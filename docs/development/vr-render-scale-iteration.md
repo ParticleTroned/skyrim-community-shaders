@@ -87,11 +87,20 @@ teardown behavior. The relatch plan records warm retention and target reuse so
 automation can distinguish deliberate residency from missed teardown.
 
 Vendor dimension compatibility is independent of full D3D target readiness. A
-same-dimension CS-menu handoff may still recreate missing or unhealthy engine
-targets while retaining compatible vendor contexts; a true render or display
-dimension change still disables warm retention. Records expose both
-`reuseRenderTargets` and `vendorDimensionsUnchanged` to make that distinction
-explicit.
+same-dimension CS-menu handoff may reuse the physical target layout when every
+target texture still has the expected dimensions and the previous contract has
+complete, exact both-eye fidelity evidence. This stable-contract fallback avoids
+treating an optional or method-specific view as a resize signal while still
+requiring the strict resource probe when stable evidence is unavailable. A true
+render or display dimension change still disables warm retention.
+
+The same guarded path preserves shared submit-stage intermediates, foveated and
+menu resources, common vendor textures, and periphery-TAA allocations. Their
+frame/history state is invalidated and the compatible intermediates are rebound
+to the new logical contract generation without reallocating them. Records expose
+`reuseRenderTargets`, `reuseStableRenderTargets`,
+`vendorDimensionsUnchanged`, and `reuseSharedSubmitResources` so automation can
+distinguish strict reuse, stable-layout reuse, and shared-resource retention.
 
 Schema v3 also groups completed transition peaks by exact backend profile
 (method, backend, quality, preset, and dimensions). Once one profile has three

@@ -1429,6 +1429,7 @@ namespace
 		bool allowMissing = false;
 		bool requireCopy = false;
 		bool requireUAV = false;
+		bool requireViews = true;
 	};
 
 	bool RenderTargetDataSizeMatches(
@@ -1440,13 +1441,14 @@ namespace
 		if (!a_renderTarget.texture)
 			return a_options.allowMissing;
 
-		if (!RenderTargetTextureSizeMatches(a_renderTarget.texture, a_width, a_height) ||
-			!a_renderTarget.RTV ||
-			!a_renderTarget.SRV) {
+		if (!RenderTargetTextureSizeMatches(a_renderTarget.texture, a_width, a_height)) {
 			return false;
 		}
 
-		if (a_options.requireUAV && !a_renderTarget.UAV)
+		if (a_options.requireViews && (!a_renderTarget.RTV || !a_renderTarget.SRV))
+			return false;
+
+		if (a_options.requireViews && a_options.requireUAV && !a_renderTarget.UAV)
 			return false;
 
 		if (a_options.requireCopy && !a_renderTarget.textureCopy)
@@ -1454,7 +1456,7 @@ namespace
 
 		if (a_renderTarget.textureCopy) {
 			if (!RenderTargetTextureSizeMatches(a_renderTarget.textureCopy, a_width, a_height) ||
-				!a_renderTarget.SRVCopy) {
+				(a_options.requireViews && !a_renderTarget.SRVCopy)) {
 				return false;
 			}
 		}
@@ -1462,7 +1464,11 @@ namespace
 		return true;
 	}
 
-	bool RequiredRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::RENDER_TARGET a_target, uint32_t a_width, uint32_t a_height)
+	bool RequiredRenderTargetTextureSizeMatches(
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		uint32_t a_width,
+		uint32_t a_height,
+		bool a_requireViews = true)
 	{
 		auto renderer = globals::game::renderer;
 		if (!renderer)
@@ -1477,32 +1483,42 @@ namespace
 			renderTarget,
 			a_width,
 			a_height,
-			{ .requireCopy = requiresCopy, .requireUAV = requiresUAV });
+			{ .requireCopy = requiresCopy, .requireUAV = requiresUAV, .requireViews = a_requireViews });
 	}
 
-	bool ExistingRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::RENDER_TARGET a_target, uint32_t a_width, uint32_t a_height)
+	bool ExistingRenderTargetTextureSizeMatches(
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		uint32_t a_width,
+		uint32_t a_height,
+		bool a_requireViews = true)
 	{
 		auto renderer = globals::game::renderer;
 		if (!renderer)
 			return false;
 
 		const auto& renderTarget = renderer->GetRuntimeData().renderTargets[a_target];
-		return RenderTargetDataSizeMatches(renderTarget, a_width, a_height, { .allowMissing = true });
+		return RenderTargetDataSizeMatches(
+			renderTarget,
+			a_width,
+			a_height,
+			{ .allowMissing = true, .requireViews = a_requireViews });
 	}
 
 	bool DepthStencilDataSizeMatches(
 		const RE::BSGraphics::DepthStencilData& a_depthStencil,
 		uint32_t a_width,
 		uint32_t a_height,
-		bool a_requireStencilSRV)
+		bool a_requireStencilSRV,
+		bool a_requireViews = true)
 	{
-		if (!RenderTargetTextureSizeMatches(a_depthStencil.texture, a_width, a_height) ||
-			!a_depthStencil.views[0] ||
-			!a_depthStencil.depthSRV) {
+		if (!RenderTargetTextureSizeMatches(a_depthStencil.texture, a_width, a_height)) {
 			return false;
 		}
 
-		if (a_requireStencilSRV && !a_depthStencil.stencilSRV)
+		if (a_requireViews && (!a_depthStencil.views[0] || !a_depthStencil.depthSRV))
+			return false;
+
+		if (a_requireViews && a_requireStencilSRV && !a_depthStencil.stencilSRV)
 			return false;
 
 		return true;
@@ -1512,17 +1528,21 @@ namespace
 		RE::RENDER_TARGETS_DEPTHSTENCIL::RENDER_TARGET_DEPTHSTENCIL a_target,
 		uint32_t a_width,
 		uint32_t a_height,
-		bool a_requireStencilSRV)
+		bool a_requireStencilSRV,
+		bool a_requireViews = true)
 	{
 		auto renderer = globals::game::renderer;
 		if (!renderer)
 			return false;
 
 		const auto& depthStencil = renderer->GetDepthStencilData().depthStencils[a_target];
-		return DepthStencilDataSizeMatches(depthStencil, a_width, a_height, a_requireStencilSRV);
+		return DepthStencilDataSizeMatches(depthStencil, a_width, a_height, a_requireStencilSRV, a_requireViews);
 	}
 
-	bool AreVRRenderScaleRenderTargetsSizedForDimensions(float2 a_engineSize, float2 a_displaySize)
+	bool AreVRRenderScaleRenderTargetsCompatibleForDimensions(
+		float2 a_engineSize,
+		float2 a_displaySize,
+		bool a_requireViews)
 	{
 		if (!globals::game::isVR || !globals::game::renderer)
 			return false;
@@ -1536,30 +1556,41 @@ namespace
 		const uint32_t engineWidth = ClampPositiveDimension(a_engineSize.x);
 		const uint32_t engineHeight = ClampPositiveDimension(a_engineSize.y);
 		for (const auto target : kVRRenderScaleEngineSizedTargets) {
-			if (!RequiredRenderTargetTextureSizeMatches(target, engineWidth, engineHeight))
+			if (!RequiredRenderTargetTextureSizeMatches(target, engineWidth, engineHeight, a_requireViews))
 				return false;
 		}
 
-		if (!RequiredDepthStencilTextureSizeMatches(RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN, engineWidth, engineHeight, false) ||
-			!RequiredDepthStencilTextureSizeMatches(RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY, engineWidth, engineHeight, true)) {
+		if (!RequiredDepthStencilTextureSizeMatches(RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN, engineWidth, engineHeight, false, a_requireViews) ||
+			!RequiredDepthStencilTextureSizeMatches(RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY, engineWidth, engineHeight, true, a_requireViews)) {
 			return false;
 		}
 
 		if (!RequiredRenderTargetTextureSizeMatches(
 				RE::RENDER_TARGETS::kUNDERWATER_MASK,
 				ClampPositiveDimension(a_engineSize.x * 0.5f),
-				engineHeight)) {
+				engineHeight,
+				a_requireViews)) {
 			return false;
 		}
 
 		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
 		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
 		for (const auto target : kVRRenderScaleDisplaySizedTargets) {
-			if (!ExistingRenderTargetTextureSizeMatches(target, displayWidth, displayHeight))
+			if (!ExistingRenderTargetTextureSizeMatches(target, displayWidth, displayHeight, a_requireViews))
 				return false;
 		}
 
 		return true;
+	}
+
+	bool AreVRRenderScaleRenderTargetsSizedForDimensions(float2 a_engineSize, float2 a_displaySize)
+	{
+		return AreVRRenderScaleRenderTargetsCompatibleForDimensions(a_engineSize, a_displaySize, true);
+	}
+
+	bool DoVRRenderScaleRenderTargetDimensionsMatch(float2 a_engineSize, float2 a_displaySize)
+	{
+		return AreVRRenderScaleRenderTargetsCompatibleForDimensions(a_engineSize, a_displaySize, false);
 	}
 
 	void CopyResourceIfNonAliased(ID3D11DeviceContext* a_context, ID3D11Resource* a_dst, ID3D11Resource* a_src)
@@ -15457,9 +15488,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			perfMode.trueHMDEyeHeight != 0 &&
 			relatchTargetRenderEyeWidth != 0 &&
 			relatchTargetRenderEyeHeight != 0;
-		const bool plannedRelatchWillResizeRenderTargets =
+		const bool plannedRelatchTargetsStrictlyReady =
 			plannedRelatchSizeKnown &&
-			!AreVRRenderScaleRenderTargetsSizedForDimensions(
+			AreVRRenderScaleRenderTargetsSizedForDimensions(
+				relatchTargetRenderScaleActive ? plannedRelatchEngineSize : plannedRelatchDisplaySize,
+				plannedRelatchDisplaySize);
+		const bool plannedRelatchTargetDimensionsMatch =
+			plannedRelatchSizeKnown &&
+			DoVRRenderScaleRenderTargetDimensionsMatch(
 				relatchTargetRenderScaleActive ? plannedRelatchEngineSize : plannedRelatchDisplaySize,
 				plannedRelatchDisplaySize);
 		const bool relatchVendorDimensionsUnchanged =
@@ -15469,8 +15505,54 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			previousBootSnapshot.displayEyeHeight == perfMode.trueHMDEyeHeight &&
 			previousBootSnapshot.renderEyeWidth == relatchTargetRenderEyeWidth &&
 			previousBootSnapshot.renderEyeHeight == relatchTargetRenderEyeHeight;
+		const auto controllerForPhysicalReuse = GetVRRenderScaleTransitionSnapshot();
+		const auto& stablePhysicalProfile = controllerForPhysicalReuse.stable;
+		const auto& stablePhysicalFidelity = controllerForPhysicalReuse.fidelity;
+		const bool stablePhysicalEyesMatch =
+			std::all_of(
+				stablePhysicalFidelity.eyes.begin(),
+				stablePhysicalFidelity.eyes.end(),
+				[&](const VRRenderScaleFidelityEyeSnapshot& a_eye) {
+					return a_eye.evaluated &&
+					       a_eye.valid &&
+					       a_eye.generation == stablePhysicalProfile.contractGeneration &&
+					       a_eye.inputWidth == relatchTargetRenderEyeWidth &&
+					       a_eye.inputHeight == relatchTargetRenderEyeHeight &&
+					       a_eye.outputWidth == perfMode.trueHMDEyeWidth &&
+					       a_eye.outputHeight == perfMode.trueHMDEyeHeight;
+				});
+		const bool stablePhysicalContractMatches =
+			plannedRelatchTargetDimensionsMatch &&
+			relatchVendorDimensionsUnchanged &&
+			previousBootSnapshot.generation != 0 &&
+			stablePhysicalProfile.valid &&
+			stablePhysicalProfile.active &&
+			stablePhysicalProfile.contractGeneration == previousBootSnapshot.generation &&
+			stablePhysicalProfile.method == previousBootSnapshot.method &&
+			stablePhysicalProfile.renderEyeWidth == relatchTargetRenderEyeWidth &&
+			stablePhysicalProfile.renderEyeHeight == relatchTargetRenderEyeHeight &&
+			stablePhysicalProfile.displayEyeWidth == perfMode.trueHMDEyeWidth &&
+			stablePhysicalProfile.displayEyeHeight == perfMode.trueHMDEyeHeight &&
+			stablePhysicalFidelity.active &&
+			stablePhysicalFidelity.bothEyesValid &&
+			stablePhysicalFidelity.transitionEpoch == stablePhysicalProfile.transitionEpoch &&
+			stablePhysicalFidelity.contractGeneration == stablePhysicalProfile.contractGeneration &&
+			stablePhysicalFidelity.method == stablePhysicalProfile.method &&
+			stablePhysicalFidelity.expectedInputWidth == relatchTargetRenderEyeWidth &&
+			stablePhysicalFidelity.expectedInputHeight == relatchTargetRenderEyeHeight &&
+			stablePhysicalFidelity.expectedOutputWidth == perfMode.trueHMDEyeWidth &&
+			stablePhysicalFidelity.expectedOutputHeight == perfMode.trueHMDEyeHeight &&
+			stablePhysicalFidelity.lastMismatchMask == static_cast<uint32_t>(VRRenderScaleFidelityMismatch::None) &&
+			stablePhysicalEyesMatch &&
+			controllerForPhysicalReuse.retirement.pendingSets == 0 &&
+			!controllerForPhysicalReuse.retirement.fencePending &&
+			!controllerForPhysicalReuse.retirement.capacityBlocked &&
+			!controllerForPhysicalReuse.postLoadRecovery.active &&
+			ClampPositiveDimension(state->screenSize.x) == ClampPositiveDimension(plannedRelatchEngineSize.x) &&
+			ClampPositiveDimension(state->screenSize.y) == ClampPositiveDimension(plannedRelatchEngineSize.y);
 		const bool lowPeakNativeRestoreRelatch =
-			plannedRelatchWillResizeRenderTargets &&
+			plannedRelatchSizeKnown &&
+			!plannedRelatchTargetDimensionsMatch &&
 			previousBootWasActiveVendorRenderScale &&
 			!relatchTargetRenderScaleActive;
 		VRRenderScaleRelatchSignature relatchSignature{};
@@ -15507,6 +15589,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
 			!preserveActiveContractForRecovery &&
 			!IsSubmitStageDeviceLost();
+		const bool reuseStableRenderTargetsForRelatch =
+			!plannedRelatchTargetsStrictlyReady &&
+			retainWarmInactiveVendorResourcesForRelatch &&
+			stablePhysicalContractMatches;
+		const bool plannedRelatchWillResizeRenderTargets =
+			plannedRelatchSizeKnown &&
+			!plannedRelatchTargetsStrictlyReady &&
+			!reuseStableRenderTargetsForRelatch;
 		const bool dlssResourcesNeedTeardownForRelatch = streamline.HasDLSSResourcesPendingTeardown();
 		const bool dlssResourcesAvailableForWarmRetention =
 			vrDLSSRuntimeResourceGeneration != 0 &&
@@ -15634,8 +15724,17 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.current = currentResourceKey;
 		relatchPlan.target = targetResourceProfile.resources;
 		relatchPlan.compatibility = CompareVRRenderScaleResourceKeys(relatchPlan.current, relatchPlan.target);
-		relatchPlan.reuseRenderTargets = plannedRelatchSizeKnown && !plannedRelatchWillResizeRenderTargets;
+		relatchPlan.reuseRenderTargets =
+			plannedRelatchSizeKnown &&
+			(plannedRelatchTargetsStrictlyReady || reuseStableRenderTargetsForRelatch);
+		relatchPlan.reuseStableRenderTargets = reuseStableRenderTargetsForRelatch;
 		relatchPlan.vendorDimensionsUnchanged = relatchVendorDimensionsUnchanged;
+		relatchPlan.reuseSharedSubmitResources =
+			retainWarmInactiveVendorResourcesForRelatch &&
+			relatchPlan.reuseRenderTargets &&
+			relatchPlan.compatibility.canReusePresentation &&
+			!destroyDLSSResourcesForRelatch &&
+			!destroyFSRResourcesForRelatch;
 		relatchPlan.preserveDLSSResources = preserveDLSSResourcesForRelatch;
 		relatchPlan.preserveFSRResources = preserveFSRResourcesForRelatch;
 		relatchPlan.retainWarmDLSSResources = retainWarmDLSSResourcesForRelatch;
@@ -15742,13 +15841,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					} :
 					relatchDiagDisplaySize;
 			logger::debug(
-				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} targetsReady={} vendorDimensionsUnchanged={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} targetsStrictlyReady={} dimensionsMatch={} stableTargetReuse={} sharedReuse={} vendorDimensionsUnchanged={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
 				magic_enum::enum_name(relatchUpscaleMethod),
 				magic_enum::enum_name(relatchOrigin),
 				BoolText(preserveActiveContractForRecovery),
 				BoolText(amdAdapterForRelatch),
 				BoolText(lowPeakNativeRestoreRelatch),
-				BoolText(!plannedRelatchWillResizeRenderTargets),
+				BoolText(plannedRelatchTargetsStrictlyReady),
+				BoolText(plannedRelatchTargetDimensionsMatch),
+				BoolText(reuseStableRenderTargetsForRelatch),
+				BoolText(relatchPlan.reuseSharedSubmitResources),
 				BoolText(relatchVendorDimensionsUnchanged),
 				BoolText(retainWarmInactiveVendorResourcesForRelatch),
 				BoolText(preserveDLSSResourcesForRelatch),
@@ -15872,10 +15974,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		const auto vendorResetResult = ResetVRVendorRuntimeResources(
 			relatchPlan.destroyDLSSResources,
-			true,
+			!relatchPlan.reuseSharedSubmitResources,
 			relatchPlan.destroyFSRResources,
 			relatchPlan.waitForFSRDrain,
-			fsrTeardownReadyForRelatch);
+			fsrTeardownReadyForRelatch,
+			!relatchPlan.reuseSharedSubmitResources);
 		if (vendorResetResult != VRVendorResourceResetResult::Ready) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
@@ -15940,9 +16043,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		                              relatchTargetDisplaySize;
 		const bool renderTargetsAlreadySized =
 			relatchPlan.reuseRenderTargets &&
-			AreVRRenderScaleRenderTargetsSizedForDimensions(
-				relatchTargetEngineSize,
-				relatchTargetDisplaySize);
+			(relatchPlan.reuseStableRenderTargets ?
+				 (DoVRRenderScaleRenderTargetDimensionsMatch(
+					  relatchTargetEngineSize,
+					  relatchTargetDisplaySize) &&
+					 ClampPositiveDimension(state->screenSize.x) == ClampPositiveDimension(relatchTargetEngineSize.x) &&
+					 ClampPositiveDimension(state->screenSize.y) == ClampPositiveDimension(relatchTargetEngineSize.y)) :
+				 AreVRRenderScaleRenderTargetsSizedForDimensions(
+					 relatchTargetEngineSize,
+					 relatchTargetDisplaySize));
+		if (relatchPlan.reuseSharedSubmitResources && !renderTargetsAlreadySized) {
+			restorePreviousBootContract();
+			requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
+			logger::warn("[VRRenderScale] Stable physical-layout reuse changed before commit; retrying without mutating shared resources.");
+			return false;
+		}
 		if (renderTargetsAlreadySized) {
 			state->screenSize = relatchTargetEngineSize;
 			renderTargetsRelatched = true;
@@ -15974,11 +16089,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			renderTargetsRelatched = true;
 		}
 
+		if (relatchPlan.reuseSharedSubmitResources)
+			vrIntermediateTextureGeneration = relatchContractGeneration;
 		if (relatchPlan.recreateFSRResources)
 			RefreshRuntimeResolutionState();
-		RecreateVendorRuntimeResources(
-			relatchUpscaleMethod,
-			relatchUpscaleMethod != UpscaleMethod::kFSR || relatchPlan.recreateFSRResources);
+		const bool warmTargetRuntimeReadyForRebind =
+			relatchPlan.reuseWarmTargetRuntime &&
+			relatchPlan.reuseSharedSubmitResources &&
+			AreCommonVendorTexturesReady(relatchUpscaleMethod);
+		if (warmTargetRuntimeReadyForRebind) {
+			MarkVendorRuntimeResourcesReady(relatchUpscaleMethod, relatchContractGeneration);
+		} else {
+			RecreateVendorRuntimeResources(
+				relatchUpscaleMethod,
+				relatchUpscaleMethod != UpscaleMethod::kFSR || relatchPlan.recreateFSRResources);
+		}
 		const bool fsrResourcesRecreatedDuringRelatch =
 			relatchPlan.recreateFSRResources &&
 			fidelityFX.HasFSRResources();
@@ -17236,12 +17361,12 @@ Upscaling::VRVendorResourceResetResult Upscaling::HandleVRDLSSResourceTeardownRe
 	return pending ? VRVendorResourceResetResult::Pending : VRVendorResourceResetResult::Failed;
 }
 
-Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
+Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources, bool a_destroySharedResources)
 {
 	if (!globals::game::isVR)
 		return VRVendorResourceResetResult::Ready;
 	const uint64_t transitionEpoch = GetVRRenderScaleTransitionSnapshot().targetEpoch;
-	if (!CanAdmitVRIntermediateRetirement(transitionEpoch)) {
+	if (a_destroySharedResources && !CanAdmitVRIntermediateRetirement(transitionEpoch)) {
 		if (a_destroyDLSSResources) {
 			MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
 			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::WaitingForDrain, 0, "submit-stage retirement drain");
@@ -17251,9 +17376,14 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 
 	InvalidateFrameScopedUpscalingState();
 	UnbindUpscalingResources();
-	DestroyVRIntermediateTextures();
-	DestroyFoveatedResources();
-	ResetVRMenuFinalCompositeLayer();
+	if (a_destroySharedResources) {
+		DestroyVRIntermediateTextures();
+		DestroyFoveatedResources();
+		ResetVRMenuFinalCompositeLayer();
+	} else {
+		peripheryTAAHistoryReadIndex = 0;
+		peripheryTAAHistoryValid = false;
+	}
 
 	auto dlssResetResult = VRVendorResourceResetResult::Ready;
 	if (a_destroyDLSSResources) {
@@ -17369,7 +17499,7 @@ void Upscaling::ClearVRRenderScaleInfoTransition()
 	++vrRenderScaleTransitionController.revision;
 }
 
-Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady)
+Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady, bool a_destroySharedResources)
 {
 	if (!globals::game::isVR)
 		return VRVendorResourceResetResult::Ready;
@@ -17382,9 +17512,10 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	if (emitDiagLogs) {
 		logger::debug(
-			"[Upscaling][Diag] Reset VR vendor runtime resources destroyDLSS={} destroyPeripheryTAA={} destroyFSR={} requestedDestroyFSR={} waitForFSRIdle={} fsrTeardownReady={} pendingDLSS={} pendingFSR={} fsrResources={} fsrTeardownPending={}",
+			"[Upscaling][Diag] Reset VR vendor runtime resources destroyDLSS={} destroyPeripheryTAA={} destroyShared={} destroyFSR={} requestedDestroyFSR={} waitForFSRIdle={} fsrTeardownReady={} pendingDLSS={} pendingFSR={} fsrResources={} fsrTeardownPending={}",
 			BoolText(a_destroyDLSSResources),
 			BoolText(a_destroyPeripheryTAAResources),
+			BoolText(a_destroySharedResources),
 			BoolText(destroyFSRResources),
 			BoolText(a_destroyFSRResources),
 			BoolText(a_waitForFSRIdleTeardown),
@@ -17402,7 +17533,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 		return VRVendorResourceResetResult::Pending;
 	}
 
-	const auto submitStageResetResult = ResetVRSubmitStageState(a_destroyDLSSResources);
+	const auto submitStageResetResult = ResetVRSubmitStageState(a_destroyDLSSResources, a_destroySharedResources);
 	if (submitStageResetResult != VRVendorResourceResetResult::Ready)
 		return submitStageResetResult;
 
@@ -17410,7 +17541,8 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 		fidelityFX.DestroyFSRResources(a_waitForFSRIdleTeardown && !a_fsrTeardownAlreadyReady);
 		ClearVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, true);
 	}
-	DestroyCommonUpscalingTextures();
+	if (a_destroySharedResources)
+		DestroyCommonUpscalingTextures();
 	if (a_destroyPeripheryTAAResources)
 		DestroyPeripheryTAAResources();
 	return VRVendorResourceResetResult::Ready;
@@ -25018,7 +25150,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							 { "origin", std::string{ magic_enum::enum_name(relatchPlan.origin) } },
 							 { "actionMask", relatchPlan.actionMask },
 							 { "reuseRenderTargets", relatchPlan.reuseRenderTargets },
+							 { "reuseStableRenderTargets", relatchPlan.reuseStableRenderTargets },
 							 { "vendorDimensionsUnchanged", relatchPlan.vendorDimensionsUnchanged },
+							 { "reuseSharedSubmitResources", relatchPlan.reuseSharedSubmitResources },
 							 { "preserveDLSSResources", relatchPlan.preserveDLSSResources },
 							 { "preserveFSRResources", relatchPlan.preserveFSRResources },
 							 { "retainWarmDLSSResources", relatchPlan.retainWarmDLSSResources },
@@ -25568,7 +25702,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} vendorDimensionsUnchanged={} preserveDLSS={} preserveFSR={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -25577,7 +25711,9 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			magic_enum::enum_name(a_plan.current.backend),
 			magic_enum::enum_name(a_plan.target.backend),
 			BoolText(a_plan.reuseRenderTargets),
+			BoolText(a_plan.reuseStableRenderTargets),
 			BoolText(a_plan.vendorDimensionsUnchanged),
+			BoolText(a_plan.reuseSharedSubmitResources),
 			BoolText(a_plan.preserveDLSSResources),
 			BoolText(a_plan.preserveFSRResources),
 			BoolText(a_plan.retainWarmDLSSResources),

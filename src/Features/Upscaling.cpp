@@ -15416,8 +15416,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vrRenderScaleMemoryReliefLogged.store(false, std::memory_order_release);
 		}
 		const bool memoryReliefActiveForRelatch = IsVRRenderScaleMemoryReliefActive();
-		if (memoryReliefActiveForRelatch)
-			ApplyVRRenderScaleMemoryReliefTransitionCleanup("render-target relatch");
 		const bool rapidAmdFsrLowPeakRelatch =
 			memoryReliefActiveForRelatch &&
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
@@ -15455,6 +15453,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			(forceFSRResourceRecreateForRelatch || missingCompatibleFSRResourcesForActiveRelatch) &&
 			!preserveFSRResourcesForRelatch;
 		const bool fsrResourcesNeedTeardownForRelatch = fidelityFX.HasFSRResourcesPendingTeardown();
+		const bool previousBootWasActiveFSR =
+			previousBootSnapshot.valid &&
+			previousBootSnapshot.active &&
+			previousBootSnapshot.method == UpscaleMethod::kFSR;
+		const bool destroyFSRResourcesForRelatch =
+			!preserveFSRResourcesForRelatch &&
+			(pendingFSRReset.load(std::memory_order_acquire) ||
+				fidelityFX.HasFSRResources() ||
+				fsrResourcesNeedTeardownForRelatch ||
+				previousBootWasActiveFSR);
 		// FSR contexts are large in VR. Serialize forced relatch teardown so D3D
 		// render-target recreation does not race peak allocation pressure.
 		const bool forceSynchronousFSRTeardownForRelatch =
@@ -15497,7 +15505,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.preserveDLSSResources = preserveDLSSResourcesForRelatch;
 		relatchPlan.preserveFSRResources = preserveFSRResourcesForRelatch;
 		relatchPlan.destroyDLSSResources = destroyDLSSResourcesForRelatch;
-		relatchPlan.destroyFSRResources = !preserveFSRResourcesForRelatch;
+		relatchPlan.destroyFSRResources = destroyFSRResourcesForRelatch;
 		relatchPlan.recreateFSRResources = recreateFSRResourcesDuringRelatch;
 		relatchPlan.waitForFSRDrain = forceSynchronousFSRTeardownForRelatch;
 		relatchPlan.lowPeakNativeRestore = lowPeakNativeRestoreRelatch;
@@ -15569,6 +15577,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Retirement);
 			return false;
 		}
+		if (!IsVRRenderScaleTransitionEpochCurrent(relatchEpoch)) {
+			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+			return false;
+		}
+		if (memoryReliefActiveForRelatch)
+			ApplyVRRenderScaleMemoryReliefTransitionCleanup("render-target relatch");
 		if (emitDiagLogs) {
 			const auto relatchDiagDisplaySize =
 				perfMode.trueHMDEyeWidth && perfMode.trueHMDEyeHeight ?

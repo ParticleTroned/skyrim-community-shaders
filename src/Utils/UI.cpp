@@ -306,7 +306,14 @@ namespace Util
 			ImGui::Spacing();
 
 			// Center buttons
-			constexpr float buttonWidth = ThemeManager::Constants::POPUP_BUTTON_WIDTH;
+			const auto buttonWidthForLabel = [](const std::string& label) {
+				return ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			};
+			const float buttonWidth = std::max({
+				ThemeManager::Constants::POPUP_BUTTON_WIDTH * GetUIScale(),
+				buttonWidthForLabel(confirmLabel),
+				buttonWidthForLabel(cancelLabel),
+			});
 			const float spacing = ImGui::GetStyle().ItemSpacing.x;
 			const float totalWidth = buttonWidth * 2 + spacing;
 			const float windowWidth = ImGui::GetWindowWidth();
@@ -566,6 +573,11 @@ namespace Util
 
 	namespace ButtonHelpers
 	{
+		constexpr ImVec4 kUnlockButtonColor = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
+		constexpr ImVec4 kUnlockButtonHoverColor = ImVec4(0.3f, 0.9f, 0.3f, 1.0f);
+		constexpr ImVec4 kLockButtonColor = ImVec4(0.8f, 0.2f, 0.2f, 1.0f);
+		constexpr ImVec4 kLockButtonHoverColor = ImVec4(0.9f, 0.3f, 0.3f, 1.0f);
+
 		struct ButtonColors
 		{
 			ImVec4 normal;
@@ -716,6 +728,26 @@ namespace Util
 	bool WarningButton(const char* label, const ImVec2& size)
 	{
 		return ButtonHelpers::InvokeStyledButton(WarningButtonStyle, [&] { return ImGui::Button(label, size); });
+	}
+
+	StyledButtonWrapper UnlockButtonStyle()
+	{
+		return StyledButtonWrapper(ButtonHelpers::kUnlockButtonColor, ButtonHelpers::kUnlockButtonHoverColor, ButtonHelpers::kUnlockButtonHoverColor);
+	}
+
+	bool UnlockButton(const char* label, const ImVec2& size)
+	{
+		return ButtonHelpers::InvokeStyledButton(UnlockButtonStyle, [&] { return ImGui::Button(label, size); });
+	}
+
+	StyledButtonWrapper LockButtonStyle()
+	{
+		return StyledButtonWrapper(ButtonHelpers::kLockButtonColor, ButtonHelpers::kLockButtonHoverColor, ButtonHelpers::kLockButtonHoverColor);
+	}
+
+	bool LockButton(const char* label, const ImVec2& size)
+	{
+		return ButtonHelpers::InvokeStyledButton(LockButtonStyle, [&] { return ImGui::Button(label, size); });
 	}
 
 	StyledButtonWrapper PresetButtonStyle(bool active)

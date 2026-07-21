@@ -3,6 +3,8 @@
 #include "Buffer.h"
 #include "Feature.h"
 
+#include <cstdint>
+
 struct CSUtility : Feature
 {
 	static CSUtility* GetSingleton()
@@ -30,6 +32,36 @@ struct CSUtility : Feature
 		};
 	}
 
+	struct DepthOfFieldAutoFocusSettings
+	{
+		float nearDistance = 0.0f;
+		float farDistance = 0.0f;
+		float nearRange = 0.0f;
+		float farRange = 0.0f;
+		float nearBlur = 0.0f;
+		float farBlur = 0.0f;
+		float blurMultiplier = 1.0f;
+	};
+
+	struct DepthOfFieldSettings
+	{
+		float strength = 0.0f;
+		float distance = 0.0f;
+		float range = 0.0f;
+		uint32_t mode = 2;
+		bool excludeSky = false;
+		bool autoFocus = false;
+		DepthOfFieldAutoFocusSettings autoFocusSettings;
+		uint32_t blurRadius = 2;
+	};
+
+	struct DepthOfFieldOverride
+	{
+		bool locked = false;
+		DepthOfFieldSettings values;
+		DepthOfFieldSettings baseline;
+	};
+
 	struct Settings
 	{
 		bool enabled = false;
@@ -41,6 +73,8 @@ struct CSUtility : Feature
 		float linearSpotlightMult = 1.0f;
 		float omnidirectionalBulbMult = 1.0f;
 		float linearOmnidirectionalBulbMult = 1.0f;
+		DepthOfFieldOverride sceneDof;
+		DepthOfFieldOverride underwaterDof;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -79,6 +113,11 @@ struct CSUtility : Feature
 	bool IsRuntimeEnabled() const;
 	bool NeedsVanillaPointLightData() const;
 	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount);
+	void DrawDepthOfFieldSettings();
+	void InstallDepthOfFieldHooks();
+
+	static void SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings);
+	static void SanitizeDepthOfFieldOverride(DepthOfFieldOverride& a_override);
 
 	struct Hooks;
 };

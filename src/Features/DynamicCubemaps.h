@@ -164,23 +164,6 @@ public:
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
-	virtual bool HasPerformanceSettings() const override { return true; }
-	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnabledSSR != 0; }
-	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
-	{
-		const uint nextEnabled = a_enabled ? Settings{}.EnabledSSR : 0u;
-		if (settings.EnabledSSR != nextEnabled) {
-			settings.EnabledSSR = nextEnabled;
-			recompileFlag = true;
-		}
-	}
-	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
-	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
-	{
-		auto state = a_state;
-		LoadSettings(state);
-	}
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 

@@ -33,12 +33,11 @@ namespace
 	constexpr float kFeatureCostDisplayEpsilonMs = 0.0005f;
 	constexpr float kFramePacingDetectionEpsilonMs = 1.0f;
 
-	constexpr std::array<std::string_view, 12> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 11> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"ScreenSpaceShadows",
 		"ScreenSpaceGI",
 		"LightLimitFix",
-		"DynamicCubemaps",
 		"Skylighting",
 		"TerrainBlending",
 		"TerrainShadows",
@@ -298,9 +297,6 @@ namespace
 			return json::object();
 
 		const auto shortName = feature->GetShortName();
-		if (shortName == "DynamicCubemaps") {
-			return MakeJsonMask({ "EnabledSSR" });
-		}
 		if (shortName == "ScreenSpaceShadows") {
 			return MakeJsonMask({ "Enable",
 				"SampleCount" });
@@ -1034,8 +1030,6 @@ namespace
 			return "SSGI/AO is switched off.";
 		if (shortName == "LightLimitFix")
 			return "particle lights, point-light contact shadows, and particle contact shadows are switched off.";
-		if (shortName == "DynamicCubemaps")
-			return "screen-space reflections are switched off; dynamic cubemap generation remains active in both windows and cancels out of the comparison.";
 		if (shortName == "Skylighting")
 			return "the in-game Enable Skylighting toggle is switched off, so probe updates stop and ambient shading plus reflection occlusion fall back to the unoccluded path.";
 		if (shortName == "TerrainBlending")

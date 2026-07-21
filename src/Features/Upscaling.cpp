@@ -14606,6 +14606,16 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	InvalidateFrameScopedUpscalingState();
 	RetiredVRIntermediateTextures retired{};
 	retired.retireFrame = globals::state ? globals::state->frameCount : 0u;
+	const auto transitionSnapshot = GetVRRenderScaleTransitionSnapshot();
+	if (transitionSnapshot.relatchPlan.valid) {
+		retired.transitionEpoch = transitionSnapshot.relatchPlan.transitionEpoch;
+		retired.contractGeneration = transitionSnapshot.relatchPlan.contractGeneration;
+	} else {
+		retired.transitionEpoch = transitionSnapshot.applied.transitionEpoch;
+		retired.contractGeneration = transitionSnapshot.applied.contractGeneration;
+	}
+	if (!CanAdmitVRIntermediateRetirement(retired.transitionEpoch))
+		return;
 	bool hasRetiredTextures = false;
 	const auto retireArray = [&hasRetiredTextures](auto& a_source, auto& a_destination) {
 		for (uint32_t i = 0; i < 2; ++i) {
@@ -14626,12 +14636,11 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 
 	if (hasRetiredTextures) {
 		retiredVRIntermediateTextures.push_back(std::move(retired));
-		while (retiredVRIntermediateTextures.size() > kVRRetiredIntermediateTextureMaxSets) {
-			retiredVRIntermediateTextures.erase(retiredVRIntermediateTextures.begin());
-		}
 		vrIntermediateTextureCleanupFence = nullptr;
 		ScheduleVRIntermediateTextureCleanup();
 		ServiceVRIntermediateTextureCleanup();
+		UpdateVRIntermediateRetirementSnapshot(
+			retiredVRIntermediateTextures.size() >= kVRRetiredIntermediateTextureMaxSets);
 	}
 
 	for (uint32_t i = 0; i < 2; ++i) {
@@ -14685,53 +14694,54 @@ void Upscaling::ScheduleVRIntermediateTextureCleanup()
 		scheduleFrame(entry.retireFrame);
 }
 
-void Upscaling::ServiceVRIntermediateTextureCleanup()
+void Upscaling::ServiceVRIntermediateTextureCleanup(bool a_forceFence)
 {
+	if (retiredVRIntermediateTextures.empty()) {
+		vrIntermediateTextureCleanupFence = nullptr;
+		deferredVRIntermediateTextureCleanupFrame = 0;
+		vrIntermediateRetirementCapacityLogged.store(false, std::memory_order_release);
+		UpdateVRIntermediateRetirementSnapshot(false);
+		return;
+	}
+
 	const bool reliefActive = IsVRRenderScaleMemoryReliefActive();
 	const bool lowPeakNativeRestoreActive = vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire);
-	const bool forceFenceCleanup = reliefActive || lowPeakNativeRestoreActive;
-	if (deferredVRIntermediateTextureCleanupFrame == 0 && (!forceFenceCleanup || retiredVRIntermediateTextures.empty()))
-		return;
-
+	const bool forceFenceCleanup = a_forceFence || reliefActive || lowPeakNativeRestoreActive;
 	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
-	if (forceFenceCleanup && !retiredVRIntermediateTextures.empty()) {
-		const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
-			vrIntermediateTextureCleanupFence,
-			lowPeakNativeRestoreActive ?
-				"VR full-resolution restore intermediate cleanup" :
-				"VR render-scale memory relief intermediate cleanup");
-		if (fenceResult == VRIntermediateCleanupFenceResult::Pending) {
-			deferredVRIntermediateTextureCleanupFrame = currentFrame + 1u;
-			return;
-		}
-
-		if (fenceResult == VRIntermediateCleanupFenceResult::Ready) {
-			retiredVRIntermediateTextures.clear();
-			deferredVRIntermediateTextureCleanupFrame = 0;
-			if (lowPeakNativeRestoreActive) {
-				vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
-				logger::debug("[VRRenderScale] Cleared retired intermediates before full-resolution render-scale-off restore.");
-			}
-			if (reliefActive &&
-				(vrRenderScaleMemoryReliefCleanEyeMask.load(std::memory_order_acquire) & kVRRenderScaleMemoryReliefCleanEyeMask) == kVRRenderScaleMemoryReliefCleanEyeMask) {
-				ClearVRRenderScaleMemoryRelief();
-				logger::debug("[VRRenderScale] Cleared memory relief after retired intermediate cleanup and clean full-eye evaluation.");
-			}
-			return;
-		}
-	}
-
-	if (deferredVRIntermediateTextureCleanupFrame != 0 && currentFrame < deferredVRIntermediateTextureCleanupFrame)
+	if (!forceFenceCleanup &&
+		deferredVRIntermediateTextureCleanupFrame != 0 &&
+		currentFrame < deferredVRIntermediateTextureCleanupFrame) {
+		UpdateVRIntermediateRetirementSnapshot(
+			retiredVRIntermediateTextures.size() >= kVRRetiredIntermediateTextureMaxSets);
 		return;
-
-	vrIntermediateTextureCleanupFence = nullptr;
-	std::erase_if(retiredVRIntermediateTextures, [currentFrame](const RetiredVRIntermediateTextures& entry) {
-		return ElapsedFrames(entry.retireFrame, currentFrame) > kVRRetiredIntermediateTextureTailFrames;
-	});
-	while (retiredVRIntermediateTextures.size() > kVRRetiredIntermediateTextureMaxSets) {
-		retiredVRIntermediateTextures.erase(retiredVRIntermediateTextures.begin());
 	}
-	ScheduleVRIntermediateTextureCleanup();
+
+	const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
+		vrIntermediateTextureCleanupFence,
+		lowPeakNativeRestoreActive ?
+			"VR full-resolution restore intermediate cleanup" :
+			(a_forceFence ? "VR intermediate retirement capacity" : "VR intermediate deferred cleanup"));
+	if (fenceResult != VRIntermediateCleanupFenceResult::Ready) {
+		deferredVRIntermediateTextureCleanupFrame = currentFrame + 1u;
+		UpdateVRIntermediateRetirementSnapshot(
+			retiredVRIntermediateTextures.size() >= kVRRetiredIntermediateTextureMaxSets);
+		return;
+	}
+
+	retiredVRIntermediateTextures.clear();
+	vrIntermediateTextureCleanupFence = nullptr;
+	deferredVRIntermediateTextureCleanupFrame = 0;
+	vrIntermediateRetirementCapacityLogged.store(false, std::memory_order_release);
+	if (lowPeakNativeRestoreActive) {
+		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
+		logger::debug("[VRRenderScale] Cleared retired intermediates before full-resolution render-scale-off restore.");
+	}
+	if (reliefActive &&
+		(vrRenderScaleMemoryReliefCleanEyeMask.load(std::memory_order_acquire) & kVRRenderScaleMemoryReliefCleanEyeMask) == kVRRenderScaleMemoryReliefCleanEyeMask) {
+		ClearVRRenderScaleMemoryRelief();
+		logger::debug("[VRRenderScale] Cleared memory relief after retired intermediate cleanup and clean full-eye evaluation.");
+	}
+	UpdateVRIntermediateRetirementSnapshot(false);
 }
 
 void Upscaling::UnbindUpscalingResources()
@@ -15437,6 +15447,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
 			return false;
 		}
+		if (!CanAdmitVRIntermediateRetirement(relatchEpoch)) {
+			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+			return false;
+		}
 		if (emitDiagLogs) {
 			const auto relatchDiagDisplaySize =
 				perfMode.trueHMDEyeWidth && perfMode.trueHMDEyeHeight ?
@@ -16114,6 +16128,52 @@ bool Upscaling::HasPendingVRIntermediateTextureCleanup() const
 	       vrIntermediateTextureCleanupFence.get() != nullptr;
 }
 
+bool Upscaling::CanAdmitVRIntermediateRetirement(uint64_t a_epoch)
+{
+	ServiceVRIntermediateTextureCleanup(true);
+	if (retiredVRIntermediateTextures.size() < kVRRetiredIntermediateTextureMaxSets) {
+		vrIntermediateRetirementCapacityLogged.store(false, std::memory_order_release);
+		UpdateVRIntermediateRetirementSnapshot(false);
+		return true;
+	}
+
+	UpdateVRIntermediateRetirementSnapshot(true);
+	if (!vrIntermediateRetirementCapacityLogged.exchange(true, std::memory_order_acq_rel)) {
+		logger::warn(
+			"[VRRenderScale] Deferred transition epoch={} because {} retired intermediate set(s) are still GPU-owned.",
+			a_epoch,
+			retiredVRIntermediateTextures.size());
+	}
+	return false;
+}
+
+void Upscaling::UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked)
+{
+	VRRenderScaleRetirementSnapshot snapshot{};
+	snapshot.pendingSets = static_cast<uint32_t>(retiredVRIntermediateTextures.size());
+	snapshot.nextCleanupFrame = deferredVRIntermediateTextureCleanupFrame;
+	snapshot.fencePending = vrIntermediateTextureCleanupFence.get() != nullptr;
+	snapshot.capacityBlocked = a_capacityBlocked;
+	if (!retiredVRIntermediateTextures.empty()) {
+		snapshot.oldestEpoch = retiredVRIntermediateTextures.front().transitionEpoch;
+		snapshot.newestEpoch = retiredVRIntermediateTextures.back().transitionEpoch;
+	}
+
+	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	const auto& previous = vrRenderScaleTransitionController.retirement;
+	if (previous.pendingSets == snapshot.pendingSets &&
+		previous.oldestEpoch == snapshot.oldestEpoch &&
+		previous.newestEpoch == snapshot.newestEpoch &&
+		previous.nextCleanupFrame == snapshot.nextCleanupFrame &&
+		previous.fencePending == snapshot.fencePending &&
+		previous.capacityBlocked == snapshot.capacityBlocked) {
+		return;
+	}
+
+	vrRenderScaleTransitionController.retirement = snapshot;
+	++vrRenderScaleTransitionController.revision;
+}
+
 bool Upscaling::HasVRRenderScaleMemoryReliefCleanupPending() const
 {
 	return HasPendingVRIntermediateTextureCleanup();
@@ -16122,6 +16182,9 @@ bool Upscaling::HasVRRenderScaleMemoryReliefCleanupPending() const
 void Upscaling::ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason)
 {
 	if (!IsVRRenderScaleMemoryReliefActive())
+		return;
+	const uint64_t transitionEpoch = GetVRRenderScaleTransitionSnapshot().targetEpoch;
+	if (!CanAdmitVRIntermediateRetirement(transitionEpoch))
 		return;
 
 	UnbindUpscalingResources();
@@ -16374,6 +16437,9 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 {
 	if (!globals::game::isVR)
 		return true;
+	const uint64_t transitionEpoch = GetVRRenderScaleTransitionSnapshot().targetEpoch;
+	if (!CanAdmitVRIntermediateRetirement(transitionEpoch))
+		return false;
 
 	InvalidateFrameScopedUpscalingState();
 	UnbindUpscalingResources();
@@ -24122,8 +24188,10 @@ void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		previousState = vrRenderScaleTransitionController.state;
 		revision = vrRenderScaleTransitionController.revision + 1u;
+		const auto retirement = vrRenderScaleTransitionController.retirement;
 		vrRenderScaleTransitionController = {};
 		vrRenderScaleTransitionController.revision = revision;
+		vrRenderScaleTransitionController.retirement = retirement;
 	}
 
 	if (ShouldEmitUpscalingDiagLogs() && previousState != VRRenderScaleTransitionState::Idle) {

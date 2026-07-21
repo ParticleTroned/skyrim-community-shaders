@@ -329,6 +329,16 @@ public:
 		bool lowPeakNativeRestore = false;
 	};
 
+	struct VRRenderScaleRetirementSnapshot
+	{
+		uint32_t pendingSets = 0;
+		uint64_t oldestEpoch = 0;
+		uint64_t newestEpoch = 0;
+		uint32_t nextCleanupFrame = 0;
+		bool fencePending = false;
+		bool capacityBlocked = false;
+	};
+
 	/** @brief Immutable controller-visible profile at one transition milestone. */
 	struct VRRenderScaleProfileSnapshot
 	{
@@ -369,6 +379,7 @@ public:
 		VRRenderScaleProfileSnapshot applied{};
 		VRRenderScaleProfileSnapshot stable{};
 		VRRenderScaleRelatchPlan relatchPlan{};
+		VRRenderScaleRetirementSnapshot retirement{};
 	};
 
 	struct PerfModeState
@@ -812,6 +823,8 @@ public:
 	struct RetiredVRIntermediateTextures
 	{
 		uint32_t retireFrame = 0;
+		uint64_t transitionEpoch = 0;
+		uint32_t contractGeneration = 0;
 		eastl::unique_ptr<Texture2D> colorIn[2];
 		eastl::unique_ptr<Texture2D> colorOut[2];
 		eastl::unique_ptr<Texture2D> depth[2];
@@ -825,6 +838,7 @@ public:
 	std::vector<RetiredVRIntermediateTextures> retiredVRIntermediateTextures;
 	uint32_t deferredVRIntermediateTextureCleanupFrame = 0;
 	winrt::com_ptr<ID3D11Query> vrIntermediateTextureCleanupFence;
+	std::atomic_bool vrIntermediateRetirementCapacityLogged{ false };
 
 	struct VRIntermediateTextureCache
 	{
@@ -1132,6 +1146,8 @@ public:
 	void MaybeArmVRRenderScaleMemoryRelief(const VRRenderScaleRelatchSignature& a_signature, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	bool IsVRRenderScaleMemoryReliefActive();
 	bool HasPendingVRIntermediateTextureCleanup() const;
+	bool CanAdmitVRIntermediateRetirement(uint64_t a_epoch);
+	void UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked = false);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);
@@ -1297,7 +1313,7 @@ private:
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);
 	void ScheduleVRIntermediateTextureCleanup();
-	void ServiceVRIntermediateTextureCleanup();
+	void ServiceVRIntermediateTextureCleanup(bool a_forceFence = false);
 	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;

@@ -28,6 +28,7 @@ struct TerrainBlending;
 struct TerrainHelper;
 struct TerrainShadows;
 struct UnifiedWater;
+struct VanillaFresnel;
 struct VolumetricLighting;
 struct WaterEffects;
 struct PerformanceOverlay;
@@ -90,6 +91,7 @@ namespace globals
 		extern TerrainHelper terrainHelper;
 		extern TerrainShadows terrainShadows;
 		extern UnifiedWater unifiedWater;
+		extern VanillaFresnel vanillaFresnel;
 		extern VolumetricLighting volumetricLighting;
 		extern WaterEffects waterEffects;
 		extern PerformanceOverlay performanceOverlay;

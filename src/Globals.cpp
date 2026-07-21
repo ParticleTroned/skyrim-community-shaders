@@ -36,6 +36,7 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/VanillaFresnel.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
@@ -82,6 +83,7 @@ namespace globals
 		TerrainHelper terrainHelper{};
 		TerrainShadows terrainShadows{};
 		UnifiedWater unifiedWater{};
+		VanillaFresnel vanillaFresnel{};
 		VolumetricLighting volumetricLighting{};
 		WaterEffects waterEffects{};
 		PerformanceOverlay performanceOverlay{};

@@ -45,6 +45,7 @@ namespace FeatureVersions
         {"TruePBR"sv,              {1,0,0}},
         {"UnifiedWater"sv,         {1,0,2}},
         {"Upscaling"sv,            {1,6,0}},
+        {"VanillaFresnel"sv,       {1,0,0}},
         {"VolumetricLighting"sv,   {1,1,5}},
         {"VolumetricShadows"sv,    {2,1,0}},
         {"WaterEffects"sv,         {1,2,0}},
@@ -75,6 +76,7 @@ namespace FeatureVersions
         "TerrainShadows"sv,
         "TruePBR"sv,
         "Upscaling"sv,
+        "VanillaFresnel"sv,
         "VolumetricLighting"sv,
         "WaterEffects"sv,
         "CSEditor"sv

@@ -19,6 +19,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/VanillaFresnel.h"
 #include "Features/WetnessEffects.h"
 #include "TruePBR.h"
 
@@ -49,6 +50,7 @@ namespace
 	using ExponentialHeightFogSettingsCB = ExponentialHeightFog::Settings;
 	using TruePBRSettingsCB = TruePBR::Settings;
 	using SkinDataCB = Skin::SkinData;
+	using VanillaFresnelSettingsCB = VanillaFresnel::Settings;
 
 	// Keep these in lock-step with package/Shaders/Common/SharedData.hlsli::FeatureData.
 	struct FeatureDataLayout
@@ -72,6 +74,7 @@ namespace
 		ExponentialHeightFogSettingsCB exponentialHeightFogSettings;
 		TruePBRSettingsCB truePBRSettings;
 		SkinDataCB skinData;
+		VanillaFresnelSettingsCB vanillaFresnelSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -93,7 +96,8 @@ namespace
 		TerrainBlendingSettingsCB,
 		ExponentialHeightFogSettingsCB,
 		TruePBRSettingsCB,
-		SkinDataCB>;
+		SkinDataCB,
+		VanillaFresnelSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(sizeof(ExtendedMaterialsSettingsCB) == 32);
@@ -119,6 +123,7 @@ namespace
 	static_assert(sizeof(TruePBRSettingsCB) == 16);
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 12);
 	static_assert(sizeof(SkinDataCB) == 112);
+	static_assert(sizeof(VanillaFresnelSettingsCB) == 48);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);
@@ -142,7 +147,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, exponentialHeightFogSettings) == offsetof(FeatureDataLayout, terrainBlendingSettings) + sizeof(TerrainBlendingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == offsetof(FeatureDataLayout, exponentialHeightFogSettings) + sizeof(ExponentialHeightFogSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, skinData) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
-	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, skinData) + sizeof(SkinDataCB));
+	static_assert(offsetof(FeatureDataLayout, vanillaFresnelSettings) == offsetof(FeatureDataLayout, skinData) + sizeof(SkinDataCB));
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, vanillaFresnelSettings) + sizeof(VanillaFresnelSettingsCB));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -195,5 +201,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::terrainBlending.settings,
 		globals::features::exponentialHeightFog.settings,
 		globals::features::truePBR.settings,
-		globals::features::skin.GetCommonBufferData());
+		globals::features::skin.GetCommonBufferData(),
+		globals::features::vanillaFresnel.settings);
 }

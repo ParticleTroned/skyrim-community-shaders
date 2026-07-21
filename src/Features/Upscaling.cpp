@@ -15157,6 +15157,39 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 
 	if (shouldSkipNoOpRelatch()) {
+		VRRenderScaleProfileSnapshot activeProfile{};
+		activeProfile.valid = previousBootSnapshot.valid;
+		activeProfile.active = previousBootSnapshot.active;
+		activeProfile.transitionEpoch = relatchEpoch;
+		activeProfile.contractGeneration = previousBootSnapshot.generation;
+		activeProfile.method = previousBootSnapshot.method;
+		activeProfile.qualityMode = previousBootSnapshot.qualityMode;
+		activeProfile.dlssPreset = previousBootSnapshot.dlssPreset;
+		activeProfile.renderScale = previousBootSnapshot.renderScale;
+		activeProfile.renderScaleModeEnabled = previousBootSnapshot.renderScaleEnabled;
+		activeProfile.perfModeEnabled = previousBootSnapshot.perfModeEnabled;
+		activeProfile.fsr4RuntimeEnabled = settings.fsr4RuntimeEnable;
+		activeProfile.displayEyeWidth = previousBootSnapshot.displayEyeWidth;
+		activeProfile.displayEyeHeight = previousBootSnapshot.displayEyeHeight;
+		activeProfile.renderEyeWidth = previousBootSnapshot.renderEyeWidth;
+		activeProfile.renderEyeHeight = previousBootSnapshot.renderEyeHeight;
+		activeProfile.origin = relatchOrigin;
+		activeProfile.resources = BuildVRRenderScaleResourceKey(activeProfile);
+		VRRenderScaleRelatchPlan noOpPlan{};
+		noOpPlan.valid = true;
+		noOpPlan.transitionEpoch = relatchEpoch;
+		noOpPlan.contractGeneration = previousBootSnapshot.generation;
+		noOpPlan.origin = relatchOrigin;
+		noOpPlan.current = activeProfile.resources;
+		noOpPlan.target = activeProfile.resources;
+		noOpPlan.compatibility = CompareVRRenderScaleResourceKeys(noOpPlan.current, noOpPlan.target);
+		noOpPlan.reuseRenderTargets = true;
+		noOpPlan.preserveDLSSResources = relatchUpscaleMethod == UpscaleMethod::kDLSS;
+		noOpPlan.preserveFSRResources = relatchUpscaleMethod == UpscaleMethod::kFSR && fidelityFX.HasFSRResources();
+		if (!RecordVRRenderScaleRelatchPlan(noOpPlan)) {
+			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+			return false;
+		}
 		if (ClampToggleUInt(settings.perfMode) == 0)
 			settings.perfMode = 1;
 		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
@@ -15343,6 +15376,67 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
 			!preserveFSRResourcesForRelatch &&
 			fsrResourcesNeedTeardownForRelatch;
+
+		VRRenderScaleProfileSnapshot targetResourceProfile{};
+		targetResourceProfile.valid = plannedRelatchSizeKnown;
+		targetResourceProfile.active = relatchTargetRenderScaleActive;
+		targetResourceProfile.transitionEpoch = relatchEpoch;
+		targetResourceProfile.contractGeneration = relatchContractGeneration;
+		targetResourceProfile.method = relatchUpscaleMethod;
+		targetResourceProfile.qualityMode = relatchQualityMode;
+		targetResourceProfile.dlssPreset = ClampDLSSPresetUInt(relatchSettings.dlssPreset);
+		targetResourceProfile.renderScale = relatchRenderScale;
+		targetResourceProfile.renderScaleModeEnabled = relatchTargetRenderScaleActive;
+		targetResourceProfile.perfModeEnabled = relatchTargetRenderScaleActive;
+		targetResourceProfile.fsr4RuntimeEnabled = relatchSettings.fsr4RuntimeEnable;
+		targetResourceProfile.displayEyeWidth = perfMode.trueHMDEyeWidth;
+		targetResourceProfile.displayEyeHeight = perfMode.trueHMDEyeHeight;
+		targetResourceProfile.renderEyeWidth = relatchTargetRenderEyeWidth;
+		targetResourceProfile.renderEyeHeight = relatchTargetRenderEyeHeight;
+		targetResourceProfile.origin = relatchOrigin;
+		targetResourceProfile.resources = BuildVRRenderScaleResourceKey(targetResourceProfile);
+
+		const auto controllerSnapshotForPlan = GetVRRenderScaleTransitionSnapshot();
+		const auto currentResourceKey = controllerSnapshotForPlan.applied.resources.valid ?
+		                                    controllerSnapshotForPlan.applied.resources :
+		                                    controllerSnapshotForPlan.stable.resources;
+		VRRenderScaleRelatchPlan relatchPlan{};
+		relatchPlan.valid = true;
+		relatchPlan.transitionEpoch = relatchEpoch;
+		relatchPlan.contractGeneration = relatchContractGeneration;
+		relatchPlan.origin = relatchOrigin;
+		relatchPlan.current = currentResourceKey;
+		relatchPlan.target = targetResourceProfile.resources;
+		relatchPlan.compatibility = CompareVRRenderScaleResourceKeys(relatchPlan.current, relatchPlan.target);
+		relatchPlan.reuseRenderTargets = plannedRelatchSizeKnown && !plannedRelatchWillResizeRenderTargets;
+		relatchPlan.preserveDLSSResources = preserveDLSSResourcesForRelatch;
+		relatchPlan.preserveFSRResources = preserveFSRResourcesForRelatch;
+		relatchPlan.destroyDLSSResources = destroyDLSSResourcesForRelatch;
+		relatchPlan.destroyFSRResources = !preserveFSRResourcesForRelatch;
+		relatchPlan.recreateFSRResources = recreateFSRResourcesDuringRelatch;
+		relatchPlan.waitForFSRDrain = forceSynchronousFSRTeardownForRelatch;
+		relatchPlan.lowPeakNativeRestore = lowPeakNativeRestoreRelatch;
+		auto addRelatchAction = [&](VRRenderScaleRelatchAction a_action) {
+			relatchPlan.actionMask |= static_cast<uint32_t>(a_action);
+		};
+		if (!relatchPlan.reuseRenderTargets)
+			addRelatchAction(VRRenderScaleRelatchAction::RecreateRenderTargets);
+		if (relatchPlan.destroyDLSSResources)
+			addRelatchAction(VRRenderScaleRelatchAction::ResetDLSS);
+		if (relatchPlan.destroyFSRResources)
+			addRelatchAction(VRRenderScaleRelatchAction::ResetFSR);
+		if (relatchPlan.recreateFSRResources)
+			addRelatchAction(VRRenderScaleRelatchAction::RecreateFSR);
+		if (!relatchPlan.compatibility.canReusePresentation)
+			addRelatchAction(VRRenderScaleRelatchAction::RefreshPresentation);
+		if ((relatchPlan.compatibility.changeMask & static_cast<uint32_t>(VRRenderScaleResourceChange::Options)) != 0)
+			addRelatchAction(VRRenderScaleRelatchAction::UpdateOptions);
+		if (memoryReliefActiveForRelatch || lowPeakNativeRestoreRelatch)
+			addRelatchAction(VRRenderScaleRelatchAction::RetireTransientResources);
+		if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
+			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+			return false;
+		}
 		if (emitDiagLogs) {
 			const auto relatchDiagDisplaySize =
 				perfMode.trueHMDEyeWidth && perfMode.trueHMDEyeHeight ?
@@ -15482,10 +15576,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		if (deferForLowPeakNativeRestoreCleanup())
 			return false;
 		if (!ResetVRVendorRuntimeResources(
-				destroyDLSSResourcesForRelatch,
+				relatchPlan.destroyDLSSResources,
 				true,
-				!preserveFSRResourcesForRelatch,
-				forceSynchronousFSRTeardownForRelatch,
+				relatchPlan.destroyFSRResources,
+				relatchPlan.waitForFSRDrain,
 				fsrTeardownReadyForRelatch)) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
@@ -15545,9 +15639,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchTargetEngineSize = relatchRenderScaleActive ?
 		                              perfMode.GetRenderScreenSize() :
 		                              relatchTargetDisplaySize;
-		const bool renderTargetsAlreadySized = AreVRRenderScaleRenderTargetsSizedForDimensions(
-			relatchTargetEngineSize,
-			relatchTargetDisplaySize);
+		const bool renderTargetsAlreadySized =
+			relatchPlan.reuseRenderTargets &&
+			AreVRRenderScaleRenderTargetsSizedForDimensions(
+				relatchTargetEngineSize,
+				relatchTargetDisplaySize);
 		if (renderTargetsAlreadySized) {
 			state->screenSize = relatchTargetEngineSize;
 			renderTargetsRelatched = true;
@@ -15579,19 +15675,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			renderTargetsRelatched = true;
 		}
 
-		if (recreateFSRResourcesDuringRelatch)
+		if (relatchPlan.recreateFSRResources)
 			RefreshRuntimeResolutionState();
 		RecreateVendorRuntimeResources(
 			relatchUpscaleMethod,
-			relatchUpscaleMethod != UpscaleMethod::kFSR || recreateFSRResourcesDuringRelatch);
+			relatchUpscaleMethod != UpscaleMethod::kFSR || relatchPlan.recreateFSRResources);
 		const bool fsrResourcesRecreatedDuringRelatch =
-			recreateFSRResourcesDuringRelatch &&
+			relatchPlan.recreateFSRResources &&
 			fidelityFX.HasFSRResources();
 		const bool fsrRelatchNeedsDeferredReset =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			!preserveFSRResourcesForRelatch &&
+			!relatchPlan.preserveFSRResources &&
 			!fsrResourcesRecreatedDuringRelatch;
-		if (recreateFSRResourcesDuringRelatch && !fsrResourcesRecreatedDuringRelatch) {
+		if (relatchPlan.recreateFSRResources && !fsrResourcesRecreatedDuringRelatch) {
 			logger::warn("[VRRenderScale] Render-target relatch could not recreate FSR resources immediately; scheduling deferred rebuild.");
 			if (missingCompatibleFSRResourcesForActiveRelatch) {
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
@@ -15606,7 +15702,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				"[VRRenderScale][Diag] FSR relatch recreate result forceRecreate={} amd={} immediateRecreate={} recreated={} deferredReset={} targetRender={}x{} targetDisplay={}x{}",
 				BoolText(forceFSRResourceRecreateForRelatch),
 				BoolText(amdAdapterForRelatch),
-				BoolText(recreateFSRResourcesDuringRelatch),
+				BoolText(relatchPlan.recreateFSRResources),
 				BoolText(fsrResourcesRecreatedDuringRelatch),
 				BoolText(fsrRelatchNeedsDeferredReset),
 				ClampPositiveDimension(relatchTargetEngineSize.x),
@@ -15628,7 +15724,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			ClearVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
-			if (preserveFSRResourcesForRelatch || fsrResourcesRecreatedDuringRelatch)
+			if (relatchPlan.preserveFSRResources || fsrResourcesRecreatedDuringRelatch)
 				RequestHistoryReset();
 		} else {
 			ClearVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
@@ -15636,7 +15732,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			ClearVendorRuntimeResourcesDirty(UpscaleMethod::kFSR);
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		}
-		if (!recreateFSRResourcesDuringRelatch)
+		if (!relatchPlan.recreateFSRResources)
 			RefreshRuntimeResolutionState();
 		RecordVRRenderScaleRelatch(
 			relatchSignature,
@@ -23764,6 +23860,7 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 		previousState = vrRenderScaleTransitionController.state;
 		vrRenderScaleTransitionController.requested = profile;
 		vrRenderScaleTransitionController.targetEpoch = profile.transitionEpoch;
+		vrRenderScaleTransitionController.relatchPlan = {};
 		vrRenderScaleTransitionController.state = VRRenderScaleTransitionState::Requested;
 		vrRenderScaleTransitionController.transitionStartFrame = frame;
 		vrRenderScaleTransitionController.stateFrame = frame;
@@ -23803,6 +23900,7 @@ void Upscaling::BindVRRenderScaleRelatchEpoch(uint64_t a_epoch)
 		vrRenderScaleTransitionController.state == VRRenderScaleTransitionState::Active;
 	if (settled || vrRenderScaleTransitionController.targetEpoch == 0) {
 		vrRenderScaleTransitionController.targetEpoch = a_epoch;
+		vrRenderScaleTransitionController.relatchPlan = {};
 		++vrRenderScaleTransitionController.revision;
 	}
 }
@@ -23815,6 +23913,41 @@ bool Upscaling::IsVRRenderScaleTransitionEpochCurrent(uint64_t a_epoch) const
 	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 	return vrRenderScaleTransitionController.targetEpoch == 0 ||
 	       vrRenderScaleTransitionController.targetEpoch == a_epoch;
+}
+
+bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a_plan)
+{
+	if (!a_plan.valid || a_plan.transitionEpoch == 0)
+		return false;
+
+	uint64_t revision;
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		if (vrRenderScaleTransitionController.targetEpoch != a_plan.transitionEpoch)
+			return false;
+
+		vrRenderScaleTransitionController.relatchPlan = a_plan;
+		revision = ++vrRenderScaleTransitionController.revision;
+	}
+
+	if (ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} preserveDLSS={} preserveFSR={} recreateFSR={} waitFSRDrain={} lowPeakRestore={}",
+			revision,
+			a_plan.transitionEpoch,
+			a_plan.contractGeneration,
+			a_plan.actionMask,
+			a_plan.compatibility.changeMask,
+			magic_enum::enum_name(a_plan.current.backend),
+			magic_enum::enum_name(a_plan.target.backend),
+			BoolText(a_plan.reuseRenderTargets),
+			BoolText(a_plan.preserveDLSSResources),
+			BoolText(a_plan.preserveFSRResources),
+			BoolText(a_plan.recreateFSRResources),
+			BoolText(a_plan.waitForFSRDrain),
+			BoolText(a_plan.lowPeakNativeRestore));
+	}
+	return true;
 }
 
 bool Upscaling::RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request)

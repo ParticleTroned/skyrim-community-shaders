@@ -296,6 +296,39 @@ public:
 		bool canReusePresentation = false;
 	};
 
+	enum class VRRenderScaleRelatchAction : uint32_t
+	{
+		None = 0,
+		RecreateRenderTargets = 1u << 0,
+		ResetDLSS = 1u << 1,
+		ResetFSR = 1u << 2,
+		RecreateFSR = 1u << 3,
+		RefreshPresentation = 1u << 4,
+		UpdateOptions = 1u << 5,
+		RetireTransientResources = 1u << 6
+	};
+
+	/** @brief Immutable physical work plan admitted for one transition epoch. */
+	struct VRRenderScaleRelatchPlan
+	{
+		bool valid = false;
+		uint64_t transitionEpoch = 0;
+		uint32_t contractGeneration = 0;
+		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		VRRenderScaleResourceKey current{};
+		VRRenderScaleResourceKey target{};
+		VRRenderScaleResourceCompatibility compatibility{};
+		uint32_t actionMask = static_cast<uint32_t>(VRRenderScaleRelatchAction::None);
+		bool reuseRenderTargets = false;
+		bool preserveDLSSResources = false;
+		bool preserveFSRResources = false;
+		bool destroyDLSSResources = false;
+		bool destroyFSRResources = false;
+		bool recreateFSRResources = false;
+		bool waitForFSRDrain = false;
+		bool lowPeakNativeRestore = false;
+	};
+
 	/** @brief Immutable controller-visible profile at one transition milestone. */
 	struct VRRenderScaleProfileSnapshot
 	{
@@ -335,6 +368,7 @@ public:
 		VRRenderScaleProfileSnapshot applying{};
 		VRRenderScaleProfileSnapshot applied{};
 		VRRenderScaleProfileSnapshot stable{};
+		VRRenderScaleRelatchPlan relatchPlan{};
 	};
 
 	struct PerfModeState
@@ -1086,6 +1120,7 @@ public:
 	uint64_t AllocateVRRenderScaleTransitionEpoch();
 	void BindVRRenderScaleRelatchEpoch(uint64_t a_epoch);
 	bool IsVRRenderScaleTransitionEpochCurrent(uint64_t a_epoch) const;
+	bool RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a_plan);
 	void SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason = nullptr);
 	void PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization, uint64_t a_epoch);
 	void PublishVRRenderScaleTransitionStable();

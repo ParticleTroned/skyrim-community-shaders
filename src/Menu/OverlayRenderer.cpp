@@ -255,6 +255,16 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	const auto renderDocInformation = renderDoc->GetOverlayWarningMessage();
 	const bool backgroundCompilation = shaderCache->backgroundCompilation.load(std::memory_order_relaxed);
 	const bool menuLoaded = shaderCache->menuLoaded.load(std::memory_order_relaxed);
+	const auto& menuSettings = Menu::GetSingleton()->GetSettings();
+	const bool hideRoutineBackgroundCompilation = backgroundCompilation &&
+	                                              menuSettings.HideBackgroundCompilationAtInfoLevel &&
+	                                              state->GetLogLevel() == spdlog::level::info;
+	const bool hasExceptionalInfo = shaderCache->HasFeatureSetRevertPending() ||
+	                                shaderCache->HasFeatureSetChanges() ||
+	                                shaderCache->IsDiskCacheHeld() ||
+	                                FeatureIssues::HasFeatureIssues() ||
+	                                (failed && !hide) ||
+	                                renderDocAvailable;
 
 	auto progressTitle = fmt::format("{}Compiling Shaders: {}",
 		backgroundCompilation ? "Background " : "",
@@ -263,13 +273,18 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
 
 	if (shaderCache->IsCompiling()) {
+		if (hideRoutineBackgroundCompilation && !hasExceptionalInfo)
+			return;
+
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
 		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::End();
 			return;
 		}
-		ImGui::TextUnformatted(progressTitle.c_str());
-		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
+		if (!hideRoutineBackgroundCompilation) {
+			ImGui::TextUnformatted(progressTitle.c_str());
+			ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
+		}
 		if (shaderCache->HasFeatureSetRevertPending()) {
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
 				"Previous cache restored.\n"

@@ -1657,6 +1657,8 @@
     "menu.advanced.background_compile_on_boot_tooltip": "Load the menu immediately and compile shaders in the background on boot. This is the same behavior as pressing the Skip Compilation key automatically. Shaders still compile; only the startup wait is skipped. Takes effect on next launch.",
     "menu.advanced.background_compiler_threads": "Background Compiler Threads",
     "menu.advanced.background_compiler_threads_tooltip": "Number of threads used to compile shaders during gameplay. Defaults to half of performance cores to avoid impacting the render thread. Higher values finish compilation faster but may cause stuttering.",
+    "menu.advanced.hide_background_compilation_at_info": "Hide Background Compilation at Info Level",
+    "menu.advanced.hide_background_compilation_at_info_tooltip": "Hides the routine background-compilation progress overlay only while Log Level is info. Blocking compilation and important diagnostics remain visible. Other log levels keep the progress overlay visible.",
     "menu.advanced.block_next": "Block Next:",
     "menu.advanced.block_previous": "Block Previous:",
     "menu.advanced.blocked_shader": "Blocked: %s",

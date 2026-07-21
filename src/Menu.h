@@ -430,6 +430,7 @@ public:
 		std::vector<InputCombo> ScreenshotKey = { InputCombo::Keyboard(VK_SNAPSHOT) };                                    // Screenshot capture key
 		bool EnableShaderBlocking = false;                                                  // Enable shader blocking hotkeys for debugging
 		bool BackgroundShaderCompilationOnBoot = false;                                     // Load the menu immediately and compile shaders in the background on boot
+		bool HideBackgroundCompilationAtInfoLevel = true;                                   // Hide routine background-compilation HUD only while log level is info
 		bool FirstTimeSetupCompleted = false;                                               // Track if first-time setup has been completed
 		bool SkipClearCacheConfirmation = false;                                            // Skip confirmation dialog when clearing shader cache
 		bool AutoHideFeatureList = false;                                                   // Auto-hide left feature list panel, show on hover

@@ -137,6 +137,12 @@ void AdvancedSettingsRenderer::RenderLoggingSection()
 							  "This is the same behavior as pressing the Skip Compilation key automatically. "
 							  "Shaders still compile; only the startup wait is skipped. Takes effect on next launch."));
 	}
+	ImGui::Checkbox(T("menu.advanced.hide_background_compilation_at_info", "Hide Background Compilation at Info Level"), &menuSettings.HideBackgroundCompilationAtInfoLevel);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("menu.advanced.hide_background_compilation_at_info_tooltip",
+							  "Hides the routine background-compilation progress overlay only while Log Level is info. "
+							  "Blocking compilation and important diagnostics remain visible. Other log levels keep the progress overlay visible."));
+	}
 
 	ImGui::Columns(2, nullptr, false);
 

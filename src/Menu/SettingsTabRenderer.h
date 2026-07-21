@@ -32,9 +32,10 @@ private:
 		SettingsState& state);
 	static void RenderInterfaceTab();
 
+	static void RenderThemesTab();
+
 	// Interface sub-tabs
 	static void RenderBehaviorTab();
-	static void RenderThemesTab();
 	static void RenderFontsTab();
 	static void RenderStylingTab();
 	static void RenderColorsTab();

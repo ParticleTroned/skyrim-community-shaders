@@ -211,6 +211,7 @@ void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state)
 		RenderShadersTab();
 		RenderKeybindingsTab(state);
 		RenderInterfaceTab();
+		RenderThemesTab();
 		ImGui::EndTabBar();
 	}
 }
@@ -407,7 +408,6 @@ void SettingsTabRenderer::RenderInterfaceTab()
 		MenuFonts::TabBarPaddingGuard tabPaddingGuard(Menu::FontRole::Subheading);
 		if (ImGui::BeginTabBar("##tabs", ImGuiTabBarFlags_None)) {
 			RenderBehaviorTab();
-			RenderThemesTab();
 			RenderFontsTab();
 			RenderStylingTab();
 			RenderColorsTab();
@@ -549,7 +549,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 
 void SettingsTabRenderer::RenderThemesTab()
 {
-	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_themes", "Themes"), "InterfaceThemesTab");
+	auto tabLabel = std::format("{}##{}", T("menu.settings.tab_themes", "Themes"), "GeneralThemesTab");
 	if (BeginTabItemWithFont(tabLabel.c_str(), Menu::FontRole::Heading)) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 

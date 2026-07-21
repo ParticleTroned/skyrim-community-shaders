@@ -3163,7 +3163,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 
 #		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
-	if (!enableVanillaFresnel)
+	if (!enableVanillaFresnel
+#			if defined(MULTI_LAYER_PARALLAX)
+		|| EnvmapData.x <= 0.0
+#			endif
+	)
 #		endif
 	indirectLobeWeights.specular *= envMask;
 #	endif

@@ -62,6 +62,15 @@ same event evidence required from a rebuilt DLSS or FSR contract. Session start
 and stop events carry zero transition counters rather than inheriting metrics
 from work outside the capture boundary.
 
+Step 19 closes the logical-versus-physical convergence gap found by the first
+RC97 MCP preflight. An unchanged active CS-menu profile is synchronous only when
+the boot latch, quality, exact backend generation, backend resources, and common
+vendor textures are all present. If that contract is incomplete and no recovery
+is already in flight, the request enters the normal latest-wins controller and
+queues an epoch-owned relatch. Zero-generation or resource-free lifecycle state
+is not reported as backend-ready, preventing a missing contract from producing
+a false `Applied`/`Stable` result.
+
 ## MCP contract
 
 Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 2`. An automation client should:

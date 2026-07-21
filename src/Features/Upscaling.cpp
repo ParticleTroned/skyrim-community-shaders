@@ -13899,8 +13899,13 @@ Upscaling::VRRenderScaleStatus Upscaling::GetVRRenderScaleModeStatus() const
 	if (perfMode.HasRestartRequiredChange())
 		return VRRenderScaleStatus::RestartRequired;
 
-	if (active)
-		return VRRenderScaleStatus::Active;
+	if (active) {
+		const auto& boot = perfMode.GetBootSnapshot();
+		if (IsVRRenderScalePhysicalContractConverged(boot.method, boot.qualityMode))
+			return VRRenderScaleStatus::Active;
+
+		return VRRenderScaleStatus::PendingRelatch;
+	}
 
 	if (!IsRenderScaleMethodEligible(GetConfiguredUpscaleMethodForTransition()))
 		return VRRenderScaleStatus::IneligibleMethod;
@@ -14001,7 +14006,9 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	}
 
 	const uint32_t requested = a_enabled ? 1u : 0u;
-	const bool activeMatchesRequest = IsVRRenderScaleModeLatched() == a_enabled;
+	const bool activeMatchesRequest =
+		IsVRRenderScaleModeLatched() == a_enabled &&
+		(!a_enabled || IsVRRenderScalePhysicalContractConverged(configuredMethod, settings.qualityMode));
 	if (ClampToggleUInt(settings.perfMode) == requested && activeMatchesRequest && !perfMode.HasRestartRequiredChange()) {
 		if (renderScaleSettingsChanged) {
 			InvalidateFrameScopedUpscalingState();
@@ -14077,7 +14084,16 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		return;
 	}
 
-	if (!hasPendingRequest && !methodChanged && !qualityTargetChanged && !renderScaleTargetChanged && dlssPresetChanged) {
+	const bool physicalRelatchInFlight =
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire);
+	const bool physicalContractRecoveryRequired =
+		targetRenderScaleMode &&
+		!physicalRelatchInFlight &&
+		!IsVRRenderScalePhysicalContractConverged(targetMethod, qualityMode);
+
+	if (!hasPendingRequest && !physicalContractRecoveryRequired && !methodChanged && !qualityTargetChanged && !renderScaleTargetChanged && dlssPresetChanged) {
 		settings.dlssPreset = dlssPreset;
 		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
@@ -14087,6 +14103,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 
 	const bool stageVRUpscalingChange =
 		hasPendingRequest ||
+		physicalContractRecoveryRequired ||
 		((targetMethodRenderScaleEligible && ShouldStageVRRenderScaleTransition(targetRenderScaleMode, qualityMode)) ||
 			methodRelatchRequired);
 	if (stageVRUpscalingChange && !ShouldAcceptVRUpscalingTransitionRequest(*this, a_origin))
@@ -14137,7 +14154,8 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	if (renderScaleModeChanged ||
 		qualityChanged ||
 		ClampToggleUInt(settings.perfMode) != requestedPerfMode ||
-		IsVRRenderScaleModeLatched() != targetRenderScaleMode) {
+		IsVRRenderScaleModeLatched() != targetRenderScaleMode ||
+		physicalContractRecoveryRequired) {
 		SetPerfModeRequested(targetRenderScaleMode, a_reason, false, a_origin);
 	}
 	if (qualityChanged || renderScaleModeChanged)
@@ -14530,6 +14548,30 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 	       textureReady(transparencyCompositionMaskTexture) &&
 	       (globals::game::isVR || textureReady(motionVectorCopyTexture)) &&
 	       (a_upscaleMethod != UpscaleMethod::kDLSS || textureReady(sharpenerTexture));
+}
+
+bool Upscaling::IsVRRenderScalePhysicalContractConverged(UpscaleMethod a_upscaleMethod, uint32_t a_qualityMode) const
+{
+	if (!globals::game::isVR ||
+		!IsRenderScaleMethodEligible(a_upscaleMethod) ||
+		!IsRenderScaleQualityMode(a_qualityMode) ||
+		!IsVRRenderScaleModeLatched()) {
+		return false;
+	}
+
+	const auto& boot = perfMode.GetBootSnapshot();
+	if (!boot.valid ||
+		!boot.active ||
+		!boot.renderScaleEnabled ||
+		!boot.perfModeEnabled ||
+		boot.generation == 0 ||
+		boot.method != a_upscaleMethod ||
+		ClampQualityModeUInt(boot.qualityMode) != ClampQualityModeUInt(a_qualityMode)) {
+		return false;
+	}
+
+	return IsVendorRuntimeReadyForActiveContract(a_upscaleMethod) &&
+	       AreCommonVendorTexturesReady(a_upscaleMethod);
 }
 
 namespace
@@ -24593,7 +24635,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 18 }
+		{ "implementationStep", 19 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -25554,7 +25596,7 @@ bool Upscaling::IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMet
 
 	const uint32_t generation = GetActiveVRRenderScaleContractGeneration();
 	if (generation == 0)
-		return true;
+		return false;
 
 	switch (a_upscaleMethod) {
 	case UpscaleMethod::kDLSS:
@@ -25562,7 +25604,8 @@ bool Upscaling::IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMet
 		       vrDLSSRuntimeResourceGeneration == generation;
 	case UpscaleMethod::kFSR:
 		return !pendingFSRReset.load(std::memory_order_acquire) &&
-		       vrFSRRuntimeResourceGeneration == generation;
+		       vrFSRRuntimeResourceGeneration == generation &&
+		       fidelityFX.HasFSRResources();
 	default:
 		return true;
 	}
@@ -25686,7 +25729,9 @@ void Upscaling::RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VR
 			increment(target.failures);
 		target.readyForContract =
 			a_phase == VRVendorRuntimeLifecyclePhase::Ready &&
-			(requestedGeneration == 0 || runtimeGeneration == requestedGeneration);
+			resourcesPresent &&
+			requestedGeneration != 0 &&
+			runtimeGeneration == requestedGeneration;
 		lifecycle = target;
 		revision = ++vrRenderScaleTransitionController.revision;
 	}
@@ -26112,7 +26157,8 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 
 	if (ClampToggleUInt(settings.perfMode) != static_cast<uint32_t>(targetPerfMode) ||
 		IsVRRenderScaleModeLatched() != targetPerfMode ||
-		perfMode.HasRestartRequiredChange()) {
+		perfMode.HasRestartRequiredChange() ||
+		(targetPerfMode && !IsVRRenderScalePhysicalContractConverged(targetMethod, targetQualityMode))) {
 		SetPerfModeRequested(targetPerfMode, "VR upscaling deferred transition", false, transitionOrigin);
 	}
 	if (targetPerfMode && methodChangedFromActiveContract)

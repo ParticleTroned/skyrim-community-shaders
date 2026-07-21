@@ -1576,6 +1576,7 @@ private:
 	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
+	bool IsVRRenderScalePhysicalContractConverged(UpscaleMethod a_upscaleMethod, uint32_t a_qualityMode) const;
 	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
 	enum class HMDMaskClearPhase : uint8_t

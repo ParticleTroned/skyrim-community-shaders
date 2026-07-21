@@ -1,6 +1,7 @@
 #include "LocationContext.h"
 
 #include "Features/InteriorSun.h"
+#include "Globals.h"
 #include "Utils/Game.h"
 
 namespace LocationContext
@@ -23,7 +24,7 @@ namespace LocationContext
 	bool IsInteriorWithSun()
 	{
 		const auto* tes = RE::TES::GetSingleton();
-		return InteriorSun::IsInteriorWithSun(tes ? tes->interiorCell : nullptr);
+		return globals::features::interiorSun.IsEnabled() && InteriorSun::IsInteriorWithSun(tes ? tes->interiorCell : nullptr);
 	}
 
 	bool AllowsInteriorOnly(bool a_interiorOnly)

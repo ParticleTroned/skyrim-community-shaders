@@ -21,6 +21,8 @@ public:
 		};
 	}
 	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
@@ -35,6 +37,7 @@ public:
 
 	struct Settings
 	{
+		bool Enabled = true;
 		bool ForceDoubleSidedRendering = true;
 		bool ForceSingleShadowCascade = true;
 		float InteriorShadowDistance = 5000;
@@ -42,6 +45,7 @@ public:
 
 	Settings settings;
 
+	std::atomic<bool> runtimeEnabled = true;
 	std::atomic<bool> isInteriorWithSun = false;
 
 	struct GetWorldSpace
@@ -64,7 +68,11 @@ public:
 
 	void UpdateRasterStateCullMode(const RE::BSRenderPass* pass, const uint32_t technique) const
 	{
-		if (isInteriorWithSun && settings.ForceDoubleSidedRendering && technique & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmap)) {
+		if (!pass || !pass->shaderProperty || !rasterStateCullMode || !globals::game::stateUpdateFlags) {
+			return;
+		}
+
+		if (IsActiveInteriorSun() && settings.ForceDoubleSidedRendering && technique & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmap)) {
 			const auto flags = pass->shaderProperty->flags;
 			const auto renderTwoSided = flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided) || flags.none(RE::BSShaderProperty::EShaderPropertyFlag::kAssumeShadowmask, RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);
 			if (renderTwoSided && *rasterStateCullMode != 0) {
@@ -98,14 +106,8 @@ public:
 	};
 
 	static bool IsInteriorWithSun(const RE::TESObjectCELL* cell);
-	bool IsActiveInteriorSun() const
-	{
-		if (!loaded)
-			return false;
-
-		const auto* tes = RE::TES::GetSingleton();
-		return tes && IsInteriorWithSun(tes->interiorCell);
-	}
+	bool IsEnabled() const { return loaded && runtimeEnabled.load(std::memory_order_acquire); }
+	bool IsActiveInteriorSun() const { return IsEnabled() && isInteriorWithSun.load(std::memory_order_acquire); }
 	virtual bool IsCore() const override { return true; };
 
 private:
@@ -116,10 +118,11 @@ private:
 
 	float* gShadowDistance = nullptr;
 	float* gInteriorShadowDistance = nullptr;
+	float vanillaInteriorShadowDistance = 0.0f;
 	RE::Setting* fFirstSliceDistance = nullptr;
 	uint32_t* rasterStateCullMode = nullptr;
 
-	RE::TESObjectCELL* currentCell = nullptr;
+	const RE::TESObjectCELL* currentCell = nullptr;
 
 	bool arraysCleared = true;
 	RE::BSTArray<RE::NiPointer<RE::NiAVObject>> currentCellRoomsAndPortals = {};
@@ -129,13 +132,16 @@ private:
 	static RE::TESWorldSpace* enableInteriorSun;
 	static RE::TESWorldSpace* disableInteriorSun;
 
+	bool DrawEnabledCheckbox();
+	void SetRuntimeEnabled(bool a_enabled);
+
 	void ClearArrays();
 
 	void InitialiseOnNewCell(const RE::NiPointer<RE::BSPortalGraph>& portalGraph);
 
 	bool IsInSunDirectionAndWithinShadowDistance(const RE::NiPointer<RE::NiAVObject>& object, const RE::NiPoint3& lightDir, const RE::NiPoint3& playerPos) const;
 
-	void PopulateReplacementJobArrays(RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays);
+	void PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays);
 
 	bool ShouldForceSingleShadowCascade() const;
 	float GetInteriorShadowDistance() const;

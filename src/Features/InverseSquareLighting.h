@@ -29,11 +29,25 @@ public:
 
 	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
+	struct Settings
+	{
+		bool Enabled = true;
+	};
+
+	Settings settings;
+	std::atomic<bool> runtimeEnabled = true;
+
+	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; }
 
 	virtual void PostPostLoad() override;
+	bool IsEnabled() const { return loaded && runtimeEnabled.load(std::memory_order_acquire); }
 
 	static float CalculateRadius(float intensity, bool shadowCaster, float cutoffOverride, float size);
 
@@ -63,6 +77,10 @@ private:
 	static constexpr float MetresToUnitsSq = MetresToUnits * MetresToUnits;
 	static constexpr float ScaledUnitsSq = Scale * MetresToUnitsSq;
 	static constexpr float FadeZoneBase = 4.5f * Scale * MetresToUnits;
+
+	bool DrawEnabledCheckbox();
+	void SetRuntimeEnabled(bool a_enabled);
+	void ApplyRuntimeStateToActiveLights() const;
 
 	static void SetExtLightData(RE::NiLight* niLight, const RE::TESObjectLIGH* ligh);
 

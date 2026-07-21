@@ -655,6 +655,7 @@ void VolumetricLighting::EarlyPrepass()
 	vlDataCB->Update(vlData);
 
 	const bool currentlyInInterior = LocationContext::HasInteriorCell();
+	const bool nextInteriorWithSun = LocationContext::IsInteriorWithSun();
 	const bool nextRainSuppressionActive =
 		globals::game::isVR &&
 		settings.DisableWeatherInteractionDuringRain &&
@@ -663,12 +664,13 @@ void VolumetricLighting::EarlyPrepass()
 
 	if (initialised &&
 		currentlyInInterior == inInterior &&
+		nextInteriorWithSun == inInteriorWithSun &&
 		nextRainSuppressionActive == rainOnlySuppressionActive)
 		return;
 
 	initialised = true;
 	inInterior = currentlyInInterior;
-	inInteriorWithSun = LocationContext::IsInteriorWithSun();
+	inInteriorWithSun = nextInteriorWithSun;
 	rainOnlySuppressionActive = nextRainSuppressionActive;
 	SetupVL();
 }

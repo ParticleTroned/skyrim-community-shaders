@@ -16,7 +16,7 @@ struct ISLCommon
 		RE::FormID lighFormId;
 		RE::NiColor diffuse;
 		float radius;
-		float pad1C;
+		float originalRadius;
 		float size;
 		float fade;
 		std::uint32_t unk138;

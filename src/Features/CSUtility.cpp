@@ -2,6 +2,7 @@
 
 #include "AdaptiveBrightness.h"
 #include "Globals.h"
+#include "InverseSquareLighting.h"
 #include "LightLimitFix.h"
 #include "LinearLighting.h"
 #include "Utils/PointLightFlags.h"
@@ -192,7 +193,10 @@ void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a
 			continue;
 
 		auto* niLight = bsLight->light.get();
-		data.pointLightFlags[lightIndex] = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
+		auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
+		if (!globals::features::inverseSquareLighting.IsEnabled())
+			pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
+		data.pointLightFlags[lightIndex] = pointLightFlags;
 	}
 
 	vanillaPointLightCB->Update(data);

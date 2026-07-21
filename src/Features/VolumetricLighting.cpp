@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
-#include "RE/N/NiDirectionalLight.h"
 #include "LocationContext.h"
+#include "RE/N/NiDirectionalLight.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
 #include "State.h"
@@ -115,11 +115,9 @@ namespace
 	{
 		saturation = ClampFinite(saturation, 0.0f, kGodraySaturationMax, 1.0f);
 		const float luminance = GetLuminance(color);
-		return ClampColor01({
-			luminance + (color.red - luminance) * saturation,
+		return ClampColor01({ luminance + (color.red - luminance) * saturation,
 			luminance + (color.green - luminance) * saturation,
-			luminance + (color.blue - luminance) * saturation
-		});
+			luminance + (color.blue - luminance) * saturation });
 	}
 
 	RE::NiColor LerpColor(const RE::NiColor& a, const RE::NiColor& b, float t)
@@ -488,16 +486,18 @@ void VolumetricLighting::EarlyPrepass()
 	vlDataCB->Update(vlData);
 
 	const bool currentlyInInterior = LocationContext::HasInteriorCell();
+	const bool nextInteriorWithSun = LocationContext::IsInteriorWithSun();
 	const bool nextRainSuppressionActive = ShouldSuppressExteriorDuringRain(settings, currentlyInInterior);
 
 	if (initialised &&
-	    currentlyInInterior == inInterior &&
-	    nextRainSuppressionActive == rainOnlySuppressionActive)
+		currentlyInInterior == inInterior &&
+		nextInteriorWithSun == inInteriorWithSun &&
+		nextRainSuppressionActive == rainOnlySuppressionActive)
 		return;
 
 	initialised = true;
 	inInterior = currentlyInInterior;
-	inInteriorWithSun = LocationContext::IsInteriorWithSun();
+	inInteriorWithSun = nextInteriorWithSun;
 	rainOnlySuppressionActive = nextRainSuppressionActive;
 	SetupVL();
 }

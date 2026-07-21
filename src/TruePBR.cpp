@@ -847,7 +847,7 @@ struct BSLightingShaderProperty_GetRenderPasses
 			return nullptr;
 		}
 
-		const auto issEnabledAndInteriorWithSun = globals::features::interiorSun.loaded && globals::features::interiorSun.isInteriorWithSun;
+		const auto issEnabledAndInteriorWithSun = globals::features::interiorSun.IsActiveInteriorSun();
 
 		auto* pbrLandscapeMaterial = TryGetRegisteredPBRLandscapeMaterial(property, geometry);
 		auto* pbrMaterial = pbrLandscapeMaterial == nullptr ? TryGetRegisteredPBRMaterial(property, geometry) : nullptr;

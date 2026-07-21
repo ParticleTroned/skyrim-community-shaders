@@ -8,11 +8,23 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	InteriorSun::Settings,
+	Enabled,
 	ForceDoubleSidedRendering,
 	InteriorShadowDistance)
 
+bool InteriorSun::DrawEnabledCheckbox()
+{
+	bool enabled = settings.Enabled;
+	if (ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &enabled))
+		SetRuntimeEnabled(enabled);
+	return enabled;
+}
+
 void InteriorSun::DrawSettings()
 {
+	const bool enabled = DrawEnabledCheckbox();
+	ImGui::BeginDisabled(!enabled);
+
 	ImGui::Checkbox(T(TKEY("force_double_sided"), "Force Double-Sided Rendering"), &settings.ForceDoubleSidedRendering);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("force_double_sided_tooltip"),
@@ -20,20 +32,29 @@ void InteriorSun::DrawSettings()
 							  "Will prevent most light leaking through unmasked/unprepared interiors at a small performance cost. "));
 	}
 	if (ImGui::SliderFloat(T(TKEY("interior_shadow_distance"), "Interior Shadow Distance"), &settings.InteriorShadowDistance, 1000.0f, 8000.0f)) {
-		*gInteriorShadowDistance = settings.InteriorShadowDistance;
-		auto tes = RE::TES::GetSingleton();
-		SetShadowDistance(tes && tes->interiorCell);
+		if (gInteriorShadowDistance) {
+			*gInteriorShadowDistance = settings.InteriorShadowDistance;
+			auto tes = RE::TES::GetSingleton();
+			SetShadowDistance(tes && tes->interiorCell);
+		}
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("interior_shadow_distance_tooltip"),
 							  "Sets the distance shadows are rendered at in interiors. "
 							  "Lower values provide higher quality shadows and improved performance but may cause distant interior spaces to light up incorrectly. "));
 	}
+	ImGui::EndDisabled();
+}
+
+void InteriorSun::DrawEssentialSettings()
+{
+	DrawEnabledCheckbox();
 }
 
 void InteriorSun::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SetRuntimeEnabled(settings.Enabled);
 }
 
 void InteriorSun::SaveSettings(json& o_json)
@@ -44,6 +65,7 @@ void InteriorSun::SaveSettings(json& o_json)
 void InteriorSun::RestoreDefaultSettings()
 {
 	settings = {};
+	SetRuntimeEnabled(settings.Enabled);
 }
 
 void InteriorSun::PostPostLoad()
@@ -63,6 +85,7 @@ void InteriorSun::PostPostLoad()
 
 	gShadowDistance = reinterpret_cast<float*>(REL::RelocationID(528314, 415263).address());
 	gInteriorShadowDistance = reinterpret_cast<float*>(REL::RelocationID(513755, 391724).address());
+	vanillaInteriorShadowDistance = *gInteriorShadowDistance;
 
 	// Patches BSShadowDirectionalLight::SetFrameCamera to read the correct shadow distance value in interior cells
 	const std::uintptr_t address = REL::RelocationID(101499, 108496).address() + REL::Relocate(0xD62, 0xE6C);
@@ -70,13 +93,15 @@ void InteriorSun::PostPostLoad()
 	REL::safe_write(address + 4, &displacement, sizeof(displacement));
 
 	rasterStateCullMode = &globals::game::shadowState->GetRuntimeData().rasterStateCullMode;
+	SetRuntimeEnabled(settings.Enabled);
 
 	logger::info("[Interior Sun] Installed hooks");
 }
 
 void InteriorSun::EarlyPrepass()
 {
-	isInteriorWithSun = IsInteriorWithSun(RE::TES::GetSingleton()->interiorCell);
+	const auto* tes = RE::TES::GetSingleton();
+	isInteriorWithSun.store(IsEnabled() && IsInteriorWithSun(tes ? tes->interiorCell : nullptr), std::memory_order_release);
 }
 
 inline bool InteriorSun::IsInteriorWithSun(const RE::TESObjectCELL* cell)
@@ -86,8 +111,13 @@ inline bool InteriorSun::IsInteriorWithSun(const RE::TESObjectCELL* cell)
 
 RE::TESWorldSpace* InteriorSun::GetWorldSpace::thunk(RE::TES* tes)
 {
-	if (const auto cell = tes->interiorCell)
-		return IsInteriorWithSun(cell) ? enableInteriorSun : disableInteriorSun;
+	if (!globals::features::interiorSun.IsEnabled())
+		return func(tes);
+
+	if (tes) {
+		if (const auto cell = tes->interiorCell)
+			return IsInteriorWithSun(cell) ? enableInteriorSun : disableInteriorSun;
+	}
 	return func(tes);
 }
 
@@ -106,10 +136,11 @@ RE::TESWorldSpace* InteriorSun::disableInteriorSun = [] {
 void InteriorSun::DirShadowLightCulling::thunk(RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays, RE::BSTArray<RE::NiPointer<RE::NiAVObject>>& nodes)
 {
 	auto& singleton = globals::features::interiorSun;
-	const auto cell = RE::TES::GetSingleton()->interiorCell;
+	const auto* tes = RE::TES::GetSingleton();
+	const auto* cell = tes ? tes->interiorCell : nullptr;
 	auto* passedJobArrays = &jobArrays;
 
-	if (cell && singleton.isInteriorWithSun) {
+	if (cell && singleton.IsActiveInteriorSun()) {
 		const auto* loadedData = cell->GetRuntimeData().loadedData;
 		const auto portalGraph = loadedData ? loadedData->portalGraph : nullptr;
 		if (portalGraph) {
@@ -146,7 +177,22 @@ void InteriorSun::ClearArrays()
 	arraysCleared = true;
 }
 
-void InteriorSun::PopulateReplacementJobArrays(RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays)
+void InteriorSun::SetRuntimeEnabled(bool a_enabled)
+{
+	settings.Enabled = a_enabled;
+	runtimeEnabled.store(a_enabled, std::memory_order_release);
+
+	const auto* tes = RE::TES::GetSingleton();
+	const auto* interiorCell = tes ? tes->interiorCell : nullptr;
+	isInteriorWithSun.store(a_enabled && loaded && IsInteriorWithSun(interiorCell), std::memory_order_release);
+
+	if (gInteriorShadowDistance) {
+		*gInteriorShadowDistance = a_enabled ? settings.InteriorShadowDistance : vanillaInteriorShadowDistance;
+		SetShadowDistance(interiorCell != nullptr);
+	}
+}
+
+void InteriorSun::PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays)
 {
 	if (cell != currentCell) {
 		InitialiseOnNewCell(portalGraph);
@@ -154,6 +200,11 @@ void InteriorSun::PopulateReplacementJobArrays(RE::TESObjectCELL* cell, const RE
 	}
 
 	const auto jobArraySize = jobArrays.size();
+	if (jobArraySize == 0) {
+		ClearArrays();
+		currentCell = nullptr;
+		return;
+	}
 
 	if (replacementJobArrays.size() != jobArraySize)
 		replacementJobArrays.resize(jobArraySize);

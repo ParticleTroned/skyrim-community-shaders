@@ -1,6 +1,6 @@
 # SkyrimVR Full-Resolution Menu Presentation Strategy
 
-Status: the ordinary-menu hybrid, Map/Stats WORLDUI overlay route, fail-open
+Status: the ordinary-menu hybrid, Map/Stats/Dialogue WORLDUI overlay route, fail-open
 Loading presentation, unmasked desktop mirror, projection de-jitter, buffered
 tracing, orphaned-Barter guard, Map-symbol supersampling, and post-game MainMenu
 presentation are implemented and committed through RC93. RC93 keeps late
@@ -184,6 +184,16 @@ Evidence reviewed:
     recovery relatches keep their existing behavior. Revision-3 API blockers
     again expose RaceSex and its tail so external stabilizers can buffer the
     newest requested profile.
+-   Focused clean-RC94 Dialogue trace ending 2026-07-21 23:41:10: the corrected
+    production schema captures and suppresses projected `6x2`, HUD `504x2`, and
+    HUD `252x2` in order, and every three-operation final transaction completes
+    successfully for both eyes. Each stable Dialogue frame nevertheless adds
+    one exact mode-24 `kWORLDUI1 6x2 -> kMENUBG` consumer with read-only depth.
+    It is accepted by the semantic bridge but kept in the `1672x836` reduced
+    base with `reason=menu-source-not-found`, including while MessageBox overlaps
+    Dialogue. Dialogue now admits that exact `kWORLDUI0/1` contract through the
+    existing ordered, projection-de-jittered full-resolution layer; event-backed
+    ownership covers overlap and first-frame UI lookup races.
 
 Developer tracing remains available. Debug/Trace records no longer request a
 synchronous file flush per record; session begin/end still flush explicitly.
@@ -1658,6 +1668,7 @@ public control surface.
 | Desktop compositor   | Samples the left half of the sealed committed layer over Skyrim's existing backbuffer; never copies a masked HMD eye                                                                                                                                                                                                                  |
 | Map policy           | Reduced mixed 3D/depth pass with no scene-target/depth substitution; Map's fixed HUD color/depth pair is raised from its native size toward per-eye display size (minimum 1.5x, maximum 2x) only while Map is open, and exact projected/HUD plus non-writing `kWORLDUI0/1` consumers join the transparent full-resolution transaction |
 | Stats policy         | Reduced constellation production and geometry; exact non-depth/stencil-writing `kWORLDUI0/1` consumers join the same transparent full-resolution transaction                                                                                                                                                                          |
+| Dialogue policy      | Exact mode-24 `kWORLDUI0/1 -> kMENUBG` consumers with no depth/stencil writes join the ordered full-resolution transaction while Dialogue is open, including MessageBox overlap                                                                                                                                                       |
 | MainMenu policy      | A latched reduced `kVR_FRAMEBUFFER` is stretched and really submitted even after world-complete eligibility ends, with exact direct consumers replayed into the final layer; late presentation into a native target with conventional vendor dynamic resolution instead uses transient 1:1 projection/dynamic state                   |
 | Loading policy       | A latched reduced `kVR_FRAMEBUFFER` is stretched and submitted, with the exact Loading direct consumer replayed when captured; late presentation into a native target with conventional vendor dynamic resolution uses transient 1:1 state through Loading and its close tail                                                         |
 
@@ -1693,8 +1704,10 @@ their existing dynamic-resolution behavior.
    and mode 516 only while MainMenu or Loading is open. Neither path inspects
    the disproven selector byte; source and destination identity remain mandatory
    at the direct draw.
-4. The exact direct draw requires bound slot-zero `kPROJECTEDMENU` or `kHUDMENU`.
-   Index count and draw shape are recorded but do not authorize ownership.
+4. The exact direct draw requires bound slot-zero `kPROJECTEDMENU` or `kHUDMENU`;
+   Stats, Map, and Dialogue additionally admit the narrowly gated
+   `kWORLDUI0/1` contract described below. Index count and draw shape are
+   recorded but do not authorize ownership.
 5. In an eligible mode-24 epoch, the destination must be `kMENUBG`.
    Production reasserts the unjittered projection contract at this exact bridge,
    replay writes the operation into full-resolution staging, restores D3D state,
@@ -1720,7 +1733,7 @@ their existing dynamic-resolution behavior.
    failure leaves the native target installed. Map close, transport loss, or a
    resource reset restores the engine-owned pointers and releases the replacement;
    closed-Map frames perform no extra draw or texture work.
-9. While Stats or Map is open, its mode-24 epoch may additionally recognize a
+9. While Stats, Map, or Dialogue is open, its mode-24 epoch may additionally recognize a
    slot-zero `kWORLDUI0/1` source. The destination must be the complete reduced
    or final stereo surface, and any bound depth/stencil state must have writes
    disabled. Per-eye, intermediate, depth/stencil-writing, or otherwise
@@ -1761,8 +1774,8 @@ their existing dynamic-resolution behavior.
     even when it is the first operation.
 -   Once bridge work is suppressed, the original submit is unsafe regardless of
     its nominal dimensions and is always held on failure. This includes Map's
-    exact projected/HUD and WORLDUI consumers plus accepted Stats WORLDUI
-    consumers, but never their mixed terrain/depth work.
+    exact projected/HUD and WORLDUI consumers plus accepted Stats and Dialogue
+    WORLDUI consumers, but never their mixed terrain/depth work.
 -   Work arriving after the transaction is sealed is rejected and poisoned; it
     cannot change staging or produce different committed generations for the two
     eyes.
@@ -1816,6 +1829,12 @@ run another broad discovery trace. Validate these focused cases:
 
 -   Inventory, Magic, Journal, Crafting, Dialogue, Tween and Console render sharp,
     update immediately, and preserve every bridge operation in order.
+-   At quality 6, Dialogue and Dialogue+MessageBox frames capture projected,
+    both HUD placements, and the exact read-only `kWORLDUI1` consumer as four
+    ordered operations. Debug decisions report
+    `dialogue-world-ui-layer-captured-original-suppressed`, with no Dialogue
+    `menu-source-not-found` decision; Dialogue close returns WORLDUI ownership
+    immediately to Skyrim.
 -   Console is readable and stable during HMD motion at Info logging level, and
     appears in the desktop game window without requiring the optional
     mirror-stabilization setting.

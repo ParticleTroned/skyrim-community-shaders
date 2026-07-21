@@ -159,6 +159,7 @@ namespace
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrMapMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrStatsMenuOpenFromEvent{ false };
+	std::atomic_bool g_vrDialogueMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrRaceSexMenuOpenFromEvent{ false };
 	std::atomic_uint32_t g_vrBarterMenuCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrMapMenuCloseFrame{ 0 };
@@ -619,6 +620,7 @@ namespace
 	bool IsMainOrLoadingMenuContextActive();
 	bool IsLoadingMenuContextActive();
 	bool IsStatsMenuContextActive();
+	bool IsDialogueMenuContextActive();
 	bool IsKnownGameMenuContextActive();
 	bool IsVRMenuPresentationContextActive();
 	bool IsCommunityShadersMenuOpen();
@@ -3396,6 +3398,13 @@ namespace
 		       (ui && ui->IsMenuOpen("StatsMenu"));
 	}
 
+	bool IsDialogueMenuContextActive()
+	{
+		auto* ui = globals::game::ui;
+		return g_vrDialogueMenuOpenFromEvent.load(std::memory_order_acquire) ||
+		       (ui && ui->IsMenuOpen("Dialogue Menu"));
+	}
+
 	void TrackVRFastTravelInteractionMenuLifecycle(const RE::MenuOpenCloseEvent* a_event)
 	{
 		if (!a_event || !globals::game::isVR || !globals::state)
@@ -3813,6 +3822,7 @@ namespace
 		g_vrMenuPresentationTailEndFrame.store(0, std::memory_order_release);
 		g_vrMapMenuOpenFromEvent.store(false, std::memory_order_release);
 		g_vrStatsMenuOpenFromEvent.store(false, std::memory_order_release);
+		g_vrDialogueMenuOpenFromEvent.store(false, std::memory_order_release);
 		g_vrRaceSexMenuOpenFromEvent.store(false, std::memory_order_release);
 		g_vrRaceSexMenuPresentationTailEndFrame.store(0, std::memory_order_release);
 		g_vrObservedProjectedMenuTailEndFrame.store(0, std::memory_order_release);
@@ -9245,7 +9255,7 @@ bool Upscaling::BeginVRMenuSemanticEpoch(
 		vrMenuFrameTransaction.presentationStarted;
 	// Map keeps its mixed 3D/depth pass on the reduced engine target, but its
 	// exact projected/HUD bridges are still eligible for transparent overlay
-	// capture. Stats and Map WORLDUI consumers share this mode-24 boundary;
+	// capture. Stats, Map, and Dialogue WORLDUI consumers share this mode-24 boundary;
 	// texture production and mixed depth-producing geometry remain outside the
 	// adapter.
 	context.eligible = menuRenderMode &&
@@ -10484,9 +10494,9 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		IsVRMenuSemanticAdapterEligible();
 	if (!semanticBridge && !authorizedDirectBridge)
 		return decide("menu-bridge-context-inactive", false);
-	const bool statsWorldUIEligible = semanticBridge && IsStatsMenuContextActive();
-	const bool mapWorldUIEligible = semanticBridge && IsVRMapMenuPresentationActive();
-	const bool menuWorldUIEligible = statsWorldUIEligible || mapWorldUIEligible;
+	bool statsWorldUIEligible = false;
+	bool mapWorldUIEligible = false;
+	bool dialogueWorldUIEligible = false;
 	bool menuWorldUIBridge = false;
 	const bool loadingDirectBridge = authorizedDirectBridge && IsLoadingMenuContextActive();
 	const bool mainMenuDirectBridge =
@@ -10515,12 +10525,21 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 				kVRKnownGameMenuFinalCompositeTargets.begin(),
 				kVRKnownGameMenuFinalCompositeTargets.end(),
 				menuSourceMatch.target) != kVRKnownGameMenuFinalCompositeTargets.end();
-		menuWorldUIBridge =
-			menuWorldUIEligible &&
+		const bool worldUISource =
 			std::find(
 				kVRMenuWorldUIFinalCompositeTargets.begin(),
 				kVRMenuWorldUIFinalCompositeTargets.end(),
 				menuSourceMatch.target) != kVRMenuWorldUIFinalCompositeTargets.end();
+		if (semanticBridge && worldUISource) {
+			// Query menu ownership only for an actual WORLDUI candidate. Ordinary
+			// projected/HUD operations retain the existing Info-level fast path.
+			statsWorldUIEligible = IsStatsMenuContextActive();
+			mapWorldUIEligible = IsVRMapMenuPresentationActive();
+			dialogueWorldUIEligible = IsDialogueMenuContextActive();
+		}
+		menuWorldUIBridge =
+			worldUISource &&
+			(statsWorldUIEligible || mapWorldUIEligible || dialogueWorldUIEligible);
 		if (!knownMenuSource && !menuWorldUIBridge)
 			return decide("menu-source-not-found", false);
 
@@ -10544,10 +10563,10 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		if (destination.target != expectedDestination)
 			return decide("destination-target-mismatch", false);
 
-		// Suppressing a Skills or Map world-UI consumer must not remove depth or
-		// stencil writes that later mixed geometry depends on. The replay remains
-		// an ordered transparent overlay while the original base keeps all geometry
-		// and depth-producing work.
+		// Suppressing a Stats, Map, or Dialogue world-UI consumer must not remove
+		// depth or stencil writes that later mixed geometry depends on. The replay
+		// remains an ordered transparent overlay while the original base keeps all
+		// geometry and depth-producing work.
 		if (menuWorldUIBridge && dsv) {
 			ID3D11DepthStencilState* depthState = nullptr;
 			UINT stencilReference = 0;
@@ -10565,11 +10584,12 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 			}
 			if (depthDesc.DepthWriteMask != D3D11_DEPTH_WRITE_MASK_ZERO ||
 				(depthDesc.StencilEnable && depthDesc.StencilWriteMask != 0)) {
-				return decide(
-					mapWorldUIEligible ?
-						"map-world-ui-depth-stencil-write" :
-						"stats-world-ui-depth-stencil-write",
-					false);
+				const char* reason = "stats-world-ui-depth-stencil-write";
+				if (mapWorldUIEligible)
+					reason = "map-world-ui-depth-stencil-write";
+				else if (dialogueWorldUIEligible)
+					reason = "dialogue-world-ui-depth-stencil-write";
+				return decide(reason, false);
 			}
 		}
 	}
@@ -10666,9 +10686,11 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		vrMenuFrameTransaction.renderComplete = true;
 	const char* successReason = "direct-layer-captured-original-suppressed";
 	if (menuWorldUIBridge) {
-		successReason = mapWorldUIEligible ?
-		                    "map-world-ui-layer-captured-original-suppressed" :
-		                    "stats-world-ui-layer-captured-original-suppressed";
+		successReason = "stats-world-ui-layer-captured-original-suppressed";
+		if (mapWorldUIEligible)
+			successReason = "map-world-ui-layer-captured-original-suppressed";
+		else if (dialogueWorldUIEligible)
+			successReason = "dialogue-world-ui-layer-captured-original-suppressed";
 	} else if (semanticBridge) {
 		successReason = "semantic-layer-captured-original-suppressed";
 	} else if (loadingDirectBridge) {
@@ -12877,6 +12899,8 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	}
 	if (a_event && a_event->menuName == "StatsMenu")
 		g_vrStatsMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
+	if (a_event && a_event->menuName == "Dialogue Menu")
+		g_vrDialogueMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_relaxed);
@@ -12940,6 +12964,7 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 	g_vrLoadingMenuOpenFromEvent.store(ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME), std::memory_order_relaxed);
 	g_vrMapMenuOpenFromEvent.store(ui->IsMenuOpen(RE::MapMenu::MENU_NAME), std::memory_order_release);
 	g_vrStatsMenuOpenFromEvent.store(ui->IsMenuOpen("StatsMenu"), std::memory_order_release);
+	g_vrDialogueMenuOpenFromEvent.store(ui->IsMenuOpen("Dialogue Menu"), std::memory_order_release);
 	g_vrRaceSexMenuOpenFromEvent.store(raceSexMenuOpen, std::memory_order_release);
 	if (kEnableVRMenuPresentationTraceDiagnostics &&
 		globals::game::isVR && ShouldEmitUpscalingDiagLogs()) {

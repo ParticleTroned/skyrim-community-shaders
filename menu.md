@@ -166,6 +166,24 @@ Evidence reviewed:
     submissions continue. This isolates that stall after the MainMenu UI action
     and before engine Loading-menu creation; the current D3D/menu trace cannot
     identify which engine or mod command handler failed to complete.
+-   Focused live-relatch trace ending 2026-07-21 15:59:19: enabling quality 6
+    Render Scale inside RaceSex relatches from native to `1644x913` while the
+    menu is open. Menu capture and both final composites remain valid, but the
+    submit-stage vendor cooldown cannot promote until the protected menu state
+    clears, leaving the `822x913` per-eye base on the presentation-only stretch
+    path. A later CS-menu activation during Loading is more severe: the relatch
+    applies with `saveLoadContext=yes` and `loadingPresentation=yes`, while the
+    physical submit remains native `4936x2740`. The expected `822x913` eye
+    contract rejects that native eye, then 555 consecutive transactions poison
+    and 1,058 synthetic reduced-fallback records suppress real OpenVR submits.
+    Explicit CS-menu setting transitions and already-staged CS-menu/VRAPI
+    relatches now remain queued throughout known menu presentation, RaceSex and
+    its tail, Loading/save-load protection, and the wait for the first completed
+    post-load world frame. The relatch repeats that check immediately before
+    resource teardown. Stable active contracts and internal `PostLoadSync`/
+    recovery relatches keep their existing behavior. Revision-3 API blockers
+    again expose RaceSex and its tail so external stabilizers can buffer the
+    newest requested profile.
 
 Developer tracing remains available. Debug/Trace records no longer request a
 synchronous file flush per record; session begin/end still flush explicitly.

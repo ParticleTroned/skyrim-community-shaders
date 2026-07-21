@@ -2913,6 +2913,37 @@ namespace
 		return true;
 	}
 
+	bool IsExplicitSettingsVRRenderScaleTransitionOrigin(Upscaling::VRUpscalingTransitionOrigin a_origin)
+	{
+		return a_origin == Upscaling::VRUpscalingTransitionOrigin::CSMenu ||
+		       a_origin == Upscaling::VRUpscalingTransitionOrigin::VRAPI;
+	}
+
+	bool IsVRRenderScaleRelatchSensitiveContextActive(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		auto* ui = globals::game::ui;
+		return IsVRMenuPresentationContextActive() ||
+		       IsRaceSexMenuContextActive(ui) ||
+		       IsVRRaceSexMenuEventContextActive(a_state) ||
+		       IsVRLoadingPresentationContextActive(a_state) ||
+		       IsSaveLoadTransitionContextActive(a_state) ||
+		       !HasCompletedVRWorldFrameAfterLatestLoad(a_state);
+	}
+
+	bool ShouldDeferExplicitVRRenderScaleRelatch(
+		Upscaling::VRUpscalingTransitionOrigin a_origin,
+		const State* a_state)
+	{
+		// Limit the new policy to settings-driven changes. A stable active contract
+		// has no pending work here, while PostLoadSync and recovery retain their
+		// existing lifecycle behavior.
+		return IsExplicitSettingsVRRenderScaleTransitionOrigin(a_origin) &&
+		       IsVRRenderScaleRelatchSensitiveContextActive(a_state);
+	}
+
 	bool IsVRFpsStabilizerLoadSyncReady(const State* a_state)
 	{
 		if (!a_state)
@@ -14115,6 +14146,10 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 
 	const auto* state = globals::state;
 	uint32_t reasons = 0;
+	const bool raceSexMenuActive =
+		IsRaceSexMenuContextActive(globals::game::ui) ||
+		g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire);
+	const bool raceSexStartupTailActive = IsVRRaceSexMenuPresentationTailActive(state);
 	const bool worldFrameReady = HasCompletedVRWorldFrameAfterLatestLoad(state);
 	const bool loadTransitionActive =
 		IsLoadingMenuContextActive() ||
@@ -14131,6 +14166,14 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 		HasPendingVRUpscalingTransition() ||
 		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
 		HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(*this);
+
+	if (raceSexMenuActive) {
+		reasons |= kVRUpscalingApplyBlockRaceSexMenu;
+	}
+
+	if (raceSexStartupTailActive) {
+		reasons |= kVRUpscalingApplyBlockRaceSexStartupTail;
+	}
 
 	if (loadTransitionActive) {
 		reasons |= kVRUpscalingApplyBlockLoadingMenu;
@@ -14892,6 +14935,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	auto* state = globals::state;
 	if (!state || !globals::game::renderer || !globals::d3d::context)
 		return false;
+	const auto previewRelatchOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 
 	if (DeferVRPerfModeBootLatchForPendingDLSS(*this)) {
 		MarkPerfModeRenderTargetRecreateQueued();
@@ -14903,7 +14947,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return false;
 	}
 
-	const auto previewRelatchOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 	const auto previewRecoverySnapshot = pendingVRRenderScaleRecoverySnapshot;
 	const bool preserveActiveContractForRecoveryPreview =
 		ShouldPreserveActiveVRRenderScaleContractForRecovery(*this, previewRelatchOrigin, previewRecoverySnapshot);
@@ -15146,6 +15189,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			perfMode.GetRenderScreenSize());
 		return false;
 	}
+
+	static bool loggedExplicitRelatchSensitiveDefer = false;
+	if (ShouldDeferExplicitVRRenderScaleRelatch(relatchOrigin, state)) {
+		requeueRelatch(kVRRenderScalePostLoadSettleRetryFrames);
+		if (!loggedExplicitRelatchSensitiveDefer) {
+			logger::debug(
+				"[VRRenderScale] Explicit {} render-target relatch waiting for menu/load presentation and a stable world frame.",
+				magic_enum::enum_name(relatchOrigin));
+			loggedExplicitRelatchSensitiveDefer = true;
+		}
+		return false;
+	}
+	loggedExplicitRelatchSensitiveDefer = false;
 
 	bool relatchRenderScaleActive = false;
 	float2 relatchTargetDisplaySize{ 0.0f, 0.0f };
@@ -23579,15 +23635,19 @@ bool Upscaling::ShouldDeferVRUpscalingTransitionSettings() const
 	if (!pendingRenderScaleTransition)
 		return false;
 
+	const auto* state = globals::state;
+	if (!state)
+		return false;
+
+	const auto transitionOrigin = LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin);
+	if (ShouldDeferExplicitVRRenderScaleRelatch(transitionOrigin, state))
+		return true;
+
 	if (!IsPendingVRRenderScaleActivationTarget(*this))
 		return false;
 
 	if (postLoadRuntimeResetPending.load(std::memory_order_acquire))
 		return true;
-
-	const auto* state = globals::state;
-	if (!state)
-		return false;
 
 	return UsesVRRenderScaleStartupActivationProtection(*this, state, true);
 }

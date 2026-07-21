@@ -112,7 +112,7 @@ public:
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	static constexpr uint32_t kPendingVRUpscalingSettingUnset = std::numeric_limits<uint32_t>::max();
-	// Retained for API compatibility; RaceSex no longer contributes apply blockers.
+	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexStartupTail = 1u << 1;
 	static constexpr uint32_t kVRUpscalingApplyBlockLoadingMenu = 1u << 2;

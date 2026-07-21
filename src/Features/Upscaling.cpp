@@ -23575,6 +23575,7 @@ namespace
 		                              profile.displayEyeHeight;
 		profile.queuedFrame = a_request.queuedFrame;
 		profile.origin = a_request.origin;
+		profile.resources = a_upscaling.BuildVRRenderScaleResourceKey(profile);
 		return profile;
 	}
 
@@ -23591,8 +23592,10 @@ namespace
 		profile.dlssSharpener = std::min(a_upscaling.settings.dlssSharpener, Upscaling::kDLSSSharpenerModeMaxIndex);
 		profile.dlssSharpness = a_upscaling.settings.sharpnessDLSS;
 		profile.fsrSharpness = a_upscaling.settings.sharpnessFSR;
-		if (!boot.valid)
+		if (!boot.valid) {
+			profile.resources = a_upscaling.BuildVRRenderScaleResourceKey(profile);
 			return profile;
+		}
 
 		profile.active =
 			boot.active &&
@@ -23609,6 +23612,7 @@ namespace
 		profile.displayEyeHeight = boot.displayEyeHeight;
 		profile.renderEyeWidth = boot.renderEyeWidth;
 		profile.renderEyeHeight = boot.renderEyeHeight;
+		profile.resources = a_upscaling.BuildVRRenderScaleResourceKey(profile);
 		return profile;
 	}
 }
@@ -23639,6 +23643,114 @@ const char* Upscaling::GetVRRenderScaleTransitionStateName(VRRenderScaleTransiti
 	default:
 		return "Unknown";
 	}
+}
+
+Upscaling::VRRenderScaleResourceKey Upscaling::BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot& a_profile) const
+{
+	VRRenderScaleResourceKey key{};
+	key.valid =
+		a_profile.valid &&
+		a_profile.displayEyeWidth != 0 &&
+		a_profile.displayEyeHeight != 0 &&
+		a_profile.renderEyeWidth != 0 &&
+		a_profile.renderEyeHeight != 0;
+	key.active = a_profile.active;
+	key.method = a_profile.method;
+	key.qualityMode = std::min(a_profile.qualityMode, kQualityModeMaxIndex);
+	key.dlssPreset = ClampDLSSPresetUInt(a_profile.dlssPreset);
+	key.displayEyeWidth = a_profile.displayEyeWidth;
+	key.displayEyeHeight = a_profile.displayEyeHeight;
+	key.renderEyeWidth = a_profile.renderEyeWidth;
+	key.renderEyeHeight = a_profile.renderEyeHeight;
+	key.contextCount = globals::game::isVR ? 2u : 1u;
+	key.foveatedVendorDispatch = a_profile.active && IsFoveatedVendorDispatchEnabled(a_profile.method);
+	key.peripheryTAA = key.foveatedVendorDispatch && IsPeripheryTAAEnabled(a_profile.method);
+
+	if (!a_profile.active) {
+		key.backend = VRRenderScaleBackendKind::None;
+	} else if (a_profile.method == UpscaleMethod::kDLSS) {
+		key.backend = VRRenderScaleBackendKind::DLSS;
+	} else if (a_profile.method == UpscaleMethod::kFSR) {
+		const bool runtimeFSR =
+			!fidelityFX.IsRuntimeUpscalerFailureLatched() &&
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR();
+		const bool runtimeFSR4 =
+			runtimeFSR &&
+			a_profile.fsr4RuntimeEnabled &&
+			!fidelityFX.IsRuntimeFsr4FailureLatched() &&
+			fidelityFX.IsRuntimeFsr4Available();
+		key.backend = runtimeFSR4 ?
+		                  VRRenderScaleBackendKind::FSR4Runtime :
+		                  (runtimeFSR ? VRRenderScaleBackendKind::FSRRuntime : VRRenderScaleBackendKind::FSRHost);
+	}
+	return key;
+}
+
+Upscaling::VRRenderScaleResourceCompatibility Upscaling::CompareVRRenderScaleResourceKeys(
+	const VRRenderScaleResourceKey& a_current,
+	const VRRenderScaleResourceKey& a_target)
+{
+	VRRenderScaleResourceCompatibility compatibility{};
+	auto recordChange = [&](VRRenderScaleResourceChange a_change) {
+		compatibility.changeMask |= static_cast<uint32_t>(a_change);
+	};
+
+	if (!a_current.valid || !a_target.valid) {
+		recordChange(VRRenderScaleResourceChange::RenderTargets);
+		recordChange(VRRenderScaleResourceChange::VendorRuntime);
+		recordChange(VRRenderScaleResourceChange::Presentation);
+		recordChange(VRRenderScaleResourceChange::Options);
+		return compatibility;
+	}
+
+	compatibility.canReuseRenderTargets =
+		a_current.active == a_target.active &&
+		a_current.displayEyeWidth == a_target.displayEyeWidth &&
+		a_current.displayEyeHeight == a_target.displayEyeHeight &&
+		a_current.renderEyeWidth == a_target.renderEyeWidth &&
+		a_current.renderEyeHeight == a_target.renderEyeHeight;
+	if (!compatibility.canReuseRenderTargets)
+		recordChange(VRRenderScaleResourceChange::RenderTargets);
+
+	compatibility.canReuseVendorRuntime =
+		a_current.active &&
+		a_target.active &&
+		a_current.method == a_target.method &&
+		a_current.backend == a_target.backend &&
+		a_current.contextCount == a_target.contextCount &&
+		a_current.displayEyeWidth == a_target.displayEyeWidth &&
+		a_current.displayEyeHeight == a_target.displayEyeHeight &&
+		a_current.renderEyeWidth == a_target.renderEyeWidth &&
+		a_current.renderEyeHeight == a_target.renderEyeHeight;
+	if (a_current.active != a_target.active ||
+		a_current.method != a_target.method ||
+		a_current.backend != a_target.backend ||
+		a_current.contextCount != a_target.contextCount ||
+		a_current.displayEyeWidth != a_target.displayEyeWidth ||
+		a_current.displayEyeHeight != a_target.displayEyeHeight ||
+		a_current.renderEyeWidth != a_target.renderEyeWidth ||
+		a_current.renderEyeHeight != a_target.renderEyeHeight) {
+		recordChange(VRRenderScaleResourceChange::VendorRuntime);
+	}
+
+	compatibility.canReusePresentation =
+		compatibility.canReuseRenderTargets &&
+		a_current.foveatedVendorDispatch == a_target.foveatedVendorDispatch &&
+		a_current.peripheryTAA == a_target.peripheryTAA;
+	if (!compatibility.canReusePresentation)
+		recordChange(VRRenderScaleResourceChange::Presentation);
+
+	const bool dlssOptionsRelevant =
+		a_current.method == UpscaleMethod::kDLSS ||
+		a_target.method == UpscaleMethod::kDLSS;
+	if (a_current.qualityMode != a_target.qualityMode ||
+		(dlssOptionsRelevant && a_current.dlssPreset != a_target.dlssPreset)) {
+		recordChange(VRRenderScaleResourceChange::Options);
+	}
+
+	compatibility.exact =
+		compatibility.changeMask == static_cast<uint32_t>(VRRenderScaleResourceChange::None);
+	return compatibility;
 }
 
 void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request)

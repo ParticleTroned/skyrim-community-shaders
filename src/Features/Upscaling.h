@@ -251,6 +251,51 @@ public:
 		uint32_t displayEyeHeight = 0;
 	};
 
+	enum class VRRenderScaleBackendKind : uint8_t
+	{
+		None,
+		DLSS,
+		FSRHost,
+		FSRRuntime,
+		FSR4Runtime
+	};
+
+	enum class VRRenderScaleResourceChange : uint32_t
+	{
+		None = 0,
+		RenderTargets = 1u << 0,
+		VendorRuntime = 1u << 1,
+		Presentation = 1u << 2,
+		Options = 1u << 3
+	};
+
+	/** @brief Backend-neutral identity for resources owned by one physical render-scale contract. */
+	struct VRRenderScaleResourceKey
+	{
+		bool valid = false;
+		bool active = false;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		VRRenderScaleBackendKind backend = VRRenderScaleBackendKind::None;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = kDLSSPresetK;
+		uint32_t displayEyeWidth = 0;
+		uint32_t displayEyeHeight = 0;
+		uint32_t renderEyeWidth = 0;
+		uint32_t renderEyeHeight = 0;
+		uint32_t contextCount = 0;
+		bool foveatedVendorDispatch = false;
+		bool peripheryTAA = false;
+	};
+
+	struct VRRenderScaleResourceCompatibility
+	{
+		uint32_t changeMask = static_cast<uint32_t>(VRRenderScaleResourceChange::None);
+		bool exact = false;
+		bool canReuseRenderTargets = false;
+		bool canReuseVendorRuntime = false;
+		bool canReusePresentation = false;
+	};
+
 	/** @brief Immutable controller-visible profile at one transition milestone. */
 	struct VRRenderScaleProfileSnapshot
 	{
@@ -275,6 +320,7 @@ public:
 		uint32_t renderEyeHeight = 0;
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		VRRenderScaleResourceKey resources{};
 	};
 
 	/** @brief Coherent read model for the complete render-scale transition controller. */
@@ -348,6 +394,10 @@ public:
 	VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() const;
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
+	VRRenderScaleResourceKey BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot& a_profile) const;
+	static VRRenderScaleResourceCompatibility CompareVRRenderScaleResourceKeys(
+		const VRRenderScaleResourceKey& a_current,
+		const VRRenderScaleResourceKey& a_target);
 	uint32_t GetActiveVRRenderScaleContractGeneration() const;
 	bool IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMethod) const;
 	void MarkVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);

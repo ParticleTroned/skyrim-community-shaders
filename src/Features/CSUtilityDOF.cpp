@@ -250,7 +250,7 @@ namespace
 		if (!imageSpaceManager)
 			return std::nullopt;
 
-		GET_INSTANCE_MEMBER(data, imageSpaceManager);
+		auto& data = imageSpaceManager->GetRuntimeData().data;
 		DofSettings result = DecodeDofPackedValue(
 			data.modData.data[RE::ImageSpaceModData::kDOFStrength],
 			data.modData.data[RE::ImageSpaceModData::kDOFDistance],
@@ -266,7 +266,7 @@ namespace
 		if (!imageSpaceManager)
 			return std::nullopt;
 
-		GET_INSTANCE_MEMBER(underwaterBaseData, imageSpaceManager);
+		auto* underwaterBaseData = imageSpaceManager->GetRuntimeData().underwaterBaseData;
 		if (!underwaterBaseData)
 			return std::nullopt;
 
@@ -554,9 +554,8 @@ namespace
 
 	bool IsCurrentUnderwaterImageSpace(RE::ImageSpaceManager* a_imageSpaceManager)
 	{
-		GET_INSTANCE_MEMBER(currentBaseData, a_imageSpaceManager);
-		GET_INSTANCE_MEMBER(underwaterBaseData, a_imageSpaceManager);
-		return underwaterBaseData && currentBaseData == underwaterBaseData;
+		const auto& runtimeData = a_imageSpaceManager->GetRuntimeData();
+		return runtimeData.underwaterBaseData && runtimeData.currentBaseData == runtimeData.underwaterBaseData;
 	}
 
 	class DepthOfFieldOverrideScope
@@ -570,6 +569,7 @@ namespace
 			auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 			if (!imageSpaceManager)
 				return;
+			auto& runtimeData = imageSpaceManager->GetRuntimeData();
 
 			const bool currentUnderwater = IsCurrentUnderwaterImageSpace(imageSpaceManager);
 			const DofOverride* autoFocusOverride = nullptr;
@@ -581,8 +581,7 @@ namespace
 			}
 
 			if (a_csUtility.settings.sceneDof.locked) {
-				GET_INSTANCE_MEMBER(data, imageSpaceManager);
-				sceneModData = &data.modData;
+				sceneModData = &runtimeData.data.modData;
 				sceneBackup = {
 					sceneModData->data[RE::ImageSpaceModData::kDOFStrength],
 					sceneModData->data[RE::ImageSpaceModData::kDOFDistance],
@@ -593,7 +592,7 @@ namespace
 			}
 
 			if (a_csUtility.settings.underwaterDof.locked) {
-				GET_INSTANCE_MEMBER(underwaterBaseData, imageSpaceManager);
+				auto* underwaterBaseData = runtimeData.underwaterBaseData;
 				if (underwaterBaseData) {
 					underwaterDepthOfField = &underwaterBaseData->depthOfField;
 					underwaterBackup = *underwaterDepthOfField;

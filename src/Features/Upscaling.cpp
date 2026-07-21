@@ -7,7 +7,9 @@
 #include "Menu.h"
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
+#include "RE/B/BarterMenu.h"
 #include "RE/R/RaceSexMenu.h"
+#include "RE/U/UIMessageQueue.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -146,6 +148,11 @@ namespace
 	std::atomic_bool g_vrMapMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrStatsMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrRaceSexMenuOpenFromEvent{ false };
+	std::atomic_uint32_t g_vrBarterMenuCloseFrame{ 0 };
+	std::atomic_uint32_t g_vrMapMenuCloseFrame{ 0 };
+	std::atomic_bool g_vrClosedBarterFastTravelPending{ false };
+	std::atomic_bool g_vrLoadingDirectLayerCapturedSinceOpen{ false };
+	std::atomic_uint32_t g_vrOrphanBarterMenuReopenGuardEndFrame{ 0 };
 	std::atomic_uint32_t g_vrStartupLoadKind{ static_cast<uint32_t>(VRStartupLoadKind::Unknown) };
 	std::atomic_uint32_t g_vrStartupRaceSexNameFrame{ 0 };
 	std::atomic_uint64_t g_vrRaceSexTraceLastKey{ std::numeric_limits<uint64_t>::max() };
@@ -167,6 +174,8 @@ namespace
 	};
 	constexpr uint8_t kVRMenuBridgeHigherExpectedFlag = 0u;
 	constexpr uint32_t kVRMenuBridgeHigherExpectedMode = 0u;
+	constexpr uint8_t kVRLoadingMenuBridgeHigherExpectedFlag = 1u;
+	constexpr uint32_t kVRLoadingMenuBridgeHigherExpectedMode = 516u;
 	constexpr uint32_t kVRMenuBridgeDirectDrawCallsiteRva = 0xDBDDF3u;
 	constexpr uint32_t kVRMenuBridgeDirectDrawCallerRva = 0xDBDDF9u;
 	constexpr std::array<uint8_t, 6> kVRMenuBridgeDirectDrawExpectedBytes{
@@ -174,6 +183,9 @@ namespace
 	};
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
+	constexpr uint32_t kVRFastTravelMenuHandoffFrames = 4u;
+	constexpr uint32_t kVRClosedBarterFastTravelWindowFrames = 1800u;
+	constexpr uint32_t kVROrphanBarterMenuReopenGuardFrames = 60u;
 	constexpr uint32_t kVRDLSSRapidRenderScaleFlipWindowFrames = 1800;
 	constexpr uint32_t kVRDLSSRapidTransitionGuardFrames = 180;
 	constexpr uint32_t kVRDLSSRapidTransitionCleanEyeMask = 0x3u;
@@ -583,6 +595,7 @@ namespace
 
 	bool IsMainMenuContextActive();
 	bool IsMainOrLoadingMenuContextActive();
+	bool IsLoadingMenuContextActive();
 	bool IsStatsMenuContextActive();
 	bool IsKnownGameMenuContextActive();
 	bool IsVRMenuPresentationContextActive();
@@ -1348,9 +1361,22 @@ namespace
 		uint32_t a_mode,
 		VRMenuBridgeHigherCallContext& a_outContext)
 	{
-		if (a_flag != kVRMenuBridgeHigherExpectedFlag ||
-			a_mode != kVRMenuBridgeHigherExpectedMode ||
-			!a_wrapperIdentity) {
+		if (!a_wrapperIdentity)
+			return false;
+
+		const bool ordinaryMenuBridge =
+			a_flag == kVRMenuBridgeHigherExpectedFlag &&
+			a_mode == kVRMenuBridgeHigherExpectedMode;
+		// Fast-travel Loading uses the same direct PROJECTEDMENU consumer as
+		// MainMenu, but the enclosing engine call has a distinct stable signature.
+		// Authorize it only while Loading is open; the direct hook still requires
+		// the exact registered source and kVR_FRAMEBUFFER destination before it can
+		// claim or suppress the draw.
+		const bool loadingMenuBridge =
+			a_flag == kVRLoadingMenuBridgeHigherExpectedFlag &&
+			a_mode == kVRLoadingMenuBridgeHigherExpectedMode &&
+			IsLoadingMenuContextActive();
+		if (!ordinaryMenuBridge && !loadingMenuBridge) {
 			return false;
 		}
 
@@ -3296,6 +3322,82 @@ namespace
 		auto* ui = globals::game::ui;
 		return g_vrStatsMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       (ui && ui->IsMenuOpen("StatsMenu"));
+	}
+
+	void TrackVRFastTravelInteractionMenuLifecycle(const RE::MenuOpenCloseEvent* a_event)
+	{
+		if (!a_event || !globals::game::isVR || !globals::state)
+			return;
+
+		const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
+		if (a_event->menuName == RE::BarterMenu::MENU_NAME) {
+			if (!a_event->opening) {
+				g_vrBarterMenuCloseFrame.store(currentFrame, std::memory_order_release);
+				return;
+			}
+			g_vrBarterMenuCloseFrame.store(0, std::memory_order_release);
+
+			const uint32_t guardEndFrame =
+				g_vrOrphanBarterMenuReopenGuardEndFrame.exchange(0, std::memory_order_acq_rel);
+			if (guardEndFrame == 0 || currentFrame > guardEndFrame)
+				return;
+
+			auto* ui = globals::game::ui;
+			if (ui && ui->IsMenuOpen("Dialogue Menu"))
+				return;
+
+			auto* uiQueue = RE::UIMessageQueue::GetSingleton();
+			if (!uiQueue)
+				return;
+
+			uiQueue->AddMessage(
+				RE::BarterMenu::MENU_NAME.data(),
+				RE::UI_MESSAGE_TYPE::kHide,
+				nullptr);
+			logger::warn(
+				"[VRMenuComposite] Queued close for orphaned BarterMenu reopened {} frame(s) after fast-travel Loading.",
+				currentFrame - (guardEndFrame - kVROrphanBarterMenuReopenGuardFrames));
+			return;
+		}
+
+		if (a_event->menuName == RE::MapMenu::MENU_NAME && !a_event->opening) {
+			g_vrMapMenuCloseFrame.store(currentFrame, std::memory_order_release);
+			return;
+		}
+
+		if (a_event->menuName != RE::LoadingMenu::MENU_NAME)
+			return;
+
+		if (a_event->opening) {
+			const uint32_t barterCloseFrame =
+				g_vrBarterMenuCloseFrame.exchange(0, std::memory_order_acq_rel);
+			const uint32_t mapCloseFrame =
+				g_vrMapMenuCloseFrame.exchange(0, std::memory_order_acq_rel);
+			const bool recentMapHandoff =
+				mapCloseFrame != 0 &&
+				currentFrame >= mapCloseFrame &&
+				currentFrame - mapCloseFrame <= kVRFastTravelMenuHandoffFrames;
+			const bool recentClosedBarter =
+				barterCloseFrame != 0 &&
+				mapCloseFrame >= barterCloseFrame &&
+				mapCloseFrame - barterCloseFrame <= kVRClosedBarterFastTravelWindowFrames;
+			g_vrClosedBarterFastTravelPending.store(
+				recentMapHandoff && recentClosedBarter,
+				std::memory_order_release);
+			g_vrLoadingDirectLayerCapturedSinceOpen.store(false, std::memory_order_release);
+			g_vrOrphanBarterMenuReopenGuardEndFrame.store(0, std::memory_order_release);
+			return;
+		}
+
+		const bool closedBarterFastTravel =
+			g_vrClosedBarterFastTravelPending.exchange(false, std::memory_order_acq_rel);
+		const bool loadingLayerCaptured =
+			g_vrLoadingDirectLayerCapturedSinceOpen.exchange(false, std::memory_order_acq_rel);
+		g_vrOrphanBarterMenuReopenGuardEndFrame.store(
+			closedBarterFastTravel && loadingLayerCaptured ?
+				currentFrame + kVROrphanBarterMenuReopenGuardFrames :
+				0u,
+			std::memory_order_release);
 	}
 
 	bool IsSkyrimMenuPresentationMenuName(std::string_view a_menuName)
@@ -9939,6 +10041,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	const bool menuWorldUIEligible = statsWorldUIEligible || mapWorldUIEligible;
 	bool menuWorldUIBridge = false;
 	const bool authorizedDirectBridge = !semanticBridge && IsMainOrLoadingMenuContextActive();
+	const bool loadingDirectBridge = authorizedDirectBridge && IsLoadingMenuContextActive();
 	BeginVRMenuFinalCompositeFrame(state->frameCount);
 	if (vrMenuFrameTransaction.presentationStarted)
 		return decide("post-presentation-source-producer", false);
@@ -10108,6 +10211,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		state->frameCount);
 
 	RecordVRMenuSemanticCapture(true);
+	if (loadingDirectBridge)
+		g_vrLoadingDirectLayerCapturedSinceOpen.store(true, std::memory_order_release);
 	if (!semanticBridge && vrMenuDrawInterfaceDepth == 0)
 		vrMenuFrameTransaction.renderComplete = true;
 	const char* successReason = "direct-layer-captured-original-suppressed";
@@ -10117,6 +10222,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		                    "stats-world-ui-layer-captured-original-suppressed";
 	} else if (semanticBridge) {
 		successReason = "semantic-layer-captured-original-suppressed";
+	} else if (loadingDirectBridge) {
+		successReason = "loading-direct-layer-captured-original-suppressed";
 	}
 	return decide(successReason, true);
 }
@@ -12204,6 +12311,8 @@ void Upscaling::DataLoaded()
 RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
+	TrackVRFastTravelInteractionMenuLifecycle(a_event);
+
 	if (a_event && a_event->opening && a_event->menuName == RE::RaceSexMenu::MENU_NAME) {
 		g_vrMenuPresentationTraceRaceSexPreRollPending.store(false, std::memory_order_release);
 		StopVRMenuPresentationTraceRaceSexPreRoll("racesex-open");

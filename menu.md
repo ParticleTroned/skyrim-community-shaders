@@ -1,23 +1,21 @@
 # SkyrimVR Full-Resolution Menu Presentation Strategy
 
-Status: the ordinary-menu hybrid, Map overlay route, unmasked desktop mirror,
-projection de-jitter, and buffered tracing are implemented and committed. The
-latest focused traces prove that Stats/Skills embedded tree labels and Map
-location/fast-travel labels use `kWORLDUI0/1`, while the existing mode-24
-overlay recognizes only projected/HUD consumers. The working revision extends
-that exact WORLDUI consumer boundary to both menus while leaving texture
-production, terrain, constellation geometry, and depth-producing work in the
-reduced base.
+Status: the ordinary-menu hybrid, Map/Stats WORLDUI overlay route, fail-open
+Loading presentation, unmasked desktop mirror, projection de-jitter, and
+buffered tracing are implemented and committed through RC89. The working
+revision additionally recognizes fast-travel Loading's exact `flag=1,
+mode=516` direct bridge and replays its projected UI into the final-resolution
+layer over the complete stretched vanilla fade.
 
 Branch: `cs-1.7-PL-VR`
 
-Implementation base reviewed: `0c66c97b895c2ee2b939073ab6cf73c87eb6ea7f`
+Implementation base reviewed: `bceaaff95b0248ff8339afbfeaf01bd6a4f73c13`
 
-Current committed implementation: `b441823941f18c70174454383cde30c96d5a445c`
+Current committed implementation: `bceaaff95b0248ff8339afbfeaf01bd6a4f73c13`
 
-Current working implementation: uncommitted Stats/Skills and Map WORLDUI
-consumer capture plus fail-open fast-travel Loading presentation on top of
-`b4418239`; no build or commit has been made for it under the branch rules.
+Current working implementation: uncommitted Loading direct-bridge recognition
+plus a narrow orphaned-Barter close guard after Map fast travel on top of RC89;
+no build or commit has been made for it under the branch rules.
 
 Checkpoint validation: the committed checkpoint was created by the user after
 the focused Map/Console changes. Current working validation is static only.
@@ -111,6 +109,28 @@ Evidence reviewed:
     `path=suppressed-reduced-fallback`; those records return synthetic OpenVR
     success without invoking the compositor. This explains SteamVR's waiting
     screen and the retained Map widgets despite zero device or submit errors.
+-   Focused Loading readability trace ending 2026-07-21 12:47:01: the initial
+    Info-level test selected quality 6 at 12:44:06, reducing the combined stereo
+    framebuffer to `1644x913` (`822x913` per eye). Quality 1 was selected again
+    at 12:44:27 and became stable before Debug was enabled at 12:45:15, so the
+    later Loading session used `4194x2329` instead. Its 691 direct consumers all
+    sample `kPROJECTEDMENU` (`2048x2048`) into reduced `kVR_FRAMEBUFFER` with
+    `flag=1, mode=516`; all were kept in the base, no final composite occurred,
+    and all 1,382 eye submits succeeded through the full-frame stretch. This
+    proves the fade transport is correct but also proves that Ultra Performance
+    loading text needs the same direct consumer replay at final resolution.
+-   Focused seller/fast-travel trace ending 2026-07-21 13:13:02: Loading session
+    37 captures and suppresses all 674 exact direct consumers, applies all 1,348
+    final eye composites, and completes all 1,348 OpenVR submits. The earlier
+    `BarterMenu` closes at frame 14574, `Dialogue Menu` closes at 14598, Map
+    closes at 14701, and Loading runs from 14702 through 15376. Skyrim then emits
+    a new `BarterMenu opening=true` event at frame 15385 without an active
+    Dialogue menu and renders it for another 344 complete frames. The returned
+    seller panel is therefore a real orphaned UI reopen, not a stale committed
+    texture. Production now closes only that narrow sequence: a recently closed
+    Barter menu, immediate Map-to-Loading handoff, successful Loading direct
+    capture, and a Barter reopen within the first 60 post-Loading frames while
+    Dialogue remains closed.
 
 Developer tracing remains available. Debug/Trace records no longer request a
 synchronous file flush per record; session begin/end still flush explicitly.
@@ -139,15 +159,15 @@ loss.
 
 ### Final routing
 
-| Context                    | Presentation policy                                                                                                                                        | Why                                                                                                                                                                                                         |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ordinary menus and Console | Replay every exact mode-24 bridge operation into full-resolution staging and suppress that operation only after replay succeeds                            | The complete ordered bridge contract is proven and must not use selector, index-count, or deduplication heuristics                                                                                          |
-| RaceSex                    | Same semantic mode-24 transport as ordinary menus                                                                                                          | RC83 proves the same three-operation projected/HUD contract, including persistent HUD reuse; no relatch is required                                                                                         |
-| MainMenu                   | Replay the exact direct projected-menu bridge outside an accumulator; stretch the reduced base at submit and composite the committed full-resolution layer | MainMenu has the exact higher/direct bridge but no ordinary mode-24 consumer                                                                                                                               |
-| Loading                    | Always stretch and submit Skyrim's complete `kVR_FRAMEBUFFER`; add a full-resolution direct layer only when the exact bridge is observed                    | Fast-travel Loading uses a different higher-call signature. Its complete framebuffer already owns the vanilla black fade and must remain a safe real-submit fallback when no operation was suppressed       |
-| Map                        | Keep Skyrim's mixed 3D/depth Map pass reduced, but replay exact projected/HUD and non-writing `kWORLDUI0/1` consumers into the transparent final-resolution layer | This preserves terrain and avoids the opaque-clear failure while routing widgets and location/fast-travel labels around the 0.33-resolution scene target                                                     |
-| Stats/Skills               | Keep constellation production and geometry reduced; replay only exact non-depth/stencil-writing mode-24 consumers of `kWORLDUI0/1` into the transparent final layer | The embedded tree labels do not use the projected/HUD source set and otherwise remain rasterized into the 0.33-resolution base                                                                              |
-| Desktop game window        | Preserve Skyrim's existing unmasked game-window backbuffer and alpha-composite the left half of the committed stereo menu layer at Present                 | Copying a completed HMD eye also copied the hidden-area mask and replaced the preferred desktop camera; only the suppressed menu pixels need restoration                                                    |
+| Context                    | Presentation policy                                                                                                                                                 | Why                                                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ordinary menus and Console | Replay every exact mode-24 bridge operation into full-resolution staging and suppress that operation only after replay succeeds                                     | The complete ordered bridge contract is proven and must not use selector, index-count, or deduplication heuristics                                                                                    |
+| RaceSex                    | Same semantic mode-24 transport as ordinary menus                                                                                                                   | RC83 proves the same three-operation projected/HUD contract, including persistent HUD reuse; no relatch is required                                                                                   |
+| MainMenu                   | Replay the exact direct projected-menu bridge outside an accumulator; stretch the reduced base at submit and composite the committed full-resolution layer          | MainMenu has the exact higher/direct bridge but no ordinary mode-24 consumer                                                                                                                          |
+| Loading                    | Always stretch and submit Skyrim's complete `kVR_FRAMEBUFFER`; add a full-resolution direct layer only when the exact bridge is observed                            | Fast-travel Loading uses a different higher-call signature. Its complete framebuffer already owns the vanilla black fade and must remain a safe real-submit fallback when no operation was suppressed |
+| Map                        | Keep Skyrim's mixed 3D/depth Map pass reduced, but replay exact projected/HUD and non-writing `kWORLDUI0/1` consumers into the transparent final-resolution layer   | This preserves terrain and avoids the opaque-clear failure while routing widgets and location/fast-travel labels around the 0.33-resolution scene target                                              |
+| Stats/Skills               | Keep constellation production and geometry reduced; replay only exact non-depth/stencil-writing mode-24 consumers of `kWORLDUI0/1` into the transparent final layer | The embedded tree labels do not use the projected/HUD source set and otherwise remain rasterized into the 0.33-resolution base                                                                        |
+| Desktop game window        | Preserve Skyrim's existing unmasked game-window backbuffer and alpha-composite the left half of the committed stereo menu layer at Present                          | Copying a completed HMD eye also copied the hidden-area mask and replaced the preferred desktop camera; only the suppressed menu pixels need restoration                                              |
 
 For ordinary menus and RaceSex, semantic ownership is:
 
@@ -626,8 +646,12 @@ no mode-24 consumer. MainMenu's exact higher/direct bridge targets
 `kVR_FRAMEBUFFER`: production replays that layer into full-resolution staging,
 suppresses the reduced operation only after capture, stretches the reduced base
 at submit, then composites the committed layer. Fast-travel Loading instead uses
-`flag=1, mode=516`; that unowned variant remains in Skyrim's complete framebuffer,
-which is stretched and really submitted without pre-requiring a separate layer.
+`flag=1, mode=516`. Production recognizes that signature only while Loading is
+open, then applies the same registered-source and `kVR_FRAMEBUFFER` destination
+checks as MainMenu. A matching consumer is replayed into the final-resolution
+layer and suppressed from the reduced base; a non-matching or pre-ownership
+failure remains in Skyrim's complete framebuffer, which is stretched and really
+submitted without pre-requiring a separate layer.
 Render Scale remains latched and no engine target recreation is requested.
 Post-latch MainMenu still requires focused visual acceptance because the traces
 establish its direct contract only before the startup latch.
@@ -1420,9 +1444,9 @@ implemented.
 
 Do not repeat broad discovery runs. The post-latch runs expose reduced-resource
 fallback failures even though their logical presentation blockers are active.
-The ordinary hybrid and Map/desktop/production-cost corrections are committed
-through `b4418239`. The Stats and Map WORLDUI extension is currently uncommitted;
-remaining work is focused visual validation. A post-latch MainMenu run remains
+The ordinary hybrid, Map/Stats WORLDUI, desktop, production-cost, and fail-open
+Loading corrections are committed through RC89. Loading direct-bridge replay is
+currently uncommitted; remaining work is focused visual validation. A post-latch MainMenu run remains
 useful as a narrow validation case because MainMenu shares Loading's
 non-semantic engine path.
 
@@ -1509,20 +1533,20 @@ changes.
 
 ## Current Implementation Reference
 
-This section describes committed checkpoint `b4418239` plus the uncommitted
-Stats/Map WORLDUI and fast-travel Loading extensions. The trace logs are not
+This section describes committed checkpoint RC89 plus the uncommitted Loading
+direct-bridge extension. The trace logs are not
 required to understand the code path; the measured contracts are preserved
 above. Reconcile newer changes against these invariants before editing.
 
 ### Code ownership
 
-| File                                 | Current responsibility                                                                                                                                                             |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File                                 | Current responsibility                                                                                                                                                                                                     |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/Features/Upscaling.cpp`         | Semantic/direct adapters, frame transaction, staging and committed layers, submit composition, production fast-path gating, Map overlay/WORLDUI capture, Stats WORLDUI capture, and Present-time desktop layer composition |
-| `src/Features/Upscaling.h`           | Transaction, layer, compositor, and hook state                                                                                                                                     |
-| `src/FrameAnnotations.cpp`           | Calls production accumulator begin/end around `BSShaderAccumulator::RenderBatches`; developer tracing is optional                                                                  |
-| `src/Hooks.cpp`                      | Runs `PresentVRMenuDesktopMirror` before state reset and before the CS desktop overlay                                                                                             |
-| `src/Features/VR/InSceneOverlay.cpp` | Suppresses unsafe reduced OpenVR fallback submits when a transition or owned menu transaction requires final-sized output                                                          |
+| `src/Features/Upscaling.h`           | Transaction, layer, compositor, and hook state                                                                                                                                                                             |
+| `src/FrameAnnotations.cpp`           | Calls production accumulator begin/end around `BSShaderAccumulator::RenderBatches`; developer tracing is optional                                                                                                          |
+| `src/Hooks.cpp`                      | Runs `PresentVRMenuDesktopMirror` before state reset and before the CS desktop overlay                                                                                                                                     |
+| `src/Features/VR/InSceneOverlay.cpp` | Suppresses unsafe reduced OpenVR fallback submits when a transition or owned menu transaction requires final-sized output                                                                                                  |
 
 The implementation adds no settings or UI. Existing Render Scale intent,
 quality, upscaler selection, OCU blockers, and mirror-quality setting remain the
@@ -1530,16 +1554,16 @@ public control surface.
 
 ### Implemented production state
 
-| State                | Ownership and invariant                                                                                                                                                            |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Semantic epoch stack | Render-thread state created for every hooked `RenderBatches` call, independent of developer tracing                                                                                |
-| Frame transaction    | Frame and plan generation, contributing epochs, captured/suppressed counts, Map display-epoch count, presentation-started/render-complete/sealed/poisoned state and failure reason |
-| Staging layer        | Mutable only while building the current ordinary/direct frame transaction                                                                                                          |
-| Committed layer      | Immutable after a staging/committed swap; sampled by both eye composites and retained across persistent-source frames                                                              |
-| Desktop compositor   | Samples the left half of the sealed committed layer over Skyrim's existing backbuffer; never copies a masked HMD eye                                                               |
-| Map policy           | Reduced mixed 3D/depth pass with no target/depth substitution; exact projected/HUD and non-writing `kWORLDUI0/1` consumers join the transparent full-resolution transaction       |
-| Stats policy         | Reduced constellation production and geometry; exact non-depth/stencil-writing `kWORLDUI0/1` consumers join the same transparent full-resolution transaction                      |
-| Loading policy       | Complete reduced `kVR_FRAMEBUFFER` is stretched and submitted; a separate layer is required only after an exact direct bridge has been captured                                  |
+| State                | Ownership and invariant                                                                                                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Semantic epoch stack | Render-thread state created for every hooked `RenderBatches` call, independent of developer tracing                                                                                     |
+| Frame transaction    | Frame and plan generation, contributing epochs, captured/suppressed counts, Map display-epoch count, presentation-started/render-complete/sealed/poisoned state and failure reason      |
+| Staging layer        | Mutable only while building the current ordinary/direct frame transaction                                                                                                               |
+| Committed layer      | Immutable after a staging/committed swap; sampled by both eye composites and retained across persistent-source frames                                                                   |
+| Desktop compositor   | Samples the left half of the sealed committed layer over Skyrim's existing backbuffer; never copies a masked HMD eye                                                                    |
+| Map policy           | Reduced mixed 3D/depth pass with no target/depth substitution; exact projected/HUD and non-writing `kWORLDUI0/1` consumers join the transparent full-resolution transaction             |
+| Stats policy         | Reduced constellation production and geometry; exact non-depth/stencil-writing `kWORLDUI0/1` consumers join the same transparent full-resolution transaction                            |
+| Loading policy       | Complete reduced `kVR_FRAMEBUFFER` is stretched and submitted; the exact Loading `flag=1, mode=516` projected consumer is replayed into a separate final-resolution layer when captured |
 
 No native-menu transition state exists. Menu events arm context/tails and
 invalidate stale committed content; they do not modify the public Render Scale
@@ -1566,8 +1590,10 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
    an observer only. Mode-24 passes are adapted only after the complete menu and
    stable reduced-plan eligibility check succeeds; unrelated mode-24 work cannot
    poison a transaction.
-3. The exact higher call requires flag zero and mode zero, but does not inspect
-   the disproven selector byte.
+3. The ordinary/MainMenu exact higher call requires flag zero and mode zero.
+   Loading additionally accepts flag one and mode 516 only while Loading is
+   open. Neither path inspects the disproven selector byte; source and
+   destination identity remain mandatory at the direct draw.
 4. The exact direct draw requires bound slot-zero `kPROJECTEDMENU` or `kHUDMENU`.
    Index count and draw shape are recorded but do not authorize ownership.
 5. In an eligible mode-24 epoch, the destination must be `kMENUBG`.
@@ -1612,6 +1638,12 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
 11. The game-window Present hook preserves Skyrim's unmasked desktop base and
     alpha-composites only the committed layer's left half. It performs no HMD
     eye publication, full-eye copies, or pending/retained pair swaps.
+12. Interaction-menu lifecycle remains engine-owned except for the proven
+    orphaned-Barter fast-travel sequence. A Barter close followed within 1,800
+    frames by Map close and Loading open within four frames arms a candidate.
+    The guard activates only if the exact Loading direct layer was actually
+    captured, and queues one normal engine `kHide` message only when Barter
+    reopens within 60 frames after Loading while Dialogue is closed.
 
 ### Failure invariants
 
@@ -1686,7 +1718,15 @@ run another broad discovery trace. Validate these focused cases:
     consecutive Map fast travels must show Skyrim's vanilla black fade, no stale
     Map widgets, and no SteamVR waiting screen. If Loading stretch preparation is
     forced to fail before any capture, the complete reduced framebuffer must be
-    submitted rather than suppressed.
+    submitted rather than suppressed. At quality 6 (`0.33`), loading-tip text
+    must remain sharp because the accepted `flag=1, mode=516` projected consumer
+    is composited after the full-frame stretch. Debug decisions for that draw
+    should report `loading-direct-layer-captured-original-suppressed`.
+-   Close a seller's Barter menu, end Dialogue, and immediately fast travel from
+    Map. The destination must return to the world without reopening the seller
+    inventory. If the engine repeats the traced orphan event, the log should
+    contain one `Queued close for orphaned BarterMenu` warning and an immediate
+    Barter close; ordinary seller conversations must remain unaffected.
 -   Map remains visible through open/close, zoom/pan, markers and MessageBox
     overlap on the original reduced terrain path, while small projected/HUD text
     widgets and location/fast-travel labels remain sharp and stable during HMD

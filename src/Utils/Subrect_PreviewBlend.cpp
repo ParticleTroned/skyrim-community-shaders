@@ -37,6 +37,9 @@ namespace Util::Subrect
 			return;
 
 		auto* drawList = ImGui::GetWindowDrawList();
+		const ImVec2 imageMin = ImGui::GetCursorScreenPos();
+		const ImVec2 imageMax(imageMin.x + a_size.x, imageMin.y + a_size.y);
+		drawList->AddRectFilled(imageMin, imageMax, IM_COL32_BLACK);
 		drawList->AddCallback(OpaquePreviewBlendCallback, nullptr);
 		ImGui::Image(reinterpret_cast<ImTextureID>(a_srv), a_size, a_uv0, a_uv1);
 		drawList->AddCallback(ImDrawCallback_ResetRenderState, nullptr);

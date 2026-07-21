@@ -955,7 +955,11 @@ void EditorWindow::RenderUI()
 	ImGui::GetStyle().FontScaleMain = settings.editorUIScale;
 
 	if (IsViewportActive()) {
-		ImGui::GetBackgroundDrawList()->AddRectFilled({ 0, 0 }, io.DisplaySize, ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg));
+		auto* backgroundDrawList = ImGui::GetBackgroundDrawList();
+		backgroundDrawList->AddRectFilled({ 0, 0 }, io.DisplaySize, ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg));
+		backgroundDrawList->AddRectFilled(
+			{ 0, 0 }, io.DisplaySize,
+			ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, ThemeManager::Constants::EDITOR_VIEWPORT_BACKGROUND_DIM_ALPHA)));
 	}
 
 	// Check for Ctrl+Z to undo

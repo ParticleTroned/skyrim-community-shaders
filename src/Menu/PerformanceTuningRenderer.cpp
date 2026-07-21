@@ -30,6 +30,14 @@ namespace
 	constexpr int kTuningHighlightFrames = 240;
 	constexpr double kFeatureCostMeasurementSeconds = 3.0;
 	constexpr double kFeatureCostMeasurementMilliseconds = kFeatureCostMeasurementSeconds * 1000.0;
+	constexpr double kFeatureCostStabilityWindowMilliseconds = 500.0;
+	constexpr double kFeatureCostStabilityTimeoutSeconds = 12.0;
+	constexpr int kFeatureCostStableComparisonCount = 2;
+	constexpr double kFeatureCostStabilityMinSampleWeight = 4.0;
+	constexpr double kFeatureCostStabilityMeanAbsoluteToleranceMs = 0.1;
+	constexpr double kFeatureCostStabilityMeanRelativeTolerance = 0.02;
+	constexpr double kFeatureCostStabilityDeviationAbsoluteToleranceMs = 0.15;
+	constexpr double kFeatureCostStabilityDeviationRelativeTolerance = 0.25;
 	constexpr float kFeatureCostDisplayEpsilonMs = 0.0005f;
 	constexpr float kFramePacingDetectionEpsilonMs = 1.0f;
 
@@ -84,6 +92,32 @@ namespace
 		uint64_t lastSampleId = 0;
 	};
 
+	struct FeatureCostStabilityMoments
+	{
+		double sum = 0.0;
+		double squaredSum = 0.0;
+		double sampleWeight = 0.0;
+	};
+
+	struct FeatureCostStabilityWindow
+	{
+		double sampledDurationMs = 0.0;
+		FeatureCostStabilityMoments frame;
+		FeatureCostStabilityMoments profilerGpu;
+		FeatureCostStabilityMoments profilerCpu;
+	};
+
+	struct FeatureCostStabilityState
+	{
+		FeatureCostStabilityWindow previousWindow;
+		FeatureCostStabilityWindow currentWindow;
+		bool hasPreviousWindow = false;
+		int consecutiveStableComparisons = 0;
+		uint64_t lastSampleId = 0;
+		bool monitoringStarted = false;
+		double monitoringStartTime = 0.0;
+	};
+
 	struct FeatureCostDelta
 	{
 		float frameMs = 0.0f;
@@ -107,7 +141,15 @@ namespace
 		MeasuringTest,
 		SettlingRestoredCurrent,
 		MeasuringRestoredCurrent,
-		Complete
+		Complete,
+		StabilityFailed
+	};
+
+	enum class FeatureCostStabilityResult
+	{
+		Pending,
+		Stable,
+		TimedOut
 	};
 
 	enum class PerformanceUserDefaultsRestoreResult
@@ -126,6 +168,7 @@ namespace
 		bool testStateApplied = false;
 		double phaseStartTime = 0.0;
 		uint64_t settleStartSampleId = 0;
+		FeatureCostStabilityState stability;
 		FeatureCostSample currentSample;
 		FeatureCostSample testSample;
 		FeatureCostSample restoredCurrentSample;
@@ -198,6 +241,13 @@ namespace
 		       state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent;
 	}
 
+	bool IsFeatureCostMeasurementSettling(const FeatureCostMeasurementState& state)
+	{
+		return state.phase == FeatureCostMeasurementPhase::SettlingCurrent ||
+		       state.phase == FeatureCostMeasurementPhase::SettlingTest ||
+		       state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent;
+	}
+
 	bool IsFeatureCostMeasurementActive(const FeatureCostMeasurementState& state)
 	{
 		return IsFeatureCostMeasurementRunning(state);
@@ -228,6 +278,170 @@ namespace
 		return (AverageOrZero(firstSum, firstWeight) + AverageOrZero(secondSum, secondWeight)) * 0.5f;
 	}
 
+	bool IsPositiveFiniteTiming(float value)
+	{
+		return std::isfinite(value) && value > 0.0f;
+	}
+
+	void AddFeatureCostStabilityMoment(
+		FeatureCostStabilityMoments& moments,
+		float value,
+		double sampleWeight)
+	{
+		if (!IsPositiveFiniteTiming(value) || sampleWeight <= 0.0)
+			return;
+
+		const double timing = static_cast<double>(value);
+		moments.sum += timing * sampleWeight;
+		moments.squaredSum += timing * timing * sampleWeight;
+		moments.sampleWeight += sampleWeight;
+	}
+
+	double GetFeatureCostStabilityMean(const FeatureCostStabilityMoments& moments)
+	{
+		return moments.sampleWeight > 0.0 ? moments.sum / moments.sampleWeight : 0.0;
+	}
+
+	double GetFeatureCostStabilityDeviation(const FeatureCostStabilityMoments& moments)
+	{
+		if (moments.sampleWeight <= 0.0)
+			return 0.0;
+
+		const double mean = GetFeatureCostStabilityMean(moments);
+		const double variance = std::max(0.0, moments.squaredSum / moments.sampleWeight - mean * mean);
+		return std::sqrt(variance);
+	}
+
+	bool AreFeatureCostStabilityMomentsEquivalent(
+		const FeatureCostStabilityMoments& previous,
+		const FeatureCostStabilityMoments& current)
+	{
+		const double previousMean = GetFeatureCostStabilityMean(previous);
+		const double currentMean = GetFeatureCostStabilityMean(current);
+		const double meanTolerance = std::max(
+			kFeatureCostStabilityMeanAbsoluteToleranceMs,
+			std::max(previousMean, currentMean) * kFeatureCostStabilityMeanRelativeTolerance);
+		if (std::abs(previousMean - currentMean) > meanTolerance)
+			return false;
+
+		const double previousDeviation = GetFeatureCostStabilityDeviation(previous);
+		const double currentDeviation = GetFeatureCostStabilityDeviation(current);
+		const double deviationTolerance = std::max(
+			kFeatureCostStabilityDeviationAbsoluteToleranceMs,
+			std::max(previousDeviation, currentDeviation) * kFeatureCostStabilityDeviationRelativeTolerance);
+		return std::abs(previousDeviation - currentDeviation) <= deviationTolerance;
+	}
+
+	bool HasCompleteFeatureCostStabilityMetric(
+		const FeatureCostStabilityWindow& window,
+		const FeatureCostStabilityMoments& moments)
+	{
+		constexpr double kSampleWeightEpsilon = 1.0e-6;
+		return window.frame.sampleWeight > 0.0 &&
+		       moments.sampleWeight + kSampleWeightEpsilon >= window.frame.sampleWeight;
+	}
+
+	bool AreFeatureCostStabilityWindowsEquivalent(
+		const FeatureCostStabilityWindow& previous,
+		const FeatureCostStabilityWindow& current)
+	{
+		if (previous.frame.sampleWeight < kFeatureCostStabilityMinSampleWeight ||
+			current.frame.sampleWeight < kFeatureCostStabilityMinSampleWeight ||
+			!AreFeatureCostStabilityMomentsEquivalent(previous.frame, current.frame)) {
+			return false;
+		}
+
+		auto optionalMetricIsStable = [&](auto member) {
+			const auto& previousMetric = previous.*member;
+			const auto& currentMetric = current.*member;
+			const bool previousComplete = HasCompleteFeatureCostStabilityMetric(previous, previousMetric);
+			const bool currentComplete = HasCompleteFeatureCostStabilityMetric(current, currentMetric);
+			if (previousComplete != currentComplete)
+				return false;
+			return !previousComplete || AreFeatureCostStabilityMomentsEquivalent(previousMetric, currentMetric);
+		};
+
+		return optionalMetricIsStable(&FeatureCostStabilityWindow::profilerGpu) &&
+		       optionalMetricIsStable(&FeatureCostStabilityWindow::profilerCpu);
+	}
+
+	bool CompleteFeatureCostStabilityWindow(FeatureCostStabilityState& stability)
+	{
+		if (!stability.hasPreviousWindow) {
+			stability.previousWindow = stability.currentWindow;
+			stability.currentWindow = {};
+			stability.hasPreviousWindow = true;
+			return false;
+		}
+
+		if (AreFeatureCostStabilityWindowsEquivalent(stability.previousWindow, stability.currentWindow)) {
+			stability.consecutiveStableComparisons++;
+		} else {
+			stability.consecutiveStableComparisons = 0;
+			stability.previousWindow = stability.currentWindow;
+		}
+
+		stability.currentWindow = {};
+		return stability.consecutiveStableComparisons >= kFeatureCostStableComparisonCount;
+	}
+
+	FeatureCostStabilityResult UpdateFeatureCostStability(
+		FeatureCostStabilityState& stability,
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
+		double currentTime)
+	{
+		if (!stability.monitoringStarted) {
+			stability.monitoringStarted = true;
+			stability.monitoringStartTime = currentTime;
+			stability.lastSampleId = summary.sampleId;
+			return FeatureCostStabilityResult::Pending;
+		}
+
+		if (currentTime - stability.monitoringStartTime >= kFeatureCostStabilityTimeoutSeconds)
+			return FeatureCostStabilityResult::TimedOut;
+
+		if (!summary.valid || summary.sampleId == 0 || summary.sampleId == stability.lastSampleId)
+			return FeatureCostStabilityResult::Pending;
+		if (summary.sampleId < stability.lastSampleId) {
+			stability = {};
+			stability.monitoringStarted = true;
+			stability.monitoringStartTime = currentTime;
+			stability.lastSampleId = summary.sampleId;
+			return FeatureCostStabilityResult::Pending;
+		}
+		stability.lastSampleId = summary.sampleId;
+
+		if (!summary.hasFrameSample || !IsPositiveFiniteTiming(summary.frameSampleMs))
+			return FeatureCostStabilityResult::Pending;
+
+		const double frameMs = static_cast<double>(summary.frameSampleMs);
+		double remainingSampleWeight = 1.0;
+		while (remainingSampleWeight > 1.0e-9) {
+			auto& window = stability.currentWindow;
+			const double remainingWindowMs = kFeatureCostStabilityWindowMilliseconds - window.sampledDurationMs;
+			const double sampleWeight = std::min(remainingSampleWeight, remainingWindowMs / frameMs);
+			if (sampleWeight <= 0.0)
+				break;
+
+			window.sampledDurationMs = std::min(
+				kFeatureCostStabilityWindowMilliseconds,
+				window.sampledDurationMs + frameMs * sampleWeight);
+			AddFeatureCostStabilityMoment(window.frame, summary.frameSampleMs, sampleWeight);
+			if (summary.hasProfilerGpuSample)
+				AddFeatureCostStabilityMoment(window.profilerGpu, summary.profilerGpuSampleMs, sampleWeight);
+			if (summary.hasProfilerCpuSample)
+				AddFeatureCostStabilityMoment(window.profilerCpu, summary.profilerCpuSampleMs, sampleWeight);
+			remainingSampleWeight -= sampleWeight;
+
+			if (window.sampledDurationMs >= kFeatureCostStabilityWindowMilliseconds &&
+				CompleteFeatureCostStabilityWindow(stability)) {
+				return FeatureCostStabilityResult::Stable;
+			}
+		}
+
+		return FeatureCostStabilityResult::Pending;
+	}
+
 	bool IsFeatureCostSampleFramePaced(const FeatureCostSample& sample)
 	{
 		return sample.framePacingEligibleSampleWeight > 0.0 &&
@@ -239,11 +453,6 @@ namespace
 		constexpr double kSampleWeightEpsilon = 1.0e-6;
 		return sample.frameSampleWeight > 0.0 &&
 		       metricSampleWeight + kSampleWeightEpsilon >= sample.frameSampleWeight;
-	}
-
-	bool IsPositiveFiniteTiming(float value)
-	{
-		return std::isfinite(value) && value > 0.0f;
 	}
 
 	bool TryGetDisplayTimingMs(bool hasProfilerTiming, float profilerTimingMs, float& value)
@@ -812,6 +1021,7 @@ namespace
 		state.phase = FeatureCostMeasurementPhase::SettlingTest;
 		state.phaseStartTime = currentTime;
 		state.settleStartSampleId = currentSampleId;
+		state.stability = {};
 	}
 
 	void RestoreFeatureCostMeasurementOriginalState(Feature* feature, FeatureCostMeasurementState& state)
@@ -821,6 +1031,13 @@ namespace
 
 		feature->RestorePerformanceCostMeasurementState(state.originalState);
 		state.testStateApplied = false;
+	}
+
+	void FailFeatureCostMeasurementStability(Feature* feature, FeatureCostMeasurementState& state)
+	{
+		RestoreFeatureCostMeasurementOriginalState(feature, state);
+		state.stability = {};
+		state.phase = FeatureCostMeasurementPhase::StabilityFailed;
 	}
 
 	void BeginFeatureCostMeasurementRestoredCurrentSettle(
@@ -834,6 +1051,7 @@ namespace
 		state.phase = FeatureCostMeasurementPhase::SettlingRestoredCurrent;
 		state.phaseStartTime = currentTime;
 		state.settleStartSampleId = currentSampleId;
+		state.stability = {};
 	}
 
 	bool HasDrainedFeatureCostProfilerPipeline(
@@ -860,6 +1078,7 @@ namespace
 		// Do not reuse the result which completed the pipeline drain as the first
 		// member of the new window. Its capture predates this phase boundary.
 		sample.lastSampleId = current.sampleId;
+		state.stability = {};
 		state.phase = phase;
 		state.phaseStartTime = currentTime;
 	}
@@ -890,17 +1109,44 @@ namespace
 
 			state.phaseStartTime = currentTime;
 			state.settleStartSampleId = current.sampleId;
+			state.stability = {};
 			return;
 		}
 
 		const double elapsed = currentTime - state.phaseStartTime;
 
-		if (state.phase == FeatureCostMeasurementPhase::SettlingCurrent) {
-			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(true));
-			if (elapsed >= settleSeconds && HasDrainedFeatureCostProfilerPipeline(state, current)) {
+		if (IsFeatureCostMeasurementSettling(state)) {
+			const bool targetEnabled = state.phase != FeatureCostMeasurementPhase::SettlingTest || state.testEnabled;
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(targetEnabled));
+			if (elapsed < settleSeconds || !HasDrainedFeatureCostProfilerPipeline(state, current))
+				return;
+
+			const auto stabilityResult = UpdateFeatureCostStability(state.stability, current, currentTime);
+			if (stabilityResult == FeatureCostStabilityResult::TimedOut) {
+				FailFeatureCostMeasurementStability(feature, state);
+				return;
+			}
+			if (stabilityResult != FeatureCostStabilityResult::Stable)
+				return;
+
+			if (state.phase == FeatureCostMeasurementPhase::SettlingCurrent) {
 				BeginFeatureCostSampleWindow(
 					state.currentSample,
 					FeatureCostMeasurementPhase::MeasuringCurrent,
+					state,
+					current,
+					currentTime);
+			} else if (state.phase == FeatureCostMeasurementPhase::SettlingTest) {
+				BeginFeatureCostSampleWindow(
+					state.testSample,
+					FeatureCostMeasurementPhase::MeasuringTest,
+					state,
+					current,
+					currentTime);
+			} else {
+				BeginFeatureCostSampleWindow(
+					state.restoredCurrentSample,
+					FeatureCostMeasurementPhase::MeasuringRestoredCurrent,
 					state,
 					current,
 					currentTime);
@@ -915,35 +1161,9 @@ namespace
 			return;
 		}
 
-		if (state.phase == FeatureCostMeasurementPhase::SettlingTest) {
-			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(state.testEnabled));
-			if (elapsed >= settleSeconds && HasDrainedFeatureCostProfilerPipeline(state, current)) {
-				BeginFeatureCostSampleWindow(
-					state.testSample,
-					FeatureCostMeasurementPhase::MeasuringTest,
-					state,
-					current,
-					currentTime);
-			}
-			return;
-		}
-
 		if (state.phase == FeatureCostMeasurementPhase::MeasuringTest) {
 			if (AddFeatureCostSample(state.testSample, current)) {
 				BeginFeatureCostMeasurementRestoredCurrentSettle(feature, state, currentTime, current.sampleId);
-			}
-			return;
-		}
-
-		if (state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent) {
-			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(true));
-			if (elapsed >= settleSeconds && HasDrainedFeatureCostProfilerPipeline(state, current)) {
-				BeginFeatureCostSampleWindow(
-					state.restoredCurrentSample,
-					FeatureCostMeasurementPhase::MeasuringRestoredCurrent,
-					state,
-					current,
-					currentTime);
 			}
 			return;
 		}
@@ -1075,7 +1295,8 @@ namespace
 
 		const bool hasMeasurementState =
 			IsFeatureCostMeasurementActive(state) ||
-			state.phase == FeatureCostMeasurementPhase::Complete;
+			state.phase == FeatureCostMeasurementPhase::Complete ||
+			state.phase == FeatureCostMeasurementPhase::StabilityFailed;
 		if (!feature->SupportsPerformanceCostMeasurement() && !hasMeasurementState) {
 			ImGui::Spacing();
 			ImGui::Separator();
@@ -1111,6 +1332,9 @@ namespace
 				kFeatureCostMeasurementSeconds,
 				kFeatureCostMeasurementSeconds);
 			ImGui::TextWrapped("Each window contains exactly %.0f seconds of raw present intervals. The boundary frame is fractionally weighted, and the rolling 60-frame display averages are not used.", kFeatureCostMeasurementSeconds);
+			ImGui::TextWrapped("Before every measurement window, consecutive 0.5-second raw timing windows must have matching total-frame, GPU, and CPU means and variability. Unavailable GPU or CPU metrics are ignored consistently.");
+			ImGui::TextWrapped("Means must remain within 0.1 ms or 2%%, whichever is wider; standard deviations must remain within 0.15 ms or 25%%. The first window establishes the reference, then two matching comparisons are required.");
+			ImGui::TextWrapped("If stability is not established within %.0f seconds, the test stops without producing a result and restores the original settings.", kFeatureCostStabilityTimeoutSeconds);
 			ImGui::TextWrapped("The delayed GPU query pipeline is drained before each window so frames from the previous state cannot enter the next one.");
 			if (feature && feature->GetShortName() == "Skylighting") {
 				ImGui::TextWrapped("For Skylighting, the comparison state is the in-game Enable Skylighting toggle set to Off, not lower Skylighting settings.");
@@ -1136,12 +1360,38 @@ namespace
 			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(targetEnabled));
 			const double elapsed = std::clamp(ImGui::GetTime() - state.phaseStartTime, 0.0, settleSeconds);
 			ImGui::SameLine();
-			if (preparingCurrent) {
+			if (state.stability.monitoringStarted) {
+				const double stabilityElapsed = std::clamp(
+					ImGui::GetTime() - state.stability.monitoringStartTime,
+					0.0,
+					kFeatureCostStabilityTimeoutSeconds);
+				const char* phaseLabel = GetFeatureCostComparisonLabel(feature, state);
+				if (preparingCurrent)
+					phaseLabel = "current";
+				else if (restoringCurrent)
+					phaseLabel = "restored current";
+				ImGui::TextDisabled(
+					"Stability %s: %d/%d (%.1fs)",
+					phaseLabel,
+					state.stability.consecutiveStableComparisons,
+					kFeatureCostStableComparisonCount,
+					stabilityElapsed);
+			} else if (preparingCurrent) {
 				ImGui::TextDisabled("Preparing current: %s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
 			} else if (restoringCurrent) {
 				ImGui::TextDisabled("Restoring current: %s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
 			} else {
 				ImGui::TextDisabled("%s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
+			}
+			return;
+		}
+
+		if (state.phase == FeatureCostMeasurementPhase::StabilityFailed) {
+			ImGui::SameLine();
+			ImGui::TextColored(Util::Colors::GetWarning(), "Stopped: frame timings did not stabilize");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextWrapped("Keep the camera and scene still, wait for background work to finish, then run Actual feature cost again.");
+				ImGui::TextWrapped("No result was produced, and the original feature settings were restored.");
 			}
 			return;
 		}
@@ -1357,10 +1607,12 @@ namespace
 		state = {};
 	}
 
-	void ClearCompletedFeatureCostMeasurement(FeatureCostMeasurementState& state)
+	void ClearFinishedFeatureCostMeasurement(FeatureCostMeasurementState& state)
 	{
-		if (state.phase == FeatureCostMeasurementPhase::Complete)
+		if (state.phase == FeatureCostMeasurementPhase::Complete ||
+			state.phase == FeatureCostMeasurementPhase::StabilityFailed) {
 			state = {};
+		}
 	}
 
 	void ClearHighlightDirections(TuningHighlightState& state)
@@ -1542,7 +1794,7 @@ void PerformanceTuningRenderer::Render()
 			const bool settingsEdited = settingsRestored || settingsStateBefore != settingsStateAfter;
 			if (settingsEdited) {
 				RegisterSettingsEdit(highlightState, timingBeforeSettings, frameCount);
-				ClearCompletedFeatureCostMeasurement(selectedCostState);
+				ClearFinishedFeatureCostMeasurement(selectedCostState);
 			}
 		}
 		ImGui::EndChild();
@@ -1564,7 +1816,7 @@ void PerformanceTuningRenderer::CancelActiveMeasurements(bool includePending)
 {
 	for (auto& [shortName, state] : g_costMeasurementStates) {
 		if (includePending)
-			ClearCompletedFeatureCostMeasurement(state);
+			ClearFinishedFeatureCostMeasurement(state);
 
 		if (!IsFeatureCostMeasurementRunning(state)) {
 			continue;

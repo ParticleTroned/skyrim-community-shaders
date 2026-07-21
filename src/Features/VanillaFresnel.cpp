@@ -111,6 +111,11 @@ void VanillaFresnel::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+void VanillaFresnel::DrawEssentialSettings()
+{
+	ImGui::Checkbox(T(TKEY("enable"), "Enable Vanilla Fresnel"), reinterpret_cast<bool*>(&settings.Enable));
+}
+
 void VanillaFresnel::DrawSettings()
 {
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Vanilla Fresnel"), reinterpret_cast<bool*>(&settings.Enable));

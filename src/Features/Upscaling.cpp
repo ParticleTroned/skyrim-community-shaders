@@ -11650,6 +11650,30 @@ void Upscaling::DrawSettings()
 		if (!openCompositeBlocksUpscaling && !renderScaleMethodEligible)
 			ImGui::TextDisabled("VR Render Scale Mode is available only with DLSS/FSR in VR.");
 
+		if (globals::state && globals::state->IsDeveloperMode()) {
+			ImGui::SeparatorText("Render Scale Stress Capture");
+			const auto stressSession = GetVRRenderScaleStressSessionSnapshot();
+			if (stressSession.active) {
+				if (ImGui::Button("Stop Capture##VRRenderScaleStress"))
+					StopVRRenderScaleStressSession();
+			} else if (ImGui::Button("Start Capture##VRRenderScaleStress")) {
+				StartVRRenderScaleStressSession();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Reset Capture##VRRenderScaleStress"))
+				ResetVRRenderScaleStressSession();
+			ImGui::TextDisabled(
+				"Session %llu: %s, %u retained, %u overwritten",
+				static_cast<unsigned long long>(stressSession.sessionID),
+				stressSession.active ? "recording" : "stopped",
+				stressSession.count,
+				stressSession.overwrittenEvents);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Records the exact CS-menu request, retry, applied, stable, and failure sequence.");
+				ImGui::TextUnformatted("The capture is a fixed 128-event ring and does not change render-scale settings automatically.");
+			}
+		}
+
 		ImGui::TreePop();
 	};
 
@@ -24433,6 +24457,58 @@ Upscaling::VRRenderScaleTransitionSnapshot Upscaling::GetVRRenderScaleTransition
 	return vrRenderScaleTransitionController;
 }
 
+Upscaling::VRRenderScaleStressSessionSnapshot Upscaling::GetVRRenderScaleStressSessionSnapshot() const
+{
+	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+	return vrRenderScaleStressSession;
+}
+
+void Upscaling::StartVRRenderScaleStressSession()
+{
+	uint64_t sessionID = nextVRRenderScaleStressSessionID.fetch_add(1, std::memory_order_acq_rel);
+	if (sessionID == 0)
+		sessionID = nextVRRenderScaleStressSessionID.fetch_add(1, std::memory_order_acq_rel);
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	{
+		std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+		vrRenderScaleStressSession = {};
+		vrRenderScaleStressSession.active = true;
+		vrRenderScaleStressSession.sessionID = sessionID;
+		vrRenderScaleStressSession.startFrame = frame;
+	}
+	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
+	logger::info("[VRRenderScale][Stress] Started deterministic CS-menu capture session {} at frame {}.", sessionID, frame);
+}
+
+void Upscaling::StopVRRenderScaleStressSession()
+{
+	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStopped);
+	uint64_t sessionID = 0;
+	uint32_t count = 0;
+	uint32_t overwritten = 0;
+	{
+		std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+		if (!vrRenderScaleStressSession.active)
+			return;
+		vrRenderScaleStressSession.active = false;
+		vrRenderScaleStressSession.endFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+		sessionID = vrRenderScaleStressSession.sessionID;
+		count = vrRenderScaleStressSession.count;
+		overwritten = vrRenderScaleStressSession.overwrittenEvents;
+	}
+	logger::info(
+		"[VRRenderScale][Stress] Stopped capture session {} with {} retained event(s) and {} overwritten event(s).",
+		sessionID,
+		count,
+		overwritten);
+}
+
+void Upscaling::ResetVRRenderScaleStressSession()
+{
+	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+	vrRenderScaleStressSession = {};
+}
+
 const char* Upscaling::GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state)
 {
 	switch (a_state) {
@@ -24681,6 +24757,7 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 			BoolText(profile.active),
 			frame);
 	}
+	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Request);
 }
 
 uint64_t Upscaling::AllocateVRRenderScaleTransitionEpoch()
@@ -24935,6 +25012,7 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 			appliedProfile.displayEyeHeight);
 	}
 	SampleVRRenderScaleMemory(true, "contract applied");
+	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Applied);
 }
 
 void Upscaling::PublishVRRenderScaleTransitionStable()
@@ -24980,6 +25058,7 @@ void Upscaling::PublishVRRenderScaleTransitionStable()
 			stableProfile.contractGeneration,
 			frame);
 	}
+	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Stable);
 }
 
 void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
@@ -25198,30 +25277,36 @@ void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bo
 
 void Upscaling::RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind)
 {
-	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
-	auto& metrics = vrRenderScaleTransitionController.metrics.current;
-	if (!metrics.valid)
-		return;
+	bool recorded = false;
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& metrics = vrRenderScaleTransitionController.metrics.current;
+		if (!metrics.valid)
+			return;
 
-	const auto increment = [](uint32_t& a_value) {
-		if (a_value != std::numeric_limits<uint32_t>::max())
-			++a_value;
-	};
-	increment(metrics.retries);
-	switch (a_kind) {
-	case VRRenderScaleRetryKind::Pressure:
-		increment(metrics.pressureDeferrals);
-		break;
-	case VRRenderScaleRetryKind::Retirement:
-		increment(metrics.retirementDeferrals);
-		break;
-	case VRRenderScaleRetryKind::Backend:
-		increment(metrics.backendDeferrals);
-		break;
-	default:
-		break;
+		const auto increment = [](uint32_t& a_value) {
+			if (a_value != std::numeric_limits<uint32_t>::max())
+				++a_value;
+		};
+		increment(metrics.retries);
+		switch (a_kind) {
+		case VRRenderScaleRetryKind::Pressure:
+			increment(metrics.pressureDeferrals);
+			break;
+		case VRRenderScaleRetryKind::Retirement:
+			increment(metrics.retirementDeferrals);
+			break;
+		case VRRenderScaleRetryKind::Backend:
+			increment(metrics.backendDeferrals);
+			break;
+		default:
+			break;
+		}
+		++vrRenderScaleTransitionController.revision;
+		recorded = true;
 	}
-	++vrRenderScaleTransitionController.revision;
+	if (recorded)
+		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Retry);
 }
 
 void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind)
@@ -25229,22 +25314,78 @@ void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_
 	if (a_kind == VRRenderScaleFailureKind::None)
 		return;
 
-	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
-	auto& metrics = vrRenderScaleTransitionController.metrics.current;
-	if (!metrics.valid)
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& metrics = vrRenderScaleTransitionController.metrics.current;
+		if (!metrics.valid)
+			return;
+
+		const auto increment = [](uint32_t& a_value) {
+			if (a_value != std::numeric_limits<uint32_t>::max())
+				++a_value;
+		};
+		increment(metrics.failures);
+		if (a_kind == VRRenderScaleFailureKind::OutOfMemory)
+			increment(metrics.outOfMemoryFailures);
+		if (a_kind == VRRenderScaleFailureKind::DeviceLost)
+			increment(metrics.deviceLostFailures);
+		metrics.lastFailure = a_kind;
+		++vrRenderScaleTransitionController.revision;
+	}
+	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Failure);
+}
+
+void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type)
+{
+	const auto controller = GetVRRenderScaleTransitionSnapshot();
+	const auto& profile =
+		a_type == VRRenderScaleStressEventType::Request ? controller.requested :
+		a_type == VRRenderScaleStressEventType::Applied ? controller.applied :
+		a_type == VRRenderScaleStressEventType::Stable  ? controller.stable :
+		controller.applying.valid                       ? controller.applying :
+		controller.requested.valid                      ? controller.requested :
+		controller.applied.valid                        ? controller.applied :
+														  controller.stable;
+	VRRenderScaleTransitionMetrics metrics{};
+	if (controller.metrics.current.valid) {
+		metrics = controller.metrics.current;
+	} else if (controller.metrics.count != 0) {
+		const uint32_t index =
+			(controller.metrics.nextIndex + static_cast<uint32_t>(controller.metrics.recent.size()) - 1u) %
+			static_cast<uint32_t>(controller.metrics.recent.size());
+		metrics = controller.metrics.recent[index];
+	}
+
+	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+	if (!vrRenderScaleStressSession.active)
 		return;
 
-	const auto increment = [](uint32_t& a_value) {
-		if (a_value != std::numeric_limits<uint32_t>::max())
-			++a_value;
-	};
-	increment(metrics.failures);
-	if (a_kind == VRRenderScaleFailureKind::OutOfMemory)
-		increment(metrics.outOfMemoryFailures);
-	if (a_kind == VRRenderScaleFailureKind::DeviceLost)
-		increment(metrics.deviceLostFailures);
-	metrics.lastFailure = a_kind;
-	++vrRenderScaleTransitionController.revision;
+	VRRenderScaleStressEvent event{};
+	event.sequence = vrRenderScaleStressSession.nextSequence++;
+	event.sessionID = vrRenderScaleStressSession.sessionID;
+	event.frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	event.type = a_type;
+	event.requestID = profile.requestID;
+	event.transitionEpoch = profile.transitionEpoch != 0 ? profile.transitionEpoch : controller.targetEpoch;
+	event.origin = profile.origin;
+	event.method = profile.method;
+	event.active = profile.active;
+	event.qualityMode = profile.qualityMode;
+	event.dlssPreset = profile.dlssPreset;
+	event.state = controller.state;
+	event.pressure = controller.memory.pressure;
+	event.usageBytes = controller.memory.currentUsageBytes;
+	event.retries = metrics.retries;
+	event.failures = metrics.failures;
+	event.fidelityMismatches = metrics.fidelityMismatches;
+	vrRenderScaleStressSession.events[vrRenderScaleStressSession.nextIndex] = event;
+	vrRenderScaleStressSession.nextIndex =
+		(vrRenderScaleStressSession.nextIndex + 1u) % static_cast<uint32_t>(vrRenderScaleStressSession.events.size());
+	if (vrRenderScaleStressSession.count < vrRenderScaleStressSession.events.size()) {
+		++vrRenderScaleStressSession.count;
+	} else if (vrRenderScaleStressSession.overwrittenEvents != std::numeric_limits<uint32_t>::max()) {
+		++vrRenderScaleStressSession.overwrittenEvents;
+	}
 }
 
 void Upscaling::MarkVRUpscalingTransitionQueued(VRUpscalingTransitionOrigin a_origin)

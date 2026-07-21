@@ -516,6 +516,51 @@ public:
 		std::array<VRRenderScaleFidelityEyeSnapshot, 2> eyes{};
 	};
 
+	enum class VRRenderScaleStressEventType : uint8_t
+	{
+		SessionStarted,
+		Request,
+		Retry,
+		Applied,
+		Stable,
+		Failure,
+		SessionStopped
+	};
+
+	struct VRRenderScaleStressEvent
+	{
+		uint64_t sequence = 0;
+		uint64_t sessionID = 0;
+		uint32_t frame = 0;
+		VRRenderScaleStressEventType type = VRRenderScaleStressEventType::Request;
+		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
+		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		bool active = false;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = kDLSSPresetK;
+		VRRenderScaleTransitionState state = VRRenderScaleTransitionState::Idle;
+		VRRenderScaleMemoryPressure pressure = VRRenderScaleMemoryPressure::Unknown;
+		uint64_t usageBytes = 0;
+		uint32_t retries = 0;
+		uint32_t failures = 0;
+		uint32_t fidelityMismatches = 0;
+	};
+
+	struct VRRenderScaleStressSessionSnapshot
+	{
+		bool active = false;
+		uint64_t sessionID = 0;
+		uint32_t startFrame = 0;
+		uint32_t endFrame = 0;
+		uint64_t nextSequence = 1;
+		uint32_t nextIndex = 0;
+		uint32_t count = 0;
+		uint32_t overwrittenEvents = 0;
+		std::array<VRRenderScaleStressEvent, 128> events{};
+	};
+
 	/** @brief Immutable controller-visible profile at one transition milestone. */
 	struct VRRenderScaleProfileSnapshot
 	{
@@ -620,6 +665,10 @@ public:
 	bool IsLatestVRRenderScaleRequest(uint64_t a_requestID) const;
 	/** @brief Returns one lock-consistent copy of requested, applying, applied, and stable state. */
 	VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() const;
+	VRRenderScaleStressSessionSnapshot GetVRRenderScaleStressSessionSnapshot() const;
+	void StartVRRenderScaleStressSession();
+	void StopVRRenderScaleStressSession();
+	void ResetVRRenderScaleStressSession();
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
 	static const char* GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure);
@@ -1197,6 +1246,9 @@ public:
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
 	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
+	mutable std::mutex vrRenderScaleStressSessionMutex;
+	VRRenderScaleStressSessionSnapshot vrRenderScaleStressSession{};
+	std::atomic<uint64_t> nextVRRenderScaleStressSessionID{ 1 };
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
@@ -1349,6 +1401,7 @@ public:
 	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind);
 	void RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind);
 	void ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame);
+	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);

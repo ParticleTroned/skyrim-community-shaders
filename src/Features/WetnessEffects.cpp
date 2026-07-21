@@ -391,6 +391,16 @@ void WetnessEffects::PostPostLoad()
 	Ripples::Install();
 }
 
+bool WetnessEffects::DrawEnabledCheckbox()
+{
+	bool enabled = settings.EnableWetnessEffects != 0;
+	if (ImGui::Checkbox("Enable", &enabled)) {
+		settings.EnableWetnessEffects = enabled ? 1u : 0u;
+		Ripples::UpdateSettings();
+	}
+	return enabled;
+}
+
 void WetnessEffects::DrawSettings()
 {
 	// Climate Preset Selection - Always visible at the top
@@ -456,9 +466,7 @@ void WetnessEffects::DrawSettings()
 	ImGui::Spacing();
 
 	if (ImGui::TreeNodeEx(T(TKEY("wetness_effects"), "Wetness Effects"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (ImGui::Checkbox(T(TKEY("enable_wetness"), "Enable Wetness"), (bool*)&settings.EnableWetnessEffects)) {
-			Ripples::UpdateSettings();  // Update cache when settings change
-		}
+		DrawEnabledCheckbox();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("enable_wetness_tooltip"), "Enables a wetness effect near water and when it is raining."));
 		}
@@ -656,6 +664,14 @@ void WetnessEffects::DrawSettings()
 	}
 }
 
+void WetnessEffects::DrawEssentialSettings()
+{
+	DrawEnabledCheckbox();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("enable_wetness_tooltip"), "Enables a wetness effect near water and when it is raining."));
+	}
+}
+
 void WetnessEffects::DrawPerformanceSettings(bool)
 {
 	auto drawToggle = [](const char* a_label, uint& a_setting) {
@@ -666,8 +682,7 @@ void WetnessEffects::DrawPerformanceSettings(bool)
 		return changed;
 	};
 
-	if (drawToggle("Enable", settings.EnableWetnessEffects))
-		Ripples::UpdateSettings();
+	DrawEnabledCheckbox();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Enables surface wetness and rain-driven effects.");
 		ImGui::TextUnformatted("The measured cost depends on the current weather and visible surfaces.");

@@ -219,6 +219,7 @@ public:
 	{
 		bool pending = false;
 		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t qualityMode = 0;
 		bool renderScaleModeEnabled = false;
@@ -256,6 +257,7 @@ public:
 		bool valid = false;
 		bool active = false;
 		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
 		uint32_t contractGeneration = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t qualityMode = 0;
@@ -279,6 +281,7 @@ public:
 	struct VRRenderScaleTransitionSnapshot
 	{
 		VRRenderScaleTransitionState state = VRRenderScaleTransitionState::Idle;
+		uint64_t targetEpoch = 0;
 		uint32_t transitionStartFrame = 0;
 		uint32_t stateFrame = 0;
 		uint64_t revision = 0;
@@ -902,6 +905,7 @@ public:
 	std::optional<VRRenderScaleDesiredProfile> pendingVRRenderScaleRequest;
 	std::atomic<uint64_t> nextVRRenderScaleRequestID{ 1 };
 	std::atomic<uint64_t> latestVRRenderScaleRequestID{ 0 };
+	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
 	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
@@ -918,6 +922,7 @@ public:
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
+	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateEpoch{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<uint32_t> vrRenderScaleNextContractGeneration{ 1 };
@@ -1027,9 +1032,12 @@ public:
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset();
 	void RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
-	void RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
+	bool RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
+	uint64_t AllocateVRRenderScaleTransitionEpoch();
+	void BindVRRenderScaleRelatchEpoch(uint64_t a_epoch);
+	bool IsVRRenderScaleTransitionEpochCurrent(uint64_t a_epoch) const;
 	void SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason = nullptr);
-	void PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization);
+	void PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization, uint64_t a_epoch);
 	void PublishVRRenderScaleTransitionStable();
 	void ResetVRRenderScaleTransitionController(const char* a_reason = nullptr);
 	void BeginVRRenderScaleInfoTransition(const char* a_reason = nullptr);

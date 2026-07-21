@@ -12554,6 +12554,7 @@ void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 	pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
 	pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 	pendingVRRenderScaleRecoverySnapshot = {};
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
@@ -14806,6 +14807,17 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	const bool requirePostLoadSettle = UsesVRRenderScalePostLoadSettle(*this, configuredMethod, a_origin);
 	const auto currentOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 	const bool wasPending = pendingPerfModeRenderTargetRecreate.exchange(true, std::memory_order_acq_rel);
+	const auto controllerSnapshot = GetVRRenderScaleTransitionSnapshot();
+	const bool controllerTransitionInFlight =
+		controllerSnapshot.state != VRRenderScaleTransitionState::Idle &&
+		controllerSnapshot.state != VRRenderScaleTransitionState::Active;
+	const uint64_t existingRelatchEpoch = pendingPerfModeRenderTargetRecreateEpoch.load(std::memory_order_acquire);
+	const uint64_t relatchEpoch =
+		controllerTransitionInFlight && controllerSnapshot.targetEpoch != 0 ?
+			controllerSnapshot.targetEpoch :
+			(wasPending && existingRelatchEpoch != 0 ? existingRelatchEpoch : AllocateVRRenderScaleTransitionEpoch());
+	pendingPerfModeRenderTargetRecreateEpoch.store(relatchEpoch, std::memory_order_release);
+	BindVRRenderScaleRelatchEpoch(relatchEpoch);
 	if (!wasPending) {
 		const uint32_t generation = vrRenderScaleNextContractGeneration.fetch_add(1, std::memory_order_acq_rel);
 		pendingVRRenderScaleContractGeneration.store(std::max(generation, 1u), std::memory_order_release);
@@ -14853,9 +14865,10 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	if (emitDiagLogs) {
 		auto* state = globals::state;
 		logger::debug(
-			"[VRRenderScale][Diag] Queued render-target relatch{}{} origin={} method={} frame={} postLoadSettle={} renderScaleMode={} perfMode={} quality={} pendingPostLoadReset={} pendingDLSS={} pendingFSR={} hmd={}x{}",
+			"[VRRenderScale][Diag] Queued render-target relatch{}{} epoch={} origin={} method={} frame={} postLoadSettle={} renderScaleMode={} perfMode={} quality={} pendingPostLoadReset={} pendingDLSS={} pendingFSR={} hmd={}x{}",
 			a_reason && *a_reason ? ": " : "",
 			a_reason && *a_reason ? a_reason : "",
+			relatchEpoch,
 			magic_enum::enum_name(a_origin),
 			magic_enum::enum_name(configuredMethod),
 			state ? state->frameCount : 0u,
@@ -14886,6 +14899,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
 		pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 		pendingVRRenderScaleRecoverySnapshot = {};
 		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
@@ -14984,6 +14998,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	if (!pendingPerfModeRenderTargetRecreate.exchange(false, std::memory_order_acq_rel))
 		return true;
 	const auto relatchOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
+	const uint64_t relatchEpoch = pendingPerfModeRenderTargetRecreateEpoch.load(std::memory_order_acquire);
 	const auto queuedRecoverySnapshot = pendingVRRenderScaleRecoverySnapshot;
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	const uint32_t retryDelayFrames = std::max(
@@ -14994,11 +15009,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
 		pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 		pendingVRRenderScaleRecoverySnapshot = {};
 	};
 	auto requeueRelatch = [&](uint32_t a_minDelayFrames, bool a_includeExistingRetryDelay = true) {
 		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateEpoch.store(relatchEpoch, std::memory_order_release);
 		const uint32_t delayFrames = a_includeExistingRetryDelay ?
 		                                 std::max(retryDelayFrames, a_minDelayFrames) :
 		                                 a_minDelayFrames;
@@ -15146,7 +15163,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		clearRelatchDelay();
 		clearRelatchRetryLogs();
 		logger::debug("[VRRenderScale] Skipped render-target relatch; current render-scale target is already active.");
-		PublishVRRenderScaleTransitionApplied(relatchOrigin, false);
+		PublishVRRenderScaleTransitionApplied(relatchOrigin, false, relatchEpoch);
 		CompleteVRRenderScaleInfoTransition(
 			"already stable",
 			true,
@@ -15193,6 +15210,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		if (perfMode.GetBootSnapshot().valid && perfMode.GetBootSnapshot().active)
 			ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
 	};
+	if (!IsVRRenderScaleTransitionEpochCurrent(relatchEpoch)) {
+		requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+		if (emitDiagLogs) {
+			logger::debug(
+				"[VRRenderScale][Controller] Deferred stale relatch epoch={} currentEpoch={} before resource mutation.",
+				relatchEpoch,
+				GetVRRenderScaleTransitionSnapshot().targetEpoch);
+		}
+		return false;
+	}
 	SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::Applying, "render-target and vendor resources");
 	try {
 		const bool amdAdapterForRelatch = fidelityFX.IsAmdAdapterDetected();
@@ -15661,7 +15688,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	ClearSubmitStageFoveatedVendorRetryBackoff();
 	const bool requiresSubmitStageStabilization =
 		IsVendorUpscalingMethod(relatchUpscaleMethod) && relatchRenderScaleActive;
-	PublishVRRenderScaleTransitionApplied(relatchOrigin, requiresSubmitStageStabilization);
+	PublishVRRenderScaleTransitionApplied(relatchOrigin, requiresSubmitStageStabilization, relatchEpoch);
 	if (requiresSubmitStageStabilization) {
 		ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
 	} else {
@@ -21944,6 +21971,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
 	pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 	pendingVRRenderScaleRecoverySnapshot = {};
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
@@ -23471,6 +23499,7 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 		request.requestID = nextVRRenderScaleRequestID.fetch_add(1, std::memory_order_acq_rel);
 		if (request.requestID == 0)
 			request.requestID = nextVRRenderScaleRequestID.fetch_add(1, std::memory_order_acq_rel);
+		request.transitionEpoch = AllocateVRRenderScaleTransitionEpoch();
 		pendingVRRenderScaleRequest = request;
 		latestVRRenderScaleRequestID.store(request.requestID, std::memory_order_release);
 	}
@@ -23479,8 +23508,9 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 	RecordVRRenderScaleTransitionRequested(request);
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Diag] Queued immutable request id={} origin={} method={} frame={} renderScaleMode={} perfMode={} quality={} dlssPreset={} fsr4={}",
+			"[VRRenderScale][Diag] Queued immutable request id={} epoch={} origin={} method={} frame={} renderScaleMode={} perfMode={} quality={} dlssPreset={} fsr4={}",
 			request.requestID,
+			request.transitionEpoch,
 			magic_enum::enum_name(request.origin),
 			magic_enum::enum_name(request.method),
 			request.queuedFrame,
@@ -23524,6 +23554,7 @@ namespace
 			IsRenderScaleMethodEligible(a_request.method) &&
 			IsRenderScaleQualityMode(a_request.qualityMode);
 		profile.requestID = a_request.requestID;
+		profile.transitionEpoch = a_request.transitionEpoch;
 		profile.method = a_request.method;
 		profile.qualityMode = std::min(a_request.qualityMode, Upscaling::kQualityModeMaxIndex);
 		profile.dlssPreset = Upscaling::ClampDLSSPresetUInt(a_request.dlssPreset);
@@ -23620,6 +23651,7 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		previousState = vrRenderScaleTransitionController.state;
 		vrRenderScaleTransitionController.requested = profile;
+		vrRenderScaleTransitionController.targetEpoch = profile.transitionEpoch;
 		vrRenderScaleTransitionController.state = VRRenderScaleTransitionState::Requested;
 		vrRenderScaleTransitionController.transitionStartFrame = frame;
 		vrRenderScaleTransitionController.stateFrame = frame;
@@ -23628,10 +23660,11 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Controller] revision={} {} -> Requested request={} method={} quality={} active={} frame={}",
+			"[VRRenderScale][Controller] revision={} {} -> Requested request={} epoch={} method={} quality={} active={} frame={}",
 			revision,
 			GetVRRenderScaleTransitionStateName(previousState),
 			profile.requestID,
+			profile.transitionEpoch,
 			magic_enum::enum_name(profile.method),
 			profile.qualityMode,
 			BoolText(profile.active),
@@ -23639,14 +23672,67 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 	}
 }
 
-void Upscaling::RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request)
+uint64_t Upscaling::AllocateVRRenderScaleTransitionEpoch()
+{
+	uint64_t epoch = nextVRRenderScaleTransitionEpoch.fetch_add(1, std::memory_order_acq_rel);
+	if (epoch == 0)
+		epoch = nextVRRenderScaleTransitionEpoch.fetch_add(1, std::memory_order_acq_rel);
+	return epoch;
+}
+
+void Upscaling::BindVRRenderScaleRelatchEpoch(uint64_t a_epoch)
+{
+	if (a_epoch == 0)
+		return;
+
+	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	const bool settled =
+		vrRenderScaleTransitionController.state == VRRenderScaleTransitionState::Idle ||
+		vrRenderScaleTransitionController.state == VRRenderScaleTransitionState::Active;
+	if (settled || vrRenderScaleTransitionController.targetEpoch == 0) {
+		vrRenderScaleTransitionController.targetEpoch = a_epoch;
+		++vrRenderScaleTransitionController.revision;
+	}
+}
+
+bool Upscaling::IsVRRenderScaleTransitionEpochCurrent(uint64_t a_epoch) const
+{
+	if (a_epoch == 0)
+		return true;
+
+	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	return vrRenderScaleTransitionController.targetEpoch == 0 ||
+	       vrRenderScaleTransitionController.targetEpoch == a_epoch;
+}
+
+bool Upscaling::RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request)
 {
 	const auto profile = BuildVRRenderScaleRequestProfile(*this, a_request);
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : a_request.queuedFrame;
+	VRRenderScaleTransitionState previousState;
+	uint64_t revision;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		if (vrRenderScaleTransitionController.targetEpoch != profile.transitionEpoch)
+			return false;
+
+		previousState = vrRenderScaleTransitionController.state;
 		vrRenderScaleTransitionController.applying = profile;
+		vrRenderScaleTransitionController.state = VRRenderScaleTransitionState::Preparing;
+		vrRenderScaleTransitionController.stateFrame = frame;
+		revision = ++vrRenderScaleTransitionController.revision;
 	}
-	SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::Preparing, "request snapshot consumed");
+
+	if (ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][Controller] revision={} {} -> Preparing request={} epoch={} frame={} reason=request snapshot consumed",
+			revision,
+			GetVRRenderScaleTransitionStateName(previousState),
+			profile.requestID,
+			profile.transitionEpoch,
+			frame);
+	}
+	return true;
 }
 
 void Upscaling::SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason)
@@ -23682,15 +23768,20 @@ void Upscaling::SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_s
 	}
 }
 
-void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization)
+void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization, uint64_t a_epoch)
 {
 	VRRenderScaleProfileSnapshot source{};
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
-		source = vrRenderScaleTransitionController.applying.valid ?
-		             vrRenderScaleTransitionController.applying :
-		             vrRenderScaleTransitionController.requested;
+		if (vrRenderScaleTransitionController.applying.valid &&
+			(a_epoch == 0 || vrRenderScaleTransitionController.applying.transitionEpoch == a_epoch)) {
+			source = vrRenderScaleTransitionController.applying;
+		} else if (vrRenderScaleTransitionController.requested.valid &&
+				   (a_epoch == 0 || vrRenderScaleTransitionController.requested.transitionEpoch == a_epoch)) {
+			source = vrRenderScaleTransitionController.requested;
+		}
 	}
+	source.transitionEpoch = a_epoch != 0 ? a_epoch : source.transitionEpoch;
 	const auto appliedProfile = BuildVRRenderScaleAppliedProfile(*this, source, a_origin);
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 	VRRenderScaleTransitionState previousState;
@@ -23702,9 +23793,9 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 		vrRenderScaleTransitionController.applied = appliedProfile;
 		vrRenderScaleTransitionController.applying = {};
 		const bool newerRequestPending =
-			vrRenderScaleTransitionController.requested.valid &&
-			vrRenderScaleTransitionController.requested.requestID != 0 &&
-			vrRenderScaleTransitionController.requested.requestID != appliedProfile.requestID;
+			vrRenderScaleTransitionController.targetEpoch != 0 &&
+			appliedProfile.transitionEpoch != 0 &&
+			vrRenderScaleTransitionController.targetEpoch != appliedProfile.transitionEpoch;
 		if (newerRequestPending) {
 			if (!a_requiresStabilization)
 				vrRenderScaleTransitionController.stable = appliedProfile;
@@ -23722,11 +23813,12 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Controller] revision={} {} -> {} request={} generation={} method={} active={} render={}x{} display={}x{}",
+			"[VRRenderScale][Controller] revision={} {} -> {} request={} epoch={} generation={} method={} active={} render={}x{} display={}x{}",
 			revision,
 			GetVRRenderScaleTransitionStateName(previousState),
 			GetVRRenderScaleTransitionStateName(nextState),
 			appliedProfile.requestID,
+			appliedProfile.transitionEpoch,
 			appliedProfile.contractGeneration,
 			magic_enum::enum_name(appliedProfile.method),
 			BoolText(appliedProfile.active),
@@ -23739,8 +23831,6 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 
 void Upscaling::PublishVRRenderScaleTransitionStable()
 {
-	const bool pendingRequest = HasPendingVRUpscalingTransition();
-	const uint64_t latestRequestID = latestVRRenderScaleRequestID.load(std::memory_order_acquire);
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 	VRRenderScaleProfileSnapshot stableProfile{};
 	VRRenderScaleTransitionState previousState;
@@ -23754,12 +23844,11 @@ void Upscaling::PublishVRRenderScaleTransitionStable()
 			vrRenderScaleTransitionController.applied,
 			vrRenderScaleTransitionController.applied.origin);
 		vrRenderScaleTransitionController.stable = stableProfile;
-		const bool newerRequestPending =
-			pendingRequest &&
-			vrRenderScaleTransitionController.requested.valid &&
-			vrRenderScaleTransitionController.requested.requestID == latestRequestID &&
-			vrRenderScaleTransitionController.requested.requestID != stableProfile.requestID;
-		nextState = newerRequestPending ?
+		const bool newerTargetPending =
+			vrRenderScaleTransitionController.targetEpoch != 0 &&
+			stableProfile.transitionEpoch != 0 &&
+			vrRenderScaleTransitionController.targetEpoch != stableProfile.transitionEpoch;
+		nextState = newerTargetPending ?
 		                VRRenderScaleTransitionState::Requested :
 		                VRRenderScaleTransitionState::Active;
 		vrRenderScaleTransitionController.state = nextState;
@@ -23769,11 +23858,12 @@ void Upscaling::PublishVRRenderScaleTransitionStable()
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Controller] revision={} {} -> {} stableRequest={} generation={} frame={}",
+			"[VRRenderScale][Controller] revision={} {} -> {} stableRequest={} epoch={} generation={} frame={}",
 			revision,
 			GetVRRenderScaleTransitionStateName(previousState),
 			GetVRRenderScaleTransitionStateName(nextState),
 			stableProfile.requestID,
+			stableProfile.transitionEpoch,
 			stableProfile.contractGeneration,
 			frame);
 	}
@@ -24055,7 +24145,16 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 		}
 		return;
 	}
-	RecordVRRenderScaleTransitionPreparing(request);
+	if (!RecordVRRenderScaleTransitionPreparing(request)) {
+		if (ShouldEmitUpscalingDiagLogs()) {
+			logger::debug(
+				"[VRRenderScale][Controller] Dropped stale consumed request id={} epoch={} currentEpoch={}.",
+				request.requestID,
+				request.transitionEpoch,
+				GetVRRenderScaleTransitionSnapshot().targetEpoch);
+		}
+		return;
+	}
 
 	const auto targetMethod = request.method;
 	const auto transitionOrigin = request.origin;
@@ -24108,7 +24207,7 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 		if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 			SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::WaitingForSafePoint, "inactive target relatch queued");
 		else {
-			PublishVRRenderScaleTransitionApplied(transitionOrigin, false);
+			PublishVRRenderScaleTransitionApplied(transitionOrigin, false, request.transitionEpoch);
 			CompleteVRRenderScaleInfoTransition(
 				"request already applied",
 				false,
@@ -24171,7 +24270,7 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 		SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::WaitingForSafePoint, "profile relatch queued");
 	else {
-		PublishVRRenderScaleTransitionApplied(transitionOrigin, false);
+		PublishVRRenderScaleTransitionApplied(transitionOrigin, false, request.transitionEpoch);
 		CompleteVRRenderScaleInfoTransition(
 			"request already applied",
 			targetPerfMode,

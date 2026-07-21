@@ -161,6 +161,8 @@ public:
 	virtual void DrawPerformanceSettings(bool) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return GetUpscaleMethod() != UpscaleMethod::kNONE; }
+	virtual bool IsPerformanceCostMeasurementReady() const override;
+	virtual const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for upscaling and frame pacing to settle"; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {
@@ -262,6 +264,18 @@ public:
 	UpscaleMethod previousHistoryUpscaleMethod = UpscaleMethod::kNONE;
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
+
+	// Last configuration observed by CheckResources. Performance cost sampling
+	// must not begin while menu settings are still pending on the render path.
+	bool performanceCostAppliedStateValid = false;
+	UpscaleMethod performanceCostAppliedUpscaleMethod = UpscaleMethod::kNONE;
+	uint32_t performanceCostAppliedQualityMode = 0;
+	uint32_t performanceCostAppliedDLSSPreset = 0;
+	bool performanceCostAppliedFrameGenerationMode = false;
+	bool performanceCostAppliedFSRRuntimePathActive = false;
+	bool performanceCostAppliedFSRRuntimeFsr4Configured = false;
+	bool performanceCostAppliedFSRRuntimeFsr4Active = false;
+	uint32_t performanceCostAppliedFrame = std::numeric_limits<uint32_t>::max();
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();

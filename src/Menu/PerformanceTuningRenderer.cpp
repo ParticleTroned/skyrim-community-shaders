@@ -896,7 +896,8 @@ namespace
 		const double elapsed = currentTime - state.phaseStartTime;
 
 		if (state.phase == FeatureCostMeasurementPhase::SettlingCurrent) {
-			if (HasDrainedFeatureCostProfilerPipeline(state, current)) {
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(true));
+			if (elapsed >= settleSeconds && HasDrainedFeatureCostProfilerPipeline(state, current)) {
 				BeginFeatureCostSampleWindow(
 					state.currentSample,
 					FeatureCostMeasurementPhase::MeasuringCurrent,
@@ -1106,7 +1107,7 @@ namespace
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextWrapped(
-				"Measures current settings for %.0f seconds, measures the settled comparison state for %.0f seconds, restores the original settings, then measures the settled current state once more.",
+				"Waits for each state to apply and settle, measures current settings for %.0f seconds, measures the comparison state for %.0f seconds, restores the original settings, then measures the current state once more.",
 				kFeatureCostMeasurementSeconds,
 				kFeatureCostMeasurementSeconds);
 			ImGui::TextWrapped("Each window contains exactly %.0f seconds of raw present intervals. The boundary frame is fractionally weighted, and the rolling 60-frame display averages are not used.", kFeatureCostMeasurementSeconds);
@@ -1126,19 +1127,18 @@ namespace
 			ImGui::TextDisabled("Finish the current measurement first");
 		}
 
-		if (state.phase == FeatureCostMeasurementPhase::SettlingCurrent) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("Preparing exact profiler window");
-			return;
-		}
-
-		if (state.phase == FeatureCostMeasurementPhase::SettlingTest ||
+		if (state.phase == FeatureCostMeasurementPhase::SettlingCurrent ||
+			state.phase == FeatureCostMeasurementPhase::SettlingTest ||
 			state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent) {
+			const bool preparingCurrent = state.phase == FeatureCostMeasurementPhase::SettlingCurrent;
 			const bool restoringCurrent = state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent;
-			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(restoringCurrent));
+			const bool targetEnabled = preparingCurrent || restoringCurrent ? true : state.testEnabled;
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(targetEnabled));
 			const double elapsed = std::clamp(ImGui::GetTime() - state.phaseStartTime, 0.0, settleSeconds);
 			ImGui::SameLine();
-			if (restoringCurrent) {
+			if (preparingCurrent) {
+				ImGui::TextDisabled("Preparing current: %s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
+			} else if (restoringCurrent) {
 				ImGui::TextDisabled("Restoring current: %s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
 			} else {
 				ImGui::TextDisabled("%s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);

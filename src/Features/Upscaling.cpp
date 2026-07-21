@@ -1396,6 +1396,65 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousMotionVectorDesc = motionVectorDesc;
 	}
 	previousTextureSourceDescsValid = currentTextureSourceDescsValid;
+
+	const bool appliedStateValid = !vendorUpscalerActive || currentTextureSourceDescsValid;
+	const bool appliedStateChanged =
+		performanceCostAppliedStateValid != appliedStateValid ||
+		performanceCostAppliedUpscaleMethod != a_upscalemethod ||
+		performanceCostAppliedQualityMode != qualityModeCurrent ||
+		performanceCostAppliedDLSSPreset != dlssPresetCurrent ||
+		performanceCostAppliedFrameGenerationMode != frameGenModeCurrent ||
+		performanceCostAppliedFSRRuntimePathActive != fsrRuntimePathCurrent ||
+		performanceCostAppliedFSRRuntimeFsr4Configured != fsrRuntimeFsr4Configured ||
+		performanceCostAppliedFSRRuntimeFsr4Active != fsrRuntimeFsr4Current;
+
+	performanceCostAppliedStateValid = appliedStateValid;
+	performanceCostAppliedUpscaleMethod = a_upscalemethod;
+	performanceCostAppliedQualityMode = qualityModeCurrent;
+	performanceCostAppliedDLSSPreset = dlssPresetCurrent;
+	performanceCostAppliedFrameGenerationMode = frameGenModeCurrent;
+	performanceCostAppliedFSRRuntimePathActive = fsrRuntimePathCurrent;
+	performanceCostAppliedFSRRuntimeFsr4Configured = fsrRuntimeFsr4Configured;
+	performanceCostAppliedFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
+	if (appliedStateChanged && globals::state)
+		performanceCostAppliedFrame = globals::state->frameCount;
+}
+
+bool Upscaling::IsPerformanceCostMeasurementReady() const
+{
+	if (!performanceCostAppliedStateValid)
+		return false;
+	if (globals::state && performanceCostAppliedFrame == globals::state->frameCount)
+		return false;
+
+	const auto requestedMethod = GetUpscaleMethod();
+	if (performanceCostAppliedUpscaleMethod != requestedMethod)
+		return false;
+
+	const bool requestedFrameGenerationMode = settings.frameGenerationMode && d3d12SwapChainActive;
+	if (performanceCostAppliedFrameGenerationMode != requestedFrameGenerationMode)
+		return false;
+
+	if (requestedMethod == UpscaleMethod::kDLSS || requestedMethod == UpscaleMethod::kFSR) {
+		if (performanceCostAppliedQualityMode != ClampQualityModeUInt(settings.qualityMode))
+			return false;
+	}
+
+	if (requestedMethod == UpscaleMethod::kDLSS) {
+		return performanceCostAppliedDLSSPreset == std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
+	}
+
+	if (requestedMethod == UpscaleMethod::kFSR) {
+		const bool requestedFSRRuntimePathActive = IsFSRRuntimePathActive(requestedMethod);
+		const bool requestedFSRRuntimeFsr4Configured =
+			settings.fsr4RuntimeEnable && fidelityFX.IsRuntimeFsr4Available();
+		const bool requestedFSRRuntimeFsr4Active = IsFSRRuntimeFsr4PathActive(requestedMethod);
+		return performanceCostAppliedFSRRuntimePathActive == requestedFSRRuntimePathActive &&
+		       performanceCostAppliedFSRRuntimeFsr4Configured == requestedFSRRuntimeFsr4Configured &&
+		       performanceCostAppliedFSRRuntimeFsr4Active == requestedFSRRuntimeFsr4Active;
+	}
+
+	return true;
 }
 
 ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()

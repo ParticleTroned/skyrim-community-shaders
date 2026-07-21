@@ -15540,7 +15540,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.pressureCleanupRequired = pressureMemoryRelief && relatchPlan.actionMask != 0;
 		if (relatchPlan.pressureCleanupRequired)
 			ServiceVRIntermediateTextureCleanup(true);
-		const bool allocationGrowth = relatchPlan.estimatedAdditionalBytes != 0;
+		const bool memoryReducingTransition =
+			relatchPlan.estimatedTargetBytes < relatchPlan.estimatedCurrentBytes;
+		const bool allocationGrowth =
+			relatchPlan.estimatedAdditionalBytes != 0 &&
+			!memoryReducingTransition;
 		const bool insufficientHeadroom =
 			allocationGrowth &&
 			memoryAtAdmission.valid &&

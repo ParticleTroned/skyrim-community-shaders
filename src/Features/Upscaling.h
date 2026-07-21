@@ -18,6 +18,7 @@
 
 namespace RE
 {
+	class MapMenu;
 	class RaceSexMenu;
 }
 
@@ -1192,6 +1193,8 @@ private:
 	bool IsVRMenuSemanticBridgeOperationActive() const;
 	bool IsVRMenuDirectBridgeOperationActive() const;
 	bool IsVRMapMenuPresentationActive() const;
+	bool EnsureVRMapMenuUISupersampling();
+	void ReleaseVRMapMenuUISupersampling();
 	void RecordVRMenuSemanticCapture(bool a_suppressed);
 	void PoisonVRMenuFrameTransaction(const char* a_reason);
 	void InvalidateVRMenuCommittedLayer(const char* a_reason);
@@ -1262,6 +1265,28 @@ private:
 	VRMenuFrameTransaction vrMenuFrameTransaction{};
 	uint32_t vrMenuAdapterPreflightFailureFrame = std::numeric_limits<uint32_t>::max();
 	bool vrMenuParallelBridgeDrawInProgress = false;
+	eastl::unique_ptr<Texture2D> vrMapMenuUISupersampleColor;
+	winrt::com_ptr<ID3D11Texture2D> vrMapMenuUISupersampleDepth;
+	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMapMenuUISupersampleDepthViews{};
+	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMapMenuUISupersampleReadOnlyDepthViews{};
+	winrt::com_ptr<ID3D11ShaderResourceView> vrMapMenuUISupersampleDepthSRV;
+	winrt::com_ptr<ID3D11ShaderResourceView> vrMapMenuUISupersampleStencilSRV;
+	ID3D11Texture2D* vrMapMenuSavedHUDTexture = nullptr;
+	ID3D11Texture2D* vrMapMenuSavedHUDTextureCopy = nullptr;
+	ID3D11RenderTargetView* vrMapMenuSavedHUDRTV = nullptr;
+	ID3D11ShaderResourceView* vrMapMenuSavedHUDSRV = nullptr;
+	ID3D11ShaderResourceView* vrMapMenuSavedHUDSRVCopy = nullptr;
+	ID3D11UnorderedAccessView* vrMapMenuSavedHUDUAV = nullptr;
+	ID3D11Texture2D* vrMapMenuSavedHUDDepthTexture = nullptr;
+	std::array<ID3D11DepthStencilView*, 8> vrMapMenuSavedHUDDepthViews{};
+	std::array<ID3D11DepthStencilView*, 8> vrMapMenuSavedHUDReadOnlyDepthViews{};
+	ID3D11ShaderResourceView* vrMapMenuSavedHUDDepthSRV = nullptr;
+	ID3D11ShaderResourceView* vrMapMenuSavedHUDStencilSRV = nullptr;
+	uint32_t vrMapMenuUINativeWidth = 0;
+	uint32_t vrMapMenuUINativeHeight = 0;
+	uint32_t vrMapMenuUISupersampleWidth = 0;
+	uint32_t vrMapMenuUISupersampleHeight = 0;
+	bool vrMapMenuUISupersamplingActive = false;
 	eastl::unique_ptr<Texture2D> vrMenuDesktopEyePair[2];
 	eastl::unique_ptr<Texture2D> vrMenuDesktopRetainedEyePair[2];
 	uint64_t vrMenuDesktopPairGeneration = 0;
@@ -1275,6 +1300,12 @@ private:
 	struct VRMapMenuCopyRenderHook
 	{
 		static void thunk(void* a_imageSpaceShader, RE::BSTriShape* a_shape, RE::ImageSpaceEffectParam* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct VRMapMenuPostDisplayHook
+	{
+		static void thunk(RE::MapMenu* a_menu);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

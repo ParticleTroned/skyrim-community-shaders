@@ -8,6 +8,7 @@
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/B/BarterMenu.h"
+#include "RE/M/MapMenu.h"
 #include "RE/R/RaceSexMenu.h"
 #include "RE/U/UIMessageQueue.h"
 #include "State.h"
@@ -8583,6 +8584,261 @@ bool Upscaling::IsVRMapMenuPresentationActive() const
 	       (ui && ui->IsMenuOpen(RE::MapMenu::MENU_NAME));
 }
 
+bool Upscaling::EnsureVRMapMenuUISupersampling()
+{
+	if (!globals::game::isVR ||
+		!globals::d3d::device ||
+		!globals::d3d::context ||
+		!globals::game::renderer ||
+		!IsVRMapMenuPresentationActive() ||
+		!IsVRMenuTransportContractPresent()) {
+		return false;
+	}
+
+	auto* renderer = globals::game::renderer;
+	auto& hudTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kHUDMENU];
+	auto& hudDepth = renderer->GetDepthStencilData()
+	                     .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kHUDMENU];
+	if (vrMapMenuUISupersamplingActive) {
+		return vrMapMenuUISupersampleColor &&
+		       hudTarget.texture == vrMapMenuUISupersampleColor->resource.get() &&
+		       hudDepth.texture == vrMapMenuUISupersampleDepth.get();
+	}
+
+	D3D11_TEXTURE2D_DESC nativeColorDesc{};
+	D3D11_TEXTURE2D_DESC nativeDepthDesc{};
+	if (!hudTarget.texture ||
+		!hudTarget.RTV ||
+		!hudTarget.SRV ||
+		hudTarget.textureCopy ||
+		hudTarget.SRVCopy ||
+		hudTarget.UAV ||
+		!hudDepth.texture ||
+		!TryGetTexture2DDesc(hudTarget.texture, nativeColorDesc) ||
+		!TryGetTexture2DDesc(hudDepth.texture, nativeDepthDesc) ||
+		nativeColorDesc.SampleDesc.Count != 1 ||
+		nativeDepthDesc.SampleDesc.Count != 1 ||
+		nativeColorDesc.ArraySize != 1 ||
+		nativeDepthDesc.ArraySize != 1 ||
+		nativeDepthDesc.Width != nativeColorDesc.Width ||
+		nativeDepthDesc.Height != nativeColorDesc.Height) {
+		return false;
+	}
+
+	const auto& plan = GetRuntimeResolutionPlan();
+	const uint32_t finalEyeWidth = std::max(ClampPositiveDimension(plan.finalOutputSize.x) / 2u, 1u);
+	const uint32_t finalHeight = ClampPositiveDimension(plan.finalOutputSize.y);
+	const float displayScale = std::max(
+		static_cast<float>(finalEyeWidth) / static_cast<float>(nativeColorDesc.Width),
+		static_cast<float>(finalHeight) / static_cast<float>(nativeColorDesc.Height));
+	// The Map HUD is normally fixed at 2048 square. A 1.5x floor materially
+	// improves rasterized marker silhouettes, while the 2x ceiling bounds Map-open
+	// fill cost and memory on very high-resolution headsets.
+	const float supersampleScale = std::clamp(std::max(displayScale, 1.5f), 1.0f, 2.0f);
+	auto scaleDimension = [&](uint32_t a_dimension) {
+		const auto scaled = static_cast<uint64_t>(std::ceil(static_cast<double>(a_dimension) * supersampleScale));
+		const auto aligned = (scaled + 7ull) & ~7ull;
+		return static_cast<uint32_t>(std::min<uint64_t>(
+			aligned,
+			D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION));
+	};
+	const uint32_t supersampleWidth = scaleDimension(nativeColorDesc.Width);
+	const uint32_t supersampleHeight = scaleDimension(nativeColorDesc.Height);
+	if (supersampleWidth <= nativeColorDesc.Width && supersampleHeight <= nativeColorDesc.Height)
+		return false;
+
+	try {
+		auto colorDesc = nativeColorDesc;
+		colorDesc.Width = supersampleWidth;
+		colorDesc.Height = supersampleHeight;
+		auto supersampleColor = eastl::make_unique<Texture2D>(colorDesc, "VRMapMenuDisplayResolutionUI");
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC colorSRVDesc{};
+		hudTarget.SRV->GetDesc(&colorSRVDesc);
+		supersampleColor->CreateSRV(colorSRVDesc);
+		D3D11_RENDER_TARGET_VIEW_DESC colorRTVDesc{};
+		hudTarget.RTV->GetDesc(&colorRTVDesc);
+		supersampleColor->CreateRTV(colorRTVDesc);
+
+		auto depthDesc = nativeDepthDesc;
+		depthDesc.Width = supersampleWidth;
+		depthDesc.Height = supersampleHeight;
+		winrt::com_ptr<ID3D11Texture2D> supersampleDepth;
+		DX::ThrowIfFailed(globals::d3d::device->CreateTexture2D(
+			&depthDesc,
+			nullptr,
+			supersampleDepth.put()));
+		Util::SetResourceName(supersampleDepth.get(), "VRMapMenuDisplayResolutionDepth");
+
+		std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> depthViews{};
+		std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> readOnlyDepthViews{};
+		auto createDepthView = [&](ID3D11DepthStencilView* a_source, auto& a_destination) {
+			if (!a_source)
+				return true;
+			D3D11_DEPTH_STENCIL_VIEW_DESC viewDesc{};
+			a_source->GetDesc(&viewDesc);
+			return SUCCEEDED(globals::d3d::device->CreateDepthStencilView(
+				supersampleDepth.get(),
+				&viewDesc,
+				a_destination.put()));
+		};
+		for (size_t index = 0; index < depthViews.size(); ++index) {
+			if (!createDepthView(hudDepth.views[index], depthViews[index]) ||
+				!createDepthView(hudDepth.readOnlyViews[index], readOnlyDepthViews[index])) {
+				return false;
+			}
+		}
+
+		winrt::com_ptr<ID3D11ShaderResourceView> depthSRV;
+		winrt::com_ptr<ID3D11ShaderResourceView> stencilSRV;
+		auto createDepthSRV = [&](ID3D11ShaderResourceView* a_source, auto& a_destination) {
+			if (!a_source)
+				return true;
+			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+			a_source->GetDesc(&viewDesc);
+			return SUCCEEDED(globals::d3d::device->CreateShaderResourceView(
+				supersampleDepth.get(),
+				&viewDesc,
+				a_destination.put()));
+		};
+		if (!createDepthSRV(hudDepth.depthSRV, depthSRV) ||
+			!createDepthSRV(hudDepth.stencilSRV, stencilSRV)) {
+			return false;
+		}
+
+		vrMapMenuSavedHUDTexture = hudTarget.texture;
+		vrMapMenuSavedHUDTextureCopy = hudTarget.textureCopy;
+		vrMapMenuSavedHUDRTV = hudTarget.RTV;
+		vrMapMenuSavedHUDSRV = hudTarget.SRV;
+		vrMapMenuSavedHUDSRVCopy = hudTarget.SRVCopy;
+		vrMapMenuSavedHUDUAV = hudTarget.UAV;
+		vrMapMenuSavedHUDDepthTexture = hudDepth.texture;
+		for (size_t index = 0; index < vrMapMenuSavedHUDDepthViews.size(); ++index) {
+			vrMapMenuSavedHUDDepthViews[index] = hudDepth.views[index];
+			vrMapMenuSavedHUDReadOnlyDepthViews[index] = hudDepth.readOnlyViews[index];
+		}
+		vrMapMenuSavedHUDDepthSRV = hudDepth.depthSRV;
+		vrMapMenuSavedHUDStencilSRV = hudDepth.stencilSRV;
+
+		vrMapMenuUISupersampleColor = std::move(supersampleColor);
+		vrMapMenuUISupersampleDepth = std::move(supersampleDepth);
+		vrMapMenuUISupersampleDepthViews = std::move(depthViews);
+		vrMapMenuUISupersampleReadOnlyDepthViews = std::move(readOnlyDepthViews);
+		vrMapMenuUISupersampleDepthSRV = std::move(depthSRV);
+		vrMapMenuUISupersampleStencilSRV = std::move(stencilSRV);
+		vrMapMenuUINativeWidth = nativeColorDesc.Width;
+		vrMapMenuUINativeHeight = nativeColorDesc.Height;
+		vrMapMenuUISupersampleWidth = supersampleWidth;
+		vrMapMenuUISupersampleHeight = supersampleHeight;
+
+		hudTarget.texture = vrMapMenuUISupersampleColor->resource.get();
+		hudTarget.textureCopy = nullptr;
+		hudTarget.RTV = vrMapMenuUISupersampleColor->rtv.get();
+		hudTarget.SRV = vrMapMenuUISupersampleColor->srv.get();
+		hudTarget.SRVCopy = nullptr;
+		hudTarget.UAV = nullptr;
+		hudDepth.texture = vrMapMenuUISupersampleDepth.get();
+		for (size_t index = 0; index < vrMapMenuUISupersampleDepthViews.size(); ++index) {
+			hudDepth.views[index] = vrMapMenuUISupersampleDepthViews[index].get();
+			hudDepth.readOnlyViews[index] = vrMapMenuUISupersampleReadOnlyDepthViews[index].get();
+		}
+		hudDepth.depthSRV = vrMapMenuUISupersampleDepthSRV.get();
+		hudDepth.stencilSRV = vrMapMenuUISupersampleStencilSRV.get();
+		vrMapMenuUISupersamplingActive = true;
+
+		static constexpr float kTransparent[4] = {};
+		globals::d3d::context->ClearRenderTargetView(vrMapMenuUISupersampleColor->rtv.get(), kTransparent);
+		for (const auto& view : vrMapMenuUISupersampleDepthViews) {
+			if (view) {
+				globals::d3d::context->ClearDepthStencilView(
+					view.get(),
+					D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL,
+					1.0f,
+					0);
+				break;
+			}
+		}
+		if (globals::game::stateUpdateFlags) {
+			globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+			globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_VIEWPORT);
+		}
+		if (ShouldEmitUpscalingDiagLogs()) {
+			logger::debug(
+				"[VRMenuComposite] Activated display-resolution Map HUD source. native={}x{} supersampled={}x{} scale={:.3f}",
+				vrMapMenuUINativeWidth,
+				vrMapMenuUINativeHeight,
+				vrMapMenuUISupersampleWidth,
+				vrMapMenuUISupersampleHeight,
+				supersampleScale);
+		}
+		return true;
+	} catch (const std::exception& e) {
+		static bool loggedMapUISupersampleFailure = false;
+		LogWarnOnce(loggedMapUISupersampleFailure, "[VRMenuComposite] Map HUD supersampling unavailable", e);
+	} catch (...) {
+		static bool loggedMapUISupersampleFailure = false;
+		LogWarnOnce(loggedMapUISupersampleFailure, "[VRMenuComposite] Map HUD supersampling unavailable");
+	}
+	return false;
+}
+
+void Upscaling::ReleaseVRMapMenuUISupersampling()
+{
+	if (vrMapMenuUISupersamplingActive && globals::game::renderer) {
+		auto* renderer = globals::game::renderer;
+		auto& hudTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kHUDMENU];
+		auto& hudDepth = renderer->GetDepthStencilData()
+		                     .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kHUDMENU];
+		if (vrMapMenuUISupersampleColor &&
+			hudTarget.texture == vrMapMenuUISupersampleColor->resource.get()) {
+			hudTarget.texture = vrMapMenuSavedHUDTexture;
+			hudTarget.textureCopy = vrMapMenuSavedHUDTextureCopy;
+			hudTarget.RTV = vrMapMenuSavedHUDRTV;
+			hudTarget.SRV = vrMapMenuSavedHUDSRV;
+			hudTarget.SRVCopy = vrMapMenuSavedHUDSRVCopy;
+			hudTarget.UAV = vrMapMenuSavedHUDUAV;
+		}
+		if (hudDepth.texture == vrMapMenuUISupersampleDepth.get()) {
+			hudDepth.texture = vrMapMenuSavedHUDDepthTexture;
+			for (size_t index = 0; index < vrMapMenuSavedHUDDepthViews.size(); ++index) {
+				hudDepth.views[index] = vrMapMenuSavedHUDDepthViews[index];
+				hudDepth.readOnlyViews[index] = vrMapMenuSavedHUDReadOnlyDepthViews[index];
+			}
+			hudDepth.depthSRV = vrMapMenuSavedHUDDepthSRV;
+			hudDepth.stencilSRV = vrMapMenuSavedHUDStencilSRV;
+		}
+		if (globals::game::stateUpdateFlags) {
+			globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+			globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_VIEWPORT);
+		}
+	}
+
+	vrMapMenuUISupersamplingActive = false;
+	vrMapMenuUISupersampleColor.reset();
+	vrMapMenuUISupersampleDepth = nullptr;
+	for (auto& view : vrMapMenuUISupersampleDepthViews)
+		view = nullptr;
+	for (auto& view : vrMapMenuUISupersampleReadOnlyDepthViews)
+		view = nullptr;
+	vrMapMenuUISupersampleDepthSRV = nullptr;
+	vrMapMenuUISupersampleStencilSRV = nullptr;
+	vrMapMenuSavedHUDTexture = nullptr;
+	vrMapMenuSavedHUDTextureCopy = nullptr;
+	vrMapMenuSavedHUDRTV = nullptr;
+	vrMapMenuSavedHUDSRV = nullptr;
+	vrMapMenuSavedHUDSRVCopy = nullptr;
+	vrMapMenuSavedHUDUAV = nullptr;
+	vrMapMenuSavedHUDDepthTexture = nullptr;
+	vrMapMenuSavedHUDDepthViews.fill(nullptr);
+	vrMapMenuSavedHUDReadOnlyDepthViews.fill(nullptr);
+	vrMapMenuSavedHUDDepthSRV = nullptr;
+	vrMapMenuSavedHUDStencilSRV = nullptr;
+	vrMapMenuUINativeWidth = 0;
+	vrMapMenuUINativeHeight = 0;
+	vrMapMenuUISupersampleWidth = 0;
+	vrMapMenuUISupersampleHeight = 0;
+}
+
 bool Upscaling::EnsureVRMenuFullResolutionDepth(uint32_t a_width, uint32_t a_height)
 {
 	if (!a_width || !a_height || !globals::d3d::device || !globals::game::renderer)
@@ -9494,6 +9750,14 @@ void Upscaling::BeginVRMenuDrawInterface()
 	const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 	if (vrMenuDrawInterfaceDepth == 0) {
 		EnsureRuntimeResolutionStateCurrent();
+		const bool mapUISupersamplingExpected =
+			IsVRMapMenuPresentationActive() && IsVRMenuSemanticAdapterEligible();
+		if (mapUISupersamplingExpected) {
+			if (!EnsureVRMapMenuUISupersampling() && vrMapMenuUISupersamplingActive)
+				ReleaseVRMapMenuUISupersampling();
+		} else if (vrMapMenuUISupersamplingActive) {
+			ReleaseVRMapMenuUISupersampling();
+		}
 		BeginVRMenuFinalCompositeFrame(frame);
 		const bool postPresentationProducer =
 			vrMenuFrameTransaction.frame == frame &&
@@ -9532,6 +9796,13 @@ void Upscaling::EndVRMenuDrawInterface()
 		return;
 	}
 	--vrMenuDrawInterfaceDepth;
+	auto releaseInactiveMapUISupersampling = ScopeExit([&]() {
+		if (vrMenuDrawInterfaceDepth == 0 &&
+			vrMapMenuUISupersamplingActive &&
+			(!IsVRMapMenuPresentationActive() || !IsVRMenuTransportContractPresent())) {
+			ReleaseVRMapMenuUISupersampling();
+		}
+	});
 	const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 	if (vrMenuFrameTransaction.frame != frame)
 		return;
@@ -9685,8 +9956,64 @@ void Upscaling::VRMapMenuCopyRenderHook::thunk(
 	globals::features::upscaling.StretchVRMapMenuCopyIfNeeded();
 }
 
+void Upscaling::VRMapMenuPostDisplayHook::thunk(RE::MapMenu* a_menu)
+{
+	auto& upscaling = globals::features::upscaling;
+	if (!a_menu ||
+		!a_menu->uiMovie ||
+		!upscaling.vrMapMenuUISupersamplingActive ||
+		!upscaling.vrMapMenuUINativeWidth ||
+		!upscaling.vrMapMenuUINativeHeight ||
+		!upscaling.vrMapMenuUISupersampleWidth ||
+		!upscaling.vrMapMenuUISupersampleHeight) {
+		func(a_menu);
+		return;
+	}
+
+	RE::GViewport nativeViewport{};
+	a_menu->uiMovie->GetViewport(&nativeViewport);
+	if (nativeViewport.bufferWidth <= 0 ||
+		nativeViewport.bufferHeight <= 0 ||
+		nativeViewport.width <= 0 ||
+		nativeViewport.height <= 0) {
+		func(a_menu);
+		return;
+	}
+	if (nativeViewport.bufferWidth == static_cast<int32_t>(upscaling.vrMapMenuUISupersampleWidth) &&
+		nativeViewport.bufferHeight == static_cast<int32_t>(upscaling.vrMapMenuUISupersampleHeight)) {
+		func(a_menu);
+		return;
+	}
+
+	const float scaleX = static_cast<float>(upscaling.vrMapMenuUISupersampleWidth) /
+	                     static_cast<float>(upscaling.vrMapMenuUINativeWidth);
+	const float scaleY = static_cast<float>(upscaling.vrMapMenuUISupersampleHeight) /
+	                     static_cast<float>(upscaling.vrMapMenuUINativeHeight);
+	auto scale = [](int32_t a_value, float a_factor) {
+		return static_cast<int32_t>(std::lround(static_cast<double>(a_value) * a_factor));
+	};
+	RE::GViewport supersampledViewport{ nativeViewport };
+	supersampledViewport.bufferWidth = scale(nativeViewport.bufferWidth, scaleX);
+	supersampledViewport.bufferHeight = scale(nativeViewport.bufferHeight, scaleY);
+	supersampledViewport.left = scale(nativeViewport.left, scaleX);
+	supersampledViewport.top = scale(nativeViewport.top, scaleY);
+	supersampledViewport.width = scale(nativeViewport.width, scaleX);
+	supersampledViewport.height = scale(nativeViewport.height, scaleY);
+	supersampledViewport.scissorLeft = scale(nativeViewport.scissorLeft, scaleX);
+	supersampledViewport.scissorTop = scale(nativeViewport.scissorTop, scaleY);
+	supersampledViewport.scissorWidth = scale(nativeViewport.scissorWidth, scaleX);
+	supersampledViewport.scissorHeight = scale(nativeViewport.scissorHeight, scaleY);
+
+	a_menu->uiMovie->SetViewport(supersampledViewport);
+	auto restoreViewport = ScopeExit([&]() {
+		a_menu->uiMovie->SetViewport(nativeViewport);
+	});
+	func(a_menu);
+}
+
 void Upscaling::ResetVRMenuFinalCompositeLayer()
 {
+	ReleaseVRMapMenuUISupersampling();
 	// A resource reset can be requested while Map's semantic epoch has replaced
 	// the engine-owned targets. Restore them before releasing the replacements.
 	while (g_vrMenuSemanticEpochDepth != 0) {
@@ -12391,8 +12718,15 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		TraceVRRaceSexStartupSignal(a_event->opening ? "menu-event-open" : "menu-event-close", true);
 	}
 
-	if (a_event && a_event->menuName == RE::MapMenu::MENU_NAME)
+	if (a_event && a_event->menuName == RE::MapMenu::MENU_NAME) {
 		g_vrMapMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
+		if (!a_event->opening &&
+			globals::features::upscaling.vrMenuDrawInterfaceDepth == 0 &&
+			g_vrMenuSemanticEpochDepth == 0 &&
+			!globals::features::upscaling.vrMenuParallelBridgeDrawInProgress) {
+			globals::features::upscaling.ReleaseVRMapMenuUISupersampling();
+		}
+	}
 	if (a_event && a_event->menuName == "StatsMenu")
 		g_vrStatsMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 
@@ -12833,6 +13167,7 @@ void Upscaling::PostPostLoad()
 		if (TryInstallVRMenuBridgeHigherCallHook())
 			TryInstallVRMenuBridgeDirectDrawHook();
 		stl::write_vfunc<0x1, VRMapMenuCopyRenderHook>(RE::VTABLE_BSImagespaceShaderCopy[3]);
+		stl::write_vfunc<0x6, VRMapMenuPostDisplayHook>(RE::VTABLE_MapMenu[0]);
 	}
 
 	bool isGOG = !GetModuleHandle(L"steam_api64.dll");

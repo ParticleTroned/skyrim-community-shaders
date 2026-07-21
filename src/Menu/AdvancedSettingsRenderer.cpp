@@ -8,6 +8,7 @@
 
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
+#include "Features/RenderDoc.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -45,6 +46,14 @@ void AdvancedSettingsRenderer::RenderAdvancedSettings(
 		if (MenuFonts::BeginTabItemWithFont(T("menu.advanced.tab_logging", "Logging"), Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##LoggingContent", ImVec2(0, 0), false)) {
 				RenderLoggingSection();
+			}
+			ImGui::EndChild();
+			ImGui::EndTabItem();
+		}
+
+		if (MenuFonts::BeginTabItemWithFont(T("menu.advanced.tab_renderdoc", "RenderDoc"), Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##RenderDocContent", ImVec2(0, 0), false)) {
+				globals::features::renderDoc.DrawSettings();
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();

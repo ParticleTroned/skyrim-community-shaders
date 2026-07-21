@@ -1749,6 +1749,7 @@
     "menu.advanced.tab_developer": "Developer",
     "menu.advanced.tab_disable_at_boot": "Disable at Boot",
     "menu.advanced.tab_logging": "Logging",
+    "menu.advanced.tab_renderdoc": "RenderDoc",
     "menu.advanced.tab_shader_debug": "Shader Debug",
     "menu.advanced.tab_testing": "Testing",
     "menu.advanced.test_conditions": "Test Conditions",

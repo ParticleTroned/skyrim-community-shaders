@@ -55,7 +55,7 @@ public:
 	std::string GetShortName() override { return "RenderDoc"; }
 	std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	bool IsCore() const override { return true; }
-	bool IsInMenu() const override { return true; }
+	bool IsInMenu() const override { return false; }
 	bool IsHiddenInEssentialsMode() const override { return true; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{

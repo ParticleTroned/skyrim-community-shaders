@@ -4009,7 +4009,7 @@ namespace
 				g_vrMenuPresentationTraceObservedMenuMask.load(std::memory_order_acquire);
 			const uint64_t sequence = g_vrMenuPresentationTraceSequence.fetch_add(1, std::memory_order_acq_rel) + 1u;
 			logger::debug(
-				"[VRMenuTrace] session={} seq={} frame={} event=session-summary reason={} menu=\"{}\" trigger=\"{}\" frames={} menus(start=\"{}\",end=\"{}\",observed=\"{}\") targets(map={},main={},loading={},raceSex={},raceSexPreRoll={}) records={} lifecycle(open={},close={},drawInterface={}/{}) composition(draws={},inputs(projected={},hud={}),higher={}/{},renderMode(24={},other={},unknown={}),accumulatorOverflow={},depth(bound={},enabled={},disabled={}),runtime(renderScaleActive={},renderScaleInactive={},presentationUpscalingActive={},presentationUpscalingInactive={}),destinationVRFramebuffer={},destinationMenuBG={},destinationOtherRegistered={},destinationUnregistered={}) producer(passes={},resources={},draws={},updateModel(clearThenDraw={},fullReplaceThenDraw={},incrementalCandidate={},withoutObservedReset={},operationsOnly={}),droppedResources={}) globalOutput(passes={},resources={},draws={},scope(insideDrawInterface={},outsideDrawInterface={}),updateModel(clearThenDraw={},fullReplaceThenDraw={},incrementalCandidate={},withoutObservedReset={},operationsOnly={}),droppedResources={}) operations={} bridge(decisions={},candidate(accepted={},rejected={}),capture(attempts={},suppressed={},kept={})) finalComposite(attempts={},applied={},rejected={}) openVRSubmit(total={},success={},failure={}) diagnostics(d3dHooksInstalled={},d3dHookBanks={},createDeferredContextHook={},recordCapReached={},requiredRecordsContinued=true,perRecordFlush=true,hadFault={})",
+				"[VRMenuTrace] session={} seq={} frame={} event=session-summary reason={} menu=\"{}\" trigger=\"{}\" frames={} menus(start=\"{}\",end=\"{}\",observed=\"{}\") targets(map={},main={},loading={},raceSex={},raceSexPreRoll={}) records={} lifecycle(open={},close={},drawInterface={}/{}) composition(draws={},inputs(projected={},hud={}),higher={}/{},renderMode(24={},other={},unknown={}),accumulatorOverflow={},depth(bound={},enabled={},disabled={}),runtime(renderScaleActive={},renderScaleInactive={},presentationUpscalingActive={},presentationUpscalingInactive={}),destinationVRFramebuffer={},destinationMenuBG={},destinationOtherRegistered={},destinationUnregistered={}) producer(passes={},resources={},draws={},updateModel(clearThenDraw={},fullReplaceThenDraw={},incrementalCandidate={},withoutObservedReset={},operationsOnly={}),droppedResources={}) globalOutput(passes={},resources={},draws={},scope(insideDrawInterface={},outsideDrawInterface={}),updateModel(clearThenDraw={},fullReplaceThenDraw={},incrementalCandidate={},withoutObservedReset={},operationsOnly={}),droppedResources={}) operations={} bridge(decisions={},candidate(accepted={},rejected={}),capture(attempts={},suppressed={},kept={})) finalComposite(attempts={},applied={},rejected={}) openVRSubmit(total={},success={},failure={}) diagnostics(d3dHooksInstalled={},d3dHookBanks={},createDeferredContextHook={},recordCapReached={},requiredRecordsContinued=true,perRecordFlush=false,hadFault={})",
 				session,
 				sequence,
 				endFrame,
@@ -4184,7 +4184,7 @@ namespace
 			g_vrMenuPresentationTraceStartMenuMask = a_menuMask;
 		}
 		logger::debug(
-			"[VRMenuTrace] session={} seq={} frame={} event=session-begin trigger=\"{}\" menus=\"{}\" d3dHooksInstalled={} d3dHookBanks={} createDeferredContextHook={} recordCap={} capBehavior=counter-only requiredRecordsContinue=true perRecordFlush=true globalOutputFlush=frame-openvr-session outsideDrawRecords=complete accumulatorEpochRecords=complete allDrawEpochAccounting=self-calibrating generationCorrelation=enabled generationHistory=preserved-across-session bridgePipelineState=complete mapDetailedStream=all-draws-and-resource-operations commandListCorrelation=enabled",
+			"[VRMenuTrace] session={} seq={} frame={} event=session-begin trigger=\"{}\" menus=\"{}\" d3dHooksInstalled={} d3dHookBanks={} createDeferredContextHook={} recordCap={} capBehavior=counter-only requiredRecordsContinue=true perRecordFlush=false globalOutputFlush=session-boundary outsideDrawRecords=complete accumulatorEpochRecords=complete allDrawEpochAccounting=self-calibrating generationCorrelation=enabled generationHistory=preserved-across-session bridgePipelineState=complete mapDetailedStream=relevant-plus-1-in-256-unrelated-and-all-resource-operations commandListCorrelation=enabled",
 			session,
 			sequence,
 			frame,
@@ -4386,7 +4386,6 @@ namespace
 				frame,
 				a_event,
 				a_buildDetails());
-			FlushVRMenuPresentationTraceLog();
 		} catch (const std::exception& e) {
 			ReportVRMenuPresentationTraceFault("after an exception", e.what());
 		} catch (...) {
@@ -6832,6 +6831,15 @@ namespace
 				std::memory_order_acq_rel);
 		}
 
+		// The exhaustive Map discovery trace has already established the mixed
+		// pass contract. Retain every relevant draw and exact bridge, plus a
+		// periodic sample of unrelated draws; the counters and ordinals above
+		// still account for every draw without formatting thousands of multi-KB
+		// records per frame.
+		static constexpr uint64_t kUnrelatedMapDrawSamplePeriod = 256u;
+		if (!related && (ordinal % kUnrelatedMapDrawSamplePeriod) != 1u)
+			return;
+
 		const auto higher = g_vrMenuPresentationTraceHigherCallContext;
 		LogVRMenuPresentationTraceLazy(
 			"map-draw",
@@ -8726,10 +8734,13 @@ bool Upscaling::BeginVRMenuSemanticEpoch(
 		globals::state &&
 		vrMenuFrameTransaction.frame == globals::state->frameCount &&
 		vrMenuFrameTransaction.presentationStarted;
+	// Map keeps its mixed 3D/depth pass on the reduced engine target, but its
+	// exact projected/HUD bridges are still eligible for transparent overlay
+	// capture. BeginVRMenuDisplayResolutionPass deliberately leaves Map's target
+	// and depth alone, so only those proven text/widget draws are redirected.
 	context.eligible = a_renderMode == 24u &&
 	                   adapterEligible &&
-	                   !postPresentationProducer &&
-	                   !IsVRMapMenuPresentationActive();
+	                   !postPresentationProducer;
 	g_vrMenuSemanticEpochStack[g_vrMenuSemanticEpochDepth++] = context;
 	if (a_renderMode == 24u && adapterEligible && !postPresentationProducer &&
 		!BeginVRMenuDisplayResolutionPass()) {
@@ -9120,7 +9131,6 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 {
 	const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
 	const bool menuPresentationContextActive = IsVRMenuPresentationContextActive();
-	const bool mapMenuEngineBypass = IsVRMapMenuPresentationActive();
 	const bool committedPlanChanged =
 		vrMenuCommittedLayerValid &&
 		vrMenuCommittedLayerPlanGeneration != GetActiveVRRenderScaleContractGeneration();
@@ -9130,10 +9140,9 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 			PoisonVRMenuFrameTransaction("plan-generation-changed-after-presentation-start");
 	}
 	if (vrMenuCommittedLayerValid &&
-		(!menuPresentationContextActive || communityShadersMenuOpen || mapMenuEngineBypass)) {
+		(!menuPresentationContextActive || communityShadersMenuOpen)) {
 		InvalidateVRMenuCommittedLayer(
 			communityShadersMenuOpen ? "community-shaders-menu-open" :
-			mapMenuEngineBypass      ? "map-engine-bypass" :
 									   "menu-context-ended");
 	}
 	if (!menuPresentationContextActive &&
@@ -9180,6 +9189,9 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 	vrMenuFrameTransaction.frame = a_frame;
 	vrMenuFrameTransaction.planGeneration = GetActiveVRRenderScaleContractGeneration();
 	vrMenuFrameTransaction.drawInterfaceDepth = vrMenuDrawInterfaceDepth;
+	// Map overlay ownership begins only after an exact bridge is recognized.
+	// Do not fail-close a Map frame merely because it contains no widget bridge;
+	// its untouched reduced 3D/UI path remains a safe fallback until suppression.
 	vrMenuFrameTransaction.menuLayerRequired =
 		IsVRMenuTransportContractPresent() &&
 		!vrMenuCommittedLayerValid &&
@@ -9974,6 +9986,22 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return decide("destination-resource-preflight-failed", false);
 	}
 
+	// PostDisplay normally removes temporal jitter before MenuManager draws the
+	// interface. Reassert that contract at the exact owned bridge boundary so a
+	// later menu/mod camera update cannot put Halton projection offsets back into
+	// a layer that is composited after the vendor temporal resolve. This is a
+	// state correction only; it adds no draw, texture, history, or texture sample.
+	auto* graphicsState = globals::game::graphicsState;
+	if (!graphicsState)
+		return decide("missing-menu-projection-state", false);
+	PrepareFullResolutionPostProcessing(graphicsState, true);
+	if (jitter.x != 0.0f ||
+		jitter.y != 0.0f ||
+		graphicsState->projectionPosScaleX != 0.0f ||
+		graphicsState->projectionPosScaleY != 0.0f) {
+		return decide("menu-projection-dejitter-failed", false);
+	}
+
 	// The exact reduced menu bridge is a direct menu-text signal. Arm the short
 	// observed tail only after an explicit menu context confirms this is not
 	// normal in-game projected UI/HUD work.
@@ -10350,11 +10378,6 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 						IsSaveLoadTransitionContextActive(),
 						GetVRMenuPresentationTraceScopeDescription()); });
 	};
-
-	if (IsVRMapMenuPresentationActive()) {
-		traceResult("rejected", "map-engine-bypass");
-		return false;
-	}
 
 	if (vrMenuFrameTransaction.frame == a_frame &&
 		vrMenuFrameTransaction.capturedOperations != 0 &&
@@ -19524,7 +19547,7 @@ bool Upscaling::PublishVRMenuDesktopEye(uint32_t a_eyeIndex, const Texture2D& a_
 
 void Upscaling::PresentVRMenuDesktopMirror(IDXGISwapChain* a_swapChain)
 {
-	if (!globals::game::isVR || !a_swapChain || !globals::state || IsVRMapMenuPresentationActive())
+	if (!globals::game::isVR || !a_swapChain || !globals::state)
 		return;
 
 	const uint32_t frame = globals::state->frameCount;

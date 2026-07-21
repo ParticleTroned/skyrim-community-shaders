@@ -5,21 +5,26 @@ validation. RC88 proved reliable capture/submission but exposed three
 presentation defects: Map's substituted target is cleared opaque, the desktop
 path copied a masked HMD eye instead of preserving Skyrim's game-window view,
 and the broad production monitor inspected unrelated draws at Info level. The
-current working revision addresses those defects without toggling Render Scale
-or recreating scene targets.
+latest focused trace proves Console eye/layer parity and identifies synchronous
+per-record Debug flushing as its motion-test performance fault. It also proves
+that Map's text bridges are currently bypassed. The working revision keeps the
+mixed 3D Map reduced, captures only its exact text/widget bridges at final
+resolution, and buffers Debug records until trace boundaries.
 
 Branch: `cs-1.7-PL-VR`
 
 Implementation base reviewed: `0c66c97b895c2ee2b939073ab6cf73c87eb6ea7f`
 
-Current committed implementation: `87d6c7dc0` (`RC88`)
+Current committed implementation: `0b677eab3` (RC88 follow-up checkpoint)
 
-Current working implementation: uncommitted RC88 follow-up; no build or commit
-has been made under the branch rules.
+Current working implementation: uncommitted exact-bridge projection de-jitter,
+Map overlay-only capture, and buffered Debug-trace hardening on top of
+`0b677eab3`; no build or commit has been made for it under the branch rules.
 
-Implementation validation at that revision: `git diff --cached --check` and a
-static ownership/resource-lifetime review. Build and runtime tests were not run
-under the branch rule; the focused acceptance matrix below remains required.
+Checkpoint validation: repository formatting/check hooks passed during the
+`0b677eab3` commit. Current working validation is static only. Build and runtime
+tests were not run under the branch rule; the focused acceptance matrix below
+remains required.
 
 Trace baseline: `87522b1f47ef5544b92962cdd11177db8e746ea8` (`RC83`)
 
@@ -72,6 +77,20 @@ Evidence reviewed:
     captured 68 exact operations and completed 46 final composites/submits. These
     are successful transport records with incorrect Map alpha, desktop base, and
     production-cost policies, not missing capture or OpenVR failures.
+-   Focused trace ending 2026-07-21 10:31:15: Console captured and suppressed
+    all 254 exact bridges, applied all 170 requested eye composites, and
+    completed all 170 eye submits with matching current transaction/layer
+    frames. No stale-eye reuse or submit failure is present. Its 15,640 records
+    over 86 frames were synchronously flushed one by one. Map retained its
+    complete reduced path, but rejected all 96 exact projected/HUD bridge
+    candidates, explaining why its widgets degraded with a 0.33 render scale.
+
+Developer tracing remains available. Debug/Trace records no longer request a
+synchronous file flush per record; session begin/end still flush explicitly.
+Map retains every relevant draw, every resource operation, exact counters and
+ordinals for all draws, while formatting only one in 256 unrelated draw records.
+This preserves the established diagnostics without making the trace itself the
+dominant frame workload.
 
 This document is a design and verification record. It is not a release claim.
 
@@ -98,7 +117,7 @@ loss.
 | Ordinary menus and Console | Replay every exact mode-24 bridge operation into full-resolution staging and suppress that operation only after replay succeeds                            | The complete ordered bridge contract is proven and must not use selector, index-count, or deduplication heuristics                                                                                          |
 | RaceSex                    | Same semantic mode-24 transport as ordinary menus                                                                                                          | RC83 proves the same three-operation projected/HUD contract, including persistent HUD reuse; no relatch is required                                                                                         |
 | MainMenu and Loading       | Replay the exact direct projected-menu bridge outside an accumulator; stretch the reduced base at submit and composite the committed full-resolution layer | These menus have the exact higher/direct bridge but no ordinary mode-24 consumer                                                                                                                            |
-| Map                        | Bypass hybrid capture/substitution and keep Skyrim's complete reduced-resolution mixed Map/UI path                                                         | RC88 proves Skyrim overwrites the substituted target's transparent alpha with opaque black, so compositing it hides terrain; visible/correct reduced Map is the safe policy until alpha ownership is solved |
+| Map                        | Keep Skyrim's mixed 3D/depth Map pass reduced, but replay and suppress only its exact projected/HUD bridges into the transparent final-resolution layer    | This preserves the visible terrain path and avoids the opaque-clear failure while routing small text widgets around the 0.33-resolution scene target                                                           |
 | Desktop game window        | Preserve Skyrim's existing unmasked game-window backbuffer and alpha-composite the left half of the committed stereo menu layer at Present                 | Copying a completed HMD eye also copied the hidden-area mask and replaced the preferred desktop camera; only the suppressed menu pixels need restoration                                                    |
 
 For ordinary menus and RaceSex, semantic ownership is:
@@ -151,15 +170,16 @@ implementation rules:
    Render Scale contract. Startup may still defer the first latch while loading,
    and real save/load or vendor-reset transitions retain their existing safety
    guards, but menu presentation itself never requests a relatch.
-5. **Map currently remains entirely engine-owned.** The mixed depth-writing
-   epoch still disqualifies selective bridge replay, and RC88 now proves the
-   attempted full-resolution substitute has no usable transparent-background
-   contract: Skyrim clears it to alpha one. Map therefore bypasses the hybrid
-   and remains visible through the original reduced `kMENUBG` path.
+5. **Map uses split ownership.** The mixed depth-writing terrain pass stays on
+   Skyrim's reduced `kMENUBG` target because the attempted full-resolution
+   substitute is cleared to alpha one. Only exact mode-24 projected/HUD bridge
+   draws are redirected into the transparent final-resolution layer. Their
+   original low-resolution draws are suppressed only after capture succeeds.
 6. **Stretch is limited to transport.** Stretching the reduced scene/base cannot
    recover text detail. It is valid for MainMenu/Loading base presentation and
    only where projected/HUD UI is rendered or replayed at full resolution
-   afterward. It is not used as a claim that Map is currently full-resolution.
+   afterward. Map terrain remains reduced/vendor-upscaled; only its widgets are
+   full-resolution.
 
 Open Shaders obtains robust menu rendering by changing the broader rendering
 contract: it enlarges selected menu/intermediate targets, supplies a display-
@@ -1152,6 +1172,10 @@ For every verified direct operation:
 -   retain the observed RGB equation `SRC_ALPHA`, `INV_SRC_ALPHA`, `ADD`, while
     using `ONE`, `INV_SRC_ALPHA`, `ADD` for staging alpha instead of the engine
     target's `ZERO`, `INV_SRC_ALPHA`, `ADD` alpha equation;
+-   reassert zero temporal jitter and zero projection offsets at the exact owned
+    bridge boundary, after all producer work and immediately before the live
+    full-resolution draw; this is a state correction with no additional pass,
+    texture, history, or texture sample;
 -   transform viewport/scissor to the final stereo extent;
 -   apply the verified depth policy;
 -   draw into full-resolution staging;
@@ -1414,10 +1438,10 @@ ordering.
 
 RC83 proves the mixed post-HUD depth-writing dependency. RC88 then proves the
 full-resolution substitute is cleared to opaque black despite successful final
-composites and submits. Together they select the current reduced engine bypass,
-not the target-substitution adapter. No more broad Map logging is needed; the
-next run should visually confirm a complete visible Map and absence of the
-text-only/black hybrid result.
+composites and submits. The latest trace proves the complete reduced Map remains
+valid and exposes two exact HUD bridges per ordinary Map frame. Together they
+select overlay-only bridge capture, not target substitution. The next run must
+confirm complete terrain plus sharp widgets, with no black or text-only result.
 
 ### RaceSex
 
@@ -1446,7 +1470,7 @@ editing.
 
 | File                                 | Current responsibility                                                                                                                                                             |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/Features/Upscaling.cpp`         | Semantic/direct adapters, frame transaction, staging and committed layers, submit composition, production fast-path gating, Map bypass, and Present-time desktop layer composition |
+| `src/Features/Upscaling.cpp`         | Semantic/direct adapters, frame transaction, staging and committed layers, submit composition, production fast-path gating, Map overlay capture, and Present-time desktop layer composition |
 | `src/Features/Upscaling.h`           | Transaction, layer, compositor, and hook state                                                                                                                                     |
 | `src/FrameAnnotations.cpp`           | Calls production accumulator begin/end around `BSShaderAccumulator::RenderBatches`; developer tracing is optional                                                                  |
 | `src/Hooks.cpp`                      | Runs `PresentVRMenuDesktopMirror` before state reset and before the CS desktop overlay                                                                                             |
@@ -1465,7 +1489,7 @@ public control surface.
 | Staging layer        | Mutable only while building the current ordinary/direct frame transaction                                                                                                          |
 | Committed layer      | Immutable after a staging/committed swap; sampled by both eye composites and retained across persistent-source frames                                                              |
 | Desktop compositor   | Samples the left half of the sealed committed layer over Skyrim's existing backbuffer; never copies a masked HMD eye                                                               |
-| Map policy           | No transaction, target substitution, full-resolution depth allocation, or final hybrid composite; Skyrim retains the complete reduced mixed pass                                   |
+| Map policy           | Reduced mixed 3D/depth pass with no target/depth substitution; exact projected/HUD bridges alone join the transparent full-resolution transaction                                  |
 
 No native-menu transition state exists. Menu events arm context/tails and
 invalidate stale committed content; they do not modify the public Render Scale
@@ -1496,17 +1520,22 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
    the disproven selector byte.
 4. The exact direct draw requires bound slot-zero `kPROJECTEDMENU` or `kHUDMENU`.
    Index count and draw shape are recorded but do not authorize ownership.
-5. In an eligible non-Map mode-24 epoch, the destination must be `kMENUBG`.
-   Replay writes the operation into full-resolution staging, restores D3D state,
-   then suppresses that one original draw.
+5. In an eligible mode-24 epoch, the destination must be `kMENUBG`.
+   Production reasserts the unjittered projection contract at this exact bridge,
+   replay writes the operation into full-resolution staging, restores D3D state,
+   then suppresses that one original draw. Failure to establish zero jitter keeps
+   the original draw and poisons the required transaction rather than publishing
+   a temporally unresolved overlay.
 6. In MainMenu or Loading outside a semantic epoch, the same exact bridge must
    target `kVR_FRAMEBUFFER`. It is replayed and suppressed under the same
    transaction rules. At Info level, other contexts never enter the broad
    production higher/direct monitor; developer tracing may still observe them
    without granting ownership. Bound slot-zero source and destination identity
    remain mandatory before a transaction is armed.
-7. Map mode-24 always remains on Skyrim's reduced engine targets. The dormant
-   substitution/ISCopy/depth code is disabled and does not mark Map required.
+7. Map mode-24 always leaves Skyrim's terrain target and depth state reduced.
+   The dormant substitution/ISCopy/depth code remains disabled. Map is not
+   pre-required: the transaction becomes required only after an exact widget
+   bridge is recognized, captured, and suppressed.
 8. Before the first eye output, the transaction must be complete and sealable.
    Staging and committed layers swap once. The committed generation is then
    composited into both vendor-upscaled or stretched eye outputs.
@@ -1531,7 +1560,8 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
     failure therefore poisons the frame and suppresses the reduced OpenVR fallback
     even when it is the first operation.
 -   Once bridge work is suppressed, the original submit is unsafe regardless of
-    its nominal dimensions and is always held on failure. Map redirects no work.
+    its nominal dimensions and is always held on failure. This includes Map's
+    exact widget bridges, but never its mixed terrain/depth pass.
 -   Work arriving after the transaction is sealed is rejected and poisoned; it
     cannot change staging or produce different committed generations for the two
     eyes.
@@ -1541,7 +1571,8 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
     so the other eye cannot publish a different or fallback presentation.
 -   MainMenu/Loading are explicitly required transactions. Missing direct bridge
     capture, hook unavailability, resource allocation failure, scope imbalance or
-    plan mismatch holds the reduced submit. Map is not a hybrid transaction.
+    plan mismatch holds the reduced submit. Map becomes required only after an
+    exact bridge establishes overlay ownership.
 -   A staging layer is never sampled. Only a sealed committed generation is used.
 -   Eye-output cache reuse includes the committed menu generation.
 -   Plan-generation changes and menu open, close, or final context end invalidate
@@ -1592,8 +1623,9 @@ run another broad discovery trace. Validate these focused cases:
     full-resolution projected UI, with no top-left stamp or reduced original
     fallback.
 -   Map remains visible through open/close, zoom/pan, markers and MessageBox
-    overlap on the original reduced `kMENUBG -> kMAIN` path. No opaque black
-    hybrid layer or text-only Map may be composited.
+    overlap on the original reduced terrain path, while small projected/HUD text
+    widgets remain sharp at 0.33 scale. No opaque black or text-only Map may be
+    composited.
 -   The desktop remains Skyrim's single unmasked game-window camera before,
     during, and after menus; it must never become an HMD eye, hidden-area mask, or
     side-by-side stereo view.
@@ -1611,5 +1643,6 @@ run another broad discovery trace. Validate these focused cases:
 Do not port Open Shaders' complete Performance Mode, broad render-target
 resizing, `kTOTAL` replacement, tonemap interception or earlier upscaler
 placement. Do not toggle Render Scale for menu entry. The dormant Map
-target/depth substitution and ISCopy correction are explicitly not part of the
-active policy after RC88's opaque-clear failure.
+target/depth substitution and ISCopy correction remain outside the active
+policy after RC88's opaque-clear failure; exact Map widget bridges are the only
+hybrid-owned Map work.

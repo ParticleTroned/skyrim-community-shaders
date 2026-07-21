@@ -1133,7 +1133,12 @@ void State::SetLogLevel(spdlog::level::level_enum a_level)
 {
 	logLevel = a_level;
 	spdlog::set_level(logLevel);
-	spdlog::flush_on(logLevel);
+	// Debug menu tracing can emit thousands of records per frame. Keep those
+	// records enabled, but do not turn every Debug/Trace write into a synchronous
+	// disk flush. Info and higher still flush promptly, while the trace session
+	// boundaries explicitly flush their buffered diagnostic tail.
+	const auto flushLevel = std::max(logLevel, spdlog::level::info);
+	spdlog::flush_on(flushLevel);
 	logger::info("Log Level set to {} ({})", magic_enum::enum_name(logLevel), magic_enum::enum_integer(logLevel));
 
 	// Testers can enable debug logging after the D3D device was initialized.

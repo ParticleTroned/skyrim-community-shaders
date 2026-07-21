@@ -105,7 +105,7 @@ struct UnifiedWater : OverlayFeature
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool IsCore() const override { return true; }
-	virtual bool IsDisabledByDefault() const override { return true; }
+	virtual bool IsDisabledByDefault() const override { return false; }
 
 	virtual void PostPostLoad() override;
 

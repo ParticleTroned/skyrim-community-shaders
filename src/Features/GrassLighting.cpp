@@ -11,7 +11,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	OverrideComplexGrassSettings,
 	BasicGrassBrightness,
 	EnableWrappedLighting,
-	ComplexGrassThreshold)
+	ComplexGrassThreshold,
+	Enabled)
 
 float GrassLighting::ClampGlossiness(float glossiness, float fallback)
 {
@@ -44,11 +45,19 @@ void GrassLighting::SanitizeSettings()
 	settings.SubsurfaceScatteringAmount = ClampSubsurfaceScatteringAmount(
 		settings.SubsurfaceScatteringAmount,
 		Settings{}.SubsurfaceScatteringAmount);
+	settings.Enabled = settings.Enabled != 0;
 }
 
 void GrassLighting::DrawSettings()
 {
 	SanitizeSettings();
+	bool enabled = settings.Enabled != 0;
+	if (ImGui::Checkbox("Enable", &enabled))
+		settings.Enabled = enabled ? 1u : 0u;
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Enables enhanced grass lighting at runtime. Disable to use the basic grass lighting path without restarting.");
+
+	ImGui::BeginDisabled(!enabled);
 
 	if (ImGui::TreeNodeEx("Complex Grass", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped("Specular highlights for complex grass");
@@ -142,11 +151,19 @@ void GrassLighting::DrawSettings()
 
 		ImGui::TreePop();
 	}
+	ImGui::EndDisabled();
 }
 
 void GrassLighting::DrawEssentialSettings()
 {
 	SanitizeSettings();
+	bool enabled = settings.Enabled != 0;
+	if (ImGui::Checkbox("Enable", &enabled))
+		settings.Enabled = enabled ? 1u : 0u;
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Enables enhanced grass lighting at runtime. Disable to use the basic grass lighting path without restarting.");
+
+	ImGui::BeginDisabled(!enabled);
 	ImGui::SliderFloat("Glossiness", &settings.Glossiness, kGlossinessMin, kGlossinessMax, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 	SanitizeSettings();
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -160,6 +177,7 @@ void GrassLighting::DrawEssentialSettings()
 	ImGui::Checkbox("Wrapped Lighting for Vanilla Grass", reinterpret_cast<bool*>(&settings.EnableWrappedLighting));
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Softens lighting on vanilla/basic grass. Complex grass is unaffected.");
+	ImGui::EndDisabled();
 }
 
 void GrassLighting::LoadSettings(json& o_json)

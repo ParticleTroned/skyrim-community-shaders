@@ -16464,6 +16464,12 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 				previous.pressureSinceFrame :
 				currentFrame;
 		vrRenderScaleTransitionController.memory = snapshot;
+		auto& metrics = vrRenderScaleTransitionController.metrics.current;
+		if (metrics.valid) {
+			metrics.peakUsageBytes = std::max(metrics.peakUsageBytes, snapshot.currentUsageBytes);
+			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(metrics.peakPressure))
+				metrics.peakPressure = snapshot.pressure;
+		}
 		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
 		if (recovery.active) {
 			recovery.lastSampleFrame = currentFrame;
@@ -25341,12 +25347,15 @@ void Upscaling::PublishVRRenderScaleTransitionStable()
 
 void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 {
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 	VRRenderScaleTransitionState previousState;
 	uint64_t revision;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		previousState = vrRenderScaleTransitionController.state;
 		revision = vrRenderScaleTransitionController.revision + 1u;
+		if (vrRenderScaleTransitionController.metrics.current.valid)
+			ArchiveVRRenderScaleTransitionMetricsLocked(false, true, frame);
 		const auto retirement = vrRenderScaleTransitionController.retirement;
 		const auto dlssLifecycle = vrRenderScaleTransitionController.dlssLifecycle;
 		const auto fsrLifecycle = vrRenderScaleTransitionController.fsrLifecycle;

@@ -2,6 +2,17 @@ cmake_minimum_required(VERSION 4.2)
 cmake_policy(SET CMP0116 NEW)
 set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 
+# The bridge is optional at build time and inert when the devbench SKSE host is
+# absent. Select the manifest feature before project() loads the vcpkg toolchain.
+option(
+    DEVBENCH_BRIDGE
+    "Expose render-scale iteration controls through the devbench MCP host"
+    ON
+)
+if(DEVBENCH_BRIDGE)
+    list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
+endif()
+
 project(
     # gersemi: ignore
     CommunityShaders
@@ -134,6 +145,9 @@ find_package(efsw CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 find_package(directx-headers CONFIG REQUIRED)
 find_path(RENDERDOC_INCLUDE_DIRS "Renderdoc/renderdoc_app.h" REQUIRED)
+if(DEVBENCH_BRIDGE)
+    find_package(devbench-api CONFIG REQUIRED)
+endif()
 add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
 
 find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
@@ -189,6 +203,11 @@ target_link_libraries(
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
 )
+
+if(DEVBENCH_BRIDGE)
+    target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
+endif()
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
 if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+

@@ -13,6 +13,46 @@ The VR render-scale controller can capture a bounded CS-menu stress session and 
 
 Use identical save, location, CS profile, change order, dwell frames, HMD resolution, backend, and graphics settings when comparing iterations. Run DLSS and FSR as separate scenario series.
 
+## DevBench automation
+
+Step 17 exposes the capture contract through the external devbench host used by
+Open Shaders. The bridge is built by default through `DEVBENCH_BRIDGE=ON`, is
+inert when the devbench SKSE plugin is absent, and can be omitted completely
+with `DEVBENCH_BRIDGE=OFF`.
+
+The registered tool is `communityshaders.renderscale`:
+
+-   `status` returns a compact live snapshot of the controller profiles, VRAM
+    pressure, retirement queue, post-load recovery, backend generations,
+    current metrics, and both-eye fidelity;
+-   `record` returns the complete schema-v2 record without changing capture
+    state;
+-   `start` begins a new fixed-memory stress capture;
+-   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
+    It requires `method` (`dlss` or `fsr`), `enabled`, `qualityMode`, and an
+    optional `dlssPreset`;
+-   `stop` stops the capture, writes the disk artifact, and returns the complete
+    record in the tool response;
+-   `reset` clears a stopped capture.
+
+Mutating actions fail closed outside Skyrim VR. `start` and `apply` require
+developer mode, and `apply` also requires an active capture so an automation
+client cannot make unrecorded benchmark changes. Quality modes are `0` for
+native AA/DLAA, `1` Hoshipa, `2` Ultra Quality, `3` Quality, `4` Balanced, `5`
+Performance, and `6` Ultra Performance; enabled render scale requires `1..6`.
+
+For one candidate cycle, start capture, apply the fixed scenario profiles, and
+poll `status` until each requested epoch reaches `Active` with the stable
+profile, exact backend generation, and both eyes valid. Drive the fixed
+fast-travel leg through devbench's own console tool when that scenario requires
+it. Stop capture only after the final recovery settles, then reject the run if
+any returned acceptance gate fails. The record includes the build's git
+description so artifacts remain attributable to the exact candidate source.
+
+Performance builds keep `kEnableVRMenuPresentationTraceDiagnostics` false.
+Changing it to true creates a dedicated forensic build with high-frequency D3D
+menu detours and must not be compared against normal optimization captures.
+
 ## MCP contract
 
 Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 2`. An automation client should:

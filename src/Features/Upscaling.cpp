@@ -15,6 +15,7 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/OpenCompositeInterop.h"
@@ -12753,6 +12754,7 @@ struct BSOpenVR_GetRenderTargetSize
 
 void Upscaling::DataLoaded()
 {
+	VRRenderScaleDevBenchBridge::Install();
 	DisableAutoDynamicResolutionSetting();
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const auto blocker = GetOpenCompositeUpscalingBlocker();
@@ -24589,8 +24591,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	record["producer"] = {
 		{ "name", "Community Shaders" },
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
+		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 16 }
+		{ "implementationStep", 17 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -24877,6 +24880,10 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	record["analysis"] = {
 		{ "baseline", "RC94" },
 		{ "ghidraVersion", "12.1.2_PUBLIC" },
+		{ "control", { { "provider", "devbench" },
+						 { "tool", "communityshaders.renderscale" },
+						 { "built", VRRenderScaleDevBenchBridge::IsBuilt() },
+						 { "registered", VRRenderScaleDevBenchBridge::IsRegistered() } } },
 		{ "symbols", { "Upscaling::ApplyPendingPerfModeRenderTargetRecreate",
 						 "Upscaling::ApplyPendingPostLoadRuntimeReset",
 						 "Upscaling::ResetVRVendorRuntimeResources",

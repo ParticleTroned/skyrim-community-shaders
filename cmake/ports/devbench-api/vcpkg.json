@@ -1,0 +1,7 @@
+{
+    "name": "devbench-api",
+    "version": "1.5.0",
+    "description": "devbench cross-plugin API for MCP and REST tool registration.",
+    "homepage": "https://github.com/alandtse/devbench",
+    "license": "MIT"
+}

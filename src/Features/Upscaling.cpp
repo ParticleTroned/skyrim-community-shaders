@@ -16068,14 +16068,7 @@ bool Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
-	logger::debug("[VRRenderScale] Cleared submit-stage vendor resume cooldown after {} stable frames.", stableFrames);
-	PublishVRRenderScaleTransitionStable();
-	CompleteVRRenderScaleInfoTransition(
-		"submit-stage vendor resume",
-		true,
-		a_upscaleMethod,
-		perfMode.GetDisplayScreenSize(),
-		perfMode.GetRenderScreenSize());
+	logger::debug("[VRRenderScale] Enabled submit-stage vendor evaluation after {} stable candidate frames.", stableFrames);
 	return true;
 }
 
@@ -16779,19 +16772,8 @@ void Upscaling::RecordVRRenderScaleRelatch(const VRRenderScaleRelatchSignature& 
 		a_frame);
 }
 
-void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight)
+void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success)
 {
-	const bool fidelitySuccess = RecordVRRenderScaleFidelityObservation(
-		a_upscaleMethod,
-		a_eyeIndex,
-		a_success,
-		GetActiveVRRenderScaleContractGeneration(),
-		a_inputWidth,
-		a_inputHeight,
-		a_outputWidth,
-		a_outputHeight,
-		true);
-	a_success = a_success && fidelitySuccess;
 	if (a_upscaleMethod == UpscaleMethod::kDLSS)
 		RecordVRDLSSFullEyeEvaluation(a_eyeIndex, a_success);
 
@@ -19412,7 +19394,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			params.label,
 			params.dlssViewportRole);
 		if (params.dlssViewportRole == Streamline::DLSSViewportRole::FullEye)
-			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated, params.inputWidth, params.inputHeight, params.outputWidth, params.outputHeight);
+			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated);
 		return evaluated;
 	}
 
@@ -19439,7 +19421,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			motionVectorScaleY,
 			settings.sharpnessFSR);
 		if (params.dlssViewportRole == Streamline::DLSSViewportRole::FullEye)
-			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated, params.inputWidth, params.inputHeight, params.outputWidth, params.outputHeight);
+			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated);
 		return evaluated;
 	}
 
@@ -23866,6 +23848,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	if (!vendorSucceeded) {
+		RecordVRRenderScaleFidelityObservation(
+			upscaleMethod,
+			eyeIndex,
+			false,
+			activeContractGeneration,
+			eyeWidthIn,
+			eyeHeightIn,
+			eyeWidthOut,
+			eyeHeightOut,
+			true);
 		static bool loggedSubmitFailure[2] = {};
 		if (!loggedSubmitFailure[eyeIndex]) {
 			logger::warn(
@@ -23928,6 +23920,36 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	submitStageVendorEyeState[eyeIndex].depthHeight = sourceRegion.depthHeight;
 	submitStageVendorEyeState[eyeIndex].depthOffsetX = sourceRegion.depthOffsetX;
 	submitStageVendorEyeState[eyeIndex].depthOffsetY = sourceRegion.depthOffsetY;
+	const bool fidelitySuccess = RecordVRRenderScaleFidelityObservation(
+		upscaleMethod,
+		eyeIndex,
+		true,
+		activeContractGeneration,
+		eyeWidthIn,
+		eyeHeightIn,
+		eyeWidthOut,
+		eyeHeightOut,
+		true);
+	if (fidelitySuccess) {
+		const auto transitionSnapshot = GetVRRenderScaleTransitionSnapshot();
+		constexpr uint32_t kBothVREyesMask = 0x3u;
+		const auto& fidelity = transitionSnapshot.fidelity;
+		if (transitionSnapshot.state == VRRenderScaleTransitionState::Stabilizing &&
+			fidelity.active &&
+			fidelity.transitionEpoch == transitionSnapshot.applied.transitionEpoch &&
+			fidelity.contractGeneration == activeContractGeneration &&
+			fidelity.lastBothEyesFrame == currentFrame &&
+			(fidelity.evaluationEyeMask & kBothVREyesMask) == kBothVREyesMask &&
+			fidelity.bothEyesValid) {
+			PublishVRRenderScaleTransitionStable();
+			CompleteVRRenderScaleInfoTransition(
+				"submit-stage vendor evaluation",
+				true,
+				upscaleMethod,
+				perfMode.GetDisplayScreenSize(),
+				perfMode.GetRenderScreenSize());
+		}
+	}
 	if (vrRenderScaleMode) {
 		const bool canMirrorToSource =
 			sourceDesc.ArraySize == 1 &&

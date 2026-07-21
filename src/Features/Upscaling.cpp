@@ -252,6 +252,10 @@ namespace
 	}
 
 	// Keep the retained-record counter bounded without dropping required evidence.
+	// Keep this disabled for performance captures: once installed, the high-frequency
+	// D3D detours retain call overhead even when the runtime diagnostic state is idle.
+	// Enable only for dedicated menu-presentation forensic builds, then rebuild and restart.
+	constexpr bool kEnableVRMenuPresentationTraceDiagnostics = false;
 	constexpr uint32_t kVRMenuPresentationTraceMaxRecordsPerSession = 300000u;
 	constexpr uint32_t kVRMenuPresentationTraceMaxAccumulatorDepth = 16u;
 	constexpr uint32_t kVRMenuPresentationTraceMaxObservedDrawContexts = 8u;
@@ -4059,7 +4063,8 @@ namespace
 
 	bool IsVRMenuPresentationTraceActive()
 	{
-		if (!globals::game::isVR ||
+		if (!kEnableVRMenuPresentationTraceDiagnostics ||
+			!globals::game::isVR ||
 			!g_vrMenuPresentationTraceDiagnosticsEnabled.load(std::memory_order_relaxed)) {
 			return false;
 		}
@@ -4333,7 +4338,7 @@ namespace
 
 	void ArmVRMenuPresentationTrace(std::string_view a_triggerMenu, uint32_t a_menuMask)
 	{
-		if (!globals::game::isVR || a_menuMask == 0)
+		if (!kEnableVRMenuPresentationTraceDiagnostics || !globals::game::isVR || a_menuMask == 0)
 			return;
 		if (!ShouldEmitUpscalingDiagLogs()) {
 			FlushVRMenuPresentationTraceProducerPass("developer-mode-disabled");
@@ -4423,7 +4428,8 @@ namespace
 
 	void StartVRMenuPresentationTraceRaceSexPreRoll(uint32_t a_frame)
 	{
-		if (!globals::game::isVR || !ShouldEmitUpscalingDiagLogs() ||
+		if (!kEnableVRMenuPresentationTraceDiagnostics || !globals::game::isVR ||
+			!ShouldEmitUpscalingDiagLogs() ||
 			!g_vrMenuPresentationTraceRaceSexPreRollPending.exchange(false, std::memory_order_acq_rel)) {
 			return;
 		}
@@ -4457,7 +4463,7 @@ namespace
 
 	void ServiceVRMenuPresentationTraceRaceSexPreRoll()
 	{
-		if (!ShouldEmitUpscalingDiagLogs())
+		if (!kEnableVRMenuPresentationTraceDiagnostics || !ShouldEmitUpscalingDiagLogs())
 			return;
 
 		if (!g_vrMenuPresentationTraceRaceSexPreRollActive.load(std::memory_order_acquire)) {
@@ -8492,7 +8498,8 @@ namespace
 
 void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context)
 {
-	if (!globals::game::isVR || !a_context || !ShouldEmitUpscalingDiagLogs())
+	if (!kEnableVRMenuPresentationTraceDiagnostics || !globals::game::isVR ||
+		!a_context || !ShouldEmitUpscalingDiagLogs())
 		return;
 	g_vrMenuPresentationTraceDiagnosticsEnabled.store(true, std::memory_order_relaxed);
 	const auto armCurrentMenu = []() {
@@ -12783,7 +12790,8 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		StopVRMenuPresentationTraceRaceSexPreRoll("racesex-open");
 	}
 
-	const bool traceDiagnostics = a_event && globals::game::isVR &&
+	const bool traceDiagnostics = kEnableVRMenuPresentationTraceDiagnostics &&
+	                              a_event && globals::game::isVR &&
 	                              (ShouldEmitUpscalingDiagLogs() ||
 									  g_vrMenuPresentationTraceMenuMask.load(std::memory_order_acquire) != 0);
 	const uint32_t traceMenuBit = traceDiagnostics ? GetVRMenuPresentationTraceMenuBit(a_event->menuName.c_str()) : 0;
@@ -12931,7 +12939,8 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 	g_vrMapMenuOpenFromEvent.store(ui->IsMenuOpen(RE::MapMenu::MENU_NAME), std::memory_order_release);
 	g_vrStatsMenuOpenFromEvent.store(ui->IsMenuOpen("StatsMenu"), std::memory_order_release);
 	g_vrRaceSexMenuOpenFromEvent.store(raceSexMenuOpen, std::memory_order_release);
-	if (globals::game::isVR && ShouldEmitUpscalingDiagLogs()) {
+	if (kEnableVRMenuPresentationTraceDiagnostics &&
+		globals::game::isVR && ShouldEmitUpscalingDiagLogs()) {
 		const uint32_t initialMenuMask = ReadVRMenuPresentationTraceMenuMask();
 		if (initialMenuMask != 0 &&
 			g_vrMenuPresentationTraceMenuMask.load(std::memory_order_acquire) == 0) {
@@ -12951,7 +12960,9 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 void Upscaling::NotifyGameLoadStarted(bool a_newGame)
 {
 	StopVRMenuPresentationTraceRaceSexPreRoll("game-load-started");
-	g_vrMenuPresentationTraceRaceSexPreRollPending.store(a_newGame, std::memory_order_release);
+	g_vrMenuPresentationTraceRaceSexPreRollPending.store(
+		kEnableVRMenuPresentationTraceDiagnostics && a_newGame,
+		std::memory_order_release);
 	g_vrMenuPresentationTraceRaceSexPreRollActive.store(false, std::memory_order_release);
 	g_vrMenuPresentationTraceRaceSexPreRollEndFrame.store(0, std::memory_order_release);
 	LogVRMenuPresentationTraceLazy(

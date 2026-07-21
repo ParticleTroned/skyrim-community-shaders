@@ -33,7 +33,7 @@ namespace
 	constexpr float kFeatureCostDisplayEpsilonMs = 0.0005f;
 	constexpr float kFramePacingDetectionEpsilonMs = 1.0f;
 
-	constexpr std::array<std::string_view, 11> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 12> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"ScreenSpaceShadows",
 		"ScreenSpaceGI",
@@ -42,7 +42,8 @@ namespace
 		"TerrainBlending",
 		"TerrainShadows",
 		"VolumetricLighting",
-		"UnifiedWater",
+		"VolumetricShadows",
+		"WetnessEffects",
 		"SubsurfaceScattering",
 		"GrassCollision"
 	};
@@ -325,6 +326,14 @@ namespace
 				"InteriorQuality",
 				"InteriorCustomSize",
 				"DisableWeatherInteractionDuringRain" });
+		}
+		if (shortName == "WetnessEffects") {
+			return MakeJsonMask({ "EnableWetnessEffects",
+				"EnableRaindropFx",
+				"RaindropFxRange",
+				"EnableSplashes",
+				"EnableRipples",
+				"EnableVanillaRipples" });
 		}
 
 		const json mask = feature->CapturePerformanceSettingsState();
@@ -1038,6 +1047,10 @@ namespace
 			return "Terrain Shadows are switched off.";
 		if (shortName == "VolumetricLighting")
 			return "Volumetric Lighting is switched off for the current interior/exterior context.";
+		if (shortName == "VolumetricShadows")
+			return "Volumetric Shadows are switched off, so shadow-map downsampling and blur passes stop.";
+		if (shortName == "WetnessEffects")
+			return "the Wetness master toggle is switched off; active wetness, raindrop, splash, and custom ripple work stops, while the installed shader path and vanilla-ripple policy remain the same in both windows.";
 		if (shortName == "SubsurfaceScattering")
 			return "Subsurface Scattering is switched off.";
 		if (shortName == "GrassCollision")
@@ -1237,7 +1250,7 @@ namespace
 
 	bool ShouldShowInPerformanceTuning(Feature* feature)
 	{
-		if (!feature || feature->GetShortName() == "WetnessEffects")
+		if (!feature)
 			return false;
 		const std::string shortName = feature->GetShortName();
 		return std::ranges::find(kPerformanceFeatureOrder, std::string_view(shortName)) != kPerformanceFeatureOrder.end();

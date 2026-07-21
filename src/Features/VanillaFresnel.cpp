@@ -113,12 +113,12 @@ void VanillaFresnel::SaveSettings(json& o_json)
 
 void VanillaFresnel::DrawEssentialSettings()
 {
-	ImGui::Checkbox(T(TKEY("enable"), "Enable Vanilla Fresnel"), reinterpret_cast<bool*>(&settings.Enable));
+	ImGui::Checkbox("Enable", reinterpret_cast<bool*>(&settings.Enable));
 }
 
 void VanillaFresnel::DrawSettings()
 {
-	ImGui::Checkbox(T(TKEY("enable"), "Enable Vanilla Fresnel"), reinterpret_cast<bool*>(&settings.Enable));
+	ImGui::Checkbox("Enable", reinterpret_cast<bool*>(&settings.Enable));
 	ImGui::Checkbox(T(TKEY("enable_ggx"), "Enable Phong to GGX"), reinterpret_cast<bool*>(&settings.EnableGGX));
 	ImGui::Checkbox(T(TKEY("enable_ggx_on_grass"), "Enable Phong to GGX on Grass"), reinterpret_cast<bool*>(&settings.EnableGGXOnGrass));
 	if (!settings.EnableGGX) {

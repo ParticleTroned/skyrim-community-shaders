@@ -86,14 +86,6 @@ public:
 	bool HasFeatureOverrides(const std::string& featureName) const;
 
 	/**
-	 * @brief Manually reapplies all overrides for a specific feature to the provided JSON
-	 * @param featureName The short name of the feature
-	 * @param featureJson JSON object to apply overrides to
-	 * @return Number of overrides applied
-	 */
-	size_t ReapplyFeatureOverrides(const std::string& featureName, json& featureJson);
-
-	/**
 	 * @brief Enables or disables a specific override
 	 * @param modName Name of the mod
 	 * @param featureName Feature name (empty for global)
@@ -177,7 +169,7 @@ public:
 	bool HasUserOverride(const std::string& featureName) const;
 
 	/**
-	 * @brief Deletes user override file for a feature (used by "Apply Override" button)
+	 * @brief Deletes the saved user customization layer for a feature
 	 * @param featureName The short name of the feature (or "Global")
 	 * @return True if file was deleted or didn't exist
 	 */

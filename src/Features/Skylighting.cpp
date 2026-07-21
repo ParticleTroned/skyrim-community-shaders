@@ -18,7 +18,7 @@ namespace
 	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
 	{
 		const bool previousEnabled = a_skylighting.settings.EnableSkylighting;
-		if (ImGui::Checkbox("Enable Skylighting", &a_skylighting.settings.EnableSkylighting))
+		if (ImGui::Checkbox("Enable", &a_skylighting.settings.EnableSkylighting))
 			ApplySkylightingRuntimeEnabledChange(a_skylighting, previousEnabled);
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -102,10 +102,21 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 
 void Skylighting::DrawSettings()
 {
+	DrawSettingsPanel(true);
+}
+
+void Skylighting::DrawPerformanceSettings(bool)
+{
+	DrawSettingsPanel(false);
+}
+
+void Skylighting::DrawSettingsPanel(bool a_showEmbeddedInfo)
+{
 	DrawSkylightingRuntimeToggle(*this);
 	ImGui::Separator();
 
-	ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
+	if (a_showEmbeddedInfo)
+		ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
 	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
 	if (ImGui::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))

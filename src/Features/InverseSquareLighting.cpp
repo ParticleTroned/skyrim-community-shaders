@@ -54,7 +54,7 @@ namespace
 bool InverseSquareLighting::DrawEnabledCheckbox()
 {
 	bool enabled = settings.Enabled;
-	if (ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &enabled))
+	if (ImGui::Checkbox("Enable", &enabled))
 		SetRuntimeEnabled(enabled);
 	return enabled;
 }

@@ -25,7 +25,6 @@
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
@@ -852,29 +851,10 @@ bool FeatureListRenderer::DrawMenuVisitor::IsFeatureInstalled(const std::string&
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
 {
-	const auto featureName = feat->GetShortName();
 	const bool showFeatureUiModeToggle = isLoaded && globals::menu && globals::menu->IsPerformanceUiMode();
 
-	// Calculate action button widths
-	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
+	// Calculate the per-feature UI mode toggle width
 	const float toggleWidth = showFeatureUiModeToggle ? GetFeatureUiModeToggleWidth() : 0.0f;
-
-	const char* overrideButtonText = "Apply Override";
-	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
-
-	// Check if override is available for this feature
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
-
-	float totalButtonWidth = 0.0f;
-	if (!isDisabled && isLoaded && hasOverrides) {
-		totalButtonWidth = overrideButtonWidth;
-	}
-	if (showFeatureUiModeToggle) {
-		if (totalButtonWidth > 0.0f)
-			totalButtonWidth += ImGui::GetStyle().ItemSpacing.x;
-		totalButtonWidth += toggleWidth;
-	}
 
 	// Get available content width for positioning
 	float availableWidth = ImGui::GetContentRegionAvail().x;
@@ -893,43 +873,12 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
 
-	// Position action buttons to the right of the header, middle-aligned with title only
+	// Position the UI mode toggle to the right of the header, middle-aligned with title only
 	float buttonHeight = ImGui::GetFrameHeight();
 
 	// Calculate Y position to middle-align buttons with title text only (not description)
 	float buttonY = titleStartPos.y + std::max(0.0f, (titleOnlyHeight - buttonHeight) * 0.5f);
-	float buttonX = titleStartPos.x + availableWidth - totalButtonWidth;
-
-	// Apply Override button (when feature has available overrides)
-	if (!isDisabled && isLoaded && hasOverrides) {
-		ImGui::SetCursorScreenPos(ImVec2(buttonX, buttonY));
-		if (sceneControlled)
-			ImGui::BeginDisabled();
-		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
-			if (feat->ReapplyOverrideSettings()) {
-				logger::info("Successfully reapplied override settings for {}", featureName);
-			} else {
-				logger::warn("Failed to reapply override settings for {}", featureName);
-			}
-		}
-		if (sceneControlled)
-			ImGui::EndDisabled();
-
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			if (sceneControlled) {
-				ImGui::Text(
-					"Cannot apply overrides while scene-specific settings are active.\n"
-					"Pause scene settings for this feature first.");
-			} else {
-				ImGui::Text(
-					"Restores original override settings from mod files.\n"
-					"This will discard your customizations and revert to\n"
-					"the mod author's recommended settings.");
-			}
-		}
-
-		buttonX += overrideButtonWidth + ImGui::GetStyle().ItemSpacing.x;
-	}
+	float buttonX = titleStartPos.x + availableWidth - toggleWidth;
 
 	if (showFeatureUiModeToggle) {
 		ImGui::SetCursorScreenPos(ImVec2(buttonX, buttonY));

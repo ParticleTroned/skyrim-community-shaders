@@ -400,12 +400,17 @@ namespace
 			a_settings.frameGenerationMode = enabled ? 1u : 0u;
 	}
 
-	void DrawFrameGenerationForceEnableToggle(Upscaling& a_upscaling)
+	void DrawFrameGenerationForceEnableToggle(Upscaling& a_upscaling, bool a_showEmbeddedInfo = true)
 	{
-		ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
+		if (a_showEmbeddedInfo)
+			ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
 		bool forceEnabled = a_upscaling.settings.frameGenerationForceEnable != 0;
 		if (ImGui::Checkbox("Force Enable Frame Generation", &forceEnabled))
 			a_upscaling.settings.frameGenerationForceEnable = forceEnabled ? 1u : 0u;
+		if (!a_showEmbeddedInfo) {
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Allows frame generation on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
+		}
 	}
 
 }
@@ -573,6 +578,16 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 void Upscaling::DrawSettings()
 {
+	DrawSettingsPanel(true);
+}
+
+void Upscaling::DrawPerformanceSettings(bool)
+{
+	DrawSettingsPanel(false);
+}
+
+void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo)
+{
 	struct UpscaleUiChoice
 	{
 		UpscaleMethod method;
@@ -656,7 +671,7 @@ void Upscaling::DrawSettings()
 		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
 			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
 	}
-	if (renderDocBlocksUpscaling) {
+	if (a_showEmbeddedInfo && renderDocBlocksUpscaling) {
 		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
 		ImGui::TextWrapped(
 			"Community Shaders Upscaling runs as None while %s to avoid DLSS/FSR backend startup crashes.",
@@ -669,7 +684,7 @@ void Upscaling::DrawSettings()
 	const bool runtimeFsr4Requested =
 		upscaleMethod == UpscaleMethod::kFSR &&
 		settings.fsr4RuntimeEnable;
-	if (upscaleMethod == UpscaleMethod::kFSR) {
+	if (a_showEmbeddedInfo && upscaleMethod == UpscaleMethod::kFSR) {
 		const auto& hostFsrSdkLabel = FidelityFX::GetHostFsrSdkLabel();
 		const auto& runtimeFsr3Label = FidelityFX::GetRuntimeUpscalerLabel(FidelityFX::Fsr3Version);
 		ImGui::TextDisabled("FSR path: %s", fidelityFX.GetDisplayedFsrPathLabel().c_str());
@@ -686,7 +701,7 @@ void Upscaling::DrawSettings()
 	}
 
 	// Display warning for DLSS resolution limits.
-	if (upscaleMethod == UpscaleMethod::kDLSS) {
+	if (a_showEmbeddedInfo && upscaleMethod == UpscaleMethod::kDLSS) {
 		auto viewport = globals::game::graphicsState;
 		const float screenWidth = static_cast<float>(viewport ? viewport->screenWidth : 0);
 		const float screenHeight = static_cast<float>(viewport ? viewport->screenHeight : 0);
@@ -742,7 +757,7 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Range: 0.0 off/softest to 1.0 sharpest.");
 			}
 
-			if (isNvidiaAdapter) {
+			if (a_showEmbeddedInfo && isNvidiaAdapter) {
 				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards. On RTX 3000-series cards, start with F and compare E if you want the other legacy profile.");
 			}
 		}
@@ -751,38 +766,40 @@ void Upscaling::DrawSettings()
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
 
 	if (ImGui::TreeNodeEx("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
-		ImGui::Text("Uses AMD FSR Frame Generation technology");
-		if (HasFrameGenModule())
-			ImGui::Text("AMD FSR Frame Generation is available.");
-		ImGui::Text("Requires a D3D11 to D3D12 proxy which can create compatibility issues");
-		ImGui::Text("Toggling this setting requires a restart to work correctly");
+		if (a_showEmbeddedInfo) {
+			ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
+			ImGui::Text("Uses AMD FSR Frame Generation technology");
+			if (HasFrameGenModule())
+				ImGui::Text("AMD FSR Frame Generation is available.");
+			ImGui::Text("Requires a D3D11 to D3D12 proxy which can create compatibility issues");
+			ImGui::Text("Toggling this setting requires a restart to work correctly");
 
-		bool onlyRequiresRestart = true;
+			bool onlyRequiresRestart = true;
 
-		if (!isWindowed) {
-			Util::Text::Warning("Warning: Requires windowed mode");
+			if (!isWindowed) {
+				Util::Text::Warning("Warning: Requires windowed mode");
 
-			onlyRequiresRestart = false;
+				onlyRequiresRestart = false;
+			}
+
+			if (lowRefreshRate && !settings.frameGenerationForceEnable) {
+				Util::Text::Warning("Warning: Requires a high refresh rate monitor or Force Enable Frame Generation");
+
+				onlyRequiresRestart = false;
+			}
+
+			if (fidelityFXMissing) {
+				Util::Text::Warning("Warning: FidelityFX DLLs are not loaded");
+
+				onlyRequiresRestart = false;
+			}
+
+			if (onlyRequiresRestart && settings.frameGenerationMode && !frameGenerationDx12PathActive)
+				Util::Text::Warning("Warning: Requires restart");
+
+			if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
+				Util::Text::Warning("Warning: Requires restart");
 		}
-
-		if (lowRefreshRate && !settings.frameGenerationForceEnable) {
-			Util::Text::Warning("Warning: Requires a high refresh rate monitor or Force Enable Frame Generation");
-
-			onlyRequiresRestart = false;
-		}
-
-		if (fidelityFXMissing) {
-			Util::Text::Warning("Warning: FidelityFX DLLs are not loaded");
-
-			onlyRequiresRestart = false;
-		}
-
-		if (onlyRequiresRestart && settings.frameGenerationMode && !frameGenerationDx12PathActive)
-			Util::Text::Warning("Warning: Requires restart");
-
-		if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
-			Util::Text::Warning("Warning: Requires restart");
 
 		DrawFrameGenerationEnabledToggle(settings);
 
@@ -796,7 +813,7 @@ void Upscaling::DrawSettings()
 		if (!frameGenerationDx12PathActive)
 			ImGui::EndDisabled();
 
-		DrawFrameGenerationForceEnableToggle(*this);
+		DrawFrameGenerationForceEnableToggle(*this, a_showEmbeddedInfo);
 
 		ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -812,11 +829,11 @@ void Upscaling::DrawSettings()
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
 		const bool reflexControlsAvailable = reflexAvailable && !reflexBlockedByFrameGeneration;
 		const bool markerOptimizationAvailable = reflexControlsAvailable && streamline.featurePCL;
-		if (reflexBlockedByFrameGeneration) {
+		if (a_showEmbeddedInfo && reflexBlockedByFrameGeneration) {
 			ImGui::TextDisabled("Reflex is unavailable while the DX12 frame-generation swapchain is active.");
 		}
 
-		if (!reflexAvailable) {
+		if (a_showEmbeddedInfo && !reflexAvailable) {
 			ImGui::TextDisabled("Reflex is not available. Ensure sl.reflex.dll is present and restart.");
 		}
 
@@ -850,7 +867,7 @@ void Upscaling::DrawSettings()
 		if (!markerOptimizationAvailable)
 			ImGui::EndDisabled();
 
-		if (!markerOptimizationAvailable) {
+		if (a_showEmbeddedInfo && !markerOptimizationAvailable) {
 			ImGui::TextDisabled("Marker optimization unavailable (PCL not loaded).");
 		}
 
@@ -884,7 +901,7 @@ void Upscaling::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Backend Diagnostics")) {
+	if (a_showEmbeddedInfo && ImGui::TreeNodeEx("Backend Diagnostics")) {
 		// Streamline log level selection
 		const char* logLevels[] = { "Off", "Default", "Verbose" };
 		int logLevelIdx = static_cast<int>(settings.streamlineLogLevel);

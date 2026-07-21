@@ -132,12 +132,12 @@ void HomePageRenderer::RenderModeSection()
 
 	auto& settings = menu->GetSettings();
 	settings.PerformanceUiMode = std::clamp(settings.PerformanceUiMode, 0, 1);
-	const char* modeLabel = "UI Mode";
+	const char* modeLabel = "UI Mode:";
 	const char* essentialsLabel = "Essentials (Recommended)";
 	const char* advancedLabel = "Advanced (Full UI)";
 	const ImGuiStyle& style = ImGui::GetStyle();
 	const float contentWidth = ImGui::GetContentRegionAvail().x;
-	const float radioDiameter = ImGui::GetFrameHeight() * 2.0f;
+	const float radioDiameter = ImGui::GetFrameHeight();
 	const ImVec2 modeLabelSize = ImGui::CalcTextSize(modeLabel);
 	const float essentialsWidth = radioDiameter + style.ItemInnerSpacing.x + ImGui::CalcTextSize(essentialsLabel).x;
 	const float advancedWidth = radioDiameter + style.ItemInnerSpacing.x + ImGui::CalcTextSize(advancedLabel).x;

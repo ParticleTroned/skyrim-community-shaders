@@ -30,7 +30,7 @@ std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetS
 void DynamicCubemaps::DrawSettings()
 {
 	if (ImGui::TreeNodeEx(T(TKEY("screen_space_reflections"), "Screen Space Reflections"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		recompileFlag |= ImGui::Checkbox(T(TKEY("enable_ssr"), "Enable Screen Space Reflections"), reinterpret_cast<bool*>(&settings.EnabledSSR));
+		recompileFlag |= ImGui::Checkbox("Enable", reinterpret_cast<bool*>(&settings.EnabledSSR));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("enable_ssr_tooltip"), "Enable Screen Space Reflections on Water"));
 		}
@@ -120,7 +120,7 @@ void DynamicCubemaps::DrawSettings()
 void DynamicCubemaps::DrawEssentialSettings()
 {
 	bool enabled = settings.EnabledSSR != 0;
-	if (ImGui::Checkbox("Enable Screen Space Reflections", &enabled)) {
+	if (ImGui::Checkbox("Enable", &enabled)) {
 		settings.EnabledSSR = enabled ? 1u : 0u;
 		recompileFlag = true;
 	}

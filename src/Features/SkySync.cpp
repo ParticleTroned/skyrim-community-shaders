@@ -33,7 +33,7 @@ void SkySync::DrawSettings()
 		T(TKEY("moon_light_source_secunda"), "Secunda")
 	};
 
-	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
+	ImGui::Checkbox("Enable", &settings.Enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(T(TKEY("enabled_tooltip"), "Enable or disable Sky Sync features."));
 	}
@@ -145,7 +145,7 @@ void SkySync::DrawSettings()
 
 void SkySync::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enabled", &settings.Enabled);
+	ImGui::Checkbox("Enable", &settings.Enabled);
 }
 
 void SkySync::LoadSettings(json& o_json)

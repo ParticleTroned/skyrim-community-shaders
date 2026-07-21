@@ -158,6 +158,7 @@ public:
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return GetUpscaleMethod() != UpscaleMethod::kNONE; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
@@ -314,6 +315,7 @@ public:
 	BlurResources GetBlurResources() const;
 
 private:
+	void DrawSettingsPanel(bool a_showEmbeddedInfo);
 	bool renderDocUpscalingBackendSkipLogged = false;
 
 	struct Main_UpdateJitter

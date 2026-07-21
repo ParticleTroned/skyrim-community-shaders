@@ -149,7 +149,7 @@ void RenderDoc::DrawEssentialSettings()
 void RenderDoc::DrawCaptureEnableToggle()
 {
 	bool prevRenderDocCapture = enableRenderDocCapture;
-	if (ImGui::Checkbox(T(TKEY("enable_capture"), "Enable RenderDoc Capture"), &enableRenderDocCapture)) {
+	if (ImGui::Checkbox("Enable", &enableRenderDocCapture)) {
 		if (enableRenderDocCapture && !prevRenderDocCapture) {
 			globals::state->useFrameAnnotations = globals::state->frameAnnotations;
 			globals::state->frameAnnotations = true;

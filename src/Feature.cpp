@@ -41,7 +41,6 @@
 #include "Features/WetnessEffects.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
-#include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
@@ -297,34 +296,6 @@ bool Feature::ToggleAtBootSetting()
 	state->SetFeatureDisabled(featureName, !disabled);
 
 	return state->IsFeatureDisabled(featureName);  // Return the new state
-}
-
-bool Feature::ReapplyOverrideSettings()
-{
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	std::string featureName = GetShortName();
-
-	if (!overrideManager || !overrideManager->HasFeatureOverrides(featureName)) {
-		return false;
-	}
-
-	// Delete user override file to restore original override behavior
-	overrideManager->DeleteUserOverride(featureName);
-
-	// Get base settings and apply overrides fresh
-	json featureJson;
-	SaveSettings(featureJson);
-
-	// Apply overrides to the settings (without user customizations)
-	size_t appliedCount = overrideManager->ReapplyFeatureOverrides(featureName, featureJson);
-
-	if (appliedCount > 0) {
-		// Load the override settings back into the feature
-		LoadSettings(featureJson);
-		return true;
-	}
-
-	return false;
 }
 
 std::string Feature::GetDisplayCategory() const

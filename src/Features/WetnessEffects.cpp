@@ -656,6 +656,67 @@ void WetnessEffects::DrawSettings()
 	}
 }
 
+void WetnessEffects::DrawPerformanceSettings(bool)
+{
+	auto drawToggle = [](const char* a_label, uint& a_setting) {
+		bool enabled = a_setting != 0;
+		const bool changed = ImGui::Checkbox(a_label, &enabled);
+		if (changed)
+			a_setting = enabled ? 1u : 0u;
+		return changed;
+	};
+
+	if (drawToggle("Enable", settings.EnableWetnessEffects))
+		Ripples::UpdateSettings();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Enables surface wetness and rain-driven effects.");
+		ImGui::TextUnformatted("The measured cost depends on the current weather and visible surfaces.");
+	}
+
+	ImGui::BeginDisabled(settings.EnableWetnessEffects == 0);
+	drawToggle("Raindrop Effects", settings.EnableRaindropFx);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Enables per-pixel raindrop evaluation while it is raining.");
+	}
+
+	ImGui::BeginDisabled(settings.EnableRaindropFx == 0);
+	ImGui::SliderFloat("Raindrop Range", &settings.RaindropFxRange, 100.0f, 2000.0f, "%.0f units");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Limits the distance at which visible water pixels evaluate raindrop effects.");
+		ImGui::TextUnformatted("Lower values reduce the affected water-screen coverage; solid-surface wetness currently uses no range gate.");
+	}
+
+	drawToggle("Splashes", settings.EnableSplashes);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Enables small splashes of wetness on dry surfaces.");
+
+	drawToggle("Ripples", settings.EnableRipples);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Enables circular ripples on puddles and other wet surfaces.");
+
+	ImGui::BeginDisabled(splashesOfStormsLoaded);
+	if (drawToggle("Vanilla Ripples", settings.EnableVanillaRipples))
+		Ripples::UpdateSettings();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		if (splashesOfStormsLoaded)
+			ImGui::TextUnformatted("Controlled by Splashes of Storms.");
+		else
+			ImGui::TextUnformatted("Enables the game's original water ripple objects.");
+		ImGui::TextUnformatted("A weather change may be required before this takes effect.");
+	}
+	ImGui::EndDisabled();
+	ImGui::EndDisabled();
+	ImGui::EndDisabled();
+}
+
+void WetnessEffects::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	settings.EnableWetnessEffects = a_enabled ? 1u : 0u;
+	// Keep the separate vanilla-ripple policy unchanged during the comparison.
+	// Otherwise the Wetness-Off window could enable vanilla ripple objects and
+	// contaminate the measurement with work that is not part of custom Wetness.
+}
+
 // =====================
 // UI/ImGui Helper Functions
 // =====================

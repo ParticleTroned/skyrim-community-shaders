@@ -61,7 +61,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LinearLighting::DrawSettings()
 {
-	ImGui::Checkbox(T(TKEY("enable"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
+	ImGui::Checkbox("Enable", (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox(T(TKEY("disable_in_interiors"), "Disable in interiors"), (bool*)&settings.DisableInInteriors);
 	ImGui::Checkbox(T(TKEY("disable_in_exteriors"), "Disable in exteriors"), (bool*)&settings.DisableInExteriors);
 
@@ -114,7 +114,7 @@ void LinearLighting::DrawSettings()
 
 void LinearLighting::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable Linear Lighting", reinterpret_cast<bool*>(&settings.enableLinearLighting));
+	ImGui::Checkbox("Enable", reinterpret_cast<bool*>(&settings.enableLinearLighting));
 }
 
 void LinearLighting::LoadSettings(json& o_json)

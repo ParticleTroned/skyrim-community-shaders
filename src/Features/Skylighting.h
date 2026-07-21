@@ -30,6 +30,7 @@ public:
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
@@ -37,6 +38,7 @@ public:
 	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override;
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
+	void DrawSettingsPanel(bool a_showEmbeddedInfo);
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

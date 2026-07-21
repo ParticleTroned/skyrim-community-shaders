@@ -119,6 +119,11 @@ public:
 
 	/** @brief Draws the ImGui settings panel for wetness effects configuration. */
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableWetnessEffects != 0; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

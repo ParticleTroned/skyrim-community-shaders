@@ -25,7 +25,7 @@ void TerrainShadows::SaveSettings(json& o_json)
 
 void TerrainShadows::DrawSettings()
 {
-	ImGui::Checkbox(T(TKEY("enable_terrain_shadow"), "Enable Terrain Shadow"), &settings.EnableTerrainShadow);
+	ImGui::Checkbox("Enable", &settings.EnableTerrainShadow);
 
 	if (ImGui::CollapsingHeader(T(TKEY("debug"), "Debug"))) {
 		std::string curr_worldspace = "N/A";
@@ -67,7 +67,7 @@ void TerrainShadows::DrawSettings()
 
 void TerrainShadows::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable Terrain Shadow", &settings.EnableTerrainShadow);
+	ImGui::Checkbox("Enable", &settings.EnableTerrainShadow);
 }
 
 void TerrainShadows::ClearShaderCache()

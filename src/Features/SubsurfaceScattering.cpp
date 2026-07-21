@@ -115,7 +115,7 @@ namespace
 void SubsurfaceScattering::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Enable Subsurface Scattering", &settings.EnableSubsurfaceScattering);
+		ImGui::Checkbox("Enable", &settings.EnableSubsurfaceScattering);
 		ImGui::Checkbox("Enable Character Lighting", (bool*)&settings.EnableCharacterLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Vanilla feature, not recommended.");
@@ -221,7 +221,7 @@ void SubsurfaceScattering::DrawSettings()
 
 void SubsurfaceScattering::DrawPerformanceSettings(bool)
 {
-	ImGui::Checkbox("Enable Subsurface Scattering", &settings.EnableSubsurfaceScattering);
+	ImGui::Checkbox("Enable", &settings.EnableSubsurfaceScattering);
 
 	ImGui::TextUnformatted("SSS Mode");
 	ImGui::RadioButton("Separable SSS", &settings.SSMode, 0);
@@ -592,7 +592,7 @@ void SubsurfaceScattering::Reset()
 
 void SubsurfaceScattering::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable Subsurface Scattering", &settings.EnableSubsurfaceScattering);
+	ImGui::Checkbox("Enable", &settings.EnableSubsurfaceScattering);
 }
 
 void SubsurfaceScattering::RestoreDefaultSettings()

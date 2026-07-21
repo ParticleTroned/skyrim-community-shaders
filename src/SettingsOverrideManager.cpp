@@ -226,12 +226,6 @@ bool SettingsOverrideManager::HasFeatureOverrides(const std::string& featureName
 	return it != featureOverrideMap.end() && !it->second.empty();
 }
 
-size_t SettingsOverrideManager::ReapplyFeatureOverrides(const std::string& featureName, json& featureJson)
-{
-	// Reuse ApplyOverrides - same logic, just different use case
-	return ApplyOverrides(featureName, featureJson);
-}
-
 void SettingsOverrideManager::SetOverrideEnabled(const std::string& modName, const std::string& featureName, bool isEnabled)
 {
 	for (auto& override : overrides) {

@@ -583,6 +583,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LightsVisualisationMode)
 void LightLimitFix::DrawSettings()
 {
+	DrawSettingsPanel(true);
+}
+
+void LightLimitFix::DrawPerformanceSettings(bool)
+{
+	DrawSettingsPanel(false);
+}
+
+void LightLimitFix::DrawSettingsPanel(bool a_showEmbeddedInfo)
+{
 	{
 		ImGui::Text("ImageSpace Refraction");
 		DrawHeatWarpStrengthSetting();
@@ -688,7 +698,7 @@ void LightLimitFix::DrawSettings()
 			}
 			ImGui::EndDisabled();
 
-			if (!jsonPlacedLightsSupported) {
+			if (a_showEmbeddedInfo && !jsonPlacedLightsSupported) {
 				ImGui::TextDisabled("Requires Inverse Square Lighting to identify JSON-placed runtime lights.");
 			}
 
@@ -747,42 +757,44 @@ void LightLimitFix::DrawSettings()
 	}
 	auto shaderCache = globals::shaderCache;
 
-	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
-		ImGui::Text(std::format("Particle Lights Count : {}", currentParticleLights.size()).c_str());
+	if (a_showEmbeddedInfo) {
+		if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
+			ImGui::Text(std::format("Particle Lights Count : {}", currentParticleLights.size()).c_str());
 
-		ImGui::TreePop();
-	}
-
-	///////////////////////////////
-	ImGui::SeparatorText("Debug");
-
-	if (ImGui::TreeNode("Light Limit Visualization")) {
-		ImGui::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables visualization of the light limit\n");
+			ImGui::TreePop();
 		}
 
-		{
-			static const char* comboOptions[] = { "Light Limit", "Strict Lights Count", "Clustered Lights Count", "Shadow Mask" };
-			ImGui::Combo("Lights Visualisation Mode", (int*)&settings.LightsVisualisationMode, comboOptions, 4);
+		///////////////////////////////
+		ImGui::SeparatorText("Debug");
+
+		if (ImGui::TreeNode("Light Limit Visualization")) {
+			ImGui::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n"
-					" - Visualise the number of strict lights.\n"
-					" - Visualise the number of clustered lights.\n"
-					" - Visualize the Shadow Mask.\n");
+				ImGui::Text("Enables visualization of the light limit\n");
 			}
+
+			{
+				static const char* comboOptions[] = { "Light Limit", "Strict Lights Count", "Clustered Lights Count", "Shadow Mask" };
+				ImGui::Combo("Lights Visualisation Mode", (int*)&settings.LightsVisualisationMode, comboOptions, 4);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text(
+						" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n"
+						" - Visualise the number of strict lights.\n"
+						" - Visualise the number of clustered lights.\n"
+						" - Visualize the Shadow Mask.\n");
+				}
+			}
+			currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
+			if (previousEnableLightsVisualisation != currentEnableLightsVisualisation) {
+				globals::state->SetDefines(settings.EnableLightsVisualisation ? "LLFDEBUG" : "");
+				shaderCache->Clear(RE::BSShader::Type::Lighting);
+				previousEnableLightsVisualisation = currentEnableLightsVisualisation;
+			}
+			ImGui::Spacing();
+			ImGui::Spacing();
+			ImGui::TreePop();
 		}
-		currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
-		if (previousEnableLightsVisualisation != currentEnableLightsVisualisation) {
-			globals::state->SetDefines(settings.EnableLightsVisualisation ? "LLFDEBUG" : "");
-			shaderCache->Clear(RE::BSShader::Type::Lighting);
-			previousEnableLightsVisualisation = currentEnableLightsVisualisation;
-		}
-		ImGui::Spacing();
-		ImGui::Spacing();
-		ImGui::TreePop();
 	}
 }
 

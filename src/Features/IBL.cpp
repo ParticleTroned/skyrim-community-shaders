@@ -128,7 +128,7 @@ void IBL::DrawSettings()
 	SanitizeSettings(settings);
 	bool recaptureWeatherBaseline = false;
 	bool enableIBL = settings.EnableIBL != 0;
-	if (Util::WeatherUI::Checkbox("Enable IBL", this, "EnableIBL", &enableIBL)) {
+	if (Util::WeatherUI::Checkbox("Enable", this, "EnableIBL", &enableIBL)) {
 		settings.EnableIBL = enableIBL ? 1u : 0u;
 		recaptureWeatherBaseline = true;
 	}
@@ -233,7 +233,7 @@ void IBL::DrawEssentialSettings()
 {
 	SanitizeSettings(settings);
 	bool enabled = settings.EnableIBL != 0;
-	if (Util::WeatherUI::Checkbox("Enable IBL", this, "EnableIBL", &enabled))
+	if (Util::WeatherUI::Checkbox("Enable", this, "EnableIBL", &enabled))
 		settings.EnableIBL = enabled ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Uses cubemap-based ambient lighting instead of the vanilla system.");

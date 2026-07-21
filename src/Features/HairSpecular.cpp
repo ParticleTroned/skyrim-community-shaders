@@ -28,7 +28,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void HairSpecular::DrawSettings()
 {
-	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), (bool*)&settings.Enabled);
+	ImGui::Checkbox("Enable", (bool*)&settings.Enabled);
 	ImGui::Combo(T(TKEY("hair_mode"), "Hair Mode"), (int*)&settings.HairMode, "Kajiya-Kay\0Marschner\0");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("hair_mode_tooltip"),
@@ -78,7 +78,7 @@ void HairSpecular::DrawSettings()
 
 void HairSpecular::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enabled", reinterpret_cast<bool*>(&settings.Enabled));
+	ImGui::Checkbox("Enable", reinterpret_cast<bool*>(&settings.Enabled));
 }
 
 void HairSpecular::LoadSettings(json& o_json)

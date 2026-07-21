@@ -64,7 +64,7 @@ struct CSUtility : Feature
 
 	struct Settings
 	{
-		bool enabled = false;
+		bool enabled = true;
 		float skyBrightness = 1.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;

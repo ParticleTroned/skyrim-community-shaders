@@ -29,7 +29,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void GrassCollision::DrawSettings()
 {
 	if (ImGui::TreeNodeEx(T(TKEY("grass_collision"), "Grass Collision"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox(T(TKEY("enable"), "Enable Grass Collision"), (bool*)&settings.EnableGrassCollision);
+		ImGui::Checkbox("Enable", (bool*)&settings.EnableGrassCollision);
 		ImGui::TreePop();
 	}
 }
@@ -231,7 +231,7 @@ void GrassCollision::Update()
 
 void GrassCollision::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable Grass Collision", &settings.EnableGrassCollision);
+	ImGui::Checkbox("Enable", &settings.EnableGrassCollision);
 }
 
 void GrassCollision::LoadSettings(json& o_json)

@@ -112,7 +112,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void CSUtility::DrawSettingsHeaderControls()
 {
-	ImGui::Checkbox(("Enable " + GetDisplayName()).c_str(), &settings.enabled);
+	ImGui::Checkbox("Enable", &settings.enabled);
 }
 
 void CSUtility::DrawSettings()

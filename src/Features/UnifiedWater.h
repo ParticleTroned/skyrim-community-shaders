@@ -93,12 +93,6 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	virtual void DrawSettings() override;
-	virtual bool HasPerformanceSettings() const override { return true; }
-	virtual const char* GetPerformanceCostMeasurementUnavailableReason() const override
-	{
-		return "Optimized water meshes only affect newly created water after a location change or restart, so they cannot be compared in the current scene.";
-	}
-	virtual void DrawPerformanceSettings(bool a_advanced) override;
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override;

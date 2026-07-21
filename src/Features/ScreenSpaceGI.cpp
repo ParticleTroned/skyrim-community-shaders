@@ -231,7 +231,7 @@ void ScreenSpaceGI::DrawSettings()
 
 	if (ImGui::BeginTable("Toggles", 4)) {
 		ImGui::TableNextColumn();
-		DrawScreenSpaceGIEnabledCheckbox(settings, T(TKEY("enabled"), "Enabled"));
+		DrawScreenSpaceGIEnabledCheckbox(settings, "Enable");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable Screen Space Global Illumination. When disabled, all other settings are ignored."));
 		}
@@ -428,7 +428,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	if (!ShadersOK())
 		Util::Text::Error("%s", T(TKEY("shader_compile_error"), "Compute shaders failed to compile!"));
 
-	DrawScreenSpaceGIEnabledCheckbox(settings, T(TKEY("enabled"), "Enabled"));
+	DrawScreenSpaceGIEnabledCheckbox(settings, "Enable");
 	{
 		auto settingsGuard = Util::DisableGuard(!settings.Enabled);
 		recompileFlag |= ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI);

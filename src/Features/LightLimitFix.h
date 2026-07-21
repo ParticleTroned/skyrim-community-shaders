@@ -206,6 +206,7 @@ public:
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
+	virtual void DrawPerformanceSettings(bool) override;
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override { return settings.EnableLightsVisualisation; }
 
@@ -264,6 +265,7 @@ public:
 	uint clusterSize[3] = { 16 };
 
 	Settings settings;
+	void DrawSettingsPanel(bool a_showEmbeddedInfo);
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override

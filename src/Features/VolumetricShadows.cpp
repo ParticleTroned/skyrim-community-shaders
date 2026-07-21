@@ -12,7 +12,7 @@ namespace
 {
 	void DrawEnabledCheckbox(VolumetricShadows::Settings& a_settings)
 	{
-		ImGui::Checkbox(T("feature.volumetric_shadows.enabled", "Enabled"), &a_settings.Enabled);
+		ImGui::Checkbox("Enable", &a_settings.Enabled);
 	}
 }
 

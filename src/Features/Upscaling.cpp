@@ -15967,9 +15967,22 @@ void Upscaling::ClearSubmitStageVendorResumeStability()
 	submitStageVendorResumeStableEyeMaskState.store(0, std::memory_order_release);
 }
 
-bool Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod)
+bool Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight)
 {
 	if (!a_stableCandidate) {
+		ClearSubmitStageVendorResumeStability();
+		return false;
+	}
+	if (!RecordVRRenderScaleFidelityObservation(
+			a_upscaleMethod,
+			a_eyeIndex,
+			true,
+			a_generation,
+			a_inputWidth,
+			a_inputHeight,
+			a_outputWidth,
+			a_outputHeight,
+			false)) {
 		ClearSubmitStageVendorResumeStability();
 		return false;
 	}
@@ -16711,8 +16724,19 @@ void Upscaling::RecordVRRenderScaleRelatch(const VRRenderScaleRelatchSignature& 
 		a_frame);
 }
 
-void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success)
+void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight)
 {
+	const bool fidelitySuccess = RecordVRRenderScaleFidelityObservation(
+		a_upscaleMethod,
+		a_eyeIndex,
+		a_success,
+		GetActiveVRRenderScaleContractGeneration(),
+		a_inputWidth,
+		a_inputHeight,
+		a_outputWidth,
+		a_outputHeight,
+		true);
+	a_success = a_success && fidelitySuccess;
 	if (a_upscaleMethod == UpscaleMethod::kDLSS)
 		RecordVRDLSSFullEyeEvaluation(a_eyeIndex, a_success);
 
@@ -16740,6 +16764,143 @@ void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMeth
 
 	ClearVRRenderScaleMemoryRelief();
 	logger::debug("[VRRenderScale] Cleared memory relief after clean full-eye evaluation for both eyes.");
+}
+
+bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_evaluated)
+{
+	if (!globals::game::isVR || a_eyeIndex >= 2)
+		return a_success;
+
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	uint32_t mismatchMask = static_cast<uint32_t>(VRRenderScaleFidelityMismatch::None);
+	VRRenderScaleFidelitySnapshot published{};
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		const auto& applied = vrRenderScaleTransitionController.applied;
+		if (!applied.valid || !applied.active || !IsVendorUpscalingMethod(applied.method))
+			return a_success;
+
+		auto& fidelity = vrRenderScaleTransitionController.fidelity;
+		if (!fidelity.active || fidelity.transitionEpoch != applied.transitionEpoch) {
+			fidelity = {};
+			fidelity.active = true;
+			fidelity.transitionEpoch = applied.transitionEpoch;
+			fidelity.contractGeneration = applied.contractGeneration;
+			fidelity.method = applied.method;
+			fidelity.backend = applied.resources.backend;
+			fidelity.expectedInputWidth = applied.renderEyeWidth;
+			fidelity.expectedInputHeight = applied.renderEyeHeight;
+			fidelity.expectedOutputWidth = applied.displayEyeWidth;
+			fidelity.expectedOutputHeight = applied.displayEyeHeight;
+		}
+
+		const bool newObservationFrame =
+			fidelity.eyes[0].frame != frame &&
+			fidelity.eyes[1].frame != frame;
+		if (newObservationFrame) {
+			fidelity.observationEyeMask = 0;
+			fidelity.evaluationEyeMask = 0;
+			fidelity.invariantEyeMask = 0;
+			fidelity.bothEyesValid = false;
+		}
+
+		const auto addMismatch = [&](VRRenderScaleFidelityMismatch a_mismatch) {
+			mismatchMask |= static_cast<uint32_t>(a_mismatch);
+		};
+		if (!a_success)
+			addMismatch(VRRenderScaleFidelityMismatch::Evaluation);
+		if (vrRenderScaleTransitionController.targetEpoch != 0 &&
+			vrRenderScaleTransitionController.targetEpoch != applied.transitionEpoch)
+			addMismatch(VRRenderScaleFidelityMismatch::Epoch);
+		if (a_upscaleMethod != fidelity.method)
+			addMismatch(VRRenderScaleFidelityMismatch::Method);
+		if (fidelity.contractGeneration != 0 && a_generation != fidelity.contractGeneration)
+			addMismatch(VRRenderScaleFidelityMismatch::Generation);
+		if (a_inputWidth != fidelity.expectedInputWidth || a_inputHeight != fidelity.expectedInputHeight)
+			addMismatch(VRRenderScaleFidelityMismatch::InputDimensions);
+		if (a_outputWidth != fidelity.expectedOutputWidth || a_outputHeight != fidelity.expectedOutputHeight)
+			addMismatch(VRRenderScaleFidelityMismatch::OutputDimensions);
+
+		auto& eye = fidelity.eyes[a_eyeIndex];
+		eye.frame = frame;
+		eye.generation = a_generation;
+		eye.inputWidth = a_inputWidth;
+		eye.inputHeight = a_inputHeight;
+		eye.outputWidth = a_outputWidth;
+		eye.outputHeight = a_outputHeight;
+		eye.evaluated = a_evaluated;
+		fidelity.observationEyeMask |= 1u << a_eyeIndex;
+		if (a_evaluated)
+			fidelity.evaluationEyeMask |= 1u << a_eyeIndex;
+
+		const uint32_t otherEyeIndex = a_eyeIndex ^ 1u;
+		const auto& otherEye = fidelity.eyes[otherEyeIndex];
+		if (otherEye.frame == frame &&
+			(otherEye.generation != eye.generation ||
+				otherEye.inputWidth != eye.inputWidth ||
+				otherEye.inputHeight != eye.inputHeight ||
+				otherEye.outputWidth != eye.outputWidth ||
+				otherEye.outputHeight != eye.outputHeight)) {
+			addMismatch(VRRenderScaleFidelityMismatch::EyeAsymmetry);
+			fidelity.invariantEyeMask &= ~(1u << otherEyeIndex);
+			fidelity.eyes[otherEyeIndex].valid = false;
+		}
+
+		eye.valid = mismatchMask == 0;
+		if (eye.valid)
+			fidelity.invariantEyeMask |= 1u << a_eyeIndex;
+		else
+			fidelity.invariantEyeMask &= ~(1u << a_eyeIndex);
+		fidelity.lastMismatchMask = mismatchMask;
+		if (mismatchMask != 0) {
+			if (fidelity.mismatchCount != std::numeric_limits<uint32_t>::max())
+				++fidelity.mismatchCount;
+			auto& metrics = vrRenderScaleTransitionController.metrics.current;
+			if (metrics.valid &&
+				metrics.transitionEpoch == fidelity.transitionEpoch &&
+				metrics.fidelityMismatches != std::numeric_limits<uint32_t>::max()) {
+				++metrics.fidelityMismatches;
+			}
+			fidelity.consecutiveValidFrames = 0;
+			fidelity.lastBothEyesFrame = 0;
+		}
+
+		constexpr uint32_t kBothEyesMask = 0x3u;
+		if ((fidelity.invariantEyeMask & kBothEyesMask) == kBothEyesMask) {
+			if (fidelity.lastBothEyesFrame != frame) {
+				fidelity.consecutiveValidFrames =
+					fidelity.lastBothEyesFrame != 0 && frame == fidelity.lastBothEyesFrame + 1u ?
+						fidelity.consecutiveValidFrames + 1u :
+						1u;
+				fidelity.lastBothEyesFrame = frame;
+			}
+			fidelity.bothEyesValid = true;
+		}
+		published = fidelity;
+		++vrRenderScaleTransitionController.revision;
+	}
+
+	if (mismatchMask != 0 && ShouldEmitUpscalingDiagLogs()) {
+		logger::warn(
+			"[VRRenderScale][Fidelity] epoch={} generation={} method={} backend={} eye={} mismatch=0x{:X} input={}x{} expectedInput={}x{} output={}x{} expectedOutput={}x{} evaluated={} totalMismatches={}",
+			published.transitionEpoch,
+			a_generation,
+			magic_enum::enum_name(a_upscaleMethod),
+			magic_enum::enum_name(published.backend),
+			a_eyeIndex,
+			mismatchMask,
+			a_inputWidth,
+			a_inputHeight,
+			published.expectedInputWidth,
+			published.expectedInputHeight,
+			a_outputWidth,
+			a_outputHeight,
+			published.expectedOutputWidth,
+			published.expectedOutputHeight,
+			BoolText(a_evaluated),
+			published.mismatchCount);
+	}
+	return mismatchMask == 0;
 }
 
 void Upscaling::ClearVRDLSSRapidTransitionGuard()
@@ -19196,7 +19357,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			params.label,
 			params.dlssViewportRole);
 		if (params.dlssViewportRole == Streamline::DLSSViewportRole::FullEye)
-			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated);
+			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated, params.inputWidth, params.inputHeight, params.outputWidth, params.outputHeight);
 		return evaluated;
 	}
 
@@ -19223,7 +19384,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			motionVectorScaleY,
 			settings.sharpnessFSR);
 		if (params.dlssViewportRole == Streamline::DLSSViewportRole::FullEye)
-			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated);
+			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated, params.inputWidth, params.inputHeight, params.outputWidth, params.outputHeight);
 		return evaluated;
 	}
 
@@ -23007,7 +23168,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			!transitionFoveatedBypass &&
 			motionVector.texture &&
 			depth.texture;
-		if (TryPromoteVRRenderScaleSubmitStageContract(currentFrame, eyeIndex, cooldownStableCandidate, upscaleMethod)) {
+		if (TryPromoteVRRenderScaleSubmitStageContract(
+				currentFrame,
+				eyeIndex,
+				cooldownStableCandidate,
+				upscaleMethod,
+				activeContractGeneration,
+				sourceRegion.width,
+				sourceRegion.height,
+				eyeWidthOut,
+				eyeHeightOut)) {
 			transitionPresentationCooldown = false;
 			presentationOnly = computePresentationOnly();
 		}
@@ -24707,6 +24877,17 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 		previousState = vrRenderScaleTransitionController.state;
 		vrRenderScaleTransitionController.applied = appliedProfile;
 		vrRenderScaleTransitionController.applying = {};
+		auto& fidelity = vrRenderScaleTransitionController.fidelity;
+		fidelity = {};
+		fidelity.active = appliedProfile.active && IsVendorUpscalingMethod(appliedProfile.method);
+		fidelity.transitionEpoch = appliedProfile.transitionEpoch;
+		fidelity.contractGeneration = appliedProfile.contractGeneration;
+		fidelity.method = appliedProfile.method;
+		fidelity.backend = appliedProfile.resources.backend;
+		fidelity.expectedInputWidth = appliedProfile.renderEyeWidth;
+		fidelity.expectedInputHeight = appliedProfile.renderEyeHeight;
+		fidelity.expectedOutputWidth = appliedProfile.displayEyeWidth;
+		fidelity.expectedOutputHeight = appliedProfile.displayEyeHeight;
 		const bool newerRequestPending =
 			vrRenderScaleTransitionController.targetEpoch != 0 &&
 			appliedProfile.transitionEpoch != 0 &&

@@ -455,6 +455,7 @@ public:
 		uint32_t failures = 0;
 		uint32_t outOfMemoryFailures = 0;
 		uint32_t deviceLostFailures = 0;
+		uint32_t fidelityMismatches = 0;
 		VRRenderScaleFailureKind lastFailure = VRRenderScaleFailureKind::None;
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		uint64_t peakUsageBytes = 0;
@@ -467,6 +468,52 @@ public:
 		std::array<VRRenderScaleTransitionMetrics, 16> recent{};
 		uint32_t nextIndex = 0;
 		uint32_t count = 0;
+	};
+
+	enum class VRRenderScaleFidelityMismatch : uint32_t
+	{
+		None = 0,
+		Evaluation = 1u << 0,
+		Epoch = 1u << 1,
+		Method = 1u << 2,
+		Generation = 1u << 3,
+		InputDimensions = 1u << 4,
+		OutputDimensions = 1u << 5,
+		EyeAsymmetry = 1u << 6
+	};
+
+	struct VRRenderScaleFidelityEyeSnapshot
+	{
+		uint32_t frame = 0;
+		uint32_t generation = 0;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		bool evaluated = false;
+		bool valid = false;
+	};
+
+	struct VRRenderScaleFidelitySnapshot
+	{
+		bool active = false;
+		uint64_t transitionEpoch = 0;
+		uint32_t contractGeneration = 0;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		VRRenderScaleBackendKind backend = VRRenderScaleBackendKind::None;
+		uint32_t expectedInputWidth = 0;
+		uint32_t expectedInputHeight = 0;
+		uint32_t expectedOutputWidth = 0;
+		uint32_t expectedOutputHeight = 0;
+		uint32_t observationEyeMask = 0;
+		uint32_t evaluationEyeMask = 0;
+		uint32_t invariantEyeMask = 0;
+		uint32_t lastMismatchMask = static_cast<uint32_t>(VRRenderScaleFidelityMismatch::None);
+		uint32_t mismatchCount = 0;
+		uint32_t consecutiveValidFrames = 0;
+		uint32_t lastBothEyesFrame = 0;
+		bool bothEyesValid = false;
+		std::array<VRRenderScaleFidelityEyeSnapshot, 2> eyes{};
 	};
 
 	/** @brief Immutable controller-visible profile at one transition milestone. */
@@ -515,6 +562,7 @@ public:
 		VRVendorRuntimeLifecycleSnapshot dlssLifecycle{};
 		VRVendorRuntimeLifecycleSnapshot fsrLifecycle{};
 		VRRenderScaleMetricsSnapshot metrics{};
+		VRRenderScaleFidelitySnapshot fidelity{};
 	};
 
 	struct PerfModeState
@@ -1304,7 +1352,8 @@ public:
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);
-	void RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success);
+	void RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight);
+	bool RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_evaluated);
 	void RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_currentActive, UpscaleMethod a_previousMethod, UpscaleMethod a_currentMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	bool ShouldBypassVRDLSSFoveatedForRapidTransition();
 	void ClearVRDLSSRapidTransitionGuard();
@@ -1455,7 +1504,7 @@ private:
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
-	bool TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod);
+	bool TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();
 	void ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery = false);

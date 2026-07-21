@@ -18,3 +18,13 @@ jobs:
             - uses: amannn/action-semantic-pull-request@v5
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: "Reject a ci/build scope on another type"
+              env:
+                  TITLE: ${{ github.event.pull_request.title }}
+              run: |
+                  title_lower="${TITLE,,}"
+                  if [[ "$title_lower" =~ ^[a-z]+\((ci|build)\)!?: ]]; then
+                      echo "::error::PR title has a '(ci)'/'(build)' scope -- use 'ci:'/'build:' as the type directly instead; a scope on another type wrongly attaches a release-impact classification."
+                      exit 1
+                  fi

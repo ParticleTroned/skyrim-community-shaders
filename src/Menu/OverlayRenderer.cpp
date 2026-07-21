@@ -276,9 +276,12 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 				"Restart to use it.");
 		} else if (shaderCache->HasFeatureSetChanges()) {
 			if (shaderCache->HasFeatureSetCacheBackup()) {
-				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
-					"Feature setup changed. Building a new shader cache for this setup.\n"
-					"Previous cache saved.");
+				const char* restoreStatus = shaderCache->HasPreviousDiskCache() ?
+				                                "Previous cache saved. Restore is available after compilation finishes." :
+				                                "Previous cache saved. Restore availability will be verified after compilation finishes.";
+				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s\n%s",
+					"Feature setup changed. Building a new shader cache for this setup.",
+					restoreStatus);
 			} else {
 				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
 					"Feature setup changed. Building shaders in memory until the cache can be rebuilt.\n"

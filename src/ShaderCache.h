@@ -746,10 +746,15 @@ namespace SIE
 		ShaderCache();
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
+		enum class PreviousCacheInfoValidation
+		{
+			RequireReadableInfo,
+			ValidatedBeforeMove,
+		};
 		bool BackupActiveDiskCache();
 		void DeleteActiveDiskCache();
 		void RefreshPreviousDiskCacheInfo();
-		bool SetPreviousCacheRestoreCandidate(std::vector<CacheMismatch> mismatches);
+		bool SetPreviousCacheRestoreCandidate(std::vector<CacheMismatch> mismatches, PreviousCacheInfoValidation a_infoValidation);
 
 		~ShaderCache();
 

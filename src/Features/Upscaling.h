@@ -330,6 +330,8 @@ public:
 		uint32_t actionMask = static_cast<uint32_t>(VRRenderScaleRelatchAction::None);
 		bool reuseRenderTargets = false;
 		bool reuseStableRenderTargets = false;
+		bool renderTargetDimensionsMatch = false;
+		bool stableContractEvidenceMatches = false;
 		bool vendorDimensionsUnchanged = false;
 		bool reuseSharedSubmitResources = false;
 		bool preserveDLSSResources = false;

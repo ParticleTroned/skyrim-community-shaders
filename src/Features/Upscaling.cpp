@@ -1130,6 +1130,18 @@ namespace
 				   a_target) != kVRRenderScaleEngineSizedTargets.end();
 	}
 
+	bool IsVRRenderScaleAlwaysResidentEngineTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		switch (a_target) {
+		case RE::RENDER_TARGETS::kMAIN:
+		case RE::RENDER_TARGETS::kMAIN_COPY:
+		case RE::RENDER_TARGETS::kMOTION_VECTOR:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	bool IsVRPresentationRenderTargetTexture(ID3D11Texture2D* a_texture)
 	{
 		auto renderer = globals::game::renderer;
@@ -1556,7 +1568,13 @@ namespace
 		const uint32_t engineWidth = ClampPositiveDimension(a_engineSize.x);
 		const uint32_t engineHeight = ClampPositiveDimension(a_engineSize.y);
 		for (const auto target : kVRRenderScaleEngineSizedTargets) {
-			if (!RequiredRenderTargetTextureSizeMatches(target, engineWidth, engineHeight, a_requireViews))
+			const bool requireResidentTarget =
+				a_requireViews || IsVRRenderScaleAlwaysResidentEngineTarget(target);
+			const bool targetMatches =
+				requireResidentTarget ?
+					RequiredRenderTargetTextureSizeMatches(target, engineWidth, engineHeight, a_requireViews) :
+					ExistingRenderTargetTextureSizeMatches(target, engineWidth, engineHeight, false);
+			if (!targetMatches)
 				return false;
 		}
 
@@ -1565,11 +1583,20 @@ namespace
 			return false;
 		}
 
-		if (!RequiredRenderTargetTextureSizeMatches(
-				RE::RENDER_TARGETS::kUNDERWATER_MASK,
-				ClampPositiveDimension(a_engineSize.x * 0.5f),
-				engineHeight,
-				a_requireViews)) {
+		const uint32_t underwaterWidth = ClampPositiveDimension(a_engineSize.x * 0.5f);
+		const bool underwaterMatches =
+			a_requireViews ?
+				RequiredRenderTargetTextureSizeMatches(
+					RE::RENDER_TARGETS::kUNDERWATER_MASK,
+					underwaterWidth,
+					engineHeight,
+					true) :
+				ExistingRenderTargetTextureSizeMatches(
+					RE::RENDER_TARGETS::kUNDERWATER_MASK,
+					underwaterWidth,
+					engineHeight,
+					false);
+		if (!underwaterMatches) {
 			return false;
 		}
 
@@ -15521,8 +15548,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					       a_eye.outputWidth == perfMode.trueHMDEyeWidth &&
 					       a_eye.outputHeight == perfMode.trueHMDEyeHeight;
 				});
-		const bool stablePhysicalContractMatches =
-			plannedRelatchTargetDimensionsMatch &&
+		const bool stablePhysicalContractEvidenceMatches =
 			relatchVendorDimensionsUnchanged &&
 			previousBootSnapshot.generation != 0 &&
 			stablePhysicalProfile.valid &&
@@ -15550,6 +15576,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!controllerForPhysicalReuse.postLoadRecovery.active &&
 			ClampPositiveDimension(state->screenSize.x) == ClampPositiveDimension(plannedRelatchEngineSize.x) &&
 			ClampPositiveDimension(state->screenSize.y) == ClampPositiveDimension(plannedRelatchEngineSize.y);
+		const bool stablePhysicalContractMatches =
+			plannedRelatchTargetDimensionsMatch &&
+			stablePhysicalContractEvidenceMatches;
 		const bool lowPeakNativeRestoreRelatch =
 			plannedRelatchSizeKnown &&
 			!plannedRelatchTargetDimensionsMatch &&
@@ -15728,6 +15757,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			plannedRelatchSizeKnown &&
 			(plannedRelatchTargetsStrictlyReady || reuseStableRenderTargetsForRelatch);
 		relatchPlan.reuseStableRenderTargets = reuseStableRenderTargetsForRelatch;
+		relatchPlan.renderTargetDimensionsMatch = plannedRelatchTargetDimensionsMatch;
+		relatchPlan.stableContractEvidenceMatches = stablePhysicalContractEvidenceMatches;
 		relatchPlan.vendorDimensionsUnchanged = relatchVendorDimensionsUnchanged;
 		relatchPlan.reuseSharedSubmitResources =
 			retainWarmInactiveVendorResourcesForRelatch &&
@@ -15841,7 +15872,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					} :
 					relatchDiagDisplaySize;
 			logger::debug(
-				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} targetsStrictlyReady={} dimensionsMatch={} stableTargetReuse={} sharedReuse={} vendorDimensionsUnchanged={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} targetsStrictlyReady={} dimensionsMatch={} stableEvidence={} stableTargetReuse={} sharedReuse={} vendorDimensionsUnchanged={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
 				magic_enum::enum_name(relatchUpscaleMethod),
 				magic_enum::enum_name(relatchOrigin),
 				BoolText(preserveActiveContractForRecovery),
@@ -15849,6 +15880,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(lowPeakNativeRestoreRelatch),
 				BoolText(plannedRelatchTargetsStrictlyReady),
 				BoolText(plannedRelatchTargetDimensionsMatch),
+				BoolText(stablePhysicalContractEvidenceMatches),
 				BoolText(reuseStableRenderTargetsForRelatch),
 				BoolText(relatchPlan.reuseSharedSubmitResources),
 				BoolText(relatchVendorDimensionsUnchanged),
@@ -25151,6 +25183,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							 { "actionMask", relatchPlan.actionMask },
 							 { "reuseRenderTargets", relatchPlan.reuseRenderTargets },
 							 { "reuseStableRenderTargets", relatchPlan.reuseStableRenderTargets },
+							 { "renderTargetDimensionsMatch", relatchPlan.renderTargetDimensionsMatch },
+							 { "stableContractEvidenceMatches", relatchPlan.stableContractEvidenceMatches },
 							 { "vendorDimensionsUnchanged", relatchPlan.vendorDimensionsUnchanged },
 							 { "reuseSharedSubmitResources", relatchPlan.reuseSharedSubmitResources },
 							 { "preserveDLSSResources", relatchPlan.preserveDLSSResources },
@@ -25702,7 +25736,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -25712,6 +25746,8 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			magic_enum::enum_name(a_plan.target.backend),
 			BoolText(a_plan.reuseRenderTargets),
 			BoolText(a_plan.reuseStableRenderTargets),
+			BoolText(a_plan.renderTargetDimensionsMatch),
+			BoolText(a_plan.stableContractEvidenceMatches),
 			BoolText(a_plan.vendorDimensionsUnchanged),
 			BoolText(a_plan.reuseSharedSubmitResources),
 			BoolText(a_plan.preserveDLSSResources),

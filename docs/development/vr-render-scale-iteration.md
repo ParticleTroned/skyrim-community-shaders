@@ -87,18 +87,23 @@ teardown behavior. The relatch plan records warm retention and target reuse so
 automation can distinguish deliberate residency from missed teardown.
 
 Vendor dimension compatibility is independent of full D3D target readiness. A
-same-dimension CS-menu handoff may reuse the physical target layout when every
-target texture still has the expected dimensions and the previous contract has
-complete, exact both-eye fidelity evidence. This stable-contract fallback avoids
-treating an optional or method-specific view as a resize signal while still
-requiring the strict resource probe when stable evidence is unavailable. A true
-render or display dimension change still disables warm retention.
+same-dimension CS-menu handoff may reuse the physical target layout when its
+always-resident anchors and every currently resident optional target still have
+the expected dimensions, and the previous contract has complete, exact both-eye
+fidelity evidence. This stable-contract fallback avoids treating an absent lazy
+target or optional/method-specific view as a resize signal while still requiring
+the strict resource probe when stable evidence is unavailable. A true render or
+display dimension change still disables warm retention.
 
 The same guarded path preserves shared submit-stage intermediates, foveated and
 menu resources, common vendor textures, and periphery-TAA allocations. Their
 frame/history state is invalidated and the compatible intermediates are rebound
-to the new logical contract generation without reallocating them. Records expose
-`reuseRenderTargets`, `reuseStableRenderTargets`,
+to the new logical contract generation without reallocating them. The stable
+probe requires the always-resident main, main-copy, motion-vector, and depth
+textures, while optional engine targets are dimension-checked when resident and
+remain governed by the render-target creation hook when created later. Records
+expose `reuseRenderTargets`, `reuseStableRenderTargets`,
+`renderTargetDimensionsMatch`, `stableContractEvidenceMatches`,
 `vendorDimensionsUnchanged`, and `reuseSharedSubmitResources` so automation can
 distinguish strict reuse, stable-layout reuse, and shared-resource retention.
 

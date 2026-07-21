@@ -24501,12 +24501,266 @@ void Upscaling::StopVRRenderScaleStressSession()
 		sessionID,
 		count,
 		overwritten);
+	WriteVRRenderScaleIterationRecord();
 }
 
 void Upscaling::ResetVRRenderScaleStressSession()
 {
 	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
 	vrRenderScaleStressSession = {};
+}
+
+json Upscaling::BuildVRRenderScaleIterationRecord() const
+{
+	constexpr uint32_t kSchemaVersion = 1u;
+	constexpr uint32_t kMinimumRequests = 2u;
+	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
+	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
+	const auto controller = GetVRRenderScaleTransitionSnapshot();
+	const auto session = GetVRRenderScaleStressSessionSnapshot();
+
+	json record;
+	record["schema"] = "community-shaders.vr-render-scale.iteration";
+	record["schemaVersion"] = kSchemaVersion;
+	record["producer"] = {
+		{ "name", "Community Shaders" },
+		{ "version", std::string{ Plugin::VERSION_LABEL } },
+		{ "component", "Upscaling" },
+		{ "implementationStep", 16 }
+	};
+	record["session"] = {
+		{ "id", session.sessionID },
+		{ "active", session.active },
+		{ "startFrame", session.startFrame },
+		{ "endFrame", session.endFrame },
+		{ "retainedEvents", session.count },
+		{ "overwrittenEvents", session.overwrittenEvents }
+	};
+
+	json events = json::array();
+	uint32_t requestCount = 0;
+	uint32_t stableCount = 0;
+	uint32_t failureEventCount = 0;
+	const uint32_t eventCapacity = static_cast<uint32_t>(session.events.size());
+	const uint32_t firstEvent =
+		(session.nextIndex + eventCapacity - session.count) % eventCapacity;
+	for (uint32_t offset = 0; offset < session.count; ++offset) {
+		const auto& event = session.events[(firstEvent + offset) % eventCapacity];
+		if (event.type == VRRenderScaleStressEventType::Request)
+			++requestCount;
+		if (event.type == VRRenderScaleStressEventType::Stable)
+			++stableCount;
+		if (event.type == VRRenderScaleStressEventType::Failure)
+			++failureEventCount;
+		events.push_back({ { "sequence", event.sequence },
+			{ "frame", event.frame },
+			{ "type", std::string{ magic_enum::enum_name(event.type) } },
+			{ "requestID", event.requestID },
+			{ "transitionEpoch", event.transitionEpoch },
+			{ "origin", std::string{ magic_enum::enum_name(event.origin) } },
+			{ "method", std::string{ magic_enum::enum_name(event.method) } },
+			{ "active", event.active },
+			{ "qualityMode", event.qualityMode },
+			{ "dlssPreset", event.dlssPreset },
+			{ "state", GetVRRenderScaleTransitionStateName(event.state) },
+			{ "pressure", GetVRRenderScaleMemoryPressureName(event.pressure) },
+			{ "usageBytes", event.usageBytes },
+			{ "retries", event.retries },
+			{ "failures", event.failures },
+			{ "fidelityMismatches", event.fidelityMismatches } });
+	}
+	record["events"] = std::move(events);
+
+	json metrics = json::array();
+	uint32_t maximumRetries = 0;
+	uint32_t maximumLatencyFrames = 0;
+	uint32_t totalFailures = 0;
+	uint32_t outOfMemoryFailures = 0;
+	uint32_t deviceLostFailures = 0;
+	uint32_t fidelityMismatches = 0;
+	auto appendMetrics = [&](const VRRenderScaleTransitionMetrics& a_metrics) {
+		if (!a_metrics.valid || a_metrics.requestedFrame < session.startFrame)
+			return;
+		maximumRetries = std::max(maximumRetries, a_metrics.retries);
+		if (a_metrics.completed)
+			maximumLatencyFrames = std::max(maximumLatencyFrames, a_metrics.totalFrames);
+		totalFailures += a_metrics.failures;
+		outOfMemoryFailures += a_metrics.outOfMemoryFailures;
+		deviceLostFailures += a_metrics.deviceLostFailures;
+		fidelityMismatches += a_metrics.fidelityMismatches;
+		metrics.push_back({ { "transitionEpoch", a_metrics.transitionEpoch },
+			{ "requestID", a_metrics.requestID },
+			{ "contractGeneration", a_metrics.contractGeneration },
+			{ "origin", std::string{ magic_enum::enum_name(a_metrics.origin) } },
+			{ "method", std::string{ magic_enum::enum_name(a_metrics.method) } },
+			{ "completed", a_metrics.completed },
+			{ "superseded", a_metrics.superseded },
+			{ "requestedFrame", a_metrics.requestedFrame },
+			{ "preparingFrame", a_metrics.preparingFrame },
+			{ "applyingFrame", a_metrics.applyingFrame },
+			{ "appliedFrame", a_metrics.appliedFrame },
+			{ "stableFrame", a_metrics.stableFrame },
+			{ "totalFrames", a_metrics.totalFrames },
+			{ "retries", a_metrics.retries },
+			{ "pressureDeferrals", a_metrics.pressureDeferrals },
+			{ "retirementDeferrals", a_metrics.retirementDeferrals },
+			{ "backendDeferrals", a_metrics.backendDeferrals },
+			{ "failures", a_metrics.failures },
+			{ "outOfMemoryFailures", a_metrics.outOfMemoryFailures },
+			{ "deviceLostFailures", a_metrics.deviceLostFailures },
+			{ "lastFailure", std::string{ magic_enum::enum_name(a_metrics.lastFailure) } },
+			{ "fidelityMismatches", a_metrics.fidelityMismatches },
+			{ "peakPressure", GetVRRenderScaleMemoryPressureName(a_metrics.peakPressure) },
+			{ "peakUsageBytes", a_metrics.peakUsageBytes },
+			{ "peakRetiredSets", a_metrics.peakRetiredSets } });
+	};
+	const uint32_t metricCapacity = static_cast<uint32_t>(controller.metrics.recent.size());
+	const uint32_t firstMetric =
+		(controller.metrics.nextIndex + metricCapacity - controller.metrics.count) % metricCapacity;
+	for (uint32_t offset = 0; offset < controller.metrics.count; ++offset)
+		appendMetrics(controller.metrics.recent[(firstMetric + offset) % metricCapacity]);
+	appendMetrics(controller.metrics.current);
+	record["metrics"] = std::move(metrics);
+
+	const auto lifecycleJson = [](const VRVendorRuntimeLifecycleSnapshot& a_lifecycle) {
+		return json{
+			{ "method", std::string{ magic_enum::enum_name(a_lifecycle.method) } },
+			{ "backend", std::string{ magic_enum::enum_name(a_lifecycle.backend) } },
+			{ "phase", GetVRVendorRuntimeLifecyclePhaseName(a_lifecycle.phase) },
+			{ "transitionEpoch", a_lifecycle.transitionEpoch },
+			{ "requestedGeneration", a_lifecycle.requestedGeneration },
+			{ "runtimeGeneration", a_lifecycle.runtimeGeneration },
+			{ "resourcesPresent", a_lifecycle.resourcesPresent },
+			{ "readyForContract", a_lifecycle.readyForContract },
+			{ "attempts", a_lifecycle.attempts },
+			{ "deferrals", a_lifecycle.deferrals },
+			{ "failures", a_lifecycle.failures }
+		};
+	};
+	record["controller"] = {
+		{ "state", GetVRRenderScaleTransitionStateName(controller.state) },
+		{ "targetEpoch", controller.targetEpoch },
+		{ "revision", controller.revision },
+		{ "memory", { { "valid", controller.memory.valid },
+						{ "usageBytes", controller.memory.currentUsageBytes },
+						{ "budgetBytes", controller.memory.budgetBytes },
+						{ "headroomBytes", controller.memory.headroomBytes },
+						{ "pressure", GetVRRenderScaleMemoryPressureName(controller.memory.pressure) } } },
+		{ "retirement", { { "pendingSets", controller.retirement.pendingSets },
+							{ "fencePending", controller.retirement.fencePending },
+							{ "capacityBlocked", controller.retirement.capacityBlocked } } },
+		{ "postLoadRecovery", { { "active", controller.postLoadRecovery.active },
+								  { "recoveryEpoch", controller.postLoadRecovery.recoveryEpoch },
+								  { "peakUsageBytes", controller.postLoadRecovery.peakUsageBytes },
+								  { "peakPressure", GetVRRenderScaleMemoryPressureName(controller.postLoadRecovery.peakPressure) } } },
+		{ "fidelity", { { "active", controller.fidelity.active },
+						  { "transitionEpoch", controller.fidelity.transitionEpoch },
+						  { "contractGeneration", controller.fidelity.contractGeneration },
+						  { "method", std::string{ magic_enum::enum_name(controller.fidelity.method) } },
+						  { "backend", std::string{ magic_enum::enum_name(controller.fidelity.backend) } },
+						  { "bothEyesValid", controller.fidelity.bothEyesValid },
+						  { "evaluationEyeMask", controller.fidelity.evaluationEyeMask },
+						  { "mismatchCount", controller.fidelity.mismatchCount },
+						  { "lastMismatchMask", controller.fidelity.lastMismatchMask } } },
+		{ "dlssLifecycle", lifecycleJson(controller.dlssLifecycle) },
+		{ "fsrLifecycle", lifecycleJson(controller.fsrLifecycle) }
+	};
+
+	const bool terminalState =
+		controller.state == VRRenderScaleTransitionState::Active ||
+		controller.state == VRRenderScaleTransitionState::Idle;
+	const bool stableActiveVendor =
+		controller.stable.valid &&
+		controller.stable.active &&
+		IsVendorUpscalingMethod(controller.stable.method);
+	bool lifecycleReady = true;
+	if (stableActiveVendor && controller.stable.method == UpscaleMethod::kDLSS)
+		lifecycleReady = controller.dlssLifecycle.readyForContract;
+	if (stableActiveVendor && controller.stable.method == UpscaleMethod::kFSR)
+		lifecycleReady = controller.fsrLifecycle.readyForContract;
+	const bool pressureRecovered =
+		controller.memory.pressure != VRRenderScaleMemoryPressure::High &&
+		controller.memory.pressure != VRRenderScaleMemoryPressure::Critical &&
+		!controller.postLoadRecovery.active;
+	const bool fidelityValid =
+		!stableActiveVendor ||
+		(controller.fidelity.bothEyesValid && controller.fidelity.lastMismatchMask == 0);
+
+	json gates = json::array();
+	json failureReasons = json::array();
+	bool accepted = true;
+	auto addGate = [&](const char* a_name, bool a_passed, const json& a_observed, const json& a_limit) {
+		gates.push_back({ { "name", a_name },
+			{ "passed", a_passed },
+			{ "observed", a_observed },
+			{ "limit", a_limit } });
+		if (!a_passed) {
+			accepted = false;
+			failureReasons.push_back(a_name);
+		}
+	};
+	addGate("capture_complete", !session.active && session.endFrame != 0, session.active ? "active" : "stopped", "stopped");
+	addGate("minimum_requests", requestCount >= kMinimumRequests, requestCount, kMinimumRequests);
+	addGate("terminal_state", terminalState && !controller.metrics.current.valid, GetVRRenderScaleTransitionStateName(controller.state), "Active or Idle with no current transition");
+	addGate("no_capture_overflow", session.overwrittenEvents == 0, session.overwrittenEvents, 0);
+	addGate("no_failures", totalFailures == 0 && failureEventCount == 0, std::max(totalFailures, failureEventCount), 0);
+	addGate("no_out_of_memory", outOfMemoryFailures == 0, outOfMemoryFailures, 0);
+	addGate("no_device_loss", deviceLostFailures == 0, deviceLostFailures, 0);
+	addGate("retry_bound", maximumRetries <= kMaximumRetriesPerTransition, maximumRetries, kMaximumRetriesPerTransition);
+	addGate("stable_latency_bound", stableCount != 0 && maximumLatencyFrames <= kMaximumStableLatencyFrames, maximumLatencyFrames, kMaximumStableLatencyFrames);
+	addGate("fidelity_invariants", fidelityMismatches == 0 && controller.fidelity.mismatchCount == 0 && fidelityValid, fidelityMismatches + controller.fidelity.mismatchCount, 0);
+	addGate("retirement_drained", controller.retirement.pendingSets == 0 && !controller.retirement.fencePending, controller.retirement.pendingSets, 0);
+	addGate("memory_recovered", pressureRecovered, GetVRRenderScaleMemoryPressureName(controller.memory.pressure), "Normal, Elevated, or Unknown with recovery inactive");
+	addGate("backend_ready", lifecycleReady, lifecycleReady, true);
+	record["acceptance"] = {
+		{ "verdict", accepted ? "pass" : "fail" },
+		{ "accepted", accepted },
+		{ "gates", std::move(gates) },
+		{ "failureReasons", std::move(failureReasons) }
+	};
+	record["analysis"] = {
+		{ "baseline", "RC94" },
+		{ "ghidraVersion", "12.1.2_PUBLIC" },
+		{ "symbols", { "Upscaling::ApplyPendingPerfModeRenderTargetRecreate",
+						 "Upscaling::ApplyPendingPostLoadRuntimeReset",
+						 "Upscaling::ResetVRVendorRuntimeResources",
+						 "Upscaling::TryPromoteVRRenderScaleSubmitStageContract",
+						 "Upscaling::RecordVRRenderScaleFidelityObservation" } }
+	};
+	return record;
+}
+
+bool Upscaling::WriteVRRenderScaleIterationRecord() const
+{
+	const auto session = GetVRRenderScaleStressSessionSnapshot();
+	if (session.sessionID == 0 || session.active)
+		return false;
+
+	try {
+		const auto directory = Util::PathHelpers::GetCommunityShaderPath() / "Diagnostics" / "VRRenderScale";
+		std::filesystem::create_directories(directory);
+		const auto path = directory / std::format(
+										  "iteration-{}-{}-{}.json",
+										  session.sessionID,
+										  session.startFrame,
+										  session.endFrame);
+		std::ofstream file(path, std::ios::out | std::ios::trunc);
+		if (!file) {
+			logger::error("[VRRenderScale][Iteration] Could not open {} for writing.", path.string());
+			return false;
+		}
+		file << BuildVRRenderScaleIterationRecord().dump(2);
+		file.flush();
+		if (!file) {
+			logger::error("[VRRenderScale][Iteration] Failed while writing {}.", path.string());
+			return false;
+		}
+		logger::info("[VRRenderScale][Iteration] Wrote machine-readable iteration record to {}.", path.string());
+		return true;
+	} catch (const std::exception& e) {
+		logger::error("[VRRenderScale][Iteration] Failed to write iteration record: {}", e.what());
+		return false;
+	}
 }
 
 const char* Upscaling::GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state)

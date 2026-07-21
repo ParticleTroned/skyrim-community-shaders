@@ -669,6 +669,8 @@ public:
 	void StartVRRenderScaleStressSession();
 	void StopVRRenderScaleStressSession();
 	void ResetVRRenderScaleStressSession();
+	json BuildVRRenderScaleIterationRecord() const;
+	bool WriteVRRenderScaleIterationRecord() const;
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
 	static const char* GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure);

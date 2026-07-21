@@ -1156,19 +1156,22 @@ as one transaction.
 
 At the first OpenVR eye submit for the frame, require:
 
-- the outermost `DrawInterface` call has ended;
+- every source-capture scope that contributed to the current consumer frame has
+  ended; an earlier `DrawInterface` must be closed, while the traced later
+  source-producing `DrawInterface` belongs to the next consumer generation;
 - no semantic, higher-call, direct-call, or internal-replay scope remains open;
 - every contributing epoch ended with matching begin/end arguments;
 - the runtime-plan and resource generation still match preflight;
-- at least one operation was captured, and every suppressed operation is
-  represented in staging.
+- at least one operation was captured, every recognized operation is represented
+  in staging, and every suppressed operation has exact capture parity.
 
 If valid, seal the transaction, swap staging and committed textures, and retain
 the frame, epoch IDs, runtime-plan generation, operation count, and layer
 generation. Both eyes must consume that same committed generation. A semantic,
-direct, or Map operation after sealing is a transaction fault: production keeps
-its original draw, poisons the transaction, and prevents the late operation from
-mutating staging between eye submits.
+direct, or Map operation that still belongs to the sealed consumer is a
+transaction fault. The traced `DrawInterface` producer that begins after submit
+is detached from the sealed transaction, keeps its original draw, and cannot
+mutate staging or poison the second eye.
 
 Preflight alone cannot make an opaque sequence of later draw interceptions
 non-fallible. If any accepted operation fails, including the first operation:
@@ -1184,9 +1187,14 @@ non-fallible. If any accepted operation fails, including the first operation:
 5. retry preflight on a later frame after normal resource or plan recovery; menu
    failure never requests a Render Scale relatch.
 
-Compact diagnostics remain around `DrawInterface` end, sealing, final
-composition, desktop publication, and OpenVR submit. Another broad
-menu-discovery trace is unnecessary.
+Context changes before rendering ownership update the transaction requirements
+without poisoning it. After any recognized operation, capture, suppression, Map
+substitution, or replay, a context change remains fail-closed for the rest of
+that transaction.
+
+Compact diagnostics record the first poison reason and remain around semantic
+completion, sealing, final composition, desktop publication, and OpenVR submit.
+Another broad menu-discovery trace is unnecessary.
 
 Do not add a reduced-`kMENUBG` backup/restore path based on RC81's generic
 unrelated-draw counter. RC82 repaired the counter, but the evidence still does
@@ -1450,10 +1458,12 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
 
 ### Production routing
 
-1. `DrawInterface` begins or joins the frame transaction and prewarms required
-   resources. Map and RaceSex ownership accept both the UI/state query and the
-   registered menu event so a delayed or unreliable UI lookup cannot miss or
-   misclassify the first frame.
+1. The first eligible semantic or direct bridge operation begins or joins the
+   frame transaction. An earlier `DrawInterface` may prewarm required resources;
+   the traced source-producing `DrawInterface` that follows OpenVR submit is
+   detached from the transaction already being presented. Map and RaceSex
+   ownership accept both the UI/state query and the registered menu event so a
+   delayed or unreliable UI lookup cannot miss or misclassify the first frame.
    Preflight must confirm both menu/desktop compositor shaders, immutable D3D
    states, sampler/constant-buffer state, both layer buffers, and the complete
    pending and retained desktop eye-pair storage before any bridge suppression
@@ -1490,11 +1500,13 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
    engine ISCopy leaves valid sticky shader/SRV state. The chained hook then
    replays the six-index copy over the full destination and restores
    viewport/scissor state.
-9. At outer `DrawInterface` end, Map publishes the completed staging target as a
-   single opaque replacement operation, matching the traced engine `CopyResource`
-   ownership. Publication relies on the transaction's completed display epochs,
-   not a second menu-state query that could change during close; ordinary/direct
-   paths publish all ordered alpha-composited operations.
+9. At the first OpenVR submit after all contributing semantic scopes close, Map
+   publishes the completed staging target as a single opaque replacement
+   operation, matching the traced engine `CopyResource` ownership. If an outer
+   `DrawInterface` actually ends before submit it may close the same transaction,
+   but the later source producer is not awaited. Publication relies on completed
+   display epochs, not a second menu-state query that could change during close;
+   ordinary/direct paths publish all ordered alpha-composited operations.
 10. Before the first eye output, the transaction must be complete and sealable.
     Staging and committed layers swap once. The committed generation is then
     composited into both vendor-upscaled or stretched eye outputs.

@@ -8704,12 +8704,21 @@ bool Upscaling::BeginVRMenuSemanticEpoch(
 	context.renderFlags = a_renderFlags;
 	context.groupIndex = a_groupIndex;
 	context.renderMode = a_renderMode;
+	if (a_renderMode == 24u && globals::state)
+		BeginVRMenuFinalCompositeFrame(globals::state->frameCount);
 	const bool adapterEligible = IsVRMenuSemanticAdapterEligible();
+	const bool postPresentationProducer =
+		a_renderMode == 24u &&
+		globals::state &&
+		vrMenuFrameTransaction.frame == globals::state->frameCount &&
+		vrMenuFrameTransaction.presentationStarted;
 	context.eligible = a_renderMode == 24u &&
 	                   adapterEligible &&
+	                   !postPresentationProducer &&
 	                   !IsVRMapMenuPresentationActive();
 	g_vrMenuSemanticEpochStack[g_vrMenuSemanticEpochDepth++] = context;
-	if (a_renderMode == 24u && adapterEligible && !BeginVRMenuDisplayResolutionPass()) {
+	if (a_renderMode == 24u && adapterEligible && !postPresentationProducer &&
+		!BeginVRMenuDisplayResolutionPass()) {
 		g_vrMenuSemanticEpochStack[g_vrMenuSemanticEpochDepth - 1u].eligible = false;
 		PoisonVRMenuFrameTransaction("display-resolution-pass-unavailable");
 	}
@@ -8741,8 +8750,18 @@ void Upscaling::EndVRMenuSemanticEpoch(
 		context.renderFlags == a_renderFlags &&
 		context.groupIndex == a_groupIndex;
 	if (!argumentsMatch &&
+		!vrMenuFrameTransaction.presentationStarted &&
 		(context.capturedOperations != 0 || displayPassActive || vrMenuFrameTransaction.mapLayerRequired))
 		PoisonVRMenuFrameTransaction("semantic-epoch-end-mismatch");
+
+	const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
+	if ((context.capturedOperations != 0 || displayPassActive) &&
+		g_vrMenuSemanticEpochDepth == 0 &&
+		vrMenuFrameTransaction.frame == frame &&
+		!vrMenuFrameTransaction.presentationStarted &&
+		!vrMenuFrameTransaction.sealed) {
+		vrMenuFrameTransaction.renderComplete = true;
+	}
 
 	if (context.capturedOperations == 0 && !displayPassActive)
 		return;
@@ -9099,15 +9118,16 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 	if (!menuPresentationContextActive &&
 		vrMenuFrameTransaction.frame == a_frame &&
 		!vrMenuFrameTransaction.sealed &&
-		(vrMenuFrameTransaction.capturedOperations != 0 ||
+		(vrMenuFrameTransaction.recognizedOperations != 0 ||
+			vrMenuFrameTransaction.capturedOperations != 0 ||
 			vrMenuFrameTransaction.suppressedOperations != 0 ||
 			vrMenuFrameTransaction.mapDisplayEpochs != 0 ||
-			vrMenuFrameTransaction.mapLayerRequired ||
 			vrMenuFrameTransaction.presentationStarted)) {
 		PoisonVRMenuFrameTransaction("menu-context-ended-during-transaction");
 	}
 	if (communityShadersMenuOpen && vrMenuFrameTransaction.frame == a_frame) {
 		const bool transactionOwnsMenuWork =
+			vrMenuFrameTransaction.recognizedOperations != 0 ||
 			vrMenuFrameTransaction.capturedOperations != 0 ||
 			vrMenuFrameTransaction.suppressedOperations != 0 ||
 			vrMenuFrameTransaction.mapDisplayEpochs != 0 ||
@@ -9120,7 +9140,7 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 			vrMenuFrameTransaction.mapLayerRequired = false;
 		}
 	}
-	if (vrMenuFinalCompositeFrame == a_frame)
+	if (vrMenuFinalCompositeFrame == a_frame && vrMenuFrameTransaction.frame == a_frame)
 		return;
 
 	if (vrMenuFrameTransaction.frame != std::numeric_limits<uint32_t>::max() &&
@@ -9151,8 +9171,45 @@ void Upscaling::PoisonVRMenuFrameTransaction(const char* a_reason)
 	if (vrMenuFrameTransaction.frame == std::numeric_limits<uint32_t>::max())
 		return;
 	vrMenuFrameTransaction.poisoned = true;
-	if (!vrMenuFrameTransaction.failureReason)
-		vrMenuFrameTransaction.failureReason = a_reason;
+	if (!vrMenuFrameTransaction.failureReason) {
+		vrMenuFrameTransaction.failureReason = a_reason ? a_reason : "unknown";
+		logger::debug(
+			"[VRMenuComposite] Poisoned menu frame transaction. frame={} reason={} recognized={} captured={} suppressed={} epochs={} mapEpochs={} renderComplete={} presentationStarted={} sealed={} drawInterfaceDepth={} semanticDepth={}",
+			vrMenuFrameTransaction.frame,
+			vrMenuFrameTransaction.failureReason,
+			vrMenuFrameTransaction.recognizedOperations,
+			vrMenuFrameTransaction.capturedOperations,
+			vrMenuFrameTransaction.suppressedOperations,
+			vrMenuFrameTransaction.epochCount,
+			vrMenuFrameTransaction.mapDisplayEpochs,
+			vrMenuFrameTransaction.renderComplete,
+			vrMenuFrameTransaction.presentationStarted,
+			vrMenuFrameTransaction.sealed,
+			vrMenuFrameTransaction.drawInterfaceDepth,
+			g_vrMenuSemanticEpochDepth);
+		LogVRMenuPresentationTraceLazy(
+			"frame-transaction-poisoned",
+			[&]() {
+				return std::format(
+					"reason={} transaction(frame={},planGeneration={},recognized={},captured={},suppressed={},epochs={},mapDisplayEpochs={},renderComplete={},presentationStarted={},sealed={},layerRequired={},mapRequired={},mapCaptured={},drawInterfaceDepth={}) {}",
+					vrMenuFrameTransaction.failureReason,
+					vrMenuFrameTransaction.frame,
+					vrMenuFrameTransaction.planGeneration,
+					vrMenuFrameTransaction.recognizedOperations,
+					vrMenuFrameTransaction.capturedOperations,
+					vrMenuFrameTransaction.suppressedOperations,
+					vrMenuFrameTransaction.epochCount,
+					vrMenuFrameTransaction.mapDisplayEpochs,
+					vrMenuFrameTransaction.renderComplete,
+					vrMenuFrameTransaction.presentationStarted,
+					vrMenuFrameTransaction.sealed,
+					vrMenuFrameTransaction.menuLayerRequired,
+					vrMenuFrameTransaction.mapLayerRequired,
+					vrMenuFrameTransaction.mapLayerCapture,
+					vrMenuFrameTransaction.drawInterfaceDepth,
+					GetVRMenuPresentationTraceScopeDescription());
+			});
+	}
 }
 
 void Upscaling::ResetVRMenuDesktopEyePairState()
@@ -9196,11 +9253,10 @@ void Upscaling::NotifyVRMenuPresentationContextChange(const char* a_reason)
 
 	const bool transactionInFlight =
 		!vrMenuFrameTransaction.sealed &&
-		(vrMenuFrameTransaction.capturedOperations != 0 ||
+		(vrMenuFrameTransaction.recognizedOperations != 0 ||
+			vrMenuFrameTransaction.capturedOperations != 0 ||
 			vrMenuFrameTransaction.suppressedOperations != 0 ||
 			vrMenuFrameTransaction.mapDisplayEpochs != 0 ||
-			vrMenuFrameTransaction.menuLayerRequired ||
-			vrMenuFrameTransaction.mapLayerRequired ||
 			vrMenuFrameTransaction.drawInterfaceDepth != 0);
 	if (vrMenuFrameTransaction.presentationStarted)
 		PoisonVRMenuFrameTransaction("menu-context-changed-after-presentation-start");
@@ -9228,7 +9284,8 @@ bool Upscaling::SealVRMenuFrameTransaction(uint32_t a_frame)
 		vrMenuFrameTransaction.suppressedOperations +
 		(vrMenuFrameTransaction.mapLayerCapture ? 1u : 0u);
 	const bool operationParityValid =
-		vrMenuFrameTransaction.capturedOperations == expectedCapturedOperations;
+		vrMenuFrameTransaction.capturedOperations == expectedCapturedOperations &&
+		vrMenuFrameTransaction.capturedOperations == vrMenuFrameTransaction.recognizedOperations;
 	if (vrMenuFrameTransaction.poisoned ||
 		!vrMenuFrameTransaction.renderComplete ||
 		vrMenuFrameTransaction.drawInterfaceDepth != 0 ||
@@ -9269,15 +9326,15 @@ void Upscaling::BeginVRMenuDrawInterface()
 	if (vrMenuDrawInterfaceDepth == 0) {
 		EnsureRuntimeResolutionStateCurrent();
 		BeginVRMenuFinalCompositeFrame(frame);
+		const bool postPresentationProducer =
+			vrMenuFrameTransaction.frame == frame &&
+			vrMenuFrameTransaction.presentationStarted;
 		const bool adapterEligible = IsVRMenuSemanticAdapterEligible();
 		const bool transportExpected =
 			IsVRMenuTransportContractPresent() &&
 			IsKnownGameMenuContextActive() &&
 			!IsCommunityShadersMenuOpen();
-		if (transportExpected && vrMenuFrameTransaction.presentationStarted) {
-			vrMenuFrameTransaction.menuLayerRequired = true;
-			PoisonVRMenuFrameTransaction("draw-interface-after-presentation-start");
-		} else if (adapterEligible) {
+		if (!postPresentationProducer && adapterEligible) {
 			vrMenuFrameTransaction.mapLayerRequired = IsVRMapMenuPresentationActive();
 			const bool directPrewarmDeferred =
 				IsMainOrLoadingMenuContextActive() && !vrMenuFrameTransaction.mapLayerRequired;
@@ -9293,13 +9350,13 @@ void Upscaling::BeginVRMenuDrawInterface()
 					PoisonVRMenuFrameTransaction("map-depth-prewarm-failed");
 				}
 			}
-		} else if (transportExpected) {
+		} else if (!postPresentationProducer && transportExpected) {
 			vrMenuFrameTransaction.menuLayerRequired = true;
 			PoisonVRMenuFrameTransaction("menu-transport-unavailable");
 		}
 	}
 	++vrMenuDrawInterfaceDepth;
-	if (vrMenuFrameTransaction.frame == frame)
+	if (vrMenuFrameTransaction.frame == frame && !vrMenuFrameTransaction.presentationStarted)
 		vrMenuFrameTransaction.drawInterfaceDepth = vrMenuDrawInterfaceDepth;
 }
 
@@ -9316,6 +9373,8 @@ void Upscaling::EndVRMenuDrawInterface()
 	const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 	if (vrMenuFrameTransaction.frame != frame)
 		return;
+	if (vrMenuFrameTransaction.presentationStarted)
+		return;
 	vrMenuFrameTransaction.drawInterfaceDepth = vrMenuDrawInterfaceDepth;
 	if (vrMenuFrameTransaction.drawInterfaceDepth == 0) {
 		if (vrMenuFrameTransaction.mapLayerRequired && !CaptureVRMapMenuLayer(frame))
@@ -9326,6 +9385,8 @@ void Upscaling::EndVRMenuDrawInterface()
 
 bool Upscaling::CaptureVRMapMenuLayer(uint32_t a_frame)
 {
+	if (vrMenuFrameTransaction.mapLayerCapture)
+		return true;
 	if (!vrMenuFrameTransaction.mapLayerRequired ||
 		vrMenuFrameTransaction.frame != a_frame ||
 		vrMenuFrameTransaction.mapDisplayEpochs == 0 ||
@@ -9347,9 +9408,12 @@ bool Upscaling::CaptureVRMapMenuLayer(uint32_t a_frame)
 		return false;
 	}
 
+	vrMenuFrameTransaction.renderComplete = false;
 	vrMenuFinalCompositeLayerClearedFrame = a_frame;
 	vrMenuFinalCompositeLayerDrawCount = 1;
 	vrMenuFrameTransaction.mapLayerCapture = true;
+	if (vrMenuFrameTransaction.recognizedOperations != std::numeric_limits<uint32_t>::max())
+		++vrMenuFrameTransaction.recognizedOperations;
 	RecordVRMenuSemanticCapture(false);
 	return true;
 }
@@ -9585,8 +9649,12 @@ bool Upscaling::PrewarmVRMenuFinalCompositeResources(DXGI_FORMAT a_layerFormat)
 			if (!upscaleVS)
 				(void)GetUpscaleVS();
 		} catch (const std::exception& e) {
+			static bool loggedShaderPrewarmFailure = false;
+			LogWarnOnce(loggedShaderPrewarmFailure, "[VRMenuComposite] Shader prewarm failed", e);
 			(void)MarkSubmitStageDeviceLostIfNeeded(e, "VR menu final composite shader prewarm");
 		} catch (...) {
+			static bool loggedShaderPrewarmFailure = false;
+			LogWarnOnce(loggedShaderPrewarmFailure, "[VRMenuComposite] Shader prewarm failed");
 			(void)MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu final composite shader prewarm");
 		}
 	}
@@ -9640,23 +9708,10 @@ bool Upscaling::PrewarmVRMenuFinalCompositeResources(DXGI_FORMAT a_layerFormat)
 
 	const bool layersAllocated = layersReady ||
 	                             EnsureVRMenuFinalCompositeLayer(finalWidth, finalHeight, a_layerFormat);
-	const bool eyeOutputsReady =
-		vrIntermediateColorOut[0] &&
-		vrIntermediateColorOut[0]->resource &&
-		vrIntermediateColorOut[0]->rtv &&
-		vrIntermediateColorOut[0]->desc.Width == finalWidth / 2u &&
-		vrIntermediateColorOut[0]->desc.Height == finalHeight &&
-		vrIntermediateColorOut[1] &&
-		vrIntermediateColorOut[1]->resource &&
-		vrIntermediateColorOut[1]->rtv &&
-		vrIntermediateColorOut[1]->desc.Width == finalWidth / 2u &&
-		vrIntermediateColorOut[1]->desc.Height == finalHeight &&
-		vrIntermediateColorOut[1]->desc.Format == vrIntermediateColorOut[0]->desc.Format;
 	const bool desktopPairReady =
 		layersAllocated &&
-		eyeOutputsReady &&
 		EnsureVRMenuDesktopEyePair(
-			*vrIntermediateColorOut[0],
+			DXGI_FORMAT_R8G8B8A8_UNORM,
 			finalWidth / 2u,
 			finalHeight);
 	const bool immutableResourcesReady =
@@ -9669,6 +9724,13 @@ bool Upscaling::PrewarmVRMenuFinalCompositeResources(DXGI_FORMAT a_layerFormat)
 		globals::deferred &&
 		globals::deferred->linearSampler;
 	if (!layersAllocated || !desktopPairReady || !immutableResourcesReady) {
+		logger::debug(
+			"[VRMenuComposite] Resource preflight failed. frame={} format={} layers={} desktopPair={} immutable={}",
+			globals::state->frameCount,
+			static_cast<uint32_t>(a_layerFormat),
+			layersAllocated,
+			desktopPairReady,
+			immutableResourcesReady);
 		vrMenuAdapterPreflightFailureFrame = globals::state->frameCount;
 		return false;
 	}
@@ -9823,16 +9885,19 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	const bool semanticBridge = IsVRMenuSemanticBridgeOperationActive();
 	const bool authorizedDirectBridge = !semanticBridge && IsMainOrLoadingMenuContextActive();
 	BeginVRMenuFinalCompositeFrame(state->frameCount);
+	if (vrMenuFrameTransaction.presentationStarted)
+		return decide("post-presentation-source-producer", false);
+	if (vrMenuFrameTransaction.sealed)
+		return decide("post-seal-source-producer", false);
 	vrMenuFrameTransaction.menuLayerRequired = true;
 	requiredBridgeOperation = true;
 	if (vrMenuFrameTransaction.poisoned)
 		return decide("transaction-already-poisoned", false);
-	if (vrMenuFrameTransaction.presentationStarted)
-		return decide("bridge-operation-after-presentation-start", false);
-	if (vrMenuFrameTransaction.sealed)
-		return decide("bridge-operation-after-seal", false);
 	if (!semanticBridge && !authorizedDirectBridge)
 		return decide("bridge-operation-outside-semantic-epoch", false);
+	vrMenuFrameTransaction.renderComplete = false;
+	if (vrMenuFrameTransaction.recognizedOperations != std::numeric_limits<uint32_t>::max())
+		++vrMenuFrameTransaction.recognizedOperations;
 	if (!globals::d3d::context ||
 		GetCOMIdentityAddress(a_context) != GetCOMIdentityAddress(globals::d3d::context)) {
 		return decide("unsupported-device-context", false);
@@ -19302,12 +19367,23 @@ bool Upscaling::IsVRMenuDesktopEyePairCompatible(
 }
 
 bool Upscaling::EnsureVRMenuDesktopEyePair(
-	const Texture2D& a_sourceTexture,
+	DXGI_FORMAT a_format,
 	uint32_t a_eyeWidth,
 	uint32_t a_eyeHeight)
 {
-	if (IsVRMenuDesktopEyePairCompatible(a_sourceTexture, a_eyeWidth, a_eyeHeight, vrMenuDesktopEyePair) &&
-		IsVRMenuDesktopEyePairCompatible(a_sourceTexture, a_eyeWidth, a_eyeHeight, vrMenuDesktopRetainedEyePair)) {
+	const auto pairCompatible = [&](const eastl::unique_ptr<Texture2D> (&a_eyePair)[2]) {
+		if (!a_eyeWidth || !a_eyeHeight || a_format == DXGI_FORMAT_UNKNOWN)
+			return false;
+		return std::all_of(std::begin(a_eyePair), std::end(a_eyePair), [&](const auto& a_eye) {
+			return a_eye &&
+			       a_eye->resource &&
+			       a_eye->srv &&
+			       a_eye->desc.Width == a_eyeWidth &&
+			       a_eye->desc.Height == a_eyeHeight &&
+			       a_eye->desc.Format == a_format;
+		});
+	};
+	if (pairCompatible(vrMenuDesktopEyePair) && pairCompatible(vrMenuDesktopRetainedEyePair)) {
 		return true;
 	}
 	try {
@@ -19317,7 +19393,7 @@ bool Upscaling::EnsureVRMenuDesktopEyePair(
 			replacementPair[eye] = CreateNamedTexture2D(
 				a_eyeWidth,
 				a_eyeHeight,
-				a_sourceTexture.desc.Format,
+				a_format,
 				true,
 				false,
 				false,
@@ -19325,7 +19401,7 @@ bool Upscaling::EnsureVRMenuDesktopEyePair(
 			replacementRetainedPair[eye] = CreateNamedTexture2D(
 				a_eyeWidth,
 				a_eyeHeight,
-				a_sourceTexture.desc.Format,
+				a_format,
 				true,
 				false,
 				false,
@@ -19415,6 +19491,7 @@ void Upscaling::PresentVRMenuDesktopMirror(IDXGISwapChain* a_swapChain)
 		currentTransactionPoisoned &&
 		(vrMenuFrameTransaction.menuLayerRequired ||
 			vrMenuFrameTransaction.mapLayerRequired ||
+			vrMenuFrameTransaction.recognizedOperations != 0 ||
 			vrMenuFrameTransaction.capturedOperations != 0 ||
 			vrMenuFrameTransaction.suppressedOperations != 0 ||
 			vrMenuFrameTransaction.mapDisplayEpochs != 0 ||
@@ -21211,25 +21288,67 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 
 	BeginVRMenuFinalCompositeFrame(currentFrame);
-	if (vrRenderScaleMode && vrMenuFrameTransaction.frame == currentFrame) {
+	if (vrRenderScaleMode &&
+		vrMenuFrameTransaction.frame == currentFrame &&
+		vrMenuFrameTransaction.presentationStarted) {
+		// The first eye fixes the transaction generation. Producer scopes that
+		// begin afterward feed a later consumer frame and must not invalidate the
+		// second eye; only an explicit transaction fault remains authoritative.
+		if (vrMenuFrameTransaction.poisoned)
+			return false;
+	} else if (vrRenderScaleMode && vrMenuFrameTransaction.frame == currentFrame) {
+		const bool transactionScopesClosed =
+			vrMenuFrameTransaction.drawInterfaceDepth == 0 &&
+			vrMenuDrawInterfaceDepth == 0 &&
+			g_vrMenuSemanticEpochDepth == 0 &&
+			GetCurrentVRMenuBridgeHigherCallContext() == nullptr &&
+			g_vrMenuBridgeDirectDrawDepth == 0 &&
+			!vrMenuParallelBridgeDrawInProgress;
+		if (!vrMenuFrameTransaction.poisoned && transactionScopesClosed) {
+			if (vrMenuFrameTransaction.mapLayerRequired &&
+				!vrMenuFrameTransaction.mapLayerCapture &&
+				vrMenuFrameTransaction.mapDisplayEpochs != 0 &&
+				!CaptureVRMapMenuLayer(currentFrame)) {
+				PoisonVRMenuFrameTransaction("map-layer-capture-failed-before-submit");
+			}
+			if (!vrMenuFrameTransaction.poisoned &&
+				vrMenuFrameTransaction.capturedOperations != 0) {
+				// Ordinary/RaceSex consumers and Map's mixed mode-24 epochs finish
+				// before the compositor submit. DrawInterface runs later to produce
+				// source content for the next consumer frame, so it is not the
+				// publication boundary for the current transaction.
+				vrMenuFrameTransaction.renderComplete = true;
+			}
+		}
+
 		const bool transactionExpected =
 			vrMenuFrameTransaction.poisoned ||
 			vrMenuFrameTransaction.menuLayerRequired ||
 			vrMenuFrameTransaction.mapLayerRequired ||
+			vrMenuFrameTransaction.recognizedOperations != 0 ||
 			vrMenuFrameTransaction.capturedOperations != 0 ||
 			vrMenuFrameTransaction.suppressedOperations != 0 ||
 			vrMenuFrameTransaction.drawInterfaceDepth != 0;
 		const bool requiredLayerMissing =
 			(vrMenuFrameTransaction.menuLayerRequired || vrMenuFrameTransaction.mapLayerRequired) &&
 			vrMenuFrameTransaction.capturedOperations == 0;
-		const bool transactionIncomplete =
-			vrMenuFrameTransaction.poisoned ||
-			vrMenuFrameTransaction.drawInterfaceDepth != 0 ||
-			!vrMenuFrameTransaction.renderComplete;
-		if (transactionExpected && (requiredLayerMissing || transactionIncomplete))
+		if (transactionExpected) {
+			if (requiredLayerMissing)
+				PoisonVRMenuFrameTransaction("required-menu-layer-missing-before-submit");
+			else if (!transactionScopesClosed)
+				PoisonVRMenuFrameTransaction("menu-render-scope-open-at-submit");
+			else if (!vrMenuFrameTransaction.renderComplete)
+				PoisonVRMenuFrameTransaction("menu-transaction-incomplete-at-submit");
+
+			if (vrMenuFrameTransaction.poisoned) {
+				vrMenuFrameTransaction.presentationStarted = true;
+				return false;
+			}
+		}
+		if (vrMenuFrameTransaction.capturedOperations != 0 && !SealVRMenuFrameTransaction(currentFrame)) {
+			vrMenuFrameTransaction.presentationStarted = true;
 			return false;
-		if (vrMenuFrameTransaction.capturedOperations != 0 && !SealVRMenuFrameTransaction(currentFrame))
-			return false;
+		}
 	}
 	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
 	if (IsVRNativeLayoutSubmitProtectedRenderTargetTexture(sourceTexture))

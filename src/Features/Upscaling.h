@@ -1205,7 +1205,7 @@ private:
 	bool PublishVRMenuDesktopEye(uint32_t a_eyeIndex, const Texture2D& a_outputTexture, uint32_t a_frame);
 	bool IsVRMenuDesktopEyePairCompatible(const Texture2D& a_sourceTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight,
 		const eastl::unique_ptr<Texture2D> (&a_eyePair)[2]) const;
-	bool EnsureVRMenuDesktopEyePair(const Texture2D& a_sourceTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
+	bool EnsureVRMenuDesktopEyePair(DXGI_FORMAT a_format, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool DrawVRMenuBridgeIntoFinalCompositeLayer(ID3D11DeviceContext* a_context, DXGI_FORMAT a_format, UINT a_indexCount,
 		UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight);
@@ -1220,6 +1220,7 @@ private:
 		uint32_t planGeneration = 0;
 		std::array<uint64_t, kVRMenuTransactionMaxEpochs> epochIds{};
 		uint32_t epochCount = 0;
+		uint32_t recognizedOperations = 0;
 		uint32_t capturedOperations = 0;
 		uint32_t suppressedOperations = 0;
 		uint32_t mapDisplayEpochs = 0;

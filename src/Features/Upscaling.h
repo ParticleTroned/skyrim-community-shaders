@@ -329,6 +329,7 @@ public:
 		VRRenderScaleResourceCompatibility compatibility{};
 		uint32_t actionMask = static_cast<uint32_t>(VRRenderScaleRelatchAction::None);
 		bool reuseRenderTargets = false;
+		bool vendorDimensionsUnchanged = false;
 		bool preserveDLSSResources = false;
 		bool preserveFSRResources = false;
 		bool retainWarmDLSSResources = false;

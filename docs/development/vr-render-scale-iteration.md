@@ -86,6 +86,13 @@ device-loss, non-`Normal` pressure, and runtime-FSR paths retain the existing
 teardown behavior. The relatch plan records warm retention and target reuse so
 automation can distinguish deliberate residency from missed teardown.
 
+Vendor dimension compatibility is independent of full D3D target readiness. A
+same-dimension CS-menu handoff may still recreate missing or unhealthy engine
+targets while retaining compatible vendor contexts; a true render or display
+dimension change still disables warm retention. Records expose both
+`reuseRenderTargets` and `vendorDimensionsUnchanged` to make that distinction
+explicit.
+
 Schema v3 also groups completed transition peaks by exact backend profile
 (method, backend, quality, preset, and dimensions). Once one profile has three
 samples, the `steady_state_memory_growth` gate compares its final two peaks and

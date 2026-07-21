@@ -709,7 +709,8 @@ public:
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
 	bool BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc,
-		uint32_t a_eyeWidth, uint32_t a_eyeHeight, Texture2D* const* a_eyeSources = nullptr);
+		uint32_t a_eyeWidth, uint32_t a_eyeHeight, Texture2D* const* a_eyeSources = nullptr,
+		bool a_compositeCommittedMenuLayer = false);
 	void PresentVRMenuDesktopMirror(IDXGISwapChain* a_swapChain);
 	bool EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const Texture2D& colorOutput);
 	bool ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput);

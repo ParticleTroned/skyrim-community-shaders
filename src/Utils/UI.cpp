@@ -306,14 +306,7 @@ namespace Util
 			ImGui::Spacing();
 
 			// Center buttons
-			const auto buttonWidthForLabel = [](const std::string& label) {
-				return ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-			};
-			const float buttonWidth = std::max({
-				ThemeManager::Constants::POPUP_BUTTON_WIDTH * GetUIScale(),
-				buttonWidthForLabel(confirmLabel),
-				buttonWidthForLabel(cancelLabel),
-			});
+			constexpr float buttonWidth = ThemeManager::Constants::POPUP_BUTTON_WIDTH;
 			const float spacing = ImGui::GetStyle().ItemSpacing.x;
 			const float totalWidth = buttonWidth * 2 + spacing;
 			const float windowWidth = ImGui::GetWindowWidth();
@@ -377,7 +370,14 @@ namespace Util
 			if (showDontAskAgain)
 				ImGui::Checkbox(T("ui.dont_ask_again", "Don't ask me again"), &dontAskCheckbox);
 
-			constexpr float buttonWidth = ThemeManager::Constants::POPUP_BUTTON_WIDTH;
+			const auto buttonWidthForLabel = [](const std::string& label) {
+				return ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			};
+			const float buttonWidth = std::max({
+				ThemeManager::Constants::POPUP_BUTTON_WIDTH * GetUIScale(),
+				buttonWidthForLabel(confirmLabel),
+				buttonWidthForLabel(cancelLabel),
+			});
 			const float spacing = ImGui::GetStyle().ItemSpacing.x;
 			const float totalWidth = buttonWidth * 2 + spacing;
 			const float offset = (ImGui::GetWindowWidth() - totalWidth) * 0.5f;

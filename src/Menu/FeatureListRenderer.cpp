@@ -791,6 +791,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 {
+	ImGui::PushID(menu.name.c_str());
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 		// Add spacing only for Home menu
 		if (menu.name == "Home") {
@@ -799,6 +800,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 		menu.func();
 	}
 	ImGui::EndChild();
+	ImGui::PopID();
 }
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const std::string&)
@@ -820,6 +822,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	bool isLoaded = feat->loaded;
 	bool hasFailedMessage = !feat->failedLoadedMessage.empty();
 
+	ImGui::PushID(featureName.c_str());
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 		// Compute scene-controlled state once for both header and settings
 		auto* sceneManager = SceneSettingsManager::GetSingleton();
@@ -835,6 +838,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		RenderRestoreDefaultsButton(feat, isDisabled, isLoaded);
 	}
 	ImGui::EndChild();
+	ImGui::PopID();
 	// Render reactive constraint warning outside the child window so it can appear as a top-level popup
 	RenderReactiveConstraintWarningDialog();
 }

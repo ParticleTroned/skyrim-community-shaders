@@ -25619,7 +25619,7 @@ void Upscaling::RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind
 		recorded = true;
 	}
 	if (recorded)
-		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Retry);
+		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Retry, a_kind);
 }
 
 void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind)
@@ -25630,25 +25630,24 @@ void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		auto& metrics = vrRenderScaleTransitionController.metrics.current;
-		if (!metrics.valid)
-			return;
-
-		const auto increment = [](uint32_t& a_value) {
-			if (a_value != std::numeric_limits<uint32_t>::max())
-				++a_value;
-		};
-		increment(metrics.failures);
-		if (a_kind == VRRenderScaleFailureKind::OutOfMemory)
-			increment(metrics.outOfMemoryFailures);
-		if (a_kind == VRRenderScaleFailureKind::DeviceLost)
-			increment(metrics.deviceLostFailures);
-		metrics.lastFailure = a_kind;
-		++vrRenderScaleTransitionController.revision;
+		if (metrics.valid) {
+			const auto increment = [](uint32_t& a_value) {
+				if (a_value != std::numeric_limits<uint32_t>::max())
+					++a_value;
+			};
+			increment(metrics.failures);
+			if (a_kind == VRRenderScaleFailureKind::OutOfMemory)
+				increment(metrics.outOfMemoryFailures);
+			if (a_kind == VRRenderScaleFailureKind::DeviceLost)
+				increment(metrics.deviceLostFailures);
+			metrics.lastFailure = a_kind;
+			++vrRenderScaleTransitionController.revision;
+		}
 	}
-	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Failure);
+	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Failure, VRRenderScaleRetryKind::Other, a_kind);
 }
 
-void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type)
+void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind, VRRenderScaleFailureKind a_failureKind)
 {
 	const auto controller = GetVRRenderScaleTransitionSnapshot();
 	const auto& profile =
@@ -25687,6 +25686,8 @@ void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_ty
 	event.dlssPreset = profile.dlssPreset;
 	event.state = controller.state;
 	event.pressure = controller.memory.pressure;
+	event.retryKind = a_retryKind;
+	event.failureKind = a_failureKind;
 	event.usageBytes = controller.memory.currentUsageBytes;
 	event.retries = metrics.retries;
 	event.failures = metrics.failures;

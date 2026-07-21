@@ -542,6 +542,8 @@ public:
 		uint32_t dlssPreset = kDLSSPresetK;
 		VRRenderScaleTransitionState state = VRRenderScaleTransitionState::Idle;
 		VRRenderScaleMemoryPressure pressure = VRRenderScaleMemoryPressure::Unknown;
+		VRRenderScaleRetryKind retryKind = VRRenderScaleRetryKind::Other;
+		VRRenderScaleFailureKind failureKind = VRRenderScaleFailureKind::None;
 		uint64_t usageBytes = 0;
 		uint32_t retries = 0;
 		uint32_t failures = 0;
@@ -1403,7 +1405,7 @@ public:
 	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind);
 	void RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind);
 	void ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame);
-	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type);
+	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other, VRRenderScaleFailureKind a_failureKind = VRRenderScaleFailureKind::None);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);

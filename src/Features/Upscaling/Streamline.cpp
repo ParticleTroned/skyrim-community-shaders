@@ -1867,25 +1867,28 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
  *
  * Sets the DLSS mode to off and frees all DLSS-related resources associated with the viewport.
  */
-bool Streamline::DestroyDLSSResources()
+Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 {
 	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
 		ResetDLSSIdleFences();
 		InvalidateDLSSOptionsCache();
 		activeDLSSViewportResourcesAllocated = {};
 		ResetFrameTracking();
-		return true;
+		return DLSSResourceTeardownResult::Ready;
 	}
 
 	if (auto context = globals::d3d::context) {
-		if (BeginOrPollD3D11IdleFence(context, pendingDLSSResourceFreeIdleFence, "DLSS resource free") != D3D11IdleFenceResult::Ready) {
-			static bool loggedDLSSResourceFreeTimeout = false;
-			if (!loggedDLSSResourceFreeTimeout) {
+		const auto idleFenceResult = BeginOrPollD3D11IdleFence(context, pendingDLSSResourceFreeIdleFence, "DLSS resource free");
+		if (idleFenceResult == D3D11IdleFenceResult::Pending) {
+			static bool loggedDLSSResourceFreePending = false;
+			if (!loggedDLSSResourceFreePending) {
 				logger::warn("[Streamline] Deferring DLSS resource free because the D3D11 queue did not become idle.");
-				loggedDLSSResourceFreeTimeout = true;
+				loggedDLSSResourceFreePending = true;
 			}
-			return false;
+			return DLSSResourceTeardownResult::Pending;
 		}
+		if (idleFenceResult == D3D11IdleFenceResult::Failed)
+			return DLSSResourceTeardownResult::Failed;
 	} else {
 		ResetDLSSIdleFences();
 	}
@@ -1917,7 +1920,7 @@ bool Streamline::DestroyDLSSResources()
 	InvalidateDLSSOptionsCache();
 	vrDLSSViewportUseCounter = 0;
 	ResetFrameTracking();
-	return activeViewportResourcesFreed;
+	return activeViewportResourcesFreed ? DLSSResourceTeardownResult::Ready : DLSSResourceTeardownResult::Failed;
 }
 
 void Streamline::UpdateReflex()

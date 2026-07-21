@@ -15780,12 +15780,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return deferSupersededRapidAmdFsrRelatch("FSR drain", false);
 		if (deferForLowPeakNativeRestoreCleanup())
 			return false;
-		if (!ResetVRVendorRuntimeResources(
-				relatchPlan.destroyDLSSResources,
-				true,
-				relatchPlan.destroyFSRResources,
-				relatchPlan.waitForFSRDrain,
-				fsrTeardownReadyForRelatch)) {
+		const auto vendorResetResult = ResetVRVendorRuntimeResources(
+			relatchPlan.destroyDLSSResources,
+			true,
+			relatchPlan.destroyFSRResources,
+			relatchPlan.waitForFSRDrain,
+			fsrTeardownReadyForRelatch);
+		if (vendorResetResult != VRVendorResourceResetResult::Ready) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
 				clearRelatchRetryLogs();
@@ -15793,13 +15794,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				return false;
 			}
 
-			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Backend);
 			if (relatchUpscaleMethod == UpscaleMethod::kDLSS && destroyDLSSResourcesForRelatch)
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, relatchContractGeneration);
 			if (relatchUpscaleMethod == UpscaleMethod::kFSR && !preserveFSRResourcesForRelatch)
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
 			if (!loggedRelatchVendorDefer) {
-				logger::warn("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
+				if (vendorResetResult == VRVendorResourceResetResult::Pending)
+					logger::warn("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
+				else
+					logger::warn("[VRRenderScale] Render-target relatch retrying after vendor resource teardown failed.");
 				loggedRelatchVendorDefer = true;
 			}
 			return false;
@@ -17116,13 +17120,44 @@ void Upscaling::RecordVRDLSSFullEyeEvaluation(uint32_t a_eyeIndex, bool a_succes
 	}
 }
 
-bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
+Upscaling::VRVendorResourceResetResult Upscaling::HandleVRDLSSResourceTeardownResult(
+	Streamline::DLSSResourceTeardownResult a_result,
+	uint32_t a_generation,
+	const char* a_lifecycleReason,
+	const char* a_deviceLostContext)
+{
+	if (a_result == Streamline::DLSSResourceTeardownResult::Ready) {
+		ClearVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, true);
+		return VRVendorResourceResetResult::Ready;
+	}
+
+	if (a_result == Streamline::DLSSResourceTeardownResult::Failed &&
+		MarkSubmitStageDeviceLostIfDeviceRemoved(a_deviceLostContext)) {
+		return VRVendorResourceResetResult::Failed;
+	}
+
+	MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, a_generation);
+	const bool pending = a_result == Streamline::DLSSResourceTeardownResult::Pending;
+	RecordVRVendorRuntimeLifecycle(
+		UpscaleMethod::kDLSS,
+		pending ? VRVendorRuntimeLifecyclePhase::WaitingForDrain : VRVendorRuntimeLifecyclePhase::Failed,
+		a_generation,
+		a_lifecycleReason);
+	return pending ? VRVendorResourceResetResult::Pending : VRVendorResourceResetResult::Failed;
+}
+
+Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 {
 	if (!globals::game::isVR)
-		return true;
+		return VRVendorResourceResetResult::Ready;
 	const uint64_t transitionEpoch = GetVRRenderScaleTransitionSnapshot().targetEpoch;
-	if (!CanAdmitVRIntermediateRetirement(transitionEpoch))
-		return false;
+	if (!CanAdmitVRIntermediateRetirement(transitionEpoch)) {
+		if (a_destroyDLSSResources) {
+			MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
+			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::WaitingForDrain, 0, "submit-stage retirement drain");
+		}
+		return VRVendorResourceResetResult::Pending;
+	}
 
 	InvalidateFrameScopedUpscalingState();
 	UnbindUpscalingResources();
@@ -17130,16 +17165,16 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	DestroyFoveatedResources();
 	ResetVRMenuFinalCompositeLayer();
 
-	bool dlssResourcesDestroyed = true;
-	if (a_destroyDLSSResources && streamline.initialized && streamline.featureDLSS && streamline.slDLSSSetOptions && streamline.slFreeResources) {
-		dlssResourcesDestroyed = streamline.DestroyDLSSResources();
-		if (!dlssResourcesDestroyed)
-			MarkSubmitStageDeviceLostIfDeviceRemoved("VR submit-stage DLSS resource teardown");
+	auto dlssResetResult = VRVendorResourceResetResult::Ready;
+	if (a_destroyDLSSResources) {
+		dlssResetResult = HandleVRDLSSResourceTeardownResult(
+			streamline.DestroyDLSSResources(),
+			0,
+			"submit-stage teardown",
+			"VR submit-stage DLSS resource teardown");
 	} else {
 		streamline.InvalidateDLSSOptionsCache();
 	}
-	if (a_destroyDLSSResources && dlssResourcesDestroyed)
-		ClearVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, true);
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedGeneration = 0;
@@ -17167,7 +17202,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	menuCameraMVsValid = false;
 	menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
 	RequestHistoryReset();
-	return dlssResourcesDestroyed;
+	return dlssResetResult;
 }
 
 void Upscaling::BeginVRRenderScaleInfoTransition(const char* a_reason)
@@ -17244,10 +17279,10 @@ void Upscaling::ClearVRRenderScaleInfoTransition()
 	++vrRenderScaleTransitionController.revision;
 }
 
-bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady)
+Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady)
 {
 	if (!globals::game::isVR)
-		return true;
+		return VRVendorResourceResetResult::Ready;
 
 	const bool destroyFSRResources = a_destroyFSRResources || pendingFSRReset.load(std::memory_order_acquire);
 	if (a_destroyDLSSResources)
@@ -17274,17 +17309,12 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 		!fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
 		MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR);
 		RecordVRVendorRuntimeLifecycle(UpscaleMethod::kFSR, VRVendorRuntimeLifecyclePhase::WaitingForDrain, 0, "vendor reset drain");
-		return false;
+		return VRVendorResourceResetResult::Pending;
 	}
 
-	const bool submitStageReset = ResetVRSubmitStageState(a_destroyDLSSResources);
-	if (!submitStageReset) {
-		if (a_destroyDLSSResources)
-			MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
-		if (a_destroyDLSSResources)
-			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Failed, 0, "vendor reset teardown");
-		return false;
-	}
+	const auto submitStageResetResult = ResetVRSubmitStageState(a_destroyDLSSResources);
+	if (submitStageResetResult != VRVendorResourceResetResult::Ready)
+		return submitStageResetResult;
 
 	if (destroyFSRResources) {
 		fidelityFX.DestroyFSRResources(a_waitForFSRIdleTeardown && !a_fsrTeardownAlreadyReady);
@@ -17293,7 +17323,7 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	DestroyCommonUpscalingTextures();
 	if (a_destroyPeripheryTAAResources)
 		DestroyPeripheryTAAResources();
-	return true;
+	return VRVendorResourceResetResult::Ready;
 }
 
 void Upscaling::RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources)
@@ -17412,14 +17442,19 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Destroying, pendingDLSSResetContractGeneration, "inactive runtime retirement");
 			logger::debug("[Upscaling] Retiring {}inactive DLSS resources before {} runtime reset", context, magic_enum::enum_name(a_upscaleMethod));
 			UnbindUpscalingResources();
-			if (!streamline.DestroyDLSSResources()) {
-				if (!MarkSubmitStageDeviceLostIfDeviceRemoved("inactive DLSS resource teardown before vendor runtime reset")) {
-					MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, pendingDLSSResetContractGeneration);
-					RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::WaitingForDrain, pendingDLSSResetContractGeneration, "inactive runtime retirement");
+			const auto dlssResetResult = HandleVRDLSSResourceTeardownResult(
+				streamline.DestroyDLSSResources(),
+				pendingDLSSResetContractGeneration,
+				"inactive runtime retirement",
+				"inactive DLSS resource teardown before vendor runtime reset");
+			if (dlssResetResult != VRVendorResourceResetResult::Ready) {
+				if (dlssResetResult == VRVendorResourceResetResult::Pending) {
 					LogWarnOnceFmt(
 						loggedVendorResetDeferral,
 						"[Upscaling] Deferred {}runtime reset because inactive Streamline resources are still in use",
 						context);
+				} else {
+					logger::error("[Upscaling] Failed to retire {}inactive Streamline resources before runtime reset", context);
 				}
 				retireDLSS = false;
 				return false;
@@ -17441,14 +17476,19 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Creating, activeContractGeneration, "runtime reset rebuild");
 			logger::debug("[Upscaling] Rebuilding {}DLSS feature after VR reset", context);
 			UnbindUpscalingResources();
-			if (!streamline.DestroyDLSSResources()) {
-				if (!MarkSubmitStageDeviceLostIfDeviceRemoved("vendor runtime DLSS resource teardown")) {
-					MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, activeContractGeneration);
-					RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::WaitingForDrain, activeContractGeneration, "runtime reset rebuild");
+			const auto dlssResetResult = HandleVRDLSSResourceTeardownResult(
+				streamline.DestroyDLSSResources(),
+				activeContractGeneration,
+				"runtime reset rebuild",
+				"vendor runtime DLSS resource teardown");
+			if (dlssResetResult != VRVendorResourceResetResult::Ready) {
+				if (dlssResetResult == VRVendorResourceResetResult::Pending) {
 					LogWarnOnceFmt(
 						loggedVendorResetDeferral,
 						"[Upscaling] Deferred rebuild of {}DLSS resources after VR reset because Streamline resources are still in use",
 						context);
+				} else {
+					logger::error("[Upscaling] Failed to tear down {}DLSS resources for runtime rebuild", context);
 				}
 				rebuildDLSS = false;
 				return false;
@@ -17597,8 +17637,12 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 			InvalidateFrameScopedUpscalingState();
 		}
 
-		if (!ResetVRVendorRuntimeResources(true, false)) {
-			logger::warn("[Upscaling] VR post-load runtime reset deferred because vendor resources are still in use");
+		const auto vendorResetResult = ResetVRVendorRuntimeResources(true, false);
+		if (vendorResetResult != VRVendorResourceResetResult::Ready) {
+			if (vendorResetResult == VRVendorResourceResetResult::Pending)
+				logger::warn("[Upscaling] VR post-load runtime reset deferred because vendor resources are still in use");
+			else
+				logger::error("[Upscaling] VR post-load runtime reset retrying after vendor resource teardown failed");
 			postLoadRuntimeResetPending.store(true, std::memory_order_release);
 			return false;
 		}
@@ -17934,14 +17978,18 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		if (upscaleModeChanged) {
 			if (previousVendorUpscalerSelected) {
 				if (previousUpscaleMode == UpscaleMethod::kDLSS) {
-					const bool dlssResourcesDestroyed = streamline.DestroyDLSSResources();
-					if (!dlssResourcesDestroyed &&
-						!MarkSubmitStageDeviceLostIfDeviceRemoved("upscale method DLSS resource teardown")) {
-						if (renderScaleTransitionRelevant)
-							MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
-					}
-					if (dlssResourcesDestroyed)
+					const auto dlssTeardownResult = streamline.DestroyDLSSResources();
+					if (renderScaleTransitionRelevant) {
+						HandleVRDLSSResourceTeardownResult(
+							dlssTeardownResult,
+							0,
+							"upscale method teardown",
+							"upscale method DLSS resource teardown");
+					} else if (dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready) {
 						ClearVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, true);
+					} else if (dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Failed) {
+						MarkSubmitStageDeviceLostIfDeviceRemoved("upscale method DLSS resource teardown");
+					}
 				} else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesDestroyedForQuality) {
 					if (renderScaleTransitionRelevant &&
 						!fidelityFX.PollFSRResourceTeardownReady("upscale method FSR resource teardown")) {
@@ -24635,7 +24683,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 19 }
+		{ "implementationStep", 20 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },

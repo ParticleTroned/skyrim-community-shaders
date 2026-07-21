@@ -71,6 +71,13 @@ queues an epoch-owned relatch. Zero-generation or resource-free lifecycle state
 is not reported as backend-ready, preventing a missing contract from producing
 a false `Applied`/`Stable` result.
 
+Step 20 preserves the DLSS teardown result across Streamline, submit-stage, and
+vendor-reset boundaries. A D3D11 idle fence that is still pending now records
+`WaitingForDrain` and a bounded backend retry instead of a backend failure. Query
+or Streamline resource-free errors remain `Failed`, so the acceptance contract
+continues to reject genuine teardown faults while allowing expected asynchronous
+GPU drain polling during DLSS/FSR handoffs and post-load recovery.
+
 ## MCP contract
 
 Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 2`. An automation client should:

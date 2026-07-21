@@ -208,6 +208,13 @@ public:
 		ID3D11Resource* transparencyMask = nullptr;
 	};
 
+	enum class DLSSResourceTeardownResult : uint8_t
+	{
+		Ready,
+		Pending,
+		Failed
+	};
+
 	// Helper: Execute DLSS for a single viewport with given resources
 	bool EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
@@ -251,5 +258,5 @@ public:
 		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
 	void UpdateReflex();
 
-	bool DestroyDLSSResources();
+	DLSSResourceTeardownResult DestroyDLSSResources();
 };

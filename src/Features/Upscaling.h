@@ -339,6 +339,15 @@ public:
 		bool capacityBlocked = false;
 	};
 
+	enum class VRRenderScaleMemoryPressure : uint8_t
+	{
+		Unknown,
+		Normal,
+		Elevated,
+		High,
+		Critical
+	};
+
 	struct VRRenderScaleMemorySnapshot
 	{
 		bool valid = false;
@@ -350,6 +359,10 @@ public:
 		uint64_t availableForReservationBytes = 0;
 		uint64_t headroomBytes = 0;
 		double usageRatio = 0.0;
+		VRRenderScaleMemoryPressure observedPressure = VRRenderScaleMemoryPressure::Unknown;
+		VRRenderScaleMemoryPressure pressure = VRRenderScaleMemoryPressure::Unknown;
+		uint32_t pressureSinceFrame = 0;
+		uint32_t recoverySamples = 0;
 	};
 
 	/** @brief Immutable controller-visible profile at one transition milestone. */
@@ -453,6 +466,7 @@ public:
 	VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() const;
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
+	static const char* GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure);
 	VRRenderScaleResourceKey BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot& a_profile) const;
 	static VRRenderScaleResourceCompatibility CompareVRRenderScaleResourceKeys(
 		const VRRenderScaleResourceKey& a_current,

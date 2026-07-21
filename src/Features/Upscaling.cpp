@@ -135,6 +135,14 @@ namespace
 	constexpr uint32_t kVRRetiredIntermediateTextureTailFrames = 4u;
 	constexpr size_t kVRRetiredIntermediateTextureMaxSets = 4u;
 	constexpr uint32_t kVRRenderScaleMemorySampleIntervalFrames = 30u;
+	constexpr uint32_t kVRRenderScaleMemoryRecoverySamples = 4u;
+	constexpr uint64_t kVRRenderScaleMiB = 1024u * 1024u;
+	constexpr uint64_t kVRRenderScaleCriticalHeadroomBytes = 256u * kVRRenderScaleMiB;
+	constexpr uint64_t kVRRenderScaleHighHeadroomBytes = 512u * kVRRenderScaleMiB;
+	constexpr uint64_t kVRRenderScaleElevatedHeadroomBytes = 1024u * kVRRenderScaleMiB;
+	constexpr uint64_t kVRRenderScaleCriticalRecoveryHeadroomBytes = 384u * kVRRenderScaleMiB;
+	constexpr uint64_t kVRRenderScaleHighRecoveryHeadroomBytes = 768u * kVRRenderScaleMiB;
+	constexpr uint64_t kVRRenderScaleElevatedRecoveryHeadroomBytes = 1280u * kVRRenderScaleMiB;
 	constexpr uint32_t kVRRaceSexPostClosePresentationTailFrames = 60u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
@@ -16195,6 +16203,8 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		snapshot.sampleFrame = currentFrame;
 		snapshot.transitionEpoch = transitionEpoch;
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		snapshot.pressure = vrRenderScaleTransitionController.memory.pressure;
+		snapshot.pressureSinceFrame = vrRenderScaleTransitionController.memory.pressureSinceFrame;
 		vrRenderScaleTransitionController.memory = snapshot;
 		++vrRenderScaleTransitionController.revision;
 	};
@@ -16236,24 +16246,95 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 	snapshot.availableForReservationBytes = info.AvailableForReservation;
 	snapshot.headroomBytes = info.Budget > info.CurrentUsage ? info.Budget - info.CurrentUsage : 0u;
 	snapshot.usageRatio = static_cast<double>(info.CurrentUsage) / static_cast<double>(info.Budget);
+	if (snapshot.usageRatio >= 0.95 || snapshot.headroomBytes <= kVRRenderScaleCriticalHeadroomBytes) {
+		snapshot.observedPressure = VRRenderScaleMemoryPressure::Critical;
+	} else if (snapshot.usageRatio >= 0.875 || snapshot.headroomBytes <= kVRRenderScaleHighHeadroomBytes) {
+		snapshot.observedPressure = VRRenderScaleMemoryPressure::High;
+	} else if (snapshot.usageRatio >= 0.75 || snapshot.headroomBytes <= kVRRenderScaleElevatedHeadroomBytes) {
+		snapshot.observedPressure = VRRenderScaleMemoryPressure::Elevated;
+	} else {
+		snapshot.observedPressure = VRRenderScaleMemoryPressure::Normal;
+	}
+
+	VRRenderScaleMemoryPressure previousPressure = VRRenderScaleMemoryPressure::Unknown;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		const auto& previous = vrRenderScaleTransitionController.memory;
+		previousPressure = previous.pressure;
+		snapshot.pressure = snapshot.observedPressure;
+		if (previous.valid && previous.pressure != VRRenderScaleMemoryPressure::Unknown) {
+			const bool observedLower =
+				static_cast<uint32_t>(snapshot.observedPressure) < static_cast<uint32_t>(previous.pressure);
+			if (observedLower) {
+				bool recoveryHealthy = false;
+				switch (previous.pressure) {
+				case VRRenderScaleMemoryPressure::Critical:
+					recoveryHealthy = snapshot.usageRatio <= 0.90 && snapshot.headroomBytes >= kVRRenderScaleCriticalRecoveryHeadroomBytes;
+					break;
+				case VRRenderScaleMemoryPressure::High:
+					recoveryHealthy = snapshot.usageRatio <= 0.82 && snapshot.headroomBytes >= kVRRenderScaleHighRecoveryHeadroomBytes;
+					break;
+				case VRRenderScaleMemoryPressure::Elevated:
+					recoveryHealthy = snapshot.usageRatio <= 0.70 && snapshot.headroomBytes >= kVRRenderScaleElevatedRecoveryHeadroomBytes;
+					break;
+				default:
+					recoveryHealthy = true;
+					break;
+				}
+
+				const bool distinctFrame = previous.sampleFrame != currentFrame;
+				snapshot.recoverySamples = recoveryHealthy ?
+				                               previous.recoverySamples + static_cast<uint32_t>(distinctFrame) :
+				                               0u;
+				if (snapshot.recoverySamples < kVRRenderScaleMemoryRecoverySamples) {
+					snapshot.pressure = previous.pressure;
+				} else {
+					snapshot.recoverySamples = 0;
+				}
+			}
+		}
+		snapshot.pressureSinceFrame =
+			snapshot.pressure == previous.pressure && previous.pressureSinceFrame != 0 ?
+				previous.pressureSinceFrame :
+				currentFrame;
 		vrRenderScaleTransitionController.memory = snapshot;
 		++vrRenderScaleTransitionController.revision;
 	}
+	if (snapshot.pressure != previousPressure) {
+		const bool severe =
+			snapshot.pressure == VRRenderScaleMemoryPressure::High ||
+			snapshot.pressure == VRRenderScaleMemoryPressure::Critical;
+		if (severe) {
+			logger::warn(
+				"[VRRenderScale][Memory] Pressure {} -> {} at {:.1f}% usage with {}MiB headroom.",
+				GetVRRenderScaleMemoryPressureName(previousPressure),
+				GetVRRenderScaleMemoryPressureName(snapshot.pressure),
+				snapshot.usageRatio * 100.0,
+				snapshot.headroomBytes / kVRRenderScaleMiB);
+		} else if (ShouldEmitUpscalingDiagLogs()) {
+			logger::debug(
+				"[VRRenderScale][Memory] Pressure {} -> {} at {:.1f}% usage with {}MiB headroom.",
+				GetVRRenderScaleMemoryPressureName(previousPressure),
+				GetVRRenderScaleMemoryPressureName(snapshot.pressure),
+				snapshot.usageRatio * 100.0,
+				snapshot.headroomBytes / kVRRenderScaleMiB);
+		}
+	}
 
 	if (a_force && ShouldEmitUpscalingDiagLogs()) {
-		constexpr uint64_t kMiB = 1024u * 1024u;
 		logger::debug(
-			"[VRRenderScale][Memory] epoch={} frame={} usage={}MiB budget={}MiB headroom={}MiB reservation={}MiB availableReservation={}MiB ratio={:.3f}{}{}",
+			"[VRRenderScale][Memory] epoch={} frame={} usage={}MiB budget={}MiB headroom={}MiB reservation={}MiB availableReservation={}MiB ratio={:.3f} observed={} pressure={} recoverySamples={}{}{}",
 			snapshot.transitionEpoch,
 			snapshot.sampleFrame,
-			snapshot.currentUsageBytes / kMiB,
-			snapshot.budgetBytes / kMiB,
-			snapshot.headroomBytes / kMiB,
-			snapshot.currentReservationBytes / kMiB,
-			snapshot.availableForReservationBytes / kMiB,
+			snapshot.currentUsageBytes / kVRRenderScaleMiB,
+			snapshot.budgetBytes / kVRRenderScaleMiB,
+			snapshot.headroomBytes / kVRRenderScaleMiB,
+			snapshot.currentReservationBytes / kVRRenderScaleMiB,
+			snapshot.availableForReservationBytes / kVRRenderScaleMiB,
 			snapshot.usageRatio,
+			GetVRRenderScaleMemoryPressureName(snapshot.observedPressure),
+			GetVRRenderScaleMemoryPressureName(snapshot.pressure),
+			snapshot.recoverySamples,
 			a_reason && *a_reason ? " reason=" : "",
 			a_reason && *a_reason ? a_reason : "");
 	}
@@ -23892,6 +23973,24 @@ const char* Upscaling::GetVRRenderScaleTransitionStateName(VRRenderScaleTransiti
 		return "Stabilizing";
 	case VRRenderScaleTransitionState::Active:
 		return "Active";
+	default:
+		return "Unknown";
+	}
+}
+
+const char* Upscaling::GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure)
+{
+	switch (a_pressure) {
+	case VRRenderScaleMemoryPressure::Unknown:
+		return "Unknown";
+	case VRRenderScaleMemoryPressure::Normal:
+		return "Normal";
+	case VRRenderScaleMemoryPressure::Elevated:
+		return "Elevated";
+	case VRRenderScaleMemoryPressure::High:
+		return "High";
+	case VRRenderScaleMemoryPressure::Critical:
+		return "Critical";
 	default:
 		return "Unknown";
 	}

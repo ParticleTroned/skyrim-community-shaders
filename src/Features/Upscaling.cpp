@@ -25387,10 +25387,10 @@ bool Upscaling::IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMet
 	switch (a_upscaleMethod) {
 	case UpscaleMethod::kDLSS:
 		return !pendingDLSSReset.load(std::memory_order_acquire) &&
-		       (vrDLSSRuntimeResourceGeneration == 0 || vrDLSSRuntimeResourceGeneration == generation);
+		       vrDLSSRuntimeResourceGeneration == generation;
 	case UpscaleMethod::kFSR:
 		return !pendingFSRReset.load(std::memory_order_acquire) &&
-		       (vrFSRRuntimeResourceGeneration == 0 || vrFSRRuntimeResourceGeneration == generation);
+		       vrFSRRuntimeResourceGeneration == generation;
 	default:
 		return true;
 	}
@@ -25502,15 +25502,19 @@ void Upscaling::RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VR
 		target.runtimeGeneration = runtimeGeneration;
 		target.stateFrame = frame;
 		target.resourcesPresent = resourcesPresent;
+		const auto increment = [](uint32_t& a_value) {
+			if (a_value != std::numeric_limits<uint32_t>::max())
+				++a_value;
+		};
 		if (a_phase == VRVendorRuntimeLifecyclePhase::Creating)
-			++target.attempts;
+			increment(target.attempts);
 		if (a_phase == VRVendorRuntimeLifecyclePhase::WaitingForDrain)
-			++target.deferrals;
+			increment(target.deferrals);
 		if (a_phase == VRVendorRuntimeLifecyclePhase::Failed)
-			++target.failures;
+			increment(target.failures);
 		target.readyForContract =
 			a_phase == VRVendorRuntimeLifecyclePhase::Ready &&
-			(requestedGeneration == 0 || runtimeGeneration == 0 || runtimeGeneration == requestedGeneration);
+			(requestedGeneration == 0 || runtimeGeneration == requestedGeneration);
 		lifecycle = target;
 		revision = ++vrRenderScaleTransitionController.revision;
 	}

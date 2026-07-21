@@ -33,7 +33,7 @@ namespace
 	constexpr float kFeatureCostDisplayEpsilonMs = 0.0005f;
 	constexpr float kFramePacingDetectionEpsilonMs = 1.0f;
 
-	constexpr std::array<std::string_view, 12> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 13> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"ScreenSpaceShadows",
 		"ScreenSpaceGI",
@@ -45,6 +45,7 @@ namespace
 		"VolumetricShadows",
 		"WetnessEffects",
 		"SubsurfaceScattering",
+		"GrassLighting",
 		"GrassCollision"
 	};
 
@@ -334,6 +335,9 @@ namespace
 				"EnableSplashes",
 				"EnableRipples",
 				"EnableVanillaRipples" });
+		}
+		if (shortName == "GrassLighting") {
+			return MakeJsonMask({ "Enabled", "ComplexGrassThreshold" });
 		}
 
 		const json mask = feature->CapturePerformanceSettingsState();
@@ -1053,6 +1057,8 @@ namespace
 			return "the Wetness master toggle is switched off; active wetness, raindrop, splash, and custom ripple work stops, while the installed shader path and vanilla-ripple policy remain the same in both windows.";
 		if (shortName == "SubsurfaceScattering")
 			return "Subsurface Scattering is switched off.";
+		if (shortName == "GrassLighting")
+			return "the Grass Lighting runtime toggle is switched off, so grass uses the basic pixel-shading path; the installed shader permutation and vertex work remain the same in both windows.";
 		if (shortName == "GrassCollision")
 			return "Grass Collision is switched off.";
 

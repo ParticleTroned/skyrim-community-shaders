@@ -45,10 +45,18 @@ void GrassLighting::SanitizeSettings()
 	settings.SubsurfaceScatteringAmount = ClampSubsurfaceScatteringAmount(
 		settings.SubsurfaceScatteringAmount,
 		Settings{}.SubsurfaceScatteringAmount);
+	if (std::isfinite(settings.ComplexGrassThreshold)) {
+		settings.ComplexGrassThreshold = std::clamp(
+			settings.ComplexGrassThreshold,
+			kComplexGrassThresholdMin,
+			kComplexGrassThresholdMax);
+	} else {
+		settings.ComplexGrassThreshold = Settings{}.ComplexGrassThreshold;
+	}
 	settings.Enabled = settings.Enabled != 0;
 }
 
-void GrassLighting::DrawSettings()
+bool GrassLighting::DrawEnabledCheckbox()
 {
 	SanitizeSettings();
 	bool enabled = settings.Enabled != 0;
@@ -56,6 +64,29 @@ void GrassLighting::DrawSettings()
 		settings.Enabled = enabled ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Enables enhanced grass lighting at runtime. Disable to use the basic grass lighting path without restarting.");
+	return enabled;
+}
+
+void GrassLighting::DrawComplexGrassDetectionThreshold()
+{
+	ImGui::SliderFloat(
+		"Complex Grass Detection",
+		&settings.ComplexGrassThreshold,
+		kComplexGrassThresholdMin,
+		kComplexGrassThresholdMax,
+		"%.3f",
+		ImGuiSliderFlags_AlwaysClamp);
+	SanitizeSettings();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Controls how strictly non-PBR complex grass textures are detected. Lower values are more strict.");
+		ImGui::TextUnformatted("Classifying fewer textures as complex can reduce enhanced normal and specular work, but may change their appearance.");
+		ImGui::TextUnformatted("The performance effect depends on the grass textures currently visible.");
+	}
+}
+
+void GrassLighting::DrawSettings()
+{
+	const bool enabled = DrawEnabledCheckbox();
 
 	ImGui::BeginDisabled(!enabled);
 
@@ -86,12 +117,7 @@ void GrassLighting::DrawSettings()
 		}
 
 		ImGui::Spacing();
-		ImGui::TextWrapped("Complex Grass Detection");
-		ImGui::SliderFloat("Detection Threshold", &settings.ComplexGrassThreshold, 0.001f, 0.1f, "%.3f");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Threshold for detecting complex grass textures. Lower values are more strict.");
-		}
+		DrawComplexGrassDetectionThreshold();
 
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -156,12 +182,7 @@ void GrassLighting::DrawSettings()
 
 void GrassLighting::DrawEssentialSettings()
 {
-	SanitizeSettings();
-	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable", &enabled))
-		settings.Enabled = enabled ? 1u : 0u;
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Enables enhanced grass lighting at runtime. Disable to use the basic grass lighting path without restarting.");
+	const bool enabled = DrawEnabledCheckbox();
 
 	ImGui::BeginDisabled(!enabled);
 	ImGui::SliderFloat("Glossiness", &settings.Glossiness, kGlossinessMin, kGlossinessMax, "%.0f", ImGuiSliderFlags_AlwaysClamp);
@@ -177,6 +198,14 @@ void GrassLighting::DrawEssentialSettings()
 	ImGui::Checkbox("Wrapped Lighting for Vanilla Grass", reinterpret_cast<bool*>(&settings.EnableWrappedLighting));
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Softens lighting on vanilla/basic grass. Complex grass is unaffected.");
+	ImGui::EndDisabled();
+}
+
+void GrassLighting::DrawPerformanceSettings(bool)
+{
+	const bool enabled = DrawEnabledCheckbox();
+	ImGui::BeginDisabled(!enabled);
+	DrawComplexGrassDetectionThreshold();
 	ImGui::EndDisabled();
 }
 

@@ -308,6 +308,15 @@ public:
 		RetireTransientResources = 1u << 6
 	};
 
+	enum class VRRenderScaleMemoryPressure : uint8_t
+	{
+		Unknown,
+		Normal,
+		Elevated,
+		High,
+		Critical
+	};
+
 	/** @brief Immutable physical work plan admitted for one transition epoch. */
 	struct VRRenderScaleRelatchPlan
 	{
@@ -327,6 +336,12 @@ public:
 		bool recreateFSRResources = false;
 		bool waitForFSRDrain = false;
 		bool lowPeakNativeRestore = false;
+		VRRenderScaleMemoryPressure memoryPressure = VRRenderScaleMemoryPressure::Unknown;
+		uint64_t estimatedCurrentBytes = 0;
+		uint64_t estimatedTargetBytes = 0;
+		uint64_t estimatedAdditionalBytes = 0;
+		bool pressureCleanupRequired = false;
+		bool pressureDeferred = false;
 	};
 
 	struct VRRenderScaleRetirementSnapshot
@@ -337,15 +352,6 @@ public:
 		uint32_t nextCleanupFrame = 0;
 		bool fencePending = false;
 		bool capacityBlocked = false;
-	};
-
-	enum class VRRenderScaleMemoryPressure : uint8_t
-	{
-		Unknown,
-		Normal,
-		Elevated,
-		High,
-		Critical
 	};
 
 	struct VRRenderScaleMemorySnapshot
@@ -471,6 +477,7 @@ public:
 	static VRRenderScaleResourceCompatibility CompareVRRenderScaleResourceKeys(
 		const VRRenderScaleResourceKey& a_current,
 		const VRRenderScaleResourceKey& a_target);
+	static uint64_t EstimateVRRenderScaleResourceBytes(const VRRenderScaleResourceKey& a_key);
 	uint32_t GetActiveVRRenderScaleContractGeneration() const;
 	bool IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMethod) const;
 	void MarkVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);

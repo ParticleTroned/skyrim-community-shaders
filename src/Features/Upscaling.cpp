@@ -15350,6 +15350,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchSignature.displayEyeWidth = perfMode.trueHMDEyeWidth;
 		relatchSignature.displayEyeHeight = perfMode.trueHMDEyeHeight;
 		MaybeArmVRRenderScaleMemoryRelief(relatchSignature, relatchOrigin, state->frameCount);
+		const auto memoryAtAdmission = GetVRRenderScaleTransitionSnapshot().memory;
+		const bool pressureMemoryRelief =
+			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Elevated ||
+			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::High ||
+			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Critical;
+		if (pressureMemoryRelief && !IsVRRenderScaleMemoryReliefActive()) {
+			vrRenderScaleMemoryReliefEndFrame.store(state->frameCount + kVRRenderScaleMemoryReliefFrames, std::memory_order_release);
+			vrRenderScaleMemoryReliefCleanEyeMask.store(0, std::memory_order_release);
+			vrRenderScaleMemoryReliefLogged.store(false, std::memory_order_release);
+		}
 		const bool memoryReliefActiveForRelatch = IsVRRenderScaleMemoryReliefActive();
 		if (memoryReliefActiveForRelatch)
 			ApplyVRRenderScaleMemoryReliefTransitionCleanup("render-target relatch");
@@ -15453,7 +15463,50 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			addRelatchAction(VRRenderScaleRelatchAction::UpdateOptions);
 		if (memoryReliefActiveForRelatch || lowPeakNativeRestoreRelatch)
 			addRelatchAction(VRRenderScaleRelatchAction::RetireTransientResources);
+		relatchPlan.memoryPressure = memoryAtAdmission.pressure;
+		relatchPlan.estimatedCurrentBytes = EstimateVRRenderScaleResourceBytes(relatchPlan.current);
+		relatchPlan.estimatedTargetBytes = EstimateVRRenderScaleResourceBytes(relatchPlan.target);
+		const bool requiresParallelAllocation =
+			!relatchPlan.compatibility.canReuseRenderTargets ||
+			!relatchPlan.compatibility.canReuseVendorRuntime;
+		relatchPlan.estimatedAdditionalBytes = requiresParallelAllocation ?
+		                                           relatchPlan.estimatedTargetBytes :
+		                                           (relatchPlan.estimatedTargetBytes > relatchPlan.estimatedCurrentBytes ?
+														   relatchPlan.estimatedTargetBytes - relatchPlan.estimatedCurrentBytes :
+														   0u);
+		relatchPlan.pressureCleanupRequired = pressureMemoryRelief && relatchPlan.actionMask != 0;
+		if (relatchPlan.pressureCleanupRequired)
+			ServiceVRIntermediateTextureCleanup(true);
+		const bool allocationGrowth = relatchPlan.estimatedAdditionalBytes != 0;
+		const bool insufficientHeadroom =
+			allocationGrowth &&
+			memoryAtAdmission.valid &&
+			relatchPlan.estimatedAdditionalBytes > memoryAtAdmission.headroomBytes;
+		const bool severePressureRetirementWait =
+			allocationGrowth &&
+			(memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::High ||
+				memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Critical) &&
+			HasPendingVRIntermediateTextureCleanup();
+		const bool criticalGrowthDeferred =
+			allocationGrowth &&
+			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Critical;
+		relatchPlan.pressureDeferred =
+			insufficientHeadroom ||
+			severePressureRetirementWait ||
+			criticalGrowthDeferred;
 		if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
+			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+			return false;
+		}
+		if (relatchPlan.pressureDeferred) {
+			logger::warn(
+				"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB headroom={} MiB pendingRetirement={} criticalGrowth={}",
+				relatchEpoch,
+				GetVRRenderScaleMemoryPressureName(memoryAtAdmission.pressure),
+				relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
+				memoryAtAdmission.headroomBytes / kVRRenderScaleMiB,
+				BoolText(severePressureRetirementWait),
+				BoolText(criticalGrowthDeferred));
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
 			return false;
 		}
@@ -24104,6 +24157,40 @@ Upscaling::VRRenderScaleResourceCompatibility Upscaling::CompareVRRenderScaleRes
 	return compatibility;
 }
 
+uint64_t Upscaling::EstimateVRRenderScaleResourceBytes(const VRRenderScaleResourceKey& a_key)
+{
+	if (!a_key.valid || !a_key.active)
+		return 0;
+
+	const uint64_t contextCount = std::max(a_key.contextCount, 1u);
+	const uint64_t inputPixels =
+		static_cast<uint64_t>(a_key.renderEyeWidth) * a_key.renderEyeHeight * contextCount;
+	const uint64_t outputPixels =
+		static_cast<uint64_t>(a_key.displayEyeWidth) * a_key.displayEyeHeight * contextCount;
+	uint64_t estimatedBytes = inputPixels * 24u + outputPixels * 8u;
+
+	switch (a_key.backend) {
+	case VRRenderScaleBackendKind::DLSS:
+		estimatedBytes += outputPixels * 8u + contextCount * 96u * kVRRenderScaleMiB;
+		break;
+	case VRRenderScaleBackendKind::FSRHost:
+		estimatedBytes += inputPixels * 16u + outputPixels * 8u + contextCount * 64u * kVRRenderScaleMiB;
+		break;
+	case VRRenderScaleBackendKind::FSRRuntime:
+	case VRRenderScaleBackendKind::FSR4Runtime:
+		estimatedBytes += inputPixels * 24u + outputPixels * 16u + contextCount * 96u * kVRRenderScaleMiB;
+		break;
+	default:
+		break;
+	}
+
+	if (a_key.foveatedVendorDispatch)
+		estimatedBytes += outputPixels * 8u;
+	if (a_key.peripheryTAA)
+		estimatedBytes += inputPixels * 16u;
+	return estimatedBytes;
+}
+
 void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request)
 {
 	const auto profile = BuildVRRenderScaleRequestProfile(*this, a_request);
@@ -24187,7 +24274,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} preserveDLSS={} preserveFSR={} recreateFSR={} waitFSRDrain={} lowPeakRestore={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} preserveDLSS={} preserveFSR={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -24200,7 +24287,13 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			BoolText(a_plan.preserveFSRResources),
 			BoolText(a_plan.recreateFSRResources),
 			BoolText(a_plan.waitForFSRDrain),
-			BoolText(a_plan.lowPeakNativeRestore));
+			BoolText(a_plan.lowPeakNativeRestore),
+			GetVRRenderScaleMemoryPressureName(a_plan.memoryPressure),
+			a_plan.estimatedCurrentBytes / kVRRenderScaleMiB,
+			a_plan.estimatedTargetBytes / kVRRenderScaleMiB,
+			a_plan.estimatedAdditionalBytes / kVRRenderScaleMiB,
+			BoolText(a_plan.pressureCleanupRequired),
+			BoolText(a_plan.pressureDeferred));
 	}
 	return true;
 }

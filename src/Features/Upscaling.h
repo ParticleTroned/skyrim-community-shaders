@@ -371,6 +371,23 @@ public:
 		uint32_t recoverySamples = 0;
 	};
 
+	struct VRRenderScalePostLoadRecoverySnapshot
+	{
+		bool active = false;
+		uint64_t recoveryEpoch = 0;
+		uint64_t transitionEpoch = 0;
+		uint32_t startFrame = 0;
+		uint32_t lastSampleFrame = 0;
+		uint32_t lastSettledFrame = 0;
+		uint32_t settledSamples = 0;
+		uint64_t baselineUsageBytes = 0;
+		uint64_t peakUsageBytes = 0;
+		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
+		bool cleanupArmed = false;
+		bool cleanupDrained = false;
+		bool relatchAdmitted = false;
+	};
+
 	/** @brief Immutable controller-visible profile at one transition milestone. */
 	struct VRRenderScaleProfileSnapshot
 	{
@@ -413,6 +430,7 @@ public:
 		VRRenderScaleRelatchPlan relatchPlan{};
 		VRRenderScaleRetirementSnapshot retirement{};
 		VRRenderScaleMemorySnapshot memory{};
+		VRRenderScalePostLoadRecoverySnapshot postLoadRecovery{};
 	};
 
 	struct PerfModeState
@@ -1036,6 +1054,8 @@ public:
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
+	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
+	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	mutable std::mutex pendingVRRenderScaleRequestMutex;
 	std::optional<VRRenderScaleDesiredProfile> pendingVRRenderScaleRequest;
@@ -1059,6 +1079,7 @@ public:
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateEpoch{ 0 };
+	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateRecoveryEpoch{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<uint32_t> vrRenderScaleNextContractGeneration{ 1 };
@@ -1187,6 +1208,10 @@ public:
 	bool CanAdmitVRIntermediateRetirement(uint64_t a_epoch);
 	void UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked = false);
 	bool SampleVRRenderScaleMemory(bool a_force = false, const char* a_reason = nullptr);
+	uint64_t BeginVRRenderScalePostLoadRecovery();
+	void PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch);
+	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
+	void CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);

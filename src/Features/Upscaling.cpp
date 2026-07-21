@@ -136,6 +136,7 @@ namespace
 	constexpr size_t kVRRetiredIntermediateTextureMaxSets = 4u;
 	constexpr uint32_t kVRRenderScaleMemorySampleIntervalFrames = 30u;
 	constexpr uint32_t kVRRenderScaleMemoryRecoverySamples = 4u;
+	constexpr uint32_t kVRRenderScalePostLoadMemorySettleSamples = 2u;
 	constexpr uint64_t kVRRenderScaleMiB = 1024u * 1024u;
 	constexpr uint64_t kVRRenderScaleCriticalHeadroomBytes = 256u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleHighHeadroomBytes = 512u * kVRRenderScaleMiB;
@@ -12564,9 +12565,11 @@ void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 	pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
 	pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 	pendingVRRenderScaleRecoverySnapshot = {};
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	pendingPostLoadRuntimeResetEpoch.store(0, std::memory_order_release);
 	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 	ClearVRRenderScaleInfoTransition();
 	if (hasPendingVRTransition)
@@ -14788,6 +14791,8 @@ void Upscaling::RequestPostLoadRuntimeReset()
 	if (!globals::game::isVR)
 		return;
 
+	const uint64_t recoveryEpoch = BeginVRRenderScalePostLoadRecovery();
+	pendingPostLoadRuntimeResetEpoch.store(recoveryEpoch, std::memory_order_release);
 	postLoadRuntimeResetPending.store(true, std::memory_order_release);
 	InvalidateFrameScopedUpscalingState();
 	auto* state = globals::state;
@@ -14795,7 +14800,8 @@ void Upscaling::RequestPostLoadRuntimeReset()
 	if (emitDiagLogs) {
 		const auto method = GetConfiguredUpscaleMethodForTransition();
 		logger::debug(
-			"[Upscaling][Diag] Armed VR post-load runtime reset frame={} method={} renderScaleMode={} perfMode={} quality={} pendingDLSS={} pendingFSR={} screen={}x{}",
+			"[Upscaling][Diag] Armed VR post-load runtime reset recoveryEpoch={} frame={} method={} renderScaleMode={} perfMode={} quality={} pendingDLSS={} pendingFSR={} screen={}x{}",
+			recoveryEpoch,
 			state ? state->frameCount : 0u,
 			magic_enum::enum_name(method),
 			BoolText(IsRenderScaleModeRequested()),
@@ -14853,6 +14859,15 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(requirePostLoadSettle, std::memory_order_release);
 	}
 	const auto effectiveOrigin = storeRelatchOrigin ? a_origin : currentOrigin;
+	if (effectiveOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
+		(IsVRRenderScaleRecoveryOrigin(effectiveOrigin) &&
+			pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire) != 0)) {
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(
+			pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire),
+			std::memory_order_release);
+	} else if (storeRelatchOrigin) {
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
+	}
 	if (IsVRRenderScaleRecoveryOrigin(effectiveOrigin) ||
 		(effectiveOrigin == VRUpscalingTransitionOrigin::PostLoadSync &&
 			a_recoverySnapshot &&
@@ -14919,6 +14934,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
 		pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 		pendingVRRenderScaleRecoverySnapshot = {};
 		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
@@ -14991,6 +15007,17 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 	}
 	loggedRelatchMemoryReliefCleanupDefer = false;
+	const uint64_t previewPostLoadRecoveryEpoch =
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire);
+	if ((previewRelatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
+			IsVRRenderScaleRecoveryOrigin(previewRelatchOrigin)) &&
+		previewPostLoadRecoveryEpoch != 0 &&
+		!CanAdmitVRRenderScalePostLoadRecoveryRelatch(
+			previewPostLoadRecoveryEpoch,
+			pendingPerfModeRenderTargetRecreateEpoch.load(std::memory_order_acquire))) {
+		MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
+		return false;
+	}
 
 	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition()) {
 		return false;
@@ -15018,6 +15045,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return true;
 	const auto relatchOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 	const uint64_t relatchEpoch = pendingPerfModeRenderTargetRecreateEpoch.load(std::memory_order_acquire);
+	const uint64_t postLoadRecoveryEpoch =
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire);
 	const auto queuedRecoverySnapshot = pendingVRRenderScaleRecoverySnapshot;
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	const uint32_t retryDelayFrames = std::max(
@@ -15029,6 +15058,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
 		pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 		pendingVRRenderScaleRecoverySnapshot = {};
 	};
@@ -15874,6 +15904,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchTargetEngineSize);
 	}
 	clearRelatchDelay();
+	if ((relatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
+			IsVRRenderScaleRecoveryOrigin(relatchOrigin)) &&
+		postLoadRecoveryEpoch != 0)
+		CompleteVRRenderScalePostLoadRecovery(postLoadRecoveryEpoch, relatchEpoch);
 	clearRelatchRetryLogs();
 	if (emitDiagLogs) {
 		logger::debug(
@@ -16259,6 +16293,13 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		snapshot.pressure = vrRenderScaleTransitionController.memory.pressure;
 		snapshot.pressureSinceFrame = vrRenderScaleTransitionController.memory.pressureSinceFrame;
 		vrRenderScaleTransitionController.memory = snapshot;
+		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		if (recovery.active) {
+			recovery.lastSampleFrame = currentFrame;
+			recovery.peakUsageBytes = std::max(recovery.peakUsageBytes, snapshot.currentUsageBytes);
+			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(recovery.peakPressure))
+				recovery.peakPressure = snapshot.pressure;
+		}
 		++vrRenderScaleTransitionController.revision;
 	};
 
@@ -16392,6 +16433,154 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 			a_reason && *a_reason ? a_reason : "");
 	}
 	return true;
+}
+
+uint64_t Upscaling::BeginVRRenderScalePostLoadRecovery()
+{
+	uint64_t recoveryEpoch = nextVRRenderScalePostLoadRecoveryEpoch.fetch_add(1, std::memory_order_acq_rel);
+	if (recoveryEpoch == 0)
+		recoveryEpoch = nextVRRenderScalePostLoadRecoveryEpoch.fetch_add(1, std::memory_order_acq_rel);
+
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		const auto memory = vrRenderScaleTransitionController.memory;
+		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		recovery = {};
+		recovery.active = true;
+		recovery.recoveryEpoch = recoveryEpoch;
+		recovery.startFrame = frame;
+		recovery.baselineUsageBytes = memory.currentUsageBytes;
+		recovery.peakUsageBytes = memory.currentUsageBytes;
+		recovery.peakPressure = memory.pressure;
+		++vrRenderScaleTransitionController.revision;
+	}
+	return recoveryEpoch;
+}
+
+void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
+{
+	if (a_recoveryEpoch == 0)
+		return;
+
+	bool active = false;
+	bool cleanupArmed = false;
+	uint64_t transitionEpoch = 0;
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		const auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		active = recovery.active && recovery.recoveryEpoch == a_recoveryEpoch;
+		cleanupArmed = recovery.cleanupArmed;
+		transitionEpoch = recovery.transitionEpoch;
+	}
+	if (!active)
+		return;
+
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
+	if (!IsVRRenderScaleMemoryReliefActive()) {
+		vrRenderScaleMemoryReliefEndFrame.store(frame + kVRRenderScaleMemoryReliefFrames, std::memory_order_release);
+		vrRenderScaleMemoryReliefCleanEyeMask.store(0, std::memory_order_release);
+		vrRenderScaleMemoryReliefLogged.store(false, std::memory_order_release);
+	}
+
+	if (!cleanupArmed && CanAdmitVRIntermediateRetirement(transitionEpoch)) {
+		ApplyVRRenderScaleMemoryReliefTransitionCleanup("post-load recovery");
+		cleanupArmed = true;
+	}
+	ServiceVRIntermediateTextureCleanup(true);
+	SampleVRRenderScaleMemory(true, "post-load recovery");
+
+	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+	if (!recovery.active || recovery.recoveryEpoch != a_recoveryEpoch)
+		return;
+	recovery.cleanupArmed = cleanupArmed;
+	recovery.cleanupDrained = cleanupArmed && !HasPendingVRIntermediateTextureCleanup();
+	++vrRenderScaleTransitionController.revision;
+}
+
+bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch)
+{
+	PrepareVRRenderScalePostLoadRecovery(a_recoveryEpoch);
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
+	bool admitted = false;
+	VRRenderScalePostLoadRecoverySnapshot recoverySnapshot{};
+	VRRenderScaleMemorySnapshot memorySnapshot{};
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		if (recovery.active && recovery.recoveryEpoch != a_recoveryEpoch)
+			return false;
+		if (!recovery.active)
+			return true;
+
+		recovery.transitionEpoch = a_transitionEpoch;
+		const auto& memory = vrRenderScaleTransitionController.memory;
+		const bool memorySettled =
+			!memory.valid ||
+			memory.pressure == VRRenderScaleMemoryPressure::Unknown ||
+			memory.pressure == VRRenderScaleMemoryPressure::Normal ||
+			memory.pressure == VRRenderScaleMemoryPressure::Elevated;
+		if (recovery.cleanupDrained && memorySettled) {
+			if (recovery.lastSettledFrame != frame) {
+				recovery.settledSamples = recovery.lastSettledFrame != 0 && frame == recovery.lastSettledFrame + 1 ?
+				                              recovery.settledSamples + 1u :
+				                              1u;
+				recovery.lastSettledFrame = frame;
+			}
+		} else {
+			recovery.settledSamples = 0;
+			recovery.lastSettledFrame = 0;
+		}
+		admitted = recovery.settledSamples >= kVRRenderScalePostLoadMemorySettleSamples;
+		recovery.relatchAdmitted = admitted;
+		recoverySnapshot = recovery;
+		memorySnapshot = memory;
+		++vrRenderScaleTransitionController.revision;
+	}
+
+	if (!admitted && ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} pressure={} settledSamples={}/{} peak={}MiB",
+			a_recoveryEpoch,
+			a_transitionEpoch,
+			BoolText(recoverySnapshot.cleanupArmed),
+			BoolText(recoverySnapshot.cleanupDrained),
+			GetVRRenderScaleMemoryPressureName(memorySnapshot.pressure),
+			recoverySnapshot.settledSamples,
+			kVRRenderScalePostLoadMemorySettleSamples,
+			recoverySnapshot.peakUsageBytes / kVRRenderScaleMiB);
+	}
+	return admitted;
+}
+
+void Upscaling::CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch)
+{
+	if (a_recoveryEpoch == 0)
+		return;
+
+	VRRenderScalePostLoadRecoverySnapshot completed{};
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		if (recovery.recoveryEpoch != a_recoveryEpoch)
+			return;
+		recovery.active = false;
+		recovery.transitionEpoch = a_transitionEpoch != 0 ? a_transitionEpoch : recovery.transitionEpoch;
+		recovery.relatchAdmitted = true;
+		completed = recovery;
+		++vrRenderScaleTransitionController.revision;
+	}
+	uint64_t expectedEpoch = a_recoveryEpoch;
+	pendingPostLoadRuntimeResetEpoch.compare_exchange_strong(expectedEpoch, 0, std::memory_order_acq_rel);
+	logger::debug(
+		"[VRRenderScale][PostLoad] Completed recoveryEpoch={} transitionEpoch={} duration={} frame(s) baseline={}MiB peak={}MiB peakPressure={}",
+		completed.recoveryEpoch,
+		completed.transitionEpoch,
+		globals::state ? ElapsedFrames(completed.startFrame, std::max(globals::state->frameCount, 1u)) : 0u,
+		completed.baselineUsageBytes / kVRRenderScaleMiB,
+		completed.peakUsageBytes / kVRRenderScaleMiB,
+		GetVRRenderScaleMemoryPressureName(completed.peakPressure));
 }
 
 bool Upscaling::HasVRRenderScaleMemoryReliefCleanupPending() const
@@ -17045,6 +17234,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 {
 	if (!postLoadRuntimeResetPending.load(std::memory_order_acquire))
 		return true;
+	const uint64_t recoveryEpoch = pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire);
 
 	auto* state = globals::state;
 	if (IsSaveLoadTransitionContextActive(state)) {
@@ -17068,8 +17258,12 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	if (!globals::game::isVR)
 		return true;
 
-	if (!renderScalePostLoadResetRelevant)
+	if (!renderScalePostLoadResetRelevant) {
+		CompleteVRRenderScalePostLoadRecovery(recoveryEpoch, 0);
 		return true;
+	}
+
+	PrepareVRRenderScalePostLoadRecovery(recoveryEpoch);
 
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	if (emitDiagLogs) {
@@ -17105,14 +17299,20 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 			return false;
 		}
 
+		bool recoveryOwnedByRelatch = false;
 		if (resetFSRRenderScaleBootLatch) {
 			RefreshRuntimeResolutionState();
 			RecreateVendorRuntimeResources(GetRuntimeUpscaleMethod(), true);
-			if (queueFSRRenderScaleRelatch)
+			if (queueFSRRenderScaleRelatch) {
 				RequestPerfModeRenderTargetRecreate("post-load render-scale relatch", VRUpscalingTransitionOrigin::PostLoadSync, &preResetBootSnapshot);
+				recoveryOwnedByRelatch =
+					pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire) == recoveryEpoch;
+			}
 		} else {
 			RecreateVendorRuntimeResources(a_upscaleMethod, true);
 		}
+		if (!recoveryOwnedByRelatch)
+			CompleteVRRenderScalePostLoadRecovery(recoveryEpoch, 0);
 	} catch (const std::exception& e) {
 		logger::error("[Upscaling] VR post-load runtime reset failed: {}", e.what());
 		if (!MarkSubmitStageDeviceLostIfNeeded(e, "VR post-load runtime reset"))
@@ -22355,9 +22555,11 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
 	pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 	pendingVRRenderScaleRecoverySnapshot = {};
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	pendingPostLoadRuntimeResetEpoch.store(0, std::memory_order_release);
 	vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
 	vrRenderScaleMemoryAdapter = nullptr;
 	vrRenderScaleMemoryAdapterDevice = nullptr;

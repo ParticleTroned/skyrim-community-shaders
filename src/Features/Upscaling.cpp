@@ -16464,6 +16464,13 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 				previous.pressureSinceFrame :
 				currentFrame;
 		vrRenderScaleTransitionController.memory = snapshot;
+		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		if (recovery.active) {
+			recovery.lastSampleFrame = currentFrame;
+			recovery.peakUsageBytes = std::max(recovery.peakUsageBytes, snapshot.currentUsageBytes);
+			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(recovery.peakPressure))
+				recovery.peakPressure = snapshot.pressure;
+		}
 		++vrRenderScaleTransitionController.revision;
 	}
 	if (snapshot.pressure != previousPressure) {
@@ -16589,10 +16596,10 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 		recovery.transitionEpoch = a_transitionEpoch;
 		const auto& memory = vrRenderScaleTransitionController.memory;
 		const bool memorySettled =
-			!memory.valid ||
-			memory.pressure == VRRenderScaleMemoryPressure::Unknown ||
-			memory.pressure == VRRenderScaleMemoryPressure::Normal ||
-			memory.pressure == VRRenderScaleMemoryPressure::Elevated;
+			memory.valid &&
+			memory.sampleFrame == frame &&
+			(memory.pressure == VRRenderScaleMemoryPressure::Normal ||
+				memory.pressure == VRRenderScaleMemoryPressure::Elevated);
 		if (recovery.cleanupDrained && memorySettled) {
 			if (recovery.lastSettledFrame != frame) {
 				recovery.settledSamples = recovery.lastSettledFrame != 0 && frame == recovery.lastSettledFrame + 1 ?
@@ -16643,7 +16650,7 @@ void Upscaling::CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, 
 			return;
 		recovery.active = false;
 		recovery.transitionEpoch = a_transitionEpoch != 0 ? a_transitionEpoch : recovery.transitionEpoch;
-		recovery.relatchAdmitted = true;
+		recovery.relatchAdmitted = recovery.relatchAdmitted || a_transitionEpoch != 0;
 		completed = recovery;
 		++vrRenderScaleTransitionController.revision;
 	}

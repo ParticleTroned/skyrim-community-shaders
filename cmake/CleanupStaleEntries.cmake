@@ -30,7 +30,13 @@ function(remove_empty_directories ROOT_DIR)
 endfunction()
 
 if(MODE STREQUAL "AIO")
-    file(GLOB FEATURE_PATHS LIST_DIRECTORIES TRUE "${SOURCE_DIR}/features/*")
+    if(NOT DEFINED FEATURE_PATHS_FILE OR NOT EXISTS "${FEATURE_PATHS_FILE}")
+        message(
+            FATAL_ERROR
+            "AIO cleanup requires an existing FEATURE_PATHS_FILE"
+        )
+    endif()
+    file(STRINGS "${FEATURE_PATHS_FILE}" FEATURE_PATHS)
 
     file(GLOB_RECURSE _current_aio_sources LIST_DIRECTORIES FALSE "${SOURCE_DIR}/package/*")
     list(FILTER _current_aio_sources EXCLUDE REGEX "/Tests/")
@@ -80,7 +86,16 @@ if(MODE STREQUAL "AIO")
     endforeach()
 
 elseif(MODE STREQUAL "SHADERS")
-    file(GLOB FEATURE_SHADER_PATHS LIST_DIRECTORIES TRUE "${SOURCE_DIR}/features/*/Shaders")
+    if(
+        NOT DEFINED FEATURE_SHADER_PATHS_FILE
+        OR NOT EXISTS "${FEATURE_SHADER_PATHS_FILE}"
+    )
+        message(
+            FATAL_ERROR
+            "Shader cleanup requires an existing FEATURE_SHADER_PATHS_FILE"
+        )
+    endif()
+    file(STRINGS "${FEATURE_SHADER_PATHS_FILE}" FEATURE_SHADER_PATHS)
 
     file(GLOB_RECURSE _package_shaders LIST_DIRECTORIES FALSE "${SOURCE_DIR}/package/Shaders/*")
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")

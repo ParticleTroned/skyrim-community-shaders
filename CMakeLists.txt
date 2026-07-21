@@ -669,6 +669,16 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # deploys from copying everything every build.
     set(_prepare_aio_cmds)
 
+    # Pass the already-filtered feature set through a file. Re-globbing inside
+    # the cleanup script would reintroduce hidden or explicitly excluded
+    # packages and incorrectly preserve their stale files in the AIO tree.
+    # A file also avoids generator-specific quoting of space-containing paths.
+    set(_feature_paths_list_file
+        "${CMAKE_CURRENT_BINARY_DIR}/feature_paths.txt"
+    )
+    string(REPLACE ";" "\n" _feature_paths_file_content "${FEATURE_PATHS}")
+    file(WRITE "${_feature_paths_list_file}" "${_feature_paths_file_content}")
+
     # Ensure SKSE/Plugins dir exists
     # Note: DLL and PDB are copied via POST_BUILD command to avoid race conditions
     list(
@@ -686,6 +696,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DMODE=AIO
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        -DFEATURE_PATHS_FILE="${_feature_paths_list_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -791,6 +802,26 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_shader_copy_cmds)
     set(_shader_copy_inputs ${_package_shaders})
 
+    set(_feature_shader_paths)
+    foreach(_fpath IN LISTS FEATURE_PATHS)
+        if(EXISTS "${_fpath}/Shaders")
+            list(APPEND _feature_shader_paths "${_fpath}/Shaders")
+        endif()
+    endforeach()
+    set(_feature_shader_paths_list_file
+        "${CMAKE_CURRENT_BINARY_DIR}/feature_shader_paths.txt"
+    )
+    string(
+        REPLACE ";"
+        "\n"
+        _feature_shader_paths_file_content
+        "${_feature_shader_paths}"
+    )
+    file(
+        WRITE "${_feature_shader_paths_list_file}"
+        "${_feature_shader_paths_file_content}"
+    )
+
     list(
         APPEND _shader_copy_cmds
         COMMAND
@@ -798,6 +829,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DMODE=SHADERS
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        -DFEATURE_SHADER_PATHS_FILE="${_feature_shader_paths_list_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )

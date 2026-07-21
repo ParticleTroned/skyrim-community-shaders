@@ -415,6 +415,60 @@ public:
 		bool readyForContract = false;
 	};
 
+	enum class VRRenderScaleRetryKind : uint8_t
+	{
+		Other,
+		Pressure,
+		Retirement,
+		Backend
+	};
+
+	enum class VRRenderScaleFailureKind : uint8_t
+	{
+		None,
+		Unknown,
+		Backend,
+		OutOfMemory,
+		DeviceLost
+	};
+
+	struct VRRenderScaleTransitionMetrics
+	{
+		bool valid = false;
+		bool completed = false;
+		bool superseded = false;
+		uint64_t transitionEpoch = 0;
+		uint64_t requestID = 0;
+		uint32_t contractGeneration = 0;
+		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t requestedFrame = 0;
+		uint32_t preparingFrame = 0;
+		uint32_t applyingFrame = 0;
+		uint32_t appliedFrame = 0;
+		uint32_t stableFrame = 0;
+		uint32_t totalFrames = 0;
+		uint32_t retries = 0;
+		uint32_t pressureDeferrals = 0;
+		uint32_t retirementDeferrals = 0;
+		uint32_t backendDeferrals = 0;
+		uint32_t failures = 0;
+		uint32_t outOfMemoryFailures = 0;
+		uint32_t deviceLostFailures = 0;
+		VRRenderScaleFailureKind lastFailure = VRRenderScaleFailureKind::None;
+		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
+		uint64_t peakUsageBytes = 0;
+		uint32_t peakRetiredSets = 0;
+	};
+
+	struct VRRenderScaleMetricsSnapshot
+	{
+		VRRenderScaleTransitionMetrics current{};
+		std::array<VRRenderScaleTransitionMetrics, 16> recent{};
+		uint32_t nextIndex = 0;
+		uint32_t count = 0;
+	};
+
 	/** @brief Immutable controller-visible profile at one transition milestone. */
 	struct VRRenderScaleProfileSnapshot
 	{
@@ -460,6 +514,7 @@ public:
 		VRRenderScalePostLoadRecoverySnapshot postLoadRecovery{};
 		VRVendorRuntimeLifecycleSnapshot dlssLifecycle{};
 		VRVendorRuntimeLifecycleSnapshot fsrLifecycle{};
+		VRRenderScaleMetricsSnapshot metrics{};
 	};
 
 	struct PerfModeState
@@ -1243,6 +1298,9 @@ public:
 	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VRVendorRuntimeLifecyclePhase a_phase, uint32_t a_generation = 0, const char* a_reason = nullptr);
+	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind);
+	void RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind);
+	void ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);

@@ -255,9 +255,11 @@ jobs:
 
             - name: Apply feature version bumps
               run: |
+                  # Repo-relative output: the Semantic Release step below reads
+                  # this file from the checkout to build the release notes.
                   python tools/feature_version_audit.py \
                     --apply-bumps \
-                    --output /tmp/feature-version-audit.txt
+                    --output feature-audit-notes.md
 
             - name: Semantic Release
               id: semantic

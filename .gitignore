@@ -17,3 +17,7 @@ tests/shaders/*.exe
 tests/shaders/*.pdb
 tests/shaders/Shaders/
 tools/__pycache__/
+
+# feature_version_audit.py --apply-bumps output, read by
+# tools/release-notes-feature-audit-plugin.js during Semantic Release
+/feature-audit-notes.md

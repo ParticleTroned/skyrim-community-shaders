@@ -497,8 +497,19 @@ void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 am
 
 	float totalLuma = ambientLuma + dirLightLuma;
 
-	if (totalLuma > 0.0 && ambientLuma > 0.0)
-		ambientColorAmb *= inputLuma / totalLuma;
+	if (totalLuma > 0.0 && ambientLuma > 0.0) {
+		static const float MaxEffectAmbientScale = Math::INV_PI;
+		ambientColorAmb *= min(inputLuma / totalLuma, MaxEffectAmbientScale);
+	}
+
+	float ambientFit = 1.0;
+	if (ambientColorAmb.x > 0.0)
+		ambientFit = min(ambientFit, max(0.0, inputColor.x) / ambientColorAmb.x);
+	if (ambientColorAmb.y > 0.0)
+		ambientFit = min(ambientFit, max(0.0, inputColor.y) / ambientColorAmb.y);
+	if (ambientColorAmb.z > 0.0)
+		ambientFit = min(ambientFit, max(0.0, inputColor.z) / ambientColorAmb.z);
+	ambientColorAmb *= ambientFit;
 
 	float3 dirLightColorAmb = max(0.0, inputColor - ambientColorAmb);
 

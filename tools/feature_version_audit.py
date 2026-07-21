@@ -298,6 +298,16 @@ def get_changed_files(feature_path, base_ref, file_types=None):
     except Exception:
         return []
 
+def is_version_relevant(file, ini_path):
+    # Version keys shader-cache invalidation; only .hlsl/.hlsli and the
+    # canonical ini can affect that cache, so other .ini files don't count.
+    ext = os.path.splitext(file)[1].lower()
+    if ext != ".ini":
+        return True
+    if not ini_path:
+        return False
+    return Path(file).resolve() == Path(ini_path).resolve()
+
 def get_commits_for_file(file_path, base_ref):
     try:
         output = subprocess.check_output(
@@ -674,12 +684,12 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
         # PR-scoped changes: used for change-type display and new-feature detection.
         # Only packaged files under features/ participate in feature versioning.
         changes = get_changed_files(feature_dir, base_ref)
-        changes = list(set(changes))
+        changes = [c for c in set(changes) if is_version_relevant(c[1], ini_path)]
 
         # Release-scoped changes: all changes since last release, used to propose the correct
         # version so that a bump already applied by a prior PR satisfies this check.
         release_changes = get_changed_files(feature_dir, version_ref)
-        release_changes = list(set(release_changes))
+        release_changes = [c for c in set(release_changes) if is_version_relevant(c[1], ini_path)]
 
         change_types = set(os.path.splitext(f)[1].lower() for _, f in changes)
         all_commits = []

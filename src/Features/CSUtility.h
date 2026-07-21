@@ -107,6 +107,7 @@ struct CSUtility : Feature
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
+	virtual void DataLoaded() override;
 
 	static Settings GetNeutralSettings();
 	PerFrameData GetCommonBufferData() const;

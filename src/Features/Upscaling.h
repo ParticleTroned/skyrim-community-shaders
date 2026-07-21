@@ -629,9 +629,9 @@ public:
 
 	winrt::com_ptr<ID3D11PixelShader> vrMenuLayerCompositePS;
 	ID3D11PixelShader* GetVRMenuLayerCompositePS();
-	bool vrMenuLayerCompositePSPrewarmAttempted = false;
 
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
+	winrt::com_ptr<ID3D11DepthStencilState> vrMenuCaptureDepthDisabledState;
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
 	winrt::com_ptr<ID3D11BlendState> vrMenuCompositeBlendState;
 	winrt::com_ptr<ID3D11BlendState> vrMenuLayerCaptureBlendState;
@@ -708,7 +708,9 @@ public:
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
-	bool BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
+	bool BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc,
+		uint32_t a_eyeWidth, uint32_t a_eyeHeight, Texture2D* const* a_eyeSources = nullptr);
+	void PresentVRMenuDesktopMirror(IDXGISwapChain* a_swapChain);
 	bool EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const Texture2D& colorOutput);
 	bool ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput);
 
@@ -864,6 +866,7 @@ public:
 		bool usedFoveatedVendorPath = false;
 		bool usedDLSSSharpening = false;
 		bool usedMenuFinalComposite = false;
+		uint64_t menuLayerGeneration = 0;
 		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		uint32_t generation = 0;
 		uint32_t inputWidth = 0;
@@ -1176,7 +1179,33 @@ private:
 	void BeginVRMenuFinalCompositeFrame(uint32_t a_frame);
 	void ResetVRMenuFinalCompositeLayer();
 	bool EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_height, DXGI_FORMAT a_format);
-	void PrewarmVRMenuFinalCompositeResources();
+	bool PrewarmVRMenuFinalCompositeResources(DXGI_FORMAT a_layerFormat = DXGI_FORMAT_UNKNOWN);
+	void BeginVRMenuDrawInterface();
+	void EndVRMenuDrawInterface();
+	bool BeginVRMenuSemanticEpoch(void* a_accumulator, uint32_t a_firstPass, uint32_t a_lastPass,
+		uint32_t a_renderFlags, int a_groupIndex, uint32_t a_renderMode);
+	void EndVRMenuSemanticEpoch(void* a_accumulator, uint32_t a_firstPass, uint32_t a_lastPass,
+		uint32_t a_renderFlags, int a_groupIndex);
+	bool IsVRMenuTransportContractPresent() const;
+	bool IsVRMenuSemanticAdapterEligible() const;
+	bool IsVRMenuSemanticBridgeOperationActive() const;
+	bool IsVRMenuDirectBridgeOperationActive() const;
+	bool IsVRMapMenuPresentationActive() const;
+	void RecordVRMenuSemanticCapture(bool a_suppressed);
+	void PoisonVRMenuFrameTransaction(const char* a_reason);
+	void InvalidateVRMenuCommittedLayer(const char* a_reason);
+	void NotifyVRMenuPresentationContextChange(const char* a_reason);
+	bool SealVRMenuFrameTransaction(uint32_t a_frame);
+	bool EnsureVRMenuFullResolutionDepth(uint32_t a_width, uint32_t a_height);
+	bool BeginVRMenuDisplayResolutionPass();
+	void EndVRMenuDisplayResolutionPass();
+	bool CaptureVRMapMenuLayer(uint32_t a_frame);
+	void StretchVRMapMenuCopyIfNeeded();
+	void ResetVRMenuDesktopEyePairState();
+	bool PublishVRMenuDesktopEye(uint32_t a_eyeIndex, const Texture2D& a_outputTexture, uint32_t a_frame);
+	bool IsVRMenuDesktopEyePairCompatible(const Texture2D& a_sourceTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight,
+		const eastl::unique_ptr<Texture2D> (&a_eyePair)[2]) const;
+	bool EnsureVRMenuDesktopEyePair(const Texture2D& a_sourceTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool DrawVRMenuBridgeIntoFinalCompositeLayer(ID3D11DeviceContext* a_context, DXGI_FORMAT a_format, UINT a_indexCount,
 		UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight);
@@ -1184,21 +1213,68 @@ private:
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_callerRva,
 		const char** a_decisionReason = nullptr);
 	bool ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D& a_outputTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame);
-	static constexpr uint32_t kVRMenuBridgeSRVSlots = 8;
+	static constexpr uint32_t kVRMenuTransactionMaxEpochs = 16;
+	struct VRMenuFrameTransaction
+	{
+		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		uint32_t planGeneration = 0;
+		std::array<uint64_t, kVRMenuTransactionMaxEpochs> epochIds{};
+		uint32_t epochCount = 0;
+		uint32_t capturedOperations = 0;
+		uint32_t suppressedOperations = 0;
+		uint32_t mapDisplayEpochs = 0;
+		uint32_t drawInterfaceDepth = 0;
+		bool renderComplete = false;
+		bool presentationStarted = false;
+		bool sealed = false;
+		bool poisoned = false;
+		bool menuLayerRequired = false;
+		bool mapLayerRequired = false;
+		bool mapLayerCapture = false;
+		const char* failureReason = nullptr;
+	};
 	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();
-	std::array<bool, 2> vrMenuFinalCompositeSuppressedTargets{};
-	bool vrMenuFinalCompositeHasOverlayOnlyCapture = false;
 	eastl::unique_ptr<Texture2D> vrMenuFinalCompositeLayer;
+	eastl::unique_ptr<Texture2D> vrMenuCommittedCompositeLayer;
+	winrt::com_ptr<ID3D11Texture2D> vrMenuFullResolutionDepth;
+	winrt::com_ptr<ID3D11DepthStencilView> vrMenuFullResolutionDSV;
+	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMenuFullResolutionDepthViews{};
+	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMenuFullResolutionReadOnlyDepthViews{};
 	uint32_t vrMenuFinalCompositeLayerWidth = 0;
 	uint32_t vrMenuFinalCompositeLayerHeight = 0;
 	DXGI_FORMAT vrMenuFinalCompositeLayerFormat = DXGI_FORMAT_UNKNOWN;
+	uint32_t vrMenuFullResolutionDepthWidth = 0;
+	uint32_t vrMenuFullResolutionDepthHeight = 0;
+	std::uintptr_t vrMenuFullResolutionDepthSourceIdentity = 0;
+	uint32_t vrMenuFullResolutionDepthClearedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t vrMenuFinalCompositeLayerClearedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t vrMenuFinalCompositeLayerDrawCount = 0;
-	bool vrMenuFinalCompositeLayerPrewarmAttempted = false;
-	uint32_t vrMenuFinalCompositeLayerPrewarmWidth = 0;
-	uint32_t vrMenuFinalCompositeLayerPrewarmHeight = 0;
-	DXGI_FORMAT vrMenuFinalCompositeLayerPrewarmFormat = DXGI_FORMAT_UNKNOWN;
+	uint64_t vrMenuNextSemanticEpochId = 1;
+	uint64_t vrMenuCommittedLayerGeneration = 0;
+	uint32_t vrMenuCommittedLayerPlanGeneration = 0;
+	uint32_t vrMenuCommittedLayerFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t vrMenuCommittedLayerOperationCount = 0;
+	bool vrMenuCommittedLayerValid = false;
+	bool vrMenuCommittedLayerOpaque = false;
+	uint32_t vrMenuDrawInterfaceDepth = 0;
+	VRMenuFrameTransaction vrMenuFrameTransaction{};
+	uint32_t vrMenuAdapterPreflightFailureFrame = std::numeric_limits<uint32_t>::max();
 	bool vrMenuParallelBridgeDrawInProgress = false;
+	eastl::unique_ptr<Texture2D> vrMenuDesktopEyePair[2];
+	eastl::unique_ptr<Texture2D> vrMenuDesktopRetainedEyePair[2];
+	uint64_t vrMenuDesktopPairGeneration = 0;
+	uint32_t vrMenuDesktopPairFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t vrMenuDesktopPairPlanGeneration = 0;
+	uint32_t vrMenuDesktopPairReadyMask = 0;
+	bool vrMenuDesktopPairPendingPresent = false;
+	uint32_t vrMenuDesktopRetainedPairPlanGeneration = 0;
+	bool vrMenuDesktopRetainedPairValid = false;
+
+	struct VRMapMenuCopyRenderHook
+	{
+		static void thunk(void* a_imageSpaceShader, RE::BSTriShape* a_shape, RE::ImageSpaceEffectParam* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 
 	struct OpenCompositeUpscalingBlocker
 	{

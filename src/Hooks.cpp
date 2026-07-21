@@ -867,6 +867,7 @@ struct IDXGISwapChain_Present
 			const double intervalMs = previousTicks != 0 ? ConvertFrameDiagTicksToMilliseconds(presentBeginTicks - previousTicks) : 0.0;
 			FlushCSFrameHookPhaseDiag(completedFrame, intervalMs);
 		}
+		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
 		state->Reset();
 		menu->DrawOverlay();
 

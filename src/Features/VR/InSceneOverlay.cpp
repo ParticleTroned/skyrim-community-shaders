@@ -303,7 +303,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					static std::atomic_bool loggedRenderScaleFallbackSuppression{ false };
 					if (!loggedRenderScaleFallbackSuppression.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(
-							"[VRRenderScale] Suppressing OpenVR submit for reduced render-scale texture during loading/relatch; waiting for final-sized presentation output.");
+							"[VRRenderScale] Suppressing a reduced OpenVR fallback while a transition or full-resolution menu transaction requires final-sized output.");
 					}
 					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 						"suppressed-reduced-fallback",

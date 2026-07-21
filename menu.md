@@ -3,24 +3,24 @@
 Status: the ordinary-menu hybrid, Map/Stats WORLDUI overlay route, fail-open
 Loading presentation, unmasked desktop mirror, projection de-jitter, buffered
 tracing, orphaned-Barter guard, Map-symbol supersampling, and post-game MainMenu
-presentation are implemented and committed through RC92. The working revision
-adds the static correctness/robustness/DRY audit fixes and removes avoidable
-developer-diagnostic work from the Info-level production paths.
+presentation are implemented and committed through RC93. RC93 keeps late
+native-target vendor presentation at a transient 1:1 state through MainMenu,
+Loading, and Loading's close tail so reduced dynamic viewport state cannot stamp
+those phases into the top-left of the native framebuffer. The preceding hybrid
+correctness/robustness/DRY and Info-level diagnostic-cost audit is included.
 
 Branch: `cs-1.7-PL-VR`
 
 Implementation base reviewed: `bceaaff95b0248ff8339afbfeaf01bd6a4f73c13`
 
-Current committed implementation: `878af8f1a3d6de594ddaddea12c3d5f99601e0e9`
+Current committed implementation: `RC93`
 
-Current working implementation: uncommitted hybrid-menu correctness and
-Info-level diagnostic-cost audit fixes on top of RC92; no build or commit has
-been made for them under the branch rules.
+Current implementation base before RC93:
+`372f65a86b11929ded6616d42bf0818f50420f96`
 
-Checkpoint validation: RC92 was created by the user after the focused
-post-game MainMenu correction. Current working validation is static only.
-Build and runtime tests were not run under the branch rule; the focused
-acceptance matrix below remains required.
+Checkpoint validation: RC93 was created by the user after the focused native
+MainMenu/New Game trace and static review. Build and runtime tests were not run
+under the branch rule; the focused acceptance matrix below remains required.
 
 Trace baseline: `87522b1f47ef5544b92962cdd11177db8e746ea8` (`RC83`)
 
@@ -141,6 +141,31 @@ Evidence reviewed:
     The UI continues producing frames, proving this is presentation starvation,
     not an engine stall. Disabling Render Scale at frame 46,355 restores native
     `4936x2740` original submissions immediately.
+-   Focused native-target MainMenu/New Game trace ending 2026-07-21 14:58:38:
+    Render Scale is inactive at quality 6 and the physical `kVR_FRAMEBUFFER` is
+    native `4936x2740`, while the conventional DLSS dynamic-resolution plan
+    remains `1645x913 -> 4936x2740`. MainMenu's direct projected draw uses a
+    full `4936x2740` viewport through frame 6,267. Selecting New Game closes
+    MainMenu and opens Loading at frame 6,268; that same registered
+    `kPROJECTEDMENU -> kVR_FRAMEBUFFER` draw immediately changes to a
+    `1645x913` viewport and scissor without changing its native destination.
+    Later Loading frames retain the same reduced rectangle. This directly
+    explains the top-left presentation and supplies the matching reduced-to-
+    native geometry for the observed particle stripes: native target allocation
+    is correct, but late direct-menu work inherits the reduced dynamic contract
+    after the vendor resolve. The log contains no matching relatch or device
+    failure, and no hybrid layer is active in this path.
+-   The same trace contains a separate post-game New Game handoff stall that the
+    presentation correction does not claim to fix. The successful startup
+    attempt hides projected MainMenu content at frame 6,245 and emits MainMenu
+    close plus Loading open 172 ms later at frame 6,268. After returning from
+    gameplay, the second attempt follows the same projected-draw sequence and
+    hides the content at frame 10,483, but never emits either lifecycle event.
+    MainMenu remains open for the remaining 8,329 empty projected passes while
+    9,034 complete interface frames and 18,070 successful original OpenVR eye
+    submissions continue. This isolates that stall after the MainMenu UI action
+    and before engine Loading-menu creation; the current D3D/menu trace cannot
+    identify which engine or mod command handler failed to complete.
 
 Developer tracing remains available. Debug/Trace records no longer request a
 synchronous file flush per record; session begin/end still flush explicitly.
@@ -688,6 +713,18 @@ Loading is open, but still requires the exact registered source and
 `kVR_FRAMEBUFFER` destination. A latched post-game MainMenu is also an explicit
 presentation-stretch context even after normal world-complete presentation
 eligibility ends.
+
+The native-target vendor path is separate from that latched transport. With
+Render Scale disabled at a sub-native quality mode, Skyrim's targets remain
+native while ordinary vendor dynamic resolution still owns scene rendering.
+MainMenu and Loading issue some direct presentation work after that resolve.
+After the vendor resolve, `PostDisplay` therefore locks only MainMenu, Loading,
+and the established Loading close tail to 1:1 dynamic ratios and zero projection
+jitter for the late presentation part of the frame. Scene rendering and the
+vendor resolve retain the selected quality-derived input size. This is transient
+render state: it adds no draw or vendor dispatch, neither recreates targets nor
+changes the user's method, quality, or Render Scale request, and normal frame
+configuration restores the quality-derived dynamic contract.
 
 ## RaceSex Evidence
 
@@ -1436,6 +1473,11 @@ intent, boot snapshot, vendor resources, and reduced scene targets.
 -   Loading always stretches its complete reduced framebuffer. An exact direct
     bridge may add a full-resolution layer, but fast-travel's unrecognized
     variant remains intact and is submitted as the base.
+-   When Render Scale is disabled but a sub-native vendor quality mode remains
+    selected, MainMenu, Loading, and Loading's close tail keep the existing
+    native targets and transiently lock their late presentation to 1:1 after the
+    normal vendor resolve. This is a render-state correction, not a
+    native-resolution relatch state machine.
 -   Map preserves Skyrim's complete reduced mixed epoch while exact projected/HUD
     and non-writing WORLDUI consumers join the final-resolution overlay.
 -   Menu open and close events invalidate stale layers and arm overlap tails. Any
@@ -1598,16 +1640,18 @@ public control surface.
 | Desktop compositor   | Samples the left half of the sealed committed layer over Skyrim's existing backbuffer; never copies a masked HMD eye                                                                                                                                                                                                                  |
 | Map policy           | Reduced mixed 3D/depth pass with no scene-target/depth substitution; Map's fixed HUD color/depth pair is raised from its native size toward per-eye display size (minimum 1.5x, maximum 2x) only while Map is open, and exact projected/HUD plus non-writing `kWORLDUI0/1` consumers join the transparent full-resolution transaction |
 | Stats policy         | Reduced constellation production and geometry; exact non-depth/stencil-writing `kWORLDUI0/1` consumers join the same transparent full-resolution transaction                                                                                                                                                                          |
-| MainMenu policy      | Complete reduced `kVR_FRAMEBUFFER` is stretched and really submitted even after world-complete presentation eligibility ends; exact `flag=0, mode=0` and post-game `flag=1, mode=516` projected consumers are replayed into the final-resolution layer                                                                                |
-| Loading policy       | Complete reduced `kVR_FRAMEBUFFER` is stretched and submitted; the exact Loading `flag=1, mode=516` projected consumer is replayed into a separate final-resolution layer when captured                                                                                                                                               |
+| MainMenu policy      | A latched reduced `kVR_FRAMEBUFFER` is stretched and really submitted even after world-complete eligibility ends, with exact direct consumers replayed into the final layer; late presentation into a native target with conventional vendor dynamic resolution instead uses transient 1:1 projection/dynamic state                   |
+| Loading policy       | A latched reduced `kVR_FRAMEBUFFER` is stretched and submitted, with the exact Loading direct consumer replayed when captured; late presentation into a native target with conventional vendor dynamic resolution uses transient 1:1 state through Loading and its close tail                                                         |
 
 No native-menu transition state exists. Menu events arm context/tails and
 invalidate stale committed content; they do not modify the public Render Scale
 request or recreate engine scene targets.
 
-The transport contract exists only for a latched reduced VR Render Scale plan.
-It does not create requirements, suppress submits, or alter behavior for the
-existing VR dynamic-resolution path or other upscaling ownership modes.
+The hybrid transport contract exists only for a latched reduced VR Render Scale
+plan. It does not create requirements or suppress submits in other ownership
+modes. The native-target vendor path has only the narrow MainMenu/Loading 1:1
+state correction described above; other menus and ordinary scene rendering keep
+their existing dynamic-resolution behavior.
 
 ### Production routing
 
@@ -1771,6 +1815,11 @@ run another broad discovery trace. Validate these focused cases:
     running game to MainMenu with quality 6 and Render Scale enabled must keep
     submitting responsive full-resolution eyes; its equivalent Debug decision
     should report `main-menu-direct-layer-captured-original-suppressed`.
+    With Render Scale disabled and quality 6 still selected, MainMenu particles
+    and projected content must remain centered in the native framebuffer.
+    Selecting New Game must preserve the centered frame/fade through Loading—no
+    frozen MainMenu image or particle stripes—and normal dynamic rendering must
+    resume after the Loading close tail/RaceSex entry.
 -   Close a seller's Barter menu, end Dialogue, and immediately fast travel from
     Map. The destination must return to the world without reopening the seller
     inventory. If the engine repeats the traced orphan event, the log should

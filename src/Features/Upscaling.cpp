@@ -3315,6 +3315,27 @@ namespace
 		return IsMainMenuContextActive() || IsLoadingMenuContextActive();
 	}
 
+	bool IsVRNativeVendorDirectMenuPresentationContextActive(const Upscaling& a_upscaling, const State* a_state)
+	{
+		if (!globals::game::isVR ||
+			!IsVendorUpscalingMethod(a_upscaling.GetRuntimeUpscaleMethod()) ||
+			a_upscaling.IsVRRenderScaleModeLatched() ||
+			!IsRenderScaleQualityMode(a_upscaling.GetRuntimeQualityMode())) {
+			return false;
+		}
+
+		// Without the Render Scale latch, the engine owns native-sized targets but
+		// vendor dynamic resolution can still leave its viewport/scissor contract
+		// reduced. Main/Loading projected work is emitted after the vendor resolve,
+		// so drawing it with that reduced contract stamps it into the top-left of
+		// kVR_FRAMEBUFFER. Keep only these direct-menu phases at 1:1; no resource
+		// relatch or target resize is involved.
+		const bool directMenuActive =
+			(a_state && a_state->IsMainOrLoadingMenuOpen()) ||
+			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed);
+		return directMenuActive || IsVRLoadingPresentationTailActive(a_state);
+	}
+
 	bool IsRaceSexMenuContextActive(RE::UI* a_ui)
 	{
 		return a_ui && a_ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME);
@@ -21580,11 +21601,15 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
+	const bool vrNativeVendorDirectMenu =
+		IsVRNativeVendorDirectMenuPresentationContextActive(*this, globals::state);
+	const bool vrRenderScaleMenu =
+		IsVRRenderScaleTransitionSafetyRelevant(*this) &&
+		IsVRMenuPresentationContextActive();
 	const bool vrVendorMenu =
 		globals::game::isVR &&
 		IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) &&
-		IsVRMenuPresentationContextActive() &&
-		IsVRRenderScaleTransitionSafetyRelevant(*this);
+		(vrNativeVendorDirectMenu || vrRenderScaleMenu);
 	if (vrVendorMenu) {
 		PrepareFullResolutionPostProcessing(viewport, true);
 	}

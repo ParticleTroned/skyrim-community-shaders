@@ -172,7 +172,7 @@ struct AdaptiveBrightness : Feature
 	float GetExteriorNightFactor() const;
 	std::string GetContextLabel() const;
 	static const char* GetProfileName(Profile a_profile);
-	bool SyncSelectedProfileTabToContext();
+	std::optional<Profile> SyncSelectedProfileTabToContext();
 	void DrawExteriorTimeSettings();
 	void DrawProfile(Profile a_profile);
 	void DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle = "Profile Values", bool a_showAdvancedControls = true);

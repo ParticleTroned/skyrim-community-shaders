@@ -775,13 +775,13 @@ void AdaptiveBrightness::DrawSettings()
 
 	DrawGlobalPresetControls();
 
-	const bool selectCurrentProfileTab = SyncSelectedProfileTabToContext();
+	const auto profileTabToSelect = SyncSelectedProfileTabToContext();
 
 	ImGui::SeparatorText("Profiles");
 	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
 		for (auto profile : kProfileOrder) {
 			const ImGuiTabItemFlags tabFlags =
-				selectCurrentProfileTab && selectedProfileTab == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+				profileTabToSelect && *profileTabToSelect == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
 			if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
 				selectedProfileTab = profile;
 				DrawProfile(profile);
@@ -801,13 +801,13 @@ void AdaptiveBrightness::DrawSettings()
 void AdaptiveBrightness::DrawEssentialSettings()
 {
 	ImGui::BeginDisabled(!settings.enabled);
-	const bool selectCurrentProfileTab = SyncSelectedProfileTabToContext();
+	const auto profileTabToSelect = SyncSelectedProfileTabToContext();
 
 	ImGui::SeparatorText("Profiles");
 	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfilesEssentials", ImGuiTabBarFlags_None)) {
 		for (auto profile : kProfileOrder) {
 			const ImGuiTabItemFlags tabFlags =
-				selectCurrentProfileTab && selectedProfileTab == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+				profileTabToSelect && *profileTabToSelect == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
 			if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
 				selectedProfileTab = profile;
 				auto& profileSettings = settings.profiles[ProfileIndex(profile)];
@@ -879,7 +879,7 @@ const char* AdaptiveBrightness::GetProfileName(Profile a_profile)
 	return kProfileNames[ProfileIndex(a_profile)];
 }
 
-bool AdaptiveBrightness::SyncSelectedProfileTabToContext()
+std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfileTabToContext()
 {
 	const auto currentProfile = GetCurrentProfileForUI();
 	std::string currentProfileTabSyncKey = std::to_string(static_cast<uint32_t>(currentProfile));
@@ -895,11 +895,11 @@ bool AdaptiveBrightness::SyncSelectedProfileTabToContext()
 	profileTabLastDrawFrame = currentFrame;
 
 	if (profileTabsWereVisible && profileTabSyncInitialized && profileTabSyncKey == currentProfileTabSyncKey)
-		return false;
+		return std::nullopt;
 	selectedProfileTab = currentProfile;
 	profileTabSyncKey = std::move(currentProfileTabSyncKey);
 	profileTabSyncInitialized = true;
-	return true;
+	return currentProfile;
 }
 
 void AdaptiveBrightness::DrawExteriorTimeSettings()

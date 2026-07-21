@@ -53,6 +53,15 @@ Performance builds keep `kEnableVRMenuPresentationTraceDiagnostics` false.
 Changing it to true creates a dedicated forensic build with high-frequency D3D
 menu detours and must not be compared against normal optimization captures.
 
+Step 18 calibrates the acceptance contract against the first live MCP rapid-
+switch baseline. A request that reuses the already-active physical contract can
+complete on its apply frame without entering vendor stabilization. That path
+emits both `Applied` and `Stable`, matching its completed transition metric, so
+the stable-latency gate accepts bounded synchronous reuse while retaining the
+same event evidence required from a rebuilt DLSS or FSR contract. Session start
+and stop events carry zero transition counters rather than inheriting metrics
+from work outside the capture boundary.
+
 ## MCP contract
 
 Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 2`. An automation client should:

@@ -24593,7 +24593,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 17 }
+		{ "implementationStep", 18 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -25391,6 +25391,7 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 	VRRenderScaleTransitionState previousState;
 	VRRenderScaleTransitionState nextState;
+	bool completedSynchronously = false;
 	uint64_t revision;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
@@ -25412,6 +25413,7 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 			vrRenderScaleTransitionController.targetEpoch != 0 &&
 			appliedProfile.transitionEpoch != 0 &&
 			vrRenderScaleTransitionController.targetEpoch != appliedProfile.transitionEpoch;
+		completedSynchronously = !a_requiresStabilization && !newerRequestPending;
 		if (newerRequestPending) {
 			if (!a_requiresStabilization)
 				vrRenderScaleTransitionController.stable = appliedProfile;
@@ -25430,7 +25432,7 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 			metrics.contractGeneration = appliedProfile.contractGeneration;
 			metrics.origin = appliedProfile.origin;
 			metrics.method = appliedProfile.method;
-			if (!a_requiresStabilization && !newerRequestPending) {
+			if (completedSynchronously) {
 				metrics.stableFrame = frame;
 				ArchiveVRRenderScaleTransitionMetricsLocked(true, false, frame);
 			}
@@ -25456,6 +25458,8 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 	}
 	SampleVRRenderScaleMemory(true, "contract applied");
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Applied);
+	if (completedSynchronously)
+		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Stable);
 }
 
 void Upscaling::PublishVRRenderScaleTransitionStable()
@@ -25796,13 +25800,18 @@ void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_ty
 		controller.applied.valid                        ? controller.applied :
 														  controller.stable;
 	VRRenderScaleTransitionMetrics metrics{};
-	if (controller.metrics.current.valid) {
-		metrics = controller.metrics.current;
-	} else if (controller.metrics.count != 0) {
-		const uint32_t index =
-			(controller.metrics.nextIndex + static_cast<uint32_t>(controller.metrics.recent.size()) - 1u) %
-			static_cast<uint32_t>(controller.metrics.recent.size());
-		metrics = controller.metrics.recent[index];
+	const bool transitionEvent =
+		a_type != VRRenderScaleStressEventType::SessionStarted &&
+		a_type != VRRenderScaleStressEventType::SessionStopped;
+	if (transitionEvent) {
+		if (controller.metrics.current.valid) {
+			metrics = controller.metrics.current;
+		} else if (controller.metrics.count != 0) {
+			const uint32_t index =
+				(controller.metrics.nextIndex + static_cast<uint32_t>(controller.metrics.recent.size()) - 1u) %
+				static_cast<uint32_t>(controller.metrics.recent.size());
+			metrics = controller.metrics.recent[index];
+		}
 	}
 
 	std::scoped_lock lock(vrRenderScaleStressSessionMutex);

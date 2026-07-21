@@ -339,6 +339,19 @@ public:
 		bool capacityBlocked = false;
 	};
 
+	struct VRRenderScaleMemorySnapshot
+	{
+		bool valid = false;
+		uint32_t sampleFrame = 0;
+		uint64_t transitionEpoch = 0;
+		uint64_t budgetBytes = 0;
+		uint64_t currentUsageBytes = 0;
+		uint64_t currentReservationBytes = 0;
+		uint64_t availableForReservationBytes = 0;
+		uint64_t headroomBytes = 0;
+		double usageRatio = 0.0;
+	};
+
 	/** @brief Immutable controller-visible profile at one transition milestone. */
 	struct VRRenderScaleProfileSnapshot
 	{
@@ -380,6 +393,7 @@ public:
 		VRRenderScaleProfileSnapshot stable{};
 		VRRenderScaleRelatchPlan relatchPlan{};
 		VRRenderScaleRetirementSnapshot retirement{};
+		VRRenderScaleMemorySnapshot memory{};
 	};
 
 	struct PerfModeState
@@ -839,6 +853,9 @@ public:
 	uint32_t deferredVRIntermediateTextureCleanupFrame = 0;
 	winrt::com_ptr<ID3D11Query> vrIntermediateTextureCleanupFence;
 	std::atomic_bool vrIntermediateRetirementCapacityLogged{ false };
+	winrt::com_ptr<IDXGIAdapter3> vrRenderScaleMemoryAdapter;
+	ID3D11Device* vrRenderScaleMemoryAdapterDevice = nullptr;
+	uint32_t vrRenderScaleMemoryLastSampleFrame = 0;
 
 	struct VRIntermediateTextureCache
 	{
@@ -1148,6 +1165,7 @@ public:
 	bool HasPendingVRIntermediateTextureCleanup() const;
 	bool CanAdmitVRIntermediateRetirement(uint64_t a_epoch);
 	void UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked = false);
+	bool SampleVRRenderScaleMemory(bool a_force = false, const char* a_reason = nullptr);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);

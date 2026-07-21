@@ -134,6 +134,7 @@ namespace
 	constexpr uint32_t kVRSubmitStageUnderwaterMaskTailFrames = 4u;
 	constexpr uint32_t kVRRetiredIntermediateTextureTailFrames = 4u;
 	constexpr size_t kVRRetiredIntermediateTextureMaxSets = 4u;
+	constexpr uint32_t kVRRenderScaleMemorySampleIntervalFrames = 30u;
 	constexpr uint32_t kVRRaceSexPostClosePresentationTailFrames = 60u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
@@ -15264,6 +15265,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return false;
 	}
 	SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::Applying, "render-target and vendor resources");
+	SampleVRRenderScaleMemory(true, "before relatch");
 	try {
 		const bool amdAdapterForRelatch = fidelityFX.IsAmdAdapterDetected();
 		const bool pendingDLSSResetForRelatch = pendingDLSSReset.load(std::memory_order_acquire);
@@ -16172,6 +16174,90 @@ void Upscaling::UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked)
 
 	vrRenderScaleTransitionController.retirement = snapshot;
 	++vrRenderScaleTransitionController.revision;
+}
+
+bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
+{
+	if (!globals::game::isVR || !globals::d3d::device)
+		return false;
+
+	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	if (!a_force &&
+		currentFrame != 0 &&
+		vrRenderScaleMemoryLastSampleFrame != 0 &&
+		ElapsedFrames(vrRenderScaleMemoryLastSampleFrame, currentFrame) < kVRRenderScaleMemorySampleIntervalFrames) {
+		return GetVRRenderScaleTransitionSnapshot().memory.valid;
+	}
+	vrRenderScaleMemoryLastSampleFrame = currentFrame;
+	const uint64_t transitionEpoch = GetVRRenderScaleTransitionSnapshot().targetEpoch;
+	const auto publishInvalidSample = [&]() {
+		VRRenderScaleMemorySnapshot snapshot{};
+		snapshot.sampleFrame = currentFrame;
+		snapshot.transitionEpoch = transitionEpoch;
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		vrRenderScaleTransitionController.memory = snapshot;
+		++vrRenderScaleTransitionController.revision;
+	};
+
+	if (vrRenderScaleMemoryAdapterDevice != globals::d3d::device) {
+		vrRenderScaleMemoryAdapter = nullptr;
+		vrRenderScaleMemoryAdapterDevice = globals::d3d::device;
+	}
+	if (!vrRenderScaleMemoryAdapter) {
+		winrt::com_ptr<IDXGIDevice> dxgiDevice;
+		if (FAILED(globals::d3d::device->QueryInterface(dxgiDevice.put()))) {
+			publishInvalidSample();
+			return false;
+		}
+		winrt::com_ptr<IDXGIAdapter> dxgiAdapter;
+		if (FAILED(dxgiDevice->GetAdapter(dxgiAdapter.put()))) {
+			publishInvalidSample();
+			return false;
+		}
+		if (FAILED(dxgiAdapter->QueryInterface(vrRenderScaleMemoryAdapter.put()))) {
+			publishInvalidSample();
+			return false;
+		}
+	}
+
+	DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+	if (FAILED(vrRenderScaleMemoryAdapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)) || info.Budget == 0) {
+		publishInvalidSample();
+		return false;
+	}
+
+	VRRenderScaleMemorySnapshot snapshot{};
+	snapshot.valid = true;
+	snapshot.sampleFrame = currentFrame;
+	snapshot.transitionEpoch = transitionEpoch;
+	snapshot.budgetBytes = info.Budget;
+	snapshot.currentUsageBytes = info.CurrentUsage;
+	snapshot.currentReservationBytes = info.CurrentReservation;
+	snapshot.availableForReservationBytes = info.AvailableForReservation;
+	snapshot.headroomBytes = info.Budget > info.CurrentUsage ? info.Budget - info.CurrentUsage : 0u;
+	snapshot.usageRatio = static_cast<double>(info.CurrentUsage) / static_cast<double>(info.Budget);
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		vrRenderScaleTransitionController.memory = snapshot;
+		++vrRenderScaleTransitionController.revision;
+	}
+
+	if (a_force && ShouldEmitUpscalingDiagLogs()) {
+		constexpr uint64_t kMiB = 1024u * 1024u;
+		logger::debug(
+			"[VRRenderScale][Memory] epoch={} frame={} usage={}MiB budget={}MiB headroom={}MiB reservation={}MiB availableReservation={}MiB ratio={:.3f}{}{}",
+			snapshot.transitionEpoch,
+			snapshot.sampleFrame,
+			snapshot.currentUsageBytes / kMiB,
+			snapshot.budgetBytes / kMiB,
+			snapshot.headroomBytes / kMiB,
+			snapshot.currentReservationBytes / kMiB,
+			snapshot.availableForReservationBytes / kMiB,
+			snapshot.usageRatio,
+			a_reason && *a_reason ? " reason=" : "",
+			a_reason && *a_reason ? a_reason : "");
+	}
+	return true;
 }
 
 bool Upscaling::HasVRRenderScaleMemoryReliefCleanupPending() const
@@ -21286,6 +21372,7 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+	SampleVRRenderScaleMemory();
 	if (ShouldEmitUpscalingDiagLogs()) {
 		ServiceVRMenuPresentationTraceRaceSexPreRoll();
 		TraceVRRaceSexStartupSignal("configure-poll");
@@ -22138,6 +22225,9 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	pendingVRRenderScaleRecoverySnapshot = {};
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
 	vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
+	vrRenderScaleMemoryAdapter = nullptr;
+	vrRenderScaleMemoryAdapterDevice = nullptr;
+	vrRenderScaleMemoryLastSampleFrame = 0;
 	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 	ClearVRRenderScaleInfoTransition();
 	ClearPendingVRUpscalingTransition();
@@ -24138,6 +24228,7 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 			appliedProfile.displayEyeWidth,
 			appliedProfile.displayEyeHeight);
 	}
+	SampleVRRenderScaleMemory(true, "contract applied");
 }
 
 void Upscaling::PublishVRRenderScaleTransitionStable()

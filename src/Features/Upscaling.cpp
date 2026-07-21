@@ -24565,7 +24565,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 1u;
+	constexpr uint32_t kSchemaVersion = 2u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -24594,17 +24594,30 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	uint32_t requestCount = 0;
 	uint32_t stableCount = 0;
 	uint32_t failureEventCount = 0;
+	uint32_t outOfMemoryFailureEventCount = 0;
+	uint32_t deviceLostFailureEventCount = 0;
+	std::vector<uint64_t> requestEpochs;
 	const uint32_t eventCapacity = static_cast<uint32_t>(session.events.size());
 	const uint32_t firstEvent =
 		(session.nextIndex + eventCapacity - session.count) % eventCapacity;
 	for (uint32_t offset = 0; offset < session.count; ++offset) {
 		const auto& event = session.events[(firstEvent + offset) % eventCapacity];
-		if (event.type == VRRenderScaleStressEventType::Request)
+		if (event.type == VRRenderScaleStressEventType::Request) {
 			++requestCount;
+			if (event.transitionEpoch != 0 &&
+				std::find(requestEpochs.begin(), requestEpochs.end(), event.transitionEpoch) == requestEpochs.end()) {
+				requestEpochs.push_back(event.transitionEpoch);
+			}
+		}
 		if (event.type == VRRenderScaleStressEventType::Stable)
 			++stableCount;
-		if (event.type == VRRenderScaleStressEventType::Failure)
+		if (event.type == VRRenderScaleStressEventType::Failure) {
 			++failureEventCount;
+			if (event.failureKind == VRRenderScaleFailureKind::OutOfMemory)
+				++outOfMemoryFailureEventCount;
+			if (event.failureKind == VRRenderScaleFailureKind::DeviceLost)
+				++deviceLostFailureEventCount;
+		}
 		events.push_back({ { "sequence", event.sequence },
 			{ "frame", event.frame },
 			{ "type", std::string{ magic_enum::enum_name(event.type) } },
@@ -24617,6 +24630,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "dlssPreset", event.dlssPreset },
 			{ "state", GetVRRenderScaleTransitionStateName(event.state) },
 			{ "pressure", GetVRRenderScaleMemoryPressureName(event.pressure) },
+			{ "retryKind", std::string{ magic_enum::enum_name(event.retryKind) } },
+			{ "failureKind", std::string{ magic_enum::enum_name(event.failureKind) } },
 			{ "usageBytes", event.usageBytes },
 			{ "retries", event.retries },
 			{ "failures", event.failures },
@@ -24627,16 +24642,24 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	json metrics = json::array();
 	uint32_t maximumRetries = 0;
 	uint32_t maximumLatencyFrames = 0;
-	uint32_t totalFailures = 0;
-	uint32_t outOfMemoryFailures = 0;
-	uint32_t deviceLostFailures = 0;
-	uint32_t fidelityMismatches = 0;
+	uint32_t completedMetricCount = 0;
+	uint64_t totalFailures = 0;
+	uint64_t outOfMemoryFailures = 0;
+	uint64_t deviceLostFailures = 0;
+	uint64_t fidelityMismatches = 0;
+	std::vector<uint64_t> metricEpochs;
 	auto appendMetrics = [&](const VRRenderScaleTransitionMetrics& a_metrics) {
-		if (!a_metrics.valid || a_metrics.requestedFrame < session.startFrame)
+		if (!a_metrics.valid ||
+			std::find(requestEpochs.begin(), requestEpochs.end(), a_metrics.transitionEpoch) == requestEpochs.end()) {
 			return;
+		}
+		if (std::find(metricEpochs.begin(), metricEpochs.end(), a_metrics.transitionEpoch) == metricEpochs.end())
+			metricEpochs.push_back(a_metrics.transitionEpoch);
 		maximumRetries = std::max(maximumRetries, a_metrics.retries);
-		if (a_metrics.completed)
+		if (a_metrics.completed) {
+			++completedMetricCount;
 			maximumLatencyFrames = std::max(maximumLatencyFrames, a_metrics.totalFrames);
+		}
 		totalFailures += a_metrics.failures;
 		outOfMemoryFailures += a_metrics.outOfMemoryFailures;
 		deviceLostFailures += a_metrics.deviceLostFailures;
@@ -24673,6 +24696,11 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	for (uint32_t offset = 0; offset < controller.metrics.count; ++offset)
 		appendMetrics(controller.metrics.recent[(firstMetric + offset) % metricCapacity]);
 	appendMetrics(controller.metrics.current);
+	const bool metricsComplete =
+		requestEpochs.size() == requestCount &&
+		std::all_of(requestEpochs.begin(), requestEpochs.end(), [&](uint64_t a_epoch) {
+			return std::find(metricEpochs.begin(), metricEpochs.end(), a_epoch) != metricEpochs.end();
+		});
 	record["metrics"] = std::move(metrics);
 
 	const auto lifecycleJson = [](const VRVendorRuntimeLifecycleSnapshot& a_lifecycle) {
@@ -24683,6 +24711,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "transitionEpoch", a_lifecycle.transitionEpoch },
 			{ "requestedGeneration", a_lifecycle.requestedGeneration },
 			{ "runtimeGeneration", a_lifecycle.runtimeGeneration },
+			{ "stateFrame", a_lifecycle.stateFrame },
 			{ "resourcesPresent", a_lifecycle.resourcesPresent },
 			{ "readyForContract", a_lifecycle.readyForContract },
 			{ "attempts", a_lifecycle.attempts },
@@ -24690,31 +24719,72 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "failures", a_lifecycle.failures }
 		};
 	};
+	const auto fidelityEyeJson = [](const VRRenderScaleFidelityEyeSnapshot& a_eye) {
+		return json{
+			{ "frame", a_eye.frame },
+			{ "generation", a_eye.generation },
+			{ "inputWidth", a_eye.inputWidth },
+			{ "inputHeight", a_eye.inputHeight },
+			{ "outputWidth", a_eye.outputWidth },
+			{ "outputHeight", a_eye.outputHeight },
+			{ "evaluated", a_eye.evaluated },
+			{ "valid", a_eye.valid }
+		};
+	};
 	record["controller"] = {
 		{ "state", GetVRRenderScaleTransitionStateName(controller.state) },
 		{ "targetEpoch", controller.targetEpoch },
 		{ "revision", controller.revision },
 		{ "memory", { { "valid", controller.memory.valid },
+						{ "sampleFrame", controller.memory.sampleFrame },
+						{ "transitionEpoch", controller.memory.transitionEpoch },
 						{ "usageBytes", controller.memory.currentUsageBytes },
 						{ "budgetBytes", controller.memory.budgetBytes },
+						{ "reservationBytes", controller.memory.currentReservationBytes },
+						{ "availableForReservationBytes", controller.memory.availableForReservationBytes },
 						{ "headroomBytes", controller.memory.headroomBytes },
-						{ "pressure", GetVRRenderScaleMemoryPressureName(controller.memory.pressure) } } },
+						{ "usageRatio", controller.memory.usageRatio },
+						{ "observedPressure", GetVRRenderScaleMemoryPressureName(controller.memory.observedPressure) },
+						{ "pressure", GetVRRenderScaleMemoryPressureName(controller.memory.pressure) },
+						{ "pressureSinceFrame", controller.memory.pressureSinceFrame },
+						{ "recoverySamples", controller.memory.recoverySamples } } },
 		{ "retirement", { { "pendingSets", controller.retirement.pendingSets },
+							{ "oldestEpoch", controller.retirement.oldestEpoch },
+							{ "newestEpoch", controller.retirement.newestEpoch },
+							{ "nextCleanupFrame", controller.retirement.nextCleanupFrame },
 							{ "fencePending", controller.retirement.fencePending },
 							{ "capacityBlocked", controller.retirement.capacityBlocked } } },
 		{ "postLoadRecovery", { { "active", controller.postLoadRecovery.active },
 								  { "recoveryEpoch", controller.postLoadRecovery.recoveryEpoch },
+								  { "transitionEpoch", controller.postLoadRecovery.transitionEpoch },
+								  { "startFrame", controller.postLoadRecovery.startFrame },
+								  { "lastSampleFrame", controller.postLoadRecovery.lastSampleFrame },
+								  { "lastSettledFrame", controller.postLoadRecovery.lastSettledFrame },
+								  { "settledSamples", controller.postLoadRecovery.settledSamples },
+								  { "baselineUsageBytes", controller.postLoadRecovery.baselineUsageBytes },
 								  { "peakUsageBytes", controller.postLoadRecovery.peakUsageBytes },
-								  { "peakPressure", GetVRRenderScaleMemoryPressureName(controller.postLoadRecovery.peakPressure) } } },
+								  { "peakPressure", GetVRRenderScaleMemoryPressureName(controller.postLoadRecovery.peakPressure) },
+								  { "cleanupArmed", controller.postLoadRecovery.cleanupArmed },
+								  { "cleanupDrained", controller.postLoadRecovery.cleanupDrained },
+								  { "relatchAdmitted", controller.postLoadRecovery.relatchAdmitted } } },
 		{ "fidelity", { { "active", controller.fidelity.active },
 						  { "transitionEpoch", controller.fidelity.transitionEpoch },
 						  { "contractGeneration", controller.fidelity.contractGeneration },
 						  { "method", std::string{ magic_enum::enum_name(controller.fidelity.method) } },
 						  { "backend", std::string{ magic_enum::enum_name(controller.fidelity.backend) } },
+						  { "expectedInputWidth", controller.fidelity.expectedInputWidth },
+						  { "expectedInputHeight", controller.fidelity.expectedInputHeight },
+						  { "expectedOutputWidth", controller.fidelity.expectedOutputWidth },
+						  { "expectedOutputHeight", controller.fidelity.expectedOutputHeight },
+						  { "observationEyeMask", controller.fidelity.observationEyeMask },
 						  { "bothEyesValid", controller.fidelity.bothEyesValid },
 						  { "evaluationEyeMask", controller.fidelity.evaluationEyeMask },
+						  { "invariantEyeMask", controller.fidelity.invariantEyeMask },
 						  { "mismatchCount", controller.fidelity.mismatchCount },
-						  { "lastMismatchMask", controller.fidelity.lastMismatchMask } } },
+						  { "lastMismatchMask", controller.fidelity.lastMismatchMask },
+						  { "consecutiveValidFrames", controller.fidelity.consecutiveValidFrames },
+						  { "lastBothEyesFrame", controller.fidelity.lastBothEyesFrame },
+						  { "eyes", json::array({ fidelityEyeJson(controller.fidelity.eyes[0]), fidelityEyeJson(controller.fidelity.eyes[1]) }) } } },
 		{ "dlssLifecycle", lifecycleJson(controller.dlssLifecycle) },
 		{ "fsrLifecycle", lifecycleJson(controller.fsrLifecycle) }
 	};
@@ -24727,17 +24797,37 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		controller.stable.active &&
 		IsVendorUpscalingMethod(controller.stable.method);
 	bool lifecycleReady = true;
-	if (stableActiveVendor && controller.stable.method == UpscaleMethod::kDLSS)
-		lifecycleReady = controller.dlssLifecycle.readyForContract;
-	if (stableActiveVendor && controller.stable.method == UpscaleMethod::kFSR)
-		lifecycleReady = controller.fsrLifecycle.readyForContract;
+	if (stableActiveVendor) {
+		const auto& lifecycle = controller.stable.method == UpscaleMethod::kDLSS ?
+		                            controller.dlssLifecycle :
+		                            controller.fsrLifecycle;
+		lifecycleReady =
+			lifecycle.readyForContract &&
+			lifecycle.requestedGeneration == controller.stable.contractGeneration &&
+			lifecycle.runtimeGeneration == controller.stable.contractGeneration;
+	}
+	const bool memoryEvidenceValid =
+		controller.memory.valid &&
+		controller.memory.sampleFrame >= session.startFrame &&
+		(session.endFrame == 0 || controller.memory.sampleFrame <= session.endFrame);
 	const bool pressureRecovered =
+		memoryEvidenceValid &&
 		controller.memory.pressure != VRRenderScaleMemoryPressure::High &&
 		controller.memory.pressure != VRRenderScaleMemoryPressure::Critical &&
 		!controller.postLoadRecovery.active;
 	const bool fidelityValid =
 		!stableActiveVendor ||
-		(controller.fidelity.bothEyesValid && controller.fidelity.lastMismatchMask == 0);
+		(controller.fidelity.active &&
+			controller.fidelity.transitionEpoch == controller.stable.transitionEpoch &&
+			controller.fidelity.contractGeneration == controller.stable.contractGeneration &&
+			(controller.fidelity.evaluationEyeMask & 0x3u) == 0x3u &&
+			controller.fidelity.bothEyesValid &&
+			controller.fidelity.lastMismatchMask == 0);
+	const bool retirementDrained =
+		controller.retirement.pendingSets == 0 &&
+		controller.retirement.nextCleanupFrame == 0 &&
+		!controller.retirement.fencePending &&
+		!controller.retirement.capacityBlocked;
 
 	json gates = json::array();
 	json failureReasons = json::array();
@@ -24756,14 +24846,16 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	addGate("minimum_requests", requestCount >= kMinimumRequests, requestCount, kMinimumRequests);
 	addGate("terminal_state", terminalState && !controller.metrics.current.valid, GetVRRenderScaleTransitionStateName(controller.state), "Active or Idle with no current transition");
 	addGate("no_capture_overflow", session.overwrittenEvents == 0, session.overwrittenEvents, 0);
-	addGate("no_failures", totalFailures == 0 && failureEventCount == 0, std::max(totalFailures, failureEventCount), 0);
-	addGate("no_out_of_memory", outOfMemoryFailures == 0, outOfMemoryFailures, 0);
-	addGate("no_device_loss", deviceLostFailures == 0, deviceLostFailures, 0);
+	addGate("metrics_complete", metricsComplete, metricEpochs.size(), requestEpochs.size());
+	addGate("no_failures", totalFailures == 0 && failureEventCount == 0, std::max<uint64_t>(totalFailures, failureEventCount), 0);
+	addGate("no_out_of_memory", outOfMemoryFailures == 0 && outOfMemoryFailureEventCount == 0, std::max<uint64_t>(outOfMemoryFailures, outOfMemoryFailureEventCount), 0);
+	addGate("no_device_loss", deviceLostFailures == 0 && deviceLostFailureEventCount == 0, std::max<uint64_t>(deviceLostFailures, deviceLostFailureEventCount), 0);
 	addGate("retry_bound", maximumRetries <= kMaximumRetriesPerTransition, maximumRetries, kMaximumRetriesPerTransition);
-	addGate("stable_latency_bound", stableCount != 0 && maximumLatencyFrames <= kMaximumStableLatencyFrames, maximumLatencyFrames, kMaximumStableLatencyFrames);
-	addGate("fidelity_invariants", fidelityMismatches == 0 && controller.fidelity.mismatchCount == 0 && fidelityValid, fidelityMismatches + controller.fidelity.mismatchCount, 0);
-	addGate("retirement_drained", controller.retirement.pendingSets == 0 && !controller.retirement.fencePending, controller.retirement.pendingSets, 0);
-	addGate("memory_recovered", pressureRecovered, GetVRRenderScaleMemoryPressureName(controller.memory.pressure), "Normal, Elevated, or Unknown with recovery inactive");
+	addGate("stable_latency_bound", stableCount != 0 && completedMetricCount != 0 && maximumLatencyFrames <= kMaximumStableLatencyFrames, maximumLatencyFrames, kMaximumStableLatencyFrames);
+	addGate("fidelity_invariants", fidelityMismatches == 0 && controller.fidelity.mismatchCount == 0 && fidelityValid, { { "metrics", fidelityMismatches }, { "current", controller.fidelity.mismatchCount } }, 0);
+	addGate("retirement_drained", retirementDrained, { { "pendingSets", controller.retirement.pendingSets }, { "nextCleanupFrame", controller.retirement.nextCleanupFrame }, { "fencePending", controller.retirement.fencePending }, { "capacityBlocked", controller.retirement.capacityBlocked } }, 0);
+	addGate("memory_sample_valid", memoryEvidenceValid, memoryEvidenceValid, true);
+	addGate("memory_recovered", pressureRecovered, GetVRRenderScaleMemoryPressureName(controller.memory.pressure), "Normal or Elevated with recovery inactive");
 	addGate("backend_ready", lifecycleReady, lifecycleReady, true);
 	record["acceptance"] = {
 		{ "verdict", accepted ? "pass" : "fail" },
@@ -24792,20 +24884,47 @@ bool Upscaling::WriteVRRenderScaleIterationRecord() const
 	try {
 		const auto directory = Util::PathHelpers::GetCommunityShaderPath() / "Diagnostics" / "VRRenderScale";
 		std::filesystem::create_directories(directory);
-		const auto path = directory / std::format(
-										  "iteration-{}-{}-{}.json",
-										  session.sessionID,
-										  session.startFrame,
-										  session.endFrame);
-		std::ofstream file(path, std::ios::out | std::ios::trunc);
+		const auto contents = BuildVRRenderScaleIterationRecord().dump(2);
+		const auto filenameStem = std::format(
+			"iteration-{}-{}-{}",
+			session.sessionID,
+			session.startFrame,
+			session.endFrame);
+		auto path = directory / std::format("{}.json", filenameStem);
+		for (uint32_t suffix = 1u; std::filesystem::exists(path); ++suffix)
+			path = directory / std::format("{}-{}.json", filenameStem, suffix);
+		auto temporaryPath = path;
+		temporaryPath += ".tmp";
+		std::ofstream file(temporaryPath, std::ios::out | std::ios::trunc);
 		if (!file) {
-			logger::error("[VRRenderScale][Iteration] Could not open {} for writing.", path.string());
+			logger::error("[VRRenderScale][Iteration] Could not open {} for writing.", temporaryPath.string());
 			return false;
 		}
-		file << BuildVRRenderScaleIterationRecord().dump(2);
+		file << contents;
 		file.flush();
 		if (!file) {
-			logger::error("[VRRenderScale][Iteration] Failed while writing {}.", path.string());
+			file.close();
+			std::error_code cleanupError;
+			std::filesystem::remove(temporaryPath, cleanupError);
+			logger::error("[VRRenderScale][Iteration] Failed while writing {}.", temporaryPath.string());
+			return false;
+		}
+		file.close();
+		if (!file) {
+			std::error_code cleanupError;
+			std::filesystem::remove(temporaryPath, cleanupError);
+			logger::error("[VRRenderScale][Iteration] Failed while closing {}.", temporaryPath.string());
+			return false;
+		}
+		std::error_code renameError;
+		std::filesystem::rename(temporaryPath, path, renameError);
+		if (renameError) {
+			std::error_code cleanupError;
+			std::filesystem::remove(temporaryPath, cleanupError);
+			logger::error(
+				"[VRRenderScale][Iteration] Could not finalize {}: {}.",
+				path.string(),
+				renameError.message());
 			return false;
 		}
 		logger::info("[VRRenderScale][Iteration] Wrote machine-readable iteration record to {}.", path.string());

@@ -15,7 +15,7 @@ Use identical save, location, CS profile, change order, dwell frames, HMD resolu
 
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 1`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 2`. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -24,7 +24,7 @@ Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVers
 5. Prefer lower stable latency and fewer retries only after correctness, fidelity, OOM, device-loss, retirement, memory-recovery, and backend-readiness gates pass.
 6. Retain the complete JSON artifact with the candidate commit and scenario identifier.
 
-The event ring retains 128 entries and the transition metrics ring retains 16 transitions. A capture-overflow gate fails if the event ring overwrites data. Keep each iteration within those bounds.
+The event ring retains 128 entries and the transition metrics ring retains 16 transitions. A capture-overflow gate fails if the event ring overwrites data, and a metrics-coverage gate fails if any captured request epoch has rotated out of the metrics ring. Keep each iteration within both bounds. Retry and failure events retain their normalized kind so pressure, retirement, backend, OOM, and device-loss evidence remains classifiable.
 
 ## Acceptance gates
 
@@ -32,15 +32,16 @@ The runtime currently requires:
 
 -   a stopped capture containing at least two accepted requests;
 -   an `Active` or `Idle` terminal controller with no transition still in flight;
--   no overwritten capture events, backend failures, OOM, or device loss;
+-   no overwritten capture events and complete per-request metric coverage;
+-   no backend failures, OOM, or device loss in either metrics or classified events;
 -   no more than 32 retries for one transition;
 -   at least one stable transition and no more than 120 frames to stability;
--   zero fidelity invariant mismatches across method, epoch, generation, dimensions, evaluation, and eye symmetry;
--   a drained retirement queue and no outstanding retirement fence;
--   memory recovered below `High` pressure with post-load recovery complete;
--   the active DLSS or FSR backend ready for its contract generation.
+-   zero fidelity invariant mismatches across method, epoch, generation, dimensions, evaluation, and eye symmetry, with finalized vendor evaluation proven for both eyes;
+-   a fully drained retirement queue with no deferred cleanup frame, outstanding fence, or capacity block;
+-   a valid DXGI memory sample and pressure recovered below `High` with post-load recovery complete;
+-   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
 
-These thresholds are part of schema version 1. Change the schema version if their meaning or units change.
+These thresholds are part of schema version 2. Change the schema version if their meaning or units change.
 
 ## Ghidra correlation
 

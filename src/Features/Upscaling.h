@@ -12,7 +12,9 @@
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
 #include <limits>
+#include <mutex>
 #include <openvr.h>
+#include <optional>
 #include <vector>
 #include <winrt/base.h>
 
@@ -111,7 +113,6 @@ public:
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
-	static constexpr uint32_t kPendingVRUpscalingSettingUnset = std::numeric_limits<uint32_t>::max();
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexStartupTail = 1u << 1;
@@ -201,22 +202,26 @@ public:
 		FoveatedRegionPlan foveatedRegion{};
 	};
 
+	/** @brief Complete, immutable target captured for one deferred VR render-scale request. */
 	struct VRRenderScaleDesiredProfile
 	{
-		bool qualityModePending = false;
-		bool renderScaleModePending = false;
-		bool dlssPresetPending = false;
-		bool perfModePending = false;
+		bool pending = false;
+		uint64_t requestID = 0;
+		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t qualityMode = 0;
 		bool renderScaleModeEnabled = false;
 		uint32_t dlssPreset = kDLSSPresetK;
 		bool perfModeEnabled = false;
+		bool fsr4RuntimeEnabled = false;
+		uint32_t dlssSharpener = static_cast<uint32_t>(DLSSSharpenerMode::RCAS);
+		float dlssSharpness = 0.0f;
+		float fsrSharpness = 0.0f;
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
 
 		bool HasPendingSettings() const
 		{
-			return qualityModePending || renderScaleModePending || dlssPresetPending || perfModePending;
+			return pending;
 		}
 	};
 
@@ -278,7 +283,14 @@ public:
 
 	PerfModeState perfMode;
 	RuntimeResolutionPlan runtimeResolutionPlan;
+	/** @brief Returns the pending request, or a non-pending snapshot of current settings. */
 	VRRenderScaleDesiredProfile GetPendingVRRenderScaleDesiredProfile() const;
+	/** @brief Publishes one complete latest-wins request. Returns zero when origin priority rejects it. */
+	uint64_t QueueVRRenderScaleRequest(UpscaleMethod a_method, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	/** @brief Atomically removes and returns the complete pending request. */
+	std::optional<VRRenderScaleDesiredProfile> TakePendingVRRenderScaleRequest();
+	/** @brief Rejects a request that was cleared or superseded before application began. */
+	bool IsLatestVRRenderScaleRequest(uint64_t a_requestID) const;
 	uint32_t GetActiveVRRenderScaleContractGeneration() const;
 	bool IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMethod) const;
 	void MarkVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);
@@ -832,12 +844,10 @@ public:
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
-	std::atomic<uint32_t> pendingVRUpscalingQualityMode{ kPendingVRUpscalingSettingUnset };
-	std::atomic<uint32_t> pendingVRRenderScaleMode{ kPendingVRUpscalingSettingUnset };
-	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRUpscalingSettingUnset };
-	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRUpscalingSettingUnset };
-	std::atomic<uint32_t> pendingVRUpscalingTransitionFrame{ 0 };
-	std::atomic<uint32_t> pendingVRUpscalingTransitionOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
+	mutable std::mutex pendingVRRenderScaleRequestMutex;
+	std::optional<VRRenderScaleDesiredProfile> pendingVRRenderScaleRequest;
+	std::atomic<uint64_t> nextVRRenderScaleRequestID{ 1 };
+	std::atomic<uint64_t> latestVRRenderScaleRequestID{ 0 };
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
@@ -980,10 +990,6 @@ public:
 	uint32_t GetEffectiveUpscalingQualityMode() const;
 	uint32_t GetEffectiveDLSSQualityMode() const;
 	uint32_t GetEffectiveDLSSPreset() const;
-	void QueueVRUpscalingQualityMode(uint32_t a_qualityMode, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void QueueVRRenderScaleModeRequest(bool a_enabled, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void QueueVRDLSSPreset(uint32_t a_dlssPreset, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void QueueVRPerfModeRequest(bool a_enabled, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	void MarkVRUpscalingTransitionQueued(VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	void ClearPendingVRUpscalingTransition();
 	bool HasPendingVRUpscalingTransition() const;
@@ -995,7 +1001,7 @@ public:
 	bool ShouldWaitForVRUpscalingTransitionDelay() const;
 	void MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames = 0);
 	bool ShouldWaitForPerfModeRenderTargetRecreateDelay() const;
-	void ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod);
+	void ApplyPendingVRUpscalingTransition();
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);
 	void LatchHistoryResetForCurrentFrame();

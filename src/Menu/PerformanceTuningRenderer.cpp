@@ -101,6 +101,8 @@ namespace
 		MeasuringCurrent,
 		SettlingTest,
 		MeasuringTest,
+		SettlingRestoredCurrent,
+		MeasuringRestoredCurrent,
 		Complete
 	};
 
@@ -121,6 +123,7 @@ namespace
 		double phaseStartTime = 0.0;
 		FeatureCostSample currentSample;
 		FeatureCostSample testSample;
+		FeatureCostSample restoredCurrentSample;
 		FeatureCostDelta delta;
 	};
 
@@ -184,7 +187,9 @@ namespace
 	{
 		return state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
 		       state.phase == FeatureCostMeasurementPhase::SettlingTest ||
-		       state.phase == FeatureCostMeasurementPhase::MeasuringTest;
+		       state.phase == FeatureCostMeasurementPhase::MeasuringTest ||
+		       state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent ||
+		       state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent;
 	}
 
 	bool IsFeatureCostMeasurementActive(const FeatureCostMeasurementState& state)
@@ -205,6 +210,14 @@ namespace
 	float AverageOrZero(float sum, int count)
 	{
 		return count > 0 ? sum / static_cast<float>(count) : 0.0f;
+	}
+
+	float AverageFeatureCostCurrentWindows(float firstSum, int firstCount, float secondSum, int secondCount)
+	{
+		if (firstCount <= 0 || secondCount <= 0)
+			return 0.0f;
+
+		return (AverageOrZero(firstSum, firstCount) + AverageOrZero(secondSum, secondCount)) * 0.5f;
 	}
 
 	bool IsFeatureCostSampleFramePaced(const FeatureCostSample& sample)
@@ -675,13 +688,28 @@ namespace
 
 	void FinalizeFeatureCostMeasurement(FeatureCostMeasurementState& state)
 	{
-		const float currentFrameMs = AverageOrZero(state.currentSample.frameMsSum, state.currentSample.frameSamples);
-		const float currentProfilerGpuMs = AverageOrZero(state.currentSample.profilerGpuMsSum, state.currentSample.profilerGpuSamples);
-		const float currentProfilerCpuMs = AverageOrZero(state.currentSample.profilerCpuMsSum, state.currentSample.profilerCpuSamples);
+		const float currentFrameMs = AverageFeatureCostCurrentWindows(
+			state.currentSample.frameMsSum,
+			state.currentSample.frameSamples,
+			state.restoredCurrentSample.frameMsSum,
+			state.restoredCurrentSample.frameSamples);
+		const float currentProfilerGpuMs = AverageFeatureCostCurrentWindows(
+			state.currentSample.profilerGpuMsSum,
+			state.currentSample.profilerGpuSamples,
+			state.restoredCurrentSample.profilerGpuMsSum,
+			state.restoredCurrentSample.profilerGpuSamples);
+		const float currentProfilerCpuMs = AverageFeatureCostCurrentWindows(
+			state.currentSample.profilerCpuMsSum,
+			state.currentSample.profilerCpuSamples,
+			state.restoredCurrentSample.profilerCpuMsSum,
+			state.restoredCurrentSample.profilerCpuSamples);
 		const float inactiveFrameMs = AverageOrZero(state.testSample.frameMsSum, state.testSample.frameSamples);
 		const float inactiveProfilerGpuMs = AverageOrZero(state.testSample.profilerGpuMsSum, state.testSample.profilerGpuSamples);
 		const float inactiveProfilerCpuMs = AverageOrZero(state.testSample.profilerCpuMsSum, state.testSample.profilerCpuSamples);
-		const bool hasFrame = state.currentSample.frameSamples > 0 && state.testSample.frameSamples > 0;
+		const bool hasFrame =
+			state.currentSample.frameSamples > 0 &&
+			state.restoredCurrentSample.frameSamples > 0 &&
+			state.testSample.frameSamples > 0;
 		const float currentFps = hasFrame ? 1000.0f / currentFrameMs : 0.0f;
 		const float inactiveFps = hasFrame ? 1000.0f / inactiveFrameMs : 0.0f;
 
@@ -691,13 +719,21 @@ namespace
 		state.delta.profilerCpuMs = CalculateFeatureCostDeltaMs(currentProfilerCpuMs, inactiveProfilerCpuMs);
 		state.delta.hasFrame = hasFrame;
 		state.delta.hasFps = hasFrame;
-		state.delta.hasProfilerGpu = state.currentSample.profilerGpuSamples > 0 && state.testSample.profilerGpuSamples > 0;
-		state.delta.hasProfilerCpu = state.currentSample.profilerCpuSamples > 0 && state.testSample.profilerCpuSamples > 0;
+		state.delta.hasProfilerGpu =
+			state.currentSample.profilerGpuSamples > 0 &&
+			state.restoredCurrentSample.profilerGpuSamples > 0 &&
+			state.testSample.profilerGpuSamples > 0;
+		state.delta.hasProfilerCpu =
+			state.currentSample.profilerCpuSamples > 0 &&
+			state.restoredCurrentSample.profilerCpuSamples > 0 &&
+			state.testSample.profilerCpuSamples > 0;
 		state.delta.fpsPresentSynced =
 			state.currentSample.presentSyncedSamples > 0 ||
+			state.restoredCurrentSample.presentSyncedSamples > 0 ||
 			state.testSample.presentSyncedSamples > 0;
 		state.delta.fpsFramePaced =
 			IsFeatureCostSampleFramePaced(state.currentSample) ||
+			IsFeatureCostSampleFramePaced(state.restoredCurrentSample) ||
 			IsFeatureCostSampleFramePaced(state.testSample);
 	}
 
@@ -750,6 +786,22 @@ namespace
 		state.testStateApplied = false;
 	}
 
+	void BeginFeatureCostMeasurementRestoredCurrentSettle(Feature* feature, FeatureCostMeasurementState& state, double currentTime)
+	{
+		RestoreFeatureCostMeasurementOriginalState(feature, state);
+		state.restoredCurrentSample = {};
+
+		const double settleSeconds = feature ? std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(true)) : 0.0;
+		if (settleSeconds > 0.0) {
+			state.phase = FeatureCostMeasurementPhase::SettlingRestoredCurrent;
+			state.phaseStartTime = currentTime;
+			return;
+		}
+
+		state.phase = FeatureCostMeasurementPhase::MeasuringRestoredCurrent;
+		state.phaseStartTime = currentTime;
+	}
+
 	void UpdateFeatureCostMeasurement(
 		Feature* feature,
 		FeatureCostMeasurementState& state,
@@ -764,6 +816,8 @@ namespace
 				state.currentSample = {};
 			else if (state.phase == FeatureCostMeasurementPhase::MeasuringTest)
 				state.testSample = {};
+			else if (state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent)
+				state.restoredCurrentSample = {};
 
 			state.phaseStartTime = currentTime;
 			return;
@@ -792,8 +846,25 @@ namespace
 		if (state.phase == FeatureCostMeasurementPhase::MeasuringTest) {
 			AddFeatureCostSample(state.testSample, current);
 			if (elapsed >= kFeatureCostMeasurementSeconds) {
+				BeginFeatureCostMeasurementRestoredCurrentSettle(feature, state, currentTime);
+			}
+			return;
+		}
+
+		if (state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent) {
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(true));
+			if (elapsed >= settleSeconds) {
+				state.restoredCurrentSample = {};
+				state.phase = FeatureCostMeasurementPhase::MeasuringRestoredCurrent;
+				state.phaseStartTime = currentTime;
+			}
+			return;
+		}
+
+		if (state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent) {
+			AddFeatureCostSample(state.restoredCurrentSample, current);
+			if (elapsed >= kFeatureCostMeasurementSeconds) {
 				FinalizeFeatureCostMeasurement(state);
-				RestoreFeatureCostMeasurementOriginalState(feature, state);
 				state.phase = FeatureCostMeasurementPhase::Complete;
 			}
 		}
@@ -946,9 +1017,10 @@ namespace
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextWrapped(
-				"Measures current settings for %.0f seconds, lets the comparison state settle, measures it for %.0f seconds, then restores the original settings.",
+				"Measures current settings for %.0f seconds, measures the settled comparison state for %.0f seconds, restores the original settings, then measures the settled current state once more.",
 				kFeatureCostMeasurementSeconds,
 				kFeatureCostMeasurementSeconds);
+			ImGui::TextWrapped("The comparison uses the exact per-frame samples captured during these windows; it does not use the rolling 60-frame display averages.");
 			if (feature && feature->GetShortName() == "Skylighting") {
 				ImGui::TextWrapped("For Skylighting, the comparison state is the in-game Enable Skylighting toggle set to Off, not lower Skylighting settings.");
 			}
@@ -964,16 +1036,23 @@ namespace
 			ImGui::TextDisabled("Finish the current measurement first");
 		}
 
-		if (state.phase == FeatureCostMeasurementPhase::SettlingTest) {
-			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(state.testEnabled));
+		if (state.phase == FeatureCostMeasurementPhase::SettlingTest ||
+			state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent) {
+			const bool restoringCurrent = state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent;
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(restoringCurrent));
 			const double elapsed = std::clamp(ImGui::GetTime() - state.phaseStartTime, 0.0, settleSeconds);
 			ImGui::SameLine();
-			ImGui::TextDisabled("%s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
+			if (restoringCurrent) {
+				ImGui::TextDisabled("Restoring current: %s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
+			} else {
+				ImGui::TextDisabled("%s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
+			}
 			return;
 		}
 
 		if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
-			state.phase == FeatureCostMeasurementPhase::MeasuringTest) {
+			state.phase == FeatureCostMeasurementPhase::MeasuringTest ||
+			state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent) {
 			if (!feature->IsPerformanceCostMeasurementReady()) {
 				ImGui::SameLine();
 				ImGui::TextDisabled("%s", feature->GetPerformanceCostMeasurementWaitText());
@@ -983,13 +1062,15 @@ namespace
 			const double elapsed = std::clamp(ImGui::GetTime() - state.phaseStartTime, 0.0, kFeatureCostMeasurementSeconds);
 			ImGui::SameLine();
 			if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent) {
-				ImGui::TextDisabled("Measuring current %.1f / %.1fs", elapsed, kFeatureCostMeasurementSeconds);
-			} else {
+				ImGui::TextDisabled("Measuring current (1/2) %.1f / %.1fs", elapsed, kFeatureCostMeasurementSeconds);
+			} else if (state.phase == FeatureCostMeasurementPhase::MeasuringTest) {
 				ImGui::TextDisabled(
 					"Measuring %s %.1f / %.1fs",
 					GetFeatureCostComparisonLabel(feature, state),
 					elapsed,
 					kFeatureCostMeasurementSeconds);
+			} else {
+				ImGui::TextDisabled("Measuring current (2/2) %.1f / %.1fs", elapsed, kFeatureCostMeasurementSeconds);
 			}
 			return;
 		}
@@ -1004,7 +1085,7 @@ namespace
 		}
 
 		ImGui::Spacing();
-		ImGui::TextDisabled("Current - %s", GetFeatureCostComparisonLabel(feature, state));
+		ImGui::TextDisabled("Current (two windows) - %s", GetFeatureCostComparisonLabel(feature, state));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextWrapped("Frametime uses current settings minus %s: positive added cost is magenta; negative savings are green.", GetFeatureCostComparisonLabel(feature, state));
 			ImGui::TextWrapped("Total is present-to-present, so VSync or an FPS limit can hide a workload change there; use GPU and CPU to see uncapped scene cost.");

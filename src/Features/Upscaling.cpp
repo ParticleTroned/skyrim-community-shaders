@@ -1011,6 +1011,8 @@ void Upscaling::DrawEssentialSettings()
 
 	ImGui::SeparatorText("Frame Generation");
 	DrawFrameGenerationEnabledToggle(settings);
+	if ((settings.frameGenerationMode != 0) != IsFrameGenerationDx12PathActive())
+		Util::Text::Warning("Warning: Requires restart");
 	DrawFrameGenerationForceEnableToggle(*this);
 }
 

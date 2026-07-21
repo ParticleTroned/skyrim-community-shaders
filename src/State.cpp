@@ -188,8 +188,6 @@ void State::Debug()
 
 void State::Reset()
 {
-	globals::profiler->EndFrame();
-
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();

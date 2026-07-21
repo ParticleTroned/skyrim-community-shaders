@@ -5,13 +5,12 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
+#include <imgui.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <imgui.h>
 
 #include "Globals.h"
-#include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
 
@@ -212,8 +211,8 @@ static uint32_t CollectDisplayTimingSamples(const Profiler::TimerResult& result,
 	const uint32_t firstSample = historyCount - sampleCount;
 	for (uint32_t i = 0; i < sampleCount; ++i)
 		samples[i] = cpuMode ?
-		                         result.GetCpuHistorySample(firstSample + i) :
-		                         result.GetHistorySample(firstSample + i);
+		                 result.GetCpuHistorySample(firstSample + i) :
+		                 result.GetHistorySample(firstSample + i);
 
 	return sampleCount;
 }
@@ -840,7 +839,6 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			ImGui::EndTable();
 		}
 	}
-
 }
 
 void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
@@ -886,7 +884,6 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture)
 {
 	PerformanceTimingSummary summary;
-	summary.frameCount = globals::state ? globals::state->frameCount : 0;
 	if (!globals::profiler)
 		return summary;
 
@@ -957,29 +954,35 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 		}
 	}
 
-	summary.gpuTotalMs = profiler.GetTotalTimeAverageMs(kDisplayedRollingFrameCount);
-	summary.cpuTotalMs = profiler.GetCpuTotalTimeAverageMs(kDisplayedRollingFrameCount);
-	if (IsPositiveFinite(summary.gpuTotalMs)) {
+	summary.sampleId = profiler.GetWholeFrameSampleId();
+	if (profiler.HasWholeFrameGpuTime()) {
+		summary.gpuTotalMs = profiler.GetWholeFrameGpuTimeAverageMs(kDisplayedRollingFrameCount);
 		summary.profilerGpuMs = summary.gpuTotalMs;
-		summary.profilerGpuSampleMs = summary.gpuTotalMs;
-		summary.hasProfilerGpu = true;
-		summary.hasProfilerGpuSample = true;
+		summary.hasProfilerGpu = IsPositiveFinite(summary.profilerGpuMs);
 	}
-	if (IsPositiveFinite(summary.cpuTotalMs)) {
+	if (profiler.HasWholeFrameCpuTime()) {
+		summary.cpuTotalMs = profiler.GetWholeFrameCpuTimeAverageMs(kDisplayedRollingFrameCount);
 		summary.profilerCpuMs = summary.cpuTotalMs;
-		summary.profilerCpuSampleMs = summary.cpuTotalMs;
-		summary.hasProfilerCpu = true;
-		summary.hasProfilerCpuSample = true;
+		summary.hasProfilerCpu = IsPositiveFinite(summary.profilerCpuMs);
+	}
+	if (profiler.HasFrameTime()) {
+		summary.frameMs = profiler.GetFrameTimeAverageMs(kDisplayedRollingFrameCount);
+		if (IsPositiveFinite(summary.frameMs))
+			summary.fps = 1000.0f / summary.frameMs;
 	}
 
-	if (summary.hasProfilerGpu || summary.hasProfilerCpu) {
-		summary.frameMs = std::max(summary.hasProfilerGpu ? summary.profilerGpuMs : 0.0f, summary.hasProfilerCpu ? summary.profilerCpuMs : 0.0f);
-		summary.frameSampleMs = summary.frameMs;
+	if (profiler.HasLatestWholeFrameGpuSample()) {
+		summary.profilerGpuSampleMs = profiler.GetWholeFrameGpuTimeMs();
+		summary.hasProfilerGpuSample = IsPositiveFinite(summary.profilerGpuSampleMs);
+	}
+	if (profiler.HasLatestWholeFrameCpuSample()) {
+		summary.profilerCpuSampleMs = profiler.GetWholeFrameCpuTimeMs();
+		summary.hasProfilerCpuSample = IsPositiveFinite(summary.profilerCpuSampleMs);
+	}
+	if (profiler.HasLatestFrameTimeSample()) {
+		summary.frameSampleMs = profiler.GetFrameTimeMs();
 		summary.hasFrameSample = IsPositiveFinite(summary.frameSampleMs);
-		if (IsPositiveFinite(summary.frameMs)) {
-			summary.fps = 1000.0f / summary.frameMs;
-			summary.fpsSample = summary.fps;
-		}
+		summary.framePresentSynced = summary.hasFrameSample && profiler.WasLatestFramePresentSynced();
 	}
 
 	for (const auto& [rootName, bucket] : timingBuckets) {

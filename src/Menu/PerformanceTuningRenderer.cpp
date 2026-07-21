@@ -30,6 +30,7 @@ namespace
 	constexpr int kTuningHighlightFrames = 240;
 	constexpr double kFeatureCostMeasurementSeconds = 3.0;
 	constexpr float kFeatureCostDisplayEpsilonMs = 0.0005f;
+	constexpr float kFramePacingDetectionEpsilonMs = 1.0f;
 
 	constexpr std::array<std::string_view, 12> kPerformanceFeatureOrder = {
 		"Upscaling",
@@ -69,14 +70,15 @@ namespace
 	struct FeatureCostSample
 	{
 		float frameMsSum = 0.0f;
-		float fpsSum = 0.0f;
 		float profilerGpuMsSum = 0.0f;
 		float profilerCpuMsSum = 0.0f;
 		int frameSamples = 0;
-		int fpsSamples = 0;
 		int profilerGpuSamples = 0;
 		int profilerCpuSamples = 0;
-		uint32_t lastFrameCount = 0;
+		int presentSyncedSamples = 0;
+		int framePacedSamples = 0;
+		int framePacingEligibleSamples = 0;
+		uint64_t lastSampleId = 0;
 	};
 
 	struct FeatureCostDelta
@@ -89,6 +91,8 @@ namespace
 		bool hasFps = false;
 		bool hasProfilerGpu = false;
 		bool hasProfilerCpu = false;
+		bool fpsPresentSynced = false;
+		bool fpsFramePaced = false;
 	};
 
 	enum class FeatureCostMeasurementPhase
@@ -154,6 +158,12 @@ namespace
 		return deltaMs > 0.0f ? 1 : -1;
 	}
 
+	float CalculateFeatureCostDeltaMs(float currentMs, float inactiveMs)
+	{
+		// Positive values are added cost; negative values are savings against the inactive state.
+		return currentMs - inactiveMs;
+	}
+
 	int GetDirectionFromFeatureCostFrameTimeDelta(float deltaMs)
 	{
 		if (std::abs(deltaMs) <= kFeatureCostDisplayEpsilonMs)
@@ -195,6 +205,12 @@ namespace
 	float AverageOrZero(float sum, int count)
 	{
 		return count > 0 ? sum / static_cast<float>(count) : 0.0f;
+	}
+
+	bool IsFeatureCostSampleFramePaced(const FeatureCostSample& sample)
+	{
+		return sample.framePacingEligibleSamples > 0 &&
+		       sample.framePacedSamples * 2 >= sample.framePacingEligibleSamples;
 	}
 
 	bool IsPositiveFiniteTiming(float value)
@@ -549,20 +565,24 @@ namespace
 		if (!summary.valid)
 			return;
 
-		if (summary.frameCount != 0) {
-			if (summary.frameCount == sample.lastFrameCount)
-				return;
-
-			sample.lastFrameCount = summary.frameCount;
-		}
+		if (summary.sampleId == 0 || summary.sampleId == sample.lastSampleId)
+			return;
+		sample.lastSampleId = summary.sampleId;
 
 		if (summary.hasFrameSample && summary.frameSampleMs > 0.0f) {
 			sample.frameMsSum += summary.frameSampleMs;
 			sample.frameSamples++;
-		}
-		if (summary.hasFrameSample && summary.fpsSample > 0.0f) {
-			sample.fpsSum += summary.fpsSample;
-			sample.fpsSamples++;
+			if (summary.framePresentSynced)
+				sample.presentSyncedSamples++;
+
+			const float sceneWorkMs = std::max(
+				summary.hasProfilerGpuSample ? summary.profilerGpuSampleMs : 0.0f,
+				summary.hasProfilerCpuSample ? summary.profilerCpuSampleMs : 0.0f);
+			if (sceneWorkMs > 0.0f) {
+				sample.framePacingEligibleSamples++;
+				if (summary.frameSampleMs > sceneWorkMs + kFramePacingDetectionEpsilonMs)
+					sample.framePacedSamples++;
+			}
 		}
 		if (summary.hasProfilerGpuSample && summary.profilerGpuSampleMs > 0.0f) {
 			sample.profilerGpuMsSum += summary.profilerGpuSampleMs;
@@ -658,26 +678,27 @@ namespace
 		const float currentFrameMs = AverageOrZero(state.currentSample.frameMsSum, state.currentSample.frameSamples);
 		const float currentProfilerGpuMs = AverageOrZero(state.currentSample.profilerGpuMsSum, state.currentSample.profilerGpuSamples);
 		const float currentProfilerCpuMs = AverageOrZero(state.currentSample.profilerCpuMsSum, state.currentSample.profilerCpuSamples);
-		const float testFrameMs = AverageOrZero(state.testSample.frameMsSum, state.testSample.frameSamples);
-		const float testProfilerGpuMs = AverageOrZero(state.testSample.profilerGpuMsSum, state.testSample.profilerGpuSamples);
-		const float testProfilerCpuMs = AverageOrZero(state.testSample.profilerCpuMsSum, state.testSample.profilerCpuSamples);
+		const float inactiveFrameMs = AverageOrZero(state.testSample.frameMsSum, state.testSample.frameSamples);
+		const float inactiveProfilerGpuMs = AverageOrZero(state.testSample.profilerGpuMsSum, state.testSample.profilerGpuSamples);
+		const float inactiveProfilerCpuMs = AverageOrZero(state.testSample.profilerCpuMsSum, state.testSample.profilerCpuSamples);
 		const bool hasFrame = state.currentSample.frameSamples > 0 && state.testSample.frameSamples > 0;
-		const bool hasFps = hasFrame || (state.currentSample.fpsSamples > 0 && state.testSample.fpsSamples > 0);
-		const float currentFps = hasFrame && currentFrameMs > 0.0f ?
-		                             1000.0f / currentFrameMs :
-		                             AverageOrZero(state.currentSample.fpsSum, state.currentSample.fpsSamples);
-		const float testFps = hasFrame && testFrameMs > 0.0f ?
-		                          1000.0f / testFrameMs :
-		                          AverageOrZero(state.testSample.fpsSum, state.testSample.fpsSamples);
+		const float currentFps = hasFrame ? 1000.0f / currentFrameMs : 0.0f;
+		const float inactiveFps = hasFrame ? 1000.0f / inactiveFrameMs : 0.0f;
 
-		state.delta.frameMs = currentFrameMs - testFrameMs;
-		state.delta.fpsDelta = currentFps - testFps;
-		state.delta.profilerGpuMs = currentProfilerGpuMs - testProfilerGpuMs;
-		state.delta.profilerCpuMs = currentProfilerCpuMs - testProfilerCpuMs;
+		state.delta.frameMs = CalculateFeatureCostDeltaMs(currentFrameMs, inactiveFrameMs);
+		state.delta.fpsDelta = currentFps - inactiveFps;
+		state.delta.profilerGpuMs = CalculateFeatureCostDeltaMs(currentProfilerGpuMs, inactiveProfilerGpuMs);
+		state.delta.profilerCpuMs = CalculateFeatureCostDeltaMs(currentProfilerCpuMs, inactiveProfilerCpuMs);
 		state.delta.hasFrame = hasFrame;
-		state.delta.hasFps = hasFps;
+		state.delta.hasFps = hasFrame;
 		state.delta.hasProfilerGpu = state.currentSample.profilerGpuSamples > 0 && state.testSample.profilerGpuSamples > 0;
 		state.delta.hasProfilerCpu = state.currentSample.profilerCpuSamples > 0 && state.testSample.profilerCpuSamples > 0;
+		state.delta.fpsPresentSynced =
+			state.currentSample.presentSyncedSamples > 0 ||
+			state.testSample.presentSyncedSamples > 0;
+		state.delta.fpsFramePaced =
+			IsFeatureCostSampleFramePaced(state.currentSample) ||
+			IsFeatureCostSampleFramePaced(state.testSample);
 	}
 
 	void StartFeatureCostMeasurement(
@@ -685,14 +706,11 @@ namespace
 		FeatureCostMeasurementState& state,
 		double currentTime)
 	{
-		if (!feature || !feature->SupportsPerformanceCostMeasurement())
+		if (!feature || !feature->SupportsPerformanceCostMeasurement() || !feature->IsPerformanceCostMeasurementEnabled())
 			return;
 
 		state = {};
 		state.originalState = feature->CapturePerformanceCostMeasurementState();
-		if (!feature->IsPerformanceCostMeasurementEnabled())
-			return;
-
 		state.testEnabled = false;
 		state.phase = FeatureCostMeasurementPhase::MeasuringCurrent;
 		state.phaseStartTime = currentTime;
@@ -794,7 +812,7 @@ namespace
 			ImGui::PopStyleColor();
 	}
 
-	void RenderMetricCounter(const char* id, const char* label, float value, const char* format, int direction, bool valid)
+	void RenderMetricCounter(const char* id, const char* label, float value, const char* format, int direction, bool valid, const char* tooltip)
 	{
 		ImGui::PushID(id);
 		if (direction != 0)
@@ -812,6 +830,10 @@ namespace
 			}
 		}
 		ImGui::EndChild();
+		if (tooltip) {
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextWrapped("%s", tooltip);
+		}
 
 		if (direction != 0)
 			ImGui::PopStyleColor();
@@ -830,13 +852,13 @@ namespace
 		if (ImGui::BeginTable("##PerformanceTuningTopCounters", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
-			RenderMetricCounter("Total", "Total:", summary.frameMs, "%.2f ms", highlightState.frameDirection, summary.frameMs > 0.0f);
+			RenderMetricCounter("Total", "Total:", summary.frameMs, "%.2f ms", highlightState.frameDirection, summary.frameMs > 0.0f, "Present-to-present wall-clock frame time. It includes VSync, an FPS limit, and other time spent waiting in Present.");
 			ImGui::TableNextColumn();
-			RenderMetricCounter("GPU", "GPU:", displayGpuMs, "%.2f ms", highlightState.gpuTotalDirection, hasDisplayGpu);
+			RenderMetricCounter("GPU", "GPU:", displayGpuMs, "%.2f ms", highlightState.gpuTotalDirection, hasDisplayGpu, "D3D11 timestamp duration across the complete rendered frame. It excludes Present wait.");
 			ImGui::TableNextColumn();
-			RenderMetricCounter("CPU", "CPU:", displayCpuMs, "%.2f ms", highlightState.cpuTotalDirection, hasDisplayCpu);
+			RenderMetricCounter("CPU", "CPU:", displayCpuMs, "%.2f ms", highlightState.cpuTotalDirection, hasDisplayCpu, "CPU wall time from the frame boundary to just before Present. It excludes time spent in Present.");
 			ImGui::TableNextColumn();
-			RenderMetricCounter("FPS", "FPS:", summary.fps, "%.0f", highlightState.fpsDirection, summary.fps > 0.0f);
+			RenderMetricCounter("FPS", "FPS:", summary.fps, "%.0f", highlightState.fpsDirection, summary.fps > 0.0f, "1000 divided by Total. This is the actual present rate, including frame pacing.");
 			ImGui::EndTable();
 		}
 	}
@@ -875,8 +897,6 @@ namespace
 			return "Terrain Shadows are switched off.";
 		if (shortName == "VolumetricLighting")
 			return "Volumetric Lighting is switched off for the current interior/exterior context.";
-		if (shortName == "UnifiedWater")
-			return "optimized water meshes are switched off.";
 		if (shortName == "SubsurfaceScattering")
 			return "Subsurface Scattering is switched off.";
 		if (shortName == "GrassCollision")
@@ -895,8 +915,17 @@ namespace
 		const bool hasMeasurementState =
 			IsFeatureCostMeasurementActive(state) ||
 			state.phase == FeatureCostMeasurementPhase::Complete;
-		if (!feature->SupportsPerformanceCostMeasurement() && !hasMeasurementState)
+		if (!feature->SupportsPerformanceCostMeasurement() && !hasMeasurementState) {
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Spacing();
+			ImGui::TextDisabled("Actual feature cost is unavailable.");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				const char* reason = feature->GetPerformanceCostMeasurementUnavailableReason();
+				ImGui::TextWrapped("%s", reason ? reason : "This feature has no runtime inactive state to compare in the current scene.");
+			}
 			return;
+		}
 		if (!feature->IsPerformanceCostMeasurementEnabled() && !hasMeasurementState)
 			return;
 
@@ -975,7 +1004,12 @@ namespace
 		}
 
 		ImGui::Spacing();
-		ImGui::TextDisabled("Current vs %s", GetFeatureCostComparisonLabel(feature, state));
+		ImGui::TextDisabled("Current - %s", GetFeatureCostComparisonLabel(feature, state));
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextWrapped("Frametime uses current settings minus %s: positive added cost is magenta; negative savings are green.", GetFeatureCostComparisonLabel(feature, state));
+			ImGui::TextWrapped("Total is present-to-present, so VSync or an FPS limit can hide a workload change there; use GPU and CPU to see uncapped scene cost.");
+			ImGui::TextWrapped("FPS uses the natural current-minus-%s sign: a drop is magenta and a gain is green.", GetFeatureCostComparisonLabel(feature, state));
+		}
 		if (state.delta.hasFrame)
 			RenderDeltaMetric(
 				"Total",
@@ -1000,6 +1034,13 @@ namespace
 				state.delta.fpsDelta,
 				GetDirectionFromFeatureCostFpsDelta(state.delta.fpsDelta),
 				"%+.1f");
+		if (state.delta.fpsPresentSynced) {
+			ImGui::Spacing();
+			Util::Text::WrappedWarning("FPS is VSync-synced. FPS differences only appear once the feature pushes frame work beyond the sync budget; use GPU and CPU deltas to see its cost before then.");
+		} else if (state.delta.fpsFramePaced) {
+			ImGui::Spacing();
+			Util::Text::WrappedWarning("FPS appears frame-paced or externally limited. FPS differences may only appear once the frame-pacing budget is exceeded; use GPU and CPU deltas to see its cost before then.");
+		}
 	}
 
 	int GetFeatureListDirection(const TuningHighlightState& state, const std::string& shortName)

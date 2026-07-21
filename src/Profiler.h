@@ -1,7 +1,8 @@
 #pragma once
 
-#include <d3d11.h>
 #include <atomic>
+#include <cstdint>
+#include <d3d11.h>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -100,13 +101,27 @@ public:
 	void EndPass();
 	bool BeginCpuPass(std::string_view name);
 	void EndCpuPass();
-	void EndFrame();
+	void EndFrame(UINT syncInterval);
 
 	const std::vector<TimerResult>& GetResults() const { return results; }
 	float GetTotalTimeMs() const { return totalTimeMs; }
 	float GetCpuTotalTimeMs() const { return cpuTotalTimeMs; }
 	float GetTotalTimeAverageMs(uint32_t maxSamples = 60) const { return totalGpuHistory.GetAverage(maxSamples); }
 	float GetCpuTotalTimeAverageMs(uint32_t maxSamples = 60) const { return totalCpuHistory.GetAverage(maxSamples); }
+	float GetWholeFrameGpuTimeMs() const { return wholeFrameGpuHistory.lastMs; }
+	float GetWholeFrameCpuTimeMs() const { return wholeFrameCpuHistory.lastMs; }
+	float GetFrameTimeMs() const { return frameTimeHistory.lastMs; }
+	float GetWholeFrameGpuTimeAverageMs(uint32_t maxSamples = 60) const { return wholeFrameGpuHistory.GetAverage(maxSamples); }
+	float GetWholeFrameCpuTimeAverageMs(uint32_t maxSamples = 60) const { return wholeFrameCpuHistory.GetAverage(maxSamples); }
+	float GetFrameTimeAverageMs(uint32_t maxSamples = 60) const { return frameTimeHistory.GetAverage(maxSamples); }
+	bool HasWholeFrameGpuTime() const { return wholeFrameGpuHistory.count > 0; }
+	bool HasWholeFrameCpuTime() const { return wholeFrameCpuHistory.count > 0; }
+	bool HasFrameTime() const { return frameTimeHistory.count > 0; }
+	bool HasLatestWholeFrameGpuSample() const { return wholeFrameSampleId != 0 && wholeFrameGpuSampleId == wholeFrameSampleId; }
+	bool HasLatestWholeFrameCpuSample() const { return wholeFrameSampleId != 0 && wholeFrameCpuSampleId == wholeFrameSampleId; }
+	bool HasLatestFrameTimeSample() const { return wholeFrameSampleId != 0 && frameTimeSampleId == wholeFrameSampleId; }
+	bool WasLatestFramePresentSynced() const { return HasLatestFrameTimeSample() && latestFrameWasPresentSynced; }
+	uint64_t GetWholeFrameSampleId() const { return wholeFrameSampleId; }
 	void ClearTimers();
 	void ClearTimersForFeature(const std::string& featureName);
 
@@ -180,6 +195,8 @@ private:
 	struct FrameQueries
 	{
 		winrt::com_ptr<ID3D11Query> disjoint;
+		winrt::com_ptr<ID3D11Query> wholeFrameBegin;
+		winrt::com_ptr<ID3D11Query> wholeFrameEnd;
 		struct TimerPair
 		{
 			winrt::com_ptr<ID3D11Query> begin;
@@ -193,6 +210,12 @@ private:
 		std::vector<CompletedCpuTimer> cpuTimers;
 		std::vector<uint32_t> activeTimerStack;
 		uint32_t activeCount = 0;
+		LARGE_INTEGER wholeFrameCpuBegin{};
+		float wholeFrameCpuMs = 0.0f;
+		float frameTimeMs = 0.0f;
+		bool hasWholeFrameCpuTime = false;
+		bool hasFrameTime = false;
+		bool presentSynced = false;
 		bool inFlight = false;
 	};
 
@@ -236,12 +259,25 @@ private:
 	RollingHistory totalCpuHistory;
 	float totalTimeMs = 0.0f;
 	float cpuTotalTimeMs = 0.0f;
+	RollingHistory wholeFrameGpuHistory;
+	RollingHistory wholeFrameCpuHistory;
+	RollingHistory frameTimeHistory;
+	uint64_t wholeFrameSampleId = 0;
+	uint64_t wholeFrameGpuSampleId = 0;
+	uint64_t wholeFrameCpuSampleId = 0;
+	uint64_t frameTimeSampleId = 0;
+	int64_t wholeFrameLastPresentStartCounter = 0;
+	bool wholeFrameGpuTimingAvailable = false;
+	bool wholeFrameHasLastPresentStart = false;
+	bool wholeFrameLastPresentSynced = false;
+	bool latestFrameWasPresentSynced = false;
 
 	bool CollectResults();
 	KnownTimer& GetOrCreateTimer(const std::string& name);
 	void RebuildResults(const std::unordered_map<std::string, ActiveTimerData>* activeTimers);
 	void StoreCompletedCpuTimers(FrameQueries& frame);
 	void ResetFrameState(FrameQueries& frame);
+	void ResetWholeFrameTimings();
 	static bool HasPendingFrameData(const FrameQueries& frame);
 };
 

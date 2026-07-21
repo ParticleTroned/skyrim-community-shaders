@@ -46,13 +46,13 @@ public:
 		float profilerGpuSampleMs = 0.0f;
 		float profilerCpuSampleMs = 0.0f;
 		float frameSampleMs = 0.0f;
-		float fpsSample = 0.0f;
-		uint32_t frameCount = 0;
+		uint64_t sampleId = 0;
 		bool hasProfilerGpu = false;
 		bool hasProfilerCpu = false;
 		bool hasProfilerGpuSample = false;
 		bool hasProfilerCpuSample = false;
 		bool hasFrameSample = false;
+		bool framePresentSynced = false;
 		bool valid = false;
 		std::unordered_map<std::string, PerformanceTimingTotals> features;
 	};

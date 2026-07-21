@@ -7,6 +7,7 @@
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
 #include "Menu.h"
+#include "Profiler.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -228,7 +229,6 @@ namespace
 			hdr->RedirectFramebuffer();
 			func(a_this, a3, a_target, a_4, a_5);
 			hdr->RestoreFramebuffer();
-
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -410,11 +410,9 @@ void HDRDisplay::DrawSettings()
 		};
 		const char* forceEnableLabel = T(TKEY("force_enable_hdr"), "Force Enable HDR");
 		const char* cancelLabel = T(TKEY("cancel"), "Cancel");
-		const float buttonWidth = std::max({
-			ThemeManager::Constants::POPUP_BUTTON_WIDTH * Util::GetUIScale(),
+		const float buttonWidth = std::max({ ThemeManager::Constants::POPUP_BUTTON_WIDTH * Util::GetUIScale(),
 			buttonWidthForLabel(forceEnableLabel),
-			buttonWidthForLabel(cancelLabel)
-		});
+			buttonWidthForLabel(cancelLabel) });
 
 		if (ImGui::Button(forceEnableLabel, ImVec2(buttonWidth, 0))) {
 			{
@@ -938,7 +936,10 @@ namespace
 			if (globals::features::hdrDisplay.IsPresentSuppressed())
 				return S_OK;
 
-			return func(This, SyncInterval, Flags);
+			globals::profiler->EndFrame(SyncInterval);
+			const HRESULT presentResult = func(This, SyncInterval, Flags);
+			globals::profiler->BeginFrame();
+			return presentResult;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1022,7 +1023,10 @@ ID3D11BlendState* HDRDisplay::GetPatchedAlphaBlendState(ID3D11BlendState* origin
 
 HRESULT HDRDisplay::PresentToSwapChain(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-	return SwapChainPresentBottom::func(swapChain, syncInterval, flags);
+	globals::profiler->EndFrame(syncInterval);
+	const HRESULT presentResult = SwapChainPresentBottom::func(swapChain, syncInterval, flags);
+	globals::profiler->BeginFrame();
+	return presentResult;
 }
 
 void HDRDisplay::DrawImGuiForPresent(bool frameGenActive, bool hdrReady)
@@ -1183,10 +1187,10 @@ void HDRDisplay::ApplyHDR()
 
 		if (!GetHDROutputCS()) {
 			// Fallback: HDR shader files not present - copy kFRAMEBUFFER directly to output
-				if (upscaling.d3d12SwapChainActive) {
-					// SetUIBuffer keeps non-FG fallback UI in kFRAMEBUFFER; FG keeps using
-					// uiBufferWrapped for FidelityFX UI composition.
-					context->CopyResource(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11.get(), framebufferRT.texture);
+			if (upscaling.d3d12SwapChainActive) {
+				// SetUIBuffer keeps non-FG fallback UI in kFRAMEBUFFER; FG keeps using
+				// uiBufferWrapped for FidelityFX UI composition.
+				context->CopyResource(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11.get(), framebufferRT.texture);
 			} else {
 				// Normal path: copy directly to swap chain back buffer
 				ID3D11Texture2D* backBuffer = nullptr;

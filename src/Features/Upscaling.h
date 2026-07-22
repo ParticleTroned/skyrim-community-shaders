@@ -332,6 +332,13 @@ public:
 		bool reuseStableRenderTargets = false;
 		bool renderTargetDimensionsMatch = false;
 		bool stableContractEvidenceMatches = false;
+		bool stateScreenDimensionsMatch = false;
+		uint64_t renderTargetMissingMask = 0;
+		uint64_t renderTargetRequiredMissingMask = 0;
+		uint64_t renderTargetDimensionMismatchMask = 0;
+		uint64_t stableContractEvidenceBlockers = 0;
+		uint32_t stateScreenWidth = 0;
+		uint32_t stateScreenHeight = 0;
 		bool vendorDimensionsUnchanged = false;
 		bool reuseSharedSubmitResources = false;
 		bool preserveDLSSResources = false;

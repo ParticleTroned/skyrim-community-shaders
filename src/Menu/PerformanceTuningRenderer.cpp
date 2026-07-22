@@ -37,7 +37,7 @@ namespace
 		return globals::game::isVR && globals::features::upscaling.IsVRRenderScaleModeActive();
 	}
 
-	constexpr std::array<std::string_view, 13> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 14> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"VR",
 		"ScreenSpaceShadows",
@@ -50,6 +50,7 @@ namespace
 		"UnifiedWater",
 		"Wetterness",
 		"SubsurfaceScattering",
+		"GrassLighting",
 		"GrassCollision"
 	};
 
@@ -324,6 +325,9 @@ namespace
 			json mask = currentSettings.is_object() ? currentSettings : json::object();
 			mask.erase("DebugSettings");
 			return mask;
+		}
+		if (shortName == "GrassLighting") {
+			return MakeJsonMask({ "Enabled", "ComplexGrassThreshold" });
 		}
 
 		const json mask = feature->CapturePerformanceSettingsState();
@@ -940,6 +944,8 @@ namespace
 			return "Wetterness is switched off.";
 		if (shortName == "SubsurfaceScattering")
 			return "Subsurface Scattering is switched off.";
+		if (shortName == "GrassLighting")
+			return "the Grass Lighting runtime toggle is switched off, so grass uses the basic pixel-shading path; the installed shader permutation and vertex work remain the same in both windows.";
 		if (shortName == "GrassCollision")
 			return "Grass Collision is switched off.";
 

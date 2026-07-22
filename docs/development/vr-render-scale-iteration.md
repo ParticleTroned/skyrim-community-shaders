@@ -25,7 +25,7 @@ The registered tool is `communityshaders.renderscale`:
 -   `status` returns a compact live snapshot of the controller profiles, VRAM
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, and both-eye fidelity;
--   `record` returns the complete schema-v4 record without changing capture
+-   `record` returns the complete schema-v5 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
@@ -284,9 +284,45 @@ bound; ordinary transitions retain the 120-frame limit.
 fields distinguish preventive backpressure from a backend stall or an actual
 allocation failure.
 
+Step 26 follows the RC110 machine-commit reproduction. Thirty uninterrupted
+2.5-second DLSS Hoshipa/Quality relatches advanced cleanly through epoch 31 with
+zero controller failures and exact both-eye fidelity, while DXGI local usage
+rose from 5.45 GB to 15.75 GB and still reported `Normal`. Over the same run,
+Skyrim private committed memory rose from approximately 21.8 GB to 72.23 GB
+and Windows commit reached 108.32/109.14 GB (99.25 percent). The resulting
+`STATUS_COMMITMENT_LIMIT` (`0xc000012d`) could prevent both Skyrim and unrelated
+processes such as the Codex command runner from allocating before the Step 25
+local-video admission boundary was reached.
+
+The shared memory sample now records Windows commit usage, limit, headroom,
+ratio, and Skyrim private usage alongside DXGI local-video residency. Every
+size-changing allocation overlap, including the isolated-switch path, projects
+system commit at four times the resource estimate, retaining margin above the
+approximately 2.8-times growth measured in RC110. Admission waits before the
+projection reaches the lower of 75 percent of the current Windows commit limit
+or an 8-GiB system reserve. This calculation is constant-time and leaves the
+ordinary isolated switch unchanged while sufficient headroom exists.
+
+The first guarded attempt owns one GPU-fenced trim for its epoch. Once that
+trim completes, later retries only resample and wait at the existing 120-frame
+pressure cadence; they do not repeatedly force cleanup. Latest-wins requests
+remain available, and the previously stable physical contract continues
+rendering until both local-video and system-commit admission succeed. Post-load
+recovery also requires system commit below the same boundary before it admits
+the fast-travel relatch.
+
+Schema v5 exposes `systemCommit*` and `processPrivateUsage*` values in live
+status, events, controller memory, transition peaks, post-load recovery, and
+exact-profile memory trends. `resourcePlan` adds
+`projectedSystemCommitAdditionalBytes`, `projectedSystemCommitBytes`,
+`systemCommitAdmissionLimitBytes`, `systemCommitGuardActive`, and
+`systemCommitDeferred`. Acceptance independently rejects unsafe final commit,
+sustained system-commit growth, and sustained Skyrim-private growth, so a run
+cannot pass merely because DXGI reports reclaimable local-video residency.
+
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 4`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 5`. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -310,12 +346,12 @@ The runtime currently requires:
 -   at least one stable transition, no more than 120 frames to stability on the ordinary fast path, and no more than 3,600 frames when pressure backpressure is recorded;
 -   zero fidelity invariant mismatches across method, epoch, generation, dimensions, evaluation, and eye symmetry, with finalized vendor evaluation proven for both eyes;
 -   a fully drained retirement queue with no deferred cleanup frame, outstanding fence, or capacity block;
--   no pending GPU-fenced common-target memory trim;
--   a valid DXGI memory sample and pressure recovered below `High` with post-load recovery complete;
--   no more than 256 MiB of growth in both consecutive same-profile peak intervals once an exact backend profile has at least three completed samples;
+-   no failed or pending GPU-fenced common-target memory trim;
+-   valid DXGI, Windows-commit, and Skyrim-private samples, with local pressure recovered below `High`, post-load recovery complete, and final system commit below the lower of 75 percent or an 8-GiB reserve;
+-   no more than 256 MiB of local-video, system-commit, or Skyrim-private growth in both consecutive same-profile peak intervals once an exact backend profile has at least three completed samples;
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
 
-These thresholds are part of schema version 4. Change the schema version if their meaning or units change.
+These thresholds are part of schema version 5. Change the schema version if their meaning or units change.
 
 ## Ghidra correlation
 
@@ -325,6 +361,7 @@ The record lists the principal native symbols under `analysis.symbols`. In Ghidr
 -   `Upscaling::ApplyPendingPostLoadRuntimeReset` for fast-travel recovery ownership;
 -   `Upscaling::ResetVRVendorRuntimeResources` for DLSS/FSR lifetime differences;
 -   `Upscaling::ServiceVRRenderScaleMemoryTrim` for fenced common-target residency recovery;
+-   `QueryVRRenderScaleSystemCommit` for Windows commit and Skyrim-private sampling;
 -   `Upscaling::TryPromoteVRRenderScaleSubmitStageContract` for stable-presentation latency;
 -   `Upscaling::RecordVRRenderScaleFidelityObservation` for both-eye contract failures.
 -   `Upscaling::EnsureVRIntermediateTextures` and

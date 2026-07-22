@@ -455,9 +455,14 @@ public:
 		uint64_t projectedAdditionalBytes = 0;
 		uint64_t projectedUsageBytes = 0;
 		uint64_t admissionUsageLimitBytes = 0;
+		uint64_t projectedSystemCommitAdditionalBytes = 0;
+		uint64_t projectedSystemCommitBytes = 0;
+		uint64_t systemCommitAdmissionLimitBytes = 0;
 		bool pressureCleanupRequired = false;
 		bool projectedResidencyGuardActive = false;
 		bool projectedResidencyDeferred = false;
+		bool systemCommitGuardActive = false;
+		bool systemCommitDeferred = false;
 		bool pressureDeferred = false;
 	};
 
@@ -482,6 +487,13 @@ public:
 		uint64_t availableForReservationBytes = 0;
 		uint64_t headroomBytes = 0;
 		double usageRatio = 0.0;
+		bool systemCommitValid = false;
+		uint64_t systemCommitBytes = 0;
+		uint64_t systemCommitLimitBytes = 0;
+		uint64_t systemCommitHeadroomBytes = 0;
+		double systemCommitRatio = 0.0;
+		bool processPrivateUsageValid = false;
+		uint64_t processPrivateUsageBytes = 0;
 		VRRenderScaleMemoryPressure observedPressure = VRRenderScaleMemoryPressure::Unknown;
 		VRRenderScaleMemoryPressure pressure = VRRenderScaleMemoryPressure::Unknown;
 		uint32_t pressureSinceFrame = 0;
@@ -516,6 +528,10 @@ public:
 		uint32_t settledSamples = 0;
 		uint64_t baselineUsageBytes = 0;
 		uint64_t peakUsageBytes = 0;
+		uint64_t baselineSystemCommitBytes = 0;
+		uint64_t peakSystemCommitBytes = 0;
+		uint64_t baselineProcessPrivateUsageBytes = 0;
+		uint64_t peakProcessPrivateUsageBytes = 0;
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		bool cleanupArmed = false;
 		bool cleanupDrained = false;
@@ -604,6 +620,8 @@ public:
 		VRRenderScaleFailureKind lastFailure = VRRenderScaleFailureKind::None;
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		uint64_t peakUsageBytes = 0;
+		uint64_t peakSystemCommitBytes = 0;
+		uint64_t peakProcessPrivateUsageBytes = 0;
 		uint32_t peakRetiredSets = 0;
 		uint32_t memoryTrimCount = 0;
 		uint32_t memoryTrimFailures = 0;
@@ -694,6 +712,8 @@ public:
 		VRRenderScaleRetryKind retryKind = VRRenderScaleRetryKind::Other;
 		VRRenderScaleFailureKind failureKind = VRRenderScaleFailureKind::None;
 		uint64_t usageBytes = 0;
+		uint64_t systemCommitBytes = 0;
+		uint64_t processPrivateUsageBytes = 0;
 		uint32_t retries = 0;
 		uint32_t failures = 0;
 		uint32_t fidelityMismatches = 0;

@@ -22,6 +22,7 @@
 #include "Utils/UI.h"
 #include "VR.h"
 #include <Windows.h>
+#include <Psapi.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -45,6 +46,8 @@
 #include <string>
 #include <string_view>
 #include <utility>
+
+#pragma comment(lib, "Psapi.lib")
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
@@ -145,6 +148,8 @@ namespace
 	constexpr uint32_t kVRRenderScaleProjectedPressureRetryFrames = 120u;
 	constexpr uint64_t kVRRenderScaleProjectedResidencyNumerator = 3u;
 	constexpr uint64_t kVRRenderScaleProjectedResidencyDenominator = 2u;
+	constexpr uint64_t kVRRenderScaleProjectedSystemCommitNumerator = 4u;
+	constexpr uint64_t kVRRenderScaleSystemCommitReserveBytes = 8ull * 1024ull * 1024ull * 1024ull;
 	constexpr uint64_t kVRRenderScaleMiB = 1024u * 1024u;
 	constexpr uint64_t kVRRenderScaleCriticalHeadroomBytes = 256u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleHighHeadroomBytes = 512u * kVRRenderScaleMiB;
@@ -152,6 +157,55 @@ namespace
 	constexpr uint64_t kVRRenderScaleCriticalRecoveryHeadroomBytes = 384u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleHighRecoveryHeadroomBytes = 768u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleElevatedRecoveryHeadroomBytes = 1280u * kVRRenderScaleMiB;
+
+	struct VRRenderScaleSystemCommitSample
+	{
+		bool valid = false;
+		uint64_t usageBytes = 0;
+		uint64_t limitBytes = 0;
+		uint64_t headroomBytes = 0;
+		double ratio = 0.0;
+		bool processPrivateUsageValid = false;
+		uint64_t processPrivateUsageBytes = 0;
+	};
+
+	VRRenderScaleSystemCommitSample QueryVRRenderScaleSystemCommit() noexcept
+	{
+		VRRenderScaleSystemCommitSample sample{};
+		MEMORYSTATUSEX memoryStatus{};
+		memoryStatus.dwLength = static_cast<DWORD>(sizeof(memoryStatus));
+		if (::GlobalMemoryStatusEx(&memoryStatus) && memoryStatus.ullTotalPageFile != 0) {
+			sample.valid = true;
+			sample.limitBytes = memoryStatus.ullTotalPageFile;
+			sample.headroomBytes = std::min<uint64_t>(memoryStatus.ullAvailPageFile, sample.limitBytes);
+			sample.usageBytes = sample.limitBytes - sample.headroomBytes;
+			sample.ratio = static_cast<double>(sample.usageBytes) / static_cast<double>(sample.limitBytes);
+		}
+
+		PROCESS_MEMORY_COUNTERS_EX processMemory{};
+		processMemory.cb = static_cast<DWORD>(sizeof(processMemory));
+		if (::GetProcessMemoryInfo(
+				::GetCurrentProcess(),
+				reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&processMemory),
+				processMemory.cb)) {
+			sample.processPrivateUsageValid = true;
+			sample.processPrivateUsageBytes = processMemory.PrivateUsage;
+		}
+		return sample;
+	}
+
+	uint64_t GetVRRenderScaleSystemCommitAdmissionLimit(uint64_t a_commitLimitBytes) noexcept
+	{
+		if (a_commitLimitBytes == 0)
+			return 0;
+
+		const uint64_t ratioLimit = a_commitLimitBytes - a_commitLimitBytes / 4u;
+		const uint64_t reserveLimit =
+			a_commitLimitBytes > kVRRenderScaleSystemCommitReserveBytes ?
+				a_commitLimitBytes - kVRRenderScaleSystemCommitReserveBytes :
+				0u;
+		return std::min(ratioLimit, reserveLimit);
+	}
 	constexpr uint32_t kVRRaceSexPostClosePresentationTailFrames = 60u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
@@ -16770,12 +16824,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			           std::numeric_limits<uint64_t>::max() :
 			           a_lhs + a_rhs;
 		};
-		relatchPlan.projectedAdditionalBytes =
-			relatchPlan.estimatedAdditionalBytes >
-				std::numeric_limits<uint64_t>::max() / kVRRenderScaleProjectedResidencyNumerator ?
-				std::numeric_limits<uint64_t>::max() :
-				(relatchPlan.estimatedAdditionalBytes * kVRRenderScaleProjectedResidencyNumerator) /
-					kVRRenderScaleProjectedResidencyDenominator;
+		const auto saturatingScale = [](uint64_t a_value, uint64_t a_numerator, uint64_t a_denominator) {
+			if (a_numerator == 0)
+				return uint64_t{ 0 };
+			if (a_denominator == 0 ||
+				a_value > std::numeric_limits<uint64_t>::max() / a_numerator) {
+				return std::numeric_limits<uint64_t>::max();
+			}
+			return (a_value * a_numerator) / a_denominator;
+		};
+		relatchPlan.projectedAdditionalBytes = saturatingScale(
+			relatchPlan.estimatedAdditionalBytes,
+			kVRRenderScaleProjectedResidencyNumerator,
+			kVRRenderScaleProjectedResidencyDenominator);
 		relatchPlan.projectedUsageBytes =
 			memoryAtAdmission.valid ?
 				saturatingAdd(memoryAtAdmission.currentUsageBytes, relatchPlan.projectedAdditionalBytes) :
@@ -16789,6 +16850,20 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					0u;
 			relatchPlan.admissionUsageLimitBytes = std::min(ratioLimit, headroomLimit);
 		}
+		relatchPlan.projectedSystemCommitAdditionalBytes = saturatingScale(
+			relatchPlan.estimatedAdditionalBytes,
+			kVRRenderScaleProjectedSystemCommitNumerator,
+			1u);
+		relatchPlan.projectedSystemCommitBytes =
+			memoryAtAdmission.systemCommitValid ?
+				saturatingAdd(
+					memoryAtAdmission.systemCommitBytes,
+					relatchPlan.projectedSystemCommitAdditionalBytes) :
+				0u;
+		if (memoryAtAdmission.systemCommitValid && memoryAtAdmission.systemCommitLimitBytes != 0) {
+			relatchPlan.systemCommitAdmissionLimitBytes =
+				GetVRRenderScaleSystemCommitAdmissionLimit(memoryAtAdmission.systemCommitLimitBytes);
+		}
 		relatchPlan.projectedResidencyGuardActive =
 			residencyOverlapAllocation &&
 			memoryAtAdmission.valid &&
@@ -16800,9 +16875,20 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchPlan.projectedResidencyGuardActive &&
 			(relatchPlan.admissionUsageLimitBytes == 0 ||
 				relatchPlan.projectedUsageBytes >= relatchPlan.admissionUsageLimitBytes);
+		relatchPlan.systemCommitGuardActive =
+			residencyOverlapAllocation &&
+			memoryAtAdmission.systemCommitValid &&
+			memoryAtAdmission.systemCommitLimitBytes != 0;
+		relatchPlan.systemCommitDeferred =
+			relatchPlan.systemCommitGuardActive &&
+			(relatchPlan.systemCommitAdmissionLimitBytes == 0 ||
+				relatchPlan.projectedSystemCommitBytes >= relatchPlan.systemCommitAdmissionLimitBytes);
 		relatchPlan.pressureCleanupRequired =
-			(pressureMemoryRelief || relatchPlan.projectedResidencyDeferred) &&
-			relatchPlan.actionMask != 0;
+			(pressureMemoryRelief ||
+				relatchPlan.projectedResidencyDeferred ||
+				relatchPlan.systemCommitDeferred) &&
+			relatchPlan.actionMask != 0 &&
+			!pressureTrimCompletedForEpoch;
 		if (relatchPlan.pressureCleanupRequired)
 			ServiceVRIntermediateTextureCleanup(true);
 		const bool insufficientHeadroom =
@@ -16821,7 +16907,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			insufficientHeadroom ||
 			severePressureRetirementWait ||
 			criticalGrowthDeferred ||
-			relatchPlan.projectedResidencyDeferred;
+			relatchPlan.projectedResidencyDeferred ||
+			relatchPlan.systemCommitDeferred;
 		if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
 			return false;
@@ -16844,7 +16931,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		if (relatchPlan.pressureDeferred) {
 			logger::warn(
-				"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB headroom={} MiB pendingRetirement={} criticalGrowth={} projectedResidency={}",
+				"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB headroom={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB systemHeadroom={} MiB processPrivate={} MiB pendingRetirement={} criticalGrowth={} projectedResidency={} systemCommit={}",
 				relatchEpoch,
 				GetVRRenderScaleMemoryPressureName(memoryAtAdmission.pressure),
 				relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
@@ -16852,11 +16939,17 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				relatchPlan.projectedUsageBytes / kVRRenderScaleMiB,
 				relatchPlan.admissionUsageLimitBytes / kVRRenderScaleMiB,
 				memoryAtAdmission.headroomBytes / kVRRenderScaleMiB,
+				relatchPlan.projectedSystemCommitAdditionalBytes / kVRRenderScaleMiB,
+				relatchPlan.projectedSystemCommitBytes / kVRRenderScaleMiB,
+				relatchPlan.systemCommitAdmissionLimitBytes / kVRRenderScaleMiB,
+				memoryAtAdmission.systemCommitHeadroomBytes / kVRRenderScaleMiB,
+				memoryAtAdmission.processPrivateUsageBytes / kVRRenderScaleMiB,
 				BoolText(severePressureRetirementWait),
 				BoolText(criticalGrowthDeferred),
-				BoolText(relatchPlan.projectedResidencyDeferred));
+				BoolText(relatchPlan.projectedResidencyDeferred),
+				BoolText(relatchPlan.systemCommitDeferred));
 			requeueRelatch(
-				relatchPlan.projectedResidencyDeferred ?
+				(relatchPlan.projectedResidencyDeferred || relatchPlan.systemCommitDeferred) ?
 					kVRRenderScaleProjectedPressureRetryFrames :
 					kVRUpscalingTransitionApplyDelayFrames,
 				false,
@@ -17917,10 +18010,21 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 	}
 	vrRenderScaleMemoryLastSampleFrame = currentFrame;
 	const uint64_t transitionEpoch = GetVRRenderScaleTransitionSnapshot().targetEpoch;
+	const auto systemCommit = QueryVRRenderScaleSystemCommit();
+	const auto populateSystemCommit = [&](VRRenderScaleMemorySnapshot& a_snapshot) {
+		a_snapshot.systemCommitValid = systemCommit.valid;
+		a_snapshot.systemCommitBytes = systemCommit.usageBytes;
+		a_snapshot.systemCommitLimitBytes = systemCommit.limitBytes;
+		a_snapshot.systemCommitHeadroomBytes = systemCommit.headroomBytes;
+		a_snapshot.systemCommitRatio = systemCommit.ratio;
+		a_snapshot.processPrivateUsageValid = systemCommit.processPrivateUsageValid;
+		a_snapshot.processPrivateUsageBytes = systemCommit.processPrivateUsageBytes;
+	};
 	const auto publishInvalidSample = [&]() {
 		VRRenderScaleMemorySnapshot snapshot{};
 		snapshot.sampleFrame = currentFrame;
 		snapshot.transitionEpoch = transitionEpoch;
+		populateSystemCommit(snapshot);
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		snapshot.pressure = vrRenderScaleTransitionController.memory.pressure;
 		snapshot.pressureSinceFrame = vrRenderScaleTransitionController.memory.pressureSinceFrame;
@@ -17928,6 +18032,8 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		auto& metrics = vrRenderScaleTransitionController.metrics.current;
 		if (metrics.valid) {
 			metrics.peakUsageBytes = std::max(metrics.peakUsageBytes, snapshot.currentUsageBytes);
+			metrics.peakSystemCommitBytes = std::max(metrics.peakSystemCommitBytes, snapshot.systemCommitBytes);
+			metrics.peakProcessPrivateUsageBytes = std::max(metrics.peakProcessPrivateUsageBytes, snapshot.processPrivateUsageBytes);
 			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(metrics.peakPressure))
 				metrics.peakPressure = snapshot.pressure;
 		}
@@ -17935,6 +18041,8 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		if (recovery.active) {
 			recovery.lastSampleFrame = currentFrame;
 			recovery.peakUsageBytes = std::max(recovery.peakUsageBytes, snapshot.currentUsageBytes);
+			recovery.peakSystemCommitBytes = std::max(recovery.peakSystemCommitBytes, snapshot.systemCommitBytes);
+			recovery.peakProcessPrivateUsageBytes = std::max(recovery.peakProcessPrivateUsageBytes, snapshot.processPrivateUsageBytes);
 			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(recovery.peakPressure))
 				recovery.peakPressure = snapshot.pressure;
 		}
@@ -17972,6 +18080,7 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 	snapshot.valid = true;
 	snapshot.sampleFrame = currentFrame;
 	snapshot.transitionEpoch = transitionEpoch;
+	populateSystemCommit(snapshot);
 	snapshot.budgetBytes = info.Budget;
 	snapshot.currentUsageBytes = info.CurrentUsage;
 	snapshot.currentReservationBytes = info.CurrentReservation;
@@ -18033,6 +18142,8 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		auto& metrics = vrRenderScaleTransitionController.metrics.current;
 		if (metrics.valid) {
 			metrics.peakUsageBytes = std::max(metrics.peakUsageBytes, snapshot.currentUsageBytes);
+			metrics.peakSystemCommitBytes = std::max(metrics.peakSystemCommitBytes, snapshot.systemCommitBytes);
+			metrics.peakProcessPrivateUsageBytes = std::max(metrics.peakProcessPrivateUsageBytes, snapshot.processPrivateUsageBytes);
 			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(metrics.peakPressure))
 				metrics.peakPressure = snapshot.pressure;
 		}
@@ -18040,6 +18151,8 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		if (recovery.active) {
 			recovery.lastSampleFrame = currentFrame;
 			recovery.peakUsageBytes = std::max(recovery.peakUsageBytes, snapshot.currentUsageBytes);
+			recovery.peakSystemCommitBytes = std::max(recovery.peakSystemCommitBytes, snapshot.systemCommitBytes);
+			recovery.peakProcessPrivateUsageBytes = std::max(recovery.peakProcessPrivateUsageBytes, snapshot.processPrivateUsageBytes);
 			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(recovery.peakPressure))
 				recovery.peakPressure = snapshot.pressure;
 		}
@@ -18068,7 +18181,7 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 
 	if (a_force && ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Memory] epoch={} frame={} usage={}MiB budget={}MiB headroom={}MiB reservation={}MiB availableReservation={}MiB ratio={:.3f} observed={} pressure={} recoverySamples={}{}{}",
+			"[VRRenderScale][Memory] epoch={} frame={} usage={}MiB budget={}MiB headroom={}MiB reservation={}MiB availableReservation={}MiB ratio={:.3f} systemCommit={}MiB systemLimit={}MiB systemHeadroom={}MiB systemRatio={:.3f} processPrivate={}MiB observed={} pressure={} recoverySamples={}{}{}",
 			snapshot.transitionEpoch,
 			snapshot.sampleFrame,
 			snapshot.currentUsageBytes / kVRRenderScaleMiB,
@@ -18077,6 +18190,11 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 			snapshot.currentReservationBytes / kVRRenderScaleMiB,
 			snapshot.availableForReservationBytes / kVRRenderScaleMiB,
 			snapshot.usageRatio,
+			snapshot.systemCommitBytes / kVRRenderScaleMiB,
+			snapshot.systemCommitLimitBytes / kVRRenderScaleMiB,
+			snapshot.systemCommitHeadroomBytes / kVRRenderScaleMiB,
+			snapshot.systemCommitRatio,
+			snapshot.processPrivateUsageBytes / kVRRenderScaleMiB,
 			GetVRRenderScaleMemoryPressureName(snapshot.observedPressure),
 			GetVRRenderScaleMemoryPressureName(snapshot.pressure),
 			snapshot.recoverySamples,
@@ -18103,6 +18221,10 @@ uint64_t Upscaling::BeginVRRenderScalePostLoadRecovery()
 		recovery.startFrame = frame;
 		recovery.baselineUsageBytes = memory.currentUsageBytes;
 		recovery.peakUsageBytes = memory.currentUsageBytes;
+		recovery.baselineSystemCommitBytes = memory.systemCommitBytes;
+		recovery.peakSystemCommitBytes = memory.systemCommitBytes;
+		recovery.baselineProcessPrivateUsageBytes = memory.processPrivateUsageBytes;
+		recovery.peakProcessPrivateUsageBytes = memory.processPrivateUsageBytes;
 		recovery.peakPressure = memory.pressure;
 		++vrRenderScaleTransitionController.revision;
 	}
@@ -18186,9 +18308,16 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 
 		recovery.transitionEpoch = a_transitionEpoch;
 		const auto& memory = vrRenderScaleTransitionController.memory;
+		const uint64_t systemCommitAdmissionLimit =
+			GetVRRenderScaleSystemCommitAdmissionLimit(memory.systemCommitLimitBytes);
+		const bool systemCommitSettled =
+			memory.systemCommitValid &&
+			systemCommitAdmissionLimit != 0 &&
+			memory.systemCommitBytes < systemCommitAdmissionLimit;
 		const bool memorySettled =
 			memory.valid &&
 			memory.sampleFrame == frame &&
+			systemCommitSettled &&
 			(memory.pressure == VRRenderScaleMemoryPressure::Normal ||
 				memory.pressure == VRRenderScaleMemoryPressure::Elevated);
 		if (recovery.cleanupDrained && memorySettled) {
@@ -18211,7 +18340,7 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 
 	if (!admitted && ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} trimArmed={} trimCompleted={} trimSucceeded={} pressure={} settledSamples={}/{} peak={}MiB",
+			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} trimArmed={} trimCompleted={} trimSucceeded={} pressure={} systemCommit={}MiB systemHeadroom={}MiB processPrivate={}MiB settledSamples={}/{} peak={}MiB peakSystemCommit={}MiB peakProcessPrivate={}MiB",
 			a_recoveryEpoch,
 			a_transitionEpoch,
 			BoolText(recoverySnapshot.cleanupArmed),
@@ -18220,9 +18349,14 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 			BoolText(recoverySnapshot.trimCompleted),
 			BoolText(recoverySnapshot.trimSucceeded),
 			GetVRRenderScaleMemoryPressureName(memorySnapshot.pressure),
+			memorySnapshot.systemCommitBytes / kVRRenderScaleMiB,
+			memorySnapshot.systemCommitHeadroomBytes / kVRRenderScaleMiB,
+			memorySnapshot.processPrivateUsageBytes / kVRRenderScaleMiB,
 			recoverySnapshot.settledSamples,
 			kVRRenderScalePostLoadMemorySettleSamples,
-			recoverySnapshot.peakUsageBytes / kVRRenderScaleMiB);
+			recoverySnapshot.peakUsageBytes / kVRRenderScaleMiB,
+			recoverySnapshot.peakSystemCommitBytes / kVRRenderScaleMiB,
+			recoverySnapshot.peakProcessPrivateUsageBytes / kVRRenderScaleMiB);
 	}
 	if (!admitted) {
 		RecordVRRenderScaleTransitionRetry(
@@ -18251,12 +18385,16 @@ void Upscaling::CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, 
 	uint64_t expectedEpoch = a_recoveryEpoch;
 	pendingPostLoadRuntimeResetEpoch.compare_exchange_strong(expectedEpoch, 0, std::memory_order_acq_rel);
 	logger::debug(
-		"[VRRenderScale][PostLoad] Completed recoveryEpoch={} transitionEpoch={} duration={} frame(s) baseline={}MiB peak={}MiB peakPressure={} trimCompleted={} trimSucceeded={}",
+		"[VRRenderScale][PostLoad] Completed recoveryEpoch={} transitionEpoch={} duration={} frame(s) baseline={}MiB peak={}MiB baselineSystemCommit={}MiB peakSystemCommit={}MiB baselineProcessPrivate={}MiB peakProcessPrivate={}MiB peakPressure={} trimCompleted={} trimSucceeded={}",
 		completed.recoveryEpoch,
 		completed.transitionEpoch,
 		globals::state ? ElapsedFrames(completed.startFrame, std::max(globals::state->frameCount, 1u)) : 0u,
 		completed.baselineUsageBytes / kVRRenderScaleMiB,
 		completed.peakUsageBytes / kVRRenderScaleMiB,
+		completed.baselineSystemCommitBytes / kVRRenderScaleMiB,
+		completed.peakSystemCommitBytes / kVRRenderScaleMiB,
+		completed.baselineProcessPrivateUsageBytes / kVRRenderScaleMiB,
+		completed.peakProcessPrivateUsageBytes / kVRRenderScaleMiB,
 		GetVRRenderScaleMemoryPressureName(completed.peakPressure),
 		BoolText(completed.trimCompleted),
 		BoolText(completed.trimSucceeded));
@@ -26245,6 +26383,7 @@ Upscaling::VRRenderScaleStressSessionSnapshot Upscaling::GetVRRenderScaleStressS
 
 void Upscaling::StartVRRenderScaleStressSession()
 {
+	SampleVRRenderScaleMemory(true, "stress capture start");
 	uint64_t sessionID = nextVRRenderScaleStressSessionID.fetch_add(1, std::memory_order_acq_rel);
 	if (sessionID == 0)
 		sessionID = nextVRRenderScaleStressSessionID.fetch_add(1, std::memory_order_acq_rel);
@@ -26262,6 +26401,7 @@ void Upscaling::StartVRRenderScaleStressSession()
 
 void Upscaling::StopVRRenderScaleStressSession()
 {
+	SampleVRRenderScaleMemory(true, "stress capture stop");
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStopped);
 	uint64_t sessionID = 0;
 	uint32_t count = 0;
@@ -26292,7 +26432,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 4u;
+	constexpr uint32_t kSchemaVersion = 5u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -26309,7 +26449,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 25 }
+		{ "implementationStep", 26 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -26363,6 +26503,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "retryKind", std::string{ magic_enum::enum_name(event.retryKind) } },
 			{ "failureKind", std::string{ magic_enum::enum_name(event.failureKind) } },
 			{ "usageBytes", event.usageBytes },
+			{ "systemCommitBytes", event.systemCommitBytes },
+			{ "processPrivateUsageBytes", event.processPrivateUsageBytes },
 			{ "retries", event.retries },
 			{ "failures", event.failures },
 			{ "fidelityMismatches", event.fidelityMismatches } });
@@ -26378,6 +26520,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	uint64_t outOfMemoryFailures = 0;
 	uint64_t deviceLostFailures = 0;
 	uint64_t fidelityMismatches = 0;
+	uint64_t memoryTrimFailures = 0;
 	uint64_t memoryPreRecreateDrainFailures = 0;
 	struct ProfileMemoryTrend
 	{
@@ -26386,6 +26529,12 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		uint64_t oldestPeakUsageBytes = 0;
 		uint64_t previousPeakUsageBytes = 0;
 		uint64_t latestPeakUsageBytes = 0;
+		uint64_t oldestPeakSystemCommitBytes = 0;
+		uint64_t previousPeakSystemCommitBytes = 0;
+		uint64_t latestPeakSystemCommitBytes = 0;
+		uint64_t oldestPeakProcessPrivateUsageBytes = 0;
+		uint64_t previousPeakProcessPrivateUsageBytes = 0;
+		uint64_t latestPeakProcessPrivateUsageBytes = 0;
 	};
 	std::vector<ProfileMemoryTrend> memoryTrends;
 	const auto sameMemoryProfile = [](const VRRenderScaleResourceKey& a_lhs, const VRRenderScaleResourceKey& a_rhs) {
@@ -26427,6 +26576,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		outOfMemoryFailures += a_metrics.outOfMemoryFailures;
 		deviceLostFailures += a_metrics.deviceLostFailures;
 		fidelityMismatches += a_metrics.fidelityMismatches;
+		memoryTrimFailures += a_metrics.memoryTrimFailures;
 		memoryPreRecreateDrainFailures += a_metrics.memoryPreRecreateDrainFailures;
 		if (a_metrics.completed &&
 			!a_metrics.superseded &&
@@ -26445,6 +26595,12 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			trendIt->oldestPeakUsageBytes = trendIt->previousPeakUsageBytes;
 			trendIt->previousPeakUsageBytes = trendIt->latestPeakUsageBytes;
 			trendIt->latestPeakUsageBytes = a_metrics.peakUsageBytes;
+			trendIt->oldestPeakSystemCommitBytes = trendIt->previousPeakSystemCommitBytes;
+			trendIt->previousPeakSystemCommitBytes = trendIt->latestPeakSystemCommitBytes;
+			trendIt->latestPeakSystemCommitBytes = a_metrics.peakSystemCommitBytes;
+			trendIt->oldestPeakProcessPrivateUsageBytes = trendIt->previousPeakProcessPrivateUsageBytes;
+			trendIt->previousPeakProcessPrivateUsageBytes = trendIt->latestPeakProcessPrivateUsageBytes;
+			trendIt->latestPeakProcessPrivateUsageBytes = a_metrics.peakProcessPrivateUsageBytes;
 			++trendIt->samples;
 		}
 		metrics.push_back({ { "transitionEpoch", a_metrics.transitionEpoch },
@@ -26478,6 +26634,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "fidelityMismatches", a_metrics.fidelityMismatches },
 			{ "peakPressure", GetVRRenderScaleMemoryPressureName(a_metrics.peakPressure) },
 			{ "peakUsageBytes", a_metrics.peakUsageBytes },
+			{ "peakSystemCommitBytes", a_metrics.peakSystemCommitBytes },
+			{ "peakProcessPrivateUsageBytes", a_metrics.peakProcessPrivateUsageBytes },
 			{ "peakRetiredSets", a_metrics.peakRetiredSets },
 			{ "memoryTrimCount", a_metrics.memoryTrimCount },
 			{ "memoryTrimFailures", a_metrics.memoryTrimFailures },
@@ -26539,6 +26697,13 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 						{ "availableForReservationBytes", controller.memory.availableForReservationBytes },
 						{ "headroomBytes", controller.memory.headroomBytes },
 						{ "usageRatio", controller.memory.usageRatio },
+						{ "systemCommitValid", controller.memory.systemCommitValid },
+						{ "systemCommitBytes", controller.memory.systemCommitBytes },
+						{ "systemCommitLimitBytes", controller.memory.systemCommitLimitBytes },
+						{ "systemCommitHeadroomBytes", controller.memory.systemCommitHeadroomBytes },
+						{ "systemCommitRatio", controller.memory.systemCommitRatio },
+						{ "processPrivateUsageValid", controller.memory.processPrivateUsageValid },
+						{ "processPrivateUsageBytes", controller.memory.processPrivateUsageBytes },
 						{ "observedPressure", GetVRRenderScaleMemoryPressureName(controller.memory.observedPressure) },
 						{ "pressure", GetVRRenderScaleMemoryPressureName(controller.memory.pressure) },
 						{ "pressureSinceFrame", controller.memory.pressureSinceFrame },
@@ -26571,6 +26736,10 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 								  { "settledSamples", controller.postLoadRecovery.settledSamples },
 								  { "baselineUsageBytes", controller.postLoadRecovery.baselineUsageBytes },
 								  { "peakUsageBytes", controller.postLoadRecovery.peakUsageBytes },
+								  { "baselineSystemCommitBytes", controller.postLoadRecovery.baselineSystemCommitBytes },
+								  { "peakSystemCommitBytes", controller.postLoadRecovery.peakSystemCommitBytes },
+								  { "baselineProcessPrivateUsageBytes", controller.postLoadRecovery.baselineProcessPrivateUsageBytes },
+								  { "peakProcessPrivateUsageBytes", controller.postLoadRecovery.peakProcessPrivateUsageBytes },
 								  { "peakPressure", GetVRRenderScaleMemoryPressureName(controller.postLoadRecovery.peakPressure) },
 								  { "cleanupArmed", controller.postLoadRecovery.cleanupArmed },
 								  { "cleanupDrained", controller.postLoadRecovery.cleanupDrained },
@@ -26617,9 +26786,14 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							 { "projectedAdditionalBytes", relatchPlan.projectedAdditionalBytes },
 							 { "projectedUsageBytes", relatchPlan.projectedUsageBytes },
 							 { "admissionUsageLimitBytes", relatchPlan.admissionUsageLimitBytes },
+							 { "projectedSystemCommitAdditionalBytes", relatchPlan.projectedSystemCommitAdditionalBytes },
+							 { "projectedSystemCommitBytes", relatchPlan.projectedSystemCommitBytes },
+							 { "systemCommitAdmissionLimitBytes", relatchPlan.systemCommitAdmissionLimitBytes },
 							 { "pressureCleanupRequired", relatchPlan.pressureCleanupRequired },
 							 { "projectedResidencyGuardActive", relatchPlan.projectedResidencyGuardActive },
 							 { "projectedResidencyDeferred", relatchPlan.projectedResidencyDeferred },
+							 { "systemCommitGuardActive", relatchPlan.systemCommitGuardActive },
+							 { "systemCommitDeferred", relatchPlan.systemCommitDeferred },
 							 { "pressureDeferred", relatchPlan.pressureDeferred } } },
 		{ "fidelity", { { "active", controller.fidelity.active },
 						  { "transitionEpoch", controller.fidelity.transitionEpoch },
@@ -26662,8 +26836,18 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	}
 	const bool memoryEvidenceValid =
 		controller.memory.valid &&
-		controller.memory.sampleFrame >= session.startFrame &&
-		(session.endFrame == 0 || controller.memory.sampleFrame <= session.endFrame);
+		controller.memory.sampleFrame >= session.startFrame;
+	const bool systemCommitEvidenceValid =
+		memoryEvidenceValid &&
+		controller.memory.systemCommitValid &&
+		controller.memory.processPrivateUsageValid;
+	const uint64_t systemCommitAdmissionLimit =
+		GetVRRenderScaleSystemCommitAdmissionLimit(controller.memory.systemCommitLimitBytes);
+	const bool systemCommitRecovered =
+		systemCommitEvidenceValid &&
+		systemCommitAdmissionLimit != 0 &&
+		controller.memory.systemCommitBytes < systemCommitAdmissionLimit &&
+		!controller.relatchPlan.systemCommitDeferred;
 	const bool pressureRecovered =
 		memoryEvidenceValid &&
 		controller.memory.pressure != VRRenderScaleMemoryPressure::High &&
@@ -26686,18 +26870,18 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	const auto positiveGrowthBytes = [](uint64_t a_previous, uint64_t a_latest) {
 		return a_latest > a_previous ? a_latest - a_previous : 0u;
 	};
-	const auto sustainedGrowthBytes = [&](const ProfileMemoryTrend& a_trend) {
-		if (a_trend.samples < 3)
+	const auto sustainedGrowthBytes = [&](uint32_t a_samples, uint64_t a_oldest, uint64_t a_previous, uint64_t a_latest) {
+		if (a_samples < 3)
 			return uint64_t{ 0 };
 
-		const uint64_t priorGrowth =
-			positiveGrowthBytes(a_trend.oldestPeakUsageBytes, a_trend.previousPeakUsageBytes);
-		const uint64_t latestGrowth =
-			positiveGrowthBytes(a_trend.previousPeakUsageBytes, a_trend.latestPeakUsageBytes);
+		const uint64_t priorGrowth = positiveGrowthBytes(a_oldest, a_previous);
+		const uint64_t latestGrowth = positiveGrowthBytes(a_previous, a_latest);
 		return std::min(priorGrowth, latestGrowth);
 	};
 	bool memoryTrendEvaluated = false;
 	uint64_t maximumSteadyStateGrowthBytes = 0;
+	uint64_t maximumSteadyStateSystemCommitGrowthBytes = 0;
+	uint64_t maximumSteadyStateProcessPrivateGrowthBytes = 0;
 	json profileMemoryTrends = json::array();
 	for (const auto& trend : memoryTrends) {
 		const bool evaluated = trend.samples >= 3;
@@ -26705,9 +26889,39 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			positiveGrowthBytes(trend.oldestPeakUsageBytes, trend.previousPeakUsageBytes);
 		const uint64_t latestGrowthBytes =
 			positiveGrowthBytes(trend.previousPeakUsageBytes, trend.latestPeakUsageBytes);
-		const uint64_t growthBytes = sustainedGrowthBytes(trend);
+		const uint64_t growthBytes = sustainedGrowthBytes(
+			trend.samples,
+			trend.oldestPeakUsageBytes,
+			trend.previousPeakUsageBytes,
+			trend.latestPeakUsageBytes);
+		const uint64_t priorSystemCommitGrowthBytes = positiveGrowthBytes(
+			trend.oldestPeakSystemCommitBytes,
+			trend.previousPeakSystemCommitBytes);
+		const uint64_t latestSystemCommitGrowthBytes = positiveGrowthBytes(
+			trend.previousPeakSystemCommitBytes,
+			trend.latestPeakSystemCommitBytes);
+		const uint64_t systemCommitGrowthBytes = sustainedGrowthBytes(
+			trend.samples,
+			trend.oldestPeakSystemCommitBytes,
+			trend.previousPeakSystemCommitBytes,
+			trend.latestPeakSystemCommitBytes);
+		const uint64_t priorProcessPrivateGrowthBytes = positiveGrowthBytes(
+			trend.oldestPeakProcessPrivateUsageBytes,
+			trend.previousPeakProcessPrivateUsageBytes);
+		const uint64_t latestProcessPrivateGrowthBytes = positiveGrowthBytes(
+			trend.previousPeakProcessPrivateUsageBytes,
+			trend.latestPeakProcessPrivateUsageBytes);
+		const uint64_t processPrivateGrowthBytes = sustainedGrowthBytes(
+			trend.samples,
+			trend.oldestPeakProcessPrivateUsageBytes,
+			trend.previousPeakProcessPrivateUsageBytes,
+			trend.latestPeakProcessPrivateUsageBytes);
 		memoryTrendEvaluated = memoryTrendEvaluated || evaluated;
 		maximumSteadyStateGrowthBytes = std::max(maximumSteadyStateGrowthBytes, growthBytes);
+		maximumSteadyStateSystemCommitGrowthBytes =
+			std::max(maximumSteadyStateSystemCommitGrowthBytes, systemCommitGrowthBytes);
+		maximumSteadyStateProcessPrivateGrowthBytes =
+			std::max(maximumSteadyStateProcessPrivateGrowthBytes, processPrivateGrowthBytes);
 		profileMemoryTrends.push_back({
 			{ "method", std::string{ magic_enum::enum_name(trend.resources.method) } },
 			{ "backend", std::string{ magic_enum::enum_name(trend.resources.backend) } },
@@ -26724,18 +26938,38 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "latestPeakUsageBytes", trend.latestPeakUsageBytes },
 			{ "priorGrowthBytes", priorGrowthBytes },
 			{ "latestGrowthBytes", latestGrowthBytes },
-			{ "steadyStateGrowthBytes", growthBytes }
+			{ "steadyStateGrowthBytes", growthBytes },
+			{ "oldestPeakSystemCommitBytes", trend.oldestPeakSystemCommitBytes },
+			{ "previousPeakSystemCommitBytes", trend.previousPeakSystemCommitBytes },
+			{ "latestPeakSystemCommitBytes", trend.latestPeakSystemCommitBytes },
+			{ "priorSystemCommitGrowthBytes", priorSystemCommitGrowthBytes },
+			{ "latestSystemCommitGrowthBytes", latestSystemCommitGrowthBytes },
+			{ "steadyStateSystemCommitGrowthBytes", systemCommitGrowthBytes },
+			{ "oldestPeakProcessPrivateUsageBytes", trend.oldestPeakProcessPrivateUsageBytes },
+			{ "previousPeakProcessPrivateUsageBytes", trend.previousPeakProcessPrivateUsageBytes },
+			{ "latestPeakProcessPrivateUsageBytes", trend.latestPeakProcessPrivateUsageBytes },
+			{ "priorProcessPrivateGrowthBytes", priorProcessPrivateGrowthBytes },
+			{ "latestProcessPrivateGrowthBytes", latestProcessPrivateGrowthBytes },
+			{ "steadyStateProcessPrivateGrowthBytes", processPrivateGrowthBytes }
 		});
 	}
 	const bool steadyStateMemoryGrowthBounded =
 		!memoryTrendEvaluated ||
 		maximumSteadyStateGrowthBytes <= kMaximumSteadyStateMemoryGrowthBytes;
+	const bool steadyStateSystemCommitGrowthBounded =
+		!memoryTrendEvaluated ||
+		maximumSteadyStateSystemCommitGrowthBytes <= kMaximumSteadyStateMemoryGrowthBytes;
+	const bool steadyStateProcessPrivateGrowthBounded =
+		!memoryTrendEvaluated ||
+		maximumSteadyStateProcessPrivateGrowthBytes <= kMaximumSteadyStateMemoryGrowthBytes;
 	record["memoryTrend"] = {
 		{ "minimumSamplesPerBackend", 3 },
 		{ "requiredConsecutiveGrowthIntervals", 2 },
 		{ "mode", "minimum_positive_growth_across_two_consecutive_intervals" },
 		{ "evaluated", memoryTrendEvaluated },
 		{ "maximumSteadyStateGrowthBytes", maximumSteadyStateGrowthBytes },
+		{ "maximumSteadyStateSystemCommitGrowthBytes", maximumSteadyStateSystemCommitGrowthBytes },
+		{ "maximumSteadyStateProcessPrivateGrowthBytes", maximumSteadyStateProcessPrivateGrowthBytes },
 		{ "limitBytes", kMaximumSteadyStateMemoryGrowthBytes },
 		{ "profiles", std::move(profileMemoryTrends) }
 	};
@@ -26775,13 +27009,40 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	addGate("fidelity_invariants", fidelityMismatches == 0 && controller.fidelity.mismatchCount == 0 && fidelityValid, { { "metrics", fidelityMismatches }, { "current", controller.fidelity.mismatchCount } }, 0);
 	addGate("retirement_drained", retirementDrained, { { "pendingSets", controller.retirement.pendingSets }, { "nextCleanupFrame", controller.retirement.nextCleanupFrame }, { "fencePending", controller.retirement.fencePending }, { "capacityBlocked", controller.retirement.capacityBlocked } }, 0);
 	addGate("common_target_predrain", memoryPreRecreateDrainFailures == 0, memoryPreRecreateDrainFailures, 0);
+	addGate("memory_trim_failures", memoryTrimFailures == 0, memoryTrimFailures, 0);
 	addGate("memory_trim_drained", memoryTrimDrained, { { "pending", controller.memoryTrim.pending }, { "reason", GetVRRenderScaleMemoryTrimReasonName(controller.memoryTrim.reason) }, { "ownerEpoch", controller.memoryTrim.ownerEpoch } }, false);
 	addGate("memory_sample_valid", memoryEvidenceValid, memoryEvidenceValid, true);
 	addGate("memory_recovered", pressureRecovered, GetVRRenderScaleMemoryPressureName(controller.memory.pressure), "Normal or Elevated with recovery inactive");
+	addGate("system_commit_sample_valid", systemCommitEvidenceValid, systemCommitEvidenceValid, true);
+	addGate(
+		"system_commit_recovered",
+		systemCommitRecovered,
+		{ { "usageBytes", controller.memory.systemCommitBytes },
+			{ "headroomBytes", controller.memory.systemCommitHeadroomBytes },
+			{ "ratio", controller.memory.systemCommitRatio },
+			{ "processPrivateUsageBytes", controller.memory.processPrivateUsageBytes },
+			{ "deferred", controller.relatchPlan.systemCommitDeferred } },
+		{ { "maximumUsageBytes", systemCommitAdmissionLimit },
+			{ "minimumReserveBytes", kVRRenderScaleSystemCommitReserveBytes },
+			{ "maximumRatio", 0.75 } });
 	addGate(
 		"steady_state_memory_growth",
 		steadyStateMemoryGrowthBounded,
 		{ { "evaluated", memoryTrendEvaluated }, { "growthBytes", maximumSteadyStateGrowthBytes } },
+		{ { "maximumBytes", kMaximumSteadyStateMemoryGrowthBytes },
+			{ "minimumSamplesPerBackend", 3 },
+			{ "requiredConsecutiveGrowthIntervals", 2 } });
+	addGate(
+		"steady_state_system_commit_growth",
+		steadyStateSystemCommitGrowthBounded,
+		{ { "evaluated", memoryTrendEvaluated }, { "growthBytes", maximumSteadyStateSystemCommitGrowthBytes } },
+		{ { "maximumBytes", kMaximumSteadyStateMemoryGrowthBytes },
+			{ "minimumSamplesPerBackend", 3 },
+			{ "requiredConsecutiveGrowthIntervals", 2 } });
+	addGate(
+		"steady_state_process_private_growth",
+		steadyStateProcessPrivateGrowthBounded,
+		{ { "evaluated", memoryTrendEvaluated }, { "growthBytes", maximumSteadyStateProcessPrivateGrowthBytes } },
 		{ { "maximumBytes", kMaximumSteadyStateMemoryGrowthBytes },
 			{ "minimumSamplesPerBackend", 3 },
 			{ "requiredConsecutiveGrowthIntervals", 2 } });
@@ -26805,6 +27066,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 						 "Upscaling::EnsureVRIntermediateTextures",
 						 "Upscaling::AreVRIntermediateTexturesCompatibleForFSR",
 						 "Upscaling::ServiceVRRenderScaleMemoryTrim",
+						 "QueryVRRenderScaleSystemCommit",
 						 "Upscaling::TryPromoteVRRenderScaleSubmitStageContract",
 						 "Upscaling::RecordVRRenderScaleFidelityObservation",
 						 "FidelityFX::AreFSRResourcesCompatible",
@@ -27130,6 +27392,8 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 		metrics.requestedFrame = frame;
 		metrics.peakPressure = vrRenderScaleTransitionController.memory.pressure;
 		metrics.peakUsageBytes = vrRenderScaleTransitionController.memory.currentUsageBytes;
+		metrics.peakSystemCommitBytes = vrRenderScaleTransitionController.memory.systemCommitBytes;
+		metrics.peakProcessPrivateUsageBytes = vrRenderScaleTransitionController.memory.processPrivateUsageBytes;
 		metrics.peakRetiredSets = vrRenderScaleTransitionController.retirement.pendingSets;
 		revision = ++vrRenderScaleTransitionController.revision;
 	}
@@ -27181,6 +27445,8 @@ void Upscaling::BindVRRenderScaleRelatchEpoch(uint64_t a_epoch)
 			metrics.requestedFrame = frame;
 			metrics.peakPressure = vrRenderScaleTransitionController.memory.pressure;
 			metrics.peakUsageBytes = vrRenderScaleTransitionController.memory.currentUsageBytes;
+			metrics.peakSystemCommitBytes = vrRenderScaleTransitionController.memory.systemCommitBytes;
+			metrics.peakProcessPrivateUsageBytes = vrRenderScaleTransitionController.memory.processPrivateUsageBytes;
 			metrics.peakRetiredSets = vrRenderScaleTransitionController.retirement.pendingSets;
 		}
 		++vrRenderScaleTransitionController.revision;
@@ -27222,7 +27488,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB cleanup={} projectedGuard={} projectedDeferred={} deferred={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB cleanup={} projectedGuard={} projectedDeferred={} systemGuard={} systemDeferred={} deferred={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -27253,9 +27519,14 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			a_plan.projectedAdditionalBytes / kVRRenderScaleMiB,
 			a_plan.projectedUsageBytes / kVRRenderScaleMiB,
 			a_plan.admissionUsageLimitBytes / kVRRenderScaleMiB,
+			a_plan.projectedSystemCommitAdditionalBytes / kVRRenderScaleMiB,
+			a_plan.projectedSystemCommitBytes / kVRRenderScaleMiB,
+			a_plan.systemCommitAdmissionLimitBytes / kVRRenderScaleMiB,
 			BoolText(a_plan.pressureCleanupRequired),
 			BoolText(a_plan.projectedResidencyGuardActive),
 			BoolText(a_plan.projectedResidencyDeferred),
+			BoolText(a_plan.systemCommitGuardActive),
+			BoolText(a_plan.systemCommitDeferred),
 			BoolText(a_plan.pressureDeferred));
 	}
 	return true;
@@ -27805,6 +28076,8 @@ void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_ty
 	event.retryKind = a_retryKind;
 	event.failureKind = a_failureKind;
 	event.usageBytes = controller.memory.currentUsageBytes;
+	event.systemCommitBytes = controller.memory.systemCommitBytes;
+	event.processPrivateUsageBytes = controller.memory.processPrivateUsageBytes;
 	event.retries = metrics.retries;
 	event.failures = metrics.failures;
 	event.fidelityMismatches = metrics.fidelityMismatches;

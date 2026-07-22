@@ -464,11 +464,13 @@ public:
 		uint64_t projectedAdditionalBytes = 0;
 		uint64_t projectedUsageBytes = 0;
 		uint64_t admissionUsageLimitBytes = 0;
+		uint64_t postTrimAdmissionUsageLimitBytes = 0;
 		uint64_t projectedSystemCommitAdditionalBytes = 0;
 		uint64_t projectedSystemCommitBytes = 0;
 		uint64_t systemCommitAdmissionLimitBytes = 0;
 		bool pressureCleanupRequired = false;
 		bool projectedResidencyGuardActive = false;
+		bool projectedResidencyPostTrimRelaxed = false;
 		bool projectedResidencyDeferred = false;
 		bool systemCommitGuardActive = false;
 		bool systemCommitDeferred = false;

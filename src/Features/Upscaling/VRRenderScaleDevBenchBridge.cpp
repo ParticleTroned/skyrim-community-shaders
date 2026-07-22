@@ -180,11 +180,13 @@ namespace
 													{ "projectedAdditionalBytes", controller.relatchPlan.projectedAdditionalBytes },
 													{ "projectedUsageBytes", controller.relatchPlan.projectedUsageBytes },
 													{ "admissionUsageLimitBytes", controller.relatchPlan.admissionUsageLimitBytes },
+													{ "postTrimAdmissionUsageLimitBytes", controller.relatchPlan.postTrimAdmissionUsageLimitBytes },
 													{ "projectedSystemCommitAdditionalBytes", controller.relatchPlan.projectedSystemCommitAdditionalBytes },
 													{ "projectedSystemCommitBytes", controller.relatchPlan.projectedSystemCommitBytes },
 													{ "systemCommitAdmissionLimitBytes", controller.relatchPlan.systemCommitAdmissionLimitBytes },
 													{ "pressureCleanupRequired", controller.relatchPlan.pressureCleanupRequired },
 													{ "projectedResidencyGuardActive", controller.relatchPlan.projectedResidencyGuardActive },
+													{ "projectedResidencyPostTrimRelaxed", controller.relatchPlan.projectedResidencyPostTrimRelaxed },
 													{ "projectedResidencyDeferred", controller.relatchPlan.projectedResidencyDeferred },
 													{ "systemCommitGuardActive", controller.relatchPlan.systemCommitGuardActive },
 													{ "systemCommitDeferred", controller.relatchPlan.systemCommitDeferred },
@@ -489,7 +491,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller, local-video and system-commit memory, retirement, backend, and both-eye fidelity snapshot. record returns the complete schema-v5 iteration artifact. start begins a fixed-memory capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the capture, writes its artifact, and returns the complete record. reset clears only a stopped capture. Mutations require Skyrim VR and developer mode; apply additionally requires an active capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller, local-video and system-commit memory, retirement, backend, and both-eye fidelity snapshot. record returns the complete schema-v6 iteration artifact. start begins a fixed-memory capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the capture, writes its artifact, and returns the complete record. reset clears only a stopped capture. Mutations require Skyrim VR and developer mode; apply additionally requires an active capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

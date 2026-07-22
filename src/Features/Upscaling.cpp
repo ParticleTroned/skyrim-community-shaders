@@ -16700,6 +16700,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			controllerAtAdmission.memoryTrim.reason == VRRenderScaleMemoryTrimReason::Pressure &&
 			controllerAtAdmission.memoryTrim.ownerEpoch == relatchEpoch &&
 			controllerAtAdmission.memoryTrim.completedFrame != 0;
+		const bool pressureTrimSucceededForEpoch =
+			pressureTrimCompletedForEpoch &&
+			controllerAtAdmission.memoryTrim.lastSucceeded;
 		if (pressureTrimCompletedForEpoch &&
 			(memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::High ||
 				memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Critical)) {
@@ -16989,6 +16992,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					memoryAtAdmission.budgetBytes - kVRRenderScaleElevatedHeadroomBytes :
 					0u;
 			relatchPlan.admissionUsageLimitBytes = std::min(ratioLimit, headroomLimit);
+			const uint64_t postTrimRatioLimit =
+				memoryAtAdmission.budgetBytes - memoryAtAdmission.budgetBytes / 8u;
+			const uint64_t postTrimHeadroomLimit =
+				memoryAtAdmission.budgetBytes > kVRRenderScaleHighHeadroomBytes ?
+					memoryAtAdmission.budgetBytes - kVRRenderScaleHighHeadroomBytes :
+					0u;
+			relatchPlan.postTrimAdmissionUsageLimitBytes =
+				std::min(postTrimRatioLimit, postTrimHeadroomLimit);
 		}
 		relatchPlan.projectedSystemCommitAdditionalBytes = saturatingScale(
 			relatchPlan.estimatedAdditionalBytes,
@@ -17011,10 +17022,23 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			(memoryReliefActiveForRelatch ||
 				pressureMemoryRelief ||
 				projectedResidencyGuardOwnedByEpoch);
-		relatchPlan.projectedResidencyDeferred =
+		const bool projectedResidencyRequiresRelief =
 			relatchPlan.projectedResidencyGuardActive &&
 			(relatchPlan.admissionUsageLimitBytes == 0 ||
 				relatchPlan.projectedUsageBytes >= relatchPlan.admissionUsageLimitBytes);
+		const bool projectedSystemCommitSafe =
+			memoryAtAdmission.systemCommitValid &&
+			relatchPlan.systemCommitAdmissionLimitBytes != 0 &&
+			relatchPlan.projectedSystemCommitBytes < relatchPlan.systemCommitAdmissionLimitBytes;
+		relatchPlan.projectedResidencyPostTrimRelaxed =
+			projectedResidencyRequiresRelief &&
+			pressureTrimSucceededForEpoch &&
+			projectedSystemCommitSafe &&
+			relatchPlan.postTrimAdmissionUsageLimitBytes != 0 &&
+			relatchPlan.projectedUsageBytes < relatchPlan.postTrimAdmissionUsageLimitBytes;
+		relatchPlan.projectedResidencyDeferred =
+			projectedResidencyRequiresRelief &&
+			!relatchPlan.projectedResidencyPostTrimRelaxed;
 		relatchPlan.systemCommitGuardActive =
 			residencyOverlapAllocation &&
 			memoryAtAdmission.systemCommitValid &&
@@ -17071,13 +17095,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		if (relatchPlan.pressureDeferred) {
 			logger::warn(
-				"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB headroom={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB systemHeadroom={} MiB processPrivate={} MiB pendingRetirement={} criticalGrowth={} projectedResidency={} systemCommit={}",
+				"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB postTrimAdmissionLimit={} MiB postTrimRelaxed={} headroom={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB systemHeadroom={} MiB processPrivate={} MiB pendingRetirement={} criticalGrowth={} projectedResidency={} systemCommit={}",
 				relatchEpoch,
 				GetVRRenderScaleMemoryPressureName(memoryAtAdmission.pressure),
 				relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
 				relatchPlan.projectedAdditionalBytes / kVRRenderScaleMiB,
 				relatchPlan.projectedUsageBytes / kVRRenderScaleMiB,
 				relatchPlan.admissionUsageLimitBytes / kVRRenderScaleMiB,
+				relatchPlan.postTrimAdmissionUsageLimitBytes / kVRRenderScaleMiB,
+				BoolText(relatchPlan.projectedResidencyPostTrimRelaxed),
 				memoryAtAdmission.headroomBytes / kVRRenderScaleMiB,
 				relatchPlan.projectedSystemCommitAdditionalBytes / kVRRenderScaleMiB,
 				relatchPlan.projectedSystemCommitBytes / kVRRenderScaleMiB,
@@ -18735,9 +18761,6 @@ bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMe
 		};
 		if (!a_success)
 			addMismatch(VRRenderScaleFidelityMismatch::Evaluation);
-		if (vrRenderScaleTransitionController.targetEpoch != 0 &&
-			vrRenderScaleTransitionController.targetEpoch != applied.transitionEpoch)
-			addMismatch(VRRenderScaleFidelityMismatch::Epoch);
 		if (a_upscaleMethod != fidelity.method)
 			addMismatch(VRRenderScaleFidelityMismatch::Method);
 		if (fidelity.contractGeneration != 0 && a_generation != fidelity.contractGeneration)
@@ -26572,7 +26595,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 5u;
+	constexpr uint32_t kSchemaVersion = 6u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -26589,7 +26612,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 26 }
+		{ "implementationStep", 27 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -26926,11 +26949,13 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							 { "projectedAdditionalBytes", relatchPlan.projectedAdditionalBytes },
 							 { "projectedUsageBytes", relatchPlan.projectedUsageBytes },
 							 { "admissionUsageLimitBytes", relatchPlan.admissionUsageLimitBytes },
+							 { "postTrimAdmissionUsageLimitBytes", relatchPlan.postTrimAdmissionUsageLimitBytes },
 							 { "projectedSystemCommitAdditionalBytes", relatchPlan.projectedSystemCommitAdditionalBytes },
 							 { "projectedSystemCommitBytes", relatchPlan.projectedSystemCommitBytes },
 							 { "systemCommitAdmissionLimitBytes", relatchPlan.systemCommitAdmissionLimitBytes },
 							 { "pressureCleanupRequired", relatchPlan.pressureCleanupRequired },
 							 { "projectedResidencyGuardActive", relatchPlan.projectedResidencyGuardActive },
+							 { "projectedResidencyPostTrimRelaxed", relatchPlan.projectedResidencyPostTrimRelaxed },
 							 { "projectedResidencyDeferred", relatchPlan.projectedResidencyDeferred },
 							 { "systemCommitGuardActive", relatchPlan.systemCommitGuardActive },
 							 { "systemCommitDeferred", relatchPlan.systemCommitDeferred },
@@ -27628,7 +27653,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB cleanup={} projectedGuard={} projectedDeferred={} systemGuard={} systemDeferred={} deferred={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB postTrimAdmissionLimit={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB cleanup={} projectedGuard={} postTrimRelaxed={} projectedDeferred={} systemGuard={} systemDeferred={} deferred={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -27659,11 +27684,13 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			a_plan.projectedAdditionalBytes / kVRRenderScaleMiB,
 			a_plan.projectedUsageBytes / kVRRenderScaleMiB,
 			a_plan.admissionUsageLimitBytes / kVRRenderScaleMiB,
+			a_plan.postTrimAdmissionUsageLimitBytes / kVRRenderScaleMiB,
 			a_plan.projectedSystemCommitAdditionalBytes / kVRRenderScaleMiB,
 			a_plan.projectedSystemCommitBytes / kVRRenderScaleMiB,
 			a_plan.systemCommitAdmissionLimitBytes / kVRRenderScaleMiB,
 			BoolText(a_plan.pressureCleanupRequired),
 			BoolText(a_plan.projectedResidencyGuardActive),
+			BoolText(a_plan.projectedResidencyPostTrimRelaxed),
 			BoolText(a_plan.projectedResidencyDeferred),
 			BoolText(a_plan.systemCommitGuardActive),
 			BoolText(a_plan.systemCommitDeferred),

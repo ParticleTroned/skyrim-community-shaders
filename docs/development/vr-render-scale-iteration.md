@@ -25,7 +25,7 @@ The registered tool is `communityshaders.renderscale`:
 -   `status` returns a compact live snapshot of the controller profiles, VRAM
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, and both-eye fidelity;
--   `record` returns the complete schema-v5 record without changing capture
+-   `record` returns the complete schema-v6 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
@@ -320,9 +320,37 @@ exact-profile memory trends. `resourcePlan` adds
 sustained system-commit growth, and sustained Skyrim-private growth, so a run
 cannot pass merely because DXGI reports reclaimable local-video residency.
 
+Step 27 follows the RC111 guarded qualification. Nine rapid DLSS
+Hoshipa/Quality changes completed with exact both-eye fidelity before epoch 11
+projected 18.62 GB of local-video use against the 18.38-GB normal admission
+limit. Its successful one-shot trim left the system-commit projection safely
+below the 81.85-GB hard limit, but the unchanged local guard waited 4,585 frames
+and accumulated 39 pressure retries before WDDM released enough residency.
+While the old Quality contract continued rendering correctly, fidelity also
+reported an epoch mismatch solely because the pending Hoshipa request owned a
+newer desired epoch.
+
+After a successful pressure trim for the same epoch, local-video admission may
+now use the existing `High` boundary (the lower of 87.5 percent of budget or
+512 MiB of headroom). The relaxation applies only when the normal projected
+limit would defer, the post-trim projection remains below that `High` boundary,
+and projected Windows commit remains below the Step 26 admission limit. The
+system-commit limit is never relaxed. A failed or missing trim therefore keeps
+the normal local boundary, and each epoch still receives at most one forced
+trim.
+
+Fidelity observations are now owned exclusively by the physical `applied`
+contract. A newer desired epoch waiting for admission no longer invalidates the
+old contract that is still presented; method, generation, dimensions,
+evaluation, and eye symmetry continue to be checked against that applied
+contract. Schema v6 exposes `postTrimAdmissionUsageLimitBytes` and
+`projectedResidencyPostTrimRelaxed` in both live status and the complete record,
+so automation can distinguish normal admission, bounded post-trim admission,
+and a genuine pressure deferral.
+
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 5`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 6`. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -344,14 +372,14 @@ The runtime currently requires:
 -   no backend failures, OOM, or device loss in either metrics or classified events;
 -   no more than 32 retries for one transition;
 -   at least one stable transition, no more than 120 frames to stability on the ordinary fast path, and no more than 3,600 frames when pressure backpressure is recorded;
--   zero fidelity invariant mismatches across method, epoch, generation, dimensions, evaluation, and eye symmetry, with finalized vendor evaluation proven for both eyes;
+-   zero fidelity invariant mismatches across method, applied generation, dimensions, evaluation, and eye symmetry, with finalized vendor evaluation proven for both eyes;
 -   a fully drained retirement queue with no deferred cleanup frame, outstanding fence, or capacity block;
 -   no failed or pending GPU-fenced common-target memory trim;
 -   valid DXGI, Windows-commit, and Skyrim-private samples, with local pressure recovered below `High`, post-load recovery complete, and final system commit below the lower of 75 percent or an 8-GiB reserve;
 -   no more than 256 MiB of local-video, system-commit, or Skyrim-private growth in both consecutive same-profile peak intervals once an exact backend profile has at least three completed samples;
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
 
-These thresholds are part of schema version 5. Change the schema version if their meaning or units change.
+These thresholds are part of schema version 6. Change the schema version if their meaning or units change.
 
 ## Ghidra correlation
 

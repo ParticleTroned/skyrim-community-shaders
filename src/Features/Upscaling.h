@@ -487,6 +487,26 @@ public:
 		bool capacityBlocked = false;
 	};
 
+	struct VREngineTargetRetirementSnapshot
+	{
+		bool supported = false;
+		bool pending = false;
+		uint64_t oldestEpoch = 0;
+		uint64_t newestEpoch = 0;
+		uint32_t pendingGenerations = 0;
+		uint32_t capturedPointerCount = 0;
+		uint32_t aliasedPointerCount = 0;
+		uint32_t replacedPointerCount = 0;
+		uint32_t restoredPointerCount = 0;
+		uint32_t pendingReleaseCount = 0;
+		uint32_t lastReleasedPointerCount = 0;
+		uint64_t totalReleasedPointerCount = 0;
+		uint32_t completedCount = 0;
+		uint32_t fenceFailures = 0;
+		bool fencePending = false;
+		bool capacityBlocked = false;
+	};
+
 	struct VRRenderScaleMemorySnapshot
 	{
 		bool valid = false;
@@ -847,6 +867,7 @@ public:
 		VRRenderScaleProfileSnapshot stable{};
 		VRRenderScaleRelatchPlan relatchPlan{};
 		VRRenderScaleRetirementSnapshot retirement{};
+		VREngineTargetRetirementSnapshot engineTargetRetirement{};
 		VRRenderScaleMemorySnapshot memory{};
 		VRRenderScaleMemoryTrimSnapshot memoryTrim{};
 		VRRenderScalePostLoadRecoverySnapshot postLoadRecovery{};
@@ -1327,6 +1348,17 @@ public:
 	uint32_t deferredVRIntermediateTextureCleanupFrame = 0;
 	winrt::com_ptr<ID3D11Query> vrIntermediateTextureCleanupFence;
 	std::atomic_bool vrIntermediateRetirementCapacityLogged{ false };
+	struct RetiredVREngineTargetGeneration
+	{
+		uint64_t oldestEpoch = 0;
+		uint64_t newestEpoch = 0;
+		uint32_t generationCount = 0;
+		std::vector<winrt::com_ptr<IUnknown>> resources;
+	};
+	std::optional<RetiredVREngineTargetGeneration> retiredVREngineTargetGeneration;
+	winrt::com_ptr<ID3D11Query> vrEngineTargetRetirementFence;
+	uint32_t vrEngineTargetRetirementFenceFailures = 0;
+	std::atomic_bool vrEngineTargetRetirementCapacityLogged{ false };
 	winrt::com_ptr<IDXGIAdapter3> vrRenderScaleMemoryAdapter;
 	ID3D11Device* vrRenderScaleMemoryAdapterDevice = nullptr;
 	uint32_t vrRenderScaleMemoryLastSampleFrame = 0;
@@ -1652,6 +1684,17 @@ public:
 	bool HasPendingVRIntermediateTextureCleanup() const;
 	bool CanAdmitVRIntermediateRetirement(uint64_t a_epoch);
 	void UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked = false);
+	bool HasPendingVREngineTargetRetirement() const;
+	bool CanAdmitVREngineTargetRetirement(uint64_t a_epoch);
+	void QueueVREngineTargetRetirement(
+		uint64_t a_epoch,
+		bool a_supported,
+		uint32_t a_capturedPointerCount,
+		uint32_t a_aliasedPointerCount,
+		uint32_t a_replacedPointerCount,
+		uint32_t a_restoredPointerCount,
+		std::vector<winrt::com_ptr<IUnknown>>&& a_resources);
+	bool ServiceVREngineTargetRetirement(const char* a_reason = nullptr);
 	bool SampleVRRenderScaleMemory(bool a_force = false, const char* a_reason = nullptr);
 	void PrepareVRRenderScaleCommonTargetResidencyDrain(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason);
 	bool ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason);

@@ -39,6 +39,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -15735,6 +15736,193 @@ namespace
 		Failed
 	};
 
+	struct VREngineTargetPointerSlotSnapshot
+	{
+		void* address = nullptr;
+		void* previous = nullptr;
+		IUnknown* releasePointer = nullptr;
+		void* (*read)(void*) noexcept = nullptr;
+		void (*write)(void*, void*) noexcept = nullptr;
+	};
+
+	struct VREngineTargetGenerationSnapshot
+	{
+		bool supported = false;
+		bool valid = false;
+		uint32_t capturedPointerCount = 0;
+		uint32_t aliasedPointerCount = 0;
+		std::vector<VREngineTargetPointerSlotSnapshot> slots;
+	};
+
+	struct VREngineTargetGenerationDelta
+	{
+		bool supported = false;
+		uint32_t capturedPointerCount = 0;
+		uint32_t aliasedPointerCount = 0;
+		uint32_t replacedPointerCount = 0;
+		uint32_t restoredPointerCount = 0;
+		std::vector<winrt::com_ptr<IUnknown>> resources;
+	};
+
+	bool IsVREngineTargetRetirementLayoutSupported()
+	{
+		// A live-decrypted SkyrimVR 1.4.15 Ghidra audit verified that the
+		// color, depth-stencil, and cubemap creation cores overwrite these
+		// owning COM slots without releasing the displaced generation.
+		return REL::Module::IsVR() &&
+		       REL::Module::get().version() == SKSE::RUNTIME_VR_1_4_15;
+	}
+
+	template <class T>
+	void CaptureVREngineTargetPointer(VREngineTargetGenerationSnapshot& a_snapshot, T*& a_pointer)
+	{
+		VREngineTargetPointerSlotSnapshot slot{};
+		slot.address = std::addressof(a_pointer);
+		slot.previous = a_pointer;
+		slot.releasePointer = a_pointer ? static_cast<IUnknown*>(a_pointer) : nullptr;
+		if (slot.releasePointer) {
+			const bool aliased = std::any_of(
+				a_snapshot.slots.begin(),
+				a_snapshot.slots.end(),
+				[&](const auto& a_existing) { return a_existing.previous == slot.previous; });
+			if (aliased) {
+				slot.releasePointer = nullptr;
+				if (a_snapshot.aliasedPointerCount != std::numeric_limits<uint32_t>::max())
+					++a_snapshot.aliasedPointerCount;
+			}
+		}
+		slot.read = [](void* a_address) noexcept -> void* {
+			return *static_cast<T**>(a_address);
+		};
+		slot.write = [](void* a_address, void* a_value) noexcept {
+			*static_cast<T**>(a_address) = static_cast<T*>(a_value);
+		};
+		if (a_pointer && a_snapshot.capturedPointerCount != std::numeric_limits<uint32_t>::max())
+			++a_snapshot.capturedPointerCount;
+		a_snapshot.slots.push_back(slot);
+	}
+
+	VREngineTargetGenerationSnapshot CaptureVREngineTargetGeneration()
+	{
+		VREngineTargetGenerationSnapshot snapshot{};
+		snapshot.supported = IsVREngineTargetRetirementLayoutSupported();
+		if (!snapshot.supported || !globals::game::renderer)
+			return snapshot;
+
+		constexpr uint32_t renderTargetCount =
+			static_cast<uint32_t>(RE::RENDER_TARGETS::kVRTOTAL);
+		constexpr uint32_t depthStencilCount =
+			static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kVRTOTAL);
+		constexpr uint32_t cubemapCount =
+			static_cast<uint32_t>(RE::RENDER_TARGETS_CUBEMAP::kTOTAL);
+		constexpr size_t renderTargetPointerCount = static_cast<size_t>(renderTargetCount) * 6u;
+		constexpr size_t depthStencilPointerCount = static_cast<size_t>(depthStencilCount) * 19u;
+		constexpr size_t cubemapPointerCount = static_cast<size_t>(cubemapCount) * 8u;
+		snapshot.slots.reserve(
+			renderTargetPointerCount + depthStencilPointerCount + cubemapPointerCount);
+
+		auto* renderer = globals::game::renderer;
+		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
+		for (uint32_t index = 0; index < renderTargetCount; ++index) {
+			auto& target = renderTargets[index];
+			CaptureVREngineTargetPointer(snapshot, target.texture);
+			CaptureVREngineTargetPointer(snapshot, target.textureCopy);
+			CaptureVREngineTargetPointer(snapshot, target.RTV);
+			CaptureVREngineTargetPointer(snapshot, target.SRV);
+			CaptureVREngineTargetPointer(snapshot, target.SRVCopy);
+			CaptureVREngineTargetPointer(snapshot, target.UAV);
+		}
+
+		auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
+		for (uint32_t index = 0; index < depthStencilCount; ++index) {
+			auto& target = depthStencils[index];
+			CaptureVREngineTargetPointer(snapshot, target.texture);
+			for (auto*& view : target.views)
+				CaptureVREngineTargetPointer(snapshot, view);
+			for (auto*& view : target.readOnlyViews)
+				CaptureVREngineTargetPointer(snapshot, view);
+			CaptureVREngineTargetPointer(snapshot, target.depthSRV);
+			CaptureVREngineTargetPointer(snapshot, target.stencilSRV);
+		}
+
+		auto& cubemapTargets = renderer->GetRendererData().cubemapRenderTargets;
+		for (uint32_t index = 0; index < cubemapCount; ++index) {
+			auto& target = cubemapTargets[index];
+			CaptureVREngineTargetPointer(snapshot, target.texture);
+			for (auto*& view : target.cubeSideRTV)
+				CaptureVREngineTargetPointer(snapshot, view);
+			CaptureVREngineTargetPointer(snapshot, target.SRV);
+		}
+		// Texture3DTargetData remains intentionally excluded because its four
+		// fields are untyped and their ownership has not been proven.
+
+		snapshot.valid = true;
+		return snapshot;
+	}
+
+	VREngineTargetGenerationDelta PrepareVREngineTargetGenerationDelta(
+		const VREngineTargetGenerationSnapshot& a_snapshot)
+	{
+		VREngineTargetGenerationDelta delta{};
+		delta.supported = a_snapshot.supported;
+		delta.capturedPointerCount = a_snapshot.capturedPointerCount;
+		delta.aliasedPointerCount = a_snapshot.aliasedPointerCount;
+		const uint32_t uniquePointerCount =
+			a_snapshot.capturedPointerCount >= a_snapshot.aliasedPointerCount ?
+				a_snapshot.capturedPointerCount - a_snapshot.aliasedPointerCount :
+				0u;
+		delta.resources.reserve(uniquePointerCount);
+		return delta;
+	}
+
+	void ReconcileVREngineTargetGeneration(
+		const VREngineTargetGenerationSnapshot& a_snapshot,
+		VREngineTargetGenerationDelta& a_delta) noexcept
+	{
+		if (!a_snapshot.valid)
+			return;
+
+		for (const auto& slot : a_snapshot.slots) {
+			if (!slot.address || !slot.read || !slot.write)
+				continue;
+
+			void* current = slot.read(slot.address);
+			if (current == slot.previous)
+				continue;
+
+			if (!current && slot.previous) {
+				slot.write(slot.address, slot.previous);
+				if (a_delta.restoredPointerCount != std::numeric_limits<uint32_t>::max())
+					++a_delta.restoredPointerCount;
+				continue;
+			}
+		}
+
+		for (const auto& owner : a_snapshot.slots) {
+			if (!owner.previous || !owner.releasePointer)
+				continue;
+
+			const bool stillReferenced = std::any_of(
+				a_snapshot.slots.begin(),
+				a_snapshot.slots.end(),
+				[&](const auto& a_alias) {
+					return a_alias.previous == owner.previous &&
+					       a_alias.address &&
+					       a_alias.read &&
+					       a_alias.read(a_alias.address) == a_alias.previous;
+				});
+			if (stillReferenced)
+				continue;
+
+			// Capacity was reserved before recreation. Each raw COM identity is
+			// transferred at most once even when Skyrim aliases it across slots.
+			a_delta.resources.emplace_back();
+			a_delta.resources.back().attach(owner.releasePointer);
+			if (a_delta.replacedPointerCount != std::numeric_limits<uint32_t>::max())
+				++a_delta.replacedPointerCount;
+		}
+	}
+
 	bool VRRenderScaleRelatchSignatureEquals(
 		const Upscaling::VRRenderScaleRelatchSignature& a_lhs,
 		const Upscaling::VRRenderScaleRelatchSignature& a_rhs)
@@ -17122,7 +17310,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				VRRenderScaleRetryKind::Pressure);
 			return false;
 		}
-		if (!CanAdmitVRIntermediateRetirement(relatchEpoch)) {
+		if (!CanAdmitVRIntermediateRetirement(relatchEpoch) ||
+			!CanAdmitVREngineTargetRetirement(relatchEpoch)) {
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Retirement);
 			return false;
 		}
@@ -17370,15 +17559,36 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				(pressureMemoryRelief || pressureTrimCompletedForEpoch) ? VRRenderScaleMemoryTrimReason::Pressure :
 				memoryReliefActiveForRelatch ? VRRenderScaleMemoryTrimReason::RapidRelatch :
 				VRRenderScaleMemoryTrimReason::None;
-			if (trimReason != VRRenderScaleMemoryTrimReason::None) {
-				PrepareVRRenderScaleCommonTargetResidencyDrain(relatchEpoch, trimReason);
-			}
+			PrepareVRRenderScaleCommonTargetResidencyDrain(relatchEpoch, trimReason);
 			const bool releasedDeferredTargetsForRelief =
 				(memoryReliefActiveForRelatch || lowPeakNativeRestoreRelatch) &&
 				globals::deferred;
 			if (releasedDeferredTargetsForRelief)
 				globals::deferred->ReleaseRenderTargets();
-			if (!Hooks::RecreateRenderTargetsForVRRenderScale()) {
+			const auto engineTargetSnapshot = CaptureVREngineTargetGeneration();
+			auto engineTargetDelta = PrepareVREngineTargetGenerationDelta(engineTargetSnapshot);
+			auto finalizeEngineTargetRecreation = [&]() {
+				ReconcileVREngineTargetGeneration(engineTargetSnapshot, engineTargetDelta);
+				QueueVREngineTargetRetirement(
+					relatchEpoch,
+					engineTargetDelta.supported,
+					engineTargetDelta.capturedPointerCount,
+					engineTargetDelta.aliasedPointerCount,
+					engineTargetDelta.replacedPointerCount,
+					engineTargetDelta.restoredPointerCount,
+					std::move(engineTargetDelta.resources));
+			};
+			bool engineTargetsRecreated = false;
+			try {
+				engineTargetsRecreated = Hooks::RecreateRenderTargetsForVRRenderScale();
+			} catch (...) {
+				// The original recreation runs before CS reinitialization and can
+				// therefore have replaced slots even when later setup throws.
+				finalizeEngineTargetRecreation();
+				throw;
+			}
+			finalizeEngineTargetRecreation();
+			if (!engineTargetsRecreated) {
 				if (releasedDeferredTargetsForRelief)
 					globals::deferred->SetupResources();
 				if (bootContractChanged && !renderTargetsRelatched) {
@@ -17891,6 +18101,23 @@ void Upscaling::UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked)
 	}
 
 	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	const auto& engineRetirement = vrRenderScaleTransitionController.engineTargetRetirement;
+	if (engineRetirement.pending) {
+		const uint32_t availableSets = std::numeric_limits<uint32_t>::max() - snapshot.pendingSets;
+		snapshot.pendingSets += std::min(engineRetirement.pendingGenerations, availableSets);
+		if (snapshot.oldestEpoch == 0 ||
+			(engineRetirement.oldestEpoch != 0 && engineRetirement.oldestEpoch < snapshot.oldestEpoch)) {
+			snapshot.oldestEpoch = engineRetirement.oldestEpoch;
+		}
+		snapshot.newestEpoch = std::max(snapshot.newestEpoch, engineRetirement.newestEpoch);
+		const uint32_t engineCleanupFrame = globals::state ?
+			std::max(globals::state->frameCount, 1u) + 1u :
+			1u;
+		if (snapshot.nextCleanupFrame == 0 || engineCleanupFrame < snapshot.nextCleanupFrame)
+			snapshot.nextCleanupFrame = engineCleanupFrame;
+		snapshot.fencePending = snapshot.fencePending || engineRetirement.fencePending;
+		snapshot.capacityBlocked = snapshot.capacityBlocked || engineRetirement.capacityBlocked;
+	}
 	const auto& previous = vrRenderScaleTransitionController.retirement;
 	if (previous.pendingSets == snapshot.pendingSets &&
 		previous.oldestEpoch == snapshot.oldestEpoch &&
@@ -17910,18 +18137,246 @@ void Upscaling::UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked)
 	++vrRenderScaleTransitionController.revision;
 }
 
+bool Upscaling::HasPendingVREngineTargetRetirement() const
+{
+	return retiredVREngineTargetGeneration.has_value() &&
+	       !retiredVREngineTargetGeneration->resources.empty();
+}
+
+bool Upscaling::CanAdmitVREngineTargetRetirement(uint64_t a_epoch)
+{
+	if (ServiceVREngineTargetRetirement("relatch admission")) {
+		vrEngineTargetRetirementCapacityLogged.store(false, std::memory_order_release);
+		return true;
+	}
+
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		vrRenderScaleTransitionController.engineTargetRetirement.capacityBlocked = true;
+		++vrRenderScaleTransitionController.revision;
+	}
+	UpdateVRIntermediateRetirementSnapshot(true);
+	if (!vrEngineTargetRetirementCapacityLogged.exchange(true, std::memory_order_acq_rel)) {
+		logger::warn(
+			"[VRRenderScale] Deferred transition epoch={} because {} engine target reference(s) are still GPU-owned.",
+			a_epoch,
+			retiredVREngineTargetGeneration ? retiredVREngineTargetGeneration->resources.size() : 0u);
+	}
+	return false;
+}
+
+void Upscaling::QueueVREngineTargetRetirement(
+	uint64_t a_epoch,
+	bool a_supported,
+	uint32_t a_capturedPointerCount,
+	uint32_t a_aliasedPointerCount,
+	uint32_t a_replacedPointerCount,
+	uint32_t a_restoredPointerCount,
+	std::vector<winrt::com_ptr<IUnknown>>&& a_resources)
+{
+	static std::atomic_bool loggedUnsupportedLayout{ false };
+	if (!a_supported) {
+		{
+			std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+			auto& retirement = vrRenderScaleTransitionController.engineTargetRetirement;
+			retirement.supported = false;
+			retirement.pending = false;
+			retirement.capturedPointerCount = 0;
+			retirement.aliasedPointerCount = 0;
+			retirement.replacedPointerCount = 0;
+			retirement.restoredPointerCount = 0;
+			retirement.pendingReleaseCount = 0;
+			retirement.fencePending = false;
+			retirement.capacityBlocked = false;
+			++vrRenderScaleTransitionController.revision;
+		}
+		UpdateVRIntermediateRetirementSnapshot(false);
+		if (!loggedUnsupportedLayout.exchange(true, std::memory_order_acq_rel)) {
+			logger::warn(
+				"[VRRenderScale] Engine target generation retirement is disabled for this runtime layout; recreated targets will retain vanilla ownership behavior.");
+		}
+		return;
+	}
+
+	loggedUnsupportedLayout.store(false, std::memory_order_release);
+	const uint32_t queuedReleaseCount = static_cast<uint32_t>(std::min<size_t>(
+		a_resources.size(),
+		std::numeric_limits<uint32_t>::max()));
+	if (!a_resources.empty()) {
+		if (HasPendingVREngineTargetRetirement()) {
+			// Admission prevents this path. If that invariant is ever broken,
+			// retain vanilla's leaked references instead of releasing resources
+			// that may still be owned by in-flight GPU work.
+			for (auto& resource : a_resources)
+				resource.detach();
+			logger::error(
+				"[VRRenderScale] Engine target retirement admission invariant failed; retained {} displaced reference(s) without an unsafe early release. epoch={}",
+				queuedReleaseCount,
+				a_epoch);
+			return;
+		}
+
+		retiredVREngineTargetGeneration.emplace();
+		auto& pending = *retiredVREngineTargetGeneration;
+		pending.oldestEpoch = a_epoch;
+		pending.newestEpoch = a_epoch;
+		pending.generationCount = 1;
+		pending.resources = std::move(a_resources);
+		vrEngineTargetRetirementFence = nullptr;
+		vrEngineTargetRetirementFenceFailures = 0;
+	}
+
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& retirement = vrRenderScaleTransitionController.engineTargetRetirement;
+		retirement.supported = true;
+		retirement.pending = HasPendingVREngineTargetRetirement();
+		retirement.oldestEpoch = retiredVREngineTargetGeneration ?
+			retiredVREngineTargetGeneration->oldestEpoch :
+			0;
+		retirement.newestEpoch = retiredVREngineTargetGeneration ?
+			retiredVREngineTargetGeneration->newestEpoch :
+			a_epoch;
+		retirement.pendingGenerations = retiredVREngineTargetGeneration ?
+			retiredVREngineTargetGeneration->generationCount :
+			0;
+		retirement.capturedPointerCount = a_capturedPointerCount;
+		retirement.aliasedPointerCount = a_aliasedPointerCount;
+		retirement.replacedPointerCount = a_replacedPointerCount;
+		retirement.restoredPointerCount = a_restoredPointerCount;
+		retirement.pendingReleaseCount = retiredVREngineTargetGeneration ?
+			static_cast<uint32_t>(std::min<size_t>(
+				retiredVREngineTargetGeneration->resources.size(),
+				std::numeric_limits<uint32_t>::max())) :
+			0;
+		retirement.lastReleasedPointerCount = 0;
+		retirement.fenceFailures = 0;
+		retirement.fencePending = false;
+		retirement.capacityBlocked = false;
+		++vrRenderScaleTransitionController.revision;
+	}
+	UpdateVRIntermediateRetirementSnapshot(false);
+
+	if (a_restoredPointerCount != 0) {
+		logger::warn(
+			"[VRRenderScale] Restored {} engine target pointer(s) because recreation did not provide replacements. epoch={} captured={} aliases={} replaced={}",
+			a_restoredPointerCount,
+			a_epoch,
+			a_capturedPointerCount,
+			a_aliasedPointerCount,
+			a_replacedPointerCount);
+	}
+	if (queuedReleaseCount == 0)
+		return;
+
+	logger::debug(
+		"[VRRenderScale] Queued {} unique displaced engine target reference(s) for GPU-fenced retirement. epoch={} captured={} aliases={} restored={}",
+		queuedReleaseCount,
+		a_epoch,
+		a_capturedPointerCount,
+		a_aliasedPointerCount,
+		a_restoredPointerCount);
+	ServiceVREngineTargetRetirement("queue");
+	if (HasPendingVREngineTargetRetirement() && globals::d3d::context)
+		globals::d3d::context->Flush();
+}
+
+bool Upscaling::ServiceVREngineTargetRetirement(const char* a_reason)
+{
+	if (!HasPendingVREngineTargetRetirement())
+		return true;
+
+	const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
+		vrEngineTargetRetirementFence,
+		"VR engine target generation retirement");
+	if (fenceResult == VRIntermediateCleanupFenceResult::Pending) {
+		{
+			std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+			auto& retirement = vrRenderScaleTransitionController.engineTargetRetirement;
+			retirement.pending = true;
+			retirement.fencePending = vrEngineTargetRetirementFence.get() != nullptr;
+			retirement.capacityBlocked = false;
+			++vrRenderScaleTransitionController.revision;
+		}
+		UpdateVRIntermediateRetirementSnapshot(false);
+		return false;
+	}
+
+	if (fenceResult == VRIntermediateCleanupFenceResult::Failed) {
+		if (vrEngineTargetRetirementFenceFailures != std::numeric_limits<uint32_t>::max())
+			++vrEngineTargetRetirementFenceFailures;
+		{
+			std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+			auto& retirement = vrRenderScaleTransitionController.engineTargetRetirement;
+			retirement.pending = true;
+			retirement.fenceFailures = vrEngineTargetRetirementFenceFailures;
+			retirement.fencePending = false;
+			++vrRenderScaleTransitionController.revision;
+		}
+		UpdateVRIntermediateRetirementSnapshot(false);
+		if (vrEngineTargetRetirementFenceFailures == kVRRenderScaleMemoryTrimMaxFenceFailures) {
+			logger::warn(
+				"[VRRenderScale] Engine target retirement fence failed {} times; retaining {} old reference(s) and retrying without an unsafe release.",
+				vrEngineTargetRetirementFenceFailures,
+				retiredVREngineTargetGeneration->resources.size());
+		}
+		return false;
+	}
+
+	const uint32_t releasedPointerCount = static_cast<uint32_t>(std::min<size_t>(
+		retiredVREngineTargetGeneration->resources.size(),
+		std::numeric_limits<uint32_t>::max()));
+	const uint64_t oldestEpoch = retiredVREngineTargetGeneration->oldestEpoch;
+	const uint64_t newestEpoch = retiredVREngineTargetGeneration->newestEpoch;
+	const uint32_t generationCount = retiredVREngineTargetGeneration->generationCount;
+	retiredVREngineTargetGeneration.reset();
+	vrEngineTargetRetirementFence = nullptr;
+	vrEngineTargetRetirementFenceFailures = 0;
+	vrEngineTargetRetirementCapacityLogged.store(false, std::memory_order_release);
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& retirement = vrRenderScaleTransitionController.engineTargetRetirement;
+		retirement.pending = false;
+		retirement.oldestEpoch = oldestEpoch;
+		retirement.newestEpoch = newestEpoch;
+		retirement.pendingGenerations = 0;
+		retirement.pendingReleaseCount = 0;
+		retirement.lastReleasedPointerCount = releasedPointerCount;
+		const uint64_t available = std::numeric_limits<uint64_t>::max() - retirement.totalReleasedPointerCount;
+		retirement.totalReleasedPointerCount += std::min<uint64_t>(releasedPointerCount, available);
+		if (retirement.completedCount != std::numeric_limits<uint32_t>::max())
+			++retirement.completedCount;
+		retirement.fenceFailures = 0;
+		retirement.fencePending = false;
+		retirement.capacityBlocked = false;
+		++vrRenderScaleTransitionController.revision;
+	}
+	UpdateVRIntermediateRetirementSnapshot(false);
+	logger::debug(
+		"[VRRenderScale] Released {} displaced engine target reference(s) after GPU completion. generations={} epochs={}-{}{}{}",
+		releasedPointerCount,
+		generationCount,
+		oldestEpoch,
+		newestEpoch,
+		a_reason && *a_reason ? " service=" : "",
+		a_reason && *a_reason ? a_reason : "");
+	SampleVRRenderScaleMemory(true, "post engine target retirement");
+	return true;
+}
+
 void Upscaling::PrepareVRRenderScaleCommonTargetResidencyDrain(
 	uint64_t a_ownerEpoch,
 	VRRenderScaleMemoryTrimReason a_reason)
 {
 	if (!globals::game::isVR || !globals::d3d::context ||
-		a_ownerEpoch == 0 || a_reason == VRRenderScaleMemoryTrimReason::None) {
+		a_ownerEpoch == 0) {
 		return;
 	}
 
-	// Remove every texture/view binding before the engine releases the old
-	// target table. This is the resource-scoped equivalent of ClearState without
-	// invalidating Skyrim's unrelated shader, sampler, and input-layout caches.
+	// Remove every texture/view binding before the engine overwrites the target
+	// table. The displaced owning references are retired after a GPU fence; this
+	// is the resource-scoped equivalent of ClearState without invalidating
+	// Skyrim's unrelated shader, sampler, and input-layout caches.
 	UnbindUpscalingResources();
 	ID3D11UnorderedAccessView* nullOMUAVs[D3D11_PS_CS_UAV_REGISTER_COUNT] = {};
 	globals::d3d::context->OMSetRenderTargetsAndUnorderedAccessViews(
@@ -17948,6 +18403,8 @@ void Upscaling::PrepareVRRenderScaleCommonTargetResidencyDrain(
 	if (globals::game::stateUpdateFlags)
 		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 	globals::d3d::context->Flush();
+	if (a_reason == VRRenderScaleMemoryTrimReason::None)
+		return;
 
 	const auto offer = OfferVRRenderScaleCommonTargetResources();
 	const bool succeeded = offer.Succeeded();
@@ -24114,6 +24571,8 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+	if (HasPendingVREngineTargetRetirement())
+		ServiceVREngineTargetRetirement("configure");
 	if (HasPendingVRRenderScaleMemoryTrim())
 		ServiceVRRenderScaleMemoryTrim("configure");
 	SampleVRRenderScaleMemory();
@@ -26836,7 +27295,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 28 }
+		{ "implementationStep", 29 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -27133,6 +27592,22 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							{ "nextCleanupFrame", controller.retirement.nextCleanupFrame },
 							{ "fencePending", controller.retirement.fencePending },
 							{ "capacityBlocked", controller.retirement.capacityBlocked } } },
+		{ "engineTargetRetirement", { { "supported", controller.engineTargetRetirement.supported },
+									  { "pending", controller.engineTargetRetirement.pending },
+									  { "oldestEpoch", controller.engineTargetRetirement.oldestEpoch },
+									  { "newestEpoch", controller.engineTargetRetirement.newestEpoch },
+									  { "pendingGenerations", controller.engineTargetRetirement.pendingGenerations },
+									  { "capturedPointerCount", controller.engineTargetRetirement.capturedPointerCount },
+									  { "aliasedPointerCount", controller.engineTargetRetirement.aliasedPointerCount },
+									  { "replacedPointerCount", controller.engineTargetRetirement.replacedPointerCount },
+									  { "restoredPointerCount", controller.engineTargetRetirement.restoredPointerCount },
+									  { "pendingReleaseCount", controller.engineTargetRetirement.pendingReleaseCount },
+									  { "lastReleasedPointerCount", controller.engineTargetRetirement.lastReleasedPointerCount },
+									  { "totalReleasedPointerCount", controller.engineTargetRetirement.totalReleasedPointerCount },
+									  { "completedCount", controller.engineTargetRetirement.completedCount },
+									  { "fenceFailures", controller.engineTargetRetirement.fenceFailures },
+									  { "fencePending", controller.engineTargetRetirement.fencePending },
+									  { "capacityBlocked", controller.engineTargetRetirement.capacityBlocked } } },
 		{ "postLoadRecovery", { { "active", controller.postLoadRecovery.active },
 								  { "recoveryEpoch", controller.postLoadRecovery.recoveryEpoch },
 								  { "transitionEpoch", controller.postLoadRecovery.transitionEpoch },
@@ -27556,6 +28031,10 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 						 "Upscaling::EnsureVRIntermediateTextures",
 						 "Upscaling::AreVRIntermediateTexturesCompatibleForFSR",
 						 "Upscaling::ServiceVRRenderScaleMemoryTrim",
+						 "CaptureVREngineTargetGeneration",
+						 "ReconcileVREngineTargetGeneration",
+						 "Upscaling::QueueVREngineTargetRetirement",
+						 "Upscaling::ServiceVREngineTargetRetirement",
 						 "QueryVRRenderScaleSystemCommit",
 						 "Upscaling::TryPromoteVRRenderScaleSubmitStageContract",
 						 "Upscaling::RecordVRRenderScaleFidelityObservation",
@@ -28269,6 +28748,7 @@ void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 		if (vrRenderScaleTransitionController.metrics.current.valid)
 			ArchiveVRRenderScaleTransitionMetricsLocked(false, true, frame);
 		const auto retirement = vrRenderScaleTransitionController.retirement;
+		const auto engineTargetRetirement = vrRenderScaleTransitionController.engineTargetRetirement;
 		const auto dlssLifecycle = vrRenderScaleTransitionController.dlssLifecycle;
 		const auto fsrLifecycle = vrRenderScaleTransitionController.fsrLifecycle;
 		const auto metrics = vrRenderScaleTransitionController.metrics;
@@ -28276,6 +28756,7 @@ void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 		vrRenderScaleTransitionController = {};
 		vrRenderScaleTransitionController.revision = revision;
 		vrRenderScaleTransitionController.retirement = retirement;
+		vrRenderScaleTransitionController.engineTargetRetirement = engineTargetRetirement;
 		vrRenderScaleTransitionController.dlssLifecycle = dlssLifecycle;
 		vrRenderScaleTransitionController.fsrLifecycle = fsrLifecycle;
 		vrRenderScaleTransitionController.metrics = metrics;

@@ -2122,6 +2122,8 @@ namespace
 	using VRFpsStabilizerUpscalingProfile = Upscaling::VRFpsStabilizerProfile;
 	using VRFpsStabilizerUpscalingProfiles = Upscaling::VRFpsStabilizerConfig;
 	constexpr uintmax_t kVRFpsStabilizerMaxIniBytes = 4u * 1024u * 1024u;
+	// Only this explicit marker is reversible; ordinary user comments remain untouched.
+	constexpr std::string_view kVRFpsStabilizerDisabledSettingPrefix = "# CS-VR-UI-DISABLED ";
 
 	struct VRFpsStabilizerTransitionTarget
 	{
@@ -2168,12 +2170,16 @@ namespace
 		4u   // Ultra Performance
 	};
 
-	uint32_t VRFpsStabilizerUpscalePresetToQualityMode(uint32_t a_preset)
+	bool TryVRFpsStabilizerUpscalePresetToQualityMode(
+		uint32_t a_preset,
+		uint32_t& outQualityMode)
 	{
 		const auto preset = std::ranges::find(kVRFpsStabilizerUpscalePresets, a_preset);
-		return preset == kVRFpsStabilizerUpscalePresets.end() ?
-		           0u :
-		           static_cast<uint32_t>(preset - kVRFpsStabilizerUpscalePresets.begin());
+		if (preset == kVRFpsStabilizerUpscalePresets.end())
+			return false;
+
+		outQualityMode = static_cast<uint32_t>(preset - kVRFpsStabilizerUpscalePresets.begin());
+		return true;
 	}
 
 	enum class VRFpsStabilizerSetting
@@ -2221,6 +2227,19 @@ namespace
 	std::string_view StripVRFpsStabilizerIniComment(std::string_view line)
 	{
 		return line.substr(0, FindVRFpsStabilizerIniComment(line));
+	}
+
+	bool TryGetVRFpsStabilizerDisabledSettingPayload(
+		std::string_view line,
+		std::string_view& outPayload)
+	{
+		line = TrimAsciiWhitespace(line);
+		if (!StartsWithAsciiInsensitive(line, kVRFpsStabilizerDisabledSettingPrefix))
+			return false;
+
+		line.remove_prefix(kVRFpsStabilizerDisabledSettingPrefix.size());
+		outPayload = TrimAsciiWhitespace(line);
+		return true;
 	}
 
 	bool ReadVRFpsStabilizerIni(
@@ -2419,11 +2438,14 @@ namespace
 			profile.hasUpscaleMethod = true;
 			break;
 		case VRFpsStabilizerSetting::UpscalePreset:
-			if (parsedValue > Upscaling::kQualityModeMaxIndex)
+			if (setting.valueUsesQualityMode) {
+				if (parsedValue > Upscaling::kQualityModeMaxIndex)
+					++profile.invalidSettingCount;
+				profile.qualityMode = ClampQualityModeUInt(parsedValue);
+			} else if (!TryVRFpsStabilizerUpscalePresetToQualityMode(parsedValue, profile.qualityMode)) {
 				++profile.invalidSettingCount;
-			profile.qualityMode = setting.valueUsesQualityMode ?
-			                          ClampQualityModeUInt(parsedValue) :
-			                          VRFpsStabilizerUpscalePresetToQualityMode(parsedValue);
+				profile.qualityMode = 0;
+			}
 			profile.hasQualityMode = true;
 			profile.hasLegacyMethodSelection |= setting.legacyMethodSelection;
 			break;
@@ -2439,6 +2461,31 @@ namespace
 		}
 	}
 
+	void MergeMissingVRFpsStabilizerUpscalingSettings(
+		VRFpsStabilizerUpscalingProfile& profile,
+		const VRFpsStabilizerUpscalingProfile& fallback)
+	{
+		if (!profile.hasUpscaleMethod && fallback.hasUpscaleMethod) {
+			profile.upscaleMethod = fallback.upscaleMethod;
+			profile.hasUpscaleMethod = true;
+		}
+		if (!profile.hasQualityMode && fallback.hasQualityMode) {
+			profile.qualityMode = fallback.qualityMode;
+			profile.hasQualityMode = true;
+		}
+		if (!profile.hasDLSSPreset && fallback.hasDLSSPreset) {
+			profile.dlssPreset = fallback.dlssPreset;
+			profile.hasDLSSPreset = true;
+		}
+		if (!profile.hasRenderScaleMode && fallback.hasRenderScaleMode) {
+			profile.renderScaleMode = fallback.renderScaleMode;
+			profile.hasRenderScaleMode = true;
+		}
+
+		profile.hasLegacyMethodSelection |= fallback.hasLegacyMethodSelection;
+		profile.invalidSettingCount += fallback.invalidSettingCount;
+	}
+
 	bool IsVRFpsStabilizerFadeSetting(std::string_view line)
 	{
 		line = StripVRFpsStabilizerIniComment(line);
@@ -2449,7 +2496,8 @@ namespace
 
 	bool TryLoadVRFpsStabilizerUpscalingProfiles(
 		VRFpsStabilizerUpscalingProfiles& outProfiles,
-		std::string* outError = nullptr)
+		std::string* outError = nullptr,
+		bool includeManagedDisabledSettings = false)
 	{
 		if (outError)
 			outError->clear();
@@ -2470,6 +2518,8 @@ namespace
 		}
 
 		outProfiles.fileReadable = true;
+		VRFpsStabilizerUpscalingProfiles disabledProfiles;
+		bool sawManagedDisabledSetting = false;
 		std::istringstream iniFile(contents);
 		VRFpsStabilizerIniSection currentSection = VRFpsStabilizerIniSection::Other;
 		std::string line;
@@ -2480,15 +2530,28 @@ namespace
 				continue;
 			}
 
-			if (currentSection == VRFpsStabilizerIniSection::Settings && IsVRFpsStabilizerFadeSetting(line)) {
-				const auto lineView = StripVRFpsStabilizerIniComment(line);
+			std::string_view managedLine = line;
+			std::string_view disabledPayload;
+			const bool managedDisabled =
+				TryGetVRFpsStabilizerDisabledSettingPayload(managedLine, disabledPayload);
+			if (managedDisabled)
+				managedLine = disabledPayload;
+
+			if (currentSection == VRFpsStabilizerIniSection::Settings && IsVRFpsStabilizerFadeSetting(managedLine)) {
+				if (managedDisabled && !includeManagedDisabledSettings) {
+					sawManagedDisabledSetting = true;
+					continue;
+				}
+
+				auto& destination = managedDisabled ? disabledProfiles : outProfiles;
+				const auto lineView = StripVRFpsStabilizerIniComment(managedLine);
 				const auto equalsOffset = lineView.find('=');
 				float fadeDuration = 0.0f;
 				if (TryParseFiniteFloat(lineView.substr(equalsOffset + 1), fadeDuration) && fadeDuration >= 0.0f) {
-					outProfiles.fadeDuration = fadeDuration;
-					outProfiles.hasFadeDuration = true;
+					destination.fadeDuration = fadeDuration;
+					destination.hasFadeDuration = true;
 				} else {
-					++outProfiles.invalidFadeSettingCount;
+					++destination.invalidFadeSettingCount;
 				}
 				continue;
 			}
@@ -2497,10 +2560,43 @@ namespace
 				continue;
 
 			VRFpsStabilizerParsedSetting parsedSetting;
-			if (!TryParseVRFpsStabilizerConditionalSetting(line, parsedSetting))
+			if (!TryParseVRFpsStabilizerConditionalSetting(managedLine, parsedSetting))
 				continue;
-			auto& profile = parsedSetting.interior ? outProfiles.interior : outProfiles.exterior;
+			if (managedDisabled && !includeManagedDisabledSettings) {
+				sawManagedDisabledSetting = true;
+				continue;
+			}
+
+			auto& destination = managedDisabled ? disabledProfiles : outProfiles;
+			auto& profile = parsedSetting.interior ? destination.interior : destination.exterior;
 			ApplyVRFpsStabilizerUpscalingSetting(profile, parsedSetting);
+		}
+
+		const bool hasActiveSettings = outProfiles.HasAnyManagedSetting();
+		const bool hasDisabledSettings = disabledProfiles.HasAnyManagedSetting();
+		if (!includeManagedDisabledSettings) {
+			outProfiles.upscalingSwitchingEnabled = !sawManagedDisabledSetting || hasActiveSettings;
+			return outProfiles.HasAnyProfile();
+		}
+
+		if (hasDisabledSettings) {
+			if (hasActiveSettings) {
+				outProfiles.hasMixedUpscalingSwitchingActivation = true;
+				MergeMissingVRFpsStabilizerUpscalingSettings(outProfiles.interior, disabledProfiles.interior);
+				MergeMissingVRFpsStabilizerUpscalingSettings(outProfiles.exterior, disabledProfiles.exterior);
+				if (!outProfiles.hasFadeDuration && disabledProfiles.hasFadeDuration) {
+					outProfiles.fadeDuration = disabledProfiles.fadeDuration;
+					outProfiles.hasFadeDuration = true;
+				}
+				outProfiles.invalidFadeSettingCount += disabledProfiles.invalidFadeSettingCount;
+			} else {
+				outProfiles.upscalingSwitchingEnabled = false;
+				outProfiles.fadeDuration = disabledProfiles.fadeDuration;
+				outProfiles.hasFadeDuration = disabledProfiles.hasFadeDuration;
+				outProfiles.invalidFadeSettingCount = disabledProfiles.invalidFadeSettingCount;
+				outProfiles.interior = std::move(disabledProfiles.interior);
+				outProfiles.exterior = std::move(disabledProfiles.exterior);
+			}
 		}
 
 		return outProfiles.HasAnyProfile();
@@ -2555,26 +2651,42 @@ namespace
 		return comment.empty() ? std::string{} : std::format(" {}", comment);
 	}
 
+	std::string BuildVRFpsStabilizerManagedSettingLine(
+		std::string settingLine,
+		bool enabled)
+	{
+		if (enabled)
+			return settingLine;
+
+		return std::format("{}{}", kVRFpsStabilizerDisabledSettingPrefix, settingLine);
+	}
+
 	std::string BuildVRFpsStabilizerConditionalLine(
 		bool interior,
 		VRFpsStabilizerSetting setting,
 		const VRFpsStabilizerUpscalingProfile& profile,
+		bool enabled,
 		std::string_view originalLine = {})
 	{
-		return std::format(
+		auto conditionalLine = std::format(
 			"{}|CS>{} = {}{}",
 			interior ? "Interior" : "Exterior",
 			GetVRFpsStabilizerSettingName(setting),
 			GetVRFpsStabilizerSettingValue(profile, setting),
 			GetVRFpsStabilizerInlineComment(originalLine));
+		return BuildVRFpsStabilizerManagedSettingLine(std::move(conditionalLine), enabled);
 	}
 
-	std::string BuildVRFpsStabilizerFadeLine(float fadeDuration, std::string_view originalLine = {})
+	std::string BuildVRFpsStabilizerFadeLine(
+		float fadeDuration,
+		bool enabled,
+		std::string_view originalLine = {})
 	{
-		return std::format(
+		auto fadeLine = std::format(
 			"CSVRFadeToBlackDuration = {}{}",
 			fadeDuration,
 			GetVRFpsStabilizerInlineComment(originalLine));
+		return BuildVRFpsStabilizerManagedSettingLine(std::move(fadeLine), enabled);
 	}
 
 	VRFpsStabilizerTransitionTarget ResolveVRFpsStabilizerTransitionTarget(
@@ -8489,7 +8601,7 @@ bool Upscaling::LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::
 	a_error.clear();
 	VRFpsStabilizerConfig loadedConfig;
 	std::string readError;
-	TryLoadVRFpsStabilizerUpscalingProfiles(loadedConfig, &readError);
+	TryLoadVRFpsStabilizerUpscalingProfiles(loadedConfig, &readError, true);
 	if (!loadedConfig.fileExists) {
 		a_config = std::move(loadedConfig);
 		a_error = std::format("VRFpsStabilizer.ini was not found at {}.", a_config.path.string());
@@ -8587,13 +8699,19 @@ bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config,
 		if (wroteProfileSetting[profileIndex][settingIndex])
 			return;
 		const auto& profile = interior ? a_config.interior : a_config.exterior;
-		outputLines.push_back(BuildVRFpsStabilizerConditionalLine(interior, setting, profile));
+		outputLines.push_back(BuildVRFpsStabilizerConditionalLine(
+			interior,
+			setting,
+			profile,
+			a_config.upscalingSwitchingEnabled));
 		wroteProfileSetting[profileIndex][settingIndex] = true;
 	};
 
 	const auto finishSection = [&](VRFpsStabilizerIniSection section) {
 		if (section == VRFpsStabilizerIniSection::Settings && !wroteFadeDuration) {
-			outputLines.push_back(BuildVRFpsStabilizerFadeLine(a_config.fadeDuration));
+			outputLines.push_back(BuildVRFpsStabilizerFadeLine(
+				a_config.fadeDuration,
+				a_config.upscalingSwitchingEnabled));
 			wroteFadeDuration = true;
 		}
 		if (section != VRFpsStabilizerIniSection::Conditional)
@@ -8619,18 +8737,34 @@ bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config,
 			continue;
 		}
 
-		if (currentSection == VRFpsStabilizerIniSection::Settings && IsVRFpsStabilizerFadeSetting(sourceLine)) {
-			outputLines.push_back(BuildVRFpsStabilizerFadeLine(a_config.fadeDuration, sourceLine));
+		std::string_view managedLine = sourceLine;
+		std::string_view disabledPayload;
+		const bool managedDisabled = TryGetVRFpsStabilizerDisabledSettingPayload(managedLine, disabledPayload);
+		if (managedDisabled)
+			managedLine = disabledPayload;
+
+		if (currentSection == VRFpsStabilizerIniSection::Settings && IsVRFpsStabilizerFadeSetting(managedLine)) {
+			outputLines.push_back(BuildVRFpsStabilizerFadeLine(
+				a_config.fadeDuration,
+				a_config.upscalingSwitchingEnabled,
+				managedLine));
 			wroteFadeDuration = true;
 			continue;
 		}
 
 		VRFpsStabilizerParsedSetting parsedSetting;
 		if (currentSection == VRFpsStabilizerIniSection::Conditional &&
-			TryParseVRFpsStabilizerConditionalSetting(sourceLine, parsedSetting)) {
+			TryParseVRFpsStabilizerConditionalSetting(managedLine, parsedSetting)) {
+			const auto profileIndex = parsedSetting.interior ? 0u : 1u;
+			const auto settingIndex = static_cast<size_t>(parsedSetting.setting) - 1u;
 			const auto& profile = parsedSetting.interior ? a_config.interior : a_config.exterior;
-			outputLines.push_back(BuildVRFpsStabilizerConditionalLine(parsedSetting.interior, parsedSetting.setting, profile, sourceLine));
-			wroteProfileSetting[parsedSetting.interior ? 0u : 1u][static_cast<size_t>(parsedSetting.setting) - 1u] = true;
+			outputLines.push_back(BuildVRFpsStabilizerConditionalLine(
+				parsedSetting.interior,
+				parsedSetting.setting,
+				profile,
+				a_config.upscalingSwitchingEnabled,
+				managedLine));
+			wroteProfileSetting[profileIndex][settingIndex] = true;
 			continue;
 		}
 
@@ -8645,7 +8779,9 @@ bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config,
 	if (!sawSettingsSection) {
 		appendSectionSpacing();
 		outputLines.emplace_back("[Settings]");
-		outputLines.push_back(BuildVRFpsStabilizerFadeLine(a_config.fadeDuration));
+		outputLines.push_back(BuildVRFpsStabilizerFadeLine(
+			a_config.fadeDuration,
+			a_config.upscalingSwitchingEnabled));
 		wroteFadeDuration = true;
 	}
 	if (!sawConditionalSection) {
@@ -15267,7 +15403,11 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	if (!TryLoadVRFpsStabilizerUpscalingProfiles(profiles)) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
-		logger::warn("[Upscaling] VR FPS Stabilizer Sync enabled, but no unconditional Interior/Exterior upscaling profile was found in {}.", profiles.path.string());
+		if (profiles.upscalingSwitchingEnabled) {
+			logger::warn("[Upscaling] VR FPS Stabilizer Sync enabled, but no unconditional Interior/Exterior upscaling profile was found in {}.", profiles.path.string());
+		} else {
+			logger::debug("[Upscaling] VR FPS Stabilizer CS upscaling switching is disabled in {}.", profiles.path.string());
+		}
 		return;
 	}
 

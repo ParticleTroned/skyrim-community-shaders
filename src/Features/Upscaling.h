@@ -241,6 +241,8 @@ public:
 		std::filesystem::path path;
 		bool fileExists = false;
 		bool fileReadable = false;
+		bool upscalingSwitchingEnabled = true;
+		bool hasMixedUpscalingSwitchingActivation = false;
 		bool hasFadeDuration = false;
 		float fadeDuration = kVRFpsStabilizerDefaultFadeDuration;
 		uint32_t invalidFadeSettingCount = 0;
@@ -271,9 +273,16 @@ public:
 			return invalidFadeSettingCount + interior.invalidSettingCount + exterior.invalidSettingCount;
 		}
 
+		/** @return True when the INI supplied any valid or invalid managed upscaling setting. */
+		[[nodiscard]] bool HasAnyManagedSetting() const
+		{
+			return hasFadeDuration || HasAnyProfile() || GetInvalidSettingCount() > 0;
+		}
+
 		/** @brief Marks all resolved settings as canonical after a successful save. */
 		void MarkSettingsComplete()
 		{
+			hasMixedUpscalingSwitchingActivation = false;
 			hasFadeDuration = true;
 			invalidFadeSettingCount = 0;
 			interior.MarkSettingsComplete();

@@ -1335,7 +1335,7 @@ namespace
 			LoadVRFpsStabilizerUIState(uiState);
 
 		ImGui::TextUnformatted("VR FPS Stabilizer Profiles");
-		ImGui::TextDisabled("Unconditional Interior and Exterior Community Shaders upscaling decisions.");
+		ImGui::TextDisabled("Interior/Exterior Community Shaders upscaling switching and its door fade.");
 		ImGui::Spacing();
 		const bool currentCellIsInterior = Util::IsInterior();
 		ImGui::TextDisabled("Current unconditional profile: %s", currentCellIsInterior ? "Interior" : "Exterior");
@@ -1343,13 +1343,34 @@ namespace
 			ImGui::TextWrapped("INI: %s", uiState.config.path.string().c_str());
 
 		ImGui::Spacing();
+		{
+			auto disabledGuard = Util::DisableGuard(uiState.loadFailed);
+			if (ImGui::Checkbox(
+					"Enable Interior/Exterior CS upscaling switching",
+					&uiState.config.upscalingSwitchingEnabled)) {
+				MarkVRFpsStabilizerUIStateDirty(uiState);
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Controls only the unconditional Interior/Exterior CS upscaling rows and CS door fade.");
+			ImGui::TextUnformatted("It does not disable VR FPS Stabilizer, its other settings, or edit other conditional rows.");
+		}
+		if (!uiState.config.upscalingSwitchingEnabled) {
+			Util::Text::WrappedWarning(
+				"Off: saving comments out only the managed Interior/Exterior CS upscaling rows and door fade. Other Stabilizer settings and conditional rows are not edited.");
+		}
+
+		ImGui::Spacing();
 		const bool openCompositeBlocksUpscaling = upscaling.IsOpenCompositeUpscalingBlocked();
 		{
-			auto disabledGuard = Util::DisableGuard(openCompositeBlocksUpscaling);
+			auto disabledGuard = Util::DisableGuard(
+				openCompositeBlocksUpscaling || !uiState.config.upscalingSwitchingEnabled);
 			ImGui::Checkbox("Enable CS save-load profile sync", &upscaling.settings.vrFpsStabilizerSync);
 		}
 		if (openCompositeBlocksUpscaling)
 			Util::Text::WrappedWarning("Open Composite upscaling disables Community Shaders stabilizer sync.");
+		else if (!uiState.config.upscalingSwitchingEnabled)
+			ImGui::TextDisabled("CS save-load profile sync is inactive while this group is off.");
 
 		if (uiState.loadFailed) {
 			ImGui::Spacing();
@@ -1363,7 +1384,13 @@ namespace
 		const bool completeConfig = uiState.config.HasCompleteSettings();
 		const bool completeProfiles = uiState.config.HasCompleteProfiles();
 		const uint32_t invalidSettingCount = uiState.config.GetInvalidSettingCount();
-		const bool configNeedsNormalization = !completeConfig || invalidSettingCount > 0;
+		const bool configNeedsNormalization =
+			!completeConfig || invalidSettingCount > 0 || uiState.config.hasMixedUpscalingSwitchingActivation;
+		if (uiState.config.hasMixedUpscalingSwitchingActivation) {
+			ImGui::Spacing();
+			Util::Text::WrappedWarning(
+				"The managed upscaling rows and door fade contain a mix of active and UI-disabled entries. Active entries take precedence; saving will make the whole group match this toggle.");
+		}
 		if (invalidSettingCount > 0) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
@@ -1383,31 +1410,37 @@ namespace
 		}
 
 		ImGui::Spacing();
-		if (ImGui::BeginTable(
-				"##VRFpsStabilizerProfiles",
-				2,
-				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
-			ImGui::TableSetupColumn(currentCellIsInterior ? "Interior (current)" : "Interior");
-			ImGui::TableSetupColumn(currentCellIsInterior ? "Exterior" : "Exterior (current)");
-			ImGui::TableHeadersRow();
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
-			const bool interiorChanged = DrawVRFpsStabilizerProfileEditor("Interior", uiState.config.interior);
-			ImGui::TableSetColumnIndex(1);
-			const bool exteriorChanged = DrawVRFpsStabilizerProfileEditor("Exterior", uiState.config.exterior);
-			if (interiorChanged || exteriorChanged)
-				MarkVRFpsStabilizerUIStateDirty(uiState);
-			ImGui::EndTable();
+		{
+			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
+			if (ImGui::BeginTable(
+					"##VRFpsStabilizerProfiles",
+					2,
+					ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
+				ImGui::TableSetupColumn(currentCellIsInterior ? "Interior (current)" : "Interior");
+				ImGui::TableSetupColumn(currentCellIsInterior ? "Exterior" : "Exterior (current)");
+				ImGui::TableHeadersRow();
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				const bool interiorChanged = DrawVRFpsStabilizerProfileEditor("Interior", uiState.config.interior);
+				ImGui::TableSetColumnIndex(1);
+				const bool exteriorChanged = DrawVRFpsStabilizerProfileEditor("Exterior", uiState.config.exterior);
+				if (interiorChanged || exteriorChanged)
+					MarkVRFpsStabilizerUIStateDirty(uiState);
+				ImGui::EndTable();
+			}
 		}
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Door / Transition Fade");
-		float fadeDuration = uiState.config.fadeDuration;
-		if (ImGui::InputFloat("Fade-to-black duration (seconds)", &fadeDuration, 0.25f, 1.0f, "%.2f")) {
-			if (std::isfinite(fadeDuration)) {
-				uiState.config.fadeDuration = std::max(fadeDuration, 0.0f);
-				uiState.config.hasFadeDuration = true;
-				MarkVRFpsStabilizerUIStateDirty(uiState);
+		{
+			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
+			float fadeDuration = uiState.config.fadeDuration;
+			if (ImGui::InputFloat("Fade-to-black duration (seconds)", &fadeDuration, 0.25f, 1.0f, "%.2f")) {
+				if (std::isfinite(fadeDuration)) {
+					uiState.config.fadeDuration = std::max(fadeDuration, 0.0f);
+					uiState.config.hasFadeDuration = true;
+					MarkVRFpsStabilizerUIStateDirty(uiState);
+				}
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1430,7 +1463,9 @@ namespace
 					uiState.dirty = false;
 					uiState.restartRequired = true;
 					uiState.messageIsError = false;
-					uiState.message = "VRFpsStabilizer.ini saved.";
+					uiState.message = uiState.config.upscalingSwitchingEnabled ?
+					                      "VR FPS Stabilizer CS upscaling switching enabled in the INI." :
+					                      "VR FPS Stabilizer CS upscaling switching disabled in the INI.";
 				} else {
 					uiState.loadFailed = false;
 					uiState.messageIsError = true;
@@ -1455,7 +1490,8 @@ namespace
 			ImGui::Spacing();
 			Util::Text::WrappedWarning("Restart Skyrim VR so VR FPS Stabilizer reloads the edited INI.");
 		}
-		Util::Text::WrappedDisabled("Only unconditional Interior/Exterior CS rows are edited. Other INI settings and conditional rows are preserved.");
+		Util::Text::WrappedDisabled(
+			"Only unconditional Interior/Exterior CS upscaling rows and CSVRFadeToBlackDuration are edited. Other Stabilizer settings and conditional rows are preserved.");
 	}
 }
 

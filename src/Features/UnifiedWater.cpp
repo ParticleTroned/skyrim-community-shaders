@@ -568,6 +568,68 @@ bool UnifiedWater::MenuOpenCloseEventHandler::Register()
 	return true;
 }
 
+namespace
+{
+	// Allow reads and writes to coexist with antivirus or indexing handles. Short
+	// retries handle transient contention without delaying startup indefinitely.
+	constexpr int kShareRetries = 3;
+	constexpr DWORD kShareRetryDelayMs = 50;
+
+	bool ReadHashFile(const std::filesystem::path& a_path, uint64_t& a_hash)
+	{
+		for (int attempt = 0; attempt < kShareRetries; ++attempt) {
+			winrt::file_handle handle{ CreateFileW(a_path.c_str(), GENERIC_READ,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+				OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
+			if (handle) {
+				DWORD bytesRead = 0;
+				const bool success = ReadFile(handle.get(), &a_hash, sizeof(a_hash), &bytesRead, nullptr) &&
+				                     bytesRead == sizeof(a_hash);
+				if (!success)
+					logger::warn("[Unified Water] '{}' exists but could not be fully read; treating as no persisted hash", a_path.string());
+				return success;
+			}
+
+			const DWORD error = GetLastError();
+			if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+				return false;
+			if ((error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) && attempt + 1 < kShareRetries) {
+				Sleep(kShareRetryDelayMs);
+				continue;
+			}
+			logger::warn("[Unified Water] Failed to open '{}' for reading (error {})", a_path.string(), error);
+			return false;
+		}
+		return false;
+	}
+
+	bool WriteHashFile(const std::filesystem::path& a_path, uint64_t a_hash)
+	{
+		for (int attempt = 0; attempt < kShareRetries; ++attempt) {
+			winrt::file_handle handle{ CreateFileW(a_path.c_str(), GENERIC_WRITE,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+				CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr) };
+			if (handle) {
+				DWORD bytesWritten = 0;
+				const bool success = WriteFile(handle.get(), &a_hash, sizeof(a_hash), &bytesWritten, nullptr) &&
+				                     bytesWritten == sizeof(a_hash);
+				if (!success)
+					logger::error("[Unified Water] Failed to persist load-order hash to '{}'; cache will regenerate again next launch", a_path.string());
+				return success;
+			}
+
+			const DWORD error = GetLastError();
+			if ((error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) && attempt + 1 < kShareRetries) {
+				Sleep(kShareRetryDelayMs);
+				continue;
+			}
+			logger::error("[Unified Water] Failed to open '{}' for writing (error {}); cache will regenerate again next launch", a_path.string(), error);
+			return false;
+		}
+		return false;
+	}
+}
+
 bool UnifiedWater::LoadOrderChanged()
 {
 	auto* dataHandler = RE::TESDataHandler::GetSingleton();
@@ -597,26 +659,21 @@ bool UnifiedWater::LoadOrderChanged()
 			addToHash(lightMods[i]);
 	}
 
-	namespace fs = std::filesystem;
-	const fs::path path = Util::PathHelpers::GetDataPath() / "UWLoadOrder.hash";
+	const std::filesystem::path path = Util::PathHelpers::GetCommunityShaderPath() / "UWLoadOrder.hash";
 
 	uint64_t existingHash = 0;
-	if (fs::exists(path)) {
-		std::ifstream file(path, std::ios::binary);
-		if (file.is_open()) {
-			file.read(reinterpret_cast<char*>(&existingHash), sizeof(existingHash));
-			file.close();
-		}
+	ReadHashFile(path, existingHash);
+
+	const bool changed = hash != existingHash;
+	logger::debug("[Unified Water] Load order hash: computed={:#x} persisted={:#x} changed={}", hash, existingHash, changed);
+
+	if (changed) {
+		std::error_code error;
+		std::filesystem::create_directories(path.parent_path(), error);
+		WriteHashFile(path, hash);
 	}
 
-	if (hash != existingHash) {
-		std::ofstream file(path, std::ios::binary | std::ios::trunc);
-		if (file.is_open()) {
-			file.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
-		}
-	}
-
-	return hash != existingHash;
+	return changed;
 }
 
 void UnifiedWater::SetFlowmapTex() const

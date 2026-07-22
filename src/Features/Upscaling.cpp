@@ -142,6 +142,9 @@ namespace
 	constexpr uint32_t kVRRenderScaleMemoryRecoverySamples = 4u;
 	constexpr uint32_t kVRRenderScalePostLoadMemorySettleSamples = 2u;
 	constexpr uint32_t kVRRenderScaleMemoryTrimMaxFenceFailures = 3u;
+	constexpr uint32_t kVRRenderScaleProjectedPressureRetryFrames = 120u;
+	constexpr uint64_t kVRRenderScaleProjectedResidencyNumerator = 3u;
+	constexpr uint64_t kVRRenderScaleProjectedResidencyDenominator = 2u;
 	constexpr uint64_t kVRRenderScaleMiB = 1024u * 1024u;
 	constexpr uint64_t kVRRenderScaleCriticalHeadroomBytes = 256u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleHighHeadroomBytes = 512u * kVRRenderScaleMiB;
@@ -16494,6 +16497,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		MaybeArmVRRenderScaleMemoryRelief(relatchSignature, relatchOrigin, state->frameCount);
 		auto controllerAtAdmission = GetVRRenderScaleTransitionSnapshot();
 		auto memoryAtAdmission = controllerAtAdmission.memory;
+		const bool projectedResidencyGuardOwnedByEpoch =
+			controllerAtAdmission.relatchPlan.valid &&
+			controllerAtAdmission.relatchPlan.transitionEpoch == relatchEpoch &&
+			controllerAtAdmission.relatchPlan.projectedResidencyGuardActive;
 		const bool pressureTrimCompletedForEpoch =
 			!controllerAtAdmission.memoryTrim.pending &&
 			controllerAtAdmission.memoryTrim.reason == VRRenderScaleMemoryTrimReason::Pressure &&
@@ -16748,22 +16755,62 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.estimatedAdditionalBytes = requiresParallelAllocation ?
 		                                           relatchPlan.estimatedTargetBytes :
 		                                           (relatchPlan.estimatedTargetBytes > relatchPlan.estimatedCurrentBytes ?
-														   relatchPlan.estimatedTargetBytes - relatchPlan.estimatedCurrentBytes :
-														   0u);
-		relatchPlan.pressureCleanupRequired = pressureMemoryRelief && relatchPlan.actionMask != 0;
-		if (relatchPlan.pressureCleanupRequired)
-			ServiceVRIntermediateTextureCleanup(true);
+													   relatchPlan.estimatedTargetBytes - relatchPlan.estimatedCurrentBytes :
+													   0u);
 		const bool memoryReducingTransition =
 			relatchPlan.estimatedTargetBytes < relatchPlan.estimatedCurrentBytes;
 		const bool allocationGrowth =
 			relatchPlan.estimatedAdditionalBytes != 0 &&
 			!memoryReducingTransition;
+		const bool residencyOverlapAllocation =
+			plannedRelatchWillResizeRenderTargets &&
+			relatchPlan.estimatedAdditionalBytes != 0;
+		const auto saturatingAdd = [](uint64_t a_lhs, uint64_t a_rhs) {
+			return a_rhs > std::numeric_limits<uint64_t>::max() - a_lhs ?
+			           std::numeric_limits<uint64_t>::max() :
+			           a_lhs + a_rhs;
+		};
+		relatchPlan.projectedAdditionalBytes =
+			relatchPlan.estimatedAdditionalBytes >
+				std::numeric_limits<uint64_t>::max() / kVRRenderScaleProjectedResidencyNumerator ?
+				std::numeric_limits<uint64_t>::max() :
+				(relatchPlan.estimatedAdditionalBytes * kVRRenderScaleProjectedResidencyNumerator) /
+					kVRRenderScaleProjectedResidencyDenominator;
+		relatchPlan.projectedUsageBytes =
+			memoryAtAdmission.valid ?
+				saturatingAdd(memoryAtAdmission.currentUsageBytes, relatchPlan.projectedAdditionalBytes) :
+				0u;
+		if (memoryAtAdmission.valid && memoryAtAdmission.budgetBytes != 0) {
+			const uint64_t ratioLimit =
+				memoryAtAdmission.budgetBytes - memoryAtAdmission.budgetBytes / 4u;
+			const uint64_t headroomLimit =
+				memoryAtAdmission.budgetBytes > kVRRenderScaleElevatedHeadroomBytes ?
+					memoryAtAdmission.budgetBytes - kVRRenderScaleElevatedHeadroomBytes :
+					0u;
+			relatchPlan.admissionUsageLimitBytes = std::min(ratioLimit, headroomLimit);
+		}
+		relatchPlan.projectedResidencyGuardActive =
+			residencyOverlapAllocation &&
+			memoryAtAdmission.valid &&
+			memoryAtAdmission.budgetBytes != 0 &&
+			(memoryReliefActiveForRelatch ||
+				pressureMemoryRelief ||
+				projectedResidencyGuardOwnedByEpoch);
+		relatchPlan.projectedResidencyDeferred =
+			relatchPlan.projectedResidencyGuardActive &&
+			(relatchPlan.admissionUsageLimitBytes == 0 ||
+				relatchPlan.projectedUsageBytes >= relatchPlan.admissionUsageLimitBytes);
+		relatchPlan.pressureCleanupRequired =
+			(pressureMemoryRelief || relatchPlan.projectedResidencyDeferred) &&
+			relatchPlan.actionMask != 0;
+		if (relatchPlan.pressureCleanupRequired)
+			ServiceVRIntermediateTextureCleanup(true);
 		const bool insufficientHeadroom =
-			allocationGrowth &&
+			residencyOverlapAllocation &&
 			memoryAtAdmission.valid &&
 			relatchPlan.estimatedAdditionalBytes > memoryAtAdmission.headroomBytes;
 		const bool severePressureRetirementWait =
-			allocationGrowth &&
+			residencyOverlapAllocation &&
 			(memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::High ||
 				memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Critical) &&
 			HasPendingVRIntermediateTextureCleanup();
@@ -16773,14 +16820,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.pressureDeferred =
 			insufficientHeadroom ||
 			severePressureRetirementWait ||
-			criticalGrowthDeferred;
+			criticalGrowthDeferred ||
+			relatchPlan.projectedResidencyDeferred;
 		if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
 			return false;
 		}
 		if (relatchPlan.pressureCleanupRequired &&
 			plannedRelatchWillResizeRenderTargets &&
-			allocationGrowth &&
+			residencyOverlapAllocation &&
 			!pressureTrimCompletedForEpoch) {
 			const auto trim = GetVRRenderScaleTransitionSnapshot().memoryTrim;
 			const bool matchingTrimPending =
@@ -16796,14 +16844,23 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		if (relatchPlan.pressureDeferred) {
 			logger::warn(
-				"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB headroom={} MiB pendingRetirement={} criticalGrowth={}",
+				"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB headroom={} MiB pendingRetirement={} criticalGrowth={} projectedResidency={}",
 				relatchEpoch,
 				GetVRRenderScaleMemoryPressureName(memoryAtAdmission.pressure),
 				relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
+				relatchPlan.projectedAdditionalBytes / kVRRenderScaleMiB,
+				relatchPlan.projectedUsageBytes / kVRRenderScaleMiB,
+				relatchPlan.admissionUsageLimitBytes / kVRRenderScaleMiB,
 				memoryAtAdmission.headroomBytes / kVRRenderScaleMiB,
 				BoolText(severePressureRetirementWait),
-				BoolText(criticalGrowthDeferred));
-			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Pressure);
+				BoolText(criticalGrowthDeferred),
+				BoolText(relatchPlan.projectedResidencyDeferred));
+			requeueRelatch(
+				relatchPlan.projectedResidencyDeferred ?
+					kVRRenderScaleProjectedPressureRetryFrames :
+					kVRUpscalingTransitionApplyDelayFrames,
+				false,
+				VRRenderScaleRetryKind::Pressure);
 			return false;
 		}
 		if (!CanAdmitVRIntermediateRetirement(relatchEpoch)) {
@@ -18331,6 +18388,11 @@ void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMeth
 
 	if (!IsVRRenderScaleMemoryReliefActive())
 		return;
+	const auto transitionState = GetVRRenderScaleTransitionSnapshot().state;
+	if (transitionState != VRRenderScaleTransitionState::Stabilizing &&
+		transitionState != VRRenderScaleTransitionState::Active) {
+		return;
+	}
 
 	if (!a_success) {
 		vrRenderScaleMemoryReliefCleanEyeMask.store(0, std::memory_order_release);
@@ -26230,10 +26292,11 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 3u;
+	constexpr uint32_t kSchemaVersion = 4u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
+	constexpr uint32_t kMaximumPressureProtectedStableLatencyFrames = 3600u;
 	constexpr uint64_t kMaximumSteadyStateMemoryGrowthBytes = 256ull * 1024ull * 1024ull;
 	const auto controller = GetVRRenderScaleTransitionSnapshot();
 	const auto session = GetVRRenderScaleStressSessionSnapshot();
@@ -26246,7 +26309,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 24 }
+		{ "implementationStep", 25 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -26308,7 +26371,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 
 	json metrics = json::array();
 	uint32_t maximumRetries = 0;
-	uint32_t maximumLatencyFrames = 0;
+	uint32_t maximumFastPathLatencyFrames = 0;
+	uint32_t maximumPressureProtectedLatencyFrames = 0;
 	uint32_t completedMetricCount = 0;
 	uint64_t totalFailures = 0;
 	uint64_t outOfMemoryFailures = 0;
@@ -26319,6 +26383,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	{
 		VRRenderScaleResourceKey resources{};
 		uint32_t samples = 0;
+		uint64_t oldestPeakUsageBytes = 0;
 		uint64_t previousPeakUsageBytes = 0;
 		uint64_t latestPeakUsageBytes = 0;
 	};
@@ -26350,7 +26415,13 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		maximumRetries = std::max(maximumRetries, a_metrics.retries);
 		if (a_metrics.completed) {
 			++completedMetricCount;
-			maximumLatencyFrames = std::max(maximumLatencyFrames, a_metrics.totalFrames);
+			if (a_metrics.pressureDeferrals != 0) {
+				maximumPressureProtectedLatencyFrames =
+					std::max(maximumPressureProtectedLatencyFrames, a_metrics.totalFrames);
+			} else {
+				maximumFastPathLatencyFrames =
+					std::max(maximumFastPathLatencyFrames, a_metrics.totalFrames);
+			}
 		}
 		totalFailures += a_metrics.failures;
 		outOfMemoryFailures += a_metrics.outOfMemoryFailures;
@@ -26371,6 +26442,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 				memoryTrends.back().resources = a_metrics.resources;
 				trendIt = memoryTrends.end() - 1;
 			}
+			trendIt->oldestPeakUsageBytes = trendIt->previousPeakUsageBytes;
 			trendIt->previousPeakUsageBytes = trendIt->latestPeakUsageBytes;
 			trendIt->latestPeakUsageBytes = a_metrics.peakUsageBytes;
 			++trendIt->samples;
@@ -26538,7 +26610,17 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							 { "reuseWarmTargetRuntime", relatchPlan.reuseWarmTargetRuntime },
 							 { "destroyDLSSResources", relatchPlan.destroyDLSSResources },
 							 { "destroyFSRResources", relatchPlan.destroyFSRResources },
-							 { "memoryPressure", GetVRRenderScaleMemoryPressureName(relatchPlan.memoryPressure) } } },
+							 { "memoryPressure", GetVRRenderScaleMemoryPressureName(relatchPlan.memoryPressure) },
+							 { "estimatedCurrentBytes", relatchPlan.estimatedCurrentBytes },
+							 { "estimatedTargetBytes", relatchPlan.estimatedTargetBytes },
+							 { "estimatedAdditionalBytes", relatchPlan.estimatedAdditionalBytes },
+							 { "projectedAdditionalBytes", relatchPlan.projectedAdditionalBytes },
+							 { "projectedUsageBytes", relatchPlan.projectedUsageBytes },
+							 { "admissionUsageLimitBytes", relatchPlan.admissionUsageLimitBytes },
+							 { "pressureCleanupRequired", relatchPlan.pressureCleanupRequired },
+							 { "projectedResidencyGuardActive", relatchPlan.projectedResidencyGuardActive },
+							 { "projectedResidencyDeferred", relatchPlan.projectedResidencyDeferred },
+							 { "pressureDeferred", relatchPlan.pressureDeferred } } },
 		{ "fidelity", { { "active", controller.fidelity.active },
 						  { "transitionEpoch", controller.fidelity.transitionEpoch },
 						  { "contractGeneration", controller.fidelity.contractGeneration },
@@ -26601,17 +26683,29 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		!controller.retirement.fencePending &&
 		!controller.retirement.capacityBlocked;
 	const bool memoryTrimDrained = !controller.memoryTrim.pending;
-	const auto steadyStateGrowthBytes = [](const ProfileMemoryTrend& a_trend) {
-		return a_trend.samples >= 3 && a_trend.latestPeakUsageBytes > a_trend.previousPeakUsageBytes ?
-		           a_trend.latestPeakUsageBytes - a_trend.previousPeakUsageBytes :
-		           0u;
+	const auto positiveGrowthBytes = [](uint64_t a_previous, uint64_t a_latest) {
+		return a_latest > a_previous ? a_latest - a_previous : 0u;
+	};
+	const auto sustainedGrowthBytes = [&](const ProfileMemoryTrend& a_trend) {
+		if (a_trend.samples < 3)
+			return uint64_t{ 0 };
+
+		const uint64_t priorGrowth =
+			positiveGrowthBytes(a_trend.oldestPeakUsageBytes, a_trend.previousPeakUsageBytes);
+		const uint64_t latestGrowth =
+			positiveGrowthBytes(a_trend.previousPeakUsageBytes, a_trend.latestPeakUsageBytes);
+		return std::min(priorGrowth, latestGrowth);
 	};
 	bool memoryTrendEvaluated = false;
 	uint64_t maximumSteadyStateGrowthBytes = 0;
 	json profileMemoryTrends = json::array();
 	for (const auto& trend : memoryTrends) {
 		const bool evaluated = trend.samples >= 3;
-		const uint64_t growthBytes = steadyStateGrowthBytes(trend);
+		const uint64_t priorGrowthBytes =
+			positiveGrowthBytes(trend.oldestPeakUsageBytes, trend.previousPeakUsageBytes);
+		const uint64_t latestGrowthBytes =
+			positiveGrowthBytes(trend.previousPeakUsageBytes, trend.latestPeakUsageBytes);
+		const uint64_t growthBytes = sustainedGrowthBytes(trend);
 		memoryTrendEvaluated = memoryTrendEvaluated || evaluated;
 		maximumSteadyStateGrowthBytes = std::max(maximumSteadyStateGrowthBytes, growthBytes);
 		profileMemoryTrends.push_back({
@@ -26625,8 +26719,11 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "displayEyeHeight", trend.resources.displayEyeHeight },
 			{ "samples", trend.samples },
 			{ "evaluated", evaluated },
+			{ "oldestPeakUsageBytes", trend.oldestPeakUsageBytes },
 			{ "previousPeakUsageBytes", trend.previousPeakUsageBytes },
 			{ "latestPeakUsageBytes", trend.latestPeakUsageBytes },
+			{ "priorGrowthBytes", priorGrowthBytes },
+			{ "latestGrowthBytes", latestGrowthBytes },
 			{ "steadyStateGrowthBytes", growthBytes }
 		});
 	}
@@ -26635,6 +26732,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		maximumSteadyStateGrowthBytes <= kMaximumSteadyStateMemoryGrowthBytes;
 	record["memoryTrend"] = {
 		{ "minimumSamplesPerBackend", 3 },
+		{ "requiredConsecutiveGrowthIntervals", 2 },
+		{ "mode", "minimum_positive_growth_across_two_consecutive_intervals" },
 		{ "evaluated", memoryTrendEvaluated },
 		{ "maximumSteadyStateGrowthBytes", maximumSteadyStateGrowthBytes },
 		{ "limitBytes", kMaximumSteadyStateMemoryGrowthBytes },
@@ -26663,7 +26762,16 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	addGate("no_out_of_memory", outOfMemoryFailures == 0 && outOfMemoryFailureEventCount == 0, std::max<uint64_t>(outOfMemoryFailures, outOfMemoryFailureEventCount), 0);
 	addGate("no_device_loss", deviceLostFailures == 0 && deviceLostFailureEventCount == 0, std::max<uint64_t>(deviceLostFailures, deviceLostFailureEventCount), 0);
 	addGate("retry_bound", maximumRetries <= kMaximumRetriesPerTransition, maximumRetries, kMaximumRetriesPerTransition);
-	addGate("stable_latency_bound", stableCount != 0 && completedMetricCount != 0 && maximumLatencyFrames <= kMaximumStableLatencyFrames, maximumLatencyFrames, kMaximumStableLatencyFrames);
+	addGate(
+		"stable_latency_bound",
+		stableCount != 0 &&
+			completedMetricCount != 0 &&
+			maximumFastPathLatencyFrames <= kMaximumStableLatencyFrames &&
+			maximumPressureProtectedLatencyFrames <= kMaximumPressureProtectedStableLatencyFrames,
+		{ { "fastPathFrames", maximumFastPathLatencyFrames },
+			{ "pressureProtectedFrames", maximumPressureProtectedLatencyFrames } },
+		{ { "fastPathFrames", kMaximumStableLatencyFrames },
+			{ "pressureProtectedFrames", kMaximumPressureProtectedStableLatencyFrames } });
 	addGate("fidelity_invariants", fidelityMismatches == 0 && controller.fidelity.mismatchCount == 0 && fidelityValid, { { "metrics", fidelityMismatches }, { "current", controller.fidelity.mismatchCount } }, 0);
 	addGate("retirement_drained", retirementDrained, { { "pendingSets", controller.retirement.pendingSets }, { "nextCleanupFrame", controller.retirement.nextCleanupFrame }, { "fencePending", controller.retirement.fencePending }, { "capacityBlocked", controller.retirement.capacityBlocked } }, 0);
 	addGate("common_target_predrain", memoryPreRecreateDrainFailures == 0, memoryPreRecreateDrainFailures, 0);
@@ -26674,7 +26782,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		"steady_state_memory_growth",
 		steadyStateMemoryGrowthBounded,
 		{ { "evaluated", memoryTrendEvaluated }, { "growthBytes", maximumSteadyStateGrowthBytes } },
-		{ { "maximumBytes", kMaximumSteadyStateMemoryGrowthBytes }, { "minimumSamplesPerBackend", 3 } });
+		{ { "maximumBytes", kMaximumSteadyStateMemoryGrowthBytes },
+			{ "minimumSamplesPerBackend", 3 },
+			{ "requiredConsecutiveGrowthIntervals", 2 } });
 	addGate("backend_ready", lifecycleReady, lifecycleReady, true);
 	record["acceptance"] = {
 		{ "verdict", accepted ? "pass" : "fail" },
@@ -27112,7 +27222,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB cleanup={} projectedGuard={} projectedDeferred={} deferred={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -27140,7 +27250,12 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			a_plan.estimatedCurrentBytes / kVRRenderScaleMiB,
 			a_plan.estimatedTargetBytes / kVRRenderScaleMiB,
 			a_plan.estimatedAdditionalBytes / kVRRenderScaleMiB,
+			a_plan.projectedAdditionalBytes / kVRRenderScaleMiB,
+			a_plan.projectedUsageBytes / kVRRenderScaleMiB,
+			a_plan.admissionUsageLimitBytes / kVRRenderScaleMiB,
 			BoolText(a_plan.pressureCleanupRequired),
+			BoolText(a_plan.projectedResidencyGuardActive),
+			BoolText(a_plan.projectedResidencyDeferred),
 			BoolText(a_plan.pressureDeferred));
 	}
 	return true;

@@ -25,7 +25,7 @@ The registered tool is `communityshaders.renderscale`:
 -   `status` returns a compact live snapshot of the controller profiles, VRAM
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, and both-eye fidelity;
--   `record` returns the complete schema-v3 record without changing capture
+-   `record` returns the complete schema-v4 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
@@ -117,12 +117,11 @@ contract evidence blockers, and the observed `stateScreenWidth/Height`. These
 are diagnostic facts only: they do not relax dimension-changing, recovery,
 pressure, retirement, or device-loss behavior.
 
-Schema v3 also groups completed transition peaks by exact backend profile
+Schema v3 introduced grouping of completed transition peaks by exact backend profile
 (method, backend, quality, preset, and dimensions). Once one profile has three
-samples, the `steady_state_memory_growth` gate compares its final two peaks and
-rejects growth above 256 MiB. The first two samples establish cold and warm
-residency, while exact-profile grouping prevents quality or resolution changes
-from being classified as leaks.
+samples, the memory trend can distinguish cold, warm, and repeated residency.
+Exact-profile grouping prevents quality or resolution changes from being
+classified as leaks. Step 25 refines the acceptance rule for schema v4 below.
 
 Live Skyrim VR decompilation for Step 21 shows that the common
 `BSShaderRenderTargets::Create` path repopulates the full engine target table;
@@ -247,9 +246,47 @@ existing Step 23 automation. Step 24 qualification must observe the two generic
 flags together with `preserveFSRResources=true`, `destroyFSRResources=false`,
 both-eye fidelity, and a passing steady-state memory-growth gate.
 
+Step 25 follows the RC108 live qualification. Six 2.5-second DLSS
+Hoshipa/Quality relatches reached 18.42 GB and `Elevated` pressure, with the two
+profiles growing by approximately 1.46--1.49 GiB. FSR showed the same pattern
+despite preserving its contexts and submit inputs. No capture reported an OOM,
+device loss, fidelity mismatch, failed pre-drain, or undrained retirement. A
+passive sample then released approximately 4.7 GB between 30 and 45 seconds and
+returned to `Normal`, identifying delayed WDDM residency rather than a
+backend-owned leak.
+
+Matched 15-second-dwell controls made the distinction explicit: DLSS ended at
+9.09 GB and FSR at 7.76 GB under `Normal` pressure, but the schema-v3 gate still
+failed isolated upward peak oscillations of 1.49 GiB and 603 MiB respectively.
+Schema v4 therefore requires growth above 256 MiB across both consecutive
+same-profile intervals before classifying the trend as sustained. The record
+retains all three peaks plus both individual deltas, so a decrease followed by
+one WDDM rebound remains visible without being mislabeled as monotonic leakage.
+Rapid captures that add a target table on every repeat still fail because both
+consecutive intervals grow.
+
+Runtime admission now protects the same transient peak. The first isolated
+switch remains on the existing fast path. Once rapid-relatch memory relief is
+active, or current pressure is already `Elevated` or higher, a size-changing recreate
+projects its additional residency with a 50-percent estimator uncertainty
+margin. If projected usage would enter the existing `Elevated` boundary, the
+epoch performs its bounded cleanup and trim attempt, then waits at a 120-frame
+retry cadence for WDDM headroom instead of allocating another overlapping
+target table. Latest-wins request handling remains active while admission is
+deferred. The rapid-relatch guard remains owned while the controller is waiting,
+so clean rendering by the old contract cannot accidentally clear admission
+protection. Pressure-protected transitions have a separate 3,600-frame latency
+bound; ordinary transitions retain the 120-frame limit.
+
+`resourcePlan` exposes `projectedAdditionalBytes`, `projectedUsageBytes`,
+`admissionUsageLimitBytes`, `projectedResidencyGuardActive`,
+`projectedResidencyDeferred`, and the existing cleanup/deferred flags. These
+fields distinguish preventive backpressure from a backend stall or an actual
+allocation failure.
+
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 3`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 4`. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -270,15 +307,15 @@ The runtime currently requires:
 -   no overwritten capture events and complete per-request metric coverage;
 -   no backend failures, OOM, or device loss in either metrics or classified events;
 -   no more than 32 retries for one transition;
--   at least one stable transition and no more than 120 frames to stability;
+-   at least one stable transition, no more than 120 frames to stability on the ordinary fast path, and no more than 3,600 frames when pressure backpressure is recorded;
 -   zero fidelity invariant mismatches across method, epoch, generation, dimensions, evaluation, and eye symmetry, with finalized vendor evaluation proven for both eyes;
 -   a fully drained retirement queue with no deferred cleanup frame, outstanding fence, or capacity block;
 -   no pending GPU-fenced common-target memory trim;
 -   a valid DXGI memory sample and pressure recovered below `High` with post-load recovery complete;
--   no more than 256 MiB growth between the final two peaks once an exact backend profile has at least three completed samples;
+-   no more than 256 MiB of growth in both consecutive same-profile peak intervals once an exact backend profile has at least three completed samples;
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
 
-These thresholds are part of schema version 3. Change the schema version if their meaning or units change.
+These thresholds are part of schema version 4. Change the schema version if their meaning or units change.
 
 ## Ghidra correlation
 

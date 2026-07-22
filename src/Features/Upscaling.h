@@ -452,7 +452,12 @@ public:
 		uint64_t estimatedCurrentBytes = 0;
 		uint64_t estimatedTargetBytes = 0;
 		uint64_t estimatedAdditionalBytes = 0;
+		uint64_t projectedAdditionalBytes = 0;
+		uint64_t projectedUsageBytes = 0;
+		uint64_t admissionUsageLimitBytes = 0;
 		bool pressureCleanupRequired = false;
+		bool projectedResidencyGuardActive = false;
+		bool projectedResidencyDeferred = false;
 		bool pressureDeferred = false;
 	};
 

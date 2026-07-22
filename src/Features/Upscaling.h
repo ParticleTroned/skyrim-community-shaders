@@ -573,6 +573,7 @@ public:
 		bool trimSucceeded = false;
 		bool settleTimeoutUsed = false;
 		bool relatchAdmitted = false;
+		bool cleanupDeferredUntilStable = false;
 	};
 
 	enum class VRVendorRuntimeLifecyclePhase : uint8_t
@@ -1706,7 +1707,9 @@ public:
 	bool HasPendingVRRenderScaleMemoryTrim() const;
 	uint64_t BeginVRRenderScalePostLoadRecovery();
 	void PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch);
-	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch, bool a_stabilizerDoorHandoff, bool a_sameVendorStabilizerActivation);
+	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
+	void DeferVRRenderScalePostLoadRecoveryUntilStable(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
+	void ServiceDeferredVRRenderScalePostLoadRecovery();
 	void CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VRVendorRuntimeLifecyclePhase a_phase, uint32_t a_generation = 0, const char* a_reason = nullptr);
 	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind);

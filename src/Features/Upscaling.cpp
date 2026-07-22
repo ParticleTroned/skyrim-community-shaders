@@ -27799,10 +27799,16 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		(globals::state ? std::max(globals::state->frameCount, 1u) : controller.presentation.lastBothEyesVendorFrame) :
 		session.endFrame;
 	constexpr uint32_t kMaximumPresentationAgeFrames = 2u;
+	const auto presentationFrameIsFresh = [&](uint32_t a_frame) {
+		return a_frame != 0 &&
+		       presentationReferenceFrame >= a_frame &&
+		       presentationReferenceFrame - a_frame <= kMaximumPresentationAgeFrames;
+	};
 	const auto presentationEyeMatchesStable = [&](const VRRenderScalePresentationEyeSnapshot& a_eye) {
 		return a_eye.valid &&
 		       a_eye.path == VRRenderScalePresentationPath::VendorEvaluated &&
-		       a_eye.frame == controller.presentation.lastBothEyesVendorFrame &&
+		       a_eye.frame >= controller.presentation.lastBothEyesVendorFrame &&
+		       presentationFrameIsFresh(a_eye.frame) &&
 		       a_eye.transitionEpoch == controller.stable.transitionEpoch &&
 		       a_eye.contractGeneration == controller.stable.contractGeneration &&
 		       a_eye.method == controller.stable.method &&
@@ -27814,9 +27820,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		       a_eye.outputHeight == controller.stable.displayEyeHeight;
 	};
 	const bool presentationFresh =
-		controller.presentation.lastBothEyesVendorFrame != 0 &&
-		presentationReferenceFrame >= controller.presentation.lastBothEyesVendorFrame &&
-		presentationReferenceFrame - controller.presentation.lastBothEyesVendorFrame <= kMaximumPresentationAgeFrames;
+		presentationFrameIsFresh(controller.presentation.lastBothEyesVendorFrame);
 	const bool presentationRecovered =
 		!stableVendorPresentation ||
 		(presentationFresh &&

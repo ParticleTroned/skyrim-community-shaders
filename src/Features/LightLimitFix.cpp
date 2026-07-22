@@ -59,6 +59,78 @@ namespace
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
 	constexpr std::size_t kDirectionalNiLightEngineReadSize = 0x174;
 	constexpr int kVRNiAVObjectFlagsOffset = 0x10C;
+	constexpr int kVRBSLightNiLightOffset = 0x48;
+
+	template <std::size_t N>
+	bool MatchesInstructions(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
+	{
+		return std::equal(std::begin(a_expected), std::end(a_expected), reinterpret_cast<const std::uint8_t*>(a_address));
+	}
+
+	class VREffectShaderFirstLightGuard : public Xbyak::CodeGenerator
+	{
+	public:
+		explicit VREffectShaderFirstLightGuard(std::uintptr_t a_skipLights)
+		{
+			Xbyak::Label invalidLight;
+
+			// Reproduce sceneLights[0]->light at the final engine read while
+			// validating every pointer in the chain. The later JZ consumes flags
+			// from an earlier engine CMP, so preserve them across the checks.
+			pushfq();
+			test(rax, rax);
+			jz(invalidLight, T_SHORT);
+			mov(rax, qword[rax]);
+			test(rax, rax);
+			jz(invalidLight, T_SHORT);
+			mov(rcx, qword[rax + kVRBSLightNiLightOffset]);
+			test(rcx, rcx);
+			jz(invalidLight, T_SHORT);
+			popfq();
+			ret();
+
+			L(invalidLight);
+			// Discard write_call's return address and take Bethesda's existing
+			// no-light path. No light constants have been written at this point.
+			popfq();
+			add(rsp, 8);
+			mov(rax, a_skipLights);
+			jmp(rax);
+		}
+	};
+
+	class VREffectShaderAdditionalLightGuard : public Xbyak::CodeGenerator
+	{
+	public:
+		explicit VREffectShaderAdditionalLightGuard(std::uintptr_t a_finishLights)
+		{
+			Xbyak::Label invalidLight;
+
+			// Reproduce sceneLights[index]->light at the final engine read.
+			test(rax, rax);
+			jz(invalidLight, T_SHORT);
+			mov(rcx, qword[rax + rbx]);
+			test(rcx, rcx);
+			jz(invalidLight, T_SHORT);
+			mov(r14, qword[rcx + kVRBSLightNiLightOffset]);
+			test(r14, r14);
+			jz(invalidLight, T_SHORT);
+			mov(rcx, r13);
+			ret();
+
+			L(invalidLight);
+			// RBX is the byte offset of the current sceneLights entry. Convert
+			// it to the number of additional lights already completed, then use
+			// Bethesda's existing tail to zero this slot and all following slots.
+			mov(r14, rbx);
+			shr(r14, 3);
+			dec(r14);
+			mov(qword[rbp + 0x28], r14);
+			add(rsp, 8);
+			mov(rax, a_finishLights);
+			jmp(rax);
+		}
+	};
 
 	class VRNonShadowCasterLightFlagsGuard : public Xbyak::CodeGenerator
 	{
@@ -1695,7 +1767,7 @@ void LightLimitFix::Hooks::InstallVRNonShadowCasterLightFlagsGuard()
 	// earlier ValidLight2 hook cannot close that time-of-check/time-of-use gap.
 	constexpr std::uint8_t expectedInstruction[] = { 0xF6, 0x80, 0x0C, 0x01, 0x00, 0x00, 0x01 };
 	const auto target = REL::RelocationID(100997, 107784).address() + 0x1F0;
-	if (!std::equal(std::begin(expectedInstruction), std::end(expectedInstruction), reinterpret_cast<const std::uint8_t*>(target))) {
+	if (!MatchesInstructions(target, expectedInstruction)) {
 		logger::error("[LLF] VR non-shadow caster light flags guard not installed: unexpected instruction at 0x{:x}", target);
 		return;
 	}
@@ -1709,6 +1781,68 @@ void LightLimitFix::Hooks::InstallVRNonShadowCasterLightFlagsGuard()
 	REL::safe_fill(target + 5, REL::NOP, sizeof(expectedInstruction) - 5);
 
 	logger::info("[LLF] Installed VR non-shadow caster light flags guard");
+}
+
+void LightLimitFix::Hooks::InstallVREffectShaderLightGuards()
+{
+	if (!REL::Module::IsVR()) {
+		return;
+	}
+
+	if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+		logger::error("[LLF] VR effect-shader light guards not installed: unsupported Skyrim VR runtime {}", REL::Module::get().version().string());
+		return;
+	}
+
+	// Skyrim VR 1.4.15 BSEffectShader::SetupGeometry reads both the first
+	// scene light and up to four additional lights without null checks. These
+	// RVAs and their recovery branches were verified against the live,
+	// decrypted runtime image because the Steam executable is encrypted on disk.
+	constexpr std::uintptr_t firstLightFlagsRVA = 0x1342102;
+	constexpr std::uintptr_t firstLightLoadRVA = 0x1342115;
+	constexpr std::uintptr_t additionalLightCountRVA = 0x13421F1;
+	constexpr std::uintptr_t additionalLightLoadRVA = 0x134223C;
+	constexpr std::uintptr_t finishAdditionalLightsRVA = 0x134253D;
+	constexpr std::uintptr_t skipLightsRVA = 0x13425B9;
+	constexpr std::uint8_t expectedFirstLightFlags[] = { 0x80, 0x3D, 0xBC, 0x0F, 0x0E, 0x02, 0x00 };
+	constexpr std::uint8_t expectedFirstLightLoad[] = { 0x48, 0x8B, 0x00, 0x48, 0x8B, 0x48, 0x48 };
+	constexpr std::uint8_t expectedAdditionalLightCount[] = { 0x48, 0x89, 0x45, 0x28 };
+	constexpr std::uint8_t expectedAdditionalLightLoad[] = { 0x48, 0x8B, 0x0C, 0x18, 0x4C, 0x8B, 0x71, 0x48, 0x49, 0x8B, 0xCD };
+	constexpr std::uint8_t expectedFinishAdditionalLights[] = { 0x48, 0x8B, 0x5D, 0x28, 0x83, 0xFB, 0x04 };
+	constexpr std::uint8_t expectedSkipLights[] = { 0xF6, 0x86, 0x90, 0x00, 0x00, 0x00, 0x80 };
+
+	const auto moduleBase = REL::Module::get().base();
+	const auto firstLightFlags = moduleBase + firstLightFlagsRVA;
+	const auto firstLightLoad = moduleBase + firstLightLoadRVA;
+	const auto additionalLightCount = moduleBase + additionalLightCountRVA;
+	const auto additionalLightLoad = moduleBase + additionalLightLoadRVA;
+	const auto finishAdditionalLights = moduleBase + finishAdditionalLightsRVA;
+	const auto skipLights = moduleBase + skipLightsRVA;
+
+	if (!MatchesInstructions(firstLightFlags, expectedFirstLightFlags) ||
+		!MatchesInstructions(firstLightLoad, expectedFirstLightLoad) ||
+		!MatchesInstructions(additionalLightCount, expectedAdditionalLightCount) ||
+		!MatchesInstructions(additionalLightLoad, expectedAdditionalLightLoad) ||
+		!MatchesInstructions(finishAdditionalLights, expectedFinishAdditionalLights) ||
+		!MatchesInstructions(skipLights, expectedSkipLights)) {
+		logger::error("[LLF] VR effect-shader light guards not installed: unexpected SkyrimVR.exe instructions");
+		return;
+	}
+
+	VREffectShaderFirstLightGuard firstLightCode{ skipLights };
+	firstLightCode.ready();
+	VREffectShaderAdditionalLightGuard additionalLightCode{ finishAdditionalLights };
+	additionalLightCode.ready();
+
+	auto& trampoline = SKSE::GetTrampoline();
+	const auto firstLightGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(firstLightCode));
+	const auto additionalLightGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(additionalLightCode));
+	trampoline.write_call<5>(firstLightLoad, firstLightGuard);
+	REL::safe_fill(firstLightLoad + 5, REL::NOP, sizeof(expectedFirstLightLoad) - 5);
+	trampoline.write_call<5>(additionalLightLoad, additionalLightGuard);
+	REL::safe_fill(additionalLightLoad + 5, REL::NOP, sizeof(expectedAdditionalLightLoad) - 5);
+
+	logger::info("[LLF] Installed VR effect-shader scene-light guards");
 }
 
 void LightLimitFix::PostPostLoad()

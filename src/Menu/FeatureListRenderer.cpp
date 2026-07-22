@@ -783,6 +783,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 {
+	ImGui::PushID(menu.name.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 		// Add spacing only for Home menu
@@ -793,6 +794,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 	}
 	ImGui::EndChild();
 	ImGui::PopStyleColor();
+	ImGui::PopID();
 }
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const std::string&)
@@ -817,6 +819,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	bool isLoaded = feat->loaded;
 	bool hasFailedMessage = !feat->failedLoadedMessage.empty();
 
+	ImGui::PushID(featureName.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 		// Compute scene-controlled state once for both header and settings
@@ -834,6 +837,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	}
 	ImGui::EndChild();
 	ImGui::PopStyleColor();
+	ImGui::PopID();
 	// Render reactive constraint warning outside the child window so it can appear as a top-level popup
 	RenderReactiveConstraintWarningDialog();
 }

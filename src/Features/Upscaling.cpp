@@ -12378,6 +12378,33 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 	return true;
 }
 
+namespace
+{
+	void DrawFrameGenerationEnabledToggle(Upscaling::Settings& a_settings)
+	{
+		bool enabled = a_settings.frameGenerationMode != 0;
+		if (ImGui::Checkbox("Frame Generation", &enabled)) {
+			a_settings.frameGenerationMode = enabled ? 1u : 0u;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Enables generated intermediate frames for higher apparent framerate.");
+			ImGui::TextUnformatted("Toggling this setting requires a restart to work correctly.");
+		}
+	}
+
+	void DrawFrameGenerationForceEnableToggle(Upscaling& a_upscaling)
+	{
+		ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
+		bool forceEnabled = a_upscaling.settings.frameGenerationForceEnable != 0;
+		if (ImGui::Checkbox("Force Enable Frame Generation", &forceEnabled)) {
+			a_upscaling.settings.frameGenerationForceEnable = forceEnabled ? 1u : 0u;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Forces Frame Generation on unsupported/low-refresh setups.");
+		}
+	}
+}
+
 /**
  * @brief Creates a Direct3D 11 device and swap chain, with support for advanced upscaling and frame generation features.
  *
@@ -12942,15 +12969,9 @@ void Upscaling::DrawSettings()
 			if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
 				Util::Text::Warning("Warning: Requires restart");
 
-			std::string enabledLabel = "Enabled";
 			const char* toggleModes[] = { "Disabled", "Enabled" };
-			const char* toggleModesFG[] = { "Disabled", enabledLabel.c_str() };
 
-			ImGui::SliderInt("Frame Generation", (int*)&settings.frameGenerationMode, 0, 1, toggleModesFG[settings.frameGenerationMode]);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Enables generated intermediate frames for higher apparent framerate.");
-				ImGui::TextUnformatted("Range: 0 Disabled, 1 Enabled.");
-			}
+			DrawFrameGenerationEnabledToggle(settings);
 
 			if (!frameGenerationDx12PathActive)
 				ImGui::BeginDisabled();
@@ -12964,12 +12985,7 @@ void Upscaling::DrawSettings()
 			if (!frameGenerationDx12PathActive)
 				ImGui::EndDisabled();
 
-			ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", refreshRate);
-			ImGui::SliderInt("Force Enable Frame Generation", (int*)&settings.frameGenerationForceEnable, 0, 1, std::format("{}", toggleModes[settings.frameGenerationForceEnable]).c_str());
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Forces Frame Generation on unsupported/low-refresh setups.");
-				ImGui::TextUnformatted("Range: 0 Disabled, 1 Enabled.");
-			}
+			DrawFrameGenerationForceEnableToggle(*this);
 
 			ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -13283,6 +13299,12 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 	}
 	if (openCompositeBlocksUpscaling) {
 		Util::Text::Warning("Upscaling is locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
+	}
+
+	if (!globals::game::isVR) {
+		ImGui::SeparatorText("Frame Generation");
+		DrawFrameGenerationEnabledToggle(settings);
+		DrawFrameGenerationForceEnableToggle(*this);
 	}
 
 	const auto upscaleMethod = GetUpscaleMethod();

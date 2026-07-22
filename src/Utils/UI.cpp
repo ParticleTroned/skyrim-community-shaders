@@ -1640,6 +1640,11 @@ namespace Util
 		{
 			return globals::menu->GetTheme().StatusPalette.Disable;
 		}
+
+		ImVec4 GetRestartNeeded()
+		{
+			return globals::menu->GetTheme().StatusPalette.RestartNeeded;
+		}
 	}
 
 	namespace Text
@@ -1685,6 +1690,8 @@ namespace Util
 		UTIL_TEXT_WRAPPED(WrappedInfo, GetInfo)
 		UTIL_TEXT(Disabled, GetDisabled)
 		UTIL_TEXT_WRAPPED(WrappedDisabled, GetDisabled)
+		UTIL_TEXT(RestartNeeded, GetRestartNeeded)
+		UTIL_TEXT_WRAPPED(WrappedRestartNeeded, GetRestartNeeded)
 
 #undef UTIL_TEXT
 #undef UTIL_TEXT_WRAPPED

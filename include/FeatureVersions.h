@@ -46,6 +46,7 @@ namespace FeatureVersions
         {"VolumetricLighting"sv,   {1,1,5}},
         {"VolumetricShadows"sv,    {2,1,5}},
         {"WaterEffects"sv,         {1,2,0}},
+        {"WeatherPicker"sv,        {1,0,0}},
         {"WetnessEffects"sv,       {3,2,0}},
         {"Wetterness"sv,           {1,0,5}},
     };
@@ -80,6 +81,7 @@ namespace FeatureVersions
         "VR"sv,
         "VolumetricLighting"sv,
         "VolumetricShadows"sv,
-        "WaterEffects"sv
+        "WaterEffects"sv,
+        "WeatherPicker"sv
     };
 }

@@ -48,6 +48,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/VR.h"
+#include "Features/WeatherPicker.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -1497,21 +1498,20 @@ void Menu::SelectFeatureMenu(const std::string& featureName)
 /**
  * @brief Renders the standalone weather details window when enabled
  *
- * Delegates to the CSEditor feature for rendering the weather details window
+ * Delegates to the Weather Picker feature for rendering the weather details window
  * that can remain open even when the main menu is closed. This provides a simple
- * coordination layer between the Menu system and the CSEditor feature.
+ * coordination layer between the Menu system and the Weather Picker feature.
  */
 void Menu::DrawWeatherDetailsWindow()
 {
-	if (!globals::features::csEditor.WeatherDetailsWindow.Enabled) {
+	if (!globals::features::weatherPicker.WeatherDetailsWindow.Enabled) {
 		return;
 	}
-	if (!globals::features::csEditor.loaded) {
+	if (!globals::features::weatherPicker.loaded) {
 		return;
 	}
 
-	// Use Weather core feature for all window management and rendering
-	auto& weather = globals::features::csEditor;
-	bool* p_open = &globals::features::csEditor.WeatherDetailsWindow.Enabled;
-	weather.RenderWeatherDetailsWindow(p_open, !weather.WeatherDetailsWindow.ShowInOverlay);
+	auto& weather = globals::features::weatherPicker;
+	bool* p_open = &weather.WeatherDetailsWindow.Enabled;
+	weather.RenderWeatherDetailsWindow(p_open);
 }

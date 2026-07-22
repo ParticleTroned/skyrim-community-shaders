@@ -1,9 +1,9 @@
 #include "Wetterness.h"
-#include "CSEditor.h"
 #include "GrassLighting.h"
 #include "Menu.h"
 #include "State.h"
 #include "Utils/UI.h"
+#include "WeatherPicker.h"
 
 #include <algorithm>
 #include <array>
@@ -1723,14 +1723,13 @@ void Wetterness::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	auto& csEditor = globals::features::csEditor;
-	if (csEditor.loaded) {
+	auto& weatherPicker = globals::features::weatherPicker;
+	if (weatherPicker.loaded) {
 		if (ImGui::SmallButton("Open Weather Picker")) {
-			// Navigate to the replacement feature in the menu
-			Menu::GetSingleton()->SelectFeatureMenu(csEditor.GetShortName());
+			Menu::GetSingleton()->SelectFeatureMenu(weatherPicker.GetShortName());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Open the Weather Picker in CS Utility");
+			ImGui::TextUnformatted("Open the Weather Picker.");
 		}
 	}
 

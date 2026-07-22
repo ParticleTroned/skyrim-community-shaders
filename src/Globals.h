@@ -32,6 +32,7 @@ struct VolumetricLighting;
 struct VolumetricShadows;
 struct VR;
 struct WaterEffects;
+struct WeatherPicker;
 struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
@@ -100,6 +101,7 @@ namespace globals
 		extern RenderDoc renderDoc;
 		extern ScreenshotFeature screenshotFeature;
 		extern CSEditor csEditor;
+		extern WeatherPicker weatherPicker;
 		extern CSUtility csUtility;
 		extern TruePBR truePBR;
 

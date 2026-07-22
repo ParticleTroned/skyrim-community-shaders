@@ -37,6 +37,7 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
+#include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
@@ -92,6 +93,7 @@ namespace globals
 		RenderDoc renderDoc{};
 		ScreenshotFeature screenshotFeature{};
 		CSEditor csEditor{};
+		WeatherPicker weatherPicker{};
 		CSUtility csUtility{};
 		TruePBR truePBR{};
 

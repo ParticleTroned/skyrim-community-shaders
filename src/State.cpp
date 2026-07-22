@@ -35,6 +35,7 @@
 #include "Features/VR.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
+#include "Features/WeatherPicker.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
@@ -370,6 +371,7 @@ void State::Draw()
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
 	auto& csEditor = globals::features::csEditor;
+	auto& weatherPicker = globals::features::weatherPicker;
 	auto& truePBR = globals::features::truePBR;
 	auto& volumetricShadows = globals::features::volumetricShadows;
 	auto context = globals::d3d::context;
@@ -396,7 +398,7 @@ void State::Draw()
 			logger::info("Applied deferred post-load runtime reset");
 		}
 
-		if (csEditor.loaded) {
+		if (csEditor.loaded || weatherPicker.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::WeatherUpdateFeatures, stateDrawDiagFrame, stateDrawDiagActive);
 			WeatherManager::GetSingleton()->UpdateFeatures();

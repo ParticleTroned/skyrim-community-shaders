@@ -473,6 +473,7 @@ public:
 		bool projectedResidencyPostTrimRelaxed = false;
 		bool projectedResidencyDeferred = false;
 		bool systemCommitGuardActive = false;
+		bool stabilizerSystemCommitRelaxed = false;
 		bool systemCommitDeferred = false;
 		bool pressureDeferred = false;
 	};
@@ -1188,6 +1189,7 @@ public:
 	UpscaleMethod GetRuntimeUpscaleMethod() const;
 	uint32_t GetRuntimeQualityMode() const;
 	uint32_t GetRuntimeDLSSPreset() const;
+	bool GetRuntimeFSR4Enabled() const;
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
@@ -1704,7 +1706,7 @@ public:
 	bool HasPendingVRRenderScaleMemoryTrim() const;
 	uint64_t BeginVRRenderScalePostLoadRecovery();
 	void PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch);
-	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
+	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch, bool a_stabilizerDoorHandoff, bool a_sameVendorStabilizerActivation);
 	void CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VRVendorRuntimeLifecyclePhase a_phase, uint32_t a_generation = 0, const char* a_reason = nullptr);
 	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind);
@@ -1858,6 +1860,9 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	std::optional<VRRenderScaleProfileSnapshot> GetStableVRRenderScaleRuntimeProfile() const;
+	std::atomic<bool> vrRenderScaleStableRuntimeProfileAuthoritative{ false };
+	std::atomic<uint32_t> vrRenderScaleLastOutOfMemoryFailureFrame{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackStartFrame{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackLastFrame{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackRecoveryFrame{ 0 };
@@ -1871,7 +1876,7 @@ private:
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
-	bool TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight);
+	bool TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();
 	void ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery = false);

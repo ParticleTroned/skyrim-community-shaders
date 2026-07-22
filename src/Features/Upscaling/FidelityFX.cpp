@@ -1518,7 +1518,7 @@ bool FidelityFX::CanUseRuntimeUpscalerPath()
 
 bool FidelityFX::ShouldRequestRuntimeFsr4() const
 {
-	return globals::features::upscaling.settings.fsr4RuntimeEnable &&
+	return globals::features::upscaling.GetRuntimeFSR4Enabled() &&
 	       !runtimeFsr4FailureLatched &&
 	       IsRuntimeFsr4Available();
 }

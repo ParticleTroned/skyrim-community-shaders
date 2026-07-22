@@ -125,7 +125,6 @@ public:
 	// Search bar state
 	std::string featureSearch;  // For left pane feature search
 	void DrawOverlay();
-	void DrawWeatherDetailsWindow();
 
 	void ProcessInputEvents(RE::InputEvent* const* a_events);
 	bool ShouldSwallowInput();

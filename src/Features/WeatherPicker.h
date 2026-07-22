@@ -95,7 +95,7 @@ private:
 	static inline bool s_accelerateWeatherChange = true;
 	static inline bool s_transientAcceleratedWeatherPreview = false;
 	static inline RE::TESWeather* s_cachedLastWeather = nullptr;
-	static inline bool s_previousGlobalOverlayVisible = false;
+	static inline bool s_previousOverlayRequested = false;
 
 	static std::string GetDisplayName(const RE::TESWeather* weather);
 

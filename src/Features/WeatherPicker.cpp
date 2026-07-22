@@ -1012,17 +1012,18 @@ std::string WeatherPicker::GetDisplayName(const RE::TESWeather* weather)
 
 void WeatherPicker::DrawOverlay()
 {
-	const bool overlayVisible = Menu::GetSingleton()->overlayVisible;
-	const bool wasOverlayVisible = s_previousGlobalOverlayVisible;
-	s_previousGlobalOverlayVisible = overlayVisible;
+	const bool overlayRequested =
+		WeatherDetailsWindow.ShowInOverlay && Menu::GetSingleton()->overlayVisible;
+	const bool wasOverlayRequested = s_previousOverlayRequested;
+	s_previousOverlayRequested = overlayRequested;
 
 	auto* player = RE::PlayerCharacter::GetSingleton();
 	if (!player || !player->parentCell)
 		return;
 
 	// If ShowInOverlay is true and overlay is visible, auto-enable the window if not already enabled
-	if (WeatherDetailsWindow.ShowInOverlay && overlayVisible) {
-		if (!wasOverlayVisible && !WeatherDetailsWindow.Enabled) {
+	if (overlayRequested) {
+		if (!wasOverlayRequested && !WeatherDetailsWindow.Enabled) {
 			WeatherDetailsWindow.Enabled = true;
 		}
 		bool* p_open = &WeatherDetailsWindow.Enabled;
@@ -1032,15 +1033,17 @@ void WeatherPicker::DrawOverlay()
 
 bool WeatherPicker::IsOverlayVisible() const
 {
-	// Keep one falling-edge frame so DrawOverlay() can reset its edge state,
-	// then allow the renderer to sleep while the global overlay is hidden.
-	if (!WeatherDetailsWindow.ShowInOverlay)
-		return false;
-
-	const bool overlayVisible = Menu::GetSingleton()->overlayVisible;
-	if (!overlayVisible)
-		return s_previousGlobalOverlayVisible;
+	const bool overlayRequested =
+		WeatherDetailsWindow.ShowInOverlay && Menu::GetSingleton()->overlayVisible;
+	// Keep one falling-edge frame so DrawOverlay() can reset its edge state.
+	if (!overlayRequested)
+		return s_previousOverlayRequested;
 
 	auto* player = RE::PlayerCharacter::GetSingleton();
-	return player && player->parentCell;
+	if (!player || !player->parentCell)
+		return false;
+
+	// A rising edge must run once to reopen the window. Once a user closes it,
+	// stop keeping ImGui alive until the overlay is toggled again.
+	return WeatherDetailsWindow.Enabled || !s_previousOverlayRequested;
 }

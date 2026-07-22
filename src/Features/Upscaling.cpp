@@ -32,6 +32,7 @@
 #include <cwctype>
 #include <directx/d3dx12.h>
 #include <dxgi.h>
+#include <dxgi1_3.h>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -138,6 +139,7 @@ namespace
 	constexpr uint32_t kVRRenderScaleMemorySampleIntervalFrames = 30u;
 	constexpr uint32_t kVRRenderScaleMemoryRecoverySamples = 4u;
 	constexpr uint32_t kVRRenderScalePostLoadMemorySettleSamples = 2u;
+	constexpr uint32_t kVRRenderScaleMemoryTrimMaxFenceFailures = 3u;
 	constexpr uint64_t kVRRenderScaleMiB = 1024u * 1024u;
 	constexpr uint64_t kVRRenderScaleCriticalHeadroomBytes = 256u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleHighHeadroomBytes = 512u * kVRRenderScaleMiB;
@@ -15800,7 +15802,20 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchSignature.displayEyeWidth = perfMode.trueHMDEyeWidth;
 		relatchSignature.displayEyeHeight = perfMode.trueHMDEyeHeight;
 		MaybeArmVRRenderScaleMemoryRelief(relatchSignature, relatchOrigin, state->frameCount);
-		const auto memoryAtAdmission = GetVRRenderScaleTransitionSnapshot().memory;
+		auto controllerAtAdmission = GetVRRenderScaleTransitionSnapshot();
+		auto memoryAtAdmission = controllerAtAdmission.memory;
+		const bool pressureTrimCompletedForEpoch =
+			!controllerAtAdmission.memoryTrim.pending &&
+			controllerAtAdmission.memoryTrim.reason == VRRenderScaleMemoryTrimReason::Pressure &&
+			controllerAtAdmission.memoryTrim.ownerEpoch == relatchEpoch &&
+			controllerAtAdmission.memoryTrim.completedFrame != 0;
+		if (pressureTrimCompletedForEpoch &&
+			(memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::High ||
+				memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Critical)) {
+			SampleVRRenderScaleMemory(true, "pressure trim admission recovery");
+			controllerAtAdmission = GetVRRenderScaleTransitionSnapshot();
+			memoryAtAdmission = controllerAtAdmission.memory;
+		}
 		const bool pressureMemoryRelief =
 			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Elevated ||
 			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::High ||
@@ -16044,6 +16059,22 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			criticalGrowthDeferred;
 		if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+			return false;
+		}
+		if (relatchPlan.pressureCleanupRequired &&
+			plannedRelatchWillResizeRenderTargets &&
+			allocationGrowth &&
+			!pressureTrimCompletedForEpoch) {
+			const auto trim = GetVRRenderScaleTransitionSnapshot().memoryTrim;
+			const bool matchingTrimPending =
+				trim.pending &&
+				trim.reason == VRRenderScaleMemoryTrimReason::Pressure &&
+				trim.ownerEpoch == relatchEpoch;
+			if (!matchingTrimPending)
+				ArmVRRenderScaleMemoryTrim(relatchEpoch, VRRenderScaleMemoryTrimReason::Pressure);
+			if (HasPendingVRRenderScaleMemoryTrim())
+				ServiceVRRenderScaleMemoryTrim("pressure admission");
+			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Pressure);
 			return false;
 		}
 		if (relatchPlan.pressureDeferred) {
@@ -16331,6 +16362,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				return false;
 			}
 			renderTargetsRelatched = true;
+			const bool postLoadRelatch =
+				relatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
+				IsVRRenderScaleRecoveryOrigin(relatchOrigin) ||
+				postLoadRecoveryEpoch != 0;
+			const auto trimReason =
+				postLoadRelatch ? VRRenderScaleMemoryTrimReason::PostLoad :
+				lowPeakNativeRestoreRelatch ? VRRenderScaleMemoryTrimReason::NativeRestore :
+				(pressureMemoryRelief || pressureTrimCompletedForEpoch) ? VRRenderScaleMemoryTrimReason::Pressure :
+				memoryReliefActiveForRelatch ? VRRenderScaleMemoryTrimReason::RapidRelatch :
+				VRRenderScaleMemoryTrimReason::None;
+			if (trimReason != VRRenderScaleMemoryTrimReason::None) {
+				ArmVRRenderScaleMemoryTrim(relatchEpoch, trimReason);
+			}
 		}
 
 		if (relatchPlan.reuseSharedSubmitResources)
@@ -16762,9 +16806,6 @@ void Upscaling::ClearVRRenderScaleMemoryRelief()
 	vrRenderScaleMemoryReliefEndFrame.store(0, std::memory_order_release);
 	vrRenderScaleMemoryReliefCleanEyeMask.store(0, std::memory_order_release);
 	vrRenderScaleMemoryReliefLogged.store(false, std::memory_order_release);
-	vrRenderScaleRapidRelatchFrame.store(0, std::memory_order_release);
-	vrRenderScaleRapidRelatchCount.store(0, std::memory_order_release);
-	ClearVRRenderScaleRelatchSignature(vrRenderScaleLastRapidRelatchSignature);
 	vrIntermediateTextureCleanupFence = nullptr;
 }
 
@@ -16846,6 +16887,159 @@ void Upscaling::UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked)
 			snapshot.pendingSets);
 	}
 	++vrRenderScaleTransitionController.revision;
+}
+
+bool Upscaling::ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason)
+{
+	if (!globals::game::isVR || !globals::d3d::device || !globals::d3d::context ||
+		a_ownerEpoch == 0 || a_reason == VRRenderScaleMemoryTrimReason::None) {
+		return false;
+	}
+
+	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	vrRenderScaleMemoryTrimFence = nullptr;
+	vrRenderScaleMemoryTrimOwnerEpoch = a_ownerEpoch;
+	vrRenderScaleMemoryTrimPendingReason = a_reason;
+	vrRenderScaleMemoryTrimRequestedFrame = currentFrame;
+	vrRenderScaleMemoryTrimFenceFailures = 0;
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& trim = vrRenderScaleTransitionController.memoryTrim;
+		trim.pending = true;
+		trim.reason = a_reason;
+		trim.ownerEpoch = a_ownerEpoch;
+		trim.requestedFrame = currentFrame;
+		trim.completedFrame = 0;
+		trim.fenceFailures = 0;
+		trim.lastSucceeded = false;
+		++vrRenderScaleTransitionController.revision;
+	}
+	logger::debug(
+		"[VRRenderScale][Memory] Armed GPU-fenced DXGI trim. reason={} ownerEpoch={} frame={}",
+		GetVRRenderScaleMemoryTrimReasonName(a_reason),
+		a_ownerEpoch,
+		currentFrame);
+
+	// Place the event after the recreation/recovery work immediately. Polling is
+	// non-blocking and Trim is not called until the GPU has crossed this point.
+	ServiceVRRenderScaleMemoryTrim("arm");
+	return true;
+}
+
+bool Upscaling::ServiceVRRenderScaleMemoryTrim(const char* a_reason)
+{
+	if (!HasPendingVRRenderScaleMemoryTrim())
+		return true;
+
+	const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
+		vrRenderScaleMemoryTrimFence,
+		"VR render-scale common-target trim");
+	if (fenceResult == VRIntermediateCleanupFenceResult::Pending)
+		return false;
+
+	if (fenceResult == VRIntermediateCleanupFenceResult::Failed) {
+		++vrRenderScaleMemoryTrimFenceFailures;
+		{
+			std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+			vrRenderScaleTransitionController.memoryTrim.fenceFailures = vrRenderScaleMemoryTrimFenceFailures;
+			++vrRenderScaleTransitionController.revision;
+		}
+		if (vrRenderScaleMemoryTrimFenceFailures < kVRRenderScaleMemoryTrimMaxFenceFailures)
+			return false;
+	}
+
+	const uint64_t ownerEpoch = vrRenderScaleMemoryTrimOwnerEpoch;
+	const auto trimReason = vrRenderScaleMemoryTrimPendingReason;
+	const uint32_t requestedFrame = vrRenderScaleMemoryTrimRequestedFrame;
+	const uint32_t fenceFailures = vrRenderScaleMemoryTrimFenceFailures;
+	const uint32_t completedFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	bool succeeded = false;
+	HRESULT queryResult = E_FAIL;
+	if (fenceResult == VRIntermediateCleanupFenceResult::Ready && globals::d3d::device) {
+		winrt::com_ptr<IDXGIDevice3> trimDevice;
+		queryResult = globals::d3d::device->QueryInterface(trimDevice.put());
+		if (SUCCEEDED(queryResult) && trimDevice) {
+			trimDevice->Trim();
+			succeeded = true;
+		}
+	}
+
+	vrRenderScaleMemoryTrimFence = nullptr;
+	vrRenderScaleMemoryTrimOwnerEpoch = 0;
+	vrRenderScaleMemoryTrimPendingReason = VRRenderScaleMemoryTrimReason::None;
+	vrRenderScaleMemoryTrimRequestedFrame = 0;
+	vrRenderScaleMemoryTrimFenceFailures = 0;
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& trim = vrRenderScaleTransitionController.memoryTrim;
+		trim.pending = false;
+		trim.reason = trimReason;
+		trim.ownerEpoch = ownerEpoch;
+		trim.requestedFrame = requestedFrame;
+		trim.completedFrame = completedFrame;
+		trim.lastSucceeded = succeeded;
+		if (succeeded) {
+			if (trim.completedCount != std::numeric_limits<uint32_t>::max())
+				++trim.completedCount;
+		} else if (trim.failures != std::numeric_limits<uint32_t>::max()) {
+			++trim.failures;
+		}
+
+		{
+			auto recordMetricsTrim = [&](VRRenderScaleTransitionMetrics& a_metrics) {
+				if (!a_metrics.valid || a_metrics.transitionEpoch != ownerEpoch)
+					return false;
+				if (succeeded) {
+					if (a_metrics.memoryTrimCount != std::numeric_limits<uint32_t>::max())
+						++a_metrics.memoryTrimCount;
+				} else if (a_metrics.memoryTrimFailures != std::numeric_limits<uint32_t>::max()) {
+					++a_metrics.memoryTrimFailures;
+				}
+				return true;
+			};
+
+			bool recorded = recordMetricsTrim(vrRenderScaleTransitionController.metrics.current);
+			if (!recorded) {
+				for (auto& archived : vrRenderScaleTransitionController.metrics.recent) {
+					if (recordMetricsTrim(archived))
+						break;
+				}
+			}
+		}
+
+		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		if (trimReason == VRRenderScaleMemoryTrimReason::PostLoad &&
+			recovery.active && recovery.recoveryEpoch == ownerEpoch) {
+			recovery.trimCompleted = true;
+			recovery.trimSucceeded = succeeded;
+		}
+		++vrRenderScaleTransitionController.revision;
+	}
+
+	if (succeeded) {
+		logger::debug(
+			"[VRRenderScale][Memory] Completed GPU-fenced DXGI trim. reason={} ownerEpoch={} requestedFrame={} completedFrame={}{}{}",
+			GetVRRenderScaleMemoryTrimReasonName(trimReason),
+			ownerEpoch,
+			requestedFrame,
+			completedFrame,
+			a_reason && *a_reason ? " service=" : "",
+			a_reason && *a_reason ? a_reason : "");
+	} else {
+		logger::warn(
+			"[VRRenderScale][Memory] DXGI trim unavailable. reason={} ownerEpoch={} fenceFailures={} queryResult=0x{:08X}",
+			GetVRRenderScaleMemoryTrimReasonName(trimReason),
+			ownerEpoch,
+			fenceFailures,
+			static_cast<uint32_t>(queryResult));
+	}
+	SampleVRRenderScaleMemory(true, succeeded ? "post DXGI trim" : "DXGI trim unavailable");
+	return true;
+}
+
+bool Upscaling::HasPendingVRRenderScaleMemoryTrim() const
+{
+	return vrRenderScaleMemoryTrimOwnerEpoch != 0;
 }
 
 bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
@@ -17061,12 +17255,14 @@ void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
 
 	bool active = false;
 	bool cleanupArmed = false;
+	bool trimArmed = false;
 	uint64_t transitionEpoch = 0;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		const auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
 		active = recovery.active && recovery.recoveryEpoch == a_recoveryEpoch;
 		cleanupArmed = recovery.cleanupArmed;
+		trimArmed = recovery.trimArmed;
 		transitionEpoch = recovery.transitionEpoch;
 	}
 	if (!active)
@@ -17084,6 +17280,11 @@ void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
 		cleanupArmed = true;
 	}
 	ServiceVRIntermediateTextureCleanup(true);
+	if (!trimArmed) {
+		trimArmed = ArmVRRenderScaleMemoryTrim(a_recoveryEpoch, VRRenderScaleMemoryTrimReason::PostLoad);
+	}
+	if (HasPendingVRRenderScaleMemoryTrim())
+		ServiceVRRenderScaleMemoryTrim("post-load recovery");
 	SampleVRRenderScaleMemory(true, "post-load recovery");
 
 	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
@@ -17091,7 +17292,19 @@ void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
 	if (!recovery.active || recovery.recoveryEpoch != a_recoveryEpoch)
 		return;
 	recovery.cleanupArmed = cleanupArmed;
-	recovery.cleanupDrained = cleanupArmed && !HasPendingVRIntermediateTextureCleanup();
+	recovery.trimArmed = recovery.trimArmed || trimArmed;
+	const auto& trim = vrRenderScaleTransitionController.memoryTrim;
+	if (recovery.trimArmed &&
+		!trim.pending &&
+		trim.reason == VRRenderScaleMemoryTrimReason::PostLoad &&
+		trim.ownerEpoch == a_recoveryEpoch) {
+		recovery.trimCompleted = true;
+		recovery.trimSucceeded = trim.lastSucceeded;
+	}
+	recovery.cleanupDrained =
+		cleanupArmed &&
+		!HasPendingVRIntermediateTextureCleanup() &&
+		recovery.trimCompleted;
 	++vrRenderScaleTransitionController.revision;
 }
 
@@ -17137,11 +17350,14 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 
 	if (!admitted && ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} pressure={} settledSamples={}/{} peak={}MiB",
+			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} trimArmed={} trimCompleted={} trimSucceeded={} pressure={} settledSamples={}/{} peak={}MiB",
 			a_recoveryEpoch,
 			a_transitionEpoch,
 			BoolText(recoverySnapshot.cleanupArmed),
 			BoolText(recoverySnapshot.cleanupDrained),
+			BoolText(recoverySnapshot.trimArmed),
+			BoolText(recoverySnapshot.trimCompleted),
+			BoolText(recoverySnapshot.trimSucceeded),
 			GetVRRenderScaleMemoryPressureName(memorySnapshot.pressure),
 			recoverySnapshot.settledSamples,
 			kVRRenderScalePostLoadMemorySettleSamples,
@@ -17174,13 +17390,15 @@ void Upscaling::CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, 
 	uint64_t expectedEpoch = a_recoveryEpoch;
 	pendingPostLoadRuntimeResetEpoch.compare_exchange_strong(expectedEpoch, 0, std::memory_order_acq_rel);
 	logger::debug(
-		"[VRRenderScale][PostLoad] Completed recoveryEpoch={} transitionEpoch={} duration={} frame(s) baseline={}MiB peak={}MiB peakPressure={}",
+		"[VRRenderScale][PostLoad] Completed recoveryEpoch={} transitionEpoch={} duration={} frame(s) baseline={}MiB peak={}MiB peakPressure={} trimCompleted={} trimSucceeded={}",
 		completed.recoveryEpoch,
 		completed.transitionEpoch,
 		globals::state ? ElapsedFrames(completed.startFrame, std::max(globals::state->frameCount, 1u)) : 0u,
 		completed.baselineUsageBytes / kVRRenderScaleMiB,
 		completed.peakUsageBytes / kVRRenderScaleMiB,
-		GetVRRenderScaleMemoryPressureName(completed.peakPressure));
+		GetVRRenderScaleMemoryPressureName(completed.peakPressure),
+		BoolText(completed.trimCompleted),
+		BoolText(completed.trimSucceeded));
 }
 
 bool Upscaling::HasVRRenderScaleMemoryReliefCleanupPending() const
@@ -17214,11 +17432,12 @@ void Upscaling::MaybeArmVRRenderScaleMemoryRelief(const VRRenderScaleRelatchSign
 	if (!globals::game::isVR || !a_signature.valid)
 		return;
 
-	const bool stabilizerTransitionScope =
+	const bool trackedTransitionScope =
+		a_origin == VRUpscalingTransitionOrigin::CSMenu ||
 		a_origin == VRUpscalingTransitionOrigin::VRAPI ||
 		a_origin == VRUpscalingTransitionOrigin::PostLoadSync ||
 		IsSaveLoadTransitionContextActive(globals::state);
-	if (!stabilizerTransitionScope) {
+	if (!trackedTransitionScope) {
 		vrRenderScaleRapidRelatchFrame.store(0, std::memory_order_release);
 		vrRenderScaleRapidRelatchCount.store(0, std::memory_order_release);
 		ClearVRRenderScaleRelatchSignature(vrRenderScaleLastRapidRelatchSignature);
@@ -22524,6 +22743,8 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+	if (HasPendingVRRenderScaleMemoryTrim())
+		ServiceVRRenderScaleMemoryTrim("configure");
 	SampleVRRenderScaleMemory();
 	if (ShouldEmitUpscalingDiagLogs()) {
 		ServiceVRMenuPresentationTraceRaceSexPreRoll();
@@ -25308,7 +25529,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "fidelityMismatches", a_metrics.fidelityMismatches },
 			{ "peakPressure", GetVRRenderScaleMemoryPressureName(a_metrics.peakPressure) },
 			{ "peakUsageBytes", a_metrics.peakUsageBytes },
-			{ "peakRetiredSets", a_metrics.peakRetiredSets } });
+			{ "peakRetiredSets", a_metrics.peakRetiredSets },
+			{ "memoryTrimCount", a_metrics.memoryTrimCount },
+			{ "memoryTrimFailures", a_metrics.memoryTrimFailures } });
 	};
 	const uint32_t metricCapacity = static_cast<uint32_t>(controller.metrics.recent.size());
 	const uint32_t firstMetric =
@@ -25369,6 +25592,15 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 						{ "pressure", GetVRRenderScaleMemoryPressureName(controller.memory.pressure) },
 						{ "pressureSinceFrame", controller.memory.pressureSinceFrame },
 						{ "recoverySamples", controller.memory.recoverySamples } } },
+		{ "memoryTrim", { { "pending", controller.memoryTrim.pending },
+							{ "reason", GetVRRenderScaleMemoryTrimReasonName(controller.memoryTrim.reason) },
+							{ "ownerEpoch", controller.memoryTrim.ownerEpoch },
+							{ "requestedFrame", controller.memoryTrim.requestedFrame },
+							{ "completedFrame", controller.memoryTrim.completedFrame },
+							{ "fenceFailures", controller.memoryTrim.fenceFailures },
+							{ "completedCount", controller.memoryTrim.completedCount },
+							{ "failures", controller.memoryTrim.failures },
+							{ "lastSucceeded", controller.memoryTrim.lastSucceeded } } },
 		{ "retirement", { { "pendingSets", controller.retirement.pendingSets },
 							{ "oldestEpoch", controller.retirement.oldestEpoch },
 							{ "newestEpoch", controller.retirement.newestEpoch },
@@ -25387,6 +25619,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 								  { "peakPressure", GetVRRenderScaleMemoryPressureName(controller.postLoadRecovery.peakPressure) },
 								  { "cleanupArmed", controller.postLoadRecovery.cleanupArmed },
 								  { "cleanupDrained", controller.postLoadRecovery.cleanupDrained },
+								  { "trimArmed", controller.postLoadRecovery.trimArmed },
+								  { "trimCompleted", controller.postLoadRecovery.trimCompleted },
+								  { "trimSucceeded", controller.postLoadRecovery.trimSucceeded },
 								  { "relatchAdmitted", controller.postLoadRecovery.relatchAdmitted } } },
 		{ "resourcePlan", { { "valid", relatchPlan.valid },
 							 { "transitionEpoch", relatchPlan.transitionEpoch },
@@ -25479,6 +25714,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		controller.retirement.nextCleanupFrame == 0 &&
 		!controller.retirement.fencePending &&
 		!controller.retirement.capacityBlocked;
+	const bool memoryTrimDrained = !controller.memoryTrim.pending;
 	const auto steadyStateGrowthBytes = [](const ProfileMemoryTrend& a_trend) {
 		return a_trend.samples >= 3 && a_trend.latestPeakUsageBytes > a_trend.previousPeakUsageBytes ?
 		           a_trend.latestPeakUsageBytes - a_trend.previousPeakUsageBytes :
@@ -25544,6 +25780,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	addGate("stable_latency_bound", stableCount != 0 && completedMetricCount != 0 && maximumLatencyFrames <= kMaximumStableLatencyFrames, maximumLatencyFrames, kMaximumStableLatencyFrames);
 	addGate("fidelity_invariants", fidelityMismatches == 0 && controller.fidelity.mismatchCount == 0 && fidelityValid, { { "metrics", fidelityMismatches }, { "current", controller.fidelity.mismatchCount } }, 0);
 	addGate("retirement_drained", retirementDrained, { { "pendingSets", controller.retirement.pendingSets }, { "nextCleanupFrame", controller.retirement.nextCleanupFrame }, { "fencePending", controller.retirement.fencePending }, { "capacityBlocked", controller.retirement.capacityBlocked } }, 0);
+	addGate("memory_trim_drained", memoryTrimDrained, { { "pending", controller.memoryTrim.pending }, { "reason", GetVRRenderScaleMemoryTrimReasonName(controller.memoryTrim.reason) }, { "ownerEpoch", controller.memoryTrim.ownerEpoch } }, false);
 	addGate("memory_sample_valid", memoryEvidenceValid, memoryEvidenceValid, true);
 	addGate("memory_recovered", pressureRecovered, GetVRRenderScaleMemoryPressureName(controller.memory.pressure), "Normal or Elevated with recovery inactive");
 	addGate(
@@ -25568,6 +25805,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "symbols", { "Upscaling::ApplyPendingPerfModeRenderTargetRecreate",
 						 "Upscaling::ApplyPendingPostLoadRuntimeReset",
 						 "Upscaling::ResetVRVendorRuntimeResources",
+						 "Upscaling::ServiceVRRenderScaleMemoryTrim",
 						 "Upscaling::TryPromoteVRRenderScaleSubmitStageContract",
 						 "Upscaling::RecordVRRenderScaleFidelityObservation" } }
 	};
@@ -25669,6 +25907,24 @@ const char* Upscaling::GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPre
 		return "High";
 	case VRRenderScaleMemoryPressure::Critical:
 		return "Critical";
+	default:
+		return "Unknown";
+	}
+}
+
+const char* Upscaling::GetVRRenderScaleMemoryTrimReasonName(VRRenderScaleMemoryTrimReason a_reason)
+{
+	switch (a_reason) {
+	case VRRenderScaleMemoryTrimReason::None:
+		return "None";
+	case VRRenderScaleMemoryTrimReason::RapidRelatch:
+		return "RapidRelatch";
+	case VRRenderScaleMemoryTrimReason::Pressure:
+		return "Pressure";
+	case VRRenderScaleMemoryTrimReason::PostLoad:
+		return "PostLoad";
+	case VRRenderScaleMemoryTrimReason::NativeRestore:
+		return "NativeRestore";
 	default:
 		return "Unknown";
 	}
@@ -26203,6 +26459,11 @@ void Upscaling::PublishVRRenderScaleTransitionStable()
 void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 {
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	vrRenderScaleMemoryTrimFence = nullptr;
+	vrRenderScaleMemoryTrimOwnerEpoch = 0;
+	vrRenderScaleMemoryTrimPendingReason = VRRenderScaleMemoryTrimReason::None;
+	vrRenderScaleMemoryTrimRequestedFrame = 0;
+	vrRenderScaleMemoryTrimFenceFailures = 0;
 	VRRenderScaleTransitionState previousState;
 	uint64_t revision;
 	{

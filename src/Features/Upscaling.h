@@ -317,6 +317,15 @@ public:
 		Critical
 	};
 
+	enum class VRRenderScaleMemoryTrimReason : uint8_t
+	{
+		None,
+		RapidRelatch,
+		Pressure,
+		PostLoad,
+		NativeRestore
+	};
+
 	/** @brief Immutable physical work plan admitted for one transition epoch. */
 	struct VRRenderScaleRelatchPlan
 	{
@@ -386,6 +395,19 @@ public:
 		uint32_t recoverySamples = 0;
 	};
 
+	struct VRRenderScaleMemoryTrimSnapshot
+	{
+		bool pending = false;
+		VRRenderScaleMemoryTrimReason reason = VRRenderScaleMemoryTrimReason::None;
+		uint64_t ownerEpoch = 0;
+		uint32_t requestedFrame = 0;
+		uint32_t completedFrame = 0;
+		uint32_t fenceFailures = 0;
+		uint32_t completedCount = 0;
+		uint32_t failures = 0;
+		bool lastSucceeded = false;
+	};
+
 	struct VRRenderScalePostLoadRecoverySnapshot
 	{
 		bool active = false;
@@ -400,6 +422,9 @@ public:
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		bool cleanupArmed = false;
 		bool cleanupDrained = false;
+		bool trimArmed = false;
+		bool trimCompleted = false;
+		bool trimSucceeded = false;
 		bool relatchAdmitted = false;
 	};
 
@@ -483,6 +508,8 @@ public:
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		uint64_t peakUsageBytes = 0;
 		uint32_t peakRetiredSets = 0;
+		uint32_t memoryTrimCount = 0;
+		uint32_t memoryTrimFailures = 0;
 	};
 
 	struct VRRenderScaleMetricsSnapshot
@@ -628,6 +655,7 @@ public:
 		VRRenderScaleRelatchPlan relatchPlan{};
 		VRRenderScaleRetirementSnapshot retirement{};
 		VRRenderScaleMemorySnapshot memory{};
+		VRRenderScaleMemoryTrimSnapshot memoryTrim{};
 		VRRenderScalePostLoadRecoverySnapshot postLoadRecovery{};
 		VRVendorRuntimeLifecycleSnapshot dlssLifecycle{};
 		VRVendorRuntimeLifecycleSnapshot fsrLifecycle{};
@@ -699,6 +727,7 @@ public:
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
 	static const char* GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure);
+	static const char* GetVRRenderScaleMemoryTrimReasonName(VRRenderScaleMemoryTrimReason a_reason);
 	static const char* GetVRVendorRuntimeLifecyclePhaseName(VRVendorRuntimeLifecyclePhase a_phase);
 	VRRenderScaleResourceKey BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot& a_profile) const;
 	static VRRenderScaleResourceCompatibility CompareVRRenderScaleResourceKeys(
@@ -1104,6 +1133,11 @@ public:
 	winrt::com_ptr<IDXGIAdapter3> vrRenderScaleMemoryAdapter;
 	ID3D11Device* vrRenderScaleMemoryAdapterDevice = nullptr;
 	uint32_t vrRenderScaleMemoryLastSampleFrame = 0;
+	winrt::com_ptr<ID3D11Query> vrRenderScaleMemoryTrimFence;
+	uint64_t vrRenderScaleMemoryTrimOwnerEpoch = 0;
+	VRRenderScaleMemoryTrimReason vrRenderScaleMemoryTrimPendingReason = VRRenderScaleMemoryTrimReason::None;
+	uint32_t vrRenderScaleMemoryTrimRequestedFrame = 0;
+	uint32_t vrRenderScaleMemoryTrimFenceFailures = 0;
 
 	struct VRIntermediateTextureCache
 	{
@@ -1420,6 +1454,9 @@ public:
 	bool CanAdmitVRIntermediateRetirement(uint64_t a_epoch);
 	void UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked = false);
 	bool SampleVRRenderScaleMemory(bool a_force = false, const char* a_reason = nullptr);
+	bool ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason);
+	bool ServiceVRRenderScaleMemoryTrim(const char* a_reason = nullptr);
+	bool HasPendingVRRenderScaleMemoryTrim() const;
 	uint64_t BeginVRRenderScalePostLoadRecovery();
 	void PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch);
 	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);

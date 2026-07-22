@@ -124,6 +124,32 @@ rejects growth above 256 MiB. The first two samples establish cold and warm
 residency, while exact-profile grouping prevents quality or resolution changes
 from being classified as leaks.
 
+Live Skyrim VR decompilation for Step 21 shows that the common
+`BSShaderRenderTargets::Create` path repopulates the full engine target table;
+only one special target is explicitly released by that top-level routine before
+the table is rebuilt. Runtime captures then showed the same approximately
+1.55-GiB repeated-profile growth for DLSS and FSR, with CS retirement fully
+drained and the allocation returning naturally after a long idle. This is
+treated as deferred D3D/DXGI residency rather than backend-owned leakage.
+
+After the second distinct rapid CS-menu relatch, and after every further
+distinct relatch within the 1,800-frame window, the controller now retires
+transient CS resources and arms a common-target memory trim. Pressure,
+post-load, and low-peak native restores arm the same recovery independently of
+the rapid-switch count. The trim is placed behind a D3D11 event query and is
+polled without blocking; `IDXGIDevice3::Trim` runs only after the GPU crosses
+that fence. Post-load admission waits for this bounded attempt to complete, but
+continues safely if DXGI trim is unavailable. This keeps ordinary isolated menu
+changes on the fast path while bounding deferred residency during the workloads
+that can otherwise approach OOM.
+
+The live MCP status and iteration record expose `controller.memoryTrim`,
+post-load trim state, and per-transition trim counts/failures. The
+`memory_trim_drained` gate rejects a capture stopped while cleanup is still
+pending. A candidate still has to pass `steady_state_memory_growth`; a reported
+successful trim is evidence of the attempted recovery, not a substitute for the
+measured VRAM plateau.
+
 To evaluate this gate, complete at least three transitions to each of two exact
 profiles in alternating order. Prefer two resolutions on one backend or native
 AA versus an enabled profile; use DLSS versus FSR only for the backend-handoff
@@ -156,6 +182,7 @@ The runtime currently requires:
 -   at least one stable transition and no more than 120 frames to stability;
 -   zero fidelity invariant mismatches across method, epoch, generation, dimensions, evaluation, and eye symmetry, with finalized vendor evaluation proven for both eyes;
 -   a fully drained retirement queue with no deferred cleanup frame, outstanding fence, or capacity block;
+-   no pending GPU-fenced common-target memory trim;
 -   a valid DXGI memory sample and pressure recovered below `High` with post-load recovery complete;
 -   no more than 256 MiB growth between the final two peaks once an exact backend profile has at least three completed samples;
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
@@ -169,6 +196,7 @@ The record lists the principal native symbols under `analysis.symbols`. In Ghidr
 -   `Upscaling::ApplyPendingPerfModeRenderTargetRecreate` for admission, teardown, allocation, and retry behavior;
 -   `Upscaling::ApplyPendingPostLoadRuntimeReset` for fast-travel recovery ownership;
 -   `Upscaling::ResetVRVendorRuntimeResources` for DLSS/FSR lifetime differences;
+-   `Upscaling::ServiceVRRenderScaleMemoryTrim` for fenced common-target residency recovery;
 -   `Upscaling::TryPromoteVRRenderScaleSubmitStageContract` for stable-presentation latency;
 -   `Upscaling::RecordVRRenderScaleFidelityObservation` for both-eye contract failures.
 

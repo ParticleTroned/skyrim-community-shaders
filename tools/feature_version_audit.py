@@ -286,6 +286,26 @@ def get_changed_files(feature_path, base_ref, file_types=None):
     except Exception:
         return []
 
+def is_version_relevant(file_path, ini_path):
+    """Return whether a packaged shader file participates in feature versioning.
+
+    Shader source and include changes affect the shader cache. Of the packaged
+    INIs, only the feature's canonical Shaders/Features INI keys cache
+    invalidation; auxiliary configuration INIs must not trigger a version bump.
+    """
+    path = Path(file_path)
+    if path.suffix.lower() != ".ini":
+        return True
+    if not ini_path:
+        return False
+
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    canonical_ini = Path(ini_path)
+    if not canonical_ini.is_absolute():
+        canonical_ini = PROJECT_ROOT / canonical_ini
+    return path.resolve() == canonical_ini.resolve()
+
 def get_commits_for_file(file_path, base_ref):
     try:
         output = subprocess.check_output(
@@ -665,12 +685,12 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
         # PR-scoped changes: used for change-type display and new-feature detection.
         # Only packaged files under features/ participate in feature versioning.
         changes = get_changed_files(feature_dir, base_ref)
-        changes = list(set(changes))
+        changes = [change for change in set(changes) if is_version_relevant(change[1], ini_path)]
 
         # Release-scoped changes: all changes since last release, used to propose the correct
         # version so that a bump already applied by a prior PR satisfies this check.
         release_changes = get_changed_files(feature_dir, version_ref)
-        release_changes = list(set(release_changes))
+        release_changes = [change for change in set(release_changes) if is_version_relevant(change[1], ini_path)]
 
         change_types = set(os.path.splitext(f)[1].lower() for _, f in changes)
         all_commits = []

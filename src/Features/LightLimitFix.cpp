@@ -215,7 +215,8 @@ namespace
 			&globals::state->refractionScale,
 			0.0f,
 			2.0f,
-			"%.2f");
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Scales ImageSpace refraction (heat shimmer around fire/heat sources).\n"

@@ -754,8 +754,11 @@ namespace
 		Wetterness& wetterness,
 		const WetternessUiPresetDefinition& preset)
 	{
+		// Profiles tune quality only; preserve the independent runtime master switch.
+		const uint enabled = wetterness.settings.EnableWetterness != 0 ? 1u : 0u;
 		const auto presetState = BuildWetternessUiPresetState(preset);
 		wetterness.settings = presetState.settings;
+		wetterness.settings.EnableWetterness = enabled;
 		wetterness.enableWeatherDrivenDryingModel = presetState.enableWeatherDrivenDryingModel;
 		wetterness.puddleDryingHours = presetState.puddleDryingHours;
 		wetterness.puddleLayout = presetState.puddleLayout;
@@ -779,8 +782,11 @@ namespace
 		const Wetterness::Settings& actual,
 		const Wetterness::Settings& expected)
 	{
-		return actual.EnableWetterness == expected.EnableWetterness &&
-		       actual.ShoreRange == expected.ShoreRange &&
+<<<<<<< HEAD
+		// Keep the selected quality profile visible while the independent runtime master switch is off.
+=======
+>>>>>>> 5b4485ae2 (ui(performance-profiles): preserve master switches)
+		return actual.ShoreRange == expected.ShoreRange &&
 		       actual.EnableRaindropFx == expected.EnableRaindropFx &&
 		       actual.EnableSplashes == expected.EnableSplashes &&
 		       actual.EnableRipples == expected.EnableRipples &&
@@ -1182,6 +1188,18 @@ const Wetterness::Settings& Wetterness::GetSanitizedSettings() const
 	return sanitizedSettingsCache;
 }
 
+void Wetterness::DrawEnabledCheckbox()
+{
+	bool enabled = settings.EnableWetterness != 0;
+	if (ImGui::Checkbox("Enable", &enabled)) {
+		settings.EnableWetterness = enabled ? 1u : 0u;
+		InvalidateSanitizedSettingsCache();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Enables wetness visuals. Off = no rain film, puddles, or shore wetness.");
+	}
+}
+
 void Wetterness::DrawSettings()
 {
 	InvalidateSanitizedSettingsCache();
@@ -1270,10 +1288,7 @@ void Wetterness::DrawSettings()
 
 	drawSectionDivider();
 
-	drawUintCheckbox("Enable Wetterness", settings.EnableWetterness);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables wetness visuals. Off = no rain film, puddles, or shore wetness.");
-	}
+	DrawEnabledCheckbox();
 
 	ImGui::TextUnformatted("Wetterness Preset");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1969,8 +1984,7 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 
 	sanitizePersistentPresetState();
 
-	if (a_advanced)
-		drawUintCheckbox("Enable Wetterness", settings.EnableWetterness);
+	DrawEnabledCheckbox();
 
 	if (a_advanced)
 		ImGui::TextUnformatted("Wetterness Presets");

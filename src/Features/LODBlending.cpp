@@ -67,7 +67,7 @@ namespace
 {
 	bool DrawEnabledCheckbox(bool& a_enabled)
 	{
-		ImGui::Checkbox("Enabled", &a_enabled);
+		ImGui::Checkbox("Enable", &a_enabled);
 		return a_enabled;
 	}
 }
@@ -193,8 +193,8 @@ LODBlending::Settings LODBlending::GetCommonBufferData() const
 		(settings.DisableTerrainVertexColors ? kDisableTerrainVertexColorsFlag : 0u) |
 		(Enabled ? kEnabledFlag : 0u);
 	data.WaterReflectionStrength = Enabled && EnableWaterReflectionStrength ?
-		ClampWaterReflectionStrength(data.WaterReflectionStrength) :
-		-1.0f;
+	                                   ClampWaterReflectionStrength(data.WaterReflectionStrength) :
+	                                   -1.0f;
 	return data;
 }
 

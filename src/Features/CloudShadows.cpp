@@ -10,7 +10,7 @@ namespace
 	bool DrawEnabledCheckbox(CloudShadows::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (ImGui::Checkbox("Enabled", &enabled))
+		if (ImGui::Checkbox("Enable", &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}

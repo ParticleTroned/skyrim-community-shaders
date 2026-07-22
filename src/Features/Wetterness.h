@@ -277,6 +277,7 @@ public:
 	void DetectCurrentPreset();
 
 private:
+	void DrawEnabledCheckbox();
 	void DrawWeatherAnalysis() const;
 	void ResetRuntimeState() const;
 	void InvalidateSanitizedSettingsCache();

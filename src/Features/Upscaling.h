@@ -694,6 +694,65 @@ public:
 		std::array<VRRenderScaleFidelityEyeSnapshot, 2> eyes{};
 	};
 
+	enum class VRRenderScalePresentationPath : uint8_t
+	{
+		Unknown,
+		VendorEvaluated,
+		PresentationStretch,
+		VendorFailureStretch,
+		BoundsMismatchOriginalFallback
+	};
+
+	struct VRRenderScalePresentationObservation
+	{
+		bool valid = false;
+		VRRenderScalePresentationPath path = VRRenderScalePresentationPath::Unknown;
+		uint32_t eyeIndex = 0;
+		uint32_t frame = 0;
+		uint32_t contractGeneration = 0;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t expectedInputWidth = 0;
+		uint32_t expectedInputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		bool loadingOrMenuContext = false;
+		bool transitionCooldown = false;
+	};
+
+	struct VRRenderScalePresentationEyeSnapshot
+	{
+		bool valid = false;
+		VRRenderScalePresentationPath path = VRRenderScalePresentationPath::Unknown;
+		uint32_t frame = 0;
+		uint64_t transitionEpoch = 0;
+		uint32_t contractGeneration = 0;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t expectedInputWidth = 0;
+		uint32_t expectedInputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		uint32_t consecutiveFrames = 0;
+		bool loadingOrMenuContext = false;
+		bool transitionCooldown = false;
+	};
+
+	struct VRRenderScalePresentationSnapshot
+	{
+		std::array<VRRenderScalePresentationEyeSnapshot, 2> eyes{};
+		uint32_t lastBothEyesVendorFrame = 0;
+		uint32_t consecutiveBothEyesVendorFrames = 0;
+		uint32_t lastFallbackFrame = 0;
+		uint32_t maximumConsecutivePresentationStretchFrames = 0;
+		uint64_t vendorEvaluatedEyeObservations = 0;
+		uint64_t presentationStretchEyeObservations = 0;
+		uint64_t vendorFailureStretchEyeObservations = 0;
+		uint64_t boundsMismatchOriginalFallbackEyeObservations = 0;
+	};
+
 	enum class VRRenderScaleStressEventType : uint8_t
 	{
 		SessionStarted,
@@ -740,6 +799,10 @@ public:
 		uint32_t nextIndex = 0;
 		uint32_t count = 0;
 		uint32_t overwrittenEvents = 0;
+		uint64_t baselineVendorEvaluatedEyeObservations = 0;
+		uint64_t baselinePresentationStretchEyeObservations = 0;
+		uint64_t baselineVendorFailureStretchEyeObservations = 0;
+		uint64_t baselineBoundsMismatchOriginalFallbackEyeObservations = 0;
 		std::array<VRRenderScaleStressEvent, 128> events{};
 	};
 
@@ -791,6 +854,7 @@ public:
 		VRVendorRuntimeLifecycleSnapshot fsrLifecycle{};
 		VRRenderScaleMetricsSnapshot metrics{};
 		VRRenderScaleFidelitySnapshot fidelity{};
+		VRRenderScalePresentationSnapshot presentation{};
 	};
 
 	struct PerfModeState
@@ -858,6 +922,7 @@ public:
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
 	static const char* GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure);
 	static const char* GetVRRenderScaleMemoryTrimReasonName(VRRenderScaleMemoryTrimReason a_reason);
+	static const char* GetVRRenderScalePresentationPathName(VRRenderScalePresentationPath a_path);
 	static const char* GetVRVendorRuntimeLifecyclePhaseName(VRVendorRuntimeLifecyclePhase a_phase);
 	VRRenderScaleResourceKey BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot& a_profile) const;
 	static VRRenderScaleResourceCompatibility CompareVRRenderScaleResourceKeys(
@@ -1329,7 +1394,8 @@ public:
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	bool ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const;
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
-		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
+		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
+	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		const char** a_decisionReason = nullptr);

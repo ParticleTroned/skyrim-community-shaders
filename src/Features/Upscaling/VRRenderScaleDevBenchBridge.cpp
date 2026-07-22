@@ -135,6 +135,29 @@ namespace
 				{ "valid", eye.valid },
 			});
 		}
+		json presentationEyes = json::array();
+		for (const auto& eye : controller.presentation.eyes) {
+			presentationEyes.push_back({
+				{ "valid", eye.valid },
+				{ "path", Upscaling::GetVRRenderScalePresentationPathName(eye.path) },
+				{ "frame", eye.frame },
+				{ "transitionEpoch", eye.transitionEpoch },
+				{ "contractGeneration", eye.contractGeneration },
+				{ "method", GetUpscaleMethodName(eye.method) },
+				{ "inputWidth", eye.inputWidth },
+				{ "inputHeight", eye.inputHeight },
+				{ "expectedInputWidth", eye.expectedInputWidth },
+				{ "expectedInputHeight", eye.expectedInputHeight },
+				{ "outputWidth", eye.outputWidth },
+				{ "outputHeight", eye.outputHeight },
+				{ "consecutiveFrames", eye.consecutiveFrames },
+				{ "loadingOrMenuContext", eye.loadingOrMenuContext },
+				{ "transitionCooldown", eye.transitionCooldown },
+			});
+		}
+		const auto observationsSinceStart = [](uint64_t a_current, uint64_t a_baseline) {
+			return a_current >= a_baseline ? a_current - a_baseline : a_current;
+		};
 
 		return {
 			{ "frame", frame },
@@ -241,8 +264,23 @@ namespace
 												  { "invariantEyeMask", controller.fidelity.invariantEyeMask },
 												  { "lastMismatchMask", controller.fidelity.lastMismatchMask },
 												  { "mismatchCount", controller.fidelity.mismatchCount },
-												  { "eyes", std::move(eyes) },
-											  } },
+								  { "eyes", std::move(eyes) },
+								  } },
+								{ "presentation", {
+											{ "lastBothEyesVendorFrame", controller.presentation.lastBothEyesVendorFrame },
+											{ "consecutiveBothEyesVendorFrames", controller.presentation.consecutiveBothEyesVendorFrames },
+											{ "lastFallbackFrame", controller.presentation.lastFallbackFrame },
+											{ "maximumConsecutivePresentationStretchFrames", controller.presentation.maximumConsecutivePresentationStretchFrames },
+											{ "vendorEvaluatedEyeObservations", controller.presentation.vendorEvaluatedEyeObservations },
+											{ "presentationStretchEyeObservations", controller.presentation.presentationStretchEyeObservations },
+											{ "vendorFailureStretchEyeObservations", controller.presentation.vendorFailureStretchEyeObservations },
+											{ "boundsMismatchOriginalFallbackEyeObservations", controller.presentation.boundsMismatchOriginalFallbackEyeObservations },
+											{ "sessionVendorEvaluatedEyeObservations", observationsSinceStart(controller.presentation.vendorEvaluatedEyeObservations, session.baselineVendorEvaluatedEyeObservations) },
+											{ "sessionPresentationStretchEyeObservations", observationsSinceStart(controller.presentation.presentationStretchEyeObservations, session.baselinePresentationStretchEyeObservations) },
+											{ "sessionVendorFailureStretchEyeObservations", observationsSinceStart(controller.presentation.vendorFailureStretchEyeObservations, session.baselineVendorFailureStretchEyeObservations) },
+											{ "sessionBoundsMismatchOriginalFallbackEyeObservations", observationsSinceStart(controller.presentation.boundsMismatchOriginalFallbackEyeObservations, session.baselineBoundsMismatchOriginalFallbackEyeObservations) },
+											{ "eyes", std::move(presentationEyes) },
+										} },
 								{ "currentMetrics", {
 														{ "valid", controller.metrics.current.valid },
 														{ "transitionEpoch", controller.metrics.current.transitionEpoch },
@@ -491,7 +529,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller, local-video and system-commit memory, retirement, backend, and both-eye fidelity snapshot. record returns the complete schema-v6 iteration artifact. start begins a fixed-memory capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the capture, writes its artifact, and returns the complete record. reset clears only a stopped capture. Mutations require Skyrim VR and developer mode; apply additionally requires an active capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller, local-video and system-commit memory, retirement, backend, both-eye fidelity, and compositor-accepted per-eye presentation paths. record returns the complete schema-v7 iteration artifact. start begins a fixed-memory capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the capture, writes its artifact, and returns the complete record. reset clears only a stopped capture. Mutations require Skyrim VR and developer mode; apply additionally requires an active capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

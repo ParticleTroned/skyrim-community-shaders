@@ -24,8 +24,9 @@ The registered tool is `communityshaders.renderscale`:
 
 -   `status` returns a compact live snapshot of the controller profiles, VRAM
     pressure, retirement queue, post-load recovery, backend generations,
-    current metrics, and both-eye fidelity;
--   `record` returns the complete schema-v6 record without changing capture
+    current metrics, both-eye fidelity, and compositor-accepted per-eye
+    presentation paths;
+-   `record` returns the complete schema-v7 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
@@ -348,9 +349,38 @@ contract. Schema v6 exposes `postTrimAdmissionUsageLimitBytes` and
 so automation can distinguish normal admission, bounded post-trim admission,
 and a genuine pressure deferral.
 
+Step 28 closes the presentation-fidelity gap exposed by the RC111 manual
+door-transition test. The prior fidelity record proved that a vendor evaluation
+had succeeded for each eye, but it did not prove which texture OpenVR actually
+accepted afterward. An intentional loading/menu stretch could therefore remain
+on screen, or a source-bounds mismatch could fall back to the original submit,
+while a stale successful fidelity observation still allowed the capture to
+pass.
+
+Each accepted compositor submission is now classified per eye as
+`VendorEvaluated`, `PresentationStretch`, `VendorFailureStretch`, or
+`BoundsMismatchOriginalFallback`. Candidate observations are discarded when
+OpenVR rejects the submission, and repeated queries do not create stress-ring
+events or high-frequency logs. The controller retains the latest dimensions,
+method, generation, epoch, context flags, consecutive-frame count, and
+monotonic path counters; capture baselines make the complete record report only
+paths observed inside that session. Starting a capture also resets only the
+consecutive-path measurements, so its maximum presentation-stretch duration is
+attributable to that scenario without discarding the monotonic totals.
+
+`PresentationStretch` remains valid while a loading/menu presentation or
+transition cooldown deliberately protects the compositor. It must recover by
+capture stop to a fresh same-frame `VendorEvaluated` submission for both eyes
+whose method, epoch, generation, input extent, and output extent exactly match
+the stable physical contract. `VendorFailureStretch` and
+`BoundsMismatchOriginalFallback` are capture failures. Schema v7 exposes the
+live paths under `controller.presentation`, session deltas under
+`presentationPath`, and the `presentation_fallbacks` and
+`presentation_recovered` gates.
+
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 6`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 7`. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -373,13 +403,14 @@ The runtime currently requires:
 -   no more than 32 retries for one transition;
 -   at least one stable transition, no more than 120 frames to stability on the ordinary fast path, and no more than 3,600 frames when pressure backpressure is recorded;
 -   zero fidelity invariant mismatches across method, applied generation, dimensions, evaluation, and eye symmetry, with finalized vendor evaluation proven for both eyes;
+-   no compositor-accepted vendor-failure stretch or bounds-mismatch original fallback during the capture, and a terminal vendor profile recovered to a fresh, exact `VendorEvaluated` presentation for both eyes;
 -   a fully drained retirement queue with no deferred cleanup frame, outstanding fence, or capacity block;
 -   no failed or pending GPU-fenced common-target memory trim;
 -   valid DXGI, Windows-commit, and Skyrim-private samples, with local pressure recovered below `High`, post-load recovery complete, and final system commit below the lower of 75 percent or an 8-GiB reserve;
 -   no more than 256 MiB of local-video, system-commit, or Skyrim-private growth in both consecutive same-profile peak intervals once an exact backend profile has at least three completed samples;
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
 
-These thresholds are part of schema version 6. Change the schema version if their meaning or units change.
+These thresholds are part of schema version 7. Change the schema version if their meaning or units change.
 
 ## Ghidra correlation
 
@@ -391,7 +422,8 @@ The record lists the principal native symbols under `analysis.symbols`. In Ghidr
 -   `Upscaling::ServiceVRRenderScaleMemoryTrim` for fenced common-target residency recovery;
 -   `QueryVRRenderScaleSystemCommit` for Windows commit and Skyrim-private sampling;
 -   `Upscaling::TryPromoteVRRenderScaleSubmitStageContract` for stable-presentation latency;
--   `Upscaling::RecordVRRenderScaleFidelityObservation` for both-eye contract failures.
+-   `Upscaling::RecordVRRenderScaleFidelityObservation` for both-eye contract failures;
+-   `Upscaling::RecordVRRenderScalePresentationObservation` for the actual compositor-accepted path and terminal presentation recovery;
 -   `Upscaling::EnsureVRIntermediateTextures` and
     `Upscaling::AreVRIntermediateTexturesCompatibleForFSR` for Step 24 stable
     external-resource identity validation;

@@ -270,17 +270,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					result);
 				return result;
 			};
+			Upscaling::VRRenderScalePresentationObservation presentationObservation{};
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
-				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
+				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
 					if (ShouldRenderInSceneMenu(vr) &&
 						upscaledTexture.handle &&
 						upscaledTexture.eType == vr::TextureType_DirectX)
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
-					return submit("upscaled", &upscaledTexture, &upscaledBounds);
+					const auto result = submit("upscaled", &upscaledTexture, &upscaledBounds);
+					if (result == vr::VRCompositorError_None)
+						upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
+					return result;
 				}
 
 				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsVRRenderScaleModeActive()) {
@@ -323,7 +327,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					}
 				}
 			}
-			return submit("original", pTexture, pBounds);
+			const auto result = submit("original", pTexture, pBounds);
+			if (result == vr::VRCompositorError_None &&
+				presentationObservation.path == Upscaling::VRRenderScalePresentationPath::BoundsMismatchOriginalFallback) {
+				upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
+			}
+			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

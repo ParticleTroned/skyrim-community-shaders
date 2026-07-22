@@ -18852,6 +18852,139 @@ bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMe
 	return mismatchMask == 0;
 }
 
+void Upscaling::RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation)
+{
+	if (!globals::game::isVR ||
+		!a_observation.valid ||
+		a_observation.eyeIndex >= 2 ||
+		a_observation.path == VRRenderScalePresentationPath::Unknown) {
+		return;
+	}
+
+	bool pathChanged = false;
+	VRRenderScalePresentationEyeSnapshot published{};
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& controller = vrRenderScaleTransitionController;
+		auto& presentation = controller.presentation;
+		auto& eye = presentation.eyes[a_observation.eyeIndex];
+		const auto previous = eye;
+		const uint32_t frame = std::max(a_observation.frame, 1u);
+		const bool sameContract =
+			previous.valid &&
+			previous.path == a_observation.path &&
+			previous.contractGeneration == a_observation.contractGeneration &&
+			previous.method == a_observation.method &&
+			previous.inputWidth == a_observation.inputWidth &&
+			previous.inputHeight == a_observation.inputHeight &&
+			previous.expectedInputWidth == a_observation.expectedInputWidth &&
+			previous.expectedInputHeight == a_observation.expectedInputHeight &&
+			previous.outputWidth == a_observation.outputWidth &&
+			previous.outputHeight == a_observation.outputHeight;
+		const bool duplicate =
+			sameContract &&
+			previous.frame == frame &&
+			previous.loadingOrMenuContext == a_observation.loadingOrMenuContext &&
+			previous.transitionCooldown == a_observation.transitionCooldown;
+		const bool consecutive =
+			sameContract &&
+			frame == previous.frame + 1u;
+		const auto& contract = controller.applied.valid ? controller.applied : controller.stable;
+
+		eye.valid = true;
+		eye.path = a_observation.path;
+		eye.frame = frame;
+		eye.transitionEpoch = contract.valid ? contract.transitionEpoch : controller.targetEpoch;
+		eye.contractGeneration = a_observation.contractGeneration;
+		eye.method = a_observation.method;
+		eye.inputWidth = a_observation.inputWidth;
+		eye.inputHeight = a_observation.inputHeight;
+		eye.expectedInputWidth = a_observation.expectedInputWidth;
+		eye.expectedInputHeight = a_observation.expectedInputHeight;
+		eye.outputWidth = a_observation.outputWidth;
+		eye.outputHeight = a_observation.outputHeight;
+		eye.consecutiveFrames = duplicate ? previous.consecutiveFrames :
+			consecutive ?
+				(previous.consecutiveFrames == std::numeric_limits<uint32_t>::max() ? previous.consecutiveFrames : previous.consecutiveFrames + 1u) :
+				1u;
+		eye.loadingOrMenuContext = a_observation.loadingOrMenuContext;
+		eye.transitionCooldown = a_observation.transitionCooldown;
+		pathChanged = !previous.valid || previous.path != eye.path;
+
+		if (!duplicate) {
+			const auto increment = [](uint64_t& a_counter) {
+				if (a_counter != std::numeric_limits<uint64_t>::max())
+					++a_counter;
+			};
+			switch (eye.path) {
+			case VRRenderScalePresentationPath::VendorEvaluated:
+				increment(presentation.vendorEvaluatedEyeObservations);
+				break;
+			case VRRenderScalePresentationPath::PresentationStretch:
+				increment(presentation.presentationStretchEyeObservations);
+				presentation.maximumConsecutivePresentationStretchFrames = std::max(
+					presentation.maximumConsecutivePresentationStretchFrames,
+					eye.consecutiveFrames);
+				presentation.lastFallbackFrame = frame;
+				presentation.consecutiveBothEyesVendorFrames = 0;
+				break;
+			case VRRenderScalePresentationPath::VendorFailureStretch:
+				increment(presentation.vendorFailureStretchEyeObservations);
+				presentation.lastFallbackFrame = frame;
+				presentation.consecutiveBothEyesVendorFrames = 0;
+				break;
+			case VRRenderScalePresentationPath::BoundsMismatchOriginalFallback:
+				increment(presentation.boundsMismatchOriginalFallbackEyeObservations);
+				presentation.lastFallbackFrame = frame;
+				presentation.consecutiveBothEyesVendorFrames = 0;
+				break;
+			default:
+				break;
+			}
+		}
+
+		const auto& left = presentation.eyes[0];
+		const auto& right = presentation.eyes[1];
+		if (left.valid && right.valid &&
+			left.path == VRRenderScalePresentationPath::VendorEvaluated &&
+			right.path == VRRenderScalePresentationPath::VendorEvaluated &&
+			left.frame == right.frame &&
+			left.frame != presentation.lastBothEyesVendorFrame) {
+			const bool consecutiveBothEyes =
+				presentation.lastBothEyesVendorFrame != 0 &&
+				left.frame == presentation.lastBothEyesVendorFrame + 1u;
+			presentation.consecutiveBothEyesVendorFrames = consecutiveBothEyes ?
+				(presentation.consecutiveBothEyesVendorFrames == std::numeric_limits<uint32_t>::max() ?
+					presentation.consecutiveBothEyesVendorFrames :
+					presentation.consecutiveBothEyesVendorFrames + 1u) :
+				1u;
+			presentation.lastBothEyesVendorFrame = left.frame;
+		}
+
+		published = eye;
+		++controller.revision;
+	}
+
+	if (pathChanged && ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][Presentation] eye={} path={} frame={} epoch={} generation={} method={} input={}x{} expected={}x{} output={}x{} loadingOrMenu={} cooldown={}",
+			a_observation.eyeIndex,
+			GetVRRenderScalePresentationPathName(published.path),
+			published.frame,
+			published.transitionEpoch,
+			published.contractGeneration,
+			magic_enum::enum_name(published.method),
+			published.inputWidth,
+			published.inputHeight,
+			published.expectedInputWidth,
+			published.expectedInputHeight,
+			published.outputWidth,
+			published.outputHeight,
+			BoolText(published.loadingOrMenuContext),
+			BoolText(published.transitionCooldown));
+	}
+}
+
 void Upscaling::ClearVRDLSSRapidTransitionGuard()
 {
 	vrDLSSRapidTransitionGuardEndFrame.store(0, std::memory_order_release);
@@ -24883,8 +25016,9 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 }
 
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
-	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds)
+	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation)
 {
+	a_presentationObservation = {};
 	if (!a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX) {
 		return false;
 	}
@@ -25094,7 +25228,38 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		sourceUsesCombinedStereoLayout,
 		inputBoundsUseCombinedStereoSpace,
 		a_inputBounds);
+	const auto& activeContract = perfMode.GetBootSnapshot();
+	const uint32_t activeContractGeneration = activeContract.valid ? activeContract.generation : 0u;
+	const auto setPresentationObservation = [&](VRRenderScalePresentationPath a_path,
+		uint32_t a_inputWidth, uint32_t a_inputHeight,
+		uint32_t a_expectedInputWidth, uint32_t a_expectedInputHeight,
+		bool a_loadingOrMenuContext, bool a_transitionCooldown) {
+		a_presentationObservation.valid = true;
+		a_presentationObservation.path = a_path;
+		a_presentationObservation.eyeIndex = eyeIndex;
+		a_presentationObservation.frame = std::max(currentFrame, 1u);
+		a_presentationObservation.contractGeneration = activeContractGeneration;
+		a_presentationObservation.method = upscaleMethod;
+		a_presentationObservation.inputWidth = a_inputWidth;
+		a_presentationObservation.inputHeight = a_inputHeight;
+		a_presentationObservation.expectedInputWidth = a_expectedInputWidth;
+		a_presentationObservation.expectedInputHeight = a_expectedInputHeight;
+		a_presentationObservation.outputWidth = eyeWidthOut;
+		a_presentationObservation.outputHeight = eyeHeightOut;
+		a_presentationObservation.loadingOrMenuContext = a_loadingOrMenuContext;
+		a_presentationObservation.transitionCooldown = a_transitionCooldown;
+	};
 	if (!sourceRegion.valid) {
+		if (vrRenderScaleMode) {
+			setPresentationObservation(
+				VRRenderScalePresentationPath::BoundsMismatchOriginalFallback,
+				sourceRegion.width,
+				sourceRegion.height,
+				sourceEyeWidthIn,
+				sourceEyeHeightIn,
+				submitPresentationContext || currentMenuPresentationContext || resolutionPlan.knownMenuContextActive || resolutionPlan.menuContextActive,
+				false);
+		}
 		static bool loggedInvalidSourceRegion = false;
 		if (!loggedInvalidSourceRegion) {
 			const auto inputBounds = BuildVRBoundsInfo(a_inputBounds);
@@ -25114,10 +25279,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 		return false;
 	}
-	const auto& activeContract = perfMode.GetBootSnapshot();
-	const uint32_t activeContractGeneration = activeContract.valid ? activeContract.generation : 0u;
 	const bool submitBoundsMismatch = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
 	if (submitBoundsMismatch) {
+		setPresentationObservation(
+			VRRenderScalePresentationPath::BoundsMismatchOriginalFallback,
+			sourceRegion.width,
+			sourceRegion.height,
+			sourceEyeWidthIn,
+			sourceEyeHeightIn,
+			submitPresentationContext || currentMenuPresentationContext || resolutionPlan.knownMenuContextActive || resolutionPlan.menuContextActive,
+			false);
 		const bool startupOrMenuProtectionContext = IsVRLoadingPresentationContextActive(state);
 		const bool submitBoundsGameplayMismatch =
 			!submitPresentationContext &&
@@ -25477,6 +25648,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		a_outputTexture.eType = vr::TextureType_DirectX;
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
 		menuPresentationSucceeded = menuPresentationAttempt;
+		setPresentationObservation(
+			VRRenderScalePresentationPath::VendorEvaluated,
+			eyeWidthIn,
+			eyeHeightIn,
+			eyeWidthIn,
+			eyeHeightIn,
+			false,
+			false);
 		return true;
 	}
 
@@ -25484,8 +25663,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
 		return false;
 
-	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, const char* path) {
-		(void)path;
+	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, VRRenderScalePresentationPath a_path) {
 		if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut) ||
 			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource) {
 			return false;
@@ -25512,6 +25690,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		a_outputTexture.eType = vr::TextureType_DirectX;
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
 		menuPresentationSucceeded = menuPresentationAttempt;
+		setPresentationObservation(
+			a_path,
+			inputWidth,
+			inputHeight,
+			eyeWidthIn,
+			eyeHeightIn,
+			submitPresentationContext || currentMenuPresentationContext || resolutionPlan.knownMenuContextActive || resolutionPlan.menuContextActive,
+			transitionPresentationCooldown);
 		return true;
 	};
 
@@ -25670,7 +25856,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return presentStretchOutput(
 			presentationInputWidth,
 			presentationInputHeight,
-			"menu-loading-presentation-output");
+			VRRenderScalePresentationPath::PresentationStretch);
 	}
 
 	if (upscaleMethod == UpscaleMethod::kDLSS)
@@ -25910,7 +26096,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			return false;
 
 		if (vrRenderScaleMode &&
-			presentStretchOutput(eyeWidthIn, eyeHeightIn, "vendor-failed-stretch-output")) {
+			presentStretchOutput(eyeWidthIn, eyeHeightIn, VRRenderScalePresentationPath::VendorFailureStretch)) {
 			return true;
 		}
 
@@ -26054,6 +26240,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		a_outputTexture.eType = vr::TextureType_DirectX;
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
 		menuPresentationSucceeded = menuPresentationAttempt;
+		setPresentationObservation(
+			VRRenderScalePresentationPath::VendorEvaluated,
+			eyeWidthIn,
+			eyeHeightIn,
+			eyeWidthIn,
+			eyeHeightIn,
+			false,
+			false);
 		return true;
 	}
 
@@ -26066,6 +26260,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		outputOffsetX = eyeIndex * eyeWidthOut;
 	}
 	if (outputOffsetX + eyeWidthOut > sourceDesc.Width || eyeHeightOut > sourceDesc.Height) {
+		setPresentationObservation(
+			VRRenderScalePresentationPath::BoundsMismatchOriginalFallback,
+			sourceRegion.width,
+			sourceRegion.height,
+			eyeWidthIn,
+			eyeHeightIn,
+			false,
+			false);
 		static bool loggedBadOutputBounds = false;
 		if (!loggedBadOutputBounds) {
 			logger::warn(
@@ -26090,6 +26292,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	a_outputTexture = *a_inputTexture;
 	a_outputTexture.eType = vr::TextureType_DirectX;
 	a_outputBounds = a_inputBounds ? *a_inputBounds : vr::VRTextureBounds_t{ 0.0f, 0.0f, 1.0f, 1.0f };
+	setPresentationObservation(
+		VRRenderScalePresentationPath::VendorEvaluated,
+		eyeWidthIn,
+		eyeHeightIn,
+		eyeWidthIn,
+		eyeHeightIn,
+		false,
+		false);
 	return true;
 }
 
@@ -26547,6 +26757,16 @@ Upscaling::VRRenderScaleStressSessionSnapshot Upscaling::GetVRRenderScaleStressS
 void Upscaling::StartVRRenderScaleStressSession()
 {
 	SampleVRRenderScaleMemory(true, "stress capture start");
+	VRRenderScalePresentationSnapshot presentation{};
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		presentation = vrRenderScaleTransitionController.presentation;
+		vrRenderScaleTransitionController.presentation.maximumConsecutivePresentationStretchFrames = 0;
+		vrRenderScaleTransitionController.presentation.consecutiveBothEyesVendorFrames = 0;
+		for (auto& eye : vrRenderScaleTransitionController.presentation.eyes)
+			eye.consecutiveFrames = 0;
+		++vrRenderScaleTransitionController.revision;
+	}
 	uint64_t sessionID = nextVRRenderScaleStressSessionID.fetch_add(1, std::memory_order_acq_rel);
 	if (sessionID == 0)
 		sessionID = nextVRRenderScaleStressSessionID.fetch_add(1, std::memory_order_acq_rel);
@@ -26557,6 +26777,10 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScaleStressSession.active = true;
 		vrRenderScaleStressSession.sessionID = sessionID;
 		vrRenderScaleStressSession.startFrame = frame;
+		vrRenderScaleStressSession.baselineVendorEvaluatedEyeObservations = presentation.vendorEvaluatedEyeObservations;
+		vrRenderScaleStressSession.baselinePresentationStretchEyeObservations = presentation.presentationStretchEyeObservations;
+		vrRenderScaleStressSession.baselineVendorFailureStretchEyeObservations = presentation.vendorFailureStretchEyeObservations;
+		vrRenderScaleStressSession.baselineBoundsMismatchOriginalFallbackEyeObservations = presentation.boundsMismatchOriginalFallbackEyeObservations;
 	}
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
 	logger::info("[VRRenderScale][Stress] Started deterministic CS-menu capture session {} at frame {}.", sessionID, frame);
@@ -26595,7 +26819,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 6u;
+	constexpr uint32_t kSchemaVersion = 7u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -26612,7 +26836,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 27 }
+		{ "implementationStep", 28 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -26846,6 +27070,25 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "valid", a_eye.valid }
 		};
 	};
+	const auto presentationEyeJson = [](const VRRenderScalePresentationEyeSnapshot& a_eye) {
+		return json{
+			{ "valid", a_eye.valid },
+			{ "path", GetVRRenderScalePresentationPathName(a_eye.path) },
+			{ "frame", a_eye.frame },
+			{ "transitionEpoch", a_eye.transitionEpoch },
+			{ "contractGeneration", a_eye.contractGeneration },
+			{ "method", std::string{ magic_enum::enum_name(a_eye.method) } },
+			{ "inputWidth", a_eye.inputWidth },
+			{ "inputHeight", a_eye.inputHeight },
+			{ "expectedInputWidth", a_eye.expectedInputWidth },
+			{ "expectedInputHeight", a_eye.expectedInputHeight },
+			{ "outputWidth", a_eye.outputWidth },
+			{ "outputHeight", a_eye.outputHeight },
+			{ "consecutiveFrames", a_eye.consecutiveFrames },
+			{ "loadingOrMenuContext", a_eye.loadingOrMenuContext },
+			{ "transitionCooldown", a_eye.transitionCooldown }
+		};
+	};
 	const auto& relatchPlan = controller.relatchPlan;
 	record["controller"] = {
 		{ "state", GetVRRenderScaleTransitionStateName(controller.state) },
@@ -26978,6 +27221,15 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 						  { "consecutiveValidFrames", controller.fidelity.consecutiveValidFrames },
 						  { "lastBothEyesFrame", controller.fidelity.lastBothEyesFrame },
 						  { "eyes", json::array({ fidelityEyeJson(controller.fidelity.eyes[0]), fidelityEyeJson(controller.fidelity.eyes[1]) }) } } },
+		{ "presentation", { { "lastBothEyesVendorFrame", controller.presentation.lastBothEyesVendorFrame },
+							  { "consecutiveBothEyesVendorFrames", controller.presentation.consecutiveBothEyesVendorFrames },
+							  { "lastFallbackFrame", controller.presentation.lastFallbackFrame },
+							  { "maximumConsecutivePresentationStretchFrames", controller.presentation.maximumConsecutivePresentationStretchFrames },
+							  { "vendorEvaluatedEyeObservations", controller.presentation.vendorEvaluatedEyeObservations },
+							  { "presentationStretchEyeObservations", controller.presentation.presentationStretchEyeObservations },
+							  { "vendorFailureStretchEyeObservations", controller.presentation.vendorFailureStretchEyeObservations },
+							  { "boundsMismatchOriginalFallbackEyeObservations", controller.presentation.boundsMismatchOriginalFallbackEyeObservations },
+							  { "eyes", json::array({ presentationEyeJson(controller.presentation.eyes[0]), presentationEyeJson(controller.presentation.eyes[1]) }) } } },
 		{ "dlssLifecycle", lifecycleJson(controller.dlssLifecycle) },
 		{ "fsrLifecycle", lifecycleJson(controller.fsrLifecycle) }
 	};
@@ -27026,6 +27278,63 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			(controller.fidelity.evaluationEyeMask & 0x3u) == 0x3u &&
 			controller.fidelity.bothEyesValid &&
 			controller.fidelity.lastMismatchMask == 0);
+	const auto observationsSinceStart = [](uint64_t a_current, uint64_t a_baseline) {
+		return a_current >= a_baseline ? a_current - a_baseline : a_current;
+	};
+	const uint64_t vendorEvaluatedEyeObservations = observationsSinceStart(
+		controller.presentation.vendorEvaluatedEyeObservations,
+		session.baselineVendorEvaluatedEyeObservations);
+	const uint64_t presentationStretchEyeObservations = observationsSinceStart(
+		controller.presentation.presentationStretchEyeObservations,
+		session.baselinePresentationStretchEyeObservations);
+	const uint64_t vendorFailureStretchEyeObservations = observationsSinceStart(
+		controller.presentation.vendorFailureStretchEyeObservations,
+		session.baselineVendorFailureStretchEyeObservations);
+	const uint64_t boundsMismatchOriginalFallbackEyeObservations = observationsSinceStart(
+		controller.presentation.boundsMismatchOriginalFallbackEyeObservations,
+		session.baselineBoundsMismatchOriginalFallbackEyeObservations);
+	const bool stableVendorPresentation =
+		controller.stable.valid &&
+		IsVendorUpscalingMethod(controller.stable.method);
+	const uint32_t presentationReferenceFrame = session.active ?
+		(globals::state ? std::max(globals::state->frameCount, 1u) : controller.presentation.lastBothEyesVendorFrame) :
+		session.endFrame;
+	constexpr uint32_t kMaximumPresentationAgeFrames = 2u;
+	const auto presentationEyeMatchesStable = [&](const VRRenderScalePresentationEyeSnapshot& a_eye) {
+		return a_eye.valid &&
+		       a_eye.path == VRRenderScalePresentationPath::VendorEvaluated &&
+		       a_eye.frame == controller.presentation.lastBothEyesVendorFrame &&
+		       a_eye.transitionEpoch == controller.stable.transitionEpoch &&
+		       a_eye.contractGeneration == controller.stable.contractGeneration &&
+		       a_eye.method == controller.stable.method &&
+		       a_eye.inputWidth == controller.stable.renderEyeWidth &&
+		       a_eye.inputHeight == controller.stable.renderEyeHeight &&
+		       a_eye.expectedInputWidth == controller.stable.renderEyeWidth &&
+		       a_eye.expectedInputHeight == controller.stable.renderEyeHeight &&
+		       a_eye.outputWidth == controller.stable.displayEyeWidth &&
+		       a_eye.outputHeight == controller.stable.displayEyeHeight;
+	};
+	const bool presentationFresh =
+		controller.presentation.lastBothEyesVendorFrame != 0 &&
+		presentationReferenceFrame >= controller.presentation.lastBothEyesVendorFrame &&
+		presentationReferenceFrame - controller.presentation.lastBothEyesVendorFrame <= kMaximumPresentationAgeFrames;
+	const bool presentationRecovered =
+		!stableVendorPresentation ||
+		(presentationFresh &&
+			presentationEyeMatchesStable(controller.presentation.eyes[0]) &&
+			presentationEyeMatchesStable(controller.presentation.eyes[1]));
+	record["presentationPath"] = {
+		{ "vendorEvaluatedEyeObservations", vendorEvaluatedEyeObservations },
+		{ "presentationStretchEyeObservations", presentationStretchEyeObservations },
+		{ "vendorFailureStretchEyeObservations", vendorFailureStretchEyeObservations },
+		{ "boundsMismatchOriginalFallbackEyeObservations", boundsMismatchOriginalFallbackEyeObservations },
+		{ "maximumConsecutivePresentationStretchFrames", controller.presentation.maximumConsecutivePresentationStretchFrames },
+		{ "stableVendorPresentation", stableVendorPresentation },
+		{ "referenceFrame", presentationReferenceFrame },
+		{ "maximumAgeFrames", kMaximumPresentationAgeFrames },
+		{ "fresh", presentationFresh },
+		{ "recovered", presentationRecovered }
+	};
 	const bool retirementDrained =
 		controller.retirement.pendingSets == 0 &&
 		controller.retirement.nextCleanupFrame == 0 &&
@@ -27172,6 +27481,22 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ { "fastPathFrames", kMaximumStableLatencyFrames },
 			{ "pressureProtectedFrames", kMaximumPressureProtectedStableLatencyFrames } });
 	addGate("fidelity_invariants", fidelityMismatches == 0 && controller.fidelity.mismatchCount == 0 && fidelityValid, { { "metrics", fidelityMismatches }, { "current", controller.fidelity.mismatchCount } }, 0);
+	addGate(
+		"presentation_fallbacks",
+		vendorFailureStretchEyeObservations == 0 && boundsMismatchOriginalFallbackEyeObservations == 0,
+		{ { "vendorFailureStretchEyeObservations", vendorFailureStretchEyeObservations },
+			{ "boundsMismatchOriginalFallbackEyeObservations", boundsMismatchOriginalFallbackEyeObservations },
+			{ "allowedPresentationStretchEyeObservations", presentationStretchEyeObservations } },
+		{ { "vendorFailureStretchEyeObservations", 0 }, { "boundsMismatchOriginalFallbackEyeObservations", 0 } });
+	addGate(
+		"presentation_recovered",
+		presentationRecovered,
+		{ { "stableVendorPresentation", stableVendorPresentation },
+			{ "lastBothEyesVendorFrame", controller.presentation.lastBothEyesVendorFrame },
+			{ "referenceFrame", presentationReferenceFrame },
+			{ "leftPath", GetVRRenderScalePresentationPathName(controller.presentation.eyes[0].path) },
+			{ "rightPath", GetVRRenderScalePresentationPathName(controller.presentation.eyes[1].path) } },
+		{ { "path", "VendorEvaluated" }, { "bothEyes", true }, { "maximumAgeFrames", kMaximumPresentationAgeFrames }, { "stableContract", true } });
 	addGate("retirement_drained", retirementDrained, { { "pendingSets", controller.retirement.pendingSets }, { "nextCleanupFrame", controller.retirement.nextCleanupFrame }, { "fencePending", controller.retirement.fencePending }, { "capacityBlocked", controller.retirement.capacityBlocked } }, 0);
 	addGate("common_target_predrain", memoryPreRecreateDrainFailures == 0, memoryPreRecreateDrainFailures, 0);
 	addGate("memory_trim_failures", memoryTrimFailures == 0, memoryTrimFailures, 0);
@@ -27234,6 +27559,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 						 "QueryVRRenderScaleSystemCommit",
 						 "Upscaling::TryPromoteVRRenderScaleSubmitStageContract",
 						 "Upscaling::RecordVRRenderScaleFidelityObservation",
+						 "Upscaling::RecordVRRenderScalePresentationObservation",
 						 "FidelityFX::AreFSRResourcesCompatible",
 						 "FidelityFX::CreateFSRResources",
 						 "FidelityFX::DestroyFSRResources" } }
@@ -27354,6 +27680,24 @@ const char* Upscaling::GetVRRenderScaleMemoryTrimReasonName(VRRenderScaleMemoryT
 		return "PostLoad";
 	case VRRenderScaleMemoryTrimReason::NativeRestore:
 		return "NativeRestore";
+	default:
+		return "Unknown";
+	}
+}
+
+const char* Upscaling::GetVRRenderScalePresentationPathName(VRRenderScalePresentationPath a_path)
+{
+	switch (a_path) {
+	case VRRenderScalePresentationPath::Unknown:
+		return "Unknown";
+	case VRRenderScalePresentationPath::VendorEvaluated:
+		return "VendorEvaluated";
+	case VRRenderScalePresentationPath::PresentationStretch:
+		return "PresentationStretch";
+	case VRRenderScalePresentationPath::VendorFailureStretch:
+		return "VendorFailureStretch";
+	case VRRenderScalePresentationPath::BoundsMismatchOriginalFallback:
+		return "BoundsMismatchOriginalFallback";
 	default:
 		return "Unknown";
 	}
@@ -27928,12 +28272,14 @@ void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 		const auto dlssLifecycle = vrRenderScaleTransitionController.dlssLifecycle;
 		const auto fsrLifecycle = vrRenderScaleTransitionController.fsrLifecycle;
 		const auto metrics = vrRenderScaleTransitionController.metrics;
+		const auto presentation = vrRenderScaleTransitionController.presentation;
 		vrRenderScaleTransitionController = {};
 		vrRenderScaleTransitionController.revision = revision;
 		vrRenderScaleTransitionController.retirement = retirement;
 		vrRenderScaleTransitionController.dlssLifecycle = dlssLifecycle;
 		vrRenderScaleTransitionController.fsrLifecycle = fsrLifecycle;
 		vrRenderScaleTransitionController.metrics = metrics;
+		vrRenderScaleTransitionController.presentation = presentation;
 	}
 
 	if (ShouldEmitUpscalingDiagLogs() && previousState != VRRenderScaleTransitionState::Idle) {

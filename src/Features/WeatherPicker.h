@@ -35,6 +35,7 @@ public:
 	 * @param open Pointer to the open/close state owned by the caller.
 	 */
 	void RenderWeatherDetailsWindow(bool* open);
+	void ResetWindowLayout();
 
 	/**
 	 * Displays weather info for a given weather record.
@@ -73,6 +74,8 @@ public:
 	static ImVec4 GetWeatherFlagColorByName(const std::string& flagName);
 
 private:
+	bool resetWindowSize = false;
+
 	void DrawShowInOverlayToggle();
 	void DrawTimeControls();
 	void DrawWeatherPickerSection();

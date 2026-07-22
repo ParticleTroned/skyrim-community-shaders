@@ -643,6 +643,8 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu)
 			menu.lastDisplaySize.x, menu.lastDisplaySize.y, currentDisplaySize.x, currentDisplaySize.y);
 		menu.resetLayout = true;
 		EditorWindow::GetSingleton()->resetLayout = true;
+		globals::features::performanceOverlay.ResetWindowLayout();
+		globals::features::weatherPicker.ResetWindowLayout();
 	}
 	menu.lastDisplaySize = currentDisplaySize;
 

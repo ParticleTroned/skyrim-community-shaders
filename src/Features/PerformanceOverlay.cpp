@@ -216,7 +216,7 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::Separator();
 		ImGui::Text("Position:");
 		if (ImGui::Button("Reset Position")) {
-			this->settings.PositionSet = false;
+			ResetWindowPosition();
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Restore Defaults")) {
@@ -279,6 +279,19 @@ void PerformanceOverlay::RestoreDefaultSettings()
 	this->state.maxFrameTime = 0.0f;
 	this->state.smoothedMinFrameTime = 0.0f;
 	this->state.smoothedMaxFrameTime = 50.0f;
+	ResetWindowLayout();
+}
+
+void PerformanceOverlay::ResetWindowLayout()
+{
+	ResetWindowPosition();
+	this->resetWindowSizePending = true;
+}
+
+void PerformanceOverlay::ResetWindowPosition()
+{
+	this->settings.PositionSet = false;
+	this->resetWindowPositionPending = true;
 }
 
 void PerformanceOverlay::DataLoaded()
@@ -341,6 +354,8 @@ void PerformanceOverlay::DrawOverlay()
 
 	const float scale = Util::GetUIScale();
 	const float defaultPad = Settings::kDefaultWindowPadding * scale;
+	const bool resetPosition = this->resetWindowPositionPending;
+	const bool resetSize = this->resetWindowSizePending;
 	if (!this->settings.PositionSet) {
 		this->settings.Position = ImVec2(defaultPad, defaultPad);
 		this->settings.PositionSet = true;
@@ -351,23 +366,32 @@ void PerformanceOverlay::DrawOverlay()
 
 	const float minWindowHeight = Settings::kMinWindowHeight * scale * this->settings.TextSize;
 	ImVec2 sizeGuess = ImVec2(Settings::kDrawCallsTableWidth * scale * this->settings.TextSize, minWindowHeight);
-	if (auto* perfWin = ImGui::FindWindowByName(kOverlayWindowName)) {
-		if (perfWin->Size.x > 0.0f && perfWin->Size.y > 0.0f) {
+	if (!resetSize) {
+		if (auto* perfWin = ImGui::FindWindowByName(kOverlayWindowName);
+			perfWin && perfWin->Size.x > 0.0f && perfWin->Size.y > 0.0f) {
 			sizeGuess = perfWin->Size;
 		}
 	}
 	autoOffsetForShaderCompile = OverlayRenderer::MoveWindowBelowShaderCompilationStatus(targetPosition, sizeGuess, ImVec2(0.0f, 0.0f));
 
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	const ImVec2 unclampedPosition = targetPosition;
+	const float displayRight = displaySize.x - defaultPad;
 	const float displayBottom = displaySize.y - defaultPad;
+	const float maxLeft = std::max(defaultPad, displayRight - std::max(1.0f, sizeGuess.x));
+	targetPosition.x = std::clamp(targetPosition.x, defaultPad, maxLeft);
 	if (!autoOffsetForShaderCompile) {
 		const float maxTop = std::max(defaultPad, displayBottom - minWindowHeight);
 		targetPosition.y = std::clamp(targetPosition.y, defaultPad, maxTop);
 	} else {
 		targetPosition.y = std::clamp(targetPosition.y, defaultPad, std::max(defaultPad, displayBottom - 1.0f));
 	}
+	const bool positionClamped = targetPosition.x != unclampedPosition.x || targetPosition.y != unclampedPosition.y;
+	const bool restoreAfterShaderCompile = !autoOffsetForShaderCompile && this->autoOffsetForShaderCompileLastFrame;
 
-	ImGui::SetNextWindowPos(targetPosition, autoOffsetForShaderCompile ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowPos(
+		targetPosition,
+		resetPosition || autoOffsetForShaderCompile || restoreAfterShaderCompile || positionClamped ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
 
 	// Calculate a default/minimum size so the bottom VRAM row is not clipped on first open.
 	float minWidth = 0.0f;
@@ -388,16 +412,20 @@ void PerformanceOverlay::DrawOverlay()
 	}
 	minWidth += Settings::kWindowBorderPadding * scale;
 
+	const float availableWindowWidth = std::max(1.0f, displaySize.x - defaultPad - targetPosition.x);
 	const float availableWindowHeight = std::max(1.0f, displayBottom - targetPosition.y);
-	const float targetWindowWidth = std::max(minWidth, sizeGuess.x);
-	ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth, availableWindowHeight), ImVec2(FLT_MAX, availableWindowHeight));
+	const float boundedMinWidth = std::min(minWidth, availableWindowWidth);
+	const float targetWindowWidth = std::min(std::max(boundedMinWidth, sizeGuess.x), availableWindowWidth);
+	ImGui::SetNextWindowSizeConstraints(
+		ImVec2(boundedMinWidth, availableWindowHeight),
+		ImVec2(availableWindowWidth, availableWindowHeight));
 	ImGui::SetNextWindowSize(ImVec2(targetWindowWidth, availableWindowHeight), ImGuiCond_Always);
 
 	// Create the window
 	ImGui::Begin(kOverlayWindowName, NULL, windowFlags);
 
 	// Remember window position for next frame
-	if (ImGui::IsWindowAppearing()) {
+	if (resetPosition || restoreAfterShaderCompile || ImGui::IsWindowAppearing()) {
 		ImGui::SetWindowPos(targetPosition, ImGuiCond_Always);
 	}
 
@@ -448,6 +476,9 @@ void PerformanceOverlay::DrawOverlay()
 	DrawABTestSection(allRows);
 
 	ImGui::End();
+	this->resetWindowPositionPending = false;
+	this->resetWindowSizePending = false;
+	this->autoOffsetForShaderCompileLastFrame = autoOffsetForShaderCompile;
 	ImGui::PopStyleVar();    // WindowBorderSize
 	ImGui::PopStyleColor();  // WindowBg
 }

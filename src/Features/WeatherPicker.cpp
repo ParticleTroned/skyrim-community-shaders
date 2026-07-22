@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "Menu.h"
+#include "Menu/ThemeManager.h"
 #include "Util.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -197,6 +198,12 @@ void WeatherPicker::DrawWeatherStatusPanel()
 // Weather Picker functionality
 // ================================================================================
 
+void WeatherPicker::ResetWindowLayout()
+{
+	WeatherDetailsWindow.PositionSet = false;
+	resetWindowSize = true;
+}
+
 void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 {
 	if (!open || !*open)
@@ -206,39 +213,55 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 	if (!player || !player->parentCell)
 		return;
 
-	const bool showInteractiveElements =
+	const bool allowInputs =
 		Menu::GetSingleton()->ShouldSwallowInput() ||
 		(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME));
 
 	// Set initial position if not already set
 	const float scale = Util::GetUIScale();
+	const auto* viewport = ImGui::GetMainViewport();
+	const float padding = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
 	if (!WeatherDetailsWindow.PositionSet) {
-		const float pos = 50.0f * scale;
-		ImGui::SetNextWindowPos(ImVec2(pos, pos));
-		WeatherDetailsWindow.Position = ImVec2(pos, pos);
+		const ImVec2 defaultPosition(
+			viewport->WorkPos.x + viewport->WorkSize.x - padding,
+			viewport->WorkPos.y + padding);
+		ImGui::SetNextWindowPos(defaultPosition, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+		WeatherDetailsWindow.Position = defaultPosition;
 		WeatherDetailsWindow.PositionSet = true;
 	} else {
 		ImGui::SetNextWindowPos(WeatherDetailsWindow.Position, ImGuiCond_FirstUseEver);
 	}
 
-	ImGui::SetNextWindowSize(ImVec2(600 * scale, 800 * scale), ImGuiCond_FirstUseEver);
-	if (Util::BeginWithRoundedClose("Weather Details##Popup", open, ImGuiWindowFlags_None)) {
-		// Remember window position for next frame
-		ImVec2 currentPos = ImGui::GetWindowPos();
-		if (currentPos.x != WeatherDetailsWindow.Position.x || currentPos.y != WeatherDetailsWindow.Position.y) {
-			WeatherDetailsWindow.Position = currentPos;
-		}
+	const ImVec2 availableSize(
+		std::max(1.0f, viewport->WorkSize.x - padding * 2.0f),
+		std::max(1.0f, viewport->WorkSize.y - padding * 2.0f));
+	const ImVec2 defaultSize(
+		std::min(600.0f * scale, availableSize.x),
+		std::min(800.0f * scale, availableSize.y));
+	ImGui::SetNextWindowSize(
+		defaultSize,
+		resetWindowSize ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+	const ImGuiWindowFlags windowFlags = allowInputs ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs;
+	const bool visible = Util::BeginWithRoundedClose("Weather Details##Popup", open, windowFlags);
+	// Store the resolved top-left even when the window is collapsed. The initial
+	// placement uses a right-edge pivot, while persisted positions do not.
+	const ImVec2 currentPos = ImGui::GetWindowPos();
+	if (currentPos.x != WeatherDetailsWindow.Position.x || currentPos.y != WeatherDetailsWindow.Position.y) {
+		WeatherDetailsWindow.Position = currentPos;
+	}
 
+	if (visible) {
 		// Controls change the page height substantially, so keep interactive and
 		// read-only scroll positions independent.
-		const char* contentId = showInteractiveElements ? "##InteractiveWeatherDetails" : "##ReadOnlyWeatherDetails";
+		const char* contentId = allowInputs ? "##InteractiveWeatherDetails" : "##ReadOnlyWeatherDetails";
 		if (ImGui::BeginChild(contentId, { 0, 0 })) {
-			RenderCoreWeatherDetails(showInteractiveElements);
+			RenderCoreWeatherDetails(allowInputs);
 			RenderFeatureWeatherAnalysis();
 		}
 		ImGui::EndChild();
 	}
 	ImGui::End();
+	resetWindowSize = false;
 }
 
 ImVec4 WeatherPicker::GetWeatherTypeColor(RE::TESWeather* weather)

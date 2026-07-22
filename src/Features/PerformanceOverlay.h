@@ -142,6 +142,7 @@ struct PerformanceOverlay : OverlayFeature
 	void SaveSettings(json& j) override;
 	void LoadSettings(json& j) override;
 	void RestoreDefaultSettings() override;
+	void ResetWindowLayout();
 
 	// ============================================================================
 	// CORE PERFORMANCE DISPLAY FUNCTIONS
@@ -314,6 +315,10 @@ private:
 	// A/B testing settings diff data
 	std::vector<SettingsDiffEntry> settingsDiff;
 	bool settingsDiffLoaded = false;
+	bool resetWindowPositionPending = false;
+	bool resetWindowSizePending = false;
+	bool autoOffsetForShaderCompileLastFrame = false;
+	void ResetWindowPosition();
 
 	// Test data management
 	void CaptureTestData();

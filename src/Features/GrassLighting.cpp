@@ -229,10 +229,7 @@ void GrassLighting::DrawPerformanceSettings(bool)
 
 json GrassLighting::CapturePerformanceSettingsState() const
 {
-	return {
-		{ "Enabled", settings.Enabled },
-		{ "ComplexGrassThreshold", settings.ComplexGrassThreshold }
-	};
+	return settings;
 }
 
 void GrassLighting::LoadSettings(json& o_json)

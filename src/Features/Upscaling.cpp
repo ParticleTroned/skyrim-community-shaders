@@ -3588,7 +3588,7 @@ namespace
 	{
 		auto state = globals::state;
 		auto ui = globals::game::ui;
-		return g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed) ||
+		return g_vrLoadingMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       (state && state->isLoadingMenuOpen) ||
 		       (ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 	}
@@ -4229,7 +4229,7 @@ namespace
 		// relatch or target resize is involved.
 		const bool directMenuActive =
 			(a_state && a_state->IsMainOrLoadingMenuOpen()) ||
-			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed);
+			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_acquire);
 		return directMenuActive || IsVRLoadingPresentationTailActive(a_state);
 	}
 
@@ -4886,7 +4886,7 @@ namespace
 		if (state && state->isMainMenuOpen)
 			mask |= kVRMenuPresentationTraceMainBit;
 		if ((state && state->isLoadingMenuOpen) ||
-			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed)) {
+			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_acquire)) {
 			mask |= kVRMenuPresentationTraceLoadingBit;
 		}
 		if (g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire))
@@ -5573,7 +5573,7 @@ namespace
 			g_vrMenuPresentationTraceMenuMask.load(std::memory_order_acquire),
 			state && state->isMainMenuOpen,
 			(state && state->isLoadingMenuOpen) ||
-				g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed),
+				g_vrLoadingMenuOpenFromEvent.load(std::memory_order_acquire),
 			(state && state->isMapMenuOpen) ||
 				g_vrMapMenuOpenFromEvent.load(std::memory_order_relaxed),
 			g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_relaxed),
@@ -14017,7 +14017,7 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		g_vrDialogueMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
-		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_relaxed);
+		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 		if (a_event->opening) {
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
 			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
@@ -14075,7 +14075,7 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 	}
 
 	const bool raceSexMenuOpen = ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME);
-	g_vrLoadingMenuOpenFromEvent.store(ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME), std::memory_order_relaxed);
+	g_vrLoadingMenuOpenFromEvent.store(ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME), std::memory_order_release);
 	g_vrMapMenuOpenFromEvent.store(ui->IsMenuOpen(RE::MapMenu::MENU_NAME), std::memory_order_release);
 	g_vrStatsMenuOpenFromEvent.store(ui->IsMenuOpen("StatsMenu"), std::memory_order_release);
 	g_vrDialogueMenuOpenFromEvent.store(ui->IsMenuOpen("Dialogue Menu"), std::memory_order_release);
@@ -29949,6 +29949,24 @@ void Upscaling::Upscale()
 	if (!state || !context || !renderer || !deferred)
 		return;
 
+	EnsureRuntimeResolutionStateCurrent();
+	const bool vrRenderScaleSubmitStageOwnsOutput =
+		globals::game::isVR &&
+		runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode &&
+		runtimeResolutionPlan.outputTarget == UpscalingOutputTarget::SubmitStageIntermediate;
+	if (vrRenderScaleSubmitStageOwnsOutput) {
+		// Render-scale mode owns a reduced kMAIN and resolves only at OpenVR submit.
+		// Never let a transient runtime gate (LoadingMenu deliberately makes
+		// IsPerfModeActive false) route vendor work through the main-target path:
+		// its full-sized output cannot be finalized into the reduced engine target.
+		static std::atomic_bool loggedSubmitStageOwnershipGuard{ false };
+		if (!loggedSubmitStageOwnershipGuard.exchange(true, std::memory_order_relaxed)) {
+			logger::warn(
+				"[VRRenderScale] Blocked main-pass vendor dispatch because the active resolution plan is submit-stage-owned.");
+		}
+		return;
+	}
+
 	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSHistoryReset.exchange(false, std::memory_order_relaxed)) {
 		logger::debug("[Upscaling] Resetting DLSS history after VR option/load transition");
 		RequestHistoryReset();
@@ -30709,18 +30727,22 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	}
 
 	const bool vendorMethodSelected = IsVendorUpscalingMethod(upscaleMethod);
-	const bool loadingTransitionTailActive =
+	const bool loadingPresentationContextActive =
 		globals::game::isVR &&
-		IsVRLoadingPresentationTailActive(globals::state);
+		IsVRLoadingPresentationContextActive(globals::state);
 	const bool vrRenderScaleVisuallyActive = upscaling.IsVRRenderScaleModeLatched();
 	const bool renderScalePresentationProtection =
 		globals::game::isVR &&
 		IsVRTransitionPresentationProtectionActive(upscaling, globals::state);
+	// LoadingMenu opening intentionally suspends IsPerfModeActive. Treat both the
+	// open menu and its post-close tail as presentation-only before evaluating the
+	// generic vendor fallback; otherwise render-scale can dispatch a full-sized
+	// DLSS/FSR output through its reduced kMAIN during the first loading frame.
 	const bool menuPresentationContext =
 		vendorMethodSelected &&
 		globals::game::isVR &&
 		(vrRenderScaleVisuallyActive || renderScalePresentationProtection) &&
-		loadingTransitionTailActive;
+		loadingPresentationContextActive;
 	const bool vendorDynamicResolutionActive =
 		vendorMethodSelected &&
 		upscaling.IsUpscalingActive() &&
@@ -30751,7 +30773,12 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	}
 
 	if (menuPresentationContext && !presentationUpscalingActive) {
-		if (upscaling.IsPerfModeActive())
+		// The submit hook supplies a full-size stretch target while the existing
+		// direct-layer transaction keeps recognized LoadingMenu text at final HMD
+		// resolution and retains the complete framebuffer as its safe fallback.
+		// IsPerfModeActive is false by design here, so key installation to the
+		// latched render-scale contract as well.
+		if (vrRenderScaleVisuallyActive || upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();
 
 		if (upscaling.ShouldUseFrameGenerationThisFrame())

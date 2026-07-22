@@ -11,7 +11,7 @@ The VR render-scale controller can capture a bounded CS-menu stress session and 
 5. Wait for the final change to reach a stable in-world presentation, then select **Stop Capture**.
 6. Read the new record from `Data/SKSE/Plugins/CommunityShaders/Diagnostics/VRRenderScale/`.
 
-Use identical save, location, CS profile, change order, dwell frames, HMD resolution, backend, and graphics settings when comparing iterations. Run DLSS and FSR as separate backend-specific scenario series, then use a fixed-profile alternating series for backend-handoff residency.
+Use identical save, location, CS profile, change order, dwell frames, HMD resolution, backend, and graphics settings when comparing iterations. Prioritize the production workload in this order: repeated same-backend resolution changes (for example Hoshipa/Quality), DLSS/DLAA and FSR/Native-AA activation changes, then a fixed-profile DLSS/FSR alternating series as a lower-priority backend-handoff stress oracle. Run each matrix as a separate capture so exact-profile memory grouping remains attributable.
 
 ## DevBench automation
 
@@ -48,6 +48,12 @@ fast-travel leg through devbench's own console tool when that scenario requires
 it. Stop capture only after the final recovery settles, then reject the run if
 any returned acceptance gate fails. The record includes the build's git
 description so artifacts remain attributable to the exact candidate source.
+
+For a memory-qualification capture, apply each of the two exact profiles at
+least three times (six alternating transitions total). A shorter diagnostic
+capture may satisfy the generic acceptance object while
+`memoryTrend.evaluated` remains false; automation must not treat that as memory
+acceptance.
 
 Performance builds keep `kEnableVRMenuPresentationTraceDiagnostics` false.
 Changing it to true creates a dedicated forensic build with high-frequency D3D
@@ -106,6 +112,10 @@ expose `reuseRenderTargets`, `reuseStableRenderTargets`,
 `renderTargetDimensionsMatch`, `stableContractEvidenceMatches`,
 `vendorDimensionsUnchanged`, and `reuseSharedSubmitResources` so automation can
 distinguish strict reuse, stable-layout reuse, and shared-resource retention.
+The record also reports named render-target missing/mismatch masks, named stable
+contract evidence blockers, and the observed `stateScreenWidth/Height`. These
+are diagnostic facts only: they do not relax dimension-changing, recovery,
+pressure, retirement, or device-loss behavior.
 
 Schema v3 also groups completed transition peaks by exact backend profile
 (method, backend, quality, preset, and dimensions). Once one profile has three
@@ -114,10 +124,11 @@ rejects growth above 256 MiB. The first two samples establish cold and warm
 residency, while exact-profile grouping prevents quality or resolution changes
 from being classified as leaks.
 
-To evaluate this gate, complete at least three transitions to the same DLSS
-profile and three to the same FSR profile in alternating order. A one-time rise
-while both backends become warm is expected; the final same-profile delta must
-plateau within the bound.
+To evaluate this gate, complete at least three transitions to each of two exact
+profiles in alternating order. Prefer two resolutions on one backend or native
+AA versus an enabled profile; use DLSS versus FSR only for the backend-handoff
+stress series. A one-time rise while the profiles become warm is expected; the
+final same-profile delta must plateau within the bound.
 
 ## MCP contract
 
@@ -125,10 +136,11 @@ Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVers
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
-3. Use `acceptance.gates` to classify a failed run instead of inferring failure from log text.
-4. Compare transition records by `transitionEpoch`, never by array position alone.
-5. Prefer lower stable latency and fewer retries only after correctness, fidelity, OOM, device-loss, retirement, memory-recovery, and backend-readiness gates pass.
-6. Retain the complete JSON artifact with the candidate commit and scenario identifier.
+3. Require `memoryTrend.evaluated` for a memory comparison; a short diagnostic pass is not memory acceptance.
+4. Use `acceptance.gates` to classify a failed run instead of inferring failure from log text.
+5. Compare transition records by `transitionEpoch`, never by array position alone.
+6. Prefer lower stable latency and fewer retries only after correctness, fidelity, OOM, device-loss, retirement, memory-recovery, and backend-readiness gates pass.
+7. Retain the complete JSON artifact with the candidate commit and scenario identifier.
 
 The event ring retains 128 entries and the transition metrics ring retains 16 transitions. A capture-overflow gate fails if the event ring overwrites data, and a metrics-coverage gate fails if any captured request epoch has rotated out of the metrics ring. Keep each iteration within both bounds. Retry and failure events retain their normalized kind so pressure, retirement, backend, OOM, and device-loss evidence remains classifiable.
 

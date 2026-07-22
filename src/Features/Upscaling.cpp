@@ -1098,6 +1098,104 @@ namespace
 		RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_2,
 	};
 
+	constexpr std::size_t kVRRenderScaleDepthMainProbeIndex = kVRRenderScaleEngineSizedTargets.size();
+	constexpr std::size_t kVRRenderScaleDepthCopyProbeIndex = kVRRenderScaleDepthMainProbeIndex + 1u;
+	constexpr std::size_t kVRRenderScaleUnderwaterProbeIndex = kVRRenderScaleDepthCopyProbeIndex + 1u;
+	constexpr std::size_t kVRRenderScaleDisplayProbeIndex = kVRRenderScaleUnderwaterProbeIndex + 1u;
+	static_assert(kVRRenderScaleDisplayProbeIndex + kVRRenderScaleDisplaySizedTargets.size() <= 64u);
+
+	struct VRRenderScaleRenderTargetDimensionProbe
+	{
+		uint64_t missingMask = 0;
+		uint64_t requiredMissingMask = 0;
+		uint64_t dimensionMismatchMask = 0;
+
+		bool Matches() const
+		{
+			return requiredMissingMask == 0 && dimensionMismatchMask == 0;
+		}
+	};
+
+	enum class VRRenderScaleStableEvidenceBlocker : uint64_t
+	{
+		VendorDimensionsChanged = 1ull << 0u,
+		BootGenerationMissing = 1ull << 1u,
+		StableProfileInvalid = 1ull << 2u,
+		StableProfileInactive = 1ull << 3u,
+		ProfileGenerationMismatch = 1ull << 4u,
+		ProfileMethodMismatch = 1ull << 5u,
+		ProfileDimensionsMismatch = 1ull << 6u,
+		FidelityInactive = 1ull << 7u,
+		BothEyesInvalid = 1ull << 8u,
+		FidelityEpochMismatch = 1ull << 9u,
+		FidelityGenerationMismatch = 1ull << 10u,
+		FidelityMethodMismatch = 1ull << 11u,
+		FidelityDimensionsMismatch = 1ull << 12u,
+		FidelityMismatchRecorded = 1ull << 13u,
+		FidelityEyesMismatch = 1ull << 14u,
+		RetirementPending = 1ull << 15u,
+		RetirementFencePending = 1ull << 16u,
+		RetirementCapacityBlocked = 1ull << 17u,
+		PostLoadRecoveryActive = 1ull << 18u,
+		StateScreenDimensionsMismatch = 1ull << 19u,
+	};
+
+	constexpr uint64_t ToMask(VRRenderScaleStableEvidenceBlocker a_blocker)
+	{
+		return static_cast<uint64_t>(a_blocker);
+	}
+
+	std::vector<std::string> GetVRRenderScaleRenderTargetProbeNames(uint64_t a_mask)
+	{
+		std::vector<std::string> names;
+		for (std::size_t index = 0; index < kVRRenderScaleEngineSizedTargets.size(); ++index) {
+			if ((a_mask & (1ull << index)) != 0)
+				names.emplace_back(magic_enum::enum_name(kVRRenderScaleEngineSizedTargets[index]));
+		}
+		if ((a_mask & (1ull << kVRRenderScaleDepthMainProbeIndex)) != 0)
+			names.emplace_back("DEPTH_MAIN");
+		if ((a_mask & (1ull << kVRRenderScaleDepthCopyProbeIndex)) != 0)
+			names.emplace_back("DEPTH_MAIN_COPY");
+		if ((a_mask & (1ull << kVRRenderScaleUnderwaterProbeIndex)) != 0)
+			names.emplace_back("UNDERWATER_MASK");
+		for (std::size_t index = 0; index < kVRRenderScaleDisplaySizedTargets.size(); ++index) {
+			const std::size_t probeIndex = kVRRenderScaleDisplayProbeIndex + index;
+			if ((a_mask & (1ull << probeIndex)) != 0)
+				names.emplace_back(magic_enum::enum_name(kVRRenderScaleDisplaySizedTargets[index]));
+		}
+		return names;
+	}
+
+	std::vector<std::string> GetVRRenderScaleStableEvidenceBlockerNames(uint64_t a_mask)
+	{
+		std::vector<std::string> names;
+		auto add = [&](VRRenderScaleStableEvidenceBlocker a_blocker, const char* a_name) {
+			if ((a_mask & ToMask(a_blocker)) != 0)
+				names.emplace_back(a_name);
+		};
+		add(VRRenderScaleStableEvidenceBlocker::VendorDimensionsChanged, "vendor_dimensions_changed");
+		add(VRRenderScaleStableEvidenceBlocker::BootGenerationMissing, "boot_generation_missing");
+		add(VRRenderScaleStableEvidenceBlocker::StableProfileInvalid, "stable_profile_invalid");
+		add(VRRenderScaleStableEvidenceBlocker::StableProfileInactive, "stable_profile_inactive");
+		add(VRRenderScaleStableEvidenceBlocker::ProfileGenerationMismatch, "profile_generation_mismatch");
+		add(VRRenderScaleStableEvidenceBlocker::ProfileMethodMismatch, "profile_method_mismatch");
+		add(VRRenderScaleStableEvidenceBlocker::ProfileDimensionsMismatch, "profile_dimensions_mismatch");
+		add(VRRenderScaleStableEvidenceBlocker::FidelityInactive, "fidelity_inactive");
+		add(VRRenderScaleStableEvidenceBlocker::BothEyesInvalid, "both_eyes_invalid");
+		add(VRRenderScaleStableEvidenceBlocker::FidelityEpochMismatch, "fidelity_epoch_mismatch");
+		add(VRRenderScaleStableEvidenceBlocker::FidelityGenerationMismatch, "fidelity_generation_mismatch");
+		add(VRRenderScaleStableEvidenceBlocker::FidelityMethodMismatch, "fidelity_method_mismatch");
+		add(VRRenderScaleStableEvidenceBlocker::FidelityDimensionsMismatch, "fidelity_dimensions_mismatch");
+		add(VRRenderScaleStableEvidenceBlocker::FidelityMismatchRecorded, "fidelity_mismatch_recorded");
+		add(VRRenderScaleStableEvidenceBlocker::FidelityEyesMismatch, "fidelity_eyes_mismatch");
+		add(VRRenderScaleStableEvidenceBlocker::RetirementPending, "retirement_pending");
+		add(VRRenderScaleStableEvidenceBlocker::RetirementFencePending, "retirement_fence_pending");
+		add(VRRenderScaleStableEvidenceBlocker::RetirementCapacityBlocked, "retirement_capacity_blocked");
+		add(VRRenderScaleStableEvidenceBlocker::PostLoadRecoveryActive, "post_load_recovery_active");
+		add(VRRenderScaleStableEvidenceBlocker::StateScreenDimensionsMismatch, "state_screen_dimensions_mismatch");
+		return names;
+	}
+
 	bool IsSubmittedVRPresentationTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
 		return std::find(
@@ -1618,6 +1716,89 @@ namespace
 	bool DoVRRenderScaleRenderTargetDimensionsMatch(float2 a_engineSize, float2 a_displaySize)
 	{
 		return AreVRRenderScaleRenderTargetsCompatibleForDimensions(a_engineSize, a_displaySize, false);
+	}
+
+	VRRenderScaleRenderTargetDimensionProbe ProbeVRRenderScaleRenderTargetDimensions(
+		float2 a_engineSize,
+		float2 a_displaySize)
+	{
+		VRRenderScaleRenderTargetDimensionProbe probe{};
+		auto renderer = globals::game::renderer;
+		if (!globals::game::isVR || !renderer ||
+			a_engineSize.x <= 0.0f || a_engineSize.y <= 0.0f ||
+			a_displaySize.x <= 0.0f || a_displaySize.y <= 0.0f) {
+			probe.requiredMissingMask = std::numeric_limits<uint64_t>::max();
+			return probe;
+		}
+
+		auto probeTexture = [&](ID3D11Texture2D* a_texture, uint32_t a_width, uint32_t a_height, std::size_t a_index, bool a_required) {
+			const uint64_t bit = 1ull << a_index;
+			if (!a_texture) {
+				probe.missingMask |= bit;
+				if (a_required)
+					probe.requiredMissingMask |= bit;
+				return;
+			}
+
+			if (!RenderTargetTextureSizeMatches(a_texture, a_width, a_height))
+				probe.dimensionMismatchMask |= bit;
+		};
+		auto probeRenderTarget = [&](RE::RENDER_TARGETS::RENDER_TARGET a_target, uint32_t a_width, uint32_t a_height, std::size_t a_index, bool a_required) {
+			const auto& renderTarget = renderer->GetRuntimeData().renderTargets[a_target];
+			if (!renderTarget.texture) {
+				probeTexture(nullptr, a_width, a_height, a_index, a_required);
+				return;
+			}
+			probeTexture(renderTarget.texture, a_width, a_height, a_index, a_required);
+			if (renderTarget.textureCopy)
+				probeTexture(renderTarget.textureCopy, a_width, a_height, a_index, false);
+		};
+
+		const uint32_t engineWidth = ClampPositiveDimension(a_engineSize.x);
+		const uint32_t engineHeight = ClampPositiveDimension(a_engineSize.y);
+		for (std::size_t index = 0; index < kVRRenderScaleEngineSizedTargets.size(); ++index) {
+			const auto target = kVRRenderScaleEngineSizedTargets[index];
+			probeRenderTarget(
+				target,
+				engineWidth,
+				engineHeight,
+				index,
+				IsVRRenderScaleAlwaysResidentEngineTarget(target));
+		}
+
+		const auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
+		probeTexture(
+			depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture,
+			engineWidth,
+			engineHeight,
+			kVRRenderScaleDepthMainProbeIndex,
+			true);
+		probeTexture(
+			depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY].texture,
+			engineWidth,
+			engineHeight,
+			kVRRenderScaleDepthCopyProbeIndex,
+			true);
+
+		probeRenderTarget(
+			RE::RENDER_TARGETS::kUNDERWATER_MASK,
+			ClampPositiveDimension(a_engineSize.x * 0.5f),
+			engineHeight,
+			kVRRenderScaleUnderwaterProbeIndex,
+			false);
+
+		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
+		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
+		for (std::size_t index = 0; index < kVRRenderScaleDisplaySizedTargets.size(); ++index) {
+			probeRenderTarget(
+				kVRRenderScaleDisplaySizedTargets[index],
+				displayWidth,
+				displayHeight,
+				kVRRenderScaleDisplayProbeIndex + index,
+				false);
+		}
+
+		return probe;
 	}
 
 	void CopyResourceIfNonAliased(ID3D11DeviceContext* a_context, ID3D11Resource* a_dst, ID3D11Resource* a_src)
@@ -15520,11 +15701,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			AreVRRenderScaleRenderTargetsSizedForDimensions(
 				relatchTargetRenderScaleActive ? plannedRelatchEngineSize : plannedRelatchDisplaySize,
 				plannedRelatchDisplaySize);
+		const auto plannedRelatchTargetDimensionProbe =
+			plannedRelatchSizeKnown ?
+				ProbeVRRenderScaleRenderTargetDimensions(
+					relatchTargetRenderScaleActive ? plannedRelatchEngineSize : plannedRelatchDisplaySize,
+					plannedRelatchDisplaySize) :
+				VRRenderScaleRenderTargetDimensionProbe{};
 		const bool plannedRelatchTargetDimensionsMatch =
 			plannedRelatchSizeKnown &&
-			DoVRRenderScaleRenderTargetDimensionsMatch(
-				relatchTargetRenderScaleActive ? plannedRelatchEngineSize : plannedRelatchDisplaySize,
-				plannedRelatchDisplaySize);
+			plannedRelatchTargetDimensionProbe.Matches();
 		const bool relatchVendorDimensionsUnchanged =
 			plannedRelatchSizeKnown &&
 			previousBootSnapshot.valid &&
@@ -15533,49 +15718,69 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			previousBootSnapshot.renderEyeWidth == relatchTargetRenderEyeWidth &&
 			previousBootSnapshot.renderEyeHeight == relatchTargetRenderEyeHeight;
 		const auto controllerForPhysicalReuse = GetVRRenderScaleTransitionSnapshot();
-		const auto& stablePhysicalProfile = controllerForPhysicalReuse.stable;
-		const auto& stablePhysicalFidelity = controllerForPhysicalReuse.fidelity;
-		const bool stablePhysicalEyesMatch =
-			std::all_of(
-				stablePhysicalFidelity.eyes.begin(),
-				stablePhysicalFidelity.eyes.end(),
-				[&](const VRRenderScaleFidelityEyeSnapshot& a_eye) {
-					return a_eye.evaluated &&
-					       a_eye.valid &&
-					       a_eye.generation == stablePhysicalProfile.contractGeneration &&
-					       a_eye.inputWidth == relatchTargetRenderEyeWidth &&
-					       a_eye.inputHeight == relatchTargetRenderEyeHeight &&
-					       a_eye.outputWidth == perfMode.trueHMDEyeWidth &&
-					       a_eye.outputHeight == perfMode.trueHMDEyeHeight;
-				});
-		const bool stablePhysicalContractEvidenceMatches =
-			relatchVendorDimensionsUnchanged &&
-			previousBootSnapshot.generation != 0 &&
-			stablePhysicalProfile.valid &&
-			stablePhysicalProfile.active &&
-			stablePhysicalProfile.contractGeneration == previousBootSnapshot.generation &&
-			stablePhysicalProfile.method == previousBootSnapshot.method &&
-			stablePhysicalProfile.renderEyeWidth == relatchTargetRenderEyeWidth &&
-			stablePhysicalProfile.renderEyeHeight == relatchTargetRenderEyeHeight &&
-			stablePhysicalProfile.displayEyeWidth == perfMode.trueHMDEyeWidth &&
-			stablePhysicalProfile.displayEyeHeight == perfMode.trueHMDEyeHeight &&
-			stablePhysicalFidelity.active &&
-			stablePhysicalFidelity.bothEyesValid &&
-			stablePhysicalFidelity.transitionEpoch == stablePhysicalProfile.transitionEpoch &&
-			stablePhysicalFidelity.contractGeneration == stablePhysicalProfile.contractGeneration &&
-			stablePhysicalFidelity.method == stablePhysicalProfile.method &&
-			stablePhysicalFidelity.expectedInputWidth == relatchTargetRenderEyeWidth &&
-			stablePhysicalFidelity.expectedInputHeight == relatchTargetRenderEyeHeight &&
-			stablePhysicalFidelity.expectedOutputWidth == perfMode.trueHMDEyeWidth &&
-			stablePhysicalFidelity.expectedOutputHeight == perfMode.trueHMDEyeHeight &&
-			stablePhysicalFidelity.lastMismatchMask == static_cast<uint32_t>(VRRenderScaleFidelityMismatch::None) &&
-			stablePhysicalEyesMatch &&
-			controllerForPhysicalReuse.retirement.pendingSets == 0 &&
-			!controllerForPhysicalReuse.retirement.fencePending &&
-			!controllerForPhysicalReuse.retirement.capacityBlocked &&
-			!controllerForPhysicalReuse.postLoadRecovery.active &&
+		const bool stateScreenDimensionsMatch =
 			ClampPositiveDimension(state->screenSize.x) == ClampPositiveDimension(plannedRelatchEngineSize.x) &&
 			ClampPositiveDimension(state->screenSize.y) == ClampPositiveDimension(plannedRelatchEngineSize.y);
+		auto getStablePhysicalContractEvidenceBlockers = [&](const VRRenderScaleTransitionSnapshot& a_controller) {
+			uint64_t blockers = 0;
+			auto blockIf = [&](bool a_condition, VRRenderScaleStableEvidenceBlocker a_blocker) {
+				if (a_condition)
+					blockers |= ToMask(a_blocker);
+			};
+
+			const auto& stableProfile = a_controller.stable;
+			const auto& fidelity = a_controller.fidelity;
+			const bool stableEyesMatch =
+				std::all_of(
+					fidelity.eyes.begin(),
+					fidelity.eyes.end(),
+					[&](const VRRenderScaleFidelityEyeSnapshot& a_eye) {
+						return a_eye.evaluated &&
+						       a_eye.valid &&
+						       a_eye.generation == stableProfile.contractGeneration &&
+						       a_eye.inputWidth == relatchTargetRenderEyeWidth &&
+						       a_eye.inputHeight == relatchTargetRenderEyeHeight &&
+						       a_eye.outputWidth == perfMode.trueHMDEyeWidth &&
+						       a_eye.outputHeight == perfMode.trueHMDEyeHeight;
+					});
+
+			blockIf(!relatchVendorDimensionsUnchanged, VRRenderScaleStableEvidenceBlocker::VendorDimensionsChanged);
+			blockIf(previousBootSnapshot.generation == 0, VRRenderScaleStableEvidenceBlocker::BootGenerationMissing);
+			blockIf(!stableProfile.valid, VRRenderScaleStableEvidenceBlocker::StableProfileInvalid);
+			blockIf(!stableProfile.active, VRRenderScaleStableEvidenceBlocker::StableProfileInactive);
+			blockIf(stableProfile.contractGeneration != previousBootSnapshot.generation, VRRenderScaleStableEvidenceBlocker::ProfileGenerationMismatch);
+			blockIf(stableProfile.method != previousBootSnapshot.method, VRRenderScaleStableEvidenceBlocker::ProfileMethodMismatch);
+			blockIf(
+				stableProfile.renderEyeWidth != relatchTargetRenderEyeWidth ||
+					stableProfile.renderEyeHeight != relatchTargetRenderEyeHeight ||
+					stableProfile.displayEyeWidth != perfMode.trueHMDEyeWidth ||
+					stableProfile.displayEyeHeight != perfMode.trueHMDEyeHeight,
+				VRRenderScaleStableEvidenceBlocker::ProfileDimensionsMismatch);
+			blockIf(!fidelity.active, VRRenderScaleStableEvidenceBlocker::FidelityInactive);
+			blockIf(!fidelity.bothEyesValid, VRRenderScaleStableEvidenceBlocker::BothEyesInvalid);
+			blockIf(fidelity.transitionEpoch != stableProfile.transitionEpoch, VRRenderScaleStableEvidenceBlocker::FidelityEpochMismatch);
+			blockIf(fidelity.contractGeneration != stableProfile.contractGeneration, VRRenderScaleStableEvidenceBlocker::FidelityGenerationMismatch);
+			blockIf(fidelity.method != stableProfile.method, VRRenderScaleStableEvidenceBlocker::FidelityMethodMismatch);
+			blockIf(
+				fidelity.expectedInputWidth != relatchTargetRenderEyeWidth ||
+					fidelity.expectedInputHeight != relatchTargetRenderEyeHeight ||
+					fidelity.expectedOutputWidth != perfMode.trueHMDEyeWidth ||
+					fidelity.expectedOutputHeight != perfMode.trueHMDEyeHeight,
+				VRRenderScaleStableEvidenceBlocker::FidelityDimensionsMismatch);
+			blockIf(
+				fidelity.lastMismatchMask != static_cast<uint32_t>(VRRenderScaleFidelityMismatch::None),
+				VRRenderScaleStableEvidenceBlocker::FidelityMismatchRecorded);
+			blockIf(!stableEyesMatch, VRRenderScaleStableEvidenceBlocker::FidelityEyesMismatch);
+			blockIf(a_controller.retirement.pendingSets != 0, VRRenderScaleStableEvidenceBlocker::RetirementPending);
+			blockIf(a_controller.retirement.fencePending, VRRenderScaleStableEvidenceBlocker::RetirementFencePending);
+			blockIf(a_controller.retirement.capacityBlocked, VRRenderScaleStableEvidenceBlocker::RetirementCapacityBlocked);
+			blockIf(a_controller.postLoadRecovery.active, VRRenderScaleStableEvidenceBlocker::PostLoadRecoveryActive);
+			blockIf(!stateScreenDimensionsMatch, VRRenderScaleStableEvidenceBlocker::StateScreenDimensionsMismatch);
+			return blockers;
+		};
+		const uint64_t stablePhysicalContractEvidenceBlockers =
+			getStablePhysicalContractEvidenceBlockers(controllerForPhysicalReuse);
+		const bool stablePhysicalContractEvidenceMatches = stablePhysicalContractEvidenceBlockers == 0;
 		const bool stablePhysicalContractMatches =
 			plannedRelatchTargetDimensionsMatch &&
 			stablePhysicalContractEvidenceMatches;
@@ -15759,6 +15964,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.reuseStableRenderTargets = reuseStableRenderTargetsForRelatch;
 		relatchPlan.renderTargetDimensionsMatch = plannedRelatchTargetDimensionsMatch;
 		relatchPlan.stableContractEvidenceMatches = stablePhysicalContractEvidenceMatches;
+		relatchPlan.stateScreenDimensionsMatch = stateScreenDimensionsMatch;
+		relatchPlan.renderTargetMissingMask = plannedRelatchTargetDimensionProbe.missingMask;
+		relatchPlan.renderTargetRequiredMissingMask = plannedRelatchTargetDimensionProbe.requiredMissingMask;
+		relatchPlan.renderTargetDimensionMismatchMask = plannedRelatchTargetDimensionProbe.dimensionMismatchMask;
+		relatchPlan.stableContractEvidenceBlockers = stablePhysicalContractEvidenceBlockers;
+		relatchPlan.stateScreenWidth = ClampPositiveDimension(state->screenSize.x);
+		relatchPlan.stateScreenHeight = ClampPositiveDimension(state->screenSize.y);
 		relatchPlan.vendorDimensionsUnchanged = relatchVendorDimensionsUnchanged;
 		relatchPlan.reuseSharedSubmitResources =
 			retainWarmInactiveVendorResourcesForRelatch &&
@@ -25185,6 +25397,17 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							 { "reuseStableRenderTargets", relatchPlan.reuseStableRenderTargets },
 							 { "renderTargetDimensionsMatch", relatchPlan.renderTargetDimensionsMatch },
 							 { "stableContractEvidenceMatches", relatchPlan.stableContractEvidenceMatches },
+							 { "stateScreenDimensionsMatch", relatchPlan.stateScreenDimensionsMatch },
+							 { "renderTargetMissingMask", relatchPlan.renderTargetMissingMask },
+							 { "renderTargetMissing", GetVRRenderScaleRenderTargetProbeNames(relatchPlan.renderTargetMissingMask) },
+							 { "renderTargetRequiredMissingMask", relatchPlan.renderTargetRequiredMissingMask },
+							 { "renderTargetRequiredMissing", GetVRRenderScaleRenderTargetProbeNames(relatchPlan.renderTargetRequiredMissingMask) },
+							 { "renderTargetDimensionMismatchMask", relatchPlan.renderTargetDimensionMismatchMask },
+							 { "renderTargetDimensionMismatches", GetVRRenderScaleRenderTargetProbeNames(relatchPlan.renderTargetDimensionMismatchMask) },
+							 { "stableContractEvidenceBlockers", relatchPlan.stableContractEvidenceBlockers },
+							 { "stableContractEvidenceBlockerNames", GetVRRenderScaleStableEvidenceBlockerNames(relatchPlan.stableContractEvidenceBlockers) },
+							 { "stateScreenWidth", relatchPlan.stateScreenWidth },
+							 { "stateScreenHeight", relatchPlan.stateScreenHeight },
 							 { "vendorDimensionsUnchanged", relatchPlan.vendorDimensionsUnchanged },
 							 { "reuseSharedSubmitResources", relatchPlan.reuseSharedSubmitResources },
 							 { "preserveDLSSResources", relatchPlan.preserveDLSSResources },

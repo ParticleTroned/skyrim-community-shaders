@@ -948,6 +948,40 @@ namespace
 		return a_upscaleMethod == Upscaling::UpscaleMethod::kFSR || a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
 	}
 
+	float GetRuntimeMipBiasMethodOffset(Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		return a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS ? -1.0f : 0.0f;
+	}
+
+	float ResolveMaterialMipBias(
+		Upscaling::UpscaleMethod a_upscaleMethod,
+		const float2& a_renderSize,
+		const float2& a_outputSize)
+	{
+		if (!IsVendorUpscalingMethod(a_upscaleMethod) ||
+			!std::isfinite(a_renderSize.x) ||
+			!std::isfinite(a_renderSize.y) ||
+			!std::isfinite(a_outputSize.x) ||
+			!std::isfinite(a_outputSize.y) ||
+			a_renderSize.x <= 0.0f ||
+			a_renderSize.y <= 0.0f ||
+			a_outputSize.x <= 0.0f ||
+			a_outputSize.y <= 0.0f) {
+			return 0.0f;
+		}
+
+		// Material mip bias is scalar. Current profiles preserve aspect ratio, so
+		// use the horizontal physical render-to-output ratio and retain the
+		// method-specific native offset independently from resolution ownership.
+		const float scaleX = a_renderSize.x / a_outputSize.x;
+		const float scaleY = a_renderSize.y / a_outputSize.y;
+		if (!std::isfinite(scaleX) || !std::isfinite(scaleY) || scaleX <= 0.0f || scaleY <= 0.0f)
+			return 0.0f;
+
+		const float mipBias = std::log2f(scaleX) + GetRuntimeMipBiasMethodOffset(a_upscaleMethod);
+		return std::isfinite(mipBias) ? mipBias : 0.0f;
+	}
+
 	bool IsRenderScaleQualityMode(uint32_t a_qualityMode)
 	{
 		return Upscaling::GetQualityModeResolutionScale(
@@ -2492,6 +2526,38 @@ namespace
 			std::abs(a_state.renderScale - 1.0f) > kNativeRenderScaleEpsilon;
 
 		return externalMethodSelected || externalRenderScaleActive;
+	}
+
+	void TraceOCUExternalMipBiasState(const Util::OCUExternalUpscalerState& a_state)
+	{
+		static bool logged = false;
+		static float previousMipBias = std::numeric_limits<float>::quiet_NaN();
+		static float previousRenderScale = std::numeric_limits<float>::quiet_NaN();
+		static uint32_t previousMethod = std::numeric_limits<uint32_t>::max();
+		static uint32_t previousFlags = std::numeric_limits<uint32_t>::max();
+
+		const bool changed =
+			!logged ||
+			std::abs(previousMipBias - a_state.mipBias) > 0.0005f ||
+			std::abs(previousRenderScale - a_state.renderScale) > 0.0005f ||
+			previousMethod != a_state.method ||
+			previousFlags != a_state.flags;
+
+		if (!changed)
+			return;
+
+		logger::info(
+			"[MipBiasTrace] source=OpenCompositeUnleashedSharedState renderScale={:.3f} mipBias={:.3f} method={} flags=0x{:X}",
+			a_state.renderScale,
+			a_state.mipBias,
+			a_state.method,
+			a_state.flags);
+
+		logged = true;
+		previousMipBias = a_state.mipBias;
+		previousRenderScale = a_state.renderScale;
+		previousMethod = a_state.method;
+		previousFlags = a_state.flags;
 	}
 
 	std::string_view TrimAsciiWhitespace(std::string_view value)
@@ -14031,6 +14097,40 @@ bool Upscaling::ShouldApplyDLSSSharpening() const
 const Upscaling::RuntimeResolutionPlan& Upscaling::GetRuntimeResolutionPlan() const
 {
 	return runtimeResolutionPlan;
+}
+
+float Upscaling::ResolveRuntimeMipBias(bool a_temporal)
+{
+	if (!loaded)
+		return 0.0f;
+
+	Util::OCUExternalUpscalerState externalState{};
+	if (globals::game::isVR &&
+		Util::TryReadOCUExternalUpscalerState(externalState) &&
+		IsOpenCompositeExternalUpscalerActive(externalState)) {
+		TraceOCUExternalMipBiasState(externalState);
+		return externalState.mipBias;
+	}
+
+	if (!a_temporal)
+		return 0.0f;
+
+	auto* state = globals::state;
+	if (!state || !globals::game::graphicsState)
+		return 0.0f;
+
+	EnsureRuntimeResolutionStateCurrent();
+	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
+		return ResolveMaterialMipBias(
+			runtimeResolutionPlan.upscaleMethod,
+			runtimeResolutionPlan.engineRenderSize,
+			runtimeResolutionPlan.finalOutputSize);
+	}
+
+	return ResolveMaterialMipBias(
+		runtimeResolutionPlan.upscaleMethod,
+		Util::ConvertToDynamic(state->screenSize, true),
+		state->screenSize);
 }
 
 void Upscaling::RefreshRuntimeResolutionState()

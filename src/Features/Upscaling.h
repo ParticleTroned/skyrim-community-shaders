@@ -979,6 +979,8 @@ public:
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
+	/** @brief Resolve material mip bias from the active resolution owner or OpenComposite Unleashed. */
+	float ResolveRuntimeMipBias(bool a_temporal);
 	// Refresh both the cached plan and restart-required state from the current VR render-scale settings.
 	void RefreshRuntimeResolutionState();
 	// Read-side helper: avoid rebuilding the cached plan multiple times in one frame.

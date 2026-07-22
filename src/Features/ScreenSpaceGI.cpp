@@ -78,15 +78,21 @@ namespace
 		}
 	}
 
+	void ClearScreenSpaceGIProfilerTimersIfDisabled(bool a_wasEnabled, const ScreenSpaceGI::Settings& a_settings)
+	{
+		if (a_wasEnabled && !a_settings.Enabled) {
+			ClearScreenSpaceGIProfilerTimers();
+		}
+	}
+
 	void SetScreenSpaceGIEnabled(ScreenSpaceGI::Settings& a_settings, bool a_enabled)
 	{
 		if (a_settings.Enabled == a_enabled)
 			return;
 
+		const bool wasEnabled = a_settings.Enabled;
 		a_settings.Enabled = a_enabled;
-		if (!a_settings.Enabled) {
-			ClearScreenSpaceGIProfilerTimers();
-		}
+		ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, a_settings);
 	}
 
 	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI::Settings& a_settings)
@@ -353,9 +359,7 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 	const bool wasEnabled = settings.Enabled;
 	settings = {};
 	ApplyPlatformSettingOverrides(settings);
-	if (wasEnabled && !settings.Enabled) {
-		ClearScreenSpaceGIProfilerTimers();
-	}
+	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 	recompileFlag = true;
 }
 
@@ -931,13 +935,12 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 		ResetVRSpecificSettings(settings);
 	else
 		SyncResolvedSharedMaskScale(settings);
-	if (wasEnabled && !settings.Enabled) {
-		ClearScreenSpaceGIProfilerTimers();
-	}
+	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 }
 
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
+	const bool wasEnabled = settings.Enabled;
 	settings = o_json;
 	settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
 	if (!o_json.contains("EnableFoveated") && o_json.contains("FoveatedPresetMode")) {
@@ -961,6 +964,7 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 		ResetVRSpecificSettings(settings);
 	}
 	ApplyPlatformSettingOverrides(settings);
+	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 
 	recompileFlag = true;
 }

@@ -510,9 +510,11 @@ void State::Debug()
 	}
 
 	if (currentShader && updateShader && frameAnnotations) {
-		BeginPerfEvent(std::format("Draw: CS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), permutationData.PixelShaderDescriptor, currentShader->fxpFilename));
-		SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(*currentShader, permutationData.PixelShaderDescriptor)));
-		EndPerfEvent();
+		// Per-draw annotations must remain capture-only. Dynamic Tracy zones allocate
+		// a source location for every draw and cannot be sustained at this frequency.
+		BeginDrawEvent("Draw: CS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), permutationData.PixelShaderDescriptor, currentShader->fxpFilename);
+		SetPerfMarker("Defines: {}", SIE::ShaderCache::GetDefinesString(*currentShader, permutationData.PixelShaderDescriptor));
+		EndDrawEvent();
 	}
 }
 
@@ -1416,6 +1418,34 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 	}
 }
 
+namespace
+{
+	// Annotation labels are ASCII. Reusing the destination avoids a wide-string
+	// allocation at every draw while preserving the existing byte-wise widening.
+	const wchar_t* WidenAnnotation(std::wstring& a_buffer, std::string_view a_title)
+	{
+		a_buffer.resize(a_title.size());
+		std::copy(a_title.begin(), a_title.end(), a_buffer.begin());
+		return a_buffer.c_str();
+	}
+}
+
+void State::BeginDrawEvent(std::string_view title)
+{
+	// Keep high-frequency draw annotations available to RenderDoc/PIX without
+	// creating a dynamic Tracy source location for every geometry draw.
+	if (pPerf.Get()) {
+		thread_local std::wstring wideTitle;
+		pPerf->BeginEvent(WidenAnnotation(wideTitle, title));
+	}
+}
+
+void State::EndDrawEvent()
+{
+	if (pPerf.Get())
+		pPerf->EndEvent();
+}
+
 void State::BeginPerfEvent(std::string_view title)
 {
 #ifdef TRACY_ENABLE
@@ -1430,8 +1460,10 @@ void State::BeginPerfEvent(std::string_view title)
 	const TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(srcloc, true);
 	s_tracyPerfZones.push_back(ctx);
 #endif
-	if (pPerf.Get())
-		pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
+	if (pPerf.Get()) {
+		thread_local std::wstring wideTitle;
+		pPerf->BeginEvent(WidenAnnotation(wideTitle, title));
+	}
 }
 
 void State::EndPerfEvent()
@@ -1450,8 +1482,10 @@ void State::EndPerfEvent()
 
 void State::SetPerfMarker(std::string_view title)
 {
-	if (pPerf.Get())
-		pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
+	if (pPerf.Get()) {
+		thread_local std::wstring wideMarker;
+		pPerf->SetMarker(WidenAnnotation(wideMarker, title));
+	}
 }
 
 void State::SetAdapterDescription(const std::wstring& description)

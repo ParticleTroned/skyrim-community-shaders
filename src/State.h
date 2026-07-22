@@ -7,9 +7,12 @@
 #include <Buffer.h>
 #include <REX/W32/COMPTR.h>
 #include <atomic>
+#include <format>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 using json = nlohmann::json;
 
@@ -170,9 +173,42 @@ public:
 	void CheckTypedUAVLoadSupport();
 	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred = false);
 
+	/** @brief Opens a named D3D annotation and Tracy zone. */
 	void BeginPerfEvent(std::string_view title);
+	/** @brief Formats an event title into reusable thread-local storage. */
+	template <class... Args>
+	void BeginPerfEvent(std::format_string<Args...> fmt, Args&&... args)
+	{
+		thread_local std::string perfTitle;
+		perfTitle.clear();
+		std::format_to(std::back_inserter(perfTitle), fmt, std::forward<Args>(args)...);
+		BeginPerfEvent(std::string_view{ perfTitle });
+	}
 	void EndPerfEvent();
+
+	/** @brief Opens a high-frequency D3D annotation without creating a Tracy zone. */
+	void BeginDrawEvent(std::string_view title);
+	/** @brief Formats a high-frequency annotation into reusable thread-local storage. */
+	template <class... Args>
+	void BeginDrawEvent(std::format_string<Args...> fmt, Args&&... args)
+	{
+		thread_local std::string drawTitle;
+		drawTitle.clear();
+		std::format_to(std::back_inserter(drawTitle), fmt, std::forward<Args>(args)...);
+		BeginDrawEvent(std::string_view{ drawTitle });
+	}
+	void EndDrawEvent();
+
 	void SetPerfMarker(std::string_view title);
+	/** @brief Formats marker text into reusable thread-local storage. */
+	template <class... Args>
+	void SetPerfMarker(std::format_string<Args...> fmt, Args&&... args)
+	{
+		thread_local std::string markerText;
+		markerText.clear();
+		std::format_to(std::back_inserter(markerText), fmt, std::forward<Args>(args)...);
+		SetPerfMarker(std::string_view{ markerText });
+	}
 
 	void SetAdapterDescription(const std::wstring& description);
 

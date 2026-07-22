@@ -15,6 +15,20 @@ namespace FrameAnnotations
 	{
 		std::atomic_uint32_t renderShadowmasksPhaseDepth{ 0 };
 
+		// Shader defines change rarely, so cache their filename suffix instead of
+		// re-deriving and allocating it for every annotated geometry draw.
+		std::string_view CachedDefinesSuffix()
+		{
+			thread_local std::string source;
+			thread_local std::string suffix;
+			const std::string& currentSource = globals::state->shaderDefinesString;
+			if (currentSource != source) {
+				source = currentSource;
+				suffix = Util::GetShaderDefinesSuffix(currentSource);
+			}
+			return suffix;
+		}
+
 		static std::string BuildEventName(RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType)
 		{
 			auto enumName = RE::ImageSpaceManager::GetImageSpaceEffectName(EffectType);
@@ -53,11 +67,16 @@ namespace FrameAnnotations
 				if (globals::game::currentPixelShader && *globals::game::currentPixelShader) {
 					descriptor = (*globals::game::currentPixelShader)->id;
 				}
-				const std::string definesSuffix = Util::GetShaderDefinesSuffix(globals::state->shaderDefinesString);
-				std::string diskPath = std::format("Data/ShaderCache/{}/{:X}{}.pso", shader->fxpFilename, descriptor, definesSuffix);
-				const std::string passName = std::format("[{}:{:X}] ({:X}) <{}> {} -> {}", magic_enum::enum_name(ShaderType), descriptor, pass->passEnum,
+				thread_local std::string diskPath;
+				thread_local std::string passName;
+				diskPath.clear();
+				std::format_to(std::back_inserter(diskPath), "Data/ShaderCache/{}/{:X}{}.pso",
+					shader->fxpFilename, descriptor, CachedDefinesSuffix());
+				passName.clear();
+				std::format_to(std::back_inserter(passName), "[{}:{:X}] ({:X}) <{}> {} -> {}",
+					magic_enum::enum_name(ShaderType), descriptor, pass->passEnum,
 					pass->accumulationHint, pass->geometry->name.c_str(), diskPath);
-				globals::state->BeginPerfEvent(passName);
+				globals::state->BeginDrawEvent(passName);
 			}
 
 			func(shader, pass, renderFlags);
@@ -74,7 +93,7 @@ namespace FrameAnnotations
 			func(shader, pass, renderFlags);
 
 			if (globals::state->frameAnnotations) {
-				globals::state->EndPerfEvent();
+				globals::state->EndDrawEvent();
 			}
 		}
 
@@ -89,12 +108,14 @@ namespace FrameAnnotations
 			if (TryReplaceDynamicResolutionUpsample<EffectType>(Upscaling::DynamicResolutionUpsampleStage::Render))
 				return;
 
-			std::string eventName = BuildEventName(EffectType) + " Draw";
-			globals::state->BeginPerfEvent(eventName);
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("{} Draw", BuildEventName(EffectType));
 
 			func(imageSpaceShader, shape, param);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -108,12 +129,14 @@ namespace FrameAnnotations
 			if (TryReplaceDynamicResolutionUpsample<EffectType>(Upscaling::DynamicResolutionUpsampleStage::Dispatch))
 				return;
 
-			std::string eventName = BuildEventName(EffectType) + " Dispatch";
-			globals::state->BeginPerfEvent(eventName);
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("{} Dispatch", BuildEventName(EffectType));
 
 			func(imageSpaceShader, a1, a2, a3);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -125,8 +148,8 @@ namespace FrameAnnotations
 		{
 			const bool frameAnnotations = globals::state->frameAnnotations;
 			if (frameAnnotations) {
-				globals::state->BeginPerfEvent(std::format("BSShaderAccumulator::FinishAccumulatingDispatch [{}] <{}>",
-					static_cast<uint32_t>(shaderAccumulator->GetRuntimeData().renderMode), renderFlags));
+				globals::state->BeginPerfEvent("BSShaderAccumulator::FinishAccumulatingDispatch [{}] <{}>",
+					static_cast<uint32_t>(shaderAccumulator->GetRuntimeData().renderMode), renderFlags);
 			}
 
 			func(shaderAccumulator, renderFlags);
@@ -143,11 +166,14 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::NiAVObject* camera, int a2, bool a3, bool a4, bool a5)
 		{
-			globals::state->BeginPerfEvent(std::format("Cubemap {}", camera->name.c_str()));
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("Cubemap {}", camera->name.c_str());
 
 			func(camera, a2, a3, a4, a5);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -157,11 +183,14 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Directional Light Shadowmaps");
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("Directional Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -171,11 +200,14 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Spot Light Shadowmaps");
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("Spot Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -185,11 +217,14 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Omnidirectional Light Shadowmaps");
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("Omnidirectional Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -203,8 +238,8 @@ namespace FrameAnnotations
 		{
 			const bool frameAnnotations = globals::state->frameAnnotations;
 			if (frameAnnotations) {
-				globals::state->BeginPerfEvent(std::format("BSBatchRenderer::RenderBatches ({:X})[{}] <{}>", *currentPass, *bucketIndex,
-					renderFlags));
+				globals::state->BeginPerfEvent("BSBatchRenderer::RenderBatches ({:X})[{}] <{}>", *currentPass, *bucketIndex,
+					renderFlags);
 			}
 
 			const bool result = func(renderer, currentPass, bucketIndex, passIndexList, renderFlags);
@@ -368,8 +403,8 @@ namespace FrameAnnotations
 				renderFlags,
 				groupIndex);
 			if (frameAnnotations) {
-				globals::state->BeginPerfEvent(std::format("BSShaderAccumulator::RenderBatches ({:X}:{:X})[{}] <{}>", firstPass, lastPass, groupIndex,
-					renderFlags));
+				globals::state->BeginPerfEvent("BSShaderAccumulator::RenderBatches ({:X}:{:X})[{}] <{}>", firstPass, lastPass, groupIndex,
+					renderFlags);
 			}
 
 			func(shaderAccumulator, firstPass, lastPass, renderFlags, groupIndex);
@@ -395,7 +430,7 @@ namespace FrameAnnotations
 		{
 			const bool frameAnnotations = globals::state->frameAnnotations;
 			if (frameAnnotations) {
-				globals::state->BeginPerfEvent(std::format("BSShaderAccumulator::RenderPersistentPassList <{}>", renderFlags));
+				globals::state->BeginPerfEvent("BSShaderAccumulator::RenderPersistentPassList <{}>", renderFlags);
 			}
 
 			func(passList, renderFlags);

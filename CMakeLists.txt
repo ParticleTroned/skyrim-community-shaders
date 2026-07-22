@@ -621,7 +621,13 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # timestamps for unchanged files and prevents downstream incremental
     # deploys from copying everything every build.
     set(_prepare_aio_cmds)
-    string(REPLACE ";" "\\;" _feature_paths_arg "${FEATURE_PATHS}")
+    # Write the list to a file instead of passing an escaped-semicolon value
+    # through -D. Ninja misquotes list entries containing spaces.
+    set(_feature_paths_list_file
+        "${CMAKE_CURRENT_BINARY_DIR}/feature_paths.txt"
+    )
+    string(REPLACE ";" "\n" _feature_paths_file_content "${FEATURE_PATHS}")
+    file(WRITE "${_feature_paths_list_file}" "${_feature_paths_file_content}")
 
     # Ensure SKSE/Plugins dir exists
     # Note: DLL and PDB are copied via POST_BUILD command to avoid race conditions
@@ -640,7 +646,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DMODE=AIO
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_PATHS="${_feature_paths_arg}"
+        -DFEATURE_PATHS_FILE="${_feature_paths_list_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -701,6 +707,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         DEPENDS
             ${_AIO_PACKAGE_FILES}
             ${PROJECT_NAME}
+            ${_feature_paths_list_file}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
     )
 
@@ -756,11 +763,20 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             list(APPEND _feature_shader_paths "${_fpath}/Shaders")
         endif()
     endforeach()
+    # Use the same file transport for feature shader paths so generators do
+    # not reinterpret space-containing entries as malformed command arguments.
+    set(_feature_shader_paths_list_file
+        "${CMAKE_CURRENT_BINARY_DIR}/feature_shader_paths.txt"
+    )
     string(
         REPLACE ";"
-        "\\;"
-        _feature_shader_paths_arg
+        "\n"
+        _feature_shader_paths_file_content
         "${_feature_shader_paths}"
+    )
+    file(
+        WRITE "${_feature_shader_paths_list_file}"
+        "${_feature_shader_paths_file_content}"
     )
 
     list(
@@ -770,7 +786,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DMODE=SHADERS
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_SHADER_PATHS="${_feature_shader_paths_arg}"
+        -DFEATURE_SHADER_PATHS_FILE="${_feature_shader_paths_list_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -799,6 +815,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         COMMAND ${CMAKE_COMMAND} -E touch copy_shaders.stamp
         DEPENDS
             ${HLSL_FILES}
+            ${_feature_shader_paths_list_file}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
     )
@@ -942,8 +959,12 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_plugin.stamp
-                # See PREPARE_AIO target-name rationale above.
-                DEPENDS PREPARE_AIO ${PROJECT_NAME}
+                # Target-only dependencies are order-only, so also depend on
+                # the built DLL file to retrigger deployment when it changes.
+                DEPENDS
+                    PREPARE_AIO
+                    ${PROJECT_NAME}
+                    $<TARGET_FILE:${PROJECT_NAME}>
                 COMMENT "Copy plugin DLL/PDB to ${DEPLOY_TARGET}/SKSE/Plugins"
             )
 

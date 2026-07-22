@@ -45,10 +45,10 @@ function(add_cxx_files TARGET)
 	file(GLOB_RECURSE HLSL_FILES
 		LIST_DIRECTORIES false
 		CONFIGURE_DEPENDS
-		"Features/**/*.hlsl"
-		"Features/**/*.hlsli"
-		"Package/**/*.hlsl"
-		"Package/**/*.hlsli"
+		"features/**/*.hlsl"
+		"features/**/*.hlsli"
+		"package/**/*.hlsl"
+		"package/**/*.hlsli"
 	)
 
 	set(HLSL_FILES ${HLSL_FILES} PARENT_SCOPE)

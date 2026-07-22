@@ -13301,12 +13301,6 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		Util::Text::Warning("Upscaling is locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
 	}
 
-	if (!globals::game::isVR) {
-		ImGui::SeparatorText("Frame Generation");
-		DrawFrameGenerationEnabledToggle(settings);
-		DrawFrameGenerationForceEnableToggle(*this);
-	}
-
 	const auto upscaleMethod = GetUpscaleMethod();
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
 		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
@@ -13358,6 +13352,12 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 				DrawDLSSPresetTooltip(displayedDLSSPreset);
 			}
 		}
+	}
+
+	if (!globals::game::isVR) {
+		ImGui::SeparatorText("Frame Generation");
+		DrawFrameGenerationEnabledToggle(settings);
+		DrawFrameGenerationForceEnableToggle(*this);
 	}
 
 	if (globals::game::isVR) {

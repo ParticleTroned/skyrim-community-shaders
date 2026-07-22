@@ -15788,12 +15788,17 @@ namespace
 		std::vector<winrt::com_ptr<IUnknown>> resources;
 	};
 
-	bool IsVREngineTargetRetirementLayoutSupported()
+	// RC116 proved that a typed renderer slot does not by itself establish a
+	// transferable COM reference. Some displaced objects can be destroyed by a
+	// CPU-side owner before the GPU fence completes, leaving an adopted raw
+	// pointer unsafe to release. Keep the generic sweep available for a future
+	// ownership-aware redesign, but do not arm it in production builds.
+	constexpr bool kVREngineTargetRawOwnershipRetirementEnabled = false;
+
+	bool IsVREngineTargetRetirementAvailable()
 	{
-		// A live-decrypted SkyrimVR 1.4.15 Ghidra audit verified that the
-		// color, depth-stencil, and cubemap creation cores overwrite these
-		// owning COM slots without releasing the displaced generation.
-		return REL::Module::IsVR() &&
+		return kVREngineTargetRawOwnershipRetirementEnabled &&
+		       REL::Module::IsVR() &&
 		       REL::Module::get().version() == SKSE::RUNTIME_VR_1_4_15;
 	}
 
@@ -15829,7 +15834,7 @@ namespace
 	VREngineTargetGenerationSnapshot CaptureVREngineTargetGeneration()
 	{
 		VREngineTargetGenerationSnapshot snapshot{};
-		snapshot.supported = IsVREngineTargetRetirementLayoutSupported();
+		snapshot.supported = IsVREngineTargetRetirementAvailable();
 		if (!snapshot.supported || !globals::game::renderer)
 			return snapshot;
 
@@ -18198,7 +18203,7 @@ void Upscaling::QueueVREngineTargetRetirement(
 	uint32_t a_restoredPointerCount,
 	std::vector<winrt::com_ptr<IUnknown>>&& a_resources)
 {
-	static std::atomic_bool loggedUnsupportedLayout{ false };
+	static std::atomic_bool loggedUnavailableRetirement{ false };
 	if (!a_supported) {
 		{
 			std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
@@ -18215,14 +18220,14 @@ void Upscaling::QueueVREngineTargetRetirement(
 			++vrRenderScaleTransitionController.revision;
 		}
 		UpdateVRIntermediateRetirementSnapshot(false);
-		if (!loggedUnsupportedLayout.exchange(true, std::memory_order_acq_rel)) {
+		if (!loggedUnavailableRetirement.exchange(true, std::memory_order_acq_rel)) {
 			logger::warn(
-				"[VRRenderScale] Engine target generation retirement is disabled for this runtime layout; recreated targets will retain vanilla ownership behavior.");
+				"[VRRenderScale] Engine target generation retirement is safety-disabled because ownership-safe reclamation is unavailable; recreated targets will retain vanilla ownership behavior.");
 		}
 		return;
 	}
 
-	loggedUnsupportedLayout.store(false, std::memory_order_release);
+	loggedUnavailableRetirement.store(false, std::memory_order_release);
 	const uint32_t queuedReleaseCount = static_cast<uint32_t>(std::min<size_t>(
 		a_resources.size(),
 		std::numeric_limits<uint32_t>::max()));

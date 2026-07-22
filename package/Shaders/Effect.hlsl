@@ -556,6 +556,13 @@ float3 GetEffectAmbientLighting(float skylightingDiffuse)
 	return ambientColor;
 }
 
+void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)
+{
+	float3 ambientColorAmb = GetEffectAmbientLighting(skylightingDiffuse);
+	float3 dirLightColorDir = ShadowSampling::GetDirectionalLighting();
+	ShadowSampling::DecomposeLighting(inputColor, ambientColorAmb, dirLightColorDir, dirColor, ambientColor);
+}
+
 #	if defined(LIGHTING)
 float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPosition, uint eyeIndex, inout float shadowVariance)
 {
@@ -582,20 +589,20 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 		}
 #		endif
 
+		float3 dirLightColor;
+		float3 ambientColor;
 #		if defined(SKYLIGHTING)
-		color = GetEffectAmbientLighting(skylightingDiffuse);
+		ExtractEffectLighting(color, dirLightColor, ambientColor, skylightingDiffuse);
 #		else
-		color = GetEffectAmbientLighting(1.0);
+		ExtractEffectLighting(color, dirLightColor, ambientColor, 1.0);
 #		endif
-
-		float3 dirLightColor = ShadowSampling::GetDirectionalLighting() * 0.5 * Color::EffectLightingMult();
 
 		if (inWorld && ShadowSampling::HasDirectionalShadows()) {
 			float shadow = ShadowSampling::Get3DFilteredShadow(worldPosition.xyz, normalize(worldPosition.xyz), screenPosition, eyeIndex);
-			color += dirLightColor * shadow;
+			color = ambientColor + dirLightColor * shadow;
 			shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
 		} else {
-			color += dirLightColor;
+			color = ambientColor + dirLightColor;
 		}
 	} else {
 #		if defined(SKYLIGHTING)

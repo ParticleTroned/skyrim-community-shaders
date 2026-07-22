@@ -347,6 +347,32 @@ namespace ShadowSampling
 		return GetAmbientLighting(LightingSampleNormal) + GetDirectionalLighting();
 	}
 
+	void DecomposeLighting(float3 inputColor, float3 sourceAmbientColor, float3 sourceDirectionalColor,
+		out float3 dirColor, out float3 ambientColor)
+	{
+		float inputLuma = Color::RGBToLuminance(inputColor);
+		float ambientLuma = Color::RGBToLuminance(sourceAmbientColor);
+		float dirLightLuma = Color::RGBToLuminance(sourceDirectionalColor);
+		float totalLuma = ambientLuma + dirLightLuma;
+
+		if (totalLuma > 0.0 && ambientLuma > 0.0) {
+			static const float MaxAmbientScale = Math::INV_PI;
+			sourceAmbientColor *= min(inputLuma / totalLuma, MaxAmbientScale);
+		}
+
+		float ambientFit = 1.0;
+		if (sourceAmbientColor.x > 0.0)
+			ambientFit = min(ambientFit, max(0.0, inputColor.x) / sourceAmbientColor.x);
+		if (sourceAmbientColor.y > 0.0)
+			ambientFit = min(ambientFit, max(0.0, inputColor.y) / sourceAmbientColor.y);
+		if (sourceAmbientColor.z > 0.0)
+			ambientFit = min(ambientFit, max(0.0, inputColor.z) / sourceAmbientColor.z);
+		sourceAmbientColor *= ambientFit;
+
+		dirColor = max(0.0, inputColor - sourceAmbientColor);
+		ambientColor = sourceAmbientColor;
+	}
+
 #if defined(SKYLIGHTING) && !defined(INTERIOR)
 	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)
 #else
@@ -361,18 +387,7 @@ namespace ShadowSampling
 
 		float3 dirLightColorDir = GetDirectionalLighting();
 
-		float inputLuma = Color::RGBToLuminance(inputColor);
-		float ambientLuma = Color::RGBToLuminance(ambientColorAmb);
-		float dirLightLuma = Color::RGBToLuminance(dirLightColorDir);
-		float totalLuma = ambientLuma + dirLightLuma;
-
-		if (totalLuma > 0.0 && ambientLuma > 0.0)
-			ambientColorAmb *= inputLuma / totalLuma;
-
-		float3 dirLightColorAmb = max(0.0, inputColor - ambientColorAmb);
-
-		dirColor = dirLightColorAmb;
-		ambientColor = ambientColorAmb;
+		DecomposeLighting(inputColor, ambientColorAmb, dirLightColorDir, dirColor, ambientColor);
 	}
 }
 

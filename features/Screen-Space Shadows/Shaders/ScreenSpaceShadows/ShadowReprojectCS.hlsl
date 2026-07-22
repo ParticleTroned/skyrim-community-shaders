@@ -94,7 +94,7 @@ float ApplyFoveatedOutputFade(float shadow, float centerWeight)
 	if (otherDepth < 1e-5 ||
 		otherDepth >= 1.0 ||
 		SharedData::GetScreenDepth(otherDepth) < VR_FP_Z ||
-		abs(otherDepth - depth) > kDepthAgreeThreshold) {
+		!Stereo::IsReprojectionExact(reprojection, depth, otherDepth, kDepthAgreeThreshold)) {
 		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(result, centerWeight);
 		return;
 	}

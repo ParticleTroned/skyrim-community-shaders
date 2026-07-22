@@ -39,11 +39,6 @@ namespace
 		return wetterness.IsRuntimeProcessingActive() ? &wetterness : nullptr;
 	}
 
-	bool IsWetternessActiveForVisibilityThrottle()
-	{
-		return globals::features::wetterness.IsRuntimeActive();
-	}
-
 	RE::NiPoint3 GetCubemapCaptureAnchorPosition()
 	{
 		const auto* wetterness = GetActiveWetterness();
@@ -228,7 +223,7 @@ void DynamicCubemaps::DrawSettings()
 	}
 }
 
-void DynamicCubemaps::DrawPerformanceSettings(bool a_advanced)
+void DynamicCubemaps::DrawEssentialSettings()
 {
 	bool enabledSSR = settings.EnabledSSR != 0;
 	if (ImGui::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
@@ -237,96 +232,6 @@ void DynamicCubemaps::DrawPerformanceSettings(bool a_advanced)
 	}
 	if (REL::Module::IsVR() && settings.EnabledSSR && !enabledAtBoot) {
 		Util::Text::Warning("SSR was not enabled at boot. Save settings and restart to enable it in VR.");
-	}
-
-	if (a_advanced && REL::Module::IsVR()) {
-		auto& vrSettings = globals::features::vr.settings;
-		ImGui::SeparatorText("VR Performance");
-		ImGui::Checkbox("Dynamic Cubemap Cadence", &vrSettings.EnableDynamicCubemapFoveation);
-		if (IsWetternessActiveForVisibilityThrottle())
-			vrSettings.EnableDynamicCubemapVisibilityThrottle = false;
-		{
-			auto guard = Util::DisableGuard(IsWetternessActiveForVisibilityThrottle());
-			ImGui::Checkbox("Low-Visibility Cubemap Throttle", &vrSettings.EnableDynamicCubemapVisibilityThrottle);
-		}
-		if (IsWetternessActiveForVisibilityThrottle())
-			ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
-	}
-}
-
-void DynamicCubemaps::DrawEssentialSettings()
-{
-	DrawPerformanceSettings(false);
-}
-
-json DynamicCubemaps::CapturePerformanceSettingsState() const
-{
-	return {
-		{ "Settings", settings },
-		{ "PerformanceTuningVR",
-			{ { "EnableDynamicCubemapFoveation", globals::features::vr.settings.EnableDynamicCubemapFoveation },
-				{ "EnableDynamicCubemapVisibilityThrottle", globals::features::vr.settings.EnableDynamicCubemapVisibilityThrottle } } }
-	};
-}
-
-bool DynamicCubemaps::IsPerformanceCostMeasurementEnabled() const
-{
-	if (IsSSRRuntimeActive())
-		return true;
-
-	const auto foveationState = GetDynamicCubemapFoveationState(*this);
-	return foveationState.cadenceEnabled || foveationState.visibilityThrottleEnabled;
-}
-
-void DynamicCubemaps::SetPerformanceCostMeasurementEnabled(bool a_enabled)
-{
-	const Settings defaults{};
-	const VR::Settings vrDefaults{};
-	const uint newValue = a_enabled ? defaults.EnabledSSR : 0u;
-	const bool ssrChanged = settings.EnabledSSR != newValue;
-	settings.EnabledSSR = newValue;
-
-	if (REL::Module::IsVR()) {
-		auto& vrSettings = globals::features::vr.settings;
-		vrSettings.EnableDynamicCubemapFoveation = a_enabled ? vrDefaults.EnableDynamicCubemapFoveation : false;
-		vrSettings.EnableDynamicCubemapVisibilityThrottle = a_enabled ? vrDefaults.EnableDynamicCubemapVisibilityThrottle : false;
-		if (IsWetternessActiveForVisibilityThrottle())
-			vrSettings.EnableDynamicCubemapVisibilityThrottle = false;
-	}
-
-	if (ssrChanged) {
-		recompileFlag = true;
-		MarkCubemapRefreshHighPriority();
-	}
-}
-
-json DynamicCubemaps::CapturePerformanceCostMeasurementState() const
-{
-	return {
-		{ "EnabledSSR", settings.EnabledSSR },
-		{ "EnableDynamicCubemapFoveation", globals::features::vr.settings.EnableDynamicCubemapFoveation },
-		{ "EnableDynamicCubemapVisibilityThrottle", globals::features::vr.settings.EnableDynamicCubemapVisibilityThrottle }
-	};
-}
-
-void DynamicCubemaps::RestorePerformanceCostMeasurementState(const json& a_state)
-{
-	if (!a_state.is_object())
-		return;
-
-	const uint restoredEnabledSSR = a_state.value("EnabledSSR", settings.EnabledSSR);
-	const bool ssrChanged = settings.EnabledSSR != restoredEnabledSSR;
-	settings.EnabledSSR = restoredEnabledSSR;
-
-	auto& vrSettings = globals::features::vr.settings;
-	vrSettings.EnableDynamicCubemapFoveation = a_state.value("EnableDynamicCubemapFoveation", vrSettings.EnableDynamicCubemapFoveation);
-	vrSettings.EnableDynamicCubemapVisibilityThrottle = a_state.value("EnableDynamicCubemapVisibilityThrottle", vrSettings.EnableDynamicCubemapVisibilityThrottle);
-	if (IsWetternessActiveForVisibilityThrottle())
-		vrSettings.EnableDynamicCubemapVisibilityThrottle = false;
-
-	if (ssrChanged) {
-		recompileFlag = true;
-		MarkCubemapRefreshHighPriority();
 	}
 }
 

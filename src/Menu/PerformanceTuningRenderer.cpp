@@ -37,13 +37,12 @@ namespace
 		return globals::game::isVR && globals::features::upscaling.IsVRRenderScaleModeActive();
 	}
 
-	constexpr std::array<std::string_view, 14> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 13> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"VR",
 		"ScreenSpaceShadows",
 		"ScreenSpaceGI",
 		"LightLimitFix",
-		"DynamicCubemaps",
 		"Skylighting",
 		"TerrainBlending",
 		"TerrainShadows",
@@ -275,9 +274,6 @@ namespace
 			return json::object();
 
 		const auto shortName = feature->GetShortName();
-		if (shortName == "DynamicCubemaps") {
-			return MakeJsonMask({ "EnabledSSR" });
-		}
 		if (shortName == "ScreenSpaceShadows") {
 			return MakeJsonMask({ "Enable",
 				"SampleCount",
@@ -430,12 +426,6 @@ namespace
 			return true;
 
 		const auto shortName = feature->GetShortName();
-		if (shortName == "DynamicCubemaps") {
-			return SaveFeatureSettingsToUserDefaults(
-				FindFeatureByShortName("VR"),
-				userSettings,
-				MakeJsonMask({ "EnableDynamicCubemapFoveation", "EnableDynamicCubemapVisibilityThrottle" }));
-		}
 		if (shortName == "VR") {
 			bool ok = SaveFeatureSettingsToUserDefaults(
 				FindFeatureByShortName("ScreenSpaceShadows"),
@@ -555,15 +545,7 @@ namespace
 			return;
 
 		const auto shortName = feature->GetShortName();
-		if (shortName == "DynamicCubemaps") {
-			RestoreFeatureSettingsFromUserDefaults(
-				FindFeatureByShortName("VR"),
-				userSettings,
-				MakeJsonMask({ "EnableDynamicCubemapFoveation", "EnableDynamicCubemapVisibilityThrottle" }),
-				anyFound,
-				anyChanged,
-				anyFailed);
-		} else if (shortName == "VR") {
+		if (shortName == "VR") {
 			RestoreFeatureSettingsFromUserDefaults(
 				FindFeatureByShortName("ScreenSpaceShadows"),
 				userSettings,
@@ -944,8 +926,6 @@ namespace
 			return "SSGI/AO is switched off.";
 		if (shortName == "LightLimitFix")
 			return "particle lights, point-light contact shadows, and particle contact shadows are switched off.";
-		if (shortName == "DynamicCubemaps")
-			return "screen-space reflections, dynamic cubemap cadence, and low-visibility cubemap throttle are switched off.";
 		if (shortName == "Skylighting")
 			return "the in-game Enable Skylighting toggle is switched off, so probe updates stop and ambient shading plus reflection occlusion fall back to the unoccluded path.";
 		if (shortName == "TerrainBlending")

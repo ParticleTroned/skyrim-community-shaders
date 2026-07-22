@@ -182,6 +182,37 @@ AA versus an enabled profile; use DLSS versus FSR only for the backend-handoff
 stress series. A one-time rise while the profiles become warm is expected; the
 final same-profile delta must plateau within the bound.
 
+Step 23 isolates the remaining Step 22 plateau failure to host FSR context
+recreation. On the live NVIDIA qualification system, six-switch DLSS
+Hoshipa/Quality and DLAA/Hoshipa captures passed every gate with zero measured
+steady-state growth. FSR Hoshipa/Quality still grew by approximately 1.44 GiB
+and 1.52 GiB for its two exact profiles, while native-AA/Hoshipa grew by
+approximately 2.20 GiB. Every FSR correctness, fidelity, latency, retirement,
+pre-drain, trim, OOM, and device-loss gate passed. The final relatch plans showed
+that each active FSR resize destroyed and recreated two host contexts even
+though those contexts were already allocated to the full per-eye display
+extent.
+
+An ordinary CS-menu transition may now preserve those host contexts when the
+selected method remains FSR, the SDK compatibility check covers the target
+render and display extents, memory pressure is `Normal`, and no runtime
+upscaler, pending reset, post-load recovery, device loss, or recovery-owned
+contract is active. This covers both same-backend quality
+changes and reactivation after an FSR-selected native-AA interval. It does not
+reuse shared submit textures or engine render targets; those are still rebuilt
+for the new dimensions, and FSR history is explicitly reset.
+The short rapid-relatch cleanup window does not block compatible context reuse
+by itself; an actual non-`Normal` DXGI pressure sample does.
+
+The historical AMD forced-recreate path remains unchanged because the live
+Step 22 evidence came from an NVIDIA DLSS-capable system and therefore cannot
+qualify AMD behavior. Runtime FSR/FSR4 and incompatible host contexts also keep
+their existing teardown path. The controller exposes
+`reuseCompatibleHostFSRResources` in `resourcePlan`; a Step 23 FSR
+qualification must observe it together with `preserveFSRResources=true`,
+`destroyFSRResources=false`, and a passing steady-state growth gate before this
+replacement for the generic non-AMD resize rebuild is accepted.
+
 ## MCP contract
 
 Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 3`. An automation client should:
@@ -225,5 +256,8 @@ The record lists the principal native symbols under `analysis.symbols`. In Ghidr
 -   `Upscaling::ServiceVRRenderScaleMemoryTrim` for fenced common-target residency recovery;
 -   `Upscaling::TryPromoteVRRenderScaleSubmitStageContract` for stable-presentation latency;
 -   `Upscaling::RecordVRRenderScaleFidelityObservation` for both-eye contract failures.
+-   `FidelityFX::AreFSRResourcesCompatible`, `FidelityFX::CreateFSRResources`,
+    and `FidelityFX::DestroyFSRResources` for Step 23 host-context lifetime
+    validation.
 
 Use Ghidra to validate control flow and ownership against the shipped binary, while using the JSON record as runtime evidence. A candidate should be promoted only when repeated scenario records pass and improve the target metric without regressing another accepted backend or pressure scenario.

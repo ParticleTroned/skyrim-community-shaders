@@ -352,6 +352,7 @@ public:
 		bool reuseSharedSubmitResources = false;
 		bool preserveDLSSResources = false;
 		bool preserveFSRResources = false;
+		bool reuseCompatibleHostFSRResources = false;
 		bool retainWarmDLSSResources = false;
 		bool retainWarmFSRResources = false;
 		bool reuseWarmTargetRuntime = false;

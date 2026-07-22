@@ -16070,23 +16070,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				(relatchUpscaleMethod == UpscaleMethod::kDLSS ||
 					previousBootWasActiveDLSS ||
 					dlssResourcesNeedTeardownForRelatch));
-		const bool rapidAmdFsrLowPeakRelatch =
-			memoryReliefActiveForRelatch &&
-			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			amdAdapterForRelatch;
-		// In rapid AMD/FSR relatch windows, prefer reusing compatible host FSR
-		// contexts and reduce peak pressure elsewhere instead of forcing a rebuild.
-		const bool forceFSRResourceRecreateForRelatch =
-			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			!rapidAmdFsrLowPeakRelatch &&
-			(amdAdapterForRelatch ||
-				(relatchTargetRenderScaleActive &&
-					plannedRelatchWillResizeRenderTargets &&
-					!retainWarmInactiveVendorResourcesForRelatch));
-		const bool previousBootWasActiveFSR =
+		const bool previousBootWasFSRMethod =
 			previousBootSnapshot.valid &&
-			previousBootSnapshot.active &&
 			previousBootSnapshot.method == UpscaleMethod::kFSR;
+		const bool previousBootWasActiveFSR =
+			previousBootWasFSRMethod &&
+			previousBootSnapshot.active;
 		const auto areFSRResourcesCompatibleForRelatch = [&]() {
 			if (!fidelityFX.HasFSRResources() ||
 				!perfMode.trueHMDEyeWidth ||
@@ -16101,9 +16090,38 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				perfMode.trueHMDEyeHeight,
 				2u);
 		};
-		const auto canPreserveActiveFSRResourcesForRelatch = [&]() {
+		const bool reuseCompatibleHostFSRResourcesForRelatch =
+			relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			previousBootWasFSRMethod &&
+			!amdAdapterForRelatch &&
+			!IsFSRRuntimePathActive(relatchUpscaleMethod) &&
+			!fidelityFX.HasRuntimeUpscalerResources() &&
+			!pendingFSRReset.load(std::memory_order_acquire) &&
+			memoryAtAdmission.valid &&
+			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Normal &&
+			!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
+			!preserveActiveContractForRecovery &&
+			!IsSubmitStageDeviceLost() &&
+			areFSRResourcesCompatibleForRelatch();
+		const bool rapidAmdFsrLowPeakRelatch =
+			memoryReliefActiveForRelatch &&
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			amdAdapterForRelatch;
+		// Host FSR contexts are allocated to the full per-eye display extent in VR,
+		// so a compatible context can serve every lower render-scale quality. Keep
+		// the historical AMD forced-recreate policy until it is qualified separately.
+		const bool forceFSRResourceRecreateForRelatch =
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			!rapidAmdFsrLowPeakRelatch &&
+			!reuseCompatibleHostFSRResourcesForRelatch &&
+			(amdAdapterForRelatch ||
+				(relatchTargetRenderScaleActive &&
+					plannedRelatchWillResizeRenderTargets &&
+					!retainWarmInactiveVendorResourcesForRelatch));
+		const auto canPreserveSelectedFSRResourcesForRelatch = [&]() {
 			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
-				!previousBootWasActiveFSR ||
+				(!previousBootWasActiveFSR && !reuseCompatibleHostFSRResourcesForRelatch) ||
 				forceFSRResourceRecreateForRelatch ||
 				pendingFSRReset.load(std::memory_order_acquire) ||
 				!areFSRResourcesCompatibleForRelatch()) {
@@ -16120,7 +16138,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			areFSRResourcesCompatibleForRelatch() &&
 			(relatchUpscaleMethod != UpscaleMethod::kFSR || !previousBootWasActiveFSR);
 		const bool preserveFSRResourcesForRelatch =
-			canPreserveActiveFSRResourcesForRelatch() ||
+			canPreserveSelectedFSRResourcesForRelatch() ||
 			retainWarmFSRResourcesForRelatch;
 		const bool missingCompatibleFSRResourcesForActiveRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
@@ -16196,6 +16214,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!destroyFSRResourcesForRelatch;
 		relatchPlan.preserveDLSSResources = preserveDLSSResourcesForRelatch;
 		relatchPlan.preserveFSRResources = preserveFSRResourcesForRelatch;
+		relatchPlan.reuseCompatibleHostFSRResources = reuseCompatibleHostFSRResourcesForRelatch;
 		relatchPlan.retainWarmDLSSResources = retainWarmDLSSResourcesForRelatch;
 		relatchPlan.retainWarmFSRResources = retainWarmFSRResourcesForRelatch;
 		relatchPlan.reuseWarmTargetRuntime =
@@ -16316,7 +16335,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					} :
 					relatchDiagDisplaySize;
 			logger::debug(
-				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} targetsStrictlyReady={} dimensionsMatch={} stableEvidence={} stableTargetReuse={} sharedReuse={} vendorDimensionsUnchanged={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} targetsStrictlyReady={} dimensionsMatch={} stableEvidence={} stableTargetReuse={} sharedReuse={} vendorDimensionsUnchanged={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} compatibleHostFSRReuse={} missingFSRForActive={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
 				magic_enum::enum_name(relatchUpscaleMethod),
 				magic_enum::enum_name(relatchOrigin),
 				BoolText(preserveActiveContractForRecovery),
@@ -16333,6 +16352,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(retainWarmDLSSResourcesForRelatch),
 				BoolText(destroyDLSSResourcesForRelatch),
 				BoolText(forceFSRResourceRecreateForRelatch),
+				BoolText(reuseCompatibleHostFSRResourcesForRelatch),
 				BoolText(missingCompatibleFSRResourcesForActiveRelatch),
 				BoolText(preserveFSRResourcesForRelatch),
 				BoolText(retainWarmFSRResourcesForRelatch),
@@ -25674,7 +25694,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 21 }
+		{ "implementationStep", 23 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -25958,6 +25978,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							 { "reuseSharedSubmitResources", relatchPlan.reuseSharedSubmitResources },
 							 { "preserveDLSSResources", relatchPlan.preserveDLSSResources },
 							 { "preserveFSRResources", relatchPlan.preserveFSRResources },
+							 { "reuseCompatibleHostFSRResources", relatchPlan.reuseCompatibleHostFSRResources },
 							 { "retainWarmDLSSResources", relatchPlan.retainWarmDLSSResources },
 							 { "retainWarmFSRResources", relatchPlan.retainWarmFSRResources },
 							 { "reuseWarmTargetRuntime", relatchPlan.reuseWarmTargetRuntime },
@@ -26119,7 +26140,10 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 						 "Upscaling::ResetVRVendorRuntimeResources",
 						 "Upscaling::ServiceVRRenderScaleMemoryTrim",
 						 "Upscaling::TryPromoteVRRenderScaleSubmitStageContract",
-						 "Upscaling::RecordVRRenderScaleFidelityObservation" } }
+						 "Upscaling::RecordVRRenderScaleFidelityObservation",
+						 "FidelityFX::AreFSRResourcesCompatible",
+						 "FidelityFX::CreateFSRResources",
+						 "FidelityFX::DestroyFSRResources" } }
 	};
 	return record;
 }
@@ -26527,7 +26551,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleHostFSRReuse={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -26543,6 +26567,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			BoolText(a_plan.reuseSharedSubmitResources),
 			BoolText(a_plan.preserveDLSSResources),
 			BoolText(a_plan.preserveFSRResources),
+			BoolText(a_plan.reuseCompatibleHostFSRResources),
 			BoolText(a_plan.retainWarmDLSSResources),
 			BoolText(a_plan.retainWarmFSRResources),
 			BoolText(a_plan.reuseWarmTargetRuntime),

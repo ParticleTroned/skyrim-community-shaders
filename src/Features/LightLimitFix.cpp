@@ -60,6 +60,11 @@ namespace
 	constexpr std::size_t kDirectionalNiLightEngineReadSize = 0x174;
 	constexpr int kVRNiAVObjectFlagsOffset = 0x10C;
 	constexpr int kVRBSLightNiLightOffset = 0x48;
+	constexpr int kVRBSLightCullingProcessOffset = 0x128;
+	constexpr int kMinimumPlausibleRenderPointer = 0x10000;
+	constexpr int kLowCanonicalUserAddressBits = 47;
+	constexpr int kRenderPointerAlignmentMask = static_cast<int>(alignof(void*)) - 1;
+	constexpr std::uintptr_t kMaximumPlausibleRenderPointer = std::uintptr_t{ 1 } << kLowCanonicalUserAddressBits;
 
 	template <std::size_t N>
 	bool MatchesInstructions(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
@@ -154,6 +159,55 @@ namespace
 		}
 	};
 
+	enum class VRRoomLightCullingUse
+	{
+		kPortalGraphEntry,
+		kVirtualCall,
+	};
+
+	class VRRoomLightCullingProcessGuard : public Xbyak::CodeGenerator
+	{
+	public:
+		VRRoomLightCullingProcessGuard(VRRoomLightCullingUse a_use, std::uintptr_t a_recoveryTarget)
+		{
+			if (a_use == VRRoomLightCullingUse::kPortalGraphEntry) {
+				Generate(rax, rcx, a_recoveryTarget);
+			} else {
+				Generate(rcx, rax, a_recoveryTarget);
+			}
+		}
+
+	private:
+		void Generate(const Xbyak::Reg64& a_cullingProcess, const Xbyak::Reg64& a_scratch, std::uintptr_t a_recoveryTarget)
+		{
+			Xbyak::Label invalidCullingProcess;
+
+			// Reproduce the displaced BSLight::cullingProcess load in the register
+			// expected by its consumer, then reject values which cannot identify an
+			// aligned low-canonical user object. The scratch register is dead at all
+			// verified sites. Keep this hot per-light guard allocation-free: it
+			// rejects impossible address shapes without querying the process allocator.
+			mov(a_cullingProcess, qword[rbx + kVRBSLightCullingProcessOffset]);
+			test(a_cullingProcess, a_cullingProcess);
+			jz(invalidCullingProcess, T_SHORT);
+			cmp(a_cullingProcess, kMinimumPlausibleRenderPointer);
+			jb(invalidCullingProcess, T_SHORT);
+			test(a_cullingProcess.cvt8(), kRenderPointerAlignmentMask);
+			jnz(invalidCullingProcess, T_SHORT);
+			mov(a_scratch, a_cullingProcess);
+			shr(a_scratch, kLowCanonicalUserAddressBits);
+			jnz(invalidCullingProcess, T_SHORT);
+			ret();
+
+			L(invalidCullingProcess);
+			// Discard write_call's return address and use the consumer's narrowest
+			// existing Bethesda recovery branch.
+			add(rsp, 8);
+			mov(rax, a_recoveryTarget);
+			jmp(rax);
+		}
+	};
+
 	void DrawHeatWarpStrengthSetting()
 	{
 		ImGui::SliderFloat(
@@ -172,7 +226,9 @@ namespace
 	bool IsPlausibleRenderPointer(const void* a_ptr)
 	{
 		const auto value = reinterpret_cast<std::uintptr_t>(a_ptr);
-		return value >= 0x10000 && value < 0x800000000000ull && (value & 0x7) == 0;
+		return value >= kMinimumPlausibleRenderPointer &&
+		       value < kMaximumPlausibleRenderPointer &&
+		       (value & kRenderPointerAlignmentMask) == 0;
 	}
 
 	bool IsReadableRange(const void* a_ptr, std::size_t a_size) noexcept
@@ -1781,6 +1837,109 @@ void LightLimitFix::Hooks::InstallVRNonShadowCasterLightFlagsGuard()
 	REL::safe_fill(target + 5, REL::NOP, sizeof(expectedInstruction) - 5);
 
 	logger::info("[LLF] Installed VR non-shadow caster light flags guard");
+}
+
+void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()
+{
+	if (!REL::Module::IsVR()) {
+		return;
+	}
+
+	if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+		logger::error("[LLF] VR room-light culling-process guards not installed: unsupported Skyrim VR runtime {}", REL::Module::get().version().string());
+		return;
+	}
+
+	// Skyrim VR 1.4.15's room-light culling loops dereference and call through
+	// BSLight::cullingProcess without validating it. The duplicated loops cover
+	// the BSMultiBoundRoom and BSPortalSharedNode parent paths. These
+	// RVAs, contexts, and recovery branches were verified against the live,
+	// decrypted runtime image after a Blue Palace transition supplied the
+	// non-canonical 0x7F7FFFFF7F7FFFFF value.
+	constexpr std::uintptr_t firstRoomLightContextRVA = 0x12F8C30;
+	constexpr std::uintptr_t firstPortalGraphEntryProcessLoadRVA = 0x12F8C61;
+	constexpr std::uintptr_t firstNoPortalGraphEntryRVA = 0x12F8C71;
+	constexpr std::uintptr_t firstCullingProcessLoadRVA = 0x12F8C81;
+	constexpr std::uintptr_t firstSkipLightRVA = 0x12F8CE0;
+	constexpr std::uintptr_t secondRoomLightContextRVA = 0x12F8D40;
+	constexpr std::uintptr_t secondPortalGraphEntryProcessLoadRVA = 0x12F8D71;
+	constexpr std::uintptr_t secondNoPortalGraphEntryRVA = 0x12F8D81;
+	constexpr std::uintptr_t secondCullingProcessLoadRVA = 0x12F8D91;
+	constexpr std::uintptr_t secondSkipLightRVA = 0x12F8DF0;
+	constexpr std::size_t cullingProcessLoadInstructionSize = 7;
+	constexpr std::uint8_t expectedFirstRoomLightContext[] = { 0x48, 0x8B, 0x8D, 0xA8, 0x01, 0x00, 0x00, 0x4A, 0x8B, 0x1C, 0xF1 };
+	constexpr std::uint8_t expectedSecondRoomLightContext[] = { 0x48, 0x8B, 0x87, 0x50, 0x01, 0x00, 0x00, 0x4A, 0x8B, 0x1C, 0xF0 };
+	constexpr std::uint8_t expectedFirstPortalGraphEntryProcessLoad[] = {
+		0x48, 0x8B, 0x83, 0x28, 0x01, 0x00, 0x00,
+		0x48, 0x8B, 0xB0, 0x90, 0x01, 0x03, 0x00,
+		0xEB, 0x02
+	};
+	constexpr std::uint8_t expectedSecondPortalGraphEntryProcessLoad[] = {
+		0x48, 0x8B, 0x83, 0x28, 0x01, 0x00, 0x00,
+		0x48, 0x8B, 0xA8, 0x90, 0x01, 0x03, 0x00,
+		0xEB, 0x02
+	};
+	constexpr std::uint8_t expectedFirstNoPortalGraphEntry[] = { 0x33, 0xF6, 0x41, 0x8B, 0x85, 0x0C, 0x01, 0x00, 0x00 };
+	constexpr std::uint8_t expectedSecondNoPortalGraphEntry[] = { 0x33, 0xED, 0x41, 0x8B, 0x85, 0x0C, 0x01, 0x00, 0x00 };
+	constexpr std::uint8_t expectedCullingProcessLoad[] = {
+		0x48, 0x8B, 0x8B, 0x28, 0x01, 0x00, 0x00,
+		0x48, 0x8D, 0x54, 0x24, 0x48,
+		0x48, 0x8B, 0x01,
+		0xFF, 0x90, 0xE8, 0x00, 0x00, 0x00
+	};
+	constexpr std::uint8_t expectedFirstSkipLight[] = { 0x41, 0xFF, 0xC6, 0x44, 0x3B, 0xB5, 0xB8, 0x01, 0x00, 0x00 };
+	constexpr std::uint8_t expectedSecondSkipLight[] = { 0x41, 0xFF, 0xC6, 0x44, 0x3B, 0xB7, 0x60, 0x01, 0x00, 0x00 };
+
+	const auto moduleBase = REL::Module::get().base();
+	const auto firstRoomLightContext = moduleBase + firstRoomLightContextRVA;
+	const auto firstPortalGraphEntryProcessLoad = moduleBase + firstPortalGraphEntryProcessLoadRVA;
+	const auto firstNoPortalGraphEntry = moduleBase + firstNoPortalGraphEntryRVA;
+	const auto firstCullingProcessLoad = moduleBase + firstCullingProcessLoadRVA;
+	const auto firstSkipLight = moduleBase + firstSkipLightRVA;
+	const auto secondRoomLightContext = moduleBase + secondRoomLightContextRVA;
+	const auto secondPortalGraphEntryProcessLoad = moduleBase + secondPortalGraphEntryProcessLoadRVA;
+	const auto secondNoPortalGraphEntry = moduleBase + secondNoPortalGraphEntryRVA;
+	const auto secondCullingProcessLoad = moduleBase + secondCullingProcessLoadRVA;
+	const auto secondSkipLight = moduleBase + secondSkipLightRVA;
+
+	if (!MatchesInstructions(firstRoomLightContext, expectedFirstRoomLightContext) ||
+		!MatchesInstructions(firstPortalGraphEntryProcessLoad, expectedFirstPortalGraphEntryProcessLoad) ||
+		!MatchesInstructions(firstNoPortalGraphEntry, expectedFirstNoPortalGraphEntry) ||
+		!MatchesInstructions(firstCullingProcessLoad, expectedCullingProcessLoad) ||
+		!MatchesInstructions(firstSkipLight, expectedFirstSkipLight) ||
+		!MatchesInstructions(secondRoomLightContext, expectedSecondRoomLightContext) ||
+		!MatchesInstructions(secondPortalGraphEntryProcessLoad, expectedSecondPortalGraphEntryProcessLoad) ||
+		!MatchesInstructions(secondNoPortalGraphEntry, expectedSecondNoPortalGraphEntry) ||
+		!MatchesInstructions(secondCullingProcessLoad, expectedCullingProcessLoad) ||
+		!MatchesInstructions(secondSkipLight, expectedSecondSkipLight)) {
+		logger::error("[LLF] VR room-light culling-process guards not installed: unexpected SkyrimVR.exe instructions");
+		return;
+	}
+
+	VRRoomLightCullingProcessGuard firstPortalGraphEntryCode{ VRRoomLightCullingUse::kPortalGraphEntry, firstNoPortalGraphEntry };
+	firstPortalGraphEntryCode.ready();
+	VRRoomLightCullingProcessGuard firstVirtualCallCode{ VRRoomLightCullingUse::kVirtualCall, firstSkipLight };
+	firstVirtualCallCode.ready();
+	VRRoomLightCullingProcessGuard secondPortalGraphEntryCode{ VRRoomLightCullingUse::kPortalGraphEntry, secondNoPortalGraphEntry };
+	secondPortalGraphEntryCode.ready();
+	VRRoomLightCullingProcessGuard secondVirtualCallCode{ VRRoomLightCullingUse::kVirtualCall, secondSkipLight };
+	secondVirtualCallCode.ready();
+
+	auto& trampoline = SKSE::GetTrampoline();
+	const auto firstPortalGraphEntryGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(firstPortalGraphEntryCode));
+	const auto firstVirtualCallGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(firstVirtualCallCode));
+	const auto secondPortalGraphEntryGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(secondPortalGraphEntryCode));
+	const auto secondVirtualCallGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(secondVirtualCallCode));
+	trampoline.write_call<5>(firstPortalGraphEntryProcessLoad, firstPortalGraphEntryGuard);
+	REL::safe_fill(firstPortalGraphEntryProcessLoad + 5, REL::NOP, cullingProcessLoadInstructionSize - 5);
+	trampoline.write_call<5>(firstCullingProcessLoad, firstVirtualCallGuard);
+	REL::safe_fill(firstCullingProcessLoad + 5, REL::NOP, cullingProcessLoadInstructionSize - 5);
+	trampoline.write_call<5>(secondPortalGraphEntryProcessLoad, secondPortalGraphEntryGuard);
+	REL::safe_fill(secondPortalGraphEntryProcessLoad + 5, REL::NOP, cullingProcessLoadInstructionSize - 5);
+	trampoline.write_call<5>(secondCullingProcessLoad, secondVirtualCallGuard);
+	REL::safe_fill(secondCullingProcessLoad + 5, REL::NOP, cullingProcessLoadInstructionSize - 5);
+
+	logger::info("[LLF] Installed VR room-light culling-process guards");
 }
 
 void LightLimitFix::Hooks::InstallVREffectShaderLightGuards()

@@ -406,6 +406,10 @@ public:
 		uint32_t completedCount = 0;
 		uint32_t failures = 0;
 		bool lastSucceeded = false;
+		uint32_t preRecreateDrainCount = 0;
+		uint32_t preRecreateDrainFailures = 0;
+		uint32_t lastOfferedResourceCount = 0;
+		bool lastOfferUsedDecommit = false;
 	};
 
 	struct VRRenderScalePostLoadRecoverySnapshot
@@ -510,6 +514,8 @@ public:
 		uint32_t peakRetiredSets = 0;
 		uint32_t memoryTrimCount = 0;
 		uint32_t memoryTrimFailures = 0;
+		uint32_t memoryPreRecreateDrainCount = 0;
+		uint32_t memoryPreRecreateDrainFailures = 0;
 	};
 
 	struct VRRenderScaleMetricsSnapshot
@@ -1454,6 +1460,7 @@ public:
 	bool CanAdmitVRIntermediateRetirement(uint64_t a_epoch);
 	void UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked = false);
 	bool SampleVRRenderScaleMemory(bool a_force = false, const char* a_reason = nullptr);
+	void PrepareVRRenderScaleCommonTargetResidencyDrain(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason);
 	bool ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason);
 	bool ServiceVRRenderScaleMemoryTrim(const char* a_reason = nullptr);
 	bool HasPendingVRRenderScaleMemoryTrim() const;

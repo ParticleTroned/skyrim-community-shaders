@@ -150,6 +150,32 @@ pending. A candidate still has to pass `steady_state_memory_growth`; a reported
 successful trim is evidence of the attempted recovery, not a substitute for the
 measured VRAM plateau.
 
+Step 22 corrects the ordering exposed by the first Step 21 live qualification.
+Six-switch DLSS and FSR Hoshipa/Quality captures preserved exact both-eye
+fidelity, bounded latency, and drained retirement, but the last two peaks still
+grew by approximately 1.45--1.89 GiB. DLAA/Hoshipa grew by approximately
+2.20 GiB. `IDXGIDevice3::Trim` completed on every protected transition, proving
+that a post-allocation trim alone cannot prevent the released and replacement
+engine target tables from overlapping in WDDM residency.
+
+Before a protected recreate, the controller now unbinds all texture and UAV
+stages, invalidates Skyrim's matching renderer-resource caches, flushes queued
+D3D11 work, and offers the size-dependent engine, depth, deferred, underwater,
+and display targets to DXGI at low priority. `IDXGIDevice4::OfferResources1`
+uses `DXGI_OFFER_RESOURCE_FLAG_ALLOW_DECOMMIT` when available; older DXGI
+devices fall back to `IDXGIDevice2::OfferResources`. The engine immediately
+releases those offered resources while rebuilding the table, and the existing
+GPU-fenced post-recreate trim remains the final destruction barrier. Offered
+resources are never reclaimed or reused.
+
+This pre-drain runs only for rapid relatches, native restores, pressure, and
+post-load recovery. An isolated ordinary CS-menu change keeps the original fast
+path. Status and schema-v3 records expose pre-recreate drain counts, failures,
+the last offered resource count, and whether decommit was used. The
+`common_target_predrain` gate rejects an unavailable offer during a captured
+protected transition; `steady_state_memory_growth` remains the authoritative
+plateau check.
+
 To evaluate this gate, complete at least three transitions to each of two exact
 profiles in alternating order. Prefer two resolutions on one backend or native
 AA versus an enabled profile; use DLSS versus FSR only for the backend-handoff

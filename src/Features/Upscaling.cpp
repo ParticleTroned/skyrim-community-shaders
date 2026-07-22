@@ -33,6 +33,7 @@
 #include <directx/d3dx12.h>
 #include <dxgi.h>
 #include <dxgi1_3.h>
+#include <dxgi1_5.h>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -1099,6 +1100,106 @@ namespace
 		RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_1,
 		RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_2,
 	};
+
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 8> kVRRenderScaleDeferredTargets{
+		ALBEDO,
+		SPECULAR,
+		REFLECTANCE,
+		NORMALROUGHNESS,
+		MASKS,
+		MASKS2,
+		RE::RENDER_TARGETS::kWATER_1,
+		RE::RENDER_TARGETS::kWATER_2,
+	};
+
+	struct VRRenderScaleCommonTargetOfferResult
+	{
+		HRESULT result = E_NOINTERFACE;
+		uint32_t resourceCount = 0;
+		bool usedDecommit = false;
+
+		[[nodiscard]] bool Succeeded() const
+		{
+			return SUCCEEDED(result) && resourceCount != 0;
+		}
+	};
+
+	VRRenderScaleCommonTargetOfferResult OfferVRRenderScaleCommonTargetResources()
+	{
+		VRRenderScaleCommonTargetOfferResult result{};
+		auto renderer = globals::game::renderer;
+		auto device = globals::d3d::device;
+		if (!renderer || !device)
+			return result;
+
+		std::vector<winrt::com_ptr<IDXGIResource>> resources;
+		resources.reserve(
+			(kVRRenderScaleEngineSizedTargets.size() +
+				kVRRenderScaleDisplaySizedTargets.size() +
+				kVRRenderScaleDeferredTargets.size() + 3u) *
+			2u);
+		auto appendTexture = [&](ID3D11Texture2D* a_texture) {
+			if (!a_texture)
+				return;
+
+			winrt::com_ptr<IDXGIResource> resource;
+			if (FAILED(a_texture->QueryInterface(resource.put())) || !resource)
+				return;
+			if (std::find_if(resources.begin(), resources.end(), [&](const auto& a_existing) {
+					return a_existing.get() == resource.get();
+				}) != resources.end()) {
+				return;
+			}
+			resources.emplace_back(std::move(resource));
+		};
+		auto appendRenderTarget = [&](RE::RENDER_TARGETS::RENDER_TARGET a_target) {
+			const auto& target = renderer->GetRuntimeData().renderTargets[a_target];
+			appendTexture(target.texture);
+			appendTexture(target.textureCopy);
+		};
+
+		for (const auto target : kVRRenderScaleEngineSizedTargets)
+			appendRenderTarget(target);
+		for (const auto target : kVRRenderScaleDisplaySizedTargets)
+			appendRenderTarget(target);
+		for (const auto target : kVRRenderScaleDeferredTargets)
+			appendRenderTarget(target);
+		appendRenderTarget(RE::RENDER_TARGETS::kUNDERWATER_MASK);
+
+		const auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
+		appendTexture(depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture);
+		appendTexture(depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY].texture);
+		if (resources.empty()) {
+			result.result = E_FAIL;
+			return result;
+		}
+
+		std::vector<IDXGIResource*> offeredResources;
+		offeredResources.reserve(resources.size());
+		for (const auto& resource : resources)
+			offeredResources.push_back(resource.get());
+		result.resourceCount = static_cast<uint32_t>(offeredResources.size());
+
+		winrt::com_ptr<IDXGIDevice4> offerDevice4;
+		if (SUCCEEDED(device->QueryInterface(offerDevice4.put())) && offerDevice4) {
+			result.result = offerDevice4->OfferResources1(
+				result.resourceCount,
+				offeredResources.data(),
+				DXGI_OFFER_RESOURCE_PRIORITY_LOW,
+				DXGI_OFFER_RESOURCE_FLAG_ALLOW_DECOMMIT);
+			result.usedDecommit = SUCCEEDED(result.result);
+			return result;
+		}
+
+		winrt::com_ptr<IDXGIDevice2> offerDevice2;
+		if (SUCCEEDED(device->QueryInterface(offerDevice2.put())) && offerDevice2) {
+			result.result = offerDevice2->OfferResources(
+				result.resourceCount,
+				offeredResources.data(),
+				DXGI_OFFER_RESOURCE_PRIORITY_LOW);
+		}
+		return result;
+	}
 
 	constexpr std::size_t kVRRenderScaleDepthMainProbeIndex = kVRRenderScaleEngineSizedTargets.size();
 	constexpr std::size_t kVRRenderScaleDepthCopyProbeIndex = kVRRenderScaleDepthMainProbeIndex + 1u;
@@ -16343,6 +16444,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				ClampPositiveDimension(relatchTargetDisplaySize.x),
 				ClampPositiveDimension(relatchTargetDisplaySize.y));
 		} else {
+			const bool postLoadRelatch =
+				relatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
+				IsVRRenderScaleRecoveryOrigin(relatchOrigin) ||
+				postLoadRecoveryEpoch != 0;
+			const auto trimReason =
+				postLoadRelatch ? VRRenderScaleMemoryTrimReason::PostLoad :
+				lowPeakNativeRestoreRelatch ? VRRenderScaleMemoryTrimReason::NativeRestore :
+				(pressureMemoryRelief || pressureTrimCompletedForEpoch) ? VRRenderScaleMemoryTrimReason::Pressure :
+				memoryReliefActiveForRelatch ? VRRenderScaleMemoryTrimReason::RapidRelatch :
+				VRRenderScaleMemoryTrimReason::None;
+			if (trimReason != VRRenderScaleMemoryTrimReason::None) {
+				PrepareVRRenderScaleCommonTargetResidencyDrain(relatchEpoch, trimReason);
+			}
 			const bool releasedDeferredTargetsForRelief =
 				(memoryReliefActiveForRelatch || lowPeakNativeRestoreRelatch) &&
 				globals::deferred;
@@ -16362,16 +16476,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				return false;
 			}
 			renderTargetsRelatched = true;
-			const bool postLoadRelatch =
-				relatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
-				IsVRRenderScaleRecoveryOrigin(relatchOrigin) ||
-				postLoadRecoveryEpoch != 0;
-			const auto trimReason =
-				postLoadRelatch ? VRRenderScaleMemoryTrimReason::PostLoad :
-				lowPeakNativeRestoreRelatch ? VRRenderScaleMemoryTrimReason::NativeRestore :
-				(pressureMemoryRelief || pressureTrimCompletedForEpoch) ? VRRenderScaleMemoryTrimReason::Pressure :
-				memoryReliefActiveForRelatch ? VRRenderScaleMemoryTrimReason::RapidRelatch :
-				VRRenderScaleMemoryTrimReason::None;
 			if (trimReason != VRRenderScaleMemoryTrimReason::None) {
 				ArmVRRenderScaleMemoryTrim(relatchEpoch, trimReason);
 			}
@@ -16889,6 +16993,99 @@ void Upscaling::UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked)
 	++vrRenderScaleTransitionController.revision;
 }
 
+void Upscaling::PrepareVRRenderScaleCommonTargetResidencyDrain(
+	uint64_t a_ownerEpoch,
+	VRRenderScaleMemoryTrimReason a_reason)
+{
+	if (!globals::game::isVR || !globals::d3d::context ||
+		a_ownerEpoch == 0 || a_reason == VRRenderScaleMemoryTrimReason::None) {
+		return;
+	}
+
+	// Remove every texture/view binding before the engine releases the old
+	// target table. This is the resource-scoped equivalent of ClearState without
+	// invalidating Skyrim's unrelated shader, sampler, and input-layout caches.
+	UnbindUpscalingResources();
+	ID3D11UnorderedAccessView* nullOMUAVs[D3D11_PS_CS_UAV_REGISTER_COUNT] = {};
+	globals::d3d::context->OMSetRenderTargetsAndUnorderedAccessViews(
+		0,
+		nullptr,
+		nullptr,
+		0,
+		ARRAYSIZE(nullOMUAVs),
+		nullOMUAVs,
+		nullptr);
+	if (globals::game::shadowState) {
+		GET_INSTANCE_MEMBER(PSResourceModifiedBits, globals::game::shadowState)
+		GET_INSTANCE_MEMBER(CSResourceModifiedBits, globals::game::shadowState)
+		GET_INSTANCE_MEMBER(CSUAVModifiedBits, globals::game::shadowState)
+		PSResourceModifiedBits = std::numeric_limits<uint32_t>::max();
+		CSResourceModifiedBits = std::numeric_limits<uint32_t>::max();
+		CSUAVModifiedBits = std::numeric_limits<uint32_t>::max();
+		if (REL::Module::IsVR()) {
+			auto& runtimeData = globals::game::shadowState->GetVRRuntimeData();
+			runtimeData.OMUAVModifiedBits = std::numeric_limits<uint32_t>::max();
+			runtimeData.SRVModifiedBits = std::numeric_limits<uint32_t>::max();
+		}
+	}
+	if (globals::game::stateUpdateFlags)
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	globals::d3d::context->Flush();
+
+	const auto offer = OfferVRRenderScaleCommonTargetResources();
+	const bool succeeded = offer.Succeeded();
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& trim = vrRenderScaleTransitionController.memoryTrim;
+		trim.reason = a_reason;
+		trim.ownerEpoch = a_ownerEpoch;
+		trim.lastOfferedResourceCount = succeeded ? offer.resourceCount : 0;
+		trim.lastOfferUsedDecommit = succeeded && offer.usedDecommit;
+		if (succeeded) {
+			if (trim.preRecreateDrainCount != std::numeric_limits<uint32_t>::max())
+				++trim.preRecreateDrainCount;
+		} else if (trim.preRecreateDrainFailures != std::numeric_limits<uint32_t>::max()) {
+			++trim.preRecreateDrainFailures;
+		}
+
+		auto recordMetricsDrain = [&](VRRenderScaleTransitionMetrics& a_metrics) {
+			if (!a_metrics.valid || a_metrics.transitionEpoch != a_ownerEpoch)
+				return false;
+			if (succeeded) {
+				if (a_metrics.memoryPreRecreateDrainCount != std::numeric_limits<uint32_t>::max())
+					++a_metrics.memoryPreRecreateDrainCount;
+			} else if (a_metrics.memoryPreRecreateDrainFailures != std::numeric_limits<uint32_t>::max()) {
+				++a_metrics.memoryPreRecreateDrainFailures;
+			}
+			return true;
+		};
+		bool recorded = recordMetricsDrain(vrRenderScaleTransitionController.metrics.current);
+		if (!recorded) {
+			for (auto& archived : vrRenderScaleTransitionController.metrics.recent) {
+				if (recordMetricsDrain(archived))
+					break;
+			}
+		}
+		++vrRenderScaleTransitionController.revision;
+	}
+
+	if (succeeded) {
+		logger::debug(
+			"[VRRenderScale][Memory] Offered {} common target resource(s) before recreate. reason={} ownerEpoch={} decommit={}",
+			offer.resourceCount,
+			GetVRRenderScaleMemoryTrimReasonName(a_reason),
+			a_ownerEpoch,
+			BoolText(offer.usedDecommit));
+	} else {
+		logger::warn(
+			"[VRRenderScale][Memory] Common-target pre-recreate offer unavailable. reason={} ownerEpoch={} candidates={} result=0x{:08X}",
+			GetVRRenderScaleMemoryTrimReasonName(a_reason),
+			a_ownerEpoch,
+			offer.resourceCount,
+			static_cast<uint32_t>(offer.result));
+	}
+}
+
 bool Upscaling::ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason)
 {
 	if (!globals::game::isVR || !globals::d3d::device || !globals::d3d::context ||
@@ -16905,6 +17102,10 @@ bool Upscaling::ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleM
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		auto& trim = vrRenderScaleTransitionController.memoryTrim;
+		if (trim.ownerEpoch != a_ownerEpoch) {
+			trim.lastOfferedResourceCount = 0;
+			trim.lastOfferUsedDecommit = false;
+		}
 		trim.pending = true;
 		trim.reason = a_reason;
 		trim.ownerEpoch = a_ownerEpoch;
@@ -16923,6 +17124,8 @@ bool Upscaling::ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleM
 	// Place the event after the recreation/recovery work immediately. Polling is
 	// non-blocking and Trim is not called until the GPU has crossed this point.
 	ServiceVRRenderScaleMemoryTrim("arm");
+	if (HasPendingVRRenderScaleMemoryTrim() && globals::d3d::context)
+		globals::d3d::context->Flush();
 	return true;
 }
 
@@ -25439,6 +25642,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	uint64_t outOfMemoryFailures = 0;
 	uint64_t deviceLostFailures = 0;
 	uint64_t fidelityMismatches = 0;
+	uint64_t memoryPreRecreateDrainFailures = 0;
 	struct ProfileMemoryTrend
 	{
 		VRRenderScaleResourceKey resources{};
@@ -25480,6 +25684,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		outOfMemoryFailures += a_metrics.outOfMemoryFailures;
 		deviceLostFailures += a_metrics.deviceLostFailures;
 		fidelityMismatches += a_metrics.fidelityMismatches;
+		memoryPreRecreateDrainFailures += a_metrics.memoryPreRecreateDrainFailures;
 		if (a_metrics.completed &&
 			!a_metrics.superseded &&
 			a_metrics.peakUsageBytes != 0 &&
@@ -25531,7 +25736,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "peakUsageBytes", a_metrics.peakUsageBytes },
 			{ "peakRetiredSets", a_metrics.peakRetiredSets },
 			{ "memoryTrimCount", a_metrics.memoryTrimCount },
-			{ "memoryTrimFailures", a_metrics.memoryTrimFailures } });
+			{ "memoryTrimFailures", a_metrics.memoryTrimFailures },
+			{ "memoryPreRecreateDrainCount", a_metrics.memoryPreRecreateDrainCount },
+			{ "memoryPreRecreateDrainFailures", a_metrics.memoryPreRecreateDrainFailures } });
 	};
 	const uint32_t metricCapacity = static_cast<uint32_t>(controller.metrics.recent.size());
 	const uint32_t firstMetric =
@@ -25600,7 +25807,11 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							{ "fenceFailures", controller.memoryTrim.fenceFailures },
 							{ "completedCount", controller.memoryTrim.completedCount },
 							{ "failures", controller.memoryTrim.failures },
-							{ "lastSucceeded", controller.memoryTrim.lastSucceeded } } },
+							{ "lastSucceeded", controller.memoryTrim.lastSucceeded },
+							{ "preRecreateDrainCount", controller.memoryTrim.preRecreateDrainCount },
+							{ "preRecreateDrainFailures", controller.memoryTrim.preRecreateDrainFailures },
+							{ "lastOfferedResourceCount", controller.memoryTrim.lastOfferedResourceCount },
+							{ "lastOfferUsedDecommit", controller.memoryTrim.lastOfferUsedDecommit } } },
 		{ "retirement", { { "pendingSets", controller.retirement.pendingSets },
 							{ "oldestEpoch", controller.retirement.oldestEpoch },
 							{ "newestEpoch", controller.retirement.newestEpoch },
@@ -25780,6 +25991,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	addGate("stable_latency_bound", stableCount != 0 && completedMetricCount != 0 && maximumLatencyFrames <= kMaximumStableLatencyFrames, maximumLatencyFrames, kMaximumStableLatencyFrames);
 	addGate("fidelity_invariants", fidelityMismatches == 0 && controller.fidelity.mismatchCount == 0 && fidelityValid, { { "metrics", fidelityMismatches }, { "current", controller.fidelity.mismatchCount } }, 0);
 	addGate("retirement_drained", retirementDrained, { { "pendingSets", controller.retirement.pendingSets }, { "nextCleanupFrame", controller.retirement.nextCleanupFrame }, { "fencePending", controller.retirement.fencePending }, { "capacityBlocked", controller.retirement.capacityBlocked } }, 0);
+	addGate("common_target_predrain", memoryPreRecreateDrainFailures == 0, memoryPreRecreateDrainFailures, 0);
 	addGate("memory_trim_drained", memoryTrimDrained, { { "pending", controller.memoryTrim.pending }, { "reason", GetVRRenderScaleMemoryTrimReasonName(controller.memoryTrim.reason) }, { "ownerEpoch", controller.memoryTrim.ownerEpoch } }, false);
 	addGate("memory_sample_valid", memoryEvidenceValid, memoryEvidenceValid, true);
 	addGate("memory_recovered", pressureRecovered, GetVRRenderScaleMemoryPressureName(controller.memory.pressure), "Normal or Elevated with recovery inactive");

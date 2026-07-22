@@ -17,7 +17,7 @@ namespace
 {
 	void DrawEnabledCheckbox(VolumetricShadows::Settings& a_settings)
 	{
-		ImGui::Checkbox("Enabled", &a_settings.Enabled);
+		ImGui::Checkbox("Enable", &a_settings.Enabled);
 	}
 
 	template <class T>

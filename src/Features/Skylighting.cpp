@@ -231,7 +231,7 @@ namespace
 	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
 	{
 		const bool previousEnabled = a_skylighting.settings.EnableSkylighting;
-		if (ImGui::Checkbox("Enable Skylighting", &a_skylighting.settings.EnableSkylighting))
+		if (ImGui::Checkbox("Enable", &a_skylighting.settings.EnableSkylighting))
 			ApplySkylightingRuntimeEnabledChange(a_skylighting, previousEnabled);
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -254,6 +254,7 @@ namespace
 		const uint probeDepth = GetProbeGridPreset(probeGridQuality).Depth;
 		const float probeFieldSizeTolerance = Skylighting::Settings::kWorldCellSize * 0.01f;
 
+		// Keep the selected quality profile visible while the independent runtime master switch is off.
 		return probeGridQuality == a_preset.ProbeGridQuality &&
 		       settings.EnableReducedUpdateFrequency == a_preset.EnableReducedUpdateFrequency &&
 		       ClampUpdateInterval(settings.OcclusionUpdateInterval) == a_preset.OcclusionUpdateInterval &&
@@ -286,6 +287,8 @@ namespace
 		Skylighting& a_skylighting,
 		const SkylightingPerformancePreset& a_preset)
 	{
+		// Profiles tune quality only; preserve the independent runtime master switch.
+		const bool runtimeEnabled = a_skylighting.settings.EnableSkylighting;
 		const uint previousProbeGridQuality = a_skylighting.settings.ProbeGridQuality;
 		auto& settings = a_skylighting.settings;
 
@@ -297,6 +300,7 @@ namespace
 		settings.StableSliceCount = ClampStableSliceCount(a_preset.StableSliceCount, GetProbeGridPreset(settings.ProbeGridQuality).Depth);
 		settings.EnableFastProbeSampling = a_preset.EnableFastProbeSampling;
 		settings.ProbeFieldSize = GetPresetProbeFieldSize(a_preset);
+		settings.EnableSkylighting = runtimeEnabled;
 
 		ApplySkylightingRuntimeSettingsChange(a_skylighting, previousProbeGridQuality);
 	}
@@ -305,8 +309,8 @@ namespace
 	{
 		ImGui::TextUnformatted("Performance Profiles");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("These presets tune Skylighting while it stays enabled.");
-			ImGui::Text("The performance profiler compares against turning Enable Skylighting off instead of using one of these presets.");
+			ImGui::Text("These profiles tune Skylighting quality without changing the Enable switch.");
+			ImGui::Text("The performance profiler compares against turning Skylighting off instead of using one of these profiles.");
 		}
 
 		if (ImGui::BeginTable(a_tableId, static_cast<int>(kSkylightingPerformancePresets.size()), ImGuiTableFlags_SizingStretchProp)) {

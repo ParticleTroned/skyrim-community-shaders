@@ -41,6 +41,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -2041,41 +2042,29 @@ namespace
 		}
 	}
 
-	bool TryParseToggle(std::string_view value, bool& outValue)
+	bool TryParseFiniteFloat(std::string_view value, float& outValue)
 	{
-		uint32_t parsedValue = 0;
-		if (TryParseUnsigned(value, parsedValue)) {
-			outValue = ClampToggleUInt(parsedValue) != 0;
-			return true;
-		}
+		value = TrimAsciiWhitespace(value);
+		if (value.empty())
+			return false;
 
-		return TryParseAsciiBoolSetting(std::string(value), outValue);
+		try {
+			const std::string text(value);
+			size_t parsedChars = 0;
+			const float parsedValue = std::stof(text, &parsedChars);
+			if (parsedChars != text.size() || !std::isfinite(parsedValue))
+				return false;
+
+			outValue = parsedValue;
+			return true;
+		} catch (...) {
+			return false;
+		}
 	}
 
-	struct VRFpsStabilizerUpscalingProfile
-	{
-		bool hasUpscaleMethod = false;
-		Upscaling::UpscaleMethod upscaleMethod = Upscaling::UpscaleMethod::kNONE;
-		bool hasLegacyMethodSelection = false;
-		bool hasQualityMode = false;
-		uint32_t qualityMode = 0;
-		bool hasDLSSPreset = false;
-		uint32_t dlssPreset = Upscaling::kDLSSPresetK;
-		bool hasRenderScaleMode = false;
-		bool renderScaleMode = false;
-
-		[[nodiscard]] bool HasAnySetting() const
-		{
-			return hasUpscaleMethod || hasLegacyMethodSelection || hasQualityMode || hasDLSSPreset || hasRenderScaleMode;
-		}
-	};
-
-	struct VRFpsStabilizerUpscalingProfiles
-	{
-		std::filesystem::path path;
-		VRFpsStabilizerUpscalingProfile interior;
-		VRFpsStabilizerUpscalingProfile exterior;
-	};
+	using VRFpsStabilizerUpscalingProfile = Upscaling::VRFpsStabilizerProfile;
+	using VRFpsStabilizerUpscalingProfiles = Upscaling::VRFpsStabilizerConfig;
+	constexpr uintmax_t kVRFpsStabilizerMaxIniBytes = 4u * 1024u * 1024u;
 
 	struct VRFpsStabilizerTransitionTarget
 	{
@@ -2111,144 +2100,424 @@ namespace
 		return GetVRFpsStabilizerIniDefaultPath();
 	}
 
+	// Internal quality-mode index -> VRAPI UpscalePreset value.
+	constexpr std::array<uint32_t, Upscaling::kQualityModeMaxIndex + 1> kVRFpsStabilizerUpscalePresets{
+		0u,  // Native AA / DLAA
+		5u,  // Hoshipa
+		6u,  // Ultra Quality
+		1u,  // Quality
+		2u,  // Balanced
+		3u,  // Performance
+		4u   // Ultra Performance
+	};
+
 	uint32_t VRFpsStabilizerUpscalePresetToQualityMode(uint32_t a_preset)
 	{
-		switch (a_preset) {
-		case 5:
-			return 1u;  // API kHoshipa
-		case 6:
-			return 2u;  // API kUltraQuality
-		case 1:
-			return 3u;  // API kQuality
-		case 2:
-			return 4u;  // API kBalanced
-		case 3:
-			return 5u;  // API kPerformance
-		case 4:
-			return 6u;  // API kUltraPerformance
-		default:
-			return 0u;  // API kNativeAA/kDLAA or invalid
-		}
+		const auto preset = std::ranges::find(kVRFpsStabilizerUpscalePresets, a_preset);
+		return preset == kVRFpsStabilizerUpscalePresets.end() ?
+		           0u :
+		           static_cast<uint32_t>(preset - kVRFpsStabilizerUpscalePresets.begin());
 	}
 
-	void ApplyVRFpsStabilizerUpscalingSetting(VRFpsStabilizerUpscalingProfile& profile, std::string_view settingName, std::string_view value)
+	enum class VRFpsStabilizerSetting
 	{
-		const bool isUpscaleMethod = EqualsAsciiInsensitive(settingName, "UpscaleMethod");
-		const bool isLegacyDLSSMode = EqualsAsciiInsensitive(settingName, "DLSSMode");
-		const bool isUpscalePreset = EqualsAsciiInsensitive(settingName, "UpscalePreset") || isLegacyDLSSMode;
-		const bool isQualityMode = EqualsAsciiInsensitive(settingName, "QualityMode");
-		const bool isLegacyDLSSProfile = EqualsAsciiInsensitive(settingName, "DLSSProfile");
-		const bool isDLSSPreset = isLegacyDLSSProfile || EqualsAsciiInsensitive(settingName, "DLSSPreset");
-		const bool isLegacyRenderScaleMode =
-			EqualsAsciiInsensitive(settingName, "RenderAtUpscaleRes") ||
-			EqualsAsciiInsensitive(settingName, "RenderAtUpscaleResEnabled");
-		const bool isRenderScaleMode = EqualsAsciiInsensitive(settingName, "RenderScaleMode") || isLegacyRenderScaleMode;
+		None,
+		UpscaleMethod,
+		UpscalePreset,
+		DLSSProfile,
+		RenderScaleMode
+	};
+	constexpr std::array kVRFpsStabilizerProfileSettings{
+		VRFpsStabilizerSetting::UpscaleMethod,
+		VRFpsStabilizerSetting::UpscalePreset,
+		VRFpsStabilizerSetting::DLSSProfile,
+		VRFpsStabilizerSetting::RenderScaleMode
+	};
 
-		if (isRenderScaleMode) {
+	enum class VRFpsStabilizerIniSection
+	{
+		Other,
+		Settings,
+		Conditional
+	};
+
+	struct VRFpsStabilizerParsedSetting
+	{
+		bool interior = false;
+		VRFpsStabilizerSetting setting = VRFpsStabilizerSetting::None;
+		std::string_view value;
+		bool legacyMethodSelection = false;
+		bool valueUsesQualityMode = false;
+	};
+
+	size_t FindVRFpsStabilizerIniComment(std::string_view line)
+	{
+		size_t commentOffset = line.size();
+		for (const char marker : { '#', ';' }) {
+			const auto markerOffset = line.find(marker);
+			if (markerOffset != std::string_view::npos)
+				commentOffset = std::min(commentOffset, markerOffset);
+		}
+		return commentOffset;
+	}
+
+	std::string_view StripVRFpsStabilizerIniComment(std::string_view line)
+	{
+		return line.substr(0, FindVRFpsStabilizerIniComment(line));
+	}
+
+	bool ReadVRFpsStabilizerIni(
+		const std::filesystem::path& path,
+		std::string& outContents,
+		std::string& outError)
+	{
+		outContents.clear();
+		outError.clear();
+
+		std::error_code fileError;
+		const auto fileSize = std::filesystem::file_size(path, fileError);
+		if (fileError) {
+			outError = std::format("Could not inspect {}: {}.", path.string(), fileError.message());
+			return false;
+		}
+		if (fileSize > kVRFpsStabilizerMaxIniBytes) {
+			outError = std::format("Refusing to read {} because it is larger than 4 MiB.", path.string());
+			return false;
+		}
+		outContents.reserve(static_cast<size_t>(fileSize));
+
+		std::ifstream input(path, std::ios::binary);
+		if (!input.is_open()) {
+			outError = std::format("Could not open {} for reading.", path.string());
+			return false;
+		}
+
+		std::array<char, 4096> buffer{};
+		while (input) {
+			input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+			const auto bytesRead = input.gcount();
+			if (bytesRead <= 0)
+				continue;
+			if (outContents.size() > kVRFpsStabilizerMaxIniBytes - static_cast<size_t>(bytesRead)) {
+				outContents.clear();
+				outError = std::format("Refusing to read {} because it grew beyond 4 MiB.", path.string());
+				return false;
+			}
+			outContents.append(buffer.data(), static_cast<size_t>(bytesRead));
+		}
+		if (input.bad()) {
+			outContents.clear();
+			outError = std::format("Could not read {}.", path.string());
+			return false;
+		}
+		if (outContents.starts_with("\xFF\xFE") ||
+			outContents.starts_with("\xFE\xFF") ||
+			outContents.find('\0') != std::string::npos) {
+			outContents.clear();
+			outError = "UTF-16 or binary VRFpsStabilizer.ini files are not supported for safe editing.";
+			return false;
+		}
+		return true;
+	}
+
+	bool TryGetVRFpsStabilizerSetting(
+		std::string_view settingName,
+		VRFpsStabilizerSetting& outSetting,
+		bool& outLegacyMethodSelection,
+		bool& outValueUsesQualityMode)
+	{
+		outSetting = VRFpsStabilizerSetting::None;
+		outLegacyMethodSelection = false;
+		outValueUsesQualityMode = false;
+		if (EqualsAsciiInsensitive(settingName, "UpscaleMethod")) {
+			outSetting = VRFpsStabilizerSetting::UpscaleMethod;
+			return true;
+		}
+		if (EqualsAsciiInsensitive(settingName, "UpscalePreset") ||
+			EqualsAsciiInsensitive(settingName, "DLSSMode")) {
+			outSetting = VRFpsStabilizerSetting::UpscalePreset;
+			outLegacyMethodSelection = EqualsAsciiInsensitive(settingName, "DLSSMode");
+			return true;
+		}
+		if (EqualsAsciiInsensitive(settingName, "QualityMode")) {
+			outSetting = VRFpsStabilizerSetting::UpscalePreset;
+			outValueUsesQualityMode = true;
+			return true;
+		}
+		if (EqualsAsciiInsensitive(settingName, "DLSSPreset") || EqualsAsciiInsensitive(settingName, "DLSSProfile")) {
+			outSetting = VRFpsStabilizerSetting::DLSSProfile;
+			outLegacyMethodSelection = EqualsAsciiInsensitive(settingName, "DLSSProfile");
+			return true;
+		}
+		if (EqualsAsciiInsensitive(settingName, "RenderScaleMode") ||
+			EqualsAsciiInsensitive(settingName, "RenderAtUpscaleRes") ||
+			EqualsAsciiInsensitive(settingName, "RenderAtUpscaleResEnabled")) {
+			outSetting = VRFpsStabilizerSetting::RenderScaleMode;
+			outLegacyMethodSelection = !EqualsAsciiInsensitive(settingName, "RenderScaleMode");
+			return true;
+		}
+		return false;
+	}
+
+	bool TryParseVRFpsStabilizerConditionalSetting(
+		std::string_view line,
+		VRFpsStabilizerParsedSetting& outSetting)
+	{
+		outSetting = {};
+		line = TrimAsciiWhitespace(StripVRFpsStabilizerIniComment(line));
+		if (line.empty())
+			return false;
+
+		const auto pipeOffset = line.find('|');
+		if (pipeOffset == std::string_view::npos)
+			return false;
+
+		const auto condition = TrimAsciiWhitespace(line.substr(0, pipeOffset));
+		if (condition.find(',') != std::string_view::npos)
+			return false;
+		if (EqualsAsciiInsensitive(condition, "Interior")) {
+			outSetting.interior = true;
+		} else if (EqualsAsciiInsensitive(condition, "Exterior")) {
+			outSetting.interior = false;
+		} else {
+			return false;
+		}
+
+		auto command = TrimAsciiWhitespace(line.substr(pipeOffset + 1));
+		if (!StartsWithAsciiInsensitive(command, "CS>"))
+			return false;
+		command.remove_prefix(3);
+		const auto equalsOffset = command.find('=');
+		if (equalsOffset == std::string_view::npos)
+			return false;
+
+		const auto settingName = TrimAsciiWhitespace(command.substr(0, equalsOffset));
+		if (!TryGetVRFpsStabilizerSetting(
+				settingName,
+				outSetting.setting,
+				outSetting.legacyMethodSelection,
+				outSetting.valueUsesQualityMode)) {
+			return false;
+		}
+		outSetting.value = TrimAsciiWhitespace(command.substr(equalsOffset + 1));
+		return true;
+	}
+
+	bool TryParseVRFpsStabilizerSectionHeader(
+		std::string_view line,
+		VRFpsStabilizerIniSection& outSection)
+	{
+		line = TrimAsciiWhitespace(StripVRFpsStabilizerIniComment(line));
+		if (line.starts_with("\xEF\xBB\xBF"))
+			line.remove_prefix(3);
+		line = TrimAsciiWhitespace(line);
+		if (line.size() < 2 || line.front() != '[' || line.back() != ']')
+			return false;
+
+		line.remove_prefix(1);
+		line.remove_suffix(1);
+		if (EqualsAsciiInsensitive(line, "Settings")) {
+			outSection = VRFpsStabilizerIniSection::Settings;
+		} else if (EqualsAsciiInsensitive(line, "Conditional")) {
+			outSection = VRFpsStabilizerIniSection::Conditional;
+		} else {
+			outSection = VRFpsStabilizerIniSection::Other;
+		}
+		return true;
+	}
+
+	void ApplyVRFpsStabilizerUpscalingSetting(
+		VRFpsStabilizerUpscalingProfile& profile,
+		const VRFpsStabilizerParsedSetting& setting)
+	{
+		if (setting.setting == VRFpsStabilizerSetting::RenderScaleMode) {
+			uint32_t toggleValue = 0;
 			bool renderScaleMode = false;
-			if (!TryParseToggle(value, renderScaleMode))
+			if (TryParseUnsigned(setting.value, toggleValue)) {
+				if (toggleValue > 1)
+					++profile.invalidSettingCount;
+				renderScaleMode = ClampToggleUInt(toggleValue) != 0;
+			} else if (!TryParseAsciiBoolSetting(std::string(setting.value), renderScaleMode)) {
+				++profile.invalidSettingCount;
 				return;
+			}
 
 			profile.renderScaleMode = renderScaleMode;
 			profile.hasRenderScaleMode = true;
-			if (isLegacyRenderScaleMode)
-				profile.hasLegacyMethodSelection = true;
+			profile.hasLegacyMethodSelection |= setting.legacyMethodSelection;
 			return;
 		}
 
 		uint32_t parsedValue = 0;
-		if (!TryParseUnsigned(value, parsedValue))
+		if (!TryParseUnsigned(setting.value, parsedValue)) {
+			++profile.invalidSettingCount;
 			return;
+		}
 
-		if (isUpscaleMethod) {
+		switch (setting.setting) {
+		case VRFpsStabilizerSetting::UpscaleMethod:
+			if (parsedValue > static_cast<uint32_t>(Upscaling::UpscaleMethod::kDLSS))
+				++profile.invalidSettingCount;
 			profile.upscaleMethod = ClampUpscaleMethod(parsedValue, Upscaling::UpscaleMethod::kDLSS);
 			profile.hasUpscaleMethod = true;
-		} else if (isUpscalePreset) {
-			profile.qualityMode = VRFpsStabilizerUpscalePresetToQualityMode(parsedValue);
+			break;
+		case VRFpsStabilizerSetting::UpscalePreset:
+			if (parsedValue > Upscaling::kQualityModeMaxIndex)
+				++profile.invalidSettingCount;
+			profile.qualityMode = setting.valueUsesQualityMode ?
+			                          ClampQualityModeUInt(parsedValue) :
+			                          VRFpsStabilizerUpscalePresetToQualityMode(parsedValue);
 			profile.hasQualityMode = true;
-			if (isLegacyDLSSMode)
-				profile.hasLegacyMethodSelection = true;
-		} else if (isQualityMode) {
-			profile.qualityMode = ClampQualityModeUInt(parsedValue);
-			profile.hasQualityMode = true;
-		} else if (isDLSSPreset) {
+			profile.hasLegacyMethodSelection |= setting.legacyMethodSelection;
+			break;
+		case VRFpsStabilizerSetting::DLSSProfile:
+			if (parsedValue > Upscaling::kDLSSPresetF)
+				++profile.invalidSettingCount;
 			profile.dlssPreset = Upscaling::ClampDLSSPresetUInt(parsedValue);
 			profile.hasDLSSPreset = true;
-			if (isLegacyDLSSProfile)
-				profile.hasLegacyMethodSelection = true;
+			profile.hasLegacyMethodSelection |= setting.legacyMethodSelection;
+			break;
+		default:
+			break;
 		}
 	}
 
-	bool TryLoadVRFpsStabilizerUpscalingProfiles(VRFpsStabilizerUpscalingProfiles& outProfiles)
+	bool IsVRFpsStabilizerFadeSetting(std::string_view line)
 	{
+		line = StripVRFpsStabilizerIniComment(line);
+		const auto equalsOffset = line.find('=');
+		return equalsOffset != std::string_view::npos &&
+		       EqualsAsciiInsensitive(line.substr(0, equalsOffset), "CSVRFadeToBlackDuration");
+	}
+
+	bool TryLoadVRFpsStabilizerUpscalingProfiles(
+		VRFpsStabilizerUpscalingProfiles& outProfiles,
+		std::string* outError = nullptr)
+	{
+		if (outError)
+			outError->clear();
 		outProfiles = {};
 		outProfiles.path = FindVRFpsStabilizerIniPath();
 
 		std::error_code ec;
 		if (!std::filesystem::exists(outProfiles.path, ec) || ec)
 			return false;
-
-		std::ifstream iniFile(outProfiles.path);
-		if (!iniFile.is_open()) {
-			logger::warn("[Upscaling] VR FPS Stabilizer Sync could not open {}.", outProfiles.path.string());
+		outProfiles.fileExists = true;
+		std::string contents;
+		std::string readError;
+		if (!ReadVRFpsStabilizerIni(outProfiles.path, contents, readError)) {
+			if (outError)
+				*outError = readError;
+			logger::warn("[Upscaling] VR FPS Stabilizer Sync: {}", readError);
 			return false;
 		}
 
-		bool inConditionalSection = false;
+		outProfiles.fileReadable = true;
+		std::istringstream iniFile(contents);
+		VRFpsStabilizerIniSection currentSection = VRFpsStabilizerIniSection::Other;
 		std::string line;
 		while (std::getline(iniFile, line)) {
-			const auto hashCommentOffset = line.find('#');
-			const auto semicolonCommentOffset = line.find(';');
-			const auto commentOffset = std::min(
-				hashCommentOffset != std::string::npos ? hashCommentOffset : line.size(),
-				semicolonCommentOffset != std::string::npos ? semicolonCommentOffset : line.size());
-			if (commentOffset != line.size())
-				line.erase(commentOffset);
-
-			std::string_view lineView = TrimAsciiWhitespace(line);
-			if (lineView.empty())
-				continue;
-
-			if (lineView.front() == '[' && lineView.back() == ']') {
-				lineView.remove_prefix(1);
-				lineView.remove_suffix(1);
-				inConditionalSection = EqualsAsciiInsensitive(lineView, "Conditional");
+			VRFpsStabilizerIniSection parsedSection = VRFpsStabilizerIniSection::Other;
+			if (TryParseVRFpsStabilizerSectionHeader(line, parsedSection)) {
+				currentSection = parsedSection;
 				continue;
 			}
 
-			if (!inConditionalSection)
+			if (currentSection == VRFpsStabilizerIniSection::Settings && IsVRFpsStabilizerFadeSetting(line)) {
+				const auto lineView = StripVRFpsStabilizerIniComment(line);
+				const auto equalsOffset = lineView.find('=');
+				float fadeDuration = 0.0f;
+				if (TryParseFiniteFloat(lineView.substr(equalsOffset + 1), fadeDuration) && fadeDuration >= 0.0f) {
+					outProfiles.fadeDuration = fadeDuration;
+					outProfiles.hasFadeDuration = true;
+				} else {
+					++outProfiles.invalidFadeSettingCount;
+				}
+				continue;
+			}
+
+			if (currentSection != VRFpsStabilizerIniSection::Conditional)
 				continue;
 
-			const auto pipeOffset = lineView.find('|');
-			if (pipeOffset == std::string_view::npos)
+			VRFpsStabilizerParsedSetting parsedSetting;
+			if (!TryParseVRFpsStabilizerConditionalSetting(line, parsedSetting))
 				continue;
-
-			const auto condition = TrimAsciiWhitespace(lineView.substr(0, pipeOffset));
-			if (condition.find(',') != std::string_view::npos)
-				continue;
-
-			const bool interiorProfile = EqualsAsciiInsensitive(condition, "Interior");
-			const bool exteriorProfile = EqualsAsciiInsensitive(condition, "Exterior");
-			if (!interiorProfile && !exteriorProfile)
-				continue;
-
-			auto command = TrimAsciiWhitespace(lineView.substr(pipeOffset + 1));
-			if (!StartsWithAsciiInsensitive(command, "CS>"))
-				continue;
-
-			command.remove_prefix(3);
-			command = TrimAsciiWhitespace(command);
-			const auto equalsOffset = command.find('=');
-			if (equalsOffset == std::string_view::npos)
-				continue;
-
-			const auto settingName = TrimAsciiWhitespace(command.substr(0, equalsOffset));
-			const auto settingValue = TrimAsciiWhitespace(command.substr(equalsOffset + 1));
-			auto& profile = interiorProfile ? outProfiles.interior : outProfiles.exterior;
-			ApplyVRFpsStabilizerUpscalingSetting(profile, settingName, settingValue);
+			auto& profile = parsedSetting.interior ? outProfiles.interior : outProfiles.exterior;
+			ApplyVRFpsStabilizerUpscalingSetting(profile, parsedSetting);
 		}
 
-		return outProfiles.interior.HasAnySetting() || outProfiles.exterior.HasAnySetting();
+		return outProfiles.HasAnyProfile();
+	}
+
+	uint32_t VRFpsStabilizerQualityModeToUpscalePreset(uint32_t qualityMode)
+	{
+		return kVRFpsStabilizerUpscalePresets[ClampQualityModeUInt(qualityMode)];
+	}
+
+	const char* GetVRFpsStabilizerSettingName(VRFpsStabilizerSetting setting)
+	{
+		switch (setting) {
+		case VRFpsStabilizerSetting::UpscaleMethod:
+			return "UpscaleMethod";
+		case VRFpsStabilizerSetting::UpscalePreset:
+			return "UpscalePreset";
+		case VRFpsStabilizerSetting::DLSSProfile:
+			return "DLSSProfile";
+		case VRFpsStabilizerSetting::RenderScaleMode:
+			return "RenderScaleMode";
+		default:
+			return "";
+		}
+	}
+
+	std::string GetVRFpsStabilizerSettingValue(
+		const VRFpsStabilizerUpscalingProfile& profile,
+		VRFpsStabilizerSetting setting)
+	{
+		switch (setting) {
+		case VRFpsStabilizerSetting::UpscaleMethod:
+			return std::to_string(static_cast<uint32_t>(profile.upscaleMethod));
+		case VRFpsStabilizerSetting::UpscalePreset:
+			return std::to_string(VRFpsStabilizerQualityModeToUpscalePreset(profile.qualityMode));
+		case VRFpsStabilizerSetting::DLSSProfile:
+			return std::to_string(std::min(profile.dlssPreset, Upscaling::kDLSSPresetF));
+		case VRFpsStabilizerSetting::RenderScaleMode:
+			return profile.renderScaleMode ? "1" : "0";
+		default:
+			return {};
+		}
+	}
+
+	std::string GetVRFpsStabilizerInlineComment(std::string_view line)
+	{
+		const auto commentOffset = FindVRFpsStabilizerIniComment(line);
+		if (commentOffset == line.size())
+			return {};
+
+		const auto comment = TrimAsciiWhitespace(line.substr(commentOffset));
+		return comment.empty() ? std::string{} : std::format(" {}", comment);
+	}
+
+	std::string BuildVRFpsStabilizerConditionalLine(
+		bool interior,
+		VRFpsStabilizerSetting setting,
+		const VRFpsStabilizerUpscalingProfile& profile,
+		std::string_view originalLine = {})
+	{
+		return std::format(
+			"{}|CS>{} = {}{}",
+			interior ? "Interior" : "Exterior",
+			GetVRFpsStabilizerSettingName(setting),
+			GetVRFpsStabilizerSettingValue(profile, setting),
+			GetVRFpsStabilizerInlineComment(originalLine));
+	}
+
+	std::string BuildVRFpsStabilizerFadeLine(float fadeDuration, std::string_view originalLine = {})
+	{
+		return std::format(
+			"CSVRFadeToBlackDuration = {}{}",
+			fadeDuration,
+			GetVRFpsStabilizerInlineComment(originalLine));
 	}
 
 	VRFpsStabilizerTransitionTarget ResolveVRFpsStabilizerTransitionTarget(
@@ -8156,6 +8425,225 @@ namespace
 
 		return texture;
 	}
+}
+
+bool Upscaling::LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::string& a_error) const
+{
+	a_error.clear();
+	VRFpsStabilizerConfig loadedConfig;
+	std::string readError;
+	TryLoadVRFpsStabilizerUpscalingProfiles(loadedConfig, &readError);
+	if (!loadedConfig.fileExists) {
+		a_config = std::move(loadedConfig);
+		a_error = std::format("VRFpsStabilizer.ini was not found at {}.", a_config.path.string());
+		return false;
+	}
+	if (!loadedConfig.fileReadable) {
+		a_config = std::move(loadedConfig);
+		a_error = readError.empty() ?
+		              std::format("VRFpsStabilizer.ini could not be read at {}.", a_config.path.string()) :
+		              std::move(readError);
+		return false;
+	}
+
+	auto resolveProfile = [&](VRFpsStabilizerProfile& profile) {
+		const auto target = ResolveVRFpsStabilizerTransitionTarget(*this, profile);
+		if (profile.hasRenderScaleMode &&
+			profile.renderScaleMode &&
+			profile.hasQualityMode &&
+			(profile.hasUpscaleMethod || profile.hasLegacyMethodSelection) &&
+			!target.renderScaleMode) {
+			++profile.invalidSettingCount;
+		}
+		profile.upscaleMethod = target.method;
+		profile.qualityMode = target.qualityMode;
+		profile.dlssPreset = std::min(target.dlssPreset, kDLSSPresetF);
+		profile.renderScaleMode = target.renderScaleMode;
+	};
+	resolveProfile(loadedConfig.interior);
+	resolveProfile(loadedConfig.exterior);
+	if (!loadedConfig.hasFadeDuration)
+		loadedConfig.fadeDuration = kVRFpsStabilizerDefaultFadeDuration;
+
+	a_config = std::move(loadedConfig);
+	return true;
+}
+
+bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const
+{
+	a_error.clear();
+	if (a_config.path.empty()) {
+		a_error = "VR FPS Stabilizer INI path is empty.";
+		return false;
+	}
+	if (!EqualsAsciiInsensitive(a_config.path.filename().string(), "VRFpsStabilizer.ini")) {
+		a_error = "Refusing to write a file that is not named VRFpsStabilizer.ini.";
+		return false;
+	}
+	if (!std::isfinite(a_config.fadeDuration) || a_config.fadeDuration < 0.0f) {
+		a_error = "Fade duration must be a finite, non-negative number.";
+		return false;
+	}
+
+	const auto profileIsValid = [](const VRFpsStabilizerProfile& profile) {
+		const bool renderScaleCombinationIsValid =
+			!profile.renderScaleMode ||
+			((profile.upscaleMethod == UpscaleMethod::kFSR || profile.upscaleMethod == UpscaleMethod::kDLSS) &&
+				profile.qualityMode > 0);
+		return renderScaleCombinationIsValid &&
+		       profile.upscaleMethod >= UpscaleMethod::kNONE &&
+		       profile.upscaleMethod <= UpscaleMethod::kDLSS &&
+		       profile.qualityMode <= kQualityModeMaxIndex &&
+		       profile.dlssPreset <= kDLSSPresetF;
+	};
+	if (!profileIsValid(a_config.interior) || !profileIsValid(a_config.exterior)) {
+		a_error = "One or more profile values or Render Scale combinations are not supported by VRAPI.";
+		return false;
+	}
+
+	std::string contents;
+	if (!ReadVRFpsStabilizerIni(a_config.path, contents, a_error))
+		return false;
+
+	const bool useWindowsNewlines = contents.find("\r\n") != std::string::npos;
+	const bool hadFinalNewline = !contents.empty() && contents.back() == '\n';
+	std::vector<std::string> lines;
+	std::istringstream stream(contents);
+	std::string line;
+	while (std::getline(stream, line)) {
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		lines.push_back(std::move(line));
+	}
+
+	std::vector<std::string> outputLines;
+	outputLines.reserve(lines.size() + 10);
+	VRFpsStabilizerIniSection currentSection = VRFpsStabilizerIniSection::Other;
+	bool sawSettingsSection = false;
+	bool sawConditionalSection = false;
+	bool wroteFadeDuration = false;
+	std::array<std::array<bool, kVRFpsStabilizerProfileSettings.size()>, 2> wroteProfileSetting{};
+
+	const auto appendProfileSetting = [&](bool interior, VRFpsStabilizerSetting setting) {
+		const auto profileIndex = interior ? 0u : 1u;
+		const auto settingIndex = static_cast<size_t>(setting) - 1u;
+		if (wroteProfileSetting[profileIndex][settingIndex])
+			return;
+		const auto& profile = interior ? a_config.interior : a_config.exterior;
+		outputLines.push_back(BuildVRFpsStabilizerConditionalLine(interior, setting, profile));
+		wroteProfileSetting[profileIndex][settingIndex] = true;
+	};
+
+	const auto finishSection = [&](VRFpsStabilizerIniSection section) {
+		if (section == VRFpsStabilizerIniSection::Settings && !wroteFadeDuration) {
+			outputLines.push_back(BuildVRFpsStabilizerFadeLine(a_config.fadeDuration));
+			wroteFadeDuration = true;
+		}
+		if (section != VRFpsStabilizerIniSection::Conditional)
+			return;
+
+		for (const bool interior : { true, false }) {
+			for (const auto setting : kVRFpsStabilizerProfileSettings)
+				appendProfileSetting(interior, setting);
+		}
+	};
+
+	for (const auto& sourceLine : lines) {
+		VRFpsStabilizerIniSection parsedSection = VRFpsStabilizerIniSection::Other;
+		if (TryParseVRFpsStabilizerSectionHeader(sourceLine, parsedSection)) {
+			finishSection(currentSection);
+			currentSection = parsedSection;
+			if (currentSection == VRFpsStabilizerIniSection::Settings) {
+				sawSettingsSection = true;
+			} else if (currentSection == VRFpsStabilizerIniSection::Conditional) {
+				sawConditionalSection = true;
+			}
+			outputLines.push_back(sourceLine);
+			continue;
+		}
+
+		if (currentSection == VRFpsStabilizerIniSection::Settings && IsVRFpsStabilizerFadeSetting(sourceLine)) {
+			outputLines.push_back(BuildVRFpsStabilizerFadeLine(a_config.fadeDuration, sourceLine));
+			wroteFadeDuration = true;
+			continue;
+		}
+
+		VRFpsStabilizerParsedSetting parsedSetting;
+		if (currentSection == VRFpsStabilizerIniSection::Conditional &&
+			TryParseVRFpsStabilizerConditionalSetting(sourceLine, parsedSetting)) {
+			const auto& profile = parsedSetting.interior ? a_config.interior : a_config.exterior;
+			outputLines.push_back(BuildVRFpsStabilizerConditionalLine(parsedSetting.interior, parsedSetting.setting, profile, sourceLine));
+			wroteProfileSetting[parsedSetting.interior ? 0u : 1u][static_cast<size_t>(parsedSetting.setting) - 1u] = true;
+			continue;
+		}
+
+		outputLines.push_back(sourceLine);
+	}
+	finishSection(currentSection);
+
+	const auto appendSectionSpacing = [&]() {
+		if (!outputLines.empty() && !outputLines.back().empty())
+			outputLines.emplace_back();
+	};
+	if (!sawSettingsSection) {
+		appendSectionSpacing();
+		outputLines.emplace_back("[Settings]");
+		outputLines.push_back(BuildVRFpsStabilizerFadeLine(a_config.fadeDuration));
+		wroteFadeDuration = true;
+	}
+	if (!sawConditionalSection) {
+		appendSectionSpacing();
+		outputLines.emplace_back("[Conditional]");
+		for (const bool interior : { true, false }) {
+			for (const auto setting : kVRFpsStabilizerProfileSettings) {
+				appendProfileSetting(interior, setting);
+			}
+		}
+	}
+
+	const std::string_view newline = useWindowsNewlines ? "\r\n" : "\n";
+	std::ostringstream output;
+	for (size_t index = 0; index < outputLines.size(); ++index) {
+		output << outputLines[index];
+		if (index + 1 < outputLines.size() || hadFinalNewline)
+			output << newline;
+	}
+	const std::string outputContents = output.str();
+	if (outputContents.size() > kVRFpsStabilizerMaxIniBytes) {
+		a_error = "The updated VRFpsStabilizer.ini would exceed the 4 MiB safety limit.";
+		return false;
+	}
+
+	auto temporaryPath = a_config.path;
+	temporaryPath += std::format(L".community-shaders.{}.tmp", GetCurrentProcessId());
+	{
+		std::ofstream temporaryFile(temporaryPath, std::ios::binary | std::ios::trunc);
+		if (!temporaryFile.is_open()) {
+			a_error = std::format("Could not open {} for writing.", temporaryPath.string());
+			return false;
+		}
+		temporaryFile.write(outputContents.data(), static_cast<std::streamsize>(outputContents.size()));
+		temporaryFile.close();
+		if (!temporaryFile) {
+			std::error_code ec;
+			std::filesystem::remove(temporaryPath, ec);
+			a_error = std::format("Could not write {}.", temporaryPath.string());
+			return false;
+		}
+	}
+
+	if (!MoveFileExW(
+			temporaryPath.c_str(),
+			a_config.path.c_str(),
+			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		const auto errorCode = GetLastError();
+		std::error_code ec;
+		std::filesystem::remove(temporaryPath, ec);
+		a_error = std::format("Could not replace {} (Windows error {}).", a_config.path.string(), errorCode);
+		return false;
+	}
+
+	return true;
 }
 
 namespace

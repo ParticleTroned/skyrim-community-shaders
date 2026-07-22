@@ -11,6 +11,7 @@
 #include <atomic>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <filesystem>
 #include <limits>
 #include <mutex>
 #include <openvr.h>
@@ -124,6 +125,7 @@ public:
 	static constexpr uint32_t kDLSSPresetF = 4;
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
+	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 6.0f;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
@@ -194,6 +196,90 @@ public:
 	};
 
 	Settings settings;
+
+	/** @brief One unconditional Interior or Exterior Community Shaders profile from VRFpsStabilizer.ini. */
+	struct VRFpsStabilizerProfile
+	{
+		bool hasUpscaleMethod = false;
+		UpscaleMethod upscaleMethod = UpscaleMethod::kNONE;
+		bool hasLegacyMethodSelection = false;
+		bool hasQualityMode = false;
+		uint32_t qualityMode = 0;
+		bool hasDLSSPreset = false;
+		uint32_t dlssPreset = kDLSSPresetK;
+		bool hasRenderScaleMode = false;
+		bool renderScaleMode = false;
+		uint32_t invalidSettingCount = 0;
+
+		/** @return True when the INI supplied any recognized setting for this profile. */
+		[[nodiscard]] bool HasAnySetting() const
+		{
+			return hasUpscaleMethod || hasLegacyMethodSelection || hasQualityMode || hasDLSSPreset || hasRenderScaleMode;
+		}
+
+		/** @return True when the profile contains every canonical editable setting. */
+		[[nodiscard]] bool HasCompleteSettings() const
+		{
+			return (hasUpscaleMethod || hasLegacyMethodSelection) && hasQualityMode && hasDLSSPreset && hasRenderScaleMode;
+		}
+
+		/** @brief Marks the resolved profile as canonical after a successful save. */
+		void MarkSettingsComplete()
+		{
+			hasUpscaleMethod = true;
+			hasLegacyMethodSelection = false;
+			hasQualityMode = true;
+			hasDLSSPreset = true;
+			hasRenderScaleMode = true;
+			invalidSettingCount = 0;
+		}
+	};
+
+	/** @brief Editable VR FPS Stabilizer settings owned by the VR Stabilizer menu tab. */
+	struct VRFpsStabilizerConfig
+	{
+		std::filesystem::path path;
+		bool fileExists = false;
+		bool fileReadable = false;
+		bool hasFadeDuration = false;
+		float fadeDuration = kVRFpsStabilizerDefaultFadeDuration;
+		uint32_t invalidFadeSettingCount = 0;
+		VRFpsStabilizerProfile interior;
+		VRFpsStabilizerProfile exterior;
+
+		/** @return True when either Interior or Exterior supplied a recognized setting. */
+		[[nodiscard]] bool HasAnyProfile() const
+		{
+			return interior.HasAnySetting() || exterior.HasAnySetting();
+		}
+
+		/** @return True when both Interior and Exterior contain every editable setting. */
+		[[nodiscard]] bool HasCompleteProfiles() const
+		{
+			return interior.HasCompleteSettings() && exterior.HasCompleteSettings();
+		}
+
+		/** @return True when the fade and both profiles contain every editable setting. */
+		[[nodiscard]] bool HasCompleteSettings() const
+		{
+			return hasFadeDuration && HasCompleteProfiles();
+		}
+
+		/** @return Number of recognized values or combinations that need normalization. */
+		[[nodiscard]] uint32_t GetInvalidSettingCount() const
+		{
+			return invalidFadeSettingCount + interior.invalidSettingCount + exterior.invalidSettingCount;
+		}
+
+		/** @brief Marks all resolved settings as canonical after a successful save. */
+		void MarkSettingsComplete()
+		{
+			hasFadeDuration = true;
+			invalidFadeSettingCount = 0;
+			interior.MarkSettingsComplete();
+			exterior.MarkSettingsComplete();
+		}
+	};
 
 	struct RuntimeResolutionPlan
 	{
@@ -1608,6 +1694,11 @@ public:
 
 	// Module availability methods
 	bool HasFrameGenModule() const;
+
+	/** @brief Loads and resolves the unconditional Interior/Exterior CS rows from VRFpsStabilizer.ini. */
+	bool LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::string& a_error) const;
+	/** @brief Persists the editable stabilizer profile while preserving unrelated INI content. */
+	bool SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const;
 
 	// Proxy interface methods
 	void SetProxyD3D11Device(ID3D11Device* device);

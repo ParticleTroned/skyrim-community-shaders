@@ -24,6 +24,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/VR.h"
+#include "Features/WeatherPicker.h"
 
 #include <algorithm>
 #include <cfloat>

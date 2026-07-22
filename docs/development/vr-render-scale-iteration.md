@@ -194,11 +194,10 @@ though those contexts were already allocated to the full per-eye display
 extent.
 
 An ordinary CS-menu transition may now preserve those host contexts when the
-selected method remains FSR, the SDK compatibility check covers the target
+previous boot contract still identifies FSR, the SDK compatibility check covers the target
 render and display extents, memory pressure is `Normal`, and no runtime
 upscaler, pending reset, post-load recovery, device loss, or recovery-owned
-contract is active. This covers both same-backend quality
-changes and reactivation after an FSR-selected native-AA interval. It does not
+contract is active. This covers same-backend quality changes. It does not
 reuse shared submit textures or engine render targets; those are still rebuilt
 for the new dimensions, and FSR history is explicitly reset.
 The short rapid-relatch cleanup window does not block compatible context reuse
@@ -212,6 +211,41 @@ their existing teardown path. The controller exposes
 qualification must observe it together with `preserveFSRResources=true`,
 `destroyFSRResources=false`, and a passing steady-state growth gate before this
 replacement for the generic non-AMD resize rebuild is accepted.
+
+Step 24 follows the RC107 live qualification. Six rapid FSR Hoshipa/Quality
+relatches again had zero failures, OOMs, device loss, retries, or both-eye
+fidelity mismatches, and the compatible host context was preserved. However,
+the final two samples of each exact profile still grew by approximately
+1.37--1.40 GiB. Usage remained at approximately 10.79 GiB (11.58 GB) for a full minute
+with no pending CS retirement and with the fenced trim completed. The remaining
+churn was therefore below the context layer: rapid cleanup and vendor reset
+retired the per-eye textures submitted to the preserved context, while
+`EnsureVRIntermediateTextures` recreated them for each contract generation.
+
+All FSR submit inputs are now allocated to stable full-display per-eye bounds.
+The host and runtime APIs continue receiving the exact active render and
+upscale rectangles for every dispatch, so Hoshipa, Quality, and other profiles
+do not change their effective fidelity. Compatible CS-menu relatches preserve
+the full-eye and foveated-center FSR input identities while still invalidating
+frame, foveated-layout, periphery-TAA, menu-composite, and temporal history.
+Engine render targets and size-dependent common textures continue to rebuild.
+Actual pressure, post-load recovery, pending reset, device loss, incompatible
+display bounds, and recovery-owned contracts retain the destructive path.
+
+The compatibility policy now applies equally to SDK fallback, native/runtime
+FSR3, FSR4, NVIDIA, and AMD. Every VR FSR path already creates its context and
+runtime shared resources against the same full per-eye display bounds; no live
+evidence supports retaining the old RC28 vendor/path-specific resize rebuild.
+Path or provider changes remain independently protected by the existing reset
+tracking. Native-AA reactivation can use the controller's last applied or stable
+FSR method when the inactive boot snapshot no longer carries method evidence.
+
+The resource plan exposes `reuseCompatibleFSRResources` and
+`preserveCompatibleFSRIntermediates`. The legacy
+`reuseCompatibleHostFSRResources` JSON member remains as a host-only alias for
+existing Step 23 automation. Step 24 qualification must observe the two generic
+flags together with `preserveFSRResources=true`, `destroyFSRResources=false`,
+both-eye fidelity, and a passing steady-state memory-growth gate.
 
 ## MCP contract
 
@@ -256,8 +290,10 @@ The record lists the principal native symbols under `analysis.symbols`. In Ghidr
 -   `Upscaling::ServiceVRRenderScaleMemoryTrim` for fenced common-target residency recovery;
 -   `Upscaling::TryPromoteVRRenderScaleSubmitStageContract` for stable-presentation latency;
 -   `Upscaling::RecordVRRenderScaleFidelityObservation` for both-eye contract failures.
+-   `Upscaling::EnsureVRIntermediateTextures` and
+    `Upscaling::AreVRIntermediateTexturesCompatibleForFSR` for Step 24 stable
+    external-resource identity validation;
 -   `FidelityFX::AreFSRResourcesCompatible`, `FidelityFX::CreateFSRResources`,
-    and `FidelityFX::DestroyFSRResources` for Step 23 host-context lifetime
-    validation.
+    and `FidelityFX::DestroyFSRResources` for FSR context lifetime validation.
 
 Use Ghidra to validate control flow and ownership against the shipped binary, while using the JSON record as runtime evidence. A candidate should be promoted only when repeated scenario records pass and improve the target metric without regressing another accepted backend or pressure scenario.

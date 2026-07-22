@@ -8,6 +8,7 @@
 
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
+#include "Features/RenderDoc.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -24,6 +25,7 @@ void AdvancedSettingsRenderer::RenderAdvancedSettings(
 	// Shaders   = configure & inspect shader compilation
 	// Diagnostics = log/inspect runtime state & block individual shaders
 	// Disable at Boot = user-facing failsafe toggles
+	// RenderDoc = frame-capture configuration and capture management
 	// Testing   = A/B harness + dev-mode test scaffolding
 	if (ImGui::BeginTabBar("##AdvancedSettingsTabs", ImGuiTabBarFlags_None)) {
 		if (MenuFonts::BeginTabItemWithFont("Diagnostics", Menu::FontRole::Subheading)) {
@@ -37,6 +39,14 @@ void AdvancedSettingsRenderer::RenderAdvancedSettings(
 		if (MenuFonts::BeginTabItemWithFont("Disable at Boot", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##DisableAtBootContent", ImVec2(0, 0), false)) {
 				RenderDisableAtBootSection(drawDisableAtBootSettings);
+			}
+			ImGui::EndChild();
+			ImGui::EndTabItem();
+		}
+
+		if (MenuFonts::BeginTabItemWithFont("RenderDoc", Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##RenderDocContent", ImVec2(0, 0), false)) {
+				globals::features::renderDoc.DrawSettings();
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();

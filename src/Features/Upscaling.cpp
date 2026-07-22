@@ -30035,7 +30035,13 @@ void Upscaling::PrepareMenuCameraMotionVectors()
 	menuCameraMVsPreparedFrame = frame;
 	menuCameraMVsValid = false;
 
-	if (!IsMainMenuContextActive() || IsLoadingMenuContextActive())
+	// Camera-only motion vectors are valid for a flat menu backdrop, but not when
+	// a real scene rendered behind the menu (such as the VR Playroom). Preserve
+	// that scene's motion vectors so head movement is not reconstructed as a
+	// frozen, head-locked background.
+	if (!IsMainMenuContextActive() ||
+		IsLoadingMenuContextActive() ||
+		state->lastWorldRenderFrame == frame)
 		return;
 
 	FillMenuCameraMotionVectors();

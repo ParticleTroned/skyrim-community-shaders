@@ -58,6 +58,29 @@ namespace
 	constexpr float kJsonPlacedLightIntensityMin = 0.0f;
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
 	constexpr std::size_t kDirectionalNiLightEngineReadSize = 0x174;
+	constexpr int kVRNiAVObjectFlagsOffset = 0x10C;
+
+	class VRNonShadowCasterLightFlagsGuard : public Xbyak::CodeGenerator
+	{
+	public:
+		VRNonShadowCasterLightFlagsGuard()
+		{
+			Xbyak::Label nullLight;
+
+			test(rax, rax);
+			jz(nullLight, T_SHORT);
+			test(byte[rax + kVRNiAVObjectFlagsOffset], 1);
+			ret();
+
+			L(nullLight);
+			// Synthesize the exact flags that the original test would produce for
+			// a hidden light, without leaving registers changed or dereferencing nullptr.
+			push(1);
+			test(byte[rsp], 1);
+			lea(rsp, ptr[rsp + 8]);
+			ret();
+		}
+	};
 
 	void DrawHeatWarpStrengthSetting()
 	{
@@ -1659,6 +1682,33 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightRefe
 	}
 
 	return true;
+}
+
+void LightLimitFix::Hooks::InstallVRNonShadowCasterLightFlagsGuard()
+{
+	if (!REL::Module::IsVR()) {
+		return;
+	}
+
+	// CalculateActiveNonShadowCasterLights reloads BSLight::light into RAX,
+	// then tests NiAVObject::flags without checking the refreshed pointer. The
+	// earlier ValidLight2 hook cannot close that time-of-check/time-of-use gap.
+	constexpr std::uint8_t expectedInstruction[] = { 0xF6, 0x80, 0x0C, 0x01, 0x00, 0x00, 0x01 };
+	const auto target = REL::RelocationID(100997, 107784).address() + 0x1F0;
+	if (!std::equal(std::begin(expectedInstruction), std::end(expectedInstruction), reinterpret_cast<const std::uint8_t*>(target))) {
+		logger::error("[LLF] VR non-shadow caster light flags guard not installed: unexpected instruction at 0x{:x}", target);
+		return;
+	}
+
+	VRNonShadowCasterLightFlagsGuard code;
+	code.ready();
+
+	auto& trampoline = SKSE::GetTrampoline();
+	const auto guard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
+	trampoline.write_call<5>(target, guard);
+	REL::safe_fill(target + 5, REL::NOP, sizeof(expectedInstruction) - 5);
+
+	logger::info("[LLF] Installed VR non-shadow caster light flags guard");
 }
 
 void LightLimitFix::PostPostLoad()

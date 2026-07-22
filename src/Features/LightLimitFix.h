@@ -409,6 +409,8 @@ public:
 		using ValidLight2 = ValidLight<2>;
 		using ValidLight3 = ValidLight<3>;
 
+		static void InstallVRNonShadowCasterLightFlagsGuard();
+
 		static void Install()
 		{
 			stl::write_thunk_call<AIProcess_CalculateLightValue_GetLuminance>(
@@ -420,6 +422,7 @@ public:
 			stl::write_thunk_call<ValidLight1>(REL::RelocationID(100994, 107781).address() + 0x92);
 			stl::write_thunk_call<ValidLight2>(REL::RelocationID(100997, 107784).address() + REL::Relocate(0x139, 0x12A, 0x133));
 			stl::write_thunk_call<ValidLight3>(REL::RelocationID(101296, 108283).address() + REL::Relocate(0xB7, 0x7E));
+			InstallVRNonShadowCasterLightFlagsGuard();
 
 			logger::info("[LLF] Installed hooks");
 		}

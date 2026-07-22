@@ -90,6 +90,7 @@ namespace
 		TruePBRSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
+	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
 	static_assert(sizeof(ExtendedMaterialsSettingsCB) == 32);
 	static_assert(sizeof(DynamicCubemapsSettingsCB) == 32);
 	static_assert(sizeof(TerrainShadowsSettingsCB) == 32);

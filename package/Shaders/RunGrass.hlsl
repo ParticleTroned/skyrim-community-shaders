@@ -254,7 +254,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.CullDistance.x = VRout.CullDistance;
 #		endif  // !VR
 
-	// Vertex normal needs to be transformed to world-space for lighting calculations.
+	// FeatureData is bound to the pixel shader only. The runtime toggle is
+	// therefore evaluated there; keep this varying initialized for the enhanced
+	// path and let the basic pixel path ignore it.
 	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
 	vsout.VertexNormal.w = input.Color.w;
 
@@ -457,6 +459,167 @@ cbuffer AlphaTestRefCB : register(b11)
 
 #	include "Common/ShadowSampling.hlsli"
 
+// This is the original non-Grass-Lighting shader path. It is shared by the
+// boot-disabled permutation and the runtime-disabled Grass Lighting path so
+// that both modes retain identical shading behavior.
+PS_OUTPUT RenderBasicGrass(PS_INPUT input)
+{
+	PS_OUTPUT psout = (PS_OUTPUT)0;
+
+	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
+
+#	if defined(RENDER_DEPTH)
+	float diffuseAlpha = input.Color.w * baseColor.w;
+
+	if ((diffuseAlpha - AlphaTestRefRS) < 0) {
+		discard;
+	}
+
+	psout.PS.xyz = input.Depth.xxx / input.Depth.yyy;
+	psout.PS.w = diffuseAlpha;
+#	else
+	if (SharedData::ShouldDisableTerrainVertexColors())
+		input.Color.xyz = 1;
+
+	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
+
+	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+	float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.HPosition.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
+
+	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
+
+	float dirShadow = !SharedData::InInterior ? shadowColor.x : 1.0;
+	float dirDetailShadow = 1.0;
+
+	if (dirShadow > 0.0 && !SharedData::InInterior) {
+#		if defined(SCREEN_SPACE_SHADOWS)
+		dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
+#		endif  // SCREEN_SPACE_SHADOWS
+
+		if (dirShadow != 0.0)
+			dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition, FrameBuffer::CameraPosAdjust[eyeIndex], eyeIndex);
+
+#		if defined(WATER_LIGHTING)
+		if (dirShadow > 0.0) {
+			float4 waterData = SharedData::GetWaterData(input.WorldPosition.xyz);
+			dirShadow *= WaterLighting::ComputeCaustics(waterData, input.WorldPosition.xyz, eyeIndex);
+		}
+#		endif
+	}
+
+	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * dirDetailShadow * llDirLightMult;
+
+#		if defined(LIGHT_LIMIT_FIX)
+	uint clusterIndex = 0;
+	uint lightCount = 0;
+
+	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
+		if (lightCount) {
+			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+
+			[loop] for (uint i = 0; i < lightCount; i++)
+			{
+				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
+				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
+
+				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
+				float lightDist = length(lightDirection);
+
+#				if defined(ISL)
+				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+				if (intensityMultiplier < 1e-5)
+					continue;
+#				else
+				float intensityFactor = saturate(lightDist / light.radius);
+				if (intensityFactor == 1)
+					continue;
+
+				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+#				endif
+
+				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
+
+				float lightShadow = 1.0;
+
+				float shadowComponent = 1.0;
+				if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+					shadowComponent = shadowColor[light.shadowLightIndex];
+					lightShadow *= shadowComponent;
+				}
+
+				lightColor *= lightShadow;
+
+				diffuseColor += lightColor;
+			}
+		}
+	}
+#		endif  // LIGHT_LIMIT_FIX
+
+	float3 ddx = ddx_coarse(input.WorldPosition);
+	float3 ddy = ddy_coarse(input.WorldPosition);
+	float3 normal = -normalize(cross(ddx, ddy));
+
+	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
+	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	vertexColor /= max(vertexAO, EPSILON_DIVISION);
+
+#		if defined(SKYLIGHTING)
+#			if defined(VR)
+	float3 positionMSSkylight = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+#			else
+	float3 positionMSSkylight = input.WorldPosition.xyz;
+#			endif
+	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
+#		endif  // SKYLIGHTING
+
+	float3 directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normal)));
+
+#		if defined(IBL)
+	if (SharedData::iblSettings.EnableIBL) {
+#			if defined(SKYLIGHTING)
+		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(directionalAmbientColor, -normal, skylightingDiffuse);
+#			else
+		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
+#			endif
+	}
+#		endif
+
+	diffuseColor += directionalAmbientColor;
+
+	float3 albedo = baseColor.xyz * vertexColor;
+
+	diffuseColor *= albedo;
+	directionalAmbientColor *= albedo;
+
+#		if defined(SKYLIGHTING)
+#			if defined(IBL)
+	if (!SharedData::iblSettings.EnableIBL)
+#			endif
+	{
+		Skylighting::ApplySkylighting(diffuseColor, directionalAmbientColor, albedo, skylightingDiffuse);
+	}
+#		endif
+
+	psout.Diffuse = float4(diffuseColor, 1);
+	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
+#		if defined(GRASS_LIGHTING)
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex)), 0, 0);
+#		else
+	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex));
+	psout.Normal.zw = 0;
+#		endif
+	psout.Albedo = float4(albedo, 1);
+	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
+	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
+#	endif
+
+	return psout;
+}
+
 #	ifdef GRASS_LIGHTING
 #		if defined(TRUE_PBR)
 
@@ -492,6 +655,9 @@ float GetWrappedDiffuseMultiplier(float angle, float wrapAmount, bool useWrapped
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
+	[branch] if (!SharedData::grassLightingSettings.Enabled)
+		return RenderBasicGrass(input);
+
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
 #		if !defined(TRUE_PBR)
@@ -821,163 +987,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	else
 PS_OUTPUT main(PS_INPUT input)
 {
-	PS_OUTPUT psout;
-
-	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
-
-#		if defined(RENDER_DEPTH)
-	float diffuseAlpha = input.Color.w * baseColor.w;
-
-	if ((diffuseAlpha - AlphaTestRefRS) < 0) {
-		discard;
-	}
-#		endif  // RENDER_DEPTH || DO_ALPHA_TEST
-
-#		if defined(RENDER_DEPTH)
-	// Depth
-	psout.PS.xyz = input.Depth.xxx / input.Depth.yyy;
-	psout.PS.w = diffuseAlpha;
-#		else
-	if (SharedData::ShouldDisableTerrainVertexColors())
-		input.Color.xyz = 1;
-
-	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
-
-	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
-	float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.HPosition.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
-
-	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
-
-	float dirShadow = !SharedData::InInterior ? shadowColor.x : 1.0;
-	float dirDetailShadow = 1.0;
-
-	if (dirShadow > 0.0 && !SharedData::InInterior) {
-#			if defined(SCREEN_SPACE_SHADOWS)
-		dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
-#			endif  // SCREEN_SPACE_SHADOWS
-
-		if (dirShadow != 0.0)
-			dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition, FrameBuffer::CameraPosAdjust[eyeIndex], eyeIndex);
-
-#			if defined(WATER_LIGHTING)
-		if (dirShadow > 0.0) {
-			float4 waterData = SharedData::GetWaterData(input.WorldPosition.xyz);
-			dirShadow *= WaterLighting::ComputeCaustics(waterData, input.WorldPosition.xyz, eyeIndex);
-		}
-#			endif
-	}
-
-	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * dirDetailShadow * llDirLightMult;
-
-#			if defined(LIGHT_LIMIT_FIX)
-	uint clusterIndex = 0;
-	uint lightCount = 0;
-
-	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
-		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
-		if (lightCount) {
-			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-
-			[loop] for (uint i = 0; i < lightCount; i++)
-			{
-				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
-				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-
-				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
-				float lightDist = length(lightDirection);
-
-#				if defined(ISL)
-				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
-				if (intensityMultiplier < 1e-5)
-					continue;
-#				else
-				float intensityFactor = saturate(lightDist / light.radius);
-				if (intensityFactor == 1)
-					continue;
-
-				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#				endif
-
-				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
-
-				float lightShadow = 1.0;
-
-				float shadowComponent = 1.0;
-				if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
-					shadowComponent = shadowColor[light.shadowLightIndex];
-					lightShadow *= shadowComponent;
-				}
-
-				lightColor *= lightShadow;
-
-				diffuseColor += lightColor;
-			}
-		}
-	}
-#			endif  // LIGHT_LIMIT_FIX
-
-	float3 ddx = ddx_coarse(input.WorldPosition);
-	float3 ddy = ddy_coarse(input.WorldPosition);
-	float3 normal = -normalize(cross(ddx, ddy));
-
-	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
-	vertexColor /= max(vertexAO, EPSILON_DIVISION);
-
-#			if defined(SKYLIGHTING)
-#				if defined(VR)
-	float3 positionMSSkylight = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#				else
-	float3 positionMSSkylight = input.WorldPosition.xyz;
-#				endif
-	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
-#			endif  // SKYLIGHTING
-
-	float3 directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normal)));
-
-#			if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-#				if defined(SKYLIGHTING)
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(directionalAmbientColor, -normal, skylightingDiffuse);
-#				else
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
-#				endif
-	}
-#			endif
-
-	diffuseColor += directionalAmbientColor;
-
-	float3 albedo = baseColor.xyz * vertexColor;
-
-	diffuseColor *= albedo;
-	directionalAmbientColor *= albedo;
-
-#			if defined(SKYLIGHTING)
-#				if defined(IBL)
-	if (!SharedData::iblSettings.EnableIBL)
-#				endif
-	{
-		Skylighting::ApplySkylighting(diffuseColor, directionalAmbientColor, albedo, skylightingDiffuse);
-	}
-#			endif
-
-	psout.Diffuse.xyz = diffuseColor;
-
-	psout.Diffuse.w = 1;
-
-	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
-	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex));
-	psout.Normal.zw = 0;
-
-	psout.Albedo = float4(albedo, 1);
-	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
-	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
-#		endif
-
-	return psout;
+	return RenderBasicGrass(input);
 }
 #	endif
 

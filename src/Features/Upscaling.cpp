@@ -145,6 +145,7 @@ namespace
 	constexpr uint32_t kVRRenderScaleMemorySampleIntervalFrames = 30u;
 	constexpr uint32_t kVRRenderScaleMemoryRecoverySamples = 4u;
 	constexpr uint32_t kVRRenderScalePostLoadMemorySettleSamples = 2u;
+	constexpr uint32_t kVRRenderScalePostLoadMemorySettleTimeoutFrames = kVRRenderScaleRelatchBusyRetryFrames * 2u;
 	constexpr uint32_t kVRRenderScaleMemoryTrimMaxFenceFailures = 3u;
 	constexpr uint32_t kVRRenderScaleProjectedPressureRetryFrames = 120u;
 	constexpr uint64_t kVRRenderScaleProjectedResidencyNumerator = 3u;
@@ -18973,17 +18974,29 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 			(memory.pressure == VRRenderScaleMemoryPressure::Normal ||
 				memory.pressure == VRRenderScaleMemoryPressure::Elevated);
 		if (recovery.cleanupDrained && memorySettled) {
+			if (recovery.firstSettledFrame == 0)
+				recovery.firstSettledFrame = frame;
+			// Relatch admission is polled after a deliberate frame delay. Consecutive
+			// samples therefore mean fresh successful polls, not adjacent game frames.
 			if (recovery.lastSettledFrame != frame) {
-				recovery.settledSamples = recovery.lastSettledFrame != 0 && frame == recovery.lastSettledFrame + 1 ?
-				                              recovery.settledSamples + 1u :
-				                              1u;
+				recovery.settledSamples = std::min(
+					recovery.settledSamples + 1u,
+					kVRRenderScalePostLoadMemorySettleSamples);
 				recovery.lastSettledFrame = frame;
 			}
+			const bool settleTimedOut =
+				frame - recovery.firstSettledFrame >= kVRRenderScalePostLoadMemorySettleTimeoutFrames;
+			recovery.settleTimeoutUsed =
+				settleTimedOut && recovery.settledSamples < kVRRenderScalePostLoadMemorySettleSamples;
 		} else {
+			recovery.firstSettledFrame = 0;
 			recovery.settledSamples = 0;
 			recovery.lastSettledFrame = 0;
+			recovery.settleTimeoutUsed = false;
 		}
-		admitted = recovery.settledSamples >= kVRRenderScalePostLoadMemorySettleSamples;
+		admitted =
+			recovery.settledSamples >= kVRRenderScalePostLoadMemorySettleSamples ||
+			recovery.settleTimeoutUsed;
 		recovery.relatchAdmitted = admitted;
 		recoverySnapshot = recovery;
 		memorySnapshot = memory;
@@ -18992,7 +19005,7 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 
 	if (!admitted && ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} trimArmed={} trimCompleted={} trimSucceeded={} pressure={} systemCommit={}MiB systemHeadroom={}MiB processPrivate={}MiB settledSamples={}/{} peak={}MiB peakSystemCommit={}MiB peakProcessPrivate={}MiB",
+			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} trimArmed={} trimCompleted={} trimSucceeded={} pressure={} systemCommit={}MiB systemHeadroom={}MiB processPrivate={}MiB settledSamples={}/{} settleAge={} timeoutUsed={} peak={}MiB peakSystemCommit={}MiB peakProcessPrivate={}MiB",
 			a_recoveryEpoch,
 			a_transitionEpoch,
 			BoolText(recoverySnapshot.cleanupArmed),
@@ -19006,6 +19019,8 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 			memorySnapshot.processPrivateUsageBytes / kVRRenderScaleMiB,
 			recoverySnapshot.settledSamples,
 			kVRRenderScalePostLoadMemorySettleSamples,
+			recoverySnapshot.firstSettledFrame != 0 ? frame - recoverySnapshot.firstSettledFrame : 0u,
+			BoolText(recoverySnapshot.settleTimeoutUsed),
 			recoverySnapshot.peakUsageBytes / kVRRenderScaleMiB,
 			recoverySnapshot.peakSystemCommitBytes / kVRRenderScaleMiB,
 			recoverySnapshot.peakProcessPrivateUsageBytes / kVRRenderScaleMiB);
@@ -27642,6 +27657,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 								  { "transitionEpoch", controller.postLoadRecovery.transitionEpoch },
 								  { "startFrame", controller.postLoadRecovery.startFrame },
 								  { "lastSampleFrame", controller.postLoadRecovery.lastSampleFrame },
+								  { "firstSettledFrame", controller.postLoadRecovery.firstSettledFrame },
 								  { "lastSettledFrame", controller.postLoadRecovery.lastSettledFrame },
 								  { "settledSamples", controller.postLoadRecovery.settledSamples },
 								  { "baselineUsageBytes", controller.postLoadRecovery.baselineUsageBytes },
@@ -27656,6 +27672,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 								  { "trimArmed", controller.postLoadRecovery.trimArmed },
 								  { "trimCompleted", controller.postLoadRecovery.trimCompleted },
 								  { "trimSucceeded", controller.postLoadRecovery.trimSucceeded },
+								  { "settleTimeoutUsed", controller.postLoadRecovery.settleTimeoutUsed },
 								  { "relatchAdmitted", controller.postLoadRecovery.relatchAdmitted } } },
 		{ "resourcePlan", { { "valid", relatchPlan.valid },
 							 { "transitionEpoch", relatchPlan.transitionEpoch },

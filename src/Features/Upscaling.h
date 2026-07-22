@@ -555,6 +555,7 @@ public:
 		uint64_t transitionEpoch = 0;
 		uint32_t startFrame = 0;
 		uint32_t lastSampleFrame = 0;
+		uint32_t firstSettledFrame = 0;
 		uint32_t lastSettledFrame = 0;
 		uint32_t settledSamples = 0;
 		uint64_t baselineUsageBytes = 0;
@@ -569,6 +570,7 @@ public:
 		bool trimArmed = false;
 		bool trimCompleted = false;
 		bool trimSucceeded = false;
+		bool settleTimeoutUsed = false;
 		bool relatchAdmitted = false;
 	};
 

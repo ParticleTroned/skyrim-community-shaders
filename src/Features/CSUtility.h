@@ -64,6 +64,7 @@ struct CSUtility : Feature
 	struct Settings
 	{
 		bool enabled = false;
+		bool fixUnderwaterFogDofBlur = true;
 		float skyBrightness = 1.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
@@ -106,6 +107,7 @@ struct CSUtility : Feature
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
+	virtual void DataLoaded() override;
 
 	static Settings GetNeutralSettings();
 	PerFrameData GetCommonBufferData() const;

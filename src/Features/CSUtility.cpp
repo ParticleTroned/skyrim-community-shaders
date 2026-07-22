@@ -5,6 +5,7 @@
 #include "InverseSquareLighting.h"
 #include "LightLimitFix.h"
 #include "LinearLighting.h"
+#include "UnderwaterDepthOfField.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
 
@@ -98,6 +99,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CSUtility::Settings,
 	enabled,
+	fixUnderwaterFogDofBlur,
 	skyBrightness,
 	directionalLightMult,
 	pointLightMult,
@@ -267,4 +269,9 @@ void CSUtility::PostPostLoad()
 {
 	Hooks::Install();
 	InstallDepthOfFieldHooks();
+}
+
+void CSUtility::DataLoaded()
+{
+	UnderwaterDepthOfField::InstallHooks();
 }

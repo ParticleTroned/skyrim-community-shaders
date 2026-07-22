@@ -1,6 +1,7 @@
 #include "CSUtility.h"
 
 #include "Globals.h"
+#include "UnderwaterDepthOfField.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
@@ -668,13 +669,28 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ImageSpaceEffectDepthOfField_Render
+	{
+		static void thunk(RE::ImageSpaceEffectDepthOfField* a_effect, RE::BSTriShape* a_shape, RE::ImageSpaceEffectParam* a_param)
+		{
+			UnderwaterDepthOfField::BeginRender();
+			const SKSE::stl::scope_exit endRender([]() noexcept {
+				UnderwaterDepthOfField::EndRender();
+			});
+			func(a_effect, a_shape, a_param);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct ImageSpaceEffectDepthOfField_UpdateParams
 	{
 		static bool thunk(RE::ImageSpaceEffectDepthOfField* a_effect, RE::ImageSpaceEffectParam* a_param)
 		{
 			auto& csUtility = globals::features::csUtility;
 			DepthOfFieldOverrideScope overrideScope(csUtility);
-			return func(a_effect, a_param);
+			const bool result = func(a_effect, a_param);
+			UnderwaterDepthOfField::RecordShaderConstants(a_effect, a_param);
+			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -702,8 +718,15 @@ void CSUtility::DrawDepthOfFieldSettings()
 	if (ImGui::BeginTabItem("Vanilla DOF")) {
 		static Util::ConfirmationPopup sceneLockPopup;
 		static Util::ConfirmationPopup underwaterLockPopup;
+
+		ImGui::Checkbox("Enable Underwater Fog DOF Blur Fix", &settings.fixUnderwaterFogDofBlur);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Correctly blurs underwater fog with vanilla DOF. This affects only the fix and takes effect immediately.");
+		}
+		ImGui::Separator();
+
 		if (!IsRuntimeEnabled()) {
-			Util::TextUnformattedDisabled("CS Utility is disabled. Saved DOF overrides are not applied.");
+			Util::TextUnformattedDisabled("CS Utility is disabled. Saved DOF settings and the fog-blur fix are not applied.");
 			ImGui::Separator();
 		}
 
@@ -735,6 +758,7 @@ void CSUtility::DrawDepthOfFieldSettings()
 
 void CSUtility::InstallDepthOfFieldHooks()
 {
+	stl::write_vfunc<0x1, ImageSpaceEffectDepthOfField_Render>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
 	stl::write_vfunc<0x6, ImageSpaceEffectDepthOfField_IsActive>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
 	stl::write_vfunc<0x7, ImageSpaceEffectDepthOfField_UpdateParams>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
 	logger::info("[CSUtility] Installed vanilla depth of field hooks");

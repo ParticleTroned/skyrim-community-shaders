@@ -30,6 +30,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/UnderwaterDepthOfField.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
@@ -299,12 +300,14 @@ namespace globals
 	/**
  * @brief Installs hooks on the Map and Unmap methods of the provided D3D11 device context.
  *
- * This enables frame-buffer caching and the focused developer-mode VR menu draw trace.
+ * This enables frame-buffer caching, the focused developer-mode VR menu draw trace,
+ * and underwater fog/depth-of-field composition.
  */
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
+		UnderwaterDepthOfField::InstallD3DHooks(a_context);
 	}
 }

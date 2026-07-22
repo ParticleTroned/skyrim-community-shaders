@@ -25,6 +25,8 @@ bool Load();
 
 namespace
 {
+	constexpr std::size_t kTrampolineCapacity = 1 << 12;
+
 	void PushStartupError(std::string errorMessage)
 	{
 		logger::error("{}", errorMessage);
@@ -98,7 +100,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION_LABEL);
 	SKSE::Init(a_skse);
-	SKSE::AllocTrampoline(1 << 10);
+	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();
 }
 

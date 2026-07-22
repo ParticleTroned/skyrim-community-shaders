@@ -367,7 +367,14 @@ namespace Util
 			if (showDontAskAgain)
 				ImGui::Checkbox("Don't ask me again", &dontAskCheckbox);
 
-			constexpr float buttonWidth = ThemeManager::Constants::POPUP_BUTTON_WIDTH;
+			const auto buttonWidthForLabel = [](const std::string& a_label) {
+				return ImGui::CalcTextSize(a_label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			};
+			const float buttonWidth = std::max({
+				ThemeManager::Constants::POPUP_BUTTON_WIDTH * GetUIScale(),
+				buttonWidthForLabel(confirmLabel),
+				buttonWidthForLabel(cancelLabel),
+			});
 			const float spacing = ImGui::GetStyle().ItemSpacing.x;
 			const float totalWidth = buttonWidth * 2 + spacing;
 			const float offset = (ImGui::GetWindowWidth() - totalWidth) * 0.5f;

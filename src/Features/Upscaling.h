@@ -498,6 +498,8 @@ public:
 		uint32_t pendingGenerations = 0;
 		uint32_t capturedPointerCount = 0;
 		uint32_t aliasedPointerCount = 0;
+		uint32_t provenPointerCount = 0;
+		uint32_t retainedUnprovenPointerCount = 0;
 		uint32_t replacedPointerCount = 0;
 		uint32_t restoredPointerCount = 0;
 		uint32_t pendingReleaseCount = 0;
@@ -1367,6 +1369,14 @@ public:
 	winrt::com_ptr<ID3D11Query> vrEngineTargetRetirementFence;
 	uint32_t vrEngineTargetRetirementFenceFailures = 0;
 	std::atomic_bool vrEngineTargetRetirementCapacityLogged{ false };
+	struct VREngineTargetSlotProvenance
+	{
+		void* address = nullptr;
+		void* pointer = nullptr;
+	};
+	std::vector<VREngineTargetSlotProvenance> vrEngineTargetOwnedOutputProvenance;
+	void* vrEngineTargetProvenanceRenderer = nullptr;
+	ID3D11Device* vrEngineTargetProvenanceDevice = nullptr;
 	winrt::com_ptr<IDXGIAdapter3> vrRenderScaleMemoryAdapter;
 	ID3D11Device* vrRenderScaleMemoryAdapterDevice = nullptr;
 	uint32_t vrRenderScaleMemoryLastSampleFrame = 0;
@@ -1699,6 +1709,8 @@ public:
 		bool a_supported,
 		uint32_t a_capturedPointerCount,
 		uint32_t a_aliasedPointerCount,
+		uint32_t a_provenPointerCount,
+		uint32_t a_retainedUnprovenPointerCount,
 		uint32_t a_replacedPointerCount,
 		uint32_t a_restoredPointerCount,
 		std::vector<winrt::com_ptr<IUnknown>>&& a_resources);

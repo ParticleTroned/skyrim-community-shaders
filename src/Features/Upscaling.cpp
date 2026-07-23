@@ -15970,11 +15970,12 @@ namespace
 		Failed
 	};
 
-	struct VREngineOwnedOutputSlotSnapshot
+	struct VREngineOutputSlotSnapshot
 	{
 		void* address = nullptr;
 		void* previous = nullptr;
-		IUnknown* ownedReference = nullptr;
+		IUnknown* provenReference = nullptr;
+		uint32_t provenanceIndex = 0;
 		void* (*read)(void*) noexcept = nullptr;
 		void (*write)(void*, void*) noexcept = nullptr;
 	};
@@ -15983,9 +15984,12 @@ namespace
 	{
 		bool supported = false;
 		bool valid = false;
+		void* renderer = nullptr;
+		ID3D11Device* device = nullptr;
 		uint32_t capturedPointerCount = 0;
 		uint32_t aliasedPointerCount = 0;
-		std::vector<VREngineOwnedOutputSlotSnapshot> slots;
+		uint32_t provenPointerCount = 0;
+		std::vector<VREngineOutputSlotSnapshot> slots;
 	};
 
 	struct VREngineTargetGenerationDelta
@@ -15993,6 +15997,8 @@ namespace
 		bool supported = false;
 		uint32_t capturedPointerCount = 0;
 		uint32_t aliasedPointerCount = 0;
+		uint32_t provenPointerCount = 0;
+		uint32_t retainedUnprovenPointerCount = 0;
 		uint32_t replacedPointerCount = 0;
 		uint32_t restoredPointerCount = 0;
 		std::vector<winrt::com_ptr<IUnknown>> resources;
@@ -16015,22 +16021,49 @@ namespace
 
 	bool IsVREngineTargetRetirementAvailable()
 	{
-		// Live VR 1.4.15 analysis established that Renderer::CreateRenderTarget
-		// and Renderer::CreateDepthStencil pass these fields directly to D3D11
-		// Create* output parameters without first releasing their old values.
-		// Other runtimes remain fail-closed until their ownership is proven.
+		// Live VR 1.4.15 analysis established that the full native recreate
+		// routine reaches Renderer::CreateRenderTarget/CreateDepthStencil
+		// without releasing these table fields, and that the leaf creators pass
+		// them directly to D3D11 Create* output parameters. Other runtimes remain
+		// fail-closed until their complete ownership route is proven.
 		return REL::Module::IsVR() &&
 		       REL::Module::get().version() == SKSE::RUNTIME_VR_1_4_15;
 	}
 
-	template <class T>
-	void CaptureVREngineOwnedOutputSlot(VREngineTargetGenerationSnapshot& a_snapshot, T*& a_pointer)
+	void InvalidateVREngineTargetOwnershipProvenance(Upscaling& a_upscaling) noexcept
 	{
-		VREngineOwnedOutputSlotSnapshot slot{};
+		std::fill(
+			a_upscaling.vrEngineTargetOwnedOutputProvenance.begin(),
+			a_upscaling.vrEngineTargetOwnedOutputProvenance.end(),
+			Upscaling::VREngineTargetSlotProvenance{});
+		a_upscaling.vrEngineTargetProvenanceRenderer = nullptr;
+		a_upscaling.vrEngineTargetProvenanceDevice = nullptr;
+	}
+
+	template <class T>
+	void CaptureVREngineOutputSlot(
+		VREngineTargetGenerationSnapshot& a_snapshot,
+		T*& a_pointer,
+		Upscaling::VREngineTargetSlotProvenance& a_provenance,
+		uint32_t a_provenanceIndex)
+	{
+		VREngineOutputSlotSnapshot slot{};
 		slot.address = std::addressof(a_pointer);
 		slot.previous = a_pointer;
-		slot.ownedReference = a_pointer ? static_cast<IUnknown*>(a_pointer) : nullptr;
-		if (slot.ownedReference) {
+		slot.provenanceIndex = a_provenanceIndex;
+		if (a_pointer &&
+			a_provenance.address == slot.address &&
+			a_provenance.pointer == a_pointer) {
+			slot.provenReference = static_cast<IUnknown*>(a_pointer);
+			if (a_snapshot.provenPointerCount != std::numeric_limits<uint32_t>::max())
+				++a_snapshot.provenPointerCount;
+		} else {
+			// Any external or CS-side slot mutation invalidates provenance. A
+			// matching value may only become releasable after it is observed as
+			// the direct output of Skyrim's native target creator.
+			a_provenance = {};
+		}
+		if (a_pointer) {
 			const bool aliased = std::any_of(
 				a_snapshot.slots.begin(),
 				a_snapshot.slots.end(),
@@ -16051,11 +16084,11 @@ namespace
 		a_snapshot.slots.push_back(slot);
 	}
 
-	VREngineTargetGenerationSnapshot CaptureVREngineTargetGeneration()
+	VREngineTargetGenerationSnapshot CaptureVREngineTargetGeneration(Upscaling& a_upscaling)
 	{
 		VREngineTargetGenerationSnapshot snapshot{};
 		snapshot.supported = IsVREngineTargetRetirementAvailable();
-		if (!snapshot.supported || !globals::game::renderer)
+		if (!snapshot.supported || !globals::game::renderer || !globals::d3d::device)
 			return snapshot;
 
 		constexpr uint32_t renderTargetCount =
@@ -16064,36 +16097,69 @@ namespace
 			static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kVRTOTAL);
 		constexpr size_t renderTargetPointerCount = static_cast<size_t>(renderTargetCount) * 6u;
 		constexpr size_t depthStencilPointerCount = static_cast<size_t>(depthStencilCount) * 19u;
-		snapshot.slots.reserve(renderTargetPointerCount + depthStencilPointerCount);
+		constexpr size_t totalPointerCount = renderTargetPointerCount + depthStencilPointerCount;
+		static_assert(totalPointerCount <= std::numeric_limits<uint32_t>::max());
+		snapshot.slots.reserve(totalPointerCount);
 
 		auto* renderer = globals::game::renderer;
+		auto* device = globals::d3d::device;
+		const bool provenanceIdentityChanged =
+			a_upscaling.vrEngineTargetProvenanceRenderer != renderer ||
+			a_upscaling.vrEngineTargetProvenanceDevice != device;
+		if (a_upscaling.vrEngineTargetOwnedOutputProvenance.size() != totalPointerCount) {
+			a_upscaling.vrEngineTargetOwnedOutputProvenance.assign(
+				totalPointerCount,
+				Upscaling::VREngineTargetSlotProvenance{});
+		} else if (provenanceIdentityChanged) {
+			InvalidateVREngineTargetOwnershipProvenance(a_upscaling);
+		}
+		a_upscaling.vrEngineTargetProvenanceRenderer = renderer;
+		a_upscaling.vrEngineTargetProvenanceDevice = device;
+		snapshot.renderer = renderer;
+		snapshot.device = device;
+
+		uint32_t provenanceIndex = 0;
+		auto capture = [&](auto*& a_pointer) {
+			auto& provenance =
+				a_upscaling.vrEngineTargetOwnedOutputProvenance[provenanceIndex];
+			CaptureVREngineOutputSlot(
+				snapshot,
+				a_pointer,
+				provenance,
+				provenanceIndex);
+			++provenanceIndex;
+		};
 		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 		for (uint32_t index = 0; index < renderTargetCount; ++index) {
 			auto& target = renderTargets[index];
-			CaptureVREngineOwnedOutputSlot(snapshot, target.texture);
-			CaptureVREngineOwnedOutputSlot(snapshot, target.textureCopy);
-			CaptureVREngineOwnedOutputSlot(snapshot, target.RTV);
-			CaptureVREngineOwnedOutputSlot(snapshot, target.SRV);
-			CaptureVREngineOwnedOutputSlot(snapshot, target.SRVCopy);
-			CaptureVREngineOwnedOutputSlot(snapshot, target.UAV);
+			capture(target.texture);
+			capture(target.textureCopy);
+			capture(target.RTV);
+			capture(target.SRV);
+			capture(target.SRVCopy);
+			capture(target.UAV);
 		}
 
 		auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
 		for (uint32_t index = 0; index < depthStencilCount; ++index) {
 			auto& target = depthStencils[index];
-			CaptureVREngineOwnedOutputSlot(snapshot, target.texture);
+			capture(target.texture);
 			for (auto*& view : target.views)
-				CaptureVREngineOwnedOutputSlot(snapshot, view);
+				capture(view);
 			for (auto*& view : target.readOnlyViews)
-				CaptureVREngineOwnedOutputSlot(snapshot, view);
-			CaptureVREngineOwnedOutputSlot(snapshot, target.depthSRV);
-			CaptureVREngineOwnedOutputSlot(snapshot, target.stencilSRV);
+				capture(view);
+			capture(target.depthSRV);
+			capture(target.stencilSRV);
 		}
 
 		// Cubemap and Texture3D targets remain intentionally excluded. The
 		// analysed render/depth creators establish no ownership contract for
 		// those families, even when the parent recreate routine touches them.
 
+		if (provenanceIndex != totalPointerCount) {
+			InvalidateVREngineTargetOwnershipProvenance(a_upscaling);
+			return snapshot;
+		}
 		snapshot.valid = true;
 		return snapshot;
 	}
@@ -16105,43 +16171,107 @@ namespace
 		delta.supported = a_snapshot.supported;
 		delta.capturedPointerCount = a_snapshot.capturedPointerCount;
 		delta.aliasedPointerCount = a_snapshot.aliasedPointerCount;
-		// Each output slot owns one reference. Repeated COM identities therefore
-		// require repeated releases rather than pointer-identity deduplication.
-		delta.resources.reserve(a_snapshot.capturedPointerCount);
+		delta.provenPointerCount = a_snapshot.provenPointerCount;
+		// Each proven D3D output slot contributes one reference. Repeated COM
+		// identities therefore require repeated releases rather than
+		// pointer-identity deduplication.
+		delta.resources.reserve(a_snapshot.provenPointerCount);
 		return delta;
 	}
 
-	void ReconcileVREngineTargetGeneration(
+	bool ReconcileVREngineTargetGeneration(
 		const VREngineTargetGenerationSnapshot& a_snapshot,
-		VREngineTargetGenerationDelta& a_delta) noexcept
+		VREngineTargetGenerationDelta& a_delta,
+		Upscaling& a_upscaling) noexcept
 	{
-		if (!a_snapshot.valid)
-			return;
+		if (!a_snapshot.valid ||
+			a_snapshot.renderer != globals::game::renderer ||
+			a_snapshot.device != globals::d3d::device ||
+			a_upscaling.vrEngineTargetOwnedOutputProvenance.size() != a_snapshot.slots.size() ||
+			!a_delta.resources.empty() ||
+			a_delta.resources.capacity() < a_snapshot.provenPointerCount) {
+			InvalidateVREngineTargetOwnershipProvenance(a_upscaling);
+			a_delta.provenPointerCount = 0;
+			return false;
+		}
+
+		for (size_t index = 0; index < a_snapshot.slots.size(); ++index) {
+			const auto& slot = a_snapshot.slots[index];
+			if (!slot.address ||
+				!slot.read ||
+				!slot.write ||
+				slot.provenanceIndex != static_cast<uint32_t>(index)) {
+				InvalidateVREngineTargetOwnershipProvenance(a_upscaling);
+				a_delta.provenPointerCount = 0;
+				return false;
+			}
+		}
 
 		for (const auto& slot : a_snapshot.slots) {
-			if (!slot.address || !slot.read || !slot.write)
-				continue;
-
 			void* current = slot.read(slot.address);
+			auto& provenance =
+				a_upscaling.vrEngineTargetOwnedOutputProvenance[slot.provenanceIndex];
 			if (current == slot.previous)
 				continue;
 
 			if (!current && slot.previous) {
 				slot.write(slot.address, slot.previous);
+				provenance.address = slot.address;
+				provenance.pointer = slot.provenReference ? slot.previous : nullptr;
 				if (a_delta.restoredPointerCount != std::numeric_limits<uint32_t>::max())
 					++a_delta.restoredPointerCount;
 				continue;
 			}
-			if (!slot.ownedReference)
-				continue;
 
-			// Capacity was reserved before recreation, so transferring the old
-			// slot-owned reference cannot allocate in this noexcept handoff.
-			a_delta.resources.emplace_back();
-			a_delta.resources.back().attach(slot.ownedReference);
-			if (a_delta.replacedPointerCount != std::numeric_limits<uint32_t>::max())
-				++a_delta.replacedPointerCount;
+			if (slot.previous) {
+				if (slot.provenReference) {
+					// Capacity was reserved before recreation, so transferring
+					// this proven old reference cannot allocate here.
+					a_delta.resources.emplace_back();
+					a_delta.resources.back().attach(slot.provenReference);
+					if (a_delta.replacedPointerCount != std::numeric_limits<uint32_t>::max())
+						++a_delta.replacedPointerCount;
+				} else if (a_delta.retainedUnprovenPointerCount != std::numeric_limits<uint32_t>::max()) {
+					// Preserve vanilla leak behavior when the old pointer was not
+					// observed as a native output for this exact slot.
+					++a_delta.retainedUnprovenPointerCount;
+				}
+			}
+
+			// No code runs between the native creator and this checkpoint.
+			// A changed non-null value is therefore a proven native output for
+			// this exact slot and may be reclaimed on a later replacement.
+			provenance.address = slot.address;
+			provenance.pointer = current;
 		}
+		return true;
+	}
+
+	struct VREngineTargetRecreateCheckpointContext
+	{
+		Upscaling* upscaling = nullptr;
+		const VREngineTargetGenerationSnapshot* snapshot = nullptr;
+		VREngineTargetGenerationDelta* delta = nullptr;
+		bool reached = false;
+		bool reconciled = false;
+	};
+
+	void ReconcileVREngineTargetGenerationCheckpoint(void* a_context) noexcept
+	{
+		auto* context = static_cast<VREngineTargetRecreateCheckpointContext*>(a_context);
+		if (!context)
+			return;
+
+		if (context->reached)
+			return;
+		context->reached = true;
+		if (!context->upscaling || !context->snapshot || !context->delta)
+			return;
+
+		context->reconciled = ReconcileVREngineTargetGeneration(
+			*context->snapshot,
+			*context->delta,
+			*context->upscaling);
 	}
 
 	bool VRRenderScaleRelatchSignatureEquals(
@@ -18011,28 +18141,43 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			if (releasedDeferredTargetsForRelief)
 				globals::deferred->ReleaseRenderTargets();
 			bool engineTargetsRecreated = false;
-			const auto engineTargetSnapshot = CaptureVREngineTargetGeneration();
+			const auto engineTargetSnapshot = CaptureVREngineTargetGeneration(*this);
 			auto engineTargetDelta = PrepareVREngineTargetGenerationDelta(engineTargetSnapshot);
-			auto finalizeEngineTargetRecreation = [&]() {
-				ReconcileVREngineTargetGeneration(engineTargetSnapshot, engineTargetDelta);
+			VREngineTargetRecreateCheckpointContext engineTargetCheckpoint{
+				.upscaling = this,
+				.snapshot = std::addressof(engineTargetSnapshot),
+				.delta = std::addressof(engineTargetDelta)
+			};
+			auto queueEngineTargetRetirement = [&]() {
+				if (!engineTargetCheckpoint.reconciled)
+					return;
+
 				QueueVREngineTargetRetirement(
 					relatchEpoch,
 					engineTargetDelta.supported,
 					engineTargetDelta.capturedPointerCount,
 					engineTargetDelta.aliasedPointerCount,
+					engineTargetDelta.provenPointerCount,
+					engineTargetDelta.retainedUnprovenPointerCount,
 					engineTargetDelta.replacedPointerCount,
 					engineTargetDelta.restoredPointerCount,
 					std::move(engineTargetDelta.resources));
 			};
 			try {
-				engineTargetsRecreated = Hooks::RecreateRenderTargetsForVRRenderScale();
+				engineTargetsRecreated = Hooks::RecreateRenderTargetsForVRRenderScale(
+					ReconcileVREngineTargetGenerationCheckpoint,
+					std::addressof(engineTargetCheckpoint));
 			} catch (...) {
 				// The original recreation runs before CS reinitialization and can
-				// therefore have replaced slots even when later setup throws.
-				finalizeEngineTargetRecreation();
+				// therefore have partially replaced slots before an exception.
+				// Unless the post-create checkpoint reconciled completely, none
+				// of those mutations has sufficiently precise provenance.
+				if (!engineTargetCheckpoint.reconciled)
+					InvalidateVREngineTargetOwnershipProvenance(*this);
+				queueEngineTargetRetirement();
 				throw;
 			}
-			finalizeEngineTargetRecreation();
+			queueEngineTargetRetirement();
 			// A null D3D output means the physical generation is incomplete.
 			// Reconciliation preserves the previous owner for that slot, while
 			// the relatch remains uncommitted and retries through the normal
@@ -18631,6 +18776,8 @@ void Upscaling::QueueVREngineTargetRetirement(
 	bool a_supported,
 	uint32_t a_capturedPointerCount,
 	uint32_t a_aliasedPointerCount,
+	uint32_t a_provenPointerCount,
+	uint32_t a_retainedUnprovenPointerCount,
 	uint32_t a_replacedPointerCount,
 	uint32_t a_restoredPointerCount,
 	std::vector<winrt::com_ptr<IUnknown>>&& a_resources)
@@ -18644,6 +18791,8 @@ void Upscaling::QueueVREngineTargetRetirement(
 			retirement.pending = false;
 			retirement.capturedPointerCount = 0;
 			retirement.aliasedPointerCount = 0;
+			retirement.provenPointerCount = 0;
+			retirement.retainedUnprovenPointerCount = 0;
 			retirement.replacedPointerCount = 0;
 			retirement.restoredPointerCount = 0;
 			retirement.pendingReleaseCount = 0;
@@ -18663,6 +18812,22 @@ void Upscaling::QueueVREngineTargetRetirement(
 	const uint32_t queuedReleaseCount = static_cast<uint32_t>(std::min<size_t>(
 		a_resources.size(),
 		std::numeric_limits<uint32_t>::max()));
+	if (a_provenPointerCount > a_capturedPointerCount ||
+		a_retainedUnprovenPointerCount > a_capturedPointerCount - a_provenPointerCount ||
+		a_replacedPointerCount > a_provenPointerCount ||
+		a_replacedPointerCount != queuedReleaseCount) {
+		for (auto& resource : a_resources)
+			resource.detach();
+		InvalidateVREngineTargetOwnershipProvenance(*this);
+		logger::error(
+			"[VRRenderScale] Engine target provenance accounting failed; retained {} reference(s) and invalidated the ledger. epoch={} captured={} proven={} replaced={}",
+			queuedReleaseCount,
+			a_epoch,
+			a_capturedPointerCount,
+			a_provenPointerCount,
+			a_replacedPointerCount);
+		return;
+	}
 	if (!a_resources.empty()) {
 		if (HasPendingVREngineTargetRetirement()) {
 			// Admission prevents this path. If that invariant is ever broken,
@@ -18703,6 +18868,8 @@ void Upscaling::QueueVREngineTargetRetirement(
 		                                    0;
 		retirement.capturedPointerCount = a_capturedPointerCount;
 		retirement.aliasedPointerCount = a_aliasedPointerCount;
+		retirement.provenPointerCount = a_provenPointerCount;
+		retirement.retainedUnprovenPointerCount = a_retainedUnprovenPointerCount;
 		retirement.replacedPointerCount = a_replacedPointerCount;
 		retirement.restoredPointerCount = a_restoredPointerCount;
 		retirement.pendingReleaseCount = retiredVREngineTargetGeneration ?
@@ -18720,23 +18887,26 @@ void Upscaling::QueueVREngineTargetRetirement(
 
 	if (a_restoredPointerCount != 0) {
 		logger::warn(
-			"[VRRenderScale] Restored {} engine target pointer(s) because recreation did not provide replacements. epoch={} captured={} repeated-identities={} replaced={}",
+			"[VRRenderScale] Restored {} engine target pointer(s) because recreation did not provide replacements. epoch={} captured={} proven={} retained-unproven={} repeated-identities={} replaced={}",
 			a_restoredPointerCount,
 			a_epoch,
 			a_capturedPointerCount,
+			a_provenPointerCount,
+			a_retainedUnprovenPointerCount,
 			a_aliasedPointerCount,
 			a_replacedPointerCount);
 	}
-	if (queuedReleaseCount == 0)
-		return;
-
-	logger::debug(
-		"[VRRenderScale] Queued {} displaced slot-owned engine target reference(s) for GPU-fenced retirement. epoch={} captured={} repeated-identities={} restored={}",
-		queuedReleaseCount,
-		a_epoch,
-		a_capturedPointerCount,
-		a_aliasedPointerCount,
-		a_restoredPointerCount);
+	if (queuedReleaseCount != 0 || a_retainedUnprovenPointerCount != 0) {
+		logger::debug(
+			"[VRRenderScale] Engine target provenance epoch={} captured={} proven={} queued={} retained-unproven={} repeated-identities={} restored={}",
+			a_epoch,
+			a_capturedPointerCount,
+			a_provenPointerCount,
+			queuedReleaseCount,
+			a_retainedUnprovenPointerCount,
+			a_aliasedPointerCount,
+			a_restoredPointerCount);
+	}
 }
 
 bool Upscaling::ServiceVREngineTargetRetirement(const char* a_reason)
@@ -28214,6 +28384,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 										{ "pendingGenerations", controller.engineTargetRetirement.pendingGenerations },
 										{ "capturedPointerCount", controller.engineTargetRetirement.capturedPointerCount },
 										{ "aliasedPointerCount", controller.engineTargetRetirement.aliasedPointerCount },
+										{ "provenPointerCount", controller.engineTargetRetirement.provenPointerCount },
+										{ "retainedUnprovenPointerCount", controller.engineTargetRetirement.retainedUnprovenPointerCount },
 										{ "replacedPointerCount", controller.engineTargetRetirement.replacedPointerCount },
 										{ "restoredPointerCount", controller.engineTargetRetirement.restoredPointerCount },
 										{ "pendingReleaseCount", controller.engineTargetRetirement.pendingReleaseCount },

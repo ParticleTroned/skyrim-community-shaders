@@ -24,5 +24,10 @@ namespace Hooks
 	void Install();
 	void InstallEarlyHooks();
 	bool RecreateRenderTargets();
-	bool RecreateRenderTargetsForVRRenderScale();
+	// Runs synchronously after Skyrim's native target creator returns and
+	// before global or Community Shaders render-target state is reinitialized.
+	using VRRenderTargetRecreateCheckpoint = void (*)(void*) noexcept;
+	bool RecreateRenderTargetsForVRRenderScale(
+		VRRenderTargetRecreateCheckpoint a_afterEngineCreate = nullptr,
+		void* a_context = nullptr);
 }

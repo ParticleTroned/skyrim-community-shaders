@@ -1031,9 +1031,13 @@ struct BSShaderRenderTargets_Create
 		return true;
 	}
 
-	static bool RecreateAndSetupRenderTargetResources()
+	static bool RecreateAndSetupRenderTargetResources(
+		Hooks::VRRenderTargetRecreateCheckpoint a_afterEngineCreate,
+		void* a_context)
 	{
 		func();
+		if (a_afterEngineCreate)
+			a_afterEngineCreate(a_context);
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
@@ -1100,12 +1104,16 @@ namespace Hooks
 		return BSShaderRenderTargets_Create::RecreateAndSetupFull();
 	}
 
-	bool RecreateRenderTargetsForVRRenderScale()
+	bool RecreateRenderTargetsForVRRenderScale(
+		VRRenderTargetRecreateCheckpoint a_afterEngineCreate,
+		void* a_context)
 	{
 		if (!globals::game::renderer || !globals::state || !globals::deferred || !globals::d3d::device || !globals::d3d::context)
 			return false;
 
-		return BSShaderRenderTargets_Create::RecreateAndSetupRenderTargetResources();
+		return BSShaderRenderTargets_Create::RecreateAndSetupRenderTargetResources(
+			a_afterEngineCreate,
+			a_context);
 	}
 
 	struct BSGraphics_Renderer_Init_InitD3D

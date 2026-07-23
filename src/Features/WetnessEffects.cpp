@@ -382,7 +382,7 @@ void WetnessEffects::DrawSettings()
 	ImGui::Spacing();
 
 	if (ImGui::TreeNodeEx("Wetness Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (ImGui::Checkbox("Enable Wetness", (bool*)&settings.EnableWetnessEffects)) {
+		if (ImGui::Checkbox("Enable", (bool*)&settings.EnableWetnessEffects)) {
 			Ripples::UpdateSettings();  // Update cache when settings change
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -635,7 +635,7 @@ void WetnessEffects::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	bool enabled = settings.EnableWetnessEffects != 0;
-	if (ImGui::Checkbox("Enable Wetness", &enabled)) {
+	if (ImGui::Checkbox("Enable", &enabled)) {
 		settings.EnableWetnessEffects = enabled ? 1u : 0u;
 		Ripples::UpdateSettings();
 	}

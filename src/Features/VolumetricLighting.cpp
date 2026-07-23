@@ -238,14 +238,14 @@ void VolumetricLighting::DrawSettings()
 	DrawGodrayTuningSettings();
 	ImGui::Separator();
 
-	if (ImGui::Checkbox("Enable Volumetric Lighting in Exteriors", &settings.ExteriorEnabled))
+	if (ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled))
 		SetupVL();
 	drawVRRestartHint();
 
 	if (settings.ExteriorEnabled)
 		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
 
-	if (ImGui::Checkbox("Enable Volumetric Lighting in Interiors", &settings.InteriorEnabled))
+	if (ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled))
 		SetupVL();
 	drawVRRestartHint();
 

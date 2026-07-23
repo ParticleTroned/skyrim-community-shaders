@@ -18,7 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void SkySync::DrawSettings()
 {
-	ImGui::Checkbox("Enabled", &settings.Enabled);
+	ImGui::Checkbox("Enable", &settings.Enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Enable or disable Sky Sync features.");
 	}
@@ -79,7 +79,7 @@ void SkySync::DrawSettings()
 
 void SkySync::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enabled", &settings.Enabled);
+	ImGui::Checkbox("Enable", &settings.Enabled);
 }
 
 void SkySync::LoadSettings(json& o_json)

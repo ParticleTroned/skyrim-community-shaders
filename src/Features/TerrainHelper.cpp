@@ -39,7 +39,7 @@ void TerrainHelper::DrawSettings()
 		return;
 	}
 
-	if (ImGui::Checkbox("Enable Terrain Helper (Hard Toggle)", &settings.EnableTerrainHelper)) {
+	if (ImGui::Checkbox("Enable", &settings.EnableTerrainHelper)) {
 		if (!settings.EnableTerrainHelper)
 			ClearTerrainHelperRuntimeState();
 	}
@@ -52,7 +52,7 @@ void TerrainHelper::DrawEssentialSettings()
 		return;
 	}
 
-	if (ImGui::Checkbox("Enable Terrain Helper", &settings.EnableTerrainHelper)) {
+	if (ImGui::Checkbox("Enable", &settings.EnableTerrainHelper)) {
 		if (!settings.EnableTerrainHelper)
 			ClearTerrainHelperRuntimeState();
 	}

@@ -509,7 +509,7 @@ namespace
 void TerrainBlending::DrawSettings()
 {
 	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable Terrain Blending", &enabled)) {
+	if (ImGui::Checkbox("Enable", &enabled)) {
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 
@@ -535,7 +535,7 @@ void TerrainBlending::DrawSettings()
 void TerrainBlending::DrawPerformanceSettings(bool)
 {
 	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable Terrain Blending", &enabled)) {
+	if (ImGui::Checkbox("Enable", &enabled)) {
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 
@@ -545,7 +545,7 @@ void TerrainBlending::DrawPerformanceSettings(bool)
 void TerrainBlending::DrawEssentialSettings()
 {
 	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable Terrain Blending", &enabled)) {
+	if (ImGui::Checkbox("Enable", &enabled)) {
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 }

@@ -187,7 +187,7 @@ void TruePBR::DrawSettings()
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNodeEx("Glint")) {
-				if (ImGui::Checkbox("Enabled", &selectedPbrTextureSet->glintParameters.enabled)) {
+				if (ImGui::Checkbox("Enable", &selectedPbrTextureSet->glintParameters.enabled)) {
 					wasEdited = true;
 				}
 				if (selectedPbrTextureSet->glintParameters.enabled) {
@@ -300,7 +300,7 @@ void TruePBR::DrawSettings()
 				wasEdited = true;
 			}
 			if (ImGui::TreeNodeEx("Glint")) {
-				if (ImGui::Checkbox("Enabled", &selectedPbrMaterialObject->glintParameters.enabled)) {
+				if (ImGui::Checkbox("Enable", &selectedPbrMaterialObject->glintParameters.enabled)) {
 					wasEdited = true;
 				}
 				if (selectedPbrMaterialObject->glintParameters.enabled) {

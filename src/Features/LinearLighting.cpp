@@ -44,7 +44,7 @@ namespace
 
 void LinearLighting::DrawSettings()
 {
-	ImGui::Checkbox("Enable Linear Lighting", (bool*)&settings.enableLinearLighting);
+	ImGui::Checkbox("Enable", (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox("Disable in interiors", (bool*)&settings.DisableInInteriors);
 	ImGui::Checkbox("Disable in exteriors", (bool*)&settings.DisableInExteriors);
 
@@ -90,7 +90,7 @@ void LinearLighting::DrawSettings()
 
 void LinearLighting::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable Linear Lighting", (bool*)&settings.enableLinearLighting);
+	ImGui::Checkbox("Enable", (bool*)&settings.enableLinearLighting);
 }
 
 void LinearLighting::LoadSettings(json& o_json)

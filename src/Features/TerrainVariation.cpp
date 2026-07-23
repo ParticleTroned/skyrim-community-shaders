@@ -12,7 +12,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void TerrainVariation::DrawSettings()
 {
 	bool oldEnabled = settings.enableTilingFix;
-	ImGui::Checkbox("Enable Terrain Tiling Fix", (bool*)&settings.enableTilingFix);
+	ImGui::Checkbox("Enable", (bool*)&settings.enableTilingFix);
 	if (oldEnabled != (bool)settings.enableTilingFix) {
 		// Update the shader settings when the checkbox is toggled
 		UpdateShaderSettings();
@@ -42,7 +42,7 @@ void TerrainVariation::DrawSettings()
 void TerrainVariation::DrawEssentialSettings()
 {
 	bool oldEnabled = settings.enableTilingFix;
-	ImGui::Checkbox("Enable Terrain Tiling Fix", (bool*)&settings.enableTilingFix);
+	ImGui::Checkbox("Enable", (bool*)&settings.enableTilingFix);
 	if (oldEnabled != (bool)settings.enableTilingFix) {
 		UpdateShaderSettings();
 		logger::info("TerrainVariation setting changed to: {}", settings.enableTilingFix);

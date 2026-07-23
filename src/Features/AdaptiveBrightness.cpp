@@ -700,8 +700,7 @@ namespace
 
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
-	const auto displayName = GetDisplayName();
-	ImGui::Checkbox(("Enable " + displayName).c_str(), &settings.enabled);
+	ImGui::Checkbox("Enable", &settings.enabled);
 
 	if (settings.enabled) {
 		const auto contextLabel = GetContextLabel();

@@ -12,7 +12,7 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 8;
+inline constexpr unsigned int CSBuildNumber = 9;
 
 namespace CSPluginAPI
 {
@@ -64,6 +64,7 @@ namespace CSPluginAPI
 		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kLoadingMenu) == Upscaling::kVRUpscalingApplyBlockLoadingMenu);
 		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kRelatchPending) == Upscaling::kVRUpscalingApplyBlockRelatchPending);
 		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kTransitionPending) == Upscaling::kVRUpscalingApplyBlockTransitionPending);
+		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kOpenCompositeUpscaling) == Upscaling::kVRUpscalingApplyBlockOpenComposite);
 
 		inline bool IsValidInterfaceRequest(const SKSE::MessagingInterface::Message* message)
 		{

@@ -133,6 +133,7 @@ public:
 	static constexpr uint32_t kVRUpscalingApplyBlockLoadingMenu = 1u << 2;
 	static constexpr uint32_t kVRUpscalingApplyBlockRelatchPending = 1u << 3;
 	static constexpr uint32_t kVRUpscalingApplyBlockTransitionPending = 1u << 4;
+	static constexpr uint32_t kVRUpscalingApplyBlockOpenComposite = 1u << 5;
 	static constexpr uint32_t ClampDLSSPresetUInt(uint32_t a_preset)
 	{
 		return a_preset <= kDLSSPresetMaxIndex ? a_preset : kDLSSPresetMaxIndex;
@@ -2085,7 +2086,7 @@ private:
 	};
 
 	OpenCompositeUpscalingBlocker GetOpenCompositeUpscalingBlocker(bool a_forceRefresh = false) const;
-	void ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh = false);
+	bool ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh = false);
 
 	bool openCompositeUpscalingBackendSkipLogged = false;
 	bool renderDocUpscalingBackendSkipLogged = false;

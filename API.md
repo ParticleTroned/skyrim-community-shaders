@@ -138,6 +138,7 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 -   `VRUpscalingApplyBlockReason::kLoadingMenu`
 -   `VRUpscalingApplyBlockReason::kRelatchPending`
 -   `VRUpscalingApplyBlockReason::kTransitionPending`
+-   `VRUpscalingApplyBlockReason::kOpenCompositeUpscaling`
 
 Advisory VR render-scale transition fade constants:
 
@@ -160,6 +161,7 @@ These constants do not control Community Shaders directly and do not change the 
 -   `SetUpscaleMethod` selects the CS upscaler method explicitly while preserving the current preset, DLSS profile, and Render Scale Mode request where valid.
 -   `SetVRUpscalingTransitionProfileForMethod` is the preferred revision-2 call for interior/exterior controllers that need deterministic DLSS/FSR behavior. It stages method, Render Scale Mode, shared preset, and DLSS profile together, so `DLSS + NativeAA + K` is unambiguously DLAA/K and `FSR + Hoshipa` is unambiguously FSR render scale.
 -   External VR transition controllers should call `GetVRUpscalingApplyBlockReasons()` or `IsVRUpscalingProfileApplyAllowed()` before applying upscaling profiles. A non-zero reason mask means the caller should buffer the latest desired profile, wait, re-check the current destination state, and apply once when CS reports that profile application is allowed. Community Shaders also defensively ignores external upscaling API setters while the mask is non-zero.
+-   `kOpenCompositeUpscaling` means Open Composite owns the active upscaling path. Community Shaders remains locked to `None`, and callers must not retry an upscaling profile until the game has restarted without Open Composite upscaling.
 -   The individual legacy `SetUpscalePreset`, `SetDLSSProfile`, and `SetRenderAtUpscaleResEnabled` setters use the same VR transition staging when called separately. `SetUpscalePreset` and `SetDLSSProfile` prefer DLSS on DLSS-capable systems for backwards compatibility with consumers built around the old DLSS naming.
 -   `Game.FadeOutGame` does not pause Community Shaders or serialize D3D/vendor resource rebuilds. It only hides the transition visually. For render-scale transitions, fade to black first, call `SetVRUpscalingTransitionProfileForMethod` as soon as the screen is black and the destination profile is known, perform the move/cell transition, then keep the screen black for at least `CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds` after the profile call or move, whichever is later, before fading back in. The clean baseline measured normal render-target relatches around `1.3` to `1.7` seconds, while first-load profile mismatch correction has taken about `6` seconds from load close to fully corrected/stable state, so the `6.0` second black hold is the conservative recommendation.
 -   New virtual methods must only be appended to the interface to preserve binary compatibility.
@@ -179,4 +181,5 @@ These constants do not control Community Shaders directly and do not change the 
 -   `SetVRUpscalingTransitionProfile` and the current VR render-scale transition staging behavior require `getBuildNumber() >= 6`.
 -   `GetUpscaleMethod`/`SetUpscaleMethod`/`SetVRUpscalingTransitionProfileForMethod` require interface revision `2` and `getBuildNumber() >= 7`.
 -   `GetVRUpscalingApplyBlockReasons`/`IsVRUpscalingProfileApplyAllowed` require interface revision `3` and `getBuildNumber() >= 8`.
+-   `VRUpscalingApplyBlockReason::kOpenCompositeUpscaling` requires `getBuildNumber() >= 9`.
 -   Treat missing API as optional integration and continue without hard failure.

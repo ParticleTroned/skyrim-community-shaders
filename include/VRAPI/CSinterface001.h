@@ -75,7 +75,8 @@ namespace CSPluginAPI
 		kRaceSexStartupTail = 1u << 1,
 		kLoadingMenu = 1u << 2,
 		kRelatchPending = 1u << 3,
-		kTransitionPending = 1u << 4
+		kTransitionPending = 1u << 4,
+		kOpenCompositeUpscaling = 1u << 5
 	};
 
 	// This object provides access to Community Shaders' mod support API.

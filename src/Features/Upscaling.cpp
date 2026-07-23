@@ -2982,6 +2982,7 @@ namespace
 
 	struct DetectedOpenCompositeUpscalingBlocker
 	{
+		bool sessionResolved = false;
 		bool active = false;
 		std::string settingName;
 		std::string configPath;
@@ -3124,7 +3125,7 @@ namespace
 		return std::filesystem::path(buffer).parent_path();
 	}
 
-	bool ShouldProbeOpenCompositeConfig()
+	std::optional<bool> DetectOpenCompositeRuntime()
 	{
 		if (!globals::game::isVR)
 			return false;
@@ -3134,8 +3135,10 @@ namespace
 			return cachedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 
 		const auto detectedInfo = VRDetection::Detect();
-		return detectedInfo.isAvailable &&
-		       detectedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
+		if (!detectedInfo.isAvailable)
+			return std::nullopt;
+
+		return detectedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 	}
 
 	std::vector<std::filesystem::path> GetOpenCompositeConfigCandidates()
@@ -3175,13 +3178,17 @@ namespace
 		return false;
 	}
 
-	void UpdateOpenCompositeSettingValue(OpenCompositeSettingValue& setting, const CSimpleIniA& ini, const char* key, const std::filesystem::path& path)
+	void AccumulateOpenCompositeSettingValue(OpenCompositeSettingValue& setting, const CSimpleIniA& ini, const char* key, const std::filesystem::path& path)
 	{
 		bool parsedValue = false;
 		if (!TryReadIniBoolSetting(ini, key, parsedValue))
 			return;
 
-		setting.value = parsedValue;
+		// This is conflict detection, not last-writer-wins configuration merging.
+		if (!parsedValue || setting.value)
+			return;
+
+		setting.value = true;
 		setting.configPath = PathToDisplayString(path);
 	}
 
@@ -3203,11 +3210,11 @@ namespace
 				continue;
 			}
 
-			UpdateOpenCompositeSettingValue(settings.dlssEnabled, ini, "dlssEnabled", path);
-			UpdateOpenCompositeSettingValue(settings.fsrEnabled, ini, "fsrEnabled", path);
-			UpdateOpenCompositeSettingValue(settings.dlaaEnabled, ini, "dlaaEnabled", path);
-			UpdateOpenCompositeSettingValue(settings.fsrNativeAA, ini, "fsrNativeAA", path);
-			UpdateOpenCompositeSettingValue(settings.fsr3PostAAEnabled, ini, "fsr3PostAAEnabled", path);
+			AccumulateOpenCompositeSettingValue(settings.dlssEnabled, ini, "dlssEnabled", path);
+			AccumulateOpenCompositeSettingValue(settings.fsrEnabled, ini, "fsrEnabled", path);
+			AccumulateOpenCompositeSettingValue(settings.dlaaEnabled, ini, "dlaaEnabled", path);
+			AccumulateOpenCompositeSettingValue(settings.fsrNativeAA, ini, "fsrNativeAA", path);
+			AccumulateOpenCompositeSettingValue(settings.fsr3PostAAEnabled, ini, "fsr3PostAAEnabled", path);
 		}
 
 		return settings;
@@ -3216,19 +3223,27 @@ namespace
 	DetectedOpenCompositeUpscalingBlocker FindOpenCompositeUpscalingBlocker()
 	{
 		DetectedOpenCompositeUpscalingBlocker blocker;
-		if (!globals::game::isVR)
+		if (!globals::game::isVR) {
+			blocker.sessionResolved = true;
 			return blocker;
+		}
 
 		Util::OCUExternalUpscalerState externalState{};
 		if (Util::TryReadOCUExternalUpscalerState(externalState) &&
 			IsOpenCompositeExternalUpscalerActive(externalState)) {
+			blocker.sessionResolved = true;
 			blocker.active = true;
 			blocker.settingName = "OpenCompositeUnleashedSharedState";
 			blocker.configPath = "Local\\OpenCompositeUnleashedUpscalingState";
 			return blocker;
 		}
 
-		if (!ShouldProbeOpenCompositeConfig())
+		const auto openCompositeRuntime = DetectOpenCompositeRuntime();
+		if (!openCompositeRuntime.has_value())
+			return blocker;
+
+		blocker.sessionResolved = true;
+		if (!*openCompositeRuntime)
 			return blocker;
 
 		const auto settings = ReadOpenCompositeUpscalingSettings();
@@ -3252,11 +3267,19 @@ namespace
 		return blocker;
 	}
 
+	enum class OpenCompositeUpscalingOwnership : uint8_t
+	{
+		Unresolved,
+		Inactive,
+		Active
+	};
+
 	struct OpenCompositeUpscalingBlockerCache
 	{
 		std::mutex lock;
 		DetectedOpenCompositeUpscalingBlocker blocker;
 		bool valid = false;
+		std::atomic<OpenCompositeUpscalingOwnership> ownership = OpenCompositeUpscalingOwnership::Unresolved;
 	};
 
 	OpenCompositeUpscalingBlockerCache& GetOpenCompositeUpscalingBlockerCache()
@@ -3270,9 +3293,15 @@ namespace
 	{
 		auto& cache = GetOpenCompositeUpscalingBlockerCache();
 		std::lock_guard<std::mutex> lock(cache.lock);
-		if (a_forceRefresh || !cache.valid) {
+		// Resolve startup ownership once; hook/backend ownership cannot change safely mid-session.
+		if ((a_forceRefresh || !cache.valid) && !cache.blocker.sessionResolved) {
 			cache.blocker = FindOpenCompositeUpscalingBlocker();
 			cache.valid = true;
+			if (cache.blocker.sessionResolved) {
+				cache.ownership.store(
+					cache.blocker.active ? OpenCompositeUpscalingOwnership::Active : OpenCompositeUpscalingOwnership::Inactive,
+					std::memory_order_release);
+			}
 		}
 
 		return std::forward<TAccessor>(a_accessor)(cache.blocker);
@@ -13850,11 +13879,11 @@ Upscaling::OpenCompositeUpscalingBlocker Upscaling::GetOpenCompositeUpscalingBlo
 	});
 }
 
-void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
+bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 {
 	const auto blocker = GetOpenCompositeUpscalingBlocker(a_forceRefresh);
 	if (!blocker.active)
-		return;
+		return false;
 
 	if (settings.upscaleMethod != static_cast<uint>(UpscaleMethod::kNONE) ||
 		settings.upscaleMethodNoDLSS != static_cast<uint>(UpscaleMethod::kNONE)) {
@@ -13916,6 +13945,7 @@ void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 		logger::warn("[Upscaling] {}", kOpenCompositeRenderScaleBlockWarning);
 	if (changedUpscaleMode || changedVRRenderScaleState)
 		InvalidateFrameScopedUpscalingState();
+	return true;
 }
 
 void Upscaling::SaveSettings(json& o_json)
@@ -14873,6 +14903,9 @@ namespace
 
 void Upscaling::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
+	if (ApplyOpenCompositeUpscalingBlocker(true))
+		return;
+
 	if (a_enabled) {
 		const Settings defaults{};
 		const UpscaleMethod targetMethod = GetDefaultPerformanceCostMeasurementMethod(*this);
@@ -14968,6 +15001,9 @@ json Upscaling::CapturePerformanceCostMeasurementState() const
 void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
 {
 	if (!a_state.is_object())
+		return;
+
+	if (ApplyOpenCompositeUpscalingBlocker(true))
 		return;
 
 	const uint32_t primaryMethod = a_state.value("upscaleMethod", settings.upscaleMethod);
@@ -15352,6 +15388,9 @@ void Upscaling::SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reas
 
 void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool a_allowDefer, VRUpscalingTransitionOrigin a_origin)
 {
+	if (ApplyOpenCompositeUpscalingBlocker(true))
+		return;
+
 	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 	if (a_allowDefer &&
 		globals::game::isVR &&
@@ -15409,6 +15448,9 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 
 void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin)
 {
+	if (ApplyOpenCompositeUpscalingBlocker(true))
+		return;
+
 	const bool isVR = globals::game::isVR;
 	const bool allowPendingDLSSSelection =
 		a_targetMethod == UpscaleMethod::kDLSS &&
@@ -15418,13 +15460,8 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	                               static_cast<int>(UpscaleMethod::kDLSS) :
 	                               static_cast<int>(UpscaleMethod::kFSR);
 	const int targetMethodValue = std::clamp(static_cast<int>(a_targetMethod), static_cast<int>(UpscaleMethod::kNONE), maxMethodValue);
-	UpscaleMethod targetMethod = static_cast<UpscaleMethod>(targetMethodValue);
+	const UpscaleMethod targetMethod = static_cast<UpscaleMethod>(targetMethodValue);
 	const auto previousMethod = GetUpscaleMethod();
-	if (IsOpenCompositeUpscalingBlocked()) {
-		targetMethod = UpscaleMethod::kNONE;
-		settings.upscaleMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
-		settings.upscaleMethodNoDLSS = static_cast<uint32_t>(UpscaleMethod::kNONE);
-	}
 	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
 	const uint32_t dlssPreset = ClampDLSSPresetUInt(a_dlssPreset);
 	const bool renderScaleQuality = IsRenderScaleQualityMode(qualityMode);
@@ -15577,6 +15614,10 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 		HasPendingVRUpscalingTransition() ||
 		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
 		HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(*this);
+
+	if (IsOpenCompositeUpscalingBlocked()) {
+		reasons |= kVRUpscalingApplyBlockOpenComposite;
+	}
 
 	if (raceSexMenuActive) {
 		reasons |= kVRUpscalingApplyBlockRaceSexMenu;
@@ -30088,6 +30129,9 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 	if (!HasPendingVRUpscalingTransition())
 		return;
 
+	if (ApplyOpenCompositeUpscalingBlocker(true))
+		return;
+
 	static bool loggedVRUpscalingTransitionDefer = false;
 	if (ShouldDeferVRUpscalingTransitionSettings()) {
 		MarkVRUpscalingTransitionQueued(GetPendingVRRenderScaleDesiredProfile().origin);
@@ -30766,6 +30810,11 @@ IDXGISwapChain* Upscaling::GetProxySwapChain()
 
 bool Upscaling::IsOpenCompositeUpscalingBlocked(bool a_forceRefresh) const
 {
+	auto& cache = GetOpenCompositeUpscalingBlockerCache();
+	const auto ownership = cache.ownership.load(std::memory_order_acquire);
+	if (!a_forceRefresh && ownership != OpenCompositeUpscalingOwnership::Unresolved)
+		return ownership == OpenCompositeUpscalingOwnership::Active;
+
 	return AccessOpenCompositeUpscalingBlockerCache(a_forceRefresh, [](const DetectedOpenCompositeUpscalingBlocker& a_blocker) {
 		return a_blocker.active;
 	});

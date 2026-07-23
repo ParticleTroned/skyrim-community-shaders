@@ -85,7 +85,7 @@ namespace
 		return std::equal(std::begin(a_expected), std::end(a_expected), reinterpret_cast<const std::uint8_t*>(a_address));
 	}
 
-	class VRValidatedLightGuard : public Xbyak::CodeGenerator
+	class VRValidatedObjectGuard : public Xbyak::CodeGenerator
 	{
 	protected:
 		void RequirePlausiblePointer(
@@ -127,7 +127,7 @@ namespace
 		}
 	};
 
-	class VREffectShaderFirstLightGuard : public VRValidatedLightGuard
+	class VREffectShaderFirstLightGuard : public VRValidatedObjectGuard
 	{
 	public:
 		VREffectShaderFirstLightGuard(
@@ -163,7 +163,7 @@ namespace
 		}
 	};
 
-	class VREffectShaderAdditionalLightGuard : public VRValidatedLightGuard
+	class VREffectShaderAdditionalLightGuard : public VRValidatedObjectGuard
 	{
 	public:
 		VREffectShaderAdditionalLightGuard(
@@ -215,6 +215,34 @@ namespace
 			push(1);
 			test(byte[rsp], 1);
 			lea(rsp, ptr[rsp + 8]);
+			ret();
+		}
+	};
+
+	class VRSceneGraphCullingObjectGuard : public VRValidatedObjectGuard
+	{
+	public:
+		explicit VRSceneGraphCullingObjectGuard(std::uintptr_t a_continuation)
+		{
+			Xbyak::Label invalidObject;
+
+			// RDX is the NiAVObject selected by the scene graph. A stale child can
+			// remain readable after its vtable has been cleared during cell teardown.
+			// Reject only impossible object/vtable shapes before the native helper
+			// reads further object fields. RAX and R10 are volatile and dead here.
+			RequirePlausiblePointer(rdx, r10, invalidObject);
+			mov(rax, qword[rdx]);
+			RequirePlausiblePointer(rax, r10, invalidObject);
+
+			// Reproduce the displaced five-byte prologue instruction exactly,
+			// then resume before the native stack frame is established.
+			mov(qword[rsp + 0x10], rbx);
+			mov(rax, a_continuation);
+			jmp(rax);
+
+			L(invalidObject);
+			// The helper is void and has not modified the stack yet, so skipping
+			// this stale culling candidate preserves its caller's frame.
 			ret();
 		}
 	};
@@ -1971,6 +1999,82 @@ void LightLimitFix::Hooks::InstallVRNonShadowCasterLightFlagsGuard()
 	REL::safe_fill(target + 5, REL::NOP, sizeof(expectedInstruction) - 5);
 
 	logger::info("[LLF] Installed VR non-shadow caster light flags guard");
+}
+
+void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()
+{
+	if (!REL::Module::IsVR()) {
+		return;
+	}
+
+	if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+		logger::error("[LLF] VR scene-graph culling-object guard not installed: unsupported Skyrim VR runtime {}", REL::Module::get().version().string());
+		return;
+	}
+
+	// Skyrim VR 1.4.15 can retain a readable NiNode child after teardown has
+	// cleared its vtable. The scene-culling helper then reads that stale object
+	// and dispatches through slot 0x1A8 of the null vtable. The helper entry,
+	// virtual-call context, internal tail-entry context, and void epilogue were verified
+	// against the live, decrypted runtime after the same Windhelm-to-Dragonsreach
+	// crash reproduced both before and after the room-light/effect-shader guards.
+	constexpr std::uintptr_t helperEntryRVA = 0xCBFC60;
+	constexpr std::uintptr_t virtualCallContextRVA = 0xCBFD15;
+	constexpr std::uintptr_t helperEpilogueRVA = 0xCBFD52;
+	constexpr std::uintptr_t helperTailContextRVA = 0xCBFDB2;
+	constexpr std::size_t patchedInstructionSize = 5;
+	constexpr std::uint8_t expectedHelperEntry[] = {
+		0x48, 0x89, 0x5C, 0x24, 0x10,
+		0x57,
+		0x48, 0x83, 0xEC, 0x20,
+		0x83, 0xBA, 0xF0, 0x00, 0x00, 0x00, 0x00,
+		0x48, 0x8B, 0xFA,
+		0x48, 0x8B, 0xD9
+	};
+	constexpr std::uint8_t expectedVirtualCallContext[] = {
+		0x41, 0x83, 0xF9, 0x06,
+		0x75, 0x24,
+		0x48, 0x8B, 0x07,
+		0x48, 0x8B, 0xD3,
+		0x48, 0x8B, 0xCF,
+		0xFF, 0x90, 0xA8, 0x01, 0x00, 0x00
+	};
+	constexpr std::uint8_t expectedHelperEpilogue[] = {
+		0x89, 0xB3, 0x9C, 0x00, 0x00, 0x00,
+		0x48, 0x8B, 0x74, 0x24, 0x30,
+		0x48, 0x8B, 0x5C, 0x24, 0x38,
+		0x48, 0x83, 0xC4, 0x20,
+		0x5F,
+		0xC3
+	};
+	constexpr std::uint8_t expectedHelperTailContext[] = {
+		0x83, 0xB9, 0x9C, 0x00, 0x00, 0x00, 0x00,
+		0x74, 0xDC,
+		0x41, 0x83, 0xC8, 0xFF,
+		0xE9, 0x9C, 0xFE, 0xFF, 0xFF
+	};
+
+	const auto moduleBase = REL::Module::get().base();
+	const auto helperEntry = moduleBase + helperEntryRVA;
+	const auto virtualCallContext = moduleBase + virtualCallContextRVA;
+	const auto helperEpilogue = moduleBase + helperEpilogueRVA;
+	const auto helperTailContext = moduleBase + helperTailContextRVA;
+	if (!MatchesInstructions(helperEntry, expectedHelperEntry) ||
+		!MatchesInstructions(virtualCallContext, expectedVirtualCallContext) ||
+		!MatchesInstructions(helperEpilogue, expectedHelperEpilogue) ||
+		!MatchesInstructions(helperTailContext, expectedHelperTailContext)) {
+		logger::error("[LLF] VR scene-graph culling-object guard not installed: unexpected SkyrimVR.exe instructions");
+		return;
+	}
+
+	VRSceneGraphCullingObjectGuard code{ helperEntry + patchedInstructionSize };
+	code.ready();
+
+	auto& trampoline = SKSE::GetTrampoline();
+	const auto guard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
+	trampoline.write_branch<patchedInstructionSize>(helperEntry, guard);
+
+	logger::info("[LLF] Installed VR scene-graph culling-object guard");
 }
 
 void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()

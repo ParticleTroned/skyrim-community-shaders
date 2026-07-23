@@ -65,6 +65,19 @@ namespace
 	constexpr int kLowCanonicalUserAddressBits = 47;
 	constexpr int kRenderPointerAlignmentMask = static_cast<int>(alignof(void*)) - 1;
 	constexpr std::uintptr_t kMaximumPlausibleRenderPointer = std::uintptr_t{ 1 } << kLowCanonicalUserAddressBits;
+	constexpr std::array<std::uintptr_t, 4> kVRBSLightVtableRVAs{
+		0x190A1F8,  // BSLight
+		0x1908B20,  // BSShadowDirectionalLight
+		0x190C090,  // BSShadowFrustumLight
+		0x190C1F0   // BSShadowParabolicLight
+	};
+	constexpr std::array<std::uintptr_t, 5> kVRNiLightVtableRVAs{
+		0x17F03B0,  // NiLight
+		0x17F2C38,  // NiPointLight
+		0x17F3550,  // NiDirectionalLight
+		0x17F4E60,  // NiAmbientLight
+		0x17F6940   // NiSpotLight
+	};
 
 	template <std::size_t N>
 	bool MatchesInstructions(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
@@ -72,54 +85,101 @@ namespace
 		return std::equal(std::begin(a_expected), std::end(a_expected), reinterpret_cast<const std::uint8_t*>(a_address));
 	}
 
-	class VREffectShaderFirstLightGuard : public Xbyak::CodeGenerator
+	class VRValidatedLightGuard : public Xbyak::CodeGenerator
+	{
+	protected:
+		void RequirePlausiblePointer(
+			const Xbyak::Reg64& a_pointer,
+			const Xbyak::Reg64& a_scratch,
+			Xbyak::Label& a_invalid)
+		{
+			test(a_pointer, a_pointer);
+			jz(a_invalid, T_NEAR);
+			cmp(a_pointer, kMinimumPlausibleRenderPointer);
+			jb(a_invalid, T_NEAR);
+			test(a_pointer.cvt8(), kRenderPointerAlignmentMask);
+			jnz(a_invalid, T_NEAR);
+			mov(a_scratch, a_pointer);
+			shr(a_scratch, kLowCanonicalUserAddressBits);
+			jnz(a_invalid, T_NEAR);
+		}
+
+		template <std::size_t N>
+		void RequireKnownVtable(
+			const Xbyak::Reg64& a_object,
+			const Xbyak::Reg64& a_vtable,
+			const Xbyak::Reg64& a_scratch,
+			const std::array<std::uintptr_t, N>& a_allowedVtables,
+			Xbyak::Label& a_invalid)
+		{
+			Xbyak::Label validVtable;
+
+			RequirePlausiblePointer(a_object, a_scratch, a_invalid);
+			mov(a_vtable, qword[a_object]);
+			for (const auto vtable : a_allowedVtables) {
+				mov(a_scratch, vtable);
+				cmp(a_vtable, a_scratch);
+				je(validVtable, T_NEAR);
+			}
+			jmp(a_invalid, T_NEAR);
+
+			L(validVtable);
+		}
+	};
+
+	class VREffectShaderFirstLightGuard : public VRValidatedLightGuard
 	{
 	public:
-		explicit VREffectShaderFirstLightGuard(std::uintptr_t a_skipLights)
+		VREffectShaderFirstLightGuard(
+			const std::array<std::uintptr_t, kVRBSLightVtableRVAs.size()>& a_allowedBSLightVtables,
+			const std::array<std::uintptr_t, kVRNiLightVtableRVAs.size()>& a_allowedNiLightVtables,
+			std::uintptr_t a_skipLights)
 		{
 			Xbyak::Label invalidLight;
 
 			// Reproduce sceneLights[0]->light at the final engine read while
-			// validating every pointer in the chain. The later JZ consumes flags
-			// from an earlier engine CMP, so preserve them across the checks.
+			// accepting only concrete BSLight and NiLight engine objects. The
+			// later JZ consumes flags from an earlier engine CMP, so preserve
+			// them and the scratch register across the checks.
+			push(r10);
 			pushfq();
-			test(rax, rax);
-			jz(invalidLight, T_SHORT);
+			RequirePlausiblePointer(rax, r10, invalidLight);
 			mov(rax, qword[rax]);
-			test(rax, rax);
-			jz(invalidLight, T_SHORT);
+			RequireKnownVtable(rax, rcx, r10, a_allowedBSLightVtables, invalidLight);
 			mov(rcx, qword[rax + kVRBSLightNiLightOffset]);
-			test(rcx, rcx);
-			jz(invalidLight, T_SHORT);
+			RequireKnownVtable(rcx, rax, r10, a_allowedNiLightVtables, invalidLight);
 			popfq();
+			pop(r10);
 			ret();
 
 			L(invalidLight);
 			// Discard write_call's return address and take Bethesda's existing
 			// no-light path. No light constants have been written at this point.
 			popfq();
+			pop(r10);
 			add(rsp, 8);
 			mov(rax, a_skipLights);
 			jmp(rax);
 		}
 	};
 
-	class VREffectShaderAdditionalLightGuard : public Xbyak::CodeGenerator
+	class VREffectShaderAdditionalLightGuard : public VRValidatedLightGuard
 	{
 	public:
-		explicit VREffectShaderAdditionalLightGuard(std::uintptr_t a_finishLights)
+		VREffectShaderAdditionalLightGuard(
+			const std::array<std::uintptr_t, kVRBSLightVtableRVAs.size()>& a_allowedBSLightVtables,
+			const std::array<std::uintptr_t, kVRNiLightVtableRVAs.size()>& a_allowedNiLightVtables,
+			std::uintptr_t a_finishLights)
 		{
 			Xbyak::Label invalidLight;
 
-			// Reproduce sceneLights[index]->light at the final engine read.
-			test(rax, rax);
-			jz(invalidLight, T_SHORT);
+			// Reproduce sceneLights[index]->light at the final engine read while
+			// rejecting stale non-null entries of another engine object type.
+			RequirePlausiblePointer(rax, r14, invalidLight);
 			mov(rcx, qword[rax + rbx]);
-			test(rcx, rcx);
-			jz(invalidLight, T_SHORT);
+			RequireKnownVtable(rcx, rax, r14, a_allowedBSLightVtables, invalidLight);
 			mov(r14, qword[rcx + kVRBSLightNiLightOffset]);
-			test(r14, r14);
-			jz(invalidLight, T_SHORT);
+			RequireKnownVtable(r14, rax, rcx, a_allowedNiLightVtables, invalidLight);
 			mov(rcx, r13);
 			ret();
 
@@ -2045,12 +2105,6 @@ void LightLimitFix::Hooks::InstallVRRoomLightEntryGuards()
 	constexpr std::uintptr_t fallbackSkipLightRVA = 0x12F9315;
 	constexpr std::size_t isShadowLightVtableOffset = 0x18;
 	constexpr std::size_t patchedInstructionSize = 5;
-	constexpr std::array<std::uintptr_t, 4> allowedVtableRVAs{
-		0x190A1F8,  // BSLight
-		0x1908B20,  // BSShadowDirectionalLight
-		0x190C090,  // BSShadowFrustumLight
-		0x190C1F0   // BSShadowParabolicLight
-	};
 	constexpr std::uint8_t expectedArrayCallContext[] = {
 		0x48, 0x8B, 0x07,
 		0x48, 0x8B, 0xCF,
@@ -2110,11 +2164,11 @@ void LightLimitFix::Hooks::InstallVRRoomLightEntryGuards()
 
 	const auto readOnlyStart = readOnlySegment.address();
 	const auto readOnlyLastVtable = readOnlyStart + readOnlySegment.size() - requiredVtableBytes;
-	std::array<std::uintptr_t, allowedVtableRVAs.size()> allowedVtables{};
-	std::array<std::uintptr_t, allowedVtableRVAs.size()> allowedCallTargets{};
+	std::array<std::uintptr_t, kVRBSLightVtableRVAs.size()> allowedVtables{};
+	std::array<std::uintptr_t, kVRBSLightVtableRVAs.size()> allowedCallTargets{};
 	std::size_t allowedCallTargetCount = 0;
-	for (std::size_t i = 0; i < allowedVtableRVAs.size(); ++i) {
-		const auto vtable = moduleBase + allowedVtableRVAs[i];
+	for (std::size_t i = 0; i < kVRBSLightVtableRVAs.size(); ++i) {
+		const auto vtable = moduleBase + kVRBSLightVtableRVAs[i];
 		if (vtable < readOnlyStart || vtable > readOnlyLastVtable) {
 			logger::error("[LLF] VR room-light entry guards not installed: BSLight vtable outside SkyrimVR.exe read-only segment");
 			return;
@@ -2197,9 +2251,41 @@ void LightLimitFix::Hooks::InstallVREffectShaderLightGuards()
 		return;
 	}
 
-	VREffectShaderFirstLightGuard firstLightCode{ skipLights };
+	const auto readOnlySegment = REL::Module::get().segment(REL::Segment::rdata);
+	const auto resolveVtables = [&](const auto& a_rvas, auto& a_addresses) {
+		constexpr auto requiredVtableBytes = sizeof(std::uintptr_t);
+		if (readOnlySegment.address() == 0 || readOnlySegment.size() < requiredVtableBytes) {
+			return false;
+		}
+
+		const auto readOnlyStart = readOnlySegment.address();
+		const auto readOnlyLastVtable = readOnlyStart + readOnlySegment.size() - requiredVtableBytes;
+		for (std::size_t i = 0; i < a_rvas.size(); ++i) {
+			const auto vtable = moduleBase + a_rvas[i];
+			if (vtable < readOnlyStart || vtable > readOnlyLastVtable) {
+				return false;
+			}
+
+			const auto firstVirtual = *reinterpret_cast<const std::uintptr_t*>(vtable);
+			if (!IsExecutableAddress(reinterpret_cast<const void*>(firstVirtual))) {
+				return false;
+			}
+			a_addresses[i] = vtable;
+		}
+		return true;
+	};
+
+	std::array<std::uintptr_t, kVRBSLightVtableRVAs.size()> allowedBSLightVtables{};
+	std::array<std::uintptr_t, kVRNiLightVtableRVAs.size()> allowedNiLightVtables{};
+	if (!resolveVtables(kVRBSLightVtableRVAs, allowedBSLightVtables) ||
+		!resolveVtables(kVRNiLightVtableRVAs, allowedNiLightVtables)) {
+		logger::error("[LLF] VR effect-shader light guards not installed: invalid engine light vtables");
+		return;
+	}
+
+	VREffectShaderFirstLightGuard firstLightCode{ allowedBSLightVtables, allowedNiLightVtables, skipLights };
 	firstLightCode.ready();
-	VREffectShaderAdditionalLightGuard additionalLightCode{ finishAdditionalLights };
+	VREffectShaderAdditionalLightGuard additionalLightCode{ allowedBSLightVtables, allowedNiLightVtables, finishAdditionalLights };
 	additionalLightCode.ready();
 
 	auto& trampoline = SKSE::GetTrampoline();

@@ -27,6 +27,8 @@ struct UnifiedWater : OverlayFeature
 	{
 		bool UseOptimisedMeshes = true;
 		bool UseOpenShadersDepthBehaviour = false;
+		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
+		float WaterTintStrength = 0.0f;
 		float DistantDepthFadeNearStrength = 0.2f;
 		float DistantDepthFadeFarStrength = 1.0f;
 		float DistantDepthFadeStart = 0.0f;
@@ -39,9 +41,11 @@ struct UnifiedWater : OverlayFeature
 		float DistantDepthFadeFarStrength;
 		float DistantDepthFadeStart;
 		float DistantDepthFadeEnd;
+		float3 WaterTintColor;
+		float WaterTintStrength;
 	};
 	static_assert(alignof(CommonBufferData) == 16);
-	static_assert(sizeof(CommonBufferData) == 16);
+	static_assert(sizeof(CommonBufferData) == 32);
 
 	Settings settings;
 	CommonBufferData GetCommonBufferData() const;
@@ -109,6 +113,8 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

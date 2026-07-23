@@ -19,6 +19,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
 	UseOptimisedMeshes,
 	UseOpenShadersDepthBehaviour,
+	WaterTintColor,
+	WaterTintStrength,
 	DistantDepthFadeNearStrength,
 	DistantDepthFadeFarStrength,
 	DistantDepthFadeStart,
@@ -26,6 +28,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	constexpr float kWaterTintColorMin = 0.0f;
+	constexpr float kWaterTintColorMax = 1.0f;
+	constexpr float kWaterTintStrengthMin = 0.0f;
+	constexpr float kWaterTintStrengthMax = 1.0f;
 	constexpr float kDistantDepthFadeStrengthMin = 0.0f;
 	constexpr float kDistantDepthFadeStrengthMax = 1.0f;
 	constexpr float kWorldCellSize = 4096.0f;
@@ -44,6 +50,26 @@ namespace
 	void SanitizeSettings(UnifiedWater::Settings& a_settings)
 	{
 		const UnifiedWater::Settings defaults{};
+		a_settings.WaterTintColor.x = ClampFiniteOrDefault(
+			a_settings.WaterTintColor.x,
+			kWaterTintColorMin,
+			kWaterTintColorMax,
+			defaults.WaterTintColor.x);
+		a_settings.WaterTintColor.y = ClampFiniteOrDefault(
+			a_settings.WaterTintColor.y,
+			kWaterTintColorMin,
+			kWaterTintColorMax,
+			defaults.WaterTintColor.y);
+		a_settings.WaterTintColor.z = ClampFiniteOrDefault(
+			a_settings.WaterTintColor.z,
+			kWaterTintColorMin,
+			kWaterTintColorMax,
+			defaults.WaterTintColor.z);
+		a_settings.WaterTintStrength = ClampFiniteOrDefault(
+			a_settings.WaterTintStrength,
+			kWaterTintStrengthMin,
+			kWaterTintStrengthMax,
+			defaults.WaterTintStrength);
 		a_settings.DistantDepthFadeNearStrength = ClampFiniteOrDefault(
 			a_settings.DistantDepthFadeNearStrength,
 			kDistantDepthFadeStrengthMin,
@@ -67,6 +93,23 @@ namespace
 
 		if (a_settings.DistantDepthFadeEnd < a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange)
 			a_settings.DistantDepthFadeEnd = a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange;
+	}
+
+	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
+	{
+		ImGui::ColorEdit3("Water Tint Color", reinterpret_cast<float*>(&a_settings.WaterTintColor));
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Selects the colour of the water tint.");
+
+		ImGui::SliderFloat(
+			"Water Tint",
+			&a_settings.WaterTintStrength,
+			kWaterTintStrengthMin,
+			kWaterTintStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Adjusts how strongly the selected colour appears in the water.");
 	}
 }
 
@@ -423,6 +466,14 @@ void UnifiedWater::DrawSettings()
 
 	ImGui::Spacing();
 
+	if (ImGui::TreeNodeEx("Water Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
+		DrawWaterTintSettings(settings);
+
+		ImGui::TreePop();
+	}
+
+	ImGui::Spacing();
+
 	if (ImGui::TreeNodeEx("Shallow Water Depth Stabilization", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -524,7 +575,15 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.DistantDepthFadeFarStrength = sanitizedSettings.DistantDepthFadeFarStrength * bypassedStrength;
 	data.DistantDepthFadeStart = sanitizedSettings.DistantDepthFadeStart;
 	data.DistantDepthFadeEnd = sanitizedSettings.DistantDepthFadeEnd;
+	data.WaterTintColor = sanitizedSettings.WaterTintColor;
+	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
 	return data;
+}
+
+void UnifiedWater::DrawEssentialSettings()
+{
+	SanitizeSettings(settings);
+	DrawWaterTintSettings(settings);
 }
 
 void UnifiedWater::DrawPerformanceSettings(bool)

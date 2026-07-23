@@ -361,6 +361,8 @@ namespace SharedData
 		float DistantDepthFadeFarStrength;
 		float DistantDepthFadeStart;
 		float DistantDepthFadeEnd;
+		float3 WaterTintColor;
+		float WaterTintStrength;
 	};
 
 	cbuffer FeatureData : register(b6)

@@ -1050,6 +1050,18 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 }
 
+#			if defined(UNIFIED_WATER)
+float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
+{
+	float tintStrength = saturate(SharedData::unifiedWaterSettings.WaterTintStrength);
+	[branch] if (tintStrength <= 0.0) return baseColor;
+
+	float3 baseColorLinear = Color::SkyrimGammaToLinear(max(baseColor, 0.0.xxx));
+	float3 tintColorLinear = Color::SkyrimGammaToLinear(saturate(SharedData::unifiedWaterSettings.WaterTintColor));
+	return Color::LinearToSkyrimGamma(lerp(baseColorLinear, tintColorLinear, tintStrength));
+}
+#			endif
+
 #			if defined(UNIFIED_WATER) && defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && !defined(UNDERWATER) && !defined(LOD)
 #				define UNIFIED_WATER_DISTANCE_DEPTH_FADE
 
@@ -1134,6 +1146,9 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
 	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
 	float3 refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
+#				if defined(UNIFIED_WATER)
+	refractionDiffuseColor = ApplyUnifiedWaterBaseTint(refractionDiffuseColor);
+#				endif
 	float skylightingDiffuse = 1.0;
 
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior)) {
@@ -1171,7 +1186,11 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	return output;
 #			else
 	DiffuseOutput output;
-	output.refractionColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel) * GetLdotN(normal);
+	float3 baseWaterColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel);
+#				if defined(UNIFIED_WATER)
+	baseWaterColor = ApplyUnifiedWaterBaseTint(baseWaterColor);
+#				endif
+	output.refractionColor = baseWaterColor * GetLdotN(normal);
 	output.refractionDiffuseColor = output.refractionColor;
 	output.depth = 1;
 	output.refractionMul = 1;

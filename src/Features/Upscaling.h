@@ -428,6 +428,7 @@ public:
 		uint64_t transitionEpoch = 0;
 		uint32_t contractGeneration = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		UpscaleMethod previousVendorMethod = UpscaleMethod::kNONE;
 		VRRenderScaleResourceKey current{};
 		VRRenderScaleResourceKey target{};
 		VRRenderScaleResourceCompatibility compatibility{};
@@ -473,7 +474,7 @@ public:
 		bool projectedResidencyPostTrimRelaxed = false;
 		bool projectedResidencyDeferred = false;
 		bool systemCommitGuardActive = false;
-		bool stabilizerSystemCommitRelaxed = false;
+		bool doorHandoffHardReserveOnly = false;
 		bool systemCommitDeferred = false;
 		bool pressureDeferred = false;
 	};
@@ -667,7 +668,7 @@ public:
 	struct VRRenderScaleMetricsSnapshot
 	{
 		VRRenderScaleTransitionMetrics current{};
-		std::array<VRRenderScaleTransitionMetrics, 16> recent{};
+		std::array<VRRenderScaleTransitionMetrics, 32> recent{};
 		uint32_t nextIndex = 0;
 		uint32_t count = 0;
 	};
@@ -793,6 +794,8 @@ public:
 		uint64_t sequence = 0;
 		uint64_t sessionID = 0;
 		uint32_t frame = 0;
+		uint32_t lastFrame = 0;
+		uint32_t occurrences = 1;
 		VRRenderScaleStressEventType type = VRRenderScaleStressEventType::Request;
 		uint64_t requestID = 0;
 		uint64_t transitionEpoch = 0;

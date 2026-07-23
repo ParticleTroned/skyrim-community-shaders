@@ -26,7 +26,7 @@ The registered tool is `communityshaders.renderscale`:
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, both-eye fidelity, and compositor-accepted per-eye
     presentation paths;
--   `record` returns the complete schema-v7 record without changing capture
+-   `record` returns the complete schema-v8 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
@@ -296,13 +296,54 @@ processes such as the Codex command runner from allocating before the Step 25
 local-video admission boundary was reached.
 
 The shared memory sample now records Windows commit usage, limit, headroom,
-ratio, and Skyrim private usage alongside DXGI local-video residency. Every
-size-changing allocation overlap, including the isolated-switch path, projects
-system commit at four times the resource estimate, retaining margin above the
-approximately 2.8-times growth measured in RC110. Admission waits before the
+ratio, and Skyrim private usage alongside DXGI local-video residency. Ordinary
+active-contract allocation overlap, including the isolated-switch path,
+projects system commit at four times the resource estimate, retaining margin
+above the approximately 2.8-times growth measured in RC110. Full-resolution
+inactive/native restoration uses an eight-times projection because that path
+showed a larger host-commit multiplier. Ordinary admission waits before the
 projection reaches the lower of 75 percent of the current Windows commit limit
 or an 8-GiB system reserve. This calculation is constant-time and leaves the
 ordinary isolated switch unchanged while sufficient headroom exists.
+
+A recognized VR FPS Stabilizer `PostLoadSync` door handoff instead preserves
+the RC94 physical cadence. It bypasses projected local-residency ratios,
+post-trim relaxation, common-target offering/decommit, engine-target
+reclamation, warm-resource policy, and steady-state analysis during the
+handoff. RC94 rapid-relatch cleanup remains part of the physical relatch:
+memory-relief transitions retire submit intermediates, and a render-scale-off
+restore tears down the active vendor contract, waits for its retired
+intermediates, releases deferred targets, and only then allocates the
+full-resolution replacement. That deactivation is admitted immediately so its
+own reclamation cannot be blocked by pre-cleanup memory evidence. Exterior
+activation fails closed when current memory evidence is missing, the device is
+lost, an OOM is recent, local pressure is `High`/`Critical`, the estimated
+allocation exceeds actual local headroom, or the four-times system-commit
+projection would consume the hard 8-GiB reserve. Newer cleanup and recovery run
+only after the destination contract becomes stable and visible; final memory
+acceptance still requires recovery below the ordinary 75-percent boundary.
+
+The first live RC94-cadence qualification exposed a presentation-release
+deadlock rather than an admission or backend failure. The exterior DLSS
+contract applied with matching dimensions and a ready generation, but the
+combined loading/menu presentation signal and deferred transition cleanup kept
+both eyes in `PresentationStretch` indefinitely, so no vendor evaluation could
+promote the contract. A resolved door handoff now derives authority from the
+matching LoadingMenu close frame, completed destination world frame, resolved
+Stabilizer sync, applied epoch/method/generation, ready vendor runtime, and
+exact submit dimensions. Once those facts hold, aggregate menu/tail and cleanup
+flags cannot retain presentation-only mode. A physically open LoadingMenu, a
+new load (which clears the close frame), any real non-loading menu, a pending
+vendor reset, missing motion/depth inputs, or mismatched dimensions still
+blocks release. This override remains valid after the controller becomes
+`Active`, so a stale aggregate flag cannot re-enter stretch on the next frame.
+
+Previous-vendor ownership resolves from the physical boot contract while that
+contract is active. When it is inactive, the authoritative applied profile is
+used first and the stable profile second, and only an inactive vendor-labelled
+contract is accepted. Requested or applying profiles never identify previous
+ownership. The resolved method is exposed as `previousVendorMethod`, so DLSS
+and FSR teardown decisions remain attributable across DLAA/Native-AA handoffs.
 
 The first guarded attempt owns one GPU-fenced trim for its epoch. Once that
 trim completes, later retries only resample and wait at the existing 120-frame
@@ -316,8 +357,10 @@ Schema v5 exposes `systemCommit*` and `processPrivateUsage*` values in live
 status, events, controller memory, transition peaks, post-load recovery, and
 exact-profile memory trends. `resourcePlan` adds
 `projectedSystemCommitAdditionalBytes`, `projectedSystemCommitBytes`,
-`systemCommitAdmissionLimitBytes`, `systemCommitGuardActive`, and
-`systemCommitDeferred`. Acceptance independently rejects unsafe final commit,
+`systemCommitAdmissionLimitBytes`, `systemCommitGuardActive`,
+`doorHandoffHardReserveOnly`, `previousVendorMethod`, and
+`systemCommitDeferred`. Acceptance
+independently rejects unsafe final commit,
 sustained system-commit growth, and sustained Skyrim-private growth, so a run
 cannot pass merely because DXGI reports reclaimable local-video residency.
 
@@ -380,7 +423,7 @@ live paths under `controller.presentation`, session deltas under
 
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 7`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 8`. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -390,7 +433,7 @@ Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVers
 6. Prefer lower stable latency and fewer retries only after correctness, fidelity, OOM, device-loss, retirement, memory-recovery, and backend-readiness gates pass.
 7. Retain the complete JSON artifact with the candidate commit and scenario identifier.
 
-The event ring retains 128 entries and the transition metrics ring retains 16 transitions. A capture-overflow gate fails if the event ring overwrites data, and a metrics-coverage gate fails if any captured request epoch has rotated out of the metrics ring. Keep each iteration within both bounds. Retry and failure events retain their normalized kind so pressure, retirement, backend, OOM, and device-loss evidence remains classifiable.
+The event ring retains 128 entries and the transition metrics ring retains 32 transitions. Consecutive retries with the same request, epoch, profile, controller state, pressure, and normalized retry/failure kind share one event: `frame` is the first observation, `lastFrame` is the latest, `occurrences` is the aggregate count, and the memory and transition counters reflect the latest observation. A capture-overflow gate still fails if distinct events overwrite the ring, and a metrics-coverage gate fails if any captured request epoch rotates out of the metrics ring. Keep each iteration within both bounds. Retry and failure kinds remain classifiable as pressure, retirement, backend, OOM, or device loss.
 
 ## Acceptance gates
 
@@ -410,7 +453,7 @@ The runtime currently requires:
 -   no more than 256 MiB of local-video, system-commit, or Skyrim-private growth in both consecutive same-profile peak intervals once an exact backend profile has at least three completed samples;
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
 
-These thresholds are part of schema version 7. Change the schema version if their meaning or units change.
+These thresholds are part of schema version 8. Change the schema version if their meaning or units change.
 
 ## Ghidra correlation
 

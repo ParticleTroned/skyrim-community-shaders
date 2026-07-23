@@ -208,6 +208,62 @@ namespace
 		}
 	};
 
+	class VRRoomLightEntryGuard : public Xbyak::CodeGenerator
+	{
+	public:
+		VRRoomLightEntryGuard(
+			const std::array<std::uintptr_t, 4>& a_allowedVtables,
+			const std::array<std::uintptr_t, 4>& a_allowedCallTargets,
+			std::size_t a_allowedCallTargetCount,
+			std::uintptr_t a_skipLight)
+		{
+			Xbyak::Label invalidLight;
+			Xbyak::Label validVtable;
+			Xbyak::Label validCallTarget;
+
+			// RAX is the vtable loaded from the current BSLight entry and RCX is
+			// the BSLight itself. A stale but readable entry can retain a
+			// heap-shaped vtable, so pointer-shape checks alone are insufficient.
+			// Accept only the verified concrete BSLight vtables, rather than any
+			// unrelated engine vtable which happens to contain executable data.
+			for (const auto vtable : a_allowedVtables) {
+				mov(r10, vtable);
+				cmp(rax, r10);
+				je(validVtable, T_NEAR);
+			}
+			jmp(invalidLight, T_NEAR);
+
+			L(validVtable);
+			mov(r11, qword[rax + 0x18]);
+			for (std::size_t i = 0; i < a_allowedCallTargetCount; ++i) {
+				mov(r10, a_allowedCallTargets[i]);
+				cmp(r11, r10);
+				je(validCallTarget, T_NEAR);
+			}
+			jmp(invalidLight, T_NEAR);
+
+			L(validCallTarget);
+			// write_call has already pushed the native continuation. Reserve a
+			// fresh Windows x64 shadow area and restore pre-call stack alignment
+			// for the nested virtual call.
+			sub(rsp, 0x28);
+			call(r11);
+			add(rsp, 0x28);
+			// The native instruction immediately following the displaced call
+			// branches on these flags.
+			test(al, al);
+			ret();
+
+			L(invalidLight);
+			// Discard write_call's return address and use Bethesda's existing
+			// skip-current-light path. RAX, R10, and R11 are volatile across the
+			// original virtual call, so no live native state is lost.
+			add(rsp, 8);
+			mov(rax, a_skipLight);
+			jmp(rax);
+		}
+	};
+
 	void DrawHeatWarpStrengthSetting()
 	{
 		ImGui::SliderFloat(
@@ -265,6 +321,23 @@ namespace
 
 		const auto available = memoryInfo.RegionSize - offset;
 		return a_size <= available;
+	}
+
+	bool IsExecutableAddress(const void* a_ptr) noexcept
+	{
+		if (!a_ptr) {
+			return false;
+		}
+
+		MEMORY_BASIC_INFORMATION memoryInfo{};
+		if (::VirtualQuery(a_ptr, &memoryInfo, sizeof(memoryInfo)) == 0 || memoryInfo.State != MEM_COMMIT) {
+			return false;
+		}
+
+		constexpr DWORD kExecutableProtection =
+			PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+		return (memoryInfo.Protect & kExecutableProtection) != 0 &&
+		       (memoryInfo.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0;
 	}
 
 	bool IsSafeDirectionalNiLight(const RE::NiLight* a_light)
@@ -1941,6 +2014,141 @@ void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()
 	REL::safe_fill(secondCullingProcessLoad + 5, REL::NOP, cullingProcessLoadInstructionSize - 5);
 
 	logger::info("[LLF] Installed VR room-light culling-process guards");
+}
+
+void LightLimitFix::Hooks::InstallVRRoomLightEntryGuards()
+{
+	if (!REL::Module::IsVR()) {
+		return;
+	}
+
+	if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+		logger::error("[LLF] VR room-light entry guards not installed: unsupported Skyrim VR runtime {}", REL::Module::get().version().string());
+		return;
+	}
+
+	// Skyrim VR 1.4.15 has three BSLight loops in this routine: the
+	// BSMultiBoundRoom array, the BSPortalSharedNode array, and the fallback
+	// pointer list. Each checks the entry for nullptr, then calls
+	// BSLight::IsShadowLight through its vtable without validating that the
+	// entry still owns a live BSLight. The reproduced Dragonsreach transition
+	// supplied a readable stale entry whose heap-shaped vtable had a null
+	// IsShadowLight slot.
+	constexpr std::uintptr_t roomCallContextRVA = 0x12F91E0;
+	constexpr std::uintptr_t roomVirtualCallRVA = 0x12F91E6;
+	constexpr std::uintptr_t roomSkipLightRVA = 0x12F9210;
+	constexpr std::uintptr_t portalCallContextRVA = 0x12F9260;
+	constexpr std::uintptr_t portalVirtualCallRVA = 0x12F9266;
+	constexpr std::uintptr_t portalSkipLightRVA = 0x12F9290;
+	constexpr std::uintptr_t fallbackCallContextRVA = 0x12F92DB;
+	constexpr std::uintptr_t fallbackVirtualCallRVA = 0x12F92E1;
+	constexpr std::uintptr_t fallbackSkipLightRVA = 0x12F9315;
+	constexpr std::size_t isShadowLightVtableOffset = 0x18;
+	constexpr std::size_t patchedInstructionSize = 5;
+	constexpr std::array<std::uintptr_t, 4> allowedVtableRVAs{
+		0x190A1F8,  // BSLight
+		0x1908B20,  // BSShadowDirectionalLight
+		0x190C090,  // BSShadowFrustumLight
+		0x190C1F0   // BSShadowParabolicLight
+	};
+	constexpr std::uint8_t expectedArrayCallContext[] = {
+		0x48, 0x8B, 0x07,
+		0x48, 0x8B, 0xCF,
+		0xFF, 0x50, 0x18,
+		0x84, 0xC0,
+		0x75, 0x23
+	};
+	constexpr std::uint8_t expectedFallbackCallContext[] = {
+		0x48, 0x8B, 0x07,
+		0x48, 0x8B, 0xCF,
+		0xFF, 0x50, 0x18,
+		0x84, 0xC0,
+		0x75, 0x2D
+	};
+	constexpr std::uint8_t expectedRoomSkipLight[] = {
+		0xFF, 0xC3,
+		0x3B, 0x9D, 0xB8, 0x01, 0x00, 0x00,
+		0x72, 0xB6
+	};
+	constexpr std::uint8_t expectedPortalSkipLight[] = {
+		0xFF, 0xC3,
+		0x3B, 0x9D, 0x60, 0x01, 0x00, 0x00,
+		0x72, 0xB6
+	};
+	constexpr std::uint8_t expectedFallbackSkipLight[] = {
+		0x48, 0x8D, 0x94, 0x24, 0x80, 0x00, 0x00, 0x00,
+		0x48, 0x8B, 0xCD
+	};
+
+	const auto moduleBase = REL::Module::get().base();
+	const auto roomCallContext = moduleBase + roomCallContextRVA;
+	const auto roomVirtualCall = moduleBase + roomVirtualCallRVA;
+	const auto roomSkipLight = moduleBase + roomSkipLightRVA;
+	const auto portalCallContext = moduleBase + portalCallContextRVA;
+	const auto portalVirtualCall = moduleBase + portalVirtualCallRVA;
+	const auto portalSkipLight = moduleBase + portalSkipLightRVA;
+	const auto fallbackCallContext = moduleBase + fallbackCallContextRVA;
+	const auto fallbackVirtualCall = moduleBase + fallbackVirtualCallRVA;
+	const auto fallbackSkipLight = moduleBase + fallbackSkipLightRVA;
+
+	if (!MatchesInstructions(roomCallContext, expectedArrayCallContext) ||
+		!MatchesInstructions(roomSkipLight, expectedRoomSkipLight) ||
+		!MatchesInstructions(portalCallContext, expectedArrayCallContext) ||
+		!MatchesInstructions(portalSkipLight, expectedPortalSkipLight) ||
+		!MatchesInstructions(fallbackCallContext, expectedFallbackCallContext) ||
+		!MatchesInstructions(fallbackSkipLight, expectedFallbackSkipLight)) {
+		logger::error("[LLF] VR room-light entry guards not installed: unexpected SkyrimVR.exe instructions");
+		return;
+	}
+
+	const auto readOnlySegment = REL::Module::get().segment(REL::Segment::rdata);
+	constexpr auto requiredVtableBytes = isShadowLightVtableOffset + sizeof(std::uintptr_t);
+	if (readOnlySegment.address() == 0 || readOnlySegment.size() < requiredVtableBytes) {
+		logger::error("[LLF] VR room-light entry guards not installed: SkyrimVR.exe segment bounds unavailable");
+		return;
+	}
+
+	const auto readOnlyStart = readOnlySegment.address();
+	const auto readOnlyLastVtable = readOnlyStart + readOnlySegment.size() - requiredVtableBytes;
+	std::array<std::uintptr_t, allowedVtableRVAs.size()> allowedVtables{};
+	std::array<std::uintptr_t, allowedVtableRVAs.size()> allowedCallTargets{};
+	std::size_t allowedCallTargetCount = 0;
+	for (std::size_t i = 0; i < allowedVtableRVAs.size(); ++i) {
+		const auto vtable = moduleBase + allowedVtableRVAs[i];
+		if (vtable < readOnlyStart || vtable > readOnlyLastVtable) {
+			logger::error("[LLF] VR room-light entry guards not installed: BSLight vtable outside SkyrimVR.exe read-only segment");
+			return;
+		}
+
+		const auto callTarget = *reinterpret_cast<const std::uintptr_t*>(vtable + isShadowLightVtableOffset);
+		if (!IsExecutableAddress(reinterpret_cast<const void*>(callTarget))) {
+			logger::error("[LLF] VR room-light entry guards not installed: invalid BSLight::IsShadowLight target");
+			return;
+		}
+
+		allowedVtables[i] = vtable;
+		const auto knownCallTargetsEnd = allowedCallTargets.begin() + allowedCallTargetCount;
+		if (std::find(allowedCallTargets.begin(), knownCallTargetsEnd, callTarget) == knownCallTargetsEnd) {
+			allowedCallTargets[allowedCallTargetCount++] = callTarget;
+		}
+	}
+
+	VRRoomLightEntryGuard roomCode{ allowedVtables, allowedCallTargets, allowedCallTargetCount, roomSkipLight };
+	roomCode.ready();
+	VRRoomLightEntryGuard portalCode{ allowedVtables, allowedCallTargets, allowedCallTargetCount, portalSkipLight };
+	portalCode.ready();
+	VRRoomLightEntryGuard fallbackCode{ allowedVtables, allowedCallTargets, allowedCallTargetCount, fallbackSkipLight };
+	fallbackCode.ready();
+
+	auto& trampoline = SKSE::GetTrampoline();
+	const auto roomGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(roomCode));
+	const auto portalGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(portalCode));
+	const auto fallbackGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(fallbackCode));
+	trampoline.write_call<patchedInstructionSize>(roomVirtualCall, roomGuard);
+	trampoline.write_call<patchedInstructionSize>(portalVirtualCall, portalGuard);
+	trampoline.write_call<patchedInstructionSize>(fallbackVirtualCall, fallbackGuard);
+
+	logger::info("[LLF] Installed VR room-light entry guards");
 }
 
 void LightLimitFix::Hooks::InstallVREffectShaderLightGuards()

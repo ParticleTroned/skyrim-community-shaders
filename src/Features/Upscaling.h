@@ -2010,6 +2010,14 @@ private:
 		bool mapLayerRequired = false;
 		bool mapLayerCapture = false;
 		const char* failureReason = nullptr;
+
+		[[nodiscard]] bool OwnsPresentationWork() const noexcept
+		{
+			return capturedOperations != 0 ||
+			       suppressedOperations != 0 ||
+			       mapDisplayEpochs != 0 ||
+			       mapLayerCapture;
+		}
 	};
 	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();
 	eastl::unique_ptr<Texture2D> vrMenuFinalCompositeLayer;

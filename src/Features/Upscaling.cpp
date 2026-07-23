@@ -10982,17 +10982,13 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 	vrMenuFrameTransaction.frame = a_frame;
 	vrMenuFrameTransaction.planGeneration = GetActiveVRRenderScaleContractGeneration();
 	vrMenuFrameTransaction.drawInterfaceDepth = vrMenuDrawInterfaceDepth;
-	// Map and Loading overlay ownership begins only after an exact bridge is
-	// recognized. Their untouched complete reduced paths remain safe fallbacks
-	// until CS actually suppresses an operation; fast-travel Loading in particular
-	// already contains Skyrim's black fade in kVR_FRAMEBUFFER.
-	vrMenuFrameTransaction.menuLayerRequired =
-		IsVRMenuTransportContractPresent() &&
-		!vrMenuCommittedLayerValid &&
-		IsKnownGameMenuContextActive() &&
-		!IsVRMapMenuPresentationActive() &&
-		!IsLoadingMenuContextActive() &&
-		!IsCommunityShadersMenuOpen();
+	// Menu presentation ownership begins only after an exact bridge operation is
+	// captured and its original draw is suppressed. Menu presence alone is not
+	// ownership: Container/Journal can remain open underneath the CS menu without
+	// producing a bridge in every frame, and their untouched reduced target is the
+	// authoritative fallback until CS actually owns work.
+	vrMenuFrameTransaction.menuLayerRequired = false;
+	vrMenuFrameTransaction.mapLayerRequired = false;
 }
 
 void Upscaling::PoisonVRMenuFrameTransaction(const char* a_reason)
@@ -11092,13 +11088,10 @@ void Upscaling::NotifyVRMenuPresentationContextChange(const char* a_reason)
 	else if (transactionInFlight)
 		PoisonVRMenuFrameTransaction("menu-context-changed-during-transaction");
 
-	const bool adapterContextRequired =
-		IsVRMenuTransportContractPresent() &&
-		IsKnownGameMenuContextActive() &&
-		!IsVRMapMenuPresentationActive() &&
-		!IsLoadingMenuContextActive() &&
-		!IsCommunityShadersMenuOpen();
-	vrMenuFrameTransaction.menuLayerRequired = adapterContextRequired;
+	// A context change invalidates the in-flight layer contract. The ownership
+	// counters remain available to the fail-open submit path, but the replacement
+	// context must establish its own exact bridge.
+	vrMenuFrameTransaction.menuLayerRequired = false;
 	vrMenuFrameTransaction.mapLayerRequired = false;
 }
 
@@ -26129,21 +26122,22 @@ bool Upscaling::ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Text
 		return false;
 
 	const bool currentMenuTransaction = vrMenuFrameTransaction.frame == state->frameCount;
+	// Once composition has failed, suppressing Skyrim's original eye texture
+	// would leave OpenVR with no replacement at all. Fail open to that valid
+	// texture; one reduced/incomplete menu frame is preferable to dropping the
+	// headset into the compositor waiting room.
+	if (currentMenuTransaction && vrMenuFrameTransaction.poisoned)
+		return false;
 	const bool originalMissingOwnedMenuWork =
 		currentMenuTransaction &&
-		(vrMenuFrameTransaction.suppressedOperations != 0 ||
-			vrMenuFrameTransaction.mapDisplayEpochs != 0 ||
-			vrMenuFrameTransaction.mapLayerCapture ||
-			(vrMenuFrameTransaction.presentationStarted && vrMenuFrameTransaction.poisoned));
+		vrMenuFrameTransaction.OwnsPresentationWork();
 	if (originalMissingOwnedMenuWork)
 		return true;
+	// Required/poisoned without owned work means the original draw was untouched.
+	// It remains a valid active-contract fallback even though the optional menu
+	// composition transaction could not start.
 	const bool menuLayerFallbackUnsafe =
-		(currentMenuTransaction &&
-			(vrMenuFrameTransaction.poisoned ||
-				vrMenuFrameTransaction.suppressedOperations != 0 ||
-				vrMenuFrameTransaction.menuLayerRequired ||
-				vrMenuFrameTransaction.mapLayerRequired)) ||
-		(vrMenuCommittedLayerValid && IsVRMenuPresentationContextActive());
+		vrMenuCommittedLayerValid && IsVRMenuPresentationContextActive();
 	// Fast-travel Loading and its close tail own a complete kVR_FRAMEBUFFER with
 	// Skyrim's fade. If CS did not suppress any separately owned menu work, that
 	// framebuffer is always safer than returning success without calling OpenVR.
@@ -26333,14 +26327,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			}
 		}
 
-		const bool transactionExpected =
-			vrMenuFrameTransaction.poisoned ||
-			vrMenuFrameTransaction.menuLayerRequired ||
-			vrMenuFrameTransaction.mapLayerRequired ||
-			vrMenuFrameTransaction.recognizedOperations != 0 ||
-			vrMenuFrameTransaction.capturedOperations != 0 ||
-			vrMenuFrameTransaction.suppressedOperations != 0 ||
-			vrMenuFrameTransaction.drawInterfaceDepth != 0;
+		// Only captured/suppressed work transfers presentation ownership. A
+		// required or poisoned zero-work transaction must leave the active vendor
+		// path authoritative instead of turning a diagnostic failure into a blank
+		// OpenVR submission.
+		const bool transactionExpected = vrMenuFrameTransaction.OwnsPresentationWork();
 		const bool requiredLayerMissing =
 			(vrMenuFrameTransaction.menuLayerRequired || vrMenuFrameTransaction.mapLayerRequired) &&
 			vrMenuFrameTransaction.capturedOperations == 0;
@@ -26388,10 +26379,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (vrRenderScaleMode && vrMenuFrameTransaction.frame == currentFrame) {
 		menuPresentationAttempt =
 			vrMenuFrameTransaction.sealed ||
-			vrMenuFrameTransaction.menuLayerRequired ||
-			vrMenuFrameTransaction.mapLayerRequired ||
-			vrMenuFrameTransaction.capturedOperations != 0 ||
-			vrMenuFrameTransaction.suppressedOperations != 0 ||
+			vrMenuFrameTransaction.OwnsPresentationWork() ||
 			(vrMenuCommittedLayerValid && menuTextProtectionContext);
 		if (menuPresentationAttempt)
 			vrMenuFrameTransaction.presentationStarted = true;

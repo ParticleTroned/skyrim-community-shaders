@@ -29,6 +29,7 @@
 #include <cctype>
 #include <cfloat>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <cwctype>
 #include <directx/d3dx12.h>
@@ -15969,11 +15970,11 @@ namespace
 		Failed
 	};
 
-	struct VREngineTargetPointerSlotSnapshot
+	struct VREngineOwnedOutputSlotSnapshot
 	{
 		void* address = nullptr;
 		void* previous = nullptr;
-		IUnknown* releasePointer = nullptr;
+		IUnknown* ownedReference = nullptr;
 		void* (*read)(void*) noexcept = nullptr;
 		void (*write)(void*, void*) noexcept = nullptr;
 	};
@@ -15984,7 +15985,7 @@ namespace
 		bool valid = false;
 		uint32_t capturedPointerCount = 0;
 		uint32_t aliasedPointerCount = 0;
-		std::vector<VREngineTargetPointerSlotSnapshot> slots;
+		std::vector<VREngineOwnedOutputSlotSnapshot> slots;
 	};
 
 	struct VREngineTargetGenerationDelta
@@ -15997,34 +15998,44 @@ namespace
 		std::vector<winrt::com_ptr<IUnknown>> resources;
 	};
 
-	// RC116 proved that a typed renderer slot does not by itself establish a
-	// transferable COM reference. Some displaced objects can be destroyed by a
-	// CPU-side owner before the GPU fence completes, leaving an adopted raw
-	// pointer unsafe to release. Keep the generic sweep available for a future
-	// ownership-aware redesign, but do not arm it in production builds.
-	constexpr bool kVREngineTargetRawOwnershipRetirementEnabled = false;
+	static_assert(offsetof(RE::BSGraphics::RenderTargetData, texture) == 0x00);
+	static_assert(offsetof(RE::BSGraphics::RenderTargetData, textureCopy) == 0x08);
+	static_assert(offsetof(RE::BSGraphics::RenderTargetData, RTV) == 0x10);
+	static_assert(offsetof(RE::BSGraphics::RenderTargetData, SRV) == 0x18);
+	static_assert(offsetof(RE::BSGraphics::RenderTargetData, SRVCopy) == 0x20);
+	static_assert(offsetof(RE::BSGraphics::RenderTargetData, UAV) == 0x28);
+	static_assert(sizeof(RE::BSGraphics::RenderTargetData) == 0x30);
+
+	static_assert(offsetof(RE::BSGraphics::DepthStencilData, texture) == 0x00);
+	static_assert(offsetof(RE::BSGraphics::DepthStencilData, views) == 0x08);
+	static_assert(offsetof(RE::BSGraphics::DepthStencilData, readOnlyViews) == 0x48);
+	static_assert(offsetof(RE::BSGraphics::DepthStencilData, depthSRV) == 0x88);
+	static_assert(offsetof(RE::BSGraphics::DepthStencilData, stencilSRV) == 0x90);
+	static_assert(sizeof(RE::BSGraphics::DepthStencilData) == 0x98);
 
 	bool IsVREngineTargetRetirementAvailable()
 	{
-		return kVREngineTargetRawOwnershipRetirementEnabled &&
-		       REL::Module::IsVR() &&
+		// Live VR 1.4.15 analysis established that Renderer::CreateRenderTarget
+		// and Renderer::CreateDepthStencil pass these fields directly to D3D11
+		// Create* output parameters without first releasing their old values.
+		// Other runtimes remain fail-closed until their ownership is proven.
+		return REL::Module::IsVR() &&
 		       REL::Module::get().version() == SKSE::RUNTIME_VR_1_4_15;
 	}
 
 	template <class T>
-	void CaptureVREngineTargetPointer(VREngineTargetGenerationSnapshot& a_snapshot, T*& a_pointer)
+	void CaptureVREngineOwnedOutputSlot(VREngineTargetGenerationSnapshot& a_snapshot, T*& a_pointer)
 	{
-		VREngineTargetPointerSlotSnapshot slot{};
+		VREngineOwnedOutputSlotSnapshot slot{};
 		slot.address = std::addressof(a_pointer);
 		slot.previous = a_pointer;
-		slot.releasePointer = a_pointer ? static_cast<IUnknown*>(a_pointer) : nullptr;
-		if (slot.releasePointer) {
+		slot.ownedReference = a_pointer ? static_cast<IUnknown*>(a_pointer) : nullptr;
+		if (slot.ownedReference) {
 			const bool aliased = std::any_of(
 				a_snapshot.slots.begin(),
 				a_snapshot.slots.end(),
 				[&](const auto& a_existing) { return a_existing.previous == slot.previous; });
 			if (aliased) {
-				slot.releasePointer = nullptr;
 				if (a_snapshot.aliasedPointerCount != std::numeric_limits<uint32_t>::max())
 					++a_snapshot.aliasedPointerCount;
 			}
@@ -16051,48 +16062,37 @@ namespace
 			static_cast<uint32_t>(RE::RENDER_TARGETS::kVRTOTAL);
 		constexpr uint32_t depthStencilCount =
 			static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kVRTOTAL);
-		constexpr uint32_t cubemapCount =
-			static_cast<uint32_t>(RE::RENDER_TARGETS_CUBEMAP::kTOTAL);
 		constexpr size_t renderTargetPointerCount = static_cast<size_t>(renderTargetCount) * 6u;
 		constexpr size_t depthStencilPointerCount = static_cast<size_t>(depthStencilCount) * 19u;
-		constexpr size_t cubemapPointerCount = static_cast<size_t>(cubemapCount) * 8u;
-		snapshot.slots.reserve(
-			renderTargetPointerCount + depthStencilPointerCount + cubemapPointerCount);
+		snapshot.slots.reserve(renderTargetPointerCount + depthStencilPointerCount);
 
 		auto* renderer = globals::game::renderer;
 		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 		for (uint32_t index = 0; index < renderTargetCount; ++index) {
 			auto& target = renderTargets[index];
-			CaptureVREngineTargetPointer(snapshot, target.texture);
-			CaptureVREngineTargetPointer(snapshot, target.textureCopy);
-			CaptureVREngineTargetPointer(snapshot, target.RTV);
-			CaptureVREngineTargetPointer(snapshot, target.SRV);
-			CaptureVREngineTargetPointer(snapshot, target.SRVCopy);
-			CaptureVREngineTargetPointer(snapshot, target.UAV);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.texture);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.textureCopy);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.RTV);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.SRV);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.SRVCopy);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.UAV);
 		}
 
 		auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
 		for (uint32_t index = 0; index < depthStencilCount; ++index) {
 			auto& target = depthStencils[index];
-			CaptureVREngineTargetPointer(snapshot, target.texture);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.texture);
 			for (auto*& view : target.views)
-				CaptureVREngineTargetPointer(snapshot, view);
+				CaptureVREngineOwnedOutputSlot(snapshot, view);
 			for (auto*& view : target.readOnlyViews)
-				CaptureVREngineTargetPointer(snapshot, view);
-			CaptureVREngineTargetPointer(snapshot, target.depthSRV);
-			CaptureVREngineTargetPointer(snapshot, target.stencilSRV);
+				CaptureVREngineOwnedOutputSlot(snapshot, view);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.depthSRV);
+			CaptureVREngineOwnedOutputSlot(snapshot, target.stencilSRV);
 		}
 
-		auto& cubemapTargets = renderer->GetRendererData().cubemapRenderTargets;
-		for (uint32_t index = 0; index < cubemapCount; ++index) {
-			auto& target = cubemapTargets[index];
-			CaptureVREngineTargetPointer(snapshot, target.texture);
-			for (auto*& view : target.cubeSideRTV)
-				CaptureVREngineTargetPointer(snapshot, view);
-			CaptureVREngineTargetPointer(snapshot, target.SRV);
-		}
-		// Texture3DTargetData remains intentionally excluded because its four
-		// fields are untyped and their ownership has not been proven.
+		// Cubemap and Texture3D targets remain intentionally excluded. The
+		// analysed render/depth creators establish no ownership contract for
+		// those families, even when the parent recreate routine touches them.
 
 		snapshot.valid = true;
 		return snapshot;
@@ -16105,11 +16105,9 @@ namespace
 		delta.supported = a_snapshot.supported;
 		delta.capturedPointerCount = a_snapshot.capturedPointerCount;
 		delta.aliasedPointerCount = a_snapshot.aliasedPointerCount;
-		const uint32_t uniquePointerCount =
-			a_snapshot.capturedPointerCount >= a_snapshot.aliasedPointerCount ?
-				a_snapshot.capturedPointerCount - a_snapshot.aliasedPointerCount :
-				0u;
-		delta.resources.reserve(uniquePointerCount);
+		// Each output slot owns one reference. Repeated COM identities therefore
+		// require repeated releases rather than pointer-identity deduplication.
+		delta.resources.reserve(a_snapshot.capturedPointerCount);
 		return delta;
 	}
 
@@ -16134,28 +16132,13 @@ namespace
 					++a_delta.restoredPointerCount;
 				continue;
 			}
-		}
-
-		for (const auto& owner : a_snapshot.slots) {
-			if (!owner.previous || !owner.releasePointer)
+			if (!slot.ownedReference)
 				continue;
 
-			const bool stillReferenced = std::any_of(
-				a_snapshot.slots.begin(),
-				a_snapshot.slots.end(),
-				[&](const auto& a_alias) {
-					return a_alias.previous == owner.previous &&
-				           a_alias.address &&
-				           a_alias.read &&
-				           a_alias.read(a_alias.address) == a_alias.previous;
-				});
-			if (stillReferenced)
-				continue;
-
-			// Capacity was reserved before recreation. Each raw COM identity is
-			// transferred at most once even when Skyrim aliases it across slots.
+			// Capacity was reserved before recreation, so transferring the old
+			// slot-owned reference cannot allocate in this noexcept handoff.
 			a_delta.resources.emplace_back();
-			a_delta.resources.back().attach(owner.releasePointer);
+			a_delta.resources.back().attach(slot.ownedReference);
 			if (a_delta.replacedPointerCount != std::numeric_limits<uint32_t>::max())
 				++a_delta.replacedPointerCount;
 		}
@@ -16886,7 +16869,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					kVRRenderScaleEngineSizedTargets.end(),
 					[&](RE::RENDER_TARGETS::RENDER_TARGET a_target) {
 						return !IsVRRenderScaleAlwaysResidentEngineTarget(a_target) ||
-						       RequiredRenderTargetTextureSizeMatches(a_target, fullWidth, fullHeight);
+				               RequiredRenderTargetTextureSizeMatches(a_target, fullWidth, fullHeight);
 					});
 			const bool requiredDepthTargetsReady =
 				RequiredDepthStencilTextureSizeMatches(
@@ -17789,7 +17772,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		}
 		if (!CanAdmitVRIntermediateRetirement(relatchEpoch) ||
-			(!rc94PostLoadDoorRelatch && !CanAdmitVREngineTargetRetirement(relatchEpoch))) {
+			!CanAdmitVREngineTargetRetirement(relatchEpoch)) {
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Retirement);
 			return false;
 		}
@@ -18028,32 +18011,34 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			if (releasedDeferredTargetsForRelief)
 				globals::deferred->ReleaseRenderTargets();
 			bool engineTargetsRecreated = false;
-			if (rc94PostLoadDoorRelatch) {
+			const auto engineTargetSnapshot = CaptureVREngineTargetGeneration();
+			auto engineTargetDelta = PrepareVREngineTargetGenerationDelta(engineTargetSnapshot);
+			auto finalizeEngineTargetRecreation = [&]() {
+				ReconcileVREngineTargetGeneration(engineTargetSnapshot, engineTargetDelta);
+				QueueVREngineTargetRetirement(
+					relatchEpoch,
+					engineTargetDelta.supported,
+					engineTargetDelta.capturedPointerCount,
+					engineTargetDelta.aliasedPointerCount,
+					engineTargetDelta.replacedPointerCount,
+					engineTargetDelta.restoredPointerCount,
+					std::move(engineTargetDelta.resources));
+			};
+			try {
 				engineTargetsRecreated = Hooks::RecreateRenderTargetsForVRRenderScale();
-			} else {
-				const auto engineTargetSnapshot = CaptureVREngineTargetGeneration();
-				auto engineTargetDelta = PrepareVREngineTargetGenerationDelta(engineTargetSnapshot);
-				auto finalizeEngineTargetRecreation = [&]() {
-					ReconcileVREngineTargetGeneration(engineTargetSnapshot, engineTargetDelta);
-					QueueVREngineTargetRetirement(
-						relatchEpoch,
-						engineTargetDelta.supported,
-						engineTargetDelta.capturedPointerCount,
-						engineTargetDelta.aliasedPointerCount,
-						engineTargetDelta.replacedPointerCount,
-						engineTargetDelta.restoredPointerCount,
-						std::move(engineTargetDelta.resources));
-				};
-				try {
-					engineTargetsRecreated = Hooks::RecreateRenderTargetsForVRRenderScale();
-				} catch (...) {
-					// The original recreation runs before CS reinitialization and can
-					// therefore have replaced slots even when later setup throws.
-					finalizeEngineTargetRecreation();
-					throw;
-				}
+			} catch (...) {
+				// The original recreation runs before CS reinitialization and can
+				// therefore have replaced slots even when later setup throws.
 				finalizeEngineTargetRecreation();
+				throw;
 			}
+			finalizeEngineTargetRecreation();
+			// A null D3D output means the physical generation is incomplete.
+			// Reconciliation preserves the previous owner for that slot, while
+			// the relatch remains uncommitted and retries through the normal
+			// pressure/device-loss gates.
+			if (engineTargetDelta.restoredPointerCount != 0)
+				engineTargetsRecreated = false;
 			if (!engineTargetsRecreated) {
 				if (releasedDeferredTargetsForRelief)
 					globals::deferred->SetupResources();
@@ -18735,7 +18720,7 @@ void Upscaling::QueueVREngineTargetRetirement(
 
 	if (a_restoredPointerCount != 0) {
 		logger::warn(
-			"[VRRenderScale] Restored {} engine target pointer(s) because recreation did not provide replacements. epoch={} captured={} aliases={} replaced={}",
+			"[VRRenderScale] Restored {} engine target pointer(s) because recreation did not provide replacements. epoch={} captured={} repeated-identities={} replaced={}",
 			a_restoredPointerCount,
 			a_epoch,
 			a_capturedPointerCount,
@@ -18746,15 +18731,12 @@ void Upscaling::QueueVREngineTargetRetirement(
 		return;
 
 	logger::debug(
-		"[VRRenderScale] Queued {} unique displaced engine target reference(s) for GPU-fenced retirement. epoch={} captured={} aliases={} restored={}",
+		"[VRRenderScale] Queued {} displaced slot-owned engine target reference(s) for GPU-fenced retirement. epoch={} captured={} repeated-identities={} restored={}",
 		queuedReleaseCount,
 		a_epoch,
 		a_capturedPointerCount,
 		a_aliasedPointerCount,
 		a_restoredPointerCount);
-	ServiceVREngineTargetRetirement("queue");
-	if (HasPendingVREngineTargetRetirement() && globals::d3d::context)
-		globals::d3d::context->Flush();
 }
 
 bool Upscaling::ServiceVREngineTargetRetirement(const char* a_reason)

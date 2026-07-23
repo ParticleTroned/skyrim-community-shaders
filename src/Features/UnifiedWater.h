@@ -26,9 +26,25 @@ struct UnifiedWater : OverlayFeature
 	struct Settings
 	{
 		bool UseOptimisedMeshes = true;
+		bool UseOpenShadersDepthBehaviour = false;
+		float DistantDepthFadeNearStrength = 0.2f;
+		float DistantDepthFadeFarStrength = 1.0f;
+		float DistantDepthFadeStart = 0.0f;
+		float DistantDepthFadeEnd = 2048.0f;
 	};
 
+	struct alignas(16) CommonBufferData
+	{
+		float DistantDepthFadeNearStrength;
+		float DistantDepthFadeFarStrength;
+		float DistantDepthFadeStart;
+		float DistantDepthFadeEnd;
+	};
+	static_assert(alignof(CommonBufferData) == 16);
+	static_assert(sizeof(CommonBufferData) == 16);
+
 	Settings settings;
+	CommonBufferData GetCommonBufferData() const;
 
 	struct TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams
 	{

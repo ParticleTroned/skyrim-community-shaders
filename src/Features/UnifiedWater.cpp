@@ -9,6 +9,7 @@
 #include "RE/M/MapMenu.h"
 #include "RE/P/PlayerCharacter.h"
 
+#include <algorithm>
 #include <cmath>
 #include <imgui_internal.h>
 #include <unordered_map>
@@ -16,7 +17,58 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
-	UseOptimisedMeshes)
+	UseOptimisedMeshes,
+	UseOpenShadersDepthBehaviour,
+	DistantDepthFadeNearStrength,
+	DistantDepthFadeFarStrength,
+	DistantDepthFadeStart,
+	DistantDepthFadeEnd)
+
+namespace
+{
+	constexpr float kDistantDepthFadeStrengthMin = 0.0f;
+	constexpr float kDistantDepthFadeStrengthMax = 1.0f;
+	constexpr float kWorldCellSize = 4096.0f;
+	constexpr float kDistantDepthFadeDistanceMin = 0.0f;
+	constexpr float kDistantDepthFadeDistanceMax = kWorldCellSize * 16.0f;
+	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
+
+	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
+	{
+		if (!std::isfinite(a_value))
+			return a_default;
+
+		return std::clamp(a_value, a_min, a_max);
+	}
+
+	void SanitizeSettings(UnifiedWater::Settings& a_settings)
+	{
+		const UnifiedWater::Settings defaults{};
+		a_settings.DistantDepthFadeNearStrength = ClampFiniteOrDefault(
+			a_settings.DistantDepthFadeNearStrength,
+			kDistantDepthFadeStrengthMin,
+			kDistantDepthFadeStrengthMax,
+			defaults.DistantDepthFadeNearStrength);
+		a_settings.DistantDepthFadeFarStrength = ClampFiniteOrDefault(
+			a_settings.DistantDepthFadeFarStrength,
+			kDistantDepthFadeStrengthMin,
+			kDistantDepthFadeStrengthMax,
+			defaults.DistantDepthFadeFarStrength);
+		a_settings.DistantDepthFadeStart = ClampFiniteOrDefault(
+			a_settings.DistantDepthFadeStart,
+			kDistantDepthFadeDistanceMin,
+			kDistantDepthFadeDistanceMax - kDistantDepthFadeMinimumRange,
+			defaults.DistantDepthFadeStart);
+		a_settings.DistantDepthFadeEnd = ClampFiniteOrDefault(
+			a_settings.DistantDepthFadeEnd,
+			kDistantDepthFadeDistanceMin + kDistantDepthFadeMinimumRange,
+			kDistantDepthFadeDistanceMax,
+			defaults.DistantDepthFadeEnd);
+
+		if (a_settings.DistantDepthFadeEnd < a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange)
+			a_settings.DistantDepthFadeEnd = a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange;
+	}
+}
 
 static const RE::TESWorldSpace* ResolveLODDataWorldSpace(const RE::TESWorldSpace* ws)
 {
@@ -344,10 +396,12 @@ void UnifiedWater::TryCompleteDeferredChildWorldspaceCull(RE::TES* tes)
 void UnifiedWater::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SanitizeSettings(settings);
 }
 
 void UnifiedWater::SaveSettings(json& o_json)
 {
+	SanitizeSettings(settings);
 	o_json = settings;
 }
 
@@ -358,11 +412,90 @@ void UnifiedWater::RestoreDefaultSettings()
 
 void UnifiedWater::DrawSettings()
 {
+	SanitizeSettings(settings);
+
 	ImGui::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Uses meshes with significantly lower tri-count for improved performance with no visual quality loss.\n"
 			"Will only affect newly created water - requires a change of location or game restart to take effect.");
+	}
+
+	ImGui::Spacing();
+
+	if (ImGui::TreeNodeEx("Shallow Water Depth Stabilization", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Bypasses Community Shaders' distance-based depth stabilization and uses Open Shaders' unmodified\n"
+				"depth/refraction behaviour. Custom stabilization values are preserved and resume when disabled.");
+		}
+
+		ImGui::Spacing();
+		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
+
+		ImGui::SliderFloat(
+			"Near Strength",
+			&settings.DistantDepthFadeNearStrength,
+			kDistantDepthFadeStrengthMin,
+			kDistantDepthFadeStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Stabilization applied at and before Fade Start.\n"
+				"A small nonzero value keeps nearby shallow water readable without fully suppressing transparency.");
+		}
+
+		ImGui::SliderFloat(
+			"Far Strength",
+			&settings.DistantDepthFadeFarStrength,
+			kDistantDepthFadeStrengthMin,
+			kDistantDepthFadeStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Stabilization applied at and after Fade End.\n"
+				"Values between Fade Start and Fade End interpolate smoothly from Near Strength.");
+		}
+
+		if (ImGui::SliderFloat(
+				"Fade Start",
+				&settings.DistantDepthFadeStart,
+				kDistantDepthFadeDistanceMin,
+				kDistantDepthFadeDistanceMax - kDistantDepthFadeMinimumRange,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp)) {
+			settings.DistantDepthFadeEnd = std::max(
+				settings.DistantDepthFadeEnd,
+				settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"View distance where stabilization begins.\nOne exterior cell is %.0f units.",
+				kWorldCellSize);
+		}
+
+		if (ImGui::SliderFloat(
+				"Fade End",
+				&settings.DistantDepthFadeEnd,
+				kDistantDepthFadeDistanceMin + kDistantDepthFadeMinimumRange,
+				kDistantDepthFadeDistanceMax,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp)) {
+			settings.DistantDepthFadeStart = std::min(
+				settings.DistantDepthFadeStart,
+				settings.DistantDepthFadeEnd - kDistantDepthFadeMinimumRange);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"View distance where the selected stabilization strength is fully applied.\n"
+				"Start and end remain at least one unit apart.");
+		}
+
+		ImGui::EndDisabled();
+		ImGui::TreePop();
 	}
 
 	ImGui::Spacing();
@@ -378,6 +511,20 @@ void UnifiedWater::DrawSettings()
 
 		ImGui::TreePop();
 	}
+}
+
+UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
+{
+	auto sanitizedSettings = settings;
+	SanitizeSettings(sanitizedSettings);
+
+	CommonBufferData data{};
+	const float bypassedStrength = sanitizedSettings.UseOpenShadersDepthBehaviour ? kDistantDepthFadeStrengthMin : 1.0f;
+	data.DistantDepthFadeNearStrength = sanitizedSettings.DistantDepthFadeNearStrength * bypassedStrength;
+	data.DistantDepthFadeFarStrength = sanitizedSettings.DistantDepthFadeFarStrength * bypassedStrength;
+	data.DistantDepthFadeStart = sanitizedSettings.DistantDepthFadeStart;
+	data.DistantDepthFadeEnd = sanitizedSettings.DistantDepthFadeEnd;
+	return data;
 }
 
 void UnifiedWater::DrawPerformanceSettings(bool)

@@ -1053,19 +1053,21 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 #			if defined(UNIFIED_WATER) && defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && !defined(UNDERWATER) && !defined(LOD)
 #				define UNIFIED_WATER_DISTANCE_DEPTH_FADE
 
-static const float UnifiedWaterDistanceDepthFadeViewStart = 32768.0;
-static const float UnifiedWaterDistanceDepthFadeViewEnd = 65536.0;
-
-float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float viewDistance)
+float GetUnifiedWaterDistanceDepthFade(float viewDistance)
 {
 	// Distant Unified Water still uses close-water depth shading. Fade that
 	// result toward stable deep-water shading where coarse LOD terrain depth
 	// would otherwise make shallow water appear transparent.
-	float farDepthFade = smoothstep(
-		UnifiedWaterDistanceDepthFadeViewStart,
-		UnifiedWaterDistanceDepthFadeViewEnd,
-		viewDistance);
-	return lerp(depthMul, 1.0.xxxx, farDepthFade);
+	float nearStrength = saturate(SharedData::unifiedWaterSettings.DistantDepthFadeNearStrength);
+	float farStrength = saturate(SharedData::unifiedWaterSettings.DistantDepthFadeFarStrength);
+	float fadeStart = SharedData::unifiedWaterSettings.DistantDepthFadeStart;
+	float fadeEnd = max(SharedData::unifiedWaterSettings.DistantDepthFadeEnd, fadeStart + 1.0);
+	return lerp(nearStrength, farStrength, smoothstep(fadeStart, fadeEnd, viewDistance));
+}
+
+float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float distanceDepthFade)
+{
+	return lerp(depthMul, 1.0.xxxx, distanceDepthFade);
 }
 #			endif
 
@@ -1079,7 +1081,7 @@ struct DiffuseOutput
 	float skylightingDiffuse;
 };
 
-DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection, inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint eyeIndex, float3 viewPosition, float viewDistance, float noise, float depth)
+DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection, inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint eyeIndex, float3 viewPosition, float distanceDepthFade, float noise, float depth)
 {
 #			if defined(REFRACTIONS)
 	float4 refractionNormal = mul(transpose(TextureProj[eyeIndex]), float4((VarAmounts.w * refractionsDepthFactor * normal.xy) + input.MPosition.xy, input.MPosition.z, 1));
@@ -1117,7 +1119,7 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 		distanceMul = saturate(refractionPlaneMul * float4(length(refractionDepthAdjustedViewDirection).xx, abs(refractionViewSurfaceAngle).xx) / FogParam.z);
 
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-		distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, viewDistance);
+		distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade);
 #					endif
 
 #					if defined(VR)
@@ -1221,6 +1223,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float viewDistance = length(input.WPosition.xyz);
 	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (viewDistance - 8192) / (WaterParams.x - 8192)));
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
+	float distanceDepthFade = 0.0;
+#			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	distanceDepthFade = GetUnifiedWaterDistanceDepthFade(viewDistance);
+#			endif
+
 	float distanceBlendFactor = distanceFactor;
 #			if defined(UNIFIED_WATER)
 	distanceBlendFactor = 1.0f;
@@ -1257,7 +1264,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, viewDistance);
+	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade);
 #			endif
 
 #			if defined(UNDERWATER)
@@ -1318,7 +1325,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.HPosition.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
 
 	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, depthControl.y, eyeIndex);
-	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, eyeIndex, viewPosition, viewDistance, screenNoise, depth);
+	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, eyeIndex, viewPosition, distanceDepthFade, screenNoise, depth);
 
 #				if defined(VOLUMETRIC_SHADOWS)
 	float surfaceShadow = 1.0;

@@ -15,6 +15,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/UnifiedWater.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "TruePBR.h"
@@ -45,6 +46,7 @@ namespace
 	using LinearLightingSettingsCB = LinearLighting::PerFrameData;
 	using TerrainBlendingSettingsCB = TerrainBlending::Settings;
 	using TruePBRSettingsCB = TruePBR::Settings;
+	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
 
 	// Keep these in lock-step with package/Shaders/Common/SharedData.hlsli::FeatureData.
 	struct FeatureDataLayout
@@ -67,6 +69,7 @@ namespace
 		LinearLightingSettingsCB linearLightingSettings;
 		TerrainBlendingSettingsCB terrainBlendingSettings;
 		TruePBRSettingsCB truePBRSettings;
+		UnifiedWaterSettingsCB unifiedWaterSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -87,7 +90,8 @@ namespace
 		CSUtilitySettingsCB,
 		LinearLightingSettingsCB,
 		TerrainBlendingSettingsCB,
-		TruePBRSettingsCB>;
+		TruePBRSettingsCB,
+		UnifiedWaterSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
@@ -113,6 +117,11 @@ namespace
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
 	static_assert(sizeof(TruePBRSettingsCB) == 16);
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 4);
+	static_assert(sizeof(UnifiedWaterSettingsCB) == 16);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeNearStrength) == 0);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeFarStrength) == 4);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeStart) == 8);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeEnd) == 12);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);
@@ -135,7 +144,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, linearLightingSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB));
 	static_assert(offsetof(FeatureDataLayout, terrainBlendingSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB) + sizeof(LinearLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB) + sizeof(LinearLightingSettingsCB) + sizeof(TerrainBlendingSettingsCB));
-	static_assert(sizeof(FeatureDataLayout) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB) + sizeof(LinearLightingSettingsCB) + sizeof(TerrainBlendingSettingsCB) + sizeof(TruePBRSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -196,5 +206,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::csUtility.GetCommonBufferData(),
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
-		globals::features::truePBR.settings);
+		globals::features::truePBR.settings,
+		globals::features::unifiedWater.GetCommonBufferData());
 }

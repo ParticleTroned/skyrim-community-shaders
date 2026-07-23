@@ -355,6 +355,14 @@ namespace SharedData
 		uint2 pad;
 	};
 
+	struct UnifiedWaterSettings
+	{
+		float DistantDepthFadeNearStrength;
+		float DistantDepthFadeFarStrength;
+		float DistantDepthFadeStart;
+		float DistantDepthFadeEnd;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -375,6 +383,7 @@ namespace SharedData
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		TruePBRSettings truePBRSettings;
+		UnifiedWaterSettings unifiedWaterSettings;
 	};
 
 	static const uint LOD_BLENDING_FLAG_DISABLE_TERRAIN_VERTEX_COLORS = 1u;

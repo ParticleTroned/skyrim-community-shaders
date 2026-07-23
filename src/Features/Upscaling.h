@@ -668,10 +668,14 @@ public:
 		uint32_t memoryPreRecreateDrainFailures = 0;
 	};
 
+	static constexpr std::size_t kVRRenderScaleTransitionMetricRetentionCapacity = 50;
+	static constexpr std::size_t kVRRenderScaleStressEventRetentionCapacity =
+		(kVRRenderScaleTransitionMetricRetentionCapacity * 6) + 2;
+
 	struct VRRenderScaleMetricsSnapshot
 	{
 		VRRenderScaleTransitionMetrics current{};
-		std::array<VRRenderScaleTransitionMetrics, 32> recent{};
+		std::array<VRRenderScaleTransitionMetrics, kVRRenderScaleTransitionMetricRetentionCapacity> recent{};
 		uint32_t nextIndex = 0;
 		uint32_t count = 0;
 	};
@@ -833,7 +837,7 @@ public:
 		uint64_t baselinePresentationStretchEyeObservations = 0;
 		uint64_t baselineVendorFailureStretchEyeObservations = 0;
 		uint64_t baselineBoundsMismatchOriginalFallbackEyeObservations = 0;
-		std::array<VRRenderScaleStressEvent, 128> events{};
+		std::array<VRRenderScaleStressEvent, kVRRenderScaleStressEventRetentionCapacity> events{};
 	};
 
 	/** @brief Immutable controller-visible profile at one transition milestone. */

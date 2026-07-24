@@ -214,7 +214,7 @@ namespace
 
 	bool IsFeatureAdvancedUiMode(Feature* feature)
 	{
-		if (!feature || !globals::menu || !globals::menu->IsPerformanceUiMode())
+		if (!feature || !globals::menu || !globals::menu->IsEssentialsUiMode())
 			return false;
 
 		int& mode = GetFeatureUiModeValue(feature);
@@ -224,7 +224,7 @@ namespace
 
 	bool DrawFeatureUiModeToggle(Feature* feature)
 	{
-		if (!feature || !globals::menu || !globals::menu->IsPerformanceUiMode())
+		if (!feature || !globals::menu || !globals::menu->IsEssentialsUiMode())
 			return false;
 
 		int& mode = GetFeatureUiModeValue(feature);
@@ -481,7 +481,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		sortedFeatureList.erase(it, sortedFeatureList.end());
 	}
 
-	const bool essentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
+	const bool essentialsMode = globals::menu && globals::menu->IsEssentialsUiMode();
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
 		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() { PerformanceTuningRenderer::Render(); } }
@@ -623,7 +623,7 @@ void FeatureListRenderer::RenderLeftColumn(
 		}
 
 		// Add Features header and search bar after built-in settings
-		Util::DrawSectionHeader((globals::menu && globals::menu->IsPerformanceUiMode()) ? "Essentials" : "Features", true);
+		Util::DrawSectionHeader((globals::menu && globals::menu->IsEssentialsUiMode()) ? "Essentials" : "Features", true);
 		Util::DrawFeatureSearchBar(featureSearch);
 
 		// Then render the rest (features and categories, but skip already rendered core menus)
@@ -852,7 +852,7 @@ bool FeatureListRenderer::DrawMenuVisitor::IsFeatureInstalled(const std::string&
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
 {
 	const auto featureName = feat->GetShortName();
-	const bool showFeatureUiModeToggle = isLoaded && globals::menu && globals::menu->IsPerformanceUiMode();
+	const bool showFeatureUiModeToggle = isLoaded && globals::menu && globals::menu->IsEssentialsUiMode();
 
 	// Calculate action button widths
 	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
@@ -962,7 +962,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		}
 	} else {
 		if (isLoaded) {
-			const bool globalEssentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
+			const bool globalEssentialsMode = globals::menu && globals::menu->IsEssentialsUiMode();
 			const bool featureAdvancedMode = IsFeatureAdvancedUiMode(feat);
 			const bool essentialsFeatureMode = globalEssentialsMode && !featureAdvancedMode;
 			const bool hasEssentialSettings = essentialsFeatureMode && feat->HasEssentialSettings();

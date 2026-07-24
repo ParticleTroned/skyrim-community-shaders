@@ -360,13 +360,13 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 		auto& settings = globals::menu->GetSettings();
 
 		Util::InputComboWidget(
-			"Toggle Key:",
+			"Menu Toggle Key:",
 			settings.ToggleKey,
 			state.settingToggleKey,
 			"Change##toggle");
 
 		Util::InputComboWidget(
-			"Effect Toggle Key:",
+			"Custom Shaders Toggle Key:",
 			settings.EffectToggleKey,
 			state.settingsEffectsToggle,
 			"Change##EffectToggle");
@@ -378,11 +378,11 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 			"Change##skip");
 
 		Util::InputComboWidget(
-			"Performance Overlay:",
+			"Overlay Toggle Key:",
 			settings.OverlayToggleKey,
 			state.settingOverlayToggleKey,
 			"Change##OverlayToggle");
-		ImGui::TextWrapped("Opens the performance overlay with runtime diagnostics. Default key: F10. This binding is configurable.");
+		ImGui::TextWrapped("Shows or hides overlay windows enabled by individual features. Default key: F10.");
 
 		Util::InputComboWidget(
 			"CS Editor Toggle Key:",

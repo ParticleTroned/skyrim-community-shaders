@@ -136,7 +136,7 @@ void HomePageRenderer::RenderModeSection()
 		return;
 
 	auto& settings = menu->GetSettings();
-	settings.PerformanceUiMode = std::clamp(settings.PerformanceUiMode, 0, 1);
+	settings.UiMode = std::clamp(settings.UiMode, 0, 1);
 
 	const char* modeLabel = "UI Mode";
 	const char* essentialsLabel = "Essentials (Recommended)";
@@ -161,9 +161,9 @@ void HomePageRenderer::RenderModeSection()
 
 	ImGui::PushID("HomeInterfaceMode");
 	ImGui::SetCursorPos(ImVec2(rowX + modeLabelWidth + style.ItemSpacing.x, rowY));
-	BigRadioButton(essentialsLabel, &settings.PerformanceUiMode, 0, radioDiameter);
+	BigRadioButton(essentialsLabel, &settings.UiMode, 0, radioDiameter);
 	ImGui::SetCursorPos(ImVec2(rowX + modeLabelWidth + style.ItemSpacing.x * 2.0f + essentialsWidth, rowY));
-	BigRadioButton(advancedLabel, &settings.PerformanceUiMode, 1, radioDiameter);
+	BigRadioButton(advancedLabel, &settings.UiMode, 1, radioDiameter);
 	ImGui::PopID();
 
 	ImGui::SetCursorPosY(rowY + rowHeight);

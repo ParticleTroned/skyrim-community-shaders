@@ -58,7 +58,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	qualityMode,
 	dlssPreset,
 	renderScaleMode,
-	vrFpsStabilizerSync,
 	perfMode,
 	frameLimitMode,
 	frameGenerationMode,
@@ -2764,10 +2763,7 @@ namespace
 
 	bool HasPendingVRFpsStabilizerRenderScaleIntent(const Upscaling& a_upscaling)
 	{
-		if (!globals::game::isVR || !a_upscaling.settings.vrFpsStabilizerSync)
-			return false;
-
-		if (a_upscaling.IsOpenCompositeUpscalingBlocked())
+		if (!a_upscaling.IsVRFpsStabilizerSyncActive())
 			return false;
 
 		const uint32_t queuedFrame = a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
@@ -2788,15 +2784,13 @@ namespace
 		if (cachedKey.load(std::memory_order_acquire) == cacheKey)
 			return cachedRenderScaleIntent.load(std::memory_order_acquire);
 
-		VRFpsStabilizerUpscalingProfiles profiles;
 		bool renderScaleIntent = false;
-		if (TryLoadVRFpsStabilizerUpscalingProfiles(profiles)) {
-			const auto& profile = interior ? profiles.interior : profiles.exterior;
-			renderScaleIntent =
-				profile.hasRenderScaleMode &&
-				profile.renderScaleMode &&
-				ResolveVRFpsStabilizerTransitionTarget(a_upscaling, profile).renderScaleMode;
-		}
+		const auto& profiles = a_upscaling.GetVRFpsStabilizerSessionConfig();
+		const auto& profile = interior ? profiles.interior : profiles.exterior;
+		renderScaleIntent =
+			profile.hasRenderScaleMode &&
+			profile.renderScaleMode &&
+			ResolveVRFpsStabilizerTransitionTarget(a_upscaling, profile).renderScaleMode;
 
 		cachedRenderScaleIntent.store(renderScaleIntent, std::memory_order_release);
 		cachedKey.store(cacheKey, std::memory_order_release);
@@ -3483,7 +3477,6 @@ namespace
 		} else if (REL::Module::IsVR()) {
 			settings.perfMode = 0;
 		}
-		settings.vrFpsStabilizerSync = settings.vrFpsStabilizerSync && REL::Module::IsVR();
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
@@ -3501,7 +3494,6 @@ namespace
 	void ResetVRSpecificUpscalingSettings(Upscaling::Settings& settings)
 	{
 		settings.renderScaleMode = 0;
-		settings.vrFpsStabilizerSync = false;
 		settings.perfMode = 0;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
@@ -3520,7 +3512,6 @@ namespace
 	void StripVRSpecificUpscalingSettings(json& o_json)
 	{
 		o_json.erase("renderScaleMode");
-		o_json.erase("vrFpsStabilizerSync");
 		o_json.erase("perfMode");
 		o_json.erase("vrMenuBridgeDebugMode");
 		o_json.erase("foveatedVendorDispatch");
@@ -3817,7 +3808,7 @@ namespace
 		// frame has been resolved and a destination world frame completed, that
 		// epoch is authoritative; an aggregate event/tail flag may no longer keep
 		// its already-applied profile in presentation stretch.
-		return a_upscaling.settings.vrFpsStabilizerSync &&
+		return a_upscaling.IsVRFpsStabilizerSyncActive() &&
 		       a_state &&
 		       a_closeFrame != 0 &&
 		       a_state->frameCount >= a_closeFrame &&
@@ -3882,7 +3873,7 @@ namespace
 
 	bool IsVRFpsStabilizerDoorHandoffPending(const Upscaling& a_upscaling)
 	{
-		if (!globals::game::isVR || !a_upscaling.settings.vrFpsStabilizerSync)
+		if (!a_upscaling.IsVRFpsStabilizerSyncActive())
 			return false;
 
 		// LoadingMenu open begins the handoff. After close, keep the handoff
@@ -4028,7 +4019,7 @@ namespace
 
 	void QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(Upscaling& a_upscaling)
 	{
-		if (!globals::game::isVR || !a_upscaling.settings.vrFpsStabilizerSync)
+		if (!a_upscaling.IsVRFpsStabilizerSyncActive())
 			return;
 
 		if (a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0)
@@ -4049,7 +4040,7 @@ namespace
 
 	bool HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(const Upscaling& a_upscaling)
 	{
-		if (!globals::game::isVR || !a_upscaling.settings.vrFpsStabilizerSync)
+		if (!a_upscaling.IsVRFpsStabilizerSyncActive())
 			return false;
 
 		if (a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0)
@@ -8821,6 +8812,25 @@ bool Upscaling::LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::
 	return true;
 }
 
+const Upscaling::VRFpsStabilizerConfig& Upscaling::GetVRFpsStabilizerSessionConfig() const
+{
+	std::call_once(vrFpsStabilizerSessionConfigOnce, [this]() {
+		TryLoadVRFpsStabilizerUpscalingProfiles(vrFpsStabilizerSessionConfig);
+	});
+	return vrFpsStabilizerSessionConfig;
+}
+
+bool Upscaling::IsVRFpsStabilizerSyncActive() const
+{
+	if (!globals::game::isVR || IsOpenCompositeUpscalingBlocked())
+		return false;
+
+	const auto& config = GetVRFpsStabilizerSessionConfig();
+	return config.fileReadable &&
+	       config.upscalingSwitchingEnabled &&
+	       config.HasAnyProfile();
+}
+
 bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const
 {
 	a_error.clear();
@@ -12954,21 +12964,6 @@ void Upscaling::DrawSettings()
 					"Warning: VR Render Scale Mode relatch scheduled");
 		}
 
-		{
-			auto disabledGuard = Util::DisableGuard(openCompositeBlocksUpscaling);
-			ImGui::Checkbox("VR FPS Stabilizer Sync", &settings.vrFpsStabilizerSync);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			if (openCompositeBlocksUpscaling) {
-				ImGui::TextUnformatted(kOpenCompositeRenderScaleBlockWarning);
-			} else {
-				ImGui::TextUnformatted("On save-load, reads VRFpsStabilizer.ini [Conditional] Interior/Exterior CS upscaling rows.");
-				ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and VR Render Scale Mode to the cell you loaded into.");
-				ImGui::TextUnformatted("Legacy DLSSMode / RenderAtUpscaleRes rows are supported; explicit UpscaleMethod rows can select FSR.");
-				ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
-			}
-		}
-
 		if (!openCompositeBlocksUpscaling && !renderScaleMethodEligible)
 			ImGui::TextDisabled("VR Render Scale Mode is available only with DLSS/FSR in VR.");
 
@@ -13885,7 +13880,6 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 	const bool changedVRRenderScaleState =
 		settings.renderScaleMode != 0 ||
 		settings.perfMode != 0 ||
-		settings.vrFpsStabilizerSync ||
 		hasPendingVRTransition ||
 		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
 		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
@@ -13900,7 +13894,6 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 	settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
 	settings.renderScaleMode = 0;
 	settings.perfMode = 0;
-	settings.vrFpsStabilizerSync = false;
 	pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreate.store(false, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
@@ -14322,6 +14315,9 @@ void Upscaling::RaceSexMenu_ChangeName::thunk(RE::RaceSexMenu* a_this, const cha
 
 void Upscaling::Load()
 {
+	if (REL::Module::IsVR())
+		(void)GetVRFpsStabilizerSessionConfig();
+
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const auto blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
@@ -15629,15 +15625,10 @@ bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
 	uint32_t a_qualityMode,
 	uint32_t a_dlssPreset) const
 {
-	if (!globals::game::isVR)
+	if (!IsVRFpsStabilizerSyncActive())
 		return true;
 
-	VRFpsStabilizerUpscalingProfiles profiles;
-	if (!TryLoadVRFpsStabilizerUpscalingProfiles(profiles) ||
-		!profiles.upscalingSwitchingEnabled) {
-		return true;
-	}
-
+	const auto& profiles = GetVRFpsStabilizerSessionConfig();
 	// The stabilizer calls the atomic profile API after fading to black but
 	// before moving the player. At that point the opposite cell-type profile is
 	// the only authoritative destination. Rejecting the current-cell profile
@@ -15659,10 +15650,7 @@ bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
 
 void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 {
-	const bool openCompositeBlocksUpscaling = globals::game::isVR && IsOpenCompositeUpscalingBlocked();
-	if (!globals::game::isVR || !settings.vrFpsStabilizerSync || openCompositeBlocksUpscaling) {
-		if (openCompositeBlocksUpscaling)
-			settings.vrFpsStabilizerSync = false;
+	if (!IsVRFpsStabilizerSyncActive()) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		return;
 	}
@@ -15678,10 +15666,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	if (queuedFrame == 0)
 		return;
 
-	const bool openCompositeBlocksUpscaling = globals::game::isVR && IsOpenCompositeUpscalingBlocked();
-	if (!globals::game::isVR || !settings.vrFpsStabilizerSync || openCompositeBlocksUpscaling) {
-		if (openCompositeBlocksUpscaling)
-			settings.vrFpsStabilizerSync = false;
+	if (!IsVRFpsStabilizerSyncActive()) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		return;
 	}
@@ -15690,18 +15675,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	if (!IsVRFpsStabilizerLoadSyncReady(state))
 		return;
 
-	VRFpsStabilizerUpscalingProfiles profiles;
-	if (!TryLoadVRFpsStabilizerUpscalingProfiles(profiles)) {
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
-		MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
-		if (profiles.upscalingSwitchingEnabled) {
-			logger::warn("[Upscaling] VR FPS Stabilizer Sync enabled, but no unconditional Interior/Exterior upscaling profile was found in {}.", profiles.path.string());
-		} else {
-			logger::debug("[Upscaling] VR FPS Stabilizer CS upscaling switching is disabled in {}.", profiles.path.string());
-		}
-		return;
-	}
-
+	const auto& profiles = GetVRFpsStabilizerSessionConfig();
 	const bool loadedInterior = Util::IsInterior();
 	const auto& profile = loadedInterior ? profiles.interior : profiles.exterior;
 	const char* profileName = loadedInterior ? "Interior" : "Exterior";

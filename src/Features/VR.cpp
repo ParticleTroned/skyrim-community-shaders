@@ -1362,15 +1362,27 @@ namespace
 
 		ImGui::Spacing();
 		const bool openCompositeBlocksUpscaling = upscaling.IsOpenCompositeUpscalingBlocked();
-		{
-			auto disabledGuard = Util::DisableGuard(
-				openCompositeBlocksUpscaling || !uiState.config.upscalingSwitchingEnabled);
-			ImGui::Checkbox("Enable CS save-load profile sync", &upscaling.settings.vrFpsStabilizerSync);
+		const auto& sessionConfig = upscaling.GetVRFpsStabilizerSessionConfig();
+		if (openCompositeBlocksUpscaling) {
+			Util::Text::WrappedWarning(
+				"Automatic CS save-load profile sync: inactive for this session because Open Composite owns upscaling.");
+		} else if (upscaling.IsVRFpsStabilizerSyncActive()) {
+			ImGui::TextColored(
+				Util::Colors::GetSuccess(),
+				"Automatic CS save-load profile sync: active for this session.");
+		} else if (!sessionConfig.fileExists) {
+			ImGui::TextDisabled("Automatic CS save-load profile sync: inactive; VRFpsStabilizer.ini was not found at startup.");
+		} else if (!sessionConfig.fileReadable) {
+			ImGui::TextDisabled("Automatic CS save-load profile sync: inactive; VRFpsStabilizer.ini was not readable at startup.");
+		} else if (!sessionConfig.upscalingSwitchingEnabled) {
+			ImGui::TextDisabled("Automatic CS save-load profile sync: inactive because this group was off at startup.");
+		} else {
+			ImGui::TextDisabled("Automatic CS save-load profile sync: inactive; no supported Interior/Exterior profile was active at startup.");
 		}
-		if (openCompositeBlocksUpscaling)
-			Util::Text::WrappedWarning("Open Composite upscaling disables Community Shaders stabilizer sync.");
-		else if (!uiState.config.upscalingSwitchingEnabled)
-			ImGui::TextDisabled("CS save-load profile sync is inactive while this group is off.");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Community Shaders enables this automatically when the INI contains active unconditional Interior or Exterior upscaling rows.");
+			ImGui::TextUnformatted("The startup state is authoritative for this game session; saved or manual INI changes take effect after restarting Skyrim VR.");
+		}
 
 		if (uiState.loadFailed) {
 			ImGui::Spacing();
@@ -1488,7 +1500,7 @@ namespace
 		}
 		if (uiState.restartRequired) {
 			ImGui::Spacing();
-			Util::Text::WrappedWarning("Restart Skyrim VR so VR FPS Stabilizer reloads the edited INI.");
+			Util::Text::WrappedWarning("Restart Skyrim VR so VR FPS Stabilizer and Community Shaders reload the edited INI.");
 		}
 		Util::Text::WrappedDisabled(
 			"Only unconditional Interior/Exterior CS upscaling rows and CSVRFadeToBlackDuration are edited. Other Stabilizer settings and conditional rows are preserved.");

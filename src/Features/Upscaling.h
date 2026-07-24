@@ -166,7 +166,6 @@ public:
 		uint qualityMode = 3;            // Shared upscaler preset; defaults to Quality
 		uint dlssPreset = kDLSSPresetK;  // Settings ids: J, K, L, M, F, E (default K)
 		uint renderScaleMode = 1;
-		bool vrFpsStabilizerSync = false;
 		uint perfMode = 1;
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 0;  // Disabled by default
@@ -1876,6 +1875,10 @@ public:
 	bool LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::string& a_error) const;
 	/** @brief Persists the editable stabilizer profile while preserving unrelated INI content. */
 	bool SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const;
+	/** @return The immutable active Stabilizer configuration captured for this game session. */
+	const VRFpsStabilizerConfig& GetVRFpsStabilizerSessionConfig() const;
+	/** @return True when the session configuration automatically owns save-load profile reconciliation. */
+	bool IsVRFpsStabilizerSyncActive() const;
 
 	// Proxy interface methods
 	void SetProxyD3D11Device(ID3D11Device* device);
@@ -1888,6 +1891,8 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	mutable std::once_flag vrFpsStabilizerSessionConfigOnce;
+	mutable VRFpsStabilizerConfig vrFpsStabilizerSessionConfig{};
 	std::optional<VRRenderScaleProfileSnapshot> GetStableVRRenderScaleRuntimeProfile() const;
 	std::atomic<bool> vrRenderScaleStableRuntimeProfileAuthoritative{ false };
 	std::atomic<uint32_t> vrRenderScaleLastOutOfMemoryFailureFrame{ 0 };

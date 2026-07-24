@@ -1077,9 +1077,32 @@ float GetUnifiedWaterDistanceDepthFade(float viewDistance)
 	return lerp(nearStrength, farStrength, smoothstep(fadeStart, fadeEnd, viewDistance));
 }
 
-float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float distanceDepthFade)
+float GetUnifiedWaterShoreDepth(float planeMul, float viewSurfaceAngle, uint eyeIndex)
 {
-	return lerp(depthMul, 1.0.xxxx, distanceDepthFade);
+	if (!isfinite(planeMul) || !isfinite(viewSurfaceAngle) || planeMul <= 0.0)
+		return max(0.0, SharedData::unifiedWaterSettings.ShoreBlendDepthEnd);
+
+	return abs(viewSurfaceAngle - ReflectPlane[eyeIndex].w);
+}
+
+float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float distanceDepthFade, float shoreDepth)
+{
+	float shoreBlendStart = max(0.0, SharedData::unifiedWaterSettings.ShoreBlendDepthStart);
+	float shoreBlendEnd = max(0.0, SharedData::unifiedWaterSettings.ShoreBlendDepthEnd);
+	float shoreInteriorFactor = 1.0;
+
+	[branch] if (shoreBlendEnd > 0.0)
+	{
+		shoreBlendEnd = max(shoreBlendEnd, shoreBlendStart + 1.0);
+		float validShoreDepth = isfinite(shoreDepth) ? max(0.0, shoreDepth) : shoreBlendEnd;
+		shoreInteriorFactor = smoothstep(shoreBlendStart, shoreBlendEnd, validShoreDepth);
+	}
+
+	// Keep the existing distance curve authoritative for water shading, but
+	// optionally restore raw refraction visibility at the immediate shoreline.
+	float4 depthFade = saturate(distanceDepthFade).xxxx;
+	depthFade.x *= shoreInteriorFactor;
+	return lerp(depthMul, 1.0.xxxx, depthFade);
 }
 #			endif
 
@@ -1131,7 +1154,8 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 		distanceMul = saturate(refractionPlaneMul * float4(length(refractionDepthAdjustedViewDirection).xx, abs(refractionViewSurfaceAngle).xx) / FogParam.z);
 
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-		distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade);
+		float refractionShoreDepth = GetUnifiedWaterShoreDepth(refractionPlaneMul, refractionViewSurfaceAngle, eyeIndex);
+		distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade, refractionShoreDepth);
 #					endif
 
 #					if defined(VR)
@@ -1279,11 +1303,14 @@ PS_OUTPUT main(PS_INPUT input)
 	distanceMul = saturate(
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z);
+#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	float shoreDepth = GetUnifiedWaterShoreDepth(planeMul, viewSurfaceAngle, eyeIndex);
+#					endif
 #				endif
 #			endif
 
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade);
+	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade, shoreDepth);
 #			endif
 
 #			if defined(UNDERWATER)

@@ -24,7 +24,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantDepthFadeNearStrength,
 	DistantDepthFadeFarStrength,
 	DistantDepthFadeStart,
-	DistantDepthFadeEnd)
+	DistantDepthFadeEnd,
+	ShoreBlendDepthStart,
+	ShoreBlendDepthEnd)
 
 namespace
 {
@@ -38,6 +40,9 @@ namespace
 	constexpr float kDistantDepthFadeDistanceMin = 0.0f;
 	constexpr float kDistantDepthFadeDistanceMax = kWorldCellSize * 16.0f;
 	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
+	constexpr float kShoreBlendDepthMin = 0.0f;
+	constexpr float kShoreBlendDepthMax = 64.0f;
+	constexpr float kShoreBlendDepthMinimumRange = 1.0f;
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
@@ -45,6 +50,56 @@ namespace
 			return a_default;
 
 		return std::clamp(a_value, a_min, a_max);
+	}
+
+	void SanitizeOrderedRange(
+		float& a_start,
+		float& a_end,
+		float a_min,
+		float a_max,
+		float a_minimumRange,
+		float a_defaultStart,
+		float a_defaultEnd)
+	{
+		a_start = ClampFiniteOrDefault(
+			a_start,
+			a_min,
+			a_max - a_minimumRange,
+			a_defaultStart);
+		a_end = ClampFiniteOrDefault(
+			a_end,
+			a_min + a_minimumRange,
+			a_max,
+			a_defaultEnd);
+
+		if (a_end < a_start + a_minimumRange)
+			a_end = a_start + a_minimumRange;
+	}
+
+	void SanitizeOptionalOrderedRange(
+		float& a_start,
+		float& a_end,
+		float a_min,
+		float a_max,
+		float a_minimumRange,
+		float a_defaultStart,
+		float a_defaultEnd)
+	{
+		a_end = ClampFiniteOrDefault(a_end, a_min, a_max, a_defaultEnd);
+		if (a_end < a_min + a_minimumRange) {
+			a_start = a_min;
+			a_end = a_min;
+			return;
+		}
+
+		SanitizeOrderedRange(
+			a_start,
+			a_end,
+			a_min,
+			a_max,
+			a_minimumRange,
+			a_defaultStart,
+			a_defaultEnd);
 	}
 
 	void SanitizeSettings(UnifiedWater::Settings& a_settings)
@@ -80,19 +135,23 @@ namespace
 			kDistantDepthFadeStrengthMin,
 			kDistantDepthFadeStrengthMax,
 			defaults.DistantDepthFadeFarStrength);
-		a_settings.DistantDepthFadeStart = ClampFiniteOrDefault(
-			a_settings.DistantDepthFadeStart,
-			kDistantDepthFadeDistanceMin,
-			kDistantDepthFadeDistanceMax - kDistantDepthFadeMinimumRange,
-			defaults.DistantDepthFadeStart);
-		a_settings.DistantDepthFadeEnd = ClampFiniteOrDefault(
-			a_settings.DistantDepthFadeEnd,
-			kDistantDepthFadeDistanceMin + kDistantDepthFadeMinimumRange,
-			kDistantDepthFadeDistanceMax,
-			defaults.DistantDepthFadeEnd);
 
-		if (a_settings.DistantDepthFadeEnd < a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange)
-			a_settings.DistantDepthFadeEnd = a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange;
+		SanitizeOrderedRange(
+			a_settings.DistantDepthFadeStart,
+			a_settings.DistantDepthFadeEnd,
+			kDistantDepthFadeDistanceMin,
+			kDistantDepthFadeDistanceMax,
+			kDistantDepthFadeMinimumRange,
+			defaults.DistantDepthFadeStart,
+			defaults.DistantDepthFadeEnd);
+		SanitizeOptionalOrderedRange(
+			a_settings.ShoreBlendDepthStart,
+			a_settings.ShoreBlendDepthEnd,
+			kShoreBlendDepthMin,
+			kShoreBlendDepthMax,
+			kShoreBlendDepthMinimumRange,
+			defaults.ShoreBlendDepthStart,
+			defaults.ShoreBlendDepthEnd);
 	}
 
 	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
@@ -545,6 +604,48 @@ void UnifiedWater::DrawSettings()
 				"Start and end remain at least one unit apart.");
 		}
 
+		ImGui::Spacing();
+		ImGui::SeparatorText("Shoreline Transparency");
+
+		if (ImGui::SliderFloat(
+				"Shore Blend Start",
+				&settings.ShoreBlendDepthStart,
+				kShoreBlendDepthMin,
+				kShoreBlendDepthMax - kShoreBlendDepthMinimumRange,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp)) {
+			settings.ShoreBlendDepthEnd = std::max(
+				settings.ShoreBlendDepthEnd,
+				settings.ShoreBlendDepthStart + kShoreBlendDepthMinimumRange);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Water depth up to which the existing stabilization leaves shoreline transparency unchanged. "
+				"Set both shore values to 0 to disable this adjustment.");
+		}
+
+		if (ImGui::SliderFloat(
+				"Shore Blend End",
+				&settings.ShoreBlendDepthEnd,
+				kShoreBlendDepthMin,
+				kShoreBlendDepthMax,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp)) {
+			if (settings.ShoreBlendDepthEnd < kShoreBlendDepthMin + kShoreBlendDepthMinimumRange) {
+				settings.ShoreBlendDepthStart = kShoreBlendDepthMin;
+				settings.ShoreBlendDepthEnd = kShoreBlendDepthMin;
+			} else {
+				settings.ShoreBlendDepthStart = std::min(
+					settings.ShoreBlendDepthStart,
+					settings.ShoreBlendDepthEnd - kShoreBlendDepthMinimumRange);
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Water depth where shoreline transparency reaches the configured Near/Far stabilization strength. "
+				"Set both shore values to 0 to disable this adjustment.");
+		}
+
 		ImGui::EndDisabled();
 		ImGui::TreePop();
 	}
@@ -577,6 +678,8 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.DistantDepthFadeEnd = sanitizedSettings.DistantDepthFadeEnd;
 	data.WaterTintColor = sanitizedSettings.WaterTintColor;
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
+	data.ShoreBlendDepthStart = sanitizedSettings.ShoreBlendDepthStart;
+	data.ShoreBlendDepthEnd = sanitizedSettings.ShoreBlendDepthEnd;
 	return data;
 }
 

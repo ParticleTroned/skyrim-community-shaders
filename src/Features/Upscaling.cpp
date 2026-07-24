@@ -18385,6 +18385,9 @@ void Upscaling::ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame)
 	perfMode.SetSubmitStageVendorAllowed(false);
 	submitStageVendorResumeStartFrame.store(currentFrame, std::memory_order_release);
 	ClearSubmitStageVendorResumeStability();
+	submitStageDLSSViewportPreparationGeneration.store(0, std::memory_order_release);
+	submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
+	submitStageDLSSViewportPreparationFailed.store(false, std::memory_order_release);
 	submitStageVendorResumeFrame.store(resumeFrame, std::memory_order_release);
 	if (emitDiagLogs) {
 		logger::debug(
@@ -18403,6 +18406,9 @@ void Upscaling::ClearSubmitStageVendorResumeCooldown()
 	submitStageVendorResumeFrame.store(0, std::memory_order_release);
 	submitStageVendorResumeStartFrame.store(0, std::memory_order_release);
 	ClearSubmitStageVendorResumeStability();
+	submitStageDLSSViewportPreparationGeneration.store(0, std::memory_order_release);
+	submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
+	submitStageDLSSViewportPreparationFailed.store(false, std::memory_order_release);
 	perfMode.SetSubmitStageVendorAllowed(true);
 }
 
@@ -18419,6 +18425,83 @@ bool Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 		ClearSubmitStageVendorResumeStability();
 		return false;
 	}
+
+	auto dlssViewportPreparation = Streamline::DLSSViewportPreparationResult::Ready;
+	if (a_upscaleMethod == UpscaleMethod::kDLSS) {
+		// Recycle the exact bounded viewport slots while submit-stage vendor
+		// presentation is still gated, so the first visible eye cannot discover
+		// an asynchronous slot miss and misclassify it as a DLSS failure.
+		const bool newPreparationGeneration =
+			submitStageDLSSViewportPreparationGeneration.exchange(a_generation, std::memory_order_acq_rel) != a_generation;
+		if (newPreparationGeneration) {
+			submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
+			submitStageDLSSViewportPreparationFailed.store(false, std::memory_order_release);
+		}
+
+		const uint32_t qualityMode = GetRuntimeQualityMode();
+		const uint32_t dlssPreset = GetRuntimeDLSSPreset();
+		const auto fullEyeViewportPreparation = streamline.PrepareVRDLSSViewport(
+			Streamline::DLSSViewportRole::FullEye,
+			qualityMode,
+			dlssPreset);
+		auto foveatedCenterViewportPreparation = Streamline::DLSSViewportPreparationResult::Ready;
+		if (fullEyeViewportPreparation != Streamline::DLSSViewportPreparationResult::Failed &&
+			IsFoveatedVendorDispatchEnabled(a_upscaleMethod)) {
+			foveatedCenterViewportPreparation = streamline.PrepareVRDLSSViewport(
+				Streamline::DLSSViewportRole::SubmitStageFoveatedCenter,
+				qualityMode,
+				dlssPreset);
+		}
+		const auto combineViewportPreparationResults = [](auto a_lhs, auto a_rhs) {
+			if (a_lhs == Streamline::DLSSViewportPreparationResult::Failed ||
+				a_rhs == Streamline::DLSSViewportPreparationResult::Failed) {
+				return Streamline::DLSSViewportPreparationResult::Failed;
+			}
+			if (a_lhs == Streamline::DLSSViewportPreparationResult::Pending ||
+				a_rhs == Streamline::DLSSViewportPreparationResult::Pending) {
+				return Streamline::DLSSViewportPreparationResult::Pending;
+			}
+			return Streamline::DLSSViewportPreparationResult::Ready;
+		};
+		dlssViewportPreparation =
+			combineViewportPreparationResults(fullEyeViewportPreparation, foveatedCenterViewportPreparation);
+
+		if (dlssViewportPreparation == Streamline::DLSSViewportPreparationResult::Pending) {
+			submitStageDLSSViewportPreparationFailed.store(false, std::memory_order_release);
+			if (!submitStageDLSSViewportPreparationPending.exchange(true, std::memory_order_acq_rel)) {
+				RecordVRVendorRuntimeLifecycle(
+					a_upscaleMethod,
+					VRVendorRuntimeLifecyclePhase::WaitingForDrain,
+					a_generation,
+					"submit-stage viewport recycle");
+				RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind::Backend);
+			}
+		} else if (dlssViewportPreparation == Streamline::DLSSViewportPreparationResult::Failed) {
+			submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS viewport preparation"))
+				return false;
+			if (!submitStageDLSSViewportPreparationFailed.exchange(true, std::memory_order_acq_rel)) {
+				RecordVRVendorRuntimeLifecycle(
+					a_upscaleMethod,
+					VRVendorRuntimeLifecyclePhase::Failed,
+					a_generation,
+					"submit-stage viewport recycle");
+			}
+		} else {
+			const bool viewportPreparationWasPending =
+				submitStageDLSSViewportPreparationPending.exchange(false, std::memory_order_acq_rel);
+			const bool viewportPreparationHadFailed =
+				submitStageDLSSViewportPreparationFailed.exchange(false, std::memory_order_acq_rel);
+			if (newPreparationGeneration || viewportPreparationWasPending || viewportPreparationHadFailed) {
+				RecordVRVendorRuntimeLifecycle(
+					a_upscaleMethod,
+					VRVendorRuntimeLifecyclePhase::Ready,
+					a_generation,
+					"submit-stage viewport ready");
+			}
+		}
+	}
+
 	if (!RecordVRRenderScaleFidelityObservation(
 			a_upscaleMethod,
 			a_eyeIndex,
@@ -18470,7 +18553,8 @@ bool Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 	const uint32_t requiredStableFrames =
 		a_stabilizerDoorHandoff ? kVRSubmitStageVendorDoorHandoffStableFrames : kVRSubmitStageVendorRelatchStableFrames;
 	if (ElapsedFrames(cooldownStartFrame, currentFrame) < minimumCooldownFrames ||
-		stableFrames < requiredStableFrames) {
+		stableFrames < requiredStableFrames ||
+		dlssViewportPreparation != Streamline::DLSSViewportPreparationResult::Ready) {
 		return false;
 	}
 

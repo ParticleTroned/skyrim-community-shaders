@@ -1660,6 +1660,9 @@ public:
 	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
 	std::atomic<uint64_t> submitStageVendorResumeStableEyeMaskState{ 0 };
+	std::atomic<uint32_t> submitStageDLSSViewportPreparationGeneration{ 0 };
+	std::atomic_bool submitStageDLSSViewportPreparationPending{ false };
+	std::atomic_bool submitStageDLSSViewportPreparationFailed{ false };
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryFrame{ 0 };
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryMethod{ static_cast<uint32_t>(UpscaleMethod::kNONE) };
 	std::atomic<uint32_t> vrFSRRelatchDrainGeneration{ 0 };

@@ -150,7 +150,7 @@ public:
 	uint64_t vrDLSSViewportUseCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
-	ID3D11Query* pendingVRDLSSSlotRecycleIdleFence = nullptr;
+	std::array<ID3D11Query*, kVRDLSSViewportRoleCount> pendingVRDLSSSlotRecycleIdleFences{};
 
 	struct ReflexOptionsCache
 	{
@@ -214,6 +214,12 @@ public:
 		Pending,
 		Failed
 	};
+	enum class DLSSViewportPreparationResult : uint8_t
+	{
+		Ready,
+		Pending,
+		Failed
+	};
 
 	// Helper: Execute DLSS for a single viewport with given resources
 	bool EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
@@ -237,6 +243,8 @@ public:
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
+	/** @brief Makes the bounded VR viewport slot for a DLSS profile safe to use without dispatching DLSS. */
+	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset);
 	bool ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport);
 	int FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset) const;
 	int ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportRole) const;

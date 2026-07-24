@@ -1281,64 +1281,113 @@ bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t 
 	return slotResourcesFreed;
 }
 
+Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset)
+{
+	if (!globals::game::isVR)
+		return DLSSViewportPreparationResult::Ready;
+
+	const uint32_t clampedQualityMode = std::min<uint32_t>(qualityMode, Upscaling::kQualityModeMaxIndex);
+	const uint32_t clampedPreset = Upscaling::ClampDLSSPresetUInt(dlssPreset);
+	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
+	// Full-eye and foveated-center caches advance independently. A cache hit
+	// in one role must never consume the fence that protects another role's
+	// LRU victim, or that other role will restart its drain indefinitely.
+	auto& pendingSlotRecycleIdleFence = pendingVRDLSSSlotRecycleIdleFences[roleIndex];
+
+	int slotIndex = FindVRDLSSViewportSlot(viewportRole, clampedQualityMode, clampedPreset);
+	if (slotIndex >= 0) {
+		// A latest-wins request can supersede a pending miss with a cache hit.
+		// Drain that abandoned fence without delaying the already-resident target.
+		if (pendingSlotRecycleIdleFence) {
+			if (auto context = globals::d3d::context) {
+				const auto idleFenceResult = BeginOrPollD3D11IdleFence(
+					context,
+					pendingSlotRecycleIdleFence,
+					"superseded VR DLSS viewport slot recycle");
+				if (idleFenceResult == D3D11IdleFenceResult::Failed)
+					return DLSSViewportPreparationResult::Failed;
+			} else {
+				ReleaseD3D11IdleFence(pendingSlotRecycleIdleFence);
+			}
+		}
+		return DLSSViewportPreparationResult::Ready;
+	}
+
+	slotIndex = ChooseVRDLSSViewportSlotForAllocation(viewportRole);
+	if (slotIndex < 0)
+		slotIndex = 0;
+
+	auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
+	if (slot.valid) {
+		if (auto context = globals::d3d::context) {
+			const auto idleFenceResult = BeginOrPollD3D11IdleFence(context, pendingSlotRecycleIdleFence, "VR DLSS viewport slot recycle");
+			if (idleFenceResult == D3D11IdleFenceResult::Pending) {
+				static bool loggedSlotRecyclePending = false;
+				if (!loggedSlotRecyclePending) {
+					logger::warn("[Streamline] Deferring VR DLSS viewport preparation because the previous slot is still in flight.");
+					loggedSlotRecyclePending = true;
+				}
+				nonVRDLSSOptionsCache.valid = false;
+				return DLSSViewportPreparationResult::Pending;
+			}
+			if (idleFenceResult == D3D11IdleFenceResult::Failed) {
+				static bool loggedSlotRecycleFenceFailure = false;
+				if (!loggedSlotRecycleFenceFailure) {
+					logger::warn("[Streamline] VR DLSS viewport preparation failed because the slot recycle fence could not be queried.");
+					loggedSlotRecycleFenceFailure = true;
+				}
+				nonVRDLSSOptionsCache.valid = false;
+				return DLSSViewportPreparationResult::Failed;
+			}
+		} else {
+			ReleaseD3D11IdleFence(pendingSlotRecycleIdleFence);
+		}
+		if (!FreeVRDLSSViewportSlot(viewportRole, static_cast<uint32_t>(slotIndex), true)) {
+			static bool loggedSlotRecycleFreeFailure = false;
+			if (!loggedSlotRecycleFreeFailure) {
+				logger::warn("[Streamline] VR DLSS viewport preparation failed because the previous slot resources could not be released.");
+				loggedSlotRecycleFreeFailure = true;
+			}
+			nonVRDLSSOptionsCache.valid = false;
+			return DLSSViewportPreparationResult::Failed;
+		}
+	}
+
+	slot.valid = true;
+	slot.qualityMode = clampedQualityMode;
+	slot.dlssPreset = clampedPreset;
+	slot.lastUse = 0;
+	slot.resourcesAllocated[0] = false;
+	slot.resourcesAllocated[1] = false;
+	for (auto& optionsCache : slot.optionsCache)
+		optionsCache = {};
+
+	const uint32_t viewportBase =
+		kVRDLSSSlotViewportBase +
+		(roleIndex * kVRDLSSSlotViewportRoleStride) +
+		(static_cast<uint32_t>(slotIndex) * kVRDLSSSlotViewportEyeStride);
+	slot.viewport[0] = sl::ViewportHandle(viewportBase);
+	slot.viewport[1] = sl::ViewportHandle(viewportBase + 1);
+	return DLSSViewportPreparationResult::Ready;
+}
+
 bool Streamline::ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport)
 {
 	outViewport = p_viewport;
 	if (!globals::game::isVR)
 		return true;
 
+	if (PrepareVRDLSSViewport(viewportRole, qualityMode, dlssPreset) != DLSSViewportPreparationResult::Ready)
+		return false;
+
 	const uint32_t eye = eyeIndex > 0 ? 1u : 0u;
 	const uint32_t clampedQualityMode = std::min<uint32_t>(qualityMode, Upscaling::kQualityModeMaxIndex);
 	const uint32_t clampedPreset = Upscaling::ClampDLSSPresetUInt(dlssPreset);
 	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
-
-	int slotIndex = FindVRDLSSViewportSlot(viewportRole, clampedQualityMode, clampedPreset);
+	const int slotIndex = FindVRDLSSViewportSlot(viewportRole, clampedQualityMode, clampedPreset);
 	if (slotIndex < 0) {
-		slotIndex = ChooseVRDLSSViewportSlotForAllocation(viewportRole);
-		if (slotIndex < 0)
-			slotIndex = 0;
-
-		auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
-		if (slot.valid) {
-			if (auto context = globals::d3d::context) {
-				if (BeginOrPollD3D11IdleFence(context, pendingVRDLSSSlotRecycleIdleFence, "VR DLSS viewport slot recycle") != D3D11IdleFenceResult::Ready) {
-					static bool loggedSlotRecycleTimeout = false;
-					if (!loggedSlotRecycleTimeout) {
-						logger::warn("[Streamline] Deferring VR DLSS evaluate because the viewport slot recycle did not become idle.");
-						loggedSlotRecycleTimeout = true;
-					}
-					nonVRDLSSOptionsCache.valid = false;
-					return false;
-				}
-			} else {
-				ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
-			}
-			if (!FreeVRDLSSViewportSlot(viewportRole, static_cast<uint32_t>(slotIndex), true)) {
-				static bool loggedSlotRecycleFreeFailure = false;
-				if (!loggedSlotRecycleFreeFailure) {
-					logger::warn("[Streamline] Deferring VR DLSS evaluate because the viewport slot recycle could not free the previous slot resources.");
-					loggedSlotRecycleFreeFailure = true;
-				}
-				nonVRDLSSOptionsCache.valid = false;
-				return false;
-			}
-		}
-
-		slot.valid = true;
-		slot.qualityMode = clampedQualityMode;
-		slot.dlssPreset = clampedPreset;
-		slot.lastUse = 0;
-		slot.resourcesAllocated[0] = false;
-		slot.resourcesAllocated[1] = false;
-		for (auto& optionsCache : slot.optionsCache)
-			optionsCache = {};
-
-		const uint32_t viewportBase =
-			kVRDLSSSlotViewportBase +
-			(roleIndex * kVRDLSSSlotViewportRoleStride) +
-			(static_cast<uint32_t>(slotIndex) * kVRDLSSSlotViewportEyeStride);
-		slot.viewport[0] = sl::ViewportHandle(viewportBase);
-		slot.viewport[1] = sl::ViewportHandle(viewportBase + 1);
+		nonVRDLSSOptionsCache.valid = false;
+		return false;
 	}
 
 	auto& activeSlot = vrDLSSViewportSlots[roleIndex][slotIndex];
@@ -1381,7 +1430,8 @@ void Streamline::InvalidateDLSSOptionsCache()
 void Streamline::ResetDLSSIdleFences()
 {
 	ReleaseD3D11IdleFence(pendingDLSSResourceFreeIdleFence);
-	ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
+	for (auto& pendingSlotRecycleIdleFence : pendingVRDLSSSlotRecycleIdleFences)
+		ReleaseD3D11IdleFence(pendingSlotRecycleIdleFence);
 }
 
 void Streamline::ResetFrameTracking()
@@ -1393,8 +1443,10 @@ void Streamline::ResetFrameTracking()
 
 bool Streamline::HasDLSSResourcesPendingTeardown() const
 {
-	if (pendingDLSSResourceFreeIdleFence || pendingVRDLSSSlotRecycleIdleFence)
+	if (pendingDLSSResourceFreeIdleFence ||
+		std::ranges::any_of(pendingVRDLSSSlotRecycleIdleFences, [](const auto* a_fence) { return a_fence != nullptr; })) {
 		return true;
+	}
 
 	// If DLSS is not active/available in this process, cached slot metadata
 	// should not trigger a teardown cooldown by itself.

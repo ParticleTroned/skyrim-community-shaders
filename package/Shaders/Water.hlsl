@@ -1088,16 +1088,36 @@ float GetUnifiedWaterDistanceDepthFade(float viewDistance)
 
 static const float ShoreConfirmationCullFadeRange = 2048.0;
 static const float ShoreFeatherDepthGradientEpsilon = 1e-8;
+static const float ShoreConfirmationMargin = 1.0;
+static const float ShoreGatherEdgeInset = 1e-2;
 
-int2 ClampUnifiedWaterDepthPixel(int2 pixelPosition, uint eyeIndex)
+int2 GetUnifiedWaterDepthRenderDimensions()
 {
-	float2 renderDimensions =
-		max(1.0.xx, round(SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy));
+	return max(
+		int2(1, 1),
+		int2(round(SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy)));
+}
+
+float2 ClampUnifiedWaterDepthGatherPosition(
+	float2 pixelPosition,
+	uint eyeIndex,
+	int2 renderDimensions)
+{
+	float2 minimumPosition = 0.5.xx;
+	float2 maximumPosition = max(
+		minimumPosition,
+		float2(renderDimensions) - float2(0.5 + ShoreGatherEdgeInset, 0.5 + ShoreGatherEdgeInset));
 #				if defined(VR)
-	return Stereo::ClampToEyeBounds(pixelPosition, eyeIndex, renderDimensions);
-#				else
-	return clamp(pixelPosition, 0, int2(renderDimensions) - 1);
+	int halfWidth = renderDimensions.x >> 1;
+	int eyeMinimum = eyeIndex == 0 ? 0 : halfWidth;
+	int eyeMaximum = eyeIndex == 0 ? halfWidth : renderDimensions.x;
+	minimumPosition.x = eyeMinimum + 0.5;
+	maximumPosition.x = max(
+		minimumPosition.x,
+		eyeMaximum - 0.5 - ShoreGatherEdgeInset);
 #				endif
+
+	return clamp(pixelPosition, minimumPosition, maximumPosition);
 }
 
 bool IsUnifiedWaterRawDepthValid(float rawDepth)
@@ -1106,10 +1126,13 @@ bool IsUnifiedWaterRawDepthValid(float rawDepth)
 	return isfinite(rawDepth) && rawDepth > 1e-5 && rawDepth < 1.0 - 1e-5;
 }
 
-bool TryGetUnifiedWaterRawDepth(int2 pixelPosition, out float rawDepth)
+float GetUnifiedWaterShoreSampleCoverage(float sceneDepth, float waterDepth)
 {
-	rawDepth = DepthTex.Load(int3(pixelPosition, 0)).x;
-	return IsUnifiedWaterRawDepthValid(rawDepth);
+	bool isConfirmedShore =
+		IsUnifiedWaterRawDepthValid(sceneDepth) &&
+		isfinite(waterDepth) &&
+		sceneDepth <= waterDepth;
+	return isConfirmedShore ? 1.0 : 0.0;
 }
 
 float GetUnifiedWaterShoreInteriorFactor(
@@ -1163,29 +1186,61 @@ float GetUnifiedWaterShoreInteriorFactor(
 			return analyticInteriorFactor;
 	}
 
-	// Confirm the predicted edge with one sample toward decreasing signed depth.
+	// Confirm the predicted edge just beyond its estimated crossing. A gather
+	// classifies the four contributing texels before interpolation, preserving
+	// foreground/background depth discontinuities while producing continuous
+	// subpixel coverage for diagonal and curved banks.
 	// Beyond the cull distance the analytic result above remains active, retaining
 	// a cheap transparent perimeter instead of reverting to a hard stabilized edge.
 	float2 confirmationDirection = -depthDeltaGradient / depthDeltaGradientLength;
-	int confirmationRadius = (int)ceil(featherWidth + 0.5);
-	int2 confirmationOffset = int2(round(confirmationDirection * confirmationRadius));
-	int2 centerPixel = ClampUnifiedWaterDepthPixel(int2(screenPosition), eyeIndex);
-	int2 confirmationPixel =
-		ClampUnifiedWaterDepthPixel(centerPixel + confirmationOffset, eyeIndex);
+	float confirmationDistance = min(
+		estimatedShoreDistance + ShoreConfirmationMargin,
+		featherWidth + 0.5);
+	int2 renderDimensions = GetUnifiedWaterDepthRenderDimensions();
+	int2 centerPixel = int2(screenPosition);
+	float2 confirmationPosition = ClampUnifiedWaterDepthGatherPosition(
+		float2(centerPixel) + 0.5 + confirmationDirection * confirmationDistance,
+		eyeIndex,
+		renderDimensions);
+	float2 textureDimensions = max(1.0.xx, SharedData::BufferDim.xy);
+	float4 confirmationSceneDepths =
+		DepthTex.GatherRed(DepthSampler, confirmationPosition / textureDimensions);
 
-	float confirmedInteriorFactor = 1.0;
-	[branch] if (any(confirmationPixel != centerPixel))
-	{
-		float confirmationSceneDepth;
-		if (TryGetUnifiedWaterRawDepth(confirmationPixel, confirmationSceneDepth)) {
-			float2 actualConfirmationOffset = float2(confirmationPixel - centerPixel);
-			float confirmationWaterDepth =
-				centerWaterDepth + dot(waterDepthGradient, actualConfirmationOffset);
-			float confirmationDepthDelta = confirmationSceneDepth - confirmationWaterDepth;
-			if (confirmationDepthDelta <= 0.0)
-				confirmedInteriorFactor = analyticInteriorFactor;
-		}
-	}
+	float2 gatherTexelPosition = confirmationPosition - 0.5;
+	int2 gatherBasePixel = int2(floor(gatherTexelPosition));
+	float2 gatherFraction = frac(gatherTexelPosition);
+	float2 inverseGatherFraction = 1.0 - gatherFraction;
+	// Gather order is lower-left, lower-right, upper-right, upper-left.
+	float4 gatherWeights = float4(
+		inverseGatherFraction.x * gatherFraction.y,
+		gatherFraction.x * gatherFraction.y,
+		gatherFraction.x * inverseGatherFraction.y,
+		inverseGatherFraction.x * inverseGatherFraction.y);
+
+	float2 gatherBaseOffset = float2(gatherBasePixel - centerPixel);
+	float gatherBaseWaterDepth =
+		centerWaterDepth + dot(waterDepthGradient, gatherBaseOffset);
+	float4 confirmationWaterDepths = gatherBaseWaterDepth + float4(
+																waterDepthGradient.y,
+																waterDepthGradient.x + waterDepthGradient.y,
+																waterDepthGradient.x,
+																0.0);
+	float4 confirmationCoverage = float4(
+		GetUnifiedWaterShoreSampleCoverage(
+			confirmationSceneDepths.x,
+			confirmationWaterDepths.x),
+		GetUnifiedWaterShoreSampleCoverage(
+			confirmationSceneDepths.y,
+			confirmationWaterDepths.y),
+		GetUnifiedWaterShoreSampleCoverage(
+			confirmationSceneDepths.z,
+			confirmationWaterDepths.z),
+		GetUnifiedWaterShoreSampleCoverage(
+			confirmationSceneDepths.w,
+			confirmationWaterDepths.w));
+	float shorelineCoverage = saturate(dot(confirmationCoverage, gatherWeights));
+	float confirmedInteriorFactor =
+		lerp(1.0, analyticInteriorFactor, shorelineCoverage);
 
 	return lerp(analyticInteriorFactor, confirmedInteriorFactor, confirmationWeight);
 }

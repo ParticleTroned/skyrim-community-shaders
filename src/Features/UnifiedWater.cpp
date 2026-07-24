@@ -475,14 +475,6 @@ void UnifiedWater::DrawSettings()
 	ImGui::Spacing();
 
 	if (ImGui::TreeNodeEx("Shallow Water Depth Stabilization", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Bypasses Community Shaders' distance-based depth stabilization and uses Open Shaders' unmodified\n"
-				"depth/refraction behaviour. Custom stabilization values are preserved and resume when disabled.");
-		}
-
-		ImGui::Spacing();
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
 
 		ImGui::SliderFloat(
@@ -552,6 +544,15 @@ void UnifiedWater::DrawSettings()
 	ImGui::Spacing();
 
 	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Bypasses Community Shaders' distance-based depth stabilization and uses Open Shaders' unmodified\n"
+				"depth/refraction behaviour. Custom stabilization values are preserved and resume when disabled.");
+		}
+
+		ImGui::Spacing();
+
 		if (ImGui::Button("Regenerate Flowmap") && flowmap) {
 			if (flowmap->RegenerateAndLoadFlowmap())
 				SetFlowmapTex();

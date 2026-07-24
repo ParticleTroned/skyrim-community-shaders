@@ -669,12 +669,30 @@ namespace
 		       GetVRUpscalingTransitionOriginPriority(a_current);
 	}
 
+	bool CanPostLoadSyncSupersedeStartupCSMenuRequest(
+		const Upscaling::VRRenderScaleDesiredProfile& a_currentRequest,
+		Upscaling::VRUpscalingTransitionOrigin a_nextOrigin)
+	{
+		// Settings loaded before the first destination world frame are represented
+		// as a CS-menu request, but they are startup configuration rather than
+		// interactive runtime intent. Once Stabilizer has proven the destination
+		// profile, let that profile own the loading handoff. Ordinary CS-menu and
+		// VRAPI requests retain their higher priority.
+		return a_nextOrigin == Upscaling::VRUpscalingTransitionOrigin::PostLoadSync &&
+		       a_currentRequest.pending &&
+		       a_currentRequest.origin == Upscaling::VRUpscalingTransitionOrigin::CSMenu &&
+		       a_currentRequest.startupCSMenuRequest;
+	}
+
 	bool ShouldAcceptVRUpscalingTransitionRequest(
 		const Upscaling& a_upscaling,
 		Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
 		const auto currentRequest = a_upscaling.GetPendingVRRenderScaleDesiredProfile();
 		if (!currentRequest.HasPendingSettings())
+			return true;
+
+		if (CanPostLoadSyncSupersedeStartupCSMenuRequest(currentRequest, a_origin))
 			return true;
 
 		return GetVRUpscalingTransitionOriginPriority(a_origin) >=
@@ -4505,6 +4523,17 @@ namespace
 
 		return a_state->pendingPostLoadRuntimeReset ||
 		       a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire);
+	}
+
+	bool IsVRRenderScaleStartupCSMenuRequest(
+		const State* a_state,
+		Upscaling::VRUpscalingTransitionOrigin a_origin)
+	{
+		return a_origin == Upscaling::VRUpscalingTransitionOrigin::CSMenu &&
+		       globals::game::isVR &&
+		       a_state &&
+		       (IsMainOrLoadingMenuContextActive() ||
+				   !HasCompletedVRWorldFrameAfterLatestLoad(a_state));
 	}
 
 	bool IsVRRenderScaleStartupCSMenuActivation(
@@ -16185,6 +16214,98 @@ bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
 		a_renderScaleModeEnabled,
 		a_qualityMode,
 		a_dlssPreset,
+		destination);
+}
+
+bool Upscaling::IsVRUpscalingTransitionProfileCurrentForAPI(
+	UpscaleMethod a_targetMethod,
+	bool a_renderScaleModeEnabled,
+	uint32_t a_qualityMode,
+	uint32_t a_dlssPreset) const
+{
+	if (!globals::game::isVR ||
+		!loaded ||
+		IsOpenCompositeUpscalingBlocked() ||
+		IsRenderDocUpscalingBlocked() ||
+		IsSubmitStageDeviceLost()) {
+		return false;
+	}
+
+	const uint32_t qualityMode = ClampQualityModeUInt(a_qualityMode);
+	const uint32_t dlssPreset = ClampDLSSPresetUInt(a_dlssPreset);
+	const bool renderScaleMode =
+		a_renderScaleModeEnabled &&
+		IsRenderScaleMethodEligible(a_targetMethod) &&
+		IsRenderScaleQualityMode(qualityMode);
+	if (a_renderScaleModeEnabled != renderScaleMode)
+		return false;
+
+	const VRUpscalingTransitionTarget target{
+		.method = a_targetMethod,
+		.qualityMode = qualityMode,
+		.dlssPreset = dlssPreset,
+		.renderScaleMode = renderScaleMode
+	};
+	const auto desired = GetPendingVRRenderScaleDesiredProfile();
+	if (desired.perfModeEnabled != target.renderScaleMode ||
+		!MatchesVRFpsStabilizerTransitionTarget(
+			desired.method,
+			desired.renderScaleModeEnabled,
+			desired.qualityMode,
+			desired.dlssPreset,
+			target)) {
+		return false;
+	}
+
+	const auto stabilizerOwnsCurrentLoad = [this]() {
+		if (!IsVRFpsStabilizerSyncActive())
+			return false;
+
+		return pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
+		       g_vrFpsStabilizerEarlySyncResolved.load(std::memory_order_acquire) ||
+		       HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(*this);
+	};
+	if (MatchesVRUpscalingPhysicalContract(
+			target.method,
+			target.renderScaleMode,
+			target.qualityMode,
+			target.dlssPreset,
+			false,
+			true)) {
+		const auto* state = globals::state;
+		const bool postLoadResetPending =
+			(state && state->pendingPostLoadRuntimeReset) ||
+			postLoadRuntimeResetPending.load(std::memory_order_acquire);
+		return !postLoadResetPending || stabilizerOwnsCurrentLoad();
+	}
+
+	// Before resources exist, an accepted settings request can still be a
+	// complete no-op for an external transition controller: LoadingMenu already
+	// owns presentation and CS will build this exact destination contract. Never
+	// extend that exception to an inferred or post-load destination.
+	if (!IsLoadingMenuPhysicallyOpen() ||
+		!stabilizerOwnsCurrentLoad()) {
+		return false;
+	}
+
+	const auto observedDestinationInterior =
+		GetObservedVRFpsStabilizerDestinationInterior();
+	if (!observedDestinationInterior.has_value())
+		return false;
+
+	const auto& profiles = GetVRFpsStabilizerSessionConfig();
+	const auto& destinationProfile =
+		*observedDestinationInterior ? profiles.interior : profiles.exterior;
+	if (!destinationProfile.HasAnySetting())
+		return false;
+
+	const auto destination =
+		ResolveVRFpsStabilizerTransitionTarget(*this, destinationProfile);
+	return MatchesVRFpsStabilizerTransitionTarget(
+		target.method,
+		target.renderScaleMode,
+		target.qualityMode,
+		target.dlssPreset,
 		destination);
 }
 
@@ -28538,6 +28659,9 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 	request.fsrSharpness = settings.sharpnessFSR;
 	request.queuedFrame = frame;
 	request.origin = a_origin;
+	request.startupCSMenuRequest = IsVRRenderScaleStartupCSMenuRequest(
+		globals::state,
+		a_origin);
 	request.startupCSMenuActivation = IsVRRenderScaleStartupCSMenuActivation(
 		*this,
 		globals::state,
@@ -28547,7 +28671,8 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 	{
 		std::scoped_lock lock(pendingVRRenderScaleRequestMutex);
 		if (pendingVRRenderScaleRequest &&
-			!ShouldStoreVRUpscalingTransitionOrigin(pendingVRRenderScaleRequest->origin, a_origin, true)) {
+			!ShouldStoreVRUpscalingTransitionOrigin(pendingVRRenderScaleRequest->origin, a_origin, true) &&
+			!CanPostLoadSyncSupersedeStartupCSMenuRequest(*pendingVRRenderScaleRequest, a_origin)) {
 			return 0;
 		}
 

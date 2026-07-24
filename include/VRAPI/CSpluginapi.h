@@ -12,7 +12,8 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 9;
+inline constexpr unsigned int CSBuildNumber = 10;
+static_assert(CSBuildNumber >= CSPluginAPI::CSBuildVRUpscalingTransitionProfileCurrent);
 
 namespace CSPluginAPI
 {
@@ -55,6 +56,11 @@ namespace CSPluginAPI
 
 		virtual uint32_t GetVRUpscalingApplyBlockReasons() override;
 		virtual bool IsVRUpscalingProfileApplyAllowed() override;
+		virtual bool IsVRUpscalingTransitionProfileCurrentForMethod(
+			UpscaleMethod method,
+			bool renderScaleModeEnabled,
+			UpscalePreset preset,
+			DLSSProfile profile) override;
 	};
 
 	namespace detail
@@ -224,6 +230,7 @@ namespace CSPluginAPI
 		if (revisionNumber != 0 &&
 		    revisionNumber != CSInterfaceRevision001 &&
 		    revisionNumber != CSInterfaceRevision002 &&
+		    revisionNumber != CSInterfaceRevision003 &&
 		    revisionNumber != CSInterfaceRevision) {
 			return nullptr;
 		}
@@ -484,5 +491,24 @@ namespace CSPluginAPI
 	inline bool CSInterface001::IsVRUpscalingProfileApplyAllowed()
 	{
 		return GetVRUpscalingApplyBlockReasons() == 0;
+	}
+
+	inline bool CSInterface001::IsVRUpscalingTransitionProfileCurrentForMethod(
+		UpscaleMethod method,
+		bool renderScaleModeEnabled,
+		UpscalePreset preset,
+		DLSSProfile profile)
+	{
+		if (!detail::IsValidUpscaleMethod(method) ||
+			!detail::IsValidUpscalePreset(preset) ||
+			!detail::IsValidDLSSProfile(profile)) {
+			return false;
+		}
+
+		return globals::features::upscaling.IsVRUpscalingTransitionProfileCurrentForAPI(
+			detail::ToInternalUpscaleMethod(method),
+			renderScaleModeEnabled,
+			detail::UpscalePresetToQualityMode(preset),
+			static_cast<uint32_t>(profile));
 	}
 }  // namespace CSPluginAPI

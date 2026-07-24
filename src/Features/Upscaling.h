@@ -328,6 +328,7 @@ public:
 		float fsrSharpness = 0.0f;
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		bool startupCSMenuRequest = false;
 		bool startupCSMenuActivation = false;
 
 		bool HasPendingSettings() const
@@ -1233,6 +1234,8 @@ public:
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
 	/** @return True when an atomic VRAPI profile is a valid stabilizer destination transition. */
 	bool IsVRFpsStabilizerAPITransitionProfileAllowed(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset) const;
+	/** @return True when an external controller can consume the exact target without applying or fading. */
+	bool IsVRUpscalingTransitionProfileCurrentForAPI(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset) const;
 	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, const PerfModeState::BootSnapshot* a_recoverySnapshot = nullptr);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);

@@ -13,7 +13,9 @@ namespace CSPluginAPI
 	inline constexpr unsigned int CSInterfaceRevision001 = 1;
 	inline constexpr unsigned int CSInterfaceRevision002 = 2;
 	inline constexpr unsigned int CSInterfaceRevision003 = 3;
-	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision003;
+	inline constexpr unsigned int CSInterfaceRevision004 = 4;
+	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision004;
+	inline constexpr unsigned int CSBuildVRUpscalingTransitionProfileCurrent = 10;
 	// Guidance for VR transition controllers that hide render-scale relatches
 	// behind a game fade. These constants are advisory only and do not change
 	// the ABI; Community Shaders does not drive Game.FadeOutGame itself.
@@ -135,6 +137,18 @@ namespace CSPluginAPI
 		// transition while the player remains in the same cell type.
 		virtual uint32_t GetVRUpscalingApplyBlockReasons() = 0;
 		virtual bool IsVRUpscalingProfileApplyAllowed() = 0;
+
+		// Revision 4. Query this before starting a controller-owned fade. True
+		// means the complete logical and physical target already matches, or CS
+		// has proven the same destination contract while LoadingMenu still owns
+		// presentation. The caller should consume the profile without starting a
+		// fade or submitting it again. False means the existing protected apply
+		// path is still required.
+		virtual bool IsVRUpscalingTransitionProfileCurrentForMethod(
+			UpscaleMethod method,
+			bool renderScaleModeEnabled,
+			UpscalePreset preset,
+			DLSSProfile profile) = 0;
 	};
 }  // namespace CSPluginAPI
 

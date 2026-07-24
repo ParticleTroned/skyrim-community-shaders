@@ -24,7 +24,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantDepthFadeNearStrength,
 	DistantDepthFadeFarStrength,
 	DistantDepthFadeStart,
-	DistantDepthFadeEnd)
+	DistantDepthFadeEnd,
+	ShoreFeatherWidth,
+	ShoreFeatherCullDistance)
 
 namespace
 {
@@ -38,6 +40,8 @@ namespace
 	constexpr float kDistantDepthFadeDistanceMin = 0.0f;
 	constexpr float kDistantDepthFadeDistanceMax = kWorldCellSize * 16.0f;
 	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
+	constexpr float kShoreFeatherWidthMin = 0.0f;
+	constexpr float kShoreFeatherWidthMax = 16.0f;
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
@@ -93,6 +97,17 @@ namespace
 
 		if (a_settings.DistantDepthFadeEnd < a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange)
 			a_settings.DistantDepthFadeEnd = a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange;
+
+		a_settings.ShoreFeatherWidth = ClampFiniteOrDefault(
+			a_settings.ShoreFeatherWidth,
+			kShoreFeatherWidthMin,
+			kShoreFeatherWidthMax,
+			defaults.ShoreFeatherWidth);
+		a_settings.ShoreFeatherCullDistance = ClampFiniteOrDefault(
+			a_settings.ShoreFeatherCullDistance,
+			kDistantDepthFadeDistanceMin,
+			kDistantDepthFadeDistanceMax,
+			defaults.ShoreFeatherCullDistance);
 	}
 
 	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
@@ -537,6 +552,35 @@ void UnifiedWater::DrawSettings()
 				"Start and end remain at least one unit apart.");
 		}
 
+		ImGui::Spacing();
+		ImGui::SeparatorText("Shoreline");
+
+		ImGui::SliderFloat(
+			"Shore Feather Width",
+			&settings.ShoreFeatherWidth,
+			kShoreFeatherWidthMin,
+			kShoreFeatherWidthMax,
+			"%.1f px",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Fades stabilization back to natural transparency only at detected shorelines.\n"
+				"Set to 0 to disable; water away from the shoreline is unchanged.");
+		}
+
+		ImGui::SliderFloat(
+			"Shore Feather Cull Distance",
+			&settings.ShoreFeatherCullDistance,
+			kDistantDepthFadeDistanceMin,
+			kDistantDepthFadeDistanceMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Stops shoreline feathering beyond this view distance to reduce GPU cost.\n"
+				"The effect fades over the preceding half-cell; set to 0 for no distance culling.");
+		}
+
 		ImGui::EndDisabled();
 		ImGui::TreePop();
 	}
@@ -578,6 +622,8 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.DistantDepthFadeEnd = sanitizedSettings.DistantDepthFadeEnd;
 	data.WaterTintColor = sanitizedSettings.WaterTintColor;
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
+	data.ShoreFeatherWidth = sanitizedSettings.ShoreFeatherWidth;
+	data.ShoreFeatherCullDistance = sanitizedSettings.ShoreFeatherCullDistance;
 	return data;
 }
 

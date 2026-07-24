@@ -117,13 +117,15 @@ namespace
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
 	static_assert(sizeof(TruePBRSettingsCB) == 16);
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 4);
-	static_assert(sizeof(UnifiedWaterSettingsCB) == 32);
+	static_assert(sizeof(UnifiedWaterSettingsCB) == 48);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeNearStrength) == 0);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeFarStrength) == 4);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeStart) == 8);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeEnd) == 12);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintColor) == 16);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintStrength) == 28);
+	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreFeatherWidth) == 32);
+	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreFeatherCullDistance) == 36);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);

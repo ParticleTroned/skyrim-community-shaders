@@ -1018,14 +1018,23 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	return ReflectionColor.xyz * VarAmounts.y;
 }
 
-float GetScreenDepthWater(float2 screenPosition, uint a_useVR = 0)
+float GetRawScreenDepthWater(float2 screenPosition)
 {
-	float depth = DepthTex.Load(float3(screenPosition, 0)).x;
+	return DepthTex.Load(float3(screenPosition, 0)).x;
+}
+
+float ResolveScreenDepthWater(float rawDepth)
+{
 #			if defined(VR)  // VR appears to use hard coded values
-	return depth * 1.01 + -0.01;
+	return rawDepth * 1.01 + -0.01;
 #			else
-	return (CameraDataWater.w / (-depth * CameraDataWater.z + CameraDataWater.x));
+	return CameraDataWater.w / (-rawDepth * CameraDataWater.z + CameraDataWater.x);
 #			endif
+}
+
+float GetScreenDepthWater(float2 screenPosition)
+{
+	return ResolveScreenDepthWater(GetRawScreenDepthWater(screenPosition));
 }
 
 float3 GetLdotN(float3 normal)
@@ -1077,9 +1086,118 @@ float GetUnifiedWaterDistanceDepthFade(float viewDistance)
 	return lerp(nearStrength, farStrength, smoothstep(fadeStart, fadeEnd, viewDistance));
 }
 
-float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float distanceDepthFade)
+static const float ShoreFeatherCullFadeRange = 2048.0;
+
+int2 ClampUnifiedWaterDepthPixel(int2 pixelPosition, uint eyeIndex)
 {
-	return lerp(depthMul, 1.0.xxxx, distanceDepthFade);
+	float2 renderDimensions =
+		max(1.0.xx, round(SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy));
+	return Stereo::ClampToEyeBounds(pixelPosition, eyeIndex, renderDimensions);
+}
+
+bool IsUnifiedWaterRawDepthValid(float rawDepth)
+{
+	// Cleared depth and the VR hidden-area mask are not shoreline evidence.
+	return isfinite(rawDepth) && rawDepth > 1e-5 && rawDepth < 1.0 - 1e-5;
+}
+
+bool TryGetUnifiedWaterRawDepth(int2 pixelPosition, out float rawDepth)
+{
+	rawDepth = DepthTex.Load(int3(pixelPosition, 0)).x;
+	return IsUnifiedWaterRawDepthValid(rawDepth);
+}
+
+float GetUnifiedWaterShoreInteriorFactor(
+	float2 screenPosition,
+	float centerSceneDepth,
+	float centerWaterDepth,
+	float2 waterDepthGradient,
+	float distanceDepthFade,
+	float viewDistance,
+	uint eyeIndex)
+{
+	float featherWidth = clamp(SharedData::unifiedWaterSettings.ShoreFeatherWidth, 0.0, 16.0);
+	float cullDistance = max(SharedData::unifiedWaterSettings.ShoreFeatherCullDistance, 0.0);
+	bool cullingEnabled = cullDistance > 0.0;
+	[branch] if (
+		featherWidth <= 0.0 ||
+		distanceDepthFade <= 0.0 ||
+		(cullingEnabled && viewDistance >= cullDistance) ||
+		!IsUnifiedWaterRawDepthValid(centerSceneDepth) ||
+		!isfinite(centerWaterDepth) ||
+		!all(isfinite(waterDepthGradient)))
+	{
+		return 1.0;
+	}
+
+	int2 centerPixel = ClampUnifiedWaterDepthPixel(int2(screenPosition), eyeIndex);
+	// Positive deltas place the opaque scene behind the water surface. A sign
+	// change in the local neighbourhood therefore identifies the same boundary
+	// that makes the water surface visible against the bank.
+	float centerDepthDelta = centerSceneDepth - centerWaterDepth;
+	int sampleRadius = (int)ceil(featherWidth + 0.5);
+	static const int2 sampleDirections[4] = {
+		int2(1, 0),
+		int2(-1, 0),
+		int2(0, 1),
+		int2(0, -1)
+	};
+
+	float interiorFactor = 1.0;
+	[unroll] for (uint sampleIndex = 0; sampleIndex < 4; ++sampleIndex)
+	{
+		int2 samplePixel =
+			ClampUnifiedWaterDepthPixel(centerPixel + sampleDirections[sampleIndex] * sampleRadius, eyeIndex);
+		if (all(samplePixel == centerPixel))
+			continue;
+
+		float sampleSceneDepth;
+		if (!TryGetUnifiedWaterRawDepth(samplePixel, sampleSceneDepth))
+			continue;
+
+		float2 sampleOffset = float2(samplePixel - centerPixel);
+		float sampleWaterDepth = centerWaterDepth + dot(waterDepthGradient, sampleOffset);
+		float sampleDepthDelta = sampleSceneDepth - sampleWaterDepth;
+		bool crossesShoreline =
+			(centerDepthDelta > 0.0 && sampleDepthDelta <= 0.0) ||
+			(centerDepthDelta <= 0.0 && sampleDepthDelta > 0.0);
+		if (!crossesShoreline)
+			continue;
+
+		if (centerDepthDelta <= 0.0) {
+			interiorFactor = 0.0;
+			continue;
+		}
+
+		// Approximate the zero crossing along each cardinal sample and retain the
+		// nearest bank. Subtracting half a pixel accounts for the centre pixel's
+		// footprint, allowing the immediate water edge to reach the raw result.
+		float sampleDistance = length(sampleOffset);
+		float crossingDistance =
+			sampleDistance * centerDepthDelta /
+			max(centerDepthDelta - sampleDepthDelta, EPSILON_DIVISION);
+		float coveredInteriorDistance = max(crossingDistance - 0.5, 0.0);
+		interiorFactor = min(
+			interiorFactor,
+			smoothstep(0.0, featherWidth, coveredInteriorDistance));
+	}
+
+	float cullVisibility = 1.0;
+	[branch] if (cullingEnabled)
+	{
+		float cullFadeStart = max(cullDistance - ShoreFeatherCullFadeRange, 0.0);
+		cullVisibility = 1.0 - smoothstep(cullFadeStart, cullDistance, viewDistance);
+	}
+	return lerp(1.0, interiorFactor, cullVisibility);
+}
+
+float4 ApplyUnifiedWaterDistanceDepthFade(
+	float4 depthMul,
+	float distanceDepthFade,
+	float shoreInteriorFactor)
+{
+	float effectiveDepthFade = saturate(distanceDepthFade * shoreInteriorFactor);
+	return lerp(depthMul, 1.0.xxxx, effectiveDepthFade);
 }
 #			endif
 
@@ -1093,7 +1211,7 @@ struct DiffuseOutput
 	float skylightingDiffuse;
 };
 
-DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection, inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint eyeIndex, float3 viewPosition, float distanceDepthFade, float noise, float depth)
+DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection, inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint eyeIndex, float3 viewPosition, float distanceDepthFade, float shoreInteriorFactor, float noise, float depth)
 {
 #			if defined(REFRACTIONS)
 	float4 refractionNormal = mul(transpose(TextureProj[eyeIndex]), float4((VarAmounts.w * refractionsDepthFactor * normal.xy) + input.MPosition.xy, input.MPosition.z, 1));
@@ -1131,7 +1249,8 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 		distanceMul = saturate(refractionPlaneMul * float4(length(refractionDepthAdjustedViewDirection).xx, abs(refractionViewSurfaceAngle).xx) / FogParam.z);
 
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-		distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade);
+		distanceMul =
+			ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade, shoreInteriorFactor);
 #					endif
 
 #					if defined(VR)
@@ -1243,8 +1362,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (viewDistance - 8192) / (WaterParams.x - 8192)));
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
 	float distanceDepthFade = 0.0;
+	float shoreInteriorFactor = 1.0;
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 	distanceDepthFade = GetUnifiedWaterDistanceDepthFade(viewDistance);
+	float2 waterDepthGradient =
+		float2(ddx_coarse(input.HPosition.z), ddy_coarse(input.HPosition.z));
 #			endif
 
 	float distanceBlendFactor = distanceFactor;
@@ -1264,7 +1386,8 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 	distanceMul = 0;
 
-	depth = GetScreenDepthWater(screenPosition);
+	float rawSceneDepth = GetRawScreenDepthWater(screenPosition);
+	depth = ResolveScreenDepthWater(rawSceneDepth);
 	float2 depthOffset =
 		FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
 #					if !defined(VR)
@@ -1279,11 +1402,22 @@ PS_OUTPUT main(PS_INPUT input)
 	distanceMul = saturate(
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z);
+#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	shoreInteriorFactor = GetUnifiedWaterShoreInteriorFactor(
+		screenPosition,
+		rawSceneDepth,
+		input.HPosition.z,
+		waterDepthGradient,
+		distanceDepthFade,
+		viewDistance,
+		eyeIndex);
+#					endif
 #				endif
 #			endif
 
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade);
+	distanceMul =
+		ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade, shoreInteriorFactor);
 #			endif
 
 #			if defined(UNDERWATER)
@@ -1344,7 +1478,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.HPosition.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
 
 	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, depthControl.y, eyeIndex);
-	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, eyeIndex, viewPosition, distanceDepthFade, screenNoise, depth);
+	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, eyeIndex, viewPosition, distanceDepthFade, shoreInteriorFactor, screenNoise, depth);
 
 #				if defined(VOLUMETRIC_SHADOWS)
 	float surfaceShadow = 1.0;

@@ -262,7 +262,7 @@ public:
 		bool StabilizeRenderScaleDesktopMirror = false;           ///< Blit render-scale output back to the desktop mirror when direct copy is incompatible
 
 		// CS menu navigation settings
-		bool UseRuntimeDefaultMenuNavigation = true;  ///< Use runtime-based default navigation mode until the user selects a mode explicitly
+		bool UseRuntimeDefaultMenuNavigation = true;  ///< Use mouse navigation by default until the user selects a mode explicitly
 		bool EnableWandPointing = true;               ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
 
 		// Visual customization
@@ -647,7 +647,7 @@ public:
 	void DetectOpenVRInfo();
 	bool IsOpenVRCompatible() const;
 	bool IsOpenCompositeRuntime() const { return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite; }
-	bool CanUseWandPointing() const { return settings.UseRuntimeDefaultMenuNavigation ? !IsOpenCompositeRuntime() : settings.EnableWandPointing; }
+	bool CanUseWandPointing() const { return !settings.UseRuntimeDefaultMenuNavigation && settings.EnableWandPointing; }
 	void InitInSceneResources();
 	void EnsureInSceneOverlaySubmitCopyResources();
 	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV = nullptr);

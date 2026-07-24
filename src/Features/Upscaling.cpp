@@ -59,7 +59,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	dlssPreset,
 	renderScaleMode,
 	vrFpsStabilizerSync,
-	disableVRDynamicResolutionForceOn,
 	perfMode,
 	frameLimitMode,
 	frameGenerationMode,
@@ -3472,8 +3471,6 @@ namespace
 			settings.perfMode = 0;
 		}
 		settings.vrFpsStabilizerSync = settings.vrFpsStabilizerSync && REL::Module::IsVR();
-		settings.disableVRDynamicResolutionForceOn =
-			settings.disableVRDynamicResolutionForceOn && REL::Module::IsVR();
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
@@ -3492,7 +3489,6 @@ namespace
 	{
 		settings.renderScaleMode = 0;
 		settings.vrFpsStabilizerSync = false;
-		settings.disableVRDynamicResolutionForceOn = false;
 		settings.perfMode = 0;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
@@ -3512,7 +3508,6 @@ namespace
 	{
 		o_json.erase("renderScaleMode");
 		o_json.erase("vrFpsStabilizerSync");
-		o_json.erase("disableVRDynamicResolutionForceOn");
 		o_json.erase("perfMode");
 		o_json.erase("vrMenuBridgeDebugMode");
 		o_json.erase("foveatedVendorDispatch");
@@ -3549,7 +3544,7 @@ namespace
 		return SupportsFoveatedVendorDispatch(a_upscaleMethod) && settings.foveatedVendorDispatch;
 	}
 
-	bool ShouldUnlockDynamicResolutionForUpscaling(Upscaling::UpscaleMethod a_upscaleMethod, const float2& a_resolutionScale)
+	bool ShouldUseReducedResolutionForUpscaling(Upscaling::UpscaleMethod a_upscaleMethod, const float2& a_resolutionScale)
 	{
 		return IsVendorUpscalingMethod(a_upscaleMethod) &&
 		       (a_resolutionScale.x < kDynamicResolutionUpscalingScaleThreshold ||
@@ -3559,7 +3554,6 @@ namespace
 	enum class DynamicResolutionOverride : uint8_t
 	{
 		RestoreOriginal,
-		ForceEnabled,
 		ForceDisabled
 	};
 
@@ -3586,9 +3580,6 @@ namespace
 			if (overrideActive)
 				targetEnabled = originalEnabled;
 			break;
-		case DynamicResolutionOverride::ForceEnabled:
-			targetEnabled = true;
-			break;
 		case DynamicResolutionOverride::ForceDisabled:
 			targetEnabled = false;
 			break;
@@ -3605,63 +3596,21 @@ namespace
 		return changed;
 	}
 
-	void DisableAutoDynamicResolutionSetting()
+	template <class Fn>
+	void RunWithDynamicResolutionLocked(Fn&& a_fn)
 	{
-		if (!globals::game::isVR)
+		auto* graphicsState = globals::game::graphicsState;
+		if (!graphicsState) {
+			std::forward<Fn>(a_fn)();
 			return;
-
-		constexpr const char* settingNames[] = {
-			"bEnableAutoDynamicResolution:Display",
-			"bEnableAutoDynamicResolution"
-		};
-
-		bool found = false;
-		bool changed = false;
-		auto disableInCollection = [&](auto* a_collection, const char* a_collectionName) {
-			if (!a_collection)
-				return;
-
-			for (const auto* settingName : settingNames) {
-				auto* setting = a_collection->GetSetting(settingName);
-				if (!setting)
-					continue;
-
-				found = true;
-				if (setting->data.b) {
-					setting->data.b = false;
-					changed = true;
-					if (a_collection->WriteSetting(setting)) {
-						logger::info("[Upscaling] Disabled {} in {}.", settingName, a_collectionName);
-					} else {
-						logger::warn("[Upscaling] Disabled {} in memory, but failed to write {}.", settingName, a_collectionName);
-					}
-				}
-				return;
-			}
-		};
-
-		disableInCollection(globals::game::iniSettingCollection, "Skyrim.ini");
-		disableInCollection(globals::game::iniPrefSettingCollection, "SkyrimPrefs.ini");
-
-		for (const auto* settingName : settingNames) {
-			auto* setting = RE::GetINISetting(settingName);
-			if (!setting)
-				continue;
-
-			found = true;
-			if (setting->data.b) {
-				setting->data.b = false;
-				changed = true;
-				logger::info("[Upscaling] Disabled {} in runtime settings.", settingName);
-			}
-			break;
 		}
 
-		if (!found) {
-			logger::debug("[Upscaling] bEnableAutoDynamicResolution setting was not found.");
-		} else if (!changed) {
-			logger::debug("[Upscaling] bEnableAutoDynamicResolution was already disabled.");
-		}
+		auto& runtimeData = graphicsState->GetRuntimeData();
+		const auto previousLock = std::exchange(runtimeData.dynamicResolutionLock, 1);
+		auto restoreLock = ScopeExit([&]() {
+			runtimeData.dynamicResolutionLock = previousLock;
+		});
+		std::forward<Fn>(a_fn)();
 	}
 
 	bool IsVRRuntimeActive()
@@ -12785,31 +12734,6 @@ namespace
 		ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 	}
-
-	void DrawVRRuntimeDynamicResolutionTestToggle(Upscaling& a_upscaling)
-	{
-		if (!globals::game::isVR)
-			return;
-
-		if (ImGui::Checkbox(
-				"Disable RS-Off Dynamic Resolution Force-On (A/B)",
-				&a_upscaling.settings.disableVRDynamicResolutionForceOn)) {
-			logger::info(
-				"[Upscaling][A/B] RS-off Dynamic Resolution force-on suppression {}; applying on the next RS-off vendor state update.",
-				a_upscaling.settings.disableVRDynamicResolutionForceOn ? "enabled" : "disabled");
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("A/B test for the force-on behavior added before Render Scale.");
-			ImGui::TextUnformatted("Keeps CS's fixed DLSS/FSR ratios and lock handling unchanged for a clean A/B comparison.");
-			ImGui::TextUnformatted("Affects only below-native DLSS/FSR while Render Scale is disabled.");
-			ImGui::TextUnformatted("Does not change Render Scale, its targets, relatch, or submit-stage behavior.");
-			ImGui::TextUnformatted("Does not change bEnableAutoDynamicResolution, which remains disabled.");
-			ImGui::TextUnformatted("Applies through the normal render-state path; close the menu before comparing.");
-		}
-		ImGui::TextDisabled(
-			"Skyrim runtime Dynamic Resolution: %s",
-			Util::IsDynamicResolution() ? "Enabled" : "Disabled");
-	}
 }
 
 void Upscaling::DrawSettings()
@@ -13031,8 +12955,6 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
 			}
 		}
-
-		DrawVRRuntimeDynamicResolutionTestToggle(*this);
 
 		if (!openCompositeBlocksUpscaling && !renderScaleMethodEligible)
 			ImGui::TextDisabled("VR Render Scale Mode is available only with DLSS/FSR in VR.");
@@ -13634,8 +13556,6 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		}
 
 		if (a_advanced) {
-			DrawVRRuntimeDynamicResolutionTestToggle(*this);
-
 			SanitizeFoveatedSettings(settings);
 			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 			if (foveatedDispatchSupportedForMethod) {
@@ -14124,6 +14044,9 @@ struct BSOpenVR_GetRenderTargetSize
 			!ShouldBlockVRRenderScaleBootLatchForPendingWork(upscaling) &&
 			upscaling.ConsumePerfModeBootLatchCreate();
 		if (upscaling.TryGetPerfModeOpenVRRenderTargetSize(perfModeWidth, perfModeHeight, allowPerfModeBootLatchCreate)) {
+			// A reduced physical target must never inherit Skyrim's automatic
+			// controller. Acquire ownership before exposing the Render Scale size.
+			(void)SetDynamicResolutionOverrideForUpscaling(DynamicResolutionOverride::ForceDisabled);
 			*a_width = perfModeWidth;
 			*a_height = perfModeHeight;
 		}
@@ -14134,7 +14057,6 @@ struct BSOpenVR_GetRenderTargetSize
 void Upscaling::DataLoaded()
 {
 	VRRenderScaleDevBenchBridge::Install();
-	DisableAutoDynamicResolutionSetting();
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const auto blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
@@ -25617,21 +25539,13 @@ bool Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 	if (!IsVendorUpscalingMethod(upscaleMethod))
 		return false;
 
-	const bool shouldUnlockDynamicResolution = globals::game::isVR && ShouldUnlockDynamicResolutionForUpscaling(upscaleMethod, resolutionScale);
+	const bool shouldUseReducedResolution = globals::game::isVR && ShouldUseReducedResolutionForUpscaling(upscaleMethod, resolutionScale);
 
 	if (globals::game::isVR) {
-		// A/B only the pre-Render-Scale force-on behavior. Keep the fixed vendor
-		// ratios and lock state below unchanged, and never enter this branch while
-		// Render Scale owns the physical target contract.
-		DynamicResolutionOverride dynamicResolutionOverride = DynamicResolutionOverride::RestoreOriginal;
-		if (shouldUnlockDynamicResolution) {
-			dynamicResolutionOverride =
-				settings.disableVRDynamicResolutionForceOn ?
-					DynamicResolutionOverride::ForceDisabled :
-					DynamicResolutionOverride::ForceEnabled;
-		}
-		bool cameraDataDirty = SetDynamicResolutionOverrideForUpscaling(dynamicResolutionOverride);
-		if (shouldUnlockDynamicResolution) {
+		// CS owns the VR vendor-resolution contract in this branch. Keep Skyrim's
+		// automatic controller off so it cannot mutate the fixed ratios below.
+		bool cameraDataDirty = SetDynamicResolutionOverrideForUpscaling(DynamicResolutionOverride::ForceDisabled);
+		if (shouldUseReducedResolution) {
 			if (runtimeData.dynamicResolutionPreviousWidthRatio != runtimeData.dynamicResolutionWidthRatio ||
 				runtimeData.dynamicResolutionPreviousHeightRatio != runtimeData.dynamicResolutionHeightRatio ||
 				runtimeData.dynamicResolutionWidthRatio != resolutionScale.x ||
@@ -31842,16 +31756,14 @@ void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left
 
 void Upscaling::Main_RenderPrecipitation::thunk()
 {
-	auto& runtimeData = globals::game::graphicsState->GetRuntimeData();
-	runtimeData.dynamicResolutionLock = 1;
-	func();
-	runtimeData.dynamicResolutionLock = 0;
+	RunWithDynamicResolutionLocked([&]() {
+		func();
+	});
 }
 
 void Upscaling::BSFaceGenManager_UpdatePendingCustomizationTextures::thunk()
 {
-	auto& runtimeData = globals::game::graphicsState->GetRuntimeData();
-	runtimeData.dynamicResolutionLock = 1;
-	func();
-	runtimeData.dynamicResolutionLock = 0;
+	RunWithDynamicResolutionLocked([&]() {
+		func();
+	});
 }

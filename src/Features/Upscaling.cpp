@@ -59,6 +59,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	dlssPreset,
 	renderScaleMode,
 	vrFpsStabilizerSync,
+	disableVRDynamicResolutionForceOn,
 	perfMode,
 	frameLimitMode,
 	frameGenerationMode,
@@ -3471,6 +3472,8 @@ namespace
 			settings.perfMode = 0;
 		}
 		settings.vrFpsStabilizerSync = settings.vrFpsStabilizerSync && REL::Module::IsVR();
+		settings.disableVRDynamicResolutionForceOn =
+			settings.disableVRDynamicResolutionForceOn && REL::Module::IsVR();
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
@@ -3489,6 +3492,7 @@ namespace
 	{
 		settings.renderScaleMode = 0;
 		settings.vrFpsStabilizerSync = false;
+		settings.disableVRDynamicResolutionForceOn = false;
 		settings.perfMode = 0;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
@@ -3508,6 +3512,7 @@ namespace
 	{
 		o_json.erase("renderScaleMode");
 		o_json.erase("vrFpsStabilizerSync");
+		o_json.erase("disableVRDynamicResolutionForceOn");
 		o_json.erase("perfMode");
 		o_json.erase("vrMenuBridgeDebugMode");
 		o_json.erase("foveatedVendorDispatch");
@@ -3551,33 +3556,52 @@ namespace
 				   a_resolutionScale.y < kDynamicResolutionUpscalingScaleThreshold);
 	}
 
-	bool SetDynamicResolutionEnabledForUpscaling(bool a_enabled, bool a_forceDisabled = false)
+	enum class DynamicResolutionOverride : uint8_t
+	{
+		RestoreOriginal,
+		ForceEnabled,
+		ForceDisabled
+	};
+
+	// Own the runtime flag only while CS needs an explicit state. Reacquiring
+	// ownership snapshots the latest external value so RestoreOriginal never
+	// writes a process-startup value that has since gone stale.
+	bool SetDynamicResolutionOverrideForUpscaling(DynamicResolutionOverride a_override)
 	{
 		if (!globals::game::isVR)
 			return false;
 
-		static bool initialized = false;
 		static bool originalEnabled = false;
-		static bool changedByUpscaling = false;
+		static bool overrideActive = false;
 
 		const static auto address = REL::RelocationID{ 508794, 380760 }.address();
 		auto* enabled = reinterpret_cast<bool*>(address);
-		if (!initialized) {
+		const bool targetOverrideActive = a_override != DynamicResolutionOverride::RestoreOriginal;
+		if (targetOverrideActive && !overrideActive)
 			originalEnabled = *enabled;
-			initialized = true;
-		}
 
-		const bool targetEnabled = a_enabled ? true : (a_forceDisabled ? false : (changedByUpscaling ? originalEnabled : *enabled));
+		bool targetEnabled = *enabled;
+		switch (a_override) {
+		case DynamicResolutionOverride::RestoreOriginal:
+			if (overrideActive)
+				targetEnabled = originalEnabled;
+			break;
+		case DynamicResolutionOverride::ForceEnabled:
+			targetEnabled = true;
+			break;
+		case DynamicResolutionOverride::ForceDisabled:
+			targetEnabled = false;
+			break;
+		}
 		bool changed = false;
 		if (*enabled != targetEnabled) {
 			*enabled = targetEnabled;
 			changed = true;
 		}
 
-		const bool targetChangedByUpscaling = a_enabled || a_forceDisabled;
-		if (changedByUpscaling != targetChangedByUpscaling)
+		if (overrideActive != targetOverrideActive)
 			changed = true;
-		changedByUpscaling = targetChangedByUpscaling;
+		overrideActive = targetOverrideActive;
 		return changed;
 	}
 
@@ -12761,6 +12785,31 @@ namespace
 		ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 	}
+
+	void DrawVRRuntimeDynamicResolutionTestToggle(Upscaling& a_upscaling)
+	{
+		if (!globals::game::isVR)
+			return;
+
+		if (ImGui::Checkbox(
+				"Disable RS-Off Dynamic Resolution Force-On (A/B)",
+				&a_upscaling.settings.disableVRDynamicResolutionForceOn)) {
+			logger::info(
+				"[Upscaling][A/B] RS-off Dynamic Resolution force-on suppression {}; applying on the next RS-off vendor state update.",
+				a_upscaling.settings.disableVRDynamicResolutionForceOn ? "enabled" : "disabled");
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("A/B test for the force-on behavior added before Render Scale.");
+			ImGui::TextUnformatted("Keeps CS's fixed DLSS/FSR ratios and lock handling unchanged for a clean A/B comparison.");
+			ImGui::TextUnformatted("Affects only below-native DLSS/FSR while Render Scale is disabled.");
+			ImGui::TextUnformatted("Does not change Render Scale, its targets, relatch, or submit-stage behavior.");
+			ImGui::TextUnformatted("Does not change bEnableAutoDynamicResolution, which remains disabled.");
+			ImGui::TextUnformatted("Applies through the normal render-state path; close the menu before comparing.");
+		}
+		ImGui::TextDisabled(
+			"Skyrim runtime Dynamic Resolution: %s",
+			Util::IsDynamicResolution() ? "Enabled" : "Disabled");
+	}
 }
 
 void Upscaling::DrawSettings()
@@ -12982,6 +13031,8 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
 			}
 		}
+
+		DrawVRRuntimeDynamicResolutionTestToggle(*this);
 
 		if (!openCompositeBlocksUpscaling && !renderScaleMethodEligible)
 			ImGui::TextDisabled("VR Render Scale Mode is available only with DLSS/FSR in VR.");
@@ -13583,6 +13634,8 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		}
 
 		if (a_advanced) {
+			DrawVRRuntimeDynamicResolutionTestToggle(*this);
+
 			SanitizeFoveatedSettings(settings);
 			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 			if (foveatedDispatchSupportedForMethod) {
@@ -25481,9 +25534,11 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto& runtimeData = a_viewport->GetRuntimeData();
 
 	if (!vendorUpscalingMethod) {
+		bool cameraDataDirty =
+			globals::game::isVR &&
+			SetDynamicResolutionOverrideForUpscaling(DynamicResolutionOverride::RestoreOriginal);
 		if (dynamicResolutionWidthRatio != 1.0f || dynamicResolutionHeightRatio != 1.0f) {
 			if (globals::game::isVR) {
-				SetDynamicResolutionEnabledForUpscaling(false);
 				runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
 				runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
 				runtimeData.dynamicResolutionWidthRatio = 1.0f;
@@ -25498,8 +25553,10 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			}
 			dynamicResolutionWidthRatio = runtimeData.dynamicResolutionWidthRatio;
 			dynamicResolutionHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-			UpdateCameraData();
+			cameraDataDirty = true;
 		}
+		if (cameraDataDirty)
+			UpdateCameraData();
 		EnsureResourcesCurrent(upscaleMethod);
 		return;
 	}
@@ -25520,7 +25577,9 @@ bool Upscaling::ApplyLockedFullResolutionDynamicResolutionState(RE::BSGraphics::
 		return false;
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
-	bool cameraDataDirty = globals::game::isVR && SetDynamicResolutionEnabledForUpscaling(false);
+	bool cameraDataDirty =
+		globals::game::isVR &&
+		SetDynamicResolutionOverrideForUpscaling(DynamicResolutionOverride::ForceDisabled);
 	if (runtimeData.dynamicResolutionPreviousWidthRatio != 1.0f ||
 		runtimeData.dynamicResolutionPreviousHeightRatio != 1.0f ||
 		runtimeData.dynamicResolutionWidthRatio != 1.0f ||
@@ -25561,7 +25620,17 @@ bool Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 	const bool shouldUnlockDynamicResolution = globals::game::isVR && ShouldUnlockDynamicResolutionForUpscaling(upscaleMethod, resolutionScale);
 
 	if (globals::game::isVR) {
-		bool cameraDataDirty = SetDynamicResolutionEnabledForUpscaling(shouldUnlockDynamicResolution);
+		// A/B only the pre-Render-Scale force-on behavior. Keep the fixed vendor
+		// ratios and lock state below unchanged, and never enter this branch while
+		// Render Scale owns the physical target contract.
+		DynamicResolutionOverride dynamicResolutionOverride = DynamicResolutionOverride::RestoreOriginal;
+		if (shouldUnlockDynamicResolution) {
+			dynamicResolutionOverride =
+				settings.disableVRDynamicResolutionForceOn ?
+					DynamicResolutionOverride::ForceDisabled :
+					DynamicResolutionOverride::ForceEnabled;
+		}
+		bool cameraDataDirty = SetDynamicResolutionOverrideForUpscaling(dynamicResolutionOverride);
 		if (shouldUnlockDynamicResolution) {
 			if (runtimeData.dynamicResolutionPreviousWidthRatio != runtimeData.dynamicResolutionWidthRatio ||
 				runtimeData.dynamicResolutionPreviousHeightRatio != runtimeData.dynamicResolutionHeightRatio ||

@@ -167,6 +167,7 @@ public:
 		uint dlssPreset = kDLSSPresetK;  // Settings ids: J, K, L, M, F, E (default K)
 		uint renderScaleMode = 1;
 		bool vrFpsStabilizerSync = false;
+		bool disableVRDynamicResolutionForceOn = false;  // A/B only: suppress the legacy RS-off runtime force-on.
 		uint perfMode = 1;
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 0;  // Disabled by default

@@ -1122,7 +1122,7 @@ float GetUnifiedWaterShoreInteriorFactor(
 	float viewDistance,
 	uint eyeIndex)
 {
-	float featherWidth = clamp(SharedData::unifiedWaterSettings.ShoreFeatherWidth, 0.0, 16.0);
+	float featherWidth = clamp(SharedData::unifiedWaterSettings.ShoreFeatherWidth, 0.0, 64.0);
 	float cullDistance = max(SharedData::unifiedWaterSettings.ShoreConfirmationCullDistance, 0.0);
 	bool cullingEnabled = cullDistance > 0.0;
 	[branch] if (

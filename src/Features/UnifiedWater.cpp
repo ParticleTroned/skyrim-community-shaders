@@ -41,7 +41,7 @@ namespace
 	constexpr float kDistantDepthFadeDistanceMax = kWorldCellSize * 16.0f;
 	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
 	constexpr float kShoreFeatherWidthMin = 0.0f;
-	constexpr float kShoreFeatherWidthMax = 16.0f;
+	constexpr float kShoreFeatherWidthMax = 64.0f;
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{

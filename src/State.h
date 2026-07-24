@@ -117,9 +117,13 @@ public:
 	void ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
 	void UpdateSaveLoadSafeMode();
 
-	// In-memory serialization for A/B testing (avoids disk I/O during swaps)
-	void SaveToJson(nlohmann::json& o_json);
-	void LoadFromJson(nlohmann::json& i_json);
+	// In-memory serialization used by A/B testing and config persistence.
+	// Overlay configs pass false so an absent disabled feature continues to inherit
+	// its SettingsDefault section.
+	void SaveToJson(
+		nlohmann::json& o_json,
+		bool a_includeMissingUnloadedFeatures = true);
+	void LoadFromJson(nlohmann::json& i_json, bool a_loadFeatureSettings = true);
 
 	void LoadTheme();
 	void SaveTheme();

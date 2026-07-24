@@ -7,6 +7,7 @@
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -203,6 +204,13 @@ namespace Util
 	 */
 	namespace FileHelpers
 	{
+		enum class JsonFileReadResult
+		{
+			Success,
+			NotFound,
+			Error
+		};
+
 		/**
 		 * Result of a file deletion operation
 		 */
@@ -226,6 +234,30 @@ namespace Util
 		 * @param path The directory path to ensure exists
 		 */
 		void EnsureDirectoryExists(const std::filesystem::path& path);
+
+		/**
+		 * Reads a JSON file without modifying the output unless parsing succeeds.
+		 * @param path The JSON file to read
+		 * @param json The parsed JSON value
+		 * @param errorMessage Details when the read fails
+		 * @return Whether the file was read, missing, or invalid/unreadable
+		 */
+		JsonFileReadResult ReadJsonFile(
+			const std::filesystem::path& path,
+			nlohmann::json& json,
+			std::string& errorMessage);
+
+		/**
+		 * Writes text to a sibling staging file and atomically replaces the destination.
+		 * @param path The file to write
+		 * @param contents The complete file contents
+		 * @param errorMessage Details when the write fails
+		 * @return True when the destination was replaced successfully
+		 */
+		bool WriteTextFileAtomic(
+			const std::filesystem::path& path,
+			std::string_view contents,
+			std::string& errorMessage);
 
 		/**
 		 * Replaces Windows-invalid filename characters with underscore.

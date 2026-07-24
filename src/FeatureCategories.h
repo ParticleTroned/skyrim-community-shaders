@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <string_view>
 
 namespace FeatureCategories
@@ -10,7 +11,22 @@ namespace FeatureCategories
 	inline constexpr std::string_view kLighting = "Lighting";
 	inline constexpr std::string_view kMaterials = "Materials";
 	inline constexpr std::string_view kOther = "Other";
+	inline constexpr std::string_view kPostProcessing = "Post-Processing";
 	inline constexpr std::string_view kSky = "Sky";
 	inline constexpr std::string_view kUtility = "Utility";
 	inline constexpr std::string_view kWater = "Water";
+
+	inline constexpr std::array kMenuOrder{
+		kDisplay,
+		kUtility,
+		kCharacters,
+		kGrass,
+		kLighting,
+		kMaterials,
+		kPostProcessing,
+		kSky,
+		kLandscapeAndTextures,
+		kWater,
+		kOther
+	};
 }

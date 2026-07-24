@@ -1,5 +1,6 @@
 #include "FileSystem.h"
 #include <Windows.h>
+#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -232,6 +233,96 @@ namespace Util
 			if (ec) {
 				logger::warn("Failed to create directory '{}': {}", path.string(), ec.message());
 			}
+		}
+
+		JsonFileReadResult ReadJsonFile(
+			const std::filesystem::path& path,
+			nlohmann::json& json,
+			std::string& errorMessage)
+		{
+			errorMessage.clear();
+
+			std::ifstream input(path, std::ios::binary);
+			if (!input.is_open()) {
+				std::error_code existsError;
+				const bool exists = std::filesystem::exists(path, existsError);
+				if (!existsError && !exists)
+					return JsonFileReadResult::NotFound;
+
+				errorMessage = existsError ?
+				                   std::format("Could not inspect the file: {}", existsError.message()) :
+				                   "Could not open the file for reading";
+				return JsonFileReadResult::Error;
+			}
+
+			try {
+				nlohmann::json parsed;
+				input >> parsed;
+				if (input.bad()) {
+					errorMessage = "An I/O error occurred while reading the file";
+					return JsonFileReadResult::Error;
+				}
+
+				json = std::move(parsed);
+				return JsonFileReadResult::Success;
+			} catch (const std::exception& e) {
+				errorMessage = e.what();
+				return JsonFileReadResult::Error;
+			}
+		}
+
+		bool WriteTextFileAtomic(
+			const std::filesystem::path& path,
+			std::string_view contents,
+			std::string& errorMessage)
+		{
+			errorMessage.clear();
+
+			std::error_code directoryError;
+			if (!path.parent_path().empty())
+				std::filesystem::create_directories(path.parent_path(), directoryError);
+			if (directoryError) {
+				errorMessage = std::format("Could not create the settings directory: {}", directoryError.message());
+				return false;
+			}
+
+			static std::atomic_uint64_t nextStagingFileID{ 0 };
+			auto stagingPath = path;
+			stagingPath += std::format(
+				L".community-shaders.{}.{}.tmp",
+				GetCurrentProcessId(),
+				nextStagingFileID.fetch_add(1, std::memory_order_relaxed));
+
+			{
+				std::ofstream output(stagingPath, std::ios::binary | std::ios::trunc);
+				if (!output.is_open()) {
+					errorMessage = std::format("Could not open the staging file {}", stagingPath.string());
+					return false;
+				}
+
+				output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+				output.flush();
+				output.close();
+				if (!output) {
+					std::error_code cleanupError;
+					std::filesystem::remove(stagingPath, cleanupError);
+					errorMessage = std::format("Could not finish writing the staging file {}", stagingPath.string());
+					return false;
+				}
+			}
+
+			if (!MoveFileExW(
+					stagingPath.c_str(),
+					path.c_str(),
+					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+				const auto windowsError = GetLastError();
+				std::error_code cleanupError;
+				std::filesystem::remove(stagingPath, cleanupError);
+				errorMessage = std::format("Could not replace the destination (Windows error {})", windowsError);
+				return false;
+			}
+
+			return true;
 		}
 
 		std::string SanitizeFileName(std::string name)

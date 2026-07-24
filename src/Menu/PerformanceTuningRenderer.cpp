@@ -4,8 +4,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <initializer_list>
@@ -21,6 +19,7 @@
 #include "Menu.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Profiler.h"
+#include "SettingsSerialization.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
@@ -612,45 +611,34 @@ namespace
 		settings = json::object();
 
 		const auto path = Util::PathHelpers::GetSettingsUserPath();
-		std::ifstream input(path);
-		if (!input.is_open())
+		std::string errorMessage;
+		const auto result = Util::FileHelpers::ReadJsonFile(path, settings, errorMessage);
+		if (result == Util::FileHelpers::JsonFileReadResult::NotFound)
 			return true;
-
-		try {
-			input >> settings;
-			if (!settings.is_object())
-				settings = json::object();
-			return true;
-		} catch (const std::exception& e) {
-			logger::warn("Failed to read performance tuning user defaults from {}: {}", path.string(), e.what());
+		if (result == Util::FileHelpers::JsonFileReadResult::Error) {
+			logger::warn("Failed to read performance tuning user defaults from {}: {}", path.string(), errorMessage);
 			settings = json::object();
 			return false;
 		}
+		if (!settings.is_object()) {
+			logger::warn("Performance tuning user defaults must contain a JSON object: {}", path.string());
+			settings = json::object();
+			return false;
+		}
+
+		return true;
 	}
 
 	bool WriteUserSettingsJson(const json& settings)
 	{
 		const auto path = Util::PathHelpers::GetSettingsUserPath();
-		try {
-			std::filesystem::create_directories(path.parent_path());
-		} catch (const std::exception& e) {
-			logger::warn("Failed to create settings directory for {}: {}", path.string(), e.what());
+		std::string errorMessage;
+		if (!SettingsSerialization::WriteFileAtomic(path, settings, errorMessage)) {
+			logger::warn("Failed to write performance tuning user defaults to {}: {}", path.string(), errorMessage);
 			return false;
 		}
 
-		std::ofstream output(path);
-		if (!output.is_open()) {
-			logger::warn("Failed to open {} for performance tuning user defaults", path.string());
-			return false;
-		}
-
-		try {
-			output << settings.dump(1);
-			return true;
-		} catch (const std::exception& e) {
-			logger::warn("Failed to write performance tuning user defaults to {}: {}", path.string(), e.what());
-			return false;
-		}
+		return true;
 	}
 
 	bool MergeJsonByMask(json& target, const json& source, const json& mask)
@@ -1198,11 +1186,11 @@ namespace
 				state.currentSample = {};
 				state.phase = FeatureCostMeasurementPhase::SettlingCurrent;
 			} else if (state.phase == FeatureCostMeasurementPhase::MeasuringTest ||
-			           state.phase == FeatureCostMeasurementPhase::SettlingTest) {
+					   state.phase == FeatureCostMeasurementPhase::SettlingTest) {
 				state.testSample = {};
 				state.phase = FeatureCostMeasurementPhase::SettlingTest;
 			} else if (state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent ||
-			           state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent) {
+					   state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent) {
 				state.restoredCurrentSample = {};
 				state.phase = FeatureCostMeasurementPhase::SettlingRestoredCurrent;
 			}
@@ -1557,8 +1545,8 @@ namespace
 
 			const FeatureCostSample& activeSample =
 				state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ? state.currentSample :
-				state.phase == FeatureCostMeasurementPhase::MeasuringTest ? state.testSample :
-				                                                               state.restoredCurrentSample;
+				state.phase == FeatureCostMeasurementPhase::MeasuringTest    ? state.testSample :
+																			   state.restoredCurrentSample;
 			const double elapsed = std::clamp(
 				activeSample.sampledDurationMs / 1000.0,
 				0.0,
@@ -2000,7 +1988,7 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 			state.phase = FeatureCostMeasurementPhase::AwaitingContinue;
 			state.menuCloseTick = now;
 		} else if (state.phase == FeatureCostMeasurementPhase::AwaitingContinue ||
-		           state.phase == FeatureCostMeasurementPhase::AwaitingRestoreContinue) {
+				   state.phase == FeatureCostMeasurementPhase::AwaitingRestoreContinue) {
 			state.menuCloseTick = now;
 		} else if (state.phase == FeatureCostMeasurementPhase::AwaitingRestoreMenuClose) {
 			auto* feature = FindFeatureByShortName(shortName);

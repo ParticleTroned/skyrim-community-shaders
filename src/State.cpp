@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <RE/B/BGSSaveLoadGame.h>
 #include <pystring/pystring.h>
@@ -42,6 +43,7 @@
 #include "Profiler.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
+#include "SettingsSerialization.h"
 #include "ShaderCache.h"
 #include "TruePBR.h"
 #include "Utils/FileSystem.h"
@@ -56,6 +58,30 @@ static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
 namespace
 {
 	static constexpr std::array<std::string_view, 0> kForcedDisableAtBootFeatures{};
+
+	void SaveFeatureUserOverrides()
+	{
+		auto overrideManager = SettingsOverrideManager::GetSingleton();
+		for (auto* feature : Feature::GetFeatureList()) {
+			std::string featureName = "<unknown>";
+			try {
+				featureName = feature->GetShortName();
+				if (!feature->loaded || !overrideManager->HasFeatureOverrides(featureName))
+					continue;
+
+				json currentSettings;
+				feature->SaveSettings(currentSettings);
+
+				const auto overrideSettings =
+					overrideManager->GetMergedOverrideSettings(featureName, json::object());
+				overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings);
+			} catch (const std::exception& e) {
+				logger::warn("Failed to save user overrides for {}: {}", featureName, e.what());
+			} catch (...) {
+				logger::warn("Failed to save user overrides for {} due to an unknown error", featureName);
+			}
+		}
+	}
 
 	void StoreMax(std::atomic_uint32_t& a_target, uint32_t a_value)
 	{
@@ -707,91 +733,121 @@ void State::SetupRenderTargetResources()
 	globals::deferred->SetupResources();
 }
 
-static std::string GetConfigPath(State::ConfigMode a_configMode)
+static std::filesystem::path GetConfigPath(State::ConfigMode a_configMode)
 {
 	switch (a_configMode) {
 	case State::ConfigMode::USER:
-		return Util::PathHelpers::GetSettingsUserPath().string();
+		return Util::PathHelpers::GetSettingsUserPath();
 	case State::ConfigMode::TEST:
-		return Util::PathHelpers::GetSettingsTestPath().string();
+		return Util::PathHelpers::GetSettingsTestPath();
 	case State::ConfigMode::THEME:
-		return Util::PathHelpers::GetSettingsThemePath().string();
+		return Util::PathHelpers::GetSettingsThemePath();
 	case State::ConfigMode::DEFAULT:
 	default:
-		return Util::PathHelpers::GetSettingsDefaultPath().string();
+		return Util::PathHelpers::GetSettingsDefaultPath();
 	}
 }
 
 void State::Load(ConfigMode a_configMode, bool a_allowReload)
 {
-	json settings;
+	json settings = json::object();
 	bool errorDetected = false;
 
-	auto configFolderPath = std::filesystem::path(GetConfigPath(a_configMode)).parent_path().string();
-	auto defaultConfigFilePath = GetConfigPath(ConfigMode::DEFAULT);
-	auto userConfigFilePath = GetConfigPath(ConfigMode::USER);
+	const auto configPath = GetConfigPath(a_configMode);
+	const auto configFolderPath = configPath.parent_path();
+	const auto defaultConfigFilePath = GetConfigPath(ConfigMode::DEFAULT);
 
 	try {
 		std::filesystem::create_directories(configFolderPath);
 	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating directory during Load ({}) : {}\n", configFolderPath, e.what());
-		errorDetected = true;
+		logger::warn("Error creating directory during Load ({}): {}", configFolderPath.string(), e.what());
 	}
 
-	// Attempt to load the config file
-	auto tryLoadConfig = [&](const std::string& path) -> bool {
-		std::ifstream i(path);
-		logger::info("Attempting to open config file: {}", path);
-		if (!i.is_open()) {
-			logger::warn("Unable to open config file: {}", path);
-			return false;
+	auto tryLoadConfig = [](const std::filesystem::path& a_path, json& o_settings) {
+		logger::info("Attempting to open config file: {}", a_path.string());
+
+		std::string errorMessage;
+		const auto result = Util::FileHelpers::ReadJsonFile(a_path, o_settings, errorMessage);
+		if (result == Util::FileHelpers::JsonFileReadResult::Success && !o_settings.is_object()) {
+			logger::warn("Config file must contain a JSON object: {}", a_path.string());
+			return Util::FileHelpers::JsonFileReadResult::Error;
 		}
-		try {
-			i >> settings;
-			i.close();
-			return true;
-		} catch (const nlohmann::json::parse_error& e) {
-			logger::warn("Error parsing json config file ({}) : {}\n", path, e.what());
-			i.close();
-			return false;
-		}
+
+		if (result == Util::FileHelpers::JsonFileReadResult::Error)
+			logger::warn("Unable to read config file {}: {}", a_path.string(), errorMessage);
+		return result;
 	};
 
-	// LOADING ORDER: Default → User → Overrides → User Overrides (.user files)
+	auto canonicalizeConfig = [](const std::filesystem::path& a_path, const json& a_settings) {
+		std::string errorMessage;
+		const auto result = SettingsSerialization::CanonicalizeFile(a_path, a_settings, errorMessage);
+		if (result == SettingsSerialization::CanonicalizationResult::Rewritten) {
+			logger::info("Reordered settings to match the UI: {}", a_path.string());
+		} else if (result == SettingsSerialization::CanonicalizationResult::Error) {
+			logger::warn("Could not reorder settings file {}: {}", a_path.string(), errorMessage);
+		}
+		return result;
+	};
+
+	auto generateFallbackSettingsInMemory = [&]() {
+		settings = json::object();
+		std::fill(enabledClasses, enabledClasses + magic_enum::enum_integer(RE::BSShader::Type::Total) - 1, true);
+		try {
+			SaveToJson(settings, true);
+			return true;
+		} catch (const std::exception& e) {
+			logger::error("Could not generate fallback settings in memory: {}", e.what());
+		} catch (...) {
+			logger::error("Could not generate fallback settings in memory due to an unknown error");
+		}
+		return false;
+	};
+
+	// LOADING ORDER: Default -> User -> Overrides -> User Overrides (.user files)
 
 	// Step 1: Always start with default settings
-	logger::info("Loading default settings from: {}", defaultConfigFilePath);
-	if (!tryLoadConfig(defaultConfigFilePath)) {
-		logger::info("No default config ({}), generating new one", defaultConfigFilePath);
+	logger::info("Loading default settings from: {}", defaultConfigFilePath.string());
+	const auto defaultResult = tryLoadConfig(defaultConfigFilePath, settings);
+	bool loadedDefaultFromDisk = defaultResult == Util::FileHelpers::JsonFileReadResult::Success;
+	bool sourceConfigSafeForAutomaticSave = true;
+	if (defaultResult == Util::FileHelpers::JsonFileReadResult::NotFound) {
+		logger::info("No usable default config ({}), generating a new one", defaultConfigFilePath.string());
 		std::fill(enabledClasses, enabledClasses + magic_enum::enum_integer(RE::BSShader::Type::Total) - 1, true);
 		Save(ConfigMode::DEFAULT);
-		// Attempt to load the newly created config
-		if (!tryLoadConfig(defaultConfigFilePath)) {
-			logger::error("Error opening newly created default config file ({})\n", defaultConfigFilePath);
-			return;
+		loadedDefaultFromDisk =
+			tryLoadConfig(defaultConfigFilePath, settings) == Util::FileHelpers::JsonFileReadResult::Success;
+		if (!loadedDefaultFromDisk) {
+			sourceConfigSafeForAutomaticSave = false;
+			logger::warn("Could not persist default settings; continuing with an in-memory baseline");
+			if (!generateFallbackSettingsInMemory())
+				return;
 		}
+	} else if (defaultResult == Util::FileHelpers::JsonFileReadResult::Error) {
+		sourceConfigSafeForAutomaticSave = false;
+		logger::error("Default config is invalid or unreadable; preserving it and using an in-memory baseline: {}", defaultConfigFilePath.string());
+		if (!generateFallbackSettingsInMemory())
+			return;
+	}
+	if (loadedDefaultFromDisk) {
+		const auto result = canonicalizeConfig(defaultConfigFilePath, settings);
+		if (result == SettingsSerialization::CanonicalizationResult::Error)
+			sourceConfigSafeForAutomaticSave = false;
 	}
 
-	// Step 2: Apply user settings on top of defaults (user preferences)
+	// Step 2: Apply user settings on top of defaults.
 	if (a_configMode == ConfigMode::USER) {
 		json userSettings;
-		std::ifstream userFile(userConfigFilePath);
-		if (userFile.is_open()) {
-			try {
-				userFile >> userSettings;
-				userFile.close();
-
-				// Merge user settings on top of defaults
-				for (auto& [key, value] : userSettings.items()) {
-					settings[key] = value;
-				}
-				logger::info("Applied user settings from: {}", userConfigFilePath);
-			} catch (const nlohmann::json::parse_error& e) {
-				logger::warn("Error parsing user config file: {}", e.what());
-				userFile.close();
-			}
+		const auto userResult = tryLoadConfig(configPath, userSettings);
+		if (userResult == Util::FileHelpers::JsonFileReadResult::Success) {
+			if (canonicalizeConfig(configPath, userSettings) == SettingsSerialization::CanonicalizationResult::Error)
+				sourceConfigSafeForAutomaticSave = false;
+			for (const auto& [key, value] : userSettings.items())
+				settings[key] = value;
+			logger::info("Applied user settings from: {}", configPath.string());
+		} else if (userResult == Util::FileHelpers::JsonFileReadResult::NotFound) {
+			logger::info("No user config file found at: {}", configPath.string());
 		} else {
-			logger::info("No user config file found at: {}", userConfigFilePath);
+			sourceConfigSafeForAutomaticSave = false;
 		}
 	}
 
@@ -819,7 +875,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 	try {
 		// Load core settings (Menu, Advanced, General, Replace Original Shaders)
 		logger::info("Loading core settings");
-		LoadFromJson(settings);
+		LoadFromJson(settings, false);
 		// Ensure 'Disable at Boot' section exists in the JSON
 		if (!settings.contains("Disable at Boot") || !settings["Disable at Boot"].is_object()) {
 			// Initialize to an empty object if it doesn't exist
@@ -846,7 +902,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				if (!isDisabled) {
 					logger::info("Loading Feature: '{}'", featureName);
 
-					// Load base feature settings from merged config (default + user)
+					// Load base feature settings from the merged default and user config.
 					feature->Load(settings);
 					if (!feature->loaded) {
 						logger::info("Feature '{}' did not finish loading; skipping post-load initialization.", featureName);
@@ -895,28 +951,41 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		}
 
 		const auto currentVersion = std::string{ Plugin::VERSION_LABEL };
-		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != currentVersion) {
-			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], currentVersion);
-			Save(a_configMode);  // Use original config mode
+		const auto versionIt = settings.find("Version");
+		if (versionIt == settings.end() || !versionIt->is_string() || versionIt->get<std::string>() != currentVersion) {
+			const auto loadedVersion = versionIt != settings.end() && versionIt->is_string() ?
+			                               versionIt->get<std::string>() :
+			                               std::string{ "<missing or invalid>" };
+			if (sourceConfigSafeForAutomaticSave) {
+				logger::info("Found config for version {}; upgrading to {}", loadedVersion, currentVersion);
+				Save(a_configMode);  // Use original config mode
+			} else {
+				logger::warn(
+					"Found config for version {}, but skipped automatic upgrade to {} because one or more source configs are not safe to rewrite",
+					loadedVersion,
+					currentVersion);
+			}
 		}
 
 		FeatureIssues::ScanForOrphanedFeatureINIs();
 
 		logger::info("Loading Settings Complete");
 	} catch (const json::exception& e) {
-		logger::info("General JSON error accessing settings: {}; recreating config", e.what());
-		Save(a_configMode);
+		logger::warn("General JSON error accessing settings: {}; preserving the source config", e.what());
 		errorDetected = true;
 	} catch (const std::exception& e) {
-		logger::info("General error accessing settings: {}; recreating config", e.what());
-		Save(a_configMode);
+		logger::warn("General error accessing settings: {}; preserving the source config", e.what());
 		errorDetected = true;
 	}
-	if (errorDetected && a_allowReload)
-		Load(a_configMode, false);
+	if (errorDetected && a_allowReload && a_configMode != ConfigMode::DEFAULT) {
+		logger::warn("Loading default settings after the selected config failed");
+		Load(ConfigMode::DEFAULT, false);
+	}
 }
 
-void State::SaveToJson(nlohmann::json& settings)
+void State::SaveToJson(
+	nlohmann::json& settings,
+	bool a_includeMissingUnloadedFeatures)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 	const auto shaderCache = globals::shaderCache;
@@ -945,10 +1014,6 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	settings["General"] = general;
 
-	auto& upscaling = globals::features::upscaling;
-	auto& upscalingJson = settings[upscaling.GetShortName()];
-	upscaling.SaveSettings(upscalingJson);
-
 	json originalShaders;
 	ForEachShaderTypeWithIndex([&](auto type, int classIndex) {
 		originalShaders[magic_enum::enum_name(type)] = enabledClasses[classIndex];
@@ -967,27 +1032,18 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	settings["Version"] = std::string{ Plugin::VERSION_LABEL };
 
-	// Save feature settings and user overrides
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
+	// Save feature settings.
 	for (auto* feature : Feature::GetFeatureList()) {
-		feature->Save(settings);
-
-		// If feature has overrides, save user modifications to .user file
-		const std::string featureName = feature->GetShortName();
-		if (overrideManager->HasFeatureOverrides(featureName) && feature->loaded) {
-			json currentSettings;
-			feature->SaveSettings(currentSettings);
-
-			// Get the merged override settings (all overrides applied to empty base)
-			json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
-
-			// Save user override only if settings differ from override
-			overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings);
+		// Preserve the last valid settings for features which were disabled, missing,
+		// or incompatible and therefore never loaded into memory.
+		const std::string settingsName = feature->GetName();
+		if (feature->loaded || (a_includeMissingUnloadedFeatures && !settings.contains(settingsName))) {
+			feature->Save(settings);
 		}
 	}
 }
 
-void State::LoadFromJson(nlohmann::json& settings)
+void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 	const auto shaderCache = globals::shaderCache;
@@ -1051,41 +1107,58 @@ void State::LoadFromJson(nlohmann::json& settings)
 		});
 	}
 
-	// Load feature settings (only for already-loaded features)
-	for (auto* feature : Feature::GetFeatureList()) {
-		if (feature->loaded) {
-			feature->Load(settings);
+	if (a_loadFeatureSettings) {
+		// Load feature settings (only for already-loaded features).
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->loaded) {
+				feature->Load(settings);
+			}
 		}
 	}
 }
 
 void State::Save(ConfigMode a_configMode)
 {
-	std::string configPath = GetConfigPath(a_configMode);
-	std::ofstream o{ configPath };
+	const auto configPath = GetConfigPath(a_configMode);
+	json settings = json::object();
 
-	try {
-		std::filesystem::create_directories(Util::PathHelpers::GetCommunityShaderPath());
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating directory during Save ({}) : {}\n", Util::PathHelpers::GetCommunityShaderPath().string(), e.what());
+	// Seed every save with its existing JSON so settings belonging to an unavailable
+	// feature and unknown forward-compatible top-level sections survive, including in defaults.
+	std::string readError;
+	json existingSettings;
+	const auto readResult = Util::FileHelpers::ReadJsonFile(configPath, existingSettings, readError);
+	if (readResult == Util::FileHelpers::JsonFileReadResult::Success) {
+		if (existingSettings.is_object()) {
+			settings = std::move(existingSettings);
+		} else {
+			logger::warn("Refusing to overwrite config which is not a JSON object: {}", configPath.string());
+			return;
+		}
+	} else if (readResult == Util::FileHelpers::JsonFileReadResult::Error) {
+		logger::warn("Refusing to overwrite unreadable config {}: {}", configPath.string(), readError);
 		return;
 	}
 
-	// Check if the file opened successfully
-	if (!o.is_open()) {
-		logger::warn("Failed to open config file for saving: {}", configPath);
-		return;  // Exit early if file cannot be opened
-	}
-
-	json settings;
-	SaveToJson(settings);
-
 	try {
-		o << settings.dump(1);
-		logger::info("Saving settings to {}", configPath);
+		SaveToJson(settings, a_configMode == ConfigMode::DEFAULT);
 	} catch (const std::exception& e) {
-		logger::warn("Failed to write settings to file: {}. Error: {}", configPath, e.what());
+		logger::warn("Failed to collect settings for {}: {}", configPath.string(), e.what());
+		return;
+	} catch (...) {
+		logger::warn("Failed to collect settings for {} due to an unknown error", configPath.string());
+		return;
 	}
+
+	std::string writeError;
+	if (!SettingsSerialization::WriteFileAtomic(configPath, settings, writeError)) {
+		logger::warn("Failed to save settings to {}: {}", configPath.string(), writeError);
+		return;
+	}
+
+	if (a_configMode == ConfigMode::USER)
+		SaveFeatureUserOverrides();
+
+	logger::info("Saving settings to {}", configPath.string());
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)

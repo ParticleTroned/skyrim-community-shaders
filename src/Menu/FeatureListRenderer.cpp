@@ -8,6 +8,7 @@
 #include <format>
 #include <imgui.h>
 #include <ranges>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -518,10 +519,9 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		});
 	}
 
-	// Define category order
-	std::vector<std::string> categoryOrder = { "Display", "Utility", "Characters", "Grass", "Lighting", "Materials", "Post-Processing", "Sky", "Landscape & Textures", "Water", "Other" };
 	// Add categorized features to menu with collapsible headers
-	for (const std::string& category : categoryOrder) {
+	for (const auto categoryName : FeatureCategories::kMenuOrder) {
+		const std::string category(categoryName);
 		if (categorizedFeatures.find(category) != categorizedFeatures.end() && !categorizedFeatures[category].empty()) {
 			// Initialize expansion state if not exists
 			if (categoryExpansionStates.find(category) == categoryExpansionStates.end()) {
@@ -540,7 +540,10 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 
 	// Add any categories not in the predefined order
 	for (const auto& [category, features] : categorizedFeatures) {
-		if (std::find(categoryOrder.begin(), categoryOrder.end(), category) == categoryOrder.end() && !features.empty()) {
+		const bool isKnownCategory =
+			std::ranges::find(FeatureCategories::kMenuOrder, std::string_view{ category }) !=
+			FeatureCategories::kMenuOrder.end();
+		if (!isKnownCategory && !features.empty()) {
 			// Initialize expansion state if not exists
 			if (categoryExpansionStates.find(category) == categoryExpansionStates.end()) {
 				categoryExpansionStates[category] = true;  // Default to expanded

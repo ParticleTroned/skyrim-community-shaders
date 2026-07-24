@@ -76,12 +76,21 @@ jobs:
                   name: feature-version-audit
                   path: feature-version-audit-latest.md
 
+    shader-cache:
+        name: Build Prebuilt Shader Caches
+        if: github.event.action != 'published'
+        uses: ./.github/workflows/shader-cache.yaml
+        with:
+            target_ref: ${{ github.ref }}
+            runtime: both
+
     release:
         name: Post Release for Draft, Manual Run, or Tag
-        needs: [build, feature-audit]
+        needs: [build, feature-audit, shader-cache]
         if: >
             always() && !cancelled() &&
             needs.build.outputs.cpp-built == 'true' &&
+            needs.shader-cache.result == 'success' &&
             github.event.action != 'published' &&
             (github.event_name == 'workflow_dispatch' ||
              startsWith(github.ref, 'refs/tags/v') ||
@@ -105,6 +114,18 @@ jobs:
               uses: actions/download-artifact@v7
               with:
                   name: dist-artifacts
+                  path: dist/
+
+            - name: Download SE shader cache
+              uses: actions/download-artifact@v7
+              with:
+                  name: ShaderCache-SE
+                  path: dist/
+
+            - name: Download VR shader cache
+              uses: actions/download-artifact@v7
+              with:
+                  name: ShaderCache-VR
                   path: dist/
 
             - name: Download feature audit artifact

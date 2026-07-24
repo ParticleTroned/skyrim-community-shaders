@@ -3,6 +3,7 @@
 #include "Util.h"
 #include "Widget.h"
 #include <cctype>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <string>
@@ -430,6 +431,7 @@ namespace WeatherUtils
 	bool DrawSliderInt8(const std::string& label, int& property);
 	bool DrawColorEdit(const std::string& l, float3& property, Widget* widget = nullptr);
 	bool DrawSliderUint8(const std::string& label, int& property);
+	bool DrawSliderUint32(const std::string& label, std::uint32_t& property, std::uint32_t min, std::uint32_t max, Widget* widget = nullptr, const char* format = "%u");
 	bool DrawSliderFloat(const std::string& label, float& property, float min = 0.0f, float max = 1.0f, Widget* widget = nullptr, const char* format = "%.3f");
 	bool DrawCheckbox(const std::string& label, bool& value, Widget* widget = nullptr);
 

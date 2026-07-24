@@ -315,7 +315,38 @@ namespace WeatherUtils
 
 	// Static debounced trackers for undo and palette tracking
 	static DebouncedTracker<int> s_int8Tracker;
+	static DebouncedTracker<std::uint32_t> s_uint32Tracker;
 	static DebouncedTracker<float> s_floatTracker;
+
+	template <class T, class DrawFn>
+	bool DrawTrackedSlider(const std::string& label, T& property, Widget* widget, DebouncedTracker<T>& tracker, DrawFn draw)
+	{
+		const double debounceDelay = 2.0;
+		const double currentTime = ImGui::GetTime();
+
+		// Strip leading "##" so hidden-label sliders still match highlight/search ids.
+		const std::string hid = label.starts_with("##") ? label.substr(2) : label;
+		Widget* effectiveWidget = widget ? widget : g_currentWidget;
+		if (effectiveWidget && !effectiveWidget->MatchesSearch(hid))
+			return false;
+
+		const bool changed = DrawWithWidgetHighlight(effectiveWidget, hid, draw);
+		const bool isNowActive = ImGui::IsItemActive();
+		const std::string trackerKey = effectiveWidget ?
+		                                   std::format("{}{}{}", static_cast<const void*>(effectiveWidget), kScopeSep, hid) :
+		                                   hid;
+
+		if (tracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay) && effectiveWidget)
+			EditorWindow::GetSingleton()->PushUndoState(effectiveWidget);
+
+		if (changed)
+			tracker.OnValueChanged(trackerKey, property, currentTime);
+
+		for (const auto& [key, value] : tracker.GetCompletedEntries(currentTime, debounceDelay))
+			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), static_cast<float>(value));
+
+		return changed;
+	}
 
 	bool DrawSliderInt8(const std::string& label, int& property)
 	{
@@ -430,44 +461,18 @@ namespace WeatherUtils
 		return changed;
 	}
 
+	bool DrawSliderUint32(const std::string& label, std::uint32_t& property, std::uint32_t min, std::uint32_t max, Widget* widget, const char* format)
+	{
+		return DrawTrackedSlider(label, property, widget, s_uint32Tracker, [&]() {
+			return ImGui::SliderScalar(label.c_str(), ImGuiDataType_U32, &property, &min, &max, format);
+		});
+	}
+
 	bool DrawSliderFloat(const std::string& label, float& property, float min, float max, Widget* widget, const char* format)
 	{
-		const double debounceDelay = 2.0;
-		double currentTime = ImGui::GetTime();
-
-		// Strip leading "##" so hidden-label sliders still match highlight/search ids.
-		std::string hid = label.starts_with("##") ? label.substr(2) : label;
-		Widget* w = widget ? widget : g_currentWidget;
-		if (w && !w->MatchesSearch(hid))
-			return false;
-
-		bool changed = DrawWithWidgetHighlight(w, hid, [&]() {
+		return DrawTrackedSlider(label, property, widget, s_floatTracker, [&]() {
 			return ImGui::SliderFloat(label.c_str(), &property, min, max, format);
 		});
-		bool isNowActive = ImGui::IsItemActive();
-
-		const std::string trackerKey = w ?
-		                                   std::format("{}{}{}", static_cast<const void*>(w), kScopeSep, hid) :
-		                                   hid;
-
-		// Push undo state when slider becomes active
-		if (s_floatTracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay)) {
-			if (w) {
-				EditorWindow::GetSingleton()->PushUndoState(w);
-			}
-		}
-
-		if (changed) {
-			s_floatTracker.OnValueChanged(trackerKey, property, currentTime);
-		}
-
-		// Track completed values to palette (strip widget prefix from palette key)
-		auto completed = s_floatTracker.GetCompletedEntries(currentTime, debounceDelay);
-		for (const auto& [key, value] : completed) {
-			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), value);
-		}
-
-		return changed;
 	}
 
 	bool DrawCheckbox(const std::string& label, bool& value, Widget* widget)

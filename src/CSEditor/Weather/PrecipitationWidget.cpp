@@ -6,6 +6,10 @@
 #include "RE/N/NiSourceTexture.h"
 #include "Utils/Game.h"
 
+#include <cstdint>
+#include <cmath>
+#include <limits>
+
 namespace
 {
 	using PrecipitationData = RE::BGSShaderParticleGeometryData;
@@ -14,13 +18,7 @@ namespace
 
 	void SetSettingValue(PrecipitationData* precipitation, DataID id, SettingValue value)
 	{
-		const auto index = static_cast<uint32_t>(id);
-		if (REL::Module::IsVR()) {
-			precipitation->GetVRRuntimeData().data[index].value = value;
-			return;
-		}
-
-		precipitation->GetRuntimeData().data[index] = value;
+		precipitation->GetSettingRef(id) = value;
 	}
 
 	void SetSetting(PrecipitationData* precipitation, DataID id, float value)
@@ -35,6 +33,62 @@ namespace
 		SettingValue setting{};
 		setting.i = value;
 		SetSettingValue(precipitation, id, setting);
+	}
+
+	enum class BoxSizeDecodeResult
+	{
+		kInvalid,
+		kDecoded,
+		kMigratedLegacyValue
+	};
+
+	BoxSizeDecodeResult DecodeBoxSize(const json& storedValue, uint32_t& boxSize)
+	{
+		if (storedValue.is_number_unsigned()) {
+			const auto value = storedValue.get<std::uint64_t>();
+			if (value <= std::numeric_limits<uint32_t>::max()) {
+				boxSize = static_cast<uint32_t>(value);
+				return BoxSizeDecodeResult::kDecoded;
+			}
+			return BoxSizeDecodeResult::kInvalid;
+		}
+
+		if (storedValue.is_number_integer()) {
+			const auto value = storedValue.get<std::int64_t>();
+			if (value >= 0 && static_cast<std::uint64_t>(value) <= std::numeric_limits<uint32_t>::max()) {
+				boxSize = static_cast<uint32_t>(value);
+				return BoxSizeDecodeResult::kDecoded;
+			}
+			return BoxSizeDecodeResult::kInvalid;
+		}
+
+		if (!storedValue.is_number_float())
+			return BoxSizeDecodeResult::kInvalid;
+
+		const double value = storedValue.get<double>();
+		if (!std::isfinite(value) || value < 0.0 || value > static_cast<double>(std::numeric_limits<uint32_t>::max()))
+			return BoxSizeDecodeResult::kInvalid;
+
+		// A legacy floating-point zero is ambiguous: denormal flushing may have erased
+		// a valid raw integer value before it was serialized. Keep the game value instead.
+		if (value == 0.0)
+			return BoxSizeDecodeResult::kInvalid;
+
+		const double floatMinNormal = std::ldexp(1.0, -126);
+		if (value < floatMinNormal) {
+			// Older CS Editor builds read the integer DATA field through SETTING_VALUE::f.
+			// Saved overrides therefore contain the integer bits serialized as a tiny float.
+			const double floatSubnormalUnit = std::ldexp(1.0, -149);
+			const auto encodedValue = std::llround(value / floatSubnormalUnit);
+			if (encodedValue <= 0 || static_cast<std::uint64_t>(encodedValue) > std::numeric_limits<uint32_t>::max())
+				return BoxSizeDecodeResult::kInvalid;
+
+			boxSize = static_cast<uint32_t>(encodedValue);
+			return BoxSizeDecodeResult::kMigratedLegacyValue;
+		}
+
+		boxSize = static_cast<uint32_t>(std::llround(value));
+		return BoxSizeDecodeResult::kMigratedLegacyValue;
 	}
 
 	namespace PrecipitationTab
@@ -116,7 +170,7 @@ void PrecipitationWidget::DrawWidget()
 				}
 				if (MatchesAnySearch({ PrecipitationSetting::kBoxSize, PrecipitationSetting::kParticleDensity })) {
 					ImGui::SeparatorText("Volume");
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kBoxSize, settings.boxSize, 0.0f, 1000.0f);
+					changed |= WeatherUtils::DrawSliderUint32(PrecipitationSetting::kBoxSize, settings.boxSize, 0, 1000);
 					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kParticleDensity, settings.particleDensity, 0.0f, 1000.0f);
 				}
 				EndScrollableContent();
@@ -209,8 +263,17 @@ void PrecipitationWidget::LoadSettings()
 				settings.numSubtexturesY = js["numSubtexturesY"];
 			if (js.contains("particleType"))
 				settings.particleType = js["particleType"];
-			if (js.contains("boxSize"))
-				settings.boxSize = js["boxSize"];
+			if (js.contains("boxSize")) {
+				uint32_t boxSize = settings.boxSize;
+				const auto decodeResult = DecodeBoxSize(js["boxSize"], boxSize);
+				if (decodeResult != BoxSizeDecodeResult::kInvalid) {
+					settings.boxSize = boxSize;
+					if (decodeResult == BoxSizeDecodeResult::kMigratedLegacyValue)
+						logger::info("Precipitation {}: migrated legacy float-encoded boxSize to {}", GetEditorID(), boxSize);
+				} else {
+					logger::warn("Precipitation {}: invalid or ambiguous boxSize override, keeping game value {}", GetEditorID(), settings.boxSize);
+				}
+			}
 			if (js.contains("particleDensity"))
 				settings.particleDensity = js["particleDensity"];
 			if (js.contains("particleTexture")) {
@@ -255,7 +318,7 @@ void PrecipitationWidget::LoadFromGameSettings()
 	settings.numSubtexturesX = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kNumSubtexturesX).i;
 	settings.numSubtexturesY = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kNumSubtexturesY).i;
 	settings.particleType = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleType).i;
-	settings.boxSize = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kBoxSize).f;
+	settings.boxSize = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kBoxSize).i;
 	settings.particleDensity = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
 	GET_INSTANCE_MEMBER(particleTexture, precipitation)
 	settings.particleTexture = particleTexture.textureName.c_str();

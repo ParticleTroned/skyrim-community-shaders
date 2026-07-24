@@ -328,6 +328,7 @@ public:
 		float fsrSharpness = 0.0f;
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		bool startupCSMenuActivation = false;
 
 		bool HasPendingSettings() const
 		{
@@ -1582,6 +1583,10 @@ public:
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
+	// A CS-menu activation selected before the first destination world frame must
+	// not perform optional memory relief while its first vendor presentation is
+	// becoming visible. The marker survives safe-point retries for that epoch.
+	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateEpoch{ 0 };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateRecoveryEpoch{ 0 };

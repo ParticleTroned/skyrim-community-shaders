@@ -4097,6 +4097,19 @@ namespace
 		       a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire);
 	}
 
+	bool IsVRRenderScaleStartupCSMenuActivation(
+		const Upscaling& a_upscaling,
+		const State* a_state,
+		Upscaling::VRUpscalingTransitionOrigin a_origin,
+		bool a_activationTarget)
+	{
+		return a_origin == Upscaling::VRUpscalingTransitionOrigin::CSMenu &&
+		       UsesVRRenderScaleStartupActivationProtection(
+				   a_upscaling,
+				   a_state,
+				   a_activationTarget);
+	}
+
 	bool CanActivateVRRenderScaleRuntime(const Upscaling& a_upscaling)
 	{
 		if (!a_upscaling.loaded)
@@ -13945,6 +13958,7 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 		pendingPerfModeRenderTargetRecreateFrame.load(std::memory_order_acquire) != 0 ||
 		pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire) != 0 ||
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire) ||
+		pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch.load(std::memory_order_acquire) != 0 ||
 		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
 		pendingVRRenderScaleContractGeneration.load(std::memory_order_acquire) != 0 ||
 		perfMode.GetBootSnapshot().valid ||
@@ -13958,6 +13972,7 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
@@ -16701,6 +16716,11 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 
 	const uint32_t relatchDelayFrames = kVRUpscalingTransitionApplyDelayFrames;
 	const bool requirePostLoadSettle = UsesVRRenderScalePostLoadSettle(*this, configuredMethod, a_origin);
+	const bool startupCSMenuActivation = IsVRRenderScaleStartupCSMenuActivation(
+		*this,
+		globals::state,
+		a_origin,
+		perfMode.IsEligible(settings, configuredMethod));
 	const auto currentOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 	const bool wasPending = pendingPerfModeRenderTargetRecreate.exchange(true, std::memory_order_acq_rel);
 	const auto controllerSnapshot = GetVRRenderScaleTransitionSnapshot();
@@ -16728,6 +16748,11 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	}
 	if (ShouldStoreVRRenderScalePostLoadSettle(wasPending, currentOrigin, a_origin)) {
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(requirePostLoadSettle, std::memory_order_release);
+	}
+	if (!wasPending || storeRelatchOrigin) {
+		pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch.store(
+			startupCSMenuActivation ? relatchEpoch : 0,
+			std::memory_order_release);
 	}
 	const auto effectiveOrigin = storeRelatchOrigin ? a_origin : currentOrigin;
 	const bool rc94PostLoadDoorRequest =
@@ -16812,6 +16837,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
@@ -16943,6 +16969,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	const uint64_t postLoadRecoveryEpoch =
 		pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire);
 	const auto queuedRecoverySnapshot = pendingVRRenderScaleRecoverySnapshot;
+	const bool startupCSMenuRelatch =
+		pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch.load(std::memory_order_acquire) == relatchEpoch;
 	const bool rc94PostLoadDoorRelatch =
 		relatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync &&
 		IsCurrentVRFpsStabilizerDoorHandoff(*this, relatchEpoch);
@@ -16954,6 +16982,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
@@ -17313,6 +17342,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::Applying, "render-target and vendor resources");
 	SampleVRRenderScaleMemory(true, "before relatch");
 	bool completedLowPeakNativeRestore = false;
+	bool deferStartupCSMenuMemoryRecovery = false;
 	try {
 		const bool pendingDLSSResetForRelatch = pendingDLSSReset.load(std::memory_order_acquire);
 		// An active physical contract is the sole previous-owner authority, including
@@ -18001,6 +18031,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				VRRenderScaleRetryKind::Pressure);
 			return false;
 		}
+		// A saved CS-menu profile can be selected at the main menu and admitted
+		// only after the first destination world frame. Preserve normal pressure
+		// admission, but move only the RapidRelatch cleanup that this resize
+		// would otherwise perform into the existing post-stable lifecycle.
+		deferStartupCSMenuMemoryRecovery =
+			!rc94PostLoadDoorRelatch &&
+			startupCSMenuRelatch &&
+			relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&
+			relatchTargetRenderScaleActive &&
+			plannedRelatchWillResizeRenderTargets &&
+			memoryReliefActiveForRelatch &&
+			!lowPeakNativeRestoreRelatch &&
+			!pressureMemoryRelief &&
+			!recentOutOfMemoryFailure &&
+			!relatchPlan.pressureCleanupRequired;
 		if (!CanAdmitVRIntermediateRetirement(relatchEpoch) ||
 			!CanAdmitVREngineTargetRetirement(relatchEpoch)) {
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Retirement);
@@ -18010,7 +18055,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
 			return false;
 		}
-		if (memoryReliefActiveForRelatch) {
+		if (memoryReliefActiveForRelatch && !deferStartupCSMenuMemoryRecovery) {
 			ApplyVRRenderScaleMemoryReliefTransitionCleanup(
 				"render-target relatch",
 				relatchPlan.preserveCompatibleFSRIntermediates);
@@ -18226,7 +18271,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				IsVRRenderScaleRecoveryOrigin(relatchOrigin) ||
 				postLoadRecoveryEpoch != 0;
 			auto trimReason = VRRenderScaleMemoryTrimReason::None;
-			if (!rc94PostLoadDoorRelatch) {
+			if (!rc94PostLoadDoorRelatch && !deferStartupCSMenuMemoryRecovery) {
 				trimReason =
 					postLoadRelatch                                         ? VRRenderScaleMemoryTrimReason::PostLoad :
 					lowPeakNativeRestoreRelatch                             ? VRRenderScaleMemoryTrimReason::NativeRestore :
@@ -18236,6 +18281,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				PrepareVRRenderScaleCommonTargetResidencyDrain(relatchEpoch, trimReason);
 			}
 			const bool releasedDeferredTargetsForRelief =
+				!deferStartupCSMenuMemoryRecovery &&
 				(memoryReliefActiveForRelatch || lowPeakNativeRestoreRelatch) &&
 				globals::deferred;
 			if (releasedDeferredTargetsForRelief)
@@ -18446,6 +18492,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		CompleteVRRenderScalePostLoadRecovery(postLoadRecoveryEpoch, relatchEpoch);
 	} else if (rc94PostLoadDoorRelatch) {
 		DeferVRRenderScalePostLoadRecoveryUntilStable(postLoadRecoveryEpoch, relatchEpoch);
+	} else if (deferStartupCSMenuMemoryRecovery) {
+		DeferVRRenderScalePostLoadRecoveryUntilStable(0, relatchEpoch);
 	} else if ((relatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
 				   IsVRRenderScaleRecoveryOrigin(relatchOrigin)) &&
 			   postLoadRecoveryEpoch != 0) {
@@ -19858,7 +19906,7 @@ void Upscaling::DeferVRRenderScalePostLoadRecoveryUntilStable(
 		++vrRenderScaleTransitionController.revision;
 	}
 	logger::debug(
-		"[VRRenderScale][PostLoad] Deferred cleanup recoveryEpoch={} until door transitionEpoch={} is stable and visible.",
+		"[VRRenderScale][PostLoad] Deferred cleanup recoveryEpoch={} until transitionEpoch={} is stable and visible.",
 		recoveryEpoch,
 		a_transitionEpoch);
 }
@@ -26380,6 +26428,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
@@ -28038,6 +28087,11 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 	request.fsrSharpness = settings.sharpnessFSR;
 	request.queuedFrame = frame;
 	request.origin = a_origin;
+	request.startupCSMenuActivation = IsVRRenderScaleStartupCSMenuActivation(
+		*this,
+		globals::state,
+		a_origin,
+		renderScaleModeEnabled);
 
 	{
 		std::scoped_lock lock(pendingVRRenderScaleRequestMutex);
@@ -30441,6 +30495,16 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 			pendingDLSSHistoryReset.store(true, std::memory_order_release);
 		if ((qualityChanged || renderScaleModeChanged) && (IsVRRenderScaleModeLatched() || GetPerfModeRequested()))
 			RequestPerfModeRenderTargetRecreate("VR render-scale profile change", transitionOrigin);
+	}
+	const uint64_t pendingRelatchEpoch =
+		pendingPerfModeRenderTargetRecreateEpoch.load(std::memory_order_acquire);
+	if (request.startupCSMenuActivation &&
+		pendingRelatchEpoch == request.transitionEpoch &&
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
+		LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin) == VRUpscalingTransitionOrigin::CSMenu) {
+		pendingPerfModeRenderTargetRecreateStartupCSMenuEpoch.store(
+			request.transitionEpoch,
+			std::memory_order_release);
 	}
 
 	if (ShouldEmitUpscalingDiagLogs()) {

@@ -364,7 +364,7 @@ namespace SharedData
 		float3 WaterTintColor;
 		float WaterTintStrength;
 		float ShoreFeatherWidth;
-		float ShoreFeatherCullDistance;
+		float ShoreConfirmationCullDistance;
 		float2 ShoreFeatherPadding;
 	};
 

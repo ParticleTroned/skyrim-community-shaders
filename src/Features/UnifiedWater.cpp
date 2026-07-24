@@ -26,7 +26,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantDepthFadeStart,
 	DistantDepthFadeEnd,
 	ShoreFeatherWidth,
-	ShoreFeatherCullDistance)
+	ShoreConfirmationCullDistance)
 
 namespace
 {
@@ -103,11 +103,11 @@ namespace
 			kShoreFeatherWidthMin,
 			kShoreFeatherWidthMax,
 			defaults.ShoreFeatherWidth);
-		a_settings.ShoreFeatherCullDistance = ClampFiniteOrDefault(
-			a_settings.ShoreFeatherCullDistance,
+		a_settings.ShoreConfirmationCullDistance = ClampFiniteOrDefault(
+			a_settings.ShoreConfirmationCullDistance,
 			kDistantDepthFadeDistanceMin,
 			kDistantDepthFadeDistanceMax,
-			defaults.ShoreFeatherCullDistance);
+			defaults.ShoreConfirmationCullDistance);
 	}
 
 	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
@@ -569,16 +569,16 @@ void UnifiedWater::DrawSettings()
 		}
 
 		ImGui::SliderFloat(
-			"Shore Feather Cull Distance",
-			&settings.ShoreFeatherCullDistance,
+			"Shore Confirmation Cull Distance",
+			&settings.ShoreConfirmationCullDistance,
 			kDistantDepthFadeDistanceMin,
 			kDistantDepthFadeDistanceMax,
 			"%.0f units",
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Stops shoreline feathering beyond this view distance to reduce GPU cost.\n"
-				"The effect fades over the preceding half-cell; set to 0 for no distance culling.");
+				"Stops extra shoreline confirmation samples beyond this view distance.\n"
+				"A lightweight fallback preserves distant edge blending; set to 0 for no distance culling.");
 		}
 
 		ImGui::EndDisabled();
@@ -623,7 +623,7 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.WaterTintColor = sanitizedSettings.WaterTintColor;
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
 	data.ShoreFeatherWidth = sanitizedSettings.ShoreFeatherWidth;
-	data.ShoreFeatherCullDistance = sanitizedSettings.ShoreFeatherCullDistance;
+	data.ShoreConfirmationCullDistance = sanitizedSettings.ShoreConfirmationCullDistance;
 	return data;
 }
 

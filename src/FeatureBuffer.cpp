@@ -125,7 +125,7 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintColor) == 16);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintStrength) == 28);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreFeatherWidth) == 32);
-	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreFeatherCullDistance) == 36);
+	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreConfirmationCullDistance) == 36);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);

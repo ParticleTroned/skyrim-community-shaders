@@ -29,12 +29,12 @@ struct UnifiedWater : OverlayFeature
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
-		float DistantDepthFadeNearStrength = 0.2f;
+		float DistantDepthFadeNearStrength = 0.15f;
 		float DistantDepthFadeFarStrength = 1.0f;
 		float DistantDepthFadeStart = 0.0f;
-		float DistantDepthFadeEnd = 2048.0f;
+		float DistantDepthFadeEnd = 4096.0f;
 		float ShoreFeatherWidth = 2.0f;
-		float ShoreFeatherCullDistance = 10000.0f;
+		float ShoreConfirmationCullDistance = 10000.0f;
 	};
 
 	struct alignas(16) CommonBufferData
@@ -46,7 +46,7 @@ struct UnifiedWater : OverlayFeature
 		float3 WaterTintColor;
 		float WaterTintStrength;
 		float ShoreFeatherWidth;
-		float ShoreFeatherCullDistance;
+		float ShoreConfirmationCullDistance;
 		float2 ShoreFeatherPadding;
 	};
 	static_assert(alignof(CommonBufferData) == 16);

@@ -1086,13 +1086,18 @@ float GetUnifiedWaterDistanceDepthFade(float viewDistance)
 	return lerp(nearStrength, farStrength, smoothstep(fadeStart, fadeEnd, viewDistance));
 }
 
-static const float ShoreFeatherCullFadeRange = 2048.0;
+static const float ShoreConfirmationCullFadeRange = 2048.0;
+static const float ShoreFeatherDepthGradientEpsilon = 1e-8;
 
 int2 ClampUnifiedWaterDepthPixel(int2 pixelPosition, uint eyeIndex)
 {
 	float2 renderDimensions =
 		max(1.0.xx, round(SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy));
+#				if defined(VR)
 	return Stereo::ClampToEyeBounds(pixelPosition, eyeIndex, renderDimensions);
+#				else
+	return clamp(pixelPosition, 0, int2(renderDimensions) - 1);
+#				endif
 }
 
 bool IsUnifiedWaterRawDepthValid(float rawDepth)
@@ -1111,84 +1116,78 @@ float GetUnifiedWaterShoreInteriorFactor(
 	float2 screenPosition,
 	float centerSceneDepth,
 	float centerWaterDepth,
+	float2 depthDeltaGradient,
 	float2 waterDepthGradient,
 	float distanceDepthFade,
 	float viewDistance,
 	uint eyeIndex)
 {
 	float featherWidth = clamp(SharedData::unifiedWaterSettings.ShoreFeatherWidth, 0.0, 16.0);
-	float cullDistance = max(SharedData::unifiedWaterSettings.ShoreFeatherCullDistance, 0.0);
+	float cullDistance = max(SharedData::unifiedWaterSettings.ShoreConfirmationCullDistance, 0.0);
 	bool cullingEnabled = cullDistance > 0.0;
 	[branch] if (
 		featherWidth <= 0.0 ||
 		distanceDepthFade <= 0.0 ||
-		(cullingEnabled && viewDistance >= cullDistance) ||
 		!IsUnifiedWaterRawDepthValid(centerSceneDepth) ||
 		!isfinite(centerWaterDepth) ||
+		!all(isfinite(depthDeltaGradient)) ||
 		!all(isfinite(waterDepthGradient)))
 	{
 		return 1.0;
 	}
 
-	int2 centerPixel = ClampUnifiedWaterDepthPixel(int2(screenPosition), eyeIndex);
-	// Positive deltas place the opaque scene behind the water surface. A sign
-	// change in the local neighbourhood therefore identifies the same boundary
-	// that makes the water surface visible against the bank.
 	float centerDepthDelta = centerSceneDepth - centerWaterDepth;
-	int sampleRadius = (int)ceil(featherWidth + 0.5);
-	static const int2 sampleDirections[4] = {
-		int2(1, 0),
-		int2(-1, 0),
-		int2(0, 1),
-		int2(0, -1)
-	};
+	if (centerDepthDelta <= 0.0)
+		return 0.0;
 
-	float interiorFactor = 1.0;
-	[unroll] for (uint sampleIndex = 0; sampleIndex < 4; ++sampleIndex)
-	{
-		int2 samplePixel =
-			ClampUnifiedWaterDepthPixel(centerPixel + sampleDirections[sampleIndex] * sampleRadius, eyeIndex);
-		if (all(samplePixel == centerPixel))
-			continue;
+	// Normalizing the signed hardware-depth separation by its local gradient
+	// estimates the distance to the water/terrain crossing in screen pixels.
+	// Flat shallow interiors therefore remain stabilized while diagonal and
+	// steep banks receive an orientation-independent edge transition.
+	float depthDeltaGradientLength = length(depthDeltaGradient);
+	if (depthDeltaGradientLength <= ShoreFeatherDepthGradientEpsilon)
+		return 1.0;
 
-		float sampleSceneDepth;
-		if (!TryGetUnifiedWaterRawDepth(samplePixel, sampleSceneDepth))
-			continue;
+	float estimatedShoreDistance = centerDepthDelta / depthDeltaGradientLength;
+	float coveredInteriorDistance = max(estimatedShoreDistance - 0.5, 0.0);
+	if (coveredInteriorDistance >= featherWidth)
+		return 1.0;
 
-		float2 sampleOffset = float2(samplePixel - centerPixel);
-		float sampleWaterDepth = centerWaterDepth + dot(waterDepthGradient, sampleOffset);
-		float sampleDepthDelta = sampleSceneDepth - sampleWaterDepth;
-		bool crossesShoreline =
-			(centerDepthDelta > 0.0 && sampleDepthDelta <= 0.0) ||
-			(centerDepthDelta <= 0.0 && sampleDepthDelta > 0.0);
-		if (!crossesShoreline)
-			continue;
-
-		if (centerDepthDelta <= 0.0) {
-			interiorFactor = 0.0;
-			continue;
-		}
-
-		// Approximate the zero crossing along each cardinal sample and retain the
-		// nearest bank. Subtracting half a pixel accounts for the centre pixel's
-		// footprint, allowing the immediate water edge to reach the raw result.
-		float sampleDistance = length(sampleOffset);
-		float crossingDistance =
-			sampleDistance * centerDepthDelta /
-			max(centerDepthDelta - sampleDepthDelta, EPSILON_DIVISION);
-		float coveredInteriorDistance = max(crossingDistance - 0.5, 0.0);
-		interiorFactor = min(
-			interiorFactor,
-			smoothstep(0.0, featherWidth, coveredInteriorDistance));
-	}
-
-	float cullVisibility = 1.0;
+	float analyticInteriorFactor = smoothstep(0.0, featherWidth, coveredInteriorDistance);
+	float confirmationWeight = 1.0;
 	[branch] if (cullingEnabled)
 	{
-		float cullFadeStart = max(cullDistance - ShoreFeatherCullFadeRange, 0.0);
-		cullVisibility = 1.0 - smoothstep(cullFadeStart, cullDistance, viewDistance);
+		float cullFadeStart = max(cullDistance - ShoreConfirmationCullFadeRange, 0.0);
+		confirmationWeight = 1.0 - smoothstep(cullFadeStart, cullDistance, viewDistance);
+		if (confirmationWeight <= 0.0)
+			return analyticInteriorFactor;
 	}
-	return lerp(1.0, interiorFactor, cullVisibility);
+
+	// Confirm the predicted edge with one sample toward decreasing signed depth.
+	// Beyond the cull distance the analytic result above remains active, retaining
+	// a cheap transparent perimeter instead of reverting to a hard stabilized edge.
+	float2 confirmationDirection = -depthDeltaGradient / depthDeltaGradientLength;
+	int confirmationRadius = (int)ceil(featherWidth + 0.5);
+	int2 confirmationOffset = int2(round(confirmationDirection * confirmationRadius));
+	int2 centerPixel = ClampUnifiedWaterDepthPixel(int2(screenPosition), eyeIndex);
+	int2 confirmationPixel =
+		ClampUnifiedWaterDepthPixel(centerPixel + confirmationOffset, eyeIndex);
+
+	float confirmedInteriorFactor = 1.0;
+	[branch] if (any(confirmationPixel != centerPixel))
+	{
+		float confirmationSceneDepth;
+		if (TryGetUnifiedWaterRawDepth(confirmationPixel, confirmationSceneDepth)) {
+			float2 actualConfirmationOffset = float2(confirmationPixel - centerPixel);
+			float confirmationWaterDepth =
+				centerWaterDepth + dot(waterDepthGradient, actualConfirmationOffset);
+			float confirmationDepthDelta = confirmationSceneDepth - confirmationWaterDepth;
+			if (confirmationDepthDelta <= 0.0)
+				confirmedInteriorFactor = analyticInteriorFactor;
+		}
+	}
+
+	return lerp(analyticInteriorFactor, confirmedInteriorFactor, confirmationWeight);
 }
 
 float4 ApplyUnifiedWaterDistanceDepthFade(
@@ -1365,8 +1364,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float shoreInteriorFactor = 1.0;
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 	distanceDepthFade = GetUnifiedWaterDistanceDepthFade(viewDistance);
-	float2 waterDepthGradient =
-		float2(ddx_coarse(input.HPosition.z), ddy_coarse(input.HPosition.z));
 #			endif
 
 	float distanceBlendFactor = distanceFactor;
@@ -1403,10 +1400,16 @@ PS_OUTPUT main(PS_INPUT input)
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z);
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	float centerDepthDelta = rawSceneDepth - input.HPosition.z;
+	float2 depthDeltaGradient =
+		float2(ddx_fine(centerDepthDelta), ddy_fine(centerDepthDelta));
+	float2 waterDepthGradient =
+		float2(ddx_fine(input.HPosition.z), ddy_fine(input.HPosition.z));
 	shoreInteriorFactor = GetUnifiedWaterShoreInteriorFactor(
 		screenPosition,
 		rawSceneDepth,
 		input.HPosition.z,
+		depthDeltaGradient,
 		waterDepthGradient,
 		distanceDepthFade,
 		viewDistance,

@@ -1092,6 +1092,7 @@ struct WetnessSurfaceState
 	float glossinessSpecular;
 	float highlightReflectanceScale;
 	float directSpecularScale;
+	float raindropRippleMask;
 	float rainCubemapSuppression;
 	float puddleSkyReflectionScale;
 	float terrainIndirectNormalStability;
@@ -1143,6 +1144,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float wetnessGlossinessSpecular = 0.0;
 	float wetHighlightReflectanceScale = 1.0;
 	float wetDirectSpecularScale = 1.0;
+	float raindropRippleMask = 0.0;
 	float wetRainCubemapSuppression = 0.0;
 	float wetPuddleSkyReflectionScale = 1.0;
 	float terrainWetIndirectNormalStability = 0.0;
@@ -1593,6 +1595,8 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		wetnessNormal = normalize(lerp(wetnessNormal, float3(0, 0, 1), flatnessAmount));
 
 		// Apply ripple normal effects
+		float raindropRippleSlopeSqr = dot(raindropInfo.xy, raindropInfo.xy);
+		raindropRippleMask = smoothstep(0.0025, 0.04, raindropRippleSlopeSqr);
 		if (any(raindropInfo.xyz != float3(0, 0, 1))) {
 			float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(1.0, flatnessAmount, 0.8)));
 			wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
@@ -1647,6 +1651,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	state.glossinessSpecular = wetnessGlossinessSpecular;
 	state.highlightReflectanceScale = wetHighlightReflectanceScale;
 	state.directSpecularScale = wetDirectSpecularScale;
+	state.raindropRippleMask = raindropRippleMask;
 	state.rainCubemapSuppression = wetRainCubemapSuppression;
 	state.puddleSkyReflectionScale = wetPuddleSkyReflectionScale;
 	state.terrainIndirectNormalStability = terrainWetIndirectNormalStability;
@@ -1761,6 +1766,7 @@ struct WetnessDirectLightState
 	float enabled;
 	float3 normal;
 	float roughness;
+	float pointLightRoughness;
 	float detailWeight;
 	WetnessDirectLightingParams params;
 };
@@ -1772,12 +1778,15 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	float waterRoughnessSpecular,
 	WetReflectionParams wetReflectionParams,
 	float wetDirectSpecularScale,
+	float raindropRippleMask,
+	float pointLightDarkness,
 	float vrWetnessDirectDetailWeight,
 	bool vrWetnessDirectDetailEnabled)
 {
 	WetnessDirectLightState state = (WetnessDirectLightState)0;
 	state.normal = wetnessNormal;
 	state.roughness = waterRoughnessSpecular;
+	state.pointLightRoughness = waterRoughnessSpecular;
 	state.detailWeight = vrWetnessDirectDetailWeight;
 
 	if (!vrWetnessDirectDetailEnabled) {
@@ -1794,6 +1803,16 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	if (!HasWetReflectionParams(wetReflectionParamsDirect)) {
 		return state;
 	}
+
+	// Animated ripple normals can drive a near-mirror GGX lobe across a small HMD
+	// footprint under local lights. Broaden only that point-light lobe in dark scenes;
+	// sunlight, indirect reflections, and non-ripple wet surfaces keep their response.
+	const float darkRippleMask = saturate(raindropRippleMask * pointLightDarkness);
+	const float minDarkRipplePointLightRoughness = 0.18;
+	state.pointLightRoughness = lerp(
+		state.roughness,
+		max(state.roughness, minDarkRipplePointLightRoughness),
+		darkRippleMask);
 
 	// Match the direct-lighting context normalization so the prepared wet params remain
 	// identical when shared across the directional light and both point-light loops.
@@ -1863,6 +1882,8 @@ WetnessLightingState CreateWetnessLightingState(
 	float3 directViewDirection,
 	float waterRoughnessSpecular,
 	float wetDirectSpecularScale,
+	float raindropRippleMask,
+	float pointLightDarkness,
 #		if defined(DYNAMIC_CUBEMAPS)
 	float3 wetIndirectNormal,
 	float wetHighlightReflectanceScale,
@@ -1904,6 +1925,8 @@ WetnessLightingState CreateWetnessLightingState(
 		waterRoughnessSpecular,
 		wetReflectionParams,
 		wetDirectSpecularScale,
+		raindropRippleMask,
+		pointLightDarkness,
 		vrWetnessDirectDetailWeight,
 		vrWetnessDirectDetailEnabled);
 	return state;
@@ -2007,14 +2030,16 @@ float3 GetWetnessCubemapContribution(
 void ApplyWetnessDirectLightingOutput(
 	inout DirectLightingOutput lightingOutput,
 	DirectContext lightContext,
-	WetnessDirectLightState wetDirectLightState)
+	WetnessDirectLightState wetDirectLightState,
+	bool isPointLight)
 {
 	if (wetDirectLightState.enabled <= 0.0) {
 		return;
 	}
 
 	DirectLightingOutput baseLightingOutput = lightingOutput;
-	EvaluateWetnessLighting(wetDirectLightState.normal, lightContext, wetDirectLightState.roughness, wetDirectLightState.params, lightingOutput);
+	float roughness = isPointLight ? wetDirectLightState.pointLightRoughness : wetDirectLightState.roughness;
+	EvaluateWetnessLighting(wetDirectLightState.normal, lightContext, roughness, wetDirectLightState.params, lightingOutput);
 	ApplyVRLightingAuxiliaryOutputWeight(lightingOutput, baseLightingOutput, wetDirectLightState.detailWeight);
 }
 #	elif defined(WETNESS_EFFECTS)
@@ -3511,6 +3536,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float wetnessGlossinessSpecular = wetnessSurface.glossinessSpecular;
 	float wetHighlightReflectanceScale = wetnessSurface.highlightReflectanceScale;
 	float wetDirectSpecularScale = wetnessSurface.directSpecularScale;
+	float wetRaindropRippleMask = wetnessSurface.raindropRippleMask;
 	float wetRainCubemapSuppression = wetnessSurface.rainCubemapSuppression;
 	float wetPuddleSkyReflectionScale = wetnessSurface.puddleSkyReflectionScale;
 	float terrainWetIndirectNormalStability = wetnessSurface.terrainIndirectNormalStability;
@@ -3752,6 +3778,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 	wetnessDirectViewDirection = refractedViewDirection;
 #		endif
+	// Directional luminance is already available here and cleanly distinguishes
+	// bright exterior rain from dark scenes dominated by local light sources.
+	float wetDirectionalLuminance = Color::RGBToLuminance(max(0.0.xxx, SanitizeFloat3(dirLightColor)));
+	float wetPointLightDarkness = 1.0 - smoothstep(0.06, 0.22, wetDirectionalLuminance);
 	const bool wetLightingVisible = wetnessEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
 	WetnessLightingState wetnessLightingState = CreateWetnessLightingState(
 		wetLightingVisible,
@@ -3760,6 +3790,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		wetnessDirectViewDirection,
 		waterRoughnessSpecular,
 		wetDirectSpecularScale,
+		wetRaindropRippleMask,
+		wetPointLightDarkness,
 #		if defined(DYNAMIC_CUBEMAPS)
 		wetIndirectNormal,
 		wetHighlightReflectanceScale,
@@ -3797,7 +3829,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	dirLightOutput.coatDiffuse = SanitizeFloat3(dirLightOutput.coatDiffuse);
 #	endif
 #	if defined(WETTERNESS)
-	ApplyWetnessDirectLightingOutput(dirLightOutput, dirLightContext, wetnessLightingState.directLightState);
+	ApplyWetnessDirectLightingOutput(dirLightOutput, dirLightContext, wetnessLightingState.directLightState, false);
 #	elif defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
 		ApplyWetnessDirectLightingOutput(dirLightOutput, wetnessNormal, dirLightContext, waterRoughnessSpecular, vrAuxDetailWeight);
@@ -3874,7 +3906,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightOutput.coatDiffuse = SanitizeFloat3(pointLightOutput.coatDiffuse);
 #			endif
 #			if defined(WETTERNESS)
-		ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState);
+		ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState, true);
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
 			ApplyWetnessDirectLightingOutput(pointLightOutput, wetnessNormal, pointLightContext, waterRoughnessSpecular, vrAuxDetailWeight);
@@ -4064,7 +4096,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightOutput.coatDiffuse = SanitizeFloat3(pointLightOutput.coatDiffuse);
 #			endif
 #			if defined(WETTERNESS)
-		ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState);
+		ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState, true);
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
 			ApplyWetnessDirectLightingOutput(pointLightOutput, wetnessNormal, pointLightContext, waterRoughnessSpecular, vrAuxDetailWeight);

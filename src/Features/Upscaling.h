@@ -1936,6 +1936,13 @@ private:
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
 	bool IsVRRenderScalePhysicalContractConverged(UpscaleMethod a_upscaleMethod, uint32_t a_qualityMode) const;
+	bool MatchesVRUpscalingPhysicalContract(
+		UpscaleMethod a_method,
+		bool a_renderScaleMode,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		bool a_allowCurrentRelatch = false,
+		bool a_allowPendingPostLoadReset = false) const;
 	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
 	enum class HMDMaskClearPhase : uint8_t

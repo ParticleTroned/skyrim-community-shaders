@@ -394,10 +394,19 @@ namespace CSPluginAPI
 			return;
 
 		auto& upscaling = globals::features::upscaling;
+		const auto method = detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling);
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
+		if (!upscaling.IsVRFpsStabilizerAPITransitionProfileAllowed(
+				method,
+				renderScaleModeEnabled,
+				qualityMode,
+				dlssPreset)) {
+			return;
+		}
+
 		upscaling.ApplyCSMenuUpscalingTransition(
-			detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling),
+			method,
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,
@@ -447,10 +456,19 @@ namespace CSPluginAPI
 			return;
 
 		auto& upscaling = globals::features::upscaling;
+		const auto internalMethod = detail::ToInternalUpscaleMethod(method);
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
+		if (!upscaling.IsVRFpsStabilizerAPITransitionProfileAllowed(
+				internalMethod,
+				renderScaleModeEnabled,
+				qualityMode,
+				dlssPreset)) {
+			return;
+		}
+
 		upscaling.ApplyCSMenuUpscalingTransition(
-			detail::ToInternalUpscaleMethod(method),
+			internalMethod,
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,

@@ -2749,6 +2749,19 @@ namespace
 		return target;
 	}
 
+	bool MatchesVRFpsStabilizerTransitionTarget(
+		Upscaling::UpscaleMethod a_method,
+		bool a_renderScaleMode,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		const VRFpsStabilizerTransitionTarget& a_target)
+	{
+		return a_method == a_target.method &&
+		       a_qualityMode == a_target.qualityMode &&
+		       a_renderScaleMode == a_target.renderScaleMode &&
+		       (a_target.method != Upscaling::UpscaleMethod::kDLSS || a_dlssPreset == a_target.dlssPreset);
+	}
+
 	bool HasPendingVRFpsStabilizerRenderScaleIntent(const Upscaling& a_upscaling)
 	{
 		if (!globals::game::isVR || !a_upscaling.settings.vrFpsStabilizerSync)
@@ -15610,6 +15623,40 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 	return reasons;
 }
 
+bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
+	UpscaleMethod a_targetMethod,
+	bool a_renderScaleModeEnabled,
+	uint32_t a_qualityMode,
+	uint32_t a_dlssPreset) const
+{
+	if (!globals::game::isVR)
+		return true;
+
+	VRFpsStabilizerUpscalingProfiles profiles;
+	if (!TryLoadVRFpsStabilizerUpscalingProfiles(profiles) ||
+		!profiles.upscalingSwitchingEnabled) {
+		return true;
+	}
+
+	// The stabilizer calls the atomic profile API after fading to black but
+	// before moving the player. At that point the opposite cell-type profile is
+	// the only authoritative destination. Rejecting the current-cell profile
+	// prevents ordinary runtime reconciliation from undoing a manual CS-menu
+	// selection without delaying the intended door relatch until after loading.
+	const bool currentInterior = Util::IsInterior();
+	const auto& destinationProfile = currentInterior ? profiles.exterior : profiles.interior;
+	if (!destinationProfile.HasAnySetting())
+		return true;
+
+	const auto destination = ResolveVRFpsStabilizerTransitionTarget(*this, destinationProfile);
+	return MatchesVRFpsStabilizerTransitionTarget(
+		a_targetMethod,
+		a_renderScaleModeEnabled,
+		a_qualityMode,
+		a_dlssPreset,
+		destination);
+}
+
 void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 {
 	const bool openCompositeBlocksUpscaling = globals::game::isVR && IsOpenCompositeUpscalingBlocked();
@@ -15668,14 +15715,16 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	const auto currentMethod = GetConfiguredUpscaleMethodForTransition();
 	const auto target = ResolveVRFpsStabilizerTransitionTarget(*this, profile);
 
-	const bool methodMatches = currentMethod == target.method;
-	const bool qualityMatches = GetEffectiveUpscalingQualityMode() == target.qualityMode;
-	const bool renderScaleMatches = IsRenderScaleModeRequested() == target.renderScaleMode;
-	const bool dlssPresetMatches = target.method != UpscaleMethod::kDLSS || GetEffectiveDLSSPreset() == target.dlssPreset;
+	const bool profileMatches = MatchesVRFpsStabilizerTransitionTarget(
+		currentMethod,
+		IsRenderScaleModeRequested(),
+		GetEffectiveUpscalingQualityMode(),
+		GetEffectiveDLSSPreset(),
+		target);
 	pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 	MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
 
-	if (methodMatches && qualityMatches && renderScaleMatches && dlssPresetMatches) {
+	if (profileMatches) {
 		logger::debug(
 			"[Upscaling] VR FPS Stabilizer Sync: {} profile already matched after save-load (method={}, quality={}, dlssProfile={}, renderScale={}).",
 			profileName,

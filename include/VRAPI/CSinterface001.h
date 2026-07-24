@@ -116,7 +116,10 @@ namespace CSPluginAPI
 		// Legacy convenience for interior/exterior transition controllers. On
 		// DLSS-capable systems this stages DLSS, render-scale path, shared
 		// preset, and DLSS profile together. FSR-specific callers should use
-		// SetVRUpscalingTransitionProfileForMethod in revision 2.
+		// SetVRUpscalingTransitionProfileForMethod in revision 2. When active VR
+		// FPS Stabilizer Interior/Exterior profiles are available, the provider
+		// accepts only the configured opposite-cell profile; ordinary current-cell
+		// reconciliation is ignored.
 		virtual void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
 
 		// Revision 2. Explicit upscaler method control for callers that must
@@ -127,7 +130,9 @@ namespace CSPluginAPI
 
 		// Revision 3. External transition controllers should query this before
 		// applying VR upscaling profiles. Non-zero block reasons mean the caller
-		// should buffer its latest desired profile and try again later.
+		// should buffer its latest desired profile and try again later. A zero
+		// result is a runtime-safety check, not permission to synthesize a door
+		// transition while the player remains in the same cell type.
 		virtual uint32_t GetVRUpscalingApplyBlockReasons() = 0;
 		virtual bool IsVRUpscalingProfileApplyAllowed() = 0;
 	};

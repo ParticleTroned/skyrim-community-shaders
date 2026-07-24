@@ -1562,6 +1562,8 @@ public:
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
 	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
+	// Hot-path atomic mirror; mutate with StoreVRRenderScaleTransitionStateLocked.
+	std::atomic<VRRenderScaleTransitionState> vrRenderScaleTransitionState{ VRRenderScaleTransitionState::Idle };
 	mutable std::mutex vrRenderScaleStressSessionMutex;
 	VRRenderScaleStressSessionSnapshot vrRenderScaleStressSession{};
 	std::atomic<uint64_t> nextVRRenderScaleStressSessionID{ 1 };
@@ -1698,6 +1700,7 @@ public:
 	void BindVRRenderScaleRelatchEpoch(uint64_t a_epoch);
 	bool IsVRRenderScaleTransitionEpochCurrent(uint64_t a_epoch) const;
 	bool RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a_plan);
+	void StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState a_state) noexcept;
 	void SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason = nullptr);
 	void PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization, uint64_t a_epoch);
 	void PublishVRRenderScaleTransitionStable();

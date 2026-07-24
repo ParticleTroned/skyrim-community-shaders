@@ -4157,16 +4157,48 @@ namespace
 		return true;
 	}
 
+	bool IsVRTransitionMaskRepairSafetyContextActive(const State* a_state)
+	{
+		return IsSaveLoadTransitionContextActive(a_state);
+	}
+
+	bool IsVRRenderScalePhysicalMaskHandoffActive(const Upscaling& a_upscaling)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		// Cover the narrow publish-before-cooldown interval without reordering the
+		// established relatch commit sequence.
+		if (a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire))
+			return true;
+
+		// A newer request may supersede the controller state immediately after the
+		// current physical contract is applied. The vendor-resume token remains the
+		// authoritative evidence that presentation is still using the protected
+		// cooldown, including rollback and bounds-recovery paths.
+		if (a_upscaling.submitStageVendorResumeFrame.load(std::memory_order_acquire) != 0)
+			return true;
+
+		const auto transitionState =
+			a_upscaling.vrRenderScaleTransitionState.load(std::memory_order_acquire);
+		return transitionState == Upscaling::VRRenderScaleTransitionState::Preparing ||
+		       transitionState == Upscaling::VRRenderScaleTransitionState::Applying ||
+		       transitionState == Upscaling::VRRenderScaleTransitionState::Stabilizing;
+	}
+
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
-		(void)a_upscaling;
-		return IsSaveLoadTransitionContextActive(a_state);
+		// Keep depth-projected mask work out of the physical relatch as well as the
+		// save/load window. The normal controller path remains Stabilizing until
+		// both eyes have evaluated the replacement vendor contract, so mask repair
+		// cannot observe a new color target with stale depth dimensions.
+		return IsVRTransitionMaskRepairSafetyContextActive(a_state) ||
+		       IsVRRenderScalePhysicalMaskHandoffActive(a_upscaling);
 	}
 
 	bool ShouldDeferVRProjectedMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
-		(void)a_upscaling;
-		return IsSaveLoadTransitionContextActive(a_state);
+		return ShouldDeferVRTransitionMaskRepair(a_upscaling, a_state);
 	}
 
 	bool ShouldBypassVRFoveatedVendorDispatchForTransition(const Upscaling& a_upscaling, const State* a_state)
@@ -25302,8 +25334,9 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		return;
 	if (!colorUAV || !depthSRV || !depthWidth || !depthHeight || !colorWidth || !colorHeight)
 		return;
-	// During save/load, the depth feed can be transiently mismatched with the current eye target.
-	// Running HAM clear in this window can briefly project a rectangular mask.
+	// During save/load or a physical render-scale handoff, the depth feed can be
+	// transiently mismatched with the current eye target. Running HAM clear in
+	// either window can briefly project a rectangular mask.
 	if (ShouldDeferHMDClearMask())
 		return;
 
@@ -26721,8 +26754,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		dlssRapidTransitionBypass ||
 		memoryReliefFoveatedBypass;
 	if (transitionPresentationCooldown) {
-		const bool hmdClearDeferred = ShouldDeferHMDClearMask();
-		const bool projectedMaskDeferred = ShouldDeferVRProjectedMaskRepair(*this, state);
+		// Mask repair remains deliberately suspended by the physical handoff while
+		// this candidate is being evaluated. Only an independently unsafe save/load
+		// context may block promotion; otherwise promotion and mask deferral would
+		// wait on each other forever.
+		const bool maskRepairSafetyContextActive =
+			IsVRTransitionMaskRepairSafetyContextActive(state);
 		const bool cooldownStableCandidate =
 			vrRenderScaleMode &&
 			(!currentMenuPresentationContext || stabilizerDoorHandoffPresentationReady) &&
@@ -26736,8 +26773,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 			!HasPendingVRVendorRuntimeReset(*this, upscaleMethod) &&
 			(!transitionProtectionActive || stabilizerDoorHandoffPresentationReady) &&
-			(!hmdClearDeferred || stabilizerDoorHandoffPresentationReady) &&
-			(!projectedMaskDeferred || stabilizerDoorHandoffPresentationReady) &&
+			(!maskRepairSafetyContextActive || stabilizerDoorHandoffPresentationReady) &&
 			(!transitionFoveatedBypass || stabilizerDoorHandoffPresentationReady) &&
 			motionVector.texture &&
 			depth.texture;
@@ -29287,7 +29323,7 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 		vrRenderScaleTransitionController.requested = profile;
 		vrRenderScaleTransitionController.targetEpoch = profile.transitionEpoch;
 		vrRenderScaleTransitionController.relatchPlan = {};
-		vrRenderScaleTransitionController.state = VRRenderScaleTransitionState::Requested;
+		StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState::Requested);
 		vrRenderScaleStableRuntimeProfileAuthoritative.store(true, std::memory_order_release);
 		vrRenderScaleTransitionController.transitionStartFrame = frame;
 		vrRenderScaleTransitionController.stateFrame = frame;
@@ -29462,7 +29498,7 @@ bool Upscaling::RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesire
 
 		previousState = vrRenderScaleTransitionController.state;
 		vrRenderScaleTransitionController.applying = profile;
-		vrRenderScaleTransitionController.state = VRRenderScaleTransitionState::Preparing;
+		StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState::Preparing);
 		vrRenderScaleStableRuntimeProfileAuthoritative.store(false, std::memory_order_release);
 		vrRenderScaleTransitionController.stateFrame = frame;
 		auto& metrics = vrRenderScaleTransitionController.metrics.current;
@@ -29483,6 +29519,12 @@ bool Upscaling::RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesire
 	return true;
 }
 
+void Upscaling::StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState a_state) noexcept
+{
+	vrRenderScaleTransitionController.state = a_state;
+	vrRenderScaleTransitionState.store(a_state, std::memory_order_release);
+}
+
 void Upscaling::SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason)
 {
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
@@ -29495,7 +29537,7 @@ void Upscaling::SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_s
 		if (previousState == a_state)
 			return;
 
-		vrRenderScaleTransitionController.state = a_state;
+		StoreVRRenderScaleTransitionStateLocked(a_state);
 		vrRenderScaleStableRuntimeProfileAuthoritative.store(
 			a_state == VRRenderScaleTransitionState::Requested ||
 				a_state == VRRenderScaleTransitionState::WaitingForSafePoint,
@@ -29578,7 +29620,7 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 			vrRenderScaleTransitionController.stable = appliedProfile;
 			nextState = VRRenderScaleTransitionState::Active;
 		}
-		vrRenderScaleTransitionController.state = nextState;
+		StoreVRRenderScaleTransitionStateLocked(nextState);
 		vrRenderScaleStableRuntimeProfileAuthoritative.store(
 			nextState == VRRenderScaleTransitionState::Requested ||
 				nextState == VRRenderScaleTransitionState::WaitingForSafePoint,
@@ -29644,7 +29686,7 @@ void Upscaling::PublishVRRenderScaleTransitionStable()
 		nextState = newerTargetPending ?
 		                VRRenderScaleTransitionState::Requested :
 		                VRRenderScaleTransitionState::Active;
-		vrRenderScaleTransitionController.state = nextState;
+		StoreVRRenderScaleTransitionStateLocked(nextState);
 		vrRenderScaleStableRuntimeProfileAuthoritative.store(
 			nextState == VRRenderScaleTransitionState::Requested ||
 				nextState == VRRenderScaleTransitionState::WaitingForSafePoint,
@@ -29695,6 +29737,7 @@ void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 		const auto metrics = vrRenderScaleTransitionController.metrics;
 		const auto presentation = vrRenderScaleTransitionController.presentation;
 		vrRenderScaleTransitionController = {};
+		StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState::Idle);
 		vrRenderScaleStableRuntimeProfileAuthoritative.store(false, std::memory_order_release);
 		vrRenderScaleTransitionController.revision = revision;
 		vrRenderScaleTransitionController.retirement = retirement;

@@ -1088,7 +1088,6 @@ float GetUnifiedWaterDistanceDepthFade(float viewDistance)
 
 static const float ShoreConfirmationCullFadeRange = 2048.0;
 static const float ShoreFeatherDepthGradientEpsilon = 1e-8;
-static const float ShoreConfirmationMargin = 1.0;
 static const float ShoreGatherEdgeInset = 1e-2;
 
 int2 GetUnifiedWaterDepthRenderDimensions()
@@ -1126,13 +1125,11 @@ bool IsUnifiedWaterRawDepthValid(float rawDepth)
 	return isfinite(rawDepth) && rawDepth > 1e-5 && rawDepth < 1.0 - 1e-5;
 }
 
-float GetUnifiedWaterShoreSampleCoverage(float sceneDepth, float waterDepth)
+bool IsUnifiedWaterShoreSample(float sceneDepth, float waterDepth)
 {
-	bool isConfirmedShore =
-		IsUnifiedWaterRawDepthValid(sceneDepth) &&
-		isfinite(waterDepth) &&
-		sceneDepth <= waterDepth;
-	return isConfirmedShore ? 1.0 : 0.0;
+	return IsUnifiedWaterRawDepthValid(sceneDepth) &&
+	       isfinite(waterDepth) &&
+	       sceneDepth <= waterDepth;
 }
 
 float GetUnifiedWaterShoreInteriorFactor(
@@ -1186,16 +1183,16 @@ float GetUnifiedWaterShoreInteriorFactor(
 			return analyticInteriorFactor;
 	}
 
-	// Confirm the predicted edge just beyond its estimated crossing. A gather
-	// classifies the four contributing texels before interpolation, preserving
-	// foreground/background depth discontinuities while producing continuous
-	// subpixel coverage for diagonal and curved banks.
+	// Confirm the predicted edge at the outer feather radius. The local linear
+	// crossing estimate is suitable for shaping the analytic feather but is too
+	// sensitive to uneven streambeds and steep banks to locate its validation
+	// sample. A gather conservatively accepts any terrain-covered texel in its
+	// footprint, avoiding the old rounded single-probe direction without turning
+	// partial confirmation into additional stabilization.
 	// Beyond the cull distance the analytic result above remains active, retaining
 	// a cheap transparent perimeter instead of reverting to a hard stabilized edge.
 	float2 confirmationDirection = -depthDeltaGradient / depthDeltaGradientLength;
-	float confirmationDistance = min(
-		estimatedShoreDistance + ShoreConfirmationMargin,
-		featherWidth + 0.5);
+	float confirmationDistance = featherWidth + 0.5;
 	int2 renderDimensions = GetUnifiedWaterDepthRenderDimensions();
 	int2 centerPixel = int2(screenPosition);
 	float2 confirmationPosition = ClampUnifiedWaterDepthGatherPosition(
@@ -1208,39 +1205,29 @@ float GetUnifiedWaterShoreInteriorFactor(
 
 	float2 gatherTexelPosition = confirmationPosition - 0.5;
 	int2 gatherBasePixel = int2(floor(gatherTexelPosition));
-	float2 gatherFraction = frac(gatherTexelPosition);
-	float2 inverseGatherFraction = 1.0 - gatherFraction;
-	// Gather order is lower-left, lower-right, upper-right, upper-left.
-	float4 gatherWeights = float4(
-		inverseGatherFraction.x * gatherFraction.y,
-		gatherFraction.x * gatherFraction.y,
-		gatherFraction.x * inverseGatherFraction.y,
-		inverseGatherFraction.x * inverseGatherFraction.y);
-
 	float2 gatherBaseOffset = float2(gatherBasePixel - centerPixel);
 	float gatherBaseWaterDepth =
 		centerWaterDepth + dot(waterDepthGradient, gatherBaseOffset);
+	// Gather order is lower-left, lower-right, upper-right, upper-left.
 	float4 confirmationWaterDepths = gatherBaseWaterDepth + float4(
 																waterDepthGradient.y,
 																waterDepthGradient.x + waterDepthGradient.y,
 																waterDepthGradient.x,
 																0.0);
-	float4 confirmationCoverage = float4(
-		GetUnifiedWaterShoreSampleCoverage(
+	bool4 confirmationSamples = bool4(
+		IsUnifiedWaterShoreSample(
 			confirmationSceneDepths.x,
 			confirmationWaterDepths.x),
-		GetUnifiedWaterShoreSampleCoverage(
+		IsUnifiedWaterShoreSample(
 			confirmationSceneDepths.y,
 			confirmationWaterDepths.y),
-		GetUnifiedWaterShoreSampleCoverage(
+		IsUnifiedWaterShoreSample(
 			confirmationSceneDepths.z,
 			confirmationWaterDepths.z),
-		GetUnifiedWaterShoreSampleCoverage(
+		IsUnifiedWaterShoreSample(
 			confirmationSceneDepths.w,
 			confirmationWaterDepths.w));
-	float shorelineCoverage = saturate(dot(confirmationCoverage, gatherWeights));
-	float confirmedInteriorFactor =
-		lerp(1.0, analyticInteriorFactor, shorelineCoverage);
+	float confirmedInteriorFactor = any(confirmationSamples) ? analyticInteriorFactor : 1.0;
 
 	return lerp(analyticInteriorFactor, confirmedInteriorFactor, confirmationWeight);
 }

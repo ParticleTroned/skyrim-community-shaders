@@ -810,6 +810,7 @@ public:
 		Original,
 		Upscaled,
 		TransitionHold,
+		CompositorHold,
 		InSceneOverlay
 	};
 
@@ -1571,6 +1572,17 @@ public:
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	bool ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const;
+	bool IsVRPostLoadCompositorHoldActive() const noexcept;
+	bool ShouldSuppressVRPostLoadCompositorSubmit(
+		vr::EVREye a_eye,
+		const vr::Texture_t* a_texture,
+		const vr::VRTextureBounds_t* a_bounds,
+		const VRRenderScalePresentationObservation* a_presentationObservation,
+		uint64_t& a_releaseToken);
+	void CompleteVRPostLoadCompositorSubmit(
+		vr::EVREye a_eye,
+		vr::EVRCompositorError a_result,
+		uint64_t a_releaseToken);
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
@@ -2016,6 +2028,23 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	enum class VRPostLoadCompositorHoldState : uint32_t
+	{
+		Idle,
+		Armed,
+		Holding,
+		ReleaseScheduled,
+		Completed
+	};
+
+	struct VRPostLoadHMDMaskRepairEvidence
+	{
+		std::atomic<uint64_t> eyeMaskState{ 0 };
+		std::array<std::atomic<uintptr_t>, 2> textureIdentity{};
+		std::array<std::atomic<uint32_t>, 2> method{};
+		std::array<std::atomic<uint32_t>, 2> generation{};
+	};
+
 	mutable std::once_flag vrFpsStabilizerSessionConfigOnce;
 	mutable VRFpsStabilizerConfig vrFpsStabilizerSessionConfig{};
 	std::optional<VRRenderScaleProfileSnapshot> GetStableVRRenderScaleRuntimeProfile() const;
@@ -2030,10 +2059,43 @@ private:
 	std::atomic<uint32_t> submitStageBoundsFallbackActualHeight{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackExpectedWidth{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackExpectedHeight{ 0 };
+	std::atomic<uint32_t> vrPostLoadCompositorHoldState{
+		static_cast<uint32_t>(VRPostLoadCompositorHoldState::Idle)
+	};
+	std::atomic<uint32_t> vrPostLoadCompositorHoldStartFrame{ 0 };
+	std::atomic<uint32_t> vrPostLoadCompositorHoldReleaseFrame{ 0 };
+	std::atomic<uint32_t> vrPostLoadCompositorHoldReleaseMethod{
+		static_cast<uint32_t>(UpscaleMethod::kNONE)
+	};
+	std::atomic<uint32_t> vrPostLoadCompositorHoldReleaseGeneration{ 0 };
+	std::atomic_bool vrPostLoadCompositorHoldReleaseRenderScale{ false };
+	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateMethod{
+		static_cast<uint32_t>(UpscaleMethod::kNONE)
+	};
+	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateGeneration{ 0 };
+	std::atomic_bool vrPostLoadCompositorHoldCandidateRenderScale{ false };
+	std::array<std::atomic<uintptr_t>, 2> vrPostLoadCompositorHoldCandidateTextureIdentity{};
+	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateTextureFormat{
+		static_cast<uint32_t>(DXGI_FORMAT_UNKNOWN)
+	};
+	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateColorSpace{
+		static_cast<uint32_t>(vr::ColorSpace_Auto)
+	};
+	std::atomic<uint64_t> vrPostLoadCompositorHoldCandidateEyeMaskState{ 0 };
+	VRPostLoadHMDMaskRepairEvidence vrPostLoadCompositorHoldFixedRepair{};
+	VRPostLoadHMDMaskRepairEvidence vrPostLoadCompositorHoldSubmitRepair{};
+	std::atomic<uint64_t> vrPostLoadCompositorHoldReleaseAttemptEyeMaskState{ 0 };
+	std::atomic<uint64_t> vrPostLoadCompositorHoldReleasedEyeMaskState{ 0 };
+	std::atomic<uint64_t> vrPostLoadCompositorHoldEpoch{ 0 };
+	std::atomic<uint64_t> vrPostLoadCompositorHoldAwaitingSyncEpoch{ 0 };
+	mutable std::mutex vrPostLoadCompositorHoldMutex;
 
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
+	void ArmVRPostLoadCompositorHold(bool a_awaitingStabilizerSync = false);
+	void ResetVRPostLoadCompositorHold();
+	void ResetVRPostLoadCompositorHoldLocked();
 	bool DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,
@@ -2064,6 +2126,20 @@ private:
 		SubmitStageOutput,
 		SubmitStageFoveatedOutput
 	};
+	void RecordVRPostLoadHMDMaskRepair(
+		HMDMaskClearPhase a_phase,
+		uint32_t a_eyeIndex,
+		ID3D11UnorderedAccessView* a_colorUAV,
+		ID3D11ShaderResourceView* a_depthSRV,
+		uint32_t a_depthWidth,
+		uint32_t a_depthHeight,
+		uint32_t a_colorWidth,
+		uint32_t a_colorHeight,
+		uint32_t a_depthOffsetX,
+		uint32_t a_colorOffsetX,
+		uint32_t a_depthOffsetY,
+		uint32_t a_colorOffsetY,
+		bool a_ordinaryClearExecuted);
 	bool ShouldClearHMDMaskInPhase(HMDMaskClearPhase a_phase) const;
 	void ClearHMDMaskForEye(HMDMaskClearPhase a_phase, uint32_t a_eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,

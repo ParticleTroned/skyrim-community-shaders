@@ -266,7 +266,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			const Upscaling::VRRenderScalePresentationObservation* probePresentationObservation = nullptr;
 #endif
-			auto submit = [&](const char* a_path, const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds) {
+			auto submit = [&](const char* a_path,
+							  const vr::Texture_t* a_texture,
+							  const vr::VRTextureBounds_t* a_bounds,
+							  uint64_t a_postLoadReleaseToken = 0) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				const uint64_t probeSequence = upscaling.BeginVRLoadPresentationProbeSubmit(
 					a_path,
@@ -277,6 +280,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					probePresentationObservation);
 #endif
 				const auto result = func(_this, eEye, a_texture, a_bounds, nSubmitFlags);
+				upscaling.CompleteVRPostLoadCompositorSubmit(
+					eEye,
+					result,
+					a_postLoadReleaseToken);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				upscaling.CompleteVRLoadPresentationProbeSubmit(probeSequence, result);
 #endif
@@ -289,6 +296,20 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					result);
 				return result;
 			};
+			auto suppressPostLoadSubmit = [&](const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				// Queue the candidate for inspection, but deliberately leave its
+				// compositor result unknown because OpenVR is not called.
+				(void)upscaling.BeginVRLoadPresentationProbeSubmit(
+					"compositor-hold",
+					eEye,
+					a_texture,
+					a_bounds,
+					nSubmitFlags,
+					probePresentationObservation);
+#endif
+				return vr::VRCompositorError_None;
+			};
 
 			// DevBench may install the interception before the production render
 			// path needs it so startup/loading submissions can be observed. Until
@@ -299,27 +320,63 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				return submit("original", pTexture, pBounds);
 #endif
 
+			if (!upscaling.IsVRPostLoadCompositorHoldActive() &&
+				!upscaling.IsVRRenderScaleModeLatched() &&
+				!upscaling.IsPresentationUpscalingActive() &&
+				!ShouldRenderInSceneMenu(vr)) {
+				return submit("original", pTexture, pBounds);
+			}
+
 			Upscaling::VRRenderScalePresentationObservation presentationObservation{};
+			uint64_t postLoadReleaseToken = 0;
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
-					if (ShouldRenderInSceneMenu(vr) &&
-						upscaledTexture.handle &&
-						upscaledTexture.eType == vr::TextureType_DirectX)
-						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 					probePresentationObservation = &presentationObservation;
 #endif
-					const auto result = submit("upscaled", &upscaledTexture, &upscaledBounds);
+					if (upscaling.ShouldSuppressVRPostLoadCompositorSubmit(
+							eEye,
+							&upscaledTexture,
+							&upscaledBounds,
+							&presentationObservation,
+							postLoadReleaseToken)) {
+						return suppressPostLoadSubmit(&upscaledTexture, &upscaledBounds);
+					}
+					if (postLoadReleaseToken == 0 &&
+						ShouldRenderInSceneMenu(vr) &&
+						upscaledTexture.handle &&
+						upscaledTexture.eType == vr::TextureType_DirectX)
+						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
+					const auto result = submit(
+						"upscaled",
+						&upscaledTexture,
+						&upscaledBounds,
+						postLoadReleaseToken);
 					if (result == vr::VRCompositorError_None)
 						upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
 					return result;
 				}
 
-				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsVRRenderScaleModeActive()) {
+				if (upscaling.ShouldSuppressVRPostLoadCompositorSubmit(
+						eEye,
+						pTexture,
+						pBounds,
+						presentationObservation.valid ? &presentationObservation : nullptr,
+						postLoadReleaseToken)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					probePresentationObservation =
+						presentationObservation.valid ? &presentationObservation : nullptr;
+#endif
+					return suppressPostLoadSubmit(pTexture, pBounds);
+				}
+
+				if (postLoadReleaseToken == 0 &&
+					upscaling.IsSubmitStageDeviceLost() &&
+					upscaling.IsVRRenderScaleModeActive()) {
 					static std::atomic_bool loggedDeviceLostSuppression{ false };
 					if (!loggedDeviceLostSuppression.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(
@@ -335,7 +392,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return vr::VRCompositorError_None;
 				}
 
-				if (upscaling.ShouldSuppressVRRenderScaleOriginalSubmitFallback(pTexture)) {
+				if (postLoadReleaseToken == 0 &&
+					upscaling.ShouldSuppressVRRenderScaleOriginalSubmitFallback(pTexture)) {
 					static std::atomic_bool loggedRenderScaleFallbackSuppression{ false };
 					if (!loggedRenderScaleFallbackSuppression.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(
@@ -351,7 +409,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return vr::VRCompositorError_None;
 				}
 
-				if (!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
+				if (postLoadReleaseToken == 0 &&
+					!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
 					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
@@ -363,7 +422,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			probePresentationObservation =
 				presentationObservation.valid ? &presentationObservation : nullptr;
 #endif
-			const auto result = submit("original", pTexture, pBounds);
+			const auto result = submit(
+				"original",
+				pTexture,
+				pBounds,
+				postLoadReleaseToken);
 			if (result == vr::VRCompositorError_None &&
 				presentationObservation.path == Upscaling::VRRenderScalePresentationPath::BoundsMismatchOriginalFallback) {
 				upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);

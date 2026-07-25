@@ -729,6 +729,7 @@ public:
 	{
 		Unknown,
 		VendorEvaluated,
+		ValidatedPresentationHold,
 		PresentationStretch,
 		VendorFailureStretch,
 		BoundsMismatchOriginalFallback
@@ -779,6 +780,7 @@ public:
 		uint32_t lastFallbackFrame = 0;
 		uint32_t maximumConsecutivePresentationStretchFrames = 0;
 		uint64_t vendorEvaluatedEyeObservations = 0;
+		uint64_t validatedPresentationHoldEyeObservations = 0;
 		uint64_t presentationStretchEyeObservations = 0;
 		uint64_t vendorFailureStretchEyeObservations = 0;
 		uint64_t boundsMismatchOriginalFallbackEyeObservations = 0;
@@ -807,6 +809,7 @@ public:
 		Unknown,
 		Original,
 		Upscaled,
+		TransitionHold,
 		InSceneOverlay
 	};
 
@@ -927,6 +930,7 @@ public:
 		uint32_t count = 0;
 		uint32_t overwrittenEvents = 0;
 		uint64_t baselineVendorEvaluatedEyeObservations = 0;
+		uint64_t baselineValidatedPresentationHoldEyeObservations = 0;
 		uint64_t baselinePresentationStretchEyeObservations = 0;
 		uint64_t baselineVendorFailureStretchEyeObservations = 0;
 		uint64_t baselineBoundsMismatchOriginalFallbackEyeObservations = 0;
@@ -1476,6 +1480,7 @@ public:
 		eastl::unique_ptr<Texture2D> reactiveMask[2];
 		eastl::unique_ptr<Texture2D> transparencyMask[2];
 		eastl::unique_ptr<Texture2D> submitStageDLSSSharpener[2];
+		eastl::unique_ptr<Texture2D> transitionPresentationHold;
 	};
 	// Retired submit-stage intermediates stay alive briefly so in-flight GPU work can drain.
 	std::vector<RetiredVRIntermediateTextures> retiredVRIntermediateTextures;
@@ -1567,6 +1572,12 @@ public:
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	bool ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const;
+	bool PrepareVRRenderScaleTransitionPresentationHold();
+	void CaptureVRRenderScaleTransitionPresentationHold(vr::EVREye a_eye, const vr::Texture_t* a_texture,
+		const vr::VRTextureBounds_t* a_bounds);
+	bool TryGetVRRenderScaleTransitionPresentationHold(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture,
+		vr::Texture_t& a_texture, vr::VRTextureBounds_t& a_bounds);
+	void ServiceVRRenderScaleTransitionPresentationHold();
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
@@ -1784,6 +1795,20 @@ public:
 	std::atomic<uint32_t> submitStageDLSSViewportPreparationGeneration{ 0 };
 	std::atomic_bool submitStageDLSSViewportPreparationPending{ false };
 	std::atomic_bool submitStageDLSSViewportPreparationFailed{ false };
+	eastl::unique_ptr<Texture2D> vrRenderScaleTransitionPresentationHold;
+	std::array<vr::VRTextureBounds_t, 2> vrRenderScaleTransitionPresentationHoldBounds{};
+	ID3D11Texture2D* vrRenderScaleTransitionPresentationHoldSource = nullptr;
+	uint32_t vrRenderScaleTransitionPresentationHoldCaptureStartFrame = 0;
+	uint32_t vrRenderScaleTransitionPresentationHoldCaptureFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t vrRenderScaleTransitionPresentationHoldCaptureEyeMask = 0;
+	uint32_t vrRenderScaleTransitionPresentationHoldInactiveSubmitEndFrame = 0;
+	uint32_t vrRenderScaleTransitionPresentationHoldSubmitFrame = std::numeric_limits<uint32_t>::max();
+	uint64_t vrRenderScaleTransitionPresentationHoldRecoveryEpoch = 0;
+	vr::EColorSpace vrRenderScaleTransitionPresentationHoldColorSpace = vr::ColorSpace_Auto;
+	bool vrRenderScaleTransitionPresentationHoldCaptureRequested = false;
+	bool vrRenderScaleTransitionPresentationHoldCaptureUnavailable = false;
+	bool vrRenderScaleTransitionPresentationHoldReady = false;
+	bool vrRenderScaleTransitionPresentationHoldSubmitFrameActive = false;
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryFrame{ 0 };
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryMethod{ static_cast<uint32_t>(UpscaleMethod::kNONE) };
 	std::atomic<uint32_t> vrFSRRelatchDrainGeneration{ 0 };
@@ -2030,6 +2055,7 @@ private:
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
+	void ResetVRRenderScaleTransitionPresentationHold(bool a_releaseTexture);
 	bool TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();

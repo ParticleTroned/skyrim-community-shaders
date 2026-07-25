@@ -319,6 +319,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return result;
 				}
 
+				vr::Texture_t transitionHoldTexture{};
+				vr::VRTextureBounds_t transitionHoldBounds{};
+				if (upscaling.TryGetVRRenderScaleTransitionPresentationHold(
+						eEye,
+						pTexture,
+						transitionHoldTexture,
+						transitionHoldBounds)) {
+					return submit("transition-hold", &transitionHoldTexture, &transitionHoldBounds);
+				}
+
 				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsVRRenderScaleModeActive()) {
 					static std::atomic_bool loggedDeviceLostSuppression{ false };
 					if (!loggedDeviceLostSuppression.exchange(true, std::memory_order_relaxed)) {
@@ -364,6 +374,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				presentationObservation.valid ? &presentationObservation : nullptr;
 #endif
 			const auto result = submit("original", pTexture, pBounds);
+			if (result == vr::VRCompositorError_None)
+				upscaling.CaptureVRRenderScaleTransitionPresentationHold(eEye, pTexture, pBounds);
 			if (result == vr::VRCompositorError_None &&
 				presentationObservation.path == Upscaling::VRRenderScalePresentationPath::BoundsMismatchOriginalFallback) {
 				upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);

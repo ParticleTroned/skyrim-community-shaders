@@ -137,6 +137,10 @@ namespace
 	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
 	constexpr uint32_t kVRSubmitStageVendorDoorHandoffStableFrames = 2u;
+	constexpr uint32_t kVRRenderScalePresentationHoldCaptureTimeoutFrames = 6u;
+	constexpr uint32_t kVRRenderScalePresentationHoldMaxPreActivationFrames = 120u;
+	constexpr uint64_t kVRRenderScalePresentationHoldBytesPerPixelUpperBound = 16u;
+	constexpr uint64_t kVRRenderScalePresentationHoldSystemCommitMultiplier = 4u;
 	constexpr uint32_t kVRSubmitStageBoundsFallbackWatchdogFrames = 180u;
 	constexpr uint32_t kVRSubmitStageBoundsFallbackRecoveryBackoffFrames = 300u;
 	constexpr uint32_t kVRSubmitStageFoveatedFailureRetryFrames = 30u;
@@ -164,6 +168,15 @@ namespace
 	constexpr uint64_t kVRRenderScaleCriticalRecoveryHeadroomBytes = 384u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleHighRecoveryHeadroomBytes = 768u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleElevatedRecoveryHeadroomBytes = 1280u * kVRRenderScaleMiB;
+
+	uint64_t SaturatingMultiplyVRRenderScaleBytes(uint64_t a_lhs, uint64_t a_rhs) noexcept
+	{
+		if (a_lhs != 0 &&
+			a_rhs > std::numeric_limits<uint64_t>::max() / a_lhs) {
+			return std::numeric_limits<uint64_t>::max();
+		}
+		return a_lhs * a_rhs;
+	}
 
 	struct VRRenderScaleSystemCommitSample
 	{
@@ -4151,6 +4164,9 @@ namespace
 			return false;
 
 		if (!ShouldQueueDeferredVRRenderScaleActivation(a_upscaling))
+			return false;
+
+		if (!a_upscaling.PrepareVRRenderScaleTransitionPresentationHold())
 			return false;
 
 		a_upscaling.RequestPerfModeRenderTargetRecreate("deferred in-game render-scale activation", Upscaling::VRUpscalingTransitionOrigin::PostLoadSync);
@@ -16526,6 +16542,332 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 }
 
+void Upscaling::ResetVRRenderScaleTransitionPresentationHold(bool a_releaseTexture)
+{
+	if (a_releaseTexture)
+		vrRenderScaleTransitionPresentationHold.reset();
+	vrRenderScaleTransitionPresentationHoldBounds = {};
+	vrRenderScaleTransitionPresentationHoldSource = nullptr;
+	vrRenderScaleTransitionPresentationHoldCaptureStartFrame = 0;
+	vrRenderScaleTransitionPresentationHoldCaptureFrame = std::numeric_limits<uint32_t>::max();
+	vrRenderScaleTransitionPresentationHoldCaptureEyeMask = 0;
+	vrRenderScaleTransitionPresentationHoldInactiveSubmitEndFrame = 0;
+	vrRenderScaleTransitionPresentationHoldSubmitFrame = std::numeric_limits<uint32_t>::max();
+	vrRenderScaleTransitionPresentationHoldRecoveryEpoch = 0;
+	vrRenderScaleTransitionPresentationHoldColorSpace = vr::ColorSpace_Auto;
+	vrRenderScaleTransitionPresentationHoldCaptureRequested = false;
+	vrRenderScaleTransitionPresentationHoldCaptureUnavailable = false;
+	vrRenderScaleTransitionPresentationHoldReady = false;
+	vrRenderScaleTransitionPresentationHoldSubmitFrameActive = false;
+}
+
+bool Upscaling::PrepareVRRenderScaleTransitionPresentationHold()
+{
+	if (!globals::game::isVR || !globals::state)
+		return true;
+
+	const uint64_t recoveryEpoch =
+		pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire);
+	const auto& boot = perfMode.GetBootSnapshot();
+	const bool inactivePostLoadActivation =
+		recoveryEpoch != 0 &&
+		(!boot.valid || !boot.active);
+	if (!inactivePostLoadActivation)
+		return true;
+
+	if (vrRenderScaleTransitionPresentationHoldRecoveryEpoch != 0 &&
+		vrRenderScaleTransitionPresentationHoldRecoveryEpoch != recoveryEpoch) {
+		// A ready hold may still be compositor-owned by the preceding recovery;
+		// let its normal retirement finish and fail open for the new activation.
+		if (vrRenderScaleTransitionPresentationHold &&
+			vrRenderScaleTransitionPresentationHoldReady) {
+			return true;
+		}
+		ResetVRRenderScaleTransitionPresentationHold(true);
+	}
+	if (vrRenderScaleTransitionPresentationHoldRecoveryEpoch == 0)
+		vrRenderScaleTransitionPresentationHoldRecoveryEpoch = recoveryEpoch;
+	if (vrRenderScaleTransitionPresentationHoldCaptureUnavailable)
+		return true;
+	if (vrRenderScaleTransitionPresentationHoldReady) {
+		const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
+		vrRenderScaleTransitionPresentationHoldInactiveSubmitEndFrame = currentFrame + 1u;
+		return true;
+	}
+
+	const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
+	if (vrRenderScaleTransitionPresentationHoldCaptureRequested) {
+		if (ElapsedFrames(vrRenderScaleTransitionPresentationHoldCaptureStartFrame, currentFrame) <
+			kVRRenderScalePresentationHoldCaptureTimeoutFrames) {
+			return false;
+		}
+
+		// A non-standard compositor source must not prevent render-scale
+		// activation. Fall back to the existing presentation path if a complete
+		// stereo snapshot could not be captured within the bounded window.
+		ResetVRRenderScaleTransitionPresentationHold(true);
+		vrRenderScaleTransitionPresentationHoldRecoveryEpoch = recoveryEpoch;
+		vrRenderScaleTransitionPresentationHoldCaptureUnavailable = true;
+		return true;
+	}
+
+	// A retained texture is still protected by deferred retirement. Do not
+	// overwrite it for a later activation.
+	if (vrRenderScaleTransitionPresentationHold)
+		return true;
+
+	// The snapshot is optional presentation protection, so admit its conservative
+	// worst-case footprint before allocating and proceed without it under pressure.
+	SampleVRRenderScaleMemory(true, "transition presentation hold admission");
+	const auto memory = GetVRRenderScaleTransitionSnapshot().memory;
+	const uint64_t expectedWidth = ClampPositiveDimension(globals::state->screenSize.x);
+	const uint64_t expectedHeight = ClampPositiveDimension(globals::state->screenSize.y);
+	const uint64_t estimatedHoldBytes = SaturatingMultiplyVRRenderScaleBytes(
+		SaturatingMultiplyVRRenderScaleBytes(expectedWidth, expectedHeight),
+		kVRRenderScalePresentationHoldBytesPerPixelUpperBound);
+	const uint64_t estimatedSystemCommitBytes = SaturatingMultiplyVRRenderScaleBytes(
+		estimatedHoldBytes,
+		kVRRenderScalePresentationHoldSystemCommitMultiplier);
+	const uint64_t videoAdmissionLimit =
+		memory.budgetBytes > kVRRenderScaleHighHeadroomBytes ?
+			memory.budgetBytes - kVRRenderScaleHighHeadroomBytes :
+			0u;
+	const uint64_t systemCommitAdmissionLimit =
+		GetVRRenderScaleDoorHandoffSystemCommitAdmissionLimit(
+			memory.systemCommitLimitBytes);
+	const bool admissionSafe =
+		memory.valid &&
+		memory.systemCommitValid &&
+		memory.currentUsageBytes < videoAdmissionLimit &&
+		estimatedHoldBytes < videoAdmissionLimit - memory.currentUsageBytes &&
+		memory.systemCommitBytes < systemCommitAdmissionLimit &&
+		estimatedSystemCommitBytes < systemCommitAdmissionLimit - memory.systemCommitBytes;
+	if (!admissionSafe) {
+		vrRenderScaleTransitionPresentationHoldCaptureUnavailable = true;
+		return true;
+	}
+
+	vrRenderScaleTransitionPresentationHoldCaptureRequested = true;
+	vrRenderScaleTransitionPresentationHoldCaptureStartFrame = currentFrame;
+	vrRenderScaleTransitionPresentationHoldCaptureFrame = std::numeric_limits<uint32_t>::max();
+	vrRenderScaleTransitionPresentationHoldCaptureEyeMask = 0;
+	vrRenderScaleTransitionPresentationHoldSource = nullptr;
+	vrRenderScaleTransitionPresentationHoldRecoveryEpoch = recoveryEpoch;
+	return false;
+}
+
+void Upscaling::CaptureVRRenderScaleTransitionPresentationHold(
+	vr::EVREye a_eye,
+	const vr::Texture_t* a_texture,
+	const vr::VRTextureBounds_t* a_bounds)
+{
+	if (!vrRenderScaleTransitionPresentationHoldCaptureRequested ||
+		vrRenderScaleTransitionPresentationHoldReady ||
+		!globals::state ||
+		!globals::d3d::context ||
+		!a_texture ||
+		!a_texture->handle ||
+		a_texture->eType != vr::TextureType_DirectX ||
+		(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right) ||
+		IsMainMenuContextActive() ||
+		IsLoadingMenuContextActive() ||
+		IsVRMenuPresentationContextActive()) {
+		return;
+	}
+
+	const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
+	const uint64_t recoveryEpoch = vrRenderScaleTransitionPresentationHoldRecoveryEpoch;
+	const auto abandonCapture = [&]() {
+		ResetVRRenderScaleTransitionPresentationHold(true);
+		vrRenderScaleTransitionPresentationHoldRecoveryEpoch = recoveryEpoch;
+		vrRenderScaleTransitionPresentationHoldCaptureUnavailable = true;
+	};
+	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_texture->handle);
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	sourceTexture->GetDesc(&sourceDesc);
+	const uint32_t expectedWidth = ClampPositiveDimension(globals::state->screenSize.x);
+	const uint32_t expectedHeight = ClampPositiveDimension(globals::state->screenSize.y);
+	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+	if (sourceDesc.Width != expectedWidth ||
+		sourceDesc.Height != expectedHeight ||
+		sourceDesc.ArraySize != 1 ||
+		sourceDesc.MipLevels != 1 ||
+		sourceDesc.SampleDesc.Count != 1 ||
+		!InputBoundsUseCombinedStereoSpace(a_bounds, eyeIndex)) {
+		return;
+	}
+
+	if (vrRenderScaleTransitionPresentationHoldCaptureFrame != currentFrame) {
+		vrRenderScaleTransitionPresentationHoldCaptureFrame = currentFrame;
+		vrRenderScaleTransitionPresentationHoldCaptureEyeMask = 0;
+		vrRenderScaleTransitionPresentationHoldSource = sourceTexture;
+		vrRenderScaleTransitionPresentationHoldColorSpace = a_texture->eColorSpace;
+	}
+
+	if (vrRenderScaleTransitionPresentationHoldSource != sourceTexture ||
+		vrRenderScaleTransitionPresentationHoldCaptureFrame != currentFrame ||
+		!a_bounds) {
+		return;
+	}
+
+	vrRenderScaleTransitionPresentationHoldBounds[eyeIndex] = *a_bounds;
+	vrRenderScaleTransitionPresentationHoldCaptureEyeMask |= 1u << eyeIndex;
+	constexpr uint32_t kBothVREyesMask = 0x3u;
+	if ((vrRenderScaleTransitionPresentationHoldCaptureEyeMask & kBothVREyesMask) == kBothVREyesMask) {
+		// Copy only after both original eye submissions have succeeded. This keeps
+		// allocation and the full-surface copy out of the inter-eye submit gap.
+		if (vrRenderScaleTransitionPresentationHold &&
+			(vrRenderScaleTransitionPresentationHold->desc.Width != sourceDesc.Width ||
+				vrRenderScaleTransitionPresentationHold->desc.Height != sourceDesc.Height ||
+				vrRenderScaleTransitionPresentationHold->desc.Format != sourceDesc.Format)) {
+			vrRenderScaleTransitionPresentationHold.reset();
+		}
+
+		if (!vrRenderScaleTransitionPresentationHold) {
+			D3D11_TEXTURE2D_DESC holdDesc = sourceDesc;
+			holdDesc.Usage = D3D11_USAGE_DEFAULT;
+			holdDesc.CPUAccessFlags = 0;
+			holdDesc.MiscFlags = 0;
+			try {
+				vrRenderScaleTransitionPresentationHold = eastl::make_unique<Texture2D>(holdDesc);
+				Util::SetResourceName(
+					vrRenderScaleTransitionPresentationHold->resource.get(),
+					"RenderScale_TransitionPresentationHold");
+			} catch (...) {
+				abandonCapture();
+				return;
+			}
+		}
+
+		globals::d3d::context->CopyResource(
+			vrRenderScaleTransitionPresentationHold->resource.get(),
+			sourceTexture);
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("render-scale transition presentation hold capture")) {
+			abandonCapture();
+			return;
+		}
+
+		vrRenderScaleTransitionPresentationHoldCaptureRequested = false;
+		vrRenderScaleTransitionPresentationHoldCaptureStartFrame = 0;
+		vrRenderScaleTransitionPresentationHoldCaptureUnavailable = false;
+		vrRenderScaleTransitionPresentationHoldReady = true;
+		vrRenderScaleTransitionPresentationHoldSubmitFrame = std::numeric_limits<uint32_t>::max();
+		vrRenderScaleTransitionPresentationHoldSubmitFrameActive = false;
+	}
+}
+
+bool Upscaling::TryGetVRRenderScaleTransitionPresentationHold(
+	vr::EVREye a_eye,
+	const vr::Texture_t* a_inputTexture,
+	vr::Texture_t& a_texture,
+	vr::VRTextureBounds_t& a_bounds)
+{
+	if (!vrRenderScaleTransitionPresentationHoldReady ||
+		!vrRenderScaleTransitionPresentationHold ||
+		!vrRenderScaleTransitionPresentationHold->resource ||
+		(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right) ||
+		IsSubmitStageDeviceLost() ||
+		IsMainMenuContextActive() ||
+		IsLoadingMenuContextActive() ||
+		IsVRMenuPresentationContextActive() ||
+		IsCommunityShadersMenuOpen()) {
+		return false;
+	}
+	if (a_inputTexture &&
+		a_inputTexture->handle &&
+		a_inputTexture->eType == vr::TextureType_DirectX &&
+		IsVRPresentationRenderTargetTexture(
+			static_cast<ID3D11Texture2D*>(a_inputTexture->handle))) {
+		return false;
+	}
+
+	const auto transition = GetVRRenderScaleTransitionSnapshot();
+	const uint64_t pendingRecoveryEpoch =
+		pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire);
+	if (transition.targetEpoch == 0 ||
+		pendingRecoveryEpoch == 0 ||
+		pendingRecoveryEpoch != vrRenderScaleTransitionPresentationHoldRecoveryEpoch ||
+		!globals::state) {
+		return false;
+	}
+	const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
+	if (IsPresentationUpscalingActive()) {
+		if (vrRenderScaleTransitionPresentationHoldSubmitFrame != currentFrame) {
+			vrRenderScaleTransitionPresentationHoldSubmitFrame = currentFrame;
+			const auto& activeContract = perfMode.GetBootSnapshot();
+			const bool transitionPresentationCooldown =
+				submitStageVendorResumeFrame.load(std::memory_order_acquire) != 0 ||
+				(activeContract.valid && !activeContract.submitStageVendorAllowed);
+			vrRenderScaleTransitionPresentationHoldSubmitFrameActive =
+				transitionPresentationCooldown ||
+				transition.state == VRRenderScaleTransitionState::Stabilizing;
+		}
+		if (!vrRenderScaleTransitionPresentationHoldSubmitFrameActive)
+			return false;
+	} else if (currentFrame >
+			   vrRenderScaleTransitionPresentationHoldInactiveSubmitEndFrame) {
+		return false;
+	}
+
+	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+	a_texture.handle = vrRenderScaleTransitionPresentationHold->resource.get();
+	a_texture.eType = vr::TextureType_DirectX;
+	a_texture.eColorSpace = vrRenderScaleTransitionPresentationHoldColorSpace;
+	a_bounds = vrRenderScaleTransitionPresentationHoldBounds[eyeIndex];
+	return true;
+}
+
+void Upscaling::ServiceVRRenderScaleTransitionPresentationHold()
+{
+	if (!vrRenderScaleTransitionPresentationHold ||
+		vrRenderScaleTransitionPresentationHoldCaptureRequested) {
+		return;
+	}
+
+	const auto transition = GetVRRenderScaleTransitionSnapshot();
+	const bool replacementStable =
+		transition.state == VRRenderScaleTransitionState::Active &&
+		transition.applied.valid &&
+		transition.applied.active &&
+		submitStageVendorResumeFrame.load(std::memory_order_acquire) == 0;
+	const bool activationAbandoned =
+		transition.targetEpoch == 0 &&
+		pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire) == 0;
+	const uint32_t currentFrame =
+		globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	const bool holdExpiredBeforeActivation =
+		currentFrame != 0 &&
+		vrRenderScaleTransitionPresentationHoldCaptureFrame !=
+			std::numeric_limits<uint32_t>::max() &&
+		ElapsedFrames(
+			vrRenderScaleTransitionPresentationHoldCaptureFrame,
+			currentFrame) >= kVRRenderScalePresentationHoldMaxPreActivationFrames &&
+		(!transition.applied.valid || !transition.applied.active);
+	if (!replacementStable && !activationAbandoned && !holdExpiredBeforeActivation)
+		return;
+
+	const uint64_t retirementEpoch =
+		transition.applied.transitionEpoch != 0 ?
+			transition.applied.transitionEpoch :
+			transition.targetEpoch;
+	if (!CanAdmitVRIntermediateRetirement(retirementEpoch))
+		return;
+
+	RetiredVRIntermediateTextures retired{};
+	retired.retireFrame = currentFrame;
+	retired.transitionEpoch = retirementEpoch;
+	retired.contractGeneration = transition.applied.contractGeneration;
+	retired.transitionPresentationHold = std::move(vrRenderScaleTransitionPresentationHold);
+	retiredVRIntermediateTextures.push_back(std::move(retired));
+	vrIntermediateTextureCleanupFence = nullptr;
+	ScheduleVRIntermediateTextureCleanup();
+	ServiceVRIntermediateTextureCleanup();
+	UpdateVRIntermediateRetirementSnapshot(
+		retiredVRIntermediateTextures.size() >= kVRRetiredIntermediateTextureMaxSets);
+
+	ResetVRRenderScaleTransitionPresentationHold(false);
+}
+
 void Upscaling::ScheduleVRIntermediateTextureCleanup()
 {
 	deferredVRIntermediateTextureCleanupFrame = 0;
@@ -20274,6 +20616,10 @@ void Upscaling::RecordVRRenderScalePresentationObservation(const VRRenderScalePr
 			case VRRenderScalePresentationPath::VendorEvaluated:
 				increment(presentation.vendorEvaluatedEyeObservations);
 				break;
+			case VRRenderScalePresentationPath::ValidatedPresentationHold:
+				increment(presentation.validatedPresentationHoldEyeObservations);
+				presentation.consecutiveBothEyesVendorFrames = 0;
+				break;
 			case VRRenderScalePresentationPath::PresentationStretch:
 				increment(presentation.presentationStretchEyeObservations);
 				presentation.maximumConsecutivePresentationStretchFrames = std::max(
@@ -20522,6 +20868,8 @@ namespace
 			return Upscaling::VRLoadPresentationProbeSubmitPath::Original;
 		if (std::strcmp(a_path, "upscaled") == 0)
 			return Upscaling::VRLoadPresentationProbeSubmitPath::Upscaled;
+		if (std::strcmp(a_path, "transition-hold") == 0)
+			return Upscaling::VRLoadPresentationProbeSubmitPath::TransitionHold;
 		if (std::strcmp(a_path, "in-scene-overlay") == 0)
 			return Upscaling::VRLoadPresentationProbeSubmitPath::InSceneOverlay;
 		return Upscaling::VRLoadPresentationProbeSubmitPath::Unknown;
@@ -26366,6 +26714,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(*this);
 	ApplyPendingVRFpsStabilizerLoadSync();
 	ApplyPendingVRUpscalingTransition();
+	ServiceVRRenderScaleTransitionPresentationHold();
 	QueueDeferredVRRenderScaleActivationIfReady(*this);
 	ServiceSubmitStageBoundsFallbackWatchdog();
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
@@ -27603,6 +27952,35 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 	if (vrRenderScaleMode && activeContract.valid && !activeContract.submitStageVendorAllowed)
 		transitionPresentationCooldown = true;
+	vr::Texture_t validatedPresentationHoldTexture{};
+	vr::VRTextureBounds_t validatedPresentationHoldBounds{};
+	const bool useValidatedPresentationHold =
+		vrRenderScaleMode &&
+		!submitPresentationContext &&
+		!currentMenuPresentationContext &&
+		!sceneFeatureMenuPauseContext &&
+		TryGetVRRenderScaleTransitionPresentationHold(
+			a_eye,
+			a_inputTexture,
+			validatedPresentationHoldTexture,
+			validatedPresentationHoldBounds);
+	const auto presentValidatedPresentationHold = [&]() {
+		if (!useValidatedPresentationHold) {
+			return false;
+		}
+
+		a_outputTexture = validatedPresentationHoldTexture;
+		a_outputBounds = validatedPresentationHoldBounds;
+		setPresentationObservation(
+			VRRenderScalePresentationPath::ValidatedPresentationHold,
+			sourceRegion.width,
+			sourceRegion.height,
+			sourceEyeWidthIn,
+			sourceEyeHeightIn,
+			false,
+			true);
+		return true;
+	};
 	auto computePresentationOnly = [&]() {
 		// The resolved PostLoadSync contract owns gameplay presentation even when
 		// a derived loading/menu flag outlives the door. Real menus are excluded by
@@ -27676,6 +28054,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			presentationOnly = computePresentationOnly();
 		}
 	}
+
+	if (presentationOnly && presentValidatedPresentationHold())
+		return true;
 
 	if (!presentationOnly)
 		EnsureResourcesCurrent(upscaleMethod);
@@ -27907,6 +28288,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		vrIntermediateColorOut[eyeIndex] &&
 		vrIntermediateColorOut[eyeIndex]->resource;
 	if (canReuseSubmitStageEyeOutput) {
+		if (presentValidatedPresentationHold())
+			return true;
+
 		a_outputTexture = *a_inputTexture;
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
 		a_outputTexture.eType = vr::TextureType_DirectX;
@@ -28365,6 +28749,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (IsSubmitStageDeviceLost())
 			return false;
 
+		if (presentValidatedPresentationHold())
+			return true;
+
 		if (vrRenderScaleMode &&
 			presentStretchOutput(eyeWidthIn, eyeHeightIn, VRRenderScalePresentationPath::VendorFailureStretch)) {
 			return true;
@@ -28504,6 +28891,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				submitStageMirrorEyeReady = {};
 			}
 		}
+
+		if (presentValidatedPresentationHold())
+			return true;
 
 		a_outputTexture = *a_inputTexture;
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
@@ -29071,6 +29461,8 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScaleStressSession.sessionID = sessionID;
 		vrRenderScaleStressSession.startFrame = frame;
 		vrRenderScaleStressSession.baselineVendorEvaluatedEyeObservations = presentation.vendorEvaluatedEyeObservations;
+		vrRenderScaleStressSession.baselineValidatedPresentationHoldEyeObservations =
+			presentation.validatedPresentationHoldEyeObservations;
 		vrRenderScaleStressSession.baselinePresentationStretchEyeObservations = presentation.presentationStretchEyeObservations;
 		vrRenderScaleStressSession.baselineVendorFailureStretchEyeObservations = presentation.vendorFailureStretchEyeObservations;
 		vrRenderScaleStressSession.baselineBoundsMismatchOriginalFallbackEyeObservations = presentation.boundsMismatchOriginalFallbackEyeObservations;
@@ -29544,6 +29936,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							  { "lastFallbackFrame", controller.presentation.lastFallbackFrame },
 							  { "maximumConsecutivePresentationStretchFrames", controller.presentation.maximumConsecutivePresentationStretchFrames },
 							  { "vendorEvaluatedEyeObservations", controller.presentation.vendorEvaluatedEyeObservations },
+							  { "validatedPresentationHoldEyeObservations", controller.presentation.validatedPresentationHoldEyeObservations },
 							  { "presentationStretchEyeObservations", controller.presentation.presentationStretchEyeObservations },
 							  { "vendorFailureStretchEyeObservations", controller.presentation.vendorFailureStretchEyeObservations },
 							  { "boundsMismatchOriginalFallbackEyeObservations", controller.presentation.boundsMismatchOriginalFallbackEyeObservations },
@@ -29603,6 +29996,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	const uint64_t vendorEvaluatedEyeObservations = observationsSinceStart(
 		controller.presentation.vendorEvaluatedEyeObservations,
 		session.baselineVendorEvaluatedEyeObservations);
+	const uint64_t validatedPresentationHoldEyeObservations = observationsSinceStart(
+		controller.presentation.validatedPresentationHoldEyeObservations,
+		session.baselineValidatedPresentationHoldEyeObservations);
 	const uint64_t presentationStretchEyeObservations = observationsSinceStart(
 		controller.presentation.presentationStretchEyeObservations,
 		session.baselinePresentationStretchEyeObservations);
@@ -29648,6 +30044,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			presentationEyeMatchesStable(controller.presentation.eyes[1]));
 	record["presentationPath"] = {
 		{ "vendorEvaluatedEyeObservations", vendorEvaluatedEyeObservations },
+		{ "validatedPresentationHoldEyeObservations", validatedPresentationHoldEyeObservations },
 		{ "presentationStretchEyeObservations", presentationStretchEyeObservations },
 		{ "vendorFailureStretchEyeObservations", vendorFailureStretchEyeObservations },
 		{ "boundsMismatchOriginalFallbackEyeObservations", boundsMismatchOriginalFallbackEyeObservations },
@@ -29807,6 +30204,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		vendorFailureStretchEyeObservations == 0 && boundsMismatchOriginalFallbackEyeObservations == 0,
 		{ { "vendorFailureStretchEyeObservations", vendorFailureStretchEyeObservations },
 			{ "boundsMismatchOriginalFallbackEyeObservations", boundsMismatchOriginalFallbackEyeObservations },
+			{ "validatedPresentationHoldEyeObservations", validatedPresentationHoldEyeObservations },
 			{ "allowedPresentationStretchEyeObservations", presentationStretchEyeObservations } },
 		{ { "vendorFailureStretchEyeObservations", 0 }, { "boundsMismatchOriginalFallbackEyeObservations", 0 } });
 	addGate(
@@ -30018,6 +30416,8 @@ const char* Upscaling::GetVRRenderScalePresentationPathName(VRRenderScalePresent
 		return "Unknown";
 	case VRRenderScalePresentationPath::VendorEvaluated:
 		return "VendorEvaluated";
+	case VRRenderScalePresentationPath::ValidatedPresentationHold:
+		return "ValidatedPresentationHold";
 	case VRRenderScalePresentationPath::PresentationStretch:
 		return "PresentationStretch";
 	case VRRenderScalePresentationPath::VendorFailureStretch:
@@ -30063,6 +30463,8 @@ const char* Upscaling::GetVRLoadPresentationProbeSubmitPathName(
 		return "Original";
 	case VRLoadPresentationProbeSubmitPath::Upscaled:
 		return "Upscaled";
+	case VRLoadPresentationProbeSubmitPath::TransitionHold:
+		return "TransitionHold";
 	case VRLoadPresentationProbeSubmitPath::InSceneOverlay:
 		return "InSceneOverlay";
 	default:

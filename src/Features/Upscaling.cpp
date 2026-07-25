@@ -4202,6 +4202,34 @@ namespace
 		       transitionState == Upscaling::VRRenderScaleTransitionState::Stabilizing;
 	}
 
+	bool IsVRFixedVendorRuntimeStableForPostLoad(const Upscaling& a_upscaling)
+	{
+		if (!globals::game::isVR ||
+			IsVRRenderScaleCurrentOrTargetRelevant(a_upscaling) ||
+			a_upscaling.HasPendingVRUpscalingTransition() ||
+			a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+			a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+			a_upscaling.perfMode.HasRestartRequiredChange()) {
+			return false;
+		}
+
+		const auto configuredMethod = a_upscaling.GetConfiguredUpscaleMethodForTransition();
+		if (!IsVendorUpscalingMethod(configuredMethod) ||
+			a_upscaling.GetRuntimeUpscaleMethod() != configuredMethod) {
+			return false;
+		}
+
+		return configuredMethod == Upscaling::UpscaleMethod::kDLSS ?
+		           !a_upscaling.pendingDLSSReset.load(std::memory_order_acquire) :
+		           !a_upscaling.pendingFSRReset.load(std::memory_order_acquire);
+	}
+
+	bool IsVRFixedVendorPostLoadResetNoOp(const Upscaling& a_upscaling)
+	{
+		return !a_upscaling.IsVRFpsStabilizerSyncActive() &&
+		       IsVRFixedVendorRuntimeStableForPostLoad(a_upscaling);
+	}
+
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
 		// Keep depth-projected mask work out of the physical relatch as well as the
@@ -4989,6 +5017,164 @@ namespace
 
 		texture->GetDesc(&outDesc);
 		return true;
+	}
+
+	bool CanRepairVRFixedVendorMaskDuringSaveLoad(
+		const Upscaling& a_upscaling,
+		const State* a_state,
+		uint32_t a_eyeIndex,
+		ID3D11UnorderedAccessView* a_colorUAV,
+		ID3D11ShaderResourceView* a_depthSRV,
+		uint32_t a_depthWidth,
+		uint32_t a_depthHeight,
+		uint32_t a_colorWidth,
+		uint32_t a_colorHeight,
+		uint32_t a_depthOffsetX,
+		uint32_t a_colorOffsetX,
+		uint32_t a_depthOffsetY,
+		uint32_t a_colorOffsetY)
+	{
+		// This is the only exception to the generic save/load HAM-repair deferral.
+		// Keep it fail-closed: the live per-eye vendor path, completed world frame,
+		// current plan, and exact color/depth resources must all agree.
+		if (!globals::game::isVR ||
+			!a_state ||
+			!a_colorUAV ||
+			!a_depthSRV ||
+			!IsSaveLoadTransitionContextActive(a_state) ||
+			a_state->pendingPostLoadRuntimeReset ||
+			IsLoadingMenuContextActive() ||
+			IsNonLoadingVRMenuPresentationContextActive() ||
+			HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(a_upscaling) ||
+			!IsVRFixedVendorRuntimeStableForPostLoad(a_upscaling)) {
+			return false;
+		}
+
+		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
+		const uint32_t saveLoadStartFrame =
+			a_state->saveLoadSafeModeStartFrame.load(std::memory_order_acquire);
+		if (!HasCompletedVRWorldFrameAfterLatestLoad(a_state) ||
+			(saveLoadStartFrame != 0 &&
+				a_state->lastCompletedWorldRenderFrame <= saveLoadStartFrame) ||
+			a_state->lastWorldRenderFrame != currentFrame) {
+			return false;
+		}
+
+		const auto runtimeMethod = a_upscaling.GetRuntimeUpscaleMethod();
+		const auto& plan = a_upscaling.GetRuntimeResolutionPlan();
+		if (!plan.vendorMethod ||
+			plan.upscaleMethod != runtimeMethod ||
+			plan.owner == Upscaling::ResolutionOwner::VRRenderScaleMode ||
+			plan.knownMenuContextActive ||
+			plan.menuContextActive ||
+			plan.loadingMenuActive ||
+			plan.perfModeRestartRequired) {
+			return false;
+		}
+
+		const uint32_t displayWidth = ClampPositiveDimension(plan.finalOutputSize.x);
+		const uint32_t displayHeight = ClampPositiveDimension(plan.finalOutputSize.y);
+		const uint32_t renderWidth = ClampPositiveDimension(plan.engineRenderSize.x);
+		const uint32_t renderHeight = ClampPositiveDimension(plan.engineRenderSize.y);
+		if (!displayWidth ||
+			!displayHeight ||
+			!renderWidth ||
+			!renderHeight ||
+			(displayWidth & 1u) != 0 ||
+			(renderWidth & 1u) != 0 ||
+			displayWidth != ClampPositiveDimension(a_state->screenSize.x) ||
+			displayHeight != ClampPositiveDimension(a_state->screenSize.y) ||
+			a_colorWidth != displayWidth / 2u ||
+			a_colorHeight != displayHeight ||
+			a_depthWidth != renderWidth / 2u ||
+			a_depthHeight != renderHeight) {
+			return false;
+		}
+
+		winrt::com_ptr<ID3D11Resource> colorResource;
+		winrt::com_ptr<ID3D11Resource> depthResource;
+		a_colorUAV->GetResource(colorResource.put());
+		a_depthSRV->GetResource(depthResource.put());
+		if (!colorResource || !depthResource)
+			return false;
+
+		D3D11_TEXTURE2D_DESC colorDesc{};
+		D3D11_TEXTURE2D_DESC depthDesc{};
+		if (!TryGetTexture2DDesc(colorResource.get(), colorDesc) ||
+			!TryGetTexture2DDesc(depthResource.get(), depthDesc) ||
+			colorDesc.ArraySize != 1 ||
+			colorDesc.MipLevels != 1 ||
+			colorDesc.SampleDesc.Count != 1 ||
+			depthDesc.ArraySize != 1 ||
+			depthDesc.MipLevels != 1 ||
+			depthDesc.SampleDesc.Count != 1) {
+			return false;
+		}
+
+		const bool colorRegionValid =
+			a_colorOffsetX <= colorDesc.Width &&
+			a_colorWidth <= colorDesc.Width - a_colorOffsetX &&
+			a_colorOffsetY <= colorDesc.Height &&
+			a_colorHeight <= colorDesc.Height - a_colorOffsetY;
+		const bool exactPerEyeColorLayout =
+			colorDesc.Width == displayWidth / 2u &&
+			a_colorOffsetX == 0;
+		const bool exactCombinedColorLayout =
+			colorDesc.Width == displayWidth &&
+			a_colorOffsetX == a_eyeIndex * (displayWidth / 2u);
+		if (!colorRegionValid ||
+			colorDesc.Height != displayHeight ||
+			(!exactPerEyeColorLayout && !exactCombinedColorLayout)) {
+			return false;
+		}
+
+		auto* renderer = globals::game::renderer;
+		if (!renderer)
+			return false;
+		for (const auto& output : a_upscaling.vrIntermediateColorOut) {
+			if (!output || !output->resource || !output->uav)
+				return false;
+		}
+		const auto colorIdentity = GetCOMIdentityAddress(colorResource.get());
+		const auto& perEyeOutput = a_upscaling.vrIntermediateColorOut[a_eyeIndex];
+		const bool perEyeOutputOwned =
+			GetCOMIdentityAddress(perEyeOutput->resource.get()) == colorIdentity;
+		const auto& mainTarget =
+			renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		const bool combinedOutputOwned =
+			(mainTarget.texture &&
+				GetCOMIdentityAddress(mainTarget.texture) == colorIdentity) ||
+			(a_upscaling.sharpenerTexture &&
+				a_upscaling.sharpenerTexture->resource &&
+				a_upscaling.sharpenerTexture->uav &&
+				GetCOMIdentityAddress(a_upscaling.sharpenerTexture->resource.get()) == colorIdentity);
+		if ((exactPerEyeColorLayout && !perEyeOutputOwned) ||
+			(exactCombinedColorLayout && !combinedOutputOwned)) {
+			return false;
+		}
+
+		auto& mainDepth =
+			renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		if (!mainDepth.texture ||
+			!mainDepth.depthSRV ||
+			a_depthSRV != mainDepth.depthSRV ||
+			GetCOMIdentityAddress(depthResource.get()) !=
+				GetCOMIdentityAddress(mainDepth.texture)) {
+			return false;
+		}
+
+		const bool depthRegionValid =
+			a_depthOffsetX <= depthDesc.Width &&
+			a_depthWidth <= depthDesc.Width - a_depthOffsetX &&
+			a_depthOffsetY <= depthDesc.Height &&
+			a_depthHeight <= depthDesc.Height - a_depthOffsetY;
+		const bool exactDepthLayout =
+			(depthDesc.Width == displayWidth && depthDesc.Height == displayHeight) ||
+			(depthDesc.Width == renderWidth && depthDesc.Height == renderHeight);
+		return depthRegionValid &&
+		       exactDepthLayout &&
+		       a_depthOffsetX == a_eyeIndex * (renderWidth / 2u) &&
+		       a_depthOffsetY == 0;
 	}
 
 	struct VRMenuPresentationTraceResourceInfo
@@ -17184,6 +17370,29 @@ void Upscaling::RequestPostLoadRuntimeReset()
 	if (!globals::game::isVR)
 		return;
 
+	// Fixed-resolution vendor upscaling has no physical post-load contract to
+	// reconcile. Avoid extending its safe-mode window when the active method is
+	// unchanged and no vendor reset or target recreation is pending.
+	if (IsVRFixedVendorPostLoadResetNoOp(*this)) {
+		const uint64_t staleRecoveryEpoch =
+			pendingPostLoadRuntimeResetEpoch.exchange(0, std::memory_order_acq_rel);
+		postLoadRuntimeResetPending.store(false, std::memory_order_release);
+		if (staleRecoveryEpoch != 0)
+			CompleteVRRenderScalePostLoadRecovery(staleRecoveryEpoch, 0);
+		InvalidateFrameScopedUpscalingState();
+		if (ShouldEmitUpscalingDiagLogs()) {
+			auto* state = globals::state;
+			logger::debug(
+				"[Upscaling][Diag] Skipped no-op fixed-resolution VR post-load runtime reset frame={} method={} quality={} screen={}x{}",
+				state ? state->frameCount : 0u,
+				magic_enum::enum_name(GetConfiguredUpscaleMethodForTransition()),
+				ClampQualityModeUInt(settings.qualityMode),
+				state ? ClampPositiveDimension(state->screenSize.x) : 0u,
+				state ? ClampPositiveDimension(state->screenSize.y) : 0u);
+		}
+		return;
+	}
+
 	const uint64_t recoveryEpoch = BeginVRRenderScalePostLoadRecovery();
 	pendingPostLoadRuntimeResetEpoch.store(recoveryEpoch, std::memory_order_release);
 	postLoadRuntimeResetPending.store(true, std::memory_order_release);
@@ -25147,6 +25356,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	if (depthTexture.depthSRV) {
 		ClearHMDMaskForEye(
 			HMDMaskClearPhase::SubmitStageFoveatedOutput,
+			eyeIndex,
 			outputUAV,
 			depthTexture.depthSRV,
 			inputWidthPerEye,
@@ -25154,14 +25364,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 			outputWidthPerEye,
 			outputHeight,
 			inputStereoLayout.eyes[eyeIndex].minX,
-			0u
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			,
-			0u,
-			0u,
-			eyeIndex
-#endif
-		);
+			0u);
 	}
 
 	if (usePeripheryTAA) {
@@ -25864,6 +26067,7 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 
 				ClearHMDMaskForEye(
 					HMDMaskClearPhase::PerEyeOutput,
+					i,
 					vrIntermediateColorOut[i]->uav.get(),
 					depthTexture.depthSRV,
 					eyeWidthIn,
@@ -25871,14 +26075,7 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 					eyeWidthOut,
 					eyeHeightOut,
 					inputStereoLayout.eyes[i].minX,
-					0u
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					,
-					0u,
-					0u,
-					i
-#endif
-				);
+					0u);
 			}
 		}
 	}
@@ -26335,6 +26532,7 @@ void Upscaling::ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11Unordere
 
 	ClearHMDMaskForEye(
 		HMDMaskClearPhase::PerEyeOutput,
+		eyeIndex,
 		colorUAV,
 		depthSRV,
 		depthWidthPerEye,
@@ -26342,14 +26540,7 @@ void Upscaling::ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11Unordere
 		colorWidthPerEye,
 		colorHeight,
 		eyeIndex * depthWidthPerEye,
-		colorOffsetX
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		,
-		0u,
-		0u,
-		eyeIndex
-#endif
-	);
+		colorOffsetX);
 }
 
 bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource,
@@ -26790,32 +26981,6 @@ bool Upscaling::ShouldClearHMDMaskInPhase(Upscaling::HMDMaskClearPhase a_phase) 
 	       runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 }
 
-void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
-	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY)
-{
-	if (!globals::game::isVR)
-		return;
-	if (!colorUAV || !depthSRV || !depthWidth || !depthHeight || !colorWidth || !colorHeight)
-		return;
-	// During save/load or a physical render-scale handoff, the depth feed can be
-	// transiently mismatched with the current eye target. Running HAM clear in
-	// either window can briefly project a rectangular mask.
-	if (ShouldDeferHMDClearMask())
-		return;
-
-	(void)DispatchHMDMaskClear(
-		colorUAV,
-		depthSRV,
-		depthWidth,
-		depthHeight,
-		colorWidth,
-		colorHeight,
-		depthOffsetX,
-		colorOffsetX,
-		depthOffsetY,
-		colorOffsetY);
-}
-
 bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY, bool a_verifyBindings)
 {
@@ -26888,21 +27053,39 @@ bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11
 	return true;
 }
 
-void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
-	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	,
-	uint32_t a_probeEyeIndex
-#endif
-)
+void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_t a_eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY)
 {
-	const bool shouldClear = ShouldClearHMDMaskInPhase(a_phase);
+	if (a_eyeIndex >= 2)
+		return;
+
+	const bool validatedFixedVendorRepair =
+		a_phase == HMDMaskClearPhase::PerEyeOutput &&
+		CanRepairVRFixedVendorMaskDuringSaveLoad(
+			*this,
+			globals::state,
+			a_eyeIndex,
+			colorUAV,
+			depthSRV,
+			depthWidth,
+			depthHeight,
+			colorWidth,
+			colorHeight,
+			depthOffsetX,
+			colorOffsetX,
+			depthOffsetY,
+			colorOffsetY);
+	const bool shouldClear =
+		validatedFixedVendorRepair ||
+		ShouldClearHMDMaskInPhase(a_phase);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	const bool deferred = ShouldDeferHMDClearMask();
+	const bool deferred =
+		ShouldDeferHMDClearMask() &&
+		!validatedFixedVendorRepair;
 	const auto recordObservation = [&](bool a_executed) {
-		if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire) || a_probeEyeIndex >= 2)
+		if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire))
 			return;
-		auto& observation = vrLoadPresentationHMDMaskObservations[a_probeEyeIndex];
+		auto& observation = vrLoadPresentationHMDMaskObservations[a_eyeIndex];
 		observation.frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 		observation.phase = static_cast<uint32_t>(a_phase);
 		observation.observed = true;
@@ -26921,11 +27104,7 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11U
 		return;
 #endif
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	const uint64_t dispatchSequence =
-		vrLoadPresentationProbeHMDDispatchSequence.load(std::memory_order_relaxed);
-#endif
-	ClearHMDMask(
+	[[maybe_unused]] const bool executed = DispatchHMDMaskClear(
 		colorUAV,
 		depthSRV,
 		depthWidth,
@@ -26935,11 +27114,11 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11U
 		depthOffsetX,
 		colorOffsetX,
 		depthOffsetY,
-		colorOffsetY);
+		colorOffsetY,
+		validatedFixedVendorRepair);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	recordObservation(
-		vrLoadPresentationProbeHMDDispatchSequence.load(std::memory_order_relaxed) != dispatchSequence);
+	recordObservation(executed);
 #endif
 }
 
@@ -28486,6 +28665,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 		ClearHMDMaskForEye(
 			HMDMaskClearPhase::SubmitStageOutput,
+			eyeIndex,
 			vrIntermediateColorOut[eyeIndex]->uav.get(),
 			depth.depthSRV,
 			sourceRegion.depthWidth,
@@ -28494,13 +28674,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			eyeHeightOut,
 			sourceRegion.depthOffsetX,
 			0u,
-			sourceRegion.depthOffsetY
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			,
-			0u,
-			eyeIndex
-#endif
-		);
+			sourceRegion.depthOffsetY);
 	};
 
 	const UINT sourceSubresource = sourceRegion.subresource;
@@ -28684,6 +28858,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			vrIntermediateColorOut[targetEyeIndex]->uav) {
 			ClearHMDMaskForEye(
 				HMDMaskClearPhase::SubmitStageOutput,
+				targetEyeIndex,
 				vrIntermediateColorOut[targetEyeIndex]->uav.get(),
 				depth.depthSRV,
 				clearDepthWidth,
@@ -28692,13 +28867,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				eyeHeightOut,
 				clearDepthOffsetX,
 				0u,
-				clearDepthOffsetY
-#ifdef DEVBENCH_BRIDGE_ENABLED
-				,
-				0u,
-				targetEyeIndex
-#endif
-			);
+				clearDepthOffsetY);
 			if (IsSubmitStageDeviceLost())
 				return false;
 		}

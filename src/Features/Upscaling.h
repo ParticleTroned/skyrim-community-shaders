@@ -1451,10 +1451,6 @@ public:
 	// Shared VR HMD Mask Clearing
 	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskCS;
 	winrt::com_ptr<ID3D11Buffer> vrClearHMDMaskCB;
-	// Helper to dispatch mask clearing for a single eye region
-	void ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
-		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
-		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void ServiceVRLoadPresentationProbeReadbacks() noexcept;
@@ -2094,14 +2090,9 @@ private:
 		SubmitStageFoveatedOutput
 	};
 	bool ShouldClearHMDMaskInPhase(HMDMaskClearPhase a_phase) const;
-	void ClearHMDMaskForEye(HMDMaskClearPhase a_phase, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+	void ClearHMDMaskForEye(HMDMaskClearPhase a_phase, uint32_t a_eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
-		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		,
-		uint32_t a_probeEyeIndex = std::numeric_limits<uint32_t>::max()
-#endif
-	);
+		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0);
 	struct VendorEyeDispatchParams
 	{
 		uint32_t eyeIndex = 0;

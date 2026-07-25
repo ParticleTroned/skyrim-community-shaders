@@ -27804,8 +27804,35 @@ void Upscaling::PostDisplay()
 {
 	auto viewport = globals::game::graphicsState;
 
+	const bool projectionChanged =
+		viewport->projectionPosScaleX != projectionPosScaleX ||
+		viewport->projectionPosScaleY != projectionPosScaleY;
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
+
+	// Flat rendering can re-latch reduced scene ratios after post-processing for
+	// the next frame. Restore only the engine's interface-facing state here, while
+	// retaining the internal reduced-resolution contract for ConfigureUpscaling().
+	if (!globals::game::isVR) {
+		auto& runtimeData = viewport->GetRuntimeData();
+		const bool interfaceStateChanged =
+			projectionChanged ||
+			runtimeData.dynamicResolutionPreviousWidthRatio != 1.0f ||
+			runtimeData.dynamicResolutionPreviousHeightRatio != 1.0f ||
+			runtimeData.dynamicResolutionWidthRatio != 1.0f ||
+			runtimeData.dynamicResolutionHeightRatio != 1.0f ||
+			runtimeData.dynamicResolutionLock != 1;
+		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
+		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
+		runtimeData.dynamicResolutionWidthRatio = 1.0f;
+		runtimeData.dynamicResolutionHeightRatio = 1.0f;
+		runtimeData.dynamicResolutionLock = 1;
+
+		if (interfaceStateChanged) {
+			globals::game::renderer->UpdateViewPort(0, 0, 1);
+			UpdateCameraData();
+		}
+	}
 
 	const bool vrNativeVendorDirectMenu =
 		IsVRNativeVendorDirectMenuPresentationContextActive(*this, globals::state);
@@ -35234,7 +35261,12 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (vendorDynamicResolutionActive && !presentationUpscalingActive) {
+	// This depth-only fallback belongs to the VR presentation pipeline. On flat,
+	// taking it skips the normal PerformUpscaling() dispatch for every sub-native
+	// FSR/DLSS preset and leaves the projection jitter unresolved.
+	if (globals::game::isVR &&
+		vendorDynamicResolutionActive &&
+		!presentationUpscalingActive) {
 		if (upscaling.ShouldUseFrameGenerationThisFrame())
 			upscaling.CopySharedD3D12Resources();
 

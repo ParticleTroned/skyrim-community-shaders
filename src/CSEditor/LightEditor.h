@@ -20,20 +20,24 @@ private:
 	struct LightInfo
 	{
 		bool isSelected = false;
-		uint32_t id;
-		void* ptr;
-		uint32_t index;
+		uint32_t id = 0;
+		void* ptr = nullptr;
+		uint32_t index = 0;
 		std::string name;
-		bool isRef;
-		bool isAttached;
-		bool isOther;
+		bool isRef = false;
+		bool isAttached = false;
+		bool isOther = false;
 		bool isSpotlight = false;
 		bool hasPosition = false;
-		RE::NiPoint3 position;
+		RE::NiPoint3 position = {};
 
 		bool operator==(const LightInfo& other) const noexcept
 		{
-			return id == other.id && index == other.index;
+			if (isOther || other.isOther)
+				return isOther == other.isOther && ptr == other.ptr;
+			if (isAttached || other.isAttached)
+				return isAttached == other.isAttached && ptr == other.ptr;
+			return isRef == other.isRef && id == other.id && index == other.index;
 		}
 	};
 
@@ -127,7 +131,10 @@ private:
 	static LPLightInfo ParseLPLightName(const std::string& name);
 	static std::string UpdateLPFlags(const std::string& existingFlags, bool inverseSquare, bool linear);
 	static bool MatchesLPFilters(const nlohmann::json& lightEntry, RE::TESObjectREFR* refr);
-	static std::array<float, 3> GetJsonVec3(const nlohmann::json& data, const char* key);
+	static bool TryGetJsonVec3(
+		const nlohmann::json& data,
+		const char* key,
+		std::array<float, 3>& value);
 	bool SaveToLightPlacer();
 
 	void UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight);

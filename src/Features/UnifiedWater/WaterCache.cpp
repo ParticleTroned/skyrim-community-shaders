@@ -20,6 +20,18 @@ namespace
 		       std::fabs(height) < kMaxValidCellHeight;
 	}
 
+	RE::TESWaterForm* LookupWaterForm(const RE::FormID formID)
+	{
+		if (!formID)
+			return nullptr;
+
+		auto* form = RE::TESWaterForm::LookupByID<RE::TESWaterForm>(formID);
+		if (!form || form->formType != RE::FormType::Water)
+			return nullptr;
+
+		return form;
+	}
+
 	bool TryGetWorldSpaceCellBounds(const RE::TESWorldSpace* worldSpace, int32_t& minX, int32_t& minY, int32_t& maxX, int32_t& maxY, int32_t& width, int32_t& height)
 	{
 		if (!worldSpace)
@@ -453,6 +465,10 @@ bool WaterCache::BuildDiskCache(RE::TESWorldSpace* worldSpace, DiskCache& diskCa
 	int32_t precacheFallbackCount = 0;
 	int32_t skippedMissingCellDataCount = 0;
 	int32_t skippedInvalidHeightCount = 0;
+	int32_t skippedUnresolvedFormCount = 0;
+	int32_t firstUnresolvedFormX = 0;
+	int32_t firstUnresolvedFormY = 0;
+	RE::FormID firstUnresolvedFormID = 0;
 
 	for (auto y = minY; y <= maxY; ++y) {
 		for (auto x = minX; x <= maxX; ++x) {
@@ -495,10 +511,23 @@ bool WaterCache::BuildDiskCache(RE::TESWorldSpace* worldSpace, DiskCache& diskCa
 				formID = 0;
 			}
 
-			RE::TESWaterForm* form = formID ? RE::TESWaterForm::LookupByID<RE::TESWaterForm>(formID) : nullptr;
-			if ((formID && !form) || (form && form->formType != RE::FormType::Water)) {
-				logger::warn("[Unified Water] [Cache] {}: Failed to load WaterForm {:08X}", editorID.c_str(), formID);
-				return false;
+			const RE::FormID requestedFormID = formID;
+			RE::TESWaterForm* form = LookupWaterForm(formID);
+
+			if (!form && requestedFormID && worldSpace->worldWater && requestedFormID != worldSpace->worldWater->formID) {
+				formID = worldSpace->worldWater->formID;
+				form = LookupWaterForm(formID);
+			}
+
+			if (requestedFormID && !form) {
+				if (!skippedUnresolvedFormCount) {
+					firstUnresolvedFormX = x;
+					firstUnresolvedFormY = y;
+					firstUnresolvedFormID = requestedFormID;
+				}
+				skippedUnresolvedFormCount++;
+				cellData[idx] = {};
+				continue;
 			}
 
 			if (form)
@@ -506,6 +535,11 @@ bool WaterCache::BuildDiskCache(RE::TESWorldSpace* worldSpace, DiskCache& diskCa
 
 			cellData[idx] = { landHeight, waterHeight, formID, form };
 		}
+	}
+
+	if (skippedUnresolvedFormCount) {
+		logger::warn("[Unified Water] [Cache] {}: Skipped {} cells due to unresolvable water forms (first at {},{} form {:08X})",
+			editorID.c_str(), skippedUnresolvedFormCount, firstUnresolvedFormX, firstUnresolvedFormY, firstUnresolvedFormID);
 	}
 
 	if (precacheFallbackCount || skippedMissingCellDataCount || skippedInvalidHeightCount) {
@@ -689,6 +723,7 @@ bool WaterCache::TryBuildRuntimeCache(const DiskCache& diskCache, RuntimeCache& 
 
 	int32_t diskReadIndex = 0;
 	int32_t skippedInvalidInstructionCount = 0;
+	int32_t skippedUnresolvedFormCount = 0;
 
 	for (int32_t lodLevelIdx = 0; lodLevelIdx < 4; ++lodLevelIdx) {
 		auto& lodInstructions = cache.instructions[lodLevelIdx];
@@ -725,10 +760,15 @@ bool WaterCache::TryBuildRuntimeCache(const DiskCache& diskCache, RuntimeCache& 
 				continue;
 			}
 
-			instruction.form.ptr = RE::TESForm::LookupByID<RE::TESWaterForm>(instruction.form.id);
-			if (!instruction.form.ptr || instruction.form.ptr->formType != RE::FormType::Water) {
-				logger::warn("[Unified Water] [Cache] Failed to load WaterForm {:08X}", instruction.form.id);
-				return false;
+			instruction.form.ptr = LookupWaterForm(instruction.form.id);
+			if (!instruction.form.ptr) {
+				if (!skippedUnresolvedFormCount) {
+					logger::warn("[Unified Water] [Cache] Failed to load WaterForm {:08X} at LOD{} cell {},{} - skipping instruction",
+						instruction.form.id, lodLevel, instruction.x, instruction.y);
+				}
+				skippedUnresolvedFormCount++;
+				diskReadIndex++;
+				continue;
 			}
 
 			if (!instruction.form.ptr->IsInitialized()) {
@@ -744,6 +784,10 @@ bool WaterCache::TryBuildRuntimeCache(const DiskCache& diskCache, RuntimeCache& 
 
 	if (skippedInvalidInstructionCount) {
 		logger::debug("[Unified Water] [Cache] Skipped {} cached instructions with invalid water heights", skippedInvalidInstructionCount);
+	}
+
+	if (skippedUnresolvedFormCount > 1) {
+		logger::warn("[Unified Water] [Cache] Skipped {} cached instructions with unresolvable water forms", skippedUnresolvedFormCount);
 	}
 
 	return true;

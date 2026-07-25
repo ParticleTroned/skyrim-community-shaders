@@ -96,6 +96,16 @@ void LensFlareWidget::RevertChanges()
 	ApplyChanges();
 }
 
+Widget::UndoRestoreAction LensFlareWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<LensFlareWidget&>(widget);
+		self.settings = snapshot;
+		self.ApplyChanges();
+	};
+}
+
 bool LensFlareWidget::HasUnsavedChanges() const
 {
 	return !(settings == originalSettings);

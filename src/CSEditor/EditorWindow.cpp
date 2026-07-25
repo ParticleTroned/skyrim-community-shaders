@@ -347,11 +347,7 @@ void EditorWindow::ShowObjectsWindow()
 									currentCellLightingWidget->SetOpen(true);
 									currentCellLightingWidget->RequestFocus();
 								} else {
-									currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
-									currentCellLightingWidget->CacheFormData();
-									currentCellLightingWidget->Load(false);
-									currentCellLightingWidget->SetOpen(true);
-									currentCellLightingWidget->RequestFocus();
+									OpenCellLightingWidget(cell, false, true);
 								}
 							} });
 					}
@@ -646,10 +642,7 @@ void EditorWindow::ShowObjectsWindow()
 									if (currentCellLightingWidget && currentCellLightingWidget->cell == cell) {
 										currentCellLightingWidget->SetOpen(true);
 									} else {
-										currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
-										currentCellLightingWidget->CacheFormData();
-										currentCellLightingWidget->Load();
-										currentCellLightingWidget->SetOpen(true);
+										OpenCellLightingWidget(cell, true);
 									}
 								}
 							}
@@ -987,10 +980,7 @@ void EditorWindow::RenderUI()
 
 					if (!found) {
 						// Create new widget for current cell
-						currentCellLightingWidget = std::make_unique<CellLightingWidget>(player->parentCell);
-						currentCellLightingWidget->CacheFormData();
-						currentCellLightingWidget->Load();
-						currentCellLightingWidget->SetOpen(true);
+						OpenCellLightingWidget(player->parentCell, true);
 					}
 				}
 			} else {
@@ -1417,27 +1407,53 @@ void EditorWindow::EnsureResources()
 	SetupResources();
 }
 
+void EditorWindow::OpenCellLightingWidget(RE::TESObjectCELL* cell, bool showNotification, bool requestFocus)
+{
+	if (!cell)
+		return;
+
+	if (currentCellLightingWidget && currentCellLightingWidget->cell == cell) {
+		currentCellLightingWidget->SetOpen(true);
+		if (requestFocus)
+			currentCellLightingWidget->RequestFocus();
+		return;
+	}
+
+	if (lastFocusedWidget == currentCellLightingWidget.get())
+		lastFocusedWidget = nullptr;
+
+	currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
+	currentCellLightingWidget->CacheFormData();
+	currentCellLightingWidget->Load(showNotification);
+	currentCellLightingWidget->SetOpen(true);
+	if (requestFocus)
+		currentCellLightingWidget->RequestFocus();
+}
+
+void EditorWindow::UpdateOpenState()
+{
+	if (open == wasOpen)
+		return;
+
+	if (open) {
+		DisableVanityCamera();
+	} else {
+		lightEditor.ResetOverrides();
+		RestoreVanityCamera();
+		lastFocusedWidget = nullptr;
+	}
+
+	wasOpen = open;
+}
+
 void EditorWindow::Draw()
 {
+	UpdateOpenState();
 	EnsureResources();
 
 	if (open) {
 		lightEditor.GatherLights();
 	}
-
-	// Track editor open state for vanity camera management
-	static bool wasOpen = false;
-
-	if (open && !wasOpen) {
-		// Editor just opened - disable vanity camera
-		DisableVanityCamera();
-	} else if (!open && wasOpen) {
-		lightEditor.ResetOverrides();
-		// Editor just closed - restore vanity camera
-		RestoreVanityCamera();
-	}
-
-	wasOpen = open;
 
 	// Re-enforce weather lock if active (handles time changes)
 	if (weatherLockActive && lockedWeather) {
@@ -2024,12 +2040,17 @@ void EditorWindow::PushUndoState(Widget* widget)
 	if (!widget)
 		return;
 
-	UndoState state;
-	state.widget = widget;
-	state.widgetId = widget->GetEditorID();
-	state.settings = widget->js;
+	auto restore = widget->CaptureUndoState();
+	if (!restore)
+		return;
 
-	undoStack.push_back(state);
+	UndoState state{
+		.widgetIdentity = widget->GetStableIdentity(),
+		.widgetLabel = widget->GetEditorID(),
+		.restore = std::move(restore)
+	};
+
+	undoStack.push_back(std::move(state));
 
 	if (undoStack.size() > maxUndoStates) {
 		undoStack.erase(undoStack.begin());
@@ -2041,31 +2062,36 @@ void EditorWindow::PerformUndo()
 	if (undoStack.empty())
 		return;
 
-	UndoState state = undoStack.back();
+	UndoState state = std::move(undoStack.back());
 	undoStack.pop_back();
 
-	if (!state.widget) {
-		for (auto* collection : GetWidgetCollections()) {
-			for (auto& w : *collection) {
-				if (w->GetEditorID() == state.widgetId) {
-					state.widget = w.get();
-					break;
-				}
-			}
-			if (state.widget)
-				break;
+	if (auto* widget = FindWidgetByIdentity(state.widgetIdentity)) {
+		state.restore(*widget);
+		ShowNotification(
+			std::format("Undone changes to {}", state.widgetLabel),
+			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.InfoColor,
+			2.0f);
+	} else {
+		ShowNotification(
+			std::format("Cannot undo {} because its editor is no longer active", state.widgetLabel),
+			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.Warning,
+			3.0f);
+	}
+}
+
+Widget* EditorWindow::FindWidgetByIdentity(std::string_view identity)
+{
+	for (auto* collection : GetWidgetCollections()) {
+		for (auto& widget : *collection) {
+			if (widget && widget->GetStableIdentity() == identity)
+				return widget.get();
 		}
 	}
 
-	if (state.widget) {
-		state.widget->js = state.settings;
-		state.widget->LoadSettings();
-		state.widget->ApplyChanges();
-		ShowNotification(
-			std::format("Undone changes to {}", state.widgetId),
-			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.InfoColor,
-			2.0f);
-	}
+	if (currentCellLightingWidget && currentCellLightingWidget->GetStableIdentity() == identity)
+		return currentCellLightingWidget.get();
+
+	return nullptr;
 }
 
 void EditorWindow::ShowNotification(const std::string& message, const ImVec4& color, float duration)

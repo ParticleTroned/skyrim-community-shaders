@@ -120,6 +120,7 @@ public:
 	void EnsureResources();
 
 	void Draw();
+	void UpdateOpenState();
 
 	void LockWeather(RE::TESWeather* weather);
 	void UnlockWeather();
@@ -144,9 +145,9 @@ public:
 	// Undo system
 	struct UndoState
 	{
-		Widget* widget;
-		json settings;
-		std::string widgetId;
+		std::string widgetIdentity;
+		std::string widgetLabel;
+		Widget::UndoRestoreAction restore;
 	};
 	std::vector<UndoState> undoStack;
 	static const size_t maxUndoStates = 50;
@@ -240,9 +241,12 @@ private:
 	std::string settingsFilename = "EditorSettings";
 	bool showSettingsWindow = false;
 	std::string settingsSelectedCategory = "Flags";
+	bool wasOpen = false;
 
 	// Widget focus tracking for Ctrl+W
 	Widget* lastFocusedWidget = nullptr;
+	void OpenCellLightingWidget(RE::TESObjectCELL* cell, bool showNotification, bool requestFocus = false);
+	Widget* FindWidgetByIdentity(std::string_view identity);
 
 	// Time control state
 	bool timePaused = false;

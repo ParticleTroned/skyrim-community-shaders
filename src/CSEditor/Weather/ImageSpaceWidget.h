@@ -66,4 +66,5 @@ public:
 	void LoadFromGameSettings();
 	void ApplyChanges() override;
 	void RevertChanges() override;
+	UndoRestoreAction CaptureUndoState() const override;
 };

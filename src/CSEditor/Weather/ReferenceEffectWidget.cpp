@@ -60,7 +60,6 @@ void ReferenceEffectWidget::DrawWidget()
 			}
 
 			if (changed && editorWindow->settings.autoApplyChanges) {
-				editorWindow->PushUndoState(this);
 				ApplyChanges();
 			}
 		}
@@ -160,6 +159,16 @@ void ReferenceEffectWidget::RevertChanges()
 {
 	settings = vanillaSettings;
 	ApplyChanges();
+}
+
+Widget::UndoRestoreAction ReferenceEffectWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<ReferenceEffectWidget&>(widget);
+		self.settings = snapshot;
+		self.ApplyChanges();
+	};
 }
 
 bool ReferenceEffectWidget::HasUnsavedChanges() const

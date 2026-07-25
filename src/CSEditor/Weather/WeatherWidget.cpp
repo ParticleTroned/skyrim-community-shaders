@@ -131,6 +131,7 @@ void WeatherWidget::DrawWidget()
 			if (ImGui::BeginCombo("Parent", settings.parent.c_str())) {
 				// Option for "None"
 				if (ImGui::Selectable("None", parent == nullptr)) {
+					editorWindow->PushUndoState(this);
 					parent = nullptr;
 					settings.parent = "None";
 				}
@@ -144,6 +145,7 @@ void WeatherWidget::DrawWidget()
 
 					// Option for each widget
 					if (ImGui::Selectable(widget->GetEditorID().c_str(), parent == widget.get())) {
+						editorWindow->PushUndoState(this);
 						parent = (WeatherWidget*)widget.get();
 						settings.parent = widget->GetEditorID();
 					}
@@ -168,6 +170,7 @@ void WeatherWidget::DrawWidget()
 			if (parent) {
 				ImGui::SameLine();
 				if (Util::ButtonWithFlash("Inherit All")) {
+					editorWindow->PushUndoState(this);
 					InheritAllFromParent();
 				}
 				Util::AddTooltip("Copy all parameter values from parent weather");
@@ -283,7 +286,7 @@ void WeatherWidget::DrawWidget()
 				if (!hasParent)
 					return false;
 				bool& inheritFlag = settings.inheritFlags[inheritKey];
-				ImGui::Checkbox(("##inherit_" + inheritKey).c_str(), &inheritFlag);
+				WeatherUtils::DrawCheckbox("##inherit_" + inheritKey, inheritFlag, this);
 				if (inheritFlag && parentWidget && recordRef != parentRef) {
 					recordRef = parentRef;
 					pendingReinit = true;
@@ -1115,6 +1118,7 @@ void WeatherWidget::DrawCloudSettings()
 			ImGui::BeginGroup();
 
 			if (ImGui::Checkbox(std::format("Enable##{}", layer).c_str(), &layerEnabled)) {
+				editorWindow->PushUndoState(this);
 				settings.clouds[i].enabled = layerEnabled;
 				enableChanged = true;
 				changed = true;
@@ -1205,11 +1209,9 @@ void WeatherWidget::DrawCloudSettings()
 	}
 	if (enableChanged) {
 		// Apply enable/disable immediately for instant feedback, regardless of autoApplyChanges.
-		editorWindow->PushUndoState(this);
 		pendingReinit = true;
 		ApplyChanges();
 	} else if (changed && editorWindow->settings.autoApplyChanges) {
-		editorWindow->PushUndoState(this);
 		ApplyChanges();
 	}
 }
@@ -1302,7 +1304,8 @@ void WeatherWidget::DrawFogRow(bool matches, const char* inheritKey, const char*
 		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
 		ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2.0f * scale, 2.0f * scale));
-		ImGui::Checkbox(std::format("##Fog{}", label).c_str(), &settings.inheritFlags[inheritKey]);
+		if (WeatherUtils::DrawCheckbox(std::format("##Fog{}", label), settings.inheritFlags[inheritKey], this))
+			changed = true;
 		if (parentWidget && settings.inheritFlags[inheritKey]) {
 			const float parentDay = parentWidget->settings.fogProperties[dayPropKey];
 			const float parentNight = parentWidget->settings.fogProperties[nightPropKey];
@@ -1349,13 +1352,12 @@ void WeatherWidget::DrawProperties(std::string category, std::map<std::string, i
 			if (hasParent) {
 				bool& inheritFlag = settings.inheritFlags[p.first];
 				isInherited = inheritFlag;
-				bool inheritChanged = DrawWithHighlight(p.first, [&]() {
-					return ImGui::Checkbox(("##inherit_" + p.first).c_str(), &inheritFlag);
-				});
+				bool inheritChanged = WeatherUtils::DrawCheckbox("##inherit_" + p.first, inheritFlag, this);
 				if (inheritChanged && inheritFlag) {
 					InheritFromParent(p.first);
-					changed = true;
 				}
+				if (inheritChanged)
+					changed = true;
 				Util::AddTooltip(inheritFlag ? "Inheriting from parent" : "Inherit from parent");
 				ImGui::SameLine();
 			}
@@ -1762,6 +1764,17 @@ void WeatherWidget::Delete()
 	Widget::Delete();
 }
 
+Widget::UndoRestoreAction WeatherWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<WeatherWidget&>(widget);
+		self.settings = snapshot;
+		self.pendingReinit = true;
+		self.ApplyChanges();
+	};
+}
+
 bool WeatherWidget::Settings::operator==(const Settings& o) const
 {
 	return parent == o.parent &&
@@ -1850,6 +1863,7 @@ void WeatherWidget::DrawFeatureSettings()
 			}
 
 			if (toggleClicked) {
+				EditorWindow::GetSingleton()->PushUndoState(this);
 				auto& featureJson = getFeatureJson();
 				if (overridesEnabled) {
 					// Disable overrides - mark as disabled but keep the settings
@@ -1877,7 +1891,6 @@ void WeatherWidget::DrawFeatureSettings()
 						}
 					}
 				}
-				EditorWindow::GetSingleton()->PushUndoState(this);
 				if (EditorWindow::GetSingleton()->settings.autoApplyChanges) {
 					ApplyChanges();
 				}
@@ -1929,6 +1942,7 @@ void WeatherWidget::DrawFeatureSettings()
 						}
 
 						if (ImGui::Checkbox(varDisplayName.c_str(), &value)) {
+							EditorWindow::GetSingleton()->PushUndoState(this);
 							featureJson[varName] = value;
 							modified = true;
 						}
@@ -1948,6 +1962,7 @@ void WeatherWidget::DrawFeatureSettings()
 						// Right-click context menu to reset individual values
 						if (ImGui::BeginPopupContextItem()) {
 							if (ImGui::MenuItem("Reset to Global")) {
+								EditorWindow::GetSingleton()->PushUndoState(this);
 								featureJson.erase(varName);
 								modified = true;
 							}
@@ -1960,6 +1975,8 @@ void WeatherWidget::DrawFeatureSettings()
 						float maxVal = floatVar->GetMax();
 
 						if (ImGui::SliderFloat(varDisplayName.c_str(), &value, minVal, maxVal, "%.3f")) {
+							if (ImGui::IsItemActivated())
+								EditorWindow::GetSingleton()->PushUndoState(this);
 							featureJson[varName] = value;
 							modified = true;
 						}
@@ -1971,6 +1988,7 @@ void WeatherWidget::DrawFeatureSettings()
 						// Right-click context menu to reset individual values
 						if (ImGui::BeginPopupContextItem()) {
 							if (ImGui::MenuItem("Reset to Global")) {
+								EditorWindow::GetSingleton()->PushUndoState(this);
 								featureJson.erase(varName);
 								modified = true;
 							}
@@ -1983,6 +2001,8 @@ void WeatherWidget::DrawFeatureSettings()
 						float colorArray[3] = { value.x, value.y, value.z };
 
 						if (ImGui::ColorEdit3(varDisplayName.c_str(), colorArray)) {
+							if (ImGui::IsItemActivated())
+								EditorWindow::GetSingleton()->PushUndoState(this);
 							featureJson[varName] = json{ colorArray[0], colorArray[1], colorArray[2] };
 							modified = true;
 						}
@@ -1993,6 +2013,7 @@ void WeatherWidget::DrawFeatureSettings()
 
 						if (ImGui::BeginPopupContextItem()) {
 							if (ImGui::MenuItem("Reset to Global")) {
+								EditorWindow::GetSingleton()->PushUndoState(this);
 								featureJson.erase(varName);
 								modified = true;
 							}
@@ -2005,6 +2026,8 @@ void WeatherWidget::DrawFeatureSettings()
 						float colorArray[4] = { value.x, value.y, value.z, value.w };
 
 						if (ImGui::ColorEdit4(varDisplayName.c_str(), colorArray)) {
+							if (ImGui::IsItemActivated())
+								EditorWindow::GetSingleton()->PushUndoState(this);
 							featureJson[varName] = json{ colorArray[0], colorArray[1], colorArray[2], colorArray[3] };
 							modified = true;
 						}
@@ -2015,6 +2038,7 @@ void WeatherWidget::DrawFeatureSettings()
 
 						if (ImGui::BeginPopupContextItem()) {
 							if (ImGui::MenuItem("Reset to Global")) {
+								EditorWindow::GetSingleton()->PushUndoState(this);
 								featureJson.erase(varName);
 								modified = true;
 							}
@@ -2036,7 +2060,6 @@ void WeatherWidget::DrawFeatureSettings()
 				}
 
 				if (modified) {
-					EditorWindow::GetSingleton()->PushUndoState(this);
 					if (EditorWindow::GetSingleton()->settings.autoApplyChanges) {
 						ApplyChanges();
 					}

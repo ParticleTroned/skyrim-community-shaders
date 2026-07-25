@@ -267,6 +267,16 @@ void ImageSpaceWidget::RevertChanges()
 	ApplyChanges();
 }
 
+Widget::UndoRestoreAction ImageSpaceWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<ImageSpaceWidget&>(widget);
+		self.settings = snapshot;
+		self.ApplyChanges();
+	};
+}
+
 bool ImageSpaceWidget::HasUnsavedChanges() const
 {
 	return !(settings == originalSettings);

@@ -113,9 +113,7 @@ void CellLightingWidget::DrawWidget()
 					int zDegrees = settings.directionalZ;
 					if (DrawIfMatchesSearch(CellLightingSetting::kXYRotation, [&](const char* label) {
 							return drawInherited(settings.inheritDirectionalRotation, [&]() {
-								return DrawWithHighlight(label, [&]() {
-									return ImGui::SliderInt(label, &xyDegrees, 0, 360);
-								});
+								return WeatherUtils::DrawSliderInt(label, xyDegrees, 0, 360);
 							});
 						})) {
 						settings.directionalXY = static_cast<uint32_t>(xyDegrees);
@@ -124,9 +122,7 @@ void CellLightingWidget::DrawWidget()
 					ImGui::Spacing();
 					if (DrawIfMatchesSearch(CellLightingSetting::kZRotation, [&](const char* label) {
 							return drawInherited(settings.inheritDirectionalRotation, [&]() {
-								return DrawWithHighlight(label, [&]() {
-									return ImGui::SliderInt(label, &zDegrees, 0, 360);
-								});
+								return WeatherUtils::DrawSliderInt(label, zDegrees, 0, 360);
 							});
 						})) {
 						settings.directionalZ = static_cast<uint32_t>(zDegrees);
@@ -562,6 +558,16 @@ void CellLightingWidget::RevertChanges()
 {
 	settings = vanillaSettings;
 	ApplyChanges();
+}
+
+Widget::UndoRestoreAction CellLightingWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<CellLightingWidget&>(widget);
+		self.settings = snapshot;
+		self.ApplyChanges();
+	};
 }
 
 bool CellLightingWidget::HasUnsavedChanges() const

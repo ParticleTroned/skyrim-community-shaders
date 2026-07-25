@@ -208,6 +208,16 @@ void VolumetricLightingWidget::RevertChanges()
 	ApplyChanges();
 }
 
+Widget::UndoRestoreAction VolumetricLightingWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<VolumetricLightingWidget&>(widget);
+		self.settings = snapshot;
+		self.ApplyChanges();
+	};
+}
+
 bool VolumetricLightingWidget::HasUnsavedChanges() const
 {
 	return !(settings == originalSettings);

@@ -86,6 +86,7 @@ void PrecipitationWidget::DrawWidget()
 							return ImGui::Combo(label, &currentType, types, IM_ARRAYSIZE(types));
 						});
 						if (comboChanged) {
+							EditorWindow::GetSingleton()->PushUndoState(this);
 							settings.particleType = static_cast<uint32_t>(currentType);
 							return true;
 						}
@@ -134,6 +135,7 @@ void PrecipitationWidget::DrawWidget()
 								return ImGui::InputInt(label, &numX);
 							});
 						})) {
+						EditorWindow::GetSingleton()->PushUndoState(this);
 						settings.numSubtexturesX = std::max(1, numX);
 						changed = true;
 					}
@@ -142,6 +144,7 @@ void PrecipitationWidget::DrawWidget()
 								return ImGui::InputInt(label, &numY);
 							});
 						})) {
+						EditorWindow::GetSingleton()->PushUndoState(this);
 						settings.numSubtexturesY = std::max(1, numY);
 						changed = true;
 					}
@@ -157,6 +160,7 @@ void PrecipitationWidget::DrawWidget()
 						lastCheckedExists = WeatherUtils::TexturePath::ExistsOnDisk(buf);
 					}
 					if (inputChanged && WeatherUtils::TexturePath::HasDdsExtension(buf) && lastCheckedExists) {
+						EditorWindow::GetSingleton()->PushUndoState(this);
 						settings.particleTexture = lastCheckedBuffer;
 						changed = true;
 					}
@@ -357,6 +361,19 @@ void PrecipitationWidget::RevertChanges()
 	lastCheckedBuffer.clear();
 	lastCheckedExists = false;
 	ApplyChanges();
+}
+
+Widget::UndoRestoreAction PrecipitationWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<PrecipitationWidget&>(widget);
+		self.settings = snapshot;
+		strncpy_s(self.textureBuffer, sizeof(self.textureBuffer), self.settings.particleTexture.c_str(), _TRUNCATE);
+		self.lastAppliedTexture.clear();
+		self.lastAppliedPrecip.reset();
+		self.ApplyChanges();
+	};
 }
 
 bool PrecipitationWidget::HasUnsavedChanges() const

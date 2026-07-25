@@ -412,6 +412,7 @@ void CSEditor::Prepass()
 	if (ShouldPreloadEditorResources()) {
 		EnsureDataLoaded();
 	}
+	EditorWindow::GetSingleton()->UpdateOpenState();
 	UpdateWeatherLockAndTime();
 }
 

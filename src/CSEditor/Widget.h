@@ -5,6 +5,7 @@
 #include "Utils/Form.h"
 
 #include <array>
+#include <functional>
 #include <string_view>
 
 #include <initializer_list>
@@ -77,6 +78,13 @@ public:
 
 	/// Full path to this widget's save file.
 	std::string GetSaveFilePath() const;
+
+	/// Stable identity used for session state such as undo. Unlike a raw pointer,
+	/// this remains safe when an on-demand widget is destroyed and recreated.
+	std::string GetStableIdentity() const
+	{
+		return std::format("{}/{}", GetFolderName(), GetSaveKey());
+	}
 
 	virtual std::string GetFormID() const
 	{
@@ -175,6 +183,9 @@ public:
 	bool CanApplyPersistentChanges() const;
 	virtual void RevertChanges() { LoadSettings(); }
 	virtual bool HasUnsavedChanges() const { return false; }
+
+	using UndoRestoreAction = std::function<void(Widget&)>;
+	virtual UndoRestoreAction CaptureUndoState() const { return {}; }
 
 	// Reinitialize weather to apply form refs that are only read at load time.
 	static void ForceWeatherReinit(RE::TESWeather* weather);

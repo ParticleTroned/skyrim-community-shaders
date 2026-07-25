@@ -25,6 +25,7 @@ public:
 	void SaveSettings() override;
 	void ApplyChanges() override;
 	void RevertChanges() override;
+	UndoRestoreAction CaptureUndoState() const override;
 	bool HasUnsavedChanges() const override;
 	std::vector<SearchResult> CollectSearchableSettings() const override;
 

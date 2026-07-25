@@ -223,6 +223,16 @@ void LightingTemplateWidget::RevertChanges()
 	ApplyChanges();
 }
 
+Widget::UndoRestoreAction LightingTemplateWidget::CaptureUndoState() const
+{
+	const auto snapshot = settings;
+	return [snapshot](Widget& widget) {
+		auto& self = static_cast<LightingTemplateWidget&>(widget);
+		self.settings = snapshot;
+		self.ApplyChanges();
+	};
+}
+
 void LightingTemplateWidget::SetLightingTemplateValues()
 {
 	auto& data = lightingTemplate->data;

@@ -4941,15 +4941,6 @@ namespace
 		return globals::game::isVR && IsKnownGameMenuContextActive();
 	}
 
-	bool IsVRRenderScalePresentationHoldMenuContextActive()
-	{
-		// A derived menu tail no longer owns compositor contents after the real
-		// menu closes. Blocking on it would prevent capture of the destination
-		// world frame that the hold exists to preserve.
-		return IsLoadingMenuContextActive() ||
-		       IsNonLoadingVRMenuPresentationContextActive();
-	}
-
 	uint64_t EncodeVRMenuBridgeTraceState(uint32_t a_frame, bool a_active)
 	{
 		return (static_cast<uint64_t>(a_frame) << 1) | (a_active ? 1ull : 0ull);
@@ -16707,11 +16698,10 @@ void Upscaling::CaptureVRRenderScaleTransitionPresentationHold(
 		!a_texture ||
 		!a_texture->handle ||
 		a_texture->eType != vr::TextureType_DirectX ||
-		(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)) {
-		return;
-	}
-	if (!HasCompletedVRWorldFrameAfterLatestLoad(globals::state) ||
-		IsVRRenderScalePresentationHoldMenuContextActive()) {
+		(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right) ||
+		IsMainMenuContextActive() ||
+		IsLoadingMenuContextActive() ||
+		IsVRMenuPresentationContextActive()) {
 		return;
 	}
 
@@ -16823,7 +16813,10 @@ bool Upscaling::TryGetVRRenderScaleTransitionPresentationHold(
 				static_cast<ID3D11Texture2D*>(a_inputTexture->handle));
 		const bool presentationContextEligible =
 			!presentationRenderTarget &&
-			!IsVRRenderScalePresentationHoldMenuContextActive();
+			!IsMainMenuContextActive() &&
+			!IsLoadingMenuContextActive() &&
+			!IsVRMenuPresentationContextActive() &&
+			!IsCommunityShadersMenuOpen();
 		if (presentationContextEligible) {
 			const auto transition = GetVRRenderScaleTransitionSnapshot();
 			const uint64_t pendingRecoveryEpoch =

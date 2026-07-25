@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Features/Upscaling.h"
+#	include "Features/VR.h"
 #	include "Globals.h"
 #	include "State.h"
 
@@ -162,6 +163,7 @@ namespace
 		return {
 			{ "frame", frame },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
+			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "session", {
 							 { "id", session.sessionID },
 							 { "active", session.active },
@@ -440,6 +442,64 @@ namespace
 			});
 		}
 
+		if (action == "probe_start") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "load presentation probing requires Skyrim VR" } };
+				if (!globals::state || !globals::state->IsDeveloperMode())
+					return json{ { "error", "developer mode is required to start a load presentation probe" } };
+				auto& upscaling = globals::features::upscaling;
+				const auto status = upscaling.BuildVRLoadPresentationProbeStatus();
+				if (status.value("active", false))
+					return json{ { "error", "a load presentation probe is already active" }, { "status", status } };
+				if (!globals::features::vr.InstallSubmitHook(false)) {
+					return json{
+						{ "error", "OpenVR submit interception is not available; load presentation probe was not started" },
+						{ "status", status }
+					};
+				}
+				upscaling.StartVRLoadPresentationProbe();
+				return json{ { "action", "probe_start" }, { "status", upscaling.BuildVRLoadPresentationProbeStatus() } };
+			});
+		}
+
+		if (action == "probe_stop") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "load presentation probing requires Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				const auto status = upscaling.BuildVRLoadPresentationProbeStatus();
+				if (!status.value("active", false))
+					return json{ { "error", "no load presentation probe is active" }, { "status", status } };
+				upscaling.StopVRLoadPresentationProbe();
+				return json{ { "action", "probe_stop" }, { "status", upscaling.BuildVRLoadPresentationProbeStatus() } };
+			});
+		}
+
+		if (action == "probe_record") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "load presentation probing requires Skyrim VR" } };
+				return json{
+					{ "action", "probe_record" },
+					{ "record", globals::features::upscaling.BuildVRLoadPresentationProbeRecord() },
+				};
+			});
+		}
+
+		if (action == "probe_reset") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "load presentation probing requires Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				const auto status = upscaling.BuildVRLoadPresentationProbeStatus();
+				if (status.value("active", false))
+					return json{ { "error", "stop the load presentation probe before resetting it" }, { "status", status } };
+				upscaling.ResetVRLoadPresentationProbe();
+				return json{ { "action", "probe_reset" }, { "status", upscaling.BuildVRLoadPresentationProbeStatus() } };
+			});
+		}
+
 		if (action == "apply") {
 			if (!a_args.contains("method") || !a_args["method"].is_string())
 				return { { "error", "apply requires string parameter 'method'" } };
@@ -525,7 +585,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset" }) },
+			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset" }) },
 		};
 	}
 
@@ -551,7 +611,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller, local-video and system-commit memory, retirement, backend, both-eye fidelity, and compositor-accepted per-eye presentation paths. record returns the complete schema-v8 iteration artifact. start begins a fixed-memory capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the capture, writes its artifact, and returns the complete record. reset clears only a stopped capture. Mutations require Skyrim VR and developer mode; apply additionally requires an active capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller, local-video and system-commit memory, retirement, backend, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v8 iteration artifact. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 per-eye luminance and HAM-clear capture at the final OpenVR submission boundary; probe_stop disables new samples, probe_record returns its timeline, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

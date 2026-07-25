@@ -35,6 +35,12 @@ The registered tool is `communityshaders.renderscale`:
 -   `stop` stops the capture, writes the disk artifact, and returns the complete
     record in the tool response;
 -   `reset` clears a stopped capture.
+-   `probe_start` begins a bounded load-presentation probe at the final OpenVR
+    submission boundary;
+-   `probe_stop` stops accepting new probe samples;
+-   `probe_record` returns the retained per-eye submission and luminance
+    timeline;
+-   `probe_reset` clears a stopped probe.
 
 Mutating actions fail closed outside Skyrim VR. `start` and `apply` require
 developer mode, and `apply` also requires an active capture so an automation
@@ -59,6 +65,35 @@ acceptance.
 Performance builds keep `kEnableVRMenuPresentationTraceDiagnostics` false.
 Changing it to true creates a dedicated forensic build with high-frequency D3D
 menu detours and must not be compared against normal optimization captures.
+
+The load-presentation probe is compiled only with `DEVBENCH_BRIDGE=ON`, requires
+developer mode to start, and remains disabled until `probe_start`. While active,
+it copies a 5x5 grid from each final DirectX eye texture into an eight-slot
+staging ring and uses D3D11 event queries plus non-blocking maps. It never reads
+back a full-resolution frame or waits synchronously for the GPU. It does not
+emit per-frame info or debug log messages; all probe output is returned through
+the DevBench tool. `probe_start` installs the existing idempotent OpenVR submit
+interception immediately and fails closed if the compositor interface is not
+available. The early interception remains observer-only and forwards Skyrim's
+original submissions unchanged until the ordinary production render path
+enables submit processing, so main-menu and loading presentation is captured
+without changing it. Each record
+correlates the sampled luminance grid with QPC/frame time, OpenVR submit path
+and result, texture identity/format/bounds, loading and destination-world
+frames, Stabilizer synchronization state, render-scale presentation path, and
+the CS HMD hidden-area-mask clear decision. `predominantlyWhite` marks a broad
+white submitted texture; `hamWhitePattern` marks bright perimeter samples
+around a substantially darker center.
+
+Start the probe at the main menu or immediately before invoking the in-game
+load command. Stop it only after the destination has visibly settled, then poll
+`status.loadPresentationProbe.pendingReadbacks` until it reaches zero before
+requesting `probe_record`. The 4,096-record ring retains about 22 seconds at
+90 Hz with both eyes submitted every frame; older records are overwritten and
+reported explicitly. If the HMD flashes white but the retained submitted
+textures do not, correlate the QPC interval with a SteamVR mirror recording:
+that result places the artifact after the application texture boundary, in an
+OpenVR/compositor layer rather than the CS presentation texture.
 
 Step 18 calibrates the acceptance contract against the first live MCP rapid-
 switch baseline. A request that reuses the already-active physical contract can

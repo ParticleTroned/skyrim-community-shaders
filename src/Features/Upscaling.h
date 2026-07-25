@@ -784,6 +784,100 @@ public:
 		uint64_t boundsMismatchOriginalFallbackEyeObservations = 0;
 	};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	static constexpr uint32_t kVRLoadPresentationProbeGridSize = 5;
+	static constexpr uint32_t kVRLoadPresentationProbeSampleCount =
+		kVRLoadPresentationProbeGridSize * kVRLoadPresentationProbeGridSize;
+	static constexpr uint32_t kVRLoadPresentationProbeRetentionCapacity = 4096;
+	static constexpr uint32_t kVRLoadPresentationProbePendingCapacity = 8;
+
+	enum class VRLoadPresentationProbeCaptureStatus : uint8_t
+	{
+		Pending,
+		Complete,
+		InvalidTexture,
+		UnsupportedTexture,
+		ResourceFailure,
+		QueueSaturated,
+		MapFailure
+	};
+
+	enum class VRLoadPresentationProbeSubmitPath : uint8_t
+	{
+		Unknown,
+		Original,
+		Upscaled,
+		InSceneOverlay
+	};
+
+	struct VRLoadPresentationProbeRecord
+	{
+		uint64_t sequence = 0;
+		uint64_t sessionID = 0;
+		uint64_t queuedQpc = 0;
+		uint64_t completedQpc = 0;
+		uint32_t frame = 0;
+		uint32_t lastCompletedWorldFrame = 0;
+		uint32_t loadingCloseFrame = 0;
+		uint32_t eyeIndex = 0;
+		VRLoadPresentationProbeSubmitPath submitPath = VRLoadPresentationProbeSubmitPath::Unknown;
+		VRRenderScalePresentationPath presentationPath = VRRenderScalePresentationPath::Unknown;
+		VRLoadPresentationProbeCaptureStatus captureStatus = VRLoadPresentationProbeCaptureStatus::Pending;
+		uintptr_t textureAddress = 0;
+		uint32_t textureWidth = 0;
+		uint32_t textureHeight = 0;
+		uint32_t textureFormat = 0;
+		uint32_t textureArraySize = 0;
+		uint32_t textureSampleCount = 0;
+		uint32_t textureColorSpace = 0;
+		uint32_t sourceSubresource = 0;
+		float boundsUMin = 0.0f;
+		float boundsVMin = 0.0f;
+		float boundsUMax = 1.0f;
+		float boundsVMax = 1.0f;
+		uint32_t viewportCount = 0;
+		float viewportTopLeftX = 0.0f;
+		float viewportTopLeftY = 0.0f;
+		float viewportWidth = 0.0f;
+		float viewportHeight = 0.0f;
+		uint32_t scissorCount = 0;
+		int32_t scissorLeft = 0;
+		int32_t scissorTop = 0;
+		int32_t scissorRight = 0;
+		int32_t scissorBottom = 0;
+		bool rasterizerScissorEnabled = false;
+		uint32_t submitFlags = 0;
+		uint32_t compositorResult = 0;
+		bool compositorResultKnown = false;
+		uint64_t transitionEpoch = 0;
+		uint32_t contractGeneration = 0;
+		bool loadingMenu = false;
+		bool mainMenu = false;
+		bool postLoadResetPending = false;
+		bool stabilizerSyncPending = false;
+		bool renderScaleModeActive = false;
+		bool presentationUpscalingActive = false;
+		bool hamClearObserved = false;
+		bool hamClearEligible = false;
+		bool hamClearDeferred = false;
+		bool hamClearExecuted = false;
+		uint32_t hamClearPhase = 0;
+		bool luminanceValid = false;
+		float minimumLuminance = 0.0f;
+		float maximumLuminance = 0.0f;
+		float meanLuminance = 0.0f;
+		float edgeMeanLuminance = 0.0f;
+		float centerLuminance = 0.0f;
+		uint32_t whiteSampleCount = 0;
+		uint32_t blackSampleCount = 0;
+		uint32_t edgeWhiteSampleCount = 0;
+		bool predominantlyWhite = false;
+		bool predominantlyBlack = false;
+		bool hamWhitePattern = false;
+		std::array<float, kVRLoadPresentationProbeSampleCount> luminance{};
+	};
+#endif
+
 	enum class VRRenderScaleStressEventType : uint8_t
 	{
 		SessionStarted,
@@ -952,11 +1046,30 @@ public:
 	void ResetVRRenderScaleStressSession();
 	json BuildVRRenderScaleIterationRecord() const;
 	bool WriteVRRenderScaleIterationRecord() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void StartVRLoadPresentationProbe();
+	void StopVRLoadPresentationProbe();
+	void ResetVRLoadPresentationProbe();
+	json BuildVRLoadPresentationProbeStatus() const;
+	json BuildVRLoadPresentationProbeRecord() const;
+	uint64_t BeginVRLoadPresentationProbeSubmit(
+		const char* a_path,
+		vr::EVREye a_eye,
+		const vr::Texture_t* a_texture,
+		const vr::VRTextureBounds_t* a_bounds,
+		vr::EVRSubmitFlags a_flags,
+		const VRRenderScalePresentationObservation* a_presentationObservation = nullptr) noexcept;
+	void CompleteVRLoadPresentationProbeSubmit(uint64_t a_sequence, vr::EVRCompositorError a_result) noexcept;
+#endif
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
 	static const char* GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure);
 	static const char* GetVRRenderScaleMemoryTrimReasonName(VRRenderScaleMemoryTrimReason a_reason);
 	static const char* GetVRRenderScalePresentationPathName(VRRenderScalePresentationPath a_path);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	static const char* GetVRLoadPresentationProbeCaptureStatusName(VRLoadPresentationProbeCaptureStatus a_status);
+	static const char* GetVRLoadPresentationProbeSubmitPathName(VRLoadPresentationProbeSubmitPath a_path);
+#endif
 	static const char* GetVRVendorRuntimeLifecyclePhaseName(VRVendorRuntimeLifecyclePhase a_phase);
 	VRRenderScaleResourceKey BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot& a_profile) const;
 	static VRRenderScaleResourceCompatibility CompareVRRenderScaleResourceKeys(
@@ -1334,6 +1447,11 @@ public:
 	void ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0);
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void ServiceVRLoadPresentationProbeReadbacks() noexcept;
+	void PublishVRLoadPresentationProbeRecord(const VRLoadPresentationProbeRecord& a_record) noexcept;
+#endif
 
 	// Shared VR Per-Eye Intermediate Buffers
 	// Owned here so both Streamline (DLSS) and FidelityFX (FSR) can use them.
@@ -1941,7 +2059,12 @@ private:
 	bool ShouldClearHMDMaskInPhase(HMDMaskClearPhase a_phase) const;
 	void ClearHMDMaskForEye(HMDMaskClearPhase a_phase, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
-		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0);
+		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		uint32_t a_probeEyeIndex = std::numeric_limits<uint32_t>::max()
+#endif
+	);
 	struct VendorEyeDispatchParams
 	{
 		uint32_t eyeIndex = 0;

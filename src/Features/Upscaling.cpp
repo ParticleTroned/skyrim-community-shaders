@@ -20329,6 +20329,850 @@ void Upscaling::RecordVRRenderScalePresentationObservation(const VRRenderScalePr
 	}
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+namespace
+{
+	constexpr std::array<float, Upscaling::kVRLoadPresentationProbeGridSize>
+		kVRLoadPresentationProbeSamplePositions{
+			0.005f,
+			0.05f,
+			0.5f,
+			0.95f,
+			0.995f
+		};
+
+	uint64_t QueryVRLoadPresentationProbeQpc() noexcept
+	{
+		LARGE_INTEGER value{};
+		return ::QueryPerformanceCounter(&value) ? static_cast<uint64_t>(value.QuadPart) : 0;
+	}
+
+	uint32_t GetVRLoadPresentationProbeBytesPerPixel(DXGI_FORMAT a_format) noexcept
+	{
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+		case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+			return 4;
+		case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		case DXGI_FORMAT_R16G16B16A16_UNORM:
+			return 8;
+		case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+			return 16;
+		default:
+			return 0;
+		}
+	}
+
+	float DecodeVRLoadPresentationProbeHalf(uint16_t a_value) noexcept
+	{
+		const bool negative = (a_value & 0x8000u) != 0;
+		const uint32_t exponent = (a_value >> 10u) & 0x1Fu;
+		const uint32_t mantissa = a_value & 0x3FFu;
+		float result = 0.0f;
+		if (exponent == 0) {
+			result = std::ldexp(static_cast<float>(mantissa), -24);
+		} else if (exponent == 0x1Fu) {
+			result = mantissa == 0 ?
+			             std::numeric_limits<float>::infinity() :
+			             std::numeric_limits<float>::quiet_NaN();
+		} else {
+			result = std::ldexp(
+				1.0f + static_cast<float>(mantissa) / 1024.0f,
+				static_cast<int>(exponent) - 15);
+		}
+		return negative ? -result : result;
+	}
+
+	float DecodeVRLoadPresentationProbeUnsignedFloat(
+		uint32_t a_value,
+		uint32_t a_mantissaBits) noexcept
+	{
+		const uint32_t mantissaMask = (1u << a_mantissaBits) - 1u;
+		const uint32_t exponent = (a_value >> a_mantissaBits) & 0x1Fu;
+		const uint32_t mantissa = a_value & mantissaMask;
+		if (exponent == 0)
+			return std::ldexp(
+				static_cast<float>(mantissa),
+				1 - 15 - static_cast<int>(a_mantissaBits));
+		if (exponent == 0x1Fu) {
+			return mantissa == 0 ?
+			           std::numeric_limits<float>::infinity() :
+			           std::numeric_limits<float>::quiet_NaN();
+		}
+		return std::ldexp(
+			1.0f + static_cast<float>(mantissa) / static_cast<float>(1u << a_mantissaBits),
+			static_cast<int>(exponent) - 15);
+	}
+
+	bool DecodeVRLoadPresentationProbePixel(
+		DXGI_FORMAT a_format,
+		const std::byte* a_pixel,
+		float& a_red,
+		float& a_green,
+		float& a_blue) noexcept
+	{
+		if (!a_pixel)
+			return false;
+
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+			{
+				const auto* channels = reinterpret_cast<const uint8_t*>(a_pixel);
+				a_red = static_cast<float>(channels[0]) / 255.0f;
+				a_green = static_cast<float>(channels[1]) / 255.0f;
+				a_blue = static_cast<float>(channels[2]) / 255.0f;
+				return true;
+			}
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+			{
+				const auto* channels = reinterpret_cast<const uint8_t*>(a_pixel);
+				a_red = static_cast<float>(channels[2]) / 255.0f;
+				a_green = static_cast<float>(channels[1]) / 255.0f;
+				a_blue = static_cast<float>(channels[0]) / 255.0f;
+				return true;
+			}
+		case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+			{
+				uint32_t packed = 0;
+				std::memcpy(&packed, a_pixel, sizeof(packed));
+				a_red = static_cast<float>(packed & 0x3FFu) / 1023.0f;
+				a_green = static_cast<float>((packed >> 10u) & 0x3FFu) / 1023.0f;
+				a_blue = static_cast<float>((packed >> 20u) & 0x3FFu) / 1023.0f;
+				return true;
+			}
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+			{
+				uint32_t packed = 0;
+				std::memcpy(&packed, a_pixel, sizeof(packed));
+				a_red = DecodeVRLoadPresentationProbeUnsignedFloat(packed & 0x7FFu, 6u);
+				a_green = DecodeVRLoadPresentationProbeUnsignedFloat((packed >> 11u) & 0x7FFu, 6u);
+				a_blue = DecodeVRLoadPresentationProbeUnsignedFloat((packed >> 22u) & 0x3FFu, 5u);
+				return true;
+			}
+		case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+			{
+				uint16_t channels[4]{};
+				std::memcpy(channels, a_pixel, sizeof(channels));
+				a_red = DecodeVRLoadPresentationProbeHalf(channels[0]);
+				a_green = DecodeVRLoadPresentationProbeHalf(channels[1]);
+				a_blue = DecodeVRLoadPresentationProbeHalf(channels[2]);
+				return true;
+			}
+		case DXGI_FORMAT_R16G16B16A16_UNORM:
+			{
+				uint16_t channels[4]{};
+				std::memcpy(channels, a_pixel, sizeof(channels));
+				a_red = static_cast<float>(channels[0]) / 65535.0f;
+				a_green = static_cast<float>(channels[1]) / 65535.0f;
+				a_blue = static_cast<float>(channels[2]) / 65535.0f;
+				return true;
+			}
+		case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+			{
+				float channels[4]{};
+				std::memcpy(channels, a_pixel, sizeof(channels));
+				a_red = channels[0];
+				a_green = channels[1];
+				a_blue = channels[2];
+				return true;
+			}
+		default:
+			return false;
+		}
+	}
+
+	Upscaling::VRLoadPresentationProbeSubmitPath ParseVRLoadPresentationProbeSubmitPath(
+		const char* a_path) noexcept
+	{
+		if (!a_path)
+			return Upscaling::VRLoadPresentationProbeSubmitPath::Unknown;
+		if (std::strcmp(a_path, "original") == 0)
+			return Upscaling::VRLoadPresentationProbeSubmitPath::Original;
+		if (std::strcmp(a_path, "upscaled") == 0)
+			return Upscaling::VRLoadPresentationProbeSubmitPath::Upscaled;
+		if (std::strcmp(a_path, "in-scene-overlay") == 0)
+			return Upscaling::VRLoadPresentationProbeSubmitPath::InSceneOverlay;
+		return Upscaling::VRLoadPresentationProbeSubmitPath::Unknown;
+	}
+
+	struct VRLoadPresentationHMDMaskObservation
+	{
+		uint32_t frame = 0;
+		uint32_t phase = 0;
+		bool observed = false;
+		bool eligible = false;
+		bool deferred = false;
+		bool executed = false;
+	};
+
+	struct VRLoadPresentationProbePendingReadback
+	{
+		bool pending = false;
+		uint64_t sequence = 0;
+		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+		uint32_t bytesPerPixel = 0;
+		winrt::com_ptr<ID3D11Texture2D> stagingTexture;
+		winrt::com_ptr<ID3D11Query> completionQuery;
+		Upscaling::VRLoadPresentationProbeRecord record{};
+	};
+
+	std::atomic_bool vrLoadPresentationProbeActive{ false };
+	std::atomic<uint64_t> vrLoadPresentationProbeSessionID{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeNextSequence{ 1 };
+	std::atomic<uint32_t> vrLoadPresentationProbePendingReadbacks{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeQueuedReadbacks{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeCompletedReadbacks{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeDroppedReadbacks{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeBrightCandidates{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeHAMCandidates{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeHMDDispatchSequence{ 0 };
+	std::mutex vrLoadPresentationProbeMutex;
+	std::array<Upscaling::VRLoadPresentationProbeRecord, Upscaling::kVRLoadPresentationProbeRetentionCapacity> vrLoadPresentationProbeRecords{};
+	uint32_t vrLoadPresentationProbeNextIndex = 0;
+	uint32_t vrLoadPresentationProbeCount = 0;
+	uint32_t vrLoadPresentationProbeOverwrittenRecords = 0;
+	std::array<VRLoadPresentationProbePendingReadback, Upscaling::kVRLoadPresentationProbePendingCapacity> vrLoadPresentationProbePending{};
+	std::array<VRLoadPresentationHMDMaskObservation, 2> vrLoadPresentationHMDMaskObservations{};
+
+	void ResetVRLoadPresentationProbeRetainedState()
+	{
+		{
+			std::scoped_lock lock(vrLoadPresentationProbeMutex);
+			vrLoadPresentationProbeNextIndex = 0;
+			vrLoadPresentationProbeCount = 0;
+			vrLoadPresentationProbeOverwrittenRecords = 0;
+		}
+		vrLoadPresentationProbeQueuedReadbacks.store(0, std::memory_order_release);
+		vrLoadPresentationProbeCompletedReadbacks.store(0, std::memory_order_release);
+		vrLoadPresentationProbeDroppedReadbacks.store(0, std::memory_order_release);
+		vrLoadPresentationProbeBrightCandidates.store(0, std::memory_order_release);
+		vrLoadPresentationProbeHAMCandidates.store(0, std::memory_order_release);
+	}
+}
+
+void Upscaling::PublishVRLoadPresentationProbeRecord(
+	const VRLoadPresentationProbeRecord& a_record) noexcept
+{
+	if (a_record.sessionID != vrLoadPresentationProbeSessionID.load(std::memory_order_acquire))
+		return;
+
+	try {
+		std::scoped_lock lock(vrLoadPresentationProbeMutex);
+		if (a_record.sessionID != vrLoadPresentationProbeSessionID.load(std::memory_order_acquire))
+			return;
+
+		vrLoadPresentationProbeRecords[vrLoadPresentationProbeNextIndex] = a_record;
+		vrLoadPresentationProbeNextIndex =
+			(vrLoadPresentationProbeNextIndex + 1u) % kVRLoadPresentationProbeRetentionCapacity;
+		if (vrLoadPresentationProbeCount < kVRLoadPresentationProbeRetentionCapacity) {
+			++vrLoadPresentationProbeCount;
+		} else if (vrLoadPresentationProbeOverwrittenRecords != std::numeric_limits<uint32_t>::max()) {
+			++vrLoadPresentationProbeOverwrittenRecords;
+		}
+	} catch (...) {
+		vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+	}
+}
+
+void Upscaling::ServiceVRLoadPresentationProbeReadbacks() noexcept
+{
+	auto* context = globals::d3d::context;
+	if (!context)
+		return;
+
+	for (auto& pending : vrLoadPresentationProbePending) {
+		if (!pending.pending || !pending.completionQuery || !pending.stagingTexture)
+			continue;
+
+		const HRESULT queryResult =
+			context->GetData(pending.completionQuery.get(), nullptr, 0, D3D11_ASYNC_GETDATA_DONOTFLUSH);
+		if (queryResult == S_FALSE)
+			continue;
+
+		auto record = pending.record;
+		record.completedQpc = QueryVRLoadPresentationProbeQpc();
+		if (FAILED(queryResult)) {
+			record.captureStatus = VRLoadPresentationProbeCaptureStatus::ResourceFailure;
+		} else {
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			const HRESULT mapResult =
+				context->Map(pending.stagingTexture.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+			if (mapResult == DXGI_ERROR_WAS_STILL_DRAWING)
+				continue;
+			if (SUCCEEDED(mapResult) && mapped.pData) {
+				float sum = 0.0f;
+				float edgeSum = 0.0f;
+				uint32_t edgeSamples = 0;
+				uint32_t decodedSamples = 0;
+				record.minimumLuminance = std::numeric_limits<float>::max();
+				record.maximumLuminance = 0.0f;
+				for (uint32_t y = 0; y < kVRLoadPresentationProbeGridSize; ++y) {
+					for (uint32_t x = 0; x < kVRLoadPresentationProbeGridSize; ++x) {
+						const uint32_t index = y * kVRLoadPresentationProbeGridSize + x;
+						const auto* pixel =
+							static_cast<const std::byte*>(mapped.pData) +
+							static_cast<size_t>(y) * mapped.RowPitch +
+							static_cast<size_t>(x) * pending.bytesPerPixel;
+						float red = 0.0f;
+						float green = 0.0f;
+						float blue = 0.0f;
+						if (!DecodeVRLoadPresentationProbePixel(
+								pending.format,
+								pixel,
+								red,
+								green,
+								blue) ||
+							!std::isfinite(red) ||
+							!std::isfinite(green) ||
+							!std::isfinite(blue)) {
+							continue;
+						}
+
+						const float luminance =
+							std::max(0.0f, 0.2126f * red + 0.7152f * green + 0.0722f * blue);
+						record.luminance[index] = luminance;
+						record.minimumLuminance = std::min(record.minimumLuminance, luminance);
+						record.maximumLuminance = std::max(record.maximumLuminance, luminance);
+						sum += luminance;
+						++decodedSamples;
+						const bool edge =
+							x == 0 ||
+							y == 0 ||
+							x + 1u == kVRLoadPresentationProbeGridSize ||
+							y + 1u == kVRLoadPresentationProbeGridSize;
+						if (edge) {
+							edgeSum += luminance;
+							++edgeSamples;
+						}
+						if (luminance >= 0.92f) {
+							++record.whiteSampleCount;
+							if (edge)
+								++record.edgeWhiteSampleCount;
+						}
+						if (luminance <= 0.05f)
+							++record.blackSampleCount;
+					}
+				}
+				context->Unmap(pending.stagingTexture.get(), 0);
+
+				if (decodedSamples == kVRLoadPresentationProbeSampleCount) {
+					record.captureStatus = VRLoadPresentationProbeCaptureStatus::Complete;
+					record.luminanceValid = true;
+					record.meanLuminance = sum / static_cast<float>(decodedSamples);
+					record.edgeMeanLuminance =
+						edgeSamples ? edgeSum / static_cast<float>(edgeSamples) : 0.0f;
+					record.centerLuminance =
+						record.luminance[kVRLoadPresentationProbeSampleCount / 2u];
+					record.predominantlyWhite =
+						record.whiteSampleCount >= kVRLoadPresentationProbeSampleCount - 5u;
+					record.predominantlyBlack =
+						record.blackSampleCount >= kVRLoadPresentationProbeSampleCount - 5u;
+					record.hamWhitePattern =
+						record.edgeWhiteSampleCount >= 8u &&
+						record.edgeMeanLuminance >= 0.80f &&
+						record.centerLuminance <= 0.65f &&
+						record.edgeMeanLuminance >= record.centerLuminance + 0.25f;
+				} else {
+					record.captureStatus = VRLoadPresentationProbeCaptureStatus::MapFailure;
+				}
+			} else {
+				record.captureStatus = VRLoadPresentationProbeCaptureStatus::MapFailure;
+			}
+		}
+
+		pending.pending = false;
+		pending.record = {};
+		vrLoadPresentationProbePendingReadbacks.fetch_sub(1, std::memory_order_relaxed);
+		if (record.sessionID == vrLoadPresentationProbeSessionID.load(std::memory_order_acquire)) {
+			if (record.predominantlyWhite)
+				vrLoadPresentationProbeBrightCandidates.fetch_add(1, std::memory_order_relaxed);
+			if (record.hamWhitePattern)
+				vrLoadPresentationProbeHAMCandidates.fetch_add(1, std::memory_order_relaxed);
+			if (record.captureStatus == VRLoadPresentationProbeCaptureStatus::Complete)
+				vrLoadPresentationProbeCompletedReadbacks.fetch_add(1, std::memory_order_relaxed);
+			else
+				vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+			PublishVRLoadPresentationProbeRecord(record);
+		}
+	}
+}
+
+uint64_t Upscaling::BeginVRLoadPresentationProbeSubmit(
+	const char* a_path,
+	vr::EVREye a_eye,
+	const vr::Texture_t* a_texture,
+	const vr::VRTextureBounds_t* a_bounds,
+	vr::EVRSubmitFlags a_flags,
+	const VRRenderScalePresentationObservation* a_presentationObservation) noexcept
+{
+	if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire) &&
+		vrLoadPresentationProbePendingReadbacks.load(std::memory_order_acquire) == 0) {
+		return 0;
+	}
+	ServiceVRLoadPresentationProbeReadbacks();
+	if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire))
+		return 0;
+
+	try {
+		VRLoadPresentationProbeRecord record{};
+		record.sequence = vrLoadPresentationProbeNextSequence.fetch_add(1, std::memory_order_relaxed);
+		record.sessionID = vrLoadPresentationProbeSessionID.load(std::memory_order_acquire);
+		record.queuedQpc = QueryVRLoadPresentationProbeQpc();
+		record.frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+		record.lastCompletedWorldFrame = globals::state ? globals::state->lastCompletedWorldRenderFrame : 0u;
+		record.loadingCloseFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+		record.eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+		record.submitPath = ParseVRLoadPresentationProbeSubmitPath(a_path);
+		record.submitFlags = static_cast<uint32_t>(a_flags);
+		record.textureColorSpace =
+			a_texture ? static_cast<uint32_t>(a_texture->eColorSpace) : 0u;
+		record.loadingMenu = IsLoadingMenuContextActive();
+		record.mainMenu = IsMainMenuContextActive();
+		record.postLoadResetPending =
+			pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire) != 0;
+		record.stabilizerSyncPending =
+			pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0;
+		record.renderScaleModeActive = IsVRRenderScaleModeActive();
+		record.presentationUpscalingActive = IsPresentationUpscalingActive();
+		if (a_bounds) {
+			record.boundsUMin = a_bounds->uMin;
+			record.boundsVMin = a_bounds->vMin;
+			record.boundsUMax = a_bounds->uMax;
+			record.boundsVMax = a_bounds->vMax;
+		}
+		if (a_presentationObservation && a_presentationObservation->valid) {
+			record.presentationPath = a_presentationObservation->path;
+			record.contractGeneration = a_presentationObservation->contractGeneration;
+		} else {
+			const auto controller = GetVRRenderScaleTransitionSnapshot();
+			const auto& eye = controller.presentation.eyes[record.eyeIndex];
+			if (eye.valid && eye.frame == record.frame) {
+				record.presentationPath = eye.path;
+				record.contractGeneration = eye.contractGeneration;
+				record.transitionEpoch = eye.transitionEpoch;
+			} else {
+				record.transitionEpoch = controller.targetEpoch;
+				const auto& contract = controller.applied.valid ? controller.applied : controller.stable;
+				record.contractGeneration = contract.valid ? contract.contractGeneration : 0u;
+			}
+		}
+		if (record.transitionEpoch == 0) {
+			const auto controller = GetVRRenderScaleTransitionSnapshot();
+			record.transitionEpoch = controller.targetEpoch;
+		}
+
+		record.hamClearDeferred = ShouldDeferHMDClearMask();
+		const auto& ham = vrLoadPresentationHMDMaskObservations[record.eyeIndex];
+		if (ham.observed && ham.frame == record.frame) {
+			record.hamClearObserved = true;
+			record.hamClearEligible = ham.eligible;
+			record.hamClearDeferred = ham.deferred;
+			record.hamClearExecuted = ham.executed;
+			record.hamClearPhase = ham.phase;
+		}
+
+		const bool finiteBounds =
+			std::isfinite(record.boundsUMin) &&
+			std::isfinite(record.boundsVMin) &&
+			std::isfinite(record.boundsUMax) &&
+			std::isfinite(record.boundsVMax);
+		if (!finiteBounds ||
+			!a_texture ||
+			!a_texture->handle ||
+			a_texture->eType != vr::TextureType_DirectX ||
+			(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)) {
+			record.captureStatus = VRLoadPresentationProbeCaptureStatus::InvalidTexture;
+			record.completedQpc = QueryVRLoadPresentationProbeQpc();
+			vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+			PublishVRLoadPresentationProbeRecord(record);
+			return record.sequence;
+		}
+
+		auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_texture->handle);
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		sourceTexture->GetDesc(&sourceDesc);
+		record.textureAddress = reinterpret_cast<uintptr_t>(sourceTexture);
+		record.textureWidth = sourceDesc.Width;
+		record.textureHeight = sourceDesc.Height;
+		record.textureFormat = static_cast<uint32_t>(sourceDesc.Format);
+		record.textureArraySize = sourceDesc.ArraySize;
+		record.textureSampleCount = sourceDesc.SampleDesc.Count;
+		record.sourceSubresource = 0;
+
+		const uint32_t bytesPerPixel =
+			GetVRLoadPresentationProbeBytesPerPixel(sourceDesc.Format);
+		if (!bytesPerPixel ||
+			!sourceDesc.Width ||
+			!sourceDesc.Height ||
+			sourceDesc.ArraySize != 1 ||
+			sourceDesc.SampleDesc.Count != 1) {
+			record.captureStatus = VRLoadPresentationProbeCaptureStatus::UnsupportedTexture;
+			record.completedQpc = QueryVRLoadPresentationProbeQpc();
+			vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+			PublishVRLoadPresentationProbeRecord(record);
+			return record.sequence;
+		}
+
+		auto* device = globals::d3d::device;
+		auto* context = globals::d3d::context;
+		winrt::com_ptr<ID3D11Device> sourceDevice;
+		sourceTexture->GetDevice(sourceDevice.put());
+		if (!device || !context || !sourceDevice || sourceDevice.get() != device) {
+			record.captureStatus = VRLoadPresentationProbeCaptureStatus::ResourceFailure;
+			record.completedQpc = QueryVRLoadPresentationProbeQpc();
+			vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+			PublishVRLoadPresentationProbeRecord(record);
+			return record.sequence;
+		}
+
+		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> viewports{};
+		UINT viewportCount = static_cast<UINT>(viewports.size());
+		context->RSGetViewports(&viewportCount, viewports.data());
+		record.viewportCount = viewportCount;
+		if (viewportCount != 0) {
+			record.viewportTopLeftX = viewports[0].TopLeftX;
+			record.viewportTopLeftY = viewports[0].TopLeftY;
+			record.viewportWidth = viewports[0].Width;
+			record.viewportHeight = viewports[0].Height;
+		}
+		std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scissorRects{};
+		UINT scissorCount = static_cast<UINT>(scissorRects.size());
+		context->RSGetScissorRects(&scissorCount, scissorRects.data());
+		record.scissorCount = scissorCount;
+		if (scissorCount != 0) {
+			record.scissorLeft = scissorRects[0].left;
+			record.scissorTop = scissorRects[0].top;
+			record.scissorRight = scissorRects[0].right;
+			record.scissorBottom = scissorRects[0].bottom;
+		}
+		winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
+		context->RSGetState(rasterizerState.put());
+		if (rasterizerState) {
+			D3D11_RASTERIZER_DESC rasterizerDesc{};
+			rasterizerState->GetDesc(&rasterizerDesc);
+			record.rasterizerScissorEnabled = rasterizerDesc.ScissorEnable != FALSE;
+		}
+
+		auto pendingIt = std::find_if(
+			vrLoadPresentationProbePending.begin(),
+			vrLoadPresentationProbePending.end(),
+			[](const VRLoadPresentationProbePendingReadback& a_pending) {
+				return !a_pending.pending;
+			});
+		if (pendingIt == vrLoadPresentationProbePending.end()) {
+			record.captureStatus = VRLoadPresentationProbeCaptureStatus::QueueSaturated;
+			record.completedQpc = QueryVRLoadPresentationProbeQpc();
+			vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+			PublishVRLoadPresentationProbeRecord(record);
+			return record.sequence;
+		}
+
+		auto& pending = *pendingIt;
+		if (!pending.stagingTexture || pending.format != sourceDesc.Format) {
+			pending.stagingTexture = nullptr;
+			D3D11_TEXTURE2D_DESC stagingDesc{};
+			stagingDesc.Width = kVRLoadPresentationProbeGridSize;
+			stagingDesc.Height = kVRLoadPresentationProbeGridSize;
+			stagingDesc.MipLevels = 1;
+			stagingDesc.ArraySize = 1;
+			stagingDesc.Format = sourceDesc.Format;
+			stagingDesc.SampleDesc.Count = 1;
+			stagingDesc.Usage = D3D11_USAGE_STAGING;
+			stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			if (FAILED(device->CreateTexture2D(
+					&stagingDesc,
+					nullptr,
+					pending.stagingTexture.put())) ||
+				!pending.stagingTexture) {
+				record.captureStatus = VRLoadPresentationProbeCaptureStatus::ResourceFailure;
+				record.completedQpc = QueryVRLoadPresentationProbeQpc();
+				vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+				PublishVRLoadPresentationProbeRecord(record);
+				return record.sequence;
+			}
+			pending.format = sourceDesc.Format;
+			pending.bytesPerPixel = bytesPerPixel;
+		}
+		if (!pending.completionQuery) {
+			D3D11_QUERY_DESC queryDesc{};
+			queryDesc.Query = D3D11_QUERY_EVENT;
+			if (FAILED(device->CreateQuery(
+					&queryDesc,
+					pending.completionQuery.put())) ||
+				!pending.completionQuery) {
+				record.captureStatus = VRLoadPresentationProbeCaptureStatus::ResourceFailure;
+				record.completedQpc = QueryVRLoadPresentationProbeQpc();
+				vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+				PublishVRLoadPresentationProbeRecord(record);
+				return record.sequence;
+			}
+		}
+
+		const auto resolveCoordinate = [](float a_minimum, float a_maximum, float a_position, uint32_t a_extent) {
+			const float coordinate = std::lerp(a_minimum, a_maximum, a_position);
+			const float scaled = std::clamp(coordinate, 0.0f, 1.0f) * static_cast<float>(a_extent);
+			return std::min(
+				static_cast<uint32_t>(std::max(0.0f, std::floor(scaled))),
+				a_extent - 1u);
+		};
+		for (uint32_t y = 0; y < kVRLoadPresentationProbeGridSize; ++y) {
+			for (uint32_t x = 0; x < kVRLoadPresentationProbeGridSize; ++x) {
+				const uint32_t sourceX = resolveCoordinate(
+					record.boundsUMin,
+					record.boundsUMax,
+					kVRLoadPresentationProbeSamplePositions[x],
+					sourceDesc.Width);
+				const uint32_t sourceY = resolveCoordinate(
+					record.boundsVMin,
+					record.boundsVMax,
+					kVRLoadPresentationProbeSamplePositions[y],
+					sourceDesc.Height);
+				const D3D11_BOX sourceBox{
+					sourceX,
+					sourceY,
+					0u,
+					sourceX + 1u,
+					sourceY + 1u,
+					1u
+				};
+				context->CopySubresourceRegion(
+					pending.stagingTexture.get(),
+					0,
+					x,
+					y,
+					0,
+					sourceTexture,
+					record.sourceSubresource,
+					&sourceBox);
+			}
+		}
+		context->End(pending.completionQuery.get());
+
+		pending.pending = true;
+		pending.sequence = record.sequence;
+		pending.record = record;
+		vrLoadPresentationProbePendingReadbacks.fetch_add(1, std::memory_order_relaxed);
+		vrLoadPresentationProbeQueuedReadbacks.fetch_add(1, std::memory_order_relaxed);
+		return record.sequence;
+	} catch (...) {
+		vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+		return 0;
+	}
+}
+
+void Upscaling::CompleteVRLoadPresentationProbeSubmit(
+	uint64_t a_sequence,
+	vr::EVRCompositorError a_result) noexcept
+{
+	if (!a_sequence)
+		return;
+	for (auto& pending : vrLoadPresentationProbePending) {
+		if (pending.pending && pending.sequence == a_sequence) {
+			pending.record.compositorResult = static_cast<uint32_t>(a_result);
+			pending.record.compositorResultKnown = true;
+			return;
+		}
+	}
+}
+
+void Upscaling::StartVRLoadPresentationProbe()
+{
+	vrLoadPresentationProbeActive.store(false, std::memory_order_release);
+	vrLoadPresentationProbeSessionID.fetch_add(1, std::memory_order_acq_rel);
+	ResetVRLoadPresentationProbeRetainedState();
+	vrLoadPresentationProbeActive.store(true, std::memory_order_release);
+}
+
+void Upscaling::StopVRLoadPresentationProbe()
+{
+	vrLoadPresentationProbeActive.store(false, std::memory_order_release);
+}
+
+void Upscaling::ResetVRLoadPresentationProbe()
+{
+	vrLoadPresentationProbeActive.store(false, std::memory_order_release);
+	vrLoadPresentationProbeSessionID.fetch_add(1, std::memory_order_acq_rel);
+	ResetVRLoadPresentationProbeRetainedState();
+}
+
+json Upscaling::BuildVRLoadPresentationProbeStatus() const
+{
+	uint32_t retainedRecords = 0;
+	uint32_t overwrittenRecords = 0;
+	{
+		std::scoped_lock lock(vrLoadPresentationProbeMutex);
+		retainedRecords = vrLoadPresentationProbeCount;
+		overwrittenRecords = vrLoadPresentationProbeOverwrittenRecords;
+	}
+	LARGE_INTEGER frequency{};
+	(void)::QueryPerformanceFrequency(&frequency);
+	return {
+		{ "active", vrLoadPresentationProbeActive.load(std::memory_order_acquire) },
+		{ "sessionID", vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) },
+		{ "qpcFrequency", frequency.QuadPart },
+		{ "gridSize", kVRLoadPresentationProbeGridSize },
+		{ "retentionCapacity", kVRLoadPresentationProbeRetentionCapacity },
+		{ "retainedRecords", retainedRecords },
+		{ "overwrittenRecords", overwrittenRecords },
+		{ "pendingReadbacks", vrLoadPresentationProbePendingReadbacks.load(std::memory_order_acquire) },
+		{ "queuedReadbacks", vrLoadPresentationProbeQueuedReadbacks.load(std::memory_order_acquire) },
+		{ "completedReadbacks", vrLoadPresentationProbeCompletedReadbacks.load(std::memory_order_acquire) },
+		{ "droppedReadbacks", vrLoadPresentationProbeDroppedReadbacks.load(std::memory_order_acquire) },
+		{ "predominantlyWhiteCandidates", vrLoadPresentationProbeBrightCandidates.load(std::memory_order_acquire) },
+		{ "hamWhitePatternCandidates", vrLoadPresentationProbeHAMCandidates.load(std::memory_order_acquire) },
+	};
+}
+
+json Upscaling::BuildVRLoadPresentationProbeRecord() const
+{
+	const auto getHMDMaskPhaseName = [](uint32_t a_phase) {
+		switch (static_cast<HMDMaskClearPhase>(a_phase)) {
+		case HMDMaskClearPhase::PerEyeInput:
+			return "PerEyeInput";
+		case HMDMaskClearPhase::PerEyeOutput:
+			return "PerEyeOutput";
+		case HMDMaskClearPhase::SubmitStageOutput:
+			return "SubmitStageOutput";
+		case HMDMaskClearPhase::SubmitStageFoveatedOutput:
+			return "SubmitStageFoveatedOutput";
+		default:
+			return "Unknown";
+		}
+	};
+	std::vector<VRLoadPresentationProbeRecord> retained;
+	{
+		std::scoped_lock lock(vrLoadPresentationProbeMutex);
+		retained.reserve(vrLoadPresentationProbeCount);
+		const uint32_t firstIndex =
+			vrLoadPresentationProbeCount == kVRLoadPresentationProbeRetentionCapacity ?
+				vrLoadPresentationProbeNextIndex :
+				0u;
+		for (uint32_t i = 0; i < vrLoadPresentationProbeCount; ++i) {
+			retained.push_back(
+				vrLoadPresentationProbeRecords[(firstIndex + i) % kVRLoadPresentationProbeRetentionCapacity]);
+		}
+	}
+	std::ranges::sort(retained, {}, &VRLoadPresentationProbeRecord::sequence);
+
+	json records = json::array();
+	for (const auto& record : retained) {
+		json item{
+			{ "sequence", record.sequence },
+			{ "sessionID", record.sessionID },
+			{ "queuedQpc", record.queuedQpc },
+			{ "completedQpc", record.completedQpc },
+			{ "frame", record.frame },
+			{ "lastCompletedWorldFrame", record.lastCompletedWorldFrame },
+			{ "loadingCloseFrame", record.loadingCloseFrame },
+			{ "eye", record.eyeIndex },
+			{ "submitPath", GetVRLoadPresentationProbeSubmitPathName(record.submitPath) },
+			{ "presentationPath", GetVRRenderScalePresentationPathName(record.presentationPath) },
+			{ "captureStatus", GetVRLoadPresentationProbeCaptureStatusName(record.captureStatus) },
+			{ "texture", {
+							 { "address", record.textureAddress },
+							 { "width", record.textureWidth },
+							 { "height", record.textureHeight },
+							 { "format", record.textureFormat },
+							 { "arraySize", record.textureArraySize },
+							 { "sampleCount", record.textureSampleCount },
+							 { "colorSpace", record.textureColorSpace },
+							 { "sourceSubresource", record.sourceSubresource },
+						 } },
+			{ "bounds", {
+							{ "uMin", record.boundsUMin },
+							{ "vMin", record.boundsVMin },
+							{ "uMax", record.boundsUMax },
+							{ "vMax", record.boundsVMax },
+						} },
+			{ "rasterizer", {
+								{ "viewportCount", record.viewportCount },
+								{ "viewport", {
+												  { "topLeftX", record.viewportTopLeftX },
+												  { "topLeftY", record.viewportTopLeftY },
+												  { "width", record.viewportWidth },
+												  { "height", record.viewportHeight },
+											  } },
+								{ "scissorCount", record.scissorCount },
+								{ "scissor", {
+												 { "left", record.scissorLeft },
+												 { "top", record.scissorTop },
+												 { "right", record.scissorRight },
+												 { "bottom", record.scissorBottom },
+											 } },
+								{ "scissorEnabled", record.rasterizerScissorEnabled },
+							} },
+			{ "submitFlags", record.submitFlags },
+			{ "compositorResultKnown", record.compositorResultKnown },
+			{ "compositorResult", record.compositorResult },
+			{ "transitionEpoch", record.transitionEpoch },
+			{ "contractGeneration", record.contractGeneration },
+			{ "context", {
+							 { "loadingMenu", record.loadingMenu },
+							 { "mainMenu", record.mainMenu },
+							 { "postLoadResetPending", record.postLoadResetPending },
+							 { "stabilizerSyncPending", record.stabilizerSyncPending },
+							 { "renderScaleModeActive", record.renderScaleModeActive },
+							 { "presentationUpscalingActive", record.presentationUpscalingActive },
+						 } },
+			{ "hamClear", {
+							  { "observed", record.hamClearObserved },
+							  { "eligible", record.hamClearEligible },
+							  { "deferred", record.hamClearDeferred },
+							  { "executed", record.hamClearExecuted },
+							  { "phase", record.hamClearPhase },
+							  { "phaseName", record.hamClearObserved ? getHMDMaskPhaseName(record.hamClearPhase) : "None" },
+						  } },
+			{ "luminance", {
+							   { "valid", record.luminanceValid },
+							   { "minimum", record.minimumLuminance },
+							   { "maximum", record.maximumLuminance },
+							   { "mean", record.meanLuminance },
+							   { "edgeMean", record.edgeMeanLuminance },
+							   { "center", record.centerLuminance },
+							   { "whiteSamples", record.whiteSampleCount },
+							   { "blackSamples", record.blackSampleCount },
+							   { "edgeWhiteSamples", record.edgeWhiteSampleCount },
+							   { "predominantlyWhite", record.predominantlyWhite },
+							   { "predominantlyBlack", record.predominantlyBlack },
+							   { "hamWhitePattern", record.hamWhitePattern },
+						   } },
+		};
+		if (record.luminanceValid)
+			item["luminance"]["grid"] = record.luminance;
+		records.push_back(std::move(item));
+	}
+
+	return {
+		{ "schemaVersion", 1 },
+		{ "status", BuildVRLoadPresentationProbeStatus() },
+		{ "samplePositions", kVRLoadPresentationProbeSamplePositions },
+		{ "records", std::move(records) },
+	};
+}
+#endif
+
 void Upscaling::ClearVRDLSSRapidTransitionGuard()
 {
 	vrDLSSRapidTransitionGuardEndFrame.store(0, std::memory_order_release);
@@ -23712,7 +24556,14 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 			outputWidthPerEye,
 			outputHeight,
 			inputStereoLayout.eyes[eyeIndex].minX,
-			0u);
+			0u
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			0u,
+			0u,
+			eyeIndex
+#endif
+		);
 	}
 
 	if (usePeripheryTAA) {
@@ -24422,7 +25273,14 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 					eyeWidthOut,
 					eyeHeightOut,
 					inputStereoLayout.eyes[i].minX,
-					0u);
+					0u
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					,
+					0u,
+					0u,
+					i
+#endif
+				);
 			}
 		}
 	}
@@ -24886,7 +25744,14 @@ void Upscaling::ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11Unordere
 		colorWidthPerEye,
 		colorHeight,
 		eyeIndex * depthWidthPerEye,
-		colorOffsetX);
+		colorOffsetX
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		0u,
+		0u,
+		eyeIndex
+#endif
+	);
 }
 
 bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource,
@@ -25378,6 +26243,10 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 			CS_PROFILE_SCOPE("Upscaling::ClearHMDMask");
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (vrLoadPresentationProbeActive.load(std::memory_order_acquire))
+			vrLoadPresentationProbeHMDDispatchSequence.fetch_add(1, std::memory_order_relaxed);
+#endif
 
 		// Unbind
 		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
@@ -25391,12 +26260,42 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 }
 
 void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
-	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY)
+	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	,
+	uint32_t a_probeEyeIndex
+#endif
+)
 {
 	const bool shouldClear = ShouldClearHMDMaskInPhase(a_phase);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool deferred = ShouldDeferHMDClearMask();
+	const auto recordObservation = [&](bool a_executed) {
+		if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire) || a_probeEyeIndex >= 2)
+			return;
+		auto& observation = vrLoadPresentationHMDMaskObservations[a_probeEyeIndex];
+		observation.frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+		observation.phase = static_cast<uint32_t>(a_phase);
+		observation.observed = true;
+		observation.eligible = shouldClear;
+		observation.deferred = deferred;
+		observation.executed = a_executed;
+	};
+#endif
 	if (!shouldClear)
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	{
+		recordObservation(false);
 		return;
+	}
+#else
+		return;
+#endif
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const uint64_t dispatchSequence =
+		vrLoadPresentationProbeHMDDispatchSequence.load(std::memory_order_relaxed);
+#endif
 	ClearHMDMask(
 		colorUAV,
 		depthSRV,
@@ -25408,6 +26307,11 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11U
 		colorOffsetX,
 		depthOffsetY,
 		colorOffsetY);
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	recordObservation(
+		vrLoadPresentationProbeHMDDispatchSequence.load(std::memory_order_relaxed) != dispatchSequence);
+#endif
 }
 
 int32_t GetJitterPhaseCount(int32_t renderWidth, int32_t displayWidth)
@@ -26928,7 +27832,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			eyeHeightOut,
 			sourceRegion.depthOffsetX,
 			0u,
-			sourceRegion.depthOffsetY);
+			sourceRegion.depthOffsetY
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			0u,
+			eyeIndex
+#endif
+		);
 	};
 
 	const UINT sourceSubresource = sourceRegion.subresource;
@@ -27117,7 +28027,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				eyeHeightOut,
 				clearDepthOffsetX,
 				0u,
-				clearDepthOffsetY);
+				clearDepthOffsetY
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				,
+				0u,
+				targetEyeIndex
+#endif
+			);
 			if (IsSubmitStageDeviceLost())
 				return false;
 		}
@@ -29132,6 +30048,48 @@ const char* Upscaling::GetVRRenderScalePresentationPathName(VRRenderScalePresent
 		return "Unknown";
 	}
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+const char* Upscaling::GetVRLoadPresentationProbeCaptureStatusName(
+	VRLoadPresentationProbeCaptureStatus a_status)
+{
+	switch (a_status) {
+	case VRLoadPresentationProbeCaptureStatus::Pending:
+		return "Pending";
+	case VRLoadPresentationProbeCaptureStatus::Complete:
+		return "Complete";
+	case VRLoadPresentationProbeCaptureStatus::InvalidTexture:
+		return "InvalidTexture";
+	case VRLoadPresentationProbeCaptureStatus::UnsupportedTexture:
+		return "UnsupportedTexture";
+	case VRLoadPresentationProbeCaptureStatus::ResourceFailure:
+		return "ResourceFailure";
+	case VRLoadPresentationProbeCaptureStatus::QueueSaturated:
+		return "QueueSaturated";
+	case VRLoadPresentationProbeCaptureStatus::MapFailure:
+		return "MapFailure";
+	default:
+		return "Unknown";
+	}
+}
+
+const char* Upscaling::GetVRLoadPresentationProbeSubmitPathName(
+	VRLoadPresentationProbeSubmitPath a_path)
+{
+	switch (a_path) {
+	case VRLoadPresentationProbeSubmitPath::Unknown:
+		return "Unknown";
+	case VRLoadPresentationProbeSubmitPath::Original:
+		return "Original";
+	case VRLoadPresentationProbeSubmitPath::Upscaled:
+		return "Upscaled";
+	case VRLoadPresentationProbeSubmitPath::InSceneOverlay:
+		return "InSceneOverlay";
+	default:
+		return "Unknown";
+	}
+}
+#endif
 
 const char* Upscaling::GetVRVendorRuntimeLifecyclePhaseName(VRVendorRuntimeLifecyclePhase a_phase)
 {

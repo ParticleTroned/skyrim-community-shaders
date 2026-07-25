@@ -28,6 +28,10 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::atomic_bool g_openVRSubmitProcessingEnabled{ false };
+#endif
+
 	bool ShouldRenderInSceneMenu(const VR& vr)
 	{
 		return vr.ShouldUseInSceneOverlay() &&
@@ -259,8 +263,23 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 		{
 			auto& vr = globals::features::vr;
 			auto& upscaling = globals::features::upscaling;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const Upscaling::VRRenderScalePresentationObservation* probePresentationObservation = nullptr;
+#endif
 			auto submit = [&](const char* a_path, const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				const uint64_t probeSequence = upscaling.BeginVRLoadPresentationProbeSubmit(
+					a_path,
+					eEye,
+					a_texture,
+					a_bounds,
+					nSubmitFlags,
+					probePresentationObservation);
+#endif
 				const auto result = func(_this, eEye, a_texture, a_bounds, nSubmitFlags);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				upscaling.CompleteVRLoadPresentationProbeSubmit(probeSequence, result);
+#endif
 				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 					a_path,
 					eEye,
@@ -270,6 +289,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					result);
 				return result;
 			};
+
+			// DevBench may install the interception before the production render
+			// path needs it so startup/loading submissions can be observed. Until
+			// the ordinary call site enables processing, preserve those submits
+			// unchanged and use the hook only as a probe boundary.
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (!g_openVRSubmitProcessingEnabled.load(std::memory_order_acquire))
+				return submit("original", pTexture, pBounds);
+#endif
+
 			Upscaling::VRRenderScalePresentationObservation presentationObservation{};
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
@@ -281,6 +310,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						upscaledTexture.handle &&
 						upscaledTexture.eType == vr::TextureType_DirectX)
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					probePresentationObservation = &presentationObservation;
+#endif
 					const auto result = submit("upscaled", &upscaledTexture, &upscaledBounds);
 					if (result == vr::VRCompositorError_None)
 						upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
@@ -327,6 +359,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					}
 				}
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			probePresentationObservation =
+				presentationObservation.valid ? &presentationObservation : nullptr;
+#endif
 			const auto result = submit("original", pTexture, pBounds);
 			if (result == vr::VRCompositorError_None &&
 				presentationObservation.path == Upscaling::VRRenderScalePresentationPath::BoundsMismatchOriginalFallback) {
@@ -1318,13 +1354,19 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 	return true;
 }
 
-void VR::InstallSubmitHook()
+bool VR::InstallSubmitHook(bool a_enableProcessing)
 {
 	static bool installed = false;
 	static bool warnedUnavailable = false;
 	if (installed) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_enableProcessing)
+			g_openVRSubmitProcessingEnabled.store(true, std::memory_order_release);
+#else
+		(void)a_enableProcessing;
+#endif
 		inSceneResources.submitHookInstalled = true;
-		return;
+		return true;
 	}
 
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
@@ -1334,7 +1376,14 @@ void VR::InstallSubmitHook()
 	}
 
 	if (openvr && compositor) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_enableProcessing)
+			logger::info("VR: Installing IVRCompositor::Submit hook for in-scene overlay rendering");
+		else
+			logger::debug("[VRLoadPresentationProbe] Installing observer-only IVRCompositor::Submit interception");
+#else
 		logger::info("VR: Installing IVRCompositor::Submit hook for in-scene overlay rendering");
+#endif
 
 		// Log comprehensive VR system parameters (debug only)
 		logger::debug("=== VR System Configuration ===");
@@ -1385,13 +1434,26 @@ void VR::InstallSubmitHook()
 		logger::debug("================================");
 
 		// IVRCompositor::Submit is index 5
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_enableProcessing)
+			g_openVRSubmitProcessingEnabled.store(true, std::memory_order_release);
+#endif
 		stl::detour_vfunc<5, IVRCompositor_Submit>(compositor);
 		installed = true;
 		inSceneResources.submitHookInstalled = true;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_enableProcessing)
+			logger::info("VR: In-scene overlay initialized");
+		else
+			logger::debug("[VRLoadPresentationProbe] Observer-only OpenVR submit interception initialized");
+#else
 		logger::info("VR: In-scene overlay initialized");
+#endif
+		return true;
 	} else if (!warnedUnavailable) {
 		logger::warn("VR: Failed to install IVRCompositor::Submit hook - Interface not available");
 		warnedUnavailable = true;
 	}
+	return false;
 }

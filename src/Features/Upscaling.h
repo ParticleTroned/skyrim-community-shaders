@@ -125,6 +125,7 @@ public:
 	static constexpr uint32_t kDLSSPresetF = 4;
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
+	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
 	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 6.0f;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
@@ -176,6 +177,7 @@ public:
 		float sharpnessDLSS = 0.9f;
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool fsr4RuntimeEnable = true;
+		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;
 		float foveatedCenterHorizontalScale = 1.0f;

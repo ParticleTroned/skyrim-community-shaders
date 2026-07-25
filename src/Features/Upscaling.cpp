@@ -68,6 +68,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sharpnessDLSS,
 	dlssSharpener,
 	fsr4RuntimeEnable,
+	fsr4RuntimeSelectionSchemaVersion,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
@@ -3555,6 +3556,29 @@ namespace
 		settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
 			settings.periphery_taa_center_area);
+	}
+
+	void ApplyLegacyFsr4RuntimeSelectionMigration(
+		Upscaling::Settings& settings,
+		FidelityFX::Fsr4AdapterSupport a_adapterSupport)
+	{
+		if (settings.fsr4RuntimeSelectionSchemaVersion >= Upscaling::kFsr4RuntimeSelectionSchemaVersion)
+			return;
+
+		switch (a_adapterSupport) {
+		case FidelityFX::Fsr4AdapterSupport::RadeonRx7000:
+			if (!settings.fsr4RuntimeEnable)
+				logger::info("[Upscaling] Migrated RX 7000 settings to the newly supported FSR4 runtime path.");
+			settings.fsr4RuntimeEnable = true;
+			break;
+		case FidelityFX::Fsr4AdapterSupport::RadeonRx9000:
+			// RX 9000 users could already choose FSR3, so preserve that selection.
+			break;
+		case FidelityFX::Fsr4AdapterSupport::Unsupported:
+			// Keep the migration pending in case this config is later used with a supported GPU.
+			return;
+		}
+		settings.fsr4RuntimeSelectionSchemaVersion = Upscaling::kFsr4RuntimeSelectionSchemaVersion;
 	}
 
 	void ResetVRSpecificUpscalingSettings(Upscaling::Settings& settings)
@@ -13159,11 +13183,14 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
-	DXGI_ADAPTER_DESC adapterDesc;
-	pAdapter->GetDesc(&adapterDesc);
-	globals::state->SetAdapterDescription(adapterDesc.Description);
-
 	auto& upscaling = globals::features::upscaling;
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (pAdapter && SUCCEEDED(pAdapter->GetDesc(&adapterDesc))) {
+		globals::state->SetAdapterDescription(adapterDesc.Description);
+		ApplyLegacyFsr4RuntimeSelectionMigration(
+			upscaling.settings,
+			FidelityFX::GetFsr4AdapterSupport(adapterDesc));
+	}
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
 			logger::warn(
@@ -14491,10 +14518,14 @@ void Upscaling::LoadSettings(json& o_json)
 {
 	const Settings previousSettings = settings;
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
+	const bool hasFsr4RuntimeSelectionSchemaVersion = o_json.contains("fsr4RuntimeSelectionSchemaVersion");
 	const bool hasRenderScaleModeSetting = o_json.contains("renderScaleMode");
 	const bool hasLegacyPerfModeSetting = o_json.contains("perfMode");
 	const bool hasLegacySettings = o_json.is_object() && !o_json.empty();
 	settings = o_json;
+	if (!hasFsr4RuntimeSelectionSchemaVersion)
+		settings.fsr4RuntimeSelectionSchemaVersion = 0;
+	ApplyLegacyFsr4RuntimeSelectionMigration(settings, fidelityFX.GetFsr4AdapterSupport());
 	if (!hasRenderScaleModeSetting && hasLegacyPerfModeSetting) {
 		try {
 			settings.renderScaleMode = o_json.at("perfMode").get<uint>();
@@ -14547,9 +14578,14 @@ void Upscaling::LoadSettings(json& o_json)
 		globals::state;
 	const uint previousUpscaleMethod = streamline.featureDLSS ? previousSettings.upscaleMethod : previousSettings.upscaleMethodNoDLSS;
 	const uint currentUpscaleMethod = streamline.featureDLSS ? settings.upscaleMethod : settings.upscaleMethodNoDLSS;
+	const bool fsr4RuntimeSelectionChanged =
+		previousSettings.fsr4RuntimeEnable != settings.fsr4RuntimeEnable &&
+		(previousUpscaleMethod == static_cast<uint>(UpscaleMethod::kFSR) ||
+			currentUpscaleMethod == static_cast<uint>(UpscaleMethod::kFSR));
 	const bool perfModeRelevantSettingChanged =
 		ClampToggleUInt(previousSettings.perfMode) != ClampToggleUInt(settings.perfMode) ||
 		ClampQualityModeUInt(previousSettings.qualityMode) != ClampQualityModeUInt(settings.qualityMode) ||
+		fsr4RuntimeSelectionChanged ||
 		previousUpscaleMethod != currentUpscaleMethod;
 	if (runtimeReady && perfModeRelevantSettingChanged)
 		RequestPerfModeRenderTargetRecreate("upscaling settings reload");

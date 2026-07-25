@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "PaletteWindow.h"
 #include "State.h"
+#include "Utils/FileSystem.h"
 #include "Utils/Subrect.h"
 #include "Utils/UI.h"
 #include "Weather/LightingTemplateWidget.h"
@@ -15,8 +16,9 @@
 #include <functional>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteValueEntry, name, value, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteFavoriteColor, hasValue, r, g, b)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings, recordMarkers, markedRecords, autoApplyChanges, useTextButtons, enableInheritFromParent, editorUIScale, favoriteWidgets, recentWidgets, maxRecentWidgets, showViewport, widgetTypeSizes, paletteColors, paletteFavorites)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings, recordMarkers, markedRecords, autoApplyChanges, useTextButtons, enableInheritFromParent, editorUIScale, favoriteWidgets, recentWidgets, maxRecentWidgets, showViewport, widgetTypeSizes, paletteColors, paletteValues, paletteFavorites)
 
 void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled)
 {
@@ -1424,6 +1426,7 @@ void EditorWindow::OpenCellLightingWidget(RE::TESObjectCELL* cell, bool showNoti
 
 	currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
 	currentCellLightingWidget->CacheFormData();
+	currentCellLightingWidget->RestoreRememberedBaseline();
 	currentCellLightingWidget->Load(showNotification);
 	currentCellLightingWidget->SetOpen(true);
 	if (requestFocus)
@@ -1559,20 +1562,24 @@ void EditorWindow::ShowSettingsWindow()
 		ImGui::TableSetColumnIndex(1);
 
 		if (settingsSelectedCategory == "General") {
-			ImGui::Checkbox("Auto-apply changes", &settings.autoApplyChanges);
+			if (ImGui::Checkbox("Auto-apply changes", &settings.autoApplyChanges))
+				Save();
 			Util::AddTooltip("Automatically apply changes to weather/lighting when editing");
 
-			ImGui::Checkbox("Use text buttons instead of icons", &settings.useTextButtons);
+			if (ImGui::Checkbox("Use text buttons instead of icons", &settings.useTextButtons))
+				Save();
 			Util::AddTooltip("Display action buttons as text labels instead of icons");
 
-			ImGui::Checkbox("Enable 'Inherit From Parent' feature", &settings.enableInheritFromParent);
+			if (ImGui::Checkbox("Enable 'Inherit From Parent' feature", &settings.enableInheritFromParent))
+				Save();
 			Util::AddTooltip("Show checkboxes to copy settings from parent weather (editor-only feature)");
 
 			ImGui::Separator();
 			ImGui::TextUnformatted("UI Scale");
 			ImGui::Spacing();
 
-			if (ImGui::SliderFloat("Editor UI Scale", &settings.editorUIScale, 0.5f, 2.0f, "%.2f")) {
+			ImGui::SliderFloat("Editor UI Scale", &settings.editorUIScale, 0.5f, 2.0f, "%.2f");
+			if (ImGui::IsItemDeactivatedAfterEdit()) {
 				Save();
 			}
 			Util::AddTooltip("Scale the size of all editor UI elements (0.5 = 50%, 2.0 = 200%)");
@@ -1589,6 +1596,8 @@ void EditorWindow::ShowSettingsWindow()
 			ImGui::Spacing();
 
 			ImGui::SliderInt("Max recent widgets", &settings.maxRecentWidgets, 5, 20);
+			if (ImGui::IsItemDeactivatedAfterEdit())
+				Save();
 			Util::AddTooltip("Maximum number of recent widgets to remember");
 
 			if (Util::ButtonWithFlash("Clear Recent History")) {
@@ -1714,58 +1723,43 @@ void EditorWindow::ShowSettingsWindow()
 void EditorWindow::Save()
 {
 	SaveSettings();
-	const std::string filePath = Util::PathHelpers::GetCommunityShaderPath().string();
-	const std::string file = std::format("{}\\{}.json", filePath, settingsFilename);
+	const auto file = Util::PathHelpers::GetCommunityShaderPath() / std::format("{}.json", settingsFilename);
 
-	std::ofstream settingsFile(file);
-
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to open settings file: {}", file);
-		return;
-	}
-
-	if (settingsFile.fail()) {
-		logger::warn("Unable to create settings file: {}", file);
-		settingsFile.close();
-		return;
-	}
-
-	logger::info("Saving settings file: {}", file);
+	logger::info("Saving settings file: {}", file.string());
 
 	try {
-		settingsFile << j.dump(1);
-
-		settingsFile.close();
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::warn("Error parsing settings for settings file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
+		std::string errorMessage;
+		if (!Util::FileHelpers::WriteTextFileAtomic(file, j.dump(1), errorMessage))
+			logger::warn("Failed to save settings file ({}): {}", file.string(), errorMessage);
+	} catch (const std::exception& e) {
+		logger::warn("Error serializing settings file ({}): {}", file.string(), e.what());
 	}
 }
 
 void EditorWindow::Load()
 {
-	std::string filePath = std::format("{}\\{}.json", Util::PathHelpers::GetCommunityShaderPath().string(), settingsFilename);
-
-	std::ifstream settingsFile(filePath);
-
-	if (!std::filesystem::exists(filePath)) {
-		// Does not have any settings so just return.
+	const auto file = Util::PathHelpers::GetCommunityShaderPath() / std::format("{}.json", settingsFilename);
+	json loaded;
+	std::string errorMessage;
+	const auto result = Util::FileHelpers::ReadJsonFile(file, loaded, errorMessage);
+	if (result == Util::FileHelpers::JsonFileReadResult::NotFound)
 		return;
-	}
-
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to load settings file: {}", filePath);
+	if (result == Util::FileHelpers::JsonFileReadResult::Error) {
+		logger::warn("Failed to load settings file ({}): {}", file.string(), errorMessage);
 		return;
 	}
 
 	try {
-		j << settingsFile;
-		settingsFile.close();
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::warn("Error parsing settings for file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
+		if (!loaded.is_object())
+			throw std::runtime_error("root value is not a JSON object");
+		j = std::move(loaded);
+		LoadSettings();
+	} catch (const std::exception& e) {
+		logger::warn("Invalid settings file ({}): {}", file.string(), e.what());
+		j = json::object();
+		settings = Settings{};
+		SetWidgetTypeSizesFromJson(settings.widgetTypeSizes);
 	}
-	LoadSettings();
 }
 
 void EditorWindow::LockWeather(RE::TESWeather* weather)

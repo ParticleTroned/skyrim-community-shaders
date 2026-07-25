@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "State.h"
+#include "Utils/FileSystem.h"
 #include "Utils/Form.h"
 
 namespace
@@ -212,19 +213,12 @@ void WeatherManager::SaveSettingsToWeather(RE::TESWeather* weather, const std::s
 		}
 	}
 
-	// Load existing weather data if it exists
 	json weatherData;
-	if (std::filesystem::exists(filePath)) {
-		std::ifstream existingFile(filePath);
-		if (existingFile.good() && existingFile.is_open()) {
-			try {
-				existingFile >> weatherData;
-			} catch (const nlohmann::json::parse_error& e) {
-				logger::warn("Error parsing existing weather file ({}): {}", filePath, e.what());
-				weatherData = json::object();
-			}
-			existingFile.close();
-		}
+	std::string readError;
+	const auto readResult = Util::FileHelpers::ReadJsonFile(filePath, weatherData, readError);
+	if (readResult == Util::FileHelpers::JsonFileReadResult::Error) {
+		logger::warn("Failed to read existing weather file ({}): {}", filePath, readError);
+		weatherData = json::object();
 	}
 
 	// Ensure weatherData is an object and has featureSettings
@@ -259,18 +253,14 @@ void WeatherManager::SaveSettingsToWeather(RE::TESWeather* weather, const std::s
 		// fall through to write updated JSON as a best-effort fallback
 	}
 
-	std::ofstream settingsFile(filePath);
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to open weather settings file for writing: {}", filePath);
-		return;
-	}
-
 	try {
-		settingsFile << weatherData.dump(1);
-		settingsFile.close();
-		logger::info("Saved {} settings for weather: {}", featureName, weatherKey);
+		std::string writeError;
+		if (Util::FileHelpers::WriteTextFileAtomic(filePath, weatherData.dump(1), writeError))
+			logger::info("Saved {} settings for weather: {}", featureName, weatherKey);
+		else
+			logger::warn("Failed to save weather settings file ({}): {}", filePath, writeError);
 	} catch (const std::exception& e) {
-		logger::warn("Error writing weather settings file ({}): {}", filePath, e.what());
+		logger::warn("Error serializing weather settings file ({}): {}", filePath, e.what());
 	}
 }
 

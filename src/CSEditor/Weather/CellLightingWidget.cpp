@@ -570,6 +570,14 @@ Widget::UndoRestoreAction CellLightingWidget::CaptureUndoState() const
 	};
 }
 
+Widget::UndoRestoreAction CellLightingWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<CellLightingWidget&>(widget).vanillaSettings = snapshot;
+	};
+}
+
 bool CellLightingWidget::HasUnsavedChanges() const
 {
 	return !(settings == originalSettings);

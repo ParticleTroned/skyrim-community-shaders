@@ -233,6 +233,14 @@ Widget::UndoRestoreAction LightingTemplateWidget::CaptureUndoState() const
 	};
 }
 
+Widget::UndoRestoreAction LightingTemplateWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<LightingTemplateWidget&>(widget).vanillaSettings = snapshot;
+	};
+}
+
 void LightingTemplateWidget::SetLightingTemplateValues()
 {
 	auto& data = lightingTemplate->data;
@@ -311,9 +319,16 @@ void LightingTemplateWidget::LoadFromGameSettings()
 
 void LightingTemplateWidget::LoadSettings()
 {
-	if (!js.empty()) {
-		settings = js;
-	} else {
+	try {
+		if (!js.empty() && js.is_object()) {
+			json mergedSettings = vanillaSettings;
+			mergedSettings.merge_patch(js);
+			settings = mergedSettings;
+		} else {
+			settings = vanillaSettings;
+		}
+	} catch (const std::exception& e) {
+		logger::error("Failed to load Lighting Template settings for {}: {}", GetEditorID(), e.what());
 		settings = vanillaSettings;
 	}
 	originalSettings = settings;

@@ -12,6 +12,33 @@ namespace
 		constexpr const char* kAttachToCamera = "Attach To Camera";
 		constexpr const char* kInheritRotation = "Inherit Rotation";
 	}
+
+	template <class T>
+	T* LoadFormReference(const json& source, const char* key, T* fallback)
+	{
+		if (!source.contains(key) || !source[key].is_string())
+			return fallback;
+
+		const auto identifier = source[key].get<std::string>();
+		if (identifier.empty() || identifier == "00000000")
+			return nullptr;
+
+		if (auto* form = WeatherUtils::FindFormByEditorIDOrFileKey<T>(identifier))
+			return form;
+
+		// Backward compatibility for files that stored the load-order-dependent
+		// eight-digit FormID used by older CS Editor versions.
+		try {
+			size_t parsedLength = 0;
+			const auto formID = static_cast<RE::FormID>(std::stoul(identifier, &parsedLength, 16));
+			if (parsedLength == identifier.size())
+				return RE::TESForm::LookupByID<T>(formID);
+		} catch (const std::exception&) {
+		}
+
+		logger::warn("ReferenceEffect: Could not resolve saved {} form '{}'", key, identifier);
+		return fallback;
+	}
 }
 
 void ReferenceEffectWidget::DrawWidget()
@@ -76,24 +103,8 @@ void ReferenceEffectWidget::LoadSettings()
 	if (!js.empty()) {
 		settings = vanillaSettings;
 		try {
-			if (js.contains("artObject")) {
-				std::string formIDStr = js["artObject"].get<std::string>();
-				if (formIDStr != "00000000") {
-					uint32_t formID = std::stoul(formIDStr, nullptr, 16);
-					settings.artObject = RE::TESForm::LookupByID<RE::BGSArtObject>(formID);
-				} else {
-					settings.artObject = nullptr;
-				}
-			}
-			if (js.contains("effectShader")) {
-				std::string formIDStr = js["effectShader"].get<std::string>();
-				if (formIDStr != "00000000") {
-					uint32_t formID = std::stoul(formIDStr, nullptr, 16);
-					settings.effectShader = RE::TESForm::LookupByID<RE::TESEffectShader>(formID);
-				} else {
-					settings.effectShader = nullptr;
-				}
-			}
+			settings.artObject = LoadFormReference(js, "artObject", vanillaSettings.artObject);
+			settings.effectShader = LoadFormReference(js, "effectShader", vanillaSettings.effectShader);
 			if (js.contains("faceTarget"))
 				settings.faceTarget = js["faceTarget"];
 			if (js.contains("attachToCamera"))
@@ -125,8 +136,8 @@ void ReferenceEffectWidget::LoadFromGameSettings()
 
 void ReferenceEffectWidget::SaveSettings()
 {
-	js["artObject"] = settings.artObject ? std::format("{:08X}", settings.artObject->GetFormID()) : "00000000";
-	js["effectShader"] = settings.effectShader ? std::format("{:08X}", settings.effectShader->GetFormID()) : "00000000";
+	js["artObject"] = settings.artObject ? Util::GetFormFileKey(settings.artObject) : "";
+	js["effectShader"] = settings.effectShader ? Util::GetFormFileKey(settings.effectShader) : "";
 	js["faceTarget"] = settings.faceTarget;
 	js["attachToCamera"] = settings.attachToCamera;
 	js["inheritRotation"] = settings.inheritRotation;
@@ -168,6 +179,14 @@ Widget::UndoRestoreAction ReferenceEffectWidget::CaptureUndoState() const
 		auto& self = static_cast<ReferenceEffectWidget&>(widget);
 		self.settings = snapshot;
 		self.ApplyChanges();
+	};
+}
+
+Widget::UndoRestoreAction ReferenceEffectWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<ReferenceEffectWidget&>(widget).vanillaSettings = snapshot;
 	};
 }
 

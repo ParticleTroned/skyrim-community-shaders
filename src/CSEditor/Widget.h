@@ -186,6 +186,9 @@ public:
 
 	using UndoRestoreAction = std::function<void(Widget&)>;
 	virtual UndoRestoreAction CaptureUndoState() const { return {}; }
+	virtual UndoRestoreAction CaptureBaselineState() const { return {}; }
+	void RememberBaseline();
+	void RestoreRememberedBaseline();
 
 	// Reinitialize weather to apply form refs that are only read at load time.
 	static void ForceWeatherReinit(RE::TESWeather* weather);

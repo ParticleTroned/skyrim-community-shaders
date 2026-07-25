@@ -390,8 +390,11 @@ void WeatherWidget::LoadSettings()
 	bool hadErrors = false;
 	if (!js.empty()) {
 		try {
-			// Attempt to load settings from JSON
-			settings = js;
+			// Treat saved JSON as an override patch. Fields and map entries omitted
+			// by older versions retain their captured game baseline values.
+			json mergedSettings = vanillaSettings;
+			mergedSettings.merge_patch(js);
+			settings = mergedSettings;
 
 			// Validate that critical fields were loaded correctly
 			if (js.contains("weatherProperties") && settings.weatherProperties.empty() && !js["weatherProperties"].empty()) {
@@ -452,7 +455,6 @@ void WeatherWidget::LoadSettings()
 				std::format("Some values failed to load for {}", GetEditorID()),
 				ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
 				3.0f);
-			return;
 		}
 	} else {
 		settings = vanillaSettings;
@@ -511,8 +513,14 @@ bool WeatherWidget::ApplySavedSettings(RE::TESWeather* a_weather, const json& a_
 	}
 
 	widget.CacheFormData();
+	widget.RememberBaseline();
 	widget.js = a_settingsJson;
-	widget.LoadSettings();
+	try {
+		widget.LoadSettings();
+	} catch (const std::exception& e) {
+		logger::error("Weather {}: Failed to apply saved override: {}", widget.GetEditorID(), e.what());
+		return false;
+	}
 	return true;
 }
 
@@ -1772,6 +1780,14 @@ Widget::UndoRestoreAction WeatherWidget::CaptureUndoState() const
 		self.settings = snapshot;
 		self.pendingReinit = true;
 		self.ApplyChanges();
+	};
+}
+
+Widget::UndoRestoreAction WeatherWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<WeatherWidget&>(widget).vanillaSettings = snapshot;
 	};
 }
 

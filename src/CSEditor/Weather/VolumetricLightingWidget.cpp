@@ -218,6 +218,14 @@ Widget::UndoRestoreAction VolumetricLightingWidget::CaptureUndoState() const
 	};
 }
 
+Widget::UndoRestoreAction VolumetricLightingWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<VolumetricLightingWidget&>(widget).vanillaSettings = snapshot;
+	};
+}
+
 bool VolumetricLightingWidget::HasUnsavedChanges() const
 {
 	return !(settings == originalSettings);

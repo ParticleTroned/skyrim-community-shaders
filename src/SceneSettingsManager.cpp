@@ -10,6 +10,24 @@
 #include <fstream>
 #include <unordered_set>
 
+namespace
+{
+	bool AreAllEntriesPaused(
+		const std::vector<SceneSettingsManager::SettingEntry>& entries,
+		SceneSettingsManager::EntrySource source)
+	{
+		bool found = false;
+		for (const auto& entry : entries) {
+			if (entry.source != source)
+				continue;
+			found = true;
+			if (!entry.paused)
+				return false;
+		}
+		return found;
+	}
+}
+
 // --- Path Resolution ---
 
 std::string SceneSettingsManager::GetSceneTypeName(SceneType type)
@@ -191,6 +209,8 @@ void SceneSettingsManager::TogglePauseEntry(SceneType type, size_t index)
 	auto& vec = GetEntriesMut(type);
 	if (index < vec.size()) {
 		vec[index].paused = !vec[index].paused;
+		if (vec[index].source == EntrySource::User)
+			SaveUserSettings(type);
 		ReapplyIfActive();
 	}
 }
@@ -205,7 +225,6 @@ bool SceneSettingsManager::HasOverwriteEntries(SceneType type) const
 
 void SceneSettingsManager::SetAllOverwritesPaused(SceneType type, bool paused)
 {
-	allOverwritesPausedMap[type] = paused;
 	for (auto& entry : GetEntriesMut(type))
 		if (entry.source == EntrySource::Overwrite)
 			entry.paused = paused;
@@ -214,8 +233,7 @@ void SceneSettingsManager::SetAllOverwritesPaused(SceneType type, bool paused)
 
 bool SceneSettingsManager::AreAllOverwritesPaused(SceneType type) const
 {
-	auto it = allOverwritesPausedMap.find(type);
-	return it != allOverwritesPausedMap.end() && it->second;
+	return AreAllEntriesPaused(GetEntries(type), EntrySource::Overwrite);
 }
 
 void SceneSettingsManager::DeleteAllOverwrites(SceneType type)
@@ -233,23 +251,21 @@ void SceneSettingsManager::DeleteAllOverwrites(SceneType type)
 		return e.source == EntrySource::Overwrite;
 	});
 
-	allOverwritesPausedMap[type] = false;
 	ReapplyIfActive();
 }
 
 void SceneSettingsManager::SetAllUserPaused(SceneType type, bool paused)
 {
-	allUserPausedMap[type] = paused;
 	for (auto& entry : GetEntriesMut(type))
 		if (entry.source == EntrySource::User)
 			entry.paused = paused;
+	SaveUserSettings(type);
 	ReapplyIfActive();
 }
 
 bool SceneSettingsManager::AreAllUserPaused(SceneType type) const
 {
-	auto it = allUserPausedMap.find(type);
-	return it != allUserPausedMap.end() && it->second;
+	return AreAllEntriesPaused(GetEntries(type), EntrySource::User);
 }
 
 void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
@@ -259,7 +275,6 @@ void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
 		return e.source == EntrySource::User;
 	});
 
-	allUserPausedMap[type] = false;
 	SaveUserSettings(type);
 	ReapplyIfActive();
 }
@@ -508,14 +523,11 @@ void SceneSettingsManager::SaveUserSettings(SceneType type)
 
 	auto typeName = GetSceneTypeName(type);
 	try {
-		std::ofstream file(path);
-		if (file.is_open()) {
-			file << data.dump(2);
-			if (file.fail())
-				logger::error("[SceneSettings] Write error saving {} settings (disk full or permissions issue)", typeName);
-			else
-				logger::info("[SceneSettings] Saved {} {} user settings", data.size(), typeName);
-		}
+		std::string errorMessage;
+		if (Util::FileHelpers::WriteTextFileAtomic(path, data.dump(2), errorMessage))
+			logger::info("[SceneSettings] Saved {} {} user settings", data.size(), typeName);
+		else
+			logger::error("[SceneSettings] Failed to save {} settings: {}", typeName, errorMessage);
 	} catch (const std::exception& e) {
 		logger::error("[SceneSettings] Failed to save {} settings: {}", typeName, e.what());
 	}

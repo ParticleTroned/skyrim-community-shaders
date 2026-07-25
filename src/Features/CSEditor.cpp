@@ -2,9 +2,11 @@
 
 #include "State.h"
 #include "Util.h"
+#include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
 #include "CSEditor/EditorWindow.h"
+#include "CSEditor/Weather/CellLightingWidget.h"
 #include "CSEditor/Weather/ImageSpaceWidget.h"
 #include "CSEditor/Weather/LensFlareWidget.h"
 #include "CSEditor/Weather/LightingTemplateWidget.h"
@@ -16,7 +18,6 @@
 #include <algorithm>
 #include <filesystem>
 #include <format>
-#include <fstream>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
 
@@ -34,17 +35,10 @@ namespace
 	bool LoadOverrideJson(const std::filesystem::directory_entry& entry, json& out,
 		OverrideLoadStats& stats, std::string_view label)
 	{
-		std::ifstream settingsFile(entry.path());
-		if (!settingsFile.good() || !settingsFile.is_open()) {
-			logger::warn("Failed to open {} override file: {}", label, entry.path().string());
-			stats.failed++;
-			return false;
-		}
-
-		try {
-			settingsFile >> out;
-		} catch (const nlohmann::json::parse_error& e) {
-			logger::warn("Error parsing {} override file ({}): {}", label, entry.path().string(), e.what());
+		std::string errorMessage;
+		if (Util::FileHelpers::ReadJsonFile(entry.path(), out, errorMessage) !=
+			Util::FileHelpers::JsonFileReadResult::Success) {
+			logger::warn("Failed to read {} override file ({}): {}", label, entry.path().string(), errorMessage);
 			stats.failed++;
 			return false;
 		}
@@ -77,8 +71,14 @@ namespace
 			return false;
 
 		widget.CacheFormData();
+		widget.RememberBaseline();
 		widget.js = settingsJson;
-		widget.LoadSettings();
+		try {
+			widget.LoadSettings();
+		} catch (const std::exception& e) {
+			logger::error("Failed to apply saved CS Editor override for {}: {}", widget.GetEditorID(), e.what());
+			return false;
+		}
 		return true;
 	}
 
@@ -263,6 +263,7 @@ void CSEditor::ApplySavedEditorOverrides()
 	ApplySavedWidgetOverrides<PrecipitationWidget, RE::BGSShaderParticleGeometryData>("Precipitation", "precipitation");
 	ApplySavedWidgetOverrides<ReferenceEffectWidget, RE::BGSReferenceEffect>("Visual Effects", "visual-effect");
 	ApplySavedWidgetOverrides<LensFlareWidget, RE::BGSLensFlare>("Other Editor Widgets", "lens-flare", false);
+	ApplySavedWidgetOverrides<CellLightingWidget, RE::TESObjectCELL>("Cell Lighting", "cell-lighting");
 
 	ApplySavedWeatherOverrides();
 }
@@ -300,18 +301,17 @@ void CSEditor::ApplySavedWeatherOverrides()
 			if (!entry.is_regular_file() || entry.path().extension() != ".json")
 				continue;
 
-			std::ifstream settingsFile(entry.path());
-			if (!settingsFile.good() || !settingsFile.is_open()) {
-				logger::warn("Failed to open weather override file: {}", entry.path().string());
+			json weatherData;
+			std::string errorMessage;
+			if (Util::FileHelpers::ReadJsonFile(entry.path(), weatherData, errorMessage) !=
+				Util::FileHelpers::JsonFileReadResult::Success) {
+				logger::warn("Failed to read weather override file ({}): {}", entry.path().string(), errorMessage);
 				failedCount++;
 				continue;
 			}
 
-			json weatherData;
-			try {
-				settingsFile >> weatherData;
-			} catch (const nlohmann::json::parse_error& e) {
-				logger::warn("Error parsing weather override file ({}): {}", entry.path().string(), e.what());
+			if (!weatherData.is_object()) {
+				logger::warn("Skipping weather override file with non-object JSON: {}", entry.path().string());
 				failedCount++;
 				continue;
 			}

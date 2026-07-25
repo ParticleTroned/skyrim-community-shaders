@@ -162,7 +162,9 @@ void ImageSpaceWidget::LoadSettings()
 {
 	try {
 		if (!js.empty() && js.contains("Settings") && js["Settings"].is_object()) {
-			settings = js["Settings"];
+			json mergedSettings = vanillaSettings;
+			mergedSettings.merge_patch(js["Settings"]);
+			settings = mergedSettings;
 		} else {
 			settings = vanillaSettings;
 		}
@@ -274,6 +276,14 @@ Widget::UndoRestoreAction ImageSpaceWidget::CaptureUndoState() const
 		auto& self = static_cast<ImageSpaceWidget&>(widget);
 		self.settings = snapshot;
 		self.ApplyChanges();
+	};
+}
+
+Widget::UndoRestoreAction ImageSpaceWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<ImageSpaceWidget&>(widget).vanillaSettings = snapshot;
 	};
 }
 

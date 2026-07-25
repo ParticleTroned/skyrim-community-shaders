@@ -376,6 +376,14 @@ Widget::UndoRestoreAction PrecipitationWidget::CaptureUndoState() const
 	};
 }
 
+Widget::UndoRestoreAction PrecipitationWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<PrecipitationWidget&>(widget).vanillaSettings = snapshot;
+	};
+}
+
 bool PrecipitationWidget::HasUnsavedChanges() const
 {
 	return !(settings == originalSettings);

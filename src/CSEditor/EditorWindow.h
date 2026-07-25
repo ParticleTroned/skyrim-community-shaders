@@ -193,7 +193,9 @@ public:
 		// Palette settings
 		struct PaletteColorEntry
 		{
-			float r, g, b;
+			float r = 0.0f;
+			float g = 0.0f;
+			float b = 0.0f;
 			int useCount = 0;
 			float lastUsedTime = 0.0f;
 			bool isFavorite = false;
@@ -201,7 +203,7 @@ public:
 		struct PaletteValueEntry
 		{
 			std::string name;
-			float value;
+			float value = 0.0f;
 			int useCount = 0;
 			float lastUsedTime = 0.0f;
 			bool isFavorite = false;

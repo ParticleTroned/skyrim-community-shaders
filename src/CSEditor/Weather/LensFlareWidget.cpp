@@ -106,6 +106,14 @@ Widget::UndoRestoreAction LensFlareWidget::CaptureUndoState() const
 	};
 }
 
+Widget::UndoRestoreAction LensFlareWidget::CaptureBaselineState() const
+{
+	const auto snapshot = vanillaSettings;
+	return [snapshot](Widget& widget) {
+		static_cast<LensFlareWidget&>(widget).vanillaSettings = snapshot;
+	};
+}
+
 bool LensFlareWidget::HasUnsavedChanges() const
 {
 	return !(settings == originalSettings);

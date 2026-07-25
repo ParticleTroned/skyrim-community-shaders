@@ -115,6 +115,7 @@ public:
 	void RevertChanges() override;
 	void Delete() override;
 	UndoRestoreAction CaptureUndoState() const override;
+	UndoRestoreAction CaptureBaselineState() const override;
 	bool HasUnsavedChanges() const override;
 
 	// New methods for per-feature settings

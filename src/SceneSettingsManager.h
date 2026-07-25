@@ -164,8 +164,6 @@ private:
 
 	// --- Per scene-type storage ---
 	std::map<SceneType, std::vector<SettingEntry>> entries;
-	std::map<SceneType, bool> allOverwritesPausedMap;
-	std::map<SceneType, bool> allUserPausedMap;
 
 	// --- Interior state tracking ---
 	bool isCurrentlyApplied = false;

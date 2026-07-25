@@ -6,9 +6,12 @@
 #include "EditorWindow.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
+
+#include <unordered_map>
 
 namespace
 {
@@ -16,72 +19,72 @@ namespace
 	{
 		return std::string(value.data(), value.size());
 	}
+
+	std::unordered_map<std::string, Widget::UndoRestoreAction>& GetBaselineSnapshots()
+	{
+		static std::unordered_map<std::string, Widget::UndoRestoreAction> snapshots;
+		return snapshots;
+	}
 }
 
 void Widget::Save()
 {
 	SaveSettings();
 	const auto file = GetSaveFilePath();
-	const auto filePath = std::filesystem::path(file).parent_path();
-
-	if (!std::filesystem::exists(filePath) || !std::filesystem::is_directory(filePath)) {
-		try {
-			std::filesystem::create_directories(filePath);
-		} catch (const std::filesystem::filesystem_error& e) {
-			logger::warn("Error creating directory during Save ({}) : {}\n", filePath.string(), e.what());
-			return;
-		}
-	}
-
-	std::ofstream settingsFile(file);
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to open settings file: {}", file);
-		return;
-	}
-
-	if (settingsFile.fail()) {
-		logger::warn("Unable to create settings file: {}", file);
-		settingsFile.close();
-		return;
-	}
 
 	try {
 		// Validate that we have valid JSON to write
 		if (js.is_null()) {
 			logger::warn("{}: Cannot save - JSON data is null", GetEditorID());
-			settingsFile.close();
 			return;
 		}
 
-		settingsFile << js.dump(2);
-		settingsFile.flush();
-
-		if (settingsFile.fail()) {
-			logger::error("{}: Failed to write settings to file", GetEditorID());
-			settingsFile.close();
+		std::string errorMessage;
+		if (!Util::FileHelpers::WriteTextFileAtomic(file, js.dump(2), errorMessage)) {
+			logger::error("{}: Failed to save settings to {}: {}", GetEditorID(), file, errorMessage);
 			return;
 		}
 
-		settingsFile.close();
 		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
 
 	} catch (const nlohmann::json::exception& e) {
 		logger::error("{}: JSON error while saving settings: {}", GetEditorID(), e.what());
-		settingsFile.close();
 	} catch (const std::exception& e) {
 		logger::error("{}: Unexpected error saving settings file: {}", GetEditorID(), e.what());
-		settingsFile.close();
 	}
+}
+
+void Widget::RememberBaseline()
+{
+	auto restore = CaptureBaselineState();
+	if (restore)
+		GetBaselineSnapshots().try_emplace(GetStableIdentity(), std::move(restore));
+}
+
+void Widget::RestoreRememberedBaseline()
+{
+	const auto it = GetBaselineSnapshots().find(GetStableIdentity());
+	if (it != GetBaselineSnapshots().end())
+		it->second(*this);
 }
 
 void Widget::Load(bool showNotification)
 {
-	std::string filePath = GetSaveFilePath();
-
-	if (!std::filesystem::exists(filePath)) {
+	const auto filePath = std::filesystem::path(GetSaveFilePath());
+	auto resetToBaseline = [&]() {
 		js = json();
-		LoadSettings();
+		try {
+			LoadSettings();
+		} catch (const std::exception& e) {
+			logger::error("Failed to restore baseline settings for {}: {}", GetEditorID(), e.what());
+		}
+	};
 
+	json loaded;
+	std::string errorMessage;
+	const auto result = Util::FileHelpers::ReadJsonFile(filePath, loaded, errorMessage);
+	if (result == Util::FileHelpers::JsonFileReadResult::NotFound) {
+		resetToBaseline();
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("No saved file - reset {} to vanilla values", GetEditorID()),
@@ -91,38 +94,22 @@ void Widget::Load(bool showNotification)
 		return;
 	}
 
-	// File exists, load from it
-	std::ifstream settingsFile(filePath);
-
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to open settings file: {}", filePath);
+	if (result == Util::FileHelpers::JsonFileReadResult::Error) {
+		logger::warn("Failed to load settings file ({}): {}", filePath.string(), errorMessage);
+		resetToBaseline();
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Failed to open file for {}", GetEditorID()),
-				Util::Colors::GetWarning(),
+				std::format("Invalid file for {} - reset to vanilla", GetEditorID()),
+				Util::Colors::GetError(),
 				3.0f);
 		}
 		return;
 	}
 
 	try {
-		settingsFile >> js;
-		settingsFile.close();
-
-		// Validate that we loaded valid JSON
-		if (js.is_null()) {
-			logger::warn("{}: Loaded JSON is null, file may be empty or invalid", filePath);
-			if (showNotification) {
-				EditorWindow::GetSingleton()->ShowNotification(
-					std::format("Invalid file for {} - resetting to vanilla", GetEditorID()),
-					Util::Colors::GetWarning(),
-					3.0f);
-			}
-			js = json();
-			LoadSettings();
-			return;
-		}
-
+		if (!loaded.is_object())
+			throw std::runtime_error("root value is not a JSON object");
+		js = std::move(loaded);
 		LoadSettings();
 
 		if (showNotification) {
@@ -131,32 +118,15 @@ void Widget::Load(bool showNotification)
 				Util::Colors::GetSuccess(),
 				3.0f);
 		}
-
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::error("Error parsing settings for file ({}) : {}\n", filePath, e.what());
-		logger::error("Parse error at byte {}: {}", e.byte, e.what());
-		settingsFile.close();
-		if (showNotification) {
-			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Parse error for {} - resetting to vanilla", GetEditorID()),
-				Util::Colors::GetError(),
-				3.0f);
-		}
-		js = json();
-		LoadSettings();
-		return;
 	} catch (const std::exception& e) {
-		logger::error("Unexpected error loading settings file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
+		logger::error("Invalid settings file ({}): {}", filePath.string(), e.what());
+		resetToBaseline();
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Error loading {} - resetting to vanilla", GetEditorID()),
+				std::format("Invalid settings for {} - reset to vanilla", GetEditorID()),
 				Util::Colors::GetError(),
 				3.0f);
 		}
-		js = json();
-		LoadSettings();
-		return;
 	}
 }
 
@@ -175,9 +145,6 @@ void Widget::Delete()
 
 		// Reload settings from vanilla/mod defaults
 		LoadSettings();
-
-		// Apply the vanilla values to the game
-		ApplyChanges();
 
 		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
 

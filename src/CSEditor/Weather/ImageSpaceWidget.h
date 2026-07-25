@@ -67,4 +67,5 @@ public:
 	void ApplyChanges() override;
 	void RevertChanges() override;
 	UndoRestoreAction CaptureUndoState() const override;
+	UndoRestoreAction CaptureBaselineState() const override;
 };

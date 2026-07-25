@@ -82,8 +82,12 @@ correlates the sampled luminance grid with QPC/frame time, OpenVR submit path
 and result, texture identity/format/bounds, loading and destination-world
 frames, Stabilizer synchronization state, render-scale presentation path, and
 the CS HMD hidden-area-mask clear decision. `predominantlyWhite` marks a broad
-white submitted texture; `hamWhitePattern` marks bright perimeter samples
-around a substantially darker center.
+white submitted texture. `hamWhitePattern` also recognizes a spatially uniform
+bright or lavender perimeter around a substantially darker center, so the
+engine's approximately 0.82-luminance startup clear cannot evade the strict
+white threshold. The record exposes strict-white and broader bright sample
+counts separately. This expanded luminance record is load-presentation probe
+schema version 2.
 
 Start the probe at the main menu or immediately before invoking the in-game
 load command. Stop it only after the destination has visibly settled, then poll

@@ -872,8 +872,12 @@ public:
 		float edgeMeanLuminance = 0.0f;
 		float centerLuminance = 0.0f;
 		uint32_t whiteSampleCount = 0;
+		uint32_t brightSampleCount = 0;
 		uint32_t blackSampleCount = 0;
 		uint32_t edgeWhiteSampleCount = 0;
+		uint32_t edgeBrightSampleCount = 0;
+		float edgeBrightMinimumLuminance = 0.0f;
+		float edgeBrightMaximumLuminance = 0.0f;
 		bool predominantlyWhite = false;
 		bool predominantlyBlack = false;
 		bool hamWhitePattern = false;
@@ -2056,6 +2060,13 @@ private:
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
 	void ResetVRRenderScaleTransitionPresentationHold(bool a_releaseTexture);
+	bool CaptureAndRepairVRRenderScaleTransitionPresentationHold(
+		ID3D11Texture2D* a_sourceTexture,
+		const D3D11_TEXTURE2D_DESC& a_colorDesc);
+	bool DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
+		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,
+		bool a_verifyBindings = false);
 	bool TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();

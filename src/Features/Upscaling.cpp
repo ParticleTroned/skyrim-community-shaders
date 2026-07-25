@@ -8606,6 +8606,18 @@ namespace
 		return (support & D3D11_FORMAT_SUPPORT_RENDER_TARGET) != 0;
 	}
 
+	bool SupportsTypedUnorderedAccessView(ID3D11Device* device, DXGI_FORMAT format)
+	{
+		if (!device || format == DXGI_FORMAT_UNKNOWN)
+			return false;
+
+		UINT support = 0;
+		if (FAILED(device->CheckFormatSupport(format, &support)))
+			return false;
+
+		return (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) != 0;
+	}
+
 	struct RuntimeResolutionPlanLogKey
 	{
 		Upscaling::UpscaleMethod method = Upscaling::UpscaleMethod::kNONE;
@@ -16672,6 +16684,12 @@ bool Upscaling::PrepareVRRenderScaleTransitionPresentationHold()
 		vrRenderScaleTransitionPresentationHoldCaptureUnavailable = true;
 		return true;
 	}
+	// Compile the mask repair shader before entering the submit callback. Hold
+	// protection is optional, so fail open if its resources are unavailable.
+	if (!EnsureHMDMaskClearResources()) {
+		vrRenderScaleTransitionPresentationHoldCaptureUnavailable = true;
+		return true;
+	}
 	if (!globals::features::vr.InstallSubmitHook()) {
 		vrRenderScaleTransitionPresentationHoldCaptureUnavailable = true;
 		return true;
@@ -16684,6 +16702,123 @@ bool Upscaling::PrepareVRRenderScaleTransitionPresentationHold()
 	vrRenderScaleTransitionPresentationHoldSource = nullptr;
 	vrRenderScaleTransitionPresentationHoldRecoveryEpoch = recoveryEpoch;
 	return false;
+}
+
+bool Upscaling::CaptureAndRepairVRRenderScaleTransitionPresentationHold(
+	ID3D11Texture2D* a_sourceTexture,
+	const D3D11_TEXTURE2D_DESC& a_colorDesc)
+{
+	auto* state = globals::state;
+	auto* renderer = globals::game::renderer;
+	auto* context = globals::d3d::context;
+	if (!state ||
+		!renderer ||
+		!context ||
+		!a_sourceTexture ||
+		!vrRenderScaleTransitionPresentationHold ||
+		!vrRenderScaleTransitionPresentationHold->uav) {
+		return false;
+	}
+
+	const uint32_t currentFrame = std::max(state->frameCount, 1u);
+	if (state->lastCompletedWorldRenderFrame != currentFrame)
+		return false;
+
+	const uint32_t expectedWidth = ClampPositiveDimension(state->screenSize.x);
+	const uint32_t expectedHeight = ClampPositiveDimension(state->screenSize.y);
+	if (a_colorDesc.Width != expectedWidth ||
+		a_colorDesc.Height != expectedHeight ||
+		(a_colorDesc.Width & 1u) != 0 ||
+		a_colorDesc.ArraySize != 1 ||
+		a_colorDesc.MipLevels != 1 ||
+		a_colorDesc.SampleDesc.Count != 1) {
+		return false;
+	}
+
+	auto& depth =
+		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	if (!depth.texture || !depth.depthSRV)
+		return false;
+	winrt::com_ptr<ID3D11Resource> depthSRVResource;
+	depth.depthSRV->GetResource(depthSRVResource.put());
+	if (!depthSRVResource ||
+		GetCOMIdentityAddress(depthSRVResource.get()) !=
+			GetCOMIdentityAddress(depth.texture)) {
+		return false;
+	}
+
+	D3D11_TEXTURE2D_DESC depthDesc{};
+	depth.texture->GetDesc(&depthDesc);
+	if (depthDesc.Width != a_colorDesc.Width ||
+		depthDesc.Height != a_colorDesc.Height ||
+		depthDesc.ArraySize != 1 ||
+		depthDesc.MipLevels != 1 ||
+		depthDesc.SampleDesc.Count != 1) {
+		return false;
+	}
+
+	const auto stereoLayout =
+		ResolveVRSideBySideStereoLayout(a_colorDesc.Width / 2u, a_colorDesc.Height);
+	if (!stereoLayout.IsValid() ||
+		stereoLayout.width != a_colorDesc.Width ||
+		stereoLayout.height != a_colorDesc.Height) {
+		return false;
+	}
+
+	context->CopyResource(
+		vrRenderScaleTransitionPresentationHold->resource.get(),
+		a_sourceTexture);
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved(
+			"render-scale transition presentation hold capture")) {
+		return false;
+	}
+
+	winrt::com_ptr<ID3D11ComputeShader> previousShader;
+	winrt::com_ptr<ID3D11ShaderResourceView> previousSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> previousUAV;
+	winrt::com_ptr<ID3D11Buffer> previousCB;
+	context->CSGetShader(previousShader.put(), nullptr, nullptr);
+	context->CSGetShaderResources(0, 1, previousSRV.put());
+	context->CSGetUnorderedAccessViews(0, 1, previousUAV.put());
+	context->CSGetConstantBuffers(0, 1, previousCB.put());
+	auto restoreComputeState = ScopeExit([&]() {
+		auto* shader = previousShader.get();
+		auto* srv = previousSRV.get();
+		auto* uav = previousUAV.get();
+		auto* cb = previousCB.get();
+		context->CSSetShader(shader, nullptr, 0);
+		context->CSSetShaderResources(0, 1, &srv);
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetConstantBuffers(0, 1, &cb);
+	});
+
+	// This private copy is deliberately repaired below the normal transition gate:
+	// that gate remains active while post-load recovery owns this capture. The
+	// current-world-frame and exact color/depth layout checks above replace it
+	// without exposing the live target. The copy and both dispatches share the
+	// immediate context, so Ready cannot publish a partially queued repair.
+	for (const auto& eye : stereoLayout.eyes) {
+		if (!DispatchHMDMaskClear(
+				vrRenderScaleTransitionPresentationHold->uav.get(),
+				depth.depthSRV,
+				eye.width,
+				eye.height,
+				eye.width,
+				eye.height,
+				eye.minX,
+				eye.minX,
+				eye.minY,
+				eye.minY,
+				true)) {
+			return false;
+		}
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved(
+				"render-scale transition presentation hold mask repair")) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 void Upscaling::CaptureVRRenderScaleTransitionPresentationHold(
@@ -16736,6 +16871,7 @@ void Upscaling::CaptureVRRenderScaleTransitionPresentationHold(
 
 	if (vrRenderScaleTransitionPresentationHoldSource != sourceTexture ||
 		vrRenderScaleTransitionPresentationHoldCaptureFrame != currentFrame ||
+		vrRenderScaleTransitionPresentationHoldColorSpace != a_texture->eColorSpace ||
 		!a_bounds) {
 		return;
 	}
@@ -16746,16 +16882,24 @@ void Upscaling::CaptureVRRenderScaleTransitionPresentationHold(
 	if ((vrRenderScaleTransitionPresentationHoldCaptureEyeMask & kBothVREyesMask) == kBothVREyesMask) {
 		// Copy only after both original eye submissions have succeeded. This keeps
 		// allocation and the full-surface copy out of the inter-eye submit gap.
+		const DXGI_FORMAT holdUAVFormat =
+			GetRenderTargetViewFormat(sourceDesc.Format);
+		if (!SupportsTypedUnorderedAccessView(globals::d3d::device, holdUAVFormat)) {
+			abandonCapture();
+			return;
+		}
 		if (vrRenderScaleTransitionPresentationHold &&
 			(vrRenderScaleTransitionPresentationHold->desc.Width != sourceDesc.Width ||
 				vrRenderScaleTransitionPresentationHold->desc.Height != sourceDesc.Height ||
-				vrRenderScaleTransitionPresentationHold->desc.Format != sourceDesc.Format)) {
+				vrRenderScaleTransitionPresentationHold->desc.Format != sourceDesc.Format ||
+				!vrRenderScaleTransitionPresentationHold->uav)) {
 			vrRenderScaleTransitionPresentationHold.reset();
 		}
 
 		if (!vrRenderScaleTransitionPresentationHold) {
 			D3D11_TEXTURE2D_DESC holdDesc = sourceDesc;
 			holdDesc.Usage = D3D11_USAGE_DEFAULT;
+			holdDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 			holdDesc.CPUAccessFlags = 0;
 			holdDesc.MiscFlags = 0;
 			try {
@@ -16763,17 +16907,30 @@ void Upscaling::CaptureVRRenderScaleTransitionPresentationHold(
 				Util::SetResourceName(
 					vrRenderScaleTransitionPresentationHold->resource.get(),
 					"RenderScale_TransitionPresentationHold");
+				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+				uavDesc.Format = holdUAVFormat;
+				uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+				uavDesc.Texture2D.MipSlice = 0;
+				vrRenderScaleTransitionPresentationHold->CreateUAV(uavDesc);
+			} catch (const std::exception& e) {
+				MarkSubmitStageDeviceLostIfNeeded(
+					e,
+					"render-scale transition presentation hold allocation");
+				abandonCapture();
+				return;
 			} catch (...) {
+				MarkSubmitStageDeviceLostIfDeviceRemoved(
+					"render-scale transition presentation hold allocation");
 				abandonCapture();
 				return;
 			}
 		}
 
-		globals::d3d::context->CopyResource(
-			vrRenderScaleTransitionPresentationHold->resource.get(),
-			sourceTexture);
-		if (MarkSubmitStageDeviceLostIfDeviceRemoved("render-scale transition presentation hold capture")) {
-			abandonCapture();
+		if (!CaptureAndRepairVRRenderScaleTransitionPresentationHold(
+				sourceTexture,
+				sourceDesc)) {
+			if (IsSubmitStageDeviceLost())
+				abandonCapture();
 			return;
 		}
 
@@ -20755,6 +20912,15 @@ namespace
 			0.95f,
 			0.995f
 		};
+	constexpr float kVRLoadPresentationProbeWhiteLuminance = 0.92f;
+	constexpr float kVRLoadPresentationProbeBrightLuminance = 0.75f;
+	constexpr uint32_t kVRLoadPresentationProbeHAMWhiteEdgeSamples = 8u;
+	constexpr float kVRLoadPresentationProbeHAMWhiteEdgeMean = 0.80f;
+	constexpr uint32_t kVRLoadPresentationProbeHAMBrightEdgeSamples = 12u;
+	constexpr float kVRLoadPresentationProbeHAMBrightEdgeMean = 0.70f;
+	constexpr float kVRLoadPresentationProbeHAMBrightEdgeSpread = 0.08f;
+	constexpr float kVRLoadPresentationProbeHAMMaximumCenter = 0.65f;
+	constexpr float kVRLoadPresentationProbeHAMMinimumContrast = 0.25f;
 
 	uint64_t QueryVRLoadPresentationProbeQpc() noexcept
 	{
@@ -21045,6 +21211,8 @@ void Upscaling::ServiceVRLoadPresentationProbeReadbacks() noexcept
 				uint32_t decodedSamples = 0;
 				record.minimumLuminance = std::numeric_limits<float>::max();
 				record.maximumLuminance = 0.0f;
+				record.edgeBrightMinimumLuminance = std::numeric_limits<float>::max();
+				record.edgeBrightMaximumLuminance = 0.0f;
 				for (uint32_t y = 0; y < kVRLoadPresentationProbeGridSize; ++y) {
 					for (uint32_t x = 0; x < kVRLoadPresentationProbeGridSize; ++x) {
 						const uint32_t index = y * kVRLoadPresentationProbeGridSize + x;
@@ -21083,10 +21251,20 @@ void Upscaling::ServiceVRLoadPresentationProbeReadbacks() noexcept
 							edgeSum += luminance;
 							++edgeSamples;
 						}
-						if (luminance >= 0.92f) {
+						if (luminance >= kVRLoadPresentationProbeWhiteLuminance) {
 							++record.whiteSampleCount;
 							if (edge)
 								++record.edgeWhiteSampleCount;
+						}
+						if (luminance >= kVRLoadPresentationProbeBrightLuminance) {
+							++record.brightSampleCount;
+							if (edge) {
+								++record.edgeBrightSampleCount;
+								record.edgeBrightMinimumLuminance =
+									std::min(record.edgeBrightMinimumLuminance, luminance);
+								record.edgeBrightMaximumLuminance =
+									std::max(record.edgeBrightMaximumLuminance, luminance);
+							}
 						}
 						if (luminance <= 0.05f)
 							++record.blackSampleCount;
@@ -21106,11 +21284,34 @@ void Upscaling::ServiceVRLoadPresentationProbeReadbacks() noexcept
 						record.whiteSampleCount >= kVRLoadPresentationProbeSampleCount - 5u;
 					record.predominantlyBlack =
 						record.blackSampleCount >= kVRLoadPresentationProbeSampleCount - 5u;
-					record.hamWhitePattern =
-						record.edgeWhiteSampleCount >= 8u &&
-						record.edgeMeanLuminance >= 0.80f &&
-						record.centerLuminance <= 0.65f &&
-						record.edgeMeanLuminance >= record.centerLuminance + 0.25f;
+					if (record.edgeBrightSampleCount == 0) {
+						record.edgeBrightMinimumLuminance = 0.0f;
+						record.edgeBrightMaximumLuminance = 0.0f;
+					}
+					const float edgeBrightSpread =
+						record.edgeBrightMaximumLuminance -
+						record.edgeBrightMinimumLuminance;
+					const bool darkHAMCenter =
+						record.centerLuminance <=
+							kVRLoadPresentationProbeHAMMaximumCenter &&
+						record.edgeMeanLuminance >=
+							record.centerLuminance +
+								kVRLoadPresentationProbeHAMMinimumContrast;
+					const bool whiteHAMPattern =
+						record.edgeWhiteSampleCount >=
+							kVRLoadPresentationProbeHAMWhiteEdgeSamples &&
+						record.edgeMeanLuminance >=
+							kVRLoadPresentationProbeHAMWhiteEdgeMean &&
+						darkHAMCenter;
+					const bool brightHAMPattern =
+						record.edgeBrightSampleCount >=
+							kVRLoadPresentationProbeHAMBrightEdgeSamples &&
+						record.edgeMeanLuminance >=
+							kVRLoadPresentationProbeHAMBrightEdgeMean &&
+						edgeBrightSpread <=
+							kVRLoadPresentationProbeHAMBrightEdgeSpread &&
+						darkHAMCenter;
+					record.hamWhitePattern = whiteHAMPattern || brightHAMPattern;
 				} else {
 					record.captureStatus = VRLoadPresentationProbeCaptureStatus::MapFailure;
 				}
@@ -21569,8 +21770,12 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 							   { "edgeMean", record.edgeMeanLuminance },
 							   { "center", record.centerLuminance },
 							   { "whiteSamples", record.whiteSampleCount },
+							   { "brightSamples", record.brightSampleCount },
 							   { "blackSamples", record.blackSampleCount },
 							   { "edgeWhiteSamples", record.edgeWhiteSampleCount },
+							   { "edgeBrightSamples", record.edgeBrightSampleCount },
+							   { "edgeBrightMinimum", record.edgeBrightMinimumLuminance },
+							   { "edgeBrightMaximum", record.edgeBrightMaximumLuminance },
 							   { "predominantlyWhite", record.predominantlyWhite },
 							   { "predominantlyBlack", record.predominantlyBlack },
 							   { "hamWhitePattern", record.hamWhitePattern },
@@ -21582,7 +21787,7 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 	}
 
 	return {
-		{ "schemaVersion", 1 },
+		{ "schemaVersion", 2 },
 		{ "status", BuildVRLoadPresentationProbeStatus() },
 		{ "samplePositions", kVRLoadPresentationProbeSamplePositions },
 		{ "records", std::move(records) },
@@ -26598,50 +26803,41 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 	if (ShouldDeferHMDClearMask())
 		return;
 
+	(void)DispatchHMDMaskClear(
+		colorUAV,
+		depthSRV,
+		depthWidth,
+		depthHeight,
+		colorWidth,
+		colorHeight,
+		depthOffsetX,
+		colorOffsetX,
+		depthOffsetY,
+		colorOffsetY);
+}
+
+bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY, bool a_verifyBindings)
+{
+	if (!globals::game::isVR)
+		return false;
+	if (!colorUAV || !depthSRV || !depthWidth || !depthHeight || !colorWidth || !colorHeight)
+		return false;
+
 	auto context = globals::d3d::context;
 	if (!context)
-		return;
+		return false;
 
 	if (!EnsureHMDMaskClearResources())
-		return;
+		return false;
+	if (!vrClearHMDMaskCS || !vrClearHMDMaskCB)
+		return false;
 
-	if (vrClearHMDMaskCS && vrClearHMDMaskCB) {
-		auto dispatchX = (colorWidth + 7) / 8;
-		auto dispatchY = (colorHeight + 7) / 8;
+	auto dispatchX = (colorWidth + 7) / 8;
+	auto dispatchY = (colorHeight + 7) / 8;
 
-		context->CSSetShader(vrClearHMDMaskCS.get(), nullptr, 0);
-
-		ID3D11ShaderResourceView* srvs[1] = { depthSRV };
-		context->CSSetShaderResources(0, 1, srvs);
-
-		ID3D11UnorderedAccessView* uavs[1] = { colorUAV };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-		uint32_t clearMaskParams[8] = {
-			depthOffsetX,
-			colorOffsetX,
-			depthOffsetY,
-			colorOffsetY,
-			depthWidth,
-			depthHeight,
-			colorWidth,
-			colorHeight
-		};
-		context->UpdateSubresource(vrClearHMDMaskCB.get(), 0, nullptr, clearMaskParams, 0, 0);
-
-		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
-		context->CSSetConstantBuffers(0, 1, cbs);
-
-		{
-			CS_PROFILE_SCOPE("Upscaling::ClearHMDMask");
-			context->Dispatch(dispatchX, dispatchY, 1);
-		}
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		if (vrLoadPresentationProbeActive.load(std::memory_order_acquire))
-			vrLoadPresentationProbeHMDDispatchSequence.fetch_add(1, std::memory_order_relaxed);
-#endif
-
-		// Unbind
+	context->CSSetShader(vrClearHMDMaskCS.get(), nullptr, 0);
+	auto clearBindings = ScopeExit([&]() {
 		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
 		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
 		ID3D11Buffer* nullCB[1] = { nullptr };
@@ -26649,7 +26845,47 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 		context->CSSetConstantBuffers(0, 1, nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
+	});
+
+	ID3D11ShaderResourceView* srvs[1] = { depthSRV };
+	context->CSSetShaderResources(0, 1, srvs);
+
+	ID3D11UnorderedAccessView* uavs[1] = { colorUAV };
+	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+	if (a_verifyBindings) {
+		winrt::com_ptr<ID3D11ShaderResourceView> boundSRV;
+		winrt::com_ptr<ID3D11UnorderedAccessView> boundUAV;
+		context->CSGetShaderResources(0, 1, boundSRV.put());
+		context->CSGetUnorderedAccessViews(0, 1, boundUAV.put());
+		if (boundSRV.get() != depthSRV || boundUAV.get() != colorUAV)
+			return false;
 	}
+
+	uint32_t clearMaskParams[8] = {
+		depthOffsetX,
+		colorOffsetX,
+		depthOffsetY,
+		colorOffsetY,
+		depthWidth,
+		depthHeight,
+		colorWidth,
+		colorHeight
+	};
+	context->UpdateSubresource(vrClearHMDMaskCB.get(), 0, nullptr, clearMaskParams, 0, 0);
+
+	ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
+	context->CSSetConstantBuffers(0, 1, cbs);
+
+	{
+		CS_PROFILE_SCOPE("Upscaling::ClearHMDMask");
+		context->Dispatch(dispatchX, dispatchY, 1);
+	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (vrLoadPresentationProbeActive.load(std::memory_order_acquire))
+		vrLoadPresentationProbeHMDDispatchSequence.fetch_add(1, std::memory_order_relaxed);
+#endif
+
+	return true;
 }
 
 void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,

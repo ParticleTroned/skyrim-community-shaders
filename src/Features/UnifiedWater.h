@@ -166,5 +166,5 @@ private:
 	void SetFlowmapTex() const;
 	bool IsExteriorWorldspaceActive() const;
 	void UpdateWaterLODCull() const;
-	static bool LoadOrderChanged();
+	static bool LoadOrderChanged(uint64_t& a_hash);
 };

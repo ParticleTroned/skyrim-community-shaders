@@ -42,6 +42,10 @@ namespace
 	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
 	constexpr float kShoreFeatherWidthMin = 0.0f;
 	constexpr float kShoreFeatherWidthMax = 64.0f;
+	// Increment when Unified Water's generated flowmap or cache contract changes.
+	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
+
+	bool PersistLoadOrderHash(uint64_t a_hash);
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
@@ -752,13 +756,18 @@ void UnifiedWater::DataLoaded()
 	flowmap = new Flowmap();
 	waterCache = new WaterCache();
 
-	if (LoadOrderChanged()) {
-		logger::info("[Unified Water] Load order changed, regenerating flowmap and caches");
+	uint64_t pendingLoadOrderHash = 0;
+	bool persistLoadOrderHash = false;
 
-		if (flowmap->RegenerateAndLoadFlowmap())
+	if (LoadOrderChanged(pendingLoadOrderHash)) {
+		logger::info("[Unified Water] Load order or data revision changed, regenerating flowmap and caches");
+
+		const bool flowmapRegenerated = flowmap->RegenerateAndLoadFlowmap();
+		if (flowmapRegenerated)
 			SetFlowmapTex();
 
-		waterCache->RegenerateCaches();
+		const bool cacheRegenerationStarted = waterCache->RegenerateCaches();
+		persistLoadOrderHash = flowmapRegenerated && cacheRegenerationStarted;
 	} else {
 		if (flowmap->LoadOrGenerateFlowmap())
 			SetFlowmapTex();
@@ -768,6 +777,14 @@ void UnifiedWater::DataLoaded()
 
 	while (waterCache->IsBuildRunning()) {
 		std::this_thread::sleep_for(100ms);
+	}
+
+	if (persistLoadOrderHash) {
+		if (waterCache->HasBuildFailed()) {
+			logger::warn("[Unified Water] Generated data is incomplete; retaining the previous load-order hash so regeneration retries next launch");
+		} else if (!PersistLoadOrderHash(pendingLoadOrderHash)) {
+			logger::warn("[Unified Water] Failed to persist the regenerated data hash; regeneration will retry next launch");
+		}
 	}
 
 	if (!MenuOpenCloseEventHandler::Register()) {
@@ -828,6 +845,11 @@ namespace
 	constexpr int kShareRetries = 3;
 	constexpr DWORD kShareRetryDelayMs = 50;
 
+	std::filesystem::path GetLoadOrderHashPath()
+	{
+		return Util::PathHelpers::GetCommunityShaderPath() / "UWLoadOrder.hash";
+	}
+
 	bool ReadHashFile(const std::filesystem::path& a_path, uint64_t& a_hash)
 	{
 		for (int attempt = 0; attempt < kShareRetries; ++attempt) {
@@ -881,23 +903,42 @@ namespace
 		}
 		return false;
 	}
+
+	bool PersistLoadOrderHash(const uint64_t a_hash)
+	{
+		const auto path = GetLoadOrderHashPath();
+
+		std::error_code error;
+		std::filesystem::create_directories(path.parent_path(), error);
+		if (error) {
+			logger::error("[Unified Water] Failed to create load-order hash directory '{}': {}; regeneration will retry next launch",
+				path.parent_path().string(), error.message());
+			return false;
+		}
+
+		return WriteHashFile(path, a_hash);
+	}
 }
 
-bool UnifiedWater::LoadOrderChanged()
+bool UnifiedWater::LoadOrderChanged(uint64_t& a_hash)
 {
 	auto* dataHandler = RE::TESDataHandler::GetSingleton();
 	if (!dataHandler)
 		return false;
 
-	uint64_t hash = 14695981039346656037ull;
+	a_hash = 14695981039346656037ull;
+
+	auto addBytes = [&](const unsigned char* bytes) {
+		for (auto p = bytes; *p; ++p) {
+			a_hash ^= *p;
+			a_hash *= 1099511628211ull;
+		}
+	};
 
 	auto addToHash = [&](const RE::TESFile* file) {
 		if (!file || !file->fileName)
 			return;
-		for (auto p = reinterpret_cast<const unsigned char*>(file->fileName); *p; ++p) {
-			hash ^= *p;
-			hash *= 1099511628211ull;
-		}
+		addBytes(reinterpret_cast<const unsigned char*>(file->fileName));
 	};
 
 	if (const auto mods = dataHandler->GetLoadedMods()) {
@@ -912,19 +953,15 @@ bool UnifiedWater::LoadOrderChanged()
 			addToHash(lightMods[i]);
 	}
 
-	const std::filesystem::path path = Util::PathHelpers::GetCommunityShaderPath() / "UWLoadOrder.hash";
+	addBytes(reinterpret_cast<const unsigned char*>(kUnifiedWaterDataRevision));
+
+	const auto path = GetLoadOrderHashPath();
 
 	uint64_t existingHash = 0;
 	ReadHashFile(path, existingHash);
 
-	const bool changed = hash != existingHash;
-	logger::debug("[Unified Water] Load order hash: computed={:#x} persisted={:#x} changed={}", hash, existingHash, changed);
-
-	if (changed) {
-		std::error_code error;
-		std::filesystem::create_directories(path.parent_path(), error);
-		WriteHashFile(path, hash);
-	}
+	const bool changed = a_hash != existingHash;
+	logger::debug("[Unified Water] Load order hash: computed={:#x} persisted={:#x} changed={}", a_hash, existingHash, changed);
 
 	return changed;
 }

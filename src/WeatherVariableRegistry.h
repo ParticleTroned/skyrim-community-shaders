@@ -509,6 +509,17 @@ namespace WeatherVariables
 			}
 		}
 
+		void RestoreFeatureUserSettings(const std::string& featureName)
+		{
+			auto* registry = GetFeatureRegistry(featureName);
+			if (!registry)
+				return;
+
+			registry->EndTransition();
+			for (const auto& variable : registry->GetVariables())
+				variable->SetToUserSettings();
+		}
+
 		bool IsFeatureVariableInTransition(const std::string& featureName, const std::string& settingName)
 		{
 			auto* registry = GetFeatureRegistry(featureName);

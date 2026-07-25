@@ -173,7 +173,7 @@ public:
 	}
 
 	void Save();
-	void Load(bool showNotification = true);
+	void Load(bool showNotification = true, bool applyChanges = true);
 	bool HasSavedFile() const;
 
 	virtual void Delete();
@@ -298,9 +298,11 @@ public:
 	json js = json();
 
 protected:
+	bool IsPersistentApplySuppressed() const { return suppressPersistentApply; }
 	mutable std::string cachedEditorID;
 	mutable std::string cachedSaveKey;
 	mutable bool isFallbackEditorID = false;
+	bool suppressPersistentApply = false;
 	virtual void DrawMenu();
 	std::string GetFolderName() const;
 

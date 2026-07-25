@@ -66,7 +66,7 @@ void LightingTemplateWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
 	if (BeginWidgetWindow()) {
-		DrawWidgetHeader("##LightingTemplateSearch", false, true);
+		DrawWidgetHeader("##LightingTemplateSearch", true, true);
 		DrawSearchDropdown();
 	}
 	if (ImGui::BeginTabBar("LightingTemplateSettingsTabs", ImGuiTabBarFlags_None)) {

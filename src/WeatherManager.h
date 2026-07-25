@@ -2,6 +2,7 @@
 
 #include "WeatherVariableRegistry.h"
 #include <map>
+#include <set>
 #include <string>
 
 using json = nlohmann::json;
@@ -30,6 +31,7 @@ public:
 
 	// Per-frame update - notify features of weather changes
 	void UpdateFeatures();
+	void SetFeatureOverrideActive(const std::string& featureName, bool active);
 
 	// Save feature settings for a specific weather
 	void SaveSettingsToWeather(RE::TESWeather* weather, const std::string& featureName, const json& settings);
@@ -60,6 +62,7 @@ private:
 
 	// Track last known weather state to detect changes
 	CurrentWeathers lastKnownWeather;
+	std::set<std::string> activeWeatherFeatures;
 
 	// Cached last weather - sky->lastWeather can be cleared before currentWeatherPct reaches 1.0
 	RE::TESWeather* cachedLastWeather = nullptr;

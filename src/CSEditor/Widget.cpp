@@ -25,6 +25,24 @@ namespace
 		static std::unordered_map<std::string, Widget::UndoRestoreAction> snapshots;
 		return snapshots;
 	}
+
+	void ReinitializeActiveWeather(RE::TESWeather* weather)
+	{
+		auto* sky = globals::game::sky;
+		if (!weather || !sky || sky->currentWeather != weather)
+			return;
+
+		auto* editor = EditorWindow::GetSingleton();
+		auto* lockedWeather = editor && editor->IsWeatherLocked() ?
+		                          editor->GetLockedWeather() :
+		                          nullptr;
+
+		sky->ForceWeather(weather, true);
+		sky->ReleaseWeatherOverride();
+
+		if (lockedWeather)
+			sky->ForceWeather(lockedWeather, false);
+	}
 }
 
 void Widget::Save()
@@ -68,8 +86,14 @@ void Widget::RestoreRememberedBaseline()
 		it->second(*this);
 }
 
-void Widget::Load(bool showNotification)
+void Widget::Load(bool showNotification, bool applyChanges)
 {
+	const bool previousSuppression = suppressPersistentApply;
+	suppressPersistentApply = previousSuppression || !applyChanges;
+	const SKSE::stl::scope_exit restoreSuppression([&]() noexcept {
+		suppressPersistentApply = previousSuppression;
+	});
+
 	const auto filePath = std::filesystem::path(GetSaveFilePath());
 	auto resetToBaseline = [&]() {
 		js = json();
@@ -164,6 +188,9 @@ bool Widget::HasSavedFile() const
 
 bool Widget::CanApplyPersistentChanges() const
 {
+	if (suppressPersistentApply)
+		return false;
+
 	auto* state = State::GetSingleton();
 	return !state || !state->IsPersistentMutationBlocked();
 }
@@ -269,20 +296,14 @@ bool Widget::BeginWidgetWindow()
 
 void Widget::ForceWeatherReinit(RE::TESWeather* weather)
 {
-	auto* sky = globals::game::sky;
-	if (weather && sky && sky->currentWeather == weather) {
-		sky->ForceWeather(weather, true);
-		sky->ReleaseWeatherOverride();
-	}
+	ReinitializeActiveWeather(weather);
 }
 
 void Widget::ForceCurrentWeatherReinit()
 {
 	auto* sky = globals::game::sky;
-	if (sky && sky->currentWeather) {
-		sky->ForceWeather(sky->currentWeather, true);
-		sky->ReleaseWeatherOverride();
-	}
+	if (sky)
+		ReinitializeActiveWeather(sky->currentWeather);
 }
 
 void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSaveLoadRevert, bool showForceWeather, RE::TESWeather* weather)
@@ -442,7 +463,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 	if (showApply && RequiresManualApply() && editorWindow->settings.autoApplyChanges && menu) {
 		ImGui::SameLine();
-		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "(Changes require manual apply)");
+		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "(Manual apply only)");
 		Util::AddTooltip("This form type is only re-read by the engine on weather reinit.\nAuto-apply is disabled - use the Apply button.");
 	}
 

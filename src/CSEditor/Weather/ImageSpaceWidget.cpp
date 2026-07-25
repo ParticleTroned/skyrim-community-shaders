@@ -93,7 +93,7 @@ void ImageSpaceWidget::DrawWidget()
 	auto editorWindow = EditorWindow::GetSingleton();
 
 	if (BeginWidgetWindow()) {
-		DrawWidgetHeader("##ImageSpaceSearch", false, true);
+		DrawWidgetHeader("##ImageSpaceSearch", true, true);
 		DrawSearchDropdown();
 	}
 	BeginScrollableContent("##ISScroll");

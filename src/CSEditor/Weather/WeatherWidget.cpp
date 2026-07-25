@@ -114,7 +114,7 @@ void WeatherWidget::DrawWidget()
 	const float scale = Util::GetUIScale();
 	if (BeginWidgetWindow()) {
 		// Draw header with search and all buttons
-		DrawWidgetHeader("##WeatherSearch", false, true, true, weather);
+		DrawWidgetHeader("##WeatherSearch", true, true, true, weather);
 		DrawSearchDropdown();
 
 		auto editorWindow = EditorWindow::GetSingleton();
@@ -464,7 +464,7 @@ void WeatherWidget::LoadSettings()
 		LoadFeatureSettings();
 	}
 	originalSettings = settings;
-	pendingReinit = true;
+	pendingReinit = !IsPersistentApplySuppressed();
 	ApplyChanges();
 }
 
@@ -648,15 +648,27 @@ void WeatherWidget::SetWeatherValues()
 		auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 		json emptyWeather;
 
-		for (const auto& [featureName, featureSettings] : settings.featureSettings) {
-			if (!featureSettings.value("__enabled", false) || !globalRegistry->HasWeatherSupport(featureName)) {
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!feature || !feature->loaded)
+				continue;
+
+			const std::string featureName = feature->GetShortName();
+			if (!globalRegistry->HasWeatherSupport(featureName))
+				continue;
+
+			const auto settingsIt = settings.featureSettings.find(featureName);
+			if (settingsIt == settings.featureSettings.end() ||
+				!settingsIt->second.value("__enabled", false)) {
+				globalRegistry->RestoreFeatureUserSettings(featureName);
+				weatherManager->SetFeatureOverrideActive(featureName, false);
 				continue;
 			}
 
-			// Filter out __enabled flag and apply settings
-			json filteredSettings = featureSettings;
+			json filteredSettings = settingsIt->second;
 			filteredSettings.erase("__enabled");
-			globalRegistry->UpdateFeatureFromWeathers(featureName, emptyWeather, filteredSettings, 1.0f);
+			globalRegistry->UpdateFeatureFromWeathers(
+				featureName, emptyWeather, filteredSettings, 1.0f);
+			weatherManager->SetFeatureOverrideActive(featureName, true);
 		}
 	}
 }
@@ -1736,26 +1748,6 @@ void WeatherWidget::ApplyChanges()
 void WeatherWidget::RevertChanges()
 {
 	auto* weatherManager = WeatherManager::GetSingleton();
-
-	// If this weather is currently active, reset enabled feature overrides to user defaults
-	if (weather == weatherManager->GetCurrentWeathers().currentWeather) {
-		auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-
-		for (const auto& [featureName, featureSettings] : settings.featureSettings) {
-			if (!featureSettings.value("__enabled", false) || !globalRegistry->HasWeatherSupport(featureName)) {
-				continue;
-			}
-
-			globalRegistry->EndFeatureTransition(featureName);
-
-			if (auto* featureRegistry = globalRegistry->GetFeatureRegistry(featureName)) {
-				for (const auto& var : featureRegistry->GetVariables()) {
-					var->SetToUserSettings();
-				}
-			}
-		}
-	}
-
 	weatherManager->ClearAllFeatureSettingsForWeather(weather);
 	settings = vanillaSettings;
 	pendingReinit = true;

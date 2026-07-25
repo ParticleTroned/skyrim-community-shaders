@@ -187,7 +187,7 @@ namespace WidgetFactory
 				auto widget = std::make_unique<WidgetType>(form);
 				widget->CacheFormData();
 				widget->RestoreRememberedBaseline();
-				widget->Load(false);
+				widget->Load(false, false);
 				widgets.push_back(std::move(widget));
 			}
 		}

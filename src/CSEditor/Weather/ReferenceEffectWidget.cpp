@@ -49,8 +49,6 @@ void ReferenceEffectWidget::DrawWidget()
 		DrawSearchDropdown();
 		BeginScrollableContent("##REScroll");
 		{
-			bool changed = false;
-
 			auto editorWindow = EditorWindow::GetSingleton();
 			auto drawFormPicker = [&](const char* label, auto& currentForm, const auto& widgets) {
 				return DrawWithHighlight(label, [&]() {
@@ -58,36 +56,27 @@ void ReferenceEffectWidget::DrawWidget()
 				});
 			};
 
-			if (DrawIfMatchesSearch(ReferenceEffectSetting::kArtObject, [&](const char* label) {
-					ImGui::SeparatorText(label);
-					if (editorWindow->artObjectWidgets.empty()) {
-						ImGui::TextDisabled("No Art Objects available");
-						return false;
-					}
-					return drawFormPicker(label, settings.artObject, editorWindow->artObjectWidgets);
-				}))
-				changed = true;
-			if (DrawIfMatchesSearch(ReferenceEffectSetting::kEffectShader, [&](const char* label) {
-					ImGui::SeparatorText(label);
-					if (editorWindow->effectShaderWidgets.empty()) {
-						ImGui::TextDisabled("No Effect Shaders available");
-						return false;
-					}
-					return drawFormPicker(label, settings.effectShader, editorWindow->effectShaderWidgets);
-				}))
-				changed = true;
+			DrawIfMatchesSearch(ReferenceEffectSetting::kArtObject, [&](const char* label) {
+				ImGui::SeparatorText(label);
+				if (editorWindow->artObjectWidgets.empty()) {
+					ImGui::TextDisabled("No Art Objects available");
+					return false;
+				}
+				return drawFormPicker(label, settings.artObject, editorWindow->artObjectWidgets);
+			});
+			DrawIfMatchesSearch(ReferenceEffectSetting::kEffectShader, [&](const char* label) {
+				ImGui::SeparatorText(label);
+				if (editorWindow->effectShaderWidgets.empty()) {
+					ImGui::TextDisabled("No Effect Shaders available");
+					return false;
+				}
+				return drawFormPicker(label, settings.effectShader, editorWindow->effectShaderWidgets);
+			});
 			if (MatchesAnySearch({ ReferenceEffectSetting::kFaceTarget, ReferenceEffectSetting::kAttachToCamera, ReferenceEffectSetting::kInheritRotation })) {
 				ImGui::SeparatorText("Flags");
-				if (WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kFaceTarget, settings.faceTarget))
-					changed = true;
-				if (WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kAttachToCamera, settings.attachToCamera))
-					changed = true;
-				if (WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kInheritRotation, settings.inheritRotation))
-					changed = true;
-			}
-
-			if (changed && editorWindow->settings.autoApplyChanges) {
-				ApplyChanges();
+				WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kFaceTarget, settings.faceTarget);
+				WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kAttachToCamera, settings.attachToCamera);
+				WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kInheritRotation, settings.inheritRotation);
 			}
 		}
 		EndScrollableContent();

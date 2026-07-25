@@ -69,8 +69,6 @@ void PrecipitationWidget::DrawWidget()
 		DrawWidgetHeader("##PrecipitationSearch", true, true);
 		DrawSearchDropdown();
 
-		bool changed = false;
-
 		if (ImGui::BeginTabBar("PrecipitationTabs")) {
 			const ImGuiTabItemFlags particleFlags = GetTabFlagsForOverride(PrecipitationTab::kParticle);
 			const ImGuiTabItemFlags positionFlags = GetTabFlagsForOverride(PrecipitationTab::kPosition);
@@ -78,30 +76,29 @@ void PrecipitationWidget::DrawWidget()
 
 			if (ImGui::BeginTabItem(PrecipitationTab::kParticle, nullptr, particleFlags)) {
 				BeginScrollableContent("##ParticleScroll");
-				if (DrawIfMatchesSearch(PrecipitationSetting::kType, [&](const char* label) {
-						ImGui::SeparatorText("Particle Type");
-						const char* types[] = { "Rain", "Snow" };
-						int currentType = static_cast<int>(settings.particleType);
-						bool comboChanged = DrawWithHighlight(label, [&]() {
-							return ImGui::Combo(label, &currentType, types, IM_ARRAYSIZE(types));
-						});
-						if (comboChanged) {
-							EditorWindow::GetSingleton()->PushUndoState(this);
-							settings.particleType = static_cast<uint32_t>(currentType);
-							return true;
-						}
-						return false;
-					}))
-					changed = true;
+				DrawIfMatchesSearch(PrecipitationSetting::kType, [&](const char* label) {
+					ImGui::SeparatorText("Particle Type");
+					const char* types[] = { "Rain", "Snow" };
+					int currentType = static_cast<int>(settings.particleType);
+					bool comboChanged = DrawWithHighlight(label, [&]() {
+						return ImGui::Combo(label, &currentType, types, IM_ARRAYSIZE(types));
+					});
+					if (comboChanged) {
+						EditorWindow::GetSingleton()->PushUndoState(this);
+						settings.particleType = static_cast<uint32_t>(currentType);
+						return true;
+					}
+					return false;
+				});
 				if (MatchesAnySearch({ PrecipitationSetting::kSizeX, PrecipitationSetting::kSizeY })) {
 					ImGui::SeparatorText("Particle Size");
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kSizeX, settings.particleSizeX, 0.0f, 200.0f);
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kSizeY, settings.particleSizeY, 0.0f, 200.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kSizeX, settings.particleSizeX, 0.0f, 200.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kSizeY, settings.particleSizeY, 0.0f, 200.0f);
 				}
 				if (MatchesAnySearch({ PrecipitationSetting::kGravityVelocity, PrecipitationSetting::kRotationVelocity })) {
 					ImGui::SeparatorText("Velocity");
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kGravityVelocity, settings.gravityVelocity, 0.0f, 10000.0f);
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kRotationVelocity, settings.rotationVelocity, 0.0f, 10000.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kGravityVelocity, settings.gravityVelocity, 0.0f, 10000.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kRotationVelocity, settings.rotationVelocity, 0.0f, 10000.0f);
 				}
 				EndScrollableContent();
 				ImGui::EndTabItem();
@@ -111,14 +108,14 @@ void PrecipitationWidget::DrawWidget()
 				BeginScrollableContent("##PositionScroll");
 				if (MatchesAnySearch({ PrecipitationSetting::kCenterOffsetMin, PrecipitationSetting::kCenterOffsetMax, PrecipitationSetting::kStartRotationRange })) {
 					ImGui::SeparatorText("Offset");
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kCenterOffsetMin, settings.centerOffsetMin, 0.0f, 200.0f);
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kCenterOffsetMax, settings.centerOffsetMax, 0.0f, 200.0f);
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kStartRotationRange, settings.startRotationRange, 0.0f, 360.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kCenterOffsetMin, settings.centerOffsetMin, 0.0f, 200.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kCenterOffsetMax, settings.centerOffsetMax, 0.0f, 200.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kStartRotationRange, settings.startRotationRange, 0.0f, 360.0f);
 				}
 				if (MatchesAnySearch({ PrecipitationSetting::kBoxSize, PrecipitationSetting::kParticleDensity })) {
 					ImGui::SeparatorText("Volume");
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kBoxSize, settings.boxSize, 0.0f, 1000.0f);
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kParticleDensity, settings.particleDensity, 0.0f, 1000.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kBoxSize, settings.boxSize, 0.0f, 1000.0f);
+					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kParticleDensity, settings.particleDensity, 0.0f, 1000.0f);
 				}
 				EndScrollableContent();
 				ImGui::EndTabItem();
@@ -137,7 +134,6 @@ void PrecipitationWidget::DrawWidget()
 						})) {
 						EditorWindow::GetSingleton()->PushUndoState(this);
 						settings.numSubtexturesX = std::max(1, numX);
-						changed = true;
 					}
 					if (DrawIfMatchesSearch(PrecipitationSetting::kNumSubtexturesY, [&](const char* label) {
 							return DrawWithHighlight(label, [&]() {
@@ -146,7 +142,6 @@ void PrecipitationWidget::DrawWidget()
 						})) {
 						EditorWindow::GetSingleton()->PushUndoState(this);
 						settings.numSubtexturesY = std::max(1, numY);
-						changed = true;
 					}
 				}
 				DrawSearchSectionIfMatches(PrecipitationSetting::kParticleTexture, [&](const char* label) {
@@ -162,7 +157,6 @@ void PrecipitationWidget::DrawWidget()
 					if (inputChanged && WeatherUtils::TexturePath::HasDdsExtension(buf) && lastCheckedExists) {
 						EditorWindow::GetSingleton()->PushUndoState(this);
 						settings.particleTexture = lastCheckedBuffer;
-						changed = true;
 					}
 					if (settings.particleTexture != buf && !buf.empty()) {
 						if (!WeatherUtils::TexturePath::HasDdsExtension(buf))
@@ -178,9 +172,6 @@ void PrecipitationWidget::DrawWidget()
 
 			ImGui::EndTabBar();
 		}
-
-		if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges)
-			ApplyChanges();
 	}
 	ImGui::End();
 }

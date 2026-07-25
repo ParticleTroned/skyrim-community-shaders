@@ -14,22 +14,6 @@ namespace
 		}
 	}
 
-	void RestoreFeatureUserSettings(WeatherVariables::GlobalWeatherRegistry* registry, const std::string& featureName)
-	{
-		if (!registry) {
-			return;
-		}
-
-		registry->EndFeatureTransition(featureName);
-		auto* featureRegistry = registry->GetFeatureRegistry(featureName);
-		if (!featureRegistry) {
-			return;
-		}
-
-		for (const auto& var : featureRegistry->GetVariables()) {
-			var->SetToUserSettings();
-		}
-	}
 }
 
 WeatherManager::CurrentWeathers WeatherManager::GetCurrentWeathers()
@@ -152,28 +136,32 @@ void WeatherManager::UpdateFeatures()
 					globalRegistry->BeginFeatureTransition(featureName, currWeatherSettings);
 				}
 
-				// No weather overrides on either side: keep in-memory settings unchanged
+				// Restore only when this manager previously applied a weather override.
+				// Otherwise a weather change must not overwrite newer user settings.
 				if (!hasAnyWeatherOverride) {
-					globalRegistry->EndFeatureTransition(featureName);
+					if (activeWeatherFeatures.erase(featureName) > 0)
+						globalRegistry->RestoreFeatureUserSettings(featureName);
 					continue;
 				}
 
-				// Update feature variables
-				if (currentWeathers.lerpFactor >= 1.0f && !hasNextOverride) {
-					// Transition complete, no override on destination - reset to user settings
-					RestoreFeatureUserSettings(globalRegistry, featureName);
-				} else {
-					// In transition or has override - interpolate
-					globalRegistry->UpdateFeatureFromWeathers(featureName, currWeatherSettings, nextWeatherSettings, currentWeathers.lerpFactor);
-					if (transitionEnding) {
-						globalRegistry->EndFeatureTransition(featureName);
-					}
-				}
+				activeWeatherFeatures.insert(featureName);
+				globalRegistry->UpdateFeatureFromWeathers(
+					featureName, currWeatherSettings, nextWeatherSettings, currentWeathers.lerpFactor);
+				if (transitionEnding)
+					globalRegistry->EndFeatureTransition(featureName);
 			}
 		}
 
 		lastKnownWeather = currentWeathers;
 	}
+}
+
+void WeatherManager::SetFeatureOverrideActive(const std::string& featureName, bool active)
+{
+	if (active)
+		activeWeatherFeatures.insert(featureName);
+	else
+		activeWeatherFeatures.erase(featureName);
 }
 
 void WeatherManager::SaveSettingsToWeather(RE::TESWeather* weather, const std::string& featureName, const json& settings)
@@ -322,7 +310,12 @@ void WeatherManager::ClearAllFeatureSettingsForWeather(RE::TESWeather* weather)
 
 void WeatherManager::ClearCache()
 {
+	auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
+	for (const auto& featureName : activeWeatherFeatures)
+		registry->RestoreFeatureUserSettings(featureName);
+
 	perWeatherSettingsCache.clear();
+	activeWeatherFeatures.clear();
 	lastKnownWeather = CurrentWeathers();
 	cachedLastWeather = nullptr;
 	logger::info("Cleared WeatherManager cache");

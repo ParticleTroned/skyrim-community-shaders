@@ -262,10 +262,10 @@ namespace Util
 			macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
 			macros.push_back({ "D3DCOMPILE_DEBUG", "" });
 		}
-		auto shaderDefines = globals::state->GetDefines();
-		if (!shaderDefines->empty()) {
-			for (unsigned int i = 0; i < shaderDefines->size(); i++)
-				macros.push_back({ shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() });
+		const auto shaderDefines = globals::state->GetShaderDefinesSnapshot();
+		if (!shaderDefines->defines.empty()) {
+			for (const auto& [name, definition] : shaderDefines->defines)
+				macros.push_back({ name.c_str(), definition.c_str() });
 		}
 		if (!_stricmp(ProgramType, "ps_5_0"))
 			macros.push_back({ "PSHADER", "" });

@@ -142,6 +142,7 @@ find_package(pystring CONFIG REQUIRED)
 find_package(cppwinrt CONFIG REQUIRED)
 find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
+find_package(xxHash CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 find_package(directx-headers CONFIG REQUIRED)
 find_path(RENDERDOC_INCLUDE_DIRS "Renderdoc/renderdoc_app.h" REQUIRED)
@@ -197,6 +198,7 @@ target_link_libraries(
         pystring::pystring
         unordered_dense::unordered_dense
         efsw::efsw
+        xxHash::xxhash
         Tracy::TracyClient
         Streamline
         d3d12.lib

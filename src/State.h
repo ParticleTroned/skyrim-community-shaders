@@ -10,6 +10,7 @@
 #include <format>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <utility>
@@ -19,11 +20,16 @@ using json = nlohmann::json;
 #include <FeatureBuffer.h>
 
 #include <Hooks.h>
-#include <mutex>
 
 class State
 {
 public:
+	struct ShaderDefinesSnapshot
+	{
+		std::string canonicalText;
+		std::vector<std::pair<std::string, std::string>> defines;
+	};
+
 	State()
 	{
 		std::lock_guard<std::mutex> lock(statsMutex);
@@ -58,8 +64,6 @@ public:
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
 	spdlog::level::level_enum logLevel = spdlog::level::info;
-	std::string shaderDefinesString = "";
-	std::vector<std::pair<std::string, std::string>> shaderDefines{};  // data structure to parse string into; needed to avoid dangling pointers
 
 	float timer = 0;
 	float refractionScale = 0.5f;  // Default LLF heat warp strength
@@ -135,7 +139,11 @@ public:
 	spdlog::level::level_enum GetLogLevel();
 
 	void SetDefines(std::string defines);
-	std::vector<std::pair<std::string, std::string>>* GetDefines();
+	std::shared_ptr<const ShaderDefinesSnapshot> GetShaderDefinesSnapshot() const;
+	uint64_t GetShaderDefinesGeneration() const
+	{
+		return shaderDefinesGeneration.load(std::memory_order_acquire);
+	}
 
 	/*
      * Whether a_type is currently enabled in Community Shaders
@@ -451,6 +459,10 @@ public:
 	}
 
 private:
+	std::atomic<std::shared_ptr<const ShaderDefinesSnapshot>> shaderDefinesSnapshot{
+		std::make_shared<const ShaderDefinesSnapshot>()
+	};
+	std::atomic<uint64_t> shaderDefinesGeneration{ 0 };
 	ID3D11Device* setupResourcesDevice = nullptr;
 	ID3D11DeviceContext* setupResourcesContext = nullptr;
 	REX::W32::ComPtr<REX::W32::ID3DUserDefinedAnnotation> pPerf;

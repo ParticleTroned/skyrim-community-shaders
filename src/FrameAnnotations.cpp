@@ -1,6 +1,8 @@
 #include "FrameAnnotations.h"
 
 #include <atomic>
+#include <limits>
+#include <limits>
 
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
@@ -19,12 +21,13 @@ namespace FrameAnnotations
 		// re-deriving and allocating it for every annotated geometry draw.
 		std::string_view CachedDefinesSuffix()
 		{
-			thread_local std::string source;
+			thread_local uint64_t generation = std::numeric_limits<uint64_t>::max();
 			thread_local std::string suffix;
-			const std::string& currentSource = globals::state->shaderDefinesString;
-			if (currentSource != source) {
-				source = currentSource;
-				suffix = Util::GetShaderDefinesSuffix(currentSource);
+			const auto currentGeneration = globals::state->GetShaderDefinesGeneration();
+			if (currentGeneration != generation) {
+				const auto snapshot = globals::state->GetShaderDefinesSnapshot();
+				suffix = Util::GetShaderDefinesSuffix(snapshot->canonicalText);
+				generation = currentGeneration;
 			}
 			return suffix;
 		}

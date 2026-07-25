@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Utils/CacheInvalidation.h"
+#include "Utils/ContentHash.h"
 #include "Utils/WinApi.h"
 
 using namespace std::chrono;
@@ -491,7 +492,14 @@ namespace SIE
 		*/
 		bool Clear(const std::string& a_path);
 
-		bool AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, ID3DBlob* a_blob, bool fromDisk = false);
+		bool AddCompletedShader(
+			ShaderClass shaderClass,
+			const RE::BSShader& shader,
+			uint32_t descriptor,
+			ID3DBlob* a_blob,
+			const std::wstring& a_diskPath,
+			const Util::ContentHash::Hash128& a_compileStateDigest,
+			bool fromDisk = false);
 
 		enum class ClaimResult
 		{
@@ -814,6 +822,7 @@ namespace SIE
 			std::uint32_t descriptor;
 			SIE::ShaderClass shaderClass;
 			std::wstring diskPath;
+			Util::ContentHash::Hash128 compileStateDigest;
 
 			bool operator<(const hlslRecord& other) const
 			{

@@ -995,7 +995,7 @@ void State::SaveToJson(
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache->IsDump();
 	advanced["Log Level"] = logLevel;
-	advanced["Shader Defines"] = shaderDefinesString;
+	advanced["Shader Defines"] = GetShaderDefinesSnapshot()->canonicalText;
 	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
@@ -1203,10 +1203,7 @@ spdlog::level::level_enum State::GetLogLevel()
 
 void State::SetDefines(std::string a_defines)
 {
-	shaderDefines.clear();
-	shaderDefinesString = "";
-	std::string name = "";
-	std::string definition = "";
+	ShaderDefinesSnapshot snapshot;
 	auto defines = pystring::split(a_defines, ";");
 	for (const auto& define : defines) {
 		auto cleanedDefine = pystring::strip(define);
@@ -1217,20 +1214,31 @@ void State::SetDefines(std::string a_defines)
 			logger::warn("Define string has too many '='; ignoring {}", define);
 			continue;
 		}
-		name = pystring::strip(token[0]);
+		auto name = pystring::strip(token[0]);
+		std::string definition;
 		if (token.size() == 2) {
 			definition = pystring::strip(token[1]);
 		}
-		shaderDefinesString += pystring::strip(define) + ";";
-		shaderDefines.push_back(std::pair(name, definition));
+		if (!snapshot.canonicalText.empty())
+			snapshot.canonicalText += ";";
+		// Preserve the accepted user text exactly as before (apart from the
+		// existing outer whitespace trim). The parsed pair remains normalized
+		// for D3D macro ownership, while cache suffixes and saved settings do not
+		// change merely because snapshotting became thread-safe.
+		snapshot.canonicalText += cleanedDefine;
+		snapshot.defines.emplace_back(std::move(name), std::move(definition));
 	}
-	shaderDefinesString = shaderDefinesString.substr(0, shaderDefinesString.size() - 1);
-	logger::debug("Shader Defines set to {}", shaderDefinesString);
+
+	auto immutableSnapshot =
+		std::make_shared<const ShaderDefinesSnapshot>(std::move(snapshot));
+	shaderDefinesSnapshot.store(immutableSnapshot, std::memory_order_release);
+	shaderDefinesGeneration.fetch_add(1, std::memory_order_release);
+	logger::debug("Shader Defines set to {}", immutableSnapshot->canonicalText);
 }
 
-std::vector<std::pair<std::string, std::string>>* State::GetDefines()
+std::shared_ptr<const State::ShaderDefinesSnapshot> State::GetShaderDefinesSnapshot() const
 {
-	return &shaderDefines;
+	return shaderDefinesSnapshot.load(std::memory_order_acquire);
 }
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)

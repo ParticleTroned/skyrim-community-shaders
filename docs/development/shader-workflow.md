@@ -18,7 +18,17 @@ exec(open(r"<repo>/tools/taa-renderdoc-ab.py").read())
 
 # Compile only shaders affected by working-tree changes
 cmake --build ./build/ALL --target validate_changed
+
+# Build install-ready SE and VR shader-cache archives
+python tools/build-shader-cache.py --runtime both --package
 ```
+
+## Prebuilt shader cache
+
+Use `tools/build-shader-cache.py` for release caches. The authoritative
+prerequisites, exact local and CI commands, version/update rules, validation
+gates, recovery procedures, scope boundary, and AI-agent instructions are in
+the [Prebuilt Shader Cache Runbook](./prebuilt-shader-cache.md).
 
 ## Verifying refactors
 

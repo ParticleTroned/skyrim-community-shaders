@@ -3648,11 +3648,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 	float dirLightAngle = dot(worldNormal.xyz, DirLightDirection.xyz);
+	const bool hasEngineDirectionalShadowMask = (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir);
 
 #	if defined(SOFT_LIGHTING) || defined(BACK_LIGHTING) || defined(RIM_LIGHTING)
-	bool inDirShadow = ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir) && shadowColor.x == 0);
+	bool inDirShadow = hasEngineDirectionalShadowMask && shadowColor.x == 0;
 #	else
-	bool inDirShadow = ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir) && shadowColor.x == 0) && dirLightAngle > 0.0;
+	bool inDirShadow = hasEngineDirectionalShadowMask && shadowColor.x == 0 && dirLightAngle > 0.0;
 #	endif
 
 	float3 refractedDirLightDirection = DirLightDirection;
@@ -3678,7 +3679,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirDetailedShadow = 1.0;
 	float parallaxShadow = 1;
 
-	if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir)) {
+	if (hasEngineDirectionalShadowMask) {
 		dirDetailedShadow *= shadowColor.x;
 #	if !defined(VOLUMETRIC_SHADOWS)
 		dirSoftShadow = dirDetailedShadow;
@@ -3687,18 +3688,26 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			dirSoftShadow = dirDetailedShadow;
 #	endif
 	} else {
-#	if defined(VOLUMETRIC_SHADOWS)
+#	if !defined(DEFERRED)
+		// Only forward passes may synthesize a missing detailed mask. Deferred LOD
+		// permutations commonly have no engine mask and must keep direct lighting unshadowed.
+#		if defined(VOLUMETRIC_SHADOWS)
 		dirDetailedShadow = dirVSMDetailedShadow;
-#	elif !defined(DEFERRED)
+#		else
 		if (!SharedData::InInterior && inWorld) {
 			dirDetailedShadow *= ShadowSampling::GetLightingShadow(screenNoise, input.WorldPosition.xyz, eyeIndex);
 			dirSoftShadow = dirDetailedShadow;
 		}
+#		endif
 #	endif
 	}
 
 #	if defined(VOLUMETRIC_SHADOWS)
-	dirSoftShadow = dirVSMShadowSampled ? max(dirSoftShadow, dirDetailedShadow) : dirDetailedShadow;
+	if (!dirVSMShadowSampled)
+		dirSoftShadow = dirDetailedShadow;
+	// A default detailed value of 1.0 must not erase soft VSM on deferred no-mask draws.
+	else if (hasEngineDirectionalShadowMask)
+		dirSoftShadow = max(dirSoftShadow, dirDetailedShadow);
 #	endif
 
 #	if defined(SCREEN_SPACE_SHADOWS) && defined(DEFERRED)

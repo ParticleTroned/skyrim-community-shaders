@@ -16660,8 +16660,16 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 	const bool perfModeActive = IsVRRenderScaleModeLatched();
 	const bool perfModeEligible = perfMode.IsEligible(settings, configuredMethod);
-	if (!perfModeActive && !perfModeEligible && !perfMode.HasRestartRequiredChange())
+	const uint64_t postLoadRecoveryEpoch =
+		pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire);
+	const bool postLoadRecoveryRelatch =
+		IsVRRenderScaleRecoveryOrigin(a_origin) && postLoadRecoveryEpoch != 0;
+	if (!perfModeActive &&
+		!perfModeEligible &&
+		!perfMode.HasRestartRequiredChange() &&
+		!postLoadRecoveryRelatch) {
 		return;
+	}
 
 	const uint32_t relatchDelayFrames = kVRUpscalingTransitionApplyDelayFrames;
 	const bool requirePostLoadSettle = UsesVRRenderScalePostLoadSettle(*this, configuredMethod, a_origin);
@@ -16697,11 +16705,13 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	const bool rc94PostLoadDoorRequest =
 		effectiveOrigin == VRUpscalingTransitionOrigin::PostLoadSync &&
 		IsCurrentVRFpsStabilizerDoorHandoff(*this, relatchEpoch);
-	if (effectiveOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
-		(IsVRRenderScaleRecoveryOrigin(effectiveOrigin) &&
-			pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire) != 0)) {
+	// A post-load recovery epoch is explicit ownership: whichever physical
+	// relatch wins request coalescing must also finish that recovery, regardless
+	// of whether its higher-priority profile came from the Stabilizer, VRAPI, or
+	// the CS menu.
+	if (postLoadRecoveryEpoch != 0) {
 		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(
-			pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire),
+			postLoadRecoveryEpoch,
 			std::memory_order_release);
 	} else if (storeRelatchOrigin) {
 		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
@@ -16772,6 +16782,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	SetVRRenderScaleTransitionState(VRRenderScaleTransitionState::WaitingForSafePoint, "render-target relatch pending");
 
 	if (IsOpenCompositeUpscalingBlocked()) {
+		const uint64_t abandonedPostLoadRecoveryEpoch =
+			pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire);
 		pendingPerfModeRenderTargetRecreate.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
@@ -16784,6 +16796,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 		ClearVRRenderScaleInfoTransition();
 		ClearVRFSRRelatchDrainGuard();
+		CompleteVRRenderScalePostLoadRecovery(abandonedPostLoadRecoveryEpoch, 0);
 		ResetVRRenderScaleTransitionController("Open Composite blocked relatch");
 		return true;
 	}
@@ -16867,9 +16880,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	loggedRelatchMemoryReliefCleanupDefer = false;
 	const uint64_t previewPostLoadRecoveryEpoch =
 		pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire);
-	if ((previewRelatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
-			IsVRRenderScaleRecoveryOrigin(previewRelatchOrigin)) &&
-		previewPostLoadRecoveryEpoch != 0 &&
+	// The bound recovery epoch remains authoritative when request coalescing
+	// promotes a higher-priority origin. Never let that promotion bypass the
+	// retirement and memory admission which the relatch will later complete.
+	if (previewPostLoadRecoveryEpoch != 0 &&
 		!previewStabilizerDoorHandoff &&
 		!CanAdmitVRRenderScalePostLoadRecoveryRelatch(
 			previewPostLoadRecoveryEpoch,
@@ -17219,9 +17233,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			CompleteVRRenderScalePostLoadRecovery(postLoadRecoveryEpoch, relatchEpoch);
 		} else if (rc94PostLoadDoorRelatch) {
 			DeferVRRenderScalePostLoadRecoveryUntilStable(postLoadRecoveryEpoch, relatchEpoch);
-		} else if ((relatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
-					   IsVRRenderScaleRecoveryOrigin(relatchOrigin)) &&
-				   postLoadRecoveryEpoch != 0) {
+		} else if (postLoadRecoveryEpoch != 0) {
 			CompleteVRRenderScalePostLoadRecovery(postLoadRecoveryEpoch, relatchEpoch);
 		}
 		return false;
@@ -18410,9 +18422,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		CompleteVRRenderScalePostLoadRecovery(postLoadRecoveryEpoch, relatchEpoch);
 	} else if (rc94PostLoadDoorRelatch) {
 		DeferVRRenderScalePostLoadRecoveryUntilStable(postLoadRecoveryEpoch, relatchEpoch);
-	} else if ((relatchOrigin == VRUpscalingTransitionOrigin::PostLoadSync ||
-				   IsVRRenderScaleRecoveryOrigin(relatchOrigin)) &&
-			   postLoadRecoveryEpoch != 0) {
+	} else if (postLoadRecoveryEpoch != 0) {
 		CompleteVRRenderScalePostLoadRecovery(postLoadRecoveryEpoch, relatchEpoch);
 	}
 	clearRelatchRetryLogs();
@@ -21779,14 +21789,6 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 
 	const bool renderScalePostLoadResetRelevant = IsVRRenderScalePostLoadResetRelevant(*this, a_upscaleMethod);
 	const auto relatchMethod = GetConfiguredUpscaleMethodForTransition();
-	const bool resetFSRRenderScaleBootLatch =
-		renderScalePostLoadResetRelevant &&
-		a_upscaleMethod == UpscaleMethod::kFSR;
-	const bool queueFSRRenderScaleRelatch =
-		resetFSRRenderScaleBootLatch &&
-		relatchMethod == UpscaleMethod::kFSR &&
-		perfMode.IsEligible(settings, relatchMethod) &&
-		perfMode.HasKnownHMDSize();
 
 	if (!postLoadRuntimeResetPending.exchange(false, std::memory_order_acq_rel))
 		return true;
@@ -21802,75 +21804,46 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	if (!IsVRFpsStabilizerDoorHandoffPending(*this))
 		PrepareVRRenderScalePostLoadRecovery(recoveryEpoch);
 
-	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
-	if (emitDiagLogs) {
+	// Never destroy the active vendor/common resources from Main_PostProcessing:
+	// Skyrim has already rendered the world into this frame by then, so a reset
+	// here exposes the partially cleared eye texture to OpenVR. The serialized
+	// physical relatch runs at the established frame-safe mutation point. The
+	// LoadingMenu close owns any required vendor dirtiness; if the physical
+	// profile and resources already match, the relatch remains a true no-op.
+	const auto preResetBootSnapshot = perfMode.GetBootSnapshot();
+	RequestPerfModeRenderTargetRecreate(
+		"post-load runtime recovery",
+		VRUpscalingTransitionOrigin::RecoveryRelatch,
+		&preResetBootSnapshot);
+
+	const bool recoveryOwnedByRelatch =
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire) == recoveryEpoch;
+	if (!recoveryOwnedByRelatch) {
+		// Fail closed without exposing an in-frame teardown. Open Composite owns
+		// presentation when blocked; otherwise retry until the relatch can accept
+		// the recovery epoch.
+		if (IsOpenCompositeUpscalingBlocked()) {
+			CompleteVRRenderScalePostLoadRecovery(recoveryEpoch, 0);
+			return true;
+		}
+
+		postLoadRuntimeResetPending.store(true, std::memory_order_release);
+		if (ShouldEmitUpscalingDiagLogs()) {
+			logger::debug(
+				"[Upscaling][Diag] VR post-load runtime recovery waiting for the protected relatch to accept epoch {}",
+				recoveryEpoch);
+		}
+		return false;
+	}
+
+	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[Upscaling][Diag] Applying VR post-load runtime reset method={} relatchMethod={} frame={} resetFSRBootLatch={} queueFSRRelatch={} renderScaleRelevant={} pendingDLSS={} pendingFSR={} fsrResources={} saveLoadContext={} loadingPresentation={} lastCompletedWorldFrame={} screen={}x{}",
+			"[Upscaling][Diag] Transferred VR post-load runtime recovery to protected relatch method={} relatchMethod={} recoveryEpoch={} frame={} pendingDLSS={} pendingFSR={} fsrResources={}",
 			magic_enum::enum_name(a_upscaleMethod),
 			magic_enum::enum_name(relatchMethod),
+			recoveryEpoch,
 			state ? state->frameCount : 0u,
-			BoolText(resetFSRRenderScaleBootLatch),
-			BoolText(queueFSRRenderScaleRelatch),
-			BoolText(renderScalePostLoadResetRelevant),
-			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
-			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
-			BoolText(fidelityFX.HasFSRResources()),
-			BoolText(IsSaveLoadTransitionContextActive(state)),
-			BoolText(IsVRLoadingPresentationContextActive(state)),
-			state ? state->lastCompletedWorldRenderFrame : 0u,
-			state ? ClampPositiveDimension(state->screenSize.x) : 0u,
-			state ? ClampPositiveDimension(state->screenSize.y) : 0u);
-	}
-
-	try {
-		const auto preResetBootSnapshot = perfMode.GetBootSnapshot();
-		if (resetFSRRenderScaleBootLatch) {
-			perfMode.ResetBootLatch();
-			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
-			InvalidateFrameScopedUpscalingState();
-		}
-
-		const auto vendorResetResult = ResetVRVendorRuntimeResources(true, false);
-		if (vendorResetResult != VRVendorResourceResetResult::Ready) {
-			if (vendorResetResult == VRVendorResourceResetResult::Pending)
-				logger::warn("[Upscaling] VR post-load runtime reset deferred because vendor resources are still in use");
-			else
-				logger::error("[Upscaling] VR post-load runtime reset retrying after vendor resource teardown failed");
-			postLoadRuntimeResetPending.store(true, std::memory_order_release);
-			return false;
-		}
-
-		bool recoveryOwnedByRelatch = false;
-		if (resetFSRRenderScaleBootLatch) {
-			RefreshRuntimeResolutionState();
-			RecreateVendorRuntimeResources(GetRuntimeUpscaleMethod(), true);
-			if (queueFSRRenderScaleRelatch) {
-				RequestPerfModeRenderTargetRecreate("post-load render-scale relatch", VRUpscalingTransitionOrigin::PostLoadSync, &preResetBootSnapshot);
-				recoveryOwnedByRelatch =
-					pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire) == recoveryEpoch;
-			}
-		} else {
-			RecreateVendorRuntimeResources(a_upscaleMethod, true);
-		}
-		if (!recoveryOwnedByRelatch)
-			CompleteVRRenderScalePostLoadRecovery(recoveryEpoch, 0);
-	} catch (const std::exception& e) {
-		logger::error("[Upscaling] VR post-load runtime reset failed: {}", e.what());
-		if (!MarkSubmitStageDeviceLostIfNeeded(e, "VR post-load runtime reset"))
-			postLoadRuntimeResetPending.store(true, std::memory_order_release);
-		return false;
-	} catch (...) {
-		logger::error("[Upscaling] VR post-load runtime reset failed with an unknown exception");
-		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("VR post-load runtime reset"))
-			postLoadRuntimeResetPending.store(true, std::memory_order_release);
-		return false;
-	}
-
-	if (emitDiagLogs) {
-		logger::debug(
-			"[Upscaling][Diag] Applied VR post-load runtime reset method={} pendingPostLoad={} pendingDLSS={} pendingFSR={} fsrResources={}",
-			magic_enum::enum_name(a_upscaleMethod),
-			BoolText(postLoadRuntimeResetPending.load(std::memory_order_acquire)),
 			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
 			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
 			BoolText(fidelityFX.HasFSRResources()));
@@ -22136,7 +22109,14 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 						previousUpscaleMode == UpscaleMethod::kDLSS &&
 						vrDLSSSettingsRelatched.exchange(false, std::memory_order_acq_rel);
 					pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
-					if (!relatchAlreadyRebuiltDLSS) {
+					// Match PL3.14 for ordinary Render Scale-off DLSS option
+					// changes: the feature consumes the new options with a
+					// history reset and retains its per-eye resources. Only a
+					// Render Scale-owned physical transition needs the newer
+					// vendor/common resource rebuild. Destroying those resources
+					// from the ordinary CheckResources path leaves one submitted
+					// eye frame without its normal output/HAM-clear pass.
+					if (renderScaleTransitionRelevant && !relatchAlreadyRebuiltDLSS) {
 						MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
 						destroyVRQualityResources();
 						DestroyPeripheryTAAResources();

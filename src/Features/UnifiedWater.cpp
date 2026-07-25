@@ -1156,6 +1156,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	std::vector<std::pair<RE::BSTriShape*, const WaterCache::Instruction*>> built;
 	bool attaching = false;
 	RE::NiPointer<RE::BSMultiBoundNode> water;
+	// Keep the runtime cache alive while built retains pointers into its instruction storage.
+	WaterCache::InstructionResult instructionResult;
 
 	if (block && block->loaded && !block->attached && block->chunk && block->water) {
 		// Keep terrain water alive while moving it out of its owning node
@@ -1170,7 +1172,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		const auto lodLevel = node->GetLODLevel();
 		const auto worldSpace = block->node->manager->worldSpace;
 
-		const auto instructions = uw.waterCache->GetInstructions(worldSpace, lodLevel, node->baseCellX, node->baseCellY);
+		instructionResult = uw.waterCache->GetInstructions(worldSpace, lodLevel, node->baseCellX, node->baseCellY);
+		const auto instructions = instructionResult.instructions;
 		if (!instructions) {
 			logger::warn("[Unified Water] No instructions found for {} chunk at {}, {}", worldSpace->GetFormEditorID(), node->baseCellX, node->baseCellY);
 			// Reattach the saved node before falling back to vanilla

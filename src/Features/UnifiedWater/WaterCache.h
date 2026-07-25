@@ -1,8 +1,13 @@
 ﻿#pragma once
+#include <mutex>
+
 #include <BS_thread_pool.hpp>
 
 class WaterCache
 {
+private:
+	struct RuntimeCache;
+
 public:
 	struct Instruction
 	{
@@ -20,6 +25,12 @@ public:
 		float waterHeight{};
 	};
 
+	struct InstructionResult
+	{
+		std::shared_ptr<RuntimeCache> cache;
+		std::vector<Instruction>* instructions = nullptr;
+	};
+
 	struct BuildProgressSnapshot
 	{
 		uint32_t total{};
@@ -31,7 +42,7 @@ public:
 	};
 
 	bool SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace);
-	std::vector<Instruction>* GetInstructions(const RE::TESWorldSpace* worldSpace, uint32_t lodLevel, uint32_t x, uint32_t y);
+	InstructionResult GetInstructions(const RE::TESWorldSpace* worldSpace, uint32_t lodLevel, uint32_t x, uint32_t y);
 
 	static void GenerateTamrielPrecache();
 	bool LoadOrGenerateCaches();
@@ -163,11 +174,13 @@ private:
 
 	std::atomic<std::shared_ptr<const CacheMap>> cacheMap{ std::make_shared<CacheMap>() };
 
+	std::mutex currentCacheMutex;
 	std::shared_ptr<RuntimeCache> currentCache;
 	std::weak_ptr<const CacheMap> currentCacheSnapshot;
 	const RE::TESWorldSpace* currentWorldSpaceForm = nullptr;
 	std::string currentWorldSpace;
 
+	bool SetCurrentWorldSpaceLocked(const RE::TESWorldSpace* worldSpace);
 	bool LoadCaches(bool allowPartial = false);
 
 	static void BuildPreCache(RE::TESWorldSpace* worldSpace, PreCache& cache);

@@ -97,6 +97,12 @@ namespace
 
 bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 {
+	std::scoped_lock lock(currentCacheMutex);
+	return SetCurrentWorldSpaceLocked(worldSpace);
+}
+
+bool WaterCache::SetCurrentWorldSpaceLocked(const RE::TESWorldSpace* worldSpace)
+{
 	auto clearCurrentCache = [this] {
 		currentCache.reset();
 		currentCacheSnapshot.reset();
@@ -149,15 +155,20 @@ bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 	return true;
 }
 
-std::vector<WaterCache::Instruction>* WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const uint32_t x, const uint32_t y)
+WaterCache::InstructionResult WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const uint32_t x, const uint32_t y)
 {
-	if (!SetCurrentWorldSpace(worldSpace)) {
+	std::scoped_lock lock(currentCacheMutex);
+
+	if (!SetCurrentWorldSpaceLocked(worldSpace)) {
 		const auto editorID = worldSpace ? worldSpace->GetFormEditorID() : nullptr;
 		logger::error("[Unified Water] [Cache] Failed to set current cache to {} while getting instructions", editorID ? editorID : "<null>");
-		return nullptr;
+		return {};
 	}
 
-	return currentCache->GetInstructions(lodLevel, x, y);
+	InstructionResult result;
+	result.cache = currentCache;
+	result.instructions = currentCache->GetInstructions(lodLevel, x, y);
+	return result;
 }
 
 std::vector<WaterCache::Instruction>* WaterCache::RuntimeCache::GetInstructions(const int32_t lodLevel, const int32_t x, const int32_t y)

@@ -3,6 +3,7 @@
 #include "Util.h"
 #include "Widget.h"
 #include <cctype>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <string>
@@ -363,10 +364,12 @@ namespace WeatherUtils
 		// True if the normalized path ends with ".dds".
 		bool HasDdsExtension(std::string_view path);
 
-		// True if the file exists under Data/textures/ (accepts paths with or without the leading "textures\").
+		// True if the texture is available as a loose file or archive resource.
+		// Accepts paths with or without the leading "textures\".
 		bool ExistsOnDisk(std::string_view path);
 
-		// Build a BSA-style resource path ("Textures\\<path>" with .dds appended if missing).
+		// Build a validated BSA-style resource path ("Textures\\<path>" with .dds appended if missing).
+		// Returns an empty string for absolute, rooted, or traversing paths.
 		std::string BuildResourcePath(std::string_view path);
 	}
 
@@ -432,6 +435,7 @@ namespace WeatherUtils
 	bool DrawColorEdit(const std::string& l, float3& property, Widget* widget = nullptr);
 	bool DrawSliderUint8(const std::string& label, int& property);
 	bool DrawSliderInt(const std::string& label, int& property, int min, int max, Widget* widget = nullptr);
+	bool DrawSliderUint32(const std::string& label, std::uint32_t& property, std::uint32_t min, std::uint32_t max, Widget* widget = nullptr, const char* format = "%u");
 	bool DrawSliderFloat(const std::string& label, float& property, float min = 0.0f, float max = 1.0f, Widget* widget = nullptr, const char* format = "%.3f");
 	bool DrawCheckbox(const std::string& label, bool& value, Widget* widget = nullptr);
 

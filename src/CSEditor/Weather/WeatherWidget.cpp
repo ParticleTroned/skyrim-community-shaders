@@ -2164,6 +2164,8 @@ ID3D11ShaderResourceView* WeatherWidget::GetCloudTexture(int layerIndex)
 	}
 
 	std::string resourcePath = WeatherUtils::TexturePath::BuildResourcePath(texturePath);
+	if (resourcePath.empty())
+		return nullptr;
 
 	ID3D11ShaderResourceView* srv = nullptr;
 	ImVec2 textureSize;

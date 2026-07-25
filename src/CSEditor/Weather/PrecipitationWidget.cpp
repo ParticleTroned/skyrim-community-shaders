@@ -6,6 +6,10 @@
 #include "RE/N/NiSourceTexture.h"
 #include "Utils/Game.h"
 
+#include <cmath>
+#include <cstdint>
+#include <limits>
+
 namespace
 {
 	using PrecipitationData = RE::BGSShaderParticleGeometryData;
@@ -35,6 +39,67 @@ namespace
 		SettingValue setting{};
 		setting.i = value;
 		SetSettingValue(precipitation, id, setting);
+	}
+
+	enum class BoxSizeDecodeResult
+	{
+		kInvalid,
+		kDecoded,
+		kMigratedLegacyFloat
+	};
+
+	BoxSizeDecodeResult DecodeBoxSize(const json& storedValue, uint32_t& boxSize)
+	{
+		if (storedValue.is_number_unsigned()) {
+			const auto value = storedValue.get<std::uint64_t>();
+			if (value <= std::numeric_limits<uint32_t>::max()) {
+				boxSize = static_cast<uint32_t>(value);
+				return BoxSizeDecodeResult::kDecoded;
+			}
+			return BoxSizeDecodeResult::kInvalid;
+		}
+
+		if (storedValue.is_number_integer()) {
+			const auto value = storedValue.get<std::int64_t>();
+			if (value >= 0 &&
+				static_cast<std::uint64_t>(value) <= std::numeric_limits<uint32_t>::max()) {
+				boxSize = static_cast<uint32_t>(value);
+				return BoxSizeDecodeResult::kDecoded;
+			}
+			return BoxSizeDecodeResult::kInvalid;
+		}
+
+		if (!storedValue.is_number_float())
+			return BoxSizeDecodeResult::kInvalid;
+
+		const double value = storedValue.get<double>();
+		if (!std::isfinite(value) ||
+			value < 0.0 ||
+			value > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+			return BoxSizeDecodeResult::kInvalid;
+		}
+
+		// Old builds read the integer union member through SETTING_VALUE::f.
+		// Small box sizes were therefore serialized as exact float subnormals.
+		if (value > 0.0 && value < std::numeric_limits<float>::min()) {
+			const double subnormalUnit = std::ldexp(1.0, -149);
+			const double encodedValue = value / subnormalUnit;
+			const double roundedValue = std::round(encodedValue);
+			if (std::abs(encodedValue - roundedValue) > 1.0e-6 ||
+				roundedValue < 1.0 ||
+				roundedValue > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+				return BoxSizeDecodeResult::kInvalid;
+			}
+
+			boxSize = static_cast<uint32_t>(roundedValue);
+			return BoxSizeDecodeResult::kMigratedLegacyFloat;
+		}
+
+		if (std::trunc(value) != value)
+			return BoxSizeDecodeResult::kInvalid;
+
+		boxSize = static_cast<uint32_t>(value);
+		return BoxSizeDecodeResult::kMigratedLegacyFloat;
 	}
 
 	namespace PrecipitationTab
@@ -114,7 +179,7 @@ void PrecipitationWidget::DrawWidget()
 				}
 				if (MatchesAnySearch({ PrecipitationSetting::kBoxSize, PrecipitationSetting::kParticleDensity })) {
 					ImGui::SeparatorText("Volume");
-					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kBoxSize, settings.boxSize, 0.0f, 1000.0f);
+					WeatherUtils::DrawSliderUint32(PrecipitationSetting::kBoxSize, settings.boxSize, 0, 1000);
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kParticleDensity, settings.particleDensity, 0.0f, 1000.0f);
 				}
 				EndScrollableContent();
@@ -162,7 +227,7 @@ void PrecipitationWidget::DrawWidget()
 						if (!WeatherUtils::TexturePath::HasDdsExtension(buf))
 							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "Path must end with '.dds'");
 						else if (!lastCheckedExists)
-							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "Texture file not found under Data/textures/.");
+							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "Texture not found in loose files or archives.");
 					}
 				});
 
@@ -204,8 +269,22 @@ void PrecipitationWidget::LoadSettings()
 				settings.numSubtexturesY = js["numSubtexturesY"];
 			if (js.contains("particleType"))
 				settings.particleType = js["particleType"];
-			if (js.contains("boxSize"))
-				settings.boxSize = js["boxSize"];
+			if (js.contains("boxSize")) {
+				uint32_t boxSize = settings.boxSize;
+				const auto decodeResult = DecodeBoxSize(js["boxSize"], boxSize);
+				if (decodeResult != BoxSizeDecodeResult::kInvalid) {
+					settings.boxSize = boxSize;
+					if (decodeResult == BoxSizeDecodeResult::kMigratedLegacyFloat) {
+						logger::info(
+							"Precipitation {}: migrated legacy float boxSize to {}",
+							GetEditorID(), boxSize);
+					}
+				} else {
+					logger::warn(
+						"Precipitation {}: invalid boxSize override; keeping game value {}",
+						GetEditorID(), settings.boxSize);
+				}
+			}
 			if (js.contains("particleDensity"))
 				settings.particleDensity = js["particleDensity"];
 			if (js.contains("particleTexture")) {
@@ -218,7 +297,7 @@ void PrecipitationWidget::LoadSettings()
 					} else {
 						settings.particleTexture = texPath;
 						if (!WeatherUtils::TexturePath::ExistsOnDisk(texPath))
-							logger::warn("Precipitation {}: saved texture path '{}' not found on disk", GetEditorID(), texPath);
+							logger::warn("Precipitation {}: saved texture path '{}' not found in game resources", GetEditorID(), texPath);
 					}
 				}
 			}
@@ -250,7 +329,7 @@ void PrecipitationWidget::LoadFromGameSettings()
 	settings.numSubtexturesX = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kNumSubtexturesX).i;
 	settings.numSubtexturesY = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kNumSubtexturesY).i;
 	settings.particleType = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleType).i;
-	settings.boxSize = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kBoxSize).f;
+	settings.boxSize = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kBoxSize).i;
 	settings.particleDensity = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
 	GET_INSTANCE_MEMBER(particleTexture, precipitation)
 	settings.particleTexture = particleTexture.textureName.c_str();
@@ -295,34 +374,47 @@ void PrecipitationWidget::ApplyChanges()
 	SetSetting(precipitation, DataID::kBoxSize, settings.boxSize);
 	SetSetting(precipitation, DataID::kParticleDensity, settings.particleDensity);
 	GET_INSTANCE_MEMBER(particleTexture, precipitation)
-	particleTexture.textureName = settings.particleTexture.c_str();
-	ApplyLiveParticleTexture(settings.particleTexture);
+	const std::string resourcePath = WeatherUtils::TexturePath::BuildResourcePath(settings.particleTexture);
+	bool applyLiveTexture = false;
+	if (settings.particleTexture.empty()) {
+		particleTexture.textureName = "";
+		lastInvalidTexture.clear();
+	} else if (!resourcePath.empty() && WeatherUtils::TexturePath::ExistsOnDisk(resourcePath)) {
+		// SPGD stores paths relative to Textures, while the resource system needs the prefix.
+		const std::string recordPath =
+			resourcePath.substr(WeatherUtils::TexturePath::kResourcePrefix.size());
+		particleTexture.textureName = recordPath.c_str();
+		lastInvalidTexture.clear();
+		applyLiveTexture = true;
+	} else {
+		if (settings.particleTexture != lastInvalidTexture) {
+			logger::warn(
+				"Precipitation {}: texture '{}' is invalid or unavailable",
+				GetEditorID(), settings.particleTexture);
+			lastInvalidTexture = settings.particleTexture;
+		}
+	}
+	if (applyLiveTexture)
+		ApplyLiveParticleTexture(resourcePath);
 	Widget::ForceCurrentWeatherReinit();
 }
 
-void PrecipitationWidget::ApplyLiveParticleTexture(const std::string& path)
+void PrecipitationWidget::ApplyLiveParticleTexture(const std::string& resourcePath)
 {
-	if (path.empty())
+	if (resourcePath.empty())
 		return;
-	if (!WeatherUtils::TexturePath::ExistsOnDisk(path)) {
-		if (path != lastInvalidTexture) {
-			logger::warn("Precipitation {}: invalid texture path '{}', must end with '.dds'", GetEditorID(), path);
-			lastInvalidTexture = path;
-		}
-		return;
-	}
 
 	auto* sky = globals::game::sky;
 	if (!sky || !sky->precip)
 		return;
 
-	if (path == lastAppliedTexture &&
+	if (resourcePath == lastAppliedTexture &&
 		sky->precip->currentPrecip == lastAppliedPrecip &&
 		sky->precip->lastPrecip == lastAppliedPrecip)
 		return;
 
 	RE::NiPointer<RE::NiTexture> tex;
-	RE::BSShaderManager::GetTexture(path.c_str(), true, tex, false);
+	RE::BSShaderManager::GetTexture(resourcePath.c_str(), true, tex, false);
 	if (!tex || tex->GetRTTI() != globals::rtti::NiSourceTextureRTTI.get())
 		return;
 
@@ -338,7 +430,8 @@ void PrecipitationWidget::ApplyLiveParticleTexture(const std::string& path)
 			shaderProp->particleShaderTexture = RE::NiPointer(sourceTex);
 	}
 
-	lastAppliedTexture = path;
+	lastAppliedTexture = resourcePath;
+	lastInvalidTexture.clear();
 	lastAppliedPrecip = sky->precip->currentPrecip;
 }
 

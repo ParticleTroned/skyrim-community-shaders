@@ -1,10 +1,10 @@
 #include "WeatherUtils.h"
 #include "EditorWindow.h"
 #include "PaletteWindow.h"
-#include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
 #include <cassert>
+#include <filesystem>
 
 namespace WeatherUtils::TexturePath
 {
@@ -12,7 +12,7 @@ namespace WeatherUtils::TexturePath
 	{
 		std::string result(path);
 		std::transform(result.begin(), result.end(), result.begin(),
-			[](unsigned char c) { return std::tolower(c); });
+			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 		std::replace(result.begin(), result.end(), '/', '\\');
 		return result;
 	}
@@ -24,34 +24,45 @@ namespace WeatherUtils::TexturePath
 
 	bool ExistsOnDisk(std::string_view path)
 	{
-		const std::string lower = Normalize(path);
-		if (!lower.ends_with(kDdsExtension))
+		if (!HasDdsExtension(path))
 			return false;
 
-		// Reject absolute paths and ".." traversal
-		const std::filesystem::path fsPath(lower);
-		if (fsPath.is_absolute())
+		const std::string resourcePath = BuildResourcePath(path);
+		if (resourcePath.empty())
 			return false;
-		for (const auto& part : fsPath)
-			if (part == "..")
-				return false;
 
-		const std::filesystem::path dataPath = Util::PathHelpers::GetDataPath();
-		const std::filesystem::path fullPath = lower.starts_with(kTexturePrefix) ?
-		                                           dataPath / lower :
-		                                           dataPath / kTexturePrefix / lower;
-
-		std::error_code ec;
-		return std::filesystem::exists(fullPath, ec) && !ec;
+		// Skyrim's resource stream resolves both loose files and BSA/BA2 archives.
+		RE::BSResourceNiBinaryStream stream(resourcePath);
+		return stream.good();
 	}
 
 	std::string BuildResourcePath(std::string_view path)
 	{
-		std::string result(kResourcePrefix);
-		result.append(path);
-		if (!Normalize(result).ends_with(kDdsExtension))
-			result += kDdsExtension;
-		return result;
+		std::string relative = Normalize(path);
+		if (relative.empty() ||
+			relative.find(':') != std::string::npos ||
+			relative.find('\0') != std::string::npos) {
+			return {};
+		}
+
+		const std::filesystem::path fsPath(relative);
+		if (fsPath.is_absolute() || fsPath.has_root_name() || fsPath.has_root_directory())
+			return {};
+		for (const auto& component : fsPath)
+			if (component == "." || component == "..")
+				return {};
+
+		while (relative.starts_with(kTexturePrefix))
+			relative.erase(0, kTexturePrefix.size());
+		if (relative.empty())
+			return {};
+
+		if (!relative.ends_with(kDdsExtension))
+			relative += kDdsExtension;
+
+		std::string resourcePath(kResourcePrefix);
+		resourcePath += relative;
+		return resourcePath;
 	}
 }
 
@@ -328,37 +339,52 @@ namespace WeatherUtils
 	// Static debounced trackers for undo and palette tracking
 	static DebouncedTracker<int> s_int8Tracker;
 	static DebouncedTracker<int> s_intTracker;
+	static DebouncedTracker<std::uint32_t> s_uint32Tracker;
 	static DebouncedTracker<float> s_floatTracker;
+
+	template <class T, class DrawFn>
+	bool DrawTrackedSlider(
+		const std::string& label,
+		T& property,
+		Widget* widget,
+		DebouncedTracker<T>& tracker,
+		DrawFn draw)
+	{
+		constexpr double debounceDelay = 2.0;
+		const double currentTime = ImGui::GetTime();
+		const std::string settingID = label.starts_with("##") ? label.substr(2) : label;
+		Widget* effectiveWidget = widget ? widget : g_currentWidget;
+		if (effectiveWidget && !effectiveWidget->MatchesSearch(settingID))
+			return false;
+
+		const T previous = property;
+		const bool changed = DrawWithWidgetHighlight(effectiveWidget, settingID, draw);
+		const bool isNowActive = ImGui::IsItemActive();
+		const std::string trackerKey = effectiveWidget ?
+		                                   std::format(
+											   "{}{}{}",
+											   static_cast<const void*>(effectiveWidget),
+											   kScopeSep,
+											   settingID) :
+		                                   settingID;
+
+		if (tracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay))
+			PushUndoWithPreviousValue(effectiveWidget, property, previous);
+
+		if (changed)
+			tracker.OnValueChanged(trackerKey, property, currentTime);
+
+		for (const auto& [key, value] : tracker.GetCompletedEntries(currentTime, debounceDelay))
+			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), static_cast<float>(value));
+
+		return changed;
+	}
 
 	bool DrawSliderInt8(const std::string& label, int& property)
 	{
-		const double debounceDelay = 2.0;
-		double currentTime = ImGui::GetTime();
-
-		const int previous = property;
-		bool changed = DrawWithWidgetHighlight(g_currentWidget, label, [&]() {
+		return DrawTrackedSlider(label, property, nullptr, s_int8Tracker, [&]() {
 			return ImGui::SliderInt(label.c_str(), &property, -127, 127);
 		});
-		bool isNowActive = ImGui::IsItemActive();
-
-		const std::string trackerKey = ScopedKey(label);
-
-		// Push undo state when slider becomes active
-		if (s_int8Tracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay)) {
-			PushUndoWithPreviousValue(g_currentWidget, property, previous);
-		}
-
-		if (changed) {
-			s_int8Tracker.OnValueChanged(trackerKey, property, currentTime);
-		}
-
-		// Track completed values to palette (strip widget prefix from palette key)
-		auto completed = s_int8Tracker.GetCompletedEntries(currentTime, debounceDelay);
-		for (const auto& [key, value] : completed) {
-			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), static_cast<float>(value));
-		}
-
-		return changed;
 	}
 
 	bool DrawColorEdit(const std::string& l, float3& property, Widget* widget)
@@ -443,70 +469,35 @@ namespace WeatherUtils
 
 	bool DrawSliderInt(const std::string& label, int& property, int min, int max, Widget* widget)
 	{
-		const double currentTime = ImGui::GetTime();
-		const std::string hid = label.starts_with("##") ? label.substr(2) : label;
-		Widget* w = widget ? widget : g_currentWidget;
-		if (w && !w->MatchesSearch(hid))
-			return false;
-
-		const int previous = property;
-		const bool changed = DrawWithWidgetHighlight(w, hid, [&]() {
+		return DrawTrackedSlider(label, property, widget, s_intTracker, [&]() {
 			return ImGui::SliderInt(label.c_str(), &property, min, max);
 		});
-		const bool isNowActive = ImGui::IsItemActive();
-		const std::string trackerKey = w ?
-		                                   std::format("{}{}{}", static_cast<const void*>(w), kScopeSep, hid) :
-		                                   hid;
+	}
 
-		if (s_intTracker.UpdateActiveState(trackerKey, isNowActive, currentTime, 2.0) && w)
-			PushUndoWithPreviousValue(w, property, previous);
-
-		if (changed)
-			s_intTracker.OnValueChanged(trackerKey, property, currentTime);
-
-		for (const auto& [key, value] : s_intTracker.GetCompletedEntries(currentTime, 2.0))
-			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), static_cast<float>(value));
-
-		return changed;
+	bool DrawSliderUint32(
+		const std::string& label,
+		std::uint32_t& property,
+		std::uint32_t min,
+		std::uint32_t max,
+		Widget* widget,
+		const char* format)
+	{
+		return DrawTrackedSlider(label, property, widget, s_uint32Tracker, [&]() {
+			return ImGui::SliderScalar(
+				label.c_str(),
+				ImGuiDataType_U32,
+				&property,
+				&min,
+				&max,
+				format);
+		});
 	}
 
 	bool DrawSliderFloat(const std::string& label, float& property, float min, float max, Widget* widget, const char* format)
 	{
-		const double debounceDelay = 2.0;
-		double currentTime = ImGui::GetTime();
-
-		// Strip leading "##" so hidden-label sliders still match highlight/search ids.
-		std::string hid = label.starts_with("##") ? label.substr(2) : label;
-		Widget* w = widget ? widget : g_currentWidget;
-		if (w && !w->MatchesSearch(hid))
-			return false;
-
-		const float previous = property;
-		bool changed = DrawWithWidgetHighlight(w, hid, [&]() {
+		return DrawTrackedSlider(label, property, widget, s_floatTracker, [&]() {
 			return ImGui::SliderFloat(label.c_str(), &property, min, max, format);
 		});
-		bool isNowActive = ImGui::IsItemActive();
-
-		const std::string trackerKey = w ?
-		                                   std::format("{}{}{}", static_cast<const void*>(w), kScopeSep, hid) :
-		                                   hid;
-
-		// Push undo state when slider becomes active
-		if (s_floatTracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay)) {
-			PushUndoWithPreviousValue(w, property, previous);
-		}
-
-		if (changed) {
-			s_floatTracker.OnValueChanged(trackerKey, property, currentTime);
-		}
-
-		// Track completed values to palette (strip widget prefix from palette key)
-		auto completed = s_floatTracker.GetCompletedEntries(currentTime, debounceDelay);
-		for (const auto& [key, value] : completed) {
-			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), value);
-		}
-
-		return changed;
 	}
 
 	bool DrawCheckbox(const std::string& label, bool& value, Widget* widget)

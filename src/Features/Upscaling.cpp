@@ -34,6 +34,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sharpnessFSR,
 	sharpnessDLSS,
 	fsr4RuntimeEnable,
+	fsr4RuntimeSelectionSchemaVersion,
 	reflexLowLatencyMode,
 	reflexLowLatencyBoost,
 	reflexUseMarkersToOptimize,
@@ -393,6 +394,30 @@ namespace
 		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
 	}
 
+	void ApplyLegacyFsr4RuntimeSelectionMigration(
+		Upscaling::Settings& a_settings,
+		FidelityFX::Fsr4AdapterSupport a_adapterSupport)
+	{
+		if (a_settings.fsr4RuntimeSelectionSchemaVersion >= Upscaling::kFsr4RuntimeSelectionSchemaVersion)
+			return;
+
+		switch (a_adapterSupport) {
+		case FidelityFX::Fsr4AdapterSupport::RadeonRx7000:
+			if (!a_settings.fsr4RuntimeEnable)
+				logger::info("[Upscaling] Migrated RX 7000 settings to the newly supported FSR4 runtime path.");
+			a_settings.fsr4RuntimeEnable = true;
+			break;
+		case FidelityFX::Fsr4AdapterSupport::RadeonRx9000:
+			// RX 9000 users could already choose FSR3, so preserve their selection.
+			break;
+		case FidelityFX::Fsr4AdapterSupport::Unsupported:
+			// Keep the migration pending if this config later runs on supported hardware.
+			return;
+		}
+
+		a_settings.fsr4RuntimeSelectionSchemaVersion = Upscaling::kFsr4RuntimeSelectionSchemaVersion;
+	}
+
 	void DrawFrameGenerationEnabledToggle(Upscaling::Settings& a_settings)
 	{
 		bool enabled = a_settings.frameGenerationMode != 0;
@@ -436,11 +461,14 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
-	DXGI_ADAPTER_DESC adapterDesc;
-	pAdapter->GetDesc(&adapterDesc);
-	globals::state->SetAdapterDescription(adapterDesc.Description);
-
 	auto& upscaling = globals::features::upscaling;
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (pAdapter && SUCCEEDED(pAdapter->GetDesc(&adapterDesc))) {
+		globals::state->SetAdapterDescription(adapterDesc.Description);
+		ApplyLegacyFsr4RuntimeSelectionMigration(
+			upscaling.settings,
+			FidelityFX::GetFsr4AdapterSupport(adapterDesc));
+	}
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
 			logger::warn(
@@ -1019,9 +1047,13 @@ void Upscaling::DrawEssentialSettings()
 void Upscaling::LoadSettings(json& o_json)
 {
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
+	const bool hasFsr4RuntimeSelectionSchemaVersion = o_json.contains("fsr4RuntimeSelectionSchemaVersion");
 	const bool hasDLSSPreset = o_json.contains("dlssPreset");
 	const uint legacyDLSSPreset = o_json.value("presetDLSS", 0u);
 	settings = o_json;
+	if (!hasFsr4RuntimeSelectionSchemaVersion)
+		settings.fsr4RuntimeSelectionSchemaVersion = 0;
+	ApplyLegacyFsr4RuntimeSelectionMigration(settings, fidelityFX.GetFsr4AdapterSupport());
 	if (!hasQualityModeSchemaVersion)
 		settings.qualityMode = MigrateLegacyQualityModeUInt(settings.qualityMode);
 	if (!hasDLSSPreset)

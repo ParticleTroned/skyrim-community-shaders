@@ -73,19 +73,32 @@ namespace
 		return a_value;
 	}
 
-	bool IsLikelyRDNA4Adapter(const DXGI_ADAPTER_DESC& a_desc)
+	FidelityFX::Fsr4AdapterSupport ClassifyFsr4AdapterSupport(const DXGI_ADAPTER_DESC& a_desc)
 	{
 		if (a_desc.VendorId != kAmdVendorId)
-			return false;
+			return FidelityFX::Fsr4AdapterSupport::Unsupported;
 
 		std::wstring wideDescription(a_desc.Description);
 		const std::string description = ToUpperAscii(stl::utf16_to_utf8(wideDescription).value_or(""));
+
+		// FSR 4.1.1 supports discrete RDNA 3/RX 7000 and RDNA 4/RX 9000
+		// adapters. A generic RDNA 3 marker is insufficient because it can also
+		// describe unsupported integrated hardware.
+		const bool isKnownRdna3DiscreteDie =
+			description.find("NAVI31") != std::string::npos ||
+			description.find("NAVI 31") != std::string::npos ||
+			description.find("NAVI32") != std::string::npos ||
+			description.find("NAVI 32") != std::string::npos ||
+			description.find("NAVI33") != std::string::npos ||
+			description.find("NAVI 33") != std::string::npos;
+		if (isKnownRdna3DiscreteDie)
+			return FidelityFX::Fsr4AdapterSupport::RadeonRx7000;
 
 		if (description.find("RDNA4") != std::string::npos ||
 			description.find("RDNA 4") != std::string::npos ||
 			description.find("NAVI4") != std::string::npos ||
 			description.find("NAVI 4") != std::string::npos) {
-			return true;
+			return FidelityFX::Fsr4AdapterSupport::RadeonRx9000;
 		}
 
 		size_t searchPosition = 0;
@@ -101,15 +114,28 @@ namespace
 				const std::string modelText = description.substr(modelStart, searchPosition - modelStart);
 				char* parseEnd = nullptr;
 				const unsigned long modelNumber = std::strtoul(modelText.c_str(), &parseEnd, 10);
-				if (parseEnd != modelText.c_str() && modelNumber >= 9000ul && modelNumber < 10000ul)
-					return true;
+				const bool isRadeon7000Series = modelNumber >= 7000ul && modelNumber < 8000ul;
+				const bool isRadeon9000Series = modelNumber >= 9000ul && modelNumber < 10000ul;
+				if (parseEnd != modelText.c_str() && isRadeon7000Series)
+					return FidelityFX::Fsr4AdapterSupport::RadeonRx7000;
+				if (parseEnd != modelText.c_str() && isRadeon9000Series)
+					return FidelityFX::Fsr4AdapterSupport::RadeonRx9000;
 			}
 		}
 
 		// Keep fallbacks for abbreviated naming variants that don't include full numeric model text.
-		return description.find("RX 90") != std::string::npos ||
-		       description.find("RX90") != std::string::npos ||
-		       description.find("RADEON 90") != std::string::npos;
+		if (description.find("RX 70") != std::string::npos ||
+			description.find("RX70") != std::string::npos ||
+			description.find("RADEON 70") != std::string::npos) {
+			return FidelityFX::Fsr4AdapterSupport::RadeonRx7000;
+		}
+		if (description.find("RX 90") != std::string::npos ||
+			description.find("RX90") != std::string::npos ||
+			description.find("RADEON 90") != std::string::npos) {
+			return FidelityFX::Fsr4AdapterSupport::RadeonRx9000;
+		}
+
+		return FidelityFX::Fsr4AdapterSupport::Unsupported;
 	}
 
 	std::string UpscalerVersionToString(uint32_t a_version)
@@ -1075,13 +1101,23 @@ bool FidelityFX::IsRuntimeUpscalerPresent() const
 	return true;
 }
 
-bool FidelityFX::IsRuntimeFsr4AutoEligible() const
+FidelityFX::Fsr4AdapterSupport FidelityFX::GetFsr4AdapterSupport(const DXGI_ADAPTER_DESC& a_adapterDesc)
+{
+	return ClassifyFsr4AdapterSupport(a_adapterDesc);
+}
+
+FidelityFX::Fsr4AdapterSupport FidelityFX::GetFsr4AdapterSupport() const
 {
 	DXGI_ADAPTER_DESC adapterDesc{};
 	if (!TryGetCurrentAdapterDesc(adapterDesc))
-		return false;
+		return Fsr4AdapterSupport::Unsupported;
 
-	return adapterDesc.VendorId == kAmdVendorId && IsLikelyRDNA4Adapter(adapterDesc);
+	return GetFsr4AdapterSupport(adapterDesc);
+}
+
+bool FidelityFX::IsRuntimeFsr4AutoEligible() const
+{
+	return GetFsr4AdapterSupport() != Fsr4AdapterSupport::Unsupported;
 }
 
 bool FidelityFX::IsRuntimeFsr4Available() const

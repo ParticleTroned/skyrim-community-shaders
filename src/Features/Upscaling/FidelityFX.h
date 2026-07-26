@@ -32,6 +32,13 @@ class WrappedResource;
 class FidelityFX
 {
 public:
+	enum class Fsr4AdapterSupport
+	{
+		Unsupported,
+		RadeonRx7000,
+		RadeonRx9000
+	};
+
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
 	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
 	static constexpr std::wstring_view RuntimeUpscalerDllName = L"amd_fidelityfx_upscaler_dx12.dll";
@@ -73,6 +80,8 @@ public:
 	bool IsAmdAdapterDetected() const;
 	bool IsNvidiaAdapterDetected() const;
 	bool IsRuntimeUpscalerPresent() const;
+	static Fsr4AdapterSupport GetFsr4AdapterSupport(const DXGI_ADAPTER_DESC& a_adapterDesc);
+	Fsr4AdapterSupport GetFsr4AdapterSupport() const;
 	bool IsRuntimeFsr4AutoEligible() const;
 	bool IsRuntimeFsr4Available() const;
 	bool ShouldRequestRuntimeFsr4() const;

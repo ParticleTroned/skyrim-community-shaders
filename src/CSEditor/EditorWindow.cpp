@@ -13,6 +13,7 @@
 #include "imgui_internal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
@@ -1228,14 +1229,22 @@ void EditorWindow::RenderUI()
 		// Preview mode buttons
 		if (hasFreeCam) {
 			bool isActive = previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::FreeCameraLocked;
-			if (DrawToggleIconButton("##FreeCamera", menu->uiIcons.freeCamera.texture, isActive, freeCameraX))
-				EnterPreviewMode(PreviewMode::FreeCamera);
+			if (DrawToggleIconButton("##FreeCamera", menu->uiIcons.freeCamera.texture, isActive, freeCameraX)) {
+				if (isActive)
+					ExitPreviewMode();
+				else
+					EnterPreviewMode(PreviewMode::FreeCamera);
+			}
 			Util::AddTooltip(isActive ? "Exit Free Camera" : "Free Camera (scroll to adjust speed)");
 		}
 		if (hasPlayMode) {
 			bool isActive = previewMode == PreviewMode::PlayMode;
-			if (DrawToggleIconButton("##PlayMode", menu->uiIcons.playMode.texture, isActive, playModeX))
-				EnterPreviewMode(PreviewMode::PlayMode);
+			if (DrawToggleIconButton("##PlayMode", menu->uiIcons.playMode.texture, isActive, playModeX)) {
+				if (isActive)
+					ExitPreviewMode();
+				else
+					EnterPreviewMode(PreviewMode::PlayMode);
+			}
 			Util::AddTooltip(isActive ? "Exit Play Mode" : "Play Mode - Walk around normally");
 		}
 
@@ -1374,6 +1383,7 @@ EditorWindow::~EditorWindow()
 	artObjectWidgets.clear();
 	effectShaderWidgets.clear();
 	currentCellLightingWidget.reset();
+	cachedCellLightingWidgets.clear();
 }
 
 void EditorWindow::SetupResources()
@@ -1424,10 +1434,43 @@ void EditorWindow::OpenCellLightingWidget(RE::TESObjectCELL* cell, bool showNoti
 	if (lastFocusedWidget == currentCellLightingWidget.get())
 		lastFocusedWidget = nullptr;
 
-	currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
-	currentCellLightingWidget->CacheFormData();
-	currentCellLightingWidget->RestoreRememberedBaseline();
-	currentCellLightingWidget->Load(showNotification);
+	const auto hasUndoState = [&](std::string_view identity) {
+		return std::ranges::any_of(undoStack, [&](const UndoState& state) {
+			return state.widgetIdentity == identity;
+		});
+	};
+	for (auto it = cachedCellLightingWidgets.begin(); it != cachedCellLightingWidgets.end();) {
+		if (!it->second ||
+			(!it->second->HasUnsavedChanges() && !hasUndoState(it->first))) {
+			it = cachedCellLightingWidgets.erase(it);
+		} else {
+			++it;
+		}
+	}
+
+	if (currentCellLightingWidget) {
+		const auto oldIdentity = currentCellLightingWidget->GetStableIdentity();
+		if (currentCellLightingWidget->HasUnsavedChanges() || hasUndoState(oldIdentity))
+			cachedCellLightingWidgets[oldIdentity] = std::move(currentCellLightingWidget);
+		else
+			currentCellLightingWidget.reset();
+	}
+
+	const auto targetIdentity = std::format(
+		"{}/{}",
+		Widget::kCellLightingFolderName,
+		Util::GetFormFileKey(cell));
+	if (auto cached = cachedCellLightingWidgets.find(targetIdentity);
+		cached != cachedCellLightingWidgets.end()) {
+		currentCellLightingWidget = std::move(cached->second);
+		cachedCellLightingWidgets.erase(cached);
+	} else {
+		currentCellLightingWidget = std::make_unique<CellLightingWidget>(cell);
+		currentCellLightingWidget->CacheFormData();
+		currentCellLightingWidget->RememberBaseline();
+		currentCellLightingWidget->RestoreRememberedBaseline();
+		currentCellLightingWidget->Load(showNotification);
+	}
 	currentCellLightingWidget->SetOpen(true);
 	if (requestFocus)
 		currentCellLightingWidget->RequestFocus();
@@ -1441,6 +1484,8 @@ void EditorWindow::UpdateOpenState()
 	if (open) {
 		DisableVanityCamera();
 	} else {
+		if (previewMode != PreviewMode::None)
+			ExitPreviewMode();
 		lightEditor.ResetOverrides();
 		RestoreVanityCamera();
 		lastFocusedWidget = nullptr;
@@ -1522,6 +1567,9 @@ void EditorWindow::SaveAll()
 	};
 	for (auto* collection : GetWidgetCollections())
 		saveOpen(*collection);
+	for (auto& [_, widget] : cachedCellLightingWidgets)
+		if (widget && widget->IsOpen())
+			widget->Save();
 	if (currentCellLightingWidget && currentCellLightingWidget->IsOpen())
 		currentCellLightingWidget->Save();
 
@@ -1538,7 +1586,73 @@ void EditorWindow::LoadSettings()
 {
 	if (!j.empty())
 		settings = j;
+	SanitizeSettings();
 	SetWidgetTypeSizesFromJson(settings.widgetTypeSizes);
+	settings.widgetTypeSizes = GetWidgetTypeSizesJson();
+}
+
+void EditorWindow::SanitizeSettings()
+{
+	if (!std::isfinite(settings.editorUIScale))
+		settings.editorUIScale = 1.0f;
+	settings.editorUIScale = std::clamp(settings.editorUIScale, 0.5f, 2.0f);
+	settings.maxRecentWidgets = std::clamp(settings.maxRecentWidgets, 5, 20);
+
+	auto sanitizeUnit = [](float value, float fallback) {
+		return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : fallback;
+	};
+
+	while (settings.recordMarkers.size() > maxRecordMarkers)
+		settings.recordMarkers.erase(std::prev(settings.recordMarkers.end()));
+	for (auto& [_, color] : settings.recordMarkers) {
+		color.x = sanitizeUnit(color.x, 0.5f);
+		color.y = sanitizeUnit(color.y, 0.5f);
+		color.z = sanitizeUnit(color.z, 0.5f);
+		color.w = sanitizeUnit(color.w, 1.0f);
+	}
+	std::erase_if(settings.markedRecords, [&](const auto& entry) {
+		return !settings.recordMarkers.contains(entry.second);
+	});
+
+	for (auto& [_, recent] : settings.recentWidgets) {
+		std::vector<std::string> sanitized;
+		sanitized.reserve(std::min(recent.size(), static_cast<size_t>(settings.maxRecentWidgets)));
+		for (const auto& id : recent) {
+			if (std::ranges::find(sanitized, id) == sanitized.end())
+				sanitized.push_back(id);
+			if (sanitized.size() == static_cast<size_t>(settings.maxRecentWidgets))
+				break;
+		}
+		recent = std::move(sanitized);
+	}
+
+	constexpr size_t kMaxPaletteEntries = 4096;
+	if (settings.paletteColors.size() > kMaxPaletteEntries)
+		settings.paletteColors.resize(kMaxPaletteEntries);
+	for (auto& entry : settings.paletteColors) {
+		entry.r = sanitizeUnit(entry.r, 0.0f);
+		entry.g = sanitizeUnit(entry.g, 0.0f);
+		entry.b = sanitizeUnit(entry.b, 0.0f);
+		entry.useCount = std::max(entry.useCount, 0);
+		if (!std::isfinite(entry.lastUsedTime) || entry.lastUsedTime < 0.0f)
+			entry.lastUsedTime = 0.0f;
+	}
+
+	if (settings.paletteValues.size() > kMaxPaletteEntries)
+		settings.paletteValues.resize(kMaxPaletteEntries);
+	for (auto& entry : settings.paletteValues) {
+		if (!std::isfinite(entry.value))
+			entry.value = 0.0f;
+		entry.useCount = std::max(entry.useCount, 0);
+		if (!std::isfinite(entry.lastUsedTime) || entry.lastUsedTime < 0.0f)
+			entry.lastUsedTime = 0.0f;
+	}
+
+	for (auto& favorite : settings.paletteFavorites) {
+		favorite.r = sanitizeUnit(favorite.r, 0.0f);
+		favorite.g = sanitizeUnit(favorite.g, 0.0f);
+		favorite.b = sanitizeUnit(favorite.b, 0.0f);
+	}
 }
 
 void EditorWindow::ShowSettingsWindow()
@@ -1648,7 +1762,8 @@ void EditorWindow::ShowSettingsWindow()
 					}
 
 					ImGui::TableSetColumnIndex(1);
-					if (ImGui::ColorEdit3(std::format("Color##{}", recordMarker.first).c_str(), (float*)&recordMarker.second)) {
+					ImGui::ColorEdit3(std::format("Color##{}", recordMarker.first).c_str(), (float*)&recordMarker.second);
+					if (ImGui::IsItemDeactivatedAfterEdit()) {
 						Save();
 					}
 
@@ -1722,12 +1837,12 @@ void EditorWindow::ShowSettingsWindow()
 
 void EditorWindow::Save()
 {
-	SaveSettings();
 	const auto file = Util::PathHelpers::GetCommunityShaderPath() / std::format("{}.json", settingsFilename);
 
 	logger::info("Saving settings file: {}", file.string());
 
 	try {
+		SaveSettings();
 		std::string errorMessage;
 		if (!Util::FileHelpers::WriteTextFileAtomic(file, j.dump(1), errorMessage))
 			logger::warn("Failed to save settings file ({}): {}", file.string(), errorMessage);
@@ -2041,6 +2156,8 @@ void EditorWindow::PushUndoState(Widget* widget)
 	UndoState state{
 		.widgetIdentity = widget->GetStableIdentity(),
 		.widgetLabel = widget->GetEditorID(),
+		.restoreRuntime =
+			settings.autoApplyChanges && !widget->RequiresManualApply(),
 		.restore = std::move(restore)
 	};
 
@@ -2061,6 +2178,8 @@ void EditorWindow::PerformUndo()
 
 	if (auto* widget = FindWidgetByIdentity(state.widgetIdentity)) {
 		state.restore(*widget);
+		if (state.restoreRuntime)
+			widget->ApplyChanges();
 		ShowNotification(
 			std::format("Undone changes to {}", state.widgetLabel),
 			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.InfoColor,
@@ -2084,6 +2203,10 @@ Widget* EditorWindow::FindWidgetByIdentity(std::string_view identity)
 
 	if (currentCellLightingWidget && currentCellLightingWidget->GetStableIdentity() == identity)
 		return currentCellLightingWidget.get();
+
+	if (auto cached = cachedCellLightingWidgets.find(std::string(identity));
+		cached != cachedCellLightingWidgets.end())
+		return cached->second.get();
 
 	return nullptr;
 }
@@ -2207,8 +2330,9 @@ void EditorWindow::AddToRecent(const std::string& widgetId, const std::string& c
 	categoryRecent.insert(categoryRecent.begin(), widgetId);
 
 	// Limit size
-	if (categoryRecent.size() > static_cast<size_t>(settings.maxRecentWidgets)) {
-		categoryRecent.resize(settings.maxRecentWidgets);
+	const auto maxRecent = static_cast<size_t>(std::clamp(settings.maxRecentWidgets, 5, 20));
+	if (categoryRecent.size() > maxRecent) {
+		categoryRecent.resize(maxRecent);
 	}
 
 	Save();

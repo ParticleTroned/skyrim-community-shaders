@@ -35,6 +35,8 @@ public:
 	// Call every frame with current item active state. Returns true if undo should be pushed.
 	bool UpdateActiveState(const std::string& key, bool isNowActive, double currentTime, double debounceDelay = DefaultDebounceDelay)
 	{
+		(void)currentTime;
+		(void)debounceDelay;
 		bool isPreviouslyActive = wasActive[key];
 		wasActive[key] = isNowActive;
 
@@ -44,13 +46,10 @@ public:
 			return true;  // Signal to push undo
 		}
 
-		// Reset undo flag when slider is released and idle
-		if (!isNowActive && undoPushedForSession[key]) {
-			auto it = lastChangeTime.find(key);
-			if (it == lastChangeTime.end() || currentTime - it->second >= debounceDelay) {
-				undoPushedForSession[key] = false;
-			}
-		}
+		// Every activation is a distinct undoable edit. Palette usage remains
+		// debounced separately through GetCompletedEntries().
+		if (!isNowActive && isPreviouslyActive)
+			undoPushedForSession[key] = false;
 
 		return false;
 	}
@@ -118,6 +117,8 @@ namespace WidgetDefaults
 	constexpr float kMinHeight = 150.0f;
 	constexpr float kInitialWidth = 580.0f;
 	constexpr float kInitialHeight = 580.0f;
+	constexpr float kMaxWidth = 16384.0f;
+	constexpr float kMaxHeight = 16384.0f;
 	constexpr float kSliderWidthRatio = 0.6f;  ///< Fraction of available width for slider/input controls
 	constexpr float kTODLabelWidth = 150.0f;   ///< Default label column width for time-of-day tables
 }
@@ -429,6 +430,7 @@ namespace WeatherUtils
 
 	// Set the current widget for undo tracking (should be called at start of widget Draw())
 	void SetCurrentWidget(Widget* widget);
+	void PushWidgetUndo(Widget* widget);
 
 	// UI helper functions
 	bool DrawSliderInt8(const std::string& label, int& property);
@@ -445,7 +447,7 @@ namespace WeatherUtils
 		// invoked with (T* form, std::string editorID) for each enumerable entry.
 		template <typename T, typename ForEachEntry>
 		bool DrawFormComboBody(const char* label, T*& currentForm, const std::string& currentEditorID,
-			bool showFormID, bool allowNone, float width, ForEachEntry forEachEntry)
+			bool showFormID, bool allowNone, float width, Widget* widget, ForEachEntry forEachEntry)
 		{
 			bool changed = false;
 
@@ -465,7 +467,8 @@ namespace WeatherUtils
 				ImGui::SetNextItemWidth(width);
 
 			if (ImGui::BeginCombo(label, previewText.c_str())) {
-				if (allowNone && ImGui::Selectable("None", currentForm == nullptr)) {
+				if (allowNone && ImGui::Selectable("None", currentForm == nullptr) && currentForm != nullptr) {
+					WeatherUtils::PushWidgetUndo(widget);
 					currentForm = nullptr;
 					changed = true;
 				}
@@ -475,7 +478,8 @@ namespace WeatherUtils
 					                             std::format("{} (0x{:08X})", editorID, form->GetFormID()) :
 					                             editorID;
 					bool isSelected = (currentForm == form);
-					if (ImGui::Selectable(comboLabel.c_str(), isSelected)) {
+					if (ImGui::Selectable(comboLabel.c_str(), isSelected) && !isSelected) {
+						WeatherUtils::PushWidgetUndo(widget);
 						currentForm = form;
 						changed = true;
 					}
@@ -492,7 +496,7 @@ namespace WeatherUtils
 	// Generic form picker combo box using cached widget EditorIDs for performance
 	// Returns true if selection changed
 	template <typename T, typename WidgetContainer>
-	bool DrawFormPickerCached(const char* label, T*& currentForm, const WidgetContainer& widgets, bool showFormID = true, bool allowNone = true, float width = 450.0f)
+	bool DrawFormPickerCached(const char* label, T*& currentForm, const WidgetContainer& widgets, bool showFormID = true, bool allowNone = true, float width = 450.0f, Widget* widget = nullptr)
 	{
 		std::string currentEditorID;
 		if (currentForm) {
@@ -504,7 +508,7 @@ namespace WeatherUtils
 			}
 		}
 
-		return detail::DrawFormComboBody<T>(label, currentForm, currentEditorID, showFormID, allowNone, width,
+		return detail::DrawFormComboBody<T>(label, currentForm, currentEditorID, showFormID, allowNone, width, widget,
 			[&](auto&& visit) {
 				for (const auto& widget : widgets) {
 					if (widget && widget->form)
@@ -515,7 +519,7 @@ namespace WeatherUtils
 
 	// Legacy form picker (slow - only use if widgets not available)
 	template <typename T, typename Container>
-	bool DrawFormPicker(const char* label, T*& currentForm, const Container& formArray, bool showFormID = true, bool allowNone = true, float width = 450.0f)
+	bool DrawFormPicker(const char* label, T*& currentForm, const Container& formArray, bool showFormID = true, bool allowNone = true, float width = 450.0f, Widget* widget = nullptr)
 	{
 		auto getEditorID = [](T* form) -> std::string {
 			if (!form)
@@ -526,7 +530,7 @@ namespace WeatherUtils
 			return std::format("{:08X}", form->GetFormID());
 		};
 
-		return detail::DrawFormComboBody<T>(label, currentForm, getEditorID(currentForm), showFormID, allowNone, width,
+		return detail::DrawFormComboBody<T>(label, currentForm, getEditorID(currentForm), showFormID, allowNone, width, widget,
 			[&](auto&& visit) {
 				for (auto form : formArray) {
 					if (form)

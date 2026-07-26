@@ -4,6 +4,7 @@
 #include "Utils/UI.h"
 
 #include <cassert>
+#include <cmath>
 #include <filesystem>
 
 namespace WeatherUtils::TexturePath
@@ -115,9 +116,16 @@ auto DrawWithWidgetHighlight(Widget* widget, const std::string& settingId, DrawF
 // when two widgets share a label string (e.g. "Specular", "Fresnel Power").
 constexpr std::string_view kScopeSep = "::";
 
+static std::string WidgetScopedKey(const Widget* widget, std::string_view label)
+{
+	return widget ?
+	           std::format("{}{}{}", widget->GetStableIdentity(), kScopeSep, label) :
+	           std::string(label);
+}
+
 static std::string ScopedKey(std::string_view label)
 {
-	return std::format("{}{}{}", static_cast<const void*>(g_currentWidget), kScopeSep, label);
+	return WidgetScopedKey(g_currentWidget, label);
 }
 
 // Recover the original label from a scoped key for use as a palette/UI key.
@@ -163,8 +171,12 @@ void SetWidgetTypeSizesFromJson(const json& j)
 	s_widgetTypeSizes.clear();
 	for (auto& [key, val] : j.items()) {
 		if (val.is_array() && val.size() == 2 && val[0].is_number() && val[1].is_number()) {
-			float w = std::max(val[0].get<float>(), WidgetDefaults::kMinWidth);
-			float h = std::max(val[1].get<float>(), WidgetDefaults::kMinHeight);
+			float w = val[0].get<float>();
+			float h = val[1].get<float>();
+			if (!std::isfinite(w) || !std::isfinite(h))
+				continue;
+			w = std::clamp(w, WidgetDefaults::kMinWidth, WidgetDefaults::kMaxWidth);
+			h = std::clamp(h, WidgetDefaults::kMinHeight, WidgetDefaults::kMaxHeight);
 			s_widgetTypeSizes[key] = ImVec2(w, h);
 		}
 	}
@@ -336,6 +348,12 @@ namespace WeatherUtils
 		g_currentWidget = widget;
 	}
 
+	void PushWidgetUndo(Widget* widget)
+	{
+		if (widget)
+			EditorWindow::GetSingleton()->PushUndoState(widget);
+	}
+
 	// Static debounced trackers for undo and palette tracking
 	static DebouncedTracker<int> s_int8Tracker;
 	static DebouncedTracker<int> s_intTracker;
@@ -360,13 +378,7 @@ namespace WeatherUtils
 		const T previous = property;
 		const bool changed = DrawWithWidgetHighlight(effectiveWidget, settingID, draw);
 		const bool isNowActive = ImGui::IsItemActive();
-		const std::string trackerKey = effectiveWidget ?
-		                                   std::format(
-											   "{}{}{}",
-											   static_cast<const void*>(effectiveWidget),
-											   kScopeSep,
-											   settingID) :
-		                                   settingID;
+		const std::string trackerKey = WidgetScopedKey(effectiveWidget, settingID);
 
 		if (tracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay))
 			PushUndoWithPreviousValue(effectiveWidget, property, previous);
@@ -389,10 +401,6 @@ namespace WeatherUtils
 
 	bool DrawColorEdit(const std::string& l, float3& property, Widget* widget)
 	{
-		static std::map<std::string, float3> colorCache;
-		static std::string activeColorId;
-		static std::map<std::string, bool> wasPickerOpen;
-
 		// Strip leading "##" so hidden-id callers still match highlight/search ids.
 		const std::string hid = l.starts_with("##") ? l.substr(2) : l;
 
@@ -400,43 +408,15 @@ namespace WeatherUtils
 		if (effectiveWidget && !effectiveWidget->MatchesSearch(hid))
 			return false;
 
-		const std::string cacheId = effectiveWidget ?
-		                                std::format("{}{}{}", static_cast<const void*>(effectiveWidget), kScopeSep, hid) :
-		                                hid;
-		bool isActive = ImGui::IsPopupOpen(l.c_str(), ImGuiPopupFlags_AnyPopupId);
-		bool wasActive = wasPickerOpen[cacheId];
-
-		// Cache the original color and push undo state when picker is first activated
-		if (isActive && activeColorId != cacheId) {
-			colorCache[cacheId] = property;
-			activeColorId = cacheId;
-			// Push undo state before change
-			if (effectiveWidget) {
-				EditorWindow::GetSingleton()->PushUndoState(effectiveWidget);
-			}
-		} else if (!isActive && activeColorId == cacheId) {
-			activeColorId.clear();
-		}
-
-		// Check for Ctrl+Z while picker is active
-		if (isActive && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_Z)) {
-			if (colorCache.contains(cacheId)) {
-				property = colorCache[cacheId];
-				wasPickerOpen[cacheId] = isActive;
-				return true;
-			}
-		}
-
+		const float3 previous = property;
 		bool changed = DrawWithWidgetHighlight(effectiveWidget, hid, [&]() {
 			return ImGui::ColorEdit3(l.c_str(), (float*)&property);
 		});
 
-		// Track color usage only when picker closes
-		if (wasActive && !isActive) {
+		if (ImGui::IsItemActivated())
+			PushUndoWithPreviousValue(effectiveWidget, property, previous);
+		if (ImGui::IsItemDeactivatedAfterEdit())
 			PaletteWindow::GetSingleton()->TrackColorUsage(property);
-		}
-
-		wasPickerOpen[cacheId] = isActive;
 
 		// Drag-and-drop source
 		if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
@@ -804,14 +784,6 @@ namespace TOD
 			}
 
 			if (isPopupOpen) {
-				// Check for Ctrl+Z while picker is active
-				if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_Z)) {
-					if (colorCache.contains(scopedId)) {
-						colors[i] = colorCache[scopedId];
-						changed = true;
-					}
-				}
-
 				// Use ColorPicker4 with ref_col to show original color preview
 				float col4[4] = { colors[i].x, colors[i].y, colors[i].z, 1.0f };
 				float refCol[4] = { colorCache[scopedId].x, colorCache[scopedId].y, colorCache[scopedId].z, 1.0f };

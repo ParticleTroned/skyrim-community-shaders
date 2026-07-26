@@ -179,7 +179,6 @@ void ImageSpaceWidget::LoadSettings()
 void ImageSpaceWidget::SaveSettings()
 {
 	js["Settings"] = settings;
-	originalSettings = settings;
 }
 
 void ImageSpaceWidget::SetImageSpaceValues()
@@ -275,7 +274,6 @@ Widget::UndoRestoreAction ImageSpaceWidget::CaptureUndoState() const
 	return [snapshot](Widget& widget) {
 		auto& self = static_cast<ImageSpaceWidget&>(widget);
 		self.settings = snapshot;
-		self.ApplyChanges();
 	};
 }
 

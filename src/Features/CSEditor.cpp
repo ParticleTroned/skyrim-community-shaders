@@ -25,6 +25,11 @@ namespace
 {
 	constexpr const char* kJsonExtension = ".json";
 
+	bool HasJsonExtension(const std::filesystem::path& path)
+	{
+		return _stricmp(path.extension().string().c_str(), kJsonExtension) == 0;
+	}
+
 	struct OverrideLoadStats
 	{
 		size_t applied = 0;
@@ -94,7 +99,7 @@ namespace
 
 		try {
 			for (const auto& entry : std::filesystem::directory_iterator(folderPath)) {
-				if (!entry.is_regular_file() || entry.path().extension() != ".json")
+				if (!entry.is_regular_file() || !HasJsonExtension(entry.path()))
 					continue;
 
 				json settingsJson;
@@ -200,7 +205,7 @@ bool CSEditor::HasWidgetJsonFiles()
 				logger::warn("[CSEditor] Failed to inspect widget settings file '{}': {}", it->path().string(), entryEc.message());
 				continue;
 			}
-			if (isRegularFile && _stricmp(it->path().extension().string().c_str(), kJsonExtension) == 0) {
+			if (isRegularFile && HasJsonExtension(it->path())) {
 				logger::info("[CSEditor] Detected widget settings in '{}'", widgetSettingsPath.string());
 				s_hasWidgetJsonFiles = true;
 				s_checkedWidgetJsonFiles = true;
@@ -257,6 +262,11 @@ void CSEditor::ToggleEditorWindow()
 
 void CSEditor::ApplySavedEditorOverrides()
 {
+	Widget::BeginWeatherReinitBatch();
+	const SKSE::stl::scope_exit endWeatherReinitBatch([]() noexcept {
+		Widget::EndWeatherReinitBatch();
+	});
+
 	ApplySavedWidgetOverrides<LightingTemplateWidget, RE::BGSLightingTemplate>("Lighting Templates", "lighting-template");
 	ApplySavedWidgetOverrides<ImageSpaceWidget, RE::TESImageSpace>("ImageSpaces", "imagespace");
 	ApplySavedWidgetOverrides<VolumetricLightingWidget, RE::BGSVolumetricLighting>("Volumetric Lighting", "volumetric-lighting");
@@ -298,7 +308,7 @@ void CSEditor::ApplySavedWeatherOverrides()
 	size_t failedCount = 0;
 	try {
 		for (const auto& entry : std::filesystem::directory_iterator(weathersPath)) {
-			if (!entry.is_regular_file() || entry.path().extension() != ".json")
+			if (!entry.is_regular_file() || !HasJsonExtension(entry.path()))
 				continue;
 
 			json weatherData;

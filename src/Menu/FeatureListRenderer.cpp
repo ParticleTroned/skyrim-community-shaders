@@ -30,6 +30,7 @@
 #include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
+#include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 
 namespace
@@ -973,7 +974,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			if (!essentialsFeatureMode && weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
 				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
 				if (ImGui::Checkbox("Pause Weather Overrides", &paused)) {
-					weatherRegistry->SetFeaturePaused(feat->GetShortName(), paused);
+					WeatherManager::GetSingleton()->SetFeaturePaused(
+						feat->GetShortName(), paused);
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text(
@@ -1126,13 +1128,26 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	const std::string restoreDefaultsTextButtonId = std::format("R##RestoreDefaults{}", feat->GetShortName());
 
 	auto& menu = *globals::menu;
+	bool restoreDefaults = false;
 	if (menu.uiIcons.featureSettingRevert.texture) {
-		if (Util::ImageButtonWithFlash(restoreDefaultsButtonId.c_str(), menu.uiIcons.featureSettingRevert.texture, iconSize)) {
-			feat->RestoreDefaultSettings();
-		}
+		restoreDefaults = Util::ImageButtonWithFlash(
+			restoreDefaultsButtonId.c_str(),
+			menu.uiIcons.featureSettingRevert.texture,
+			iconSize);
 	} else {
-		if (Util::ButtonWithFlash(restoreDefaultsTextButtonId.c_str(), iconSize)) {
-			feat->RestoreDefaultSettings();
+		restoreDefaults =
+			Util::ButtonWithFlash(restoreDefaultsTextButtonId.c_str(), iconSize);
+	}
+	if (restoreDefaults) {
+		feat->RestoreDefaultSettings();
+		auto* weatherRegistry =
+			WeatherVariables::GlobalWeatherRegistry::GetSingleton();
+		const auto& featureName = feat->GetShortName();
+		if (weatherRegistry->HasWeatherSupport(featureName)) {
+			weatherRegistry->CaptureFeatureUserSettings(featureName);
+			auto* weatherManager = WeatherManager::GetSingleton();
+			weatherManager->NotifyUserSettingsChanged();
+			weatherManager->RefreshFeatureOverrides();
 		}
 	}
 

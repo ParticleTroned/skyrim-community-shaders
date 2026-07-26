@@ -113,13 +113,11 @@ public:
 	void LoadWeatherValues();
 	void ApplyChanges() override;
 	void RevertChanges() override;
-	void Delete() override;
+	bool Delete() override;
 	UndoRestoreAction CaptureUndoState() const override;
 	UndoRestoreAction CaptureBaselineState() const override;
 	bool HasUnsavedChanges() const override;
 
-	// New methods for per-feature settings
-	void SaveFeatureSettings();
 	void LoadFeatureSettings();
 
 	// Navigation state for opening specific features
@@ -128,6 +126,7 @@ public:
 	void NavigateToFeatureSetting(const std::string& featureName, const std::string& settingName);
 
 private:
+	void MarkSavedState() override;
 	void InitializeInheritFlags();
 	void DrawDALCSettings();
 	void DrawWeatherColorSettings();

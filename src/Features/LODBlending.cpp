@@ -108,7 +108,9 @@ void LODBlending::DrawSettings()
 		}
 	}
 	if (waterReflectionChanged) {
-		WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(GetShortName());
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton()
+			->CaptureFeatureUserSettings(
+				GetShortName(), { kWaterReflectionStrengthSetting });
 	}
 	bool disableTerrainVertexColors = settings.DisableTerrainVertexColors != 0;
 	if (ImGui::Checkbox("Disable Terrain Vertex Colors", &disableTerrainVertexColors))

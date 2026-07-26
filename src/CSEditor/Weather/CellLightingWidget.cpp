@@ -482,7 +482,6 @@ void CellLightingWidget::SaveSettings()
 	js["inherit"]["fogPower"] = settings.inheritFogPower;
 	js["inherit"]["fogMax"] = settings.inheritFogMax;
 	js["inherit"]["lightFadeDistances"] = settings.inheritLightFadeDistances;
-	originalSettings = settings;
 }
 
 void CellLightingWidget::ApplyChanges()
@@ -566,7 +565,6 @@ Widget::UndoRestoreAction CellLightingWidget::CaptureUndoState() const
 	return [snapshot](Widget& widget) {
 		auto& self = static_cast<CellLightingWidget&>(widget);
 		self.settings = snapshot;
-		self.ApplyChanges();
 	};
 }
 

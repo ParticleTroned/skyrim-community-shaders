@@ -10,7 +10,6 @@
 #include "PerfUtils.h"
 #include "ShaderCache.h"
 #include "WeatherManager.h"
-#include "WeatherVariableRegistry.h"
 
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
@@ -2253,38 +2252,10 @@ namespace Util
 	{
 		bool IsWeatherControlled(Feature* feature, const char* settingName)
 		{
-			if (!feature || !settingName) {
+			if (!feature || !settingName)
 				return false;
-			}
-
-			auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			auto* weatherManager = WeatherManager::GetSingleton();
-
-			// Check if this feature has registered weather variables
-			std::string featureName = feature->GetShortName();
-			if (!globalRegistry->HasWeatherSupport(featureName)) {
-				return false;
-			}
-
-			// Still controlled if variable is mid-transition (e.g., transitioning to a weather without an override)
-			if (globalRegistry->IsFeatureVariableInTransition(featureName, settingName)) {
-				return true;
-			}
-
-			// Check if current weather exists
-			auto currentWeathers = weatherManager->GetCurrentWeathers();
-			if (!currentWeathers.currentWeather) {
-				return false;
-			}
-
-			// Load weather settings for this feature
-			json weatherSettings;
-			if (!weatherManager->LoadSettingsFromWeather(currentWeathers.currentWeather, featureName, weatherSettings)) {
-				return false;
-			}
-
-			// Check if this specific setting has an override
-			return weatherSettings.contains(settingName) && !weatherSettings[settingName].is_null();
+			return WeatherManager::GetSingleton()->IsVariableOverrideActive(
+				feature->GetShortName(), settingName);
 		}
 
 		void PushWeatherControlledFrameStyle(bool includeActive)

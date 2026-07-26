@@ -229,7 +229,6 @@ Widget::UndoRestoreAction LightingTemplateWidget::CaptureUndoState() const
 	return [snapshot](Widget& widget) {
 		auto& self = static_cast<LightingTemplateWidget&>(widget);
 		self.settings = snapshot;
-		self.ApplyChanges();
 	};
 }
 
@@ -338,7 +337,6 @@ void LightingTemplateWidget::LoadSettings()
 void LightingTemplateWidget::SaveSettings()
 {
 	js = settings;
-	originalSettings = settings;
 }
 
 bool LightingTemplateWidget::HasUnsavedChanges() const

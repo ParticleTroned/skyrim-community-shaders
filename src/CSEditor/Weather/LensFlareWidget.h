@@ -32,6 +32,7 @@ public:
 	RE::BGSLensFlare* lensFlare = nullptr;
 
 private:
+	void MarkSavedState() override { originalSettings = settings; }
 	void LoadFromGameSettings();
 
 	struct Settings

@@ -70,7 +70,12 @@ namespace
 					continue;
 
 				json currentSettings;
-				feature->SaveSettings(currentSettings);
+				const auto activeVariables =
+					WeatherManager::GetSingleton()->GetActiveVariablesForFeature(featureName);
+				WeatherVariables::GlobalWeatherRegistry::GetSingleton()
+					->SerializeFeatureUserSettings(featureName, activeVariables, [&]() {
+						feature->SaveSettings(currentSettings);
+					});
 
 				const auto overrideSettings =
 					overrideManager->GetMergedOverrideSettings(featureName, json::object());
@@ -950,6 +955,8 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		}
 
+		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
+
 		const auto currentVersion = std::string{ Plugin::VERSION_LABEL };
 		const auto versionIt = settings.find("Version");
 		if (versionIt == settings.end() || !versionIt->is_string() || versionIt->get<std::string>() != currentVersion) {
@@ -1033,12 +1040,24 @@ void State::SaveToJson(
 	settings["Version"] = std::string{ Plugin::VERSION_LABEL };
 
 	// Save feature settings.
+	auto* weatherRegistry =
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 	for (auto* feature : Feature::GetFeatureList()) {
 		// Preserve the last valid settings for features which were disabled, missing,
 		// or incompatible and therefore never loaded into memory.
 		const std::string settingsName = feature->GetName();
 		if (feature->loaded || (a_includeMissingUnloadedFeatures && !settings.contains(settingsName))) {
-			feature->Save(settings);
+			if (feature->loaded) {
+				const auto activeVariables =
+					WeatherManager::GetSingleton()->GetActiveVariablesForFeature(
+						feature->GetShortName());
+				weatherRegistry->SerializeFeatureUserSettings(
+					feature->GetShortName(), activeVariables, [&]() {
+						feature->Save(settings);
+					});
+			} else {
+				feature->Save(settings);
+			}
 		}
 	}
 }
@@ -1109,11 +1128,18 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 
 	if (a_loadFeatureSettings) {
 		// Load feature settings (only for already-loaded features).
+		auto* weatherRegistry =
+			WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (feature->loaded) {
 				feature->Load(settings);
+				if (feature->loaded) {
+					weatherRegistry->CaptureFeatureUserSettings(
+						feature->GetShortName());
+				}
 			}
 		}
+		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
 	}
 }
 

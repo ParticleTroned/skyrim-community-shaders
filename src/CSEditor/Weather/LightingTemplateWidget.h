@@ -77,6 +77,7 @@ public:
 	UndoRestoreAction CaptureBaselineState() const override;
 
 private:
+	void MarkSavedState() override { originalSettings = settings; }
 	void DrawDALCSettings();
 	void DrawBasicSettings();
 	void DrawFogSettings();

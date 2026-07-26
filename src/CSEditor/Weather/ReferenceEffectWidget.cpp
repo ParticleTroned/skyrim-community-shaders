@@ -52,7 +52,7 @@ void ReferenceEffectWidget::DrawWidget()
 			auto editorWindow = EditorWindow::GetSingleton();
 			auto drawFormPicker = [&](const char* label, auto& currentForm, const auto& widgets) {
 				return DrawWithHighlight(label, [&]() {
-					return WeatherUtils::DrawFormPickerCached(label, currentForm, widgets, false, true);
+					return WeatherUtils::DrawFormPickerCached(label, currentForm, widgets, false, true, 450.0f, this);
 				});
 			};
 
@@ -130,7 +130,6 @@ void ReferenceEffectWidget::SaveSettings()
 	js["faceTarget"] = settings.faceTarget;
 	js["attachToCamera"] = settings.attachToCamera;
 	js["inheritRotation"] = settings.inheritRotation;
-	originalSettings = settings;
 }
 
 void ReferenceEffectWidget::ApplyChanges()
@@ -167,7 +166,6 @@ Widget::UndoRestoreAction ReferenceEffectWidget::CaptureUndoState() const
 	return [snapshot](Widget& widget) {
 		auto& self = static_cast<ReferenceEffectWidget&>(widget);
 		self.settings = snapshot;
-		self.ApplyChanges();
 	};
 }
 

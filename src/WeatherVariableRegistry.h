@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cmath>
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -36,6 +38,7 @@ namespace WeatherVariables
 		virtual ~IWeatherVariable() = default;
 		virtual void Lerp(const json& from, const json& to, float factor) = 0;
 		virtual void SaveToJson(json& j) const = 0;
+		virtual void SaveUserSettingsToJson(json& j) const = 0;
 		virtual void LoadFromJson(const json& j) = 0;
 		virtual void SetToDefault() = 0;
 		virtual std::string GetName() const = 0;
@@ -44,8 +47,9 @@ namespace WeatherVariables
 		virtual void CaptureUserSettingsValue() = 0;
 		virtual void SetToUserSettings() = 0;
 		virtual void BeginTransition(const json& fromOverride) = 0;
+		virtual void RebaseTransition(const json& fromOverride) = 0;
 		virtual void EndTransition() = 0;
-		virtual bool IsInTransition() const = 0;
+		virtual bool IsValidJsonValue(const json& value) const = 0;
 	};
 
 	// Templated weather variable for type safety
@@ -94,7 +98,7 @@ namespace WeatherVariables
 			} else if (hasFromOverride) {
 				try {
 					fromVal = from.get<T>();
-				} catch (const nlohmann::json::type_error& e) {
+				} catch (const nlohmann::json::exception& e) {
 					logger::debug("Type error in Lerp 'from' for {}: {}", name, e.what());
 					fromVal = userSettingsValue;
 				}
@@ -105,7 +109,7 @@ namespace WeatherVariables
 			if (hasToOverride) {
 				try {
 					toVal = to.get<T>();
-				} catch (const nlohmann::json::type_error& e) {
+				} catch (const nlohmann::json::exception& e) {
 					logger::debug("Type error in Lerp 'to' for {}: {}", name, e.what());
 					toVal = userSettingsValue;  // Fallback to user settings on error
 				}
@@ -125,7 +129,7 @@ namespace WeatherVariables
 			if (!fromOverride.is_null()) {
 				try {
 					transitionStartValue = fromOverride.get<T>();
-				} catch (const nlohmann::json::type_error& e) {
+				} catch (const nlohmann::json::exception& e) {
 					logger::debug("Type error in BeginTransition for {}: {}", name, e.what());
 					transitionStartValue = *valuePtr;
 				}
@@ -135,12 +139,42 @@ namespace WeatherVariables
 			inTransition = true;
 		}
 
+		void RebaseTransition(const json& fromOverride) override
+		{
+			if (!valuePtr)
+				return;
+
+			if (!fromOverride.is_null() && IsValidJsonValue(fromOverride)) {
+				try {
+					transitionStartValue = fromOverride.get<T>();
+				} catch (const nlohmann::json::exception& e) {
+					logger::debug("Type error in RebaseTransition for {}: {}", name, e.what());
+					transitionStartValue = userSettingsValue;
+				}
+			} else {
+				transitionStartValue = userSettingsValue;
+			}
+			inTransition = true;
+		}
+
 		void EndTransition() override
 		{
 			inTransition = false;
 		}
 
-		bool IsInTransition() const override { return inTransition; }
+		bool IsValidJsonValue(const json& value) const override
+		{
+			if (value.is_null())
+				return false;
+			try {
+				const T decoded = value.get<T>();
+				if constexpr (std::is_floating_point_v<T>)
+					return std::isfinite(decoded);
+				return true;
+			} catch (const nlohmann::json::exception&) {
+				return false;
+			}
+		}
 
 		void SaveToJson(json& j) const override
 		{
@@ -149,12 +183,17 @@ namespace WeatherVariables
 			}
 		}
 
+		void SaveUserSettingsToJson(json& j) const override
+		{
+			j[name] = userSettingsValue;
+		}
+
 		void LoadFromJson(const json& j) override
 		{
 			if (valuePtr && j.contains(name)) {
 				try {
 					*valuePtr = j[name].get<T>();
-				} catch (const nlohmann::json::type_error& e) {
+				} catch (const nlohmann::json::exception& e) {
 					logger::debug("Type error in LoadFromJson for {}: {}", name, e.what());
 					*valuePtr = defaultValue;
 				}
@@ -214,6 +253,14 @@ namespace WeatherVariables
 		float GetMin() const { return minValue; }
 		float GetMax() const { return maxValue; }
 
+		bool IsValidJsonValue(const json& value) const override
+		{
+			if (!WeatherVariable<float>::IsValidJsonValue(value))
+				return false;
+			const float decoded = value.get<float>();
+			return decoded >= minValue && decoded <= maxValue;
+		}
+
 	private:
 		float minValue;
 		float maxValue;
@@ -234,6 +281,16 @@ namespace WeatherVariables
 				})
 		{
 		}
+
+		bool IsValidJsonValue(const json& value) const override
+		{
+			if (!WeatherVariable<float3>::IsValidJsonValue(value))
+				return false;
+			const auto decoded = value.get<float3>();
+			return std::isfinite(decoded.x) &&
+			       std::isfinite(decoded.y) &&
+			       std::isfinite(decoded.z);
+		}
 	};
 
 	class Float4Variable : public WeatherVariable<float4>
@@ -251,6 +308,17 @@ namespace WeatherVariables
 					};
 				})
 		{
+		}
+
+		bool IsValidJsonValue(const json& value) const override
+		{
+			if (!WeatherVariable<float4>::IsValidJsonValue(value))
+				return false;
+			const auto decoded = value.get<float4>();
+			return std::isfinite(decoded.x) &&
+			       std::isfinite(decoded.y) &&
+			       std::isfinite(decoded.z) &&
+			       std::isfinite(decoded.w);
 		}
 	};
 
@@ -372,11 +440,67 @@ namespace WeatherVariables
 			}
 		}
 
-		void BeginTransition(const json& fromWeatherSettings)
+		void CaptureUserSettingsValues(
+			const std::set<std::string>& variableNames)
 		{
 			for (auto& var : variables) {
-				auto [fromVar, _] = ExtractVarJson(var->GetName(), fromWeatherSettings, json{});
+				if (variableNames.contains(var->GetName()))
+					var->CaptureUserSettingsValue();
+			}
+		}
+
+		void SerializeWithUserSettings(
+			const std::set<std::string>& variableNames,
+			const std::function<void()>& serializer)
+		{
+			if (variableNames.empty()) {
+				serializer();
+				return;
+			}
+
+			json runtimeValues;
+			std::vector<IWeatherVariable*> selectedVariables;
+			for (auto& var : variables) {
+				if (!variableNames.contains(var->GetName()))
+					continue;
+				var->SaveToJson(runtimeValues);
+				selectedVariables.push_back(var.get());
+			}
+
+			try {
+				for (auto* var : selectedVariables)
+					var->SetToUserSettings();
+				serializer();
+			} catch (...) {
+				LoadAllFromJson(runtimeValues);
+				throw;
+			}
+			LoadAllFromJson(runtimeValues);
+		}
+
+		void BeginTransition(
+			const json& fromWeatherSettings,
+			const std::set<std::string>& variableNames)
+		{
+			for (auto& var : variables) {
+				if (!variableNames.contains(var->GetName()))
+					continue;
+				auto [fromVar, _] =
+					ExtractVarJson(var->GetName(), fromWeatherSettings, json{});
 				var->BeginTransition(fromVar);
+			}
+		}
+
+		void RebaseTransition(
+			const json& fromWeatherSettings,
+			const std::set<std::string>& variableNames)
+		{
+			for (auto& var : variables) {
+				if (!variableNames.contains(var->GetName()))
+					continue;
+				auto [fromVar, _] =
+					ExtractVarJson(var->GetName(), fromWeatherSettings, json{});
+				var->RebaseTransition(fromVar);
 			}
 		}
 
@@ -387,13 +511,14 @@ namespace WeatherVariables
 			}
 		}
 
-		bool IsVariableInTransition(const std::string& settingName) const
+		void RestoreUserSettings(const std::set<std::string>& variableNames)
 		{
-			for (const auto& var : variables) {
-				if (var->GetName() == settingName)
-					return var->IsInTransition();
+			for (auto& var : variables) {
+				if (!variableNames.contains(var->GetName()))
+					continue;
+				var->EndTransition();
+				var->SetToUserSettings();
 			}
-			return false;
 		}
 
 		const std::vector<std::shared_ptr<IWeatherVariable>>& GetVariables() const { return variables; }
@@ -469,20 +594,17 @@ namespace WeatherVariables
 			pausedFeatures[featureName] = paused;
 		}
 
-		void SaveFeatureToJson(const std::string& featureName, json& j) const
-		{
-			auto it = featureRegistries.find(featureName);
-			if (it != featureRegistries.end()) {
-				it->second->SaveAllToJson(j);
-			}
-		}
-
-		void LoadFeatureFromJson(const std::string& featureName, const json& j)
+		void SerializeFeatureUserSettings(
+			const std::string& featureName,
+			const std::set<std::string>& variableNames,
+			const std::function<void()>& serializer)
 		{
 			auto* registry = GetFeatureRegistry(featureName);
-			if (registry) {
-				registry->LoadAllFromJson(j);
-			}
+			if (registry)
+				registry->SerializeWithUserSettings(
+					variableNames, serializer);
+			else
+				serializer();
 		}
 
 		void CaptureFeatureUserSettings(const std::string& featureName)
@@ -493,12 +615,33 @@ namespace WeatherVariables
 			}
 		}
 
-		void BeginFeatureTransition(const std::string& featureName, const json& fromWeatherSettings)
+		void CaptureFeatureUserSettings(
+			const std::string& featureName,
+			const std::set<std::string>& variableNames)
 		{
 			auto* registry = GetFeatureRegistry(featureName);
-			if (registry) {
-				registry->BeginTransition(fromWeatherSettings);
-			}
+			if (registry)
+				registry->CaptureUserSettingsValues(variableNames);
+		}
+
+		void BeginFeatureTransition(
+			const std::string& featureName,
+			const json& fromWeatherSettings,
+			const std::set<std::string>& variableNames)
+		{
+			auto* registry = GetFeatureRegistry(featureName);
+			if (registry)
+				registry->BeginTransition(fromWeatherSettings, variableNames);
+		}
+
+		void RebaseFeatureTransition(
+			const std::string& featureName,
+			const json& fromWeatherSettings,
+			const std::set<std::string>& variableNames)
+		{
+			auto* registry = GetFeatureRegistry(featureName);
+			if (registry)
+				registry->RebaseTransition(fromWeatherSettings, variableNames);
 		}
 
 		void EndFeatureTransition(const std::string& featureName)
@@ -509,21 +652,13 @@ namespace WeatherVariables
 			}
 		}
 
-		void RestoreFeatureUserSettings(const std::string& featureName)
+		void RestoreFeatureUserSettings(
+			const std::string& featureName,
+			const std::set<std::string>& variableNames)
 		{
 			auto* registry = GetFeatureRegistry(featureName);
-			if (!registry)
-				return;
-
-			registry->EndTransition();
-			for (const auto& variable : registry->GetVariables())
-				variable->SetToUserSettings();
-		}
-
-		bool IsFeatureVariableInTransition(const std::string& featureName, const std::string& settingName)
-		{
-			auto* registry = GetFeatureRegistry(featureName);
-			return registry && registry->IsVariableInTransition(settingName);
+			if (registry)
+				registry->RestoreUserSettings(variableNames);
 		}
 
 	private:

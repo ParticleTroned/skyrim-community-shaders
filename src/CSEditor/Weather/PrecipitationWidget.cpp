@@ -18,13 +18,7 @@ namespace
 
 	void SetSettingValue(PrecipitationData* precipitation, DataID id, SettingValue value)
 	{
-		const auto index = static_cast<uint32_t>(id);
-		if (REL::Module::IsVR()) {
-			precipitation->GetVRRuntimeData().data[index].value = value;
-			return;
-		}
-
-		precipitation->GetRuntimeData().data[index] = value;
+		precipitation->GetSettingRef(id) = value;
 	}
 
 	void SetSetting(PrecipitationData* precipitation, DataID id, float value)
@@ -78,6 +72,10 @@ namespace
 			value > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
 			return BoxSizeDecodeResult::kInvalid;
 		}
+		// A legacy floating-point zero is ambiguous: the original integer union
+		// value may have been flushed to zero before it was serialized.
+		if (value == 0.0)
+			return BoxSizeDecodeResult::kInvalid;
 
 		// Old builds read the integer union member through SETTING_VALUE::f.
 		// Small box sizes were therefore serialized as exact float subnormals.
@@ -100,6 +98,39 @@ namespace
 
 		boxSize = static_cast<uint32_t>(value);
 		return BoxSizeDecodeResult::kMigratedLegacyFloat;
+	}
+
+	bool DecodeUint32(
+		const json& storedValue,
+		uint32_t minimum,
+		uint32_t maximum,
+		uint32_t& value)
+	{
+		std::uint64_t decoded = 0;
+		if (storedValue.is_number_unsigned()) {
+			decoded = storedValue.get<std::uint64_t>();
+		} else if (storedValue.is_number_integer()) {
+			const auto signedValue = storedValue.get<std::int64_t>();
+			if (signedValue < 0)
+				return false;
+			decoded = static_cast<std::uint64_t>(signedValue);
+		} else if (storedValue.is_number_float()) {
+			const double floatValue = storedValue.get<double>();
+			if (!std::isfinite(floatValue) ||
+				std::trunc(floatValue) != floatValue ||
+				floatValue < 0.0 ||
+				floatValue > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+				return false;
+			}
+			decoded = static_cast<std::uint64_t>(floatValue);
+		} else {
+			return false;
+		}
+
+		if (decoded < minimum || decoded > maximum)
+			return false;
+		value = static_cast<uint32_t>(decoded);
+		return true;
 	}
 
 	namespace PrecipitationTab
@@ -190,38 +221,61 @@ void PrecipitationWidget::DrawWidget()
 				BeginScrollableContent("##TextureScroll");
 				if (MatchesAnySearch({ PrecipitationSetting::kNumSubtexturesX, PrecipitationSetting::kNumSubtexturesY })) {
 					ImGui::SeparatorText("Subtextures");
-					int numX = static_cast<int>(settings.numSubtexturesX);
-					int numY = static_cast<int>(settings.numSubtexturesY);
-					if (DrawIfMatchesSearch(PrecipitationSetting::kNumSubtexturesX, [&](const char* label) {
-							return DrawWithHighlight(label, [&]() {
+					int numX = static_cast<int>(std::min(
+						settings.numSubtexturesX,
+						static_cast<uint32_t>(std::numeric_limits<int>::max())));
+					int numY = static_cast<int>(std::min(
+						settings.numSubtexturesY,
+						static_cast<uint32_t>(std::numeric_limits<int>::max())));
+					bool numXActivated = false;
+					const bool numXChanged =
+						DrawIfMatchesSearch(PrecipitationSetting::kNumSubtexturesX, [&](const char* label) {
+							const bool changed = DrawWithHighlight(label, [&]() {
 								return ImGui::InputInt(label, &numX);
 							});
-						})) {
+							numXActivated = ImGui::IsItemActivated();
+							return changed;
+						});
+					if (numXActivated)
 						EditorWindow::GetSingleton()->PushUndoState(this);
+					if (numXChanged)
 						settings.numSubtexturesX = std::max(1, numX);
-					}
-					if (DrawIfMatchesSearch(PrecipitationSetting::kNumSubtexturesY, [&](const char* label) {
-							return DrawWithHighlight(label, [&]() {
+
+					bool numYActivated = false;
+					const bool numYChanged =
+						DrawIfMatchesSearch(PrecipitationSetting::kNumSubtexturesY, [&](const char* label) {
+							const bool changed = DrawWithHighlight(label, [&]() {
 								return ImGui::InputInt(label, &numY);
 							});
-						})) {
+							numYActivated = ImGui::IsItemActivated();
+							return changed;
+						});
+					if (numYActivated)
 						EditorWindow::GetSingleton()->PushUndoState(this);
+					if (numYChanged)
 						settings.numSubtexturesY = std::max(1, numY);
-					}
 				}
 				DrawSearchSectionIfMatches(PrecipitationSetting::kParticleTexture, [&](const char* label) {
 					ImGui::SeparatorText("Texture Path");
 					const bool inputChanged = DrawWithHighlight(label, [&]() {
 						return ImGui::InputText(label, textureBuffer, sizeof(textureBuffer));
 					});
+					if (ImGui::IsItemActivated())
+						EditorWindow::GetSingleton()->PushUndoState(this);
 					std::string_view buf(textureBuffer);
 					if (buf != lastCheckedBuffer) {
 						lastCheckedBuffer = std::string(buf);
 						lastCheckedExists = WeatherUtils::TexturePath::ExistsOnDisk(buf);
 					}
-					if (inputChanged && WeatherUtils::TexturePath::HasDdsExtension(buf) && lastCheckedExists) {
-						EditorWindow::GetSingleton()->PushUndoState(this);
-						settings.particleTexture = lastCheckedBuffer;
+					if (inputChanged) {
+						if (buf.empty()) {
+							settings.particleTexture.clear();
+							lastAppliedTexture.clear();
+							lastAppliedPrecip.reset();
+							lastInvalidTexture.clear();
+						} else if (WeatherUtils::TexturePath::HasDdsExtension(buf) && lastCheckedExists) {
+							settings.particleTexture = lastCheckedBuffer;
+						}
 					}
 					if (settings.particleTexture != buf && !buf.empty()) {
 						if (!WeatherUtils::TexturePath::HasDdsExtension(buf))
@@ -248,62 +302,86 @@ void PrecipitationWidget::LoadSettings()
 
 	if (!js.empty()) {
 		settings = vanillaSettings;
-		try {
-			if (js.contains("gravityVelocity"))
-				settings.gravityVelocity = js["gravityVelocity"];
-			if (js.contains("rotationVelocity"))
-				settings.rotationVelocity = js["rotationVelocity"];
-			if (js.contains("particleSizeX"))
-				settings.particleSizeX = js["particleSizeX"];
-			if (js.contains("particleSizeY"))
-				settings.particleSizeY = js["particleSizeY"];
-			if (js.contains("centerOffsetMin"))
-				settings.centerOffsetMin = js["centerOffsetMin"];
-			if (js.contains("centerOffsetMax"))
-				settings.centerOffsetMax = js["centerOffsetMax"];
-			if (js.contains("startRotationRange"))
-				settings.startRotationRange = js["startRotationRange"];
-			if (js.contains("numSubtexturesX"))
-				settings.numSubtexturesX = js["numSubtexturesX"];
-			if (js.contains("numSubtexturesY"))
-				settings.numSubtexturesY = js["numSubtexturesY"];
-			if (js.contains("particleType"))
-				settings.particleType = js["particleType"];
-			if (js.contains("boxSize")) {
-				uint32_t boxSize = settings.boxSize;
-				const auto decodeResult = DecodeBoxSize(js["boxSize"], boxSize);
-				if (decodeResult != BoxSizeDecodeResult::kInvalid) {
-					settings.boxSize = boxSize;
-					if (decodeResult == BoxSizeDecodeResult::kMigratedLegacyFloat) {
-						logger::info(
-							"Precipitation {}: migrated legacy float boxSize to {}",
-							GetEditorID(), boxSize);
-					}
+		auto readFloat = [&](const char* key, float minimum, float maximum, float& target) {
+			const auto it = js.find(key);
+			if (it == js.end())
+				return;
+			try {
+				if (!it->is_number())
+					throw std::runtime_error("value is not numeric");
+				const double value = it->get<double>();
+				if (!std::isfinite(value) || value < minimum || value > maximum)
+					throw std::runtime_error("value is outside the supported range");
+				target = static_cast<float>(value);
+			} catch (const std::exception& e) {
+				logger::warn(
+					"Precipitation {}: invalid {} override ({}); keeping game value",
+					GetEditorID(), key, e.what());
+			}
+		};
+		auto readUint = [&](const char* key, uint32_t minimum, uint32_t maximum, uint32_t& target) {
+			const auto it = js.find(key);
+			if (it == js.end())
+				return;
+			try {
+				uint32_t value = target;
+				if (!DecodeUint32(*it, minimum, maximum, value))
+					throw std::runtime_error("value is outside the supported integer range");
+				target = value;
+			} catch (const std::exception& e) {
+				logger::warn(
+					"Precipitation {}: invalid {} override ({}); keeping game value",
+					GetEditorID(), key, e.what());
+			}
+		};
+
+		readFloat("gravityVelocity", 0.0f, 10000.0f, settings.gravityVelocity);
+		readFloat("rotationVelocity", 0.0f, 10000.0f, settings.rotationVelocity);
+		readFloat("particleSizeX", 0.0f, 200.0f, settings.particleSizeX);
+		readFloat("particleSizeY", 0.0f, 200.0f, settings.particleSizeY);
+		readFloat("centerOffsetMin", 0.0f, 200.0f, settings.centerOffsetMin);
+		readFloat("centerOffsetMax", 0.0f, 200.0f, settings.centerOffsetMax);
+		readFloat("startRotationRange", 0.0f, 360.0f, settings.startRotationRange);
+		readUint(
+			"numSubtexturesX", 1, static_cast<uint32_t>(std::numeric_limits<int>::max()),
+			settings.numSubtexturesX);
+		readUint(
+			"numSubtexturesY", 1, static_cast<uint32_t>(std::numeric_limits<int>::max()),
+			settings.numSubtexturesY);
+		readUint("particleType", 0, 1, settings.particleType);
+		if (const auto boxSizeIt = js.find("boxSize"); boxSizeIt != js.end()) {
+			uint32_t boxSize = settings.boxSize;
+			const auto decodeResult = DecodeBoxSize(*boxSizeIt, boxSize);
+			if (decodeResult != BoxSizeDecodeResult::kInvalid && boxSize <= 1000) {
+				settings.boxSize = boxSize;
+				if (decodeResult == BoxSizeDecodeResult::kMigratedLegacyFloat) {
+					logger::info(
+						"Precipitation {}: migrated legacy float boxSize to {}",
+						GetEditorID(), boxSize);
+				}
+			} else {
+				logger::warn(
+					"Precipitation {}: invalid boxSize override; keeping game value {}",
+					GetEditorID(), settings.boxSize);
+			}
+		}
+		readFloat("particleDensity", 0.0f, 1000.0f, settings.particleDensity);
+
+		if (const auto textureIt = js.find("particleTexture"); textureIt != js.end()) {
+			if (!textureIt->is_string()) {
+				logger::warn("Precipitation {}: particleTexture is not a string, skipping", GetEditorID());
+			} else {
+				const auto texPath = textureIt->get<std::string>();
+				if (texPath.empty()) {
+					settings.particleTexture.clear();
+				} else if (!WeatherUtils::TexturePath::HasDdsExtension(texPath)) {
+					logger::warn("Precipitation {}: ignoring malformed texture path '{}'", GetEditorID(), texPath);
 				} else {
-					logger::warn(
-						"Precipitation {}: invalid boxSize override; keeping game value {}",
-						GetEditorID(), settings.boxSize);
+					settings.particleTexture = texPath;
+					if (!WeatherUtils::TexturePath::ExistsOnDisk(texPath))
+						logger::warn("Precipitation {}: saved texture path '{}' not found in game resources", GetEditorID(), texPath);
 				}
 			}
-			if (js.contains("particleDensity"))
-				settings.particleDensity = js["particleDensity"];
-			if (js.contains("particleTexture")) {
-				if (!js["particleTexture"].is_string()) {
-					logger::warn("Precipitation {}: particleTexture is not a string, skipping", GetEditorID());
-				} else {
-					auto texPath = js["particleTexture"].get<std::string>();
-					if (!WeatherUtils::TexturePath::HasDdsExtension(texPath)) {
-						logger::warn("Precipitation {}: ignoring malformed texture path '{}'", GetEditorID(), texPath);
-					} else {
-						settings.particleTexture = texPath;
-						if (!WeatherUtils::TexturePath::ExistsOnDisk(texPath))
-							logger::warn("Precipitation {}: saved texture path '{}' not found in game resources", GetEditorID(), texPath);
-					}
-				}
-			}
-		} catch (const std::exception& e) {
-			logger::error("Precipitation {}: Failed to load from JSON: {}", GetEditorID(), e.what());
-			settings = vanillaSettings;
 		}
 	} else {
 		settings = vanillaSettings;
@@ -350,7 +428,6 @@ void PrecipitationWidget::SaveSettings()
 	js["boxSize"] = settings.boxSize;
 	js["particleDensity"] = settings.particleDensity;
 	js["particleTexture"] = settings.particleTexture;
-	originalSettings = settings;
 }
 
 void PrecipitationWidget::ApplyChanges()
@@ -456,7 +533,6 @@ Widget::UndoRestoreAction PrecipitationWidget::CaptureUndoState() const
 		strncpy_s(self.textureBuffer, sizeof(self.textureBuffer), self.settings.particleTexture.c_str(), _TRUNCATE);
 		self.lastAppliedTexture.clear();
 		self.lastAppliedPrecip.reset();
-		self.ApplyChanges();
 	};
 }
 

@@ -177,7 +177,6 @@ void VolumetricLightingWidget::SaveSettings()
 	js["phaseFunctionContribution"] = settings.phaseFunctionContribution;
 	js["phaseFunctionScattering"] = settings.phaseFunctionScattering;
 	js["samplingRangeFactor"] = settings.samplingRangeFactor;
-	originalSettings = settings;
 }
 
 void VolumetricLightingWidget::ApplyChanges()
@@ -214,7 +213,6 @@ Widget::UndoRestoreAction VolumetricLightingWidget::CaptureUndoState() const
 	return [snapshot](Widget& widget) {
 		auto& self = static_cast<VolumetricLightingWidget&>(widget);
 		self.settings = snapshot;
-		self.ApplyChanges();
 	};
 }
 

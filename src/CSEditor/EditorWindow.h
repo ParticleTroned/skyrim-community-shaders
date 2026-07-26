@@ -63,6 +63,7 @@ public:
 
 	// Owned by EditorWindow, created on demand in ShowObjectsWindow(), released in destructor
 	std::unique_ptr<CellLightingWidget> currentCellLightingWidget;
+	std::unordered_map<std::string, std::unique_ptr<CellLightingWidget>> cachedCellLightingWidgets;
 
 	LightEditor lightEditor;
 
@@ -147,6 +148,7 @@ public:
 	{
 		std::string widgetIdentity;
 		std::string widgetLabel;
+		bool restoreRuntime = false;
 		Widget::UndoRestoreAction restore;
 	};
 	std::vector<UndoState> undoStack;
@@ -236,6 +238,7 @@ private:
 	void SaveAll();
 	void SaveSettings();
 	void LoadSettings();
+	void SanitizeSettings();
 	void ShowSettingsWindow();
 	void Load();
 	bool resourcesInitialized = false;

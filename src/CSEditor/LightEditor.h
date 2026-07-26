@@ -3,6 +3,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
+
 struct LightEditor
 {
 	bool disableInvSqLights = false;
@@ -28,16 +30,24 @@ private:
 		bool isAttached = false;
 		bool isOther = false;
 		bool isSpotlight = false;
+		bool isShadow = false;
 		bool hasPosition = false;
 		RE::NiPoint3 position = {};
 
 		bool operator==(const LightInfo& other) const noexcept
 		{
-			if (isOther || other.isOther)
-				return isOther == other.isOther && ptr == other.ptr;
-			if (isAttached || other.isAttached)
-				return isAttached == other.isAttached && ptr == other.ptr;
-			return isRef == other.isRef && id == other.id && index == other.index;
+			if (isRef != other.isRef ||
+				isAttached != other.isAttached ||
+				isOther != other.isOther) {
+				return false;
+			}
+
+			// References and attached bulbs survive a 3D rebuild by owner identity. The
+			// NiLight pointer does not: Disable/Enable recreates it.
+			if (isRef || isAttached)
+				return id == other.id && index == other.index;
+
+			return ptr == other.ptr;
 		}
 	};
 
@@ -108,6 +118,7 @@ private:
 	LightDisplayInfo displayInfo = {};
 	LightSettings original = {};
 	LightSettings current = {};
+	float inverseSquareRadius = 0.0f;
 
 	struct LPLightInfo
 	{
@@ -116,11 +127,17 @@ private:
 		std::string ownerModelPath;
 		std::string ownerEditorId;
 		bool isLPLight = false;
+		bool ignoreScale = false;
+		bool hasAuthoredState = false;
+		float fadeFactor = 1.0f;
+		float radiusFactor = 1.0f;
+		float sizeFactor = 1.0f;
+		ISLCommon::RuntimeLightDataExt runtimeSnapshot = {};
 	};
 
 	LPLightInfo lpInfo;
 	RE::NiPointer<RE::NiLight> activeNiLight;
-	RE::TESObjectREFR* activeRefr = nullptr;
+	RE::ObjectRefHandle activeRefr;
 	RE::TESObjectLIGH* activeLigh = nullptr;
 	bool activeIsRef = false;
 
@@ -131,10 +148,17 @@ private:
 	static LPLightInfo ParseLPLightName(const std::string& name);
 	static std::string UpdateLPFlags(const std::string& existingFlags, bool inverseSquare, bool linear);
 	static bool MatchesLPFilters(const nlohmann::json& lightEntry, RE::TESObjectREFR* refr);
-	static bool TryGetJsonVec3(
-		const nlohmann::json& data,
-		const char* key,
-		std::array<float, 3>& value);
+	bool LoadLightPlacerConfig(
+		nlohmann::json& configArray,
+		std::filesystem::path& filePath) const;
+	nlohmann::json* FindUniqueLightPlacerData(
+		nlohmann::json& configArray,
+		RE::TESObjectREFR* refr) const;
+	bool LoadLightPlacerAuthoredState(RE::TESObjectREFR* refr);
+	float GetLightPlacerFadeFactor() const;
+	float GetLightPlacerRadiusFactor() const;
+	float GetLightPlacerSizeFactor() const;
+	void ApplyCurrentRuntimeData(ISLCommon::RuntimeLightDataExt& runtimeData) const;
 	bool SaveToLightPlacer();
 
 	void UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight);

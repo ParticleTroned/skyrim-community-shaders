@@ -176,7 +176,9 @@ public:
 	void Load(bool showNotification = true, bool applyChanges = true);
 	bool HasSavedFile() const;
 
-	virtual void Delete();
+	// Returns true when the saved file is absent after the operation. Runtime
+	// state is reset only after the filesystem operation has succeeded.
+	virtual bool Delete();
 	virtual void LoadSettings() = 0;
 	virtual void SaveSettings() = 0;
 	virtual void ApplyChanges() = 0;
@@ -185,6 +187,8 @@ public:
 	virtual bool HasUnsavedChanges() const { return false; }
 
 	using UndoRestoreAction = std::function<void(Widget&)>;
+	// Restore actions update editor-owned state only. EditorWindow decides whether
+	// the captured edit was auto-applied and mirrors the undo to runtime once.
 	virtual UndoRestoreAction CaptureUndoState() const { return {}; }
 	virtual UndoRestoreAction CaptureBaselineState() const { return {}; }
 	void RememberBaseline();
@@ -194,6 +198,9 @@ public:
 	static void ForceWeatherReinit(RE::TESWeather* weather);
 	// Reinitialize the current sky weather (use when the specific weather is unknown).
 	static void ForceCurrentWeatherReinit();
+	// Coalesce repeated active-weather reinitializations during startup override loading.
+	static void BeginWeatherReinitBatch();
+	static void EndWeatherReinitBatch();
 
 	// Override to suppress per-frame auto-apply and show a manual-apply warning in the header.
 	virtual bool RequiresManualApply() const { return false; }
@@ -303,6 +310,9 @@ protected:
 	mutable std::string cachedSaveKey;
 	mutable bool isFallbackEditorID = false;
 	bool suppressPersistentApply = false;
+	// SaveSettings serializes only. Advance the widget's clean baseline after
+	// the atomic replacement has actually succeeded.
+	virtual void MarkSavedState() = 0;
 	virtual void DrawMenu();
 	std::string GetFolderName() const;
 
@@ -340,5 +350,6 @@ public:
 	const char* GetWidgetTypeName() const override { return ""; }
 	void LoadSettings() override {}
 	void SaveSettings() override {}
+	void MarkSavedState() override {}
 	void ApplyChanges() override {}
 };

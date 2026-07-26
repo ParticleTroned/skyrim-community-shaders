@@ -334,23 +334,73 @@ bool Feature::ReapplyOverrideSettings()
 		return false;
 	}
 
-	// Delete user override file to restore original override behavior
-	overrideManager->DeleteUserOverride(featureName);
-
 	// Get base settings and apply overrides fresh
-	json featureJson;
-	SaveSettings(featureJson);
+	json originalSettings;
+	auto* weatherRegistry =
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton();
+	auto* weatherManager = WeatherManager::GetSingleton();
+	const bool hasWeatherSupport =
+		weatherRegistry->HasWeatherSupport(featureName);
+	const auto synchronizeWeatherBaseline = [&]() {
+		if (!hasWeatherSupport)
+			return;
+		weatherRegistry->CaptureFeatureUserSettings(featureName);
+		weatherManager->NotifyUserSettingsChanged();
+		weatherManager->RefreshFeatureOverrides();
+	};
+	const auto activeVariables =
+		weatherManager->GetActiveVariablesForFeature(featureName);
+	weatherRegistry->SerializeFeatureUserSettings(featureName, activeVariables, [&]() {
+		SaveSettings(originalSettings);
+	});
 
 	// Apply overrides to the settings (without user customizations)
+	json featureJson = originalSettings;
 	size_t appliedCount = overrideManager->ReapplyFeatureOverrides(featureName, featureJson);
 
-	if (appliedCount > 0) {
-		// Load the override settings back into the feature
+	if (appliedCount == 0)
+		return false;
+
+	const auto restoreOriginalSettings = [&]() noexcept {
+		try {
+			LoadSettings(originalSettings);
+			synchronizeWeatherBaseline();
+		} catch (const std::exception& e) {
+			logger::error(
+				"Failed to restore settings after applying overrides for {}: {}",
+				featureName, e.what());
+		} catch (...) {
+			logger::error(
+				"Failed to restore settings after applying overrides for {}",
+				featureName);
+		}
+	};
+
+	try {
 		LoadSettings(featureJson);
-		return true;
+	} catch (const std::exception& e) {
+		logger::warn(
+			"Failed to validate reapplied override settings for {}: {}",
+			featureName, e.what());
+		restoreOriginalSettings();
+		return false;
+	} catch (...) {
+		logger::warn(
+			"Failed to validate reapplied override settings for {}",
+			featureName);
+		restoreOriginalSettings();
+		return false;
 	}
 
-	return false;
+	// Do not discard the user's persisted customizations unless an override was
+	// successfully prepared and the file can actually be removed.
+	if (!overrideManager->DeleteUserOverride(featureName)) {
+		restoreOriginalSettings();
+		return false;
+	}
+
+	synchronizeWeatherBaseline();
+	return true;
 }
 
 void Feature::DrawUnloadedUI()

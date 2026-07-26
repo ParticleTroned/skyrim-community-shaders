@@ -34,6 +34,7 @@ public:
 	RE::BGSShaderParticleGeometryData* precipitation = nullptr;
 
 private:
+	void MarkSavedState() override { originalSettings = settings; }
 	void LoadFromGameSettings();
 
 	// Swaps the live precipitation particle texture (Sky → precip → BSParticleShaderProperty::particleShaderTexture).

@@ -26,6 +26,9 @@ namespace
 		return snapshots;
 	}
 
+	std::uint32_t weatherReinitBatchDepth = 0;
+	RE::TESWeather* pendingWeatherReinit = nullptr;
+
 	void ReinitializeActiveWeather(RE::TESWeather* weather)
 	{
 		auto* sky = globals::game::sky;
@@ -47,10 +50,10 @@ namespace
 
 void Widget::Save()
 {
-	SaveSettings();
-	const auto file = GetSaveFilePath();
-
 	try {
+		SaveSettings();
+		const auto file = GetSaveFilePath();
+
 		// Validate that we have valid JSON to write
 		if (js.is_null()) {
 			logger::warn("{}: Cannot save - JSON data is null", GetEditorID());
@@ -63,6 +66,7 @@ void Widget::Save()
 			return;
 		}
 
+		MarkSavedState();
 		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
 
 	} catch (const nlohmann::json::exception& e) {
@@ -154,36 +158,69 @@ void Widget::Load(bool showNotification, bool applyChanges)
 	}
 }
 
-void Widget::Delete()
+bool Widget::Delete()
 {
-	std::string filePath = GetSaveFilePath();
-
-	if (!std::filesystem::exists(filePath)) {
-		return;
-	}
-
-	try {
-		std::filesystem::remove(filePath);
-
-		js = json();
-
-		// Reload settings from vanilla/mod defaults
-		LoadSettings();
-
-		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
-
+	const auto filePath = std::filesystem::path(GetSaveFilePath());
+	std::error_code ec;
+	const bool fileExists = std::filesystem::exists(filePath, ec);
+	if (ec) {
+		logger::warn(
+			"Failed to inspect settings file before deletion ({}): {}",
+			filePath.string(), ec.message());
 		EditorWindow::GetSingleton()->ShowNotification(
-			std::format("Deleted {} - reverted to vanilla values", GetEditorID()),
-			Util::Colors::GetSuccess(),
+			std::format("Could not inspect saved settings for {}", GetEditorID()),
+			Util::Colors::GetError(),
 			3.0f);
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error deleting settings file ({}) : {}\n", filePath, e.what());
+		return false;
 	}
+
+	if (fileExists && !std::filesystem::remove(filePath, ec) && ec) {
+		logger::warn(
+			"Failed to delete settings file ({}): {}",
+			filePath.string(), ec.message());
+		EditorWindow::GetSingleton()->ShowNotification(
+			std::format("Could not delete saved settings for {}", GetEditorID()),
+			Util::Colors::GetError(),
+			3.0f);
+		return false;
+	}
+
+	js = json();
+	try {
+		// Reload settings from vanilla/mod defaults only after persistence is gone.
+		LoadSettings();
+	} catch (const std::exception& e) {
+		logger::warn(
+			"Deleted settings file ({}), but failed to restore game values: {}",
+			filePath.string(), e.what());
+		EditorWindow::GetSingleton()->ShowNotification(
+			std::format("Deleted {}, but failed to restore game values", GetEditorID()),
+			Util::Colors::GetError(),
+			3.0f);
+		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
+		return true;
+	}
+
+	EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
+	EditorWindow::GetSingleton()->ShowNotification(
+		std::format("Deleted {} - reverted to vanilla values", GetEditorID()),
+		Util::Colors::GetSuccess(),
+		3.0f);
+	return true;
 }
 
 bool Widget::HasSavedFile() const
 {
-	return std::filesystem::exists(GetSaveFilePath());
+	const auto filePath = std::filesystem::path(GetSaveFilePath());
+	std::error_code ec;
+	const bool exists = std::filesystem::exists(filePath, ec);
+	if (ec) {
+		logger::warn(
+			"Failed to inspect settings file ({}): {}",
+			filePath.string(), ec.message());
+		return false;
+	}
+	return exists;
 }
 
 bool Widget::CanApplyPersistentChanges() const
@@ -242,8 +279,7 @@ void Widget::DrawDeleteConfirmationModal(const char* popupId)
 
 		ImGui::SetCursorPosX(cursorX);
 
-		if (ImGui::Button("Yes, Delete", ImVec2(buttonWidth, 0))) {
-			Delete();
+		if (ImGui::Button("Yes, Delete", ImVec2(buttonWidth, 0)) && Delete()) {
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::SameLine();
@@ -296,6 +332,15 @@ bool Widget::BeginWidgetWindow()
 
 void Widget::ForceWeatherReinit(RE::TESWeather* weather)
 {
+	auto* sky = globals::game::sky;
+	if (!weather || !sky || sky->currentWeather != weather)
+		return;
+
+	if (weatherReinitBatchDepth != 0) {
+		pendingWeatherReinit = weather;
+		return;
+	}
+
 	ReinitializeActiveWeather(weather);
 }
 
@@ -303,7 +348,28 @@ void Widget::ForceCurrentWeatherReinit()
 {
 	auto* sky = globals::game::sky;
 	if (sky)
-		ReinitializeActiveWeather(sky->currentWeather);
+		ForceWeatherReinit(sky->currentWeather);
+}
+
+void Widget::BeginWeatherReinitBatch()
+{
+	weatherReinitBatchDepth++;
+}
+
+void Widget::EndWeatherReinitBatch()
+{
+	if (weatherReinitBatchDepth == 0) {
+		logger::warn("Unbalanced weather reinitialization batch");
+		return;
+	}
+
+	weatherReinitBatchDepth--;
+	if (weatherReinitBatchDepth != 0)
+		return;
+
+	auto* weather = pendingWeatherReinit;
+	pendingWeatherReinit = nullptr;
+	ReinitializeActiveWeather(weather);
 }
 
 void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSaveLoadRevert, bool showForceWeather, RE::TESWeather* weather)

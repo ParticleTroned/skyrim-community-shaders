@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace
 {
@@ -127,11 +128,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void IBL::DrawSettings()
 {
 	SanitizeSettings(settings);
-	bool recaptureWeatherBaseline = false;
+	std::set<std::string> changedWeatherBaselines;
 	bool enableIBL = settings.EnableIBL != 0;
 	if (Util::WeatherUI::Checkbox("Enable", this, "EnableIBL", &enableIBL)) {
 		settings.EnableIBL = enableIBL ? 1u : 0u;
-		recaptureWeatherBaseline = true;
+		changedWeatherBaselines.insert("EnableIBL");
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system.");
@@ -153,23 +154,28 @@ void IBL::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
-	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f");
+	if (Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f"))
+		changedWeatherBaselines.insert("EnvIBLScale");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Intensity multiplier for the environment IBL (from Dynamic Cubemaps).\nControls how strongly the surrounding environment contributes to ambient lighting.");
 	}
-	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Sky IBL Scale", this, "SkyIBLScale", &settings.SkyIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f");
+	if (Util::WeatherUI::SliderFloat("Sky IBL Scale", this, "SkyIBLScale", &settings.SkyIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f"))
+		changedWeatherBaselines.insert("SkyIBLScale");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Intensity multiplier for the sky IBL (from the game's native reflections cubemap).\nControls how strongly the sky contributes to ambient lighting.");
 	}
-	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Env IBL Saturation", this, "EnvIBLSaturation", &settings.EnvIBLSaturation, 0.0f, 2.0f, "%.2f");
+	if (Util::WeatherUI::SliderFloat("Env IBL Saturation", this, "EnvIBLSaturation", &settings.EnvIBLSaturation, 0.0f, 2.0f, "%.2f"))
+		changedWeatherBaselines.insert("EnvIBLSaturation");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Color saturation of the environment IBL.\nLower values produce more neutral ambient light; higher values produce more vivid color.");
 	}
-	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Sky IBL Saturation", this, "SkyIBLSaturation", &settings.SkyIBLSaturation, 0.0f, 2.0f, "%.2f");
+	if (Util::WeatherUI::SliderFloat("Sky IBL Saturation", this, "SkyIBLSaturation", &settings.SkyIBLSaturation, 0.0f, 2.0f, "%.2f"))
+		changedWeatherBaselines.insert("SkyIBLSaturation");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Color saturation of the sky IBL.\nLower values produce more neutral ambient light; higher values produce more vivid color.");
 	}
-	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("DALC Amount", this, "DALCAmount", &settings.DALCAmount, 0.0f, 1.0f, "%.2f");
+	if (Util::WeatherUI::SliderFloat("DALC Amount", this, "DALCAmount", &settings.DALCAmount, 0.0f, 1.0f, "%.2f"))
+		changedWeatherBaselines.insert("DALCAmount");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Blends the IBL brightness toward the game's vanilla ambient (DALC) level.\n"
@@ -211,7 +217,8 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Uses pre-baked static IBL cubemap textures for objects rendered outside the game world (e.g. inventory items, loading screens).");
 	}
-	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Fog Mix", this, "FogAmount", &settings.FogAmount, 0.0f, 1.0f, "%.2f");
+	if (Util::WeatherUI::SliderFloat("Fog Mix", this, "FogAmount", &settings.FogAmount, 0.0f, 1.0f, "%.2f"))
+		changedWeatherBaselines.insert("FogAmount");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Blends the fog color toward the IBL ambient color.\n0 = vanilla fog, 1 = fog fully tinted by IBL.");
 	}
@@ -228,8 +235,11 @@ void IBL::DrawSettings()
 	}
 	ImGui::EndDisabled();
 
-	if (settings.CaptureWeatherBaselineOnSliderChange && recaptureWeatherBaseline) {
-		WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(GetShortName());
+	if (settings.CaptureWeatherBaselineOnSliderChange &&
+		!changedWeatherBaselines.empty()) {
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton()
+			->CaptureFeatureUserSettings(
+				GetShortName(), changedWeatherBaselines);
 	}
 }
 
@@ -239,6 +249,11 @@ void IBL::DrawEssentialSettings()
 	bool enableIBL = settings.EnableIBL != 0;
 	if (Util::WeatherUI::Checkbox("Enable", this, "EnableIBL", &enableIBL)) {
 		settings.EnableIBL = enableIBL ? 1u : 0u;
+		if (settings.CaptureWeatherBaselineOnSliderChange) {
+			WeatherVariables::GlobalWeatherRegistry::GetSingleton()
+				->CaptureFeatureUserSettings(
+					GetShortName(), { "EnableIBL" });
+		}
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system.");

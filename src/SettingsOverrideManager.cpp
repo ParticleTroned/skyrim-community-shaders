@@ -1087,7 +1087,14 @@ bool SettingsOverrideManager::DeleteUserOverride(const std::string& featureName)
 	auto userFilePath = GetUserOverridesDirectory() / (featureName + ".user.json");
 
 	std::error_code ec;
-	if (!std::filesystem::exists(userFilePath, ec)) {
+	const bool fileExists = std::filesystem::exists(userFilePath, ec);
+	if (ec) {
+		logger::info(
+			"Failed to inspect user override file before deletion ({}): {}",
+			userFilePath.string(), ec.message());
+		return false;
+	}
+	if (!fileExists) {
 		return true;  // Already doesn't exist
 	}
 

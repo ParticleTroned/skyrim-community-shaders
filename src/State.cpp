@@ -564,6 +564,8 @@ void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
 	saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
+	if (globals::shaderCache)
+		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
 	saveLoadSafeModeActive.store(true, std::memory_order_release);
 	persistentMutationBlocked.store(true, std::memory_order_release);
 }
@@ -576,6 +578,8 @@ void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCoun
 		saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
 	}
 	StoreMax(saveLoadSafeModeEndFrame, endFrame);
+	if (globals::shaderCache)
+		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
 	saveLoadSafeModeActive.store(true, std::memory_order_release);
 	persistentMutationBlocked.store(true, std::memory_order_release);
 }
@@ -600,6 +604,7 @@ void State::UpdateSaveLoadSafeMode()
 {
 	const uint32_t currentFrame = std::max(frameCount, 1u);
 	bool safeModeActive = saveLoadSafeModeActive.load(std::memory_order_acquire);
+	const bool wasSafeModeActive = safeModeActive;
 
 	bool engineSaveLoadActive = false;
 	if (auto* saveLoad = RE::BGSSaveLoadGame::GetSingleton()) {
@@ -613,6 +618,8 @@ void State::UpdateSaveLoadSafeMode()
 
 	if (engineSaveLoadActive) {
 		if (!safeModeActive) {
+			if (globals::shaderCache)
+				globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
 			saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
 		}
 		StoreMax(saveLoadSafeModeEndFrame, currentFrame + kSaveLoadSafeModeGraceFrames);
@@ -647,6 +654,9 @@ void State::UpdateSaveLoadSafeMode()
 
 	const bool mutationGraceActive = mutationBlockEndFrame != 0 && currentFrame < mutationBlockEndFrame;
 	persistentMutationBlocked.store(safeModeActive || mutationGraceActive, std::memory_order_release);
+
+	if (wasSafeModeActive && !safeModeActive && globals::shaderCache)
+		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(false);
 }
 
 void State::Reset()

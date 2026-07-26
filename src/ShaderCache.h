@@ -2,8 +2,13 @@
 
 #include <atomic>
 #include <BS_thread_pool.hpp>
+#include <condition_variable>
+#include <deque>
 #include <efsw/efsw.hpp>
+#include <mutex>
+#include <thread>
 #include <vector>
+#include <wrl/client.h>
 
 #include "Utils/CacheInvalidation.h"
 #include "Utils/ContentHash.h"
@@ -418,6 +423,13 @@ namespace SIE
 
 		bool IsDiskCache() const;
 		void SetDiskCache(bool value);
+		void PersistCompiledShaderBlob(
+			ID3DBlob* a_shaderBlob,
+			const std::wstring& a_diskPath,
+			const std::filesystem::path& a_shaderPath,
+			const Util::ContentHash::Hash128& a_compileStateDigest,
+			uint64_t a_diskCacheGeneration);
+		void SetSaveLoadDiskPersistenceBlocked(bool a_blocked);
 		void DeleteDiskCache();
 		void ValidateDiskCache();
 		void CommitFeatureSetChange();
@@ -429,11 +441,16 @@ namespace SIE
 		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
 		const std::vector<CacheMismatch>& GetPreviousCacheMismatches() const { return previousCacheMismatches; }
 		bool HasFeatureSetChanges() const { return featureSetChanged; }
-		bool HasFeatureSetRevertPending() const { return featureSetRevertPending; }
+		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_acquire); }
 		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp; }
 		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable; }
-		bool IsDiskCacheHeld() const { return diskCacheHeld; }
-		bool IsDiskCacheActive() const { return isDiskCache && !diskCacheHeld && !featureSetRevertPending; }
+		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_acquire); }
+		bool IsDiskCacheActive() const
+		{
+			return isDiskCache.load(std::memory_order_acquire) &&
+			       !diskCacheHeld.load(std::memory_order_acquire) &&
+			       !featureSetRevertPending.load(std::memory_order_acquire);
+		}
 		void AcceptCacheRebuild();
 
 		bool IsSkipUnchangedShaders() const;
@@ -829,9 +846,18 @@ namespace SIE
 				return key < other.key;
 			}
 		};
+		struct DeferredDiskWrite
+		{
+			Microsoft::WRL::ComPtr<ID3DBlob> shaderBlob;
+			std::wstring diskPath;
+			std::filesystem::path shaderPath;
+			Util::ContentHash::Hash128 compileStateDigest;
+			uint64_t diskCacheGeneration = 0;
+		};
 		ShaderCache();
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
+		void ProcessDeferredDiskWrites(std::stop_token stoken);
 		bool BackupActiveDiskCache();
 		void DeleteActiveDiskCache();
 		void RefreshPreviousDiskCacheInfo();
@@ -848,10 +874,10 @@ namespace SIE
 		ShaderMapArray<RE::BSGraphics::ComputeShader> computeShaders;
 
 		bool isEnabled = true;
-		bool isDiskCache = true;
-		bool diskCacheHeld = false;
+		std::atomic_bool isDiskCache{ true };
+		std::atomic_bool diskCacheHeld{ false };
 		bool featureSetChanged = false;
-		bool featureSetRevertPending = false;
+		std::atomic_bool featureSetRevertPending{ false };
 		bool featureSetCacheBackedUp = false;
 		bool previousDiskCacheAvailable = false;
 		std::vector<CacheMismatch> cacheMismatches;
@@ -877,6 +903,14 @@ namespace SIE
 		std::mutex modifiedMapMutex;                                                              // guard for modifiedShaderMap
 		ankerl::unordered_dense::map<std::string, std::set<hlslRecord>> hlslToShaderMap{};        // hashmap linking specific hlsl files to shader keys in shaderMap
 		std::mutex hlslMapMutex;                                                                  // guard for hlslToShaderMap
+
+		std::deque<DeferredDiskWrite> deferredDiskWrites;
+		std::mutex deferredDiskWritesMutex;
+		std::condition_variable_any deferredDiskWritesCV;
+		std::jthread deferredDiskWriterJthread;
+		std::atomic_bool acceptDeferredDiskWrites{ true };
+		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
+		bool deferredManifestFlushPending = false;  // guarded by deferredDiskWritesMutex
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

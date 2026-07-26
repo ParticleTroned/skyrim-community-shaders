@@ -1979,13 +1979,12 @@ namespace SIE
 				strippedShaderBlob->Release();
 			}
 
-			if ((useDiskCache || cache.IsDiskCacheActive()) && !IsSaveLoadSafeModeActive())
-				SaveShaderBlobToDisk(
-					shaderBlob,
-					diskPath,
-					path,
-					compileState.digest,
-					diskCacheGeneration);
+			cache.PersistCompiledShaderBlob(
+				shaderBlob,
+				diskPath,
+				path,
+				compileState.digest,
+				diskCacheGeneration);
 			cache.AddCompletedShader(
 				shaderClass,
 				shader,
@@ -2447,19 +2446,41 @@ namespace SIE
 
 	ShaderCache::~ShaderCache()
 	{
-		Clear();
 		StopFileWatcher();
-		// Signal management thread to stop dispatching; pool workers observe the same
-		// stop token and will not pick up new tasks after current compilations finish.
-		HANDLE managementHandle = managementJthread.native_handle();
+
+		// Stop dispatch before closing deferred-persistence intake. This lets
+		// compilations already in flight enqueue their completed blobs first.
 		managementJthread.request_stop();
-		// Purge unstarted tasks so we only wait for compilations already in flight.
+		if (managementJthread.joinable())
+			managementJthread.join();
 		compilationPool.purge();
 		if (!compilationPool.wait_for(std::chrono::milliseconds(1000))) {
-			logger::info("Tasks still running despite request to stop; killing management thread {}!", GetThreadId(managementHandle));
-			WaitForSingleObject(managementHandle, 1000);
-			TerminateThread(managementHandle, 0);
+			logger::info("Shader compilation tasks are still finishing during cache shutdown");
+			compilationPool.wait();
 		}
+
+		acceptDeferredDiskWrites.store(false, std::memory_order_release);
+		// Shader blobs are independent of the savegame. Once all compilation
+		// producers are stopped, finish persisting them even if teardown began
+		// before the load grace window expired.
+		SetSaveLoadDiskPersistenceBlocked(false);
+		if (deferredDiskWriterJthread.joinable()) {
+			deferredDiskWriterJthread.request_stop();
+			deferredDiskWritesCV.notify_all();
+			deferredDiskWriterJthread.join();
+		}
+		{
+			std::lock_guard lock{ deferredDiskWritesMutex };
+			if (!deferredDiskWrites.empty()) {
+				logger::warn(
+					"Discarding {} deferred shader-cache writes during shutdown",
+					deferredDiskWrites.size());
+			}
+			deferredDiskWrites.clear();
+			deferredManifestFlushPending = false;
+		}
+
+		Clear();
 		FlushShaderCacheManifest();
 	}
 
@@ -2874,12 +2895,82 @@ namespace SIE
 
 	bool ShaderCache::IsDiskCache() const
 	{
-		return isDiskCache;
+		return isDiskCache.load(std::memory_order_acquire);
 	}
 
 	void ShaderCache::SetDiskCache(bool value)
 	{
-		isDiskCache = value;
+		std::unique_lock lock{ g_diskCacheMutationMutex };
+		if (isDiskCache.load(std::memory_order_relaxed) == value)
+			return;
+
+		isDiskCache.store(value, std::memory_order_release);
+		if (!value)
+			AdvanceDiskCacheGeneration();
+	}
+
+	void ShaderCache::PersistCompiledShaderBlob(
+		ID3DBlob* a_shaderBlob,
+		const std::wstring& a_diskPath,
+		const std::filesystem::path& a_shaderPath,
+		const Util::ContentHash::Hash128& a_compileStateDigest,
+		uint64_t a_diskCacheGeneration)
+	{
+		if (!a_shaderBlob ||
+			!acceptDeferredDiskWrites.load(std::memory_order_acquire) ||
+			!IsDiskCacheActive())
+			return;
+
+		if (!saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire)) {
+			SaveShaderBlobToDisk(
+				a_shaderBlob,
+				a_diskPath,
+				a_shaderPath,
+				a_compileStateDigest,
+				a_diskCacheGeneration);
+			return;
+		}
+
+		DeferredDiskWrite deferredWrite;
+		a_shaderBlob->AddRef();
+		deferredWrite.shaderBlob.Attach(a_shaderBlob);
+		deferredWrite.diskPath = a_diskPath;
+		deferredWrite.shaderPath = a_shaderPath;
+		deferredWrite.compileStateDigest = a_compileStateDigest;
+		deferredWrite.diskCacheGeneration = a_diskCacheGeneration;
+		{
+			std::lock_guard lock{ deferredDiskWritesMutex };
+			if (!acceptDeferredDiskWrites.load(std::memory_order_acquire))
+				return;
+
+			const auto existing = std::find_if(
+				deferredDiskWrites.begin(),
+				deferredDiskWrites.end(),
+				[&](const DeferredDiskWrite& a_write) {
+					return a_write.diskCacheGeneration == a_diskCacheGeneration &&
+					       a_write.diskPath == a_diskPath;
+				});
+			if (existing != deferredDiskWrites.end())
+				*existing = std::move(deferredWrite);
+			else
+				deferredDiskWrites.push_back(std::move(deferredWrite));
+		}
+		deferredDiskWritesCV.notify_one();
+	}
+
+	void ShaderCache::SetSaveLoadDiskPersistenceBlocked(bool a_blocked)
+	{
+		const bool wasBlocked =
+			saveLoadDiskPersistenceBlocked.exchange(a_blocked, std::memory_order_acq_rel);
+		if (a_blocked || !wasBlocked)
+			return;
+
+		// Synchronize with the writer's wait transition so the falling edge cannot
+		// be lost between evaluating its predicate and going to sleep.
+		{
+			std::lock_guard lock{ deferredDiskWritesMutex };
+		}
+		deferredDiskWritesCV.notify_all();
 	}
 
 	bool ShaderCache::IsSkipUnchangedShaders() const
@@ -3529,6 +3620,9 @@ namespace SIE
 		managementJthread = std::jthread([this](std::stop_token stoken) {
 			ManageCompilationSet(stoken);
 		});
+		deferredDiskWriterJthread = std::jthread([this](std::stop_token stoken) {
+			ProcessDeferredDiskWrites(stoken);
+		});
 	}
 
 	bool ShaderCache::UseFileWatcher() const
@@ -4032,6 +4126,104 @@ namespace SIE
 			if (!task.has_value())
 				break;  // exit because thread told to end
 			compilationPool.detach_task([this, stoken, t = task.value()] { ProcessCompilationSet(stoken, t); });
+		}
+	}
+
+	void ShaderCache::ProcessDeferredDiskWrites(std::stop_token stoken)
+	{
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		for (;;) {
+			std::deque<DeferredDiskWrite> writes;
+			bool flushManifest = false;
+			{
+				std::unique_lock lock{ deferredDiskWritesMutex };
+				deferredDiskWritesCV.wait(lock, stoken, [this, stoken] {
+					const bool hasPendingWork =
+						!deferredDiskWrites.empty() || deferredManifestFlushPending;
+					const bool persistenceBlocked =
+						saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire);
+					return stoken.stop_requested() ||
+					       (hasPendingWork && !persistenceBlocked);
+				});
+				if (stoken.stop_requested() &&
+					(deferredDiskWrites.empty() ||
+						saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))) {
+					break;
+				}
+
+				writes.swap(deferredDiskWrites);
+				flushManifest = deferredManifestFlushPending;
+				deferredManifestFlushPending = false;
+			}
+
+			std::size_t savedWrites = 0;
+			std::size_t skippedWrites = 0;
+			while (!writes.empty()) {
+				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))
+					break;
+
+				auto write = std::move(writes.front());
+				writes.pop_front();
+				if (!IsDiskCacheActive()) {
+					++skippedWrites;
+					continue;
+				}
+
+				try {
+					if (SaveShaderBlobToDisk(
+							write.shaderBlob.Get(),
+							write.diskPath,
+							write.shaderPath,
+							write.compileStateDigest,
+							write.diskCacheGeneration)) {
+						++savedWrites;
+					} else {
+						++skippedWrites;
+					}
+				} catch (const std::exception& e) {
+					++skippedWrites;
+					logger::error(
+						"Failed deferred shader-cache write to {}: {}",
+						Util::WStringToString(write.diskPath),
+						e.what());
+				} catch (...) {
+					++skippedWrites;
+					logger::error(
+						"Failed deferred shader-cache write to {} due to an unknown error",
+						Util::WStringToString(write.diskPath));
+				}
+			}
+
+			const bool stopping = stoken.stop_requested();
+			if (!writes.empty()) {
+				if (stopping) {
+					logger::warn(
+						"Discarding {} deferred shader-cache writes because disk persistence became blocked during shutdown",
+						writes.size());
+				} else {
+					std::lock_guard lock{ deferredDiskWritesMutex };
+					while (!writes.empty()) {
+						deferredDiskWrites.push_front(std::move(writes.back()));
+						writes.pop_back();
+					}
+					deferredManifestFlushPending =
+						deferredManifestFlushPending || flushManifest || savedWrites != 0;
+				}
+			} else if (flushManifest || savedWrites != 0) {
+				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire) && !stopping) {
+					std::lock_guard lock{ deferredDiskWritesMutex };
+					deferredManifestFlushPending = true;
+				} else {
+					FlushShaderCacheManifest();
+				}
+			}
+
+			if (savedWrites != 0 || skippedWrites != 0) {
+				logger::debug(
+					"Deferred shader-cache persistence completed: {} saved, {} skipped",
+					savedWrites,
+					skippedWrites);
+			}
 		}
 	}
 

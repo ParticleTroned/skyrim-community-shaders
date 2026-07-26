@@ -265,7 +265,7 @@ namespace Util
 										   });
 	}
 
-	std::string GetShaderDefinesSuffix(const std::string& definesStr)
+	std::string GetShaderDefinesSuffix(std::string_view definesStr)
 	{
 		if (definesStr.empty())
 			return {};

@@ -139,6 +139,8 @@ namespace
 	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
 	constexpr uint32_t kVRSubmitStageVendorDoorHandoffStableFrames = 2u;
 	constexpr uint32_t kVRPostLoadCompositorHoldMaxFrames = 180u;
+	constexpr uint64_t kVRPostLoadCompositorHoldMaxMilliseconds = 5000u;
+	constexpr uint64_t kVRPostLoadCompositorQuarantineMaxMilliseconds = 250u;
 	constexpr uint32_t kVRSubmitStageBoundsFallbackWatchdogFrames = 180u;
 	constexpr uint32_t kVRSubmitStageBoundsFallbackRecoveryBackoffFrames = 300u;
 	constexpr uint32_t kVRSubmitStageFoveatedFailureRetryFrames = 30u;
@@ -4306,12 +4308,12 @@ namespace
 
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
-		// Keep depth-projected mask work out of the physical relatch as well as the
-		// save/load window. The normal controller path remains Stabilizing until
-		// both eyes have evaluated the replacement vendor contract, so mask repair
-		// cannot observe a new color target with stale depth dimensions.
+		// RC141's save/load predicate remains authoritative for ordinary door,
+		// fast-travel, and map-travel relatches. The broader physical-handoff
+		// deferral is required only while protecting the initial process load.
 		return IsVRTransitionMaskRepairSafetyContextActive(a_state) ||
-		       IsVRRenderScalePhysicalMaskHandoffActive(a_upscaling);
+		       (a_upscaling.IsVRInitialLoadPresentationProtectionActive() &&
+				   IsVRRenderScalePhysicalMaskHandoffActive(a_upscaling));
 	}
 
 	bool ShouldDeferVRProjectedMaskRepair(const Upscaling& a_upscaling, const State* a_state)
@@ -14774,6 +14776,16 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 		if (a_event->opening) {
+			auto& upscaling = globals::features::upscaling;
+			if (globals::state &&
+				!IsBeforeFirstCompletedVRWorldFrame(globals::state) &&
+				(upscaling.IsVRInitialLoadPresentationProtectionActive() ||
+					upscaling.IsVRPostLoadCompositorHoldActive())) {
+				// A LoadingMenu which opens after any completed world frame is a
+				// door, travel, or later save-load epoch. Do not let the one-shot
+				// startup compositor policy become part of that transition.
+				upscaling.ResetVRPostLoadCompositorHold();
+			}
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
 			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
 			ResetVRMenuPresentationTrackingState();
@@ -14853,7 +14865,9 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 	return true;
 }
 
-void Upscaling::NotifyGameLoadStarted(bool a_newGame)
+void Upscaling::NotifyGameLoadStarted(
+	bool a_newGame,
+	bool a_initialProcessSaveLoad)
 {
 	StopVRMenuPresentationTraceRaceSexPreRoll("game-load-started");
 	g_vrMenuPresentationTraceRaceSexPreRollPending.store(
@@ -14875,14 +14889,14 @@ void Upscaling::NotifyGameLoadStarted(bool a_newGame)
 	g_vrStartupRaceSexNameFrame.store(0, std::memory_order_release);
 	g_vrStartupRaceSexFirstLoadCloseFrame.store(0, std::memory_order_release);
 	g_vrRaceSexTraceLastKey.store(std::numeric_limits<uint64_t>::max(), std::memory_order_release);
-	if (a_newGame) {
+	if (!a_initialProcessSaveLoad) {
 		ResetVRPostLoadCompositorHold();
 	} else {
 		const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 		ArmVRPostLoadCompositorHold(
 			!IsVendorUpscalingMethod(configuredMethod) &&
-			IsVRFpsStabilizerSyncActive() &&
-			!IsOpenCompositeUpscalingBlocked());
+				IsVRFpsStabilizerSyncActive(),
+			true);
 	}
 	TraceVRRaceSexStartupSignal(a_newGame ? "notify-new-game" : "notify-post-load", true);
 	if (a_newGame && ShouldEmitUpscalingDiagLogs())
@@ -16246,6 +16260,10 @@ void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 	if (!IsVRFpsStabilizerSyncActive()) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
+		if (IsVRInitialLoadPresentationProtectionActive() &&
+			!IsVRPostLoadCompositorHoldActive()) {
+			ResetVRPostLoadCompositorHold();
+		}
 		return;
 	}
 
@@ -16256,6 +16274,18 @@ void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 
 void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 {
+	if (IsVRInitialLoadPresentationProtectionActive() &&
+		!IsVRPostLoadCompositorHoldActive() &&
+		vrPostLoadCompositorHoldAwaitingSyncEpoch.load(std::memory_order_acquire) != 0) {
+		const uint64_t holdStartTickMs =
+			vrPostLoadCompositorHoldStartTickMs.load(std::memory_order_acquire);
+		if (holdStartTickMs != 0 &&
+			::GetTickCount64() - holdStartTickMs >=
+				kVRPostLoadCompositorHoldMaxMilliseconds) {
+			ResetVRPostLoadCompositorHold();
+		}
+	}
+
 	const uint32_t queuedFrame = pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
 	if (queuedFrame == 0)
 		return;
@@ -16263,6 +16293,10 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	if (!IsVRFpsStabilizerSyncActive()) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
+		if (IsVRInitialLoadPresentationProtectionActive() &&
+			!IsVRPostLoadCompositorHoldActive()) {
+			ResetVRPostLoadCompositorHold();
+		}
 		return;
 	}
 
@@ -16275,6 +16309,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 			0,
 			std::memory_order_acq_rel);
 	const bool armPostLoadCompositorHoldAfterSync =
+		IsVRInitialLoadPresentationProtectionActive() &&
 		postLoadCompositorHoldSyncEpoch != 0 &&
 		postLoadCompositorHoldSyncEpoch ==
 			vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire);
@@ -16285,6 +16320,8 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	if (!profile.HasAnySetting()) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
+		if (armPostLoadCompositorHoldAfterSync)
+			ResetVRPostLoadCompositorHold();
 		logger::warn("[Upscaling] VR FPS Stabilizer Sync found no {} upscaling profile in {}.", profileName, profiles.path.string());
 		return;
 	}
@@ -16299,11 +16336,14 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		GetEffectiveDLSSPreset(),
 		target);
 	const auto armPostLoadCompositorHoldIfEligible = [&]() {
-		if (armPostLoadCompositorHoldAfterSync &&
-			postLoadCompositorHoldSyncEpoch ==
-				vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire) &&
-			IsVendorUpscalingMethod(target.method) &&
-			!IsVRPostLoadCompositorHoldActive()) {
+		if (!armPostLoadCompositorHoldAfterSync ||
+			postLoadCompositorHoldSyncEpoch !=
+				vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire)) {
+			return;
+		}
+		if (!IsVendorUpscalingMethod(target.method)) {
+			ResetVRPostLoadCompositorHold();
+		} else if (!IsVRPostLoadCompositorHoldActive()) {
 			ArmVRPostLoadCompositorHold();
 		}
 	};
@@ -28422,7 +28462,14 @@ void Upscaling::ReleaseVRPostLoadCompositorKeepalive()
 void Upscaling::ResetVRPostLoadCompositorHold()
 {
 	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
-	ResetVRPostLoadCompositorHoldLocked();
+	const bool protectedSubmitInFlight =
+		vrPostLoadCompositorInFlightSubmitCount != 0;
+	if (protectedSubmitInFlight) {
+		QuarantineVRPostLoadCompositorCycleLocked(
+			vrPostLoadCompositorInFlightCycleToken);
+	}
+	FinishVRInitialLoadPresentationProtectionLocked(
+		protectedSubmitInFlight);
 }
 
 void Upscaling::ResetVRPostLoadCompositorHoldLocked(
@@ -28435,6 +28482,7 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 	vrPostLoadCompositorHoldEpoch.store(nextEpoch, std::memory_order_release);
 	vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldStartFrame.store(0, std::memory_order_release);
+	vrPostLoadCompositorHoldStartTickMs.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldReleaseFrame.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldReleaseMethod.store(
 		static_cast<uint32_t>(UpscaleMethod::kNONE),
@@ -28474,11 +28522,109 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 		std::memory_order_release);
 }
 
-void Upscaling::ArmVRPostLoadCompositorHold(bool a_awaitingStabilizerSync)
+void Upscaling::FinishVRInitialLoadPresentationProtectionLocked(
+	bool a_preservePublishedQuarantine)
+{
+	const uint32_t exactCycleOccupiedEyeMask =
+		vrPostLoadCompositorKeepaliveOccupiedEyeMask |
+		vrPostLoadCompositorReleaseOccupiedEyeMask |
+		vrPostLoadCompositorUnknownOccupiedEyeMask;
+	const uint32_t prePoseOccupiedEyeMask =
+		vrPostLoadCompositorPrePoseKeepaliveOccupiedEyeMask |
+		vrPostLoadCompositorPrePoseUnknownOccupiedEyeMask;
+	if (!a_preservePublishedQuarantine) {
+		if (vrPostLoadCompositorKeepaliveOccupiedCycleToken != 0 &&
+			exactCycleOccupiedEyeMask != 0) {
+			QuarantineVRPostLoadCompositorCycleLocked(
+				vrPostLoadCompositorKeepaliveOccupiedCycleToken);
+		} else if (prePoseOccupiedEyeMask != 0) {
+			QuarantineVRPostLoadCompositorCycleLocked(0);
+		}
+	}
+	vrPostLoadCompositorCycleDrainPending.store(true, std::memory_order_release);
+	vrInitialLoadPresentationProtectionActive.store(false, std::memory_order_release);
+	ResetVRPostLoadCompositorHoldLocked();
+}
+
+void Upscaling::QuarantineVRPostLoadCompositorCycleLocked(
+	uint64_t a_compositorCycleToken)
+{
+	if (a_compositorCycleToken == 0) {
+		vrPostLoadCompositorQuarantinedCycleToken.store(
+			0,
+			std::memory_order_release);
+		vrPostLoadCompositorPrePoseCycleQuarantined.store(
+			true,
+			std::memory_order_release);
+	} else {
+		vrPostLoadCompositorPrePoseCycleQuarantined.store(
+			false,
+			std::memory_order_release);
+		vrPostLoadCompositorQuarantinedCycleToken.store(
+			a_compositorCycleToken,
+			std::memory_order_release);
+	}
+	vrPostLoadCompositorQuarantineDeadlineTickMs.store(
+		::GetTickCount64() + kVRPostLoadCompositorQuarantineMaxMilliseconds,
+		std::memory_order_release);
+}
+
+void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
+	uint64_t a_compositorCycleToken)
+{
+	if (a_compositorCycleToken == 0)
+		return;
+	if (!IsVRInitialLoadPresentationProtectionActive() &&
+		!IsVRPostLoadCompositorHoldActive() &&
+		!vrPostLoadCompositorCycleDrainPending.load(std::memory_order_acquire) &&
+		vrPostLoadCompositorQuarantineDeadlineTickMs.load(std::memory_order_acquire) == 0) {
+		return;
+	}
+
+	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
+	if (vrPostLoadCompositorKeepaliveOccupiedCycleToken !=
+		a_compositorCycleToken) {
+		vrPostLoadCompositorKeepaliveOccupiedCycleToken = 0;
+		vrPostLoadCompositorKeepaliveOccupiedEyeMask = 0;
+		vrPostLoadCompositorReleaseOccupiedEyeMask = 0;
+		vrPostLoadCompositorUnknownOccupiedEyeMask = 0;
+		vrPostLoadCompositorReleaseOccupiedEpoch.fill(0);
+	}
+	vrPostLoadCompositorPrePoseKeepaliveOccupiedEyeMask = 0;
+	vrPostLoadCompositorPrePoseUnknownOccupiedEyeMask = 0;
+
+	if (vrPostLoadCompositorQuarantinedCycleToken.load(
+			std::memory_order_acquire) != a_compositorCycleToken) {
+		vrPostLoadCompositorQuarantinedCycleToken.store(
+			0,
+			std::memory_order_release);
+		vrPostLoadCompositorPrePoseCycleQuarantined.store(
+			false,
+			std::memory_order_release);
+		vrPostLoadCompositorQuarantineDeadlineTickMs.store(
+			0,
+			std::memory_order_release);
+	}
+
+	if (vrPostLoadCompositorInFlightSubmitCount == 0 &&
+		vrPostLoadCompositorCycleDrainPending.exchange(
+			false,
+			std::memory_order_acq_rel)) {
+		vrPostLoadCompositorKeepaliveTexture = nullptr;
+		vrPostLoadCompositorKeepaliveDevice = nullptr;
+	}
+}
+
+void Upscaling::ArmVRPostLoadCompositorHold(
+	bool a_awaitingStabilizerSync,
+	bool a_beginInitialLoadProtection)
 {
 	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
-	if (!globals::game::isVR || IsOpenCompositeUpscalingBlocked()) {
-		ResetVRPostLoadCompositorHoldLocked();
+	if ((!a_beginInitialLoadProtection &&
+			!vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire)) ||
+		!globals::game::isVR ||
+		IsOpenCompositeUpscalingBlocked()) {
+		FinishVRInitialLoadPresentationProtectionLocked();
 		return;
 	}
 
@@ -28487,11 +28633,19 @@ void Upscaling::ArmVRPostLoadCompositorHold(bool a_awaitingStabilizerSync)
 		// The Stabilizer may intentionally start from a non-vendor profile and
 		// resolve the destination vendor contract only after the first world
 		// frame. Preserve that idle sync epoch without exposing an active hold.
-		ResetVRPostLoadCompositorHoldLocked();
 		if (a_awaitingStabilizerSync) {
+			ResetVRPostLoadCompositorHoldLocked();
 			vrPostLoadCompositorHoldAwaitingSyncEpoch.store(
 				vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire),
 				std::memory_order_release);
+			vrPostLoadCompositorHoldStartTickMs.store(
+				::GetTickCount64(),
+				std::memory_order_release);
+			vrInitialLoadPresentationProtectionActive.store(
+				true,
+				std::memory_order_release);
+		} else {
+			FinishVRInitialLoadPresentationProtectionLocked();
 		}
 		return;
 	}
@@ -28509,9 +28663,64 @@ void Upscaling::ArmVRPostLoadCompositorHold(bool a_awaitingStabilizerSync)
 	if (a_awaitingStabilizerSync)
 		vrPostLoadCompositorHoldAwaitingSyncEpoch.store(epoch, std::memory_order_release);
 	if (!globals::features::vr.InstallSubmitHook()) {
-		ResetVRPostLoadCompositorHoldLocked();
+		FinishVRInitialLoadPresentationProtectionLocked();
 		return;
 	}
+	// Publish the one-shot lifecycle only after the epoch, hold state, and hook
+	// are coherent. Submit can then observe either the old inactive state or the
+	// complete new transaction, never an active flag paired with an old epoch.
+	vrInitialLoadPresentationProtectionActive.store(true, std::memory_order_release);
+}
+
+bool Upscaling::IsVRInitialLoadPresentationProtectionActive() const noexcept
+{
+	return vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire);
+}
+
+uint64_t Upscaling::BeginVRPostLoadCompositorSubmitScope(
+	uint64_t a_compositorCycleToken)
+{
+	if (!IsVRInitialLoadPresentationProtectionActive() &&
+		!IsVRPostLoadCompositorHoldActive()) {
+		return 0;
+	}
+
+	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
+	if (!vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire) &&
+		static_cast<VRPostLoadCompositorHoldState>(
+			vrPostLoadCompositorHoldState.load(std::memory_order_acquire)) ==
+			VRPostLoadCompositorHoldState::Idle) {
+		return 0;
+	}
+
+	const uint64_t epoch =
+		vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire);
+	if (epoch == 0)
+		return 0;
+	if (vrPostLoadCompositorInFlightSubmitCount == 0) {
+		vrPostLoadCompositorInFlightCycleToken = a_compositorCycleToken;
+	} else if (
+		vrPostLoadCompositorInFlightCycleToken != a_compositorCycleToken) {
+		// Protected scene submits are serialized by the OpenVR hook. If an
+		// unexpected overlap crosses WaitGetPoses, protect the newest boundary;
+		// the older compositor cycle is already closed.
+		vrPostLoadCompositorInFlightCycleToken = a_compositorCycleToken;
+	}
+	++vrPostLoadCompositorInFlightSubmitCount;
+	return epoch;
+}
+
+void Upscaling::EndVRPostLoadCompositorSubmitScope(uint64_t a_scopeEpoch)
+{
+	if (a_scopeEpoch == 0)
+		return;
+
+	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
+	if (vrPostLoadCompositorInFlightSubmitCount == 0)
+		return;
+	--vrPostLoadCompositorInFlightSubmitCount;
+	if (vrPostLoadCompositorInFlightSubmitCount == 0)
+		vrPostLoadCompositorInFlightCycleToken = 0;
 }
 
 bool Upscaling::IsVRPostLoadCompositorHoldActive() const noexcept
@@ -28524,12 +28733,22 @@ bool Upscaling::IsVRPostLoadCompositorHoldActive() const noexcept
 bool Upscaling::ShouldQuarantineVRPostLoadCompositorCycle(
 	uint64_t a_compositorCycleToken) const noexcept
 {
-	if (a_compositorCycleToken == 0) {
-		return vrPostLoadCompositorPrePoseCycleQuarantined.load(
-			std::memory_order_acquire);
+	const uint64_t quarantineDeadline =
+		vrPostLoadCompositorQuarantineDeadlineTickMs.load(std::memory_order_acquire);
+	const bool quarantineLive =
+		quarantineDeadline != 0 &&
+		::GetTickCount64() <= quarantineDeadline;
+	if (quarantineLive) {
+		if (a_compositorCycleToken == 0) {
+			return vrPostLoadCompositorPrePoseCycleQuarantined.load(
+				std::memory_order_acquire);
+		}
+		if (vrPostLoadCompositorQuarantinedCycleToken.load(
+				std::memory_order_acquire) == a_compositorCycleToken) {
+			return true;
+		}
 	}
-	return vrPostLoadCompositorQuarantinedCycleToken.load(
-			   std::memory_order_acquire) == a_compositorCycleToken;
+	return false;
 }
 
 bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
@@ -28543,21 +28762,17 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 {
 	a_releaseToken = 0;
 	a_keepaliveSubmission = {};
+	if (!IsVRInitialLoadPresentationProtectionActive() &&
+		!IsVRPostLoadCompositorHoldActive()) {
+		return false;
+	}
 	std::unique_lock lock(vrPostLoadCompositorHoldMutex);
 	auto holdState = static_cast<VRPostLoadCompositorHoldState>(
 		vrPostLoadCompositorHoldState.load(std::memory_order_acquire));
 	const auto quarantineCurrentCycle = [&](bool a_resetHold = true) {
-		if (a_compositorCycleToken == 0) {
-			vrPostLoadCompositorPrePoseCycleQuarantined.store(
-				true,
-				std::memory_order_release);
-		} else {
-			vrPostLoadCompositorQuarantinedCycleToken.store(
-				a_compositorCycleToken,
-				std::memory_order_release);
-		}
+		QuarantineVRPostLoadCompositorCycleLocked(a_compositorCycleToken);
 		if (a_resetHold)
-			ResetVRPostLoadCompositorHoldLocked();
+			FinishVRInitialLoadPresentationProtectionLocked(true);
 		a_keepaliveSubmission.quarantine = true;
 		return true;
 	};
@@ -28590,12 +28805,28 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 	};
 	const auto resetAndFailOpen = [&]() {
 		const bool quarantine = hasIncompatibleOccupancyForFailOpen();
-		ResetVRPostLoadCompositorHoldLocked();
 		if (quarantine)
-			return quarantineCurrentCycle(false);
+			return quarantineCurrentCycle();
+		FinishVRInitialLoadPresentationProtectionLocked();
 		return false;
 	};
 	if (holdState == VRPostLoadCompositorHoldState::Idle) {
+		const uint64_t awaitingSyncEpoch =
+			vrPostLoadCompositorHoldAwaitingSyncEpoch.load(std::memory_order_acquire);
+		const uint64_t holdStartTickMs =
+			vrPostLoadCompositorHoldStartTickMs.load(std::memory_order_acquire);
+		if (awaitingSyncEpoch != 0 &&
+			holdStartTickMs != 0 &&
+			::GetTickCount64() - holdStartTickMs >=
+				kVRPostLoadCompositorHoldMaxMilliseconds) {
+			FinishVRInitialLoadPresentationProtectionLocked();
+			if (ShouldQuarantineVRPostLoadCompositorCycle(
+					a_compositorCycleToken)) {
+				a_keepaliveSubmission.quarantine = true;
+				return true;
+			}
+			return false;
+		}
 		if (hasIncompatibleOccupancyForFailOpen())
 			return quarantineCurrentCycle(false);
 		return false;
@@ -28738,20 +28969,32 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 
 	uint32_t holdStartFrame =
 		vrPostLoadCompositorHoldStartFrame.load(std::memory_order_acquire);
+	uint64_t holdStartTickMs =
+		vrPostLoadCompositorHoldStartTickMs.load(std::memory_order_acquire);
+	const uint64_t currentTickMs = ::GetTickCount64();
 	if (holdStartFrame == 0) {
 		holdStartFrame = currentFrame;
+		holdStartTickMs = currentTickMs;
 		vrPostLoadCompositorHoldStartFrame.store(holdStartFrame, std::memory_order_release);
+		vrPostLoadCompositorHoldStartTickMs.store(
+			holdStartTickMs,
+			std::memory_order_release);
 		vrPostLoadCompositorHoldState.store(
 			static_cast<uint32_t>(VRPostLoadCompositorHoldState::Holding),
 			std::memory_order_release);
 		holdState = VRPostLoadCompositorHoldState::Holding;
-	} else if (ElapsedFrames(holdStartFrame, currentFrame) >=
-			   kVRPostLoadCompositorHoldMaxFrames) {
+	} else if (
+		ElapsedFrames(holdStartFrame, currentFrame) >=
+			kVRPostLoadCompositorHoldMaxFrames ||
+		(holdStartTickMs != 0 &&
+			currentTickMs - holdStartTickMs >=
+				kVRPostLoadCompositorHoldMaxMilliseconds)) {
 		if (ShouldEmitUpscalingDiagLogs()) {
 			logger::debug(
-				"[Upscaling][Diag] Released post-load compositor hold after bounded timeout frame={} start={}.",
+				"[Upscaling][Diag] Released post-load compositor hold after bounded timeout frame={} start={} elapsedMs={}.",
 				currentFrame,
-				holdStartFrame);
+				holdStartFrame,
+				holdStartTickMs == 0 ? 0 : currentTickMs - holdStartTickMs);
 		}
 		return resetAndFailOpen();
 	}
@@ -29327,15 +29570,20 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 	uint64_t a_releaseToken,
 	uint64_t a_keepaliveToken,
 	uint64_t a_compositorCycleToken,
-	bool a_postLoadHoldActiveAtSubmitEntry)
+	uint64_t a_initialLoadProtectionEpochAtSubmitEntry)
 {
 	if (a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)
 		return VRPostLoadCompositorKeepaliveDisposition::NotApplicable;
-	const bool tokenlessSubmitWasHoldRelevant =
-		a_keepaliveToken == 0 &&
-		a_releaseToken == 0 &&
-		(a_postLoadHoldActiveAtSubmitEntry ||
-			IsVRPostLoadCompositorHoldActive());
+	const bool hasExplicitHoldToken =
+		a_keepaliveToken != 0 || a_releaseToken != 0;
+	if (a_initialLoadProtectionEpochAtSubmitEntry == 0 &&
+		!hasExplicitHoldToken &&
+		!IsVRInitialLoadPresentationProtectionActive() &&
+		!IsVRPostLoadCompositorHoldActive()) {
+		// Once the one-shot startup scope has drained, ordinary OpenVR submits
+		// retain the RC141/RC145 path without compositor occupancy bookkeeping.
+		return VRPostLoadCompositorKeepaliveDisposition::NotApplicable;
+	}
 
 	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
@@ -29360,15 +29608,7 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 			std::memory_order_release);
 	};
 	const auto quarantineCycle = [&]() {
-		if (a_compositorCycleToken == 0) {
-			vrPostLoadCompositorPrePoseCycleQuarantined.store(
-				true,
-				std::memory_order_release);
-		} else {
-			vrPostLoadCompositorQuarantinedCycleToken.store(
-				a_compositorCycleToken,
-				std::memory_order_release);
-		}
+		QuarantineVRPostLoadCompositorCycleLocked(a_compositorCycleToken);
 	};
 	const auto resultNeedsCycleQuarantine = [&]() {
 		return a_result == vr::VRCompositorError_None ||
@@ -29376,6 +29616,35 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 		       a_result == vr::VRCompositorError_RequestFailed ||
 		       a_result == vr::VRCompositorError_DoNotHaveFocus;
 	};
+	const uint64_t currentProtectionEpoch =
+		vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire);
+	const bool currentProtectionActive =
+		vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire);
+	const bool entryScopeStillCurrent =
+		currentProtectionActive &&
+		a_initialLoadProtectionEpochAtSubmitEntry != 0 &&
+		a_initialLoadProtectionEpochAtSubmitEntry == currentProtectionEpoch;
+	const uint64_t explicitHoldToken =
+		a_keepaliveToken != 0 ? a_keepaliveToken : a_releaseToken;
+	const bool explicitHoldTokenStillCurrent =
+		currentProtectionActive &&
+		explicitHoldToken != 0 &&
+		explicitHoldToken == currentProtectionEpoch;
+	if (!entryScopeStillCurrent && !explicitHoldTokenStillCurrent) {
+		// Submit blocked outside this mutex. A menu, device, or lifecycle reset
+		// may have invalidated its scope while OpenVR was executing. Preserve
+		// only a short exact-cycle drain; never repopulate logical ownership.
+		if (resultNeedsCycleQuarantine() &&
+			(a_initialLoadProtectionEpochAtSubmitEntry != 0 ||
+				explicitHoldToken != 0 ||
+				currentProtectionActive)) {
+			quarantineCycle();
+		}
+		return VRPostLoadCompositorKeepaliveDisposition::NotApplicable;
+	}
+	const bool tokenlessSubmitWasHoldRelevant =
+		!hasExplicitHoldToken &&
+		(entryScopeStillCurrent || IsVRPostLoadCompositorHoldActive());
 	const auto recordAcceptedOccupancy = [&]() {
 		if (a_result != vr::VRCompositorError_None &&
 			a_result != vr::VRCompositorError_AlreadySubmitted) {
@@ -29495,7 +29764,7 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 			// unoccupied. Abort without issuing a visually different second
 			// Submit, and quarantine peer calls until WaitGetPoses advances.
 			quarantineCycle();
-			ResetVRPostLoadCompositorHoldLocked();
+			FinishVRInitialLoadPresentationProtectionLocked(true);
 			return VRPostLoadCompositorKeepaliveDisposition::Aborted;
 		case vr::VRCompositorError_InvalidTexture:
 		case vr::VRCompositorError_TextureIsOnWrongDevice:
@@ -29524,12 +29793,12 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 					// next compositor cycle fails open instead of repeating a
 					// black/stale pair until timeout.
 					quarantineCycle();
-					ResetVRPostLoadCompositorHoldLocked();
+					FinishVRInitialLoadPresentationProtectionLocked(true);
 					return VRPostLoadCompositorKeepaliveDisposition::
 						RejectedPeerSatisfied;
 				}
 
-				ResetVRPostLoadCompositorHoldLocked();
+				FinishVRInitialLoadPresentationProtectionLocked();
 				return VRPostLoadCompositorKeepaliveDisposition::
 					RejectedCanFallback;
 			}
@@ -29538,7 +29807,7 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 		case vr::VRCompositorError_IndexOutOfRange:
 		default:
 			quarantineCycle();
-			ResetVRPostLoadCompositorHoldLocked();
+			FinishVRInitialLoadPresentationProtectionLocked(true);
 			return VRPostLoadCompositorKeepaliveDisposition::Aborted;
 		}
 	}
@@ -29561,9 +29830,10 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 
 	const auto* state = globals::state;
 	if (!state) {
-		if (resultNeedsCycleQuarantine())
+		const bool quarantine = resultNeedsCycleQuarantine();
+		if (quarantine)
 			quarantineCycle();
-		ResetVRPostLoadCompositorHoldLocked();
+		FinishVRInitialLoadPresentationProtectionLocked(quarantine);
 		return VRPostLoadCompositorKeepaliveDisposition::NotApplicable;
 	}
 
@@ -29595,7 +29865,7 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 	}
 	if (a_result != vr::VRCompositorError_None) {
 		quarantineCycle();
-		ResetVRPostLoadCompositorHoldLocked();
+		FinishVRInitialLoadPresentationProtectionLocked(true);
 		return VRPostLoadCompositorKeepaliveDisposition::NotApplicable;
 	}
 

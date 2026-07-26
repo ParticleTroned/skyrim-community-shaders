@@ -26,6 +26,7 @@ bool Load();
 namespace
 {
 	constexpr std::size_t kTrampolineCapacity = 1 << 12;
+	std::atomic_bool g_initialGameEntryConsumed{ false };
 
 	void PushStartupError(std::string errorMessage)
 	{
@@ -215,7 +216,15 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		{
 			if (errors.empty()) {
 				const bool newGame = message->type == SKSE::MessagingInterface::kNewGame;
-				globals::features::upscaling.NotifyGameLoadStarted(newGame);
+				const bool firstGameEntry =
+					!g_initialGameEntryConsumed.exchange(true, std::memory_order_acq_rel);
+				// New Game owns the separate RaceSex/startup presentation path.
+				// Consume the process-lifetime entry latch, but reserve this
+				// compositor hold for the first save loaded in this process.
+				const bool initialProcessSaveLoad = !newGame && firstGameEntry;
+				globals::features::upscaling.NotifyGameLoadStarted(
+					newGame,
+					initialProcessSaveLoad);
 				if (globals::state) {
 					const uint32_t frame = globals::state->frameCount;
 					globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);

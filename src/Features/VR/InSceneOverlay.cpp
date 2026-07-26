@@ -273,13 +273,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			// OpenVR defines one Submit cycle as the interval before the next
 			// WaitGetPoses call. Publish that exact boundary before rendering
 			// begins; zero remains reserved for pre-hook/pre-pose submissions.
-			g_openVRSubmitCycleToken.fetch_add(1, std::memory_order_acq_rel);
-			return func(
+			const uint64_t compositorCycleToken =
+				g_openVRSubmitCycleToken.fetch_add(1, std::memory_order_acq_rel) + 1u;
+			const auto result = func(
 				_this,
 				pRenderPoseArray,
 				unRenderPoseArrayCount,
 				pGamePoseArray,
 				unGamePoseArrayCount);
+			globals::features::upscaling.NotifyVRPostLoadCompositorCycleStarted(
+				compositorCycleToken);
+			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -292,6 +296,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			auto& upscaling = globals::features::upscaling;
 			uint64_t compositorCycleToken =
 				g_openVRSubmitCycleToken.load(std::memory_order_acquire);
+			const uint64_t postLoadSubmitScopeEpoch =
+				upscaling.BeginVRPostLoadCompositorSubmitScope(
+					compositorCycleToken);
+			const SKSE::stl::scope_exit endPostLoadSubmitScope([&]() noexcept {
+				upscaling.EndVRPostLoadCompositorSubmitScope(
+					postLoadSubmitScopeEpoch);
+			});
 			const bool postLoadHoldActiveAtHookEntry =
 				upscaling.IsVRPostLoadCompositorHoldActive();
 			const bool quarantinedAtHookEntry =
@@ -300,9 +311,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			std::unique_lock postLoadSubmitLock(
 				g_vrPostLoadCompositorSubmitMutex,
 				std::defer_lock);
-			if (postLoadHoldActiveAtHookEntry || quarantinedAtHookEntry) {
+			if (postLoadSubmitScopeEpoch != 0 ||
+				postLoadHoldActiveAtHookEntry ||
+				quarantinedAtHookEntry) {
 				// OpenVR scene submissions are normally serial already. Make
-				// that guarantee explicit only during the short post-load hold
+				// that guarantee explicit only during the short startup scope
 				// so one eye cannot race a quarantine/release decision.
 				postLoadSubmitLock.lock();
 				compositorCycleToken =
@@ -355,9 +368,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					a_submitFlags,
 					a_probeObservation);
 #endif
-				const bool postLoadHoldActiveAtSubmitEntry =
-					postLoadHoldActiveAtHookEntry ||
-					upscaling.IsVRPostLoadCompositorHoldActive();
 				const auto result = func(_this, eEye, a_texture, a_bounds, a_submitFlags);
 				const auto keepaliveDisposition =
 					upscaling.CompleteVRPostLoadCompositorSubmit(
@@ -366,7 +376,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						a_postLoadReleaseToken,
 						a_postLoadKeepaliveToken,
 						compositorCycleToken,
-						postLoadHoldActiveAtSubmitEntry);
+						postLoadSubmitScopeEpoch);
 				if (a_keepaliveDisposition)
 					*a_keepaliveDisposition = keepaliveDisposition;
 #ifdef DEVBENCH_BRIDGE_ENABLED

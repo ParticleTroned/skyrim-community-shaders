@@ -1602,6 +1602,10 @@ public:
 		Aborted
 	};
 
+	bool IsVRInitialLoadPresentationProtectionActive() const noexcept;
+	uint64_t BeginVRPostLoadCompositorSubmitScope(uint64_t a_compositorCycleToken);
+	void EndVRPostLoadCompositorSubmitScope(uint64_t a_scopeEpoch);
+	void NotifyVRPostLoadCompositorCycleStarted(uint64_t a_compositorCycleToken);
 	bool IsVRPostLoadCompositorHoldActive() const noexcept;
 	bool ShouldQuarantineVRPostLoadCompositorCycle(
 		uint64_t a_compositorCycleToken) const noexcept;
@@ -1619,7 +1623,7 @@ public:
 		uint64_t a_releaseToken,
 		uint64_t a_keepaliveToken,
 		uint64_t a_compositorCycleToken,
-		bool a_postLoadHoldActiveAtSubmitEntry);
+		uint64_t a_initialLoadProtectionEpochAtSubmitEntry);
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
@@ -1647,7 +1651,7 @@ public:
 	};
 	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
-	void NotifyGameLoadStarted(bool a_newGame);
+	void NotifyGameLoadStarted(bool a_newGame, bool a_initialProcessSaveLoad);
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
 
@@ -2096,10 +2100,12 @@ private:
 	std::atomic<uint32_t> submitStageBoundsFallbackActualHeight{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackExpectedWidth{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackExpectedHeight{ 0 };
+	std::atomic_bool vrInitialLoadPresentationProtectionActive{ false };
 	std::atomic<uint32_t> vrPostLoadCompositorHoldState{
 		static_cast<uint32_t>(VRPostLoadCompositorHoldState::Idle)
 	};
 	std::atomic<uint32_t> vrPostLoadCompositorHoldStartFrame{ 0 };
+	std::atomic<uint64_t> vrPostLoadCompositorHoldStartTickMs{ 0 };
 	std::atomic<uint32_t> vrPostLoadCompositorHoldReleaseFrame{ 0 };
 	std::atomic<uint32_t> vrPostLoadCompositorHoldReleaseMethod{
 		static_cast<uint32_t>(UpscaleMethod::kNONE)
@@ -2130,6 +2136,10 @@ private:
 	uint32_t vrPostLoadCompositorPrePoseUnknownOccupiedEyeMask = 0;
 	std::atomic<uint64_t> vrPostLoadCompositorQuarantinedCycleToken{ 0 };
 	std::atomic_bool vrPostLoadCompositorPrePoseCycleQuarantined{ false };
+	std::atomic<uint64_t> vrPostLoadCompositorQuarantineDeadlineTickMs{ 0 };
+	std::atomic_bool vrPostLoadCompositorCycleDrainPending{ false };
+	uint64_t vrPostLoadCompositorInFlightCycleToken = 0;
+	uint32_t vrPostLoadCompositorInFlightSubmitCount = 0;
 	std::atomic<uint64_t> vrPostLoadCompositorHoldReleaseAttemptEyeMaskState{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldReleasedEyeMaskState{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldEpoch{ 0 };
@@ -2142,11 +2152,16 @@ private:
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
-	void ArmVRPostLoadCompositorHold(bool a_awaitingStabilizerSync = false);
+	void ArmVRPostLoadCompositorHold(
+		bool a_awaitingStabilizerSync = false,
+		bool a_beginInitialLoadProtection = false);
 	void ResetVRPostLoadCompositorHold();
 	void ResetVRPostLoadCompositorHoldLocked(
 		VRPostLoadCompositorHoldState a_finalState =
 			VRPostLoadCompositorHoldState::Idle);
+	void QuarantineVRPostLoadCompositorCycleLocked(uint64_t a_compositorCycleToken);
+	void FinishVRInitialLoadPresentationProtectionLocked(
+		bool a_preservePublishedQuarantine = false);
 	bool PrepareVRPostLoadCompositorKeepaliveLocked(
 		ID3D11Texture2D* a_candidateTexture,
 		VRPostLoadCompositorKeepaliveSubmission& a_submission);

@@ -1089,12 +1089,48 @@ float GetUnifiedWaterDistanceDepthFade(float viewDistance)
 static const float ShoreConfirmationCullFadeRange = 2048.0;
 static const float ShoreFeatherDepthGradientEpsilon = 1e-8;
 static const float ShoreGatherEdgeInset = 1e-2;
+static const float ShoreGradientCandidateScale = 2.0;
+static const float ShoreGradientCandidateMargin = 2.0;
+static const float ShoreGradientFilterWidthScale = 0.25;
+static const int ShoreGradientFilterMaxRadius = 2;
+static const int2 ShoreGradientSampleOffsets[8] = {
+	int2(-1, -1),
+	int2(0, -1),
+	int2(1, -1),
+	int2(-1, 0),
+	int2(1, 0),
+	int2(-1, 1),
+	int2(0, 1),
+	int2(1, 1),
+};
+static const float2 ShoreGradientSobelWeights[8] = {
+	float2(-1.0, -1.0),
+	float2(0.0, -2.0),
+	float2(1.0, -1.0),
+	float2(-2.0, 0.0),
+	float2(2.0, 0.0),
+	float2(-1.0, 1.0),
+	float2(0.0, 2.0),
+	float2(1.0, 1.0),
+};
 
 int2 GetUnifiedWaterDepthRenderDimensions()
 {
 	return max(
 		int2(1, 1),
 		int2(round(SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy)));
+}
+
+int2 ClampUnifiedWaterDepthPixel(
+	int2 pixelPosition,
+	uint eyeIndex,
+	int2 renderDimensions)
+{
+#				if defined(VR)
+	return Stereo::ClampToEyeBounds(pixelPosition, eyeIndex, renderDimensions);
+#				else
+	return clamp(pixelPosition, 0, renderDimensions - 1);
+#				endif
 }
 
 float2 ClampUnifiedWaterDepthGatherPosition(
@@ -1132,6 +1168,80 @@ bool IsUnifiedWaterShoreSample(float sceneDepth, float waterDepth)
 	       sceneDepth <= waterDepth;
 }
 
+bool TryGetUnifiedWaterDepthDelta(
+	int2 samplePixel,
+	int2 centerPixel,
+	float centerWaterDepth,
+	float2 waterDepthGradient,
+	out float depthDelta)
+{
+	float sceneDepth = DepthTex.Load(int3(samplePixel, 0)).x;
+	float2 sampleOffset = float2(samplePixel - centerPixel);
+	float waterDepth =
+		centerWaterDepth + dot(waterDepthGradient, sampleOffset);
+	depthDelta = sceneDepth - waterDepth;
+	return IsUnifiedWaterRawDepthValid(sceneDepth) &&
+	       isfinite(waterDepth) &&
+	       isfinite(depthDelta);
+}
+
+bool TryGetUnifiedWaterFilteredDepthDeltaGradient(
+	int2 centerPixel,
+	int filterRadius,
+	float centerWaterDepth,
+	float2 waterDepthGradient,
+	uint eyeIndex,
+	int2 renderDimensions,
+	out float2 filteredDepthDeltaGradient)
+{
+	filteredDepthDeltaGradient = 0.0.xx;
+	bool filterValid = true;
+
+	[unroll] for (int sampleIndex = 0; sampleIndex < 8; ++sampleIndex)
+	{
+		int2 requestedPixel =
+			centerPixel +
+			ShoreGradientSampleOffsets[sampleIndex] * filterRadius;
+		int2 samplePixel = ClampUnifiedWaterDepthPixel(
+			requestedPixel,
+			eyeIndex,
+			renderDimensions);
+		float sampleDepthDelta;
+		bool sampleValid = TryGetUnifiedWaterDepthDelta(
+			samplePixel,
+			centerPixel,
+			centerWaterDepth,
+			waterDepthGradient,
+			sampleDepthDelta);
+		filterValid =
+			filterValid &&
+			all(requestedPixel == samplePixel) &&
+			sampleValid;
+		// Keep the outputs finite even when the caller must use its fallback.
+		sampleDepthDelta = sampleValid ? sampleDepthDelta : 0.0;
+		filteredDepthDeltaGradient +=
+			ShoreGradientSobelWeights[sampleIndex] * sampleDepthDelta;
+	}
+
+	filteredDepthDeltaGradient /= 8.0 * filterRadius;
+	return filterValid;
+}
+
+float GetUnifiedWaterAnalyticShoreInteriorFactor(
+	float centerDepthDelta,
+	float depthDeltaGradientLength,
+	float featherWidth)
+{
+	if (depthDeltaGradientLength <= ShoreFeatherDepthGradientEpsilon)
+		return 1.0;
+
+	float estimatedShoreDistance =
+		centerDepthDelta / depthDeltaGradientLength;
+	float coveredInteriorDistance =
+		max(estimatedShoreDistance - 0.5, 0.0);
+	return smoothstep(0.0, featherWidth, coveredInteriorDistance);
+}
+
 float GetUnifiedWaterShoreInteriorFactor(
 	float2 screenPosition,
 	float centerSceneDepth,
@@ -1162,18 +1272,102 @@ float GetUnifiedWaterShoreInteriorFactor(
 
 	// Normalizing the signed hardware-depth separation by its local gradient
 	// estimates the distance to the water/terrain crossing in screen pixels.
-	// Flat shallow interiors therefore remain stabilized while diagonal and
-	// steep banks receive an orientation-independent edge transition.
+	// Use the fine derivative only as a conservative candidate test: terrain
+	// triangle boundaries make that quad-local estimate visibly polygonal when
+	// it directly shapes a wide feather.
 	float depthDeltaGradientLength = length(depthDeltaGradient);
 	if (depthDeltaGradientLength <= ShoreFeatherDepthGradientEpsilon)
 		return 1.0;
 
-	float estimatedShoreDistance = centerDepthDelta / depthDeltaGradientLength;
-	float coveredInteriorDistance = max(estimatedShoreDistance - 0.5, 0.0);
-	if (coveredInteriorDistance >= featherWidth)
+	// L1 is conservative here: its no-larger distance keeps the filtered
+	// candidate band at least as wide as the Euclidean estimate.
+	float conservativeGradientLength =
+		abs(depthDeltaGradient.x) +
+		abs(depthDeltaGradient.y);
+	float conservativeShoreDistance =
+		centerDepthDelta / conservativeGradientLength;
+	float candidateFadeStart =
+		ShoreGradientCandidateScale * featherWidth +
+		ShoreGradientCandidateMargin;
+	float candidateFadeEnd = 2.0 * candidateFadeStart;
+	if (conservativeShoreDistance >= candidateFadeEnd) {
+		return 1.0;
+	}
+	float gradientFilterWeight =
+		1.0 -
+		smoothstep(
+			candidateFadeStart,
+			candidateFadeEnd,
+			conservativeShoreDistance);
+
+	int2 renderDimensions = GetUnifiedWaterDepthRenderDimensions();
+	int2 centerPixel = ClampUnifiedWaterDepthPixel(
+		int2(screenPosition),
+		eyeIndex,
+		renderDimensions);
+	int filterRadius = clamp(
+		(int)round(featherWidth * ShoreGradientFilterWidthScale),
+		1,
+		ShoreGradientFilterMaxRadius);
+
+	float2 analyticDepthDeltaGradient = depthDeltaGradient;
+	float analyticDepthDeltaGradientLength = depthDeltaGradientLength;
+	float2 filteredDepthDeltaGradient;
+	bool filterValid = TryGetUnifiedWaterFilteredDepthDeltaGradient(
+		centerPixel,
+		filterRadius,
+		centerWaterDepth,
+		waterDepthGradient,
+		eyeIndex,
+		renderDimensions,
+		filteredDepthDeltaGradient);
+	float analyticInteriorFactor =
+		GetUnifiedWaterAnalyticShoreInteriorFactor(
+			centerDepthDelta,
+			depthDeltaGradientLength,
+			featherWidth);
+	[flatten] if (filterValid)
+	{
+		// Sobel's perpendicular 1-2-1 weights smooth derivative discontinuities
+		// without moving the exact center-depth crossing or narrowing streams.
+		float filteredDepthDeltaGradientLength =
+			length(filteredDepthDeltaGradient);
+		if (
+			filteredDepthDeltaGradientLength >
+			ShoreFeatherDepthGradientEpsilon) {
+			float filteredInteriorFactor =
+				GetUnifiedWaterAnalyticShoreInteriorFactor(
+					centerDepthDelta,
+					filteredDepthDeltaGradientLength,
+					featherWidth);
+			analyticInteriorFactor = lerp(
+				analyticInteriorFactor,
+				filteredInteriorFactor,
+				gradientFilterWeight);
+			float2 blendedDepthDeltaGradient = lerp(
+				depthDeltaGradient,
+				filteredDepthDeltaGradient,
+				gradientFilterWeight);
+			float blendedDepthDeltaGradientLength =
+				length(blendedDepthDeltaGradient);
+			if (
+				blendedDepthDeltaGradientLength >
+				ShoreFeatherDepthGradientEpsilon) {
+				analyticDepthDeltaGradient =
+					blendedDepthDeltaGradient;
+				analyticDepthDeltaGradientLength =
+					blendedDepthDeltaGradientLength;
+			}
+		}
+	}
+	if (
+		analyticDepthDeltaGradientLength <=
+		ShoreFeatherDepthGradientEpsilon) {
+		return 1.0;
+	}
+	if (analyticInteriorFactor >= 1.0)
 		return 1.0;
 
-	float analyticInteriorFactor = smoothstep(0.0, featherWidth, coveredInteriorDistance);
 	float confirmationWeight = 1.0;
 	[branch] if (cullingEnabled)
 	{
@@ -1183,18 +1377,16 @@ float GetUnifiedWaterShoreInteriorFactor(
 			return analyticInteriorFactor;
 	}
 
-	// Confirm the predicted edge at the outer feather radius. The local linear
-	// crossing estimate is suitable for shaping the analytic feather but is too
-	// sensitive to uneven streambeds and steep banks to locate its validation
-	// sample. A gather conservatively accepts any terrain-covered texel in its
-	// footprint, avoiding the old rounded single-probe direction without turning
-	// partial confirmation into additional stabilization.
+	// Confirm the predicted edge at the outer feather radius. A gather
+	// conservatively accepts any terrain-covered texel in its footprint, avoiding
+	// a rounded single-probe direction without turning partial confirmation into
+	// additional stabilization.
 	// Beyond the cull distance the analytic result above remains active, retaining
 	// a cheap transparent perimeter instead of reverting to a hard stabilized edge.
-	float2 confirmationDirection = -depthDeltaGradient / depthDeltaGradientLength;
+	float2 confirmationDirection =
+		-analyticDepthDeltaGradient /
+		analyticDepthDeltaGradientLength;
 	float confirmationDistance = featherWidth + 0.5;
-	int2 renderDimensions = GetUnifiedWaterDepthRenderDimensions();
-	int2 centerPixel = int2(screenPosition);
 	float2 confirmationPosition = ClampUnifiedWaterDepthGatherPosition(
 		float2(centerPixel) + 0.5 + confirmationDirection * confirmationDistance,
 		eyeIndex,
@@ -1227,7 +1419,8 @@ float GetUnifiedWaterShoreInteriorFactor(
 		IsUnifiedWaterShoreSample(
 			confirmationSceneDepths.w,
 			confirmationWaterDepths.w));
-	float confirmedInteriorFactor = any(confirmationSamples) ? analyticInteriorFactor : 1.0;
+	float confirmedInteriorFactor =
+		any(confirmationSamples) ? analyticInteriorFactor : 1.0;
 
 	return lerp(analyticInteriorFactor, confirmedInteriorFactor, confirmationWeight);
 }

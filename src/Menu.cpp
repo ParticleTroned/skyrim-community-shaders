@@ -1150,6 +1150,32 @@ void Menu::DrawOverlay()
 		ThemeManager::ResolveFontSize(*this));
 }
 
+bool Menu::IsMenuSessionOpen() const
+{
+	const auto* editorWindow = EditorWindow::GetSingleton();
+	return IsEnabled || (editorWindow && editorWindow->open);
+}
+
+void Menu::CloseMenu()
+{
+	auto* editorWindow = EditorWindow::GetSingleton();
+	const bool editorWasOpen = editorWindow && editorWindow->open;
+	if (!IsEnabled && !editorWasOpen)
+		return;
+
+	if (editorWindow) {
+		editorWindow->open = false;
+		editorWindow->UpdateOpenState();
+	}
+	IsEnabled = false;
+
+	PerformanceTuningRenderer::NotifyMenuClosed();
+	PerformanceTuningRenderer::CancelActiveMeasurements();
+
+	if (globals::features::vr.IsOpenVRCompatible())
+		globals::features::vr.ResetMenuInputRuntimeState();
+}
+
 /**
  * @brief Processes queued input events for both VR and non-VR devices
  *
@@ -1256,16 +1282,13 @@ void Menu::ProcessInputEventQueue()
 				KeyAction keyActions[] = {
 					{ settings.ToggleKey, [this]() {
 						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
-							 const bool wasEnabled = IsEnabled;
-							 IsEnabled = !IsEnabled;
-							 if (globals::features::vr.IsOpenVRCompatible()) {
-								 globals::features::vr.ResetMenuInputRuntimeState();
-							 }
-							 if (IsEnabled)
+							 if (IsMenuSessionOpen()) {
+								 CloseMenu();
+							 } else {
+								 IsEnabled = true;
+								 if (globals::features::vr.IsOpenVRCompatible())
+									 globals::features::vr.ResetMenuInputRuntimeState();
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
-							 else if (wasEnabled) {
-								 PerformanceTuningRenderer::NotifyMenuClosed();
-								 PerformanceTuningRenderer::CancelActiveMeasurements();
 							 }
 						 }
 					 } },
@@ -1402,12 +1425,7 @@ void Menu::ProcessInputEventQueue()
 					} else if (editorWindow && editorWindow->open && editorWindow->ShouldHandleEscapeKey()) {
 						editorWindow->open = false;
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
-						IsEnabled = false;
-						PerformanceTuningRenderer::NotifyMenuClosed();
-						PerformanceTuningRenderer::CancelActiveMeasurements();
-						if (globals::features::vr.IsOpenVRCompatible()) {
-							globals::features::vr.ResetMenuInputRuntimeState();
-						}
+						CloseMenu();
 					}
 				}
 			} else if (event.IsDown() && !wasCapturingHotkey) {
@@ -1500,8 +1518,7 @@ void Menu::ProcessInputEvents(RE::InputEvent* const* a_events)
 
 bool Menu::ShouldSwallowInput()
 {
-	auto editorWindow = EditorWindow::GetSingleton();
-	return IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup() || (editorWindow && editorWindow->open);
+	return IsMenuSessionOpen() || HomePageRenderer::ShouldShowFirstTimeSetup();
 }
 
 bool Menu::ShouldBlockAllGameInput()

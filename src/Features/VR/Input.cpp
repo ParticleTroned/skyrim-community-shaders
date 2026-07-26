@@ -151,6 +151,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 	bool& isEnabled = globals::menu->IsEnabled;
 	bool& overlayEnabled = globals::menu->overlayVisible;
 	bool& testMode = settings.VRMenuControllerDiagnosticsTestMode;
+	const bool menuSessionOpen = globals::menu->IsMenuSessionOpen();
 
 	if (testMode) {
 		if (!isEnabled) {
@@ -200,11 +201,11 @@ void VR::UpdateOverlayMenuStateFromInput()
 		!ShouldUseInSceneOverlay() &&
 		openVRInfo.hasOverlayInterface &&
 		settings.attachMode != AttachMode::None;
-	const bool canUseMenuBindings = uiMenusOpen || isEnabled || canOpenMenuFromWorld;
+	const bool canUseMenuBindings = uiMenusOpen || menuSessionOpen || canOpenMenuFromWorld;
 
 	bool inValidMenuState =
 		uiMenusOpen ||
-		isEnabled ||
+		menuSessionOpen ||
 		overlayEnabled ||
 		(canUseMenuBindings && (menuOpenPressed || menuClosePressed)) ||
 		overlayOpenPressed ||
@@ -231,11 +232,10 @@ void VR::UpdateOverlayMenuStateFromInput()
 
 		// Close Community Shaders menu when open
 		{ [&]() {
-			 return menuClosePressed && isEnabled;
+			 return menuClosePressed && menuSessionOpen;
 		 },
 			[&]() {
-				isEnabled = false;
-				ResetMenuInputRuntimeState();
+				globals::menu->CloseMenu();
 			} },
 
 		// Open VR overlay when closed

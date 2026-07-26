@@ -125,6 +125,10 @@ public:
 	// Search bar state
 	std::string featureSearch;  // For left pane feature search
 	void DrawOverlay();
+	/// True while either the main menu or its CS Editor surface is open.
+	bool IsMenuSessionOpen() const;
+	/// Closes the main menu and any active CS Editor surface as one UI session.
+	void CloseMenu();
 
 	void ProcessInputEvents(RE::InputEvent* const* a_events);
 	bool ShouldSwallowInput();

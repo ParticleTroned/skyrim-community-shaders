@@ -13327,7 +13327,7 @@ namespace
 {
 	void DrawVRRenderScaleModeTooltip()
 	{
-		ImGui::TextUnformatted("Experimental. Can provide a strong performance boost, but it is not fully tested in all situations.");
+		ImGui::TextUnformatted("Can provide a strong performance boost, but it is not fully tested in all situations.");
 		ImGui::TextUnformatted("DLSS/FSR VR only.");
 		ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
@@ -13516,7 +13516,7 @@ void Upscaling::DrawSettings()
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			if (ImGui::SliderInt("Render Scale (Experimental)", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+			if (ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				ApplyCSMenuUpscalingTransition(
 					upscaleMethod,
@@ -14121,7 +14121,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			if (ImGui::SliderInt("Render Scale (Experimental)", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+			if (ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				ApplyCSMenuUpscalingTransition(
 					upscaleMethod,

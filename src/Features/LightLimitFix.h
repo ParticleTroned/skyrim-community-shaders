@@ -6,6 +6,9 @@
 
 #include "Features/LightLimitFix/ParticleLights.h"
 
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <shared_mutex>
 
@@ -153,16 +156,56 @@ public:
 	float lightsNear = 1;
 	float lightsFar = 16384;
 
-	struct ParticleLightInfo
+	struct ParticleEmitterLight
 	{
-		bool billboard;
-		RE::BSGeometry* node;
+		RE::NiPointer<RE::NiParticleSystem> node;
+		RE::NiPointer<RE::NiPSysData> particleData;
 		RE::NiColorA color;
 		float radiusMult = 1.0f;
+		float saturationMult = 1.0f;
+		std::uint64_t sequence = 0;
+	};
+
+	struct ResolvedBillboardLight
+	{
+		RE::NiPoint3 position;
+		float radius = 0.0f;
+		float3 color{};
+		std::uint32_t flickerSeed = 0;
 		bool flicker = false;
 		float flickerSpeed = 1.0f;
 		float flickerIntensity = 0.0f;
 		float flickerMovement = 0.0f;
+		std::uint64_t sequence = 0;
+	};
+
+	struct ParticleLightKey
+	{
+		RE::BSGeometry* geometry = nullptr;
+		RE::BSShaderProperty* shaderProperty = nullptr;
+
+		bool operator==(const ParticleLightKey&) const = default;
+	};
+
+	struct ParticleLightKeyHash
+	{
+		[[nodiscard]] std::size_t operator()(const ParticleLightKey& a_key) const noexcept
+		{
+			std::size_t hash = reinterpret_cast<std::size_t>(a_key.geometry) >> 4;
+			const std::size_t shaderPropertyHash = reinterpret_cast<std::size_t>(a_key.shaderProperty) >> 4;
+			hash ^= shaderPropertyHash + std::size_t{ 0x9E3779B9u } + (hash << 6) + (hash >> 2);
+			return hash;
+		}
+	};
+
+	struct ParticleLightCacheSignature
+	{
+		RE::BSShaderMaterial* material = nullptr;
+		RE::BSGraphics::TriShape* rendererData = nullptr;
+		const std::uint8_t* rawVertexData = nullptr;
+		bool billboard = false;
+
+		bool operator==(const ParticleLightCacheSignature&) const = default;
 	};
 
 	struct ParticleLightReference
@@ -178,12 +221,37 @@ public:
 		std::uint64_t configVersion = 0;
 	};
 
-	eastl::hash_map<RE::BSGeometry*, ParticleLightReference> particleLightsReferences;
-	eastl::vector<ParticleLightInfo> queuedParticleLights;
-	eastl::vector<ParticleLightInfo> currentParticleLights;
-	std::mutex particleLightsQueueMutex;
+	struct ParticleLightCacheEntry
+	{
+		ParticleLightReference reference{};
+		ParticleLightCacheSignature signature{};
+		RE::BSFixedString sourceTexturePath;
+		RE::BSFixedString gradientTexturePath;
+		std::uint32_t lastSeenFrame = 0;
+		std::uint32_t tintResolvedFrame = 0;
+	};
 
-	void CleanupParticleLights(RE::NiNode* a_node);
+	struct ParticleLightDiagnostics
+	{
+		std::atomic<std::size_t> currentEmitters{ 0 };
+		std::atomic<std::size_t> currentBillboards{ 0 };
+		std::atomic<std::size_t> cacheEntries{ 0 };
+	};
+
+	eastl::hash_map<ParticleLightKey, ParticleLightCacheEntry, ParticleLightKeyHash> particleLightsReferences;
+	std::mutex particleLightsCacheMutex;
+	std::uint32_t lastParticleLightCacheSweepFrame = 0;
+
+	eastl::vector<ParticleEmitterLight> queuedParticleEmitters;
+	eastl::vector<ParticleEmitterLight> currentParticleEmitters;
+	eastl::vector<ResolvedBillboardLight> queuedBillboardLights;
+	eastl::vector<ResolvedBillboardLight> currentBillboardLights;
+	eastl::hash_map<ParticleLightKey, std::size_t, ParticleLightKeyHash> queuedEmitterIndices;
+	eastl::hash_map<ParticleLightKey, std::size_t, ParticleLightKeyHash> queuedBillboardIndices;
+	std::uint64_t nextParticleLightSequence = 0;
+	std::mutex particleLightsQueueMutex;
+	std::mutex currentParticleLightsMutex;
+	ParticleLightDiagnostics particleLightDiagnostics;
 
 	RE::NiPoint3 eyePositionCached{};
 	bool wasEmpty = false;
@@ -215,7 +283,7 @@ public:
 	virtual void ClearShaderCache() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, const ParticleLightInfo* a_particleLight = nullptr);
+	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, const ResolvedBillboardLight* a_billboardLight = nullptr);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void RefreshJsonPlacedLightCacheFrame();
 	bool IsJsonPlacedLight(RE::BSLight* a_bsLight, RE::NiLight* a_niLight);
@@ -305,8 +373,9 @@ public:
 	}
 
 	ParticleLightReference GetParticleLightConfigs(RE::BSRenderPass* a_pass);
-	bool AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightReference a_reference);
+	bool AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLightReference& a_reference);
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
+	void PruneParticleLightCache(std::uint32_t a_frame);
 
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
 
@@ -354,12 +423,6 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct NiNode_Destroy
-		{
-			static void thunk(RE::NiNode* This);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		template <int N>
 		struct ValidLight
 		{
@@ -384,7 +447,6 @@ public:
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			stl::write_vfunc<0x6, BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 			stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
-			stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
 			stl::write_thunk_call<ValidLight1>(REL::RelocationID(100994, 107781).address() + 0x92);
 			stl::write_thunk_call<ValidLight2>(REL::RelocationID(100997, 107784).address() + REL::Relocate(0x139, 0x12A));
 			stl::write_thunk_call<ValidLight3>(REL::RelocationID(101296, 108283).address() + REL::Relocate(0xB7, 0x7E));

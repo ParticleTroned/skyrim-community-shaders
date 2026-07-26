@@ -85,7 +85,7 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "CS_PL_FORK_VERSION": "PL3.15-VR"
+                "CS_PL_FORK_VERSION": "PL3.16-VR"
             },
             "inherits": "skyrim"
         },
@@ -122,7 +122,7 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "CS_PL_FORK_VERSION": "PL3.15-VR"
+                "CS_PL_FORK_VERSION": "PL3.16-VR"
             },
             "inherits": "skyrim"
         },

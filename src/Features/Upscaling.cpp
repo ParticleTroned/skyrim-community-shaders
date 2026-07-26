@@ -5083,6 +5083,8 @@ namespace
 		auto ui = globals::game::ui;
 		return g_vrMapMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       (state && state->isMapMenuOpen) ||
+		       g_vrStatsMenuOpenFromEvent.load(std::memory_order_acquire) ||
+		       g_vrDialogueMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       IsMainMenuContextActive() ||
 		       IsLoadingMenuContextActive() ||
@@ -10542,7 +10544,11 @@ bool Upscaling::IsVRMenuSemanticAdapterEligible() const
 		return false;
 	if (vrMenuAdapterPreflightFailureFrame == globals::state->frameCount)
 		return false;
-	if (!IsVRMenuPresentationContextActive())
+	// Consumer paths may use a presentation tail to complete the bounded
+	// post-close presentation handoff, but the tail must not authorize a new
+	// semantic producer. Successful captures extend that same tail, so admitting
+	// tail-only frames here would keep the adapter and render-scale block alive.
+	if (!IsExplicitVRMenuPresentationContextActive())
 		return false;
 	if (!g_vrMenuBridgeHigherCallHookInstalled.load(std::memory_order_acquire) ||
 		!g_vrMenuBridgeDirectDrawHookInstalled.load(std::memory_order_acquire)) {
@@ -12498,6 +12504,11 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		graphicsState->projectionPosScaleY != 0.0f) {
 		return decide("menu-projection-dejitter-failed", false);
 	}
+	// Eligibility was checked before resource preparation. Revalidate the live
+	// menu context at the ownership boundary so an interleaved close event cannot
+	// publish a new layer or rearm any presentation tail.
+	if (!IsExplicitVRMenuPresentationContextActive())
+		return decide("menu-context-ended-before-capture", false);
 
 	// The exact reduced menu bridge is a direct menu-text signal. Arm the short
 	// observed tail only after an explicit menu context confirms this is not

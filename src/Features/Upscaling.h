@@ -791,7 +791,7 @@ public:
 	static constexpr uint32_t kVRLoadPresentationProbeSampleCount =
 		kVRLoadPresentationProbeGridSize * kVRLoadPresentationProbeGridSize;
 	static constexpr uint32_t kVRLoadPresentationProbeRetentionCapacity = 4096;
-	static constexpr uint32_t kVRLoadPresentationProbePendingCapacity = 8;
+	static constexpr uint32_t kVRLoadPresentationProbePendingCapacity = 16;
 
 	enum class VRLoadPresentationProbeCaptureStatus : uint8_t
 	{
@@ -811,7 +811,9 @@ public:
 		Upscaled,
 		TransitionHold,
 		CompositorHold,
-		InSceneOverlay
+		InSceneOverlay,
+		CompositorKeepalive,
+		CompositorQuarantine
 	};
 
 	struct VRLoadPresentationProbeRecord
@@ -1572,17 +1574,50 @@ public:
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	bool ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const;
+
+	struct VRPostLoadCompositorKeepaliveSubmission
+	{
+		vr::Texture_t texture{};
+		vr::VRTextureBounds_t bounds{ 0.0f, 0.0f, 1.0f, 1.0f };
+		winrt::com_ptr<ID3D11Texture2D> lifetime;
+		uint64_t token = 0;
+		bool quarantine = false;
+
+		[[nodiscard]] bool IsValid() const noexcept
+		{
+			return token != 0 && texture.handle && lifetime;
+		}
+	};
+
+	enum class VRPostLoadCompositorKeepaliveDisposition : uint8_t
+	{
+		NotApplicable,
+		Accepted,
+		AlreadySatisfied,
+		Retry,
+		RejectedCanFallback,
+		RejectedPeerSatisfied,
+		Aborted
+	};
+
 	bool IsVRPostLoadCompositorHoldActive() const noexcept;
+	bool ShouldQuarantineVRPostLoadCompositorCycle(
+		uint64_t a_compositorCycleToken) const noexcept;
 	bool ShouldSuppressVRPostLoadCompositorSubmit(
 		vr::EVREye a_eye,
 		const vr::Texture_t* a_texture,
 		const vr::VRTextureBounds_t* a_bounds,
 		const VRRenderScalePresentationObservation* a_presentationObservation,
-		uint64_t& a_releaseToken);
-	void CompleteVRPostLoadCompositorSubmit(
+		uint64_t a_compositorCycleToken,
+		uint64_t& a_releaseToken,
+		VRPostLoadCompositorKeepaliveSubmission& a_keepaliveSubmission);
+	VRPostLoadCompositorKeepaliveDisposition CompleteVRPostLoadCompositorSubmit(
 		vr::EVREye a_eye,
 		vr::EVRCompositorError a_result,
-		uint64_t a_releaseToken);
+		uint64_t a_releaseToken,
+		uint64_t a_keepaliveToken,
+		uint64_t a_compositorCycleToken,
+		bool a_postLoadHoldActiveAtSubmitEntry);
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
 	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
@@ -2084,18 +2119,43 @@ private:
 	std::atomic<uint64_t> vrPostLoadCompositorHoldCandidateEyeMaskState{ 0 };
 	VRPostLoadHMDMaskRepairEvidence vrPostLoadCompositorHoldFixedRepair{};
 	VRPostLoadHMDMaskRepairEvidence vrPostLoadCompositorHoldSubmitRepair{};
+	uint64_t vrPostLoadCompositorKeepaliveOccupiedCycleToken = 0;
+	uint32_t vrPostLoadCompositorKeepaliveOccupiedEyeMask = 0;
+	uint32_t vrPostLoadCompositorReleaseOccupiedEyeMask = 0;
+	uint32_t vrPostLoadCompositorUnknownOccupiedEyeMask = 0;
+	std::array<uint64_t, 2> vrPostLoadCompositorReleaseOccupiedEpoch{};
+	uint32_t vrPostLoadCompositorPrePoseKeepaliveOccupiedEyeMask = 0;
+	uint32_t vrPostLoadCompositorPrePoseUnknownOccupiedEyeMask = 0;
+	std::atomic<uint64_t> vrPostLoadCompositorQuarantinedCycleToken{ 0 };
+	std::atomic_bool vrPostLoadCompositorPrePoseCycleQuarantined{ false };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldReleaseAttemptEyeMaskState{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldReleasedEyeMaskState{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldEpoch{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldAwaitingSyncEpoch{ 0 };
+	winrt::com_ptr<ID3D11Texture2D> vrPostLoadCompositorKeepaliveTexture;
+	winrt::com_ptr<ID3D11Device> vrPostLoadCompositorKeepaliveDevice;
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
+	std::mutex vrPostLoadCompositorRepairMutex;
 
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
 	void ArmVRPostLoadCompositorHold(bool a_awaitingStabilizerSync = false);
 	void ResetVRPostLoadCompositorHold();
-	void ResetVRPostLoadCompositorHoldLocked();
+	void ResetVRPostLoadCompositorHoldLocked(
+		VRPostLoadCompositorHoldState a_finalState =
+			VRPostLoadCompositorHoldState::Idle);
+	bool PrepareVRPostLoadCompositorKeepaliveLocked(
+		ID3D11Texture2D* a_candidateTexture,
+		VRPostLoadCompositorKeepaliveSubmission& a_submission);
+	bool TryRepairVRPostLoadFixedCompositorCandidate(
+		ID3D11Texture2D* a_candidateTexture,
+		const D3D11_TEXTURE2D_DESC& a_candidateDesc,
+		UpscaleMethod a_runtimeMethod,
+		uint32_t a_currentFrame,
+		uint32_t a_expectedRenderWidth,
+		uint32_t a_expectedRenderHeight);
+	void ReleaseVRPostLoadCompositorKeepalive();
 	bool DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,

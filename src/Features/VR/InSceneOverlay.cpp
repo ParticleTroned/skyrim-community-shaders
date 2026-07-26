@@ -16,6 +16,7 @@
 #include <d3dcompiler.h>
 #include <imgui_impl_dx11.h>
 #include <limits>
+#include <mutex>
 
 using namespace DirectX;
 using namespace DirectX::SimpleMath;
@@ -28,6 +29,9 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+	std::atomic<uint64_t> g_openVRSubmitCycleToken{ 0 };
+	std::mutex g_vrPostLoadCompositorSubmitMutex;
+
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic_bool g_openVRSubmitProcessingEnabled{ false };
 #endif
@@ -257,33 +261,114 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 }
 )";
 
+	struct IVRCompositor_WaitGetPoses
+	{
+		static vr::EVRCompositorError thunk(
+			vr::IVRCompositor* _this,
+			vr::TrackedDevicePose_t* pRenderPoseArray,
+			uint32_t unRenderPoseArrayCount,
+			vr::TrackedDevicePose_t* pGamePoseArray,
+			uint32_t unGamePoseArrayCount)
+		{
+			// OpenVR defines one Submit cycle as the interval before the next
+			// WaitGetPoses call. Publish that exact boundary before rendering
+			// begins; zero remains reserved for pre-hook/pre-pose submissions.
+			g_openVRSubmitCycleToken.fetch_add(1, std::memory_order_acq_rel);
+			return func(
+				_this,
+				pRenderPoseArray,
+				unRenderPoseArrayCount,
+				pGamePoseArray,
+				unGamePoseArrayCount);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct IVRCompositor_Submit
 	{
 		static vr::EVRCompositorError thunk(vr::IVRCompositor* _this, vr::EVREye eEye, const vr::Texture_t* pTexture, const vr::VRTextureBounds_t* pBounds, vr::EVRSubmitFlags nSubmitFlags)
 		{
 			auto& vr = globals::features::vr;
 			auto& upscaling = globals::features::upscaling;
+			uint64_t compositorCycleToken =
+				g_openVRSubmitCycleToken.load(std::memory_order_acquire);
+			const bool postLoadHoldActiveAtHookEntry =
+				upscaling.IsVRPostLoadCompositorHoldActive();
+			const bool quarantinedAtHookEntry =
+				upscaling.ShouldQuarantineVRPostLoadCompositorCycle(
+					compositorCycleToken);
+			std::unique_lock postLoadSubmitLock(
+				g_vrPostLoadCompositorSubmitMutex,
+				std::defer_lock);
+			if (postLoadHoldActiveAtHookEntry || quarantinedAtHookEntry) {
+				// OpenVR scene submissions are normally serial already. Make
+				// that guarantee explicit only during the short post-load hold
+				// so one eye cannot race a quarantine/release decision.
+				postLoadSubmitLock.lock();
+				compositorCycleToken =
+					g_openVRSubmitCycleToken.load(std::memory_order_acquire);
+			}
+			const auto rejectQuarantinedSubmit = [&](
+													 const vr::Texture_t* a_texture,
+													 const vr::VRTextureBounds_t* a_bounds) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			const Upscaling::VRRenderScalePresentationObservation* probePresentationObservation = nullptr;
+				const uint64_t probeSequence =
+					upscaling.BeginVRLoadPresentationProbeSubmit(
+						"compositor-quarantine",
+						eEye,
+						a_texture,
+						a_bounds,
+						nSubmitFlags,
+						nullptr);
+				upscaling.CompleteVRLoadPresentationProbeSubmit(
+					probeSequence,
+					vr::VRCompositorError_RequestFailed);
 #endif
+				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
+					"post-load-cycle-quarantine",
+					eEye,
+					a_texture,
+					a_bounds,
+					nSubmitFlags,
+					vr::VRCompositorError_RequestFailed);
+				return vr::VRCompositorError_RequestFailed;
+			};
+			if (upscaling.ShouldQuarantineVRPostLoadCompositorCycle(
+					compositorCycleToken))
+				return rejectQuarantinedSubmit(pTexture, pBounds);
+			const Upscaling::VRRenderScalePresentationObservation* probePresentationObservation = nullptr;
 			auto submit = [&](const char* a_path,
 							  const vr::Texture_t* a_texture,
 							  const vr::VRTextureBounds_t* a_bounds,
-							  uint64_t a_postLoadReleaseToken = 0) {
+							  vr::EVRSubmitFlags a_submitFlags,
+							  uint64_t a_postLoadReleaseToken = 0,
+							  uint64_t a_postLoadKeepaliveToken = 0,
+							  const Upscaling::VRRenderScalePresentationObservation* a_probeObservation = nullptr,
+							  Upscaling::VRPostLoadCompositorKeepaliveDisposition* a_keepaliveDisposition = nullptr) {
+				(void)a_probeObservation;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				const uint64_t probeSequence = upscaling.BeginVRLoadPresentationProbeSubmit(
 					a_path,
 					eEye,
 					a_texture,
 					a_bounds,
-					nSubmitFlags,
-					probePresentationObservation);
+					a_submitFlags,
+					a_probeObservation);
 #endif
-				const auto result = func(_this, eEye, a_texture, a_bounds, nSubmitFlags);
-				upscaling.CompleteVRPostLoadCompositorSubmit(
-					eEye,
-					result,
-					a_postLoadReleaseToken);
+				const bool postLoadHoldActiveAtSubmitEntry =
+					postLoadHoldActiveAtHookEntry ||
+					upscaling.IsVRPostLoadCompositorHoldActive();
+				const auto result = func(_this, eEye, a_texture, a_bounds, a_submitFlags);
+				const auto keepaliveDisposition =
+					upscaling.CompleteVRPostLoadCompositorSubmit(
+						eEye,
+						result,
+						a_postLoadReleaseToken,
+						a_postLoadKeepaliveToken,
+						compositorCycleToken,
+						postLoadHoldActiveAtSubmitEntry);
+				if (a_keepaliveDisposition)
+					*a_keepaliveDisposition = keepaliveDisposition;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				upscaling.CompleteVRLoadPresentationProbeSubmit(probeSequence, result);
 #endif
@@ -292,11 +377,18 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					eEye,
 					a_texture,
 					a_bounds,
-					nSubmitFlags,
+					a_submitFlags,
 					result);
 				return result;
 			};
-			auto suppressPostLoadSubmit = [&](const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds) {
+			auto suppressPostLoadSubmit = [&](
+											  const char* a_candidatePath,
+											  const vr::Texture_t* a_texture,
+											  const vr::VRTextureBounds_t* a_bounds,
+											  const Upscaling::VRPostLoadCompositorKeepaliveSubmission& a_keepalive,
+											  bool a_recordCandidateObservationOnFallback) {
+				if (a_keepalive.quarantine)
+					return rejectQuarantinedSubmit(a_texture, a_bounds);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				// Queue the candidate for inspection, but deliberately leave its
 				// compositor result unknown because OpenVR is not called.
@@ -308,7 +400,62 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					nSubmitFlags,
 					probePresentationObservation);
 #endif
-				return vr::VRCompositorError_None;
+				const auto submitCandidateFallback = [&]() {
+					const auto fallbackResult = submit(
+						a_candidatePath,
+						a_texture,
+						a_bounds,
+						nSubmitFlags,
+						0,
+						0,
+						probePresentationObservation);
+					if (fallbackResult == vr::VRCompositorError_None &&
+						a_recordCandidateObservationOnFallback &&
+						probePresentationObservation &&
+						probePresentationObservation->valid) {
+						upscaling.RecordVRRenderScalePresentationObservation(
+							*probePresentationObservation);
+					}
+					return fallbackResult;
+				};
+
+				// ShouldSuppress supplies either an explicit one-cycle
+				// quarantine or a real black submission. Preserve continuity if
+				// neither invariant is satisfied instead of manufacturing a
+				// successful no-submit result.
+				if (!a_keepalive.IsValid())
+					return submitCandidateFallback();
+
+				Upscaling::VRPostLoadCompositorKeepaliveDisposition
+					keepaliveDisposition =
+						Upscaling::VRPostLoadCompositorKeepaliveDisposition::
+							NotApplicable;
+				const auto keepaliveResult = submit(
+					"compositor-keepalive",
+					&a_keepalive.texture,
+					&a_keepalive.bounds,
+					vr::Submit_Default,
+					0,
+					a_keepalive.token,
+					nullptr,
+					&keepaliveDisposition);
+				switch (keepaliveDisposition) {
+				case Upscaling::VRPostLoadCompositorKeepaliveDisposition::
+					Accepted:
+					return keepaliveResult;
+				case Upscaling::VRPostLoadCompositorKeepaliveDisposition::
+					AlreadySatisfied:
+					return vr::VRCompositorError_None;
+				case Upscaling::VRPostLoadCompositorKeepaliveDisposition::
+					RejectedCanFallback:
+					// OpenVR rejected the keepalive before either eye was
+					// accepted. Fail open once to the exact candidate.
+					return submitCandidateFallback();
+				default:
+					// Transient, peer-satisfied, and interface-level failures
+					// must not issue a second, visually different Submit.
+					return keepaliveResult;
+				}
 			};
 
 			// DevBench may install the interception before the production render
@@ -317,34 +464,40 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			// unchanged and use the hook only as a probe boundary.
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (!g_openVRSubmitProcessingEnabled.load(std::memory_order_acquire))
-				return submit("original", pTexture, pBounds);
+				return submit("original", pTexture, pBounds, nSubmitFlags);
 #endif
 
 			if (!upscaling.IsVRPostLoadCompositorHoldActive() &&
 				!upscaling.IsVRRenderScaleModeLatched() &&
 				!upscaling.IsPresentationUpscalingActive() &&
 				!ShouldRenderInSceneMenu(vr)) {
-				return submit("original", pTexture, pBounds);
+				return submit("original", pTexture, pBounds, nSubmitFlags);
 			}
 
 			Upscaling::VRRenderScalePresentationObservation presentationObservation{};
 			uint64_t postLoadReleaseToken = 0;
+			Upscaling::VRPostLoadCompositorKeepaliveSubmission postLoadKeepalive{};
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
 					probePresentationObservation = &presentationObservation;
-#endif
 					if (upscaling.ShouldSuppressVRPostLoadCompositorSubmit(
 							eEye,
 							&upscaledTexture,
 							&upscaledBounds,
 							&presentationObservation,
-							postLoadReleaseToken)) {
-						return suppressPostLoadSubmit(&upscaledTexture, &upscaledBounds);
+							compositorCycleToken,
+							postLoadReleaseToken,
+							postLoadKeepalive)) {
+						return suppressPostLoadSubmit(
+							"upscaled",
+							&upscaledTexture,
+							&upscaledBounds,
+							postLoadKeepalive,
+							true);
 					}
 					if (postLoadReleaseToken == 0 &&
 						ShouldRenderInSceneMenu(vr) &&
@@ -355,23 +508,32 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						"upscaled",
 						&upscaledTexture,
 						&upscaledBounds,
-						postLoadReleaseToken);
+						nSubmitFlags,
+						postLoadReleaseToken,
+						0,
+						&presentationObservation);
 					if (result == vr::VRCompositorError_None)
 						upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
 					return result;
 				}
 
+				probePresentationObservation =
+					presentationObservation.valid ? &presentationObservation : nullptr;
 				if (upscaling.ShouldSuppressVRPostLoadCompositorSubmit(
 						eEye,
 						pTexture,
 						pBounds,
 						presentationObservation.valid ? &presentationObservation : nullptr,
-						postLoadReleaseToken)) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					probePresentationObservation =
-						presentationObservation.valid ? &presentationObservation : nullptr;
-#endif
-					return suppressPostLoadSubmit(pTexture, pBounds);
+						compositorCycleToken,
+						postLoadReleaseToken,
+						postLoadKeepalive)) {
+					return suppressPostLoadSubmit(
+						"original",
+						pTexture,
+						pBounds,
+						postLoadKeepalive,
+						presentationObservation.path ==
+							Upscaling::VRRenderScalePresentationPath::BoundsMismatchOriginalFallback);
 				}
 
 				if (postLoadReleaseToken == 0 &&
@@ -414,19 +576,24 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
-						return submit("in-scene-overlay", &overlayTexture, pBounds);
+						return submit(
+							"in-scene-overlay",
+							&overlayTexture,
+							pBounds,
+							nSubmitFlags);
 					}
 				}
 			}
-#ifdef DEVBENCH_BRIDGE_ENABLED
 			probePresentationObservation =
 				presentationObservation.valid ? &presentationObservation : nullptr;
-#endif
 			const auto result = submit(
 				"original",
 				pTexture,
 				pBounds,
-				postLoadReleaseToken);
+				nSubmitFlags,
+				postLoadReleaseToken,
+				0,
+				presentationObservation.valid ? &presentationObservation : nullptr);
 			if (result == vr::VRCompositorError_None &&
 				presentationObservation.path == Upscaling::VRRenderScalePresentationPath::BoundsMismatchOriginalFallback) {
 				upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
@@ -1496,12 +1663,54 @@ bool VR::InstallSubmitHook(bool a_enableProcessing)
 		}
 		logger::debug("================================");
 
-		// IVRCompositor::Submit is index 5
+		// WaitGetPoses (index 2) provides the exact OpenVR Submit-cycle
+		// boundary; Submit itself is index 5. Install both hooks in one checked
+		// transaction: Submit suppression must never run without its cycle
+		// boundary, or a quarantine could become permanent.
+		auto* compositorVtable =
+			*reinterpret_cast<std::uintptr_t**>(compositor);
+		if (!compositorVtable ||
+			compositorVtable[2] == 0 ||
+			compositorVtable[5] == 0) {
+			logger::error(
+				"VR: Failed to install OpenVR compositor hooks: required vtable entries are unavailable");
+			return false;
+		}
+		IVRCompositor_WaitGetPoses::func = compositorVtable[2];
+		IVRCompositor_Submit::func = compositorVtable[5];
+		LONG hookResult = DetourTransactionBegin();
+		const bool transactionStarted = hookResult == NO_ERROR;
+		if (hookResult == NO_ERROR)
+			hookResult = DetourUpdateThread(GetCurrentThread());
+		if (hookResult == NO_ERROR) {
+			hookResult = DetourAttach(
+				reinterpret_cast<PVOID*>(&IVRCompositor_WaitGetPoses::func),
+				reinterpret_cast<PVOID>(IVRCompositor_WaitGetPoses::thunk));
+		}
+		if (hookResult == NO_ERROR) {
+			hookResult = DetourAttach(
+				reinterpret_cast<PVOID*>(&IVRCompositor_Submit::func),
+				reinterpret_cast<PVOID>(IVRCompositor_Submit::thunk));
+		}
+		if (hookResult != NO_ERROR) {
+			if (transactionStarted)
+				DetourTransactionAbort();
+			logger::error(
+				"VR: Failed to queue the atomic OpenVR compositor hooks (error {})",
+				hookResult);
+			return false;
+		}
+		hookResult = DetourTransactionCommit();
+		if (hookResult != NO_ERROR) {
+			logger::error(
+				"VR: Failed to commit the atomic OpenVR compositor hooks (error {})",
+				hookResult);
+			return false;
+		}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_enableProcessing)
 			g_openVRSubmitProcessingEnabled.store(true, std::memory_order_release);
 #endif
-		stl::detour_vfunc<5, IVRCompositor_Submit>(compositor);
 		installed = true;
 		inSceneResources.submitHookInstalled = true;
 

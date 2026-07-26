@@ -1211,8 +1211,13 @@ namespace TOD
 		return changed;
 	}
 
+	// TOD integer rows have their own tracker because the generic integer
+	// trackers are implementation details of the WeatherUtils namespace.
+	static DebouncedTracker<int> s_todInt8Tracker;
+
 	bool DrawTODInt8Row(const char* label, int values[4])
 	{
+		constexpr double debounceDelay = 2.0;
 		const double currentTime = ImGui::GetTime();
 		float factors[4];
 		GetTimeOfDayFactors(factors);
@@ -1241,10 +1246,12 @@ namespace TOD
 			const int previousValue = values[i];
 			if (ImGui::SliderInt(id.c_str(), &values[i], -127, 127)) {
 				changed = true;
-				s_int8Tracker.OnValueChanged(itemId, values[i], currentTime);
+				s_todInt8Tracker.OnValueChanged(itemId, values[i], currentTime);
 			}
-			if (s_int8Tracker.UpdateActiveState(itemId, ImGui::IsItemActive(), currentTime, 2.0))
+			if (s_todInt8Tracker.UpdateActiveState(
+					itemId, ImGui::IsItemActive(), currentTime, debounceDelay)) {
 				PushUndoWithPreviousValue(g_currentWidget, values[i], previousValue);
+			}
 
 			Util::AddTooltip(std::format("{:.0f}%", factors[i] * 100.0f).c_str());
 
@@ -1252,6 +1259,12 @@ namespace TOD
 
 			if (!isActive)
 				ImGui::PopStyleVar();
+		}
+
+		for (const auto& [key, value] :
+			s_todInt8Tracker.GetCompletedEntries(currentTime, debounceDelay)) {
+			PaletteWindow::GetSingleton()->TrackValueUsage(
+				std::string(UnscopeKey(key)), static_cast<float>(value));
 		}
 
 		PopTODHighlight(label, highlighted);

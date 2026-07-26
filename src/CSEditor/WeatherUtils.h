@@ -496,19 +496,19 @@ namespace WeatherUtils
 	// Generic form picker combo box using cached widget EditorIDs for performance
 	// Returns true if selection changed
 	template <typename T, typename WidgetContainer>
-	bool DrawFormPickerCached(const char* label, T*& currentForm, const WidgetContainer& widgets, bool showFormID = true, bool allowNone = true, float width = 450.0f, Widget* widget = nullptr)
+	bool DrawFormPickerCached(const char* label, T*& currentForm, const WidgetContainer& widgets, bool showFormID = true, bool allowNone = true, float width = 450.0f, Widget* trackingWidget = nullptr)
 	{
 		std::string currentEditorID;
 		if (currentForm) {
-			for (const auto& widget : widgets) {
-				if (widget->form == currentForm) {
-					currentEditorID = widget->GetEditorID();
+			for (const auto& cachedWidget : widgets) {
+				if (cachedWidget && cachedWidget->form == currentForm) {
+					currentEditorID = cachedWidget->GetEditorID();
 					break;
 				}
 			}
 		}
 
-		return detail::DrawFormComboBody<T>(label, currentForm, currentEditorID, showFormID, allowNone, width, widget,
+		return detail::DrawFormComboBody<T>(label, currentForm, currentEditorID, showFormID, allowNone, width, trackingWidget,
 			[&](auto&& visit) {
 				for (const auto& widget : widgets) {
 					if (widget && widget->form)

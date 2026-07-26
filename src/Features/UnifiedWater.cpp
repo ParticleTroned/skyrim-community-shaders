@@ -26,7 +26,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantDepthFadeStart,
 	DistantDepthFadeEnd,
 	ShoreFeatherWidth,
-	ShoreConfirmationCullDistance)
+	ShoreConfirmationCullDistance,
+	DeepShoreSofteningStrength,
+	DeepShoreSofteningStart)
 
 namespace
 {
@@ -42,6 +44,10 @@ namespace
 	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
 	constexpr float kShoreFeatherWidthMin = 0.0f;
 	constexpr float kShoreFeatherWidthMax = 64.0f;
+	constexpr float kDeepShoreSofteningStrengthMin = 0.0f;
+	constexpr float kDeepShoreSofteningStrengthMax = 1.0f;
+	constexpr float kDeepShoreSofteningStartMin = 0.0f;
+	constexpr float kDeepShoreSofteningStartMax = 1.0f;
 	// Increment when Unified Water's generated flowmap or cache contract changes.
 	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
 
@@ -112,6 +118,16 @@ namespace
 			kDistantDepthFadeDistanceMin,
 			kDistantDepthFadeDistanceMax,
 			defaults.ShoreConfirmationCullDistance);
+		a_settings.DeepShoreSofteningStrength = ClampFiniteOrDefault(
+			a_settings.DeepShoreSofteningStrength,
+			kDeepShoreSofteningStrengthMin,
+			kDeepShoreSofteningStrengthMax,
+			defaults.DeepShoreSofteningStrength);
+		a_settings.DeepShoreSofteningStart = ClampFiniteOrDefault(
+			a_settings.DeepShoreSofteningStart,
+			kDeepShoreSofteningStartMin,
+			kDeepShoreSofteningStartMax,
+			defaults.DeepShoreSofteningStart);
 	}
 
 	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
@@ -573,6 +589,32 @@ void UnifiedWater::DrawSettings()
 		}
 
 		ImGui::SliderFloat(
+			"Deep Shore Softening",
+			&settings.DeepShoreSofteningStrength,
+			kDeepShoreSofteningStrengthMin,
+			kDeepShoreSofteningStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Softens abrupt deeper shoreline changes caused by coarse terrain depth.\n"
+				"Set to 0 to use strict shoreline confirmation.");
+		}
+
+		ImGui::SliderFloat(
+			"Deep Shore Start",
+			&settings.DeepShoreSofteningStart,
+			kDeepShoreSofteningStartMin,
+			kDeepShoreSofteningStartMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Controls how deep water must be before extra shoreline softening begins.\n"
+				"Higher values leave more medium-depth water unchanged.");
+		}
+
+		ImGui::SliderFloat(
 			"Shore Confirmation Cull Distance",
 			&settings.ShoreConfirmationCullDistance,
 			kDistantDepthFadeDistanceMin,
@@ -628,6 +670,8 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
 	data.ShoreFeatherWidth = sanitizedSettings.ShoreFeatherWidth;
 	data.ShoreConfirmationCullDistance = sanitizedSettings.ShoreConfirmationCullDistance;
+	data.DeepShoreSofteningStrength = sanitizedSettings.DeepShoreSofteningStrength;
+	data.DeepShoreSofteningStart = sanitizedSettings.DeepShoreSofteningStart;
 	return data;
 }
 

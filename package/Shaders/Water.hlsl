@@ -1092,6 +1092,7 @@ static const float ShoreGatherEdgeInset = 1e-2;
 static const float ShoreGradientCandidateScale = 2.0;
 static const float ShoreGradientCandidateMargin = 2.0;
 static const float ShoreGradientFilterWidthScale = 0.25;
+static const float ShoreConfirmationNearMissTolerancePixels = 1.0;
 static const int ShoreGradientFilterMaxRadius = 2;
 static const int2 ShoreGradientSampleOffsets[8] = {
 	int2(-1, -1),
@@ -1161,11 +1162,19 @@ bool IsUnifiedWaterRawDepthValid(float rawDepth)
 	return isfinite(rawDepth) && rawDepth > 1e-5 && rawDepth < 1.0 - 1e-5;
 }
 
-bool IsUnifiedWaterShoreSample(float sceneDepth, float waterDepth)
+bool TryGetUnifiedWaterShoreDepthDelta(
+	float sceneDepth,
+	float waterDepth,
+	out float depthDelta)
 {
-	return IsUnifiedWaterRawDepthValid(sceneDepth) &&
-	       isfinite(waterDepth) &&
-	       sceneDepth <= waterDepth;
+	depthDelta = sceneDepth - waterDepth;
+	bool sampleValid =
+		IsUnifiedWaterRawDepthValid(sceneDepth) &&
+		isfinite(waterDepth) &&
+		isfinite(depthDelta);
+	// Keep the output finite even when the caller ignores invalid evidence.
+	depthDelta = sampleValid ? depthDelta : 0.0;
+	return sampleValid;
 }
 
 bool TryGetUnifiedWaterDepthDelta(
@@ -1179,10 +1188,10 @@ bool TryGetUnifiedWaterDepthDelta(
 	float2 sampleOffset = float2(samplePixel - centerPixel);
 	float waterDepth =
 		centerWaterDepth + dot(waterDepthGradient, sampleOffset);
-	depthDelta = sceneDepth - waterDepth;
-	return IsUnifiedWaterRawDepthValid(sceneDepth) &&
-	       isfinite(waterDepth) &&
-	       isfinite(depthDelta);
+	return TryGetUnifiedWaterShoreDepthDelta(
+		sceneDepth,
+		waterDepth,
+		depthDelta);
 }
 
 bool TryGetUnifiedWaterFilteredDepthDeltaGradient(
@@ -1249,6 +1258,7 @@ float GetUnifiedWaterShoreInteriorFactor(
 	float2 depthDeltaGradient,
 	float2 waterDepthGradient,
 	float distanceDepthFade,
+	float nativeDepthFactor,
 	float viewDistance,
 	uint eyeIndex)
 {
@@ -1379,8 +1389,9 @@ float GetUnifiedWaterShoreInteriorFactor(
 
 	// Confirm the predicted edge at the outer feather radius. A gather
 	// conservatively accepts any terrain-covered texel in its footprint, avoiding
-	// a rounded single-probe direction without turning partial confirmation into
-	// additional stabilization.
+	// a rounded single-probe direction. In deeper water, a rejected sample that
+	// misses the depth crossing by less than one local screen pixel can retain
+	// partial evidence instead of introducing a binary faceted boundary.
 	// Beyond the cull distance the analytic result above remains active, retaining
 	// a cheap transparent perimeter instead of reverting to a hard stabilized edge.
 	float2 confirmationDirection =
@@ -1406,21 +1417,80 @@ float GetUnifiedWaterShoreInteriorFactor(
 																waterDepthGradient.x + waterDepthGradient.y,
 																waterDepthGradient.x,
 																0.0);
+	float confirmationDepthDelta0;
+	float confirmationDepthDelta1;
+	float confirmationDepthDelta2;
+	float confirmationDepthDelta3;
+	bool confirmationSampleValid0 = TryGetUnifiedWaterShoreDepthDelta(
+		confirmationSceneDepths.x,
+		confirmationWaterDepths.x,
+		confirmationDepthDelta0);
+	bool confirmationSampleValid1 = TryGetUnifiedWaterShoreDepthDelta(
+		confirmationSceneDepths.y,
+		confirmationWaterDepths.y,
+		confirmationDepthDelta1);
+	bool confirmationSampleValid2 = TryGetUnifiedWaterShoreDepthDelta(
+		confirmationSceneDepths.z,
+		confirmationWaterDepths.z,
+		confirmationDepthDelta2);
+	bool confirmationSampleValid3 = TryGetUnifiedWaterShoreDepthDelta(
+		confirmationSceneDepths.w,
+		confirmationWaterDepths.w,
+		confirmationDepthDelta3);
+	float4 confirmationDepthDeltas = float4(
+		confirmationDepthDelta0,
+		confirmationDepthDelta1,
+		confirmationDepthDelta2,
+		confirmationDepthDelta3);
 	bool4 confirmationSamples = bool4(
-		IsUnifiedWaterShoreSample(
-			confirmationSceneDepths.x,
-			confirmationWaterDepths.x),
-		IsUnifiedWaterShoreSample(
-			confirmationSceneDepths.y,
-			confirmationWaterDepths.y),
-		IsUnifiedWaterShoreSample(
-			confirmationSceneDepths.z,
-			confirmationWaterDepths.z),
-		IsUnifiedWaterShoreSample(
-			confirmationSceneDepths.w,
-			confirmationWaterDepths.w));
+		confirmationSampleValid0 && confirmationDepthDelta0 <= 0.0,
+		confirmationSampleValid1 && confirmationDepthDelta1 <= 0.0,
+		confirmationSampleValid2 && confirmationDepthDelta2 <= 0.0,
+		confirmationSampleValid3 && confirmationDepthDelta3 <= 0.0);
+	float confirmationEvidence = any(confirmationSamples) ? 1.0 : 0.0;
+
+	float deepShoreSofteningStrength =
+		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStrength);
+	float deepShoreSofteningStart =
+		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStart);
+	[branch] if (
+		confirmationEvidence <= 0.0 &&
+		deepShoreSofteningStrength > 0.0 &&
+		deepShoreSofteningStart < 1.0 &&
+		nativeDepthFactor > deepShoreSofteningStart)
+	{
+		float deepShoreMask = smoothstep(
+			deepShoreSofteningStart,
+			1.0,
+			saturate(nativeDepthFactor));
+		float confirmationDepthTolerance = max(
+			analyticDepthDeltaGradientLength *
+				ShoreConfirmationNearMissTolerancePixels,
+			ShoreFeatherDepthGradientEpsilon);
+		float4 positiveConfirmationDepthDeltas =
+			max(confirmationDepthDeltas, 0.0.xxxx);
+		float4 nearMissEvidence =
+			1.0.xxxx -
+			smoothstep(
+				0.0.xxxx,
+				confirmationDepthTolerance.xxxx,
+				positiveConfirmationDepthDeltas);
+		nearMissEvidence *= float4(
+			confirmationSampleValid0 ? 1.0 : 0.0,
+			confirmationSampleValid1 ? 1.0 : 0.0,
+			confirmationSampleValid2 ? 1.0 : 0.0,
+			confirmationSampleValid3 ? 1.0 : 0.0);
+		float maximumNearMissEvidence = max(
+			max(nearMissEvidence.x, nearMissEvidence.y),
+			max(nearMissEvidence.z, nearMissEvidence.w));
+		confirmationEvidence =
+			deepShoreSofteningStrength *
+			deepShoreMask *
+			maximumNearMissEvidence;
+	}
+
 	float confirmedInteriorFactor =
-		any(confirmationSamples) ? analyticInteriorFactor : 1.0;
+		lerp(1.0, analyticInteriorFactor, confirmationEvidence);
 
 	return lerp(analyticInteriorFactor, confirmedInteriorFactor, confirmationWeight);
 }
@@ -1647,6 +1717,7 @@ PS_OUTPUT main(PS_INPUT input)
 		depthDeltaGradient,
 		waterDepthGradient,
 		distanceDepthFade,
+		distanceMul.y,
 		viewDistance,
 		eyeIndex);
 #					endif

@@ -1092,7 +1092,7 @@ static const float ShoreGatherEdgeInset = 1e-2;
 static const float ShoreGradientCandidateScale = 2.0;
 static const float ShoreGradientCandidateMargin = 2.0;
 static const float ShoreGradientFilterWidthScale = 0.25;
-static const float ShoreConfirmationNearMissTolerancePixels = 1.0;
+static const float DeepShoreSofteningDepthRange = 0.25;
 static const int ShoreGradientFilterMaxRadius = 2;
 static const int2 ShoreGradientSampleOffsets[8] = {
 	int2(-1, -1),
@@ -1177,6 +1177,16 @@ bool TryGetUnifiedWaterShoreDepthDelta(
 	return sampleValid;
 }
 
+bool IsUnifiedWaterShoreSample(float sceneDepth, float waterDepth)
+{
+	float depthDelta;
+	bool sampleValid = TryGetUnifiedWaterShoreDepthDelta(
+		sceneDepth,
+		waterDepth,
+		depthDelta);
+	return sampleValid && depthDelta <= 0.0;
+}
+
 bool TryGetUnifiedWaterDepthDelta(
 	int2 samplePixel,
 	int2 centerPixel,
@@ -1258,7 +1268,8 @@ float GetUnifiedWaterShoreInteriorFactor(
 	float2 depthDeltaGradient,
 	float2 waterDepthGradient,
 	float distanceDepthFade,
-	float nativeDepthFactor,
+	float unclampedNativeDepthFactor,
+	float2 unclampedNativeDepthFactorGradient,
 	float viewDistance,
 	uint eyeIndex)
 {
@@ -1377,6 +1388,56 @@ float GetUnifiedWaterShoreInteriorFactor(
 	}
 	if (analyticInteriorFactor >= 1.0)
 		return 1.0;
+	// Deep shoreline softening must affect confirmed real shores as well as
+	// confirmation misses. Classify depth at a fixed point one feather width
+	// inside the estimated shore; linearly extrapolating the native depth factor
+	// to that point keeps the mask approximately constant across a planar bank
+	// instead of switching the softening curve on midway through it.
+	float deepShoreSofteningStrength =
+		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStrength);
+	float deepShoreSofteningStart =
+		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStart);
+	float deepShoreSofteningWeight = 0.0;
+	bool deepShoreClassifierValid =
+		deepShoreSofteningStrength > 0.0 &&
+		deepShoreSofteningStart < 1.0 &&
+		isfinite(unclampedNativeDepthFactor) &&
+		all(isfinite(unclampedNativeDepthFactorGradient));
+	[branch] if (deepShoreClassifierValid)
+	{
+		float2 shoreInteriorDirection =
+			analyticDepthDeltaGradient /
+			analyticDepthDeltaGradientLength;
+		float estimatedShoreDistance =
+			centerDepthDelta /
+			analyticDepthDeltaGradientLength;
+		float classificationOffset =
+			featherWidth + 0.5 - estimatedShoreDistance;
+		float classifiedNativeDepthFactor =
+			unclampedNativeDepthFactor +
+			dot(
+				unclampedNativeDepthFactorGradient,
+				shoreInteriorDirection * classificationOffset);
+		if (isfinite(classifiedNativeDepthFactor)) {
+			float deepShoreSofteningEnd = min(
+				deepShoreSofteningStart + DeepShoreSofteningDepthRange,
+				1.0);
+			deepShoreSofteningWeight =
+				deepShoreSofteningStrength *
+				smoothstep(
+					deepShoreSofteningStart,
+					deepShoreSofteningEnd,
+					saturate(classifiedNativeDepthFactor));
+		}
+	}
+
+	// Remap the filtered feather toward A * A. Both endpoints stay fixed and the
+	// curve remains monotonic, while stabilized deep water yields more gradually
+	// to the naturally transparent shoreline result.
+	float softenedAnalyticInteriorFactor = lerp(
+		analyticInteriorFactor,
+		analyticInteriorFactor * analyticInteriorFactor,
+		deepShoreSofteningWeight);
 
 	float confirmationWeight = 1.0;
 	[branch] if (cullingEnabled)
@@ -1384,14 +1445,18 @@ float GetUnifiedWaterShoreInteriorFactor(
 		float cullFadeStart = max(cullDistance - ShoreConfirmationCullFadeRange, 0.0);
 		confirmationWeight = 1.0 - smoothstep(cullFadeStart, cullDistance, viewDistance);
 		if (confirmationWeight <= 0.0)
-			return analyticInteriorFactor;
+			return softenedAnalyticInteriorFactor;
 	}
+	// At maximum deep softening both confirmation outcomes resolve to the same
+	// analytic feather, so avoid the gather entirely.
+	if (deepShoreSofteningWeight >= 1.0)
+		return softenedAnalyticInteriorFactor;
 
 	// Confirm the predicted edge at the outer feather radius. A gather
 	// conservatively accepts any terrain-covered texel in its footprint, avoiding
-	// a rounded single-probe direction. In deeper water, a rejected sample that
-	// misses the depth crossing by less than one local screen pixel can retain
-	// partial evidence instead of introducing a binary faceted boundary.
+	// a rounded single-probe direction. Deep softening progressively relaxes a
+	// rejection toward the same filtered feather used by a confirmed real shore,
+	// reducing the binary boundary without changing shallow-water confirmation.
 	// Beyond the cull distance the analytic result above remains active, retaining
 	// a cheap transparent perimeter instead of reverting to a hard stabilized edge.
 	float2 confirmationDirection =
@@ -1417,82 +1482,32 @@ float GetUnifiedWaterShoreInteriorFactor(
 																waterDepthGradient.x + waterDepthGradient.y,
 																waterDepthGradient.x,
 																0.0);
-	float confirmationDepthDelta0;
-	float confirmationDepthDelta1;
-	float confirmationDepthDelta2;
-	float confirmationDepthDelta3;
-	bool confirmationSampleValid0 = TryGetUnifiedWaterShoreDepthDelta(
-		confirmationSceneDepths.x,
-		confirmationWaterDepths.x,
-		confirmationDepthDelta0);
-	bool confirmationSampleValid1 = TryGetUnifiedWaterShoreDepthDelta(
-		confirmationSceneDepths.y,
-		confirmationWaterDepths.y,
-		confirmationDepthDelta1);
-	bool confirmationSampleValid2 = TryGetUnifiedWaterShoreDepthDelta(
-		confirmationSceneDepths.z,
-		confirmationWaterDepths.z,
-		confirmationDepthDelta2);
-	bool confirmationSampleValid3 = TryGetUnifiedWaterShoreDepthDelta(
-		confirmationSceneDepths.w,
-		confirmationWaterDepths.w,
-		confirmationDepthDelta3);
-	float4 confirmationDepthDeltas = float4(
-		confirmationDepthDelta0,
-		confirmationDepthDelta1,
-		confirmationDepthDelta2,
-		confirmationDepthDelta3);
 	bool4 confirmationSamples = bool4(
-		confirmationSampleValid0 && confirmationDepthDelta0 <= 0.0,
-		confirmationSampleValid1 && confirmationDepthDelta1 <= 0.0,
-		confirmationSampleValid2 && confirmationDepthDelta2 <= 0.0,
-		confirmationSampleValid3 && confirmationDepthDelta3 <= 0.0);
-	float confirmationEvidence = any(confirmationSamples) ? 1.0 : 0.0;
-
-	float deepShoreSofteningStrength =
-		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStrength);
-	float deepShoreSofteningStart =
-		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStart);
-	[branch] if (
-		confirmationEvidence <= 0.0 &&
-		deepShoreSofteningStrength > 0.0 &&
-		deepShoreSofteningStart < 1.0 &&
-		nativeDepthFactor > deepShoreSofteningStart)
-	{
-		float deepShoreMask = smoothstep(
-			deepShoreSofteningStart,
-			1.0,
-			saturate(nativeDepthFactor));
-		float confirmationDepthTolerance = max(
-			analyticDepthDeltaGradientLength *
-				ShoreConfirmationNearMissTolerancePixels,
-			ShoreFeatherDepthGradientEpsilon);
-		float4 positiveConfirmationDepthDeltas =
-			max(confirmationDepthDeltas, 0.0.xxxx);
-		float4 nearMissEvidence =
-			1.0.xxxx -
-			smoothstep(
-				0.0.xxxx,
-				confirmationDepthTolerance.xxxx,
-				positiveConfirmationDepthDeltas);
-		nearMissEvidence *= float4(
-			confirmationSampleValid0 ? 1.0 : 0.0,
-			confirmationSampleValid1 ? 1.0 : 0.0,
-			confirmationSampleValid2 ? 1.0 : 0.0,
-			confirmationSampleValid3 ? 1.0 : 0.0);
-		float maximumNearMissEvidence = max(
-			max(nearMissEvidence.x, nearMissEvidence.y),
-			max(nearMissEvidence.z, nearMissEvidence.w));
-		confirmationEvidence =
-			deepShoreSofteningStrength *
-			deepShoreMask *
-			maximumNearMissEvidence;
-	}
+		IsUnifiedWaterShoreSample(
+			confirmationSceneDepths.x,
+			confirmationWaterDepths.x),
+		IsUnifiedWaterShoreSample(
+			confirmationSceneDepths.y,
+			confirmationWaterDepths.y),
+		IsUnifiedWaterShoreSample(
+			confirmationSceneDepths.z,
+			confirmationWaterDepths.z),
+		IsUnifiedWaterShoreSample(
+			confirmationSceneDepths.w,
+			confirmationWaterDepths.w));
+	float confirmationEvidence =
+		any(confirmationSamples) ? 1.0 : deepShoreSofteningWeight;
 
 	float confirmedInteriorFactor =
-		lerp(1.0, analyticInteriorFactor, confirmationEvidence);
+		lerp(
+			1.0,
+			softenedAnalyticInteriorFactor,
+			confirmationEvidence);
 
-	return lerp(analyticInteriorFactor, confirmedInteriorFactor, confirmationWeight);
+	return lerp(
+		softenedAnalyticInteriorFactor,
+		confirmedInteriorFactor,
+		confirmationWeight);
 }
 
 float4 ApplyUnifiedWaterDistanceDepthFade(
@@ -1701,15 +1716,18 @@ PS_OUTPUT main(PS_INPUT input)
 	float viewSurfaceAngle = dot(depthAdjustedViewDirection, ReflectPlane[eyeIndex].xyz);
 
 	float planeMul = (1 - ReflectPlane[eyeIndex].w / viewSurfaceAngle);
-	distanceMul = saturate(
+	float4 unclampedDistanceMul =
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
-		FogParam.z);
+		FogParam.z;
+	distanceMul = saturate(unclampedDistanceMul);
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 	float centerDepthDelta = rawSceneDepth - input.HPosition.z;
 	float2 depthDeltaGradient =
 		float2(ddx_fine(centerDepthDelta), ddy_fine(centerDepthDelta));
 	float2 waterDepthGradient =
 		float2(ddx_fine(input.HPosition.z), ddy_fine(input.HPosition.z));
+	float2 unclampedNativeDepthFactorGradient =
+		float2(ddx_fine(unclampedDistanceMul.y), ddy_fine(unclampedDistanceMul.y));
 	shoreInteriorFactor = GetUnifiedWaterShoreInteriorFactor(
 		screenPosition,
 		rawSceneDepth,
@@ -1717,7 +1735,8 @@ PS_OUTPUT main(PS_INPUT input)
 		depthDeltaGradient,
 		waterDepthGradient,
 		distanceDepthFade,
-		distanceMul.y,
+		unclampedDistanceMul.y,
+		unclampedNativeDepthFactorGradient,
 		viewDistance,
 		eyeIndex);
 #					endif

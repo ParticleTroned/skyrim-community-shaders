@@ -597,8 +597,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Softens abrupt deeper shoreline changes caused by coarse terrain depth.\n"
-				"Set to 0 to use strict shoreline confirmation.");
+				"Softens deeper-water shoreline transitions while preserving the detected edge.\n"
+				"Set to 0 to use the standard shoreline fade.");
 		}
 
 		ImGui::SliderFloat(

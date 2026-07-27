@@ -513,7 +513,7 @@
   "periphery_taa_center_blend_feather": 0.05000000074505806,
   "periphery_taa_enable": true,
   "periphery_taa_outer_scale": 0.699999988079071,
-  "qualityMode": 1,
+  "qualityMode": 2,
   "qualityModeSchemaVersion": 2,
   "reflexFPSLimit": 60.0,
   "reflexLowLatencyBoost": false,

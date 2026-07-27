@@ -731,6 +731,7 @@ public:
 	{
 		Unknown,
 		VendorEvaluated,
+		NativeOriginal,
 		ValidatedPresentationHold,
 		PresentationStretch,
 		VendorFailureStretch,
@@ -743,6 +744,8 @@ public:
 		VRRenderScalePresentationPath path = VRRenderScalePresentationPath::Unknown;
 		uint32_t eyeIndex = 0;
 		uint32_t frame = 0;
+		uint64_t compositorCycleToken = 0;
+		uint64_t transitionEpoch = 0;
 		uint32_t contractGeneration = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
 		uint32_t inputWidth = 0;
@@ -760,6 +763,7 @@ public:
 		bool valid = false;
 		VRRenderScalePresentationPath path = VRRenderScalePresentationPath::Unknown;
 		uint32_t frame = 0;
+		uint64_t compositorCycleToken = 0;
 		uint64_t transitionEpoch = 0;
 		uint32_t contractGeneration = 0;
 		UpscaleMethod method = UpscaleMethod::kNONE;
@@ -778,6 +782,7 @@ public:
 	{
 		std::array<VRRenderScalePresentationEyeSnapshot, 2> eyes{};
 		uint32_t lastBothEyesVendorFrame = 0;
+		uint64_t lastBothEyesVendorCycle = 0;
 		uint32_t consecutiveBothEyesVendorFrames = 0;
 		uint32_t lastFallbackFrame = 0;
 		uint32_t maximumConsecutivePresentationStretchFrames = 0;
@@ -978,6 +983,7 @@ public:
 	{
 		VRRenderScaleTransitionState state = VRRenderScaleTransitionState::Idle;
 		uint64_t targetEpoch = 0;
+		uint64_t transitionStartEpoch = 0;
 		uint32_t transitionStartFrame = 0;
 		uint32_t stateFrame = 0;
 		uint64_t revision = 0;
@@ -1356,7 +1362,11 @@ public:
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
 	/** @return True when an atomic VRAPI profile is a valid stabilizer destination transition. */
 	bool IsVRFpsStabilizerAPITransitionProfileAllowed(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset) const;
-	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, const PerfModeState::BootSnapshot* a_recoverySnapshot = nullptr);
+	void RequestPerfModeRenderTargetRecreate(
+		const char* a_reason = nullptr,
+		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
+		const PerfModeState::BootSnapshot* a_recoverySnapshot = nullptr,
+		uint32_t a_minDelayFrames = 0);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
@@ -1575,7 +1585,50 @@ public:
 	void RecordVRDLSSFullEyeEvaluation(uint32_t a_eyeIndex, bool a_success);
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
-	bool ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const;
+	enum class VRRenderScaleOriginalSubmitDisposition : uint8_t
+	{
+		Allow,
+		Suppress,
+		NativeRestoreContinuity,
+		NativeRestoreInvalid
+	};
+	struct VRRenderScaleOriginalSubmitDecision
+	{
+		VRRenderScaleOriginalSubmitDisposition disposition =
+			VRRenderScaleOriginalSubmitDisposition::Allow;
+		uint64_t nativeRestoreGuardEpoch = 0;
+
+		bool IsNativeRestoreGuarded() const noexcept
+		{
+			return disposition ==
+					   VRRenderScaleOriginalSubmitDisposition::
+						   NativeRestoreContinuity ||
+			       disposition ==
+					   VRRenderScaleOriginalSubmitDisposition::
+						   NativeRestoreInvalid;
+		}
+		bool IsNativeRestoreContinuity() const noexcept
+		{
+			return disposition ==
+			       VRRenderScaleOriginalSubmitDisposition::
+					   NativeRestoreContinuity;
+		}
+		bool ShouldSuppress() const noexcept
+		{
+			return disposition ==
+					   VRRenderScaleOriginalSubmitDisposition::Suppress ||
+			       disposition ==
+					   VRRenderScaleOriginalSubmitDisposition::
+						   NativeRestoreInvalid;
+		}
+	};
+	VRRenderScaleOriginalSubmitDecision
+	ClassifyVRRenderScaleOriginalSubmitFallback(
+		vr::EVREye a_eye,
+		const vr::Texture_t* a_texture,
+		const vr::VRTextureBounds_t* a_bounds) const;
+	[[nodiscard]] std::unique_lock<std::recursive_mutex>
+	AcquireVRRenderScalePresentationCommitLock() const;
 
 	struct VRPostLoadCompositorKeepaliveSubmission
 	{
@@ -1588,6 +1641,18 @@ public:
 		[[nodiscard]] bool IsValid() const noexcept
 		{
 			return token != 0 && texture.handle && lifetime;
+		}
+	};
+
+	struct VRNativeRestoreCompositorKeepaliveSubmission
+	{
+		vr::Texture_t texture{};
+		vr::VRTextureBounds_t bounds{ 0.0f, 0.0f, 1.0f, 1.0f };
+		winrt::com_ptr<ID3D11Texture2D> lifetime;
+
+		[[nodiscard]] bool IsValid() const noexcept
+		{
+			return texture.handle && lifetime;
 		}
 	};
 
@@ -1605,7 +1670,9 @@ public:
 	bool IsVRInitialLoadPresentationProtectionActive() const noexcept;
 	uint64_t BeginVRPostLoadCompositorSubmitScope(uint64_t a_compositorCycleToken);
 	void EndVRPostLoadCompositorSubmitScope(uint64_t a_scopeEpoch);
-	void NotifyVRPostLoadCompositorCycleStarted(uint64_t a_compositorCycleToken);
+	void NotifyVRPostLoadCompositorCycleStarted(
+		uint64_t a_compositorCycleToken,
+		bool a_poseBoundaryAccepted);
 	bool IsVRPostLoadCompositorHoldActive() const noexcept;
 	bool ShouldQuarantineVRPostLoadCompositorCycle(
 		uint64_t a_compositorCycleToken) const noexcept;
@@ -1624,8 +1691,32 @@ public:
 		uint64_t a_keepaliveToken,
 		uint64_t a_compositorCycleToken,
 		uint64_t a_initialLoadProtectionEpochAtSubmitEntry);
-	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation);
+	bool PrepareVRNativeRestorePresentationObservation(
+		vr::EVREye a_eye,
+		uint64_t a_compositorCycleToken,
+		const vr::Texture_t* a_inputTexture,
+		const vr::VRTextureBounds_t* a_inputBounds,
+		VRRenderScalePresentationObservation& a_presentationObservation) const;
+	bool PrepareVRNativeRestoreCompositorKeepalive(
+		uint64_t a_expectedGuardEpoch,
+		VRNativeRestoreCompositorKeepaliveSubmission& a_submission);
+	bool IsVRNativeRestorePresentationGuardActive() const;
+	uint64_t GetVRNativeRestorePresentationGuardActiveEpoch() const;
+	void RecordVRNativeRestorePresentationRejection(
+		uint64_t a_compositorCycleToken,
+		uint64_t a_expectedGuardEpoch,
+		const char* a_reason);
+	void ServiceVRNativeRestorePresentationRecovery(
+		uint64_t a_compositorCycleToken);
+	bool QueueVRNativeRestorePresentationRecovery(
+		uint64_t a_expectedGuardEpoch,
+		uint64_t a_compositorCycleToken,
+		const char* a_reason);
+	void ClearVRNativeRestorePresentationWatchdog();
+	bool RecordVRNativeRestorePresentationObservationIfUnprotected(
+		const VRRenderScalePresentationObservation& a_observation);
 	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
@@ -1751,7 +1842,13 @@ public:
 	std::atomic<uint32_t> pendingFSRResetGeneration{ 0 };
 	uint32_t vrDLSSRuntimeResourceGeneration = 0;
 	uint32_t vrFSRRuntimeResourceGeneration = 0;
+	std::atomic<uint32_t> vrMainPassVendorDispatchCompletedFrame{ 0 };
+	mutable std::recursive_mutex perfModeRenderTargetRecreateQueueMutex;
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
+	// Queue-owned evidence that this relatch must replace physical targets even
+	// when their dimensions already match. Used only by the native-presentation
+	// watchdog, whose failure can be identity/content rather than size related.
+	std::atomic<bool> pendingPerfModeRenderTargetRecreateForcePhysical{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
@@ -1759,6 +1856,14 @@ public:
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateEpoch{ 0 };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateRecoveryEpoch{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
+	std::atomic<uint64_t> vrNativeRestorePresentationGuardEpoch{ 0 };
+	mutable std::mutex vrNativeRestorePresentationWatchdogMutex;
+	uint64_t vrNativeRestorePresentationWatchdogEpoch = 0;
+	uint64_t vrNativeRestorePresentationLastRejectedCycle = 0;
+	uint64_t vrNativeRestorePresentationRecoveryCandidateCycle = 0;
+	uint32_t vrNativeRestorePresentationRejectedCycles = 0;
+	uint32_t vrNativeRestorePresentationLastRecoveryFrame = 0;
+	uint32_t vrNativeRestorePresentationRecoveryAttempts = 0;
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<uint32_t> vrRenderScaleNextContractGeneration{ 1 };
 	std::atomic<uint32_t> pendingVRRenderScaleContractGeneration{ 0 };
@@ -1837,7 +1942,12 @@ public:
 	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
-	std::atomic<uint64_t> submitStageVendorResumeStableEyeMaskState{ 0 };
+	mutable std::recursive_mutex submitStageVendorResumeStableEyeMaskMutex;
+	uint64_t submitStageVendorResumeStableEyeMaskCycle = 0;
+	uint32_t submitStageVendorResumeStableEyeMaskFrame = 0;
+	uint32_t submitStageVendorResumeStableEyeMask = 0;
+	uint64_t submitStageVendorResumeStabilitySerial = 0;
+	std::atomic<uint64_t> submitStageVendorResumeReleaseCandidateCycle{ 0 };
 	std::atomic<uint32_t> submitStageDLSSViewportPreparationGeneration{ 0 };
 	std::atomic_bool submitStageDLSSViewportPreparationPending{ false };
 	std::atomic_bool submitStageDLSSViewportPreparationFailed{ false };
@@ -1877,11 +1987,11 @@ public:
 	bool RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a_plan);
 	void StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState a_state) noexcept;
 	void SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason = nullptr);
-	void PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization, uint64_t a_epoch);
-	void PublishVRRenderScaleTransitionStable();
+	bool PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization, uint64_t a_epoch);
+	bool PublishVRRenderScaleTransitionStable(uint64_t a_expectedEpoch, uint32_t a_expectedGeneration, UpscaleMethod a_expectedMethod);
 	void ResetVRRenderScaleTransitionController(const char* a_reason = nullptr);
-	void BeginVRRenderScaleInfoTransition(const char* a_reason = nullptr);
-	void CompleteVRRenderScaleInfoTransition(const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
+	void BeginVRRenderScaleInfoTransition(uint64_t a_epoch, const char* a_reason = nullptr);
+	void CompleteVRRenderScaleInfoTransition(uint64_t a_expectedEpoch, const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
 	void ClearVRRenderScaleInfoTransition();
 	void RecordVRRenderScaleRelatch(const VRRenderScaleRelatchSignature& a_signature, bool a_previousActive, UpscaleMethod a_previousMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	void MaybeArmVRRenderScaleMemoryRelief(const VRRenderScaleRelatchSignature& a_signature, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
@@ -2165,6 +2275,8 @@ private:
 	bool PrepareVRPostLoadCompositorKeepaliveLocked(
 		ID3D11Texture2D* a_candidateTexture,
 		VRPostLoadCompositorKeepaliveSubmission& a_submission);
+	bool EnsureVRCompositorKeepaliveTextureLocked(
+		ID3D11Device* a_candidateDevice);
 	bool TryRepairVRPostLoadFixedCompositorCandidate(
 		ID3D11Texture2D* a_candidateTexture,
 		const D3D11_TEXTURE2D_DESC& a_candidateDesc,
@@ -2177,7 +2289,8 @@ private:
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,
 		bool a_verifyBindings = false);
-	bool TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
+	void TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
+	void ServiceSubmitStageVendorResumePromotion(uint64_t a_compositorCycleToken);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();
 	void ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery = false);

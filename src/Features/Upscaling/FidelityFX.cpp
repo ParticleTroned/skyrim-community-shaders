@@ -2332,12 +2332,12 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	return dispatchOK;
 }
 
-void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
+bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
 	auto renderer = globals::game::renderer;
 	auto state = globals::state;
 	if (!renderer || !state)
-		return;
+		return false;
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -2347,7 +2347,7 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 	auto& upscaling = globals::features::upscaling;
 	if (globals::game::isVR && upscaling.IsPresentationUpscalingActive())
-		return;
+		return false;
 
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 
@@ -2358,7 +2358,7 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				logger::warn("[FidelityFX] VR FSR skipped because per-eye input preparation failed.");
 				loggedPrepareFailure = true;
 			}
-			return;
+			return false;
 		}
 
 		const bool perEyeResourcesReady = upscaling.AreVRPerEyeUpscalingResourcesReady(false, true);
@@ -2368,7 +2368,7 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				logger::warn("[FidelityFX] VR FSR skipped because prepared per-eye resources are incomplete.");
 				loggedMissingResource = true;
 			}
-			return;
+			return false;
 		}
 
 		const uint32_t eyeDisplayWidth = static_cast<uint32_t>(screenSize.x / 2.0f);
@@ -2407,10 +2407,10 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				loggedVREvaluateFailure = true;
 			}
 		}
-		return;
+		return allEvaluated;
 	}
 
-	if (!UpscaleRegion(
+	const bool evaluated = UpscaleRegion(
 			0,
 			a_upscalingTexture,
 			depthTexture.texture,
@@ -2424,7 +2424,9 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			static_cast<uint32_t>(screenSize.y),
 			renderSize.x,
 			renderSize.y,
-			a_sharpness)) {
+			a_sharpness);
+	if (!evaluated) {
 		logger::error("[FidelityFX] Upscale dispatch failed.");
 	}
+	return evaluated;
 }

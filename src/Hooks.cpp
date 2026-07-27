@@ -25,10 +25,16 @@
 #include <algorithm>
 #include <array>
 #include <intrin.h>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
+
+namespace
+{
+	std::shared_mutex g_renderTargetRecreationMutex;
+}
 
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
 {
@@ -1023,7 +1029,11 @@ struct BSShaderRenderTargets_Create
 
 	static bool RecreateAndSetupFull()
 	{
-		func();
+		{
+			const std::unique_lock recreateLock(
+				g_renderTargetRecreationMutex);
+			func();
+		}
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
@@ -1032,12 +1042,22 @@ struct BSShaderRenderTargets_Create
 	}
 
 	static bool RecreateAndSetupRenderTargetResources(
+		Hooks::VRRenderTargetRecreatePreparation a_beforeEngineCreate,
 		Hooks::VRRenderTargetRecreateCheckpoint a_afterEngineCreate,
-		void* a_context)
+		void* a_context,
+		bool* a_engineCreateEntered)
 	{
-		func();
-		if (a_afterEngineCreate)
-			a_afterEngineCreate(a_context);
+		{
+			const std::unique_lock recreateLock(
+				g_renderTargetRecreationMutex);
+			if (a_beforeEngineCreate)
+				a_beforeEngineCreate(a_context);
+			if (a_engineCreateEntered)
+				*a_engineCreateEntered = true;
+			func();
+			if (a_afterEngineCreate)
+				a_afterEngineCreate(a_context);
+		}
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
@@ -1096,6 +1116,11 @@ struct BSInputDeviceManager_PollInputDevices
 
 namespace Hooks
 {
+	std::shared_mutex& GetRenderTargetRecreationMutex()
+	{
+		return g_renderTargetRecreationMutex;
+	}
+
 	bool RecreateRenderTargets()
 	{
 		if (!globals::game::renderer || !globals::state || !globals::d3d::device || !globals::d3d::context)
@@ -1105,15 +1130,21 @@ namespace Hooks
 	}
 
 	bool RecreateRenderTargetsForVRRenderScale(
+		VRRenderTargetRecreatePreparation a_beforeEngineCreate,
 		VRRenderTargetRecreateCheckpoint a_afterEngineCreate,
-		void* a_context)
+		void* a_context,
+		bool* a_engineCreateEntered)
 	{
+		if (a_engineCreateEntered)
+			*a_engineCreateEntered = false;
 		if (!globals::game::renderer || !globals::state || !globals::deferred || !globals::d3d::device || !globals::d3d::context)
 			return false;
 
 		return BSShaderRenderTargets_Create::RecreateAndSetupRenderTargetResources(
+			a_beforeEngineCreate,
 			a_afterEngineCreate,
-			a_context);
+			a_context,
+			a_engineCreateEntered);
 	}
 
 	struct BSGraphics_Renderer_Init_InitD3D

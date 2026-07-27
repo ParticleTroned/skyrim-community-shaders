@@ -1,5 +1,7 @@
 #pragma once
 
+#include <shared_mutex>
+
 namespace Hooks
 {
 	struct BSShader_BeginTechnique
@@ -23,11 +25,15 @@ namespace Hooks
 	void DrawRenderPassImmediately(RE::BSRenderPass* pass, uint32_t technique, bool alphaTest, uint32_t renderFlags);
 	void Install();
 	void InstallEarlyHooks();
+	std::shared_mutex& GetRenderTargetRecreationMutex();
 	bool RecreateRenderTargets();
+	using VRRenderTargetRecreatePreparation = void (*)(void*);
 	// Runs synchronously after Skyrim's native target creator returns and
 	// before global or Community Shaders render-target state is reinitialized.
 	using VRRenderTargetRecreateCheckpoint = void (*)(void*) noexcept;
 	bool RecreateRenderTargetsForVRRenderScale(
+		VRRenderTargetRecreatePreparation a_beforeEngineCreate = nullptr,
 		VRRenderTargetRecreateCheckpoint a_afterEngineCreate = nullptr,
-		void* a_context = nullptr);
+		void* a_context = nullptr,
+		bool* a_engineCreateEntered = nullptr);
 }

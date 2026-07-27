@@ -1698,20 +1698,20 @@ bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D1
 	return EvaluateDLSS(vp, eyeIndex, colorIn, colorOut, depth, mvec, reactiveMask, transparencyMask, extentIn, extentOut, outputWidth, pinholeOffsetX, pinholeOffsetY, "UpscaleRegion");
 }
 
-void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
+bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
 {
 	auto state = globals::state;
 
 	auto renderer = globals::game::renderer;
 	if (!state || !renderer)
-		return;
+		return false;
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	auto& upscaling = globals::features::upscaling;
 	if (globals::game::isVR && upscaling.IsPresentationUpscalingActive()) {
 		upscaling.dlssUpscaleOutputInSharpenerTexture = false;
-		return;
+		return false;
 	}
 
 	auto screenSize = upscaling.GetRuntimeResolutionPlan().finalOutputSize;
@@ -1757,7 +1757,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				loggedPrepareFailure = true;
 			}
 			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
-			return;
+			return false;
 		}
 
 		const bool perEyeResourcesReady = upscaling.AreVRPerEyeUpscalingResourcesReady(true, false);
@@ -1768,7 +1768,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				loggedMissingResource = true;
 			}
 			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
-			return;
+			return false;
 		}
 
 		sl::Extent extentIn{ 0, 0, eyeWidthIn, eyeHeightIn };
@@ -1820,7 +1820,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				}
 			}
 			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && (allEvaluated || fallbackPresented);
-			return;
+			return allEvaluated;
 		}
 
 		// Copy right-eye depth before eye 0 evaluation; eye 0 output can overlap right-eye input
@@ -1890,6 +1890,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		}
 
 		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && ((leftEvaluated && rightEvaluated) || fallbackPresented);
+		return leftEvaluated && rightEvaluated;
 
 	} else {
 		// Non-VR: Simple full-texture upscale
@@ -1912,6 +1913,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				loggedEvaluateFailure = true;
 			}
 		}
+		return evaluated;
 	}
 }
 /**

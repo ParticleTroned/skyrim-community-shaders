@@ -1,6 +1,9 @@
 #pragma once
 #include "../Features/InverseSquareLighting/Common.h"
 
+#include <atomic>
+#include <cstdint>
+
 struct LightEditor
 {
 	bool enabled = false;
@@ -14,24 +17,30 @@ struct LightEditor
 
 	bool ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const;
 
+	static void ObserveWaterPass(RE::BSRenderPass* pass);
+
 private:
 	struct LightInfo
 	{
 		bool isSelected = false;
-		uint32_t id;
-		void* ptr;
-		uint32_t index;
+		uint32_t id = 0;
+		void* ptr = nullptr;
+		uint32_t index = 0;
 		std::string name;
-		bool isRef;
-		bool isAttached;
-		bool isOther;
+		bool isRef = false;
+		bool isAttached = false;
+		bool isOther = false;
 		bool isSpotlight = false;
 		bool hasPosition = false;
-		RE::NiPoint3 position;
+		RE::NiPoint3 position = {};
 
 		bool operator==(const LightInfo& other) const noexcept
 		{
-			return id == other.id && index == other.index;
+			if (isOther || other.isOther)
+				return isOther && other.isOther && ptr == other.ptr;
+			if (isRef != other.isRef || isAttached != other.isAttached || index != other.index)
+				return false;
+			return id != 0 && other.id != 0 ? id == other.id : ptr == other.ptr;
 		}
 	};
 
@@ -52,6 +61,25 @@ private:
 		stl::enumeration<ISLCommon::TES_LIGHT_FLAGS_EXT, uint32_t> tesFlags;
 		ISLCommon::RuntimeLightDataExt data = {};
 		RE::NiPoint3 pos = {};
+	};
+
+	struct WaterRoutingDiagnostics
+	{
+		bool available = false;
+		bool observerAvailable = false;
+		bool portalStrict = false;
+		bool portalGraphPresent = false;
+		bool affectWater = false;
+		bool shadow = false;
+		bool llfWaterCandidate = false;
+		bool skyrimWaterPassEligible = false;
+
+		std::atomic<RE::BSLight*> target{ nullptr };
+		std::atomic<uint64_t> waterPassCount{ 0 };
+		std::atomic<uint64_t> matchedWaterPassCount{ 0 };
+		std::atomic<uint32_t> lastPassEnum{ 0 };
+		std::atomic<uint32_t> lastSceneLightIndex{ 0 };
+		std::atomic<uint32_t> lastSceneLightCount{ 0 };
 	};
 
 	bool showAttachedLights = false;
@@ -113,6 +141,8 @@ private:
 	};
 
 	LPLightInfo lpInfo;
+	static inline WaterRoutingDiagnostics waterRoutingDiagnostics;
+	RE::NiPointer<RE::BSLight> activeBSLight;
 	RE::NiPointer<RE::NiLight> activeNiLight;
 	RE::TESObjectREFR* activeRefr = nullptr;
 	RE::TESObjectLIGH* activeLigh = nullptr;
@@ -120,6 +150,9 @@ private:
 
 	void SortLights();
 	void RestoreOriginal();
+	void DrawWaterRoutingDiagnostics() const;
+	void UpdateWaterRoutingDiagnostics(RE::BSLight* bsLight, RE::NiLight* niLight);
+	static void ClearWaterRoutingDiagnostics();
 
 	static std::string GetLightName(LightInfo& lightInfo);
 	static LPLightInfo ParseLPLightName(const std::string& name);
@@ -128,5 +161,5 @@ private:
 	static std::array<float, 3> GetJsonVec3(const json& data, const char* key);
 	bool SaveToLightPlacer();
 
-	void UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight);
+	void UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::BSLight* bsLight, RE::NiLight* niLight);
 };

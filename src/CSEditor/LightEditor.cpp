@@ -4,6 +4,7 @@
 #include "Features/LightLimitFix.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Shadercache.h"
 #include "State.h"
 
 #define I18N_KEY_PREFIX "feature.light_editor."
@@ -88,6 +89,8 @@ void LightEditor::DrawSettings()
 	}
 
 	ImGui::Spacing();
+	DrawWaterRoutingDiagnostics();
+	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
 
@@ -162,6 +165,80 @@ void LightEditor::DrawSettings()
 	}
 }
 
+void LightEditor::DrawWaterRoutingDiagnostics() const
+{
+	const auto& diagnostics = waterRoutingDiagnostics;
+	ImGui::SeparatorText(T(TKEY("water_routing_diagnostics"), "Water Routing Diagnostics"));
+
+	if (!diagnostics.available) {
+		ImGui::TextDisabled("%s", T(TKEY("water_routing_unavailable"), "Runtime light data unavailable."));
+		return;
+	}
+
+	const char* yes = T(TKEY("yes"), "Yes");
+	const char* no = T(TKEY("no"), "No");
+
+	if (ImGui::BeginTable("##WaterRoutingDiagnostics", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+		auto drawRow = [](const char* label, const char* value, const char* tooltip = nullptr) {
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextWrapped("%s", label);
+			if (tooltip) {
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted(tooltip);
+			}
+			ImGui::TableSetColumnIndex(1);
+			ImGui::TextWrapped("%s", value);
+		};
+
+		drawRow(T(TKEY("runtime_portal_strict"), "Runtime Portal Strict"), diagnostics.portalStrict ? yes : no);
+		drawRow(T(TKEY("portal_graph_present"), "Portal Graph Present"), diagnostics.portalGraphPresent ? yes : no);
+		drawRow(T(TKEY("affects_water"), "Affects Water"), diagnostics.affectWater ? yes : no);
+		drawRow(T(TKEY("shadow_light"), "Shadow Light"), diagnostics.shadow ? yes : no);
+		drawRow(
+			T(TKEY("llf_water_candidate"), "LLF Water Candidate"),
+			diagnostics.llfWaterCandidate ? yes : no,
+			T(TKEY("llf_water_candidate_tooltip"),
+				"Current clustered-water path before cluster, range, intensity, and room culling."));
+		drawRow(
+			T(TKEY("skyrim_water_pass_eligible"), "Skyrim Water-Pass Eligible"),
+			diagnostics.skyrimWaterPassEligible ? yes : no,
+			T(TKEY("skyrim_water_pass_eligible_tooltip"),
+				"Computed from Affects Water and the LLF ownership gate. Pass observations provide the runtime proof."));
+		drawRow(
+			T(TKEY("potential_duplicate_water_route"), "Potential Duplicate Water Route"),
+			diagnostics.llfWaterCandidate && diagnostics.skyrimWaterPassEligible ? yes : no);
+
+		if (!diagnostics.observerAvailable) {
+			drawRow(
+				T(TKEY("water_pass_observation"), "Water-Pass Observation"),
+				T(TKEY("unavailable"), "Unavailable"),
+				T(TKEY("water_pass_observation_unavailable_tooltip"),
+					"Actual water-pass observation requires the Light Limit Fix hook."));
+		} else {
+			const auto waterPassCount = diagnostics.waterPassCount.load(std::memory_order_acquire);
+			const auto matchedWaterPassCount = diagnostics.matchedWaterPassCount.load(std::memory_order_acquire);
+			const auto waterPassCountText = fmt::format("{}", waterPassCount);
+			const auto matchedWaterPassCountText = fmt::format("{}", matchedWaterPassCount);
+			drawRow(T(TKEY("water_pass_calls"), "Water-Pass Calls"), waterPassCountText.c_str());
+			drawRow(T(TKEY("selected_light_pass_matches"), "Selected-Light Pass Matches"), matchedWaterPassCountText.c_str());
+
+			if (matchedWaterPassCount > 0) {
+				const auto lastMatchText = fmt::format(
+					"pass=0x{:X}, sceneSlot={}, sceneLights={}",
+					diagnostics.lastPassEnum.load(std::memory_order_relaxed),
+					diagnostics.lastSceneLightIndex.load(std::memory_order_relaxed),
+					diagnostics.lastSceneLightCount.load(std::memory_order_relaxed));
+				drawRow(
+					T(TKEY("last_water_pass_match"), "Last Water-Pass Match"),
+					lastMatchText.c_str());
+			}
+		}
+
+		ImGui::EndTable();
+	}
+}
+
 #undef I18N_KEY_PREFIX
 
 std::string LightEditor::GetLightName(LightInfo& lightInfo)
@@ -196,7 +273,8 @@ void LightEditor::GatherLights()
 		if (!niLight)
 			return;
 
-		LightInfo current;
+		LightInfo current{};
+		current.ptr = reinterpret_cast<void*>(niLight);
 		RE::TESObjectLIGH* ligh = nullptr;
 
 		const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
@@ -247,7 +325,6 @@ void LightEditor::GatherLights()
 			current.hasPosition = true;
 		}
 		if (current.isOther) {
-			current.ptr = reinterpret_cast<void*>(niLight);
 			if (current.name.empty())
 				current.name = niLight->name.c_str();
 			current.index = 0;
@@ -261,7 +338,7 @@ void LightEditor::GatherLights()
 			return;
 		selected = current;
 		foundSelected = true;
-		UpdateSelectedLight(refr, ligh, niLight);
+		UpdateSelectedLight(refr, ligh, bsLight, niLight);
 	};
 
 	lights.clear();
@@ -299,12 +376,12 @@ void LightEditor::ResetOverrides()
 	previous = {};
 }
 
-void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight)
+void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::BSLight* bsLight, RE::NiLight* niLight)
 {
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
 	auto tesFlags = ligh ? &ligh->data.flags : nullptr;
 
-	if (previous != selected) {
+	if (previous != selected || activeBSLight.get() != bsLight || activeNiLight.get() != niLight) {
 		RestoreOriginal();
 
 		original.tesFlags = tesFlags ? static_cast<ISLCommon::TES_LIGHT_FLAGS_EXT>(tesFlags->underlying()) : static_cast<ISLCommon::TES_LIGHT_FLAGS_EXT>(0);
@@ -332,7 +409,9 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 		previous = selected;
 	}
 
+	activeBSLight.reset(bsLight);
 	activeNiLight.reset(niLight);
+	UpdateWaterRoutingDiagnostics(bsLight, niLight);
 
 	if (current.data.flags.any(LightLimitFix::LightFlags::InverseSquare)) {
 		const bool isShadow = ligh && ligh->data.flags.any(RE::TES_LIGHT_FLAGS::kHemiShadow, RE::TES_LIGHT_FLAGS::kOmniShadow);
@@ -382,6 +461,144 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 	displayInfo.lighEditorId = ligh ? clib_util::editorID::get_editorID(ligh) : "Unknown";
 }
 
+void LightEditor::UpdateWaterRoutingDiagnostics(RE::BSLight* bsLight, RE::NiLight* niLight)
+{
+	if (!bsLight || !niLight) {
+		ClearWaterRoutingDiagnostics();
+		return;
+	}
+
+	auto& diagnostics = waterRoutingDiagnostics;
+	const bool observerAvailable = globals::features::lightLimitFix.loaded;
+	const bool portalStrict = bsLight->portalStrict;
+	const bool portalGraphPresent = bsLight->portalGraph != nullptr;
+	const bool affectWater = bsLight->affectWater;
+	const bool shadow = bsLight->IsShadowLight();
+	// The clustered shader follows the master CS toggle, while LLF's engine-ownership hook stays installed.
+	const bool llfShaderActive =
+		globals::features::lightLimitFix.loaded &&
+		globals::shaderCache &&
+		globals::shaderCache->IsEnabled();
+	const bool llfWaterCandidate =
+		llfShaderActive &&
+		!shadow &&
+		!niLight->GetFlags().any(RE::NiAVObject::Flag::kHidden);
+	const bool skyrimWaterPassEligible =
+		affectWater &&
+		(!globals::features::lightLimitFix.loaded || LightLimitFix::RequiresEngineLightPath(bsLight));
+
+	const bool classificationChanged =
+		!diagnostics.available ||
+		diagnostics.observerAvailable != observerAvailable ||
+		diagnostics.portalStrict != portalStrict ||
+		diagnostics.portalGraphPresent != portalGraphPresent ||
+		diagnostics.affectWater != affectWater ||
+		diagnostics.shadow != shadow ||
+		diagnostics.llfWaterCandidate != llfWaterCandidate ||
+		diagnostics.skyrimWaterPassEligible != skyrimWaterPassEligible;
+	const bool targetChanged = diagnostics.target.load(std::memory_order_acquire) != bsLight;
+
+	if (targetChanged || classificationChanged) {
+		diagnostics.target.store(nullptr, std::memory_order_release);
+		diagnostics.waterPassCount.store(0, std::memory_order_relaxed);
+		diagnostics.matchedWaterPassCount.store(0, std::memory_order_relaxed);
+		diagnostics.lastPassEnum.store(0, std::memory_order_relaxed);
+		diagnostics.lastSceneLightIndex.store(0, std::memory_order_relaxed);
+		diagnostics.lastSceneLightCount.store(0, std::memory_order_relaxed);
+	}
+
+	diagnostics.available = true;
+	diagnostics.observerAvailable = observerAvailable;
+	diagnostics.portalStrict = portalStrict;
+	diagnostics.portalGraphPresent = portalGraphPresent;
+	diagnostics.affectWater = affectWater;
+	diagnostics.shadow = shadow;
+	diagnostics.llfWaterCandidate = llfWaterCandidate;
+	diagnostics.skyrimWaterPassEligible = skyrimWaterPassEligible;
+	diagnostics.target.store(bsLight, std::memory_order_release);
+
+	if (targetChanged || classificationChanged) {
+		logger::debug(
+			"[LightEditor] Water routing selection: BSLight=0x{:X}, NiLight=0x{:X}, "
+			"portalStrict={}, portalGraphPresent={}, portalGraph=0x{:X}, affectWater={}, shadow={}, "
+			"llfWaterCandidate={}, skyrimWaterPassEligible={}",
+			reinterpret_cast<std::uintptr_t>(bsLight),
+			reinterpret_cast<std::uintptr_t>(niLight),
+			portalStrict,
+			portalGraphPresent,
+			reinterpret_cast<std::uintptr_t>(bsLight->portalGraph),
+			affectWater,
+			shadow,
+			llfWaterCandidate,
+			skyrimWaterPassEligible);
+	}
+}
+
+void LightEditor::ClearWaterRoutingDiagnostics()
+{
+	auto& diagnostics = waterRoutingDiagnostics;
+	auto* target = diagnostics.target.exchange(nullptr, std::memory_order_acq_rel);
+	if (target && diagnostics.available) {
+		logger::debug(
+			"[LightEditor] Water routing summary: BSLight=0x{:X}, waterPassCalls={}, "
+			"selectedLightPassMatches={}, lastPass=0x{:X}, lastSceneSlot={}, lastSceneLights={}",
+			reinterpret_cast<std::uintptr_t>(target),
+			diagnostics.waterPassCount.load(std::memory_order_relaxed),
+			diagnostics.matchedWaterPassCount.load(std::memory_order_relaxed),
+			diagnostics.lastPassEnum.load(std::memory_order_relaxed),
+			diagnostics.lastSceneLightIndex.load(std::memory_order_relaxed),
+			diagnostics.lastSceneLightCount.load(std::memory_order_relaxed));
+	}
+	diagnostics.available = false;
+	diagnostics.observerAvailable = false;
+	diagnostics.portalStrict = false;
+	diagnostics.portalGraphPresent = false;
+	diagnostics.affectWater = false;
+	diagnostics.shadow = false;
+	diagnostics.llfWaterCandidate = false;
+	diagnostics.skyrimWaterPassEligible = false;
+	diagnostics.waterPassCount.store(0, std::memory_order_relaxed);
+	diagnostics.matchedWaterPassCount.store(0, std::memory_order_relaxed);
+	diagnostics.lastPassEnum.store(0, std::memory_order_relaxed);
+	diagnostics.lastSceneLightIndex.store(0, std::memory_order_relaxed);
+	diagnostics.lastSceneLightCount.store(0, std::memory_order_relaxed);
+}
+
+void LightEditor::ObserveWaterPass(RE::BSRenderPass* pass)
+{
+	auto& diagnostics = waterRoutingDiagnostics;
+	auto* target = diagnostics.target.load(std::memory_order_acquire);
+	if (!target)
+		return;
+
+	diagnostics.waterPassCount.fetch_add(1, std::memory_order_relaxed);
+	if (!pass || !pass->sceneLights)
+		return;
+
+	const uint32_t sceneLightCount = pass->numLights;
+	for (uint32_t sceneLightIndex = 0; sceneLightIndex < sceneLightCount; ++sceneLightIndex) {
+		if (pass->sceneLights[sceneLightIndex] != target)
+			continue;
+		if (diagnostics.target.load(std::memory_order_acquire) != target)
+			return;
+
+		diagnostics.lastPassEnum.store(pass->passEnum, std::memory_order_relaxed);
+		diagnostics.lastSceneLightIndex.store(sceneLightIndex, std::memory_order_relaxed);
+		diagnostics.lastSceneLightCount.store(sceneLightCount, std::memory_order_relaxed);
+		const auto previousMatchCount = diagnostics.matchedWaterPassCount.fetch_add(1, std::memory_order_release);
+		if (previousMatchCount == 0) {
+			logger::debug(
+				"[LightEditor] Selected BSLight 0x{:X} observed in Skyrim water pass "
+				"(pass=0x{:X}, sceneSlot={}, sceneLights={})",
+				reinterpret_cast<std::uintptr_t>(target),
+				pass->passEnum,
+				sceneLightIndex,
+				sceneLightCount);
+		}
+		return;
+	}
+}
+
 bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const
 {
 	if (!enabled || niLight != activeNiLight.get())
@@ -407,6 +624,9 @@ bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDa
 
 void LightEditor::RestoreOriginal()
 {
+	ClearWaterRoutingDiagnostics();
+	activeBSLight.reset();
+
 	if (!activeNiLight)
 		return;
 

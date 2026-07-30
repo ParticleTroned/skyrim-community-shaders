@@ -1,4 +1,5 @@
 #include "LightLimitFix.h"
+#include "CSEditor/LightEditor.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
 #include "InverseSquareLighting.h"
@@ -2390,6 +2391,7 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 void LightLimitFix::Hooks::BSWaterShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
 	func(This, Pass, RenderFlags);
+	LightEditor::ObserveWaterPass(Pass);
 	auto& singleton = globals::features::lightLimitFix;
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	singleton.BSLightingShader_SetupGeometry_After(Pass);

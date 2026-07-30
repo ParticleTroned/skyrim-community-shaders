@@ -1120,6 +1120,44 @@ namespace Hooks
 		PatchMemory(Address, Data.begin(), Data.size());
 	}
 
+	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
+	{
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			return globals::features::lightLimitFix.loaded &&
+			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
+		}
+#if defined(_MSC_VER)
+		__except (1) {
+			// Fail open on transient render-pass data so collection cannot crash rendering.
+			return false;
+		}
+#endif
+	}
+
+	template <std::size_t>
+	struct BSBatchRenderer_RenderPassImmediately
+	{
+		static void thunk(
+			RE::BSRenderPass* a_pass,
+			uint32_t a_technique,
+			bool a_alphaTest,
+			uint32_t a_renderFlags)
+		{
+			if (!ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+				func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			}
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	using BSBatchRenderer_RenderPassImmediately1 = BSBatchRenderer_RenderPassImmediately<1>;
+	using BSBatchRenderer_RenderPassImmediately2 = BSBatchRenderer_RenderPassImmediately<2>;
+	using BSBatchRenderer_RenderPassImmediately3 = BSBatchRenderer_RenderPassImmediately<3>;
+
 	struct BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights
 	{
 		static void thunk(RE::BSGraphics::PixelShader* PixelShader, RE::BSRenderPass* Pass, DirectX::XMMATRIX& Transform, uint32_t LightCount, uint32_t ShadowLightCount, float WorldScale, uint32_t)
@@ -1229,6 +1267,15 @@ namespace Hooks
 
 		logger::info("Hooking BSLightingShader");
 		stl::write_vfunc<0x4, BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
+
+		// Terrain Blending may wrap call site 2 later; write_thunk_call preserves this filter in its call chain.
+		logger::info("Hooking BSBatchRenderer::RenderPassImmediately for Particle Lights");
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately1>(
+			REL::RelocationID(100877, 107673).address() + REL::Relocate(0x1E5, 0x1EE));
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately2>(
+			REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately3>(
+			REL::RelocationID(100871, 107667).address() + REL::Relocate(0xEE, 0xED));
 
 		// Patch render space in BSLightingShader::SetupGeometry to always use world space
 		// The variable updateEyePosition is set to 1 when not skinned. By patching to be 0 it will always use world space

@@ -168,6 +168,7 @@ private:
 
 	bool runtimeUpscalerFailureLatched = false;
 	bool runtimeFsr4FailureLatched = false;
+	bool runtimeUpscalerSessionQuarantined = false;
 	uint32_t runtimeFallbackResetDispatchesRemaining = 0;
 	bool runtimeUpscalerLastFramePathValid = false;
 	uint32_t runtimeUpscalerLastFrameIndex = 0;
@@ -181,8 +182,8 @@ private:
 	bool CanUseRuntimeUpscalerPath();
 	uint32_t GetPreferredRuntimeUpscalerVersion() const;
 	void ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache);
-	void LatchRuntimeUpscalerFailure();
 	void LatchRuntimeFsr4Failure();
+	void QuarantineRuntimeUpscalerForSession(const char* a_reason);
 	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
 	bool EnsureRuntimeUpscalerInterop();
@@ -191,7 +192,7 @@ private:
 	void ResetRuntimeCommandContexts();
 	bool WaitForRuntimeD3D12Fence(uint64_t a_value);
 	bool EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);
-	void WaitForRuntimeUpscalerIdle();
+	bool WaitForRuntimeUpscalerIdle();
 	bool PollRuntimeUpscalerTeardownIdle(const char* a_reason);
 	bool EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight,
 		const D3D11_TEXTURE2D_DESC& a_colorDesc,

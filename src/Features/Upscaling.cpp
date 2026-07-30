@@ -1468,10 +1468,11 @@ namespace
 		uint64_t missingMask = 0;
 		uint64_t requiredMissingMask = 0;
 		uint64_t dimensionMismatchMask = 0;
+		uint64_t requiredDimensionMismatchMask = 0;
 
 		bool MatchesReusableLayout() const
 		{
-			return requiredMissingMask == 0 && dimensionMismatchMask == 0;
+			return requiredMissingMask == 0 && requiredDimensionMismatchMask == 0;
 		}
 
 		uint64_t PublicationBlockingMismatchMask() const
@@ -2151,8 +2152,12 @@ namespace
 				return;
 			}
 
-			if (!RenderTargetTextureSizeMatches(a_texture, a_width, a_height))
+			const bool dimensionsMatch =
+				RenderTargetTextureSizeMatches(a_texture, a_width, a_height);
+			if (!dimensionsMatch)
 				probe.dimensionMismatchMask |= bit;
+			if (!dimensionsMatch && a_required)
+				probe.requiredDimensionMismatchMask |= bit;
 		};
 		auto probeRenderTarget = [&](RE::RENDER_TARGETS::RENDER_TARGET a_target, uint32_t a_width, uint32_t a_height, std::size_t a_index, bool a_required) {
 			const auto& renderTarget = renderer->GetRuntimeData().renderTargets[a_target];
@@ -4067,7 +4072,7 @@ namespace
 		return physicallyOpen;
 	}
 
-	bool IsNonLoadingVRMenuPresentationContextActive()
+	bool IsNonLoadingVRGameMenuPresentationContextActive()
 	{
 		auto* state = globals::state;
 		auto* ui = globals::game::ui;
@@ -4078,7 +4083,12 @@ namespace
 		       (state && state->isMapMenuOpen) ||
 		       (ui && ui->IsMenuOpen(RE::MapMenu::MENU_NAME)) ||
 		       IsMainMenuContextActive() ||
-		       IsSkyrimMenuPresentationContextActive(ui) ||
+		       IsSkyrimMenuPresentationContextActive(ui);
+	}
+
+	bool IsNonLoadingVRMenuPresentationContextActive()
+	{
+		return IsNonLoadingVRGameMenuPresentationContextActive() ||
 		       IsCommunityShadersMenuOpen();
 	}
 
@@ -4992,7 +5002,8 @@ namespace
 		// relatch or target resize is involved.
 		const bool directMenuActive =
 			(a_state && a_state->IsMainOrLoadingMenuOpen()) ||
-			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_acquire);
+			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_acquire) ||
+			IsCommunityShadersMenuOpen();
 		return directMenuActive || IsVRLoadingPresentationTailActive(a_state);
 	}
 
@@ -13729,7 +13740,7 @@ namespace
 	{
 		ImGui::TextUnformatted("Can provide a strong performance boost, but it is not fully tested in all situations.");
 		ImGui::TextUnformatted("DLSS/FSR VR only.");
-		ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
+		ImGui::TextUnformatted("CS applies changes while render targets rebuild.");
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 	}
 }
@@ -13932,11 +13943,12 @@ void Upscaling::DrawSettings()
 		if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
 		}
-		if (perfMode.HasRestartRequiredChange()) {
+		if (perfModeRelatchPending) {
 			Util::Text::Warning(
-				perfModeRelatchPending ?
-					"Warning: VR Render Scale Mode relatch pending" :
-					"Warning: VR Render Scale Mode relatch scheduled");
+				"Relatch Pending: applying the upscaling change.");
+		} else if (perfMode.HasRestartRequiredChange()) {
+			Util::Text::Warning(
+				"VR Render Scale Mode relatch scheduled.");
 		}
 
 		if (!openCompositeBlocksUpscaling && !renderScaleMethodEligible)
@@ -14992,12 +15004,31 @@ void Upscaling::LoadSettings(json& o_json)
 		(previousUpscaleMethod == static_cast<uint>(UpscaleMethod::kFSR) ||
 			currentUpscaleMethod == static_cast<uint>(UpscaleMethod::kFSR));
 	const bool perfModeRelevantSettingChanged =
+		ClampToggleUInt(previousSettings.renderScaleMode) != ClampToggleUInt(settings.renderScaleMode) ||
 		ClampToggleUInt(previousSettings.perfMode) != ClampToggleUInt(settings.perfMode) ||
 		ClampQualityModeUInt(previousSettings.qualityMode) != ClampQualityModeUInt(settings.qualityMode) ||
+		ClampDLSSPresetUInt(previousSettings.dlssPreset) != ClampDLSSPresetUInt(settings.dlssPreset) ||
 		fsr4RuntimeSelectionChanged ||
 		previousUpscaleMethod != currentUpscaleMethod;
-	if (runtimeReady && perfModeRelevantSettingChanged)
-		RequestPerfModeRenderTargetRecreate("upscaling settings reload");
+	if (runtimeReady && perfModeRelevantSettingChanged) {
+		const auto previousMethod = static_cast<UpscaleMethod>(
+			std::min<uint>(
+				previousUpscaleMethod,
+				static_cast<uint>(UpscaleMethod::kDLSS)));
+		const auto currentMethod = static_cast<UpscaleMethod>(
+			std::min<uint>(
+				currentUpscaleMethod,
+				static_cast<uint>(UpscaleMethod::kDLSS)));
+		if (IsRenderScaleMethodEligible(previousMethod) ||
+			IsRenderScaleMethodEligible(currentMethod) ||
+			IsVRRenderScaleModeLatched() ||
+			perfMode.HasRestartRequiredChange()) {
+			RequestPerfModeRenderTargetRecreate(
+				"upscaling settings reload",
+				VRUpscalingTransitionOrigin::CSMenu);
+		}
+		RequestHistoryReset();
+	}
 	InvalidateFrameScopedUpscalingState();
 
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
@@ -15009,6 +15040,7 @@ void Upscaling::LoadSettings(json& o_json)
 
 void Upscaling::RestoreDefaultSettings()
 {
+	const Settings previousSettings = settings;
 	settings = {};
 	settings.foveatedVendorDispatch = false;
 	settings.foveatedPeripheryMaskVisualization = false;
@@ -15019,6 +15051,17 @@ void Upscaling::RestoreDefaultSettings()
 	SanitizeUpscalingSettings(settings);
 	ApplyOpenCompositeUpscalingBlocker(true);
 	InvalidateFrameScopedUpscalingState();
+	RequestHistoryReset();
+	if (globals::game::isVR &&
+		globals::d3d::device &&
+		globals::game::renderer &&
+		globals::state &&
+		(BuildUpscalingResourceMutationSettingsKey(previousSettings) !=
+			BuildUpscalingResourceMutationSettingsKey(settings))) {
+		RequestPerfModeRenderTargetRecreate(
+			"restore default upscaling settings",
+			VRUpscalingTransitionOrigin::CSMenu);
+	}
 }
 
 struct BSOpenVR_GetRenderTargetSize
@@ -22305,7 +22348,11 @@ void Upscaling::RecordVRNativeRestorePresentationRejection(
 		state->lastCompletedWorldRenderFrame == currentFrame &&
 		!IsMainMenuContextActive() &&
 		!IsLoadingMenuContextActive() &&
-		!IsNonLoadingVRMenuPresentationContextActive() &&
+		// The CS menu is an out-of-band in-scene overlay. It is suppressed while
+		// this native candidate is validated, so keeping it logically open must
+		// not prevent native restore from completing. Skyrim-rendered menus still
+		// block validation because they can replace the scene submit candidate.
+		!IsNonLoadingVRGameMenuPresentationContextActive() &&
 		!IsSaveLoadTransitionContextActive(state) &&
 		!IsVRInitialLoadPresentationProtectionActive() &&
 		!IsVRPostLoadCompositorHoldActive() &&
@@ -22633,7 +22680,7 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 		state->lastCompletedWorldRenderFrame != currentFrame ||
 		IsMainMenuContextActive() ||
 		IsLoadingMenuContextActive() ||
-		IsNonLoadingVRMenuPresentationContextActive() ||
+		IsNonLoadingVRGameMenuPresentationContextActive() ||
 		IsSaveLoadTransitionContextActive(state) ||
 		ShouldDeferHMDClearMask() ||
 		state->pendingPostLoadRuntimeReset ||
@@ -30036,12 +30083,18 @@ void Upscaling::PostDisplay()
 	const bool vrRenderScaleMenu =
 		IsVRRenderScaleTransitionSafetyRelevant(*this) &&
 		IsVRMenuPresentationContextActive();
-	const bool vrVendorMenu =
+	const bool vrVendorMethod =
 		globals::game::isVR &&
-		IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) &&
-		(vrNativeVendorDirectMenu || vrRenderScaleMenu);
-	if (vrVendorMenu) {
+		IsVendorUpscalingMethod(GetRuntimeUpscaleMethod());
+	if (vrVendorMethod && vrRenderScaleMenu) {
 		PrepareFullResolutionPostProcessing(viewport, true);
+	} else if (vrVendorMethod && vrNativeVendorDirectMenu) {
+		// The CS interface must draw against the full native target, but this is
+		// only a temporary engine viewport state. Retain resolutionScale/jitter
+		// as the persistent vendor contract; resetting them here makes the
+		// runtime plan alternate Native <-> VendorDynamicResolution while the
+		// menu is open and submits the reduced scene as an inset.
+		PrepareFullResolutionPostProcessing(viewport, false);
 	}
 
 	RefreshVRMenuBridgeTraceState(globals::state);
@@ -38015,28 +38068,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	// This depth-only fallback belongs to the VR presentation pipeline. On flat,
-	// taking it skips the normal PerformUpscaling() dispatch for every sub-native
-	// FSR/DLSS preset and leaves the projection jitter unresolved.
-	if (globals::game::isVR &&
-		vendorDynamicResolutionActive &&
-		!presentationUpscalingActive) {
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
-
-		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
-
-		upscaling.UpscaleDepth();
-
-		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		func(a_this, a3, a_target, a_4, a_5);
-		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
-		return;
-	}
-
 	if (presentationUpscalingActive) {
 		globals::features::vr.InstallSubmitHook();
 
@@ -38076,6 +38107,10 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaling.ShouldUseFrameGenerationThisFrame())
 		upscaling.CopySharedD3D12Resources();
 
+	// Preserve the normal full color-upscaling path in VR even when submit-stage
+	// presentation is inactive. A former depth-only early return here skipped
+	// the vendor dispatch and produced periodic lighting/shadow corruption with
+	// OCU ASW.
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
 		upscaling.PerformUpscaling();
 	} else if (globals::game::isVR) {

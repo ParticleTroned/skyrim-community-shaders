@@ -1,4 +1,5 @@
 #include "VR.h"
+#include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
 #include "FoveatedCommon.h"
 #include "LocationContext.h"
@@ -606,6 +607,42 @@ void VR::SetupResources()
 		}
 	} else {
 		logger::info("OpenVR DLL not available in current process");
+	}
+
+	const auto& diagnosticSettings = globals::features::upscaling.settings;
+	if (diagnosticSettings.pipelineDiagnostics) {
+		nlohmann::json fields;
+		fields["mode"] = REL::Module::IsVR() ? "vr" : "flat";
+		fields["runtime"] = VRDetection::RuntimeTypeToString(openVRInfo.runtimeType);
+		fields["openVR"] = {
+			{ "available", openVRInfo.isAvailable },
+			{ "compatible", openVRInfo.isCompatible },
+			{ "dllPath", openVRInfo.dllPath },
+			{ "version", openVRInfo.version },
+			{ "fileSize", openVRInfo.fileSize },
+			{ "modified", openVRInfo.modificationTime },
+			{ "hasOverlayInterface", openVRInfo.hasOverlayInterface },
+			{ "hasSystemInterface", openVRInfo.hasSystemInterface },
+			{ "hasCompositorInterface", openVRInfo.hasCompositorInterface },
+			{ "probingSucceeded", openVRInfo.probingSucceeded }
+		};
+
+		VRPipelineDiagnostics::Emit(
+			{ VRPipelineDiagnostics::Source::CS, "ENV", "startup", std::move(fields) },
+			diagnosticSettings.pipelineDiagnosticsStructured,
+			std::format(
+				"reason=startup mode={} runtime={} openvrAvailable={} compatible={} dll=\"{}\" version={} size={} modified=\"{}\" overlay={} system={} compositor={}",
+				REL::Module::IsVR() ? "vr" : "flat",
+				VRDetection::RuntimeTypeToString(openVRInfo.runtimeType),
+				openVRInfo.isAvailable,
+				openVRInfo.isCompatible,
+				openVRInfo.dllPath,
+				openVRInfo.version,
+				openVRInfo.fileSize,
+				openVRInfo.modificationTime,
+				openVRInfo.hasOverlayInterface,
+				openVRInfo.hasSystemInterface,
+				openVRInfo.hasCompositorInterface));
 	}
 }
 

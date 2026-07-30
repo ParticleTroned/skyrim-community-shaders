@@ -1,5 +1,6 @@
 #include "Upscaling.h"
 
+#include "Diagnostics/VRPipelineDiagnostics.h"
 #include "Deferred.h"
 #include "Features/LightLimitFix.h"
 #include "Features/RenderDoc.h"
@@ -73,6 +74,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	dlssSharpener,
 	fsr4RuntimeEnable,
 	fsr4RuntimeSelectionSchemaVersion,
+	pipelineDiagnostics,
+	pipelineDiagnosticsStructured,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
@@ -3866,6 +3869,8 @@ namespace
 		settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
 			settings.periphery_taa_center_area);
+		if (settings.pipelineDiagnosticsStructured)
+			settings.pipelineDiagnostics = true;
 	}
 
 	void ApplyLegacyFsr4RuntimeSelectionMigration(
@@ -3895,6 +3900,8 @@ namespace
 	{
 		settings.renderScaleMode = 0;
 		settings.perfMode = 0;
+		settings.pipelineDiagnostics = false;
+		settings.pipelineDiagnosticsStructured = false;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
@@ -3914,6 +3921,8 @@ namespace
 		o_json.erase("renderScaleMode");
 		o_json.erase("perfMode");
 		o_json.erase("vrMenuBridgeDebugMode");
+		o_json.erase("pipelineDiagnostics");
+		o_json.erase("pipelineDiagnosticsStructured");
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("foveatedCenterArea");
 		o_json.erase("foveatedCenterHorizontalScale");
@@ -14314,6 +14323,19 @@ void Upscaling::DrawSettings()
 	drawRenderPipelineBlock();
 
 	if (ImGui::TreeNodeEx("Backend Diagnostics")) {
+		ImGui::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Logs VRPIPE startup and runtime environment metadata.");
+		}
+		ImGui::Checkbox("Pipeline Diagnostics JSONL", &settings.pipelineDiagnosticsStructured);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Also writes structured JSON Lines records to VRPipeline-CS.jsonl in the SKSE log directory.");
+			ImGui::TextUnformatted("Use this for automated comparison of CS and OCU environment records.");
+		}
+		if (settings.pipelineDiagnosticsStructured)
+			settings.pipelineDiagnostics = true;
+		ImGui::Separator();
+
 		// Streamline log level selection
 		const char* logLevels[] = { "Off", "Default", "Verbose" };
 		const auto logLevelMax = static_cast<uint>(IM_ARRAYSIZE(logLevels) - 1);
@@ -15190,6 +15212,11 @@ void Upscaling::LoadSettings(json& o_json)
 	}
 	if (!IsVRRuntimeActive()) {
 		ResetVRSpecificUpscalingSettings(settings);
+	}
+	if (o_json.is_object() &&
+	    !o_json.contains("pipelineDiagnostics") &&
+	    o_json.value("vrSubmitStageLogDiagnostics", false)) {
+		settings.pipelineDiagnostics = true;
 	}
 	// Force mask visualization OFF on load for all existing profiles.
 	settings.foveatedPeripheryMaskVisualization = false;

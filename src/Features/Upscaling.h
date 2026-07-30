@@ -178,6 +178,8 @@ public:
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool fsr4RuntimeEnable = true;
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
+		bool pipelineDiagnostics = false;
+		bool pipelineDiagnosticsStructured = false;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;
 		float foveatedCenterHorizontalScale = 1.0f;

@@ -19,7 +19,6 @@ namespace
 	constexpr float kMultiplierMin = 0.0f;
 	constexpr float kMultiplierMax = 5.0f;
 	constexpr uint32_t kMaxVanillaPointLights = 7;
-	constexpr uint32_t kVanillaPointLightCBRegister = 3;
 	constexpr uint32_t kFirstPointLightSceneIndex = 1;
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
@@ -199,7 +198,7 @@ bool CSUtility::IsRuntimeEnabled() const
 
 bool CSUtility::NeedsVanillaPointLightData() const
 {
-	if (!loaded || globals::features::lightLimitFix.loaded)
+	if (!loaded)
 		return false;
 
 	// Linear Lighting also consumes this buffer's linear-light classification,
@@ -210,7 +209,7 @@ bool CSUtility::NeedsVanillaPointLightData() const
 	return IsRuntimeEnabled() && UsesPointLightTypeMultipliers(settings);
 }
 
-void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount)
+void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount, uint32_t a_bufferRegister)
 {
 	if (!vanillaPointLightCB || !globals::d3d::context || !a_pass || !a_pass->sceneLights)
 		return;
@@ -236,7 +235,7 @@ void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a
 	vanillaPointLightCB->Update(data);
 
 	ID3D11Buffer* buffer = vanillaPointLightCB->CB();
-	globals::d3d::context->PSSetConstantBuffers(kVanillaPointLightCBRegister, 1, &buffer);
+	globals::d3d::context->PSSetConstantBuffers(a_bufferRegister, 1, &buffer);
 }
 
 struct CSUtility::Hooks
@@ -252,7 +251,7 @@ struct CSUtility::Hooks
 				return;
 
 			const uint32_t lightCount = a_pass && a_pass->numLights > 0 ? a_pass->numLights - kFirstPointLightSceneIndex : 0;
-			csUtility.UpdateVanillaPointLightData(a_pass, lightCount);
+			csUtility.UpdateVanillaPointLightData(a_pass, lightCount, kWaterPointLightCBRegister);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

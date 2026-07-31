@@ -889,7 +889,7 @@
     "feature.light_editor.lights": "Lights",
     "feature.light_editor.linear_light": "Linear Light",
     "feature.light_editor.llf_water_candidate": "LLF Water Candidate",
-    "feature.light_editor.llf_water_candidate_tooltip": "Current clustered-water path before cluster, range, intensity, and room culling.",
+    "feature.light_editor.llf_water_candidate_tooltip": "Current LLF-owned clustered-water path before cluster, range, intensity, and room culling.",
     "feature.light_editor.memory_address": "Memory Address: %p",
     "feature.light_editor.negative": "Negative",
     "feature.light_editor.ni_light_name": "NiLight Name: %s",

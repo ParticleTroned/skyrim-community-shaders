@@ -24,6 +24,7 @@ namespace LightFlags
 	static const uint PortalStrict = POINT_LIGHT_FLAG_PORTAL_STRICT;
 	static const uint Shadow = POINT_LIGHT_FLAG_SHADOW;
 	static const uint Simple = POINT_LIGHT_FLAG_SIMPLE;
+	static const uint AffectWater = POINT_LIGHT_FLAG_AFFECT_WATER;
 
 	static const uint Initialised = POINT_LIGHT_FLAG_INITIALISED;
 	static const uint Disabled = POINT_LIGHT_FLAG_DISABLED;

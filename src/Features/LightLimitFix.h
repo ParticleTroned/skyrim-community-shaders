@@ -305,6 +305,12 @@ public:
 		return a_light &&
 		       (a_light->portalStrict || !a_light->portalGraph || a_light->IsShadowLight());
 	}
+	static inline bool UsesClusteredWaterPath(RE::BSLight* a_light)
+	{
+		return a_light &&
+		       a_light->affectWater &&
+		       !RequiresEngineLightPath(a_light);
+	}
 
 	struct Settings
 	{

@@ -199,7 +199,7 @@ void LightEditor::DrawWaterRoutingDiagnostics() const
 			T(TKEY("llf_water_candidate"), "LLF Water Candidate"),
 			diagnostics.llfWaterCandidate ? yes : no,
 			T(TKEY("llf_water_candidate_tooltip"),
-				"Current clustered-water path before cluster, range, intensity, and room culling."));
+				"Current LLF-owned clustered-water path before cluster, range, intensity, and room culling."));
 		drawRow(
 			T(TKEY("skyrim_water_pass_eligible"), "Skyrim Water-Pass Eligible"),
 			diagnostics.skyrimWaterPassEligible ? yes : no,
@@ -481,7 +481,7 @@ void LightEditor::UpdateWaterRoutingDiagnostics(RE::BSLight* bsLight, RE::NiLigh
 		globals::shaderCache->IsEnabled();
 	const bool llfWaterCandidate =
 		llfShaderActive &&
-		!shadow &&
+		LightLimitFix::UsesClusteredWaterPath(bsLight) &&
 		!niLight->GetFlags().any(RE::NiAVObject::Flag::kHidden);
 	const bool skyrimWaterPassEligible =
 		affectWater &&

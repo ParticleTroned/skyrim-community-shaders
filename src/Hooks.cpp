@@ -1167,7 +1167,7 @@ namespace Hooks
 			} else {
 				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, 0);
 				if (globals::features::csUtility.NeedsVanillaPointLightData())
-					globals::features::csUtility.UpdateVanillaPointLightData(Pass, LightCount);
+					globals::features::csUtility.UpdateVanillaPointLightData(Pass, LightCount, CSUtility::kLightingPointLightCBRegister);
 			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

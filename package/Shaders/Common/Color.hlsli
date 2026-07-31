@@ -321,9 +321,16 @@ namespace Color
 		return ApplyWhiteDiffuseBrightness(Diffuse(color));
 	}
 
-	float3 Light(float3 color, bool isLinear = false)
+	float3 Light(float3 color, bool isLinear = false, bool preserveHDRIntensity = false)
 	{
-		color = (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? pow(abs(color), SharedData::linearLightingSettings.lightGamma) : color;
+		if (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) {
+			if (preserveHDRIntensity) {
+				const float hdrScale = max(1.0f, max(abs(color.r), max(abs(color.g), abs(color.b))));
+				color = pow(abs(color / hdrScale), SharedData::linearLightingSettings.lightGamma) * hdrScale;
+			} else {
+				color = pow(abs(color), SharedData::linearLightingSettings.lightGamma);
+			}
+		}
 #	if defined(TRUE_PBR)
 		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
@@ -353,12 +360,17 @@ namespace Color
 		return 1.0f;
 	}
 
-	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0)
+	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0, bool preserveHDRIntensity = false)
 	{
-		return Light(color, isLinear) *
+		return Light(color, isLinear, preserveHDRIntensity) *
 		       ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
 		       GetPointLightMultiplier(isLinear) *
 		       GetPointLightTypeMultiplier(isLinear, lightFlags);
+	}
+
+	float3 PointLightPreserveHDRIntensity(float3 color, bool isLinear = false, uint lightFlags = 0)
+	{
+		return PointLight(color, isLinear, lightFlags, true);
 	}
 
 	uint GetVanillaPointLightFlags(uint lightIndex)

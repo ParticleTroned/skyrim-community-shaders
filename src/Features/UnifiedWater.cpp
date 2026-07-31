@@ -11,14 +11,126 @@
 #include "RE/M/MapMenu.h"
 #include "RE/P/PlayerCharacter.h"
 
+#include <algorithm>
+#include <cmath>
 #include <imgui_internal.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
-	UseOptimisedMeshes)
+	UseOptimisedMeshes,
+	UseOpenShadersDepthBehaviour,
+	WaterTintColor,
+	WaterTintStrength,
+	DistantDepthFadeNearStrength,
+	DistantDepthFadeFarStrength,
+	DistantDepthFadeStart,
+	DistantDepthFadeEnd,
+	ShoreFeatherWidth,
+	ShoreConfirmationCullDistance,
+	DeepShoreSofteningStrength,
+	DeepShoreSofteningStart)
 
 namespace
 {
+	constexpr float kWaterTintColorMin = 0.0f;
+	constexpr float kWaterTintColorMax = 1.0f;
+	constexpr float kWaterTintStrengthMin = 0.0f;
+	constexpr float kWaterTintStrengthMax = 1.0f;
+	constexpr float kDistantDepthFadeStrengthMin = 0.0f;
+	constexpr float kDistantDepthFadeStrengthMax = 1.0f;
+	constexpr float kWorldCellSize = 4096.0f;
+	constexpr float kDistantDepthFadeDistanceMin = 0.0f;
+	constexpr float kDistantDepthFadeDistanceMax = kWorldCellSize * 16.0f;
+	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
+	constexpr float kShoreFeatherWidthMin = 0.0f;
+	constexpr float kShoreFeatherWidthMax = 64.0f;
+	constexpr float kDeepShoreSofteningStrengthMin = 0.0f;
+	constexpr float kDeepShoreSofteningStrengthMax = 1.0f;
+	constexpr float kDeepShoreSofteningStartMin = 0.0f;
+	constexpr float kDeepShoreSofteningStartMax = 1.0f;
+
+	// Increment when Unified Water's generated flowmap or cache contract changes.
+	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
+
+	bool PersistLoadOrderHash(uint64_t a_hash);
+
+	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
+	{
+		if (!std::isfinite(a_value))
+			return a_default;
+
+		return std::clamp(a_value, a_min, a_max);
+	}
+
+	void SanitizeSettings(UnifiedWater::Settings& a_settings)
+	{
+		const UnifiedWater::Settings defaults{};
+		a_settings.WaterTintColor.x = ClampFiniteOrDefault(
+			a_settings.WaterTintColor.x,
+			kWaterTintColorMin,
+			kWaterTintColorMax,
+			defaults.WaterTintColor.x);
+		a_settings.WaterTintColor.y = ClampFiniteOrDefault(
+			a_settings.WaterTintColor.y,
+			kWaterTintColorMin,
+			kWaterTintColorMax,
+			defaults.WaterTintColor.y);
+		a_settings.WaterTintColor.z = ClampFiniteOrDefault(
+			a_settings.WaterTintColor.z,
+			kWaterTintColorMin,
+			kWaterTintColorMax,
+			defaults.WaterTintColor.z);
+		a_settings.WaterTintStrength = ClampFiniteOrDefault(
+			a_settings.WaterTintStrength,
+			kWaterTintStrengthMin,
+			kWaterTintStrengthMax,
+			defaults.WaterTintStrength);
+		a_settings.DistantDepthFadeNearStrength = ClampFiniteOrDefault(
+			a_settings.DistantDepthFadeNearStrength,
+			kDistantDepthFadeStrengthMin,
+			kDistantDepthFadeStrengthMax,
+			defaults.DistantDepthFadeNearStrength);
+		a_settings.DistantDepthFadeFarStrength = ClampFiniteOrDefault(
+			a_settings.DistantDepthFadeFarStrength,
+			kDistantDepthFadeStrengthMin,
+			kDistantDepthFadeStrengthMax,
+			defaults.DistantDepthFadeFarStrength);
+		a_settings.DistantDepthFadeStart = ClampFiniteOrDefault(
+			a_settings.DistantDepthFadeStart,
+			kDistantDepthFadeDistanceMin,
+			kDistantDepthFadeDistanceMax - kDistantDepthFadeMinimumRange,
+			defaults.DistantDepthFadeStart);
+		a_settings.DistantDepthFadeEnd = ClampFiniteOrDefault(
+			a_settings.DistantDepthFadeEnd,
+			kDistantDepthFadeDistanceMin + kDistantDepthFadeMinimumRange,
+			kDistantDepthFadeDistanceMax,
+			defaults.DistantDepthFadeEnd);
+
+		if (a_settings.DistantDepthFadeEnd < a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange)
+			a_settings.DistantDepthFadeEnd = a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange;
+
+		a_settings.ShoreFeatherWidth = ClampFiniteOrDefault(
+			a_settings.ShoreFeatherWidth,
+			kShoreFeatherWidthMin,
+			kShoreFeatherWidthMax,
+			defaults.ShoreFeatherWidth);
+		a_settings.ShoreConfirmationCullDistance = ClampFiniteOrDefault(
+			a_settings.ShoreConfirmationCullDistance,
+			kDistantDepthFadeDistanceMin,
+			kDistantDepthFadeDistanceMax,
+			defaults.ShoreConfirmationCullDistance);
+		a_settings.DeepShoreSofteningStrength = ClampFiniteOrDefault(
+			a_settings.DeepShoreSofteningStrength,
+			kDeepShoreSofteningStrengthMin,
+			kDeepShoreSofteningStrengthMax,
+			defaults.DeepShoreSofteningStrength);
+		a_settings.DeepShoreSofteningStart = ClampFiniteOrDefault(
+			a_settings.DeepShoreSofteningStart,
+			kDeepShoreSofteningStartMin,
+			kDeepShoreSofteningStartMax,
+			defaults.DeepShoreSofteningStart);
+	}
+
 	bool IsInteriorCellActive()
 	{
 		const auto tes = RE::TES::GetSingleton();
@@ -68,10 +180,12 @@ namespace
 void UnifiedWater::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SanitizeSettings(settings);
 }
 
 void UnifiedWater::SaveSettings(json& o_json)
 {
+	SanitizeSettings(settings);
 	o_json = settings;
 }
 
@@ -82,6 +196,8 @@ void UnifiedWater::RestoreDefaultSettings()
 
 void UnifiedWater::DrawSettings()
 {
+	SanitizeSettings(settings);
+
 	ImGui::Checkbox(T(TKEY("use_optimised_meshes"), "Use Optimised Meshes"), &settings.UseOptimisedMeshes);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("use_optimised_meshes_tooltip"),
@@ -91,7 +207,164 @@ void UnifiedWater::DrawSettings()
 
 	ImGui::Spacing();
 
+	if (ImGui::TreeNodeEx(T(TKEY("water_appearance"), "Water Appearance"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::ColorEdit3(
+			T(TKEY("water_tint_color"), "Water Tint Color"),
+			reinterpret_cast<float*>(&settings.WaterTintColor));
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("water_tint_color_tooltip"), "Selects the colour of the water tint."));
+
+		ImGui::SliderFloat(
+			T(TKEY("water_tint"), "Water Tint"),
+			&settings.WaterTintStrength,
+			kWaterTintStrengthMin,
+			kWaterTintStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("water_tint_tooltip"), "Adjusts how strongly the selected colour appears in the water."));
+
+		ImGui::TreePop();
+	}
+
+	ImGui::Spacing();
+
+	if (ImGui::TreeNodeEx(T(TKEY("shallow_water_depth_stabilization"), "Shallow Water Depth Stabilization"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
+
+		ImGui::SliderFloat(
+			T(TKEY("near_strength"), "Near Strength"),
+			&settings.DistantDepthFadeNearStrength,
+			kDistantDepthFadeStrengthMin,
+			kDistantDepthFadeStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("near_strength_tooltip"),
+								  "Stabilization applied at and before Fade Start.\n"
+								  "A small nonzero value keeps nearby shallow water readable without fully suppressing transparency."));
+		}
+
+		ImGui::SliderFloat(
+			T(TKEY("far_strength"), "Far Strength"),
+			&settings.DistantDepthFadeFarStrength,
+			kDistantDepthFadeStrengthMin,
+			kDistantDepthFadeStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("far_strength_tooltip"),
+								  "Stabilization applied at and after Fade End.\n"
+								  "Values between Fade Start and Fade End interpolate smoothly from Near Strength."));
+		}
+
+		if (ImGui::SliderFloat(
+				T(TKEY("fade_start"), "Fade Start"),
+				&settings.DistantDepthFadeStart,
+				kDistantDepthFadeDistanceMin,
+				kDistantDepthFadeDistanceMax - kDistantDepthFadeMinimumRange,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp)) {
+			settings.DistantDepthFadeEnd = std::max(
+				settings.DistantDepthFadeEnd,
+				settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				T(TKEY("fade_start_tooltip"), "View distance where stabilization begins.\nOne exterior cell is %.0f units."),
+				kWorldCellSize);
+		}
+
+		if (ImGui::SliderFloat(
+				T(TKEY("fade_end"), "Fade End"),
+				&settings.DistantDepthFadeEnd,
+				kDistantDepthFadeDistanceMin + kDistantDepthFadeMinimumRange,
+				kDistantDepthFadeDistanceMax,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp)) {
+			settings.DistantDepthFadeStart = std::min(
+				settings.DistantDepthFadeStart,
+				settings.DistantDepthFadeEnd - kDistantDepthFadeMinimumRange);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("fade_end_tooltip"),
+								  "View distance where the selected stabilization strength is fully applied.\n"
+								  "Start and end remain at least one unit apart."));
+		}
+
+		ImGui::Spacing();
+		ImGui::SeparatorText(T(TKEY("shoreline"), "Shoreline"));
+
+		ImGui::SliderFloat(
+			T(TKEY("shore_feather_width"), "Shore Feather Width"),
+			&settings.ShoreFeatherWidth,
+			kShoreFeatherWidthMin,
+			kShoreFeatherWidthMax,
+			"%.1f px",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("shore_feather_width_tooltip"),
+								  "Fades stabilization back to natural transparency only at detected shorelines.\n"
+								  "Set to 0 to disable; water away from the shoreline is unchanged."));
+		}
+
+		ImGui::SliderFloat(
+			T(TKEY("deep_shore_softening"), "Deep Shore Softening"),
+			&settings.DeepShoreSofteningStrength,
+			kDeepShoreSofteningStrengthMin,
+			kDeepShoreSofteningStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("deep_shore_softening_tooltip"),
+								  "Softens deeper-water shoreline transitions while preserving the detected edge.\n"
+								  "Set to 0 to use the standard shoreline fade."));
+		}
+
+		ImGui::SliderFloat(
+			T(TKEY("deep_shore_start"), "Deep Shore Start"),
+			&settings.DeepShoreSofteningStart,
+			kDeepShoreSofteningStartMin,
+			kDeepShoreSofteningStartMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("deep_shore_start_tooltip"),
+								  "Controls how deep water must be before extra shoreline softening begins.\n"
+								  "Higher values leave more medium-depth water unchanged."));
+		}
+
+		ImGui::SliderFloat(
+			T(TKEY("shore_confirmation_cull_distance"), "Shore Confirmation Cull Distance"),
+			&settings.ShoreConfirmationCullDistance,
+			kDistantDepthFadeDistanceMin,
+			kDistantDepthFadeDistanceMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("shore_confirmation_cull_distance_tooltip"),
+								  "Stops extra shoreline confirmation samples beyond this view distance.\n"
+								  "A lightweight fallback preserves distant edge blending; set to 0 for no distance culling."));
+		}
+
+		ImGui::EndDisabled();
+		ImGui::TreePop();
+	}
+
+	ImGui::Spacing();
+
 	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox(
+			T(TKEY("use_open_shaders_depth_behaviour"), "Use Open Shaders Depth Behaviour"),
+			&settings.UseOpenShadersDepthBehaviour);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("use_open_shaders_depth_behaviour_tooltip"),
+								  "Bypasses Community Shaders' distance-based depth stabilization and uses Open Shaders' unmodified\n"
+								  "depth/refraction behaviour. Custom stabilization values are preserved and resume when disabled."));
+		}
+
+		ImGui::Spacing();
+
 		if (ImGui::Button(T(TKEY("regenerate_flowmap"), "Regenerate Flowmap")) && flowmap) {
 			if (flowmap->RegenerateAndLoadFlowmap())
 				SetFlowmapTex();
@@ -102,6 +375,26 @@ void UnifiedWater::DrawSettings()
 
 		ImGui::TreePop();
 	}
+}
+
+UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
+{
+	auto sanitizedSettings = settings;
+	SanitizeSettings(sanitizedSettings);
+
+	CommonBufferData data{};
+	const float depthBehaviourScale = sanitizedSettings.UseOpenShadersDepthBehaviour ? 0.0f : 1.0f;
+	data.DistantDepthFadeNearStrength = sanitizedSettings.DistantDepthFadeNearStrength * depthBehaviourScale;
+	data.DistantDepthFadeFarStrength = sanitizedSettings.DistantDepthFadeFarStrength * depthBehaviourScale;
+	data.DistantDepthFadeStart = sanitizedSettings.DistantDepthFadeStart;
+	data.DistantDepthFadeEnd = sanitizedSettings.DistantDepthFadeEnd;
+	data.WaterTintColor = sanitizedSettings.WaterTintColor;
+	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
+	data.ShoreFeatherWidth = sanitizedSettings.ShoreFeatherWidth;
+	data.ShoreConfirmationCullDistance = sanitizedSettings.ShoreConfirmationCullDistance;
+	data.DeepShoreSofteningStrength = sanitizedSettings.DeepShoreSofteningStrength;
+	data.DeepShoreSofteningStart = sanitizedSettings.DeepShoreSofteningStart;
+	return data;
 }
 
 void UnifiedWater::DrawOverlay()
@@ -154,7 +447,14 @@ void UnifiedWater::DrawOverlay()
 			return;
 		}
 
-		ImGui::TextColored(themeSettings.StatusPalette.Error, T("feature.unified_water.error_water_cache_generation_failed_for_worldspaces_check", "ERROR: Water cache generation failed for %d WorldSpaces. Check installation and CommunityShaders.log"), snapshot.failed);
+		if (snapshot.failed > 0) {
+			ImGui::TextColored(themeSettings.StatusPalette.Error, T("feature.unified_water.error_water_cache_generation_failed_for_worldspaces_check", "ERROR: Water cache generation failed for %d WorldSpaces. Check installation and CommunityShaders.log"), snapshot.failed);
+		} else {
+			ImGui::TextColored(
+				themeSettings.StatusPalette.Error,
+				"%s",
+				T(TKEY("error_water_cache_publication_failed"), "ERROR: Generated water caches could not be loaded completely. Check CommunityShaders.log"));
+		}
 
 		ImGui::End();
 	}
@@ -162,7 +462,7 @@ void UnifiedWater::DrawOverlay()
 
 bool UnifiedWater::IsOverlayVisible() const
 {
-	return true;
+	return waterCache && (waterCache->IsBuildRunning() || waterCache->HasBuildFailed());
 }
 
 void UnifiedWater::DataLoaded()
@@ -208,13 +508,18 @@ void UnifiedWater::DataLoaded()
 	flowmap = new Flowmap();
 	waterCache = new WaterCache();
 
-	if (LoadOrderChanged()) {
-		logger::info("[Unified Water] Load order changed, regenerating flowmap and caches");
+	uint64_t pendingLoadOrderHash = 0;
+	bool persistLoadOrderHash = false;
 
-		if (flowmap->RegenerateAndLoadFlowmap())
+	if (LoadOrderChanged(pendingLoadOrderHash)) {
+		logger::info("[Unified Water] Load order or data revision changed, regenerating flowmap and caches");
+
+		const bool flowmapRegenerated = flowmap->RegenerateAndLoadFlowmap();
+		if (flowmapRegenerated)
 			SetFlowmapTex();
 
-		waterCache->RegenerateCaches();
+		const bool cacheRegenerationStarted = waterCache->RegenerateCaches();
+		persistLoadOrderHash = flowmapRegenerated && cacheRegenerationStarted;
 	} else {
 		if (flowmap->LoadOrGenerateFlowmap())
 			SetFlowmapTex();
@@ -224,6 +529,14 @@ void UnifiedWater::DataLoaded()
 
 	while (waterCache->IsBuildRunning()) {
 		std::this_thread::sleep_for(100ms);
+	}
+
+	if (persistLoadOrderHash) {
+		if (waterCache->HasBuildFailed()) {
+			logger::warn("[Unified Water] Generated data is incomplete; retaining the previous load-order hash so regeneration retries next launch");
+		} else if (!PersistLoadOrderHash(pendingLoadOrderHash)) {
+			logger::warn("[Unified Water] Failed to persist the regenerated data hash; regeneration will retry next launch");
+		}
 	}
 
 	if (!MenuOpenCloseEventHandler::Register()) {
@@ -284,6 +597,11 @@ namespace
 	constexpr int kShareRetries = 3;
 	constexpr DWORD kShareRetryDelayMs = 50;
 
+	std::filesystem::path GetLoadOrderHashPath()
+	{
+		return Util::PathHelpers::GetCommunityShaderPath() / "UWLoadOrder.hash";
+	}
+
 	bool ReadHashFile(const std::filesystem::path& path, uint64_t& outHash)
 	{
 		for (int attempt = 0; attempt < kShareRetries; ++attempt) {
@@ -335,23 +653,42 @@ namespace
 		}
 		return false;
 	}
+
+	bool PersistLoadOrderHash(const uint64_t hash)
+	{
+		const auto path = GetLoadOrderHashPath();
+
+		std::error_code error;
+		std::filesystem::create_directories(path.parent_path(), error);
+		if (error) {
+			logger::error("[Unified Water] Failed to create load-order hash directory '{}': {}; regeneration will retry next launch",
+				path.parent_path().string(), error.message());
+			return false;
+		}
+
+		return WriteHashFile(path, hash);
+	}
 }
 
-bool UnifiedWater::LoadOrderChanged()
+bool UnifiedWater::LoadOrderChanged(uint64_t& a_hash)
 {
 	auto* dataHandler = RE::TESDataHandler::GetSingleton();
 	if (!dataHandler)
 		return false;
 
-	uint64_t hash = 14695981039346656037ull;
+	a_hash = 14695981039346656037ull;
+
+	auto addBytes = [&](const unsigned char* bytes) {
+		for (auto p = bytes; *p; ++p) {
+			a_hash ^= *p;
+			a_hash *= 1099511628211ull;
+		}
+	};
 
 	auto addToHash = [&](const RE::TESFile* file) {
 		if (!file || !file->fileName)
 			return;
-		for (auto p = reinterpret_cast<const unsigned char*>(file->fileName); *p; ++p) {
-			hash ^= *p;
-			hash *= 1099511628211ull;
-		}
+		addBytes(reinterpret_cast<const unsigned char*>(file->fileName));
 	};
 
 	if (const auto mods = dataHandler->GetLoadedMods()) {
@@ -366,19 +703,15 @@ bool UnifiedWater::LoadOrderChanged()
 			addToHash(lightMods[i]);
 	}
 
-	const std::filesystem::path path = Util::PathHelpers::GetCommunityShaderPath() / "UWLoadOrder.hash";
+	addBytes(reinterpret_cast<const unsigned char*>(kUnifiedWaterDataRevision));
+
+	const auto path = GetLoadOrderHashPath();
 
 	uint64_t existingHash = 0;
 	ReadHashFile(path, existingHash);
 
-	const bool changed = hash != existingHash;
-	logger::debug("[Unified Water] Load order hash: computed={:#x} persisted={:#x} changed={}", hash, existingHash, changed);
-
-	if (changed) {
-		std::error_code ec;
-		std::filesystem::create_directories(path.parent_path(), ec);
-		WriteHashFile(path, hash);
-	}
+	const bool changed = a_hash != existingHash;
+	logger::debug("[Unified Water] Load order hash: computed={:#x} persisted={:#x} changed={}", a_hash, existingHash, changed);
 
 	return changed;
 }
@@ -557,6 +890,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	std::vector<std::pair<RE::BSTriShape*, const WaterCache::Instruction*>> built;
 	bool attaching = false;
 	RE::NiPointer<RE::BSMultiBoundNode> water;
+	// Keep the runtime cache alive while built retains pointers into its instruction storage.
+	WaterCache::InstructionResult instructionResult;
 
 	if (block && block->loaded && !block->attached && block->chunk && block->water) {
 		// Keep terrain water alive while moving it out of its owning node
@@ -571,7 +906,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		const auto lodLevel = node->GetLODLevel();
 		const auto worldSpace = block->node->manager->worldSpace;
 
-		const auto instructions = singleton.waterCache->GetInstructions(worldSpace, lodLevel, node->baseCellX, node->baseCellY);
+		instructionResult = singleton.waterCache->GetInstructions(worldSpace, lodLevel, node->baseCellX, node->baseCellY);
+		const auto instructions = instructionResult.instructions;
 		if (!instructions) {
 			logger::warn("[Unified Water] No instructions found for {} chunk at {}, {}", worldSpace->GetFormEditorID(), node->baseCellX, node->baseCellY);
 			// Reattach the saved node before falling back to vanilla

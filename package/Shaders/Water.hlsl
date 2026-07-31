@@ -855,10 +855,19 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	return lerp(ReflectionColor.xyz, reflectionColor, waterReflectionStrength);
 }
 
+float GetRawScreenDepthWater(float2 screenPosition)
+{
+	return DepthTex.Load(float3(screenPosition, 0)).x;
+}
+
+float ResolveScreenDepthWater(float rawDepth)
+{
+	return CameraDataWater.w / (-rawDepth * CameraDataWater.z + CameraDataWater.x);
+}
+
 float GetScreenDepthWater(float2 screenPosition)
 {
-	float depth = DepthTex.Load(float3(screenPosition, 0)).x;
-	return (CameraDataWater.w / (-depth * CameraDataWater.z + CameraDataWater.x));
+	return ResolveScreenDepthWater(GetRawScreenDepthWater(screenPosition));
 }
 
 float3 GetLdotN(float3 normal)
@@ -883,6 +892,383 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 }
 
+#			if defined(UNIFIED_WATER)
+float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
+{
+	float tintStrength = saturate(SharedData::unifiedWaterSettings.WaterTintStrength);
+	[branch] if (tintStrength <= 0.0)
+		return baseColor;
+
+	float3 baseColorLinear = Color::SkyrimGammaToLinear(max(baseColor, 0.0.xxx));
+	float3 tintColorLinear = Color::SkyrimGammaToLinear(saturate(SharedData::unifiedWaterSettings.WaterTintColor));
+	return Color::LinearToSkyrimGamma(lerp(baseColorLinear, tintColorLinear, tintStrength));
+}
+#			endif
+
+#			if defined(UNIFIED_WATER) && defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && !defined(UNDERWATER) && !defined(LOD)
+#				define UNIFIED_WATER_DISTANCE_DEPTH_FADE
+
+float GetUnifiedWaterDistanceDepthFade(float viewDistance)
+{
+	// Generated distant surfaces still use close-water depth shading. Stabilize
+	// coarse terrain depth progressively without changing normal water permutations.
+	float nearStrength = saturate(SharedData::unifiedWaterSettings.DistantDepthFadeNearStrength);
+	float farStrength = saturate(SharedData::unifiedWaterSettings.DistantDepthFadeFarStrength);
+	float fadeStart = SharedData::unifiedWaterSettings.DistantDepthFadeStart;
+	float fadeEnd = max(SharedData::unifiedWaterSettings.DistantDepthFadeEnd, fadeStart + 1.0);
+	return lerp(nearStrength, farStrength, smoothstep(fadeStart, fadeEnd, viewDistance));
+}
+
+static const float ShoreConfirmationCullFadeRange = 2048.0;
+static const float ShoreFeatherDepthGradientEpsilon = 1e-8;
+static const float ShoreGatherEdgeInset = 1e-2;
+static const float ShoreGradientCandidateScale = 2.0;
+static const float ShoreGradientCandidateMargin = 2.0;
+static const float ShoreGradientFilterWidthScale = 0.25;
+static const float DeepShoreSofteningDepthRange = 0.25;
+static const int ShoreGradientFilterMaxRadius = 2;
+static const int2 ShoreGradientSampleOffsets[8] = {
+	int2(-1, -1),
+	int2(0, -1),
+	int2(1, -1),
+	int2(-1, 0),
+	int2(1, 0),
+	int2(-1, 1),
+	int2(0, 1),
+	int2(1, 1),
+};
+static const float2 ShoreGradientSobelWeights[8] = {
+	float2(-1.0, -1.0),
+	float2(0.0, -2.0),
+	float2(1.0, -1.0),
+	float2(-2.0, 0.0),
+	float2(2.0, 0.0),
+	float2(-1.0, 1.0),
+	float2(0.0, 2.0),
+	float2(1.0, 1.0),
+};
+
+int2 GetUnifiedWaterDepthRenderDimensions()
+{
+	return max(
+		int2(1, 1),
+		int2(round(SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy)));
+}
+
+int2 ClampUnifiedWaterDepthPixel(int2 pixelPosition, int2 renderDimensions)
+{
+	return clamp(pixelPosition, 0, renderDimensions - 1);
+}
+
+float2 ClampUnifiedWaterDepthGatherPosition(float2 pixelPosition, int2 renderDimensions)
+{
+	float2 minimumPosition = 0.5.xx;
+	float2 maximumPosition = max(
+		minimumPosition,
+		float2(renderDimensions) - float2(0.5 + ShoreGatherEdgeInset, 0.5 + ShoreGatherEdgeInset));
+	return clamp(pixelPosition, minimumPosition, maximumPosition);
+}
+
+bool IsUnifiedWaterRawDepthValid(float rawDepth)
+{
+	return isfinite(rawDepth) && rawDepth > 1e-5 && rawDepth < 1.0 - 1e-5;
+}
+
+bool TryGetUnifiedWaterShoreDepthDelta(float sceneDepth, float waterDepth, out float depthDelta)
+{
+	depthDelta = sceneDepth - waterDepth;
+	bool sampleValid =
+		IsUnifiedWaterRawDepthValid(sceneDepth) &&
+		isfinite(waterDepth) &&
+		isfinite(depthDelta);
+	depthDelta = sampleValid ? depthDelta : 0.0;
+	return sampleValid;
+}
+
+bool IsUnifiedWaterShoreSample(float sceneDepth, float waterDepth)
+{
+	float depthDelta;
+	bool sampleValid = TryGetUnifiedWaterShoreDepthDelta(sceneDepth, waterDepth, depthDelta);
+	return sampleValid && depthDelta <= 0.0;
+}
+
+bool TryGetUnifiedWaterDepthDelta(
+	int2 samplePixel,
+	int2 centerPixel,
+	float centerWaterDepth,
+	float2 waterDepthGradient,
+	out float depthDelta)
+{
+	float sceneDepth = DepthTex.Load(int3(samplePixel, 0)).x;
+	float2 sampleOffset = float2(samplePixel - centerPixel);
+	float waterDepth = centerWaterDepth + dot(waterDepthGradient, sampleOffset);
+	return TryGetUnifiedWaterShoreDepthDelta(sceneDepth, waterDepth, depthDelta);
+}
+
+bool TryGetUnifiedWaterFilteredDepthDeltaGradient(
+	int2 centerPixel,
+	int filterRadius,
+	float centerWaterDepth,
+	float2 waterDepthGradient,
+	int2 renderDimensions,
+	out float2 filteredDepthDeltaGradient)
+{
+	filteredDepthDeltaGradient = 0.0.xx;
+	bool filterValid = true;
+
+	[unroll] for (int sampleIndex = 0; sampleIndex < 8; ++sampleIndex)
+	{
+		int2 requestedPixel = centerPixel + ShoreGradientSampleOffsets[sampleIndex] * filterRadius;
+		int2 samplePixel = ClampUnifiedWaterDepthPixel(requestedPixel, renderDimensions);
+		float sampleDepthDelta;
+		bool sampleValid = TryGetUnifiedWaterDepthDelta(
+			samplePixel,
+			centerPixel,
+			centerWaterDepth,
+			waterDepthGradient,
+			sampleDepthDelta);
+		filterValid =
+			filterValid &&
+			all(requestedPixel == samplePixel) &&
+			sampleValid;
+		sampleDepthDelta = sampleValid ? sampleDepthDelta : 0.0;
+		filteredDepthDeltaGradient += ShoreGradientSobelWeights[sampleIndex] * sampleDepthDelta;
+	}
+
+	filteredDepthDeltaGradient /= 8.0 * filterRadius;
+	return filterValid;
+}
+
+float GetUnifiedWaterAnalyticShoreInteriorFactor(
+	float centerDepthDelta,
+	float depthDeltaGradientLength,
+	float featherWidth)
+{
+	if (depthDeltaGradientLength <= ShoreFeatherDepthGradientEpsilon)
+		return 1.0;
+
+	float estimatedShoreDistance = centerDepthDelta / depthDeltaGradientLength;
+	float coveredInteriorDistance = max(estimatedShoreDistance - 0.5, 0.0);
+	return smoothstep(0.0, featherWidth, coveredInteriorDistance);
+}
+
+float GetUnifiedWaterShoreInteriorFactor(
+	float2 screenPosition,
+	float centerSceneDepth,
+	float centerWaterDepth,
+	float2 depthDeltaGradient,
+	float2 waterDepthGradient,
+	float distanceDepthFade,
+	float unclampedNativeDepthFactor,
+	float2 unclampedNativeDepthFactorGradient,
+	float viewDistance)
+{
+	float featherWidth = clamp(SharedData::unifiedWaterSettings.ShoreFeatherWidth, 0.0, 64.0);
+	float cullDistance = max(SharedData::unifiedWaterSettings.ShoreConfirmationCullDistance, 0.0);
+	bool cullingEnabled = cullDistance > 0.0;
+	[branch] if (
+		featherWidth <= 0.0 ||
+		distanceDepthFade <= 0.0 ||
+		!IsUnifiedWaterRawDepthValid(centerSceneDepth) ||
+		!isfinite(centerWaterDepth) ||
+		!all(isfinite(depthDeltaGradient)) ||
+		!all(isfinite(waterDepthGradient)))
+	{
+		return 1.0;
+	}
+
+	float centerDepthDelta = centerSceneDepth - centerWaterDepth;
+	if (centerDepthDelta <= 0.0)
+		return 0.0;
+
+	float depthDeltaGradientLength = length(depthDeltaGradient);
+	if (depthDeltaGradientLength <= ShoreFeatherDepthGradientEpsilon)
+		return 1.0;
+
+	// The L1 norm gives a conservative candidate band before the wider Sobel
+	// estimate replaces faceted quad-local terrain gradients.
+	float conservativeGradientLength = abs(depthDeltaGradient.x) + abs(depthDeltaGradient.y);
+	float conservativeShoreDistance = centerDepthDelta / conservativeGradientLength;
+	float candidateFadeStart = ShoreGradientCandidateScale * featherWidth + ShoreGradientCandidateMargin;
+	float candidateFadeEnd = 2.0 * candidateFadeStart;
+	if (conservativeShoreDistance >= candidateFadeEnd)
+		return 1.0;
+
+	float gradientFilterWeight =
+		1.0 -
+		smoothstep(
+			candidateFadeStart,
+			candidateFadeEnd,
+			conservativeShoreDistance);
+
+	int2 renderDimensions = GetUnifiedWaterDepthRenderDimensions();
+	int2 centerPixel = ClampUnifiedWaterDepthPixel(int2(screenPosition), renderDimensions);
+	int filterRadius = clamp(
+		(int)round(featherWidth * ShoreGradientFilterWidthScale),
+		1,
+		ShoreGradientFilterMaxRadius);
+
+	float2 analyticDepthDeltaGradient = depthDeltaGradient;
+	float analyticDepthDeltaGradientLength = depthDeltaGradientLength;
+	float2 filteredDepthDeltaGradient;
+	bool filterValid = TryGetUnifiedWaterFilteredDepthDeltaGradient(
+		centerPixel,
+		filterRadius,
+		centerWaterDepth,
+		waterDepthGradient,
+		renderDimensions,
+		filteredDepthDeltaGradient);
+	float analyticInteriorFactor =
+		GetUnifiedWaterAnalyticShoreInteriorFactor(
+			centerDepthDelta,
+			depthDeltaGradientLength,
+			featherWidth);
+	[flatten] if (filterValid)
+	{
+		float filteredDepthDeltaGradientLength = length(filteredDepthDeltaGradient);
+		if (filteredDepthDeltaGradientLength > ShoreFeatherDepthGradientEpsilon) {
+			float filteredInteriorFactor =
+				GetUnifiedWaterAnalyticShoreInteriorFactor(
+					centerDepthDelta,
+					filteredDepthDeltaGradientLength,
+					featherWidth);
+			analyticInteriorFactor = lerp(
+				analyticInteriorFactor,
+				filteredInteriorFactor,
+				gradientFilterWeight);
+			float2 blendedDepthDeltaGradient = lerp(
+				depthDeltaGradient,
+				filteredDepthDeltaGradient,
+				gradientFilterWeight);
+			float blendedDepthDeltaGradientLength = length(blendedDepthDeltaGradient);
+			if (blendedDepthDeltaGradientLength > ShoreFeatherDepthGradientEpsilon) {
+				analyticDepthDeltaGradient = blendedDepthDeltaGradient;
+				analyticDepthDeltaGradientLength = blendedDepthDeltaGradientLength;
+			}
+		}
+	}
+
+	if (analyticDepthDeltaGradientLength <= ShoreFeatherDepthGradientEpsilon)
+		return 1.0;
+	if (analyticInteriorFactor >= 1.0)
+		return 1.0;
+
+	// Classify depth at a fixed point inside the estimated shore so deep
+	// softening remains stable across a planar bank.
+	float deepShoreSofteningStrength =
+		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStrength);
+	float deepShoreSofteningStart =
+		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStart);
+	float deepShoreSofteningWeight = 0.0;
+	bool deepShoreClassifierValid =
+		deepShoreSofteningStrength > 0.0 &&
+		deepShoreSofteningStart < 1.0 &&
+		isfinite(unclampedNativeDepthFactor) &&
+		all(isfinite(unclampedNativeDepthFactorGradient));
+	[branch] if (deepShoreClassifierValid)
+	{
+		float2 shoreInteriorDirection =
+			analyticDepthDeltaGradient /
+			analyticDepthDeltaGradientLength;
+		float estimatedShoreDistance =
+			centerDepthDelta /
+			analyticDepthDeltaGradientLength;
+		float classificationOffset = featherWidth + 0.5 - estimatedShoreDistance;
+		float classifiedNativeDepthFactor =
+			unclampedNativeDepthFactor +
+			dot(
+				unclampedNativeDepthFactorGradient,
+				shoreInteriorDirection * classificationOffset);
+		if (isfinite(classifiedNativeDepthFactor)) {
+			float deepShoreSofteningEnd = min(
+				deepShoreSofteningStart + DeepShoreSofteningDepthRange,
+				1.0);
+			deepShoreSofteningWeight =
+				deepShoreSofteningStrength *
+				smoothstep(
+					deepShoreSofteningStart,
+					deepShoreSofteningEnd,
+					saturate(classifiedNativeDepthFactor));
+		}
+	}
+
+	float softenedAnalyticInteriorFactor = lerp(
+		analyticInteriorFactor,
+		analyticInteriorFactor * analyticInteriorFactor,
+		deepShoreSofteningWeight);
+
+	float confirmationWeight = 1.0;
+	[branch] if (cullingEnabled)
+	{
+		float cullFadeStart = max(cullDistance - ShoreConfirmationCullFadeRange, 0.0);
+		confirmationWeight = 1.0 - smoothstep(cullFadeStart, cullDistance, viewDistance);
+		if (confirmationWeight <= 0.0)
+			return softenedAnalyticInteriorFactor;
+	}
+
+	if (deepShoreSofteningWeight >= 1.0)
+		return softenedAnalyticInteriorFactor;
+
+	float2 confirmationDirection =
+		-analyticDepthDeltaGradient /
+		analyticDepthDeltaGradientLength;
+	float confirmationDistance = featherWidth + 0.5;
+	float2 confirmationPosition = ClampUnifiedWaterDepthGatherPosition(
+		float2(centerPixel) + 0.5 + confirmationDirection * confirmationDistance,
+		renderDimensions);
+	float2 textureDimensions = max(1.0.xx, SharedData::BufferDim.xy);
+	float4 confirmationSceneDepths =
+		DepthTex.GatherRed(DepthSampler, confirmationPosition / textureDimensions);
+
+	float2 gatherTexelPosition = confirmationPosition - 0.5;
+	int2 gatherBasePixel = int2(floor(gatherTexelPosition));
+	float2 gatherBaseOffset = float2(gatherBasePixel - centerPixel);
+	float gatherBaseWaterDepth =
+		centerWaterDepth + dot(waterDepthGradient, gatherBaseOffset);
+	// Gather order is lower-left, lower-right, upper-right, upper-left.
+	float4 confirmationWaterDepths = gatherBaseWaterDepth + float4(
+																waterDepthGradient.y,
+																waterDepthGradient.x + waterDepthGradient.y,
+																waterDepthGradient.x,
+																0.0);
+	bool4 confirmationSamples = bool4(
+		IsUnifiedWaterShoreSample(
+			confirmationSceneDepths.x,
+			confirmationWaterDepths.x),
+		IsUnifiedWaterShoreSample(
+			confirmationSceneDepths.y,
+			confirmationWaterDepths.y),
+		IsUnifiedWaterShoreSample(
+			confirmationSceneDepths.z,
+			confirmationWaterDepths.z),
+		IsUnifiedWaterShoreSample(
+			confirmationSceneDepths.w,
+			confirmationWaterDepths.w));
+	float confirmationEvidence =
+		any(confirmationSamples) ? 1.0 : deepShoreSofteningWeight;
+
+	float confirmedInteriorFactor =
+		lerp(
+			1.0,
+			softenedAnalyticInteriorFactor,
+			confirmationEvidence);
+
+	return lerp(
+		softenedAnalyticInteriorFactor,
+		confirmedInteriorFactor,
+		confirmationWeight);
+}
+
+float4 ApplyUnifiedWaterDistanceDepthFade(
+	float4 depthMul,
+	float distanceDepthFade,
+	float shoreInteriorFactor)
+{
+	float effectiveDepthFade = saturate(distanceDepthFade * shoreInteriorFactor);
+	return lerp(depthMul, 1.0.xxxx, effectiveDepthFade);
+}
+#			endif
+
 struct DiffuseOutput
 {
 	float3 refractionColor;
@@ -892,7 +1278,17 @@ struct DiffuseOutput
 	float3 refractedViewDirection;
 };
 
-DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection, inout float4 distanceMul, float refractionsDepthFactor, float fresnel, float3 viewPosition, float depth)
+DiffuseOutput GetWaterDiffuseColor(
+	PS_INPUT input,
+	float3 normal,
+	float3 viewDirection,
+	inout float4 distanceMul,
+	float refractionsDepthFactor,
+	float fresnel,
+	float3 viewPosition,
+	float distanceDepthFade,
+	float shoreInteriorFactor,
+	float depth)
 {
 #			if defined(REFRACTIONS)
 	float4 refractionNormal = mul(transpose(TextureProj), float4((VarAmounts.w * refractionsDepthFactor * normal.xy) + input.MPosition.xy, input.MPosition.z, 1));
@@ -918,6 +1314,11 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	} else {
 		distanceMul = saturate(refractionPlaneMul * float4(length(refractionDepthAdjustedViewDirection).xx, abs(refractionViewSurfaceAngle).xx) / FogParam.z);
 
+#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+		distanceMul =
+			ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade, shoreInteriorFactor);
+#					endif
+
 		refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse, float4((refractionUvRaw * 2 - 1) * float2(1, -1), DepthTex.Load(float3(refractionScreenPosition, 0)).x, 1));
 		refractionWorldPosition.xyz /= refractionWorldPosition.w;
 	}
@@ -926,6 +1327,9 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
 	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
 	float3 refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
+#				if defined(UNIFIED_WATER)
+	refractionDiffuseColor = ApplyUnifiedWaterBaseTint(refractionDiffuseColor);
+#				endif
 
 #				if defined(UNDERWATER)
 	float refractionMul = 0;
@@ -938,11 +1342,16 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	output.refractionDiffuseColor = refractionDiffuseColor;
 	output.depth = depth;
 	output.refractionMul = refractionMul;
-	output.refractedViewDirection = normalize(refractionWorldPosition.xyz - input.WPosition.xyz);
+	float3 refractedViewDelta = refractionWorldPosition.xyz - input.WPosition.xyz;
+	output.refractedViewDirection = dot(refractedViewDelta, refractedViewDelta) > 1e-6 ? normalize(refractedViewDelta) : viewDirection;
 	return output;
 #			else
 	DiffuseOutput output;
-	output.refractionColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel) * GetLdotN(normal);
+	float3 baseWaterColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel);
+#				if defined(UNIFIED_WATER)
+	baseWaterColor = ApplyUnifiedWaterBaseTint(baseWaterColor);
+#				endif
+	output.refractionColor = baseWaterColor * GetLdotN(normal);
 	output.refractionDiffuseColor = output.refractionColor;
 	output.depth = 1;
 	output.refractionMul = 1;
@@ -995,8 +1404,15 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(SIMPLE) || defined(UNDERWATER) || defined(LOD) || defined(SPECULAR)
 	float3 viewDirection = normalize(input.WPosition.xyz);
 
-	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (length(input.WPosition.xyz) - 8192) / (WaterParams.x - 8192)));
+	float viewDistance = length(input.WPosition.xyz);
+	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (viewDistance - 8192) / (WaterParams.x - 8192)));
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
+	float distanceDepthFade = 0.0;
+	float shoreInteriorFactor = 1.0;
+#			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	distanceDepthFade = GetUnifiedWaterDistanceDepthFade(viewDistance);
+#			endif
+
 	float distanceBlendFactor = distanceFactor;
 #			if defined(UNIFIED_WATER)
 	distanceBlendFactor = 1.0f;
@@ -1014,7 +1430,8 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 	distanceMul = 0;
 
-	depth = GetScreenDepthWater(screenPosition);
+	float rawSceneDepth = GetRawScreenDepthWater(screenPosition);
+	depth = ResolveScreenDepthWater(rawSceneDepth);
 	float2 depthOffset =
 		FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
 	float depthMul = length(float3((depthOffset * 2 - 1) * depth / ProjData.xy, depth));
@@ -1022,10 +1439,35 @@ PS_OUTPUT main(PS_INPUT input)
 	float viewSurfaceAngle = dot(depthAdjustedViewDirection, ReflectPlane[0].xyz);
 
 	float planeMul = (1 - ReflectPlane[0].w / viewSurfaceAngle);
-	distanceMul = saturate(
+	float4 unclampedDistanceMul =
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
-		FogParam.z);
+		FogParam.z;
+	distanceMul = saturate(unclampedDistanceMul);
+#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	float centerDepthDelta = rawSceneDepth - input.HPosition.z;
+	float2 depthDeltaGradient =
+		float2(ddx_fine(centerDepthDelta), ddy_fine(centerDepthDelta));
+	float2 waterDepthGradient =
+		float2(ddx_fine(input.HPosition.z), ddy_fine(input.HPosition.z));
+	float2 unclampedNativeDepthFactorGradient =
+		float2(ddx_fine(unclampedDistanceMul.y), ddy_fine(unclampedDistanceMul.y));
+	shoreInteriorFactor = GetUnifiedWaterShoreInteriorFactor(
+		screenPosition,
+		rawSceneDepth,
+		input.HPosition.z,
+		depthDeltaGradient,
+		waterDepthGradient,
+		distanceDepthFade,
+		unclampedDistanceMul.y,
+		unclampedNativeDepthFactorGradient,
+		viewDistance);
+#					endif
 #				endif
+#			endif
+
+#			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	distanceMul =
+		ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade, shoreInteriorFactor);
 #			endif
 
 #			if defined(UNDERWATER)
@@ -1103,7 +1545,17 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, 1.0);
 #				endif
 
-	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, viewPosition, depth);
+	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(
+		input,
+		normal,
+		viewDirection,
+		distanceMul,
+		depthControl.y,
+		fresnel,
+		viewPosition,
+		distanceDepthFade,
+		shoreInteriorFactor,
+		depth);
 
 	float surfaceShadow;
 	float dirShadow = ShadowSampling::Get3DFilteredShadow(input.WPosition.xyz, diffuseOutput.refractedViewDirection, input.HPosition.xy, surfaceShadow);

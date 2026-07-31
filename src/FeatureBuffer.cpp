@@ -19,6 +19,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/UnifiedWater.h"
 #include "Features/VanillaFresnel.h"
 #include "Features/WetnessEffects.h"
 #include "TruePBR.h"
@@ -51,6 +52,7 @@ namespace
 	using TruePBRSettingsCB = TruePBR::Settings;
 	using SkinDataCB = Skin::SkinData;
 	using VanillaFresnelSettingsCB = VanillaFresnel::Settings;
+	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
 
 	// Keep these in lock-step with package/Shaders/Common/SharedData.hlsli::FeatureData.
 	struct FeatureDataLayout
@@ -75,6 +77,7 @@ namespace
 		TruePBRSettingsCB truePBRSettings;
 		SkinDataCB skinData;
 		VanillaFresnelSettingsCB vanillaFresnelSettings;
+		UnifiedWaterSettingsCB unifiedWaterSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -97,7 +100,8 @@ namespace
 		ExponentialHeightFogSettingsCB,
 		TruePBRSettingsCB,
 		SkinDataCB,
-		VanillaFresnelSettingsCB>;
+		VanillaFresnelSettingsCB,
+		UnifiedWaterSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
@@ -125,6 +129,17 @@ namespace
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 12);
 	static_assert(sizeof(SkinDataCB) == 112);
 	static_assert(sizeof(VanillaFresnelSettingsCB) == 48);
+	static_assert(sizeof(UnifiedWaterSettingsCB) == 48);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeNearStrength) == 0);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeFarStrength) == 4);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeStart) == 8);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeEnd) == 12);
+	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintColor) == 16);
+	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintStrength) == 28);
+	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreFeatherWidth) == 32);
+	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreConfirmationCullDistance) == 36);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DeepShoreSofteningStrength) == 40);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DeepShoreSofteningStart) == 44);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);
@@ -149,7 +164,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == offsetof(FeatureDataLayout, exponentialHeightFogSettings) + sizeof(ExponentialHeightFogSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, skinData) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, vanillaFresnelSettings) == offsetof(FeatureDataLayout, skinData) + sizeof(SkinDataCB));
-	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, vanillaFresnelSettings) + sizeof(VanillaFresnelSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, vanillaFresnelSettings) + sizeof(VanillaFresnelSettingsCB));
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -203,5 +219,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::exponentialHeightFog.settings,
 		globals::features::truePBR.settings,
 		globals::features::skin.GetCommonBufferData(),
-		globals::features::vanillaFresnel.settings);
+		globals::features::vanillaFresnel.settings,
+		globals::features::unifiedWater.GetCommonBufferData());
 }

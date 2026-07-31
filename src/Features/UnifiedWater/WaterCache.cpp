@@ -83,6 +83,12 @@ namespace
 
 bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 {
+	std::scoped_lock lock(currentCacheMutex);
+	return SetCurrentWorldSpaceLocked(worldSpace);
+}
+
+bool WaterCache::SetCurrentWorldSpaceLocked(const RE::TESWorldSpace* worldSpace)
+{
 	auto clearCurrentCache = [this] {
 		currentCache.reset();
 		currentCacheSnapshot.reset();
@@ -135,15 +141,20 @@ bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 	return true;
 }
 
-std::vector<WaterCache::Instruction>* WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const uint32_t x, const uint32_t y)
+WaterCache::InstructionResult WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const uint32_t x, const uint32_t y)
 {
-	if (!SetCurrentWorldSpace(worldSpace)) {
+	std::scoped_lock lock(currentCacheMutex);
+
+	if (!SetCurrentWorldSpaceLocked(worldSpace)) {
 		const auto editorID = worldSpace ? worldSpace->GetFormEditorID() : nullptr;
 		logger::error("[Unified Water] [Cache] Failed to set current cache to {} while getting instructions", editorID ? editorID : "<null>");
-		return nullptr;
+		return {};
 	}
 
-	return currentCache->GetInstructions(lodLevel, x, y);
+	InstructionResult result;
+	result.cache = currentCache;
+	result.instructions = currentCache->GetInstructions(lodLevel, x, y);
+	return result;
 }
 
 std::vector<WaterCache::Instruction>* WaterCache::RuntimeCache::GetInstructions(const int32_t lodLevel, const int32_t x, const int32_t y)
@@ -242,7 +253,7 @@ bool WaterCache::RegenerateCaches()
 	return GenerateCaches();
 }
 
-bool WaterCache::LoadCaches()
+bool WaterCache::LoadCaches(bool a_requireComplete)
 {
 	const auto t0 = std::chrono::steady_clock::now();
 
@@ -297,7 +308,7 @@ bool WaterCache::LoadCaches()
 	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 	logger::info("[Unified Water] [Cache] Caches loaded in {} ms", ms);
 
-	return true;
+	return !a_requireComplete || unavailableCount == 0;
 }
 
 bool WaterCache::GenerateCaches()
@@ -368,7 +379,10 @@ bool WaterCache::GenerateCaches()
 		buildProgress.Stop();
 
 		logger::info("[Unified Water] [Cache] Disk caches generated in {} ms  ({} / {} complete - {} failed)", buildProgress.ElapsedMs(), buildProgress.completed.load(), buildProgress.total.load(), buildProgress.failed.load());
-		LoadCaches();
+		if (!LoadCaches(true)) {
+			async.failed.store(true, std::memory_order_release);
+			logger::error("[Unified Water] [Cache] Generated caches could not be published completely");
+		}
 		async.running.store(false);
 	});
 

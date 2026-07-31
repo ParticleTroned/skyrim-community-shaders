@@ -351,6 +351,20 @@ namespace SharedData
 		float pad;
 	};
 
+	struct UnifiedWaterSettings
+	{
+		float DistantDepthFadeNearStrength;
+		float DistantDepthFadeFarStrength;
+		float DistantDepthFadeStart;
+		float DistantDepthFadeEnd;
+		float3 WaterTintColor;
+		float WaterTintStrength;
+		float ShoreFeatherWidth;
+		float ShoreConfirmationCullDistance;
+		float DeepShoreSofteningStrength;
+		float DeepShoreSofteningStart;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -373,6 +387,7 @@ namespace SharedData
 		TruePBRSettings truePBRSettings;
 		SkinData skinData;
 		VanillaFresnelSettings vanillaFresnelSettings;
+		UnifiedWaterSettings unifiedWaterSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

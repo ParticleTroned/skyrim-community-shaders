@@ -26,9 +26,37 @@ struct UnifiedWater : OverlayFeature
 	struct Settings
 	{
 		bool UseOptimisedMeshes = true;
+		bool UseOpenShadersDepthBehaviour = false;
+		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
+		float WaterTintStrength = 0.0f;
+		float DistantDepthFadeNearStrength = 0.10f;
+		float DistantDepthFadeFarStrength = 1.0f;
+		float DistantDepthFadeStart = 0.0f;
+		float DistantDepthFadeEnd = 4096.0f;
+		float ShoreFeatherWidth = 16.0f;
+		float ShoreConfirmationCullDistance = 16000.0f;
+		float DeepShoreSofteningStrength = 0.5f;
+		float DeepShoreSofteningStart = 0.5f;
 	};
 
+	struct alignas(16) CommonBufferData
+	{
+		float DistantDepthFadeNearStrength;
+		float DistantDepthFadeFarStrength;
+		float DistantDepthFadeStart;
+		float DistantDepthFadeEnd;
+		float3 WaterTintColor;
+		float WaterTintStrength;
+		float ShoreFeatherWidth;
+		float ShoreConfirmationCullDistance;
+		float DeepShoreSofteningStrength;
+		float DeepShoreSofteningStart;
+	};
+	static_assert(alignof(CommonBufferData) == 16);
+	static_assert(sizeof(CommonBufferData) == 48);
+
 	Settings settings;
+	CommonBufferData GetCommonBufferData() const;
 
 	struct TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams
 	{
@@ -128,5 +156,5 @@ private:
 	void SetFlowmapTex() const;
 	bool IsExteriorWorldspaceActive() const;
 	void UpdateWaterLODCull() const;
-	static bool LoadOrderChanged();
+	static bool LoadOrderChanged(uint64_t& a_hash);
 };

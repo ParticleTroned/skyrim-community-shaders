@@ -27,8 +27,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantDepthFadeEnd,
 	ShoreFeatherWidth,
 	ShoreConfirmationCullDistance,
-	DeepShoreSofteningStrength,
-	DeepShoreSofteningStart)
+	DeepWaterNativeBlendStrength,
+	DeepWaterNativeBlendStart)
 
 namespace
 {
@@ -44,10 +44,10 @@ namespace
 	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
 	constexpr float kShoreFeatherWidthMin = 0.0f;
 	constexpr float kShoreFeatherWidthMax = 64.0f;
-	constexpr float kDeepShoreSofteningStrengthMin = 0.0f;
-	constexpr float kDeepShoreSofteningStrengthMax = 1.0f;
-	constexpr float kDeepShoreSofteningStartMin = 0.0f;
-	constexpr float kDeepShoreSofteningStartMax = 1.0f;
+	constexpr float kDeepWaterNativeBlendStrengthMin = 0.0f;
+	constexpr float kDeepWaterNativeBlendStrengthMax = 1.0f;
+	constexpr float kDeepWaterNativeBlendStartMin = 0.0f;
+	constexpr float kDeepWaterNativeBlendStartMax = 1.0f;
 
 	// Increment when Unified Water's generated flowmap or cache contract changes.
 	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
@@ -119,16 +119,16 @@ namespace
 			kDistantDepthFadeDistanceMin,
 			kDistantDepthFadeDistanceMax,
 			defaults.ShoreConfirmationCullDistance);
-		a_settings.DeepShoreSofteningStrength = ClampFiniteOrDefault(
-			a_settings.DeepShoreSofteningStrength,
-			kDeepShoreSofteningStrengthMin,
-			kDeepShoreSofteningStrengthMax,
-			defaults.DeepShoreSofteningStrength);
-		a_settings.DeepShoreSofteningStart = ClampFiniteOrDefault(
-			a_settings.DeepShoreSofteningStart,
-			kDeepShoreSofteningStartMin,
-			kDeepShoreSofteningStartMax,
-			defaults.DeepShoreSofteningStart);
+		a_settings.DeepWaterNativeBlendStrength = ClampFiniteOrDefault(
+			a_settings.DeepWaterNativeBlendStrength,
+			kDeepWaterNativeBlendStrengthMin,
+			kDeepWaterNativeBlendStrengthMax,
+			defaults.DeepWaterNativeBlendStrength);
+		a_settings.DeepWaterNativeBlendStart = ClampFiniteOrDefault(
+			a_settings.DeepWaterNativeBlendStart,
+			kDeepWaterNativeBlendStartMin,
+			kDeepWaterNativeBlendStartMax,
+			defaults.DeepWaterNativeBlendStart);
 	}
 
 	bool IsInteriorCellActive()
@@ -309,29 +309,29 @@ void UnifiedWater::DrawSettings()
 		}
 
 		ImGui::SliderFloat(
-			T(TKEY("deep_shore_softening"), "Deep Shore Softening"),
-			&settings.DeepShoreSofteningStrength,
-			kDeepShoreSofteningStrengthMin,
-			kDeepShoreSofteningStrengthMax,
+			T(TKEY("deep_water_native_blend"), "Deep Water Native Blend"),
+			&settings.DeepWaterNativeBlendStrength,
+			kDeepWaterNativeBlendStrengthMin,
+			kDeepWaterNativeBlendStrengthMax,
 			"%.2f",
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("deep_shore_softening_tooltip"),
-								  "Softens deeper-water shoreline transitions while preserving the detected edge.\n"
-								  "Set to 0 to use the standard shoreline fade."));
+			ImGui::Text("%s", T(TKEY("deep_water_native_blend_tooltip"),
+								  "Returns deep water to native depth blending while preserving stabilization for shallow water.\n"
+								  "Set to 0 to keep stabilization active at every depth."));
 		}
 
 		ImGui::SliderFloat(
-			T(TKEY("deep_shore_start"), "Deep Shore Start"),
-			&settings.DeepShoreSofteningStart,
-			kDeepShoreSofteningStartMin,
-			kDeepShoreSofteningStartMax,
+			T(TKEY("deep_water_native_blend_start"), "Native Blend Start"),
+			&settings.DeepWaterNativeBlendStart,
+			kDeepWaterNativeBlendStartMin,
+			kDeepWaterNativeBlendStartMax,
 			"%.2f",
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("deep_shore_start_tooltip"),
-								  "Controls how deep water must be before extra shoreline softening begins.\n"
-								  "Higher values leave more medium-depth water unchanged."));
+			ImGui::Text("%s", T(TKEY("deep_water_native_blend_start_tooltip"),
+								  "Controls how deep water must be before stabilization yields to native depth blending.\n"
+								  "Higher values retain stabilization through more medium-depth water."));
 		}
 
 		ImGui::SliderFloat(
@@ -392,8 +392,8 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
 	data.ShoreFeatherWidth = sanitizedSettings.ShoreFeatherWidth;
 	data.ShoreConfirmationCullDistance = sanitizedSettings.ShoreConfirmationCullDistance;
-	data.DeepShoreSofteningStrength = sanitizedSettings.DeepShoreSofteningStrength;
-	data.DeepShoreSofteningStart = sanitizedSettings.DeepShoreSofteningStart;
+	data.DeepWaterNativeBlendStrength = sanitizedSettings.DeepWaterNativeBlendStrength;
+	data.DeepWaterNativeBlendStart = sanitizedSettings.DeepWaterNativeBlendStart;
 	return data;
 }
 

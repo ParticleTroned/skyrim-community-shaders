@@ -927,7 +927,7 @@ static const float ShoreGatherEdgeInset = 1e-2;
 static const float ShoreGradientCandidateScale = 2.0;
 static const float ShoreGradientCandidateMargin = 2.0;
 static const float ShoreGradientFilterWidthScale = 0.25;
-static const float DeepShoreSofteningDepthRange = 0.25;
+static const float DeepWaterNativeBlendDepthRange = 0.25;
 static const int ShoreGradientFilterMaxRadius = 2;
 static const int2 ShoreGradientSampleOffsets[8] = {
 	int2(-1, -1),
@@ -1054,6 +1054,30 @@ float GetUnifiedWaterAnalyticShoreInteriorFactor(
 	return smoothstep(0.0, featherWidth, coveredInteriorDistance);
 }
 
+float GetUnifiedWaterNativeDepthBlendWeight(float nativeDepthFactor)
+{
+	float nativeDepthBlendStrength =
+		saturate(SharedData::unifiedWaterSettings.DeepWaterNativeBlendStrength);
+	float nativeDepthBlendStart =
+		saturate(SharedData::unifiedWaterSettings.DeepWaterNativeBlendStart);
+	if (
+		nativeDepthBlendStrength <= 0.0 ||
+		nativeDepthBlendStart >= 1.0 ||
+		!isfinite(nativeDepthFactor))
+	{
+		return 0.0;
+	}
+
+	float nativeDepthBlendEnd = min(
+		nativeDepthBlendStart + DeepWaterNativeBlendDepthRange,
+		1.0);
+	return nativeDepthBlendStrength *
+		smoothstep(
+			nativeDepthBlendStart,
+			nativeDepthBlendEnd,
+			saturate(nativeDepthFactor));
+}
+
 float GetUnifiedWaterShoreInteriorFactor(
 	float2 screenPosition,
 	float centerSceneDepth,
@@ -1063,7 +1087,8 @@ float GetUnifiedWaterShoreInteriorFactor(
 	float distanceDepthFade,
 	float unclampedNativeDepthFactor,
 	float2 unclampedNativeDepthFactorGradient,
-	float viewDistance)
+	float viewDistance,
+	inout float nativeDepthBlendWeight)
 {
 	float featherWidth = clamp(SharedData::unifiedWaterSettings.ShoreFeatherWidth, 0.0, 64.0);
 	float cullDistance = max(SharedData::unifiedWaterSettings.ShoreConfirmationCullDistance, 0.0);
@@ -1152,22 +1177,13 @@ float GetUnifiedWaterShoreInteriorFactor(
 
 	if (analyticDepthDeltaGradientLength <= ShoreFeatherDepthGradientEpsilon)
 		return 1.0;
-	if (analyticInteriorFactor >= 1.0)
-		return 1.0;
 
-	// Classify depth at a fixed point inside the estimated shore so deep
-	// softening remains stable across a planar bank.
-	float deepShoreSofteningStrength =
-		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStrength);
-	float deepShoreSofteningStart =
-		saturate(SharedData::unifiedWaterSettings.DeepShoreSofteningStart);
-	float deepShoreSofteningWeight = 0.0;
-	bool deepShoreClassifierValid =
-		deepShoreSofteningStrength > 0.0 &&
-		deepShoreSofteningStart < 1.0 &&
+	// Classify a fixed point inside the estimated shore so a deep bank uses
+	// one coherent owner instead of changing ownership across its depth ramp.
+	bool nativeDepthClassifierValid =
 		isfinite(unclampedNativeDepthFactor) &&
 		all(isfinite(unclampedNativeDepthFactorGradient));
-	[branch] if (deepShoreClassifierValid)
+	[branch] if (nativeDepthClassifierValid)
 	{
 		float2 shoreInteriorDirection =
 			analyticDepthDeltaGradient /
@@ -1181,23 +1197,13 @@ float GetUnifiedWaterShoreInteriorFactor(
 			dot(
 				unclampedNativeDepthFactorGradient,
 				shoreInteriorDirection * classificationOffset);
-		if (isfinite(classifiedNativeDepthFactor)) {
-			float deepShoreSofteningEnd = min(
-				deepShoreSofteningStart + DeepShoreSofteningDepthRange,
-				1.0);
-			deepShoreSofteningWeight =
-				deepShoreSofteningStrength *
-				smoothstep(
-					deepShoreSofteningStart,
-					deepShoreSofteningEnd,
-					saturate(classifiedNativeDepthFactor));
-		}
+		if (isfinite(classifiedNativeDepthFactor))
+			nativeDepthBlendWeight =
+				GetUnifiedWaterNativeDepthBlendWeight(classifiedNativeDepthFactor);
 	}
 
-	float softenedAnalyticInteriorFactor = lerp(
-		analyticInteriorFactor,
-		analyticInteriorFactor * analyticInteriorFactor,
-		deepShoreSofteningWeight);
+	if (analyticInteriorFactor >= 1.0 || nativeDepthBlendWeight >= 1.0)
+		return analyticInteriorFactor;
 
 	float confirmationWeight = 1.0;
 	[branch] if (cullingEnabled)
@@ -1205,11 +1211,8 @@ float GetUnifiedWaterShoreInteriorFactor(
 		float cullFadeStart = max(cullDistance - ShoreConfirmationCullFadeRange, 0.0);
 		confirmationWeight = 1.0 - smoothstep(cullFadeStart, cullDistance, viewDistance);
 		if (confirmationWeight <= 0.0)
-			return softenedAnalyticInteriorFactor;
+			return analyticInteriorFactor;
 	}
-
-	if (deepShoreSofteningWeight >= 1.0)
-		return softenedAnalyticInteriorFactor;
 
 	float2 confirmationDirection =
 		-analyticDepthDeltaGradient /
@@ -1246,17 +1249,11 @@ float GetUnifiedWaterShoreInteriorFactor(
 		IsUnifiedWaterShoreSample(
 			confirmationSceneDepths.w,
 			confirmationWaterDepths.w));
-	float confirmationEvidence =
-		any(confirmationSamples) ? 1.0 : deepShoreSofteningWeight;
-
 	float confirmedInteriorFactor =
-		lerp(
-			1.0,
-			softenedAnalyticInteriorFactor,
-			confirmationEvidence);
+		any(confirmationSamples) ? analyticInteriorFactor : 1.0;
 
 	return lerp(
-		softenedAnalyticInteriorFactor,
+		analyticInteriorFactor,
 		confirmedInteriorFactor,
 		confirmationWeight);
 }
@@ -1264,9 +1261,16 @@ float GetUnifiedWaterShoreInteriorFactor(
 float4 ApplyUnifiedWaterDistanceDepthFade(
 	float4 depthMul,
 	float distanceDepthFade,
-	float shoreInteriorFactor)
+	float shoreInteriorFactor,
+	float nativeDepthBlendWeight)
 {
-	float effectiveDepthFade = saturate(distanceDepthFade * shoreInteriorFactor);
+	// Preserve stabilized coverage in shallow water, then yield to native
+	// depth shading before stabilization can flatten a deep shoreline.
+	float stabilizationWeight = 1.0 - saturate(nativeDepthBlendWeight);
+	float effectiveDepthFade = saturate(
+		distanceDepthFade *
+		shoreInteriorFactor *
+		stabilizationWeight);
 	return lerp(depthMul, 1.0.xxxx, effectiveDepthFade);
 }
 #			endif
@@ -1290,6 +1294,7 @@ DiffuseOutput GetWaterDiffuseColor(
 	float3 viewPosition,
 	float distanceDepthFade,
 	float shoreInteriorFactor,
+	float nativeDepthBlendWeight,
 	float depth)
 {
 #			if defined(REFRACTIONS)
@@ -1318,7 +1323,11 @@ DiffuseOutput GetWaterDiffuseColor(
 
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 		distanceMul =
-			ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade, shoreInteriorFactor);
+			ApplyUnifiedWaterDistanceDepthFade(
+				distanceMul,
+				distanceDepthFade,
+				shoreInteriorFactor,
+				nativeDepthBlendWeight);
 #					endif
 
 		refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse, float4((refractionUvRaw * 2 - 1) * float2(1, -1), DepthTex.Load(float3(refractionScreenPosition, 0)).x, 1));
@@ -1411,6 +1420,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
 	float distanceDepthFade = 0.0;
 	float shoreInteriorFactor = 1.0;
+	float nativeDepthBlendWeight = 0.0;
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 	distanceDepthFade = GetUnifiedWaterDistanceDepthFade(viewDistance);
 #			endif
@@ -1446,6 +1456,8 @@ PS_OUTPUT main(PS_INPUT input)
 		FogParam.z;
 	distanceMul = saturate(unclampedDistanceMul);
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	nativeDepthBlendWeight =
+		GetUnifiedWaterNativeDepthBlendWeight(distanceMul.y);
 	float centerDepthDelta = rawSceneDepth - input.HPosition.z;
 	float2 depthDeltaGradient =
 		float2(ddx_fine(centerDepthDelta), ddy_fine(centerDepthDelta));
@@ -1462,14 +1474,19 @@ PS_OUTPUT main(PS_INPUT input)
 		distanceDepthFade,
 		unclampedDistanceMul.y,
 		unclampedNativeDepthFactorGradient,
-		viewDistance);
+		viewDistance,
+		nativeDepthBlendWeight);
 #					endif
 #				endif
 #			endif
 
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 	distanceMul =
-		ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceDepthFade, shoreInteriorFactor);
+		ApplyUnifiedWaterDistanceDepthFade(
+			distanceMul,
+			distanceDepthFade,
+			shoreInteriorFactor,
+			nativeDepthBlendWeight);
 #			endif
 
 #			if defined(UNDERWATER)
@@ -1557,6 +1574,7 @@ PS_OUTPUT main(PS_INPUT input)
 		viewPosition,
 		distanceDepthFade,
 		shoreInteriorFactor,
+		nativeDepthBlendWeight,
 		depth);
 
 	float surfaceShadow;

@@ -361,8 +361,8 @@ namespace SharedData
 		float WaterTintStrength;
 		float ShoreFeatherWidth;
 		float ShoreConfirmationCullDistance;
-		float DeepShoreSofteningStrength;
-		float DeepShoreSofteningStart;
+		float DeepWaterNativeBlendStrength;
+		float DeepWaterNativeBlendStart;
 	};
 
 	cbuffer FeatureData : register(b6)

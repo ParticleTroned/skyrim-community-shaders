@@ -363,6 +363,8 @@ namespace SharedData
 		float ShoreConfirmationCullDistance;
 		float DeepWaterNativeBlendStrength;
 		float DeepWaterNativeBlendStart;
+		float DeepWaterNativeBlendEnd;
+		float3 Padding;
 	};
 
 	cbuffer FeatureData : register(b6)

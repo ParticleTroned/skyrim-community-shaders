@@ -36,7 +36,8 @@ struct UnifiedWater : OverlayFeature
 		float ShoreFeatherWidth = 16.0f;
 		float ShoreConfirmationCullDistance = 16000.0f;
 		float DeepWaterNativeBlendStrength = 1.0f;
-		float DeepWaterNativeBlendStart = 0.5f;
+		float DeepWaterNativeBlendStart = 0.25f;
+		float DeepWaterNativeBlendEnd = 0.5f;
 	};
 
 	struct alignas(16) CommonBufferData
@@ -51,9 +52,11 @@ struct UnifiedWater : OverlayFeature
 		float ShoreConfirmationCullDistance;
 		float DeepWaterNativeBlendStrength;
 		float DeepWaterNativeBlendStart;
+		float DeepWaterNativeBlendEnd;
+		float Padding[3];
 	};
 	static_assert(alignof(CommonBufferData) == 16);
-	static_assert(sizeof(CommonBufferData) == 48);
+	static_assert(sizeof(CommonBufferData) == 64);
 
 	Settings settings;
 	CommonBufferData GetCommonBufferData() const;

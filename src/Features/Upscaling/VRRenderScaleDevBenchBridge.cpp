@@ -5,6 +5,7 @@
 #	include "Features/Upscaling.h"
 #	include "Features/VR.h"
 #	include "Globals.h"
+#	include "ShaderCache.h"
 #	include "State.h"
 
 #	include <DevBenchAPI.h>
@@ -89,6 +90,7 @@ namespace
 			{ "dlssPreset", a_profile.dlssPreset },
 			{ "renderScale", a_profile.renderScale },
 			{ "renderScaleMode", a_profile.renderScaleModeEnabled },
+			{ "fsr4RuntimeEnabled", a_profile.fsr4RuntimeEnabled },
 			{ "displayEyeWidth", a_profile.displayEyeWidth },
 			{ "displayEyeHeight", a_profile.displayEyeHeight },
 			{ "renderEyeWidth", a_profile.renderEyeWidth },
@@ -122,6 +124,7 @@ namespace
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
 		const auto session = a_upscaling.GetVRRenderScaleStressSessionSnapshot();
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
+		auto& fidelityFX = Upscaling::fidelityFX;
 
 		json eyes = json::array();
 		for (const auto& eye : controller.fidelity.eyes) {
@@ -163,6 +166,24 @@ namespace
 		return {
 			{ "frame", frame },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
+			{ "fsrDispatch", {
+							 { "fsr4SelectorEnabled", a_upscaling.settings.fsr4RuntimeEnable },
+							 { "runtimeProfileFsr4Enabled", a_upscaling.GetRuntimeFSR4Enabled() },
+							 { "runtimePathRequested", fidelityFX.ShouldUseRuntimeUpscalerForFSR() || fidelityFX.ShouldRequestRuntimeFsr4() },
+							 { "fsr4RuntimeRequested", fidelityFX.ShouldRequestRuntimeFsr4() },
+							 { "contextOrDesiredRuntimeVersion", fidelityFX.GetRuntimeUpscalerRequestedVersionString() },
+							 { "configuredPath", fidelityFX.GetConfiguredFsrPathLabel() },
+							 { "displayedPath", fidelityFX.GetDisplayedFsrPathLabel() },
+							 { "lastActualPath", fidelityFX.GetRuntimeUpscalerLastFramePathLabel() },
+							 { "runtimeResourcesPresent", fidelityFX.HasRuntimeUpscalerResources() },
+							 { "runtimeSupportCheckKnown", fidelityFX.HasRuntimeUpscalerSupportCheckResult() },
+							 { "runtimeSupportConfirmed", fidelityFX.IsRuntimeUpscalerSupportConfirmed() },
+							 { "runtimeProvider", fidelityFX.GetRuntimeUpscalerProviderName() },
+							 { "providerMatchesContextRequest", fidelityFX.IsRuntimeUpscalerProviderMatchingRequestedVersion() },
+							 { "runtimeFailureLatched", fidelityFX.IsRuntimeUpscalerFailureLatched() },
+							 { "fsr4FailureLatched", fidelityFX.IsRuntimeFsr4FailureLatched() },
+							 { "shaderCompilationActive", globals::shaderCache && globals::shaderCache->IsCompiling() },
+						 } },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "session", {
 							 { "id", session.sessionID },
@@ -614,7 +635,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller, local-video and system-commit memory, retirement, backend, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v8 iteration artifact. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 per-eye luminance and HAM-clear capture at the final OpenVR submission boundary; probe_stop disables new samples, probe_record returns its timeline, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller plus requested FSR4 selector state, configured and actual FSR dispatch paths, runtime provider/version state, shader-compilation gating, local-video and system-commit memory, retirement, backend, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v8 iteration artifact. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 per-eye luminance and HAM-clear capture at the final OpenVR submission boundary; probe_stop disables new samples, probe_record returns its timeline, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

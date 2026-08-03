@@ -176,6 +176,18 @@ runs:
                   }
                 }
 
+                # Check generator instance mismatch — CMAKE_GENERATOR_INSTANCE pins
+                # the exact VS install path found at configure time. If a runner
+                # image or toolchain change moves or removes that path, CMake fails
+                # hard instead of re-detecting a new instance.
+                if ($content -match 'CMAKE_GENERATOR_INSTANCE:INTERNAL=(.+)') {
+                  $cachedInstance = $Matches[1].Trim()
+                  if ($cachedInstance -and -not (Test-Path $cachedInstance)) {
+                    Write-Host "❌ Generator instance gone: cached='$cachedInstance' no longer exists."
+                    $stale = $true
+                  }
+                }
+
                 # Check vcpkg triplet mismatch. A triplet change installs
                 # vcpkg_installed/ under a new directory, while cached
                 # find_library() results can still point at the old one.

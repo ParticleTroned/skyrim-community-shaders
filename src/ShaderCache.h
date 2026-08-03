@@ -301,6 +301,7 @@ namespace SIE
 		void Add(const ShaderCompilationTask& task);
 		void Complete(const ShaderCompilationTask& task);
 		void Clear();
+		bool IsInProgress(size_t a_taskId);
 		void Forget(const std::unordered_set<size_t>& a_taskIds);
 		static std::string GetHumanTime(double a_totalMs);
 		double GetEta();

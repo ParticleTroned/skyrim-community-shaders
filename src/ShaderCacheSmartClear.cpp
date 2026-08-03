@@ -148,13 +148,17 @@ namespace SIE
 			if (clearedThisCaptureCycle.contains(entry.key))
 				continue;
 
-			// Do not race an in-flight compile or allow a duplicate task to write the
-			// same blob. A later clear can pick it up once it has completed.
-			if (GetShaderStatus(entry.key) == ShaderCompilationTask::Status::Pending)
+			const size_t taskId = ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor);
+			// AddCompletedShader publishes a completed blob before the worker installs
+			// the runtime shader and retires its task. Require both phases to finish so
+			// scoped eviction cannot race a late runtime insertion or lose bookkeeping.
+			if (GetShaderStatus(entry.key) == ShaderCompilationTask::Status::Pending ||
+				compilationSet.IsInProgress(taskId)) {
 				continue;
+			}
 
 			EvictShader(entry.key, entry.shaderType, entry.descriptor, entry.shaderClass);
-			taskIds.insert(ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor));
+			taskIds.insert(taskId);
 			diskPaths.push_back(entry.diskPath);
 			clearedThisCaptureCycle.insert(entry.key);
 			++evictedCount;

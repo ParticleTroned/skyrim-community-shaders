@@ -4708,10 +4708,17 @@ namespace SIE
 		};
 
 		std::scoped_lock lock(compilationMutex);
-		// Queued work remains valid. Only completed/in-flight bookkeeping can block
-		// the freshly evicted permutation from being requested again.
+		// Queued and in-flight work remain valid. Only completed bookkeeping can
+		// block a safely evicted permutation from being requested again.
 		std::erase_if(processedTasks, matches);
-		std::erase_if(tasksInProgress, matches);
+	}
+
+	bool CompilationSet::IsInProgress(size_t a_taskId)
+	{
+		std::scoped_lock lock(compilationMutex);
+		return std::any_of(tasksInProgress.begin(), tasksInProgress.end(), [a_taskId](const ShaderCompilationTask& task) {
+			return task.GetId() == a_taskId;
+		});
 	}
 
 	std::string CompilationSet::GetHumanTime(double a_totalMs)

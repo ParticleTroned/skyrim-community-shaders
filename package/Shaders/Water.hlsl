@@ -908,17 +908,107 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 #			endif
 
 #			if defined(UNIFIED_WATER) && defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && !defined(UNDERWATER) && !defined(LOD)
-#				define UNIFIED_WATER_DISTANCE_DEPTH_FADE
+#				define UNIFIED_WATER_SHALLOW_FALLBACK
 
-float GetUnifiedWaterDistanceDepthFade(float viewDistance)
+static const float UnifiedWaterFallbackCullFadeRange = 2048.0;
+static const float UnifiedWaterPresenceContrastSoftness = 0.015;
+static const float UnifiedWaterPresenceRefractionSoftnessPixels = 0.5;
+static const float UnifiedWaterPresenceRefractionDisabledPixels = 8.0;
+static const float UnifiedWaterPresenceCoverageSoftness = 0.04;
+
+float GetUnifiedWaterShallowFallbackAvailability(float viewDistance)
 {
-	// Generated distant surfaces still use close-water depth shading. Stabilize
-	// coarse terrain depth progressively without changing normal water permutations.
-	float nearStrength = saturate(SharedData::unifiedWaterSettings.DistantDepthFadeNearStrength);
-	float farStrength = saturate(SharedData::unifiedWaterSettings.DistantDepthFadeFarStrength);
-	float fadeStart = SharedData::unifiedWaterSettings.DistantDepthFadeStart;
-	float fadeEnd = max(SharedData::unifiedWaterSettings.DistantDepthFadeEnd, fadeStart + 1.0);
-	return lerp(nearStrength, farStrength, smoothstep(fadeStart, fadeEnd, viewDistance));
+	float maximumDistance = max(
+		SharedData::unifiedWaterSettings.ShallowFallbackMaxDistance,
+		0.0);
+	if (!isfinite(viewDistance) || !isfinite(maximumDistance) || maximumDistance <= 0.0)
+		return 0.0;
+
+	float fadeRange = min(
+		UnifiedWaterFallbackCullFadeRange,
+		0.25 * maximumDistance);
+	float fadeStart = maximumDistance - fadeRange;
+	return 1.0 - smoothstep(fadeStart, maximumDistance, viewDistance);
+}
+
+float GetUnifiedWaterRelativeColorDifference(float3 firstColor, float3 secondColor)
+{
+	// A relative maximum-channel difference remains stable across exposure while
+	// retaining blue/green water evidence that a luma-only probe can underweight.
+	float3 difference = abs(firstColor - secondColor);
+	float numerator = max(difference.x, max(difference.y, difference.z));
+	float3 magnitude = max(abs(firstColor), abs(secondColor));
+	float denominator = max(
+		0.10,
+		max(magnitude.x, max(magnitude.y, magnitude.z)));
+	return
+		isfinite(numerator) && isfinite(denominator) ?
+		saturate(numerator / denominator) :
+		0.0;
+}
+
+float GetUnifiedWaterPresenceFromSurfaceColor(float relativeDifference)
+{
+	float threshold = max(
+		SharedData::unifiedWaterSettings.WaterPresenceColorThreshold,
+		0.0);
+	return smoothstep(
+		threshold,
+		threshold + UnifiedWaterPresenceContrastSoftness,
+		max(relativeDifference, 0.0));
+}
+
+float GetUnifiedWaterPresenceFromRefraction(float displacementPixels)
+{
+	float threshold = max(
+		SharedData::unifiedWaterSettings.WaterPresenceRefractionThresholdPixels,
+		0.0);
+	if (threshold >= UnifiedWaterPresenceRefractionDisabledPixels)
+		return 0.0;
+	return smoothstep(
+		threshold,
+		threshold + UnifiedWaterPresenceRefractionSoftnessPixels,
+		max(displacementPixels, 0.0));
+}
+
+float GetUnifiedWaterPresenceFromImageDifference(float relativeDifference)
+{
+	float threshold = max(
+		SharedData::unifiedWaterSettings.WaterPresenceImageDifferenceThreshold,
+		0.0);
+	return smoothstep(
+		threshold,
+		threshold + UnifiedWaterPresenceContrastSoftness,
+		max(relativeDifference, 0.0));
+}
+
+float GetUnifiedWaterPresenceFromCoverage(float nativeCoverage)
+{
+	float threshold = max(
+		SharedData::unifiedWaterSettings.WaterPresenceCoverageThreshold,
+		0.0);
+	return smoothstep(
+		threshold,
+		threshold + UnifiedWaterPresenceCoverageSoftness,
+		saturate(nativeCoverage));
+}
+
+float GetUnifiedWaterNativePresence(
+	float3 nativeColor,
+	float3 groundReference,
+	float nativeCoverage,
+	float refractionDisplacementPixels)
+{
+	return max(
+		max(
+			GetUnifiedWaterPresenceFromSurfaceColor(
+				GetUnifiedWaterRelativeColorDifference(
+					nativeColor,
+					groundReference)),
+			GetUnifiedWaterPresenceFromRefraction(
+				refractionDisplacementPixels)),
+		GetUnifiedWaterPresenceFromCoverage(
+			nativeCoverage));
 }
 
 float GetUnifiedWaterShoreContactWeight(float waterColumnDepthUnits)
@@ -961,191 +1051,6 @@ float GetUnifiedWaterShallowSurfaceDepthWeight(float waterColumnDepthUnits)
 	return 1.0 - smootherDepth;
 }
 
-static const float UnifiedWaterDeepProbeCullFadeRange = 2048.0;
-static const float UnifiedWaterDeepProbeRadiusScale = 1.5;
-static const float UnifiedWaterDeepProbeMinRadiusPixels = 2.0;
-static const float UnifiedWaterDeepProbeMaxRadiusPixels = 96.0;
-static const int2 UnifiedWaterDeepProbeOffsets[4] = {
-	int2(-1, 0),
-	int2(1, 0),
-	int2(0, -1),
-	int2(0, 1),
-};
-
-bool IsUnifiedWaterRawDepthValid(float rawDepth)
-{
-	return
-		isfinite(rawDepth) &&
-		rawDepth > 1e-5 &&
-		rawDepth < 1.0 - 1e-5;
-}
-
-bool TryGetUnifiedWaterScenePosition(
-	float2 logicalUV,
-	float rawDepth,
-	out float3 scenePosition)
-{
-	scenePosition = 0.0.xxx;
-	if (!IsUnifiedWaterRawDepthValid(rawDepth) || !all(isfinite(logicalUV)))
-		return false;
-
-	float4 scenePositionH = mul(
-		FrameBuffer::CameraViewProjInverse,
-		float4(
-			(logicalUV * 2.0 - 1.0) * float2(1.0, -1.0),
-			rawDepth,
-			1.0));
-	if (!all(isfinite(scenePositionH)) || abs(scenePositionH.w) <= 1e-6)
-		return false;
-
-	scenePosition = scenePositionH.xyz / scenePositionH.w;
-	return all(isfinite(scenePosition));
-}
-
-float2 GetUnifiedWaterDeepProbeRadiusPixels(float3 waterSurfacePosition)
-{
-	// Water-surface derivatives are independent of the terrain triangulation.
-	// Convert the configured physical shallow range independently on each screen
-	// axis so an oblique surface cannot make the coarse axis overshoot.
-	float2 worldUnitsPerPixel = float2(
-		length(ddx_fine(waterSurfacePosition)),
-		length(ddy_fine(waterSurfacePosition)));
-	if (
-		!all(isfinite(worldUnitsPerPixel)) ||
-		any(worldUnitsPerPixel <= 1e-4))
-	{
-		return 0.0.xx;
-	}
-
-	float shallowDepthRange = max(
-		SharedData::unifiedWaterSettings.ShallowSurfaceDepthRangeUnits,
-		1.0);
-	return clamp(
-		UnifiedWaterDeepProbeRadiusScale *
-			shallowDepthRange /
-			worldUnitsPerPixel,
-		UnifiedWaterDeepProbeMinRadiusPixels,
-		UnifiedWaterDeepProbeMaxRadiusPixels);
-}
-
-float GetUnifiedWaterConnectedDeepWeight(
-	float2 screenPosition,
-	float2 primaryLogicalUV,
-	float primaryRawDepth,
-	float3 waterSurfacePosition,
-	float2 probeRadiusPixels,
-	float viewDistance)
-{
-	float probeMaxDistance = max(
-		SharedData::unifiedWaterSettings.ShoreConfirmationMaxDistance,
-		0.0);
-	if (
-		probeMaxDistance <= 0.0 ||
-		viewDistance >= probeMaxDistance ||
-		any(probeRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels))
-	{
-		return 0.0;
-	}
-
-	float3 centerScenePosition;
-	if (!TryGetUnifiedWaterScenePosition(
-			primaryLogicalUV,
-			primaryRawDepth,
-			centerScenePosition))
-	{
-		return 0.0;
-	}
-
-	float3 waterPlaneNormal = ReflectPlane[0].xyz;
-	float waterPlaneNormalLength = length(waterPlaneNormal);
-	if (!isfinite(waterPlaneNormalLength) || waterPlaneNormalLength <= 1e-6)
-		return 0.0;
-	waterPlaneNormal /= waterPlaneNormalLength;
-
-	float centerPlaneOffset = dot(
-		centerScenePosition - waterSurfacePosition,
-		waterPlaneNormal);
-	if (!isfinite(centerPlaneOffset) || abs(centerPlaneOffset) <= 1e-4)
-		return 0.0;
-	float belowPlaneSign = centerPlaneOffset < 0.0 ? -1.0 : 1.0;
-	float centerColumn = abs(centerPlaneOffset);
-
-	int2 renderDimensions = max(
-		int2(1, 1),
-		int2(round(
-			SharedData::BufferDim.xy *
-			FrameBuffer::DynamicResolutionParams1.xy)));
-	int2 centerPixel = clamp(
-		int2(screenPosition),
-		int2(0, 0),
-		renderDimensions - 1);
-	int2 probeRadius = int2(round(probeRadiusPixels));
-	float maximumProbeColumn = 0.0;
-
-	[unroll] for (int probeIndex = 0; probeIndex < 4; ++probeIndex)
-	{
-		int2 requestedPixel =
-			centerPixel +
-			UnifiedWaterDeepProbeOffsets[probeIndex] * probeRadius;
-		int2 samplePixel = clamp(
-			requestedPixel,
-			int2(0, 0),
-			renderDimensions - 1);
-		if (any(requestedPixel != samplePixel))
-			continue;
-
-		float rawDepth = DepthTex.Load(int3(samplePixel, 0)).x;
-		float2 logicalUV =
-			FrameBuffer::DynamicResolutionParams2.xy *
-			(float2(samplePixel) + 0.5) *
-			VPOSOffset.xy +
-			VPOSOffset.zw;
-		float3 scenePosition;
-		if (!TryGetUnifiedWaterScenePosition(
-				logicalUV,
-				rawDepth,
-				scenePosition))
-		{
-			continue;
-		}
-
-		// The center sample establishes which side of the current water plane is
-		// submerged. Dry banks and geometry above that plane remain non-positive.
-		float probeColumn =
-			belowPlaneSign *
-			dot(
-				scenePosition - waterSurfacePosition,
-				waterPlaneNormal);
-		if (isfinite(probeColumn))
-			maximumProbeColumn = max(maximumProbeColumn, probeColumn);
-	}
-
-	float shallowDepthRange = max(
-		SharedData::unifiedWaterSettings.ShallowSurfaceDepthRangeUnits,
-		1.0);
-	float absoluteDepthWeight = smoothstep(
-		0.75 * shallowDepthRange,
-		shallowDepthRange,
-		maximumProbeColumn);
-	// A deep-enough endpoint is not sufficient: a uniformly shallow stream can
-	// sit near the configured cutoff. Require the endpoint to rise materially
-	// from this pixel before treating it as a connected deeper channel.
-	float depthRise = max(maximumProbeColumn - centerColumn, 0.0);
-	float depthRiseWeight = smoothstep(
-		0.25 * shallowDepthRange,
-		0.5 * shallowDepthRange,
-		depthRise);
-	float connectedDeepWeight =
-		absoluteDepthWeight * depthRiseWeight;
-	float cullFadeRange = min(
-		UnifiedWaterDeepProbeCullFadeRange,
-		0.25 * probeMaxDistance);
-	float cullFadeStart = probeMaxDistance - cullFadeRange;
-	float probeAvailability =
-		1.0 - smoothstep(cullFadeStart, probeMaxDistance, viewDistance);
-	return connectedDeepWeight * probeAvailability;
-}
-
 #			endif
 
 struct DiffuseOutput
@@ -1156,6 +1061,9 @@ struct DiffuseOutput
 	float refractionMul;
 	float3 refractedViewDirection;
 	float waterColumnDepthUnits;
+#			if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	float refractionDisplacementPixels;
+#			endif
 };
 
 DiffuseOutput GetWaterDiffuseColor(
@@ -1170,6 +1078,12 @@ DiffuseOutput GetWaterDiffuseColor(
 	float depth)
 {
 #			if defined(REFRACTIONS)
+#				if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	float2 primaryRefractionUvRaw =
+		FrameBuffer::DynamicResolutionParams2.xy *
+		input.HPosition.xy * VPOSOffset.xy +
+		VPOSOffset.zw;
+#				endif
 	float4 refractionNormal = mul(transpose(TextureProj), float4((VarAmounts.w * refractionsDepthFactor * normal.xy) + input.MPosition.xy, input.MPosition.z, 1));
 
 	float2 refractionUvRaw = float2(refractionNormal.x, refractionNormal.w - refractionNormal.y) / refractionNormal.ww;
@@ -1201,7 +1115,11 @@ DiffuseOutput GetWaterDiffuseColor(
 		all(isfinite(unclampedRefractionDistanceMul));
 
 	if (!refractionDepthValid) {
+#					if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+		refractionUvRaw = primaryRefractionUvRaw;
+#					else
 		refractionUvRaw = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
+#					endif
 	} else {
 		depth = refractionDepth;
 		distanceMul = saturate(unclampedRefractionDistanceMul);
@@ -1213,6 +1131,18 @@ DiffuseOutput GetWaterDiffuseColor(
 #				endif
 
 	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
+#				if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	float2 primaryRefractionUV =
+		FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(
+			primaryRefractionUvRaw);
+	float2 refractionDisplacementPixels2D =
+		(refractionUV - primaryRefractionUV) *
+		SharedData::BufferDim.xy;
+	float refractionDisplacementPixels =
+		all(isfinite(refractionDisplacementPixels2D)) ?
+		length(refractionDisplacementPixels2D) :
+		0.0;
+#				endif
 	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
 	float3 refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
 #				if defined(UNIFIED_WATER)
@@ -1233,6 +1163,9 @@ DiffuseOutput GetWaterDiffuseColor(
 	float3 refractedViewDelta = refractionWorldPosition.xyz - input.WPosition.xyz;
 	output.refractedViewDirection = dot(refractedViewDelta, refractedViewDelta) > 1e-6 ? normalize(refractedViewDelta) : viewDirection;
 	output.waterColumnDepthUnits = refractionWaterColumnDepthUnits;
+#				if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	output.refractionDisplacementPixels = refractionDisplacementPixels;
+#				endif
 	return output;
 #			else
 	DiffuseOutput output;
@@ -1246,6 +1179,9 @@ DiffuseOutput GetWaterDiffuseColor(
 	output.refractionMul = 1;
 	output.refractedViewDirection = viewDirection;
 	output.waterColumnDepthUnits = waterColumnDepthUnits;
+#				if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	output.refractionDisplacementPixels = 0.0;
+#				endif
 	return output;
 #			endif
 }
@@ -1297,13 +1233,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float viewDistance = length(input.WPosition.xyz);
 	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (viewDistance - 8192) / (WaterParams.x - 8192)));
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
-	float distanceDepthFade = 0.0;
+	float shallowFallbackAvailability = 0.0;
 	float shoreContactWeight = 1.0;
-	float2 deepProbeRadiusPixels = 0.0.xx;
-#			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-	distanceDepthFade = GetUnifiedWaterDistanceDepthFade(viewDistance);
-	deepProbeRadiusPixels =
-		GetUnifiedWaterDeepProbeRadiusPixels(input.WPosition.xyz);
+#			if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	shallowFallbackAvailability =
+		GetUnifiedWaterShallowFallbackAvailability(viewDistance);
 #			endif
 
 	float distanceBlendFactor = distanceFactor;
@@ -1314,7 +1248,6 @@ PS_OUTPUT main(PS_INPUT input)
 	bool isSpecular = false;
 
 	float depth = 0;
-	float rawSceneDepth = -1.0;
 	float2 primaryDepthLogicalUV = 0.0.xx;
 	float waterColumnDepthUnits = -1.0;
 
@@ -1326,8 +1259,7 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 	distanceMul = 0;
 
-	rawSceneDepth = GetRawScreenDepthWater(screenPosition);
-	depth = ResolveScreenDepthWater(rawSceneDepth);
+	depth = GetScreenDepthWater(screenPosition);
 	primaryDepthLogicalUV =
 		FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
 	float depthMul = length(float3((primaryDepthLogicalUV * 2 - 1) * depth / ProjData.xy, depth));
@@ -1342,7 +1274,7 @@ PS_OUTPUT main(PS_INPUT input)
 	distanceMul = all(isfinite(unclampedDistanceMul)) ?
 		saturate(unclampedDistanceMul) :
 		0.0.xxxx;
-#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+#					if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
 	shoreContactWeight =
 		GetUnifiedWaterShoreContactWeight(waterColumnDepthUnits);
 #					endif
@@ -1435,6 +1367,16 @@ PS_OUTPUT main(PS_INPUT input)
 		waterColumnDepthUnits,
 		depth);
 
+#				if defined(UNIFIED_WATER_SHALLOW_FALLBACK) && defined(REFRACTIONS)
+	// Calculate gradients before the candidate-only branch so the single
+	// undistorted refraction sample remains well-defined for every quad.
+	float2 undistortedRefractionUV =
+		FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(
+			primaryDepthLogicalUV);
+	float2 undistortedRefractionGradientX = ddx(undistortedRefractionUV);
+	float2 undistortedRefractionGradientY = ddy(undistortedRefractionUV);
+#				endif
+
 	float surfaceShadow;
 	float dirShadow = ShadowSampling::Get3DFilteredShadow(input.WPosition.xyz, diffuseOutput.refractedViewDirection, input.HPosition.xy, surfaceShadow);
 
@@ -1517,13 +1459,12 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 
 	float3 sunColor = GetSunColor(normal, viewDirection, input.WPosition.xyz) * surfaceShadow;
-	// The configured strength controls a bounded, independent surface layer.
-	// Its additional contribution is capped at 0.5 before material response.
-	float shallowSurfaceLayerWeight = 0.0;
-#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	// Build only the bounded shallow candidate here. Each output path first
+	// computes its untouched native/Open result, then rejects this fallback when
+	// that result already has visible colour, distortion, or depth coverage.
+	float shallowSurfaceCandidateWeight = 0.0;
+#					if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
 	// Require the primary and refracted samples to agree that this is shallow.
-	// The native visibility deficit then releases water that is already visible
-	// without relying on that material-dependent value as the depth classifier.
 	float primaryShallowDepthWeight =
 		GetUnifiedWaterShallowSurfaceDepthWeight(
 			waterColumnDepthUnits);
@@ -1534,48 +1475,53 @@ PS_OUTPUT main(PS_INPUT input)
 		min(
 			primaryShallowDepthWeight,
 			refractedShallowDepthWeight);
-	// Near Strength is the baseline for transition-depth water. Fully shallow
-	// pixels automatically select Far Strength, allowing Near 0 / Far 1 to keep
-	// medium water native without sacrificing nearby shallow streams.
-	float fullShallowStrength =
-		saturate(
-			SharedData::unifiedWaterSettings.DistantDepthFadeFarStrength);
-	float effectiveShallowStrength =
-		lerp(
-			saturate(distanceDepthFade),
-			fullShallowStrength,
-			agreedShallowDepthWeight);
 	float nativeVisibilityDeficit =
 		1.0 - saturate(diffuseOutput.refractionMul);
-	float preliminaryShallowSurfaceLayerWeight =
+	shallowSurfaceCandidateWeight =
 		0.5 *
 		saturate(shoreContactWeight) *
 		agreedShallowDepthWeight *
-		effectiveShallowStrength *
-		nativeVisibilityDeficit;
-	// Local depth cannot distinguish a narrow stream from the edge of a deeper
-	// channel. Only ambiguous pixels pay for four direction-independent probes;
-	// actual medium/deep water vetoes the layer without becoming its feather.
-	float connectedDeepWeight = 0.0;
-	[branch] if (preliminaryShallowSurfaceLayerWeight > 1e-4)
-	{
-		connectedDeepWeight = GetUnifiedWaterConnectedDeepWeight(
-			screenPosition,
-			primaryDepthLogicalUV,
-			rawSceneDepth,
-			input.WPosition.xyz,
-			deepProbeRadiusPixels,
-			viewDistance);
-	}
-	shallowSurfaceLayerWeight =
-		preliminaryShallowSurfaceLayerWeight *
-		(1.0 - saturate(connectedDeepWeight));
+		saturate(SharedData::unifiedWaterSettings.ShallowFallbackStrength) *
+		nativeVisibilityDeficit *
+		saturate(shallowFallbackAvailability);
 #					endif
 
 #					if defined(VC)
 	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceBlendFactor);
 	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
-#						if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+#						if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	float nativePresenceWeight = 1.0;
+	[branch] if (shallowSurfaceCandidateWeight > 1e-4)
+	{
+		nativePresenceWeight = GetUnifiedWaterNativePresence(
+			finalColorPreFog,
+			diffuseOutput.refractionColor,
+			diffuseOutput.refractionMul,
+			diffuseOutput.refractionDisplacementPixels);
+#							if defined(REFRACTIONS)
+		[branch] if (
+			nativePresenceWeight < 1.0 - 1e-4 &&
+			SharedData::unifiedWaterSettings.WaterPresenceImageDifferenceThreshold < 1.0)
+		{
+			float3 undistortedGroundColor = RefractionTex.SampleGrad(
+				RefractionSampler,
+				undistortedRefractionUV,
+				undistortedRefractionGradientX,
+				undistortedRefractionGradientY).xyz;
+			float groundImageDifference =
+				GetUnifiedWaterRelativeColorDifference(
+					diffuseOutput.refractionColor,
+					undistortedGroundColor);
+			nativePresenceWeight = max(
+				nativePresenceWeight,
+				GetUnifiedWaterPresenceFromImageDifference(
+					groundImageDifference));
+		}
+#							endif
+	}
+	float shallowSurfaceLayerWeight =
+		shallowSurfaceCandidateWeight *
+		(1.0 - saturate(nativePresenceWeight));
 	// VC water normally suppresses both material colour and reflection through
 	// refractionMul. Restore a bounded shallow surface using the native water
 	// material colour and native Fresnel instead of forcing a white reflection.
@@ -1700,9 +1646,49 @@ PS_OUTPUT main(PS_INPUT input)
 	refractionColor = lerp(refractionColor, fogColor, Color::FogAlpha(fogFactor));
 
 	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
-	// Add the already-fogged shallow surface layer after the untouched native
-	// refraction composition. Medium/deep water has an exact zero layer weight.
-	finalColor = lerp(finalColor, finalColorPreFog, shallowSurfaceLayerWeight);
+#						if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	// Probe the exact native/Open output first. Surface colour and depth coverage
+	// cost no texture reads; only an unresolved shallow candidate samples the
+	// undistorted ground to measure transparent-water refraction.
+	float nativePresenceWeight = 1.0;
+	[branch] if (shallowSurfaceCandidateWeight > 1e-4)
+	{
+		nativePresenceWeight = GetUnifiedWaterNativePresence(
+			finalColor,
+			refractionColor,
+			diffuseOutput.refractionMul,
+			diffuseOutput.refractionDisplacementPixels);
+#							if defined(REFRACTIONS)
+		[branch] if (
+			nativePresenceWeight < 1.0 - 1e-4 &&
+			SharedData::unifiedWaterSettings.WaterPresenceImageDifferenceThreshold < 1.0)
+		{
+			float3 undistortedGroundColor = RefractionTex.SampleGrad(
+				RefractionSampler,
+				undistortedRefractionUV,
+				undistortedRefractionGradientX,
+				undistortedRefractionGradientY).xyz;
+			float groundImageDifference =
+				GetUnifiedWaterRelativeColorDifference(
+					diffuseOutput.refractionColor,
+					undistortedGroundColor);
+			nativePresenceWeight = max(
+				nativePresenceWeight,
+				GetUnifiedWaterPresenceFromImageDifference(
+					groundImageDifference));
+		}
+#							endif
+	}
+	float shallowSurfaceLayerWeight =
+		shallowSurfaceCandidateWeight *
+		(1.0 - saturate(nativePresenceWeight));
+	// The existing continuous depth/contact feather remains the fallback target,
+	// preserving smooth river seams without modifying terrain or water geometry.
+	finalColor = lerp(
+		finalColor,
+		finalColorPreFog,
+		shallowSurfaceLayerWeight);
+#						endif
 #						if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
 	// DEBUG MODE: Override water color with debug visualization
 	float3 debugColor = WetnessEffects::GetDebugWetnessColorStandard(waterData.rippleInfo, 2.0, 3.0);

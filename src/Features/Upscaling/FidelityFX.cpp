@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <directx/d3dx12.h>
 #include <filesystem>
@@ -43,6 +45,52 @@ namespace
 
 		a_query->Release();
 		a_query = nullptr;
+	}
+
+	struct FSRSharpeningSettings
+	{
+		bool enabled = false;
+		float sharpness = 0.0f;
+	};
+
+	FSRSharpeningSettings ResolveFSRSharpeningSettings(float a_sharpness)
+	{
+		const float sharpness =
+			std::isfinite(a_sharpness) ?
+				std::clamp(a_sharpness, 0.0f, 1.0f) :
+				0.0f;
+		return {
+			.enabled = sharpness > 0.0f,
+			.sharpness = sharpness
+		};
+	}
+
+	void LogFSRSharpeningDispatch(const FSRSharpeningSettings& a_settings, const char* a_path)
+	{
+		const char* path = a_path && *a_path ? a_path : "unknown";
+		struct DispatchLogState
+		{
+			bool initialized = false;
+			bool enabled = false;
+			float sharpness = -1.0f;
+		};
+		static DispatchLogState runtimeState{};
+		static DispatchLogState hostState{};
+		auto& state = std::strcmp(path, "runtime") == 0 ? runtimeState : hostState;
+		if (state.initialized &&
+			state.enabled == a_settings.enabled &&
+			state.sharpness == a_settings.sharpness) {
+			return;
+		}
+
+		state.initialized = true;
+		state.enabled = a_settings.enabled;
+		state.sharpness = a_settings.sharpness;
+		logger::info(
+			"[FidelityFX] FSR sharpening dispatch path={} enabled={} sharpness={:.2f}.",
+			path,
+			a_settings.enabled ? "yes" : "no",
+			a_settings.sharpness);
 	}
 
 	FidelityFX::LifecycleResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query, const char* a_reason)
@@ -2178,8 +2226,10 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a
 			dispatchParameters.motionVectorScale = { a_motionVectorScaleX, a_motionVectorScaleY };
 			dispatchParameters.renderSize = { a_renderWidth, a_renderHeight };
 			dispatchParameters.upscaleSize = { a_displayWidth, a_displayHeight };
-			dispatchParameters.enableSharpening = true;
-			dispatchParameters.sharpness = a_sharpness;
+			const auto sharpening = ResolveFSRSharpeningSettings(a_sharpness);
+			dispatchParameters.enableSharpening = sharpening.enabled;
+			dispatchParameters.sharpness = sharpening.sharpness;
+			LogFSRSharpeningDispatch(sharpening, "runtime");
 			dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
 			dispatchParameters.preExposure = 1.0f;
 			dispatchParameters.reset = upscaling.ShouldResetHistoryThisFrame();
@@ -2534,8 +2584,10 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
 	dispatchParameters.cameraFar = *globals::game::cameraFar;
 	dispatchParameters.cameraNear = *globals::game::cameraNear;
-	dispatchParameters.enableSharpening = true;
-	dispatchParameters.sharpness = a_sharpness;
+	const auto sharpening = ResolveFSRSharpeningSettings(a_sharpness);
+	dispatchParameters.enableSharpening = sharpening.enabled;
+	dispatchParameters.sharpness = sharpening.sharpness;
+	LogFSRSharpeningDispatch(sharpening, "host");
 	dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
 	dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
 	const bool runtimeFallbackReset = runtimeRequested && runtimeFallbackResetDispatchesRemaining > 0;

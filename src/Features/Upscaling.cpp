@@ -15060,9 +15060,14 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 		if (a_event->opening) {
+			auto& upscaling = globals::features::upscaling;
+			// A deferred cleanup owner can survive after its presentation becomes
+			// stable. Supersede it before the next LoadingMenu can inherit it; this is
+			// bookkeeping-only and deliberately performs no renderer or D3D work from
+			// the menu event.
+			upscaling.AbandonDeferredVRRenderScalePostLoadRecovery(0, "LoadingMenu open");
 			g_vrLoadingTransitionPhysicalClosePending.store(false, std::memory_order_release);
 			EnsureVRLoadingTransitionSerialOpen();
-			auto& upscaling = globals::features::upscaling;
 			if (globals::state &&
 				!IsBeforeFirstCompletedVRWorldFrame(globals::state) &&
 				(upscaling.IsVRInitialLoadPresentationProtectionActive() ||
@@ -21426,6 +21431,8 @@ uint64_t Upscaling::BeginVRRenderScalePostLoadRecovery()
 		recovery = {};
 		recovery.active = true;
 		recovery.recoveryEpoch = recoveryEpoch;
+		recovery.loadingSerial =
+			g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
 		recovery.startFrame = frame;
 		recovery.baselineUsageBytes = memory.currentUsageBytes;
 		recovery.peakUsageBytes = memory.currentUsageBytes;
@@ -21443,6 +21450,14 @@ void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
 {
 	if (a_recoveryEpoch == 0)
 		return;
+	// LoadingMenu owns renderer mutation. Enforce the direct owner at the physical
+	// cleanup entry because the broader Stabilizer handoff state can lag an event
+	// edge by one render callback.
+	if (g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire) ||
+		IsLoadingMenuContextActive() ||
+		IsLoadingMenuPhysicallyOpen()) {
+		return;
+	}
 
 	bool active = false;
 	bool cleanupArmed = false;
@@ -21626,6 +21641,10 @@ void Upscaling::DeferVRRenderScalePostLoadRecoveryUntilStable(
 		if (!recovery.active || recovery.recoveryEpoch != recoveryEpoch)
 			return;
 		recovery.transitionEpoch = a_transitionEpoch;
+		if (recovery.loadingSerial == 0) {
+			recovery.loadingSerial =
+				g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
+		}
 		recovery.relatchAdmitted = true;
 		recovery.cleanupDeferredUntilStable = true;
 		++vrRenderScaleTransitionController.revision;
@@ -21636,6 +21655,45 @@ void Upscaling::DeferVRRenderScalePostLoadRecoveryUntilStable(
 		a_transitionEpoch);
 }
 
+void Upscaling::AbandonDeferredVRRenderScalePostLoadRecovery(
+	uint64_t a_expectedRecoveryEpoch,
+	const char* a_reason)
+{
+	uint64_t abandonedRecoveryEpoch = 0;
+	uint64_t abandonedTransitionEpoch = 0;
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		if (!recovery.active ||
+			!recovery.cleanupDeferredUntilStable ||
+			recovery.recoveryEpoch == 0 ||
+			(a_expectedRecoveryEpoch != 0 &&
+				recovery.recoveryEpoch != a_expectedRecoveryEpoch)) {
+			return;
+		}
+
+		abandonedRecoveryEpoch = recovery.recoveryEpoch;
+		abandonedTransitionEpoch = recovery.transitionEpoch;
+		recovery.active = false;
+		recovery.cleanupDeferredUntilStable = false;
+		++vrRenderScaleTransitionController.revision;
+	}
+
+	// Door-created recoveries normally have no pending runtime-reset owner. Use a
+	// compare/exchange so a newer save-load epoch can never be cleared here.
+	uint64_t expectedRecoveryEpoch = abandonedRecoveryEpoch;
+	pendingPostLoadRuntimeResetEpoch.compare_exchange_strong(
+		expectedRecoveryEpoch,
+		0,
+		std::memory_order_acq_rel);
+	logger::debug(
+		"[VRRenderScale][PostLoad] Superseded deferred recoveryEpoch={} transitionEpoch={}{}{}; no renderer cleanup was executed.",
+		abandonedRecoveryEpoch,
+		abandonedTransitionEpoch,
+		a_reason && *a_reason ? " reason=" : "",
+		a_reason && *a_reason ? a_reason : "");
+}
+
 void Upscaling::ServiceDeferredVRRenderScalePostLoadRecovery()
 {
 	auto controller = GetVRRenderScaleTransitionSnapshot();
@@ -21644,29 +21702,41 @@ void Upscaling::ServiceDeferredVRRenderScalePostLoadRecovery()
 		!recovery.cleanupDeferredUntilStable ||
 		!recovery.relatchAdmitted ||
 		recovery.recoveryEpoch == 0 ||
-		recovery.transitionEpoch == 0 ||
-		controller.state != VRRenderScaleTransitionState::Active ||
+		recovery.transitionEpoch == 0) {
+		return;
+	}
+
+	const bool loadingMenuOwnsMutation =
+		g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire) ||
+		IsLoadingMenuContextActive() ||
+		IsLoadingMenuPhysicallyOpen();
+	if (loadingMenuOwnsMutation)
+		return;
+
+	const uint64_t loadingSerial =
+		g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
+	if (recovery.loadingSerial != 0 &&
+		loadingSerial != recovery.loadingSerial) {
+		AbandonDeferredVRRenderScalePostLoadRecovery(
+			recovery.recoveryEpoch,
+			"newer LoadingMenu generation superseded recovery owner");
+		return;
+	}
+
+	if (controller.state != VRRenderScaleTransitionState::Active ||
 		!controller.stable.valid ||
 		controller.stable.transitionEpoch == 0) {
 		return;
 	}
+
 	if (controller.stable.transitionEpoch != recovery.transitionEpoch) {
-		// A newer explicit request can supersede a door contract while it is still
-		// stabilizing. Cleanup belongs after the visible contract, not permanently
-		// to the superseded epoch; transfer ownership only after the replacement is
-		// itself Active so live resources remain protected.
-		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
-		auto& currentRecovery = vrRenderScaleTransitionController.postLoadRecovery;
-		if (!currentRecovery.active ||
-			currentRecovery.recoveryEpoch != recovery.recoveryEpoch ||
-			vrRenderScaleTransitionController.state != VRRenderScaleTransitionState::Active ||
-			!vrRenderScaleTransitionController.stable.valid ||
-			vrRenderScaleTransitionController.stable.transitionEpoch == 0) {
-			return;
-		}
-		currentRecovery.transitionEpoch = vrRenderScaleTransitionController.stable.transitionEpoch;
-		recovery = currentRecovery;
-		++vrRenderScaleTransitionController.revision;
+		// Cleanup may retire only the contract which created it. A newer stable
+		// profile supersedes the old owner; never transfer destructive cleanup onto
+		// the replacement contract.
+		AbandonDeferredVRRenderScalePostLoadRecovery(
+			recovery.recoveryEpoch,
+			"stable transition superseded recovery owner");
+		return;
 	}
 
 	PrepareVRRenderScalePostLoadRecovery(recovery.recoveryEpoch);
@@ -29233,14 +29303,22 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+	// Deferred recovery owns only its immediately published stable contract. Let
+	// it complete or be superseded before unrelated maintenance, independently of
+	// the Stabilizer's broader post-close bookkeeping. Its direct LoadingMenu gate
+	// prevents any physical work during a new load.
+	ServiceDeferredVRRenderScalePostLoadRecovery();
 	const bool stabilizerDoorHandoffPending = IsVRFpsStabilizerDoorHandoffPending(*this);
-	if (!stabilizerDoorHandoffPending) {
+	const bool loadingMenuOwnsMutation =
+		g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire) ||
+		IsLoadingMenuContextActive() ||
+		IsLoadingMenuPhysicallyOpen();
+	if (!stabilizerDoorHandoffPending && !loadingMenuOwnsMutation) {
 		if (HasPendingVREngineTargetRetirement())
 			ServiceVREngineTargetRetirement("configure");
 		if (HasPendingVRRenderScaleMemoryTrim())
 			ServiceVRRenderScaleMemoryTrim("configure");
 		SampleVRRenderScaleMemory();
-		ServiceDeferredVRRenderScalePostLoadRecovery();
 	}
 	if (ShouldEmitUpscalingDiagLogs()) {
 		ServiceVRMenuPresentationTraceRaceSexPreRoll();
@@ -29249,8 +29327,8 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	// Preserve RC94 ordering for the legacy intermediate retirement queue. Its
 	// fence-based cleanup is safe during a door handoff and must remain serviceable
 	// before the first destination world frame; otherwise the handoff and cleanup
-	// can each wait for the other. Newer target retirement, trimming, and recovery
-	// work remains deferred by stabilizerDoorHandoffPending above.
+	// can each wait for the other. Newer target retirement and trimming remain
+	// deferred by the handoff above; recovery uses its narrower stable-owner gate.
 	if (deferredVRIntermediateTextureCleanupFrame != 0)
 		ServiceVRIntermediateTextureCleanup();
 	QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(*this);
@@ -34383,6 +34461,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "postLoadRecovery", { { "active", controller.postLoadRecovery.active },
 								  { "recoveryEpoch", controller.postLoadRecovery.recoveryEpoch },
 								  { "transitionEpoch", controller.postLoadRecovery.transitionEpoch },
+								  { "loadingSerial", controller.postLoadRecovery.loadingSerial },
 								  { "startFrame", controller.postLoadRecovery.startFrame },
 								  { "lastSampleFrame", controller.postLoadRecovery.lastSampleFrame },
 								  { "firstSettledFrame", controller.postLoadRecovery.firstSettledFrame },

@@ -561,6 +561,7 @@ public:
 		bool active = false;
 		uint64_t recoveryEpoch = 0;
 		uint64_t transitionEpoch = 0;
+		uint64_t loadingSerial = 0;
 		uint32_t startFrame = 0;
 		uint32_t lastSampleFrame = 0;
 		uint32_t firstSettledFrame = 0;
@@ -2036,6 +2037,7 @@ public:
 	void PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch);
 	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void DeferVRRenderScalePostLoadRecoveryUntilStable(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
+	void AbandonDeferredVRRenderScalePostLoadRecovery(uint64_t a_expectedRecoveryEpoch = 0, const char* a_reason = nullptr);
 	void ServiceDeferredVRRenderScalePostLoadRecovery();
 	void CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VRVendorRuntimeLifecyclePhase a_phase, uint32_t a_generation = 0, const char* a_reason = nullptr);

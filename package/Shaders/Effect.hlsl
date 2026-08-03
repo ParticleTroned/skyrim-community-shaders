@@ -502,14 +502,8 @@ void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 am
 		ambientColorAmb *= min(inputLuma / totalLuma, MaxEffectAmbientScale);
 	}
 
-	float ambientFit = 1.0;
-	if (ambientColorAmb.x > 0.0)
-		ambientFit = min(ambientFit, max(0.0, inputColor.x) / ambientColorAmb.x);
-	if (ambientColorAmb.y > 0.0)
-		ambientFit = min(ambientFit, max(0.0, inputColor.y) / ambientColorAmb.y);
-	if (ambientColorAmb.z > 0.0)
-		ambientFit = min(ambientFit, max(0.0, inputColor.z) / ambientColorAmb.z);
-	ambientColorAmb *= ambientFit;
+	// Do not let one missing input channel extinguish the complete ambient contribution.
+	ambientColorAmb = min(max(0.0, ambientColorAmb), max(0.0, inputColor));
 
 	float3 dirLightColorAmb = max(0.0, inputColor - ambientColorAmb);
 

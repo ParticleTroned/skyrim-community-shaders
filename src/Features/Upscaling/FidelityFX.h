@@ -31,6 +31,13 @@ class WrappedResource;
 class FidelityFX
 {
 public:
+	enum class LifecycleResult : uint8_t
+	{
+		Ready,
+		Pending,
+		Failed
+	};
+
 	enum class Fsr4AdapterSupport
 	{
 		Unsupported,
@@ -63,18 +70,15 @@ public:
 	void SetupFrameGeneration();
 	void Present(bool a_useFrameGeneration);
 
-	void CreateFSRResources();
+	LifecycleResult CreateFSRResources();
 
-	void DestroyFSRResources(bool a_waitForIdle = true);
+	LifecycleResult DestroyFSRResources(bool a_waitForIdle = true);
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
-	bool HasRuntimeUpscalerResources() const;
-	bool PollRuntimeUpscalerTeardownReady(const char* a_reason = nullptr);
-	void ReleaseRuntimeUpscalerResourcesForRelatch(bool a_waitForIdle = true);
 	bool HasFSRResourcesPendingTeardown() const;
-	bool PollFSRResourceTeardownReady(const char* a_reason = nullptr);
+	LifecycleResult PollFSRResourceTeardownReady(const char* a_reason = nullptr);
 	void ResetFSRIdleFence();
-	void ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
+	LifecycleResult ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
 
 	bool IsAmdAdapterDetected() const;
 	bool IsNvidiaAdapterDetected() const;
@@ -102,12 +106,13 @@ public:
 	bool UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness);
+		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool* a_usedRuntimeUpscaler = nullptr);
 
 private:
 	// FSR scratch buffer - needs to be freed in DestroyFSRResources
 	void* fsrScratchBuffer = nullptr;
 	uint32_t fsrContextCount = 0;
+	bool fsrContextValid[2]{};
 	uint32_t fsrContextMaxRenderWidth = 0;
 	uint32_t fsrContextMaxRenderHeight = 0;
 	uint32_t fsrContextDisplayWidth = 0;
@@ -168,7 +173,17 @@ private:
 
 	bool runtimeUpscalerFailureLatched = false;
 	bool runtimeFsr4FailureLatched = false;
+	bool runtimeUpscalerSessionQuarantined = false;
+	LifecycleResult runtimeUpscalerQuarantineRetirement = LifecycleResult::Ready;
+	bool runtimeUpscalerQuarantineFrameValid = false;
+	uint32_t runtimeUpscalerQuarantineFrame = 0;
 	uint32_t runtimeFallbackResetDispatchesRemaining = 0;
+	uint32_t runtimeResumeResetDispatchesRemaining = 0;
+	bool runtimeHostFallbackActive = false;
+	bool runtimeHostFallbackFrameValid = false;
+	uint32_t runtimeHostFallbackFrame = 0;
+	bool runtimeHostFallbackForFrame = false;
+	bool runtimeUpscalerUsedForFrame = false;
 	bool runtimeUpscalerLastFramePathValid = false;
 	uint32_t runtimeUpscalerLastFrameIndex = 0;
 	RuntimeUpscalerFramePath runtimeUpscalerLastFramePath = RuntimeUpscalerFramePath::kInactive;
@@ -181,29 +196,32 @@ private:
 	bool CanUseRuntimeUpscalerPath();
 	uint32_t GetPreferredRuntimeUpscalerVersion() const;
 	void ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache);
-	void LatchRuntimeUpscalerFailure();
 	void LatchRuntimeFsr4Failure();
+	void QuarantineRuntimeUpscalerForSession(const char* a_reason);
 	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
-	bool EnsureRuntimeUpscalerInterop();
-	bool EnsureRuntimeCommandContexts();
-	RuntimeCommandContext* AcquireRuntimeCommandContext();
+	LifecycleResult EnsureRuntimeUpscalerInterop();
+	LifecycleResult EnsureRuntimeCommandContexts();
+	LifecycleResult AcquireRuntimeCommandContext(RuntimeCommandContext*& a_commandContext, uint32_t a_requiredFreeContexts = 1);
 	void ResetRuntimeCommandContexts();
-	bool WaitForRuntimeD3D12Fence(uint64_t a_value);
-	bool EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);
-	void WaitForRuntimeUpscalerIdle();
-	bool PollRuntimeUpscalerTeardownIdle(const char* a_reason);
-	bool EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight,
+	void ReleaseIdleRuntimeUpscalerInterop();
+	bool HasRuntimeUpscalerResources() const;
+	bool AreRuntimeUpscalerContextsCompatible(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion) const;
+	LifecycleResult PollRuntimeUpscalerTeardownReady(const char* a_reason = nullptr);
+	LifecycleResult EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);
+	LifecycleResult PollRuntimeUpscalerTeardownIdle(const char* a_reason);
+	LifecycleResult EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight,
 		const D3D11_TEXTURE2D_DESC& a_colorDesc,
 		const D3D11_TEXTURE2D_DESC& a_depthDesc,
 		const D3D11_TEXTURE2D_DESC& a_motionDesc,
 		const D3D11_TEXTURE2D_DESC& a_reactiveDesc,
 		const D3D11_TEXTURE2D_DESC& a_transparencyDesc,
 		const D3D11_TEXTURE2D_DESC& a_outputDesc);
-	bool DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+	LifecycleResult DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
 		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness);
-	void DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);
-	void DestroyRuntimeUpscalerResources(bool a_waitForIdle = true);
+	LifecycleResult DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);
+	LifecycleResult DestroyRuntimeUpscalerResources(bool a_waitForIdle = true);
+	LifecycleResult RetireQuarantinedRuntimeUpscalerResources();
 };

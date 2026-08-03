@@ -665,8 +665,12 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		pos = GetDefaultVRLeftAnchorX(GetDefaultVRSettingsWindowSize(false).x);
 	}
 
-	uint64_t totalShaders = shaderCache->GetTotalTasks();
-	uint64_t compiledShaders = shaderCache->GetCompletedTasks();
+	const uint64_t totalShaders = shaderCache->GetTotalTasks();
+	const uint64_t completedShaders = shaderCache->GetCompletedTasks();
+	const uint64_t failedTasks = shaderCache->GetFailedTasks();
+	const uint64_t processedShaders = std::min(completedShaders + failedTasks, totalShaders);
+	const uint64_t diskCacheHits = std::min(shaderCache->GetDiskHitTasks(), completedShaders);
+	const bool hasSourceCompilation = shaderCache->GetSourceCompileTasks() != 0 || failedTasks != 0;
 
 	auto state = globals::state;
 	auto* menu = Menu::GetSingleton();
@@ -676,11 +680,18 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	const auto renderDocInformation = renderDoc->GetOverlayWarningMessage();
 	const bool backgroundCompilation = shaderCache->backgroundCompilation.load(std::memory_order_relaxed);
 
-	auto progressTitle = fmt::format("{}Compiling Shaders: {}",
+	const char* progressAction = "Preparing Shaders";
+	if (hasSourceCompilation) {
+		progressAction = diskCacheHits == 0 ? "Compiling Shaders" : "Loading / Compiling Shaders";
+	} else if (processedShaders != 0) {
+		progressAction = "Loading Shader Cache";
+	}
+	auto progressTitle = fmt::format("{}{}: {}",
 		backgroundCompilation ? "Background " : "",
+		progressAction,
 		shaderCache->GetShaderStatsString(!state->IsDeveloperMode()).c_str());
-	auto percent = totalShaders > 0 ? static_cast<float>(compiledShaders) / static_cast<float>(totalShaders) : 0.0f;
-	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
+	auto percent = totalShaders > 0 ? static_cast<float>(processedShaders) / static_cast<float>(totalShaders) : 0.0f;
+	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", processedShaders, totalShaders, 100 * percent);
 
 	if (shaderCache->IsCompiling()) {
 		const bool hasFeatureSetRevertPending = shaderCache->HasFeatureSetRevertPending();

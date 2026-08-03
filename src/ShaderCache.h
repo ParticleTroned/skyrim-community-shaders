@@ -307,6 +307,7 @@ namespace SIE
 		std::atomic<uint64_t> failedTasks = 0;
 		std::atomic<uint64_t> cacheHitTasks = 0;            // number of compiles of a previously seen shader combo
 		std::atomic<uint64_t> diskHitTasks = 0;             // tasks resolved from disk cache rather than compiled
+		std::atomic<uint64_t> sourceCompileTasks = 0;       // tasks that reached source compilation after cache lookup
 		std::atomic<uint64_t> diskHitPriorityWeight = 0;    // cumulative priority weight of disk-hit tasks
 		LARGE_INTEGER compilationPhaseStart = { 0 };        // time of first non-disk-hit task dispatch
 		std::atomic<bool> compilationPhaseStarted = false;  // set when first actual compilation begins
@@ -560,7 +561,9 @@ namespace SIE
 		uint64_t GetCurrentFailedCount();
 		uint64_t GetTotalTasks();
 		uint64_t GetDiskHitTasks();
+		uint64_t GetSourceCompileTasks();
 		void IncCacheHitTasks();
+		void IncSourceCompileTasks();
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);

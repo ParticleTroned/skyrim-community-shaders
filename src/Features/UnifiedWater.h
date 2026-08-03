@@ -25,12 +25,12 @@ struct UnifiedWater : OverlayFeature
 
 	struct Settings
 	{
-		std::uint32_t SurfaceVisibilityModelVersion = 4;
+		std::uint32_t SurfaceVisibilityModelVersion = 5;
 		bool UseOptimisedMeshes = true;
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
-		float DistantDepthFadeNearStrength = 1.0f;
+		float DistantDepthFadeNearStrength = 0.0f;
 		float DistantDepthFadeFarStrength = 1.0f;
 		float DistantDepthFadeStart = 0.0f;
 		float DistantDepthFadeEnd = 4096.0f;

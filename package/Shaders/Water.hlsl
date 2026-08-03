@@ -961,14 +961,6 @@ float GetUnifiedWaterShallowSurfaceDepthWeight(float waterColumnDepthUnits)
 	return 1.0 - smootherDepth;
 }
 
-float GetUnifiedWaterShallowSurfacePresence(
-	float distanceDepthFade,
-	float shoreContactWeight)
-{
-	return
-		saturate(distanceDepthFade) *
-		saturate(shoreContactWeight);
-}
 #			endif
 
 struct DiffuseOutput
@@ -979,6 +971,9 @@ struct DiffuseOutput
 	float refractionMul;
 	float3 refractedViewDirection;
 	float waterColumnDepthUnits;
+#			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	float refractionDisplacementPixels;
+#			endif
 };
 
 DiffuseOutput GetWaterDiffuseColor(
@@ -995,7 +990,25 @@ DiffuseOutput GetWaterDiffuseColor(
 #			if defined(REFRACTIONS)
 	float4 refractionNormal = mul(transpose(TextureProj), float4((VarAmounts.w * refractionsDepthFactor * normal.xy) + input.MPosition.xy, input.MPosition.z, 1));
 
+#				if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	float2 primaryRefractionUvRaw =
+		FrameBuffer::DynamicResolutionParams2.xy *
+		input.HPosition.xy * VPOSOffset.xy +
+		VPOSOffset.zw;
+#				endif
 	float2 refractionUvRaw = float2(refractionNormal.x, refractionNormal.w - refractionNormal.y) / refractionNormal.ww;
+#				if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	// Preserve the material's requested refraction before an invalid depth
+	// lookup can fall back to the primary pixel. Requested displacement remains
+	// a smooth ownership cue across bank-crossing validity boundaries.
+	float2 requestedRefractionUvRaw = refractionUvRaw;
+	float2 outputPixelSizeInRefractionUvRaw =
+		max(abs(VPOSOffset.xy), float2(1e-6, 1e-6));
+	float refractionDisplacementPixels =
+		length(
+			(requestedRefractionUvRaw - primaryRefractionUvRaw) /
+			outputPixelSizeInRefractionUvRaw);
+#				endif
 
 	float2 refractionScreenPosition = FrameBuffer::DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy);
 	float4 refractionWorldPosition = float4(input.WPosition.xyz * depth / viewPosition.z, 0);
@@ -1024,7 +1037,11 @@ DiffuseOutput GetWaterDiffuseColor(
 		all(isfinite(unclampedRefractionDistanceMul));
 
 	if (!refractionDepthValid) {
+#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+		refractionUvRaw = primaryRefractionUvRaw;
+#					else
 		refractionUvRaw = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
+#					endif
 	} else {
 		depth = refractionDepth;
 		distanceMul = saturate(unclampedRefractionDistanceMul);
@@ -1056,6 +1073,9 @@ DiffuseOutput GetWaterDiffuseColor(
 	float3 refractedViewDelta = refractionWorldPosition.xyz - input.WPosition.xyz;
 	output.refractedViewDirection = dot(refractedViewDelta, refractedViewDelta) > 1e-6 ? normalize(refractedViewDelta) : viewDirection;
 	output.waterColumnDepthUnits = refractionWaterColumnDepthUnits;
+#				if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	output.refractionDisplacementPixels = refractionDisplacementPixels;
+#				endif
 	return output;
 #			else
 	DiffuseOutput output;
@@ -1069,6 +1089,9 @@ DiffuseOutput GetWaterDiffuseColor(
 	output.refractionMul = 1;
 	output.refractedViewDirection = viewDirection;
 	output.waterColumnDepthUnits = waterColumnDepthUnits;
+#				if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	output.refractionDisplacementPixels = 0.0;
+#				endif
 	return output;
 #			endif
 }
@@ -1122,7 +1145,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
 	float distanceDepthFade = 0.0;
 	float shoreContactWeight = 1.0;
-	float shallowSurfacePresence = 0.0;
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 	distanceDepthFade = GetUnifiedWaterDistanceDepthFade(viewDistance);
 #			endif
@@ -1163,10 +1185,6 @@ PS_OUTPUT main(PS_INPUT input)
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 	shoreContactWeight =
 		GetUnifiedWaterShoreContactWeight(waterColumnDepthUnits);
-	shallowSurfacePresence =
-		GetUnifiedWaterShallowSurfacePresence(
-			distanceDepthFade,
-			shoreContactWeight);
 #					endif
 #				endif
 #			endif
@@ -1356,12 +1374,37 @@ PS_OUTPUT main(PS_INPUT input)
 		min(
 			primaryShallowDepthWeight,
 			refractedShallowDepthWeight);
+	// Requested native refraction displacement is an already-computed cue that
+	// separates genuinely bare-looking shallow water from a bank that the local
+	// depth samples also classify as shallow. Once native refraction requests
+	// visible movement of the riverbed, release this layer completely to the
+	// Open/native result even if the displaced lookup crossed the bank and fell back.
+	float missingNativeRefractionWeight =
+		isfinite(diffuseOutput.refractionDisplacementPixels) ?
+		1.0 - smoothstep(
+			0.25,
+			1.25,
+			max(diffuseOutput.refractionDisplacementPixels, 0.0)) :
+		0.0;
+	// Near Strength is the baseline for transition-depth water. Fully shallow
+	// pixels automatically select Far Strength, allowing Near 0 / Far 1 to keep
+	// medium water native without sacrificing nearby shallow streams.
+	float fullShallowStrength =
+		saturate(
+			SharedData::unifiedWaterSettings.DistantDepthFadeFarStrength);
+	float effectiveShallowStrength =
+		lerp(
+			saturate(distanceDepthFade),
+			fullShallowStrength,
+			agreedShallowDepthWeight);
 	float nativeVisibilityDeficit =
 		1.0 - saturate(diffuseOutput.refractionMul);
 	shallowSurfaceLayerWeight =
 		0.5 *
-		saturate(shallowSurfacePresence) *
+		saturate(shoreContactWeight) *
 		agreedShallowDepthWeight *
+		effectiveShallowStrength *
+		missingNativeRefractionWeight *
 		nativeVisibilityDeficit;
 #					endif
 

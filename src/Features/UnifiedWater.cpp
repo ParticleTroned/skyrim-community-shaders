@@ -31,7 +31,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
-	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 4;
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 5;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
@@ -240,8 +240,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("near_strength_tooltip"),
-								  "Shallow-only water-material correction at and before Fade Start.\n"
-								  "It activates only where the native depth/refraction blend would make shallow water disappear."));
+								  "Baseline correction for nearby transition-depth water.\n"
+								  "Fully shallow water lacking visible native refraction uses Far Strength, so 0 keeps nearby medium/deep water native."));
 		}
 
 		ImGui::SliderFloat(
@@ -253,8 +253,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("far_strength_tooltip"),
-								  "Shallow-only water-material correction at and after Fade End.\n"
-								  "1 is the strongest setting; already-visible medium/deep water remains native."));
+								  "Full correction for distant water and nearby fully shallow streams.\n"
+								  "Keep at 1 to preserve shallow streams; visible native refraction releases medium/deep water."));
 		}
 
 		if (ImGui::SliderFloat(

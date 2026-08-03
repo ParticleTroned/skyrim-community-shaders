@@ -120,8 +120,8 @@ namespace Util
 
 	float4 GetCameraData()
 	{
-		static float& cameraNear = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x40));
-		static float& cameraFar = (*(float*)(REL::RelocationID(517032, 403540).address() + 0x44));
+		const float cameraNear = *globals::game::cameraNear;
+		const float cameraFar = *globals::game::cameraFar;
 
 		float4 cameraData{};
 		cameraData.x = cameraFar;

@@ -359,11 +359,7 @@ namespace SharedData
 		float DistantDepthFadeEnd;
 		float3 WaterTintColor;
 		float WaterTintStrength;
-		float ShoreFeatherWidth;
-		float ShoreConfirmationCullDistance;
-		float DeepWaterNativeBlendStrength;
-		float DeepWaterNativeBlendStart;
-		float DeepWaterNativeBlendEnd;
+		float ShoreDepthBlendRangeUnits;
 		float3 Padding;
 	};
 

@@ -129,19 +129,15 @@ namespace
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 12);
 	static_assert(sizeof(SkinDataCB) == 112);
 	static_assert(sizeof(VanillaFresnelSettingsCB) == 48);
-	static_assert(sizeof(UnifiedWaterSettingsCB) == 64);
+	static_assert(sizeof(UnifiedWaterSettingsCB) == 48);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeNearStrength) == 0);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeFarStrength) == 4);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeStart) == 8);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DistantDepthFadeEnd) == 12);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintColor) == 16);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintStrength) == 28);
-	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreFeatherWidth) == 32);
-	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreConfirmationCullDistance) == 36);
-	static_assert(offsetof(UnifiedWaterSettingsCB, DeepWaterNativeBlendStrength) == 40);
-	static_assert(offsetof(UnifiedWaterSettingsCB, DeepWaterNativeBlendStart) == 44);
-	static_assert(offsetof(UnifiedWaterSettingsCB, DeepWaterNativeBlendEnd) == 48);
-	static_assert(offsetof(UnifiedWaterSettingsCB, Padding) == 52);
+	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreDepthBlendRangeUnits) == 32);
+	static_assert(offsetof(UnifiedWaterSettingsCB, Padding) == 36);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);

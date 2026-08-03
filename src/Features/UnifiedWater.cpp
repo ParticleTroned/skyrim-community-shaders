@@ -17,6 +17,7 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
+	SurfaceVisibilityModelVersion,
 	UseOptimisedMeshes,
 	UseOpenShadersDepthBehaviour,
 	WaterTintColor,
@@ -25,14 +26,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantDepthFadeFarStrength,
 	DistantDepthFadeStart,
 	DistantDepthFadeEnd,
-	ShoreFeatherWidth,
-	ShoreConfirmationCullDistance,
-	DeepWaterNativeBlendStrength,
-	DeepWaterNativeBlendStart,
-	DeepWaterNativeBlendEnd)
+	ShoreDepthBlendRangeUnits)
 
 namespace
 {
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 2;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
@@ -43,15 +41,8 @@ namespace
 	constexpr float kDistantDepthFadeDistanceMin = 0.0f;
 	constexpr float kDistantDepthFadeDistanceMax = kWorldCellSize * 16.0f;
 	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
-	constexpr float kShoreFeatherWidthMin = 0.0f;
-	constexpr float kShoreFeatherWidthMax = 64.0f;
-	constexpr float kDeepWaterNativeBlendStrengthMin = 0.0f;
-	constexpr float kDeepWaterNativeBlendStrengthMax = 1.0f;
-	constexpr float kDeepWaterNativeBlendStartMin = 0.0f;
-	constexpr float kDeepWaterNativeBlendStartMax = 1.0f;
-	constexpr float kDeepWaterNativeBlendEndMin = 0.0f;
-	constexpr float kDeepWaterNativeBlendEndMax = 1.0f;
-	constexpr float kLegacyDeepWaterNativeBlendDepthRange = 0.25f;
+	constexpr float kShoreDepthBlendRangeUnitsMin = 0.0f;
+	constexpr float kShoreDepthBlendRangeUnitsMax = 10.0f;
 
 	// Increment when Unified Water's generated flowmap or cache contract changes.
 	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
@@ -64,20 +55,6 @@ namespace
 			return a_default;
 
 		return std::clamp(a_value, a_min, a_max);
-	}
-
-	void MigrateLegacyFloatSetting(
-		const json& a_json,
-		const char* a_currentKey,
-		const char* a_legacyKey,
-		float& a_value)
-	{
-		if (a_json.contains(a_currentKey))
-			return;
-
-		const auto legacySetting = a_json.find(a_legacyKey);
-		if (legacySetting != a_json.end() && legacySetting->is_number())
-			a_value = legacySetting->get<float>();
 	}
 
 	void SanitizeSettings(UnifiedWater::Settings& a_settings)
@@ -127,34 +104,11 @@ namespace
 		if (a_settings.DistantDepthFadeEnd < a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange)
 			a_settings.DistantDepthFadeEnd = a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange;
 
-		a_settings.ShoreFeatherWidth = ClampFiniteOrDefault(
-			a_settings.ShoreFeatherWidth,
-			kShoreFeatherWidthMin,
-			kShoreFeatherWidthMax,
-			defaults.ShoreFeatherWidth);
-		a_settings.ShoreConfirmationCullDistance = ClampFiniteOrDefault(
-			a_settings.ShoreConfirmationCullDistance,
-			kDistantDepthFadeDistanceMin,
-			kDistantDepthFadeDistanceMax,
-			defaults.ShoreConfirmationCullDistance);
-		a_settings.DeepWaterNativeBlendStrength = ClampFiniteOrDefault(
-			a_settings.DeepWaterNativeBlendStrength,
-			kDeepWaterNativeBlendStrengthMin,
-			kDeepWaterNativeBlendStrengthMax,
-			defaults.DeepWaterNativeBlendStrength);
-		a_settings.DeepWaterNativeBlendStart = ClampFiniteOrDefault(
-			a_settings.DeepWaterNativeBlendStart,
-			kDeepWaterNativeBlendStartMin,
-			kDeepWaterNativeBlendStartMax,
-			defaults.DeepWaterNativeBlendStart);
-		a_settings.DeepWaterNativeBlendEnd = ClampFiniteOrDefault(
-			a_settings.DeepWaterNativeBlendEnd,
-			kDeepWaterNativeBlendEndMin,
-			kDeepWaterNativeBlendEndMax,
-			defaults.DeepWaterNativeBlendEnd);
-
-		if (a_settings.DeepWaterNativeBlendEnd < a_settings.DeepWaterNativeBlendStart)
-			std::swap(a_settings.DeepWaterNativeBlendStart, a_settings.DeepWaterNativeBlendEnd);
+		a_settings.ShoreDepthBlendRangeUnits = ClampFiniteOrDefault(
+			a_settings.ShoreDepthBlendRangeUnits,
+			kShoreDepthBlendRangeUnitsMin,
+			kShoreDepthBlendRangeUnitsMax,
+			defaults.ShoreDepthBlendRangeUnits);
 	}
 
 	bool IsInteriorCellActive()
@@ -206,29 +160,21 @@ namespace
 void UnifiedWater::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	MigrateLegacyFloatSetting(
-		o_json,
-		"DeepWaterNativeBlendStrength",
-		"DeepShoreSofteningStrength",
-		settings.DeepWaterNativeBlendStrength);
-	MigrateLegacyFloatSetting(
-		o_json,
-		"DeepWaterNativeBlendStart",
-		"DeepShoreSofteningStart",
-		settings.DeepWaterNativeBlendStart);
-	const bool hasSavedNativeBlendStart =
-		o_json.contains("DeepWaterNativeBlendStart") ||
-		o_json.contains("DeepShoreSofteningStart");
-	if (!o_json.contains("DeepWaterNativeBlendEnd") && hasSavedNativeBlendStart) {
-		settings.DeepWaterNativeBlendEnd = std::min(
-			settings.DeepWaterNativeBlendStart + kLegacyDeepWaterNativeBlendDepthRange,
-			kDeepWaterNativeBlendEndMax);
+	if (o_json.value("SurfaceVisibilityModelVersion", 0u) != kSurfaceVisibilityModelVersion) {
+		// Earlier revisions used different depth ownership and strength ranges.
+		// Preserve unrelated settings while applying the current requested defaults.
+		const Settings defaults{};
+		settings.DistantDepthFadeNearStrength = defaults.DistantDepthFadeNearStrength;
+		settings.DistantDepthFadeFarStrength = defaults.DistantDepthFadeFarStrength;
+		settings.ShoreDepthBlendRangeUnits = defaults.ShoreDepthBlendRangeUnits;
 	}
+	settings.SurfaceVisibilityModelVersion = kSurfaceVisibilityModelVersion;
 	SanitizeSettings(settings);
 }
 
 void UnifiedWater::SaveSettings(json& o_json)
 {
+	settings.SurfaceVisibilityModelVersion = kSurfaceVisibilityModelVersion;
 	SanitizeSettings(settings);
 	o_json = settings;
 }
@@ -273,7 +219,7 @@ void UnifiedWater::DrawSettings()
 
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx(T(TKEY("shallow_water_depth_stabilization"), "Shallow Water Depth Stabilization"), ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx(T(TKEY("shallow_water_depth_stabilization"), "Shallow Water Surface Visibility"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
 
 		ImGui::SliderFloat(
@@ -285,8 +231,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("near_strength_tooltip"),
-								  "Stabilization applied at and before Fade Start.\n"
-								  "A small nonzero value keeps nearby shallow water readable without fully suppressing transparency."));
+								  "Shallow-water surface-visibility lift strength at and before Fade Start.\n"
+								  "The shader bounds the resulting floor so medium/deep water can return to its native blend."));
 		}
 
 		ImGui::SliderFloat(
@@ -298,8 +244,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("far_strength_tooltip"),
-								  "Stabilization applied at and after Fade End.\n"
-								  "Values between Fade Start and Fade End interpolate smoothly from Near Strength."));
+								  "Shallow-water surface-visibility lift strength at and after Fade End.\n"
+								  "1 is the strongest setting; medium/deep water still returns automatically to its native blend."));
 		}
 
 		if (ImGui::SliderFloat(
@@ -315,7 +261,7 @@ void UnifiedWater::DrawSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				T(TKEY("fade_start_tooltip"), "View distance where stabilization begins.\nOne exterior cell is %.0f units."),
+				T(TKEY("fade_start_tooltip"), "View distance where visibility starts transitioning from Near toward Far.\nOne exterior cell is %.0f units."),
 				kWorldCellSize);
 		}
 
@@ -332,75 +278,30 @@ void UnifiedWater::DrawSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("fade_end_tooltip"),
-								  "View distance where the selected stabilization strength is fully applied.\n"
+								  "View distance where Far Strength is fully applied.\n"
 								  "Start and end remain at least one unit apart."));
 		}
 
 		ImGui::Spacing();
-		ImGui::SeparatorText(T(TKEY("shoreline"), "Shoreline"));
+		ImGui::SeparatorText(T(TKEY("shoreline"), "Shore Contact"));
 
 		ImGui::SliderFloat(
-			T(TKEY("shore_feather_width"), "Shore Feather Width"),
-			&settings.ShoreFeatherWidth,
-			kShoreFeatherWidthMin,
-			kShoreFeatherWidthMax,
-			"%.1f px",
+			T(TKEY("shore_depth_blend_range"), "Edge Fade Depth"),
+			&settings.ShoreDepthBlendRangeUnits,
+			kShoreDepthBlendRangeUnitsMin,
+			kShoreDepthBlendRangeUnitsMax,
+			"%.1f units",
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("shore_feather_width_tooltip"),
-								  "Fades stabilization back to natural transparency only at detected shorelines.\n"
-								  "Set to 0 to disable; water away from the shoreline is unchanged."));
+			ImGui::Text("%s", T(TKEY("shore_depth_blend_range_tooltip"),
+								  "Plane-normal water depth over which the configured surface-visibility lift fades in at terrain contact.\n"
+								  "The focused 0-10 unit range keeps this transition local to the water contact. Set to 0 for no contact fade."));
 		}
 
-		ImGui::Spacing();
-		ImGui::SeparatorText(T(TKEY("native_depth_weight"), "Native Depth Weight"));
-
-		ImGui::SliderFloat(
-			T(TKEY("deep_water_native_blend"), "Strength"),
-			&settings.DeepWaterNativeBlendStrength,
-			kDeepWaterNativeBlendStrengthMin,
-			kDeepWaterNativeBlendStrengthMax,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
+		ImGui::TextDisabled("%s", T(TKEY("surface_visibility_performance"), "Direct blend: no extra shoreline texture samples."));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("deep_water_native_blend_tooltip"),
-								  "Maximum native depth/refraction weight reached at End and retained for deeper water.\n"
-								  "Set to 0 to keep stabilization active at every depth.\n"
-								  "Set Strength to 1 and Start and End to 0 to match the Open Shaders depth/refraction bypass."));
-		}
-
-		if (ImGui::SliderFloat(
-				T(TKEY("deep_water_native_blend_start"), "Start"),
-				&settings.DeepWaterNativeBlendStart,
-				kDeepWaterNativeBlendStartMin,
-				kDeepWaterNativeBlendStartMax,
-				"%.2f",
-				ImGuiSliderFlags_AlwaysClamp)) {
-			settings.DeepWaterNativeBlendEnd = std::max(
-				settings.DeepWaterNativeBlendEnd,
-				settings.DeepWaterNativeBlendStart);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("deep_water_native_blend_start_tooltip"),
-								  "Normalized depth (0 shallow, 1 deepest) where native weight begins increasing.\n"
-								  "Set Start equal to End for a hard threshold."));
-		}
-
-		if (ImGui::SliderFloat(
-				T(TKEY("deep_water_native_blend_end"), "End"),
-				&settings.DeepWaterNativeBlendEnd,
-				kDeepWaterNativeBlendEndMin,
-				kDeepWaterNativeBlendEndMax,
-				"%.2f",
-				ImGuiSliderFlags_AlwaysClamp)) {
-			settings.DeepWaterNativeBlendStart = std::min(
-				settings.DeepWaterNativeBlendStart,
-				settings.DeepWaterNativeBlendEnd);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("deep_water_native_blend_end_tooltip"),
-								  "Normalized depth (0 shallow, 1 deepest) where native weight reaches Strength.\n"
-								  "Lower values restore native depth and refraction behaviour sooner."));
+			ImGui::Text("%s", T(TKEY("surface_visibility_performance_tooltip"),
+								  "The retired confirmation-cull control only skipped shoreline samples that this path no longer performs."));
 		}
 
 		ImGui::EndDisabled();
@@ -415,28 +316,10 @@ void UnifiedWater::DrawSettings()
 			&settings.UseOpenShadersDepthBehaviour);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("use_open_shaders_depth_behaviour_tooltip"),
-								  "Bypasses Community Shaders' distance-based depth stabilization and uses Open Shaders' unmodified\n"
-								  "depth/refraction behaviour. Custom stabilization values are preserved and resume when disabled."));
+								  "Disables the shallow-water surface-visibility floor and uses the native Open Shaders-like water blend.\n"
+								  "Custom visibility values are preserved and resume when disabled."));
 		}
 
-		ImGui::Spacing();
-		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
-
-		ImGui::SliderFloat(
-			T(TKEY("shore_confirmation_cull_distance"), "Shore Confirmation Max Distance"),
-			&settings.ShoreConfirmationCullDistance,
-			kDistantDepthFadeDistanceMin,
-			kDistantDepthFadeDistanceMax,
-			"%.0f units",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("shore_confirmation_cull_distance_tooltip"),
-								  "Performance limit for extra shoreline confirmation samples. Correctly confirmed shores are unchanged.\n"
-								  "Only rejected edge candidates are affected; confirmation fades over up to the final 2048 units and stops beyond the limit.\n"
-								  "Set to 0 for no culling."));
-		}
-
-		ImGui::EndDisabled();
 		ImGui::Spacing();
 
 		if (ImGui::Button(T(TKEY("regenerate_flowmap"), "Regenerate Flowmap")) && flowmap) {
@@ -464,11 +347,7 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.DistantDepthFadeEnd = sanitizedSettings.DistantDepthFadeEnd;
 	data.WaterTintColor = sanitizedSettings.WaterTintColor;
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
-	data.ShoreFeatherWidth = sanitizedSettings.ShoreFeatherWidth;
-	data.ShoreConfirmationCullDistance = sanitizedSettings.ShoreConfirmationCullDistance;
-	data.DeepWaterNativeBlendStrength = sanitizedSettings.DeepWaterNativeBlendStrength;
-	data.DeepWaterNativeBlendStart = sanitizedSettings.DeepWaterNativeBlendStart;
-	data.DeepWaterNativeBlendEnd = sanitizedSettings.DeepWaterNativeBlendEnd;
+	data.ShoreDepthBlendRangeUnits = sanitizedSettings.ShoreDepthBlendRangeUnits;
 	return data;
 }
 

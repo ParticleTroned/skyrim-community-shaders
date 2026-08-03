@@ -39,7 +39,8 @@ public:
 	ID3D11ComputeShader* blurShadowHorizontalCS = nullptr;
 	ID3D11ComputeShader* blurShadowVerticalCS = nullptr;
 
-	ID3D11ShaderResourceView* shadowView = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> shadowView = nullptr;
+	uint32_t shadowViewCaptureFrame = UINT32_MAX;
 
 	// Downsampled shadow texture with 2 mip levels
 	ID3D11Texture2D* shadowCopyTexture = nullptr;
@@ -66,9 +67,21 @@ public:
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override { DrawEssentialSettings(); }
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 8,
+			T("menu.performance_tuning.feature.volumetric_shadows.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.volumetric_shadows.comparison_details", "Volumetric Shadows are switched off, so shadow-map downsampling and blur passes stop.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return { { "Enabled", true } };
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled; }
+	virtual bool IsPerformanceTuningApplicable() const override;
+	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 
@@ -81,5 +94,28 @@ public:
 	virtual void PostPostLoad() override;
 
 private:
+	enum class RuntimeReadiness
+	{
+		Ready,
+		NoDirectionalShadows,
+		NoRuntimeResources,
+		NoCapturedShadowMap,
+		ShaderUnavailable,
+		OutputResourcesUnavailable
+	};
+
+	struct RuntimeContext
+	{
+		ID3D11DeviceContext* context = nullptr;
+		ID3D11ShaderResourceView* directionalShadowSRV = nullptr;
+		ID3D11ShaderResourceView* esramShadowSRV = nullptr;
+		D3D11_TEXTURE2D_DESC directionalShadowDesc{};
+	};
+
+	RuntimeReadiness GetRuntimeReadiness(
+		ID3D11ShaderResourceView* a_capturedShadowView,
+		bool a_requireOutputResources,
+		RuntimeContext* a_context = nullptr) const;
+
 	static void SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_srv);
 };

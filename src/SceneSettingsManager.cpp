@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "Globals.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
@@ -277,6 +278,10 @@ void SceneSettingsManager::UpdateEntryValue(SceneType type, size_t index, const 
 
 	// Only apply if no active overwrite covers this key (overwrites take priority)
 	if (isCurrentlyApplied && !vec[index].paused && !IsFeaturePaused(vec[index].featureShortName)) {
+		if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition()) {
+			queuedReapply = true;
+			return;
+		}
 		if (vec[index].source == EntrySource::Overwrite ||
 			!HasActiveOverwrite(type, vec[index].featureShortName, vec[index].settingKey))
 			ApplySettingToFeature(vec[index]);
@@ -306,6 +311,8 @@ void SceneSettingsManager::Update()
 	if (isCurrentlyApplied) {
 		bool isMainOrLoading = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 		if (isMainOrLoading) {
+			if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition())
+				return;
 			RevertToExteriorSettings();
 			isCurrentlyApplied = false;
 		}
@@ -315,6 +322,9 @@ void SceneSettingsManager::Update()
 		queuedCellTransition = false;
 		OnCellTransition();
 	}
+
+	if (queuedReapply)
+		ReapplyIfActive();
 }
 
 void SceneSettingsManager::OnCellTransition()
@@ -325,10 +335,18 @@ void SceneSettingsManager::OnCellTransition()
 		interior = sky->mode.get() != RE::Sky::Mode::kFull;
 
 	if (interior && !isCurrentlyApplied) {
+		if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition()) {
+			queuedCellTransition = true;
+			return;
+		}
 		SaveExteriorSettings(SceneType::InteriorOnly);
 		ApplySettings(SceneType::InteriorOnly);
 		isCurrentlyApplied = true;
 	} else if (!interior && isCurrentlyApplied) {
+		if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition()) {
+			queuedCellTransition = true;
+			return;
+		}
 		RevertToExteriorSettings();
 		isCurrentlyApplied = false;
 	}
@@ -336,8 +354,15 @@ void SceneSettingsManager::OnCellTransition()
 
 void SceneSettingsManager::ReapplyIfActive()
 {
-	if (!isCurrentlyApplied)
+	if (!isCurrentlyApplied) {
+		queuedReapply = false;
 		return;
+	}
+	if (!PerformanceTuningRenderer::PrepareForSceneSettingsTransition()) {
+		queuedReapply = true;
+		return;
+	}
+	queuedReapply = false;
 
 	// Full revert + re-apply so removed/paused entries get exterior values restored
 	RevertToExteriorSettings();
@@ -490,7 +515,6 @@ void SceneSettingsManager::ApplySettingToFeature(const SettingEntry& entry)
 void SceneSettingsManager::SaveUserSettings(SceneType type)
 {
 	auto path = GetSettingsFilePath(type);
-	Util::FileHelpers::EnsureDirectoryExists(path.parent_path());
 
 	auto& vec = GetEntries(type);
 	json data = json::array();
@@ -507,18 +531,17 @@ void SceneSettingsManager::SaveUserSettings(SceneType type)
 	}
 
 	auto typeName = GetSceneTypeName(type);
-	try {
-		std::ofstream file(path);
-		if (file.is_open()) {
-			file << data.dump(2);
-			if (file.fail())
-				logger::error("[SceneSettings] Write error saving {} settings (disk full or permissions issue)", typeName);
-			else
-				logger::info("[SceneSettings] Saved {} {} user settings", data.size(), typeName);
-		}
-	} catch (const std::exception& e) {
-		logger::error("[SceneSettings] Failed to save {} settings: {}", typeName, e.what());
+	const auto writeResult = Util::FileHelpers::WriteJsonFileAtomic(path, data, 2);
+	if (!writeResult) {
+		logger::error(
+			"[SceneSettings] Failed to save {} settings at '{}': {}",
+			typeName,
+			path.string(),
+			writeResult.errorMessage);
+		return;
 	}
+
+	logger::info("[SceneSettings] Saved {} {} user settings", data.size(), typeName);
 }
 
 void SceneSettingsManager::LoadUserSettings(SceneType type)

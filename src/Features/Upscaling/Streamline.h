@@ -128,7 +128,7 @@ public:
 	void InvalidateDLSSOptionsCache();
 	void ResetFrameTracking();
 
-	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
+	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	void UpdateReflex();
 
 	void DestroyDLSSResources();

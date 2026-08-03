@@ -116,6 +116,20 @@ public:
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 10,
+			T("menu.performance_tuning.feature.subsurface_scattering.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.subsurface_scattering.comparison_details", "Subsurface Scattering is switched off.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "EnableSubsurfaceScattering", true },
+			{ "SSMode", true },
+			{ "BurleySamples", true }
+		};
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableSubsurfaceScattering; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;

@@ -55,6 +55,12 @@ void Skylighting::RestoreDefaultSettings()
 	ApplySkylightingRuntimeEnabledChange(*this, previousEnabled);
 }
 
+void Skylighting::ApplyPerformanceSettings()
+{
+	inOcclusion = false;
+	ResetSkylighting();
+}
+
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
@@ -82,7 +88,9 @@ bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 
 const char* Skylighting::GetPerformanceCostMeasurementWaitText() const
 {
-	return "Waiting for Skylighting state to settle";
+	return T(
+		"menu.performance_tuning.feature.skylighting.wait",
+		"Waiting for Skylighting state to settle");
 }
 
 double Skylighting::GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const

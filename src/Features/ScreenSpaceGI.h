@@ -32,8 +32,29 @@ public:
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 2,
+			T("menu.performance_tuning.feature.screen_space_gi.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.screen_space_gi.comparison_details", "SSGI/AO is switched off.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "Enabled", true },
+			{ "EnableGI", true },
+			{ "EnableExperimentalSpecularGI", true },
+			{ "ResolutionMode", true },
+			{ "NumSlices", true },
+			{ "NumSteps", true },
+			{ "EnableTemporalDenoiser", true },
+			{ "EnableBlur", true }
+		};
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
+	virtual bool IsPerformanceTuningApplicable() const override;
+	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
@@ -44,7 +65,9 @@ public:
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 	void CompileComputeShaders();
-	bool ShadersOK();
+	bool ShadersOK() const;
+	bool RuntimeResourcesOK() const;
+	bool IsRuntimeReady() const;
 
 	void DrawSSGI();
 	void UpdateSB();
@@ -147,7 +170,7 @@ public:
 
 	inline auto GetOutputTextures()
 	{
-		return (loaded && settings.Enabled) ?
+		return (loaded && settings.Enabled && IsRuntimeReady()) ?
 		           std::make_tuple(
 					   texAo[outputAoIdx]->srv.get(),
 					   texIlY[outputIlIdx]->srv.get(),

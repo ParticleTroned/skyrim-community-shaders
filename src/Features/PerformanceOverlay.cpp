@@ -346,7 +346,11 @@ void PerformanceOverlay::DrawOverlay()
 	if (this->settings.ShowFPS) {
 		std::string fpsText = std::format("{:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
 		if (this->state.isFrameGenerationActive) {
-			fpsText = std::format("Raw FPS: {:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
+			fpsText = std::format(
+				"{} {:.1f} ({:.2f} ms)",
+				T(TKEY("raw_fps"), "Pre-FG Game FPS:"),
+				this->state.smoothFps,
+				this->state.smoothFrameTimeMs);
 		}
 		const float fpsWidth = ImGui::CalcTextSize(fpsText.c_str()).x;
 		minWidth = std::max(minWidth, fpsWidth + Settings::kLabelPadding * scale);
@@ -444,7 +448,7 @@ void PerformanceOverlay::DrawFPS()
 		ImGui::TableSetupColumn("##value");
 
 		ImGui::TableNextColumn();
-		ImGui::Text(this->state.isFrameGenerationActive ? T(TKEY("raw_fps"), "Raw FPS:") : T(TKEY("fps"), "FPS:"));
+		ImGui::Text(this->state.isFrameGenerationActive ? T(TKEY("raw_fps"), "Pre-FG Game FPS:") : T(TKEY("fps"), "FPS:"));
 		ImGui::TableNextColumn();
 
 		// Check if buffer is full for the avg
@@ -1604,7 +1608,7 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 	if (std::abs(otherFrameTime) < 1e-4f)
 		otherFrameTime = 0.0f;
 
-	float csPassesTime = globals::profiler->GetTotalTimeMs();
+	float csPassesTime = globals::profiler->GetProfiledPassGpuTotalMs();
 	float csPercent = smoothedFrameTime > 0.0f ? (csPassesTime / smoothedFrameTime) * 100.0f : 0.0f;
 	float remainingOtherTime = std::max(0.0f, otherFrameTime - csPassesTime);
 	float remainingOtherPercent = smoothedFrameTime > 0.0f ? (remainingOtherTime / smoothedFrameTime) * 100.0f : 0.0f;

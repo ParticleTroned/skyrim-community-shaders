@@ -45,6 +45,11 @@ option(
     ON
 )
 option(
+    BUILD_HOST_TESTS
+    "Build deterministic host-side C++ unit tests"
+    ON
+)
+option(
     AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
     "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
     OFF
@@ -59,6 +64,7 @@ message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
+message("\tHost C++ tests: ${BUILD_HOST_TESTS}")
 message(
     "\tExclude hidden AIO feature packages: ${AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES}"
 )
@@ -1380,6 +1386,15 @@ if(BUILD_SHADER_TESTS)
     )
 endif()
 
+# #######################################################################################################################
+# # Host-side C++ Unit Tests
+# #######################################################################################################################
+if(BUILD_HOST_TESTS)
+    message(STATUS "Adding host-side C++ tests subdirectory")
+    enable_testing()
+    add_subdirectory(tests/host)
+endif()
+
 message("*************************************************************")
 message("Community Shaders configuration complete")
 message("To prepare a ZIP package of AIO, Core, or Features")
@@ -1393,6 +1408,12 @@ if(BUILD_SHADER_TESTS)
     message("To run shader tests manually:")
     message(
         "  cmake --build build/<preset> --config <Debug|Release> --target run_shader_tests"
+    )
+endif()
+if(BUILD_HOST_TESTS)
+    message("To run host-side C++ tests manually:")
+    message(
+        "  cmake --build build/<preset> --config <Debug|Release> --target run_host_tests"
     )
 endif()
 message("Try switching to build preset 'Dev' for faster iteration time")

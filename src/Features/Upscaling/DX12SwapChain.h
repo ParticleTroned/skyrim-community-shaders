@@ -89,7 +89,10 @@ public:
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 
 	UINT frameIndex = 0;
-	UINT64 fenceValue = 0;
+	// Shared fences are created at zero, so the first submitted value must be
+	// strictly greater than their initial completed value.
+	UINT64 fenceValue = 1;
+	HRESULT presentInteropFailure = S_OK;
 
 	LARGE_INTEGER qpf;
 

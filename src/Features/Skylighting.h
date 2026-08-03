@@ -31,6 +31,23 @@ public:
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
+	virtual void ApplyPerformanceSettings() override;
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 4,
+			T("menu.performance_tuning.feature.skylighting.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.skylighting.comparison_details", "the in-game Enable Skylighting toggle is switched off, so probe updates stop and ambient shading plus reflection occlusion fall back to the unoccluded path.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "MaxZenith", true },
+			{ "MinDiffuseVisibility", true },
+			{ "MinSpecularVisibility", true },
+			{ "EnableSkylighting", true },
+			{ "IncludeMarkedRoofOccluders", true }
+		};
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;

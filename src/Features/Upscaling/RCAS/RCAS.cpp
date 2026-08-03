@@ -82,34 +82,35 @@ void RCAS::CreateComputeShader()
 	rcasComputeShader.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\RCAS\\RCAS.hlsl", defines, "cs_5_0"));
 }
 
-void RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness)
+bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness)
 {
 	auto state = globals::state;
 	auto context = globals::d3d::context;
-	if (!state || !context || !inputSRV || !outputUAV)
-		return;
+	auto* profiler = globals::profiler;
+	if (!state || !context || !profiler || !inputSRV || !outputUAV)
+		return false;
 
 	ZoneScoped;
 	TracyD3D11Zone(state->tracyCtx, "RCAS Sharpening");
 
 	if (!rcasComputeShader) {
 		logger::warn("[RCAS] Compute shader not compiled");
-		return;
+		return false;
 	}
-	if (!rcasConfigCB) {
+	if (!rcasConfigCB || !rcasConfigCB->CB()) {
 		logger::warn("[RCAS] Constant buffer not initialized");
-		return;
+		return false;
 	}
-	globals::profiler->BeginPass("Upscaling::RCAS");
+	profiler->BeginPass("Upscaling::RCAS");
 	state->BeginPerfEvent("RCAS Sharpening");
 
 	uint32_t screenWidth = 0;
 	uint32_t screenHeight = 0;
 	if (!TryGetOutputDimensions(outputUAV, screenWidth, screenHeight)) {
 		logger::warn("[RCAS] Unable to determine output UAV dimensions");
-		globals::profiler->EndPass();
+		profiler->EndPass();
 		state->EndPerfEvent();
-		return;
+		return false;
 	}
 
 	RCASConfig config{};
@@ -139,6 +140,7 @@ void RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	globals::profiler->EndPass();
+	profiler->EndPass();
 	state->EndPerfEvent();
+	return true;
 }

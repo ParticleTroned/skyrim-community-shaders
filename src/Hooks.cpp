@@ -509,6 +509,11 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// TEST only probes presentation status. It must not advance any render,
+		// measurement, HDR, UI, screenshot, or frame-accounting state.
+		if ((Flags & DXGI_PRESENT_TEST) != 0)
+			return func(This, SyncInterval, Flags);
+
 		globals::state->Reset();
 
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(

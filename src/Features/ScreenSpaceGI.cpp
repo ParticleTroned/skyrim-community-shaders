@@ -1,5 +1,7 @@
 #include "ScreenSpaceGI.h"
 
+#include <cmath>
+
 #include <DirectXTex.h>
 
 #include "../I18n/I18n.h"
@@ -769,9 +771,153 @@ void ScreenSpaceGI::CompileComputeShaders()
 	recompileFlag = false;
 }
 
-bool ScreenSpaceGI::ShadersOK()
+bool ScreenSpaceGI::ShadersOK() const
 {
-	return texNoise && prefilterDepthsCompute && prefilterRadianceCompute && prefilterNormalCompute && radianceDisoccCompute && giCompute && blurCompute && upsampleCompute;
+	if (!prefilterDepthsCompute ||
+	    !prefilterRadianceCompute ||
+	    !prefilterNormalCompute ||
+	    !radianceDisoccCompute ||
+	    !giCompute)
+		return false;
+
+	if (settings.EnableBlur && !blurCompute)
+		return false;
+
+	return settings.ResolutionMode == 0 || upsampleCompute;
+}
+
+bool ScreenSpaceGI::RuntimeResourcesOK() const
+{
+	if (settings.ResolutionMode < 0 || settings.ResolutionMode > 2)
+		return false;
+
+	if (!loaded ||
+	    !globals::d3d::device ||
+	    !globals::d3d::context ||
+	    !globals::game::renderer ||
+	    !globals::game::graphicsState ||
+	    !globals::game::shadowState ||
+	    !globals::deferred ||
+	    !globals::state ||
+	    !globals::state->sharedDataCB ||
+	    !globals::profiler)
+		return false;
+
+	if (globals::game::graphicsState->screenWidth == 0 ||
+	    globals::game::graphicsState->screenHeight == 0 ||
+	    !ssgiCB ||
+	    !ssgiCB->CB() ||
+	    !globals::state->sharedDataCB->CB() ||
+	    !pointClampSampler ||
+	    !linearClampSampler)
+		return false;
+
+	const auto hasSRV = [](const auto& a_texture) {
+		return a_texture && a_texture->resource && a_texture->srv;
+	};
+	const auto hasSRVAndUAV = [&](const auto& a_texture) {
+		return hasSRV(a_texture) && a_texture->uav;
+	};
+
+	if (!hasSRV(texNoise) ||
+	    !hasSRV(texRadiance) ||
+	    !hasSRVAndUAV(texRadianceTemp) ||
+	    !hasSRV(texWorkingDepth) ||
+	    !hasSRV(texNormal) ||
+	    !hasSRVAndUAV(texPrevGeo))
+		return false;
+
+	for (const auto& uav : uavWorkingDepth)
+		if (!uav)
+			return false;
+	for (const auto& uav : uavRadiance)
+		if (!uav)
+			return false;
+	for (const auto& uav : uavNormal)
+		if (!uav)
+			return false;
+
+	for (std::size_t i = 0; i < 2; ++i) {
+		if (!hasSRVAndUAV(texAccumFrames[i]) ||
+		    !hasSRVAndUAV(texAo[i]) ||
+		    !hasSRVAndUAV(texIlY[i]) ||
+		    !hasSRVAndUAV(texIlCoCg[i]) ||
+		    !hasSRVAndUAV(texGiSpecular[i]))
+			return false;
+	}
+
+	const auto* graphicsState = globals::game::graphicsState;
+	const auto& runtimeData = graphicsState->GetRuntimeData();
+	if (!runtimeData.dynamicResolutionLock &&
+		(!std::isfinite(runtimeData.dynamicResolutionWidthRatio) ||
+			runtimeData.dynamicResolutionWidthRatio <= 0.0f ||
+			!std::isfinite(runtimeData.dynamicResolutionHeightRatio) ||
+			runtimeData.dynamicResolutionHeightRatio <= 0.0f)) {
+		return false;
+	}
+
+	const uint32_t resolutionDivisor = 1u << settings.ResolutionMode;
+	const auto dynamicScreenSize = Util::ConvertToDynamic(float2{
+		static_cast<float>(graphicsState->screenWidth),
+		static_cast<float>(graphicsState->screenHeight) });
+	const auto dynamicTextureSize = Util::ConvertToDynamic(float2{
+		static_cast<float>(texRadiance->desc.Width),
+		static_cast<float>(texRadiance->desc.Height) });
+	const auto validDynamicSize = [resolutionDivisor](
+		const float2& a_size,
+		uint32_t a_allocatedWidth,
+		uint32_t a_allocatedHeight) {
+		return std::isfinite(a_size.x) &&
+		       std::isfinite(a_size.y) &&
+		       a_size.x >= static_cast<float>(resolutionDivisor) &&
+		       a_size.y >= static_cast<float>(resolutionDivisor) &&
+		       std::floor(a_size.x) <= static_cast<float>(a_allocatedWidth) &&
+		       std::floor(a_size.y) <= static_cast<float>(a_allocatedHeight);
+	};
+	if (!validDynamicSize(
+			dynamicScreenSize,
+			texRadiance->desc.Width,
+			texRadiance->desc.Height) ||
+		!validDynamicSize(
+			dynamicTextureSize,
+			texRadiance->desc.Width,
+			texRadiance->desc.Height)) {
+		return false;
+	}
+
+	if (!Util::GetCurrentSceneDepthSRV())
+		return false;
+
+	const auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
+	return renderTargets[globals::deferred->forwardRenderTargets[0]].SRV &&
+	       renderTargets[NORMALROUGHNESS].SRV &&
+	       renderTargets[RE::RENDER_TARGET::kMOTION_VECTOR].SRV;
+}
+
+bool ScreenSpaceGI::IsRuntimeReady() const
+{
+	return RuntimeResourcesOK() && ShadersOK();
+}
+
+bool ScreenSpaceGI::IsPerformanceTuningApplicable() const
+{
+	return IsRuntimeReady();
+}
+
+const char* ScreenSpaceGI::GetPerformanceTuningApplicabilityReason() const
+{
+	if (IsPerformanceTuningApplicable())
+		return nullptr;
+
+	if (!RuntimeResourcesOK()) {
+		return T(
+			"menu.performance_tuning.feature.screen_space_gi.runtime_resources_unavailable",
+			"Screen Space GI cannot be measured because its runtime resources are unavailable.");
+	}
+
+	return T(
+		"menu.performance_tuning.feature.screen_space_gi.shaders_unavailable",
+		"Screen Space GI cannot be measured because one or more required compute shaders failed to compile.");
 }
 
 void ScreenSpaceGI::UpdateSB()
@@ -833,17 +979,34 @@ void ScreenSpaceGI::DrawSSGI()
 	auto context = globals::d3d::context;
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-	auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
+	if (imageSpaceManager) {
+		auto& ssaoBlur = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
+		if (ssaoBlur) {
+			auto* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(ssaoBlur.get()) + 0x50LL);
+			*enableSSAO = settings.EnableVanillaSSAO;
+		}
+	}
 
-	// Toggle vanilla SSAO
-	static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
-	*enableSSAO = settings.EnableVanillaSSAO;
+	if (settings.Enabled && recompileFlag && RuntimeResourcesOK())
+		ClearShaderCache();
 
-	if (!(settings.Enabled && ShadersOK())) {
+	if (!(settings.Enabled && IsRuntimeReady())) {
+		if (settings.Enabled)
+			ClearScreenSpaceGIProfilerTimers();
+		if (!context)
+			return;
+
 		FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
-		context->ClearUnorderedAccessViewFloat(texAo[outputAoIdx]->uav.get(), clr);
-		context->ClearUnorderedAccessViewFloat(texIlY[outputIlIdx]->uav.get(), clr);
-		context->ClearUnorderedAccessViewFloat(texIlCoCg[outputIlIdx]->uav.get(), clr);
+		const auto clearOutput = [&](const auto& a_texture) {
+			if (a_texture && a_texture->uav)
+				context->ClearUnorderedAccessViewFloat(a_texture->uav.get(), clr);
+		};
+		const auto aoIndex = std::min(outputAoIdx, 1u);
+		const auto ilIndex = std::min(outputIlIdx, 1u);
+		clearOutput(texAo[aoIndex]);
+		clearOutput(texIlY[ilIndex]);
+		clearOutput(texIlCoCg[ilIndex]);
+		clearOutput(texGiSpecular[aoIndex]);
 		return;
 	}
 
@@ -857,9 +1020,6 @@ void ScreenSpaceGI::DrawSSGI()
 	uint inputGITexIdx = lastFrameGITexIdx;
 
 	//////////////////////////////////////////////////////
-
-	if (recompileFlag)
-		ClearShaderCache();
 
 	UpdateSB();
 

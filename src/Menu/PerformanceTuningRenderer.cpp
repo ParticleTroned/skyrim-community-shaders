@@ -1,60 +1,64 @@
 #include "PerformanceTuningRenderer.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <imgui.h>
-#include <imgui_internal.h>
-#include <initializer_list>
+#include <limits>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include <imgui.h>
+
 #include "Feature.h"
+#include "Features/Upscaling.h"
 #include "Globals.h"
+#include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/PerformanceTuningJson.h"
+#include "Menu/PerformanceTuningMeasurement.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Profiler.h"
-#include "State.h"
+#include "SceneSettingsManager.h"
+#include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
+
+#define I18N_KEY_PREFIX "menu.performance_tuning."
 
 namespace
 {
 	constexpr float kTuningDeltaThresholdMs = 0.099f;
-	constexpr int kTuningSettleFrames = 20;
-	constexpr int kTuningHighlightFrames = 240;
-	constexpr double kFeatureCostMeasurementSeconds = 3.0;
-	constexpr double kFeatureCostMeasurementMilliseconds = kFeatureCostMeasurementSeconds * 1000.0;
+	constexpr uint64_t kTuningPostEditFreshSamples = 60;
+	constexpr double kTuningPostEditSettleSeconds = 2.0;
+	constexpr double kTuningPostEditTimeoutSeconds = 15.0;
+	constexpr double kTuningHighlightSeconds = 4.0;
+	constexpr double kFeatureCostMeasurementSeconds =
+		PerformanceTuning::kMeasurementDurationMs / 1000.0;
 	constexpr double kFeatureCostStabilityWindowMilliseconds = 500.0;
 	constexpr double kFeatureCostStabilityTimeoutSeconds = 12.0;
 	constexpr int kFeatureCostStableComparisonCount = 2;
-	constexpr double kFeatureCostStabilityMinSampleWeight = 4.0;
-	constexpr double kFeatureCostStabilityMeanAbsoluteToleranceMs = 0.1;
-	constexpr double kFeatureCostStabilityMeanRelativeTolerance = 0.02;
-	constexpr double kFeatureCostStabilityDeviationAbsoluteToleranceMs = 0.15;
-	constexpr double kFeatureCostStabilityDeviationRelativeTolerance = 0.25;
-	constexpr float kFeatureCostDisplayEpsilonMs = 0.0005f;
-	constexpr float kFramePacingDetectionEpsilonMs = 1.0f;
+	constexpr double kFeatureCostTransitionTimeoutSeconds = 20.0;
+	constexpr double kFeatureCostSampleProgressTimeoutSeconds = 8.0;
+	constexpr double kFeatureCostProfilerDrainTimeoutSeconds = 2.0;
+	constexpr double kFeatureCostOverallTimeoutSeconds = 90.0;
+	constexpr uint64_t kFeatureCostPipelineDrainPresentCount = Profiler::kFrameLatency;
 
-	constexpr std::array<std::string_view, 13> kPerformanceFeatureOrder = {
-		"Upscaling",
-		"ScreenSpaceShadows",
-		"ScreenSpaceGI",
-		"LightLimitFix",
-		"Skylighting",
-		"TerrainBlending",
-		"TerrainShadows",
-		"VolumetricLighting",
-		"VolumetricShadows",
-		"WetnessEffects",
-		"SubsurfaceScattering",
-		"GrassLighting",
-		"GrassCollision"
+	struct SceneFingerprint
+	{
+		const void* cell = nullptr;
+		const void* currentWeather = nullptr;
+		const void* lastWeather = nullptr;
+		float weatherTransition = 0.0f;
+		bool interior = false;
+
+		bool operator==(const SceneFingerprint&) const = default;
 	};
 
 	struct FeatureHighlightDirection
@@ -67,9 +71,11 @@ namespace
 	{
 		ProfilingRenderer::PerformanceTimingSummary baseline;
 		bool pendingComparison = false;
-		int lastEditFrame = -10000;
-		int measureAfterFrame = 0;
-		int expireFrame = 0;
+		uint64_t lastEditSampleId = 0;
+		uint64_t measureAfterSampleId = 0;
+		double settleAfterTime = 0.0;
+		double comparisonDeadline = 0.0;
+		double expireTime = 0.0;
 		int frameDirection = 0;
 		int fpsDirection = 0;
 		int gpuTotalDirection = 0;
@@ -77,34 +83,10 @@ namespace
 		std::unordered_map<std::string, FeatureHighlightDirection> featureDirections;
 	};
 
-	struct FeatureCostSample
-	{
-		double sampledDurationMs = 0.0;
-		double frameMsSum = 0.0;
-		double profilerGpuMsSum = 0.0;
-		double profilerCpuMsSum = 0.0;
-		double frameSampleWeight = 0.0;
-		double profilerGpuSampleWeight = 0.0;
-		double profilerCpuSampleWeight = 0.0;
-		int presentSyncedSamples = 0;
-		double framePacedSampleWeight = 0.0;
-		double framePacingEligibleSampleWeight = 0.0;
-		uint64_t lastSampleId = 0;
-	};
-
-	struct FeatureCostStabilityMoments
-	{
-		double sum = 0.0;
-		double squaredSum = 0.0;
-		double sampleWeight = 0.0;
-	};
-
 	struct FeatureCostStabilityWindow
 	{
 		double sampledDurationMs = 0.0;
-		FeatureCostStabilityMoments frame;
-		FeatureCostStabilityMoments profilerGpu;
-		FeatureCostStabilityMoments profilerCpu;
+		PerformanceTuning::Moments present;
 	};
 
 	struct FeatureCostStabilityState
@@ -118,31 +100,21 @@ namespace
 		double monitoringStartTime = 0.0;
 	};
 
-	struct FeatureCostDelta
+	enum class FeatureCostMeasurementLeg
 	{
-		float frameMs = 0.0f;
-		float fpsDelta = 0.0f;
-		float profilerGpuMs = 0.0f;
-		float profilerCpuMs = 0.0f;
-		bool hasFrame = false;
-		bool hasFps = false;
-		bool hasProfilerGpu = false;
-		bool hasProfilerCpu = false;
-		bool fpsPresentSynced = false;
-		bool fpsFramePaced = false;
+		CurrentBefore,
+		Comparison,
+		CurrentAfter
 	};
 
-	enum class FeatureCostMeasurementPhase
+	enum class FeatureCostMeasurementStage
 	{
 		Idle,
-		SettlingCurrent,
-		MeasuringCurrent,
-		SettlingTest,
-		MeasuringTest,
-		SettlingRestoredCurrent,
-		MeasuringRestoredCurrent,
+		Settling,
+		Measuring,
+		Draining,
 		Complete,
-		StabilityFailed
+		Failed
 	};
 
 	enum class FeatureCostStabilityResult
@@ -162,23 +134,56 @@ namespace
 
 	struct FeatureCostMeasurementState
 	{
-		FeatureCostMeasurementPhase phase = FeatureCostMeasurementPhase::Idle;
+		FeatureCostMeasurementStage stage = FeatureCostMeasurementStage::Idle;
+		FeatureCostMeasurementLeg leg = FeatureCostMeasurementLeg::CurrentBefore;
 		json originalState;
-		bool testEnabled = false;
-		bool testStateApplied = false;
-		double phaseStartTime = 0.0;
-		uint64_t settleStartSampleId = 0;
+		json runSettingsState;
+		json resultSettingsState;
+		SceneFingerprint runScene;
+		SceneFingerprint resultScene;
+		bool hasResultScene = false;
+		bool comparisonStateApplied = false;
+		bool restorePending = false;
+		double overallStartTime = 0.0;
+		double stageStartTime = 0.0;
+		double lastProgressTime = 0.0;
+		double continuousReadyStartTime = 0.0;
+		uint64_t settleStartPresentSampleId = 0;
+		uint64_t lastObservedPresentSampleId = 0;
+		bool continuouslyReady = false;
 		FeatureCostStabilityState stability;
-		FeatureCostSample currentSample;
-		FeatureCostSample testSample;
-		FeatureCostSample restoredCurrentSample;
-		FeatureCostDelta delta;
+		PerformanceTuning::SampleWindow currentBefore;
+		PerformanceTuning::SampleWindow comparison;
+		PerformanceTuning::SampleWindow currentAfter;
+		PerformanceTuning::CostResult result;
+		std::string failureReason;
 	};
 
 	static std::unordered_map<std::string, FeatureCostMeasurementState> g_costMeasurementStates;
 	static bool g_profilerStateCaptured = false;
 	static bool g_profilerWasUserEnabled = false;
+	static bool g_profilerCaptureLimitOwned = false;
+	static Profiler::CaptureMode g_profilerPreviousCaptureLimit =
+		Profiler::CaptureMode::DetailedPasses;
 	static std::unordered_map<std::string, std::string> g_performanceDefaultsMessages;
+	static std::unordered_map<std::string, json> g_lastPerformanceUiStates;
+	static std::string g_selectedShortName;
+	static TuningHighlightState g_highlightState;
+	static ProfilingRenderer::PerformanceTimingSummary g_lastTimingSummary;
+
+	SceneFingerprint CaptureSceneFingerprint()
+	{
+		const auto* player = globals::game::player;
+		const auto* cell = player ? player->parentCell : nullptr;
+		const auto* sky = globals::game::sky;
+		return {
+			cell,
+			sky ? sky->currentWeather : nullptr,
+			sky ? sky->lastWeather : nullptr,
+			sky ? sky->currentWeatherPct : 0.0f,
+			cell && cell->IsInteriorCell()
+		};
+	}
 
 	void CaptureProfilerStateForPerformanceTuning()
 	{
@@ -201,405 +206,188 @@ namespace
 		g_profilerWasUserEnabled = false;
 	}
 
-	int GetDirectionFromFrameTimeDelta(float deltaMs)
-	{
-		if (std::abs(deltaMs) <= kTuningDeltaThresholdMs)
-			return 0;
-
-		return deltaMs > 0.0f ? 1 : -1;
-	}
-
-	float CalculateFeatureCostDeltaMs(float currentMs, float inactiveMs)
-	{
-		// Positive values are added cost; negative values are savings against the inactive state.
-		return currentMs - inactiveMs;
-	}
-
-	int GetDirectionFromFeatureCostFrameTimeDelta(float deltaMs)
-	{
-		if (std::abs(deltaMs) <= kFeatureCostDisplayEpsilonMs)
-			return 0;
-
-		return deltaMs > 0.0f ? 1 : -1;
-	}
-
-	int GetDirectionFromFeatureCostFpsDelta(float deltaFps)
-	{
-		if (std::abs(deltaFps) <= kFeatureCostDisplayEpsilonMs)
-			return 0;
-
-		return deltaFps > 0.0f ? -1 : 1;
-	}
-
 	bool IsFeatureCostMeasurementRunning(const FeatureCostMeasurementState& state)
 	{
-		return state.phase == FeatureCostMeasurementPhase::SettlingCurrent ||
-		       state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
-		       state.phase == FeatureCostMeasurementPhase::SettlingTest ||
-		       state.phase == FeatureCostMeasurementPhase::MeasuringTest ||
-		       state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent ||
-		       state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent;
-	}
-
-	bool IsFeatureCostMeasurementSettling(const FeatureCostMeasurementState& state)
-	{
-		return state.phase == FeatureCostMeasurementPhase::SettlingCurrent ||
-		       state.phase == FeatureCostMeasurementPhase::SettlingTest ||
-		       state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent;
-	}
-
-	bool IsFeatureCostMeasurementActive(const FeatureCostMeasurementState& state)
-	{
-		return IsFeatureCostMeasurementRunning(state);
+		return state.stage == FeatureCostMeasurementStage::Settling ||
+		       state.stage == FeatureCostMeasurementStage::Measuring ||
+		       state.stage == FeatureCostMeasurementStage::Draining;
 	}
 
 	bool IsAnyFeatureCostMeasurementRunning()
 	{
 		for (const auto& [_, state] : g_costMeasurementStates) {
-			if (IsFeatureCostMeasurementActive(state))
+			if (IsFeatureCostMeasurementRunning(state))
 				return true;
 		}
-
 		return false;
 	}
 
-	float AverageOrZero(double sum, double weight)
+	bool IsFeatureCostMeasurementLocked(
+		const FeatureCostMeasurementState& state)
 	{
-		return weight > 0.0 ? static_cast<float>(sum / weight) : 0.0f;
+		return IsFeatureCostMeasurementRunning(state) || state.restorePending;
 	}
 
-	float AverageFeatureCostCurrentWindows(double firstSum, double firstWeight, double secondSum, double secondWeight)
+	bool IsAnyFeatureCostMeasurementLocked()
 	{
-		if (firstWeight <= 0.0 || secondWeight <= 0.0)
-			return 0.0f;
-
-		// Both windows cover the same three-second duration. Average their means
-		// equally so a faster window cannot dominate merely by containing more frames.
-		return (AverageOrZero(firstSum, firstWeight) + AverageOrZero(secondSum, secondWeight)) * 0.5f;
+		for (const auto& [_, state] : g_costMeasurementStates) {
+			if (IsFeatureCostMeasurementLocked(state))
+				return true;
+		}
+		return false;
 	}
 
-	bool IsPositiveFiniteTiming(float value)
+	void SyncProfilerCaptureModeLimit()
 	{
-		return std::isfinite(value) && value > 0.0f;
-	}
-
-	void AddFeatureCostStabilityMoment(
-		FeatureCostStabilityMoments& moments,
-		float value,
-		double sampleWeight)
-	{
-		if (!IsPositiveFiniteTiming(value) || sampleWeight <= 0.0)
+		if (!globals::profiler)
 			return;
 
-		const double timing = static_cast<double>(value);
-		moments.sum += timing * sampleWeight;
-		moments.squaredSum += timing * timing * sampleWeight;
-		moments.sampleWeight += sampleWeight;
-	}
-
-	double GetFeatureCostStabilityMean(const FeatureCostStabilityMoments& moments)
-	{
-		return moments.sampleWeight > 0.0 ? moments.sum / moments.sampleWeight : 0.0;
-	}
-
-	double GetFeatureCostStabilityDeviation(const FeatureCostStabilityMoments& moments)
-	{
-		if (moments.sampleWeight <= 0.0)
-			return 0.0;
-
-		const double mean = GetFeatureCostStabilityMean(moments);
-		const double variance = std::max(0.0, moments.squaredSum / moments.sampleWeight - mean * mean);
-		return std::sqrt(variance);
-	}
-
-	bool AreFeatureCostStabilityMomentsEquivalent(
-		const FeatureCostStabilityMoments& previous,
-		const FeatureCostStabilityMoments& current)
-	{
-		const double previousMean = GetFeatureCostStabilityMean(previous);
-		const double currentMean = GetFeatureCostStabilityMean(current);
-		const double meanTolerance = std::max(
-			kFeatureCostStabilityMeanAbsoluteToleranceMs,
-			std::max(previousMean, currentMean) * kFeatureCostStabilityMeanRelativeTolerance);
-		if (std::abs(previousMean - currentMean) > meanTolerance)
-			return false;
-
-		const double previousDeviation = GetFeatureCostStabilityDeviation(previous);
-		const double currentDeviation = GetFeatureCostStabilityDeviation(current);
-		const double deviationTolerance = std::max(
-			kFeatureCostStabilityDeviationAbsoluteToleranceMs,
-			std::max(previousDeviation, currentDeviation) * kFeatureCostStabilityDeviationRelativeTolerance);
-		return std::abs(previousDeviation - currentDeviation) <= deviationTolerance;
-	}
-
-	bool HasCompleteFeatureCostStabilityMetric(
-		const FeatureCostStabilityWindow& window,
-		const FeatureCostStabilityMoments& moments)
-	{
-		constexpr double kSampleWeightEpsilon = 1.0e-6;
-		return window.frame.sampleWeight > 0.0 &&
-		       moments.sampleWeight + kSampleWeightEpsilon >= window.frame.sampleWeight;
-	}
-
-	bool AreFeatureCostStabilityWindowsEquivalent(
-		const FeatureCostStabilityWindow& previous,
-		const FeatureCostStabilityWindow& current)
-	{
-		if (previous.frame.sampleWeight < kFeatureCostStabilityMinSampleWeight ||
-			current.frame.sampleWeight < kFeatureCostStabilityMinSampleWeight ||
-			!AreFeatureCostStabilityMomentsEquivalent(previous.frame, current.frame)) {
-			return false;
-		}
-
-		auto optionalMetricIsStable = [&](auto member) {
-			const auto& previousMetric = previous.*member;
-			const auto& currentMetric = current.*member;
-			const bool previousComplete = HasCompleteFeatureCostStabilityMetric(previous, previousMetric);
-			const bool currentComplete = HasCompleteFeatureCostStabilityMetric(current, currentMetric);
-			if (previousComplete != currentComplete)
-				return false;
-			return !previousComplete || AreFeatureCostStabilityMomentsEquivalent(previousMetric, currentMetric);
-		};
-
-		return optionalMetricIsStable(&FeatureCostStabilityWindow::profilerGpu) &&
-		       optionalMetricIsStable(&FeatureCostStabilityWindow::profilerCpu);
-	}
-
-	bool CompleteFeatureCostStabilityWindow(FeatureCostStabilityState& stability)
-	{
-		if (!stability.hasPreviousWindow) {
-			stability.previousWindow = stability.currentWindow;
-			stability.currentWindow = {};
-			stability.hasPreviousWindow = true;
-			return false;
-		}
-
-		if (AreFeatureCostStabilityWindowsEquivalent(stability.previousWindow, stability.currentWindow)) {
-			stability.consecutiveStableComparisons++;
-		} else {
-			stability.consecutiveStableComparisons = 0;
-			stability.previousWindow = stability.currentWindow;
-		}
-
-		stability.currentWindow = {};
-		return stability.consecutiveStableComparisons >= kFeatureCostStableComparisonCount;
-	}
-
-	FeatureCostStabilityResult UpdateFeatureCostStability(
-		FeatureCostStabilityState& stability,
-		const ProfilingRenderer::PerformanceTimingSummary& summary,
-		double currentTime)
-	{
-		if (!stability.monitoringStarted) {
-			stability.monitoringStarted = true;
-			stability.monitoringStartTime = currentTime;
-			stability.lastSampleId = summary.sampleId;
-			return FeatureCostStabilityResult::Pending;
-		}
-
-		if (currentTime - stability.monitoringStartTime >= kFeatureCostStabilityTimeoutSeconds)
-			return FeatureCostStabilityResult::TimedOut;
-
-		if (!summary.valid || summary.sampleId == 0 || summary.sampleId == stability.lastSampleId)
-			return FeatureCostStabilityResult::Pending;
-		if (summary.sampleId < stability.lastSampleId) {
-			stability = {};
-			stability.monitoringStarted = true;
-			stability.monitoringStartTime = currentTime;
-			stability.lastSampleId = summary.sampleId;
-			return FeatureCostStabilityResult::Pending;
-		}
-		stability.lastSampleId = summary.sampleId;
-
-		if (!summary.hasFrameSample || !IsPositiveFiniteTiming(summary.frameSampleMs))
-			return FeatureCostStabilityResult::Pending;
-
-		const double frameMs = static_cast<double>(summary.frameSampleMs);
-		double remainingSampleWeight = 1.0;
-		while (remainingSampleWeight > 1.0e-9) {
-			auto& window = stability.currentWindow;
-			const double remainingWindowMs = kFeatureCostStabilityWindowMilliseconds - window.sampledDurationMs;
-			const double sampleWeight = std::min(remainingSampleWeight, remainingWindowMs / frameMs);
-			if (sampleWeight <= 0.0)
-				break;
-
-			window.sampledDurationMs = std::min(
-				kFeatureCostStabilityWindowMilliseconds,
-				window.sampledDurationMs + frameMs * sampleWeight);
-			AddFeatureCostStabilityMoment(window.frame, summary.frameSampleMs, sampleWeight);
-			if (summary.hasProfilerGpuSample)
-				AddFeatureCostStabilityMoment(window.profilerGpu, summary.profilerGpuSampleMs, sampleWeight);
-			if (summary.hasProfilerCpuSample)
-				AddFeatureCostStabilityMoment(window.profilerCpu, summary.profilerCpuSampleMs, sampleWeight);
-			remainingSampleWeight -= sampleWeight;
-
-			if (window.sampledDurationMs >= kFeatureCostStabilityWindowMilliseconds &&
-				CompleteFeatureCostStabilityWindow(stability)) {
-				return FeatureCostStabilityResult::Stable;
+		if (IsAnyFeatureCostMeasurementRunning()) {
+			if (!g_profilerCaptureLimitOwned) {
+				g_profilerPreviousCaptureLimit =
+					globals::profiler->GetCaptureModeLimit();
+				g_profilerCaptureLimitOwned = true;
 			}
+			const auto tuningLimit =
+				static_cast<uint8_t>(g_profilerPreviousCaptureLimit) <
+						static_cast<uint8_t>(Profiler::CaptureMode::WholeFrameOnly) ?
+					g_profilerPreviousCaptureLimit :
+					Profiler::CaptureMode::WholeFrameOnly;
+			globals::profiler->SetCaptureModeLimit(tuningLimit);
+		} else if (g_profilerCaptureLimitOwned) {
+			globals::profiler->SetCaptureModeLimit(
+				g_profilerPreviousCaptureLimit);
+			g_profilerCaptureLimitOwned = false;
+			g_profilerPreviousCaptureLimit =
+				Profiler::CaptureMode::DetailedPasses;
 		}
-
-		return FeatureCostStabilityResult::Pending;
 	}
 
-	bool IsFeatureCostSampleFramePaced(const FeatureCostSample& sample)
+	PerformanceTuning::SampleWindow& GetFeatureCostSampleWindow(FeatureCostMeasurementState& state)
 	{
-		return sample.framePacingEligibleSampleWeight > 0.0 &&
-		       sample.framePacedSampleWeight * 2.0 >= sample.framePacingEligibleSampleWeight;
-	}
-
-	bool HasCompleteFeatureCostMetricCoverage(const FeatureCostSample& sample, double metricSampleWeight)
-	{
-		constexpr double kSampleWeightEpsilon = 1.0e-6;
-		return sample.frameSampleWeight > 0.0 &&
-		       metricSampleWeight + kSampleWeightEpsilon >= sample.frameSampleWeight;
-	}
-
-	bool TryGetDisplayTimingMs(bool hasProfilerTiming, float profilerTimingMs, float& value)
-	{
-		if (hasProfilerTiming && IsPositiveFiniteTiming(profilerTimingMs)) {
-			value = profilerTimingMs;
-			return true;
+		switch (state.leg) {
+		case FeatureCostMeasurementLeg::CurrentBefore:
+			return state.currentBefore;
+		case FeatureCostMeasurementLeg::Comparison:
+			return state.comparison;
+		case FeatureCostMeasurementLeg::CurrentAfter:
+		default:
+			return state.currentAfter;
 		}
-		return false;
 	}
 
-	bool TryGetDisplayGpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
+	const PerformanceTuning::SampleWindow& GetFeatureCostSampleWindow(
+		const FeatureCostMeasurementState& state)
 	{
-		return TryGetDisplayTimingMs(summary.hasProfilerGpu, summary.profilerGpuMs, value);
-	}
-
-	bool TryGetDisplayCpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
-	{
-		return TryGetDisplayTimingMs(summary.hasProfilerCpu, summary.profilerCpuMs, value);
-	}
-
-	ProfilingRenderer::PerformanceTimingTotals GetTimingTotalsForFeature(
-		const ProfilingRenderer::PerformanceTimingSummary& summary,
-		const std::string& shortName);
-	std::vector<std::string> BuildProfilingPrefixesForFeature(const std::string& shortName);
-
-	json MakeJsonMask(std::initializer_list<std::string_view> keys)
-	{
-		json mask = json::object();
-		for (const auto key : keys) {
-			mask[std::string(key)] = true;
+		switch (state.leg) {
+		case FeatureCostMeasurementLeg::CurrentBefore:
+			return state.currentBefore;
+		case FeatureCostMeasurementLeg::Comparison:
+			return state.comparison;
+		case FeatureCostMeasurementLeg::CurrentAfter:
+		default:
+			return state.currentAfter;
 		}
-		return mask;
+	}
+
+	const char* GetFeatureCostLegStatusLabel(const FeatureCostMeasurementState& state)
+	{
+		switch (state.leg) {
+		case FeatureCostMeasurementLeg::CurrentBefore:
+			return T(TKEY("status.current_before"), "current (1/2)");
+		case FeatureCostMeasurementLeg::Comparison:
+			return T(TKEY("status.comparison"), "comparison");
+		case FeatureCostMeasurementLeg::CurrentAfter:
+		default:
+			return T(TKEY("status.current_after"), "restored current (2/2)");
+		}
 	}
 
 	Feature* FindFeatureByShortName(std::string_view shortName)
 	{
 		for (auto* feature : Feature::GetFeatureList()) {
-			if (!feature)
-				continue;
-
-			const auto featureShortName = feature->GetShortName();
-			if (std::string_view(featureShortName) == shortName)
+			if (feature && std::string_view(feature->GetShortName()) == shortName)
 				return feature;
 		}
-
 		return nullptr;
 	}
 
-	json GetPerformanceUserSettingsMask(Feature* feature, const json& currentSettings)
+	bool IsFeatureControlledBySceneSettings(Feature* feature)
+	{
+		if (!feature)
+			return false;
+
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto shortName = feature->GetShortName();
+		return manager &&
+		       manager->HasActiveSettingsForFeature(shortName) &&
+		       !manager->IsFeaturePaused(shortName);
+	}
+
+	json CapturePerformanceUiState(Feature* feature)
 	{
 		if (!feature)
 			return json::object();
 
-		const auto shortName = feature->GetShortName();
-		if (shortName == "ScreenSpaceShadows") {
-			return MakeJsonMask({ "Enable",
-				"SampleCount" });
-		}
-		if (shortName == "ScreenSpaceGI") {
-			return MakeJsonMask({ "Enabled",
-				"EnableGI",
-				"EnableExperimentalSpecularGI",
-				"ResolutionMode",
-				"NumSlices",
-				"NumSteps",
-				"EnableTemporalDenoiser",
-				"EnableBlur" });
-		}
-		if (shortName == "TerrainBlending") {
-			return MakeJsonMask({ "Enabled", "TerrainCullDistance" });
-		}
-		if (shortName == "SubsurfaceScattering") {
-			return MakeJsonMask({ "EnableSubsurfaceScattering", "SSMode", "BurleySamples" });
-		}
-		if (shortName == "VolumetricLighting") {
-			return MakeJsonMask({ "ExteriorEnabled",
-				"ExteriorQuality",
-				"ExteriorCustomSize",
-				"InteriorEnabled",
-				"InteriorQuality",
-				"InteriorCustomSize",
-				"DisableWeatherInteractionDuringRain" });
-		}
-		if (shortName == "WetnessEffects") {
-			return MakeJsonMask({ "EnableWetnessEffects",
-				"EnableRaindropFx",
-				"RaindropFxRange",
-				"EnableSplashes",
-				"EnableRipples",
-				"EnableVanillaRipples" });
-		}
-		if (shortName == "GrassLighting") {
-			return MakeJsonMask({ "Enabled", "ComplexGrassThreshold" });
-		}
-
-		const json mask = feature->CapturePerformanceSettingsState();
-		if (!mask.is_object() && currentSettings.is_object())
-			return currentSettings;
-
-		return mask;
+		return {
+			{ "Feature", feature->CapturePerformanceSettingsState() },
+			{ "Auxiliary", feature->CapturePerformanceTuningAuxiliaryState() }
+		};
 	}
 
-	bool ReadUserSettingsJson(json& settings)
+	bool ReadSettingsJson(
+		const std::filesystem::path& path,
+		json& settings,
+		bool allowMissing,
+		std::string_view description)
 	{
 		settings = json::object();
+		std::error_code fileError;
+		const bool exists =
+			std::filesystem::exists(path, fileError);
+		if (fileError) {
+			logger::warn(
+				"Failed to inspect {} at {}: {}",
+				description,
+				path.string(),
+				fileError.message());
+			return false;
+		}
+		if (!exists)
+			return allowMissing;
 
-		const auto path = Util::PathHelpers::GetSettingsUserPath();
 		std::ifstream input(path);
-		if (!input.is_open())
-			return true;
+		if (!input.is_open()) {
+			logger::warn(
+				"Failed to open {} at {}",
+				description,
+				path.string());
+			return false;
+		}
 
 		try {
 			input >> settings;
 			if (!settings.is_object())
-				settings = json::object();
+				throw std::runtime_error("root value is not an object");
 			return true;
 		} catch (const std::exception& e) {
-			logger::warn("Failed to read performance tuning user defaults from {}: {}", path.string(), e.what());
+			logger::warn(
+				"Failed to read {} from {}: {}",
+				description,
+				path.string(),
+				e.what());
 			settings = json::object();
 			return false;
 		}
 	}
 
-	bool WriteUserSettingsJson(const json& settings)
+	bool ReadUserSettingsJson(json& settings)
 	{
-		const auto path = Util::PathHelpers::GetSettingsUserPath();
-		try {
-			std::filesystem::create_directories(path.parent_path());
-		} catch (const std::exception& e) {
-			logger::warn("Failed to create settings directory for {}: {}", path.string(), e.what());
-			return false;
-		}
-
-		std::ofstream output(path);
-		if (!output.is_open()) {
-			logger::warn("Failed to open {} for performance tuning user defaults", path.string());
-			return false;
-		}
-
-		try {
-			output << settings.dump(1);
-			return true;
-		} catch (const std::exception& e) {
-			logger::warn("Failed to write performance tuning user defaults to {}: {}", path.string(), e.what());
-			return false;
-		}
+		return ReadSettingsJson(
+			Util::PathHelpers::GetSettingsUserPath(),
+			settings,
+			true,
+			"Performance Tuning user defaults");
 	}
 
 	bool MergeJsonByMask(json& target, const json& source, const json& mask)
@@ -616,7 +404,7 @@ namespace
 					continue;
 				if (maskValue.is_object()) {
 					changed |= MergeJsonByMask(target[key], source[key], maskValue);
-				} else if (target[key] != source[key]) {
+				} else if (!target.contains(key) || target[key] != source[key]) {
 					target[key] = source[key];
 					changed = true;
 				}
@@ -626,233 +414,471 @@ namespace
 
 		if (target == source)
 			return false;
-
 		target = source;
 		return true;
 	}
 
-	bool SaveFeatureSettingsToUserDefaults(Feature* feature, json& userSettings, const json& mask)
+	bool HasJsonValuesForMask(const json& source, const json& mask)
 	{
-		if (!feature || !mask.is_object())
+		if (!mask.is_object())
 			return true;
+		if (!source.is_object())
+			return false;
 
-		json currentSettings;
-		feature->SaveSettings(currentSettings);
-		json& savedFeatureSettings = userSettings[feature->GetName()];
-		MergeJsonByMask(savedFeatureSettings, currentSettings, mask);
+		for (const auto& [key, maskValue] : mask.items()) {
+			if (!source.contains(key))
+				continue;
+			if (!maskValue.is_object() ||
+				!source[key].is_object() ||
+				HasJsonValuesForMask(source[key], maskValue)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool HasAllJsonValuesForMask(const json& source, const json& mask)
+	{
+		if (!mask.is_object())
+			return true;
+		if (!source.is_object())
+			return false;
+
+		for (const auto& [key, maskValue] : mask.items()) {
+			const auto sourceIt = source.find(key);
+			if (sourceIt == source.end())
+				return false;
+			if (maskValue.is_object() &&
+				!HasAllJsonValuesForMask(*sourceIt, maskValue)) {
+				return false;
+			}
+		}
 		return true;
 	}
 
-	bool SaveCrossFeaturePerformanceDefaults(Feature* feature, json& userSettings)
+	bool HasPerformanceDefaultsOverride(Feature* feature)
 	{
 		if (!feature)
 			return false;
 
-		if (feature->GetShortName() == "LightLimitFix" && globals::state) {
-			const float refractionScale = std::isfinite(globals::state->refractionScale) ?
-			                                  std::clamp(globals::state->refractionScale, 0.0f, 2.0f) :
-			                                  1.0f;
-			userSettings["Advanced"]["Refraction Scale"] = refractionScale;
+		auto* manager =
+			SettingsOverrideManager::GetSingleton();
+		if (!manager || !manager->IsEnabled())
+			return false;
+		const auto& overrides = manager->GetOverrides();
+		// State applies Global.user whenever any valid override was discovered,
+		// so its affected paths cannot safely be inferred through this API.
+		if (!overrides.empty() && manager->HasUserOverride("Global"))
+			return true;
+
+		try {
+			const std::string shortName = feature->GetShortName();
+			const json performanceMask =
+				feature->GetPerformanceTuningUserSettingsMask();
+			// Feature .user files are applied as a separate high-priority layer and
+			// this API does not expose their parsed paths. Treat their presence
+			// conservatively, while filtering ordinary overrides precisely.
+			if (manager->HasUserOverride(shortName))
+				return true;
+			for (const auto* overrideInfo :
+				manager->GetFeatureOverrides(shortName)) {
+				if (overrideInfo &&
+					overrideInfo->enabled &&
+					HasJsonValuesForMask(
+						overrideInfo->overrideData,
+						performanceMask)) {
+					return true;
+				}
+			}
+
+			json featureMask = json::object();
+			featureMask[feature->GetName()] =
+				performanceMask;
+			const json auxiliaryMask =
+				feature->CapturePerformanceTuningAuxiliaryState();
+
+			for (const auto& overrideInfo : overrides) {
+				if (!overrideInfo.isGlobal || !overrideInfo.enabled)
+					continue;
+				if (HasJsonValuesForMask(
+						overrideInfo.overrideData,
+						featureMask) ||
+					HasJsonValuesForMask(
+						overrideInfo.overrideData,
+						auxiliaryMask)) {
+					return true;
+				}
+			}
+		} catch (...) {
+			// A defaults action must not bypass an override merely because its
+			// affected-path mask could not be captured.
+			return true;
+		}
+
+		return false;
+	}
+
+	bool MaterializeAuxiliarySettings(
+		json& materializedSettings,
+		const json& userSettings,
+		const json& defaultSettings,
+		const json& auxiliaryMask)
+	{
+		materializedSettings = json::object();
+		if (!auxiliaryMask.is_object())
+			return false;
+		if (auxiliaryMask.empty())
+			return true;
+
+		for (const auto& [key, maskValue] : auxiliaryMask.items()) {
+			const auto defaultIt = defaultSettings.find(key);
+			if (defaultIt == defaultSettings.end() ||
+				defaultIt->is_object() != maskValue.is_object()) {
+				return false;
+			}
+
+			json completeNode = *defaultIt;
+			if (const auto userIt = userSettings.find(key);
+				userIt != userSettings.end()) {
+				if (userIt->is_object() != maskValue.is_object())
+					return false;
+				if (userIt->is_object()) {
+					MergeJsonByMask(
+						completeNode,
+						*userIt,
+						*userIt);
+				} else {
+					completeNode = *userIt;
+				}
+			}
+			if (!HasAllJsonValuesForMask(completeNode, maskValue))
+				return false;
+			materializedSettings[key] = std::move(completeNode);
+		}
+		return true;
+	}
+
+	bool MergeAuxiliarySettingsIntoUserSettings(
+		json& userSettings,
+		const json& defaultSettings,
+		const json& auxiliaryState)
+	{
+		json materializedSettings;
+		if (!MaterializeAuxiliarySettings(
+				materializedSettings,
+				userSettings,
+				defaultSettings,
+				auxiliaryState)) {
+			return false;
+		}
+
+		for (const auto& [key, auxiliaryValue] : auxiliaryState.items()) {
+			auto& completeNode = materializedSettings[key];
+			MergeJsonByMask(
+				completeNode,
+				auxiliaryValue,
+				auxiliaryValue);
+			userSettings[key] = std::move(completeNode);
 		}
 		return true;
 	}
 
 	bool SavePerformanceSettingsToUserDefaults(Feature* feature)
 	{
-		if (!feature)
+		if (!feature ||
+			HasPerformanceDefaultsOverride(feature)) {
 			return false;
+		}
 
 		json userSettings;
 		if (!ReadUserSettingsJson(userSettings))
 			return false;
-
-		json currentSettings;
-		feature->SaveSettings(currentSettings);
-		const json mask = GetPerformanceUserSettingsMask(feature, currentSettings);
-		if (!SaveFeatureSettingsToUserDefaults(feature, userSettings, mask))
+		json defaultSettings;
+		if (!ReadSettingsJson(
+				Util::PathHelpers::GetSettingsDefaultPath(),
+				defaultSettings,
+				false,
+				"base settings needed for Performance Tuning defaults")) {
 			return false;
-		if (!SaveCrossFeaturePerformanceDefaults(feature, userSettings))
-			return false;
+		}
 
-		if (!WriteUserSettingsJson(userSettings))
-			return false;
+		try {
+			const json currentSettings =
+				feature->CapturePerformanceSettingsState();
+			const json mask = feature->GetPerformanceTuningUserSettingsMask();
+			if (!currentSettings.is_object() ||
+				!mask.is_object() ||
+				mask.empty() ||
+				!HasAllJsonValuesForMask(currentSettings, mask)) {
+				throw std::runtime_error(
+					"feature performance settings or mask are incomplete");
+			}
 
-		logger::info("Saved Performance Tuning user defaults for {}", feature->GetDisplayName());
+			const std::string featureName = feature->GetName();
+			const auto defaultIt = defaultSettings.find(featureName);
+			if (defaultIt == defaultSettings.end() ||
+				!defaultIt->is_object()) {
+				throw std::runtime_error(
+					"base feature settings are missing or malformed");
+			}
+
+			json completeSettings = *defaultIt;
+			const auto existingIt = userSettings.find(featureName);
+			if (existingIt != userSettings.end()) {
+				if (!existingIt->is_object()) {
+					throw std::runtime_error(
+						"existing user feature settings are not an object");
+				}
+				MergeJsonByMask(
+					completeSettings,
+					*existingIt,
+					*existingIt);
+			}
+			MergeJsonByMask(
+				completeSettings,
+				currentSettings,
+				mask);
+			userSettings[featureName] =
+				std::move(completeSettings);
+
+			const json auxiliaryState = feature->CapturePerformanceTuningAuxiliaryState();
+			if (!MergeAuxiliarySettingsIntoUserSettings(
+					userSettings,
+					defaultSettings,
+					auxiliaryState)) {
+				throw std::runtime_error(
+					"could not preserve the complete auxiliary settings container");
+			}
+		} catch (const std::exception& e) {
+			logger::warn(
+				"Failed to capture Performance Tuning defaults for {}: {}",
+				feature->GetDisplayName(),
+				e.what());
+			return false;
+		} catch (...) {
+			logger::warn(
+				"Failed to capture Performance Tuning defaults for {}",
+				feature->GetDisplayName());
+			return false;
+		}
+
+		const auto path = Util::PathHelpers::GetSettingsUserPath();
+		const auto writeResult = Util::FileHelpers::WriteJsonFileAtomic(path, userSettings, 1);
+		if (!writeResult) {
+			logger::warn(
+				"Failed to atomically update Performance Tuning defaults at {}: {}",
+				path.string(),
+				writeResult.errorMessage);
+			return false;
+		}
+
+		logger::info(
+			"Saved Performance Tuning user defaults for {}",
+			feature->GetDisplayName());
 		return true;
 	}
 
-	void RestoreFeatureSettingsFromUserDefaults(
-		Feature* feature,
-		const json& userSettings,
-		const json& mask,
-		bool& anyFound,
-		bool& anyChanged,
-		bool& anyFailed)
+	PerformanceUserDefaultsRestoreResult RestorePerformanceSettingsFromUserDefaults(
+		Feature* feature)
 	{
-		if (!feature || !mask.is_object())
-			return;
-
-		const auto featureName = feature->GetName();
-		if (!userSettings.contains(featureName) || !userSettings[featureName].is_object())
-			return;
-
-		anyFound = true;
-
-		json currentSettings;
-		feature->SaveSettings(currentSettings);
-		const json beforeSettings = currentSettings;
-		if (!MergeJsonByMask(currentSettings, userSettings[featureName], mask) || currentSettings == beforeSettings)
-			return;
-
-		try {
-			feature->LoadSettings(currentSettings);
-			feature->ApplyPerformanceSettings();
-			anyChanged = true;
-		} catch (const std::exception& e) {
-			logger::warn("Failed to restore Performance Tuning user defaults for {}: {}", feature->GetDisplayName(), e.what());
-			anyFailed = true;
-		} catch (...) {
-			logger::warn("Failed to restore Performance Tuning user defaults for {}", feature->GetDisplayName());
-			anyFailed = true;
-		}
-	}
-
-	void RestoreCrossFeaturePerformanceDefaults(
-		Feature* feature,
-		const json& userSettings,
-		bool& anyFound,
-		bool& anyChanged,
-		bool& anyFailed)
-	{
-		if (!feature || feature->GetShortName() != "LightLimitFix" || !globals::state)
-			return;
-
-		const auto advancedIt = userSettings.find("Advanced");
-		if (advancedIt == userSettings.end() || !advancedIt->is_object())
-			return;
-
-		const auto refractionIt = advancedIt->find("Refraction Scale");
-		if (refractionIt == advancedIt->end())
-			return;
-
-		anyFound = true;
-		if (!refractionIt->is_number()) {
-			anyFailed = true;
-			return;
-		}
-
-		try {
-			const float savedScale = refractionIt->get<float>();
-			if (!std::isfinite(savedScale)) {
-				anyFailed = true;
-				return;
-			}
-			const float restoredScale = std::clamp(savedScale, 0.0f, 2.0f);
-			if (globals::state->refractionScale != restoredScale) {
-				globals::state->refractionScale = restoredScale;
-				anyChanged = true;
-			}
-		} catch (const std::exception& e) {
-			logger::warn("Failed to restore Performance Tuning heat-warp default: {}", e.what());
-			anyFailed = true;
-		}
-	}
-
-	json CapturePerformanceUiState(Feature* feature)
-	{
-		if (!feature)
-			return json::object();
-
-		json state = feature->CapturePerformanceSettingsState();
-		if (!state.is_object())
-			state = json{ { "FeatureState", std::move(state) } };
-
-		if (feature->GetShortName() == "LightLimitFix" && globals::state) {
-			state["PerformanceTuningGlobals"]["Refraction Scale"] =
-				std::isfinite(globals::state->refractionScale) ? std::clamp(globals::state->refractionScale, 0.0f, 2.0f) : 1.0f;
-		}
-		return state;
-	}
-
-	PerformanceUserDefaultsRestoreResult RestorePerformanceSettingsFromUserDefaults(Feature* feature)
-	{
-		if (!feature)
+		if (!feature ||
+			HasPerformanceDefaultsOverride(feature)) {
 			return PerformanceUserDefaultsRestoreResult::Failed;
+		}
 
 		json userSettings;
 		if (!ReadUserSettingsJson(userSettings))
 			return PerformanceUserDefaultsRestoreResult::Failed;
 
-		json currentSettings;
-		feature->SaveSettings(currentSettings);
-		const json mask = GetPerformanceUserSettingsMask(feature, currentSettings);
-		bool anyFound = false;
-		bool anyChanged = false;
-		bool anyFailed = false;
-		RestoreFeatureSettingsFromUserDefaults(feature, userSettings, mask, anyFound, anyChanged, anyFailed);
-		RestoreCrossFeaturePerformanceDefaults(feature, userSettings, anyFound, anyChanged, anyFailed);
+		json originalSettings;
+		json originalAuxiliary;
+		json targetSettings;
+		json targetAuxiliary;
+		json normalizedUserFeatureSettings;
+		bool featureSettingsFound = false;
+		bool auxiliarySettingsFound = false;
+		bool featureSettingsChanged = false;
 
-		if (anyFailed)
+		try {
+			originalSettings =
+				feature->CapturePerformanceSettingsState();
+			originalAuxiliary = feature->CapturePerformanceTuningAuxiliaryState();
+			const json mask = feature->GetPerformanceTuningUserSettingsMask();
+			if (!originalSettings.is_object() ||
+				!originalAuxiliary.is_object() ||
+				!mask.is_object() ||
+				mask.empty() ||
+				!HasAllJsonValuesForMask(originalSettings, mask)) {
+				throw std::runtime_error(
+					"feature performance settings or mask are incomplete");
+			}
+			const auto featureIt = userSettings.find(feature->GetName());
+			if (featureIt != userSettings.end() && !featureIt->is_object())
+				throw std::runtime_error("saved feature defaults are not an object");
+			if (featureIt != userSettings.end()) {
+				normalizedUserFeatureSettings = *featureIt;
+				if (!feature->NormalizePerformanceTuningUserSettings(
+						normalizedUserFeatureSettings)) {
+					throw std::runtime_error(
+						"saved feature defaults could not be migrated");
+				}
+			}
+			featureSettingsFound =
+				featureIt != userSettings.end() &&
+				HasJsonValuesForMask(normalizedUserFeatureSettings, mask);
+			auxiliarySettingsFound =
+				HasJsonValuesForMask(userSettings, originalAuxiliary);
+
+			if (!featureSettingsFound && !auxiliarySettingsFound)
+				return PerformanceUserDefaultsRestoreResult::Missing;
+
+			json defaultSettings;
+			if (!ReadSettingsJson(
+					Util::PathHelpers::GetSettingsDefaultPath(),
+					defaultSettings,
+					false,
+					"base settings needed for Performance Tuning defaults")) {
+				throw std::runtime_error("base settings could not be read");
+			}
+
+			const auto defaultFeatureIt = defaultSettings.find(feature->GetName());
+			if (defaultFeatureIt == defaultSettings.end() ||
+				!defaultFeatureIt->is_object()) {
+				throw std::runtime_error(
+					"base feature settings are missing or malformed");
+			}
+
+			json completeFeatureSettings = *defaultFeatureIt;
+			if (featureIt != userSettings.end()) {
+				MergeJsonByMask(
+					completeFeatureSettings,
+					normalizedUserFeatureSettings,
+					normalizedUserFeatureSettings);
+			}
+			if (!HasAllJsonValuesForMask(completeFeatureSettings, mask)) {
+				throw std::runtime_error(
+					"base and user feature defaults are incomplete");
+			}
+
+			targetSettings = originalSettings;
+			featureSettingsChanged = MergeJsonByMask(
+				targetSettings,
+				completeFeatureSettings,
+				mask);
+
+			json completeAuxiliarySettings;
+			if (!MaterializeAuxiliarySettings(
+					completeAuxiliarySettings,
+					userSettings,
+					defaultSettings,
+					originalAuxiliary)) {
+				throw std::runtime_error(
+					"base and user auxiliary defaults are incomplete or malformed");
+			}
+			targetAuxiliary = originalAuxiliary;
+			MergeJsonByMask(
+				targetAuxiliary,
+				completeAuxiliarySettings,
+				originalAuxiliary);
+		} catch (const std::exception& e) {
+			logger::warn(
+				"Failed to prepare Performance Tuning restore for {}: {}",
+				feature->GetDisplayName(),
+				e.what());
 			return PerformanceUserDefaultsRestoreResult::Failed;
-		if (!anyFound)
-			return PerformanceUserDefaultsRestoreResult::Missing;
-		if (!anyChanged)
-			return PerformanceUserDefaultsRestoreResult::Unchanged;
+		} catch (...) {
+			logger::warn(
+				"Failed to prepare Performance Tuning restore for {}",
+				feature->GetDisplayName());
+			return PerformanceUserDefaultsRestoreResult::Failed;
+		}
 
-		logger::info("Restored Performance Tuning user defaults for {}", feature->GetDisplayName());
+		auto rollback = [&]() {
+			bool restored = true;
+			try {
+				feature->LoadSettings(originalSettings);
+				feature->ApplyPerformanceSettings();
+			} catch (...) {
+				restored = false;
+			}
+			try {
+				if (!feature->RestorePerformanceTuningAuxiliaryState(originalAuxiliary))
+					restored = false;
+			} catch (...) {
+				restored = false;
+			}
+			try {
+				const json verifiedSettings =
+					feature->CapturePerformanceSettingsState();
+				if (!PerformanceTuning::AreJsonValuesEquivalent(
+						verifiedSettings,
+						originalSettings) ||
+					!PerformanceTuning::AreJsonValuesEquivalent(
+						feature->CapturePerformanceTuningAuxiliaryState(),
+						originalAuxiliary)) {
+					restored = false;
+				}
+			} catch (...) {
+				restored = false;
+			}
+			if (!restored) {
+				logger::error(
+					"Performance Tuning could not fully roll back {} after a defaults restore failure",
+					feature->GetDisplayName());
+			}
+		};
+
+		try {
+			if (featureSettingsChanged) {
+				feature->LoadSettings(targetSettings);
+				feature->ApplyPerformanceSettings();
+			}
+			if (!originalAuxiliary.empty() &&
+				!feature->RestorePerformanceTuningAuxiliaryState(targetAuxiliary)) {
+				throw std::runtime_error("feature rejected auxiliary user defaults");
+			}
+
+			const json restoredSettings =
+				feature->CapturePerformanceSettingsState();
+			const json restoredAuxiliary =
+				feature->CapturePerformanceTuningAuxiliaryState();
+			if (!PerformanceTuning::AreJsonValuesEquivalent(
+					restoredSettings,
+					targetSettings) ||
+				!PerformanceTuning::AreJsonValuesEquivalent(
+					restoredAuxiliary,
+					targetAuxiliary)) {
+				throw std::runtime_error(
+					"feature did not apply the requested user defaults exactly");
+			}
+			const bool changed =
+				!PerformanceTuning::AreJsonValuesEquivalent(
+					restoredSettings,
+					originalSettings) ||
+				!PerformanceTuning::AreJsonValuesEquivalent(
+					restoredAuxiliary,
+					originalAuxiliary);
+			if (!changed)
+				return PerformanceUserDefaultsRestoreResult::Unchanged;
+		} catch (const std::exception& e) {
+			logger::warn(
+				"Failed to restore Performance Tuning defaults for {}: {}",
+				feature->GetDisplayName(),
+				e.what());
+			rollback();
+			return PerformanceUserDefaultsRestoreResult::Failed;
+		} catch (...) {
+			logger::warn(
+				"Failed to restore Performance Tuning defaults for {}",
+				feature->GetDisplayName());
+			rollback();
+			return PerformanceUserDefaultsRestoreResult::Failed;
+		}
+
+		logger::info(
+			"Restored Performance Tuning user defaults for {}",
+			feature->GetDisplayName());
 		return PerformanceUserDefaultsRestoreResult::Restored;
-	}
-
-	bool AddFeatureCostSample(
-		FeatureCostSample& sample,
-		const ProfilingRenderer::PerformanceTimingSummary& summary)
-	{
-		if (!summary.valid)
-			return false;
-
-		if (summary.sampleId == 0 || summary.sampleId == sample.lastSampleId)
-			return false;
-		if (sample.lastSampleId != 0 && summary.sampleId < sample.lastSampleId)
-			sample = {};
-		sample.lastSampleId = summary.sampleId;
-
-		if (!summary.hasFrameSample || !IsPositiveFiniteTiming(summary.frameSampleMs))
-			return false;
-
-		const double remainingDurationMs = kFeatureCostMeasurementMilliseconds - sample.sampledDurationMs;
-		if (remainingDurationMs <= 0.0)
-			return true;
-
-		// Fractionally weight only the final boundary frame. This makes every phase
-		// represent exactly three seconds of raw present intervals rather than a
-		// UI-clock window rounded up by one frame.
-		const double frameMs = static_cast<double>(summary.frameSampleMs);
-		const double sampleWeight = std::min(1.0, remainingDurationMs / frameMs);
-		sample.sampledDurationMs = std::min(
-			kFeatureCostMeasurementMilliseconds,
-			sample.sampledDurationMs + frameMs * sampleWeight);
-		sample.frameMsSum += frameMs * sampleWeight;
-		sample.frameSampleWeight += sampleWeight;
-		if (summary.framePresentSynced)
-			sample.presentSyncedSamples++;
-
-		if (summary.hasProfilerGpuSample && summary.profilerGpuSampleMs > 0.0f &&
-			summary.hasProfilerCpuSample && summary.profilerCpuSampleMs > 0.0f) {
-			const float sceneWorkMs = std::max(summary.profilerGpuSampleMs, summary.profilerCpuSampleMs);
-			sample.framePacingEligibleSampleWeight += sampleWeight;
-			if (summary.frameSampleMs > sceneWorkMs + kFramePacingDetectionEpsilonMs)
-				sample.framePacedSampleWeight += sampleWeight;
-		}
-		if (summary.hasProfilerGpuSample && summary.profilerGpuSampleMs > 0.0f) {
-			sample.profilerGpuMsSum += static_cast<double>(summary.profilerGpuSampleMs) * sampleWeight;
-			sample.profilerGpuSampleWeight += sampleWeight;
-		}
-		if (summary.hasProfilerCpuSample && summary.profilerCpuSampleMs > 0.0f) {
-			sample.profilerCpuMsSum += static_cast<double>(summary.profilerCpuSampleMs) * sampleWeight;
-			sample.profilerCpuSampleWeight += sampleWeight;
-		}
-
-		return sample.sampledDurationMs >= kFeatureCostMeasurementMilliseconds;
 	}
 
 	bool RenderUserDefaultsIconButton(
@@ -865,7 +891,6 @@ namespace
 			auto iconButtonStyle = Util::TransparentIconButtonStyle();
 			return Util::ImageButtonWithFlash(id, texture, imageSize);
 		}
-
 		return Util::ButtonWithFlash(fallbackLabel);
 	}
 
@@ -882,47 +907,68 @@ namespace
 		const ImVec2 imageSize(iconSize, iconSize);
 		const std::string applyId = "##ApplyPerformanceDefaults" + featureKey;
 		const std::string restoreId = "##RestorePerformanceDefaults" + featureKey;
+		const bool overrideManaged =
+			HasPerformanceDefaultsOverride(feature);
+		if (overrideManaged) {
+			message = T(
+				TKEY("defaults.override_managed"),
+				"Defaults are managed by an installed settings override.");
+		}
 
 		ImGui::Spacing();
-		ImGui::BeginDisabled(disabled);
+		ImGui::BeginDisabled(disabled || overrideManaged);
 		if (RenderUserDefaultsIconButton(
 				applyId.c_str(),
-				"Apply settings to user defaults",
+				T(TKEY("defaults.save"), "Apply settings to user defaults"),
 				icons.saveSettings.texture,
 				imageSize)) {
 			message = SavePerformanceSettingsToUserDefaults(feature) ?
-			              "Performance user defaults updated." :
-			              "Failed to update performance user defaults.";
+			              T(TKEY("defaults.saved"), "Performance user defaults updated.") :
+			              T(TKEY("defaults.save_failed"), "Failed to update performance user defaults.");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Apply the current Performance Tuning controls for this feature to user defaults.");
+			ImGui::TextUnformatted(
+				overrideManaged ?
+					T(
+						TKEY("defaults.override_tooltip"),
+						"User-default actions are unavailable because this feature uses the higher-priority settings override system.") :
+					T(
+						TKEY("defaults.save_tooltip"),
+						"Apply the current Performance Tuning controls for this feature to user defaults."));
 		}
 
 		ImGui::SameLine();
 		if (RenderUserDefaultsIconButton(
 				restoreId.c_str(),
-				"Reset to user defaults",
+				T(TKEY("defaults.restore"), "Reset to user defaults"),
 				icons.loadSettings.texture,
 				imageSize)) {
 			switch (RestorePerformanceSettingsFromUserDefaults(feature)) {
 			case PerformanceUserDefaultsRestoreResult::Restored:
 				settingsRestored = true;
-				message = "Performance user defaults restored.";
+				message = T(TKEY("defaults.restored"), "Performance user defaults restored.");
 				break;
 			case PerformanceUserDefaultsRestoreResult::Unchanged:
-				message = "Already using performance user defaults.";
+				message = T(TKEY("defaults.unchanged"), "Already using performance user defaults.");
 				break;
 			case PerformanceUserDefaultsRestoreResult::Missing:
-				message = "No saved performance user defaults found.";
+				message = T(TKEY("defaults.missing"), "No saved performance user defaults found.");
 				break;
 			case PerformanceUserDefaultsRestoreResult::Failed:
 			default:
-				message = "Failed to restore performance user defaults.";
+				message = T(TKEY("defaults.restore_failed"), "Failed to restore performance user defaults.");
 				break;
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Reset the current Performance Tuning controls for this feature to saved user defaults.");
+			ImGui::TextUnformatted(
+				overrideManaged ?
+					T(
+						TKEY("defaults.override_tooltip"),
+						"User-default actions are unavailable because this feature uses the higher-priority settings override system.") :
+					T(
+						TKEY("defaults.restore_tooltip"),
+						"Reset the current Performance Tuning controls for this feature to saved user defaults."));
 		}
 		ImGui::EndDisabled();
 
@@ -930,278 +976,717 @@ namespace
 			ImGui::SameLine();
 			ImGui::TextDisabled("%s", message.c_str());
 		}
-
 		return settingsRestored;
 	}
 
-	void FinalizeFeatureCostMeasurement(FeatureCostMeasurementState& state)
+	bool AreFeatureCostStabilityWindowsEquivalent(
+		const FeatureCostStabilityWindow& previous,
+		const FeatureCostStabilityWindow& current)
 	{
-		const float currentFrameMs = AverageFeatureCostCurrentWindows(
-			state.currentSample.frameMsSum,
-			state.currentSample.frameSampleWeight,
-			state.restoredCurrentSample.frameMsSum,
-			state.restoredCurrentSample.frameSampleWeight);
-		const float currentProfilerGpuMs = AverageFeatureCostCurrentWindows(
-			state.currentSample.profilerGpuMsSum,
-			state.currentSample.profilerGpuSampleWeight,
-			state.restoredCurrentSample.profilerGpuMsSum,
-			state.restoredCurrentSample.profilerGpuSampleWeight);
-		const float currentProfilerCpuMs = AverageFeatureCostCurrentWindows(
-			state.currentSample.profilerCpuMsSum,
-			state.currentSample.profilerCpuSampleWeight,
-			state.restoredCurrentSample.profilerCpuMsSum,
-			state.restoredCurrentSample.profilerCpuSampleWeight);
-		const float inactiveFrameMs = AverageOrZero(state.testSample.frameMsSum, state.testSample.frameSampleWeight);
-		const float inactiveProfilerGpuMs = AverageOrZero(state.testSample.profilerGpuMsSum, state.testSample.profilerGpuSampleWeight);
-		const float inactiveProfilerCpuMs = AverageOrZero(state.testSample.profilerCpuMsSum, state.testSample.profilerCpuSampleWeight);
-		const bool hasFrame =
-			state.currentSample.frameSampleWeight > 0.0 &&
-			state.restoredCurrentSample.frameSampleWeight > 0.0 &&
-			state.testSample.frameSampleWeight > 0.0;
-		const float currentFps = hasFrame ? 1000.0f / currentFrameMs : 0.0f;
-		const float inactiveFps = hasFrame ? 1000.0f / inactiveFrameMs : 0.0f;
+		return PerformanceTuning::AreMomentsEquivalent(
+			previous.present,
+			current.present);
+	}
 
-		state.delta.frameMs = CalculateFeatureCostDeltaMs(currentFrameMs, inactiveFrameMs);
-		state.delta.fpsDelta = currentFps - inactiveFps;
-		state.delta.profilerGpuMs = CalculateFeatureCostDeltaMs(currentProfilerGpuMs, inactiveProfilerGpuMs);
-		state.delta.profilerCpuMs = CalculateFeatureCostDeltaMs(currentProfilerCpuMs, inactiveProfilerCpuMs);
-		state.delta.hasFrame = hasFrame;
-		state.delta.hasFps = hasFrame;
-		state.delta.hasProfilerGpu =
-			HasCompleteFeatureCostMetricCoverage(state.currentSample, state.currentSample.profilerGpuSampleWeight) &&
-			HasCompleteFeatureCostMetricCoverage(state.restoredCurrentSample, state.restoredCurrentSample.profilerGpuSampleWeight) &&
-			HasCompleteFeatureCostMetricCoverage(state.testSample, state.testSample.profilerGpuSampleWeight);
-		state.delta.hasProfilerCpu =
-			HasCompleteFeatureCostMetricCoverage(state.currentSample, state.currentSample.profilerCpuSampleWeight) &&
-			HasCompleteFeatureCostMetricCoverage(state.restoredCurrentSample, state.restoredCurrentSample.profilerCpuSampleWeight) &&
-			HasCompleteFeatureCostMetricCoverage(state.testSample, state.testSample.profilerCpuSampleWeight);
-		state.delta.fpsPresentSynced =
-			state.currentSample.presentSyncedSamples > 0 ||
-			state.restoredCurrentSample.presentSyncedSamples > 0 ||
-			state.testSample.presentSyncedSamples > 0;
-		state.delta.fpsFramePaced =
-			IsFeatureCostSampleFramePaced(state.currentSample) ||
-			IsFeatureCostSampleFramePaced(state.restoredCurrentSample) ||
-			IsFeatureCostSampleFramePaced(state.testSample);
+	bool CompleteFeatureCostStabilityWindow(FeatureCostStabilityState& stability)
+	{
+		if (!stability.hasPreviousWindow) {
+			stability.previousWindow = stability.currentWindow;
+			stability.currentWindow = {};
+			stability.hasPreviousWindow = true;
+			return false;
+		}
+
+		if (AreFeatureCostStabilityWindowsEquivalent(
+				stability.previousWindow,
+				stability.currentWindow)) {
+			stability.consecutiveStableComparisons++;
+		} else {
+			stability.consecutiveStableComparisons = 0;
+			stability.previousWindow = stability.currentWindow;
+		}
+
+		stability.currentWindow = {};
+		return stability.consecutiveStableComparisons >=
+		       kFeatureCostStableComparisonCount;
+	}
+
+	FeatureCostStabilityResult UpdateFeatureCostStability(
+		FeatureCostStabilityState& stability,
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
+		double currentTime)
+	{
+		if (!stability.monitoringStarted) {
+			stability.monitoringStarted = true;
+			stability.monitoringStartTime = currentTime;
+			stability.lastSampleId = summary.presentIntervalSampleId;
+			return FeatureCostStabilityResult::Pending;
+		}
+
+		if (currentTime - stability.monitoringStartTime >=
+			kFeatureCostStabilityTimeoutSeconds) {
+			return FeatureCostStabilityResult::TimedOut;
+		}
+
+		if (!summary.hasPresentIntervalSample ||
+			summary.presentIntervalSampleId == 0 ||
+			summary.presentIntervalSampleId == stability.lastSampleId) {
+			return FeatureCostStabilityResult::Pending;
+		}
+		if (summary.presentIntervalSampleId < stability.lastSampleId)
+			return FeatureCostStabilityResult::TimedOut;
+
+		stability.lastSampleId = summary.presentIntervalSampleId;
+		if (!std::isfinite(summary.presentIntervalSampleMs) ||
+			summary.presentIntervalSampleMs <= 0.0f) {
+			return FeatureCostStabilityResult::Pending;
+		}
+
+		const double presentMs = summary.presentIntervalSampleMs;
+		double remainingSampleWeight = 1.0;
+		while (remainingSampleWeight > 1.0e-9) {
+			auto& window = stability.currentWindow;
+			const double remainingWindowMs =
+				kFeatureCostStabilityWindowMilliseconds - window.sampledDurationMs;
+			const double sampleWeight =
+				std::min(remainingSampleWeight, remainingWindowMs / presentMs);
+			if (sampleWeight <= 0.0)
+				break;
+
+			window.sampledDurationMs = std::min(
+				kFeatureCostStabilityWindowMilliseconds,
+				window.sampledDurationMs + presentMs * sampleWeight);
+			window.present.Add(presentMs, sampleWeight);
+			remainingSampleWeight -= sampleWeight;
+
+			if (window.sampledDurationMs >=
+					kFeatureCostStabilityWindowMilliseconds &&
+				CompleteFeatureCostStabilityWindow(stability)) {
+				return FeatureCostStabilityResult::Stable;
+			}
+		}
+		return FeatureCostStabilityResult::Pending;
+	}
+
+	bool TryRestoreFeatureCostOriginalState(
+		Feature* feature,
+		FeatureCostMeasurementState& state)
+	{
+		if (!state.restorePending && !state.comparisonStateApplied)
+			return true;
+		if (!feature)
+			return false;
+
+		try {
+			feature->RestorePerformanceCostMeasurementState(state.originalState);
+			if (!PerformanceTuning::AreJsonValuesEquivalent(
+					feature->CapturePerformanceCostMeasurementState(),
+					state.originalState)) {
+				throw std::runtime_error("restored state did not match its snapshot");
+			}
+
+			state.comparisonStateApplied = false;
+			state.restorePending = false;
+			return true;
+		} catch (const std::exception& e) {
+			logger::error(
+				"Failed to restore {} after Performance Tuning: {}",
+				feature->GetDisplayName(),
+				e.what());
+		} catch (...) {
+			logger::error(
+				"Failed to restore {} after Performance Tuning",
+				feature->GetDisplayName());
+		}
+		state.restorePending = true;
+		return false;
+	}
+
+	void FailFeatureCostMeasurement(
+		Feature* feature,
+		FeatureCostMeasurementState& state,
+		std::string reason)
+	{
+		const bool restored = TryRestoreFeatureCostOriginalState(feature, state);
+		state.stage = FeatureCostMeasurementStage::Failed;
+		state.stability = {};
+		state.failureReason = std::move(reason);
+		if (!restored) {
+			if (!state.failureReason.empty())
+				state.failureReason += " ";
+			state.failureReason += T(
+				TKEY("error.restore_pending"),
+				"Original settings could not be restored; retry restoration.");
+		}
+	}
+
+	bool PrepareFeatureCostMeasurementsForSceneChange(
+		bool cancelAllRunning,
+		const char* failureReason)
+	{
+		const auto currentScene = CaptureSceneFingerprint();
+		bool allRestored = true;
+		for (auto& [shortName, state] : g_costMeasurementStates) {
+			auto* feature = FindFeatureByShortName(shortName);
+			if (IsFeatureCostMeasurementRunning(state) &&
+				(cancelAllRunning || currentScene != state.runScene)) {
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					failureReason ? failureReason :
+						T(TKEY("error.scene_changed"), "Stopped because the scene changed."));
+			} else if (state.restorePending) {
+				TryRestoreFeatureCostOriginalState(feature, state);
+			}
+			allRestored &= !state.restorePending;
+		}
+
+		SyncProfilerCaptureModeLimit();
+		return allRestored;
+	}
+
+	void BeginFeatureCostSettling(
+		FeatureCostMeasurementState& state,
+		FeatureCostMeasurementLeg leg,
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
+		double currentTime)
+	{
+		state.leg = leg;
+		state.stage = FeatureCostMeasurementStage::Settling;
+		state.stageStartTime = currentTime;
+		state.lastProgressTime = currentTime;
+		state.continuousReadyStartTime = 0.0;
+		state.settleStartPresentSampleId = summary.presentIntervalSampleId;
+		state.lastObservedPresentSampleId = summary.presentIntervalSampleId;
+		state.continuouslyReady = false;
+		state.stability = {};
+	}
+
+	bool ApplyFeatureCostComparisonState(
+		Feature* feature,
+		FeatureCostMeasurementState& state)
+	{
+		if (!feature)
+			return false;
+
+		state.restorePending = true;
+		try {
+			feature->SetPerformanceCostMeasurementEnabled(false);
+			if (feature->IsPerformanceCostMeasurementEnabled())
+				throw std::runtime_error("comparison state remained enabled");
+			state.comparisonStateApplied = true;
+			return true;
+		} catch (const std::exception& e) {
+			logger::warn(
+				"Failed to apply Performance Tuning comparison state for {}: {}",
+				feature->GetDisplayName(),
+				e.what());
+		} catch (...) {
+			logger::warn(
+				"Failed to apply Performance Tuning comparison state for {}",
+				feature->GetDisplayName());
+		}
+		return false;
 	}
 
 	void StartFeatureCostMeasurement(
 		Feature* feature,
 		FeatureCostMeasurementState& state,
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		double currentTime)
 	{
-		if (!feature || !feature->SupportsPerformanceCostMeasurement() || !feature->IsPerformanceCostMeasurementEnabled())
+		if (!feature ||
+			!feature->SupportsPerformanceCostMeasurement() ||
+			!feature->IsPerformanceCostMeasurementEnabled() ||
+			!feature->IsPerformanceTuningApplicable() ||
+			IsFeatureControlledBySceneSettings(feature)) {
 			return;
+		}
 
 		state = {};
-		state.originalState = feature->CapturePerformanceCostMeasurementState();
-		state.testEnabled = false;
-		state.phase = FeatureCostMeasurementPhase::SettlingCurrent;
-		state.phaseStartTime = currentTime;
-		state.settleStartSampleId = globals::profiler ? globals::profiler->GetWholeFrameSampleId() : 0;
-	}
-
-	void ApplyFeatureCostMeasurementTestState(Feature* feature, FeatureCostMeasurementState& state)
-	{
-		if (!feature)
+		try {
+			state.originalState =
+				feature->CapturePerformanceCostMeasurementState();
+			state.runSettingsState =
+				CapturePerformanceUiState(feature);
+		} catch (const std::exception& e) {
+			logger::warn(
+				"Failed to capture the original Performance Tuning state for {}: {}",
+				feature->GetDisplayName(),
+				e.what());
+			state.stage = FeatureCostMeasurementStage::Failed;
+			state.failureReason = T(
+				TKEY("error.capture_failed"),
+				"Could not capture the original feature state.");
 			return;
+		} catch (...) {
+			state.stage = FeatureCostMeasurementStage::Failed;
+			state.failureReason = T(
+				TKEY("error.capture_failed"),
+				"Could not capture the original feature state.");
+			return;
+		}
 
-		feature->SetPerformanceCostMeasurementEnabled(state.testEnabled);
-		state.testStateApplied = true;
+		state.runScene = CaptureSceneFingerprint();
+		state.overallStartTime = currentTime;
+		BeginFeatureCostSettling(
+			state,
+			FeatureCostMeasurementLeg::CurrentBefore,
+			summary,
+			currentTime);
 	}
 
-	void BeginFeatureCostMeasurementTestSettle(
+	PerformanceTuning::AddSampleResult AddWholeFrameTimingSample(
+		PerformanceTuning::SampleWindow& window,
+		const ProfilingRenderer::PerformanceTimingSummary& summary)
+	{
+		std::optional<double> gpuMs;
+		std::optional<double> cpuMs;
+		if (summary.hasWholeFrameGpuSample &&
+			summary.wholeFrameGpuSampleId == summary.wholeFrameSampleId)
+			gpuMs = summary.wholeFrameGpuSampleMs;
+		if (summary.hasWholeFrameCpuSample &&
+			summary.wholeFrameCpuSampleId == summary.wholeFrameSampleId)
+			cpuMs = summary.wholeFrameCpuSampleMs;
+
+		return PerformanceTuning::AddWholeFrameSample(
+			window,
+			summary.wholeFrameSampleId,
+			summary.wholeFramePresentIntervalSampleId,
+			gpuMs,
+			cpuMs);
+	}
+
+	bool CompleteFeatureCostWindow(
 		Feature* feature,
 		FeatureCostMeasurementState& state,
-		double currentTime,
-		uint64_t currentSampleId)
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
+		double currentTime)
 	{
-		ApplyFeatureCostMeasurementTestState(feature, state);
-		state.testSample = {};
-		state.phase = FeatureCostMeasurementPhase::SettlingTest;
-		state.phaseStartTime = currentTime;
-		state.settleStartSampleId = currentSampleId;
-		state.stability = {};
-	}
-
-	void RestoreFeatureCostMeasurementOriginalState(Feature* feature, FeatureCostMeasurementState& state)
-	{
-		if (!feature || !state.testStateApplied)
-			return;
-
-		feature->RestorePerformanceCostMeasurementState(state.originalState);
-		state.testStateApplied = false;
-	}
-
-	void FailFeatureCostMeasurementStability(Feature* feature, FeatureCostMeasurementState& state)
-	{
-		RestoreFeatureCostMeasurementOriginalState(feature, state);
-		state.stability = {};
-		state.phase = FeatureCostMeasurementPhase::StabilityFailed;
-	}
-
-	void BeginFeatureCostMeasurementRestoredCurrentSettle(
-		Feature* feature,
-		FeatureCostMeasurementState& state,
-		double currentTime,
-		uint64_t currentSampleId)
-	{
-		RestoreFeatureCostMeasurementOriginalState(feature, state);
-		state.restoredCurrentSample = {};
-		state.phase = FeatureCostMeasurementPhase::SettlingRestoredCurrent;
-		state.phaseStartTime = currentTime;
-		state.settleStartSampleId = currentSampleId;
-		state.stability = {};
-	}
-
-	bool HasDrainedFeatureCostProfilerPipeline(
-		FeatureCostMeasurementState& state,
-		const ProfilingRenderer::PerformanceTimingSummary& current)
-	{
-		if (current.sampleId < state.settleStartSampleId) {
-			// A profiler reset restarts sample IDs. Rebase and drain the new query ring.
-			state.settleStartSampleId = current.sampleId;
+		auto& window = GetFeatureCostSampleWindow(state);
+		if (!PerformanceTuning::IsInternallyStable(window)) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(
+					TKEY("error.window_drift"),
+					"Stopped because timings drifted during a measurement window."));
 			return false;
 		}
 
-		return current.sampleId - state.settleStartSampleId >= Profiler::kFrameLatency;
-	}
+		if (state.leg == FeatureCostMeasurementLeg::CurrentBefore) {
+			if (!ApplyFeatureCostComparisonState(feature, state)) {
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					T(
+						TKEY("error.comparison_apply"),
+						"Stopped because the comparison state could not be applied."));
+				return false;
+			}
+			BeginFeatureCostSettling(
+				state,
+				FeatureCostMeasurementLeg::Comparison,
+				summary,
+				currentTime);
+			return true;
+		}
 
-	void BeginFeatureCostSampleWindow(
-		FeatureCostSample& sample,
-		FeatureCostMeasurementPhase phase,
-		FeatureCostMeasurementState& state,
-		const ProfilingRenderer::PerformanceTimingSummary& current,
-		double currentTime)
-	{
-		sample = {};
-		// Do not reuse the result which completed the pipeline drain as the first
-		// member of the new window. Its capture predates this phase boundary.
-		sample.lastSampleId = current.sampleId;
+		if (state.leg == FeatureCostMeasurementLeg::Comparison) {
+			if (!TryRestoreFeatureCostOriginalState(feature, state)) {
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					T(
+						TKEY("error.restore_failed"),
+						"Stopped because the original feature state could not be restored."));
+				return false;
+			}
+			BeginFeatureCostSettling(
+				state,
+				FeatureCostMeasurementLeg::CurrentAfter,
+				summary,
+				currentTime);
+			return true;
+		}
+
+		if (!PerformanceTuning::AreCurrentWindowsEquivalent(
+				state.currentBefore,
+				state.currentAfter)) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(
+					TKEY("error.aba_drift"),
+					"Stopped because the two current-state windows did not agree."));
+			return false;
+		}
+
+		state.result = PerformanceTuning::CalculateCostResult(
+			state.currentBefore,
+			state.comparison,
+			state.currentAfter,
+			kTuningDeltaThresholdMs);
+		try {
+			state.resultSettingsState = CapturePerformanceUiState(feature);
+			if (!PerformanceTuning::AreJsonValuesEquivalent(
+					state.resultSettingsState,
+					state.runSettingsState)) {
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					T(
+						TKEY("error.settings_changed"),
+						"Stopped because performance settings changed during measurement."));
+				return false;
+			}
+		} catch (...) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(
+					TKEY("error.result_snapshot"),
+					"Stopped because the result settings snapshot could not be captured."));
+			return false;
+		}
+		state.resultScene = CaptureSceneFingerprint();
+		state.hasResultScene = true;
+		state.stage = FeatureCostMeasurementStage::Complete;
 		state.stability = {};
-		state.phase = phase;
-		state.phaseStartTime = currentTime;
+		return true;
 	}
 
 	void UpdateFeatureCostMeasurement(
 		Feature* feature,
 		FeatureCostMeasurementState& state,
-		const ProfilingRenderer::PerformanceTimingSummary& current,
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		double currentTime)
 	{
 		if (!feature || !IsFeatureCostMeasurementRunning(state))
 			return;
 
-		if (!feature->IsPerformanceCostMeasurementReady()) {
-			if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
-				state.phase == FeatureCostMeasurementPhase::SettlingCurrent) {
-				state.currentSample = {};
-				state.phase = FeatureCostMeasurementPhase::SettlingCurrent;
-			} else if (state.phase == FeatureCostMeasurementPhase::MeasuringTest ||
-				       state.phase == FeatureCostMeasurementPhase::SettlingTest) {
-				state.testSample = {};
-				state.phase = FeatureCostMeasurementPhase::SettlingTest;
-			} else if (state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent ||
-				           state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent) {
-				state.restoredCurrentSample = {};
-				state.phase = FeatureCostMeasurementPhase::SettlingRestoredCurrent;
-			}
-
-			state.phaseStartTime = currentTime;
-			state.settleStartSampleId = current.sampleId;
-			state.stability = {};
+		if (currentTime - state.overallStartTime >
+			kFeatureCostOverallTimeoutSeconds) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(TKEY("error.overall_timeout"), "Stopped because the measurement timed out."));
+			return;
+		}
+		if (CaptureSceneFingerprint() != state.runScene) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(TKEY("error.scene_changed"), "Stopped because the scene changed."));
+			return;
+		}
+		if (!feature->IsPerformanceTuningApplicable()) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(
+					TKEY("error.no_longer_applicable"),
+					"Stopped because the feature is no longer active in this scene."));
+			return;
+		}
+		if (IsFeatureControlledBySceneSettings(feature)) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(
+					TKEY("error.scene_owned"),
+					"Stopped because scene-specific settings took control of this feature."));
 			return;
 		}
 
-		const double elapsed = currentTime - state.phaseStartTime;
+		if (summary.presentIntervalSampleId != 0) {
+			if (state.lastObservedPresentSampleId != 0 &&
+				summary.presentIntervalSampleId < state.lastObservedPresentSampleId) {
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					T(
+						TKEY("error.timing_reset"),
+						"Stopped because the frame timing source was reset."));
+				return;
+			}
+			if (state.stage != FeatureCostMeasurementStage::Draining &&
+				state.lastObservedPresentSampleId != 0 &&
+				summary.presentIntervalSampleId >
+					state.lastObservedPresentSampleId &&
+				summary.presentIntervalSampleId -
+						state.lastObservedPresentSampleId >
+					1) {
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					T(
+						TKEY("error.timing_gap"),
+						"Stopped because one or more direct frame timing samples were missed."));
+				return;
+			}
+			if (summary.presentIntervalSampleId >
+				state.lastObservedPresentSampleId) {
+				state.lastObservedPresentSampleId =
+					summary.presentIntervalSampleId;
+				state.lastProgressTime = currentTime;
+			}
+		}
+		if (currentTime - state.lastProgressTime >
+			kFeatureCostSampleProgressTimeoutSeconds) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(
+					TKEY("error.no_progress"),
+					"Stopped because no new presented frames were measured."));
+			return;
+		}
 
-		if (IsFeatureCostMeasurementSettling(state)) {
-			const bool targetEnabled = state.phase != FeatureCostMeasurementPhase::SettlingTest || state.testEnabled;
-			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(targetEnabled));
-			if (elapsed < settleSeconds || !HasDrainedFeatureCostProfilerPipeline(state, current))
+		if (state.stage == FeatureCostMeasurementStage::Settling) {
+			if (currentTime - state.stageStartTime >
+				kFeatureCostTransitionTimeoutSeconds) {
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					T(
+						TKEY("error.transition_timeout"),
+						"Stopped while waiting for the feature state to settle."));
+				return;
+			}
+			if (!feature->IsPerformanceCostMeasurementReady()) {
+				state.continuouslyReady = false;
+				state.continuousReadyStartTime = 0.0;
+				state.settleStartPresentSampleId =
+					summary.presentIntervalSampleId;
+				state.stability = {};
+				return;
+			}
+			if (!state.continuouslyReady) {
+				state.continuouslyReady = true;
+				state.continuousReadyStartTime = currentTime;
+				state.settleStartPresentSampleId =
+					summary.presentIntervalSampleId;
+				state.stability = {};
+				return;
+			}
+
+			const bool targetEnabled =
+				state.leg != FeatureCostMeasurementLeg::Comparison;
+			const double settleSeconds = std::max(
+				0.0,
+				feature->GetPerformanceCostMeasurementSettleSeconds(
+					targetEnabled));
+			if (currentTime - state.continuousReadyStartTime < settleSeconds)
 				return;
 
-			const auto stabilityResult = UpdateFeatureCostStability(state.stability, current, currentTime);
+			if (summary.presentIntervalSampleId <
+				state.settleStartPresentSampleId) {
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					T(
+						TKEY("error.timing_reset"),
+						"Stopped because the frame timing source was reset."));
+				return;
+			}
+			if (summary.presentIntervalSampleId -
+					state.settleStartPresentSampleId <
+				kFeatureCostPipelineDrainPresentCount) {
+				return;
+			}
+
+			const auto stabilityResult = UpdateFeatureCostStability(
+				state.stability,
+				summary,
+				currentTime);
 			if (stabilityResult == FeatureCostStabilityResult::TimedOut) {
-				FailFeatureCostMeasurementStability(feature, state);
+				FailFeatureCostMeasurement(
+					feature,
+					state,
+					T(
+						TKEY("error.stability_timeout"),
+						"Stopped because frame timings did not stabilize."));
 				return;
 			}
 			if (stabilityResult != FeatureCostStabilityResult::Stable)
 				return;
 
-			if (state.phase == FeatureCostMeasurementPhase::SettlingCurrent) {
-				BeginFeatureCostSampleWindow(
-					state.currentSample,
-					FeatureCostMeasurementPhase::MeasuringCurrent,
+			auto& window = GetFeatureCostSampleWindow(state);
+			PerformanceTuning::BeginSampleWindow(
+				window,
+				summary.presentIntervalSampleId,
+				summary.wholeFrameSampleId,
+				!globals::features::upscaling.IsFrameGenerationDx12PathActive());
+			state.stage = FeatureCostMeasurementStage::Measuring;
+			state.stageStartTime = currentTime;
+			state.lastProgressTime = currentTime;
+			state.stability = {};
+			return;
+		}
+
+		auto& window = GetFeatureCostSampleWindow(state);
+		const auto wholeFrameResult =
+			AddWholeFrameTimingSample(window, summary);
+		if (wholeFrameResult ==
+			PerformanceTuning::AddSampleResult::SourceReset) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(
+					TKEY("error.timing_reset"),
+					"Stopped because the frame timing source was reset."));
+			return;
+		}
+
+		if (state.stage == FeatureCostMeasurementStage::Measuring) {
+			if (!feature->IsPerformanceCostMeasurementReady()) {
+				FailFeatureCostMeasurement(
+					feature,
 					state,
-					current,
-					currentTime);
-			} else if (state.phase == FeatureCostMeasurementPhase::SettlingTest) {
-				BeginFeatureCostSampleWindow(
-					state.testSample,
-					FeatureCostMeasurementPhase::MeasuringTest,
+					T(
+						TKEY("error.feature_unready"),
+						"Stopped because the feature state changed during measurement."));
+				return;
+			}
+
+			if (!summary.hasPresentIntervalSample)
+				return;
+			const auto presentResult = PerformanceTuning::AddPresentSample(
+				window,
+				summary.presentIntervalSampleId,
+				summary.presentIntervalSampleMs,
+				summary.presentIntervalSynced);
+			if (presentResult ==
+				PerformanceTuning::AddSampleResult::SourceReset) {
+				FailFeatureCostMeasurement(
+					feature,
 					state,
-					current,
-					currentTime);
-			} else {
-				BeginFeatureCostSampleWindow(
-					state.restoredCurrentSample,
-					FeatureCostMeasurementPhase::MeasuringRestoredCurrent,
+					T(
+						TKEY("error.timing_reset"),
+						"Stopped because the frame timing source was reset."));
+				return;
+			}
+			if (presentResult ==
+				PerformanceTuning::AddSampleResult::SourceGap) {
+				FailFeatureCostMeasurement(
+					feature,
 					state,
-					current,
-					currentTime);
+					T(
+						TKEY("error.timing_gap"),
+						"Stopped because one or more direct frame timing samples were missed."));
+				return;
+			}
+			if (presentResult ==
+				PerformanceTuning::AddSampleResult::Complete) {
+				state.stage = FeatureCostMeasurementStage::Draining;
+				state.stageStartTime = currentTime;
 			}
 			return;
 		}
 
-		if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent) {
-			if (AddFeatureCostSample(state.currentSample, current)) {
-				BeginFeatureCostMeasurementTestSettle(feature, state, currentTime, current.sampleId);
-			}
+		if (state.stage != FeatureCostMeasurementStage::Draining)
 			return;
-		}
 
-		if (state.phase == FeatureCostMeasurementPhase::MeasuringTest) {
-			if (AddFeatureCostSample(state.testSample, current)) {
-				BeginFeatureCostMeasurementRestoredCurrentSettle(feature, state, currentTime, current.sampleId);
-			}
+		const bool profilerDrained =
+			window.endPresentSampleId != 0 &&
+			window.latestWholeFramePresentSampleId >=
+				window.endPresentSampleId;
+		const bool drainTimedOut =
+			currentTime - state.stageStartTime >=
+			kFeatureCostProfilerDrainTimeoutSeconds;
+		if (!profilerDrained && !drainTimedOut)
 			return;
-		}
 
-		if (state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent) {
-			if (AddFeatureCostSample(state.restoredCurrentSample, current)) {
-				FinalizeFeatureCostMeasurement(state);
-				state.phase = FeatureCostMeasurementPhase::Complete;
-			}
-		}
+		CompleteFeatureCostWindow(
+			feature,
+			state,
+			summary,
+			currentTime);
 	}
 
-	void RenderDeltaMetric(const char* label, float value, int direction, const char* format)
+	int GetDirectionFromFrameTimeDelta(float deltaMs)
 	{
-		ImGui::TextDisabled("%s", label);
-		ImGui::SameLine();
-		if (direction != 0)
-			ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::PerformanceDelta(direction));
-
-		ImGui::Text(format, value);
-
-		if (direction != 0)
-			ImGui::PopStyleColor();
+		if (std::abs(deltaMs) <= kTuningDeltaThresholdMs)
+			return 0;
+		return deltaMs > 0.0f ? 1 : -1;
 	}
 
-	void RenderMetricCounter(const char* id, const char* label, float value, const char* format, int direction, bool valid, const char* tooltip)
+	int GetDirectionFromFeatureCostMetric(
+		const PerformanceTuning::MetricDelta& metric)
+	{
+		if (!metric.available || !metric.significant)
+			return 0;
+		return metric.valueMs > 0.0 ? 1 : -1;
+	}
+
+	int GetDirectionFromFeatureCostFps(
+		const PerformanceTuning::CostResult& result)
+	{
+		if (!result.hasFps || !result.fpsSignificant)
+			return 0;
+		return result.fpsDelta < 0.0 ? 1 : -1;
+	}
+
+	bool TryGetDisplayTimingMs(bool hasTiming, float timingMs, float& value)
+	{
+		if (hasTiming && std::isfinite(timingMs) && timingMs > 0.0f) {
+			value = timingMs;
+			return true;
+		}
+		return false;
+	}
+
+	bool TryGetDisplayGpuMs(
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
+		float& value)
+	{
+		return TryGetDisplayTimingMs(
+			summary.hasWholeFrameGpu,
+			summary.wholeFrameGpuMs,
+			value);
+	}
+
+	bool TryGetDisplayCpuMs(
+		const ProfilingRenderer::PerformanceTimingSummary& summary,
+		float& value)
+	{
+		return TryGetDisplayTimingMs(
+			summary.hasWholeFrameCpu,
+			summary.wholeFrameCpuMs,
+			value);
+	}
+
+	void RenderMetricCounter(
+		const char* id,
+		const char* label,
+		float value,
+		const char* format,
+		int direction,
+		bool valid,
+		const char* tooltip)
 	{
 		ImGui::PushID(id);
 		if (direction != 0)
-			ImGui::PushStyleColor(ImGuiCol_Border, Util::Color::PerformanceDelta(direction));
+			ImGui::PushStyleColor(
+				ImGuiCol_Border,
+				Util::Color::PerformanceDelta(direction));
 
 		const float height = 58.0f * Util::GetUIScale();
-		if (ImGui::BeginChild("##Counter", ImVec2(0.0f, height), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+		if (ImGui::BeginChild(
+				"##Counter",
+				ImVec2(0.0f, height),
+				true,
+				ImGuiWindowFlags_NoScrollbar |
+					ImGuiWindowFlags_NoScrollWithMouse)) {
 			ImGui::TextDisabled("%s", label);
 			if (!valid) {
 				ImGui::TextDisabled("--");
 			} else if (direction != 0) {
-				ImGui::TextColored(Util::Color::PerformanceDelta(direction), format, value);
+				ImGui::TextColored(
+					Util::Color::PerformanceDelta(direction),
+					format,
+					value);
 			} else {
 				ImGui::Text(format, value);
 			}
@@ -1211,7 +1696,6 @@ namespace
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::TextWrapped("%s", tooltip);
 		}
-
 		if (direction != 0)
 			ImGui::PopStyleColor();
 		ImGui::PopID();
@@ -1222,337 +1706,389 @@ namespace
 		const TuningHighlightState& highlightState)
 	{
 		float displayGpuMs = 0.0f;
-		const bool hasDisplayGpu = TryGetDisplayGpuMs(summary, displayGpuMs);
+		const bool hasDisplayGpu =
+			TryGetDisplayGpuMs(summary, displayGpuMs);
 		float displayCpuMs = 0.0f;
-		const bool hasDisplayCpu = TryGetDisplayCpuMs(summary, displayCpuMs);
+		const bool hasDisplayCpu =
+			TryGetDisplayCpuMs(summary, displayCpuMs);
 
-		if (ImGui::BeginTable("##PerformanceTuningTopCounters", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
+		if (ImGui::BeginTable(
+				"##PerformanceTuningTopCounters",
+				4,
+				ImGuiTableFlags_SizingStretchProp |
+					ImGuiTableFlags_PadOuterX)) {
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
-			RenderMetricCounter("Total", "Total:", summary.frameMs, "%.2f ms", highlightState.frameDirection, summary.frameMs > 0.0f, "Present-to-present wall-clock frame time. It includes VSync, an FPS limit, and other time spent waiting in Present.");
+			RenderMetricCounter(
+				"Total",
+				T(TKEY("counter.game_frame"), "Game frame:"),
+				summary.presentIntervalMs,
+				"%.2f ms",
+				highlightState.frameDirection,
+				summary.hasPresentInterval,
+				T(
+					TKEY("counter.game_frame_tooltip"),
+					"Direct Present-to-Present wall-clock time for each game-produced frame. It includes VSync, FPS limiting, and Present wait, and is the pre-frame-generation cadence."));
 			ImGui::TableNextColumn();
-			RenderMetricCounter("GPU", "GPU:", displayGpuMs, "%.2f ms", highlightState.gpuTotalDirection, hasDisplayGpu, "D3D11 timestamp duration across the complete rendered frame. It excludes Present wait.");
+			RenderMetricCounter(
+				"GPU",
+				T(TKEY("counter.gpu"), "GPU:"),
+				displayGpuMs,
+				"%.2f ms",
+				highlightState.gpuTotalDirection,
+				hasDisplayGpu,
+				T(
+					TKEY("counter.gpu_tooltip"),
+					"D3D11 timestamp duration across the whole rendered game frame. It excludes Present wait."));
 			ImGui::TableNextColumn();
-			RenderMetricCounter("CPU", "CPU:", displayCpuMs, "%.2f ms", highlightState.cpuTotalDirection, hasDisplayCpu, "CPU wall time from the frame boundary to just before Present. It excludes time spent in Present.");
+			RenderMetricCounter(
+				"CPU",
+				T(TKEY("counter.cpu"), "CPU:"),
+				displayCpuMs,
+				"%.2f ms",
+				highlightState.cpuTotalDirection,
+				hasDisplayCpu,
+				T(
+					TKEY("counter.cpu_tooltip"),
+					"CPU wall time across the whole rendered game frame up to Present. It excludes Present wait."));
 			ImGui::TableNextColumn();
-			RenderMetricCounter("FPS", "FPS:", summary.fps, "%.0f", highlightState.fpsDirection, summary.fps > 0.0f, "1000 divided by Total. This is the actual present rate, including frame pacing.");
+			RenderMetricCounter(
+				"FPS",
+				T(TKEY("counter.game_fps"), "Game FPS:"),
+				summary.fps,
+				"%.0f",
+				highlightState.fpsDirection,
+				summary.fps > 0.0f,
+				T(
+					TKEY("counter.game_fps_tooltip"),
+					"1000 divided by direct Present-to-Present time. With frame generation, displayed output FPS can be higher."));
 			ImGui::EndTable();
 		}
 	}
 
-	const char* GetFeatureCostComparisonLabel(Feature* feature, const FeatureCostMeasurementState& state)
+	void RenderCostMetric(
+		const char* label,
+		const PerformanceTuning::MetricDelta& metric)
 	{
-		(void)state;
+		if (!metric.available)
+			return;
 
-		if (feature && feature->GetShortName() == "Upscaling")
-			return "None";
-
-		return "Off";
+		const int direction = GetDirectionFromFeatureCostMetric(metric);
+		ImGui::TextDisabled("%s", label);
+		ImGui::SameLine();
+		if (direction != 0)
+			ImGui::PushStyleColor(
+				ImGuiCol_Text,
+				Util::Color::PerformanceDelta(direction));
+		ImGui::Text(
+			"%+.3f \xC2\xB1 %.3f ms%s",
+			metric.valueMs,
+			metric.margin95Ms,
+			metric.significant ?
+				"" :
+				T(TKEY("result.inconclusive_suffix"), " (inconclusive)"));
+		if (direction != 0)
+			ImGui::PopStyleColor();
 	}
 
-	const char* GetFeatureCostComparisonDetails(Feature* feature)
+	void RenderFeatureCostRunningStatus(
+		Feature* feature,
+		FeatureCostMeasurementState& state)
 	{
-		if (!feature)
-			return "the feature is switched off.";
+		if (state.stage == FeatureCostMeasurementStage::Settling) {
+			ImGui::TextDisabled(
+				T(TKEY("status.settling"), "Settling %s"),
+				GetFeatureCostLegStatusLabel(state));
+			if (state.stability.monitoringStarted) {
+				ImGui::SameLine();
+				ImGui::TextDisabled(
+					T(TKEY("status.stability"), "stability %d/%d"),
+					state.stability.consecutiveStableComparisons,
+					kFeatureCostStableComparisonCount);
+			} else if (feature) {
+				ImGui::SameLine();
+				ImGui::TextDisabled(
+					"%s",
+					feature->GetPerformanceCostMeasurementWaitText());
+			}
+		} else if (state.stage == FeatureCostMeasurementStage::Measuring) {
+			const auto& sample = GetFeatureCostSampleWindow(state);
+			ImGui::TextDisabled(
+				T(TKEY("status.measuring"), "Measuring %s %.1f / %.1f s"),
+				GetFeatureCostLegStatusLabel(state),
+				std::clamp(
+					sample.sampledDurationMs / 1000.0,
+					0.0,
+					kFeatureCostMeasurementSeconds),
+				kFeatureCostMeasurementSeconds);
+		} else if (state.stage == FeatureCostMeasurementStage::Draining) {
+			ImGui::TextDisabled(
+				T(
+					TKEY("status.draining"),
+					"Finalizing delayed whole-frame timings for %s"),
+				GetFeatureCostLegStatusLabel(state));
+		}
 
-		const std::string shortName = feature->GetShortName();
-		if (shortName == "Upscaling")
-			return "Upscaling is set to None.";
-		if (shortName == "ScreenSpaceShadows")
-			return "Screen Space Shadows are switched off.";
-		if (shortName == "ScreenSpaceGI")
-			return "SSGI/AO is switched off.";
-		if (shortName == "LightLimitFix")
-			return "particle lights, point-light contact shadows, and particle contact shadows are switched off.";
-		if (shortName == "Skylighting")
-			return "the in-game Enable Skylighting toggle is switched off, so probe updates stop and ambient shading plus reflection occlusion fall back to the unoccluded path.";
-		if (shortName == "TerrainBlending")
-			return "Terrain Blending is switched off.";
-		if (shortName == "TerrainShadows")
-			return "Terrain Shadows are switched off.";
-		if (shortName == "VolumetricLighting")
-			return "Volumetric Lighting is switched off for the current interior/exterior context.";
-		if (shortName == "VolumetricShadows")
-			return "Volumetric Shadows are switched off, so shadow-map downsampling and blur passes stop.";
-		if (shortName == "WetnessEffects")
-			return "the Wetness master toggle is switched off; active wetness, raindrop, splash, and custom ripple work stops, while the installed shader path and vanilla-ripple policy remain the same in both windows.";
-		if (shortName == "SubsurfaceScattering")
-			return "Subsurface Scattering is switched off.";
-		if (shortName == "GrassLighting")
-			return "the Grass Lighting runtime toggle is switched off, so grass uses the basic pixel-shading path; the installed shader permutation and vertex work remain the same in both windows.";
-		if (shortName == "GrassCollision")
-			return "Grass Collision is switched off.";
-
-		return "the feature's measurement state is switched off.";
+		ImGui::SameLine();
+		if (ImGui::Button(T(TKEY("action.cancel"), "Cancel"))) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(TKEY("error.cancelled"), "Measurement cancelled."));
+		}
 	}
 
-	void RenderFeatureCostMeasurement(
+	bool RenderFeatureCostMeasurement(
 		Feature* feature,
 		FeatureCostMeasurementState& state)
 	{
 		if (!feature)
-			return;
+			return false;
 
-		const bool hasMeasurementState =
-			IsFeatureCostMeasurementActive(state) ||
-			state.phase == FeatureCostMeasurementPhase::Complete ||
-			state.phase == FeatureCostMeasurementPhase::StabilityFailed;
-		if (!feature->SupportsPerformanceCostMeasurement() && !hasMeasurementState) {
+		const bool hasState =
+			state.stage != FeatureCostMeasurementStage::Idle;
+		if (!feature->SupportsPerformanceCostMeasurement() && !hasState) {
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
-			ImGui::TextDisabled("Actual feature cost is unavailable.");
+			ImGui::TextDisabled(
+				"%s",
+				T(
+					TKEY("cost.unavailable"),
+					"Actual feature cost is unavailable."));
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				const char* reason = feature->GetPerformanceCostMeasurementUnavailableReason();
-				ImGui::TextWrapped("%s", reason ? reason : "This feature has no runtime inactive state to compare in the current scene.");
+				const char* reason =
+					feature->GetPerformanceCostMeasurementUnavailableReason();
+				ImGui::TextWrapped(
+					"%s",
+					reason ?
+						reason :
+						T(
+							TKEY("cost.unavailable_reason"),
+							"This feature has no runtime inactive state to compare in the current scene."));
 			}
-			return;
+			return false;
 		}
-		if (!feature->IsPerformanceCostMeasurementEnabled() && !hasMeasurementState)
-			return;
+		if (!feature->IsPerformanceCostMeasurementEnabled() && !hasState)
+			return false;
 
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
 
-		const bool running = IsFeatureCostMeasurementRunning(state);
-		const bool anyMeasurementRunning = IsAnyFeatureCostMeasurementRunning();
-		const bool canStartMeasurement =
+		if (IsFeatureCostMeasurementRunning(state)) {
+			RenderFeatureCostRunningStatus(feature, state);
+			return false;
+		}
+
+		const bool anyMeasurementLocked =
+			IsAnyFeatureCostMeasurementLocked();
+		const bool applicable =
+			feature->IsPerformanceTuningApplicable();
+		const bool sceneControlled =
+			IsFeatureControlledBySceneSettings(feature);
+		const bool canStart =
+			feature->SupportsPerformanceCostMeasurement() &&
 			feature->IsPerformanceCostMeasurementEnabled() &&
-			!running &&
-			!anyMeasurementRunning;
-		ImGui::BeginDisabled(!canStartMeasurement);
-		if (ImGui::Button("Actual feature cost")) {
-			StartFeatureCostMeasurement(feature, state, ImGui::GetTime());
-		}
+			applicable &&
+			!sceneControlled &&
+			!anyMeasurementLocked;
+
+		ImGui::BeginDisabled(!canStart);
+		const bool startClicked = ImGui::Button(
+			T(TKEY("cost.start"), "Measure actual feature cost"));
 		ImGui::EndDisabled();
+
 		if (auto _tt = Util::HoverTooltipWrapper()) {
+			const auto config = feature->GetPerformanceTuningConfig();
 			ImGui::TextWrapped(
-				"Waits for each state to apply and settle, measures current settings for %.0f seconds, measures the comparison state for %.0f seconds, restores the original settings, then measures the current state once more.",
-				kFeatureCostMeasurementSeconds,
+				T(
+					TKEY("cost.tooltip"),
+					"Measures two current-state windows around a comparison window. Every window contains exactly %.0f seconds of direct Present intervals; delayed GPU/CPU whole-frame samples are matched back to those same frames."),
 				kFeatureCostMeasurementSeconds);
-			ImGui::TextWrapped("Each window contains exactly %.0f seconds of raw present intervals. The boundary frame is fractionally weighted, and the rolling 60-frame display averages are not used.", kFeatureCostMeasurementSeconds);
-			ImGui::TextWrapped("Before every measurement window, consecutive 0.5-second raw timing windows must have matching total-frame, GPU, and CPU means and variability. Unavailable GPU or CPU metrics are ignored consistently.");
-			ImGui::TextWrapped("Means must remain within 0.1 ms or 2%%, whichever is wider; standard deviations must remain within 0.15 ms or 25%%. The first window establishes the reference, then two matching comparisons are required.");
-			ImGui::TextWrapped("If stability is not established within %.0f seconds, the test stops without producing a result and restores the original settings.", kFeatureCostStabilityTimeoutSeconds);
-			ImGui::TextWrapped("The delayed GPU query pipeline is drained before each window so frames from the previous state cannot enter the next one.");
-			if (feature && feature->GetShortName() == "Skylighting") {
-				ImGui::TextWrapped("For Skylighting, the comparison state is the in-game Enable Skylighting toggle set to Off, not lower Skylighting settings.");
-			}
 			ImGui::TextWrapped(
-				"Comparison: %s - %s",
-				GetFeatureCostComparisonLabel(feature, state),
-				GetFeatureCostComparisonDetails(feature));
+				"%s",
+				T(
+					TKEY("cost.tooltip_stability"),
+					"Each state must settle first. Both halves of every window and both current-state windows must agree, otherwise the result is rejected."));
 			ImGui::TextWrapped(
-				"Results depend on the current scene. Measure features where their inputs are active, such as Grass Collision where grass is visible or Screen Space Shadows under relevant lighting.");
-		}
-		if (!running && anyMeasurementRunning && !IsFeatureCostMeasurementActive(state)) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("Finish the current measurement first");
+				T(TKEY("cost.comparison"), "Comparison: %s - %s"),
+				config.comparisonLabel.data(),
+				config.comparisonDetails.data());
+			ImGui::TextWrapped(
+				"%s",
+				T(
+					TKEY("cost.tooltip_scene"),
+					"Keep the camera and scene still. Results are valid only for the current cell and weather."));
 		}
 
-		if (state.phase == FeatureCostMeasurementPhase::SettlingCurrent ||
-			state.phase == FeatureCostMeasurementPhase::SettlingTest ||
-			state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent) {
-			const bool preparingCurrent = state.phase == FeatureCostMeasurementPhase::SettlingCurrent;
-			const bool restoringCurrent = state.phase == FeatureCostMeasurementPhase::SettlingRestoredCurrent;
-			const bool targetEnabled = preparingCurrent || restoringCurrent ? true : state.testEnabled;
-			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(targetEnabled));
-			const double elapsed = std::clamp(ImGui::GetTime() - state.phaseStartTime, 0.0, settleSeconds);
+		if (state.stage == FeatureCostMeasurementStage::Failed) {
 			ImGui::SameLine();
-			if (state.stability.monitoringStarted) {
-				const double stabilityElapsed = std::clamp(
-					ImGui::GetTime() - state.stability.monitoringStartTime,
-					0.0,
-					kFeatureCostStabilityTimeoutSeconds);
-				const char* phaseLabel = GetFeatureCostComparisonLabel(feature, state);
-				if (preparingCurrent)
-					phaseLabel = "current";
-				else if (restoringCurrent)
-					phaseLabel = "restored current";
-				ImGui::TextDisabled(
-					"Stability %s: %d/%d (%.1fs)",
-					phaseLabel,
-					state.stability.consecutiveStableComparisons,
-					kFeatureCostStableComparisonCount,
-					stabilityElapsed);
-			} else if (preparingCurrent) {
-				ImGui::TextDisabled("Preparing current: %s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
-			} else if (restoringCurrent) {
-				ImGui::TextDisabled("Restoring current: %s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
-			} else {
-				ImGui::TextDisabled("%s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
+			ImGui::TextColored(
+				Util::Colors::GetWarning(),
+				"%s",
+				state.failureReason.empty() ?
+					T(TKEY("error.generic"), "Measurement stopped.") :
+					state.failureReason.c_str());
+			if (state.restorePending) {
+				if (ImGui::Button(
+						T(TKEY("action.retry_restore"), "Retry restoration"))) {
+					if (TryRestoreFeatureCostOriginalState(feature, state)) {
+						state.failureReason = T(
+							TKEY("status.restore_succeeded"),
+							"Original feature settings restored.");
+					}
+				}
 			}
-			return;
+			return startClicked;
 		}
 
-		if (state.phase == FeatureCostMeasurementPhase::StabilityFailed) {
-			ImGui::SameLine();
-			ImGui::TextColored(Util::Colors::GetWarning(), "Stopped: frame timings did not stabilize");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextWrapped("Keep the camera and scene still, wait for background work to finish, then run Actual feature cost again.");
-				ImGui::TextWrapped("No result was produced, and the original feature settings were restored.");
-			}
-			return;
-		}
-
-		if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
-			state.phase == FeatureCostMeasurementPhase::MeasuringTest ||
-			state.phase == FeatureCostMeasurementPhase::MeasuringRestoredCurrent) {
-			if (!feature->IsPerformanceCostMeasurementReady()) {
-				ImGui::SameLine();
-				ImGui::TextDisabled("%s", feature->GetPerformanceCostMeasurementWaitText());
-				return;
-			}
-
-			const FeatureCostSample& activeSample =
-				state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ? state.currentSample :
-				state.phase == FeatureCostMeasurementPhase::MeasuringTest ? state.testSample :
-				                                                               state.restoredCurrentSample;
-			const double elapsed = std::clamp(
-				activeSample.sampledDurationMs / 1000.0,
-				0.0,
-				kFeatureCostMeasurementSeconds);
-			ImGui::SameLine();
-			if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent) {
-				ImGui::TextDisabled("Measuring current (1/2) %.1f / %.1fs", elapsed, kFeatureCostMeasurementSeconds);
-			} else if (state.phase == FeatureCostMeasurementPhase::MeasuringTest) {
-				ImGui::TextDisabled(
-					"Measuring %s %.1f / %.1fs",
-					GetFeatureCostComparisonLabel(feature, state),
-					elapsed,
-					kFeatureCostMeasurementSeconds);
-			} else {
-				ImGui::TextDisabled("Measuring current (2/2) %.1f / %.1fs", elapsed, kFeatureCostMeasurementSeconds);
-			}
-			return;
-		}
-
-		if (state.phase != FeatureCostMeasurementPhase::Complete)
-			return;
-
-		if (!state.delta.hasFrame && !state.delta.hasFps && !state.delta.hasProfilerGpu && !state.delta.hasProfilerCpu) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("No profiler timing data");
-			return;
-		}
+		if (state.stage != FeatureCostMeasurementStage::Complete)
+			return startClicked;
 
 		ImGui::Spacing();
-		ImGui::TextDisabled("Current (two windows) - %s", GetFeatureCostComparisonLabel(feature, state));
+		const auto config = feature->GetPerformanceTuningConfig();
+		ImGui::TextDisabled(
+			T(
+				TKEY("result.heading"),
+				"Current (two windows) - %s"),
+			config.comparisonLabel.data());
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Frametime uses current settings minus %s: positive added cost is magenta; negative savings are green.", GetFeatureCostComparisonLabel(feature, state));
-			ImGui::TextWrapped("Total is present-to-present, so VSync or an FPS limit can hide a workload change there; use GPU and CPU to see uncapped scene cost.");
-			ImGui::TextWrapped("FPS uses the natural current-minus-%s sign: a drop is magenta and a gain is green.", GetFeatureCostComparisonLabel(feature, state));
+			ImGui::TextWrapped(
+				"%s",
+				T(
+					TKEY("result.tooltip"),
+					"Values are current minus comparison with a 95% uncertainty margin. Changes smaller than both the uncertainty margin and 0.099 ms are inconclusive. Total always comes directly from Present-to-Present timing, never from added profiler passes."));
 		}
-		if (state.delta.hasFrame)
-			RenderDeltaMetric(
-				"Total",
-				state.delta.frameMs,
-				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.frameMs),
-				"%+.3f ms");
-		if (state.delta.hasProfilerGpu)
-			RenderDeltaMetric(
-				"GPU",
-				state.delta.profilerGpuMs,
-				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.profilerGpuMs),
-				"%+.3f ms");
-		if (state.delta.hasProfilerCpu)
-			RenderDeltaMetric(
-				"CPU",
-				state.delta.profilerCpuMs,
-				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.profilerCpuMs),
-				"%+.3f ms");
-		if (state.delta.hasFps)
-			RenderDeltaMetric(
-				"FPS:",
-				state.delta.fpsDelta,
-				GetDirectionFromFeatureCostFpsDelta(state.delta.fpsDelta),
-				"%+.1f");
-		if (state.delta.fpsPresentSynced) {
+		RenderCostMetric(
+			T(TKEY("result.total"), "Game frame"),
+			state.result.present);
+		RenderCostMetric(
+			T(TKEY("result.gpu"), "Whole-frame GPU"),
+			state.result.wholeFrameGpu);
+		RenderCostMetric(
+			T(TKEY("result.cpu"), "Whole-frame CPU"),
+			state.result.wholeFrameCpu);
+
+		if (state.result.hasFps) {
+			const int direction = GetDirectionFromFeatureCostFps(state.result);
+			ImGui::TextDisabled(
+				"%s",
+				T(TKEY("result.fps"), "Game FPS"));
+			ImGui::SameLine();
+			if (direction != 0)
+				ImGui::PushStyleColor(
+					ImGuiCol_Text,
+					Util::Color::PerformanceDelta(direction));
+			ImGui::Text(
+				"%+.1f \xC2\xB1 %.1f%s",
+				state.result.fpsDelta,
+				state.result.fpsMargin95,
+				state.result.fpsSignificant ?
+					"" :
+					T(
+						TKEY("result.inconclusive_suffix"),
+						" (inconclusive)"));
+			if (direction != 0)
+				ImGui::PopStyleColor();
+		}
+
+		if (state.result.presentSynced) {
 			ImGui::Spacing();
-			Util::Text::WrappedWarning("FPS is VSync-synced. FPS differences only appear once the feature pushes frame work beyond the sync budget; use GPU and CPU deltas to see its cost before then.");
-		} else if (state.delta.fpsFramePaced) {
+			Util::Text::WrappedWarning(
+				T(
+					TKEY("result.vsync_warning"),
+					"Game FPS is VSync-synced. Total/FPS can hide workload changes below the sync budget; use whole-frame GPU and CPU deltas as supporting metrics."));
+		} else if (state.result.framePaced) {
 			ImGui::Spacing();
-			Util::Text::WrappedWarning("FPS appears frame-paced or externally limited. FPS differences may only appear once the frame-pacing budget is exceeded; use GPU and CPU deltas to see its cost before then.");
+			Util::Text::WrappedWarning(
+				T(
+					TKEY("result.pacing_warning"),
+					"Game FPS appears externally paced or limited. Total/FPS can hide workload changes below that pacing budget; use whole-frame GPU and CPU deltas as supporting metrics."));
 		}
-	}
-
-	int GetFeatureListDirection(const TuningHighlightState& state, const std::string& shortName)
-	{
-		auto it = state.featureDirections.find(shortName);
-		if (it == state.featureDirections.end())
-			return 0;
-
-		if (it->second.gpu > 0 || it->second.cpu > 0)
-			return 1;
-		if (it->second.gpu < 0 || it->second.cpu < 0)
-			return -1;
-		return 0;
-	}
-
-	int GetFeatureOrder(Feature* feature)
-	{
-		if (!feature)
-			return static_cast<int>(kPerformanceFeatureOrder.size());
-
-		const std::string shortName = feature->GetShortName();
-		for (size_t i = 0; i < kPerformanceFeatureOrder.size(); ++i) {
-			if (kPerformanceFeatureOrder[i] == shortName)
-				return static_cast<int>(i);
-		}
-
-		return static_cast<int>(kPerformanceFeatureOrder.size());
-	}
-
-	bool ShouldShowInPerformanceTuning(Feature* feature)
-	{
-		if (!feature)
-			return false;
-		const std::string shortName = feature->GetShortName();
-		return std::ranges::find(kPerformanceFeatureOrder, std::string_view(shortName)) != kPerformanceFeatureOrder.end();
+		return startClicked;
 	}
 
 	std::vector<Feature*> BuildPerformanceFeatureList()
 	{
 		std::vector<Feature*> features;
-		const bool essentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
+		const bool essentialsMode =
+			globals::menu && globals::menu->IsPerformanceUiMode();
 		for (auto* feature : Feature::GetFeatureList()) {
-			if (!feature || !feature->loaded || feature->IsHiddenFromUserView() ||
+			if (!feature ||
+				!feature->loaded ||
+				feature->IsHiddenFromUserView() ||
 				(essentialsMode && feature->IsHiddenInEssentialsMode()) ||
-				!feature->IsInMenu() || !feature->HasPerformanceSettings() ||
-				!ShouldShowInPerformanceTuning(feature))
+				!feature->IsInMenu() ||
+				!feature->HasPerformanceSettings() ||
+				feature->GetPerformanceTuningConfig().order < 0) {
 				continue;
-
+			}
 			features.push_back(feature);
 		}
 
 		std::ranges::sort(features, [](Feature* lhs, Feature* rhs) {
-			const int lhsOrder = GetFeatureOrder(lhs);
-			const int rhsOrder = GetFeatureOrder(rhs);
+			const int lhsOrder =
+				lhs->GetPerformanceTuningConfig().order;
+			const int rhsOrder =
+				rhs->GetPerformanceTuningConfig().order;
 			if (lhsOrder != rhsOrder)
 				return lhsOrder < rhsOrder;
-
 			return lhs->GetDisplayName() < rhs->GetDisplayName();
 		});
-
 		return features;
 	}
 
-	std::vector<std::string> BuildPerformanceFeaturePrefixes(const std::vector<Feature*>& features)
+	std::vector<std::string> BuildPerformanceFeaturePrefixes(
+		const std::vector<Feature*>& features)
 	{
 		std::vector<std::string> prefixes;
 		prefixes.reserve(features.size());
 		for (auto* feature : features) {
-			if (feature) {
+			if (feature)
 				prefixes.push_back(feature->GetShortName());
-			}
 		}
 		return prefixes;
 	}
 
-	std::vector<std::string> BuildProfilingPrefixesForFeature(const std::string& shortName)
+	std::string FindLockedFeatureShortName()
 	{
-		return { shortName };
+		for (const auto& [shortName, state] : g_costMeasurementStates) {
+			if (IsFeatureCostMeasurementRunning(state))
+				return shortName;
+		}
+		for (const auto& [shortName, state] : g_costMeasurementStates) {
+			if (state.restorePending)
+				return shortName;
+		}
+		return {};
+	}
+
+	Feature* FindSelectedFeature(const std::vector<Feature*>& features)
+	{
+		if (features.empty())
+			return nullptr;
+
+		const auto it = std::ranges::find_if(
+			features,
+			[](Feature* feature) {
+				return feature &&
+				       feature->GetShortName() == g_selectedShortName;
+			});
+		if (it != features.end())
+			return *it;
+
+		g_selectedShortName = features.front()->GetShortName();
+		return features.front();
+	}
+
+	Feature* FindRunningFeature()
+	{
+		for (auto& [shortName, state] : g_costMeasurementStates) {
+			if (IsFeatureCostMeasurementRunning(state))
+				return FindFeatureByShortName(shortName);
+		}
+		return nullptr;
 	}
 
 	ProfilingRenderer::PerformanceTimingTotals GetTimingTotalsForFeature(
@@ -1560,59 +2096,10 @@ namespace
 		const std::string& shortName)
 	{
 		ProfilingRenderer::PerformanceTimingTotals totals;
-		const auto prefixes = BuildProfilingPrefixesForFeature(shortName);
-		for (const auto& prefix : prefixes) {
-			const auto it = summary.features.find(prefix);
-			if (it == summary.features.end())
-				continue;
-
-			totals.gpuAvgMs += it->second.gpuAvgMs;
-			totals.cpuAvgMs += it->second.cpuAvgMs;
-			totals.hasGpu = totals.hasGpu || it->second.hasGpu;
-			totals.hasCpu = totals.hasCpu || it->second.hasCpu;
-		}
-
-		return totals;
-	}
-
-	Feature* FindSelectedFeature(const std::vector<Feature*>& features, std::string& selectedShortName)
-	{
-		if (features.empty()) {
-			selectedShortName.clear();
-			return nullptr;
-		}
-
-		auto it = std::ranges::find_if(features, [&](Feature* feature) {
-			return feature && feature->GetShortName() == selectedShortName;
-		});
-		if (it != features.end())
-			return *it;
-
-		selectedShortName = features.front()->GetShortName();
-		return features.front();
-	}
-
-	void CancelFeatureCostMeasurement(Feature* feature, FeatureCostMeasurementState& state, bool allowPendingRestore)
-	{
-		(void)allowPendingRestore;
-
-		if (!IsFeatureCostMeasurementActive(state)) {
-			return;
-		}
-
-		if (feature && state.testStateApplied) {
-			RestoreFeatureCostMeasurementOriginalState(feature, state);
-		}
-
-		state = {};
-	}
-
-	void ClearFinishedFeatureCostMeasurement(FeatureCostMeasurementState& state)
-	{
-		if (state.phase == FeatureCostMeasurementPhase::Complete ||
-			state.phase == FeatureCostMeasurementPhase::StabilityFailed) {
-			state = {};
-		}
+		const auto it = summary.features.find(shortName);
+		if (it == summary.features.end())
+			return totals;
+		return it->second;
 	}
 
 	void ClearHighlightDirections(TuningHighlightState& state)
@@ -1635,14 +2122,25 @@ namespace
 
 		float baselineGpuMs = 0.0f;
 		float currentGpuMs = 0.0f;
-		if (TryGetDisplayGpuMs(state.baseline, baselineGpuMs) && TryGetDisplayGpuMs(current, currentGpuMs))
-			state.gpuTotalDirection = GetDirectionFromFrameTimeDelta(currentGpuMs - baselineGpuMs);
+		if (TryGetDisplayGpuMs(state.baseline, baselineGpuMs) &&
+			TryGetDisplayGpuMs(current, currentGpuMs)) {
+			state.gpuTotalDirection =
+				GetDirectionFromFrameTimeDelta(
+					currentGpuMs - baselineGpuMs);
+		}
 		float baselineCpuMs = 0.0f;
 		float currentCpuMs = 0.0f;
-		if (TryGetDisplayCpuMs(state.baseline, baselineCpuMs) && TryGetDisplayCpuMs(current, currentCpuMs))
-			state.cpuTotalDirection = GetDirectionFromFrameTimeDelta(currentCpuMs - baselineCpuMs);
-		if (state.baseline.frameMs > 0.0f && current.frameMs > 0.0f) {
-			state.frameDirection = GetDirectionFromFrameTimeDelta(current.frameMs - state.baseline.frameMs);
+		if (TryGetDisplayCpuMs(state.baseline, baselineCpuMs) &&
+			TryGetDisplayCpuMs(current, currentCpuMs)) {
+			state.cpuTotalDirection =
+				GetDirectionFromFrameTimeDelta(
+					currentCpuMs - baselineCpuMs);
+		}
+		if (state.baseline.hasPresentInterval &&
+			current.hasPresentInterval) {
+			state.frameDirection = GetDirectionFromFrameTimeDelta(
+				current.presentIntervalMs -
+				state.baseline.presentIntervalMs);
 			state.fpsDirection = state.frameDirection;
 		}
 
@@ -1651,30 +2149,54 @@ namespace
 				continue;
 
 			const std::string shortName = feature->GetShortName();
-			const auto baselineTotals = GetTimingTotalsForFeature(state.baseline, shortName);
-			const auto currentTotals = GetTimingTotalsForFeature(current, shortName);
-
+			const auto baselineTotals =
+				GetTimingTotalsForFeature(state.baseline, shortName);
+			const auto currentTotals =
+				GetTimingTotalsForFeature(current, shortName);
 			FeatureHighlightDirection direction;
-			if (baselineTotals.hasGpu || currentTotals.hasGpu)
-				direction.gpu = GetDirectionFromFrameTimeDelta(currentTotals.gpuAvgMs - baselineTotals.gpuAvgMs);
-			if (baselineTotals.hasCpu || currentTotals.hasCpu)
-				direction.cpu = GetDirectionFromFrameTimeDelta(currentTotals.cpuAvgMs - baselineTotals.cpuAvgMs);
-
+			if (baselineTotals.hasGpu && currentTotals.hasGpu) {
+				direction.gpu = GetDirectionFromFrameTimeDelta(
+					currentTotals.gpuAvgMs -
+					baselineTotals.gpuAvgMs);
+			}
+			if (baselineTotals.hasCpu && currentTotals.hasCpu) {
+				direction.cpu = GetDirectionFromFrameTimeDelta(
+					currentTotals.cpuAvgMs -
+					baselineTotals.cpuAvgMs);
+			}
 			if (direction.gpu != 0 || direction.cpu != 0)
 				state.featureDirections[shortName] = direction;
 		}
 	}
 
-	void RegisterSettingsEdit(TuningHighlightState& state, const ProfilingRenderer::PerformanceTimingSummary& timingBeforeEdit, int frameCount)
+	void RegisterSettingsEdit(
+		TuningHighlightState& state,
+		const ProfilingRenderer::PerformanceTimingSummary& timingBeforeEdit,
+		const ProfilingRenderer::PerformanceTimingSummary& current,
+		double currentTime)
 	{
-		const bool startsNewEditSequence = frameCount - state.lastEditFrame > 1;
-		if (startsNewEditSequence && timingBeforeEdit.valid)
-			state.baseline = timingBeforeEdit;
+		if (!timingBeforeEdit.valid ||
+			current.presentIntervalSampleId == 0) {
+			state.pendingComparison = false;
+			ClearHighlightDirections(state);
+			return;
+		}
 
-		state.pendingComparison = timingBeforeEdit.valid || state.pendingComparison;
-		state.lastEditFrame = frameCount;
-		state.measureAfterFrame = frameCount + kTuningSettleFrames;
-		state.expireFrame = frameCount + kTuningHighlightFrames;
+		if (!state.pendingComparison)
+			state.baseline = timingBeforeEdit;
+		state.pendingComparison = true;
+		state.lastEditSampleId = current.presentIntervalSampleId;
+		const uint64_t remaining =
+			std::numeric_limits<uint64_t>::max() -
+			current.presentIntervalSampleId;
+		state.measureAfterSampleId =
+			current.presentIntervalSampleId +
+			std::min(remaining, kTuningPostEditFreshSamples);
+		state.settleAfterTime =
+			currentTime + kTuningPostEditSettleSeconds;
+		state.comparisonDeadline =
+			currentTime + kTuningPostEditTimeoutSeconds;
+		state.expireTime = 0.0;
 		ClearHighlightDirections(state);
 	}
 
@@ -1682,19 +2204,56 @@ namespace
 		TuningHighlightState& state,
 		const ProfilingRenderer::PerformanceTimingSummary& current,
 		const std::vector<Feature*>& features,
-		int frameCount)
+		double currentTime)
 	{
-		if (state.pendingComparison && frameCount >= state.measureAfterFrame) {
-			RecomputeHighlightDirections(state, current, features);
-			state.pendingComparison = false;
+		if (state.pendingComparison) {
+			const bool timingReset =
+				current.presentIntervalSampleId <
+				state.lastEditSampleId;
+			const bool timedOut =
+				currentTime >= state.comparisonDeadline;
+			if (timingReset || timedOut) {
+				state.pendingComparison = false;
+				ClearHighlightDirections(state);
+			} else if (
+				currentTime >= state.settleAfterTime &&
+				current.presentIntervalSampleId >=
+					state.measureAfterSampleId) {
+				RecomputeHighlightDirections(
+					state,
+					current,
+					features);
+				state.pendingComparison = false;
+				state.expireTime =
+					currentTime + kTuningHighlightSeconds;
+			}
 		}
 
-		if (!state.pendingComparison && frameCount > state.expireFrame) {
+		if (!state.pendingComparison &&
+			state.expireTime > 0.0 &&
+			currentTime >= state.expireTime) {
 			ClearHighlightDirections(state);
+			state.expireTime = 0.0;
 		}
 	}
 
-	ProfilingRenderer::PerformanceTimingHighlight BuildSelectedHighlight(const TuningHighlightState& state, const std::string& selectedShortName)
+	int GetFeatureListDirection(
+		const TuningHighlightState& state,
+		const std::string& shortName)
+	{
+		const auto it = state.featureDirections.find(shortName);
+		if (it == state.featureDirections.end())
+			return 0;
+		if (it->second.gpu > 0 || it->second.cpu > 0)
+			return 1;
+		if (it->second.gpu < 0 || it->second.cpu < 0)
+			return -1;
+		return 0;
+	}
+
+	ProfilingRenderer::PerformanceTimingHighlight BuildSelectedHighlight(
+		const TuningHighlightState& state,
+		const std::string& selectedShortName)
 	{
 		ProfilingRenderer::PerformanceTimingHighlight highlight;
 		highlight.frameDirection = state.frameDirection;
@@ -1702,133 +2261,383 @@ namespace
 		highlight.gpuTotalDirection = state.gpuTotalDirection;
 		highlight.cpuTotalDirection = state.cpuTotalDirection;
 
-		auto it = state.featureDirections.find(selectedShortName);
+		const auto it =
+			state.featureDirections.find(selectedShortName);
 		if (it != state.featureDirections.end()) {
 			highlight.featureGpuDirection = it->second.gpu;
 			highlight.featureCpuDirection = it->second.cpu;
 		}
-
 		return highlight;
+	}
+
+	void ClearFinishedFeatureCostMeasurement(
+		FeatureCostMeasurementState& state)
+	{
+		if ((state.stage == FeatureCostMeasurementStage::Complete ||
+			 state.stage == FeatureCostMeasurementStage::Failed) &&
+			!state.restorePending) {
+			state = {};
+		}
+	}
+
+	void InvalidateCompletedResultIfStale(
+		Feature* feature,
+		FeatureCostMeasurementState& state,
+		const json& currentUiState)
+	{
+		if (state.stage != FeatureCostMeasurementStage::Complete)
+			return;
+
+		if (!state.hasResultScene ||
+			CaptureSceneFingerprint() != state.resultScene ||
+			!PerformanceTuning::AreJsonValuesEquivalent(
+				currentUiState,
+				state.resultSettingsState) ||
+			!feature->IsPerformanceTuningApplicable() ||
+			IsFeatureControlledBySceneSettings(feature)) {
+			state = {};
+		}
 	}
 }
 
 void PerformanceTuningRenderer::Render()
 {
-	static std::string selectedShortName;
-	static TuningHighlightState highlightState;
-
 	CaptureProfilerStateForPerformanceTuning();
 
-	const auto features = BuildPerformanceFeatureList();
-	auto* selectedFeature = FindSelectedFeature(features, selectedShortName);
+	auto features = BuildPerformanceFeatureList();
+	const std::string lockedShortName = FindLockedFeatureShortName();
+	if (!lockedShortName.empty()) {
+		g_selectedShortName = lockedShortName;
+		if (auto* lockedFeature = FindFeatureByShortName(lockedShortName);
+			lockedFeature &&
+			std::ranges::find(features, lockedFeature) == features.end()) {
+			features.insert(features.begin(), lockedFeature);
+		}
+	}
+	auto* selectedFeature = FindSelectedFeature(features);
+
+	const bool measurementWasRunning =
+		IsAnyFeatureCostMeasurementRunning();
+	SyncProfilerCaptureModeLimit();
+	const auto captureMode = measurementWasRunning ?
+	                         Profiler::CaptureMode::WholeFrameOnly :
+	                         Profiler::CaptureMode::DetailedPasses;
+	const auto featurePrefixes =
+		BuildPerformanceFeaturePrefixes(features);
+	const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(
+		featurePrefixes,
+		captureMode);
+	const double currentTime = ImGui::GetTime();
+
+	for (auto& [shortName, state] : g_costMeasurementStates) {
+		if (!IsFeatureCostMeasurementRunning(state))
+			continue;
+
+		auto* feature = FindFeatureByShortName(shortName);
+		if (!feature || !feature->loaded) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(
+					TKEY("error.feature_unavailable"),
+					"Stopped because the measured feature became unavailable."));
+			continue;
+		}
+		UpdateFeatureCostMeasurement(feature, state, timing, currentTime);
+	}
+	SyncProfilerCaptureModeLimit();
+
+	if (!measurementWasRunning &&
+		!IsAnyFeatureCostMeasurementRunning()) {
+		UpdateHighlightState(
+			g_highlightState,
+			timing,
+			features,
+			currentTime);
+	}
+
 	if (!selectedFeature) {
-		ImGui::TextDisabled("No loaded performance settings are available.");
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				TKEY("empty"),
+				"No loaded performance settings are available."));
+		g_lastTimingSummary = timing;
 		return;
 	}
 
-	const auto featurePrefixes = BuildPerformanceFeaturePrefixes(features);
-	const auto timingBeforeSettings = ProfilingRenderer::CapturePerformanceTimingSummary(featurePrefixes, true);
-	const int frameCount = ImGui::GetFrameCount();
-	const double currentTime = ImGui::GetTime();
-	UpdateHighlightState(highlightState, timingBeforeSettings, features, frameCount);
-	for (auto* feature : features) {
-		if (!feature)
-			continue;
-
-		UpdateFeatureCostMeasurement(feature, g_costMeasurementStates[feature->GetShortName()], timingBeforeSettings, currentTime);
-	}
-	const bool anyMeasurementRunning = IsAnyFeatureCostMeasurementRunning();
-
-	const float selectorWidth = std::max(180.0f * Util::GetUIScale(), ImGui::GetContentRegionAvail().x * 0.18f);
-
-	RenderTopPerformanceCounters(timingBeforeSettings, highlightState);
+	RenderTopPerformanceCounters(timing, g_highlightState);
 	ImGui::Spacing();
 
-	if (ImGui::BeginTable("##PerformanceTuningLayout", 3,
-			ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
-		ImGui::TableSetupColumn("##PerformanceFeatureSelector", ImGuiTableColumnFlags_WidthFixed, selectorWidth);
-		ImGui::TableSetupColumn("##PerformanceSettings", ImGuiTableColumnFlags_WidthStretch, 1.25f);
-		ImGui::TableSetupColumn("##PerformanceProfile", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+	// Keep UI work constant and minimal for all A-B-A states. In particular,
+	// do not draw settings, serialize feature JSON, or request detailed pass
+	// scopes while a measurement frame is being consumed.
+	if (measurementWasRunning) {
+		auto* runningFeature = FindRunningFeature();
+		if (!runningFeature)
+			runningFeature = selectedFeature;
+		if (runningFeature) {
+			ImGui::SeparatorText(
+				runningFeature->GetDisplayName().c_str());
+			(void)RenderFeatureCostMeasurement(
+				runningFeature,
+				g_costMeasurementStates[runningFeature->GetShortName()]);
+		}
+		SyncProfilerCaptureModeLimit();
+		g_lastTimingSummary = timing;
+		return;
+	}
+
+	const bool anyMeasurementLocked =
+		IsAnyFeatureCostMeasurementLocked();
+	const float selectorWidth = std::max(
+		180.0f * Util::GetUIScale(),
+		ImGui::GetContentRegionAvail().x * 0.18f);
+
+	if (ImGui::BeginTable(
+			"##PerformanceTuningLayout",
+			3,
+			ImGuiTableFlags_Resizable |
+				ImGuiTableFlags_BordersInnerV |
+				ImGuiTableFlags_SizingStretchProp)) {
+		ImGui::TableSetupColumn(
+			"##PerformanceFeatureSelector",
+			ImGuiTableColumnFlags_WidthFixed,
+			selectorWidth);
+		ImGui::TableSetupColumn(
+			"##PerformanceSettings",
+			ImGuiTableColumnFlags_WidthStretch,
+			1.25f);
+		ImGui::TableSetupColumn(
+			"##PerformanceProfile",
+			ImGuiTableColumnFlags_WidthStretch,
+			1.0f);
 
 		ImGui::TableNextRow();
 		ImGui::TableSetColumnIndex(0);
-		if (ImGui::BeginChild("##PerformanceFeatureSelectorChild", ImVec2(0, 0), false)) {
-			ImGui::BeginDisabled(anyMeasurementRunning);
+		if (ImGui::BeginChild(
+				"##PerformanceFeatureSelectorChild",
+				ImVec2(0, 0),
+				false)) {
+			ImGui::BeginDisabled(anyMeasurementLocked);
 			for (auto* feature : features) {
 				if (!feature)
 					continue;
 
-				const bool selected = feature->GetShortName() == selectedShortName;
-				const int featureDirection = GetFeatureListDirection(highlightState, feature->GetShortName());
-				if (featureDirection != 0)
-					ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::PerformanceDelta(featureDirection));
-				if (ImGui::Selectable(feature->GetDisplayName().c_str(), selected, ImGuiSelectableFlags_None)) {
-					selectedShortName = feature->GetShortName();
+				const bool selected =
+					feature->GetShortName() ==
+					g_selectedShortName;
+				const int direction = GetFeatureListDirection(
+					g_highlightState,
+					feature->GetShortName());
+				if (direction != 0)
+					ImGui::PushStyleColor(
+						ImGuiCol_Text,
+						Util::Color::PerformanceDelta(direction));
+				if (ImGui::Selectable(
+						feature->GetDisplayName().c_str(),
+						selected,
+						ImGuiSelectableFlags_None)) {
+					g_selectedShortName =
+						feature->GetShortName();
 					selectedFeature = feature;
 				}
-				if (featureDirection != 0)
+				if (direction != 0)
 					ImGui::PopStyleColor();
 			}
 			ImGui::EndDisabled();
-			if (anyMeasurementRunning) {
+			if (anyMeasurementLocked) {
 				ImGui::Spacing();
-				ImGui::TextDisabled("Feature selection is locked while a cost test is running.");
+				ImGui::TextDisabled(
+					"%s",
+					T(
+						TKEY("selection_locked"),
+						"Feature selection is locked while a cost test or settings restoration is active."));
 			}
 		}
 		ImGui::EndChild();
 
 		ImGui::TableSetColumnIndex(1);
-		if (ImGui::BeginChild("##PerformanceSettingsChild", ImVec2(0, 0), false)) {
-			ImGui::SeparatorText(selectedFeature->GetDisplayName().c_str());
+		if (ImGui::BeginChild(
+				"##PerformanceSettingsChild",
+				ImVec2(0, 0),
+				false)) {
+			ImGui::SeparatorText(
+				selectedFeature->GetDisplayName().c_str());
 			Util::PerformanceFrameStyleWrapper performanceStyle(true);
-			auto& selectedCostState = g_costMeasurementStates[selectedFeature->GetShortName()];
-			const json settingsStateBefore = CapturePerformanceUiState(selectedFeature);
-			ImGui::BeginDisabled(anyMeasurementRunning);
-			ImGui::BeginGroup();
+			auto& selectedCostState =
+				g_costMeasurementStates[selectedFeature->GetShortName()];
+
+			json currentUiState;
+			bool capturedUiState = false;
+			try {
+				currentUiState =
+					CapturePerformanceUiState(selectedFeature);
+				capturedUiState = true;
+			} catch (const std::exception& e) {
+				logger::warn(
+					"Failed to capture Performance Tuning UI state for {}: {}",
+					selectedFeature->GetDisplayName(),
+					e.what());
+			} catch (...) {
+				logger::warn(
+					"Failed to capture Performance Tuning UI state for {}",
+					selectedFeature->GetDisplayName());
+			}
+
+			if (capturedUiState) {
+				const std::string shortName =
+					selectedFeature->GetShortName();
+				const auto lastIt =
+					g_lastPerformanceUiStates.find(shortName);
+				if (lastIt !=
+						g_lastPerformanceUiStates.end() &&
+					!PerformanceTuning::AreJsonValuesEquivalent(
+						lastIt->second,
+						currentUiState)) {
+					RegisterSettingsEdit(
+						g_highlightState,
+						g_lastTimingSummary,
+						timing,
+						currentTime);
+					ClearFinishedFeatureCostMeasurement(
+						selectedCostState);
+				}
+				g_lastPerformanceUiStates[shortName] =
+					currentUiState;
+				InvalidateCompletedResultIfStale(
+					selectedFeature,
+					selectedCostState,
+					currentUiState);
+			}
+
+			const bool sceneControlled =
+				IsFeatureControlledBySceneSettings(selectedFeature);
+			const bool applicable =
+				selectedFeature->IsPerformanceTuningApplicable();
+			const bool settingsDisabled =
+				anyMeasurementLocked ||
+				sceneControlled;
+			ImGui::BeginDisabled(settingsDisabled);
 			selectedFeature->DrawPerformanceSettings(true);
-			ImGui::EndGroup();
 			ImGui::EndDisabled();
-			RenderFeatureCostMeasurement(selectedFeature, selectedCostState);
-			const bool settingsRestored = RenderPerformanceUserDefaultButtons(selectedFeature, IsAnyFeatureCostMeasurementRunning());
-			const json settingsStateAfter = CapturePerformanceUiState(selectedFeature);
-			const bool settingsEdited = settingsRestored || settingsStateBefore != settingsStateAfter;
-			if (settingsEdited) {
-				RegisterSettingsEdit(highlightState, timingBeforeSettings, frameCount);
-				ClearFinishedFeatureCostMeasurement(selectedCostState);
+
+			if (sceneControlled) {
+				Util::Text::WrappedWarning(
+					T(
+						TKEY("scene_settings_owned"),
+						"Scene-specific settings currently control this feature. Pause those overrides before tuning it."));
+			} else if (!applicable) {
+				const char* reason =
+					selectedFeature->GetPerformanceTuningApplicabilityReason();
+				Util::Text::WrappedWarning(
+					reason ?
+						reason :
+						T(
+							TKEY("not_applicable"),
+							"This feature has no active work in the current scene."));
+			}
+
+			const bool startMeasurement = RenderFeatureCostMeasurement(
+				selectedFeature,
+				selectedCostState);
+			const bool settingsRestored =
+				RenderPerformanceUserDefaultButtons(
+					selectedFeature,
+					settingsDisabled);
+			if (settingsRestored) {
+				RegisterSettingsEdit(
+					g_highlightState,
+					timing,
+					timing,
+					currentTime);
+				if (!selectedCostState.restorePending)
+					selectedCostState = {};
+				g_lastPerformanceUiStates.erase(
+					selectedFeature->GetShortName());
+			}
+			if (startMeasurement && !settingsRestored) {
+				StartFeatureCostMeasurement(
+					selectedFeature,
+					selectedCostState,
+					timing,
+					currentTime);
+				SyncProfilerCaptureModeLimit();
 			}
 		}
 		ImGui::EndChild();
 
 		ImGui::TableSetColumnIndex(2);
-		if (ImGui::BeginChild("##PerformanceProfileChild", ImVec2(0, 0), false)) {
-			ImGui::SeparatorText("Profiling");
-			const auto selectedHighlight = BuildSelectedHighlight(highlightState, selectedFeature->GetShortName());
-			const auto profilingPrefixes = BuildProfilingPrefixesForFeature(selectedFeature->GetShortName());
-			ProfilingRenderer::RenderFeaturePerformanceSummary(profilingPrefixes, &selectedHighlight);
+		if (ImGui::BeginChild(
+				"##PerformanceProfileChild",
+				ImVec2(0, 0),
+				false)) {
+			ImGui::SeparatorText(
+				T(TKEY("profiling"), "Profiling"));
+			const auto selectedHighlight =
+				BuildSelectedHighlight(
+					g_highlightState,
+					selectedFeature->GetShortName());
+			ProfilingRenderer::RenderFeaturePerformanceSummary(
+				selectedFeature->GetShortName(),
+				&selectedHighlight);
 		}
 		ImGui::EndChild();
-
 		ImGui::EndTable();
 	}
+
+	g_lastTimingSummary = timing;
 }
 
-void PerformanceTuningRenderer::CancelActiveMeasurements(bool includePending)
+void PerformanceTuningRenderer::CancelActiveMeasurements(CancelMode mode)
 {
 	for (auto& [shortName, state] : g_costMeasurementStates) {
-		if (includePending)
-			ClearFinishedFeatureCostMeasurement(state);
-
-		if (!IsFeatureCostMeasurementRunning(state)) {
-			continue;
+		auto* feature = FindFeatureByShortName(shortName);
+		if (IsFeatureCostMeasurementRunning(state)) {
+			FailFeatureCostMeasurement(
+				feature,
+				state,
+				T(TKEY("error.cancelled"), "Measurement cancelled."));
+		} else if (state.restorePending) {
+			TryRestoreFeatureCostOriginalState(feature, state);
 		}
-
-		CancelFeatureCostMeasurement(FindFeatureByShortName(shortName), state, includePending);
 	}
 
+	if (mode == CancelMode::ClearSession) {
+		std::erase_if(
+			g_costMeasurementStates,
+			[](const auto& entry) {
+				return !entry.second.restorePending;
+			});
+		g_performanceDefaultsMessages.clear();
+		g_lastPerformanceUiStates.clear();
+		g_selectedShortName.clear();
+		g_highlightState = {};
+		g_lastTimingSummary = {};
+	}
+	SyncProfilerCaptureModeLimit();
 	RestoreProfilerStateAfterPerformanceTuning();
 }
 
 bool PerformanceTuningRenderer::HasActiveMeasurements()
 {
-	return IsAnyFeatureCostMeasurementRunning();
+	return IsAnyFeatureCostMeasurementLocked();
 }
+
+bool PerformanceTuningRenderer::PrepareForSceneUpdate()
+{
+	return PrepareFeatureCostMeasurementsForSceneChange(
+		false,
+		T(TKEY("error.scene_changed"), "Stopped because the scene changed."));
+}
+
+bool PerformanceTuningRenderer::PrepareForSceneSettingsTransition()
+{
+	return PrepareFeatureCostMeasurementsForSceneChange(
+		true,
+		T(
+			TKEY("error.scene_owned"),
+			"Stopped because scene-specific settings took control of this feature."));
+}
+
+#undef I18N_KEY_PREFIX

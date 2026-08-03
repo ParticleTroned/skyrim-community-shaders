@@ -13,6 +13,7 @@
 #include "imgui_internal.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 
@@ -1951,39 +1952,89 @@ void EditorWindow::ResetTimeScale()
 	timeScaleSlider = kVanillaTimeScale;
 }
 
-void EditorWindow::UpdateTimeState()
+namespace
+{
+	// Time must keep running while these are up: the engine hangs on fast travel and sleep/wait
+	// never completes when game time cannot advance. MapMenu covers the fast travel launch point.
+	constexpr std::array kTimeSensitiveMenus{ RE::LoadingMenu::MENU_NAME, RE::SleepWaitMenu::MENU_NAME, RE::MapMenu::MENU_NAME };
+
+	bool IsTimeSensitiveMenu(const RE::BSFixedString& a_menuName)
+	{
+		return std::ranges::any_of(kTimeSensitiveMenus, [&](std::string_view name) { return a_menuName == name; });
+	}
+
+	bool IsAnyTimeSensitiveMenuOpen()
+	{
+		auto ui = globals::game::ui ? globals::game::ui : RE::UI::GetSingleton();
+		return ui && std::ranges::any_of(kTimeSensitiveMenus, [&](std::string_view name) { return ui->IsMenuOpen(name); });
+	}
+}
+
+void EditorWindow::SetTimeRunningForMenu(bool a_needsRunningTime)
 {
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
-	auto ui = globals::game::ui ? globals::game::ui : RE::UI::GetSingleton();
 	if (!calendar || !calendar->timeScale)
 		return;
 
-	bool needsTimeRestored = ui && (ui->IsMenuOpen(RE::SleepWaitMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	if (a_needsRunningTime) {
+		if (timeRestoredForMenu || calendar->timeScale->value != 0.0f)
+			return;
 
-	// External state sync (skip while a time-sensitive menu is open)
-	if (!needsTimeRestored) {
-		if (calendar->timeScale->value == 0.0f && !timePaused)
+		// Only re-pause afterwards if the pause is ours. A zero timescale set by a stale save,
+		// console command, or another mod stays restored so it cannot freeze the game again.
+		wasPausedBeforeMenu = timePaused;
+		if (savedTimeScale <= 0.0f)
 			savedTimeScale = kVanillaTimeScale;
-		else if (calendar->timeScale->value > 0.0f && timePaused)
-			timePaused = false;
+		if (timePaused)
+			ResumeTime();
+		else
+			calendar->timeScale->value = std::max(savedTimeScale, kVanillaTimeScale);
+		timeRestoredForMenu = true;
+	} else if (timeRestoredForMenu) {
+		if (wasPausedBeforeMenu)
+			PauseTime();
+		timeRestoredForMenu = false;
+		wasPausedBeforeMenu = false;
+	}
+}
+
+RE::BSEventNotifyControl EditorWindow::MenuOpenCloseEventHandler::ProcessEvent(
+	const RE::MenuOpenCloseEvent* a_event,
+	RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
+{
+	// Fast travel overlaps these menus (map then loading), so a close only ends the guard once
+	// the whole set is closed.
+	if (a_event && IsTimeSensitiveMenu(a_event->menuName))
+		GetSingleton()->SetTimeRunningForMenu(a_event->opening || IsAnyTimeSensitiveMenuOpen());
+
+	return RE::BSEventNotifyControl::kContinue;
+}
+
+bool EditorWindow::MenuOpenCloseEventHandler::Register()
+{
+	static MenuOpenCloseEventHandler singleton;
+	static bool registered = false;
+
+	// DataLoaded can run more than once on reload paths.
+	if (registered)
+		return true;
+
+	auto ui = globals::game::ui ? globals::game::ui : RE::UI::GetSingleton();
+	if (!ui) {
+		logger::error("[CSEditor] UI event source not found");
+		return false;
 	}
 
-	// Temporarily restore time during sleep/wait, fast travel, and loading screens
-	if (needsTimeRestored && calendar->timeScale->value == 0.0f) {
-		if (!wasRestoredForWait) {
-			wasPausedBeforeWait = true;
-			if (timePaused)
-				ResumeTime();
-			else
-				calendar->timeScale->value = std::max(savedTimeScale, kVanillaTimeScale);
-			wasRestoredForWait = true;
-		}
-	} else if (!needsTimeRestored && wasRestoredForWait) {
-		if (wasPausedBeforeWait && !timePaused)
-			PauseTime();
-		wasRestoredForWait = false;
-		wasPausedBeforeWait = false;
+	auto eventSource = ui->GetEventSource<RE::MenuOpenCloseEvent>();
+	if (!eventSource) {
+		logger::error("[CSEditor] MenuOpenCloseEvent source not found");
+		return false;
 	}
+
+	eventSource->AddEventSink(&singleton);
+	registered = true;
+	logger::info("[CSEditor] Registered MenuOpenCloseEventHandler");
+	return true;
 }
 
 bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
@@ -2000,6 +2051,10 @@ void EditorWindow::DrawTimeControls()
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
 	if (!calendar || !calendar->gameHour || !calendar->timeScale)
 		return;
+
+	// An external timescale change (console, another mod, or the menu guard) overrides our pause.
+	if (timePaused && calendar->timeScale->value > 0.0f)
+		timePaused = false;
 
 	const float framePadX = ImGui::GetStyle().FramePadding.x * 2.0f;
 	const float buttonWidth = std::max({ ImGui::CalcTextSize("Resume Time").x,

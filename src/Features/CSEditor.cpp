@@ -167,6 +167,7 @@ namespace
 void CSEditor::DataLoaded()
 {
 	s_dataAvailable = true;
+	EditorWindow::MenuOpenCloseEventHandler::Register();
 	ApplySavedEditorOverrides();
 }
 
@@ -436,8 +437,6 @@ void CSEditor::UpdateWeatherLockAndTime()
 			sky->ForceWeather(lockedWeather, false);
 		}
 	}
-
-	editorWindow->UpdateTimeState();
 }
 
 void CSEditor::LerpWeather(RE::TESWeather* oldWeather, RE::TESWeather* newWeather, float currentWeatherPct)

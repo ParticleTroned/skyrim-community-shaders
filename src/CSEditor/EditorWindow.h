@@ -133,7 +133,18 @@ public:
 	inline void TogglePause() { timePaused ? ResumeTime() : PauseTime(); }
 	void ResetTimeScale();
 	bool IsTimePaused() const { return timePaused; }
-	void UpdateTimeState();
+	void SetTimeRunningForMenu(bool a_needsRunningTime);
+
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		virtual RE::BSEventNotifyControl ProcessEvent(
+			const RE::MenuOpenCloseEvent* a_event,
+			RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
+
+		static bool Register();
+	};
+
 	bool DrawGameHourSlider(const char* label = "Game Time", const char* format = "%.2f");
 	void DrawTimeControls();
 
@@ -257,8 +268,8 @@ private:
 	bool timePaused = false;
 	float savedTimeScale = kVanillaTimeScale;
 	float timeScaleSlider = kVanillaTimeScale;
-	bool wasRestoredForWait = false;
-	bool wasPausedBeforeWait = false;
+	bool timeRestoredForMenu = false;
+	bool wasPausedBeforeMenu = false;
 
 	// Sorting state
 	enum class SortColumn

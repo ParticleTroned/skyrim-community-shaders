@@ -125,6 +125,7 @@ If you want an example CMakeUserPreset to start off with you can copy the `CMake
 
 -   This option is default `"OFF"`
 -   This will enable tracy support, might need to delete build folder when this option is changed
+-   The client is pinned to Tracy protocol v82 (`ef099b05`); use a protocol-v82 profiler because protocol-v81 tools cannot connect
 
 When using custom preset you can call BuildRelease.bat with an parameter to specify which preset to configure eg:
 `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`

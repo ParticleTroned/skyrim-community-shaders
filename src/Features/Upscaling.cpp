@@ -171,7 +171,9 @@ namespace
 	constexpr uint64_t kVRRenderScaleProjectedResidencyDenominator = 2u;
 	constexpr uint64_t kVRRenderScaleProjectedSystemCommitNumerator = 4u;
 	constexpr uint64_t kVRRenderScaleProjectedNativeRestoreSystemCommitNumerator = 8u;
-	constexpr uint64_t kVRRenderScaleSystemCommitReserveBytes = 8ull * 1024ull * 1024ull * 1024ull;
+	constexpr uint64_t kVRRenderScaleSystemCommitMinimumReserveBytes = 8ull * 1024ull * 1024ull * 1024ull;
+	constexpr uint64_t kVRRenderScaleSystemCommitMaximumReserveBytes = 16ull * 1024ull * 1024ull * 1024ull;
+	constexpr uint64_t kVRRenderScaleSystemCommitReserveScaleDenominator = 8u;
 	constexpr uint32_t kVRRenderScaleRecentOutOfMemoryGuardFrames = 1800u;
 	constexpr uint64_t kVRRenderScaleMiB = 1024u * 1024u;
 	constexpr uint64_t kVRRenderScaleCriticalHeadroomBytes = 256u * kVRRenderScaleMiB;
@@ -217,37 +219,23 @@ namespace
 		return sample;
 	}
 
-	uint64_t GetVRRenderScaleSystemCommitAdmissionLimitForRatio(
-		uint64_t a_commitLimitBytes,
-		uint64_t a_ratioNumerator,
-		uint64_t a_ratioDenominator) noexcept
-	{
-		if (a_commitLimitBytes == 0 ||
-			a_ratioNumerator == 0 ||
-			a_ratioDenominator == 0 ||
-			a_ratioNumerator > a_ratioDenominator) {
-			return 0;
-		}
-
-		const uint64_t ratioLimit =
-			(a_commitLimitBytes / a_ratioDenominator) * a_ratioNumerator +
-			((a_commitLimitBytes % a_ratioDenominator) * a_ratioNumerator) / a_ratioDenominator;
-		const uint64_t reserveLimit =
-			a_commitLimitBytes > kVRRenderScaleSystemCommitReserveBytes ?
-				a_commitLimitBytes - kVRRenderScaleSystemCommitReserveBytes :
-				0u;
-		return std::min(ratioLimit, reserveLimit);
-	}
-
 	uint64_t GetVRRenderScaleSystemCommitAdmissionLimit(uint64_t a_commitLimitBytes) noexcept
 	{
-		return GetVRRenderScaleSystemCommitAdmissionLimitForRatio(a_commitLimitBytes, 3u, 4u);
+		if (a_commitLimitBytes == 0)
+			return 0;
+
+		const uint64_t scaledReserve = a_commitLimitBytes / kVRRenderScaleSystemCommitReserveScaleDenominator;
+		const uint64_t reserveBytes = std::clamp(
+			scaledReserve,
+			kVRRenderScaleSystemCommitMinimumReserveBytes,
+			kVRRenderScaleSystemCommitMaximumReserveBytes);
+		return a_commitLimitBytes > reserveBytes ? a_commitLimitBytes - reserveBytes : 0u;
 	}
 
 	uint64_t GetVRRenderScaleDoorHandoffSystemCommitAdmissionLimit(uint64_t a_commitLimitBytes) noexcept
 	{
-		return a_commitLimitBytes > kVRRenderScaleSystemCommitReserveBytes ?
-		           a_commitLimitBytes - kVRRenderScaleSystemCommitReserveBytes :
+		return a_commitLimitBytes > kVRRenderScaleSystemCommitMinimumReserveBytes ?
+		           a_commitLimitBytes - kVRRenderScaleSystemCommitMinimumReserveBytes :
 		           0u;
 	}
 
@@ -35037,9 +35025,10 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "processPrivateUsageBytes", controller.memory.processPrivateUsageBytes },
 			{ "deferred", controller.relatchPlan.systemCommitDeferred } },
 		{ { "maximumUsageBytes", systemCommitRecoveryLimit },
-			{ "minimumReserveBytes", kVRRenderScaleSystemCommitReserveBytes },
-			{ "maximumRatio", 0.75 },
-			{ "policy", "post_transition_recovery" } });
+			{ "minimumReserveBytes", kVRRenderScaleSystemCommitMinimumReserveBytes },
+			{ "maximumReserveBytes", kVRRenderScaleSystemCommitMaximumReserveBytes },
+			{ "reserveScaleDenominator", kVRRenderScaleSystemCommitReserveScaleDenominator },
+			{ "policy", "bounded_commit_reserve" } });
 	addGate(
 		"steady_state_memory_growth",
 		steadyStateMemoryGrowthBounded,

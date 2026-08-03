@@ -169,7 +169,8 @@ jobs:
                   body = release.get('body') or ''
                   # Strip feature audit appendix — Nexus changelog should only
                   # contain human-readable release notes, not the audit table.
-                  body = re.sub(r'\n---\n+# Feature Version Audit\b.*', '', body, flags=re.DOTALL).strip()
+                  # GitHub's release body API may return CRLF line endings.
+                  body = re.sub(r'\r?\n---\r?\n+# Feature Version Audit\b.*', '', body, flags=re.DOTALL).strip()
                   with open('nexus-matrix-raw.json') as f:
                       data = json.load(f)
                   for row in data:

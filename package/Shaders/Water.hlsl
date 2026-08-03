@@ -921,11 +921,11 @@ float GetUnifiedWaterDistanceDepthFade(float viewDistance)
 	return lerp(nearStrength, farStrength, smoothstep(fadeStart, fadeEnd, viewDistance));
 }
 
-float GetUnifiedWaterShoreDepthBlendWeight(float waterColumnDepthUnits)
+float GetUnifiedWaterShoreContactWeight(float waterColumnDepthUnits)
 {
 	// Plane-normal water-column depth is value-continuous across connected
-	// terrain triangles. Using it directly avoids the block discontinuities
-	// produced by normalizing against each triangle's screen-space gradient.
+	// terrain triangles. Fade the cue in only after crossing the water contact
+	// so it cannot draw a hard line over the bank itself.
 	float blendRange = max(
 		SharedData::unifiedWaterSettings.ShoreDepthBlendRangeUnits,
 		0.0);
@@ -940,35 +940,34 @@ float GetUnifiedWaterShoreDepthBlendWeight(float waterColumnDepthUnits)
 		max(waterColumnDepthUnits, 0.0));
 }
 
-float ApplyUnifiedWaterSurfaceVisibility(
-	float nativeSurfaceVisibility,
-	float distanceDepthFade,
-	float shallowDepthBlendWeight)
+float GetUnifiedWaterShallowSurfaceDepthWeight(float waterColumnDepthUnits)
 {
-	// Preserve the native depth, colour, distortion, normal, and lighting inputs.
-	// Only lift the final surface-versus-riverbed mix where shallow generated
-	// water would otherwise disappear into coarse terrain depth.
-	float visibilityStrength =
-		saturate(distanceDepthFade) * saturate(shallowDepthBlendWeight);
-	// Preserve the full 0-1 UI strength range while bounding the actual floor
-	// to 0.5. The concave mapping gives shallow tuning more authority and keeps
-	// every slider position effective without blocking the native deep handoff.
-	float visibilityFloor =
-		visibilityStrength * (1.0 - 0.5 * visibilityStrength);
-	float nativeVisibility = saturate(nativeSurfaceVisibility);
-	if (visibilityFloor <= 0.0)
-		return nativeVisibility;
+	float depthRange = max(
+		SharedData::unifiedWaterSettings.ShallowSurfaceDepthRangeUnits,
+		1.0);
+	if (
+		!isfinite(waterColumnDepthUnits) ||
+		waterColumnDepthUnits < 0.0 ||
+		!isfinite(depthRange))
+		return 0.0;
 
-	// A compact smooth maximum is monotonic and becomes exactly native once
-	// native visibility exceeds the floor's narrow transition. Unlike a forced
-	// depth Start/End handoff, it cannot create a falling, triangle-shaped band.
-	float transitionHalfWidth = visibilityFloor * 0.5;
-	float nativeWeight = saturate(
-		0.5 +
-		0.5 * (nativeVisibility - visibilityFloor) / transitionHalfWidth);
-	return saturate(
-		lerp(visibilityFloor, nativeVisibility, nativeWeight) +
-		transitionHalfWidth * nativeWeight * (1.0 - nativeWeight));
+	// A quintic fade keeps both slope and curvature continuous at the ends.
+	// The value reaches exactly zero at the configured shallow depth, leaving
+	// every medium/deep-water calculation on the unmodified native path.
+	float normalizedDepth = saturate(max(waterColumnDepthUnits, 0.0) / depthRange);
+	float smootherDepth =
+		normalizedDepth * normalizedDepth * normalizedDepth *
+		(normalizedDepth * (normalizedDepth * 6.0 - 15.0) + 10.0);
+	return 1.0 - smootherDepth;
+}
+
+float GetUnifiedWaterShallowSurfacePresence(
+	float distanceDepthFade,
+	float shoreContactWeight)
+{
+	return
+		saturate(distanceDepthFade) *
+		saturate(shoreContactWeight);
 }
 #			endif
 
@@ -979,6 +978,7 @@ struct DiffuseOutput
 	float depth;
 	float refractionMul;
 	float3 refractedViewDirection;
+	float waterColumnDepthUnits;
 };
 
 DiffuseOutput GetWaterDiffuseColor(
@@ -989,8 +989,7 @@ DiffuseOutput GetWaterDiffuseColor(
 	float refractionsDepthFactor,
 	float fresnel,
 	float3 viewPosition,
-	float distanceDepthFade,
-	float shallowDepthBlendWeight,
+	float waterColumnDepthUnits,
 	float depth)
 {
 #			if defined(REFRACTIONS)
@@ -1000,7 +999,7 @@ DiffuseOutput GetWaterDiffuseColor(
 
 	float2 refractionScreenPosition = FrameBuffer::DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy);
 	float4 refractionWorldPosition = float4(input.WPosition.xyz * depth / viewPosition.z, 0);
-	float refractionShallowDepthBlendWeight = shallowDepthBlendWeight;
+	float refractionWaterColumnDepthUnits = waterColumnDepthUnits;
 
 #				if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH)
 	float refractionDepth = GetScreenDepthWater(refractionScreenPosition);
@@ -1010,7 +1009,7 @@ DiffuseOutput GetWaterDiffuseColor(
 	float refractionViewSurfaceAngle = dot(refractionDepthAdjustedViewDirection, ReflectPlane[0].xyz);
 
 	float refractionPlaneMul = (1 - ReflectPlane[0].w / refractionViewSurfaceAngle);
-	float refractionWaterColumnDepthUnits =
+	float candidateRefractionWaterColumnDepthUnits =
 		refractionPlaneMul * abs(refractionViewSurfaceAngle);
 	float4 unclampedRefractionDistanceMul =
 		refractionPlaneMul *
@@ -1021,7 +1020,7 @@ DiffuseOutput GetWaterDiffuseColor(
 	bool refractionDepthValid =
 		isfinite(refractionPlaneMul) &&
 		refractionPlaneMul >= 0.0 &&
-		isfinite(refractionWaterColumnDepthUnits) &&
+		isfinite(candidateRefractionWaterColumnDepthUnits) &&
 		all(isfinite(unclampedRefractionDistanceMul));
 
 	if (!refractionDepthValid) {
@@ -1029,15 +1028,8 @@ DiffuseOutput GetWaterDiffuseColor(
 	} else {
 		depth = refractionDepth;
 		distanceMul = saturate(unclampedRefractionDistanceMul);
-
-#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-		refractionShallowDepthBlendWeight =
-			min(
-				shallowDepthBlendWeight,
-				GetUnifiedWaterShoreDepthBlendWeight(
-					refractionWaterColumnDepthUnits));
-#					endif
-
+		refractionWaterColumnDepthUnits =
+			candidateRefractionWaterColumnDepthUnits;
 		refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse, float4((refractionUvRaw * 2 - 1) * float2(1, -1), DepthTex.Load(float3(refractionScreenPosition, 0)).x, 1));
 		refractionWorldPosition.xyz /= refractionWorldPosition.w;
 	}
@@ -1055,12 +1047,6 @@ DiffuseOutput GetWaterDiffuseColor(
 #				else
 	float refractionMul = 1 - pow(saturate((-distanceMul.x * FogParam.z + FogParam.z) / FogParam.w), FogNearColor.w);
 #				endif
-#				if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-	refractionMul = ApplyUnifiedWaterSurfaceVisibility(
-		refractionMul,
-		distanceDepthFade,
-		refractionShallowDepthBlendWeight);
-#				endif
 
 	DiffuseOutput output;
 	output.refractionColor = refractionColor;
@@ -1069,6 +1055,7 @@ DiffuseOutput GetWaterDiffuseColor(
 	output.refractionMul = refractionMul;
 	float3 refractedViewDelta = refractionWorldPosition.xyz - input.WPosition.xyz;
 	output.refractedViewDirection = dot(refractedViewDelta, refractedViewDelta) > 1e-6 ? normalize(refractedViewDelta) : viewDirection;
+	output.waterColumnDepthUnits = refractionWaterColumnDepthUnits;
 	return output;
 #			else
 	DiffuseOutput output;
@@ -1081,6 +1068,7 @@ DiffuseOutput GetWaterDiffuseColor(
 	output.depth = 1;
 	output.refractionMul = 1;
 	output.refractedViewDirection = viewDirection;
+	output.waterColumnDepthUnits = waterColumnDepthUnits;
 	return output;
 #			endif
 }
@@ -1133,7 +1121,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (viewDistance - 8192) / (WaterParams.x - 8192)));
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
 	float distanceDepthFade = 0.0;
-	float shallowDepthBlendWeight = 1.0;
+	float shoreContactWeight = 1.0;
+	float shallowSurfacePresence = 0.0;
 #			if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
 	distanceDepthFade = GetUnifiedWaterDistanceDepthFade(viewDistance);
 #			endif
@@ -1146,6 +1135,7 @@ PS_OUTPUT main(PS_INPUT input)
 	bool isSpecular = false;
 
 	float depth = 0;
+	float waterColumnDepthUnits = -1.0;
 
 #			if defined(DEPTH)
 #				if defined(VERTEX_ALPHA_DEPTH)
@@ -1163,7 +1153,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float viewSurfaceAngle = dot(depthAdjustedViewDirection, ReflectPlane[0].xyz);
 
 	float planeMul = (1 - ReflectPlane[0].w / viewSurfaceAngle);
-	float waterColumnDepthUnits = planeMul * abs(viewSurfaceAngle);
+	waterColumnDepthUnits = planeMul * abs(viewSurfaceAngle);
 	float4 unclampedDistanceMul =
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z;
@@ -1171,8 +1161,12 @@ PS_OUTPUT main(PS_INPUT input)
 		saturate(unclampedDistanceMul) :
 		0.0.xxxx;
 #					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
-	shallowDepthBlendWeight =
-		GetUnifiedWaterShoreDepthBlendWeight(waterColumnDepthUnits);
+	shoreContactWeight =
+		GetUnifiedWaterShoreContactWeight(waterColumnDepthUnits);
+	shallowSurfacePresence =
+		GetUnifiedWaterShallowSurfacePresence(
+			distanceDepthFade,
+			shoreContactWeight);
 #					endif
 #				endif
 #			endif
@@ -1260,8 +1254,7 @@ PS_OUTPUT main(PS_INPUT input)
 		depthControl.y,
 		fresnel,
 		viewPosition,
-		distanceDepthFade,
-		shallowDepthBlendWeight,
+		waterColumnDepthUnits,
 		depth);
 
 	float surfaceShadow;
@@ -1346,10 +1339,53 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 
 	float3 sunColor = GetSunColor(normal, viewDirection, input.WPosition.xyz) * surfaceShadow;
+	// The configured strength controls a bounded, independent surface layer.
+	// Its additional contribution is capped at 0.5 before material response.
+	float shallowSurfaceLayerWeight = 0.0;
+#					if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	// Require the primary and refracted samples to agree that this is shallow.
+	// The native visibility deficit then releases water that is already visible
+	// without relying on that material-dependent value as the depth classifier.
+	float primaryShallowDepthWeight =
+		GetUnifiedWaterShallowSurfaceDepthWeight(
+			waterColumnDepthUnits);
+	float refractedShallowDepthWeight =
+		GetUnifiedWaterShallowSurfaceDepthWeight(
+			diffuseOutput.waterColumnDepthUnits);
+	float agreedShallowDepthWeight =
+		min(
+			primaryShallowDepthWeight,
+			refractedShallowDepthWeight);
+	float nativeVisibilityDeficit =
+		1.0 - saturate(diffuseOutput.refractionMul);
+	shallowSurfaceLayerWeight =
+		0.5 *
+		saturate(shallowSurfacePresence) *
+		agreedShallowDepthWeight *
+		nativeVisibilityDeficit;
+#					endif
 
 #					if defined(VC)
 	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceBlendFactor);
 	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
+#						if defined(UNIFIED_WATER_DISTANCE_DEPTH_FADE)
+	// VC water normally suppresses both material colour and reflection through
+	// refractionMul. Restore a bounded shallow surface using the native water
+	// material colour and native Fresnel instead of forcing a white reflection.
+	float shallowSurfaceSpecularFraction =
+		lerp(1.0, fresnel, distanceBlendFactor);
+	float3 shallowSurfaceColor =
+		lerp(
+			diffuseOutput.refractionDiffuseColor,
+			specularColor,
+			shallowSurfaceSpecularFraction) +
+		sunColor * depthControl.w;
+	finalColorPreFog =
+		lerp(
+			finalColorPreFog,
+			shallowSurfaceColor,
+			shallowSurfaceLayerWeight);
+#						endif
 
 #						if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = input.FogParam.w;
@@ -1457,6 +1493,9 @@ PS_OUTPUT main(PS_INPUT input)
 	refractionColor = lerp(refractionColor, fogColor, Color::FogAlpha(fogFactor));
 
 	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
+	// Add the already-fogged shallow surface layer after the untouched native
+	// refraction composition. Medium/deep water has an exact zero layer weight.
+	finalColor = lerp(finalColor, finalColorPreFog, shallowSurfaceLayerWeight);
 #						if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
 	// DEBUG MODE: Override water color with debug visualization
 	float3 debugColor = WetnessEffects::GetDebugWetnessColorStandard(waterData.rippleInfo, 2.0, 3.0);

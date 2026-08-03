@@ -26,11 +26,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantDepthFadeFarStrength,
 	DistantDepthFadeStart,
 	DistantDepthFadeEnd,
-	ShoreDepthBlendRangeUnits)
+	ShoreDepthBlendRangeUnits,
+	ShallowSurfaceDepthRangeUnits)
 
 namespace
 {
-	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 2;
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 4;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
@@ -43,6 +44,8 @@ namespace
 	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
 	constexpr float kShoreDepthBlendRangeUnitsMin = 0.0f;
 	constexpr float kShoreDepthBlendRangeUnitsMax = 10.0f;
+	constexpr float kShallowSurfaceDepthRangeUnitsMin = 16.0f;
+	constexpr float kShallowSurfaceDepthRangeUnitsMax = 256.0f;
 
 	// Increment when Unified Water's generated flowmap or cache contract changes.
 	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
@@ -109,6 +112,11 @@ namespace
 			kShoreDepthBlendRangeUnitsMin,
 			kShoreDepthBlendRangeUnitsMax,
 			defaults.ShoreDepthBlendRangeUnits);
+		a_settings.ShallowSurfaceDepthRangeUnits = ClampFiniteOrDefault(
+			a_settings.ShallowSurfaceDepthRangeUnits,
+			kShallowSurfaceDepthRangeUnitsMin,
+			kShallowSurfaceDepthRangeUnitsMax,
+			defaults.ShallowSurfaceDepthRangeUnits);
 	}
 
 	bool IsInteriorCellActive()
@@ -167,6 +175,7 @@ void UnifiedWater::LoadSettings(json& o_json)
 		settings.DistantDepthFadeNearStrength = defaults.DistantDepthFadeNearStrength;
 		settings.DistantDepthFadeFarStrength = defaults.DistantDepthFadeFarStrength;
 		settings.ShoreDepthBlendRangeUnits = defaults.ShoreDepthBlendRangeUnits;
+		settings.ShallowSurfaceDepthRangeUnits = defaults.ShallowSurfaceDepthRangeUnits;
 	}
 	settings.SurfaceVisibilityModelVersion = kSurfaceVisibilityModelVersion;
 	SanitizeSettings(settings);
@@ -231,8 +240,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("near_strength_tooltip"),
-								  "Shallow-water surface-visibility lift strength at and before Fade Start.\n"
-								  "The shader bounds the resulting floor so medium/deep water can return to its native blend."));
+								  "Shallow-only water-material correction at and before Fade Start.\n"
+								  "It activates only where the native depth/refraction blend would make shallow water disappear."));
 		}
 
 		ImGui::SliderFloat(
@@ -244,8 +253,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("far_strength_tooltip"),
-								  "Shallow-water surface-visibility lift strength at and after Fade End.\n"
-								  "1 is the strongest setting; medium/deep water still returns automatically to its native blend."));
+								  "Shallow-only water-material correction at and after Fade End.\n"
+								  "1 is the strongest setting; already-visible medium/deep water remains native."));
 		}
 
 		if (ImGui::SliderFloat(
@@ -283,6 +292,22 @@ void UnifiedWater::DrawSettings()
 		}
 
 		ImGui::Spacing();
+		ImGui::SeparatorText(T(TKEY("depth_separation"), "Depth Separation"));
+
+		ImGui::SliderFloat(
+			T(TKEY("shallow_surface_depth_range"), "Shallow Surface Depth"),
+			&settings.ShallowSurfaceDepthRangeUnits,
+			kShallowSurfaceDepthRangeUnitsMin,
+			kShallowSurfaceDepthRangeUnitsMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("shallow_surface_depth_range_tooltip"),
+								  "Plane-normal water depth where the shallow surface cue has faded completely to native water.\n"
+								  "Lower this if the cue reaches medium water; raise it only when a shallow stream still loses its surface."));
+		}
+
+		ImGui::Spacing();
 		ImGui::SeparatorText(T(TKEY("shoreline"), "Shore Contact"));
 
 		ImGui::SliderFloat(
@@ -294,14 +319,14 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("shore_depth_blend_range_tooltip"),
-								  "Plane-normal water depth over which the configured surface-visibility lift fades in at terrain contact.\n"
+								  "Plane-normal water depth over which the shallow surface cue fades in at terrain contact.\n"
 								  "The focused 0-10 unit range keeps this transition local to the water contact. Set to 0 for no contact fade."));
 		}
 
 		ImGui::TextDisabled("%s", T(TKEY("surface_visibility_performance"), "Direct blend: no extra shoreline texture samples."));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("surface_visibility_performance_tooltip"),
-								  "The retired confirmation-cull control only skipped shoreline samples that this path no longer performs."));
+								  "The depth separation and shore-contact fades use values already calculated by the water shader."));
 		}
 
 		ImGui::EndDisabled();
@@ -316,7 +341,7 @@ void UnifiedWater::DrawSettings()
 			&settings.UseOpenShadersDepthBehaviour);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("use_open_shaders_depth_behaviour_tooltip"),
-								  "Disables the shallow-water surface-visibility floor and uses the native Open Shaders-like water blend.\n"
+								  "Disables the shallow-only surface cue and uses the native Open Shaders-like water blend.\n"
 								  "Custom visibility values are preserved and resume when disabled."));
 		}
 
@@ -348,6 +373,7 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.WaterTintColor = sanitizedSettings.WaterTintColor;
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
 	data.ShoreDepthBlendRangeUnits = sanitizedSettings.ShoreDepthBlendRangeUnits;
+	data.ShallowSurfaceDepthRangeUnits = sanitizedSettings.ShallowSurfaceDepthRangeUnits;
 	return data;
 }
 

@@ -328,6 +328,8 @@ public:
 		float fsrSharpness = 0.0f;
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		bool stabilizerDoorHandoff = false;
+		uint64_t stabilizerDoorHandoffSerial = 0;
 
 		bool HasPendingSettings() const
 		{
@@ -975,6 +977,8 @@ public:
 		uint32_t renderEyeHeight = 0;
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+		bool stabilizerDoorHandoff = false;
+		uint64_t stabilizerDoorHandoffSerial = 0;
 		VRRenderScaleResourceKey resources{};
 	};
 
@@ -1052,7 +1056,7 @@ public:
 	/** @brief Returns the pending request, or a non-pending snapshot of current settings. */
 	VRRenderScaleDesiredProfile GetPendingVRRenderScaleDesiredProfile() const;
 	/** @brief Publishes one complete latest-wins request. Returns zero when origin priority rejects it. */
-	uint64_t QueueVRRenderScaleRequest(UpscaleMethod a_method, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	uint64_t QueueVRRenderScaleRequest(UpscaleMethod a_method, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, uint64_t a_bufferedStabilizerDoorHandoffSerial = 0);
 	/** @brief Atomically removes and returns the complete pending request. */
 	std::optional<VRRenderScaleDesiredProfile> TakePendingVRRenderScaleRequest();
 	/** @brief Rejects a request that was cleared or superseded before application began. */
@@ -1357,11 +1361,18 @@ public:
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, uint64_t a_bufferedStabilizerDoorHandoffSerial = 0);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
+	/** @return The admitted LoadingMenu serial when an atomic Stabilizer profile may be staged; otherwise zero. */
+	uint64_t CanBufferVRFpsStabilizerAPITransitionProfile(uint32_t a_blockReasons);
+	bool ConsumeVRFpsStabilizerAPITransitionProfileAdmission(uint64_t a_loadingSerial);
+	void ClearVRFpsStabilizerAPITransitionProfileAdmission(uint64_t a_expectedLoadingSerial);
+	void ClearAllVRFpsStabilizerAPITransitionProfileAdmissions();
 	/** @return True when an atomic VRAPI profile is a valid stabilizer destination transition. */
-	bool IsVRFpsStabilizerAPITransitionProfileAllowed(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset) const;
+	bool IsVRFpsStabilizerAPITransitionProfileAllowed(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, uint64_t a_bufferedStabilizerDoorHandoffSerial) const;
+	/** @return True only when settings and the physical contract already match the complete atomic target. */
+	bool IsVRUpscalingTransitionProfileNoOp(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset) const;
 	void RequestPerfModeRenderTargetRecreate(
 		const char* a_reason = nullptr,
 		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
@@ -1601,25 +1612,25 @@ public:
 		bool IsNativeRestoreGuarded() const noexcept
 		{
 			return disposition ==
-					   VRRenderScaleOriginalSubmitDisposition::
-						   NativeRestoreContinuity ||
+			           VRRenderScaleOriginalSubmitDisposition::
+			               NativeRestoreContinuity ||
 			       disposition ==
-					   VRRenderScaleOriginalSubmitDisposition::
-						   NativeRestoreInvalid;
+			           VRRenderScaleOriginalSubmitDisposition::
+			               NativeRestoreInvalid;
 		}
 		bool IsNativeRestoreContinuity() const noexcept
 		{
 			return disposition ==
 			       VRRenderScaleOriginalSubmitDisposition::
-					   NativeRestoreContinuity;
+			           NativeRestoreContinuity;
 		}
 		bool ShouldSuppress() const noexcept
 		{
 			return disposition ==
-					   VRRenderScaleOriginalSubmitDisposition::Suppress ||
+			           VRRenderScaleOriginalSubmitDisposition::Suppress ||
 			       disposition ==
-					   VRRenderScaleOriginalSubmitDisposition::
-						   NativeRestoreInvalid;
+			           VRRenderScaleOriginalSubmitDisposition::
+			               NativeRestoreInvalid;
 		}
 	};
 	VRRenderScaleOriginalSubmitDecision
@@ -1835,6 +1846,10 @@ public:
 	std::atomic<uint64_t> nextVRRenderScaleStressSessionID{ 1 };
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };
+	mutable std::mutex vrFpsStabilizerAPIProfileAdmissionMutex;
+	uint32_t vrFpsStabilizerAPIProfileAdmissionFrame = 0;
+	uint64_t vrFpsStabilizerAPIProfileAdmissionSerial = 0;
+	uint64_t vrFpsStabilizerAPIProfileAdmissionTickMs = 0;
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };

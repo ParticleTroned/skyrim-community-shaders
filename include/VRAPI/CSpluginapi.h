@@ -12,7 +12,7 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 9;
+inline constexpr unsigned int CSBuildNumber = 10;
 
 namespace CSPluginAPI
 {
@@ -55,6 +55,11 @@ namespace CSPluginAPI
 
 		virtual uint32_t GetVRUpscalingApplyBlockReasons() override;
 		virtual bool IsVRUpscalingProfileApplyAllowed() override;
+		virtual VRUpscalingTransitionProfileDecision GetVRUpscalingTransitionProfileDecision(
+			UpscaleMethod method,
+			bool renderScaleModeEnabled,
+			UpscalePreset preset,
+			DLSSProfile profile) override;
 	};
 
 	namespace detail
@@ -212,6 +217,25 @@ namespace CSPluginAPI
 				reasons);
 			return true;
 		}
+
+		inline bool ShouldBlockVRUpscalingTransitionProfileApply(
+			const char* action,
+			Upscaling& upscaling,
+			uint64_t& bufferedStabilizerDoorHandoffSerial)
+		{
+			const uint32_t reasons = upscaling.GetVRUpscalingApplyBlockReasonsForAPI();
+			bufferedStabilizerDoorHandoffSerial =
+				upscaling.CanBufferVRFpsStabilizerAPITransitionProfile(reasons);
+			if (reasons == 0 || bufferedStabilizerDoorHandoffSerial != 0) {
+				return false;
+			}
+
+			logger::debug(
+				"[CS API] Ignoring {} while VR upscaling transition-profile apply is blocked (reasons=0x{:X}).",
+				action ? action : "VR upscaling transition profile",
+				reasons);
+			return true;
+		}
 	}
 
 	inline CSInterface001 g_interface001;
@@ -224,6 +248,7 @@ namespace CSPluginAPI
 		if (revisionNumber != 0 &&
 		    revisionNumber != CSInterfaceRevision001 &&
 		    revisionNumber != CSInterfaceRevision002 &&
+		    revisionNumber != CSInterfaceRevision003 &&
 		    revisionNumber != CSInterfaceRevision) {
 			return nullptr;
 		}
@@ -382,6 +407,7 @@ namespace CSPluginAPI
 
 	inline void CSInterface001::SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile)
 	{
+		auto& upscaling = globals::features::upscaling;
 		if (!detail::IsValidUpscalePreset(preset)) {
 			logger::warn("[CS API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(preset));
 			return;
@@ -390,18 +416,24 @@ namespace CSPluginAPI
 			logger::warn("[CS API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
 		}
-		if (detail::ShouldBlockVRUpscalingApply("legacy DLSS-preferred VR upscaling transition profile"))
-			return;
-
-		auto& upscaling = globals::features::upscaling;
 		const auto method = detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling);
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
+		uint64_t bufferedStabilizerDoorHandoffSerial = 0;
+		if (detail::ShouldBlockVRUpscalingTransitionProfileApply(
+				"legacy DLSS-preferred VR upscaling transition profile",
+				upscaling,
+				bufferedStabilizerDoorHandoffSerial)) {
+			return;
+		}
 		if (!upscaling.IsVRFpsStabilizerAPITransitionProfileAllowed(
 				method,
 				renderScaleModeEnabled,
 				qualityMode,
-				dlssPreset)) {
+				dlssPreset,
+				bufferedStabilizerDoorHandoffSerial)) {
+			upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(
+				bufferedStabilizerDoorHandoffSerial);
 			return;
 		}
 
@@ -411,7 +443,10 @@ namespace CSPluginAPI
 			qualityMode,
 			dlssPreset,
 			"CS API legacy DLSS-preferred VR upscaling transition profile",
-			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
+			Upscaling::VRUpscalingTransitionOrigin::VRAPI,
+			bufferedStabilizerDoorHandoffSerial);
+		upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(
+			bufferedStabilizerDoorHandoffSerial);
 	}
 
 	inline UpscaleMethod CSInterface001::GetUpscaleMethod()
@@ -440,6 +475,7 @@ namespace CSPluginAPI
 
 	inline void CSInterface001::SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile)
 	{
+		auto& upscaling = globals::features::upscaling;
 		if (!detail::IsValidUpscaleMethod(method)) {
 			logger::warn("[CS API] Ignoring invalid transition upscaler method value {}", static_cast<uint32_t>(method));
 			return;
@@ -452,18 +488,24 @@ namespace CSPluginAPI
 			logger::warn("[CS API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
 		}
-		if (detail::ShouldBlockVRUpscalingApply("VR method-specific upscaling transition profile"))
-			return;
-
-		auto& upscaling = globals::features::upscaling;
 		const auto internalMethod = detail::ToInternalUpscaleMethod(method);
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
+		uint64_t bufferedStabilizerDoorHandoffSerial = 0;
+		if (detail::ShouldBlockVRUpscalingTransitionProfileApply(
+				"VR method-specific upscaling transition profile",
+				upscaling,
+				bufferedStabilizerDoorHandoffSerial)) {
+			return;
+		}
 		if (!upscaling.IsVRFpsStabilizerAPITransitionProfileAllowed(
 				internalMethod,
 				renderScaleModeEnabled,
 				qualityMode,
-				dlssPreset)) {
+				dlssPreset,
+				bufferedStabilizerDoorHandoffSerial)) {
+			upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(
+				bufferedStabilizerDoorHandoffSerial);
 			return;
 		}
 
@@ -473,7 +515,10 @@ namespace CSPluginAPI
 			qualityMode,
 			dlssPreset,
 			"CS API VR method-specific upscaling transition profile",
-			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
+			Upscaling::VRUpscalingTransitionOrigin::VRAPI,
+			bufferedStabilizerDoorHandoffSerial);
+		upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(
+			bufferedStabilizerDoorHandoffSerial);
 	}
 
 	inline uint32_t CSInterface001::GetVRUpscalingApplyBlockReasons()
@@ -484,5 +529,49 @@ namespace CSPluginAPI
 	inline bool CSInterface001::IsVRUpscalingProfileApplyAllowed()
 	{
 		return GetVRUpscalingApplyBlockReasons() == 0;
+	}
+
+	inline VRUpscalingTransitionProfileDecision CSInterface001::GetVRUpscalingTransitionProfileDecision(
+		UpscaleMethod method,
+		bool renderScaleModeEnabled,
+		UpscalePreset preset,
+		DLSSProfile profile)
+	{
+		if (!detail::IsValidUpscaleMethod(method) ||
+			!detail::IsValidUpscalePreset(preset) ||
+			!detail::IsValidDLSSProfile(profile)) {
+			return VRUpscalingTransitionProfileDecision::kBlocked;
+		}
+
+		auto& upscaling = globals::features::upscaling;
+		const uint32_t reasons = upscaling.GetVRUpscalingApplyBlockReasonsForAPI();
+		const uint64_t admissionSerial =
+			upscaling.CanBufferVRFpsStabilizerAPITransitionProfile(reasons);
+		if (reasons != 0 && admissionSerial == 0)
+			return VRUpscalingTransitionProfileDecision::kBlocked;
+
+		const auto internalMethod = detail::ToInternalUpscaleMethod(method);
+		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
+		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
+		if (!upscaling.IsVRFpsStabilizerAPITransitionProfileAllowed(
+				internalMethod,
+				renderScaleModeEnabled,
+				qualityMode,
+				dlssPreset,
+				admissionSerial)) {
+			upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(admissionSerial);
+			return VRUpscalingTransitionProfileDecision::kBlocked;
+		}
+
+		if (upscaling.IsVRUpscalingTransitionProfileNoOp(
+				internalMethod,
+				renderScaleModeEnabled,
+				qualityMode,
+				dlssPreset)) {
+			upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(admissionSerial);
+			return VRUpscalingTransitionProfileDecision::kNoChange;
+		}
+
+		return VRUpscalingTransitionProfileDecision::kApply;
 	}
 }  // namespace CSPluginAPI

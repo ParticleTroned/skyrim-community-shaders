@@ -13,7 +13,8 @@ namespace CSPluginAPI
 	inline constexpr unsigned int CSInterfaceRevision001 = 1;
 	inline constexpr unsigned int CSInterfaceRevision002 = 2;
 	inline constexpr unsigned int CSInterfaceRevision003 = 3;
-	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision003;
+	inline constexpr unsigned int CSInterfaceRevision004 = 4;
+	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision004;
 	// Guidance for VR transition controllers that hide render-scale relatches
 	// behind a game fade. These constants are advisory only and do not change
 	// the ABI; Community Shaders does not drive Game.FadeOutGame itself.
@@ -79,6 +80,13 @@ namespace CSPluginAPI
 		kOpenCompositeUpscaling = 1u << 5
 	};
 
+	enum class VRUpscalingTransitionProfileDecision : uint32_t
+	{
+		kBlocked = 0,
+		kNoChange = 1,
+		kApply = 2
+	};
+
 	// This object provides access to Community Shaders' mod support API.
 	struct ICSInterface001
 	{
@@ -118,8 +126,9 @@ namespace CSPluginAPI
 		// preset, and DLSS profile together. FSR-specific callers should use
 		// SetVRUpscalingTransitionProfileForMethod in revision 2. When active VR
 		// FPS Stabilizer Interior/Exterior profiles are available, the provider
-		// accepts only the configured opposite-cell profile; ordinary current-cell
-		// reconciliation is ignored.
+		// accepts the configured destination profile at either supported door
+		// timing: before the cell-type flip, or during the destination LoadingMenu.
+		// Ordinary current-cell reconciliation outside that handoff is ignored.
 		virtual void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
 
 		// Revision 2. Explicit upscaler method control for callers that must
@@ -130,11 +139,24 @@ namespace CSPluginAPI
 
 		// Revision 3. External transition controllers should query this before
 		// applying VR upscaling profiles. Non-zero block reasons mean the caller
-		// should buffer its latest desired profile and try again later. A zero
-		// result is a runtime-safety check, not permission to synthesize a door
-		// transition while the player remains in the same cell type.
+		// should buffer its latest desired profile and try again later. A zero result
+		// is a runtime-safety check, not permission to synthesize a door transition
+		// while the player remains in the same cell type.
 		virtual uint32_t GetVRUpscalingApplyBlockReasons() = 0;
 		virtual bool IsVRUpscalingProfileApplyAllowed() = 0;
+
+		// Revision 4 / build 10. Intent-specific preflight for the method-specific
+		// atomic profile call. Unlike the revision-3 global gate, this may admit a
+		// destination profile during a real Stabilizer LoadingMenu handoff without
+		// authorizing unrelated CS setters. kNoChange means both settings and the
+		// physical render-scale contract already match, so the caller must not
+		// schedule a fade or invoke the setter. kApply means schedule the existing
+		// door fade and immediately call SetVRUpscalingTransitionProfileForMethod.
+		virtual VRUpscalingTransitionProfileDecision GetVRUpscalingTransitionProfileDecision(
+			UpscaleMethod method,
+			bool renderScaleModeEnabled,
+			UpscalePreset preset,
+			DLSSProfile profile) = 0;
 	};
 }  // namespace CSPluginAPI
 

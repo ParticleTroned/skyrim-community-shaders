@@ -25,6 +25,31 @@ namespace PerformanceTuning
 		double StandardError() const;
 	};
 
+	struct TransitionGateState
+	{
+		bool continuouslyReady = false;
+		double readyStartTime = 0.0;
+		uint64_t readyStartPresentSampleId = 0;
+		bool soakStarted = false;
+		double soakStartTime = 0.0;
+	};
+
+	enum class TransitionGateResult
+	{
+		Pending,
+		Ready,
+		TimingReset
+	};
+
+	TransitionGateResult UpdateTransitionGate(
+		TransitionGateState& state,
+		bool featureReady,
+		double currentTime,
+		uint64_t currentPresentSampleId,
+		double minimumReadySeconds,
+		uint64_t minimumFreshPresentCount,
+		double postFreshSoakSeconds);
+
 	struct PresentSampleContribution
 	{
 		double timingMs = 0.0;
@@ -97,12 +122,13 @@ namespace PerformanceTuning
 
 	struct MetricDelta
 	{
+		double currentBeforeMeanMs = 0.0;
+		double comparisonMeanMs = 0.0;
+		double currentAfterMeanMs = 0.0;
 		double valueMs = 0.0;
 		double margin95Ms = 0.0;
-		double significanceThresholdMs = 0.0;
 		bool available = false;
 		bool statisticallySignificant = false;
-		bool significant = false;
 	};
 
 	struct CostResult
@@ -114,7 +140,6 @@ namespace PerformanceTuning
 		double fpsMargin95 = 0.0;
 		bool hasFps = false;
 		bool fpsStatisticallySignificant = false;
-		bool fpsSignificant = false;
 		bool presentSynced = false;
 		bool framePaced = false;
 	};
@@ -122,6 +147,5 @@ namespace PerformanceTuning
 	CostResult CalculateCostResult(
 		const SampleWindow& currentBefore,
 		const SampleWindow& comparison,
-		const SampleWindow& currentAfter,
-		double minimumMeaningfulDeltaMs = 0.099);
+		const SampleWindow& currentAfter);
 }

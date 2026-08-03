@@ -1488,7 +1488,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		performanceCostAppliedFrameGenerationMode != frameGenModeCurrent ||
 		performanceCostAppliedFSRRuntimePathActive != fsrRuntimePathCurrent ||
 		performanceCostAppliedFSRRuntimeFsr4Configured != fsrRuntimeFsr4Configured ||
-		performanceCostAppliedFSRRuntimeFsr4Active != fsrRuntimeFsr4Current;
+		performanceCostAppliedFSRRuntimeFsr4Active != fsrRuntimeFsr4Current ||
+		std::abs(performanceCostAppliedResolutionScale.x - resolutionScale.x) > 1.0e-4f ||
+		std::abs(performanceCostAppliedResolutionScale.y - resolutionScale.y) > 1.0e-4f;
 
 	performanceCostAppliedStateValid = appliedStateValid;
 	performanceCostAppliedUpscaleMethod = a_upscalemethod;
@@ -1498,6 +1500,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	performanceCostAppliedFSRRuntimePathActive = fsrRuntimePathCurrent;
 	performanceCostAppliedFSRRuntimeFsr4Configured = fsrRuntimeFsr4Configured;
 	performanceCostAppliedFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
+	performanceCostAppliedResolutionScale = resolutionScale;
 	if (appliedStateChanged && globals::state)
 		performanceCostAppliedFrame = globals::state->frameCount;
 }
@@ -1513,6 +1516,34 @@ bool Upscaling::IsPerformanceCostMeasurementReady() const
 	const auto requestedMethod = GetUpscaleMethod();
 	if (performanceCostAppliedUpscaleMethod != requestedMethod)
 		return false;
+
+	auto* graphicsState = globals::game::graphicsState;
+	if (!graphicsState)
+		return false;
+	const int screenWidth = static_cast<int>(graphicsState->screenWidth);
+	const int screenHeight = static_cast<int>(graphicsState->screenHeight);
+	if (screenWidth <= 0 || screenHeight <= 0)
+		return false;
+	float2 expectedResolutionScale = { 1.0f, 1.0f };
+	if (requestedMethod != UpscaleMethod::kNONE &&
+		requestedMethod != UpscaleMethod::kTAA) {
+		const float resolutionScaleBase =
+			GetQualityModeResolutionScale(ClampQualityModeUInt(settings.qualityMode));
+		expectedResolutionScale.x =
+			static_cast<float>(static_cast<int>(screenWidth * resolutionScaleBase)) /
+			static_cast<float>(screenWidth);
+		expectedResolutionScale.y =
+			static_cast<float>(static_cast<int>(screenHeight * resolutionScaleBase)) /
+			static_cast<float>(screenHeight);
+	}
+	if (std::abs(
+			performanceCostAppliedResolutionScale.x -
+			expectedResolutionScale.x) > 1.0e-4f ||
+		std::abs(
+			performanceCostAppliedResolutionScale.y -
+			expectedResolutionScale.y) > 1.0e-4f) {
+		return false;
+	}
 
 	const bool requestedFrameGenerationMode = settings.frameGenerationMode && d3d12SwapChainActive;
 	if (performanceCostAppliedFrameGenerationMode != requestedFrameGenerationMode)

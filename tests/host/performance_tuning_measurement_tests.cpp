@@ -10,6 +10,8 @@ namespace
 	using PerformanceTuning::AddSampleResult;
 	using PerformanceTuning::Moments;
 	using PerformanceTuning::SampleWindow;
+	using PerformanceTuning::TransitionGateResult;
+	using PerformanceTuning::TransitionGateState;
 
 	void SetSplitMoments(
 		Moments& total,
@@ -118,6 +120,136 @@ namespace
 }
 
 TEST_CASE(
+	"Transition gate waits for readiness, fresh Presents, and post-flush soak",
+	"[performance-tuning][transition]")
+{
+	TransitionGateState state;
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, false, 0.0, 100, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE_FALSE(state.continuouslyReady);
+
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 1.0, 100, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 3.0, 159, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE_FALSE(state.soakStarted);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 3.0, 160, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(state.soakStarted);
+	REQUIRE(state.soakStartTime == Catch::Approx(3.0));
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 6.999, 200, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 7.0, 201, 2.0, 60, 4.0) ==
+		TransitionGateResult::Ready);
+}
+
+TEST_CASE(
+	"Transition gate restarts every wait after readiness loss",
+	"[performance-tuning][transition][reset]")
+{
+	TransitionGateState state;
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 0.0, 100, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 2.0, 160, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(state.soakStarted);
+
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, false, 5.0, 200, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE_FALSE(state.continuouslyReady);
+	REQUIRE_FALSE(state.soakStarted);
+	REQUIRE(state.readyStartTime == 0.0);
+	REQUIRE(state.readyStartPresentSampleId == 0);
+
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 6.0, 200, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 8.0, 259, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE_FALSE(state.soakStarted);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 8.0, 260, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(state.soakStarted);
+	REQUIRE(state.soakStartTime == Catch::Approx(8.0));
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 11.999, 300, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 12.0, 301, 2.0, 60, 4.0) ==
+		TransitionGateResult::Ready);
+}
+
+TEST_CASE(
+	"Transition gate reports Present rollback and starts over",
+	"[performance-tuning][transition][source-reset]")
+{
+	TransitionGateState state;
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 10.0, 500, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 12.0, 499, 2.0, 60, 4.0) ==
+		TransitionGateResult::TimingReset);
+	REQUIRE_FALSE(state.continuouslyReady);
+	REQUIRE_FALSE(state.soakStarted);
+
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 13.0, 600, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 15.0, 660, 2.0, 60, 4.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 19.0, 700, 2.0, 60, 4.0) ==
+		TransitionGateResult::Ready);
+}
+
+TEST_CASE(
+	"Transition gate can become ready without a post-flush soak",
+	"[performance-tuning][transition][default]")
+{
+	TransitionGateState state;
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 0.0, 10, 2.0, 3, 0.0) ==
+		TransitionGateResult::Pending);
+	REQUIRE(
+		PerformanceTuning::UpdateTransitionGate(
+			state, true, 2.0, 13, 2.0, 3, 0.0) ==
+		TransitionGateResult::Ready);
+}
+
+TEST_CASE(
 	"Present sampling clips the final interval to an exact wall-clock window",
 	"[performance-tuning][present]")
 {
@@ -165,8 +297,40 @@ TEST_CASE(
 }
 
 TEST_CASE(
-	"Sub-threshold Present differences remain inconclusive",
-	"[performance-tuning][uncertainty]")
+	"Cost results preserve all three captured window means",
+	"[performance-tuning][result][diagnostics]")
+{
+	const auto currentBefore = MakeConstantWindow(20.0, 8.0, 5.0, 1);
+	const auto comparison = MakeConstantWindow(14.0, 6.0, 4.0, 1000);
+	const auto currentAfter = MakeConstantWindow(22.0, 10.0, 6.0, 2000);
+
+	const auto result = PerformanceTuning::CalculateCostResult(
+		currentBefore,
+		comparison,
+		currentAfter);
+
+	REQUIRE(result.present.available);
+	REQUIRE(result.present.currentBeforeMeanMs == Catch::Approx(20.0));
+	REQUIRE(result.present.comparisonMeanMs == Catch::Approx(14.0));
+	REQUIRE(result.present.currentAfterMeanMs == Catch::Approx(22.0));
+	REQUIRE(result.present.valueMs == Catch::Approx(7.0));
+
+	REQUIRE(result.wholeFrameGpu.available);
+	REQUIRE(result.wholeFrameGpu.currentBeforeMeanMs == Catch::Approx(8.0));
+	REQUIRE(result.wholeFrameGpu.comparisonMeanMs == Catch::Approx(6.0));
+	REQUIRE(result.wholeFrameGpu.currentAfterMeanMs == Catch::Approx(10.0));
+	REQUIRE(result.wholeFrameGpu.valueMs == Catch::Approx(3.0));
+
+	REQUIRE(result.wholeFrameCpu.available);
+	REQUIRE(result.wholeFrameCpu.currentBeforeMeanMs == Catch::Approx(5.0));
+	REQUIRE(result.wholeFrameCpu.comparisonMeanMs == Catch::Approx(4.0));
+	REQUIRE(result.wholeFrameCpu.currentAfterMeanMs == Catch::Approx(6.0));
+	REQUIRE(result.wholeFrameCpu.valueMs == Catch::Approx(1.5));
+}
+
+TEST_CASE(
+	"Small differences are significant when their confidence interval excludes zero",
+	"[performance-tuning][uncertainty][significance]")
 {
 	const auto currentBefore = MakeConstantWindow(16.0, std::nullopt, std::nullopt, 1);
 	const auto comparison = MakeConstantWindow(15.95, std::nullopt, std::nullopt, 1000);
@@ -179,11 +343,9 @@ TEST_CASE(
 
 	REQUIRE(result.present.available);
 	REQUIRE(result.present.valueMs == Catch::Approx(0.05));
-	REQUIRE(result.present.significanceThresholdMs == Catch::Approx(0.099));
+	REQUIRE(result.present.margin95Ms == Catch::Approx(0.0));
 	REQUIRE(result.present.statisticallySignificant);
-	REQUIRE_FALSE(result.present.significant);
 	REQUIRE(result.fpsStatisticallySignificant);
-	REQUIRE_FALSE(result.fpsSignificant);
 }
 
 TEST_CASE(
@@ -205,10 +367,8 @@ TEST_CASE(
 	REQUIRE(result.present.valueMs == Catch::Approx(0.1));
 	REQUIRE(result.present.margin95Ms == Catch::Approx(0.196));
 	REQUIRE_FALSE(result.present.statisticallySignificant);
-	REQUIRE_FALSE(result.present.significant);
 	REQUIRE(result.fpsMargin95 > 0.0);
 	REQUIRE_FALSE(result.fpsStatisticallySignificant);
-	REQUIRE_FALSE(result.fpsSignificant);
 }
 
 TEST_CASE(
@@ -251,13 +411,11 @@ TEST_CASE(
 	REQUIRE(result.present.valueMs == Catch::Approx(1.0));
 	REQUIRE(result.present.margin95Ms == Catch::Approx(1.96));
 	REQUIRE_FALSE(result.present.statisticallySignificant);
-	REQUIRE_FALSE(result.present.significant);
 	REQUIRE(result.hasFps);
 	REQUIRE(
 		result.fpsMargin95 ==
 		Catch::Approx(1.96 * 1000.0 / (15.0 * 15.0)));
 	REQUIRE_FALSE(result.fpsStatisticallySignificant);
-	REQUIRE_FALSE(result.fpsSignificant);
 }
 
 TEST_CASE(
@@ -277,7 +435,6 @@ TEST_CASE(
 	REQUIRE(result.present.valueMs == Catch::Approx(1.0));
 	REQUIRE(result.present.margin95Ms == Catch::Approx(1.96));
 	REQUIRE_FALSE(result.present.statisticallySignificant);
-	REQUIRE_FALSE(result.present.significant);
 }
 
 TEST_CASE(
@@ -297,9 +454,7 @@ TEST_CASE(
 	REQUIRE(result.present.valueMs == Catch::Approx(7.0));
 	REQUIRE(result.present.margin95Ms == Catch::Approx(1.96 / std::sqrt(2.0)));
 	REQUIRE(result.present.statisticallySignificant);
-	REQUIRE(result.present.significant);
 	REQUIRE(result.fpsStatisticallySignificant);
-	REQUIRE(result.fpsSignificant);
 }
 
 TEST_CASE(
@@ -322,7 +477,6 @@ TEST_CASE(
 	REQUIRE(result.fpsDelta == Catch::Approx(-50.0));
 	REQUIRE(result.fpsMargin95 == Catch::Approx(78.4));
 	REQUIRE_FALSE(result.fpsStatisticallySignificant);
-	REQUIRE_FALSE(result.fpsSignificant);
 }
 
 TEST_CASE(

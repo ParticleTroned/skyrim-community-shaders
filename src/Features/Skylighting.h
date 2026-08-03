@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 struct Skylighting : Feature
 {
 private:
@@ -51,6 +53,7 @@ public:
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override;
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
@@ -116,6 +119,16 @@ public:
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
 	uint frameCount = 0;
+
+	// UpdateProbesCS needs 15 samples for full confidence. Occlusion rendering
+	// rotates through four quadrants, so each quadrant must reach that count
+	// after a reset before a performance measurement can consume the probes.
+	static constexpr uint kProbeOcclusionQuadrantCount = 4;
+	static constexpr uint kProbeConfidenceSampleCount = 15;
+	std::array<uint, kProbeOcclusionQuadrantCount> probeRefreshCounts{};
+	uint64_t occlusionCaptureSerial = 0;
+	uint64_t probeUpdateCaptureSerial = 0;
+	uint occlusionCaptureQuadrant = 0;
 
 	void ResetSkylighting();
 

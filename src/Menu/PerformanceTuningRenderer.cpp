@@ -41,10 +41,10 @@ namespace
 	constexpr double kTuningHighlightSeconds = 4.0;
 	constexpr double kFeatureCostMeasurementSeconds =
 		PerformanceTuning::kMeasurementDurationMs / 1000.0;
-	constexpr double kFeatureCostTransitionTimeoutSeconds = 20.0;
+	constexpr double kFeatureCostTransitionTimeoutSeconds = 30.0;
 	constexpr double kFeatureCostSampleProgressTimeoutSeconds = 8.0;
 	constexpr double kFeatureCostProfilerDrainTimeoutSeconds = 2.0;
-	constexpr double kFeatureCostOverallTimeoutSeconds = 90.0;
+	constexpr double kFeatureCostOverallTimeoutSeconds = 120.0;
 	constexpr uint64_t kFeatureCostPipelineDrainPresentCount = Profiler::kFrameLatency;
 
 	struct SceneFingerprint
@@ -120,10 +120,8 @@ namespace
 		double overallStartTime = 0.0;
 		double stageStartTime = 0.0;
 		double lastProgressTime = 0.0;
-		double continuousReadyStartTime = 0.0;
-		uint64_t settleStartPresentSampleId = 0;
 		uint64_t lastObservedPresentSampleId = 0;
-		bool continuouslyReady = false;
+		PerformanceTuning::TransitionGateState transitionGate;
 		PerformanceTuning::SampleWindow currentBefore;
 		PerformanceTuning::SampleWindow comparison;
 		PerformanceTuning::SampleWindow currentAfter;
@@ -1037,10 +1035,8 @@ namespace
 		state.stage = FeatureCostMeasurementStage::Settling;
 		state.stageStartTime = currentTime;
 		state.lastProgressTime = currentTime;
-		state.continuousReadyStartTime = 0.0;
-		state.settleStartPresentSampleId = summary.presentIntervalSampleId;
 		state.lastObservedPresentSampleId = summary.presentIntervalSampleId;
-		state.continuouslyReady = false;
+		state.transitionGate = {};
 	}
 
 	bool ApplyFeatureCostComparisonState(
@@ -1183,8 +1179,7 @@ namespace
 		state.result = PerformanceTuning::CalculateCostResult(
 			state.currentBefore,
 			state.comparison,
-			state.currentAfter,
-			kTuningDeltaThresholdMs);
+			state.currentAfter);
 		try {
 			state.resultSettingsState = CapturePerformanceUiState(feature);
 			if (!PerformanceTuning::AreJsonValuesEquivalent(
@@ -1301,42 +1296,34 @@ namespace
 		}
 
 		if (state.stage == FeatureCostMeasurementStage::Settling) {
-			if (currentTime - state.stageStartTime >
-				kFeatureCostTransitionTimeoutSeconds) {
-				FailFeatureCostMeasurement(
-					feature,
-					state,
-					T(
-						TKEY("error.transition_timeout"),
-						"Stopped while waiting for the feature state to settle."));
-				return;
-			}
-			if (!feature->IsPerformanceCostMeasurementReady()) {
-				state.continuouslyReady = false;
-				state.continuousReadyStartTime = 0.0;
-				state.settleStartPresentSampleId =
-					summary.presentIntervalSampleId;
-				return;
-			}
-			if (!state.continuouslyReady) {
-				state.continuouslyReady = true;
-				state.continuousReadyStartTime = currentTime;
-				state.settleStartPresentSampleId =
-					summary.presentIntervalSampleId;
-				return;
-			}
-
 			const bool targetEnabled =
 				state.leg != FeatureCostMeasurementLeg::Comparison;
 			const double settleSeconds = std::max(
 				0.0,
 				feature->GetPerformanceCostMeasurementSettleSeconds(
 					targetEnabled));
-			if (currentTime - state.continuousReadyStartTime < settleSeconds)
-				return;
-
-			if (summary.presentIntervalSampleId <
-				state.settleStartPresentSampleId) {
+			const uint64_t freshPresentCount = std::max(
+				kFeatureCostPipelineDrainPresentCount,
+				feature->GetPerformanceCostMeasurementFreshPresentCount(
+					targetEnabled));
+			const double postFreshSoakSeconds = std::max(
+				0.0,
+				feature->GetPerformanceCostMeasurementPostFreshSoakSeconds(
+					targetEnabled));
+			const bool targetStateApplied =
+				feature->IsPerformanceCostMeasurementEnabled() == targetEnabled;
+			const auto transitionResult =
+				PerformanceTuning::UpdateTransitionGate(
+					state.transitionGate,
+					targetStateApplied &&
+						feature->IsPerformanceCostMeasurementReady(),
+					currentTime,
+					summary.presentIntervalSampleId,
+					settleSeconds,
+					freshPresentCount,
+					postFreshSoakSeconds);
+			if (transitionResult ==
+				PerformanceTuning::TransitionGateResult::TimingReset) {
 				FailFeatureCostMeasurement(
 					feature,
 					state,
@@ -1345,9 +1332,17 @@ namespace
 						"Stopped because the frame timing source was reset."));
 				return;
 			}
-			if (summary.presentIntervalSampleId -
-					state.settleStartPresentSampleId <
-				kFeatureCostPipelineDrainPresentCount) {
+			if (transitionResult !=
+				PerformanceTuning::TransitionGateResult::Ready) {
+				if (currentTime - state.stageStartTime >
+					kFeatureCostTransitionTimeoutSeconds) {
+					FailFeatureCostMeasurement(
+						feature,
+						state,
+						T(
+							TKEY("error.transition_timeout"),
+							"Stopped while waiting for the feature state to settle."));
+				}
 				return;
 			}
 
@@ -1380,7 +1375,10 @@ namespace
 		}
 
 		if (state.stage == FeatureCostMeasurementStage::Measuring) {
-			if (!feature->IsPerformanceCostMeasurementReady()) {
+			const bool targetEnabled =
+				state.leg != FeatureCostMeasurementLeg::Comparison;
+			if (feature->IsPerformanceCostMeasurementEnabled() != targetEnabled ||
+				!feature->IsPerformanceCostMeasurementReady()) {
 				FailFeatureCostMeasurement(
 					feature,
 					state,
@@ -1455,7 +1453,7 @@ namespace
 	int GetDirectionFromFeatureCostMetric(
 		const PerformanceTuning::MetricDelta& metric)
 	{
-		if (!metric.available || !metric.significant)
+		if (!metric.available || !metric.statisticallySignificant)
 			return 0;
 		return metric.valueMs > 0.0 ? 1 : -1;
 	}
@@ -1463,7 +1461,7 @@ namespace
 	int GetDirectionFromFeatureCostFps(
 		const PerformanceTuning::CostResult& result)
 	{
-		if (!result.hasFps || !result.fpsSignificant)
+		if (!result.hasFps || !result.fpsStatisticallySignificant)
 			return 0;
 		return result.fpsDelta < 0.0 ? 1 : -1;
 	}
@@ -1636,11 +1634,18 @@ namespace
 			"%+.3f \xC2\xB1 %.3f ms%s",
 			metric.valueMs,
 			metric.margin95Ms,
-			metric.significant ?
+			metric.statisticallySignificant ?
 				"" :
-				T(TKEY("result.inconclusive_suffix"), " (inconclusive)"));
+				T(TKEY("result.inconclusive_suffix"), " (95% CI includes zero)"));
 		if (direction != 0)
 			ImGui::PopStyleColor();
+		ImGui::TextDisabled(
+			T(
+				TKEY("result.window_means_ms"),
+				"Captured means: %.3f ms current 1 | %.3f ms comparison | %.3f ms current 2"),
+			metric.currentBeforeMeanMs,
+			metric.comparisonMeanMs,
+			metric.currentAfterMeanMs);
 	}
 
 	void RenderFeatureCostRunningStatus(
@@ -1651,7 +1656,14 @@ namespace
 			ImGui::TextDisabled(
 				T(TKEY("status.settling"), "Settling %s"),
 				GetFeatureCostLegStatusLabel(state));
-			if (feature) {
+			if (state.transitionGate.soakStarted) {
+				ImGui::SameLine();
+				ImGui::TextDisabled(
+					"%s",
+					T(
+						TKEY("status.post_change_soak"),
+						"Waiting for the post-change timing window to clear"));
+			} else if (feature) {
 				ImGui::SameLine();
 				ImGui::TextDisabled(
 					"%s",
@@ -1733,11 +1745,15 @@ namespace
 			feature->IsPerformanceTuningApplicable();
 		const bool sceneControlled =
 			IsFeatureControlledBySceneSettings(feature);
+		const bool postEditTimingActive =
+			g_highlightState.pendingComparison ||
+			g_highlightState.expireTime > 0.0;
 		const bool canStart =
 			feature->SupportsPerformanceCostMeasurement() &&
 			feature->IsPerformanceCostMeasurementEnabled() &&
 			applicable &&
 			!sceneControlled &&
+			!postEditTimingActive &&
 			!anyMeasurementLocked;
 
 		ImGui::BeginDisabled(!canStart);
@@ -1747,6 +1763,13 @@ namespace
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			const auto config = feature->GetPerformanceTuningConfig();
+			if (postEditTimingActive) {
+				ImGui::TextWrapped(
+					"%s",
+					T(
+						TKEY("cost.wait_for_white"),
+						"Wait until the post-change timing colors return to white before measuring."));
+			}
 			ImGui::TextWrapped(
 				T(
 					TKEY("cost.tooltip"),
@@ -1756,7 +1779,7 @@ namespace
 				"%s",
 				T(
 					TKEY("cost.tooltip_stability"),
-					"Each feature state gets its required settle time and pipeline drain before capture. Timing variation within a window and between the two current-state windows widens the 95% confidence interval instead of discarding the measurement."));
+					"Each feature state gets its required applied-state, fresh-frame, and post-change settle waits before capture. Timing variation within a window and between the two current-state windows widens the 95% confidence interval instead of discarding the measurement."));
 			ImGui::TextWrapped(
 				T(TKEY("cost.comparison"), "Comparison: %s - %s"),
 				config.comparisonLabel.data(),
@@ -1797,14 +1820,14 @@ namespace
 		ImGui::TextDisabled(
 			T(
 				TKEY("result.heading"),
-				"Current (two windows) - %s"),
+				"Difference: average(current 1, current 2) - %s"),
 			config.comparisonLabel.data());
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextWrapped(
 				"%s",
 				T(
 					TKEY("result.tooltip"),
-					"Values are current minus comparison with a 95% uncertainty margin that includes variation within each window and between the two current-state windows. Changes must exceed both the uncertainty margin and 0.099 ms to be conclusive. Total always comes directly from Present-to-Present timing, never from added profiler passes."));
+					"Values are the average of the two current-state means minus the comparison mean, with a 95% confidence margin that includes variation within each window and between the two current-state windows. Negative frame-time means the current state is faster; positive FPS means the current state is faster. Differences whose 95% confidence intervals exclude zero are colored: improvements are green and regressions are pink. Total always comes directly from Present-to-Present timing, never from added profiler passes."));
 		}
 		RenderCostMetric(
 			T(TKEY("result.total"), "Game frame"),
@@ -1830,13 +1853,21 @@ namespace
 				"%+.1f \xC2\xB1 %.1f%s",
 				state.result.fpsDelta,
 				state.result.fpsMargin95,
-				state.result.fpsSignificant ?
+				state.result.fpsStatisticallySignificant ?
 					"" :
 					T(
 						TKEY("result.inconclusive_suffix"),
-						" (inconclusive)"));
+						" (95% CI includes zero)"));
 			if (direction != 0)
 				ImGui::PopStyleColor();
+			const auto& present = state.result.present;
+			ImGui::TextDisabled(
+				T(
+					TKEY("result.window_means_fps"),
+					"Captured means: %.1f FPS current 1 | %.1f FPS comparison | %.1f FPS current 2"),
+				1000.0 / present.currentBeforeMeanMs,
+				1000.0 / present.comparisonMeanMs,
+				1000.0 / present.currentAfterMeanMs);
 		}
 
 		if (HasStatisticallyInsignificantFeatureCostValue(state.result)) {

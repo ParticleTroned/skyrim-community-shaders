@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "FeatureCategories.h"
 #include "FeatureConstraints.h"
 #include "FeatureVersions.h"
@@ -169,6 +171,16 @@ public:
 	{
 		(void)a_targetEnabled;
 		return 2.0;
+	}
+	virtual uint64_t GetPerformanceCostMeasurementFreshPresentCount(bool a_targetEnabled) const
+	{
+		(void)a_targetEnabled;
+		return 0;
+	}
+	virtual double GetPerformanceCostMeasurementPostFreshSoakSeconds(bool a_targetEnabled) const
+	{
+		(void)a_targetEnabled;
+		return 0.0;
 	}
 	virtual json CapturePerformanceCostMeasurementState() const { return IsPerformanceCostMeasurementEnabled(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state)

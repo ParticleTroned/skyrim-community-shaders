@@ -127,7 +127,6 @@ namespace PerformanceTuning
 			const MetricWindowMoments& currentBefore,
 			const MetricWindowMoments& comparison,
 			const MetricWindowMoments& currentAfter,
-			double minimumMeaningfulDeltaMs,
 			bool available)
 		{
 			MetricDelta result;
@@ -138,9 +137,12 @@ namespace PerformanceTuning
 			if (!result.available)
 				return result;
 
+			result.currentBeforeMeanMs = currentBefore.total.Mean();
+			result.comparisonMeanMs = comparison.total.Mean();
+			result.currentAfterMeanMs = currentAfter.total.Mean();
 			const double currentMean =
-				(currentBefore.total.Mean() + currentAfter.total.Mean()) * 0.5;
-			result.valueMs = currentMean - comparison.total.Mean();
+				(result.currentBeforeMeanMs + result.currentAfterMeanMs) * 0.5;
+			result.valueMs = currentMean - result.comparisonMeanMs;
 
 			const double currentVariance =
 				CalculateCurrentMeanVariance(
@@ -150,10 +152,8 @@ namespace PerformanceTuning
 				CalculateWindowMeanVariance(comparison);
 			result.margin95Ms = k95PercentConfidenceZScore *
 			                    std::sqrt(std::max(0.0, currentVariance + comparisonVariance));
-			result.significanceThresholdMs = std::max(minimumMeaningfulDeltaMs, result.margin95Ms);
 			result.statisticallySignificant =
 				std::abs(result.valueMs) > result.margin95Ms;
-			result.significant = std::abs(result.valueMs) > result.significanceThresholdMs;
 			return result;
 		}
 	}
@@ -190,6 +190,56 @@ namespace PerformanceTuning
 	double Moments::StandardError() const
 	{
 		return sampleWeight > 0.0 ? StandardDeviation() / std::sqrt(sampleWeight) : 0.0;
+	}
+
+	TransitionGateResult UpdateTransitionGate(
+		TransitionGateState& state,
+		bool featureReady,
+		double currentTime,
+		uint64_t currentPresentSampleId,
+		double minimumReadySeconds,
+		uint64_t minimumFreshPresentCount,
+		double postFreshSoakSeconds)
+	{
+		if (!featureReady) {
+			state = {};
+			return TransitionGateResult::Pending;
+		}
+
+		if (!state.continuouslyReady) {
+			state.continuouslyReady = true;
+			state.readyStartTime = currentTime;
+			state.readyStartPresentSampleId = currentPresentSampleId;
+			return TransitionGateResult::Pending;
+		}
+
+		if (currentPresentSampleId < state.readyStartPresentSampleId) {
+			state = {};
+			return TransitionGateResult::TimingReset;
+		}
+
+		const bool readyLongEnough =
+			currentTime - state.readyStartTime >=
+			std::max(0.0, minimumReadySeconds);
+		const bool hasFreshSamples =
+			currentPresentSampleId - state.readyStartPresentSampleId >=
+			minimumFreshPresentCount;
+		if (!readyLongEnough || !hasFreshSamples)
+			return TransitionGateResult::Pending;
+
+		const double soakSeconds = std::max(0.0, postFreshSoakSeconds);
+		if (soakSeconds <= 0.0)
+			return TransitionGateResult::Ready;
+
+		if (!state.soakStarted) {
+			state.soakStarted = true;
+			state.soakStartTime = currentTime;
+			return TransitionGateResult::Pending;
+		}
+
+		return currentTime - state.soakStartTime >= soakSeconds ?
+		           TransitionGateResult::Ready :
+		           TransitionGateResult::Pending;
 	}
 
 	void BeginSampleWindow(
@@ -370,8 +420,7 @@ namespace PerformanceTuning
 	CostResult CalculateCostResult(
 		const SampleWindow& currentBefore,
 		const SampleWindow& comparison,
-		const SampleWindow& currentAfter,
-		double minimumMeaningfulDeltaMs)
+		const SampleWindow& currentAfter)
 	{
 		CostResult result;
 		const auto currentBeforePresent = GetPresentWindow(currentBefore);
@@ -381,7 +430,6 @@ namespace PerformanceTuning
 			currentBeforePresent,
 			comparisonPresent,
 			currentAfterPresent,
-			minimumMeaningfulDeltaMs,
 			true);
 
 		const bool hasGpu =
@@ -392,7 +440,6 @@ namespace PerformanceTuning
 			GetWholeFrameGpuWindow(currentBefore),
 			GetWholeFrameGpuWindow(comparison),
 			GetWholeFrameGpuWindow(currentAfter),
-			minimumMeaningfulDeltaMs,
 			hasGpu);
 
 		const bool hasCpu =
@@ -403,7 +450,6 @@ namespace PerformanceTuning
 			GetWholeFrameCpuWindow(currentBefore),
 			GetWholeFrameCpuWindow(comparison),
 			GetWholeFrameCpuWindow(currentAfter),
-			minimumMeaningfulDeltaMs,
 			hasCpu);
 
 		if (result.present.available) {
@@ -429,9 +475,6 @@ namespace PerformanceTuning
 				                     std::sqrt(std::max(0.0, fpsVariance));
 				result.fpsStatisticallySignificant =
 					std::abs(result.fpsDelta) > result.fpsMargin95;
-				result.fpsSignificant =
-					result.fpsStatisticallySignificant &&
-					std::abs(result.present.valueMs) > minimumMeaningfulDeltaMs;
 			}
 		}
 

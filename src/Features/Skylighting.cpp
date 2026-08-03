@@ -63,6 +63,9 @@ void Skylighting::ApplyPerformanceSettings()
 
 void Skylighting::ResetSkylighting()
 {
+	probeRefreshCounts.fill(0);
+	probeUpdateCaptureSerial = occlusionCaptureSerial;
+
 	auto context = globals::d3d::context;
 	if (!context || !texAccumFramesArray || !texAccumFramesArray->uav.get()) {
 		queuedResetSkylighting = true;
@@ -86,11 +89,44 @@ bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 	return IsRuntimeActive();
 }
 
+bool Skylighting::IsPerformanceCostMeasurementReady() const
+{
+	if (!loaded || queuedResetSkylighting || inOcclusion)
+		return false;
+
+	// The disabled comparison is ready once its accumulation reset has been
+	// applied. The common transition gate then drains the rendering pipeline.
+	if (!settings.EnableSkylighting)
+		return true;
+
+	auto state = globals::state;
+	auto sky = globals::game::sky;
+	auto precip = sky ? sky->precip : nullptr;
+	if (!state || state->isMapMenuOpen ||
+		!sky || sky->mode.get() != RE::Sky::Mode::kFull ||
+		Util::IsInterior() ||
+		!precip || !precip->occlusionData.camera ||
+		!globals::shaderCache || !globals::shaderCache->IsEnabled() ||
+		!globals::d3d::context || !probeUpdateCompute.get() ||
+		!comparisonSampler.get() ||
+		!texOcclusion || !texOcclusion->srv.get() || !texOcclusion->dsv.get() ||
+		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
+		!texAccumFramesArray || !texAccumFramesArray->uav.get()) {
+		return false;
+	}
+
+	for (const auto refreshCount : probeRefreshCounts) {
+		if (refreshCount < kProbeConfidenceSampleCount)
+			return false;
+	}
+	return true;
+}
+
 const char* Skylighting::GetPerformanceCostMeasurementWaitText() const
 {
 	return T(
 		"menu.performance_tuning.feature.skylighting.wait",
-		"Waiting for Skylighting state to settle");
+		"Waiting for Skylighting probes to refresh");
 }
 
 double Skylighting::GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
@@ -343,6 +379,19 @@ void Skylighting::Prepass()
 			globals::profiler->BeginPass("Skylighting::ProbeUpdate");
 			context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, probeArrayDims[2]);
 			globals::profiler->EndPass();
+
+			// Count only a dispatch backed by a newly rendered occlusion mask.
+			// Multiple prepasses cannot advance refresh progress from stale data.
+			if (!queuedResetSkylighting &&
+				probeUpdateCompute.get() && comparisonSampler.get() &&
+				texOcclusion && texOcclusion->srv.get() && texOcclusion->dsv.get() &&
+				texProbeArray && texProbeArray->srv.get() && texProbeArray->uav.get() &&
+				texAccumFramesArray && texAccumFramesArray->uav.get() &&
+				probeUpdateCaptureSerial != occlusionCaptureSerial) {
+				probeUpdateCaptureSerial = occlusionCaptureSerial;
+				auto& refreshCount = probeRefreshCounts[occlusionCaptureQuadrant];
+				refreshCount = std::min(refreshCount + 1, kProbeConfidenceSampleCount);
+			}
 		}
 
 		// Reset
@@ -564,7 +613,7 @@ void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a
 	auto& skylighting = globals::features::skylighting;
 
 	if (skylighting.IsRuntimeActive() && skylighting.inOcclusion) {
-		uint corner = skylighting.frameCount % 4;
+		uint corner = skylighting.frameCount % Skylighting::kProbeOcclusionQuadrantCount;
 
 		float frustumSize = a_frustum->fTop;
 
@@ -726,6 +775,11 @@ void Skylighting::RenderOcclusion()
 		}
 
 		state->EndPerfEvent();
+
+		// Prepass consumes the latest completed mask. Recording its quadrant lets
+		// readiness wait until all four regions were submitted for 15 fresh samples.
+		occlusionCaptureQuadrant = frameCount % kProbeOcclusionQuadrantCount;
+		occlusionCaptureSerial++;
 	}
 }
 

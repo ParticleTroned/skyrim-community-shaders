@@ -206,6 +206,16 @@ public:
 			"menu.performance_tuning.feature.upscaling.wait",
 			"Waiting for upscaling and frame pacing to settle");
 	}
+	virtual uint64_t GetPerformanceCostMeasurementFreshPresentCount(bool) const override
+	{
+		// Flush the same 60-frame rolling window shown by Performance Tuning.
+		return 60;
+	}
+	virtual double GetPerformanceCostMeasurementPostFreshSoakSeconds(bool) const override
+	{
+		// Match the time for which the post-edit timing comparison remains visible.
+		return 4.0;
+	}
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {
@@ -320,6 +330,7 @@ public:
 	bool performanceCostAppliedFSRRuntimePathActive = false;
 	bool performanceCostAppliedFSRRuntimeFsr4Configured = false;
 	bool performanceCostAppliedFSRRuntimeFsr4Active = false;
+	float2 performanceCostAppliedResolutionScale = { 1.0f, 1.0f };
 	uint32_t performanceCostAppliedFrame = std::numeric_limits<uint32_t>::max();
 	bool performanceCostExecutedPathValid = false;
 	bool performanceCostExecutedPathSuccessful = false;

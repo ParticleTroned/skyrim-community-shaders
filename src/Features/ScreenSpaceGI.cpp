@@ -1528,13 +1528,18 @@ void ScreenSpaceGI::DrawSSGI()
 	const int resolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	const float centerScale = ResolveFoveatedSharedMaskScale(settings);
 	const bool foveatedSsgiActive = IsRuntimeFoveatedActive(settings);
+	const bool enableVanillaSSAO = settings.EnableVanillaSSAO;
+
+	if (auto* setting = RE::GetINISetting("bSAOEnable:Display"); setting && setting->data.b != enableVanillaSSAO)
+		setting->data.b = enableVanillaSSAO;
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 	GET_INSTANCE_MEMBER(BSImagespaceShaderISSAOBlurH, imageSpaceManager);
 
-	// Toggle vanilla SSAO
-	static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH) + 0x50LL);
-	*enableSSAO = settings.EnableVanillaSSAO;
+	// Keep the live params in sync so the toggle applies immediately rather than
+	// waiting for the next ImageSpaceManager reinitialization.
+	if (auto* sao = BSImagespaceShaderISSAOBlurH; sao && sao->enableSAO != enableVanillaSSAO)
+		sao->enableSAO = enableVanillaSSAO;
 
 	const auto location = LocationContext::Get();
 	const bool allowAOSpace = LocationContext::AllowsInteriorOnly(settings.AOInteriorsOnly, location);

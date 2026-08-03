@@ -211,18 +211,50 @@ public:
 		uint32_t dlssPreset = kDLSSPresetK;
 		bool hasRenderScaleMode = false;
 		bool renderScaleMode = false;
+		bool hasScreenSpaceShadows = false;
+		bool screenSpaceShadowsEnabled = false;
+		bool hasScreenSpaceGI = false;
+		bool screenSpaceGIEnabled = false;
+		bool hasVolumetricLightingExterior = false;
+		bool volumetricLightingExteriorEnabled = false;
+		bool hasContactShadows = false;
+		bool contactShadowsEnabled = false;
 		uint32_t invalidSettingCount = 0;
+
+		/** @return True when the INI supplied any recognized upscaling setting for this profile. */
+		[[nodiscard]] bool HasAnyUpscalingSetting() const
+		{
+			return hasUpscaleMethod || hasLegacyMethodSelection || hasQualityMode || hasDLSSPreset || hasRenderScaleMode;
+		}
+
+		/** @return True when the INI supplied any recognized direct CS feature setting for this profile. */
+		[[nodiscard]] bool HasAnyFeatureSetting() const
+		{
+			return hasScreenSpaceShadows || hasScreenSpaceGI || hasVolumetricLightingExterior || hasContactShadows;
+		}
 
 		/** @return True when the INI supplied any recognized setting for this profile. */
 		[[nodiscard]] bool HasAnySetting() const
 		{
-			return hasUpscaleMethod || hasLegacyMethodSelection || hasQualityMode || hasDLSSPreset || hasRenderScaleMode;
+			return HasAnyUpscalingSetting() || HasAnyFeatureSetting();
+		}
+
+		/** @return True when the profile contains every canonical editable upscaling setting. */
+		[[nodiscard]] bool HasCompleteUpscalingSettings() const
+		{
+			return (hasUpscaleMethod || hasLegacyMethodSelection) && hasQualityMode && hasDLSSPreset && hasRenderScaleMode;
+		}
+
+		/** @return True when the profile contains every canonical editable direct CS feature setting. */
+		[[nodiscard]] bool HasCompleteFeatureSettings() const
+		{
+			return hasScreenSpaceShadows && hasScreenSpaceGI && hasVolumetricLightingExterior && hasContactShadows;
 		}
 
 		/** @return True when the profile contains every canonical editable setting. */
 		[[nodiscard]] bool HasCompleteSettings() const
 		{
-			return (hasUpscaleMethod || hasLegacyMethodSelection) && hasQualityMode && hasDLSSPreset && hasRenderScaleMode;
+			return HasCompleteUpscalingSettings() && HasCompleteFeatureSettings();
 		}
 
 		/** @brief Marks the resolved profile as canonical after a successful save. */
@@ -233,6 +265,10 @@ public:
 			hasQualityMode = true;
 			hasDLSSPreset = true;
 			hasRenderScaleMode = true;
+			hasScreenSpaceShadows = true;
+			hasScreenSpaceGI = true;
+			hasVolumetricLightingExterior = true;
+			hasContactShadows = true;
 			invalidSettingCount = 0;
 		}
 	};
@@ -257,6 +293,12 @@ public:
 			return interior.HasAnySetting() || exterior.HasAnySetting();
 		}
 
+		/** @return True when either Interior or Exterior supplied a recognized upscaling setting. */
+		[[nodiscard]] bool HasAnyUpscalingProfile() const
+		{
+			return interior.HasAnyUpscalingSetting() || exterior.HasAnyUpscalingSetting();
+		}
+
 		/** @return True when both Interior and Exterior contain every editable setting. */
 		[[nodiscard]] bool HasCompleteProfiles() const
 		{
@@ -275,7 +317,7 @@ public:
 			return invalidFadeSettingCount + interior.invalidSettingCount + exterior.invalidSettingCount;
 		}
 
-		/** @return True when the INI supplied any valid or invalid managed upscaling setting. */
+		/** @return True when the INI supplied any valid or invalid managed profile setting. */
 		[[nodiscard]] bool HasAnyManagedSetting() const
 		{
 			return hasFadeDuration || HasAnyProfile() || GetInvalidSettingCount() > 0;

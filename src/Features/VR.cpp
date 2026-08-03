@@ -1187,7 +1187,7 @@ void VR::DrawSettings()
 
 namespace
 {
-	constexpr std::array<const char*, 4> kVRFpsStabilizerMethodNames{ "None", "TAA", "FSR", "DLSS" };
+	constexpr std::array<const char*, 4> kVRFpsStabilizerMethodNames{ "None", "TAA", "AMD FSR", "NVIDIA DLSS" };
 	constexpr std::array<const char*, 7> kVRFpsStabilizerPresetNames{
 		"Native AA",
 		"Hoshipa",
@@ -1253,6 +1253,7 @@ namespace
 	{
 		bool changed = false;
 		ImGui::PushID(id);
+		ImGui::SeparatorText("Upscaling");
 
 		int method = std::clamp(
 			static_cast<int>(profile.upscaleMethod),
@@ -1262,6 +1263,9 @@ namespace
 			profile.upscaleMethod = static_cast<Upscaling::UpscaleMethod>(method);
 			profile.hasUpscaleMethod = true;
 			changed = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("AMD FSR profiles keep the current AMD FSR3 or AMD FSR4 selection from Community Shaders.");
 		}
 
 		const bool vendorUpscaling =
@@ -1273,7 +1277,7 @@ namespace
 		int qualityMode = static_cast<int>(std::min(profile.qualityMode, Upscaling::kQualityModeMaxIndex));
 		{
 			auto disabledGuard = Util::DisableGuard(!vendorUpscaling);
-			if (ImGui::Combo("Preset", &qualityMode, presetNames.data(), static_cast<int>(presetNames.size()))) {
+			if (ImGui::Combo("Upscale Preset", &qualityMode, presetNames.data(), static_cast<int>(presetNames.size()))) {
 				profile.qualityMode = static_cast<uint32_t>(qualityMode);
 				profile.hasQualityMode = true;
 				changed = true;
@@ -1298,13 +1302,13 @@ namespace
 		}
 		{
 			auto disabledGuard = Util::DisableGuard(!renderScaleEligible);
-			if (ImGui::Checkbox("Render Scale Mode", &profile.renderScaleMode)) {
+			if (ImGui::Checkbox("Render Scale", &profile.renderScaleMode)) {
 				profile.hasRenderScaleMode = true;
 				changed = true;
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Available with FSR or DLSS and a below-native preset.");
+			ImGui::TextUnformatted("Available with AMD FSR or NVIDIA DLSS and a below-native preset.");
 		}
 
 		ImGui::Spacing();
@@ -1312,16 +1316,41 @@ namespace
 			ImGui::TextDisabled("%s", GetVRFpsStabilizerMethodName(profile.upscaleMethod));
 		} else if (profile.upscaleMethod == Upscaling::UpscaleMethod::kDLSS) {
 			Util::Text::WrappedDisabled(
-				"DLSS  |  %s  |  Profile %s  |  Render Scale %s",
+				"NVIDIA DLSS  |  %s  |  Profile %s  |  Render Scale %s",
 				GetVRFpsStabilizerPresetName(profile.upscaleMethod, profile.qualityMode),
 				GetVRFpsStabilizerDLSSProfileName(profile.dlssPreset),
 				profile.renderScaleMode ? "On" : "Off");
 		} else {
 			Util::Text::WrappedDisabled(
-				"FSR  |  %s  |  Render Scale %s",
+				"AMD FSR  |  %s  |  Render Scale %s",
 				GetVRFpsStabilizerPresetName(profile.upscaleMethod, profile.qualityMode),
 				profile.renderScaleMode ? "On" : "Off");
 		}
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Community Shaders Features");
+		const auto drawFeatureToggle = [&](const char* label, bool& enabled, bool& hasSetting) {
+			if (ImGui::Checkbox(label, &enabled)) {
+				hasSetting = true;
+				changed = true;
+			}
+		};
+		drawFeatureToggle(
+			"Screen Space Shadows: Enable",
+			profile.screenSpaceShadowsEnabled,
+			profile.hasScreenSpaceShadows);
+		drawFeatureToggle(
+			"Screen Space GI: Enable",
+			profile.screenSpaceGIEnabled,
+			profile.hasScreenSpaceGI);
+		drawFeatureToggle(
+			"Volumetric Lighting: Enable in Exteriors",
+			profile.volumetricLightingExteriorEnabled,
+			profile.hasVolumetricLightingExterior);
+		drawFeatureToggle(
+			"Enable Point Light Contact Shadows",
+			profile.contactShadowsEnabled,
+			profile.hasContactShadows);
 
 		ImGui::PopID();
 		return changed;
@@ -1335,7 +1364,7 @@ namespace
 			LoadVRFpsStabilizerUIState(uiState);
 
 		ImGui::TextUnformatted("VR FPS Stabilizer Profiles");
-		ImGui::TextDisabled("Interior/Exterior Community Shaders upscaling switching and its door fade.");
+		ImGui::TextDisabled("Interior/Exterior Community Shaders profiles, upscaling, and Render Scale transition fade.");
 		ImGui::Spacing();
 		const bool currentCellIsInterior = Util::IsInterior();
 		ImGui::TextDisabled("Current unconditional profile: %s", currentCellIsInterior ? "Interior" : "Exterior");
@@ -1346,18 +1375,18 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(uiState.loadFailed);
 			if (ImGui::Checkbox(
-					"Enable Interior/Exterior CS upscaling switching",
+					"Enable Interior/Exterior Community Shaders profiles",
 					&uiState.config.upscalingSwitchingEnabled)) {
 				MarkVRFpsStabilizerUIStateDirty(uiState);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls only the unconditional Interior/Exterior CS upscaling rows and CS door fade.");
+			ImGui::TextUnformatted("Controls only the unconditional Interior/Exterior Community Shaders profile rows and Render Scale transition fade.");
 			ImGui::TextUnformatted("It does not disable VR FPS Stabilizer, its other settings, or edit other conditional rows.");
 		}
 		if (!uiState.config.upscalingSwitchingEnabled) {
 			Util::Text::WrappedWarning(
-				"Off: saving comments out only the managed Interior/Exterior CS upscaling rows and door fade. Other Stabilizer settings and conditional rows are not edited.");
+				"Off: saving comments out only the managed Interior/Exterior Community Shaders profile rows and transition fade. Other Stabilizer settings and conditional rows are not edited.");
 		}
 
 		ImGui::Spacing();
@@ -1365,19 +1394,19 @@ namespace
 		const auto& sessionConfig = upscaling.GetVRFpsStabilizerSessionConfig();
 		if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning(
-				"Automatic CS save-load profile sync: inactive for this session because Open Composite owns upscaling.");
+				"Automatic Community Shaders upscaling save-load sync: inactive for this session because Open Composite owns upscaling.");
 		} else if (upscaling.IsVRFpsStabilizerSyncActive()) {
 			ImGui::TextColored(
 				Util::Colors::GetSuccess(),
-				"Automatic CS save-load profile sync: active for this session.");
+				"Automatic Community Shaders upscaling save-load sync: active for this session.");
 		} else if (!sessionConfig.fileExists) {
-			ImGui::TextDisabled("Automatic CS save-load profile sync: inactive; VRFpsStabilizer.ini was not found at startup.");
+			ImGui::TextDisabled("Automatic Community Shaders upscaling save-load sync: inactive; VRFpsStabilizer.ini was not found at startup.");
 		} else if (!sessionConfig.fileReadable) {
-			ImGui::TextDisabled("Automatic CS save-load profile sync: inactive; VRFpsStabilizer.ini was not readable at startup.");
+			ImGui::TextDisabled("Automatic Community Shaders upscaling save-load sync: inactive; VRFpsStabilizer.ini was not readable at startup.");
 		} else if (!sessionConfig.upscalingSwitchingEnabled) {
-			ImGui::TextDisabled("Automatic CS save-load profile sync: inactive because this group was off at startup.");
+			ImGui::TextDisabled("Automatic Community Shaders upscaling save-load sync: inactive because this group was off at startup.");
 		} else {
-			ImGui::TextDisabled("Automatic CS save-load profile sync: inactive; no supported Interior/Exterior profile was active at startup.");
+			ImGui::TextDisabled("Automatic Community Shaders upscaling save-load sync: inactive; no supported Interior/Exterior upscaling profile was active at startup.");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Community Shaders enables this automatically when the INI contains active unconditional Interior or Exterior upscaling rows.");
@@ -1401,23 +1430,23 @@ namespace
 		if (uiState.config.hasMixedUpscalingSwitchingActivation) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"The managed upscaling rows and door fade contain a mix of active and UI-disabled entries. Active entries take precedence; saving will make the whole group match this toggle.");
+				"The managed Community Shaders profile rows and transition fade contain a mix of active and UI-disabled entries. Active entries take precedence; saving will make the whole group match this toggle.");
 		}
 		if (invalidSettingCount > 0) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"%u recognized stabilizer value(s) or combination(s) are invalid or outside the VRAPI range. Safe resolved values are shown; saving will normalize those rows.",
+				"%u recognized profile value(s) or combination(s) are invalid or outside the supported Community Shaders range. Safe resolved values are shown; saving will normalize those rows.",
 				invalidSettingCount);
 		}
 		if (!completeProfiles) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"Missing profile values inherit the current Community Shaders configuration. Saving will write complete Interior and Exterior profiles.");
+				"Missing profile values inherit the current Community Shaders configuration. Saving will write complete upscaling and feature settings for both profiles.");
 		}
 		if (!uiState.config.hasFadeDuration) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"CSVRFadeToBlackDuration is missing. The %.0f second Community Shaders recommendation is shown and will be written when saved.",
+				"The Render Scale transition fade duration is missing. The %.0f second Community Shaders recommendation is shown and will be written when saved.",
 				Upscaling::kVRFpsStabilizerDefaultFadeDuration);
 		}
 
@@ -1443,7 +1472,7 @@ namespace
 		}
 
 		ImGui::Spacing();
-		ImGui::SeparatorText("Door / Transition Fade");
+		ImGui::SeparatorText("Render Scale Transition Fade");
 		{
 			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
 			float fadeDuration = uiState.config.fadeDuration;
@@ -1456,19 +1485,24 @@ namespace
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Used when VR FPS Stabilizer runs a Render Scale Mode command during a door or cell transition.");
+			ImGui::TextUnformatted("Used when an Interior/Exterior profile changes Render Scale during a door or cell transition.");
 			ImGui::Text(
 				"Community Shaders recommends a %.0f second black hold for conservative relatch coverage.",
 				Upscaling::kVRFpsStabilizerDefaultFadeDuration);
 		}
 
 		ImGui::Spacing();
+		if (uiState.dirty) {
+			Util::Text::WrappedWarning("Unsaved changes have not been written to VRFpsStabilizer.ini.");
+			ImGui::Spacing();
+		}
 		if (ImGui::Button(uiState.dirty ? "Discard & Reload" : "Reload INI"))
 			LoadVRFpsStabilizerUIState(uiState);
 		ImGui::SameLine();
 		{
 			auto disabledGuard = Util::DisableGuard(!uiState.dirty && !configNeedsNormalization);
-			if (ImGui::Button("Save INI")) {
+			const bool saveRequested = uiState.dirty ? Util::WarningButton("Save INI") : ImGui::Button("Save INI");
+			if (saveRequested) {
 				uiState.message.clear();
 				if (upscaling.SaveVRFpsStabilizerConfig(uiState.config, uiState.message)) {
 					uiState.config.MarkSettingsComplete();
@@ -1476,8 +1510,8 @@ namespace
 					uiState.restartRequired = true;
 					uiState.messageIsError = false;
 					uiState.message = uiState.config.upscalingSwitchingEnabled ?
-					                      "VR FPS Stabilizer CS upscaling switching enabled in the INI." :
-					                      "VR FPS Stabilizer CS upscaling switching disabled in the INI.";
+					                      "Community Shaders profile switching enabled in the VR FPS Stabilizer INI." :
+					                      "Community Shaders profile switching disabled in the VR FPS Stabilizer INI.";
 				} else {
 					uiState.loadFailed = false;
 					uiState.messageIsError = true;
@@ -1486,10 +1520,6 @@ namespace
 			}
 		}
 
-		if (uiState.dirty) {
-			ImGui::Spacing();
-			ImGui::TextDisabled("Unsaved INI changes.");
-		}
 		if (!uiState.message.empty()) {
 			ImGui::Spacing();
 			if (uiState.messageIsError) {
@@ -1503,7 +1533,7 @@ namespace
 			Util::Text::WrappedWarning("Restart Skyrim VR so VR FPS Stabilizer and Community Shaders reload the edited INI.");
 		}
 		Util::Text::WrappedDisabled(
-			"Only unconditional Interior/Exterior CS upscaling rows and CSVRFadeToBlackDuration are edited. Other Stabilizer settings and conditional rows are preserved.");
+			"Only unconditional Interior/Exterior Community Shaders profile rows and the Render Scale transition fade are edited. Other Stabilizer settings and conditional rows are preserved.");
 	}
 }
 

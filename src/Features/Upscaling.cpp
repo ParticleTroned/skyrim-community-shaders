@@ -1,7 +1,11 @@
 #include "Upscaling.h"
 
 #include "Deferred.h"
+#include "Features/LightLimitFix.h"
 #include "Features/RenderDoc.h"
+#include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpaceShadows.h"
+#include "Features/VolumetricLighting.h"
 #include "FoveatedCommon.h"
 #include "Hooks.h"
 #include "Menu.h"
@@ -2411,8 +2415,8 @@ namespace
 		}
 	}
 
-	using VRFpsStabilizerUpscalingProfile = Upscaling::VRFpsStabilizerProfile;
-	using VRFpsStabilizerUpscalingProfiles = Upscaling::VRFpsStabilizerConfig;
+	using VRFpsStabilizerProfile = Upscaling::VRFpsStabilizerProfile;
+	using VRFpsStabilizerProfiles = Upscaling::VRFpsStabilizerConfig;
 	constexpr uintmax_t kVRFpsStabilizerMaxIniBytes = 4u * 1024u * 1024u;
 	// Only this explicit marker is reversible; ordinary user comments remain untouched.
 	constexpr std::string_view kVRFpsStabilizerDisabledSettingPrefix = "# CS-VR-UI-DISABLED ";
@@ -2480,14 +2484,103 @@ namespace
 		UpscaleMethod,
 		UpscalePreset,
 		DLSSProfile,
-		RenderScaleMode
+		RenderScaleMode,
+		ScreenSpaceShadows,
+		ScreenSpaceGI,
+		VolumetricLightingExterior,
+		ContactShadows
 	};
 	constexpr std::array kVRFpsStabilizerProfileSettings{
 		VRFpsStabilizerSetting::UpscaleMethod,
 		VRFpsStabilizerSetting::UpscalePreset,
 		VRFpsStabilizerSetting::DLSSProfile,
-		VRFpsStabilizerSetting::RenderScaleMode
+		VRFpsStabilizerSetting::RenderScaleMode,
+		VRFpsStabilizerSetting::ScreenSpaceShadows,
+		VRFpsStabilizerSetting::ScreenSpaceGI,
+		VRFpsStabilizerSetting::VolumetricLightingExterior,
+		VRFpsStabilizerSetting::ContactShadows
 	};
+	static_assert(
+		kVRFpsStabilizerProfileSettings.size() ==
+		static_cast<size_t>(VRFpsStabilizerSetting::ContactShadows));
+
+	using VRFpsStabilizerProfileBoolMember = bool Upscaling::VRFpsStabilizerProfile::*;
+
+	struct VRFpsStabilizerDirectFeature
+	{
+		VRFpsStabilizerSetting setting = VRFpsStabilizerSetting::None;
+		const char* iniName = "";
+		VRFpsStabilizerProfileBoolMember enabled = nullptr;
+		VRFpsStabilizerProfileBoolMember hasSetting = nullptr;
+		bool (*getCurrentValue)() = nullptr;
+	};
+
+	bool GetVRFpsStabilizerScreenSpaceShadowsEnabled()
+	{
+		return globals::features::screenSpaceShadows.bendSettings.Enable != 0;
+	}
+
+	bool GetVRFpsStabilizerScreenSpaceGIEnabled()
+	{
+		return globals::features::screenSpaceGI.settings.Enabled;
+	}
+
+	bool GetVRFpsStabilizerVolumetricLightingExteriorEnabled()
+	{
+		return globals::features::volumetricLighting.IsExteriorEnabled();
+	}
+
+	bool GetVRFpsStabilizerContactShadowsEnabled()
+	{
+		return globals::features::lightLimitFix.settings.EnableContactShadows;
+	}
+
+	const std::array kVRFpsStabilizerDirectFeatures{
+		VRFpsStabilizerDirectFeature{
+			VRFpsStabilizerSetting::ScreenSpaceShadows,
+			"SSS",
+			&Upscaling::VRFpsStabilizerProfile::screenSpaceShadowsEnabled,
+			&Upscaling::VRFpsStabilizerProfile::hasScreenSpaceShadows,
+			GetVRFpsStabilizerScreenSpaceShadowsEnabled },
+		VRFpsStabilizerDirectFeature{
+			VRFpsStabilizerSetting::ScreenSpaceGI,
+			"SSGI",
+			&Upscaling::VRFpsStabilizerProfile::screenSpaceGIEnabled,
+			&Upscaling::VRFpsStabilizerProfile::hasScreenSpaceGI,
+			GetVRFpsStabilizerScreenSpaceGIEnabled },
+		VRFpsStabilizerDirectFeature{
+			VRFpsStabilizerSetting::VolumetricLightingExterior,
+			"VLExterior",
+			&Upscaling::VRFpsStabilizerProfile::volumetricLightingExteriorEnabled,
+			&Upscaling::VRFpsStabilizerProfile::hasVolumetricLightingExterior,
+			GetVRFpsStabilizerVolumetricLightingExteriorEnabled },
+		VRFpsStabilizerDirectFeature{
+			VRFpsStabilizerSetting::ContactShadows,
+			"ContactShadows",
+			&Upscaling::VRFpsStabilizerProfile::contactShadowsEnabled,
+			&Upscaling::VRFpsStabilizerProfile::hasContactShadows,
+			GetVRFpsStabilizerContactShadowsEnabled }
+	};
+
+	const VRFpsStabilizerDirectFeature* FindVRFpsStabilizerDirectFeature(
+		VRFpsStabilizerSetting setting)
+	{
+		for (const auto& feature : kVRFpsStabilizerDirectFeatures) {
+			if (feature.setting == setting)
+				return &feature;
+		}
+		return nullptr;
+	}
+
+	const VRFpsStabilizerDirectFeature* FindVRFpsStabilizerDirectFeature(
+		std::string_view iniName)
+	{
+		for (const auto& feature : kVRFpsStabilizerDirectFeatures) {
+			if (EqualsAsciiInsensitive(iniName, feature.iniName))
+				return &feature;
+		}
+		return nullptr;
+	}
 
 	enum class VRFpsStabilizerIniSection
 	{
@@ -2624,6 +2717,10 @@ namespace
 			outLegacyMethodSelection = !EqualsAsciiInsensitive(settingName, "RenderScaleMode");
 			return true;
 		}
+		if (const auto* feature = FindVRFpsStabilizerDirectFeature(settingName)) {
+			outSetting = feature->setting;
+			return true;
+		}
 		return false;
 	}
 
@@ -2694,25 +2791,37 @@ namespace
 		return true;
 	}
 
-	void ApplyVRFpsStabilizerUpscalingSetting(
-		VRFpsStabilizerUpscalingProfile& profile,
+	void ApplyVRFpsStabilizerProfileSetting(
+		VRFpsStabilizerProfile& profile,
 		const VRFpsStabilizerParsedSetting& setting)
 	{
-		if (setting.setting == VRFpsStabilizerSetting::RenderScaleMode) {
+		const auto applyToggle = [&](bool& value, bool& hasValue) {
 			uint32_t toggleValue = 0;
-			bool renderScaleMode = false;
+			bool parsedToggle = false;
 			if (TryParseUnsigned(setting.value, toggleValue)) {
 				if (toggleValue > 1)
 					++profile.invalidSettingCount;
-				renderScaleMode = ClampToggleUInt(toggleValue) != 0;
-			} else if (!TryParseAsciiBoolSetting(std::string(setting.value), renderScaleMode)) {
+				parsedToggle = ClampToggleUInt(toggleValue) != 0;
+			} else if (!TryParseAsciiBoolSetting(std::string(setting.value), parsedToggle)) {
 				++profile.invalidSettingCount;
-				return;
+				return false;
 			}
 
-			profile.renderScaleMode = renderScaleMode;
-			profile.hasRenderScaleMode = true;
-			profile.hasLegacyMethodSelection |= setting.legacyMethodSelection;
+			value = parsedToggle;
+			hasValue = true;
+			return true;
+		};
+
+		switch (setting.setting) {
+		case VRFpsStabilizerSetting::RenderScaleMode:
+			if (applyToggle(profile.renderScaleMode, profile.hasRenderScaleMode))
+				profile.hasLegacyMethodSelection |= setting.legacyMethodSelection;
+			return;
+		default:
+			break;
+		}
+		if (const auto* feature = FindVRFpsStabilizerDirectFeature(setting.setting)) {
+			applyToggle(profile.*(feature->enabled), profile.*(feature->hasSetting));
 			return;
 		}
 
@@ -2753,9 +2862,9 @@ namespace
 		}
 	}
 
-	void MergeMissingVRFpsStabilizerUpscalingSettings(
-		VRFpsStabilizerUpscalingProfile& profile,
-		const VRFpsStabilizerUpscalingProfile& fallback)
+	void MergeMissingVRFpsStabilizerProfileSettings(
+		VRFpsStabilizerProfile& profile,
+		const VRFpsStabilizerProfile& fallback)
 	{
 		if (!profile.hasUpscaleMethod && fallback.hasUpscaleMethod) {
 			profile.upscaleMethod = fallback.upscaleMethod;
@@ -2773,6 +2882,12 @@ namespace
 			profile.renderScaleMode = fallback.renderScaleMode;
 			profile.hasRenderScaleMode = true;
 		}
+		for (const auto& feature : kVRFpsStabilizerDirectFeatures) {
+			if (!(profile.*(feature.hasSetting)) && fallback.*(feature.hasSetting)) {
+				profile.*(feature.enabled) = fallback.*(feature.enabled);
+				profile.*(feature.hasSetting) = true;
+			}
+		}
 
 		profile.hasLegacyMethodSelection |= fallback.hasLegacyMethodSelection;
 		profile.invalidSettingCount += fallback.invalidSettingCount;
@@ -2786,8 +2901,8 @@ namespace
 		       EqualsAsciiInsensitive(line.substr(0, equalsOffset), "CSVRFadeToBlackDuration");
 	}
 
-	bool TryLoadVRFpsStabilizerUpscalingProfiles(
-		VRFpsStabilizerUpscalingProfiles& outProfiles,
+	bool TryLoadVRFpsStabilizerProfiles(
+		VRFpsStabilizerProfiles& outProfiles,
 		std::string* outError = nullptr,
 		bool includeManagedDisabledSettings = false)
 	{
@@ -2810,7 +2925,7 @@ namespace
 		}
 
 		outProfiles.fileReadable = true;
-		VRFpsStabilizerUpscalingProfiles disabledProfiles;
+		VRFpsStabilizerProfiles disabledProfiles;
 		bool sawManagedDisabledSetting = false;
 		std::istringstream iniFile(contents);
 		VRFpsStabilizerIniSection currentSection = VRFpsStabilizerIniSection::Other;
@@ -2861,7 +2976,7 @@ namespace
 
 			auto& destination = managedDisabled ? disabledProfiles : outProfiles;
 			auto& profile = parsedSetting.interior ? destination.interior : destination.exterior;
-			ApplyVRFpsStabilizerUpscalingSetting(profile, parsedSetting);
+			ApplyVRFpsStabilizerProfileSetting(profile, parsedSetting);
 		}
 
 		const bool hasActiveSettings = outProfiles.HasAnyManagedSetting();
@@ -2874,8 +2989,8 @@ namespace
 		if (hasDisabledSettings) {
 			if (hasActiveSettings) {
 				outProfiles.hasMixedUpscalingSwitchingActivation = true;
-				MergeMissingVRFpsStabilizerUpscalingSettings(outProfiles.interior, disabledProfiles.interior);
-				MergeMissingVRFpsStabilizerUpscalingSettings(outProfiles.exterior, disabledProfiles.exterior);
+				MergeMissingVRFpsStabilizerProfileSettings(outProfiles.interior, disabledProfiles.interior);
+				MergeMissingVRFpsStabilizerProfileSettings(outProfiles.exterior, disabledProfiles.exterior);
 				if (!outProfiles.hasFadeDuration && disabledProfiles.hasFadeDuration) {
 					outProfiles.fadeDuration = disabledProfiles.fadeDuration;
 					outProfiles.hasFadeDuration = true;
@@ -2901,6 +3016,9 @@ namespace
 
 	const char* GetVRFpsStabilizerSettingName(VRFpsStabilizerSetting setting)
 	{
+		if (const auto* feature = FindVRFpsStabilizerDirectFeature(setting))
+			return feature->iniName;
+
 		switch (setting) {
 		case VRFpsStabilizerSetting::UpscaleMethod:
 			return "UpscaleMethod";
@@ -2916,9 +3034,12 @@ namespace
 	}
 
 	std::string GetVRFpsStabilizerSettingValue(
-		const VRFpsStabilizerUpscalingProfile& profile,
+		const VRFpsStabilizerProfile& profile,
 		VRFpsStabilizerSetting setting)
 	{
+		if (const auto* feature = FindVRFpsStabilizerDirectFeature(setting))
+			return profile.*(feature->enabled) ? "1" : "0";
+
 		switch (setting) {
 		case VRFpsStabilizerSetting::UpscaleMethod:
 			return std::to_string(static_cast<uint32_t>(profile.upscaleMethod));
@@ -2956,7 +3077,7 @@ namespace
 	std::string BuildVRFpsStabilizerConditionalLine(
 		bool interior,
 		VRFpsStabilizerSetting setting,
-		const VRFpsStabilizerUpscalingProfile& profile,
+		const VRFpsStabilizerProfile& profile,
 		bool enabled,
 		std::string_view originalLine = {})
 	{
@@ -2983,7 +3104,7 @@ namespace
 
 	VRFpsStabilizerTransitionTarget ResolveVRFpsStabilizerTransitionTarget(
 		const Upscaling& a_upscaling,
-		const VRFpsStabilizerUpscalingProfile& a_profile)
+		const VRFpsStabilizerProfile& a_profile)
 	{
 		VRFpsStabilizerTransitionTarget target;
 		const auto currentMethod = a_upscaling.GetConfiguredUpscaleMethodForTransition();
@@ -9613,7 +9734,7 @@ bool Upscaling::LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::
 	a_error.clear();
 	VRFpsStabilizerConfig loadedConfig;
 	std::string readError;
-	TryLoadVRFpsStabilizerUpscalingProfiles(loadedConfig, &readError, true);
+	TryLoadVRFpsStabilizerProfiles(loadedConfig, &readError, true);
 	if (!loadedConfig.fileExists) {
 		a_config = std::move(loadedConfig);
 		a_error = std::format("VRFpsStabilizer.ini was not found at {}.", a_config.path.string());
@@ -9640,6 +9761,10 @@ bool Upscaling::LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::
 		profile.qualityMode = target.qualityMode;
 		profile.dlssPreset = std::min(target.dlssPreset, kDLSSPresetF);
 		profile.renderScaleMode = target.renderScaleMode;
+		for (const auto& feature : kVRFpsStabilizerDirectFeatures) {
+			if (!(profile.*(feature.hasSetting)))
+				profile.*(feature.enabled) = feature.getCurrentValue();
+		}
 	};
 	resolveProfile(loadedConfig.interior);
 	resolveProfile(loadedConfig.exterior);
@@ -9653,7 +9778,7 @@ bool Upscaling::LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::
 const Upscaling::VRFpsStabilizerConfig& Upscaling::GetVRFpsStabilizerSessionConfig() const
 {
 	std::call_once(vrFpsStabilizerSessionConfigOnce, [this]() {
-		TryLoadVRFpsStabilizerUpscalingProfiles(vrFpsStabilizerSessionConfig);
+		TryLoadVRFpsStabilizerProfiles(vrFpsStabilizerSessionConfig);
 	});
 	return vrFpsStabilizerSessionConfig;
 }
@@ -9666,7 +9791,7 @@ bool Upscaling::IsVRFpsStabilizerSyncActive() const
 	const auto& config = GetVRFpsStabilizerSessionConfig();
 	return config.fileReadable &&
 	       config.upscalingSwitchingEnabled &&
-	       config.HasAnyProfile();
+	       config.HasAnyUpscalingProfile();
 }
 
 bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const
@@ -16730,7 +16855,7 @@ bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
 	const auto& currentProfile = currentInterior ? profiles.interior : profiles.exterior;
 	const auto& oppositeProfile = currentInterior ? profiles.exterior : profiles.interior;
 	const auto matchesProfile = [&](const VRFpsStabilizerProfile& a_profile) {
-		if (!a_profile.HasAnySetting())
+		if (!a_profile.HasAnyUpscalingSetting())
 			return false;
 		const auto target = ResolveVRFpsStabilizerTransitionTarget(*this, a_profile);
 		return MatchesVRFpsStabilizerTransitionTarget(
@@ -16747,7 +16872,7 @@ bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
 		// this narrowly owned LoadingMenu window, either configured cell profile
 		// is a legitimate destination request; PostLoadSync remains authoritative
 		// and corrects a stale request before physical work can begin.
-		if (!currentProfile.HasAnySetting() && !oppositeProfile.HasAnySetting())
+		if (!currentProfile.HasAnyUpscalingSetting() && !oppositeProfile.HasAnyUpscalingSetting())
 			return true;
 		return matchesProfile(currentProfile) || matchesProfile(oppositeProfile);
 	}
@@ -16755,7 +16880,7 @@ bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
 	// Outside the protected handoff preserve the pre-move contract: only the
 	// opposite cell profile may be asserted, so ordinary current-cell runtime
 	// reconciliation cannot undo a user's CS-menu selection.
-	if (!oppositeProfile.HasAnySetting())
+	if (!oppositeProfile.HasAnyUpscalingSetting())
 		return true;
 	return matchesProfile(oppositeProfile);
 }
@@ -16866,7 +16991,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	const bool loadedInterior = Util::IsInterior();
 	const auto& profile = loadedInterior ? profiles.interior : profiles.exterior;
 	const char* profileName = loadedInterior ? "Interior" : "Exterior";
-	if (!profile.HasAnySetting()) {
+	if (!profile.HasAnyUpscalingSetting()) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
 		if (armPostLoadCompositorHoldAfterSync)

@@ -245,12 +245,21 @@ void AdvancedSettingsRenderer::RenderShaderCacheControls()
 		ImGui::Text("Dump shaders at startup. This should be used only when reversing shaders. Normal users don't need this.");
 	}
 
-	// Clear Shader Cache button
+	const bool capturing = shaderCache->IsCapturingActiveShaders();
+	const bool awaitingMenuClose = shaderCache->IsAwaitingMenuCloseCapture();
+	ImGui::BeginDisabled(capturing || awaitingMenuClose);
 	if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
-		shaderCache->Clear();
+		Util::RequestClearShaderCacheConfirmation(Util::ResolveShaderCacheClearScope());
 	}
+	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Clear all compiled shaders from memory. Forces recompilation of all shaders on next use.");
+		ImGui::TextWrapped("%s", Util::GetClearShaderCacheTooltip());
+	}
+	if (auto count = shaderCache->GetLastScopedClearCount(); count > 0) {
+		ImGui::TextDisabled(
+			"Last smart clear: %zu shader(s) (%.1f ms)",
+			count,
+			shaderCache->GetLastScopedClearMs());
 	}
 }
 

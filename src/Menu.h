@@ -414,6 +414,7 @@ public:
 		bool EnableShaderBlocking = false;                                                                             // Enable shader blocking hotkeys for debugging
 		bool FirstTimeSetupCompleted = false;                                                                          // Track if first-time setup has been completed
 		bool SkipClearCacheConfirmation = false;                                                                       // Skip confirmation dialog when clearing shader cache
+		bool SmartClearShaderCacheDefault = false;                                                                     // Plain-click clears active shaders; Shift-click selects the other clear scope
 		bool BackgroundShaderCompilationOnBoot = false;                                                                // Load the menu immediately and compile shaders in the background on boot
 		bool HideCompilationHUDInVR = false;                                                                           // Suppress routine background shader compilation HUD in VR
 		bool AutoHideFeatureList = false;                                                                              // Auto-hide left feature list panel, show on hover

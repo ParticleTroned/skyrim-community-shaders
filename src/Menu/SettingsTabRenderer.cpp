@@ -494,6 +494,16 @@ void SettingsTabRenderer::RenderBehaviorTab()
 			ImGui::Text("When checked, the shader cache will be cleared immediately without asking for confirmation.");
 		}
 
+		bool smartClearDefault = menuSettings.SmartClearShaderCacheDefault;
+		if (ImGui::Checkbox("Smart Clear by Default", &smartClearDefault)) {
+			menuSettings.SmartClearShaderCacheDefault = smartClearDefault;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextWrapped(
+				"When checked, a normal click clears only shaders drawing the current scene; Shift-click performs "
+				"a full clear. When unchecked, those roles are reversed. Enable this for controller-only VR use.");
+		}
+
 		SeparatorTextWithFont("Visual Effects", Menu::FontRole::Subheading);
 
 		if (ImGui::Checkbox("Background Blur", &themeSettings.BackgroundBlurEnabled)) {

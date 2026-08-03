@@ -317,15 +317,22 @@ void MenuHeaderRenderer::RenderHeader(
 
 			// Clear Shader Cache Button
 			ImGui::TableNextColumn();
-			if (ImGui::Button("Clear Shader Cache", { -1, 0 })) {
-				Util::RequestClearShaderCacheConfirmation();
+			{
+				const bool capturing = shaderCache->IsCapturingActiveShaders();
+				const bool awaitingMenuClose = shaderCache->IsAwaitingMenuCloseCapture();
+				ImGui::BeginDisabled(capturing || awaitingMenuClose);
+				const std::string label = awaitingMenuClose ?
+				                              "Close the menu to finish" :
+				                      capturing ?
+				                              std::format("Capturing... {}", shaderCache->GetActiveShaderCaptureFramesRemaining()) :
+				                              "Clear Shader Cache";
+				if (ImGui::Button(label.c_str(), { -1, 0 })) {
+					Util::RequestClearShaderCacheConfirmation(Util::ResolveShaderCacheClearScope());
+				}
+				ImGui::EndDisabled();
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Clears the shader cache and disk cache (if enabled). "
-					"The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime. "
-					"The Disk Cache is a collection of compiled shaders on disk. "
-					"Clearing will mean that shaders are recompiled only when the game re-encounters them. ");
+				ImGui::TextWrapped("%s", Util::GetClearShaderCacheTooltip());
 			}
 
 			// Error message toggle if needed
@@ -407,14 +414,9 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 		actionIcons.push_back({ "HeaderClearShaderCache",
 			nullptr,
 			uiIcons.clearCache.texture,
-			"Clear Shader Cache\n\n"
-			"Clears the shader cache and disk cache (if enabled).\n"
-			"The Shader Cache is the collection of compiled shaders which replace\n"
-			"the vanilla shaders at runtime. The Disk Cache is a collection of\n"
-			"compiled shaders on disk. Clearing will mean that shaders are\n"
-			"recompiled only when the game re-encounters them.",
+			Util::GetClearShaderCacheTooltip(),
 			[]() {
-				Util::RequestClearShaderCacheConfirmation();
+				Util::RequestClearShaderCacheConfirmation(Util::ResolveShaderCacheClearScope());
 			} });
 	}
 

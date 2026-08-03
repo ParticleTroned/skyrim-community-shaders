@@ -219,6 +219,9 @@ public:
 	virtual bool ValidateCache(CSimpleIniA& a_ini);
 	virtual void WriteDiskCacheInfo(CSimpleIniA& a_ini);
 	virtual void ClearShaderCache() {}
+	/** @brief Invalidates this feature's shader cache during a scene-scoped clear.
+	 *  Features may override this when they can avoid an eager full-cache rebuild. */
+	virtual void ClearShaderCacheScoped() { ClearShaderCache(); }
 
 	static const std::vector<Feature*>& GetFeatureList();
 

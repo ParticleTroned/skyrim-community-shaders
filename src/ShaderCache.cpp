@@ -2308,18 +2308,21 @@ namespace SIE
 		}
 
 		auto state = globals::state;
+		const bool developerMode = state->IsDeveloperMode();
 		if (globals::game::isVR && strcmp(shader.fxpFilename, "OBBOcclusionTesting") == 0)
 			// use vanilla shader
 			return nullptr;
 
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enableVShaders)) {
+		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && state->enableVShaders)) {
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		// Developer diagnostics and bounded smart clears share the tracking hook.
+		// Outside those short-lived modes this remains a single relaxed atomic read.
+		if (developerMode || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
 			TrackActiveShader(ShaderClass::Vertex, shader, descriptor);
 
+		if (developerMode) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -2355,11 +2358,12 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = globals::state;
+		const bool developerMode = state->IsDeveloperMode();
 		if (globals::game::isVR && strcmp(shader.fxpFilename, "OBBOcclusionTesting") == 0)
 			// use vanilla shader
 			return nullptr;
 
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enablePShaders)) {
+		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && state->enablePShaders)) {
 			return nullptr;
 		}
 
@@ -2367,10 +2371,10 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		if (developerMode || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
 			TrackActiveShader(ShaderClass::Pixel, shader, descriptor);
 
+		if (developerMode) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -2406,7 +2410,8 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		auto state = globals::state;
-		if (!((ShaderCache::IsSupportedShader(shader) || state->IsDeveloperMode() && state->IsShaderEnabled(shader)) && state->enableCShaders)) {
+		const bool developerMode = state->IsDeveloperMode();
+		if (!((ShaderCache::IsSupportedShader(shader) || developerMode && state->IsShaderEnabled(shader)) && state->enableCShaders)) {
 			return nullptr;
 		}
 
@@ -2414,10 +2419,10 @@ namespace SIE
 			return nullptr;
 		}
 
-		if (state->IsDeveloperMode()) {
-			// Track this shader as active
+		if (developerMode || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
 			TrackActiveShader(ShaderClass::Compute, shader, descriptor);
 
+		if (developerMode) {
 			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Compute, shader, descriptor, true);
 			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
@@ -2557,6 +2562,71 @@ namespace SIE
 			}
 		}
 	}
+
+	void ShaderCache::EvictShader(
+		const std::string& a_key,
+		RE::BSShader::Type a_type,
+		uint32_t a_descriptor,
+		ShaderClass a_shaderClass)
+	{
+		// Never hold mapMutex while acquiring compilationMutex: CompilationSet::Add
+		// takes those locks in the opposite order when it checks GetCompletedShader().
+		{
+			std::unique_lock lockM{ mapMutex };
+			shaderMap.erase(a_key);
+		}
+
+		switch (a_shaderClass) {
+		case ShaderClass::Vertex:
+			ReleaseShader(vertexShaders, vertexShadersMutex, a_type, a_descriptor);
+			break;
+		case ShaderClass::Pixel:
+			ReleaseShader(pixelShaders, pixelShadersMutex, a_type, a_descriptor);
+			break;
+		case ShaderClass::Compute:
+			ReleaseShader(computeShaders, computeShadersMutex, a_type, a_descriptor);
+			break;
+		default:
+			logger::warn("Unexpected shader class: {}", static_cast<int>(a_shaderClass));
+			break;
+		}
+
+		logger::debug("Marking recompile for shader: {}", a_key);
+	}
+
+	void ShaderCache::DeleteScopedDiskCacheEntries(const std::vector<std::wstring>& a_diskPaths)
+	{
+		if (a_diskPaths.empty())
+			return;
+
+		// The exclusive disk mutation lock drains any write already in progress. Advancing
+		// the generation then prevents deferred or waiting writes from resurrecting a blob
+		// selected by this clear. Keep compilation bookkeeping stable while files disappear.
+		std::scoped_lock lockD{ compilationSet.compilationMutex, g_diskCacheMutationMutex };
+		if (!isDiskCache.load(std::memory_order_relaxed))
+			return;
+
+		AdvanceDiskCacheGeneration();
+		auto& manifest = GetShaderCacheManifest();
+		bool manifestChanged = false;
+		for (const auto& diskPath : a_diskPaths) {
+			const auto diskPathString = Util::WStringToString(diskPath);
+			std::error_code error;
+			const bool removed = std::filesystem::remove(diskPath, error);
+			if (error) {
+				logger::warn("Error while trying to delete {}: {}", diskPathString, error.message());
+			} else if (removed) {
+				logger::debug("Deleted {}", diskPathString);
+			}
+
+			if (manifest.Erase(GetManifestKey(diskPath)))
+				manifestChanged = true;
+		}
+
+		if (manifestChanged)
+			FlushShaderCacheManifestLocked();
+	}
+
 	bool ShaderCache::Clear(const std::string& a_path)
 	{
 		std::string lowerFilePath = Util::FixFilePath(a_path);
@@ -2577,29 +2647,7 @@ namespace SIE
 
 		// Step 2: Process the copied entries without holding hlslMapMutex
 		for (auto& entry : entries) {
-			// Remove shader key from shaderMap
-			{
-				std::unique_lock lockM{ mapMutex };
-				shaderMap.erase(entry.key);
-			}
-
-			// Handle vertex, pixel, and compute shaders (each will lock)
-			switch (entry.shaderClass) {
-			case SIE::ShaderClass::Vertex:
-				ReleaseShader(vertexShaders, vertexShadersMutex, entry.type, entry.descriptor);
-				break;
-			case SIE::ShaderClass::Pixel:
-				ReleaseShader(pixelShaders, pixelShadersMutex, entry.type, entry.descriptor);
-				break;
-			case SIE::ShaderClass::Compute:
-				ReleaseShader(computeShaders, computeShadersMutex, entry.type, entry.descriptor);
-				break;
-			default:
-				logger::warn("Unexpected shader class: {}", static_cast<int>(entry.shaderClass));
-				break;
-			}
-
-			logger::debug("Marking recompile for shader: {}", entry.key);
+			EvictShader(entry.key, entry.type, entry.descriptor, entry.shaderClass);
 		}
 
 		if (!entries.empty()) {
@@ -4064,31 +4112,47 @@ namespace SIE
 
 	void ShaderCache::TrackActiveShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor)
 	{
-		if (!globals::state->IsDeveloperMode())
+		const bool developerMode = globals::state->IsDeveloperMode();
+		const bool capturing =
+			activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0 &&
+			std::this_thread::get_id() == activeShaderCaptureThread.load(std::memory_order_relaxed);
+		if (!developerMode && !capturing)
 			return;
 
 		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
 		std::lock_guard lock(activeShadersMutex);
 
-		auto& info = activeShaders[key];
-		if (info.key.empty()) {
-			// First time seeing this shader
+		auto initializeInfo = [&](ActiveShaderInfo& info) {
 			info.key = key;
 			info.shaderType = shader.shaderType.get();
 			info.shaderClass = shaderClass;
 			info.descriptor = descriptor;
+			// Compiled blobs are keyed on fxpFilename even for ImageSpace shaders.
+			info.diskPath = SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
+			info.isActive = true;
+			info.drawCalls = 1;
+			info.lastUsed = std::chrono::steady_clock::now();
+		};
 
-			// Construct disk path
-			info.diskPath = SIE::SShaderCache::GetDiskPath(
-				shader.shaderType == RE::BSShader::Type::ImageSpace ?
-					static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
-					shader.fxpFilename,
-				descriptor, shaderClass);
+		if (developerMode) {
+			auto& info = activeShaders[key];
+			if (info.key.empty())
+				initializeInfo(info);
+			else {
+				info.isActive = true;
+				info.drawCalls++;
+				info.lastUsed = std::chrono::steady_clock::now();
+			}
+
+			if (capturing)
+				capturedShaders.try_emplace(key, info);
+		} else if (capturing) {
+			// Normal gameplay captures must not populate the persistent developer map:
+			// ResetFrameShaderTracking intentionally does nothing outside developer mode.
+			auto [it, inserted] = capturedShaders.try_emplace(key);
+			if (inserted)
+				initializeInfo(it->second);
 		}
-
-		info.isActive = true;
-		info.drawCalls++;
-		info.lastUsed = std::chrono::steady_clock::now();
 	}
 
 	void ShaderCache::ResetFrameShaderTracking()
@@ -4354,7 +4418,12 @@ namespace SIE
 
 	size_t ShaderCompilationTask::GetId() const
 	{
-		return descriptor + (static_cast<size_t>(shader.shaderType.underlying()) << 32) +
+		return MakeId(shaderClass, shader.shaderType.get(), descriptor);
+	}
+
+	size_t ShaderCompilationTask::MakeId(ShaderClass shaderClass, RE::BSShader::Type shaderType, uint32_t descriptor)
+	{
+		return descriptor + (static_cast<size_t>(shaderType) << 32) +
 		       (static_cast<size_t>(shaderClass) << 60);
 	}
 
@@ -4627,6 +4696,22 @@ namespace SIE
 			std::lock_guard slowLock(slowTasksMutex);
 			slowTaskRecords.clear();
 		}
+	}
+
+	void CompilationSet::Forget(const std::unordered_set<size_t>& a_taskIds)
+	{
+		if (a_taskIds.empty())
+			return;
+
+		auto matches = [&a_taskIds](const ShaderCompilationTask& task) {
+			return a_taskIds.contains(task.GetId());
+		};
+
+		std::scoped_lock lock(compilationMutex);
+		// Queued work remains valid. Only completed/in-flight bookkeeping can block
+		// the freshly evicted permutation from being requested again.
+		std::erase_if(processedTasks, matches);
+		std::erase_if(tasksInProgress, matches);
 	}
 
 	std::string CompilationSet::GetHumanTime(double a_totalMs)

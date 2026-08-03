@@ -7,6 +7,7 @@
 #include <efsw/efsw.hpp>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 #include <wrl/client.h>
 
@@ -228,6 +229,7 @@ namespace SIE
 		void Perform() const;
 
 		size_t GetId() const;
+		static size_t MakeId(ShaderClass shaderClass, RE::BSShader::Type shaderType, uint32_t descriptor);
 		std::string GetString() const;
 
 		/// LPT scheduling score: higher = more expensive = should be dispatched first.
@@ -299,6 +301,7 @@ namespace SIE
 		void Add(const ShaderCompilationTask& task);
 		void Complete(const ShaderCompilationTask& task);
 		void Clear();
+		void Forget(const std::unordered_set<size_t>& a_taskIds);
 		static std::string GetHumanTime(double a_totalMs);
 		double GetEta();
 		std::string GetStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
@@ -807,7 +810,7 @@ namespace SIE
 		std::string blockedKey = "";
 		std::vector<uint32_t> blockedIDs;  // more than one descriptor could be blocked based on shader hash
 
-		// Active shader tracking for developer mode
+		// Active shader tracking for developer mode and bounded smart-cache captures
 		struct ActiveShaderInfo
 		{
 			std::string key;
@@ -832,9 +835,49 @@ namespace SIE
 		void ResetFrameShaderTracking();
 		std::vector<ActiveShaderInfo> GetActiveShaders() const;
 
+		enum class ActiveShaderCaptureStage
+		{
+			Idle,
+			FirstWindow,
+			AwaitingMenuClose,
+			SecondWindow
+		};
+
+		// One second at 60 Hz and roughly two-thirds of a second at 90 Hz VR.
+		static constexpr uint32_t kActiveShaderCaptureFrames = 60;
+		static constexpr std::chrono::milliseconds kActiveShaderCaptureTimeout{ 2000 };
+
+		void BeginActiveShaderCapture();
+		bool IsCapturingActiveShaders() const;
+		uint32_t GetActiveShaderCaptureFramesRemaining() const;
+		bool IsAwaitingMenuCloseCapture() const;
+		void TickActiveShaderCapture(bool a_menuVisible);
+		bool IsTrackingActiveShaders() const;
+		size_t ClearActive(bool a_clearFeatures = true);
+		size_t GetLastScopedClearCount() const { return lastScopedClearCount; }
+		double GetLastScopedClearMs() const { return lastScopedClearMs; }
+
 		HANDLE managementThread = nullptr;
 
 	private:
+		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
+		void EvictShader(
+			const std::string& a_key,
+			RE::BSShader::Type a_type,
+			uint32_t a_descriptor,
+			ShaderClass a_shaderClass);
+		void DeleteScopedDiskCacheEntries(const std::vector<std::wstring>& a_diskPaths);
+
+		std::atomic<uint32_t> activeShaderCaptureFramesRemaining{ 0 };
+		ActiveShaderCaptureStage activeShaderCaptureStage = ActiveShaderCaptureStage::Idle;
+		std::chrono::steady_clock::time_point activeShaderCaptureDeadline;
+		bool activeShaderCaptureMenuWasVisible = false;
+		std::atomic<std::thread::id> activeShaderCaptureThread{};
+		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> capturedShaders;
+		std::unordered_set<std::string> clearedThisCaptureCycle;
+		size_t lastScopedClearCount = 0;
+		double lastScopedClearMs = 0.0;
+
 		struct hlslRecord
 		{
 			std::string key;

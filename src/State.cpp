@@ -686,6 +686,8 @@ void State::Reset()
 	frameCount++;
 	UpdateSaveLoadSafeMode();
 
+	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);
+
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		GET_INSTANCE_MEMBER(BSImagespaceShaderApplyReflections, imageSpaceManager);
 

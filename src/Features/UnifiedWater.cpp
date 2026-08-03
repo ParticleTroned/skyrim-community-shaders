@@ -27,7 +27,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantDepthFadeStart,
 	DistantDepthFadeEnd,
 	ShoreDepthBlendRangeUnits,
-	ShallowSurfaceDepthRangeUnits)
+	ShallowSurfaceDepthRangeUnits,
+	ShoreConfirmationMaxDistance)
 
 namespace
 {
@@ -46,6 +47,8 @@ namespace
 	constexpr float kShoreDepthBlendRangeUnitsMax = 10.0f;
 	constexpr float kShallowSurfaceDepthRangeUnitsMin = 16.0f;
 	constexpr float kShallowSurfaceDepthRangeUnitsMax = 256.0f;
+	constexpr float kShoreConfirmationMaxDistanceMin = 0.0f;
+	constexpr float kShoreConfirmationMaxDistanceMax = kWorldCellSize * 16.0f;
 
 	// Increment when Unified Water's generated flowmap or cache contract changes.
 	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
@@ -117,6 +120,11 @@ namespace
 			kShallowSurfaceDepthRangeUnitsMin,
 			kShallowSurfaceDepthRangeUnitsMax,
 			defaults.ShallowSurfaceDepthRangeUnits);
+		a_settings.ShoreConfirmationMaxDistance = ClampFiniteOrDefault(
+			a_settings.ShoreConfirmationMaxDistance,
+			kShoreConfirmationMaxDistanceMin,
+			kShoreConfirmationMaxDistanceMax,
+			defaults.ShoreConfirmationMaxDistance);
 	}
 
 	bool IsInteriorCellActive()
@@ -176,6 +184,7 @@ void UnifiedWater::LoadSettings(json& o_json)
 		settings.DistantDepthFadeFarStrength = defaults.DistantDepthFadeFarStrength;
 		settings.ShoreDepthBlendRangeUnits = defaults.ShoreDepthBlendRangeUnits;
 		settings.ShallowSurfaceDepthRangeUnits = defaults.ShallowSurfaceDepthRangeUnits;
+		settings.ShoreConfirmationMaxDistance = defaults.ShoreConfirmationMaxDistance;
 	}
 	settings.SurfaceVisibilityModelVersion = kSurfaceVisibilityModelVersion;
 	SanitizeSettings(settings);
@@ -241,7 +250,7 @@ void UnifiedWater::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("near_strength_tooltip"),
 								  "Baseline correction for nearby transition-depth water.\n"
-								  "Fully shallow water lacking visible native refraction uses Far Strength, so 0 keeps nearby medium/deep water native."));
+								  "Fully shallow water uses Far Strength, while connected deeper water releases to the native blend."));
 		}
 
 		ImGui::SliderFloat(
@@ -254,7 +263,7 @@ void UnifiedWater::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("far_strength_tooltip"),
 								  "Full correction for distant water and nearby fully shallow streams.\n"
-								  "Keep at 1 to preserve shallow streams; visible native refraction releases medium/deep water."));
+								  "Keep at 1 to preserve shallow streams; connected medium/deep water returns to the native blend."));
 		}
 
 		if (ImGui::SliderFloat(
@@ -323,10 +332,23 @@ void UnifiedWater::DrawSettings()
 								  "The focused 0-10 unit range keeps this transition local to the water contact. Set to 0 for no contact fade."));
 		}
 
-		ImGui::TextDisabled("%s", T(TKEY("surface_visibility_performance"), "Direct blend: no extra shoreline texture samples."));
+		ImGui::SliderFloat(
+			T(TKEY("shore_confirmation_max_distance"), "Shore Confirmation Max Distance"),
+			&settings.ShoreConfirmationMaxDistance,
+			kShoreConfirmationMaxDistanceMin,
+			kShoreConfirmationMaxDistanceMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("shore_confirmation_max_distance_tooltip"),
+								  "Maximum view distance for checking whether a shallow edge connects to deeper water.\n"
+								  "Set to 0 to disable those checks and their texture cost."));
+		}
+
+		ImGui::TextDisabled("%s", T(TKEY("surface_visibility_performance"), "Four depth probes run only on ambiguous shallow pixels inside the confirmation distance."));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("surface_visibility_performance_tooltip"),
-								  "The depth separation and shore-contact fades use values already calculated by the water shader."));
+								  "Open/native, medium/deep, already-visible, and distance-culled pixels skip all confirmation texture reads."));
 		}
 
 		ImGui::EndDisabled();
@@ -374,6 +396,7 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
 	data.ShoreDepthBlendRangeUnits = sanitizedSettings.ShoreDepthBlendRangeUnits;
 	data.ShallowSurfaceDepthRangeUnits = sanitizedSettings.ShallowSurfaceDepthRangeUnits;
+	data.ShoreConfirmationMaxDistance = sanitizedSettings.ShoreConfirmationMaxDistance;
 	return data;
 }
 

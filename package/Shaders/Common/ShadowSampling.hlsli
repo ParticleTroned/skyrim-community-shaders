@@ -360,14 +360,8 @@ namespace ShadowSampling
 			sourceAmbientColor *= min(inputLuma / totalLuma, MaxAmbientScale);
 		}
 
-		float ambientFit = 1.0;
-		if (sourceAmbientColor.x > 0.0)
-			ambientFit = min(ambientFit, max(0.0, inputColor.x) / sourceAmbientColor.x);
-		if (sourceAmbientColor.y > 0.0)
-			ambientFit = min(ambientFit, max(0.0, inputColor.y) / sourceAmbientColor.y);
-		if (sourceAmbientColor.z > 0.0)
-			ambientFit = min(ambientFit, max(0.0, inputColor.z) / sourceAmbientColor.z);
-		sourceAmbientColor *= ambientFit;
+		// Do not let one missing input channel extinguish the complete ambient contribution.
+		sourceAmbientColor = min(max(0.0, sourceAmbientColor), max(0.0, inputColor));
 
 		dirColor = max(0.0, inputColor - sourceAmbientColor);
 		ambientColor = sourceAmbientColor;

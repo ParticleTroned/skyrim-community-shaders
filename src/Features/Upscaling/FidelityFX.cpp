@@ -700,6 +700,16 @@ bool FidelityFX::IsRuntimeFsr4FailureLatched() const
 	return runtimeFsr4FailureLatched;
 }
 
+bool FidelityFX::HasRuntimeUpscalerLastFramePath() const
+{
+	return runtimeUpscalerLastFramePathValid;
+}
+
+uint32_t FidelityFX::GetRuntimeUpscalerLastFrameIndex() const
+{
+	return runtimeUpscalerLastFrameIndex;
+}
+
 const std::string& FidelityFX::GetHostFsrSdkLabel()
 {
 	static const std::string label = std::format("Host FSR3 SDK {}", UpscalerVersionToString(Fsr3Version));
@@ -783,6 +793,11 @@ std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const
 {
 	const uint32_t requestedVersion = runtimeUpscalerRequestedVersion ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
 	return UpscalerVersionToString(requestedVersion);
+}
+
+std::string FidelityFX::GetPreferredRuntimeUpscalerVersionString() const
+{
+	return UpscalerVersionToString(GetPreferredRuntimeUpscalerVersion());
 }
 
 void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
@@ -1328,6 +1343,32 @@ bool FidelityFX::HasRuntimeUpscalerResources() const
 	return hasRuntimeResources;
 }
 
+bool FidelityFX::AreRuntimeUpscalerContextsCompatible(
+	uint32_t a_fullRenderWidth,
+	uint32_t a_fullRenderHeight,
+	uint32_t a_fullDisplayWidth,
+	uint32_t a_fullDisplayHeight,
+	uint32_t a_contextCount,
+	uint32_t a_requestedVersion) const
+{
+	if (!a_fullRenderWidth || !a_fullRenderHeight || !a_fullDisplayWidth || !a_fullDisplayHeight ||
+		a_contextCount == 0 || a_contextCount > std::size(runtimeUpscalerContexts)) {
+		return false;
+	}
+
+	for (uint32_t i = 0; i < a_contextCount; ++i) {
+		if (!runtimeUpscalerContexts[i])
+			return false;
+	}
+
+	return runtimeUpscalerContextCount == a_contextCount &&
+	       runtimeUpscalerMaxRenderWidth == a_fullRenderWidth &&
+	       runtimeUpscalerMaxRenderHeight == a_fullRenderHeight &&
+	       runtimeUpscalerMaxDisplayWidth == a_fullDisplayWidth &&
+	       runtimeUpscalerMaxDisplayHeight == a_fullDisplayHeight &&
+	       runtimeUpscalerRequestedVersion == a_requestedVersion;
+}
+
 bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
 {
 	const char* reason = a_reason && *a_reason ? a_reason : "runtime upscaler teardown";
@@ -1740,25 +1781,15 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 		return false;
 	}
 
-	bool allContextsValid = true;
-	for (uint32_t i = 0; i < a_contextCount; ++i) {
-		if (!runtimeUpscalerContexts[i]) {
-			allContextsValid = false;
-			break;
-		}
-	}
-
-	const bool needsRecreate =
-		!allContextsValid ||
-		runtimeUpscalerContextCount != a_contextCount ||
-		runtimeUpscalerMaxRenderWidth != a_fullRenderWidth ||
-		runtimeUpscalerMaxRenderHeight != a_fullRenderHeight ||
-		runtimeUpscalerMaxDisplayWidth != a_fullDisplayWidth ||
-		runtimeUpscalerMaxDisplayHeight != a_fullDisplayHeight ||
-		runtimeUpscalerRequestedVersion != a_requestedVersion;
-
-	if (!needsRecreate && runtimeUpscalerContextCount == a_contextCount)
+	if (AreRuntimeUpscalerContextsCompatible(
+			a_fullRenderWidth,
+			a_fullRenderHeight,
+			a_fullDisplayWidth,
+			a_fullDisplayHeight,
+			a_contextCount,
+			a_requestedVersion)) {
 		return true;
+	}
 
 	if (!WaitForRuntimeUpscalerIdle()) {
 		logger::warn("[FidelityFX] Deferring runtime upscaler context recreation because GPU idle could not be proven.");
@@ -2278,21 +2309,68 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		globals::game::isVR &&
 		upscaling.IsRenderScaleModeRequested() &&
 		!upscaling.IsVRRenderScaleModeLatched();
-	const bool runtimeSelected =
+	const bool runtimePathEligible =
 		runtimeRequested &&
 		CanUseRuntimeUpscalerPath() &&
-		!shaderCompilationActive &&
 		!awaitingInitialVRRenderScaleLatch;
+
+	float2 screenSize{};
+	float2 renderSize{};
+	uint32_t fullDisplayWidth = 0;
+	uint32_t fullDisplayHeight = 0;
+	uint32_t requestedFullRenderWidth = 0;
+	uint32_t requestedFullRenderHeight = 0;
+	uint32_t fullRenderWidth = 0;
+	uint32_t fullRenderHeight = 0;
+	bool runtimeContextsCompatible = false;
+	if (runtimePathEligible) {
+		GetRuntimeUpscaleSizes(screenSize, renderSize);
+		fullDisplayWidth = static_cast<uint32_t>(splitPerEyeContexts ? screenSize.x / 2.0f : screenSize.x);
+		fullDisplayHeight = static_cast<uint32_t>(screenSize.y);
+		requestedFullRenderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2.0f : renderSize.x);
+		requestedFullRenderHeight = static_cast<uint32_t>(renderSize.y);
+		// Mirror the host VR path: keep runtime contexts/resources sized for the
+		// largest per-eye display bounds so render-scale quality changes do not
+		// force DX11<->DX12 runtime context/shared-resource churn.
+		const bool useFullRenderBounds = splitPerEyeContexts || runtimeFsr4Requested;
+		fullRenderWidth = useFullRenderBounds ? fullDisplayWidth : requestedFullRenderWidth;
+		fullRenderHeight = useFullRenderBounds ? fullDisplayHeight : requestedFullRenderHeight;
+		runtimeContextsCompatible = AreRuntimeUpscalerContextsCompatible(
+			fullRenderWidth,
+			fullRenderHeight,
+			fullDisplayWidth,
+			fullDisplayHeight,
+			runtimeContextCount,
+			requestedRuntimeVersion);
+	}
+
+	// Shader compilation and runtime-provider context creation both exercise the
+	// driver compiler. Keep an already-compatible provider dispatching, but do
+	// not create or recreate a provider context until CS compilation is idle.
+	const bool runtimeSelected =
+		runtimePathEligible &&
+		(!shaderCompilationActive || runtimeContextsCompatible);
 	static bool loggedRuntimeDeferredForShaderCompilation = false;
-	if (runtimeRequested && !runtimeUpscalerSessionQuarantined && shaderCompilationActive) {
+	if (runtimePathEligible && shaderCompilationActive && !runtimeContextsCompatible) {
 		if (!loggedRuntimeDeferredForShaderCompilation) {
 			logger::info(
-				"[FidelityFX] Deferring DX12 runtime upscaler context creation while CS shader compilation is active; using {}.",
+				"[FidelityFX] Deferring required DX12 runtime upscaler context creation/recreation while CS shader compilation is active; actual dispatch is {}.",
 				GetHostFsrSdkLabel());
 			loggedRuntimeDeferredForShaderCompilation = true;
 		}
 	} else {
 		loggedRuntimeDeferredForShaderCompilation = false;
+	}
+	static bool loggedRuntimeContinuedDuringShaderCompilation = false;
+	if (runtimeSelected && shaderCompilationActive && runtimeContextsCompatible) {
+		if (!loggedRuntimeContinuedDuringShaderCompilation) {
+			logger::info(
+				"[FidelityFX] CS shader compilation is active; continuing dispatch through the already-compatible DX12 runtime upscaler context (requested FSR version {}).",
+				UpscalerVersionToString(requestedRuntimeVersion));
+			loggedRuntimeContinuedDuringShaderCompilation = true;
+		}
+	} else {
+		loggedRuntimeContinuedDuringShaderCompilation = false;
 	}
 	static bool loggedRuntimeDeferredForRenderScaleLatch = false;
 	if (runtimeRequested && !runtimeUpscalerSessionQuarantined && awaitingInitialVRRenderScaleLatch) {
@@ -2310,20 +2388,6 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		auto state = globals::state;
 		if (!state)
 			return false;
-
-		float2 screenSize{};
-		float2 renderSize{};
-		GetRuntimeUpscaleSizes(screenSize, renderSize);
-		const uint32_t fullDisplayWidth = static_cast<uint32_t>(splitPerEyeContexts ? screenSize.x / 2.0f : screenSize.x);
-		const uint32_t fullDisplayHeight = static_cast<uint32_t>(screenSize.y);
-		const uint32_t requestedFullRenderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2.0f : renderSize.x);
-		const uint32_t requestedFullRenderHeight = static_cast<uint32_t>(renderSize.y);
-		// Mirror the host VR path: keep runtime contexts/resources sized for the
-		// largest per-eye display bounds so render-scale quality changes do not
-		// force DX11<->DX12 runtime context/shared-resource churn.
-		const bool useFullRenderBounds = splitPerEyeContexts || runtimeFsr4Requested;
-		const uint32_t fullRenderWidth = useFullRenderBounds ? fullDisplayWidth : requestedFullRenderWidth;
-		const uint32_t fullRenderHeight = useFullRenderBounds ? fullDisplayHeight : requestedFullRenderHeight;
 
 		auto tryRuntimeUpscaler = [&](uint32_t a_requestedVersion, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight) {
 			try {

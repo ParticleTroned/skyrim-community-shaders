@@ -69,6 +69,7 @@ public:
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
 	bool HasRuntimeUpscalerResources() const;
+	bool AreRuntimeUpscalerContextsCompatible(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion) const;
 	bool PollRuntimeUpscalerTeardownReady(const char* a_reason = nullptr);
 	void ReleaseRuntimeUpscalerResourcesForRelatch(bool a_waitForIdle = true);
 	bool HasFSRResourcesPendingTeardown() const;
@@ -90,6 +91,8 @@ public:
 	bool IsRuntimeUpscalerProviderMatchingRequestedVersion() const;
 	bool IsRuntimeUpscalerFailureLatched() const;
 	bool IsRuntimeFsr4FailureLatched() const;
+	bool HasRuntimeUpscalerLastFramePath() const;
+	uint32_t GetRuntimeUpscalerLastFrameIndex() const;
 	const std::string& GetRuntimeUpscalerLastFramePathLabel() const;
 	const std::string& GetConfiguredFsrPathLabel() const;
 	const std::string& GetDisplayedFsrPathLabel() const;
@@ -97,6 +100,7 @@ public:
 	static const std::string& GetRuntimeUpscalerLabel(uint32_t a_version);
 	std::string GetRuntimeUpscalerProviderName() const;
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
+	std::string GetPreferredRuntimeUpscalerVersionString() const;
 
 	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
 	bool UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,

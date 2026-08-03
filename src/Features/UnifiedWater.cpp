@@ -533,7 +533,6 @@ void UnifiedWater::DataLoaded()
 	waterCache = new WaterCache();
 
 	uint64_t pendingLoadOrderHash = 0;
-	bool persistLoadOrderHash = false;
 
 	if (LoadOrderChanged(pendingLoadOrderHash)) {
 		logger::info("[Unified Water] Load order or data revision changed, regenerating flowmap and caches");
@@ -542,8 +541,21 @@ void UnifiedWater::DataLoaded()
 		if (flowmapRegenerated)
 			SetFlowmapTex();
 
-		const bool cacheRegenerationStarted = waterCache->RegenerateCaches();
-		persistLoadOrderHash = flowmapRegenerated && cacheRegenerationStarted;
+		const bool cacheRegenerationStarted = waterCache->RegenerateCaches(
+			[pendingLoadOrderHash, flowmapRegenerated](const bool succeeded) {
+				if (!flowmapRegenerated)
+					return;
+
+				if (!succeeded) {
+					logger::warn("[Unified Water] Generated data is incomplete; retaining the previous load-order hash so regeneration retries next launch");
+				} else if (!PersistLoadOrderHash(pendingLoadOrderHash)) {
+					logger::warn("[Unified Water] Failed to persist the regenerated data hash; regeneration will retry next launch");
+				}
+			});
+
+		if (flowmapRegenerated && !cacheRegenerationStarted) {
+			logger::warn("[Unified Water] Cache regeneration did not start; retaining the previous load-order hash so regeneration retries next launch");
+		}
 	} else {
 		if (flowmap->LoadOrGenerateFlowmap())
 			SetFlowmapTex();
@@ -551,21 +563,10 @@ void UnifiedWater::DataLoaded()
 		waterCache->LoadOrGenerateCaches();
 	}
 
-	while (waterCache->IsBuildRunning()) {
-		std::this_thread::sleep_for(100ms);
-	}
-
-	if (persistLoadOrderHash) {
-		if (waterCache->HasBuildFailed()) {
-			logger::warn("[Unified Water] Generated data is incomplete; retaining the previous load-order hash so regeneration retries next launch");
-		} else if (!PersistLoadOrderHash(pendingLoadOrderHash)) {
-			logger::warn("[Unified Water] Failed to persist the regenerated data hash; regeneration will retry next launch");
-		}
-	}
-
-	if (!MenuOpenCloseEventHandler::Register()) {
-		logger::warn("[Unified Water] MenuOpenCloseEventHandler registration failed");
-	}
+	// Runtime readers use the previously published cache snapshot (or the vanilla
+	// path when none exists) until the complete replacement is published atomically.
+	// Do not hold the deferred DataLoaded callback through the disk build: after a
+	// long foreground shader compilation, Skyrim may already be resuming UI startup.
 }
 
 RE::BSEventNotifyControl UnifiedWater::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
@@ -592,7 +593,7 @@ bool UnifiedWater::MenuOpenCloseEventHandler::Register()
 	static MenuOpenCloseEventHandler singleton;
 	static bool registered = false;
 
-	// DataLoaded can run more than once on some reload paths
+	// Keep registration idempotent if lifecycle notifications are repeated.
 	if (registered)
 		return true;
 
@@ -792,6 +793,13 @@ void UnifiedWater::PostPostLoad()
 	gDisplacementCellTexCoordOffset = reinterpret_cast<float4*>(REL::RelocationID(528184, 415129).address());
 	gDisplacementMeshPos = reinterpret_cast<RE::NiPoint2*>(REL::RelocationID(516235, 402400).address());
 	gDisplacementMeshFlowCellOffset = reinterpret_cast<RE::NiPoint2*>(REL::RelocationID(528164, 415109).address());
+
+	// Install the sink before DataLoaded can be delayed by foreground shader
+	// compilation and first-run cache generation. Other UI event sinks are
+	// registered in this lifecycle phase as well.
+	if (!MenuOpenCloseEventHandler::Register()) {
+		logger::warn("[Unified Water] MenuOpenCloseEventHandler registration failed");
+	}
 
 	logger::info("[Unified Water] Installed hooks");
 }

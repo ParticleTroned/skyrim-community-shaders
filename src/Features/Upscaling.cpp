@@ -127,6 +127,11 @@ namespace
 	constexpr float kPeripheryTAACenterBlendFeatherMin = 0.0f;
 	constexpr float kPeripheryTAACenterBlendFeatherMax = 0.10f;
 	constexpr float kDynamicResolutionUpscalingScaleThreshold = 0.99f;
+	// An active-to-native relatch keeps the last known-good presentation latch
+	// until physical native targets converge. Only the synchronous engine-create
+	// thread observes this override, so concurrent OpenVR submission still sees
+	// the previous active presentation contract if recreation fails.
+	thread_local bool g_vrNativeRenderTargetRecreateOverrideActive = false;
 	constexpr uint32_t kDefaultRenderScaleQualityMode = 3u;  // Quality
 	constexpr uint32_t kVRUpscalingTransitionApplyDelayFrames = 6u;
 	constexpr uint64_t kVRFpsStabilizerAPIAdmissionMaxMilliseconds = 1000u;
@@ -14905,6 +14910,9 @@ struct BSOpenVR_GetRenderTargetSize
 
 		auto& upscaling = globals::features::upscaling;
 		upscaling.RecordTrueHMDRenderTargetSize(trueEyeWidth, trueEyeHeight);
+		if (g_vrNativeRenderTargetRecreateOverrideActive)
+			return;
+
 		uint32_t perfModeWidth = trueEyeWidth;
 		uint32_t perfModeHeight = trueEyeHeight;
 		const bool allowPerfModeBootLatchCreate =
@@ -16129,6 +16137,9 @@ bool Upscaling::IsVRRenderScaleModeLatched() const
 {
 	if (!REL::Module::IsVR())
 		return false;
+	if (g_vrNativeRenderTargetRecreateOverrideActive)
+		return false;
+
 	if (IsOpenCompositeUpscalingBlocked())
 		return false;
 	if (IsRenderDocUpscalingBlocked())
@@ -16226,6 +16237,8 @@ const char* Upscaling::GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_stat
 
 bool Upscaling::IsPerfModeActive() const
 {
+	if (g_vrNativeRenderTargetRecreateOverrideActive)
+		return false;
 	if (IsOpenCompositeUpscalingBlocked())
 		return false;
 	if (IsRenderDocUpscalingBlocked())
@@ -16941,6 +16954,9 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 		return false;
 	if (IsRenderDocUpscalingBlocked())
 		return false;
+	if (g_vrNativeRenderTargetRecreateOverrideActive)
+		return false;
+
 	if (!CanActivateVRRenderScaleRuntime(*this)) {
 		if (a_allowCreate)
 			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
@@ -16984,6 +17000,9 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 {
 	if (!a_properties || !globals::game::isVR)
 		return false;
+	if (g_vrNativeRenderTargetRecreateOverrideActive)
+		return false;
+
 	auto setSize = [a_properties](float2 a_size) {
 		const uint32_t width = ClampPositiveDimension(a_size.x);
 		const uint32_t height = ClampPositiveDimension(a_size.y);
@@ -18499,7 +18518,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchUpscaleMethod,
 		relatchOrigin,
 		queuedRecoverySnapshot);
-	const bool nativeRestorePresentationGuardRequired =
+	const bool deferBootLatchCommitUntilNativeTargetsConverge =
 		!authoritativeRelatchActivationTarget &&
 		previousRenderScaleActive &&
 		IsVendorUpscalingMethod(previousBootSnapshot.method);
@@ -18632,12 +18651,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	static bool loggedRelatchVendorDefer = false;
 	static bool loggedRelatchD3DDefer = false;
-	static bool loggedRelatchBootContractMismatch = false;
 	static UpscaleMethod lastRelatchLogMethod = UpscaleMethod::kNONE;
 	const auto clearRelatchRetryLogs = [&]() {
 		loggedRelatchVendorDefer = false;
 		loggedRelatchD3DDefer = false;
-		loggedRelatchBootContractMismatch = false;
 	};
 	if (lastRelatchLogMethod != relatchUpscaleMethod) {
 		clearRelatchRetryLogs();
@@ -18796,9 +18813,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	bool renderTargetsRelatched = false;
 	bool renderTargetMutationOccurred = false;
 	auto restorePreviousBootContract = [&]() {
-		// Keep an armed native-restore presentation guard: vendor teardown may
-		// already have retired the previous backend even when the engine creator
-		// made no physical mutation, so that contract is not safe to present yet.
 		perfMode.RestoreBootLatch(relatchReferenceSnapshot);
 		perfMode.UpdateRestartRequiredState(settings, relatchUpscaleMethod);
 		if (relatchReferenceSnapshot.valid && relatchReferenceSnapshot.active)
@@ -18818,37 +18832,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			activeBootContract.valid ? activeBootContract.generation : 0u);
 		if (activeBootContract.valid && activeBootContract.active)
 			ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
-	};
-	const auto isRelatchBootContractCoherent = [&]() {
-		return perfMode.IsActive(relatchSettings, relatchUpscaleMethod) ==
-		       authoritativeRelatchActivationTarget;
-	};
-	const auto deferIncoherentRelatchBootContract = [&](const char* a_stage) {
-		const bool observedBootActive =
-			perfMode.IsActive(relatchSettings, relatchUpscaleMethod);
-		if (bootContractChanged &&
-			!renderTargetsRelatched &&
-			!renderTargetMutationOccurred) {
-			restorePreviousBootContract();
-		} else {
-			markActiveVendorRuntimeDirtyAfterRelatchFailure();
-			ClearSubmitStageVendorResumeStability();
-			InvalidateFrameScopedUpscalingState();
-		}
-		requeueRelatch(
-			kVRRenderScaleRelatchBusyRetryFrames,
-			false,
-			VRRenderScaleRetryKind::Other);
-		if (!loggedRelatchBootContractMismatch) {
-			logger::warn(
-				"[VRRenderScale] Target boot contract changed {} physical recreation; retrying without publishing epoch={} targetActive={} bootActive={}.",
-				a_stage && *a_stage ? a_stage : "during",
-				relatchEpoch,
-				BoolText(authoritativeRelatchActivationTarget),
-				BoolText(observedBootActive));
-			loggedRelatchBootContractMismatch = true;
-		}
-		return false;
 	};
 	const auto isRelatchPhysicalProfilePublishable = [&]() {
 		return IsVRRenderScalePhysicalTargetProfilePublishable(
@@ -19770,36 +19753,32 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return deferSupersededRapidFSRRelatch("vendor resource reset", relatchPlan.destroyFSRResources);
 		loggedRapidFSRRelatchCoalesce = false;
 
-		if (nativeRestorePresentationGuardRequired) {
-			// The physical creator, CS reinitialization, and every feature resource
-			// setup below must observe one target-native contract. Presentation is
-			// protected independently until both eyes accept the new native output.
-			const uint64_t previousGuardEpoch =
-				vrNativeRestorePresentationGuardEpoch.load(
-					std::memory_order_acquire);
-			if (previousGuardEpoch != relatchEpoch)
-				ClearVRNativeRestorePresentationWatchdog();
-			vrNativeRestorePresentationGuardEpoch.store(
-				relatchEpoch,
-				std::memory_order_release);
+		if (deferBootLatchCommitUntilNativeTargetsConverge) {
+			// Keep the previous reduced presentation contract authoritative while
+			// native targets are being recreated. If the engine creator fails or
+			// partially mutates its generation, current reduced submissions still
+			// take the guarded vendor/stretch path instead of being mislabeled as
+			// native. The scoped recreate override below exposes full dimensions
+			// to OpenVR and render-target property hooks without dropping this
+			// logical latch prematurely.
+			relatchRenderScaleActive = false;
+			relatchTargetDisplaySize = {
+				static_cast<float>(perfMode.trueHMDEyeWidth * 2u),
+				static_cast<float>(perfMode.trueHMDEyeHeight)
+			};
+			relatchTargetEngineSize = relatchTargetDisplaySize;
+		} else {
+			perfMode.ResetBootLatch();
+			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
+			perfMode.EnsureBootLatch(relatchSettings, relatchUpscaleMethod, true, relatchContractGeneration);
+			bootContractChanged = true;
+
+			relatchRenderScaleActive = perfMode.IsActive(relatchSettings, relatchUpscaleMethod);
+			relatchTargetDisplaySize = perfMode.GetDisplayScreenSize();
+			relatchTargetEngineSize = relatchRenderScaleActive ?
+			                              perfMode.GetRenderScreenSize() :
+			                              relatchTargetDisplaySize;
 		}
-
-		// Restore RC141's coherent physical-contract ordering: install the target
-		// latch before the engine creator, globals::ReInit, and feature setup run.
-		// The transition controller remains authoritative for visible presentation
-		// until this transaction publishes successfully.
-		perfMode.ResetBootLatch();
-		perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
-		perfMode.EnsureBootLatch(relatchSettings, relatchUpscaleMethod, true, relatchContractGeneration);
-		bootContractChanged = true;
-
-		relatchRenderScaleActive = perfMode.IsActive(relatchSettings, relatchUpscaleMethod);
-		relatchTargetDisplaySize = perfMode.GetDisplayScreenSize();
-		relatchTargetEngineSize = relatchRenderScaleActive ?
-		                              perfMode.GetRenderScreenSize() :
-		                              relatchTargetDisplaySize;
-		if (!isRelatchBootContractCoherent())
-			return deferIncoherentRelatchBootContract("before");
 		const bool renderTargetsAlreadySized =
 			relatchPlan.reuseRenderTargets &&
 			(relatchPlan.reuseStableRenderTargets ?
@@ -19874,6 +19853,18 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					std::move(engineTargetDelta.resources));
 			};
 			try {
+				bool previousNativeRecreateOverride = false;
+				if (deferBootLatchCommitUntilNativeTargetsConverge) {
+					previousNativeRecreateOverride =
+						g_vrNativeRenderTargetRecreateOverrideActive;
+					g_vrNativeRenderTargetRecreateOverrideActive = true;
+				}
+				auto restoreNativeRecreateOverride = ScopeExit([&]() {
+					if (deferBootLatchCommitUntilNativeTargetsConverge) {
+						g_vrNativeRenderTargetRecreateOverrideActive =
+							previousNativeRecreateOverride;
+					}
+				});
 				engineTargetsRecreated =
 					Hooks::RecreateRenderTargetsForVRRenderScale(
 						CaptureVREngineTargetGenerationPreparation,
@@ -19921,8 +19912,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				ArmVRRenderScaleMemoryTrim(relatchEpoch, trimReason);
 			}
 		}
-		if (!isRelatchBootContractCoherent())
-			return deferIncoherentRelatchBootContract("during");
 		if (!isRelatchPhysicalProfilePublishable())
 			return deferUnpublishablePhysicalProfile("after render-target recreation");
 		if (!isRelatchEpochStillOwned()) {
@@ -19931,6 +19920,44 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			InvalidateFrameScopedUpscalingState();
 			return false;
 		}
+		if (deferBootLatchCommitUntilNativeTargetsConverge) {
+			// The full native generation and this epoch are now both proven. Only
+			// at this point may presentation stop treating reduced input as owned
+			// by the previous active contract.
+			const uint64_t previousGuardEpoch =
+				vrNativeRestorePresentationGuardEpoch.load(
+					std::memory_order_acquire);
+			if (previousGuardEpoch != relatchEpoch)
+				ClearVRNativeRestorePresentationWatchdog();
+			vrNativeRestorePresentationGuardEpoch.store(
+				relatchEpoch,
+				std::memory_order_release);
+			perfMode.ResetBootLatch();
+			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
+			perfMode.EnsureBootLatch(
+				relatchSettings,
+				relatchUpscaleMethod,
+				true,
+				relatchContractGeneration);
+			bootContractChanged = true;
+			if (perfMode.IsActive(relatchSettings, relatchUpscaleMethod)) {
+				// Physical targets are already native. Keep the logical latch
+				// inactive and the presentation guard armed until the retried
+				// target gets its own complete physical handoff.
+				perfMode.ResetBootLatch();
+				perfModeAllowBootLatchCreate.store(
+					true,
+					std::memory_order_release);
+				requeueRelatch(
+					kVRRenderScaleRelatchBusyRetryFrames,
+					false,
+					VRRenderScaleRetryKind::Other);
+				logger::warn(
+					"[VRRenderScale] Native target generation converged but the target settings no longer resolve inactive; retrying without publishing the stale native contract.");
+				return false;
+			}
+		}
+
 		if (relatchPlan.reuseSharedSubmitResources || relatchPlan.preserveCompatibleFSRIntermediates)
 			vrIntermediateTextureGeneration = relatchContractGeneration;
 		if (relatchPlan.recreateFSRResources)
@@ -20077,7 +20104,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			std::memory_order_acquire) == relatchEpoch;
 	const bool requiresNativePresentationStabilization =
 		!relatchRenderScaleActive &&
-		(nativeRestorePresentationGuardRequired ||
+		(deferBootLatchCommitUntilNativeTargetsConverge ||
 			ownsNativePresentationGuard);
 	const bool requiresSubmitStageStabilization =
 		requiresVendorSubmitStageStabilization ||

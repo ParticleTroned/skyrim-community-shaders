@@ -219,17 +219,23 @@ namespace
 		return sample;
 	}
 
-	uint64_t GetVRRenderScaleSystemCommitAdmissionLimit(uint64_t a_commitLimitBytes) noexcept
+	uint64_t GetVRRenderScaleSystemCommitReserve(uint64_t a_commitLimitBytes) noexcept
 	{
 		if (a_commitLimitBytes == 0)
 			return 0;
 
 		const uint64_t scaledReserve = a_commitLimitBytes / kVRRenderScaleSystemCommitReserveScaleDenominator;
-		const uint64_t reserveBytes = std::clamp(
-			scaledReserve,
-			kVRRenderScaleSystemCommitMinimumReserveBytes,
-			kVRRenderScaleSystemCommitMaximumReserveBytes);
-		return a_commitLimitBytes > reserveBytes ? a_commitLimitBytes - reserveBytes : 0u;
+		return std::min(
+			a_commitLimitBytes,
+			std::clamp(
+				scaledReserve,
+				kVRRenderScaleSystemCommitMinimumReserveBytes,
+				kVRRenderScaleSystemCommitMaximumReserveBytes));
+	}
+
+	uint64_t GetVRRenderScaleSystemCommitAdmissionLimit(uint64_t a_commitLimitBytes) noexcept
+	{
+		return a_commitLimitBytes - GetVRRenderScaleSystemCommitReserve(a_commitLimitBytes);
 	}
 
 	uint64_t GetVRRenderScaleDoorHandoffSystemCommitAdmissionLimit(uint64_t a_commitLimitBytes) noexcept
@@ -1456,11 +1462,10 @@ namespace
 		uint64_t missingMask = 0;
 		uint64_t requiredMissingMask = 0;
 		uint64_t dimensionMismatchMask = 0;
-		uint64_t requiredDimensionMismatchMask = 0;
 
 		bool MatchesReusableLayout() const
 		{
-			return requiredMissingMask == 0 && requiredDimensionMismatchMask == 0;
+			return requiredMissingMask == 0 && dimensionMismatchMask == 0;
 		}
 
 		uint64_t PublicationBlockingMismatchMask() const
@@ -2144,8 +2149,6 @@ namespace
 				RenderTargetTextureSizeMatches(a_texture, a_width, a_height);
 			if (!dimensionsMatch)
 				probe.dimensionMismatchMask |= bit;
-			if (!dimensionsMatch && a_required)
-				probe.requiredDimensionMismatchMask |= bit;
 		};
 		auto probeRenderTarget = [&](RE::RENDER_TARGETS::RENDER_TARGET a_target, uint32_t a_width, uint32_t a_height, std::size_t a_index, bool a_required) {
 			const auto& renderTarget = renderer->GetRuntimeData().renderTargets[a_target];
@@ -13756,8 +13759,6 @@ void Upscaling::DrawSettings()
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
 		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
-	if (*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) && !runtimeFsr4AutoEligible)
-		settings.fsr4RuntimeEnable = false;
 
 	std::vector<UpscaleUiChoice> upscaleChoices = {
 		{ UpscaleMethod::kNONE, false, "None" }
@@ -13772,11 +13773,22 @@ void Upscaling::DrawSettings()
 			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
 	}
 
+	const auto pendingMethodSelection = GetPendingVRRenderScaleDesiredProfile();
+	const bool usePendingMethodSelection =
+		globals::game::isVR && pendingMethodSelection.HasPendingSettings();
 	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
-		if (static_cast<uint32_t>(choice.method) != *currentUpscaleMode)
+		const auto effectiveMethod = usePendingMethodSelection ?
+		                                 pendingMethodSelection.method :
+		                                 static_cast<UpscaleMethod>(*currentUpscaleMode);
+		if (choice.method != effectiveMethod)
 			return false;
-		if (choice.method == UpscaleMethod::kFSR)
-			return settings.fsr4RuntimeEnable == choice.useRuntimeFsr4;
+		if (choice.method == UpscaleMethod::kFSR) {
+			const bool effectiveFSR4RuntimeEnable =
+				usePendingMethodSelection ?
+					pendingMethodSelection.fsr4RuntimeEnabled :
+					settings.fsr4RuntimeEnable;
+			return effectiveFSR4RuntimeEnable == choice.useRuntimeFsr4;
+		}
 		return true;
 	};
 
@@ -13817,19 +13829,23 @@ void Upscaling::DrawSettings()
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
-	const bool shouldApplyMethodSelection = methodChanged || !matchesCurrentChoice(selectedUpscaleChoice);
-	if (shouldApplyMethodSelection) {
+	if (methodChanged) {
 		const bool targetRenderScaleMode = IsRenderScaleModeRequested();
 		const uint32_t targetQualityMode = GetEffectiveUpscalingQualityMode();
 		const uint32_t targetDLSSPreset = GetEffectiveDLSSPreset();
-		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
-			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+		const std::optional<bool> targetFSR4RuntimeEnable =
+			selectedUpscaleChoice.method == UpscaleMethod::kFSR ?
+				std::optional<bool>{ selectedUpscaleChoice.useRuntimeFsr4 } :
+				std::nullopt;
 		ApplyCSMenuUpscalingTransition(
 			selectedUpscaleChoice.method,
 			targetRenderScaleMode,
 			targetQualityMode,
 			targetDLSSPreset,
-			"upscaling menu method change");
+			"upscaling menu method change",
+			VRUpscalingTransitionOrigin::CSMenu,
+			0,
+			targetFSR4RuntimeEnable);
 	}
 	if (openCompositeBlocksUpscaling) {
 		ApplyOpenCompositeUpscalingBlocker();
@@ -14365,9 +14381,46 @@ void Upscaling::DrawSettings()
 		InvalidateFrameScopedUpscalingState();
 }
 
+namespace
+{
+	void ApplyVRUpscalingDesiredProfileToSettings(
+		Upscaling::Settings& a_settings,
+		const Upscaling::VRRenderScaleDesiredProfile& a_profile)
+	{
+		auto& configuredMethod =
+			(Upscaling::streamline.featureDLSS ||
+			 a_profile.method == Upscaling::UpscaleMethod::kDLSS) ?
+				a_settings.upscaleMethod :
+				a_settings.upscaleMethodNoDLSS;
+		configuredMethod = static_cast<uint32_t>(a_profile.method);
+		a_settings.qualityMode = a_profile.qualityMode;
+		a_settings.dlssPreset = a_profile.dlssPreset;
+		a_settings.renderScaleMode = a_profile.renderScaleModeEnabled ? 1u : 0u;
+		a_settings.perfMode = a_profile.perfModeEnabled ? 1u : 0u;
+		a_settings.fsr4RuntimeEnable = a_profile.fsr4RuntimeEnabled;
+	}
+
+	Upscaling::Settings CaptureEffectiveVRUpscalingSettings(
+		const Upscaling& a_upscaling)
+	{
+		Upscaling::Settings capturedSettings = a_upscaling.settings;
+		if (!globals::game::isVR)
+			return capturedSettings;
+
+		const auto desiredProfile =
+			a_upscaling.GetPendingVRRenderScaleDesiredProfile();
+		if (desiredProfile.HasPendingSettings()) {
+			ApplyVRUpscalingDesiredProfileToSettings(
+				capturedSettings,
+				desiredProfile);
+		}
+		return capturedSettings;
+	}
+}
+
 json Upscaling::CapturePerformanceSettingsState() const
 {
-	return settings;
+	return CaptureEffectiveVRUpscalingSettings(*this);
 }
 
 void Upscaling::DrawPerformanceSettings(bool a_advanced)
@@ -14390,8 +14443,6 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
 		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
-	if (*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) && !runtimeFsr4AutoEligible)
-		settings.fsr4RuntimeEnable = false;
 
 	std::vector<UpscaleUiChoice> upscaleChoices = {
 		{ UpscaleMethod::kNONE, false, "None" }
@@ -14405,11 +14456,22 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
 	}
 
+	const auto pendingMethodSelection = GetPendingVRRenderScaleDesiredProfile();
+	const bool usePendingMethodSelection =
+		globals::game::isVR && pendingMethodSelection.HasPendingSettings();
 	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
-		if (static_cast<uint32_t>(choice.method) != *currentUpscaleMode)
+		const auto effectiveMethod = usePendingMethodSelection ?
+		                                 pendingMethodSelection.method :
+		                                 static_cast<UpscaleMethod>(*currentUpscaleMode);
+		if (choice.method != effectiveMethod)
 			return false;
-		if (choice.method == UpscaleMethod::kFSR)
-			return settings.fsr4RuntimeEnable == choice.useRuntimeFsr4;
+		if (choice.method == UpscaleMethod::kFSR) {
+			const bool effectiveFSR4RuntimeEnable =
+				usePendingMethodSelection ?
+					pendingMethodSelection.fsr4RuntimeEnabled :
+					settings.fsr4RuntimeEnable;
+			return effectiveFSR4RuntimeEnable == choice.useRuntimeFsr4;
+		}
 		return true;
 	};
 
@@ -14418,6 +14480,17 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		if (matchesCurrentChoice(upscaleChoices[i])) {
 			methodUiIndex = i;
 			break;
+		}
+	}
+	if (methodUiIndex == 0 && !matchesCurrentChoice(upscaleChoices[0])) {
+		const auto effectiveMethod = usePendingMethodSelection ?
+		                                 pendingMethodSelection.method :
+		                                 static_cast<UpscaleMethod>(*currentUpscaleMode);
+		for (int i = 0; i < static_cast<int>(upscaleChoices.size()); ++i) {
+			if (upscaleChoices[i].method == effectiveMethod) {
+				methodUiIndex = i;
+				break;
+			}
 		}
 	}
 
@@ -14429,18 +14502,23 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
-	if (methodChanged || !matchesCurrentChoice(selectedUpscaleChoice)) {
+	if (methodChanged) {
 		const bool targetRenderScaleMode = IsRenderScaleModeRequested();
 		const uint32_t targetQualityMode = GetEffectiveUpscalingQualityMode();
 		const uint32_t targetDLSSPreset = GetEffectiveDLSSPreset();
-		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
-			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+		const std::optional<bool> targetFSR4RuntimeEnable =
+			selectedUpscaleChoice.method == UpscaleMethod::kFSR ?
+				std::optional<bool>{ selectedUpscaleChoice.useRuntimeFsr4 } :
+				std::nullopt;
 		ApplyCSMenuUpscalingTransition(
 			selectedUpscaleChoice.method,
 			targetRenderScaleMode,
 			targetQualityMode,
 			targetDLSSPreset,
-			"performance tuning method change");
+			"performance tuning method change",
+			VRUpscalingTransitionOrigin::CSMenu,
+			0,
+			targetFSR4RuntimeEnable);
 	}
 	if (openCompositeBlocksUpscaling) {
 		Util::Text::Warning("Upscaling is locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
@@ -14907,8 +14985,14 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 void Upscaling::SaveSettings(json& o_json)
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
-	SanitizeUpscalingSettings(settings);
-	o_json = settings;
+	if (globals::game::isVR && HasPendingVRUpscalingTransition()) {
+		Settings persistedSettings = CaptureEffectiveVRUpscalingSettings(*this);
+		SanitizeUpscalingSettings(persistedSettings);
+		o_json = persistedSettings;
+	} else {
+		SanitizeUpscalingSettings(settings);
+		o_json = settings;
+	}
 	o_json["qualityModeSchemaVersion"] = 2;
 	if (IsVRRuntimeActive()) {
 		o_json.erase("perfMode");
@@ -14923,9 +15007,98 @@ void Upscaling::SaveSettings(json& o_json)
 	}
 }
 
+namespace
+{
+	void ApplyLoadedVRUpscalingTransition(
+		Upscaling& a_upscaling,
+		const Upscaling::Settings& a_previousSettings,
+		const Upscaling::VRRenderScaleDesiredProfile& a_currentDesiredProfile,
+		const char* a_reason)
+	{
+		if (!globals::game::isVR ||
+			!globals::d3d::device ||
+			!globals::game::renderer ||
+			!globals::state ||
+			a_upscaling.IsOpenCompositeUpscalingBlocked() ||
+			IsRenderDocUpscalingBlocked()) {
+			return;
+		}
+
+		const Upscaling::Settings targetSettings = a_upscaling.settings;
+		const auto targetMethod =
+			a_upscaling.GetConfiguredUpscaleMethodForTransition();
+		const uint32_t targetQualityMode =
+			ClampQualityModeUInt(targetSettings.qualityMode);
+		const uint32_t targetDLSSPreset =
+			Upscaling::ClampDLSSPresetUInt(targetSettings.dlssPreset);
+		const bool targetRenderScaleMode =
+			IsRenderScaleMethodEligible(targetMethod) &&
+			ClampToggleUInt(targetSettings.renderScaleMode) != 0 &&
+			IsRenderScaleQualityMode(targetQualityMode);
+		const bool methodChanged =
+			a_currentDesiredProfile.method != targetMethod;
+		const bool qualityChanged =
+			a_currentDesiredProfile.qualityMode != targetQualityMode;
+		const bool renderScaleModeChanged =
+			a_currentDesiredProfile.renderScaleModeEnabled !=
+			targetRenderScaleMode;
+		const bool dlssPresetChanged =
+			a_currentDesiredProfile.dlssPreset != targetDLSSPreset;
+		const bool fsr4RuntimeSelectionChanged =
+			a_currentDesiredProfile.fsr4RuntimeEnabled !=
+			targetSettings.fsr4RuntimeEnable;
+		const bool targetChanged =
+			methodChanged ||
+			qualityChanged ||
+			renderScaleModeChanged ||
+			dlssPresetChanged ||
+			fsr4RuntimeSelectionChanged;
+
+		// Keep the currently applied settings authoritative until the immutable
+		// replacement request is consumed. Non-transition settings from the load
+		// remain installed immediately.
+		if (targetChanged || a_currentDesiredProfile.HasPendingSettings()) {
+			auto& configuredMethod =
+				(Upscaling::streamline.featureDLSS ||
+				 targetMethod == Upscaling::UpscaleMethod::kDLSS) ?
+					a_upscaling.settings.upscaleMethod :
+					a_upscaling.settings.upscaleMethodNoDLSS;
+			configuredMethod =
+				(Upscaling::streamline.featureDLSS ||
+				 targetMethod == Upscaling::UpscaleMethod::kDLSS) ?
+					a_previousSettings.upscaleMethod :
+					a_previousSettings.upscaleMethodNoDLSS;
+			a_upscaling.settings.qualityMode =
+				a_previousSettings.qualityMode;
+			a_upscaling.settings.dlssPreset =
+				a_previousSettings.dlssPreset;
+			a_upscaling.settings.renderScaleMode =
+				a_previousSettings.renderScaleMode;
+			a_upscaling.settings.perfMode = a_previousSettings.perfMode;
+			a_upscaling.settings.fsr4RuntimeEnable =
+				a_previousSettings.fsr4RuntimeEnable;
+		}
+
+		if (!targetChanged)
+			return;
+
+		a_upscaling.ApplyCSMenuUpscalingTransition(
+			targetMethod,
+			targetRenderScaleMode,
+			targetQualityMode,
+			targetDLSSPreset,
+			a_reason,
+			Upscaling::VRUpscalingTransitionOrigin::CSMenu,
+			0,
+			targetSettings.fsr4RuntimeEnable);
+	}
+}
+
 void Upscaling::LoadSettings(json& o_json)
 {
 	const Settings previousSettings = settings;
+	const VRRenderScaleDesiredProfile currentDesiredProfile =
+		GetPendingVRRenderScaleDesiredProfile();
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
 	const bool hasFsr4RuntimeSelectionSchemaVersion = o_json.contains("fsr4RuntimeSelectionSchemaVersion");
 	const bool hasRenderScaleModeSetting = o_json.contains("renderScaleMode");
@@ -14980,43 +15153,11 @@ void Upscaling::LoadSettings(json& o_json)
 	}
 	settings.reflexFPSLimit = clampedReflexFPSLimit;
 
-	const bool runtimeReady =
-		globals::game::isVR &&
-		globals::d3d::device &&
-		globals::game::renderer &&
-		globals::state;
-	const uint previousUpscaleMethod = streamline.featureDLSS ? previousSettings.upscaleMethod : previousSettings.upscaleMethodNoDLSS;
-	const uint currentUpscaleMethod = streamline.featureDLSS ? settings.upscaleMethod : settings.upscaleMethodNoDLSS;
-	const bool fsr4RuntimeSelectionChanged =
-		previousSettings.fsr4RuntimeEnable != settings.fsr4RuntimeEnable &&
-		(previousUpscaleMethod == static_cast<uint>(UpscaleMethod::kFSR) ||
-			currentUpscaleMethod == static_cast<uint>(UpscaleMethod::kFSR));
-	const bool perfModeRelevantSettingChanged =
-		ClampToggleUInt(previousSettings.renderScaleMode) != ClampToggleUInt(settings.renderScaleMode) ||
-		ClampToggleUInt(previousSettings.perfMode) != ClampToggleUInt(settings.perfMode) ||
-		ClampQualityModeUInt(previousSettings.qualityMode) != ClampQualityModeUInt(settings.qualityMode) ||
-		ClampDLSSPresetUInt(previousSettings.dlssPreset) != ClampDLSSPresetUInt(settings.dlssPreset) ||
-		fsr4RuntimeSelectionChanged ||
-		previousUpscaleMethod != currentUpscaleMethod;
-	if (runtimeReady && perfModeRelevantSettingChanged) {
-		const auto previousMethod = static_cast<UpscaleMethod>(
-			std::min<uint>(
-				previousUpscaleMethod,
-				static_cast<uint>(UpscaleMethod::kDLSS)));
-		const auto currentMethod = static_cast<UpscaleMethod>(
-			std::min<uint>(
-				currentUpscaleMethod,
-				static_cast<uint>(UpscaleMethod::kDLSS)));
-		if (IsRenderScaleMethodEligible(previousMethod) ||
-			IsRenderScaleMethodEligible(currentMethod) ||
-			IsVRRenderScaleModeLatched() ||
-			perfMode.HasRestartRequiredChange()) {
-			RequestPerfModeRenderTargetRecreate(
-				"upscaling settings reload",
-				VRUpscalingTransitionOrigin::CSMenu);
-		}
-		RequestHistoryReset();
-	}
+	ApplyLoadedVRUpscalingTransition(
+		*this,
+		previousSettings,
+		currentDesiredProfile,
+		"upscaling settings reload");
 	InvalidateFrameScopedUpscalingState();
 
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
@@ -15029,6 +15170,8 @@ void Upscaling::LoadSettings(json& o_json)
 void Upscaling::RestoreDefaultSettings()
 {
 	const Settings previousSettings = settings;
+	const VRRenderScaleDesiredProfile currentDesiredProfile =
+		GetPendingVRRenderScaleDesiredProfile();
 	settings = {};
 	settings.foveatedVendorDispatch = false;
 	settings.foveatedPeripheryMaskVisualization = false;
@@ -15038,18 +15181,13 @@ void Upscaling::RestoreDefaultSettings()
 	settings.reflexUseFPSLimit = false;
 	SanitizeUpscalingSettings(settings);
 	ApplyOpenCompositeUpscalingBlocker(true);
+	ApplyLoadedVRUpscalingTransition(
+		*this,
+		previousSettings,
+		currentDesiredProfile,
+		"restore default upscaling settings");
 	InvalidateFrameScopedUpscalingState();
 	RequestHistoryReset();
-	if (globals::game::isVR &&
-		globals::d3d::device &&
-		globals::game::renderer &&
-		globals::state &&
-		(BuildUpscalingResourceMutationSettingsKey(previousSettings) !=
-			BuildUpscalingResourceMutationSettingsKey(settings))) {
-		RequestPerfModeRenderTargetRecreate(
-			"restore default upscaling settings",
-			VRUpscalingTransitionOrigin::CSMenu);
-	}
 }
 
 struct BSOpenVR_GetRenderTargetSize
@@ -15900,6 +16038,27 @@ namespace
 		return ClampUpscaleMethod(defaults.upscaleMethodNoDLSS, Upscaling::UpscaleMethod::kFSR);
 	}
 
+	Upscaling::UpscaleMethod ResolveCapturedPerformanceUpscaleMethod(
+		uint32_t a_primaryMethod,
+		uint32_t a_fallbackMethod)
+	{
+		const auto primaryMethod =
+			ClampUpscaleMethod(
+				a_primaryMethod,
+				Upscaling::UpscaleMethod::kDLSS);
+		if (primaryMethod != Upscaling::UpscaleMethod::kDLSS)
+			return primaryMethod;
+
+		if (Upscaling::streamline.featureDLSS ||
+			!Upscaling::streamline.featureCheckComplete) {
+			return Upscaling::UpscaleMethod::kDLSS;
+		}
+
+		return ClampUpscaleMethod(
+			a_fallbackMethod,
+			Upscaling::UpscaleMethod::kFSR);
+	}
+
 	bool IsTargetVRRenderScalePerformanceCostMeasurement(const Upscaling& a_upscaling, bool a_targetEnabled)
 	{
 		if (!REL::Module::IsVR())
@@ -15923,9 +16082,9 @@ namespace
 		const uint32_t primaryMethod = a_state.value("upscaleMethod", a_upscaling.settings.upscaleMethod);
 		const uint32_t fallbackMethod = a_state.value("upscaleMethodNoDLSS", a_upscaling.settings.upscaleMethodNoDLSS);
 		const Upscaling::UpscaleMethod targetMethod =
-			Upscaling::streamline.featureDLSS ?
-				ClampUpscaleMethod(primaryMethod, Upscaling::UpscaleMethod::kDLSS) :
-				ClampUpscaleMethod(fallbackMethod, Upscaling::UpscaleMethod::kFSR);
+			ResolveCapturedPerformanceUpscaleMethod(
+				primaryMethod,
+				fallbackMethod);
 		const uint32_t qualityMode = ClampQualityModeUInt(a_state.value("qualityMode", a_upscaling.settings.qualityMode));
 		const bool renderScaleMode = ClampToggleUInt(a_state.value("renderScaleMode", a_upscaling.settings.renderScaleMode)) != 0;
 
@@ -15950,20 +16109,15 @@ void Upscaling::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 			IsRenderScaleMethodEligible(targetMethod) &&
 			IsRenderScaleQualityMode(qualityMode);
 
-		settings.fsr4RuntimeEnable = defaults.fsr4RuntimeEnable;
 		ApplyCSMenuUpscalingTransition(
 			targetMethod,
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,
-			"performance cost measurement on");
-		settings.upscaleMethod = static_cast<uint32_t>(ClampUpscaleMethod(defaults.upscaleMethod, UpscaleMethod::kDLSS));
-		settings.upscaleMethodNoDLSS = static_cast<uint32_t>(ClampUpscaleMethod(defaults.upscaleMethodNoDLSS, UpscaleMethod::kFSR));
-		settings.qualityMode = qualityMode;
-		settings.dlssPreset = dlssPreset;
-		settings.renderScaleMode = ClampToggleUInt(defaults.renderScaleMode);
-		settings.perfMode = ClampToggleUInt(defaults.perfMode);
-		settings.fsr4RuntimeEnable = defaults.fsr4RuntimeEnable;
+			"performance cost measurement on",
+			VRUpscalingTransitionOrigin::CSMenu,
+			0,
+			defaults.fsr4RuntimeEnable);
 		settings.foveatedVendorDispatch = defaults.foveatedVendorDispatch;
 		settings.periphery_taa_enable = defaults.periphery_taa_enable;
 		SanitizeFoveatedSettings(settings);
@@ -16019,16 +16173,18 @@ bool Upscaling::RequiresMenuCloseForPerformanceCostMeasurementRestore(const json
 
 json Upscaling::CapturePerformanceCostMeasurementState() const
 {
+	const Settings capturedSettings =
+		CaptureEffectiveVRUpscalingSettings(*this);
 	return {
-		{ "upscaleMethod", settings.upscaleMethod },
-		{ "upscaleMethodNoDLSS", settings.upscaleMethodNoDLSS },
-		{ "qualityMode", settings.qualityMode },
-		{ "dlssPreset", settings.dlssPreset },
-		{ "renderScaleMode", settings.renderScaleMode },
-		{ "perfMode", settings.perfMode },
-		{ "fsr4RuntimeEnable", settings.fsr4RuntimeEnable },
-		{ "foveatedVendorDispatch", settings.foveatedVendorDispatch },
-		{ "periphery_taa_enable", settings.periphery_taa_enable }
+		{ "upscaleMethod", capturedSettings.upscaleMethod },
+		{ "upscaleMethodNoDLSS", capturedSettings.upscaleMethodNoDLSS },
+		{ "qualityMode", capturedSettings.qualityMode },
+		{ "dlssPreset", capturedSettings.dlssPreset },
+		{ "renderScaleMode", capturedSettings.renderScaleMode },
+		{ "perfMode", capturedSettings.perfMode },
+		{ "fsr4RuntimeEnable", capturedSettings.fsr4RuntimeEnable },
+		{ "foveatedVendorDispatch", capturedSettings.foveatedVendorDispatch },
+		{ "periphery_taa_enable", capturedSettings.periphery_taa_enable }
 	};
 }
 
@@ -16045,25 +16201,24 @@ void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
 	const uint32_t qualityMode = ClampQualityModeUInt(a_state.value("qualityMode", settings.qualityMode));
 	const uint32_t dlssPreset = ClampDLSSPresetUInt(a_state.value("dlssPreset", settings.dlssPreset));
 	const bool renderScaleMode = ClampToggleUInt(a_state.value("renderScaleMode", settings.renderScaleMode)) != 0;
+	const bool fsr4RuntimeEnable =
+		a_state.value("fsr4RuntimeEnable", settings.fsr4RuntimeEnable);
 
-	const UpscaleMethod targetMethod = streamline.featureDLSS ?
-	                                       ClampUpscaleMethod(primaryMethod, UpscaleMethod::kDLSS) :
-	                                       ClampUpscaleMethod(fallbackMethod, UpscaleMethod::kFSR);
+	const UpscaleMethod targetMethod =
+		ResolveCapturedPerformanceUpscaleMethod(
+			primaryMethod,
+			fallbackMethod);
 
 	ApplyCSMenuUpscalingTransition(
 		targetMethod,
 		renderScaleMode,
 		qualityMode,
 		dlssPreset,
-		"performance cost measurement restore");
+		"performance cost measurement restore",
+		VRUpscalingTransitionOrigin::CSMenu,
+		0,
+		fsr4RuntimeEnable);
 
-	settings.upscaleMethod = static_cast<uint32_t>(ClampUpscaleMethod(primaryMethod, UpscaleMethod::kDLSS));
-	settings.upscaleMethodNoDLSS = static_cast<uint32_t>(ClampUpscaleMethod(fallbackMethod, UpscaleMethod::kFSR));
-	settings.qualityMode = qualityMode;
-	settings.dlssPreset = dlssPreset;
-	settings.renderScaleMode = ClampToggleUInt(a_state.value("renderScaleMode", settings.renderScaleMode));
-	settings.perfMode = ClampToggleUInt(a_state.value("perfMode", settings.perfMode));
-	settings.fsr4RuntimeEnable = a_state.value("fsr4RuntimeEnable", settings.fsr4RuntimeEnable);
 	settings.foveatedVendorDispatch = a_state.value("foveatedVendorDispatch", settings.foveatedVendorDispatch);
 	settings.periphery_taa_enable = a_state.value("periphery_taa_enable", settings.periphery_taa_enable);
 	SanitizeFoveatedSettings(settings);
@@ -16487,7 +16642,7 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
 }
 
-void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin, uint64_t a_bufferedStabilizerDoorHandoffSerial)
+void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin, uint64_t a_bufferedStabilizerDoorHandoffSerial, std::optional<bool> a_targetFSR4RuntimeEnable)
 {
 	if (ApplyOpenCompositeUpscalingBlocker(true))
 		return;
@@ -16505,6 +16660,10 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	const auto previousMethod = GetUpscaleMethod();
 	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
 	const uint32_t dlssPreset = ClampDLSSPresetUInt(a_dlssPreset);
+	const auto currentDesiredProfile = GetPendingVRRenderScaleDesiredProfile();
+	const bool targetFSR4RuntimeEnable =
+		a_targetFSR4RuntimeEnable.value_or(
+			currentDesiredProfile.fsr4RuntimeEnabled);
 	const bool renderScaleQuality = IsRenderScaleQualityMode(qualityMode);
 	const bool previousRenderScaleRelevant =
 		isVR &&
@@ -16519,18 +16678,47 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	const bool qualityTargetChanged = GetEffectiveUpscalingQualityMode() != qualityMode;
 	const bool renderScaleTargetChanged = isVR && IsRenderScaleModeRequested() != targetRenderScaleMode;
 	const bool hasPendingRequest = HasPendingVRUpscalingTransition();
+	const bool dlssPresetTargetChanged =
+		currentDesiredProfile.dlssPreset != dlssPreset;
 	const bool dlssPresetChanged =
 		targetMethod == UpscaleMethod::kDLSS &&
-		GetEffectiveDLSSPreset() != dlssPreset;
+		dlssPresetTargetChanged;
+	const bool fsr4RuntimeTargetChanged =
+		currentDesiredProfile.fsr4RuntimeEnabled !=
+		targetFSR4RuntimeEnable;
+	const bool fsr4RuntimeSelectionChanged =
+		targetMethod == UpscaleMethod::kFSR &&
+		fsr4RuntimeTargetChanged;
+	const bool fsr4RuntimeRelatchRequired =
+		isVR &&
+		fsr4RuntimeSelectionChanged &&
+		(targetRenderScaleMode ||
+			(currentDesiredProfile.method == UpscaleMethod::kFSR &&
+				currentDesiredProfile.renderScaleModeEnabled) ||
+			IsVRRenderScaleModeLatched());
 	const bool bufferedStabilizerDoorHandoff =
 		isVR &&
 		a_origin == VRUpscalingTransitionOrigin::VRAPI &&
 		a_bufferedStabilizerDoorHandoffSerial != 0;
+	const bool duplicatePendingTarget =
+		hasPendingRequest &&
+		!bufferedStabilizerDoorHandoff &&
+		currentDesiredProfile.origin == a_origin &&
+		currentDesiredProfile.method == targetMethod &&
+		currentDesiredProfile.qualityMode == qualityMode &&
+		currentDesiredProfile.renderScaleModeEnabled == targetRenderScaleMode &&
+		currentDesiredProfile.perfModeEnabled == targetRenderScaleMode &&
+		currentDesiredProfile.dlssPreset == dlssPreset &&
+		currentDesiredProfile.fsr4RuntimeEnabled == targetFSR4RuntimeEnable;
+	if (duplicatePendingTarget)
+		return;
+
 	const bool bufferedProfileChanged =
 		methodChanged ||
 		qualityTargetChanged ||
 		renderScaleTargetChanged ||
-		dlssPresetChanged;
+		dlssPresetChanged ||
+		fsr4RuntimeSelectionChanged;
 
 	if (!isVR) {
 		uint32_t* currentUpscaleMode = (streamline.featureDLSS || targetMethod == UpscaleMethod::kDLSS) ? &settings.upscaleMethod : &settings.upscaleMethodNoDLSS;
@@ -16544,6 +16732,11 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		}
 		if (dlssPresetChanged) {
 			settings.dlssPreset = dlssPreset;
+			settingsChanged = true;
+		}
+		if (targetMethod == UpscaleMethod::kFSR &&
+			settings.fsr4RuntimeEnable != targetFSR4RuntimeEnable) {
+			settings.fsr4RuntimeEnable = targetFSR4RuntimeEnable;
 			settingsChanged = true;
 		}
 		ClearPendingVRUpscalingTransition();
@@ -16561,14 +16754,20 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	const bool physicalContractRecoveryRequired =
 		targetRenderScaleMode &&
 		!physicalRelatchInFlight &&
-		!IsVRRenderScalePhysicalContractConverged(targetMethod, qualityMode);
+		!IsVRRenderScalePhysicalContractConverged(
+			targetMethod,
+			qualityMode,
+			targetFSR4RuntimeEnable);
 	const bool bufferedPhysicalContractMismatch =
 		bufferedStabilizerDoorHandoff &&
 		(GetPerfModeRequested() != targetRenderScaleMode ||
 			IsVRRenderScaleModeLatched() != targetRenderScaleMode ||
 			perfMode.HasRestartRequiredChange() ||
 			(targetRenderScaleMode &&
-				!IsVRRenderScalePhysicalContractConverged(targetMethod, qualityMode)));
+				!IsVRRenderScalePhysicalContractConverged(
+					targetMethod,
+					qualityMode,
+					targetFSR4RuntimeEnable)));
 
 	if (!bufferedStabilizerDoorHandoff &&
 		!hasPendingRequest &&
@@ -16576,6 +16775,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		!methodChanged &&
 		!qualityTargetChanged &&
 		!renderScaleTargetChanged &&
+		!fsr4RuntimeSelectionChanged &&
 		dlssPresetChanged) {
 		settings.dlssPreset = dlssPreset;
 		InvalidateFrameScopedUpscalingState();
@@ -16589,6 +16789,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			(bufferedProfileChanged || bufferedPhysicalContractMismatch)) ||
 		hasPendingRequest ||
 		physicalContractRecoveryRequired ||
+		fsr4RuntimeRelatchRequired ||
 		((targetMethodRenderScaleEligible && ShouldStageVRRenderScaleTransition(targetRenderScaleMode, qualityMode)) ||
 			methodRelatchRequired);
 	if (stageVRUpscalingChange && !ShouldAcceptVRUpscalingTransitionRequest(*this, a_origin))
@@ -16600,6 +16801,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 				targetRenderScaleMode,
 				qualityMode,
 				dlssPreset,
+				targetFSR4RuntimeEnable,
 				a_origin,
 				bufferedStabilizerDoorHandoff ?
 					a_bufferedStabilizerDoorHandoffSerial :
@@ -16622,6 +16824,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 
 	bool qualityChanged = false;
 	bool presetChanged = false;
+	bool fsr4RuntimeSettingChanged = false;
 
 	const uint32_t requestedRenderScaleMode = targetRenderScaleMode ? 1u : 0u;
 	const bool renderScaleModeChanged = settings.renderScaleMode != requestedRenderScaleMode;
@@ -16633,12 +16836,16 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		qualityChanged = true;
 		presetChanged = true;
 	}
-	if (dlssPresetChanged) {
+	if (settings.dlssPreset != dlssPreset) {
 		settings.dlssPreset = dlssPreset;
-		presetChanged = true;
+		presetChanged = targetMethod == UpscaleMethod::kDLSS;
+	}
+	if (settings.fsr4RuntimeEnable != targetFSR4RuntimeEnable) {
+		settings.fsr4RuntimeEnable = targetFSR4RuntimeEnable;
+		fsr4RuntimeSettingChanged = targetMethod == UpscaleMethod::kFSR;
 	}
 
-	if (presetChanged || renderScaleModeChanged) {
+	if (presetChanged || renderScaleModeChanged || fsr4RuntimeSettingChanged) {
 		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
 	}
@@ -17332,7 +17539,10 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 	       (a_upscaleMethod != UpscaleMethod::kDLSS || textureReady(sharpenerTexture));
 }
 
-bool Upscaling::IsVRRenderScalePhysicalContractConverged(UpscaleMethod a_upscaleMethod, uint32_t a_qualityMode) const
+bool Upscaling::IsVRRenderScalePhysicalContractConverged(
+	UpscaleMethod a_upscaleMethod,
+	uint32_t a_qualityMode,
+	std::optional<bool> a_fsr4RuntimeEnable) const
 {
 	if (!globals::game::isVR ||
 		!IsRenderScaleMethodEligible(a_upscaleMethod) ||
@@ -17350,6 +17560,43 @@ bool Upscaling::IsVRRenderScalePhysicalContractConverged(UpscaleMethod a_upscale
 		boot.method != a_upscaleMethod ||
 		ClampQualityModeUInt(boot.qualityMode) != ClampQualityModeUInt(a_qualityMode)) {
 		return false;
+	}
+
+	if (a_upscaleMethod == UpscaleMethod::kFSR) {
+		const auto controller = GetVRRenderScaleTransitionSnapshot();
+		const auto matchesPhysicalBoot = [&](const VRRenderScaleProfileSnapshot& a_profile) {
+			return a_profile.valid &&
+			       a_profile.active &&
+			       a_profile.contractGeneration == boot.generation &&
+			       a_profile.method == boot.method &&
+			       a_profile.resources.valid;
+		};
+		const VRRenderScaleProfileSnapshot* physicalProfile = nullptr;
+		if (matchesPhysicalBoot(controller.applied))
+			physicalProfile = &controller.applied;
+		else if (matchesPhysicalBoot(controller.stable))
+			physicalProfile = &controller.stable;
+		if (!physicalProfile)
+			return false;
+
+		VRRenderScaleProfileSnapshot targetProfile{};
+		targetProfile.valid = true;
+		targetProfile.active = true;
+		targetProfile.method = a_upscaleMethod;
+		targetProfile.qualityMode = ClampQualityModeUInt(a_qualityMode);
+		targetProfile.dlssPreset = ClampDLSSPresetUInt(settings.dlssPreset);
+		targetProfile.fsr4RuntimeEnabled =
+			a_fsr4RuntimeEnable.value_or(settings.fsr4RuntimeEnable);
+		targetProfile.displayEyeWidth = boot.displayEyeWidth;
+		targetProfile.displayEyeHeight = boot.displayEyeHeight;
+		targetProfile.renderEyeWidth = boot.renderEyeWidth;
+		targetProfile.renderEyeHeight = boot.renderEyeHeight;
+		const auto targetResources =
+			BuildVRRenderScaleResourceKey(targetProfile);
+		if (!targetResources.valid ||
+			physicalProfile->resources.backend != targetResources.backend) {
+			return false;
+		}
 	}
 
 	const float2 displaySize{
@@ -18716,6 +18963,20 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return &previousControllerSnapshot.stable;
 		return nullptr;
 	};
+	const auto getAuthoritativeActivePhysicalProfile = [&]() -> const VRRenderScaleProfileSnapshot* {
+		const auto matchesBoot = [&](const VRRenderScaleProfileSnapshot& a_profile) {
+			return a_profile.valid &&
+			       a_profile.active &&
+			       a_profile.contractGeneration == previousBootSnapshot.generation &&
+			       a_profile.method == previousBootSnapshot.method &&
+			       a_profile.resources.valid;
+		};
+		if (matchesBoot(previousControllerSnapshot.applied))
+			return &previousControllerSnapshot.applied;
+		if (matchesBoot(previousControllerSnapshot.stable))
+			return &previousControllerSnapshot.stable;
+		return nullptr;
+	};
 	auto shouldSkipNoOpRelatch = [&]() {
 		if (preserveActiveContractForRecovery)
 			return false;
@@ -18747,8 +19008,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				ClampQualityModeUInt(physicalProfile->qualityMode) != ClampQualityModeUInt(relatchSettings.qualityMode) ||
 				(relatchUpscaleMethod == UpscaleMethod::kDLSS &&
 					ClampDLSSPresetUInt(physicalProfile->dlssPreset) != ClampDLSSPresetUInt(relatchSettings.dlssPreset)) ||
-				(relatchUpscaleMethod == UpscaleMethod::kFSR &&
-					physicalProfile->fsr4RuntimeEnabled != relatchSettings.fsr4RuntimeEnable) ||
 				perfMode.trueHMDEyeWidth == 0 ||
 				perfMode.trueHMDEyeHeight == 0 ||
 				physicalProfile->displayEyeWidth != perfMode.trueHMDEyeWidth ||
@@ -18803,6 +19062,42 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		}
 
+		if (relatchUpscaleMethod == UpscaleMethod::kFSR) {
+			const auto* physicalProfile =
+				getAuthoritativeActivePhysicalProfile();
+			if (!physicalProfile)
+				return false;
+
+			VRRenderScaleProfileSnapshot targetProfile{};
+			targetProfile.valid = true;
+			targetProfile.active = true;
+			targetProfile.method = relatchUpscaleMethod;
+			targetProfile.qualityMode =
+				ClampQualityModeUInt(relatchSettings.qualityMode);
+			targetProfile.dlssPreset =
+				ClampDLSSPresetUInt(relatchSettings.dlssPreset);
+			targetProfile.fsr4RuntimeEnabled =
+				relatchSettings.fsr4RuntimeEnable;
+			targetProfile.displayEyeWidth =
+				ClampPositiveDimension(targetDisplaySize.x * 0.5f);
+			targetProfile.displayEyeHeight =
+				ClampPositiveDimension(targetDisplaySize.y);
+			targetProfile.renderEyeWidth =
+				ClampPositiveDimension(targetRenderSize.x * 0.5f);
+			targetProfile.renderEyeHeight =
+				ClampPositiveDimension(targetRenderSize.y);
+			const auto targetResources =
+				BuildVRRenderScaleResourceKey(targetProfile);
+			const auto compatibility = CompareVRRenderScaleResourceKeys(
+				physicalProfile->resources,
+				targetResources);
+			if (!targetResources.valid ||
+				!compatibility.canReuseVendorRuntime ||
+				!compatibility.canReusePresentation) {
+				return false;
+			}
+		}
+
 		return AreVRRenderScaleRenderTargetsSizedForDimensions(targetRenderSize, targetDisplaySize) &&
 		       IsVRRenderScalePhysicalTargetProfileReusable(
 				   state,
@@ -18848,20 +19143,25 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool noOpRenderScaleActive = authoritativeRelatchActivationTarget;
 		VRRenderScaleProfileSnapshot physicalProfile{};
 		if (noOpRenderScaleActive) {
-			physicalProfile.valid = previousBootSnapshot.valid;
-			physicalProfile.active = previousBootSnapshot.active;
-			physicalProfile.contractGeneration = previousBootSnapshot.generation;
-			physicalProfile.method = previousBootSnapshot.method;
-			physicalProfile.qualityMode = previousBootSnapshot.qualityMode;
-			physicalProfile.dlssPreset = previousBootSnapshot.dlssPreset;
-			physicalProfile.renderScale = previousBootSnapshot.renderScale;
-			physicalProfile.renderScaleModeEnabled = previousBootSnapshot.renderScaleEnabled;
-			physicalProfile.perfModeEnabled = previousBootSnapshot.perfModeEnabled;
-			physicalProfile.fsr4RuntimeEnabled = settings.fsr4RuntimeEnable;
-			physicalProfile.displayEyeWidth = previousBootSnapshot.displayEyeWidth;
-			physicalProfile.displayEyeHeight = previousBootSnapshot.displayEyeHeight;
-			physicalProfile.renderEyeWidth = previousBootSnapshot.renderEyeWidth;
-			physicalProfile.renderEyeHeight = previousBootSnapshot.renderEyeHeight;
+			if (const auto* authoritativeProfile =
+					getAuthoritativeActivePhysicalProfile()) {
+				physicalProfile = *authoritativeProfile;
+			} else {
+				physicalProfile.valid = previousBootSnapshot.valid;
+				physicalProfile.active = previousBootSnapshot.active;
+				physicalProfile.contractGeneration = previousBootSnapshot.generation;
+				physicalProfile.method = previousBootSnapshot.method;
+				physicalProfile.qualityMode = previousBootSnapshot.qualityMode;
+				physicalProfile.dlssPreset = previousBootSnapshot.dlssPreset;
+				physicalProfile.renderScale = previousBootSnapshot.renderScale;
+				physicalProfile.renderScaleModeEnabled = previousBootSnapshot.renderScaleEnabled;
+				physicalProfile.perfModeEnabled = previousBootSnapshot.perfModeEnabled;
+				physicalProfile.fsr4RuntimeEnabled = settings.fsr4RuntimeEnable;
+				physicalProfile.displayEyeWidth = previousBootSnapshot.displayEyeWidth;
+				physicalProfile.displayEyeHeight = previousBootSnapshot.displayEyeHeight;
+				physicalProfile.renderEyeWidth = previousBootSnapshot.renderEyeWidth;
+				physicalProfile.renderEyeHeight = previousBootSnapshot.renderEyeHeight;
+			}
 		} else {
 			physicalProfile = *getAuthoritativeInactivePhysicalProfile();
 			physicalProfile.renderScale = 1.0f;
@@ -19579,13 +19879,20 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.doorHandoffHardReserveOnly =
 			rc94PostLoadDoorRelatch && relatchTargetRenderScaleActive;
 		if (memoryAtAdmission.systemCommitValid && memoryAtAdmission.systemCommitLimitBytes != 0) {
+			relatchPlan.systemCommitLimitBytes = memoryAtAdmission.systemCommitLimitBytes;
 			if (relatchPlan.doorHandoffHardReserveOnly) {
+				relatchPlan.systemCommitAdmissionPolicy =
+					VRRenderScaleSystemCommitAdmissionPolicy::DoorHandoffFixedReserve;
 				relatchPlan.systemCommitAdmissionLimitBytes =
 					GetVRRenderScaleDoorHandoffSystemCommitAdmissionLimit(memoryAtAdmission.systemCommitLimitBytes);
 			} else {
+				relatchPlan.systemCommitAdmissionPolicy =
+					VRRenderScaleSystemCommitAdmissionPolicy::BoundedReserve;
 				relatchPlan.systemCommitAdmissionLimitBytes =
 					GetVRRenderScaleSystemCommitAdmissionLimit(memoryAtAdmission.systemCommitLimitBytes);
 			}
+			relatchPlan.systemCommitReserveBytes =
+				relatchPlan.systemCommitLimitBytes - relatchPlan.systemCommitAdmissionLimitBytes;
 		}
 		relatchPlan.projectedResidencyGuardActive =
 			!rc94PostLoadDoorRelatch &&
@@ -34016,6 +34323,7 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 	bool a_renderScaleModeEnabled,
 	uint32_t a_qualityMode,
 	uint32_t a_dlssPreset,
+	bool a_fsr4RuntimeEnabled,
 	VRUpscalingTransitionOrigin a_origin,
 	uint64_t a_bufferedStabilizerDoorHandoffSerial)
 {
@@ -34041,7 +34349,7 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 	request.renderScaleModeEnabled = renderScaleModeEnabled;
 	request.dlssPreset = ClampDLSSPresetUInt(a_dlssPreset);
 	request.perfModeEnabled = renderScaleModeEnabled;
-	request.fsr4RuntimeEnabled = settings.fsr4RuntimeEnable;
+	request.fsr4RuntimeEnabled = a_fsr4RuntimeEnabled;
 	request.dlssSharpener = std::min(settings.dlssSharpener, kDLSSSharpenerModeMaxIndex);
 	request.dlssSharpness = settings.sharpnessDLSS;
 	request.fsrSharpness = settings.sharpnessFSR;
@@ -34691,6 +34999,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							  { "postTrimAdmissionUsageLimitBytes", relatchPlan.postTrimAdmissionUsageLimitBytes },
 							  { "projectedSystemCommitAdditionalBytes", relatchPlan.projectedSystemCommitAdditionalBytes },
 							  { "projectedSystemCommitBytes", relatchPlan.projectedSystemCommitBytes },
+							  { "systemCommitAdmissionPolicy", GetVRRenderScaleSystemCommitAdmissionPolicyName(relatchPlan.systemCommitAdmissionPolicy) },
+							  { "systemCommitLimitBytes", relatchPlan.systemCommitLimitBytes },
+							  { "systemCommitReserveBytes", relatchPlan.systemCommitReserveBytes },
 							  { "systemCommitAdmissionLimitBytes", relatchPlan.systemCommitAdmissionLimitBytes },
 							  { "pressureCleanupRequired", relatchPlan.pressureCleanupRequired },
 							  { "projectedResidencyGuardActive", relatchPlan.projectedResidencyGuardActive },
@@ -34759,6 +35070,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		controller.memory.processPrivateUsageValid;
 	const uint64_t systemCommitRecoveryLimit =
 		GetVRRenderScaleSystemCommitAdmissionLimit(
+			controller.memory.systemCommitLimitBytes);
+	const uint64_t systemCommitRecoveryReserve =
+		GetVRRenderScaleSystemCommitReserve(
 			controller.memory.systemCommitLimitBytes);
 	const bool systemCommitRecovered =
 		systemCommitEvidenceValid &&
@@ -35025,10 +35339,12 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "processPrivateUsageBytes", controller.memory.processPrivateUsageBytes },
 			{ "deferred", controller.relatchPlan.systemCommitDeferred } },
 		{ { "maximumUsageBytes", systemCommitRecoveryLimit },
+			{ "reserveBytes", systemCommitRecoveryReserve },
 			{ "minimumReserveBytes", kVRRenderScaleSystemCommitMinimumReserveBytes },
 			{ "maximumReserveBytes", kVRRenderScaleSystemCommitMaximumReserveBytes },
 			{ "reserveScaleDenominator", kVRRenderScaleSystemCommitReserveScaleDenominator },
-			{ "policy", "bounded_commit_reserve" } });
+			{ "policy", GetVRRenderScaleSystemCommitAdmissionPolicyName(
+				VRRenderScaleSystemCommitAdmissionPolicy::BoundedReserve) } });
 	addGate(
 		"steady_state_memory_growth",
 		steadyStateMemoryGrowthBounded,
@@ -35182,6 +35498,21 @@ const char* Upscaling::GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPre
 		return "Critical";
 	default:
 		return "Unknown";
+	}
+}
+
+const char* Upscaling::GetVRRenderScaleSystemCommitAdmissionPolicyName(
+	VRRenderScaleSystemCommitAdmissionPolicy a_policy)
+{
+	switch (a_policy) {
+	case VRRenderScaleSystemCommitAdmissionPolicy::None:
+		return "none";
+	case VRRenderScaleSystemCommitAdmissionPolicy::BoundedReserve:
+		return "bounded_eighth_clamped_8_to_16_gib";
+	case VRRenderScaleSystemCommitAdmissionPolicy::DoorHandoffFixedReserve:
+		return "door_handoff_fixed_8_gib";
+	default:
+		return "unknown";
 	}
 }
 
@@ -36539,19 +36870,36 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 			&settings.upscaleMethod :
 			&settings.upscaleMethodNoDLSS;
 	*currentUpscaleMode = static_cast<uint32_t>(targetMethod);
-	settings.fsr4RuntimeEnable = request.fsr4RuntimeEnabled;
 
-	bool changed = false;
-	bool qualityChanged = false;
-	bool renderScaleModeChanged = false;
-	bool presetChanged = false;
+	const bool qualitySettingChanged =
+		settings.qualityMode != targetQualityMode;
+	const bool dlssPresetSettingChanged =
+		settings.dlssPreset != targetDLSSPreset;
+	const bool fsr4RuntimeSettingChanged =
+		settings.fsr4RuntimeEnable != request.fsr4RuntimeEnabled;
+	const uint32_t requestedRenderScaleMode =
+		targetRenderScaleMode ? 1u : 0u;
+	const bool renderScaleModeChanged =
+		settings.renderScaleMode != requestedRenderScaleMode;
+	settings.qualityMode = targetQualityMode;
+	settings.dlssPreset = targetDLSSPreset;
+	settings.fsr4RuntimeEnable = request.fsr4RuntimeEnabled;
+	settings.renderScaleMode = requestedRenderScaleMode;
+
+	const bool qualityChanged =
+		IsRenderScaleMethodEligible(targetMethod) && qualitySettingChanged;
+	const bool presetChanged =
+		targetMethod == UpscaleMethod::kDLSS &&
+		dlssPresetSettingChanged;
+	const bool fsr4RuntimeSelectionChanged =
+		targetMethod == UpscaleMethod::kFSR &&
+		fsr4RuntimeSettingChanged;
+	const bool changed =
+		qualityChanged ||
+		presetChanged ||
+		fsr4RuntimeSelectionChanged;
 
 	if (!IsRenderScaleMethodEligible(targetMethod)) {
-		if (settings.renderScaleMode != 0) {
-			settings.renderScaleMode = 0;
-			renderScaleModeChanged = true;
-		}
-
 		if (ClampToggleUInt(settings.perfMode) != 0 || IsVRRenderScaleModeLatched() || perfMode.HasRestartRequiredChange())
 			SetPerfModeRequested(false, "VR upscaling deferred transition", false, transitionOrigin);
 
@@ -36586,32 +36934,26 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 		return;
 	}
 
-	const uint32_t requestedRenderScaleMode = targetRenderScaleMode ? 1u : 0u;
-	if (settings.renderScaleMode != requestedRenderScaleMode) {
-		settings.renderScaleMode = requestedRenderScaleMode;
-		renderScaleModeChanged = true;
-	}
-
-	if (settings.qualityMode != targetQualityMode) {
-		settings.qualityMode = targetQualityMode;
-		qualityChanged = true;
-		changed = true;
-	}
-
-	if (targetMethod == UpscaleMethod::kDLSS && settings.dlssPreset != targetDLSSPreset) {
-		settings.dlssPreset = targetDLSSPreset;
-		changed = true;
-		presetChanged = true;
-	}
-
 	if (ClampToggleUInt(settings.perfMode) != static_cast<uint32_t>(targetPerfMode) ||
 		IsVRRenderScaleModeLatched() != targetPerfMode ||
 		perfMode.HasRestartRequiredChange() ||
-		(targetPerfMode && !IsVRRenderScalePhysicalContractConverged(targetMethod, targetQualityMode))) {
+		(targetPerfMode &&
+			!IsVRRenderScalePhysicalContractConverged(
+				targetMethod,
+				targetQualityMode,
+				request.fsr4RuntimeEnabled))) {
 		SetPerfModeRequested(targetPerfMode, "VR upscaling deferred transition", false, transitionOrigin);
 	}
 	if (targetPerfMode && methodChangedFromActiveContract)
 		RequestPerfModeRenderTargetRecreate("VR upscaling method change", transitionOrigin);
+	if (targetPerfMode &&
+		fsr4RuntimeSelectionChanged &&
+		!IsVRRenderScalePhysicalContractConverged(
+			targetMethod,
+			targetQualityMode,
+			request.fsr4RuntimeEnabled)) {
+		RequestPerfModeRenderTargetRecreate("VR FSR runtime path change", transitionOrigin);
+	}
 
 	if (changed || renderScaleModeChanged || methodChangedFromActiveContract) {
 		InvalidateFrameScopedUpscalingState();

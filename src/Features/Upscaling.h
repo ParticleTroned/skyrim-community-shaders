@@ -458,6 +458,13 @@ public:
 		Critical
 	};
 
+	enum class VRRenderScaleSystemCommitAdmissionPolicy : uint8_t
+	{
+		None,
+		BoundedReserve,
+		DoorHandoffFixedReserve
+	};
+
 	enum class VRRenderScaleMemoryTrimReason : uint8_t
 	{
 		None,
@@ -514,6 +521,10 @@ public:
 		uint64_t postTrimAdmissionUsageLimitBytes = 0;
 		uint64_t projectedSystemCommitAdditionalBytes = 0;
 		uint64_t projectedSystemCommitBytes = 0;
+		VRRenderScaleSystemCommitAdmissionPolicy systemCommitAdmissionPolicy =
+			VRRenderScaleSystemCommitAdmissionPolicy::None;
+		uint64_t systemCommitLimitBytes = 0;
+		uint64_t systemCommitReserveBytes = 0;
 		uint64_t systemCommitAdmissionLimitBytes = 0;
 		bool pressureCleanupRequired = false;
 		bool projectedResidencyGuardActive = false;
@@ -1099,7 +1110,14 @@ public:
 	/** @brief Returns the pending request, or a non-pending snapshot of current settings. */
 	VRRenderScaleDesiredProfile GetPendingVRRenderScaleDesiredProfile() const;
 	/** @brief Publishes one complete latest-wins request. Returns zero when origin priority rejects it. */
-	uint64_t QueueVRRenderScaleRequest(UpscaleMethod a_method, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, uint64_t a_bufferedStabilizerDoorHandoffSerial = 0);
+	uint64_t QueueVRRenderScaleRequest(
+		UpscaleMethod a_method,
+		bool a_renderScaleModeEnabled,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		bool a_fsr4RuntimeEnabled,
+		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
+		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0);
 	/** @brief Atomically removes and returns the complete pending request. */
 	std::optional<VRRenderScaleDesiredProfile> TakePendingVRRenderScaleRequest();
 	/** @brief Rejects a request that was cleared or superseded before application began. */
@@ -1130,6 +1148,8 @@ public:
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
 	static const char* GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure);
+	static const char* GetVRRenderScaleSystemCommitAdmissionPolicyName(
+		VRRenderScaleSystemCommitAdmissionPolicy a_policy);
 	static const char* GetVRRenderScaleMemoryTrimReasonName(VRRenderScaleMemoryTrimReason a_reason);
 	static const char* GetVRRenderScalePresentationPathName(VRRenderScalePresentationPath a_path);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1404,7 +1424,15 @@ public:
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, uint64_t a_bufferedStabilizerDoorHandoffSerial = 0);
+	void ApplyCSMenuUpscalingTransition(
+		UpscaleMethod a_targetMethod,
+		bool a_renderScaleModeEnabled,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		const char* a_reason = nullptr,
+		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
+		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0,
+		std::optional<bool> a_targetFSR4RuntimeEnable = std::nullopt);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
 	/** @return The admitted LoadingMenu serial when an atomic Stabilizer profile may be staged; otherwise zero. */
@@ -2365,7 +2393,10 @@ private:
 	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
-	bool IsVRRenderScalePhysicalContractConverged(UpscaleMethod a_upscaleMethod, uint32_t a_qualityMode) const;
+	bool IsVRRenderScalePhysicalContractConverged(
+		UpscaleMethod a_upscaleMethod,
+		uint32_t a_qualityMode,
+		std::optional<bool> a_fsr4RuntimeEnable = std::nullopt) const;
 	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
 	enum class HMDMaskClearPhase : uint8_t

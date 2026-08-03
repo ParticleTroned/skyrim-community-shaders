@@ -122,10 +122,6 @@ namespace
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
 		const auto session = a_upscaling.GetVRRenderScaleStressSessionSnapshot();
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
-		const uint64_t systemCommitReserveBytes =
-			controller.memory.systemCommitLimitBytes > controller.relatchPlan.systemCommitAdmissionLimitBytes ?
-				controller.memory.systemCommitLimitBytes - controller.relatchPlan.systemCommitAdmissionLimitBytes :
-				0u;
 
 		json eyes = json::array();
 		for (const auto& eye : controller.fidelity.eyes) {
@@ -212,10 +208,11 @@ namespace
 													  { "admissionUsageLimitBytes", controller.relatchPlan.admissionUsageLimitBytes },
 													  { "postTrimAdmissionUsageLimitBytes", controller.relatchPlan.postTrimAdmissionUsageLimitBytes },
 													  { "projectedSystemCommitAdditionalBytes", controller.relatchPlan.projectedSystemCommitAdditionalBytes },
-												  { "projectedSystemCommitBytes", controller.relatchPlan.projectedSystemCommitBytes },
-												  { "systemCommitAdmissionLimitBytes", controller.relatchPlan.systemCommitAdmissionLimitBytes },
-												  { "systemCommitReserveBytes", systemCommitReserveBytes },
-												  { "systemCommitAdmissionPolicy", "bounded_eighth_clamped_8_to_16_gib" },
+													  { "projectedSystemCommitBytes", controller.relatchPlan.projectedSystemCommitBytes },
+													  { "systemCommitAdmissionPolicy", Upscaling::GetVRRenderScaleSystemCommitAdmissionPolicyName(controller.relatchPlan.systemCommitAdmissionPolicy) },
+													  { "systemCommitLimitBytes", controller.relatchPlan.systemCommitLimitBytes },
+													  { "systemCommitReserveBytes", controller.relatchPlan.systemCommitReserveBytes },
+													  { "systemCommitAdmissionLimitBytes", controller.relatchPlan.systemCommitAdmissionLimitBytes },
 													  { "pressureCleanupRequired", controller.relatchPlan.pressureCleanupRequired },
 													  { "projectedResidencyGuardActive", controller.relatchPlan.projectedResidencyGuardActive },
 													  { "projectedResidencyPostTrimRelaxed", controller.relatchPlan.projectedResidencyPostTrimRelaxed },

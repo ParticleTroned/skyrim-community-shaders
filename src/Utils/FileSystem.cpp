@@ -1,9 +1,50 @@
 #include "FileSystem.h"
 #include <Windows.h>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <psapi.h>
+#include <system_error>
+#include <utility>
+
+namespace
+{
+	std::atomic_uint64_t atomicWriteSequence = 0;
+
+	std::string GetWindowsErrorMessage(DWORD error)
+	{
+		return std::system_category().message(static_cast<int>(error));
+	}
+
+	void CloseTemporaryFileAfterFailure(
+		HANDLE file,
+		std::string& errorMessage)
+	{
+		if (!CloseHandle(file)) {
+			errorMessage += std::format(
+				" Closing the temporary file also failed: {}.",
+				GetWindowsErrorMessage(GetLastError()));
+		}
+	}
+
+	void RemoveTemporaryFile(
+		const std::filesystem::path& path,
+		std::string& errorMessage)
+	{
+		std::error_code ec;
+		std::filesystem::remove(path, ec);
+		if (ec) {
+			errorMessage += std::format(
+				" Temporary file cleanup failed for '{}': {}.",
+				path.string(),
+				ec.message());
+		}
+	}
+}
 
 namespace Util
 {
@@ -288,6 +329,137 @@ namespace Util
 			}
 
 			return name;
+		}
+
+		AtomicWriteResult WriteJsonFileAtomic(
+			const std::filesystem::path& path,
+			const nlohmann::json& json,
+			int indent)
+		{
+			if (path.empty() || path.filename().empty())
+				return { false, "Atomic JSON write requires a destination filename." };
+
+			std::string serialized;
+			try {
+				serialized = json.dump(indent);
+			} catch (const std::exception& e) {
+				return { false, std::format("Failed to serialize JSON for '{}': {}", path.string(), e.what()) };
+			}
+
+			const auto parentPath = path.parent_path();
+			if (!parentPath.empty()) {
+				std::error_code ec;
+				std::filesystem::create_directories(parentPath, ec);
+				if (ec) {
+					return {
+						false,
+						std::format(
+							"Failed to create destination directory '{}': {}",
+							parentPath.string(),
+							ec.message())
+					};
+				}
+			}
+
+			std::filesystem::path temporaryPath;
+			HANDLE temporaryFile = INVALID_HANDLE_VALUE;
+			DWORD createError = ERROR_SUCCESS;
+			const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+
+			for (std::uint32_t attempt = 0; attempt < 32; ++attempt) {
+				temporaryPath = path;
+				temporaryPath += std::format(
+					".tmp.{}.{}.{}",
+					GetCurrentProcessId(),
+					timestamp,
+					atomicWriteSequence.fetch_add(1, std::memory_order_relaxed));
+
+				temporaryFile = CreateFileW(
+					temporaryPath.c_str(),
+					GENERIC_WRITE,
+					0,
+					nullptr,
+					CREATE_NEW,
+					FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
+					nullptr);
+				if (temporaryFile != INVALID_HANDLE_VALUE)
+					break;
+
+				createError = GetLastError();
+				if (createError != ERROR_FILE_EXISTS && createError != ERROR_ALREADY_EXISTS)
+					break;
+			}
+
+			if (temporaryFile == INVALID_HANDLE_VALUE) {
+				return {
+					false,
+					std::format(
+						"Failed to create temporary file for '{}': {}",
+						path.string(),
+						GetWindowsErrorMessage(createError))
+				};
+			}
+
+			std::size_t offset = 0;
+			while (offset < serialized.size()) {
+				const auto remaining = serialized.size() - offset;
+				const auto writeSize = static_cast<DWORD>(
+					std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
+				DWORD bytesWritten = 0;
+				const bool writeSucceeded = WriteFile(
+						temporaryFile,
+						serialized.data() + offset,
+						writeSize,
+						&bytesWritten,
+						nullptr) != FALSE;
+				if (!writeSucceeded || bytesWritten == 0) {
+					const DWORD writeError = writeSucceeded ? ERROR_WRITE_FAULT : GetLastError();
+					std::string errorMessage = std::format(
+						"Failed to write temporary JSON file for '{}': {}",
+						path.string(),
+						GetWindowsErrorMessage(writeError));
+					CloseTemporaryFileAfterFailure(temporaryFile, errorMessage);
+					RemoveTemporaryFile(temporaryPath, errorMessage);
+					return { false, std::move(errorMessage) };
+				}
+				offset += bytesWritten;
+			}
+
+			if (!FlushFileBuffers(temporaryFile)) {
+				const DWORD flushError = GetLastError();
+				std::string errorMessage = std::format(
+					"Failed to flush temporary JSON file for '{}': {}",
+					path.string(),
+					GetWindowsErrorMessage(flushError));
+				CloseTemporaryFileAfterFailure(temporaryFile, errorMessage);
+				RemoveTemporaryFile(temporaryPath, errorMessage);
+				return { false, std::move(errorMessage) };
+			}
+
+			if (!CloseHandle(temporaryFile)) {
+				const DWORD closeError = GetLastError();
+				std::string errorMessage = std::format(
+					"Failed to close temporary JSON file for '{}': {}",
+					path.string(),
+					GetWindowsErrorMessage(closeError));
+				RemoveTemporaryFile(temporaryPath, errorMessage);
+				return { false, std::move(errorMessage) };
+			}
+
+			if (!MoveFileExW(
+					temporaryPath.c_str(),
+					path.c_str(),
+					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+				const DWORD replaceError = GetLastError();
+				std::string errorMessage = std::format(
+					"Failed to atomically replace JSON file '{}': {}",
+					path.string(),
+					GetWindowsErrorMessage(replaceError));
+				RemoveTemporaryFile(temporaryPath, errorMessage);
+				return { false, std::move(errorMessage) };
+			}
+
+			return { true, {} };
 		}
 	}
 }

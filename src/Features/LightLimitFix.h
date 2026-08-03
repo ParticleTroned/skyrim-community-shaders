@@ -346,6 +346,42 @@ public:
 	Settings settings;
 	void DrawSettingsPanel(bool a_showEmbeddedInfo);
 	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 3,
+			T("menu.performance_tuning.feature.light_limit_fix.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.light_limit_fix.comparison_details", "particle lights, point-light contact shadows, and particle contact shadows are switched off.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "EnableParticleLights", true },
+			{ "EnableParticleLightsCulling", true },
+			{ "EnableParticleLightsDetection", true },
+			{ "ParticleLightsSaturation", true },
+			{ "ParticleBrightness", true },
+			{ "ParticleRadius", true },
+			{ "BillboardBrightness", true },
+			{ "BillboardRadius", true },
+			{ "UseParticleLights087LegacyMode", true },
+			{ "ParticleClusterThreshold", true },
+			{ "MaxParticlesPerEmitter", true },
+			{ "MaxParticleDistance", true },
+			{ "EnableParticleLightsOptimization", true },
+			{ "JsonPlacedLightIntensity", true },
+			{ "JsonPlacedLightsInteriorsOnly", true },
+			{ "JsonPlacedLightsPortalStrictOnly", true },
+			{ "EnableContactShadows", true },
+			{ "ContactShadowsInteriorsOnly", true },
+			{ "EnableParticleContactShadows", true },
+			{ "ContactShadowQuality", true },
+			{ "ContactShadowClusterBudget", true },
+			{ "ParticleContactShadowBudget", true },
+			{ "StrictContactShadowBudget", true }
+		};
+	}
+	virtual json CapturePerformanceTuningAuxiliaryState() const override;
+	virtual bool RestorePerformanceTuningAuxiliaryState(const json& a_userSettings) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override
 	{

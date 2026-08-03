@@ -79,6 +79,16 @@ public:
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 12,
+			T("menu.performance_tuning.feature.grass_collision.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.grass_collision.comparison_details", "Grass Collision is switched off.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return { { "EnableGrassCollision", true } };
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableGrassCollision; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override

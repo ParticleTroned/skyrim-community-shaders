@@ -62,8 +62,40 @@ public:
 		if (initialised)
 			SetupVL();
 	}
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 7,
+			T("menu.performance_tuning.feature.volumetric_lighting.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.volumetric_lighting.comparison_details", "Volumetric Lighting is switched off for the current interior/exterior context.") };
+	}
+	virtual bool IsPerformanceTuningApplicable() const override;
+	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "ExteriorEnabled", true },
+			{ "DisableWeatherInteractionDuringRain", true },
+			{ "GodrayIntensity", true },
+			{ "GodrayShaftIntensity", true },
+			{ "GodrayOpacity", true },
+			{ "GodraySaturation", true },
+			{ "CustomColorContribution", true },
+			{ "CustomColorRed", true },
+			{ "CustomColorGreen", true },
+			{ "CustomColorBlue", true },
+			{ "ExteriorQuality", true },
+			{ "ExteriorCustomSize", true },
+			{ "InteriorEnabled", true },
+			{ "InteriorQuality", true },
+			{ "InteriorCustomSize", true }
+		};
+	}
+	virtual bool NormalizePerformanceTuningUserSettings(json& a_settings) const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.ExteriorEnabled || settings.InteriorEnabled; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override
+	{
+		return inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled;
+	}
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		const Settings defaults{};
@@ -120,6 +152,7 @@ private:
 	void DrawGodrayTuningSettings();
 	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
+	static void SanitizeSettings(Settings& a_settings);
 	void SanitizeSettings();
 	void SetupVL();
 	void ClearVolumetricLightingTargets();

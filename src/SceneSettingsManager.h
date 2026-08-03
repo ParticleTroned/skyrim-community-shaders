@@ -170,6 +170,7 @@ private:
 	// --- Interior state tracking ---
 	bool isCurrentlyApplied = false;
 	bool queuedCellTransition = false;
+	bool queuedReapply = false;
 
 	// Stored exterior settings per-feature (only the overridden keys)
 	std::map<std::string, json> savedExteriorSettings;

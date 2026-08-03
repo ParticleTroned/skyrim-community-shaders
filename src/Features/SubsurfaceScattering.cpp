@@ -94,6 +94,17 @@ namespace
 			a_settings.HumanFemaleSSSBaseSaturation);
 	}
 
+	void SanitizeSettings(SubsurfaceScattering::Settings& a_settings)
+	{
+		SanitizeHumanSkinControls(a_settings);
+		a_settings.SSMode = std::clamp(a_settings.SSMode, 0, 1);
+		a_settings.ScatterMode = std::clamp(
+			a_settings.ScatterMode,
+			static_cast<int>(SubsurfaceScattering::kPreScatter),
+			static_cast<int>(SubsurfaceScattering::kPreAndPostScatter));
+		a_settings.BurleySamples = std::clamp(a_settings.BurleySamples, 1u, 64u);
+	}
+
 	void ApplyLegacyHumanControl(
 		const json& a_json,
 		const char* a_legacyKey,
@@ -237,7 +248,9 @@ void SubsurfaceScattering::DrawPerformanceSettings(bool)
 
 json SubsurfaceScattering::CapturePerformanceSettingsState() const
 {
-	return settings;
+	auto capturedSettings = settings;
+	SanitizeSettings(capturedSettings);
+	return capturedSettings;
 }
 
 void SubsurfaceScattering::SetPerformanceCostMeasurementEnabled(bool a_enabled)
@@ -252,7 +265,7 @@ void SubsurfaceScattering::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 
 json SubsurfaceScattering::CapturePerformanceCostMeasurementState() const
 {
-	return settings;
+	return CapturePerformanceSettingsState();
 }
 
 void SubsurfaceScattering::RestorePerformanceCostMeasurementState(const json& a_state)
@@ -261,8 +274,7 @@ void SubsurfaceScattering::RestorePerformanceCostMeasurementState(const json& a_
 		return;
 
 	settings = a_state.get<Settings>();
-	SanitizeHumanSkinControls(settings);
-	settings.ScatterMode = std::clamp(settings.ScatterMode, (int)kPreScatter, (int)kPreAndPostScatter);
+	SanitizeSettings(settings);
 }
 
 float3 SubsurfaceScattering::Gaussian(DiffusionProfile& a_profile, float variance, float r)
@@ -609,14 +621,14 @@ void SubsurfaceScattering::LoadSettings(json& o_json)
 	ApplyLegacyHumanControl(o_json, "HumanSSSSaturation", "HumanMaleSSSSaturation", "HumanFemaleSSSSaturation", settings.HumanMaleSSSSaturation, settings.HumanFemaleSSSSaturation);
 	ApplyLegacyHumanControl(o_json, "HumanSSSBrightness", "HumanMaleSSSBrightness", "HumanFemaleSSSBrightness", settings.HumanMaleSSSBrightness, settings.HumanFemaleSSSBrightness);
 	ApplyLegacyHumanControl(o_json, "HumanSSSBaseSaturation", "HumanMaleSSSBaseSaturation", "HumanFemaleSSSBaseSaturation", settings.HumanMaleSSSBaseSaturation, settings.HumanFemaleSSSBaseSaturation);
-	SanitizeHumanSkinControls(settings);
-	settings.ScatterMode = std::clamp(settings.ScatterMode, (int)kPreScatter, (int)kPreAndPostScatter);
+	SanitizeSettings(settings);
 }
 
 void SubsurfaceScattering::SaveSettings(json& o_json)
 {
-	SanitizeHumanSkinControls(settings);
-	o_json = settings;
+	auto savedSettings = settings;
+	SanitizeSettings(savedSettings);
+	o_json = savedSettings;
 }
 
 void SubsurfaceScattering::ClearShaderCache()

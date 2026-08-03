@@ -13,6 +13,7 @@
 #include "Upscaling.h"
 #include "Util.h"
 #include <algorithm>
+#include <utility>
 #include <dxgi1_4.h>
 #include <dxgi1_6.h>
 #include <imgui.h>
@@ -923,6 +924,20 @@ void HDRDisplay::SyncFramebufferUIRedirect()
 
 namespace
 {
+	template <class PresentCallable>
+	HRESULT ProfilePresentBoundary(
+		UINT syncInterval,
+		UINT flags,
+		PresentCallable&& present)
+	{
+		globals::profiler->BeginPresent(syncInterval, flags);
+		const HRESULT presentResult = std::forward<PresentCallable>(present)();
+		globals::profiler->CompletePresent(presentResult);
+		if ((flags & DXGI_PRESENT_TEST) == 0)
+			globals::profiler->BeginFrame();
+		return presentResult;
+	}
+
 	struct PresentSuppressionScope
 	{
 		PresentSuppressionScope() { globals::features::hdrDisplay.SetPresentSuppressed(true); }
@@ -936,10 +951,10 @@ namespace
 			if (globals::features::hdrDisplay.IsPresentSuppressed())
 				return S_OK;
 
-			globals::profiler->EndFrame(SyncInterval);
-			const HRESULT presentResult = func(This, SyncInterval, Flags);
-			globals::profiler->BeginFrame();
-			return presentResult;
+			return ProfilePresentBoundary(
+				SyncInterval,
+				Flags,
+				[&]() { return func(This, SyncInterval, Flags); });
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1023,10 +1038,10 @@ ID3D11BlendState* HDRDisplay::GetPatchedAlphaBlendState(ID3D11BlendState* origin
 
 HRESULT HDRDisplay::PresentToSwapChain(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-	globals::profiler->EndFrame(syncInterval);
-	const HRESULT presentResult = SwapChainPresentBottom::func(swapChain, syncInterval, flags);
-	globals::profiler->BeginFrame();
-	return presentResult;
+	return ProfilePresentBoundary(
+		syncInterval,
+		flags,
+		[&]() { return SwapChainPresentBottom::func(swapChain, syncInterval, flags); });
 }
 
 void HDRDisplay::DrawImGuiForPresent(bool frameGenActive, bool hdrReady)

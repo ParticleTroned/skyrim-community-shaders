@@ -829,7 +829,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 	return evalResult == sl::Result::eOk;
 }
 
-void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
+bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
 {
 	auto renderer = globals::game::renderer;
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -854,8 +854,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			loggedMissingSharpenerTexture = true;
 		}
 		upscaling.dlssSharpenerOutputValid = false;
-		globals::features::upscaling.RequestHistoryReset();
-		return;
+		return false;
 	}
 	ID3D11Resource* colorOut = useSharpenerOutput ?
 	                               upscaling.sharpenerTexture->resource.get() :
@@ -872,13 +871,13 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		extentIn, extentOut, (uint)baseSize.x);
 	upscaling.dlssSharpenerOutputValid = evaluated && useSharpenerOutput;
 	if (!evaluated) {
-		globals::features::upscaling.RequestHistoryReset();
 		static bool loggedEvaluateFailure = false;
 		if (!loggedEvaluateFailure) {
 			logger::warn("[Streamline] DLSS/DLAA evaluate failed; keeping the current scene texture instead of sharpening stale output.");
 			loggedEvaluateFailure = true;
 		}
 	}
+	return evaluated;
 }
 
 void Streamline::UpdateReflex()

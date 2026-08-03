@@ -37,22 +37,25 @@ public:
 
 	struct PerformanceTimingSummary
 	{
-		float gpuTotalMs = 0.0f;
-		float cpuTotalMs = 0.0f;
-		float profilerGpuMs = 0.0f;
-		float profilerCpuMs = 0.0f;
-		float frameMs = 0.0f;
+		float presentIntervalMs = 0.0f;
 		float fps = 0.0f;
-		float profilerGpuSampleMs = 0.0f;
-		float profilerCpuSampleMs = 0.0f;
-		float frameSampleMs = 0.0f;
-		uint64_t sampleId = 0;
-		bool hasProfilerGpu = false;
-		bool hasProfilerCpu = false;
-		bool hasProfilerGpuSample = false;
-		bool hasProfilerCpuSample = false;
-		bool hasFrameSample = false;
-		bool framePresentSynced = false;
+		float presentIntervalSampleMs = 0.0f;
+		float wholeFrameGpuMs = 0.0f;
+		float wholeFrameCpuMs = 0.0f;
+		float wholeFrameGpuSampleMs = 0.0f;
+		float wholeFrameCpuSampleMs = 0.0f;
+		uint64_t presentIntervalSampleId = 0;
+		uint64_t wholeFrameSampleId = 0;
+		uint64_t wholeFramePresentIntervalSampleId = 0;
+		uint64_t wholeFrameGpuSampleId = 0;
+		uint64_t wholeFrameCpuSampleId = 0;
+		bool hasPresentInterval = false;
+		bool hasPresentIntervalSample = false;
+		bool presentIntervalSynced = false;
+		bool hasWholeFrameGpu = false;
+		bool hasWholeFrameCpu = false;
+		bool hasWholeFrameGpuSample = false;
+		bool hasWholeFrameCpuSample = false;
 		bool valid = false;
 		std::unordered_map<std::string, PerformanceTimingTotals> features;
 	};
@@ -70,7 +73,9 @@ public:
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
 	static bool HasFeatureTimers(const std::string& featurePrefix);
 	static void RenderFeatureTimers(const std::string& featurePrefix);
-	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture = true);
+	static PerformanceTimingSummary CapturePerformanceTimingSummary(
+		const std::vector<std::string>& featurePrefixes,
+		Profiler::CaptureMode captureMode = Profiler::CaptureMode::DetailedPasses);
 	static void RenderFeaturePerformanceSummary(
 		const std::string& featurePrefix,
 		const PerformanceTimingHighlight* highlight = nullptr);

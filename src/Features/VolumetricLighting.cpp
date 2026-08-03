@@ -384,10 +384,24 @@ void VolumetricLighting::LoadSettings(json& o_json)
 
 void VolumetricLighting::SaveSettings(json& o_json)
 {
-	SanitizeSettings();
+	auto savedSettings = settings;
+	SanitizeSettings(savedSettings);
 	// Keep legacy value aligned for older config readers.
-	settings.GodrayIntensity = settings.GodrayShaftIntensity;
-	o_json = settings;
+	savedSettings.GodrayIntensity = savedSettings.GodrayShaftIntensity;
+	o_json = savedSettings;
+}
+
+bool VolumetricLighting::NormalizePerformanceTuningUserSettings(json& a_settings) const
+{
+	if (!a_settings.is_object())
+		return false;
+
+	if (a_settings.contains("GodrayShaftIntensity")) {
+		a_settings["GodrayIntensity"] = a_settings.at("GodrayShaftIntensity");
+	} else if (a_settings.contains("GodrayIntensity")) {
+		a_settings["GodrayShaftIntensity"] = a_settings.at("GodrayIntensity");
+	}
+	return true;
 }
 
 void VolumetricLighting::RestoreDefaultSettings()
@@ -412,25 +426,72 @@ VolumetricLighting::TextureSize VolumetricLighting::ClampTextureSize(const Textu
 	};
 }
 
+void VolumetricLighting::SanitizeSettings(Settings& a_settings)
+{
+	a_settings.GodrayIntensity = ClampFinite(a_settings.GodrayIntensity, 0.0f, kGodrayIntensityMax, 1.0f);
+	a_settings.GodrayShaftIntensity = ClampFinite(a_settings.GodrayShaftIntensity, 0.0f, kGodrayShaftIntensityMax, 1.0f);
+	a_settings.GodrayOpacity = ClampFinite(a_settings.GodrayOpacity, 0.0f, kGodrayOpacityMax, 1.0f);
+	a_settings.GodraySaturation = ClampFinite(a_settings.GodraySaturation, 0.0f, kGodraySaturationMax, 1.0f);
+	a_settings.CustomColorContribution = ClampFinite(a_settings.CustomColorContribution, 0.0f, 1.0f, 0.0f);
+	a_settings.CustomColorRed = ClampFinite(a_settings.CustomColorRed, 0.0f, 1.0f, 1.0f);
+	a_settings.CustomColorGreen = ClampFinite(a_settings.CustomColorGreen, 0.0f, 1.0f, 1.0f);
+	a_settings.CustomColorBlue = ClampFinite(a_settings.CustomColorBlue, 0.0f, 1.0f, 1.0f);
+	a_settings.ExteriorQuality = ClampQualityIndex(a_settings.ExteriorQuality);
+	a_settings.InteriorQuality = ClampQualityIndex(a_settings.InteriorQuality);
+	a_settings.ExteriorCustomSize = ClampTextureSize(a_settings.ExteriorCustomSize);
+	a_settings.InteriorCustomSize = ClampTextureSize(a_settings.InteriorCustomSize);
+}
+
 void VolumetricLighting::SanitizeSettings()
 {
-	settings.GodrayIntensity = ClampFinite(settings.GodrayIntensity, 0.0f, kGodrayIntensityMax, 1.0f);
-	settings.GodrayShaftIntensity = ClampFinite(settings.GodrayShaftIntensity, 0.0f, kGodrayShaftIntensityMax, 1.0f);
-	settings.GodrayOpacity = ClampFinite(settings.GodrayOpacity, 0.0f, kGodrayOpacityMax, 1.0f);
-	settings.GodraySaturation = ClampFinite(settings.GodraySaturation, 0.0f, kGodraySaturationMax, 1.0f);
-	settings.CustomColorContribution = ClampFinite(settings.CustomColorContribution, 0.0f, 1.0f, 0.0f);
-	settings.CustomColorRed = ClampFinite(settings.CustomColorRed, 0.0f, 1.0f, 1.0f);
-	settings.CustomColorGreen = ClampFinite(settings.CustomColorGreen, 0.0f, 1.0f, 1.0f);
-	settings.CustomColorBlue = ClampFinite(settings.CustomColorBlue, 0.0f, 1.0f, 1.0f);
-	settings.ExteriorQuality = ClampQualityIndex(settings.ExteriorQuality);
-	settings.InteriorQuality = ClampQualityIndex(settings.InteriorQuality);
-	settings.ExteriorCustomSize = ClampTextureSize(settings.ExteriorCustomSize);
-	settings.InteriorCustomSize = ClampTextureSize(settings.InteriorCustomSize);
+	SanitizeSettings(settings);
 }
 
 bool VolumetricLighting::IsExteriorEnabled() const
 {
 	return settings.ExteriorEnabled;
+}
+
+bool VolumetricLighting::IsPerformanceTuningApplicable() const
+{
+	if (!initialised)
+		return false;
+	if (!gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting)
+		return false;
+	if (inInterior)
+		return inInteriorWithSun;
+
+	return !rainOnlySuppressionActive;
+}
+
+const char* VolumetricLighting::GetPerformanceTuningApplicabilityReason() const
+{
+	if (IsPerformanceTuningApplicable())
+		return nullptr;
+	if (!initialised) {
+		return T(
+			"menu.performance_tuning.feature.volumetric_lighting.not_initialized",
+			"Volumetric Lighting has not initialized for the current scene yet.");
+	}
+	if (!gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting) {
+		return T(
+			"menu.performance_tuning.feature.volumetric_lighting.runtime_unavailable",
+			"Volumetric Lighting cannot be measured because its runtime controls are unavailable.");
+	}
+	if (inInterior && !inInteriorWithSun) {
+		return T(
+			"menu.performance_tuning.feature.volumetric_lighting.interior_without_sun",
+			"The current interior does not support sunlight volumetric lighting, so there is no runtime work to measure.");
+	}
+	if (rainOnlySuppressionActive) {
+		return T(
+			"menu.performance_tuning.feature.volumetric_lighting.rain_suppressed",
+			"Exterior Volumetric Lighting is currently suppressed by the Disable During Rain setting.");
+	}
+
+	return T(
+		"menu.performance_tuning.feature.volumetric_lighting.not_applicable",
+		"Volumetric Lighting has no measurable runtime work in the current scene.");
 }
 
 void VolumetricLighting::SetExteriorEnabled(bool enabled)

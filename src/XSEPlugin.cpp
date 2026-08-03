@@ -7,6 +7,7 @@
 #include "Hooks.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
 #include "ShaderCache.h"
@@ -148,6 +149,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kPreLoadGame:
 		{
+			PerformanceTuningRenderer::CancelActiveMeasurements(
+				PerformanceTuningRenderer::CancelMode::ClearSession);
 			break;
 		}
 	case SKSE::MessagingInterface::kSaveGame:
@@ -157,6 +160,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostLoadGame:
 	case SKSE::MessagingInterface::kNewGame:
 		{
+			PerformanceTuningRenderer::CancelActiveMeasurements(
+				PerformanceTuningRenderer::CancelMode::ClearSession);
 			if (errors.empty()) {
 				ResetRuntimeStateAfterGameLoad();
 				logger::info("Handled {}", message->type == SKSE::MessagingInterface::kPostLoadGame ? "kPostLoadGame" : "kNewGame");

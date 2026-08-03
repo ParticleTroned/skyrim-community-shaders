@@ -20,6 +20,7 @@
 #include "Features/Upscaling.h"
 #include "Features/VolumetricShadows.h"
 #include "Menu.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
@@ -75,10 +76,14 @@ void State::Draw()
 	auto& volumetricShadows = globals::features::volumetricShadows;
 
 	if (shaderCache->IsEnabled()) {
-		// Process deferred cell transitions (interior detection)
-		SceneSettingsManager::GetSingleton()->Update();
+		const bool sceneManagersReady =
+			PerformanceTuningRenderer::PrepareForSceneUpdate();
 
-		if (csEditor.loaded) {
+		// Process deferred cell transitions (interior detection)
+		if (sceneManagersReady)
+			SceneSettingsManager::GetSingleton()->Update();
+
+		if (sceneManagersReady && csEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}

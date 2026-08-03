@@ -716,7 +716,7 @@ void FidelityFX::SetupFrameGeneration()
 		logger::critical("[FidelityFX] Failed to create frame generation context!");
 }
 
-void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
+FidelityFX::FrameGenerationPresentResult FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 {
 	auto& upscaling = globals::features::upscaling;
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
@@ -810,7 +810,9 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 	configParameters.generationRect.width = swapChain.swapChainDesc.Width;
 	configParameters.generationRect.height = swapChain.swapChainDesc.Height;
 
-	if (ffx::Configure(frameGenContext, configParameters) != ffx::ReturnCode::Ok)
+	const bool frameGenerationConfigured =
+		ffx::Configure(frameGenContext, configParameters) == ffx::ReturnCode::Ok;
+	if (!frameGenerationConfigured)
 		logger::critical("[FidelityFX] Failed to configure frame generation!");
 
 	ffx::ConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12 uiConfig{};
@@ -823,10 +825,13 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 		uiConfig.flags = 0;
 	}
 
-	if (ffx::Configure(swapChainContext, uiConfig) != ffx::ReturnCode::Ok)
+	const bool uiCompositionConfigured =
+		ffx::Configure(swapChainContext, uiConfig) == ffx::ReturnCode::Ok;
+	if (!uiCompositionConfigured)
 		logger::critical("[FidelityFX] Failed to configure UI composition!");
 
-	if (a_useFrameGeneration) {
+	bool frameGenerationPrepared = !a_useFrameGeneration;
+	if (a_useFrameGeneration && frameGenerationConfigured && uiCompositionConfigured) {
 		ffx::DispatchDescFrameGenerationPrepare dispatchParameters{};
 
 		dispatchParameters.commandList = swapChain.commandLists[swapChain.frameIndex].get();
@@ -865,12 +870,19 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 		cameraConfig.cameraPosition[1] = globals::game::frameBufferCached.GetCameraPosAdjust().y;
 		cameraConfig.cameraPosition[2] = globals::game::frameBufferCached.GetCameraPosAdjust().z;
 
-		if (ffx::Dispatch(frameGenContext, dispatchParameters, cameraConfig) != ffx::ReturnCode::Ok)
+		frameGenerationPrepared =
+			ffx::Dispatch(frameGenContext, dispatchParameters, cameraConfig) ==
+			ffx::ReturnCode::Ok;
+		if (!frameGenerationPrepared)
 			logger::critical("[FidelityFX] Failed to dispatch frame generation!");
 	}
 
 	frameID++;
-	isFrameGenActive = a_useFrameGeneration;
+	const bool successful =
+		frameGenerationConfigured &&
+		uiCompositionConfigured &&
+		frameGenerationPrepared;
+	return { successful, a_useFrameGeneration && successful };
 }
 
 void FidelityFX::CreateFSRResources()
@@ -2002,12 +2014,12 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	return dispatchOK;
 }
 
-void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
+bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
 	auto renderer = globals::game::renderer;
 	auto state = globals::state;
 	if (!renderer || !state)
-		return;
+		return false;
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -2018,7 +2030,7 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	};
 	const auto renderSize = Util::ConvertToDynamic(screenSize);
 
-	if (!UpscaleRegion(
+	const bool dispatched = UpscaleRegion(
 			0,
 			a_upscalingTexture,
 			depthTexture.texture,
@@ -2032,7 +2044,9 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			static_cast<uint32_t>(screenSize.y),
 			renderSize.x,
 			renderSize.y,
-			a_sharpness)) {
+			a_sharpness);
+	if (!dispatched) {
 		logger::error("[FidelityFX] Upscale dispatch failed.");
 	}
+	return dispatched;
 }

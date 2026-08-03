@@ -216,6 +216,17 @@ namespace Util
 	namespace FileHelpers
 	{
 		/**
+		 * Result of an atomic JSON file write.
+		 */
+		struct AtomicWriteResult
+		{
+			bool success = false;
+			std::string errorMessage;
+
+			explicit operator bool() const noexcept { return success; }
+		};
+
+		/**
 		 * Result of a file deletion operation
 		 */
 		struct DeletionResult
@@ -245,6 +256,24 @@ namespace Util
 		 * @return Sanitized string safe for use as a filename
 		 */
 		std::string SanitizeFileName(std::string name);
+
+		/**
+		 * Serializes JSON to a uniquely named sibling file, flushes and closes it,
+		 * then atomically replaces the destination.
+		 *
+		 * The existing destination is left intact if serialization, writing,
+		 * flushing, closing, or replacement fails. Temporary files are removed
+		 * on a best-effort basis.
+		 *
+		 * @param path Destination JSON file.
+		 * @param json JSON value to serialize.
+		 * @param indent Indentation passed to nlohmann::json::dump().
+		 * @return AtomicWriteResult with success status and failure details.
+		 */
+		AtomicWriteResult WriteJsonFileAtomic(
+			const std::filesystem::path& path,
+			const nlohmann::json& json,
+			int indent = 1);
 	}
 
 	/**

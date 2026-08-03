@@ -38,22 +38,27 @@ float GrassLighting::ClampSubsurfaceScatteringAmount(float subsurfaceScatteringA
 	return std::clamp(subsurfaceScatteringAmount, kSubsurfaceScatteringAmountMin, kSubsurfaceScatteringAmountMax);
 }
 
-void GrassLighting::SanitizeSettings()
+void GrassLighting::SanitizeSettings(Settings& a_settings)
 {
-	settings.Glossiness = ClampGlossiness(settings.Glossiness, Settings{}.Glossiness);
-	settings.SpecularStrength = ClampSpecularStrength(settings.SpecularStrength, Settings{}.SpecularStrength);
-	settings.SubsurfaceScatteringAmount = ClampSubsurfaceScatteringAmount(
-		settings.SubsurfaceScatteringAmount,
+	a_settings.Glossiness = ClampGlossiness(a_settings.Glossiness, Settings{}.Glossiness);
+	a_settings.SpecularStrength = ClampSpecularStrength(a_settings.SpecularStrength, Settings{}.SpecularStrength);
+	a_settings.SubsurfaceScatteringAmount = ClampSubsurfaceScatteringAmount(
+		a_settings.SubsurfaceScatteringAmount,
 		Settings{}.SubsurfaceScatteringAmount);
-	if (std::isfinite(settings.ComplexGrassThreshold)) {
-		settings.ComplexGrassThreshold = std::clamp(
-			settings.ComplexGrassThreshold,
+	if (std::isfinite(a_settings.ComplexGrassThreshold)) {
+		a_settings.ComplexGrassThreshold = std::clamp(
+			a_settings.ComplexGrassThreshold,
 			kComplexGrassThresholdMin,
 			kComplexGrassThresholdMax);
 	} else {
-		settings.ComplexGrassThreshold = Settings{}.ComplexGrassThreshold;
+		a_settings.ComplexGrassThreshold = Settings{}.ComplexGrassThreshold;
 	}
-	settings.Enabled = settings.Enabled != 0;
+	a_settings.Enabled = a_settings.Enabled != 0;
+}
+
+void GrassLighting::SanitizeSettings()
+{
+	SanitizeSettings(settings);
 }
 
 bool GrassLighting::DrawEnabledCheckbox()
@@ -217,8 +222,9 @@ void GrassLighting::LoadSettings(json& o_json)
 
 void GrassLighting::SaveSettings(json& o_json)
 {
-	SanitizeSettings();
-	o_json = settings;
+	auto savedSettings = settings;
+	SanitizeSettings(savedSettings);
+	o_json = savedSettings;
 }
 
 void GrassLighting::RestoreDefaultSettings()

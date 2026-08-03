@@ -56,6 +56,7 @@ public:
 	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
+	static constexpr uint32_t kQualityModeSchemaVersion = 2;
 	static constexpr uint32_t kDLSSPresetJ = 0;
 	static constexpr uint32_t kDLSSPresetK = 1;
 	static constexpr uint32_t kDLSSPresetL = 2;
@@ -152,6 +153,7 @@ public:
 	bool IsFrameGenerationDx12PathActive() const;
 	bool IsFrameGenerationActive() const;
 	bool ShouldUseFrameGenerationThisFrame() const;
+	bool ConsumeFrameGenerationInputsForPresent();
 	float GetFrameGenerationFrameTime() const;
 	bool IsUpscalingActive() const;
 
@@ -161,10 +163,49 @@ public:
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 0,
+			T("menu.performance_tuning.feature.upscaling.comparison_label", "None / Frame Generation Off"),
+			T("menu.performance_tuning.feature.upscaling.comparison_details", "Upscaling is set to None and Frame Generation is switched off.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "upscaleMethod", true },
+			{ "upscaleMethodNoDLSS", true },
+			{ "qualityMode", true },
+			{ "qualityModeSchemaVersion", true },
+			{ "dlssPreset", true },
+			{ "frameLimitMode", true },
+			{ "frameGenerationMode", true },
+			{ "frameGenerationForceEnable", true },
+			{ "frameGenerationAllowInMenus", true },
+			{ "sharpnessFSR", true },
+			{ "sharpnessDLSS", true },
+			{ "fsr4RuntimeEnable", true },
+			{ "fsr4RuntimeSelectionSchemaVersion", true },
+			{ "reflexLowLatencyMode", true },
+			{ "reflexLowLatencyBoost", true },
+			{ "reflexUseMarkersToOptimize", true },
+			{ "reflexUseFPSLimit", true },
+			{ "reflexFPSLimit", true }
+		};
+	}
+	virtual bool NormalizePerformanceTuningUserSettings(json& a_settings) const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return GetUpscaleMethod() != UpscaleMethod::kNONE; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override
+	{
+		return GetUpscaleMethod() != UpscaleMethod::kNONE ||
+		       ShouldUseFrameGenerationThisFrame();
+	}
 	virtual bool IsPerformanceCostMeasurementReady() const override;
-	virtual const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for upscaling and frame pacing to settle"; }
+	virtual const char* GetPerformanceCostMeasurementWaitText() const override
+	{
+		return T(
+			"menu.performance_tuning.feature.upscaling.wait",
+			"Waiting for upscaling and frame pacing to settle");
+	}
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {
@@ -174,8 +215,10 @@ public:
 
 		settings.upscaleMethod = static_cast<uint>(UpscaleMethod::kNONE);
 		settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
+		settings.frameGenerationMode = 0;
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual json CapturePerformanceSettingsState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
 	{
 		auto state = a_state;
@@ -225,7 +268,7 @@ public:
 
 	void ConfigureTAA();
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
-	void Upscale();
+	bool Upscale();
 
 	// D3D11 textures
 	std::unique_ptr<Texture2D> reactiveMaskTexture;
@@ -278,11 +321,30 @@ public:
 	bool performanceCostAppliedFSRRuntimeFsr4Configured = false;
 	bool performanceCostAppliedFSRRuntimeFsr4Active = false;
 	uint32_t performanceCostAppliedFrame = std::numeric_limits<uint32_t>::max();
+	bool performanceCostExecutedPathValid = false;
+	bool performanceCostExecutedPathSuccessful = false;
+	UpscaleMethod performanceCostExecutedUpscaleMethod = UpscaleMethod::kNONE;
+	uint32_t performanceCostExecutedFrame = std::numeric_limits<uint32_t>::max();
+	bool frameGenerationCopyValid = false;
+	bool frameGenerationCopyRequested = false;
+	bool frameGenerationCopySuccessful = false;
+	bool frameGenerationCopyConsumed = true;
+	bool performanceCostFrameGenerationPresentValid = false;
+	bool performanceCostFrameGenerationPresentRequested = false;
+	bool performanceCostFrameGenerationPresentSuccessful = false;
+	bool performanceCostFrameGenerationPresentActive = false;
+	uint32_t performanceCostFrameGenerationPresentFrame = std::numeric_limits<uint32_t>::max();
 
-	void CopySharedD3D12Resources();
+	bool CopySharedD3D12Resources();
 	void PostDisplay();
-	void PerformUpscaling();
-	void UpscaleDepth();
+	bool PerformUpscaling();
+	bool UpscaleDepth();
+	void RecordPerformanceCostExecutedPath(UpscaleMethod a_method, bool a_successful);
+	void RecordFrameGenerationCopy(bool a_requested, bool a_successful);
+	void RecordPerformanceCostFrameGenerationPresent(
+		bool a_requested,
+		bool a_successful,
+		bool a_active);
 	void RequestHistoryReset();
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);
@@ -295,11 +357,11 @@ public:
 	 *
 	 * Runs in HDR space before tonemapping. Only called when DLSS is active and sharpness > 0.
 	 */
-	void ApplySharpening();
+	bool ApplySharpening();
 
 	static void TimerSleepQPC(int64_t targetQPC);
 
-	void FrameLimiter();
+	void FrameLimiter(bool a_frameGenerationActive);
 
 	static double GetRefreshRate(HWND a_window);
 

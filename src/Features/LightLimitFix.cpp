@@ -86,6 +86,17 @@ namespace
 		0x17F4E60,  // NiAmbientLight
 		0x17F6940   // NiSpotLight
 	};
+	struct VRCullingProcessVtableSpec
+	{
+		std::uintptr_t vtableRVA;
+		std::uintptr_t visibilityTargetRVA;
+	};
+	constexpr std::array<VRCullingProcessVtableSpec, 3> kVRBSCullingProcessVtableSpecs{
+		VRCullingProcessVtableSpec{ 0x1815B40, 0xD9A7B0 },  // BSCullingProcess
+		VRCullingProcessVtableSpec{ 0x1621068, 0xD9A7B0 },  // BSGeometryListCullingProcess
+		VRCullingProcessVtableSpec{ 0x190BEB0, 0x136F600 }  // BSParabolicCullingProcess
+	};
+	constexpr std::size_t kVRBSCullingProcessVisibilityVtableOffset = 0xE8;
 
 	template <std::size_t N>
 	bool MatchesInstructions(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
@@ -261,43 +272,53 @@ namespace
 		kVirtualCall,
 	};
 
-	class VRRoomLightCullingProcessGuard : public Xbyak::CodeGenerator
+	class VRRoomLightCullingProcessGuard : public VRValidatedObjectGuard
 	{
 	public:
-		VRRoomLightCullingProcessGuard(VRRoomLightCullingUse a_use, std::uintptr_t a_recoveryTarget)
+		VRRoomLightCullingProcessGuard(
+			const std::array<std::uintptr_t, kVRBSCullingProcessVtableSpecs.size()>& a_allowedVtables,
+			VRRoomLightCullingUse a_use,
+			std::uintptr_t a_recoveryTarget)
 		{
 			if (a_use == VRRoomLightCullingUse::kPortalGraphEntry) {
-				Generate(rax, rcx, a_recoveryTarget);
+				Generate(rax, rcx, a_allowedVtables, a_recoveryTarget);
 			} else {
-				Generate(rcx, rax, a_recoveryTarget);
+				Generate(rcx, rax, a_allowedVtables, a_recoveryTarget);
 			}
 		}
 
 	private:
-		void Generate(const Xbyak::Reg64& a_cullingProcess, const Xbyak::Reg64& a_scratch, std::uintptr_t a_recoveryTarget)
+		void Generate(
+			const Xbyak::Reg64& a_cullingProcess,
+			const Xbyak::Reg64& a_vtable,
+			const std::array<std::uintptr_t, kVRBSCullingProcessVtableSpecs.size()>& a_allowedVtables,
+			std::uintptr_t a_recoveryTarget)
 		{
 			Xbyak::Label invalidCullingProcess;
 
 			// Reproduce the displaced BSLight::cullingProcess load in the register
-			// expected by its consumer, then reject values which cannot identify an
-			// aligned low-canonical user object. The scratch register is dead at all
-			// verified sites. Keep this hot per-light guard allocation-free: it
-			// rejects impossible address shapes without querying the process allocator.
+			// expected by its consumer. A stale but readable process can retain the
+			// base NiCullingProcess vtable, whose +0xE8 entry is data rather than a
+			// callable target. Accept only the concrete BSCullingProcess layouts that
+			// provide both the portalGraphEntry field and the required virtual slot.
+			// Preserve the registers and flags that the displaced MOV left unchanged,
+			// while keeping this hot per-light guard allocation- and logging-free.
+			push(a_vtable);
+			push(r10);
+			pushfq();
 			mov(a_cullingProcess, qword[rbx + kVRBSLightCullingProcessOffset]);
-			test(a_cullingProcess, a_cullingProcess);
-			jz(invalidCullingProcess, T_SHORT);
-			cmp(a_cullingProcess, kMinimumPlausibleRenderPointer);
-			jb(invalidCullingProcess, T_SHORT);
-			test(a_cullingProcess.cvt8(), kRenderPointerAlignmentMask);
-			jnz(invalidCullingProcess, T_SHORT);
-			mov(a_scratch, a_cullingProcess);
-			shr(a_scratch, kLowCanonicalUserAddressBits);
-			jnz(invalidCullingProcess, T_SHORT);
+			RequireKnownVtable(a_cullingProcess, a_vtable, r10, a_allowedVtables, invalidCullingProcess);
+			popfq();
+			pop(r10);
+			pop(a_vtable);
 			ret();
 
 			L(invalidCullingProcess);
 			// Discard write_call's return address and use the consumer's narrowest
 			// existing Bethesda recovery branch.
+			popfq();
+			pop(r10);
+			pop(a_vtable);
 			add(rsp, 8);
 			mov(rax, a_recoveryTarget);
 			jmp(rax);
@@ -2231,11 +2252,11 @@ void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()
 	}
 
 	// Skyrim VR 1.4.15's room-light culling loops dereference and call through
-	// BSLight::cullingProcess without validating it. The duplicated loops cover
-	// the BSMultiBoundRoom and BSPortalSharedNode parent paths. These
+	// BSLight::cullingProcess without validating its concrete type. The duplicated
+	// loops cover the BSMultiBoundRoom and BSPortalSharedNode parent paths. These
 	// RVAs, contexts, and recovery branches were verified against the live,
-	// decrypted runtime image after a Blue Palace transition supplied the
-	// non-canonical 0x7F7FFFFF7F7FFFFF value.
+	// decrypted runtime image after transitions supplied both a non-canonical
+	// pointer and a readable base NiCullingProcess whose +0xE8 entry was data.
 	constexpr std::uintptr_t firstRoomLightContextRVA = 0x12F8C30;
 	constexpr std::uintptr_t firstPortalGraphEntryProcessLoadRVA = 0x12F8C61;
 	constexpr std::uintptr_t firstNoPortalGraphEntryRVA = 0x12F8C71;
@@ -2296,13 +2317,41 @@ void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()
 		return;
 	}
 
-	VRRoomLightCullingProcessGuard firstPortalGraphEntryCode{ VRRoomLightCullingUse::kPortalGraphEntry, firstNoPortalGraphEntry };
+	const auto readOnlySegment = REL::Module::get().segment(REL::Segment::rdata);
+	constexpr auto requiredVtableBytes = kVRBSCullingProcessVisibilityVtableOffset + sizeof(std::uintptr_t);
+	if (readOnlySegment.address() == 0 || readOnlySegment.size() < requiredVtableBytes) {
+		logger::error("[LLF] VR room-light culling-process guards not installed: SkyrimVR.exe segment bounds unavailable");
+		return;
+	}
+
+	const auto readOnlyStart = readOnlySegment.address();
+	const auto readOnlyLastVtable = readOnlyStart + readOnlySegment.size() - requiredVtableBytes;
+	std::array<std::uintptr_t, kVRBSCullingProcessVtableSpecs.size()> allowedVtables{};
+	for (std::size_t i = 0; i < kVRBSCullingProcessVtableSpecs.size(); ++i) {
+		const auto& vtableSpec = kVRBSCullingProcessVtableSpecs[i];
+		const auto vtable = moduleBase + vtableSpec.vtableRVA;
+		if (vtable < readOnlyStart || vtable > readOnlyLastVtable) {
+			logger::error("[LLF] VR room-light culling-process guards not installed: BSCullingProcess vtable outside SkyrimVR.exe read-only segment");
+			return;
+		}
+
+		const auto callTarget = *reinterpret_cast<const std::uintptr_t*>(vtable + kVRBSCullingProcessVisibilityVtableOffset);
+		const auto expectedCallTarget = moduleBase + vtableSpec.visibilityTargetRVA;
+		if (callTarget != expectedCallTarget || !IsExecutableAddress(reinterpret_cast<const void*>(callTarget))) {
+			logger::error("[LLF] VR room-light culling-process guards not installed: invalid BSCullingProcess visibility target");
+			return;
+		}
+
+		allowedVtables[i] = vtable;
+	}
+
+	VRRoomLightCullingProcessGuard firstPortalGraphEntryCode{ allowedVtables, VRRoomLightCullingUse::kPortalGraphEntry, firstNoPortalGraphEntry };
 	firstPortalGraphEntryCode.ready();
-	VRRoomLightCullingProcessGuard firstVirtualCallCode{ VRRoomLightCullingUse::kVirtualCall, firstSkipLight };
+	VRRoomLightCullingProcessGuard firstVirtualCallCode{ allowedVtables, VRRoomLightCullingUse::kVirtualCall, firstSkipLight };
 	firstVirtualCallCode.ready();
-	VRRoomLightCullingProcessGuard secondPortalGraphEntryCode{ VRRoomLightCullingUse::kPortalGraphEntry, secondNoPortalGraphEntry };
+	VRRoomLightCullingProcessGuard secondPortalGraphEntryCode{ allowedVtables, VRRoomLightCullingUse::kPortalGraphEntry, secondNoPortalGraphEntry };
 	secondPortalGraphEntryCode.ready();
-	VRRoomLightCullingProcessGuard secondVirtualCallCode{ VRRoomLightCullingUse::kVirtualCall, secondSkipLight };
+	VRRoomLightCullingProcessGuard secondVirtualCallCode{ allowedVtables, VRRoomLightCullingUse::kVirtualCall, secondSkipLight };
 	secondVirtualCallCode.ready();
 
 	auto& trampoline = SKSE::GetTrampoline();

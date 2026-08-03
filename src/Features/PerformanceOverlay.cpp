@@ -32,6 +32,7 @@
 #include "Utils/Format.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
+#include "Utils/VRUtils.h"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -49,6 +50,36 @@
 // --- Constants ---
 constexpr float kDefaultFPS = 60.0f;
 constexpr float kDefaultFrameTimeMs = 1000.0f / kDefaultFPS;
+
+namespace
+{
+	void DrawPerformanceHUDOverlayHelp()
+	{
+		ImGui::TextUnformatted("Displays the performance panel in the standalone HUD, which can stay visible after CS settings close.");
+		if (REL::Module::IsVR()) {
+			const auto& vrSettings = globals::features::vr.settings;
+			ImGui::TextUnformatted("Show Performance Overlay:");
+			ImGui::SameLine();
+			Util::DrawButtonCombo(vrSettings.VROverlayOpenKeys, true);
+			ImGui::TextUnformatted("Hide Performance Overlay:");
+			ImGui::SameLine();
+			Util::DrawButtonCombo(vrSettings.VROverlayCloseKeys, true);
+			ImGui::TextDisabled("Configure these actions under VR > Bindings.");
+			return;
+		}
+
+		auto* menu = Menu::GetSingleton();
+		if (!menu) {
+			return;
+		}
+		const auto& themeSettings = menu->GetTheme();
+		const auto& menuSettings = menu->GetSettings();
+		ImGui::TextUnformatted("Desktop toggle:");
+		ImGui::SameLine();
+		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s",
+			Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
+	}
+}
 
 // --- Helper Structures and Functions ---
 
@@ -161,16 +192,9 @@ bool PerformanceOverlay::HideFromDesktopWhenSubmittedToVR() const
 
 void PerformanceOverlay::DrawSettings()
 {
-	auto menu = Menu::GetSingleton();
-	const auto& themeSettings = menu->GetTheme();
-	const auto& menuSettings = menu->GetSettings();
-	ImGui::Checkbox("Show in Overlay", &this->settings.ShowInOverlay);
+	ImGui::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Opens performance overlay in a separate window that stays open\neven when the main menu is closed. ");
-		ImGui::Text("Toggle with ");
-		ImGui::SameLine();
-		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s",
-			Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
+		DrawPerformanceHUDOverlayHelp();
 	}
 
 	if (this->settings.ShowInOverlay) {
@@ -232,16 +256,9 @@ void PerformanceOverlay::DrawSettings()
 
 void PerformanceOverlay::DrawEssentialSettings()
 {
-	auto menu = Menu::GetSingleton();
-	const auto& themeSettings = menu->GetTheme();
-	const auto& menuSettings = menu->GetSettings();
-	ImGui::Checkbox("Show in Overlay", &this->settings.ShowInOverlay);
+	ImGui::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Opens performance overlay in a separate window that stays open\neven when the main menu is closed. ");
-		ImGui::Text("Toggle with ");
-		ImGui::SameLine();
-		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s",
-			Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
+		DrawPerformanceHUDOverlayHelp();
 	}
 }
 

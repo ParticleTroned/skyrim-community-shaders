@@ -197,10 +197,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 	const bool menuClosePressed = CheckCombo(settings.VRMenuCloseKeys);
 	const bool overlayOpenPressed = CheckCombo(settings.VROverlayOpenKeys);
 	const bool overlayClosePressed = CheckCombo(settings.VROverlayCloseKeys);
-	const bool canOpenMenuFromWorld =
-		!ShouldUseInSceneOverlay() &&
-		openVRInfo.hasOverlayInterface &&
-		settings.attachMode != AttachMode::None;
+	const bool canOpenMenuFromWorld = CanOpenMenuFromWorld();
 	const bool canUseMenuBindings = uiMenusOpen || menuSessionOpen || canOpenMenuFromWorld;
 
 	bool inValidMenuState =

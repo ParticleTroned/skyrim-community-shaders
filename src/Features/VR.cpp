@@ -305,6 +305,8 @@ namespace
 		vr.lastDesktopWindowManagementAttemptSecs = 0.0;
 	}
 
+	constexpr int kVRControllerBindingsVersion = 1;
+
 	void LoadVRControllerBinding(const json& source, const char* keyName, std::vector<ButtonCombo>& target)
 	{
 		if (!source.is_object() || !source.contains(keyName)) {
@@ -353,8 +355,19 @@ namespace
 		}
 	}
 
-	void MigrateLegacyBindingDefaults(VR::Settings& settings)
+	void MigrateLegacyBindingDefaults(const json& source, VR::Settings& settings)
 	{
+		int sourceVersion = 0;
+		if (source.is_object()) {
+			const auto versionIt = source.find("VRControllerBindingsVersion");
+			if (versionIt != source.end() && versionIt->is_number_integer()) {
+				sourceVersion = versionIt->get<int>();
+			}
+		}
+		if (sourceVersion >= kVRControllerBindingsVersion) {
+			return;
+		}
+
 		const std::vector<ButtonCombo> legacyMenuOpen = {
 			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA)),
 			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY))
@@ -363,17 +376,25 @@ namespace
 			settings.VRMenuOpenKeys = VR::Settings::DefaultVRMenuOpenKeys();
 		}
 
+		const std::vector<ButtonCombo> previousOverlayOpen = {
+			ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+		};
+		const std::vector<ButtonCombo> previousOverlayClose = {
+			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+		};
 		const std::vector<ButtonCombo> legacyOverlayOpen = {
 			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
 		};
-		if (settings.VROverlayOpenKeys == legacyOverlayOpen) {
-			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
-		}
-
 		const std::vector<ButtonCombo> legacyOverlayClose = {
 			ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
 		};
-		if (settings.VROverlayCloseKeys == legacyOverlayClose) {
+
+		if (settings.VROverlayOpenKeys == previousOverlayOpen ||
+			settings.VROverlayOpenKeys == legacyOverlayOpen) {
+			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
+		}
+		if (settings.VROverlayCloseKeys == previousOverlayClose ||
+			settings.VROverlayCloseKeys == legacyOverlayClose) {
 			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
 		}
 	}
@@ -463,7 +484,7 @@ void VR::LoadSettings(json& o_json)
 		!o_json.value("EnableWandPointing", true)) {
 		settings.UseRuntimeDefaultMenuNavigation = false;
 	}
-	MigrateLegacyBindingDefaults(settings);
+	MigrateLegacyBindingDefaults(o_json, settings);
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
@@ -477,6 +498,7 @@ void VR::SaveSettings(json& o_json)
 	SaveVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
 	SaveVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
 	SaveVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
+	o_json["VRControllerBindingsVersion"] = kVRControllerBindingsVersion;
 }
 
 void VR::RestoreDefaultSettings()
@@ -494,6 +516,7 @@ void VR::RestoreDefaultSettings()
 	overlayDragState = OverlayDragState{};
 	fixedWorldOverlayPosition = OverlayWorldPosition{};
 	wandState = WandIntersectionState{};
+	autoHideOverlayStartTimeSecs = 0.0;
 	primaryControllerState = {};
 	secondaryControllerState = {};
 	menuOpenCombo = {};
@@ -892,11 +915,46 @@ void VR::EarlyPrepass()
 
 bool VR::ShouldShowAutoHideOverlay() const
 {
-	return settings.kAutoHideSeconds > 0 &&
-	       globals::state &&
-	       globals::state->isMainMenuOpen &&
-	       globals::menu &&
-	       !globals::menu->IsEnabled;
+	const bool eligible = settings.kAutoHideSeconds > 0 &&
+	                      globals::state &&
+	                      globals::state->isMainMenuOpen &&
+	                      globals::menu &&
+	                      !globals::menu->IsEnabled;
+	if (!eligible) {
+		return false;
+	}
+
+	if (autoHideOverlayStartTimeSecs <= 0.0) {
+		if (settings.attachMode != AttachMode::None) {
+			return true;
+		}
+		autoHideOverlayStartTimeSecs = Util::GetNowSecs();
+	}
+
+	return Util::GetNowSecs() - autoHideOverlayStartTimeSecs < static_cast<double>(settings.kAutoHideSeconds);
+}
+
+void VR::MarkAutoHideOverlayPresented()
+{
+	if (autoHideOverlayStartTimeSecs > 0.0 ||
+		settings.kAutoHideSeconds <= 0 ||
+		!globals::state ||
+		!globals::state->isMainMenuOpen ||
+		!globals::menu ||
+		globals::menu->IsEnabled) {
+		return;
+	}
+
+	autoHideOverlayStartTimeSecs = Util::GetNowSecs();
+}
+
+bool VR::ShouldPresentOverlayInHeadset() const
+{
+	return globals::menu &&
+	       (globals::menu->IsEnabled ||
+	        globals::menu->overlayVisible ||
+	        ShouldShowAutoHideOverlay() ||
+	        ShouldShowShaderCompilationInHMD());
 }
 
 bool VR::ShouldUseInSceneOverlay() const
@@ -917,6 +975,14 @@ bool VR::ShouldUseInSceneOverlay() const
 	}
 }
 
+bool VR::CanOpenMenuFromWorld() const
+{
+	return openVRInfo.isCompatible &&
+	       !ShouldUseInSceneOverlay() &&
+	       openVRInfo.hasOverlayInterface &&
+	       settings.attachMode != AttachMode::None;
+}
+
 bool VR::IsOverlayVisible() const
 {
 	return openVRInfo.isCompatible && ShouldShowAutoHideOverlay();
@@ -926,33 +992,19 @@ void VR::DrawOverlay()
 {
 	if (!openVRInfo.isCompatible)
 		return;
-	static LARGE_INTEGER overlayShowStart = { 0 };
-	static LARGE_INTEGER freq = { 0 };
 
 	bool shouldShow = ShouldShowAutoHideOverlay();
 
 	if (!shouldShow) {
-		overlayShowStart.QuadPart = 0;  // Reset timer when overlay is not shown
 		return;
 	}
 
-	if (freq.QuadPart == 0) {
-		QueryPerformanceFrequency(&freq);
+	double elapsed = 0.0;
+	if (autoHideOverlayStartTimeSecs > 0.0) {
+		elapsed = std::max(0.0, Util::GetNowSecs() - autoHideOverlayStartTimeSecs);
 	}
-
-	LARGE_INTEGER now;
-	QueryPerformanceCounter(&now);
-
-	if (overlayShowStart.QuadPart == 0) {
-		overlayShowStart = now;
-	}
-
-	double elapsed = double(now.QuadPart - overlayShowStart.QuadPart) / double(freq.QuadPart);
 	const double autoHideSeconds = static_cast<double>(settings.kAutoHideSeconds);
-	if (elapsed >= autoHideSeconds) {
-		return;
-	}
-	int secondsLeft = int(std::ceil(autoHideSeconds - elapsed));
+	const int secondsLeft = std::max(1, static_cast<int>(std::ceil(autoHideSeconds - elapsed)));
 
 	ImGuiIO& io = ImGui::GetIO();
 	const float scale = Util::GetUIScale();
@@ -963,17 +1015,31 @@ void VR::DrawOverlay()
 	ImGui::SetNextWindowBgAlpha(0.92f);
 
 	ImGui::Begin("HowToUseOverlay", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-	ImGui::Text("How to Use VR Community Shaders Menu:");
+	ImGui::TextUnformatted("How to Use VR Community Shaders:");
 	ImGui::Separator();
-	ImGui::Text("You must be in the Main Menu or Tween Menu for these key binds to work.");
+	if (CanOpenMenuFromWorld()) {
+		ImGui::TextWrapped("With the current SteamVR overlay path, CS settings bindings work during gameplay and menus.");
+	} else {
+		ImGui::TextWrapped("Open the Skyrim Main Menu or Tween Menu before using the CS settings bindings.");
+	}
 	ImGui::Spacing();
-	ImGui::Text("Open Menu: ");
+	ImGui::TextUnformatted("Open CS Settings:");
+	ImGui::SameLine();
 	Util::DrawButtonCombo(settings.VRMenuOpenKeys, true);
-	ImGui::Text("\nClose Menu: ");
+	ImGui::TextUnformatted("Close CS Settings:");
+	ImGui::SameLine();
 	Util::DrawButtonCombo(settings.VRMenuCloseKeys, true);
 	ImGui::Spacing();
-	ImGui::TextDisabled("(This message will auto-disable in %d seconds)", secondsLeft);
-	ImGui::TextDisabled("(You can disable this message in VR settings > Controller Input Instructions)");
+	ImGui::TextWrapped("Performance Overlay bindings work during gameplay and menus.");
+	ImGui::TextUnformatted("Show Performance Overlay:");
+	ImGui::SameLine();
+	Util::DrawButtonCombo(settings.VROverlayOpenKeys, true);
+	ImGui::TextUnformatted("Hide Performance Overlay:");
+	ImGui::SameLine();
+	Util::DrawButtonCombo(settings.VROverlayCloseKeys, true);
+	ImGui::Spacing();
+	ImGui::TextDisabled("(This message will auto-hide in %d seconds)", secondsLeft);
+	ImGui::TextDisabled("(Configure bindings and this message under VR settings)");
 	ImGui::End();
 }
 
@@ -1778,18 +1844,23 @@ namespace
 
 	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix)
 	{
-		auto& settings = globals::features::vr.settings;
+		auto& vr = globals::features::vr;
+		auto& settings = vr.settings;
 		ImGui::PushID(a_idPrefix);
 
 		if (a_includeAutoHideSetting) {
-			ImGui::SliderInt("Auto-hide Welcome overlay timeout", &settings.kAutoHideSeconds, 0, VR::Config::kMaxAutoHideSeconds,
+			ImGui::SliderInt("Welcome Message Timeout", &settings.kAutoHideSeconds, 0, VR::Config::kMaxAutoHideSeconds,
 				settings.kAutoHideSeconds <= 0 ? "Hidden" : "%d seconds");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Set to 0 to hide the overlay, or a positive value to show it for that many seconds");
+				ImGui::TextUnformatted("Set to 0 to hide the startup controller instructions, or choose how long to show them.");
 			}
 		}
 
-		ImGui::TextWrapped("Menu (while in the main menu or tween menu):");
+		if (vr.CanOpenMenuFromWorld()) {
+			ImGui::TextWrapped("CS settings menu (available during gameplay and menus with the current SteamVR overlay path):");
+		} else {
+			ImGui::TextWrapped("CS settings menu (open from the Skyrim Main Menu or Tween Menu):");
+		}
 		if (ImGui::BeginTable("MenuInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
@@ -1804,16 +1875,16 @@ namespace
 			ImGui::EndTable();
 		}
 
-		ImGui::TextWrapped("Overlay (while in the main menu or tween menu):");
+		ImGui::TextWrapped("Performance Overlay (available during gameplay and menus):");
 		if (ImGui::BeginTable("OverlayInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
-			ImGui::Text("Open Overlay:");
+			ImGui::Text("Show Performance Overlay:");
 			ImGui::TableSetColumnIndex(1);
 			Util::DrawButtonCombo(settings.VROverlayOpenKeys, true);
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
-			ImGui::Text("Close Overlay:");
+			ImGui::Text("Hide Performance Overlay:");
 			ImGui::TableSetColumnIndex(1);
 			Util::DrawButtonCombo(settings.VROverlayCloseKeys, true);
 			ImGui::EndTable();
@@ -2614,6 +2685,31 @@ namespace
 	{
 		auto& vr = globals::features::vr;
 		auto& settings = vr.settings;
+		struct VRKeyBindingConfig
+		{
+			const char* label;
+			std::vector<ButtonCombo>* combos;
+			VR::ComboType comboType;
+			const char* description;
+		};
+		const std::array<VRKeyBindingConfig, 4> keyBindingConfigs = {
+			VRKeyBindingConfig{ "Open Community Shaders Menu", &settings.VRMenuOpenKeys, VR::ComboType::MenuOpen, "Open CS settings from Main or Tween; also during gameplay with the SteamVR overlay path." },
+			VRKeyBindingConfig{ "Close Community Shaders Menu", &settings.VRMenuCloseKeys, VR::ComboType::MenuClose, "Close CS settings while its VR menu session is open." },
+			VRKeyBindingConfig{ "Show Performance Overlay", &settings.VROverlayOpenKeys, VR::ComboType::OverlayOpen, "Show the standalone performance panel during gameplay or menus." },
+			VRKeyBindingConfig{ "Hide Performance Overlay", &settings.VROverlayCloseKeys, VR::ComboType::OverlayClose, "Hide the standalone performance panel during gameplay or menus." }
+		};
+		std::array<const char*, 4> comboTypes{};
+		for (size_t i = 0; i < keyBindingConfigs.size(); ++i) {
+			comboTypes[i] = keyBindingConfigs[i].label;
+		}
+
+		ImGui::TextWrapped("CS settings bindings open the configuration menu from the Skyrim Main Menu or Tween Menu.");
+		if (vr.CanOpenMenuFromWorld()) {
+			ImGui::TextWrapped("The current SteamVR overlay path also allows CS settings to open during gameplay.");
+		}
+		ImGui::TextWrapped("Performance Overlay bindings work during gameplay and menus, independently of the CS settings menu.");
+		ImGui::TextDisabled("Unbound actions are disabled. Save settings to persist binding changes.");
+		ImGui::Spacing();
 
 		// Combo Settings
 		if (ImGui::CollapsingHeader("Combo Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -2624,50 +2720,30 @@ namespace
 		}
 		ImGui::Separator();
 		// Combo box for selecting which combo to record
-		const char* comboTypes[] = {
-			"Open Community Shaders Menu",
-			"Close Community Shaders Menu",
-			"Open VR Overlay",
-			"Close VR Overlay"
-		};
 		static int selectedComboIndex = 0;
 		ImGui::Text("Select Combo to Record:");
 		ImGui::SameLine();
-		if (ImGui::Combo("##ComboSelector", &selectedComboIndex, comboTypes, IM_ARRAYSIZE(comboTypes))) {
-			// Reset recording state when changing selection
-			vr.isCapturingCombo = false;
-			vr.currentComboType = VR::ComboType::None;
-			vr.recordedCombo.clear();
+		if (ImGui::Combo("##ComboSelector", &selectedComboIndex, comboTypes.data(), static_cast<int>(comboTypes.size()))) {
+			vr.ResetComboRecordingState();
 		}
+		auto& selectedConfig = keyBindingConfigs[static_cast<size_t>(selectedComboIndex)];
 		if (ImGui::Button("Record Selected Combo")) {
-			// Start recording the selected combo
+			vr.ResetComboRecordingState();
 			vr.isCapturingCombo = true;
-			vr.currentComboType = static_cast<VR::ComboType>(selectedComboIndex + 1);
-			vr.currentComboName = comboTypes[selectedComboIndex];
-			vr.recordedCombo.clear();
+			vr.currentComboType = selectedConfig.comboType;
+			vr.currentComboName = selectedConfig.label;
 			vr.comboStartTime = Util::GetNowSecs();
-			vr.recordingButtonControllers.clear();
-		}
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Clear")) {
-			// Clear the selected combo
-			switch (selectedComboIndex) {
-			case 0:
-				settings.VRMenuOpenKeys.clear();
-				break;
-			case 1:
-				settings.VRMenuCloseKeys.clear();
-				break;
-			case 2:
-				settings.VROverlayOpenKeys.clear();
-				break;
-			case 3:
-				settings.VROverlayCloseKeys.clear();
-				break;
-			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Click to start recording a new button combination for the selected action.");
+			ImGui::TextUnformatted("Start recording a controller combination for the selected action.");
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Unbind Selected Action")) {
+			selectedConfig.combos->clear();
+			vr.ResetComboRecordingState();
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Disable the selected controller action. Save settings to persist the change.");
 		}
 		ImGui::Spacing();
 		ImGui::Separator();
@@ -2678,19 +2754,6 @@ namespace
 			ImGui::TableSetupColumn("Current Binding");
 			ImGui::TableSetupColumn("Description");
 			ImGui::TableHeadersRow();
-			// Define VR key binding configurations
-			struct VRKeyBindingConfig
-			{
-				const char* label;
-				std::vector<InputCombo>& combos;
-				const char* description;
-			};
-			std::vector<VRKeyBindingConfig> keyBindingConfigs = {
-				{ "Open Community Shaders Menu", settings.VRMenuOpenKeys, "Button combination to open the Community Shaders menu" },
-				{ "Close Community Shaders Menu", settings.VRMenuCloseKeys, "Button combination to close the Community Shaders menu" },
-				{ "Open VR Overlay", settings.VROverlayOpenKeys, "Button combination to open the VR overlay" },
-				{ "Close VR Overlay", settings.VROverlayCloseKeys, "Button combination to close the VR overlay" }
-			};
 			for (size_t row = 0; row < keyBindingConfigs.size(); ++row) {
 				const auto& config = keyBindingConfigs[row];
 				ImGui::TableNextRow();
@@ -2699,22 +2762,18 @@ namespace
 					ImU32 highlight = ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 0.0f, 0.15f));
 					ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, highlight);
 				}
-				// Make row selectable
 				ImGui::TableSetColumnIndex(0);
-				char selectableId[64];
-				snprintf(selectableId, sizeof(selectableId), "##combo_row_%zu", row);
 				bool rowSelected = (row == static_cast<size_t>(selectedComboIndex));
-				if (ImGui::Selectable(selectableId, rowSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap, ImVec2(0, 0))) {
+				if (ImGui::Selectable(config.label, rowSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
 					selectedComboIndex = static_cast<int>(row);
+					vr.ResetComboRecordingState();
 				}
-				ImGui::SameLine(0, 0);
-				ImGui::Text("%s", config.label);
 				// Current Binding column
 				ImGui::TableSetColumnIndex(1);
-				Util::DrawButtonCombo(config.combos, true);
+				Util::DrawButtonCombo(*config.combos, true);
 				// Description column
 				ImGui::TableSetColumnIndex(2);
-				ImGui::Text("%s", config.description);
+				ImGui::TextWrapped("%s", config.description);
 			}
 			ImGui::EndTable();
 		}
@@ -2725,9 +2784,10 @@ namespace
 			settings.VRMenuCloseKeys = VR::Settings::DefaultVRMenuCloseKeys();
 			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
 			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
+			vr.ResetComboRecordingState();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Reset all VR key bindings to their default values.");
+			ImGui::TextUnformatted("Reset all VR bindings. Performance Overlay actions are unbound by default to avoid accidental stick-click activation.");
 		}
 	}
 	void DrawDebugSection()
@@ -3627,10 +3687,7 @@ void VR::SubmitOverlayFrame()
 
 	// Update drag logic for all modes - only when overlay is visible
 	auto& enabled = globals::menu->IsEnabled;
-	auto& overlayVisible = globals::menu->overlayVisible;
-	const bool shouldShowAutoHide = ShouldShowAutoHideOverlay();
-	const bool shouldShowShaderCompilation = ShouldShowShaderCompilationInHMD();
-	const bool shouldRenderOverlay = enabled || overlayVisible || shouldShowAutoHide || shouldShowShaderCompilation;
+	const bool shouldRenderOverlay = ShouldPresentOverlayInHeadset();
 	static bool wasMenuEnabled = false;
 	const bool menuJustOpened = enabled && !wasMenuEnabled;
 	const bool menuJustClosed = !enabled && wasMenuEnabled;
@@ -3763,6 +3820,7 @@ void VR::SubmitOverlayFrame()
 			UpdateFixedWorldPositioning();
 			HideAllOverlays(gameOverlay);
 		} else {
+			bool vrOverlayPresented = false;
 			// Apply highlight tint to HMD overlay if it's being dragged
 			bool hmdBeingDragged = settings.EnableDragToReposition && overlayDragState.dragging &&
 			                       (overlayDragState.mode == OverlayDragState::DragMode::HMD ||
@@ -3774,14 +3832,15 @@ void VR::SubmitOverlayFrame()
 			vr::Texture_t tex = { menuTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
 			if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
 				Util::SetOverlayInputFlags(cleanOverlay, menuOverlayHandle);
-				vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuOverlayHandle, &tex);
-				if (err != vr::VROverlayError_None) {
-					logger::error("SetOverlayTexture failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				const vr::EVROverlayError textureError = cleanOverlay->SetOverlayTexture(menuOverlayHandle, &tex);
+				if (textureError != vr::VROverlayError_None) {
+					logger::error("SetOverlayTexture failed for menu overlay: {} ({})", static_cast<int>(textureError), magic_enum::enum_name(textureError));
 				}
-				err = cleanOverlay->ShowOverlay(menuOverlayHandle);
-				if (err != vr::VROverlayError_None) {
-					logger::error("ShowOverlay failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				const vr::EVROverlayError showError = cleanOverlay->ShowOverlay(menuOverlayHandle);
+				if (showError != vr::VROverlayError_None) {
+					logger::error("ShowOverlay failed for menu overlay: {} ({})", static_cast<int>(showError), magic_enum::enum_name(showError));
 				}
+				vrOverlayPresented = textureError == vr::VROverlayError_None && showError == vr::VROverlayError_None;
 			} else if (menuOverlayHandle != vr::k_ulOverlayHandleInvalid) {
 				cleanOverlay->HideOverlay(menuOverlayHandle);
 			}
@@ -3792,16 +3851,21 @@ void VR::SubmitOverlayFrame()
 
 				vr::Texture_t controllerTex = { menuControllerTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
 				Util::SetOverlayInputFlags(cleanOverlay, menuControllerOverlayHandle);
-				vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuControllerOverlayHandle, &controllerTex);
-				if (err != vr::VROverlayError_None) {
-					logger::error("SetOverlayTexture failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				const vr::EVROverlayError textureError = cleanOverlay->SetOverlayTexture(menuControllerOverlayHandle, &controllerTex);
+				if (textureError != vr::VROverlayError_None) {
+					logger::error("SetOverlayTexture failed for controller overlay: {} ({})", static_cast<int>(textureError), magic_enum::enum_name(textureError));
 				}
-				err = cleanOverlay->ShowOverlay(menuControllerOverlayHandle);
-				if (err != vr::VROverlayError_None) {
-					logger::error("ShowOverlay failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				const vr::EVROverlayError showError = cleanOverlay->ShowOverlay(menuControllerOverlayHandle);
+				if (showError != vr::VROverlayError_None) {
+					logger::error("ShowOverlay failed for controller overlay: {} ({})", static_cast<int>(showError), magic_enum::enum_name(showError));
 				}
+				vrOverlayPresented = vrOverlayPresented ||
+				                     (textureError == vr::VROverlayError_None && showError == vr::VROverlayError_None);
 			} else if (menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid) {
 				cleanOverlay->HideOverlay(menuControllerOverlayHandle);
+			}
+			if (vrOverlayPresented) {
+				MarkAutoHideOverlayPresented();
 			}
 		}
 

@@ -67,6 +67,10 @@ namespace Util
 			ImGui::PopStyleColor();
 			anyDrawn = true;
 		}
+		if (!anyDrawn) {
+			ImGui::TextDisabled("Unbound");
+			return;
+		}
 		if (showControllerLabels && anyDrawn) {
 			ImVec4 labelColor = Util::GetControllerDefaultColor();
 			const char* label = "";
@@ -88,13 +92,11 @@ namespace Util
 				ImGui::TextColored(labelColor, "%s", label);
 			}
 		}
-		if (anyDrawn) {
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				Util::DrawColoredMultiLineTooltip({ { "Color coding:", Util::GetControllerDefaultColor() },
-					{ "Yellow = Primary controller", Util::GetControllerPrimaryColor() },
-					{ "Blue = Secondary controller", Util::GetControllerSecondaryColor() },
-					{ "Green = Both controllers (Yellow + Blue)", Util::GetControllerBothColor() } });
-			}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			Util::DrawColoredMultiLineTooltip({ { "Color coding:", Util::GetControllerDefaultColor() },
+				{ "Yellow = Primary controller", Util::GetControllerPrimaryColor() },
+				{ "Blue = Secondary controller", Util::GetControllerSecondaryColor() },
+				{ "Green = Both controllers (Yellow + Blue)", Util::GetControllerBothColor() } });
 		}
 	}
 

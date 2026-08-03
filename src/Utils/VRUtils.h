@@ -45,6 +45,7 @@ namespace Util
 	 * - Yellow: Primary controller
 	 * - Blue: Secondary controller
 	 * - Green: Both controllers
+	 * - Empty or invalid combinations: explicit "Unbound" status
 	 *
 	 * @example
 	 * ```cpp

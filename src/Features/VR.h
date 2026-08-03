@@ -285,23 +285,19 @@ public:
 
 		static std::vector<ButtonCombo> DefaultVROverlayOpenKeys()
 		{
-			return {
-				ButtonCombo::Primary(kButtonJoystickTrigger)
-			};
+			return {};
 		}
 
 		static std::vector<ButtonCombo> DefaultVROverlayCloseKeys()
 		{
-			return {
-				ButtonCombo::Secondary(kButtonJoystickTrigger)
-			};
+			return {};
 		}
 
 		// Key binding configurations
 		std::vector<ButtonCombo> VRMenuOpenKeys = DefaultVRMenuOpenKeys();          ///< Button combos to open VR menu
 		std::vector<ButtonCombo> VRMenuCloseKeys = DefaultVRMenuCloseKeys();        ///< Button combos to close VR menu
-		std::vector<ButtonCombo> VROverlayOpenKeys = DefaultVROverlayOpenKeys();    ///< Button combos to open VR overlay
-		std::vector<ButtonCombo> VROverlayCloseKeys = DefaultVROverlayCloseKeys();  ///< Button combos to close VR overlay
+		std::vector<ButtonCombo> VROverlayOpenKeys = DefaultVROverlayOpenKeys();    ///< Button combos to show the Performance Overlay
+		std::vector<ButtonCombo> VROverlayCloseKeys = DefaultVROverlayCloseKeys();  ///< Button combos to hide the Performance Overlay
 
 		// General interaction settings
 		float comboTimeout = Config::kDefaultComboTimeout;       ///< Timeout for button combo sequences (1.0-10.0 seconds)
@@ -434,7 +430,10 @@ public:
 	void SubmitControllerOverlay(OverlayRenderContext& context);
 	void HideAllOverlays(vr::IVROverlay* gameOverlay);
 	bool ShouldShowAutoHideOverlay() const;
+	void MarkAutoHideOverlayPresented();
+	bool ShouldPresentOverlayInHeadset() const;
 	bool ShouldUseInSceneOverlay() const;
+	bool CanOpenMenuFromWorld() const;
 
 	void UpdateOverlayDrag();
 	bool CanPerformDrag();
@@ -455,6 +454,7 @@ public:
 	winrt::com_ptr<ID3D11RenderTargetView> menuRTV;
 	winrt::com_ptr<ID3D11Texture2D> menuControllerTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> menuControllerRTV;
+	mutable double autoHideOverlayStartTimeSecs = 0.0;  ///< Starts after the welcome frame can first reach the headset
 
 	// Post-composite stereo blend resources, created lazily when the advanced option is enabled.
 	winrt::com_ptr<ID3D11ComputeShader> stereoBlendCS;
@@ -650,8 +650,19 @@ public:
 	bool CanUseWandPointing() const { return !settings.UseRuntimeDefaultMenuNavigation && settings.EnableWandPointing; }
 	void InitInSceneResources();
 	void EnsureInSceneOverlaySubmitCopyResources();
-	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV = nullptr);
-	void CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* targetTexture, ID3D11UnorderedAccessView* targetUAV, const D3D11_TEXTURE2D_DESC& targetDesc, const vr::VRTextureBounds_t* bounds);
+	void RenderInSceneOverlay(
+		vr::EVREye eye,
+		ID3D11Texture2D* targetTexture,
+		const vr::VRTextureBounds_t* bounds,
+		ID3D11RenderTargetView* targetRTV = nullptr,
+		bool* overlayComposited = nullptr);
+	void CompositeInSceneOverlaySubmitTexture(
+		vr::EVREye eye,
+		ID3D11Texture2D* targetTexture,
+		ID3D11UnorderedAccessView* targetUAV,
+		const D3D11_TEXTURE2D_DESC& targetDesc,
+		const vr::VRTextureBounds_t* bounds,
+		bool* overlayComposited = nullptr);
 	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
 	bool InstallSubmitHook(bool a_enableProcessing = true);
 	bool GetGripPressed(bool isLeft, bool isRight) const;

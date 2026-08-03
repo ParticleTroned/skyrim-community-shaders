@@ -119,8 +119,7 @@ namespace
 	bool ShouldRenderInSceneMenu(const VR& vr)
 	{
 		return vr.ShouldUseInSceneOverlay() &&
-		       globals::menu &&
-		       (globals::menu->IsEnabled || globals::menu->overlayVisible) &&
+		       vr.ShouldPresentOverlayInHeadset() &&
 		       vr.menuTexture &&
 		       vr.settings.attachMode != AttachMode::None;
 	}
@@ -1180,11 +1179,18 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						}
 						refreshOriginalSubmitDecision();
 						if (!nativeRestoreGuardActive) {
+							bool inSceneOverlayComposited = false;
 							if (postLoadReleaseToken == 0 &&
 								ShouldRenderInSceneMenu(vr) &&
 								upscaledTexture.handle &&
-								upscaledTexture.eType == vr::TextureType_DirectX)
-								vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
+								upscaledTexture.eType == vr::TextureType_DirectX) {
+								vr.RenderInSceneOverlay(
+									eEye,
+									static_cast<ID3D11Texture2D*>(upscaledTexture.handle),
+									&upscaledBounds,
+									nullptr,
+									&inSceneOverlayComposited);
+							}
 							const auto result = submit(
 								"upscaled",
 								&upscaledTexture,
@@ -1193,8 +1199,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 								postLoadReleaseToken,
 								0,
 								&presentationObservation);
-							if (result == vr::VRCompositorError_None)
+							if (result == vr::VRCompositorError_None) {
 								upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
+								if (inSceneOverlayComposited) {
+									vr.MarkAutoHideOverlayPresented();
+								}
+							}
 							return result;
 						}
 					}
@@ -1330,11 +1340,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
-						return submit(
+						const auto result = submit(
 							"in-scene-overlay",
 							&overlayTexture,
 							pBounds,
 							nSubmitFlags);
+						if (result == vr::VRCompositorError_None) {
+							vr.MarkAutoHideOverlayPresented();
+						}
+						return result;
 					}
 				}
 			}
@@ -1644,8 +1658,11 @@ void VR::InitInSceneResources()
 	logger::debug("VR: In-Scene Overlay resources initialized.");
 }
 
-void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV)
+void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV, bool* overlayComposited)
 {
+	if (overlayComposited) {
+		*overlayComposited = false;
+	}
 	auto context = globals::d3d::context;
 	if (!context || !targetTexture) {
 		return;
@@ -1888,13 +1905,15 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		textureInfoLogged[eyeIdx] = true;
 	}
 
+	bool overlayDrawn = false;
+
 	// Helper to draw the overlay quad with a given WVP matrix
 	auto drawOverlayQuad = [&](ID3D11DeviceContext* ctx,
 							   const InSceneCB& cbData,
 							   ID3D11Texture2D* texture,
 							   winrt::com_ptr<ID3D11ShaderResourceView>& srv,
 							   ID3D11Texture2D*& cachedTexture,
-							   const char* label) {
+							   const char* label) -> bool {
 		D3D11_MAPPED_SUBRESOURCE mappedResource;
 		if (SUCCEEDED(ctx->Map(inSceneResources.cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {
 			memcpy(mappedResource.pData, &cbData, sizeof(InSceneCB));
@@ -1924,7 +1943,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		ctx->RSSetState(inSceneResources.rasterizerState.get());
 
 		if (!EnsureMenuTextureSRV(texture, srv, cachedTexture, label)) {
-			return;
+			return false;
 		}
 		ID3D11ShaderResourceView* srvPtr = srv.get();
 		ctx->PSSetShaderResources(0, 1, &srvPtr);
@@ -1933,6 +1952,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		ctx->PSSetSamplers(0, 1, &sampler);
 
 		ctx->DrawIndexed(6, 0, 0);
+		return true;
 	};
 
 	// --- Render HMD Overlay ---
@@ -1951,13 +1971,13 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		}
 		cbData.wvp = (modelMatrix * vp).Transpose();
 
-		drawOverlayQuad(
+		overlayDrawn = drawOverlayQuad(
 			context,
 			cbData,
 			menuTexture.get(),
 			inSceneResources.menuSRV,
 			inSceneResources.cachedMenuTexture,
-			"HMD");
+			"HMD") || overlayDrawn;
 	}
 
 	// --- Render Controller Overlay ---
@@ -1987,21 +2007,21 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 					InSceneCB cbData;
 					cbData.wvp = (modelMatrix * vpWorldSpace).Transpose();
 					if (menuControllerTexture) {
-						drawOverlayQuad(
+						overlayDrawn = drawOverlayQuad(
 							context,
 							cbData,
 							menuControllerTexture.get(),
 							inSceneResources.menuControllerSRV,
 							inSceneResources.cachedMenuControllerTexture,
-							"controller");
+							"controller") || overlayDrawn;
 					} else {
-						drawOverlayQuad(
+						overlayDrawn = drawOverlayQuad(
 							context,
 							cbData,
 							menuTexture.get(),
 							inSceneResources.menuSRV,
 							inSceneResources.cachedMenuTexture,
-							"HMD");
+							"HMD") || overlayDrawn;
 					}
 				}
 			}
@@ -2026,10 +2046,16 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			oldRTVs[i]->Release();
 	if (oldDSV)
 		oldDSV->Release();
+	if (overlayComposited) {
+		*overlayComposited = overlayDrawn;
+	}
 }
 
-void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* targetTexture, ID3D11UnorderedAccessView* targetUAV, const D3D11_TEXTURE2D_DESC& targetDesc, const vr::VRTextureBounds_t* bounds)
+void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* targetTexture, ID3D11UnorderedAccessView* targetUAV, const D3D11_TEXTURE2D_DESC& targetDesc, const vr::VRTextureBounds_t* bounds, bool* overlayComposited)
 {
+	if (overlayComposited) {
+		*overlayComposited = false;
+	}
 	auto* context = globals::d3d::context;
 	auto* device = globals::d3d::device;
 	if (!context || !device || !targetTexture || !targetUAV || !menuTexture || !inSceneResources.initialized || !inSceneResources.submitCompositeCS || !inSceneResources.submitCompositeCB || !inSceneResources.sampler) {
@@ -2237,6 +2263,9 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	context->CSSetSamplers(0, 1, &sampler);
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->Dispatch((cbData.dispatchSize[0] + 7) / 8, (cbData.dispatchSize[1] + 7) / 8, 1);
+	if (overlayComposited) {
+		*overlayComposited = true;
+	}
 
 	ID3D11ShaderResourceView* nullSRV = nullptr;
 	ID3D11UnorderedAccessView* nullUAV = nullptr;
@@ -2393,7 +2422,17 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 	}
 
 	context->CopyResource(submitCopy.texture.get(), sourceTexture.get());
-	CompositeInSceneOverlaySubmitTexture(eye, submitCopy.texture.get(), submitCopy.uav.get(), sourceDesc, bounds);
+	bool overlayComposited = false;
+	CompositeInSceneOverlaySubmitTexture(
+		eye,
+		submitCopy.texture.get(),
+		submitCopy.uav.get(),
+		sourceDesc,
+		bounds,
+		&overlayComposited);
+	if (!overlayComposited) {
+		return false;
+	}
 
 	outputTexture = *inputTexture;
 	outputTexture.handle = submitCopy.texture.get();

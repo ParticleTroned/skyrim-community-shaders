@@ -41,9 +41,6 @@ namespace
 	constexpr double kTuningHighlightSeconds = 4.0;
 	constexpr double kFeatureCostMeasurementSeconds =
 		PerformanceTuning::kMeasurementDurationMs / 1000.0;
-	constexpr double kFeatureCostStabilityWindowMilliseconds = 500.0;
-	constexpr double kFeatureCostStabilityTimeoutSeconds = 12.0;
-	constexpr int kFeatureCostStableComparisonCount = 2;
 	constexpr double kFeatureCostTransitionTimeoutSeconds = 20.0;
 	constexpr double kFeatureCostSampleProgressTimeoutSeconds = 8.0;
 	constexpr double kFeatureCostProfilerDrainTimeoutSeconds = 2.0;
@@ -83,23 +80,6 @@ namespace
 		std::unordered_map<std::string, FeatureHighlightDirection> featureDirections;
 	};
 
-	struct FeatureCostStabilityWindow
-	{
-		double sampledDurationMs = 0.0;
-		PerformanceTuning::Moments present;
-	};
-
-	struct FeatureCostStabilityState
-	{
-		FeatureCostStabilityWindow previousWindow;
-		FeatureCostStabilityWindow currentWindow;
-		bool hasPreviousWindow = false;
-		int consecutiveStableComparisons = 0;
-		uint64_t lastSampleId = 0;
-		bool monitoringStarted = false;
-		double monitoringStartTime = 0.0;
-	};
-
 	enum class FeatureCostMeasurementLeg
 	{
 		CurrentBefore,
@@ -115,13 +95,6 @@ namespace
 		Draining,
 		Complete,
 		Failed
-	};
-
-	enum class FeatureCostStabilityResult
-	{
-		Pending,
-		Stable,
-		TimedOut
 	};
 
 	enum class PerformanceUserDefaultsRestoreResult
@@ -151,7 +124,6 @@ namespace
 		uint64_t settleStartPresentSampleId = 0;
 		uint64_t lastObservedPresentSampleId = 0;
 		bool continuouslyReady = false;
-		FeatureCostStabilityState stability;
 		PerformanceTuning::SampleWindow currentBefore;
 		PerformanceTuning::SampleWindow comparison;
 		PerformanceTuning::SampleWindow currentAfter;
@@ -979,95 +951,6 @@ namespace
 		return settingsRestored;
 	}
 
-	bool AreFeatureCostStabilityWindowsEquivalent(
-		const FeatureCostStabilityWindow& previous,
-		const FeatureCostStabilityWindow& current)
-	{
-		return PerformanceTuning::AreMomentsEquivalent(
-			previous.present,
-			current.present);
-	}
-
-	bool CompleteFeatureCostStabilityWindow(FeatureCostStabilityState& stability)
-	{
-		if (!stability.hasPreviousWindow) {
-			stability.previousWindow = stability.currentWindow;
-			stability.currentWindow = {};
-			stability.hasPreviousWindow = true;
-			return false;
-		}
-
-		if (AreFeatureCostStabilityWindowsEquivalent(
-				stability.previousWindow,
-				stability.currentWindow)) {
-			stability.consecutiveStableComparisons++;
-		} else {
-			stability.consecutiveStableComparisons = 0;
-			stability.previousWindow = stability.currentWindow;
-		}
-
-		stability.currentWindow = {};
-		return stability.consecutiveStableComparisons >=
-		       kFeatureCostStableComparisonCount;
-	}
-
-	FeatureCostStabilityResult UpdateFeatureCostStability(
-		FeatureCostStabilityState& stability,
-		const ProfilingRenderer::PerformanceTimingSummary& summary,
-		double currentTime)
-	{
-		if (!stability.monitoringStarted) {
-			stability.monitoringStarted = true;
-			stability.monitoringStartTime = currentTime;
-			stability.lastSampleId = summary.presentIntervalSampleId;
-			return FeatureCostStabilityResult::Pending;
-		}
-
-		if (currentTime - stability.monitoringStartTime >=
-			kFeatureCostStabilityTimeoutSeconds) {
-			return FeatureCostStabilityResult::TimedOut;
-		}
-
-		if (!summary.hasPresentIntervalSample ||
-			summary.presentIntervalSampleId == 0 ||
-			summary.presentIntervalSampleId == stability.lastSampleId) {
-			return FeatureCostStabilityResult::Pending;
-		}
-		if (summary.presentIntervalSampleId < stability.lastSampleId)
-			return FeatureCostStabilityResult::TimedOut;
-
-		stability.lastSampleId = summary.presentIntervalSampleId;
-		if (!std::isfinite(summary.presentIntervalSampleMs) ||
-			summary.presentIntervalSampleMs <= 0.0f) {
-			return FeatureCostStabilityResult::Pending;
-		}
-
-		const double presentMs = summary.presentIntervalSampleMs;
-		double remainingSampleWeight = 1.0;
-		while (remainingSampleWeight > 1.0e-9) {
-			auto& window = stability.currentWindow;
-			const double remainingWindowMs =
-				kFeatureCostStabilityWindowMilliseconds - window.sampledDurationMs;
-			const double sampleWeight =
-				std::min(remainingSampleWeight, remainingWindowMs / presentMs);
-			if (sampleWeight <= 0.0)
-				break;
-
-			window.sampledDurationMs = std::min(
-				kFeatureCostStabilityWindowMilliseconds,
-				window.sampledDurationMs + presentMs * sampleWeight);
-			window.present.Add(presentMs, sampleWeight);
-			remainingSampleWeight -= sampleWeight;
-
-			if (window.sampledDurationMs >=
-					kFeatureCostStabilityWindowMilliseconds &&
-				CompleteFeatureCostStabilityWindow(stability)) {
-				return FeatureCostStabilityResult::Stable;
-			}
-		}
-		return FeatureCostStabilityResult::Pending;
-	}
-
 	bool TryRestoreFeatureCostOriginalState(
 		Feature* feature,
 		FeatureCostMeasurementState& state)
@@ -1109,7 +992,6 @@ namespace
 	{
 		const bool restored = TryRestoreFeatureCostOriginalState(feature, state);
 		state.stage = FeatureCostMeasurementStage::Failed;
-		state.stability = {};
 		state.failureReason = std::move(reason);
 		if (!restored) {
 			if (!state.failureReason.empty())
@@ -1159,7 +1041,6 @@ namespace
 		state.settleStartPresentSampleId = summary.presentIntervalSampleId;
 		state.lastObservedPresentSampleId = summary.presentIntervalSampleId;
 		state.continuouslyReady = false;
-		state.stability = {};
 	}
 
 	bool ApplyFeatureCostComparisonState(
@@ -1263,17 +1144,6 @@ namespace
 		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		double currentTime)
 	{
-		auto& window = GetFeatureCostSampleWindow(state);
-		if (!PerformanceTuning::IsInternallyStable(window)) {
-			FailFeatureCostMeasurement(
-				feature,
-				state,
-				T(
-					TKEY("error.window_drift"),
-					"Stopped because timings drifted during a measurement window."));
-			return false;
-		}
-
 		if (state.leg == FeatureCostMeasurementLeg::CurrentBefore) {
 			if (!ApplyFeatureCostComparisonState(feature, state)) {
 				FailFeatureCostMeasurement(
@@ -1310,18 +1180,6 @@ namespace
 			return true;
 		}
 
-		if (!PerformanceTuning::AreCurrentWindowsEquivalent(
-				state.currentBefore,
-				state.currentAfter)) {
-			FailFeatureCostMeasurement(
-				feature,
-				state,
-				T(
-					TKEY("error.aba_drift"),
-					"Stopped because the two current-state windows did not agree."));
-			return false;
-		}
-
 		state.result = PerformanceTuning::CalculateCostResult(
 			state.currentBefore,
 			state.comparison,
@@ -1352,7 +1210,6 @@ namespace
 		state.resultScene = CaptureSceneFingerprint();
 		state.hasResultScene = true;
 		state.stage = FeatureCostMeasurementStage::Complete;
-		state.stability = {};
 		return true;
 	}
 
@@ -1459,7 +1316,6 @@ namespace
 				state.continuousReadyStartTime = 0.0;
 				state.settleStartPresentSampleId =
 					summary.presentIntervalSampleId;
-				state.stability = {};
 				return;
 			}
 			if (!state.continuouslyReady) {
@@ -1467,7 +1323,6 @@ namespace
 				state.continuousReadyStartTime = currentTime;
 				state.settleStartPresentSampleId =
 					summary.presentIntervalSampleId;
-				state.stability = {};
 				return;
 			}
 
@@ -1496,22 +1351,8 @@ namespace
 				return;
 			}
 
-			const auto stabilityResult = UpdateFeatureCostStability(
-				state.stability,
-				summary,
-				currentTime);
-			if (stabilityResult == FeatureCostStabilityResult::TimedOut) {
-				FailFeatureCostMeasurement(
-					feature,
-					state,
-					T(
-						TKEY("error.stability_timeout"),
-						"Stopped because frame timings did not stabilize."));
-				return;
-			}
-			if (stabilityResult != FeatureCostStabilityResult::Stable)
-				return;
-
+			// Do not wait for quiet frame timings here. The completed A-B-A
+			// confidence interval accounts for timing variation in the scene.
 			auto& window = GetFeatureCostSampleWindow(state);
 			PerformanceTuning::BeginSampleWindow(
 				window,
@@ -1521,7 +1362,6 @@ namespace
 			state.stage = FeatureCostMeasurementStage::Measuring;
 			state.stageStartTime = currentTime;
 			state.lastProgressTime = currentTime;
-			state.stability = {};
 			return;
 		}
 
@@ -1626,6 +1466,18 @@ namespace
 		if (!result.hasFps || !result.fpsSignificant)
 			return 0;
 		return result.fpsDelta < 0.0 ? 1 : -1;
+	}
+
+	bool HasStatisticallyInsignificantFeatureCostValue(
+		const PerformanceTuning::CostResult& result)
+	{
+		const auto isInsignificant = [](const PerformanceTuning::MetricDelta& metric) {
+			return metric.available && !metric.statisticallySignificant;
+		};
+		return isInsignificant(result.present) ||
+		       isInsignificant(result.wholeFrameGpu) ||
+		       isInsignificant(result.wholeFrameCpu) ||
+		       (result.hasFps && !result.fpsStatisticallySignificant);
 	}
 
 	bool TryGetDisplayTimingMs(bool hasTiming, float timingMs, float& value)
@@ -1799,13 +1651,7 @@ namespace
 			ImGui::TextDisabled(
 				T(TKEY("status.settling"), "Settling %s"),
 				GetFeatureCostLegStatusLabel(state));
-			if (state.stability.monitoringStarted) {
-				ImGui::SameLine();
-				ImGui::TextDisabled(
-					T(TKEY("status.stability"), "stability %d/%d"),
-					state.stability.consecutiveStableComparisons,
-					kFeatureCostStableComparisonCount);
-			} else if (feature) {
+			if (feature) {
 				ImGui::SameLine();
 				ImGui::TextDisabled(
 					"%s",
@@ -1910,7 +1756,7 @@ namespace
 				"%s",
 				T(
 					TKEY("cost.tooltip_stability"),
-					"Each state must settle first. Both halves of every window and both current-state windows must agree, otherwise the result is rejected."));
+					"Each feature state gets its required settle time and pipeline drain before capture. Timing variation within a window and between the two current-state windows widens the 95% confidence interval instead of discarding the measurement."));
 			ImGui::TextWrapped(
 				T(TKEY("cost.comparison"), "Comparison: %s - %s"),
 				config.comparisonLabel.data(),
@@ -1958,7 +1804,7 @@ namespace
 				"%s",
 				T(
 					TKEY("result.tooltip"),
-					"Values are current minus comparison with a 95% uncertainty margin. Changes smaller than both the uncertainty margin and 0.099 ms are inconclusive. Total always comes directly from Present-to-Present timing, never from added profiler passes."));
+					"Values are current minus comparison with a 95% uncertainty margin that includes variation within each window and between the two current-state windows. Changes must exceed both the uncertainty margin and 0.099 ms to be conclusive. Total always comes directly from Present-to-Present timing, never from added profiler passes."));
 		}
 		RenderCostMetric(
 			T(TKEY("result.total"), "Game frame"),
@@ -1991,6 +1837,14 @@ namespace
 						" (inconclusive)"));
 			if (direction != 0)
 				ImGui::PopStyleColor();
+		}
+
+		if (HasStatisticallyInsignificantFeatureCostValue(state.result)) {
+			ImGui::Spacing();
+			Util::Text::WrappedWarning(
+				T(
+					TKEY("result.significance_warning"),
+					"One or more 95% confidence intervals include zero. Treat those measured differences as unconfirmed."));
 		}
 
 		if (state.result.presentSynced) {

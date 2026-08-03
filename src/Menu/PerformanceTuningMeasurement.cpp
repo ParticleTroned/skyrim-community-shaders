@@ -24,19 +24,96 @@ namespace PerformanceTuning
 			secondHalf.Add(value, contribution.secondHalfWeight);
 		}
 
+		struct MetricWindowMoments
+		{
+			const Moments& total;
+			const Moments& firstHalf;
+			const Moments& secondHalf;
+		};
+
+		MetricWindowMoments GetPresentWindow(const SampleWindow& window)
+		{
+			return {
+				window.present,
+				window.firstHalfPresent,
+				window.secondHalfPresent
+			};
+		}
+
+		MetricWindowMoments GetWholeFrameGpuWindow(const SampleWindow& window)
+		{
+			return {
+				window.wholeFrameGpu,
+				window.firstHalfWholeFrameGpu,
+				window.secondHalfWholeFrameGpu
+			};
+		}
+
+		MetricWindowMoments GetWholeFrameCpuWindow(const SampleWindow& window)
+		{
+			return {
+				window.wholeFrameCpu,
+				window.firstHalfWholeFrameCpu,
+				window.secondHalfWholeFrameCpu
+			};
+		}
+
+		double CalculateWindowMeanVariance(const MetricWindowMoments& window)
+		{
+			const double standardError = window.total.StandardError();
+			const double standardErrorVariance =
+				standardError * standardError;
+			if (window.firstHalf.sampleWeight <= 0.0 ||
+				window.secondHalf.sampleWeight <= 0.0) {
+				return standardErrorVariance;
+			}
+
+			const double halfSampleWeight =
+				window.firstHalf.sampleWeight + window.secondHalf.sampleWeight;
+			const double firstHalfWeight =
+				window.firstHalf.sampleWeight / halfSampleWeight;
+			const double secondHalfWeight =
+				window.secondHalf.sampleWeight / halfSampleWeight;
+			const double firstHalfError = window.firstHalf.StandardError();
+			const double secondHalfError = window.secondHalf.StandardError();
+			const double samplingVariance =
+				firstHalfWeight * firstHalfWeight *
+					firstHalfError * firstHalfError +
+				secondHalfWeight * secondHalfWeight *
+					secondHalfError * secondHalfError;
+			const double halfMeanDifference =
+				window.firstHalf.Mean() - window.secondHalf.Mean();
+			// Treat the two half-window means as repeated estimates. Any gap
+			// beyond their sampling error contributes temporal variance to the
+			// window mean instead of rejecting the captured window.
+			const double temporalVariance = std::max(
+				0.0,
+				(halfMeanDifference * halfMeanDifference -
+				 firstHalfError * firstHalfError -
+				 secondHalfError * secondHalfError) *
+					0.5);
+			const double temporalMeanVariance =
+				(firstHalfWeight * firstHalfWeight +
+				 secondHalfWeight * secondHalfWeight) *
+				temporalVariance;
+			return std::max(
+				standardErrorVariance,
+				samplingVariance + temporalMeanVariance);
+		}
+
 		double CalculateCurrentMeanVariance(
-			const Moments& currentBefore,
-			const Moments& currentAfter)
+			const MetricWindowMoments& currentBefore,
+			const MetricWindowMoments& currentAfter)
 		{
 			const double withinCurrentVariance =
-				(currentBefore.StandardError() *
-					 currentBefore.StandardError() +
-				 currentAfter.StandardError() *
-					 currentAfter.StandardError()) *
+				(CalculateWindowMeanVariance(currentBefore) +
+				 CalculateWindowMeanVariance(currentAfter)) *
 				0.25;
 			const double currentMeanDifference =
-				currentBefore.Mean() -
-				currentAfter.Mean();
+				currentBefore.total.Mean() -
+				currentAfter.total.Mean();
+			// The two A windows are the repeated current-state observations in
+			// A-B-A. Restored-state drift therefore widens the same interval.
 			const double betweenCurrentVariance =
 				currentMeanDifference *
 				currentMeanDifference *
@@ -47,31 +124,35 @@ namespace PerformanceTuning
 		}
 
 		MetricDelta CalculateMetricDelta(
-			const Moments& currentBefore,
-			const Moments& comparison,
-			const Moments& currentAfter,
+			const MetricWindowMoments& currentBefore,
+			const MetricWindowMoments& comparison,
+			const MetricWindowMoments& currentAfter,
 			double minimumMeaningfulDeltaMs,
 			bool available)
 		{
 			MetricDelta result;
 			result.available = available &&
-			                   currentBefore.sampleWeight > 0.0 &&
-			                   comparison.sampleWeight > 0.0 &&
-			                   currentAfter.sampleWeight > 0.0;
+			                   currentBefore.total.sampleWeight > 0.0 &&
+			                   comparison.total.sampleWeight > 0.0 &&
+			                   currentAfter.total.sampleWeight > 0.0;
 			if (!result.available)
 				return result;
 
-			const double currentMean = (currentBefore.Mean() + currentAfter.Mean()) * 0.5;
-			result.valueMs = currentMean - comparison.Mean();
+			const double currentMean =
+				(currentBefore.total.Mean() + currentAfter.total.Mean()) * 0.5;
+			result.valueMs = currentMean - comparison.total.Mean();
 
 			const double currentVariance =
 				CalculateCurrentMeanVariance(
 					currentBefore,
 					currentAfter);
 			const double comparisonVariance =
-				comparison.StandardError() * comparison.StandardError();
-			result.margin95Ms = 1.96 * std::sqrt(std::max(0.0, currentVariance + comparisonVariance));
+				CalculateWindowMeanVariance(comparison);
+			result.margin95Ms = k95PercentConfidenceZScore *
+			                    std::sqrt(std::max(0.0, currentVariance + comparisonVariance));
 			result.significanceThresholdMs = std::max(minimumMeaningfulDeltaMs, result.margin95Ms);
+			result.statisticallySignificant =
+				std::abs(result.valueMs) > result.margin95Ms;
 			result.significant = std::abs(result.valueMs) > result.significanceThresholdMs;
 			return result;
 		}
@@ -109,32 +190,6 @@ namespace PerformanceTuning
 	double Moments::StandardError() const
 	{
 		return sampleWeight > 0.0 ? StandardDeviation() / std::sqrt(sampleWeight) : 0.0;
-	}
-
-	bool AreMomentsEquivalent(
-		const Moments& lhs,
-		const Moments& rhs,
-		const StabilityTolerance& tolerance)
-	{
-		if (lhs.sampleWeight < tolerance.minimumSampleWeight ||
-			rhs.sampleWeight < tolerance.minimumSampleWeight) {
-			return false;
-		}
-
-		const double lhsMean = lhs.Mean();
-		const double rhsMean = rhs.Mean();
-		const double meanTolerance = std::max(
-			tolerance.meanAbsoluteMs,
-			std::max(lhsMean, rhsMean) * tolerance.meanRelative);
-		if (std::abs(lhsMean - rhsMean) > meanTolerance)
-			return false;
-
-		const double lhsDeviation = lhs.StandardDeviation();
-		const double rhsDeviation = rhs.StandardDeviation();
-		const double deviationTolerance = std::max(
-			tolerance.deviationAbsoluteMs,
-			std::max(lhsDeviation, rhsDeviation) * tolerance.deviationRelative);
-		return std::abs(lhsDeviation - rhsDeviation) <= deviationTolerance;
 	}
 
 	void BeginSampleWindow(
@@ -299,54 +354,6 @@ namespace PerformanceTuning
 			       kSampleWeightEpsilon;
 	}
 
-	bool IsInternallyStable(const SampleWindow& window, const StabilityTolerance& tolerance)
-	{
-		if (!AreMomentsEquivalent(window.firstHalfPresent, window.secondHalfPresent, tolerance))
-			return false;
-
-		auto optionalMetricStable = [&](const Moments& total, const Moments& firstHalf, const Moments& secondHalf) {
-			if (!HasCompleteMetricCoverage(window, total))
-				return true;
-			return AreMomentsEquivalent(firstHalf, secondHalf, tolerance);
-		};
-
-		return optionalMetricStable(
-				   window.wholeFrameGpu,
-				   window.firstHalfWholeFrameGpu,
-				   window.secondHalfWholeFrameGpu) &&
-		       optionalMetricStable(
-				   window.wholeFrameCpu,
-				   window.firstHalfWholeFrameCpu,
-				   window.secondHalfWholeFrameCpu);
-	}
-
-	bool AreCurrentWindowsEquivalent(
-		const SampleWindow& before,
-		const SampleWindow& after,
-		const StabilityTolerance& tolerance)
-	{
-		if (!AreMomentsEquivalent(before.present, after.present, tolerance))
-			return false;
-
-		auto optionalMetricEquivalent = [&](const Moments& lhs, const Moments& rhs, bool lhsComplete, bool rhsComplete) {
-			// Query availability is not itself a scene-stability signal. If either
-			// current window lacks full coverage, the metric is omitted from the
-			// final A-B-A result and Present timing remains authoritative.
-			return !lhsComplete || !rhsComplete || AreMomentsEquivalent(lhs, rhs, tolerance);
-		};
-
-		return optionalMetricEquivalent(
-				   before.wholeFrameGpu,
-				   after.wholeFrameGpu,
-				   HasCompleteMetricCoverage(before, before.wholeFrameGpu),
-				   HasCompleteMetricCoverage(after, after.wholeFrameGpu)) &&
-		       optionalMetricEquivalent(
-				   before.wholeFrameCpu,
-				   after.wholeFrameCpu,
-				   HasCompleteMetricCoverage(before, before.wholeFrameCpu),
-				   HasCompleteMetricCoverage(after, after.wholeFrameCpu));
-	}
-
 	bool IsFramePaced(const SampleWindow& window)
 	{
 		return window.framePacingInferenceValid &&
@@ -367,10 +374,13 @@ namespace PerformanceTuning
 		double minimumMeaningfulDeltaMs)
 	{
 		CostResult result;
+		const auto currentBeforePresent = GetPresentWindow(currentBefore);
+		const auto comparisonPresent = GetPresentWindow(comparison);
+		const auto currentAfterPresent = GetPresentWindow(currentAfter);
 		result.present = CalculateMetricDelta(
-			currentBefore.present,
-			comparison.present,
-			currentAfter.present,
+			currentBeforePresent,
+			comparisonPresent,
+			currentAfterPresent,
 			minimumMeaningfulDeltaMs,
 			true);
 
@@ -379,9 +389,9 @@ namespace PerformanceTuning
 			HasCompleteMetricCoverage(comparison, comparison.wholeFrameGpu) &&
 			HasCompleteMetricCoverage(currentAfter, currentAfter.wholeFrameGpu);
 		result.wholeFrameGpu = CalculateMetricDelta(
-			currentBefore.wholeFrameGpu,
-			comparison.wholeFrameGpu,
-			currentAfter.wholeFrameGpu,
+			GetWholeFrameGpuWindow(currentBefore),
+			GetWholeFrameGpuWindow(comparison),
+			GetWholeFrameGpuWindow(currentAfter),
 			minimumMeaningfulDeltaMs,
 			hasGpu);
 
@@ -390,33 +400,38 @@ namespace PerformanceTuning
 			HasCompleteMetricCoverage(comparison, comparison.wholeFrameCpu) &&
 			HasCompleteMetricCoverage(currentAfter, currentAfter.wholeFrameCpu);
 		result.wholeFrameCpu = CalculateMetricDelta(
-			currentBefore.wholeFrameCpu,
-			comparison.wholeFrameCpu,
-			currentAfter.wholeFrameCpu,
+			GetWholeFrameCpuWindow(currentBefore),
+			GetWholeFrameCpuWindow(comparison),
+			GetWholeFrameCpuWindow(currentAfter),
 			minimumMeaningfulDeltaMs,
 			hasCpu);
 
 		if (result.present.available) {
 			const double currentMean =
-				(currentBefore.present.Mean() + currentAfter.present.Mean()) * 0.5;
-			const double comparisonMean = comparison.present.Mean();
+				(currentBeforePresent.total.Mean() + currentAfterPresent.total.Mean()) * 0.5;
+			const double comparisonMean = comparisonPresent.total.Mean();
 			if (IsPositiveFinite(currentMean) && IsPositiveFinite(comparisonMean)) {
 				result.hasFps = true;
 				result.fpsDelta = 1000.0 / currentMean - 1000.0 / comparisonMean;
 
 				const double currentVariance =
 					CalculateCurrentMeanVariance(
-						currentBefore.present,
-						currentAfter.present);
+						currentBeforePresent,
+						currentAfterPresent);
 				const double comparisonVariance =
-					comparison.present.StandardError() * comparison.present.StandardError();
+					CalculateWindowMeanVariance(comparisonPresent);
 				const double fpsVariance =
 					(1000.0 / (currentMean * currentMean)) *
 						(1000.0 / (currentMean * currentMean)) * currentVariance +
 					(1000.0 / (comparisonMean * comparisonMean)) *
 						(1000.0 / (comparisonMean * comparisonMean)) * comparisonVariance;
-				result.fpsMargin95 = 1.96 * std::sqrt(std::max(0.0, fpsVariance));
-				result.fpsSignificant = result.present.significant;
+				result.fpsMargin95 = k95PercentConfidenceZScore *
+				                     std::sqrt(std::max(0.0, fpsVariance));
+				result.fpsStatisticallySignificant =
+					std::abs(result.fpsDelta) > result.fpsMargin95;
+				result.fpsSignificant =
+					result.fpsStatisticallySignificant &&
+					std::abs(result.present.valueMs) > minimumMeaningfulDeltaMs;
 			}
 		}
 

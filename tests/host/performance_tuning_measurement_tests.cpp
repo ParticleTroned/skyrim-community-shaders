@@ -1,12 +1,85 @@
 #include "Menu/PerformanceTuningMeasurement.h"
 
+#include <cmath>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 namespace
 {
 	using PerformanceTuning::AddSampleResult;
+	using PerformanceTuning::Moments;
 	using PerformanceTuning::SampleWindow;
+
+	void SetSplitMoments(
+		Moments& total,
+		Moments& firstHalf,
+		Moments& secondHalf,
+		double firstHalfValue,
+		double secondHalfValue,
+		int halfSampleCount = 90)
+	{
+		for (int i = 0; i < halfSampleCount; ++i) {
+			total.Add(firstHalfValue, 1.0);
+			firstHalf.Add(firstHalfValue, 1.0);
+		}
+		for (int i = 0; i < halfSampleCount; ++i) {
+			total.Add(secondHalfValue, 1.0);
+			secondHalf.Add(secondHalfValue, 1.0);
+		}
+	}
+
+	SampleWindow MakeSplitPresentWindow(
+		double firstHalfPresentMs,
+		double secondHalfPresentMs,
+		int halfSampleCount = 90)
+	{
+		SampleWindow window;
+		SetSplitMoments(
+			window.present,
+			window.firstHalfPresent,
+			window.secondHalfPresent,
+			firstHalfPresentMs,
+			secondHalfPresentMs,
+			halfSampleCount);
+		return window;
+	}
+
+	void AddAlternatingHalf(
+		Moments& total,
+		Moments& half,
+		double firstValue,
+		double secondValue,
+		int pairCount)
+	{
+		for (int i = 0; i < pairCount; ++i) {
+			total.Add(firstValue, 1.0);
+			total.Add(secondValue, 1.0);
+			half.Add(firstValue, 1.0);
+			half.Add(secondValue, 1.0);
+		}
+	}
+
+	SampleWindow MakeStationaryPresentWindow(
+		double firstValue,
+		double secondValue,
+		int halfPairCount = 45)
+	{
+		SampleWindow window;
+		AddAlternatingHalf(
+			window.present,
+			window.firstHalfPresent,
+			firstValue,
+			secondValue,
+			halfPairCount);
+		AddAlternatingHalf(
+			window.present,
+			window.secondHalfPresent,
+			firstValue,
+			secondValue,
+			halfPairCount);
+		return window;
+	}
 
 	SampleWindow MakeConstantWindow(
 		double presentIntervalMs,
@@ -80,10 +153,13 @@ TEST_CASE(
 
 	REQUIRE(result.present.available);
 	REQUIRE(result.present.valueMs == Catch::Approx(6.0));
+	REQUIRE(result.present.statisticallySignificant);
 	REQUIRE(result.wholeFrameGpu.available);
 	REQUIRE(result.wholeFrameGpu.valueMs == Catch::Approx(-28.0));
+	REQUIRE(result.wholeFrameGpu.statisticallySignificant);
 	REQUIRE(result.wholeFrameCpu.available);
 	REQUIRE(result.wholeFrameCpu.valueMs == Catch::Approx(-31.0));
+	REQUIRE(result.wholeFrameCpu.statisticallySignificant);
 	REQUIRE(result.hasFps);
 	REQUIRE(result.fpsDelta == Catch::Approx(1000.0 / 16.0 - 1000.0 / 10.0));
 }
@@ -104,7 +180,9 @@ TEST_CASE(
 	REQUIRE(result.present.available);
 	REQUIRE(result.present.valueMs == Catch::Approx(0.05));
 	REQUIRE(result.present.significanceThresholdMs == Catch::Approx(0.099));
+	REQUIRE(result.present.statisticallySignificant);
 	REQUIRE_FALSE(result.present.significant);
+	REQUIRE(result.fpsStatisticallySignificant);
 	REQUIRE_FALSE(result.fpsSignificant);
 }
 
@@ -119,11 +197,6 @@ TEST_CASE(
 	const auto currentAfter =
 		MakeConstantWindow(16.2, std::nullopt, std::nullopt, 2000);
 
-	REQUIRE(
-		PerformanceTuning::AreCurrentWindowsEquivalent(
-			currentBefore,
-			currentAfter));
-
 	const auto result = PerformanceTuning::CalculateCostResult(
 		currentBefore,
 		comparison,
@@ -131,65 +204,182 @@ TEST_CASE(
 
 	REQUIRE(result.present.valueMs == Catch::Approx(0.1));
 	REQUIRE(result.present.margin95Ms == Catch::Approx(0.196));
+	REQUIRE_FALSE(result.present.statisticallySignificant);
 	REQUIRE_FALSE(result.present.significant);
 	REQUIRE(result.fpsMargin95 > 0.0);
+	REQUIRE_FALSE(result.fpsStatisticallySignificant);
 	REQUIRE_FALSE(result.fpsSignificant);
 }
 
 TEST_CASE(
-	"Drift within a measurement window is rejected",
-	"[performance-tuning][stability]")
+	"Stationary sampling error contributes to the confidence interval",
+	"[performance-tuning][uncertainty][statistics]")
 {
-	SampleWindow window;
-	PerformanceTuning::BeginSampleWindow(window, 0, 0);
+	const auto currentBefore = MakeStationaryPresentWindow(12.0, 20.0);
+	const auto comparison = MakeStationaryPresentWindow(10.0, 18.0);
+	const auto currentAfter = MakeStationaryPresentWindow(12.0, 20.0);
 
-	uint64_t sampleId = 1;
-	for (; window.sampledDurationMs < 1500.0; ++sampleId) {
-		REQUIRE(
-			PerformanceTuning::AddPresentSample(window, sampleId, 10.0, false) ==
-			AddSampleResult::Added);
-	}
-	for (;; ++sampleId) {
-		const auto result =
-			PerformanceTuning::AddPresentSample(window, sampleId, 20.0, false);
-		if (result == AddSampleResult::Complete)
-			break;
-		REQUIRE(result == AddSampleResult::Added);
-	}
+	const auto result = PerformanceTuning::CalculateCostResult(
+		currentBefore,
+		comparison,
+		currentAfter);
+	const double windowMeanVariance = 16.0 / 180.0;
 
-	REQUIRE_FALSE(PerformanceTuning::IsInternallyStable(window));
+	REQUIRE(result.present.available);
+	REQUIRE(result.present.valueMs == Catch::Approx(2.0));
+	REQUIRE(
+		result.present.margin95Ms ==
+		Catch::Approx(
+			1.96 * std::sqrt(windowMeanVariance * 1.5)));
+	REQUIRE(result.present.statisticallySignificant);
 }
 
 TEST_CASE(
-	"Restored-current drift is rejected",
-	"[performance-tuning][stability]")
+	"Comparison-window drift widens confidence without discarding the result",
+	"[performance-tuning][uncertainty][drift][comparison]")
 {
-	const auto currentBefore = MakeConstantWindow(16.0, 8.0, 5.0, 1);
-	const auto matchingAfter = MakeConstantWindow(16.0, 8.0, 5.0, 1000);
-	const auto driftedAfter = MakeConstantWindow(20.0, 12.0, 7.0, 2000);
+	const auto currentBefore = MakeSplitPresentWindow(16.0, 16.0);
+	const auto comparison = MakeSplitPresentWindow(14.0, 16.0);
+	const auto currentAfter = MakeSplitPresentWindow(16.0, 16.0);
 
+	const auto result = PerformanceTuning::CalculateCostResult(
+		currentBefore,
+		comparison,
+		currentAfter);
+
+	REQUIRE(result.present.available);
+	REQUIRE(result.present.valueMs == Catch::Approx(1.0));
+	REQUIRE(result.present.margin95Ms == Catch::Approx(1.96));
+	REQUIRE_FALSE(result.present.statisticallySignificant);
+	REQUIRE_FALSE(result.present.significant);
+	REQUIRE(result.hasFps);
 	REQUIRE(
-		PerformanceTuning::AreCurrentWindowsEquivalent(
-			currentBefore,
-			matchingAfter));
-	REQUIRE_FALSE(
-		PerformanceTuning::AreCurrentWindowsEquivalent(
-			currentBefore,
-			driftedAfter));
+		result.fpsMargin95 ==
+		Catch::Approx(1.96 * 1000.0 / (15.0 * 15.0)));
+	REQUIRE_FALSE(result.fpsStatisticallySignificant);
+	REQUIRE_FALSE(result.fpsSignificant);
 }
 
 TEST_CASE(
-	"Missing optional query coverage does not invalidate stable Present windows",
-	"[performance-tuning][stability][coverage]")
+	"A-B-A drift widens confidence without discarding the result",
+	"[performance-tuning][uncertainty][drift][aba]")
 {
-	const auto currentBefore = MakeConstantWindow(16.0, 8.0, 5.0, 1);
-	const auto currentAfter =
-		MakeConstantWindow(16.0, std::nullopt, 5.0, 1000);
+	const auto currentBefore = MakeSplitPresentWindow(15.0, 15.0);
+	const auto comparison = MakeSplitPresentWindow(15.0, 15.0);
+	const auto currentAfter = MakeSplitPresentWindow(17.0, 17.0);
 
-	REQUIRE(
-		PerformanceTuning::AreCurrentWindowsEquivalent(
-			currentBefore,
-			currentAfter));
+	const auto result = PerformanceTuning::CalculateCostResult(
+		currentBefore,
+		comparison,
+		currentAfter);
+
+	REQUIRE(result.present.available);
+	REQUIRE(result.present.valueMs == Catch::Approx(1.0));
+	REQUIRE(result.present.margin95Ms == Catch::Approx(1.96));
+	REQUIRE_FALSE(result.present.statisticallySignificant);
+	REQUIRE_FALSE(result.present.significant);
+}
+
+TEST_CASE(
+	"Large effects remain significant when confidence clears observed drift",
+	"[performance-tuning][uncertainty][drift][significance]")
+{
+	const auto currentBefore = MakeSplitPresentWindow(16.0, 18.0);
+	const auto comparison = MakeSplitPresentWindow(10.0, 10.0);
+	const auto currentAfter = MakeSplitPresentWindow(16.0, 18.0);
+
+	const auto result = PerformanceTuning::CalculateCostResult(
+		currentBefore,
+		comparison,
+		currentAfter);
+
+	REQUIRE(result.present.available);
+	REQUIRE(result.present.valueMs == Catch::Approx(7.0));
+	REQUIRE(result.present.margin95Ms == Catch::Approx(1.96 / std::sqrt(2.0)));
+	REQUIRE(result.present.statisticallySignificant);
+	REQUIRE(result.present.significant);
+	REQUIRE(result.fpsStatisticallySignificant);
+	REQUIRE(result.fpsSignificant);
+}
+
+TEST_CASE(
+	"FPS significance uses the FPS confidence interval",
+	"[performance-tuning][uncertainty][fps][significance]")
+{
+	const auto currentBefore = MakeSplitPresentWindow(20.0, 20.0);
+	const auto comparison = MakeSplitPresentWindow(6.0, 14.0);
+	const auto currentAfter = MakeSplitPresentWindow(20.0, 20.0);
+
+	const auto result = PerformanceTuning::CalculateCostResult(
+		currentBefore,
+		comparison,
+		currentAfter);
+
+	REQUIRE(result.present.valueMs == Catch::Approx(10.0));
+	REQUIRE(result.present.margin95Ms == Catch::Approx(7.84));
+	REQUIRE(result.present.statisticallySignificant);
+	REQUIRE(result.hasFps);
+	REQUIRE(result.fpsDelta == Catch::Approx(-50.0));
+	REQUIRE(result.fpsMargin95 == Catch::Approx(78.4));
+	REQUIRE_FALSE(result.fpsStatisticallySignificant);
+	REQUIRE_FALSE(result.fpsSignificant);
+}
+
+TEST_CASE(
+	"GPU and CPU confidence use their own half-window variation",
+	"[performance-tuning][uncertainty][drift][coverage]")
+{
+	auto currentBefore = MakeSplitPresentWindow(16.0, 16.0);
+	auto comparison = MakeSplitPresentWindow(15.0, 15.0);
+	auto currentAfter = MakeSplitPresentWindow(16.0, 16.0);
+	SetSplitMoments(
+		currentBefore.wholeFrameGpu,
+		currentBefore.firstHalfWholeFrameGpu,
+		currentBefore.secondHalfWholeFrameGpu,
+		8.0,
+		10.0);
+	SetSplitMoments(
+		comparison.wholeFrameGpu,
+		comparison.firstHalfWholeFrameGpu,
+		comparison.secondHalfWholeFrameGpu,
+		8.0,
+		8.0);
+	SetSplitMoments(
+		currentAfter.wholeFrameGpu,
+		currentAfter.firstHalfWholeFrameGpu,
+		currentAfter.secondHalfWholeFrameGpu,
+		8.0,
+		10.0);
+	SetSplitMoments(
+		currentBefore.wholeFrameCpu,
+		currentBefore.firstHalfWholeFrameCpu,
+		currentBefore.secondHalfWholeFrameCpu,
+		5.0,
+		5.0);
+	SetSplitMoments(
+		comparison.wholeFrameCpu,
+		comparison.firstHalfWholeFrameCpu,
+		comparison.secondHalfWholeFrameCpu,
+		4.0,
+		4.0);
+	SetSplitMoments(
+		currentAfter.wholeFrameCpu,
+		currentAfter.firstHalfWholeFrameCpu,
+		currentAfter.secondHalfWholeFrameCpu,
+		5.0,
+		5.0);
+
+	const auto result = PerformanceTuning::CalculateCostResult(
+		currentBefore,
+		comparison,
+		currentAfter);
+
+	REQUIRE(result.wholeFrameGpu.available);
+	REQUIRE(result.wholeFrameGpu.valueMs == Catch::Approx(1.0));
+	REQUIRE_FALSE(result.wholeFrameGpu.statisticallySignificant);
+	REQUIRE(result.wholeFrameCpu.available);
+	REQUIRE(result.wholeFrameCpu.valueMs == Catch::Approx(1.0));
+	REQUIRE(result.wholeFrameCpu.statisticallySignificant);
 }
 
 TEST_CASE(

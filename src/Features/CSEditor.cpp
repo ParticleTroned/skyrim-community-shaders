@@ -164,6 +164,12 @@ namespace
 	}
 }
 
+void CSEditor::PostPostLoad()
+{
+	// Install before the game loop starts so both entry points change atomically while idle.
+	EditorWindow::InstallWeatherLockHooks();
+}
+
 void CSEditor::DataLoaded()
 {
 	s_dataAvailable = true;
@@ -429,14 +435,7 @@ void CSEditor::Prepass()
 
 void CSEditor::UpdateWeatherLockAndTime()
 {
-	auto editorWindow = EditorWindow::GetSingleton();
-	if (editorWindow->IsWeatherLocked()) {
-		auto lockedWeather = editorWindow->GetLockedWeather();
-		auto sky = globals::game::sky;
-		if (sky && lockedWeather && sky->currentWeather != lockedWeather) {
-			sky->ForceWeather(lockedWeather, false);
-		}
-	}
+	EditorWindow::MaintainWeatherLock();
 }
 
 void CSEditor::LerpWeather(RE::TESWeather* oldWeather, RE::TESWeather* newWeather, float currentWeatherPct)

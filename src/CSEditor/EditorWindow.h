@@ -67,10 +67,6 @@ public:
 
 	LightEditor lightEditor;
 
-	// Weather locking for editing
-	RE::TESWeather* lockedWeather = nullptr;
-	bool weatherLockActive = false;
-
 	/// When true, resets all window positions/sizes on next frame (auto-cleared).
 	bool resetLayout = false;
 
@@ -125,8 +121,11 @@ public:
 
 	void LockWeather(RE::TESWeather* weather);
 	void UnlockWeather();
-	bool IsWeatherLocked() const { return weatherLockActive; }
-	RE::TESWeather* GetLockedWeather() const { return lockedWeather; }
+	bool IsWeatherLocked() const;
+	RE::TESWeather* GetLockedWeather() const;
+	static void InstallWeatherLockHooks();
+	static bool AreWeatherLockHooksInstalled();
+	static void MaintainWeatherLock();
 
 	void PauseTime();
 	void ResumeTime();

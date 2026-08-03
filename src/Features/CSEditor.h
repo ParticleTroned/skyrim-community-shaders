@@ -28,6 +28,7 @@ public:
 				"Real-time editing and previewing of effects" } };
 	}
 
+	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 	virtual void Prepass() override;
 

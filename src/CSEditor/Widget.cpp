@@ -44,7 +44,7 @@ namespace
 		sky->ReleaseWeatherOverride();
 
 		if (lockedWeather)
-			sky->ForceWeather(lockedWeather, false);
+			EditorWindow::MaintainWeatherLock();
 	}
 }
 
@@ -420,7 +420,10 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		} else {
 			drawButton();
 		}
-		Util::AddTooltip(isLocked ? "Unlock Weather" : "Force This Weather");
+		if (isLocked && !EditorWindow::AreWeatherLockHooksInstalled())
+			Util::AddTooltip("Unlock Weather (weather-lock hooks unavailable; weather may briefly flash before correction)");
+		else
+			Util::AddTooltip(isLocked ? "Unlock Weather" : "Force This Weather");
 	};
 
 	auto drawUnsavedIndicator = [&]() {

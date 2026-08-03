@@ -1533,7 +1533,7 @@ void ScreenSpaceGI::DrawSSGI()
 	GET_INSTANCE_MEMBER(BSImagespaceShaderISSAOBlurH, imageSpaceManager);
 
 	// Toggle vanilla SSAO
-	static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
+	static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH) + 0x50LL);
 	*enableSSAO = settings.EnableVanillaSSAO;
 
 	const auto location = LocationContext::Get();

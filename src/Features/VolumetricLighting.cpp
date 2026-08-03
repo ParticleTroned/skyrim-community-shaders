@@ -125,15 +125,12 @@ namespace
 
 	RE::NiColor GetDescriptorColor(const RE::BSVolumetricLightingRenderData& descriptor)
 	{
-		return ClampColor01({ descriptor.red, descriptor.green, descriptor.blue });
+		return ClampColor01(descriptor.color);
 	}
 
 	void SetDescriptorColor(RE::BSVolumetricLightingRenderData& descriptor, const RE::NiColor& color)
 	{
-		const RE::NiColor clamped = ClampColor01(color);
-		descriptor.red = clamped.red;
-		descriptor.green = clamped.green;
-		descriptor.blue = clamped.blue;
+		descriptor.color = ClampColor01(color);
 	}
 
 	void ApplyGodrayOpacity(RE::BSVolumetricLightingRenderData& descriptor, float opacity)

@@ -49,6 +49,7 @@ public:
 	static float ClampGlossiness(float glossiness, float fallback);
 	static float ClampSpecularStrength(float specularStrength, float fallback);
 	static float ClampSubsurfaceScatteringAmount(float subsurfaceScatteringAmount, float fallback);
+	static void SanitizeSettings(Settings& a_settings);
 	void SanitizeSettings();
 
 	virtual void DrawSettings() override;
@@ -56,6 +57,19 @@ public:
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 11,
+			T("menu.performance_tuning.feature.grass_lighting.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.grass_lighting.comparison_details", "the Grass Lighting runtime toggle is switched off, so grass uses the basic pixel-shading path; the installed shader permutation and vertex work remain the same in both windows.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "Enabled", true },
+			{ "ComplexGrassThreshold", true }
+		};
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled ? 1u : 0u; }

@@ -177,12 +177,69 @@ void TerrainShadows::CompileComputeShaders()
 	}
 }
 
-bool TerrainShadows::IsHeightMapReady()
+bool TerrainShadows::IsHeightMapReady() const
 {
 	if (auto tes = RE::TES::GetSingleton())
 		if (auto worldspace = tes->GetRuntimeData2().worldSpace)
 			return cachedHeightmap && cachedHeightmap->worldspace == worldspace->GetFormEditorID();
 	return false;
+}
+
+bool TerrainShadows::HasShadowUpdateResources() const
+{
+	return IsHeightMapReady() &&
+	       texHeightMap && texHeightMap->srv &&
+	       texShadowHeight && texShadowHeight->srv && texShadowHeight->uav &&
+	       shadowUpdateCB && shadowUpdateCB->CB() &&
+	       shadowUpdateProgram &&
+	       globals::d3d::context &&
+	       globals::state &&
+	       globals::profiler;
+}
+
+RE::NiDirectionalLight* TerrainShadows::GetShadowUpdateSunLight() const
+{
+	if (!HasShadowUpdateResources())
+		return nullptr;
+
+	auto** accumulatorSlot = globals::game::currentAccumulator.get();
+	if (!accumulatorSlot || !*accumulatorSlot)
+		return nullptr;
+
+	auto* shadowSceneNode = (*accumulatorSlot)->GetRuntimeData().activeShadowSceneNode;
+	if (!shadowSceneNode)
+		return nullptr;
+
+	const auto& sunLight = shadowSceneNode->GetRuntimeData().sunLight;
+	if (!sunLight || !sunLight->light)
+		return nullptr;
+
+	return skyrim_cast<RE::NiDirectionalLight*>(sunLight->light.get());
+}
+
+bool TerrainShadows::IsPerformanceTuningApplicable() const
+{
+	return GetShadowUpdateSunLight() != nullptr;
+}
+
+const char* TerrainShadows::GetPerformanceTuningApplicabilityReason() const
+{
+	if (IsPerformanceTuningApplicable())
+		return nullptr;
+	if (!IsHeightMapReady() || !texHeightMap) {
+		return T(
+			"menu.performance_tuning.feature.terrain_shadows.no_heightmap",
+			"Terrain Shadows have no loaded heightmap for the current worldspace, so there is no runtime work to measure.");
+	}
+	if (!HasShadowUpdateResources()) {
+		return T(
+			"menu.performance_tuning.feature.terrain_shadows.no_runtime_resources",
+			"Terrain Shadows cannot be measured because their runtime update resources are unavailable.");
+	}
+
+	return T(
+		"menu.performance_tuning.feature.terrain_shadows.no_active_sun",
+		"Terrain Shadows cannot be measured because the current scene has no active directional sunlight.");
 }
 
 TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
@@ -322,7 +379,8 @@ void TerrainShadows::UpdateShadow()
 {
 	ZoneScoped;
 
-	if (!IsHeightMapReady())
+	auto* sunLight = GetShadowUpdateSunLight();
+	if (!sunLight)
 		return;
 
 	// don't forget to change NTHREADS in shader!
@@ -331,19 +389,10 @@ void TerrainShadows::UpdateShadow()
 
 	auto context = globals::d3d::context;
 
-	if (texShadowHeight) {
-		std::array<ID3D11ShaderResourceView*, 1> srvs = { nullptr };
-		context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
-		context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
-	}
+	std::array<ID3D11ShaderResourceView*, 1> srvs = { nullptr };
+	context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+	context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 
-	auto accumulator = *globals::game::currentAccumulator.get();
-	auto shadowSceneNode = accumulator->GetRuntimeData().activeShadowSceneNode;
-	if (!shadowSceneNode)
-		return;
-	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
-	if (!sunLight)
-		return;
 	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Occlusion - Update Shadows");
 
 	/* ---- UPDATE CB ---- */

@@ -72,8 +72,27 @@ public:
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 1,
+			T("menu.performance_tuning.feature.screen_space_shadows.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.screen_space_shadows.comparison_details", "Screen Space Shadows are switched off.") };
+	}
+	virtual bool IsPerformanceTuningApplicable() const override;
+	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "Enable", true },
+			{ "SampleCount", true },
+			{ "SurfaceThickness", true },
+			{ "BilinearThreshold", true },
+			{ "ShadowContrast", true }
+		};
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return bendSettings.Enable != 0; }
+	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {
@@ -95,7 +114,7 @@ public:
 	/** @brief Releases the raymarch compute shader so it is recompiled on next use. */
 	void InvalidateRaymarchShaders();
 	/** @brief Calculates the resolution-scaled and quantized sample count for the raymarch shader. */
-	uint GetScaledSampleCount();
+	uint GetScaledSampleCount() const;
 	uint lastCompiledSampleCount = 0;
 	/**
 	 * @brief Returns the compiled raymarch compute shader, recompiling if the sample count changed.
@@ -113,4 +132,33 @@ public:
 	void DrawShadows();
 
 	virtual void RestoreDefaultSettings() override;
+
+private:
+	enum class RuntimeReadiness
+	{
+		Ready,
+		NoFullSky,
+		NoRuntimeResources,
+		NoDirectionalLight,
+		ShaderUnavailable
+	};
+
+	struct RuntimeContext
+	{
+		ID3D11DeviceContext* context = nullptr;
+		ID3D11ShaderResourceView* depthSRV = nullptr;
+		ID3D11ComputeShader* raymarchShader = nullptr;
+		RE::NiDirectionalLight* directionalLight = nullptr;
+		float2 renderSize{};
+		float2 dynamicResolution{};
+	};
+
+	/**
+	 * @brief Checks every runtime prerequisite without creating or changing resources.
+	 *
+	 * Execution calls this before and after shader compilation. Applicability uses
+	 * the side-effect-free resource/scene form; enabled measurement legs additionally
+	 * require the shader compiled for the current dynamic resolution.
+	 */
+	RuntimeReadiness GetRuntimeReadiness(bool a_requireCompiledShader, RuntimeContext* a_context = nullptr) const;
 };

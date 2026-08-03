@@ -126,12 +126,45 @@ public:
 		const_cast<Feature*>(this)->SaveSettings(state);
 		return state;
 	}
+	struct PerformanceTuningConfig
+	{
+		// A negative order opts the feature out of the Performance Tuning page.
+		int order = -1;
+		std::string_view comparisonLabel = "Off";
+		std::string_view comparisonDetails = "the feature's measurement state is switched off.";
+	};
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const { return {}; }
+	virtual bool IsPerformanceTuningApplicable() const { return true; }
+	virtual const char* GetPerformanceTuningApplicabilityReason() const { return nullptr; }
+	// Leaves identify the feature settings exposed by DrawPerformanceSettings().
+	virtual json GetPerformanceTuningUserSettingsMask() const { return CapturePerformanceSettingsState(); }
+	// Migrates legacy values from SettingsUser.json before the masked values are
+	// merged into a current settings snapshot. Implementations must not mutate
+	// live feature state.
+	virtual bool NormalizePerformanceTuningUserSettings(json& a_settings) const
+	{
+		return a_settings.is_object();
+	}
+	// Auxiliary state uses paths rooted at SettingsUser.json. Restore receives the
+	// mask-shaped rooted subset for those paths, succeeds without mutation when they
+	// are absent, and returns false for malformed values or an apply failure.
+	virtual json CapturePerformanceTuningAuxiliaryState() const { return json::object(); }
+	virtual bool RestorePerformanceTuningAuxiliaryState(const json& a_userSettings)
+	{
+		(void)a_userSettings;
+		return true;
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const { return false; }
 	virtual const char* GetPerformanceCostMeasurementUnavailableReason() const { return nullptr; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const { return false; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) { (void)a_enabled; }
 	virtual bool IsPerformanceCostMeasurementReady() const { return true; }
-	virtual const char* GetPerformanceCostMeasurementWaitText() const { return "Waiting for settings to apply"; }
+	virtual const char* GetPerformanceCostMeasurementWaitText() const
+	{
+		return T(
+			"menu.performance_tuning.measurement.wait.settings_apply",
+			"Waiting for settings to apply");
+	}
 	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
 	{
 		(void)a_targetEnabled;

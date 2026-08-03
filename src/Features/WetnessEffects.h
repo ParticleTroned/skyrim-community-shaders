@@ -123,6 +123,23 @@ public:
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 9,
+			T("menu.performance_tuning.feature.wetness_effects.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.wetness_effects.comparison_details", "the Wetness master toggle is switched off; active wetness, raindrop, splash, and custom ripple work stops, while the installed shader path and vanilla-ripple policy remain the same in both windows.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "EnableWetnessEffects", true },
+			{ "EnableRaindropFx", true },
+			{ "RaindropFxRange", true },
+			{ "EnableSplashes", true },
+			{ "EnableRipples", true },
+			{ "EnableVanillaRipples", true }
+		};
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableWetnessEffects != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;

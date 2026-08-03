@@ -43,6 +43,20 @@ public:
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 5,
+			T("menu.performance_tuning.feature.terrain_blending.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.terrain_blending.comparison_details", "Terrain Blending is switched off.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "Enabled", true },
+			{ "TerrainCullDistance", true },
+			{ "BlendStrength", true }
+		};
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override

@@ -634,6 +634,50 @@ void LightLimitFix::DrawPerformanceSettings(bool)
 	DrawSettingsPanel(false);
 }
 
+json LightLimitFix::CapturePerformanceTuningAuxiliaryState() const
+{
+	if (!globals::state)
+		return json::object();
+
+	const float refractionScale = std::isfinite(globals::state->refractionScale) ?
+	                                  std::clamp(globals::state->refractionScale, 0.0f, 2.0f) :
+	                                  1.0f;
+	return {
+		{ "Advanced", {
+			{ "Refraction Scale", refractionScale } } }
+	};
+}
+
+bool LightLimitFix::RestorePerformanceTuningAuxiliaryState(const json& a_userSettings)
+{
+	if (!a_userSettings.is_object())
+		return false;
+
+	const auto advancedIt = a_userSettings.find("Advanced");
+	if (advancedIt == a_userSettings.end())
+		return true;
+	if (!advancedIt->is_object())
+		return false;
+
+	const auto refractionIt = advancedIt->find("Refraction Scale");
+	if (refractionIt == advancedIt->end())
+		return true;
+	if (!refractionIt->is_number() || !globals::state)
+		return false;
+
+	try {
+		const float savedScale = refractionIt->get<float>();
+		if (!std::isfinite(savedScale))
+			return false;
+
+		const float restoredScale = std::clamp(savedScale, 0.0f, 2.0f);
+		globals::state->refractionScale = restoredScale;
+		return true;
+	} catch (const std::exception&) {
+		return false;
+	}
+}
+
 void LightLimitFix::DrawSettingsPanel(bool a_showEmbeddedInfo)
 {
 	{
@@ -1097,8 +1141,9 @@ void LightLimitFix::LoadSettings(json& o_json)
 
 void LightLimitFix::SaveSettings(json& o_json)
 {
-	SanitizeSettings(settings);
-	o_json = settings;
+	auto savedSettings = settings;
+	SanitizeSettings(savedSettings);
+	o_json = savedSettings;
 }
 
 void LightLimitFix::RestoreDefaultSettings()

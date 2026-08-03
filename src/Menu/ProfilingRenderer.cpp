@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 #include "Globals.h"
+#include "I18n/I18n.h"
 #include "Util.h"
 #include "Utils/UI.h"
 
@@ -174,9 +175,41 @@ static void TextWithTuningDelta(int direction, const char* fmt, ...)
 
 static void RenderFeatureTimingStats(float avgMs, float p95Ms, float p99Ms, int direction)
 {
-	TextWithTuningDelta(direction, "Avg %.3f ms", avgMs);
-	TextWithTuningDelta(direction, "P95 %.3f", p95Ms);
-	TextWithTuningDelta(direction, "P99 %.3f", p99Ms);
+	TextWithTuningDelta(
+		direction,
+		"%s %.3f ms",
+		T("menu.performance_tuning.profiling.metric.average", "Average"),
+		avgMs);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			T(
+				"menu.performance_tuning.profiling.metric.average_tooltip",
+				"Arithmetic mean over the latest detailed-capture frames."));
+	}
+
+	TextWithTuningDelta(
+		direction,
+		"%s %.3f ms",
+		T("menu.performance_tuning.profiling.metric.p95", "P95"),
+		p95Ms);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			T(
+				"menu.performance_tuning.profiling.metric.p95_tooltip",
+				"95% of the latest detailed-capture frame samples are at or below this value."));
+	}
+
+	TextWithTuningDelta(
+		direction,
+		"%s %.3f ms",
+		T("menu.performance_tuning.profiling.metric.p99", "P99"),
+		p99Ms);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			T(
+				"menu.performance_tuning.profiling.metric.p99_tooltip",
+				"99% of the latest detailed-capture frame samples are at or below this value."));
+	}
 }
 
 struct DisplayTimingStats
@@ -517,7 +550,11 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 	const auto data = CollectFeatureTimingData(featurePrefix, cpuMode);
 
 	if (data.entries.empty()) {
-		ImGui::TextDisabled("No timing data");
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				"menu.profiling.no_timing_data",
+				"No timing data"));
 		return false;
 	}
 
@@ -532,11 +569,15 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 		passLabels.reserve(data.entries.size() + 1);
 		for (const auto& e : data.entries)
 			passLabels.push_back(e.label);
-		passLabels.emplace_back("Total");
-		ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Pass", passLabels, GetColorMarkerExtraWidth()));
-		ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-		ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-		ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+		const char* totalLabel =
+			T("menu.profiling.total", "Total");
+		const char* passLabel =
+			T("menu.profiling.pass", "Pass");
+		passLabels.emplace_back(totalLabel);
+		ImGui::TableSetupColumn(passLabel, ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth(passLabel, passLabels, GetColorMarkerExtraWidth()));
+		ImGui::TableSetupColumn(T("menu.profiling.avg", "Avg"), ImGuiTableColumnFlags_WidthFixed, 55.0f);
+		ImGui::TableSetupColumn(T("menu.profiling.p95", "P95"), ImGuiTableColumnFlags_WidthFixed, 55.0f);
+		ImGui::TableSetupColumn(T("menu.profiling.p99", "P99"), ImGuiTableColumnFlags_WidthFixed, 55.0f);
 		ImGui::TableHeadersRow();
 
 		for (const auto& e : data.entries) {
@@ -554,7 +595,10 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 
 		ImGui::TableNextRow();
 		ImGui::TableNextColumn();
-		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Total");
+		ImGui::TextColored(
+			ImVec4(1.0f, 1.0f, 0.6f, 1.0f),
+			"%s",
+			totalLabel);
 		ImGui::TableNextColumn();
 		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
 		ImGui::TableNextColumn();
@@ -585,13 +629,18 @@ bool ProfilingRenderer::RenderFeatureOverview()
 		return lhs < rhs;
 	});
 
-	ImGui::SeparatorText("Feature Profiling Overview");
+	ImGui::SeparatorText(
+		T(
+			"menu.profiling.feature_overview",
+			"Feature Profiling Overview"));
 
 	if (ImGui::BeginTable("##FeatureProfilingOverview", 3,
 			ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_RowBg)) {
-		ImGui::TableSetupColumn("Feature", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Feature", activeFeatures));
-		ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-		ImGui::TableSetupColumn("CPU", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		const char* featureLabel =
+			T("menu.profiling.feature", "Feature");
+		ImGui::TableSetupColumn(featureLabel, ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth(featureLabel, activeFeatures));
+		ImGui::TableSetupColumn(T("menu.profiling.gpu", "GPU"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableSetupColumn(T("menu.profiling.cpu", "CPU"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		ImGui::TableHeadersRow();
 
 		for (const auto& featurePrefix : activeFeatures) {
@@ -606,13 +655,21 @@ bool ProfilingRenderer::RenderFeatureOverview()
 			ImGui::TableNextColumn();
 			ImGui::PushID((featurePrefix + "::GPU").c_str());
 			if (!RenderFeatureTimingGraph(featurePrefix, gpuData, state.gpuGraph, 85))
-				ImGui::TextDisabled("No GPU timing data");
+				ImGui::TextDisabled(
+					"%s",
+					T(
+						"menu.profiling.no_gpu_timing_data",
+						"No GPU timing data"));
 			ImGui::PopID();
 
 			ImGui::TableNextColumn();
 			ImGui::PushID((featurePrefix + "::CPU").c_str());
 			if (!RenderFeatureTimingGraph(featurePrefix, cpuData, state.cpuGraph, 85))
-				ImGui::TextDisabled("No CPU timing data");
+				ImGui::TextDisabled(
+					"%s",
+					T(
+						"menu.profiling.no_cpu_timing_data",
+						"No CPU timing data"));
 			ImGui::PopID();
 		}
 
@@ -644,34 +701,61 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 
 	if (fullProfilerPage) {
 		bool profilingEnabled = profiler.IsUserEnabled();
-		ImGui::TextUnformatted("Profiling");
+		ImGui::TextUnformatted(
+			T(
+				"menu.profiling.title",
+				"Profiling"));
 		ImGui::SameLine();
-		if (ImGui::Checkbox("Enable", &profilingEnabled)) {
+		if (ImGui::Checkbox(
+			    T(
+				    "menu.profiling.enable",
+				    "Enable"),
+			    &profilingEnabled)) {
 			profiler.SetUserEnabled(profilingEnabled);
 			timeSinceLastUpdate = 1.0f;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Runtime profiling capture. No restart required.");
-			ImGui::TextUnformatted("When off, profiling capture requests are ignored and no timestamp/query timing scopes are recorded.");
+			ImGui::TextUnformatted(
+				T(
+					"menu.profiling.enable_tooltip",
+					"Runtime profiling capture. No restart required."));
+			ImGui::TextUnformatted(
+				T(
+					"menu.profiling.enable_tooltip_off",
+					"When off, profiling capture requests are ignored and no timestamp/query timing scopes are recorded."));
 		}
 		ImGui::Separator();
 
 		if (!profilingEnabled) {
-			ImGui::TextDisabled("Profiling is off.");
+			ImGui::TextDisabled(
+				"%s",
+				T(
+					"menu.profiling.off",
+					"Profiling is off."));
 			return;
 		}
 	} else if (!profiler.IsUserEnabled()) {
 		profiler.SetUserEnabled(true);
 	}
 
-	profiler.RequestCapture();
+	profiler.RequestCapture(Profiler::CaptureMode::DetailedPasses);
 
 	bool cpuMode = (timingMode == TimingMode::CPU);
 	if (showModeToggle) {
 		int mode = static_cast<int>(timingMode);
-		ImGui::RadioButton("GPU", &mode, 0);
+		ImGui::RadioButton(
+			T(
+				"menu.profiling.mode.gpu",
+				"GPU"),
+			&mode,
+			0);
 		ImGui::SameLine();
-		ImGui::RadioButton("CPU", &mode, 1);
+		ImGui::RadioButton(
+			T(
+				"menu.profiling.mode.cpu",
+				"CPU"),
+			&mode,
+			1);
 		if (static_cast<TimingMode>(mode) != timingMode) {
 			timingMode = static_cast<TimingMode>(mode);
 			timeSinceLastUpdate = 1.0f;
@@ -757,12 +841,19 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 	const bool renderedFeatureOverview = fullProfilerPage && RenderFeatureOverview();
 	if (cachedGroups.empty()) {
 		if (!renderedFeatureOverview)
-			ImGui::TextDisabled("No timing data available (enter game world)");
+			ImGui::TextDisabled(
+				"%s",
+				T(
+					"menu.profiling.no_timing_data_world",
+					"No timing data available (enter game world)"));
 		return;
 	}
 
 	if (renderedFeatureOverview)
-		ImGui::SeparatorText("All Timings");
+		ImGui::SeparatorText(
+			T(
+				"menu.profiling.all_timings",
+				"All Timings"));
 	RenderGraph();
 
 	if (showTable) {
@@ -774,17 +865,19 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			for (const auto& pass : group.passes)
 				passLabels.push_back(pass.label);
 		}
-		const float passColumnWidth = GetTextColumnWidth("Pass", passLabels, GetColorMarkerExtraWidth() + ImGui::GetTreeNodeToLabelSpacing() + ImGui::GetStyle().IndentSpacing);
+		const char* passLabel =
+			T("menu.profiling.pass", "Pass");
+		const float passColumnWidth = GetTextColumnWidth(passLabel, passLabels, GetColorMarkerExtraWidth() + ImGui::GetTreeNodeToLabelSpacing() + ImGui::GetStyle().IndentSpacing);
 
 		if (ImGui::BeginTable("##Profiler", 5,
 				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
-				ImVec2(0.0f, availHeight))) {
+			ImVec2(0.0f, availHeight))) {
 			ImGui::TableSetupScrollFreeze(0, 1);
-			ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, passColumnWidth);
-			ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-			ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-			ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-			ImGui::TableSetupColumn("%%", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+			ImGui::TableSetupColumn(passLabel, ImGuiTableColumnFlags_WidthFixed, passColumnWidth);
+			ImGui::TableSetupColumn(T("menu.profiling.avg", "Avg"), ImGuiTableColumnFlags_WidthFixed, 55.0f);
+			ImGui::TableSetupColumn(T("menu.profiling.p95", "P95"), ImGuiTableColumnFlags_WidthFixed, 55.0f);
+			ImGui::TableSetupColumn(T("menu.profiling.p99", "P99"), ImGuiTableColumnFlags_WidthFixed, 55.0f);
+			ImGui::TableSetupColumn(T("menu.profiling.percent", "%"), ImGuiTableColumnFlags_WidthFixed, 45.0f);
 			ImGui::TableHeadersRow();
 
 			for (const auto& group : cachedGroups) {
@@ -848,11 +941,26 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 
 	int mode = static_cast<int>(featureMode);
 	const int previousMode = mode;
-	ImGui::RadioButton("Off", &mode, static_cast<int>(FeatureTimingMode::Off));
+	ImGui::RadioButton(
+		T(
+			"menu.profiling.feature_mode.off",
+			"Off"),
+		&mode,
+		static_cast<int>(FeatureTimingMode::Off));
 	ImGui::SameLine();
-	ImGui::RadioButton("GPU", &mode, static_cast<int>(FeatureTimingMode::GPU));
+	ImGui::RadioButton(
+		T(
+			"menu.profiling.feature_mode.gpu",
+			"GPU"),
+		&mode,
+		static_cast<int>(FeatureTimingMode::GPU));
 	ImGui::SameLine();
-	ImGui::RadioButton("CPU", &mode, static_cast<int>(FeatureTimingMode::CPU));
+	ImGui::RadioButton(
+		T(
+			"menu.profiling.feature_mode.cpu",
+			"CPU"),
+		&mode,
+		static_cast<int>(FeatureTimingMode::CPU));
 
 	mode = std::clamp(mode, static_cast<int>(FeatureTimingMode::Off), static_cast<int>(FeatureTimingMode::CPU));
 	if (mode != previousMode) {
@@ -862,39 +970,66 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 	}
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Off: do not request profiling capture for this feature.");
-		ImGui::TextUnformatted("GPU/CPU: enable runtime profiling and show this feature's timing in the selected mode.");
-		ImGui::TextUnformatted("No restart required.");
+		ImGui::TextUnformatted(
+			T(
+				"menu.profiling.feature_mode.off_tooltip",
+				"Off: do not request profiling capture for this feature."));
+		ImGui::TextUnformatted(
+			T(
+				"menu.profiling.feature_mode.active_tooltip",
+				"GPU/CPU: enable runtime profiling and show this feature's timing in the selected mode."));
+		ImGui::TextUnformatted(
+			T(
+				"menu.profiling.feature_mode.restart_tooltip",
+				"No restart required."));
 	}
 
 	if (featureMode == FeatureTimingMode::Off) {
-		ImGui::TextDisabled("Feature profiling is off.");
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				"menu.profiling.feature_mode.feature_off",
+				"Feature profiling is off."));
 		return;
 	}
 
 	if (!profiler.IsUserEnabled()) {
-		ImGui::TextDisabled("Runtime profiling is off.");
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				"menu.profiling.feature_mode.runtime_off",
+				"Runtime profiling is off."));
 		return;
 	}
 
-	profiler.RequestCapture();
+	profiler.RequestCapture(Profiler::CaptureMode::DetailedPasses);
 	RenderFeatureTimingData(featurePrefix, featureMode, true);
 }
 
-ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture)
+ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(
+	const std::vector<std::string>& featurePrefixes,
+	Profiler::CaptureMode captureMode)
 {
 	PerformanceTimingSummary summary;
 	if (!globals::profiler)
 		return summary;
 
 	auto& profiler = (*globals::profiler);
+	const bool requestCapture = captureMode != Profiler::CaptureMode::None;
 	if (requestCapture && !profiler.IsUserEnabled())
 		profiler.SetUserEnabled(true);
 	if (requestCapture)
-		profiler.RequestCapture();
+		profiler.RequestCapture(captureMode);
 
-	for (const auto& featurePrefix : featurePrefixes) {
-		summary.features.try_emplace(featurePrefix);
+	const bool includeDetailedTimings =
+		captureMode == Profiler::CaptureMode::DetailedPasses &&
+		profiler.GetCaptureModeLimit() ==
+			Profiler::CaptureMode::DetailedPasses &&
+		profiler.IsDetailedCaptureActive();
+	if (includeDetailedTimings) {
+		for (const auto& featurePrefix : featurePrefixes) {
+			summary.features.try_emplace(featurePrefix);
+		}
 	}
 
 	struct TimingBucket
@@ -917,72 +1052,78 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	};
 
 	std::unordered_map<std::string, TimingBucket> timingBuckets;
-	for (const auto& result : profiler.GetResults()) {
-		if (!result.valid)
-			continue;
+	if (includeDetailedTimings) {
+		for (const auto& result : profiler.GetResults()) {
+			if (!result.valid)
+				continue;
 
-		const std::string rootName = GetTimingRootName(result.name);
-		if (!isRequestedFeatureRoot(rootName))
-			continue;
+			const std::string rootName = GetTimingRootName(result.name);
+			if (!isRequestedFeatureRoot(rootName))
+				continue;
 
-		auto& bucket = timingBuckets[rootName];
-		const bool rootTimer = result.name == rootName;
-		if (HasTimingMode(result, false)) {
-			DisplayTimingStats stats;
-			if (TryGetDisplayTimingStats(result, false, stats)) {
-				if (rootTimer) {
-					bucket.gpuExactMs += stats.avgMs;
-					bucket.hasGpuExact = true;
-				} else {
-					bucket.gpuChildMs += stats.avgMs;
-					bucket.hasGpuChild = true;
+			auto& bucket = timingBuckets[rootName];
+			const bool rootTimer = result.name == rootName;
+			if (HasTimingMode(result, false)) {
+				DisplayTimingStats stats;
+				if (TryGetDisplayTimingStats(result, false, stats)) {
+					if (rootTimer) {
+						bucket.gpuExactMs += stats.avgMs;
+						bucket.hasGpuExact = true;
+					} else {
+						bucket.gpuChildMs += stats.avgMs;
+						bucket.hasGpuChild = true;
+					}
 				}
 			}
-		}
 
-		if (HasTimingMode(result, true)) {
-			DisplayTimingStats stats;
-			if (TryGetDisplayTimingStats(result, true, stats)) {
-				if (rootTimer) {
-					bucket.cpuExactMs += stats.avgMs;
-					bucket.hasCpuExact = true;
-				} else {
-					bucket.cpuChildMs += stats.avgMs;
-					bucket.hasCpuChild = true;
+			if (HasTimingMode(result, true)) {
+				DisplayTimingStats stats;
+				if (TryGetDisplayTimingStats(result, true, stats)) {
+					if (rootTimer) {
+						bucket.cpuExactMs += stats.avgMs;
+						bucket.hasCpuExact = true;
+					} else {
+						bucket.cpuChildMs += stats.avgMs;
+						bucket.hasCpuChild = true;
+					}
 				}
 			}
 		}
 	}
 
-	summary.sampleId = profiler.GetWholeFrameSampleId();
+	summary.presentIntervalSampleId = profiler.GetPresentIntervalSampleId();
+	summary.wholeFrameSampleId = profiler.GetWholeFrameSampleId();
+	summary.wholeFramePresentIntervalSampleId = profiler.GetWholeFramePresentIntervalSampleId();
+	summary.wholeFrameGpuSampleId = profiler.GetWholeFrameGpuSampleId();
+	summary.wholeFrameCpuSampleId = profiler.GetWholeFrameCpuSampleId();
 	if (profiler.HasWholeFrameGpuTime()) {
-		summary.gpuTotalMs = profiler.GetWholeFrameGpuTimeAverageMs(kDisplayedRollingFrameCount);
-		summary.profilerGpuMs = summary.gpuTotalMs;
-		summary.hasProfilerGpu = IsPositiveFinite(summary.profilerGpuMs);
+		summary.wholeFrameGpuMs = profiler.GetWholeFrameGpuTimeAverageMs(kDisplayedRollingFrameCount);
+		summary.hasWholeFrameGpu = IsPositiveFinite(summary.wholeFrameGpuMs);
 	}
 	if (profiler.HasWholeFrameCpuTime()) {
-		summary.cpuTotalMs = profiler.GetWholeFrameCpuTimeAverageMs(kDisplayedRollingFrameCount);
-		summary.profilerCpuMs = summary.cpuTotalMs;
-		summary.hasProfilerCpu = IsPositiveFinite(summary.profilerCpuMs);
+		summary.wholeFrameCpuMs = profiler.GetWholeFrameCpuTimeAverageMs(kDisplayedRollingFrameCount);
+		summary.hasWholeFrameCpu = IsPositiveFinite(summary.wholeFrameCpuMs);
 	}
-	if (profiler.HasFrameTime()) {
-		summary.frameMs = profiler.GetFrameTimeAverageMs(kDisplayedRollingFrameCount);
-		if (IsPositiveFinite(summary.frameMs))
-			summary.fps = 1000.0f / summary.frameMs;
+	if (profiler.HasPresentInterval()) {
+		summary.presentIntervalMs = profiler.GetPresentIntervalAverageMs(kDisplayedRollingFrameCount);
+		summary.hasPresentInterval = IsPositiveFinite(summary.presentIntervalMs);
+		if (summary.hasPresentInterval)
+			summary.fps = 1000.0f / summary.presentIntervalMs;
 	}
 
 	if (profiler.HasLatestWholeFrameGpuSample()) {
-		summary.profilerGpuSampleMs = profiler.GetWholeFrameGpuTimeMs();
-		summary.hasProfilerGpuSample = IsPositiveFinite(summary.profilerGpuSampleMs);
+		summary.wholeFrameGpuSampleMs = profiler.GetWholeFrameGpuTimeMs();
+		summary.hasWholeFrameGpuSample = IsPositiveFinite(summary.wholeFrameGpuSampleMs);
 	}
 	if (profiler.HasLatestWholeFrameCpuSample()) {
-		summary.profilerCpuSampleMs = profiler.GetWholeFrameCpuTimeMs();
-		summary.hasProfilerCpuSample = IsPositiveFinite(summary.profilerCpuSampleMs);
+		summary.wholeFrameCpuSampleMs = profiler.GetWholeFrameCpuTimeMs();
+		summary.hasWholeFrameCpuSample = IsPositiveFinite(summary.wholeFrameCpuSampleMs);
 	}
-	if (profiler.HasLatestFrameTimeSample()) {
-		summary.frameSampleMs = profiler.GetFrameTimeMs();
-		summary.hasFrameSample = IsPositiveFinite(summary.frameSampleMs);
-		summary.framePresentSynced = summary.hasFrameSample && profiler.WasLatestFramePresentSynced();
+	if (profiler.HasLatestPresentIntervalSample()) {
+		summary.presentIntervalSampleMs = profiler.GetPresentIntervalMs();
+		summary.hasPresentIntervalSample = IsPositiveFinite(summary.presentIntervalSampleMs);
+		summary.presentIntervalSynced =
+			summary.hasPresentIntervalSample && profiler.WasLatestPresentIntervalSynced();
 	}
 
 	for (const auto& [rootName, bucket] : timingBuckets) {
@@ -1005,9 +1146,9 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	}
 
 	summary.valid =
-		IsPositiveFinite(summary.frameMs) ||
-		IsPositiveFinite(summary.gpuTotalMs) ||
-		IsPositiveFinite(summary.cpuTotalMs);
+		summary.hasPresentInterval ||
+		summary.hasWholeFrameGpu ||
+		summary.hasWholeFrameCpu;
 	return summary;
 }
 
@@ -1023,35 +1164,108 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(
 	const PerformanceTimingHighlight* highlight)
 {
 	if (!globals::profiler) {
-		ImGui::TextDisabled("No profiler available.");
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				"menu.performance_tuning.profiling.unavailable",
+				"Profiling is unavailable."));
 		return;
 	}
 
 	if (featurePrefixes.empty()) {
-		ImGui::TextDisabled("No feature selected.");
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				"menu.performance_tuning.profiling.no_feature",
+				"No feature is selected."));
 		return;
+	}
+
+	const auto& profiler = *globals::profiler;
+	if (!profiler.IsDetailedCaptureActive()) {
+		const bool wholeFrameOnly =
+			profiler.IsWholeFrameCaptureActive();
+		ImGui::TextDisabled(
+			"%s",
+			wholeFrameOnly ?
+				T(
+					"menu.performance_tuning.profiling.capture_mode.whole_frame",
+					"Capture: Whole frame only") :
+				T(
+					"menu.performance_tuning.profiling.capture_mode.pending",
+					"Capture: Pending"));
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(
+				wholeFrameOnly ?
+					T(
+						"menu.performance_tuning.profiling.capture_mode.whole_frame_tooltip",
+						"Named pass scopes are paused during cost measurement to keep measurement overhead constant. GPU and CPU whole-frame boundaries remain separate supporting metrics.") :
+					T(
+						"menu.performance_tuning.profiling.capture_mode.pending_tooltip",
+						"Detailed pass capture will begin at the next successful game-frame Present."));
+			ImGui::TextUnformatted(
+				T(
+					"menu.performance_tuning.profiling.pre_fg_explanation",
+					"Game-frame Total and FPS use the direct pre-frame-generation Present-to-Present interval. Profiled pass timings are never added to Total."));
+		}
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				"menu.performance_tuning.profiling.detailed_paused",
+				"Detailed pass timing is paused."));
+		return;
+	}
+
+	ImGui::TextDisabled(
+		"%s",
+		T(
+			"menu.performance_tuning.profiling.capture_mode.detailed",
+			"Capture: Detailed passes"));
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			T(
+				"menu.performance_tuning.profiling.capture_mode.detailed_tooltip",
+				"Named GPU and CPU pass scopes are active for the selected feature."));
+		ImGui::TextUnformatted(
+			T(
+				"menu.performance_tuning.profiling.pre_fg_explanation",
+				"Game-frame Total and FPS use the direct pre-frame-generation Present-to-Present interval. Profiled pass timings are never added to Total."));
 	}
 
 	const auto gpuData = CollectFeatureTimingData(featurePrefixes, false);
 	const auto cpuData = CollectFeatureTimingData(featurePrefixes, true);
 	auto& graphState = featureGraphs[BuildTimingPrefixKey(featurePrefixes)];
 
-	ImGui::TextUnformatted("GPU");
+	ImGui::TextUnformatted(
+		T(
+			"menu.performance_tuning.profiling.gpu",
+			"GPU"));
 	ImGui::PushID("PerformanceSummaryGPU");
 	if (RenderFeatureTimingGraph(featurePrefixes.front(), gpuData, graphState.gpuGraph, 82)) {
 		RenderFeatureTimingStats(gpuData.totalAvg, gpuData.totalP95, gpuData.totalP99, highlight ? highlight->featureGpuDirection : 0);
 	} else {
-		ImGui::TextDisabled("No GPU timing data");
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				"menu.performance_tuning.profiling.no_gpu_data",
+				"No GPU pass timing data."));
 	}
 	ImGui::PopID();
 
 	ImGui::Spacing();
-	ImGui::TextUnformatted("CPU");
+	ImGui::TextUnformatted(
+		T(
+			"menu.performance_tuning.profiling.cpu",
+			"CPU"));
 	ImGui::PushID("PerformanceSummaryCPU");
 	if (RenderFeatureTimingGraph(featurePrefixes.front(), cpuData, graphState.cpuGraph, 82)) {
 		RenderFeatureTimingStats(cpuData.totalAvg, cpuData.totalP95, cpuData.totalP99, highlight ? highlight->featureCpuDirection : 0);
 	} else {
-		ImGui::TextDisabled("No CPU timing data");
+		ImGui::TextDisabled(
+			"%s",
+			T(
+				"menu.performance_tuning.profiling.no_cpu_data",
+				"No CPU pass timing data."));
 	}
 	ImGui::PopID();
 }

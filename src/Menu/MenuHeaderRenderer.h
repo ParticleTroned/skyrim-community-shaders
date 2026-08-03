@@ -12,6 +12,7 @@ public:
 		ID3D11ShaderResourceView* texture;
 		const char* tooltip;
 		std::function<void()> callback;
+		bool enabled;
 	};
 
 	static void RenderHeader(bool isDocked, bool showLogo, bool canShowIcons, float uiScale, const Menu::UIIcons& uiIcons);

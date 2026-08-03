@@ -952,13 +952,63 @@ void Upscaling::SaveSettings(json& o_json)
 {
 	SanitizeUpscalingSettings(settings);
 	o_json = settings;
-	o_json["qualityModeSchemaVersion"] = 2;
+	o_json["qualityModeSchemaVersion"] = kQualityModeSchemaVersion;
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
 		auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");
 		if (setting) {
 			iniSettingCollection->WriteSetting(setting);
 		}
+	}
+}
+
+json Upscaling::CapturePerformanceSettingsState() const
+{
+	auto capturedSettings = settings;
+	SanitizeUpscalingSettings(capturedSettings);
+
+	json state = capturedSettings;
+	state["qualityModeSchemaVersion"] = kQualityModeSchemaVersion;
+	return state;
+}
+
+bool Upscaling::NormalizePerformanceTuningUserSettings(json& a_settings) const
+{
+	if (!a_settings.is_object())
+		return false;
+
+	try {
+		if (!a_settings.contains("qualityModeSchemaVersion") &&
+			a_settings.contains("qualityMode")) {
+			a_settings["qualityMode"] =
+				MigrateLegacyQualityModeUInt(a_settings.at("qualityMode").get<uint>());
+			a_settings["qualityModeSchemaVersion"] = kQualityModeSchemaVersion;
+		}
+
+		if (!a_settings.contains("dlssPreset") &&
+			a_settings.contains("presetDLSS")) {
+			a_settings["dlssPreset"] =
+				MigrateLegacyDLSSPresetUInt(a_settings.at("presetDLSS").get<uint>());
+		}
+
+		if (!a_settings.contains("fsr4RuntimeSelectionSchemaVersion") &&
+			a_settings.contains("fsr4RuntimeEnable")) {
+			Settings migratedSettings{};
+			migratedSettings.fsr4RuntimeEnable =
+				a_settings.at("fsr4RuntimeEnable").get<bool>();
+			migratedSettings.fsr4RuntimeSelectionSchemaVersion = 0;
+			ApplyLegacyFsr4RuntimeSelectionMigration(
+				migratedSettings,
+				fidelityFX.GetFsr4AdapterSupport());
+			a_settings["fsr4RuntimeEnable"] =
+				migratedSettings.fsr4RuntimeEnable;
+			a_settings["fsr4RuntimeSelectionSchemaVersion"] =
+				migratedSettings.fsr4RuntimeSelectionSchemaVersion;
+		}
+
+		return true;
+	} catch (...) {
+		return false;
 	}
 }
 
@@ -1456,7 +1506,8 @@ bool Upscaling::IsPerformanceCostMeasurementReady() const
 {
 	if (!performanceCostAppliedStateValid)
 		return false;
-	if (globals::state && performanceCostAppliedFrame == globals::state->frameCount)
+	auto* state = globals::state;
+	if (!state || performanceCostAppliedFrame == state->frameCount)
 		return false;
 
 	const auto requestedMethod = GetUpscaleMethod();
@@ -1466,6 +1517,40 @@ bool Upscaling::IsPerformanceCostMeasurementReady() const
 	const bool requestedFrameGenerationMode = settings.frameGenerationMode && d3d12SwapChainActive;
 	if (performanceCostAppliedFrameGenerationMode != requestedFrameGenerationMode)
 		return false;
+	const bool requestedFrameGenerationThisFrame =
+		ShouldUseFrameGenerationThisFrame();
+	if (requestedFrameGenerationMode && !requestedFrameGenerationThisFrame)
+		return false;
+
+	const auto isRecent = [state](bool a_valid, uint32_t a_frame) {
+		return a_valid && state->frameCount - a_frame <= 1u;
+	};
+	if (!isRecent(
+			performanceCostExecutedPathValid,
+			performanceCostExecutedFrame) ||
+		performanceCostExecutedUpscaleMethod != requestedMethod ||
+		!performanceCostExecutedPathSuccessful) {
+		return false;
+	}
+
+	if (d3d12SwapChainActive) {
+		if (!frameGenerationCopyValid ||
+			frameGenerationCopyRequested != requestedFrameGenerationThisFrame ||
+			!frameGenerationCopySuccessful ||
+			(requestedFrameGenerationThisFrame && frameGenerationCopyConsumed)) {
+			return false;
+		}
+		if (!isRecent(
+				performanceCostFrameGenerationPresentValid,
+				performanceCostFrameGenerationPresentFrame) ||
+			performanceCostFrameGenerationPresentRequested !=
+				requestedFrameGenerationThisFrame ||
+			!performanceCostFrameGenerationPresentSuccessful ||
+			performanceCostFrameGenerationPresentActive !=
+				requestedFrameGenerationThisFrame) {
+			return false;
+		}
+	}
 
 	if (requestedMethod == UpscaleMethod::kDLSS || requestedMethod == UpscaleMethod::kFSR) {
 		if (performanceCostAppliedQualityMode != ClampQualityModeUInt(settings.qualityMode))
@@ -1487,6 +1572,45 @@ bool Upscaling::IsPerformanceCostMeasurementReady() const
 	}
 
 	return true;
+}
+
+void Upscaling::RecordPerformanceCostExecutedPath(
+	UpscaleMethod a_method,
+	bool a_successful)
+{
+	auto* state = globals::state;
+	performanceCostExecutedPathValid = state != nullptr;
+	performanceCostExecutedPathSuccessful = a_successful;
+	performanceCostExecutedUpscaleMethod = a_method;
+	performanceCostExecutedFrame = state ?
+		state->frameCount :
+		std::numeric_limits<uint32_t>::max();
+}
+
+void Upscaling::RecordFrameGenerationCopy(
+	bool a_requested,
+	bool a_successful)
+{
+	auto* state = globals::state;
+	frameGenerationCopyValid = state != nullptr;
+	frameGenerationCopyRequested = a_requested;
+	frameGenerationCopySuccessful = a_successful;
+	frameGenerationCopyConsumed = !a_requested || !a_successful;
+}
+
+void Upscaling::RecordPerformanceCostFrameGenerationPresent(
+	bool a_requested,
+	bool a_successful,
+	bool a_active)
+{
+	auto* state = globals::state;
+	performanceCostFrameGenerationPresentValid = state != nullptr;
+	performanceCostFrameGenerationPresentRequested = a_requested;
+	performanceCostFrameGenerationPresentSuccessful = a_successful;
+	performanceCostFrameGenerationPresentActive = a_active;
+	performanceCostFrameGenerationPresentFrame = state ?
+		state->frameCount :
+		std::numeric_limits<uint32_t>::max();
 }
 
 ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
@@ -1757,35 +1881,48 @@ void Upscaling::ClearShaderCache()
 	copyDepthToSharedBufferPS = nullptr;
 }
 
-void Upscaling::CopySharedD3D12Resources()
+bool Upscaling::CopySharedD3D12Resources()
 {
+	auto* state = globals::state;
+	if (!state)
+		return false;
+
 	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Copy Shared D3D12 Resources");
-	globals::state->BeginPerfEvent("Copy Shared D3D12 Resources");
+	TracyD3D11Zone(state->tracyCtx, "Upscaling - Copy Shared D3D12 Resources");
+	state->BeginPerfEvent("Copy Shared D3D12 Resources");
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	auto* viewportState = globals::game::graphicsState;
 	static bool loggedMissingSharedResources = false;
 	static bool loggedMissingCopySources = false;
 
 	if (!copyDepthToSharedBufferPS)
 		copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+	auto* upscaleVertexShader = GetUpscaleVS();
 
 	const bool hasSharedResources =
 		renderer &&
 		context &&
+		globals::profiler &&
+		viewportState &&
+		viewportState->screenWidth > 0 &&
+		viewportState->screenHeight > 0 &&
 		dx12SwapChain.motionVectorBufferShared12 &&
 		dx12SwapChain.motionVectorBufferShared12->resource11 &&
 		dx12SwapChain.depthBufferShared12 &&
 		dx12SwapChain.depthBufferShared12->rtv &&
-		copyDepthToSharedBufferPS;
+		copyDepthToSharedBufferPS &&
+		upscaleVertexShader &&
+		upscaleRasterizerState &&
+		upscaleBlendState;
 	if (!hasSharedResources) {
 		if (!loggedMissingSharedResources) {
 			logger::error("[Upscaling] Skipping D3D12 shared-resource copy because frame-generation interop resources are incomplete.");
 			loggedMissingSharedResources = true;
 		}
-		globals::state->EndPerfEvent();
-		return;
+		state->EndPerfEvent();
+		return false;
 	}
 	loggedMissingSharedResources = false;
 
@@ -1798,8 +1935,23 @@ void Upscaling::CopySharedD3D12Resources()
 			logger::error("[Upscaling] Skipping D3D12 shared-resource copy because source depth or motion-vector resources are missing.");
 			loggedMissingCopySources = true;
 		}
-		globals::state->EndPerfEvent();
-		return;
+		state->EndPerfEvent();
+		return false;
+	}
+	D3D11_TEXTURE2D_DESC sourceMotionVectorDesc{};
+	D3D11_TEXTURE2D_DESC sharedMotionVectorDesc{};
+	motionVector.texture->GetDesc(&sourceMotionVectorDesc);
+	dx12SwapChain.motionVectorBufferShared12->resource11->GetDesc(
+		&sharedMotionVectorDesc);
+	if (sourceMotionVectorDesc.Width != sharedMotionVectorDesc.Width ||
+		sourceMotionVectorDesc.Height != sharedMotionVectorDesc.Height ||
+		sourceMotionVectorDesc.MipLevels != sharedMotionVectorDesc.MipLevels ||
+		sourceMotionVectorDesc.ArraySize != sharedMotionVectorDesc.ArraySize ||
+		sourceMotionVectorDesc.Format != sharedMotionVectorDesc.Format ||
+		sourceMotionVectorDesc.SampleDesc.Count != sharedMotionVectorDesc.SampleDesc.Count ||
+		sourceMotionVectorDesc.SampleDesc.Quality != sharedMotionVectorDesc.SampleDesc.Quality) {
+		state->EndPerfEvent();
+		return false;
 	}
 	loggedMissingCopySources = false;
 
@@ -1807,7 +1959,6 @@ void Upscaling::CopySharedD3D12Resources()
 
 	{
 		// Set up viewport for fullscreen rendering
-		auto viewportState = globals::game::graphicsState;
 		const float screenWidth = static_cast<float>(viewportState ? viewportState->screenWidth : 0);
 		const float screenHeight = static_cast<float>(viewportState ? viewportState->screenHeight : 0);
 
@@ -1827,7 +1978,7 @@ void Upscaling::CopySharedD3D12Resources()
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 		// Set up vertex shader
-		context->VSSetShader(GetUpscaleVS(), nullptr, 0);
+		context->VSSetShader(upscaleVertexShader, nullptr, 0);
 
 		// Set up rasterizer and blend states
 		context->RSSetState(upscaleRasterizerState.get());
@@ -1852,7 +2003,8 @@ void Upscaling::CopySharedD3D12Resources()
 	ID3D11ShaderResourceView* views[1] = { nullptr };
 	context->PSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	globals::state->EndPerfEvent();
+	state->EndPerfEvent();
+	return true;
 }
 
 void UpdateCameraData()
@@ -1894,7 +2046,7 @@ void Upscaling::TimerSleepQPC(int64_t targetQPC)
 	} while (currentQPC.QuadPart < targetQPC);
 }
 
-void Upscaling::FrameLimiter()
+void Upscaling::FrameLimiter(bool a_frameGenerationActive)
 {
 	if (d3d12SwapChainActive) {
 		// Use frame latency waitable object if available for better frame pacing
@@ -1915,7 +2067,7 @@ void Upscaling::FrameLimiter()
 		if (settings.frameLimitMode) {
 			static constexpr int64_t kNanosecondsPerSecond = 1000000000LL;
 			static constexpr double kFrameGenerationRateScale = 0.5;
-			const double frameRateScale = ShouldUseFrameGenerationThisFrame() ? kFrameGenerationRateScale : 1.0;
+			const double frameRateScale = a_frameGenerationActive ? kFrameGenerationRateScale : 1.0;
 			int64_t targetFrameTimeNS = int64_t(static_cast<double>(kNanosecondsPerSecond) / (refreshRate * frameRateScale));
 			int64_t targetFrameTicks = (targetFrameTimeNS * qpf.QuadPart) / kNanosecondsPerSecond;
 
@@ -2007,6 +2159,20 @@ bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 	auto* state = globals::state;
 	const bool menuOpen = (ui && ui->GameIsPaused()) || (state && state->IsMainOrLoadingMenuOpen(ui));
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
+}
+
+bool Upscaling::ConsumeFrameGenerationInputsForPresent()
+{
+	const bool inputsReady =
+		globals::state &&
+		frameGenerationCopyValid &&
+		frameGenerationCopyRequested &&
+		frameGenerationCopySuccessful &&
+		!frameGenerationCopyConsumed;
+	// A real Present attempt owns this render's inputs even if a later interop or
+	// DXGI operation fails. Reusing them could feed stale motion/depth to FG.
+	frameGenerationCopyConsumed = true;
+	return inputsReady;
 }
 
 bool Upscaling::IsUpscalingActive() const
@@ -2358,60 +2524,101 @@ Upscaling::BlurResources Upscaling::GetBlurResources() const
 	return {};
 }
 
-void Upscaling::Upscale()
+bool Upscaling::Upscale()
 {
 	ZoneScoped;
-	auto upscaleMethod = GetUpscaleMethod();
+	const auto upscaleMethod = GetUpscaleMethod();
+	if (upscaleMethod != UpscaleMethod::kDLSS &&
+		upscaleMethod != UpscaleMethod::kFSR) {
+		return false;
+	}
 
 	UpdateHistoryResetState(upscaleMethod);
 	LatchHistoryResetForCurrentFrame();
 
-	auto state = globals::state;
-	auto context = globals::d3d::context;
-	auto renderer = globals::game::renderer;
+	auto* state = globals::state;
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	auto* deferred = globals::deferred;
+	auto* profiler = globals::profiler;
+	const auto* viewport = globals::game::graphicsState;
+	if (!state || !context || !renderer || !deferred || !profiler || !viewport ||
+		!upscalingDataCB || !upscalingDataCB->CB() ||
+		viewport->screenWidth == 0 || viewport->screenHeight == 0) {
+		return false;
+	}
+
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
+	auto& normals = renderer->GetRuntimeData().renderTargets[deferred->forwardRenderTargets[2]];
+	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	const bool hasEncodeResources =
+		main.texture &&
+		temporalAAMask.SRV &&
+		normals.SRV &&
+		motionVector.SRV &&
+		depth.texture &&
+		depth.depthSRV &&
+		reactiveMaskTexture &&
+		reactiveMaskTexture->resource &&
+		reactiveMaskTexture->uav &&
+		transparencyCompositionMaskTexture &&
+		transparencyCompositionMaskTexture->resource &&
+		transparencyCompositionMaskTexture->uav &&
+		motionVectorCopyTexture &&
+		motionVectorCopyTexture->resource &&
+		motionVectorCopyTexture->uav;
+	if (!hasEncodeResources)
+		return false;
+
+	auto* encodeShader = GetEncodeTexturesCS();
+	if (!encodeShader)
+		return false;
+
+	const float2 displaySize{
+		static_cast<float>(viewport->screenWidth),
+		static_cast<float>(viewport->screenHeight)
+	};
+	const auto renderSize = Util::ConvertToDynamic(displaySize);
+	if (!std::isfinite(renderSize.x) || !std::isfinite(renderSize.y) ||
+		renderSize.x <= 0.0f || renderSize.y <= 0.0f ||
+		static_cast<double>(renderSize.x) > std::numeric_limits<uint32_t>::max() ||
+		static_cast<double>(renderSize.y) > std::numeric_limits<uint32_t>::max()) {
+		return false;
+	}
+	const uint32_t renderWidth = static_cast<uint32_t>(renderSize.x);
+	const uint32_t renderHeight = static_cast<uint32_t>(renderSize.y);
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	main.texture->GetDesc(&mainDesc);
+	if (renderWidth == 0 || renderHeight == 0 ||
+		renderWidth > mainDesc.Width || renderHeight > mainDesc.Height) {
+		return false;
+	}
+
+	UpscalingDataCB upscalingData{};
+	upscalingData.trueSamplingDim = renderSize;
+	upscalingDataCB->Update(upscalingData);
+	auto upscalingBuffer = upscalingDataCB->CB();
+	if (!upscalingBuffer)
+		return false;
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	const bool requiresEncodedMotionVectors = upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR;
-	if (requiresEncodedMotionVectors && (!motionVectorCopyTexture || !motionVectorCopyTexture->uav || !motionVectorCopyTexture->resource)) {
-		logger::error("[Upscaling] Missing encoded motion-vector resources for method {}", magic_enum::enum_name(upscaleMethod));
-		return;
-	}
-
 	{
-		globals::profiler->BeginPass("Upscaling::EncodeTextures");
+		profiler->BeginPass("Upscaling::EncodeTextures");
 		state->BeginPerfEvent("Encode Upscaling Textures");
-		TracyD3D11Zone(globals::state->tracyCtx, "Encode Upscaling Textures");
-
-		auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
-		auto& normals = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[2]];
-		auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-
-		const auto* viewport = globals::game::graphicsState;
-		const float2 displaySize{
-			static_cast<float>(viewport ? viewport->screenWidth : 0),
-			static_cast<float>(viewport ? viewport->screenHeight : 0)
-		};
-		auto renderSize = Util::ConvertToDynamic(displaySize);
-		uint32_t renderWidth = static_cast<uint32_t>(renderSize.x);
-		uint32_t renderHeight = static_cast<uint32_t>(renderSize.y);
+		TracyD3D11Zone(state->tracyCtx, "Encode Upscaling Textures");
 
 		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
-		context->CSSetShader(GetEncodeTexturesCS(), nullptr, 0);
-
-		UpscalingDataCB upscalingData{};
-		upscalingData.trueSamplingDim = renderSize;
-		upscalingDataCB->Update(upscalingData);
-		auto upscalingBuffer = upscalingDataCB->CB();
+		context->CSSetShader(encodeShader, nullptr, 0);
 		context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
 
 		ID3D11UnorderedAccessView* uavs[3] = {
 			reactiveMaskTexture->uav.get(),
 			transparencyCompositionMaskTexture->uav.get(),
-			requiresEncodedMotionVectors ? motionVectorCopyTexture->uav.get() : nullptr
+			motionVectorCopyTexture->uav.get()
 		};
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
@@ -2430,48 +2637,56 @@ void Upscaling::Upscale()
 		context->CSSetShader(shader, nullptr, 0);
 
 		state->EndPerfEvent();
-		globals::profiler->EndPass();
+		profiler->EndPass();
 	}
 
+	bool upscaleSuccessful = false;
 	{
-		globals::profiler->BeginPass("Upscaling::Upscale");
+		profiler->BeginPass("Upscaling::Upscale");
 		state->BeginPerfEvent("Upscaling");
-		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
-		ID3D11Resource* motionVectorResource = requiresEncodedMotionVectors ?
-		                                           motionVectorCopyTexture->resource.get() :
-		                                           nullptr;
+		TracyD3D11Zone(state->tracyCtx, "Upscaling Dispatch");
+		ID3D11Resource* motionVectorResource = motionVectorCopyTexture->resource.get();
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
-			streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
+			upscaleSuccessful = streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
-			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
+			upscaleSuccessful = fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
 		}
 
 		state->EndPerfEvent();
-		globals::profiler->EndPass();
+		profiler->EndPass();
 	}
+	return upscaleSuccessful;
 }
 
-void Upscaling::PerformUpscaling()
+bool Upscaling::PerformUpscaling()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling");
-	Upscale();
-	UpscaleDepth();
+	auto* state = globals::state;
+	auto* graphicsState = globals::game::graphicsState;
+	if (!state || !graphicsState) {
+		RequestHistoryReset();
+		return false;
+	}
 
-	auto& runtimeData = globals::game::graphicsState->GetRuntimeData();
+	ZoneScoped;
+	TracyD3D11Zone(state->tracyCtx, "Upscaling");
+	const bool upscaleSuccessful = Upscale();
+	if (!upscaleSuccessful)
+		RequestHistoryReset();
+	const bool depthSuccessful = UpscaleDepth();
+
+	auto& runtimeData = graphicsState->GetRuntimeData();
 
 	// Disable dynamic resolution past this point
 	runtimeData.dynamicResolutionLock = 1;
 
 	// Updates the PerFrame constant buffer so that dynamic resolution settings are disabled
 	UpdateCameraData();
+	return upscaleSuccessful && depthSuccessful;
 }
 
-void Upscaling::UpscaleDepth()
+bool Upscaling::UpscaleDepth()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth");
 	// Optimization overview:
 	// 1) Early validation exits before issuing GPU work.
 	// 2) Wide-kernel depth mode uses hysteresis to avoid frequent toggles.
@@ -2479,22 +2694,26 @@ void Upscaling::UpscaleDepth()
 
 	// (1) Early validation exits
 	if (!IsUpscalingActive()) {
-		return;
+		return true;
 	}
 
-	auto state = globals::state;
-	auto renderer = globals::game::renderer;
-	auto context = globals::d3d::context;
-	auto deferred = globals::deferred;
-	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !jitterCB || !upscaleRasterizerState || !upscaleBlendState || !upscaleDepthStencilState) {
-		return;
+	auto* state = globals::state;
+	auto* renderer = globals::game::renderer;
+	auto* context = globals::d3d::context;
+	auto* deferred = globals::deferred;
+	auto* profiler = globals::profiler;
+	if (!state || !renderer || !context || !deferred || !profiler ||
+		!deferred->linearSampler || !jitterCB || !jitterCB->CB() ||
+		!upscaleRasterizerState || !upscaleBlendState || !upscaleDepthStencilState) {
+		return false;
 	}
 
 	auto* viewportState = globals::game::graphicsState;
 	const float screenWidth = viewportState ? static_cast<float>(viewportState->screenWidth) : 0.0f;
 	const float screenHeight = viewportState ? static_cast<float>(viewportState->screenHeight) : 0.0f;
-	if (screenWidth <= 0.0f || screenHeight <= 0.0f) {
-		return;
+	if (!std::isfinite(screenWidth) || !std::isfinite(screenHeight) ||
+		screenWidth <= 0.0f || screenHeight <= 0.0f) {
+		return false;
 	}
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -2506,15 +2725,18 @@ void Upscaling::UpscaleDepth()
 	if (!depth.texture || !depth.views[0] || !depthCopy.texture || !depthCopy.depthSRV ||
 		!refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV ||
 		!underwaterMask.texture || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !underwaterMask.RTV) {
-		return;
+		return false;
 	}
 
 	auto* fullscreenVS = GetUpscaleVS();
 	auto* depthUpscalePS = GetDepthRefractionUpscalePS();
 	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS();
 	if (!fullscreenVS || !depthUpscalePS || !underwaterMaskPS) {
-		return;
+		return false;
 	}
+
+	ZoneScoped;
+	TracyD3D11Zone(state->tracyCtx, "Upscaling - Depth");
 
 	state->BeginPerfEvent("Render Target Upscaling");
 
@@ -2598,9 +2820,9 @@ void Upscaling::UpscaleDepth()
 		context->OMSetRenderTargets(2, rtvs, depth.views[0]);
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
-		globals::profiler->BeginPass("Upscaling::DepthUpscale");
+		profiler->BeginPass("Upscaling::DepthUpscale");
 		context->Draw(3, 0);
-		globals::profiler->EndPass();
+		profiler->EndPass();
 	}
 
 	{
@@ -2622,43 +2844,51 @@ void Upscaling::UpscaleDepth()
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
 		context->PSSetShader(underwaterMaskPS, nullptr, 0);
-		globals::profiler->BeginPass("Upscaling::UnderwaterMaskUpscale");
+		profiler->BeginPass("Upscaling::UnderwaterMaskUpscale");
 		context->Draw(3, 0);
-		globals::profiler->EndPass();
+		profiler->EndPass();
 	}
 
 	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(0, ARRAYSIZE(nullPSResources), nullPSResources);
 
 	state->EndPerfEvent();
+	return true;
 }
 
-void Upscaling::ApplySharpening()
+bool Upscaling::ApplySharpening()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Sharpening");
-
 	if (settings.sharpnessDLSS <= 0.0f)
-		return;
+		return true;
 
 	if (!dlssSharpenerOutputValid || !sharpenerTexture)
-		return;
+		return false;
+
+	auto* state = globals::state;
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	auto* stateUpdateFlags = globals::game::stateUpdateFlags;
+	if (!state || !context || !renderer || !globals::profiler || !stateUpdateFlags)
+		return false;
+
+	ZoneScoped;
+	TracyD3D11Zone(state->tracyCtx, "Upscaling - Sharpening");
 
 	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
 	currentSharpness = exp2(-currentSharpness);
 
-	auto context = globals::d3d::context;
-	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
 	if (!main.UAV || !sharpenerTexture->srv)
-		return;
+		return false;
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+	if (!rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness))
+		return false;
 
-	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	return true;
 }
 
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
@@ -2686,22 +2916,27 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
 	auto& upscaling = globals::features::upscaling;
-	auto upscaleMethod = upscaling.GetUpscaleMethod();
-
-	if (upscaling.ShouldUseFrameGenerationThisFrame())
-		upscaling.CopySharedD3D12Resources();
-
-	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
-		upscaling.PerformUpscaling();
-
-	if (upscaleMethod == UpscaleMethod::kDLSS)
-		upscaling.ApplySharpening();
+	const auto upscaleMethod = upscaling.GetUpscaleMethod();
+	const bool frameGenerationRequested = upscaling.ShouldUseFrameGenerationThisFrame();
+	const bool frameGenerationCopySuccessful =
+		!frameGenerationRequested || upscaling.CopySharedD3D12Resources();
+	upscaling.RecordFrameGenerationCopy(
+		frameGenerationRequested,
+		frameGenerationCopySuccessful);
 
 	if (upscaleMethod == UpscaleMethod::kNONE) {
 		// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
 		func(a_this, a3, a_target, a_4, a_5);
+		upscaling.RecordPerformanceCostExecutedPath(upscaleMethod, true);
 		return;
 	}
+
+	bool pathSuccessful = true;
+	if (upscaleMethod != UpscaleMethod::kTAA)
+		pathSuccessful = upscaling.PerformUpscaling();
+
+	if (upscaleMethod == UpscaleMethod::kDLSS)
+		pathSuccessful = upscaling.ApplySharpening() && pathSuccessful;
 
 	Util::SetTemporal(upscaleMethod == UpscaleMethod::kTAA);
 
@@ -2718,6 +2953,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::features::hdrDisplay.RestoreFramebuffer();
 
 	Util::SetTemporal(false);
+	upscaling.RecordPerformanceCostExecutedPath(upscaleMethod, pathSuccessful);
 }
 
 void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)

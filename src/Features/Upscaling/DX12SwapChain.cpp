@@ -144,6 +144,11 @@ void DX12SwapChain::CreateInterop()
 	// UI buffer uses R8G8B8A8_UNORM - vanilla UI is SDR and 8-bit precision
 	texDesc11.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	uiBufferWrapped = std::make_unique<WrappedResource>(texDesc11, d3d11Device.get(), d3d12Device.get());
+
+	// A fully recreated shared-fence path is the recovery boundary for a
+	// previously latched post-Present interop failure.
+	fenceValue = 1;
+	presentInteropFailure = S_OK;
 }
 
 DXGISwapChainProxy* DX12SwapChain::GetSwapChainProxy()
@@ -182,7 +187,25 @@ HRESULT DX12SwapChain::GetBuffer(UINT Buffer, REFIID riid, void** ppSurface)
 
 HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 {
+	if ((Flags & DXGI_PRESENT_TEST) != 0)
+		return swapChain ?
+		           swapChain->Present(SyncInterval, Flags) :
+		           DXGI_ERROR_INVALID_CALL;
+
 	auto& upscaling = globals::features::upscaling;
+	const bool frameGenerationRequested =
+		upscaling.ShouldUseFrameGenerationThisFrame();
+	// Every real Present attempt owns the current render's copy token, even when
+	// frame generation is not requested or later interop work fails.
+	const bool frameGenerationInputsReady =
+		upscaling.ConsumeFrameGenerationInputsForPresent();
+	upscaling.fidelityFX.isFrameGenActive = false;
+	upscaling.RecordPerformanceCostFrameGenerationPresent(
+		frameGenerationRequested,
+		false,
+		false);
+	if (FAILED(presentInteropFailure))
+		return presentInteropFailure;
 	static bool loggedIncompletePresentResources = false;
 
 	const bool hasPresentResources =
@@ -219,13 +242,27 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	bool isHDR = hdr && hdr->settings.enableHDR;
 
 	// Wait for D3D11 to finish (includes ApplyHDR scene encoding AND UIBrightnessCS)
-	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
-	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
-	fenceValue++;
+	// Retire the value when the handshake starts so a partial failure can never
+	// reuse a value that one side may already have completed.
+	const UINT64 prePresentFenceValue = fenceValue++;
+	if (const HRESULT result = d3d11Context->Signal(d3d11Fence.get(), prePresentFenceValue); FAILED(result)) {
+		logger::error("[DX12SwapChain] D3D11 pre-Present fence signal failed: 0x{:08X}", static_cast<unsigned>(result));
+		return result;
+	}
+	if (const HRESULT result = commandQueue->Wait(d3d12Fence.get(), prePresentFenceValue); FAILED(result)) {
+		logger::error("[DX12SwapChain] D3D12 pre-Present fence wait failed: 0x{:08X}", static_cast<unsigned>(result));
+		return result;
+	}
 
 	// New frame, reset
-	DX::ThrowIfFailed(commandAllocators[frameIndex]->Reset());
-	DX::ThrowIfFailed(commandLists[frameIndex]->Reset(commandAllocators[frameIndex].get(), nullptr));
+	if (const HRESULT result = commandAllocators[frameIndex]->Reset(); FAILED(result)) {
+		logger::error("[DX12SwapChain] Command allocator reset failed: 0x{:08X}", static_cast<unsigned>(result));
+		return result;
+	}
+	if (const HRESULT result = commandLists[frameIndex]->Reset(commandAllocators[frameIndex].get(), nullptr); FAILED(result)) {
+		logger::error("[DX12SwapChain] Command list reset failed: 0x{:08X}", static_cast<unsigned>(result));
+		return result;
+	}
 
 	// Copy shared texture to swap chain buffer
 	{
@@ -248,32 +285,72 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 		}
 	}
 
-	upscaling.fidelityFX.Present(upscaling.ShouldUseFrameGenerationThisFrame(), isHDR);
+	const bool useFrameGeneration =
+		frameGenerationRequested && frameGenerationInputsReady;
+	const auto frameGenerationResult =
+		upscaling.fidelityFX.Present(useFrameGeneration, isHDR);
 
-	DX::ThrowIfFailed(commandLists[frameIndex]->Close());
+	if (const HRESULT result = commandLists[frameIndex]->Close(); FAILED(result)) {
+		logger::error("[DX12SwapChain] Command list close failed: 0x{:08X}", static_cast<unsigned>(result));
+		return result;
+	}
 
 	ID3D12CommandList* commandListsToExecute[] = { commandLists[frameIndex].get() };
 	commandQueue->ExecuteCommandLists(1, commandListsToExecute);
 
 	// Present the frame
-	DX::ThrowIfFailed(swapChain->Present(SyncInterval, Flags));
-
-	// Wait for D3D12 to finish
-	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
-	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
-	fenceValue++;
-
-	// Update the frame index
+	const HRESULT presentResult = swapChain->Present(SyncInterval, Flags);
+	const bool acceptedPresent =
+		SUCCEEDED(presentResult) &&
+		presentResult != DXGI_STATUS_OCCLUDED;
+	if (FAILED(presentResult))
+		return presentResult;
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
 
+	// Commit the underlying DXGI boundary before post-Present housekeeping. A
+	// later interop synchronization failure must not erase an accepted display
+	// boundary from direct Present-to-Present timing.
+	const bool frameGenerationActive =
+		acceptedPresent &&
+		useFrameGeneration &&
+		frameGenerationResult.successful &&
+		frameGenerationResult.active;
+	upscaling.fidelityFX.isFrameGenActive = frameGenerationActive;
+	upscaling.RecordPerformanceCostFrameGenerationPresent(
+		frameGenerationRequested,
+		acceptedPresent &&
+			frameGenerationResult.successful &&
+			(!frameGenerationRequested || useFrameGeneration),
+		frameGenerationActive);
+
+	// Wait for D3D12 to finish
+	const UINT64 postPresentFenceValue = fenceValue++;
+	if (const HRESULT result = commandQueue->Signal(d3d12Fence.get(), postPresentFenceValue); FAILED(result)) {
+		logger::error("[DX12SwapChain] D3D12 post-Present fence signal failed: 0x{:08X}", static_cast<unsigned>(result));
+		presentInteropFailure = result;
+		upscaling.RecordPerformanceCostFrameGenerationPresent(
+			frameGenerationRequested,
+			false,
+			frameGenerationActive);
+		return presentResult;
+	}
+	if (const HRESULT result = d3d11Context->Wait(d3d11Fence.get(), postPresentFenceValue); FAILED(result)) {
+		logger::error("[DX12SwapChain] D3D11 post-Present fence wait failed: 0x{:08X}", static_cast<unsigned>(result));
+		presentInteropFailure = result;
+		upscaling.RecordPerformanceCostFrameGenerationPresent(
+			frameGenerationRequested,
+			false,
+			frameGenerationActive);
+		return presentResult;
+	}
 	float clearColor[4]{ 0, 0, 0, 0 };
 	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv.get(), clearColor);
 
 	// If VSync is disabled, use frame limiter to prevent tearing and optimise pacing
-	if (SyncInterval == 0)
-		upscaling.FrameLimiter();
+	if (acceptedPresent && SyncInterval == 0)
+		upscaling.FrameLimiter(frameGenerationActive);
 
-	return S_OK;
+	return presentResult;
 }
 
 HRESULT DX12SwapChain::GetDevice(REFIID uuid, void** ppDevice)

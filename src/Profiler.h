@@ -19,6 +19,16 @@ public:
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
 
+	enum class CaptureMode : uint8_t
+	{
+		None,
+		// Collect whole-frame GPU/CPU boundaries without named pass scopes.
+		// Direct Present intervals remain independent and always-on.
+		WholeFrameOnly,
+		// Also execute and collect named GPU/CPU pass scopes.
+		DetailedPasses
+	};
+
 	struct RollingHistory
 	{
 		float history[kHistorySize]{};
@@ -87,8 +97,17 @@ public:
 	void Release();
 	void SetUserEnabled(bool a_enabled);
 	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
-	void RequestCapture();
-	bool IsEnabled() const { return IsUserEnabled() && captureActive.load(std::memory_order_acquire); }
+	void SetCaptureModeLimit(CaptureMode a_mode);
+	CaptureMode GetCaptureModeLimit() const { return captureModeLimit.load(std::memory_order_acquire); }
+	void RequestCapture(CaptureMode a_mode = CaptureMode::DetailedPasses);
+	bool IsWholeFrameCaptureActive() const
+	{
+		return IsUserEnabled() && captureActive.load(std::memory_order_acquire) != CaptureMode::None;
+	}
+	bool IsDetailedCaptureActive() const
+	{
+		return IsUserEnabled() && captureActive.load(std::memory_order_acquire) == CaptureMode::DetailedPasses;
+	}
 
 	void SetPerfEventCallbacks(PerfEventCallback beginCb, PerfEventCallback endCb)
 	{
@@ -101,27 +120,34 @@ public:
 	void EndPass();
 	bool BeginCpuPass(std::string_view name);
 	void EndCpuPass();
-	void EndFrame(UINT syncInterval);
+	// These calls must immediately bracket the actual DXGI Present. A direct
+	// Present interval is committed only after a successful, non-test, visible Present.
+	void BeginPresent(UINT syncInterval, UINT presentFlags);
+	void CompletePresent(HRESULT presentResult);
 
 	const std::vector<TimerResult>& GetResults() const { return results; }
-	float GetTotalTimeMs() const { return totalTimeMs; }
-	float GetCpuTotalTimeMs() const { return cpuTotalTimeMs; }
-	float GetTotalTimeAverageMs(uint32_t maxSamples = 60) const { return totalGpuHistory.GetAverage(maxSamples); }
-	float GetCpuTotalTimeAverageMs(uint32_t maxSamples = 60) const { return totalCpuHistory.GetAverage(maxSamples); }
+	float GetProfiledPassGpuTotalMs() const { return profiledPassGpuTotalMs; }
+	float GetProfiledPassCpuTotalMs() const { return profiledPassCpuTotalMs; }
+	float GetProfiledPassGpuTotalAverageMs(uint32_t maxSamples = 60) const { return profiledPassGpuTotalHistory.GetAverage(maxSamples); }
+	float GetProfiledPassCpuTotalAverageMs(uint32_t maxSamples = 60) const { return profiledPassCpuTotalHistory.GetAverage(maxSamples); }
 	float GetWholeFrameGpuTimeMs() const { return wholeFrameGpuHistory.lastMs; }
 	float GetWholeFrameCpuTimeMs() const { return wholeFrameCpuHistory.lastMs; }
-	float GetFrameTimeMs() const { return frameTimeHistory.lastMs; }
+	float GetPresentIntervalMs() const { return presentIntervalHistory.lastMs; }
 	float GetWholeFrameGpuTimeAverageMs(uint32_t maxSamples = 60) const { return wholeFrameGpuHistory.GetAverage(maxSamples); }
 	float GetWholeFrameCpuTimeAverageMs(uint32_t maxSamples = 60) const { return wholeFrameCpuHistory.GetAverage(maxSamples); }
-	float GetFrameTimeAverageMs(uint32_t maxSamples = 60) const { return frameTimeHistory.GetAverage(maxSamples); }
+	float GetPresentIntervalAverageMs(uint32_t maxSamples = 60) const { return presentIntervalHistory.GetAverage(maxSamples); }
 	bool HasWholeFrameGpuTime() const { return wholeFrameGpuHistory.count > 0; }
 	bool HasWholeFrameCpuTime() const { return wholeFrameCpuHistory.count > 0; }
-	bool HasFrameTime() const { return frameTimeHistory.count > 0; }
+	bool HasPresentInterval() const { return presentIntervalHistory.count > 0; }
 	bool HasLatestWholeFrameGpuSample() const { return wholeFrameSampleId != 0 && wholeFrameGpuSampleId == wholeFrameSampleId; }
 	bool HasLatestWholeFrameCpuSample() const { return wholeFrameSampleId != 0 && wholeFrameCpuSampleId == wholeFrameSampleId; }
-	bool HasLatestFrameTimeSample() const { return wholeFrameSampleId != 0 && frameTimeSampleId == wholeFrameSampleId; }
-	bool WasLatestFramePresentSynced() const { return HasLatestFrameTimeSample() && latestFrameWasPresentSynced; }
+	bool HasLatestPresentIntervalSample() const { return presentIntervalSampleId != 0; }
+	bool WasLatestPresentIntervalSynced() const { return HasLatestPresentIntervalSample() && latestPresentIntervalWasSynced; }
 	uint64_t GetWholeFrameSampleId() const { return wholeFrameSampleId; }
+	uint64_t GetWholeFrameGpuSampleId() const { return wholeFrameGpuSampleId; }
+	uint64_t GetWholeFrameCpuSampleId() const { return wholeFrameCpuSampleId; }
+	uint64_t GetWholeFramePresentIntervalSampleId() const { return wholeFramePresentIntervalSampleId; }
+	uint64_t GetPresentIntervalSampleId() const { return presentIntervalSampleId; }
 	void ClearTimers();
 	void ClearTimersForFeature(const std::string& featureName);
 
@@ -130,7 +156,7 @@ public:
 	public:
 		ScopedPass(Profiler* a_profiler, std::string_view a_name)
 		{
-			if (a_profiler && a_profiler->IsEnabled() && a_profiler->BeginPass(a_name)) {
+			if (a_profiler && a_profiler->BeginPass(a_name)) {
 				profiler = a_profiler;
 			}
 		}
@@ -156,7 +182,7 @@ public:
 	public:
 		ScopedCpuPass(Profiler* a_profiler, std::string_view a_name)
 		{
-			if (a_profiler && a_profiler->IsEnabled() && a_profiler->BeginCpuPass(a_name)) {
+			if (a_profiler && a_profiler->BeginCpuPass(a_name)) {
 				profiler = a_profiler;
 			}
 		}
@@ -190,6 +216,7 @@ private:
 	{
 		std::string name;
 		float cpuMs = 0.0f;
+		bool hasCpuTime = false;
 	};
 
 	struct FrameQueries
@@ -204,18 +231,21 @@ private:
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
 			float cpuMs = 0.0f;
+			bool hasCpuBegin = false;
+			bool hasCpuTime = false;
 			bool ended = false;
 		};
 		std::vector<TimerPair> timers;
 		std::vector<CompletedCpuTimer> cpuTimers;
 		std::vector<uint32_t> activeTimerStack;
 		uint32_t activeCount = 0;
+		CaptureMode captureMode = CaptureMode::None;
 		LARGE_INTEGER wholeFrameCpuBegin{};
 		float wholeFrameCpuMs = 0.0f;
-		float frameTimeMs = 0.0f;
+		bool hasWholeFrameCpuBegin = false;
 		bool hasWholeFrameCpuTime = false;
-		bool hasFrameTime = false;
-		bool presentSynced = false;
+		bool acceptedPresent = false;
+		uint64_t presentIntervalSampleId = 0;
 		bool inFlight = false;
 	};
 
@@ -228,8 +258,9 @@ private:
 	bool initialized = false;
 	bool frameActive = false;
 	std::atomic_bool userEnabled{ false };
-	std::atomic_bool captureRequested{ false };
-	std::atomic_bool captureActive{ false };
+	std::atomic<CaptureMode> captureModeLimit{ CaptureMode::DetailedPasses };
+	std::atomic<CaptureMode> captureRequested{ CaptureMode::None };
+	std::atomic<CaptureMode> captureActive{ CaptureMode::None };
 	double cpuTicksToMs = 0.0;
 
 	PerfEventCallback beginPerfEvent;
@@ -255,24 +286,35 @@ private:
 	std::unordered_map<std::string, size_t> knownTimerIndex;
 	std::vector<CpuTimer> activeCpuTimers;
 	std::vector<CompletedCpuTimer> completedCpuTimers;
-	RollingHistory totalGpuHistory;
-	RollingHistory totalCpuHistory;
-	float totalTimeMs = 0.0f;
-	float cpuTotalTimeMs = 0.0f;
+	RollingHistory profiledPassGpuTotalHistory;
+	RollingHistory profiledPassCpuTotalHistory;
+	float profiledPassGpuTotalMs = 0.0f;
+	float profiledPassCpuTotalMs = 0.0f;
 	RollingHistory wholeFrameGpuHistory;
 	RollingHistory wholeFrameCpuHistory;
-	RollingHistory frameTimeHistory;
+	RollingHistory presentIntervalHistory;
 	uint64_t wholeFrameSampleId = 0;
 	uint64_t wholeFrameGpuSampleId = 0;
 	uint64_t wholeFrameCpuSampleId = 0;
-	uint64_t frameTimeSampleId = 0;
-	int64_t wholeFrameLastPresentStartCounter = 0;
+	uint64_t wholeFramePresentIntervalSampleId = 0;
+	uint64_t presentIntervalSampleId = 0;
+	int64_t lastAcceptedPresentStartCounter = 0;
 	bool wholeFrameGpuTimingAvailable = false;
-	bool wholeFrameHasLastPresentStart = false;
-	bool wholeFrameLastPresentSynced = false;
-	bool latestFrameWasPresentSynced = false;
+	bool detailedPassGpuTimingAvailable = false;
+	bool hasLastAcceptedPresentStart = false;
+	bool lastAcceptedPresentWasSynced = false;
+	bool latestPresentIntervalWasSynced = false;
+
+	LARGE_INTEGER pendingPresentStart{};
+	UINT pendingPresentSyncInterval = 0;
+	uint32_t pendingPresentFrame = 0;
+	bool presentPending = false;
+	bool pendingPresentIsReal = false;
+	bool pendingPresentHasTimestamp = false;
+	bool pendingPresentHasProfileFrame = false;
 
 	bool CollectResults();
+	void PromoteRequestedCapture();
 	KnownTimer& GetOrCreateTimer(const std::string& name);
 	void RebuildResults(const std::unordered_map<std::string, ActiveTimerData>* activeTimers);
 	void StoreCompletedCpuTimers(FrameQueries& frame);

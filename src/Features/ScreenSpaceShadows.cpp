@@ -25,11 +25,15 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::TreeNodeEx(T(TKEY("general"), "General"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox(T(TKEY("enable"), "Enable"), (bool*)&bendSettings.Enable);
+		bool enabled = bendSettings.Enable != 0;
+		if (ImGui::Checkbox(T(TKEY("enable"), "Enable"), &enabled))
+			bendSettings.Enable = enabled ? 1u : 0u;
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("enable_tooltip"), "Enable screen-space contact shadows from the sun/moon direction."));
 
-		ImGui::SliderInt(T(TKEY("sample_count"), "Sample Count Multiplier"), (int*)&bendSettings.SampleCount, 1, 4);
+		int sampleCount = static_cast<int>(bendSettings.SampleCount);
+		if (ImGui::SliderInt(T(TKEY("sample_count"), "Sample Count Multiplier"), &sampleCount, 1, 4))
+			bendSettings.SampleCount = static_cast<uint>(std::clamp(sampleCount, 1, 4));
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("sample_count_tooltip"), "Multiplier for shadow ray sample count. Higher values increase shadow reach at the cost of performance. Adapts to render resolution."));
 
@@ -64,7 +68,7 @@ void ScreenSpaceShadows::ClearShaderCache()
 	InvalidateRaymarchShaders();
 }
 
-uint ScreenSpaceShadows::GetScaledSampleCount()
+uint ScreenSpaceShadows::GetScaledSampleCount() const
 {
 	float2 renderSize = Util::ConvertToDynamic(float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight });
 
@@ -103,15 +107,114 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 	return raymarchCS;
 }
 
+ScreenSpaceShadows::RuntimeReadiness ScreenSpaceShadows::GetRuntimeReadiness(
+	bool a_requireCompiledShader,
+	RuntimeContext* a_context) const
+{
+	if (a_context)
+		*a_context = {};
+
+	const auto* sky = globals::game::sky;
+	if (!sky || sky->mode.get() != RE::Sky::Mode::kFull)
+		return RuntimeReadiness::NoFullSky;
+
+	auto* d3dContext = globals::d3d::context;
+	auto* viewport = globals::game::graphicsState;
+	if (!globals::d3d::device ||
+	    !d3dContext ||
+	    !viewport ||
+	    !globals::state ||
+	    !globals::profiler ||
+	    !globals::shaderCache ||
+	    !pointBorderSampler ||
+	    !raymarchCB ||
+	    !raymarchCB->CB() ||
+	    !screenSpaceShadowsTexture ||
+	    !screenSpaceShadowsTexture->resource ||
+	    !screenSpaceShadowsTexture->srv ||
+	    !screenSpaceShadowsTexture->uav) {
+		return RuntimeReadiness::NoRuntimeResources;
+	}
+
+	auto* depthSRV = Util::GetCurrentSceneDepthSRV(false);
+	const auto renderSize = Util::ConvertToDynamic(
+		float2{ static_cast<float>(viewport->screenWidth), static_cast<float>(viewport->screenHeight) });
+	const auto dynamicResolution = float2{
+		viewport->GetRuntimeData().dynamicResolutionWidthRatio,
+		viewport->GetRuntimeData().dynamicResolutionHeightRatio
+	};
+	if (!depthSRV ||
+	    !std::isfinite(renderSize.x) ||
+	    !std::isfinite(renderSize.y) ||
+	    renderSize.x < 1.0f ||
+	    renderSize.y < 1.0f ||
+	    static_cast<double>(renderSize.x) >
+			std::min<double>(
+				screenSpaceShadowsTexture->desc.Width,
+				std::numeric_limits<int>::max()) ||
+	    static_cast<double>(renderSize.y) >
+			std::min<double>(
+				screenSpaceShadowsTexture->desc.Height,
+				std::numeric_limits<int>::max()) ||
+	    !std::isfinite(dynamicResolution.x) ||
+	    !std::isfinite(dynamicResolution.y) ||
+	    dynamicResolution.x <= 0.0f ||
+	    dynamicResolution.y <= 0.0f) {
+		return RuntimeReadiness::NoRuntimeResources;
+	}
+
+	auto** accumulatorSlot = globals::game::currentAccumulator.get();
+	if (!accumulatorSlot || !*accumulatorSlot)
+		return RuntimeReadiness::NoDirectionalLight;
+
+	auto* shadowSceneNode = (*accumulatorSlot)->GetRuntimeData().activeShadowSceneNode;
+	if (!shadowSceneNode)
+		return RuntimeReadiness::NoDirectionalLight;
+
+	const auto& sunLight = shadowSceneNode->GetRuntimeData().sunLight;
+	if (!sunLight || !sunLight->light)
+		return RuntimeReadiness::NoDirectionalLight;
+
+	auto* directionalLight = skyrim_cast<RE::NiDirectionalLight*>(sunLight->light.get());
+	if (!directionalLight)
+		return RuntimeReadiness::NoDirectionalLight;
+
+	if (a_requireCompiledShader &&
+	    (!raymarchCS || lastCompiledSampleCount != GetScaledSampleCount())) {
+		return RuntimeReadiness::ShaderUnavailable;
+	}
+
+	if (a_context) {
+		a_context->context = d3dContext;
+		a_context->depthSRV = depthSRV;
+		a_context->raymarchShader = raymarchCS;
+		a_context->directionalLight = directionalLight;
+		a_context->renderSize = renderSize;
+		a_context->dynamicResolution = dynamicResolution;
+	}
+
+	return RuntimeReadiness::Ready;
+}
+
 void ScreenSpaceShadows::DrawShadows()
 {
+	RuntimeContext runtimeContext;
+	if (GetRuntimeReadiness(false, &runtimeContext) != RuntimeReadiness::Ready)
+		return;
+
 	ZoneScopedS(8);
 	TracyD3D11Zone(globals::state->tracyCtx, "Screen Space Shadows");
 
-	auto context = globals::d3d::context;
+	if (!GetComputeRaymarch())
+		return;
 
-	auto accumulator = *globals::game::currentAccumulator.get();
-	auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
+	// Shader compilation can span a runtime transition. Revalidate the complete
+	// dispatch path and take a fresh pointer snapshot before binding anything.
+	if (GetRuntimeReadiness(true, &runtimeContext) != RuntimeReadiness::Ready)
+		return;
+
+	auto* context = runtimeContext.context;
+	auto* dirLight = runtimeContext.directionalLight;
 
 	auto& directionNi = dirLight->GetWorldDirection();
 	float3 light = { directionNi.x, directionNi.y, directionNi.z };
@@ -127,7 +230,7 @@ void ScreenSpaceShadows::DrawShadows()
 
 	auto lightProjectionF = CalculateLightProjection();
 
-	float2 renderSize = Util::ConvertToDynamic(float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight });
+	const auto renderSize = runtimeContext.renderSize;
 	int viewportSize[2] = { (int)renderSize.x, (int)renderSize.y };
 
 	int minRenderBounds[2] = { 0, 0 };
@@ -139,7 +242,7 @@ void ScreenSpaceShadows::DrawShadows()
 	// without it, the game's kPOST_ZPREPASS_COPY (R24_UNORM_X8_TYPELESS).
 	// The shader's DepthTexture declaration is conditional on TERRAIN_BLENDING:
 	// `<float>` for the R32_FLOAT path, `<unorm float>` for the R24_UNORM path.
-	auto* depthSRV = Util::GetCurrentSceneDepthSRV(false);
+	auto* depthSRV = runtimeContext.depthSRV;
 	context->CSSetShaderResources(0, 1, &depthSRV);
 
 	auto uav = screenSpaceShadowsTexture->uav.get();
@@ -150,13 +253,14 @@ void ScreenSpaceShadows::DrawShadows()
 	auto buffer = raymarchCB->CB();
 	context->CSSetConstantBuffers(1, 1, &buffer);
 
-	auto viewport = globals::game::graphicsState;
-
-	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
+	const auto dynamicRes = runtimeContext.dynamicResolution;
 
 	// Shared dispatch logic
 	auto Dispatch = [&](ID3D11ComputeShader* shader, const float* lightProj,
 						float invTexSizeX, float invTexSizeY) {
+		if (!shader)
+			return;
+
 		globals::profiler->BeginPass("ScreenSpaceShadows::RayMarch");
 
 		if (globals::state->frameAnnotations) {
@@ -211,7 +315,7 @@ void ScreenSpaceShadows::DrawShadows()
 	float InvTexSizeX = 1.0f / (float)viewportSize[0];
 	float InvTexSizeY = 1.0f / (float)viewportSize[1];
 
-	Dispatch(GetComputeRaymarch(), lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+	Dispatch(runtimeContext.raymarchShader, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 
 	ID3D11ShaderResourceView* views[1]{ nullptr };
 	context->CSSetShaderResources(0, 1, views);
@@ -230,18 +334,65 @@ void ScreenSpaceShadows::DrawShadows()
 
 void ScreenSpaceShadows::Prepass()
 {
-	auto context = globals::d3d::context;
+	auto* context = globals::d3d::context;
+	if (!context)
+		return;
+	if (!screenSpaceShadowsTexture ||
+	    !screenSpaceShadowsTexture->uav ||
+	    !screenSpaceShadowsTexture->srv) {
+		ID3D11ShaderResourceView* nullView = nullptr;
+		context->PSSetShaderResources(45, 1, &nullView);
+		return;
+	}
 
 	float white[4] = { 1, 1, 1, 1 };
 	context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
 
-	if (auto sky = globals::game::sky)
-		if (bendSettings.Enable && sky->mode.get() == RE::Sky::Mode::kFull) {
-			DrawShadows();
-		}
+	if (bendSettings.Enable)
+		DrawShadows();
 
 	auto view = screenSpaceShadowsTexture->srv.get();
 	context->PSSetShaderResources(45, 1, &view);
+}
+
+bool ScreenSpaceShadows::IsPerformanceTuningApplicable() const
+{
+	return GetRuntimeReadiness(bendSettings.Enable != 0) ==
+	       RuntimeReadiness::Ready;
+}
+
+bool ScreenSpaceShadows::IsPerformanceCostMeasurementReady() const
+{
+	return GetRuntimeReadiness(bendSettings.Enable != 0) ==
+	       RuntimeReadiness::Ready;
+}
+
+const char* ScreenSpaceShadows::GetPerformanceTuningApplicabilityReason() const
+{
+	switch (GetRuntimeReadiness(bendSettings.Enable != 0)) {
+	case RuntimeReadiness::Ready:
+		return nullptr;
+	case RuntimeReadiness::NoFullSky:
+		return T(
+			"menu.performance_tuning.feature.screen_space_shadows.no_full_sky",
+			"Screen Space Shadows only perform runtime work while the current sky is in full exterior mode.");
+	case RuntimeReadiness::NoRuntimeResources:
+		return T(
+			"menu.performance_tuning.feature.screen_space_shadows.no_runtime_resources",
+			"Screen Space Shadows cannot be measured because their required rendering resources are unavailable.");
+	case RuntimeReadiness::NoDirectionalLight:
+		return T(
+			"menu.performance_tuning.feature.screen_space_shadows.no_directional_light",
+			"Screen Space Shadows cannot be measured because the current scene has no active directional sun or moon light.");
+	case RuntimeReadiness::ShaderUnavailable:
+		return T(
+			"menu.performance_tuning.feature.screen_space_shadows.shader_unavailable",
+			"Screen Space Shadows cannot be measured because the raymarch shader has not compiled successfully for the current resolution.");
+	default:
+		return T(
+			"menu.performance_tuning.feature.screen_space_shadows.not_applicable",
+			"Screen Space Shadows cannot perform runtime work in the current scene.");
+	}
 }
 
 void ScreenSpaceShadows::DrawEssentialSettings()
@@ -254,6 +405,18 @@ void ScreenSpaceShadows::DrawEssentialSettings()
 void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
 	bendSettings = o_json;
+	const BendSettings defaults{};
+	bendSettings.Enable = bendSettings.Enable != 0 ? 1u : 0u;
+	bendSettings.SampleCount = std::clamp(bendSettings.SampleCount, 1u, 4u);
+	bendSettings.SurfaceThickness = std::isfinite(bendSettings.SurfaceThickness) ?
+	                                    std::clamp(bendSettings.SurfaceThickness, 0.005f, 0.05f) :
+	                                    defaults.SurfaceThickness;
+	bendSettings.BilinearThreshold = std::isfinite(bendSettings.BilinearThreshold) ?
+	                                    std::clamp(bendSettings.BilinearThreshold, 0.02f, 1.0f) :
+	                                    defaults.BilinearThreshold;
+	bendSettings.ShadowContrast = std::isfinite(bendSettings.ShadowContrast) ?
+	                                  std::clamp(bendSettings.ShadowContrast, 0.0f, 4.0f) :
+	                                  defaults.ShadowContrast;
 }
 
 void ScreenSpaceShadows::SaveSettings(json& o_json)

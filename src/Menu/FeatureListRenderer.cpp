@@ -454,7 +454,8 @@ void FeatureListRenderer::RenderFeatureList(
 
 	auto cancelPerformanceMeasurementsIfInactive = [&]() {
 		if (!IsPerformanceTuningMenuSelected(menuList, selectedMenu))
-			PerformanceTuningRenderer::CancelActiveMeasurements(true);
+			PerformanceTuningRenderer::CancelActiveMeasurements(
+				PerformanceTuningRenderer::CancelMode::ClearSession);
 	};
 	cancelPerformanceMeasurementsIfInactive();
 

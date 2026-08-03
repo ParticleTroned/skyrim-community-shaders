@@ -1,7 +1,7 @@
 name: "PR: Checks"
 
 on:
-    pull_request_target:
+    pull_request:
         types: [opened, synchronize, reopened, ready_for_review]
         paths:
             - "**.cpp"
@@ -46,6 +46,7 @@ jobs:
             - uses: actions/checkout@v6
               with:
                   fetch-depth: 0
+                  persist-credentials: false
 
             - name: Fetch PR head and base
               run: |
@@ -135,11 +136,10 @@ jobs:
                   done < <(jq -r '.[]' <<< "$ALL_CHANGED_JSON")
                   echo "version_changed=$version_changed" >> "$GITHUB_OUTPUT"
 
-    # Security: this job compiles untrusted fork code.
-    # It uses _shared-build.yaml which enforces permissions: contents: read and receives NO secrets.
-    # The absence of a `secrets:` block here is intentional — passing secrets to a reusable
-    # workflow from pull_request_target triggered by a fork causes GitHub to reject the
-    # entire workflow file at parse time (0 jobs, "workflow file issue").
+    # Security: this job compiles untrusted fork code under pull_request, whose fork
+    # runs receive a read-only token and no secrets. Do not move it to
+    # pull_request_target or opt out of actions/checkout's unsafe-PR protection.
+    # The absence of a `secrets:` block is intentional.
     build:
         name: Build (PR)
         needs: [check-changes]
@@ -157,13 +157,14 @@ jobs:
             shader-tests-should-build: ${{ needs.check-changes.outputs.shader-tests-should-build || 'true' }}
             changed-files-json: ${{ needs.check-changes.outputs.changed-files-json }}
 
-    # Security: this job uses GITHUB_TOKEN with write permissions but does NOT execute
-    # fork code — it only downloads pre-built artifacts from the build job above.
+    # Security: write-capable release publication is limited to branches in this
+    # repository. Fork PRs still receive build artifacts from the read-only build job.
     prerelease:
         name: Post Prerelease from PR
         needs: [build]
         if: >
             always() && !cancelled() &&
+            github.event.pull_request.head.repo.full_name == github.repository &&
             needs.build.outputs.cpp-built == 'true'
         runs-on: windows-2025
         permissions:
@@ -218,9 +219,8 @@ jobs:
               with:
                   name: "Community Shaders ${{ needs.build.outputs.version }} PR #${{ github.event.pull_request.number }}"
                   tag: v${{ needs.build.outputs.version }}-pr${{ github.event.pull_request.number }}
-                  # Anchor the preview tag to the PR head, not the base tip.
-                  # Without this, pull_request_target makes GITHUB_SHA the base
-                  # (dev) commit, so the tag lands in dev's history. A PR that
+                  # Anchor the preview tag to the PR head, not the merge commit,
+                  # so the tag stays outside dev's history. A PR that
                   # bumped CMake VERSION (e.g. a breaking change to 2.0.0) would
                   # then expose a higher reachable version tag and poison
                   # semantic-release's floor for every RC cut from dev.
@@ -269,6 +269,7 @@ jobs:
               with:
                   fetch-depth: 0
                   submodules: recursive
+                  persist-credentials: false
 
             - name: Setup Python
               uses: actions/setup-python@v6
@@ -299,7 +300,10 @@ jobs:
 
     feature-audit-pr-comment:
         name: Comment on PR with audit results
-        if: always() && (needs.feature-audit-pr.result == 'success' || needs.feature-audit-pr.result == 'failure')
+        if: >
+            always() &&
+            github.event.pull_request.head.repo.full_name == github.repository &&
+            (needs.feature-audit-pr.result == 'success' || needs.feature-audit-pr.result == 'failure')
         needs: feature-audit-pr
         runs-on: ubuntu-latest
         permissions:

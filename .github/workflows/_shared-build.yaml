@@ -70,6 +70,7 @@ jobs:
                   ref: ${{ inputs.ref }}
                   repository: ${{ inputs.repository }}
                   submodules: recursive
+                  persist-credentials: false
 
             - name: Setup Build Environment
               id: setup
@@ -147,6 +148,7 @@ jobs:
                   ref: ${{ inputs.ref }}
                   repository: ${{ inputs.repository }}
                   submodules: recursive
+                  persist-credentials: false
 
             - name: Check for HLSL Changes
               id: check-hlsl
@@ -241,6 +243,7 @@ jobs:
                   ref: ${{ inputs.ref }}
                   repository: ${{ inputs.repository }}
                   submodules: recursive
+                  persist-credentials: false
 
             - name: Check for HLSL Changes
               id: check-hlsl

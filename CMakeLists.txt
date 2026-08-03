@@ -747,8 +747,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         VERBATIM
     )
 
-    # Only copy shaders when HLSL files change; copy individually so unchanged
-    # files do not get their timestamps updated.
+    # Copy shader-package content individually so unchanged files keep their
+    # timestamps. Track every staged asset (not only HLSL/HLSLI): feature
+    # shader trees also contain runtime configuration, textures, libraries,
+    # symbols, and notices that must retrigger staging when changed.
     file(
         GLOB_RECURSE _package_shaders
         CONFIGURE_DEPENDS
@@ -757,6 +759,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     )
     # Exclude test files from production packages
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
+    set(_all_shader_sources ${_package_shaders})
     set(_shader_copy_cmds)
 
     set(_feature_shader_paths)
@@ -805,9 +808,11 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
                 "${_fpath}/Shaders/*"
             )
             list(FILTER _feat_shaders EXCLUDE REGEX "/Tests/")
+            list(APPEND _all_shader_sources ${_feat_shaders})
             append_copy_if_different(_shader_copy_cmds _feat_shaders "${_fpath}/Shaders" "${AIO_DIR}/Shaders")
         endif()
     endforeach()
+    list(REMOVE_DUPLICATES _all_shader_sources)
 
     add_custom_command(
         OUTPUT copy_shaders.stamp
@@ -816,7 +821,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_shader_copy_cmds}
         COMMAND ${CMAKE_COMMAND} -E touch copy_shaders.stamp
         DEPENDS
-            ${HLSL_FILES}
+            ${_all_shader_sources}
             ${_feature_shader_paths_list_file}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
@@ -857,13 +862,9 @@ endif()
 # Automatic deployment to CommunityShaders output directory.
 if(AUTO_PLUGIN_DEPLOYMENT)
     # Detect git HEAD changes (branch switch or new commit) and invalidate stale
-    # deploy state. BuildRelease.bat reconfigures, so this runs on every build
-    # invocation. When HEAD changes we:
-    #   1. Clear AIO so PREPARE_AIO re-copies everything with fresh timestamps.
-    #   2. Delete deploy stamps so CMake re-runs the robocopy commands.
-    # Per-build incremental deploy relies on robocopy's default
-    # name+size+timestamp detection to copy any file whose size or mtime differs
-    # from the deployed destination.
+    # deploy state. Preserve AIO/Shaders: the shader deploy hop below compares
+    # content, so recreating unchanged staged files would only produce false
+    # runtime FileWatcher events. Non-shader content remains timestamp-deployed.
     execute_process(
         COMMAND git rev-parse --short HEAD
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -881,13 +882,23 @@ if(AUTO_PLUGIN_DEPLOYMENT)
         if(NOT "${_git_head}" STREQUAL "${_prev_git_head}")
             message(
                 STATUS
-                "Git HEAD changed (${_prev_git_head} -> ${_git_head}): clearing AIO and deploy stamps for full redeploy"
+                "Git HEAD changed (${_prev_git_head} -> ${_git_head}): reconciling shaders and clearing non-shader deploy state"
             )
-            file(REMOVE_RECURSE "${AIO_DIR}")
+            # Delete everything under AIO except Shaders. The shader staging
+            # stamp is still cleared so deletion-only changes are reconciled;
+            # copy_if_different preserves the mtimes of unchanged files.
+            file(GLOB _aio_top_entries "${AIO_DIR}/*")
+            foreach(_entry IN LISTS _aio_top_entries)
+                get_filename_component(_entry_name "${_entry}" NAME)
+                if(NOT _entry_name STREQUAL "Shaders")
+                    file(REMOVE_RECURSE "${_entry}")
+                endif()
+            endforeach()
             file(
                 GLOB _build_stamps
                 "${CMAKE_BINARY_DIR}/*_deploy.stamp"
                 "${CMAKE_BINARY_DIR}/*_plugin.stamp"
+                "${CMAKE_BINARY_DIR}/*_shaders.stamp"
                 "${CMAKE_BINARY_DIR}/*_shaders_full.stamp"
                 "${CMAKE_BINARY_DIR}/*_shaders_only.stamp"
                 "${CMAKE_BINARY_DIR}/prepare_aio.stamp"
@@ -972,62 +983,39 @@ if(AUTO_PLUGIN_DEPLOYMENT)
 
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_plugin.stamp)
 
-            # Incremental shader-only copy for fast dev iteration
-            # Depends ONLY on copy_shaders.stamp (no DLL, no PREPARE_AIO)
+            # One canonical shader-sync rule serves shader-only and full
+            # deploys. This avoids concurrent writers to the same ownership
+            # manifest while preserving the fast path's DLL-free dependency
+            # graph. Files are copied only when their content differs.
             add_custom_command(
-                OUTPUT ${DEPLOY_TARGET_HASH}_shaders_only.stamp
+                OUTPUT ${DEPLOY_TARGET_HASH}_shaders.stamp
                 COMMAND
-                    ${CMAKE_COMMAND} -E make_directory
-                    "${DEPLOY_TARGET}/Shaders"
-                # See /XO rationale above on the main deploy block.
-                COMMAND
-                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
+                    ${CMAKE_COMMAND} -DSRC_DIR="${AIO_DIR}/Shaders"
+                    -DDST_DIR="${DEPLOY_TARGET}/Shaders"
+                    -DMANIFEST_FILE="${CMAKE_CURRENT_BINARY_DIR}/${DEPLOY_TARGET_HASH}_shaders.manifest"
+                    -P "${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
-                    ${DEPLOY_TARGET_HASH}_shaders_only.stamp
+                    ${DEPLOY_TARGET_HASH}_shaders.stamp
                 # See the PREPARE_AIO target+stamp rationale above.
                 DEPENDS
                     prepare_shaders
                     ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
-                COMMENT "Fast shader-only deploy to ${DEPLOY_TARGET}/Shaders"
+                    ${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake
+                COMMENT
+                    "Content-based shader deploy to ${DEPLOY_TARGET}/Shaders"
+                VERBATIM
             )
 
             list(
                 APPEND SHADER_ONLY_HASHES
-                ${DEPLOY_TARGET_HASH}_shaders_only.stamp
-            )
-
-            # Full shader copy for packaging (includes PREPARE_AIO dependency)
-            # This ensures DLL is built and all AIO files are ready
-            add_custom_command(
-                OUTPUT ${DEPLOY_TARGET_HASH}_shaders_full.stamp
-                COMMAND
-                    ${CMAKE_COMMAND} -E make_directory
-                    "${DEPLOY_TARGET}/Shaders"
-                # See /XO rationale above on the main deploy block.
-                COMMAND
-                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
-                COMMAND
-                    ${CMAKE_COMMAND} -E touch
-                    ${DEPLOY_TARGET_HASH}_shaders_full.stamp
-                # See the PREPARE_AIO target+stamp rationale above.
-                DEPENDS
-                    prepare_shaders
-                    PREPARE_AIO
-                    ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
-                    ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
-                COMMENT
-                    "Full shader deploy to ${DEPLOY_TARGET}/Shaders (with PREPARE_AIO)"
+                ${DEPLOY_TARGET_HASH}_shaders.stamp
             )
 
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_deploy.stamp)
             list(
                 APPEND DEPLOY_TARGET_HASHES
-                ${DEPLOY_TARGET_HASH}_shaders_full.stamp
+                ${DEPLOY_TARGET_HASH}_shaders.stamp
             )
         endforeach()
     else()

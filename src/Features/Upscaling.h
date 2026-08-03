@@ -160,6 +160,11 @@ public:
 		}
 	}
 
+	// Resolve an active sub-native per-eye dimension. Keep the result even so
+	// half-resolution engine resources and stereo offsets cannot lose a pixel.
+	// Native/inactive callers must retain the headset-provided dimension.
+	static uint32_t ScaleVRRenderDimension(uint32_t a_dimension, float a_scale);
+
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;

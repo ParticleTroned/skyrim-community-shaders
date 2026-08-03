@@ -12,18 +12,6 @@ namespace
 		return std::min<uint32_t>(a_qualityMode, Upscaling::kQualityModeMaxIndex);
 	}
 
-	uint32_t ScaleDimension(uint32_t a_dimension, float a_scale)
-	{
-		if (!std::isfinite(a_scale))
-			return a_dimension;
-
-		const float scaled = static_cast<float>(a_dimension) * std::clamp(a_scale, 0.1f, 1.0f);
-		return std::clamp<uint32_t>(
-			static_cast<uint32_t>(std::floor(scaled)),
-			1u,
-			std::max<uint32_t>(a_dimension, 1u));
-	}
-
 	bool IsVendorMethod(Upscaling::UpscaleMethod a_method)
 	{
 		return a_method == Upscaling::UpscaleMethod::kDLSS ||
@@ -144,8 +132,8 @@ bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, Upsca
 	boot.renderScale = renderScale;
 	boot.displayEyeWidth = trueHMDEyeWidth;
 	boot.displayEyeHeight = trueHMDEyeHeight;
-	boot.renderEyeWidth = ScaleDimension(trueHMDEyeWidth, renderScale);
-	boot.renderEyeHeight = ScaleDimension(trueHMDEyeHeight, renderScale);
+	boot.renderEyeWidth = ScaleVRRenderDimension(trueHMDEyeWidth, renderScale);
+	boot.renderEyeHeight = ScaleVRRenderDimension(trueHMDEyeHeight, renderScale);
 	boot.renderScaleEnabled = std::min<uint32_t>(a_settings.renderScaleMode, 1u) != 0;
 	boot.perfModeEnabled = IsRequested(a_settings);
 	boot.submitStageVendorAllowed = true;

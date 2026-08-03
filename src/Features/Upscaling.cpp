@@ -95,6 +95,19 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
+uint32_t Upscaling::ScaleVRRenderDimension(uint32_t a_dimension, float a_scale)
+{
+	if (a_dimension < 2u || !std::isfinite(a_scale))
+		return a_dimension;
+
+	const float scaled = static_cast<float>(a_dimension) * std::clamp(a_scale, 0.1f, 1.0f);
+	const uint32_t bounded = std::clamp<uint32_t>(
+		static_cast<uint32_t>(std::floor(scaled)),
+		2u,
+		a_dimension);
+	return bounded & ~1u;
+}
+
 namespace
 {
 	constexpr float kDLSSRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
@@ -19572,23 +19585,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const uint32_t relatchQualityMode = ClampQualityModeUInt(relatchSettings.qualityMode);
 		const bool relatchTargetRenderScaleActive = authoritativeRelatchActivationTarget;
 		const float relatchRenderScale = relatchTargetRenderScaleActive ? GetQualityModeResolutionScale(relatchQualityMode) : 1.0f;
-		auto scaleRelatchDimension = [](uint32_t a_dimension, float a_scale) {
-			if (!a_dimension || !std::isfinite(a_scale))
-				return a_dimension;
-
-			const float scaled = static_cast<float>(a_dimension) * std::clamp(a_scale, 0.1f, 1.0f);
-			return std::clamp<uint32_t>(
-				static_cast<uint32_t>(std::floor(scaled)),
-				1u,
-				std::max<uint32_t>(a_dimension, 1u));
-		};
 		const uint32_t relatchTargetRenderEyeWidth =
 			relatchTargetRenderScaleActive ?
-				scaleRelatchDimension(perfMode.trueHMDEyeWidth, relatchRenderScale) :
+				ScaleVRRenderDimension(perfMode.trueHMDEyeWidth, relatchRenderScale) :
 				perfMode.trueHMDEyeWidth;
 		const uint32_t relatchTargetRenderEyeHeight =
 			relatchTargetRenderScaleActive ?
-				scaleRelatchDimension(perfMode.trueHMDEyeHeight, relatchRenderScale) :
+				ScaleVRRenderDimension(perfMode.trueHMDEyeHeight, relatchRenderScale) :
 				perfMode.trueHMDEyeHeight;
 		const float2 plannedRelatchDisplaySize{
 			static_cast<float>(perfMode.trueHMDEyeWidth * 2u),
@@ -34977,10 +34980,10 @@ namespace
 		profile.displayEyeWidth = a_upscaling.perfMode.trueHMDEyeWidth;
 		profile.displayEyeHeight = a_upscaling.perfMode.trueHMDEyeHeight;
 		profile.renderEyeWidth = profile.active && profile.displayEyeWidth != 0 ?
-		                             std::max(static_cast<uint32_t>(std::floor(static_cast<float>(profile.displayEyeWidth) * profile.renderScale)), 1u) :
+		                             Upscaling::ScaleVRRenderDimension(profile.displayEyeWidth, profile.renderScale) :
 		                             profile.displayEyeWidth;
 		profile.renderEyeHeight = profile.active && profile.displayEyeHeight != 0 ?
-		                              std::max(static_cast<uint32_t>(std::floor(static_cast<float>(profile.displayEyeHeight) * profile.renderScale)), 1u) :
+		                              Upscaling::ScaleVRRenderDimension(profile.displayEyeHeight, profile.renderScale) :
 		                              profile.displayEyeHeight;
 		profile.queuedFrame = a_request.queuedFrame;
 		profile.origin = a_request.origin;

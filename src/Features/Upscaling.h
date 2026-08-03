@@ -761,6 +761,12 @@ public:
 		uint32_t outputHeight = 0;
 		bool evaluated = false;
 		bool valid = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool fsrDispatchPathValid = false;
+		VRRenderScaleBackendKind fsrDispatchBackend = VRRenderScaleBackendKind::None;
+		bool fsrRuntimeFallback = false;
+		uint64_t fsrDispatchSerial = 0;
+#endif
 	};
 
 	struct VRRenderScaleFidelitySnapshot

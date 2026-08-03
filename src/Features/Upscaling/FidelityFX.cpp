@@ -780,6 +780,18 @@ std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const
 	return UpscalerVersionToString(requestedVersion);
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+FidelityFX::RuntimeUpscalerDispatchSnapshot FidelityFX::GetRuntimeUpscalerDispatchSnapshotForRenderThread() const
+{
+	return {
+		devBenchSuccessfulDispatch.valid,
+		devBenchSuccessfulDispatch.frame,
+		devBenchSuccessfulDispatch.path,
+		devBenchSuccessfulDispatch.serial,
+	};
+}
+#endif
+
 void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
 {
 	runtimeUpscalerFailureLatched = false;
@@ -790,6 +802,9 @@ void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
 	runtimeUpscalerLastFramePathValid = false;
 	runtimeUpscalerLastFrameIndex = 0;
 	runtimeUpscalerLastFramePath = RuntimeUpscalerFramePath::kInactive;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	devBenchSuccessfulDispatch = {};
+#endif
 
 	if (!a_invalidateProviderCache)
 		return;
@@ -849,6 +864,21 @@ void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
 	if (static_cast<uint8_t>(a_path) > static_cast<uint8_t>(runtimeUpscalerLastFramePath))
 		runtimeUpscalerLastFramePath = a_path;
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void FidelityFX::RecordDevBenchSuccessfulDispatch(RuntimeUpscalerFramePath a_path)
+{
+	uint64_t serial = ++devBenchSuccessfulDispatchSerial;
+	if (serial == 0)
+		serial = ++devBenchSuccessfulDispatchSerial;
+	devBenchSuccessfulDispatch = {
+		true,
+		globals::state ? std::max(globals::state->frameCount, 1u) : 0u,
+		a_path,
+		serial,
+	};
+}
+#endif
 
 void FidelityFX::SetupFrameGeneration()
 {
@@ -2489,7 +2519,11 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 						a_motionVectorScaleY,
 						a_sharpness);
 				if (dispatchResult == LifecycleResult::Ready) {
-					RecordRuntimeUpscalerFramePath(GetRuntimeUpscalerProviderFramePath(a_requestedVersion));
+					const auto dispatchPath = GetRuntimeUpscalerProviderFramePath(a_requestedVersion);
+					RecordRuntimeUpscalerFramePath(dispatchPath);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordDevBenchSuccessfulDispatch(dispatchPath);
+#endif
 				}
 				return dispatchResult;
 			} catch (const std::exception& e) {
@@ -2599,6 +2633,10 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 
 	bool hostDispatchCrashed = false;
 	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters, hostDispatchCrashed);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (dispatchOK)
+		RecordDevBenchSuccessfulDispatch(fallbackFramePath);
+#endif
 	if (!dispatchOK && !hostDispatchCrashed) {
 		logger::critical("[FidelityFX] Failed to dispatch region upscaling for eye {}!", a_contextIndex);
 	}

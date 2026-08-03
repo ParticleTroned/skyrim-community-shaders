@@ -1,6 +1,5 @@
 #include "Upscaling.h"
 
-#include "Diagnostics/VRPipelineDiagnostics.h"
 #include "Deferred.h"
 #include "Features/LightLimitFix.h"
 #include "Features/RenderDoc.h"
@@ -14323,18 +14322,25 @@ void Upscaling::DrawSettings()
 	drawRenderPipelineBlock();
 
 	if (ImGui::TreeNodeEx("Backend Diagnostics")) {
-		ImGui::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Logs VRPIPE startup and runtime environment metadata.");
+		if (IsVRRuntimeActive()) {
+			if (ImGui::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics) &&
+				!settings.pipelineDiagnostics) {
+				settings.pipelineDiagnosticsStructured = false;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Logs VRPIPE environment metadata during VR startup.");
+			}
+			if (ImGui::Checkbox("Pipeline Diagnostics JSONL", &settings.pipelineDiagnosticsStructured) &&
+				settings.pipelineDiagnosticsStructured) {
+				settings.pipelineDiagnostics = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Also writes structured JSON Lines records to VRPipeline-CS.jsonl in the SKSE log directory.");
+				ImGui::TextUnformatted("Use this for automated comparison of CS and OCU environment records.");
+			}
+			ImGui::TextUnformatted("Changing these options requires a restart to take effect.");
+			ImGui::Separator();
 		}
-		ImGui::Checkbox("Pipeline Diagnostics JSONL", &settings.pipelineDiagnosticsStructured);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Also writes structured JSON Lines records to VRPipeline-CS.jsonl in the SKSE log directory.");
-			ImGui::TextUnformatted("Use this for automated comparison of CS and OCU environment records.");
-		}
-		if (settings.pipelineDiagnosticsStructured)
-			settings.pipelineDiagnostics = true;
-		ImGui::Separator();
 
 		// Streamline log level selection
 		const char* logLevels[] = { "Off", "Default", "Verbose" };
@@ -15213,7 +15219,8 @@ void Upscaling::LoadSettings(json& o_json)
 	if (!IsVRRuntimeActive()) {
 		ResetVRSpecificUpscalingSettings(settings);
 	}
-	if (o_json.is_object() &&
+	if (IsVRRuntimeActive() &&
+		o_json.is_object() &&
 	    !o_json.contains("pipelineDiagnostics") &&
 	    o_json.value("vrSubmitStageLogDiagnostics", false)) {
 		settings.pipelineDiagnostics = true;
@@ -22672,6 +22679,27 @@ bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMe
 		return a_success;
 
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto fsrDispatch =
+		a_success && a_evaluated && a_upscaleMethod == UpscaleMethod::kFSR ?
+		    fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread() :
+		    FidelityFX::RuntimeUpscalerDispatchSnapshot{};
+	const bool fsrDispatchPathValid = fsrDispatch.valid && fsrDispatch.frame == frame;
+	const auto fsrDispatchBackend = [&]() {
+		switch (fsrDispatch.path) {
+		case FidelityFX::RuntimeUpscalerFramePath::kHostFsr31:
+		case FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback:
+			return VRRenderScaleBackendKind::FSRHost;
+		case FidelityFX::RuntimeUpscalerFramePath::kRuntimeFsr31:
+			return VRRenderScaleBackendKind::FSRRuntime;
+		case FidelityFX::RuntimeUpscalerFramePath::kRuntimeFsr4:
+			return VRRenderScaleBackendKind::FSR4Runtime;
+		case FidelityFX::RuntimeUpscalerFramePath::kInactive:
+		default:
+			return VRRenderScaleBackendKind::None;
+		}
+	}();
+#endif
 	uint32_t mismatchMask = static_cast<uint32_t>(VRRenderScaleFidelityMismatch::None);
 	VRRenderScaleFidelitySnapshot published{};
 	{
@@ -22726,6 +22754,14 @@ bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMe
 		eye.outputWidth = a_outputWidth;
 		eye.outputHeight = a_outputHeight;
 		eye.evaluated = a_evaluated;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		eye.fsrDispatchPathValid = fsrDispatchPathValid;
+		eye.fsrDispatchBackend = fsrDispatchPathValid ? fsrDispatchBackend : VRRenderScaleBackendKind::None;
+		eye.fsrRuntimeFallback =
+			fsrDispatchPathValid &&
+			fsrDispatch.path == FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback;
+		eye.fsrDispatchSerial = fsrDispatchPathValid ? fsrDispatch.serial : 0;
+#endif
 		fidelity.observationEyeMask |= 1u << a_eyeIndex;
 		if (a_evaluated)
 			fidelity.evaluationEyeMask |= 1u << a_eyeIndex;

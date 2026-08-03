@@ -37,6 +37,7 @@
 #include <imgui_impl_dx11.h>
 #include <imgui_internal.h>
 #include <limits>
+#include <mutex>
 #include <unordered_map>
 #include <windows.h>
 
@@ -49,6 +50,69 @@ bool VR::OverlayRenderContext::IsValid() const
 
 namespace
 {
+	void EmitVRPipelineEnvironmentDiagnosticsOnce(const VR& a_vr)
+	{
+		static std::mutex startupDiagnosticsMutex;
+		static bool settingsLatched = false;
+		static bool diagnosticsRequested = false;
+		static bool structuredRequested = false;
+		static bool textCaptured = false;
+		static bool structuredCaptured = false;
+		std::scoped_lock lock(startupDiagnosticsMutex);
+		if (!settingsLatched) {
+			const auto& diagnosticSettings = globals::features::upscaling.settings;
+			diagnosticsRequested = diagnosticSettings.pipelineDiagnostics;
+			structuredRequested = diagnosticSettings.pipelineDiagnosticsStructured;
+			settingsLatched = true;
+		}
+		if (!diagnosticsRequested || (textCaptured && (!structuredRequested || structuredCaptured)))
+			return;
+
+		try {
+			const auto& openVRInfo = a_vr.openVRInfo;
+			nlohmann::json fields;
+			fields["mode"] = REL::Module::IsVR() ? "vr" : "flat";
+			fields["runtime"] = VRDetection::RuntimeTypeToString(openVRInfo.runtimeType);
+			fields["openVR"] = {
+				{ "available", openVRInfo.isAvailable },
+				{ "compatible", openVRInfo.isCompatible },
+				{ "dllPath", openVRInfo.dllPath },
+				{ "version", openVRInfo.version },
+				{ "fileSize", openVRInfo.fileSize },
+				{ "modified", openVRInfo.modificationTime },
+				{ "hasOverlayInterface", openVRInfo.hasOverlayInterface },
+				{ "hasSystemInterface", openVRInfo.hasSystemInterface },
+				{ "hasCompositorInterface", openVRInfo.hasCompositorInterface },
+				{ "probingSucceeded", openVRInfo.probingSucceeded }
+			};
+
+			const bool structuredSucceeded = VRPipelineDiagnostics::Emit(
+				{ VRPipelineDiagnostics::Source::CS, "ENV", "startup", std::move(fields) },
+				structuredRequested && !structuredCaptured,
+				std::format(
+					"reason=startup mode={} runtime={} openvrAvailable={} compatible={} dll=\"{}\" version={} size={} modified=\"{}\" overlay={} system={} compositor={}",
+					REL::Module::IsVR() ? "vr" : "flat",
+					VRDetection::RuntimeTypeToString(openVRInfo.runtimeType),
+					openVRInfo.isAvailable,
+					openVRInfo.isCompatible,
+					openVRInfo.dllPath,
+					openVRInfo.version,
+					openVRInfo.fileSize,
+					openVRInfo.modificationTime,
+					openVRInfo.hasOverlayInterface,
+					openVRInfo.hasSystemInterface,
+					openVRInfo.hasCompositorInterface),
+				!textCaptured);
+			textCaptured = true;
+			if (structuredRequested && structuredSucceeded)
+				structuredCaptured = true;
+		} catch (const std::exception& e) {
+			logger::warn("[VRPIPE v1][CS][ERROR] startup diagnostics failed: {}", e.what());
+		} catch (...) {
+			logger::warn("[VRPIPE v1][CS][ERROR] startup diagnostics failed");
+		}
+	}
+
 	bool IsWetternessActiveForDynamicCubemapVisibilityThrottle()
 	{
 		const auto& wetterness = globals::features::wetterness;
@@ -609,41 +673,7 @@ void VR::SetupResources()
 		logger::info("OpenVR DLL not available in current process");
 	}
 
-	const auto& diagnosticSettings = globals::features::upscaling.settings;
-	if (diagnosticSettings.pipelineDiagnostics) {
-		nlohmann::json fields;
-		fields["mode"] = REL::Module::IsVR() ? "vr" : "flat";
-		fields["runtime"] = VRDetection::RuntimeTypeToString(openVRInfo.runtimeType);
-		fields["openVR"] = {
-			{ "available", openVRInfo.isAvailable },
-			{ "compatible", openVRInfo.isCompatible },
-			{ "dllPath", openVRInfo.dllPath },
-			{ "version", openVRInfo.version },
-			{ "fileSize", openVRInfo.fileSize },
-			{ "modified", openVRInfo.modificationTime },
-			{ "hasOverlayInterface", openVRInfo.hasOverlayInterface },
-			{ "hasSystemInterface", openVRInfo.hasSystemInterface },
-			{ "hasCompositorInterface", openVRInfo.hasCompositorInterface },
-			{ "probingSucceeded", openVRInfo.probingSucceeded }
-		};
-
-		VRPipelineDiagnostics::Emit(
-			{ VRPipelineDiagnostics::Source::CS, "ENV", "startup", std::move(fields) },
-			diagnosticSettings.pipelineDiagnosticsStructured,
-			std::format(
-				"reason=startup mode={} runtime={} openvrAvailable={} compatible={} dll=\"{}\" version={} size={} modified=\"{}\" overlay={} system={} compositor={}",
-				REL::Module::IsVR() ? "vr" : "flat",
-				VRDetection::RuntimeTypeToString(openVRInfo.runtimeType),
-				openVRInfo.isAvailable,
-				openVRInfo.isCompatible,
-				openVRInfo.dllPath,
-				openVRInfo.version,
-				openVRInfo.fileSize,
-				openVRInfo.modificationTime,
-				openVRInfo.hasOverlayInterface,
-				openVRInfo.hasSystemInterface,
-				openVRInfo.hasCompositorInterface));
-	}
+	EmitVRPipelineEnvironmentDiagnosticsOnce(*this);
 }
 
 void VR::ClearShaderCache()

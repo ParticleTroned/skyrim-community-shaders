@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Diagnostics/VRPipelineDiagnostics.h"
 #	include "Features/Upscaling.h"
 #	include "Features/VR.h"
 #	include "Globals.h"
@@ -119,12 +120,119 @@ namespace
 		};
 	}
 
+	json FsrDispatchJson(
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		bool a_shaderCompilationActive)
+	{
+		const auto* desired = [&]() -> const Upscaling::VRRenderScaleProfileSnapshot* {
+			if (a_controller.requested.valid)
+				return &a_controller.requested;
+			if (a_controller.applying.valid)
+				return &a_controller.applying;
+			if (a_controller.stable.valid)
+				return &a_controller.stable;
+			if (a_controller.applied.valid)
+				return &a_controller.applied;
+			return nullptr;
+		}();
+		const auto* authoritative = [&]() -> const Upscaling::VRRenderScaleProfileSnapshot* {
+			if (a_controller.stable.valid)
+				return &a_controller.stable;
+			if (a_controller.applied.valid)
+				return &a_controller.applied;
+			if (a_controller.applying.valid)
+				return &a_controller.applying;
+			return nullptr;
+		}();
+
+		const bool desiredFsr = desired && desired->method == Upscaling::UpscaleMethod::kFSR;
+		const bool authoritativeFsr = authoritative && authoritative->method == Upscaling::UpscaleMethod::kFSR;
+		const bool backendConverged =
+			desiredFsr && authoritativeFsr &&
+			desired->active == authoritative->active &&
+			desired->renderScaleModeEnabled == authoritative->renderScaleModeEnabled &&
+			desired->fsr4RuntimeEnabled == authoritative->fsr4RuntimeEnabled &&
+			desired->resources.backend == authoritative->resources.backend &&
+			desired->renderEyeWidth == authoritative->renderEyeWidth &&
+			desired->renderEyeHeight == authoritative->renderEyeHeight &&
+			desired->displayEyeWidth == authoritative->displayEyeWidth &&
+			desired->displayEyeHeight == authoritative->displayEyeHeight;
+		const auto& leftDispatch = a_controller.fidelity.eyes[0];
+		const auto& rightDispatch = a_controller.fidelity.eyes[1];
+		const bool leftDispatchValid =
+			a_controller.fidelity.active &&
+			a_controller.fidelity.method == Upscaling::UpscaleMethod::kFSR &&
+			(a_controller.fidelity.evaluationEyeMask & 0x1u) != 0 &&
+			leftDispatch.fsrDispatchPathValid &&
+			leftDispatch.fsrDispatchSerial != 0;
+		const bool rightDispatchValid =
+			a_controller.fidelity.active &&
+			a_controller.fidelity.method == Upscaling::UpscaleMethod::kFSR &&
+			(a_controller.fidelity.evaluationEyeMask & 0x2u) != 0 &&
+			rightDispatch.fsrDispatchPathValid &&
+			rightDispatch.fsrDispatchSerial != 0;
+		json actualDispatchEyes = json::array();
+		for (std::size_t eyeIndex = 0; eyeIndex < a_controller.fidelity.eyes.size(); ++eyeIndex) {
+			const auto& eye = a_controller.fidelity.eyes[eyeIndex];
+			const bool valid = eyeIndex == 0 ? leftDispatchValid : rightDispatchValid;
+			actualDispatchEyes.push_back({
+				{ "valid", valid },
+				{ "frame", valid ? eye.frame : 0u },
+				{ "backend", valid ? GetBackendName(eye.fsrDispatchBackend) : "none" },
+				{ "runtimeFallback", valid && eye.fsrRuntimeFallback },
+				{ "serial", valid ? eye.fsrDispatchSerial : 0u },
+			});
+		}
+		const bool actualDispatchBothEyesValid =
+			a_controller.fidelity.bothEyesValid &&
+			leftDispatchValid &&
+			rightDispatchValid &&
+			leftDispatch.frame == rightDispatch.frame &&
+			leftDispatch.fsrDispatchSerial != rightDispatch.fsrDispatchSerial;
+		const bool actualDispatchBackendConverged =
+			actualDispatchBothEyesValid &&
+			leftDispatch.fsrDispatchBackend == rightDispatch.fsrDispatchBackend;
+		const bool actualRuntimeFallbackObserved =
+			(leftDispatchValid && leftDispatch.fsrRuntimeFallback) ||
+			(rightDispatchValid && rightDispatch.fsrRuntimeFallback);
+
+		return {
+			{ "desiredValid", desired != nullptr },
+			{ "desiredMethod", desired ? GetUpscaleMethodName(desired->method) : "none" },
+			{ "desiredActive", desired && desired->active },
+			{ "desiredFsr4RuntimeEnabled", desiredFsr && desired->fsr4RuntimeEnabled },
+			{ "desiredBackend", desired ? GetBackendName(desired->resources.backend) : "none" },
+			{ "authoritativeValid", authoritative != nullptr },
+			{ "authoritativeMethod", authoritative ? GetUpscaleMethodName(authoritative->method) : "none" },
+			{ "authoritativeActive", authoritative && authoritative->active },
+			{ "authoritativeFsr4RuntimeEnabled", authoritativeFsr && authoritative->fsr4RuntimeEnabled },
+			{ "authoritativeBackend", authoritative ? GetBackendName(authoritative->resources.backend) : "none" },
+			{ "fsrBackendConverged", backendConverged },
+			{ "evaluationActive", a_controller.fidelity.active },
+			{ "evaluationMethod", GetUpscaleMethodName(a_controller.fidelity.method) },
+			{ "expectedEvaluationBackend", GetBackendName(a_controller.fidelity.backend) },
+			{ "evaluationTransitionEpoch", a_controller.fidelity.transitionEpoch },
+			{ "evaluationContractGeneration", a_controller.fidelity.contractGeneration },
+			{ "evaluationBothEyesValid", a_controller.fidelity.bothEyesValid },
+			{ "actualDispatchBothEyesValid", actualDispatchBothEyesValid },
+			{ "actualDispatchBackendConverged", actualDispatchBackendConverged },
+			{ "actualDispatchFrame", actualDispatchBothEyesValid ? leftDispatch.frame : 0u },
+			{ "actualDispatchBackend", actualDispatchBackendConverged ? GetBackendName(leftDispatch.fsrDispatchBackend) : (actualDispatchBothEyesValid ? "mixed" : "none") },
+			{ "actualRuntimeFallbackObserved", actualRuntimeFallbackObserved },
+			{ "actualDispatchEyes", std::move(actualDispatchEyes) },
+			{ "contractResourcesPresent", a_controller.fsrLifecycle.resourcesPresent },
+			{ "contractReady", a_controller.fsrLifecycle.readyForContract },
+			{ "contractLifecyclePhase", Upscaling::GetVRVendorRuntimeLifecyclePhaseName(a_controller.fsrLifecycle.phase) },
+			{ "contractLifecycleFailures", a_controller.fsrLifecycle.failures },
+			{ "shaderCompilationActive", a_shaderCompilationActive },
+		};
+	}
+
 	json BuildStatus(Upscaling& a_upscaling)
 	{
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
 		const auto session = a_upscaling.GetVRRenderScaleStressSessionSnapshot();
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
-		auto& fidelityFX = Upscaling::fidelityFX;
 
 		json eyes = json::array();
 		for (const auto& eye : controller.fidelity.eyes) {
@@ -166,24 +274,12 @@ namespace
 		return {
 			{ "frame", frame },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
-			{ "fsrDispatch", {
-							 { "fsr4SelectorEnabled", a_upscaling.settings.fsr4RuntimeEnable },
-							 { "runtimeProfileFsr4Enabled", a_upscaling.GetRuntimeFSR4Enabled() },
-							 { "runtimePathRequested", fidelityFX.ShouldUseRuntimeUpscalerForFSR() || fidelityFX.ShouldRequestRuntimeFsr4() },
-							 { "fsr4RuntimeRequested", fidelityFX.ShouldRequestRuntimeFsr4() },
-							 { "contextOrDesiredRuntimeVersion", fidelityFX.GetRuntimeUpscalerRequestedVersionString() },
-							 { "configuredPath", fidelityFX.GetConfiguredFsrPathLabel() },
-							 { "displayedPath", fidelityFX.GetDisplayedFsrPathLabel() },
-							 { "lastActualPath", fidelityFX.GetRuntimeUpscalerLastFramePathLabel() },
-							 { "runtimeResourcesPresent", fidelityFX.HasRuntimeUpscalerResources() },
-							 { "runtimeSupportCheckKnown", fidelityFX.HasRuntimeUpscalerSupportCheckResult() },
-							 { "runtimeSupportConfirmed", fidelityFX.IsRuntimeUpscalerSupportConfirmed() },
-							 { "runtimeProvider", fidelityFX.GetRuntimeUpscalerProviderName() },
-							 { "providerMatchesContextRequest", fidelityFX.IsRuntimeUpscalerProviderMatchingRequestedVersion() },
-							 { "runtimeFailureLatched", fidelityFX.IsRuntimeUpscalerFailureLatched() },
-							 { "fsr4FailureLatched", fidelityFX.IsRuntimeFsr4FailureLatched() },
-							 { "shaderCompilationActive", globals::shaderCache && globals::shaderCache->IsCompiling() },
-						 } },
+			{ "pipelineDiagnostics", {
+										 { "configuredForNextStartup", a_upscaling.settings.pipelineDiagnostics },
+										 { "configuredStructuredForNextStartup", a_upscaling.settings.pipelineDiagnosticsStructured },
+										 { "capture", VRPipelineDiagnostics::GetStatusSnapshot() },
+									 } },
+			{ "fsrDispatch", FsrDispatchJson(controller, globals::shaderCache && globals::shaderCache->IsCompiling()) },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "session", {
 							 { "id", session.sessionID },
@@ -421,7 +517,13 @@ namespace
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale iteration control requires Skyrim VR" } };
-				return json{ { "action", "record" }, { "record", globals::features::upscaling.BuildVRRenderScaleIterationRecord() } };
+				auto& upscaling = globals::features::upscaling;
+				return json{
+					{ "action", "record" },
+					{ "record", upscaling.BuildVRRenderScaleIterationRecord() },
+					{ "status", BuildStatus(upscaling) },
+					{ "statusRelation", "captured_after_record" },
+				};
 			});
 		}
 
@@ -450,6 +552,8 @@ namespace
 				return json{
 					{ "action", "stop" },
 					{ "record", upscaling.BuildVRRenderScaleIterationRecord() },
+					{ "status", BuildStatus(upscaling) },
+					{ "statusRelation", "captured_after_record" },
 				};
 			});
 		}
@@ -635,7 +739,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns a compact live controller plus requested FSR4 selector state, configured and actual FSR dispatch paths, runtime provider/version state, shader-compilation gating, local-video and system-commit memory, retirement, backend, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v8 iteration artifact. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 per-eye luminance and HAM-clear capture at the final OpenVR submission boundary; probe_stop disables new samples, probe_record returns its timeline, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns the optional captured startup VR pipeline environment, one coherent desired/authoritative controller view, frame-stamped successful per-eye FSR dispatch evidence, shader-compilation gating, local-video and system-commit memory, retirement, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v8 iteration artifact plus a subsequent live status snapshot. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record plus a subsequent final status. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 per-eye luminance and HAM-clear capture at the final OpenVR submission boundary; probe_stop disables new samples, probe_record returns its timeline, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

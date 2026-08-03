@@ -19,6 +19,6 @@ namespace VRPipelineDiagnostics
 		nlohmann::json data = nlohmann::json::object();
 	};
 
-	void Emit(const Event& event, bool writeStructured, std::string_view textPayload);
-	void ResetSession();
+	bool Emit(const Event& event, bool writeStructured, std::string_view textPayload, bool writeText = true);
+	nlohmann::json GetStatusSnapshot();
 }

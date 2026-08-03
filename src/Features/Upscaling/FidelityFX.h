@@ -44,6 +44,23 @@ public:
 		RadeonRx7000,
 		RadeonRx9000
 	};
+	enum class RuntimeUpscalerFramePath : uint8_t
+	{
+		kInactive = 0,
+		kHostFsr31 = 1,
+		kRuntimeFsr31 = 2,
+		kRuntimeFsr4 = 3,
+		kHostFsr31Fallback = 4
+	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct RuntimeUpscalerDispatchSnapshot
+	{
+		bool valid = false;
+		uint32_t frame = 0;
+		RuntimeUpscalerFramePath path = RuntimeUpscalerFramePath::kInactive;
+		uint64_t serial = 0;
+	};
+#endif
 
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
 	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
@@ -101,6 +118,10 @@ public:
 	static const std::string& GetRuntimeUpscalerLabel(uint32_t a_version);
 	std::string GetRuntimeUpscalerProviderName() const;
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @brief Render-thread-only copy used to publish actual FSR path evidence under the controller lock. */
+	RuntimeUpscalerDispatchSnapshot GetRuntimeUpscalerDispatchSnapshotForRenderThread() const;
+#endif
 
 	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
 	bool UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
@@ -162,15 +183,6 @@ private:
 	// Flag to prevent spamming the log with FSR3 dispatch crash messages
 	bool fsrDispatchCrashLogged = false;
 
-	enum class RuntimeUpscalerFramePath : uint8_t
-	{
-		kInactive = 0,
-		kHostFsr31 = 1,
-		kRuntimeFsr31 = 2,
-		kRuntimeFsr4 = 3,
-		kHostFsr31Fallback = 4
-	};
-
 	bool runtimeUpscalerFailureLatched = false;
 	bool runtimeFsr4FailureLatched = false;
 	bool runtimeUpscalerSessionQuarantined = false;
@@ -200,6 +212,11 @@ private:
 	void QuarantineRuntimeUpscalerForSession(const char* a_reason);
 	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void RecordDevBenchSuccessfulDispatch(RuntimeUpscalerFramePath a_path);
+	RuntimeUpscalerDispatchSnapshot devBenchSuccessfulDispatch{};
+	uint64_t devBenchSuccessfulDispatchSerial = 0;
+#endif
 	LifecycleResult EnsureRuntimeUpscalerInterop();
 	LifecycleResult EnsureRuntimeCommandContexts();
 	LifecycleResult AcquireRuntimeCommandContext(RuntimeCommandContext*& a_commandContext, uint32_t a_requiredFreeContexts = 1);

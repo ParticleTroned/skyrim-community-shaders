@@ -178,6 +178,8 @@ public:
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool fsr4RuntimeEnable = true;
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
+		bool pipelineDiagnostics = false;
+		bool pipelineDiagnosticsStructured = false;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;
 		float foveatedCenterHorizontalScale = 1.0f;
@@ -759,6 +761,12 @@ public:
 		uint32_t outputHeight = 0;
 		bool evaluated = false;
 		bool valid = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool fsrDispatchPathValid = false;
+		VRRenderScaleBackendKind fsrDispatchBackend = VRRenderScaleBackendKind::None;
+		bool fsrRuntimeFallback = false;
+		uint64_t fsrDispatchSerial = 0;
+#endif
 	};
 
 	struct VRRenderScaleFidelitySnapshot

@@ -73,6 +73,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	dlssSharpener,
 	fsr4RuntimeEnable,
 	fsr4RuntimeSelectionSchemaVersion,
+	pipelineDiagnostics,
+	pipelineDiagnosticsStructured,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
@@ -3866,6 +3868,8 @@ namespace
 		settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
 			settings.periphery_taa_center_area);
+		if (settings.pipelineDiagnosticsStructured)
+			settings.pipelineDiagnostics = true;
 	}
 
 	void ApplyLegacyFsr4RuntimeSelectionMigration(
@@ -3895,6 +3899,8 @@ namespace
 	{
 		settings.renderScaleMode = 0;
 		settings.perfMode = 0;
+		settings.pipelineDiagnostics = false;
+		settings.pipelineDiagnosticsStructured = false;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
@@ -3914,6 +3920,8 @@ namespace
 		o_json.erase("renderScaleMode");
 		o_json.erase("perfMode");
 		o_json.erase("vrMenuBridgeDebugMode");
+		o_json.erase("pipelineDiagnostics");
+		o_json.erase("pipelineDiagnosticsStructured");
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("foveatedCenterArea");
 		o_json.erase("foveatedCenterHorizontalScale");
@@ -14314,6 +14322,26 @@ void Upscaling::DrawSettings()
 	drawRenderPipelineBlock();
 
 	if (ImGui::TreeNodeEx("Backend Diagnostics")) {
+		if (IsVRRuntimeActive()) {
+			if (ImGui::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics) &&
+				!settings.pipelineDiagnostics) {
+				settings.pipelineDiagnosticsStructured = false;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Logs VRPIPE environment metadata during VR startup.");
+			}
+			if (ImGui::Checkbox("Pipeline Diagnostics JSONL", &settings.pipelineDiagnosticsStructured) &&
+				settings.pipelineDiagnosticsStructured) {
+				settings.pipelineDiagnostics = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Also writes structured JSON Lines records to VRPipeline-CS.jsonl in the SKSE log directory.");
+				ImGui::TextUnformatted("Use this for automated comparison of CS and OCU environment records.");
+			}
+			ImGui::TextUnformatted("Changing these options requires a restart to take effect.");
+			ImGui::Separator();
+		}
+
 		// Streamline log level selection
 		const char* logLevels[] = { "Off", "Default", "Verbose" };
 		const auto logLevelMax = static_cast<uint>(IM_ARRAYSIZE(logLevels) - 1);
@@ -15190,6 +15218,12 @@ void Upscaling::LoadSettings(json& o_json)
 	}
 	if (!IsVRRuntimeActive()) {
 		ResetVRSpecificUpscalingSettings(settings);
+	}
+	if (IsVRRuntimeActive() &&
+		o_json.is_object() &&
+	    !o_json.contains("pipelineDiagnostics") &&
+	    o_json.value("vrSubmitStageLogDiagnostics", false)) {
+		settings.pipelineDiagnostics = true;
 	}
 	// Force mask visualization OFF on load for all existing profiles.
 	settings.foveatedPeripheryMaskVisualization = false;
@@ -22645,6 +22679,27 @@ bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMe
 		return a_success;
 
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto fsrDispatch =
+		a_success && a_evaluated && a_upscaleMethod == UpscaleMethod::kFSR ?
+		    fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread() :
+		    FidelityFX::RuntimeUpscalerDispatchSnapshot{};
+	const bool fsrDispatchPathValid = fsrDispatch.valid && fsrDispatch.frame == frame;
+	const auto fsrDispatchBackend = [&]() {
+		switch (fsrDispatch.path) {
+		case FidelityFX::RuntimeUpscalerFramePath::kHostFsr31:
+		case FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback:
+			return VRRenderScaleBackendKind::FSRHost;
+		case FidelityFX::RuntimeUpscalerFramePath::kRuntimeFsr31:
+			return VRRenderScaleBackendKind::FSRRuntime;
+		case FidelityFX::RuntimeUpscalerFramePath::kRuntimeFsr4:
+			return VRRenderScaleBackendKind::FSR4Runtime;
+		case FidelityFX::RuntimeUpscalerFramePath::kInactive:
+		default:
+			return VRRenderScaleBackendKind::None;
+		}
+	}();
+#endif
 	uint32_t mismatchMask = static_cast<uint32_t>(VRRenderScaleFidelityMismatch::None);
 	VRRenderScaleFidelitySnapshot published{};
 	{
@@ -22699,6 +22754,14 @@ bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMe
 		eye.outputWidth = a_outputWidth;
 		eye.outputHeight = a_outputHeight;
 		eye.evaluated = a_evaluated;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		eye.fsrDispatchPathValid = fsrDispatchPathValid;
+		eye.fsrDispatchBackend = fsrDispatchPathValid ? fsrDispatchBackend : VRRenderScaleBackendKind::None;
+		eye.fsrRuntimeFallback =
+			fsrDispatchPathValid &&
+			fsrDispatch.path == FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback;
+		eye.fsrDispatchSerial = fsrDispatchPathValid ? fsrDispatch.serial : 0;
+#endif
 		fidelity.observationEyeMask |= 1u << a_eyeIndex;
 		if (a_evaluated)
 			fidelity.evaluationEyeMask |= 1u << a_eyeIndex;

@@ -1,5 +1,6 @@
 #include "OpenVRDetection.h"
 #include <cctype>
+#include <filesystem>
 #include <format>
 #include <initializer_list>
 #include <openvr.h>
@@ -15,7 +16,8 @@ namespace VRDetection
 	{
 		bool TryReadFileBytes(const std::string& path, std::string& bytes)
 		{
-			HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			const auto widePath = std::filesystem::u8path(path);
+			HANDLE file = CreateFileW(widePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 			if (file == INVALID_HANDLE_VALUE)
 				return false;
 
@@ -88,22 +90,23 @@ namespace VRDetection
 
 		result.isAvailable = true;
 
-		char dllPath[MAX_PATH];
-		DWORD fileLength = GetModuleFileNameA(hModule, dllPath, MAX_PATH);
-		if (fileLength == 0 || (fileLength == MAX_PATH && GetLastError() == ERROR_INSUFFICIENT_BUFFER)) {
+		std::vector<wchar_t> dllPath(32768, L'\0');
+		const DWORD fileLength = GetModuleFileNameW(hModule, dllPath.data(), static_cast<DWORD>(dllPath.size()));
+		if (fileLength == 0 || fileLength >= static_cast<DWORD>(dllPath.size())) {
 			result.isAvailable = false;
 			return;
 		}
 
-		result.dllPath = dllPath;
+		const auto utf8Path = stl::utf16_to_utf8(std::wstring(dllPath.data(), fileLength));
+		result.dllPath = utf8Path.value_or("<unicode conversion error>");
 
-		DWORD dwSize = GetFileVersionInfoSizeA(dllPath, nullptr);
+		DWORD dwSize = GetFileVersionInfoSizeW(dllPath.data(), nullptr);
 		if (dwSize > 0) {
 			std::vector<BYTE> buffer(dwSize);
-			if (GetFileVersionInfoA(dllPath, 0, dwSize, buffer.data())) {
+			if (GetFileVersionInfoW(dllPath.data(), 0, dwSize, buffer.data())) {
 				VS_FIXEDFILEINFO* pFileInfo = nullptr;
 				UINT len = 0;
-				if (VerQueryValueA(buffer.data(), "\\", reinterpret_cast<LPVOID*>(&pFileInfo), &len)) {
+				if (VerQueryValueW(buffer.data(), L"\\", reinterpret_cast<LPVOID*>(&pFileInfo), &len)) {
 					DWORD major = HIWORD(pFileInfo->dwFileVersionMS);
 					DWORD minor = LOWORD(pFileInfo->dwFileVersionMS);
 					DWORD build = HIWORD(pFileInfo->dwFileVersionLS);
@@ -116,8 +119,9 @@ namespace VRDetection
 		if (result.version.empty())
 			result.version = "Unknown";
 
-		WIN32_FIND_DATAA findData;
-		HANDLE hFind = FindFirstFileA(dllPath, &findData);
+		result.modificationTime = "Unknown";
+		WIN32_FIND_DATAW findData{};
+		HANDLE hFind = FindFirstFileW(dllPath.data(), &findData);
 		if (hFind != INVALID_HANDLE_VALUE) {
 			FindClose(hFind);
 			ULARGE_INTEGER fileSize;
@@ -125,10 +129,11 @@ namespace VRDetection
 			fileSize.HighPart = findData.nFileSizeHigh;
 			result.fileSize = fileSize.QuadPart;
 
-			SYSTEMTIME st;
-			FileTimeToSystemTime(&findData.ftLastWriteTime, &st);
-			result.modificationTime = std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
-				st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+			SYSTEMTIME st{};
+			if (FileTimeToSystemTime(&findData.ftLastWriteTime, &st)) {
+				result.modificationTime = std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
+					st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+			}
 		}
 	}
 

@@ -34,6 +34,8 @@ public:
 
 	bool needPrecompute = false;
 	uint shadowUpdateIdx = 0;
+	bool hasPreviousLightDirection = false;
+	RE::NiPoint3 previousLightDirection{};
 
 	struct HeightMapMetadata
 	{
@@ -52,7 +54,7 @@ public:
 		float2 LightDeltaZ;  // per LightUVDir, upper penumbra and lower, should be negative
 		uint StartPxCoord;
 		float2 PxSize;
-		uint pad0[1];
+		float BlendWeight;
 		float2 PosRange;
 		float2 ZRange;
 	} shadowUpdateCBData;
@@ -94,7 +96,7 @@ public:
 	virtual void EarlyPrepass() override;
 	void LoadHeightmap();
 	void Precompute();
-	void UpdateShadow();
+	void UpdateShadow(bool a_refreshImmediately);
 
 	virtual void ReflectionsPrepass() override;
 

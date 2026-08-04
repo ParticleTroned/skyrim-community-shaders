@@ -12,7 +12,7 @@ effect of the diagnostic probe.
 
 Current branch and candidate:
 
--   Branch: `cs-1.7-PL-VR`
+-   Branch: current CSX VR branch
 -   RC164: `744183a0756cb10540b740fab266f2b3d876f62b`
 -   Result: failed; the third-transition hang remains
 
@@ -101,7 +101,7 @@ A replacement is ready only when all of the following pass:
 -   No SteamVR waiting-room hang or loss of world view
 -   Correct destination profile and Render Scale state after every transition
 -   No permanent stretch, flicker, white flash, or black HAM artefact
--   No second Community Shaders-generated black fade
+-   No second CSX-generated black fade
 -   Stable memory behavior through the complete session
 -   The same first-load visual checks that previously passed with the newer
     startup protection

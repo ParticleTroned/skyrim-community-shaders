@@ -548,9 +548,9 @@ def default_plugin_version(source_root: Path, runtime: str) -> str:
         if not preset:
             continue
         cache_variables = preset.get("cacheVariables", {})
-        version = cache_variables.get("CS_PL_FORK_VERSION")
+        version = cache_variables.get("CSX_VERSION")
         if isinstance(version, str) and version:
-            return version
+            return f"CSX {version}"
 
     raise SystemExit(
         f"cannot derive {runtime} plugin version from CMakePresets.json; pass --plugin-version"

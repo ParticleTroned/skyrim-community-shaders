@@ -1,7 +1,7 @@
 # devbench API overlay port
 
 This overlay pins the MIT-licensed devbench cross-plugin API used by the
-optional `DEVBENCH_BRIDGE` build. The API registers Community Shaders tools in
+optional `DEVBENCH_BRIDGE` build. The API registers CSX tools in
 the external devbench SKSE host; it does not embed an MCP server in this DLL.
 
 To update the API, bump the pinned devbench commit and archive hash in

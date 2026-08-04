@@ -1,4 +1,4 @@
-# Content-based sync of staged Community Shaders files into a deployment
+# Content-based sync of staged CSX files into a deployment
 # target. Unchanged files retain their destination mtimes, avoiding false
 # runtime FileWatcher events and unnecessary shader-cache invalidation.
 #
@@ -147,7 +147,7 @@ endif()
 set(_previous_keys)
 set(_previous_hashes)
 set(_previous_rels)
-set(_manifest_header "# Community Shaders deploy manifest v1")
+set(_manifest_header "# CSX deploy manifest v1")
 if(EXISTS "${_manifest_file}")
     file(STRINGS "${_manifest_file}" _manifest_lines ENCODING UTF-8)
     list(LENGTH _manifest_lines _manifest_line_count)

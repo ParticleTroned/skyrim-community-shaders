@@ -789,9 +789,9 @@ void ThemeManager::CreateDefaultThemeFiles()
 
 		file << R"({
 	"DisplayName": "Default Dark",
-	"Description": "Community Shaders dark theme with graphite, silver, and gold accents",
+	"Description": "CSX dark theme with graphite, silver, and gold accents",
 	"Version": "1.1.0",
-	"Author": "Community Shaders Team",
+	"Author": "CSX Team",
 	"Theme": {
 		"UseSimplePalette": false,
 		"Palette": {

@@ -29,7 +29,7 @@ algebra or reordered code.
 -   `fxc.exe` from the Windows SDK.
 -   A capture where the target shader pass is actually present.
 
-On this branch, Community Shaders disables CS Upscaling and Frame Generation
+On this branch, CSX disables CSX Upscaling and Frame Generation
 while RenderDoc capture is enabled or injected, to avoid DLSS/FSR startup
 crashes. Do not rely on saved DLSS/FSR settings to expose an upscaling path in a
 RenderDoc run. For `ISTemporalAA.hlsl` refactors, capture a TAA/None path where
@@ -47,17 +47,16 @@ Compile both shaders to DXBC with the same defines as the captured build. Use
 `VR=1` for SkyrimVR captures and `HDR_OUTPUT=1` only when the captured build used
 HDR output.
 
-Use the refactor's true base, not blindly `origin/dev`. On this branch the usual
-upstream baseline is `origin/cs-1.6-PL-VR`, but stacked work should use the
-immediate parent commit of the refactor so the measured floor is compiler noise,
-not unrelated behavior changes.
+Use the refactor's true base, not blindly `origin/dev`. Stacked work should use
+the immediate parent commit of the refactor so the measured floor is compiler
+noise, not unrelated behavior changes.
 
 ```powershell
 $fxc = (Get-Command fxc.exe).Source
 $inc = "package/Shaders"
 $sh = "package/Shaders/ISTemporalAA.hlsl"
 $defs = @("/D", "PSHADER=1") # add "/D", "VR=1" and/or "/D", "HDR_OUTPUT=1" as needed
-$base = "origin/cs-1.6-PL-VR" # or the refactor parent commit
+$base = "HEAD^" # replace with the refactor parent commit when needed
 
 [IO.File]::WriteAllLines("$env:TEMP\taa_A.hlsl", (git show "$base`:$sh"))
 & $fxc /nologo /T ps_5_0 /E main @defs /I $inc "$env:TEMP\taa_A.hlsl" /Fo "$env:TEMP\taa_A.dxbc"

@@ -17,11 +17,11 @@ on:
             artifact_pattern:
                 description: "Artifact glob pattern to select the package to upload"
                 required: false
-                default: "CommunityShaders-*.7z"
+                default: "CSX-*.7z"
             mod_filename:
                 description: "Filename used for the Nexus mod upload"
                 required: false
-                default: "Community Shaders"
+                default: "Community Shaders Expanded (CSX)"
             dry_run:
                 description: "If true, do not upload to Nexus; only report the planned upload"
                 required: false
@@ -50,11 +50,11 @@ on:
             artifact_pattern:
                 required: false
                 type: string
-                default: "CommunityShaders-*.7z"
+                default: "CSX-*.7z"
             mod_filename:
                 required: false
                 type: string
-                default: "Community Shaders"
+                default: "Community Shaders Expanded (CSX)"
             dry_run:
                 required: false
                 type: string

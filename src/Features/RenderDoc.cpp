@@ -569,7 +569,7 @@ void RenderDoc::DrawCaptureEnableToggle()
 	}
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable RenderDoc frame capture for providing debug captures to the Community Shaders team.");
+		ImGui::Text("Enable RenderDoc frame capture for providing debug captures to the CSX maintainers.");
 		ImGui::Text("Enabling capture will force-enable frame annotations for easier debugging and will restore the previous setting when disabled.");
 	}
 }
@@ -881,7 +881,7 @@ std::string RenderDoc::BuildAutomaticCaptureComments(const std::string& userComm
 	comments += std::format("Skyrim {} {}\n", runtimeName, gameVersion);
 
 	// Plugin version
-	comments += std::format("Community Shaders {}\n", Plugin::VERSION_LABEL);
+	comments += std::format("{}\n", Plugin::VERSION_LABEL);
 
 	// Enabled features
 	const auto& features = Feature::GetFeatureList();
@@ -953,7 +953,7 @@ void RenderDoc::ApplyAutomaticCommentsToNewCaptures()
 std::string RenderDoc::GetOverlayWarningMessage() const
 {
 	return "WARNING: RenderDoc capture is active, performance will be severely impacted.\n"
-		   "Community Shaders Upscaling and Frame Generation are disabled while capture is active.\n"
+		   "CSX Upscaling and Frame Generation are disabled while capture is active.\n"
 		   "Press F12, Print Screen or press the Capture button in the RenderDoc feature settings.\n"
 		   "Disable RenderDoc capture in the RenderDoc feature settings.";
 }

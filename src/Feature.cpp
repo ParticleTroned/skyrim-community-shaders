@@ -88,7 +88,7 @@ void Feature::Load(json& o_json)
 				hasError = true;
 				errorVersion = value;
 				errorType = FeatureIssues::FeatureIssueInfo::IssueType::UNKNOWN;
-				failedLoadedMessage = std::format("{} {} is an unknown feature not supported by this CS version. This may be a feature from a development branch.", GetShortName(), value);
+				failedLoadedMessage = std::format("{} {} is an unknown feature not supported by this CSX version. This may be a feature from a development branch.", GetShortName(), value);
 			} else {
 				// Version compatibility check
 				bool oldFeature = featureVersion.compare(minimalFeatureVersion) == std::strong_ordering::less;
@@ -105,7 +105,7 @@ void Feature::Load(json& o_json)
 					std::string minimalVersionString = Util::GetFormattedVersion(minimalFeatureVersion);
 
 					if (IsCore()) {
-						failedLoadedMessage = std::format("This feature is already included as part of the core Community Shaders installation. Uninstall this feature with your mod manager.");
+						failedLoadedMessage = std::format("This feature is already included as part of the core CSX installation. Uninstall this feature with your mod manager.");
 					} else if (majorVersionMismatch) {
 						failedLoadedMessage = std::format("{} {} is too old, major version incompatibility detected. Required: {}", GetShortName(), value, minimalVersionString);
 					} else {

@@ -29,7 +29,7 @@ namespace Hooks
 	bool RecreateRenderTargets();
 	using VRRenderTargetRecreatePreparation = void (*)(void*);
 	// Runs synchronously after Skyrim's native target creator returns and
-	// before global or Community Shaders render-target state is reinitialized.
+	// before global or CSX render-target state is reinitialized.
 	using VRRenderTargetRecreateCheckpoint = void (*)(void*) noexcept;
 	bool RecreateRenderTargetsForVRRenderScale(
 		VRRenderTargetRecreatePreparation a_beforeEngineCreate = nullptr,

@@ -1,6 +1,6 @@
-# Community Shaders Particle Lights Fork Installation Guide
+# Community Shaders Expanded (CSX) Installation Guide
 
-For **Skyrim VR / MGO** users setting up the Particle Lights fork, Wetterness, Upscaling, and VR FOV.
+For **Skyrim VR / MGO** users setting up CSX, Wetterness, Upscaling, and VR FOV.
 
 ## Index
 
@@ -9,15 +9,15 @@ For **Skyrim VR / MGO** users setting up the Particle Lights fork, Wetterness, U
   - [2. Install in MO2](#2-install-in-mo2)
   - [3. Check Overwritten Files](#3-check-overwritten-files)
   - [4. Disable Old Overwritten Features](#4-disable-old-overwritten-features)
-  - [5. SE/AE Only: Install Optional CS Features](#5-seae-only-install-optional-cs-features)
+  - [5. SE/AE Only: Install Optional Community Shaders Features](#5-seae-only-install-optional-community-shaders-features)
   - [6. Why Old Features Turn Red](#6-why-old-features-turn-red)
   - [7. VR AIO Summary](#7-vr-aio-summary)
   - [8. Update SKSE VR Address Library](#8-update-skse-vr-address-library)
   - [9. Startup Errors](#9-startup-errors)
   - [10. Clear Shader Cache](#10-clear-shader-cache)
   - [11. Start Skyrim VR](#11-start-skyrim-vr)
-  - [12. Open the CS Menu](#12-open-the-cs-menu)
-- [Community Shaders First Setup](#community-shaders-first-setup)
+  - [12. Open the CSX Menu](#12-open-the-csx-menu)
+- [CSX First Setup](#csx-first-setup)
   - [Menu Basics](#menu-basics)
   - [Setup Upscaling](#setup-upscaling)
   - [VR Only: Setup FOV](#vr-only-setup-fov)
@@ -41,33 +41,34 @@ For **Skyrim VR / MGO** users setting up the Particle Lights fork, Wetterness, U
 ## Installation
 
 > [!IMPORTANT]
-> **VR users:** The current **Community Shaders Particle Lights VR** file is an **all-in-one** Community Shaders package. For CS itself, install only this AIO file. Do not download or keep separate Community Shaders feature files from Nexus under it; old feature files can overwrite newer AIO files and break shader compilation.
+> **VR users:** The current **Community Shaders Expanded (CSX) VR** file is an **all-in-one** CSX package. For CSX itself, install only this AIO file. Do not download or keep separate Community Shaders feature files from Nexus under it; old feature files can overwrite newer AIO files and break shader compilation.
 
 > [!NOTE]
-> **SE/AE users:** The SE/AE Particle Lights fork is **not** all-in-one. SE/AE users still need the separate Community Shaders feature downloads they want to use, matched to the correct feature versions for their CS/fork base.
+> **SE/AE users:** The SE/AE CSX is **not** all-in-one. SE/AE users still need the separate Community Shaders feature downloads they want to use, matched to the correct feature versions for their Community Shaders/CSX base.
 
 ### 1. Download the Latest Version
 
-Download the latest version of **Community Shaders - Particle Lights Fork** from Nexus:
+Download the latest version of **Community Shaders Expanded (CSX)** from Nexus:
 
-**Community Shaders - Particle Lights (Unofficial Fork)**  
+**Community Shaders Expanded (CSX) (Unofficial Fork)**
+
 https://www.nexusmods.com/skyrimspecialedition/mods/166950
 
 For VR, download:
 
 ```text
-Community Shaders Particle Lights VR
+Community Shaders Expanded (CSX) VR
 ```
 
-This is the AIO file. No other CS feature package is required for the VR setup described in this guide. Required support mods such as VR Address Library and Engine Fixes VR still apply.
+This is the AIO file. No other CSX feature package is required for the VR setup described in this guide. Required support mods such as VR Address Library and Engine Fixes VR still apply.
 
 For SE/AE, download:
 
 ```text
-Community Shaders Particle Lights SE
+Community Shaders Expanded (CSX) SE
 ```
 
-This is not an AIO file. SE/AE users must add the separate CS feature downloads they want to use, using versions appropriate for their base CS/fork version.
+This is not an AIO file. SE/AE users must add the separate Community Shaders feature downloads they want to use, using versions appropriate for their CSX base version.
 
 Please also read the full mod description and the sticky post in the comments section, as these usually contain the most up-to-date information, known issues, and version-specific notes:
 
@@ -77,35 +78,35 @@ https://www.nexusmods.com/skyrimspecialedition/mods/166950?tab=posts
 
 Install the downloaded **.7z** file with **Mod Organizer 2**.
 
-In your MO2 left pane, move the newly installed file directly **above** your existing **Community Shaders Unofficial Fork** mod in the Community Shaders section of MGO. The old fork will be disabled in the next steps.
+In your MO2 left pane, move the newly installed file directly **above** your existing **Community Shaders Unofficial Fork** mod in the CSX section of MGO. The old fork will be disabled in the next steps.
 
-![MO2 placement for the Particle Lights fork](Images-Fork-Installation/intro1.PNG)
+![MO2 placement for the CSX](Images-Fork-Installation/intro1.PNG)
 
 ### 3. Check Overwritten Files
 
-Click on the newly installed **Community Shaders Particle Lights VR** file in MO2.
+Click on the newly installed **Community Shaders Expanded (CSX) VR** file in MO2.
 
-You will now see that several Community Shaders feature mods below it turn **red**. This means these files are being overwritten by the new fork/core package.
+You will now see that several CSX feature mods below it turn **red**. This means these files are being overwritten by the new fork/core package.
 
 ![MO2 overwrite highlights after selecting the new fork](Images-Fork-Installation/intro2.png)
 
 ### 4. Disable Old Overwritten Features
 
-Untick all red Community Shaders feature mods that are now overwritten.
+Untick all red CSX feature mods that are now overwritten.
 
 Also untick the old **Community Shaders Unofficial Fork** file.
 
-![Disabled old overwritten Community Shaders files](Images-Fork-Installation/intro3.png)
+![Disabled old overwritten CSX files](Images-Fork-Installation/intro3.png)
 
 > **Important:** Do not keep old overwritten feature files active below the new fork. Otherwise, they can overwrite newer files and cause shader compile errors, missing features, or unexpected graphical issues.
 
-### 5. SE/AE Only: Install Optional CS Features
+### 5. SE/AE Only: Install Optional Community Shaders Features
 
-VR users can skip this step. The VR AIO already contains the CS feature stack used by this guide.
+VR users can skip this step. The VR AIO already contains the CSX feature stack used by this guide.
 
-SE/AE users should install only supported CS feature packages from Nexus, with feature versions matching the CS/fork base they are using. Do not mix old legacy feature files into a current setup.
+SE/AE users should install only supported Community Shaders feature packages from Nexus, with feature versions matching the CSX base they are using. Do not mix old legacy feature files into a current setup.
 
-Official CS 1.5.2 feature split:
+Official Community Shaders 1.5.2 feature split:
 
 https://www.nexusmods.com/skyrimspecialedition/mods/86492
 
@@ -146,16 +147,16 @@ Upscaling
 Wetness Effects
 ```
 
-Anything outside the supported current list should not be installed. If you use the SE/AE Particle Lights fork instead of official CS 1.5.2, match the feature versions required by that fork/base version, not random newer or older files.
+Anything outside the supported current list should not be installed. If you use the SE/AE CSX instead of official Community Shaders 1.5.2, match the feature versions required by that fork/base version, not random newer or older files.
 
 ![Remaining active Community Shaders features to update](Images-Fork-Installation/intro4.png)
 
 Not every optional feature is required. Install only the feature pages you actually want to use.
 
 > [!NOTE]
-> Good practice when updating CS during an existing playthrough is to make an interior save first, then update. If you experience hang-ups or an indefinite loading screen after a CS update, untick **Enable Async** in **CS UI > General > Shaders**.
+> Good practice when updating CSX during an existing playthrough is to make an interior save first, then update. If you experience hang-ups or an indefinite loading screen after a CSX update, untick **Enable Async** in **CSX UI > General > Shaders**.
 
-![Untick Enable Async if you experience indefinite loading screens after a CS update](Images-Fork-Installation/CS-UI/loaderror.png)
+![Untick Enable Async if you experience indefinite loading screens after a CSX update](Images-Fork-Installation/CS-UI/loaderror.png)
 
 ### 6. Why Old Features Turn Red
 
@@ -163,11 +164,11 @@ Community Shaders used to provide many features as separate downloads. This was 
 
 However, separate feature plugins can also make development and compatibility more difficult. Because of this, the Community Shaders team has moved several features back into the main Community Shaders core file.
 
-This is why, compared to older CS 1.4.6-based setups, features such as **Inverse Square Lighting** and several others may now turn red in MO2 when you select the main file.
+This is why, compared to older Community Shaders 1.4.6-based setups, features such as **Inverse Square Lighting** and several others may now turn red in MO2 when you select the main file.
 
 That usually means:
 
-- The feature is already included in the main Community Shaders file.
+- The feature is already included in the main CSX file.
 - The old separate feature below it would overwrite newer core files.
 - The old separate file should be disabled.
 
@@ -177,9 +178,9 @@ Disable these old separate files if they are already included in the new core pa
 
 ### 7. VR AIO Summary
 
-Because the **Community Shaders Particle Lights VR** file is now an AIO, it already includes the VR-focused feature stack used later in this guide, including Upscaling/FOV, Wetterness, Light Limit Fix / Particle Lights, Terrain Blending, Screen Space Shadows, Screen Space GI, Skylighting, Volumetric Lighting, and the other CS menu pages shown below.
+Because the **Community Shaders Expanded (CSX) VR** file is now an AIO, it already includes the VR-focused feature stack used later in this guide, including Upscaling/FOV, Wetterness, Light Limit Fix / Particle Lights, Terrain Blending, Screen Space Shadows, Screen Space GI, Skylighting, Volumetric Lighting, and the other CSX menu pages shown below.
 
-This means you no longer need to download and install those CS features separately for VR. If your old modlist still contains separate CS feature files below the AIO, leave them disabled unless the current fork description explicitly says otherwise.
+This means you no longer need to download and install those CSX features separately for VR. If your old modlist still contains separate Community Shaders feature files below the AIO, leave them disabled unless the current fork description explicitly says otherwise.
 
 ### 8. Update SKSE VR Address Library
 
@@ -200,7 +201,7 @@ This usually means one of the following:
 - You also need to update **Light Placer VR**.
 - You have an incompatible DLL/mod installed.
 
-Check compatibility on the Particle Lights fork description page:
+Check compatibility on the CSX description page:
 https://www.nexusmods.com/skyrimspecialedition/mods/166950?tab=description
 
 Update these two mods if needed:
@@ -238,23 +239,23 @@ You can either press **Clear Overwrite** and delete the contents, or, more safel
 
 > **Recommended:** If you use mods that store configuration files in Overwrite, it is safer to open the folder manually and delete only the shader cache.
 
-Deleting the shader cache is 100% sufficient for a new Community Shaders install.
+Deleting the shader cache is 100% sufficient for a new CSX install.
 
 If you accidentally clear the whole Overwrite folder, do not panic. The shader cache folder is regenerated when Skyrim VR starts.
 
-Modlists often integrate their CS user configuration file (`SettingsUser.json`) as a mod. In that case, your Community Shaders configuration file is saved in that dedicated MO2 mod instead of only in Overwrite.
+Modlists often integrate their CSX user configuration file (`SettingsUser.json`) as a mod. In that case, your CSX configuration file is saved in that dedicated MO2 mod instead of only in Overwrite.
 
 The important point is:
 
-- Your CS settings are saved in these MO2 configuration mods.
-- Deleting Overwrite does not normally remove your saved CS settings in MGO.
+- Your CSX settings are saved in these MO2 configuration mods.
+- Deleting Overwrite does not normally remove your saved CSX settings in MGO.
 - You do not have to do anything special here.
 
 ### 11. Start Skyrim VR
 
 Start **Skyrim VR** through MO2.
 
-> **Very important:** When the game starts, Community Shaders will compile shaders.
+> **Very important:** When the game starts, CSX will compile shaders.
 
 You must let this finish completely before starting your game.
 
@@ -270,17 +271,17 @@ During this time, your PC may become slow or temporarily unresponsive. Shader co
 
 Just be patient and let it finish.
 
-### 12. Open the CS Menu
+### 12. Open the CSX Menu
 
-While waiting, you can press the **END** key to open the Community Shaders menu.
+While waiting, you can press the **END** key to open the CSX menu.
 
 At the bottom of the menu, you may see **Unified Water** listed in grey as an unloaded mod. You may also see a red warning elsewhere in the UI.
 
 This is normal.
 
-Unified Water is already indexed by Community Shaders, but the actual feature does not yet exist as a released mod. This warning does not affect any functional feature.
+Unified Water is already indexed by CSX, but the actual feature does not yet exist as a released mod. This warning does not affect any functional feature.
 
-You can now customise Community Shaders according to your own performance and graphical preferences.
+You can now customise CSX according to your own performance and graphical preferences.
 
 My recommendations below are based on my own system:
 
@@ -291,13 +292,13 @@ RTX 4090
 
 If your system is weaker, you may need to reduce some settings.
 
-You can press **END** at any time in-game to open or close the CS menu. Many changes can be previewed in real time.
+You can press **END** at any time in-game to open or close the CSX menu. Many changes can be previewed in real time.
 
 > **Reminder:** Only start playing once all shaders have compiled.
 
 ---
 
-## Community Shaders First Setup
+## CSX First Setup
 
 Do not try to tune every page on the first launch. Set up the core systems first, test them, then come back to the optional visual pages.
 
@@ -317,9 +318,9 @@ After changing settings, use the save icon in the menu header. Restart the game 
 
 #### Home
 
-![Community Shaders home page](Images-Fork-Installation/CS-UI/home-startup.png)
+![CSX home page](Images-Fork-Installation/CS-UI/home-startup.png)
 
-The **Home** page confirms that you are running the Particle Lights fork and shows the current fork/version information. Use the left feature list to move through the menu. The header icons are for common actions such as saving, loading/reloading settings, clearing cache, and closing the menu.
+The **Home** page confirms that you are running the CSX and shows the current fork/version information. Use the left feature list to move through the menu. The header icons are for common actions such as saving, loading/reloading settings, clearing cache, and closing the menu.
 
 #### General > Shaders
 
@@ -343,7 +344,7 @@ The shader cache bar shows the last cache build result. Hover it in game to see 
 
 ![General keybinding settings](Images-Fork-Installation/CS-UI/general-keybindings.png)
 
-Use **General > Keybindings** for desktop keyboard shortcuts such as the Community Shaders menu toggle, effect toggle, skip compilation key, overlay toggle, and Weather Editor toggle. The default menu key is usually **END**. Change these only if they conflict with another mod or with your VR controller workflow.
+Use **General > Keybindings** for desktop keyboard shortcuts such as the CSX menu toggle, effect toggle, skip compilation key, overlay toggle, and Weather Editor toggle. The default menu key is usually **END**. Change these only if they conflict with another mod or with your VR controller workflow.
 
 ### Setup Upscaling
 
@@ -367,7 +368,7 @@ Other GPUs:
 Use AMD FSR 3.1.5, or TAA if vendor upscaling causes problems.
 ```
 
-If Community Shaders locks Upscaling to **None** because OpenComposite already has external upscaling enabled, disable the OpenComposite upscaler first, or use the OpenComposite upscaler instead of Community Shaders Upscaling.
+If CSX locks Upscaling to **None** because OpenComposite already has external upscaling enabled, disable the OpenComposite upscaler first, or use the OpenComposite upscaler instead of CSX Upscaling.
 
 Use **Upscale Preset** to choose the internal render scale:
 
@@ -435,11 +436,11 @@ In **Menu Settings**, use:
 Keep Game Window Focused for VR Menu
 ```
 
-Turn this **on** if the Community Shaders VR menu loses input, appears behind other desktop windows, or if Windows focus changes while you are trying to use the menu in the headset. While the CS menu is open, this forces the Skyrim VR desktop window to stay centered, foregrounded, and above other desktop windows.
+Turn this **on** if the CSX VR menu loses input, appears behind other desktop windows, or if Windows focus changes while you are trying to use the menu in the headset. While the CSX menu is open, this forces the Skyrim VR desktop window to stay centered, foregrounded, and above other desktop windows.
 
 This only applies when **Attach Mode** presents the menu in VR, such as **HMD Only**, **Controller Only**, or **Both**. It does not apply when **Attach Mode** is **None (Desktop Only)**.
 
-To deactivate it, uncheck **Keep Game Window Focused for VR Menu**. The game window is then released again, so you can move it aside or use other desktop applications while the VR menu remains open. Closing the CS menu also stops the active window forcing until the menu is opened again.
+To deactivate it, uncheck **Keep Game Window Focused for VR Menu**. The game window is then released again, so you can move it aside or use other desktop applications while the VR menu remains open. Closing the CSX menu also stops the active window forcing until the menu is opened again.
 
 The rest of the page controls the VR menu itself: controller instructions, menu scale, positioning mode, overlay path, HMD/controller offsets, wand pointing, mouse deadzone/speed, and drag repositioning. These are comfort and usability settings, not graphics-quality settings.
 
@@ -592,7 +593,7 @@ The **Stereo Blending** section is an advanced fallback. It blends between eyes 
 
 ![VR Bindings settings](Images-Fork-Installation/CS-UI/vr-bindings.png)
 
-The **Bindings** tab lets you record controller button combinations for opening and closing the Community Shaders menu and VR overlay. Increase **Combo Timeout** if you need more time to press multi-button combos.
+The **Bindings** tab lets you record controller button combinations for opening and closing the CSX menu and VR overlay. Increase **Combo Timeout** if you need more time to press multi-button combos.
 
 Use **Record Selected Combo** only when you are ready to change the selected action. The table shows the current binding and description for each action.
 
@@ -822,7 +823,7 @@ For VR, treat **Screen Space GI** as an **AO-only** feature. Enable only the AO 
 
 #### Dynamic Rules with VR FPS Stabilizer
 
-[VR FPS Stabilizer](https://www.nexusmods.com/skyrimspecialedition/mods/31392?tab=description) can be used on top of the manual setup. Its CS VR Fork API support allows Community Shaders settings to be changed through conditionals, performance levels, and location rules, including interior/exterior and weather-aware rules.
+[VR FPS Stabilizer](https://www.nexusmods.com/skyrimspecialedition/mods/31392?tab=description) can be used on top of the manual setup. Its CS VR Fork API support allows CSX settings to be changed through conditionals, performance levels, and location rules, including interior/exterior and weather-aware rules.
 
 Use this after the FOV masks and normal culling settings are already tuned:
 
@@ -831,9 +832,9 @@ Use this after the FOV masks and normal culling settings are already tuned:
 3. During rain, storm, or snow, disable expensive fine-detail effects that are less visible anyway: **SSGI**, **Screen Space Shadows**, and **Light Limit Fix Contact Shadows**.
 4. Use location rules for known problem areas, level rules for general frametime pressure, and conditional rules for interior/exterior or weather-specific changes.
 
-VR FPS Stabilizer uses its own config syntax, for example `CS>Setting=value`. Follow that mod's description for the exact file and rule format. The useful CS settings are **SSS**, **SSGI**, **VLExterior**, and **DLSSMode**.
+VR FPS Stabilizer uses its own config syntax, for example `CS>Setting=value`. Follow that mod's description for the exact file and rule format. The useful CSX settings are **SSS**, **SSGI**, **VLExterior**, and **DLSSMode**.
 
-The CS API names are technical. **SSS** means **Screen Space Shadows** here, not Subsurface Scattering. The legacy **DLSSMode** API name controls the shared upscaling preset for **DLSS**, **FSR 3.1.5**, and runtime **FSR4**; for FSR/FSR4 the DLAA/native preset behaves as **Native AA**. If a config rule uses numeric presets, the stable values are `0` DLAA/Native AA, `1` Quality, `2` Balanced, `3` Performance, and `4` Ultra Performance. This fork also defines `5` Hoshipa and `6` Ultra Quality for compatible configs, and exposes **Light Limit Fix Contact Shadows** through the API so a compatible dynamic config can switch contact shadows with the same scene/weather logic.
+The legacy CS API names are technical. **SSS** means **Screen Space Shadows** here, not Subsurface Scattering. The legacy **DLSSMode** API name controls the shared upscaling preset for **DLSS**, **FSR 3.1.5**, and runtime **FSR4**; for FSR/FSR4 the DLAA/native preset behaves as **Native AA**. If a config rule uses numeric presets, the stable values are `0` DLAA/Native AA, `1` Quality, `2` Balanced, `3` Performance, and `4` Ultra Performance. This fork also defines `5` Hoshipa and `6` Ultra Quality for compatible configs, and exposes **Light Limit Fix Contact Shadows** through the API so a compatible dynamic config can switch contact shadows with the same scene/weather logic.
 
 Conceptually, a dynamic profile can look like this:
 
@@ -896,7 +897,7 @@ Recommended tuning order:
 
 **Image Based Lighting** is not fully ready for general use yet. **Linear Lighting** is intended for future post-processing presets. Both are core features, but I usually disable them for now.
 
-To unload a feature, toggle the upper-right feature switch off, save, exit, and restart the game. The setting is saved in your CS configuration.
+To unload a feature, toggle the upper-right feature switch off, save, exit, and restart the game. The setting is saved in your CSX configuration.
 
 ### Complex Material: Ice Mesh Wobble
 
@@ -914,12 +915,12 @@ This was needed in MGO 3.66. I am not sure if it is still required in MGO 3.88.
 
 Before playing, confirm:
 
-- Make sure old overwritten CS feature mods are disabled.
+- Make sure old overwritten Community Shaders feature mods are disabled.
 - Make sure SKSE VR Address Library is updated.
 - Update Light Placer and Light Placer VR only if required.
 - Clear the shader cache.
 - Start Skyrim VR through MO2.
 - Let shader compilation finish fully before loading into the game.
-- Press **END** to adjust Community Shaders settings in game.
+- Press **END** to adjust CSX settings in game.
 
 Once everything is compiled and configured, you are ready to play.

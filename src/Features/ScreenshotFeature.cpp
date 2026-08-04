@@ -339,7 +339,7 @@ namespace
 	// Picks the capture source for this branch:
 	//   VR        -> kFRAMEBUFFER (SBS).
 	//   flat      -> kFRAMEBUFFER (usually already tonemapped UNORM).
-	// Dedicated HDR capture is intentionally omitted in PL3.15-VR; if a
+	// Dedicated HDR capture is intentionally omitted in 3.15-VR; if a
 	// future source is FP16, the save path still tonemaps before SDR encoding.
 	CaptureSource SelectCaptureSource(winrt::com_ptr<ID3D11Texture2D>& holder)
 	{

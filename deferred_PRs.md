@@ -1,7 +1,7 @@
 # Deferred PRs
 
 This file tracks upstream PRs that are intentionally not picked into the
-`cs-1.4.11-PL-VR` branch right now.
+current CSX VR branch.
 
 Keep this file updated when a PR is reviewed and deferred, skipped, or only
 partially adapted.

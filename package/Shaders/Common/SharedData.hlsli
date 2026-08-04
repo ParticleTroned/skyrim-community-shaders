@@ -25,7 +25,7 @@ namespace SharedData
 		bool HideSky;                   // HideSky flag in WorldSpace, e.g. Blackreach
 		float MipBias;                  // Offset to mip level for TAA sharpness
 		float WaterSystemHeight;        // TES::GetWaterHeight at eye-0 in camera-relative Z; -FLT_MAX when no water body found (VR only)
-		float RefractionScale;          // Global scale for ImageSpace refraction heat warp (1.0 = vanilla CS)
+		float RefractionScale;          // Global scale for ImageSpace refraction heat warp (1.0 = base CSX)
 		float PBRMetalReflectionScale;  // Global scale for PBR metal reflections (1.0 = default)
 		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights (1.0 = default)
 		uint HasDirectionalShadows;     // Exterior or Interior Sun directional shadow availability

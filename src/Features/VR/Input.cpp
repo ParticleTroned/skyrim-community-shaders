@@ -218,7 +218,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 	};
 
 	std::vector<MenuStateMapping> mappings = {
-		// Open Community Shaders menu when closed
+		// Open CSX menu when closed
 		{ [&]() {
 			 return menuOpenPressed && !isEnabled && canUseMenuBindings;
 		 },
@@ -227,7 +227,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 				ResetMenuInputRuntimeState();
 			} },
 
-		// Close Community Shaders menu when open
+		// Close CSX menu when open
 		{ [&]() {
 			 return menuClosePressed && menuSessionOpen;
 		 },

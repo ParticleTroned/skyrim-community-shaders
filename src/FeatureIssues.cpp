@@ -48,15 +48,15 @@ namespace FeatureIssues
 										  .displayName = "Complex Parallax Materials",
 										  .rejectionReason = "Integrated into ExtendedMaterials feature",
 										  .replacementFeature = "ExtendedMaterials",
-										  .userMessage = "This functionality is now built into Community Shaders. Remove the old feature as it's no longer needed.",
+										  .userMessage = "This functionality is now built into CSX. Remove the old feature as it's no longer needed.",
 										  .removedInVersion = { 1, 0, 0 },
 										  .modifiedShaderDirectory = false,
 										  .issueType = FeatureIssueInfo::IssueType::OBSOLETE } },
 		{ "TreeLODLighting", { .shortName = "TreeLODLighting",
 								 .displayName = "Tree LOD Lighting",
-								 .rejectionReason = "Functionality integrated into base CS lighting system",
+								 .rejectionReason = "Functionality integrated into base CSX lighting system",
 								 .replacementFeature = "",
-								 .userMessage = "This functionality is now built into Community Shaders. Remove the old feature as it's no longer needed.",
+								 .userMessage = "This functionality is now built into CSX. Remove the old feature as it's no longer needed.",
 								 .removedInVersion = { 1, 0, 0 },
 								 .modifiedShaderDirectory = true,
 								 .issueType = FeatureIssueInfo::IssueType::OBSOLETE } },
@@ -86,9 +86,9 @@ namespace FeatureIssues
 							   .issueType = FeatureIssueInfo::IssueType::OBSOLETE } },
 		{ "DistantTreeLighting", { .shortName = "DistantTreeLighting",
 									 .displayName = "Distant Tree Lighting",
-									 .rejectionReason = "Replaced by TreeLODLighting, which was later integrated into CS core",
+									 .rejectionReason = "Replaced by TreeLODLighting, which was later integrated into CSX core",
 									 .replacementFeature = "",
-									 .userMessage = "This functionality is now built into Community Shaders. Remove the old feature as it's no longer needed.",
+									 .userMessage = "This functionality is now built into CSX. Remove the old feature as it's no longer needed.",
 									 .removedInVersion = { 0, 8, 0 },
 									 .modifiedShaderDirectory = true,
 									 .issueType = FeatureIssueInfo::IssueType::OBSOLETE } }
@@ -384,7 +384,7 @@ namespace FeatureIssues
 		// Unknown Features Section (potentially compilation breaking)
 		if (auto section = Util::SectionWrapper("Unknown Features",
 				"The following features are not recognized and we tried to disable automatically. "
-				"They may be from development branches or newer CS versions. Since we cannot determine what files they may have modified, "
+				"They may be from development branches or newer CSX versions. Since we cannot determine what files they may have modified, "
 				"they should be removed as a precaution to prevent potential shader compilation failures.",
 				theme.StatusPalette.Error, !unknownIssues.empty())) {
 			for (const auto* issue : unknownIssues) {
@@ -394,7 +394,7 @@ namespace FeatureIssues
 		// Obsolete Features Section (non-shader-breaking)
 		if (auto section = Util::SectionWrapper("Obsolete Features",
 				"The following features are obsolete and disabled automatically. "
-				"These features have been removed or replaced in this CS version but do not modify core shaders.",
+				"These features have been removed or replaced in this CSX version but do not modify core shaders.",
 				theme.StatusPalette.Warning, !obsoleteIssues.empty())) {
 			for (const auto* issue : obsoleteIssues) {
 				DrawFeatureIssue(*issue, theme.StatusPalette.Warning);
@@ -591,7 +591,7 @@ namespace FeatureIssues
 			ImGui::SameLine();
 			ImGui::Text("Core feature already installed");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextWrapped("This feature is already included as part of the core Community Shaders installation. Uninstall this feature with your mod manager.");
+				ImGui::TextWrapped("This feature is already included as part of the core CSX installation. Uninstall this feature with your mod manager.");
 			}
 		} else if (issue.IsVersionMismatch()) {
 			ImGui::SameLine();
@@ -676,7 +676,7 @@ namespace FeatureIssues
 					ImGui::TextColored(theme.StatusPalette.Warning, "If compilation issues persist after deletion:");
 					ImGui::BulletText("Completely uninstall the feature via your mod manager");
 					ImGui::BulletText("Check for modified files in Data/Shaders/ (not in feature subfolders)");
-					ImGui::BulletText("Consider reinstalling Community Shaders if issues persist");
+					ImGui::BulletText("Consider reinstalling CSX if issues persist");
 					ImGui::Spacing();
 					ImGui::Separator();
 					ImGui::Spacing();
@@ -814,7 +814,7 @@ namespace FeatureIssues
 						// Unknown orphaned feature
 						FeatureFileInfo fileInfo = GetFeatureFileInfo(featureName);
 						AddFeatureIssue(featureName, "unknown",
-							std::format("{} is not recognized by this CS version", featureName),
+							std::format("{} is not recognized by this CSX version", featureName),
 							FeatureIssueInfo::IssueType::UNKNOWN, fileInfo);
 
 						logger::warn("Found orphaned unknown feature INI: {}", featureName);
@@ -1094,7 +1094,7 @@ namespace FeatureIssues
 						"Version = 1-0-0\n"
 						"\n"
 						"[Settings]\n"
-						"# Test INI created by CS Developer Mode for {}\n"
+						"# Test INI created by CSX Developer Mode for {}\n"
 						"# This feature is obsolete and will trigger feature issue detection\n"
 						"TestFeature = true\n",
 						testCase.category);
@@ -1134,7 +1134,7 @@ namespace FeatureIssues
 						"Version = 9-9-9\n"
 						"\n"
 						"[Settings]\n"
-						"# Unknown test feature created by CS Developer Mode\n"
+						"# Unknown test feature created by CSX Developer Mode\n"
 						"# This will trigger unknown feature issue detection\n"
 						"UnknownSetting = true\n";
 
@@ -1308,7 +1308,7 @@ namespace FeatureIssues
 							"Version = 0-0-1\n"
 							"\n"
 							"[Settings]\n"
-							"# Test INI created by CS Developer Mode for version mismatch testing\n"
+							"# Test INI created by CSX Developer Mode for version mismatch testing\n"
 							"# This version (0-0-1) is incompatible and will trigger version mismatch detection\n"
 							"TestFeature = true\n";
 
@@ -1470,7 +1470,7 @@ namespace FeatureIssues
 				const bool hasActiveTests = HasActiveTestInis();
 				if (hasActiveTests) {  // Warning section using theme colors
 					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.RestartNeeded);
-					ImGui::TextWrapped("Test INI files are currently active. Restart CS to see feature issues.");
+					ImGui::TextWrapped("Test INI files are currently active. Restart CSX to see feature issues.");
 					ImGui::PopStyleColor();  // Show detailed test state information
 					ImGui::Spacing();
 					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.RestartNeeded);
@@ -1499,7 +1499,7 @@ namespace FeatureIssues
 						"- Obsolete features (ComplexParallaxMaterials, TerrainBlending, etc.)\n"
 						"- Unknown features (fake non-existent features)\n"
 						"- Version mismatch (modifies existing feature version)\n"
-						"Restart CS after creating to see the issues in action.");
+						"Restart CSX after creating to see the issues in action.");
 				}
 
 				// Restore button
@@ -1524,7 +1524,7 @@ namespace FeatureIssues
 					ImGui::Text(
 						"Removes all test INI files and restores any modified INI files to their original state.\n"
 						"This undoes all changes made by 'Create Test INIs'.\n"
-						"Restart CS after restoring to see normal operation.");
+						"Restart CSX after restoring to see normal operation.");
 				}
 			}
 		}

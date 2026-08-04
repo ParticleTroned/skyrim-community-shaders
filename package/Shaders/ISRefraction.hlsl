@@ -24,7 +24,7 @@ cbuffer PerGeometry : register(b2)
 
 float2 GetRefractedTexCoord(float2 texCoordOriginal, float3 normalOriginal)
 {
-    // 1.0 = current CS behavior; <1.0 weaker warp, >1.0 stronger
+    // 1.0 = current CSX behavior; <1.0 weaker warp, >1.0 stronger
     float scale = SharedData::RefractionScale;
 
     float2 texCoord = texCoordOriginal + float2(-1, 1) *

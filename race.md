@@ -158,7 +158,7 @@ Timings observed:
 
 | Time         |     Frame | Event                                                                                                                             |
 | ------------ | --------: | --------------------------------------------------------------------------------------------------------------------------------- |
-| 07:42:43.550 |       n/a | Community Shaders provides plugin interface to `VRFpsStabilizerPlugin`.                                                           |
+| 07:42:43.550 |       n/a | CSX provides plugin interface to `VRFpsStabilizerPlugin`.                                                           |
 | 07:43:42.371 |      4674 | Loading has closed recently; trace still shows `gate=inactive eligible=no`, `renderScaleIntent=yes`.                              |
 | 07:43:42.862 |      4682 | Boot-latched DLSS quality 1, render scale ON, generation 1.                                                                       |
 | 07:43:42.881 |      4682 | Recovery relatch queued for submit-bounds mismatch.                                                                               |
@@ -237,7 +237,7 @@ Timings observed:
 
 | Time         | Frame | Event                                                                                                                                 |
 | ------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 08:08:17.003 |   n/a | Community Shaders provides plugin interface to `VRFpsStabilizerPlugin`.                                                               |
+| 08:08:17.003 |   n/a | CSX provides plugin interface to `VRFpsStabilizerPlugin`.                                                               |
 | 08:08:34.622 |   n/a | Startup RaceSex render-scale watch arms from the startup render-scale request.                                                        |
 | 08:08:35.581 |     1 | Trace already shows `gate=awaiting-racesex`, `renderScaleIntent=yes`, `latched=no`, `perfRequested=yes`.                              |
 | 08:09:15.946 |  4654 | World rendering has completed, but render scale is still inactive due to the startup watch.                                           |
@@ -312,7 +312,7 @@ Timings observed:
 
 | Time         | Frame | Event                                                                                                   |
 | ------------ | ----: | ------------------------------------------------------------------------------------------------------- |
-| 08:55:08.936 |   n/a | Community Shaders provides plugin interface to `VRFpsStabilizerPlugin`.                                 |
+| 08:55:08.936 |   n/a | CSX provides plugin interface to `VRFpsStabilizerPlugin`.                                 |
 | 08:55:28.146 |     1 | Startup trace shows `renderScaleIntent=yes`, `latched=no`, `perfRequested=yes`, `gate=inactive`.        |
 | 08:56:09.810 |  4894 | Loading has closed recently; trace shows `loadingCloseFrame=4893`, no completed world frame yet.        |
 | 08:56:09.844 |  4894 | Runtime plan is normal vendor dynamic DLSS: display `4936x2740`, render `4195x2329`, final `4936x2740`. |
@@ -352,7 +352,7 @@ Timings observed:
 
 | Time         | Frame | Event                                                                                                                                            |
 | ------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 09:13:47.739 |   n/a | Community Shaders provides plugin interface to `VRFpsStabilizerPlugin`.                                                                          |
+| 09:13:47.739 |   n/a | CSX provides plugin interface to `VRFpsStabilizerPlugin`.                                                                          |
 | 09:14:06.815 |     1 | Startup trace shows `renderScaleIntent=yes`, `perfRequested=yes`, `loading=yes`, but `loadKind=unknown`.                                         |
 | 09:14:33.248 |  3125 | Menu event handler registers while still loading; `loadKind` remains `unknown`.                                                                  |
 | 09:14:48.986 |  4955 | Final loading close has occurred; `firstLoadCloseFrame=4954`, `worldComplete=no`, `loadKind=unknown`.                                            |
@@ -426,7 +426,7 @@ Timings observed:
 
 | Time         | Frame | Event                                                                                                             |
 | ------------ | ----: | ----------------------------------------------------------------------------------------------------------------- |
-| 10:01:18.388 |   n/a | Community Shaders provides plugin interface to `VRFpsStabilizerPlugin`.                                           |
+| 10:01:18.388 |   n/a | CSX provides plugin interface to `VRFpsStabilizerPlugin`.                                           |
 | 10:01:36.589 |     1 | Startup Stabilizer profile hold arms immediately, target render scale off, requested render scale on.             |
 | 10:02:36.745 |  6763 | Direct CS API / VRAPI method-specific profile queues a render-scale-on relatch while LoadingMenu is still active. |
 | 10:02:37.389 |  6840 | `notify-post-load` fires with load kind `post-load-game`; hold arms again.                                        |
@@ -456,7 +456,7 @@ Conclusions:
 | RC / build          | Post sync-toggle revert build                                                                                                                    |
 | Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                                                          |
 | Log last write      | 2026-07-04 11:52:05                                                                                                                              |
-| Stabilizer active   | Yes. Community Shaders provides the plugin interface to `VRFpsStabilizerPlugin`.                                                                 |
+| Stabilizer active   | Yes. CSX provides the plugin interface to `VRFpsStabilizerPlugin`.                                                                 |
 | User result         | Worldspace appears briefly, then disappears/goes black after a couple of seconds.                                                                |
 | Upscaler            | DLSS                                                                                                                                             |
 | Render-scale intent | Yes at startup                                                                                                                                   |
@@ -466,7 +466,7 @@ Timings observed:
 
 | Time         |     Frame | Event                                                                                           |
 | ------------ | --------: | ----------------------------------------------------------------------------------------------- |
-| 11:50:47.624 |       n/a | Community Shaders provides plugin interface to `VRFpsStabilizerPlugin`.                         |
+| 11:50:47.624 |       n/a | CSX provides plugin interface to `VRFpsStabilizerPlugin`.                         |
 | 11:51:47.134 |      4705 | Boot-latched DLSS quality 1, render scale ON, generation 1.                                     |
 | 11:51:47.288 |      4717 | Recovery relatch completes and boot-latches generation 2.                                       |
 | 11:51:47.449 | 4717-4718 | Render scale reports stable ON after 18 frames.                                                 |
@@ -493,7 +493,7 @@ Conclusions:
 | RC / build          | Current branch with CS-side VR FPS Stabilizer Sync active                                                            |
 | Log file            | `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`                                              |
 | Log last write      | 2026-07-04 12:59:43                                                                                                  |
-| Stabilizer active   | Yes. Community Shaders provides the plugin interface to `VRFpsStabilizerPlugin`, and CS reads `VRFpsStabilizer.ini`. |
+| Stabilizer active   | Yes. CSX provides the plugin interface to `VRFpsStabilizerPlugin`, and CS reads `VRFpsStabilizer.ini`. |
 | User result         | Modified Stabilizer build: worldspace immediately black.                                                             |
 | Upscaler            | DLSS                                                                                                                 |
 | Render-scale intent | Yes at startup, then CS sync changes it to off before RaceSex opens                                                  |
@@ -503,7 +503,7 @@ Timings observed:
 
 | Time         | Frame | Event                                                                                               |
 | ------------ | ----: | --------------------------------------------------------------------------------------------------- |
-| 12:58:17.261 |   n/a | Community Shaders provides plugin interface to `VRFpsStabilizerPlugin`.                             |
+| 12:58:17.261 |   n/a | CSX provides plugin interface to `VRFpsStabilizerPlugin`.                             |
 | 12:59:24.821 |  5718 | Loading closes; render-scale intent still yes and no RaceSex is open.                               |
 | 12:59:24.854 |  5718 | Runtime plan is still DLSS quality 1 dynamic resolution.                                            |
 | 12:59:25.321 |  5726 | CS logs `VR FPS Stabilizer Sync queued after save-load menu close`.                                 |

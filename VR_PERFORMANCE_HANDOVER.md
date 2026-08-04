@@ -1,6 +1,6 @@
 # Codex Handover: VR Performance Analysis
 
-Branch context: `cs-1.4.11-PL-VR`
+Branch context: current CSX VR branch
 
 This document captures the last VR-focused performance analysis for this branch. It is intended for a future Codex session so work can continue without rediscovering the same repo context.
 
@@ -161,9 +161,9 @@ Recent negative debugging result (2026-05-04):
 - Removing the compute-side `VRValues`/`StereoEnabled` dependency from the SSGI/SSS stereo sync path also had no visible effect.
 - Testing the SSS stereo-sync validation patch, including extra cross-eye depth checks and eye-local blur clamping, also had no visible effect. The test changes were reverted; treat this as another negative result.
 - Testing runtime SSS stereo-sync diagnostic toggles also had no useful effect. The toggles covered source-copy-only output, disabling cross-eye blend, disabling same-eye blur, and scaled-depth sampling. None changed the artifact.
-- During that diagnostic-toggle build, the per-eye misaligned Community Shaders UI in VR reappeared. Treat the toggle build as invalid for further work and keep the branch reverted to the pre-toggle state.
+- During that diagnostic-toggle build, the per-eye misaligned CSX UI in VR reappeared. Treat the toggle build as invalid for further work and keep the branch reverted to the pre-toggle state.
 - Testing the depth-layout compatibility gate patch for SSGI/SSS stereo sync (combined-stereo-only guard and frame-dimension dispatch change) did not fix the world-locked/HMD-locked split artifact.
-- The same patch introduced a new VR UI regression: Community Shaders per-eye UI overlay no longer lines up correctly (stereo UI sync/overlay broken).
+- The same patch introduced a new VR UI regression: CSX per-eye UI overlay no longer lines up correctly (stereo UI sync/overlay broken).
 - Do not keep chasing the unjittered/full-matrix helper difference as the primary cause. Next suspects are producer-side per-eye data, eye selection, dispatch/write bounds, or depth/shadow/AO texture layout feeding stereo sync.
 
 Targeted mitigation patch (2026-05-04, pending runtime validation):

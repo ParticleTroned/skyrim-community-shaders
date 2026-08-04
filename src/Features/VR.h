@@ -37,7 +37,7 @@ using ButtonCombo = InputCombo;
  * - Drag-and-drop overlay repositioning
  *
  * The VR class follows the singleton pattern and integrates with the OpenVR API
- * to provide seamless VR experience within the Community Shaders framework.
+ * to provide seamless VR experience within the CSX framework.
  *
  * @example
  * ```cpp
@@ -128,7 +128,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides VR-specific optimizations and enhancements for Community Shaders, improving performance and visual quality in virtual reality environments.",
+			"Provides VR-specific optimizations and enhancements for CSX, improving performance and visual quality in virtual reality environments.",
 			{ "Depth buffer culling optimization for VR performance",
 				"Configurable occlusion culling parameters",
 				"VR-specific rendering pipeline improvements",
@@ -261,7 +261,7 @@ public:
 		bool KeepDesktopWindowFocusedForVRMenu = false;           ///< Keep the game window centered and foregrounded while the VR menu is open
 		bool StabilizeRenderScaleDesktopMirror = false;           ///< Blit render-scale output back to the desktop mirror when direct copy is incompatible
 
-		// CS menu navigation settings
+		// CSX menu navigation settings
 		bool UseRuntimeDefaultMenuNavigation = true;  ///< Use mouse navigation by default until the user selects a mode explicitly
 		bool EnableWandPointing = true;               ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
 

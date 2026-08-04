@@ -13,12 +13,34 @@ if(DEVBENCH_BRIDGE)
     list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
 endif()
 
+set(_CSX_VERSION_DEFAULT "3.18-VR")
+if(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\]AIO-Release$]])
+    set(_CSX_VERSION_DEFAULT "3.15-SE")
+elseif(DEFINED ENABLE_SKYRIM_VR AND NOT ENABLE_SKYRIM_VR)
+    set(_CSX_VERSION_DEFAULT "3.15-SE")
+endif()
+set(CSX_VERSION
+    "${_CSX_VERSION_DEFAULT}"
+    CACHE STRING
+    "Display version for Community Shaders Expanded."
+)
+if(NOT CSX_VERSION MATCHES [[^([0-9]+)\.([0-9]+)-(SE|VR)$]])
+    message(
+        FATAL_ERROR
+        "CSX_VERSION must use the <major>.<minor>-<SE|VR> format."
+    )
+endif()
+set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
+
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 1.7.3
+    VERSION "${_CSX_PROJECT_VERSION}"
+    DESCRIPTION "Community Shaders Expanded (CSX)"
     LANGUAGES CXX
 )
+
+set(CSX_PACKAGE_NAME "CSX")
 
 # default install path
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
@@ -103,29 +125,7 @@ else()
     set(GIT_DESCRIBE "unknown")
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
-set(_CS_PL_FORK_VERSION_DEFAULT "PL3.18-VR")
-set(_CS_PL_FORK_VERSION_FORCE OFF)
-if(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\]AIO-Release$]])
-    set(_CS_PL_FORK_VERSION_DEFAULT "PL3.15-SE")
-    set(_CS_PL_FORK_VERSION_FORCE ON)
-elseif(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\](ALL|ALL-VS2022|ALL-TRACY)$]])
-    set(_CS_PL_FORK_VERSION_DEFAULT "PL3.18-VR")
-    set(_CS_PL_FORK_VERSION_FORCE ON)
-endif()
-set(CS_PL_FORK_VERSION
-    "${_CS_PL_FORK_VERSION_DEFAULT}"
-    CACHE STRING
-    "Display version label for the Particle Lights fork."
-)
-if(_CS_PL_FORK_VERSION_FORCE)
-    set(CS_PL_FORK_VERSION
-        "${_CS_PL_FORK_VERSION_DEFAULT}"
-        CACHE STRING
-        "Display version label for the Particle Lights fork."
-        FORCE
-    )
-endif()
-message("\tParticle Lights fork version: ${CS_PL_FORK_VERSION}")
+message("\tCommunity Shaders Expanded version: CSX ${CSX_VERSION}")
 
 # #######################################################################################################################
 # # Add CMake features
@@ -1103,7 +1103,7 @@ if(ZIP_TO_DIST)
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}/Shaders/Tests"
     )
 
-    set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.7z")
+    set(TARGET_ZIP "${CSX_PACKAGE_NAME}-${UTC_NOW}.7z")
     message("Zipping ${ZIP_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}")
     add_custom_command(
         TARGET ${PROJECT_NAME}
@@ -1160,7 +1160,7 @@ endif()
 set(DIST_PATH "${CMAKE_SOURCE_DIR}/dist")
 file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
 
-set(CORE_PACKAGE "${DIST_PATH}/${PROJECT_NAME}-${UTC_NOW}.7z")
+set(CORE_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}-${UTC_NOW}.7z")
 
 # CORE_SOURCES = all content copied to the AIO directory + the SKSE plugin dll
 file(
@@ -1244,7 +1244,7 @@ add_custom_target(
 )
 
 # Manual AIO package target
-set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
+set(AIO_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}_AIO-${UTC_NOW}.7z")
 add_custom_command(
     OUTPUT ${AIO_PACKAGE}
     DEPENDS ${CORE_SOURCES}
@@ -1349,7 +1349,7 @@ if(BUILD_CONTROLLER_TESTS)
 endif()
 
 message("*************************************************************")
-message("Community Shaders configuration complete")
+message("Community Shaders Expanded configuration complete")
 message("To prepare a ZIP package of AIO, Core, or Features")
 message("  Build cmake targets:")
 message("    - Package-Core: Core package")

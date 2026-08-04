@@ -25,8 +25,8 @@
 
 .PARAMETER BaseRef
     Git ref to treat as "before". Default: merge-base of HEAD and the current
-    branch upstream. If no upstream is configured, falls back to
-    origin/cs-1.6-PL-VR, then origin/dev, then HEAD.
+    branch upstream. If no upstream is configured, falls back to origin/dev,
+    then HEAD.
 
 .PARAMETER IncludeDir
     Shader include root passed to fxc /I. Default: package/Shaders.
@@ -115,7 +115,7 @@ function Resolve-DefaultBaseRef {
         }
     }
 
-    foreach ($candidate in @("origin/cs-1.6-PL-VR", "origin/dev")) {
+    foreach ($candidate in @("origin/dev")) {
         git rev-parse --verify $candidate 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $base = (git merge-base HEAD $candidate 2>$null)

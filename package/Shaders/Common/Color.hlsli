@@ -263,7 +263,11 @@ namespace Color
 #	if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
 		if (lightIndex >= MaxVanillaPointLightFlags)
 			return 0;
-		return lightIndex < PackedPointLightFlagVectorSize ? CSUtilityPointLightFlags0[lightIndex] : CSUtilityPointLightFlags1[lightIndex - PackedPointLightFlagVectorSize];
+
+		// Keep both ternary operands in range. The legacy HLSL compiler evaluates
+		// both vector indices while unrolling Water's literal local-light loop.
+		const uint componentIndex = lightIndex % PackedPointLightFlagVectorSize;
+		return lightIndex < PackedPointLightFlagVectorSize ? CSUtilityPointLightFlags0[componentIndex] : CSUtilityPointLightFlags1[componentIndex];
 #	else
 		return 0;
 #	endif

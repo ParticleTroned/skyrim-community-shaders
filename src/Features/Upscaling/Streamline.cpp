@@ -1536,8 +1536,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 	ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
-	float pinholeOffsetX, float pinholeOffsetY, const char* label, DLSSViewportRole viewportRole,
-	bool useAuthoritativeProfile, uint32_t authoritativeQualityMode, uint32_t authoritativeDLSSPreset)
+	float pinholeOffsetX, float pinholeOffsetY, const char* label, DLSSViewportRole viewportRole)
 {
 	auto context = globals::d3d::context;
 	if (!initialized || !featureDLSS || !slEvaluateFeature || !context ||
@@ -1555,15 +1554,6 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	auto& upscaling = globals::features::upscaling;
 	auto state = globals::state;
-	const bool vendorLifecycleMutationDeferred =
-		globals::game::isVR &&
-		upscaling.ShouldDeferVRVendorLifecycleMutation();
-	const bool existingProviderOnly =
-		vendorLifecycleMutationDeferred || useAuthoritativeProfile;
-	const auto existingProvider =
-		vendorLifecycleMutationDeferred && !useAuthoritativeProfile ?
-			upscaling.GetExistingVRVendorProviderSnapshot() :
-			Upscaling::VRExistingVendorProviderSnapshot{};
 	float viewportScaleX = 1.0f;
 	float viewportScaleY = 1.0f;
 	if (state) {
@@ -1581,21 +1571,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	}
 
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
-	const bool useExistingDLSSProfile =
-		existingProvider.valid &&
-		existingProvider.method == Upscaling::UpscaleMethod::kDLSS;
-	uint32_t qualityMode = 0;
-	uint32_t dlssPreset = Upscaling::kDLSSPresetK;
-	if (useAuthoritativeProfile) {
-		qualityMode = std::min(authoritativeQualityMode, Upscaling::kQualityModeMaxIndex);
-		dlssPreset = Upscaling::ClampDLSSPresetUInt(authoritativeDLSSPreset);
-	} else if (useExistingDLSSProfile) {
-		qualityMode = existingProvider.qualityMode;
-		dlssPreset = existingProvider.dlssPreset;
-	} else {
-		qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
-		dlssPreset = upscaling.GetRuntimeDLSSPreset();
-	}
+	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
+	const uint32_t dlssPreset = upscaling.GetRuntimeDLSSPreset();
 	const sl::ViewportHandle requestedViewport = vp;
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
@@ -1654,7 +1631,10 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		diagnostics.optionsCacheLegacyProfile = optionsCache.useLegacyProfile;
 	};
 
-	if (existingProviderOnly) {
+	const bool vendorLifecycleMutationDeferred =
+		globals::game::isVR &&
+		upscaling.ShouldDeferVRVendorLifecycleMutation();
+	if (vendorLifecycleMutationDeferred) {
 		if (!TryResolveExistingVRDLSSViewport(
 				viewportRole,
 				eyeIndex,
@@ -1676,7 +1656,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY, diagnosticsPtr))
 		return false;
-	if (!existingProviderOnly &&
+	if (!vendorLifecycleMutationDeferred &&
 		!SetDLSSOptions(viewportRole, vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset, diagnosticsPtr))
 		return false;
 	updateOptionsCacheDiagnostics();
@@ -1836,10 +1816,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				upscaling.GetActiveVRRenderScaleContractGeneration() : 0u;
 		const bool vendorLifecycleMutationDeferred =
 			upscaling.ShouldDeferVRVendorLifecycleMutation();
-		const auto existingProvider =
-			vendorLifecycleMutationDeferred ?
-				upscaling.GetExistingVRVendorProviderSnapshot() :
-				Upscaling::VRExistingVendorProviderSnapshot{};
 		if (vendorLifecycleMutationDeferred &&
 			!upscaling.AreActiveVRIntermediateTexturesCompatible(
 				Upscaling::UpscaleMethod::kDLSS,
@@ -1856,17 +1832,10 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			return false;
 		}
 		if (vendorLifecycleMutationDeferred) {
-			if (!existingProvider.valid ||
-				existingProvider.method != Upscaling::UpscaleMethod::kDLSS ||
-				existingProvider.renderEyeWidth != eyeWidthIn ||
-				existingProvider.renderEyeHeight != eyeHeightIn ||
-				existingProvider.displayEyeWidth != eyeWidthOut ||
-				existingProvider.displayEyeHeight != eyeHeightOut) {
-				upscaling.dlssUpscaleOutputInSharpenerTexture = false;
-				return false;
-			}
-			const uint32_t qualityMode = existingProvider.qualityMode;
-			const uint32_t dlssPreset = existingProvider.dlssPreset;
+			const uint32_t qualityMode = std::min(
+				upscaling.GetRuntimeQualityMode(),
+				Upscaling::kQualityModeMaxIndex);
+			const uint32_t dlssPreset = upscaling.GetRuntimeDLSSPreset();
 			for (uint32_t eye = 0; eye < 2; ++eye) {
 				sl::ViewportHandle resolvedViewport{};
 				if (!TryResolveExistingVRDLSSViewport(
@@ -1883,16 +1852,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				}
 			}
 		}
-		const bool useAuthoritativeExistingProfile =
-			vendorLifecycleMutationDeferred &&
-			existingProvider.valid &&
-			existingProvider.method == Upscaling::UpscaleMethod::kDLSS;
-		const uint32_t authoritativeQualityMode =
-			useAuthoritativeExistingProfile ? existingProvider.qualityMode : 0u;
-		const uint32_t authoritativeDLSSPreset =
-			useAuthoritativeExistingProfile ?
-				existingProvider.dlssPreset :
-				Upscaling::kDLSSPresetK;
 
 		// Split the combined stereo inputs up front. The direct left-eye path still
 		// uses the native depth buffer, but isolated-output fallback needs valid
@@ -1950,11 +1909,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					extentIn, extentOut, eyeWidthOut,
 					0.0f,
 					0.0f,
-					"VR prepared per-eye",
-					DLSSViewportRole::FullEye,
-					useAuthoritativeExistingProfile,
-					authoritativeQualityMode,
-					authoritativeDLSSPreset);
+					"VR prepared per-eye");
 				upscaling.RecordVRDLSSFullEyeEvaluation(i, eyeEvaluated);
 				allEvaluated &= eyeEvaluated;
 			}
@@ -2002,11 +1957,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			extentIn, extentOut, eyeWidthOut,
 			0.0f,
 			0.0f,
-			"VR direct eye0 combined",
-			DLSSViewportRole::FullEye,
-			useAuthoritativeExistingProfile,
-			authoritativeQualityMode,
-			authoritativeDLSSPreset);
+			"VR direct eye0 combined");
 		upscaling.RecordVRDLSSFullEyeEvaluation(0, leftEvaluated);
 
 		// Eye 1 writes to intermediate, then copy into right half of combined output.
@@ -2017,11 +1968,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			extentIn, extentOut, eyeWidthOut,
 			0.0f,
 			0.0f,
-			"VR direct eye1 intermediate",
-			DLSSViewportRole::FullEye,
-			useAuthoritativeExistingProfile,
-			authoritativeQualityMode,
-			authoritativeDLSSPreset);
+			"VR direct eye1 intermediate");
 		upscaling.RecordVRDLSSFullEyeEvaluation(1, rightEvaluated);
 
 		if (leftEvaluated && rightEvaluated) {
@@ -2089,35 +2036,8 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
  */
 Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 {
-	const bool hasTrackedViewportOwnership = [&]() {
-		if (activeDLSSViewportResourcesAllocated[0] ||
-			activeDLSSViewportResourcesAllocated[1] ||
-			nonVRDLSSOptionsCache.valid) {
-			return true;
-		}
-		for (const auto& roleSlots : vrDLSSViewportSlots) {
-			for (const auto& slot : roleSlots) {
-				if (slot.valid ||
-					slot.resourcesAllocated[0] ||
-					slot.resourcesAllocated[1] ||
-					slot.optionsCache[0].valid ||
-					slot.optionsCache[1].valid) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}();
 	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
 		ResetDLSSIdleFences();
-		if (hasTrackedViewportOwnership) {
-			static bool loggedUnavailableTeardownOwnership = false;
-			if (!loggedUnavailableTeardownOwnership) {
-				logger::error("[Streamline] Refusing to report DLSS teardown complete while tracked viewport ownership cannot be released.");
-				loggedUnavailableTeardownOwnership = true;
-			}
-			return DLSSResourceTeardownResult::Failed;
-		}
 		InvalidateDLSSOptionsCache();
 		activeDLSSViewportResourcesAllocated = {};
 		ResetFrameTracking();
@@ -2167,9 +2087,7 @@ Streamline::DLSSResourceTeardownResult Streamline::DestroyDLSSResources()
 	InvalidateDLSSOptionsCache();
 	vrDLSSViewportUseCounter = 0;
 	ResetFrameTracking();
-	return activeViewportResourcesFreed ?
-	           DLSSResourceTeardownResult::Ready :
-	           DLSSResourceTeardownResult::FailedAfterMutation;
+	return activeViewportResourcesFreed ? DLSSResourceTeardownResult::Ready : DLSSResourceTeardownResult::Failed;
 }
 
 void Streamline::UpdateReflex()

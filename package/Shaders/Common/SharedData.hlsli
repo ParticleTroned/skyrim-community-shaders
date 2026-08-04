@@ -369,6 +369,20 @@ namespace SharedData
 		float DeepShoreSofteningStart;
 	};
 
+	struct BloomSettings
+	{
+		uint Enabled;
+		float EnhancementIntensity;
+		float HaloRadius;
+		float HaloSpread;
+
+		float BloomSaturation;
+		float3 BloomTint;
+		float CompressionThreshold;
+		float CompressionCeiling;
+		float2 pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -390,6 +404,7 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		TruePBRSettings truePBRSettings;
 		UnifiedWaterSettings unifiedWaterSettings;
+		BloomSettings bloomSettings;
 	};
 
 	static const uint LOD_BLENDING_FLAG_DISABLE_TERRAIN_VERTEX_COLORS = 1u;

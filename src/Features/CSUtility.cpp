@@ -42,6 +42,7 @@ namespace
 		a_settings.linearOmnidirectionalBulbMult = ClampFiniteOrDefault(a_settings.linearOmnidirectionalBulbMult, kMultiplierMin, kMultiplierMax, defaults.linearOmnidirectionalBulbMult);
 		CSUtility::SanitizeDepthOfFieldOverride(a_settings.sceneDof);
 		CSUtility::SanitizeDepthOfFieldOverride(a_settings.underwaterDof);
+		Bloom::SanitizeSettings(a_settings.bloomEnhancement);
 	}
 
 	void DrawMultiplierSlider(const char* a_label, float& a_value, float a_max = kMultiplierMax)
@@ -109,7 +110,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	omnidirectionalBulbMult,
 	linearOmnidirectionalBulbMult,
 	sceneDof,
-	underwaterDof)
+	underwaterDof,
+	bloomEnhancement)
 
 void CSUtility::DrawSettingsHeaderControls()
 {
@@ -140,8 +142,17 @@ void CSUtility::DrawSettings()
 		}
 
 		DrawDepthOfFieldSettings();
+		DrawVanillaBloomSettings();
 
 		ImGui::EndTabBar();
+	}
+}
+
+void CSUtility::DrawVanillaBloomSettings()
+{
+	if (ImGui::BeginTabItem("Vanilla Bloom")) {
+		Bloom::DrawSettings(settings.bloomEnhancement);
+		ImGui::EndTabItem();
 	}
 }
 

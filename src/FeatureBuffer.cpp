@@ -1,5 +1,6 @@
 #include "FeatureBuffer.h"
 
+#include "Features/Bloom.h"
 #include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
@@ -47,6 +48,7 @@ namespace
 	using TerrainBlendingSettingsCB = TerrainBlending::Settings;
 	using TruePBRSettingsCB = TruePBR::Settings;
 	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
+	using BloomSettingsCB = Bloom::Settings;
 
 	// Keep these in lock-step with package/Shaders/Common/SharedData.hlsli::FeatureData.
 	struct FeatureDataLayout
@@ -70,6 +72,7 @@ namespace
 		TerrainBlendingSettingsCB terrainBlendingSettings;
 		TruePBRSettingsCB truePBRSettings;
 		UnifiedWaterSettingsCB unifiedWaterSettings;
+		BloomSettingsCB bloomSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -91,7 +94,8 @@ namespace
 		LinearLightingSettingsCB,
 		TerrainBlendingSettingsCB,
 		TruePBRSettingsCB,
-		UnifiedWaterSettingsCB>;
+		UnifiedWaterSettingsCB,
+		BloomSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
@@ -128,6 +132,11 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreConfirmationCullDistance) == 36);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepShoreSofteningStrength) == 40);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepShoreSofteningStart) == 44);
+	static_assert(sizeof(BloomSettingsCB) == 48);
+	static_assert(offsetof(BloomSettingsCB, Enabled) == 0);
+	static_assert(offsetof(BloomSettingsCB, BloomTint) == 20);
+	static_assert(offsetof(BloomSettingsCB, CompressionThreshold) == 32);
+	static_assert(offsetof(BloomSettingsCB, CompressionCeiling) == 36);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);
@@ -151,7 +160,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, terrainBlendingSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB) + sizeof(LinearLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB) + sizeof(LinearLightingSettingsCB) + sizeof(TerrainBlendingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
-	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -213,5 +223,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::truePBR.settings,
-		globals::features::unifiedWater.GetCommonBufferData());
+		globals::features::unifiedWater.GetCommonBufferData(),
+		Bloom::GetCommonBufferData(globals::features::csUtility.settings.bloomEnhancement, globals::features::csUtility.IsRuntimeEnabled()));
 }

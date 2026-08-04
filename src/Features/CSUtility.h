@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Bloom.h"
 #include "Buffer.h"
 #include "Feature.h"
 
@@ -16,7 +17,7 @@ struct CSUtility : Feature
 	virtual inline std::string GetShortName() override { return "CSUtility"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CS_UTILITY"; }
 	virtual inline std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
-	virtual bool HasShaderDefine(RE::BSShader::Type a_shaderType) override { return a_shaderType == RE::BSShader::Type::Lighting || a_shaderType == RE::BSShader::Type::Water; }
+	virtual bool HasShaderDefine(RE::BSShader::Type a_shaderType) override { return a_shaderType == RE::BSShader::Type::Lighting || a_shaderType == RE::BSShader::Type::Water || a_shaderType == RE::BSShader::Type::ImageSpace; }
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsCore() const override { return true; }
 	virtual bool IsInMenu() const override { return true; }
@@ -27,7 +28,8 @@ struct CSUtility : Feature
 			"Core utility controls for shared renderer tuning.",
 			{ "Atmosphere brightness control",
 				"Shared lighting multiplier controls",
-				"Separate controls for linear point lights" }
+				"Separate controls for linear point lights",
+				"Optional vanilla bloom enhancement controls" }
 		};
 	}
 
@@ -75,6 +77,7 @@ struct CSUtility : Feature
 		float linearOmnidirectionalBulbMult = 1.0f;
 		DepthOfFieldOverride sceneDof;
 		DepthOfFieldOverride underwaterDof;
+		Bloom::PresetSettings bloomEnhancement;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -115,6 +118,7 @@ struct CSUtility : Feature
 	bool NeedsVanillaPointLightData() const;
 	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount);
 	void DrawDepthOfFieldSettings();
+	void DrawVanillaBloomSettings();
 	void InstallDepthOfFieldHooks();
 
 	static void SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings);

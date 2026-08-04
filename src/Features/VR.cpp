@@ -1328,7 +1328,35 @@ namespace
 		bool messageIsError = false;
 		std::string message;
 		Upscaling::VRFpsStabilizerConfig config;
+		Upscaling::VRFpsStabilizerConfig baselineConfig;
 	};
+
+	bool MatchesVRFpsStabilizerEditableProfile(
+		const Upscaling::VRFpsStabilizerProfile& lhs,
+		const Upscaling::VRFpsStabilizerProfile& rhs)
+	{
+		return lhs.upscaleMethod == rhs.upscaleMethod &&
+		       lhs.qualityMode == rhs.qualityMode &&
+		       lhs.dlssPreset == rhs.dlssPreset &&
+		       lhs.renderScaleMode == rhs.renderScaleMode &&
+		       lhs.screenSpaceShadowsEnabled == rhs.screenSpaceShadowsEnabled &&
+		       lhs.screenSpaceGIEnabled == rhs.screenSpaceGIEnabled &&
+		       lhs.volumetricLightingExteriorEnabled == rhs.volumetricLightingExteriorEnabled &&
+		       lhs.contactShadowsEnabled == rhs.contactShadowsEnabled;
+	}
+
+	bool HasVRFpsStabilizerEditableChanges(const VRFpsStabilizerUIState& state)
+	{
+		return state.config.upscalingSwitchingEnabled != state.baselineConfig.upscalingSwitchingEnabled ||
+		       state.config.fadeDuration != state.baselineConfig.fadeDuration ||
+		       !MatchesVRFpsStabilizerEditableProfile(state.config.interior, state.baselineConfig.interior) ||
+		       !MatchesVRFpsStabilizerEditableProfile(state.config.exterior, state.baselineConfig.exterior);
+	}
+
+	void RefreshVRFpsStabilizerUIStateDirty(VRFpsStabilizerUIState& state)
+	{
+		state.dirty = HasVRFpsStabilizerEditableChanges(state);
+	}
 
 	void LoadVRFpsStabilizerUIState(VRFpsStabilizerUIState& state)
 	{
@@ -1336,12 +1364,13 @@ namespace
 		state.loadFailed = !globals::features::upscaling.LoadVRFpsStabilizerConfig(state.config, state.message);
 		state.messageIsError = state.loadFailed;
 		state.initialized = true;
-		state.dirty = false;
+		state.baselineConfig = state.config;
+		RefreshVRFpsStabilizerUIStateDirty(state);
 	}
 
-	void MarkVRFpsStabilizerUIStateDirty(VRFpsStabilizerUIState& state)
+	void HandleVRFpsStabilizerUIEdit(VRFpsStabilizerUIState& state)
 	{
-		state.dirty = true;
+		RefreshVRFpsStabilizerUIStateDirty(state);
 		state.message.clear();
 		state.messageIsError = false;
 	}
@@ -1562,6 +1591,12 @@ namespace
 		if (!uiState.initialized)
 			LoadVRFpsStabilizerUIState(uiState);
 
+		if (uiState.dirty) {
+			Util::Text::WrappedError(
+				"VR FPS Stabilizer settings have changed. Use Save INI below to write them to VRFpsStabilizer.ini.");
+			ImGui::Spacing();
+		}
+
 		ImGui::TextUnformatted("Interior and Exterior Profiles");
 		ImGui::TextWrapped("Choose the VR FPS Stabilizer settings for each location type.");
 		ImGui::Spacing();
@@ -1578,7 +1613,7 @@ namespace
 			if (ImGui::Checkbox(
 					"Enable VR FPS Stabilizer Interior/Exterior switching",
 					&uiState.config.upscalingSwitchingEnabled)) {
-				MarkVRFpsStabilizerUIStateDirty(uiState);
+				HandleVRFpsStabilizerUIEdit(uiState);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1603,7 +1638,7 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
 			if (DrawVRFpsStabilizerProfileEditors(uiState.config, currentCellIsInterior))
-				MarkVRFpsStabilizerUIStateDirty(uiState);
+				HandleVRFpsStabilizerUIEdit(uiState);
 		}
 
 		ImGui::Spacing();
@@ -1667,7 +1702,7 @@ namespace
 				if (std::isfinite(fadeDuration)) {
 					uiState.config.fadeDuration = std::max(fadeDuration, 0.0f);
 					uiState.config.hasFadeDuration = true;
-					MarkVRFpsStabilizerUIStateDirty(uiState);
+					HandleVRFpsStabilizerUIEdit(uiState);
 				}
 			}
 		}
@@ -1679,10 +1714,6 @@ namespace
 		}
 
 		ImGui::Spacing();
-		if (uiState.dirty) {
-			Util::Text::WrappedWarning("Unsaved changes have not been written to VRFpsStabilizer.ini.");
-			ImGui::Spacing();
-		}
 		if (ImGui::Button(uiState.dirty ? "Discard & Reload" : "Reload INI"))
 			LoadVRFpsStabilizerUIState(uiState);
 		ImGui::SameLine();
@@ -1693,7 +1724,8 @@ namespace
 				uiState.message.clear();
 				if (upscaling.SaveVRFpsStabilizerConfig(uiState.config, uiState.message)) {
 					uiState.config.MarkSettingsComplete();
-					uiState.dirty = false;
+					uiState.baselineConfig = uiState.config;
+					RefreshVRFpsStabilizerUIStateDirty(uiState);
 					uiState.restartRequired = true;
 					uiState.messageIsError = false;
 					uiState.message = uiState.config.upscalingSwitchingEnabled ?
@@ -1702,7 +1734,7 @@ namespace
 				} else {
 					uiState.loadFailed = false;
 					uiState.messageIsError = true;
-					uiState.dirty = true;
+					RefreshVRFpsStabilizerUIStateDirty(uiState);
 				}
 			}
 		}

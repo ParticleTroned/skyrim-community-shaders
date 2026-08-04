@@ -562,6 +562,7 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 void Skylighting::DrawSettings()
 {
 	DrawSkylightingRuntimeToggle(*this);
+	DrawSkylightingPerformancePresetButtons(*this, "SkylightingSettingsPerformancePresetButtons");
 	ImGui::Separator();
 
 	ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
@@ -582,7 +583,6 @@ void Skylighting::DrawSettings()
 
 	ImGui::Separator();
 	ImGui::Text("Performance options (highest impact first)");
-	DrawSkylightingPerformancePresetButtons(*this, "SkylightingSettingsPerformancePresetButtons");
 
 	settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
 

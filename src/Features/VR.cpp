@@ -1359,40 +1359,15 @@ namespace
 		state.messageIsError = false;
 	}
 
-	const char* GetVRFpsStabilizerMethodName(Upscaling::UpscaleMethod method)
-	{
-		const auto index = std::clamp(
-			static_cast<int>(method),
-			0,
-			static_cast<int>(kVRFpsStabilizerMethodNames.size()) - 1);
-		return kVRFpsStabilizerMethodNames[static_cast<size_t>(index)];
-	}
-
-	const char* GetVRFpsStabilizerPresetName(Upscaling::UpscaleMethod method, uint32_t qualityMode)
-	{
-		if (qualityMode == 0 && method == Upscaling::UpscaleMethod::kDLSS)
-			return "DLAA";
-		return kVRFpsStabilizerPresetNames[std::min<size_t>(qualityMode, kVRFpsStabilizerPresetNames.size() - 1)];
-	}
-
-	const char* GetVRFpsStabilizerDLSSProfileName(uint32_t preset)
-	{
-		return kVRFpsStabilizerDLSSProfileNames[std::min<size_t>(preset, kVRFpsStabilizerDLSSProfileNames.size() - 1)];
-	}
-
-	bool DrawVRFpsStabilizerProfileEditor(
-		const char* id,
-		Upscaling::VRFpsStabilizerProfile& profile)
+	bool DrawVRFpsStabilizerUpscaleMethod(Upscaling::VRFpsStabilizerProfile& profile)
 	{
 		bool changed = false;
-		ImGui::PushID(id);
-		ImGui::SeparatorText("Upscaling");
-
 		int method = std::clamp(
 			static_cast<int>(profile.upscaleMethod),
 			static_cast<int>(Upscaling::UpscaleMethod::kNONE),
 			static_cast<int>(Upscaling::UpscaleMethod::kDLSS));
-		if (ImGui::Combo("Method", &method, kVRFpsStabilizerMethodNames.data(), static_cast<int>(kVRFpsStabilizerMethodNames.size()))) {
+		ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
+		if (ImGui::Combo("##UpscaleMethod", &method, kVRFpsStabilizerMethodNames.data(), static_cast<int>(kVRFpsStabilizerMethodNames.size()))) {
 			profile.upscaleMethod = static_cast<Upscaling::UpscaleMethod>(method);
 			profile.hasUpscaleMethod = true;
 			changed = true;
@@ -1401,6 +1376,12 @@ namespace
 			ImGui::TextUnformatted("AMD FSR profiles keep the current AMD FSR3 or AMD FSR4 selection from Community Shaders.");
 		}
 
+		return changed;
+	}
+
+	bool DrawVRFpsStabilizerUpscalePreset(Upscaling::VRFpsStabilizerProfile& profile)
+	{
+		bool changed = false;
 		const bool vendorUpscaling =
 			profile.upscaleMethod == Upscaling::UpscaleMethod::kFSR ||
 			profile.upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
@@ -1410,23 +1391,38 @@ namespace
 		int qualityMode = static_cast<int>(std::min(profile.qualityMode, Upscaling::kQualityModeMaxIndex));
 		{
 			auto disabledGuard = Util::DisableGuard(!vendorUpscaling);
-			if (ImGui::Combo("Upscale Preset", &qualityMode, presetNames.data(), static_cast<int>(presetNames.size()))) {
+			ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
+			if (ImGui::Combo("##UpscalePreset", &qualityMode, presetNames.data(), static_cast<int>(presetNames.size()))) {
 				profile.qualityMode = static_cast<uint32_t>(qualityMode);
 				profile.hasQualityMode = true;
 				changed = true;
 			}
 		}
+		return changed;
+	}
 
+	bool DrawVRFpsStabilizerDLSSProfile(Upscaling::VRFpsStabilizerProfile& profile)
+	{
+		bool changed = false;
 		int dlssPreset = static_cast<int>(std::min(profile.dlssPreset, Upscaling::kDLSSPresetF));
 		{
 			auto disabledGuard = Util::DisableGuard(profile.upscaleMethod != Upscaling::UpscaleMethod::kDLSS);
-			if (ImGui::Combo("DLSS Profile", &dlssPreset, kVRFpsStabilizerDLSSProfileNames.data(), static_cast<int>(kVRFpsStabilizerDLSSProfileNames.size()))) {
+			ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
+			if (ImGui::Combo("##DLSSProfile", &dlssPreset, kVRFpsStabilizerDLSSProfileNames.data(), static_cast<int>(kVRFpsStabilizerDLSSProfileNames.size()))) {
 				profile.dlssPreset = static_cast<uint32_t>(dlssPreset);
 				profile.hasDLSSPreset = true;
 				changed = true;
 			}
 		}
+		return changed;
+	}
 
+	bool DrawVRFpsStabilizerRenderScale(Upscaling::VRFpsStabilizerProfile& profile)
+	{
+		bool changed = false;
+		const bool vendorUpscaling =
+			profile.upscaleMethod == Upscaling::UpscaleMethod::kFSR ||
+			profile.upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
 		const bool renderScaleEligible = vendorUpscaling && profile.qualityMode > 0;
 		if (!renderScaleEligible && profile.renderScaleMode) {
 			profile.renderScaleMode = false;
@@ -1435,7 +1431,7 @@ namespace
 		}
 		{
 			auto disabledGuard = Util::DisableGuard(!renderScaleEligible);
-			if (ImGui::Checkbox("Render Scale", &profile.renderScaleMode)) {
+			if (ImGui::Checkbox("Enable##RenderScale", &profile.renderScaleMode)) {
 				profile.hasRenderScaleMode = true;
 				changed = true;
 			}
@@ -1443,49 +1439,132 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Available with AMD FSR or NVIDIA DLSS and a below-native preset.");
 		}
+		return changed;
+	}
 
-		ImGui::Spacing();
-		if (!vendorUpscaling) {
-			ImGui::TextDisabled("%s", GetVRFpsStabilizerMethodName(profile.upscaleMethod));
-		} else if (profile.upscaleMethod == Upscaling::UpscaleMethod::kDLSS) {
-			Util::Text::WrappedDisabled(
-				"NVIDIA DLSS  |  %s  |  Profile %s  |  Render Scale %s",
-				GetVRFpsStabilizerPresetName(profile.upscaleMethod, profile.qualityMode),
-				GetVRFpsStabilizerDLSSProfileName(profile.dlssPreset),
-				profile.renderScaleMode ? "On" : "Off");
-		} else {
-			Util::Text::WrappedDisabled(
-				"AMD FSR  |  %s  |  Render Scale %s",
-				GetVRFpsStabilizerPresetName(profile.upscaleMethod, profile.qualityMode),
-				profile.renderScaleMode ? "On" : "Off");
+	bool DrawVRFpsStabilizerFeatureToggle(
+		const char* id,
+		const char* label,
+		bool& enabled,
+		bool& hasSetting)
+	{
+		ImGui::PushID(id);
+		const bool changed = ImGui::Checkbox(label, &enabled);
+		ImGui::PopID();
+		if (changed)
+			hasSetting = true;
+		return changed;
+	}
+
+	void SetupVRFpsStabilizerProfileTableColumns(bool currentCellIsInterior)
+	{
+		const char* interiorHeader = currentCellIsInterior ?
+		                               "Interior Profile (Current Location)###InteriorProfile" :
+		                               "Interior Profile###InteriorProfile";
+		const char* exteriorHeader = currentCellIsInterior ?
+		                               "Exterior Profile###ExteriorProfile" :
+		                               "Exterior Profile (Current Location)###ExteriorProfile";
+		ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch, 0.85f);
+		ImGui::TableSetupColumn(interiorHeader, ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableSetupColumn(exteriorHeader, ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableHeadersRow();
+	}
+
+	void DrawVRFpsStabilizerProfileRowLabel(const char* label)
+	{
+		ImGui::TableNextRow();
+		ImGui::TableSetColumnIndex(0);
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted(label);
+	}
+
+	bool DrawVRFpsStabilizerProfileEditors(
+		Upscaling::VRFpsStabilizerConfig& config,
+		bool currentCellIsInterior)
+	{
+		bool changed = false;
+		constexpr auto tableFlags =
+			ImGuiTableFlags_Borders |
+			ImGuiTableFlags_RowBg |
+			ImGuiTableFlags_SizingStretchProp |
+			ImGuiTableFlags_PadOuterX |
+			ImGuiTableFlags_NoSavedSettings;
+
+		const auto drawProfileCells = [&](auto&& drawControl) {
+			ImGui::TableSetColumnIndex(1);
+			ImGui::PushID("InteriorProfile");
+			changed |= drawControl(config.interior);
+			ImGui::PopID();
+			ImGui::TableSetColumnIndex(2);
+			ImGui::PushID("ExteriorProfile");
+			changed |= drawControl(config.exterior);
+			ImGui::PopID();
+		};
+
+		ImGui::SeparatorText("Upscaling");
+		if (ImGui::BeginTable("##VRFpsStabilizerUpscalingProfiles", 3, tableFlags)) {
+			SetupVRFpsStabilizerProfileTableColumns(currentCellIsInterior);
+
+			DrawVRFpsStabilizerProfileRowLabel("Method");
+			drawProfileCells([](auto& profile) { return DrawVRFpsStabilizerUpscaleMethod(profile); });
+
+			DrawVRFpsStabilizerProfileRowLabel("Upscale Preset");
+			drawProfileCells([](auto& profile) { return DrawVRFpsStabilizerUpscalePreset(profile); });
+
+			DrawVRFpsStabilizerProfileRowLabel("DLSS Profile");
+			drawProfileCells([](auto& profile) { return DrawVRFpsStabilizerDLSSProfile(profile); });
+
+			DrawVRFpsStabilizerProfileRowLabel("Render Scale");
+			drawProfileCells([](auto& profile) { return DrawVRFpsStabilizerRenderScale(profile); });
+
+			ImGui::EndTable();
 		}
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Community Shaders Features");
-		const auto drawFeatureToggle = [&](const char* label, bool& enabled, bool& hasSetting) {
-			if (ImGui::Checkbox(label, &enabled)) {
-				hasSetting = true;
-				changed = true;
-			}
-		};
-		drawFeatureToggle(
-			"Screen Space Shadows: Enable",
-			profile.screenSpaceShadowsEnabled,
-			profile.hasScreenSpaceShadows);
-		drawFeatureToggle(
-			"Screen Space GI: Enable",
-			profile.screenSpaceGIEnabled,
-			profile.hasScreenSpaceGI);
-		drawFeatureToggle(
-			"Volumetric Lighting: Enable in Exteriors",
-			profile.volumetricLightingExteriorEnabled,
-			profile.hasVolumetricLightingExterior);
-		drawFeatureToggle(
-			"Enable Point Light Contact Shadows",
-			profile.contactShadowsEnabled,
-			profile.hasContactShadows);
+		if (ImGui::BeginTable("##VRFpsStabilizerFeatureProfiles", 3, tableFlags)) {
+			SetupVRFpsStabilizerProfileTableColumns(currentCellIsInterior);
 
-		ImGui::PopID();
+			DrawVRFpsStabilizerProfileRowLabel("Screen Space Shadows");
+			drawProfileCells([](auto& profile) {
+				return DrawVRFpsStabilizerFeatureToggle(
+					"ScreenSpaceShadows",
+					"Enable",
+					profile.screenSpaceShadowsEnabled,
+					profile.hasScreenSpaceShadows);
+			});
+
+			DrawVRFpsStabilizerProfileRowLabel("Screen Space GI");
+			drawProfileCells([](auto& profile) {
+				return DrawVRFpsStabilizerFeatureToggle(
+					"ScreenSpaceGI",
+					"Enable",
+					profile.screenSpaceGIEnabled,
+					profile.hasScreenSpaceGI);
+			});
+
+			DrawVRFpsStabilizerProfileRowLabel("Point Light Contact Shadows");
+			drawProfileCells([](auto& profile) {
+				return DrawVRFpsStabilizerFeatureToggle(
+					"PointLightContactShadows",
+					"Enable",
+					profile.contactShadowsEnabled,
+					profile.hasContactShadows);
+			});
+
+			DrawVRFpsStabilizerProfileRowLabel("Volumetric Lighting");
+			ImGui::TableSetColumnIndex(2);
+			ImGui::PushID("ExteriorProfile");
+			changed |= DrawVRFpsStabilizerFeatureToggle(
+				"VolumetricLighting",
+				"Enable in Exteriors",
+				config.exterior.volumetricLightingExteriorEnabled,
+				config.exterior.hasVolumetricLightingExterior);
+			ImGui::PopID();
+
+			ImGui::EndTable();
+		}
+
 		return changed;
 	}
 
@@ -1496,30 +1575,32 @@ namespace
 		if (!uiState.initialized)
 			LoadVRFpsStabilizerUIState(uiState);
 
-		ImGui::TextUnformatted("VR FPS Stabilizer Profiles");
-		ImGui::TextDisabled("Interior/Exterior Community Shaders profiles, upscaling, and Render Scale transition fade.");
+		ImGui::TextUnformatted("Interior and Exterior Profiles");
+		ImGui::TextWrapped("Choose the Community Shaders settings VR FPS Stabilizer applies for each location type.");
 		ImGui::Spacing();
 		const bool currentCellIsInterior = Util::IsInterior();
-		ImGui::TextDisabled("Current unconditional profile: %s", currentCellIsInterior ? "Interior" : "Exterior");
+		ImGui::TextDisabled(
+			"Current location: %s. The matching profile column is marked below.",
+			currentCellIsInterior ? "Interior" : "Exterior");
 		if (!uiState.config.path.empty())
-			ImGui::TextWrapped("INI: %s", uiState.config.path.string().c_str());
+			ImGui::TextDisabled("INI file: %s", uiState.config.path.string().c_str());
 
 		ImGui::Spacing();
 		{
 			auto disabledGuard = Util::DisableGuard(uiState.loadFailed);
 			if (ImGui::Checkbox(
-					"Enable Interior/Exterior Community Shaders profiles",
+					"Enable Community Shaders profile switching",
 					&uiState.config.upscalingSwitchingEnabled)) {
 				MarkVRFpsStabilizerUIStateDirty(uiState);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls only the unconditional Interior/Exterior Community Shaders profile rows and Render Scale transition fade.");
-			ImGui::TextUnformatted("It does not disable VR FPS Stabilizer, its other settings, or edit other conditional rows.");
+			ImGui::TextUnformatted("Switches between the Interior and Exterior Community Shaders profiles shown below.");
+			ImGui::TextUnformatted("It does not disable VR FPS Stabilizer or edit its other settings and conditional profiles.");
 		}
 		if (!uiState.config.upscalingSwitchingEnabled) {
 			Util::Text::WrappedWarning(
-				"Off: saving comments out only the managed Interior/Exterior Community Shaders profile rows and transition fade. Other Stabilizer settings and conditional rows are not edited.");
+				"Profile switching is off. Saving disables the managed Interior and Exterior Community Shaders profile group; other VR FPS Stabilizer settings are preserved.");
 		}
 
 		ImGui::Spacing();
@@ -1527,22 +1608,22 @@ namespace
 		const auto& sessionConfig = upscaling.GetVRFpsStabilizerSessionConfig();
 		if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning(
-				"Automatic Community Shaders upscaling save-load sync: inactive for this session because Open Composite owns upscaling.");
+				"Community Shaders profile sync: Inactive because Open Composite owns upscaling for this session.");
 		} else if (upscaling.IsVRFpsStabilizerSyncActive()) {
 			ImGui::TextColored(
 				Util::Colors::GetSuccess(),
-				"Automatic Community Shaders upscaling save-load sync: active for this session.");
+				"Community Shaders profile sync: Active for this session.");
 		} else if (!sessionConfig.fileExists) {
-			ImGui::TextDisabled("Automatic Community Shaders upscaling save-load sync: inactive; VRFpsStabilizer.ini was not found at startup.");
+			ImGui::TextDisabled("Community Shaders profile sync: Inactive; VRFpsStabilizer.ini was not found at startup.");
 		} else if (!sessionConfig.fileReadable) {
-			ImGui::TextDisabled("Automatic Community Shaders upscaling save-load sync: inactive; VRFpsStabilizer.ini was not readable at startup.");
+			ImGui::TextDisabled("Community Shaders profile sync: Inactive; VRFpsStabilizer.ini was not readable at startup.");
 		} else if (!sessionConfig.upscalingSwitchingEnabled) {
-			ImGui::TextDisabled("Automatic Community Shaders upscaling save-load sync: inactive because this group was off at startup.");
+			ImGui::TextDisabled("Community Shaders profile sync: Inactive because profile switching was off at startup.");
 		} else {
-			ImGui::TextDisabled("Automatic Community Shaders upscaling save-load sync: inactive; no supported Interior/Exterior upscaling profile was active at startup.");
+			ImGui::TextDisabled("Community Shaders profile sync: Inactive; no supported Interior or Exterior upscaling profile was active at startup.");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Community Shaders enables this automatically when the INI contains active unconditional Interior or Exterior upscaling rows.");
+			ImGui::TextUnformatted("Community Shaders enables sync automatically when the INI contains an active Interior or Exterior upscaling profile.");
 			ImGui::TextUnformatted("The startup state is authoritative for this game session; saved or manual INI changes take effect after restarting Skyrim VR.");
 		}
 
@@ -1586,22 +1667,8 @@ namespace
 		ImGui::Spacing();
 		{
 			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
-			if (ImGui::BeginTable(
-					"##VRFpsStabilizerProfiles",
-					2,
-					ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
-				ImGui::TableSetupColumn(currentCellIsInterior ? "Interior (current)" : "Interior");
-				ImGui::TableSetupColumn(currentCellIsInterior ? "Exterior" : "Exterior (current)");
-				ImGui::TableHeadersRow();
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				const bool interiorChanged = DrawVRFpsStabilizerProfileEditor("Interior", uiState.config.interior);
-				ImGui::TableSetColumnIndex(1);
-				const bool exteriorChanged = DrawVRFpsStabilizerProfileEditor("Exterior", uiState.config.exterior);
-				if (interiorChanged || exteriorChanged)
-					MarkVRFpsStabilizerUIStateDirty(uiState);
-				ImGui::EndTable();
-			}
+			if (DrawVRFpsStabilizerProfileEditors(uiState.config, currentCellIsInterior))
+				MarkVRFpsStabilizerUIStateDirty(uiState);
 		}
 
 		ImGui::Spacing();
@@ -1666,7 +1733,7 @@ namespace
 			Util::Text::WrappedWarning("Restart Skyrim VR so VR FPS Stabilizer and Community Shaders reload the edited INI.");
 		}
 		Util::Text::WrappedDisabled(
-			"Only unconditional Interior/Exterior Community Shaders profile rows and the Render Scale transition fade are edited. Other Stabilizer settings and conditional rows are preserved.");
+			"Only the managed Interior and Exterior Community Shaders profile group and the Render Scale transition fade are edited. Other VR FPS Stabilizer settings and conditional profiles are preserved.");
 	}
 }
 

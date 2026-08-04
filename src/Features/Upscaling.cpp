@@ -19009,6 +19009,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			false,
 			settings.qualityMode,
 			settings.dlssPreset,
+			settings.fsr4RuntimeEnable,
 			VRUpscalingTransitionOrigin::RecoveryRelatch);
 
 		// Build the latch after queueing so its epoch matches the recovery

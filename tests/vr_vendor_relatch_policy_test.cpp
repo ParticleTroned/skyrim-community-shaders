@@ -1,69 +1,226 @@
 #include "Features/Upscaling/VRVendorRelatchPolicy.h"
 
-#include <cassert>
+#include <cstdint>
+#include <limits>
 
-int main()
+namespace
 {
 	using namespace VRVendorRelatchPolicy;
 
-	// Native/RS-off retains the selected FSR method as a setting, but its
-	// physical resource contract has no submit-stage vendor backend.
-	assert(!RequiresVendorRuntime(false, true));
-	assert(!RequiresFSRCompatibility(false, true));
-	assert(!NeedsDeferredFSRReset(false, true, false, false));
+	constexpr bool CoversWorkGateMasks()
+	{
+		if (ToMask(WorkGateSource::None) != 0u ||
+			ToMask(WorkGateSource::ProcessStartup) != (1u << 0) ||
+			ToMask(WorkGateSource::MainMenu) != (1u << 1) ||
+			ToMask(WorkGateSource::LoadingMenu) != (1u << 2) ||
+			ToMask(WorkGateSource::PreLoadGame) != (1u << 3) ||
+			ToMask(WorkGateSource::GameLoadNotification) != (1u << 4)) {
+			return false;
+		}
 
-	// An active FSR contract still requires creation, compatibility proof, and
-	// a deferred rebuild when neither preserved nor recreated resources exist.
-	assert(RequiresVendorRuntime(true, true));
-	assert(RequiresFSRCompatibility(true, true));
-	assert(NeedsDeferredFSRReset(true, true, false, false));
-	assert(!NeedsDeferredFSRReset(true, true, true, false));
-	assert(!NeedsDeferredFSRReset(true, true, false, true));
+		constexpr WorkGateMask expectedGameEntrySources =
+			ToMask(WorkGateSource::ProcessStartup) |
+			ToMask(WorkGateSource::MainMenu) |
+			ToMask(WorkGateSource::PreLoadGame) |
+			ToMask(WorkGateSource::GameLoadNotification);
+		if (kNoWorkGateSources != 0u ||
+			kGameEntryWorkGateSources != expectedGameEntrySources ||
+			kAllWorkGateSources != (expectedGameEntrySources | ToMask(WorkGateSource::LoadingMenu)) ||
+			HasSource(kGameEntryWorkGateSources, WorkGateSource::LoadingMenu)) {
+			return false;
+		}
 
-	// Active non-vendor methods do not acquire a vendor runtime.
-	assert(!RequiresVendorRuntime(true, false));
+		for (WorkGateMask sources = 0; sources <= kAllWorkGateSources; ++sources) {
+			if (HasAny(sources) != (sources != 0u) ||
+				AcquireSource(sources, WorkGateSource::None) != sources ||
+				ReleaseSource(sources, WorkGateSource::None) != sources ||
+				HasSource(sources, WorkGateSource::None)) {
+				return false;
+			}
 
-	// The relatch transaction exclusively owns resource teardown and creation.
-	// Ordinary frame/resource checks must not enter the vendor backend while a
-	// load-start/post-load recovery is waiting to queue that relatch, while
-	// mutation is queued, or while synchronous target recreation is active.
-	assert(ShouldDeferOrdinaryVendorWork(true, true, false, false));
-	assert(ShouldDeferOrdinaryVendorWork(true, false, true, false));
-	assert(ShouldDeferOrdinaryVendorWork(true, false, false, true));
-	assert(ShouldDeferOrdinaryVendorWork(true, true, true, true));
-	assert(!ShouldDeferOrdinaryVendorWork(true, false, false, false));
-	assert(!ShouldDeferOrdinaryVendorWork(false, true, true, true));
+			for (std::uint32_t bit = 0; bit < 5; ++bit) {
+				const auto source = static_cast<WorkGateSource>(1u << bit);
+				const WorkGateMask sourceMask = ToMask(source);
+				const WorkGateMask acquired = AcquireSource(sources, source);
+				const WorkGateMask released = ReleaseSource(sources, source);
+				if (HasSource(sources, source) != ((sources & sourceMask) != 0u) ||
+					acquired != (sources | sourceMask) ||
+					released != (sources & ~sourceMask) ||
+					AcquireSource(acquired, source) != acquired ||
+					ReleaseSource(released, source) != released) {
+					return false;
+				}
+			}
 
-	// A missing or delayed SKSE game-entry message may not be the sole release
-	// authority. Renderer convergence is a safe fallback only after every menu,
-	// load, recovery, relatch, and profile owner has cleared.
-	GameEntryConvergence convergence{};
-	assert(!CanReleaseGameEntryVendorGate(convergence));
-	convergence.hasGateOwner = true;
-	convergence.completedWorldFrame = true;
-	assert(CanReleaseGameEntryVendorGate(convergence));
+			for (WorkGateMask candidates = 0; candidates <= kAllWorkGateSources; ++candidates) {
+				if (HasAny(sources, candidates) != ((sources & candidates) != 0u)) {
+					return false;
+				}
+			}
+		}
 
-	convergence.mainMenuActive = true;
-	assert(!CanReleaseGameEntryVendorGate(convergence));
-	convergence.mainMenuActive = false;
-	convergence.loadingPresentationActive = true;
-	assert(!CanReleaseGameEntryVendorGate(convergence));
-	convergence.loadingPresentationActive = false;
-	convergence.raceSexPresentationActive = true;
-	assert(!CanReleaseGameEntryVendorGate(convergence));
-	convergence.raceSexPresentationActive = false;
-	convergence.saveLoadProtectionActive = true;
-	assert(!CanReleaseGameEntryVendorGate(convergence));
-	convergence.saveLoadProtectionActive = false;
-	convergence.recoveryPending = true;
-	assert(!CanReleaseGameEntryVendorGate(convergence));
-	convergence.recoveryPending = false;
-	convergence.relatchPending = true;
-	assert(!CanReleaseGameEntryVendorGate(convergence));
-	convergence.relatchPending = false;
-	convergence.profileTransitionPending = true;
-	assert(!CanReleaseGameEntryVendorGate(convergence));
-	convergence.profileTransitionPending = false;
-	convergence.completedWorldFrame = false;
-	assert(!CanReleaseGameEntryVendorGate(convergence));
+		return true;
+	}
+
+	constexpr bool CoversWorkGateState()
+	{
+		constexpr WorkGateMask firstMask = ToMask(WorkGateSource::LoadingMenu);
+		constexpr WorkGateState first = AdvanceState(0, firstMask);
+		if (GetStateMask(first) != firstMask || GetStateEpoch(first) != 1u)
+			return false;
+
+		// Re-acquiring the same source advances ownership even though its bit is
+		// unchanged, so convergence from the older epoch cannot clear it.
+		constexpr WorkGateState reacquired = AdvanceState(first, firstMask);
+		if (GetStateMask(reacquired) != firstMask || GetStateEpoch(reacquired) != 2u)
+			return false;
+
+		constexpr WorkGateMask secondMask =
+			firstMask | ToMask(WorkGateSource::GameLoadNotification);
+		constexpr WorkGateState second = AdvanceState(reacquired, secondMask);
+		if (GetStateMask(second) != secondMask || GetStateEpoch(second) != 3u)
+			return false;
+
+		constexpr WorkGateState wrapped =
+			(static_cast<WorkGateState>(std::numeric_limits<std::uint32_t>::max()) <<
+			 kWorkGateStateMaskBits) |
+			firstMask;
+		constexpr WorkGateState afterWrap = AdvanceState(wrapped, secondMask);
+		return GetStateMask(afterWrap) == secondMask && GetStateEpoch(afterWrap) == 0u;
+	}
+
+	constexpr bool CoversGameEntryConvergence()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 9); ++bits) {
+			const GameEntryConvergence state{
+				.hasGateOwner = (bits & (1u << 0)) != 0,
+				.mainMenuActive = (bits & (1u << 1)) != 0,
+				.loadingPresentationActive = (bits & (1u << 2)) != 0,
+				.raceSexPresentationActive = (bits & (1u << 3)) != 0,
+				.saveLoadProtectionActive = (bits & (1u << 4)) != 0,
+				.completedWorldFrame = (bits & (1u << 5)) != 0,
+				.recoveryPending = (bits & (1u << 6)) != 0,
+				.relatchPending = (bits & (1u << 7)) != 0,
+				.profileTransitionPending = (bits & (1u << 8)) != 0,
+			};
+			const bool expected =
+				state.hasGateOwner &&
+				!state.mainMenuActive &&
+				!state.loadingPresentationActive &&
+				!state.raceSexPresentationActive &&
+				!state.saveLoadProtectionActive &&
+				state.completedWorldFrame &&
+				!state.recoveryPending &&
+				!state.relatchPending &&
+				!state.profileTransitionPending;
+			if (CanReleaseGameEntryVendorGate(state) != expected) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversLifecycleMutationAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 4); ++bits) {
+			for (WorkGateMask gateSources = 0; gateSources <= kAllWorkGateSources; ++gateSources) {
+				const LifecycleMutationAdmission state{
+					.isVR = (bits & (1u << 0)) != 0,
+					.gateSources = gateSources,
+					.postLoadResetPending = (bits & (1u << 1)) != 0,
+					.relatchPending = (bits & (1u << 2)) != 0,
+					.relatchInProgress = (bits & (1u << 3)) != 0,
+				};
+				const bool expected =
+					!state.isVR ||
+					(state.gateSources == kNoWorkGateSources &&
+						!state.postLoadResetPending &&
+						!state.relatchPending &&
+						!state.relatchInProgress);
+				if (CanMutateVendorLifecycle(state) != expected) {
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversDispatchAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 4); ++bits) {
+			const DispatchAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.vendorEvaluationSelected = (bits & (1u << 1)) != 0,
+				.resourcesReady = (bits & (1u << 2)) != 0,
+				.relatchInProgress = (bits & (1u << 3)) != 0,
+			};
+			const bool expected =
+				state.vendorEvaluationSelected &&
+				state.resourcesReady &&
+				(!state.isVR || !state.relatchInProgress);
+			if (CanDispatchVendorEvaluation(state) != expected) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversVendorResourcePredicates()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
+			const bool vendorEvaluation = (bits & (1u << 0)) != 0;
+			const bool preservedResources = (bits & (1u << 1)) != 0;
+			const bool recreatedResources = (bits & (1u << 2)) != 0;
+			if (UsesVendorEvaluation(vendorEvaluation) != vendorEvaluation ||
+				RequiresFSRCompatibility(vendorEvaluation) != vendorEvaluation ||
+				NeedsDeferredFSRReset(vendorEvaluation, preservedResources, recreatedResources) !=
+					(vendorEvaluation && !preservedResources && !recreatedResources)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversStereoRelatchAdmission()
+	{
+		for (std::uint32_t currentFrame = 0; currentFrame < 3; ++currentFrame) {
+			for (std::uint32_t admissionFrame = 0; admissionFrame < 3; ++admissionFrame) {
+				for (std::uint32_t eyeMask = 0; eyeMask < 8; ++eyeMask) {
+					for (std::uint64_t relatchEpoch = 0; relatchEpoch < 3; ++relatchEpoch) {
+						for (std::uint64_t deferredEpoch = 0; deferredEpoch < 3; ++deferredEpoch) {
+							const std::uint32_t stereoMask = eyeMask & 0x3u;
+							const bool expected =
+								relatchEpoch != 0 &&
+								relatchEpoch != deferredEpoch &&
+								currentFrame == admissionFrame &&
+								(stereoMask == 0x1u || stereoMask == 0x2u);
+							if (ShouldDeferPhysicalRelatchForStereo(
+									currentFrame,
+									admissionFrame,
+									eyeMask,
+									relatchEpoch,
+									deferredEpoch) != expected) {
+								return false;
+							}
+						}
+					}
+				}
+			}
+		}
+		return true;
+	}
+
+	static_assert(CoversWorkGateMasks());
+	static_assert(CoversWorkGateState());
+	static_assert(CoversGameEntryConvergence());
+	static_assert(CoversLifecycleMutationAdmission());
+	static_assert(CoversDispatchAdmission());
+	static_assert(CoversVendorResourcePredicates());
+	static_assert(CoversStereoRelatchAdmission());
 }
+
+int main() {}

@@ -247,6 +247,15 @@ public:
 	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset);
 	bool ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport);
 	int FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset) const;
+	bool TryResolveExistingVRDLSSViewport(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_eyeIndex,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		ID3D11Resource* a_colorInput,
+		sl::ViewportHandle& a_viewport) const;
 	int ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportRole) const;
 	bool FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures);
 	bool FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures);
@@ -258,6 +267,24 @@ public:
 	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
 	bool WasLastDLSSFailureDuplicatedConstants() const { return lastDLSSFailureDuplicatedConstants; }
 	bool HasDLSSResourcesPendingTeardown() const;
+	[[nodiscard]] bool HasCompleteVRDLSSViewportResources() const noexcept
+	{
+		if (activeDLSSViewportResourcesAllocated[0] &&
+			activeDLSSViewportResourcesAllocated[1]) {
+			return true;
+		}
+
+		for (const auto& roleSlots : vrDLSSViewportSlots) {
+			for (const auto& slot : roleSlots) {
+				if (slot.valid &&
+					slot.resourcesAllocated[0] && slot.resourcesAllocated[1] &&
+					slot.optionsCache[0].valid && slot.optionsCache[1].valid) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
 
 	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

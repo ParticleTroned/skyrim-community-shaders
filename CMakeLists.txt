@@ -1312,31 +1312,39 @@ endif()
 
 if(BUILD_CONTROLLER_TESTS)
     enable_testing()
-    add_executable(
+
+    function(add_controller_test TARGET_NAME TEST_NAME SOURCE_FILE)
+        add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${SOURCE_FILE})
+        target_compile_features(${TARGET_NAME} PRIVATE cxx_std_23)
+        target_include_directories(
+            ${TARGET_NAME}
+            PRIVATE "${PROJECT_SOURCE_DIR}/src"
+        )
+        add_test(NAME ${TEST_NAME} COMMAND ${TARGET_NAME})
+    endfunction()
+
+    add_controller_test(
         perf_mode_restart_state_test
+        PerfModeRestartState
         tests/perf_mode_restart_state_test.cpp
     )
-    target_compile_features(perf_mode_restart_state_test PRIVATE cxx_std_23)
-    target_include_directories(
-        perf_mode_restart_state_test
-        PRIVATE "${CMAKE_SOURCE_DIR}/src"
-    )
-    add_test(
-        NAME PerfModeRestartState
-        COMMAND perf_mode_restart_state_test
-    )
-    add_executable(
+    add_controller_test(
         vr_vendor_relatch_policy_test
+        VRVendorRelatchPolicy
         tests/vr_vendor_relatch_policy_test.cpp
     )
-    target_compile_features(vr_vendor_relatch_policy_test PRIVATE cxx_std_23)
-    target_include_directories(
-        vr_vendor_relatch_policy_test
-        PRIVATE "${CMAKE_SOURCE_DIR}/src"
+    add_controller_test(
+        fsr_host_lifecycle_policy_test
+        FSRHostLifecyclePolicy
+        tests/fsr_host_lifecycle_policy_test.cpp
     )
-    add_test(
-        NAME VRVendorRelatchPolicy
-        COMMAND vr_vendor_relatch_policy_test
+
+    add_custom_target(
+        controller_tests
+        DEPENDS
+            perf_mode_restart_state_test
+            vr_vendor_relatch_policy_test
+            fsr_host_lifecycle_policy_test
     )
 endif()
 

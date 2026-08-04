@@ -20,6 +20,7 @@
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
+#include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/OpenCompositeInterop.h"
@@ -15070,6 +15071,7 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 		pendingVRRenderScaleRecoverySnapshot = {};
 	}
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	vrVendorWorkGateSources.store(0, std::memory_order_release);
 	pendingPostLoadRuntimeResetEpoch.store(0, std::memory_order_release);
 	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 	vrNativeRestorePresentationGuardEpoch.store(
@@ -15467,11 +15469,19 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		g_vrStatsMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 	if (a_event && a_event->menuName == "Dialogue Menu")
 		g_vrDialogueMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
+	if (a_event && a_event->menuName == RE::MainMenu::MENU_NAME && a_event->opening) {
+		globals::features::upscaling.ArmVRVendorWorkGate(
+			VRVendorWorkGateSource::MainMenu,
+			"MainMenu open");
+	}
 
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 		if (a_event->opening) {
 			auto& upscaling = globals::features::upscaling;
+			upscaling.ArmVRVendorWorkGate(
+				VRVendorWorkGateSource::LoadingMenu,
+				"LoadingMenu open");
 			// A deferred cleanup owner can survive after its presentation becomes
 			// stable. Supersede it before the next LoadingMenu can inherit it; this is
 			// bookkeeping-only and deliberately performs no renderer or D3D work from
@@ -15506,6 +15516,9 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		}
 		if (!a_event->opening) {
 			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
+			globals::features::upscaling.ReleaseVRVendorWorkGate(
+				VRVendorWorkGateSource::LoadingMenu,
+				"LoadingMenu close");
 			if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
 				globals::features::upscaling.QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
 			if (globals::state &&
@@ -15547,6 +15560,16 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 	}
 
 	const bool raceSexMenuOpen = ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME);
+	if (ui->IsMenuOpen(RE::MainMenu::MENU_NAME)) {
+		globals::features::upscaling.ArmVRVendorWorkGate(
+			VRVendorWorkGateSource::MainMenu,
+			"MainMenu already open at event registration");
+	}
+	if (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)) {
+		globals::features::upscaling.ArmVRVendorWorkGate(
+			VRVendorWorkGateSource::LoadingMenu,
+			"LoadingMenu already open at event registration");
+	}
 	g_vrLoadingMenuOpenFromEvent.store(ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME), std::memory_order_release);
 	g_vrMapMenuOpenFromEvent.store(ui->IsMenuOpen(RE::MapMenu::MENU_NAME), std::memory_order_release);
 	g_vrStatsMenuOpenFromEvent.store(ui->IsMenuOpen("StatsMenu"), std::memory_order_release);
@@ -15570,10 +15593,115 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 	return true;
 }
 
+void Upscaling::ArmVRVendorWorkGate(
+	VRVendorWorkGateSource a_source,
+	const char* a_reason)
+{
+	if (!REL::Module::IsVR())
+		return;
+
+	const uint32_t source = static_cast<uint32_t>(a_source);
+	const uint32_t previous = vrVendorWorkGateSources.fetch_or(source, std::memory_order_acq_rel);
+	if ((previous & source) == 0 && ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale] Vendor work gate acquired: source={} reason={} activeMask=0x{:X}",
+			source,
+			a_reason ? a_reason : "unspecified",
+			previous | source);
+	}
+}
+
+void Upscaling::ReleaseVRVendorWorkGate(
+	VRVendorWorkGateSource a_source,
+	const char* a_reason)
+{
+	const uint32_t source = static_cast<uint32_t>(a_source);
+	const uint32_t previous = vrVendorWorkGateSources.fetch_and(~source, std::memory_order_acq_rel);
+	if ((previous & source) != 0 && ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale] Vendor work gate released: source={} reason={} activeMask=0x{:X}",
+			source,
+			a_reason ? a_reason : "unspecified",
+			previous & ~source);
+	}
+}
+
+void Upscaling::ReleaseVRGameEntryVendorWorkGates(const char* a_reason)
+{
+	constexpr uint32_t gameEntrySources =
+		static_cast<uint32_t>(VRVendorWorkGateSource::ProcessStartup) |
+		static_cast<uint32_t>(VRVendorWorkGateSource::MainMenu) |
+		static_cast<uint32_t>(VRVendorWorkGateSource::PreLoadGame) |
+		static_cast<uint32_t>(VRVendorWorkGateSource::GameLoadNotification);
+	const uint32_t previous = vrVendorWorkGateSources.fetch_and(~gameEntrySources, std::memory_order_acq_rel);
+	if ((previous & gameEntrySources) != 0 && ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale] Game-entry vendor work gates released: reason={} activeMask=0x{:X}",
+			a_reason ? a_reason : "unspecified",
+			previous & ~gameEntrySources);
+	}
+}
+
+void Upscaling::ReleaseVRGameEntryVendorWorkGatesIfConverged()
+{
+	constexpr uint32_t gameEntrySources =
+		static_cast<uint32_t>(VRVendorWorkGateSource::ProcessStartup) |
+		static_cast<uint32_t>(VRVendorWorkGateSource::MainMenu) |
+		static_cast<uint32_t>(VRVendorWorkGateSource::PreLoadGame) |
+		static_cast<uint32_t>(VRVendorWorkGateSource::GameLoadNotification);
+	const uint32_t activeGateSources = vrVendorWorkGateSources.load(std::memory_order_acquire);
+	if ((activeGateSources & gameEntrySources) == 0)
+		return;
+
+	auto* state = globals::state;
+	auto* ui = globals::game::ui;
+	if (!state)
+		return;
+
+	const VRVendorRelatchPolicy::GameEntryConvergence convergence{
+		.hasGateOwner = true,
+		.mainMenuActive = IsMainMenuContextActive(),
+		.loadingPresentationActive =
+			IsLoadingMenuContextActive() ||
+			IsLoadingMenuPhysicallyOpen() ||
+			IsVRLoadingPresentationContextActive(state),
+		.raceSexPresentationActive =
+			IsRaceSexMenuContextActive(ui) ||
+			IsVRRaceSexMenuEventContextActive(state),
+		.saveLoadProtectionActive = IsSaveLoadTransitionContextActive(state),
+		.completedWorldFrame = HasCompletedVRWorldFrameAfterLatestLoad(state),
+		.recoveryPending = postLoadRuntimeResetPending.load(std::memory_order_acquire),
+		.relatchPending =
+			pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+			perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+			pendingPerfModeRenderTargetRecreateFrame.load(std::memory_order_acquire) != 0 ||
+			pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire),
+		.profileTransitionPending =
+			HasPendingVRUpscalingTransition() ||
+			pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
+			HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(*this)
+	};
+	if (!VRVendorRelatchPolicy::CanReleaseGameEntryVendorGate(convergence)) {
+		return;
+	}
+
+	ReleaseVRGameEntryVendorWorkGates("stable destination convergence");
+	logger::info(
+		"[VRRenderScale] Vendor work gate released after stable game entry at frame {}.",
+		state->frameCount);
+}
+
 void Upscaling::NotifyGameLoadStarted(
 	bool a_newGame,
 	bool a_initialProcessSaveLoad)
 {
+	// The SKSE post-load callback that arms postLoadRuntimeResetPending arrives
+	// after the destination begins drawing. Gate ordinary vendor work from the
+	// earlier load-start signal so a transient provider cannot be created and
+	// immediately torn down by the eventual recovery relatch.
+	ArmVRVendorWorkGate(
+		VRVendorWorkGateSource::GameLoadNotification,
+		a_newGame ? "SKSE new-game notification" : "SKSE post-load notification");
 	StopVRMenuPresentationTraceRaceSexPreRoll("game-load-started");
 	g_vrMenuPresentationTraceRaceSexPreRollPending.store(
 		kEnableVRMenuPresentationTraceDiagnostics && a_newGame,
@@ -15627,8 +15755,13 @@ void Upscaling::RaceSexMenu_ChangeName::thunk(RE::RaceSexMenu* a_this, const cha
 
 void Upscaling::Load()
 {
-	if (REL::Module::IsVR())
+	if (REL::Module::IsVR()) {
+		ArmVRVendorWorkGate(
+			VRVendorWorkGateSource::ProcessStartup,
+			"VR process startup");
+		logger::info("[VRRenderScale] Vendor work gated before initial game entry.");
 		(void)GetVRFpsStabilizerSessionConfig();
+	}
 
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const auto blocker = GetOpenCompositeUpscalingBlocker();
@@ -19152,6 +19285,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		*this,
 		state,
 		authoritativeRelatchActivationTarget);
+	// A superseded relatch can leave restartRequired describing the abandoned
+	// settings tuple. Recompute it from this immutable target before no-op
+	// admission so returning to the still-active boot contract does not force a
+	// destructive target recreation. RecordTrueHMDSize keeps displaySizeChanged
+	// sticky, so an actual HMD-size change cannot be hidden by this refresh.
+	perfMode.UpdateRestartRequiredState(relatchSettings, relatchUpscaleMethod);
 	if (authoritativeStartupActivationProtection && !CanStartVRRenderScaleRuntime(*this)) {
 		requeueRelatch(kVRRenderScalePostLoadSettleRetryFrames);
 		if (!loggedRelatchRuntimeActivationDefer) {
@@ -20682,7 +20821,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vrIntermediateTextureGeneration = relatchContractGeneration;
 		if (relatchPlan.recreateFSRResources)
 			RefreshRuntimeResolutionState();
+		const bool targetRequiresVendorRuntime =
+			VRVendorRelatchPolicy::RequiresVendorRuntime(
+				relatchTargetRenderScaleActive,
+				IsVendorUpscalingMethod(relatchUpscaleMethod));
 		const bool warmTargetRuntimeReadyForRebind =
+			targetRequiresVendorRuntime &&
 			relatchPlan.reuseWarmTargetRuntime &&
 			relatchPlan.reuseSharedSubmitResources &&
 			AreCommonVendorTexturesReady(relatchUpscaleMethod);
@@ -20692,17 +20836,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				vendorRecreateResult = VRVendorResourceResetResult::Failed;
 			else
 				MarkVendorRuntimeResourcesReady(relatchUpscaleMethod, relatchContractGeneration);
-		} else {
+		} else if (targetRequiresVendorRuntime) {
 			vendorRecreateResult = RecreateVendorRuntimeResources(
 				relatchUpscaleMethod,
 				relatchUpscaleMethod != UpscaleMethod::kFSR || relatchPlan.recreateFSRResources);
 		}
-		if (relatchUpscaleMethod == UpscaleMethod::kFSR &&
+		const bool targetRequiresFSRCompatibility =
+			VRVendorRelatchPolicy::RequiresFSRCompatibility(
+				relatchTargetRenderScaleActive,
+				relatchUpscaleMethod == UpscaleMethod::kFSR);
+		if (targetRequiresFSRCompatibility &&
 			vendorRecreateResult == VRVendorResourceResetResult::Ready &&
 			!areFSRResourcesCompatibleForRelatch()) {
 			vendorRecreateResult = VRVendorResourceResetResult::Failed;
 		}
-		if (relatchUpscaleMethod == UpscaleMethod::kFSR &&
+		if (targetRequiresFSRCompatibility &&
 			vendorRecreateResult != VRVendorResourceResetResult::Ready) {
 			if (vendorRecreateResult == VRVendorResourceResetResult::Pending)
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
@@ -20722,9 +20870,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vendorRecreateResult == VRVendorResourceResetResult::Ready &&
 			areFSRResourcesCompatibleForRelatch();
 		const bool fsrRelatchNeedsDeferredReset =
-			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			!relatchPlan.preserveFSRResources &&
-			!fsrResourcesRecreatedDuringRelatch;
+			VRVendorRelatchPolicy::NeedsDeferredFSRReset(
+				relatchTargetRenderScaleActive,
+				relatchUpscaleMethod == UpscaleMethod::kFSR,
+				relatchPlan.preserveFSRResources,
+				fsrResourcesRecreatedDuringRelatch);
 		if (relatchPlan.recreateFSRResources && !fsrResourcesRecreatedDuringRelatch) {
 			logger::warn("[VRRenderScale] Render-target relatch could not recreate FSR resources immediately; scheduling deferred rebuild.");
 			if (missingCompatibleFSRResourcesForActiveRelatch) {
@@ -20750,7 +20900,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				ClampPositiveDimension(relatchTargetDisplaySize.y));
 		}
 
-		if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
+		if (!relatchTargetRenderScaleActive) {
+			// The inactive physical contract has no vendor backend. Teardown above
+			// already retired any previous runtime; do not publish a new generation
+			// or leave a deferred rebuild armed for native presentation.
+			ClearVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, true);
+			ClearVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, true);
+			pendingDLSSHistoryReset.store(false, std::memory_order_release);
+			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
+		} else if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
 			pendingDLSSHistoryReset.store(true, std::memory_order_release);
 			MarkVendorRuntimeResourcesReady(UpscaleMethod::kDLSS, relatchContractGeneration);
 			ClearVendorRuntimeResourcesDirty(UpscaleMethod::kFSR);
@@ -25423,8 +25581,10 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	if (!postLoadRuntimeResetPending.exchange(false, std::memory_order_acq_rel))
 		return true;
 
-	if (!globals::game::isVR)
+	if (!globals::game::isVR) {
+		vrVendorWorkGateSources.store(0, std::memory_order_release);
 		return true;
+	}
 
 	if (!renderScalePostLoadResetRelevant) {
 		CompleteVRRenderScalePostLoadRecovery(recoveryEpoch, 0);
@@ -25450,6 +25610,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		// A higher-priority CSX-menu request accepted the physical transaction and
 		// deliberately superseded this recovery owner. Its ordinary relatch gates
 		// now own progress; do not resurrect the completed post-load reset.
+		ReleaseVRGameEntryVendorWorkGates("post-load recovery superseded");
 		return true;
 	}
 
@@ -25462,6 +25623,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		// the recovery epoch.
 		if (IsOpenCompositeUpscalingBlocked()) {
 			CompleteVRRenderScalePostLoadRecovery(recoveryEpoch, 0);
+			ReleaseVRGameEntryVendorWorkGates("Open Composite owns presentation");
 			return true;
 		}
 
@@ -25485,11 +25647,29 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
 			BoolText(fidelityFX.HasFSRResources()));
 	}
+	// The protected relatch now owns the recovery epoch. Release the early
+	// load-start gate only after that ownership is observable; the relatch gate
+	// keeps ordinary vendor work blocked until physical mutation completes.
+	ReleaseVRGameEntryVendorWorkGates("protected relatch accepted post-load recovery");
 	return true;
+}
+
+bool Upscaling::ShouldDeferOrdinaryVRVendorWork() const
+{
+	return VRVendorRelatchPolicy::ShouldDeferOrdinaryVendorWork(
+		globals::game::isVR,
+		vrVendorWorkGateSources.load(std::memory_order_acquire) != 0 ||
+			postLoadRuntimeResetPending.load(std::memory_order_acquire),
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire),
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire));
 }
 
 bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
+	if (ShouldDeferOrdinaryVRVendorWork()) {
+		return false;
+	}
+
 	resourceCheckLastCompletedFrame = std::numeric_limits<uint32_t>::max();
 	resourceCheckLastCompletedMethod = UpscaleMethod::kNONE;
 	resourceCheckStable = false;
@@ -26020,6 +26200,10 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
 {
+	if (ShouldDeferOrdinaryVRVendorWork()) {
+		return false;
+	}
+
 	const uint32_t currentFrame = GetFrameScopedUpscalingWorkFrame();
 	if (currentFrame != std::numeric_limits<uint32_t>::max() &&
 		resourceCheckLastCompletedFrame == currentFrame &&
@@ -33233,6 +33417,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 		pendingVRRenderScaleRecoverySnapshot = {};
 	}
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	vrVendorWorkGateSources.store(0, std::memory_order_release);
 	pendingPostLoadRuntimeResetEpoch.store(0, std::memory_order_release);
 	vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
 	vrRenderScaleMemoryAdapter = nullptr;
@@ -37464,13 +37649,14 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 					transitionOrigin,
 					false,
 					request.transitionEpoch)) {
+				const float2 nativeSize = perfMode.GetDisplayScreenSize();
 				CompleteVRRenderScaleInfoTransition(
 					request.transitionEpoch,
 					"request already applied",
 					false,
 					targetMethod,
-					perfMode.GetDisplayScreenSize(),
-					perfMode.GetRenderScreenSize());
+					nativeSize,
+					nativeSize);
 			}
 		}
 		return;
@@ -37527,13 +37713,17 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 				transitionOrigin,
 				false,
 				request.transitionEpoch)) {
+			const float2 displaySize = perfMode.GetDisplayScreenSize();
+			const float2 renderSize = targetPerfMode ?
+			                              perfMode.GetRenderScreenSize() :
+			                              displaySize;
 			CompleteVRRenderScaleInfoTransition(
 				request.transitionEpoch,
 				"request already applied",
 				targetPerfMode,
 				targetMethod,
-				perfMode.GetDisplayScreenSize(),
-				perfMode.GetRenderScreenSize());
+				displaySize,
+				renderSize);
 		}
 	}
 }
@@ -38077,7 +38267,14 @@ void Upscaling::Upscale()
 		vrMainPassVendorDispatchCompletedFrame.store(
 			0,
 			std::memory_order_release);
+		ReleaseVRGameEntryVendorWorkGatesIfConverged();
 	}
+	// A post-load reset is already committed to a serialized relatch, but the
+	// relatch cannot be queued until Skyrim leaves its protected loading/menu
+	// context. Do not create or dispatch a transient provider in that window:
+	// doing so forces an immediate DX11/DX12 teardown once the relatch is admitted.
+	if (ShouldDeferOrdinaryVRVendorWork())
+		return;
 
 	EnsureRuntimeResolutionStateCurrent();
 	const bool vrRenderScaleSubmitStageOwnsOutput =

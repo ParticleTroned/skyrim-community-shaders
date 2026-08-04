@@ -1422,6 +1422,12 @@ namespace Hooks
 	{
 		static void thunk(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
 		{
+			// A geometry with no resolvable material (for example, a decal whose
+			// textures failed to load) can reach this hook with a null material.
+			// Guard before TruePBR and the original engine call, which both dereference it.
+			if (!material)
+				return;
+
 			// setup material for PBR
 			auto& truePBR = globals::features::truePBR;
 			if (truePBR.loaded && truePBR.BSLightingShader_SetupMaterial(shader, material)) {

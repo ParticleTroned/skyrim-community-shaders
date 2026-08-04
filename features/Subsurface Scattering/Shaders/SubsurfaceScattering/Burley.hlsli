@@ -48,6 +48,18 @@ float3 GetScalingFactor(float3 albedo)
 	return 3.5f + 100.f * pow(abs(value), 4);
 }
 
+float3 BurleyRemoveAlbedo(float3 color, float3 albedo)
+{
+	albedo /= Color::PBRLightingScale;
+	return lerp(color, color / max(albedo, EPSILON_SSS_ALBEDO), albedo > EPSILON_SSS_ALBEDO);
+}
+
+float3 BurleyApplyAlbedo(float3 irradiance, float3 albedo)
+{
+	albedo /= Color::PBRLightingScale;
+	return lerp(irradiance, irradiance * albedo, albedo > EPSILON_SSS_ALBEDO);
+}
+
 float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssAmount, bool humanProfile, bool isFemale)
 {
 	float centerDepth = SharedData::GetScreenDepth(DepthTexture[DTid].x);
@@ -58,7 +70,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 	}
 
 	float4 surfaceAlbedo = AlbedoTexture[DTid];
-	float3 originalColor = Color::IrradianceToLinear(centerColor.xyz / max(surfaceAlbedo.xyz, EPSILON_SSS_ALBEDO));
+	float3 originalColor = Color::IrradianceToLinear(BurleyRemoveAlbedo(centerColor.xyz, surfaceAlbedo.xyz));
 
 	float4 diffuseMeanFreePath = humanProfile ? MeanFreePathHuman : MeanFreePathBase;
 	diffuseMeanFreePath.xyz = float3(max(diffuseMeanFreePath.x, 1e-5f), max(diffuseMeanFreePath.y, 1e-5f), max(diffuseMeanFreePath.z, 1e-5f));
@@ -113,7 +125,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 		if (!mask)
 			continue;
 
-		float3 sampleColor = Color::IrradianceToLinear(ColorTexture[samplePixcoord].xyz * maskSample / max(AlbedoTexture[samplePixcoord].xyz, EPSILON_SSS_ALBEDO));
+		float3 sampleColor = Color::IrradianceToLinear(BurleyRemoveAlbedo(ColorTexture[samplePixcoord].xyz * maskSample, AlbedoTexture[samplePixcoord].xyz));
 		float sampleDepth = SharedData::GetScreenDepth(DepthTexture[samplePixcoord].x);
 		float3 sampleNormalVS = GBuffer::DecodeNormal(NormalTexture[samplePixcoord].xy);
 		float3 sampleNormalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(sampleNormalVS, 0)).xyz);
@@ -131,7 +143,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 
 	colorSum *= any(weightSum == 0.0f) ? 0.0f : (1.0f / weightSum);
 	colorSum = lerp(colorSum, originalColor, saturate(centerWeight));
-	float3 color = Color::IrradianceToGamma(colorSum) * AlbedoTexture[DTid.xy].xyz;
+	float3 color = BurleyApplyAlbedo(Color::IrradianceToGamma(colorSum), surfaceAlbedo.xyz);
 	color = lerp(centerColor.xyz, color, saturate(sssAmount));
 
 	if (humanProfile) {

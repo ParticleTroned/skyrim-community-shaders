@@ -1129,6 +1129,29 @@ void VR::DrawSettings()
 	if (this->isCapturingCombo) {
 		ImGui::OpenPopup("Record Combo");
 		if (auto popup = Util::CenteredPopupModal("Record Combo")) {
+			auto applyRecordedCombo = [&]() {
+				if (this->recordedCombo.empty())
+					return;
+
+				switch (this->currentComboType) {
+				case VR::ComboType::MenuOpen:
+					settings.VRMenuOpenKeys = this->recordedCombo;
+					break;
+				case VR::ComboType::MenuClose:
+					settings.VRMenuCloseKeys = this->recordedCombo;
+					break;
+				case VR::ComboType::OverlayOpen:
+					settings.VROverlayOpenKeys = this->recordedCombo;
+					break;
+				case VR::ComboType::OverlayClose:
+					settings.VROverlayCloseKeys = this->recordedCombo;
+					break;
+				default:
+					return;
+				}
+				globals::menu->RequestSettingsDirtyCheck();
+			};
+
 			// Helper function to get button name
 			auto GetButtonName = [](uint32_t key) -> const char* {
 				switch (key) {
@@ -1240,25 +1263,7 @@ void VR::DrawSettings()
 
 			// Handle ENTER key to accept combo
 			if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
-				if (!this->recordedCombo.empty()) {
-					// Apply the recorded combo to the correct settings vector
-					switch (this->currentComboType) {
-					case VR::ComboType::MenuOpen:
-						settings.VRMenuOpenKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::MenuClose:
-						settings.VRMenuCloseKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::OverlayOpen:
-						settings.VROverlayOpenKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::OverlayClose:
-						settings.VROverlayCloseKeys = this->recordedCombo;
-						break;
-					default:
-						break;
-					}
-				}
+				applyRecordedCombo();
 
 				// Reset recording state
 				this->isCapturingCombo = false;
@@ -1284,25 +1289,7 @@ void VR::DrawSettings()
 
 			// Handle timeout - auto-accept if buttons were pressed, auto-cancel if not
 			if (remainingTime <= 0.0) {
-				if (!this->recordedCombo.empty()) {
-					// Auto-accept if buttons were pressed - apply to correct settings vector
-					switch (this->currentComboType) {
-					case VR::ComboType::MenuOpen:
-						settings.VRMenuOpenKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::MenuClose:
-						settings.VRMenuCloseKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::OverlayOpen:
-						settings.VROverlayOpenKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::OverlayClose:
-						settings.VROverlayCloseKeys = this->recordedCombo;
-						break;
-					default:
-						break;
-					}
-				}
+				applyRecordedCombo();
 				// Auto-cancel if no buttons were pressed (do nothing, just close)
 
 				// Reset recording state
@@ -1373,7 +1360,7 @@ namespace
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("AMD FSR profiles keep the current AMD FSR3 or AMD FSR4 selection from Community Shaders.");
+			ImGui::TextUnformatted("AMD FSR profiles keep the current AMD FSR3 or AMD FSR4 selection.");
 		}
 
 		return changed;
@@ -1521,7 +1508,7 @@ namespace
 		}
 
 		ImGui::Spacing();
-		ImGui::SeparatorText("Community Shaders Features");
+		ImGui::SeparatorText("Features");
 		if (ImGui::BeginTable("##VRFpsStabilizerFeatureProfiles", 3, tableFlags)) {
 			SetupVRFpsStabilizerProfileTableColumns(currentCellIsInterior);
 
@@ -1576,7 +1563,7 @@ namespace
 			LoadVRFpsStabilizerUIState(uiState);
 
 		ImGui::TextUnformatted("Interior and Exterior Profiles");
-		ImGui::TextWrapped("Choose the Community Shaders settings VR FPS Stabilizer applies for each location type.");
+		ImGui::TextWrapped("Choose the VR FPS Stabilizer settings for each location type.");
 		ImGui::Spacing();
 		const bool currentCellIsInterior = Util::IsInterior();
 		ImGui::TextDisabled(
@@ -1589,42 +1576,18 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(uiState.loadFailed);
 			if (ImGui::Checkbox(
-					"Enable Community Shaders profile switching",
+					"Enable VR FPS Stabilizer Interior/Exterior switching",
 					&uiState.config.upscalingSwitchingEnabled)) {
 				MarkVRFpsStabilizerUIStateDirty(uiState);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Switches between the Interior and Exterior Community Shaders profiles shown below.");
+			ImGui::TextUnformatted("Controls switching between the Interior and Exterior profiles shown below.");
 			ImGui::TextUnformatted("It does not disable VR FPS Stabilizer or edit its other settings and conditional profiles.");
 		}
 		if (!uiState.config.upscalingSwitchingEnabled) {
 			Util::Text::WrappedWarning(
-				"Profile switching is off. Saving disables the managed Interior and Exterior Community Shaders profile group; other VR FPS Stabilizer settings are preserved.");
-		}
-
-		ImGui::Spacing();
-		const bool openCompositeBlocksUpscaling = upscaling.IsOpenCompositeUpscalingBlocked();
-		const auto& sessionConfig = upscaling.GetVRFpsStabilizerSessionConfig();
-		if (openCompositeBlocksUpscaling) {
-			Util::Text::WrappedWarning(
-				"Community Shaders profile sync: Inactive because Open Composite owns upscaling for this session.");
-		} else if (upscaling.IsVRFpsStabilizerSyncActive()) {
-			ImGui::TextColored(
-				Util::Colors::GetSuccess(),
-				"Community Shaders profile sync: Active for this session.");
-		} else if (!sessionConfig.fileExists) {
-			ImGui::TextDisabled("Community Shaders profile sync: Inactive; VRFpsStabilizer.ini was not found at startup.");
-		} else if (!sessionConfig.fileReadable) {
-			ImGui::TextDisabled("Community Shaders profile sync: Inactive; VRFpsStabilizer.ini was not readable at startup.");
-		} else if (!sessionConfig.upscalingSwitchingEnabled) {
-			ImGui::TextDisabled("Community Shaders profile sync: Inactive because profile switching was off at startup.");
-		} else {
-			ImGui::TextDisabled("Community Shaders profile sync: Inactive; no supported Interior or Exterior upscaling profile was active at startup.");
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Community Shaders enables sync automatically when the INI contains an active Interior or Exterior upscaling profile.");
-			ImGui::TextUnformatted("The startup state is authoritative for this game session; saved or manual INI changes take effect after restarting Skyrim VR.");
+				"Interior/Exterior switching is off. Saving disables the managed profile group; other VR FPS Stabilizer settings are preserved.");
 		}
 
 		if (uiState.loadFailed) {
@@ -1636,6 +1599,37 @@ namespace
 			return;
 		}
 
+		ImGui::Spacing();
+		{
+			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
+			if (DrawVRFpsStabilizerProfileEditors(uiState.config, currentCellIsInterior))
+				MarkVRFpsStabilizerUIStateDirty(uiState);
+		}
+
+		ImGui::Spacing();
+		const bool openCompositeBlocksUpscaling = upscaling.IsOpenCompositeUpscalingBlocked();
+		const auto& sessionConfig = upscaling.GetVRFpsStabilizerSessionConfig();
+		if (openCompositeBlocksUpscaling) {
+			Util::Text::WrappedWarning(
+				"VR FPS Stabilizer profile sync: Inactive because Open Composite owns upscaling for this session.");
+		} else if (upscaling.IsVRFpsStabilizerSyncActive()) {
+			ImGui::TextColored(
+				Util::Colors::GetSuccess(),
+				"VR FPS Stabilizer profile sync: Active for this session.");
+		} else if (!sessionConfig.fileExists) {
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not found at startup.");
+		} else if (!sessionConfig.fileReadable) {
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not readable at startup.");
+		} else if (!sessionConfig.upscalingSwitchingEnabled) {
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive because Interior/Exterior switching was off at startup.");
+		} else {
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; no supported Interior or Exterior upscaling profile was active at startup.");
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Profile sync activates automatically when the INI contains an active Interior or Exterior upscaling profile.");
+			ImGui::TextUnformatted("The startup state is authoritative for this game session; saved or manual INI changes take effect after restarting Skyrim VR.");
+		}
+
 		const bool completeConfig = uiState.config.HasCompleteSettings();
 		const bool completeProfiles = uiState.config.HasCompleteProfiles();
 		const uint32_t invalidSettingCount = uiState.config.GetInvalidSettingCount();
@@ -1644,31 +1638,24 @@ namespace
 		if (uiState.config.hasMixedUpscalingSwitchingActivation) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"The managed Community Shaders profile rows and transition fade contain a mix of active and UI-disabled entries. Active entries take precedence; saving will make the whole group match this toggle.");
+				"The managed Interior/Exterior profile rows and transition fade contain a mix of active and UI-disabled entries. Active entries take precedence; saving will make the whole group match this toggle.");
 		}
 		if (invalidSettingCount > 0) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"%u recognized profile value(s) or combination(s) are invalid or outside the supported Community Shaders range. Safe resolved values are shown; saving will normalize those rows.",
+				"%u recognized profile value(s) or combination(s) are invalid or outside the supported range. Safe resolved values are shown; saving will normalize those rows.",
 				invalidSettingCount);
 		}
 		if (!completeProfiles) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"Missing profile values inherit the current Community Shaders configuration. Saving will write complete upscaling and feature settings for both profiles.");
+				"Missing profile values inherit the current runtime settings. Saving will write complete upscaling and feature settings for both profiles.");
 		}
 		if (!uiState.config.hasFadeDuration) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"The Render Scale transition fade duration is missing. The %.0f second Community Shaders recommendation is shown and will be written when saved.",
+				"The Render Scale transition fade duration is missing. The recommended %.0f second value is shown and will be written when saved.",
 				Upscaling::kVRFpsStabilizerDefaultFadeDuration);
-		}
-
-		ImGui::Spacing();
-		{
-			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
-			if (DrawVRFpsStabilizerProfileEditors(uiState.config, currentCellIsInterior))
-				MarkVRFpsStabilizerUIStateDirty(uiState);
 		}
 
 		ImGui::Spacing();
@@ -1687,7 +1674,7 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Used when an Interior/Exterior profile changes Render Scale during a door or cell transition.");
 			ImGui::Text(
-				"Community Shaders recommends a %.0f second black hold for conservative relatch coverage.",
+				"A %.0f second black hold is recommended for conservative relatch coverage.",
 				Upscaling::kVRFpsStabilizerDefaultFadeDuration);
 		}
 
@@ -1710,8 +1697,8 @@ namespace
 					uiState.restartRequired = true;
 					uiState.messageIsError = false;
 					uiState.message = uiState.config.upscalingSwitchingEnabled ?
-					                      "Community Shaders profile switching enabled in the VR FPS Stabilizer INI." :
-					                      "Community Shaders profile switching disabled in the VR FPS Stabilizer INI.";
+					                      "VR FPS Stabilizer Interior/Exterior switching enabled in VRFpsStabilizer.ini." :
+					                      "VR FPS Stabilizer Interior/Exterior switching disabled in VRFpsStabilizer.ini.";
 				} else {
 					uiState.loadFailed = false;
 					uiState.messageIsError = true;
@@ -1730,10 +1717,10 @@ namespace
 		}
 		if (uiState.restartRequired) {
 			ImGui::Spacing();
-			Util::Text::WrappedWarning("Restart Skyrim VR so VR FPS Stabilizer and Community Shaders reload the edited INI.");
+			Util::Text::WrappedWarning("Restart Skyrim VR so VR FPS Stabilizer reloads the edited INI.");
 		}
 		Util::Text::WrappedDisabled(
-			"Only the managed Interior and Exterior Community Shaders profile group and the Render Scale transition fade are edited. Other VR FPS Stabilizer settings and conditional profiles are preserved.");
+			"Only the managed Interior/Exterior profile group and the Render Scale transition fade are edited. Other VR FPS Stabilizer settings and conditional profiles are preserved.");
 	}
 }
 

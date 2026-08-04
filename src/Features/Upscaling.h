@@ -1399,6 +1399,7 @@ public:
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
+	virtual void OnSettingsSaved() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DataLoaded() override;

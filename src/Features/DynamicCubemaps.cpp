@@ -247,6 +247,10 @@ void DynamicCubemaps::LoadSettings(json& o_json)
 void DynamicCubemaps::SaveSettings(json& o_json)
 {
 	o_json = settings;
+}
+
+void DynamicCubemaps::OnSettingsSaved()
+{
 	if (REL::Module::IsVR()) {
 		Util::SaveGameSettings(iniVRCubeMapSettings);
 	}

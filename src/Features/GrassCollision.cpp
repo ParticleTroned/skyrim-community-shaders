@@ -26,10 +26,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void GrassCollision::DrawSettings()
 {
-	if (ImGui::TreeNodeEx("Grass Collision", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Enable", &settings.EnableGrassCollision);
-		ImGui::TreePop();
-	}
+	ImGui::Checkbox("Enable", &settings.EnableGrassCollision);
 }
 
 void GrassCollision::DrawPerformanceSettings(bool)

@@ -214,8 +214,8 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 		ImGui::Checkbox("Hide Compilation HUD in VR", &menuSettings.HideCompilationHUDInVR);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Hides shader compilation status in the headset while keeping it visible on the desktop.\n"
-				"Turn this off to show shader compilation status on both outputs.");
+				"When enabled, shader compilation status is hidden in the headset but remains visible on the desktop.\n"
+				"When disabled, shader compilation status is shown in both the headset and desktop.");
 		}
 	}
 }

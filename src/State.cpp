@@ -1010,6 +1010,8 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		logger::warn("Loading default settings after the selected config failed");
 		Load(ConfigMode::DEFAULT, false);
 	}
+	if (!errorDetected && globals::menu)
+		globals::menu->ResetSettingsDirtyState();
 }
 
 void State::SaveToJson(
@@ -1203,8 +1205,22 @@ void State::Save(ConfigMode a_configMode)
 		return;
 	}
 
-	if (a_configMode == ConfigMode::USER)
+	if (a_configMode == ConfigMode::USER) {
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!feature->loaded)
+				continue;
+			try {
+				feature->OnSettingsSaved();
+			} catch (const std::exception& e) {
+				logger::warn("Post-save handling failed for {}: {}", feature->GetName(), e.what());
+			} catch (...) {
+				logger::warn("Post-save handling failed for {} due to an unknown error", feature->GetName());
+			}
+		}
 		SaveUserOverrides(settings);
+		if (globals::menu)
+			globals::menu->ResetSettingsDirtyState();
+	}
 
 	logger::info("Saving settings to {}", configPath.string());
 }

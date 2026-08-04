@@ -589,6 +589,77 @@ void Menu::Save(json& o_json)
 	InputCombo::ComboList::to_json(o_json["ScreenshotKey"], settings.ScreenshotKey);
 }
 
+bool Menu::CaptureCurrentSettingsSnapshot(json& a_snapshot)
+{
+	if (!globals::state)
+		return false;
+
+	try {
+		a_snapshot = json::object();
+		globals::state->SaveToJson(a_snapshot, false);
+		return true;
+	} catch (const std::exception& e) {
+		logger::warn("Could not capture current settings for unsaved-change detection: {}", e.what());
+	} catch (...) {
+		logger::warn("Could not capture current settings for unsaved-change detection due to an unknown error");
+	}
+	return false;
+}
+
+bool Menu::EnsureSettingsDirtyBaseline()
+{
+	if (settingsDirtyBaselineInitialized)
+		return true;
+
+	json snapshot;
+	if (!CaptureCurrentSettingsSnapshot(snapshot))
+		return false;
+
+	settingsDirtyBaseline = std::move(snapshot);
+	settingsDirtyBaselineInitialized = true;
+	settingsDirty = false;
+	return true;
+}
+
+void Menu::ResetSettingsDirtyState()
+{
+	settingsDirtyBaseline = json::object();
+	settingsDirtyBaselineInitialized = false;
+	settingsDirty = false;
+	settingsDirtyCheckRequested = false;
+}
+
+void Menu::AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName)
+{
+	if (a_featureSettingsName.empty() || !EnsureSettingsDirtyBaseline())
+		return;
+
+	json currentSettings;
+	if (!CaptureCurrentSettingsSnapshot(currentSettings))
+		return;
+
+	if (currentSettings.contains(a_featureSettingsName)) {
+		settingsDirtyBaseline[a_featureSettingsName] = currentSettings[a_featureSettingsName];
+	} else {
+		settingsDirtyBaseline.erase(a_featureSettingsName);
+	}
+	settingsDirty = currentSettings != settingsDirtyBaseline;
+}
+
+void Menu::UpdateSettingsDirtyState()
+{
+	if (!settingsDirtyCheckRequested)
+		return;
+
+	settingsDirtyCheckRequested = false;
+	if (!EnsureSettingsDirtyBaseline())
+		return;
+
+	json currentSettings;
+	if (CaptureCurrentSettingsSnapshot(currentSettings))
+		settingsDirty = currentSettings != settingsDirtyBaseline;
+}
+
 void Menu::LoadTheme(json& o_json)
 {
 	if (o_json["Theme"].is_object()) {
@@ -812,6 +883,8 @@ void Menu::Init()
  */
 void Menu::DrawSettings()
 {
+	EnsureSettingsDirtyBaseline();
+
 	if (focusChanged) {
 		OnFocusChanged();
 		focusChanged = false;
@@ -1011,6 +1084,17 @@ void Menu::DrawSettings()
 		}
 	}
 	ImGui::End();
+
+	const auto* imguiContext = ImGui::GetCurrentContext();
+	if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
+		ImGui::IsMouseReleased(ImGuiMouseButton_Right) ||
+		(imguiContext &&
+			(imguiContext->ActiveIdHasBeenEditedThisFrame ||
+				imguiContext->NavActivateId != 0))) {
+		RequestSettingsDirtyCheck();
+	}
+	UpdateSettingsDirtyState();
+
 	if (!IsEnabled) {
 		PerformanceTuningRenderer::NotifyMenuClosed();
 		PerformanceTuningRenderer::CancelActiveMeasurements();
@@ -1403,6 +1487,7 @@ void Menu::ProcessInputEventQueue()
 						combo.push_back(InputCombo::Keyboard(key));
 
 						h.action(combo);
+						RequestSettingsDirtyCheck();
 						handled = true;
 						break;
 					}

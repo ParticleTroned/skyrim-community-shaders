@@ -183,6 +183,7 @@ public:
 
 	virtual void SaveSettings(json&) override;
 	virtual void LoadSettings(json&) override;
+	virtual void OnSettingsSaved() override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }

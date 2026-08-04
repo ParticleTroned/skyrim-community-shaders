@@ -245,6 +245,7 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::SameLine();
 		if (ImGui::Button("Restore Defaults")) {
 			RestoreDefaultSettings();
+			globals::menu->AcceptCurrentFeatureSettingsAsClean(GetName());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Restores Performance Overlay settings to defaults, including graphs, appearance, and update intervals.");

@@ -40,6 +40,16 @@ namespace
 	constexpr std::array<const char*, 6> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", PERFORMANCE_TUNING_MENU_NAME, "Display" };
 	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
 
+	void DrawUnsavedSettingsWarning()
+	{
+		if (!globals::menu->HasUnsavedSettings())
+			return;
+
+		Util::Text::WrappedError(
+			"Unsaved settings changes. Save them, restore the changed feature's defaults, or restore saved settings.");
+		ImGui::Spacing();
+	}
+
 	ImVec2 GetRestoreDefaultsIconSize()
 	{
 		const float iconDimension = ImGui::GetFrameHeight() * RESTORE_DEFAULTS_ICON_SCALE;
@@ -790,6 +800,8 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 	ImGui::PushID(menu.name.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+		DrawUnsavedSettingsWarning();
+
 		// Add spacing only for Home menu
 		if (menu.name == "Home") {
 			ImGui::Dummy(ImVec2(0, ThemeManager::Constants::BUTTON_SPACING));
@@ -826,6 +838,8 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	ImGui::PushID(featureName.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
+		DrawUnsavedSettingsWarning();
+
 		// Compute scene-controlled state once for both header and settings
 		auto* sceneManager = SceneSettingsManager::GetSingleton();
 		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
@@ -1149,6 +1163,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 			weatherManager->NotifyUserSettingsChanged();
 			weatherManager->RefreshFeatureOverrides();
 		}
+		globals::menu->AcceptCurrentFeatureSettingsAsClean(feat->GetName());
 	}
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {

@@ -14510,7 +14510,7 @@ namespace
 	{
 		auto& configuredMethod =
 			(Upscaling::streamline.featureDLSS ||
-			 a_profile.method == Upscaling::UpscaleMethod::kDLSS) ?
+				a_profile.method == Upscaling::UpscaleMethod::kDLSS) ?
 				a_settings.upscaleMethod :
 				a_settings.upscaleMethodNoDLSS;
 		configuredMethod = static_cast<uint32_t>(a_profile.method);
@@ -15122,6 +15122,10 @@ void Upscaling::SaveSettings(json& o_json)
 	if (!IsVRRuntimeActive()) {
 		StripVRSpecificUpscalingSettings(o_json);
 	}
+}
+
+void Upscaling::OnSettingsSaved()
+{
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
 		if (auto setting = iniSettingCollection->GetSetting("bUseTAA:Display"))
@@ -15182,12 +15186,12 @@ namespace
 		if (targetChanged || a_currentDesiredProfile.HasPendingSettings()) {
 			auto& configuredMethod =
 				(Upscaling::streamline.featureDLSS ||
-				 targetMethod == Upscaling::UpscaleMethod::kDLSS) ?
+					targetMethod == Upscaling::UpscaleMethod::kDLSS) ?
 					a_upscaling.settings.upscaleMethod :
 					a_upscaling.settings.upscaleMethodNoDLSS;
 			configuredMethod =
 				(Upscaling::streamline.featureDLSS ||
-				 targetMethod == Upscaling::UpscaleMethod::kDLSS) ?
+					targetMethod == Upscaling::UpscaleMethod::kDLSS) ?
 					a_previousSettings.upscaleMethod :
 					a_previousSettings.upscaleMethodNoDLSS;
 			a_upscaling.settings.qualityMode =
@@ -15249,8 +15253,8 @@ void Upscaling::LoadSettings(json& o_json)
 	}
 	if (IsVRRuntimeActive() &&
 		o_json.is_object() &&
-	    !o_json.contains("pipelineDiagnostics") &&
-	    o_json.value("vrSubmitStageLogDiagnostics", false)) {
+		!o_json.contains("pipelineDiagnostics") &&
+		o_json.value("vrSubmitStageLogDiagnostics", false)) {
 		settings.pipelineDiagnostics = true;
 	}
 	// Force mask visualization OFF on load for all existing profiles.
@@ -15773,15 +15777,15 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(UpscaleMethod a_upscaleMet
 {
 	const bool vendorEvaluationSelected = IsVendorUpscalingMethod(a_upscaleMethod);
 	bool resourcesReady = vendorEvaluationSelected &&
-		AreCommonVendorTexturesReady(a_upscaleMethod);
+	                      AreCommonVendorTexturesReady(a_upscaleMethod);
 	if (a_upscaleMethod == UpscaleMethod::kDLSS) {
 		resourcesReady = resourcesReady &&
-			!pendingDLSSReset.load(std::memory_order_acquire) &&
-			streamline.HasCompleteVRDLSSViewportResources();
+		                 !pendingDLSSReset.load(std::memory_order_acquire) &&
+		                 streamline.HasCompleteVRDLSSViewportResources();
 	} else if (a_upscaleMethod == UpscaleMethod::kFSR) {
 		resourcesReady = resourcesReady &&
-			!pendingFSRReset.load(std::memory_order_acquire) &&
-			fidelityFX.HasFSRResources();
+		                 !pendingFSRReset.load(std::memory_order_acquire) &&
+		                 fidelityFX.HasFSRResources();
 	}
 	if (resourcesReady && IsVRRenderScaleModeLatched())
 		resourcesReady = IsVendorRuntimeReadyForActiveContract(a_upscaleMethod);
@@ -15811,7 +15815,8 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(UpscaleMethod a_upscaleMet
 			const uint32_t eyeHeightOut = static_cast<uint32_t>(outputSize.y);
 			const uint32_t contractGeneration =
 				IsVRRenderScaleModeLatched() ?
-					GetActiveVRRenderScaleContractGeneration() : 0u;
+					GetActiveVRRenderScaleContractGeneration() :
+					0u;
 			resourcesReady = AreActiveVRIntermediateTexturesCompatible(
 				a_upscaleMethod,
 				eyeWidthIn,
@@ -19421,8 +19426,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			a_reason);
 	};
 	const auto recoverTerminalFSRRelatchAfterTargetMutation = [&](
-		const char* a_reason,
-		const VRRenderScaleProfileSnapshot& a_physicalProfile) {
+																  const char* a_reason,
+																  const VRRenderScaleProfileSnapshot& a_physicalProfile) {
 		// Once the engine targets have changed, the pre-relatch profile is no
 		// longer a truthful physical fallback. Latch this immutable FSR failure
 		// and recover through the existing serialized native-target path instead
@@ -23194,8 +23199,8 @@ bool Upscaling::RecordVRRenderScaleFidelityObservation(UpscaleMethod a_upscaleMe
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto fsrDispatch =
 		a_success && a_evaluated && a_upscaleMethod == UpscaleMethod::kFSR ?
-		    fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread() :
-		    FidelityFX::RuntimeUpscalerDispatchSnapshot{};
+			fidelityFX.GetRuntimeUpscalerDispatchSnapshotForRenderThread() :
+			FidelityFX::RuntimeUpscalerDispatchSnapshot{};
 	const bool fsrDispatchPathValid = fsrDispatch.valid && fsrDispatch.frame == frame;
 	const auto fsrDispatchBackend = [&]() {
 		switch (fsrDispatch.path) {
@@ -25540,8 +25545,8 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 			0,
 			"vendor reset drain");
 		return fsrTeardownResult == FidelityFX::LifecycleResult::Pending ?
-			       VRVendorResourceResetResult::Pending :
-			       VRVendorResourceResetResult::Failed;
+		           VRVendorResourceResetResult::Pending :
+		           VRVendorResourceResetResult::Failed;
 	}
 
 	const auto submitStageResetResult = ResetVRSubmitStageState(
@@ -25566,8 +25571,8 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 				0,
 				"vendor reset teardown");
 			return destroyResult == FidelityFX::LifecycleResult::Pending ?
-			       VRVendorResourceResetResult::Pending :
-			       VRVendorResourceResetResult::Failed;
+			           VRVendorResourceResetResult::Pending :
+			           VRVendorResourceResetResult::Failed;
 		}
 		ClearVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, true);
 	}
@@ -25630,10 +25635,10 @@ Upscaling::VRVendorResourceResetResult Upscaling::RecreateVendorRuntimeResources
 			BoolText(fidelityFX.HasFSRResources()));
 	}
 	return fsrCreateResult == FidelityFX::LifecycleResult::Ready ?
-	       VRVendorResourceResetResult::Ready :
+	           VRVendorResourceResetResult::Ready :
 	       fsrCreateResult == FidelityFX::LifecycleResult::Pending ?
-		       VRVendorResourceResetResult::Pending :
-		       VRVendorResourceResetResult::Failed;
+	           VRVendorResourceResetResult::Pending :
+	           VRVendorResourceResetResult::Failed;
 }
 
 bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context)
@@ -29575,14 +29580,16 @@ bool Upscaling::AreActiveVRIntermediateTexturesCompatible(
 		return false;
 	}
 	const uint32_t allocationWidth = stableFSRInputBounds ?
-		std::max(a_inputWidth, a_outputWidth) : a_inputWidth;
+	                                     std::max(a_inputWidth, a_outputWidth) :
+	                                     a_inputWidth;
 	const uint32_t allocationHeight = stableFSRInputBounds ?
-		std::max(a_inputHeight, a_outputHeight) : a_inputHeight;
+	                                      std::max(a_inputHeight, a_outputHeight) :
+	                                      a_inputHeight;
 	const bool requireOutputRTV = IsPresentationUpscalingActive();
 	const auto coversInput = [allocationWidth, allocationHeight](
-		const eastl::unique_ptr<Texture2D>& a_texture,
-		DXGI_FORMAT a_format,
-		bool a_requireUAV) {
+								 const eastl::unique_ptr<Texture2D>& a_texture,
+								 DXGI_FORMAT a_format,
+								 bool a_requireUAV) {
 		return a_texture && a_texture->resource && a_texture->srv &&
 		       (!a_requireUAV || a_texture->uav) &&
 		       a_texture->desc.Width >= allocationWidth &&
@@ -29656,11 +29663,11 @@ bool Upscaling::AreExistingVRSubmitVendorResourcesCompatible(
 
 	return a_upscaleMethod != UpscaleMethod::kFSR ||
 	       fidelityFX.AreFSRResourcesCompatible(
-		       a_inputWidth,
-		       a_inputHeight,
-		       a_outputWidth,
-		       a_outputHeight,
-		       2u);
+			   a_inputWidth,
+			   a_inputHeight,
+			   a_outputWidth,
+			   a_outputHeight,
+			   2u);
 }
 
 void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
@@ -36762,7 +36769,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "maximumReserveBytes", kVRRenderScaleSystemCommitMaximumReserveBytes },
 			{ "reserveScaleDenominator", kVRRenderScaleSystemCommitReserveScaleDenominator },
 			{ "policy", GetVRRenderScaleSystemCommitAdmissionPolicyName(
-				VRRenderScaleSystemCommitAdmissionPolicy::BoundedReserve) } });
+							VRRenderScaleSystemCommitAdmissionPolicy::BoundedReserve) } });
 	addGate(
 		"steady_state_memory_growth",
 		steadyStateMemoryGrowthBounded,

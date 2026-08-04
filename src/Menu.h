@@ -121,6 +121,10 @@ public:
 
 	void Init();
 	void DrawSettings();
+	bool HasUnsavedSettings() const { return settingsDirty; }
+	void RequestSettingsDirtyCheck() { settingsDirtyCheckRequested = true; }
+	void ResetSettingsDirtyState();
+	void AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName);
 
 	// Search bar state
 	std::string featureSearch;  // For left pane feature search
@@ -493,6 +497,14 @@ public:
 
 private:
 	Settings settings;
+	json settingsDirtyBaseline = json::object();
+	bool settingsDirtyBaselineInitialized = false;
+	bool settingsDirty = false;
+	bool settingsDirtyCheckRequested = false;
+
+	bool CaptureCurrentSettingsSnapshot(json& a_snapshot);
+	bool EnsureSettingsDirtyBaseline();
+	void UpdateSettingsDirtyState();
 
 	std::string cachedIniPath;  // io.IniFilename must point to a string that lives for the duration of the runtime
 

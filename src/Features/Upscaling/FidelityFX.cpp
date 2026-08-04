@@ -1018,6 +1018,17 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		logger::critical("[FidelityFX] Cannot create FSR resources with zero-sized render or display bounds.");
 		return LifecycleResult::Failed;
 	}
+	if (!globals::d3d::device) {
+		logger::error("[FidelityFX] Cannot create FSR resources without a D3D11 device.");
+		return LifecycleResult::Failed;
+	}
+	const HRESULT deviceStatus = globals::d3d::device->GetDeviceRemovedReason();
+	if (FAILED(deviceStatus)) {
+		logger::error(
+			"[FidelityFX] Refusing FSR resource creation after D3D11 device removal. reason=0x{:08X}",
+			static_cast<std::uint32_t>(deviceStatus));
+		return LifecycleResult::Failed;
+	}
 
 	if (fsrScratchBuffer || fsrContextCount != 0 || std::ranges::any_of(fsrContextValid, [](bool a_valid) { return a_valid; })) {
 		if (AreFSRResourcesCompatible(renderWidth, renderHeight, displayWidth, displayHeight, numContexts))
@@ -1102,13 +1113,31 @@ FidelityFX::LifecycleResult FidelityFX::CreateFSRResources()
 		contextDescription.flags = FFX_FSR3_ENABLE_UPSCALING_ONLY | FFX_FSR3_ENABLE_AUTO_EXPOSURE | FFX_FSR3_ENABLE_HIGH_DYNAMIC_RANGE;
 		contextDescription.backendInterfaceUpscaling = fsrInterface;
 
-		if (ffxFsr3ContextCreate(&fsrContext[i], &contextDescription) != FFX_OK) {
+		FfxErrorCode createResult = FFX_ERROR_BACKEND_API_ERROR;
+		try {
+			createResult = ffxFsr3ContextCreate(&fsrContext[i], &contextDescription);
+		} catch (const std::exception& e) {
+			logger::error("[FidelityFX] FSR3 context creation for eye {} threw an exception: {}", i, e.what());
+		} catch (...) {
+			logger::error("[FidelityFX] FSR3 context creation for eye {} threw an unknown exception.", i);
+		}
+		if (createResult != FFX_OK) {
 			logger::critical("[FidelityFX] Failed to initialize FSR3 context for eye {}!", i);
+			// A throwing backend does not provide the SDK's normal failed-create
+			// guarantee. Do not retain or retry an indeterminate context handle.
+			fsrContext[i] = {};
+			fsrContextValid[i] = false;
 			bool cleanupFailed = false;
 			for (uint32_t j = 0; j < i; ++j) {
 				if (!fsrContextValid[j])
 					continue;
-				if (ffxFsr3ContextDestroy(&fsrContext[j]) == FFX_OK) {
+				FfxErrorCode destroyResult = FFX_ERROR_BACKEND_API_ERROR;
+				try {
+					destroyResult = ffxFsr3ContextDestroy(&fsrContext[j]);
+				} catch (...) {
+					logger::error("[FidelityFX] FSR3 context cleanup for eye {} threw an exception.", j);
+				}
+				if (destroyResult == FFX_OK) {
 					fsrContext[j] = {};
 					fsrContextValid[j] = false;
 				} else {

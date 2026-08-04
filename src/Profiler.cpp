@@ -96,6 +96,13 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 	readFrame = 0;
 	framesSinceInit = 0;
 	frameActive = false;
+	resolvedTotalMs = 0.0f;
+	resolvedCpuTotalMs = 0.0f;
+	capturedFrameCount = 0;
+	acquiredSlotsThisFrame = 0;
+	acquiredSlots = 0;
+	peakAcquiredSlots = 0;
+	slotRefusals = 0;
 	initialized = true;
 	// Preserve the user's preference across renderer/device reinitialization.
 	captureRequested.store(false, std::memory_order_release);
@@ -118,6 +125,13 @@ void Profiler::Release()
 	completedCpuTimers.clear();
 	totalTimeMs = 0.0f;
 	cpuTotalTimeMs = 0.0f;
+	resolvedTotalMs = 0.0f;
+	resolvedCpuTotalMs = 0.0f;
+	capturedFrameCount = 0;
+	acquiredSlotsThisFrame = 0;
+	acquiredSlots = 0;
+	peakAcquiredSlots = 0;
+	slotRefusals = 0;
 	frameActive = false;
 	initialized = false;
 	context = nullptr;
@@ -152,6 +166,12 @@ void Profiler::ClearTimers()
 	completedCpuTimers.clear();
 	totalTimeMs = 0.0f;
 	cpuTotalTimeMs = 0.0f;
+	resolvedTotalMs = 0.0f;
+	resolvedCpuTotalMs = 0.0f;
+	capturedFrameCount = 0;
+	if (!frameActive)
+		acquiredSlotsThisFrame = 0;
+	acquiredSlots = 0;
 
 	ResetPendingFrames();
 }
@@ -202,6 +222,7 @@ void Profiler::BeginFrame()
 	ResetFrameState(frame);
 	frame.inFlight = true;
 	frameActive = true;
+	acquiredSlotsThisFrame = 0;
 	context->Begin(frame.disjoint.get());
 }
 
@@ -218,10 +239,13 @@ bool Profiler::BeginPass(std::string_view name)
 		return false;
 
 	auto& frame = frames[writeFrame];
-	if (frame.activeCount >= kMaxTimers)
+	if (frame.activeCount >= kMaxTimers) {
+		slotRefusals++;
 		return false;
+	}
 
 	const uint32_t timerIndex = frame.activeCount++;
+	acquiredSlotsThisFrame++;
 	auto& timer = frame.timers[timerIndex];
 	timer.name.assign(name);
 	timer.cpuMs = 0.0f;
@@ -305,7 +329,7 @@ void Profiler::EndCpuPass()
 	completedCpuTimers.push_back(std::move(completed));
 }
 
-void Profiler::EndFrame()
+void Profiler::EndFrame(uint32_t a_frameCount)
 {
 	if (!initialized || !context) {
 		captureRequested.store(false, std::memory_order_release);
@@ -349,11 +373,15 @@ void Profiler::EndFrame()
 	if (frameActive) {
 		frameActive = false;
 		context->End(frame.disjoint.get());
+		acquiredSlots = acquiredSlotsThisFrame;
+		peakAcquiredSlots = std::max(peakAcquiredSlots, acquiredSlotsThisFrame);
 	} else {
 		ResetFrameState(frame);
+		acquiredSlots = 0;
 	}
 
 	StoreCompletedCpuTimers(frame);
+	frame.capturedFrame = a_frameCount;
 
 	writeFrame = (writeFrame + 1) % kFrameLatency;
 	framesSinceInit++;
@@ -410,8 +438,10 @@ bool Profiler::CollectResults()
 				if (gpuValid) {
 					entry.gpuMs += gpuMs;
 					entry.hasGpu = true;
-					if (timer.depth == 0)
+					if (timer.depth == 0) {
 						activeTotalMs += gpuMs;
+						entry.topLevelMs += gpuMs;
+					}
 				}
 				if (cpuValid) {
 					entry.cpuMs += timer.cpuMs;
@@ -467,6 +497,9 @@ bool Profiler::CollectResults()
 
 	totalTimeMs = activeTotalMs;
 	cpuTotalTimeMs = activeCpuTotalMs;
+	resolvedTotalMs = activeTotalMs;
+	resolvedCpuTotalMs = activeCpuTotalMs;
+	capturedFrameCount = frame.capturedFrame;
 
 	RebuildResults(&activeTimers);
 	return true;
@@ -514,6 +547,7 @@ void Profiler::RebuildResults(const std::unordered_map<std::string, ActiveTimerD
 		if (activeTimer && activeTimer->hasGpu) {
 			result.activeGpu = true;
 			result.gpuTimeMs = activeTimer->gpuMs;
+			result.topLevelMs = activeTimer->topLevelMs;
 		} else {
 			result.gpuTimeMs = known.gpu.lastMs;
 		}

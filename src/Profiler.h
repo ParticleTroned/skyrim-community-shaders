@@ -42,6 +42,8 @@ public:
 	{
 		std::string name;
 		float gpuTimeMs = 0.0f;
+		// Portion of gpuTimeMs contributed by depth-0 intervals this cycle.
+		float topLevelMs = 0.0f;
 		float avgMs = 0.0f;
 		float p95Ms = 0.0f;
 		float p99Ms = 0.0f;
@@ -95,11 +97,17 @@ public:
 	void EndPass();
 	bool BeginCpuPass(std::string_view name);
 	void EndCpuPass();
-	void EndFrame();
+	void EndFrame(uint32_t a_frameCount);
 
 	const std::vector<TimerResult>& GetResults() const { return results; }
 	float GetTotalTimeMs() const { return totalTimeMs; }
 	float GetCpuTotalTimeMs() const { return cpuTotalTimeMs; }
+	float GetResolvedTotalTimeMs() const { return resolvedTotalMs; }
+	float GetResolvedCpuTotalTimeMs() const { return resolvedCpuTotalMs; }
+	uint32_t GetCapturedFrameCount() const { return capturedFrameCount; }
+	uint32_t GetAcquiredSlots() const { return acquiredSlots; }
+	uint32_t GetPeakAcquiredSlots() const { return peakAcquiredSlots; }
+	uint32_t GetSlotRefusals() const { return slotRefusals; }
 	void ClearTimers();
 	void ClearTimersForFeature(const std::string& featureName);
 
@@ -159,6 +167,7 @@ private:
 	struct ActiveTimerData
 	{
 		float gpuMs = 0.0f;
+		float topLevelMs = 0.0f;
 		float cpuMs = 0.0f;
 		bool hasGpu = false;
 		bool hasCpu = false;
@@ -188,6 +197,7 @@ private:
 		std::vector<CompletedCpuTimer> cpuTimers;
 		std::vector<uint32_t> activeTimerStack;
 		uint32_t activeCount = 0;
+		uint32_t capturedFrame = 0;
 		bool inFlight = false;
 	};
 
@@ -230,6 +240,14 @@ private:
 	std::vector<CompletedCpuTimer> completedCpuTimers;
 	float totalTimeMs = 0.0f;
 	float cpuTotalTimeMs = 0.0f;
+	// Resolve-consistent totals remain paired with results while live totals idle at zero.
+	float resolvedTotalMs = 0.0f;
+	float resolvedCpuTotalMs = 0.0f;
+	uint32_t capturedFrameCount = 0;
+	uint32_t acquiredSlotsThisFrame = 0;
+	uint32_t acquiredSlots = 0;
+	uint32_t peakAcquiredSlots = 0;
+	uint32_t slotRefusals = 0;
 
 	bool CollectResults();
 	KnownTimer& GetOrCreateTimer(const std::string& name);

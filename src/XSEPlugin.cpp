@@ -7,6 +7,7 @@
 #include "Hooks.h"
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
+#include "ProfilerDevBenchBridge.h"
 #include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -187,6 +188,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				ProfilerDevBenchBridge::Install();
 			}
 
 			break;

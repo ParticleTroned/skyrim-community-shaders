@@ -661,7 +661,7 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
-	globals::profiler->EndFrame();
+	globals::profiler->EndFrame(frameCount);
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();

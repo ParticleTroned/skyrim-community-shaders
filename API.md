@@ -1,10 +1,10 @@
-# Community Shaders SKSE API
+# Community Shaders Expanded (CSX) SKSE API
 
-This document explains how another SKSE plugin can talk to Community Shaders at runtime.
+This document explains how another SKSE plugin can talk to Community Shaders Expanded (CSX) at runtime.
 
 ## Audience
 
-This is for **consumer plugins** (mods that want to call into Community Shaders).
+This is for **consumer plugins** (mods that want to call into CSX).
 
 ## API Version
 
@@ -24,7 +24,7 @@ This is for **consumer plugins** (mods that want to call into Community Shaders)
 -   Target-aware VR transition-profile decisions that distinguish blocked, already-matched, and required applies
 -   Advisory VR transition fade timing constants for controllers that want to hide render-scale relatches behind a fade-to-black
 
-The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. `DLSSMode` remains a type alias for `UpscalePreset` so old enum values keep their numeric layout. DLSS profile control is DLSS-only. In VR, presets below native enable Render Scale Mode and Native AA/DLAA disables it. Render Scale Mode requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch. Legacy revision-1 upscaling calls keep DLSS-first behavior on DLSS-capable systems. Revision 2 adds method-explicit calls for controllers that must select FSR/FSR4 or otherwise distinguish DLSS from FSR/FSR4 instead of relying on legacy DLSS behavior. Revision 3 adds the strict global apply-safety query. Revision 4 adds the target-aware atomic-profile decision used to stage a door relatch early without releasing unrelated CS settings.
+The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. `DLSSMode` remains a type alias for `UpscalePreset` so old enum values keep their numeric layout. DLSS profile control is DLSS-only. In VR, presets below native enable Render Scale Mode and Native AA/DLAA disables it. Render Scale Mode requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch. Legacy revision-1 upscaling calls keep DLSS-first behavior on DLSS-capable systems. Revision 2 adds method-explicit calls for controllers that must select FSR/FSR4 or otherwise distinguish DLSS from FSR/FSR4 instead of relying on legacy DLSS behavior. Revision 3 adds the strict global apply-safety query. Revision 4 adds the target-aware atomic-profile decision used to stage a door relatch early without releasing unrelated CSX settings.
 
 ## Files You Need In The Consumer Mod
 
@@ -66,7 +66,7 @@ namespace
         if (msg->type == SKSE::MessagingInterface::kPostLoad) {
             g_csApi = CSPluginAPI::GetCSInterface001();
             if (!g_csApi) {
-                logger::warn("Community Shaders API unavailable");
+                logger::warn("CSX API unavailable");
             }
         }
     }
@@ -129,7 +129,7 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 
 -   `UpscaleMethod::kNone`
 -   `UpscaleMethod::kTAA`
--   `UpscaleMethod::kFSR` (covers FSR 3.1.5 and runtime FSR4; runtime FSR4 remains a CS-side runtime path choice)
+-   `UpscaleMethod::kFSR` (covers FSR 3.1.5 and runtime FSR4; runtime FSR4 remains a CSX-side runtime path choice)
 -   `UpscaleMethod::kDLSS`
 
 `VRUpscalingApplyBlockReason` bit values returned by `GetVRUpscalingApplyBlockReasons()`:
@@ -154,28 +154,28 @@ Advisory VR render-scale transition fade constants:
 -   `CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds = 6.0f`
 -   `CSVRRenderScaleTransitionFadeInSeconds = 1.0f`
 
-These constants do not control Community Shaders directly and do not change the ABI. They are timing guidance for transition controllers that call `Game.FadeOutGame` or an equivalent fade system.
+These constants do not control CSX directly and do not change the ABI. They are timing guidance for transition controllers that call `Game.FadeOutGame` or an equivalent fade system.
 
 ## Behavior Notes
 
 -   `SSS` means **Screen Space Shadows**, not Subsurface Scattering.
--   Setters change runtime state in Community Shaders.
+-   Setters change runtime state in CSX.
 -   `GetUpscalePreset`/`SetUpscalePreset` control the shared upscaler preset for DLSS, FSR 3.1.5, and runtime FSR4. These are renamed versions of the old `GetDLSSMode`/`SetDLSSMode` vtable slots, with the same return type size and parameter layout.
--   These presets are Community Shaders render-scale presets, not AMD FSR quality enum values. `Hoshipa` and `Ultra Quality` are valid for both DLSS and FSR/FSR4 because the backend receives explicit render and display sizes.
+-   These presets are CSX render-scale presets, not AMD FSR quality enum values. `Hoshipa` and `Ultra Quality` are valid for both DLSS and FSR/FSR4 because the backend receives explicit render and display sizes.
 -   DLSS profile control is DLSS-only and does **not** affect FSR 3.1.5 or FSR4.
 -   `SetRenderAtUpscaleResEnabled` is the legacy API name for changing the requested VR Render Scale Mode state. Enabling it from Native AA/DLAA promotes the shared preset to `Quality` so the render-scale state stays valid. `GetRenderAtUpscaleResActive` reports whether the Render Scale Mode render-target relatch is actually active.
 -   Render Scale Mode is only eligible in VR with DLSS/FSR upscaling presets below native scale. Selecting Native AA/DLAA disables Render Scale Mode and clears the relatch request.
--   `SetVRUpscalingTransitionProfile` is the legacy transition call. On DLSS-capable systems, it stages DLSS, Render Scale Mode, the shared render-scale preset, and the DLSS profile together so Community Shaders can apply one relatch. If DLSS is known unavailable, it falls back to the configured non-DLSS method. This preserves old `DLSSMode`/`DLSSProfile` caller expectations; FSR-specific callers should use the revision-2 method-specific call. During VR save/load safe mode, RaceSex startup, loading presentation windows, or pending relatches, external upscaling setters are blocked by the revision-3 safety mask and should be buffered by the caller.
--   `SetUpscaleMethod` selects the CS upscaler method explicitly while preserving the current preset, DLSS profile, and Render Scale Mode request where valid.
+-   `SetVRUpscalingTransitionProfile` is the legacy transition call. On DLSS-capable systems, it stages DLSS, Render Scale Mode, the shared render-scale preset, and the DLSS profile together so CSX can apply one relatch. If DLSS is known unavailable, it falls back to the configured non-DLSS method. This preserves old `DLSSMode`/`DLSSProfile` caller expectations; FSR-specific callers should use the revision-2 method-specific call. During VR save/load safe mode, RaceSex startup, loading presentation windows, or pending relatches, external upscaling setters are blocked by the revision-3 safety mask and should be buffered by the caller.
+-   `SetUpscaleMethod` selects the CSX upscaler method explicitly while preserving the current preset, DLSS profile, and Render Scale Mode request where valid.
 -   `SetVRUpscalingTransitionProfileForMethod` is the preferred revision-2 call for interior/exterior controllers that need deterministic DLSS/FSR behavior. It stages method, Render Scale Mode, shared preset, and DLSS profile together, so `DLSS + NativeAA + K` is unambiguously DLAA/K and `FSR + Hoshipa` is unambiguously FSR render scale. When active unconditional VR FPS Stabilizer Interior/Exterior profiles are available, the two atomic transition-profile calls accept the configured destination profile at either supported timing: before the cell type changes or during the destination-cell `LoadingMenu` handoff. Current-cell profile reassertions during ordinary gameplay remain ignored. Individual setters and consumers without active stabilizer profiles retain their existing behavior.
--   External VR transition controllers should call `GetVRUpscalingApplyBlockReasons()` or `IsVRUpscalingProfileApplyAllowed()` before applying ordinary CS changes; both revision-3 queries remain strictly blocked for every non-zero reason mask. Revision 4 / build 10 adds `GetVRUpscalingTransitionProfileDecision(...)` for the method-specific atomic upscaling profile only. It returns `kBlocked` when the caller must buffer and retry, `kNoChange` when settings and the physical render-scale contract already match (do not fade or call the setter), and `kApply` when the caller should start its existing door fade and immediately call `SetVRUpscalingTransitionProfileForMethod`. During a real in-game Stabilizer `LoadingMenu` handoff, this intent-specific preflight may stage the immutable destination profile while only soft loading/transition blockers remain; renderer mutation still waits until Skyrim releases loading-target ownership.
--   `kOpenCompositeUpscaling` means Open Composite owns the active upscaling path. Community Shaders remains locked to `None`, and callers must not retry an upscaling profile until the game has restarted without Open Composite upscaling.
+-   External VR transition controllers should call `GetVRUpscalingApplyBlockReasons()` or `IsVRUpscalingProfileApplyAllowed()` before applying ordinary CSX changes; both revision-3 queries remain strictly blocked for every non-zero reason mask. Revision 4 / build 10 adds `GetVRUpscalingTransitionProfileDecision(...)` for the method-specific atomic upscaling profile only. It returns `kBlocked` when the caller must buffer and retry, `kNoChange` when settings and the physical render-scale contract already match (do not fade or call the setter), and `kApply` when the caller should start its existing door fade and immediately call `SetVRUpscalingTransitionProfileForMethod`. During a real in-game Stabilizer `LoadingMenu` handoff, this intent-specific preflight may stage the immutable destination profile while only soft loading/transition blockers remain; renderer mutation still waits until Skyrim releases loading-target ownership.
+-   `kOpenCompositeUpscaling` means Open Composite owns the active upscaling path. CSX remains locked to `None`, and callers must not retry an upscaling profile until the game has restarted without Open Composite upscaling.
 -   The individual legacy `SetUpscalePreset`, `SetDLSSProfile`, and `SetRenderAtUpscaleResEnabled` setters use the same VR transition staging when called separately. `SetUpscalePreset` and `SetDLSSProfile` prefer DLSS on DLSS-capable systems for backwards compatibility with consumers built around the old DLSS naming.
--   `Game.FadeOutGame` does not pause Community Shaders or serialize D3D/vendor resource rebuilds; it only hides the transition visually. A revision-4 controller must make its target-aware decision before scheduling a fade. For `kNoChange`, schedule no fade and call no setter. For `kApply`, start the controller's one existing transition fade and synchronously call `SetVRUpscalingTransitionProfileForMethod` immediately on the same game thread—do not wait for the screen to become black or defer the setter to another frame. Community Shaders stages that immutable request but still defers physical renderer mutation until Skyrim releases loading-target ownership. Keep the screen black for at least `CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds` after the profile call or move, whichever is later, before fading back in. Legacy callers without revision 4 should apply only when the strict revision-3 gate allows it. The clean baseline measured normal render-target relatches around `1.3` to `1.7` seconds, while first-load profile mismatch correction has taken about `6` seconds from load close to fully corrected/stable state, so the `6.0` second black hold is the conservative recommendation.
+-   `Game.FadeOutGame` does not pause CSX or serialize D3D/vendor resource rebuilds; it only hides the transition visually. A revision-4 controller must make its target-aware decision before scheduling a fade. For `kNoChange`, schedule no fade and call no setter. For `kApply`, start the controller's one existing transition fade and synchronously call `SetVRUpscalingTransitionProfileForMethod` immediately on the same game thread—do not wait for the screen to become black or defer the setter to another frame. CSX stages that immutable request but still defers physical renderer mutation until Skyrim releases loading-target ownership. Keep the screen black for at least `CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds` after the profile call or move, whichever is later, before fading back in. Legacy callers without revision 4 should apply only when the strict revision-3 gate allows it. The clean baseline measured normal render-target relatches around `1.3` to `1.7` seconds, while first-load profile mismatch correction has taken about `6` seconds from load close to fully corrected/stable state, so the `6.0` second black hold is the conservative recommendation.
 -   New virtual methods must only be appended to the interface to preserve binary compatibility.
 -   VR DLSS keeps two viewport/resource slots for recent quality/profile combinations. Alternating between an exterior profile and an interior profile can reuse those slots instead of rebuilding DLSS every time.
 -   Reflex settings are not exposed by this API.
--   If the API pointer is null, Community Shaders is missing, too old, or not ready yet.
+-   If the API pointer is null, CSX is missing, too old, or not ready yet.
 -   Call from the main/game thread, or queue via SKSE task interface.
 
 ## Compatibility Guidance

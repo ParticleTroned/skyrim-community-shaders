@@ -391,19 +391,19 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	const char* actionText = "To go back, restore the previous cache and restart:";
 	if (cacheHeld) {
 		summaryText = "Saved shader cache cannot be used because a required feature is missing or failed to load.";
-		actionText = "Check CS menu > Feature Issues if available. Fix the feature install and restart to use the saved cache, or rebuild the cache for the current setup if the change was intentional:";
+		actionText = "Check CSX menu > Feature Issues if available. Fix the feature install and restart to use the saved cache, or rebuild the cache for the current setup if the change was intentional:";
 	} else if (featureChangeHeld) {
-		summaryText = "Your feature setup changed, but CS could not keep a usable previous cache for restore. CS is building shaders for this session and will rebuild the cache for the current setup when compilation finishes.";
+		summaryText = "Your feature setup changed, but CSX could not keep a usable previous cache for restore. CSX is building shaders for this session and will rebuild the cache for the current setup when compilation finishes.";
 		actionText = "Restore is unavailable because no usable previous cache was kept for this change. Let compilation finish to rebuild the cache for the current setup.";
 	} else if (featureSetChanged && featureSetCacheBackedUp) {
 		if (previousCacheAvailable) {
-			summaryText = "Your feature setup changed. CS saved the previous cache and is building a new cache for the current setup. You can restore the previous cache after compilation finishes.";
+			summaryText = "Your feature setup changed. CSX saved the previous cache and is building a new cache for the current setup. You can restore the previous cache after compilation finishes.";
 		} else {
-			summaryText = "Your feature setup changed. CS saved the previous cache and is building a new cache for the current setup. Restore availability will be verified after compilation finishes.";
-			actionText = "Let compilation finish so CS can verify the saved previous cache.";
+			summaryText = "Your feature setup changed. CSX saved the previous cache and is building a new cache for the current setup. Restore availability will be verified after compilation finishes.";
+			actionText = "Let compilation finish so CSX can verify the saved previous cache.";
 		}
 	} else if (featureSetChanged) {
-		summaryText = "Your feature setup changed. CS is building a new cache for the current setup. Previous cache is not available for restore.";
+		summaryText = "Your feature setup changed. CSX is building a new cache for the current setup. Previous cache is not available for restore.";
 		actionText = "Let compilation finish to rebuild the cache for the current setup.";
 	}
 
@@ -511,7 +511,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 
 	auto menu = Menu::GetSingleton();
 
-	// Render CS logo as background watermark with proper aspect ratio
+	// Render CSX logo as background watermark with proper aspect ratio
 	if (menu && menu->uiIcons.logo.texture) {
 		ImVec2 windowPos = ImGui::GetWindowPos();
 		ImVec2 windowSize = ImGui::GetWindowSize();
@@ -547,7 +547,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	float windowWidth = ImGui::GetWindowWidth();
 
 	// Welcome title - centered
-	const char* welcomeTitle = "Welcome to Community Shaders - Particle Lights (Unofficial Fork)!";
+	const char* welcomeTitle = "Welcome to Community Shaders Expanded (CSX) (Unofficial Fork)!";
 	float welcomeTitleWidth = ImGui::CalcTextSize(welcomeTitle).x;
 	ImGui::SetCursorPosX((windowWidth - welcomeTitleWidth) * 0.5f);
 	ImGui::Text("%s", welcomeTitle);
@@ -555,7 +555,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	ImGui::Spacing();
 
 	// Version text - wrapped and centered
-	const char* versionText = "This appears to be a new install, update, or reinstallation of Community Shaders.";
+	const char* versionText = "This appears to be a new install, update, or reinstallation of CSX.";
 	float textPadding = 40.0f * uiScale;  // Padding from window edges
 
 	// Use a centered region for wrapped text

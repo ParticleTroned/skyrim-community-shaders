@@ -24,7 +24,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// Modifications for Community Shaders:
+// Modifications for CSX:
 //   - Input changed from Texture2D to Texture2DArray to process all 6 cubemap faces in one dispatch
 //   - Output changed from RWTexture2D to RWTexture2DArray accordingly
 //   - cbuffer simplified to only fields needed for compression

@@ -89,7 +89,7 @@ hlslkit-generate-defines --log CommunityShaders.log
 hlslkit-buffer-scan --features-dir features/
 
 # Verify that a shader refactor preserved compiled bytecode
-# Defaults to merge-base(HEAD, current branch upstream); on this branch, origin/cs-1.6-PL-VR
+# Defaults to merge-base(HEAD, current branch upstream).
 pwsh tools/verify-shader-refactor.ps1 package/Shaders/ISTemporalAA.hlsl
 ```
 
@@ -161,7 +161,7 @@ cmake --install ./build/ALL --prefix <TARGET_DIR>  # installs files according to
 
 Notes and behaviour:
 
--   `Package-Core` collects everything marked as CORE and the built plugin into a temporary folder, then tars it to `dist/${PROJECT_NAME}-${UTC_NOW}.7z`.
+-   `Package-Core` collects everything marked as CORE and the built plugin into a temporary folder, then tars it to `dist/${CSX_PACKAGE_NAME}-${UTC_NOW}.7z`.
 -   `Package-<Feature>` targets are generated per feature directory (non-CORE features). They create `${FEATURE}-${UTC_NOW}.7z` in `dist/`.
 -   `Package-AIO-Manual` performs an install to the AIO folder and then creates a single AIO archive. This is similar to the automated `AIO_ZIP_PACKAGE`, but wired as an explicit file-producing custom target (useful for CI reproducibility).
 -   `AIO` target runs `cmake --install` with the `aio` prefix so you can locally inspect the AIO folder layout without creating an archive.

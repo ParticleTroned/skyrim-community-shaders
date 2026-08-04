@@ -13,13 +13,13 @@ These configuration files can be regenerated using the `generate-shader-configs.
 
 1. A valid Skyrim installation (SE and/or VR)
 2. The [hlslkit](https://github.com/alandtse/hlslkit) package installed (`pip install hlslkit`)
-3. Community Shaders to be run once with specific settings to generate the required log data
+3. CSX to be run once with specific settings to generate the required log data
 
 ### Prerequisites
 
-Before running the generation script, you must run each version of Skyrim (SE and VR) **once** with the following Community Shaders settings:
+Before running the generation script, you must run each version of Skyrim (SE and VR) **once** with the following CSX settings:
 
-1. **Set Debug Log Level**: In the Community Shaders menu, set the log level to "Debug" or "Trace"
+1. **Set Debug Log Level**: In the CSX menu, set the log level to "Debug" or "Trace"
 2. **Clear Disk Cache**: Clear the shader disk cache before running
 3. **Enable Disk Cache**: Ensure disk cache is enabled and will be saved
 4. **Run the Game**: Launch and wait for compilation to complete to generate shader compilation logs

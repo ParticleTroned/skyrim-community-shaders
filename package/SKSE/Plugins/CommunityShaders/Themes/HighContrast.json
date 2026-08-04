@@ -2,7 +2,7 @@
     "DisplayName": "High Contrast",
     "Description": "A high contrast theme for improved readability.",
     "Version": "1.0.0",
-    "Author": "Community Shaders Team",
+    "Author": "CSX Team",
     "Theme": {
         "FontSize": 27.0,
         "FontName": "Jost/Jost-Regular.ttf",

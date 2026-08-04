@@ -193,7 +193,7 @@ jobs:
               id: create_release
               uses: ncipollo/release-action@v1
               with:
-                  name: "Community Shaders ${{ steps.combined_notes.outputs.release_tag }}"
+                  name: "CSX ${{ steps.combined_notes.outputs.release_tag }}"
                   draft: true
                   omitDraftDuringUpdate: true
                   tag: ${{ steps.combined_notes.outputs.release_tag }}
@@ -218,7 +218,7 @@ jobs:
         uses: ./.github/workflows/nexus-upload.yaml
         with:
             tag: ${{ github.event.release.tag_name }}
-            artifact_pattern: "CommunityShaders-*.7z"
+            artifact_pattern: "CSX-*.7z"
             dry_run: "true"
         secrets:
             UNEX_NEXUSMODS_SESSION_COOKIE: ${{ secrets.UNEX_NEXUSMODS_SESSION_COOKIE }}

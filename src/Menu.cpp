@@ -869,7 +869,7 @@ void Menu::Init()
 }
 
 /**
- * @brief Main UI rendering coordinator for the Community Shaders menu
+ * @brief Main UI rendering coordinator for the CSX menu
  *
  * This method serves as the primary entry point for rendering the entire menu interface.
  * It handles window setup, docking configuration, and delegates rendering to specialized

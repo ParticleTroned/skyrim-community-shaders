@@ -1,17 +1,17 @@
-PL3.15-VR render-scale port notes
+CSX 3.15-VR render-scale port notes
 
 Rationale
 ---------
 This branch ports the useful VR render-scale pipeline from the Pre84/Pre145 line onto
-the 7940f114 PL3.14 base without carrying forward unrelated churn. The goal is a
-clean render-scale path that is stable during VRAPI transitions, keeps CS menu text
-sharp, and leaves the normal PL3.14 submit path untouched when render scale is off.
+the 7940f114 CSX 3.14 base without carrying forward unrelated churn. The goal is a
+clean render-scale path that is stable during VRAPI transitions, keeps CSX menu text
+sharp, and leaves the normal CSX 3.14 submit path untouched when render scale is off.
 
 Render scale and final submit are intentionally one pipeline. When presentation
 render-scale is inactive, the OpenVR submit hook falls through to the original
 compositor submit as before. There is no separate legacy submit replacement path.
 
-The CS UI behavior follows the Pre145 menu state: SteamVR and in-scene menu layout,
+The CSX UI behavior follows the Pre145 menu state: SteamVR and in-scene menu layout,
 controller interaction, HMD/controller overlay sizing, dock controls, and menu input
 reset behavior are kept. The Pre144/Pre145 menu text jitter fix is included through
 the final overlay dimension split and stable menu submit behavior, without carrying

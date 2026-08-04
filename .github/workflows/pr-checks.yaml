@@ -217,7 +217,7 @@ jobs:
               if: steps.gen_notes.outputs.notes_generated == 'true'
               uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
               with:
-                  name: "Community Shaders ${{ needs.build.outputs.version }} PR #${{ github.event.pull_request.number }}"
+                  name: "CSX ${{ needs.build.outputs.version }} PR #${{ github.event.pull_request.number }}"
                   tag: v${{ needs.build.outputs.version }}-pr${{ github.event.pull_request.number }}
                   # Anchor the preview tag to the PR head, not the merge commit,
                   # so the tag stays outside dev's history. A PR that
@@ -226,7 +226,7 @@ jobs:
                   # semantic-release's floor for every RC cut from dev.
                   commit: ${{ github.event.pull_request.head.sha }}
                   prerelease: true
-                  artifacts: "${{ github.workspace }}/dist/CommunityShaders_AIO-*.7z"
+                  artifacts: "${{ github.workspace }}/dist/CSX_AIO-*.7z"
                   bodyFile: release-notes.md
                   allowUpdates: true
                   replacesArtifacts: true
@@ -236,13 +236,13 @@ jobs:
               if: steps.gen_notes.outputs.notes_generated != 'true'
               uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
               with:
-                  name: "Community Shaders ${{ needs.build.outputs.version }} PR #${{ github.event.pull_request.number }}"
+                  name: "CSX ${{ needs.build.outputs.version }} PR #${{ github.event.pull_request.number }}"
                   tag: v${{ needs.build.outputs.version }}-pr${{ github.event.pull_request.number }}
                   # Anchor to the PR head, not the base tip — see the custom-notes
                   # step above for why dev-reachable preview tags break releases.
                   commit: ${{ github.event.pull_request.head.sha }}
                   prerelease: true
-                  artifacts: "${{ github.workspace }}/dist/CommunityShaders_AIO-*.7z"
+                  artifacts: "${{ github.workspace }}/dist/CSX_AIO-*.7z"
                   generateReleaseNotes: true
                   allowUpdates: true
                   replacesArtifacts: true

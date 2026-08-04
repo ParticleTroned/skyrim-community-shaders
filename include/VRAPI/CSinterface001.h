@@ -17,12 +17,12 @@ namespace CSPluginAPI
 	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision004;
 	// Guidance for VR transition controllers that hide render-scale relatches
 	// behind a game fade. These constants are advisory only and do not change
-	// the ABI; Community Shaders does not drive Game.FadeOutGame itself.
+	// the ABI; CSX does not drive Game.FadeOutGame itself.
 	inline constexpr float CSVRRenderScaleTransitionFadeOutSeconds = 1.0f;
 	inline constexpr float CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds = 6.0f;
 	inline constexpr float CSVRRenderScaleTransitionFadeInSeconds = 1.0f;
 
-	// A message used to fetch Community Shaders' interface.
+	// A message used to fetch CSX' interface.
 	struct CSMessage
 	{
 		enum : uint32_t
@@ -87,7 +87,7 @@ namespace CSPluginAPI
 		kApply = 2
 	};
 
-	// This object provides access to Community Shaders' mod support API.
+	// This object provides access to CSX' mod support API.
 	struct ICSInterface001
 	{
 		// ABI note: keep virtual methods append-only. Inserting new virtuals before
@@ -115,7 +115,7 @@ namespace CSPluginAPI
 		virtual DLSSProfile GetDLSSProfile() = 0;
 		virtual void SetDLSSProfile(DLSSProfile profile) = 0;
 
-		// VR only. Legacy compatibility names for Community Shaders' Render Scale Mode request.
+		// VR only. Legacy compatibility names for CSX' Render Scale Mode request.
 		// Runtime activation can require a render-target relatch during a loading transition.
 		virtual bool GetRenderAtUpscaleResEnabled() = 0;
 		virtual void SetRenderAtUpscaleResEnabled(bool enabled) = 0;
@@ -132,7 +132,7 @@ namespace CSPluginAPI
 		virtual void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
 
 		// Revision 2. Explicit upscaler method control for callers that must
-		// distinguish DLSS from FSR/FSR4 instead of relying on current CS settings.
+		// distinguish DLSS from FSR/FSR4 instead of relying on current CSX settings.
 		virtual UpscaleMethod GetUpscaleMethod() = 0;
 		virtual void SetUpscaleMethod(UpscaleMethod method) = 0;
 		virtual void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
@@ -148,7 +148,7 @@ namespace CSPluginAPI
 		// Revision 4 / build 10. Intent-specific preflight for the method-specific
 		// atomic profile call. Unlike the revision-3 global gate, this may admit a
 		// destination profile during a real Stabilizer LoadingMenu handoff without
-		// authorizing unrelated CS setters. kNoChange means both settings and the
+		// authorizing unrelated CSX setters. kNoChange means both settings and the
 		// physical render-scale contract already match, so the caller must not
 		// schedule a fade or invoke the setter. kApply means schedule the existing
 		// door fade and immediately call SetVRUpscalingTransitionProfileForMethod.

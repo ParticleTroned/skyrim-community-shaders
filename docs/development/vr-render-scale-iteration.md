@@ -1,17 +1,17 @@
 # VR render-scale iteration records
 
-The VR render-scale controller can capture a bounded CS-menu stress session and write a versioned JSON record for an MCP/Ghidra optimization loop. The capture observes user-driven changes; it never changes render-scale settings itself.
+The VR render-scale controller can capture a bounded CSX-menu stress session and write a versioned JSON record for an MCP/Ghidra optimization loop. The capture observes user-driven changes; it never changes render-scale settings itself.
 
 ## Capture workflow
 
-1. Enable Community Shaders developer mode.
+1. Enable CSX developer mode.
 2. Open **Upscaling > Render Pipeline > Render Scale Stress Capture**.
 3. Select **Start Capture**.
 4. Exercise the same fixed scenario for every candidate build. At minimum, perform two render-scale changes. Include repeated preset changes and a fast-travel cycle when evaluating memory recovery.
 5. Wait for the final change to reach a stable in-world presentation, then select **Stop Capture**.
 6. Read the new record from `Data/SKSE/Plugins/CommunityShaders/Diagnostics/VRRenderScale/`.
 
-Use identical save, location, CS profile, change order, dwell frames, HMD resolution, backend, and graphics settings when comparing iterations. Prioritize the production workload in this order: repeated same-backend resolution changes (for example Hoshipa/Quality), DLSS/DLAA and FSR/Native-AA activation changes, then a fixed-profile DLSS/FSR alternating series as a lower-priority backend-handoff stress oracle. Run each matrix as a separate capture so exact-profile memory grouping remains attributable.
+Use identical save, location, CSX profile, change order, dwell frames, HMD resolution, backend, and graphics settings when comparing iterations. Prioritize the production workload in this order: repeated same-backend resolution changes (for example Hoshipa/Quality), DLSS/DLAA and FSR/Native-AA activation changes, then a fixed-profile DLSS/FSR alternating series as a lower-priority backend-handoff stress oracle. Run each matrix as a separate capture so exact-profile memory grouping remains attributable.
 
 ## DevBench automation
 
@@ -29,7 +29,7 @@ The registered tool is `communityshaders.renderscale`:
 -   `record` returns the complete schema-v9 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
--   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
+-   `apply` uses the same latest-wins transition entrypoint as a CSX-menu change.
     It requires `method` (`dlss` or `fsr`), `enabled`, `qualityMode`, and an
     optional `dlssPreset`;
 -   `stop` stops the capture, writes the disk artifact, and returns the complete
@@ -81,7 +81,7 @@ without changing it. Each record
 correlates the sampled luminance grid with QPC/frame time, OpenVR submit path
 and result, texture identity/format/bounds, loading and destination-world
 frames, Stabilizer synchronization state, render-scale presentation path, and
-the CS HMD hidden-area-mask clear decision. `predominantlyWhite` marks a broad
+the CSX HMD hidden-area-mask clear decision. `predominantlyWhite` marks a broad
 white submitted texture. `hamWhitePattern` also recognizes a spatially uniform
 bright or lavender perimeter around a substantially darker center, so the
 engine's approximately 0.82-luminance startup clear cannot evade the strict
@@ -97,7 +97,7 @@ requesting `probe_record`. The 4,096-record ring retains about 22 seconds at
 reported explicitly. If the HMD flashes white but the retained submitted
 textures do not, correlate the QPC interval with a SteamVR mirror recording:
 that result places the artifact after the application texture boundary, in an
-OpenVR/compositor layer rather than the CS presentation texture.
+OpenVR/compositor layer rather than the CSX presentation texture.
 
 Step 18 calibrates the acceptance contract against the first live MCP rapid-
 switch baseline. A request that reuses the already-active physical contract can
@@ -109,7 +109,7 @@ and stop events carry zero transition counters rather than inheriting metrics
 from work outside the capture boundary.
 
 Step 19 closes the logical-versus-physical convergence gap found by the first
-RC97 MCP preflight. An unchanged active CS-menu profile is synchronous only when
+RC97 MCP preflight. An unchanged active CSX-menu profile is synchronous only when
 the boot latch, quality, exact backend generation, backend resources, and common
 vendor textures are all present. If that contract is incomplete and no recovery
 is already in flight, the request enters the normal latest-wins controller and
@@ -125,7 +125,7 @@ continues to reject genuine teardown faults while allowing expected asynchronous
 GPU drain polling during DLSS/FSR handoffs and post-load recovery.
 
 Step 21 bounds repeated backend-switch allocation churn. During an ordinary
-CS-menu relatch at the same dimensions and `Normal` memory pressure, compatible
+CSX-menu relatch at the same dimensions and `Normal` memory pressure, compatible
 inactive host-FSR and DLSS runtime resources remain resident and are reused when
 that backend becomes active again. Recovery, post-load, resize, pending-reset,
 device-loss, non-`Normal` pressure, and runtime-FSR paths retain the existing
@@ -133,7 +133,7 @@ teardown behavior. The relatch plan records warm retention and target reuse so
 automation can distinguish deliberate residency from missed teardown.
 
 Vendor dimension compatibility is independent of full D3D target readiness. A
-same-dimension CS-menu handoff may reuse the physical target layout when its
+same-dimension CSX-menu handoff may reuse the physical target layout when its
 always-resident anchors and every currently resident optional target still have
 the expected dimensions, and the previous contract has complete, exact both-eye
 fidelity evidence. This stable-contract fallback avoids treating an absent lazy
@@ -167,13 +167,13 @@ Live Skyrim VR decompilation for Step 21 shows that the common
 `BSShaderRenderTargets::Create` path repopulates the full engine target table;
 only one special target is explicitly released by that top-level routine before
 the table is rebuilt. Runtime captures then showed the same approximately
-1.55-GiB repeated-profile growth for DLSS and FSR, with CS retirement fully
+1.55-GiB repeated-profile growth for DLSS and FSR, with CSX retirement fully
 drained and the allocation returning naturally after a long idle. This is
 treated as deferred D3D/DXGI residency rather than backend-owned leakage.
 
-After the second distinct rapid CS-menu relatch, and after every further
+After the second distinct rapid CSX-menu relatch, and after every further
 distinct relatch within the 1,800-frame window, the controller now retires
-transient CS resources and arms a common-target memory trim. Pressure,
+transient CSX resources and arms a common-target memory trim. Pressure,
 post-load, and low-peak native restores arm the same recovery independently of
 the rapid-switch count. The trim is placed behind a D3D11 event query and is
 polled without blocking; `IDXGIDevice3::Trim` runs only after the GPU crosses
@@ -208,7 +208,7 @@ GPU-fenced post-recreate trim remains the final destruction barrier. Offered
 resources are never reclaimed or reused.
 
 This pre-drain runs only for rapid relatches, native restores, pressure, and
-post-load recovery. An isolated ordinary CS-menu change keeps the original fast
+post-load recovery. An isolated ordinary CSX-menu change keeps the original fast
 path. Status and schema-v3 records expose pre-recreate drain counts, failures,
 the last offered resource count, and whether decommit was used. The
 `common_target_predrain` gate rejects an unavailable offer during a captured
@@ -232,7 +232,7 @@ that each active FSR resize destroyed and recreated two host contexts even
 though those contexts were already allocated to the full per-eye display
 extent.
 
-An ordinary CS-menu transition may now preserve those host contexts when the
+An ordinary CSX-menu transition may now preserve those host contexts when the
 previous boot contract still identifies FSR, the SDK compatibility check covers the target
 render and display extents, memory pressure is `Normal`, and no runtime
 upscaler, pending reset, post-load recovery, device loss, or recovery-owned
@@ -256,7 +256,7 @@ relatches again had zero failures, OOMs, device loss, retries, or both-eye
 fidelity mismatches, and the compatible host context was preserved. However,
 the final two samples of each exact profile still grew by approximately
 1.37--1.40 GiB. Usage remained at approximately 10.79 GiB (11.58 GB) for a full minute
-with no pending CS retirement and with the fenced trim completed. The remaining
+with no pending CSX retirement and with the fenced trim completed. The remaining
 churn was therefore below the context layer: rapid cleanup and vendor reset
 retired the per-eye textures submitted to the preserved context, while
 `EnsureVRIntermediateTextures` recreated them for each contract generation.
@@ -264,7 +264,7 @@ retired the per-eye textures submitted to the preserved context, while
 All FSR submit inputs are now allocated to stable full-display per-eye bounds.
 The host and runtime APIs continue receiving the exact active render and
 upscale rectangles for every dispatch, so Hoshipa, Quality, and other profiles
-do not change their effective fidelity. Compatible CS-menu relatches preserve
+do not change their effective fidelity. Compatible CSX-menu relatches preserve
 the full-eye and foveated-center FSR input identities while still invalidating
 frame, foveated-layout, periphery-TAA, menu-composite, and temporal history.
 Engine render targets and size-dependent common textures continue to rebuild.

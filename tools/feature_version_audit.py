@@ -1090,7 +1090,7 @@ def generate_audit_report(
     return output
 
 def main():
-    parser = argparse.ArgumentParser(description="Feature version audit for Skyrim Community Shaders.")
+    parser = argparse.ArgumentParser(description="Feature version audit for Community Shaders Expanded (CSX).")
     parser.add_argument('--output', type=str, help='Output markdown filename')
     parser.add_argument('--ci', action='store_true', help='Exit 1 if actionable items found (alias for --fail-on-actionable)')
     parser.add_argument('--base', type=str, default=None, help='Base tag/branch/commit to compare against')
@@ -1103,8 +1103,8 @@ def main():
     parser.add_argument('--nexus-metadata-file', type=str, help='Optional Nexus metadata JSON file exported from nexus_mods_api')
     parser.add_argument('--all-features', action='store_true', help='Include all Nexus-capable features in export, not just version-changed ones')
     parser.add_argument('--core-mod-id', type=str, default='86492', help='Core Nexus mod ID for the generated upload matrix')
-    parser.add_argument('--core-filename', type=str, default='Community Shaders', help='Core Nexus filename for the generated upload matrix')
-    parser.add_argument('--core-artifact-pattern', type=str, default='CommunityShaders-*.7z', help='Core artifact pattern for the generated upload matrix')
+    parser.add_argument('--core-filename', type=str, default='Community Shaders Expanded (CSX)', help='Core Nexus filename for the generated upload matrix')
+    parser.add_argument('--core-artifact-pattern', type=str, default='CSX-*.7z', help='Core artifact pattern for the generated upload matrix')
     args = parser.parse_args()
 
     global HEAD_REF

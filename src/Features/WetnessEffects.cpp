@@ -866,7 +866,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 					}
 
 					// Apply the same fade-in/fade-out thresholds the game uses in
-					// Sky::IsRaining() to prevent CS effects appearing before the
+					// Sky::IsRaining() to prevent CSX effects appearing before the
 					// game's own rain particles become visible, with a smooth ramp
 					// from the threshold to full intensity.
 					float currentWeight = 0.0f;

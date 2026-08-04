@@ -1,19 +1,19 @@
 # Prebuilt Shader Cache Runbook
 
 This is the authoritative maintainer and AI-agent procedure for building,
-updating, validating, and shipping Community Shaders' prebuilt shader cache.
+updating, validating, and shipping CSX' prebuilt shader cache.
 Use `tools/build-shader-cache.py`; do not assemble cache blobs or metadata by
 hand.
 
 ## Purpose and scope
 
-The cache distributes compiled DXBC for Community Shaders' engine-managed
+The cache distributes compiled DXBC for CSX' engine-managed
 pixel, vertex, and compute shader permutations. It is not a GPU-driver cache,
 so it is not tied to a particular GPU vendor. It is tied to all of the
 following:
 
 -   the SE or VR runtime;
--   the exact Community Shaders plugin version;
+-   the exact CSX plugin version;
 -   installed feature versions and enabled states;
 -   the shipped shader source and recursive includes;
 -   compiler flags and custom shader defines;
@@ -131,7 +131,7 @@ if ($status) {
 }
 
 git rev-parse HEAD
-Select-String -Path CMakePresets.json -Pattern "CS_PL_FORK_VERSION"
+Select-String -Path CMakePresets.json -Pattern "CSX_VERSION"
 ```
 
 Run the feature-version audit before compiling. Shader or include changes
@@ -252,7 +252,7 @@ For one runtime:
 ```powershell
 & $cachePython tools/build-shader-cache.py `
     --runtime SE `
-    --plugin-version "PLx.y-SE" `
+    --plugin-version "CSX 3.15-SE" `
     --package `
     --package-label "v1.7.0"
 ```
@@ -262,8 +262,8 @@ For both runtimes:
 ```powershell
 & $cachePython tools/build-shader-cache.py `
     --runtime both `
-    --plugin-version-se "PLx.y-SE" `
-    --plugin-version-vr "PLx.y-VR" `
+    --plugin-version-se "CSX 3.15-SE" `
+    --plugin-version-vr "CSX 3.18-VR" `
     --package `
     --package-label "v1.7.0"
 ```
@@ -335,7 +335,7 @@ one commit with shader source or a DLL from another commit.
 
 For a smoke test, use a clean mod-manager profile, move any existing
 `ShaderCache` aside so it can be restored, install the matching artifact, and
-start the matching runtime. Check the Community Shaders log for cache
+start the matching runtime. Check the CSX runtime log (`CommunityShaders.log`) for cache
 validation/invalidation and unexpected compilation. Test both runtimes before
 publishing a two-runtime release.
 
@@ -414,7 +414,7 @@ check to a warning.
 
 ## Updating the plugin version
 
-1. Update the appropriate `CS_PL_FORK_VERSION` values in
+1. Update the appropriate `CSX_VERSION` values in
    `CMakePresets.json`.
 2. Confirm the compiled plugin's `Plugin::VERSION_LABEL` will be identical.
 3. Rebuild the caches; do not reuse archives whose `Info.ini` has the previous

@@ -9,7 +9,7 @@ Loading, and Loading's close tail so reduced dynamic viewport state cannot stamp
 those phases into the top-left of the native framebuffer. The preceding hybrid
 correctness/robustness/DRY and Info-level diagnostic-cost audit is included.
 
-Branch: `cs-1.7-PL-VR`
+Branch: current CSX VR branch
 
 Implementation base reviewed: `bceaaff95b0248ff8339afbfeaf01bd6a4f73c13`
 
@@ -1056,9 +1056,9 @@ The crash report records:
     `racemenubase.OnMenuReinitialized()`;
 -   `skeletonbeast.nif` as the first relevant object;
 -   PapyrusTweaks in the probable call stack;
--   no Community Shaders frame in the probable or scanned call stack.
+-   no CSX frame in the probable or scanned call stack.
 
-Community Shaders is loaded, but the renderer trace reports no fault and
+CSX is loaded, but the renderer trace reports no fault and
 finishes its final recorded frame normally. This does not prove the crash's
 root cause or rule out prior memory corruption. It does show no direct evidence
 of a CS menu-rendering failure at the crash site, while the immediate stack
@@ -1417,7 +1417,7 @@ session rearmed.
 
 The committed layer is reused while its presentation contract remains current.
 Menu open/close events invalidate the previous context before a replacement is
-built. Runtime-plan generation changes, final context end, Community Shaders
+built. Runtime-plan generation changes, final context end, CSX
 overlay ownership, device loss, resource rebuild, or an incompatible layer
 descriptor also invalidate it.
 
@@ -1795,7 +1795,7 @@ their existing dynamic-resolution behavior.
 -   A menu open/close event updates an already-initialized same-frame transaction;
     mixed-context work is poisoned instead of being published. Loading resets its
     tracking state before the new presentation tail is armed.
--   Opening the Community Shaders overlay invalidates a retained game-menu layer.
+-   Opening the CSX overlay invalidates a retained game-menu layer.
     An untouched same-frame requirement is released, while captured or active
     game-menu work remains fail-closed.
 -   Resource reset clears the active transaction, layer-frame identity, dormant

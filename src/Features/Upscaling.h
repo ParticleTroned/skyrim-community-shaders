@@ -103,7 +103,7 @@ public:
 	enum class VRUpscalingTransitionOrigin : uint8_t
 	{
 		CSMenu,
-		VRAPI,  // Legacy external API entrypoints remain separate from direct CS menu changes.
+		VRAPI,  // Legacy external API entrypoints remain separate from direct CSX menu changes.
 		RecoveryRelatch,
 		PostLoadSync
 	};
@@ -207,7 +207,7 @@ public:
 
 	Settings settings;
 
-	/** @brief One unconditional Interior or Exterior Community Shaders profile from VRFpsStabilizer.ini. */
+	/** @brief One unconditional Interior or Exterior CSX profile from VRFpsStabilizer.ini. */
 	struct VRFpsStabilizerProfile
 	{
 		bool hasUpscaleMethod = false;
@@ -235,7 +235,7 @@ public:
 			return hasUpscaleMethod || hasLegacyMethodSelection || hasQualityMode || hasDLSSPreset || hasRenderScaleMode;
 		}
 
-		/** @return True when the INI supplied any recognized direct CS feature setting for this profile. */
+		/** @return True when the INI supplied any recognized direct CSX feature setting for this profile. */
 		[[nodiscard]] bool HasAnyFeatureSetting() const
 		{
 			return hasScreenSpaceShadows || hasScreenSpaceGI || hasVolumetricLightingExterior || hasContactShadows;
@@ -253,7 +253,7 @@ public:
 			return (hasUpscaleMethod || hasLegacyMethodSelection) && hasQualityMode && hasDLSSPreset && hasRenderScaleMode;
 		}
 
-		/** @return True when the profile contains every canonical editable direct CS feature setting. */
+		/** @return True when the profile contains every canonical editable direct CSX feature setting. */
 		[[nodiscard]] bool HasCompleteFeatureSettings() const
 		{
 			return hasScreenSpaceShadows && hasScreenSpaceGI && hasVolumetricLightingExterior && hasContactShadows;
@@ -2348,7 +2348,7 @@ public:
 	// Module availability methods
 	bool HasFrameGenModule() const;
 
-	/** @brief Loads and resolves the unconditional Interior/Exterior CS rows from VRFpsStabilizer.ini. */
+	/** @brief Loads and resolves the unconditional Interior/Exterior CSX rows from VRFpsStabilizer.ini. */
 	bool LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::string& a_error) const;
 	/** @brief Persists the editable stabilizer profile while preserving unrelated INI content. */
 	bool SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const;

@@ -405,9 +405,9 @@ constexpr int kOverlayHeight = VR::Config::kOverlayHeight;
 constexpr int kHMDOverlayWidth = VR::Config::kHMDOverlayWidth;
 constexpr int kHMDOverlayHeight = VR::Config::kHMDOverlayHeight;
 constexpr const char* kMenuOverlayKey = "communityshaders.menu";
-constexpr const char* kMenuOverlayName = "Community Shaders Menu";
+constexpr const char* kMenuOverlayName = "CSX Menu";
 constexpr const char* kControllerOverlayKey = "communityshaders.menu.controller";
-constexpr const char* kControllerOverlayName = "Community Shaders Menu (Controller)";
+constexpr const char* kControllerOverlayName = "CSX Menu (Controller)";
 constexpr float kLegacyDefaultHMDOffsetZ = -0.41f;
 constexpr float kPreviousDefaultHMDOffsetZ = -0.5125f;
 constexpr float kCurrentDefaultHMDOffsetZ = -1.025f;
@@ -690,7 +690,7 @@ void VR::SetupResources()
 
 		if (!openVRInfo.isCompatible) {
 			logger::info("Required OpenVR system/compositor interfaces are unavailable.");
-			logger::info("Community Shaders VR menus will be disabled for stability");
+			logger::info("CSX VR menus will be disabled for stability");
 		}
 	} else {
 		logger::info("OpenVR DLL not available in current process");
@@ -1015,18 +1015,18 @@ void VR::DrawOverlay()
 	ImGui::SetNextWindowBgAlpha(0.92f);
 
 	ImGui::Begin("HowToUseOverlay", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-	ImGui::TextUnformatted("How to Use VR Community Shaders:");
+	ImGui::TextUnformatted("How to Use VR CSX:");
 	ImGui::Separator();
 	if (CanOpenMenuFromWorld()) {
-		ImGui::TextWrapped("With the current SteamVR overlay path, CS settings bindings work during gameplay and menus.");
+		ImGui::TextWrapped("With the current SteamVR overlay path, CSX settings bindings work during gameplay and menus.");
 	} else {
-		ImGui::TextWrapped("Open the Skyrim Main Menu or Tween Menu before using the CS settings bindings.");
+		ImGui::TextWrapped("Open the Skyrim Main Menu or Tween Menu before using the CSX settings bindings.");
 	}
 	ImGui::Spacing();
-	ImGui::TextUnformatted("Open CS Settings:");
+	ImGui::TextUnformatted("Open CSX Settings:");
 	ImGui::SameLine();
 	Util::DrawButtonCombo(settings.VRMenuOpenKeys, true);
-	ImGui::TextUnformatted("Close CS Settings:");
+	ImGui::TextUnformatted("Close CSX Settings:");
 	ImGui::SameLine();
 	Util::DrawButtonCombo(settings.VRMenuCloseKeys, true);
 	ImGui::Spacing();
@@ -1897,7 +1897,7 @@ namespace
 			return;
 
 		auto& settings = vr.settings;
-		ImGui::SeparatorText("CS Menu Navigation");
+		ImGui::SeparatorText("CSX Menu Navigation");
 
 		const bool effectiveWandNavigation = vr.CanUseWandPointing();
 		auto setWandNavigation = [&](bool a_enabled) {
@@ -1914,7 +1914,7 @@ namespace
 			setWandNavigation(false);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Use thumbstick-driven cursor navigation for the CS menu.");
+			ImGui::TextUnformatted("Use thumbstick-driven cursor navigation for the CSX menu.");
 		}
 
 		ImGui::SameLine();
@@ -1924,7 +1924,7 @@ namespace
 			setWandNavigation(true);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Use controller ray-cast pointing for the CS menu.");
+			ImGui::TextUnformatted("Use controller ray-cast pointing for the CSX menu.");
 		}
 	}
 
@@ -1943,19 +1943,19 @@ namespace
 		}
 
 		if (vr.CanOpenMenuFromWorld()) {
-			ImGui::TextWrapped("CS settings menu (available during gameplay and menus with the current SteamVR overlay path):");
+			ImGui::TextWrapped("CSX settings menu (available during gameplay and menus with the current SteamVR overlay path):");
 		} else {
-			ImGui::TextWrapped("CS settings menu (open from the Skyrim Main Menu or Tween Menu):");
+			ImGui::TextWrapped("CSX settings menu (open from the Skyrim Main Menu or Tween Menu):");
 		}
 		if (ImGui::BeginTable("MenuInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
-			ImGui::Text("Open Community Shaders Menu:");
+			ImGui::Text("Open CSX Menu:");
 			ImGui::TableSetColumnIndex(1);
 			Util::DrawButtonCombo(settings.VRMenuOpenKeys, true);
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
-			ImGui::Text("Close Community Shaders Menu:");
+			ImGui::Text("Close CSX Menu:");
 			ImGui::TableSetColumnIndex(1);
 			Util::DrawButtonCombo(settings.VRMenuCloseKeys, true);
 			ImGui::EndTable();
@@ -2095,7 +2095,7 @@ namespace
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("While the CS menu is open in VR, keep the game window centered, foregrounded, and above other desktop windows.");
+			ImGui::Text("While the CSX menu is open in VR, keep the game window centered, foregrounded, and above other desktop windows.");
 			ImGui::Text("Only applies when Attach Mode presents the menu in VR.");
 			ImGui::Text("Disable this to move the game window aside or use other desktop applications while the menu stays open.");
 		}
@@ -2234,14 +2234,14 @@ namespace
 			ImGui::SliderFloat("Mouse Deadzone", &settings.mouseDeadzone, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (vr.CanUseWandPointing()) {
-					ImGui::TextUnformatted("Thumbstick deadzone for CS menu scrolling while Wand Navigation is active.");
+					ImGui::TextUnformatted("Thumbstick deadzone for CSX menu scrolling while Wand Navigation is active.");
 				} else {
-					ImGui::TextUnformatted("Thumbstick deadzone for CS menu cursor movement and scrolling while Mouse Navigation is active.");
+					ImGui::TextUnformatted("Thumbstick deadzone for CSX menu cursor movement and scrolling while Mouse Navigation is active.");
 				}
 			}
 			ImGui::SliderFloat("Mouse Speed", &settings.mouseSpeed, 0.1f, 50.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Speed multiplier for CS menu cursor movement while Mouse Navigation is active.");
+				ImGui::TextUnformatted("Speed multiplier for CSX menu cursor movement while Mouse Navigation is active.");
 			}
 		}
 	}
@@ -2779,8 +2779,8 @@ namespace
 			const char* description;
 		};
 		const std::array<VRKeyBindingConfig, 4> keyBindingConfigs = {
-			VRKeyBindingConfig{ "Open Community Shaders Menu", &settings.VRMenuOpenKeys, VR::ComboType::MenuOpen, "Open CS settings from Main or Tween; also during gameplay with the SteamVR overlay path." },
-			VRKeyBindingConfig{ "Close Community Shaders Menu", &settings.VRMenuCloseKeys, VR::ComboType::MenuClose, "Close CS settings while its VR menu session is open." },
+			VRKeyBindingConfig{ "Open CSX Menu", &settings.VRMenuOpenKeys, VR::ComboType::MenuOpen, "Open CSX settings from Main or Tween; also during gameplay with the SteamVR overlay path." },
+			VRKeyBindingConfig{ "Close CSX Menu", &settings.VRMenuCloseKeys, VR::ComboType::MenuClose, "Close CSX settings while its VR menu session is open." },
 			VRKeyBindingConfig{ "Show Performance Overlay", &settings.VROverlayOpenKeys, VR::ComboType::OverlayOpen, "Show the standalone performance panel during gameplay or menus." },
 			VRKeyBindingConfig{ "Hide Performance Overlay", &settings.VROverlayCloseKeys, VR::ComboType::OverlayClose, "Hide the standalone performance panel during gameplay or menus." }
 		};
@@ -2789,11 +2789,11 @@ namespace
 			comboTypes[i] = keyBindingConfigs[i].label;
 		}
 
-		ImGui::TextWrapped("CS settings bindings open the configuration menu from the Skyrim Main Menu or Tween Menu.");
+		ImGui::TextWrapped("CSX settings bindings open the configuration menu from the Skyrim Main Menu or Tween Menu.");
 		if (vr.CanOpenMenuFromWorld()) {
-			ImGui::TextWrapped("The current SteamVR overlay path also allows CS settings to open during gameplay.");
+			ImGui::TextWrapped("The current SteamVR overlay path also allows CSX settings to open during gameplay.");
 		}
-		ImGui::TextWrapped("Performance Overlay bindings work during gameplay and menus, independently of the CS settings menu.");
+		ImGui::TextWrapped("Performance Overlay bindings work during gameplay and menus, independently of the CSX settings menu.");
 		ImGui::TextDisabled("Unbound actions are disabled. Save settings to persist binding changes.");
 		ImGui::Spacing();
 

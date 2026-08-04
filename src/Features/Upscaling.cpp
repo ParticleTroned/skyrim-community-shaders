@@ -158,7 +158,7 @@ namespace
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr const char* kOpenCompositeRenderScaleBlockWarning =
-		"Open Composite upscaling is active. CS VR Render Scale Mode and VR FPS Stabilizer Sync are disabled to avoid double upscaling.";
+		"Open Composite upscaling is active. CSX VR Render Scale Mode and VR FPS Stabilizer Sync are disabled to avoid double upscaling.";
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
 	constexpr uint32_t kVRSubmitStageVendorRelatchCooldownFrames = 30u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
@@ -3984,7 +3984,7 @@ namespace
 		ForceDisabled
 	};
 
-	// Own the runtime flag only while CS needs an explicit state. Reacquiring
+	// Own the runtime flag only while CSX needs an explicit state. Reacquiring
 	// ownership snapshots the latest external value so RestoreOriginal never
 	// writes a process-startup value that has since gone stale.
 	bool SetDynamicResolutionOverrideForUpscaling(DynamicResolutionOverride a_override)
@@ -12050,9 +12050,9 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 	vrMenuFrameTransaction.drawInterfaceDepth = vrMenuDrawInterfaceDepth;
 	// Menu presentation ownership begins only after an exact bridge operation is
 	// captured and its original draw is suppressed. Menu presence alone is not
-	// ownership: Container/Journal can remain open underneath the CS menu without
+	// ownership: Container/Journal can remain open underneath the CSX menu without
 	// producing a bridge in every frame, and their untouched reduced target is the
-	// authoritative fallback until CS actually owns work.
+	// authoritative fallback until CSX actually owns work.
 	vrMenuFrameTransaction.menuLayerRequired = false;
 	vrMenuFrameTransaction.mapLayerRequired = false;
 }
@@ -13832,7 +13832,7 @@ namespace
 	{
 		ImGui::TextUnformatted("Can provide a strong performance boost, but it is not fully tested in all situations.");
 		ImGui::TextUnformatted("DLSS/FSR VR only.");
-		ImGui::TextUnformatted("CS applies changes while render targets rebuild.");
+		ImGui::TextUnformatted("CSX applies changes while render targets rebuild.");
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 	}
 }
@@ -13953,11 +13953,11 @@ void Upscaling::DrawSettings()
 		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
 		if (openCompositeBlocker.configPath.empty()) {
 			ImGui::TextWrapped(
-				"Community Shaders Upscaling is locked to None because Open Composite has %s=true.",
+				"CSX Upscaling is locked to None because Open Composite has %s=true.",
 				openCompositeBlocker.settingName.c_str());
 		} else {
 			ImGui::TextWrapped(
-				"Community Shaders Upscaling is locked to None because Open Composite has %s=true in %s.",
+				"CSX Upscaling is locked to None because Open Composite has %s=true in %s.",
 				openCompositeBlocker.settingName.c_str(),
 				openCompositeBlocker.configPath.c_str());
 		}
@@ -13966,7 +13966,7 @@ void Upscaling::DrawSettings()
 	if (renderDocBlocksUpscaling) {
 		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
 		ImGui::TextWrapped(
-			"Community Shaders Upscaling runs as None while %s to avoid DLSS/FSR backend startup crashes.",
+			"CSX Upscaling runs as None while %s to avoid DLSS/FSR backend startup crashes.",
 			GetRenderDocUpscalingBlockReason());
 		ImGui::PopStyleColor();
 	}
@@ -14363,7 +14363,7 @@ void Upscaling::DrawSettings()
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Also writes structured JSON Lines records to VRPipeline-CS.jsonl in the SKSE log directory.");
-				ImGui::TextUnformatted("Use this for automated comparison of CS and OCU environment records.");
+				ImGui::TextUnformatted("Use this for automated comparison of CSX and OCU environment records.");
 			}
 			ImGui::TextUnformatted("Changing these options requires a restart to take effect.");
 			ImGui::Separator();
@@ -15037,11 +15037,11 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 		settings.upscaleMethodNoDLSS != static_cast<uint>(UpscaleMethod::kNONE)) {
 		if (blocker.configPath.empty()) {
 			logger::warn(
-				"[Upscaling] Forcing Community Shaders Upscaling to None because Open Composite has {}=true.",
+				"[Upscaling] Forcing CSX Upscaling to None because Open Composite has {}=true.",
 				blocker.settingName);
 		} else {
 			logger::warn(
-				"[Upscaling] Forcing Community Shaders Upscaling to None because Open Composite has {}=true in {}.",
+				"[Upscaling] Forcing CSX Upscaling to None because Open Composite has {}=true in {}.",
 				blocker.settingName,
 				blocker.configPath);
 		}
@@ -17584,7 +17584,7 @@ uint64_t Upscaling::CanBufferVRFpsStabilizerAPITransitionProfile(uint32_t a_bloc
 			// report open. This is the old door's trailing level, not a new edge.
 			return 0;
 		}
-		// Support the opposite listener order: Stabilizer may query before CS
+		// Support the opposite listener order: Stabilizer may query before CSX
 		// receives the real LoadingMenu open event. A physically observed close
 		// must have occurred since the previous event before this can manufacture
 		// an edge, preventing a post-close lag from opening a phantom serial.
@@ -17699,7 +17699,7 @@ bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
 
 	// Outside the protected handoff preserve the pre-move contract: only the
 	// opposite cell profile may be asserted, so ordinary current-cell runtime
-	// reconciliation cannot undo a user's CS-menu selection.
+	// reconciliation cannot undo a user's CSX-menu selection.
 	if (!oppositeProfile.HasAnyUpscalingSetting())
 		return true;
 	return matchesProfile(oppositeProfile);
@@ -18294,7 +18294,7 @@ namespace
 			if (a_snapshot.provenPointerCount != std::numeric_limits<uint32_t>::max())
 				++a_snapshot.provenPointerCount;
 		} else {
-			// Any external or CS-side slot mutation invalidates provenance. A
+			// Any external or CSX-side slot mutation invalidates provenance. A
 			// matching value may only become releasable after it is observed as
 			// the direct output of Skyrim's native target creator.
 			a_provenance = {};
@@ -18972,7 +18972,7 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 	const bool rc94PostLoadDoorRequest =
 		IsCurrentVRFpsStabilizerDoorHandoff(*this, relatchEpoch);
 	// Post-load recovery owns only its protected recovery/door transaction. Once
-	// that reset has transferred, a higher-priority CS-menu profile supersedes
+	// that reset has transferred, a higher-priority CSX-menu profile supersedes
 	// the recovery gate instead of inheriting it indefinitely. VRAPI remains
 	// eligible to carry recovery ownership because the Stabilizer uses it for
 	// protected door handoffs.
@@ -21083,7 +21083,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 						std::addressof(engineTargetCheckpoint),
 						std::addressof(renderTargetMutationOccurred));
 			} catch (...) {
-				// The original recreation runs before CS reinitialization and can
+				// The original recreation runs before CSX reinitialization and can
 				// therefore have partially replaced slots before an exception.
 				// Unless the post-create checkpoint reconciled completely, none
 				// of those mutations has sufficiently precise provenance.
@@ -23458,7 +23458,7 @@ void Upscaling::RecordVRNativeRestorePresentationRejection(
 		state->lastCompletedWorldRenderFrame == currentFrame &&
 		!IsMainMenuContextActive() &&
 		!IsLoadingMenuContextActive() &&
-		// The CS menu is an out-of-band in-scene overlay. It is suppressed while
+		// The CSX menu is an out-of-band in-scene overlay. It is suppressed while
 		// this native candidate is validated, so keeping it logically open must
 		// not prevent native restore from completing. Skyrim-rendered menus still
 		// block validation because they can replace the scene submit candidate.
@@ -25999,7 +25999,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		&preResetBootSnapshot);
 	if (recoveryEpoch != 0 &&
 		pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire) != recoveryEpoch) {
-		// A higher-priority CS-menu request accepted the physical transaction and
+		// A higher-priority CSX-menu request accepted the physical transaction and
 		// deliberately superseded this recovery owner. Its ordinary relatch gates
 		// now own progress; do not resurrect the completed post-load reset.
 		return true;
@@ -26386,7 +26386,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 						previousUpscaleMode == UpscaleMethod::kDLSS &&
 						vrDLSSSettingsRelatched.exchange(false, std::memory_order_acq_rel);
 					pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
-					// Match PL3.14 for ordinary Render Scale-off DLSS option
+					// Match 3.14 for ordinary Render Scale-off DLSS option
 					// changes: the feature consumes the new options with a
 					// history reset and retains its per-eye resources. Only a
 					// Render Scale-owned physical transition needs the newer
@@ -27717,7 +27717,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	// - Godot's TAA resolve / Spartan Engine lineage (taa_resolve.glsl, copyright Panos Karabelas)
 	// - AMD FidelityFX FSR2/FSR3 lock/reactivity/luminance-instability heuristics.
 	// - Temporal AA survey background: Yang, Liu, Salvi, "A Survey of Temporal Antialiasing Techniques" (2020).
-	// The implementation below is purpose-built for Community Shaders VR periphery resolve and is not a verbatim copy.
+	// The implementation below is purpose-built for CSX VR periphery resolve and is not a verbatim copy.
 	auto* peripheryTAA = GetPeripheryTAACS();
 	if (!peripheryTAA || !peripheryTAACB)
 		return;
@@ -31072,7 +31072,7 @@ void Upscaling::ConfigureTAA()
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 	GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
-	// CS TAA replaces vanilla TAA, so disable water TAA there.
+	// CSX TAA replaces vanilla TAA, so disable water TAA there.
 	// FSR/DLSS keep water TAA enabled.
 	bool* enableWaterTAA = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISTemporalAA) + 0x38LL);
 	*enableWaterTAA = upscaleMethod != UpscaleMethod::kTAA;
@@ -31313,7 +31313,7 @@ bool Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 	const bool shouldUseReducedResolution = globals::game::isVR && ShouldUseReducedResolutionForUpscaling(upscaleMethod, resolutionScale);
 
 	if (globals::game::isVR) {
-		// CS owns the VR vendor-resolution contract in this branch. Keep Skyrim's
+		// CSX owns the VR vendor-resolution contract in this branch. Keep Skyrim's
 		// automatic controller off so it cannot mutate the fixed ratios below.
 		bool cameraDataDirty = SetDynamicResolutionOverrideForUpscaling(DynamicResolutionOverride::ForceDisabled);
 		if (shouldUseReducedResolution) {
@@ -31696,7 +31696,7 @@ void Upscaling::PostDisplay()
 	if (vrVendorMethod && vrRenderScaleMenu) {
 		PrepareFullResolutionPostProcessing(viewport, true);
 	} else if (vrVendorMethod && vrNativeVendorDirectMenu) {
-		// The CS interface must draw against the full native target, but this is
+		// The CSX interface must draw against the full native target, but this is
 		// only a temporary engine viewport state. Retain resolutionScale/jitter
 		// as the persistent vendor contract; resetting them here makes the
 		// runtime plan alternate Native <-> VendorDynamicResolution while the
@@ -33907,7 +33907,7 @@ Upscaling::ClassifyVRRenderScaleOriginalSubmitFallback(
 	const bool menuLayerFallbackUnsafe =
 		vrMenuCommittedLayerValid && IsVRMenuPresentationContextActive();
 	// Fast-travel Loading and its close tail own a complete kVR_FRAMEBUFFER with
-	// Skyrim's fade. If CS did not suppress any separately owned menu work, that
+	// Skyrim's fade. If CSX did not suppress any separately owned menu work, that
 	// framebuffer is always safer than returning success without calling OpenVR.
 	if (IsVRLoadingPresentationContextActive(state) &&
 		!menuLayerFallbackUnsafe) {
@@ -35944,7 +35944,7 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScaleStressSession.baselineBoundsMismatchOriginalFallbackEyeObservations = presentation.boundsMismatchOriginalFallbackEyeObservations;
 	}
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
-	logger::info("[VRRenderScale][Stress] Started deterministic CS-menu capture session {} at frame {}.", sessionID, frame);
+	logger::info("[VRRenderScale][Stress] Started deterministic CSX-menu capture session {} at frame {}.", sessionID, frame);
 }
 
 void Upscaling::StopVRRenderScaleStressSession()
@@ -36002,7 +36002,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	record["schema"] = "community-shaders.vr-render-scale.iteration";
 	record["schemaVersion"] = kSchemaVersion;
 	record["producer"] = {
-		{ "name", "Community Shaders" },
+		{ "name", "Community Shaders Expanded (CSX)" },
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
@@ -38848,11 +38848,11 @@ void Upscaling::LoadUpscalingSDKs()
 		if (!openCompositeUpscalingBackendSkipLogged) {
 			if (blocker.configPath.empty()) {
 				logger::warn(
-					"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because Open Composite has {}=true.",
+					"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because Open Composite has {}=true.",
 					blocker.settingName);
 			} else {
 				logger::warn(
-					"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because Open Composite has {}=true in {}.",
+					"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because Open Composite has {}=true in {}.",
 					blocker.settingName,
 					blocker.configPath);
 			}
@@ -38863,7 +38863,7 @@ void Upscaling::LoadUpscalingSDKs()
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!renderDocUpscalingBackendSkipLogged) {
 			logger::warn(
-				"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because {}.",
+				"[Upscaling] Skipping CSX Streamline/FidelityFX backend initialization because {}.",
 				GetRenderDocUpscalingBlockReason());
 			renderDocUpscalingBackendSkipLogged = true;
 		}

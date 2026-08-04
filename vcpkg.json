@@ -8,7 +8,7 @@
             "dependencies": ["catch2", "fmt", "directxtk", "rapidcsv", "spdlog"]
         },
         "devbench-bridge": {
-            "description": "Expose Community Shaders render-scale iteration controls through devbench.",
+            "description": "Expose CSX render-scale iteration controls through devbench.",
             "dependencies": ["devbench-api"]
         }
     },

@@ -39,7 +39,7 @@ namespace FeatureIssues
 		std::string rejectionReason;            // Why it was rejected/obsolete
 		std::string replacementFeature;         // What feature replaced it (short name)
 		std::string userMessage;                // Guidance message for user
-		REL::Version removedInVersion;          // CS version when it was removed (for obsolete features)
+		REL::Version removedInVersion;          // CSX version when it was removed (for obsolete features)
 		bool modifiedShaderDirectory{ false };  // Whether this obsolete feature modified package/Shaders/ directly
 		FeatureFileInfo fileInfo;               // Detailed file information
 
@@ -56,7 +56,7 @@ namespace FeatureIssues
 			OBSOLETE,          // Known obsolete feature with replacement info
 			VERSION_MISMATCH,  // Feature exists but version is incompatible
 			OVERRIDE_FAILED,   // Override file failed to load or apply
-			UNKNOWN            // Feature not recognized by this CS version
+			UNKNOWN            // Feature not recognized by this CSX version
 		};
 
 		IssueType issueType{ IssueType::UNKNOWN };

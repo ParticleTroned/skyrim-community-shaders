@@ -24,7 +24,7 @@ For example, for v1.43:
 2. Install RenderDoc or extract the MSI using a tool like 7-Zip
 3. Copy `renderdoc.dll` from the installation directory (typically `C:\Program Files\RenderDoc\`)
 4. Place it in this directory (`features/RenderDoc/Renderdoc/`)
-5. The DLL will be deployed with Community Shaders mod package
+5. The DLL will be deployed with CSX mod package
 
 ## License
 

@@ -179,7 +179,7 @@ namespace ProfilerDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the Community Shaders GPU/CPU profiler. status requests a capture and returns live UI totals, resolve-consistent totals, the captured engine frame, timer capacity diagnostics, and per-timer current and rolling values. Results normally resolve after three frames and can be older while capture is idle or the game is paused; compare frame_count with capturedFrameCount. Use resolvedTotalMs with topLevelMs for nesting-correct totals. enable and disable change the profiling preference.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable"],"default":"status"}}}})";
+			R"({"description":"Inspect and control the CSX GPU/CPU profiler. status requests a capture and returns live UI totals, resolve-consistent totals, the captured engine frame, timer capacity diagnostics, and per-timer current and rolling values. Results normally resolve after three frames and can be older while capture is idle or the game is paused; compare frame_count with capturedFrameCount. Use resolvedTotalMs with topLevelMs for nesting-correct totals. enable and disable change the profiling preference.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable"],"default":"status"}}}})";
 		devBench->RegisterTool(
 			"communityshaders.profiler",
 			descriptor,

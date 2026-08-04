@@ -2,11 +2,11 @@
 > This is an unofficial fork of [Skyrim Community Shaders](https://github.com/doodlum/skyrim-community-shaders)
 > by Doodlum & contributors. It is not affiliated with or endorsed by the Community Shaders team.
 
-# Skyrim Community Shaders – Unofficial Fork
+# Community Shaders Expanded (CSX) – Unofficial Fork
 
 SKSE core plugin for community-driven advanced graphics modifications.
 
-This fork restores (and extents) Particle Lights functionality in Community Shaders, which was removed after CS 1.3.6. It also enables using and Screen Space Shadows (SSS) in VR again, while remaining compatible with SE and AE. While SSS is not perfect in VR, especially when using upscaling, the visual benefits outweigh the potential bugs for me. Using SSS version 1.2.1 is recommended.
+Community Shaders Expanded (CSX) restores (and extends) Particle Lights functionality removed after Community Shaders 1.3.6. It also enables Screen Space Shadows (SSS) in VR again while remaining compatible with SE and AE. While SSS is not perfect in VR, especially when using upscaling, the visual benefits outweigh the potential bugs for me. Using SSS version 1.2.1 is recommended.
 
 This fork inherits the original GPL-3.0-or-later license with the Modding Exception and Linking Exception (see below).
 
@@ -102,7 +102,7 @@ cmake --build ./build/ALL --config Release --target AIO_ZIP_PACKAGE
 # Manual AIO package (install + tar)
 cmake --build ./build/ALL --config Release --target Package-AIO-Manual
 
-# Create a CommunityShaders core package in ./dist/
+# Create a CSX core package in ./dist/
 cmake --build ./build/ALL --config Release --target Package-Core
 
 # Create a feature package in ./dist/ (example: GrassLighting)

@@ -1,7 +1,7 @@
 # Skyrim VR Save/Load Hang Assessment
 
 Date: 2026-04-26
-Branch/context: `cs-1.4.11-PL-VR`
+Branch/context: current CSX VR branch
 
 ## Symptom Summary
 

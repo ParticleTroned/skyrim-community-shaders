@@ -1,6 +1,6 @@
 # New Feature Development Reference
 
-Quick reference for creating new graphics features in Community Shaders.
+Quick reference for creating new graphics features in CSX.
 
 ## File Structure
 

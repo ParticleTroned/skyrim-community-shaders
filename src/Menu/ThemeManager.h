@@ -12,7 +12,7 @@
 using json = nlohmann::json;
 
 /**
- * @brief Manages hot-swappable theme system for Community Shaders menu
+ * @brief Manages hot-swappable theme system for CSX menu
  *
  * THEME JSON SCHEMA:
  * ==================

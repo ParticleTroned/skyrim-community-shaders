@@ -1434,7 +1434,7 @@ namespace
 
 		if (state.phase == FeatureCostMeasurementPhase::AwaitingMenuClose) {
 			ImGui::Spacing();
-			ImGui::TextDisabled("Close the Community Shaders menu now.");
+			ImGui::TextDisabled("Close the CSX menu now.");
 			ImGui::TextWrapped(
 				"Wait at least %.0f seconds with the menu closed. Reopen only after FPS and frame times look stable again, then continue the comparison measurement.",
 				feature->GetPerformanceCostMeasurementMenuCloseWaitMs() / 1000.0f);
@@ -1454,7 +1454,7 @@ namespace
 
 			ImGui::Spacing();
 			if (state.menuCloseTick == 0) {
-				ImGui::TextDisabled("Close the Community Shaders menu and wait %.0f seconds.", waitMs / 1000.0f);
+				ImGui::TextDisabled("Close the CSX menu and wait %.0f seconds.", waitMs / 1000.0f);
 			} else if (!closeWaitSatisfied) {
 				const double remainingSeconds = static_cast<double>(waitMs - elapsedCloseMs) / 1000.0;
 				ImGui::TextDisabled("Wait %.1f more seconds with the menu closed, then reopen.", remainingSeconds);
@@ -1485,7 +1485,7 @@ namespace
 				ImGui::TextDisabled("The measurement was cancelled.");
 			else
 				ImGui::TextDisabled("The comparison measurement is done.");
-			ImGui::TextWrapped("Close the Community Shaders menu now so your previous settings can be restored safely.");
+			ImGui::TextWrapped("Close the CSX menu now so your previous settings can be restored safely.");
 			return;
 		}
 

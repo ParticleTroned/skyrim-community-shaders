@@ -448,11 +448,11 @@ void SettingsTabRenderer::RenderBehaviorTab()
 				ImGui::Text("Uses white monochrome icons that adapt to your theme's text color");
 			}
 			ImGui::SameLine();
-			if (ImGui::Checkbox("Use Monochrome CS Logo", &themeSettings.UseMonochromeLogo)) {
+			if (ImGui::Checkbox("Use Monochrome CSX Logo", &themeSettings.UseMonochromeLogo)) {
 				globals::menu->pendingIconReload = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Uses monochrome version of the Community Shaders logo");
+				ImGui::Text("Uses monochrome version of the CSX logo");
 			}
 			ImGui::Unindent();
 		}
@@ -464,7 +464,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
 
 		ImGui::Checkbox("Center Header Title", &themeSettings.CenterHeader);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Centers the Community Shaders title and logo in the header title bar");
+			ImGui::Text("Centers the CSX title and logo in the header title bar");
 		}
 
 		ImGui::Checkbox("Auto-hide Feature List", &globals::menu->GetSettings().AutoHideFeatureList);

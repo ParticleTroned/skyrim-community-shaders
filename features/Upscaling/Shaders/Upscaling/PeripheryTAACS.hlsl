@@ -1,6 +1,6 @@
 #include "Common/FoveatedMask.hlsli"
 
-// Custom Community Shaders VR periphery-only TAA.
+// Custom CSX VR periphery-only TAA.
 // Source lineage and required attribution for adapted MIT-licensed ideas:
 // - Godot Engine / Spartan Engine TAA lineage:
 //   godotengine/godot :: servers/rendering/renderer_rd/shaders/effects/taa_resolve.glsl
@@ -10,7 +10,7 @@
 //   for lock, reactivity, and luminance-instability style history management.
 // - General temporal AA background:
 //   Lei Yang, Shiqiu Liu, Marco Salvi, "A Survey of Temporal Antialiasing Techniques", Computer Graphics Forum, 2020.
-// This shader is an original periphery-only implementation for Community Shaders VR and is not a verbatim copy.
+// This shader is an original periphery-only implementation for CSX VR and is not a verbatim copy.
 
 cbuffer PeripheryTAACB : register(b0)
 {

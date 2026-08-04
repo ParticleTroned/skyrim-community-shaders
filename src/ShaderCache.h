@@ -645,10 +645,10 @@ namespace SIE
 			Skinned = 1 << 1,
 			ModelSpaceNormals = 1 << 2,
 			// flags 3 to 8 are unused by vanilla
-			// Community Shaders start
+			// CSX start
 			TruePbr = 1 << 3,
 			Deferred = 1 << 4,
-			// Community Shaders end
+			// CSX end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,
 			RimLighting = 1 << 11,

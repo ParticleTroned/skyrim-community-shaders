@@ -3,7 +3,7 @@
 // Stores the API after it has already been fetched.
 CSPluginAPI::ICSInterface001* g_CSInterface = nullptr;
 
-// Fetches the interface to use from Community Shaders.
+// Fetches the interface to use from CSX.
 CSPluginAPI::ICSInterface001* CSPluginAPI::GetCSInterface001()
 {
 	// If the interface has already been fetched, return the same object.
@@ -11,7 +11,7 @@ CSPluginAPI::ICSInterface001* CSPluginAPI::GetCSInterface001()
 		return g_CSInterface;
 	}
 
-	// Dispatch a message to get the plugin interface from Community Shaders.
+	// Dispatch a message to get the plugin interface from CSX.
 	CSMessage csMessage;
 	const auto skseMessaging = SKSE::GetMessagingInterface();
 	if (!skseMessaging) {

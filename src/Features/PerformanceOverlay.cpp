@@ -1,6 +1,6 @@
 /**
  * @file PerformanceOverlay.cpp
- * @brief Real-time performance monitoring system for Skyrim Community Shaders
+ * @brief Real-time performance monitoring system for CSX
  *
  * This module provides comprehensive performance monitoring capabilities including:
  * - Real-time FPS and frame time tracking with configurable update intervals
@@ -55,7 +55,7 @@ namespace
 {
 	void DrawPerformanceHUDOverlayHelp()
 	{
-		ImGui::TextUnformatted("Displays the performance panel in the standalone HUD, which can stay visible after CS settings close.");
+		ImGui::TextUnformatted("Displays the performance panel in the standalone HUD, which can stay visible after CSX settings close.");
 		if (REL::Module::IsVR()) {
 			const auto& vrSettings = globals::features::vr.settings;
 			ImGui::TextUnformatted("Show Performance Overlay:");
@@ -206,7 +206,7 @@ void PerformanceOverlay::DrawSettings()
 
 		ImGui::Checkbox("Show FPS Counter", &this->settings.ShowFPS);
 		ImGui::Checkbox("Show Draw Calls", &this->settings.ShowDrawCalls);
-		ImGui::Checkbox("Show CS Render Passes", &this->settings.ShowCSPasses);
+		ImGui::Checkbox("Show CSX Render Passes", &this->settings.ShowCSPasses);
 		ImGui::Checkbox("Show VRAM Usage", &this->settings.ShowVRAM);
 
 		bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
@@ -839,7 +839,7 @@ void PerformanceOverlay::ConvertABTestResultsToRows(const std::vector<Aggregated
 					row.tooltip = "Frame time not attributed to any measured shader type. This includes UI, post-processing, engine work, and any GPU activity not directly measured by the overlay.";
 					break;
 				case SpecialShaderType::CSPasses:
-					row.tooltip = "GPU time spent in Community Shaders render passes while pass profiling is visible.";
+					row.tooltip = "GPU time spent in CSX render passes while pass profiling is visible.";
 					break;
 				}
 			}
@@ -1691,15 +1691,15 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 		totalTestCostPerCall = itTotal->second.costPerCall;
 	}
 	DrawCallRow csPassesRow = {
-		"CS Passes:", magic_enum::enum_integer(SpecialShaderType::CSPasses), kDrawCallsNotApplicable, csPassesTime, csPercent,
+		"CSX Passes:", magic_enum::enum_integer(SpecialShaderType::CSPasses), kDrawCallsNotApplicable, csPassesTime, csPercent,
 		0.0f,
-		std::string("GPU time spent in Community Shaders render passes while pass profiling is visible."),
+		std::string("GPU time spent in CSX render passes while pass profiling is visible."),
 		true, std::nullopt, std::nullopt
 	};
 	DrawCallRow otherRow = {
 		"Other:", magic_enum::enum_integer(SpecialShaderType::Other), kDrawCallsNotApplicable, remainingOtherTime, remainingOtherPercent,
 		0.0f,
-		std::string("Frame time not attributed to any measured shader type or visible CS render-pass profile. This includes UI, post-processing, engine work, and any GPU activity not directly measured."),
+		std::string("Frame time not attributed to any measured shader type or visible CSX render-pass profile. This includes UI, post-processing, engine work, and any GPU activity not directly measured."),
 		true, otherTestFrameTime, otherTestCostPerCall
 	};
 	// Always use the actual total frame time for live data
@@ -1739,7 +1739,7 @@ std::function<void(int, int, const DrawCallRow&)> PerformanceOverlay::CreateTabl
 		// Special handling for summary rows
 		const bool isTotalRow = row.label == "Total:";
 		const bool isOtherRow = row.label == "Other:";
-		const bool isCSPassesRow = row.label == "CS Passes:";
+		const bool isCSPassesRow = row.label == "CSX Passes:";
 		if ((isTotalRow || isOtherRow || isCSPassesRow) && colIdx == 0) {
 			if (row.label == "Total:") {
 				if (ImGui::Selectable(row.label.c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {

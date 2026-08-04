@@ -59,7 +59,7 @@ public:
 	 * Whether the feature is a CORE feature
 	 * This will place it under "Core Features" in UI
 	 * If "CORE" file is present in the root of the feature folder,
-	 * it will be merged into main cs zip file and automatically considered core
+	 * it will be merged into the main CSX zip file and automatically considered core
 	 */
 	virtual bool IsCore() const
 	{

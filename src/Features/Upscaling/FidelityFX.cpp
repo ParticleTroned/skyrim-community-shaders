@@ -3017,7 +3017,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 
 	// Shader compilation and runtime-provider context creation both exercise the
 	// driver compiler. Keep an already-compatible provider dispatching, but do
-	// not create or recreate a provider context until CS compilation is idle.
+	// not create or recreate a provider context until CSX compilation is idle.
 	const bool runtimeDeferredByGate =
 		runtimeRequested &&
 		!runtimeUpscalerSessionQuarantined &&
@@ -3034,7 +3034,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	if (ShouldEmitFidelityFXDiagLogs() && runtimePathEligible && shaderCompilationActive && !runtimeContextsCompatible) {
 		if (!loggedRuntimeDeferredForShaderCompilation) {
 			logger::debug(
-				"[FidelityFX] Deferring required DX12 runtime upscaler context creation/recreation while CS shader compilation is active; actual dispatch is {}.",
+				"[FidelityFX] Deferring required DX12 runtime upscaler context creation/recreation while CSX shader compilation is active; actual dispatch is {}.",
 				GetHostFsrSdkLabel());
 			loggedRuntimeDeferredForShaderCompilation = true;
 		}
@@ -3045,7 +3045,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	if (ShouldEmitFidelityFXDiagLogs() && runtimeSelected && shaderCompilationActive && runtimeContextsCompatible) {
 		if (!loggedRuntimeContinuedDuringShaderCompilation) {
 			logger::debug(
-				"[FidelityFX] CS shader compilation is active; continuing dispatch through the already-compatible DX12 runtime upscaler context (requested FSR version {}).",
+				"[FidelityFX] CSX shader compilation is active; continuing dispatch through the already-compatible DX12 runtime upscaler context (requested FSR version {}).",
 				UpscalerVersionToString(requestedRuntimeVersion));
 			loggedRuntimeContinuedDuringShaderCompilation = true;
 		}

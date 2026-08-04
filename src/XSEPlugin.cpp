@@ -39,16 +39,16 @@ namespace
 	{
 		auto messaging = SKSE::GetMessagingInterface();
 		if (!messaging) {
-			PushStartupError("SKSE messaging interface unavailable while registering Community Shaders API message listener. Check CommunityShaders.log for details.");
+			PushStartupError("SKSE messaging interface unavailable while registering CSX API message listener. Check CommunityShaders.log for details.");
 			return false;
 		}
 
 		if (!messaging->RegisterListener(nullptr, CSPluginAPI::ModMessageHandler)) {
-			PushStartupError("Failed to register Community Shaders API message listener. Check CommunityShaders.log for details.");
+			PushStartupError("Failed to register CSX API message listener. Check CommunityShaders.log for details.");
 			return false;
 		}
 
-		logger::info("Registered Community Shaders API message listener during PostLoad");
+		logger::info("Registered CSX API message listener during PostLoad");
 		return true;
 	}
 
@@ -160,7 +160,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		{
 			for (auto it = errors.begin(); it != errors.end(); ++it) {
 				auto& errorMessage = *it;
-				RE::DebugMessageBox(std::format("Community Shaders\n{}, will disable all hooks and features", errorMessage).c_str());
+				RE::DebugMessageBox(std::format("CSX\n{}, will disable all hooks and features", errorMessage).c_str());
 			}
 
 			if (errors.empty()) {

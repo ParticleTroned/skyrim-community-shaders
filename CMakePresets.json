@@ -56,7 +56,8 @@
             "cacheVariables": {
                 "ENABLE_SKYRIM_AE": "ON",
                 "ENABLE_SKYRIM_SE": "OFF",
-                "ENABLE_SKYRIM_VR": "OFF"
+                "ENABLE_SKYRIM_VR": "OFF",
+                "CSX_VERSION": "3.15-SE"
             },
             "inherits": "skyrim"
         },
@@ -65,7 +66,8 @@
             "cacheVariables": {
                 "ENABLE_SKYRIM_AE": "OFF",
                 "ENABLE_SKYRIM_SE": "ON",
-                "ENABLE_SKYRIM_VR": "OFF"
+                "ENABLE_SKYRIM_VR": "OFF",
+                "CSX_VERSION": "3.15-SE"
             },
             "inherits": "skyrim"
         },
@@ -74,7 +76,8 @@
             "cacheVariables": {
                 "ENABLE_SKYRIM_AE": "OFF",
                 "ENABLE_SKYRIM_SE": "OFF",
-                "ENABLE_SKYRIM_VR": "ON"
+                "ENABLE_SKYRIM_VR": "ON",
+                "CSX_VERSION": "3.18-VR"
             },
             "inherits": "skyrim"
         },
@@ -85,7 +88,7 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "CS_PL_FORK_VERSION": "PL3.18-VR"
+                "CSX_VERSION": "3.18-VR"
             },
             "inherits": "skyrim"
         },
@@ -94,7 +97,8 @@
             "cacheVariables": {
                 "ENABLE_SKYRIM_AE": "OFF",
                 "ENABLE_SKYRIM_SE": "ON",
-                "ENABLE_SKYRIM_VR": "ON"
+                "ENABLE_SKYRIM_VR": "ON",
+                "CSX_VERSION": "3.18-VR"
             },
             "inherits": "skyrim"
         },
@@ -103,7 +107,8 @@
             "cacheVariables": {
                 "ENABLE_SKYRIM_AE": "ON",
                 "ENABLE_SKYRIM_SE": "ON",
-                "ENABLE_SKYRIM_VR": "OFF"
+                "ENABLE_SKYRIM_VR": "OFF",
+                "CSX_VERSION": "3.15-SE"
             },
             "inherits": "skyrim"
         },
@@ -122,7 +127,7 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "CS_PL_FORK_VERSION": "PL3.18-VR"
+                "CSX_VERSION": "3.18-VR"
             },
             "inherits": "skyrim"
         },
@@ -132,7 +137,7 @@
             "inherits": "ALL",
             "cacheVariables": {
                 "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON",
-                "CS_PL_FORK_VERSION": "PL3.15-SE"
+                "CSX_VERSION": "3.15-SE"
             }
         }
     ],
@@ -181,7 +186,7 @@
         },
         {
             "name": "Debug",
-            "description": "Debug build for CS SKSE plugin, generate an AIO folder thats ready to copy",
+            "description": "Debug build for CSX SKSE plugin, generate an AIO folder thats ready to copy",
             "configurePreset": "ALL",
             "configuration": "Debug",
             "targets": ["CommunityShaders", "AIO"]

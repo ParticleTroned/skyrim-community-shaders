@@ -310,7 +310,7 @@ namespace
 				if (windows[i].rect.Overlaps(windows[j].rect)) {
 					auto* a = windows[i].win;
 					auto* b = windows[j].win;
-					// Main CS window never dims; other windows yield to it
+					// Main CSX window never dims; other windows yield to it
 					if (IsMainWindow(a))
 						overlapping.insert(b->ID);
 					else if (IsMainWindow(b))
@@ -732,7 +732,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 			const size_t issueCount = FeatureIssues::GetFeatureIssues().size();
 			const auto issueMessage = fmt::format(
 				"WARNING: {} feature{} failed to load (bad install or version mismatch).\n"
-				"Check CS menu > Feature Issues tab, then quit, fix your mod setup, and restart.\n"
+				"Check CSX menu > Feature Issues tab, then quit, fix your mod setup, and restart.\n"
 				"Compiling now bakes the wrong shaders and you will have to recompile after fixing.",
 				issueCount,
 				issueCount == 1 ? "" : "s");

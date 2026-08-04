@@ -20,7 +20,7 @@ namespace CSPluginAPI
 
 	void ModMessageHandler(SKSE::MessagingInterface::Message* message);
 
-	// This object provides access to Community Shaders' mod support API.
+	// This object provides access to CSX' mod support API.
 	struct CSInterface001 : ICSInterface001
 	{
 		// Must mirror ICSInterface001 virtual order exactly.
@@ -212,7 +212,7 @@ namespace CSPluginAPI
 				return false;
 
 			logger::debug(
-				"[CS API] Ignoring {} while VR upscaling profile apply is blocked (reasons=0x{:X}).",
+				"[CSX API] Ignoring {} while VR upscaling profile apply is blocked (reasons=0x{:X}).",
 				action ? action : "VR upscaling API request",
 				reasons);
 			return true;
@@ -231,7 +231,7 @@ namespace CSPluginAPI
 			}
 
 			logger::debug(
-				"[CS API] Ignoring {} while VR upscaling transition-profile apply is blocked (reasons=0x{:X}).",
+				"[CSX API] Ignoring {} while VR upscaling transition-profile apply is blocked (reasons=0x{:X}).",
 				action ? action : "VR upscaling transition profile",
 				reasons);
 			return true;
@@ -256,7 +256,7 @@ namespace CSPluginAPI
 		return &g_interface001;
 	}
 
-	// Handles SKSE mod messages requesting to fetch API functions from Community Shaders.
+	// Handles SKSE mod messages requesting to fetch API functions from CSX.
 	inline void ModMessageHandler(SKSE::MessagingInterface::Message* message)
 	{
 		if (!detail::IsValidInterfaceRequest(message)) {
@@ -265,7 +265,7 @@ namespace CSPluginAPI
 
 		auto* csMessage = static_cast<CSMessage*>(message->data);
 		csMessage->GetApiFunction = GetApi;
-		logger::info("Provided Community Shaders plugin interface to {}", message->sender ? message->sender : "<unknown>");
+		logger::info("Provided CSX plugin interface to {}", message->sender ? message->sender : "<unknown>");
 	}
 
 	// Fetches the version number.
@@ -314,7 +314,7 @@ namespace CSPluginAPI
 	inline void CSInterface001::SetUpscalePreset(UpscalePreset preset)
 	{
 		if (!detail::IsValidUpscalePreset(preset)) {
-			logger::warn("[CS API] Ignoring invalid upscaler preset value {}", static_cast<uint32_t>(preset));
+			logger::warn("[CSX API] Ignoring invalid upscaler preset value {}", static_cast<uint32_t>(preset));
 			return;
 		}
 		if (detail::ShouldBlockVRUpscalingApply("upscaler preset change"))
@@ -331,7 +331,7 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			upscaling.GetEffectiveDLSSPreset(),
-			"CS API upscaler preset change",
+			"CSX API upscaler preset change",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
@@ -354,7 +354,7 @@ namespace CSPluginAPI
 	inline void CSInterface001::SetDLSSProfile(DLSSProfile profile)
 	{
 		if (!detail::IsValidDLSSProfile(profile)) {
-			logger::warn("[CS API] Ignoring invalid DLSS profile value {}", static_cast<uint32_t>(profile));
+			logger::warn("[CSX API] Ignoring invalid DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
 		}
 		if (detail::ShouldBlockVRUpscalingApply("DLSS profile change"))
@@ -371,7 +371,7 @@ namespace CSPluginAPI
 				upscaling.GetPerfModeRequested(),
 				upscaling.GetEffectiveDLSSQualityMode(),
 				dlssPreset,
-				"CS API legacy DLSS profile change",
+				"CSX API legacy DLSS profile change",
 				Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 			return;
 		}
@@ -395,7 +395,7 @@ namespace CSPluginAPI
 
 		globals::features::upscaling.SetPerfModeRequested(
 			enabled,
-			"CS API render-scale mode change",
+			"CSX API render-scale mode change",
 			true,
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
@@ -409,11 +409,11 @@ namespace CSPluginAPI
 	{
 		auto& upscaling = globals::features::upscaling;
 		if (!detail::IsValidUpscalePreset(preset)) {
-			logger::warn("[CS API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(preset));
+			logger::warn("[CSX API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(preset));
 			return;
 		}
 		if (!detail::IsValidDLSSProfile(profile)) {
-			logger::warn("[CS API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
+			logger::warn("[CSX API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
 		}
 		const auto method = detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling);
@@ -442,7 +442,7 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,
-			"CS API legacy DLSS-preferred VR upscaling transition profile",
+			"CSX API legacy DLSS-preferred VR upscaling transition profile",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI,
 			bufferedStabilizerDoorHandoffSerial);
 		upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(
@@ -457,7 +457,7 @@ namespace CSPluginAPI
 	inline void CSInterface001::SetUpscaleMethod(UpscaleMethod method)
 	{
 		if (!detail::IsValidUpscaleMethod(method)) {
-			logger::warn("[CS API] Ignoring invalid upscaler method value {}", static_cast<uint32_t>(method));
+			logger::warn("[CSX API] Ignoring invalid upscaler method value {}", static_cast<uint32_t>(method));
 			return;
 		}
 		if (detail::ShouldBlockVRUpscalingApply("upscaler method change"))
@@ -469,7 +469,7 @@ namespace CSPluginAPI
 			upscaling.IsRenderScaleModeRequested(),
 			upscaling.GetEffectiveDLSSQualityMode(),
 			upscaling.GetEffectiveDLSSPreset(),
-			"CS API upscaler method change",
+			"CSX API upscaler method change",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
@@ -477,15 +477,15 @@ namespace CSPluginAPI
 	{
 		auto& upscaling = globals::features::upscaling;
 		if (!detail::IsValidUpscaleMethod(method)) {
-			logger::warn("[CS API] Ignoring invalid transition upscaler method value {}", static_cast<uint32_t>(method));
+			logger::warn("[CSX API] Ignoring invalid transition upscaler method value {}", static_cast<uint32_t>(method));
 			return;
 		}
 		if (!detail::IsValidUpscalePreset(preset)) {
-			logger::warn("[CS API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(preset));
+			logger::warn("[CSX API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(preset));
 			return;
 		}
 		if (!detail::IsValidDLSSProfile(profile)) {
-			logger::warn("[CS API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
+			logger::warn("[CSX API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
 		}
 		const auto internalMethod = detail::ToInternalUpscaleMethod(method);
@@ -514,7 +514,7 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,
-			"CS API VR method-specific upscaling transition profile",
+			"CSX API VR method-specific upscaling transition profile",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI,
 			bufferedStabilizerDoorHandoffSerial);
 		upscaling.ClearVRFpsStabilizerAPITransitionProfileAdmission(

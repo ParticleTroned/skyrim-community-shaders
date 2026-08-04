@@ -259,7 +259,7 @@
                        "omnidirectionalBulbMult":  1.0,
                        "enabled":  true
                    },
-    "Version":  "PL3.15-VR",
+    "Version":  "CSX 3.18-VR",
     "Replace Original Shaders":  {
                                      "Lighting":  true,
                                      "Effect":  true,

@@ -44,9 +44,9 @@ working-tree headers.
 -   **DIFFERS** dumps `/Fc` assembly differences for review.
 
 Exit codes: `0` all identical, `2` some differ, `1` compile error. By default,
-the base is `merge-base(HEAD, <current branch upstream>)`; on this branch that
-keeps comparisons against `origin/cs-1.6-PL-VR`. Pass `-BaseRef <ref>` to compare
-against another ref. Requires `fxc.exe` from the Windows SDK. The default sweep is
+the base is `merge-base(HEAD, <current branch upstream>)`. Pass
+`-BaseRef <ref>` to compare against another ref. Requires `fxc.exe` from the
+Windows SDK. The default sweep is
 useful targeted coverage, not the full `.github/configs/shader-validation*.yaml`
 matrix; pass `-Permutations` for feature-specific define combinations.
 

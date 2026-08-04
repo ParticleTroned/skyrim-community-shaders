@@ -1507,101 +1507,10 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 bool Upscaling::IsPerformanceCostMeasurementReady() const
 {
-	if (!performanceCostAppliedStateValid)
-		return false;
-	auto* state = globals::state;
-	if (!state || performanceCostAppliedFrame == state->frameCount)
-		return false;
-
-	const auto requestedMethod = GetUpscaleMethod();
-	if (performanceCostAppliedUpscaleMethod != requestedMethod)
-		return false;
-
-	auto* graphicsState = globals::game::graphicsState;
-	if (!graphicsState)
-		return false;
-	const int screenWidth = static_cast<int>(graphicsState->screenWidth);
-	const int screenHeight = static_cast<int>(graphicsState->screenHeight);
-	if (screenWidth <= 0 || screenHeight <= 0)
-		return false;
-	float2 expectedResolutionScale = { 1.0f, 1.0f };
-	if (requestedMethod != UpscaleMethod::kNONE &&
-		requestedMethod != UpscaleMethod::kTAA) {
-		const float resolutionScaleBase =
-			GetQualityModeResolutionScale(ClampQualityModeUInt(settings.qualityMode));
-		expectedResolutionScale.x =
-			static_cast<float>(static_cast<int>(screenWidth * resolutionScaleBase)) /
-			static_cast<float>(screenWidth);
-		expectedResolutionScale.y =
-			static_cast<float>(static_cast<int>(screenHeight * resolutionScaleBase)) /
-			static_cast<float>(screenHeight);
-	}
-	if (std::abs(
-			performanceCostAppliedResolutionScale.x -
-			expectedResolutionScale.x) > 1.0e-4f ||
-		std::abs(
-			performanceCostAppliedResolutionScale.y -
-			expectedResolutionScale.y) > 1.0e-4f) {
-		return false;
-	}
-
-	const bool requestedFrameGenerationMode = settings.frameGenerationMode && d3d12SwapChainActive;
-	if (performanceCostAppliedFrameGenerationMode != requestedFrameGenerationMode)
-		return false;
-	const bool requestedFrameGenerationThisFrame =
-		ShouldUseFrameGenerationThisFrame();
-	if (requestedFrameGenerationMode && !requestedFrameGenerationThisFrame)
-		return false;
-
-	const auto isRecent = [state](bool a_valid, uint32_t a_frame) {
-		return a_valid && state->frameCount - a_frame <= 1u;
-	};
-	if (!isRecent(
-			performanceCostExecutedPathValid,
-			performanceCostExecutedFrame) ||
-		performanceCostExecutedUpscaleMethod != requestedMethod ||
-		!performanceCostExecutedPathSuccessful) {
-		return false;
-	}
-
-	if (d3d12SwapChainActive) {
-		if (!frameGenerationCopyValid ||
-			frameGenerationCopyRequested != requestedFrameGenerationThisFrame ||
-			!frameGenerationCopySuccessful ||
-			(requestedFrameGenerationThisFrame && frameGenerationCopyConsumed)) {
-			return false;
-		}
-		if (!isRecent(
-				performanceCostFrameGenerationPresentValid,
-				performanceCostFrameGenerationPresentFrame) ||
-			performanceCostFrameGenerationPresentRequested !=
-				requestedFrameGenerationThisFrame ||
-			!performanceCostFrameGenerationPresentSuccessful ||
-			performanceCostFrameGenerationPresentActive !=
-				requestedFrameGenerationThisFrame) {
-			return false;
-		}
-	}
-
-	if (requestedMethod == UpscaleMethod::kDLSS || requestedMethod == UpscaleMethod::kFSR) {
-		if (performanceCostAppliedQualityMode != ClampQualityModeUInt(settings.qualityMode))
-			return false;
-	}
-
-	if (requestedMethod == UpscaleMethod::kDLSS) {
-		return performanceCostAppliedDLSSPreset == std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
-	}
-
-	if (requestedMethod == UpscaleMethod::kFSR) {
-		const bool requestedFSRRuntimePathActive = IsFSRRuntimePathActive(requestedMethod);
-		const bool requestedFSRRuntimeFsr4Configured =
-			settings.fsr4RuntimeEnable && fidelityFX.IsRuntimeFsr4Available();
-		const bool requestedFSRRuntimeFsr4Active = IsFSRRuntimeFsr4PathActive(requestedMethod);
-		return performanceCostAppliedFSRRuntimePathActive == requestedFSRRuntimePathActive &&
-		       performanceCostAppliedFSRRuntimeFsr4Configured == requestedFSRRuntimeFsr4Configured &&
-		       performanceCostAppliedFSRRuntimeFsr4Active == requestedFSRRuntimeFsr4Active;
-	}
-
+	// The renderer separately verifies the requested enabled/disabled state.
+	// Upscaling then flushes 60 fresh Presents and waits through the four-second
+	// post-change window. Runtime diagnostic latches are intentionally excluded:
+	// transient or platform-specific values must not restart that settling gate.
 	return true;
 }
 

@@ -59,7 +59,7 @@ namespace
 {
 	static constexpr std::array<std::string_view, 0> kForcedDisableAtBootFeatures{};
 
-	void SaveFeatureUserOverrides()
+	void SaveUserOverrides(const json& a_settings)
 	{
 		auto overrideManager = SettingsOverrideManager::GetSingleton();
 		for (auto* feature : Feature::GetFeatureList()) {
@@ -85,6 +85,16 @@ namespace
 			} catch (...) {
 				logger::warn("Failed to save user overrides for {} due to an unknown error", featureName);
 			}
+		}
+
+		try {
+			const auto globalOverrideSettings =
+				overrideManager->GetMergedOverrideSettings("Global", json::object());
+			overrideManager->SaveUserOverride("Global", a_settings, globalOverrideSettings);
+		} catch (const std::exception& e) {
+			logger::warn("Failed to save global user overrides: {}", e.what());
+		} catch (...) {
+			logger::warn("Failed to save global user overrides due to an unknown error");
 		}
 	}
 
@@ -1194,7 +1204,7 @@ void State::Save(ConfigMode a_configMode)
 	}
 
 	if (a_configMode == ConfigMode::USER)
-		SaveFeatureUserOverrides();
+		SaveUserOverrides(settings);
 
 	logger::info("Saving settings to {}", configPath.string());
 }

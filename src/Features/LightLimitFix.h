@@ -370,6 +370,17 @@ public:
 	static inline float3 Saturation(float3 color, float saturation);
 	static inline bool IsValidLight(RE::BSLight* a_light);
 	static inline bool IsGlobalLight(RE::BSLight* a_light);
+	static inline bool RequiresEngineLightPath(RE::BSLight* a_light)
+	{
+		return a_light &&
+		       (a_light->portalStrict || !a_light->portalGraph || a_light->IsShadowLight());
+	}
+	static inline bool UsesClusteredWaterPath(RE::BSLight* a_light)
+	{
+		return a_light &&
+		       a_light->affectWater &&
+		       !RequiresEngineLightPath(a_light);
+	}
 
 	struct Settings
 	{
@@ -463,7 +474,7 @@ public:
 				return a_light &&
 				       a_light->light &&
 				       func(a_property, a_light) &&
-				       (a_light->portalStrict || !a_light->portalGraph || a_light->IsShadowLight());
+				       LightLimitFix::RequiresEngineLightPath(a_light);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};

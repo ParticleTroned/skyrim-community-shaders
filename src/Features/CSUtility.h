@@ -101,6 +101,10 @@ struct CSUtility : Feature
 	STATIC_ASSERT_ALIGNAS_16(VanillaPointLightData);
 	static_assert(sizeof(VanillaPointLightData) == 32);
 
+	// Water uses b7 so its classification data can coexist with LLF's b3 payload.
+	static constexpr uint32_t kLightingPointLightCBRegister = 3;
+	static constexpr uint32_t kWaterPointLightCBRegister = 7;
+
 	ConstantBuffer* vanillaPointLightCB = nullptr;
 
 	virtual void DrawSettingsHeaderControls() override;
@@ -116,7 +120,7 @@ struct CSUtility : Feature
 	PerFrameData GetCommonBufferData() const;
 	bool IsRuntimeEnabled() const;
 	bool NeedsVanillaPointLightData() const;
-	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount);
+	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount, uint32_t a_bufferRegister);
 	void DrawDepthOfFieldSettings();
 	void DrawVanillaBloomSettings();
 	void InstallDepthOfFieldHooks();

@@ -859,9 +859,16 @@ namespace
 		       std::max(a_tint.blue, 0.0f);
 	}
 
-	void SetPointLightTypeFlags(LightLimitFix::LightData& a_light, RE::BSLight* a_bsLight)
+	void SetEngineLightFlags(LightLimitFix::LightData& a_light, RE::BSLight* a_bsLight)
 	{
 		PointLightFlags::SetPointLightTypeFlags(a_light.lightFlags, a_bsLight);
+		a_light.lightFlags.reset(
+			LightLimitFix::LightFlags::PortalStrict,
+			LightLimitFix::LightFlags::Shadow,
+			LightLimitFix::LightFlags::AffectWater);
+		if (a_bsLight && a_bsLight->affectWater) {
+			a_light.lightFlags.set(LightLimitFix::LightFlags::AffectWater);
+		}
 	}
 }
 
@@ -1518,7 +1525,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 				light.fade = runtimeData.fade;
 			}
 
-			SetPointLightTypeFlags(light, bsLight);
+			SetEngineLightFlags(light, bsLight);
 			light.fade *= bsLight->lodDimmer;
 			const bool isPortalStrict = !IsGlobalLight(bsLight);
 			ApplyJsonPlacedLightIntensityScale(light, bsLight, niLight, isPortalStrict, isInterior);
@@ -2790,7 +2797,7 @@ void LightLimitFix::UpdateLights()
 						light.fade = runtimeData.fade;
 					}
 
-					SetPointLightTypeFlags(light, bsLight);
+					SetEngineLightFlags(light, bsLight);
 					light.fade *= bsLight->lodDimmer;
 					const bool isPortalStrict = !IsGlobalLight(bsLight);
 
@@ -2869,6 +2876,7 @@ void LightLimitFix::UpdateLights()
 
 			clusteredLight.lightFlags.set(LightFlags::Simple);
 			clusteredLight.lightFlags.set(LightFlags::Particle);
+			clusteredLight.lightFlags.set(LightFlags::AffectWater);
 			AddCachedParticleLights(lightsData, clusteredLight);
 
 			clusteredLights = 0;
@@ -2983,6 +2991,7 @@ void LightLimitFix::UpdateLights()
 			SetLightPosition(light, a_billboardLight.position);
 			light.lightFlags.set(LightFlags::Simple);
 			light.lightFlags.set(LightFlags::Particle);
+			light.lightFlags.set(LightFlags::AffectWater);
 			AddCachedParticleLights(lightsData, light, &a_billboardLight);
 		};
 

@@ -48,7 +48,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/MotionBlur.hlsli"
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
+#	define CS_UTILITY_WATER_POINT_LIGHT_DATA
 #	include "Common/Color.hlsli"
+#	undef CS_UTILITY_WATER_POINT_LIGHT_DATA
 
 #	define WATER
 
@@ -1785,7 +1787,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float LdotN = saturate(dot(lightDirection, normal));
 		uint lightFlags = Color::GetVanillaPointLightFlags(lightIndex);
 		bool isPointLightLinear = (lightFlags & Color::PointLightFlagLinear) != 0;
-		float3 lightColor = (Color::PointLight(LightColor[lightIndex].xyz, isPointLightLinear, lightFlags) * pow(LdotN, FresnelRI.z)) * lightColorMul;
+		float3 lightColor = (Color::PointLight(LightColor[lightIndex].xyz, isPointLightLinear, lightFlags) * Color::VanillaNormalization() * pow(LdotN, FresnelRI.z)) * lightColorMul;
 		finalColor += lightColor;
 	}
 
@@ -1852,7 +1854,10 @@ PS_OUTPUT main(PS_INPUT input)
 		{
 			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 			LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-			if (LightLimitFix::IsLightIgnored(light) || light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+			const bool usesEngineWaterPath =
+				(light.lightFlags & (LightLimitFix::LightFlags::PortalStrict | LightLimitFix::LightFlags::Shadow)) != 0;
+			const bool affectsWater = (light.lightFlags & LightLimitFix::LightFlags::AffectWater) != 0;
+			if (LightLimitFix::IsLightIgnored(light) || usesEngineWaterPath || !affectsWater) {
 				continue;
 			}
 
@@ -1872,7 +1877,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float HdotN = saturate(dot(H, normal));
 
 			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * pow(HdotN, FresnelRI.z) * light.fade;
+			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * Color::VanillaNormalization() * pow(HdotN, FresnelRI.z) * light.fade;
 			specularLighting += lightColor * intensityMultiplier;
 		}
 	}

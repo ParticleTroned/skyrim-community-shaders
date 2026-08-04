@@ -36,8 +36,12 @@ cbuffer LLPerGeometry : register(b8)
 };
 #endif
 
-#if defined(PSHADER) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
+#if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
+#	if defined(CS_UTILITY_WATER_POINT_LIGHT_DATA)
+cbuffer CSUtilityPerGeometry : register(b7)
+#	else
 cbuffer CSUtilityPerGeometry : register(b3)
+#	endif
 {
 	uint4 CSUtilityPointLightFlags0;
 	uint4 CSUtilityPointLightFlags1;
@@ -244,7 +248,7 @@ namespace Color
 
 	uint GetVanillaPointLightFlags(uint lightIndex)
 	{
-#	if defined(PSHADER) && defined(CS_UTILITY) && !defined(LIGHT_LIMIT_FIX)
+#	if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
 		if (lightIndex >= MaxVanillaPointLightFlags)
 			return 0;
 		return lightIndex < PackedPointLightFlagVectorSize ? CSUtilityPointLightFlags0[lightIndex] : CSUtilityPointLightFlags1[lightIndex - PackedPointLightFlagVectorSize];

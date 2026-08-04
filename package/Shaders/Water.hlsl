@@ -1975,7 +1975,12 @@ PS_OUTPUT main(PS_INPUT input)
 
 #				endif
 #			endif
+#			if defined(SPECULAR) && (NUM_SPECULAR_LIGHTS != 0)
+	// Bound the additive local-light pass without clamping the primary HDR water output.
+	psout.Lighting = float4(saturate(finalColor), isSpecular);
+#			else
 	psout.Lighting = float4(finalColor, isSpecular);
+#			endif
 #		endif
 
 #		if defined(STENCIL)

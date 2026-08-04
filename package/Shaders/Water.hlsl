@@ -911,7 +911,6 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 #				define UNIFIED_WATER_SHALLOW_FALLBACK
 
 static const float UnifiedWaterFallbackCullFadeRange = 2048.0;
-static const float UnifiedWaterDeepProbeRadiusOvershoot = 1.25;
 static const float UnifiedWaterDeepProbeMinRadiusPixels = 4.0;
 static const float UnifiedWaterDeepProbeMaxRadiusPixels = 512.0;
 
@@ -1003,8 +1002,7 @@ float GetUnifiedWaterDeepContextWeight(
 	float transition = max(
 		SharedData::unifiedWaterSettings.DeepContextTransitionUnits,
 		0.0);
-	float transitionStart = max(deepDepth - 0.5 * transition, 0.0);
-	float transitionEnd = deepDepth + 0.5 * transition;
+	float transitionStart = max(deepDepth - transition, 0.0);
 
 	float maximumReach = max(
 		SharedData::unifiedWaterSettings.DeepConnectionProbeReachUnits,
@@ -1045,15 +1043,11 @@ float GetUnifiedWaterDeepContextWeight(
 	if (!isfinite(maximumRadiusPixels) || maximumRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels)
 		return 0.0;
 
-	float targetDepth = deepDepth + 0.5 * transition;
-	float desiredRise = max(targetDepth - centerColumn, 1.0);
-	float requestedRadiusPixels =
-		UnifiedWaterDeepProbeRadiusOvershoot *
-		desiredRise /
-		gradientMagnitude;
-	float radiusPixels = min(
-		max(requestedRadiusPixels, UnifiedWaterDeepProbeMinRadiusPixels),
-		maximumRadiusPixels);
+	// Reach is a search distance, not merely a cap on a local linear depth
+	// prediction. Coarse terrain triangles can have a very large one-quad
+	// derivative; predicting the target radius from that derivative kept both
+	// reads on the same shallow facet and made the reach slider ineffective.
+	float radiusPixels = maximumRadiusPixels;
 
 	int2 endpointOffset = int2(round(probeDirection * radiusPixels));
 	int2 midpointOffset = int2(round(0.5 * float2(endpointOffset)));
@@ -1070,11 +1064,7 @@ float GetUnifiedWaterDeepContextWeight(
 	int2 endpointPixel = centerPixel + endpointOffset;
 	if (
 		any(centerPixel < 0) ||
-		any(centerPixel >= renderDimensions) ||
-		any(midpointPixel < 0) ||
-		any(midpointPixel >= renderDimensions) ||
-		any(endpointPixel < 0) ||
-		any(endpointPixel >= renderDimensions))
+		any(centerPixel >= renderDimensions))
 	{
 		return 0.0;
 	}
@@ -1101,49 +1091,55 @@ float GetUnifiedWaterDeepContextWeight(
 		return 0.0;
 	float belowPlaneSign = centerPlaneOffset < 0.0 ? -1.0 : 1.0;
 
-	float midpointColumn;
-	float endpointColumn;
+	// Evaluate both reads independently. A deep midpoint remains useful when the
+	// full-reach endpoint overshoots a narrow channel, encounters foreground
+	// geometry, or leaves the screen. Endpoint evidence still requires a valid
+	// submerged midpoint so a disconnected below-plane surface cannot veto the
+	// shallow fallback.
+	float midpointColumn = -1.0;
+	bool midpointValid = false;
 	if (
-		!TryGetUnifiedWaterProbeColumn(
+		all(midpointPixel >= 0) &&
+		all(midpointPixel < renderDimensions))
+	{
+		midpointValid = TryGetUnifiedWaterProbeColumn(
 			midpointPixel,
 			waterSurfacePosition,
 			waterPlaneNormal,
 			belowPlaneSign,
-			midpointColumn) ||
-		!TryGetUnifiedWaterProbeColumn(
+			midpointColumn);
+	}
+
+	float endpointColumn = -1.0;
+	bool endpointValid = false;
+	if (
+		all(endpointPixel >= 0) &&
+		all(endpointPixel < renderDimensions))
+	{
+		endpointValid = TryGetUnifiedWaterProbeColumn(
 			endpointPixel,
 			waterSurfacePosition,
 			waterPlaneNormal,
 			belowPlaneSign,
-			endpointColumn))
-	{
-		return 0.0;
+			endpointColumn);
 	}
 
-	float endpointDeepWeight = transition > 1e-4 ?
-		smoothstep(transitionStart, transitionEnd, endpointColumn) :
-		step(deepDepth, endpointColumn);
-	float pathSubmersionRange = max(
-		SharedData::unifiedWaterSettings.ShoreDepthBlendRangeUnits,
-		1.0);
-	float midpointSubmergedWeight = smoothstep(
-		0.0,
-		pathSubmersionRange,
-		midpointColumn);
-	float monotonicTolerance = max(transition, 4.0);
-	float centerToMidpointWeight = smoothstep(
-		-monotonicTolerance,
-		0.0,
-		midpointColumn - centerColumn);
-	float midpointToEndpointWeight = smoothstep(
-		-monotonicTolerance,
-		0.0,
-		endpointColumn - midpointColumn);
-	float connectedDeepWeight =
-		endpointDeepWeight *
-		midpointSubmergedWeight *
-		centerToMidpointWeight *
-		midpointToEndpointWeight;
+	// Do not let the current pixel count as its own connected-depth evidence.
+	// This keeps unusual Depth/Transition slider combinations from suppressing
+	// the fallback when neither search tap establishes a submerged path.
+	if (!midpointValid)
+		return 0.0;
+
+	float deepestConnectedColumn = midpointColumn;
+	if (endpointValid)
+		deepestConnectedColumn = max(deepestConnectedColumn, endpointColumn);
+
+	// Deep Context Depth is now the point of full native/Open protection and
+	// Transition only controls the soft interval below it. Qualifying pixels can
+	// therefore reach exactly one instead of retaining a residual shallow layer.
+	float connectedDeepWeight = transition > 1e-4 ?
+		smoothstep(transitionStart, deepDepth, deepestConnectedColumn) :
+		step(deepDepth, deepestConnectedColumn);
 	return saturate(connectedDeepWeight);
 }
 
@@ -1403,7 +1399,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 #			if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
 	// Derivatives must remain outside the candidate-only branch. They provide a
-	// stable downhill direction and convert the world-space reach to pixels.
+	// stable downhill direction and convert the configured world-space search
+	// reach to pixels.
 	float2 waterColumnGradient = float2(
 		ddx_fine(waterColumnDepthUnits),
 		ddy_fine(waterColumnDepthUnits));

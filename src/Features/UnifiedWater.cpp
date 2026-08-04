@@ -293,7 +293,7 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("deep_connection_probe_reach_tooltip"),
-								  "Maximum physical distance searched toward increasing terrain depth for a connected medium/deep channel.\n"
+								  "Physical distance searched toward increasing terrain depth at half and full reach.\n"
 								  "Increase this for broad shallow banks. Set to 0 to disable connected-depth protection."));
 		}
 
@@ -306,7 +306,7 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("deep_context_depth_tooltip"),
-								  "Plane-normal depth that identifies a connected medium/deep channel and preserves the native/Open result.\n"
+								  "Plane-normal depth that gives full native/Open protection to a connected medium/deep channel.\n"
 								  "Keep this above Shallow Surface Depth so a uniformly shallow stream retains its fallback surface."));
 		}
 
@@ -319,7 +319,7 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("deep_context_transition_tooltip"),
-								  "Depth width over which connected deep-water protection fades in.\n"
+								  "Depth width below Deep Context Depth over which connected deep-water protection fades in.\n"
 								  "Raise this for a softer handoff; use the minimum for the sharpest transition."));
 		}
 

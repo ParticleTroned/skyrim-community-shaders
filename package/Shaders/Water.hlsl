@@ -1079,7 +1079,7 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 }
 #			endif
 
-#			if defined(UNIFIED_WATER) && defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && !defined(UNDERWATER) && !defined(LOD)
+#			if defined(UNIFIED_WATER) && defined(DEPTH) && (!defined(VERTEX_ALPHA_DEPTH) || defined(VR)) && !defined(UNDERWATER) && !defined(LOD)
 #				define UNIFIED_WATER_SHALLOW_FALLBACK
 
 static const float UnifiedWaterFallbackCullFadeRange = 2048.0;
@@ -1174,33 +1174,28 @@ bool TryGetUnifiedWaterVRColumn(
 	float2 logicalUV,
 	float sceneRawDepth,
 	float waterSurfaceRawDepth,
+	float3 waterSurfacePosition,
 	uint eyeIndex,
-	out float3 waterSurfacePosition,
 	out float waterColumnDepthUnits)
 {
-	waterSurfacePosition = 0.0.xxx;
 	waterColumnDepthUnits = -1.0;
-	// Both depths use the same projection at the same pixel. Geometry in front
-	// of the transparent surface cannot establish a submerged column.
+	// SV_POSITION depth is deliberately biased for distant water, so retain it
+	// only for the same-pixel foreground rejection. The interpolated world
+	// position is the authoritative rasterized water surface.
 	if (
 		!IsUnifiedWaterRawDepthValid(sceneRawDepth) ||
-		!IsUnifiedWaterRawDepthValid(waterSurfaceRawDepth) ||
+		!isfinite(waterSurfaceRawDepth) ||
+		!all(isfinite(waterSurfacePosition)) ||
 		sceneRawDepth < waterSurfaceRawDepth) {
 		return false;
 	}
 
 	float3 scenePosition;
-	if (
-		!TryGetUnifiedWaterScenePosition(
+	if (!TryGetUnifiedWaterScenePosition(
 			logicalUV,
 			sceneRawDepth,
 			eyeIndex,
-			scenePosition) ||
-		!TryGetUnifiedWaterScenePosition(
-			logicalUV,
-			waterSurfaceRawDepth,
-			eyeIndex,
-			waterSurfacePosition)) {
+			scenePosition)) {
 		return false;
 	}
 
@@ -1682,6 +1677,26 @@ PS_OUTPUT main(PS_INPUT input)
 #					if defined(VC)
 	distanceMul = saturate(input.TexCoord3.z);
 #					endif
+#					if defined(VR) && defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	// Vertex-alpha depth remains the native water blend input. Sample the
+	// undistorted scene depth only for Unified Water's bounded classifier so
+	// this permutation receives the same shallow/deep protection as depth water.
+	primaryRawDepth = GetRawScreenDepthWater(screenPosition);
+	primaryDepthLogicalUV =
+		FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
+	float reconstructedWaterColumnDepthUnits;
+	if (TryGetUnifiedWaterVRColumn(
+			primaryDepthLogicalUV,
+			primaryRawDepth,
+			input.HPosition.z,
+			input.WPosition.xyz,
+			eyeIndex,
+			reconstructedWaterColumnDepthUnits)) {
+		waterColumnDepthUnits = reconstructedWaterColumnDepthUnits;
+	}
+	shoreContactWeight =
+		GetUnifiedWaterShoreContactWeight(waterColumnDepthUnits);
+#					endif
 #				else
 	distanceMul = 0;
 
@@ -1701,19 +1716,17 @@ PS_OUTPUT main(PS_INPUT input)
 	waterColumnDepthUnits = planeMul * abs(viewSurfaceAngle);
 #					if defined(VR) && defined(UNIFIED_WATER_SHALLOW_FALLBACK)
 	// The legacy VR projection approximation remains the native fog/depth input,
-	// but it is not a world-unit water column. Reconstruct both surfaces through
-	// the same eye matrix before feeding the Unified Water classifier.
-	float3 reconstructedWaterSurfacePosition;
+	// but it is not a world-unit water column. Reconstruct the terrain through
+	// the current eye matrix and measure it from the rasterized water surface.
 	float reconstructedWaterColumnDepthUnits;
 	waterColumnDepthUnits = -1.0;
 	if (TryGetUnifiedWaterVRColumn(
 			primaryDepthLogicalUV,
 			primaryRawDepth,
 			input.HPosition.z,
+			input.WPosition.xyz,
 			eyeIndex,
-			reconstructedWaterSurfacePosition,
 			reconstructedWaterColumnDepthUnits)) {
-		unifiedWaterSurfacePosition = reconstructedWaterSurfacePosition;
 		waterColumnDepthUnits = reconstructedWaterColumnDepthUnits;
 	}
 #					endif
@@ -1995,10 +2008,15 @@ PS_OUTPUT main(PS_INPUT input)
 	shallowSurfaceLayerWeight =
 		shallowSurfaceCandidateWeight *
 		(1.0 - saturate(deepContextWeight));
-	// The native refraction already contains the riverbed shadow. Reusing the
-	// calculated surface visibility avoids restoring a second shadow copy and
-	// adds no extra texture reads.
+	// The native refraction already contains the riverbed shadow. SE and VR's
+	// non-VSM path can use the surface sample to suppress a duplicate shadow
+	// copy. VR VSM can return zero surface visibility over an otherwise lit water
+	// draw; do not let that stochastic result erase the water layer itself. The
+	// fallback target remains shadow-lit through refractionDiffuseColor and
+	// sunColor, so this does not turn the restored layer into unlit emission.
+#					if !defined(VR) || !defined(VOLUMETRIC_SHADOWS)
 	shallowSurfaceLayerWeight *= saturate(surfaceShadow);
+#					endif
 #					endif
 
 #					if !defined(VOLUMETRIC_SHADOWS)

@@ -660,7 +660,8 @@ public:
 	{
 		Ready,
 		Pending,
-		Failed
+		Failed,
+		FailedAfterMutation
 	};
 
 	struct VRVendorRuntimeLifecycleSnapshot
@@ -1590,6 +1591,7 @@ public:
 	{
 		uint32_t retireFrame = 0;
 		uint64_t transitionEpoch = 0;
+		uint64_t retirementSerial = 0;
 		uint32_t contractGeneration = 0;
 		eastl::unique_ptr<Texture2D> colorIn[2];
 		eastl::unique_ptr<Texture2D> colorOut[2];
@@ -1604,6 +1606,9 @@ public:
 	std::vector<RetiredVRIntermediateTextures> retiredVRIntermediateTextures;
 	uint32_t deferredVRIntermediateTextureCleanupFrame = 0;
 	winrt::com_ptr<ID3D11Query> vrIntermediateTextureCleanupFence;
+	std::atomic<uint64_t> vrIntermediateRetirementNextSerial{ 1 };
+	std::atomic<uint64_t> vrIntermediateRetirementLastIssuedSerial{ 0 };
+	std::atomic<uint64_t> vrIntermediateRetirementCompletedSerial{ 0 };
 	std::atomic_bool vrIntermediateRetirementCapacityLogged{ false };
 	struct RetiredVREngineTargetGeneration
 	{
@@ -1659,6 +1664,19 @@ public:
 		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
 	bool EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc);
+	struct VRExistingVendorProviderSnapshot
+	{
+		bool valid = false;
+		bool renderScaleActive = false;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = kDLSSPresetK;
+		uint32_t renderEyeWidth = 0;
+		uint32_t renderEyeHeight = 0;
+		uint32_t displayEyeWidth = 0;
+		uint32_t displayEyeHeight = 0;
+		uint32_t contractGeneration = 0;
+	};
 
 	// Helper: Create a Texture2D matching source format at a given size
 	static eastl::unique_ptr<Texture2D> CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
@@ -1682,6 +1700,7 @@ public:
 		uint32_t a_contractGeneration) const;
 	bool AreExistingVRSubmitVendorResourcesCompatible(
 		UpscaleMethod a_upscaleMethod,
+		const VRExistingVendorProviderSnapshot& a_provider,
 		uint32_t a_inputWidth,
 		uint32_t a_inputHeight,
 		uint32_t a_outputWidth,
@@ -1918,7 +1937,11 @@ public:
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
 	[[nodiscard]] bool ShouldDeferVRVendorLifecycleMutation() const;
 	[[nodiscard]] bool IsVRVendorLifecycleGateRelevant() const;
+	[[nodiscard]] VRExistingVendorProviderSnapshot GetExistingVRVendorProviderSnapshot() const;
 	[[nodiscard]] bool CanDispatchExistingVRVendorEvaluation(UpscaleMethod a_upscaleMethod) const;
+	[[nodiscard]] bool CanDispatchExistingVRVendorEvaluation(
+		UpscaleMethod a_upscaleMethod,
+		const VRExistingVendorProviderSnapshot& a_provider) const;
 
 	// D3D11 textures
 	Texture2D* reactiveMaskTexture = nullptr;
@@ -2059,6 +2082,10 @@ public:
 	uint32_t submitStageVendorAdmissionGeneration = 0;
 	uint32_t submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
 	bool submitStageVendorAdmissionPresentationOnly = true;
+	bool submitStageVendorAdmissionExactProviderReady = false;
+	bool submitStageVendorAdmissionAuthoritativeDLSSProfile = false;
+	uint32_t submitStageVendorAdmissionDLSSQualityMode = 0;
+	uint32_t submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	uint32_t submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageVendorAdmissionEyeMask = 0;
 	uint64_t submitStageVendorRelatchDeferredEpoch = 0;
@@ -2148,6 +2175,13 @@ public:
 	std::atomic<uint32_t> vrRenderScaleMemoryReliefEndFrame{ 0 };
 	std::atomic<uint32_t> vrRenderScaleMemoryReliefCleanEyeMask{ 0 };
 	std::atomic_bool vrRenderScaleMemoryReliefLogged{ false };
+	using VRLowPeakNativeRestoreProgress =
+		VRVendorRelatchPolicy::NativeRestoreProgress;
+	using VRLowPeakNativeRestoreOperation =
+		VRVendorRelatchPolicy::NativeRestoreOperation;
+	mutable std::mutex vrLowPeakNativeRestoreProgressMutex;
+	VRLowPeakNativeRestoreProgress vrLowPeakNativeRestoreProgress{};
+	VRLowPeakNativeRestoreOperation vrLowPeakNativeRestoreOperation{};
 	std::atomic_bool vrLowPeakNativeRestoreCleanupActive{ false };
 	VRRenderScaleRelatchSignature vrRenderScaleLastRapidRelatchSignature{};
 	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipFrame{ 0 };
@@ -2187,6 +2221,18 @@ public:
 	bool HasPendingVRIntermediateTextureCleanup() const;
 	bool CanAdmitVRIntermediateRetirement(uint64_t a_epoch);
 	void UpdateVRIntermediateRetirementSnapshot(bool a_capacityBlocked = false);
+	[[nodiscard]] VRLowPeakNativeRestoreProgress GetVRLowPeakNativeRestoreProgress() const;
+	[[nodiscard]] VRLowPeakNativeRestoreOperation GetVRLowPeakNativeRestoreOperation() const;
+	void ArmVRNativeRestorePresentationGuard(uint64_t a_epoch);
+	bool BeginVRLowPeakNativeRestoreProgress(
+		uint64_t a_epoch,
+		const VRLowPeakNativeRestoreOperation& a_operation);
+	bool RecordVRLowPeakNativeRestoreRetirement(uint64_t a_epoch, uint64_t a_retirementSerial);
+	bool CompleteVRLowPeakNativeRestoreVendorTeardown(uint64_t a_epoch);
+	bool MarkVRLowPeakNativeRestoreComplete(uint64_t a_epoch, uint64_t a_completedRetirementSerial);
+	bool AbortVRLowPeakNativeRestoreProgress(uint64_t a_expectedOwnerEpoch, uint64_t a_expectedGuardEpoch);
+	void ClearOwnedVRLowPeakNativeRestoreProgress(uint64_t a_expectedEpoch);
+	void ClearAllVRLowPeakNativeRestoreProgress();
 	bool HasPendingVREngineTargetRetirement() const;
 	bool CanAdmitVREngineTargetRetirement(uint64_t a_epoch);
 	void QueueVREngineTargetRetirement(
@@ -2493,7 +2539,7 @@ private:
 	VRVendorResourceResetResult HandleVRDLSSResourceTeardownResult(Streamline::DLSSResourceTeardownResult a_result, uint32_t a_generation, const char* a_lifecycleReason, const char* a_deviceLostContext);
 	void ScheduleVRIntermediateTextureCleanup();
 	void ServiceVRIntermediateTextureCleanup(bool a_forceFence = false);
-	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false);
+	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool a_includePendingFSRReset = true);
 	VRVendorResourceResetResult RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
 	bool IsVRRenderScalePhysicalContractConverged(
@@ -2546,6 +2592,9 @@ private:
 		ID3D11Resource* colorOut = nullptr;
 		const char* label = "vendor eye dispatch";
 		Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FullEye;
+		bool useAuthoritativeDLSSProfile = false;
+		uint32_t authoritativeDLSSQualityMode = 0;
+		uint32_t authoritativeDLSSPreset = kDLSSPresetK;
 	};
 	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
 	bool EnsureHMDMaskClearResources();

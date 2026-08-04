@@ -4997,37 +4997,6 @@ namespace
 		return a_value ? "yes" : "no";
 	}
 
-	constexpr VRVendorRelatchPolicy::NativeRestoreTeardownDisposition GetNativeRestoreTeardownDisposition(
-		Upscaling::VRVendorResourceResetResult a_result)
-	{
-		using Outcome = VRVendorRelatchPolicy::NativeRestoreTeardownOutcome;
-		switch (a_result) {
-		case Upscaling::VRVendorResourceResetResult::Ready:
-			return VRVendorRelatchPolicy::SelectNativeRestoreTeardownDisposition(Outcome::Ready);
-		case Upscaling::VRVendorResourceResetResult::Pending:
-			return VRVendorRelatchPolicy::SelectNativeRestoreTeardownDisposition(Outcome::Pending);
-		case Upscaling::VRVendorResourceResetResult::Failed:
-			return VRVendorRelatchPolicy::SelectNativeRestoreTeardownDisposition(Outcome::FailedBeforeRelease);
-		case Upscaling::VRVendorResourceResetResult::FailedAfterMutation:
-			return VRVendorRelatchPolicy::SelectNativeRestoreTeardownDisposition(Outcome::FailedAfterMutation);
-		default:
-			return VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Abort;
-		}
-	}
-
-	static_assert(
-		GetNativeRestoreTeardownDisposition(Upscaling::VRVendorResourceResetResult::Ready) ==
-		VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Complete);
-	static_assert(
-		GetNativeRestoreTeardownDisposition(Upscaling::VRVendorResourceResetResult::Pending) ==
-		VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Retry);
-	static_assert(
-		GetNativeRestoreTeardownDisposition(Upscaling::VRVendorResourceResetResult::Failed) ==
-		VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Abort);
-	static_assert(
-		GetNativeRestoreTeardownDisposition(Upscaling::VRVendorResourceResetResult::FailedAfterMutation) ==
-		VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Abort);
-
 	struct VRBoundsInfo
 	{
 		float uMin = -1.0f;
@@ -15117,7 +15086,7 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
 	ClearVRVendorWorkGates("upscaling reset");
 	pendingPostLoadRuntimeResetEpoch.store(0, std::memory_order_release);
-	ClearAllVRLowPeakNativeRestoreProgress();
+	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 	vrNativeRestorePresentationGuardEpoch.store(
 		0,
 		std::memory_order_release);
@@ -15804,104 +15773,61 @@ bool Upscaling::ReleaseVRGameEntryVendorWorkGates(
 	return true;
 }
 
-Upscaling::VRExistingVendorProviderSnapshot Upscaling::GetExistingVRVendorProviderSnapshot() const
-{
-	VRExistingVendorProviderSnapshot provider{};
-	if (!globals::game::isVR)
-		return provider;
-
-	const auto& boot = perfMode.GetBootSnapshot();
-	if (boot.valid && boot.active && IsVendorUpscalingMethod(boot.method)) {
-		provider.valid = true;
-		provider.renderScaleActive = true;
-		provider.method = boot.method;
-		provider.qualityMode = std::min<uint32_t>(boot.qualityMode, kQualityModeMaxIndex);
-		provider.dlssPreset = ClampDLSSPresetUInt(boot.dlssPreset);
-		provider.renderEyeWidth = boot.renderEyeWidth;
-		provider.renderEyeHeight = boot.renderEyeHeight;
-		provider.displayEyeWidth = boot.displayEyeWidth;
-		provider.displayEyeHeight = boot.displayEyeHeight;
-		provider.contractGeneration = boot.generation;
-		return provider;
-	}
-
-	const auto transition = GetVRRenderScaleTransitionSnapshot();
-	const auto* physical = transition.applied.valid ?
-	                           std::addressof(transition.applied) :
-	                       transition.stable.valid ?
-	                           std::addressof(transition.stable) :
-	                           nullptr;
-	if (physical && IsVendorUpscalingMethod(physical->method)) {
-		provider.valid = true;
-		provider.renderScaleActive = physical->active;
-		provider.method = physical->method;
-		provider.qualityMode = std::min<uint32_t>(physical->qualityMode, kQualityModeMaxIndex);
-		provider.dlssPreset = ClampDLSSPresetUInt(physical->dlssPreset);
-		provider.renderEyeWidth = physical->renderEyeWidth;
-		provider.renderEyeHeight = physical->renderEyeHeight;
-		provider.displayEyeWidth = physical->displayEyeWidth;
-		provider.displayEyeHeight = physical->displayEyeHeight;
-		provider.contractGeneration = physical->contractGeneration;
-		return provider;
-	}
-	return provider;
-}
-
 bool Upscaling::CanDispatchExistingVRVendorEvaluation(UpscaleMethod a_upscaleMethod) const
 {
-	return CanDispatchExistingVRVendorEvaluation(
-		a_upscaleMethod,
-		GetExistingVRVendorProviderSnapshot());
-}
-
-bool Upscaling::CanDispatchExistingVRVendorEvaluation(
-	UpscaleMethod a_upscaleMethod,
-	const VRExistingVendorProviderSnapshot& provider) const
-{
-	const bool vendorEvaluationSelected =
-		provider.valid &&
-		provider.method == a_upscaleMethod &&
-		IsVendorUpscalingMethod(a_upscaleMethod);
+	const bool vendorEvaluationSelected = IsVendorUpscalingMethod(a_upscaleMethod);
 	bool resourcesReady = vendorEvaluationSelected &&
 	                      AreCommonVendorTexturesReady(a_upscaleMethod);
 	if (a_upscaleMethod == UpscaleMethod::kDLSS) {
 		resourcesReady = resourcesReady &&
-		                 (provider.renderScaleActive ||
-						 !pendingDLSSReset.load(std::memory_order_acquire)) &&
+		                 !pendingDLSSReset.load(std::memory_order_acquire) &&
 		                 streamline.HasCompleteVRDLSSViewportResources();
 	} else if (a_upscaleMethod == UpscaleMethod::kFSR) {
 		resourcesReady = resourcesReady &&
 		                 !pendingFSRReset.load(std::memory_order_acquire) &&
 		                 fidelityFX.HasFSRResources();
 	}
-	if (resourcesReady && provider.renderScaleActive) {
-		if (a_upscaleMethod == UpscaleMethod::kDLSS) {
-			resourcesReady = provider.contractGeneration != 0 &&
-			                 vrDLSSRuntimeResourceGeneration == provider.contractGeneration;
-		} else {
-			resourcesReady = IsVendorRuntimeReadyForActiveContract(a_upscaleMethod);
-		}
-	}
+	if (resourcesReady && IsVRRenderScaleModeLatched())
+		resourcesReady = IsVendorRuntimeReadyForActiveContract(a_upscaleMethod);
 	if (resourcesReady && globals::game::isVR) {
-		if (!provider.renderEyeWidth || !provider.renderEyeHeight ||
-			!provider.displayEyeWidth || !provider.displayEyeHeight ||
+		auto* state = globals::state;
+		auto outputSize = runtimeResolutionPlan.finalOutputSize;
+		auto renderSize = runtimeResolutionPlan.engineRenderSize;
+		if (state && (outputSize.x <= 0.0f || outputSize.y <= 0.0f))
+			outputSize = state->screenSize;
+		if (outputSize.x > 0.0f && outputSize.y > 0.0f &&
+			(renderSize.x <= 0.0f || renderSize.y <= 0.0f)) {
+			renderSize = Util::ConvertToDynamic(outputSize);
+		}
+
+		if (!state ||
+			outputSize.x <= 0.0f || outputSize.y <= 0.0f ||
+			renderSize.x <= 0.0f || renderSize.y <= 0.0f ||
 			!vrIntermediateColorIn[0] || !vrIntermediateColorIn[0]->resource ||
 			!vrIntermediateMotionVectors[0] || !vrIntermediateMotionVectors[0]->resource ||
 			!vrIntermediateReactiveMask[0] || !vrIntermediateReactiveMask[0]->resource ||
 			!vrIntermediateTransparencyMask[0] || !vrIntermediateTransparencyMask[0]->resource) {
 			resourcesReady = false;
 		} else {
+			const uint32_t eyeWidthIn = static_cast<uint32_t>(renderSize.x / 2.0f);
+			const uint32_t eyeHeightIn = static_cast<uint32_t>(renderSize.y);
+			const uint32_t eyeWidthOut = static_cast<uint32_t>(outputSize.x / 2.0f);
+			const uint32_t eyeHeightOut = static_cast<uint32_t>(outputSize.y);
+			const uint32_t contractGeneration =
+				IsVRRenderScaleModeLatched() ?
+					GetActiveVRRenderScaleContractGeneration() :
+					0u;
 			resourcesReady = AreActiveVRIntermediateTexturesCompatible(
 				a_upscaleMethod,
-				provider.renderEyeWidth,
-				provider.renderEyeHeight,
-				provider.displayEyeWidth,
-				provider.displayEyeHeight,
+				eyeWidthIn,
+				eyeHeightIn,
+				eyeWidthOut,
+				eyeHeightOut,
 				vrIntermediateColorIn[0]->resource.get(),
 				vrIntermediateMotionVectors[0]->resource.get(),
 				vrIntermediateReactiveMask[0]->resource.get(),
 				vrIntermediateTransparencyMask[0]->resource.get(),
-				provider.contractGeneration);
+				contractGeneration);
 
 			if (resourcesReady && a_upscaleMethod == UpscaleMethod::kDLSS) {
 				for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -15909,10 +15835,10 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(
 					if (!streamline.TryResolveExistingVRDLSSViewport(
 							Streamline::DLSSViewportRole::FullEye,
 							eye,
-							provider.qualityMode,
-							provider.dlssPreset,
-							provider.displayEyeWidth,
-							provider.displayEyeHeight,
+							GetRuntimeQualityMode(),
+							GetRuntimeDLSSPreset(),
+							eyeWidthOut,
+							eyeHeightOut,
 							vrIntermediateColorIn[eye]->resource.get(),
 							resolvedViewport)) {
 						resourcesReady = false;
@@ -15921,10 +15847,10 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(
 				}
 			} else if (resourcesReady && a_upscaleMethod == UpscaleMethod::kFSR) {
 				resourcesReady = fidelityFX.AreFSRResourcesCompatible(
-					provider.renderEyeWidth,
-					provider.renderEyeHeight,
-					provider.displayEyeWidth,
-					provider.displayEyeHeight,
+					eyeWidthIn,
+					eyeHeightIn,
+					eyeWidthOut,
+					eyeHeightOut,
 					2u);
 			}
 		}
@@ -18721,161 +18647,6 @@ namespace
 
 }
 
-Upscaling::VRLowPeakNativeRestoreProgress Upscaling::GetVRLowPeakNativeRestoreProgress() const
-{
-	std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-	return vrLowPeakNativeRestoreProgress;
-}
-
-Upscaling::VRLowPeakNativeRestoreOperation Upscaling::GetVRLowPeakNativeRestoreOperation() const
-{
-	std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-	return vrLowPeakNativeRestoreOperation;
-}
-
-void Upscaling::ArmVRNativeRestorePresentationGuard(uint64_t a_epoch)
-{
-	if (a_epoch == 0)
-		return;
-
-	const uint64_t previousGuardEpoch =
-		vrNativeRestorePresentationGuardEpoch.exchange(
-			a_epoch,
-			std::memory_order_acq_rel);
-	if (previousGuardEpoch != a_epoch)
-		ClearVRNativeRestorePresentationWatchdog();
-}
-
-bool Upscaling::BeginVRLowPeakNativeRestoreProgress(
-	uint64_t a_epoch,
-	const VRLowPeakNativeRestoreOperation& a_operation)
-{
-	if (a_epoch == 0 || !a_operation.valid)
-		return false;
-
-	// Serialize progress publication and guard arming with request supersession.
-	// A successor either observes and transfers the fully armed transaction, or
-	// wins first and makes this stale owner fail closed before teardown begins.
-	const std::scoped_lock queueLock(
-		perfModeRenderTargetRecreateQueueMutex);
-	const auto controller = GetVRRenderScaleTransitionSnapshot();
-	if (!VRVendorRelatchPolicy::CanArmNativeRestoreGuard(
-			a_epoch,
-			controller.targetEpoch)) {
-		return false;
-	}
-
-	bool beganNewTransaction = false;
-	{
-		std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-		const uint64_t previousOwner =
-			vrLowPeakNativeRestoreProgress.ownerEpoch;
-		if (!VRVendorRelatchPolicy::BeginNativeRestore(
-				vrLowPeakNativeRestoreProgress,
-				a_epoch)) {
-			return false;
-		}
-		beganNewTransaction = previousOwner != a_epoch;
-		if (beganNewTransaction)
-			vrLowPeakNativeRestoreOperation = a_operation;
-	}
-
-	// Vendor teardown can make the reduced physical submit invalid before native
-	// targets exist. Arm the existing compositor guard at transaction admission so
-	// the OpenVR hook submits its real black keepalive instead of creating a
-	// no-submit gap or exposing the reduced original.
-	if (beganNewTransaction)
-		ArmVRNativeRestorePresentationGuard(a_epoch);
-	return true;
-}
-
-bool Upscaling::RecordVRLowPeakNativeRestoreRetirement(
-	uint64_t a_epoch,
-	uint64_t a_retirementSerial)
-{
-	std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-	return VRVendorRelatchPolicy::RecordNativeRestoreRetirement(
-		vrLowPeakNativeRestoreProgress,
-		a_epoch,
-		a_retirementSerial);
-}
-
-bool Upscaling::CompleteVRLowPeakNativeRestoreVendorTeardown(
-	uint64_t a_epoch)
-{
-	std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-	return VRVendorRelatchPolicy::CompleteNativeRestoreVendorTeardown(
-		vrLowPeakNativeRestoreProgress,
-		a_epoch);
-}
-
-bool Upscaling::MarkVRLowPeakNativeRestoreComplete(
-	uint64_t a_epoch,
-	uint64_t a_completedRetirementSerial)
-{
-	std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-	return VRVendorRelatchPolicy::CompleteNativeRestoreRetirement(
-		vrLowPeakNativeRestoreProgress,
-		a_epoch,
-		a_completedRetirementSerial);
-}
-
-bool Upscaling::AbortVRLowPeakNativeRestoreProgress(
-	uint64_t a_expectedOwnerEpoch,
-	uint64_t a_expectedGuardEpoch)
-{
-	const std::scoped_lock queueLock(
-		perfModeRenderTargetRecreateQueueMutex);
-	bool aborted = false;
-	{
-		std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-		aborted = VRVendorRelatchPolicy::AbortNativeRestore(
-			vrLowPeakNativeRestoreProgress,
-			a_expectedOwnerEpoch);
-		if (aborted)
-			vrLowPeakNativeRestoreOperation = {};
-	}
-
-	bool guardCleared = false;
-	if (aborted) {
-		guardCleared =
-			vrNativeRestorePresentationGuardEpoch.exchange(
-				0,
-				std::memory_order_acq_rel) != 0;
-	} else if (a_expectedGuardEpoch != 0) {
-		guardCleared =
-			vrNativeRestorePresentationGuardEpoch.compare_exchange_strong(
-				a_expectedGuardEpoch,
-				0,
-				std::memory_order_acq_rel,
-				std::memory_order_acquire);
-	}
-	if (guardCleared)
-		ClearVRNativeRestorePresentationWatchdog();
-	return aborted || guardCleared;
-}
-
-void Upscaling::ClearOwnedVRLowPeakNativeRestoreProgress(uint64_t a_expectedEpoch)
-{
-	if (a_expectedEpoch == 0)
-		return;
-
-	std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-	if (vrLowPeakNativeRestoreProgress.ownerEpoch != a_expectedEpoch)
-		return;
-
-	vrLowPeakNativeRestoreProgress = {};
-	vrLowPeakNativeRestoreOperation = {};
-}
-
-void Upscaling::ClearAllVRLowPeakNativeRestoreProgress()
-{
-	std::scoped_lock lock(vrLowPeakNativeRestoreProgressMutex);
-	vrLowPeakNativeRestoreProgress = {};
-	vrLowPeakNativeRestoreOperation = {};
-	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
-}
-
 void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 {
 	InvalidateFrameScopedUpscalingState();
@@ -18910,11 +18681,6 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	retireArray(submitStageDLSSSharpenerTexture, retired.submitStageDLSSSharpener);
 
 	if (hasRetiredTextures) {
-		retired.retirementSerial =
-			vrIntermediateRetirementNextSerial.fetch_add(1, std::memory_order_acq_rel);
-		vrIntermediateRetirementLastIssuedSerial.store(
-			retired.retirementSerial,
-			std::memory_order_release);
 		retiredVRIntermediateTextures.push_back(std::move(retired));
 		vrIntermediateTextureCleanupFence = nullptr;
 		ScheduleVRIntermediateTextureCleanup();
@@ -18945,10 +18711,6 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageVendorAdmissionGeneration = 0;
 	submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
 	submitStageVendorAdmissionPresentationOnly = true;
-	submitStageVendorAdmissionExactProviderReady = false;
-	submitStageVendorAdmissionAuthoritativeDLSSProfile = false;
-	submitStageVendorAdmissionDLSSQualityMode = 0;
-	submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorAdmissionEyeMask = 0;
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
@@ -18995,14 +18757,7 @@ void Upscaling::ServiceVRIntermediateTextureCleanup(bool a_forceFence)
 	}
 
 	const bool reliefActive = IsVRRenderScaleMemoryReliefActive();
-	const auto lowPeakProgress = GetVRLowPeakNativeRestoreProgress();
-	const bool epochOwnedLowPeakRestoreActive =
-		lowPeakProgress.phase ==
-		VRVendorRelatchPolicy::NativeRestorePhase::SharedRetirementPending;
-	const bool legacyLowPeakRestoreActive =
-		vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire);
-	const bool lowPeakNativeRestoreActive =
-		epochOwnedLowPeakRestoreActive || legacyLowPeakRestoreActive;
+	const bool lowPeakNativeRestoreActive = vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire);
 	const bool forceFenceCleanup = a_forceFence || reliefActive || lowPeakNativeRestoreActive;
 	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
 	if (!forceFenceCleanup &&
@@ -19025,34 +18780,12 @@ void Upscaling::ServiceVRIntermediateTextureCleanup(bool a_forceFence)
 		return;
 	}
 
-	uint64_t completedRetirementSerial = 0;
-	for (const auto& retired : retiredVRIntermediateTextures) {
-		completedRetirementSerial =
-			std::max(completedRetirementSerial, retired.retirementSerial);
-	}
 	retiredVRIntermediateTextures.clear();
-	if (completedRetirementSerial != 0) {
-		auto completedHighWater =
-			vrIntermediateRetirementCompletedSerial.load(std::memory_order_acquire);
-		while (completedHighWater < completedRetirementSerial &&
-			!vrIntermediateRetirementCompletedSerial.compare_exchange_weak(
-				completedHighWater,
-				completedRetirementSerial,
-				std::memory_order_acq_rel,
-				std::memory_order_acquire)) {
-		}
-	}
 	vrIntermediateTextureCleanupFence = nullptr;
 	deferredVRIntermediateTextureCleanupFrame = 0;
 	vrIntermediateRetirementCapacityLogged.store(false, std::memory_order_release);
-	const bool completedEpochOwnedLowPeakRestore =
-		epochOwnedLowPeakRestoreActive &&
-		MarkVRLowPeakNativeRestoreComplete(
-			lowPeakProgress.ownerEpoch,
-			completedRetirementSerial);
-	if (legacyLowPeakRestoreActive)
+	if (lowPeakNativeRestoreActive) {
 		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
-	if (completedEpochOwnedLowPeakRestore || legacyLowPeakRestoreActive) {
 		logger::debug("[VRRenderScale] Cleared retired intermediates before full-resolution render-scale-off restore.");
 	}
 	if (reliefActive &&
@@ -19357,7 +19090,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 			pendingVRRenderScaleRecoverySnapshot = {};
 		}
-		ClearAllVRLowPeakNativeRestoreProgress();
+		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 		ClearVRRenderScaleInfoTransition();
 		ClearVRFSRRelatchDrainGuard();
 		CompleteVRRenderScalePostLoadRecovery(abandonedPostLoadRecoveryEpoch, 0);
@@ -19679,11 +19412,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return true;
 	};
 	const auto stopTerminalFSRRelatch = [&](const char* a_reason) {
-		const auto nativeRestoreProgress =
-			GetVRLowPeakNativeRestoreProgress();
-		AbortVRLowPeakNativeRestoreProgress(
-			nativeRestoreProgress.ownerEpoch,
-			relatchEpoch);
 		RecordVRVendorRuntimeLifecycle(
 			UpscaleMethod::kFSR,
 			VRVendorRuntimeLifecyclePhase::Failed,
@@ -20171,6 +19899,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		if (noOpRenderScaleActive && ClampToggleUInt(settings.perfMode) == 0)
 			settings.perfMode = 1;
+		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 		clearRelatchRetryLogs();
 		const bool resumeNativePresentationStabilization =
 			!noOpRenderScaleActive &&
@@ -20184,7 +19913,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				false);
 			return false;
 		}
-		ClearOwnedVRLowPeakNativeRestoreProgress(relatchEpoch);
 		logger::debug(
 			"[VRRenderScale] Skipped render-target relatch; authoritative physical {} contract already matches the requested profile.",
 			noOpRenderScaleActive ? "active" : "inactive");
@@ -20316,7 +20044,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	bool completedLowPeakNativeRestore = false;
 	try {
 		const bool pendingDLSSResetForRelatch = pendingDLSSReset.load(std::memory_order_acquire);
-		const bool pendingFSRResetForRelatch = pendingFSRReset.load(std::memory_order_acquire);
 		// An active physical contract is the sole previous-owner authority, including
 		// an explicit non-vendor result. Only an inactive physical contract may fall
 		// back to the applied, then stable, inactive contract; requested/applying are
@@ -20471,223 +20198,33 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!plannedRelatchTargetsStrictlyReady &&
 			previousBootWasActiveVendorRenderScale &&
 			!relatchTargetRenderScaleActive;
-		const auto nativeRestoreProgressAtAdmission =
-			GetVRLowPeakNativeRestoreProgress();
-		const bool epochOwnedDLSSNativeRestore =
-			(lowPeakNativeRestoreRelatch && previousVendorWasDLSS) ||
-			nativeRestoreProgressAtAdmission.ownerEpoch == relatchEpoch;
-		VRLowPeakNativeRestoreOperation nativeRestoreOperation{};
 		static bool loggedLowPeakNativeRestoreCleanupDefer = false;
 		bool lowPeakNativeRestoreCleanupCompleted = false;
 		const auto serviceLowPeakNativeRestoreCleanup = [&]() {
-			auto progress = GetVRLowPeakNativeRestoreProgress();
-			if (progress.ownerEpoch != 0 &&
-				progress.ownerEpoch != relatchEpoch &&
-				progress.phase != VRVendorRelatchPolicy::NativeRestorePhase::Idle) {
-				// A superseding request owns the current compositor contract even while
-				// the previous epoch's exact teardown/retirement is drained.
-				ArmVRNativeRestorePresentationGuard(relatchEpoch);
-			}
-			auto action = VRVendorRelatchPolicy::SelectNativeRestoreAction(
-				relatchEpoch,
-				progress.ownerEpoch,
-				progress.phase);
-			const bool pollOutstandingDLSSRestoreHere =
-				progress.ownerEpoch != 0 &&
-				action == VRVendorRelatchPolicy::NativeRestoreAction::PollVendorTeardown;
-			if (pollOutstandingDLSSRestoreHere) {
-				const auto outstandingOperation =
-					GetVRLowPeakNativeRestoreOperation();
-				if (!outstandingOperation.valid) {
-					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-					return true;
-				}
-				const uint64_t retirementSerialBefore =
-					vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
-				const auto outstandingResetResult =
-					ResetVRVendorRuntimeResources(
-						outstandingOperation.destroyDLSSResources,
-						outstandingOperation.destroyPeripheryTAAResources,
-						outstandingOperation.destroyFSRResources,
-						outstandingOperation.waitForFSRIdleTeardown,
-						false,
-						outstandingOperation.destroySharedResources,
-						outstandingOperation.preserveVRIntermediateTextures,
-						false);
-				const uint64_t retirementSerialAfter =
-					vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
-				if (retirementSerialAfter != retirementSerialBefore &&
-					!RecordVRLowPeakNativeRestoreRetirement(
-						progress.ownerEpoch,
-						retirementSerialAfter)) {
-					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-					return true;
-				}
-				const auto outstandingTeardownDisposition =
-					GetNativeRestoreTeardownDisposition(outstandingResetResult);
-				if (outstandingTeardownDisposition ==
-					VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Retry) {
-					requeueRelatch(
-						kVRUpscalingTransitionApplyDelayFrames,
-						false,
-						VRRenderScaleRetryKind::Backend);
-					return true;
-				}
-				if (outstandingTeardownDisposition ==
-					VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Abort) {
-					const auto failedLifecycle =
-						GetVRRenderScaleTransitionSnapshot();
-					if (outstandingOperation.destroyFSRResources &&
-						failedLifecycle.fsrLifecycle.phase ==
-							VRVendorRuntimeLifecyclePhase::Failed &&
-						failedLifecycle.fsrLifecycle.transitionEpoch ==
-							relatchEpoch) {
-						stopTerminalFSRRelatch(
-							"outstanding native-restore FSR teardown failed");
-					} else {
-						AbortVRLowPeakNativeRestoreProgress(
-							progress.ownerEpoch,
-							relatchEpoch);
-						clearRelatchDelay(true);
-						ClearVRFSRRelatchDrainGuard();
-						SetVRRenderScaleTransitionState(
-							VRRenderScaleTransitionState::WaitingForSafePoint,
-							"outstanding native-restore vendor teardown failed");
-					}
-					return true;
-				}
-
-				if (!CompleteVRLowPeakNativeRestoreVendorTeardown(
-						progress.ownerEpoch)) {
-					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-					return true;
-				}
-				progress = GetVRLowPeakNativeRestoreProgress();
-				action = VRVendorRelatchPolicy::SelectNativeRestoreAction(
-					relatchEpoch,
-					progress.ownerEpoch,
-					progress.phase);
-			}
-
-			if (action == VRVendorRelatchPolicy::NativeRestoreAction::DrainPreviousRetirement ||
-				action == VRVendorRelatchPolicy::NativeRestoreAction::DrainCurrentRetirement) {
-				ServiceVRIntermediateTextureCleanup();
-				if (HasPendingVRIntermediateTextureCleanup()) {
-					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Retirement);
-					if (!loggedLowPeakNativeRestoreCleanupDefer) {
-						logger::debug(
-							"[VRRenderScale] Render-target relatch waiting for retired intermediates to drain before full-resolution render-scale-off restore. method={} frame={} ownerEpoch={} targetEpoch={}",
-							magic_enum::enum_name(relatchUpscaleMethod),
-							state->frameCount,
-							progress.ownerEpoch,
-							relatchEpoch);
-						loggedLowPeakNativeRestoreCleanupDefer = true;
-					}
-					return true;
-				}
-
-				MarkVRLowPeakNativeRestoreComplete(
-					progress.ownerEpoch,
-					vrIntermediateRetirementCompletedSerial.load(std::memory_order_acquire));
-				progress = GetVRLowPeakNativeRestoreProgress();
-				if (progress.phase != VRVendorRelatchPolicy::NativeRestorePhase::Complete) {
-					requeueRelatch(
-						kVRUpscalingTransitionApplyDelayFrames,
-						false,
-						VRRenderScaleRetryKind::Retirement);
-					return true;
-				}
-			}
-
-			progress = GetVRLowPeakNativeRestoreProgress();
-			if (progress.ownerEpoch != 0 &&
-				progress.ownerEpoch != relatchEpoch &&
-				progress.phase == VRVendorRelatchPolicy::NativeRestorePhase::Complete) {
-				// The first cleanup service pass precedes construction of the current
-				// relatch plan. Keep a completed predecessor intact until the exact
-				// successor operation is available for the coverage decision below.
-				if (epochOwnedDLSSNativeRestore && !nativeRestoreOperation.valid)
-					return false;
-				const auto completedOperation =
-					GetVRLowPeakNativeRestoreOperation();
-				ClearOwnedVRLowPeakNativeRestoreProgress(progress.ownerEpoch);
-				progress = {};
-				if (epochOwnedDLSSNativeRestore) {
-					if (!BeginVRLowPeakNativeRestoreProgress(
-							relatchEpoch,
-							nativeRestoreOperation)) {
-						requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-						return true;
-					}
-					if (completedOperation.Covers(nativeRestoreOperation)) {
-						if (!CompleteVRLowPeakNativeRestoreVendorTeardown(
-								relatchEpoch)) {
-							requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-							return true;
-						}
-						lowPeakNativeRestoreCleanupCompleted = true;
-						loggedLowPeakNativeRestoreCleanupDefer = false;
-					}
-					return false;
-				}
-			}
-
-			progress = GetVRLowPeakNativeRestoreProgress();
-			if (!epochOwnedDLSSNativeRestore) {
-				if (progress.ownerEpoch != 0) {
-					if (progress.phase != VRVendorRelatchPolicy::NativeRestorePhase::Complete) {
-						requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-						return true;
-					}
-					ClearOwnedVRLowPeakNativeRestoreProgress(progress.ownerEpoch);
-				}
-
-				// Preserve the proven RC173/PR7 FSR native-restore cleanup path.
-				if (!lowPeakNativeRestoreRelatch) {
-					vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
-					loggedLowPeakNativeRestoreCleanupDefer = false;
-					return false;
-				}
-				if (!vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire))
-					return false;
-
-				ServiceVRIntermediateTextureCleanup();
-				if (HasPendingVRIntermediateTextureCleanup()) {
-					requeueRelatch(
-						kVRUpscalingTransitionApplyDelayFrames,
-						false,
-						VRRenderScaleRetryKind::Retirement);
-					return true;
-				}
+			if (!lowPeakNativeRestoreRelatch) {
 				vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 				loggedLowPeakNativeRestoreCleanupDefer = false;
-				lowPeakNativeRestoreCleanupCompleted = true;
 				return false;
 			}
+			if (!vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire))
+				return false;
 
-			progress = GetVRLowPeakNativeRestoreProgress();
-			action = VRVendorRelatchPolicy::SelectNativeRestoreAction(
-				relatchEpoch,
-				progress.ownerEpoch,
-				progress.phase);
-			if (action == VRVendorRelatchPolicy::NativeRestoreAction::BeginVendorTeardown) {
-				// The early service pass may drain an older transaction, but the
-				// immutable operation for a new owner is only known after planning.
-				if (!nativeRestoreOperation.valid)
-					return false;
-				if (!BeginVRLowPeakNativeRestoreProgress(
-						relatchEpoch,
-						nativeRestoreOperation)) {
-					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-					return true;
+			ServiceVRIntermediateTextureCleanup();
+			if (HasPendingVRIntermediateTextureCleanup()) {
+				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Retirement);
+				if (!loggedLowPeakNativeRestoreCleanupDefer) {
+					logger::debug(
+						"[VRRenderScale] Render-target relatch waiting for retired intermediates to drain before full-resolution render-scale-off restore. method={} frame={}",
+						magic_enum::enum_name(relatchUpscaleMethod),
+						state->frameCount);
+					loggedLowPeakNativeRestoreCleanupDefer = true;
 				}
-				return false;
+				return true;
 			}
 
-			if (action == VRVendorRelatchPolicy::NativeRestoreAction::RecreatePhysicalTargets) {
-				loggedLowPeakNativeRestoreCleanupDefer = false;
-				lowPeakNativeRestoreCleanupCompleted = true;
-			}
+			vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
+			loggedLowPeakNativeRestoreCleanupDefer = false;
+			lowPeakNativeRestoreCleanupCompleted = true;
 			return false;
 		};
 		if (serviceLowPeakNativeRestoreCleanup())
@@ -20806,7 +20343,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
 			previousVendorWasFSR &&
-			!pendingFSRResetForRelatch &&
+			!pendingFSRReset.load(std::memory_order_acquire) &&
 			memoryAtAdmission.valid &&
 			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Normal &&
 			!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
@@ -20835,7 +20372,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
 				(!previousBootWasActiveFSR && !reuseCompatibleFSRResourcesForRelatch) ||
 				forceFSRResourceRecreateForRelatch ||
-				pendingFSRResetForRelatch ||
+				pendingFSRReset.load(std::memory_order_acquire) ||
 				!areFSRResourcesCompatibleForRelatch()) {
 				return false;
 			}
@@ -20845,7 +20382,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool retainWarmFSRResourcesForRelatch =
 			retainWarmInactiveVendorResourcesForRelatch &&
 			!forceFSRResourceRecreateForRelatch &&
-			!pendingFSRResetForRelatch &&
+			!pendingFSRReset.load(std::memory_order_acquire) &&
 			areFSRResourcesCompatibleForRelatch() &&
 			(relatchUpscaleMethod != UpscaleMethod::kFSR || !previousBootWasActiveFSR);
 		const bool preserveFSRResourcesForRelatch =
@@ -20861,7 +20398,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool fsrResourcesNeedTeardownForRelatch = fidelityFX.HasFSRResourcesPendingTeardown();
 		const bool destroyFSRResourcesForRelatch =
 			!preserveFSRResourcesForRelatch &&
-			(pendingFSRResetForRelatch ||
+			(pendingFSRReset.load(std::memory_order_acquire) ||
 				fidelityFX.HasFSRResources() ||
 				fsrResourcesNeedTeardownForRelatch ||
 				previousVendorWasFSR);
@@ -20941,18 +20478,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.recreateFSRResources = recreateFSRResourcesDuringRelatch;
 		relatchPlan.waitForFSRDrain = forceSynchronousFSRTeardownForRelatch;
 		relatchPlan.lowPeakNativeRestore = lowPeakNativeRestoreRelatch;
-		nativeRestoreOperation = {
-			.valid = true,
-			.destroyDLSSResources = relatchPlan.destroyDLSSResources,
-			.destroyPeripheryTAAResources =
-				!relatchPlan.reuseSharedSubmitResources,
-			.destroyFSRResources = relatchPlan.destroyFSRResources,
-			.waitForFSRIdleTeardown = relatchPlan.waitForFSRDrain,
-			.destroySharedResources =
-				!relatchPlan.reuseSharedSubmitResources,
-			.preserveVRIntermediateTextures =
-				relatchPlan.preserveCompatibleFSRIntermediates,
-		};
 		auto addRelatchAction = [&](VRRenderScaleRelatchAction a_action) {
 			relatchPlan.actionMask |= static_cast<uint32_t>(a_action);
 		};
@@ -21263,7 +20788,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(relatchPlan.reuseWarmTargetRuntime),
 				BoolText(forceSynchronousFSRTeardownForRelatch),
 				BoolText(pendingDLSSResetForRelatch),
-				BoolText(pendingFSRResetForRelatch),
+				BoolText(pendingFSRReset.load(std::memory_order_acquire)),
 				BoolText(relatchTargetRenderScaleActive),
 				ClampPositiveDimension(relatchDiagRenderSize.x),
 				ClampPositiveDimension(relatchDiagRenderSize.y),
@@ -21314,7 +20839,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		};
 		bool fsrTeardownReadyForRelatch = false;
 		const bool drainFSRResourcesBeforeRelatch =
-			!lowPeakNativeRestoreCleanupCompleted &&
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
 			!preserveFSRResourcesForRelatch &&
 			fsrResourcesNeedTeardownForRelatch;
@@ -21368,8 +20892,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return deferSupersededRapidFSRRelatch("FSR drain", false);
 		if (serviceLowPeakNativeRestoreCleanup())
 			return false;
-		const uint64_t retirementSerialBeforeVendorReset =
-			vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
 		const auto vendorResetResult =
 			lowPeakNativeRestoreCleanupCompleted ?
 				VRVendorResourceResetResult::Ready :
@@ -21380,20 +20902,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					relatchPlan.waitForFSRDrain,
 					fsrTeardownReadyForRelatch,
 					!relatchPlan.reuseSharedSubmitResources,
-					relatchPlan.preserveCompatibleFSRIntermediates,
-					!epochOwnedDLSSNativeRestore);
-		if (epochOwnedDLSSNativeRestore) {
-			const uint64_t retirementSerialAfterVendorReset =
-				vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
-			if (retirementSerialAfterVendorReset !=
-					retirementSerialBeforeVendorReset &&
-				!RecordVRLowPeakNativeRestoreRetirement(
-					relatchEpoch,
-					retirementSerialAfterVendorReset)) {
-				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-				return false;
-			}
-		}
+					relatchPlan.preserveCompatibleFSRIntermediates);
 		if (vendorResetResult != VRVendorResourceResetResult::Ready) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay(true);
@@ -21402,27 +20911,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				return false;
 			}
 
-			const auto teardownDisposition =
-				GetNativeRestoreTeardownDisposition(vendorResetResult);
 			const auto failedVendorSnapshot = GetVRRenderScaleTransitionSnapshot();
-			const bool terminalVendorFailure =
-				vendorResetResult == VRVendorResourceResetResult::Failed ||
-				vendorResetResult == VRVendorResourceResetResult::FailedAfterMutation;
 			const bool terminalInactiveFSRFailure =
-				terminalVendorFailure &&
+				vendorResetResult == VRVendorResourceResetResult::Failed &&
 				relatchUpscaleMethod != UpscaleMethod::kFSR &&
 				relatchPlan.destroyFSRResources &&
 				failedVendorSnapshot.fsrLifecycle.phase == VRVendorRuntimeLifecyclePhase::Failed &&
 				failedVendorSnapshot.fsrLifecycle.transitionEpoch == relatchEpoch;
-			const bool terminalFSRFailure =
-				terminalVendorFailure &&
-				relatchPlan.destroyFSRResources &&
-				failedVendorSnapshot.fsrLifecycle.phase ==
-					VRVendorRuntimeLifecyclePhase::Failed &&
-				failedVendorSnapshot.fsrLifecycle.transitionEpoch ==
-					relatchEpoch;
-			if (teardownDisposition ==
-				VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Retry) {
+			if (vendorResetResult == VRVendorResourceResetResult::Pending ||
+				(relatchUpscaleMethod != UpscaleMethod::kFSR && !terminalInactiveFSRFailure)) {
 				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Backend);
 			} else if (terminalInactiveFSRFailure) {
 				// The failed FSR allocation remains owned, but a terminal teardown
@@ -21433,29 +20930,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				ClearVRFSRRelatchDrainGuard();
 				fsrResourceFailureRequestKey =
 					BuildFSRResourceLifecycleRequestKey(*this, UpscaleMethod::kFSR);
-				const auto failedNativeRestore =
-					GetVRLowPeakNativeRestoreProgress();
-				AbortVRLowPeakNativeRestoreProgress(
-					failedNativeRestore.ownerEpoch,
-					relatchEpoch);
 				SetVRRenderScaleTransitionState(
 					VRRenderScaleTransitionState::WaitingForSafePoint,
 					relatchOrigin == VRUpscalingTransitionOrigin::RecoveryRelatch ?
 						"native recovery FSR teardown failed" :
 						"inactive-target FSR teardown failed");
-			} else if (terminalFSRFailure) {
-				stopTerminalFSRRelatch("render-target relatch vendor resource teardown");
 			} else {
-				const auto failedNativeRestore =
-					GetVRLowPeakNativeRestoreProgress();
-				AbortVRLowPeakNativeRestoreProgress(
-					failedNativeRestore.ownerEpoch,
-					relatchEpoch);
-				clearRelatchDelay(true);
-				ClearVRFSRRelatchDrainGuard();
-				SetVRRenderScaleTransitionState(
-					VRRenderScaleTransitionState::WaitingForSafePoint,
-					"render-target relatch DLSS teardown failed");
+				stopTerminalFSRRelatch("render-target relatch vendor resource teardown");
 			}
 			if (relatchUpscaleMethod == UpscaleMethod::kDLSS && destroyDLSSResourcesForRelatch)
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, relatchContractGeneration);
@@ -21473,19 +20954,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 			return false;
 		}
-		if ((lowPeakNativeRestoreRelatch || epochOwnedDLSSNativeRestore) &&
-			!lowPeakNativeRestoreCleanupCompleted) {
-			if (lowPeakNativeRestoreRelatch)
-				markLowPeakNativeRestoreVendorDirty();
-			if (epochOwnedDLSSNativeRestore) {
-				if (!CompleteVRLowPeakNativeRestoreVendorTeardown(
-						relatchEpoch)) {
-					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-					return false;
-				}
-			} else {
-				vrLowPeakNativeRestoreCleanupActive.store(true, std::memory_order_release);
-			}
+		if (lowPeakNativeRestoreRelatch && !lowPeakNativeRestoreCleanupCompleted) {
+			markLowPeakNativeRestoreVendorDirty();
+			vrLowPeakNativeRestoreCleanupActive.store(true, std::memory_order_release);
 			if (serviceLowPeakNativeRestoreCleanup())
 				return false;
 		}
@@ -21664,7 +21135,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			// The full native generation and this epoch are now both proven. Only
 			// at this point may presentation stop treating reduced input as owned
 			// by the previous active contract.
-			ArmVRNativeRestorePresentationGuard(relatchEpoch);
+			const uint64_t previousGuardEpoch =
+				vrNativeRestorePresentationGuardEpoch.load(
+					std::memory_order_acquire);
+			if (previousGuardEpoch != relatchEpoch)
+				ClearVRNativeRestorePresentationWatchdog();
+			vrNativeRestorePresentationGuardEpoch.store(
+				relatchEpoch,
+				std::memory_order_release);
 			perfMode.ResetBootLatch();
 			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
 			perfMode.EnsureBootLatch(
@@ -21826,7 +21304,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			                                 kVRRenderScaleRelatchBusyRetryFrames;
 			requeueRelatch(retryFrames);
 		} else {
-			ClearAllVRLowPeakNativeRestoreProgress();
+			vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 			clearRelatchDelay(true);
 			clearRelatchRetryLogs();
 			ResetVRRenderScaleTransitionController("render-target relatch device lost");
@@ -21849,7 +21327,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind::Unknown);
 			requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
 		} else {
-			ClearAllVRLowPeakNativeRestoreProgress();
+			vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 			clearRelatchDelay(true);
 			clearRelatchRetryLogs();
 			ResetVRRenderScaleTransitionController("render-target relatch device removed");
@@ -21862,6 +21340,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return deferUnpublishablePhysicalProfile("before contract publication");
 
 	vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
+	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 	ClearVRFSRRelatchDrainGuard();
 	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
@@ -21886,7 +21365,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			false);
 		return false;
 	}
-	ClearOwnedVRLowPeakNativeRestoreProgress(relatchEpoch);
 	if (requiresVendorSubmitStageStabilization) {
 		ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
 		uint64_t expectedGuardEpoch = relatchEpoch;
@@ -25831,15 +25309,9 @@ Upscaling::VRVendorResourceResetResult Upscaling::HandleVRDLSSResourceTeardownRe
 		return VRVendorResourceResetResult::Ready;
 	}
 
-	const bool failedAfterMutation =
-		a_result == Streamline::DLSSResourceTeardownResult::FailedAfterMutation;
-	const bool failed =
-		a_result == Streamline::DLSSResourceTeardownResult::Failed ||
-		failedAfterMutation;
-	if (failed && MarkSubmitStageDeviceLostIfDeviceRemoved(a_deviceLostContext)) {
-		return failedAfterMutation ?
-		           VRVendorResourceResetResult::FailedAfterMutation :
-		           VRVendorResourceResetResult::Failed;
+	if (a_result == Streamline::DLSSResourceTeardownResult::Failed &&
+		MarkSubmitStageDeviceLostIfDeviceRemoved(a_deviceLostContext)) {
+		return VRVendorResourceResetResult::Failed;
 	}
 
 	MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, a_generation);
@@ -25849,11 +25321,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::HandleVRDLSSResourceTeardownRe
 		pending ? VRVendorRuntimeLifecyclePhase::WaitingForDrain : VRVendorRuntimeLifecyclePhase::Failed,
 		a_generation,
 		a_lifecycleReason);
-	if (pending)
-		return VRVendorResourceResetResult::Pending;
-	return failedAfterMutation ?
-	           VRVendorResourceResetResult::FailedAfterMutation :
-	           VRVendorResourceResetResult::Failed;
+	return pending ? VRVendorResourceResetResult::Pending : VRVendorResourceResetResult::Failed;
 }
 
 Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources, bool a_destroySharedResources, bool a_preserveVRIntermediateTextures)
@@ -25871,24 +25339,6 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 
 	InvalidateFrameScopedUpscalingState();
 	UnbindUpscalingResources();
-	auto dlssResetResult = VRVendorResourceResetResult::Ready;
-	if (a_destroyDLSSResources) {
-		dlssResetResult = HandleVRDLSSResourceTeardownResult(
-			streamline.DestroyDLSSResources(),
-			0,
-			"submit-stage teardown",
-			"VR submit-stage DLSS resource teardown");
-		if (dlssResetResult != VRVendorResourceResetResult::Ready) {
-			// The applied provider and its shared intermediates remain one physical
-			// contract until Streamline proves the backend idle. Retiring them on a
-			// Pending poll lets presentation fallback repopulate the same slots and
-			// restarts this teardown on every relatch tick.
-			return dlssResetResult;
-		}
-	} else {
-		streamline.InvalidateDLSSOptionsCache();
-	}
-
 	if (a_destroySharedResources) {
 		if (a_preserveVRIntermediateTextures) {
 			submitStageFoveatedCenterState = {};
@@ -25905,6 +25355,17 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 		peripheryTAAHistoryValid = false;
 	}
 
+	auto dlssResetResult = VRVendorResourceResetResult::Ready;
+	if (a_destroyDLSSResources) {
+		dlssResetResult = HandleVRDLSSResourceTeardownResult(
+			streamline.DestroyDLSSResources(),
+			0,
+			"submit-stage teardown",
+			"VR submit-stage DLSS resource teardown");
+	} else {
+		streamline.InvalidateDLSSOptionsCache();
+	}
+
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedGeneration = 0;
 	submitStagePreparedFramePresentationOnly = false;
@@ -25913,10 +25374,6 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	submitStageVendorAdmissionGeneration = 0;
 	submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
 	submitStageVendorAdmissionPresentationOnly = true;
-	submitStageVendorAdmissionExactProviderReady = false;
-	submitStageVendorAdmissionAuthoritativeDLSSProfile = false;
-	submitStageVendorAdmissionDLSSQualityMode = 0;
-	submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorAdmissionEyeMask = 0;
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
@@ -26045,15 +25502,12 @@ void Upscaling::ClearVRRenderScaleInfoTransition()
 	++vrRenderScaleTransitionController.revision;
 }
 
-Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady, bool a_destroySharedResources, bool a_preserveVRIntermediateTextures, bool a_includePendingFSRReset)
+Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady, bool a_destroySharedResources, bool a_preserveVRIntermediateTextures)
 {
 	if (!globals::game::isVR)
 		return VRVendorResourceResetResult::Ready;
 
-	const bool destroyFSRResources =
-		a_destroyFSRResources ||
-		(a_includePendingFSRReset &&
-			pendingFSRReset.load(std::memory_order_acquire));
+	const bool destroyFSRResources = a_destroyFSRResources || pendingFSRReset.load(std::memory_order_acquire);
 	if (a_destroyDLSSResources)
 		RecordVRVendorRuntimeLifecycle(UpscaleMethod::kDLSS, VRVendorRuntimeLifecyclePhase::Destroying, 0, "vendor reset");
 	if (destroyFSRResources)
@@ -26118,11 +25572,10 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRVendorRuntimeResources(
 				"vendor reset teardown");
 			return destroyResult == FidelityFX::LifecycleResult::Pending ?
 			           VRVendorResourceResetResult::Pending :
-			           VRVendorResourceResetResult::FailedAfterMutation;
+			           VRVendorResourceResetResult::Failed;
 		}
 		ClearVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, true);
 	}
-
 	if (a_destroySharedResources)
 		DestroyCommonUpscalingTextures();
 	if (a_destroyPeripheryTAAResources)
@@ -26989,22 +26442,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			if (previousVendorUpscalerSelected) {
 				if (previousUpscaleMode == UpscaleMethod::kDLSS) {
 					const auto dlssTeardownResult = streamline.DestroyDLSSResources();
-					if (globals::game::isVR) {
-						const auto resetResult = HandleVRDLSSResourceTeardownResult(
+					if (renderScaleTransitionRelevant) {
+						HandleVRDLSSResourceTeardownResult(
 							dlssTeardownResult,
 							0,
 							"upscale method teardown",
 							"upscale method DLSS resource teardown");
-						if (resetResult != VRVendorResourceResetResult::Ready)
-							return false;
 					} else if (dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Ready) {
 						ClearVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, true);
-					} else {
-						if (dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Failed ||
-							dlssTeardownResult == Streamline::DLSSResourceTeardownResult::FailedAfterMutation) {
-							MarkSubmitStageDeviceLostIfDeviceRemoved("upscale method DLSS resource teardown");
-						}
-						return false;
+					} else if (dlssTeardownResult == Streamline::DLSSResourceTeardownResult::Failed) {
+						MarkSubmitStageDeviceLostIfDeviceRemoved("upscale method DLSS resource teardown");
 					}
 				} else if (previousUpscaleMode == UpscaleMethod::kFSR &&
 						   !fsrResourcesDestroyedForQuality &&
@@ -28576,10 +28023,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			params.pinholeOffsetX,
 			params.pinholeOffsetY,
 			params.label,
-			params.dlssViewportRole,
-			params.useAuthoritativeDLSSProfile,
-			params.authoritativeDLSSQualityMode,
-			params.authoritativeDLSSPreset);
+			params.dlssViewportRole);
 		if (params.dlssViewportRole == Streamline::DLSSViewportRole::FullEye)
 			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated);
 		return evaluated;
@@ -30177,7 +29621,6 @@ bool Upscaling::AreActiveVRIntermediateTexturesCompatible(
 
 bool Upscaling::AreExistingVRSubmitVendorResourcesCompatible(
 	UpscaleMethod a_upscaleMethod,
-	const VRExistingVendorProviderSnapshot& a_provider,
 	uint32_t a_inputWidth,
 	uint32_t a_inputHeight,
 	uint32_t a_outputWidth,
@@ -30188,17 +29631,6 @@ bool Upscaling::AreExistingVRSubmitVendorResourcesCompatible(
 	ID3D11Resource* a_transparencySource,
 	uint32_t a_contractGeneration) const
 {
-	if (!a_provider.valid || a_provider.method != a_upscaleMethod)
-		return false;
-
-	if (a_provider.renderEyeWidth != a_inputWidth ||
-		a_provider.renderEyeHeight != a_inputHeight ||
-		a_provider.displayEyeWidth != a_outputWidth ||
-		a_provider.displayEyeHeight != a_outputHeight ||
-		a_provider.contractGeneration != a_contractGeneration) {
-		return false;
-	}
-
 	if (!AreActiveVRIntermediateTexturesCompatible(
 			a_upscaleMethod,
 			a_inputWidth,
@@ -30218,8 +29650,8 @@ bool Upscaling::AreExistingVRSubmitVendorResourcesCompatible(
 			if (!streamline.TryResolveExistingVRDLSSViewport(
 					Streamline::DLSSViewportRole::FullEye,
 					eye,
-					a_provider.qualityMode,
-					a_provider.dlssPreset,
+					GetRuntimeQualityMode(),
+					GetRuntimeDLSSPreset(),
 					a_outputWidth,
 					a_outputHeight,
 					vrIntermediateColorIn[eye]->resource.get(),
@@ -34447,13 +33879,12 @@ Upscaling::ClassifyVRRenderScaleOriginalSubmitFallback(
 		}
 		return decision;
 	}
-	if (IsVRProtectedFullSizeSubmitTexture(a_texture))
+	if (!IsVRRenderScaleModeLatched() ||
+		IsVRProtectedFullSizeSubmitTexture(a_texture)) {
 		return decision;
+	}
 
 	const auto* state = globals::state;
-	if (!IsVRRenderScaleModeLatched())
-		return decision;
-
 	if (!state)
 		return decision;
 
@@ -34546,10 +33977,6 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorAdmissionGeneration = 0;
 	submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
 	submitStageVendorAdmissionPresentationOnly = true;
-	submitStageVendorAdmissionExactProviderReady = false;
-	submitStageVendorAdmissionAuthoritativeDLSSProfile = false;
-	submitStageVendorAdmissionDLSSQualityMode = 0;
-	submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorAdmissionEyeMask = 0;
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
@@ -34590,7 +34017,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	vrRenderScaleMemoryAdapter = nullptr;
 	vrRenderScaleMemoryAdapterDevice = nullptr;
 	vrRenderScaleMemoryLastSampleFrame = 0;
-	ClearAllVRLowPeakNativeRestoreProgress();
+	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 	ClearVRRenderScaleInfoTransition();
 	ClearPendingVRUpscalingTransition();
 	streamline.ResetDLSSIdleFences();
@@ -34991,22 +34418,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	// vendor contract is promotable. Do not replay a separately captured startup
 	// surface here: a valid D3D texture can still contain a transient HAM frame.
 	bool presentationOnly = computePresentationOnly();
-	bool vendorLifecycleMutationDeferred = ShouldDeferVRVendorLifecycleMutation();
-	VRExistingVendorProviderSnapshot existingVendorProvider{};
-	bool exactExistingProviderReady = false;
-	if (vendorLifecycleMutationDeferred) {
-		existingVendorProvider = GetExistingVRVendorProviderSnapshot();
-		const uint32_t existingProviderGeneration =
-			existingVendorProvider.valid ?
-				existingVendorProvider.contractGeneration :
-				activeContractGeneration;
-		exactExistingProviderReady =
-			CanDispatchExistingVRVendorEvaluation(
+	const bool vendorLifecycleMutationDeferred = ShouldDeferVRVendorLifecycleMutation();
+	if (vendorLifecycleMutationDeferred &&
+		(!CanDispatchExistingVRVendorEvaluation(upscaleMethod) ||
+			!AreExistingVRSubmitVendorResourcesCompatible(
 				upscaleMethod,
-				existingVendorProvider) &&
-			AreExistingVRSubmitVendorResourcesCompatible(
-				upscaleMethod,
-				existingVendorProvider,
 				sourceEyeWidthIn,
 				sourceEyeHeightIn,
 				eyeWidthOut,
@@ -35015,27 +34431,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture,
 				reactiveMaskTexture ? reactiveMaskTexture->resource.get() : nullptr,
 				transparencyCompositionMaskTexture ? transparencyCompositionMaskTexture->resource.get() : nullptr,
-				existingProviderGeneration);
-	}
-	const auto deferredDispatchAction =
-		VRVendorRelatchPolicy::SelectDeferredDispatchAction({
-			.mutationDeferred = vendorLifecycleMutationDeferred,
-			.exactProviderReady = exactExistingProviderReady,
-		});
-	if (deferredDispatchAction ==
-		VRVendorRelatchPolicy::DeferredDispatchAction::PresentationStretch) {
-		// Other deferred transitions retain the established presentation-only
-		// fallback. In particular, keep FSR's stricter lifecycle protection.
+				activeContractGeneration))) {
+		// A load/relatch owner may defer backend creation or teardown, but it must
+		// not expose an unevaluated reduced submit. Preserve the existing
+		// presentation path until a complete provider is authoritative.
 		presentationOnly = true;
 	}
-	bool useAuthoritativeDLSSProfile =
-		vendorLifecycleMutationDeferred &&
-		existingVendorProvider.valid &&
-		existingVendorProvider.method == UpscaleMethod::kDLSS;
-	uint32_t authoritativeDLSSQualityMode =
-		useAuthoritativeDLSSProfile ? existingVendorProvider.qualityMode : 0u;
-	uint32_t authoritativeDLSSPreset =
-		useAuthoritativeDLSSProfile ? existingVendorProvider.dlssPreset : kDLSSPresetK;
 	if (a_compositorCycleToken != 0) {
 		const uint32_t methodValue = static_cast<uint32_t>(upscaleMethod);
 		if (submitStageVendorAdmissionCycle != a_compositorCycleToken) {
@@ -35043,16 +34444,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			submitStageVendorAdmissionGeneration = activeContractGeneration;
 			submitStageVendorAdmissionMethod = methodValue;
 			submitStageVendorAdmissionPresentationOnly = presentationOnly;
-			submitStageVendorAdmissionExactProviderReady =
-				vendorLifecycleMutationDeferred &&
-				exactExistingProviderReady &&
-				useAuthoritativeDLSSProfile;
-			submitStageVendorAdmissionAuthoritativeDLSSProfile =
-				useAuthoritativeDLSSProfile;
-			submitStageVendorAdmissionDLSSQualityMode =
-				authoritativeDLSSQualityMode;
-			submitStageVendorAdmissionDLSSPreset =
-				authoritativeDLSSPreset;
 			submitStageVendorAdmissionFrame = currentFrame;
 			submitStageVendorAdmissionEyeMask = 0;
 		} else {
@@ -35065,35 +34456,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				submitStageVendorAdmissionPresentationOnly = true;
 			}
 			presentationOnly = submitStageVendorAdmissionPresentationOnly;
-			useAuthoritativeDLSSProfile =
-				submitStageVendorAdmissionAuthoritativeDLSSProfile;
-			if (submitStageVendorAdmissionExactProviderReady &&
-				useAuthoritativeDLSSProfile) {
-				vendorLifecycleMutationDeferred = true;
-				exactExistingProviderReady = true;
-			}
-			authoritativeDLSSQualityMode =
-				submitStageVendorAdmissionDLSSQualityMode;
-			authoritativeDLSSPreset =
-				submitStageVendorAdmissionDLSSPreset;
 		}
-	} else {
-		submitStageVendorAdmissionFrame = currentFrame;
 	}
-	const bool admittedExistingDLSSProvider =
-		vendorLifecycleMutationDeferred &&
-		exactExistingProviderReady &&
-		useAuthoritativeDLSSProfile;
-	const auto applyAuthoritativeDLSSProfile =
-		[&](VendorEyeDispatchParams& a_params) {
-			if (!useAuthoritativeDLSSProfile)
-				return;
-
-			a_params.useAuthoritativeDLSSProfile = true;
-			a_params.authoritativeDLSSQualityMode =
-				authoritativeDLSSQualityMode;
-			a_params.authoritativeDLSSPreset = authoritativeDLSSPreset;
-		};
 	const bool trackSubmitAdmissionEye = a_compositorCycleToken != 0;
 	auto recordSubmitAdmissionEye = ScopeExit([&]() {
 		if (trackSubmitAdmissionEye &&
@@ -35228,8 +34592,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		if (IsSubmitStageDeviceLost())
 			return false;
 
-		if (HasPendingVRVendorRuntimeReset(*this, upscaleMethod) &&
-			!admittedExistingDLSSProvider)
+		if (HasPendingVRVendorRuntimeReset(*this, upscaleMethod))
 			return false;
 
 		if (historyResetLatchedFrame != currentFrame)
@@ -35237,9 +34600,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		LatchHistoryResetForCurrentFrame();
 	} else {
 		const bool vendorResetPending = HasPendingVRVendorRuntimeReset(*this, upscaleMethod);
-		if (vendorResetPending &&
-			!presentationOnly &&
-			!admittedExistingDLSSProvider)
+		if (vendorResetPending && !presentationOnly)
 			return false;
 	}
 
@@ -35574,7 +34935,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			vendorParams.transparencyMask = vrIntermediateTransparencyMask[targetEyeIndex]->resource.get();
 			vendorParams.colorOut = replayVendorColorOutput->resource.get();
 			vendorParams.label = "submit-stage full-eye replay";
-			applyAuthoritativeDLSSProfile(vendorParams);
 			{
 				CS_PROFILE_SCOPE("Upscaling::SubmitStageUpscale");
 				if (!DispatchVendorEyeRegion(upscaleMethod, vendorParams))
@@ -35798,7 +35158,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			vendorParams.transparencyMask = vrIntermediateTransparencyMask[eyeIndex]->resource.get();
 			vendorParams.colorOut = vendorColorOutput->resource.get();
 			vendorParams.label = "submit-stage full-eye";
-			applyAuthoritativeDLSSProfile(vendorParams);
 			{
 				CS_PROFILE_SCOPE("Upscaling::SubmitStageUpscale");
 				vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
@@ -37865,18 +37224,11 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 		vrNativeRestorePresentationGuardEpoch.load(
 			std::memory_order_acquire);
 	if (guardEpoch != 0 && guardEpoch != profile.transitionEpoch) {
-		const auto nativeRestoreProgress =
-			GetVRLowPeakNativeRestoreProgress();
-		if (VRVendorRelatchPolicy::HasNativeRestoreTransaction(
-				nativeRestoreProgress)) {
-			// Queue serialization prevents OpenVR from observing this exchange until
-			// the controller target below owns the same successor epoch.
-			ArmVRNativeRestorePresentationGuard(profile.transitionEpoch);
-		} else if (vrNativeRestorePresentationGuardEpoch.compare_exchange_strong(
-				   guardEpoch,
-				   0,
-				   std::memory_order_acq_rel,
-				   std::memory_order_acquire)) {
+		if (vrNativeRestorePresentationGuardEpoch.compare_exchange_strong(
+				guardEpoch,
+				0,
+				std::memory_order_acq_rel,
+				std::memory_order_acquire)) {
 			ClearVRNativeRestorePresentationWatchdog();
 		}
 	}
@@ -38341,7 +37693,6 @@ void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 	vrNativeRestorePresentationGuardEpoch.store(
 		0,
 		std::memory_order_release);
-	ClearAllVRLowPeakNativeRestoreProgress();
 	ClearAllVRFpsStabilizerAPITransitionProfileAdmissions();
 	ClearVRNativeRestorePresentationWatchdog();
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;

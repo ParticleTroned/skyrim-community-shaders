@@ -212,8 +212,7 @@ public:
 	{
 		Ready,
 		Pending,
-		Failed,
-		FailedAfterMutation
+		Failed
 	};
 	enum class DLSSViewportPreparationResult : uint8_t
 	{
@@ -228,10 +227,7 @@ public:
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
 		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const char* label = "DLSS Evaluate",
-		DLSSViewportRole viewportRole = DLSSViewportRole::FullEye,
-		bool useAuthoritativeProfile = false,
-		uint32_t authoritativeQualityMode = 0,
-		uint32_t authoritativeDLSSPreset = 1);
+		DLSSViewportRole viewportRole = DLSSViewportRole::FullEye);
 
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;

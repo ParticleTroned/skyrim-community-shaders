@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 
 #include "ShaderCache.h"
 #include "State.h"
@@ -485,11 +486,18 @@ void Skylighting::ApplyProbeGridQuality()
 
 void Skylighting::ResetSkylighting()
 {
-	if (texAccumFramesArray && texAccumFramesArray->uav) {
-		auto context = globals::d3d::context;
-		UINT clr[1] = { 0 };
-		context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
+	auto context = globals::d3d::context;
+	if (!context || !texProbeArray || !texProbeArray->uav || !texAccumFramesArray || !texAccumFramesArray->uav) {
+		queuedResetSkylighting = true;
+		return;
 	}
+
+	const float unitSH[4] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
+	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
+
+	UINT clr[1] = { 0 };
+	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
+
 	ResetProbeUpdateWindow(*this);
 	forcedFullUpdateFrames = 1;
 	forceProbeUpdateThisFrame = true;
@@ -823,6 +831,8 @@ void Skylighting::SetupResources()
 		texAccumFramesArray->CreateUAV(uavDesc);
 	}
 
+	ResetSkylighting();
+
 	{
 		D3D11_SAMPLER_DESC samplerDesc = {};
 		samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;  // Use comparison filtering
@@ -1022,9 +1032,9 @@ void Skylighting::Prepass()
 	if (interior)
 		return;
 
-	TracyD3D11Zone(globals::state->tracyCtx, "Skylighting - Update Probes");
+	if (probeUpdateCompute) {
+		TracyD3D11Zone(globals::state->tracyCtx, "Skylighting - Update Probes");
 
-	{
 		std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
 		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
 		std::array<ID3D11SamplerState*, 1> samplers = { comparisonSampler.get() };

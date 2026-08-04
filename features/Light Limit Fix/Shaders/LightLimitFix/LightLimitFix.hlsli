@@ -15,7 +15,7 @@ namespace LightLimitFix
 	StructuredBuffer<Light> lights : register(t35);
 	StructuredBuffer<uint> lightList : register(t36);       //MAX_CLUSTER_LIGHTS * 16^3
 	StructuredBuffer<LightGrid> lightGrid : register(t37);  //16^3
-#if defined(DEFERRED)
+#if defined(DEFERRED) || defined(WATER)
 	StructuredBuffer<uint> contactShadowList : register(t38);
 	StructuredBuffer<LightGrid> contactShadowGrid : register(t39);
 #endif
@@ -39,7 +39,7 @@ namespace LightLimitFix
 		return true;
 	}
 
-#if defined(DEFERRED)
+#if defined(DEFERRED) || defined(WATER)
 	bool IsSaturated(float value)
 	{
 		return value == saturate(value);
@@ -54,7 +54,8 @@ namespace LightLimitFix
 	{
 		contactShadowCount = min(contactShadowCount, MAX_CONTACT_SHADOW_LIGHTS);
 
-		[unroll] for (uint i = 0; i < MAX_CONTACT_SHADOW_LIGHTS; ++i) {
+		[unroll] for (uint i = 0; i < MAX_CONTACT_SHADOW_LIGHTS; ++i)
+		{
 			if (i >= contactShadowCount)
 				break;
 
@@ -126,19 +127,19 @@ namespace LightLimitFix
 	float2 GetContactShadowScreenDim()
 	{
 		float2 screenDim = SharedData::BufferDim.xy;
-#if defined(VR)
+#	if defined(VR)
 		screenDim.x *= 0.5;
-#endif
+#	endif
 		return screenDim;
 	}
 
 	float2 GetContactShadowNoiseCoord(float2 screenPosition, float2 screenUV, float2 screenDim)
 	{
-#if defined(VR)
+#	if defined(VR)
 		return screenUV * screenDim;
-#else
+#	else
 		return screenPosition;
-#endif
+#	endif
 	}
 
 	float ContactShadows(float3 viewPosition, float2 screenUV, float3 lightPositionWS, float screenNoise, float2 screenDim, bool isParticle, uint eyeIndex)
@@ -175,7 +176,8 @@ namespace LightLimitFix
 		float minValidSceneDepth = max(SharedData::CameraData.y + 1.0, 16.5);
 		float contactShadow = 0.0;
 
-		[unroll] for (uint i = 0; i < 6; ++i) {
+		[unroll] for (uint i = 0; i < 6; ++i)
+		{
 			if (i >= sampleCount)
 				break;
 

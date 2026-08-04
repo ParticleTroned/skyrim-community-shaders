@@ -9,6 +9,7 @@
 #include "Shadercache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/D3D.h"
 #include "Utils/ExternalEmittance.h"
 #include "Utils/StringUtils.h"
 
@@ -3176,6 +3177,10 @@ void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* Thi
 void LightLimitFix::Hooks::BSWaterShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
 	func(This, Pass, RenderFlags);
+	// Cloud Shadows can leave cubemap depth in t17. Water contact shadows need
+	// the current 16-bit scene depth for their screen-space raymarch.
+	auto* srv = Util::GetCurrentSceneDepthSRV(true);
+	globals::d3d::context->PSSetShaderResources(17, 1, &srv);
 	auto& singleton = globals::features::lightLimitFix;
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	singleton.BSLightingShader_SetupGeometry_After(Pass);

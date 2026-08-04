@@ -354,15 +354,15 @@ namespace SharedData
 	struct UnifiedWaterSettings
 	{
 		float ShallowFallbackStrength;
-		float WaterPresenceColorThreshold;
-		float WaterPresenceRefractionThresholdPixels;
+		float DeepConnectionProbeReachUnits;
+		float DeepContextDepthUnits;
 		float ShoreContactMinFadePixels;
 		float3 WaterTintColor;
 		float WaterTintStrength;
 		float ShoreDepthBlendRangeUnits;
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
-		float WaterPresenceImageDifferenceThreshold;
+		float DeepContextTransitionUnits;
 	};
 
 	cbuffer FeatureData : register(b6)

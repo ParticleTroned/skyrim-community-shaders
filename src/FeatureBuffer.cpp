@@ -131,15 +131,15 @@ namespace
 	static_assert(sizeof(VanillaFresnelSettingsCB) == 48);
 	static_assert(sizeof(UnifiedWaterSettingsCB) == 48);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackStrength) == 0);
-	static_assert(offsetof(UnifiedWaterSettingsCB, WaterPresenceColorThreshold) == 4);
-	static_assert(offsetof(UnifiedWaterSettingsCB, WaterPresenceRefractionThresholdPixels) == 8);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DeepConnectionProbeReachUnits) == 4);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextDepthUnits) == 8);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreContactMinFadePixels) == 12);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintColor) == 16);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintStrength) == 28);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreDepthBlendRangeUnits) == 32);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowSurfaceDepthRangeUnits) == 36);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackMaxDistance) == 40);
-	static_assert(offsetof(UnifiedWaterSettingsCB, WaterPresenceImageDifferenceThreshold) == 44);
+	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextTransitionUnits) == 44);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);

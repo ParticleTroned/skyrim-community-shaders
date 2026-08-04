@@ -176,17 +176,17 @@ namespace
 		       (GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 	}
 
-	bool HasRenderedWorldFrame()
+	bool ShouldHideShaderCompilationInHMD()
 	{
-		const auto* state = globals::state;
-		return state && state->lastWorldRenderFrame != std::numeric_limits<uint32_t>::max();
+		return globals::menu &&
+		       globals::menu->GetSettings().HideCompilationHUDInVR;
 	}
 
 	bool ShouldShowShaderCompilationInHMD()
 	{
 		return globals::shaderCache &&
 		       globals::shaderCache->IsCompiling() &&
-		       !HasRenderedWorldFrame();
+		       !ShouldHideShaderCompilationInHMD();
 	}
 
 	bool IsDrawListOwnedByWindow(const ImDrawList* drawList, const char* windowName)
@@ -200,7 +200,7 @@ namespace
 			return drawData;
 		}
 
-		const bool hideShaderCompilationWindow = HasRenderedWorldFrame();
+		const bool hideShaderCompilationWindow = ShouldHideShaderCompilationInHMD();
 		bool removedAny = false;
 		int totalIdxCount = 0;
 		int totalVtxCount = 0;
@@ -952,9 +952,9 @@ bool VR::ShouldPresentOverlayInHeadset() const
 {
 	return globals::menu &&
 	       (globals::menu->IsEnabled ||
-	        globals::menu->overlayVisible ||
-	        ShouldShowAutoHideOverlay() ||
-	        ShouldShowShaderCompilationInHMD());
+			   globals::menu->overlayVisible ||
+			   ShouldShowAutoHideOverlay() ||
+			   ShouldShowShaderCompilationInHMD());
 }
 
 bool VR::ShouldUseInSceneOverlay() const
@@ -1459,11 +1459,11 @@ namespace
 	void SetupVRFpsStabilizerProfileTableColumns(bool currentCellIsInterior)
 	{
 		const char* interiorHeader = currentCellIsInterior ?
-		                               "Interior Profile (Current Location)###InteriorProfile" :
-		                               "Interior Profile###InteriorProfile";
+		                                 "Interior Profile (Current Location)###InteriorProfile" :
+		                                 "Interior Profile###InteriorProfile";
 		const char* exteriorHeader = currentCellIsInterior ?
-		                               "Exterior Profile###ExteriorProfile" :
-		                               "Exterior Profile (Current Location)###ExteriorProfile";
+		                                 "Exterior Profile###ExteriorProfile" :
+		                                 "Exterior Profile (Current Location)###ExteriorProfile";
 		ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch, 0.85f);
 		ImGui::TableSetupColumn(interiorHeader, ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		ImGui::TableSetupColumn(exteriorHeader, ImGuiTableColumnFlags_WidthStretch, 1.0f);

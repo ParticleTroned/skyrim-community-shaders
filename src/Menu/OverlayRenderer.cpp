@@ -698,28 +698,14 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		const bool hasFeatureSetChanges = shaderCache->HasFeatureSetChanges();
 		const bool isDiskCacheHeld = shaderCache->IsDiskCacheHeld();
 		const bool hasFeatureIssues = FeatureIssues::HasFeatureIssues();
-		const bool hideRoutineHud = isVR && backgroundCompilation && menu->GetSettings().HideCompilationHUDInVR;
-		const bool hasExceptionalInfo =
-			hasFeatureSetRevertPending ||
-			hasFeatureSetChanges ||
-			isDiskCacheHeld ||
-			hasFeatureIssues ||
-			state->IsDeveloperMode() ||
-			(failed && !hide) ||
-			renderDocAvailable;
-
-		if (hideRoutineHud && !hasExceptionalInfo)
-			return;
 
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
 		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::End();
 			return;
 		}
-		if (!hideRoutineHud) {
-			ImGui::TextUnformatted(progressTitle.c_str());
-			ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
-		}
+		ImGui::TextUnformatted(progressTitle.c_str());
+		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
 		if (hasFeatureSetRevertPending) {
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
 				"Previous cache restored.\n"

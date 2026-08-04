@@ -356,7 +356,7 @@ namespace SharedData
 		float ShallowFallbackStrength;
 		float WaterPresenceColorThreshold;
 		float WaterPresenceRefractionThresholdPixels;
-		float WaterPresenceCoverageThreshold;
+		float ShoreContactMinFadePixels;
 		float3 WaterTintColor;
 		float WaterTintStrength;
 		float ShoreDepthBlendRangeUnits;

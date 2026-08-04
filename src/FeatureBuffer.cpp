@@ -133,7 +133,7 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackStrength) == 0);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterPresenceColorThreshold) == 4);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterPresenceRefractionThresholdPixels) == 8);
-	static_assert(offsetof(UnifiedWaterSettingsCB, WaterPresenceCoverageThreshold) == 12);
+	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreContactMinFadePixels) == 12);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintColor) == 16);
 	static_assert(offsetof(UnifiedWaterSettingsCB, WaterTintStrength) == 28);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShoreDepthBlendRangeUnits) == 32);

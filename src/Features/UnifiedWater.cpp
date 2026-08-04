@@ -26,14 +26,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WaterPresenceColorThreshold,
 	WaterPresenceRefractionThresholdPixels,
 	WaterPresenceImageDifferenceThreshold,
-	WaterPresenceCoverageThreshold,
+	ShoreContactMinFadePixels,
 	ShoreDepthBlendRangeUnits,
 	ShallowSurfaceDepthRangeUnits,
 	ShallowFallbackMaxDistance)
 
 namespace
 {
-	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 6;
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 8;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
@@ -46,8 +46,8 @@ namespace
 	constexpr float kWaterPresenceRefractionThresholdPixelsMax = 8.0f;
 	constexpr float kWaterPresenceImageDifferenceThresholdMin = 0.0f;
 	constexpr float kWaterPresenceImageDifferenceThresholdMax = 1.0f;
-	constexpr float kWaterPresenceCoverageThresholdMin = 0.0f;
-	constexpr float kWaterPresenceCoverageThresholdMax = 1.0f;
+	constexpr float kShoreContactMinFadePixelsMin = 0.0f;
+	constexpr float kShoreContactMinFadePixelsMax = 4.0f;
 	constexpr float kWorldCellSize = 4096.0f;
 	constexpr float kShoreDepthBlendRangeUnitsMin = 0.0f;
 	constexpr float kShoreDepthBlendRangeUnitsMax = 10.0f;
@@ -112,11 +112,11 @@ namespace
 			kWaterPresenceImageDifferenceThresholdMin,
 			kWaterPresenceImageDifferenceThresholdMax,
 			defaults.WaterPresenceImageDifferenceThreshold);
-		a_settings.WaterPresenceCoverageThreshold = ClampFiniteOrDefault(
-			a_settings.WaterPresenceCoverageThreshold,
-			kWaterPresenceCoverageThresholdMin,
-			kWaterPresenceCoverageThresholdMax,
-			defaults.WaterPresenceCoverageThreshold);
+		a_settings.ShoreContactMinFadePixels = ClampFiniteOrDefault(
+			a_settings.ShoreContactMinFadePixels,
+			kShoreContactMinFadePixelsMin,
+			kShoreContactMinFadePixelsMax,
+			defaults.ShoreContactMinFadePixels);
 
 		a_settings.ShoreDepthBlendRangeUnits = ClampFiniteOrDefault(
 			a_settings.ShoreDepthBlendRangeUnits,
@@ -184,20 +184,40 @@ namespace
 void UnifiedWater::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	if (o_json.value("SurfaceVisibilityModelVersion", 0u) != kSurfaceVisibilityModelVersion) {
-		// Preserve the working depth/contact controls while replacing the old
-		// distance-strength model with one native-first shallow fallback.
+	const auto loadedModelVersion = o_json.value("SurfaceVisibilityModelVersion", 0u);
+	if (loadedModelVersion != kSurfaceVisibilityModelVersion) {
 		const Settings defaults{};
-		settings.ShallowFallbackStrength = o_json.value(
-			"DistantDepthFadeFarStrength",
-			defaults.ShallowFallbackStrength);
-		settings.WaterPresenceColorThreshold = defaults.WaterPresenceColorThreshold;
-		settings.WaterPresenceRefractionThresholdPixels = defaults.WaterPresenceRefractionThresholdPixels;
-		settings.WaterPresenceImageDifferenceThreshold = defaults.WaterPresenceImageDifferenceThreshold;
-		settings.WaterPresenceCoverageThreshold = defaults.WaterPresenceCoverageThreshold;
-		settings.ShallowFallbackMaxDistance = o_json.value(
-			"ShoreConfirmationMaxDistance",
-			defaults.ShallowFallbackMaxDistance);
+
+		if (loadedModelVersion < 8) {
+			// The image probe now separates its very-shallow and native/Open
+			// endpoints by depth. Start the revised model from one coherent set of
+			// shallow values instead of retaining thresholds tuned for the old
+			// depth-invariant classifier.
+			settings.WaterPresenceColorThreshold = defaults.WaterPresenceColorThreshold;
+			settings.WaterPresenceRefractionThresholdPixels = defaults.WaterPresenceRefractionThresholdPixels;
+			settings.WaterPresenceImageDifferenceThreshold = defaults.WaterPresenceImageDifferenceThreshold;
+		}
+
+		if (loadedModelVersion < 7) {
+			// Native coverage used a view-dependent threshold that could switch
+			// whole shallow terrain triangles. The replacement is a screen-space
+			// minimum contact fade, so never reinterpret the old serialized value.
+			settings.ShoreContactMinFadePixels = defaults.ShoreContactMinFadePixels;
+		}
+
+		if (loadedModelVersion < 6) {
+			// Preserve the working depth/contact controls while replacing the old
+			// distance-strength model with one native-first shallow fallback.
+			settings.ShallowFallbackStrength = o_json.value(
+				"DistantDepthFadeFarStrength",
+				defaults.ShallowFallbackStrength);
+			settings.WaterPresenceColorThreshold = defaults.WaterPresenceColorThreshold;
+			settings.WaterPresenceRefractionThresholdPixels = defaults.WaterPresenceRefractionThresholdPixels;
+			settings.WaterPresenceImageDifferenceThreshold = defaults.WaterPresenceImageDifferenceThreshold;
+			settings.ShallowFallbackMaxDistance = o_json.value(
+				"ShoreConfirmationMaxDistance",
+				defaults.ShallowFallbackMaxDistance);
+		}
 	}
 	settings.SurfaceVisibilityModelVersion = kSurfaceVisibilityModelVersion;
 	SanitizeSettings(settings);
@@ -303,21 +323,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("water_presence_image_difference_threshold_tooltip"),
-								  "Minimum relative difference between the refracted and undistorted terrain image that keeps the native/Open result.\n"
-								  "This is the only measurement that needs the optional texture sample. Set to 1 to disable it."));
-		}
-
-		ImGui::SliderFloat(
-			T(TKEY("water_presence_coverage_threshold"), "Native Coverage Threshold"),
-			&settings.WaterPresenceCoverageThreshold,
-			kWaterPresenceCoverageThresholdMin,
-			kWaterPresenceCoverageThresholdMax,
-			"%.3f",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("water_presence_coverage_threshold_tooltip"),
-								  "Native depth coverage that is sufficient to keep the native/Open result even over uniform terrain.\n"
-								  "Lower values release medium water earlier; higher values favour the shallow fallback. Set to 1 to disable this measurement."));
+								  "Very-shallow relative difference between the refracted and undistorted terrain image that keeps the native/Open result.\n"
+								  "The probe blends toward sensitive threshold-zero detection with depth so medium/deep water remains native/Open. Set to 1 to disable it."));
 		}
 
 		ImGui::Spacing();
@@ -350,6 +357,19 @@ void UnifiedWater::DrawSettings()
 			ImGui::Text("%s", T(TKEY("shore_depth_blend_range_tooltip"),
 								  "Plane-normal water depth over which the shallow surface cue fades in at terrain contact.\n"
 								  "The focused 0-10 unit range keeps this transition local to the water contact. Set to 0 for no contact fade."));
+		}
+
+		ImGui::SliderFloat(
+			T(TKEY("shore_contact_min_fade_pixels"), "Minimum Edge Fade Width"),
+			&settings.ShoreContactMinFadePixels,
+			kShoreContactMinFadePixelsMin,
+			kShoreContactMinFadePixelsMax,
+			"%.1f px",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("shore_contact_min_fade_pixels_tooltip"),
+								  "Minimum screen-space width of the shallow cue's terrain-contact fade.\n"
+								  "This prevents subpixel terminal seams without extra texture samples. Set to 0 to use only Edge Fade Depth."));
 		}
 
 		ImGui::SliderFloat(
@@ -411,7 +431,7 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowFallbackStrength = sanitizedSettings.ShallowFallbackStrength * depthBehaviourScale;
 	data.WaterPresenceColorThreshold = sanitizedSettings.WaterPresenceColorThreshold;
 	data.WaterPresenceRefractionThresholdPixels = sanitizedSettings.WaterPresenceRefractionThresholdPixels;
-	data.WaterPresenceCoverageThreshold = sanitizedSettings.WaterPresenceCoverageThreshold;
+	data.ShoreContactMinFadePixels = sanitizedSettings.ShoreContactMinFadePixels;
 	data.WaterTintColor = sanitizedSettings.WaterTintColor;
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
 	data.ShoreDepthBlendRangeUnits = sanitizedSettings.ShoreDepthBlendRangeUnits;

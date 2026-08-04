@@ -25,16 +25,16 @@ struct UnifiedWater : OverlayFeature
 
 	struct Settings
 	{
-		std::uint32_t SurfaceVisibilityModelVersion = 6;
+		std::uint32_t SurfaceVisibilityModelVersion = 8;
 		bool UseOptimisedMeshes = true;
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
 		float ShallowFallbackStrength = 1.0f;
-		float WaterPresenceColorThreshold = 0.035f;
-		float WaterPresenceRefractionThresholdPixels = 0.5f;
-		float WaterPresenceImageDifferenceThreshold = 0.08f;
-		float WaterPresenceCoverageThreshold = 0.08f;
+		float WaterPresenceColorThreshold = 0.26f;
+		float WaterPresenceRefractionThresholdPixels = 1.5f;
+		float WaterPresenceImageDifferenceThreshold = 0.15f;
+		float ShoreContactMinFadePixels = 2.0f;
 		float ShoreDepthBlendRangeUnits = 5.0f;
 		float ShallowSurfaceDepthRangeUnits = 64.0f;
 		float ShallowFallbackMaxDistance = 16000.0f;
@@ -45,7 +45,7 @@ struct UnifiedWater : OverlayFeature
 		float ShallowFallbackStrength;
 		float WaterPresenceColorThreshold;
 		float WaterPresenceRefractionThresholdPixels;
-		float WaterPresenceCoverageThreshold;
+		float ShoreContactMinFadePixels;
 		float3 WaterTintColor;
 		float WaterTintStrength;
 		float ShoreDepthBlendRangeUnits;

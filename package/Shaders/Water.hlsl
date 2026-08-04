@@ -914,7 +914,6 @@ static const float UnifiedWaterFallbackCullFadeRange = 2048.0;
 static const float UnifiedWaterPresenceContrastSoftness = 0.015;
 static const float UnifiedWaterPresenceRefractionSoftnessPixels = 0.5;
 static const float UnifiedWaterPresenceRefractionDisabledPixels = 8.0;
-static const float UnifiedWaterPresenceCoverageSoftness = 0.04;
 
 float GetUnifiedWaterShallowFallbackAvailability(float viewDistance)
 {
@@ -971,44 +970,47 @@ float GetUnifiedWaterPresenceFromRefraction(float displacementPixels)
 		max(displacementPixels, 0.0));
 }
 
-float GetUnifiedWaterPresenceFromImageDifference(float relativeDifference)
+float GetUnifiedWaterPresenceFromImageDifference(
+	float relativeDifference,
+	float shallowDepthWeight)
 {
-	float threshold = max(
-		SharedData::unifiedWaterSettings.WaterPresenceImageDifferenceThreshold,
-		0.0);
-	return smoothstep(
+	float threshold = saturate(
+		SharedData::unifiedWaterSettings.WaterPresenceImageDifferenceThreshold);
+	if (threshold >= 1.0)
+		return 0.0;
+
+	float difference = max(relativeDifference, 0.0);
+	float openPresence = smoothstep(
+		0.0,
+		UnifiedWaterPresenceContrastSoftness,
+		difference);
+	float shallowPresence = smoothstep(
 		threshold,
 		threshold + UnifiedWaterPresenceContrastSoftness,
-		max(relativeDifference, 0.0));
-}
+		difference);
 
-float GetUnifiedWaterPresenceFromCoverage(float nativeCoverage)
-{
-	float threshold = max(
-		SharedData::unifiedWaterSettings.WaterPresenceCoverageThreshold,
-		0.0);
-	return smoothstep(
-		threshold,
-		threshold + UnifiedWaterPresenceCoverageSoftness,
-		saturate(nativeCoverage));
+	// Blend the two classifier outcomes instead of moving the threshold through
+	// the image-difference signal, which would create a new depth contour. The
+	// primary-depth weight is stable, and squaring confines the tuned threshold
+	// to the genuinely shallow core while medium/deep water approaches the
+	// threshold-zero native/Open result.
+	float veryShallowWeight = saturate(shallowDepthWeight);
+	veryShallowWeight *= veryShallowWeight;
+	return lerp(openPresence, shallowPresence, veryShallowWeight);
 }
 
 float GetUnifiedWaterNativePresence(
 	float3 nativeColor,
 	float3 groundReference,
-	float nativeCoverage,
 	float refractionDisplacementPixels)
 {
 	return max(
-		max(
-			GetUnifiedWaterPresenceFromSurfaceColor(
-				GetUnifiedWaterRelativeColorDifference(
-					nativeColor,
-					groundReference)),
-			GetUnifiedWaterPresenceFromRefraction(
-				refractionDisplacementPixels)),
-		GetUnifiedWaterPresenceFromCoverage(
-			nativeCoverage));
+		GetUnifiedWaterPresenceFromSurfaceColor(
+			GetUnifiedWaterRelativeColorDifference(
+				nativeColor,
+				groundReference)),
+		GetUnifiedWaterPresenceFromRefraction(
+			refractionDisplacementPixels));
 }
 
 float GetUnifiedWaterShoreContactWeight(float waterColumnDepthUnits)
@@ -1019,14 +1021,28 @@ float GetUnifiedWaterShoreContactWeight(float waterColumnDepthUnits)
 	float blendRange = max(
 		SharedData::unifiedWaterSettings.ShoreDepthBlendRangeUnits,
 		0.0);
-	if (!isfinite(waterColumnDepthUnits) || !isfinite(blendRange))
+	float minimumFadePixels = max(
+		SharedData::unifiedWaterSettings.ShoreContactMinFadePixels,
+		0.0);
+	if (
+		!isfinite(waterColumnDepthUnits) ||
+		!isfinite(blendRange) ||
+		!isfinite(minimumFadePixels))
 		return 0.0;
 	if (blendRange <= 0.0)
 		return 1.0;
 
+	// Preserve the focused world-space fade while ensuring it cannot collapse
+	// below a controllable screen-space width on steep, coarse terrain.
+	float depthFootprint = fwidth(waterColumnDepthUnits);
+	float adaptiveRange = isfinite(depthFootprint) ?
+		minimumFadePixels * max(depthFootprint, 0.0) :
+		0.0;
+	float effectiveRange = max(blendRange, adaptiveRange);
+
 	return smoothstep(
 		0.0,
-		blendRange,
+		effectiveRange,
 		max(waterColumnDepthUnits, 0.0));
 }
 
@@ -1461,26 +1477,23 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 sunColor = GetSunColor(normal, viewDirection, input.WPosition.xyz) * surfaceShadow;
 	// Build only the bounded shallow candidate here. Each output path first
 	// computes its untouched native/Open result, then rejects this fallback when
-	// that result already has visible colour, distortion, or depth coverage.
+	// that result already has visible colour or distortion.
 	float shallowSurfaceCandidateWeight = 0.0;
 #					if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
-	// Require the primary and refracted samples to agree that this is shallow.
-	float primaryShallowDepthWeight =
+	// The undistorted primary depth is the stable spatial mask. Refracted depth
+	// can cross a bank as the view or animated normal changes, which previously
+	// switched complete shallow terrain triangles on and off.
+	float shallowDepthWeight =
 		GetUnifiedWaterShallowSurfaceDepthWeight(
 			waterColumnDepthUnits);
-	float refractedShallowDepthWeight =
-		GetUnifiedWaterShallowSurfaceDepthWeight(
-			diffuseOutput.waterColumnDepthUnits);
-	float agreedShallowDepthWeight =
-		min(
-			primaryShallowDepthWeight,
-			refractedShallowDepthWeight);
+	// Native coverage remains only as its original continuous blend. It no
+	// longer passes through a second threshold that can draw a terminal contour.
 	float nativeVisibilityDeficit =
 		1.0 - saturate(diffuseOutput.refractionMul);
 	shallowSurfaceCandidateWeight =
 		0.5 *
 		saturate(shoreContactWeight) *
-		agreedShallowDepthWeight *
+		shallowDepthWeight *
 		saturate(SharedData::unifiedWaterSettings.ShallowFallbackStrength) *
 		nativeVisibilityDeficit *
 		saturate(shallowFallbackAvailability);
@@ -1496,7 +1509,6 @@ PS_OUTPUT main(PS_INPUT input)
 		nativePresenceWeight = GetUnifiedWaterNativePresence(
 			finalColorPreFog,
 			diffuseOutput.refractionColor,
-			diffuseOutput.refractionMul,
 			diffuseOutput.refractionDisplacementPixels);
 #							if defined(REFRACTIONS)
 		[branch] if (
@@ -1515,7 +1527,8 @@ PS_OUTPUT main(PS_INPUT input)
 			nativePresenceWeight = max(
 				nativePresenceWeight,
 				GetUnifiedWaterPresenceFromImageDifference(
-					groundImageDifference));
+					groundImageDifference,
+					shallowDepthWeight));
 		}
 #							endif
 	}
@@ -1647,7 +1660,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
 #						if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
-	// Probe the exact native/Open output first. Surface colour and depth coverage
+	// Probe the exact native/Open output first. Surface colour and displacement
 	// cost no texture reads; only an unresolved shallow candidate samples the
 	// undistorted ground to measure transparent-water refraction.
 	float nativePresenceWeight = 1.0;
@@ -1656,7 +1669,6 @@ PS_OUTPUT main(PS_INPUT input)
 		nativePresenceWeight = GetUnifiedWaterNativePresence(
 			finalColor,
 			refractionColor,
-			diffuseOutput.refractionMul,
 			diffuseOutput.refractionDisplacementPixels);
 #							if defined(REFRACTIONS)
 		[branch] if (
@@ -1675,7 +1687,8 @@ PS_OUTPUT main(PS_INPUT input)
 			nativePresenceWeight = max(
 				nativePresenceWeight,
 				GetUnifiedWaterPresenceFromImageDifference(
-					groundImageDifference));
+					groundImageDifference,
+					shallowDepthWeight));
 		}
 #							endif
 	}

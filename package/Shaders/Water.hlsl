@@ -1618,6 +1618,15 @@ PS_OUTPUT main(PS_INPUT input)
 	shallowSurfaceLayerWeight =
 		shallowSurfaceCandidateWeight *
 		(1.0 - saturate(deepContextWeight));
+	// The native refraction already contains the shadow projected onto the
+	// riverbed. Restoring the opaque-looking surface cue beneath the same caster
+	// also exposes the independently projected water-surface shadow, producing
+	// two (and across overlapping penumbrae, more) visible copies. Keep the
+	// native/Open composite wherever the water surface is shadowed so only the
+	// refracted riverbed shadow remains; unshadowed shallow water keeps the full
+	// fallback. This reuses the shadow visibility already calculated above and
+	// therefore adds no texture reads.
+	shallowSurfaceLayerWeight *= saturate(surfaceShadow);
 #					endif
 
 #					if defined(VC)

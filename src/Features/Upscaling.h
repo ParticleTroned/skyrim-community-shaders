@@ -196,8 +196,12 @@ public:
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override
 	{
-		return GetUpscaleMethod() != UpscaleMethod::kNONE ||
-		       ShouldUseFrameGenerationThisFrame();
+		const auto configuredMethod =
+			streamline.featureDLSS ?
+				static_cast<UpscaleMethod>(settings.upscaleMethod) :
+				static_cast<UpscaleMethod>(settings.upscaleMethodNoDLSS);
+		return configuredMethod != UpscaleMethod::kNONE ||
+		       (d3d12SwapChainActive && settings.frameGenerationMode != 0);
 	}
 	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override

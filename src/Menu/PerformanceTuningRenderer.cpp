@@ -97,6 +97,14 @@ namespace
 		Failed
 	};
 
+	enum class FeatureCostTransitionWait
+	{
+		FeatureReady,
+		SettleDelay,
+		FreshPresents,
+		PostChangeSoak
+	};
+
 	enum class PerformanceUserDefaultsRestoreResult
 	{
 		Failed,
@@ -122,6 +130,8 @@ namespace
 		double lastProgressTime = 0.0;
 		uint64_t lastObservedPresentSampleId = 0;
 		PerformanceTuning::TransitionGateState transitionGate;
+		FeatureCostTransitionWait transitionWait =
+			FeatureCostTransitionWait::FeatureReady;
 		PerformanceTuning::SampleWindow currentBefore;
 		PerformanceTuning::SampleWindow comparison;
 		PerformanceTuning::SampleWindow currentAfter;
@@ -1037,6 +1047,62 @@ namespace
 		state.lastProgressTime = currentTime;
 		state.lastObservedPresentSampleId = summary.presentIntervalSampleId;
 		state.transitionGate = {};
+		state.transitionWait = FeatureCostTransitionWait::FeatureReady;
+	}
+
+	void UpdateFeatureCostTransitionWait(
+		FeatureCostMeasurementState& state,
+		bool featureReady,
+		double currentTime,
+		uint64_t currentPresentSampleId,
+		double minimumReadySeconds,
+		uint64_t minimumFreshPresentCount)
+	{
+		if (!featureReady || !state.transitionGate.continuouslyReady) {
+			state.transitionWait = FeatureCostTransitionWait::FeatureReady;
+			return;
+		}
+
+		if (currentTime - state.transitionGate.readyStartTime <
+			minimumReadySeconds) {
+			state.transitionWait = FeatureCostTransitionWait::SettleDelay;
+			return;
+		}
+
+		const uint64_t freshPresentCount =
+			currentPresentSampleId >=
+					state.transitionGate.readyStartPresentSampleId ?
+				currentPresentSampleId -
+					state.transitionGate.readyStartPresentSampleId :
+				0;
+		state.transitionWait =
+			freshPresentCount < minimumFreshPresentCount ?
+				FeatureCostTransitionWait::FreshPresents :
+				FeatureCostTransitionWait::PostChangeSoak;
+	}
+
+	const char* GetFeatureCostTransitionTimeoutReason(
+		const FeatureCostMeasurementState& state)
+	{
+		switch (state.transitionWait) {
+		case FeatureCostTransitionWait::FeatureReady:
+			return T(
+				TKEY("error.transition_ready_timeout"),
+				"Stopped because the feature did not remain ready to measure.");
+		case FeatureCostTransitionWait::SettleDelay:
+			return T(
+				TKEY("error.transition_delay_timeout"),
+				"Stopped while waiting for the applied feature state.");
+		case FeatureCostTransitionWait::FreshPresents:
+			return T(
+				TKEY("error.transition_presents_timeout"),
+				"Stopped while waiting for fresh presented frames after the state change.");
+		case FeatureCostTransitionWait::PostChangeSoak:
+		default:
+			return T(
+				TKEY("error.transition_soak_timeout"),
+				"Stopped while waiting for the post-change timing window to clear.");
+		}
 	}
 
 	bool ApplyFeatureCostComparisonState(
@@ -1310,18 +1376,24 @@ namespace
 				0.0,
 				feature->GetPerformanceCostMeasurementPostFreshSoakSeconds(
 					targetEnabled));
-			const bool targetStateApplied =
-				feature->IsPerformanceCostMeasurementEnabled() == targetEnabled;
+			const bool featureReady =
+				feature->IsPerformanceCostMeasurementReady();
 			const auto transitionResult =
 				PerformanceTuning::UpdateTransitionGate(
 					state.transitionGate,
-					targetStateApplied &&
-						feature->IsPerformanceCostMeasurementReady(),
+					featureReady,
 					currentTime,
 					summary.presentIntervalSampleId,
 					settleSeconds,
 					freshPresentCount,
 					postFreshSoakSeconds);
+			UpdateFeatureCostTransitionWait(
+				state,
+				featureReady,
+				currentTime,
+				summary.presentIntervalSampleId,
+				settleSeconds,
+				freshPresentCount);
 			if (transitionResult ==
 				PerformanceTuning::TransitionGateResult::TimingReset) {
 				FailFeatureCostMeasurement(
@@ -1339,15 +1411,17 @@ namespace
 					FailFeatureCostMeasurement(
 						feature,
 						state,
-						T(
-							TKEY("error.transition_timeout"),
-							"Stopped while waiting for the feature state to settle."));
+						GetFeatureCostTransitionTimeoutReason(state));
 				}
 				return;
 			}
 
-			// Do not wait for quiet frame timings here. The completed A-B-A
-			// confidence interval accounts for timing variation in the scene.
+			// State application is verified at each A/B/A boundary, settings are
+			// locked during the run, and the final snapshot must match the initial
+			// one. Do not poll the feature's enabled predicate here: some features
+			// expose transient runtime activity through it, which would otherwise
+			// erase a valid fresh-frame window. Timing variation belongs in the
+			// completed A-B-A confidence interval.
 			auto& window = GetFeatureCostSampleWindow(state);
 			PerformanceTuning::BeginSampleWindow(
 				window,
@@ -1375,16 +1449,13 @@ namespace
 		}
 
 		if (state.stage == FeatureCostMeasurementStage::Measuring) {
-			const bool targetEnabled =
-				state.leg != FeatureCostMeasurementLeg::Comparison;
-			if (feature->IsPerformanceCostMeasurementEnabled() != targetEnabled ||
-				!feature->IsPerformanceCostMeasurementReady()) {
+			if (!feature->IsPerformanceCostMeasurementReady()) {
 				FailFeatureCostMeasurement(
 					feature,
 					state,
 					T(
 						TKEY("error.feature_unready"),
-						"Stopped because the feature state changed during measurement."));
+						"Stopped because the feature stopped reporting ready during measurement."));
 				return;
 			}
 
@@ -1656,13 +1727,30 @@ namespace
 			ImGui::TextDisabled(
 				T(TKEY("status.settling"), "Settling %s"),
 				GetFeatureCostLegStatusLabel(state));
-			if (state.transitionGate.soakStarted) {
+			if (state.transitionWait ==
+				FeatureCostTransitionWait::PostChangeSoak) {
 				ImGui::SameLine();
 				ImGui::TextDisabled(
 					"%s",
 					T(
 						TKEY("status.post_change_soak"),
 						"Waiting for the post-change timing window to clear"));
+			} else if (state.transitionWait ==
+				FeatureCostTransitionWait::FreshPresents) {
+				ImGui::SameLine();
+				ImGui::TextDisabled(
+					"%s",
+					T(
+						TKEY("status.fresh_presents"),
+						"Flushing frame timings from before the state change"));
+			} else if (state.transitionWait ==
+				FeatureCostTransitionWait::SettleDelay) {
+				ImGui::SameLine();
+				ImGui::TextDisabled(
+					"%s",
+					T(
+						TKEY("status.settle_delay"),
+						"Waiting for the state change to take effect"));
 			} else if (feature) {
 				ImGui::SameLine();
 				ImGui::TextDisabled(

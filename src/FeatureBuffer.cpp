@@ -13,6 +13,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/MeshBlending.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainShadows.h"
@@ -53,6 +54,7 @@ namespace
 	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
 	using WaterAppearanceSettingsCB = WaterAppearance::Settings;
 	using BloomSettingsCB = Bloom::Settings;
+	using MeshBlendingSettingsCB = MeshBlending::PerFrame;
 
 	// Keep these in lock-step with package/Shaders/Common/SharedData.hlsli::FeatureData.
 	struct FeatureDataLayout
@@ -79,6 +81,7 @@ namespace
 		UnifiedWaterSettingsCB unifiedWaterSettings;
 		WaterAppearanceSettingsCB waterAppearanceSettings;
 		BloomSettingsCB bloomSettings;
+		MeshBlendingSettingsCB meshBlendingSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -103,7 +106,8 @@ namespace
 		FoliageLightingSettingsCB,
 		UnifiedWaterSettingsCB,
 		WaterAppearanceSettingsCB,
-		BloomSettingsCB>;
+		BloomSettingsCB,
+		MeshBlendingSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
@@ -162,6 +166,11 @@ namespace
 	static_assert(offsetof(BloomSettingsCB, CompressionThreshold) == 32);
 	static_assert(offsetof(BloomSettingsCB, CompressionCeiling) == 36);
 	static_assert(offsetof(BloomSettingsCB, BlendWeight) == 40);
+	static_assert(sizeof(MeshBlendingSettingsCB) == 16);
+	static_assert(offsetof(MeshBlendingSettingsCB, BlendStrength) == 0);
+	static_assert(offsetof(MeshBlendingSettingsCB, BlendWidth) == 4);
+	static_assert(offsetof(MeshBlendingSettingsCB, DepthBias) == 8);
+	static_assert(offsetof(MeshBlendingSettingsCB, MaximumGap) == 12);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);
@@ -188,7 +197,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, foliageLightingSettings) + sizeof(FoliageLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, waterAppearanceSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, waterAppearanceSettings) + sizeof(WaterAppearanceSettingsCB));
-	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, meshBlendingSettings) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, meshBlendingSettings) + sizeof(MeshBlendingSettingsCB));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -253,5 +263,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::foliageLighting.GetCommonBufferData(),
 		globals::features::unifiedWater.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
-		globals::features::adaptiveBrightness.GetEffectiveBloomSettings());
+		globals::features::adaptiveBrightness.GetEffectiveBloomSettings(),
+		globals::features::meshBlending.GetCommonBufferData());
 }

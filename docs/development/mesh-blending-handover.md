@@ -1,17 +1,37 @@
-# NIF Soft Mesh Transitions — Implementation Handover
+# Mesh Blending — Implementation Handover
 
 ## Status
 
-- Design and implementation handover only.
-- No implementation from this document is currently assumed to exist.
-- Evaluated against the `cs-1.7-PL-SE` worktree on 2026-08-03.
+- The first conservative implementation now exists on `PR/nif-blending`, based on tag `RC173`.
+- The original proposal was re-evaluated against RC173 before implementation; the decisions below supersede stale integration details in the handover.
+- Static source checks pass. In accordance with the no-build instruction, the final source, shader permutations, C++ integration, and runtime behaviour remain unbuilt and require later validation.
 - The design intentionally avoids NIF edits and new engine-address hooks.
 - The initial implementation should target the normal world `BSLightingShader` path. Reflection, cubemap, shadow, water, effect, and other specialised passes are explicitly outside the MVP.
-- No build or runtime tests were performed while preparing this handover.
+
+## RC173 implementation decisions
+
+- Descriptor bit 8 is used because RC173 already mirrors `IsFemale` at bit 6 and uses bit 7 for external-emittance suppression.
+- The descriptor is prepared before the original shared Lighting `SetupGeometry` call, matching the per-draw timing used by Extended Translucency and avoiding a possible dirty-state upload inside the original call.
+- Static ownership is proven with `TESObjectREFR::Get3D()` plus a bounded ancestry walk. The nearest `BSFadeNode` is not treated as authoritative ownership.
+- Model and node rules use an active `ExtraModelSwap` path when present, falling back to the base static model. The selected model and path identities participate in cache validation.
+- The shipped default is strict automatic classification. Allow-list-only remains available for curated deployments, and deny rules always override automatic candidates.
+- Allow rules bypass the sibling and bounds heuristic only. They do not bypass source render-state, material, static-owner, animation, pass, or distance safety gates; deny rules always win.
+- Renderer submission remains the primary visibility/frustum/portal culling mechanism. A configurable 8192-unit camera/eye-centered bubble rejects distant candidates before owner lookup, cache lookup, string construction, or sibling traversal; zero disables the bubble.
+- Classification uses a fixed 4096-entry, four-way set-associative cache with no owning references and a hard 256-object traversal cap. With no effective allow/deny rules, validated source/material/parent state can hit before owner resolution and is revalidated after a geometry-jittered 120–183 frames; configured policy retains the full model/owner signature lookup and 600–855-frame interval. Jitter avoids a cell-wide reclassification spike; distance rejects are deliberately not cached. Developer diagnostics separate pre-owner hits, full policy-signature hits, and owner-resolution attempts.
+- Automatic receivers are initially required to be fully opaque and non-alpha-tested. This is stricter than the proposal because CPU flags cannot prove that an alpha-test cutoff exactly matches the prepass depth.
+- Receiver classification is structural rather than tied to transient application-cull state, keeping cached results coherent when scripted nodes are hidden or revealed. Invalid or absent receiver depth still fails open in the shader.
+- VR depth reads explicitly pass the current eye index. Raw depth near either 0 or 1 fails open, covering the far clear value and VR hidden-area/mask values.
+- `MaximumGap` is sanitized to at least `DepthBias + BlendWidth`, preventing a discontinuous jump back to full opacity. Clearly negative signed gaps also fail open rather than fading against foreground geometry.
+- The MVP continues to reuse slot `t17` and adds no depth copy, render target, draw pass, or geometry. The R16 Terrain Blending depth path should be compared with its existing R32 resource during later runtime quality testing before paying extra bandwidth globally.
+- Known-ineligible Lighting permutations are removed at shader compile time. The remaining permutations take one uniform fast-path branch, and only CPU-qualified transition draws sample depth.
+- If Light Limit Fix skips the shared Lighting hook for an unsafe directional-light slot, it explicitly clears the Mesh Blending descriptor so stale per-draw state cannot leak.
+- The feature is intentionally non-core and its standalone package has `autoupload = false`; publication remains an explicit release decision.
+- User sliders and toggles remain in `SettingsUser.json`, while generated allow/deny policy is isolated in the atomically written `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json`.
+- The normal feature UI exposes a session-only **Discover Blendable Meshes** toggle. Discovery applies the same distance bubble and bounded strict classifier, records at most 1024 unique exact model/node candidates, performs no disk I/O while walking, and costs additional CPU time only while active.
 
 ## Executive summary
 
-Implement a Community Shaders feature tentatively named **Soft Mesh Transitions**. It should soften the intersection between a transparent transition layer and an opaque surface behind it.
+Implement a Community Shaders feature named **Mesh Blending**. It should soften the intersection between a transparent transition layer and an opaque surface behind it.
 
 The principal target is a static NIF containing:
 
@@ -81,7 +101,7 @@ The alpha-blended, Z-tested, non-Z-writing shape whose opacity CS modifies.
 
 ### Receiver
 
-An opaque or alpha-tested, Z-tested, Z-writing sibling, or the underlying LAND surface already represented in the scene depth.
+A fully opaque, non-alpha-tested, Z-tested, Z-writing sibling, or the underlying LAND surface already represented in the scene depth. Alpha-tested sibling support is deferred until cutoff/prepass equivalence can be proven.
 
 ### Soft intersection fade
 
@@ -101,7 +121,7 @@ Relevant existing paths include:
 
 Use the shared lighting setup chain if practical. Do not add a new relocation merely to classify geometry.
 
-The soft-transition descriptor must be cleared for every lighting geometry before optionally being set. A stale per-draw bit would affect unrelated meshes.
+The Mesh Blending descriptor must be cleared for every lighting geometry before optionally being set. A stale per-draw bit would affect unrelated meshes.
 
 ### Scene depth
 
@@ -137,28 +157,28 @@ CS already carries per-draw information through `State::PermutationCB` and `Extr
 Reserve a new matching bit in both C++ and HLSL, for example bit 8:
 
 ```cpp
-SoftMeshTransition = 1u << 8
+MeshBlending = 1u << 8
 ```
 
-Do not reuse bit 6. HLSL already names it `IsFemale`, even though the current C++ enum does not mirror it. Do not overlap Extended Translucency's bits 6–8 in `ExtraFeatureDescriptor`; use `ExtraShaderDescriptor` instead.
+Do not reuse bit 6. RC173 mirrors `IsFemale` at bit 6 in both C++ and HLSL, and bit 7 is also occupied. Do not overlap Extended Translucency's bits 6–8 in `ExtraFeatureDescriptor`; use bit 8 of `ExtraShaderDescriptor` instead.
 
-## Proposed feature structure
+## Implemented feature structure
 
-Tentative feature identity:
+Feature identity:
 
-- Display name: `Soft Mesh Transitions`
-- Short name: `SoftMeshTransitions`
-- Category: `Landscape & Textures` or `Materials`
-- Shader define: `SOFT_MESH_TRANSITIONS`
+- Display name: `Mesh Blending`
+- Short name: `MeshBlending`
+- Category: `Landscape & Textures`
+- Shader define: `MESH_BLENDING`
 - Shader type: Lighting only
 
 Suggested files:
 
 ```text
-src/Features/SoftMeshTransitions.h
-src/Features/SoftMeshTransitions.cpp
-features/Soft Mesh Transitions/Shaders/SoftMeshTransitions/SoftMeshTransitions.hlsli
-docs/development/nif-soft-mesh-transitions-handover.md
+src/Features/MeshBlending.h
+src/Features/MeshBlending.cpp
+features/Mesh Blending/Shaders/MeshBlending/MeshBlending.hlsli
+docs/development/mesh-blending-handover.md
 ```
 
 Expected registrations and integration edits:
@@ -173,21 +193,20 @@ src/Hooks.cpp
 package/Shaders/Common/Permutation.hlsli
 package/Shaders/Common/SharedData.hlsli
 package/Shaders/Lighting.hlsl
-package/SKSE/Plugins/CommunityShaders/Translations/en.json
 ```
 
-The build system normally discovers feature shader folders automatically, but confirm the existing feature-template conventions before adding explicit CMake entries.
+The existing CMake source and feature-package globs discover these files, so no explicit CMake entry is required.
 
-## Proposed settings
+## Implemented settings
 
 ### GPU settings
 
-Use a 16-byte-aligned structure:
+The implementation uses a 16-byte-aligned structure:
 
 ```cpp
-struct alignas(16) Settings
+struct alignas(16) PerFrame
 {
-    std::uint32_t Enabled = 0;
+    float BlendStrength = 1.0f;
     float BlendWidth = 12.0f;
     float DepthBias = 0.25f;
     float MaximumGap = 64.0f;
@@ -208,43 +227,75 @@ enum class DetectionMode : std::uint32_t
     StrictAutomatic
 };
 
-DetectionMode Mode = DetectionMode::AllowListOnly;
-bool RequireOpaqueSibling = true;
-bool RequireOverlappingBounds = true;
+std::uint32_t DetectionMode = 2; // StrictAutomatic
+std::uint32_t RequireOverlappingBounds = 1;
+float MaximumDistance = 8192.0f;
 float BoundsExpansion = 32.0f;
-bool DeveloperLogging = false;
+std::uint32_t DeveloperLogging = 0;
 ```
 
-The safest first release is disabled or allow-list-only. Strict automatic mode should not become the default until a representative group of mesh packs has been inspected.
+Strict automatic is the product default. It remains bounded by static ownership, render-state, animation, material, sibling, bounds, traversal, cache, and distance gates; allow-list-only is available when a curated policy is preferred.
 
-### Illustrative CS-side override format
+### CS-side settings and rule format
 
-The exact JSON shape should follow existing CS settings and override conventions. The following is illustrative:
+`Feature::Load` keys ordinary feature settings by display name, and this implementation serializes enum/bool-like values as integers. `SettingsUser.json` contains only the normal feature controls:
 
 ```json
 {
-  "SoftMeshTransitions": {
-    "Enabled": true,
-    "DetectionMode": "StrictAutomatic",
+  "Mesh Blending": {
+    "Enabled": 1,
+    "BlendStrength": 1.0,
+    "DetectionMode": 2,
     "BlendWidth": 12.0,
     "DepthBias": 0.25,
-    "Allow": [
-      {
-        "Model": "meshes/landscape/mountains/mountaintrim01wet.nif",
-        "NodePath": "MountainTrim01Wet/RockSkirt01Wet"
-      }
-    ],
-    "Deny": [
-      {
-        "Model": "meshes/example/glasswindow.nif",
-        "NodePath": "WindowRoot/Glass"
-      }
-    ]
+    "MaximumGap": 64.0,
+    "MaximumDistance": 8192.0,
+    "BoundsExpansion": 32.0,
+    "RequireOverlappingBounds": 1,
+    "DeveloperLogging": 0
   }
 }
 ```
 
+Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json` so discovery does not rewrite unrelated CS settings. It is loaded once independently of whether a Mesh Blending section exists in `SettingsUser.json`, rather than reread during live settings or performance swaps. Save/Clear re-read and validate it immediately before mutation so in-session mod-author edits are merged rather than silently replaced. The file is replaced atomically and uses this versioned shape:
+
+```json
+{
+  "SchemaVersion": 1,
+  "AllowList": [
+    {
+      "Model": "meshes/landscape/mountains/mountaintrim01wet.nif",
+      "NodePath": "mountaintrim01wet/rockskirt01wet[2]"
+    }
+  ],
+  "DenyList": [
+    {
+      "Model": "meshes/example/glasswindow.nif",
+      "NodePath": "windowroot/glass[1]"
+    }
+  ]
+}
+```
+
+Detection modes are `0` disabled, `1` allow-list-only, and `2` strict automatic. Empty `Model` or `NodePath` fields wildcard that component; an entirely empty rule never matches. `*` and `?` wildcards are supported after ASCII lowercase/slash normalization.
+
 An allow match should override automatic rejection only for safe render-state requirements. It must not force unsupported blend functions, disabled Z testing, water/effect shaders, or missing depth resources. A deny match always wins.
+
+### Runtime discovery workflow
+
+The normal Mesh Blending UI exposes one session-only toggle, **Discover Blendable Meshes**:
+
+1. Enable discovery and walk through the locations to test.
+2. Only rendered Lighting geometry inside `Culling Distance` is inspected.
+3. A candidate is retained only after the strict source, static-owner, deny-rule, opaque-sibling, bounds, traversal, UTF-8, and path-safety checks pass.
+4. **Save Detected Meshes** stops capture, confirms the promotion, merges exact candidates without partial overflow, and atomically updates `MeshBlendingRules.json`.
+5. **Clear Saved Allow List** stops capture, clears the session, and atomically empties the saved `AllowList`; manually authored deny rules remain intact.
+
+Discovery is not an installed-NIF inventory. It cannot see unvisited, unloaded, culled, or conditional variants. Starting or manually stopping it invalidates the bounded classification cache so stale normal-mode decisions cannot suppress capture or leak back into normal policy rendering. Capture automatically stops at 1024 unique candidates, before further cache misses can spend time on sibling traversal that cannot retain a result. No per-candidate file writes or log spam occur while walking.
+
+Captured entries are candidates for visual review. The default Strict automatic mode previews them while discovery records them; Allow-list-only discovery records without changing unsaved candidates. Promoting one to an allow rule deliberately avoids repeating the automatic sibling traversal for that exact model/node pair, while all source render-state, static-owner, pass, animation, distance, and deny gates continue to apply. Feature-cost A/B measurement cannot start while discovery is active, so capture overhead cannot contaminate its baseline.
+
+Malformed, unreadable, or newer-schema rule files fail closed: runtime blending and discovery are disabled, Save/Clear are locked, and the existing file is never silently replaced. The UI reports that the file must be fixed or removed followed by a restart.
 
 ## Runtime asset and shape identity
 
@@ -260,7 +311,7 @@ Preferred identity components:
 Suggested conceptual key:
 
 ```text
-lowercase(normalised model path) | root-relative node path | geometry name
+lowercase(normalised active model path) | root-relative named/indexed node path
 ```
 
 Do not use only the material hash. Multiple placed cells and unrelated shapes can share materials, and systems such as True PBR can replace materials at runtime.
@@ -269,11 +320,11 @@ Do not use only the material hash. Multiple placed cells and unrelated shapes ca
 
 Starting from `pass->geometry`:
 
-1. Walk `parent` pointers to the nearest owning `BSFadeNode` or reference root, not the global world root.
-2. Prefer a root carrying `TESObjectREFR` user data.
-3. Obtain its base object and attempt `As<RE::TESModel>()`.
-4. Use `TESModel::GetModel()` when available.
-5. Fall back to the root-relative node path plus geometry/material diagnostics when a model path cannot be resolved.
+1. Read the geometry's `TESObjectREFR` user data and require its base form to be exactly `Static`.
+2. Obtain that reference's authoritative `Get3D()` root and prove ownership with a bounded parent walk; do not infer ownership from the nearest `BSFadeNode`.
+3. Prefer a valid `ExtraModelSwap` model and path when present.
+4. Otherwise use the base static's `TESModel::GetModel()` path.
+5. Permit an explicit node-only rule to use the root-relative node path when a model path cannot be resolved; strict automatic detection still fails closed without a stable model path.
 
 Do not attach persistent extra data to the scenegraph in the MVP. Runtime scenegraph mutation introduces cloning, threading, and lifetime questions that are unnecessary for the first implementation.
 
@@ -310,14 +361,14 @@ Also reject effect, water, sky, grass, particle, and other non-lighting shader t
 
 A source that is both alpha tested and alpha blended is possible. Do not support it automatically in the first classifier. Alpha-test ordering can turn a smooth fade into a hard discard or coverage artifact. It can be considered later after explicit tests.
 
-An opaque sibling may be alpha tested as long as it writes valid post-Z-prepass depth with the same cutoff used in its visible pass.
+Alpha-tested siblings are rejected in the MVP because the CPU-side flags cannot prove that their visible cutoff matches the depth prepass.
 
 ### Receiver plausibility
 
 Traverse geometries only under the selected owning root. A plausible receiver should:
 
 - not be the source geometry;
-- use a supported opaque or alpha-tested lighting path;
+- use a supported fully opaque, non-alpha-tested lighting path;
 - have `kZBufferTest` and `kZBufferWrite` set;
 - not use true alpha blending;
 - not be refraction, water, effect, decal, particle, or billboard geometry; and
@@ -381,12 +432,12 @@ Do not build strings or log on every draw. Compute and retain hashes for normal 
 Add a function similar to:
 
 ```cpp
-void SoftMeshTransitions::PrepareLightingDraw(RE::BSRenderPass* a_pass);
+void MeshBlending::PrepareLightingDraw(RE::BSRenderPass* a_pass);
 ```
 
 It should:
 
-1. Clear `ExtraShaderDescriptors::SoftMeshTransition` unconditionally.
+1. Clear `ExtraShaderDescriptors::MeshBlending` unconditionally.
 2. Return unless the feature and shader cache are active.
 3. Return unless the pass is a safe main-world lighting pass.
 4. Obtain or calculate the classification.
@@ -402,46 +453,47 @@ Add matching definitions:
 
 ```cpp
 // src/State.h
-SoftMeshTransition = 1u << 8
+MeshBlending = 1u << 8
 ```
 
 ```hlsl
 // package/Shaders/Common/Permutation.hlsli
-static const uint SoftMeshTransition = (1u << 8);
+static const uint MeshBlending = (1u << 8);
 ```
 
 Clear and set only this bit. Do not rewrite the whole descriptor.
 
 ## Shader integration
 
-### Suggested helper
+### Shader helper
 
-Create a small HLSL helper rather than embedding the full calculation directly in `Lighting.hlsl`:
+The implementation keeps the calculation in a small HLSL helper rather than embedding it directly in `Lighting.hlsl`:
 
 ```hlsl
-namespace SoftMeshTransitions
+namespace MeshBlending
 {
-    float GetFade(float2 screenUV, float fragmentRawDepth)
+    float ComputeFade(float2 screenUV, float fragmentRawDepth, uint eyeIndex)
     {
-        float receiverRawDepth = SharedData::GetDepth(screenUV);
+        float receiverRawDepth = SharedData::GetDepth(screenUV, eyeIndex);
 
-        // No opaque receiver: retain authored opacity.
-        if (receiverRawDepth >= 1.0)
+        // Far clear and the VR hidden-area/mask value retain authored opacity.
+        if (receiverRawDepth <= 1.0e-6 || receiverRawDepth >= 1.0 - 1.0e-6)
             return 1.0;
 
         float receiverDepth = SharedData::GetScreenDepth(receiverRawDepth);
         float fragmentDepth = SharedData::GetScreenDepth(fragmentRawDepth);
         float gap = receiverDepth - fragmentDepth;
 
-        float width = max(SharedData::softMeshTransitionSettings.BlendWidth, 0.001);
-        float start = SharedData::softMeshTransitionSettings.DepthBias;
-        float fade = smoothstep(start, start + width, gap);
+        float width = max(SharedData::meshBlendingSettings.BlendWidth, 1.0e-4);
+        float start = max(SharedData::meshBlendingSettings.DepthBias, 0.0);
+        float maximumGap = max(SharedData::meshBlendingSettings.MaximumGap, start + width);
 
-        // Treat gaps beyond the configured influence as ordinary authored alpha.
-        if (gap >= SharedData::softMeshTransitionSettings.MaximumGap)
-            fade = 1.0;
+        // A receiver clearly in front is unrelated foreground; fail open.
+        if (!(gap == gap) || gap < -max(start, 1.0e-4) || gap >= maximumGap)
+            return 1.0;
 
-        return saturate(fade);
+        float fade = smoothstep(start, start + width, max(gap, 0.0));
+        return lerp(1.0, saturate(fade), saturate(SharedData::meshBlendingSettings.BlendStrength));
     }
 }
 ```
@@ -453,28 +505,26 @@ The sign of `gap` must be verified with an in-game debug visualisation before sh
 The fade must compose with the final authored/material alpha:
 
 1. Let vanilla and CS calculate texture alpha, material alpha, vertex alpha, alpha-test behaviour, and Extended Translucency adjustments first.
-2. Calculate `softMeshFade` only when the per-draw bit is set.
+2. Calculate `meshBlendFade` only when the per-draw bit is set.
 3. Multiply the final output alpha after feature-specific alpha overrides and before alpha is copied into motion-vector or deferred MRT channels.
 
 Conceptually:
 
 ```hlsl
-float softMeshFade = 1.0;
+float meshBlendFade = 1.0;
 
-#if defined(SOFT_MESH_TRANSITIONS)
-[branch] if (
-    SharedData::softMeshTransitionSettings.Enabled &&
-    (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SoftMeshTransition))
+#if defined(MESH_BLENDING_AVAILABLE)
+[branch] if (MeshBlending::ShouldApply())
 {
-    softMeshFade = SoftMeshTransitions::GetFade(screenUV, input.Position.z);
+    meshBlendFade = MeshBlending::ComputeFade(screenUV, input.Position.z, eyeIndex);
 }
 #endif
 
 // After normal alpha and Terrain Blending alpha selection:
-psout.Diffuse.w *= softMeshFade;
+psout.Diffuse.w *= meshBlendFade;
 ```
 
-The exact placement matters. In the current shader, the deferred Terrain Blending block can replace `psout.Diffuse.w`. Applying the soft-mesh multiplier before that replacement would lose it. Apply the multiplier after any replacement and before the value fans out to `MotionVectors`, `Specular`, `Albedo`, `Reflectance`, `NormalGlossiness`, `Parameters`, `Masks`, and `Masks2`.
+The exact placement matters. In the current shader, the deferred Terrain Blending block can replace `psout.Diffuse.w`. Applying the mesh-blending multiplier before that replacement would lose it. Apply the multiplier after any replacement and before the value fans out to `MotionVectors`, `Specular`, `Albedo`, `Reflectance`, `NormalGlossiness`, `Parameters`, `Masks`, and `Masks2`.
 
 For the non-deferred path, ensure the final returned diffuse alpha receives the same multiplier.
 
@@ -501,7 +551,7 @@ For the MVP:
 - reuse the normal `t17` resource;
 - verify the target NIF with Terrain Blending both enabled and disabled;
 - confirm that the terrain depth offset does not widen or invert the new fade; and
-- ensure Terrain Blending's deferred alpha assignment is followed by, not subsequent to, the soft-transition multiplier.
+- ensure Terrain Blending's deferred alpha assignment is followed by, not subsequent to, the Mesh Blending multiplier.
 
 If compatibility testing reveals incorrect depth gaps, add an explicit read-only accessor for the unmodified opaque prepass depth rather than duplicating or guessing Terrain Blending state. The desired receiver choice should then become a documented setting or fixed policy:
 
@@ -512,13 +562,13 @@ Do not sample a resource while it is simultaneously bound for incompatible depth
 
 ## Interaction with Extended Translucency
 
-Extended Translucency already changes alpha for selected lighting materials. Soft Mesh Transitions must be a final multiplicative coverage adjustment:
+Extended Translucency already changes alpha for selected lighting materials. Mesh Blending must be a final multiplicative coverage adjustment:
 
 ```text
 texture/material/vertex alpha
 → Extended Translucency shaping
 → other explicit alpha selection
-→ Soft Mesh Transitions depth fade
+→ Mesh Blending depth fade
 → output alpha/MRT propagation
 ```
 
@@ -718,11 +768,11 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 - Extended Translucency output remains intact and is multiplied by the new fade.
 - True PBR and vanilla lighting materials produce comparable transition placement.
 - Reflections and specialised passes remain unchanged in the MVP.
-- Alpha-tested receivers do not leak rectangular depth silhouettes.
+- Alpha-tested receiver candidates are rejected and remain visually unchanged.
 
 ### Robustness
 
-- Null pass, geometry, shader property, alpha property, parent, root, user data, model, or renderer data fails closed.
+- Null pass, geometry, shader property, alpha property, parent, root, user data, or renderer data fails closed. A missing model path can match only an explicit node-only allow rule; strict automatic mode fails closed.
 - Cache entries validate current live signatures before reuse.
 - Cache size remains bounded during cell traversal and fast travel.
 - Logging is rate limited.
@@ -734,7 +784,9 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 - No extra geometry pass in the MVP.
 - No scenegraph traversal on every draw after cache warm-up.
 - One depth read plus minimal ALU only for accepted source pixels.
-- No per-draw string allocation in normal mode.
+- No string allocation on cache hits; path strings are built only on bounded cache misses when policy or diagnostics require them.
+
+Because strict automatic is the default, use the built-in feature A/B toggle from a fixed camera after warming the classification cache. Record CPU classifier time, active draws, cache hit/miss/eviction counts, traversed objects, and GPU frame time for representative accepted assets and a deliberately dense worst-case view. Label zero-active results as idle-overhead samples rather than visual-effect cost. Repeat at 4096, 8192, and unlimited distance in flat-screen and VR. The inactive configuration should report no classifier work or depth samples; active cost should scale with accepted on-screen coverage rather than total loaded statics. The built-in toggle cannot measure package-install shader/hook overhead because those remain resident in both halves; compare separate loaded/unloaded captures for that question. Reconsider the default if these properties do not hold.
 
 ### VR-specific
 
@@ -745,13 +797,14 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 
 ## Suggested focused tests
 
-No tests were run for this handover. When implementation begins, use focused checks rather than assuming that generic shader compilation proves renderer-state correctness.
+Pure HLSL fade tests now cover endpoints, malformed-range sanitization, and fail-open gap handling. The CPU classifier cases and all renderer-state/runtime scenarios below remain pending; generic shader compilation is not evidence that they behave correctly in game.
 
 ### Classifier tests
 
 - Standard alpha, Z-test on, Z-write off, opaque sibling: accept.
 - Additive alpha: reject.
 - Premultiplied alpha: reject in MVP.
+- Alpha-tested receiver: reject in MVP.
 - Z-test off: reject.
 - Z-write on: reject as source.
 - Skinned/tree/decal/refraction/water/effect: reject.
@@ -780,17 +833,14 @@ No tests were run for this handover. When implementation begins, use focused che
 - Cell transition, fast travel, save load, and menu open/close.
 - Reflection/cubemap scenes to confirm the effect remains disabled there.
 
-## Decisions to make before implementation
+## Remaining validation decisions
 
-1. Final feature name and UI category.
-2. Whether the initial user-visible mode is disabled or allow-list-only by default.
-3. Exact stable key representation and wildcard policy.
-4. Whether an Advanced UI candidate browser is required for the first version.
-5. Initial blend-width, bias, and maximum-gap units after depth visualisation.
-6. Whether Terrain Blending's blended depth or the unmodified opaque prepass is the preferred receiver source.
-7. Whether alpha-tested plus alpha-blended sources remain excluded.
-8. Whether implicit material alpha without `NiAlphaProperty` is supported initially.
-9. Whether VR ships simultaneously or follows after SE validation.
+The implementation fixes the feature name/category, strict-automatic default, normalized model/node wildcard policy, strict `NiAlphaProperty` source gate, alpha-test exclusion, and initial VR code path. Runtime evidence is still needed to decide:
+
+1. Final blend-width, bias, and maximum-gap defaults after depth visualization.
+2. Whether Terrain Blending's R16 depth is adequate or its existing R32 resource is materially better on target assets.
+3. Whether bounded acceptance logs are sufficient or an Advanced UI candidate browser is justified.
+4. Whether VR should ship simultaneously after stereo/MSAA testing or remain disabled for the first release.
 
 ## Recommended first implementation boundary
 
@@ -806,6 +856,6 @@ For the first working version, implement only:
 - main world pass only;
 - the existing `t17` scene depth;
 - one final alpha multiplier; and
-- developer mask/gap visualisation.
+- bounded developer counters and accepted-candidate logging.
 
-Do not add group-ID rendering, material-buffer blending, opaque-source replay, or support for two transparent layers until the MVP has been evaluated on real assets. This boundary preserves the original reason for the proposal: a cheap, CS-only improvement for authored terrain and rock transition skirts.
+Shader mask/gap visualisations remain a deferred diagnostic enhancement. Do not add group-ID rendering, material-buffer blending, opaque-source replay, or support for two transparent layers until the MVP has been evaluated on real assets. This boundary preserves the original reason for the proposal: a cheap, CS-only improvement for authored terrain and rock transition skirts.

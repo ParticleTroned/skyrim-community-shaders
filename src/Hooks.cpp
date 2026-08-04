@@ -18,6 +18,7 @@
 #include "Features/AdaptiveBrightness.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/MeshBlending.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -778,6 +779,14 @@ namespace LightingExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			auto& meshBlending = globals::features::meshBlending;
+			constexpr auto meshBlendingMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending);
+			if (meshBlending.loaded) {
+				meshBlending.PrepareLightingDraw(pass);
+			} else if (auto* state = globals::state;
+				state && (state->permutationData.ExtraShaderDescriptor & meshBlendingMask) != 0u) {
+				meshBlending.PrepareLightingDraw(pass);
+			}
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;

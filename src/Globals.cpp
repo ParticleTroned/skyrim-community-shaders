@@ -20,6 +20,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/LinearLighting.h"
+#include "Features/MeshBlending.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -79,6 +80,7 @@ namespace globals
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceShadows screenSpaceShadows{};
 		Skylighting skylighting{};
+		MeshBlending meshBlending{};
 		TerrainVariation terrainVariation{};
 		SkySync skySync{};
 		SubsurfaceScattering subsurfaceScattering{};

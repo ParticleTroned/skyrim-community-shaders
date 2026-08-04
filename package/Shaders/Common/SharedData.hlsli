@@ -409,6 +409,14 @@ namespace SharedData
 		float pad;
 	};
 
+	struct MeshBlendingSettings
+	{
+		float BlendStrength;
+		float BlendWidth;
+		float DepthBias;
+		float MaximumGap;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -433,6 +441,7 @@ namespace SharedData
 		UnifiedWaterSettings unifiedWaterSettings;
 		WaterAppearanceSettings waterAppearanceSettings;
 		BloomSettings bloomSettings;
+		MeshBlendingSettings meshBlendingSettings;
 	};
 
 	static const uint LOD_BLENDING_FLAG_DISABLE_TERRAIN_VERTEX_COLORS = 1u;

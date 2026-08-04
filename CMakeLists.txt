@@ -97,13 +97,13 @@ else()
     set(GIT_DESCRIBE "unknown")
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
-set(_CS_PL_FORK_VERSION_DEFAULT "PL3.16-VR")
+set(_CS_PL_FORK_VERSION_DEFAULT "PL3.18-VR")
 set(_CS_PL_FORK_VERSION_FORCE OFF)
 if(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\]AIO-Release$]])
     set(_CS_PL_FORK_VERSION_DEFAULT "PL3.15-SE")
     set(_CS_PL_FORK_VERSION_FORCE ON)
 elseif(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\](ALL|ALL-VS2022|ALL-TRACY)$]])
-    set(_CS_PL_FORK_VERSION_DEFAULT "PL3.16-VR")
+    set(_CS_PL_FORK_VERSION_DEFAULT "PL3.18-VR")
     set(_CS_PL_FORK_VERSION_FORCE ON)
 endif()
 set(CS_PL_FORK_VERSION
@@ -1007,10 +1007,7 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 VERBATIM
             )
 
-            list(
-                APPEND SHADER_ONLY_HASHES
-                ${DEPLOY_TARGET_HASH}_shaders.stamp
-            )
+            list(APPEND SHADER_ONLY_HASHES ${DEPLOY_TARGET_HASH}_shaders.stamp)
 
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_deploy.stamp)
             list(

@@ -4517,8 +4517,8 @@ namespace SIE
 			/*Woke up because of a stop request. */
 			return std::nullopt;
 		}
-		// Session clock is now managed by CompilationSet::Add(); this branch is kept
-		// as a safety net but will not trigger because totalTasks is incremented
+		// Session state is managed by Add(), Complete(), and Forget(). This branch is
+		// retained as a safety net but will not trigger because totalTasks is incremented
 		// before the conditionVariable notification.
 		if (!shaderCache->IsCompiling()) {
 			QueryPerformanceCounter(&lastReset);
@@ -4564,11 +4564,12 @@ namespace SIE
 				// IsCompiling() after waking up, sees the updated totalTasks and
 				// does NOT incorrectly treat the new work as a "fresh start" and
 				// reset the session clock via its !IsCompiling() branch.
-				// Only the first task starts the clock here. Add() cannot know whether
-				// later work is a disk-cache hit or a real compile, so Complete() owns
-				// the decision to re-arm a finished compilation session.
+				// Only the first task after Clear() starts a session here. A drained queue
+				// is ambiguous: later requests may all be disk hits, so rearming here would
+				// emit a false completion for every small cache-hit burst. Complete() rearms
+				// only after it confirms a real compile; Forget() handles smart clears.
 				if (totalTasks.load(std::memory_order_relaxed) == 0) {
-					QueryPerformanceCounter(&lastReset);
+					lastReset = now;
 					lastCalculation = lastReset;
 				}
 
@@ -4597,6 +4598,8 @@ namespace SIE
 		// Perform all completion operations under one mutex acquisition
 		{
 			std::scoped_lock lock(compilationMutex);
+			LARGE_INTEGER now;
+			QueryPerformanceCounter(&now);
 
 			// Update task counters
 			if (shaderBlob) {
@@ -4613,20 +4616,26 @@ namespace SIE
 				diskHitTasks++;
 				diskHitPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
 			} else {
-				// A real compile finishing after an earlier completion is an
-				// unambiguous new session. Disk-cache hits must not repeatedly reset
-				// elapsed time, ETA, or completion notifications.
+				// The task's enqueue timestamp is the earliest reliable boundary available
+				// once a real compile is confirmed. Starting at completion, as upstream did,
+				// makes a one-shader hot reload report approximately zero milliseconds.
+				const int64_t enqueuedQpc = task.GetEnqueuedQpc();
+				const int64_t sessionStartQpc =
+					enqueuedQpc > 0 && enqueuedQpc <= now.QuadPart ? enqueuedQpc : now.QuadPart;
+
 				if (completionTime.load(std::memory_order_relaxed) != 0) {
-					QueryPerformanceCounter(&lastReset);
+					lastReset.QuadPart = sessionStartQpc;
 					lastCalculation = lastReset;
+					totalTime = { 0 };
 					completionTime.store(0, std::memory_order_relaxed);
 					compilationPhaseStarted.store(false, std::memory_order_relaxed);
+					compilationPhaseStart = { 0 };
 				}
 
 				if (!compilationPhaseStarted.load(std::memory_order_relaxed)) {
-					// First actual compilation of this session: start the
-					// compilation-phase clock before publishing the flag.
-					QueryPerformanceCounter(&compilationPhaseStart);
+					// Publish the timestamp before the release-store so ETA readers that
+					// acquire compilationPhaseStarted observe the matching boundary.
+					compilationPhaseStart.QuadPart = sessionStartQpc;
 					compilationPhaseStarted.store(true, std::memory_order_release);
 				}
 			}
@@ -4642,8 +4651,6 @@ namespace SIE
 			}
 
 			// Update timing
-			LARGE_INTEGER now;
-			QueryPerformanceCounter(&now);
 			totalTime.QuadPart += now.QuadPart - lastCalculation.QuadPart;
 			lastCalculation = now;
 
@@ -4710,7 +4717,20 @@ namespace SIE
 		std::scoped_lock lock(compilationMutex);
 		// Queued and in-flight work remain valid. Only completed bookkeeping can
 		// block a safely evicted permutation from being requested again.
-		std::erase_if(processedTasks, matches);
+		const size_t erasedProcessed = std::erase_if(processedTasks, matches);
+
+		// Smart clear resurrects processed tasks without calling Clear(), so Add()
+		// sees cumulative counters rather than a zero-task session. Rearm only when
+		// at least one completed task was actually forgotten and the prior session
+		// had finished. In-flight work is preserved until Complete() retires it.
+		if (erasedProcessed > 0 && completionTime.load(std::memory_order_relaxed) != 0) {
+			QueryPerformanceCounter(&lastReset);
+			lastCalculation = lastReset;
+			totalTime = { 0 };
+			completionTime.store(0, std::memory_order_relaxed);
+			compilationPhaseStarted.store(false, std::memory_order_relaxed);
+			compilationPhaseStart = { 0 };
+		}
 	}
 
 	bool CompilationSet::IsInProgress(size_t a_taskId)

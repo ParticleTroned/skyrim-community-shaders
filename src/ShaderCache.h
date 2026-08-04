@@ -313,7 +313,7 @@ namespace SIE
 		std::atomic<uint64_t> diskHitTasks = 0;             // tasks resolved from disk cache rather than compiled
 		std::atomic<uint64_t> sourceCompileTasks = 0;       // tasks that reached source compilation after cache lookup
 		std::atomic<uint64_t> diskHitPriorityWeight = 0;    // cumulative priority weight of disk-hit tasks
-		LARGE_INTEGER compilationPhaseStart = { 0 };        // time of first non-disk-hit task dispatch
+		LARGE_INTEGER compilationPhaseStart = { 0 };        // enqueue time of first confirmed non-disk-hit task
 		std::atomic<bool> compilationPhaseStarted = false;  // set when first actual compilation begins
 		std::atomic<uint64_t> slowTasks = 0;                // shaders taking >= 2s
 		std::atomic<uint64_t> verySlowTasks = 0;            // shaders taking >= 8s

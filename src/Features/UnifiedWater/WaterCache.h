@@ -1,7 +1,7 @@
 ﻿#pragma once
-#include <mutex>
-
 #include <BS_thread_pool.hpp>
+#include <functional>
+#include <mutex>
 
 class WaterCache
 {
@@ -41,13 +41,15 @@ public:
 		int64_t elapsedMs{};
 	};
 
+	using CompletionCallback = std::function<void(bool)>;
+
 	bool SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace);
 	InstructionResult GetInstructions(const RE::TESWorldSpace* worldSpace, uint32_t lodLevel, uint32_t x, uint32_t y);
 
 	static void GenerateTamrielPrecache();
 	bool LoadOrGenerateCaches();
-	bool RegenerateCaches();
-	bool GenerateCaches();
+	bool RegenerateCaches(CompletionCallback a_onComplete = {});
+	bool GenerateCaches(CompletionCallback a_onComplete = {});
 
 	bool IsBuildRunning() const { return async.running.load(); }
 	bool HasBuildFailed() const { return async.failed.load(); }
@@ -181,7 +183,7 @@ private:
 	std::string currentWorldSpace;
 
 	bool SetCurrentWorldSpaceLocked(const RE::TESWorldSpace* worldSpace);
-	bool LoadCaches(bool allowPartial = false);
+	bool LoadCaches(bool a_requireComplete = false);
 
 	static void BuildPreCache(RE::TESWorldSpace* worldSpace, PreCache& cache);
 	static bool BuildDiskCache(RE::TESWorldSpace* worldSpace, DiskCache& diskCache);
@@ -191,8 +193,8 @@ private:
 	static void GetLODCoords(int32_t lodLevel, int32_t x, int32_t y, int32_t& outX, int32_t& outY);
 
 	static bool TryGetCellData(RE::TESWorldSpace* worldSpace, RE::TESFileArray* files, int32_t x, int32_t y, RE::FormID& outFormID, float& outWaterHeight, float& outLandHeight, bool resolveFormID);
-	static void ReadWaterData(RE::TESFile* file, float& waterHeight, RE::FormID& formID);
-	static void ReadMinLandHeightData(RE::TESFile* file, float& minHeight);
+	static bool ReadWaterData(RE::TESFile* file, float& waterHeight, RE::FormID& formID);
+	static bool ReadMinLandHeightData(RE::TESFile* file, float& minHeight);
 
 	template <class T>
 	static bool TryWriteCacheToFile(const std::string& name, const WorldSpaceHeader& header, const std::vector<T>& vec);

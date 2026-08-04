@@ -17,37 +17,44 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
+	SurfaceVisibilityModelVersion,
 	UseOptimisedMeshes,
 	UseOpenShadersDepthBehaviour,
 	WaterTintColor,
 	WaterTintStrength,
-	DistantDepthFadeNearStrength,
-	DistantDepthFadeFarStrength,
-	DistantDepthFadeStart,
-	DistantDepthFadeEnd,
-	ShoreFeatherWidth,
-	ShoreConfirmationCullDistance,
-	DeepShoreSofteningStrength,
-	DeepShoreSofteningStart)
+	ShallowFallbackStrength,
+	DeepConnectionProbeReachUnits,
+	DeepContextDepthUnits,
+	DeepContextTransitionUnits,
+	ShoreContactMinFadePixels,
+	ShoreDepthBlendRangeUnits,
+	ShallowSurfaceDepthRangeUnits,
+	ShallowFallbackMaxDistance)
 
 namespace
 {
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 9;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
 	constexpr float kWaterTintStrengthMax = 1.0f;
-	constexpr float kDistantDepthFadeStrengthMin = 0.0f;
-	constexpr float kDistantDepthFadeStrengthMax = 1.0f;
+	constexpr float kShallowFallbackStrengthMin = 0.0f;
+	constexpr float kShallowFallbackStrengthMax = 1.0f;
+	constexpr float kDeepConnectionProbeReachUnitsMin = 0.0f;
+	constexpr float kDeepConnectionProbeReachUnitsMax = 768.0f;
+	constexpr float kDeepContextDepthUnitsMin = 32.0f;
+	constexpr float kDeepContextDepthUnitsMax = 384.0f;
+	constexpr float kDeepContextTransitionUnitsMin = 4.0f;
+	constexpr float kDeepContextTransitionUnitsMax = 128.0f;
+	constexpr float kShoreContactMinFadePixelsMin = 0.0f;
+	constexpr float kShoreContactMinFadePixelsMax = 4.0f;
 	constexpr float kWorldCellSize = 4096.0f;
-	constexpr float kDistantDepthFadeDistanceMin = 0.0f;
-	constexpr float kDistantDepthFadeDistanceMax = kWorldCellSize * 16.0f;
-	constexpr float kDistantDepthFadeMinimumRange = 1.0f;
-	constexpr float kShoreFeatherWidthMin = 0.0f;
-	constexpr float kShoreFeatherWidthMax = 64.0f;
-	constexpr float kDeepShoreSofteningStrengthMin = 0.0f;
-	constexpr float kDeepShoreSofteningStrengthMax = 1.0f;
-	constexpr float kDeepShoreSofteningStartMin = 0.0f;
-	constexpr float kDeepShoreSofteningStartMax = 1.0f;
+	constexpr float kShoreDepthBlendRangeUnitsMin = 0.0f;
+	constexpr float kShoreDepthBlendRangeUnitsMax = 10.0f;
+	constexpr float kShallowSurfaceDepthRangeUnitsMin = 16.0f;
+	constexpr float kShallowSurfaceDepthRangeUnitsMax = 256.0f;
+	constexpr float kShallowFallbackMaxDistanceMin = 0.0f;
+	constexpr float kShallowFallbackMaxDistanceMax = kWorldCellSize * 16.0f;
 	// Increment when Unified Water's generated flowmap or cache contract changes.
 	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
 
@@ -84,50 +91,46 @@ namespace
 			kWaterTintStrengthMin,
 			kWaterTintStrengthMax,
 			defaults.WaterTintStrength);
-		a_settings.DistantDepthFadeNearStrength = ClampFiniteOrDefault(
-			a_settings.DistantDepthFadeNearStrength,
-			kDistantDepthFadeStrengthMin,
-			kDistantDepthFadeStrengthMax,
-			defaults.DistantDepthFadeNearStrength);
-		a_settings.DistantDepthFadeFarStrength = ClampFiniteOrDefault(
-			a_settings.DistantDepthFadeFarStrength,
-			kDistantDepthFadeStrengthMin,
-			kDistantDepthFadeStrengthMax,
-			defaults.DistantDepthFadeFarStrength);
-		a_settings.DistantDepthFadeStart = ClampFiniteOrDefault(
-			a_settings.DistantDepthFadeStart,
-			kDistantDepthFadeDistanceMin,
-			kDistantDepthFadeDistanceMax - kDistantDepthFadeMinimumRange,
-			defaults.DistantDepthFadeStart);
-		a_settings.DistantDepthFadeEnd = ClampFiniteOrDefault(
-			a_settings.DistantDepthFadeEnd,
-			kDistantDepthFadeDistanceMin + kDistantDepthFadeMinimumRange,
-			kDistantDepthFadeDistanceMax,
-			defaults.DistantDepthFadeEnd);
-
-		if (a_settings.DistantDepthFadeEnd < a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange)
-			a_settings.DistantDepthFadeEnd = a_settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange;
-
-		a_settings.ShoreFeatherWidth = ClampFiniteOrDefault(
-			a_settings.ShoreFeatherWidth,
-			kShoreFeatherWidthMin,
-			kShoreFeatherWidthMax,
-			defaults.ShoreFeatherWidth);
-		a_settings.ShoreConfirmationCullDistance = ClampFiniteOrDefault(
-			a_settings.ShoreConfirmationCullDistance,
-			kDistantDepthFadeDistanceMin,
-			kDistantDepthFadeDistanceMax,
-			defaults.ShoreConfirmationCullDistance);
-		a_settings.DeepShoreSofteningStrength = ClampFiniteOrDefault(
-			a_settings.DeepShoreSofteningStrength,
-			kDeepShoreSofteningStrengthMin,
-			kDeepShoreSofteningStrengthMax,
-			defaults.DeepShoreSofteningStrength);
-		a_settings.DeepShoreSofteningStart = ClampFiniteOrDefault(
-			a_settings.DeepShoreSofteningStart,
-			kDeepShoreSofteningStartMin,
-			kDeepShoreSofteningStartMax,
-			defaults.DeepShoreSofteningStart);
+		a_settings.ShallowFallbackStrength = ClampFiniteOrDefault(
+			a_settings.ShallowFallbackStrength,
+			kShallowFallbackStrengthMin,
+			kShallowFallbackStrengthMax,
+			defaults.ShallowFallbackStrength);
+		a_settings.DeepConnectionProbeReachUnits = ClampFiniteOrDefault(
+			a_settings.DeepConnectionProbeReachUnits,
+			kDeepConnectionProbeReachUnitsMin,
+			kDeepConnectionProbeReachUnitsMax,
+			defaults.DeepConnectionProbeReachUnits);
+		a_settings.DeepContextDepthUnits = ClampFiniteOrDefault(
+			a_settings.DeepContextDepthUnits,
+			kDeepContextDepthUnitsMin,
+			kDeepContextDepthUnitsMax,
+			defaults.DeepContextDepthUnits);
+		a_settings.DeepContextTransitionUnits = ClampFiniteOrDefault(
+			a_settings.DeepContextTransitionUnits,
+			kDeepContextTransitionUnitsMin,
+			kDeepContextTransitionUnitsMax,
+			defaults.DeepContextTransitionUnits);
+		a_settings.ShoreContactMinFadePixels = ClampFiniteOrDefault(
+			a_settings.ShoreContactMinFadePixels,
+			kShoreContactMinFadePixelsMin,
+			kShoreContactMinFadePixelsMax,
+			defaults.ShoreContactMinFadePixels);
+		a_settings.ShoreDepthBlendRangeUnits = ClampFiniteOrDefault(
+			a_settings.ShoreDepthBlendRangeUnits,
+			kShoreDepthBlendRangeUnitsMin,
+			kShoreDepthBlendRangeUnitsMax,
+			defaults.ShoreDepthBlendRangeUnits);
+		a_settings.ShallowSurfaceDepthRangeUnits = ClampFiniteOrDefault(
+			a_settings.ShallowSurfaceDepthRangeUnits,
+			kShallowSurfaceDepthRangeUnitsMin,
+			kShallowSurfaceDepthRangeUnitsMax,
+			defaults.ShallowSurfaceDepthRangeUnits);
+		a_settings.ShallowFallbackMaxDistance = ClampFiniteOrDefault(
+			a_settings.ShallowFallbackMaxDistance,
+			kShallowFallbackMaxDistanceMin,
+			kShallowFallbackMaxDistanceMax,
+			defaults.ShallowFallbackMaxDistance);
 	}
 
 	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
@@ -474,11 +477,43 @@ void UnifiedWater::TryCompleteDeferredChildWorldspaceCull(RE::TES* tes)
 void UnifiedWater::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	const auto loadedModelVersion = o_json.value("SurfaceVisibilityModelVersion", 0u);
+	if (loadedModelVersion != kSurfaceVisibilityModelVersion) {
+		const Settings defaults{};
+
+		if (loadedModelVersion < 9) {
+			// Earlier appearance thresholds are not geometric water-depth units.
+			settings.DeepConnectionProbeReachUnits = defaults.DeepConnectionProbeReachUnits;
+			settings.DeepContextDepthUnits = defaults.DeepContextDepthUnits;
+			settings.DeepContextTransitionUnits = defaults.DeepContextTransitionUnits;
+		}
+
+		if (loadedModelVersion < 7) {
+			// The replacement is a screen-space minimum contact fade, so never
+			// reinterpret the old view-dependent coverage value.
+			settings.ShoreContactMinFadePixels = defaults.ShoreContactMinFadePixels;
+		}
+
+		if (loadedModelVersion < 6) {
+			// Preserve useful legacy strength/distance intent while switching to
+			// the native-first shallow fallback model.
+			settings.ShallowFallbackStrength = o_json.value(
+				"DistantDepthFadeFarStrength",
+				defaults.ShallowFallbackStrength);
+			settings.ShallowFallbackMaxDistance = o_json.value(
+				"ShoreConfirmationMaxDistance",
+				o_json.value(
+					"ShoreConfirmationCullDistance",
+					defaults.ShallowFallbackMaxDistance));
+		}
+	}
+	settings.SurfaceVisibilityModelVersion = kSurfaceVisibilityModelVersion;
 	SanitizeSettings(settings);
 }
 
 void UnifiedWater::SaveSettings(json& o_json)
 {
+	settings.SurfaceVisibilityModelVersion = kSurfaceVisibilityModelVersion;
 	SanitizeSettings(settings);
 	o_json = settings;
 }
@@ -509,122 +544,125 @@ void UnifiedWater::DrawSettings()
 
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Shallow Water Depth Stabilization", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Shallow Water Surface Visibility", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
 
 		ImGui::SliderFloat(
-			"Near Strength",
-			&settings.DistantDepthFadeNearStrength,
-			kDistantDepthFadeStrengthMin,
-			kDistantDepthFadeStrengthMax,
+			"Shallow Fallback Strength",
+			&settings.ShallowFallbackStrength,
+			kShallowFallbackStrengthMin,
+			kShallowFallbackStrengthMax,
 			"%.2f",
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Stabilization applied at and before Fade Start.\n"
-				"A small nonzero value keeps nearby shallow water readable without fully suppressing transparency.");
-		}
-
-		ImGui::SliderFloat(
-			"Far Strength",
-			&settings.DistantDepthFadeFarStrength,
-			kDistantDepthFadeStrengthMin,
-			kDistantDepthFadeStrengthMax,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Stabilization applied at and after Fade End.\n"
-				"Values between Fade Start and Fade End interpolate smoothly from Near Strength.");
-		}
-
-		if (ImGui::SliderFloat(
-				"Fade Start",
-				&settings.DistantDepthFadeStart,
-				kDistantDepthFadeDistanceMin,
-				kDistantDepthFadeDistanceMax - kDistantDepthFadeMinimumRange,
-				"%.0f units",
-				ImGuiSliderFlags_AlwaysClamp)) {
-			settings.DistantDepthFadeEnd = std::max(
-				settings.DistantDepthFadeEnd,
-				settings.DistantDepthFadeStart + kDistantDepthFadeMinimumRange);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"View distance where stabilization begins.\nOne exterior cell is %.0f units.",
-				kWorldCellSize);
-		}
-
-		if (ImGui::SliderFloat(
-				"Fade End",
-				&settings.DistantDepthFadeEnd,
-				kDistantDepthFadeDistanceMin + kDistantDepthFadeMinimumRange,
-				kDistantDepthFadeDistanceMax,
-				"%.0f units",
-				ImGuiSliderFlags_AlwaysClamp)) {
-			settings.DistantDepthFadeStart = std::min(
-				settings.DistantDepthFadeStart,
-				settings.DistantDepthFadeEnd - kDistantDepthFadeMinimumRange);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"View distance where the selected stabilization strength is fully applied.\n"
-				"Start and end remain at least one unit apart.");
+				"Strength of the bounded surface cue used only when native/Open water is visually indistinguishable from the riverbed.");
 		}
 
 		ImGui::Spacing();
-		ImGui::SeparatorText("Shoreline");
+		ImGui::SeparatorText("Deep Water Protection");
 
 		ImGui::SliderFloat(
-			"Shore Feather Width",
-			&settings.ShoreFeatherWidth,
-			kShoreFeatherWidthMin,
-			kShoreFeatherWidthMax,
-			"%.1f px",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Fades stabilization back to natural transparency only at detected shorelines.\n"
-				"Set to 0 to disable; water away from the shoreline is unchanged.");
-		}
-
-		ImGui::SliderFloat(
-			"Deep Shore Softening",
-			&settings.DeepShoreSofteningStrength,
-			kDeepShoreSofteningStrengthMin,
-			kDeepShoreSofteningStrengthMax,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Softens deeper-water shoreline transitions while preserving the detected edge.\n"
-				"Set to 0 to use the standard shoreline fade.");
-		}
-
-		ImGui::SliderFloat(
-			"Deep Shore Start",
-			&settings.DeepShoreSofteningStart,
-			kDeepShoreSofteningStartMin,
-			kDeepShoreSofteningStartMax,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Controls how deep water must be before extra shoreline softening begins.\n"
-				"Higher values leave more medium-depth water unchanged.");
-		}
-
-		ImGui::SliderFloat(
-			"Shore Confirmation Cull Distance",
-			&settings.ShoreConfirmationCullDistance,
-			kDistantDepthFadeDistanceMin,
-			kDistantDepthFadeDistanceMax,
+			"Connection Search Reach",
+			&settings.DeepConnectionProbeReachUnits,
+			kDeepConnectionProbeReachUnitsMin,
+			kDeepConnectionProbeReachUnitsMax,
 			"%.0f units",
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Stops extra shoreline confirmation samples beyond this view distance.\n"
-				"A lightweight fallback preserves distant edge blending; set to 0 for no distance culling.");
+				"Physical distance searched toward increasing terrain depth at half and full reach.\n"
+				"Increase this for broad shallow banks. Set to 0 to disable connected-depth protection.");
+		}
+
+		ImGui::SliderFloat(
+			"Deep Context Depth",
+			&settings.DeepContextDepthUnits,
+			kDeepContextDepthUnitsMin,
+			kDeepContextDepthUnitsMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Plane-normal depth that gives full native/Open protection to a connected medium/deep channel.\n"
+				"Keep this above Shallow Surface Depth so a uniformly shallow stream retains its fallback surface.");
+		}
+
+		ImGui::SliderFloat(
+			"Deep Context Transition",
+			&settings.DeepContextTransitionUnits,
+			kDeepContextTransitionUnitsMin,
+			kDeepContextTransitionUnitsMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Depth width below Deep Context Depth over which connected deep-water protection fades in.\n"
+				"Raise this for a softer handoff; use the minimum for the sharpest transition.");
+		}
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Depth Separation");
+
+		ImGui::SliderFloat(
+			"Shallow Surface Depth",
+			&settings.ShallowSurfaceDepthRangeUnits,
+			kShallowSurfaceDepthRangeUnitsMin,
+			kShallowSurfaceDepthRangeUnitsMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Plane-normal water depth where the shallow surface cue has faded completely to native water.\n"
+				"Lower this if the cue reaches medium water; raise it only when a shallow stream still loses its surface.");
+		}
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Shore Contact");
+
+		ImGui::SliderFloat(
+			"Edge Fade Depth",
+			&settings.ShoreDepthBlendRangeUnits,
+			kShoreDepthBlendRangeUnitsMin,
+			kShoreDepthBlendRangeUnitsMax,
+			"%.1f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Plane-normal water depth over which the shallow surface cue fades in at terrain contact.\n"
+				"Set to 0 to disable the world-space fade; Minimum Edge Fade Width remains active.");
+		}
+
+		ImGui::SliderFloat(
+			"Minimum Edge Fade Width",
+			&settings.ShoreContactMinFadePixels,
+			kShoreContactMinFadePixelsMin,
+			kShoreContactMinFadePixelsMax,
+			"%.1f px",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Minimum screen-space width of the shallow cue's terrain-contact fade.\n"
+				"This prevents subpixel terminal seams without extra texture samples. Set to 0 to use only Edge Fade Depth.");
+		}
+
+		ImGui::SliderFloat(
+			"Shallow Fallback Max Distance",
+			&settings.ShallowFallbackMaxDistance,
+			kShallowFallbackMaxDistanceMin,
+			kShallowFallbackMaxDistanceMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Maximum view distance for the shallow fallback and its connected-depth reads.\n"
+				"Set to 0 to use native/Open depth blending everywhere.");
+		}
+
+		ImGui::TextDisabled("Two scene-depth reads run only for unresolved shallow pixels inside the fallback distance.");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Native/Open is always the base. Pixels outside the shallow range, disabled, or distance-culled skip the connectivity reads.");
 		}
 
 		ImGui::EndDisabled();
@@ -637,8 +675,8 @@ void UnifiedWater::DrawSettings()
 		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Bypasses Community Shaders' distance-based depth stabilization and uses Open Shaders' unmodified\n"
-				"depth/refraction behaviour. Custom stabilization values are preserved and resume when disabled.");
+				"Disables the shallow-only surface cue and uses the native Open Shaders-like water blend.\n"
+				"Custom visibility values are preserved and resume when disabled.");
 		}
 
 		ImGui::Spacing();
@@ -661,17 +699,17 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	SanitizeSettings(sanitizedSettings);
 
 	CommonBufferData data{};
-	const float bypassedStrength = sanitizedSettings.UseOpenShadersDepthBehaviour ? kDistantDepthFadeStrengthMin : 1.0f;
-	data.DistantDepthFadeNearStrength = sanitizedSettings.DistantDepthFadeNearStrength * bypassedStrength;
-	data.DistantDepthFadeFarStrength = sanitizedSettings.DistantDepthFadeFarStrength * bypassedStrength;
-	data.DistantDepthFadeStart = sanitizedSettings.DistantDepthFadeStart;
-	data.DistantDepthFadeEnd = sanitizedSettings.DistantDepthFadeEnd;
+	const float depthBehaviourScale = sanitizedSettings.UseOpenShadersDepthBehaviour ? 0.0f : 1.0f;
+	data.ShallowFallbackStrength = sanitizedSettings.ShallowFallbackStrength * depthBehaviourScale;
+	data.DeepConnectionProbeReachUnits = sanitizedSettings.DeepConnectionProbeReachUnits;
+	data.DeepContextDepthUnits = sanitizedSettings.DeepContextDepthUnits;
+	data.ShoreContactMinFadePixels = sanitizedSettings.ShoreContactMinFadePixels;
 	data.WaterTintColor = sanitizedSettings.WaterTintColor;
 	data.WaterTintStrength = sanitizedSettings.WaterTintStrength;
-	data.ShoreFeatherWidth = sanitizedSettings.ShoreFeatherWidth;
-	data.ShoreConfirmationCullDistance = sanitizedSettings.ShoreConfirmationCullDistance;
-	data.DeepShoreSofteningStrength = sanitizedSettings.DeepShoreSofteningStrength;
-	data.DeepShoreSofteningStart = sanitizedSettings.DeepShoreSofteningStart;
+	data.ShoreDepthBlendRangeUnits = sanitizedSettings.ShoreDepthBlendRangeUnits;
+	data.ShallowSurfaceDepthRangeUnits = sanitizedSettings.ShallowSurfaceDepthRangeUnits;
+	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
+	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
 	return data;
 }
 
@@ -746,7 +784,11 @@ void UnifiedWater::DrawOverlay()
 			return;
 		}
 
-		ImGui::TextColored(themeSettings.StatusPalette.Error, "ERROR: Water cache generation failed for %d WorldSpaces. Check installation and CommunityShaders.log", snapshot.failed);
+		if (snapshot.failed > 0) {
+			ImGui::TextColored(themeSettings.StatusPalette.Error, "ERROR: Water cache generation failed for %d WorldSpaces. Check installation and CommunityShaders.log", snapshot.failed);
+		} else {
+			ImGui::TextColored(themeSettings.StatusPalette.Error, "ERROR: Generated water caches could not be loaded completely. Check CommunityShaders.log");
+		}
 
 		ImGui::End();
 	}
@@ -801,7 +843,6 @@ void UnifiedWater::DataLoaded()
 	waterCache = new WaterCache();
 
 	uint64_t pendingLoadOrderHash = 0;
-	bool persistLoadOrderHash = false;
 
 	if (LoadOrderChanged(pendingLoadOrderHash)) {
 		logger::info("[Unified Water] Load order or data revision changed, regenerating flowmap and caches");
@@ -810,8 +851,21 @@ void UnifiedWater::DataLoaded()
 		if (flowmapRegenerated)
 			SetFlowmapTex();
 
-		const bool cacheRegenerationStarted = waterCache->RegenerateCaches();
-		persistLoadOrderHash = flowmapRegenerated && cacheRegenerationStarted;
+		const bool cacheRegenerationStarted = waterCache->RegenerateCaches(
+			[pendingLoadOrderHash, flowmapRegenerated](const bool succeeded) {
+				if (!flowmapRegenerated)
+					return;
+
+				if (!succeeded) {
+					logger::warn("[Unified Water] Generated data is incomplete; retaining the previous load-order hash so regeneration retries next launch");
+				} else if (!PersistLoadOrderHash(pendingLoadOrderHash)) {
+					logger::warn("[Unified Water] Failed to persist the regenerated data hash; regeneration will retry next launch");
+				}
+			});
+
+		if (flowmapRegenerated && !cacheRegenerationStarted) {
+			logger::warn("[Unified Water] Cache regeneration did not start; retaining the previous load-order hash so regeneration retries next launch");
+		}
 	} else {
 		if (flowmap->LoadOrGenerateFlowmap())
 			SetFlowmapTex();
@@ -819,21 +873,9 @@ void UnifiedWater::DataLoaded()
 		waterCache->LoadOrGenerateCaches();
 	}
 
-	while (waterCache->IsBuildRunning()) {
-		std::this_thread::sleep_for(100ms);
-	}
-
-	if (persistLoadOrderHash) {
-		if (waterCache->HasBuildFailed()) {
-			logger::warn("[Unified Water] Generated data is incomplete; retaining the previous load-order hash so regeneration retries next launch");
-		} else if (!PersistLoadOrderHash(pendingLoadOrderHash)) {
-			logger::warn("[Unified Water] Failed to persist the regenerated data hash; regeneration will retry next launch");
-		}
-	}
-
-	if (!MenuOpenCloseEventHandler::Register()) {
-		logger::warn("[Unified Water] MenuOpenCloseEventHandler registration failed");
-	}
+	// Runtime readers keep using the previously published cache snapshot (or the
+	// vanilla path) until the complete replacement is published atomically.
+	// Do not hold DataLoaded through an asynchronous disk build.
 }
 
 RE::BSEventNotifyControl UnifiedWater::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
@@ -1061,6 +1103,12 @@ void UnifiedWater::PostPostLoad()
 	gDisplacementCellTexCoordOffset = reinterpret_cast<float4*>(REL::RelocationID(528184, 415129).address());
 	gDisplacementMeshPos = reinterpret_cast<RE::NiPoint2*>(REL::RelocationID(516235, 402400).address());
 	gDisplacementMeshFlowCellOffset = reinterpret_cast<RE::NiPoint2*>(REL::RelocationID(528164, 415109).address());
+
+	// Register before DataLoaded can be delayed by foreground shader compilation
+	// or first-run cache generation.
+	if (!MenuOpenCloseEventHandler::Register()) {
+		logger::warn("[Unified Water] MenuOpenCloseEventHandler registration failed");
+	}
 
 	logger::info("[Unified Water] Installed hooks");
 }

@@ -233,7 +233,7 @@ bool WaterCache::LoadOrGenerateCaches()
 	return true;
 }
 
-bool WaterCache::RegenerateCaches()
+bool WaterCache::RegenerateCaches(CompletionCallback a_onComplete)
 {
 	if (async.running.load(std::memory_order_acquire)) {
 		logger::warn("[Unified Water] [Cache] Build already running");
@@ -264,10 +264,10 @@ bool WaterCache::RegenerateCaches()
 		}
 	}
 
-	return GenerateCaches();
+	return GenerateCaches(std::move(a_onComplete));
 }
 
-bool WaterCache::LoadCaches(const bool allowPartial)
+bool WaterCache::LoadCaches(bool a_requireComplete)
 {
 	const auto t0 = std::chrono::steady_clock::now();
 
@@ -309,14 +309,12 @@ bool WaterCache::LoadCaches(const bool allowPartial)
 	}
 
 	if (unavailableCount) {
-		logger::info("[Unified Water] [Cache] Found usable caches for {} / {} worldspaces ({} unavailable)", newCacheMap->size(), worldSpaces.size(), unavailableCount);
+		logger::info("[Unified Water] [Cache] Loaded {} / {} worldspace caches ({} unavailable)", newCacheMap->size(), worldSpaces.size(), unavailableCount);
 	}
 
-	if (newCacheMap->empty())
+	if (newCacheMap->empty()) {
 		return false;
-
-	if (unavailableCount && !allowPartial)
-		return false;
+	}
 
 	std::atomic_store_explicit(&cacheMap, std::const_pointer_cast<const CacheMap>(newCacheMap), std::memory_order_release);
 
@@ -324,10 +322,10 @@ bool WaterCache::LoadCaches(const bool allowPartial)
 	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 	logger::info("[Unified Water] [Cache] Caches loaded in {} ms", ms);
 
-	return unavailableCount == 0;
+	return !a_requireComplete || unavailableCount == 0;
 }
 
-bool WaterCache::GenerateCaches()
+bool WaterCache::GenerateCaches(CompletionCallback a_onComplete)
 {
 	if (async.running.load()) {
 		logger::warn("[Unified Water] [Cache] Build already running");
@@ -381,7 +379,7 @@ bool WaterCache::GenerateCaches()
 		});
 	}
 
-	async.monitor = std::jthread([this](const std::stop_token& st) {
+	async.monitor = std::jthread([this, onComplete = std::move(a_onComplete)](const std::stop_token& st) mutable {
 		using namespace std::chrono_literals;
 		while (!st.stop_requested()) {
 			const auto bp = this->GetBuildProgressSnapshot();
@@ -396,11 +394,30 @@ bool WaterCache::GenerateCaches()
 		buildProgress.Stop();
 
 		logger::info("[Unified Water] [Cache] Disk caches generated in {} ms  ({} / {} complete - {} failed)", buildProgress.ElapsedMs(), buildProgress.completed.load(), buildProgress.total.load(), buildProgress.failed.load());
-		if (!LoadCaches(true)) {
-			async.failed.store(true, std::memory_order_relaxed);
-			logger::error("[Unified Water] [Cache] Failed to load all generated caches");
+
+		auto* taskInterface = SKSE::GetTaskInterface();
+		if (!taskInterface) {
+			async.failed.store(true, std::memory_order_release);
+			logger::error("[Unified Water] [Cache] Could not queue runtime cache publication on the game thread");
+			if (onComplete)
+				onComplete(false);
+			async.running.store(false, std::memory_order_release);
+			return;
 		}
-		async.running.store(false);
+
+		taskInterface->AddTask([this, onComplete = std::move(onComplete)] {
+			const bool publishedCompletely = LoadCaches(true);
+			if (!publishedCompletely) {
+				async.failed.store(true, std::memory_order_release);
+				logger::error("[Unified Water] [Cache] Generated caches could not be published completely");
+			}
+
+			const bool succeeded = publishedCompletely && !async.failed.load(std::memory_order_acquire);
+			if (onComplete)
+				onComplete(succeeded);
+
+			async.running.store(false, std::memory_order_release);
+		});
 	});
 
 	return true;
@@ -847,35 +864,53 @@ bool WaterCache::TryGetCellData(RE::TESWorldSpace* worldSpace, RE::TESFileArray*
 	outWaterHeight = FLT_MAX;
 	outLandHeight = FLT_MAX;
 
+	if (!worldSpace || !files || files->empty())
+		return false;
+
 	const auto size = static_cast<int32_t>(files->size());
 	const auto arrayData = files->data();
+	if (!arrayData)
+		return false;
+
+	auto duplicateFile = [arrayData](const int32_t index) -> RE::TESFile* {
+		const auto source = arrayData[index];
+		return source ? source->Duplicate() : nullptr;
+	};
 
 	int32_t fileIndex = size - 1;
-	RE::TESFile* file = arrayData[fileIndex]->Duplicate();
+	RE::TESFile* file = duplicateFile(fileIndex);
 	bool foundWaterData = false;
 	bool foundLandData = false;
 
 	// Search through the files in reverse load order to find the cell and read the water height and waterForm FormID
 	do {
 		if (file && file->SeekCell(worldSpace, x, y)) {
-			ReadWaterData(file, outWaterHeight, outFormID);
-			foundWaterData = true;
-			break;
+			float waterHeight = FLT_MAX;
+			RE::FormID formID = 0;
+			if (ReadWaterData(file, waterHeight, formID)) {
+				outWaterHeight = waterHeight;
+				outFormID = formID;
+				foundWaterData = true;
+				break;
+			}
 		}
-		file = --fileIndex >= 0 ? arrayData[fileIndex]->Duplicate() : nullptr;
+		file = --fileIndex >= 0 ? duplicateFile(fileIndex) : nullptr;
 	} while (fileIndex >= 0);
 
-	if (resolveFormID && outFormID)
+	if (resolveFormID && outFormID && file)
 		outFormID = file->GetRuntimeFormID(outFormID);
 
 	// Continue searching from the previous file to find the original record for the cell, this always has the landscape data - extract land height
 	do {
 		if (file && file->SeekCell(worldSpace, x, y) && file->SeekLandscapeForCurrentCell()) {
-			ReadMinLandHeightData(file, outLandHeight);
-			foundLandData = true;
-			break;
+			float landHeight = FLT_MAX;
+			if (ReadMinLandHeightData(file, landHeight)) {
+				outLandHeight = landHeight;
+				foundLandData = true;
+				break;
+			}
 		}
-		file = --fileIndex >= 0 ? arrayData[fileIndex]->Duplicate() : nullptr;
+		file = --fileIndex >= 0 ? duplicateFile(fileIndex) : nullptr;
 	} while (fileIndex >= 0);
 
 	if (!foundWaterData || !foundLandData) {
@@ -893,27 +928,31 @@ bool WaterCache::TryGetCellData(RE::TESWorldSpace* worldSpace, RE::TESFileArray*
 	return foundWaterData && foundLandData;
 }
 
-void WaterCache::ReadWaterData(RE::TESFile* file, float& waterHeight, RE::FormID& formID)
+bool WaterCache::ReadWaterData(RE::TESFile* file, float& waterHeight, RE::FormID& formID)
 {
 	if (!file->SeekNextSubrecordType(Util::FCC("XCLW")))
-		return;
+		return true;
 
-	file->ReadData(&waterHeight, 4);
+	if (!file->ReadData(&waterHeight, static_cast<std::uint32_t>(sizeof(waterHeight))))
+		return false;
 	if (file->isBigEndian)
 		waterHeight = std::bit_cast<float>(_byteswap_ulong(std::bit_cast<uint32_t>(waterHeight)));
 
 	if (!file->SeekNextSubrecordType(Util::FCC("XCWT")))
-		return;
+		return true;
 
-	file->ReadData(&formID, 4);
+	if (!file->ReadData(&formID, static_cast<std::uint32_t>(sizeof(formID))))
+		return false;
 	if (file->isBigEndian)
 		formID = _byteswap_ulong(formID);
+
+	return true;
 }
 
-void WaterCache::ReadMinLandHeightData(RE::TESFile* file, float& minHeight)
+bool WaterCache::ReadMinLandHeightData(RE::TESFile* file, float& minHeight)
 {
 	if (!file->SeekNextSubrecordType(Util::FCC("VHGT")))
-		return;
+		return true;
 
 	struct VHGTData
 	{
@@ -921,9 +960,11 @@ void WaterCache::ReadMinLandHeightData(RE::TESFile* file, float& minHeight)
 		int8_t deltas[1089];
 		byte padding[3];
 	};
-	VHGTData data;
+	static_assert(sizeof(VHGTData) == 1096);
+	VHGTData data{};
 
-	file->ReadData(&data, 1096);
+	if (!file->ReadData(&data, static_cast<std::uint32_t>(sizeof(data))))
+		return false;
 
 	float offset = data.offset;
 	if (file->isBigEndian)
@@ -943,6 +984,8 @@ void WaterCache::ReadMinLandHeightData(RE::TESFile* file, float& minHeight)
 			minHeight = std::min(height, minHeight);
 		}
 	}
+
+	return true;
 }
 
 template <typename T>

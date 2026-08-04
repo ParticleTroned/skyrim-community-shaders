@@ -223,6 +223,7 @@ file_common_defines:
             - CLOUD_SHADOWS
             - WATER_EFFECTS
             - SSS
+            - UNIFIED_WATER
         VSHADER:
             - IBL
             - SCREEN_SPACE_SHADOWS
@@ -238,6 +239,7 @@ file_common_defines:
             - CLOUD_SHADOWS
             - WATER_EFFECTS
             - SSS
+            - UNIFIED_WATER
         CSHADER: []
     Utility.hlsl:
         PSHADER:
@@ -17221,6 +17223,7 @@ shaders:
                   - CLOUD_SHADOWS
                   - WATER_EFFECTS
                   - SSS
+                  - UNIFIED_WATER
               entries:
                   - entry: Water:Pixel:1
                     defines:
@@ -19466,6 +19469,7 @@ shaders:
                   - CLOUD_SHADOWS
                   - WATER_EFFECTS
                   - SSS
+                  - UNIFIED_WATER
               entries:
                   - entry: Water:Vertex:1
                     defines:

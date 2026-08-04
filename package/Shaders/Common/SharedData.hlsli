@@ -357,16 +357,16 @@ namespace SharedData
 
 	struct UnifiedWaterSettings
 	{
-		float DistantDepthFadeNearStrength;
-		float DistantDepthFadeFarStrength;
-		float DistantDepthFadeStart;
-		float DistantDepthFadeEnd;
+		float ShallowFallbackStrength;
+		float DeepConnectionProbeReachUnits;
+		float DeepContextDepthUnits;
+		float ShoreContactMinFadePixels;
 		float3 WaterTintColor;
 		float WaterTintStrength;
-		float ShoreFeatherWidth;
-		float ShoreConfirmationCullDistance;
-		float DeepShoreSofteningStrength;
-		float DeepShoreSofteningStart;
+		float ShoreDepthBlendRangeUnits;
+		float ShallowSurfaceDepthRangeUnits;
+		float ShallowFallbackMaxDistance;
+		float DeepContextTransitionUnits;
 	};
 
 	struct BloomSettings

@@ -1169,6 +1169,54 @@ bool TryGetUnifiedWaterScenePosition(
 	return all(isfinite(scenePosition));
 }
 
+#				if defined(VR)
+bool TryGetUnifiedWaterVRColumn(
+	float2 logicalUV,
+	float sceneRawDepth,
+	float waterSurfaceRawDepth,
+	uint eyeIndex,
+	out float3 waterSurfacePosition,
+	out float waterColumnDepthUnits)
+{
+	waterSurfacePosition = 0.0.xxx;
+	waterColumnDepthUnits = -1.0;
+	// Both depths use the same projection at the same pixel. Geometry in front
+	// of the transparent surface cannot establish a submerged column.
+	if (
+		!IsUnifiedWaterRawDepthValid(sceneRawDepth) ||
+		!IsUnifiedWaterRawDepthValid(waterSurfaceRawDepth) ||
+		sceneRawDepth < waterSurfaceRawDepth) {
+		return false;
+	}
+
+	float3 scenePosition;
+	if (
+		!TryGetUnifiedWaterScenePosition(
+			logicalUV,
+			sceneRawDepth,
+			eyeIndex,
+			scenePosition) ||
+		!TryGetUnifiedWaterScenePosition(
+			logicalUV,
+			waterSurfaceRawDepth,
+			eyeIndex,
+			waterSurfacePosition)) {
+		return false;
+	}
+
+	float3 waterPlaneNormal = ReflectPlane[eyeIndex].xyz;
+	float waterPlaneNormalLength = length(waterPlaneNormal);
+	if (!isfinite(waterPlaneNormalLength) || waterPlaneNormalLength <= 1e-6)
+		return false;
+	waterPlaneNormal /= waterPlaneNormalLength;
+
+	waterColumnDepthUnits = abs(dot(
+		scenePosition - waterSurfacePosition,
+		waterPlaneNormal));
+	return isfinite(waterColumnDepthUnits);
+}
+#				endif
+
 bool TryGetUnifiedWaterProbeColumn(
 	int2 samplePixel,
 	uint eyeIndex,
@@ -1625,6 +1673,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float primaryRawDepth = 0;
 	float2 primaryDepthLogicalUV = 0.0.xx;
 	float waterColumnDepthUnits = -1.0;
+#			if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	float3 unifiedWaterSurfacePosition = input.WPosition.xyz;
+#			endif
 
 #			if defined(DEPTH)
 #				if defined(VERTEX_ALPHA_DEPTH)
@@ -1648,6 +1699,24 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float planeMul = (1 - ReflectPlane[eyeIndex].w / viewSurfaceAngle);
 	waterColumnDepthUnits = planeMul * abs(viewSurfaceAngle);
+#					if defined(VR) && defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	// The legacy VR projection approximation remains the native fog/depth input,
+	// but it is not a world-unit water column. Reconstruct both surfaces through
+	// the same eye matrix before feeding the Unified Water classifier.
+	float3 reconstructedWaterSurfacePosition;
+	float reconstructedWaterColumnDepthUnits;
+	waterColumnDepthUnits = -1.0;
+	if (TryGetUnifiedWaterVRColumn(
+			primaryDepthLogicalUV,
+			primaryRawDepth,
+			input.HPosition.z,
+			eyeIndex,
+			reconstructedWaterSurfacePosition,
+			reconstructedWaterColumnDepthUnits)) {
+		unifiedWaterSurfacePosition = reconstructedWaterSurfacePosition;
+		waterColumnDepthUnits = reconstructedWaterColumnDepthUnits;
+	}
+#					endif
 	float4 unclampedDistanceMul =
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z;
@@ -1667,8 +1736,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 waterColumnGradient = float2(
 		ddx_fine(waterColumnDepthUnits),
 		ddy_fine(waterColumnDepthUnits));
-	float3 waterSurfaceDx = ddx_fine(input.WPosition.xyz);
-	float3 waterSurfaceDy = ddy_fine(input.WPosition.xyz);
+	float3 waterSurfaceDx = ddx_fine(unifiedWaterSurfacePosition);
+	float3 waterSurfaceDy = ddy_fine(unifiedWaterSurfacePosition);
 #			endif
 
 #			if defined(UNDERWATER)
@@ -1917,7 +1986,7 @@ PS_OUTPUT main(PS_INPUT input)
 			eyeIndex,
 			primaryDepthLogicalUV,
 			primaryRawDepth,
-			input.WPosition.xyz,
+			unifiedWaterSurfacePosition,
 			waterColumnDepthUnits,
 			waterColumnGradient,
 			waterSurfaceDx,

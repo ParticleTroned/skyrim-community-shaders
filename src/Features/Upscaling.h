@@ -7,6 +7,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/VRVendorRelatchPolicy.h"
 #include <array>
 #include <atomic>
 #include <d3d11_4.h>
@@ -1000,6 +1001,13 @@ public:
 		uint32_t retries = 0;
 		uint32_t failures = 0;
 		uint32_t fidelityMismatches = 0;
+		uint64_t vendorWorkGateState = 0;
+		uint32_t vendorWorkGateMask = 0;
+		uint32_t vendorWorkGateEffectiveMask = 0;
+		uint32_t vendorWorkGateEpoch = 0;
+		bool vendorLifecycleGateRelevant = false;
+		bool vendorLifecycleMutationDeferred = false;
+		bool existingVendorDispatchReady = false;
 	};
 
 	struct VRRenderScaleStressSessionSnapshot
@@ -1660,6 +1668,28 @@ public:
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	bool AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeWidth, uint32_t a_displayEyeHeight) const;
+	bool AreActiveVRIntermediateTexturesCompatible(
+		UpscaleMethod a_upscaleMethod,
+		uint32_t a_inputWidth,
+		uint32_t a_inputHeight,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		ID3D11Resource* a_colorSource,
+		ID3D11Resource* a_motionVectorSource,
+		ID3D11Resource* a_reactiveSource,
+		ID3D11Resource* a_transparencySource,
+		uint32_t a_contractGeneration) const;
+	bool AreExistingVRSubmitVendorResourcesCompatible(
+		UpscaleMethod a_upscaleMethod,
+		uint32_t a_inputWidth,
+		uint32_t a_inputHeight,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		ID3D11Resource* a_colorSource,
+		ID3D11Resource* a_motionVectorSource,
+		ID3D11Resource* a_reactiveSource,
+		ID3D11Resource* a_transparencySource,
+		uint32_t a_contractGeneration) const;
 	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
 	bool BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc,
 		uint32_t a_eyeWidth, uint32_t a_eyeHeight, Texture2D* const* a_eyeSources = nullptr,
@@ -1837,9 +1867,57 @@ public:
 	};
 	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
+	using VRVendorWorkGateSource = VRVendorRelatchPolicy::WorkGateSource;
+	struct VRVendorWorkGateSnapshot
+	{
+		uint64_t state = 0;
+		uint32_t stateEpoch = 0;
+		uint32_t activeMask = 0;
+		uint32_t effectiveLifecycleMask = 0;
+		uint32_t gameEntryOwnerMask = 0;
+		bool processStartup = false;
+		bool mainMenu = false;
+		bool loadingMenu = false;
+		bool preLoadGame = false;
+		bool gameLoadNotification = false;
+		bool active = false;
+		bool lifecycleGateRelevant = false;
+		bool lifecycleMutationDeferred = false;
+		bool existingVendorDispatchReady = false;
+		bool postLoadResetPending = false;
+		bool relatchQueued = false;
+		bool relatchInProgress = false;
+		bool relatchFramePending = false;
+		bool relatchPostLoadSettle = false;
+		bool mainMenuActive = false;
+		bool loadingPresentationActive = false;
+		bool raceSexPresentationActive = false;
+		bool saveLoadProtectionActive = false;
+		bool completedWorldFrame = false;
+		bool recoveryPending = false;
+		bool relatchPending = false;
+		bool profileTransitionPending = false;
+		bool gameEntryReleaseReady = false;
+	};
+	void ArmVRVendorWorkGate(VRVendorWorkGateSource a_source, const char* a_reason);
+	void ReleaseVRVendorWorkGate(VRVendorWorkGateSource a_source, const char* a_reason);
+	bool ReleaseVRVendorWorkGateIfUnchanged(uint64_t a_expectedState, VRVendorWorkGateSource a_source, const char* a_reason);
+	void ClearVRVendorWorkGates(const char* a_reason);
+	bool ReleaseVRGameEntryVendorWorkGates(uint64_t a_expectedState, const char* a_reason);
+	void ReleaseVRGameEntryVendorWorkGatesIfConverged();
+	[[nodiscard]] VRVendorWorkGateSnapshot GetVRVendorWorkGateSnapshot(
+		bool a_includeDispatchReadiness = true) const;
+	[[nodiscard]] uint64_t GetVRVendorWorkGateState() const noexcept
+	{
+		return vrVendorWorkGateState.load(std::memory_order_acquire);
+	}
+	[[nodiscard]] uint64_t GetVRVendorEffectiveWorkGateState() const;
 	void NotifyGameLoadStarted(bool a_newGame, bool a_initialProcessSaveLoad);
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
+	[[nodiscard]] bool ShouldDeferVRVendorLifecycleMutation() const;
+	[[nodiscard]] bool IsVRVendorLifecycleGateRelevant() const;
+	[[nodiscard]] bool CanDispatchExistingVRVendorEvaluation(UpscaleMethod a_upscaleMethod) const;
 
 	// D3D11 textures
 	Texture2D* reactiveMaskTexture = nullptr;
@@ -1889,6 +1967,7 @@ public:
 	uint32_t runtimeResolutionStateLastRefreshFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t resourceCheckLastCompletedFrame = std::numeric_limits<uint32_t>::max();
 	UpscaleMethod resourceCheckLastCompletedMethod = UpscaleMethod::kNONE;
+	uint64_t resourceCheckLastCompletedGateState = 0;
 	bool resourceCheckStable = false;
 	UpscaleMethod resourceCheckStableMethod = UpscaleMethod::kNONE;
 	uint64_t resourceCheckStableKey = 0;
@@ -1913,6 +1992,7 @@ public:
 	float previousHistoryPeripheryTAACenterBlendFeather = 0.05f;
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
+	std::atomic<uint64_t> vrVendorWorkGateState{ 0 };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
@@ -1974,6 +2054,13 @@ public:
 	uint32_t submitStagePreparedGeneration = 0;
 	bool submitStagePreparedFramePresentationOnly = false;
 	bool submitStagePreparedFrameFoveatedRegionEncode = false;
+	uint64_t submitStageVendorAdmissionCycle = 0;
+	uint32_t submitStageVendorAdmissionGeneration = 0;
+	uint32_t submitStageVendorAdmissionMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
+	bool submitStageVendorAdmissionPresentationOnly = true;
+	uint32_t submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t submitStageVendorAdmissionEyeMask = 0;
+	uint64_t submitStageVendorRelatchDeferredEpoch = 0;
 	struct SubmitStageVendorEyeState
 	{
 		bool ready = false;
@@ -2401,6 +2488,7 @@ private:
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);
+	bool HandleFSRLifecycleDeviceLoss(FidelityFX::LifecycleResult a_result, const char* a_context);
 	VRVendorResourceResetResult HandleVRDLSSResourceTeardownResult(Streamline::DLSSResourceTeardownResult a_result, uint32_t a_generation, const char* a_lifecycleReason, const char* a_deviceLostContext);
 	void ScheduleVRIntermediateTextureCleanup();
 	void ServiceVRIntermediateTextureCleanup(bool a_forceFence = false);

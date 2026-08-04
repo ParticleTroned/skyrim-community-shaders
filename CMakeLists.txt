@@ -56,6 +56,11 @@ option(
     ON
 )
 option(
+    BUILD_CONTROLLER_TESTS
+    "Build dependency-free controller state regression tests"
+    OFF
+)
+option(
     AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
     "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
     OFF
@@ -71,6 +76,7 @@ message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
+message("\tController tests: ${BUILD_CONTROLLER_TESTS}")
 message(
     "\tExclude hidden AIO feature packages: ${AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES}"
 )
@@ -1301,6 +1307,44 @@ if(BUILD_SHADER_TESTS)
     message(
         STATUS
         "Package and shader deployment targets will automatically run shader tests before deploying"
+    )
+endif()
+
+if(BUILD_CONTROLLER_TESTS)
+    enable_testing()
+
+    function(add_controller_test TARGET_NAME TEST_NAME SOURCE_FILE)
+        add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${SOURCE_FILE})
+        target_compile_features(${TARGET_NAME} PRIVATE cxx_std_23)
+        target_include_directories(
+            ${TARGET_NAME}
+            PRIVATE "${PROJECT_SOURCE_DIR}/src"
+        )
+        add_test(NAME ${TEST_NAME} COMMAND ${TARGET_NAME})
+    endfunction()
+
+    add_controller_test(
+        perf_mode_restart_state_test
+        PerfModeRestartState
+        tests/perf_mode_restart_state_test.cpp
+    )
+    add_controller_test(
+        vr_vendor_relatch_policy_test
+        VRVendorRelatchPolicy
+        tests/vr_vendor_relatch_policy_test.cpp
+    )
+    add_controller_test(
+        fsr_host_lifecycle_policy_test
+        FSRHostLifecyclePolicy
+        tests/fsr_host_lifecycle_policy_test.cpp
+    )
+
+    add_custom_target(
+        controller_tests
+        DEPENDS
+            perf_mode_restart_state_test
+            vr_vendor_relatch_policy_test
+            fsr_host_lifecycle_policy_test
     )
 endif()
 

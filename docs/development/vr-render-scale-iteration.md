@@ -26,7 +26,7 @@ The registered tool is `communityshaders.renderscale`:
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, both-eye fidelity, and compositor-accepted per-eye
     presentation paths;
--   `record` returns the complete schema-v8 record without changing capture
+-   `record` returns the complete schema-v9 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
@@ -462,7 +462,7 @@ live paths under `controller.presentation`, session deltas under
 
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 8`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 9`. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -472,7 +472,7 @@ Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVers
 6. Prefer lower stable latency and fewer retries only after correctness, fidelity, OOM, device-loss, retirement, memory-recovery, and backend-readiness gates pass.
 7. Retain the complete JSON artifact with the candidate commit and scenario identifier.
 
-The event ring retains 128 entries and the transition metrics ring retains 32 transitions. Consecutive retries with the same request, epoch, profile, controller state, pressure, and normalized retry/failure kind share one event: `frame` is the first observation, `lastFrame` is the latest, `occurrences` is the aggregate count, and the memory and transition counters reflect the latest observation. A capture-overflow gate still fails if distinct events overwrite the ring, and a metrics-coverage gate fails if any captured request epoch rotates out of the metrics ring. Keep each iteration within both bounds. Retry and failure kinds remain classifiable as pressure, retirement, backend, OOM, or device loss.
+The event ring retains 302 entries and the transition metrics ring retains 50 transitions. Consecutive retries with the same request, epoch, profile, controller state, pressure, vendor-work-gate state, and normalized retry/failure kind share one event: `frame` is the first observation, `lastFrame` is the latest, `occurrences` is the aggregate count, and the memory and transition counters reflect the latest observation. The packed vendor-work-gate state combines its raw source mask with an ownership epoch, so a newly reacquired source remains distinct from an older owner with the same mask. A capture-overflow gate still fails if distinct events overwrite the ring, and a metrics-coverage gate fails if any captured request epoch rotates out of the metrics ring. Keep each iteration within both bounds. Retry and failure kinds remain classifiable as pressure, retirement, backend, OOM, or device loss.
 
 ## Acceptance gates
 
@@ -491,8 +491,9 @@ The runtime currently requires:
 -   valid DXGI, Windows-commit, and Skyrim-private samples, with local pressure recovered below `High`, post-load recovery complete, and final system commit below the lower of 75 percent or an 8-GiB reserve;
 -   no more than 256 MiB of local-video, system-commit, or Skyrim-private growth in both consecutive same-profile peak intervals once an exact backend profile has at least three completed samples;
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
+-   no effective lifecycle-mutation deferral remaining at capture stop, including relevant source gates, post-load reset ownership, or queued/in-progress relatch ownership; raw source owners that are irrelevant to the active render-scale lifecycle do not fail acceptance.
 
-These thresholds are part of schema version 8. Change the schema version if their meaning or units change.
+Schema version 9 adds source-resolved vendor-work-gate status to the live snapshot, complete record, and retained stress events. These thresholds are part of schema version 9. Change the schema version if their meaning or units change.
 
 ## Ghidra correlation
 

@@ -35,7 +35,9 @@ public:
 	{
 		Ready,
 		Pending,
-		Failed
+		Failed,
+		DeviceLost,
+		RuntimeDeviceLost
 	};
 
 	enum class Fsr4AdapterSupport
@@ -93,6 +95,8 @@ public:
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
 	bool HasFSRResourcesPendingTeardown() const;
+	[[nodiscard]] HRESULT GetLastFSRDeviceRemovedReason() const noexcept { return fsrLastDeviceRemovedReason; }
+	LifecycleResult ProbeFSRDeviceStatus() noexcept { return RecordFSRDeviceStatus(); }
 	LifecycleResult PollFSRResourceTeardownReady(const char* a_reason = nullptr);
 	void ResetFSRIdleFence();
 	LifecycleResult ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
@@ -130,10 +134,26 @@ public:
 		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool* a_usedRuntimeUpscaler = nullptr);
 
 private:
+	LifecycleResult RecordFSRDeviceStatus() noexcept;
+	LifecycleResult RecordRuntimeUpscalerDeviceStatus() noexcept;
+	LifecycleResult ResolveFSRLifecycleFailure(const char* a_operation);
+	LifecycleResult ResolveRuntimeUpscalerLifecycleFailure(const char* a_operation);
+	[[nodiscard]] bool IsRuntimeUpscalerOwnershipDetached() const noexcept;
+	LifecycleResult GetQuarantinedHostFSRResult(const char* a_operation);
+	LifecycleResult RetireRuntimeUpscalerWhileHostFSRQuarantined(const char* a_operation);
+	LifecycleResult DestroyTrackedHostFSRContexts(const char* a_operation);
+	void QuarantineHostFSRState(const char* a_reason);
+	void QuarantineHostFSRContext(uint32_t a_contextIndex, const char* a_reason);
+	LifecycleResult ReleaseHostFSRResources();
+
 	// FSR scratch buffer - needs to be freed in DestroyFSRResources
 	void* fsrScratchBuffer = nullptr;
 	uint32_t fsrContextCount = 0;
 	bool fsrContextValid[2]{};
+	bool fsrContextIndeterminate[2]{};
+	bool fsrHostStateQuarantined = false;
+	HRESULT fsrLastDeviceRemovedReason = S_OK;
+	HRESULT runtimeUpscalerLastDeviceRemovedReason = S_OK;
 	uint32_t fsrContextMaxRenderWidth = 0;
 	uint32_t fsrContextMaxRenderHeight = 0;
 	uint32_t fsrContextDisplayWidth = 0;
@@ -152,6 +172,7 @@ private:
 	D3D11_TEXTURE2D_DESC runtimeTransparencySharedDesc{};
 	D3D11_TEXTURE2D_DESC runtimeOutputSharedDesc{};
 	ffx::Context runtimeUpscalerContexts[2]{};
+	bool runtimeUpscalerContextIndeterminate[2]{};
 
 	winrt::com_ptr<ID3D11Fence> runtimeD3D11Fence;
 	winrt::com_ptr<ID3D12Fence> runtimeD3D12Fence;

@@ -120,6 +120,51 @@ namespace
 		};
 	}
 
+	json VendorWorkGateJson(const Upscaling::VRVendorWorkGateSnapshot& a_gate)
+	{
+		const auto sourceNames = [](uint32_t a_mask) {
+			json names = json::array();
+			for (const auto source : VRVendorRelatchPolicy::kWorkGateSources) {
+				if ((a_mask & VRVendorRelatchPolicy::ToMask(source)) != 0u)
+					names.push_back(VRVendorRelatchPolicy::GetWorkGateSourceName(source));
+			}
+			return names;
+		};
+
+		return {
+			{ "state", a_gate.state },
+			{ "epoch", a_gate.stateEpoch },
+			{ "active", a_gate.active },
+			{ "activeMask", a_gate.activeMask },
+			{ "effectiveLifecycleMask", a_gate.effectiveLifecycleMask },
+			{ "gameEntryOwnerMask", a_gate.gameEntryOwnerMask },
+			{ "sources", sourceNames(a_gate.activeMask) },
+			{ "effectiveSources", sourceNames(a_gate.effectiveLifecycleMask) },
+			{ "processStartup", a_gate.processStartup },
+			{ "mainMenu", a_gate.mainMenu },
+			{ "loadingMenu", a_gate.loadingMenu },
+			{ "preLoadGame", a_gate.preLoadGame },
+			{ "gameLoadNotification", a_gate.gameLoadNotification },
+			{ "lifecycleGateRelevant", a_gate.lifecycleGateRelevant },
+			{ "lifecycleMutationDeferred", a_gate.lifecycleMutationDeferred },
+			{ "existingVendorDispatchReady", a_gate.existingVendorDispatchReady },
+			{ "postLoadResetPending", a_gate.postLoadResetPending },
+			{ "relatchQueued", a_gate.relatchQueued },
+			{ "relatchInProgress", a_gate.relatchInProgress },
+			{ "relatchFramePending", a_gate.relatchFramePending },
+			{ "relatchPostLoadSettle", a_gate.relatchPostLoadSettle },
+			{ "mainMenuActive", a_gate.mainMenuActive },
+			{ "loadingPresentationActive", a_gate.loadingPresentationActive },
+			{ "raceSexPresentationActive", a_gate.raceSexPresentationActive },
+			{ "saveLoadProtectionActive", a_gate.saveLoadProtectionActive },
+			{ "completedWorldFrame", a_gate.completedWorldFrame },
+			{ "recoveryPending", a_gate.recoveryPending },
+			{ "relatchPending", a_gate.relatchPending },
+			{ "profileTransitionPending", a_gate.profileTransitionPending },
+			{ "gameEntryReleaseReady", a_gate.gameEntryReleaseReady },
+		};
+	}
+
 	json FsrDispatchJson(
 		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
 		bool a_shaderCompilationActive)
@@ -232,6 +277,7 @@ namespace
 	{
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
 		const auto session = a_upscaling.GetVRRenderScaleStressSessionSnapshot();
+		const auto vendorWorkGate = a_upscaling.GetVRVendorWorkGateSnapshot();
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 
 		json eyes = json::array();
@@ -280,6 +326,7 @@ namespace
 										 { "capture", VRPipelineDiagnostics::GetStatusSnapshot() },
 									 } },
 			{ "fsrDispatch", FsrDispatchJson(controller, globals::shaderCache && globals::shaderCache->IsCompiling()) },
+			{ "vendorWorkGate", VendorWorkGateJson(vendorWorkGate) },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "session", {
 							 { "id", session.sessionID },
@@ -739,7 +786,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns the optional captured startup VR pipeline environment, one coherent desired/authoritative controller view, frame-stamped successful per-eye FSR dispatch evidence, shader-compilation gating, local-video and system-commit memory, retirement, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v8 iteration artifact plus a subsequent live status snapshot. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record plus a subsequent final status. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 per-eye luminance and HAM-clear capture at the final OpenVR submission boundary; probe_stop disables new samples, probe_record returns its timeline, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
+			R"({"description":"Control and inspect Community Shaders VR render-scale stress iterations. status returns the optional captured startup VR pipeline environment, one coherent desired/authoritative controller view, source-resolved vendor lifecycle-mutation and existing-dispatch gate status, frame-stamped successful per-eye FSR dispatch evidence, shader-compilation gating, local-video and system-commit memory, retirement, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v9 iteration artifact plus a subsequent live status snapshot. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CS menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record plus a subsequent final status. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 per-eye luminance and HAM-clear capture at the final OpenVR submission boundary; probe_stop disables new samples, probe_record returns its timeline, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			descriptor,

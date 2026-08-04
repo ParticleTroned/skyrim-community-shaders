@@ -195,10 +195,15 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kPreLoadGame:
 		{
-			if (errors.empty() && globals::state) {
-				const uint32_t frame = globals::state->frameCount;
-				globals::state->BeginSaveLoadSafeMode(frame);
-				globals::state->BeginPersistentMutationBlock(frame);
+			if (errors.empty()) {
+				globals::features::upscaling.ArmVRVendorWorkGate(
+					Upscaling::VRVendorWorkGateSource::PreLoadGame,
+					"SKSE pre-load game");
+				if (globals::state) {
+					const uint32_t frame = globals::state->frameCount;
+					globals::state->BeginSaveLoadSafeMode(frame);
+					globals::state->BeginPersistentMutationBlock(frame);
+				}
 			}
 
 			break;

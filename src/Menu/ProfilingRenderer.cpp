@@ -505,7 +505,7 @@ static int ComputeFeatureGraphLegendWidth(const FeatureTimingDataT& data, int to
 	constexpr float legendTextScale = 0.74f;
 	const float markerAndConnectorWidth = (3.0f + 5.0f + 18.0f + 8.0f + 5.0f) * uiScale;
 	const float textColumnWidth = std::max(
-		48.0f,
+		48.0f * uiScale,
 		ImGui::CalcTextSize("000.00ms").x * legendTextScale + 5.0f * uiScale);
 	float labelWidth = 0.0f;
 	for (const auto& entry : data.entries) {
@@ -959,7 +959,7 @@ bool ProfilingRenderer::RenderFeatureOverview()
 
 			const auto gpuData = CollectFeatureTimingData(featurePrefix, false);
 			const auto cpuData = CollectFeatureTimingData(featurePrefix, true);
-			auto& state = featureGraphs[featurePrefix];
+			auto& state = featureGraphs[featurePrefix + "::overview"];
 
 			ImGui::TableNextColumn();
 			ImGui::PushID((featurePrefix + "::GPU").c_str());

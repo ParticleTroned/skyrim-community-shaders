@@ -168,6 +168,7 @@ private:
 	{
 		std::string name;
 		float cpuMs = 0.0f;
+		uint32_t depth = 0;
 	};
 
 	struct FrameQueries
@@ -180,6 +181,7 @@ private:
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
 			float cpuMs = 0.0f;
+			uint32_t depth = 0;
 			bool ended = false;
 		};
 		std::vector<TimerPair> timers;
@@ -211,6 +213,7 @@ private:
 	{
 		std::string name;
 		LARGE_INTEGER cpuBegin{};
+		uint32_t depth = 0;
 	};
 
 	struct KnownTimer
@@ -233,6 +236,7 @@ private:
 	void RebuildResults(const std::unordered_map<std::string, ActiveTimerData>* activeTimers);
 	void StoreCompletedCpuTimers(FrameQueries& frame);
 	void ResetFrameState(FrameQueries& frame);
+	void ResetPendingFrames();
 	static bool HasPendingFrameData(const FrameQueries& frame);
 };
 

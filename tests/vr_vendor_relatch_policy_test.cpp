@@ -660,6 +660,66 @@ namespace
 		       !NativeRestoreOperation{}.Covers(weakFSRTeardown);
 	}
 
+	constexpr bool CoversNativeRestoreOwnership()
+	{
+		constexpr std::uint64_t epoch = 17;
+		if (!UsesEpochOwnedNativeRestore({
+				.lowPeakNativeRestore = true,
+				.previousVendorWasDLSS = true,
+				.targetEpoch = epoch,
+			})) {
+			return false;
+		}
+		if (!UsesEpochOwnedNativeRestore({
+				.lowPeakNativeRestore = true,
+				.previousVendorWasFSR = true,
+				.targetEpoch = epoch,
+			})) {
+			return false;
+		}
+		if (UsesEpochOwnedNativeRestore({
+				.lowPeakNativeRestore = true,
+				.targetEpoch = epoch,
+			})) {
+			return false;
+		}
+		if (UsesEpochOwnedNativeRestore({
+				.lowPeakNativeRestore = true,
+				.previousVendorWasFSR = true,
+			})) {
+			return false;
+		}
+		if (UsesEpochOwnedNativeRestore({
+				.previousVendorWasDLSS = true,
+				.targetEpoch = epoch,
+			}) ||
+			UsesEpochOwnedNativeRestore({
+				.previousVendorWasFSR = true,
+				.targetEpoch = epoch,
+			})) {
+			return false;
+		}
+		if (!UsesEpochOwnedNativeRestore({
+				.targetEpoch = epoch,
+				.progressOwnerEpoch = epoch,
+			})) {
+			return false;
+		}
+		return !UsesEpochOwnedNativeRestore({
+			.targetEpoch = epoch,
+			.progressOwnerEpoch = epoch + 1,
+		});
+	}
+
+	constexpr bool CoversNativeRestoreMemoryReliefOwnership()
+	{
+		return !ShouldApplyGenericMemoryReliefCleanup(false, true, true, true) &&
+		       !ShouldApplyGenericMemoryReliefCleanup(true, true, true, true) &&
+		       ShouldApplyGenericMemoryReliefCleanup(true, false, true, true) &&
+		       ShouldApplyGenericMemoryReliefCleanup(true, true, false, true) &&
+		       ShouldApplyGenericMemoryReliefCleanup(true, true, true, false);
+	}
+
 	constexpr bool CoversDeferredDispatchSelection()
 	{
 		for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
@@ -691,6 +751,8 @@ namespace
 	static_assert(CoversNativeRestoreActionSelection());
 	static_assert(CoversNativeRestoreTeardownDisposition());
 	static_assert(CoversNativeRestoreOperationStrength());
+	static_assert(CoversNativeRestoreOwnership());
+	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
 }
 

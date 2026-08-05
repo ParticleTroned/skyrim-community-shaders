@@ -20621,9 +20621,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!relatchTargetRenderScaleActive;
 		const auto nativeRestoreProgressAtAdmission =
 			GetVRLowPeakNativeRestoreProgress();
-		const bool epochOwnedDLSSNativeRestore =
-			(lowPeakNativeRestoreRelatch && previousVendorWasDLSS) ||
-			nativeRestoreProgressAtAdmission.ownerEpoch == relatchEpoch;
+		const bool epochOwnedNativeRestore =
+			VRVendorRelatchPolicy::UsesEpochOwnedNativeRestore({
+				.lowPeakNativeRestore = lowPeakNativeRestoreRelatch,
+				.previousVendorWasDLSS = previousVendorWasDLSS,
+				.previousVendorWasFSR = previousVendorWasFSR,
+				.targetEpoch = relatchEpoch,
+				.progressOwnerEpoch = nativeRestoreProgressAtAdmission.ownerEpoch,
+			});
 		VRLowPeakNativeRestoreOperation nativeRestoreOperation{};
 		static bool loggedLowPeakNativeRestoreCleanupDefer = false;
 		bool lowPeakNativeRestoreCleanupCompleted = false;
@@ -20640,10 +20645,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				relatchEpoch,
 				progress.ownerEpoch,
 				progress.phase);
-			const bool pollOutstandingDLSSRestoreHere =
+			const bool pollOutstandingNativeRestoreHere =
 				progress.ownerEpoch != 0 &&
 				action == VRVendorRelatchPolicy::NativeRestoreAction::PollVendorTeardown;
-			if (pollOutstandingDLSSRestoreHere) {
+			if (pollOutstandingNativeRestoreHere) {
 				const auto outstandingOperation =
 					GetVRLowPeakNativeRestoreOperation();
 				if (!outstandingOperation.valid) {
@@ -20759,13 +20764,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				// The first cleanup service pass precedes construction of the current
 				// relatch plan. Keep a completed predecessor intact until the exact
 				// successor operation is available for the coverage decision below.
-				if (epochOwnedDLSSNativeRestore && !nativeRestoreOperation.valid)
+				if (epochOwnedNativeRestore && !nativeRestoreOperation.valid)
 					return false;
 				const auto completedOperation =
 					GetVRLowPeakNativeRestoreOperation();
 				ClearOwnedVRLowPeakNativeRestoreProgress(progress.ownerEpoch);
 				progress = {};
-				if (epochOwnedDLSSNativeRestore) {
+				if (epochOwnedNativeRestore) {
 					if (!BeginVRLowPeakNativeRestoreProgress(
 							relatchEpoch,
 							nativeRestoreOperation)) {
@@ -20786,7 +20791,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 
 			progress = GetVRLowPeakNativeRestoreProgress();
-			if (!epochOwnedDLSSNativeRestore) {
+			if (!epochOwnedNativeRestore) {
 				if (progress.ownerEpoch != 0) {
 					if (progress.phase != VRVendorRelatchPolicy::NativeRestorePhase::Complete) {
 						requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
@@ -20795,7 +20800,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					ClearOwnedVRLowPeakNativeRestoreProgress(progress.ownerEpoch);
 				}
 
-				// Preserve the proven RC173/PR7 FSR native-restore cleanup path.
+				// Retain the legacy cleanup only as a fail-safe for an already-armed
+				// transaction. New DLSS and FSR native restores are epoch-owned above.
 				if (!lowPeakNativeRestoreRelatch) {
 					vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 					loggedLowPeakNativeRestoreCleanupDefer = false;
@@ -21371,7 +21377,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
 			return false;
 		}
-		if (memoryReliefActiveForRelatch) {
+		if (VRVendorRelatchPolicy::ShouldApplyGenericMemoryReliefCleanup(
+				memoryReliefActiveForRelatch,
+				epochOwnedNativeRestore,
+				lowPeakNativeRestoreRelatch,
+				previousVendorWasFSR)) {
+			// FSR's native/AA restore owns one exact shared-resource retirement.
+			// Running generic rapid-switch cleanup first fills the single-set
+			// retirement capacity, so presentation fallback can recreate and retire
+			// the same intermediates forever without consuming completion.
 			ApplyVRRenderScaleMemoryReliefTransitionCleanup(
 				"render-target relatch",
 				relatchPlan.preserveCompatibleFSRIntermediates);
@@ -21534,8 +21548,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					fsrTeardownReadyForRelatch,
 					!relatchPlan.reuseSharedSubmitResources,
 					relatchPlan.preserveCompatibleFSRIntermediates,
-					!epochOwnedDLSSNativeRestore);
-		if (epochOwnedDLSSNativeRestore) {
+					!epochOwnedNativeRestore);
+		if (epochOwnedNativeRestore) {
 			const uint64_t retirementSerialAfterVendorReset =
 				vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
 			if (retirementSerialAfterVendorReset !=
@@ -21626,11 +21640,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 			return false;
 		}
-		if ((lowPeakNativeRestoreRelatch || epochOwnedDLSSNativeRestore) &&
+		if ((lowPeakNativeRestoreRelatch || epochOwnedNativeRestore) &&
 			!lowPeakNativeRestoreCleanupCompleted) {
 			if (lowPeakNativeRestoreRelatch)
 				markLowPeakNativeRestoreVendorDirty();
-			if (epochOwnedDLSSNativeRestore) {
+			if (epochOwnedNativeRestore) {
 				if (!CompleteVRLowPeakNativeRestoreVendorTeardown(
 						relatchEpoch)) {
 					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);

@@ -299,6 +299,44 @@ namespace VRVendorRelatchPolicy
 		NativeRestorePhase phase = NativeRestorePhase::Idle;
 	};
 
+	struct NativeRestoreOwnershipAdmission
+	{
+		bool lowPeakNativeRestore = false;
+		bool previousVendorWasDLSS = false;
+		bool previousVendorWasFSR = false;
+		std::uint64_t targetEpoch = 0;
+		std::uint64_t progressOwnerEpoch = 0;
+	};
+
+	[[nodiscard]] constexpr bool UsesEpochOwnedNativeRestore(
+		const NativeRestoreOwnershipAdmission& a_admission) noexcept
+	{
+		if (a_admission.targetEpoch == 0)
+			return false;
+
+		const bool vendorNativeRestore =
+			a_admission.lowPeakNativeRestore &&
+			(a_admission.previousVendorWasDLSS ||
+				a_admission.previousVendorWasFSR);
+		const bool continuingOwnedRestore =
+			a_admission.progressOwnerEpoch == a_admission.targetEpoch;
+		return vendorNativeRestore || continuingOwnedRestore;
+	}
+
+	[[nodiscard]] constexpr bool ShouldApplyGenericMemoryReliefCleanup(
+		bool a_memoryReliefActive,
+		bool a_epochOwnedNativeRestore,
+		bool a_lowPeakNativeRestore,
+		bool a_previousVendorWasFSR) noexcept
+	{
+		const bool fsrNativeRestoreOwnsSharedRetirement =
+			a_epochOwnedNativeRestore &&
+			a_lowPeakNativeRestore &&
+			a_previousVendorWasFSR;
+		return a_memoryReliefActive &&
+		       !fsrNativeRestoreOwnsSharedRetirement;
+	}
+
 	struct NativeRestoreFenceReadyResumeAdmission
 	{
 		bool relatchPending = false;

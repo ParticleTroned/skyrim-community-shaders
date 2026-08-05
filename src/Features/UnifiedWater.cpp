@@ -29,11 +29,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShoreContactMinFadePixels,
 	ShoreDepthBlendRangeUnits,
 	ShallowSurfaceDepthRangeUnits,
-	ShallowFallbackMaxDistance)
+	ShallowFallbackMaxDistance,
+	DeepShoreDepthBlendRangeUnits)
 
 namespace
 {
-	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 9;
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 10;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
@@ -51,6 +52,8 @@ namespace
 	constexpr float kWorldCellSize = 4096.0f;
 	constexpr float kShoreDepthBlendRangeUnitsMin = 0.0f;
 	constexpr float kShoreDepthBlendRangeUnitsMax = 10.0f;
+	constexpr float kDeepShoreDepthBlendRangeUnitsMin = 0.0f;
+	constexpr float kDeepShoreDepthBlendRangeUnitsMax = 50.0f;
 	constexpr float kShallowSurfaceDepthRangeUnitsMin = 16.0f;
 	constexpr float kShallowSurfaceDepthRangeUnitsMax = 256.0f;
 	constexpr float kShallowFallbackMaxDistanceMin = 0.0f;
@@ -121,6 +124,13 @@ namespace
 			kShoreDepthBlendRangeUnitsMin,
 			kShoreDepthBlendRangeUnitsMax,
 			defaults.ShoreDepthBlendRangeUnits);
+		a_settings.DeepShoreDepthBlendRangeUnits = std::max(
+			a_settings.ShoreDepthBlendRangeUnits,
+			ClampFiniteOrDefault(
+				a_settings.DeepShoreDepthBlendRangeUnits,
+				kDeepShoreDepthBlendRangeUnitsMin,
+				kDeepShoreDepthBlendRangeUnitsMax,
+				defaults.DeepShoreDepthBlendRangeUnits));
 		a_settings.ShallowSurfaceDepthRangeUnits = ClampFiniteOrDefault(
 			a_settings.ShallowSurfaceDepthRangeUnits,
 			kShallowSurfaceDepthRangeUnitsMin,
@@ -481,6 +491,10 @@ void UnifiedWater::LoadSettings(json& o_json)
 	if (loadedModelVersion != kSurfaceVisibilityModelVersion) {
 		const Settings defaults{};
 
+		if (loadedModelVersion < 10) {
+			settings.DeepShoreDepthBlendRangeUnits = defaults.DeepShoreDepthBlendRangeUnits;
+		}
+
 		if (loadedModelVersion < 9) {
 			// Earlier appearance thresholds are not geometric water-depth units.
 			settings.DeepConnectionProbeReachUnits = defaults.DeepConnectionProbeReachUnits;
@@ -621,7 +635,7 @@ void UnifiedWater::DrawSettings()
 		ImGui::SeparatorText("Shore Contact");
 
 		ImGui::SliderFloat(
-			"Edge Fade Depth",
+			"Shallow Edge Fade Depth",
 			&settings.ShoreDepthBlendRangeUnits,
 			kShoreDepthBlendRangeUnitsMin,
 			kShoreDepthBlendRangeUnitsMax,
@@ -629,8 +643,21 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Plane-normal water depth over which the shallow surface cue fades in at terrain contact.\n"
-				"Set to 0 to disable the world-space fade; Minimum Edge Fade Width remains active.");
+				"Plane-normal fade depth used for shallow streams and whenever connected-depth classification is unavailable.\n"
+				"Set to 0 to disable this world-space fade; Minimum Edge Fade Width remains active.");
+		}
+
+		ImGui::SliderFloat(
+			"Deep-Connected Edge Fade Depth",
+			&settings.DeepShoreDepthBlendRangeUnits,
+			settings.ShoreDepthBlendRangeUnits,
+			kDeepShoreDepthBlendRangeUnitsMax,
+			"%.1f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Plane-normal fade depth selected progressively as trusted connected medium/deep context increases.\n"
+				"Unavailable or VR-suppressed classification retains Shallow Edge Fade Depth; this value cannot be lower than it.");
 		}
 
 		ImGui::SliderFloat(
@@ -710,6 +737,7 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowSurfaceDepthRangeUnits = sanitizedSettings.ShallowSurfaceDepthRangeUnits;
 	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
 	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
+	data.DeepShoreDepthBlendRangeUnits = sanitizedSettings.DeepShoreDepthBlendRangeUnits;
 	return data;
 }
 

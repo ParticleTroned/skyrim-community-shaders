@@ -25,19 +25,20 @@ struct UnifiedWater : OverlayFeature
 
 	struct Settings
 	{
-		std::uint32_t SurfaceVisibilityModelVersion = 9;
+		std::uint32_t SurfaceVisibilityModelVersion = 10;
 		bool UseOptimisedMeshes = true;
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
 		float ShallowFallbackStrength = 1.0f;
-		float DeepConnectionProbeReachUnits = 512.0f;
+		float DeepConnectionProbeReachUnits = 768.0f;
 		float DeepContextDepthUnits = 192.0f;
 		float DeepContextTransitionUnits = 128.0f;
 		float ShoreContactMinFadePixels = 2.0f;
 		float ShoreDepthBlendRangeUnits = 5.0f;
 		float ShallowSurfaceDepthRangeUnits = 256.0f;
 		float ShallowFallbackMaxDistance = 26000.0f;
+		float DeepShoreDepthBlendRangeUnits = 20.0f;
 	};
 
 	struct alignas(16) CommonBufferData
@@ -52,9 +53,11 @@ struct UnifiedWater : OverlayFeature
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
+		float DeepShoreDepthBlendRangeUnits;
+		float3 _pad;
 	};
 	static_assert(alignof(CommonBufferData) == 16);
-	static_assert(sizeof(CommonBufferData) == 48);
+	static_assert(sizeof(CommonBufferData) == 64);
 
 	Settings settings;
 	CommonBufferData GetCommonBufferData() const;

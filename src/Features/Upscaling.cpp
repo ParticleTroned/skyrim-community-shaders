@@ -729,6 +729,21 @@ namespace
 		       a_profile.stabilizerDoorHandoffSerial != 0;
 	}
 
+	bool HasSameVRRenderScaleRequestTarget(
+		const Upscaling::VRRenderScaleDesiredProfile& a_left,
+		const Upscaling::VRRenderScaleDesiredProfile& a_right)
+	{
+		return a_left.method == a_right.method &&
+		       a_left.qualityMode == a_right.qualityMode &&
+		       a_left.renderScaleModeEnabled == a_right.renderScaleModeEnabled &&
+		       a_left.dlssPreset == a_right.dlssPreset &&
+		       a_left.perfModeEnabled == a_right.perfModeEnabled &&
+		       a_left.fsr4RuntimeEnabled == a_right.fsr4RuntimeEnabled &&
+		       a_left.dlssSharpener == a_right.dlssSharpener &&
+		       a_left.dlssSharpness == a_right.dlssSharpness &&
+		       a_left.fsrSharpness == a_right.fsrSharpness;
+	}
+
 	bool IsBufferedVRFpsStabilizerDoorHandoff(
 		const Upscaling::VRRenderScaleProfileSnapshot& a_profile)
 	{
@@ -14103,14 +14118,15 @@ void Upscaling::DrawSettings()
 			if (ImGui::Button("Reset Capture##VRRenderScaleStress"))
 				ResetVRRenderScaleStressSession();
 			ImGui::TextDisabled(
-				"Session %llu: %s, %u retained, %u overwritten",
+				"Session %llu: %s, %u retained, %u overwritten, %u duplicate request(s) coalesced",
 				static_cast<unsigned long long>(stressSession.sessionID),
 				stressSession.active ? "recording" : "stopped",
 				stressSession.count,
-				stressSession.overwrittenEvents);
+				stressSession.overwrittenEvents,
+				stressSession.coalescedDuplicateCount);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Records requests, coalesced equivalent retries, applied, stable, and failure events.");
-				ImGui::TextUnformatted("The capture is a fixed 128-event ring and does not change render-scale settings automatically.");
+				ImGui::TextUnformatted("Records request, applied, stable, and failure events; equivalent same-door retries are counted separately.");
+				ImGui::TextUnformatted("The capture uses a fixed-capacity event ring and does not change render-scale settings automatically.");
 			}
 		}
 
@@ -15867,7 +15883,7 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(
 	if (a_upscaleMethod == UpscaleMethod::kDLSS) {
 		resourcesReady = resourcesReady &&
 		                 (provider.renderScaleActive ||
-						 !pendingDLSSReset.load(std::memory_order_acquire)) &&
+							 !pendingDLSSReset.load(std::memory_order_acquire)) &&
 		                 streamline.HasCompleteVRDLSSViewportResources();
 	} else if (a_upscaleMethod == UpscaleMethod::kFSR) {
 		resourcesReady = resourcesReady &&
@@ -17449,18 +17465,21 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		return;
 
 	if (stageVRUpscalingChange) {
-		if (QueueVRRenderScaleRequest(
-				targetMethod,
-				targetRenderScaleMode,
-				qualityMode,
-				dlssPreset,
-				targetFSR4RuntimeEnable,
-				a_origin,
-				bufferedStabilizerDoorHandoff ?
-					a_bufferedStabilizerDoorHandoffSerial :
-					0) == 0) {
+		const auto queueResult = QueueVRRenderScaleRequest(
+			targetMethod,
+			targetRenderScaleMode,
+			qualityMode,
+			dlssPreset,
+			targetFSR4RuntimeEnable,
+			a_origin,
+			bufferedStabilizerDoorHandoff ?
+				a_bufferedStabilizerDoorHandoffSerial :
+				0);
+		if (!queueResult.Accepted()) {
 			return;
 		}
+		if (!queueResult.Published())
+			return;
 
 		uint32_t* currentUpscaleMode = (streamline.featureDLSS || targetMethod == UpscaleMethod::kDLSS) ? &settings.upscaleMethod : &settings.upscaleMethodNoDLSS;
 		*currentUpscaleMode = static_cast<uint32_t>(targetMethod);
@@ -19035,11 +19054,11 @@ void Upscaling::ServiceVRIntermediateTextureCleanup(bool a_forceFence)
 		auto completedHighWater =
 			vrIntermediateRetirementCompletedSerial.load(std::memory_order_acquire);
 		while (completedHighWater < completedRetirementSerial &&
-			!vrIntermediateRetirementCompletedSerial.compare_exchange_weak(
-				completedHighWater,
-				completedRetirementSerial,
-				std::memory_order_acq_rel,
-				std::memory_order_acquire)) {
+			   !vrIntermediateRetirementCompletedSerial.compare_exchange_weak(
+				   completedHighWater,
+				   completedRetirementSerial,
+				   std::memory_order_acq_rel,
+				   std::memory_order_acquire)) {
 		}
 	}
 	vrIntermediateTextureCleanupFence = nullptr;
@@ -19760,13 +19779,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			++vrRenderScaleTransitionController.revision;
 		}
 
-		const uint64_t recoveryRequestID = QueueVRRenderScaleRequest(
+		const auto recoveryQueueResult = QueueVRRenderScaleRequest(
 			UpscaleMethod::kTAA,
 			false,
 			settings.qualityMode,
 			settings.dlssPreset,
 			settings.fsr4RuntimeEnable,
 			VRUpscalingTransitionOrigin::RecoveryRelatch);
+		const uint64_t recoveryRequestID = recoveryQueueResult.requestID;
 
 		// Build the latch after queueing so its epoch matches the recovery
 		// request. Applying that request changes the method and therefore clears
@@ -36342,7 +36362,7 @@ Upscaling::VRRenderScaleDesiredProfile Upscaling::GetPendingVRRenderScaleDesired
 	return profile;
 }
 
-uint64_t Upscaling::QueueVRRenderScaleRequest(
+Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	UpscaleMethod a_method,
 	bool a_renderScaleModeEnabled,
 	uint32_t a_qualityMode,
@@ -36363,7 +36383,7 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 	if (bufferedAPIDoorHandoff &&
 		!ConsumeVRFpsStabilizerAPITransitionProfileAdmission(
 			a_bufferedStabilizerDoorHandoffSerial)) {
-		return 0;
+		return {};
 	}
 
 	VRRenderScaleDesiredProfile request{};
@@ -36383,25 +36403,73 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 	request.stabilizerDoorHandoffSerial =
 		bufferedAPIDoorHandoff ? a_bufferedStabilizerDoorHandoffSerial : 0;
 
+	VRRenderScaleRequestQueueResult result{};
 	{
 		std::scoped_lock lock(pendingVRRenderScaleRequestMutex);
-		const bool correctBufferedAPIHandoff =
-			pendingVRRenderScaleRequest &&
-			a_origin == VRUpscalingTransitionOrigin::PostLoadSync &&
-			pendingVRRenderScaleRequest->transitionEpoch != 0 &&
-			IsBufferedVRFpsStabilizerDoorHandoff(*pendingVRRenderScaleRequest);
 		if (pendingVRRenderScaleRequest &&
-			!correctBufferedAPIHandoff &&
-			!ShouldStoreVRUpscalingTransitionOrigin(pendingVRRenderScaleRequest->origin, a_origin, true)) {
-			return 0;
-		}
+			VRVendorRelatchPolicy::CanCoalesceBufferedDoorRequest({
+				.existingRequestValid =
+					pendingVRRenderScaleRequest->requestID != 0 &&
+					pendingVRRenderScaleRequest->transitionEpoch != 0,
+				.incomingRequestValid = request.pending,
+				.existingBufferedDoorHandoff =
+					IsBufferedVRFpsStabilizerDoorHandoff(
+						*pendingVRRenderScaleRequest),
+				.incomingBufferedDoorHandoff = bufferedAPIDoorHandoff,
+				.sameOrigin = pendingVRRenderScaleRequest->origin == request.origin,
+				.sameCompleteTarget = HasSameVRRenderScaleRequestTarget(
+					*pendingVRRenderScaleRequest,
+					request),
+				.existingLoadingSerial =
+					pendingVRRenderScaleRequest->stabilizerDoorHandoffSerial,
+				.incomingLoadingSerial = request.stabilizerDoorHandoffSerial,
+			})) {
+			result = {
+				.disposition = VRRenderScaleRequestQueueDisposition::Coalesced,
+				.requestID = pendingVRRenderScaleRequest->requestID,
+				.transitionEpoch = pendingVRRenderScaleRequest->transitionEpoch,
+			};
+		} else {
+			const bool correctBufferedAPIHandoff =
+				pendingVRRenderScaleRequest &&
+				a_origin == VRUpscalingTransitionOrigin::PostLoadSync &&
+				pendingVRRenderScaleRequest->transitionEpoch != 0 &&
+				IsBufferedVRFpsStabilizerDoorHandoff(*pendingVRRenderScaleRequest);
+			if (pendingVRRenderScaleRequest &&
+				!correctBufferedAPIHandoff &&
+				!ShouldStoreVRUpscalingTransitionOrigin(pendingVRRenderScaleRequest->origin, a_origin, true)) {
+				return {};
+			}
 
-		request.requestID = nextVRRenderScaleRequestID.fetch_add(1, std::memory_order_acq_rel);
-		if (request.requestID == 0)
 			request.requestID = nextVRRenderScaleRequestID.fetch_add(1, std::memory_order_acq_rel);
-		request.transitionEpoch = AllocateVRRenderScaleTransitionEpoch();
-		pendingVRRenderScaleRequest = request;
-		latestVRRenderScaleRequestID.store(request.requestID, std::memory_order_release);
+			if (request.requestID == 0)
+				request.requestID = nextVRRenderScaleRequestID.fetch_add(1, std::memory_order_acq_rel);
+			request.transitionEpoch = AllocateVRRenderScaleTransitionEpoch();
+			pendingVRRenderScaleRequest = request;
+			latestVRRenderScaleRequestID.store(request.requestID, std::memory_order_release);
+			result = {
+				.disposition = VRRenderScaleRequestQueueDisposition::Published,
+				.requestID = request.requestID,
+				.transitionEpoch = request.transitionEpoch,
+			};
+		}
+	}
+
+	if (result.disposition == VRRenderScaleRequestQueueDisposition::Coalesced) {
+		RecordVRRenderScaleCoalescedDuplicate();
+		if (ShouldEmitUpscalingDiagLogs()) {
+			logger::debug(
+				"[VRRenderScale][Diag] Coalesced duplicate buffered request id={} epoch={} loadingSerial={} method={} renderScaleMode={} quality={} dlssPreset={} fsr4={}",
+				result.requestID,
+				result.transitionEpoch,
+				request.stabilizerDoorHandoffSerial,
+				magic_enum::enum_name(request.method),
+				BoolText(request.renderScaleModeEnabled),
+				request.qualityMode,
+				request.dlssPreset,
+				BoolText(request.fsr4RuntimeEnabled));
+		}
+		return result;
 	}
 
 	InvalidateFrameScopedUpscalingState();
@@ -36420,7 +36488,7 @@ uint64_t Upscaling::QueueVRRenderScaleRequest(
 			request.dlssPreset,
 			BoolText(request.fsr4RuntimeEnabled));
 	}
-	return request.requestID;
+	return result;
 }
 
 std::optional<Upscaling::VRRenderScaleDesiredProfile> Upscaling::TakePendingVRRenderScaleRequest()
@@ -36621,7 +36689,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 9u;
+	constexpr uint32_t kSchemaVersion = 10u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -36655,7 +36723,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "startFrame", session.startFrame },
 		{ "endFrame", session.endFrame },
 		{ "retainedEvents", session.count },
-		{ "overwrittenEvents", session.overwrittenEvents }
+		{ "overwrittenEvents", session.overwrittenEvents },
+		{ "coalescedDuplicateCount", session.coalescedDuplicateCount }
 	};
 	record["vendorWorkGate"] = {
 		{ "state", vendorWorkGate.state },
@@ -37873,10 +37942,10 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 			// the controller target below owns the same successor epoch.
 			ArmVRNativeRestorePresentationGuard(profile.transitionEpoch);
 		} else if (vrNativeRestorePresentationGuardEpoch.compare_exchange_strong(
-				   guardEpoch,
-				   0,
-				   std::memory_order_acq_rel,
-				   std::memory_order_acquire)) {
+					   guardEpoch,
+					   0,
+					   std::memory_order_acq_rel,
+					   std::memory_order_acquire)) {
 			ClearVRNativeRestorePresentationWatchdog();
 		}
 	}
@@ -38638,6 +38707,17 @@ void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_
 		}
 	}
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Failure, VRRenderScaleRetryKind::Other, a_kind);
+}
+
+void Upscaling::RecordVRRenderScaleCoalescedDuplicate()
+{
+	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+	if (!vrRenderScaleStressSession.active)
+		return;
+	if (vrRenderScaleStressSession.coalescedDuplicateCount !=
+		std::numeric_limits<uint32_t>::max()) {
+		++vrRenderScaleStressSession.coalescedDuplicateCount;
+	}
 }
 
 void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind, VRRenderScaleFailureKind a_failureKind)

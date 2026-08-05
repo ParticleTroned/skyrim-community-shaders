@@ -387,6 +387,33 @@ public:
 		}
 	};
 
+	enum class VRRenderScaleRequestQueueDisposition : uint8_t
+	{
+		Rejected,
+		Coalesced,
+		Published
+	};
+
+	struct VRRenderScaleRequestQueueResult
+	{
+		VRRenderScaleRequestQueueDisposition disposition =
+			VRRenderScaleRequestQueueDisposition::Rejected;
+		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
+
+		[[nodiscard]] bool Accepted() const
+		{
+			return disposition != VRRenderScaleRequestQueueDisposition::Rejected &&
+			       requestID != 0 &&
+			       transitionEpoch != 0;
+		}
+
+		[[nodiscard]] bool Published() const
+		{
+			return disposition == VRRenderScaleRequestQueueDisposition::Published;
+		}
+	};
+
 	struct VRRenderScaleRelatchSignature
 	{
 		bool valid = false;
@@ -1021,6 +1048,7 @@ public:
 		uint32_t nextIndex = 0;
 		uint32_t count = 0;
 		uint32_t overwrittenEvents = 0;
+		uint32_t coalescedDuplicateCount = 0;
 		uint64_t baselineVendorEvaluatedEyeObservations = 0;
 		uint64_t baselineValidatedPresentationHoldEyeObservations = 0;
 		uint64_t baselinePresentationStretchEyeObservations = 0;
@@ -1131,8 +1159,8 @@ public:
 	RuntimeResolutionPlan runtimeResolutionPlan;
 	/** @brief Returns the pending request, or a non-pending snapshot of current settings. */
 	VRRenderScaleDesiredProfile GetPendingVRRenderScaleDesiredProfile() const;
-	/** @brief Publishes one complete latest-wins request. Returns zero when origin priority rejects it. */
-	uint64_t QueueVRRenderScaleRequest(
+	/** @brief Publishes or coalesces one complete latest-wins request. */
+	VRRenderScaleRequestQueueResult QueueVRRenderScaleRequest(
 		UpscaleMethod a_method,
 		bool a_renderScaleModeEnabled,
 		uint32_t a_qualityMode,
@@ -2262,6 +2290,7 @@ public:
 	void RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind);
 	void RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind);
 	void ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame);
+	void RecordVRRenderScaleCoalescedDuplicate();
 	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other, VRRenderScaleFailureKind a_failureKind = VRRenderScaleFailureKind::None);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();

@@ -154,9 +154,9 @@ namespace VRVendorRelatchPolicy
 	{
 		return !a_state.isVR ||
 		       (!HasAny(a_state.gateSources) &&
-			   !a_state.postLoadResetPending &&
-			   !a_state.relatchPending &&
-			   !a_state.relatchInProgress);
+				   !a_state.postLoadResetPending &&
+				   !a_state.relatchPending &&
+				   !a_state.relatchInProgress);
 	}
 
 	struct DispatchAdmission
@@ -187,6 +187,32 @@ namespace VRVendorRelatchPolicy
 		       a_relatchEpoch != a_deferredRelatchEpoch &&
 		       a_admissionFrame == a_currentFrame &&
 		       (stereoMask == 0x1u || stereoMask == 0x2u);
+	}
+
+	struct BufferedDoorRequestCoalescingAdmission
+	{
+		bool existingRequestValid = false;
+		bool incomingRequestValid = false;
+		bool existingBufferedDoorHandoff = false;
+		bool incomingBufferedDoorHandoff = false;
+		bool sameOrigin = false;
+		bool sameCompleteTarget = false;
+		std::uint64_t existingLoadingSerial = 0;
+		std::uint64_t incomingLoadingSerial = 0;
+	};
+
+	[[nodiscard]] constexpr bool CanCoalesceBufferedDoorRequest(
+		const BufferedDoorRequestCoalescingAdmission& a_admission) noexcept
+	{
+		return a_admission.existingRequestValid &&
+		       a_admission.incomingRequestValid &&
+		       a_admission.existingBufferedDoorHandoff &&
+		       a_admission.incomingBufferedDoorHandoff &&
+		       a_admission.sameOrigin &&
+		       a_admission.sameCompleteTarget &&
+		       a_admission.existingLoadingSerial != 0 &&
+		       a_admission.existingLoadingSerial ==
+		           a_admission.incomingLoadingSerial;
 	}
 
 	enum class NativeRestorePhase : std::uint8_t
@@ -407,8 +433,8 @@ namespace VRVendorRelatchPolicy
 		}
 
 		a_progress.phase = a_progress.retirementSerial != 0 ?
-			NativeRestorePhase::SharedRetirementPending :
-			NativeRestorePhase::Complete;
+		                       NativeRestorePhase::SharedRetirementPending :
+		                       NativeRestorePhase::Complete;
 		return true;
 	}
 

@@ -82,8 +82,7 @@ namespace
 			return false;
 
 		constexpr WorkGateState wrapped =
-			(static_cast<WorkGateState>(std::numeric_limits<std::uint32_t>::max()) <<
-			 kWorkGateStateMaskBits) |
+			(static_cast<WorkGateState>(std::numeric_limits<std::uint32_t>::max()) << kWorkGateStateMaskBits) |
 			firstMask;
 		constexpr WorkGateState afterWrap = AdvanceState(wrapped, secondMask);
 		return GetStateMask(afterWrap) == secondMask && GetStateEpoch(afterWrap) == 0u;
@@ -119,6 +118,54 @@ namespace
 		}
 
 		return true;
+	}
+
+	constexpr bool CoversBufferedDoorRequestCoalescing()
+	{
+		constexpr BufferedDoorRequestCoalescingAdmission match{
+			.existingRequestValid = true,
+			.incomingRequestValid = true,
+			.existingBufferedDoorHandoff = true,
+			.incomingBufferedDoorHandoff = true,
+			.sameOrigin = true,
+			.sameCompleteTarget = true,
+			.existingLoadingSerial = 41,
+			.incomingLoadingSerial = 41,
+		};
+		if (!CanCoalesceBufferedDoorRequest(match))
+			return false;
+
+		auto rejected = match;
+		rejected.existingRequestValid = false;
+		if (CanCoalesceBufferedDoorRequest(rejected))
+			return false;
+		rejected = match;
+		rejected.incomingRequestValid = false;
+		if (CanCoalesceBufferedDoorRequest(rejected))
+			return false;
+		rejected = match;
+		rejected.existingBufferedDoorHandoff = false;
+		if (CanCoalesceBufferedDoorRequest(rejected))
+			return false;
+		rejected = match;
+		rejected.incomingBufferedDoorHandoff = false;
+		if (CanCoalesceBufferedDoorRequest(rejected))
+			return false;
+		rejected = match;
+		rejected.sameOrigin = false;
+		if (CanCoalesceBufferedDoorRequest(rejected))
+			return false;
+		rejected = match;
+		rejected.sameCompleteTarget = false;
+		if (CanCoalesceBufferedDoorRequest(rejected))
+			return false;
+		rejected = match;
+		rejected.existingLoadingSerial = 0;
+		if (CanCoalesceBufferedDoorRequest(rejected))
+			return false;
+		rejected = match;
+		rejected.incomingLoadingSerial = 42;
+		return !CanCoalesceBufferedDoorRequest(rejected);
 	}
 
 	constexpr bool CoversLifecycleMutationAdmission()
@@ -227,7 +274,7 @@ namespace
 				epoch,
 				progress.ownerEpoch,
 				progress.phase) !=
-				NativeRestoreAction::BeginVendorTeardown) {
+			NativeRestoreAction::BeginVendorTeardown) {
 			return false;
 		}
 		if (!BeginNativeRestore(progress, epoch))
@@ -300,7 +347,7 @@ namespace
 				epoch,
 				progress.ownerEpoch,
 				progress.phase) !=
-				NativeRestoreAction::RecreatePhysicalTargets) {
+			NativeRestoreAction::RecreatePhysicalTargets) {
 			return false;
 		}
 		++physicalRecreations;
@@ -326,7 +373,7 @@ namespace
 				epoch + 1,
 				progress.ownerEpoch,
 				progress.phase) !=
-				NativeRestoreAction::RecreatePhysicalTargets) {
+			NativeRestoreAction::RecreatePhysicalTargets) {
 			return false;
 		}
 
@@ -505,6 +552,7 @@ namespace
 	static_assert(CoversWorkGateMasks());
 	static_assert(CoversWorkGateState());
 	static_assert(CoversGameEntryConvergence());
+	static_assert(CoversBufferedDoorRequestCoalescing());
 	static_assert(CoversLifecycleMutationAdmission());
 	static_assert(CoversDispatchAdmission());
 	static_assert(CoversVendorResourcePredicates());

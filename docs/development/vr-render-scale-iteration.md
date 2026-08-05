@@ -26,7 +26,7 @@ The registered tool is `communityshaders.renderscale`:
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, both-eye fidelity, and compositor-accepted per-eye
     presentation paths;
--   `record` returns the complete schema-v9 record without changing capture
+-   `record` returns the complete schema-v10 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CSX-menu change.
@@ -462,7 +462,7 @@ live paths under `controller.presentation`, session deltas under
 
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 9`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 10`. Schema v10 adds `session.coalescedDuplicateCount`; acceptance thresholds and units are unchanged. Same-door Stabilizer retries that match the complete pending target are counted there without creating another request event or transition metric. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.

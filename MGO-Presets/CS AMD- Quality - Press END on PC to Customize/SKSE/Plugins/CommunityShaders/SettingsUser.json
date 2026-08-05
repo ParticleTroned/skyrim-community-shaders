@@ -88,7 +88,7 @@
   "Compiler Threads": 15,
   "Dump Shaders": false,
   "Frame Annotations": false,
-  "Log Level": 1,
+  "Log Level": 2,
   "PBR Metal Highlight Scale": 0.25,
   "PBR Metal Reflection Scale": 1.0,
   "Partial Precision": false,
@@ -271,6 +271,7 @@
  "Menu": {
   "AutoHideFeatureList": false,
   "BackgroundShaderCompilationOnBoot": false,
+  "HideCompilationHUDInVR": true,
   "CSEditorToggleKey": 122,
   "EffectToggleKey": 106,
   "EnableShaderBlocking": false,
@@ -525,7 +526,7 @@
   "sharpnessFSR": 0.8999999761581421,
   "streamlineLogLevel": 0,
   "upscaleMethod": 2,
-  "upscaleMethodNoDLSS": 0
+  "upscaleMethodNoDLSS": 2
   },
  "VR": {
   "EnableDepthBufferCullingExterior": true,

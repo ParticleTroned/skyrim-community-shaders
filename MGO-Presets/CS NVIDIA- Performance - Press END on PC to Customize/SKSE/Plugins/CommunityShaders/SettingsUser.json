@@ -7,7 +7,7 @@
                  "EffectToggleKey":  106,
                  "EnableShaderBlocking":  false,
                  "FirstTimeSetupCompleted":  false,
-                 "HideCompilationHUDInVR":  false,
+                 "HideCompilationHUDInVR":  true,
                  "OverlayToggleKey":  121,
                  "RequireShiftToDock":  true,
                  "ScreenshotKey":  44,
@@ -31,7 +31,7 @@
                      "Compiler Threads":  15,
                      "Dump Shaders":  false,
                      "Frame Annotations":  false,
-                     "Log Level":  1,
+                     "Log Level":  2,
                      "PBR Metal Highlight Scale":  0.25,
                      "PBR Metal Reflection Scale":  1.0,
                      "Partial Precision":  false,
@@ -40,7 +40,8 @@
                      "Use FileWatcher":  false
                  },
     "Disable at Boot":  {
-                            "UnifiedWater":  false
+                            "UnifiedWater":  false,
+                            "Upscaling":  false
                         },
     "RenderDoc":  {
                       "Capture Frame Count":  20,
@@ -92,7 +93,7 @@
                       "sharpnessFSR":  0.8999999761581421,
                       "streamlineLogLevel":  0,
                       "upscaleMethod":  3,
-                      "upscaleMethodNoDLSS":  0
+                      "upscaleMethodNoDLSS":  2
                   },
     "CS Editor":  null,
     "CS Utility":  {

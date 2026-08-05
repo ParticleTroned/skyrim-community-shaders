@@ -75,7 +75,7 @@
                      "Compiler Threads":  15,
                      "PBR Metal Reflection Scale":  1.0,
                      "Use FileWatcher":  false,
-                     "Log Level":  1,
+                     "Log Level":  2,
                      "Background Compiler Threads":  8,
                      "Shader Defines":  "",
                      "Refraction Scale":  0.5
@@ -98,7 +98,7 @@
                  "UI Mode":  0,
                  "ShaderBlockNextKey":  34,
                  "BackgroundShaderCompilationOnBoot":  false,
-                 "HideCompilationHUDInVR":  false,
+                 "HideCompilationHUDInVR":  true,
                  "OverlayToggleKey":  121,
                  "UseResolutionFont":  true,
                  "ToggleKey":  35,
@@ -336,7 +336,8 @@
                                   "AlphaReduction":  0.15000000596046448
                               },
     "Disable at Boot":  {
-                            "UnifiedWater":  false
+                            "UnifiedWater":  false,
+                            "Upscaling":  false
                         },
     "Terrain Helper":  {
                            "EnableTerrainHelper":  true
@@ -756,7 +757,7 @@
                       "foveatedPeripheryMaskVisualization":  false,
                       "dlssPreset":  1,
                       "foveatedLeftEyeMaskOffsetX":  0.0,
-                      "upscaleMethodNoDLSS":  0,
+                      "upscaleMethodNoDLSS":  2,
                       "periphery_taa_center_blend_feather":  0.05000000074505806,
                       "fsr4RuntimeEnable":  false,
                       "reflexUseFPSLimit":  false,

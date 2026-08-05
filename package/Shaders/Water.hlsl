@@ -1086,10 +1086,6 @@ static const float UnifiedWaterFallbackCullFadeRange = 2048.0;
 static const float UnifiedWaterDeepProbeMinRadiusPixels = 4.0;
 static const float UnifiedWaterDeepProbeMaxRadiusPixels = 512.0;
 static const float UnifiedWaterDeepProbeReliableRadiusRatio = 0.75;
-#				if defined(VR)
-static const float UnifiedWaterDeepShoreAnchorMaxRadiusPixels = 256.0;
-static const float UnifiedWaterDeepShoreAnchorReliableRadiusRatio = 0.75;
-#				endif
 
 int2 GetUnifiedWaterDepthRenderDimensions()
 {
@@ -1263,13 +1259,8 @@ float GetUnifiedWaterDeepContextWeight(
 	float centerColumn,
 	float2 columnGradient,
 	float3 waterSurfaceDx,
-	float3 waterSurfaceDy,
-	out float connectedDeepEvidence,
-	out float probeAuthority)
+	float3 waterSurfaceDy)
 {
-	connectedDeepEvidence = 0.0;
-	probeAuthority = 0.0;
-
 	if (!isfinite(centerColumn) || centerColumn < 0.0)
 		return 0.0;
 
@@ -1357,7 +1348,7 @@ float GetUnifiedWaterDeepContextWeight(
 	float probeConfidence =
 		probeRepresentationConfidence *
 		probeNearFieldConfidence;
-	probeAuthority = saturate(probeConfidence);
+	float probeAuthority = saturate(probeConfidence);
 	if (probeAuthority <= 1e-4)
 		return 0.0;
 
@@ -1460,7 +1451,7 @@ float GetUnifiedWaterDeepContextWeight(
 	// Deep Context Depth is now the point of full native/Open protection and
 	// Transition only controls the soft interval below it. Qualifying pixels can
 	// therefore reach exactly one instead of retaining a residual shallow layer.
-	connectedDeepEvidence = saturate(
+	float connectedDeepEvidence = saturate(
 		transition > 1e-4 ?
 			smoothstep(transitionStart, deepDepth, deepestConnectedColumn) :
 			step(deepDepth, deepestConnectedColumn));
@@ -1468,144 +1459,6 @@ float GetUnifiedWaterDeepContextWeight(
 		connectedDeepEvidence *
 		probeAuthority);
 }
-
-#				if defined(VR)
-float GetUnifiedWaterAnchoredDeepShoreWeight(
-	float2 screenPosition,
-	uint eyeIndex,
-	float2 primaryLogicalUV,
-	float primaryRawDepth,
-	float3 waterSurfacePosition,
-	float centerColumn,
-	float2 columnGradient,
-	float3 waterSurfaceDx,
-	float3 waterSurfaceDy)
-{
-	float maximumReach = max(
-		SharedData::unifiedWaterSettings.DeepConnectionProbeReachUnits,
-		0.0);
-	float deepDepth = max(
-		SharedData::unifiedWaterSettings.DeepContextDepthUnits,
-		1.0);
-	float transition = max(
-		SharedData::unifiedWaterSettings.DeepContextTransitionUnits,
-		0.0);
-	float transitionStart = max(deepDepth - transition, 0.0);
-	if (
-		maximumReach <= 0.0 ||
-		!isfinite(centerColumn) ||
-		centerColumn < 0.0 ||
-		!all(isfinite(columnGradient)) ||
-		!all(isfinite(waterSurfaceDx)) ||
-		!all(isfinite(waterSurfaceDy))) {
-		return 0.0;
-	}
-
-	float gradientMagnitude = length(columnGradient);
-	if (!isfinite(gradientMagnitude) || gradientMagnitude <= 1e-4)
-		return 0.0;
-	float2 inwardDirection = columnGradient / gradientMagnitude;
-	float3 directionalSurfaceStep =
-		inwardDirection.x * waterSurfaceDx +
-		inwardDirection.y * waterSurfaceDy;
-	float surfaceUnitsPerPixel = length(directionalSurfaceStep);
-	if (!isfinite(surfaceUnitsPerPixel) || surfaceUnitsPerPixel <= 1e-4)
-		return 0.0;
-
-	// Aim at a fixed deep-water contour rather than launching a fixed-radius
-	// probe from every pixel. Adjacent pixels on a planar bank therefore
-	// converge on the same anchor instead of creating a view-moving mask.
-	float requestedRadiusPixels =
-		max(deepDepth - centerColumn, 0.0) /
-		gradientMagnitude;
-	int2 renderDimensions = GetUnifiedWaterDepthRenderDimensions();
-	float2 eyeRenderDimensions = float2(renderDimensions);
-	eyeRenderDimensions.x *= 0.5;
-	float representableRadiusPixels = min(
-		UnifiedWaterDeepShoreAnchorMaxRadiusPixels,
-		length(eyeRenderDimensions));
-	if (
-		!isfinite(requestedRadiusPixels) ||
-		!isfinite(representableRadiusPixels) ||
-		requestedRadiusPixels >= representableRadiusPixels ||
-		representableRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels) {
-		return 0.0;
-	}
-	float screenConfidence =
-		1.0 - smoothstep(
-				  UnifiedWaterDeepShoreAnchorReliableRadiusRatio * representableRadiusPixels,
-				  representableRadiusPixels,
-				  requestedRadiusPixels);
-	if (screenConfidence <= 1e-4)
-		return 0.0;
-	float radiusPixels = max(
-		requestedRadiusPixels,
-		UnifiedWaterDeepProbeMinRadiusPixels);
-
-	float worldReach = radiusPixels * surfaceUnitsPerPixel;
-	if (!isfinite(worldReach))
-		return 0.0;
-	float reachConfidence =
-		1.0 - smoothstep(
-				  0.75 * maximumReach,
-				  maximumReach,
-				  worldReach);
-	if (reachConfidence <= 1e-4)
-		return 0.0;
-
-	// Reuse the primary depth already held by main to establish the same
-	// below-plane sign as the trusted two-tap veto; only the anchor adds a load.
-	float3 centerScenePosition;
-	if (!TryGetUnifiedWaterScenePosition(
-			primaryLogicalUV,
-			primaryRawDepth,
-			eyeIndex,
-			centerScenePosition)) {
-		return 0.0;
-	}
-	float3 waterPlaneNormal = ReflectPlane[eyeIndex].xyz;
-	float waterPlaneNormalLength = length(waterPlaneNormal);
-	if (!isfinite(waterPlaneNormalLength) || waterPlaneNormalLength <= 1e-6)
-		return 0.0;
-	waterPlaneNormal /= waterPlaneNormalLength;
-	float centerPlaneOffset = dot(
-		centerScenePosition - waterSurfacePosition,
-		waterPlaneNormal);
-	if (!isfinite(centerPlaneOffset) || abs(centerPlaneOffset) <= 1e-4)
-		return 0.0;
-	float belowPlaneSign = centerPlaneOffset < 0.0 ? -1.0 : 1.0;
-
-	int2 centerPixel = int2(screenPosition);
-	int2 anchorPixel =
-		centerPixel +
-		int2(round(inwardDirection * radiusPixels));
-	float anchorColumn;
-	if (!TryGetUnifiedWaterProbeColumn(
-			anchorPixel,
-			eyeIndex,
-			renderDimensions,
-			waterSurfacePosition,
-			waterPlaneNormal,
-			belowPlaneSign,
-			anchorColumn)) {
-		return 0.0;
-	}
-
-	float requiredRise = max(deepDepth - centerColumn, 1.0);
-	float riseConfidence = smoothstep(
-		0.5 * requiredRise,
-		requiredRise,
-		max(anchorColumn - centerColumn, 0.0));
-	float anchorDeepBodyWeight = transition > 1e-4 ?
-	                                 smoothstep(transitionStart, deepDepth, anchorColumn) :
-	                                 step(deepDepth, anchorColumn);
-	return saturate(
-		anchorDeepBodyWeight *
-		riseConfidence *
-		screenConfidence *
-		reachConfidence);
-}
-#				endif
 
 float GetUnifiedWaterShoreContactWeight(
 	float waterColumnDepthUnits,
@@ -2160,9 +2013,9 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 	float3 sunColor = GetSunColor(normal, viewDirection) * surfaceShadow;
 
-	// Build the bounded candidate independently from shore contact. The shallow
-	// contact endpoint remains the probe gate so adding the deep-connected fade
-	// does not expand the pixels that pay for connectivity reads.
+	// Build the bounded candidate from one shore-contact curve. Its endpoint is
+	// also the probe gate, so edge fading cannot expand the pixels that pay for
+	// connected-depth reads.
 	float shallowSurfaceProbeCandidateWeight = 0.0;
 #					if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
 	// The undistorted primary depth is the stable spatial mask. Refracted depth
@@ -2172,31 +2025,17 @@ PS_OUTPUT main(PS_INPUT input)
 			waterColumnDepthUnits);
 	float nativeVisibilityDeficit =
 		1.0 - saturate(diffuseOutput.refractionMul);
-	float shallowShoreDepthBlendRange = max(
+	float shoreDepthBlendRange = max(
 		SharedData::unifiedWaterSettings.ShoreDepthBlendRangeUnits,
 		0.0);
-	float shallowShoreContactWeight =
+	float shoreContactWeight =
 		GetUnifiedWaterShoreContactWeight(
 			waterColumnDepthUnits,
-			shallowShoreDepthBlendRange,
+			shoreDepthBlendRange,
 			shoreContactDepthFootprint);
-	float deepShoreDepthBlendRange = max(
-		SharedData::unifiedWaterSettings.DeepShoreDepthBlendRangeUnits,
-		shallowShoreDepthBlendRange);
-	float deepShoreContactWeight =
-		GetUnifiedWaterShoreContactWeight(
-			waterColumnDepthUnits,
-			deepShoreDepthBlendRange,
-			shoreContactDepthFootprint);
-	float shallowSurfaceBaseWeight =
-		0.5 *
-		shallowDepthWeight *
-		saturate(SharedData::unifiedWaterSettings.ShallowFallbackStrength) *
-		nativeVisibilityDeficit *
-		saturate(shallowFallbackAvailability);
 	shallowSurfaceProbeCandidateWeight =
 		0.5 *
-		saturate(shallowShoreContactWeight) *
+		saturate(shoreContactWeight) *
 		shallowDepthWeight *
 		saturate(SharedData::unifiedWaterSettings.ShallowFallbackStrength) *
 		nativeVisibilityDeficit *
@@ -2206,8 +2045,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float shallowSurfaceLayerWeight = 0.0;
 #					if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
 	float deepContextWeight = 0.0;
-	float connectedDeepEvidence = 0.0;
-	float deepContextProbeAuthority = 0.0;
 	[branch] if (shallowSurfaceProbeCandidateWeight > 1e-4)
 	{
 		deepContextWeight = GetUnifiedWaterDeepContextWeight(
@@ -2219,63 +2056,11 @@ PS_OUTPUT main(PS_INPUT input)
 			waterColumnDepthUnits,
 			waterColumnGradient,
 			waterSurfaceDx,
-			waterSurfaceDy,
-			connectedDeepEvidence,
-			deepContextProbeAuthority);
+			waterSurfaceDy);
 	}
-	float trustedDeepContextWeight = saturate(deepContextWeight);
-	float anchoredDeepShoreWeight = 0.0;
-	float contactCurveSeparation = max(
-		shallowShoreContactWeight - deepShoreContactWeight,
-		0.0);
-#						if defined(VR)
-	// The trusted remote probes remain the only deep-water veto. When their
-	// authority is suppressed near the HMD, one fixed-contour anchor may select
-	// the wider edge curve but can never erase fallback water.
-	[branch] if (
-		shallowSurfaceProbeCandidateWeight > 1e-4 &&
-		deepShoreDepthBlendRange > shallowShoreDepthBlendRange + 1e-4 &&
-		contactCurveSeparation > 1e-4 &&
-		deepContextProbeAuthority < 1.0 - 1e-4)
-	{
-		anchoredDeepShoreWeight =
-			GetUnifiedWaterAnchoredDeepShoreWeight(
-				screenPosition,
-				eyeIndex,
-				primaryDepthLogicalUV,
-				primaryRawDepth,
-				unifiedWaterSurfacePosition,
-				waterColumnDepthUnits,
-				waterColumnGradient,
-				waterSurfaceDx,
-				waterSurfaceDy);
-	}
-#						endif
-	float deepBodyContextWeight = saturate(lerp(
-		anchoredDeepShoreWeight,
-		connectedDeepEvidence,
-		saturate(deepContextProbeAuthority)));
-
-	// With no deep-body evidence this is exactly the established shallow path.
-	// On a deep-connected bank, delay the trusted veto only by the separation
-	// between the shallow and deep contact curves. The bounded residual therefore
-	// vanishes at shore and deep interior, and also converges continuously to the
-	// shallow result when both configured or adaptive curves coincide.
-	float shallowFadeLayerWeight =
-		shallowSurfaceBaseWeight *
-		shallowShoreContactWeight *
-		(1.0 - trustedDeepContextWeight);
-	float deepFadeLayerWeight =
-		shallowSurfaceBaseWeight *
-		deepShoreContactWeight *
-		lerp(
-			1.0,
-			contactCurveSeparation,
-			trustedDeepContextWeight);
-	shallowSurfaceLayerWeight = lerp(
-		shallowFadeLayerWeight,
-		deepFadeLayerWeight,
-		deepBodyContextWeight);
+	shallowSurfaceLayerWeight =
+		shallowSurfaceProbeCandidateWeight *
+		(1.0 - saturate(deepContextWeight));
 	// The native refraction already contains the riverbed shadow. SE and VR's
 	// non-VSM path can use the surface sample to suppress a duplicate shadow
 	// copy. VR VSM can return zero surface visibility over an otherwise lit water

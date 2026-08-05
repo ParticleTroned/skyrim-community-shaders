@@ -29,12 +29,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShoreContactMinFadePixels,
 	ShoreDepthBlendRangeUnits,
 	ShallowSurfaceDepthRangeUnits,
-	ShallowFallbackMaxDistance,
-	DeepShoreDepthBlendRangeUnits)
+	ShallowFallbackMaxDistance)
 
 namespace
 {
-	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 10;
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 11;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
@@ -51,9 +50,7 @@ namespace
 	constexpr float kShoreContactMinFadePixelsMax = 4.0f;
 	constexpr float kWorldCellSize = 4096.0f;
 	constexpr float kShoreDepthBlendRangeUnitsMin = 0.0f;
-	constexpr float kShoreDepthBlendRangeUnitsMax = 10.0f;
-	constexpr float kDeepShoreDepthBlendRangeUnitsMin = 0.0f;
-	constexpr float kDeepShoreDepthBlendRangeUnitsMax = 50.0f;
+	constexpr float kShoreDepthBlendRangeUnitsMax = 20.0f;
 	constexpr float kShallowSurfaceDepthRangeUnitsMin = 16.0f;
 	constexpr float kShallowSurfaceDepthRangeUnitsMax = 256.0f;
 	constexpr float kShallowFallbackMaxDistanceMin = 0.0f;
@@ -124,13 +121,6 @@ namespace
 			kShoreDepthBlendRangeUnitsMin,
 			kShoreDepthBlendRangeUnitsMax,
 			defaults.ShoreDepthBlendRangeUnits);
-		a_settings.DeepShoreDepthBlendRangeUnits = std::max(
-			a_settings.ShoreDepthBlendRangeUnits,
-			ClampFiniteOrDefault(
-				a_settings.DeepShoreDepthBlendRangeUnits,
-				kDeepShoreDepthBlendRangeUnitsMin,
-				kDeepShoreDepthBlendRangeUnitsMax,
-				defaults.DeepShoreDepthBlendRangeUnits));
 		a_settings.ShallowSurfaceDepthRangeUnits = ClampFiniteOrDefault(
 			a_settings.ShallowSurfaceDepthRangeUnits,
 			kShallowSurfaceDepthRangeUnitsMin,
@@ -145,9 +135,30 @@ namespace
 
 	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
 	{
-		ImGui::ColorEdit3("Water Tint Color", reinterpret_cast<float*>(&a_settings.WaterTintColor));
+		auto* tintColor = reinterpret_cast<float*>(&a_settings.WaterTintColor);
+		const ImVec4 tintPreview(tintColor[0], tintColor[1], tintColor[2], 1.0f);
+
+		ImGui::PushID("WaterTintColor");
+		if (ImGui::ColorButton("##Preview", tintPreview, ImGuiColorEditFlags_NoAlpha))
+			ImGui::OpenPopup("Picker");
+		ImGui::SameLine();
+		ImGui::ColorEdit3(
+			"Water Tint Color",
+			tintColor,
+			ImGuiColorEditFlags_NoAlpha |
+				ImGuiColorEditFlags_NoPicker |
+				ImGuiColorEditFlags_NoSmallPreview);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Selects the colour of the water tint.");
+
+		if (ImGui::BeginPopup("Picker")) {
+			ImGui::ColorPicker3("##ColorPicker", tintColor, ImGuiColorEditFlags_NoAlpha);
+			ImGui::Spacing();
+			if (ImGui::Button("Exit Tint Menu", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		ImGui::PopID();
 
 		ImGui::SliderFloat(
 			"Water Tint",
@@ -491,8 +502,11 @@ void UnifiedWater::LoadSettings(json& o_json)
 	if (loadedModelVersion != kSurfaceVisibilityModelVersion) {
 		const Settings defaults{};
 
-		if (loadedModelVersion < 10) {
-			settings.DeepShoreDepthBlendRangeUnits = defaults.DeepShoreDepthBlendRangeUnits;
+		if (loadedModelVersion < 11) {
+			// The former model selected between separate shallow and deep edge
+			// curves. Start the replacement single curve at its balanced default
+			// instead of reinterpreting either legacy value.
+			settings.ShoreDepthBlendRangeUnits = defaults.ShoreDepthBlendRangeUnits;
 		}
 
 		if (loadedModelVersion < 9) {
@@ -549,12 +563,8 @@ void UnifiedWater::DrawSettings()
 	}
 
 	ImGui::Spacing();
-
-	if (ImGui::TreeNodeEx("Water Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
-		DrawWaterTintSettings(settings);
-
-		ImGui::TreePop();
-	}
+	ImGui::SeparatorText("Water Appearance");
+	DrawWaterTintSettings(settings);
 
 	ImGui::Spacing();
 
@@ -574,6 +584,51 @@ void UnifiedWater::DrawSettings()
 		}
 
 		ImGui::Spacing();
+		ImGui::SeparatorText("Shore Contact");
+
+		ImGui::SliderFloat(
+			"Edge Fade Depth",
+			&settings.ShoreDepthBlendRangeUnits,
+			kShoreDepthBlendRangeUnitsMin,
+			kShoreDepthBlendRangeUnitsMax,
+			"%.1f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Plane-normal depth over which the shallow surface cue fades in from the shore.\n"
+				"Set to 0 to disable this world-space fade; Minimum Edge Fade Width remains active.");
+		}
+
+		ImGui::SliderFloat(
+			"Shallow Fallback Max Distance",
+			&settings.ShallowFallbackMaxDistance,
+			kShallowFallbackMaxDistanceMin,
+			kShallowFallbackMaxDistanceMax,
+			"%.0f units",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Maximum view distance for the shallow fallback and its connected-depth reads.\n"
+				"Set to 0 to use native/Open depth blending everywhere.");
+		}
+
+		ImGui::EndDisabled();
+		ImGui::TreePop();
+	}
+
+	ImGui::Spacing();
+
+	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Disables the shallow-only surface cue and uses the native Open Shaders-like water blend.\n"
+				"Custom visibility values are preserved and resume when disabled.");
+		}
+
+		ImGui::Spacing();
+		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
+
 		ImGui::SeparatorText("Deep Water Protection");
 
 		ImGui::SliderFloat(
@@ -635,33 +690,6 @@ void UnifiedWater::DrawSettings()
 		ImGui::SeparatorText("Shore Contact");
 
 		ImGui::SliderFloat(
-			"Shallow Edge Fade Depth",
-			&settings.ShoreDepthBlendRangeUnits,
-			kShoreDepthBlendRangeUnitsMin,
-			kShoreDepthBlendRangeUnitsMax,
-			"%.1f units",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Plane-normal fade depth used for shallow streams and whenever connected-depth classification is unavailable.\n"
-				"Set to 0 to disable this world-space fade; Minimum Edge Fade Width remains active.");
-		}
-
-		ImGui::SliderFloat(
-			"Deep-Connected Edge Fade Depth",
-			&settings.DeepShoreDepthBlendRangeUnits,
-			settings.ShoreDepthBlendRangeUnits,
-			kDeepShoreDepthBlendRangeUnitsMax,
-			"%.1f units",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Plane-normal fade depth selected progressively when connected medium/deep body evidence is available.\n"
-				"Near the VR camera a bounded shore anchor replaces suppressed remote probes; unreliable evidence retains Shallow Edge Fade Depth.\n"
-				"This value cannot be lower than Shallow Edge Fade Depth.");
-		}
-
-		ImGui::SliderFloat(
 			"Minimum Edge Fade Width",
 			&settings.ShoreContactMinFadePixels,
 			kShoreContactMinFadePixelsMin,
@@ -674,40 +702,14 @@ void UnifiedWater::DrawSettings()
 				"This prevents subpixel terminal seams without extra texture samples. Set to 0 to use only Edge Fade Depth.");
 		}
 
-		ImGui::SliderFloat(
-			"Shallow Fallback Max Distance",
-			&settings.ShallowFallbackMaxDistance,
-			kShallowFallbackMaxDistanceMin,
-			kShallowFallbackMaxDistanceMax,
-			"%.0f units",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Maximum view distance for the shallow fallback and its connected-depth reads.\n"
-				"Set to 0 to use native/Open depth blending everywhere.");
-		}
-
 		ImGui::TextDisabled(
-			"Up to two connection reads, plus one bounded VR shore-anchor read, run only for unresolved shallow pixels inside the fallback distance.");
+			"Up to two bounded connection reads run only for unresolved shallow pixels inside the fallback distance.");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Native/Open is always the base. Pixels outside the shallow range, disabled, or distance-culled skip the connectivity reads.");
 		}
 
 		ImGui::EndDisabled();
-		ImGui::TreePop();
-	}
-
-	ImGui::Spacing();
-
-	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Disables the shallow-only surface cue and uses the native Open Shaders-like water blend.\n"
-				"Custom visibility values are preserved and resume when disabled.");
-		}
-
 		ImGui::Spacing();
 
 		if (ImGui::Button("Regenerate Flowmap") && flowmap) {
@@ -739,13 +741,13 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowSurfaceDepthRangeUnits = sanitizedSettings.ShallowSurfaceDepthRangeUnits;
 	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
 	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
-	data.DeepShoreDepthBlendRangeUnits = sanitizedSettings.DeepShoreDepthBlendRangeUnits;
 	return data;
 }
 
 void UnifiedWater::DrawEssentialSettings()
 {
 	SanitizeSettings(settings);
+	ImGui::SeparatorText("Water Appearance");
 	DrawWaterTintSettings(settings);
 }
 

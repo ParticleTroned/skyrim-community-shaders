@@ -1085,6 +1085,7 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 static const float UnifiedWaterFallbackCullFadeRange = 2048.0;
 static const float UnifiedWaterDeepProbeMinRadiusPixels = 4.0;
 static const float UnifiedWaterDeepProbeMaxRadiusPixels = 512.0;
+static const float UnifiedWaterDeepProbeReliableRadiusRatio = 0.75;
 
 int2 GetUnifiedWaterDepthRenderDimensions()
 {
@@ -1299,19 +1300,40 @@ float GetUnifiedWaterDeepContextWeight(
 #				if defined(VR)
 	eyeRenderDimensions.x *= 0.5;
 #				endif
-	float maximumRadiusPixels = min(
-		min(
-			maximumReach / surfaceUnitsPerPixel,
-			UnifiedWaterDeepProbeMaxRadiusPixels),
+	float requestedRadiusPixels = maximumReach / surfaceUnitsPerPixel;
+	float representableRadiusPixels = min(
+		UnifiedWaterDeepProbeMaxRadiusPixels,
 		length(eyeRenderDimensions));
-	if (!isfinite(maximumRadiusPixels) || maximumRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels)
+	if (
+		!isfinite(requestedRadiusPixels) ||
+		!isfinite(representableRadiusPixels) ||
+		requestedRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels ||
+		representableRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels) {
+		return 0.0;
+	}
+
+	// A maximum world-space reach can span hundreds of pixels beside the water.
+	// Clamping that request and trusting two remote taps as complete evidence
+	// creates large terrain-shaped regions that move with the VR view. Preserve
+	// the configured reach where it is representable, but smoothly release the
+	// deep-context veto over the final quarter of the screen-space budget.
+	float reliabilityFadeStartPixels =
+		UnifiedWaterDeepProbeReliableRadiusRatio * representableRadiusPixels;
+	float probeRepresentationConfidence =
+		1.0 - smoothstep(
+			reliabilityFadeStartPixels,
+			representableRadiusPixels,
+			requestedRadiusPixels);
+	if (probeRepresentationConfidence <= 1e-4)
 		return 0.0;
 
 	// Reach is a search distance, not merely a cap on a local linear depth
 	// prediction. Coarse terrain triangles can have a very large one-quad
 	// derivative; predicting the target radius from that derivative kept both
 	// reads on the same shallow facet and made the reach slider ineffective.
-	float radiusPixels = maximumRadiusPixels;
+	float radiusPixels = min(
+		requestedRadiusPixels,
+		representableRadiusPixels);
 
 	int2 endpointOffset = int2(round(probeDirection * radiusPixels));
 	int2 midpointOffset = int2(round(0.5 * float2(endpointOffset)));
@@ -1407,7 +1429,9 @@ float GetUnifiedWaterDeepContextWeight(
 	float connectedDeepWeight = transition > 1e-4 ?
 	                                smoothstep(transitionStart, deepDepth, deepestConnectedColumn) :
 	                                step(deepDepth, deepestConnectedColumn);
-	return saturate(connectedDeepWeight);
+	return saturate(
+		connectedDeepWeight *
+		probeRepresentationConfidence);
 }
 
 float GetUnifiedWaterShoreContactWeight(float waterColumnDepthUnits)

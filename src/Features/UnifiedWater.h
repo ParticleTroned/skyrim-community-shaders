@@ -31,13 +31,13 @@ struct UnifiedWater : OverlayFeature
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
 		float ShallowFallbackStrength = 1.0f;
-		float DeepConnectionProbeReachUnits = 256.0f;
-		float DeepContextDepthUnits = 96.0f;
-		float DeepContextTransitionUnits = 32.0f;
+		float DeepConnectionProbeReachUnits = 512.0f;
+		float DeepContextDepthUnits = 192.0f;
+		float DeepContextTransitionUnits = 128.0f;
 		float ShoreContactMinFadePixels = 2.0f;
 		float ShoreDepthBlendRangeUnits = 5.0f;
-		float ShallowSurfaceDepthRangeUnits = 64.0f;
-		float ShallowFallbackMaxDistance = 16000.0f;
+		float ShallowSurfaceDepthRangeUnits = 256.0f;
+		float ShallowFallbackMaxDistance = 26000.0f;
 	};
 
 	struct alignas(16) CommonBufferData

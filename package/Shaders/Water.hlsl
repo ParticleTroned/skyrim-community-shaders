@@ -1324,7 +1324,31 @@ float GetUnifiedWaterDeepContextWeight(
 			reliabilityFadeStartPixels,
 			representableRadiusPixels,
 			requestedRadiusPixels);
-	if (probeRepresentationConfidence <= 1e-4)
+
+	// In VR an oblique close-water surface can report enough world units per
+	// pixel to pass the projected-radius guard even though the configured search
+	// still reaches far beyond the viewer. Remove remote-probe authority inside
+	// one reach and restore it smoothly by two reaches. The local column-depth
+	// classifier remains active, and medium/far water is unchanged.
+	float probeNearFieldConfidence = 1.0;
+#				if defined(VR)
+	float waterSurfaceViewDistance = length(waterSurfacePosition);
+	if (!isfinite(waterSurfaceViewDistance))
+		return 0.0;
+	float nearFieldFadeStart = maximumReach;
+	float nearFieldFadeEnd = max(
+		2.0 * maximumReach,
+		nearFieldFadeStart + 1.0);
+	probeNearFieldConfidence = smoothstep(
+		nearFieldFadeStart,
+		nearFieldFadeEnd,
+		waterSurfaceViewDistance);
+#				endif
+
+	float probeConfidence =
+		probeRepresentationConfidence *
+		probeNearFieldConfidence;
+	if (probeConfidence <= 1e-4)
 		return 0.0;
 
 	// Reach is a search distance, not merely a cap on a local linear depth
@@ -1431,7 +1455,7 @@ float GetUnifiedWaterDeepContextWeight(
 	                                step(deepDepth, deepestConnectedColumn);
 	return saturate(
 		connectedDeepWeight *
-		probeRepresentationConfidence);
+		probeConfidence);
 }
 
 float GetUnifiedWaterShoreContactWeight(float waterColumnDepthUnits)

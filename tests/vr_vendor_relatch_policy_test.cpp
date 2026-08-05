@@ -394,6 +394,135 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversProvenNativeRestoreRetirementResume()
+	{
+		constexpr NativeRestoreFenceReadyResumeAdmission ready{
+			.relatchPending = true,
+			.queuedEpoch = 17,
+			.controllerTargetEpoch = 17,
+			.progress = {
+				.ownerEpoch = 17,
+				.retirementSerial = 41,
+				.phase = NativeRestorePhase::Complete,
+			},
+			.operation = {
+				.valid = true,
+				.destroyDLSSResources = true,
+				.destroySharedResources = true,
+				.preserveVRIntermediateTextures = false,
+			},
+			.completedRetirementSerial = 42,
+			.queuedFrame = 100,
+			.currentFrame = 103,
+			.queuedDelayFrames = 6,
+			.ordinaryRetryFrames = 6,
+			.queuedNativeRestoreRetirementSerial = 41,
+			.loadingMenuOpen = false,
+			.loadingSerialMatches = true,
+		};
+		if (!CanResumeNativeRestoreAfterProvenRetirement(ready))
+			return false;
+
+		const auto rejected = [](const NativeRestoreFenceReadyResumeAdmission& a_admission) {
+			return !CanResumeNativeRestoreAfterProvenRetirement(a_admission);
+		};
+		auto candidate = ready;
+		candidate.relatchPending = false;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.queuedEpoch = 0;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.queuedEpoch = 18;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.controllerTargetEpoch = 18;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.progress.ownerEpoch = 18;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.progress.phase = NativeRestorePhase::SharedRetirementPending;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.progress.phase = NativeRestorePhase::Failed;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.progress.phase = NativeRestorePhase::FailedAfterMutation;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.progress.retirementSerial = 0;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.completedRetirementSerial = 40;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.operation.valid = false;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.operation.destroyDLSSResources = false;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.operation.destroySharedResources = false;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.operation.preserveVRIntermediateTextures = true;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.ordinaryRetryFrames = 0;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.queuedDelayFrames = 12;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.queuedNativeRestoreRetirementSerial = 0;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.queuedNativeRestoreRetirementSerial = 40;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.queuedFrame = 0;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.currentFrame = 99;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.currentFrame = 100;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.currentFrame = 106;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.loadingMenuOpen = true;
+		if (!rejected(candidate))
+			return false;
+		candidate = ready;
+		candidate.loadingSerialMatches = false;
+		return rejected(candidate);
+	}
+
 	constexpr bool CoversNativeRestoreActionSelection()
 	{
 		for (std::uint64_t requestedEpoch = 0; requestedEpoch < 3; ++requestedEpoch) {
@@ -558,6 +687,7 @@ namespace
 	static_assert(CoversVendorResourcePredicates());
 	static_assert(CoversStereoRelatchAdmission());
 	static_assert(CoversNativeRestoreSequence());
+	static_assert(CoversProvenNativeRestoreRetirementResume());
 	static_assert(CoversNativeRestoreActionSelection());
 	static_assert(CoversNativeRestoreTeardownDisposition());
 	static_assert(CoversNativeRestoreOperationStrength());

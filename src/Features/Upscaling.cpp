@@ -15123,6 +15123,9 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 		pendingPerfModeRenderTargetRecreateForcePhysical.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateNativeRestoreRetirementSerial.store(
+			0,
+			std::memory_order_release);
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
@@ -18839,6 +18842,115 @@ bool Upscaling::MarkVRLowPeakNativeRestoreComplete(
 		a_completedRetirementSerial);
 }
 
+bool Upscaling::TryResumeVRLowPeakNativeRestoreAfterProvenRetirement(
+	uint64_t a_expectedEpoch)
+{
+	if (a_expectedEpoch == 0 || !globals::state)
+		return false;
+
+	VRLowPeakNativeRestoreProgress progress{};
+	VRLowPeakNativeRestoreOperation operation{};
+	const bool loadingMenuPhysicallyOpen =
+		IsLoadingMenuPhysicallyOpen();
+
+	uint32_t queuedFrame = 0;
+	uint32_t currentFrame = 0;
+	uint64_t expectedRetirementSerial = 0;
+	uint64_t completedRetirementSerial = 0;
+	{
+		const std::scoped_lock admissionLock(
+			perfModeRenderTargetRecreateQueueMutex,
+			g_vrLoadingTransitionSerialMutex,
+			g_vrLoadingMenuGateReconciliationMutex);
+		const uint64_t currentLoadingSerial =
+			g_vrLoadingTransitionSerial.load(std::memory_order_relaxed);
+		const bool loadingSerialOpen =
+			g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed);
+		const bool loadingMenuOpen =
+			loadingMenuPhysicallyOpen ||
+			IsLoadingMenuContextActive() ||
+			loadingSerialOpen;
+		{
+			std::scoped_lock progressLock(
+				vrLowPeakNativeRestoreProgressMutex);
+			progress = vrLowPeakNativeRestoreProgress;
+			operation = vrLowPeakNativeRestoreOperation;
+		}
+		const auto controller = GetVRRenderScaleTransitionSnapshot();
+		uint64_t expectedLoadingSerial = 0;
+		bool conflictingLoadingSerial = false;
+		const auto inspectLoadingSerial = [&](const VRRenderScaleProfileSnapshot& a_profile) {
+			if (!a_profile.valid ||
+				a_profile.transitionEpoch != a_expectedEpoch ||
+				a_profile.stabilizerDoorHandoffSerial == 0) {
+				return;
+			}
+			if (expectedLoadingSerial != 0 &&
+				expectedLoadingSerial != a_profile.stabilizerDoorHandoffSerial) {
+				conflictingLoadingSerial = true;
+				return;
+			}
+			expectedLoadingSerial = a_profile.stabilizerDoorHandoffSerial;
+		};
+		inspectLoadingSerial(controller.requested);
+		inspectLoadingSerial(controller.applying);
+		inspectLoadingSerial(controller.applied);
+		const bool loadingSerialMatches =
+			!conflictingLoadingSerial &&
+			(expectedLoadingSerial == 0 ||
+				expectedLoadingSerial == currentLoadingSerial);
+
+		queuedFrame = pendingPerfModeRenderTargetRecreateFrame.load(
+			std::memory_order_acquire);
+		currentFrame = std::max(globals::state->frameCount, 1u);
+		expectedRetirementSerial = progress.retirementSerial;
+		completedRetirementSerial =
+			vrIntermediateRetirementCompletedSerial.load(
+				std::memory_order_acquire);
+		if (!VRVendorRelatchPolicy::CanResumeNativeRestoreAfterProvenRetirement({
+				.relatchPending = pendingPerfModeRenderTargetRecreate.load(
+					std::memory_order_acquire),
+				.queuedEpoch = pendingPerfModeRenderTargetRecreateEpoch.load(
+					std::memory_order_acquire),
+				.controllerTargetEpoch = controller.targetEpoch,
+				.progress = progress,
+				.operation = operation,
+				.completedRetirementSerial = completedRetirementSerial,
+				.queuedFrame = queuedFrame,
+				.currentFrame = currentFrame,
+				.queuedDelayFrames =
+					pendingPerfModeRenderTargetRecreateDelayFrames.load(
+						std::memory_order_acquire),
+				.ordinaryRetryFrames =
+					kVRUpscalingTransitionApplyDelayFrames,
+				.queuedNativeRestoreRetirementSerial =
+					pendingPerfModeRenderTargetRecreateNativeRestoreRetirementSerial.load(
+						std::memory_order_acquire),
+				.loadingMenuOpen = loadingMenuOpen,
+				.loadingSerialMatches = loadingSerialMatches,
+			})) {
+			return false;
+		}
+
+		// Leave the immutable queue tuple intact. Removing only the elapsed-frame
+		// wait lets the normal consumer run every remaining safety gate below.
+		pendingPerfModeRenderTargetRecreateFrame.store(
+			0,
+			std::memory_order_release);
+	}
+
+	if (ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][Diag] Resuming native restore after proven retirement fence completion. epoch={} expectedSerial={} completedSerial={} queuedFrame={} frame={}",
+			a_expectedEpoch,
+			expectedRetirementSerial,
+			completedRetirementSerial,
+			queuedFrame,
+			currentFrame);
+	}
+	return true;
+}
+
 bool Upscaling::AbortVRLowPeakNativeRestoreProgress(
 	uint64_t a_expectedOwnerEpoch,
 	uint64_t a_expectedGuardEpoch)
@@ -19369,6 +19481,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingPerfModeRenderTargetRecreateForcePhysical.store(false, std::memory_order_release);
 			pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 			pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
+			pendingPerfModeRenderTargetRecreateNativeRestoreRetirementSerial.store(
+				0,
+				std::memory_order_release);
 			pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 			pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 			pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
@@ -19473,8 +19588,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	loggedRelatchRuntimeActivationDefer = false;
 
-	if (ShouldWaitForPerfModeRenderTargetRecreateDelay())
+	if (ShouldWaitForPerfModeRenderTargetRecreateDelay() &&
+		!TryResumeVRLowPeakNativeRestoreAfterProvenRetirement(
+			previewRelatchEpoch)) {
 		return false;
+	}
 
 	static bool loggedRelatchMemoryReliefCleanupDefer = false;
 	if (IsVRRenderScaleMemoryReliefActive() &&
@@ -19678,6 +19796,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	const auto clearRelatchQueueStateLocked = [&]() {
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateNativeRestoreRetirementSerial.store(
+			0,
+			std::memory_order_release);
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateForcePhysical.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
@@ -19831,7 +19952,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		clearRelatchQueueStateLocked();
 		return true;
 	};
-	auto requeueRelatch = [&](uint32_t a_minDelayFrames, bool a_includeExistingRetryDelay = true, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other) {
+	auto requeueRelatch = [&](
+							  uint32_t a_minDelayFrames,
+							  bool a_includeExistingRetryDelay = true,
+							  VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other,
+							  uint64_t a_nativeRestoreRetirementSerial = 0) {
 		const auto controllerSnapshot = GetVRRenderScaleTransitionSnapshot();
 		if (relatchEpoch != 0 &&
 			controllerSnapshot.targetEpoch != 0 &&
@@ -19876,6 +20001,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				}
 				MarkPerfModeRenderTargetRecreateQueued(delayFrames);
 			}
+			pendingPerfModeRenderTargetRecreateNativeRestoreRetirementSerial.store(
+				a_nativeRestoreRetirementSerial,
+				std::memory_order_release);
 			// As in the initial queue path, make pending visible last so every
 			// consumer observes a complete retry request and its delay.
 			pendingPerfModeRenderTargetRecreate.store(
@@ -20593,7 +20721,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				action == VRVendorRelatchPolicy::NativeRestoreAction::DrainCurrentRetirement) {
 				ServiceVRIntermediateTextureCleanup();
 				if (HasPendingVRIntermediateTextureCleanup()) {
-					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Retirement);
+					requeueRelatch(
+						kVRUpscalingTransitionApplyDelayFrames,
+						false,
+						VRRenderScaleRetryKind::Retirement,
+						progress.retirementSerial);
 					if (!loggedLowPeakNativeRestoreCleanupDefer) {
 						logger::debug(
 							"[VRRenderScale] Render-target relatch waiting for retired intermediates to drain before full-resolution render-scale-off restore. method={} frame={} ownerEpoch={} targetEpoch={}",
@@ -20614,7 +20746,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					requeueRelatch(
 						kVRUpscalingTransitionApplyDelayFrames,
 						false,
-						VRRenderScaleRetryKind::Retirement);
+						VRRenderScaleRetryKind::Retirement,
+						progress.retirementSerial);
 					return true;
 				}
 			}
@@ -34596,6 +34729,9 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 		pendingPerfModeRenderTargetRecreateForcePhysical.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
+		pendingPerfModeRenderTargetRecreateNativeRestoreRetirementSerial.store(
+			0,
+			std::memory_order_release);
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateEpoch.store(0, std::memory_order_release);
@@ -38970,6 +39106,9 @@ void Upscaling::MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames)
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
 	const uint32_t delayFrames = a_delayFrames != 0 ? a_delayFrames : kVRUpscalingTransitionApplyDelayFrames;
 	pendingPerfModeRenderTargetRecreateFrame.store(frame, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateNativeRestoreRetirementSerial.store(
+		0,
+		std::memory_order_release);
 	const uint32_t previousDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
 	if (previousDelay == 0 || delayFrames > previousDelay)
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(delayFrames, std::memory_order_release);

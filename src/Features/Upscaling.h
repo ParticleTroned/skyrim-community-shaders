@@ -2083,6 +2083,7 @@ public:
 	std::atomic<bool> pendingPerfModeRenderTargetRecreateForcePhysical{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
+	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateNativeRestoreRetirementSerial{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateEpoch{ 0 };
@@ -2258,6 +2259,7 @@ public:
 	bool RecordVRLowPeakNativeRestoreRetirement(uint64_t a_epoch, uint64_t a_retirementSerial);
 	bool CompleteVRLowPeakNativeRestoreVendorTeardown(uint64_t a_epoch);
 	bool MarkVRLowPeakNativeRestoreComplete(uint64_t a_epoch, uint64_t a_completedRetirementSerial);
+	bool TryResumeVRLowPeakNativeRestoreAfterProvenRetirement(uint64_t a_expectedEpoch);
 	bool AbortVRLowPeakNativeRestoreProgress(uint64_t a_expectedOwnerEpoch, uint64_t a_expectedGuardEpoch);
 	void ClearOwnedVRLowPeakNativeRestoreProgress(uint64_t a_expectedEpoch);
 	void ClearAllVRLowPeakNativeRestoreProgress();

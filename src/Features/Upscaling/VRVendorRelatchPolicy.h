@@ -299,6 +299,51 @@ namespace VRVendorRelatchPolicy
 		NativeRestorePhase phase = NativeRestorePhase::Idle;
 	};
 
+	struct NativeRestoreFenceReadyResumeAdmission
+	{
+		bool relatchPending = false;
+		std::uint64_t queuedEpoch = 0;
+		std::uint64_t controllerTargetEpoch = 0;
+		NativeRestoreProgress progress{};
+		NativeRestoreOperation operation{};
+		std::uint64_t completedRetirementSerial = 0;
+		std::uint32_t queuedFrame = 0;
+		std::uint32_t currentFrame = 0;
+		std::uint32_t queuedDelayFrames = 0;
+		std::uint32_t ordinaryRetryFrames = 0;
+		std::uint64_t queuedNativeRestoreRetirementSerial = 0;
+		bool loadingMenuOpen = false;
+		bool loadingSerialMatches = false;
+	};
+
+	[[nodiscard]] constexpr bool CanResumeNativeRestoreAfterProvenRetirement(
+		const NativeRestoreFenceReadyResumeAdmission& a_admission) noexcept
+	{
+		return a_admission.relatchPending &&
+		       a_admission.queuedEpoch != 0 &&
+		       a_admission.queuedEpoch == a_admission.controllerTargetEpoch &&
+		       a_admission.queuedEpoch == a_admission.progress.ownerEpoch &&
+		       a_admission.progress.phase == NativeRestorePhase::Complete &&
+		       a_admission.progress.retirementSerial != 0 &&
+		       a_admission.completedRetirementSerial >=
+		           a_admission.progress.retirementSerial &&
+		       a_admission.operation.valid &&
+		       a_admission.operation.destroyDLSSResources &&
+		       a_admission.operation.destroySharedResources &&
+		       !a_admission.operation.preserveVRIntermediateTextures &&
+		       a_admission.ordinaryRetryFrames != 0 &&
+		       a_admission.queuedDelayFrames ==
+		           a_admission.ordinaryRetryFrames &&
+		       a_admission.queuedNativeRestoreRetirementSerial ==
+		           a_admission.progress.retirementSerial &&
+		       a_admission.queuedFrame != 0 &&
+		       a_admission.currentFrame > a_admission.queuedFrame &&
+		       a_admission.currentFrame - a_admission.queuedFrame <
+		           a_admission.queuedDelayFrames &&
+		       !a_admission.loadingMenuOpen &&
+		       a_admission.loadingSerialMatches;
+	}
+
 	[[nodiscard]] constexpr bool HasNativeRestoreTransaction(
 		const NativeRestoreProgress& a_progress) noexcept
 	{

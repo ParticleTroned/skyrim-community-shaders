@@ -97,7 +97,7 @@ struct AdaptiveBrightness : Feature
 
 	struct Settings
 	{
-		bool enabled = false;
+		bool enabled = true;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;

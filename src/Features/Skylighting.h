@@ -78,7 +78,7 @@ public:
 		uint OcclusionUpdateInterval = 6;
 		uint ProbeUpdateInterval = 13;
 		bool EnableFastProbeSampling = true;
-		bool IncludeMarkedRoofOccluders = false;
+		bool IncludeMarkedRoofOccluders = true;
 	} settings;
 
 	struct SkylightingCB

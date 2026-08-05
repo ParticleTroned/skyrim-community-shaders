@@ -420,7 +420,7 @@ public:
 		bool SkipClearCacheConfirmation = false;                                                                       // Skip confirmation dialog when clearing shader cache
 		bool SmartClearShaderCacheDefault = false;                                                                     // Plain-click clears active shaders; Shift-click selects the other clear scope
 		bool BackgroundShaderCompilationOnBoot = false;                                                                // Load the menu immediately and compile shaders in the background on boot
-		bool HideCompilationHUDInVR = false;                                                                           // Hide shader compilation status in the HMD while retaining the desktop HUD
+		bool HideCompilationHUDInVR = true;                                                                            // Hide shader compilation status in the HMD while retaining the desktop HUD
 		bool AutoHideFeatureList = false;                                                                              // Auto-hide left feature list panel, show on hover
 		bool SkipConstraintWarning = false;                                                                            // Skip popup when a setting change creates new constraints
 		int UiMode = 0;                                                                                                // Persisted as "UI Mode"; 0 = Essentials, 1 = Advanced

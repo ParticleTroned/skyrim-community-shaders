@@ -380,7 +380,7 @@ namespace
 	};
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
-	constexpr uint32_t kVRFpsStabilizerSameCellSyncFallbackFrames = 30;
+	constexpr uint32_t kVRFpsStabilizerIdentitySyncFallbackFrames = 30;
 	constexpr uint32_t kVRFastTravelMenuHandoffFrames = 4u;
 	constexpr uint32_t kVRClosedBarterFastTravelWindowFrames = 1800u;
 	constexpr uint32_t kVROrphanBarterMenuReopenGuardFrames = 60u;
@@ -3208,17 +3208,20 @@ namespace
 		uint32_t a_qualityMode,
 		uint32_t a_dlssPreset)
 	{
-		if (a_controller.targetEpoch == 0)
-			return false;
-
 		const auto matches = [&](const Upscaling::VRRenderScaleProfileSnapshot& a_profile) {
-			return a_profile.valid &&
-			       a_profile.transitionEpoch == a_controller.targetEpoch &&
-			       a_profile.method == a_method &&
-			       a_profile.qualityMode == a_qualityMode &&
-			       a_profile.renderScaleModeEnabled == a_renderScaleMode &&
-			       (a_method != Upscaling::UpscaleMethod::kDLSS ||
-				   a_profile.dlssPreset == a_dlssPreset);
+			return VRVendorRelatchPolicy::MatchesStabilizerControllerTarget({
+				.profileValid = a_profile.valid,
+				.targetEpochKnown = a_controller.targetEpoch != 0,
+				.profileOwnsTargetEpoch =
+					a_profile.transitionEpoch == a_controller.targetEpoch,
+				.methodMatches = a_profile.method == a_method,
+				.qualityMatches = a_profile.qualityMode == a_qualityMode,
+				.renderScaleModeMatches =
+					a_profile.renderScaleModeEnabled == a_renderScaleMode,
+				.dlssPresetMatchesOrIrrelevant =
+					a_method != Upscaling::UpscaleMethod::kDLSS ||
+					a_profile.dlssPreset == a_dlssPreset,
+			});
 		};
 
 		return matches(a_controller.requested) ||
@@ -4604,9 +4607,9 @@ namespace
 			.destinationCellChanged = destinationCellChanged,
 			.completedWorldFrameAfterDestinationObservation =
 				completedWorldFrameAfterDestinationObservation,
-			.sameCellFallbackElapsed =
+			.identityFallbackElapsed =
 				closeElapsedFrames != std::numeric_limits<uint32_t>::max() &&
-				closeElapsedFrames >= kVRFpsStabilizerSameCellSyncFallbackFrames,
+				closeElapsedFrames >= kVRFpsStabilizerIdentitySyncFallbackFrames,
 		});
 	}
 
@@ -16163,8 +16166,8 @@ Upscaling::VRVendorWorkGateSnapshot Upscaling::GetVRVendorWorkGateSnapshot(
 
 	auto* state = globals::state;
 	snapshot.lastCompletedWorldRenderFrame = state ?
-		state->lastCompletedWorldRenderFrame :
-		std::numeric_limits<uint32_t>::max();
+	                                             state->lastCompletedWorldRenderFrame :
+	                                             std::numeric_limits<uint32_t>::max();
 	auto* ui = globals::game::ui;
 	snapshot.mainMenuActive = IsMainMenuContextActive();
 	snapshot.loadingPresentationActive =
@@ -24346,9 +24349,12 @@ void Upscaling::RecordVRNativeRestorePresentationRejection(
 			vrNativeRestorePresentationRejectedCycles = 0;
 			return;
 		}
-		if (vrNativeRestorePresentationRecoveryCandidateCycle != 0 ||
-			vrNativeRestorePresentationLastRejectedCycle ==
-				a_compositorCycleToken) {
+		if (!VRVendorRelatchPolicy::
+				CanScheduleNativeRestorePresentationRecovery(
+					vrNativeRestorePresentationRecoveryAttempts,
+					vrNativeRestorePresentationRecoveryCandidateCycle != 0,
+					vrNativeRestorePresentationLastRejectedCycle ==
+						a_compositorCycleToken)) {
 			return;
 		}
 
@@ -24573,6 +24579,59 @@ void Upscaling::ServiceVRNativeRestorePresentationRecovery(
 		ClearVRNativeRestorePresentationWatchdog();
 		return;
 	}
+	const auto recoveryAction =
+		VRVendorRelatchPolicy::
+			SelectNativeRestorePresentationRecoveryAction(
+				recoveryAttempt);
+	if (recoveryAction ==
+		VRVendorRelatchPolicy::
+			NativeRestorePresentationRecoveryAction::LogicalFallback) {
+		// One physical retry is the complete repair budget. If exact compositor
+		// evidence still cannot settle, publish a fresh logical request for the
+		// already-selected target. This gives the normal latest-wins/no-op path a
+		// terminal fallback without repeatedly recreating targets or resurrecting
+		// the retired vendor owner.
+		const auto& applied = transition.applied;
+		if (!applied.valid ||
+			applied.active ||
+			applied.transitionEpoch != guardEpoch) {
+			ClearVRNativeRestorePresentationWatchdog();
+			return;
+		}
+		const auto fallback = QueueVRRenderScaleRequest(
+			applied.method,
+			false,
+			applied.qualityMode,
+			applied.dlssPreset,
+			applied.fsr4RuntimeEnabled,
+			VRUpscalingTransitionOrigin::RecoveryRelatch);
+		uint64_t expectedGuardEpoch = guardEpoch;
+		vrNativeRestorePresentationGuardEpoch.compare_exchange_strong(
+			expectedGuardEpoch,
+			0,
+			std::memory_order_acq_rel,
+			std::memory_order_acquire);
+		ClearVRNativeRestorePresentationWatchdog();
+		if (fallback.Accepted()) {
+			logger::warn(
+				"[VRRenderScale] Native presentation validation exhausted {} bounded attempt(s); queued terminal logical fallback request {} for method={}.",
+				recoveryAttempt,
+				fallback.requestID,
+				magic_enum::enum_name(applied.method));
+		} else {
+			logger::error(
+				"[VRRenderScale] Native presentation validation exhausted {} bounded attempt(s) and the terminal logical fallback was not accepted; releasing the stale guard to the current target owner.",
+				recoveryAttempt);
+		}
+		return;
+	}
+	if (recoveryAction !=
+		VRVendorRelatchPolicy::
+			NativeRestorePresentationRecoveryAction::PhysicalRetry) {
+		ClearVRNativeRestorePresentationWatchdog();
+		return;
+	}
+
 	const bool recoveryQueued =
 		QueueVRNativeRestorePresentationRecovery(
 			guardEpoch,
@@ -24696,15 +24755,12 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 		IsVRNativeEngineOutputSubmitTexture(sourceTexture) ||
 		(vendorMethod &&
 			IsVRFixedVendorOutputSubmitTexture(*this, sourceTexture));
-	const bool exactNativeCandidate =
+	const bool exactPhysicalNativeContinuity =
 		sourceDesc.ArraySize == 1 &&
 		sourceDesc.MipLevels == 1 &&
 		sourceDesc.SampleDesc.Count == 1 &&
 		sourceDesc.Width == applied.displayEyeWidth * 2u &&
 		sourceDesc.Height == applied.displayEyeHeight &&
-		GetRuntimeUpscaleMethod() == applied.method &&
-		GetConfiguredUpscaleMethodForTransition() == applied.method &&
-		runtimePlanExact &&
 		!resolutionPlan.menuContextActive &&
 		!resolutionPlan.knownMenuContextActive &&
 		!resolutionPlan.loadingMenuActive &&
@@ -24715,6 +24771,17 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 			sourceDesc.Height &&
 		sourceIdentityExact &&
 		InputBoundsMatchCombinedStereoEye(a_inputBounds, eyeIndex);
+	const bool exactRuntimeContract =
+		GetRuntimeUpscaleMethod() == applied.method &&
+		GetConfiguredUpscaleMethodForTransition() == applied.method &&
+		runtimePlanExact;
+	const bool exactNativeCandidate =
+		VRVendorRelatchPolicy::CanAcceptNativeRestorePresentation({
+			.targetUsesVendorEvaluation = vendorMethod,
+			.exactPhysicalNativeContinuity =
+				exactPhysicalNativeContinuity,
+			.exactRuntimeContract = exactRuntimeContract,
+		});
 	if (!exactNativeCandidate)
 		return false;
 

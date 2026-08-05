@@ -53,8 +53,9 @@ public:
 	 * @brief Whether the shader compilation status window belongs on-screen now.
 	 *
 	 * Startup may show status before the first world frame. Once gameplay has
-	 * started, the window is restricted to an active Community Shaders menu
-	 * session so background compilation cannot create an in-game pop-up.
+	 * started, the window is restricted to an active Community Shaders menu,
+	 * editor, or performance-overlay session so background compilation cannot
+	 * create an otherwise unrequested in-game pop-up.
 	 */
 	static bool ShouldShowShaderCompilationStatus(const Menu& menu);
 

@@ -174,41 +174,56 @@ namespace
 			return false;
 		if (SelectStabilizerSourceCell(0u, 0x5678u) != 0x5678u)
 			return false;
-		if (ShouldPublishStabilizerDestinationProfile(true, true))
-			return false;
-		if (!ShouldPublishStabilizerDestinationProfile(false, true))
-			return false;
-		if (!ShouldPublishStabilizerDestinationProfile(true, false))
-			return false;
 
-		if (IsStabilizerDestinationSyncReady({}))
-			return false;
-		if (!IsStabilizerDestinationSyncReady({ .completedWorldFrameAfterClose = true }))
-			return false;
-		StabilizerDestinationSyncReadiness tracked{
-			.completedWorldFrameAfterClose = true,
-			.sourceCellKnown = true,
-			.currentCellKnown = true,
-		};
-		if (IsStabilizerDestinationSyncReady(tracked))
-			return false;
+		for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
+			const bool settingsMatch = (bits & (1u << 0)) != 0;
+			const bool controllerMatch = (bits & (1u << 1)) != 0;
+			if (ShouldPublishStabilizerDestinationProfile(
+					settingsMatch,
+					controllerMatch) !=
+				(!settingsMatch || !controllerMatch)) {
+				return false;
+			}
+		}
 
-		tracked.destinationCellChanged = true;
-		if (IsStabilizerDestinationSyncReady(tracked))
-			return false;
+		for (std::uint32_t bits = 0; bits < (1u << 7); ++bits) {
+			const StabilizerControllerTargetAdmission admission{
+				.profileValid = (bits & (1u << 0)) != 0,
+				.targetEpochKnown = (bits & (1u << 1)) != 0,
+				.profileOwnsTargetEpoch = (bits & (1u << 2)) != 0,
+				.methodMatches = (bits & (1u << 3)) != 0,
+				.qualityMatches = (bits & (1u << 4)) != 0,
+				.renderScaleModeMatches = (bits & (1u << 5)) != 0,
+				.dlssPresetMatchesOrIrrelevant = (bits & (1u << 6)) != 0,
+			};
+			const bool expected = bits == ((1u << 7) - 1u);
+			if (MatchesStabilizerControllerTarget(admission) != expected)
+				return false;
+		}
 
-		tracked.completedWorldFrameAfterDestinationObservation = true;
-		if (!IsStabilizerDestinationSyncReady(tracked))
-			return false;
+		for (std::uint32_t bits = 0; bits < (1u << 6); ++bits) {
+			const StabilizerDestinationSyncReadiness readiness{
+				.completedWorldFrameAfterClose = (bits & (1u << 0)) != 0,
+				.sourceCellKnown = (bits & (1u << 1)) != 0,
+				.currentCellKnown = (bits & (1u << 2)) != 0,
+				.destinationCellChanged = (bits & (1u << 3)) != 0,
+				.completedWorldFrameAfterDestinationObservation =
+					(bits & (1u << 4)) != 0,
+				.identityFallbackElapsed = (bits & (1u << 5)) != 0,
+			};
+			const bool expected =
+				readiness.completedWorldFrameAfterClose &&
+				(!readiness.sourceCellKnown ||
+					(!readiness.currentCellKnown ?
+							readiness.identityFallbackElapsed :
+						readiness.destinationCellChanged ?
+							readiness.completedWorldFrameAfterDestinationObservation :
+							readiness.identityFallbackElapsed));
+			if (IsStabilizerDestinationSyncReady(readiness) != expected)
+				return false;
+		}
 
-		tracked.destinationCellChanged = false;
-		tracked.completedWorldFrameAfterDestinationObservation = false;
-		tracked.sameCellFallbackElapsed = true;
-		if (!IsStabilizerDestinationSyncReady(tracked))
-			return false;
-
-		tracked.currentCellKnown = false;
-		return !IsStabilizerDestinationSyncReady(tracked);
+		return true;
 	}
 
 	constexpr bool CoversLifecycleMutationAdmission()
@@ -256,6 +271,60 @@ namespace
 		}
 
 		return true;
+	}
+
+	constexpr bool CoversNativeRestorePresentationAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
+			const NativeRestorePresentationAdmission admission{
+				.targetUsesVendorEvaluation = (bits & (1u << 0)) != 0,
+				.exactPhysicalNativeContinuity = (bits & (1u << 1)) != 0,
+				.exactRuntimeContract = (bits & (1u << 2)) != 0,
+			};
+			const bool expected =
+				admission.exactPhysicalNativeContinuity &&
+				(admission.exactRuntimeContract ||
+					!admission.targetUsesVendorEvaluation);
+			if (CanAcceptNativeRestorePresentation(admission) != expected)
+				return false;
+		}
+		return true;
+	}
+
+	constexpr bool CoversBoundedNativeRestorePresentationRecovery()
+	{
+		if (kNativeRestoreMaximumPhysicalRecoveryAttempts != 1u ||
+			kNativeRestoreMaximumRecoveryAttempts != 2u) {
+			return false;
+		}
+
+		for (std::uint32_t attempt = 0; attempt <= 4u; ++attempt) {
+			for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
+				const bool candidatePending = (bits & (1u << 0)) != 0;
+				const bool duplicateCycle = (bits & (1u << 1)) != 0;
+				const bool expectedSchedule =
+					attempt < kNativeRestoreMaximumRecoveryAttempts &&
+					!candidatePending &&
+					!duplicateCycle;
+				if (CanScheduleNativeRestorePresentationRecovery(
+						attempt,
+						candidatePending,
+						duplicateCycle) != expectedSchedule) {
+					return false;
+				}
+			}
+
+			const auto expected = attempt == 1u ?
+			                          NativeRestorePresentationRecoveryAction::PhysicalRetry :
+			                      attempt == 2u ?
+			                          NativeRestorePresentationRecoveryAction::LogicalFallback :
+			                          NativeRestorePresentationRecoveryAction::Exhausted;
+			if (SelectNativeRestorePresentationRecoveryAction(attempt) != expected)
+				return false;
+		}
+		return SelectNativeRestorePresentationRecoveryAction(
+				   std::numeric_limits<std::uint32_t>::max()) ==
+		       NativeRestorePresentationRecoveryAction::Exhausted;
 	}
 
 	constexpr bool CoversVendorResourcePredicates()
@@ -780,6 +849,8 @@ namespace
 	static_assert(CoversBufferedDoorRequestCoalescing());
 	static_assert(CoversLifecycleMutationAdmission());
 	static_assert(CoversDispatchAdmission());
+	static_assert(CoversNativeRestorePresentationAdmission());
+	static_assert(CoversBoundedNativeRestorePresentationRecovery());
 	static_assert(CoversVendorResourcePredicates());
 	static_assert(CoversStereoRelatchAdmission());
 	static_assert(CoversNativeRestoreSequence());

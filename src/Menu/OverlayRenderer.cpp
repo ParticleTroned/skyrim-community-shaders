@@ -1,6 +1,7 @@
 #include "OverlayRenderer.h"
 #include "BackgroundBlur.h"
 #include "HomePageRenderer.h"
+#include "OverlayPolicy.h"
 #include "ThemeManager.h"
 
 #include <dxgi.h>
@@ -531,7 +532,11 @@ bool OverlayRenderer::ShouldShowShaderCompilationStatus(const Menu& menu)
 	const auto* state = globals::state;
 	const bool hasRenderedWorldFrame =
 		state && state->lastWorldRenderFrame != std::numeric_limits<uint32_t>::max();
-	return !hasRenderedWorldFrame || menu.IsMenuSessionOpen();
+	return OverlayPolicy::ShouldShowShaderCompilationStatus({
+		.hasRenderedWorldFrame = hasRenderedWorldFrame,
+		.menuSessionOpen = menu.IsMenuSessionOpen(),
+		.performanceOverlayOpen = menu.overlayVisible,
+	});
 }
 
 std::vector<OverlayFeature*> OverlayRenderer::CollectDrawableFeatureOverlays(const Menu& menu)

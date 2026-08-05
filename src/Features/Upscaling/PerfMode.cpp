@@ -1,5 +1,4 @@
 #include "../Upscaling.h"
-#include "PerfModeRestartState.h"
 
 #include <algorithm>
 #include <cmath>
@@ -85,16 +84,13 @@ void Upscaling::PerfModeState::UpdateRestartRequiredState(const Settings& a_sett
 	if (boot.valid) {
 		// Once a boot latch exists, any setting drift that would change that latched RT sizing
 		// means the user now has a restart-required delta.
-		VRPerfModeRestartState::Refresh(
-			restartRequired,
-			VRPerfModeRestartState::ActiveBootContractInputs{
-				.bootActive = boot.active,
-				.requestedNow = requestedNow,
-				.displaySizeChanged = displaySizeChanged,
-				.eligibleNow = eligibleNow,
-				.methodMatches = boot.method == a_method,
-				.qualityModeMatches = boot.qualityMode == qualityMode,
-			});
+		restartRequired =
+			boot.active &&
+			(!requestedNow ||
+				displaySizeChanged ||
+				!eligibleNow ||
+				boot.method != a_method ||
+				boot.qualityMode != qualityMode);
 		return;
 	}
 

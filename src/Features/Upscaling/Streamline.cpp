@@ -1202,61 +1202,6 @@ int Streamline::FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t q
 	return -1;
 }
 
-bool Streamline::TryResolveExistingVRDLSSViewport(
-	DLSSViewportRole a_viewportRole,
-	uint32_t a_eyeIndex,
-	uint32_t a_qualityMode,
-	uint32_t a_dlssPreset,
-	uint32_t a_outputWidth,
-	uint32_t a_outputHeight,
-	ID3D11Resource* a_colorInput,
-	sl::ViewportHandle& a_viewport) const
-{
-	if (!globals::game::isVR || a_eyeIndex >= 2 ||
-		!initialized || !featureDLSS || !slEvaluateFeature || !slDLSSSetOptions ||
-		!globals::d3d::context || !a_colorInput || !a_outputWidth || !a_outputHeight) {
-		return false;
-	}
-	if (static_cast<uint32_t>(a_viewportRole) >= kVRDLSSViewportRoleCount)
-		return false;
-
-	const uint32_t roleIndex = GetDLSSViewportRoleIndex(a_viewportRole);
-	if (pendingDLSSResourceFreeIdleFence ||
-		pendingVRDLSSSlotRecycleIdleFences[roleIndex]) {
-		return false;
-	}
-
-	const uint32_t qualityMode = std::min<uint32_t>(
-		a_qualityMode,
-		Upscaling::kQualityModeMaxIndex);
-	const uint32_t dlssPreset = Upscaling::ClampDLSSPresetUInt(a_dlssPreset);
-	const int slotIndex = FindVRDLSSViewportSlot(
-		a_viewportRole,
-		qualityMode,
-		dlssPreset);
-	if (slotIndex < 0)
-		return false;
-
-	const auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
-	const auto& cache = slot.optionsCache[a_eyeIndex];
-	const auto resolvedViewport = slot.viewport[a_eyeIndex];
-	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(a_colorInput);
-	if (!slot.resourcesAllocated[a_eyeIndex] ||
-		!cache.valid ||
-		cache.viewport != static_cast<uint32_t>(resolvedViewport) ||
-		cache.outputWidth != a_outputWidth ||
-		cache.outputHeight != a_outputHeight ||
-		cache.qualityMode != qualityMode ||
-		cache.dlssPreset != dlssPreset ||
-		cache.isHDR != colorBuffersHDR ||
-		cache.useLegacyProfile != isRTXBelow40series) {
-		return false;
-	}
-
-	a_viewport = resolvedViewport;
-	return true;
-}
-
 int Streamline::ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportRole) const
 {
 	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
@@ -1631,23 +1576,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		diagnostics.optionsCacheLegacyProfile = optionsCache.useLegacyProfile;
 	};
 
-	const bool vendorLifecycleMutationDeferred =
-		globals::game::isVR &&
-		upscaling.ShouldDeferVRVendorLifecycleMutation();
-	if (vendorLifecycleMutationDeferred) {
-		if (!TryResolveExistingVRDLSSViewport(
-				viewportRole,
-				eyeIndex,
-				qualityMode,
-				dlssPreset,
-				outputWidth,
-				extentOut.height,
-				colorIn,
-				vp)) {
-			LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::ResolveViewport, "lifecycle-gated", diagnosticsPtr);
-			return false;
-		}
-	} else if (!ResolveDLSSViewport(viewportRole, vp, eyeIndex, qualityMode, dlssPreset, vp)) {
+	if (!ResolveDLSSViewport(viewportRole, vp, eyeIndex, qualityMode, dlssPreset, vp)) {
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::ResolveViewport, "unavailable", diagnosticsPtr);
 		return false;
 	}
@@ -1656,8 +1585,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY, diagnosticsPtr))
 		return false;
-	if (!vendorLifecycleMutationDeferred &&
-		!SetDLSSOptions(viewportRole, vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset, diagnosticsPtr))
+	if (!SetDLSSOptions(viewportRole, vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset, diagnosticsPtr))
 		return false;
 	updateOptionsCacheDiagnostics();
 
@@ -1811,47 +1739,6 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		uint32_t eyeHeightOut = (uint32_t)screenSize.y;
 		uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
-		const uint32_t contractGeneration =
-			upscaling.IsVRRenderScaleModeLatched() ?
-				upscaling.GetActiveVRRenderScaleContractGeneration() : 0u;
-		const bool vendorLifecycleMutationDeferred =
-			upscaling.ShouldDeferVRVendorLifecycleMutation();
-		if (vendorLifecycleMutationDeferred &&
-			!upscaling.AreActiveVRIntermediateTexturesCompatible(
-				Upscaling::UpscaleMethod::kDLSS,
-				eyeWidthIn,
-				eyeHeightIn,
-				eyeWidthOut,
-				eyeHeightOut,
-				a_upscalingTexture,
-				a_motionVectors,
-				a_reactiveMask,
-				a_transparencyCompositionMask,
-				contractGeneration)) {
-			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
-			return false;
-		}
-		if (vendorLifecycleMutationDeferred) {
-			const uint32_t qualityMode = std::min(
-				upscaling.GetRuntimeQualityMode(),
-				Upscaling::kQualityModeMaxIndex);
-			const uint32_t dlssPreset = upscaling.GetRuntimeDLSSPreset();
-			for (uint32_t eye = 0; eye < 2; ++eye) {
-				sl::ViewportHandle resolvedViewport{};
-				if (!TryResolveExistingVRDLSSViewport(
-						DLSSViewportRole::FullEye,
-						eye,
-						qualityMode,
-						dlssPreset,
-						eyeWidthOut,
-						eyeHeightOut,
-						upscaling.vrIntermediateColorIn[eye]->resource.get(),
-						resolvedViewport)) {
-					upscaling.dlssUpscaleOutputInSharpenerTexture = false;
-					return false;
-				}
-			}
-		}
 
 		// Split the combined stereo inputs up front. The direct left-eye path still
 		// uses the native depth buffer, but isolated-output fallback needs valid

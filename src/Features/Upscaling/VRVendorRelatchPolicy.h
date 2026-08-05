@@ -140,6 +140,51 @@ namespace VRVendorRelatchPolicy
 		       !a_state.profileTransitionPending;
 	}
 
+	struct StabilizerDestinationSyncReadiness
+	{
+		bool completedWorldFrameAfterClose = false;
+		bool sourceCellKnown = false;
+		bool currentCellKnown = false;
+		bool destinationCellChanged = false;
+		bool completedWorldFrameAfterDestinationObservation = false;
+		bool sameCellFallbackElapsed = false;
+	};
+
+	[[nodiscard]] constexpr uint32_t SelectStabilizerSourceCell(
+		uint32_t a_lastResolvedCell,
+		uint32_t a_currentPlayerCell) noexcept
+	{
+		return a_lastResolvedCell != 0 ? a_lastResolvedCell : a_currentPlayerCell;
+	}
+
+	[[nodiscard]] constexpr bool ShouldPublishStabilizerDestinationProfile(
+		bool a_settingsMatch,
+		bool a_controllerCurrentTargetMatches) noexcept
+	{
+		return !a_settingsMatch || !a_controllerCurrentTargetMatches;
+	}
+
+	[[nodiscard]] constexpr bool IsStabilizerDestinationSyncReady(
+		const StabilizerDestinationSyncReadiness& a_state) noexcept
+	{
+		if (!a_state.completedWorldFrameAfterClose)
+			return false;
+		// Startup and early save-load paths may not have a source cell to capture.
+		// Retain their existing completed-world-frame readiness contract.
+		if (!a_state.sourceCellKnown)
+			return true;
+
+		if (!a_state.currentCellKnown)
+			return false;
+
+		if (a_state.destinationCellChanged)
+			return a_state.completedWorldFrameAfterDestinationObservation;
+
+		// A real same-cell load cannot prove a destination identity change. It may
+		// fail open only after the bounded transition fallback has elapsed.
+		return a_state.sameCellFallbackElapsed;
+	}
+
 	struct LifecycleMutationAdmission
 	{
 		bool isVR = false;

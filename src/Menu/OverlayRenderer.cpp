@@ -30,6 +30,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -379,7 +380,8 @@ void OverlayRenderer::RenderOverlay(
 	HandleFontReload(menu, cachedFontSize, currentFontSize);
 	InitializeImGuiFrame(menu);
 
-	RenderShaderCompilationStatus(keyIdToString);
+	if (ShouldShowShaderCompilationStatus(menu))
+		RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
 
 	auto* editorWindow = EditorWindow::GetSingleton();
@@ -512,14 +514,24 @@ bool OverlayRenderer::ShouldSkipRendering(const Menu& menu, bool hasDrawableFeat
 	auto* abTestingManager = ABTestingManager::GetSingleton();
 	auto* renderDoc = RenderDoc::GetSingleton();
 
-	return !(shaderCache->IsCompiling() ||
+	const bool hasShaderCompilationStatus =
+		ShouldShowShaderCompilationStatus(menu) &&
+		(shaderCache->IsCompiling() || (failed && !hide) || renderDoc->IsAvailable());
+
+	return !(hasShaderCompilationStatus ||
 			 menu.IsEnabled ||
 			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 EditorWindow::GetSingleton()->open ||
 			 abTestingManager->IsEnabled() ||
-			 (failed && !hide) ||
-			 hasDrawableFeatureOverlay ||
-			 renderDoc->IsAvailable());
+			 hasDrawableFeatureOverlay);
+}
+
+bool OverlayRenderer::ShouldShowShaderCompilationStatus(const Menu& menu)
+{
+	const auto* state = globals::state;
+	const bool hasRenderedWorldFrame =
+		state && state->lastWorldRenderFrame != std::numeric_limits<uint32_t>::max();
+	return !hasRenderedWorldFrame || menu.IsMenuSessionOpen();
 }
 
 std::vector<OverlayFeature*> OverlayRenderer::CollectDrawableFeatureOverlays(const Menu& menu)

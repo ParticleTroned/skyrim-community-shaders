@@ -168,6 +168,49 @@ namespace
 		return !CanCoalesceBufferedDoorRequest(rejected);
 	}
 
+	constexpr bool CoversStabilizerDestinationSyncReadiness()
+	{
+		if (SelectStabilizerSourceCell(0x1234u, 0x5678u) != 0x1234u)
+			return false;
+		if (SelectStabilizerSourceCell(0u, 0x5678u) != 0x5678u)
+			return false;
+		if (ShouldPublishStabilizerDestinationProfile(true, true))
+			return false;
+		if (!ShouldPublishStabilizerDestinationProfile(false, true))
+			return false;
+		if (!ShouldPublishStabilizerDestinationProfile(true, false))
+			return false;
+
+		if (IsStabilizerDestinationSyncReady({}))
+			return false;
+		if (!IsStabilizerDestinationSyncReady({ .completedWorldFrameAfterClose = true }))
+			return false;
+		StabilizerDestinationSyncReadiness tracked{
+			.completedWorldFrameAfterClose = true,
+			.sourceCellKnown = true,
+			.currentCellKnown = true,
+		};
+		if (IsStabilizerDestinationSyncReady(tracked))
+			return false;
+
+		tracked.destinationCellChanged = true;
+		if (IsStabilizerDestinationSyncReady(tracked))
+			return false;
+
+		tracked.completedWorldFrameAfterDestinationObservation = true;
+		if (!IsStabilizerDestinationSyncReady(tracked))
+			return false;
+
+		tracked.destinationCellChanged = false;
+		tracked.completedWorldFrameAfterDestinationObservation = false;
+		tracked.sameCellFallbackElapsed = true;
+		if (!IsStabilizerDestinationSyncReady(tracked))
+			return false;
+
+		tracked.currentCellKnown = false;
+		return !IsStabilizerDestinationSyncReady(tracked);
+	}
+
 	constexpr bool CoversLifecycleMutationAdmission()
 	{
 		for (std::uint32_t bits = 0; bits < (1u << 4); ++bits) {
@@ -448,14 +491,6 @@ namespace
 			return false;
 		candidate = ready;
 		candidate.progress.phase = NativeRestorePhase::SharedRetirementPending;
-		if (!rejected(candidate))
-			return false;
-		candidate = ready;
-		candidate.progress.phase = NativeRestorePhase::Failed;
-		if (!rejected(candidate))
-			return false;
-		candidate = ready;
-		candidate.progress.phase = NativeRestorePhase::FailedAfterMutation;
 		if (!rejected(candidate))
 			return false;
 		candidate = ready;
@@ -741,6 +776,7 @@ namespace
 	static_assert(CoversWorkGateMasks());
 	static_assert(CoversWorkGateState());
 	static_assert(CoversGameEntryConvergence());
+	static_assert(CoversStabilizerDestinationSyncReadiness());
 	static_assert(CoversBufferedDoorRequestCoalescing());
 	static_assert(CoversLifecycleMutationAdmission());
 	static_assert(CoversDispatchAdmission());

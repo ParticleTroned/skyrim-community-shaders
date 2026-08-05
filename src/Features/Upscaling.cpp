@@ -289,6 +289,10 @@ namespace
 	std::atomic_uint64_t g_vrLoadingTransitionSerial{ 0 };
 	std::atomic_bool g_vrLoadingTransitionSerialOpen{ false };
 	std::mutex g_vrLoadingTransitionSerialMutex;
+	std::atomic_uint32_t g_vrLoadingTransitionSourceCellFormID{ 0 };
+	std::atomic_uint32_t g_vrLoadingTransitionDestinationCellFormID{ 0 };
+	std::atomic_uint32_t g_vrLoadingTransitionDestinationObservationWorldFrame{ 0 };
+	std::atomic_uint32_t g_vrLastResolvedWorldCellFormID{ 0 };
 	// A close event is authoritative before Skyrim's UI/state mirrors necessarily
 	// drop their open bit. Do not let that trailing level observation manufacture
 	// the next LoadingMenu serial; it is cleared only after a physical close has
@@ -307,12 +311,38 @@ namespace
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 
+	uint32_t GetVRPlayerCellFormID()
+	{
+		const auto* player = RE::PlayerCharacter::GetSingleton();
+		const auto* cell = player ? player->GetParentCell() : nullptr;
+		return cell ? cell->GetFormID() : 0u;
+	}
+
+	void CaptureVRLoadingTransitionSourceCell()
+	{
+		const uint32_t sourceCellFormID =
+			VRVendorRelatchPolicy::SelectStabilizerSourceCell(
+				g_vrLastResolvedWorldCellFormID.load(std::memory_order_acquire),
+				GetVRPlayerCellFormID());
+		g_vrLoadingTransitionSourceCellFormID.store(sourceCellFormID, std::memory_order_release);
+		g_vrLoadingTransitionDestinationCellFormID.store(0, std::memory_order_release);
+		g_vrLoadingTransitionDestinationObservationWorldFrame.store(0, std::memory_order_release);
+	}
+
+	void RememberVRResolvedWorldCell()
+	{
+		const uint32_t currentCellFormID = GetVRPlayerCellFormID();
+		if (currentCellFormID != 0)
+			g_vrLastResolvedWorldCellFormID.store(currentCellFormID, std::memory_order_release);
+	}
+
 	uint64_t EnsureVRLoadingTransitionSerialOpen()
 	{
 		std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
 		uint64_t serial =
 			g_vrLoadingTransitionSerial.load(std::memory_order_relaxed);
 		if (!g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed)) {
+			CaptureVRLoadingTransitionSourceCell();
 			serial = serial == std::numeric_limits<uint64_t>::max() ?
 			             1u :
 			             serial + 1u;
@@ -350,6 +380,7 @@ namespace
 	};
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
+	constexpr uint32_t kVRFpsStabilizerSameCellSyncFallbackFrames = 30;
 	constexpr uint32_t kVRFastTravelMenuHandoffFrames = 4u;
 	constexpr uint32_t kVRClosedBarterFastTravelWindowFrames = 1800u;
 	constexpr uint32_t kVROrphanBarterMenuReopenGuardFrames = 60u;
@@ -3170,6 +3201,32 @@ namespace
 		       (a_target.method != Upscaling::UpscaleMethod::kDLSS || a_dlssPreset == a_target.dlssPreset);
 	}
 
+	bool HasCurrentVRRenderScaleControllerTarget(
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		Upscaling::UpscaleMethod a_method,
+		bool a_renderScaleMode,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset)
+	{
+		if (a_controller.targetEpoch == 0)
+			return false;
+
+		const auto matches = [&](const Upscaling::VRRenderScaleProfileSnapshot& a_profile) {
+			return a_profile.valid &&
+			       a_profile.transitionEpoch == a_controller.targetEpoch &&
+			       a_profile.method == a_method &&
+			       a_profile.qualityMode == a_qualityMode &&
+			       a_profile.renderScaleModeEnabled == a_renderScaleMode &&
+			       (a_method != Upscaling::UpscaleMethod::kDLSS ||
+				   a_profile.dlssPreset == a_dlssPreset);
+		};
+
+		return matches(a_controller.requested) ||
+		       matches(a_controller.applying) ||
+		       matches(a_controller.applied) ||
+		       matches(a_controller.stable);
+	}
+
 	bool HasPendingVRFpsStabilizerRenderScaleIntent(const Upscaling& a_upscaling)
 	{
 		if (!a_upscaling.IsVRFpsStabilizerSyncActive())
@@ -4505,10 +4562,52 @@ namespace
 		if (IsMainOrLoadingMenuContextActive())
 			return false;
 
-		if (!HasCompletedVRWorldFrameAfterLatestLoad(a_state))
-			return false;
+		const bool completedWorldFrameAfterClose =
+			HasCompletedVRWorldFrameAfterLatestLoad(a_state);
+		const uint32_t sourceCellFormID =
+			g_vrLoadingTransitionSourceCellFormID.load(std::memory_order_acquire);
+		const uint32_t currentCellFormID = GetVRPlayerCellFormID();
+		const bool destinationCellChanged =
+			sourceCellFormID != 0 &&
+			currentCellFormID != 0 &&
+			currentCellFormID != sourceCellFormID;
 
-		return true;
+		bool completedWorldFrameAfterDestinationObservation = false;
+		if (destinationCellChanged) {
+			const uint32_t observedDestination =
+				g_vrLoadingTransitionDestinationCellFormID.load(std::memory_order_acquire);
+			if (observedDestination != currentCellFormID) {
+				g_vrLoadingTransitionDestinationCellFormID.store(
+					currentCellFormID,
+					std::memory_order_release);
+				g_vrLoadingTransitionDestinationObservationWorldFrame.store(
+					a_state->lastCompletedWorldRenderFrame,
+					std::memory_order_release);
+				logger::debug(
+					"[Upscaling] VR FPS Stabilizer Sync observed destination cell {:08X} after source {:08X}.",
+					currentCellFormID,
+					sourceCellFormID);
+			} else {
+				const uint32_t observationWorldFrame =
+					g_vrLoadingTransitionDestinationObservationWorldFrame.load(std::memory_order_acquire);
+				completedWorldFrameAfterDestinationObservation =
+					a_state->lastCompletedWorldRenderFrame != std::numeric_limits<uint32_t>::max() &&
+					a_state->lastCompletedWorldRenderFrame > observationWorldFrame;
+			}
+		}
+
+		const uint32_t closeElapsedFrames = GetVRLoadingTransitionCloseElapsedFrames(a_state);
+		return VRVendorRelatchPolicy::IsStabilizerDestinationSyncReady({
+			.completedWorldFrameAfterClose = completedWorldFrameAfterClose,
+			.sourceCellKnown = sourceCellFormID != 0,
+			.currentCellKnown = currentCellFormID != 0,
+			.destinationCellChanged = destinationCellChanged,
+			.completedWorldFrameAfterDestinationObservation =
+				completedWorldFrameAfterDestinationObservation,
+			.sameCellFallbackElapsed =
+				closeElapsedFrames != std::numeric_limits<uint32_t>::max() &&
+				closeElapsedFrames >= kVRFpsStabilizerSameCellSyncFallbackFrames,
+		});
 	}
 
 	uint32_t GetVRFpsStabilizerCurrentSyncFrame(const State* a_state)
@@ -16037,8 +16136,35 @@ Upscaling::VRVendorWorkGateSnapshot Upscaling::GetVRVendorWorkGateSnapshot(
 		HasPendingVRUpscalingTransition() ||
 		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
 		HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(*this);
+	snapshot.loadingTransitionSerial =
+		g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
+	snapshot.loadingTransitionSerialOpen =
+		g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire);
+	snapshot.loadingTransitionCloseFrame =
+		g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+	snapshot.loadingTransitionSourceCellFormID =
+		g_vrLoadingTransitionSourceCellFormID.load(std::memory_order_acquire);
+	snapshot.loadingTransitionDestinationCellFormID =
+		g_vrLoadingTransitionDestinationCellFormID.load(std::memory_order_acquire);
+	snapshot.loadingTransitionDestinationObservationWorldFrame =
+		g_vrLoadingTransitionDestinationObservationWorldFrame.load(std::memory_order_acquire);
+	snapshot.lastResolvedWorldCellFormID =
+		g_vrLastResolvedWorldCellFormID.load(std::memory_order_acquire);
+	snapshot.currentPlayerCellFormID = GetVRPlayerCellFormID();
+	snapshot.stabilizerPendingSyncFrame =
+		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
+	snapshot.stabilizerResolvedSyncFrame =
+		vrFpsStabilizerSyncResolvedFrame.load(std::memory_order_acquire);
+	snapshot.configuredUpscaleMethod =
+		static_cast<uint32_t>(GetConfiguredUpscaleMethodForTransition());
+	snapshot.configuredQualityMode = GetEffectiveUpscalingQualityMode();
+	snapshot.configuredRenderScaleMode = IsRenderScaleModeRequested();
+	snapshot.configuredDLSSPreset = GetEffectiveDLSSPreset();
 
 	auto* state = globals::state;
+	snapshot.lastCompletedWorldRenderFrame = state ?
+		state->lastCompletedWorldRenderFrame :
+		std::numeric_limits<uint32_t>::max();
 	auto* ui = globals::game::ui;
 	snapshot.mainMenuActive = IsMainMenuContextActive();
 	snapshot.loadingPresentationActive =
@@ -17455,6 +17581,16 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		pendingDLSSHistoryReset.store(true, std::memory_order_release);
 		return;
 	}
+	const bool postLoadControllerPublicationRequired =
+		a_origin == VRUpscalingTransitionOrigin::PostLoadSync &&
+		VRVendorRelatchPolicy::ShouldPublishStabilizerDestinationProfile(
+			true,
+			HasCurrentVRRenderScaleControllerTarget(
+				GetVRRenderScaleTransitionSnapshot(),
+				targetMethod,
+				targetRenderScaleMode,
+				qualityMode,
+				dlssPreset));
 
 	const bool stageVRUpscalingChange =
 		(bufferedStabilizerDoorHandoff &&
@@ -17462,6 +17598,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		hasPendingRequest ||
 		physicalContractRecoveryRequired ||
 		fsr4RuntimeRelatchRequired ||
+		postLoadControllerPublicationRequired ||
 		((targetMethodRenderScaleEligible && ShouldStageVRRenderScaleTransition(targetRenderScaleMode, qualityMode)) ||
 			methodRelatchRequired);
 	if (stageVRUpscalingChange && !ShouldAcceptVRUpscalingTransitionRequest(*this, a_origin))
@@ -17684,6 +17821,9 @@ uint64_t Upscaling::CanBufferVRFpsStabilizerAPITransitionProfile(uint32_t a_bloc
 		// receives the real LoadingMenu open event. A physically observed close
 		// must have occurred since the previous event before this can manufacture
 		// an edge, preventing a post-close lag from opening a phantom serial.
+		// The player pointer may already expose the destination in this ordering;
+		// prefer the last fully resolved cell as the source identity.
+		CaptureVRLoadingTransitionSourceCell();
 		loadingSerial = loadingSerial == std::numeric_limits<uint64_t>::max() ?
 		                    1u :
 		                    loadingSerial + 1u;
@@ -17909,6 +18049,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	if (!profile.HasAnyUpscalingSetting()) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
+		RememberVRResolvedWorldCell();
 		if (armPostLoadCompositorHoldAfterSync)
 			ResetVRPostLoadCompositorHold();
 		logger::warn("[Upscaling] VR FPS Stabilizer Sync found no {} upscaling profile in {}.", profileName, profiles.path.string());
@@ -17918,12 +18059,23 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	const auto currentMethod = GetConfiguredUpscaleMethodForTransition();
 	const auto target = ResolveVRFpsStabilizerTransitionTarget(*this, profile);
 
-	const bool profileMatches = MatchesVRFpsStabilizerTransitionTarget(
+	const bool settingsProfileMatches = MatchesVRFpsStabilizerTransitionTarget(
 		currentMethod,
 		IsRenderScaleModeRequested(),
 		GetEffectiveUpscalingQualityMode(),
 		GetEffectiveDLSSPreset(),
 		target);
+	const auto controller = GetVRRenderScaleTransitionSnapshot();
+	const bool controllerProfileMatches = HasCurrentVRRenderScaleControllerTarget(
+		controller,
+		target.method,
+		target.renderScaleMode,
+		target.qualityMode,
+		target.dlssPreset);
+	const bool profileMatches =
+		!VRVendorRelatchPolicy::ShouldPublishStabilizerDestinationProfile(
+			settingsProfileMatches,
+			controllerProfileMatches);
 	const auto armPostLoadCompositorHoldIfEligible = [&]() {
 		if (!armPostLoadCompositorHoldAfterSync ||
 			postLoadCompositorHoldSyncEpoch !=
@@ -17940,6 +18092,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
 
 	if (profileMatches) {
+		RememberVRResolvedWorldCell();
 		armPostLoadCompositorHoldIfEligible();
 		logger::debug(
 			"[Upscaling] VR FPS Stabilizer Sync: {} profile already matched after save-load (method={}, quality={}, dlssProfile={}, renderScale={}).",
@@ -17970,6 +18123,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		target.dlssPreset,
 		"VR FPS Stabilizer save-load sync",
 		VRUpscalingTransitionOrigin::PostLoadSync);
+	RememberVRResolvedWorldCell();
 	armPostLoadCompositorHoldIfEligible();
 }
 

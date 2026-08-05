@@ -656,8 +656,9 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Plane-normal fade depth selected progressively as trusted connected medium/deep context increases.\n"
-				"Unavailable or VR-suppressed classification retains Shallow Edge Fade Depth; this value cannot be lower than it.");
+				"Plane-normal fade depth selected progressively when connected medium/deep body evidence is available.\n"
+				"Near the VR camera a bounded shore anchor replaces suppressed remote probes; unreliable evidence retains Shallow Edge Fade Depth.\n"
+				"This value cannot be lower than Shallow Edge Fade Depth.");
 		}
 
 		ImGui::SliderFloat(
@@ -686,7 +687,8 @@ void UnifiedWater::DrawSettings()
 				"Set to 0 to use native/Open depth blending everywhere.");
 		}
 
-		ImGui::TextDisabled("Two scene-depth reads run only for unresolved shallow pixels inside the fallback distance.");
+		ImGui::TextDisabled(
+			"Up to two connection reads, plus one bounded VR shore-anchor read, run only for unresolved shallow pixels inside the fallback distance.");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Native/Open is always the base. Pixels outside the shallow range, disabled, or distance-culled skip the connectivity reads.");

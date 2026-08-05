@@ -70,6 +70,8 @@ namespace
 	constexpr int kVRNiAVObjectFlagsOffset = 0x10C;
 	constexpr int kVRBSLightNiLightOffset = 0x48;
 	constexpr int kVRBSLightCullingProcessOffset = 0x128;
+	constexpr int kVRShadowMapDescriptorPrimaryCameraOffset = 0x40;
+	constexpr int kVRNiCameraViewFrustumArrayOffset = 0x180;
 	constexpr int kMinimumPlausibleRenderPointer = 0x10000;
 	constexpr int kLowCanonicalUserAddressBits = 47;
 	constexpr int kRenderPointerAlignmentMask = static_cast<int>(alignof(void*)) - 1;
@@ -86,6 +88,10 @@ namespace
 		0x17F3550,  // NiDirectionalLight
 		0x17F4E60,  // NiAmbientLight
 		0x17F6940   // NiSpotLight
+	};
+	constexpr std::array<std::uintptr_t, 2> kVRShadowCameraVtableRVAs{
+		0x17F0CB8,  // NiCamera
+		0x19064C0   // BSCubeMapCamera
 	};
 	struct VRCullingProcessVtableSpec
 	{
@@ -263,6 +269,41 @@ namespace
 			L(invalidObject);
 			// The helper is void and has not modified the stack yet, so skipping
 			// this stale culling candidate preserves its caller's frame.
+			ret();
+		}
+	};
+
+	class VRShadowMapCameraGuard : public VRValidatedObjectGuard
+	{
+	public:
+		VRShadowMapCameraGuard(
+			const std::array<std::uintptr_t, kVRShadowCameraVtableRVAs.size()>& a_allowedCameraVtables,
+			std::uintptr_t a_continuation)
+		{
+			Xbyak::Label invalidCamera;
+
+			// ShadowmapDescriptorVR::camera[0] is consumed unconditionally by the
+			// shared shadow-map helper. A descriptor can survive cell teardown after
+			// its camera storage has been reused by another engine object, so accept
+			// only known camera layouts and their required per-eye frustum array.
+			// RAX, R10, and R11 are volatile and the original prologue overwrites RAX.
+			RequirePlausiblePointer(rdx, r10, invalidCamera);
+			mov(rax, qword[rdx + kVRShadowMapDescriptorPrimaryCameraOffset]);
+			RequireKnownVtable(rax, r10, r11, a_allowedCameraVtables, invalidCamera);
+			mov(rax, qword[rax + kVRNiCameraViewFrustumArrayOffset]);
+			RequirePlausiblePointer(rax, r10, invalidCamera);
+
+			// Reproduce the displaced six-byte prologue exactly, then continue
+			// before the native helper has released or modified any render state.
+			mov(rax, rsp);
+			push(rbp);
+			push(r12);
+			mov(r10, a_continuation);
+			jmp(r10);
+
+			L(invalidCamera);
+			// The helper is void and no native state has changed yet. Returning here
+			// skips only this stale shadow descriptor; its caller advances normally.
 			ret();
 		}
 	};
@@ -2246,6 +2287,89 @@ void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()
 	trampoline.write_branch<patchedInstructionSize>(helperEntry, guard);
 
 	logger::info("[LLF] Installed VR scene-graph culling-object guard");
+}
+
+void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
+{
+	if (!REL::Module::IsVR()) {
+		return;
+	}
+
+	if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+		logger::error("[LLF] VR shadow-map camera guard not installed: unsupported Skyrim VR runtime {}", REL::Module::get().version().string());
+		return;
+	}
+
+	// Skyrim VR 1.4.15's shared shadow-map helper trusts
+	// ShadowmapDescriptorVR::camera[0] and NiCamera::viewFrustumArray. A
+	// reproduced Windhelm-to-Dragonsreach transition supplied a stale camera
+	// whose heap storage had already become a BSXAudio2GameSound, then crashed at
+	// SkyrimVR.exe+134C61A while reading the null frustum array. The entry and
+	// layout were verified against the live, decrypted runtime image.
+	constexpr std::uintptr_t helperEntryRVA = 0x134C370;
+	constexpr std::uintptr_t cameraUseContextRVA = 0x134C5F9;
+	constexpr std::size_t patchedInstructionSize = 6;
+	constexpr std::uint8_t expectedHelperEntry[] = {
+		0x48, 0x8B, 0xC4,
+		0x55,
+		0x41, 0x54,
+		0x41, 0x55,
+		0x41, 0x56,
+		0x41, 0x57,
+		0x48, 0x8D, 0xA8, 0xE8, 0xFE, 0xFF, 0xFF,
+		0x48, 0x81, 0xEC, 0xF0, 0x01, 0x00, 0x00
+	};
+	constexpr std::uint8_t expectedCameraUseContext[] = {
+		0x48, 0x8B, 0x7B, 0x40,
+		0xC7, 0x45, 0x98, 0x00, 0x00, 0x00, 0x00,
+		0xC7, 0x45, 0x9C, 0x00, 0x00, 0x80, 0x3F,
+		0x48, 0xC7, 0x45, 0xA0, 0x00, 0x00, 0x80, 0x3F,
+		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00,
+		0x0F, 0x10, 0x00
+	};
+
+	const auto moduleBase = REL::Module::get().base();
+	const auto helperEntry = moduleBase + helperEntryRVA;
+	const auto cameraUseContext = moduleBase + cameraUseContextRVA;
+	if (!MatchesInstructions(helperEntry, expectedHelperEntry) ||
+		!MatchesInstructions(cameraUseContext, expectedCameraUseContext)) {
+		logger::error("[LLF] VR shadow-map camera guard not installed: unexpected SkyrimVR.exe instructions");
+		return;
+	}
+
+	const auto readOnlySegment = REL::Module::get().segment(REL::Segment::rdata);
+	constexpr auto requiredVtableBytes = sizeof(std::uintptr_t);
+	if (readOnlySegment.address() == 0 || readOnlySegment.size() < requiredVtableBytes) {
+		logger::error("[LLF] VR shadow-map camera guard not installed: SkyrimVR.exe segment bounds unavailable");
+		return;
+	}
+
+	const auto readOnlyStart = readOnlySegment.address();
+	const auto readOnlyLastVtable = readOnlyStart + readOnlySegment.size() - requiredVtableBytes;
+	std::array<std::uintptr_t, kVRShadowCameraVtableRVAs.size()> allowedCameraVtables{};
+	for (std::size_t i = 0; i < kVRShadowCameraVtableRVAs.size(); ++i) {
+		const auto vtable = moduleBase + kVRShadowCameraVtableRVAs[i];
+		if (vtable < readOnlyStart || vtable > readOnlyLastVtable) {
+			logger::error("[LLF] VR shadow-map camera guard not installed: camera vtable outside SkyrimVR.exe read-only segment");
+			return;
+		}
+
+		const auto firstVirtual = *reinterpret_cast<const std::uintptr_t*>(vtable);
+		if (!IsExecutableAddress(reinterpret_cast<const void*>(firstVirtual))) {
+			logger::error("[LLF] VR shadow-map camera guard not installed: invalid camera vtable");
+			return;
+		}
+		allowedCameraVtables[i] = vtable;
+	}
+
+	VRShadowMapCameraGuard code{ allowedCameraVtables, helperEntry + patchedInstructionSize };
+	code.ready();
+
+	auto& trampoline = SKSE::GetTrampoline();
+	const auto guard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
+	trampoline.write_branch<patchedInstructionSize>(helperEntry, guard);
+
+	logger::info("[LLF] Installed VR shadow-map camera guard");
 }
 
 void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()

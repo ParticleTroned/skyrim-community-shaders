@@ -485,6 +485,7 @@ public:
 
 		static void InstallVRNonShadowCasterLightFlagsGuard();
 		static void InstallVRSceneGraphCullingObjectGuard();
+		static void InstallVRShadowMapCameraGuard();
 		static void InstallVRRoomLightCullingProcessGuards();
 		static void InstallVRRoomLightEntryGuards();
 		static void InstallVREffectShaderLightGuards();
@@ -501,6 +502,7 @@ public:
 			stl::write_thunk_call<ValidLight3>(REL::RelocationID(101296, 108283).address() + REL::Relocate(0xB7, 0x7E));
 			InstallVRNonShadowCasterLightFlagsGuard();
 			InstallVRSceneGraphCullingObjectGuard();
+			InstallVRShadowMapCameraGuard();
 			InstallVRRoomLightCullingProcessGuards();
 			InstallVRRoomLightEntryGuards();
 			InstallVREffectShaderLightGuards();

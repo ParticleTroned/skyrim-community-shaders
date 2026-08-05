@@ -162,6 +162,23 @@ namespace
 			{ "relatchPending", a_gate.relatchPending },
 			{ "profileTransitionPending", a_gate.profileTransitionPending },
 			{ "gameEntryReleaseReady", a_gate.gameEntryReleaseReady },
+			{ "stabilizerSync", {
+									{ "loadingSerial", a_gate.loadingTransitionSerial },
+									{ "serialOpen", a_gate.loadingTransitionSerialOpen },
+									{ "closeFrame", a_gate.loadingTransitionCloseFrame },
+									{ "sourceCellFormID", a_gate.loadingTransitionSourceCellFormID },
+									{ "destinationCellFormID", a_gate.loadingTransitionDestinationCellFormID },
+									{ "destinationObservationWorldFrame", a_gate.loadingTransitionDestinationObservationWorldFrame },
+									{ "lastResolvedCellFormID", a_gate.lastResolvedWorldCellFormID },
+									{ "currentPlayerCellFormID", a_gate.currentPlayerCellFormID },
+									{ "lastCompletedWorldRenderFrame", a_gate.lastCompletedWorldRenderFrame },
+									{ "pendingSyncFrame", a_gate.stabilizerPendingSyncFrame },
+									{ "resolvedSyncFrame", a_gate.stabilizerResolvedSyncFrame },
+									{ "configuredUpscaleMethod", a_gate.configuredUpscaleMethod },
+									{ "configuredQualityMode", a_gate.configuredQualityMode },
+									{ "configuredRenderScaleMode", a_gate.configuredRenderScaleMode },
+									{ "configuredDLSSPreset", a_gate.configuredDLSSPreset },
+								} },
 		};
 	}
 

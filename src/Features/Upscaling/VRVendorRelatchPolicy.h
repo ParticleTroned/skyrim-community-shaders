@@ -140,6 +140,74 @@ namespace VRVendorRelatchPolicy
 		       !a_state.profileTransitionPending;
 	}
 
+	struct StabilizerDestinationSyncReadiness
+	{
+		bool completedWorldFrameAfterClose = false;
+		bool sourceCellKnown = false;
+		bool currentCellKnown = false;
+		bool destinationCellChanged = false;
+		bool completedWorldFrameAfterDestinationObservation = false;
+		bool identityFallbackElapsed = false;
+	};
+
+	[[nodiscard]] constexpr uint32_t SelectStabilizerSourceCell(
+		uint32_t a_lastResolvedCell,
+		uint32_t a_currentPlayerCell) noexcept
+	{
+		return a_lastResolvedCell != 0 ? a_lastResolvedCell : a_currentPlayerCell;
+	}
+
+	[[nodiscard]] constexpr bool ShouldPublishStabilizerDestinationProfile(
+		bool a_settingsMatch,
+		bool a_controllerCurrentTargetMatches) noexcept
+	{
+		return !a_settingsMatch || !a_controllerCurrentTargetMatches;
+	}
+
+	struct StabilizerControllerTargetAdmission
+	{
+		bool profileValid = false;
+		bool targetEpochKnown = false;
+		bool profileOwnsTargetEpoch = false;
+		bool methodMatches = false;
+		bool qualityMatches = false;
+		bool renderScaleModeMatches = false;
+		bool dlssPresetMatchesOrIrrelevant = false;
+	};
+
+	[[nodiscard]] constexpr bool MatchesStabilizerControllerTarget(
+		const StabilizerControllerTargetAdmission& a_admission) noexcept
+	{
+		return a_admission.profileValid &&
+		       a_admission.targetEpochKnown &&
+		       a_admission.profileOwnsTargetEpoch &&
+		       a_admission.methodMatches &&
+		       a_admission.qualityMatches &&
+		       a_admission.renderScaleModeMatches &&
+		       a_admission.dlssPresetMatchesOrIrrelevant;
+	}
+
+	[[nodiscard]] constexpr bool IsStabilizerDestinationSyncReady(
+		const StabilizerDestinationSyncReadiness& a_state) noexcept
+	{
+		if (!a_state.completedWorldFrameAfterClose)
+			return false;
+		// Startup and early save-load paths may not have a source cell to capture.
+		// Retain their existing completed-world-frame readiness contract.
+		if (!a_state.sourceCellKnown)
+			return true;
+
+		if (!a_state.currentCellKnown)
+			return a_state.identityFallbackElapsed;
+
+		if (a_state.destinationCellChanged)
+			return a_state.completedWorldFrameAfterDestinationObservation;
+
+		// A real same-cell load cannot prove a destination identity change. It may
+		// fail open only after the bounded transition fallback has elapsed.
+		return a_state.identityFallbackElapsed;
+	}
+
 	struct LifecycleMutationAdmission
 	{
 		bool isVR = false;
@@ -173,6 +241,62 @@ namespace VRVendorRelatchPolicy
 		return a_state.vendorEvaluationSelected &&
 		       a_state.resourcesReady &&
 		       (!a_state.isVR || !a_state.relatchInProgress);
+	}
+
+	struct NativeRestorePresentationAdmission
+	{
+		bool targetUsesVendorEvaluation = false;
+		bool exactPhysicalNativeContinuity = false;
+		bool exactRuntimeContract = false;
+	};
+
+	[[nodiscard]] constexpr bool CanAcceptNativeRestorePresentation(
+		const NativeRestorePresentationAdmission& a_admission) noexcept
+	{
+		// A vendor-evaluated 1:1 target still needs the exact runtime provider
+		// contract. A non-vendor target does not: once the controller owns a
+		// publishable native target generation and OpenVR is receiving that exact
+		// engine texture, lagging resolution-plan metadata cannot make the physical
+		// frame stale again.
+		return a_admission.exactPhysicalNativeContinuity &&
+		       (a_admission.exactRuntimeContract ||
+				   !a_admission.targetUsesVendorEvaluation);
+	}
+
+	inline constexpr std::uint32_t
+		kNativeRestoreMaximumPhysicalRecoveryAttempts = 1u;
+	inline constexpr std::uint32_t
+		kNativeRestoreMaximumRecoveryAttempts = 2u;
+
+	[[nodiscard]] constexpr bool
+	CanScheduleNativeRestorePresentationRecovery(
+		std::uint32_t a_completedAttempts,
+		bool a_candidateAlreadyPending,
+		bool a_duplicateCompositorCycle) noexcept
+	{
+		return a_completedAttempts < kNativeRestoreMaximumRecoveryAttempts &&
+		       !a_candidateAlreadyPending &&
+		       !a_duplicateCompositorCycle;
+	}
+
+	enum class NativeRestorePresentationRecoveryAction : std::uint8_t
+	{
+		PhysicalRetry,
+		LogicalFallback,
+		Exhausted
+	};
+
+	[[nodiscard]] constexpr NativeRestorePresentationRecoveryAction
+	SelectNativeRestorePresentationRecoveryAction(
+		std::uint32_t a_attempt) noexcept
+	{
+		if (a_attempt == 0 ||
+			a_attempt > kNativeRestoreMaximumRecoveryAttempts) {
+			return NativeRestorePresentationRecoveryAction::Exhausted;
+		}
+		return a_attempt <= kNativeRestoreMaximumPhysicalRecoveryAttempts ?
+		           NativeRestorePresentationRecoveryAction::PhysicalRetry :
+		           NativeRestorePresentationRecoveryAction::LogicalFallback;
 	}
 
 	[[nodiscard]] constexpr bool ShouldDeferPhysicalRelatchForStereo(

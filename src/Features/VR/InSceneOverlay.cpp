@@ -1280,19 +1280,19 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					!nativeRestoreGuardActive &&
 					upscaling.IsSubmitStageDeviceLost() &&
 					upscaling.IsVRRenderScaleModeActive()) {
-					static std::atomic_bool loggedDeviceLostSuppression{ false };
-					if (!loggedDeviceLostSuppression.exchange(true, std::memory_order_relaxed)) {
+					static std::atomic_bool loggedDeviceLostFallback{ false };
+					if (!loggedDeviceLostFallback.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(
-							"[VRRenderScale] Suppressing OpenVR submit after submit-stage device loss while render-scale is still active; original texture is not a final HMD submit target.");
+							"[VRRenderScale] Submit-stage device loss left no final-size output while render-scale is active; submitting the current original texture so the compositor cannot reuse a stale frame.");
 					}
-					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
-						"suppressed-device-lost",
-						eEye,
+					// OpenComposite ASW reprojects the last accepted texture when an
+					// application omits Submit. Never synthesize success here: make a
+					// real submission and propagate the compositor's actual result.
+					return submit(
+						"current-original-device-lost-fallback",
 						pTexture,
 						pBounds,
-						nSubmitFlags,
-						vr::VRCompositorError_None);
-					return vr::VRCompositorError_None;
+						nSubmitFlags);
 				}
 
 				// Post-load arbitration may itself span a controller change.
@@ -1319,19 +1319,29 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							"native output identity, dimensions, bounds, or content proof rejected");
 						return submitNativeRestoreKeepalive();
 					}
-					static std::atomic_bool loggedRenderScaleFallbackSuppression{ false };
-					if (!loggedRenderScaleFallbackSuppression.exchange(true, std::memory_order_relaxed)) {
+					static std::atomic_bool loggedRenderScaleCurrentFallback{ false };
+					if (!loggedRenderScaleCurrentFallback.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(
-							"[VRRenderScale] Suppressing a reduced OpenVR fallback while a transition or full-resolution menu transaction requires final-sized output.");
+							"[VRRenderScale] Final-size fallback is unavailable during a transition or menu transaction; submitting the current reduced texture so the compositor cannot reuse a stale frame.");
 					}
-					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
-						"suppressed-reduced-fallback",
-						eEye,
+					// A current reduced frame is preferable to a false-success no-submit:
+					// the latter makes ASW reproject an unrelated stale accepted frame.
+					const auto result = submit(
+						"current-reduced-fallback",
 						pTexture,
 						pBounds,
 						nSubmitFlags,
-						vr::VRCompositorError_None);
-					return vr::VRCompositorError_None;
+						0,
+						0,
+						presentationObservation.valid ?
+							&presentationObservation :
+							nullptr);
+					if (result == vr::VRCompositorError_None &&
+						presentationObservation.valid) {
+						upscaling.RecordVRRenderScalePresentationObservation(
+							presentationObservation);
+					}
+					return result;
 				}
 
 				if (postLoadReleaseToken == 0 &&

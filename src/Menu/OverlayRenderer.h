@@ -49,6 +49,15 @@ public:
 	static bool MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot);
 	static ImVec2 GetDefaultVRSettingsWindowSize(bool a_excludeShaderCompilationWindow = true);
 	static float GetDefaultVRLeftAnchorX(float a_windowWidth);
+	/**
+	 * @brief Whether the shader compilation status window belongs on-screen now.
+	 *
+	 * Startup may show status before the first world frame. Once gameplay has
+	 * started, the window is restricted to an active Community Shaders menu,
+	 * editor, or performance-overlay session so background compilation cannot
+	 * create an otherwise unrequested in-game pop-up.
+	 */
+	static bool ShouldShowShaderCompilationStatus(const Menu& menu);
 
 private:
 	static void HandleVRSetup();

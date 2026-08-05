@@ -1838,22 +1838,9 @@ public:
 	};
 	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
-	enum class VRVendorWorkGateSource : uint32_t
-	{
-		ProcessStartup = 1u << 0,
-		MainMenu = 1u << 1,
-		LoadingMenu = 1u << 2,
-		PreLoadGame = 1u << 3,
-		GameLoadNotification = 1u << 4
-	};
-	void ArmVRVendorWorkGate(VRVendorWorkGateSource a_source, const char* a_reason);
-	void ReleaseVRVendorWorkGate(VRVendorWorkGateSource a_source, const char* a_reason);
-	void ReleaseVRGameEntryVendorWorkGates(const char* a_reason);
-	void ReleaseVRGameEntryVendorWorkGatesIfConverged();
 	void NotifyGameLoadStarted(bool a_newGame, bool a_initialProcessSaveLoad);
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
-	bool ShouldDeferOrdinaryVRVendorWork() const;
 
 	// D3D11 textures
 	Texture2D* reactiveMaskTexture = nullptr;
@@ -1927,7 +1914,6 @@ public:
 	float previousHistoryPeripheryTAACenterBlendFeather = 0.05f;
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
-	std::atomic<uint32_t> vrVendorWorkGateSources{ 0 };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };

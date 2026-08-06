@@ -1975,6 +1975,7 @@ public:
 		return vrVendorWorkGateState.load(std::memory_order_acquire);
 	}
 	[[nodiscard]] uint64_t GetVRVendorEffectiveWorkGateState() const;
+	void NotifyGamePreLoadStarted(bool a_initialProcessSaveLoad);
 	void NotifyGameLoadStarted(bool a_newGame, bool a_initialProcessSaveLoad);
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
@@ -2469,6 +2470,13 @@ private:
 		Completed
 	};
 
+	enum class VRPostLoadCompositorHoldRoute : uint32_t
+	{
+		None,
+		MainMenuLoad,
+		InGameLoad
+	};
+
 	struct VRPostLoadHMDMaskRepairEvidence
 	{
 		std::atomic<uint64_t> eyeMaskState{ 0 };
@@ -2495,6 +2503,11 @@ private:
 	std::atomic<uint32_t> vrPostLoadCompositorHoldState{
 		static_cast<uint32_t>(VRPostLoadCompositorHoldState::Idle)
 	};
+	std::atomic<uint32_t> vrPostLoadCompositorHoldRoute{
+		static_cast<uint32_t>(VRPostLoadCompositorHoldRoute::None)
+	};
+	std::atomic<uint64_t> vrPostLoadCompositorHoldLoadingSerial{ 0 };
+	std::atomic_bool vrPostLoadCompositorHoldLoadingMenuClosed{ false };
 	std::atomic<uint32_t> vrPostLoadCompositorHoldStartFrame{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldStartTickMs{ 0 };
 	std::atomic<uint32_t> vrPostLoadCompositorHoldReleaseFrame{ 0 };
@@ -2516,6 +2529,8 @@ private:
 		static_cast<uint32_t>(vr::ColorSpace_Auto)
 	};
 	std::atomic<uint64_t> vrPostLoadCompositorHoldCandidateEyeMaskState{ 0 };
+	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateStableFrame{ 0 };
+	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateStableFrameCount{ 0 };
 	VRPostLoadHMDMaskRepairEvidence vrPostLoadCompositorHoldFixedRepair{};
 	VRPostLoadHMDMaskRepairEvidence vrPostLoadCompositorHoldSubmitRepair{};
 	uint64_t vrPostLoadCompositorKeepaliveOccupiedCycleToken = 0;
@@ -2543,9 +2558,19 @@ private:
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
+	[[nodiscard]] VRPostLoadCompositorHoldRoute ResolveVRPostLoadCompositorHoldRoute(
+		bool a_initialProcessSaveLoad) const;
 	void ArmVRPostLoadCompositorHold(
 		bool a_awaitingStabilizerSync = false,
-		bool a_beginInitialLoadProtection = false);
+		bool a_beginLoadProtection = false,
+		VRPostLoadCompositorHoldRoute a_route =
+			VRPostLoadCompositorHoldRoute::None,
+		uint64_t a_loadingSerial = 0);
+	[[nodiscard]] bool IsVRPostLoadCompositorHoldOwnedByLoadingSerial(
+		uint64_t a_loadingSerial) const noexcept;
+	void NotifyVRPostLoadCompositorLoadingMenuOpened(uint64_t a_loadingSerial);
+	void NotifyVRPostLoadCompositorLoadingMenuClosed(uint64_t a_loadingSerial);
+	[[nodiscard]] uint64_t GetVRPostLoadCompositorHoldTimeoutMilliseconds() const noexcept;
 	void ResetVRPostLoadCompositorHold();
 	void ResetVRPostLoadCompositorHoldLocked(
 		VRPostLoadCompositorHoldState a_finalState =

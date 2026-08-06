@@ -196,6 +196,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPreLoadGame:
 		{
 			if (errors.empty()) {
+				const bool initialProcessSaveLoad =
+					!g_initialGameEntryConsumed.load(std::memory_order_acquire);
+				globals::features::upscaling.NotifyGamePreLoadStarted(
+					initialProcessSaveLoad);
 				globals::features::upscaling.ArmVRVendorWorkGate(
 					Upscaling::VRVendorWorkGateSource::PreLoadGame,
 					"SKSE pre-load game");

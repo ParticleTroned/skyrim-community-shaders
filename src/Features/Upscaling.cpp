@@ -164,8 +164,11 @@ namespace
 	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
 	constexpr uint32_t kVRSubmitStageVendorDoorHandoffStableFrames = 2u;
-	constexpr uint32_t kVRPostLoadCompositorHoldMaxFrames = 180u;
-	constexpr uint64_t kVRPostLoadCompositorHoldMaxMilliseconds = 5000u;
+	// The route-owned wall clock begins when the source LoadingMenu closes. It
+	// bounds only CS's black presentation extension, never Skyrim's own load.
+	constexpr uint64_t kVRPostLoadCompositorMainMenuHoldMaxMilliseconds = 5500u;
+	constexpr uint64_t kVRPostLoadCompositorInGameHoldMaxMilliseconds = 2500u;
+	constexpr uint32_t kVRPostLoadCompositorStableStereoFrames = 3u;
 	constexpr uint64_t kVRPostLoadCompositorQuarantineMaxMilliseconds = 250u;
 	constexpr uint32_t kVRSubmitStageBoundsFallbackWatchdogFrames = 180u;
 	constexpr uint32_t kVRSubmitStageBoundsFallbackRecoveryBackoffFrames = 300u;
@@ -15643,8 +15646,13 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		const std::scoped_lock loadingGateLock(g_vrLoadingMenuGateReconciliationMutex);
 		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
+		auto& upscaling = globals::features::upscaling;
+		const uint64_t loadingSerial = a_event->opening ?
+		                                   EnsureVRLoadingTransitionSerialOpen() :
+		                                   g_vrLoadingTransitionSerial.load(
+											   std::memory_order_acquire);
 		if (a_event->opening) {
-			auto& upscaling = globals::features::upscaling;
+			upscaling.NotifyVRPostLoadCompositorLoadingMenuOpened(loadingSerial);
 			upscaling.ArmVRVendorWorkGate(
 				VRVendorWorkGateSource::LoadingMenu,
 				"LoadingMenu open");
@@ -15654,14 +15662,15 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 			// the menu event.
 			upscaling.AbandonDeferredVRRenderScalePostLoadRecovery(0, "LoadingMenu open");
 			g_vrLoadingTransitionPhysicalClosePending.store(false, std::memory_order_release);
-			EnsureVRLoadingTransitionSerialOpen();
 			if (globals::state &&
 				!IsBeforeFirstCompletedVRWorldFrame(globals::state) &&
 				(upscaling.IsVRInitialLoadPresentationProtectionActive() ||
-					upscaling.IsVRPostLoadCompositorHoldActive())) {
-				// A LoadingMenu which opens after any completed world frame is a
-				// door, travel, or later save-load epoch. Do not let the one-shot
-				// startup compositor policy become part of that transition.
+					upscaling.IsVRPostLoadCompositorHoldActive()) &&
+				!upscaling.IsVRPostLoadCompositorHoldOwnedByLoadingSerial(
+					loadingSerial)) {
+				// A hold armed by SKSE PreLoadGame owns exactly one LoadingMenu
+				// serial. A different serial is a door, travel, or newer load and
+				// must remain under the established transition controller.
 				upscaling.ResetVRPostLoadCompositorHold();
 			}
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
@@ -15678,6 +15687,7 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				g_vrStartupRaceSexFirstLoadCloseFrame.store(currentFrame, std::memory_order_release);
 		}
 		if (!a_event->opening) {
+			upscaling.NotifyVRPostLoadCompositorLoadingMenuClosed(loadingSerial);
 			CloseVRLoadingTransitionSerial();
 		}
 		if (!a_event->opening) {
@@ -16241,6 +16251,50 @@ void Upscaling::ReleaseVRGameEntryVendorWorkGatesIfConverged()
 	}
 }
 
+Upscaling::VRPostLoadCompositorHoldRoute
+Upscaling::ResolveVRPostLoadCompositorHoldRoute(
+	bool a_initialProcessSaveLoad) const
+{
+	const auto workGate = GetVRVendorWorkGateSnapshot(false);
+	const bool mainMenuLoad =
+		a_initialProcessSaveLoad ||
+		workGate.processStartup ||
+		workGate.mainMenu ||
+		IsMainMenuContextActive() ||
+		IsBeforeFirstCompletedVRWorldFrame(globals::state);
+	return mainMenuLoad ?
+	           VRPostLoadCompositorHoldRoute::MainMenuLoad :
+	           VRPostLoadCompositorHoldRoute::InGameLoad;
+}
+
+void Upscaling::NotifyGamePreLoadStarted(bool a_initialProcessSaveLoad)
+{
+	if (!globals::game::isVR || IsOpenCompositeUpscalingBlocked())
+		return;
+
+	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
+	const bool awaitingStabilizerSync =
+		!IsVendorUpscalingMethod(configuredMethod) &&
+		IsVRFpsStabilizerSyncActive();
+	if (!IsVendorUpscalingMethod(configuredMethod) &&
+		!awaitingStabilizerSync) {
+		ResetVRPostLoadCompositorHold();
+		return;
+	}
+
+	const auto route = ResolveVRPostLoadCompositorHoldRoute(
+		a_initialProcessSaveLoad);
+	const uint64_t loadingSerial =
+		g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire) ?
+			g_vrLoadingTransitionSerial.load(std::memory_order_acquire) :
+			0;
+	ArmVRPostLoadCompositorHold(
+		awaitingStabilizerSync,
+		true,
+		route,
+		loadingSerial);
+}
+
 void Upscaling::NotifyGameLoadStarted(
 	bool a_newGame,
 	bool a_initialProcessSaveLoad)
@@ -16272,14 +16326,35 @@ void Upscaling::NotifyGameLoadStarted(
 	g_vrStartupRaceSexNameFrame.store(0, std::memory_order_release);
 	g_vrStartupRaceSexFirstLoadCloseFrame.store(0, std::memory_order_release);
 	g_vrRaceSexTraceLastKey.store(std::numeric_limits<uint64_t>::max(), std::memory_order_release);
-	if (!a_initialProcessSaveLoad) {
+	if (a_newGame) {
 		ResetVRPostLoadCompositorHold();
-	} else {
+	} else if (
+		!IsVRInitialLoadPresentationProtectionActive() &&
+		!IsVRPostLoadCompositorHoldActive()) {
+		// PreLoadGame normally owns arming so presentation is protected before
+		// the destination can draw. Retain a post-load fallback for runtimes which
+		// omit or reorder that message; its deadline begins on the first eligible
+		// post-menu submit and is never renewed.
 		const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
-		ArmVRPostLoadCompositorHold(
+		const bool awaitingStabilizerSync =
 			!IsVendorUpscalingMethod(configuredMethod) &&
-				IsVRFpsStabilizerSyncActive(),
-			true);
+			IsVRFpsStabilizerSyncActive();
+		const auto route = ResolveVRPostLoadCompositorHoldRoute(
+			a_initialProcessSaveLoad);
+		ArmVRPostLoadCompositorHold(
+			awaitingStabilizerSync,
+			true,
+			route,
+			g_vrLoadingTransitionSerial.load(std::memory_order_acquire));
+	}
+	if (!a_newGame &&
+		!IsLoadingMenuContextActive() &&
+		IsVRInitialLoadPresentationProtectionActive()) {
+		// The close event normally starts the immutable deadline. Some SKSE/UI
+		// orderings publish PostLoadGame after the destination begins drawing but
+		// without a matching close callback, so confirm that same serial here.
+		NotifyVRPostLoadCompositorLoadingMenuClosed(
+			g_vrLoadingTransitionSerial.load(std::memory_order_acquire));
 	}
 	TraceVRRaceSexStartupSignal(a_newGame ? "notify-new-game" : "notify-post-load", true);
 	if (a_newGame && ShouldEmitUpscalingDiagLogs())
@@ -18006,18 +18081,6 @@ void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 
 void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 {
-	if (IsVRInitialLoadPresentationProtectionActive() &&
-		!IsVRPostLoadCompositorHoldActive() &&
-		vrPostLoadCompositorHoldAwaitingSyncEpoch.load(std::memory_order_acquire) != 0) {
-		const uint64_t holdStartTickMs =
-			vrPostLoadCompositorHoldStartTickMs.load(std::memory_order_acquire);
-		if (holdStartTickMs != 0 &&
-			::GetTickCount64() - holdStartTickMs >=
-				kVRPostLoadCompositorHoldMaxMilliseconds) {
-			ResetVRPostLoadCompositorHold();
-		}
-	}
-
 	const uint32_t queuedFrame = pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
 	if (queuedFrame == 0)
 		return;
@@ -33299,6 +33362,11 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 		nextEpoch = 1u;
 	vrPostLoadCompositorHoldEpoch.store(nextEpoch, std::memory_order_release);
 	vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
+	vrPostLoadCompositorHoldRoute.store(
+		static_cast<uint32_t>(VRPostLoadCompositorHoldRoute::None),
+		std::memory_order_release);
+	vrPostLoadCompositorHoldLoadingSerial.store(0, std::memory_order_release);
+	vrPostLoadCompositorHoldLoadingMenuClosed.store(false, std::memory_order_release);
 	vrPostLoadCompositorHoldStartFrame.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldStartTickMs.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldReleaseFrame.store(0, std::memory_order_release);
@@ -33321,6 +33389,8 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 		static_cast<uint32_t>(vr::ColorSpace_Auto),
 		std::memory_order_release);
 	vrPostLoadCompositorHoldCandidateEyeMaskState.store(0, std::memory_order_release);
+	vrPostLoadCompositorHoldCandidateStableFrame.store(0, std::memory_order_release);
+	vrPostLoadCompositorHoldCandidateStableFrameCount.store(0, std::memory_order_release);
 	const auto clearRepairEvidence = [](VRPostLoadHMDMaskRepairEvidence& a_evidence) {
 		a_evidence.eyeMaskState.store(0, std::memory_order_release);
 		for (uint32_t eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
@@ -33430,6 +33500,38 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 			std::memory_order_release);
 	}
 
+	if (vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire) &&
+		vrPostLoadCompositorHoldLoadingMenuClosed.load(std::memory_order_acquire)) {
+		uint64_t holdStartTickMs =
+			vrPostLoadCompositorHoldStartTickMs.load(std::memory_order_acquire);
+		if (holdStartTickMs == 0 &&
+			!IsMainMenuContextActive() &&
+			!IsLoadingMenuContextActive()) {
+			holdStartTickMs = ::GetTickCount64();
+			vrPostLoadCompositorHoldStartTickMs.store(
+				holdStartTickMs,
+				std::memory_order_release);
+		}
+
+		const uint64_t timeoutMs =
+			GetVRPostLoadCompositorHoldTimeoutMilliseconds();
+		const uint64_t currentTickMs = ::GetTickCount64();
+		if (holdStartTickMs != 0 &&
+			timeoutMs != 0 &&
+			currentTickMs - holdStartTickMs >= timeoutMs) {
+			if (ShouldEmitUpscalingDiagLogs()) {
+				logger::debug(
+					"[Upscaling][Diag] Released post-load compositor hold at stereo-cycle boundary after timeout elapsedMs={} budgetMs={}.",
+					currentTickMs - holdStartTickMs,
+					timeoutMs);
+			}
+			// Fail open only before either eye of this compositor cycle submits.
+			// Relatch and recovery ownership remain untouched and continue behind
+			// the visible world after the bounded presentation hold ends.
+			FinishVRInitialLoadPresentationProtectionLocked();
+		}
+	}
+
 	if (vrPostLoadCompositorInFlightSubmitCount == 0 &&
 		vrPostLoadCompositorCycleDrainPending.exchange(
 			false,
@@ -33441,10 +33543,12 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 
 void Upscaling::ArmVRPostLoadCompositorHold(
 	bool a_awaitingStabilizerSync,
-	bool a_beginInitialLoadProtection)
+	bool a_beginLoadProtection,
+	VRPostLoadCompositorHoldRoute a_route,
+	uint64_t a_loadingSerial)
 {
 	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
-	if ((!a_beginInitialLoadProtection &&
+	if ((!a_beginLoadProtection &&
 			!vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire)) ||
 		!globals::game::isVR ||
 		IsOpenCompositeUpscalingBlocked()) {
@@ -33452,25 +33556,23 @@ void Upscaling::ArmVRPostLoadCompositorHold(
 		return;
 	}
 
+	if (a_route == VRPostLoadCompositorHoldRoute::None) {
+		a_route = static_cast<VRPostLoadCompositorHoldRoute>(
+			vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire));
+	}
+	if (a_loadingSerial == 0) {
+		a_loadingSerial =
+			vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_acquire);
+	}
+	if (a_route == VRPostLoadCompositorHoldRoute::None) {
+		FinishVRInitialLoadPresentationProtectionLocked();
+		return;
+	}
+
 	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
-	if (!IsVendorUpscalingMethod(configuredMethod)) {
-		// The Stabilizer may intentionally start from a non-vendor profile and
-		// resolve the destination vendor contract only after the first world
-		// frame. Preserve that idle sync epoch without exposing an active hold.
-		if (a_awaitingStabilizerSync) {
-			ResetVRPostLoadCompositorHoldLocked();
-			vrPostLoadCompositorHoldAwaitingSyncEpoch.store(
-				vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire),
-				std::memory_order_release);
-			vrPostLoadCompositorHoldStartTickMs.store(
-				::GetTickCount64(),
-				std::memory_order_release);
-			vrInitialLoadPresentationProtectionActive.store(
-				true,
-				std::memory_order_release);
-		} else {
-			FinishVRInitialLoadPresentationProtectionLocked();
-		}
+	if (!IsVendorUpscalingMethod(configuredMethod) &&
+		!a_awaitingStabilizerSync) {
+		FinishVRInitialLoadPresentationProtectionLocked();
 		return;
 	}
 
@@ -33482,6 +33584,12 @@ void Upscaling::ArmVRPostLoadCompositorHold(
 		std::memory_order_release);
 	ResetVRPostLoadCompositorHoldLocked(
 		VRPostLoadCompositorHoldState::Armed);
+	vrPostLoadCompositorHoldRoute.store(
+		static_cast<uint32_t>(a_route),
+		std::memory_order_release);
+	vrPostLoadCompositorHoldLoadingSerial.store(
+		a_loadingSerial,
+		std::memory_order_release);
 	const uint64_t epoch =
 		vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire);
 	if (a_awaitingStabilizerSync)
@@ -33490,10 +33598,79 @@ void Upscaling::ArmVRPostLoadCompositorHold(
 		FinishVRInitialLoadPresentationProtectionLocked();
 		return;
 	}
-	// Publish the one-shot lifecycle only after the epoch, hold state, and hook
+	// Publish the per-load lifecycle only after the epoch, hold state, and hook
 	// are coherent. Submit can then observe either the old inactive state or the
 	// complete new transaction, never an active flag paired with an old epoch.
 	vrInitialLoadPresentationProtectionActive.store(true, std::memory_order_release);
+}
+
+bool Upscaling::IsVRPostLoadCompositorHoldOwnedByLoadingSerial(
+	uint64_t a_loadingSerial) const noexcept
+{
+	return a_loadingSerial != 0 &&
+	       static_cast<VRPostLoadCompositorHoldRoute>(
+			   vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire)) !=
+	           VRPostLoadCompositorHoldRoute::None &&
+	       vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_acquire) ==
+	           a_loadingSerial;
+}
+
+void Upscaling::NotifyVRPostLoadCompositorLoadingMenuOpened(
+	uint64_t a_loadingSerial)
+{
+	if (a_loadingSerial == 0)
+		return;
+
+	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
+	if (!vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire) ||
+		static_cast<VRPostLoadCompositorHoldRoute>(
+			vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire)) ==
+			VRPostLoadCompositorHoldRoute::None) {
+		return;
+	}
+
+	uint64_t expectedSerial = 0;
+	(void)vrPostLoadCompositorHoldLoadingSerial.compare_exchange_strong(
+		expectedSerial,
+		a_loadingSerial,
+		std::memory_order_acq_rel,
+		std::memory_order_acquire);
+}
+
+void Upscaling::NotifyVRPostLoadCompositorLoadingMenuClosed(
+	uint64_t a_loadingSerial)
+{
+	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
+	const uint64_t ownedLoadingSerial =
+		vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_acquire);
+	if (!vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire) ||
+		static_cast<VRPostLoadCompositorHoldRoute>(
+			vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire)) ==
+			VRPostLoadCompositorHoldRoute::None ||
+		ownedLoadingSerial != a_loadingSerial) {
+		return;
+	}
+
+	vrPostLoadCompositorHoldLoadingMenuClosed.store(true, std::memory_order_release);
+	uint64_t expectedStartTick = 0;
+	(void)vrPostLoadCompositorHoldStartTickMs.compare_exchange_strong(
+		expectedStartTick,
+		::GetTickCount64(),
+		std::memory_order_acq_rel,
+		std::memory_order_acquire);
+}
+
+uint64_t Upscaling::GetVRPostLoadCompositorHoldTimeoutMilliseconds() const noexcept
+{
+	switch (static_cast<VRPostLoadCompositorHoldRoute>(
+		vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire))) {
+	case VRPostLoadCompositorHoldRoute::MainMenuLoad:
+		return kVRPostLoadCompositorMainMenuHoldMaxMilliseconds;
+	case VRPostLoadCompositorHoldRoute::InGameLoad:
+		return kVRPostLoadCompositorInGameHoldMaxMilliseconds;
+	default:
+		return 0;
+	}
 }
 
 bool Upscaling::IsVRInitialLoadPresentationProtectionActive() const noexcept
@@ -33635,25 +33812,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		return false;
 	};
 	if (holdState == VRPostLoadCompositorHoldState::Idle) {
-		const uint64_t awaitingSyncEpoch =
-			vrPostLoadCompositorHoldAwaitingSyncEpoch.load(std::memory_order_acquire);
-		const uint64_t holdStartTickMs =
-			vrPostLoadCompositorHoldStartTickMs.load(std::memory_order_acquire);
-		if (awaitingSyncEpoch != 0 &&
-			holdStartTickMs != 0 &&
-			::GetTickCount64() - holdStartTickMs >=
-				kVRPostLoadCompositorHoldMaxMilliseconds) {
-			FinishVRInitialLoadPresentationProtectionLocked();
-			if (ShouldQuarantineVRPostLoadCompositorCycle(
-					a_compositorCycleToken)) {
-				a_keepaliveSubmission.quarantine = true;
-				return true;
-			}
-			return false;
-		}
-		if (hasIncompatibleOccupancyForFailOpen())
-			return quarantineCurrentCycle(false);
-		return false;
+		return resetAndFailOpen();
 	}
 
 	if (!globals::game::isVR ||
@@ -33674,6 +33833,22 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 
 	const uint32_t currentFrame = std::max(state->frameCount, 1u);
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+	const auto resetCandidateStability = [&]() {
+		vrPostLoadCompositorHoldCandidateStableFrame.store(
+			0,
+			std::memory_order_release);
+		vrPostLoadCompositorHoldCandidateStableFrameCount.store(
+			0,
+			std::memory_order_release);
+	};
+	const auto resetCandidateEvidence = [&]() {
+		vrPostLoadCompositorHoldCandidateEyeMaskState.store(
+			0,
+			std::memory_order_release);
+		for (auto& identity : vrPostLoadCompositorHoldCandidateTextureIdentity)
+			identity.store(0, std::memory_order_release);
+		resetCandidateStability();
+	};
 	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_texture->handle);
 	const uint32_t peerEyeBit = 1u << (eyeIndex ^ 1u);
 	const auto hasNonKeepalivePeerInCurrentCycle = [&]() {
@@ -33758,9 +33933,9 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			return false;
 		};
 
-	// Initial main/loading menus own a valid fade. If either reappears after the
-	// hold has started, it belongs to another load or door transition and must
-	// remain under the established transition controller.
+	// The source Main/Loading menu owns a valid fade. If either reappears after
+	// the hold has started, it belongs to another load or door transition and
+	// must remain under the established transition controller.
 	if (IsMainMenuContextActive()) {
 		if (hasIncompatibleOccupancyForFailOpen())
 			return quarantineCurrentCycle(false);
@@ -33775,8 +33950,25 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			return resetAndFailOpen();
 		return false;
 	}
-	if (IsNonLoadingVRMenuPresentationContextActive())
+	if (IsNonLoadingVRMenuPresentationContextActive()) {
+		if (hasIncompatibleOccupancyForFailOpen())
+			return quarantineCurrentCycle(false);
+		if (holdState == VRPostLoadCompositorHoldState::Armed &&
+			!vrPostLoadCompositorHoldLoadingMenuClosed.load(
+				std::memory_order_acquire)) {
+			// kPreLoadGame can arrive while Skyrim's Journal/Load menu still owns
+			// presentation. Preserve the pending save-load epoch without replacing
+			// that menu or starting the post-close deadline early.
+			return false;
+		}
 		return resetAndFailOpen();
+	}
+	if (!vrPostLoadCompositorHoldLoadingMenuClosed.load(
+			std::memory_order_acquire)) {
+		if (hasIncompatibleOccupancyForFailOpen())
+			return quarantineCurrentCycle(false);
+		return false;
+	}
 
 	if (holdState == VRPostLoadCompositorHoldState::Completed) {
 		// OpenVR, not the game-frame counter, owns Submit-cycle deduplication.
@@ -33786,11 +33978,6 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		return resetAndFailOpen();
 	}
 
-	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
-	const auto runtimeMethod = GetRuntimeUpscaleMethod();
-	if (!IsVendorUpscalingMethod(configuredMethod))
-		return resetAndFailOpen();
-
 	uint32_t holdStartFrame =
 		vrPostLoadCompositorHoldStartFrame.load(std::memory_order_acquire);
 	uint64_t holdStartTickMs =
@@ -33798,7 +33985,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 	const uint64_t currentTickMs = ::GetTickCount64();
 	if (holdStartFrame == 0) {
 		holdStartFrame = currentFrame;
-		holdStartTickMs = currentTickMs;
+		if (holdStartTickMs == 0)
+			holdStartTickMs = currentTickMs;
 		vrPostLoadCompositorHoldStartFrame.store(holdStartFrame, std::memory_order_release);
 		vrPostLoadCompositorHoldStartTickMs.store(
 			holdStartTickMs,
@@ -33807,18 +33995,17 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			static_cast<uint32_t>(VRPostLoadCompositorHoldState::Holding),
 			std::memory_order_release);
 		holdState = VRPostLoadCompositorHoldState::Holding;
-	} else if (
-		ElapsedFrames(holdStartFrame, currentFrame) >=
-			kVRPostLoadCompositorHoldMaxFrames ||
-		(holdStartTickMs != 0 &&
-			currentTickMs - holdStartTickMs >=
-				kVRPostLoadCompositorHoldMaxMilliseconds)) {
-		if (ShouldEmitUpscalingDiagLogs()) {
-			logger::debug(
-				"[Upscaling][Diag] Released post-load compositor hold after bounded timeout frame={} start={} elapsedMs={}.",
-				currentFrame,
-				holdStartFrame,
-				holdStartTickMs == 0 ? 0 : currentTickMs - holdStartTickMs);
+	}
+
+	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
+	const auto runtimeMethod = GetRuntimeUpscaleMethod();
+	if (!IsVendorUpscalingMethod(configuredMethod)) {
+		const uint64_t awaitingSyncEpoch =
+			vrPostLoadCompositorHoldAwaitingSyncEpoch.load(std::memory_order_acquire);
+		if (awaitingSyncEpoch != 0 &&
+			awaitingSyncEpoch ==
+				vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire)) {
+			return suppressWithKeepalive();
 		}
 		return resetAndFailOpen();
 	}
@@ -34276,9 +34463,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		vrPostLoadCompositorHoldReleaseFrame.store(0, std::memory_order_release);
 		vrPostLoadCompositorHoldReleaseAttemptEyeMaskState.store(0, std::memory_order_release);
 		vrPostLoadCompositorHoldReleasedEyeMaskState.store(0, std::memory_order_release);
-		vrPostLoadCompositorHoldCandidateEyeMaskState.store(0, std::memory_order_release);
-		for (auto& identity : vrPostLoadCompositorHoldCandidateTextureIdentity)
-			identity.store(0, std::memory_order_release);
+		resetCandidateEvidence();
 		vrPostLoadCompositorHoldState.store(
 			static_cast<uint32_t>(VRPostLoadCompositorHoldState::Holding),
 			std::memory_order_release);
@@ -34289,8 +34474,15 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		releaseSafetyReady &&
 		((renderScaleActive && renderScaleVendorCandidate) ||
 			(fixedVendorActive && fixedCandidate));
-	if (!candidate)
+	if (!candidate) {
+		const uint32_t stableFrame =
+			vrPostLoadCompositorHoldCandidateStableFrame.load(
+				std::memory_order_acquire);
+		if (ElapsedFrames(stableFrame, currentFrame) > 1u) {
+			resetCandidateStability();
+		}
 		return suppressWithKeepalive();
+	}
 
 	const uint32_t candidateContractGeneration =
 		renderScaleActive ? candidateGeneration : 0u;
@@ -34311,6 +34503,25 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 	const uint32_t sourceFormat = static_cast<uint32_t>(sourceDesc.Format);
 	const uint32_t sourceColorSpace = static_cast<uint32_t>(a_texture->eColorSpace);
 	if (existingCandidateMask == 0) {
+		const uint32_t stableFrameCount =
+			vrPostLoadCompositorHoldCandidateStableFrameCount.load(
+				std::memory_order_acquire);
+		const bool stableContractMatches =
+			stableFrameCount == 0 ||
+			(static_cast<UpscaleMethod>(
+				 vrPostLoadCompositorHoldCandidateMethod.load(
+					 std::memory_order_acquire)) == runtimeMethod &&
+				vrPostLoadCompositorHoldCandidateGeneration.load(
+					std::memory_order_acquire) == candidateContractGeneration &&
+				vrPostLoadCompositorHoldCandidateRenderScale.load(
+					std::memory_order_acquire) == renderScaleActive &&
+				vrPostLoadCompositorHoldCandidateTextureFormat.load(
+					std::memory_order_acquire) == sourceFormat &&
+				vrPostLoadCompositorHoldCandidateColorSpace.load(
+					std::memory_order_acquire) == sourceColorSpace);
+		if (!stableContractMatches) {
+			resetCandidateStability();
+		}
 		vrPostLoadCompositorHoldCandidateMethod.store(
 			static_cast<uint32_t>(runtimeMethod),
 			std::memory_order_release);
@@ -34338,9 +34549,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			sourceFormat ||
 		vrPostLoadCompositorHoldCandidateColorSpace.load(std::memory_order_acquire) !=
 			sourceColorSpace) {
-		vrPostLoadCompositorHoldCandidateEyeMaskState.store(0, std::memory_order_release);
-		for (auto& identity : vrPostLoadCompositorHoldCandidateTextureIdentity)
-			identity.store(0, std::memory_order_release);
+		resetCandidateEvidence();
 		return suppressWithKeepalive();
 	}
 
@@ -34349,11 +34558,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		if ((existingCandidateMask & (1u << otherEyeIndex)) != 0 &&
 			vrPostLoadCompositorHoldCandidateTextureIdentity[otherEyeIndex].load(
 				std::memory_order_acquire) != sourceIdentity) {
-			vrPostLoadCompositorHoldCandidateEyeMaskState.store(
-				0,
-				std::memory_order_release);
-			for (auto& identity : vrPostLoadCompositorHoldCandidateTextureIdentity)
-				identity.store(0, std::memory_order_release);
+			resetCandidateEvidence();
 			return suppressWithKeepalive();
 		}
 	}
@@ -34367,6 +34572,28 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			currentFrame,
 			eyeIndex);
 	if (candidateEyeMask == 0x3u) {
+		const uint32_t previousStableFrame =
+			vrPostLoadCompositorHoldCandidateStableFrame.load(
+				std::memory_order_acquire);
+		uint32_t stableFrameCount =
+			vrPostLoadCompositorHoldCandidateStableFrameCount.load(
+				std::memory_order_acquire);
+		if (previousStableFrame != currentFrame) {
+			stableFrameCount =
+				previousStableFrame != 0 &&
+						currentFrame == previousStableFrame + 1u ?
+					stableFrameCount + 1u :
+					1u;
+			vrPostLoadCompositorHoldCandidateStableFrame.store(
+				currentFrame,
+				std::memory_order_release);
+			vrPostLoadCompositorHoldCandidateStableFrameCount.store(
+				stableFrameCount,
+				std::memory_order_release);
+		}
+		if (stableFrameCount < kVRPostLoadCompositorStableStereoFrames)
+			return suppressWithKeepalive();
+
 		vrPostLoadCompositorHoldReleaseMethod.store(
 			static_cast<uint32_t>(runtimeMethod),
 			std::memory_order_release);
@@ -34404,7 +34631,7 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 		!hasExplicitHoldToken &&
 		!IsVRInitialLoadPresentationProtectionActive() &&
 		!IsVRPostLoadCompositorHoldActive()) {
-		// Once the one-shot startup scope has drained, ordinary OpenVR submits
+		// Once the per-load presentation scope has drained, ordinary OpenVR submits
 		// retain the RC141/RC145 path without compositor occupancy bookkeeping.
 		return VRPostLoadCompositorKeepaliveDisposition::NotApplicable;
 	}

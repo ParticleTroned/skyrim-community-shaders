@@ -181,7 +181,8 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 6. writes `Info.ini` with plugin and feature versions;
 7. validates metadata, every manifest entry, every blob, and the `DXBC`
    signature;
-8. prepares install-ready archives;
+8. adds FOMOD metadata that preserves the required `ShaderCache` directory in
+   Mod Organizer 2 and prepares install-ready archives;
 9. publishes output only after every requested runtime has passed the earlier
    stages.
 
@@ -282,7 +283,9 @@ Successful builder completion already proves:
 -   every blob has exactly one valid 32-character lowercase digest;
 -   the manifest contains no entry without a blob;
 -   `Info.ini` contains the requested plugin version;
--   the archive was created and is nonempty.
+-   the archive was created and is nonempty;
+-   the archive contains `ShaderCache/Info.ini`,
+    `ShaderCache/Manifest.json`, and both required FOMOD installer files.
 
 Optional operator checks:
 
@@ -320,10 +323,14 @@ contract and rerun the supported builder.
 
 ## Install and ship
 
-Each archive contains a top-level `ShaderCache` directory.
+Each archive contains a top-level `ShaderCache` directory and FOMOD metadata.
 
 -   For manual installation, it becomes
     `<Skyrim>\Data\ShaderCache`.
+-   In Mod Organizer 2, use the included FOMOD installer. Do not select
+    `ShaderCache` and choose **Set data directory** in the manual installer;
+    that strips the required directory and incorrectly exposes the cache as
+    `Data\Info.ini`, `Data\Lighting`, and so on.
 -   In a mod-manager package whose root maps to Skyrim's `Data`, place
     `ShaderCache` alongside `Shaders` and `SKSE`.
 -   Offer separate, clearly labelled SE and VR files.

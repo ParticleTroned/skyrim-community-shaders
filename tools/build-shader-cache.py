@@ -6,6 +6,9 @@ Produces the layout the runtime consumes at Data/ShaderCache/:
   ShaderCache/Info.ini
   ShaderCache/Manifest.json
 
+Packaged archives also contain a FOMOD installer that preserves the required
+ShaderCache directory when installing through Mod Organizer 2.
+
 The generated cache targets this repo's shipped distribution profile:
   - the VR feature is omitted on SE
   - shipped features are treated as active
@@ -37,6 +40,9 @@ CACHE_EXTENSIONS = frozenset({".pso", ".vso", ".cso"})
 INFO_FILE_NAME = "Info.ini"
 MANIFEST_FILE_NAME = "Manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
+FOMOD_DIRECTORY = "fomod"
+FOMOD_CONFIG_FILE_NAME = "ModuleConfig.xml"
+FOMOD_INFO_FILE_NAME = "info.xml"
 
 
 RUNTIME_EXCLUDED_FEATURES = {
@@ -843,6 +849,87 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
     return destination
 
 
+def write_fomod_installer(runtime_root: Path, runtime: str, label: str) -> Path:
+    """Stage an MO2 installer that maps ShaderCache to Data/ShaderCache."""
+    fomod_dir = runtime_root / FOMOD_DIRECTORY
+    if path_entry_exists(fomod_dir):
+        raise SystemExit(
+            f"refusing to replace unexpected cache installer directory: {fomod_dir}"
+        )
+
+    fomod_dir.mkdir()
+    display_label = safe_label(label)
+    module_name = f"Community Shaders {runtime} Shader Cache - {display_label}"
+    description = (
+        "Installs the precompiled shader cache at Data\\ShaderCache without "
+        "flattening its required directory."
+    )
+    module_config = f"""<?xml version="1.0" encoding="UTF-8"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
+  <moduleName>{module_name}</moduleName>
+  <requiredInstallFiles>
+    <folder source="{CACHE_DIRECTORY}" destination="{CACHE_DIRECTORY}" priority="0" />
+  </requiredInstallFiles>
+</config>
+"""
+    info = f"""<?xml version="1.0" encoding="UTF-8"?>
+<fomod>
+  <Name>{module_name}</Name>
+  <Author>Community Shaders Expanded</Author>
+  <Version>{display_label}</Version>
+  <Description>{description}</Description>
+</fomod>
+"""
+
+    try:
+        (fomod_dir / FOMOD_CONFIG_FILE_NAME).write_text(
+            module_config, encoding="utf-8", newline="\n"
+        )
+        (fomod_dir / FOMOD_INFO_FILE_NAME).write_text(
+            info, encoding="utf-8", newline="\n"
+        )
+    except OSError as exc:
+        shutil.rmtree(fomod_dir, ignore_errors=True)
+        raise SystemExit(f"failed to stage cache installer: {fomod_dir}") from exc
+    return fomod_dir
+
+
+def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
+    """Verify the archive is installable without flattening ShaderCache."""
+    command = [cmake, "-E", "tar", "tf", str(archive)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(
+            f"failed to inspect packaged {runtime} cache (exit {result.returncode})"
+        )
+
+    entries = {
+        entry.strip().replace("\\", "/")
+        for entry in result.stdout.splitlines()
+        if entry.strip()
+    }
+    required_entries = {
+        f"{CACHE_DIRECTORY}/{INFO_FILE_NAME}",
+        f"{CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
+        f"{FOMOD_DIRECTORY}/{FOMOD_CONFIG_FILE_NAME}",
+        f"{FOMOD_DIRECTORY}/{FOMOD_INFO_FILE_NAME}",
+    }
+    missing_entries = sorted(required_entries - entries)
+    if missing_entries:
+        raise SystemExit(
+            f"packaged {runtime} cache is missing required install entries: "
+            f"{', '.join(missing_entries)}"
+        )
+
+    flattened_entries = sorted({INFO_FILE_NAME, MANIFEST_FILE_NAME} & entries)
+    if flattened_entries:
+        raise SystemExit(
+            f"packaged {runtime} cache contains flattened metadata: "
+            f"{', '.join(flattened_entries)}"
+        )
+
+
 def prepare_cache_archive(
     runtime_root: Path,
     workspace: Path,
@@ -853,17 +940,28 @@ def prepare_cache_archive(
     """Create a validated candidate archive without changing published output."""
     archive_name = f"ShaderCache-{runtime}-{safe_label(label)}.7z"
     temporary_archive = workspace / archive_name
-    command = [
-        cmake,
-        "-E",
-        "tar",
-        "cf",
-        str(temporary_archive),
-        "--format=7zip",
-        CACHE_DIRECTORY,
-    ]
-    print("run:", " ".join(command))
-    result = subprocess.run(command, cwd=runtime_root)
+    fomod_dir = write_fomod_installer(runtime_root, runtime, label)
+    try:
+        command = [
+            cmake,
+            "-E",
+            "tar",
+            "cf",
+            str(temporary_archive),
+            "--format=7zip",
+            CACHE_DIRECTORY,
+            FOMOD_DIRECTORY,
+        ]
+        print("run:", " ".join(command))
+        result = subprocess.run(command, cwd=runtime_root)
+    finally:
+        try:
+            shutil.rmtree(fomod_dir)
+        except OSError as exc:
+            raise SystemExit(
+                f"failed to remove temporary cache installer directory: {fomod_dir}"
+            ) from exc
+
     if (
         result.returncode != 0
         or not temporary_archive.is_file()
@@ -873,6 +971,7 @@ def prepare_cache_archive(
             f"failed to package {runtime} cache (exit {result.returncode})"
         )
 
+    validate_cache_archive(temporary_archive, cmake, runtime)
     print(
         f"{runtime}: prepared {temporary_archive.name} "
         f"({temporary_archive.stat().st_size} bytes)"

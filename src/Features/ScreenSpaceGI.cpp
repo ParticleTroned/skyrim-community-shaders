@@ -978,6 +978,47 @@ void ScreenSpaceGI::SaveSettings(json& o_json)
 	}
 }
 
+RE::BSEventNotifyControl ScreenSpaceGI::MenuOpenCloseEventHandler::ProcessEvent(
+	const RE::MenuOpenCloseEvent* a_event,
+	RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
+{
+	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
+		globals::features::screenSpaceGI.queuedResetHistory.store(true, std::memory_order_release);
+
+	return RE::BSEventNotifyControl::kContinue;
+}
+
+bool ScreenSpaceGI::MenuOpenCloseEventHandler::Register()
+{
+	static MenuOpenCloseEventHandler singleton;
+	static bool registered = false;
+
+	if (registered)
+		return true;
+
+	const auto ui = globals::game::ui;
+	if (!ui) {
+		logger::error("[SSGI] UI event source not found; loading-screen history reset disabled");
+		return false;
+	}
+
+	const auto source = ui->GetEventSource<RE::MenuOpenCloseEvent>();
+	if (!source) {
+		logger::error("[SSGI] MenuOpenCloseEvent source not found; loading-screen history reset disabled");
+		return false;
+	}
+
+	source->AddEventSink(&singleton);
+	registered = true;
+	logger::info("[SSGI] Registered loading-screen history reset handler");
+	return true;
+}
+
+void ScreenSpaceGI::PostPostLoad()
+{
+	MenuOpenCloseEventHandler::Register();
+}
+
 void ScreenSpaceGI::SetupResources()
 {
 	auto renderer = globals::game::renderer;
@@ -1018,6 +1059,8 @@ void ScreenSpaceGI::SetupResources()
 	outputAoIdx = 0;
 	outputIlIdx = 0;
 	centerRectCache = {};
+	// Function-local ping-pong state survives target recreation; clear the new history before use.
+	queuedResetHistory.store(true, std::memory_order_release);
 
 	if (previousActiveResourceProfile != activeResourceProfile && globals::deferred) {
 		globals::deferred->ClearShaderCache();
@@ -1625,6 +1668,7 @@ void ScreenSpaceGI::DrawSSGI()
 		clearOutputsAndReturn();
 		return;
 	}
+	const bool loadingScreenResetQueued = queuedResetHistory.exchange(false, std::memory_order_acq_rel);
 
 	static uint64_t lastModeSignature = 0;
 	static bool hasModeSignature = false;
@@ -1657,15 +1701,11 @@ void ScreenSpaceGI::DrawSSGI()
 	hashCombine(static_cast<uint64_t>(vrStereoSyncEnabled));
 	const bool modeSignatureChanged = !hasModeSignature || modeSignature != lastModeSignature;
 	if (modeSignatureChanged) {
-		resetHistoryState("runtime mode switch");
 		lastModeSignature = modeSignature;
 		hasModeSignature = true;
 	}
-	if (skippedLastFrame) {
-		if (!modeSignatureChanged)
-			resetHistoryState("output resumed");
-		skippedLastFrame = false;
-	}
+	const bool outputResumed = skippedLastFrame;
+	skippedLastFrame = false;
 
 	if (recompileFlag) {
 		ClearShaderCache();
@@ -1674,6 +1714,12 @@ void ScreenSpaceGI::DrawSSGI()
 		clearOutputsAndReturn();
 		return;
 	}
+	if (modeSignatureChanged)
+		resetHistoryState("runtime mode switch");
+	else if (outputResumed)
+		resetHistoryState("output resumed");
+	else if (loadingScreenResetQueued)
+		resetHistoryState("loading screen closed");
 
 	if (!ShadersOK()) {
 		logger::warn("SSGI shader set incomplete for current runtime mode; skipping frame.");

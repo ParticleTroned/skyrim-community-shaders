@@ -55,6 +55,7 @@ namespace FeatureVersions
         "AdaptiveBrightness"sv,
         "CSEditor"sv,
         "CSUtility"sv,
+        "CloudShadows"sv,
         "DynamicCubemaps"sv,
         "ExtendedMaterials"sv,
         "ExtendedTranslucency"sv,

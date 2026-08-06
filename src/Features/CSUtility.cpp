@@ -14,55 +14,16 @@
 
 namespace
 {
-	constexpr float kSkyBrightnessMin = 0.0f;
-	constexpr float kSkyBrightnessMax = 2.0f;
-	constexpr float kMultiplierMin = 0.0f;
-	constexpr float kMultiplierMax = 5.0f;
 	constexpr uint32_t kMaxVanillaPointLights = 7;
 	constexpr uint32_t kFirstPointLightSceneIndex = 1;
 
-	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
-	{
-		if (!std::isfinite(a_value))
-			return a_default;
-		return std::clamp(a_value, a_min, a_max);
-	}
-
 	void SanitizeSettings(CSUtility::Settings& a_settings)
 	{
-		const CSUtility::Settings defaults{};
-		a_settings.skyBrightness = ClampFiniteOrDefault(a_settings.skyBrightness, kSkyBrightnessMin, kSkyBrightnessMax, defaults.skyBrightness);
-		a_settings.directionalLightMult = ClampFiniteOrDefault(a_settings.directionalLightMult, kMultiplierMin, kMultiplierMax, defaults.directionalLightMult);
-		a_settings.pointLightMult = ClampFiniteOrDefault(a_settings.pointLightMult, kMultiplierMin, kMultiplierMax, defaults.pointLightMult);
-		a_settings.linearPointLightMult = ClampFiniteOrDefault(a_settings.linearPointLightMult, kMultiplierMin, kMultiplierMax, defaults.linearPointLightMult);
-		a_settings.spotlightMult = ClampFiniteOrDefault(a_settings.spotlightMult, kMultiplierMin, kMultiplierMax, defaults.spotlightMult);
-		a_settings.linearSpotlightMult = ClampFiniteOrDefault(a_settings.linearSpotlightMult, kMultiplierMin, kMultiplierMax, defaults.linearSpotlightMult);
-		a_settings.omnidirectionalBulbMult = ClampFiniteOrDefault(a_settings.omnidirectionalBulbMult, kMultiplierMin, kMultiplierMax, defaults.omnidirectionalBulbMult);
-		a_settings.linearOmnidirectionalBulbMult = ClampFiniteOrDefault(a_settings.linearOmnidirectionalBulbMult, kMultiplierMin, kMultiplierMax, defaults.linearOmnidirectionalBulbMult);
 		CSUtility::SanitizeDepthOfFieldOverride(a_settings.sceneDof);
 		CSUtility::SanitizeDepthOfFieldOverride(a_settings.underwaterDof);
-		Bloom::SanitizeSettings(a_settings.bloomEnhancement);
 	}
 
-	void DrawMultiplierSlider(const char* a_label, float& a_value, float a_max = kMultiplierMax)
-	{
-		ImGui::SliderFloat(a_label, &a_value, kMultiplierMin, a_max, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	}
-
-	void DrawLinearMultiplierSlider(const char* a_label, float& a_value, bool a_linearLightingEnabled)
-	{
-		ImGui::BeginDisabled(!a_linearLightingEnabled);
-		DrawMultiplierSlider(a_label, a_value);
-		ImGui::EndDisabled();
-
-		if (!a_linearLightingEnabled) {
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enable Linear Lighting to use this multiplier.");
-			}
-		}
-	}
-
-	bool UsesPointLightTypeMultipliers(const CSUtility::Settings& a_settings)
+	bool UsesPointLightTypeMultipliers(const SharedLightingSettings& a_settings)
 	{
 		return a_settings.spotlightMult != 1.0f ||
 		       a_settings.omnidirectionalBulbMult != 1.0f;
@@ -100,59 +61,19 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CSUtility::Settings,
 	enabled,
 	fixUnderwaterFogDofBlur,
-	skyBrightness,
-	directionalLightMult,
-	pointLightMult,
-	linearPointLightMult,
-	spotlightMult,
-	linearSpotlightMult,
-	omnidirectionalBulbMult,
-	linearOmnidirectionalBulbMult,
 	sceneDof,
-	underwaterDof,
-	bloomEnhancement)
+	underwaterDof)
 
 void CSUtility::DrawSettingsHeaderControls()
 {
-	ImGui::Checkbox("Enable", &settings.enabled);
+	ImGui::Checkbox("Enable DOF Utilities", &settings.enabled);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Controls the depth-of-field overrides and underwater fog blur correction on this page.");
 }
 
 void CSUtility::DrawSettings()
 {
-	if (ImGui::BeginTabBar("##CSUtilityTabs", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem("Atmosphere")) {
-			ImGui::SliderFloat("Sky Brightness", &settings.skyBrightness, kSkyBrightnessMin, kSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::EndTabItem();
-		}
-
-		if (ImGui::BeginTabItem("Multipliers")) {
-			if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
-				const bool linearLightingEnabled = globals::features::linearLighting.settings.enableLinearLighting;
-				DrawMultiplierSlider("Global Point Lighting", settings.pointLightMult);
-				DrawLinearMultiplierSlider("Global Point Lighting (Linear)", settings.linearPointLightMult, linearLightingEnabled);
-				DrawMultiplierSlider("Spotlights", settings.spotlightMult);
-				DrawLinearMultiplierSlider("Spotlights (Linear)", settings.linearSpotlightMult, linearLightingEnabled);
-				DrawMultiplierSlider("Omnidirectional Bulbs", settings.omnidirectionalBulbMult);
-				DrawLinearMultiplierSlider("Omnidirectional Bulbs (Linear)", settings.linearOmnidirectionalBulbMult, linearLightingEnabled);
-				DrawMultiplierSlider("Directional Light Multiplier", settings.directionalLightMult);
-				ImGui::TreePop();
-			}
-			ImGui::EndTabItem();
-		}
-
-		DrawDepthOfFieldSettings();
-		DrawVanillaBloomSettings();
-
-		ImGui::EndTabBar();
-	}
-}
-
-void CSUtility::DrawVanillaBloomSettings()
-{
-	if (ImGui::BeginTabItem("Vanilla Bloom")) {
-		Bloom::DrawSettings(settings.bloomEnhancement);
-		ImGui::EndTabItem();
-	}
+	DrawDepthOfFieldSettings();
 }
 
 void CSUtility::LoadSettings(json& o_json)
@@ -177,19 +98,9 @@ void CSUtility::SetupResources()
 	vanillaPointLightCB = new ConstantBuffer(ConstantBufferDesc<VanillaPointLightData>(), "CSUtility::VanillaPointLightData");
 }
 
-CSUtility::Settings CSUtility::GetNeutralSettings()
-{
-	auto settings = Settings{};
-	settings.enabled = false;
-	return settings;
-}
-
 CSUtility::PerFrameData CSUtility::GetCommonBufferData() const
 {
-	// Adaptive Brightness owns the shared-setting composition. When CS Utility is
-	// off, it receives a neutral base so only AB's runtime adjustments remain.
-	Settings effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveCSUtilitySettings(settings, IsRuntimeEnabled());
-	SanitizeSettings(effectiveSettings);
+	const auto effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings();
 
 	PerFrameData data{};
 	data.skyBrightness = effectiveSettings.skyBrightness;
@@ -218,7 +129,10 @@ bool CSUtility::NeedsVanillaPointLightData() const
 	if (globals::features::linearLighting.IsRuntimeEnabled())
 		return true;
 
-	return IsRuntimeEnabled() && UsesPointLightTypeMultipliers(settings);
+	const auto& adaptiveBalance = globals::features::adaptiveBrightness;
+	return adaptiveBalance.loaded &&
+	       adaptiveBalance.settings.rendererControlsEnabled &&
+	       UsesPointLightTypeMultipliers(adaptiveBalance.settings.lighting);
 }
 
 void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount, uint32_t a_bufferRegister)

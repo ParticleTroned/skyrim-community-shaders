@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Bloom.h"
 #include "Buffer.h"
 #include "Feature.h"
 
@@ -25,11 +24,9 @@ struct CSUtility : Feature
 	virtual inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Core utility controls for shared renderer tuning.",
-			{ "Atmosphere brightness control",
-				"Shared lighting multiplier controls",
-				"Separate controls for linear point lights",
-				"Optional vanilla bloom enhancement controls" }
+			"Controls vanilla depth of field and corrects underwater fog blur.",
+			{ "Vanilla scene and underwater depth-of-field overrides",
+				"Underwater fog depth-of-field blur correction" }
 		};
 	}
 
@@ -67,17 +64,8 @@ struct CSUtility : Feature
 	{
 		bool enabled = true;
 		bool fixUnderwaterFogDofBlur = true;
-		float skyBrightness = 1.0f;
-		float directionalLightMult = 1.0f;
-		float pointLightMult = 1.0f;
-		float linearPointLightMult = 1.0f;
-		float spotlightMult = 1.0f;
-		float linearSpotlightMult = 1.0f;
-		float omnidirectionalBulbMult = 1.0f;
-		float linearOmnidirectionalBulbMult = 1.0f;
 		DepthOfFieldOverride sceneDof;
 		DepthOfFieldOverride underwaterDof;
-		Bloom::PresetSettings bloomEnhancement;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -116,13 +104,11 @@ struct CSUtility : Feature
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 
-	static Settings GetNeutralSettings();
 	PerFrameData GetCommonBufferData() const;
 	bool IsRuntimeEnabled() const;
 	bool NeedsVanillaPointLightData() const;
 	void UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount, uint32_t a_bufferRegister);
 	void DrawDepthOfFieldSettings();
-	void DrawVanillaBloomSettings();
 	void InstallDepthOfFieldHooks();
 
 	static void SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings);

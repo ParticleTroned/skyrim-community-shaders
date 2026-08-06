@@ -69,9 +69,10 @@ float2 ClampBloomSampleUV(float2 a_uv, uint a_eyeIndex, uint a_bloomWidth)
 	return a_uv;
 }
 
-float3 SampleVanillaBloomEnhanced(float2 a_uv)
+float3 SampleVanillaBloomEnhanced(float2 a_uv, out float3 a_vanillaBloom)
 {
 	float3 center = ImageTex.Sample(ImageSampler, a_uv).xyz;
+	a_vanillaBloom = center;
 	float3 bloom = center;
 
 	if (SharedData::bloomSettings.Enabled) {
@@ -175,21 +176,24 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
 
 	float3 bloomColor = 0;
+#		if defined(CS_UTILITY)
+	float3 vanillaBloomColor = 0;
+#		endif
 	if (Flags.x > 0.5) {
-		#if defined(CS_UTILITY)
-		bloomColor = SampleVanillaBloomEnhanced(uv);
-		#else
+#		if defined(CS_UTILITY)
+		bloomColor = SampleVanillaBloomEnhanced(uv, vanillaBloomColor);
+#		else
 		bloomColor = ImageTex.Sample(ImageSampler, uv).xyz;
-		#endif
+#		endif
 	} else {
-		#if defined(CS_UTILITY)
-		bloomColor = SampleVanillaBloomEnhanced(input.TexCoord.xy);
-		#else
+#		if defined(CS_UTILITY)
+		bloomColor = SampleVanillaBloomEnhanced(input.TexCoord.xy, vanillaBloomColor);
+#		else
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
-		#endif
+#		endif
 	}
 
-	#if defined(CS_UTILITY)
+#		if defined(CS_UTILITY)
 	if (SharedData::bloomSettings.Enabled) {
 		float bloomLuminance = Color::RGBToLuminance(bloomColor);
 		float glowThreshold = min(SharedData::bloomSettings.CompressionThreshold, SharedData::bloomSettings.CompressionCeiling);
@@ -197,12 +201,13 @@ PS_OUTPUT main(PS_INPUT input)
 		float bloomExcess = max(0.0, bloomLuminance - glowThreshold);
 		float softRange = max(glowCeiling - glowThreshold, EPSILON_DIVISION);
 		float compressedBloomLuminance = glowCeiling > 0.0 ?
-		                                    (bloomLuminance <= glowThreshold ? bloomLuminance : glowThreshold + bloomExcess / (1.0 + bloomExcess / softRange)) :
-		                                    0.0;
+		                                     (bloomLuminance <= glowThreshold ? bloomLuminance : glowThreshold + bloomExcess / (1.0 + bloomExcess / softRange)) :
+		                                     0.0;
 		float bloomScale = compressedBloomLuminance / max(bloomLuminance, EPSILON_DIVISION);
 		bloomColor *= bloomScale;
+		bloomColor = lerp(vanillaBloomColor, bloomColor, saturate(SharedData::bloomSettings.BlendWeight));
 	}
-	#endif
+#		endif
 
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 

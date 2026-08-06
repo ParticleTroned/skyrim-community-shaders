@@ -23,7 +23,9 @@
 
 #include "Deferred.h"
 #include "FeatureIssues.h"
+#include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
+#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/FoveatedCommon.h"
@@ -42,6 +44,7 @@
 #include "Menu.h"
 #include "Profiler.h"
 #include "SceneSettingsManager.h"
+#include "SettingsMigrations.h"
 #include "SettingsOverrideManager.h"
 #include "SettingsSerialization.h"
 #include "ShaderCache.h"
@@ -859,6 +862,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		const auto result = canonicalizeConfig(defaultConfigFilePath, settings);
 		if (result == SettingsSerialization::CanonicalizationResult::Error)
 			sourceConfigSafeForAutomaticSave = false;
+		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	}
 
 	// Step 2: Apply user settings on top of defaults.
@@ -868,8 +872,23 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		if (userResult == Util::FileHelpers::JsonFileReadResult::Success) {
 			if (canonicalizeConfig(configPath, userSettings) == SettingsSerialization::CanonicalizationResult::Error)
 				sourceConfigSafeForAutomaticSave = false;
-			for (const auto& [key, value] : userSettings.items())
-				settings[key] = value;
+			const auto adaptiveBalanceIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+			const bool userDefinedAdaptiveBalance =
+				adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object();
+			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings);
+			for (const auto& [key, value] : userSettings.items()) {
+				auto existingIt = settings.find(key);
+				if (!userDefinedAdaptiveBalance &&
+					key == SettingsMigrations::kAdaptiveBalanceSettingsName &&
+					existingIt != settings.end() && existingIt->is_object() && value.is_object()) {
+					// Migration can synthesize a partial destination section in an
+					// otherwise-CSUtility-only user file. Overlay that patch so it does
+					// not replace richer Adaptive Balance defaults from Settings.json.
+					existingIt->merge_patch(value);
+				} else {
+					settings[key] = value;
+				}
+			}
 			logger::info("Applied user settings from: {}", configPath.string());
 		} else if (userResult == Util::FileHelpers::JsonFileReadResult::NotFound) {
 			logger::info("No user config file found at: {}", configPath.string());
@@ -898,6 +917,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			logger::info("Applied global user override customizations");
 		}
 	}
+	SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 
 	try {
 		// Load core settings (Menu, Advanced, General, Replace Original Shaders)
@@ -977,6 +997,13 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		}
 
+		if (globals::features::adaptiveBrightness.loaded && !globals::features::csUtility.loaded) {
+			globals::features::adaptiveBrightness.loaded = false;
+			globals::features::adaptiveBrightness.failedLoadedMessage =
+				"Adaptive Balance requires CS Utility renderer support. Resolve the CS Utility load issue, then restart.";
+			logger::warn("Adaptive Balance was disabled because its CSUtility renderer dependency is unavailable");
+		}
+
 		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
 
 		const auto currentVersion = std::string{ Plugin::VERSION_LABEL };
@@ -1019,6 +1046,7 @@ void State::SaveToJson(
 	bool a_includeMissingUnloadedFeatures)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
+	SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	const auto shaderCache = globals::shaderCache;
 
 	globals::menu->Save(settings["Menu"]);
@@ -1089,6 +1117,8 @@ void State::SaveToJson(
 void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
+	if (a_loadFeatureSettings)
+		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	const auto shaderCache = globals::shaderCache;
 
 	// Load Menu settings

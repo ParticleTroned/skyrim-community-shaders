@@ -1,5 +1,6 @@
 #include "FeatureBuffer.h"
 
+#include "Features/AdaptiveBrightness.h"
 #include "Features/Bloom.h"
 #include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
@@ -138,6 +139,7 @@ namespace
 	static_assert(offsetof(BloomSettingsCB, BloomTint) == 20);
 	static_assert(offsetof(BloomSettingsCB, CompressionThreshold) == 32);
 	static_assert(offsetof(BloomSettingsCB, CompressionCeiling) == 36);
+	static_assert(offsetof(BloomSettingsCB, BlendWeight) == 40);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);
@@ -225,5 +227,5 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::terrainBlending.settings,
 		globals::features::truePBR.settings,
 		globals::features::unifiedWater.GetCommonBufferData(),
-		Bloom::GetCommonBufferData(globals::features::csUtility.settings.bloomEnhancement, globals::features::csUtility.IsRuntimeEnabled()));
+		globals::features::adaptiveBrightness.GetEffectiveBloomSettings());
 }

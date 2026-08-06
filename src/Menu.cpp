@@ -1171,6 +1171,12 @@ void Menu::DrawDisableAtBootSettings()
 				// Update the disabledFeatures map based on user interaction
 				disabledFeatures[featureName] = isDisabled;
 			}
+			if (featureName == "CSUtility" &&
+				!(disabledFeatures.contains("AdaptiveBrightness") && disabledFeatures["AdaptiveBrightness"])) {
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextWrapped("Adaptive Balance requires CSUtility renderer support. Disabling CSUtility also makes Adaptive Balance unavailable after restart.");
+				}
+			}
 		}
 	}
 }

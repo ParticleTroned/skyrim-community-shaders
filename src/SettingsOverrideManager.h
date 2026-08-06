@@ -27,6 +27,10 @@ public:
 		std::string featureName;  // Empty for global overrides
 		std::string filePath;
 		json overrideData;
+		// A source file can carry settings which were moved to another feature.
+		// Routing them through the normal feature map preserves override ordering,
+		// hashing, and user customizations without duplicating the source file.
+		std::unordered_map<std::string, json> routedFeatureData;
 		bool isGlobal = false;
 
 		// Metadata from override file
@@ -258,6 +262,12 @@ private:
 
 	std::vector<OverrideInfo> overrides;
 	std::unordered_map<std::string, std::vector<size_t>> featureOverrideMap;  // Maps feature name to override indices
+	// Renderer values retained from a legacy CSUtility.user.json remain the
+	// recoverable source until their AdaptiveBrightness destination is durable.
+	json pendingLegacyCSUtilityUserData = json::object();
+	bool legacyCSUtilityUserMigrationPending = false;
+	bool adaptiveBalanceUserMigrationApplied = false;
+	bool adaptiveBalanceUserMigrationPersisted = false;
 	bool enabled = true;
 	bool discovered = false;
 

@@ -904,7 +904,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	(void)keyFeatures;  // Not used for subtitle display
 
 	// Draw feature title and description on the left.
-	const float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), description, totalButtonWidth);
+	const float titleOnlyHeight = DrawFeatureHeader(feat->GetDisplayName(), description, totalButtonWidth);
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();

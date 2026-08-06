@@ -9,8 +9,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "CSUtility.h"
+#include "Bloom.h"
 #include "LinearLighting.h"
+#include "SharedLighting.h"
 
 namespace RE
 {
@@ -21,6 +22,7 @@ struct AdaptiveBrightness : Feature
 {
 	static constexpr std::string_view kFeatureName = "Adaptive Brightness";
 	static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
+	static constexpr std::string_view kFeatureDisplayName = "Adaptive Balance";
 
 	static AdaptiveBrightness* GetSingleton()
 	{
@@ -30,16 +32,17 @@ struct AdaptiveBrightness : Feature
 
 	virtual inline std::string GetName() override { return std::string(kFeatureName); }
 	virtual inline std::string GetShortName() override { return std::string(kFeatureShortName); }
+	virtual inline std::string GetDisplayName() override { return std::string(kFeatureDisplayName); }
 	virtual inline bool IsCore() const override { return true; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Blends scene lighting by location and exterior time of day.",
-			{ "Separate exterior day and night lighting profiles",
+			"Balances scene lighting, atmosphere and bloom by location and exterior time of day.",
+			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Optional per-location overrides with COC codes",
-				"Per-profile brightness and advanced lighting controls" }
+				"Shared light calibration and per-profile Bloom controls" }
 		};
 	}
 
@@ -63,6 +66,7 @@ struct AdaptiveBrightness : Feature
 		float brightness = 1.0f;
 		bool advanced = false;
 
+		float skyBrightnessMult = 1.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
 		float ambientMult = 1.0f;
@@ -75,6 +79,10 @@ struct AdaptiveBrightness : Feature
 		float fogAlphaGammaOffset = 0.0f;
 		float waterGammaOffset = 0.0f;
 		float vlGammaOffset = 0.0f;
+
+		bool bloomOverride = false;
+		bool bloomEnabled = false;
+		Bloom::Profile bloom;
 	};
 
 	struct LocationOverride
@@ -98,9 +106,12 @@ struct AdaptiveBrightness : Feature
 	struct Settings
 	{
 		bool enabled = true;
+		bool rendererControlsEnabled = true;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;
+		SharedLightingSettings lighting;
+		Bloom::PresetSettings bloomEnhancement;
 		std::array<ProfileSettings, kProfileCount> profiles{};
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
@@ -125,6 +136,26 @@ struct AdaptiveBrightness : Feature
 		bool valid = false;
 	};
 
+	enum class ProfileTabSurface : std::size_t
+	{
+		Advanced,
+		Essentials,
+		Count
+	};
+
+	struct ProfileTabSyncState
+	{
+		std::string key;
+		bool initialized = false;
+		int lastDrawFrame = -1;
+	};
+
+	enum class ContextSection
+	{
+		Profiles,
+		Locations
+	};
+
 	std::string globalPresetName = kDefaultGlobalPresetName;
 	std::string globalPresetStatus;
 	std::string selectedLocationOverrideKey;
@@ -134,11 +165,10 @@ struct AdaptiveBrightness : Feature
 	std::string fullPresetStatus;
 	std::string locationOverrideEditKey;
 	std::optional<ProfileSettings> locationOverrideEditProfile;
-	Profile selectedProfileTab = Profile::ExteriorDay;
-	std::string profileTabSyncKey;
-	bool profileTabSyncInitialized = false;
-	int profileTabLastDrawFrame = -1;
-	bool advancedControlsOpen = false;
+	std::array<ProfileTabSyncState, static_cast<std::size_t>(ProfileTabSurface::Count)> profileTabSyncStates{};
+	std::string contextSectionSyncKey;
+	bool contextSectionSyncInitialized = false;
+	int contextSectionLastDrawFrame = -1;
 	mutable std::unordered_map<std::string, std::size_t> locationOverrideLookup;
 	mutable LocationOverrideCache locationOverrideCache;
 	mutable uint64_t locationOverrideLookupVersion = 0;
@@ -156,7 +186,8 @@ struct AdaptiveBrightness : Feature
 	EffectiveLinearLightingSettings GetEffectiveLinearLightingSettings(
 		const LinearLighting::Settings& a_linearLightingSettings,
 		bool a_linearLightingEnabled) const;
-	CSUtility::Settings GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings, bool a_csUtilityEnabled) const;
+	SharedLightingSettings GetEffectiveSharedLightingSettings() const;
+	Bloom::Settings GetEffectiveBloomSettings() const;
 
 	struct ActiveProfileBlend
 	{
@@ -168,8 +199,9 @@ struct AdaptiveBrightness : Feature
 	LinearLighting::Settings GetNeutralLinearLightingSettings() const;
 	LinearLighting::Settings ApplyProfile(const LinearLighting::Settings& a_base, const ProfileSettings& a_profile) const;
 	LinearLighting::Settings LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const;
-	CSUtility::Settings ApplyProfile(const CSUtility::Settings& a_base, const ProfileSettings& a_profile) const;
-	CSUtility::Settings LerpSettings(const CSUtility::Settings& a_a, const CSUtility::Settings& a_b, float a_t) const;
+	SharedLightingSettings ApplyProfile(const SharedLightingSettings& a_base, const ProfileSettings& a_profile) const;
+	SharedLightingSettings LerpSettings(const SharedLightingSettings& a_a, const SharedLightingSettings& a_b, float a_t) const;
+	Bloom::Profile ResolveBloomProfile(const ProfileSettings& a_profile) const;
 	ActiveProfileBlend GetActiveProfileBlend() const;
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;
@@ -177,13 +209,20 @@ struct AdaptiveBrightness : Feature
 	float GetExteriorNightFactor() const;
 	std::string GetContextLabel() const;
 	static const char* GetProfileName(Profile a_profile);
-	std::optional<Profile> SyncSelectedProfileTabToContext();
+	std::optional<Profile> SyncSelectedProfileTabToContext(ProfileTabSurface a_surface);
+	std::optional<ContextSection> SyncContextSection();
 	void DrawExteriorTimeSettings();
-	void DrawProfile(Profile a_profile);
-	void DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle = "Profile Values", bool a_showAdvancedControls = true);
-	void SetAdvancedControlsOpen(bool a_open);
+	void DrawProfile(Profile a_profile, bool a_allowEdits = true);
+	void DrawProfileSettings(
+		ProfileSettings& a_profile,
+		const char* a_sectionTitle = "Profile Values",
+		bool a_showAdvancedControls = true,
+		bool a_allowEdits = true);
+	void DrawGlobalRendererSettings();
+	void DrawProfileBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_showPresetActions = true);
 	void DrawGlobalPresetControls();
-	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true);
+	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
+	void DrawLocationSummary();
 	void DrawLocationOverridePresetControls();
 	void DrawFullPresetControls();
 	void SaveCurrentLocationOverride();

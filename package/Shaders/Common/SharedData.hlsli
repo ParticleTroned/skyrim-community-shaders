@@ -381,7 +381,8 @@ namespace SharedData
 		float3 BloomTint;
 		float CompressionThreshold;
 		float CompressionCeiling;
-		float2 pad;
+		float BlendWeight;
+		float pad;
 	};
 
 	cbuffer FeatureData : register(b6)

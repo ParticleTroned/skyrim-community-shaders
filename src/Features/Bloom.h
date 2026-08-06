@@ -34,12 +34,19 @@ struct Bloom
 		float3 BloomTint = { 1.0f, 0.98f, 0.94f };
 		float CompressionThreshold = 0.0f;
 		float CompressionCeiling = 1.5f;
-		float2 pad{};
+		float BlendWeight = 0.0f;
+		float pad = 0.0f;
 	};
 	static_assert(sizeof(Settings) == 48);
 
 	static void DrawSettings(PresetSettings& a_settings);
-	static Settings GetCommonBufferData(const PresetSettings& a_settings, bool a_runtimeEnabled);
+	static void DrawProfileSettings(Profile& a_profile, bool a_showAdvancedControls = true);
+	static Settings GetCommonBufferData(const Profile& a_profile, float a_blendWeight);
+	static const char* GetPresetName(uint a_preset);
+	static const Profile& GetSelectedProfile(const PresetSettings& a_settings);
+	static const Profile& GetPresetProfile(const PresetSettings& a_settings, uint a_preset);
+	static Profile LerpProfiles(const Profile& a_a, const Profile& a_b, float a_t);
+	static void SanitizeProfile(Profile& a_profile);
 	static void SanitizeSettings(PresetSettings& a_settings);
 };
 

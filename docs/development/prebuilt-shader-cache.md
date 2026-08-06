@@ -34,6 +34,10 @@ filter with hlslkit's `--strip-debug-defines`: the pinned implementation also
 injects `D3DCOMPILE_AVOID_FLOW_CONTROL`, which does not match the default
 runtime compile state.
 
+Generated inventories may include `captured_shader_variants`, written by
+`.github/configs/generate-shader-configs.ps1`. The builder verifies that exact
+number of entries before compiling so a truncated capture cannot be packaged.
+
 This cache does **not** cover feature-specific shaders compiled through
 independent `Util::CompileShader` or direct `D3DCompile*` paths. Those can
 still compile on first use. A new shader path may be added only after it has a
@@ -65,6 +69,12 @@ both in the plugin and in Python. Treat it as one cross-language contract.
 
 Build on Windows. The manifest's include-path ordering intentionally depends on
 Windows path semantics so it matches the runtime exactly.
+
+Use a normal, non-elevated PowerShell. An Administrator shell is unnecessary
+and makes manually created output owned by the Administrators group. The
+builder copies validated candidates into publication staging paths beneath the
+selected output root so release files inherit that root's normal ACL even if an
+operator accidentally launches an elevated build.
 
 Install:
 
@@ -216,6 +226,28 @@ dist/shader-cache/
 Use a unique release label if old archives must remain alongside new ones.
 Reusing a label intentionally replaces an ordinary archive file of that name;
 the tool refuses linked paths and non-file destinations.
+
+## Refreshing a permutation inventory
+
+Capture from the exact runtime/profile being shipped. Disable any installed
+prebuilt shader cache, clear the runtime disk cache, select Debug or Trace log
+level, start the game, and wait until the shader compilation counter reaches
+zero before exiting. Preserve the completed `CommunityShaders.log`, then run:
+
+```powershell
+.\.github\configs\generate-shader-configs.ps1 `
+    -LogFile ".tmp\CommunityShaders-clean-trace.log" `
+    -OutputDir ".\.github\configs" `
+    -OutputName "shader-validation-vr.yaml" `
+    -Force
+```
+
+Use `shader-validation.yaml` for an SE capture. Always use the wrapper rather
+than calling `hlslkit-generate` directly. It normalizes padded logger thread
+IDs in a temporary copy and refuses to replace the inventory unless the YAML
+entry count equals the clean runtime capture count. The runtime UI can show a
+slightly larger total because completed tasks include in-session cache hits;
+only source compilation records produce distinct distributable variants.
 
 ### Build one runtime
 

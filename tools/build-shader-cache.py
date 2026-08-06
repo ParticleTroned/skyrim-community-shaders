@@ -44,6 +44,7 @@ MANIFEST_SCHEMA_VERSION = 1
 FOMOD_DIRECTORY = "fomod"
 FOMOD_CONFIG_FILE_NAME = "ModuleConfig.xml"
 FOMOD_INFO_FILE_NAME = "info.xml"
+CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
 
 
 RUNTIME_EXCLUDED_FEATURES = {
@@ -391,11 +392,50 @@ def apply_shipped_profile_defines(config: object) -> object:
     return config
 
 
+def validate_captured_variant_count(config: dict[str, object], config_path: Path) -> None:
+    """Ensure a generated inventory still contains every captured variant."""
+    expected = config.get(CAPTURED_VARIANT_COUNT_KEY)
+    if expected is None:
+        return
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 1:
+        raise SystemExit(
+            f"shader config {CAPTURED_VARIANT_COUNT_KEY} must be a positive integer: "
+            f"{config_path}"
+        )
+
+    shaders = config.get("shaders")
+    if not isinstance(shaders, list):
+        raise SystemExit(f"shader config shaders must be a list: {config_path}")
+
+    actual = 0
+    for shader in shaders:
+        if not isinstance(shader, dict):
+            raise SystemExit(f"shader config contains a malformed shader entry: {config_path}")
+        stage_configs = shader.get("configs")
+        if not isinstance(stage_configs, dict):
+            raise SystemExit(f"shader config contains malformed stage configs: {config_path}")
+        for stage_config in stage_configs.values():
+            if not isinstance(stage_config, dict):
+                raise SystemExit(f"shader config contains a malformed stage: {config_path}")
+            entries = stage_config.get("entries")
+            if not isinstance(entries, list):
+                raise SystemExit(f"shader config stage entries must be a list: {config_path}")
+            actual += len(entries)
+
+    if actual != expected:
+        raise SystemExit(
+            f"shader config inventory is incomplete: {actual} variants are present, "
+            f"but its clean runtime capture declared {expected}: {config_path}"
+        )
+    print(f"shader config: validated {actual} captured variants from {config_path}")
+
+
 def filter_profile_defines(config_path: Path, out_path: Path, yaml: Any) -> Path:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise SystemExit(f"shader config must be a YAML mapping: {config_path}")
 
+    validate_captured_variant_count(config, config_path)
     config = apply_shipped_profile_defines(config)
     out_path.write_text(
         yaml.safe_dump(config, sort_keys=False),
@@ -817,33 +857,85 @@ def archive_output_destination(out_root: Path, candidate: Path) -> Path:
     return destination
 
 
+def remove_publication_staging(path: Path) -> None:
+    """Remove only a builder-owned, unpublished staging path."""
+    if not path_entry_exists(path):
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    else:
+        shutil.rmtree(path)
+
+
+def discard_publication_staging(path: Path) -> None:
+    """Best-effort cleanup that never masks the publication failure."""
+    try:
+        remove_publication_staging(path)
+    except OSError:
+        pass
+
+
+def copy_publication_candidate(source: Path, staging: Path, label: str) -> None:
+    """Copy validated output so it inherits the destination parent's ACL.
+
+    Python creates TemporaryDirectory workspaces with a private ACL on Windows.
+    Moving a candidate out of that workspace preserves the private ACL and can
+    leave an elevated build readable only from an Administrator shell. A new
+    path created beneath the output root inherits the output root's ACL instead.
+    """
+    if path_entry_exists(staging):
+        raise SystemExit(
+            f"refusing to replace unexpected publication staging path: {staging}"
+        )
+
+    try:
+        if source.is_dir():
+            shutil.copytree(source, staging)
+        else:
+            shutil.copy2(source, staging)
+    except OSError as exc:
+        discard_publication_staging(staging)
+        raise SystemExit(f"failed to stage {label} for publication: {staging}") from exc
+
+
 def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) -> Path:
     """Publish a fully validated cache while preserving the previous cache on failure."""
     destination = runtime_output_destination(out_root, runtime)
+    staging = out_root / f".{runtime}.publishing"
+    copy_publication_candidate(candidate_root, staging, f"{runtime} cache")
+
     if not path_entry_exists(destination):
-        candidate_root.replace(destination)
+        try:
+            staging.replace(destination)
+        except OSError as exc:
+            discard_publication_staging(staging)
+            raise SystemExit(f"failed to publish {runtime} cache: {destination}") from exc
         return destination
 
     backup = candidate_root.parent / f"{runtime}.previous"
     if backup.exists():
+        discard_publication_staging(staging)
         raise RuntimeError(f"unexpected temporary backup already exists: {backup}")
 
     try:
         destination.replace(backup)
     except OSError as exc:
+        discard_publication_staging(staging)
         raise SystemExit(
             f"could not move the existing {runtime} cache aside: {destination}"
         ) from exc
     try:
-        candidate_root.replace(destination)
+        staging.replace(destination)
     except OSError as exc:
         try:
             backup.replace(destination)
         except OSError as restore_error:
+            discard_publication_staging(staging)
             raise SystemExit(
                 f"failed to publish {runtime} cache and could not restore "
                 f"the previous output: {destination}"
             ) from restore_error
+        discard_publication_staging(staging)
         raise SystemExit(f"failed to publish {runtime} cache: {destination}") from exc
 
     # The old cache remains inside the isolated temporary workspace until it
@@ -984,9 +1076,12 @@ def prepare_cache_archive(
 
 def publish_cache_archive(candidate: Path, out_root: Path, runtime: str) -> Path:
     archive_path = archive_output_destination(out_root, candidate)
+    staging = out_root / f".{candidate.name}.publishing"
+    copy_publication_candidate(candidate, staging, f"{runtime} cache archive")
     try:
-        candidate.replace(archive_path)
+        staging.replace(archive_path)
     except OSError as exc:
+        discard_publication_staging(staging)
         raise SystemExit(
             f"failed to publish {runtime} cache archive: {archive_path}"
         ) from exc

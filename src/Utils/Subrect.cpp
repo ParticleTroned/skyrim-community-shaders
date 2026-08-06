@@ -1,23 +1,30 @@
 #include "Utils/Subrect.h"
+#include "Utils/NormalizedCoordinates.h"
 
 #include <algorithm>
+#include <cmath>
 #include <imgui.h>
 
 namespace
 {
 	Util::Subrect::UVRegion ClampUV(Util::Subrect::UVRegion uv)
 	{
-		uv.x = std::clamp(uv.x, 0.0f, 1.0f);
-		uv.y = std::clamp(uv.y, 0.0f, 1.0f);
-		uv.w = std::clamp(uv.w, 0.01f, 1.0f);
-		uv.h = std::clamp(uv.h, 0.01f, 1.0f);
+		if (!std::isfinite(uv.x))
+			uv.x = 0.0f;
+		if (!std::isfinite(uv.y))
+			uv.y = 0.0f;
+		if (!std::isfinite(uv.w))
+			uv.w = 1.0f;
+		if (!std::isfinite(uv.h))
+			uv.h = 1.0f;
 
-		if (uv.x + uv.w > 1.0f) {
-			uv.w = 1.0f - uv.x;
-		}
-		if (uv.y + uv.h > 1.0f) {
-			uv.h = 1.0f - uv.y;
-		}
+		constexpr double minimumExtent = 0.01;
+		const double x = std::clamp(static_cast<double>(uv.x), 0.0, 1.0 - minimumExtent);
+		const double y = std::clamp(static_cast<double>(uv.y), 0.0, 1.0 - minimumExtent);
+		uv.x = static_cast<float>(x);
+		uv.y = static_cast<float>(y);
+		uv.w = static_cast<float>(std::clamp(static_cast<double>(uv.w), minimumExtent, 1.0 - x));
+		uv.h = static_cast<float>(std::clamp(static_cast<double>(uv.h), minimumExtent, 1.0 - y));
 
 		return uv;
 	}
@@ -44,21 +51,39 @@ namespace
 		return { uv.x, uv.y, uv.w, uv.h };
 	}
 
-	Util::Subrect::PixelRegion UVToPixelRegion(const Util::Subrect::UVRegion& uv, uint32_t width, uint32_t height)
+	bool IsFullFrame(const Util::Subrect::UVRegion& uv)
 	{
-		Util::Subrect::PixelRegion result;
-		result.x = std::min<uint32_t>(width - 1, static_cast<uint32_t>(uv.x * width));
-		result.y = std::min<uint32_t>(height - 1, static_cast<uint32_t>(uv.y * height));
-		result.w = std::max<uint32_t>(1, static_cast<uint32_t>(uv.w * width));
-		result.h = std::max<uint32_t>(1, static_cast<uint32_t>(uv.h * height));
-		result.w = std::min<uint32_t>(result.w, width - result.x);
-		result.h = std::min<uint32_t>(result.h, height - result.y);
-		return result;
+		constexpr float epsilon = 1.0e-6f;
+		return std::abs(uv.x) <= epsilon &&
+		       std::abs(uv.y) <= epsilon &&
+		       std::abs(uv.w - 1.0f) <= epsilon &&
+		       std::abs(uv.h - 1.0f) <= epsilon;
 	}
+
 }
 
 namespace Util::Subrect
 {
+	PixelRegion ResolvePixelRegion(const UVRegion& uv, uint32_t width, uint32_t height)
+	{
+		if (width == 0 || height == 0) {
+			return { 0, 0, 0, 0 };
+		}
+
+		const UVRegion normalized = ClampUV(uv);
+		const uint32_t left = NormalizedCoordinates::ResolvePixelBoundary(normalized.x, width);
+		const uint32_t top = NormalizedCoordinates::ResolvePixelBoundary(normalized.y, height);
+		const uint32_t right = NormalizedCoordinates::ResolvePixelBoundary(normalized.x + normalized.w, width);
+		const uint32_t bottom = NormalizedCoordinates::ResolvePixelBoundary(normalized.y + normalized.h, height);
+
+		PixelRegion result;
+		result.x = std::min(width - 1, left);
+		result.y = std::min(height - 1, top);
+		result.w = std::clamp(right, result.x + 1, width) - result.x;
+		result.h = std::clamp(bottom, result.y + 1, height) - result.y;
+		return result;
+	}
+
 	void Controller::LoadSettings(const json& a_json)
 	{
 		if (a_json.contains("CropX"))
@@ -116,6 +141,37 @@ namespace Util::Subrect
 	void Controller::SeedDefaultPresets(std::vector<Preset> defaults)
 	{
 		seededDefaults = std::move(defaults);
+		if (seededDefaults.empty()) {
+			return;
+		}
+
+		const bool hasLegacyFullFramePlaceholder =
+			presets.size() == 1 &&
+			presets.front().name == "Full Frame" &&
+			IsFullFrame(presets.front().uv);
+		if (!presets.empty() && !hasLegacyFullFramePlaceholder) {
+			return;
+		}
+
+		const UVRegion previousUV = currentUV;
+		const int previousPresetIndex = selectedPresetIndex;
+		presets = seededDefaults;
+		if (!hasLegacyFullFramePlaceholder) {
+			currentUV = presets.front().uv;
+			selectedPresetIndex = 0;
+		} else if (previousPresetIndex == 0 && IsFullFrame(previousUV)) {
+			const auto fullFrame = std::find_if(presets.begin(), presets.end(), [](const Preset& preset) {
+				return IsFullFrame(preset.uv);
+			});
+			selectedPresetIndex = fullFrame != presets.end() ?
+			                          static_cast<int>(fullFrame - presets.begin()) :
+			                          -1;
+			currentUV = previousUV;
+		} else {
+			currentUV = previousUV;
+			selectedPresetIndex = -1;
+		}
+		ClampCurrentUV();
 	}
 
 	void Controller::DrawEditor(ID3D11ShaderResourceView* previewSrv, ID3D11Texture2D* previewTexture, float uvVisibleWidth, float uvStartX, ImDrawCallback imageRenderCallback)
@@ -123,8 +179,8 @@ namespace Util::Subrect
 		// Hosts that render without first calling LoadSettings would otherwise
 		// see an empty presets vector and the combo would mislabel as "(Custom)".
 		EnsureDefaultPreset();
-		if (selectedPresetIndex < 0 || selectedPresetIndex >= static_cast<int>(presets.size())) {
-			selectedPresetIndex = 0;
+		if (selectedPresetIndex < -1 || selectedPresetIndex >= static_cast<int>(presets.size())) {
+			selectedPresetIndex = -1;
 		}
 
 		std::string currentPreview =
@@ -250,7 +306,7 @@ namespace Util::Subrect
 
 	PixelRegion Controller::GetPixelRegion(uint32_t width, uint32_t height) const
 	{
-		return UVToPixelRegion(currentUV, width, height);
+		return ResolvePixelRegion(currentUV, width, height);
 	}
 
 	void Controller::EnsureDefaultPreset()

@@ -1,3 +1,4 @@
+#include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Globals.h"
@@ -364,8 +365,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					previousCycleState >> 1u;
 				const uint64_t compositorCycleToken =
 					previousCompositorCycleToken == kOpenVRCycleTokenMax ?
-					    1u :
-					    previousCompositorCycleToken + 1u;
+						1u :
+						previousCompositorCycleToken + 1u;
 				auto& upscaling = globals::features::upscaling;
 				// Service promotion before atomically publishing the token and
 				// resulting policy. A concurrent Submit keeps the complete old
@@ -477,7 +478,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							  uint64_t a_postLoadKeepaliveToken = 0,
 							  const Upscaling::VRRenderScalePresentationObservation* a_probeObservation = nullptr,
 							  Upscaling::VRPostLoadCompositorKeepaliveDisposition* a_keepaliveDisposition = nullptr,
-							  bool a_allowPostLoadScopeRebase = false) {
+							  bool a_allowPostLoadScopeRebase = false,
+							  bool a_allowScreenshotCapture = true) {
 				(void)a_probeObservation;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				const uint64_t probeSequence = upscaling.BeginVRLoadPresentationProbeSubmit(
@@ -490,15 +492,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 #endif
 				vr::EVRCompositorError result;
 				winrt::com_ptr<ID3D11Texture2D> submitTextureLifetime;
+				const bool observeScreenshot =
+					a_allowScreenshotCapture &&
+					globals::features::screenshotFeature.HasPendingCapture();
 				{
 					const std::shared_lock renderTargetReadLock(
 						Hooks::GetRenderTargetRecreationMutex());
-					if (a_texture &&
+					if (observeScreenshot &&
+						a_texture &&
 						a_texture->handle &&
 						a_texture->eType == vr::TextureType_DirectX) {
-						submitTextureLifetime.copy_from(
-							static_cast<ID3D11Texture2D*>(
-								a_texture->handle));
+						submitTextureLifetime = ResolveSubmitTexture2D(a_texture->handle);
 					}
 					result = func(
 						_this,
@@ -506,6 +510,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						a_texture,
 						a_bounds,
 						a_submitFlags);
+					if (result == vr::VRCompositorError_None &&
+						observeScreenshot &&
+						submitTextureLifetime &&
+						globals::features::screenshotFeature.HasPendingCapture()) {
+						globals::features::screenshotFeature.ObserveAcceptedVRSubmit(
+							compositorCycleToken,
+							eEye,
+							submitTextureLifetime.get(),
+							a_bounds,
+							a_texture->eColorSpace);
+					}
 				}
 				uint64_t completionScopeEpoch =
 					postLoadSubmitScopeEpoch;
@@ -587,8 +602,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				// successful no-submit result.
 				if (!a_keepalive.IsValid()) {
 					return a_allowCandidateFallback ?
-						submitCandidateFallback() :
-						vr::VRCompositorError_RequestFailed;
+					           submitCandidateFallback() :
+					           vr::VRCompositorError_RequestFailed;
 				}
 
 				Upscaling::VRPostLoadCompositorKeepaliveDisposition
@@ -603,7 +618,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					0,
 					a_keepalive.token,
 					nullptr,
-					&keepaliveDisposition);
+					&keepaliveDisposition,
+					false,
+					false);
 				switch (keepaliveDisposition) {
 				case Upscaling::VRPostLoadCompositorKeepaliveDisposition::
 					Accepted:
@@ -616,8 +633,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					// OpenVR rejected the keepalive before either eye was
 					// accepted. Fail open once to the exact candidate.
 					return a_allowCandidateFallback ?
-						submitCandidateFallback() :
-						keepaliveResult;
+					           submitCandidateFallback() :
+					           keepaliveResult;
 				default:
 					// Transient, peer-satisfied, and interface-level failures
 					// must not issue a second, visually different Submit.
@@ -715,8 +732,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				}
 			}
 			const auto rejectNativeRestoreCycle = [&](
-													 vr::EVRCompositorError a_result,
-													 uint64_t a_postLoadKeepaliveToken = 0) {
+													  vr::EVRCompositorError a_result,
+													  uint64_t a_postLoadKeepaliveToken = 0) {
 				nativeRestoreCycle.path =
 					VRNativeRestoreCyclePresentationPath::Rejected;
 				nativeRestoreCycle.rejectionResult =
@@ -844,8 +861,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							freshObservation);
 				};
 			const auto submitLatchedNativeRestoreCycle = [&](
-														 const char* a_path,
-														 bool a_recordStrictObservation = false) {
+															 const char* a_path,
+															 bool a_recordStrictObservation = false) {
 				if (nativeRestoreCycle.path ==
 					VRNativeRestoreCyclePresentationPath::Rejected) {
 					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
@@ -896,7 +913,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						&presentationObservation :
 						nullptr,
 					nullptr,
-					nativeRestoreCycle.postLoadKeepaliveToken == 0);
+					nativeRestoreCycle.postLoadKeepaliveToken == 0,
+					nativeRestoreCycle.path == VRNativeRestoreCyclePresentationPath::Native);
 				if (result == vr::VRCompositorError_None &&
 					a_recordStrictObservation &&
 					presentationObservation.valid) {
@@ -955,7 +973,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					0,
 					nullptr,
 					nullptr,
-					true);
+					true,
+					false);
 				if (result != vr::VRCompositorError_None) {
 					rejectNativeRestoreCycle(result);
 					upscaling.RecordVRNativeRestorePresentationRejection(
@@ -982,7 +1001,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				return result;
 			};
 			const auto submitNewNativeRestoreCycle = [&](
-													 bool a_recordStrictObservation) {
+														 bool a_recordStrictObservation) {
 				if (!pTexture ||
 					!pTexture->handle ||
 					pTexture->eType != vr::TextureType_DirectX ||
@@ -1088,8 +1107,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					"native-restore-cycle-rejected");
 			}
 			if (nativeRestoreCycle.path ==
-					VRNativeRestoreCyclePresentationPath::
-						BlackKeepalive) {
+				VRNativeRestoreCyclePresentationPath::
+					BlackKeepalive) {
 				if (nativeRestoreGuardActive &&
 					nativeRestoreCycle.postLoadKeepaliveToken == 0 &&
 					!upscaling.IsVRInitialLoadPresentationProtectionActive() &&
@@ -1105,7 +1124,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					"native-restore-cycle-black");
 			}
 			if (nativeRestoreCycle.path ==
-					VRNativeRestoreCyclePresentationPath::Native) {
+				VRNativeRestoreCyclePresentationPath::Native) {
 				winrt::com_ptr<ID3D11Texture2D> currentTexture;
 				if (nativeRestoreContinuityCandidate &&
 					pTexture &&
@@ -1432,7 +1451,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				upscaling.RecordVRRenderScalePresentationObservation(
 					presentationObservation);
 			} else if (nativeRestoreGuardActive &&
-				result != vr::VRCompositorError_None) {
+					   result != vr::VRCompositorError_None) {
 				upscaling.RecordVRNativeRestorePresentationRejection(
 					compositorCycleToken,
 					nativeRestoreGuardEpoch,
@@ -1982,12 +2001,13 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		cbData.wvp = (modelMatrix * vp).Transpose();
 
 		overlayDrawn = drawOverlayQuad(
-			context,
-			cbData,
-			menuTexture.get(),
-			inSceneResources.menuSRV,
-			inSceneResources.cachedMenuTexture,
-			"HMD") || overlayDrawn;
+						   context,
+						   cbData,
+						   menuTexture.get(),
+						   inSceneResources.menuSRV,
+						   inSceneResources.cachedMenuTexture,
+						   "HMD") ||
+		               overlayDrawn;
 	}
 
 	// --- Render Controller Overlay ---
@@ -2018,20 +2038,22 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 					cbData.wvp = (modelMatrix * vpWorldSpace).Transpose();
 					if (menuControllerTexture) {
 						overlayDrawn = drawOverlayQuad(
-							context,
-							cbData,
-							menuControllerTexture.get(),
-							inSceneResources.menuControllerSRV,
-							inSceneResources.cachedMenuControllerTexture,
-							"controller") || overlayDrawn;
+										   context,
+										   cbData,
+										   menuControllerTexture.get(),
+										   inSceneResources.menuControllerSRV,
+										   inSceneResources.cachedMenuControllerTexture,
+										   "controller") ||
+						               overlayDrawn;
 					} else {
 						overlayDrawn = drawOverlayQuad(
-							context,
-							cbData,
-							menuTexture.get(),
-							inSceneResources.menuSRV,
-							inSceneResources.cachedMenuTexture,
-							"HMD") || overlayDrawn;
+										   context,
+										   cbData,
+										   menuTexture.get(),
+										   inSceneResources.menuSRV,
+										   inSceneResources.cachedMenuTexture,
+										   "HMD") ||
+						               overlayDrawn;
 					}
 				}
 			}

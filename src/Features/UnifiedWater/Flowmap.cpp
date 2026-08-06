@@ -178,8 +178,9 @@ bool Flowmap::GenerateFlowmap(bool useMips)
 	}
 
 	static winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
+	BOOL wasMultithreadProtected = FALSE;
 	if (SUCCEEDED(ctx->QueryInterface(multithread.put()))) {
-		multithread->SetMultithreadProtected(TRUE);
+		wasMultithreadProtected = multithread->SetMultithreadProtected(TRUE);
 	} else {
 		logger::error("[Unified Water] [Flowmap] ID3D11Multithread not available");
 		return false;
@@ -190,16 +191,17 @@ bool Flowmap::GenerateFlowmap(bool useMips)
 	struct MultithreadGuard
 	{
 		winrt::com_ptr<REX::W32::ID3D11Multithread> mt;
-		MultithreadGuard(winrt::com_ptr<REX::W32::ID3D11Multithread> m) :
-			mt(m) {}
+		BOOL wasProtected = FALSE;
+		MultithreadGuard(winrt::com_ptr<REX::W32::ID3D11Multithread> m, BOOL a_wasProtected) :
+			mt(m), wasProtected(a_wasProtected) {}
 		~MultithreadGuard()
 		{
 			if (mt) {
 				mt->Leave();
-				mt->SetMultithreadProtected(FALSE);
+				mt->SetMultithreadProtected(wasProtected);
 			}
 		}
-	} guard(multithread);
+	} guard(multithread, wasMultithreadProtected);
 
 	const auto tamriel = RE::TESForm::LookupByEditorID<RE::TESWorldSpace>("Tamriel");
 	if (!tamriel) {

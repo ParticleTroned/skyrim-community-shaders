@@ -1431,7 +1431,7 @@ void Menu::ProcessInputEventQueue()
 					 } },
 					{ settings.ScreenshotKey, []() {
 						 if (globals::features::screenshotFeature.loaded)
-							 globals::features::screenshotFeature.captureRequested = true;
+							 globals::features::screenshotFeature.RequestCapture();
 					 } },
 				};
 

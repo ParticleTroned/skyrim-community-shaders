@@ -14,6 +14,7 @@
 #include "Features/CSUtility.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -874,6 +875,7 @@ struct IDXGISwapChain_Present
 			FlushCSFrameHookPhaseDiag(completedFrame, intervalMs);
 		}
 		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
+		globals::features::screenshotFeature.OnBeforePresent(This);
 		state->Reset();
 		menu->DrawOverlay();
 

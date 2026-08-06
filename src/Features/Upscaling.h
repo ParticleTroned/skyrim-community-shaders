@@ -1585,6 +1585,13 @@ public:
 	ID3D11PixelShader* GetVRDesktopMirrorBlitPS();
 	winrt::com_ptr<ID3D11RenderTargetView> vrDesktopMirrorBlitRTV;
 	ID3D11Texture2D* vrDesktopMirrorBlitTarget = nullptr;
+	std::atomic_uint64_t screenshotDesktopMirrorActiveEpoch{ 0 };
+	mutable std::mutex screenshotDesktopMirrorMutex;
+	winrt::com_ptr<ID3D11Texture2D> screenshotDesktopMirrorTexture;
+	uint64_t screenshotDesktopMirrorNextEpoch = 0;
+	uint64_t screenshotDesktopMirrorTextureEpoch = 0;
+	uint32_t screenshotDesktopMirrorGeneration = 0;
+	vr::EColorSpace screenshotDesktopMirrorColorSpace = vr::ColorSpace_Auto;
 
 	winrt::com_ptr<ID3D11PixelShader> vrMenuLayerCompositePS;
 	ID3D11PixelShader* GetVRMenuLayerCompositePS();
@@ -1743,6 +1750,28 @@ public:
 		uint32_t a_eyeWidth, uint32_t a_eyeHeight, Texture2D* const* a_eyeSources = nullptr,
 		bool a_compositeCommittedMenuLayer = false);
 	void PresentVRMenuDesktopMirror(IDXGISwapChain* a_swapChain);
+	/** Begins a transient high-quality desktop-mirror capture and returns its owning epoch. */
+	uint64_t BeginScreenshotDesktopMirrorQualityOverride();
+	/** Ends the transient mirror override only when a_captureEpoch still owns it. */
+	void EndScreenshotDesktopMirrorQualityOverride(uint64_t a_captureEpoch);
+	/**
+	 * Acquires an owning reference to the immutable mirror snapshot for an epoch
+	 * and render-scale contract. Called from the Present thread.
+	 */
+	bool TryAcquireScreenshotDesktopMirror(
+		uint64_t a_captureEpoch,
+		uint32_t a_contractGeneration,
+		winrt::com_ptr<ID3D11Texture2D>& a_texture,
+		vr::EColorSpace& a_colorSpace) const;
+	/**
+	 * Publishes an immutable mirror snapshot from the render/Submit thread when
+	 * a_captureEpoch is still active.
+	 */
+	void PublishScreenshotDesktopMirror(
+		ID3D11Texture2D* a_texture,
+		uint32_t a_contractGeneration,
+		vr::EColorSpace a_colorSpace,
+		uint64_t a_captureEpoch);
 	bool EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const Texture2D& colorOutput);
 	bool ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput);
 

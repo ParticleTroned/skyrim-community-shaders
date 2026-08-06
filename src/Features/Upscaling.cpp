@@ -23,6 +23,7 @@
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
+#include "Utils/NormalizedCoordinates.h"
 #include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
 #include "VR.h"
@@ -1042,12 +1043,6 @@ namespace
 		return box.bottom > box.top ? box.bottom - box.top : 0u;
 	}
 
-	uint32_t ResolveVRBoundsPixel(float value, uint32_t maxValue)
-	{
-		const double normalized = std::clamp(static_cast<double>(value), 0.0, 1.0);
-		return static_cast<uint32_t>(std::llround(normalized * static_cast<double>(maxValue)));
-	}
-
 	bool TryGetNormalizedVRBounds(const vr::VRTextureBounds_t* inputBounds, float& minU, float& minV, float& maxU, float& maxV)
 	{
 		if (!inputBounds ||
@@ -1173,10 +1168,10 @@ namespace
 			if (!TryGetNormalizedVRBounds(inputBounds, minU, minV, maxU, maxV)) {
 				return region;
 			}
-			const uint32_t left = ResolveVRBoundsPixel(minU, sourceDesc.Width);
-			const uint32_t top = ResolveVRBoundsPixel(minV, sourceDesc.Height);
-			const uint32_t right = ResolveVRBoundsPixel(maxU, sourceDesc.Width);
-			const uint32_t bottom = ResolveVRBoundsPixel(maxV, sourceDesc.Height);
+			const uint32_t left = Util::NormalizedCoordinates::ResolvePixelBoundary(minU, sourceDesc.Width);
+			const uint32_t top = Util::NormalizedCoordinates::ResolvePixelBoundary(minV, sourceDesc.Height);
+			const uint32_t right = Util::NormalizedCoordinates::ResolvePixelBoundary(maxU, sourceDesc.Width);
+			const uint32_t bottom = Util::NormalizedCoordinates::ResolvePixelBoundary(maxV, sourceDesc.Height);
 			region.box = {
 				left,
 				top,
@@ -1187,19 +1182,19 @@ namespace
 			};
 			region.fromOpenVRBounds = true;
 			if (inputBoundsUseCombinedStereoSpace) {
-				const uint32_t depthLeft = ResolveVRBoundsPixel(minU, sourceStereoLayout.width);
-				const uint32_t depthTop = ResolveVRBoundsPixel(minV, sourceStereoLayout.height);
-				const uint32_t depthRight = ResolveVRBoundsPixel(maxU, sourceStereoLayout.width);
-				const uint32_t depthBottom = ResolveVRBoundsPixel(maxV, sourceStereoLayout.height);
+				const uint32_t depthLeft = Util::NormalizedCoordinates::ResolvePixelBoundary(minU, sourceStereoLayout.width);
+				const uint32_t depthTop = Util::NormalizedCoordinates::ResolvePixelBoundary(minV, sourceStereoLayout.height);
+				const uint32_t depthRight = Util::NormalizedCoordinates::ResolvePixelBoundary(maxU, sourceStereoLayout.width);
+				const uint32_t depthBottom = Util::NormalizedCoordinates::ResolvePixelBoundary(maxV, sourceStereoLayout.height);
 				region.depthOffsetX = depthLeft;
 				region.depthOffsetY = depthTop;
 				region.depthWidth = depthRight > depthLeft ? depthRight - depthLeft : 0u;
 				region.depthHeight = depthBottom > depthTop ? depthBottom - depthTop : 0u;
 			} else {
-				const uint32_t depthLeft = ResolveVRBoundsPixel(minU, expectedEyeWidth);
-				const uint32_t depthTop = ResolveVRBoundsPixel(minV, expectedEyeHeight);
-				const uint32_t depthRight = ResolveVRBoundsPixel(maxU, expectedEyeWidth);
-				const uint32_t depthBottom = ResolveVRBoundsPixel(maxV, expectedEyeHeight);
+				const uint32_t depthLeft = Util::NormalizedCoordinates::ResolvePixelBoundary(minU, expectedEyeWidth);
+				const uint32_t depthTop = Util::NormalizedCoordinates::ResolvePixelBoundary(minV, expectedEyeHeight);
+				const uint32_t depthRight = Util::NormalizedCoordinates::ResolvePixelBoundary(maxU, expectedEyeWidth);
+				const uint32_t depthBottom = Util::NormalizedCoordinates::ResolvePixelBoundary(maxV, expectedEyeHeight);
 				region.depthOffsetX = baseDepthOffsetX + depthLeft;
 				region.depthOffsetY = depthTop;
 				region.depthWidth = depthRight > depthLeft ? depthRight - depthLeft : 0u;
@@ -30950,6 +30945,115 @@ void Upscaling::PresentVRMenuDesktopMirror(IDXGISwapChain* a_swapChain)
 		true);
 }
 
+uint64_t Upscaling::BeginScreenshotDesktopMirrorQualityOverride()
+{
+	std::lock_guard lock(screenshotDesktopMirrorMutex);
+	screenshotDesktopMirrorTexture = nullptr;
+	screenshotDesktopMirrorTextureEpoch = 0;
+	screenshotDesktopMirrorGeneration = 0;
+	screenshotDesktopMirrorColorSpace = vr::ColorSpace_Auto;
+	do {
+		++screenshotDesktopMirrorNextEpoch;
+	} while (screenshotDesktopMirrorNextEpoch == 0);
+	screenshotDesktopMirrorActiveEpoch.store(
+		screenshotDesktopMirrorNextEpoch,
+		std::memory_order_release);
+	return screenshotDesktopMirrorNextEpoch;
+}
+
+void Upscaling::EndScreenshotDesktopMirrorQualityOverride(uint64_t a_captureEpoch)
+{
+	std::lock_guard lock(screenshotDesktopMirrorMutex);
+	if (screenshotDesktopMirrorActiveEpoch.load(std::memory_order_relaxed) != a_captureEpoch) {
+		return;
+	}
+
+	screenshotDesktopMirrorActiveEpoch.store(0, std::memory_order_release);
+	screenshotDesktopMirrorTexture = nullptr;
+	screenshotDesktopMirrorTextureEpoch = 0;
+	screenshotDesktopMirrorGeneration = 0;
+	screenshotDesktopMirrorColorSpace = vr::ColorSpace_Auto;
+}
+
+bool Upscaling::TryAcquireScreenshotDesktopMirror(
+	uint64_t a_captureEpoch,
+	uint32_t a_contractGeneration,
+	winrt::com_ptr<ID3D11Texture2D>& a_texture,
+	vr::EColorSpace& a_colorSpace) const
+{
+	std::lock_guard lock(screenshotDesktopMirrorMutex);
+	if (!screenshotDesktopMirrorTexture ||
+		screenshotDesktopMirrorTextureEpoch != a_captureEpoch ||
+		screenshotDesktopMirrorGeneration != a_contractGeneration) {
+		return false;
+	}
+
+	a_texture = screenshotDesktopMirrorTexture;
+	a_colorSpace = screenshotDesktopMirrorColorSpace;
+	return true;
+}
+
+void Upscaling::PublishScreenshotDesktopMirror(
+	ID3D11Texture2D* a_texture,
+	uint32_t a_contractGeneration,
+	vr::EColorSpace a_colorSpace,
+	uint64_t a_captureEpoch)
+{
+	if (!a_texture || a_captureEpoch == 0 ||
+		screenshotDesktopMirrorActiveEpoch.load(std::memory_order_acquire) != a_captureEpoch) {
+		return;
+	}
+
+	std::lock_guard lock(screenshotDesktopMirrorMutex);
+	if (screenshotDesktopMirrorActiveEpoch.load(std::memory_order_relaxed) != a_captureEpoch) {
+		return;
+	}
+
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	a_texture->GetDesc(&sourceDesc);
+	if (sourceDesc.Width == 0 || sourceDesc.Height == 0 || sourceDesc.ArraySize != 1) {
+		return;
+	}
+
+	D3D11_TEXTURE2D_DESC snapshotDesc = sourceDesc;
+	snapshotDesc.MipLevels = 1;
+	snapshotDesc.ArraySize = 1;
+	snapshotDesc.Usage = D3D11_USAGE_DEFAULT;
+	snapshotDesc.BindFlags = 0;
+	snapshotDesc.CPUAccessFlags = 0;
+	snapshotDesc.MiscFlags = 0;
+
+	winrt::com_ptr<ID3D11Texture2D> snapshotTexture;
+	if (!globals::d3d::device || !globals::d3d::context ||
+		FAILED(globals::d3d::device->CreateTexture2D(&snapshotDesc, nullptr, snapshotTexture.put()))) {
+		static bool loggedSnapshotAllocationFailure = false;
+		if (!loggedSnapshotAllocationFailure) {
+			logger::warn("[Upscaling] Could not allocate the requested desktop screenshot mirror snapshot.");
+			loggedSnapshotAllocationFailure = true;
+		}
+		return;
+	}
+	Util::SetResourceName(snapshotTexture.get(), "Screenshot::DesktopMirrorSnapshot");
+
+	globals::d3d::context->CopySubresourceRegion(
+		snapshotTexture.get(),
+		0,
+		0,
+		0,
+		0,
+		a_texture,
+		0,
+		nullptr);
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("desktop screenshot mirror snapshot")) {
+		return;
+	}
+
+	screenshotDesktopMirrorTexture = std::move(snapshotTexture);
+	screenshotDesktopMirrorTextureEpoch = a_captureEpoch;
+	screenshotDesktopMirrorGeneration = a_contractGeneration;
+	screenshotDesktopMirrorColorSpace = a_colorSpace;
+}
+
 bool Upscaling::BlitVRRenderScaleDesktopMirror(
 	ID3D11Texture2D* a_targetTexture,
 	const D3D11_TEXTURE2D_DESC& a_targetDesc,
@@ -36539,6 +36643,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		eyeHeightOut,
 		true);
 	if (vrRenderScaleMode) {
+		const uint64_t screenshotMirrorEpoch =
+			screenshotDesktopMirrorActiveEpoch.load(std::memory_order_acquire);
 		const bool canMirrorToSource =
 			sourceDesc.ArraySize == 1 &&
 			sourceDesc.Width >= eyeWidthOut * 2 &&
@@ -36569,10 +36675,18 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
 				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
 					return false;
+				if (screenshotMirrorEpoch != 0) {
+					PublishScreenshotDesktopMirror(
+						sourceTexture,
+						activeContractGeneration,
+						a_inputTexture->eColorSpace,
+						screenshotMirrorEpoch);
+				}
 				submitStageMirrorEyeReady = {};
 			}
 		} else {
-			if (globals::features::vr.settings.StabilizeRenderScaleDesktopMirror) {
+			if (globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||
+				screenshotMirrorEpoch != 0) {
 				if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
 					submitStageMirrorFrame = currentFrame;
 					submitStageMirrorSourceTexture = sourceTexture;
@@ -36585,6 +36699,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
 					if (!mirrorUpdated && IsSubmitStageDeviceLost())
 						return false;
+					if (mirrorUpdated && screenshotMirrorEpoch != 0) {
+						PublishScreenshotDesktopMirror(
+							sourceTexture,
+							activeContractGeneration,
+							a_inputTexture->eColorSpace,
+							screenshotMirrorEpoch);
+					}
 					if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
 						logger::warn(
 							"[Upscaling] Desktop mirror fallback could not update incompatible render-scale submit texture. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",

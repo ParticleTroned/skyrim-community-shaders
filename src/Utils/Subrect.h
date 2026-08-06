@@ -21,6 +21,9 @@ namespace Util::Subrect
 		uint32_t h = 1;
 	};
 
+	/** Resolves and sanitizes a normalized crop against an arbitrary pixel size. */
+	PixelRegion ResolvePixelRegion(const UVRegion& uv, uint32_t width, uint32_t height);
+
 	struct Preset
 	{
 		std::string name;
@@ -36,8 +39,8 @@ namespace Util::Subrect
 		void LoadSettings(const json& a_json);
 		void SaveSettings(json& a_json) const;
 
-		// Replaces the built-in "Full Frame" placeholder used when JSON has no
-		// CropPresets entry yet. Empty-case only - user edits/deletions persist.
+		// Seeds and materializes defaults while empty, or migrates the legacy sole
+		// Full Frame placeholder. Existing custom crops and user presets are preserved.
 		void SeedDefaultPresets(std::vector<Preset> defaults);
 
 		// uvStartX/uvVisibleWidth window the preview onto a sub-region of the

@@ -62,9 +62,13 @@ namespace
 {
 	static constexpr std::array<std::string_view, 0> kForcedDisableAtBootFeatures{};
 
-	void SaveUserOverrides(const json& a_settings)
+	std::vector<std::string> SaveUserOverrides(const json& a_settings)
 	{
+		std::vector<std::string> failedLayers;
 		auto overrideManager = SettingsOverrideManager::GetSingleton();
+		if (!overrideManager->IsEnabled())
+			return failedLayers;
+
 		for (auto* feature : Feature::GetFeatureList()) {
 			std::string featureName = "<unknown>";
 			try {
@@ -82,23 +86,42 @@ namespace
 
 				const auto overrideSettings =
 					overrideManager->GetMergedOverrideSettings(featureName, json::object());
-				overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings);
+				if (!overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings))
+					failedLayers.push_back(featureName);
 			} catch (const std::exception& e) {
 				logger::warn("Failed to save user overrides for {}: {}", featureName, e.what());
+				failedLayers.push_back(featureName);
 			} catch (...) {
 				logger::warn("Failed to save user overrides for {} due to an unknown error", featureName);
+				failedLayers.push_back(featureName);
 			}
 		}
 
 		try {
 			const auto globalOverrideSettings =
 				overrideManager->GetMergedOverrideSettings("Global", json::object());
-			overrideManager->SaveUserOverride("Global", a_settings, globalOverrideSettings);
+			if (!overrideManager->SaveUserOverride("Global", a_settings, globalOverrideSettings))
+				failedLayers.emplace_back("Global");
 		} catch (const std::exception& e) {
 			logger::warn("Failed to save global user overrides: {}", e.what());
+			failedLayers.emplace_back("Global");
 		} catch (...) {
 			logger::warn("Failed to save global user overrides due to an unknown error");
+			failedLayers.emplace_back("Global");
 		}
+
+		return failedLayers;
+	}
+
+	std::string JoinSettingLayerNames(const std::vector<std::string>& a_names)
+	{
+		std::string result;
+		for (const auto& name : a_names) {
+			if (!result.empty())
+				result += ", ";
+			result += name;
+		}
+		return result;
 	}
 
 	void StoreMax(std::atomic_uint32_t& a_target, uint32_t a_value)
@@ -1197,9 +1220,16 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 	}
 }
 
-void State::Save(ConfigMode a_configMode)
+bool State::Save(ConfigMode a_configMode)
 {
 	const auto configPath = GetConfigPath(a_configMode);
+	const auto configName = configPath.filename().string();
+	const auto reportFailure = [&](std::string a_logMessage, std::string a_userMessage) {
+		logger::warn("{}", a_logMessage);
+		if (a_configMode == ConfigMode::USER && globals::menu)
+			globals::menu->ReportSettingsSaveResult(false, std::move(a_userMessage));
+		return false;
+	};
 	json settings = json::object();
 
 	// Seed every save with its existing JSON so settings belonging to an unavailable
@@ -1211,31 +1241,39 @@ void State::Save(ConfigMode a_configMode)
 		if (existingSettings.is_object()) {
 			settings = std::move(existingSettings);
 		} else {
-			logger::warn("Refusing to overwrite config which is not a JSON object: {}", configPath.string());
-			return;
+			return reportFailure(
+				std::format("Refusing to overwrite config which is not a JSON object: {}", configPath.string()),
+				std::format(
+					"Settings were not saved because the existing {} is not a JSON object. Fix or remove that file, then try again.",
+					configName));
 		}
 	} else if (readResult == Util::FileHelpers::JsonFileReadResult::Error) {
-		logger::warn("Refusing to overwrite unreadable config {}: {}", configPath.string(), readError);
-		return;
+		return reportFailure(
+			std::format("Refusing to overwrite unreadable config {}: {}", configPath.string(), readError),
+			std::format("Settings were not saved because {} could not be read: {}", configName, readError));
 	}
 
 	try {
 		SaveToJson(settings, a_configMode == ConfigMode::DEFAULT);
 	} catch (const std::exception& e) {
-		logger::warn("Failed to collect settings for {}: {}", configPath.string(), e.what());
-		return;
+		return reportFailure(
+			std::format("Failed to collect settings for {}: {}", configPath.string(), e.what()),
+			std::format("Settings were not saved because the active values could not be collected: {}", e.what()));
 	} catch (...) {
-		logger::warn("Failed to collect settings for {} due to an unknown error", configPath.string());
-		return;
+		return reportFailure(
+			std::format("Failed to collect settings for {} due to an unknown error", configPath.string()),
+			"Settings were not saved because the active values could not be collected. See CommunityShaders.log.");
 	}
 
 	std::string writeError;
 	if (!SettingsSerialization::WriteFileAtomic(configPath, settings, writeError)) {
-		logger::warn("Failed to save settings to {}: {}", configPath.string(), writeError);
-		return;
+		return reportFailure(
+			std::format("Failed to save settings to {}: {}", configPath.string(), writeError),
+			std::format("Settings were not saved to {}: {}", configName, writeError));
 	}
 
 	if (a_configMode == ConfigMode::USER) {
+		std::vector<std::string> postSaveFailures;
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (!feature->loaded)
 				continue;
@@ -1243,16 +1281,43 @@ void State::Save(ConfigMode a_configMode)
 				feature->OnSettingsSaved();
 			} catch (const std::exception& e) {
 				logger::warn("Post-save handling failed for {}: {}", feature->GetName(), e.what());
+				postSaveFailures.push_back(feature->GetDisplayName());
 			} catch (...) {
 				logger::warn("Post-save handling failed for {} due to an unknown error", feature->GetName());
+				postSaveFailures.push_back(feature->GetDisplayName());
 			}
 		}
-		SaveUserOverrides(settings);
-		if (globals::menu)
+
+		const auto overrideFailures = SaveUserOverrides(settings);
+		if (!postSaveFailures.empty() || !overrideFailures.empty()) {
+			std::string failureDetails;
+			if (!overrideFailures.empty())
+				failureDetails = std::format("override customizations for {}", JoinSettingLayerNames(overrideFailures));
+			if (!postSaveFailures.empty()) {
+				if (!failureDetails.empty())
+					failureDetails += "; ";
+				failureDetails += std::format("post-save handling for {}", JoinSettingLayerNames(postSaveFailures));
+			}
+
+			return reportFailure(
+				std::format(
+					"Settings save incomplete after writing {}: failed {}",
+					configPath.string(), failureDetails),
+				std::format(
+					"{} was written, but {} could not be persisted. Changes remain marked unsaved; see CommunityShaders.log.",
+					configName, failureDetails));
+		}
+
+		if (globals::menu) {
 			globals::menu->ResetSettingsDirtyState();
+			globals::menu->ReportSettingsSaveResult(
+				true,
+				std::format("Settings saved successfully to {}.", configName));
+		}
 	}
 
-	logger::info("Saving settings to {}", configPath.string());
+	logger::info("Saved settings to {}", configPath.string());
+	return true;
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)

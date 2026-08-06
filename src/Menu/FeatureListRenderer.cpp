@@ -40,14 +40,27 @@ namespace
 	constexpr std::array<const char*, 6> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", PERFORMANCE_TUNING_MENU_NAME, "Display" };
 	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
 
-	void DrawUnsavedSettingsWarning()
+	void DrawSettingsSaveStatus()
 	{
-		if (!globals::menu->HasUnsavedSettings())
-			return;
+		bool drewStatus = false;
+		const auto& saveMessage = globals::menu->GetSettingsSaveMessage();
+		const bool hasSaveError = !saveMessage.empty() && globals::menu->IsSettingsSaveMessageError();
+		if (!saveMessage.empty()) {
+			if (hasSaveError)
+				Util::Text::WrappedError("%s", saveMessage.c_str());
+			else
+				Util::Text::WrappedSuccess("%s", saveMessage.c_str());
+			drewStatus = true;
+		}
 
-		Util::Text::WrappedError(
-			"Unsaved settings changes. Save them, restore the changed feature's defaults, or restore saved settings.");
-		ImGui::Spacing();
+		if (globals::menu->HasUnsavedSettings() && !hasSaveError) {
+			Util::Text::WrappedError(
+				"Unsaved settings changes. Save them, restore the changed feature's defaults, or restore saved settings.");
+			drewStatus = true;
+		}
+
+		if (drewStatus)
+			ImGui::Spacing();
 	}
 
 	ImVec2 GetRestoreDefaultsIconSize()
@@ -800,7 +813,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 	ImGui::PushID(menu.name.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-		DrawUnsavedSettingsWarning();
+		DrawSettingsSaveStatus();
 
 		// Add spacing only for Home menu
 		if (menu.name == "Home") {
@@ -838,7 +851,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	ImGui::PushID(featureName.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-		DrawUnsavedSettingsWarning();
+		DrawSettingsSaveStatus();
 
 		// Compute scene-controlled state once for both header and settings
 		auto* sceneManager = SceneSettingsManager::GetSingleton();

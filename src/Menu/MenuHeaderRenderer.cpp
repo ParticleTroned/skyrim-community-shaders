@@ -304,8 +304,8 @@ void MenuHeaderRenderer::RenderHeader(
 			// Save Settings Button
 			ImGui::TableNextColumn();
 			if (Util::ButtonWithFlash("Save Settings", { -1, 0 })) {
-				globals::state->Save();
-				globals::state->SaveTheme();
+				if (globals::state->Save())
+					globals::state->SaveTheme();
 			}
 
 			// Restore Saved Settings Button
@@ -323,7 +323,7 @@ void MenuHeaderRenderer::RenderHeader(
 				ImGui::BeginDisabled(capturing || awaitingMenuClose);
 				const std::string label = awaitingMenuClose ?
 				                              "Close the menu to finish" :
-				                      capturing ?
+				                          capturing ?
 				                              std::format("Capturing... {}", shaderCache->GetActiveShaderCaptureFramesRemaining()) :
 				                              "Clear Shader Cache";
 				if (ImGui::Button(label.c_str(), { -1, 0 })) {
@@ -396,8 +396,8 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			uiIcons.saveSettings.texture,
 			"Save Settings",
 			[]() {
-				globals::state->Save();
-				globals::state->SaveTheme();
+				if (globals::state->Save())
+					globals::state->SaveTheme();
 			} });
 	}
 	if (uiIcons.loadSettings.texture) {

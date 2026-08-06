@@ -627,6 +627,19 @@ void Menu::ResetSettingsDirtyState()
 	settingsDirtyBaselineInitialized = false;
 	settingsDirty = false;
 	settingsDirtyCheckRequested = false;
+	ClearSettingsSaveResult();
+}
+
+void Menu::ReportSettingsSaveResult(bool a_success, std::string a_message)
+{
+	settingsSaveMessage = std::move(a_message);
+	settingsSaveMessageIsError = !a_success;
+}
+
+void Menu::ClearSettingsSaveResult()
+{
+	settingsSaveMessage.clear();
+	settingsSaveMessageIsError = false;
 }
 
 void Menu::AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName)
@@ -644,6 +657,7 @@ void Menu::AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSetti
 		settingsDirtyBaseline.erase(a_featureSettingsName);
 	}
 	settingsDirty = currentSettings != settingsDirtyBaseline;
+	ClearSettingsSaveResult();
 }
 
 void Menu::UpdateSettingsDirtyState()
@@ -656,8 +670,11 @@ void Menu::UpdateSettingsDirtyState()
 		return;
 
 	json currentSettings;
-	if (CaptureCurrentSettingsSnapshot(currentSettings))
+	if (CaptureCurrentSettingsSnapshot(currentSettings)) {
 		settingsDirty = currentSettings != settingsDirtyBaseline;
+		if (settingsDirty && !settingsSaveMessageIsError)
+			ClearSettingsSaveResult();
+	}
 }
 
 void Menu::LoadTheme(json& o_json)

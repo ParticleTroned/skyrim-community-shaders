@@ -107,7 +107,9 @@ public:
 	void SetupRenderTargetResources();
 
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
-	void Save(ConfigMode a_configMode = ConfigMode::USER);
+	// Returns true only when the main settings file and every required
+	// persistence layer have been saved successfully.
+	bool Save(ConfigMode a_configMode = ConfigMode::USER);
 
 	static constexpr uint32_t kSaveLoadSafeModeGraceFrames = 120;
 	static constexpr uint32_t kSaveLoadSafeModeFallbackFrames = 36000;

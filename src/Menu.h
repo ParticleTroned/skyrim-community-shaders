@@ -125,6 +125,10 @@ public:
 	void RequestSettingsDirtyCheck() { settingsDirtyCheckRequested = true; }
 	void ResetSettingsDirtyState();
 	void AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName);
+	void ReportSettingsSaveResult(bool a_success, std::string a_message);
+	void ClearSettingsSaveResult();
+	const std::string& GetSettingsSaveMessage() const { return settingsSaveMessage; }
+	bool IsSettingsSaveMessageError() const { return settingsSaveMessageIsError; }
 
 	// Search bar state
 	std::string featureSearch;  // For left pane feature search
@@ -501,6 +505,8 @@ private:
 	bool settingsDirtyBaselineInitialized = false;
 	bool settingsDirty = false;
 	bool settingsDirtyCheckRequested = false;
+	std::string settingsSaveMessage;
+	bool settingsSaveMessageIsError = false;
 
 	bool CaptureCurrentSettingsSnapshot(json& a_snapshot);
 	bool EnsureSettingsDirtyBaseline();

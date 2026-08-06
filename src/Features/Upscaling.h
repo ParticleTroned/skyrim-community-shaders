@@ -1904,6 +1904,8 @@ public:
 		VRRenderScalePresentationObservation& a_presentationObservation) const;
 	bool PrepareVRNativeRestoreCompositorKeepalive(
 		uint64_t a_expectedGuardEpoch,
+		const vr::Texture_t* a_candidateTexture,
+		const vr::VRTextureBounds_t* a_candidateBounds,
 		VRNativeRestoreCompositorKeepaliveSubmission& a_submission);
 	bool IsVRNativeRestorePresentationGuardActive() const;
 	uint64_t GetVRNativeRestorePresentationGuardActiveEpoch() const;
@@ -2611,9 +2613,18 @@ private:
 		bool a_preservePublishedQuarantine = false);
 	bool PrepareVRPostLoadCompositorKeepaliveLocked(
 		ID3D11Texture2D* a_candidateTexture,
+		const vr::VRTextureBounds_t* a_candidateBounds,
 		VRPostLoadCompositorKeepaliveSubmission& a_submission);
+	bool PrepareVRCompositorKeepaliveSubmissionLocked(
+		ID3D11Texture2D* a_candidateTexture,
+		const vr::VRTextureBounds_t* a_candidateBounds,
+		vr::Texture_t& a_texture,
+		vr::VRTextureBounds_t& a_bounds,
+		winrt::com_ptr<ID3D11Texture2D>& a_lifetime);
 	bool EnsureVRCompositorKeepaliveTextureLocked(
-		ID3D11Device* a_candidateDevice);
+		ID3D11Device* a_candidateDevice,
+		uint32_t a_width,
+		uint32_t a_height);
 	bool TryRepairVRPostLoadFixedCompositorCandidate(
 		ID3D11Texture2D* a_candidateTexture,
 		const D3D11_TEXTURE2D_DESC& a_candidateDesc,

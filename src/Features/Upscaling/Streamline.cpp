@@ -1813,11 +1813,32 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
 		renderSize = Util::ConvertToDynamic(screenSize);
 	auto& mainTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	const bool useSharpenerOutput =
-		upscaling.ShouldApplyDLSSSharpening() &&
+	const bool isVR = globals::game::isVR;
+	const bool sharpenerOutputReady =
 		upscaling.sharpenerTexture &&
 		upscaling.sharpenerTexture->resource &&
-		upscaling.sharpenerTexture->uav;
+		(isVR || upscaling.sharpenerTexture->resource.get() != a_upscalingTexture) &&
+		(!isVR || upscaling.sharpenerTexture->uav);
+
+	// Flat DLSS receives kMAIN as its color input, so writing directly back to it
+	// would alias the Streamline input and output tags. VR first isolates each eye's
+	// input and can retain its direct combined-target path when sharpening is off.
+	if (!isVR) {
+		static bool loggedMissingSharpenerOutput = false;
+		if (!sharpenerOutputReady) {
+			if (!loggedMissingSharpenerOutput) {
+				logger::error("[Upscaling] DLSS dispatch skipped because a distinct intermediate output is unavailable.");
+				loggedMissingSharpenerOutput = true;
+			}
+			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+			return false;
+		}
+		loggedMissingSharpenerOutput = false;
+	}
+
+	const bool useSharpenerOutput =
+		sharpenerOutputReady &&
+		upscaling.ShouldRouteDLSSMainPassThroughSharpener();
 	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
 	ID3D11UnorderedAccessView* colorOutUAV = useSharpenerOutput ? upscaling.sharpenerTexture->uav.get() : mainTarget.UAV;
 	const bool outputToSharpener = useSharpenerOutput;

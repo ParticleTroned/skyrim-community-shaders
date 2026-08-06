@@ -1452,6 +1452,7 @@ public:
 	bool GetRuntimeFSR4Enabled() const;
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
+	bool ShouldRouteDLSSMainPassThroughSharpener() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
 	/** @brief Resolve material mip bias from the active resolution owner or OpenComposite Unleashed. */
 	float ResolveRuntimeMipBias(bool a_temporal);
@@ -2442,9 +2443,10 @@ public:
 	void DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, uint32_t dispatchOffsetX, uint32_t dispatchOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather);
 
 	/**
-	 * @brief Applies the selected DLSS sharpening pass to the main render target after upscaling.
+	 * @brief Resolves the DLSS output into the main render target after upscaling.
 	 *
-	 * Runs in HDR space before tonemapping. Only called when DLSS sharpening is enabled.
+	 * Runs in HDR space before tonemapping. Applies the selected sharpening pass when enabled,
+	 * otherwise copies a successfully produced intermediate without altering it.
 	 */
 	void ApplySharpening();
 

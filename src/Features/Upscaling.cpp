@@ -17105,6 +17105,11 @@ bool Upscaling::ShouldApplyDLSSSharpening() const
 	return settings.sharpnessDLSS > 0.0f && GetDLSSSharpenerMode() != DLSSSharpenerMode::Off;
 }
 
+bool Upscaling::ShouldRouteDLSSMainPassThroughSharpener() const
+{
+	return !globals::game::isVR || ShouldApplyDLSSSharpening();
+}
+
 const Upscaling::RuntimeResolutionPlan& Upscaling::GetRuntimeResolutionPlan() const
 {
 	return runtimeResolutionPlan;
@@ -17232,7 +17237,10 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		if (globals::game::isVR)
 			plan.engineRenderSize = resolveVendorDynamicRenderSize(plan.trueHMDDisplaySize);
 		plan.owner = ResolutionOwner::VendorDynamicResolution;
-		plan.outputTarget = plan.upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening() ?
+		const bool dlssUsesSharpenerOutput =
+			plan.upscaleMethod == UpscaleMethod::kDLSS &&
+			ShouldRouteDLSSMainPassThroughSharpener();
+		plan.outputTarget = dlssUsesSharpenerOutput ?
 		                        UpscalingOutputTarget::Sharpener :
 		                        UpscalingOutputTarget::Main;
 	}
@@ -40714,7 +40722,7 @@ void Upscaling::Upscale()
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 			const bool foveatedOutputToSharpener =
 				upscaleMethod == UpscaleMethod::kDLSS &&
-				ShouldApplyDLSSSharpening() &&
+				ShouldRouteDLSSMainPassThroughSharpener() &&
 				sharpenerTexture &&
 				sharpenerTexture->resource &&
 				sharpenerTexture->srv &&
@@ -41158,7 +41166,8 @@ void Upscaling::ApplySharpening()
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Sharpening");
 
-	if (!ShouldApplyDLSSSharpening())
+	const bool shouldApplySharpening = ShouldApplyDLSSSharpening();
+	if (!dlssUpscaleOutputInSharpenerTexture && !shouldApplySharpening)
 		return;
 
 	if (!sharpenerTexture)
@@ -41174,7 +41183,7 @@ void Upscaling::ApplySharpening()
 		if (!main.texture || !sharpenerTexture->resource)
 			return;
 
-		if (!main.UAV || !sharpenerTexture->srv || !DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV))
+		if (!shouldApplySharpening || !main.UAV || !sharpenerTexture->srv || !DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV))
 			context->CopyResource(main.texture, sharpenerTexture->resource.get());
 	} else {
 		if (!main.SRV || !main.texture || !sharpenerTexture->resource || !sharpenerTexture->uav)

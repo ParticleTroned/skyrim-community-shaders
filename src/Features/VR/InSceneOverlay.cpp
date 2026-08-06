@@ -953,6 +953,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					keepalive{};
 				if (!upscaling.PrepareVRNativeRestoreCompositorKeepalive(
 						nativeRestoreGuardEpoch,
+						pTexture,
+						pBounds,
 						keepalive)) {
 					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 						"native-restore-keepalive-unavailable",

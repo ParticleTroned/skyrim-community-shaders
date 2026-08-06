@@ -12,6 +12,7 @@ ShaderCache directory when installing through Mod Organizer 2.
 The generated cache targets this repo's shipped distribution profile:
   - the VR feature is omitted on SE
   - shipped features are treated as active
+  - plugin-detected compatibility features are inactive until detected at runtime
   - WetnessEffects is legacy, default-off, and not shipped
 
 Usage:
@@ -64,6 +65,7 @@ FILE_SHIPPED_DEFINES = {
     "Lighting.hlsl": ("WETTERNESS",),
     "Water.hlsl": ("WETTERNESS",),
 }
+CACHE_DEFAULT_DISABLED_FEATURES = frozenset({"HorizonFix"})
 NON_SHIPPED_DEFINES = {
     feature["define"]
     for feature in NON_SHIPPED_FEATURES.values()
@@ -515,7 +517,8 @@ def write_info_ini(cache_dir: Path, stage: Path, plugin_version: str, runtime: s
             raise SystemExit(f"{ini_path.name} has no Info/Version")
         validate_ini_value(version, f"{ini_path.name} feature version")
 
-        lines += [f"[{stem}]", "Enabled = true", f"Version = {version}", "", ""]
+        enabled = "false" if stem in CACHE_DEFAULT_DISABLED_FEATURES else "true"
+        lines += [f"[{stem}]", f"Enabled = {enabled}", f"Version = {version}", "", ""]
         count += 1
 
     (cache_dir / INFO_FILE_NAME).write_bytes(

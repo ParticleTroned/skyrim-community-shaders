@@ -14,6 +14,7 @@
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/HairSpecular.h"
+#include "Features/HorizonFix.h"
 #include "Features/IBL.h"
 #include "Features/InteriorSun.h"
 #include "Features/InverseSquareLighting.h"
@@ -262,6 +263,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
 		&globals::features::unifiedWater,
+		&globals::features::horizonFix,
 		&globals::features::csUtility
 	};
 

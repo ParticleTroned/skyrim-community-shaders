@@ -22,7 +22,20 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversShaderCompilationHMDRouting()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 2); ++bits) {
+			const bool statusAdmitted = (bits & (1u << 0)) != 0;
+			const bool showInHMD = (bits & (1u << 1)) != 0;
+			if (OverlayPolicy::ShouldRouteShaderCompilationStatusToHMD(statusAdmitted, showInHMD) !=
+				(statusAdmitted && showInHMD))
+				return false;
+		}
+		return true;
+	}
+
 	static_assert(CoversShaderCompilationStatusAdmission());
+	static_assert(CoversShaderCompilationHMDRouting());
 }
 
 int main() {}

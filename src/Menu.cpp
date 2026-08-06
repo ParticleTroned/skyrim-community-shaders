@@ -173,7 +173,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkipClearCacheConfirmation,
 	SmartClearShaderCacheDefault,
 	BackgroundShaderCompilationOnBoot,
-	HideCompilationHUDInVR,
+	ShowCompilationHUDInVR,
 	AutoHideFeatureList,
 	SkipConstraintWarning,
 	RequireShiftToDock,
@@ -187,6 +187,8 @@ namespace
 {
 	constexpr const char* UI_MODE_SETTING_KEY = "UI Mode";
 	constexpr const char* LEGACY_PERFORMANCE_UI_MODE_SETTING_KEY = "PerformanceUiMode";
+	constexpr const char* SHOW_COMPILATION_HUD_IN_VR_SETTING_KEY = "ShowCompilationHUDInVR";
+	constexpr const char* LEGACY_HIDE_COMPILATION_HUD_IN_VR_SETTING_KEY = "HideCompilationHUDInVR";
 	constexpr int ESSENTIALS_UI_MODE = 0;
 	constexpr int ADVANCED_UI_MODE = 1;
 
@@ -449,6 +451,14 @@ void Menu::Load(json& o_json)
 	auto currentTheme = settings.Theme;
 
 	settings = o_json;
+
+	// The legacy negative toggle never routed compilation status to the HMD in
+	// either state. Do not reinterpret its saved value as consent to show a new
+	// headset overlay; existing users must explicitly opt in with the new key.
+	if (!o_json.contains(SHOW_COMPILATION_HUD_IN_VR_SETTING_KEY) &&
+		o_json.contains(LEGACY_HIDE_COMPILATION_HUD_IN_VR_SETTING_KEY)) {
+		settings.ShowCompilationHUDInVR = false;
+	}
 
 	// Restore Theme - don't load it from config, only from theme preset files
 	settings.Theme = currentTheme;

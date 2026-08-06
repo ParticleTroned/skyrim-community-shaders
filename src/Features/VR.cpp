@@ -6,6 +6,7 @@
 #include "Menu.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
+#include "Menu/OverlayPolicy.h"
 #include "Menu/OverlayRenderer.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/B/BSOpenVRControllerDevice.h"
@@ -177,12 +178,20 @@ namespace
 		       (GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 	}
 
+	bool ShouldRenderShaderCompilationInHMD()
+	{
+		const auto* menu = globals::menu;
+		return menu &&
+		       OverlayPolicy::ShouldRouteShaderCompilationStatusToHMD(
+				   OverlayRenderer::ShouldShowShaderCompilationStatus(*menu),
+				   menu->GetSettings().ShowCompilationHUDInVR);
+	}
+
 	bool ShouldShowShaderCompilationInHMD()
 	{
 		return globals::shaderCache &&
 		       globals::shaderCache->IsCompiling() &&
-		       globals::menu &&
-		       OverlayRenderer::ShouldShowShaderCompilationStatus(*globals::menu);
+		       ShouldRenderShaderCompilationInHMD();
 	}
 
 	bool IsDrawListOwnedByWindow(const ImDrawList* drawList, const char* windowName)
@@ -196,9 +205,7 @@ namespace
 			return drawData;
 		}
 
-		const bool hideShaderCompilationWindow =
-			!globals::menu ||
-			!OverlayRenderer::ShouldShowShaderCompilationStatus(*globals::menu);
+		const bool hideShaderCompilationWindow = !ShouldRenderShaderCompilationInHMD();
 		bool removedAny = false;
 		int totalIdxCount = 0;
 		int totalVtxCount = 0;

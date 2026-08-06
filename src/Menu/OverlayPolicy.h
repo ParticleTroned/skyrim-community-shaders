@@ -16,4 +16,11 @@ namespace OverlayPolicy
 		       a_admission.menuSessionOpen ||
 		       a_admission.performanceOverlayOpen;
 	}
+
+	[[nodiscard]] constexpr bool ShouldRouteShaderCompilationStatusToHMD(
+		bool a_statusAdmitted,
+		bool a_showInHMD) noexcept
+	{
+		return a_statusAdmitted && a_showInHMD;
+	}
 }

@@ -3001,7 +3001,7 @@ namespace SIE
 				deferredDiskWrites.end(),
 				[&](const DeferredDiskWrite& a_write) {
 					return a_write.diskCacheGeneration == a_diskCacheGeneration &&
-					       a_write.diskPath == a_diskPath;
+				           a_write.diskPath == a_diskPath;
 				});
 			if (existing != deferredDiskWrites.end())
 				*existing = std::move(deferredWrite);
@@ -3162,12 +3162,22 @@ namespace SIE
 			});
 	}
 
-	static bool HasMissingOrFailedFeature(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
+	static bool HasMissingOrFailedFeature(
+		const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches,
+		bool allowExpectedRuntimeDisable = false)
 	{
 		return std::any_of(mismatches.begin(), mismatches.end(),
-			[](const Util::CacheInvalidation::CacheMismatch& mismatch) {
+			[allowExpectedRuntimeDisable](const Util::CacheInvalidation::CacheMismatch& mismatch) {
 				if (mismatch.kind != Util::CacheInvalidation::CacheMismatch::Kind::EnabledFlip || mismatch.nowPresent)
 					return false;
+
+				if (allowExpectedRuntimeDisable) {
+					const auto& features = Feature::GetFeatureList();
+					const auto featureIt = std::ranges::find_if(features,
+						[&](Feature* feature) { return feature->GetShortName() == mismatch.shortName; });
+					if (featureIt != features.end() && (*featureIt)->IsRuntimeDisabledByMissingDependency())
+						return false;
+				}
 
 				auto* state = globals::state;
 				return !state || !state->IsFeatureDisabled(mismatch.shortName);
@@ -3400,7 +3410,7 @@ namespace SIE
 
 		const bool onlyEnabledFlips = OnlyEnabledFlips(cacheMismatches);
 		if (onlyEnabledFlips) {
-			if (HasMissingOrFailedFeature(cacheMismatches)) {
+			if (HasMissingOrFailedFeature(cacheMismatches, true)) {
 				diskCacheHeld = true;
 				logger::info("Disk cache HELD (not deleted): a previously cached feature is missing or failed to load; compiling memory-only this session");
 				return;

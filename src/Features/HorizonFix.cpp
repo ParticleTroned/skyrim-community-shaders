@@ -15,11 +15,16 @@ void HorizonFix::PostPostLoad()
 	// because every SKSE plugin has loaded by now and the shader disk cache has not been
 	// validated yet, so installing or removing the plugin invalidates the cache through
 	// regular feature validation.
-	if (loaded && GetModuleHandleW(L"HorizonFix.dll") == nullptr) {
+	if (!loaded)
+		return;
+
+	pluginInstalled = GetModuleHandleW(L"HorizonFix.dll") != nullptr;
+	pluginDetectionComplete = true;
+	if (!pluginInstalled) {
 		loaded = false;
-		failedLoadedMessage = "HorizonFix is not installed, compatibility is disabled.";
 		logger::info("[Horizon Fix] HorizonFix plugin not detected, compatibility disabled");
-	} else {
-		logger::info("[Horizon Fix] HorizonFix plugin detected, compatibility enabled");
+		return;
 	}
+
+	logger::info("[Horizon Fix] HorizonFix plugin detected, compatibility enabled");
 }

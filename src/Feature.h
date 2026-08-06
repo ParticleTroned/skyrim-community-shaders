@@ -78,6 +78,13 @@ public:
 	virtual bool IsInMenu() const { return true; }
 
 	/**
+	 * Whether a successfully loaded feature was intentionally disabled because an optional
+	 * runtime dependency is absent. Cache validation uses this to distinguish that expected
+	 * transition from a missing or failed feature package.
+	 */
+	virtual bool IsRuntimeDisabledByMissingDependency() const { return false; }
+
+	/**
 	 * Whether the feature should be hidden from user-facing feature lists.
 	 */
 	virtual bool IsHiddenFromUserView() const { return false; }

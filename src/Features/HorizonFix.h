@@ -23,6 +23,8 @@ struct HorizonFix : Feature
 	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::Water; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kWater; }
 	virtual inline bool SupportsVR() override { return true; }
+	virtual bool IsInMenu() const override { return !pluginDetectionComplete || pluginInstalled; }
+	virtual bool IsRuntimeDisabledByMissingDependency() const override { return pluginDetectionComplete && !pluginInstalled; }
 
 	/** @brief Returns a summary description for the UI. */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -40,4 +42,8 @@ struct HorizonFix : Feature
 	virtual void PostPostLoad() override;
 
 	virtual bool IsCore() const override { return true; }
+
+private:
+	bool pluginDetectionComplete = false;
+	bool pluginInstalled = false;
 };

@@ -32,6 +32,7 @@ struct ScreenshotFeature : public Feature
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsInMenu() const override;
 
+	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override { DrawSettings(); }
@@ -41,6 +42,10 @@ struct ScreenshotFeature : public Feature
 
 	/** Requests one capture from the render thread using an immutable settings snapshot. */
 	void RequestCapture();
+	/** Returns whether Community Shaders screenshot capture is enabled at runtime. */
+	bool IsRuntimeEnabled() const noexcept { return loaded && enabled.load(std::memory_order_acquire); }
+	/** Toggles new captures, cancelling active source acquisition while committed encoder work finishes. */
+	void SetEnabled(bool a_enabled);
 	/** Returns whether a source capture is awaiting Submit or Present processing. */
 	bool HasPendingCapture() const noexcept { return capturePending.load(std::memory_order_acquire); }
 	/**
@@ -129,6 +134,7 @@ private:
 	std::atomic_bool readbackProtectionCleanupPending{ false };
 	Util::Subrect::Controller subrect;
 
+	std::atomic_bool enabled{ true };
 	std::atomic_bool capturePending{ false };
 	std::mutex captureStateMutex;
 	ActiveCapture activeCapture;

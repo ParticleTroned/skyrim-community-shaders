@@ -31,7 +31,7 @@ namespace FeatureVersions
         {"RenderDoc"sv,            {1,1,0}},
         {"ScreenSpaceGI"sv,        {4,2,6}},
         {"ScreenSpaceShadows"sv,   {2,2,5}},
-        {"Screenshot"sv,           {1,5,0}},
+        {"Screenshot"sv,           {1,5,1}},
         {"SkySync"sv,              {1,5,0}},
         {"Skylighting"sv,          {1,3,7}},
         {"SubsurfaceScattering"sv, {3,1,6}},

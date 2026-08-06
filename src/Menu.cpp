@@ -1390,11 +1390,14 @@ void Menu::ProcessInputEventQueue()
 			}
 
 			auto shaderCache = globals::shaderCache;
-			auto dispatchHotkeyActions = [this, key, shaderCache](bool combosOnly) {
+			const bool screenshotHotkeyActive =
+				globals::features::screenshotFeature.IsRuntimeEnabled();
+			auto dispatchHotkeyActions = [this, key, shaderCache, screenshotHotkeyActive](bool combosOnly) {
 				struct KeyAction
 				{
 					std::vector<InputCombo>& settingKey;
 					std::function<void()> action;
+					bool active = true;
 				};
 
 				KeyAction keyActions[] = {
@@ -1429,10 +1432,7 @@ void Menu::ProcessInputEventQueue()
 							 CSEditor::ToggleEditorWindow();
 						 }
 					 } },
-					{ settings.ScreenshotKey, []() {
-						 if (globals::features::screenshotFeature.loaded)
-							 globals::features::screenshotFeature.RequestCapture();
-					 } },
+					{ settings.ScreenshotKey, []() { globals::features::screenshotFeature.RequestCapture(); }, screenshotHotkeyActive },
 				};
 
 				// RenderDoc's capture key is a single, unmodified key; only consider it on key-up.
@@ -1441,7 +1441,9 @@ void Menu::ProcessInputEventQueue()
 
 				for (const auto& ka : keyActions) {
 					const bool isCombo = ka.settingKey.size() > 1;
-					if (isCombo == combosOnly && InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
+					if (ka.active &&
+						isCombo == combosOnly &&
+						InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
 						ka.action();
 						return true;
 					}
@@ -1560,11 +1562,13 @@ void Menu::ProcessInputEventQueue()
 			const std::vector<InputCombo>* hotkeys[] = {
 				&settings.ToggleKey, &settings.EffectToggleKey,
 				&settings.OverlayToggleKey, &settings.ShaderBlockPrevKey, &settings.ShaderBlockNextKey,
-				&settings.CSEditorToggleKey,
-				&settings.ScreenshotKey
+				&settings.CSEditorToggleKey
 			};
-			bool isHotkey = ShouldSwallowInput() && std::any_of(std::begin(hotkeys), std::end(hotkeys),
-														[key](const auto* combo) { return InputCombo::MatchesKeyboardCombo(*combo, key); });
+			const bool isHotkey = ShouldSwallowInput() &&
+			                      ((screenshotHotkeyActive &&
+									   InputCombo::MatchesKeyboardCombo(settings.ScreenshotKey, key)) ||
+									  std::any_of(std::begin(hotkeys), std::end(hotkeys),
+										  [key](const auto* combo) { return InputCombo::MatchesKeyboardCombo(*combo, key); }));
 
 			// Always forward key-up events. Suppress key-down during active hotkeys,
 			// and during hotkey capture except setup close keys (Enter/Escape).

@@ -483,6 +483,18 @@ bool ScreenshotFeature::IsInMenu() const
 	return true;
 }
 
+void ScreenshotFeature::DrawSettingsHeaderControls()
+{
+	bool runtimeEnabled = enabled.load(std::memory_order_acquire);
+	if (ImGui::Checkbox("Enable Community Shaders Screenshots", &runtimeEnabled)) {
+		SetEnabled(runtimeEnabled);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Controls the Community Shaders screenshot hotkey and manual capture button.");
+		ImGui::Text("Vanilla Skyrim screenshots are unaffected.");
+	}
+}
+
 void ScreenshotFeature::PostPostLoad()
 {
 	// Seed VR-specific presets here rather than in LoadSettings: Feature::Load
@@ -500,6 +512,7 @@ void ScreenshotFeature::PostPostLoad()
 
 void ScreenshotFeature::LoadSettings(json& a_json)
 {
+	const bool captureEnabled = a_json.value("Enabled", true);
 	if (a_json.contains("ScreenshotPath"))
 		screenshotPath = a_json["ScreenshotPath"];
 	if (a_json.contains("ApplyCropToScreenshot"))
@@ -515,10 +528,12 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 	}
 
 	subrect.LoadSettings(a_json);
+	SetEnabled(captureEnabled);
 }
 
 void ScreenshotFeature::SaveSettings(json& a_json)
 {
+	a_json["Enabled"] = enabled.load(std::memory_order_acquire);
 	a_json["ScreenshotPath"] = screenshotPath;
 	a_json["ApplyCropToScreenshot"] = applyCropToScreenshot;
 	a_json["SdrUsePng"] = sdrUsePng;
@@ -536,6 +551,9 @@ void ScreenshotFeature::DrawSettings()
 		"VR HMD captures use the exact accepted OpenVR eye submissions before compositor distortion. "
 		"SDR and VR captures use the selected lossless format. Desktop FP16 scene sources are tonemapped "
 		"(Reinhard) before SDR save; HDR PNG metadata is intentionally not included in this branch.");
+	if (!IsRuntimeEnabled()) {
+		ImGui::TextDisabled("Community Shaders screenshot capture is off. Output and crop settings can still be edited.");
+	}
 
 	if (globals::game::isVR) {
 		ImGui::SeparatorText("VR Capture Source");
@@ -552,9 +570,11 @@ void ScreenshotFeature::DrawSettings()
 		}
 	}
 
+	ImGui::BeginDisabled(!IsRuntimeEnabled());
 	if (ImGui::Button("Take Screenshot Now")) {
 		RequestCapture();
 	}
+	ImGui::EndDisabled();
 	ImGui::SameLine();
 	ImGui::Checkbox("Apply crop", &applyCropToScreenshot);
 
@@ -602,7 +622,7 @@ void ScreenshotFeature::DrawSettings()
 		Menu::GetSingleton()->settingScreenshotKey,
 		"Change##ScreenshotFeature");
 
-	if (HotkeyCollidesWithVanilla()) {
+	if (IsRuntimeEnabled() && HotkeyCollidesWithVanilla()) {
 		Util::Text::WrappedWarning(
 			"This hotkey collides with vanilla PrintScreen; both saves will fire. "
 			"Set bAllowScreenShot=0 in Skyrim.ini to suppress vanilla, or pick a different hotkey above.");
@@ -738,9 +758,16 @@ void ScreenshotFeature::FallBackToDesktopCapture(ActiveCapture& a_capture, std::
 
 void ScreenshotFeature::RequestCapture()
 {
+	if (!IsRuntimeEnabled()) {
+		return;
+	}
+
 	auto options = SnapshotCaptureOptions();
 
 	std::lock_guard lock(captureStateMutex);
+	if (!IsRuntimeEnabled()) {
+		return;
+	}
 	ClearActiveCapture(activeCapture);
 	if (!TryReserveScreenshotSlot()) {
 		capturePending.store(false, std::memory_order_release);
@@ -771,6 +798,30 @@ void ScreenshotFeature::RequestCapture()
 		activeCapture.source == VRCaptureSource::HMDSubmission ?
 			"the accepted HMD submission" :
 			"the desktop mirror");
+}
+
+void ScreenshotFeature::SetEnabled(bool a_enabled)
+{
+	bool wasEnabled = false;
+	bool cancelledPendingCapture = false;
+	{
+		std::lock_guard lock(captureStateMutex);
+		wasEnabled = enabled.exchange(a_enabled, std::memory_order_acq_rel);
+		if (!a_enabled) {
+			// Close the Submit fast path before releasing partial textures and its
+			// reserved encoder slot. Completed or queued encoder work remains committed.
+			capturePending.store(false, std::memory_order_release);
+			cancelledPendingCapture = activeCapture.pending;
+			ClearActiveCapture(activeCapture);
+		}
+	}
+
+	if (wasEnabled != a_enabled) {
+		logger::debug("Community Shaders screenshot capture {}", a_enabled ? "enabled" : "disabled");
+	}
+	if (cancelledPendingCapture) {
+		logger::debug("Cancelled the pending screenshot capture after the feature was disabled");
+	}
 }
 
 bool ScreenshotFeature::TryReserveScreenshotSlot()
@@ -1411,7 +1462,9 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 	bool completed = false;
 	{
 		std::lock_guard lock(captureStateMutex);
-		if (!activeCapture.pending || activeCapture.source != VRCaptureSource::HMDSubmission) {
+		if (!IsRuntimeEnabled() ||
+			!activeCapture.pending ||
+			activeCapture.source != VRCaptureSource::HMDSubmission) {
 			return;
 		}
 
@@ -1493,7 +1546,7 @@ void ScreenshotFeature::OnBeforePresent(IDXGISwapChain* a_swapChain)
 	}
 
 	std::lock_guard lock(captureStateMutex);
-	if (!activeCapture.pending) {
+	if (!IsRuntimeEnabled() || !activeCapture.pending) {
 		return;
 	}
 

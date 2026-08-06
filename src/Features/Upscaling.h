@@ -1904,6 +1904,8 @@ public:
 		VRRenderScalePresentationObservation& a_presentationObservation) const;
 	bool PrepareVRNativeRestoreCompositorKeepalive(
 		uint64_t a_expectedGuardEpoch,
+		const vr::Texture_t* a_candidateTexture,
+		const vr::VRTextureBounds_t* a_candidateBounds,
 		VRNativeRestoreCompositorKeepaliveSubmission& a_submission);
 	bool IsVRNativeRestorePresentationGuardActive() const;
 	uint64_t GetVRNativeRestorePresentationGuardActiveEpoch() const;
@@ -2581,8 +2583,6 @@ private:
 	std::atomic<uint64_t> vrPostLoadCompositorHoldReleasedEyeMaskState{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldEpoch{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldAwaitingSyncEpoch{ 0 };
-	winrt::com_ptr<ID3D11Texture2D> vrPostLoadCompositorKeepaliveTexture;
-	winrt::com_ptr<ID3D11Device> vrPostLoadCompositorKeepaliveDevice;
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
 	std::mutex vrPostLoadCompositorRepairMutex;
 
@@ -2610,10 +2610,17 @@ private:
 	void FinishVRInitialLoadPresentationProtectionLocked(
 		bool a_preservePublishedQuarantine = false);
 	bool PrepareVRPostLoadCompositorKeepaliveLocked(
-		ID3D11Texture2D* a_candidateTexture,
+		const vr::Texture_t* a_candidateTexture,
+		const vr::VRTextureBounds_t* a_candidateBounds,
 		VRPostLoadCompositorKeepaliveSubmission& a_submission);
-	bool EnsureVRCompositorKeepaliveTextureLocked(
-		ID3D11Device* a_candidateDevice);
+	bool PrepareVRCompositorKeepaliveSubmissionLocked(
+		const vr::Texture_t* a_candidateTexture,
+		const vr::VRTextureBounds_t* a_candidateBounds,
+		vr::Texture_t& a_texture,
+		vr::VRTextureBounds_t& a_bounds,
+		winrt::com_ptr<ID3D11Texture2D>& a_lifetime);
+	bool ClearVRCompositorCandidateBlackLocked(
+		ID3D11Texture2D* a_candidateTexture);
 	bool TryRepairVRPostLoadFixedCompositorCandidate(
 		ID3D11Texture2D* a_candidateTexture,
 		const D3D11_TEXTURE2D_DESC& a_candidateDesc,
@@ -2621,7 +2628,6 @@ private:
 		uint32_t a_currentFrame,
 		uint32_t a_expectedRenderWidth,
 		uint32_t a_expectedRenderHeight);
-	void ReleaseVRPostLoadCompositorKeepalive();
 	bool DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,

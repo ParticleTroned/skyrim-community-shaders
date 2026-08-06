@@ -896,8 +896,11 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			if (canonicalizeConfig(configPath, userSettings) == SettingsSerialization::CanonicalizationResult::Error)
 				sourceConfigSafeForAutomaticSave = false;
 			const auto adaptiveBalanceIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+			const auto legacyAdaptiveBrightnessIt =
+				userSettings.find(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
 			const bool userDefinedAdaptiveBalance =
-				adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object();
+				(adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object()) ||
+				(legacyAdaptiveBrightnessIt != userSettings.end() && legacyAdaptiveBrightnessIt->is_object());
 			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings);
 			for (const auto& [key, value] : userSettings.items()) {
 				auto existingIt = settings.find(key);

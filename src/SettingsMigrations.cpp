@@ -93,6 +93,46 @@ namespace
 		return changed;
 	}
 
+	bool MergeMissingObjectMembers(json& a_target, const json& a_fallback)
+	{
+		if (!a_target.is_object() || !a_fallback.is_object())
+			return false;
+
+		bool changed = false;
+		for (const auto& [key, fallbackValue] : a_fallback.items()) {
+			auto targetIt = a_target.find(key);
+			if (targetIt == a_target.end()) {
+				a_target[key] = fallbackValue;
+				changed = true;
+			} else if (targetIt->is_object() && fallbackValue.is_object()) {
+				changed |= MergeMissingObjectMembers(*targetIt, fallbackValue);
+			}
+		}
+		return changed;
+	}
+
+	bool MigrateLegacyAdaptiveBrightnessRoot(json& a_layer)
+	{
+		auto legacyIt = a_layer.find(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
+		if (legacyIt == a_layer.end())
+			return false;
+
+		auto adaptiveIt = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		if (adaptiveIt == a_layer.end()) {
+			// A malformed legacy section previously loaded defaults. Preserve that
+			// behavior with an empty canonical object instead of retaining both names.
+			a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)] =
+				legacyIt->is_object() ? *legacyIt : json::object();
+		} else if (adaptiveIt->is_object() && legacyIt->is_object()) {
+			// During the transition, settings explicitly written under the canonical
+			// name win while the old section supplies any still-missing members.
+			MergeMissingObjectMembers(*adaptiveIt, *legacyIt);
+		}
+
+		a_layer.erase(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
+		return true;
+	}
+
 	const json& GetBloomSchema()
 	{
 		static const json schema = Bloom::PresetSettings{};
@@ -121,16 +161,20 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(nlohmann::json& a_layer
 	if (!a_layer.is_object())
 		return false;
 
-	const auto sourceCSUtilityIt = a_layer.find(kCSUtilitySettingsName.data());
-	if (sourceCSUtilityIt == a_layer.end() ||
+	auto migratedLayer = a_layer;
+	bool migrated = MigrateLegacyAdaptiveBrightnessRoot(migratedLayer);
+
+	const auto sourceCSUtilityIt = migratedLayer.find(kCSUtilitySettingsName.data());
+	if (sourceCSUtilityIt == migratedLayer.end() ||
 		!sourceCSUtilityIt->is_object() ||
 		!HasLegacyRendererSettings(*sourceCSUtilityIt)) {
-		return false;
+		if (migrated)
+			a_layer = std::move(migratedLayer);
+		return migrated;
 	}
 
-	// Work on a candidate so a layer is never partially rewritten when its legacy
-	// renderer data is present but unusable.
-	auto migratedLayer = a_layer;
+	// Work on the candidate so a layer is never partially rewritten when its
+	// legacy CS Utility renderer data is present but unusable.
 	auto csUtilityIt = migratedLayer.find(kCSUtilitySettingsName.data());
 
 	auto adaptiveIt = migratedLayer.find(kAdaptiveBalanceSettingsName.data());
@@ -138,14 +182,15 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(nlohmann::json& a_layer
 		migratedLayer[std::string(kAdaptiveBalanceSettingsName)] = json::object();
 		adaptiveIt = migratedLayer.find(kAdaptiveBalanceSettingsName.data());
 	} else if (!adaptiveIt->is_object()) {
-		if (!HasRecoverableLegacyRendererSettings(*csUtilityIt))
-			return false;
+		if (!HasRecoverableLegacyRendererSettings(*csUtilityIt)) {
+			if (migrated)
+				a_layer = std::move(migratedLayer);
+			return migrated;
+		}
 		// A malformed destination cannot represent any valid explicit setting.
 		// Recover into a clean object when the legacy layer contains usable data.
 		*adaptiveIt = json::object();
 	}
-
-	bool migrated = false;
 
 	const auto enabledIt = csUtilityIt->find(kEnabledKey.data());
 	if (enabledIt != csUtilityIt->end() && enabledIt->is_boolean()) {

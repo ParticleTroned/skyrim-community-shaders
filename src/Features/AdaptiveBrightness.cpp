@@ -1,6 +1,7 @@
 #include "AdaptiveBrightness.h"
 
 #include "LocationContext.h"
+#include "SettingsMigrations.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Form.h"
@@ -597,7 +598,7 @@ namespace
 				return &*it;
 		}
 
-		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), AdaptiveBrightness::kFeatureDisplayName.data(), "AdaptiveBalance" }) {
+		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data(), "AdaptiveBalance" }) {
 			if (auto it = a_json.find(featureName); it != a_json.end() && it->is_object()) {
 				if (auto profilesIt = it->find(kProfilesFieldName.data()); profilesIt != it->end() && profilesIt->is_array())
 					return &*it;
@@ -655,7 +656,7 @@ namespace
 		if (auto it = a_json.find(kLocationOverridesFieldName.data()); it != a_json.end())
 			return &*it;
 
-		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), AdaptiveBrightness::kFeatureDisplayName.data(), "AdaptiveBalance" }) {
+		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data(), "AdaptiveBalance" }) {
 			if (auto it = a_json.find(featureName); it != a_json.end() && it->is_object()) {
 				if (auto overridesIt = it->find(kLocationOverridesFieldName.data()); overridesIt != it->end())
 					return &*overridesIt;

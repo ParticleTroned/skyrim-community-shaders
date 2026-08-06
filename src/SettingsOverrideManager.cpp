@@ -548,7 +548,7 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 
 		if (overrideInfo->isGlobal) {
 			if (SettingsMigrations::MigrateAdaptiveBalanceRootLayer(overrideInfo->overrideData))
-				logger::info("Migrated legacy CS Utility renderer settings in global override {}", filePath.string());
+				logger::info("Migrated legacy Adaptive Balance settings in global override {}", filePath.string());
 		} else if (overrideInfo->featureName == SettingsMigrations::kCSUtilityFeatureName) {
 			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(overrideInfo->overrideData);
 			if (!adaptiveBalancePatch.empty()) {

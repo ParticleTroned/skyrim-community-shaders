@@ -7,7 +7,7 @@
                  "EffectToggleKey":  106,
                  "EnableShaderBlocking":  false,
                  "FirstTimeSetupCompleted":  false,
-                 "HideCompilationHUDInVR":  true,
+                 "ShowCompilationHUDInVR":  false,
                  "OverlayToggleKey":  121,
                  "RequireShiftToDock":  true,
                  "ScreenshotKey":  44,

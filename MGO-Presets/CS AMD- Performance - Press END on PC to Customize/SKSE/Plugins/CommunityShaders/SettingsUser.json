@@ -271,7 +271,7 @@
  "Menu": {
   "AutoHideFeatureList": false,
   "BackgroundShaderCompilationOnBoot": false,
-  "HideCompilationHUDInVR": true,
+  "ShowCompilationHUDInVR": false,
   "CSEditorToggleKey": 122,
   "EffectToggleKey": 106,
   "EnableShaderBlocking": false,

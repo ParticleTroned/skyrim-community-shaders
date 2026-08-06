@@ -98,7 +98,7 @@
                  "UI Mode":  0,
                  "ShaderBlockNextKey":  34,
                  "BackgroundShaderCompilationOnBoot":  false,
-                 "HideCompilationHUDInVR":  true,
+                 "ShowCompilationHUDInVR":  false,
                  "OverlayToggleKey":  121,
                  "UseResolutionFont":  true,
                  "ToggleKey":  35,

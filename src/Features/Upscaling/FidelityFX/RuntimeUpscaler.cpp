@@ -637,10 +637,14 @@ void FidelityFX::LatchRuntimeUpscalerFailure()
 	runtimeUpscalerFailureLatched = true;
 }
 
-void FidelityFX::QuarantineRuntimeUpscalerForSession([[maybe_unused]] const char* a_reason)
+void FidelityFX::QuarantineRuntimeUpscalerForSession(const char* a_reason)
 {
 	LatchRuntimeUpscalerFailure();
+	if (runtimeUpscalerQuarantined)
+		return;
+
 	runtimeUpscalerQuarantined = true;
+	logger::error("[FidelityFX] Quarantining runtime upscaler provider for this session: {}", a_reason ? a_reason : "unknown reason");
 }
 
 void FidelityFX::LatchRuntimeFsr4Failure()
@@ -648,6 +652,7 @@ void FidelityFX::LatchRuntimeFsr4Failure()
 	if (runtimeFsr4FailureLatched)
 		return;
 
+	logger::warn("[FidelityFX] Runtime FSR4 failed this session; falling back to the runtime FSR3 provider");
 	runtimeFsr4FailureLatched = true;
 }
 
@@ -804,9 +809,10 @@ bool FidelityFX::EnsureRuntimeUpscalerInterop()
 		if (!EnsureRuntimeCommandContexts())
 			return false;
 	} catch (const std::exception& e) {
-		(void)e;
+		logger::error("[FidelityFX] Runtime upscaler interop setup failed: {}", e.what());
 		return false;
 	} catch (...) {
+		logger::error("[FidelityFX] Runtime upscaler interop setup failed with an unknown exception");
 		return false;
 	}
 
@@ -838,9 +844,10 @@ bool FidelityFX::EnsureRuntimeCommandContexts()
 			DX::ThrowIfFailed(commandContext.commandList->Close());
 		}
 	} catch (const std::exception& e) {
-		(void)e;
+		logger::error("[FidelityFX] Runtime upscaler command context creation failed: {}", e.what());
 		return false;
 	} catch (...) {
+		logger::error("[FidelityFX] Runtime upscaler command context creation failed with an unknown exception");
 		return false;
 	}
 
@@ -948,8 +955,9 @@ void FidelityFX::WaitForRuntimeUpscalerIdle()
 			}
 		}
 	} catch (const std::exception& e) {
-		(void)e;
+		logger::debug("[FidelityFX] Runtime upscaler idle wait failed: {}", e.what());
 	} catch (...) {
+		logger::debug("[FidelityFX] Runtime upscaler idle wait failed with an unknown exception");
 	}
 }
 
@@ -1058,7 +1066,11 @@ bool FidelityFX::PollRuntimeUpscalerTeardownIdle()
 			pendingRuntimeTeardownD3D12FenceValue = 0;
 		}
 	} catch (const std::exception& e) {
-		(void)e;
+		static bool loggedTeardownPollFailure = false;
+		if (!loggedTeardownPollFailure) {
+			logger::debug("[FidelityFX] Runtime upscaler teardown poll failed: {}", e.what());
+			loggedTeardownPollFailure = true;
+		}
 		pendingRuntimeTeardownD3D11FenceValue = 0;
 		pendingRuntimeTeardownD3D12FenceValue = 0;
 		return true;
@@ -1317,10 +1329,11 @@ bool FidelityFX::EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, u
 			runtimeOutputShared[i] = new WrappedResource(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("RuntimeUpscaler::OutputShared{}", i));
 		}
 	} catch (const std::exception& e) {
-		(void)e;
+		logger::error("[FidelityFX] Runtime upscaler shared resource creation failed: {}", e.what());
 		DestroyRuntimeUpscalerResources();
 		return false;
 	} catch (...) {
+		logger::error("[FidelityFX] Runtime upscaler shared resource creation failed with an unknown exception");
 		DestroyRuntimeUpscalerResources();
 		return false;
 	}
@@ -1538,9 +1551,8 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 				commandContext->fenceValue = 0;
 			}
 		}
-		(void)e;
 		dispatchOk = false;
-		QuarantineRuntimeUpscalerForSession("runtime upscaler dispatch threw");
+		QuarantineRuntimeUpscalerForSession(std::format("runtime upscaler dispatch threw: {}", e.what()).c_str());
 	} catch (...) {
 		if (!commandListSubmitted) {
 			commandContext->fenceValue = 0;
@@ -1554,7 +1566,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 			}
 		}
 		dispatchOk = false;
-		QuarantineRuntimeUpscalerForSession("runtime upscaler dispatch threw");
+		QuarantineRuntimeUpscalerForSession("runtime upscaler dispatch threw an unknown exception");
 	}
 
 	return dispatchOk;
@@ -1619,10 +1631,9 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 					return true;
 				}
 			} catch (const std::exception& e) {
-				(void)e;
-				QuarantineRuntimeUpscalerForSession("runtime upscaler context/resource setup threw");
+				QuarantineRuntimeUpscalerForSession(std::format("runtime upscaler context/resource setup threw: {}", e.what()).c_str());
 			} catch (...) {
-				QuarantineRuntimeUpscalerForSession("runtime upscaler context/resource setup threw");
+				QuarantineRuntimeUpscalerForSession("runtime upscaler context/resource setup threw an unknown exception");
 			}
 
 			return false;

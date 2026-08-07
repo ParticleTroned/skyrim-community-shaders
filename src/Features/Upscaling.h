@@ -65,6 +65,8 @@ public:
 		kUltraPerformance = 4,
 	};
 
+	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
+
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
@@ -97,6 +99,11 @@ public:
 		// Opt in to AMD's runtime FSR4 upscaler DLL on eligible RDNA4 hardware instead of the
 		// host-linked FSR3 SDK; falls back to FSR3 on any failure.
 		bool fsr4RuntimeEnable = false;
+
+		// Tracks whether fsr4RuntimeEnable has been auto-migrated for the detected adapter.
+		// Defaults to current so a fresh config needs no migration; LoadSettings resets it to
+		// 0 when absent from JSON so pre-existing configs run the migration once.
+		uint32_t fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 	};
 
 	static constexpr float kVRRenderScaleMin = 0.33f;

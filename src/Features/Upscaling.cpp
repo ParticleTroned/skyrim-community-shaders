@@ -49,9 +49,35 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	reflexFPSLimit,
 	renderAtUpscaleRes,
 	vrRenderScale,
-	fsr4RuntimeEnable);
+	fsr4RuntimeEnable,
+	fsr4RuntimeSelectionSchemaVersion);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
+
+/**
+ * @brief One-shot migration of fsr4RuntimeEnable for the detected adapter's FSR4 support class.
+ *
+ * RX 7000 (RDNA3 discrete) eligibility was added after fsr4RuntimeEnable already shipped
+ * defaulting to off; auto-enable it once for those adapters so existing/new RX 7000 users
+ * get the same experience as a fresh RX 9000 install. Leaves the user's own choice alone on
+ * RX 9000 (already eligible pre-migration) and on Unsupported adapters, where the version is
+ * deliberately left unstamped so the migration re-runs once a supported adapter is detected.
+ */
+void ApplyLegacyFsr4RuntimeSelectionMigration(Upscaling::Settings& a_settings, FidelityFX::Fsr4AdapterSupport a_adapterSupport)
+{
+	if (a_settings.fsr4RuntimeSelectionSchemaVersion >= Upscaling::kFsr4RuntimeSelectionSchemaVersion)
+		return;
+
+	if (a_adapterSupport == FidelityFX::Fsr4AdapterSupport::Unsupported)
+		return;
+
+	if (a_adapterSupport == FidelityFX::Fsr4AdapterSupport::RadeonRx7000 && !a_settings.fsr4RuntimeEnable) {
+		a_settings.fsr4RuntimeEnable = true;
+		logger::info("[Upscaling] Auto-enabled Runtime FSR4 for detected RX 7000-class adapter");
+	}
+
+	a_settings.fsr4RuntimeSelectionSchemaVersion = Upscaling::kFsr4RuntimeSelectionSchemaVersion;
+}
 
 /**
  * @brief Creates a Direct3D 11 device and swap chain, with support for advanced upscaling and frame generation features.
@@ -74,11 +100,14 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
-	DXGI_ADAPTER_DESC adapterDesc;
-	pAdapter->GetDesc(&adapterDesc);
-	globals::state->SetAdapterDescription(adapterDesc.Description);
-
 	auto& upscaling = globals::features::upscaling;
+
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (pAdapter && SUCCEEDED(pAdapter->GetDesc(&adapterDesc))) {
+		globals::state->SetAdapterDescription(adapterDesc.Description);
+		ApplyLegacyFsr4RuntimeSelectionMigration(upscaling.settings, FidelityFX::GetFsr4AdapterSupport(adapterDesc));
+	}
+
 	upscaling.LoadUpscalingSDKs();
 
 	if (upscaling.IsBackendInitialized())
@@ -901,7 +930,14 @@ void Upscaling::LoadSettings(json& o_json)
 		foveatedRender.LoadSettings(o_json["foveatedRender"]);
 		o_json.erase("foveatedRender");
 	}
+	// NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT fills an absent key with
+	// Settings' default member initializer (the CURRENT schema version), not 0 --
+	// detect absence explicitly so a pre-existing config still runs the migration.
+	const bool hadFsr4SchemaVersion = o_json.contains("fsr4RuntimeSelectionSchemaVersion");
 	settings = o_json;
+	if (!hadFsr4SchemaVersion)
+		settings.fsr4RuntimeSelectionSchemaVersion = 0;
+	ApplyLegacyFsr4RuntimeSelectionMigration(settings, fidelityFX.GetFsr4AdapterSupport());
 
 	// Sanitize loaded settings to ensure enum indices are valid
 	constexpr auto enumCount = 4;  // UpscaleMethod has 4 values: kNONE, kTAA, kFSR, kDLSS

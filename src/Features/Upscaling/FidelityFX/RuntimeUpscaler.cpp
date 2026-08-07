@@ -189,6 +189,11 @@ namespace
 		std::wstring wideDescription(a_desc.Description);
 		const std::string description = ToUpperAscii(stl::utf16_to_utf8(wideDescription).value_or(""));
 
+		// Pre-RDNA "HD"-branded GCN cards (e.g. "Radeon HD 7970") fall in the same 7000-7999
+		// numeric range as RX 7000 without being FSR 4.1.1-capable; reject them before the scan.
+		if (description.find("RADEON HD") != std::string::npos)
+			return FidelityFX::Fsr4AdapterSupport::Unsupported;
+
 		// Only accept explicit discrete RDNA3 dies here, never a bare "RDNA 3"/"RDNA3" marker --
 		// that also matches RDNA3 integrated GPUs, which FSR 4.1.1 does not support.
 		if (description.find("NAVI31") != std::string::npos ||
@@ -456,6 +461,21 @@ namespace
 
 		__try {
 			dispatchOk = ffxFsr3ContextDispatchUpscale(&a_context, &a_dispatchParameters) == FFX_OK;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			dispatchOk = false;
+		}
+
+		return dispatchOk;
+	}
+
+	// A faulting dispatch inside the AMD-provided DLL is not guaranteed to raise a C++
+	// exception the caller's try/catch can observe; wrap it the same way as the host path.
+	bool DispatchRuntimeUpscalerProtected(ffx::Context& a_context, ffx::DispatchDescUpscale& a_dispatchParameters)
+	{
+		bool dispatchOk = true;
+
+		__try {
+			dispatchOk = ffx::Dispatch(a_context, a_dispatchParameters) == ffx::ReturnCode::Ok;
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
 			dispatchOk = false;
 		}
@@ -1450,6 +1470,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 			!copyIntoShared(a_motionVectors, runtimeMotionShared[a_contextIndex], motionDesc.Width, motionDesc.Height, runtimeMotionSharedDesc.Width, runtimeMotionSharedDesc.Height) ||
 			!copyIntoShared(a_reactiveMask, runtimeReactiveShared[a_contextIndex], reactiveDesc.Width, reactiveDesc.Height, runtimeReactiveSharedDesc.Width, runtimeReactiveSharedDesc.Height) ||
 			!copyIntoShared(a_transparencyCompositionMask, runtimeTransparencyShared[a_contextIndex], transparencyDesc.Width, transparencyDesc.Height, runtimeTransparencySharedDesc.Width, runtimeTransparencySharedDesc.Height)) {
+			logger::error("[FidelityFX] Runtime upscaler shared-resource copy failed for eye {}", a_contextIndex);
 			dispatchOk = false;
 		} else {
 			const uint64_t d3d11SubmitFence = runtimeFenceValue++;
@@ -1497,9 +1518,20 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 			const bool runtimeFallbackReset = runtimeFallbackResetDispatchesRemaining > 0;
 			dispatchParameters.reset = dispatchParameters.reset || runtimeFallbackReset;
 
-			dispatchOk = ffx::Dispatch(runtimeUpscalerContexts[a_contextIndex], dispatchParameters) == ffx::ReturnCode::Ok;
+			dispatchOk = DispatchRuntimeUpscalerProtected(runtimeUpscalerContexts[a_contextIndex], dispatchParameters);
 			if (dispatchOk && runtimeFallbackReset)
 				runtimeFallbackResetDispatchesRemaining--;
+
+			if (!dispatchOk) {
+				// A non-OK/faulted dispatch doesn't necessarily throw, so it would otherwise
+				// bypass this function's catch blocks (and their quarantine) entirely.
+				const HRESULT deviceRemovedReason = swapChain.d3d12Device ? swapChain.d3d12Device->GetDeviceRemovedReason() : S_OK;
+				if (FAILED(deviceRemovedReason)) {
+					QuarantineRuntimeUpscalerForSession(std::format("runtime upscaler D3D12 device removed: 0x{:08X}", static_cast<uint32_t>(deviceRemovedReason)).c_str());
+				} else {
+					logger::error("[FidelityFX] Runtime upscaler dispatch returned a failure code");
+				}
+			}
 
 			std::array<D3D12_RESOURCE_BARRIER, 6> endBarriers = {
 				CD3DX12_RESOURCE_BARRIER::Transition(runtimeColorShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
@@ -1582,6 +1614,10 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		return false;
 	}
 
+	// Snapshot before this eye's own dispatch -- and before the quarantine teardown below,
+	// which clears the frame-path tracking this reads -- so it reflects only a sibling eye.
+	const bool runtimeAlreadyUsedThisFrame = WasRuntimeUpscalerUsedThisFrame();
+
 	// A quarantined provider's contexts/resources are never dispatched into again; release
 	// them at this natural per-call boundary rather than inside the exception handler that
 	// discovered the quarantine, where GPU/command-list state is mid-teardown already.
@@ -1594,8 +1630,6 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 	const uint32_t runtimeContextCount = splitPerEyeContexts ? 2u : 1u;
 	const bool runtimeSelected = runtimeRequested && CanUseRuntimeUpscalerPath();
-	// Snapshot before this eye's own dispatch can update it, so it reflects only a sibling eye.
-	const bool runtimeAlreadyUsedThisFrame = WasRuntimeUpscalerUsedThisFrame();
 
 	if (runtimeSelected) {
 		auto state = globals::state;
@@ -1643,7 +1677,9 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 			return true;
 
 		// Try the runtime FSR3 provider in the upscaler DLL before falling back to the host SDK.
-		if (runtimeFsr4Requested && ShouldUseRuntimeUpscalerForFSR()) {
+		// CanUseRuntimeUpscalerPath() re-check: the FSR4 attempt above may have just quarantined
+		// the provider, which must stop this fallback from dispatching into it too.
+		if (runtimeFsr4Requested && ShouldUseRuntimeUpscalerForFSR() && CanUseRuntimeUpscalerPath()) {
 			LatchRuntimeFsr4Failure();
 			runtimeFallbackResetDispatchesRemaining = std::max(runtimeFallbackResetDispatchesRemaining, runtimeContextCount);
 			const uint32_t fallbackRenderWidth = splitPerEyeContexts ? fullRenderWidth : a_renderWidth;

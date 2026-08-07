@@ -189,6 +189,11 @@ private:
 
 	bool runtimeUpscalerFailureLatched = false;
 	bool runtimeFsr4FailureLatched = false;
+	// Set once a runtime-provider dispatch throws. Unlike runtimeUpscalerFailureLatched
+	// (cleared by ResetRuntimeUpscalerTracking on ordinary teardown/reconfigure), this
+	// survives that reset -- a terminal exception can leave the DX12 provider's internal
+	// state unsafe to reuse for the rest of the session, so it is never re-armed.
+	bool runtimeUpscalerQuarantined = false;
 	uint32_t runtimeFallbackResetDispatchesRemaining = 0;
 	bool runtimeUpscalerLastFramePathValid = false;
 	uint32_t runtimeUpscalerLastFrameIndex = 0;
@@ -208,6 +213,10 @@ private:
 	void ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache);
 	void LatchRuntimeUpscalerFailure();
 	void LatchRuntimeFsr4Failure();
+	// Retires the runtime provider for the rest of the session: latches the ordinary
+	// failure flag immediately (so no eye attempts it again this frame) and marks it
+	// quarantined so a later ResetRuntimeUpscalerTracking(true) cannot re-arm it.
+	void QuarantineRuntimeUpscalerForSession(const char* a_reason);
 	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
 	bool EnsureRuntimeUpscalerInterop();

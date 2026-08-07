@@ -637,6 +637,12 @@ void FidelityFX::LatchRuntimeUpscalerFailure()
 	runtimeUpscalerFailureLatched = true;
 }
 
+void FidelityFX::QuarantineRuntimeUpscalerForSession([[maybe_unused]] const char* a_reason)
+{
+	LatchRuntimeUpscalerFailure();
+	runtimeUpscalerQuarantined = true;
+}
+
 void FidelityFX::LatchRuntimeFsr4Failure()
 {
 	if (runtimeFsr4FailureLatched)
@@ -745,7 +751,7 @@ bool FidelityFX::ShouldUseRuntimeUpscalerForFSR() const
 
 bool FidelityFX::CanUseRuntimeUpscalerPath()
 {
-	if (runtimeUpscalerFailureLatched)
+	if (runtimeUpscalerQuarantined || runtimeUpscalerFailureLatched)
 		return false;
 	return true;
 }
@@ -1534,6 +1540,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 		}
 		(void)e;
 		dispatchOk = false;
+		QuarantineRuntimeUpscalerForSession("runtime upscaler dispatch threw");
 	} catch (...) {
 		if (!commandListSubmitted) {
 			commandContext->fenceValue = 0;
@@ -1547,6 +1554,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 			}
 		}
 		dispatchOk = false;
+		QuarantineRuntimeUpscalerForSession("runtime upscaler dispatch threw");
 	}
 
 	return dispatchOk;
@@ -1561,6 +1569,12 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		!a_renderWidth || !a_renderHeight || !a_displayWidth || !a_displayHeight) {
 		return false;
 	}
+
+	// A quarantined provider's contexts/resources are never dispatched into again; release
+	// them at this natural per-call boundary rather than inside the exception handler that
+	// discovered the quarantine, where GPU/command-list state is mid-teardown already.
+	if (runtimeUpscalerQuarantined && HasRuntimeUpscalerResources())
+		ResetRuntimeUpscalerResources(false);
 
 	const bool runtimeFsr4Requested = ShouldRequestRuntimeFsr4();
 	const bool runtimeRequested = runtimeFsr4Requested || ShouldUseRuntimeUpscalerForFSR();
@@ -1606,7 +1620,9 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 				}
 			} catch (const std::exception& e) {
 				(void)e;
+				QuarantineRuntimeUpscalerForSession("runtime upscaler context/resource setup threw");
 			} catch (...) {
+				QuarantineRuntimeUpscalerForSession("runtime upscaler context/resource setup threw");
 			}
 
 			return false;

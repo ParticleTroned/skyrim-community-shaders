@@ -203,6 +203,18 @@ namespace SharedData
 		// View-depth fade/cull range for dev-style wetness distance fading, in game units.
 		uint WetnessDistanceFadeRangePacked;
 		float RainContactWetnessScale;
+
+		// Keep these three lanes in lock-step with Wetterness::DarkPointLightRippleTuning.
+		float DarkRipplePointLightRoughnessFloor;
+		float DarkRipplePointLightSpecularScale;
+		float DarkRippleGgxCompressionStrength;
+		float DarkRippleGgxSoftKnee;
+		float DarkRippleGgxPeakLimit;
+		float DarkRippleSlopeMaskStart;
+		float DarkRippleSlopeMaskEnd;
+		float DarkRippleDarknessLuminanceStart;
+		float DarkRippleDarknessLuminanceEnd;
+		float3 DarkRippleTuningPad;
 	};
 
 	struct SkylightingSettings

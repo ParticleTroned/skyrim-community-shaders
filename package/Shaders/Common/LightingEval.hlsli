@@ -265,7 +265,30 @@ WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNorm
 	return params;
 }
 
-void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, WetnessDirectLightingParams params, inout DirectLightingOutput lightingOutput)
+float ApplyWetnessGgxPeakLimit(float distribution, float compressionStrength, float softKnee, float peakLimit)
+{
+	compressionStrength = saturate(compressionStrength);
+	if (compressionStrength <= 0.0) {
+		return distribution;
+	}
+
+	softKnee = max(0.0, softKnee);
+	peakLimit = max(softKnee + 1e-4, peakLimit);
+	float excess = max(0.0, distribution - softKnee);
+	float compressedDistribution = softKnee + excess / (1.0 + excess / (peakLimit - softKnee));
+	compressedDistribution = min(distribution, compressedDistribution);
+	return lerp(distribution, compressedDistribution, compressionStrength);
+}
+
+void EvaluateWetnessLighting(
+	float3 wetnessNormal,
+	DirectContext context,
+	float roughness,
+	WetnessDirectLightingParams params,
+	float ggxPeakCompressionStrength,
+	float ggxSoftKnee,
+	float ggxPeakLimit,
+	inout DirectLightingOutput lightingOutput)
 {
 #	if defined(TRUE_PBR)
 	float3 lightColor = context.coatLightColor;
@@ -283,6 +306,7 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 	float VdotH = saturate(dot(context.viewDir, H));
 
 	float D = BRDF::D_GGX(roughness, NdotH);
+	D = ApplyWetnessGgxPeakLimit(D, ggxPeakCompressionStrength, ggxSoftKnee, ggxPeakLimit);
 	float G = BRDF::Vis_SmithJointApprox(roughness, params.NdotV, NdotL);
 	float3 F = BRDF::F_Schlick(params.wetnessF0, VdotH);
 

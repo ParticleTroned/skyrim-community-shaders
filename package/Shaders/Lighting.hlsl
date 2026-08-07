@@ -1596,7 +1596,9 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 
 		// Apply ripple normal effects
 		float raindropRippleSlopeSqr = dot(raindropInfo.xy, raindropInfo.xy);
-		raindropRippleMask = smoothstep(0.0025, 0.04, raindropRippleSlopeSqr);
+		float rippleSlopeMaskStart = max(0.0, CS_WETNESS_SETTINGS.DarkRippleSlopeMaskStart);
+		float rippleSlopeMaskEnd = max(rippleSlopeMaskStart + 1e-6, CS_WETNESS_SETTINGS.DarkRippleSlopeMaskEnd);
+		raindropRippleMask = smoothstep(rippleSlopeMaskStart, rippleSlopeMaskEnd, raindropRippleSlopeSqr);
 		if (any(raindropInfo.xyz != float3(0, 0, 1))) {
 			float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(1.0, flatnessAmount, 0.8)));
 			wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
@@ -1767,6 +1769,7 @@ struct WetnessDirectLightState
 	float3 normal;
 	float roughness;
 	float pointLightRoughness;
+	float pointLightDarkRippleMask;
 	float detailWeight;
 	WetnessDirectLightingParams params;
 };
@@ -1805,14 +1808,15 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	}
 
 	// Animated ripple normals can drive a near-mirror GGX lobe across a small HMD
-	// footprint under local lights. Broaden only that point-light lobe in dark scenes;
+	// footprint under local lights. Tune only that point-light lobe in dark scenes;
 	// sunlight, indirect reflections, and non-ripple wet surfaces keep their response.
 	const float darkRippleMask = saturate(raindropRippleMask * pointLightDarkness);
-	const float minDarkRipplePointLightRoughness = 0.18;
+	const float minDarkRipplePointLightRoughness = max(0.0, CS_WETNESS_SETTINGS.DarkRipplePointLightRoughnessFloor);
 	state.pointLightRoughness = lerp(
 		state.roughness,
 		max(state.roughness, minDarkRipplePointLightRoughness),
 		darkRippleMask);
+	state.pointLightDarkRippleMask = darkRippleMask;
 
 	// Match the direct-lighting context normalization so the prepared wet params remain
 	// identical when shared across the directional light and both point-light loops.
@@ -2039,7 +2043,26 @@ void ApplyWetnessDirectLightingOutput(
 
 	DirectLightingOutput baseLightingOutput = lightingOutput;
 	float roughness = isPointLight ? wetDirectLightState.pointLightRoughness : wetDirectLightState.roughness;
-	EvaluateWetnessLighting(wetDirectLightState.normal, lightContext, roughness, wetDirectLightState.params, lightingOutput);
+	WetnessDirectLightingParams wetnessParams = wetDirectLightState.params;
+	float ggxPeakCompressionStrength = 0.0;
+	float ggxSoftKnee = 0.0;
+	float ggxPeakLimit = 1.0;
+	if (isPointLight) {
+		float darkRippleMask = wetDirectLightState.pointLightDarkRippleMask;
+		wetnessParams.lightColorScale *= lerp(1.0, saturate(CS_WETNESS_SETTINGS.DarkRipplePointLightSpecularScale), darkRippleMask);
+		ggxPeakCompressionStrength = darkRippleMask * saturate(CS_WETNESS_SETTINGS.DarkRippleGgxCompressionStrength);
+		ggxSoftKnee = max(0.0, CS_WETNESS_SETTINGS.DarkRippleGgxSoftKnee);
+		ggxPeakLimit = max(ggxSoftKnee + 1e-4, CS_WETNESS_SETTINGS.DarkRippleGgxPeakLimit);
+	}
+	EvaluateWetnessLighting(
+		wetDirectLightState.normal,
+		lightContext,
+		roughness,
+		wetnessParams,
+		ggxPeakCompressionStrength,
+		ggxSoftKnee,
+		ggxPeakLimit,
+		lightingOutput);
 	ApplyVRLightingAuxiliaryOutputWeight(lightingOutput, baseLightingOutput, wetDirectLightState.detailWeight);
 }
 #	elif defined(WETNESS_EFFECTS)
@@ -3790,7 +3813,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Directional luminance is already available here and cleanly distinguishes
 	// bright exterior rain from dark scenes dominated by local light sources.
 	float wetDirectionalLuminance = Color::RGBToLuminance(max(0.0.xxx, SanitizeFloat3(dirLightColor)));
-	float wetPointLightDarkness = 1.0 - smoothstep(0.06, 0.22, wetDirectionalLuminance);
+	float darkRippleLuminanceStart = max(0.0, CS_WETNESS_SETTINGS.DarkRippleDarknessLuminanceStart);
+	float darkRippleLuminanceEnd = max(darkRippleLuminanceStart + 1e-4, CS_WETNESS_SETTINGS.DarkRippleDarknessLuminanceEnd);
+	float wetPointLightDarkness = 1.0 - smoothstep(darkRippleLuminanceStart, darkRippleLuminanceEnd, wetDirectionalLuminance);
 	const bool wetLightingVisible = wetnessEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
 	WetnessLightingState wetnessLightingState = CreateWetnessLightingState(
 		wetLightingVisible,

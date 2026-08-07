@@ -82,6 +82,13 @@ namespace
 	constexpr float WET_HIGHLIGHT_REDUCTION_MAX = 10.0f;
 	constexpr float WET_FILM_SPECULAR_FLOOR_SCALE_MIN = 0.0f;
 	constexpr float WET_FILM_SPECULAR_FLOOR_SCALE_MAX = 3.0f;
+	constexpr float DARK_RIPPLE_ROUGHNESS_FLOOR_MAX = 0.5f;
+	constexpr float DARK_RIPPLE_GGX_KNEE_MAX = 256.0f;
+	constexpr float DARK_RIPPLE_GGX_LIMIT_MIN = 0.01f;
+	constexpr float DARK_RIPPLE_GGX_LIMIT_MAX = 512.0f;
+	constexpr float DARK_RIPPLE_MASK_SLOPE_MAX = 0.25f;
+	constexpr float DARK_RIPPLE_DARKNESS_LUMINANCE_MAX = 2.0f;
+	constexpr float DARK_RIPPLE_MIN_THRESHOLD_SEPARATION = 1e-4f;
 	constexpr float RAIN_CONTACT_WETNESS_SCALE_MIN = 0.0f;
 	constexpr float RAIN_CONTACT_WETNESS_SCALE_MAX = 2.5f;
 	constexpr float DEFAULT_RAIN_CONTACT_WETNESS_SCALE = 1.75f;
@@ -871,6 +878,77 @@ namespace
 		return std::clamp(value, minValue, maxValue);
 	}
 
+	void SanitizeDarkPointLightRippleTuning(Wetterness::DarkPointLightRippleTuning& tuning)
+	{
+		const Wetterness::DarkPointLightRippleTuning defaults{};
+		tuning.RoughnessFloor = ClampFiniteOrDefault(tuning.RoughnessFloor, 0.0f, DARK_RIPPLE_ROUGHNESS_FLOOR_MAX, defaults.RoughnessFloor);
+		tuning.SpecularScale = ClampFiniteOrDefault(tuning.SpecularScale, 0.0f, 1.0f, defaults.SpecularScale);
+		tuning.GgxCompressionStrength = ClampFiniteOrDefault(tuning.GgxCompressionStrength, 0.0f, 1.0f, defaults.GgxCompressionStrength);
+		tuning.GgxPeakLimit = ClampFiniteOrDefault(tuning.GgxPeakLimit, DARK_RIPPLE_GGX_LIMIT_MIN, DARK_RIPPLE_GGX_LIMIT_MAX, defaults.GgxPeakLimit);
+		tuning.GgxSoftKnee = ClampFiniteOrDefault(
+			tuning.GgxSoftKnee,
+			0.0f,
+			std::min(DARK_RIPPLE_GGX_KNEE_MAX, tuning.GgxPeakLimit - DARK_RIPPLE_MIN_THRESHOLD_SEPARATION),
+			std::min(defaults.GgxSoftKnee, tuning.GgxPeakLimit - DARK_RIPPLE_MIN_THRESHOLD_SEPARATION));
+
+		tuning.RippleSlopeMaskStart = ClampFiniteOrDefault(
+			tuning.RippleSlopeMaskStart,
+			0.0f,
+			DARK_RIPPLE_MASK_SLOPE_MAX - DARK_RIPPLE_MIN_THRESHOLD_SEPARATION,
+			defaults.RippleSlopeMaskStart);
+		tuning.RippleSlopeMaskEnd = ClampFiniteOrDefault(
+			tuning.RippleSlopeMaskEnd,
+			tuning.RippleSlopeMaskStart + DARK_RIPPLE_MIN_THRESHOLD_SEPARATION,
+			DARK_RIPPLE_MASK_SLOPE_MAX,
+			std::max(defaults.RippleSlopeMaskEnd, tuning.RippleSlopeMaskStart + DARK_RIPPLE_MIN_THRESHOLD_SEPARATION));
+
+		tuning.DarknessLuminanceStart = ClampFiniteOrDefault(
+			tuning.DarknessLuminanceStart,
+			0.0f,
+			DARK_RIPPLE_DARKNESS_LUMINANCE_MAX - DARK_RIPPLE_MIN_THRESHOLD_SEPARATION,
+			defaults.DarknessLuminanceStart);
+		tuning.DarknessLuminanceEnd = ClampFiniteOrDefault(
+			tuning.DarknessLuminanceEnd,
+			tuning.DarknessLuminanceStart + DARK_RIPPLE_MIN_THRESHOLD_SEPARATION,
+			DARK_RIPPLE_DARKNESS_LUMINANCE_MAX,
+			std::max(defaults.DarknessLuminanceEnd, tuning.DarknessLuminanceStart + DARK_RIPPLE_MIN_THRESHOLD_SEPARATION));
+	}
+
+	json CaptureDarkPointLightRippleTuning(const Wetterness::DarkPointLightRippleTuning& tuning)
+	{
+		return {
+			{ "RoughnessFloor", tuning.RoughnessFloor },
+			{ "SpecularScale", tuning.SpecularScale },
+			{ "GgxCompressionStrength", tuning.GgxCompressionStrength },
+			{ "GgxSoftKnee", tuning.GgxSoftKnee },
+			{ "GgxPeakLimit", tuning.GgxPeakLimit },
+			{ "RippleSlopeMaskStart", tuning.RippleSlopeMaskStart },
+			{ "RippleSlopeMaskEnd", tuning.RippleSlopeMaskEnd },
+			{ "DarknessLuminanceStart", tuning.DarknessLuminanceStart },
+			{ "DarknessLuminanceEnd", tuning.DarknessLuminanceEnd }
+		};
+	}
+
+	void RestoreDarkPointLightRippleTuning(const json& root, Wetterness::DarkPointLightRippleTuning& tuning)
+	{
+		if (!root.is_object() || !root.contains("DarkPointLightRippleTuning") || !root["DarkPointLightRippleTuning"].is_object()) {
+			SanitizeDarkPointLightRippleTuning(tuning);
+			return;
+		}
+
+		const json& values = root["DarkPointLightRippleTuning"];
+		tuning.RoughnessFloor = JsonValueOr<float>(values, "RoughnessFloor", tuning.RoughnessFloor);
+		tuning.SpecularScale = JsonValueOr<float>(values, "SpecularScale", tuning.SpecularScale);
+		tuning.GgxCompressionStrength = JsonValueOr<float>(values, "GgxCompressionStrength", tuning.GgxCompressionStrength);
+		tuning.GgxSoftKnee = JsonValueOr<float>(values, "GgxSoftKnee", tuning.GgxSoftKnee);
+		tuning.GgxPeakLimit = JsonValueOr<float>(values, "GgxPeakLimit", tuning.GgxPeakLimit);
+		tuning.RippleSlopeMaskStart = JsonValueOr<float>(values, "RippleSlopeMaskStart", tuning.RippleSlopeMaskStart);
+		tuning.RippleSlopeMaskEnd = JsonValueOr<float>(values, "RippleSlopeMaskEnd", tuning.RippleSlopeMaskEnd);
+		tuning.DarknessLuminanceStart = JsonValueOr<float>(values, "DarknessLuminanceStart", tuning.DarknessLuminanceStart);
+		tuning.DarknessLuminanceEnd = JsonValueOr<float>(values, "DarknessLuminanceEnd", tuning.DarknessLuminanceEnd);
+		SanitizeDarkPointLightRippleTuning(tuning);
+	}
+
 	void SanitizeSplashRadiusSettings(Wetterness::Settings& settings)
 	{
 		settings.SplashesMinRadius = ClampFiniteOrDefault(settings.SplashesMinRadius, 0.0f, 1.0f, 0.35f);
@@ -1617,6 +1695,114 @@ void Wetterness::DrawSettings()
 			ImGui::TextUnformatted("Reduces bright white thin-film highlights. Higher = less white film glare, lower = brighter highlights. Deep puddles are not the target.");
 		}
 
+		if (ImGui::TreeNodeEx("Dark Point-Light Raindrop Tuning")) {
+			SanitizeDarkPointLightRippleTuning(darkPointLightRippleTuning);
+			ImGui::TextWrapped("Live A/B controls for animated raindrop highlights under local lights in dark scenes. Directional and indirect reflections never use them. Point-light changes fade in only as directional luminance falls through the configured darkness range.");
+
+			ImGui::SliderFloat(
+				"Point-Light Roughness Floor",
+				&darkPointLightRippleTuning.RoughnessFloor,
+				0.0f,
+				DARK_RIPPLE_ROUGHNESS_FLOOR_MAX,
+				"%.3f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("0.18 reproduces the current mitigation. 0.00 disables its lobe broadening and restores the calculated wet roughness.");
+			}
+
+			ImGui::SliderFloat(
+				"Point-Light Specular Scale",
+				&darkPointLightRippleTuning.SpecularScale,
+				0.0f,
+				1.0f,
+				"%.2f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Scales only the added wet highlight on masked dark-scene point-light ripples. 1.00 is neutral; 0.00 removes that added lobe.");
+			}
+
+			ImGui::SliderFloat(
+				"GGX Limiter Strength",
+				&darkPointLightRippleTuning.GgxCompressionStrength,
+				0.0f,
+				1.0f,
+				"%.2f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("0.00 disables the proposed peak limiter. 1.00 applies it fully; intermediate values blend between raw and limited GGX.");
+			}
+
+			const float ggxPeakLimitMin = std::max(
+				DARK_RIPPLE_GGX_LIMIT_MIN,
+				darkPointLightRippleTuning.GgxSoftKnee + DARK_RIPPLE_MIN_THRESHOLD_SEPARATION);
+			ImGui::SliderFloat(
+				"GGX Peak Limit",
+				&darkPointLightRippleTuning.GgxPeakLimit,
+				ggxPeakLimitMin,
+				DARK_RIPPLE_GGX_LIMIT_MAX,
+				"%.2f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Asymptotic maximum for the GGX distribution. Lower values suppress white fireflies more strongly. Must remain above the soft knee.");
+			}
+
+			const float ggxSoftKneeMax = std::min(
+				DARK_RIPPLE_GGX_KNEE_MAX,
+				darkPointLightRippleTuning.GgxPeakLimit - DARK_RIPPLE_MIN_THRESHOLD_SEPARATION);
+			ImGui::SliderFloat(
+				"GGX Soft Knee",
+				&darkPointLightRippleTuning.GgxSoftKnee,
+				0.0f,
+				ggxSoftKneeMax,
+				"%.2f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("GGX distribution values below this remain unchanged. Raise it to preserve more ordinary highlights; lower it if medium sparkles remain excessive.");
+			}
+
+			const float rippleSlopeMaskStartMax = darkPointLightRippleTuning.RippleSlopeMaskEnd - DARK_RIPPLE_MIN_THRESHOLD_SEPARATION;
+			ImGui::SliderFloat(
+				"Ripple Mask Start",
+				&darkPointLightRippleTuning.RippleSlopeMaskStart,
+				0.0f,
+				rippleSlopeMaskStartMax,
+				"%.4f",
+				ImGuiSliderFlags_AlwaysClamp);
+			const float rippleSlopeMaskEndMin = darkPointLightRippleTuning.RippleSlopeMaskStart + DARK_RIPPLE_MIN_THRESHOLD_SEPARATION;
+			ImGui::SliderFloat(
+				"Ripple Mask End",
+				&darkPointLightRippleTuning.RippleSlopeMaskEnd,
+				rippleSlopeMaskEndMin,
+				DARK_RIPPLE_MASK_SLOPE_MAX,
+				"%.4f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Squared ripple-slope interval used to identify animated raindrop pixels. Current values are 0.0025 to 0.0400.");
+			}
+
+			const float darknessLuminanceStartMax = darkPointLightRippleTuning.DarknessLuminanceEnd - DARK_RIPPLE_MIN_THRESHOLD_SEPARATION;
+			ImGui::SliderFloat(
+				"Darkness Luminance Start",
+				&darkPointLightRippleTuning.DarknessLuminanceStart,
+				0.0f,
+				darknessLuminanceStartMax,
+				"%.3f",
+				ImGuiSliderFlags_AlwaysClamp);
+			const float darknessLuminanceEndMin = darkPointLightRippleTuning.DarknessLuminanceStart + DARK_RIPPLE_MIN_THRESHOLD_SEPARATION;
+			ImGui::SliderFloat(
+				"Darkness Luminance End",
+				&darkPointLightRippleTuning.DarknessLuminanceEnd,
+				darknessLuminanceEndMin,
+				DARK_RIPPLE_DARKNESS_LUMINANCE_MAX,
+				"%.3f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Directional-light luminance interval that fades the point-light mitigation out. Current values are 0.060 to 0.220; above the end, daytime output is unchanged.");
+			}
+
+			ImGui::TreePop();
+		}
+
 		ImGui::SliderFloat("Wetness Fade Range", &wetnessDistanceFadeRange, WETNESS_DISTANCE_FADE_RANGE_UI_MIN_GAME_UNITS, WETNESS_DISTANCE_FADE_RANGE_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			const float fadeRangeMeters = Util::Units::GameUnitsToMeters(wetnessDistanceFadeRange);
@@ -2055,7 +2241,8 @@ json Wetterness::CapturePerformanceSettingsState() const
 		{ "ShorePersistentDarkeningStrength", shorePersistentDarkeningStrength },
 		{ "WetnessDistanceFadeRange", wetnessDistanceFadeRange },
 		{ "RainGrassGlossiness", rainGrassGlossiness },
-		{ "RainGrassSpecularStrength", rainGrassSpecularStrength }
+		{ "RainGrassSpecularStrength", rainGrassSpecularStrength },
+		{ "DarkPointLightRippleTuning", CaptureDarkPointLightRippleTuning(darkPointLightRippleTuning) }
 	};
 }
 
@@ -2102,6 +2289,7 @@ void Wetterness::RestorePerformanceCostMeasurementState(const json& a_state)
 	rainGrassGlossiness = a_state.value("RainGrassGlossiness", rainGrassGlossiness);
 	rainGrassSpecularStrength = a_state.value("RainGrassSpecularStrength", rainGrassSpecularStrength);
 	enableWeatherDrivenDryingModel = a_state.value("EnableWeatherDrivenDryingModel", enableWeatherDrivenDryingModel);
+	RestoreDarkPointLightRippleTuning(a_state, darkPointLightRippleTuning);
 
 	SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
 	SanitizeShaderFacingSettings(settings);
@@ -2458,6 +2646,9 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 
 	const Settings& sanitizedSettings = GetSanitizedSettings();
 	data.settings = MakeShaderSettings(sanitizedSettings);
+	auto sanitizedDarkPointLightRippleTuning = darkPointLightRippleTuning;
+	SanitizeDarkPointLightRippleTuning(sanitizedDarkPointLightRippleTuning);
+	data.darkPointLightRippleTuning = sanitizedDarkPointLightRippleTuning;
 	if (runtimeInactive) {
 		data.settings.EnableWetterness = 0u;
 	}
@@ -2628,6 +2819,7 @@ void Wetterness::LoadSettings(json& o_json)
 	wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
 	rainGrassGlossiness = kDefaultRainGrassGlossiness;
 	rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
+	darkPointLightRippleTuning = {};
 	modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
 	legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
 	puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
@@ -2691,6 +2883,7 @@ void Wetterness::LoadSettings(json& o_json)
 			debugSettings = {};
 		}
 	}
+	RestoreDarkPointLightRippleTuning(o_json, darkPointLightRippleTuning);
 
 	if (!hasExplicitWetternessSettings) {
 		climatePreset = defaultPreset;
@@ -2730,6 +2923,8 @@ void Wetterness::SaveSettings(json& o_json)
 		kDefaultRainGrassSpecularStrength);
 	o_json["RainGrassSpecularStrength"] = rainGrassSpecularStrength;
 	o_json["EnableWeatherDrivenDryingModel"] = enableWeatherDrivenDryingModel;
+	SanitizeDarkPointLightRippleTuning(darkPointLightRippleTuning);
+	o_json["DarkPointLightRippleTuning"] = CaptureDarkPointLightRippleTuning(darkPointLightRippleTuning);
 
 	o_json["DebugSettings"] = debugSettings;
 }
@@ -2747,6 +2942,7 @@ void Wetterness::RestoreDefaultSettings()
 	wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
 	rainGrassGlossiness = kDefaultRainGrassGlossiness;
 	rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
+	darkPointLightRippleTuning = {};
 	modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
 	legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
 	climatePreset = defaultPreset;

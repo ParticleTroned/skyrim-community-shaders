@@ -93,6 +93,10 @@ public:
 		// Explicit per-eye fraction of native HMD size (0 = Auto: preset-derived).
 		// Boot-locked; the preset is inert while set. DLSS clamps into NGX range.
 		float vrRenderScale = 0.0f;
+
+		// Opt in to AMD's runtime FSR4 upscaler DLL on eligible RDNA4 hardware instead of the
+		// host-linked FSR3 SDK; falls back to FSR3 on any failure.
+		bool fsr4RuntimeEnable = false;
 	};
 
 	static constexpr float kVRRenderScaleMin = 0.33f;

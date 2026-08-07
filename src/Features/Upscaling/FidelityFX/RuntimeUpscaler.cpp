@@ -1,0 +1,1640 @@
+// Runtime FSR4/FSR3-provider DLL path (falls back to the host SDK on any failure). Split
+// into its own file per the LightLimitFix/*.cpp convention -- these are FidelityFX methods.
+
+#include "../FidelityFX.h"
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdlib>
+#include <directx/d3dx12.h>
+#include <format>
+#include <limits>
+#include <string>
+#include <vector>
+
+#include "../../../GpuPass.h"
+#include "../../../State.h"
+#include "../../Upscaling.h"
+#include "../DX12SwapChain.h"
+
+extern ffxFunctions ffxModule;
+
+// Defined in FidelityFX.cpp; used by UpscaleRegion's host-FSR3 fallback path below.
+FfxResource ffxGetResource(ID3D11Resource* dx11Resource, wchar_t const* ffxResName, FfxResourceStates state = FFX_RESOURCE_STATE_PIXEL_COMPUTE_READ);
+
+namespace
+{
+	void EnsureFidelityFxDllDirectory();
+}
+
+// Used by FidelityFX::LoadFFX() (FidelityFX.cpp) to load amd_fidelityfx_upscaler_dx12.dll
+// so it can resolve sibling loader/framegen DLLs in the same plugin directory.
+HMODULE LoadFidelityFxDllSafe(const std::wstring& a_path)
+{
+	EnsureFidelityFxDllDirectory();
+
+	constexpr DWORD kLoadFlags =
+		LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+		LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+		LOAD_LIBRARY_SEARCH_USER_DIRS;
+
+	if (auto module = LoadLibraryExW(a_path.c_str(), nullptr, kLoadFlags))
+		return module;
+
+	return LoadLibraryW(a_path.c_str());
+}
+
+namespace
+{
+	constexpr uint32_t kAmdVendorId = 0x1002u;
+	constexpr uint32_t kNvidiaVendorId = 0x10DEu;
+
+	enum class D3D11IdleFenceResult : uint8_t
+	{
+		Ready,
+		Pending,
+		Failed
+	};
+
+	void ReleaseD3D11IdleFence(ID3D11Query*& a_query)
+	{
+		if (!a_query)
+			return;
+
+		a_query->Release();
+		a_query = nullptr;
+	}
+
+	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query)
+	{
+		if (!a_context) {
+			ReleaseD3D11IdleFence(a_query);
+			return D3D11IdleFenceResult::Ready;
+		}
+
+		const auto pollFence = [&]() {
+			BOOL completed = FALSE;
+			const HRESULT dataResult = a_context->GetData(a_query, &completed, sizeof(completed), 0);
+			if (dataResult == S_OK && completed) {
+				ReleaseD3D11IdleFence(a_query);
+				return D3D11IdleFenceResult::Ready;
+			}
+
+			if (dataResult == S_FALSE || dataResult == S_OK)
+				return D3D11IdleFenceResult::Pending;
+
+			ReleaseD3D11IdleFence(a_query);
+			return D3D11IdleFenceResult::Failed;
+		};
+
+		if (a_query)
+			return pollFence();
+
+		ID3D11Device* device = nullptr;
+		a_context->GetDevice(&device);
+		if (!device) {
+			a_context->Flush();
+			return D3D11IdleFenceResult::Ready;
+		}
+
+		D3D11_QUERY_DESC queryDesc{};
+		queryDesc.Query = D3D11_QUERY_EVENT;
+
+		const HRESULT createResult = device->CreateQuery(&queryDesc, &a_query);
+		device->Release();
+
+		if (FAILED(createResult) || !a_query) {
+			a_context->Flush();
+			return D3D11IdleFenceResult::Failed;
+		}
+
+		a_context->End(a_query);
+		a_context->Flush();
+		return pollFence();
+	}
+
+	bool UseSplitPerEyeFSRContexts()
+	{
+		return globals::game::isVR;
+	}
+
+	void* s_fidelityFxDllDirectoryCookie = nullptr;
+
+	// Registers PluginDir as a DLL search directory -- plain LoadLibrary won't find
+	// sibling loader/framegen DLLs there under safe DLL search mode.
+	void EnsureFidelityFxDllDirectory()
+	{
+		if (s_fidelityFxDllDirectoryCookie)
+			return;
+
+		auto kernel32 = GetModuleHandleW(L"kernel32.dll");
+		if (!kernel32)
+			return;
+
+		using AddDllDirectoryFn = void*(WINAPI*)(PCWSTR);
+		auto addDllDirectory = reinterpret_cast<AddDllDirectoryFn>(GetProcAddress(kernel32, "AddDllDirectory"));
+		if (!addDllDirectory)
+			return;
+
+		s_fidelityFxDllDirectoryCookie = addDllDirectory(FidelityFX::PluginDir);
+	}
+
+	bool TryGetTexture2DDesc(ID3D11Resource* a_resource, D3D11_TEXTURE2D_DESC& a_outDesc)
+	{
+		if (!a_resource)
+			return false;
+
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (FAILED(a_resource->QueryInterface(IID_PPV_ARGS(texture.put()))))
+			return false;
+
+		texture->GetDesc(&a_outDesc);
+		return true;
+	}
+
+	bool TryGetCurrentAdapterDesc(DXGI_ADAPTER_DESC& a_outDesc)
+	{
+		if (!globals::d3d::device)
+			return false;
+
+		winrt::com_ptr<IDXGIDevice> dxgiDevice;
+		if (FAILED(globals::d3d::device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put()))))
+			return false;
+
+		winrt::com_ptr<IDXGIAdapter> adapter;
+		if (FAILED(dxgiDevice->GetAdapter(adapter.put())))
+			return false;
+
+		a_outDesc = {};
+		if (FAILED(adapter->GetDesc(&a_outDesc)))
+			return false;
+
+		return true;
+	}
+
+	std::string ToUpperAscii(std::string a_value)
+	{
+		std::transform(a_value.begin(), a_value.end(), a_value.begin(), [](unsigned char c) {
+			return static_cast<char>(std::toupper(c));
+		});
+		return a_value;
+	}
+
+	bool IsLikelyRDNA4Adapter(const DXGI_ADAPTER_DESC& a_desc)
+	{
+		if (a_desc.VendorId != kAmdVendorId)
+			return false;
+
+		std::wstring wideDescription(a_desc.Description);
+		const std::string description = ToUpperAscii(stl::utf16_to_utf8(wideDescription).value_or(""));
+
+		if (description.find("RDNA4") != std::string::npos ||
+			description.find("RDNA 4") != std::string::npos ||
+			description.find("NAVI4") != std::string::npos ||
+			description.find("NAVI 4") != std::string::npos) {
+			return true;
+		}
+
+		size_t searchPosition = 0;
+		while (searchPosition < description.length()) {
+			while (searchPosition < description.length() && !std::isdigit(static_cast<unsigned char>(description[searchPosition])))
+				searchPosition++;
+
+			const size_t modelStart = searchPosition;
+			while (searchPosition < description.length() && std::isdigit(static_cast<unsigned char>(description[searchPosition])))
+				searchPosition++;
+
+			if (searchPosition > modelStart) {
+				const std::string modelText = description.substr(modelStart, searchPosition - modelStart);
+				char* parseEnd = nullptr;
+				const unsigned long modelNumber = std::strtoul(modelText.c_str(), &parseEnd, 10);
+				if (parseEnd != modelText.c_str() && modelNumber >= 9000ul && modelNumber < 10000ul)
+					return true;
+			}
+		}
+
+		// Keep fallbacks for abbreviated naming variants that don't include full numeric model text.
+		return description.find("RX 90") != std::string::npos ||
+		       description.find("RX90") != std::string::npos ||
+		       description.find("RADEON 90") != std::string::npos;
+	}
+
+	std::string UpscalerVersionToString(uint32_t a_version)
+	{
+		const uint32_t major = (a_version >> 22) & 0x3FFu;
+		const uint32_t minor = (a_version >> 12) & 0x3FFu;
+		const uint32_t patch = a_version & 0xFFFu;
+		return std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
+	}
+
+	const std::string& PendingFsrDispatchLabel()
+	{
+		static const std::string label = "Pending FSR dispatch";
+		return label;
+	}
+
+	const std::string& HostFsrFallbackLabel()
+	{
+		static const std::string label = std::format("{} fallback", FidelityFX::GetHostFsrSdkLabel());
+		return label;
+	}
+
+	bool RuntimeProviderNameMatchesVersion(const std::string& a_providerName, uint32_t a_version)
+	{
+		return !a_providerName.empty() &&
+		       a_providerName.find(UpscalerVersionToString(a_version)) != std::string::npos;
+	}
+
+	bool RuntimeProviderIdMatchesVersion(uint64_t a_providerId, uint32_t a_version)
+	{
+		return a_providerId != 0 &&
+		       static_cast<uint32_t>(a_providerId & 0xFFFFFFFFull) == a_version;
+	}
+
+	bool RuntimeProviderMatchesVersion(uint64_t a_providerId, const std::string& a_providerName, uint32_t a_version)
+	{
+		return RuntimeProviderIdMatchesVersion(a_providerId, a_version) ||
+		       RuntimeProviderNameMatchesVersion(a_providerName, a_version);
+	}
+
+	std::string RuntimeProviderDisplayName(uint64_t a_providerId, const std::string& a_providerName)
+	{
+		if (!a_providerName.empty())
+			return a_providerName;
+		if (a_providerId != 0)
+			return std::format("id 0x{:X}", a_providerId);
+
+		return {};
+	}
+
+	bool QueryRuntimeUpscalerVersionId(ID3D12Device* a_device, uint32_t a_requestedVersion, uint64_t& a_versionId, std::string& a_versionName)
+	{
+		a_versionId = 0;
+		a_versionName.clear();
+
+		if (!a_device || !ffxModule.Query) {
+			return false;
+		}
+
+		uint64_t versionCount = 0;
+		ffxQueryDescGetVersions countQuery{};
+		countQuery.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+		countQuery.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+		countQuery.device = a_device;
+		countQuery.outputCount = &versionCount;
+
+		auto countResult = ffxModule.Query(nullptr, &countQuery.header);
+		if (countResult != FFX_API_RETURN_OK || versionCount == 0) {
+			return false;
+		}
+
+		std::vector<uint64_t> versionIds(versionCount, 0);
+		std::vector<const char*> versionNames(versionCount, nullptr);
+
+		uint64_t returnedVersionCount = versionCount;
+		ffxQueryDescGetVersions versionsQuery{};
+		versionsQuery.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+		versionsQuery.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+		versionsQuery.device = a_device;
+		versionsQuery.outputCount = &returnedVersionCount;
+		versionsQuery.versionIds = versionIds.data();
+		versionsQuery.versionNames = versionNames.data();
+
+		auto versionsResult = ffxModule.Query(nullptr, &versionsQuery.header);
+		if (versionsResult != FFX_API_RETURN_OK) {
+			return false;
+		}
+
+		const auto resultCount = std::min<size_t>(versionIds.size(), returnedVersionCount);
+
+		for (size_t i = 0; i < resultCount; ++i) {
+			const std::string versionName = versionNames[i] ? versionNames[i] : "";
+			if (versionIds[i] == a_requestedVersion ||
+				RuntimeProviderIdMatchesVersion(versionIds[i], a_requestedVersion) ||
+				RuntimeProviderNameMatchesVersion(versionName, a_requestedVersion)) {
+				a_versionId = versionIds[i];
+				a_versionName = versionName;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	enum class RuntimeUpscalerCreateAttempt : uint8_t
+	{
+		kGenericOverrideOnly,
+		kGenericOverrideWithUpscalerVersion,
+		kUpscalerVersionDescriptor,
+		kDefaultProvider
+	};
+
+	struct RuntimeUpscalerCreateAttemptResult
+	{
+		RuntimeUpscalerCreateAttempt attempt;
+		bool enabled;
+		ffxReturnCode_t result = FFX_API_RETURN_ERROR;
+	};
+
+	ffxReturnCode_t TryCreateRuntimeUpscalerContext(
+		ffx::Context& a_context,
+		RuntimeUpscalerCreateAttempt a_attempt,
+		ffx::CreateContextDescUpscale& a_createDesc,
+		ffx::CreateBackendDX12Desc& a_backendDesc,
+		ffx::CreateContextDescUpscaleVersion& a_versionDesc,
+		ffx::CreateContextDescOverrideVersion& a_overrideVersionDesc)
+	{
+		a_context = nullptr;
+		a_createDesc.header.pNext = nullptr;
+		a_backendDesc.header.pNext = nullptr;
+		a_versionDesc.header.pNext = nullptr;
+		a_overrideVersionDesc.header.pNext = nullptr;
+
+		switch (a_attempt) {
+		case RuntimeUpscalerCreateAttempt::kGenericOverrideOnly:
+			a_createDesc.header.pNext = &a_backendDesc.header;
+			a_backendDesc.header.pNext = &a_overrideVersionDesc.header;
+			break;
+		case RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion:
+			a_createDesc.header.pNext = &a_backendDesc.header;
+			a_backendDesc.header.pNext = &a_versionDesc.header;
+			a_versionDesc.header.pNext = &a_overrideVersionDesc.header;
+			break;
+		case RuntimeUpscalerCreateAttempt::kUpscalerVersionDescriptor:
+			a_createDesc.header.pNext = &a_versionDesc.header;
+			a_versionDesc.header.pNext = &a_backendDesc.header;
+			break;
+		case RuntimeUpscalerCreateAttempt::kDefaultProvider:
+			a_createDesc.header.pNext = &a_backendDesc.header;
+			break;
+		}
+
+		ffx::Context createdContext = nullptr;
+		const auto result = ffxModule.CreateContext(&createdContext, &a_createDesc.header, nullptr);
+		if (result == FFX_API_RETURN_OK) {
+			if (createdContext) {
+				a_context = createdContext;
+				return result;
+			}
+
+			return FFX_API_RETURN_ERROR;
+		} else if (createdContext && ffxModule.DestroyContext) {
+			(void)ffxModule.DestroyContext(&createdContext, nullptr);
+		}
+
+		return result;
+	}
+
+	D3D11_TEXTURE2D_DESC MakeSharedTextureDesc(const D3D11_TEXTURE2D_DESC& a_sourceDesc, uint32_t a_width, uint32_t a_height, UINT a_bindFlags)
+	{
+		D3D11_TEXTURE2D_DESC desc = a_sourceDesc;
+		desc.Width = a_width;
+		desc.Height = a_height;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.SampleDesc.Count = 1;
+		desc.SampleDesc.Quality = 0;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.CPUAccessFlags = 0;
+		desc.BindFlags = a_bindFlags;
+		desc.MiscFlags = 0;
+		return desc;
+	}
+
+	bool SameTextureDesc(const D3D11_TEXTURE2D_DESC& a_left, const D3D11_TEXTURE2D_DESC& a_right)
+	{
+		return a_left.Width == a_right.Width &&
+		       a_left.Height == a_right.Height &&
+		       a_left.MipLevels == a_right.MipLevels &&
+		       a_left.ArraySize == a_right.ArraySize &&
+		       a_left.Format == a_right.Format &&
+		       a_left.SampleDesc.Count == a_right.SampleDesc.Count &&
+		       a_left.SampleDesc.Quality == a_right.SampleDesc.Quality &&
+		       a_left.Usage == a_right.Usage &&
+		       a_left.BindFlags == a_right.BindFlags &&
+		       a_left.CPUAccessFlags == a_right.CPUAccessFlags &&
+		       a_left.MiscFlags == a_right.MiscFlags;
+	}
+
+	template <size_t N>
+	void DeleteWrappedResourceArray(WrappedResource* (&a_resources)[N])
+	{
+		for (auto*& resource : a_resources) {
+			delete resource;
+			resource = nullptr;
+		}
+	}
+
+	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters)
+	{
+		bool dispatchOk = true;
+
+		__try {
+			dispatchOk = ffxFsr3ContextDispatchUpscale(&a_context, &a_dispatchParameters) == FFX_OK;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			dispatchOk = false;
+		}
+
+		return dispatchOk;
+	}
+}
+
+FidelityFX::~FidelityFX()
+{
+	ReleaseRuntimeUpscalerResourcesForRelatch();
+	ResetFSRIdleFence();
+}
+
+void FidelityFX::ResetFSRIdleFence()
+{
+	ReleaseD3D11IdleFence(pendingFSRResourceFreeIdleFence);
+	pendingRuntimeTeardownD3D11FenceValue = 0;
+	pendingRuntimeTeardownD3D12FenceValue = 0;
+}
+
+void FidelityFX::WaitForHostFsrIdle()
+{
+	// Bounded poll before ffxFsr3ContextDestroy -- the GPU may still have in-flight FSR3
+	// work referencing the context being torn down.
+	const ULONGLONG waitStart = GetTickCount64();
+	while (true) {
+		const auto result = BeginOrPollD3D11IdleFence(globals::d3d::context, pendingFSRResourceFreeIdleFence);
+		if (result != D3D11IdleFenceResult::Pending)
+			break;
+
+		if (GetTickCount64() - waitStart >= 5000)
+			break;
+
+		Sleep(1);
+	}
+}
+
+bool FidelityFX::HasRuntimeUpscalerSupportCheckResult() const
+{
+	return runtimeUpscalerSupportCheckKnown;
+}
+
+bool FidelityFX::IsRuntimeUpscalerSupportConfirmed() const
+{
+	return runtimeUpscalerSupportCheckKnown && runtimeUpscalerSupportConfirmed;
+}
+
+bool FidelityFX::IsRuntimeUpscalerProviderMatchingRequestedVersion() const
+{
+	if (!runtimeUpscalerSupportCheckKnown || !runtimeUpscalerSupportConfirmed)
+		return false;
+
+	if (runtimeUpscalerProviderMatchedVersionName.empty() && runtimeUpscalerProviderMatchedVersionId == 0)
+		return true;
+
+	const uint32_t requestedVersion = runtimeUpscalerRequestedVersion ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
+	return RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, requestedVersion);
+}
+
+bool FidelityFX::IsRuntimeUpscalerFailureLatched() const
+{
+	return runtimeUpscalerFailureLatched;
+}
+
+bool FidelityFX::IsRuntimeFsr4FailureLatched() const
+{
+	return runtimeFsr4FailureLatched;
+}
+
+const std::string& FidelityFX::GetHostFsrSdkLabel()
+{
+	static const std::string label = std::format("Host FSR3 SDK {}", UpscalerVersionToString(Fsr3Version));
+	return label;
+}
+
+const std::string& FidelityFX::GetRuntimeUpscalerLabel(uint32_t a_version)
+{
+	static const std::string runtimeFsr3Label = std::format("Runtime FSR3 {} ({})", UpscalerVersionToString(Fsr3Version), RuntimeUpscalerDllNameUtf8);
+	static const std::string runtimeFsr4Label = std::format("Runtime FSR4 ({})", RuntimeUpscalerDllNameUtf8);
+
+	if (a_version == Fsr3Version)
+		return runtimeFsr3Label;
+	if (a_version == FFX_UPSCALER_VERSION)
+		return runtimeFsr4Label;
+
+	thread_local std::string fallbackLabel;
+	fallbackLabel = std::format("Runtime FSR {} ({})", UpscalerVersionToString(a_version), RuntimeUpscalerDllNameUtf8);
+	return fallbackLabel;
+}
+
+const std::string& FidelityFX::GetRuntimeUpscalerLastFramePathLabel() const
+{
+	if (!runtimeUpscalerLastFramePathValid)
+		return PendingFsrDispatchLabel();
+
+	switch (runtimeUpscalerLastFramePath) {
+	case RuntimeUpscalerFramePath::kHostFsr31:
+		return GetHostFsrSdkLabel();
+	case RuntimeUpscalerFramePath::kRuntimeFsr31:
+		return GetRuntimeUpscalerLabel(Fsr3Version);
+	case RuntimeUpscalerFramePath::kRuntimeFsr4:
+		return GetRuntimeUpscalerLabel(FFX_UPSCALER_VERSION);
+	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
+		return HostFsrFallbackLabel();
+	case RuntimeUpscalerFramePath::kInactive:
+	default:
+		return PendingFsrDispatchLabel();
+	}
+}
+
+const std::string& FidelityFX::GetConfiguredFsrPathLabel() const
+{
+	if (runtimeUpscalerFailureLatched)
+		return HostFsrFallbackLabel();
+
+	if (runtimeFsr4FailureLatched) {
+		if (ShouldUseRuntimeUpscalerForFSR())
+			return GetRuntimeUpscalerLabel(Fsr3Version);
+
+		return HostFsrFallbackLabel();
+	}
+
+	if (runtimeUpscalerSupportCheckKnown && !runtimeUpscalerSupportConfirmed)
+		return HostFsrFallbackLabel();
+
+	if (ShouldRequestRuntimeFsr4())
+		return GetRuntimeUpscalerLabel(FFX_UPSCALER_VERSION);
+
+	if (ShouldUseRuntimeUpscalerForFSR())
+		return GetRuntimeUpscalerLabel(Fsr3Version);
+
+	return GetHostFsrSdkLabel();
+}
+
+const std::string& FidelityFX::GetDisplayedFsrPathLabel() const
+{
+	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0;
+	if (runtimeUpscalerLastFramePathValid && runtimeUpscalerLastFrameIndex == currentFrame)
+		return GetRuntimeUpscalerLastFramePathLabel();
+
+	return GetConfiguredFsrPathLabel();
+}
+
+std::string FidelityFX::GetRuntimeUpscalerProviderName() const
+{
+	return RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName);
+}
+
+std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const
+{
+	const uint32_t requestedVersion = runtimeUpscalerRequestedVersion ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
+	return UpscalerVersionToString(requestedVersion);
+}
+
+void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
+{
+	runtimeUpscalerFailureLatched = false;
+	runtimeFsr4FailureLatched = false;
+	runtimeFallbackResetDispatchesRemaining = 0;
+	runtimeUpscalerLastFramePathValid = false;
+	runtimeUpscalerLastFrameIndex = 0;
+	runtimeUpscalerLastFramePath = RuntimeUpscalerFramePath::kInactive;
+
+	if (!a_invalidateProviderCache)
+		return;
+
+	runtimeUpscalerSupportCheckKnown = false;
+	runtimeUpscalerSupportConfirmed = false;
+	runtimeUpscalerProviderMatchedVersionId = 0;
+	runtimeUpscalerProviderMatchedVersionName.clear();
+}
+
+void FidelityFX::LatchRuntimeUpscalerFailure()
+{
+	if (runtimeUpscalerFailureLatched)
+		return;
+
+	runtimeUpscalerFailureLatched = true;
+}
+
+void FidelityFX::LatchRuntimeFsr4Failure()
+{
+	if (runtimeFsr4FailureLatched)
+		return;
+
+	runtimeFsr4FailureLatched = true;
+}
+
+FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const
+{
+	if (RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, FFX_UPSCALER_VERSION))
+		return RuntimeUpscalerFramePath::kRuntimeFsr4;
+
+	if (RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, Fsr3Version))
+		return RuntimeUpscalerFramePath::kRuntimeFsr31;
+
+	return a_requestedVersion == FFX_UPSCALER_VERSION ? RuntimeUpscalerFramePath::kRuntimeFsr4 : RuntimeUpscalerFramePath::kRuntimeFsr31;
+}
+
+void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
+{
+	const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+	if (!runtimeUpscalerLastFramePathValid || runtimeUpscalerLastFrameIndex != frame) {
+		runtimeUpscalerLastFramePathValid = true;
+		runtimeUpscalerLastFrameIndex = frame;
+		runtimeUpscalerLastFramePath = a_path;
+		return;
+	}
+
+	if (static_cast<uint8_t>(a_path) > static_cast<uint8_t>(runtimeUpscalerLastFramePath))
+		runtimeUpscalerLastFramePath = a_path;
+}
+
+bool FidelityFX::IsAmdAdapterDetected() const
+{
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (TryGetCurrentAdapterDesc(adapterDesc))
+		return adapterDesc.VendorId == kAmdVendorId;
+
+	return false;
+}
+
+bool FidelityFX::IsNvidiaAdapterDetected() const
+{
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (TryGetCurrentAdapterDesc(adapterDesc))
+		return adapterDesc.VendorId == kNvidiaVendorId;
+
+	return false;
+}
+
+bool FidelityFX::IsRuntimeUpscalerPresent() const
+{
+	if (!featureRuntimeUpscaler || !runtimeUpscalerModule || !module)
+		return false;
+	if (!ffxModule.CreateContext || !ffxModule.DestroyContext || !ffxModule.Dispatch || !ffxModule.Query)
+		return false;
+
+	return true;
+}
+
+bool FidelityFX::IsRuntimeFsr4AutoEligible() const
+{
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (!TryGetCurrentAdapterDesc(adapterDesc))
+		return false;
+
+	return adapterDesc.VendorId == kAmdVendorId && IsLikelyRDNA4Adapter(adapterDesc);
+}
+
+bool FidelityFX::IsRuntimeFsr4Available() const
+{
+	if (!IsRuntimeUpscalerPresent())
+		return false;
+
+	return IsRuntimeFsr4AutoEligible();
+}
+
+bool FidelityFX::ShouldUseRuntimeUpscalerForFSR() const
+{
+	return IsRuntimeUpscalerPresent() && IsAmdAdapterDetected();
+}
+
+bool FidelityFX::CanUseRuntimeUpscalerPath()
+{
+	if (runtimeUpscalerFailureLatched)
+		return false;
+	return true;
+}
+
+bool FidelityFX::ShouldRequestRuntimeFsr4() const
+{
+	return globals::features::upscaling.settings.fsr4RuntimeEnable &&
+	       !runtimeFsr4FailureLatched &&
+	       IsRuntimeFsr4Available();
+}
+
+uint32_t FidelityFX::GetPreferredRuntimeUpscalerVersion() const
+{
+	return ShouldRequestRuntimeFsr4() ? FFX_UPSCALER_VERSION : Fsr3Version;
+}
+
+bool FidelityFX::EnsureRuntimeUpscalerInterop()
+{
+	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+
+	if (!globals::d3d::device || !globals::d3d::context)
+		return false;
+
+	try {
+		if (!swapChain.d3d11Device)
+			swapChain.SetD3D11Device(globals::d3d::device);
+		if (!swapChain.d3d11Context)
+			swapChain.SetD3D11DeviceContext(globals::d3d::context);
+
+		if (!swapChain.d3d12Device) {
+			winrt::com_ptr<IDXGIDevice> dxgiDevice;
+			DX::ThrowIfFailed(globals::d3d::device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())));
+
+			winrt::com_ptr<IDXGIAdapter> adapter;
+			DX::ThrowIfFailed(dxgiDevice->GetAdapter(adapter.put()));
+			swapChain.CreateD3D12Device(adapter.get());
+		}
+
+		if (!runtimeD3D12Fence || !runtimeD3D11Fence) {
+			winrt::handle sharedFenceHandle;
+			DX::ThrowIfFailed(swapChain.d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&runtimeD3D12Fence)));
+			DX::ThrowIfFailed(swapChain.d3d12Device->CreateSharedHandle(runtimeD3D12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()));
+			DX::ThrowIfFailed(swapChain.d3d11Device->OpenSharedFence(sharedFenceHandle.get(), IID_PPV_ARGS(&runtimeD3D11Fence)));
+			runtimeFenceValue = 1;
+			for (auto& commandContext : runtimeCommandContexts)
+				commandContext.fenceValue = 0;
+			runtimeCommandContextCursor = 0;
+		}
+
+		if (!EnsureRuntimeCommandContexts())
+			return false;
+	} catch (const std::exception& e) {
+		(void)e;
+		return false;
+	} catch (...) {
+		return false;
+	}
+
+	return swapChain.d3d11Device.get() &&
+	       swapChain.d3d11Context.get() &&
+	       swapChain.d3d12Device.get() &&
+	       swapChain.commandQueue.get() &&
+	       runtimeD3D11Fence.get() &&
+	       runtimeD3D12Fence.get();
+}
+
+bool FidelityFX::EnsureRuntimeCommandContexts()
+{
+	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	if (!swapChain.d3d12Device)
+		return false;
+
+	try {
+		for (auto& commandContext : runtimeCommandContexts) {
+			if (commandContext.commandAllocator && commandContext.commandList)
+				continue;
+
+			commandContext.commandList = nullptr;
+			commandContext.commandAllocator = nullptr;
+			commandContext.fenceValue = 0;
+
+			DX::ThrowIfFailed(swapChain.d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandContext.commandAllocator)));
+			DX::ThrowIfFailed(swapChain.d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandContext.commandAllocator.get(), nullptr, IID_PPV_ARGS(&commandContext.commandList)));
+			DX::ThrowIfFailed(commandContext.commandList->Close());
+		}
+	} catch (const std::exception& e) {
+		(void)e;
+		return false;
+	} catch (...) {
+		return false;
+	}
+
+	return true;
+}
+
+FidelityFX::RuntimeCommandContext* FidelityFX::AcquireRuntimeCommandContext()
+{
+	if (!runtimeD3D12Fence || !EnsureRuntimeCommandContexts())
+		return nullptr;
+
+	const uint64_t completedValue = runtimeD3D12Fence->GetCompletedValue();
+	const uint32_t commandContextCount = static_cast<uint32_t>(runtimeCommandContexts.size());
+	for (uint32_t i = 0; i < commandContextCount; ++i) {
+		const uint32_t index = (runtimeCommandContextCursor + i) % commandContextCount;
+		auto& commandContext = runtimeCommandContexts[index];
+		if (!commandContext.commandAllocator || !commandContext.commandList)
+			continue;
+		if (commandContext.fenceValue != 0 && completedValue < commandContext.fenceValue)
+			continue;
+
+		commandContext.fenceValue = 0;
+		runtimeCommandContextCursor = (index + 1) % commandContextCount;
+		return &commandContext;
+	}
+
+	uint32_t waitIndex = commandContextCount;
+	uint64_t waitValue = std::numeric_limits<uint64_t>::max();
+	for (uint32_t i = 0; i < commandContextCount; ++i) {
+		auto& commandContext = runtimeCommandContexts[i];
+		if (!commandContext.commandAllocator || !commandContext.commandList || commandContext.fenceValue == 0)
+			continue;
+		if (commandContext.fenceValue < waitValue) {
+			waitValue = commandContext.fenceValue;
+			waitIndex = i;
+		}
+	}
+
+	if (waitIndex == commandContextCount)
+		return nullptr;
+
+	if (!WaitForRuntimeD3D12Fence(waitValue)) {
+		return nullptr;
+	}
+
+	auto& commandContext = runtimeCommandContexts[waitIndex];
+	commandContext.fenceValue = 0;
+	runtimeCommandContextCursor = (waitIndex + 1) % commandContextCount;
+	return &commandContext;
+}
+
+void FidelityFX::ResetRuntimeCommandContexts()
+{
+	for (auto& commandContext : runtimeCommandContexts) {
+		commandContext.commandList = nullptr;
+		commandContext.commandAllocator = nullptr;
+		commandContext.fenceValue = 0;
+	}
+	runtimeCommandContextCursor = 0;
+}
+
+bool FidelityFX::WaitForRuntimeD3D12Fence(uint64_t a_value)
+{
+	if (!runtimeD3D12Fence || a_value == 0)
+		return true;
+	if (runtimeD3D12Fence->GetCompletedValue() >= a_value)
+		return true;
+
+	winrt::handle fenceEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr));
+	if (!fenceEvent)
+		return false;
+	if (FAILED(runtimeD3D12Fence->SetEventOnCompletion(a_value, fenceEvent.get())))
+		return false;
+
+	return WaitForSingleObject(fenceEvent.get(), 5000) == WAIT_OBJECT_0;
+}
+
+void FidelityFX::WaitForRuntimeUpscalerIdle()
+{
+	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	if (!runtimeD3D12Fence && !runtimeD3D11Fence)
+		return;
+
+	try {
+		if (swapChain.d3d11Context && runtimeD3D11Fence && runtimeD3D12Fence) {
+			const uint64_t d3d11FenceValue = runtimeFenceValue++;
+			DX::ThrowIfFailed(swapChain.d3d11Context->Signal(runtimeD3D11Fence.get(), d3d11FenceValue));
+			swapChain.d3d11Context->Flush();
+			(void)WaitForRuntimeD3D12Fence(d3d11FenceValue);
+		} else if (globals::d3d::context) {
+			globals::d3d::context->Flush();
+		}
+
+		if (swapChain.commandQueue && runtimeD3D12Fence) {
+			const uint64_t d3d12FenceValue = runtimeFenceValue++;
+			DX::ThrowIfFailed(swapChain.commandQueue->Signal(runtimeD3D12Fence.get(), d3d12FenceValue));
+			(void)WaitForRuntimeD3D12Fence(d3d12FenceValue);
+		}
+
+		if (runtimeD3D12Fence) {
+			const uint64_t completedValue = runtimeD3D12Fence->GetCompletedValue();
+			for (auto& commandContext : runtimeCommandContexts) {
+				if (commandContext.fenceValue != 0 && completedValue >= commandContext.fenceValue)
+					commandContext.fenceValue = 0;
+			}
+		}
+	} catch (const std::exception& e) {
+		(void)e;
+	} catch (...) {
+	}
+}
+
+void FidelityFX::DestroyRuntimeUpscalerContexts(bool a_waitForIdle)
+{
+	if (a_waitForIdle)
+		WaitForRuntimeUpscalerIdle();
+
+	for (uint32_t i = 0; i < std::size(runtimeUpscalerContexts); ++i) {
+		if (runtimeUpscalerContexts[i])
+			(void)ffx::DestroyContext(runtimeUpscalerContexts[i]);
+		runtimeUpscalerContexts[i] = nullptr;
+	}
+
+	runtimeUpscalerContextCount = 0;
+	runtimeUpscalerMaxRenderWidth = 0;
+	runtimeUpscalerMaxRenderHeight = 0;
+	runtimeUpscalerMaxDisplayWidth = 0;
+	runtimeUpscalerMaxDisplayHeight = 0;
+	runtimeUpscalerRequestedVersion = 0;
+}
+
+void FidelityFX::DestroyRuntimeUpscalerResources(bool a_waitForIdle)
+{
+	if (a_waitForIdle)
+		WaitForRuntimeUpscalerIdle();
+
+	DeleteWrappedResourceArray(runtimeColorShared);
+	DeleteWrappedResourceArray(runtimeDepthShared);
+	DeleteWrappedResourceArray(runtimeMotionShared);
+	DeleteWrappedResourceArray(runtimeReactiveShared);
+	DeleteWrappedResourceArray(runtimeTransparencyShared);
+	DeleteWrappedResourceArray(runtimeOutputShared);
+
+	runtimeColorSharedDesc = {};
+	runtimeDepthSharedDesc = {};
+	runtimeMotionSharedDesc = {};
+	runtimeReactiveSharedDesc = {};
+	runtimeTransparencySharedDesc = {};
+	runtimeOutputSharedDesc = {};
+}
+
+bool FidelityFX::HasRuntimeUpscalerResources() const
+{
+	bool hasRuntimeResources =
+		runtimeUpscalerContextCount != 0 ||
+		pendingRuntimeTeardownD3D11FenceValue != 0 ||
+		pendingRuntimeTeardownD3D12FenceValue != 0;
+	for (auto* resource : runtimeColorShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeDepthShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeMotionShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeReactiveShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeTransparencyShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeOutputShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	return hasRuntimeResources;
+}
+
+bool FidelityFX::PollRuntimeUpscalerTeardownIdle()
+{
+	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	if (!runtimeD3D12Fence && !runtimeD3D11Fence) {
+		pendingRuntimeTeardownD3D11FenceValue = 0;
+		pendingRuntimeTeardownD3D12FenceValue = 0;
+		return true;
+	}
+
+	try {
+		if (pendingRuntimeTeardownD3D11FenceValue != 0 &&
+			(!swapChain.d3d11Context || !runtimeD3D11Fence || !runtimeD3D12Fence)) {
+			pendingRuntimeTeardownD3D11FenceValue = 0;
+		}
+		if (pendingRuntimeTeardownD3D12FenceValue != 0 && (!swapChain.commandQueue || !runtimeD3D12Fence)) {
+			pendingRuntimeTeardownD3D12FenceValue = 0;
+		}
+
+		if (swapChain.d3d11Context && runtimeD3D11Fence && runtimeD3D12Fence) {
+			if (pendingRuntimeTeardownD3D11FenceValue == 0) {
+				pendingRuntimeTeardownD3D11FenceValue = runtimeFenceValue++;
+				DX::ThrowIfFailed(swapChain.d3d11Context->Signal(runtimeD3D11Fence.get(), pendingRuntimeTeardownD3D11FenceValue));
+				swapChain.d3d11Context->Flush();
+			}
+
+			if (runtimeD3D12Fence->GetCompletedValue() < pendingRuntimeTeardownD3D11FenceValue)
+				return false;
+
+			pendingRuntimeTeardownD3D11FenceValue = 0;
+		} else if (globals::d3d::context) {
+			globals::d3d::context->Flush();
+		}
+
+		if (swapChain.commandQueue && runtimeD3D12Fence) {
+			if (pendingRuntimeTeardownD3D12FenceValue == 0) {
+				pendingRuntimeTeardownD3D12FenceValue = runtimeFenceValue++;
+				DX::ThrowIfFailed(swapChain.commandQueue->Signal(runtimeD3D12Fence.get(), pendingRuntimeTeardownD3D12FenceValue));
+			}
+
+			if (runtimeD3D12Fence->GetCompletedValue() < pendingRuntimeTeardownD3D12FenceValue)
+				return false;
+
+			pendingRuntimeTeardownD3D12FenceValue = 0;
+		}
+	} catch (const std::exception& e) {
+		(void)e;
+		pendingRuntimeTeardownD3D11FenceValue = 0;
+		pendingRuntimeTeardownD3D12FenceValue = 0;
+		return true;
+	} catch (...) {
+		pendingRuntimeTeardownD3D11FenceValue = 0;
+		pendingRuntimeTeardownD3D12FenceValue = 0;
+		return true;
+	}
+
+	return true;
+}
+
+bool FidelityFX::PollRuntimeUpscalerTeardownReady()
+{
+	if (!HasRuntimeUpscalerResources()) {
+		pendingRuntimeTeardownD3D11FenceValue = 0;
+		pendingRuntimeTeardownD3D12FenceValue = 0;
+		return true;
+	}
+
+	return PollRuntimeUpscalerTeardownIdle();
+}
+
+void FidelityFX::ResetRuntimeUpscalerResources(bool a_invalidateProviderCache)
+{
+	WaitForRuntimeUpscalerIdle();
+	DestroyRuntimeUpscalerContexts(false);
+	DestroyRuntimeUpscalerResources(false);
+	ResetRuntimeUpscalerTracking(a_invalidateProviderCache);
+}
+
+void FidelityFX::ReleaseRuntimeUpscalerResourcesForRelatch(bool a_waitForIdle)
+{
+	if (a_waitForIdle)
+		WaitForRuntimeUpscalerIdle();
+
+	DestroyRuntimeUpscalerContexts(false);
+	DestroyRuntimeUpscalerResources(false);
+	ResetRuntimeCommandContexts();
+	pendingRuntimeTeardownD3D11FenceValue = 0;
+	pendingRuntimeTeardownD3D12FenceValue = 0;
+}
+
+bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion)
+{
+	auto recordRuntimeProviderResult = [&](bool a_supported) {
+		runtimeUpscalerSupportCheckKnown = true;
+		runtimeUpscalerSupportConfirmed = a_supported;
+		runtimeUpscalerProviderMatchedVersionId = 0;
+		runtimeUpscalerProviderMatchedVersionName.clear();
+
+		if (!a_supported || !runtimeUpscalerContexts[0] || !ffxModule.Query)
+			return;
+
+		ffxQueryGetProviderVersion providerQuery{};
+		providerQuery.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+		providerQuery.header.pNext = nullptr;
+		providerQuery.versionId = 0;
+		providerQuery.versionName = nullptr;
+
+		if (ffxModule.Query(&runtimeUpscalerContexts[0], &providerQuery.header) == FFX_API_RETURN_OK) {
+			runtimeUpscalerProviderMatchedVersionId = providerQuery.versionId;
+			if (providerQuery.versionName)
+				runtimeUpscalerProviderMatchedVersionName = providerQuery.versionName;
+		}
+	};
+
+	if (!a_fullRenderWidth || !a_fullRenderHeight || !a_fullDisplayWidth || !a_fullDisplayHeight) {
+		recordRuntimeProviderResult(false);
+		return false;
+	}
+	if (a_contextCount == 0 || a_contextCount > std::size(runtimeUpscalerContexts)) {
+		recordRuntimeProviderResult(false);
+		return false;
+	}
+	if (!EnsureRuntimeUpscalerInterop()) {
+		recordRuntimeProviderResult(false);
+		return false;
+	}
+	if (!ffxModule.CreateContext || !ffxModule.DestroyContext) {
+		recordRuntimeProviderResult(false);
+		return false;
+	}
+
+	bool allContextsValid = true;
+	for (uint32_t i = 0; i < a_contextCount; ++i) {
+		if (!runtimeUpscalerContexts[i]) {
+			allContextsValid = false;
+			break;
+		}
+	}
+
+	const bool needsRecreate =
+		!allContextsValid ||
+		runtimeUpscalerContextCount != a_contextCount ||
+		runtimeUpscalerMaxRenderWidth != a_fullRenderWidth ||
+		runtimeUpscalerMaxRenderHeight != a_fullRenderHeight ||
+		runtimeUpscalerMaxDisplayWidth != a_fullDisplayWidth ||
+		runtimeUpscalerMaxDisplayHeight != a_fullDisplayHeight ||
+		runtimeUpscalerRequestedVersion != a_requestedVersion;
+
+	if (!needsRecreate && runtimeUpscalerContextCount == a_contextCount)
+		return true;
+
+	DestroyRuntimeUpscalerContexts();
+
+	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+
+	ffx::CreateBackendDX12Desc backendDesc{};
+	backendDesc.device = swapChain.d3d12Device.get();
+
+	uint64_t runtimeVersionId = 0;
+	std::string runtimeVersionName;
+	const bool hasRuntimeVersionOverride = QueryRuntimeUpscalerVersionId(swapChain.d3d12Device.get(), a_requestedVersion, runtimeVersionId, runtimeVersionName);
+
+	for (uint32_t i = 0; i < a_contextCount; ++i) {
+		ffx::CreateContextDescUpscale createDesc{};
+		createDesc.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+		createDesc.maxRenderSize = { a_fullRenderWidth, a_fullRenderHeight };
+		createDesc.maxUpscaleSize = { a_fullDisplayWidth, a_fullDisplayHeight };
+
+		ffx::CreateContextDescUpscaleVersion versionDesc{};
+		versionDesc.version = a_requestedVersion;
+
+		ffx::CreateContextDescOverrideVersion overrideVersionDesc{};
+		overrideVersionDesc.versionId = runtimeVersionId;
+
+		std::array<RuntimeUpscalerCreateAttemptResult, 4> attempts{ {
+			{ RuntimeUpscalerCreateAttempt::kGenericOverrideOnly, hasRuntimeVersionOverride },
+			{ RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion, hasRuntimeVersionOverride },
+			{ RuntimeUpscalerCreateAttempt::kUpscalerVersionDescriptor, true },
+			{ RuntimeUpscalerCreateAttempt::kDefaultProvider, a_requestedVersion == FFX_UPSCALER_VERSION },
+		} };
+
+		bool contextCreated = false;
+		for (auto& attempt : attempts) {
+			if (!attempt.enabled)
+				continue;
+
+			attempt.result = TryCreateRuntimeUpscalerContext(
+				runtimeUpscalerContexts[i],
+				attempt.attempt,
+				createDesc,
+				backendDesc,
+				versionDesc,
+				overrideVersionDesc);
+
+			if (attempt.result != FFX_API_RETURN_OK)
+				continue;
+
+			contextCreated = true;
+			break;
+		}
+
+		if (!contextCreated) {
+			DestroyRuntimeUpscalerContexts();
+			recordRuntimeProviderResult(false);
+			return false;
+		}
+	}
+
+	runtimeUpscalerContextCount = a_contextCount;
+	runtimeUpscalerMaxRenderWidth = a_fullRenderWidth;
+	runtimeUpscalerMaxRenderHeight = a_fullRenderHeight;
+	runtimeUpscalerMaxDisplayWidth = a_fullDisplayWidth;
+	runtimeUpscalerMaxDisplayHeight = a_fullDisplayHeight;
+	runtimeUpscalerRequestedVersion = a_requestedVersion;
+	recordRuntimeProviderResult(true);
+
+	return true;
+}
+
+bool FidelityFX::EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight,
+	const D3D11_TEXTURE2D_DESC& a_colorDesc,
+	const D3D11_TEXTURE2D_DESC& a_depthDesc,
+	const D3D11_TEXTURE2D_DESC& a_motionDesc,
+	const D3D11_TEXTURE2D_DESC& a_reactiveDesc,
+	const D3D11_TEXTURE2D_DESC& a_transparencyDesc,
+	const D3D11_TEXTURE2D_DESC& a_outputDesc)
+{
+	if (!EnsureRuntimeUpscalerInterop())
+		return false;
+	if (a_contextCount == 0 || a_contextCount > std::size(runtimeColorShared))
+		return false;
+
+	const D3D11_TEXTURE2D_DESC desiredColorDesc = MakeSharedTextureDesc(a_colorDesc, a_fullRenderWidth, a_fullRenderHeight, 0);
+	const D3D11_TEXTURE2D_DESC desiredDepthDesc = MakeSharedTextureDesc(a_depthDesc, a_fullRenderWidth, a_fullRenderHeight, 0);
+	const D3D11_TEXTURE2D_DESC desiredMotionDesc = MakeSharedTextureDesc(a_motionDesc, a_fullRenderWidth, a_fullRenderHeight, 0);
+	const D3D11_TEXTURE2D_DESC desiredReactiveDesc = MakeSharedTextureDesc(a_reactiveDesc, a_fullRenderWidth, a_fullRenderHeight, 0);
+	const D3D11_TEXTURE2D_DESC desiredTransparencyDesc = MakeSharedTextureDesc(a_transparencyDesc, a_fullRenderWidth, a_fullRenderHeight, 0);
+	const D3D11_TEXTURE2D_DESC desiredOutputDesc = MakeSharedTextureDesc(a_outputDesc, a_fullDisplayWidth, a_fullDisplayHeight, D3D11_BIND_UNORDERED_ACCESS);
+
+	bool missingRequiredResource = false;
+	for (uint32_t i = 0; i < a_contextCount; ++i) {
+		if (!runtimeColorShared[i] ||
+			!runtimeDepthShared[i] ||
+			!runtimeMotionShared[i] ||
+			!runtimeReactiveShared[i] ||
+			!runtimeTransparencyShared[i] ||
+			!runtimeOutputShared[i] ||
+			!runtimeColorShared[i]->resource11 ||
+			!runtimeDepthShared[i]->resource11 ||
+			!runtimeMotionShared[i]->resource11 ||
+			!runtimeReactiveShared[i]->resource11 ||
+			!runtimeTransparencyShared[i]->resource11 ||
+			!runtimeOutputShared[i]->resource11 ||
+			!runtimeColorShared[i]->resource.get() ||
+			!runtimeDepthShared[i]->resource.get() ||
+			!runtimeMotionShared[i]->resource.get() ||
+			!runtimeReactiveShared[i]->resource.get() ||
+			!runtimeTransparencyShared[i]->resource.get() ||
+			!runtimeOutputShared[i]->resource.get()) {
+			missingRequiredResource = true;
+			break;
+		}
+	}
+
+	const bool needsRecreate =
+		missingRequiredResource ||
+		!SameTextureDesc(runtimeColorSharedDesc, desiredColorDesc) ||
+		!SameTextureDesc(runtimeDepthSharedDesc, desiredDepthDesc) ||
+		!SameTextureDesc(runtimeMotionSharedDesc, desiredMotionDesc) ||
+		!SameTextureDesc(runtimeReactiveSharedDesc, desiredReactiveDesc) ||
+		!SameTextureDesc(runtimeTransparencySharedDesc, desiredTransparencyDesc) ||
+		!SameTextureDesc(runtimeOutputSharedDesc, desiredOutputDesc);
+
+	if (!needsRecreate) {
+		for (uint32_t i = a_contextCount; i < std::size(runtimeColorShared); ++i) {
+			delete runtimeColorShared[i];
+			runtimeColorShared[i] = nullptr;
+			delete runtimeDepthShared[i];
+			runtimeDepthShared[i] = nullptr;
+			delete runtimeMotionShared[i];
+			runtimeMotionShared[i] = nullptr;
+			delete runtimeReactiveShared[i];
+			runtimeReactiveShared[i] = nullptr;
+			delete runtimeTransparencyShared[i];
+			runtimeTransparencyShared[i] = nullptr;
+			delete runtimeOutputShared[i];
+			runtimeOutputShared[i] = nullptr;
+		}
+		return true;
+	}
+
+	DestroyRuntimeUpscalerResources();
+
+	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+
+	try {
+		for (uint32_t i = 0; i < a_contextCount; ++i) {
+			runtimeColorShared[i] = new WrappedResource(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("RuntimeUpscaler::ColorShared{}", i));
+			runtimeDepthShared[i] = new WrappedResource(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("RuntimeUpscaler::DepthShared{}", i));
+			runtimeMotionShared[i] = new WrappedResource(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("RuntimeUpscaler::MotionShared{}", i));
+			runtimeReactiveShared[i] = new WrappedResource(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("RuntimeUpscaler::ReactiveShared{}", i));
+			runtimeTransparencyShared[i] = new WrappedResource(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("RuntimeUpscaler::TransparencyShared{}", i));
+			runtimeOutputShared[i] = new WrappedResource(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("RuntimeUpscaler::OutputShared{}", i));
+		}
+	} catch (const std::exception& e) {
+		(void)e;
+		DestroyRuntimeUpscalerResources();
+		return false;
+	} catch (...) {
+		DestroyRuntimeUpscalerResources();
+		return false;
+	}
+
+	runtimeColorSharedDesc = desiredColorDesc;
+	runtimeDepthSharedDesc = desiredDepthDesc;
+	runtimeMotionSharedDesc = desiredMotionDesc;
+	runtimeReactiveSharedDesc = desiredReactiveDesc;
+	runtimeTransparencySharedDesc = desiredTransparencyDesc;
+	runtimeOutputSharedDesc = desiredOutputDesc;
+
+	return true;
+}
+
+bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+	ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
+	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
+	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness)
+{
+	if (a_contextIndex >= runtimeUpscalerContextCount || !runtimeUpscalerContexts[a_contextIndex])
+		return false;
+	if (!a_color || !a_depth || !a_motionVectors || !a_reactiveMask || !a_transparencyCompositionMask || !a_output)
+		return false;
+	if (!a_renderWidth || !a_renderHeight || !a_displayWidth || !a_displayHeight)
+		return false;
+
+	D3D11_TEXTURE2D_DESC colorDesc{};
+	D3D11_TEXTURE2D_DESC depthDesc{};
+	D3D11_TEXTURE2D_DESC motionDesc{};
+	D3D11_TEXTURE2D_DESC reactiveDesc{};
+	D3D11_TEXTURE2D_DESC transparencyDesc{};
+	D3D11_TEXTURE2D_DESC outputDesc{};
+	if (!TryGetTexture2DDesc(a_color, colorDesc) ||
+		!TryGetTexture2DDesc(a_depth, depthDesc) ||
+		!TryGetTexture2DDesc(a_motionVectors, motionDesc) ||
+		!TryGetTexture2DDesc(a_reactiveMask, reactiveDesc) ||
+		!TryGetTexture2DDesc(a_transparencyCompositionMask, transparencyDesc) ||
+		!TryGetTexture2DDesc(a_output, outputDesc)) {
+		return false;
+	}
+
+	if (!EnsureRuntimeUpscalerSharedResources(
+			runtimeUpscalerContextCount,
+			runtimeUpscalerMaxRenderWidth,
+			runtimeUpscalerMaxRenderHeight,
+			runtimeUpscalerMaxDisplayWidth,
+			runtimeUpscalerMaxDisplayHeight,
+			colorDesc,
+			depthDesc,
+			motionDesc,
+			reactiveDesc,
+			transparencyDesc,
+			outputDesc)) {
+		return false;
+	}
+
+	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	auto& upscaling = globals::features::upscaling;
+	auto state = globals::state;
+
+	if (!swapChain.d3d11Context || !swapChain.commandQueue || !runtimeD3D11Fence || !runtimeD3D12Fence)
+		return false;
+
+	auto isValidShared = [](WrappedResource* a_resource) {
+		return a_resource && a_resource->resource11 && a_resource->resource.get();
+	};
+	if (!isValidShared(runtimeColorShared[a_contextIndex]) ||
+		!isValidShared(runtimeDepthShared[a_contextIndex]) ||
+		!isValidShared(runtimeMotionShared[a_contextIndex]) ||
+		!isValidShared(runtimeReactiveShared[a_contextIndex]) ||
+		!isValidShared(runtimeTransparencyShared[a_contextIndex]) ||
+		!isValidShared(runtimeOutputShared[a_contextIndex])) {
+		return false;
+	}
+
+	auto* commandContext = AcquireRuntimeCommandContext();
+	if (!commandContext)
+		return false;
+
+	auto* commandAllocator = commandContext->commandAllocator.get();
+	auto* commandList = commandContext->commandList.get();
+	if (!commandAllocator || !commandList)
+		return false;
+
+	const std::string dispatchPassName = globals::game::isVR ? std::format("Upscaling::RuntimeUpscalerDispatch Eye {}", a_contextIndex) : "Upscaling::RuntimeUpscalerDispatch";
+	CS_GPU_PASS(dispatchPassName);
+
+	bool dispatchOk = false;
+	bool commandListSubmitted = false;
+	bool commandFenceTracked = false;
+	try {
+		auto copyIntoShared = [&](ID3D11Resource* a_source, WrappedResource* a_destination, uint32_t a_width, uint32_t a_height, uint32_t a_maxWidth, uint32_t a_maxHeight) {
+			if (!a_source || !a_destination || !a_destination->resource11)
+				return false;
+
+			const uint32_t copyWidth = std::min(a_width, a_maxWidth);
+			const uint32_t copyHeight = std::min(a_height, a_maxHeight);
+			if (!copyWidth || !copyHeight)
+				return false;
+
+			D3D11_BOX sourceBox{};
+			sourceBox.left = 0;
+			sourceBox.top = 0;
+			sourceBox.front = 0;
+			sourceBox.right = copyWidth;
+			sourceBox.bottom = copyHeight;
+			sourceBox.back = 1;
+			swapChain.d3d11Context->CopySubresourceRegion(a_destination->resource11, 0, 0, 0, 0, a_source, 0, &sourceBox);
+			return true;
+		};
+
+		if (!copyIntoShared(a_color, runtimeColorShared[a_contextIndex], colorDesc.Width, colorDesc.Height, runtimeColorSharedDesc.Width, runtimeColorSharedDesc.Height) ||
+			!copyIntoShared(a_depth, runtimeDepthShared[a_contextIndex], depthDesc.Width, depthDesc.Height, runtimeDepthSharedDesc.Width, runtimeDepthSharedDesc.Height) ||
+			!copyIntoShared(a_motionVectors, runtimeMotionShared[a_contextIndex], motionDesc.Width, motionDesc.Height, runtimeMotionSharedDesc.Width, runtimeMotionSharedDesc.Height) ||
+			!copyIntoShared(a_reactiveMask, runtimeReactiveShared[a_contextIndex], reactiveDesc.Width, reactiveDesc.Height, runtimeReactiveSharedDesc.Width, runtimeReactiveSharedDesc.Height) ||
+			!copyIntoShared(a_transparencyCompositionMask, runtimeTransparencyShared[a_contextIndex], transparencyDesc.Width, transparencyDesc.Height, runtimeTransparencySharedDesc.Width, runtimeTransparencySharedDesc.Height)) {
+			dispatchOk = false;
+		} else {
+			const uint64_t d3d11SubmitFence = runtimeFenceValue++;
+			DX::ThrowIfFailed(swapChain.d3d11Context->Signal(runtimeD3D11Fence.get(), d3d11SubmitFence));
+			DX::ThrowIfFailed(swapChain.commandQueue->Wait(runtimeD3D12Fence.get(), d3d11SubmitFence));
+
+			DX::ThrowIfFailed(commandAllocator->Reset());
+			DX::ThrowIfFailed(commandList->Reset(commandAllocator, nullptr));
+
+			std::array<D3D12_RESOURCE_BARRIER, 6> beginBarriers = {
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeColorShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeDepthShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeMotionShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeReactiveShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeTransparencyShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeOutputShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+			};
+			commandList->ResourceBarrier(static_cast<UINT>(beginBarriers.size()), beginBarriers.data());
+
+			ffx::DispatchDescUpscale dispatchParameters{};
+			dispatchParameters.commandList = commandList;
+			dispatchParameters.color = ffxApiGetResourceDX12(runtimeColorShared[a_contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+			dispatchParameters.depth = ffxApiGetResourceDX12(runtimeDepthShared[a_contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+			dispatchParameters.motionVectors = ffxApiGetResourceDX12(runtimeMotionShared[a_contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+			dispatchParameters.exposure = FfxApiResource({});
+			dispatchParameters.reactive = ffxApiGetResourceDX12(runtimeReactiveShared[a_contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+			dispatchParameters.transparencyAndComposition = ffxApiGetResourceDX12(runtimeTransparencyShared[a_contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+			dispatchParameters.output = ffxApiGetResourceDX12(runtimeOutputShared[a_contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, FFX_API_RESOURCE_USAGE_UAV);
+			dispatchParameters.jitterOffset = { -upscaling.jitter.x, -upscaling.jitter.y };
+			dispatchParameters.motionVectorScale = { a_motionVectorScaleX, a_motionVectorScaleY };
+			dispatchParameters.renderSize = { a_renderWidth, a_renderHeight };
+			dispatchParameters.upscaleSize = { a_displayWidth, a_displayHeight };
+			dispatchParameters.enableSharpening = true;
+			dispatchParameters.sharpness = a_sharpness;
+			dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
+			dispatchParameters.preExposure = 1.0f;
+			// Our repo has no ShouldResetHistoryThisFrame(); mirror Upscale()'s existing
+			// menu-reset predicate (menus produce no fresh motion vectors/depth).
+			dispatchParameters.reset = state->IsMainOrLoadingMenuOpen() && !upscaling.menuCameraMVsValid;
+			dispatchParameters.cameraNear = *globals::game::cameraNear;
+			dispatchParameters.cameraFar = *globals::game::cameraFar;
+			dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
+			dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
+			dispatchParameters.flags = 0;
+			const bool runtimeFallbackReset = runtimeFallbackResetDispatchesRemaining > 0;
+			dispatchParameters.reset = dispatchParameters.reset || runtimeFallbackReset;
+
+			dispatchOk = ffx::Dispatch(runtimeUpscalerContexts[a_contextIndex], dispatchParameters) == ffx::ReturnCode::Ok;
+			if (dispatchOk && runtimeFallbackReset)
+				runtimeFallbackResetDispatchesRemaining--;
+
+			std::array<D3D12_RESOURCE_BARRIER, 6> endBarriers = {
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeColorShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeDepthShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeMotionShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeReactiveShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeTransparencyShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
+				CD3DX12_RESOURCE_BARRIER::Transition(runtimeOutputShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON),
+			};
+			commandList->ResourceBarrier(static_cast<UINT>(endBarriers.size()), endBarriers.data());
+
+			DX::ThrowIfFailed(commandList->Close());
+
+			ID3D12CommandList* commandListsToExecute[] = { commandList };
+			const uint64_t d3d12SubmitFence = runtimeFenceValue++;
+			swapChain.commandQueue->ExecuteCommandLists(1, commandListsToExecute);
+			commandListSubmitted = true;
+			DX::ThrowIfFailed(swapChain.commandQueue->Signal(runtimeD3D12Fence.get(), d3d12SubmitFence));
+			commandContext->fenceValue = d3d12SubmitFence;
+			commandFenceTracked = true;
+			DX::ThrowIfFailed(swapChain.d3d11Context->Wait(runtimeD3D11Fence.get(), d3d12SubmitFence));
+
+			if (dispatchOk) {
+				const uint32_t copyWidth = std::min({ a_displayWidth, outputDesc.Width, runtimeOutputSharedDesc.Width });
+				const uint32_t copyHeight = std::min({ a_displayHeight, outputDesc.Height, runtimeOutputSharedDesc.Height });
+				if (!copyWidth || !copyHeight) {
+					dispatchOk = false;
+				} else {
+					D3D11_BOX outputBox{};
+					outputBox.left = 0;
+					outputBox.top = 0;
+					outputBox.front = 0;
+					outputBox.right = copyWidth;
+					outputBox.bottom = copyHeight;
+					outputBox.back = 1;
+					swapChain.d3d11Context->CopySubresourceRegion(a_output, 0, 0, 0, 0, runtimeOutputShared[a_contextIndex]->resource11, 0, &outputBox);
+				}
+			}
+		}
+	} catch (const std::exception& e) {
+		if (!commandListSubmitted) {
+			commandContext->fenceValue = 0;
+		} else if (!commandFenceTracked) {
+			try {
+				const uint64_t rescueFence = runtimeFenceValue++;
+				DX::ThrowIfFailed(swapChain.commandQueue->Signal(runtimeD3D12Fence.get(), rescueFence));
+				commandContext->fenceValue = rescueFence;
+			} catch (...) {
+				commandContext->fenceValue = 0;
+			}
+		}
+		(void)e;
+		dispatchOk = false;
+	} catch (...) {
+		if (!commandListSubmitted) {
+			commandContext->fenceValue = 0;
+		} else if (!commandFenceTracked) {
+			try {
+				const uint64_t rescueFence = runtimeFenceValue++;
+				DX::ThrowIfFailed(swapChain.commandQueue->Signal(runtimeD3D12Fence.get(), rescueFence));
+				commandContext->fenceValue = rescueFence;
+			} catch (...) {
+				commandContext->fenceValue = 0;
+			}
+		}
+		dispatchOk = false;
+	}
+
+	return dispatchOk;
+}
+
+bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+	ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
+	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
+	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness)
+{
+	if (!a_color || !a_depth || !a_motionVectors || !a_reactiveMask || !a_transparencyCompositionMask || !a_output ||
+		!a_renderWidth || !a_renderHeight || !a_displayWidth || !a_displayHeight) {
+		return false;
+	}
+
+	const bool runtimeFsr4Requested = ShouldRequestRuntimeFsr4();
+	const bool runtimeRequested = runtimeFsr4Requested || ShouldUseRuntimeUpscalerForFSR();
+	const uint32_t requestedRuntimeVersion = runtimeFsr4Requested ? FFX_UPSCALER_VERSION : Fsr3Version;
+	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
+	const uint32_t runtimeContextCount = splitPerEyeContexts ? 2u : 1u;
+	const bool runtimeSelected = runtimeRequested && CanUseRuntimeUpscalerPath();
+
+	if (runtimeSelected) {
+		auto state = globals::state;
+		if (!state)
+			return false;
+
+		// Mirror the host VR path: keep runtime contexts/resources sized for the largest
+		// per-eye display bounds so render-scale quality changes do not force DX11<->DX12
+		// runtime context/shared-resource churn.
+		const bool useFullRenderBounds = splitPerEyeContexts || runtimeFsr4Requested;
+		const uint32_t fullRenderWidth = useFullRenderBounds ? a_displayWidth : a_renderWidth;
+		const uint32_t fullRenderHeight = useFullRenderBounds ? a_displayHeight : a_renderHeight;
+
+		auto tryRuntimeUpscaler = [&](uint32_t a_requestedVersion, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight) {
+			try {
+				if (EnsureRuntimeUpscalerContexts(a_fullRenderWidth, a_fullRenderHeight, a_displayWidth, a_displayHeight, runtimeContextCount, a_requestedVersion) &&
+					DispatchRuntimeUpscalerSingle(
+						a_contextIndex,
+						a_color,
+						a_depth,
+						a_motionVectors,
+						a_reactiveMask,
+						a_transparencyCompositionMask,
+						a_output,
+						a_renderWidth,
+						a_renderHeight,
+						a_displayWidth,
+						a_displayHeight,
+						a_motionVectorScaleX,
+						a_motionVectorScaleY,
+						a_sharpness)) {
+					RecordRuntimeUpscalerFramePath(GetRuntimeUpscalerProviderFramePath(a_requestedVersion));
+					return true;
+				}
+			} catch (const std::exception& e) {
+				(void)e;
+			} catch (...) {
+			}
+
+			return false;
+		};
+
+		if (tryRuntimeUpscaler(requestedRuntimeVersion, fullRenderWidth, fullRenderHeight))
+			return true;
+
+		// Try the runtime FSR3 provider in the upscaler DLL before falling back to the host SDK.
+		if (runtimeFsr4Requested && ShouldUseRuntimeUpscalerForFSR()) {
+			LatchRuntimeFsr4Failure();
+			runtimeFallbackResetDispatchesRemaining = std::max(runtimeFallbackResetDispatchesRemaining, runtimeContextCount);
+			const uint32_t fallbackRenderWidth = splitPerEyeContexts ? fullRenderWidth : a_renderWidth;
+			const uint32_t fallbackRenderHeight = splitPerEyeContexts ? fullRenderHeight : a_renderHeight;
+			if (tryRuntimeUpscaler(Fsr3Version, fallbackRenderWidth, fallbackRenderHeight))
+				return true;
+		}
+
+		if (!runtimeUpscalerFailureLatched) {
+			runtimeFallbackResetDispatchesRemaining = std::max(runtimeFallbackResetDispatchesRemaining, runtimeContextCount);
+		}
+		LatchRuntimeUpscalerFailure();
+	}
+
+	if (!runtimeRequested)
+		runtimeFallbackResetDispatchesRemaining = 0;
+
+	// std::size(fsrContext) is always 2; only fsrContext[0] is initialized in flat mode
+	// (CreateFSRResources' numContexts), so check against the actually-created count.
+	const uint32_t hostContextCount = globals::game::isVR ? 2u : 1u;
+	if (!fsrScratchBuffer || a_contextIndex >= hostContextCount)
+		return false;
+
+	auto context = globals::d3d::context;
+	auto state = globals::state;
+	if (!context || !state)
+		return false;
+
+	auto& upscaling = globals::features::upscaling;
+	auto jitter = upscaling.jitter;
+	const auto fallbackFramePath =
+		runtimeRequested ? RuntimeUpscalerFramePath::kHostFsr31Fallback : RuntimeUpscalerFramePath::kHostFsr31;
+	RecordRuntimeUpscalerFramePath(fallbackFramePath);
+
+	const std::string dispatchPassName = globals::game::isVR ? std::format("Upscaling::HostFsr3Dispatch Eye {}", a_contextIndex) : "Upscaling::HostFsr3Dispatch";
+	CS_GPU_PASS(dispatchPassName);
+
+	FfxFsr3DispatchUpscaleDescription dispatchParameters{};
+	dispatchParameters.commandList = ffxGetCommandListDX11(context);
+	dispatchParameters.color = ffxGetResource(a_color, L"FSR3_Input_OutputColor");
+	dispatchParameters.depth = ffxGetResource(a_depth, L"FSR3_InputDepth");
+	dispatchParameters.motionVectors = ffxGetResource(a_motionVectors, L"FSR3_InputMotionVectors");
+	dispatchParameters.exposure = ffxGetResource(nullptr, L"FSR3_InputExposure");
+	dispatchParameters.upscaleOutput = ffxGetResource(a_output, L"FSR3_OutputColor");
+	dispatchParameters.reactive = ffxGetResource(a_reactiveMask, L"FSR3_InputReactiveMap");
+	dispatchParameters.transparencyAndComposition = ffxGetResource(a_transparencyCompositionMask, L"FSR3_TransparencyAndCompositionMap");
+	dispatchParameters.motionVectorScale.x = a_motionVectorScaleX;
+	dispatchParameters.motionVectorScale.y = a_motionVectorScaleY;
+	dispatchParameters.renderSize.width = a_renderWidth;
+	dispatchParameters.renderSize.height = a_renderHeight;
+	dispatchParameters.jitterOffset.x = -jitter.x;
+	dispatchParameters.jitterOffset.y = -jitter.y;
+	dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
+	dispatchParameters.cameraFar = *globals::game::cameraFar;
+	dispatchParameters.cameraNear = *globals::game::cameraNear;
+	dispatchParameters.enableSharpening = true;
+	dispatchParameters.sharpness = a_sharpness;
+	dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
+	dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
+	const bool runtimeFallbackReset = runtimeRequested && runtimeFallbackResetDispatchesRemaining > 0;
+	if (runtimeFallbackReset)
+		runtimeFallbackResetDispatchesRemaining--;
+	dispatchParameters.reset = (state->IsMainOrLoadingMenuOpen() && !upscaling.menuCameraMVsValid) || runtimeFallbackReset;
+	dispatchParameters.preExposure = 1.0f;
+	dispatchParameters.flags = 0;
+
+	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters);
+
+	return dispatchOK;
+}

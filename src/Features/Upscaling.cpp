@@ -35279,12 +35279,25 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 		vrPostLoadCompositorReleaseOccupiedEpoch[0] == a_releaseToken &&
 		vrPostLoadCompositorReleaseOccupiedEpoch[1] == a_releaseToken;
 	if (releasedMask == 0x3u && exactStereoRelease) {
-		vrPostLoadCompositorHoldReleaseFrame.store(
-			currentFrame,
-			std::memory_order_release);
-		vrPostLoadCompositorHoldState.store(
-			static_cast<uint32_t>(VRPostLoadCompositorHoldState::Completed),
-			std::memory_order_release);
+		const uint32_t currentScopeContribution =
+			a_initialLoadProtectionEpochAtSubmitEntry != 0 ? 1u : 0u;
+		if (vrPostLoadCompositorInFlightSubmitCount == currentScopeContribution) {
+			// Both proven eyes now own this compositor cycle. Retire the hold here
+			// without publishing a quarantine so the next Submit cannot capture the
+			// completed release epoch and misclassify its ordinary stereo cycle as
+			// stale. Partial, mixed, and failed cycles retain their quarantine paths.
+			FinishVRInitialLoadPresentationProtectionLocked(true);
+		} else {
+			// BeginSubmitScope precedes the hook's serialization lock. Preserve the
+			// existing terminal drain if another call already captured this epoch;
+			// retiring underneath that queued scope would turn its result stale.
+			vrPostLoadCompositorHoldReleaseFrame.store(
+				currentFrame,
+				std::memory_order_release);
+			vrPostLoadCompositorHoldState.store(
+				static_cast<uint32_t>(VRPostLoadCompositorHoldState::Completed),
+				std::memory_order_release);
+		}
 	}
 	return VRPostLoadCompositorKeepaliveDisposition::NotApplicable;
 }

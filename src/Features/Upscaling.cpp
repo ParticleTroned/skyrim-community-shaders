@@ -31076,20 +31076,25 @@ bool Upscaling::BlitVRRenderScaleDesktopMirror(
 		vrIntermediateColorOut[1].get()
 	};
 	Texture2D* const* eyeSources = a_eyeSources ? a_eyeSources : defaultEyeSources;
-	Texture2D* sourceTexture = a_compositeCommittedMenuLayer ?
-	                               vrMenuCommittedCompositeLayer.get() :
-	                               eyeSources[0];
+	Texture2D* compositeSource = a_compositeCommittedMenuLayer ?
+	                                 vrMenuCommittedCompositeLayer.get() :
+	                                 nullptr;
 	if (!a_targetTexture || a_targetDesc.Width < 2 || a_targetDesc.Height == 0 || !a_eyeWidth || !a_eyeHeight ||
 		a_targetDesc.ArraySize != 1 || a_targetDesc.SampleDesc.Count != 1) {
 		return false;
 	}
-	if (!sourceTexture || !sourceTexture->srv) {
-		return false;
-	}
-	const uint32_t requiredSourceWidth = a_compositeCommittedMenuLayer ? a_eyeWidth * 2u : a_eyeWidth;
-	if (sourceTexture->desc.Width < requiredSourceWidth ||
-		sourceTexture->desc.Height < a_eyeHeight) {
-		return false;
+	if (a_compositeCommittedMenuLayer) {
+		if (!compositeSource || !compositeSource->srv ||
+			compositeSource->desc.Width < a_eyeWidth * 2u ||
+			compositeSource->desc.Height < a_eyeHeight) {
+			return false;
+		}
+	} else {
+		if (!eyeSources[0] || !eyeSources[1] || !eyeSources[0]->srv || !eyeSources[1]->srv ||
+			eyeSources[0]->desc.Width < a_eyeWidth || eyeSources[0]->desc.Height < a_eyeHeight ||
+			eyeSources[1]->desc.Width < a_eyeWidth || eyeSources[1]->desc.Height < a_eyeHeight) {
+			return false;
+		}
 	}
 	if ((a_targetDesc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0) {
 		return false;
@@ -31286,18 +31291,42 @@ bool Upscaling::BlitVRRenderScaleDesktopMirror(
 			context->PSSetConstantBuffers(0, 1, &compositeBuffer);
 		}
 
-		D3D11_VIEWPORT viewport{};
-		viewport.TopLeftX = 0.0f;
-		viewport.TopLeftY = 0.0f;
-		viewport.Width = static_cast<float>(a_targetDesc.Width);
-		viewport.Height = static_cast<float>(a_targetDesc.Height);
-		viewport.MinDepth = 0.0f;
-		viewport.MaxDepth = 1.0f;
+		if (a_compositeCommittedMenuLayer) {
+			D3D11_VIEWPORT viewport{};
+			viewport.TopLeftX = 0.0f;
+			viewport.TopLeftY = 0.0f;
+			viewport.Width = static_cast<float>(a_targetDesc.Width);
+			viewport.Height = static_cast<float>(a_targetDesc.Height);
+			viewport.MinDepth = 0.0f;
+			viewport.MaxDepth = 1.0f;
 
-		ID3D11ShaderResourceView* sourceSRV = sourceTexture->srv.get();
-		context->RSSetViewports(1, &viewport);
-		context->PSSetShaderResources(0, 1, &sourceSRV);
-		context->Draw(3, 0);
+			ID3D11ShaderResourceView* sourceSRV = compositeSource->srv.get();
+			context->RSSetViewports(1, &viewport);
+			context->PSSetShaderResources(0, 1, &sourceSRV);
+			context->Draw(3, 0);
+		} else {
+			const uint32_t leftWidth = a_targetDesc.Width / 2u;
+			const uint32_t rightWidth = a_targetDesc.Width - leftWidth;
+			for (uint32_t eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
+				const uint32_t targetWidth = eyeIndex == 0 ? leftWidth : rightWidth;
+				if (targetWidth == 0) {
+					continue;
+				}
+
+				D3D11_VIEWPORT viewport{};
+				viewport.TopLeftX = static_cast<float>(eyeIndex == 0 ? 0u : leftWidth);
+				viewport.TopLeftY = 0.0f;
+				viewport.Width = static_cast<float>(targetWidth);
+				viewport.Height = static_cast<float>(a_targetDesc.Height);
+				viewport.MinDepth = 0.0f;
+				viewport.MaxDepth = 1.0f;
+
+				ID3D11ShaderResourceView* sourceSRV = eyeSources[eyeIndex]->srv.get();
+				context->RSSetViewports(1, &viewport);
+				context->PSSetShaderResources(0, 1, &sourceSRV);
+				context->Draw(3, 0);
+			}
+		}
 		ID3D11ShaderResourceView* nullSRV = nullptr;
 		context->PSSetShaderResources(0, 1, &nullSRV);
 	} catch (const std::exception& e) {

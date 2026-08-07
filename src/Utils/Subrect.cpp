@@ -51,13 +51,18 @@ namespace
 		return { uv.x, uv.y, uv.w, uv.h };
 	}
 
-	bool IsFullFrame(const Util::Subrect::UVRegion& uv)
+	bool MatchesUV(const Util::Subrect::UVRegion& lhs, const Util::Subrect::UVRegion& rhs)
 	{
 		constexpr float epsilon = 1.0e-6f;
-		return std::abs(uv.x) <= epsilon &&
-		       std::abs(uv.y) <= epsilon &&
-		       std::abs(uv.w - 1.0f) <= epsilon &&
-		       std::abs(uv.h - 1.0f) <= epsilon;
+		return std::abs(lhs.x - rhs.x) <= epsilon &&
+		       std::abs(lhs.y - rhs.y) <= epsilon &&
+		       std::abs(lhs.w - rhs.w) <= epsilon &&
+		       std::abs(lhs.h - rhs.h) <= epsilon;
+	}
+
+	bool IsFullFrame(const Util::Subrect::UVRegion& uv)
+	{
+		return MatchesUV(uv, Util::Subrect::UVRegion{});
 	}
 
 }
@@ -118,6 +123,8 @@ namespace Util::Subrect
 				selectedPresetIndex = -1;
 			}
 		}
+
+		ReconcileSeededDefaults();
 	}
 
 	void Controller::SaveSettings(json& a_json) const
@@ -141,6 +148,11 @@ namespace Util::Subrect
 	void Controller::SeedDefaultPresets(std::vector<Preset> defaults)
 	{
 		seededDefaults = std::move(defaults);
+		ReconcileSeededDefaults();
+	}
+
+	void Controller::ReconcileSeededDefaults()
+	{
 		if (seededDefaults.empty()) {
 			return;
 		}
@@ -150,6 +162,7 @@ namespace Util::Subrect
 			presets.front().name == "Full Frame" &&
 			IsFullFrame(presets.front().uv);
 		if (!presets.empty() && !hasLegacyFullFramePlaceholder) {
+			MigrateLegacySeededPresetNames();
 			return;
 		}
 
@@ -322,6 +335,27 @@ namespace Util::Subrect
 			selectedPresetIndex = 0;
 		} else {
 			presets.push_back(Preset{ .name = "Full Frame", .uv = DefaultUV() });
+		}
+	}
+
+	void Controller::MigrateLegacySeededPresetNames()
+	{
+		if (presets.size() < 3 || seededDefaults.size() < 3) {
+			return;
+		}
+
+		const bool hasLegacyVRStereoDefaults =
+			seededDefaults[0].name == "Left Eye" &&
+			seededDefaults[1].name == "Right Eye" &&
+			presets[0].name == "Left Eye" &&
+			presets[1].name == "Right Eye" &&
+			presets[2].name == "Full Frame" &&
+			MatchesUV(presets[0].uv, seededDefaults[0].uv) &&
+			MatchesUV(presets[1].uv, seededDefaults[1].uv) &&
+			IsFullFrame(presets[2].uv) &&
+			IsFullFrame(seededDefaults[2].uv);
+		if (hasLegacyVRStereoDefaults) {
+			presets[2].name = seededDefaults[2].name;
 		}
 	}
 

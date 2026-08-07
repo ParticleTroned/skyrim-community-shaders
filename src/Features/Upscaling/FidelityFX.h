@@ -83,11 +83,21 @@ public:
 	// of writing back into a_upscalingTexture (needed when kMAIN is renderRes, e.g. PerfMode).
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness, ID3D11Resource* a_colorOut = nullptr);
 
+	/** @brief AMD adapter classes FSR 4.1.1 can run on: RDNA 3 discrete (RX 7000) and RDNA 4 (RX 9000). */
+	enum class Fsr4AdapterSupport
+	{
+		Unsupported,
+		RadeonRx7000,
+		RadeonRx9000
+	};
+
 	// Runtime upscaler provider (amd_fidelityfx_upscaler_dx12.dll): on eligible AMD hardware,
 	// dispatches via the runtime DLL instead of the host FSR3 SDK. See RuntimeUpscaler.cpp.
 	bool IsAmdAdapterDetected() const;
 	bool IsNvidiaAdapterDetected() const;
 	bool IsRuntimeUpscalerPresent() const;
+	static Fsr4AdapterSupport GetFsr4AdapterSupport(const DXGI_ADAPTER_DESC& a_adapterDesc);
+	Fsr4AdapterSupport GetFsr4AdapterSupport() const;
 	bool IsRuntimeFsr4AutoEligible() const;
 	bool IsRuntimeFsr4Available() const;
 	bool ShouldRequestRuntimeFsr4() const;

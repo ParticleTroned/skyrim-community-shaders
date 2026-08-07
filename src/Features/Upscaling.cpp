@@ -502,7 +502,7 @@ void Upscaling::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("sharpness"), "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 			// Hidden entirely on ineligible GPUs so it can't be toggled somewhere it silently no-ops.
 			if (fidelityFX.IsRuntimeFsr4AutoEligible()) {
-				ImGui::Checkbox(T(TKEY("fsr4_runtime_enable"), "Use Runtime FSR4 (RDNA4)"), &settings.fsr4RuntimeEnable);
+				ImGui::Checkbox(T(TKEY("fsr4_runtime_enable"), "Use Runtime FSR4"), &settings.fsr4RuntimeEnable);
 				if (settings.fsr4RuntimeEnable) {
 					ImGui::TextDisabled("%s: %s", T(TKEY("fsr4_active_path"), "Active path"), fidelityFX.GetDisplayedFsrPathLabel().c_str());
 					if (fidelityFX.IsRuntimeFsr4FailureLatched())

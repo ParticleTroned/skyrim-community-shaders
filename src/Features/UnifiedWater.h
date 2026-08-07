@@ -169,6 +169,9 @@ private:
 	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 
 	void SetFlowmapTex() const;
+	// Readiness covers safely constructed hook resources. WaterCache publishes
+	// generated instruction snapshots independently when asynchronous work ends.
+	bool IsWaterDataReady() const;
 	bool IsExteriorWorldspaceActive() const;
 	void UpdateWaterLODCull() const;
 	static bool LoadOrderChanged(uint64_t& a_hash);

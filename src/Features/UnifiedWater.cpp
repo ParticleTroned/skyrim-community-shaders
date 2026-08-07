@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <imgui_internal.h>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -197,6 +198,16 @@ static bool IsInteriorCellActive()
 	return cell && cell->IsInteriorCell();
 }
 
+static void LogMeshLoadFailure(RE::BSResource::ErrorCode error, const char* dataRelativePath)
+{
+	std::error_code ec;
+	logger::error(
+		"[Unified Water] {} load failed: {}, loose file present: {}",
+		dataRelativePath,
+		magic_enum::enum_name(error),
+		std::filesystem::exists(std::filesystem::path("Data") / dataRelativePath, ec));
+}
+
 static bool IsShortBranch(const std::uint8_t opcode)
 {
 	return opcode == 0xEB || (opcode >= 0x70 && opcode <= 0x7F);
@@ -225,6 +236,60 @@ static void PatchBranchToUnconditional(const std::uintptr_t address, const char*
 	}
 
 	logger::error("[Unified Water] Skipping {} patch at {:X}: unexpected branch bytes {:02X} {:02X}", label, address, bytes[0], bytes[1]);
+}
+
+static bool CanPatchBranch(const std::uintptr_t address)
+{
+	const auto bytes = reinterpret_cast<const std::uint8_t*>(address);
+	return IsShortBranch(bytes[0]) || IsNearConditionalBranch(bytes[0], bytes[1]);
+}
+
+static bool CanPatchRelativeCall(const std::uintptr_t address)
+{
+	return *reinterpret_cast<const std::uint8_t*>(address) == 0xE8;
+}
+
+static bool DisableVanillaWaterLOD()
+{
+	// DataLoaded can be delivered more than once on reload paths. Re-patching a
+	// near branch would no longer match its original conditional encoding.
+	static bool patched = false;
+	if (patched)
+		return true;
+
+	// Unified Water owns these paths only after both replacement meshes have
+	// validated. Preflight both branches before making either write so a runtime
+	// conflict leaves vanilla LOD and flow-map handling intact on SE, AE, and VR.
+	const auto attachedMeshAddLoop = REL::RelocationID(30934, 31737).address() + REL::Relocate(0x109, 0x109);
+	const auto lodWaterAddLoop = REL::RelocationID(30978, 31751).address() + REL::Relocate(0x54, 0xEA);
+	const auto flowMapCall1 = REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1B7, 0x1F7);
+	const auto flowMapCall2 = REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1EA, 0x22A);
+	const auto flowMapCall3 = REL::RelocationID(35561, 36560).address() + REL::Relocate(0x202, 0x242);
+	if (!CanPatchBranch(attachedMeshAddLoop) ||
+		!CanPatchBranch(lodWaterAddLoop) ||
+		!CanPatchRelativeCall(flowMapCall1) ||
+		!CanPatchRelativeCall(flowMapCall2) ||
+		!CanPatchRelativeCall(flowMapCall3)) {
+		logger::error(
+			"[Unified Water] Cannot disable vanilla water paths; unexpected instructions at branches {:X}/{:X} or calls {:X}/{:X}/{:X}. Another mod may patch the same code",
+			attachedMeshAddLoop,
+			lodWaterAddLoop,
+			flowMapCall1,
+			flowMapCall2,
+			flowMapCall3);
+		return false;
+	}
+
+	PatchBranchToUnconditional(attachedMeshAddLoop, "attached mesh add loop");
+	PatchBranchToUnconditional(lodWaterAddLoop, "LOD water add loop");
+
+	// Patch out the compute shader calls that write to the vanilla flow map.
+	REL::safe_fill(flowMapCall1, REL::NOP, 5);
+	REL::safe_fill(flowMapCall2, REL::NOP, 5);
+	REL::safe_fill(flowMapCall3, REL::NOP, 5);
+
+	patched = true;
+	return true;
 }
 
 // Engine behavior: CellState value 6 is the transition/attached state.
@@ -836,46 +901,75 @@ bool UnifiedWater::IsOverlayVisible() const
 
 void UnifiedWater::DataLoaded()
 {
+	if (IsWaterDataReady()) {
+		logger::debug("[Unified Water] Runtime data is already initialized");
+		return;
+	}
+
 	auto args = RE::BSModelDB::DBTraits::ArgsType();
 	args.unk8 = false;
 	args.unkA = false;
 	args.postProcess = false;
 	RE::NiPointer<RE::NiNode> nif;
+	RE::NiPointer<RE::BSTriShape> loadedWaterMesh;
+	RE::NiPointer<RE::BSTriShape> loadedOptimisedWaterMesh;
+
+	const auto fail = [this](std::string reason) {
+		logger::error("[Unified Water] {}; distant water falls back to vanilla LOD", reason);
+		failedLoadedMessage = std::move(reason);
+	};
 
 	if (const auto error = RE::BSModelDB::Demand("meshes\\water\\watermesh.nif", nif, args); error != RE::BSResource::ErrorCode::kNone) {
-		logger::error("[Unified Water] Failed to load water mesh");
+		LogMeshLoadFailure(error, "meshes\\water\\WaterMesh.nif");
+		fail("Failed to load water mesh");
 		return;
 	}
 	if (!nif || nif->GetChildren().empty() || !nif->GetChildren().front()->AsNode() || nif->GetChildren().front()->AsNode()->GetChildren().empty()) {
-		logger::error("[Unified Water] Invalid water mesh hierarchy");
+		fail("Invalid water mesh hierarchy");
 		return;
 	}
 	const auto waterShape = nif->GetChildren().front()->AsNode()->GetChildren().front()->AsTriShape();
 	if (!waterShape) {
-		logger::error("[Unified Water] Water mesh does not contain valid TriShape");
+		fail("Water mesh does not contain valid TriShape");
 		return;
 	}
-	waterMesh = RE::NiPointer(waterShape);
+	loadedWaterMesh = RE::NiPointer(waterShape);
 	logger::debug("[Unified Water] Water mesh loaded");
 
 	if (const auto error = RE::BSModelDB::Demand("meshes\\water\\optimisedwatermesh.nif", nif, args); error != RE::BSResource::ErrorCode::kNone) {
-		logger::error("[Unified Water] Failed to load optimised water mesh");
+		LogMeshLoadFailure(error, "meshes\\water\\OptimisedWaterMesh.nif");
+		fail("Failed to load optimised water mesh");
 		return;
 	}
 	if (!nif || nif->GetChildren().empty() || !nif->GetChildren().front()->AsNode() || nif->GetChildren().front()->AsNode()->GetChildren().empty()) {
-		logger::error("[Unified Water] Invalid optimised water mesh hierarchy");
+		fail("Invalid optimised water mesh hierarchy");
 		return;
 	}
 	const auto optimisedWaterShape = nif->GetChildren().front()->AsNode()->GetChildren().front()->AsTriShape();
 	if (!optimisedWaterShape) {
-		logger::error("[Unified Water] Optimised water mesh does not contain valid TriShape");
+		fail("Optimised water mesh does not contain valid TriShape");
 		return;
 	}
-	optimisedWaterMesh = RE::NiPointer(optimisedWaterShape);
+	loadedOptimisedWaterMesh = RE::NiPointer(optimisedWaterShape);
 	logger::debug("[Unified Water] Optimised water mesh loaded");
 
-	flowmap = new Flowmap();
-	waterCache = new WaterCache();
+	// Construct every fallible resource before disabling vanilla. These remain
+	// locally owned until the executable patches have also been validated.
+	auto loadedFlowmap = std::make_unique<Flowmap>();
+	auto loadedWaterCache = std::make_unique<WaterCache>();
+
+	if (!DisableVanillaWaterLOD()) {
+		fail("Could not disable vanilla water LOD");
+		return;
+	}
+
+	// Publish the validated meshes together. Hooks continue using vanilla until
+	// the cache pointer below completes the readiness invariant.
+	waterMesh = std::move(loadedWaterMesh);
+	optimisedWaterMesh = std::move(loadedOptimisedWaterMesh);
+	flowmap = loadedFlowmap.release();
+	waterCache = loadedWaterCache.release();
+	failedLoadedMessage.clear();
 
 	uint64_t pendingLoadOrderHash = 0;
 
@@ -1113,11 +1207,6 @@ void UnifiedWater::PostPostLoad()
 	stl::write_vfunc<0x4, BSWaterShaderMaterial_ComputeCRC32>(RE::VTABLE_BSWaterShaderMaterial[0]);
 
 	stl::detour_thunk<BGSTerrainBlock_Attach>(REL::RelocationID(30934, 31737));
-	// Skip iterating attached meshes and calling TESWaterSystem::AddLODWater, this is handled in Attach now
-	const auto addLoopOffset = REL::RelocationID(30934, 31737).address() + REL::Relocate(0x109, 0x109);
-	const auto addLoopOffset2 = REL::RelocationID(30978, 31751).address() + REL::Relocate(0x54, 0xEA);
-	PatchBranchToUnconditional(addLoopOffset, "attached mesh add loop");
-	PatchBranchToUnconditional(addLoopOffset2, "LOD water add loop");
 
 	stl::detour_thunk<BGSTerrainBlock_Detach>(REL::RelocationID(30936, 31739));
 
@@ -1126,11 +1215,6 @@ void UnifiedWater::PostPostLoad()
 	stl::detour_thunk<TESWaterSystem_UpdateDisplacementMeshPosition>(REL::RelocationID(31384, 32175));
 
 	stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
-
-	// Patch out the code compute shader calls that write to the flow map in Main::RenderWaterEffects
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1B7, 0x1F7), REL::NOP, 5);
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1EA, 0x22A), REL::NOP, 5);
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x202, 0x242), REL::NOP, 5);
 
 	gWaterLOD = reinterpret_cast<RE::NiNode**>(REL::RelocationID(516171, 402322).address());
 	gFlowMapSize = reinterpret_cast<int32_t*>(REL::RelocationID(527644, 414596).address());
@@ -1181,6 +1265,11 @@ int32_t UnifiedWater::BSWaterShaderMaterial_ComputeCRC32::thunk(RE::BSWaterShade
 	return func(material, srcHash);
 }
 
+bool UnifiedWater::IsWaterDataReady() const
+{
+	return waterCache && waterMesh && optimisedWaterMesh;
+}
+
 bool UnifiedWater::IsExteriorWorldspaceActive() const
 {
 	if (IsChildWorldSpace(currentPlayerWorldSpace.load(std::memory_order_acquire)))
@@ -1216,7 +1305,7 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 
 	uw.exteriorWorldspaceActive.store(worldSpace && isExterior, std::memory_order_release);
 
-	if (!uw.waterCache) {
+	if (!uw.IsWaterDataReady()) {
 		uw.pendingChildWsCull.store(false, std::memory_order_release);
 		uw.UpdateWaterLODCull();
 		return;
@@ -1251,13 +1340,18 @@ void UnifiedWater::TES_DestroySkyCell::thunk(RE::TES* tes)
 	uw.cachedTes.store(nullptr, std::memory_order_release);
 	uw.exteriorWorldspaceActive.store(false, std::memory_order_release);
 
-	if (uw.waterCache)
+	if (uw.IsWaterDataReady())
 		uw.waterCache->SetCurrentWorldSpace(nullptr);
 	uw.UpdateWaterLODCull();
 }
 
 void UnifiedWater::BGSTerrainNode_UpdateWaterMeshSubVisibility::thunk(const RE::BGSTerrainNode* node, RE::BSMultiBoundNode* waterParent)
 {
+	if (!globals::features::unifiedWater.IsWaterDataReady()) {
+		func(node, waterParent);
+		return;
+	}
+
 	if (!node || !waterParent)
 		return;
 
@@ -1272,7 +1366,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	const auto waterSystem = globals::game::waterSystem;
 	auto& uw = globals::features::unifiedWater;
 
-	if (!waterSystem || !uw.waterCache) {
+	if (!waterSystem || !uw.IsWaterDataReady()) {
 		func(block);
 		return;
 	}
@@ -1428,6 +1522,11 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 	auto& uw = globals::features::unifiedWater;
 
 	if (!block) {
+		return;
+	}
+
+	if (!uw.IsWaterDataReady()) {
+		func(block);
 		return;
 	}
 

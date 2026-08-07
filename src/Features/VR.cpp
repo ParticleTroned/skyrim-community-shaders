@@ -2189,7 +2189,7 @@ namespace
 		auto& vr = globals::features::vr;
 		if (!vr.openVRInfo.isCompatible)
 			return;
-		if (ImGui::CollapsingHeader("Controller Input Instructions", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Controller Input Instructions")) {
 			DrawControllerBindingSummary(true, "ControllerInputInstructions");
 		}
 	}
@@ -2236,7 +2236,7 @@ namespace
 		DrawKeepDesktopWindowFocusedForVRMenuSetting();
 		DrawStabilizeRenderScaleDesktopMirrorSetting();
 		ImGui::Separator();
-		if (ImGui::CollapsingHeader("General Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("General Settings")) {
 			// Exteriors
 			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2270,7 +2270,7 @@ namespace
 		auto& settings = vr.settings;
 		if (!vr.openVRInfo.isCompatible)
 			return;
-		if (ImGui::CollapsingHeader("Menu Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Menu Settings")) {
 			ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
 			const char* positioningMethods[] = { "HMD Relative", "Fixed World Position" };
 			ImGui::Combo("Menu Positioning Method", &settings.VRMenuPositioningMethod, positioningMethods, IM_ARRAYSIZE(positioningMethods));
@@ -2340,7 +2340,7 @@ namespace
 		if (!vr.openVRInfo.isCompatible)
 			return;
 		VR::Settings& settings = vr.settings;
-		if (ImGui::CollapsingHeader("Input Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Input Settings")) {
 			ImGui::Text("Joystick Settings");
 			ImGui::SliderFloat("Mouse Deadzone", &settings.mouseDeadzone, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2363,8 +2363,8 @@ namespace
 		if (!vr.openVRInfo.isCompatible)
 			return;
 		VR::Settings& settings = vr.settings;
-		if (ImGui::CollapsingHeader("Drag Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (ImGui::CollapsingHeader("Drag Instructions", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Drag Settings")) {
+			if (ImGui::CollapsingHeader("Drag Instructions")) {
 				ImGui::TextWrapped("Overlay Positioning (Grip + Drag):");
 				ImGui::BulletText("Fixed World Position: Any controller can drag (HMD-only mode) or attached controller only (Both modes)");
 				ImGui::BulletText("HMD Relative: Any controller can drag (HMD-only mode) or attached controller only (Both modes)");
@@ -2388,7 +2388,7 @@ namespace
 		const bool screenSpaceShadowsEnabled = isVR && screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
 		const bool screenSpaceGIEnabled = isVR && screenSpaceGI.loaded && screenSpaceGI.settings.Enabled;
 
-		if (ImGui::CollapsingHeader("Screen Space Sync", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Screen Space Sync")) {
 			auto drawSyncToggle =
 				[](const char* a_label,
 					bool& a_enabled,
@@ -2475,7 +2475,7 @@ namespace
 		const bool screenSpaceEffectActive = VR::AnyScreenSpaceEffectActive();
 		const bool blendCanRun = settings.EnableStereoBlend && settings.StereoBlendMaxFactor > VR::Config::kMinStereoBlendMaxFactor && screenSpaceEffectActive;
 
-		if (ImGui::CollapsingHeader("Stereo Blending", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Stereo Blending")) {
 			ImGui::TextWrapped("Advanced fallback for VR screen-space mismatches. It is default-off and only runs when a supported screen-space effect is active.");
 			ImGui::Spacing();
 
@@ -2909,7 +2909,7 @@ namespace
 		ImGui::Spacing();
 
 		// Combo Settings
-		if (ImGui::CollapsingHeader("Combo Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Combo Settings")) {
 			ImGui::SliderFloat("Combo Timeout", &settings.comboTimeout, 1.0f, 10.0f, "%.1f seconds");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Time limit for recording button combinations.");
@@ -2994,7 +2994,7 @@ namespace
 		auto menu = globals::menu;
 
 		// OpenVR Version Information
-		if (ImGui::CollapsingHeader("OpenVR Information", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("OpenVR Information")) {
 			auto& info = vr.openVRInfo;
 			if (info.isAvailable) {
 				ImGui::Text("OpenVR System: %s", info.isCompatible ? "Active & Compatible" : "Active but INCOMPATIBLE");
@@ -3017,7 +3017,7 @@ namespace
 		}
 
 		// Controller Diagnostics Section
-		if (ImGui::CollapsingHeader("Controller Diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Controller Diagnostics")) {
 			if (ImGui::Checkbox("Test Mode: Disable controller menu input (except scroll controller and triggers)", &settings.VRMenuControllerDiagnosticsTestMode)) {
 				ImGui::SetScrollHereY(0.0f);  // Scroll to top of the window when toggled
 			}

@@ -62,8 +62,8 @@ struct CSUtility : Feature
 
 	struct Settings
 	{
-		bool enabled = true;
-		bool fixUnderwaterFogDofBlur = true;
+		bool enabled = false;
+		bool fixUnderwaterFogDofBlur = false;
 		DepthOfFieldOverride sceneDof;
 		DepthOfFieldOverride underwaterDof;
 	} settings;

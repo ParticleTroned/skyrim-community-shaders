@@ -314,7 +314,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileStatistics()
 {
 	auto shaderCache = globals::shaderCache;
 
-	if (!ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (!ImGui::TreeNodeEx("Statistics")) {
 		return;
 	}
 

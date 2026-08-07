@@ -522,7 +522,7 @@ namespace
 		bool a_allowAutoFocus,
 		const char* a_missingDataText)
 	{
-		if (!ImGui::TreeNodeEx(a_label, ImGuiTreeNodeFlags_DefaultOpen))
+		if (!ImGui::TreeNodeEx(a_label))
 			return;
 
 		ImGui::PushID(a_id);

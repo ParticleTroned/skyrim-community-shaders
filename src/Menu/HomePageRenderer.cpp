@@ -373,7 +373,7 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	const bool featureChangeHeld = shaderCache->IsDiskCacheHeld() && featureSetChanged && !featureSetCacheBackedUp;
 
 	ImGui::PushStyleColor(ImGuiCol_Text, warningColor);
-	const bool headerOpen = ImGui::CollapsingHeader("Shader Cache Changes", ImGuiTreeNodeFlags_DefaultOpen);
+	const bool headerOpen = ImGui::CollapsingHeader("Shader Cache Changes");
 	ImGui::PopStyleColor();
 	if (!headerOpen)
 		return;

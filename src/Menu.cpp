@@ -1179,7 +1179,7 @@ void Menu::DrawDisableAtBootSettings()
 
 	ImGui::Spacing();
 
-	if (ImGui::CollapsingHeader("Features", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::CollapsingHeader("Features")) {
 		// Prepare a sorted list of feature pointers
 		auto featureList = Feature::GetFeatureList();
 		std::sort(featureList.begin(), featureList.end(), [](Feature* a, Feature* b) {

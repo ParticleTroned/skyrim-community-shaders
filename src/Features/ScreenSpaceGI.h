@@ -105,7 +105,7 @@ public:
 		float VRCullDistance = 1500.0f;       // 0 disables VR distance culling
 		float CenterFullResMaskScale = 0.0f;  // runtime cache; SSGI FOV derives this from the shared VR foveation profile
 		bool EnableFoveated = REL::Module::IsVR() ? true : false;
-		bool EnableStereoSync = true;     // VR-only bilateral cross-eye stabilization pass
+		bool EnableStereoSync = false;    // VR-only bilateral cross-eye stabilization pass
 		bool UseStereoReproject = false;  // VR-only exact cross-eye transfer for AO/diffuse GI when compatible
 		// visual
 		float MinScreenRadius = 0.01f;

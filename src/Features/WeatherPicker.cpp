@@ -74,7 +74,7 @@ namespace
 
 	bool DrawAnalysisSectionHeader(const char* label)
 	{
-		constexpr auto flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+		constexpr auto flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 		return ImGui::TreeNodeEx(label, flags);
 	}
 }

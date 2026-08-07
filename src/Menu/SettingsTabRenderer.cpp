@@ -1201,7 +1201,7 @@ void SettingsTabRenderer::RenderColorsTab()
 		if (colorFilter.PassFilter("Text"))
 			ColorEditWithTooltip("Text", themeSettings.Palette.Text, "Primary text color.");
 
-		if (ImGui::TreeNodeEx("Borders & Separators", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Borders & Separators")) {
 			if (colorFilter.PassFilter("Window Border"))
 				ColorEditWithTooltip("Window Border", themeSettings.Palette.WindowBorder, "Outer window border color.");
 			if (colorFilter.PassFilter("Control Background"))
@@ -1213,7 +1213,7 @@ void SettingsTabRenderer::RenderColorsTab()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Feature Headings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Feature Headings")) {
 			if (colorFilter.PassFilter("Feature Heading"))
 				ColorEditWithTooltip("Feature Heading", themeSettings.FeatureHeading.ColorDefault, "Default section and feature heading color.");
 			if (colorFilter.PassFilter("Feature Heading Hovered"))
@@ -1227,7 +1227,7 @@ void SettingsTabRenderer::RenderColorsTab()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Status", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Status")) {
 			if (colorFilter.PassFilter("Disabled"))
 				ColorEditWithTooltip("Disabled", themeSettings.StatusPalette.Disable, "Inactive and unavailable controls.");
 			if (colorFilter.PassFilter("Error"))

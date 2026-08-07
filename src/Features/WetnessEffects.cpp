@@ -381,7 +381,7 @@ void WetnessEffects::DrawSettings()
 	ImGui::Separator();
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Wetness Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Wetness Effects")) {
 		if (ImGui::Checkbox("Enable", (bool*)&settings.EnableWetnessEffects)) {
 			Ripples::UpdateSettings();  // Update cache when settings change
 		}
@@ -403,7 +403,7 @@ void WetnessEffects::DrawSettings()
 	ImGui::Spacing();
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Raindrop Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Raindrop Effects")) {
 		ImGui::Checkbox("Enable Raindrop Effects", (bool*)&settings.EnableRaindropFx);
 
 		ImGui::BeginDisabled(!settings.EnableRaindropFx);
@@ -492,7 +492,7 @@ void WetnessEffects::DrawSettings()
 	ImGui::Spacing();
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Advanced")) {
 		ImGui::SliderFloat("Weather transition speed", &settings.WeatherTransitionSpeed, 0.2f, 8.0f);
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			DetectCurrentPreset();
@@ -553,7 +553,7 @@ void WetnessEffects::DrawSettings()
 		}
 	}
 
-	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Debug")) {
 		ImGui::Checkbox("Enable Wetness Override", &debugSettings.EnableWetnessOverride);
 		ImGui::Checkbox("Enable Puddle Override", &debugSettings.EnablePuddleOverride);
 		ImGui::Checkbox("Enable Rain Override", &debugSettings.EnableRainOverride);

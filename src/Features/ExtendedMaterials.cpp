@@ -24,7 +24,7 @@ void ExtendedMaterials::DataLoaded()
 
 void ExtendedMaterials::DrawSettings()
 {
-	if (ImGui::TreeNodeEx("Complex Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Complex Material")) {
 		ImGui::Checkbox("Enable Complex Material", (bool*)&settings.EnableComplexMaterial);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
@@ -38,7 +38,7 @@ void ExtendedMaterials::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Parallax", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Parallax")) {
 		ImGui::Checkbox("Enable Parallax", (bool*)&settings.EnableParallax);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables parallax on standard meshes made for parallax.");
@@ -68,7 +68,7 @@ void ExtendedMaterials::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Approximate Soft Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Approximate Soft Shadows")) {
 		ImGui::Checkbox("Enable Shadows", (bool*)&settings.EnableShadows);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(

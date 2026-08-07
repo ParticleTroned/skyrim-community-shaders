@@ -66,7 +66,7 @@ public:
 	spdlog::level::level_enum logLevel = spdlog::level::info;
 
 	float timer = 0;
-	float refractionScale = 0.5f;  // Default LLF heat warp strength
+	float refractionScale = 0.25f;  // Default LLF heat warp strength
 	static constexpr float kDefaultPbrMetalReflectionScale = 1.0f;
 	static constexpr float kDefaultPbrMetalHighlightScale = 0.25f;
 	float pbrMetalReflectionScale = kDefaultPbrMetalReflectionScale;  // Global scale for PBR metal reflections

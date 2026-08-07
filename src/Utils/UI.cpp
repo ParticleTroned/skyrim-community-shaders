@@ -261,12 +261,12 @@ namespace Util
 	{
 		if (ResolveShaderCacheClearScope() == ShaderCacheClearScope::ActiveOnly) {
 			return "Clears only shaders drawing the current scene. They recompile as the scene redraws; "
-			       "everything else stays cached. Shift-click selects a full clear. VR controller users can "
-			       "choose the normal-click behavior with Smart Clear by Default.";
+				   "everything else stays cached. Shift-click selects a full clear. VR controller users can "
+				   "choose the normal-click behavior with Smart Clear by Default.";
 		}
 		return "Clears all compiled shaders from memory and disk cache (if enabled). They recompile when "
-		       "the game next encounters them. Shift-click selects a scene-only smart clear. VR controller "
-		       "users can choose the normal-click behavior with Smart Clear by Default.";
+			   "the game next encounters them. Shift-click selects a scene-only smart clear. VR controller "
+			   "users can choose the normal-click behavior with Smart Clear by Default.";
 	}
 
 	// Helper function to perform the actual cache clearing
@@ -1136,7 +1136,7 @@ namespace Util
 
 			ImGui::PushStyleColor(ImGuiCol_Text, headerColor);
 
-			if (ImGui::CollapsingHeader(sectionName, ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (ImGui::CollapsingHeader(sectionName)) {
 				if (!*isExpanded) {
 					stateChanged = true;
 				}

@@ -258,12 +258,12 @@ public:
 			InScene = 2
 		};
 		MenuOverlayPath menuOverlayPath = MenuOverlayPath::Auto;  ///< Runtime path used to present the menu in the headset
-		bool KeepDesktopWindowFocusedForVRMenu = false;           ///< Keep the game window centered and foregrounded while the VR menu is open
+		bool KeepDesktopWindowFocusedForVRMenu = true;            ///< Keep the game window centered and foregrounded while the VR menu is open
 		bool StabilizeRenderScaleDesktopMirror = false;           ///< Blit render-scale output back to the desktop mirror when direct copy is incompatible
 
 		// CSX menu navigation settings
-		bool UseRuntimeDefaultMenuNavigation = true;  ///< Use mouse navigation by default until the user selects a mode explicitly
-		bool EnableWandPointing = true;               ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
+		bool UseRuntimeDefaultMenuNavigation = false;  ///< Use the explicit Wand Navigation default unless the user selects mouse navigation
+		bool EnableWandPointing = true;                ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
 
 		// Visual customization
 		std::array<float, 4> dragHighlightColor = { 1.0f, 1.0f, 0.0f, 0.3f };  ///< RGBA color for drag highlight

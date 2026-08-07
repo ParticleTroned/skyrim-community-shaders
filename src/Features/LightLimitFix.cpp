@@ -951,7 +951,7 @@ void LightLimitFix::DrawSettings()
 		ImGui::Separator();
 		ImGui::Spacing();
 
-		if (ImGui::TreeNodeEx("Particle Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Particle Lights")) {
 			ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Enables Particle Lights.");
@@ -1027,7 +1027,7 @@ void LightLimitFix::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Placed Lights (JSON)", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Placed Lights (JSON)")) {
 			const bool jsonPlacedLightsSupported = globals::features::inverseSquareLighting.loaded;
 			ImGui::BeginDisabled(!jsonPlacedLightsSupported);
 			ImGui::SliderFloat("Intensity Scale", &settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, "%.2f");
@@ -1058,7 +1058,7 @@ void LightLimitFix::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Contact Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Contact Shadows")) {
 			ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
@@ -1108,7 +1108,7 @@ void LightLimitFix::DrawSettings()
 	}
 	auto shaderCache = globals::shaderCache;
 
-	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Statistics")) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
 		ImGui::Text(std::format(
 			"Particle Lights Count : {}",
@@ -1224,7 +1224,7 @@ void LightLimitFix::DrawOverlay()
 	ImGui::Begin("##LLFDebug", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
 	Util::Text::Error("DEBUG FEATURE - LIGHT LIMIT VISUALISATION ENABLED");
 
-	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Statistics")) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
 		ImGui::Text(std::format(
 			"Particle Lights Count : {}",

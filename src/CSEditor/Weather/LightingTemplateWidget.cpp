@@ -108,7 +108,7 @@ void LightingTemplateWidget::DrawBasicSettings()
 			return;
 		if (ShouldOpenSearchSection())
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-		if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader(label)) {
 			ImGui::Spacing();
 			draw();
 			ImGui::Spacing();

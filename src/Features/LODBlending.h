@@ -34,7 +34,7 @@ struct LODBlending : Feature
 
 	Settings settings;
 	bool Enabled = true;
-	bool EnableWaterReflectionStrength = true;
+	bool EnableWaterReflectionStrength = false;
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }

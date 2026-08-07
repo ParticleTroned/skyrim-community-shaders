@@ -998,7 +998,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			const bool essentialsFeatureMode = globalEssentialsMode && !featureAdvancedMode;
 			const bool hasEssentialSettings = essentialsFeatureMode && feat->HasEssentialSettings();
 			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			if (!essentialsFeatureMode && weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
+			const bool showWeatherPause = !essentialsFeatureMode && weatherRegistry->HasWeatherSupport(feat->GetShortName());
+			const bool moveWeatherPauseToBottom = showWeatherPause && feat->GetShortName() == "LODBlending";
+			auto drawWeatherPauseToggle = [&]() {
 				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
 				if (ImGui::Checkbox("Pause Weather Overrides", &paused)) {
 					WeatherManager::GetSingleton()->SetFeaturePaused(
@@ -1009,6 +1011,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 						"Temporarily disable weather-based setting adjustments for this feature.\n"
 						"This state is not saved.");
 				}
+			};
+			if (showWeatherPause && !moveWeatherPauseToBottom) {
+				drawWeatherPauseToggle();
 				ImGui::Separator();
 			}
 
@@ -1047,6 +1052,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 
 			if (sceneControlled)
 				ImGui::EndDisabled();
+
+			if (moveWeatherPauseToBottom) {
+				ImGui::Separator();
+				drawWeatherPauseToggle();
+			}
 
 			// --- Reactive constraint detection ---
 			// Compare the current full constraint set against g_knownConstraintKeys.

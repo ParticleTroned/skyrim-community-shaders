@@ -142,7 +142,7 @@ void TruePBR::DrawSettings()
 		ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 
-	if (ImGui::TreeNodeEx("Texture Set Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Texture Set Settings")) {
 		if (Util::SearchableCombo("Texture Set", selectedPbrTextureSetName, pbrTextureSets)) {
 			selectedPbrTextureSet = &pbrTextureSets[selectedPbrTextureSetName];
 		}
@@ -229,14 +229,14 @@ void TruePBR::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Material Object Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Material Object Settings")) {
 		if (Util::SearchableCombo("Material Object", selectedPbrMaterialObjectName, pbrMaterialObjects)) {
 			selectedPbrMaterialObject = &pbrMaterialObjects[selectedPbrMaterialObjectName];
 		}
 
 		if (selectedPbrMaterialObject != nullptr) {
 			bool wasEdited = false;
-			if (ImGui::TreeNodeEx("Base Color Scale", ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (ImGui::TreeNodeEx("Base Color Scale")) {
 				if (ImGui::Button("Reset to 1.0##BaseColorScale")) {
 					selectedPbrMaterialObject->baseColorScale = { 1.f, 1.f, 1.f };
 					wasEdited = true;

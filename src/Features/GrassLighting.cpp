@@ -90,7 +90,7 @@ void GrassLighting::DrawSettings()
 
 	ImGui::BeginDisabled(!enabled);
 
-	if (ImGui::TreeNodeEx("Complex Grass", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Complex Grass")) {
 		ImGui::TextWrapped("Specular highlights for complex grass");
 		ImGui::SliderFloat(
 			"Glossiness",
@@ -126,7 +126,7 @@ void GrassLighting::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Effects")) {
 		ImGui::SliderFloat(
 			"SSS Amount",
 			&settings.SubsurfaceScatteringAmount,
@@ -149,7 +149,7 @@ void GrassLighting::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Lighting")) {
 		ImGui::Checkbox("Wrapped Lighting for Vanilla Grass", (bool*)&settings.EnableWrappedLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(

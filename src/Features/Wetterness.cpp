@@ -67,7 +67,7 @@ namespace
 	constexpr float POST_RAIN_PUDDLE_SHINE_MAX = 5.0f;
 	constexpr float RAIN_REFLECTION_BALANCE_MIN = 0.0f;
 	constexpr float RAIN_REFLECTION_BALANCE_MAX = 1.0f;
-	constexpr float DEFAULT_RAIN_REFLECTION_BALANCE = 0.25f;
+	constexpr float DEFAULT_RAIN_REFLECTION_BALANCE = 0.1f;
 	constexpr float PUDDLE_SKY_REFLECTION_SCALE_MIN = 0.0f;
 	constexpr float PUDDLE_SKY_REFLECTION_SCALE_MAX = 1.0f;
 	constexpr float DEFAULT_PUDDLE_SKY_REFLECTION_SCALE = 0.5f;
@@ -844,7 +844,7 @@ namespace
 		       IsNearlyEqual(wetterness.legacyWetIndirectSpecularScale, expected.legacyWetIndirectSpecularScale);
 	}
 
-	constexpr size_t DEFAULT_WETTERNESS_UI_PRESET_INDEX = 2;  // Quality
+	constexpr size_t DEFAULT_WETTERNESS_UI_PRESET_INDEX = 1;  // Balanced
 
 	void ApplyDefaultWetternessUiPreset(Wetterness& wetterness)
 	{
@@ -888,7 +888,7 @@ namespace
 		settings.PuddleMaxAngle = ClampFiniteOrDefault(settings.PuddleMaxAngle, 0.0f, 1.0f, 0.75f);
 		settings.PuddleMinWetness = ClampFiniteOrDefault(settings.PuddleMinWetness, 0.0f, 1.0f, 0.525f);
 		settings.MinRainWetness = ClampFiniteOrDefault(settings.MinRainWetness, 0.0f, 1.0f, 0.60f);
-		settings.SkinWetness = ClampFiniteOrDefault(settings.SkinWetness, 0.0f, 1.5f, 0.95f);
+		settings.SkinWetness = ClampFiniteOrDefault(settings.SkinWetness, 0.0f, 1.5f, 1.0f);
 
 		settings.StoneDryingMultiplier = ClampFiniteOrDefault(settings.StoneDryingMultiplier, DRYING_HOURS_MIN, DRYING_HOURS_MAX, DEFAULT_STONE_DRYING_HOURS);
 		settings.DirtDryingMultiplier = ClampFiniteOrDefault(settings.DirtDryingMultiplier, DRYING_HOURS_MIN, DRYING_HOURS_MAX, DEFAULT_DIRT_DRYING_HOURS);
@@ -1317,7 +1317,7 @@ void Wetterness::DrawSettings()
 
 	drawSectionDivider();
 
-	if (ImGui::TreeNodeEx("Raindrop Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Raindrop Effects")) {
 		drawUintCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Master switch for raindrop splashes and ripple motion. One of the main wetness performance drivers.");
@@ -1437,7 +1437,7 @@ void Wetterness::DrawSettings()
 
 	drawSectionDivider();
 
-	if (ImGui::TreeNodeEx("Wet Reflection Mode", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Wet Reflection Mode")) {
 		int reflectionMode = 0;  // 0 = Off, 1 = Modern, 2 = Legacy
 		if (settings.EnableModernWetReflection != 0 && settings.EnableLegacyWetReflection == 0) {
 			reflectionMode = 1;
@@ -1484,7 +1484,7 @@ void Wetterness::DrawSettings()
 
 	drawSectionDivider();
 
-	if (ImGui::TreeNodeEx("Advanced", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Advanced")) {
 		const auto drawDryingSlider = [](const char* label, float& value, const char* tooltip) {
 			ImGui::SliderFloat(label, &value, DRYING_HOURS_MIN, DRYING_HOURS_MAX, "%.0f h", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {

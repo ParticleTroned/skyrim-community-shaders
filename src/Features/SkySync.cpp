@@ -55,7 +55,7 @@ void SkySync::DrawSettings()
 	}
 	ImGui::Spacing();
 	ImGui::Spacing();
-	if (ImGui::TreeNodeEx("Sun Position Offsets", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Sun Position Offsets")) {
 		ImGui::TextWrapped("Moves sun height during sunrise/sunset. Reset weather to see changes.");
 		ImGui::SliderFloat("Sunrise Begin (Hours)", &settings.SunriseBeginOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {

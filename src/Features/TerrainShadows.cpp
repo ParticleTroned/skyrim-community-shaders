@@ -25,7 +25,7 @@ void TerrainShadows::DrawSettings()
 {
 	ImGui::Checkbox("Enable", &settings.EnableTerrainShadow);
 
-	if (ImGui::CollapsingHeader("Debug")) {
+	if (ImGui::TreeNodeEx("Debug")) {
 		std::string curr_worldspace = "N/A";
 		std::string curr_worldspace_name = "N/A";
 		auto tes = RE::TES::GetSingleton();
@@ -60,6 +60,7 @@ void TerrainShadows::DrawSettings()
 			}
 			ImGui::TreePop();
 		}
+		ImGui::TreePop();
 	}
 }
 

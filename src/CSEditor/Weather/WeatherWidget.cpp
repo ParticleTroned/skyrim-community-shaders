@@ -298,7 +298,7 @@ void WeatherWidget::DrawWidget()
 					return;
 				if (ShouldOpenSearchSection())
 					ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-				if (!ImGui::CollapsingHeader(sectionLabel, ImGuiTreeNodeFlags_DefaultOpen))
+				if (!ImGui::CollapsingHeader(sectionLabel))
 					return;
 				for (int i = 0; i < ColorTimes::kTotal; i++) {
 					std::string rowId = makeTimeRecordLabel(sectionLabel, i);
@@ -337,7 +337,7 @@ void WeatherWidget::DrawWidget()
 					return;
 				if (ShouldOpenSearchSection())
 					ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-				if (!ImGui::CollapsingHeader(sectionLabel, ImGuiTreeNodeFlags_DefaultOpen))
+				if (!ImGui::CollapsingHeader(sectionLabel))
 					return;
 				const bool recordHighlighted = pushRecordHighlight(recordId);
 

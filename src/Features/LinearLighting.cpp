@@ -72,7 +72,7 @@ void LinearLighting::DrawSettings()
 			ImGui::SliderFloat("Glowmap Multiplier", &settings.glowmapMult, kMultiplierMin, kMultiplierMax, "%.2f");
 			ImGui::SliderFloat("Effect Lighting Multiplier", &settings.effectLightingMult, kMultiplierMin, kMultiplierMax, "%.2f");
 
-			if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (ImGui::TreeNodeEx("Effects")) {
 				ImGui::SliderFloat("Blood Effects Multiplier", &settings.bloodEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
 				ImGui::SliderFloat("Deferred Effects Multiplier", &settings.deferredEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
 				ImGui::SliderFloat("Membrane Effects Multiplier", &settings.membraneEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");

@@ -125,7 +125,7 @@ void SubsurfaceScattering::DrawSettings()
 	ImGui::RadioButton("Burley", &settings.SSMode, 1);
 
 	if (settings.SSMode == 0) {
-		if (ImGui::TreeNodeEx("Base Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Base Profile")) {
 			ImGui::SliderFloat("Blur Radius", &settings.BaseProfile.BlurRadius, 0, 3, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Blur radius.");
@@ -142,7 +142,7 @@ void SubsurfaceScattering::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Humanoid Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Humanoid Profile")) {
 			ImGui::SliderFloat("Blur Radius", &settings.HumanProfile.BlurRadius, 0, 3, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Blur radius.");
@@ -162,7 +162,7 @@ void SubsurfaceScattering::DrawSettings()
 		int burleySamples = static_cast<int>(settings.BurleySamples);
 		if (ImGui::SliderInt("Burley Samples", &burleySamples, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp))
 			settings.BurleySamples = static_cast<uint>(std::clamp(burleySamples, 1, 64));
-		if (ImGui::TreeNodeEx("Base Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Base Profile")) {
 			ImGui::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathBase);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");
@@ -174,7 +174,7 @@ void SubsurfaceScattering::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Humanoid Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Humanoid Profile")) {
 			ImGui::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathHuman);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");

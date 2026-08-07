@@ -115,7 +115,7 @@ std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetS
 
 void DynamicCubemaps::DrawSettings()
 {
-	if (ImGui::TreeNodeEx("Screen Space Reflections", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Screen Space Reflections")) {
 		bool enabledSSR = settings.EnabledSSR != 0;
 		if (ImGui::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
 			settings.EnabledSSR = enabledSSR ? 1u : 0u;
@@ -134,7 +134,7 @@ void DynamicCubemaps::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Dynamic Cubemap Creator", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Dynamic Cubemap Creator")) {
 		ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
 		bool enabledCreator = settings.EnabledCreator != 0;
 		if (ImGui::Checkbox("Enable Creator", &enabledCreator))
@@ -215,7 +215,7 @@ void DynamicCubemaps::DrawSettings()
 		ImGui::TreePop();
 	}
 	if (REL::Module::IsVR()) {
-		if (ImGui::TreeNodeEx("Advanced VR Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Advanced VR Settings")) {
 			Util::RenderImGuiSettingsTree(iniVRCubeMapSettings, "VR");
 			Util::RenderImGuiSettingsTree(hiddenVRCubeMapSettings, "hiddenVR");
 			ImGui::TreePop();

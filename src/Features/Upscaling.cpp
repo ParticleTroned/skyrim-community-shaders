@@ -3995,16 +3995,16 @@ namespace
 		settings.pipelineDiagnostics = false;
 		settings.pipelineDiagnosticsStructured = false;
 		settings.foveatedVendorDispatch = false;
-		settings.foveatedCenterArea = 0.6f;
+		settings.foveatedCenterArea = 0.3f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
 		settings.foveatedLeftEyeMaskOffsetX = 0.0f;
 		settings.foveatedLeftEyeMaskOffsetY = 0.0f;
 		settings.foveatedRightEyeMaskOffsetX = 0.0f;
 		settings.foveatedRightEyeMaskOffsetY = 0.0f;
-		settings.periphery_taa_center_area = 0.6f;
+		settings.periphery_taa_center_area = 0.3f;
 		settings.foveatedPeripheryMaskVisualization = false;
 		settings.periphery_taa_enable = false;
-		settings.periphery_taa_outer_scale = 0.70f;
+		settings.periphery_taa_outer_scale = 0.80f;
 		settings.periphery_taa_center_blend_feather = FoveatedCommon::kCenterFeather;
 	}
 
@@ -14361,7 +14361,7 @@ void Upscaling::DrawSettings()
 				publicRenderScaleRequested);
 
 		ImGui::Separator();
-		if (!ImGui::TreeNodeEx("Render Pipeline", ImGuiTreeNodeFlags_DefaultOpen))
+		if (!ImGui::TreeNodeEx("Render Pipeline"))
 			return;
 
 		const char* renderScaleModes[] = { "Disabled", "Enabled" };
@@ -14534,7 +14534,7 @@ void Upscaling::DrawSettings()
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
 
 	if (!globals::game::isVR) {
-		if (ImGui::TreeNodeEx("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::TreeNodeEx("Frame Generation")) {
 			ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
 			ImGui::Text("Uses AMD FSR Frame Generation technology");
 			if (HasFrameGenModule())
@@ -14596,7 +14596,7 @@ void Upscaling::DrawSettings()
 		}
 	}
 
-	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex")) {
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
 		const bool markerOptimizationAvailable = reflexAvailable && streamline.featurePCL;
 		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
@@ -15074,22 +15074,22 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
 		}
 
-		if (a_advanced) {
-			SanitizeFoveatedSettings(settings);
-			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
-			if (foveatedDispatchSupportedForMethod) {
-				ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
-			} else {
-				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
-			}
-
-			const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
-			auto foveatedGuard = Util::DisableGuard(!foveatedDispatchRequestedForMethod);
-			ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
+		if (!a_advanced)
+			ImGui::SeparatorText("VR FOV");
+		SanitizeFoveatedSettings(settings);
+		const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
+		if (foveatedDispatchSupportedForMethod) {
+			ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
+		} else {
+			ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 		}
+
+		const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
+		auto foveatedGuard = Util::DisableGuard(!foveatedDispatchRequestedForMethod);
+		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
 	}
 
-	if (streamline.reflexSupportedOnCurrentAdapter) {
+	if (a_advanced && streamline.reflexSupportedOnCurrentAdapter) {
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
 		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
 		const char* toggleModes[] = { "Disabled", "Enabled" };
@@ -15109,13 +15109,6 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 void Upscaling::DrawEssentialSettings()
 {
 	DrawPerformanceSettings(false);
-
-	if (!REL::Module::IsVR())
-		return;
-
-	ImGui::SeparatorText("VR FOV");
-	DrawFoveatedSetupInstructions();
-	DrawFoveatedSettings(true);
 }
 
 void Upscaling::DrawFoveatedSetupInstructions()

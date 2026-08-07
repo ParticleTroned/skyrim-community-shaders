@@ -98,7 +98,7 @@ void ExtendedTranslucency::DrawSettings()
 	DrawEnabledCheckbox(settings);
 	ImGui::BeginDisabled(!settings.Enabled);
 
-	if (ImGui::TreeNodeEx("Translucent Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Translucent Material")) {
 		static constexpr const char* AlphaModeNames[] = {
 			"0 - Disabled",
 			"1 - Rim Edge",

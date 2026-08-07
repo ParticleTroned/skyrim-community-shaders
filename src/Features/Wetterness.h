@@ -45,7 +45,7 @@ public:
 		float PuddleMaxAngle = 0.75f;
 		float PuddleMinWetness = 0.525f;
 		float MinRainWetness = 0.60f;
-		float SkinWetness = 0.95f;
+		float SkinWetness = 1.0f;
 		float WeatherTransitionSpeed = 3.0f;
 		// Surface drying-time controls in hours (1..24).
 		float StoneDryingMultiplier = 6.0f;
@@ -110,7 +110,7 @@ public:
 		float PuddleMaxAngle = 0.75f;
 		float PuddleMinWetness = 0.525f;
 		float MinRainWetness = 0.60f;
-		float SkinWetness = 0.95f;
+		float SkinWetness = 1.0f;
 		float PuddleLayout = 3.0f;
 		float StoneDryingMultiplier = 6.0f;
 		float DirtDryingMultiplier = 12.0f;

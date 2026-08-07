@@ -569,22 +569,8 @@ void UnifiedWater::DrawSettings()
 
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Shallow Water Surface Visibility", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Shallow Water Surface Visibility")) {
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
-
-		ImGui::SliderFloat(
-			"Shallow Fallback Strength",
-			&settings.ShallowFallbackStrength,
-			kShallowFallbackStrengthMin,
-			kShallowFallbackStrengthMax,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Strength of the bounded surface cue used only when native/Open water is visually indistinguishable from the riverbed.");
-		}
-
-		ImGui::Spacing();
 		ImGui::SeparatorText("Shore Contact");
 
 		ImGui::SliderFloat(
@@ -619,13 +605,27 @@ void UnifiedWater::DrawSettings()
 
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Debug")) {
 		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Disables the shallow-only surface cue and uses the native Open Shaders-like water blend.\n"
 				"Custom visibility values are preserved and resume when disabled.");
 		}
+
+		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
+		ImGui::SliderFloat(
+			"Shallow Fallback Strength",
+			&settings.ShallowFallbackStrength,
+			kShallowFallbackStrengthMin,
+			kShallowFallbackStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Strength of the bounded surface cue used only when native/Open water is visually indistinguishable from the riverbed.");
+		}
+		ImGui::EndDisabled();
 
 		if (globals::state && globals::state->IsDeveloperMode()) {
 			ImGui::Spacing();

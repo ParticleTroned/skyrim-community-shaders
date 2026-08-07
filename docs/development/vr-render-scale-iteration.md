@@ -38,8 +38,8 @@ The registered tool is `communityshaders.renderscale`:
 -   `probe_start` begins a bounded load-presentation probe at the final OpenVR
     submission boundary;
 -   `probe_stop` stops accepting new probe samples;
--   `probe_record` returns the retained per-eye submission and luminance
-    timeline;
+-   `probe_record` returns the retained per-eye submission timeline plus the
+    correlated pre-HAM, depth-topology, and post-HAM dispatch timeline;
 -   `probe_reset` clears a stopped probe.
 
 Mutating actions fail closed outside Skyrim VR. `start` and `apply` require
@@ -68,9 +68,22 @@ menu detours and must not be compared against normal optimization captures.
 
 The load-presentation probe is compiled only with `DEVBENCH_BRIDGE=ON`, requires
 developer mode to start, and remains disabled until `probe_start`. While active,
-it copies a 5x5 grid from each final DirectX eye texture into an eight-slot
-staging ring and uses D3D11 event queries plus non-blocking maps. It never reads
-back a full-resolution frame or waits synchronously for the GPU. It does not
+it copies a 5x5 grid from each final DirectX eye texture into a 16-slot staging
+ring and uses D3D11 event queries plus non-blocking maps. At the terminal
+post-load stereo handoff it also uses a separate eight-slot ring to capture a
+uniform 9x9 color grid immediately before and after the HMD hidden-area-mask
+(HAM) clear. The probe shader is prepared by `probe_start`, and the format-bound
+staging resources are prepared during the preceding black hold so compilation
+or allocation does not perturb the measured release frame. The same capture is
+armed for the first requested-eye submit-stage clear in the exact compositor
+cycle where the bounded hold times out. A tiny diagnostic
+compute pass samples the exact depth SRV and
+reproduces the production clear's integer depth mapping, two-pixel dilation,
+and clear decision for the same 9x9 positions. This avoids illegal partial
+copies from Skyrim's live depth-stencil resource. It never reads back a
+full-resolution frame, flushes, or waits synchronously for the GPU. A probe
+failure or saturated diagnostic ring drops only that diagnostic sample and
+does not gate the HAM clear or post-load release. It does not
 emit per-frame info or debug log messages; all probe output is returned through
 the DevBench tool. `probe_start` installs the existing idempotent OpenVR submit
 interception immediately and fails closed if the compositor interface is not
@@ -81,21 +94,48 @@ without changing it. Each record
 correlates the sampled luminance grid with QPC/frame time, OpenVR submit path
 and result, texture identity/format/bounds, loading and destination-world
 frames, Stabilizer synchronization state, render-scale presentation path, and
-the CSX HMD hidden-area-mask clear decision. `predominantlyWhite` marks a broad
-white submitted texture. `hamWhitePattern` also recognizes a spatially uniform
-bright or lavender perimeter around a substantially darker center, so the
-engine's approximately 0.82-luminance startup clear cannot evade the strict
-white threshold. The record exposes strict-white and broader bright sample
-counts separately. This expanded luminance record is load-presentation probe
-schema version 2.
+the CSX HMD hidden-area-mask clear decision and its correlated HAM dispatch
+sequence. Schema v4 binds timeout instrumentation to the exact compositor
+cycle and requested eye, then marks the first real OpenVR attempt independently
+for each eye. It correlates that submitted texture with the preceding clear by
+session, cycle, eye, and COM identity. `Matched`,
+`NoSubmitStageClearBeforeSubmit`, `ClearFailedBeforeSubmit`,
+`IdentityMismatch`, and `InvalidSubmitTexture` are retained explicitly. When
+there is no submit-stage clear, the probe does not inject the diagnostic depth
+pass; the existing final-submit grid remains the authoritative bright/white or
+dark/black sample. This keeps the timeout probe observer-only and prevents
+speculative peer-eye replay from consuming the requested eye's capture.
+The exact-cycle marker remains retained until the next load lifecycle or probe
+reset so a later `WaitGetPoses` cannot discard a target-cycle submit that is
+still in flight; completed records contain copied provenance and do not depend
+on that marker's lifetime.
+`predominantlyWhite`
+and `predominantlyBlack` mark broadly uniform
+submitted textures. The legacy `hamWhitePattern` remains available, while the
+explicit bright/dark fields classify both a bright or lavender HAM and a black
+HAM. Strict white/black, broader bright/dark perimeter, and exact depth-aligned
+classifiers are reported separately. The terminal `hamDispatches` records retain raw pre/post luminance and
+alpha grids, center and neighborhood-minimum depth grids, exact clear-mask
+decisions, signed luminance/alpha deltas, newly-black/newly-white counts, and
+newly-transparent/newly-opaque counts split between masked and unmasked
+samples. This distinguishes RGB black from transparent black that a later
+compositor could present differently. These grids are authoritative; the polarity labels are
+diagnostic heuristics. A depth-aligned black/transparent post-HAM mask is the
+expected result of a successful clear; it is evidence of what CSX wrote, not by
+itself proof that the compositor exposed the mask as an artifact. This
+correlated record is load-presentation probe schema version 4. The main
+render-scale iteration schema remains version 10.
 
 Start the probe at the main menu or immediately before invoking the in-game
 load command. Stop it only after the destination has visibly settled, then poll
-`status.loadPresentationProbe.pendingReadbacks` until it reaches zero before
-requesting `probe_record`. The 4,096-record ring retains about 22 seconds at
+both `status.loadPresentationProbe.pendingReadbacks` and
+`status.loadPresentationProbe.hamDispatchProbe.pendingReadbacks` until they
+reach zero before requesting `probe_record`. The 4,096-record ring retains
+about 22 seconds at
 90 Hz with both eyes submitted every frame; older records are overwritten and
-reported explicitly. If the HMD flashes white but the retained submitted
-textures do not, correlate the QPC interval with a SteamVR mirror recording:
+reported explicitly. If the HMD shows a white/lavender or black HAM but the
+retained submitted textures and correlated HAM dispatch do not, correlate the
+QPC interval with a SteamVR mirror recording:
 that result places the artifact after the application texture boundary, in an
 OpenVR/compositor layer rather than the CSX presentation texture.
 

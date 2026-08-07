@@ -451,6 +451,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						a_texture,
 						a_bounds,
 						nSubmitFlags,
+						compositorCycleToken,
+						false,
 						nullptr);
 				upscaling.CompleteVRLoadPresentationProbeSubmit(
 					probeSequence,
@@ -488,6 +490,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					a_texture,
 					a_bounds,
 					a_submitFlags,
+					compositorCycleToken,
+					true,
 					a_probeObservation);
 #endif
 				vr::EVRCompositorError result;
@@ -575,6 +579,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					a_texture,
 					a_bounds,
 					nSubmitFlags,
+					compositorCycleToken,
+					false,
 					probePresentationObservation);
 #endif
 				const auto submitCandidateFallback = [&]() {

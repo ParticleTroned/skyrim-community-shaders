@@ -25428,7 +25428,12 @@ namespace
 			0.995f
 		};
 	constexpr float kVRLoadPresentationProbeWhiteLuminance = 0.92f;
+	constexpr uint32_t kVRLoadPresentationProbeSchemaVersion = 4;
 	constexpr float kVRLoadPresentationProbeBrightLuminance = 0.75f;
+	constexpr float kVRLoadPresentationProbeDarkLuminance = 0.25f;
+	constexpr float kVRLoadPresentationProbeBlackLuminance = 0.05f;
+	constexpr float kVRLoadPresentationProbeTransparentAlpha = 0.05f;
+	constexpr float kVRLoadPresentationProbeOpaqueAlpha = 0.95f;
 	constexpr uint32_t kVRLoadPresentationProbeHAMWhiteEdgeSamples = 8u;
 	constexpr float kVRLoadPresentationProbeHAMWhiteEdgeMean = 0.80f;
 	constexpr uint32_t kVRLoadPresentationProbeHAMBrightEdgeSamples = 12u;
@@ -25436,6 +25441,45 @@ namespace
 	constexpr float kVRLoadPresentationProbeHAMBrightEdgeSpread = 0.08f;
 	constexpr float kVRLoadPresentationProbeHAMMaximumCenter = 0.65f;
 	constexpr float kVRLoadPresentationProbeHAMMinimumContrast = 0.25f;
+	constexpr uint32_t kVRLoadPresentationProbeHAMBlackEdgeSamples = 8u;
+	constexpr float kVRLoadPresentationProbeHAMMaximumBlackEdgeMean = 0.20f;
+	constexpr uint32_t kVRLoadPresentationProbeHAMDarkEdgeSamples = 12u;
+	constexpr float kVRLoadPresentationProbeHAMMaximumDarkEdgeMean = 0.30f;
+	constexpr uint32_t kVRLoadPresentationHAMProbeGridSize = 9;
+	constexpr uint32_t kVRLoadPresentationHAMProbeSampleCount =
+		kVRLoadPresentationHAMProbeGridSize * kVRLoadPresentationHAMProbeGridSize;
+	constexpr uint32_t kVRLoadPresentationHAMProbeEdgeSampleCount =
+		4u * (kVRLoadPresentationHAMProbeGridSize - 1u);
+	constexpr uint32_t kVRLoadPresentationHAMProbeRetentionCapacity = 256;
+	constexpr uint32_t kVRLoadPresentationHAMProbePendingCapacity = 8;
+	constexpr uint32_t kVRLoadPresentationHAMProbeRequiredWarmSlots = 2;
+	constexpr uint32_t kVRLoadPresentationHAMProbeMaximumWarmAttempts = 4;
+	constexpr uint32_t kVRLoadPresentationHAMProbeInvalidSlot =
+		std::numeric_limits<uint32_t>::max();
+	constexpr uint32_t kVRLoadPresentationHAMProbeBrightEdgeSamples = 24;
+	constexpr uint32_t kVRLoadPresentationHAMProbeWhiteEdgeSamples = 16;
+	constexpr uint32_t kVRLoadPresentationHAMProbeDarkEdgeSamples = 24;
+	constexpr uint32_t kVRLoadPresentationHAMProbeBlackEdgeSamples = 16;
+	constexpr float kVRLoadPresentationHAMProbeMaximumDarkEdgeMean = 0.30f;
+	constexpr float kVRLoadPresentationHAMProbeMaximumBlackEdgeMean = 0.20f;
+	constexpr float kVRLoadPresentationHAMProbeMinimumDelta = 0.10f;
+	constexpr uint32_t kVRLoadPresentationHAMProbeMinimumTopologySamples = 4;
+	constexpr float kVRLoadPresentationHAMProbeMinimumTopologyMatchRatio = 0.75f;
+	constexpr float kVRLoadPresentationHAMProbeMinimumTopologyRatioContrast = 0.25f;
+	constexpr float kVRLoadPresentationHAMProbeDepthThreshold = 1e-6f;
+	constexpr uint32_t kVRLoadPresentationHAMProbeDepthDilationRadius = 2;
+	constexpr std::array<float, kVRLoadPresentationHAMProbeGridSize>
+		kVRLoadPresentationHAMProbeSamplePositions = []() {
+			std::array<float, kVRLoadPresentationHAMProbeGridSize> positions{};
+			for (uint32_t i = 0; i < kVRLoadPresentationHAMProbeGridSize; ++i) {
+				positions[i] =
+					(static_cast<float>(i) + 0.5f) /
+					static_cast<float>(kVRLoadPresentationHAMProbeGridSize);
+			}
+			return positions;
+		}();
+	static_assert(kVRLoadPresentationHAMProbeSampleCount == 81);
+	static_assert(kVRLoadPresentationHAMProbeEdgeSampleCount == 32);
 
 	uint64_t QueryVRLoadPresentationProbeQpc() noexcept
 	{
@@ -25517,7 +25561,8 @@ namespace
 		const std::byte* a_pixel,
 		float& a_red,
 		float& a_green,
-		float& a_blue) noexcept
+		float& a_blue,
+		float* a_alpha = nullptr) noexcept
 	{
 		if (!a_pixel)
 			return false;
@@ -25531,6 +25576,8 @@ namespace
 				a_red = static_cast<float>(channels[0]) / 255.0f;
 				a_green = static_cast<float>(channels[1]) / 255.0f;
 				a_blue = static_cast<float>(channels[2]) / 255.0f;
+				if (a_alpha)
+					*a_alpha = static_cast<float>(channels[3]) / 255.0f;
 				return true;
 			}
 		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
@@ -25544,6 +25591,13 @@ namespace
 				a_red = static_cast<float>(channels[2]) / 255.0f;
 				a_green = static_cast<float>(channels[1]) / 255.0f;
 				a_blue = static_cast<float>(channels[0]) / 255.0f;
+				if (a_alpha) {
+					const bool hasAlpha =
+						a_format != DXGI_FORMAT_B8G8R8X8_TYPELESS &&
+						a_format != DXGI_FORMAT_B8G8R8X8_UNORM &&
+						a_format != DXGI_FORMAT_B8G8R8X8_UNORM_SRGB;
+					*a_alpha = hasAlpha ? static_cast<float>(channels[3]) / 255.0f : 1.0f;
+				}
 				return true;
 			}
 		case DXGI_FORMAT_R10G10B10A2_TYPELESS:
@@ -25554,6 +25608,8 @@ namespace
 				a_red = static_cast<float>(packed & 0x3FFu) / 1023.0f;
 				a_green = static_cast<float>((packed >> 10u) & 0x3FFu) / 1023.0f;
 				a_blue = static_cast<float>((packed >> 20u) & 0x3FFu) / 1023.0f;
+				if (a_alpha)
+					*a_alpha = static_cast<float>((packed >> 30u) & 0x3u) / 3.0f;
 				return true;
 			}
 		case DXGI_FORMAT_R11G11B10_FLOAT:
@@ -25563,6 +25619,8 @@ namespace
 				a_red = DecodeVRLoadPresentationProbeUnsignedFloat(packed & 0x7FFu, 6u);
 				a_green = DecodeVRLoadPresentationProbeUnsignedFloat((packed >> 11u) & 0x7FFu, 6u);
 				a_blue = DecodeVRLoadPresentationProbeUnsignedFloat((packed >> 22u) & 0x3FFu, 5u);
+				if (a_alpha)
+					*a_alpha = 1.0f;
 				return true;
 			}
 		case DXGI_FORMAT_R16G16B16A16_TYPELESS:
@@ -25573,6 +25631,8 @@ namespace
 				a_red = DecodeVRLoadPresentationProbeHalf(channels[0]);
 				a_green = DecodeVRLoadPresentationProbeHalf(channels[1]);
 				a_blue = DecodeVRLoadPresentationProbeHalf(channels[2]);
+				if (a_alpha)
+					*a_alpha = DecodeVRLoadPresentationProbeHalf(channels[3]);
 				return true;
 			}
 		case DXGI_FORMAT_R16G16B16A16_UNORM:
@@ -25582,6 +25642,8 @@ namespace
 				a_red = static_cast<float>(channels[0]) / 65535.0f;
 				a_green = static_cast<float>(channels[1]) / 65535.0f;
 				a_blue = static_cast<float>(channels[2]) / 65535.0f;
+				if (a_alpha)
+					*a_alpha = static_cast<float>(channels[3]) / 65535.0f;
 				return true;
 			}
 		case DXGI_FORMAT_R32G32B32A32_TYPELESS:
@@ -25592,6 +25654,8 @@ namespace
 				a_red = channels[0];
 				a_green = channels[1];
 				a_blue = channels[2];
+				if (a_alpha)
+					*a_alpha = channels[3];
 				return true;
 			}
 		default:
@@ -25623,12 +25687,272 @@ namespace
 
 	struct VRLoadPresentationHMDMaskObservation
 	{
+		uint64_t sessionID = 0;
+		uint64_t compositorCycleToken = 0;
+		uint64_t dispatchSequence = 0;
+		uint64_t captureSequence = 0;
+		uintptr_t colorIdentity = 0;
+		uintptr_t depthIdentity = 0;
 		uint32_t frame = 0;
+		uint32_t eyeIndex = 0;
+		uint32_t requestedEyeIndex = std::numeric_limits<uint32_t>::max();
 		uint32_t phase = 0;
 		bool observed = false;
 		bool eligible = false;
 		bool deferred = false;
 		bool executed = false;
+		bool captureRequested = false;
+		Upscaling::VRLoadPresentationProbeCaptureStatus captureStatus =
+			Upscaling::VRLoadPresentationProbeCaptureStatus::Pending;
+	};
+
+	struct VRLoadPresentationHAMProbeLuminanceSummary
+	{
+		bool valid = false;
+		float minimum = 0.0f;
+		float maximum = 0.0f;
+		float mean = 0.0f;
+		float edgeMean = 0.0f;
+		float center = 0.0f;
+		float edgeBrightMinimum = 0.0f;
+		float edgeBrightMaximum = 0.0f;
+		float edgeDarkMinimum = 0.0f;
+		float edgeDarkMaximum = 0.0f;
+		uint32_t whiteSamples = 0;
+		uint32_t brightSamples = 0;
+		uint32_t darkSamples = 0;
+		uint32_t blackSamples = 0;
+		uint32_t edgeWhiteSamples = 0;
+		uint32_t edgeBrightSamples = 0;
+		uint32_t edgeDarkSamples = 0;
+		uint32_t edgeBlackSamples = 0;
+		bool predominantlyWhite = false;
+		bool predominantlyBlack = false;
+		bool whiteHAMPattern = false;
+		bool brightHAMPattern = false;
+		bool blackHAMPattern = false;
+		bool darkHAMPattern = false;
+	};
+
+	struct VRLoadPresentationHAMProbeAlphaSummary
+	{
+		bool valid = false;
+		float minimum = 0.0f;
+		float maximum = 0.0f;
+		float mean = 0.0f;
+		uint32_t transparentSamples = 0;
+		uint32_t opaqueSamples = 0;
+	};
+
+	enum class VRLoadPresentationHAMProbeHandoffSource : uint8_t
+	{
+		None,
+		StereoRelease,
+		TimeoutRelease
+	};
+
+	enum class VRLoadPresentationHAMProbeHandoffRoute : uint8_t
+	{
+		Unknown,
+		MainMenuLoad,
+		InGameLoad
+	};
+
+	enum class VRLoadPresentationHAMProbeTimeoutSubmitCorrelation : uint8_t
+	{
+		NotApplicable,
+		Matched,
+		NoSubmitStageClearBeforeSubmit,
+		ClearFailedBeforeSubmit,
+		IdentityMismatch,
+		InvalidSubmitTexture
+	};
+
+	struct VRLoadPresentationHAMProbeHandoff
+	{
+		VRLoadPresentationHAMProbeHandoffSource source =
+			VRLoadPresentationHAMProbeHandoffSource::None;
+		VRLoadPresentationHAMProbeHandoffRoute route =
+			VRLoadPresentationHAMProbeHandoffRoute::Unknown;
+		uint64_t protectionEpoch = 0;
+		uint64_t loadingSerial = 0;
+		uint64_t compositorCycleToken = 0;
+		uint64_t timeoutElapsedMs = 0;
+		uint64_t timeoutBudgetMs = 0;
+	};
+
+	struct VRLoadPresentationHAMProbeTimeoutEyeState
+	{
+		bool clearDecisionSeen = false;
+		bool clearSeen = false;
+		bool submitSeen = false;
+		bool clearEligible = false;
+		bool clearDeferred = false;
+		bool clearExecuted = false;
+		uintptr_t clearColorIdentity = 0;
+		uint32_t clearPhase = 0;
+		uint64_t clearDispatchSequence = 0;
+		bool captureRequested = false;
+		uint64_t captureSequence = 0;
+		Upscaling::VRLoadPresentationProbeCaptureStatus captureStatus =
+			Upscaling::VRLoadPresentationProbeCaptureStatus::Pending;
+	};
+
+	struct VRLoadPresentationHAMProbeTimeoutHandoffMarker
+	{
+		uint64_t sessionID = 0;
+		VRLoadPresentationHAMProbeHandoff handoff{};
+		std::array<VRLoadPresentationHAMProbeTimeoutEyeState, 2> eyes{};
+	};
+
+	struct VRLoadPresentationHAMProbeTimeoutSubmitClaim
+	{
+		VRLoadPresentationHAMProbeHandoff handoff{};
+		VRLoadPresentationHAMProbeTimeoutEyeState eye{};
+	};
+
+	struct VRLoadPresentationHAMProbeSubmitContext
+	{
+		uint64_t compositorCycleToken = 0;
+		uint32_t requestedEyeIndex = std::numeric_limits<uint32_t>::max();
+	};
+
+	struct VRLoadPresentationHAMProbeRecord
+	{
+		uint64_t sequence = 0;
+		uint64_t sessionID = 0;
+		uint64_t dispatchSequence = 0;
+		uint64_t queuedQpc = 0;
+		uint64_t completedQpc = 0;
+		uint32_t frame = 0;
+		uint32_t eyeIndex = 0;
+		uint32_t phase = 0;
+		VRLoadPresentationHAMProbeHandoff handoff{};
+		Upscaling::VRLoadPresentationProbeCaptureStatus captureStatus =
+			Upscaling::VRLoadPresentationProbeCaptureStatus::Pending;
+		bool clearExecuted = false;
+		uintptr_t colorIdentity = 0;
+		uintptr_t depthIdentity = 0;
+		uint32_t colorWidth = 0;
+		uint32_t colorHeight = 0;
+		uint32_t colorOffsetX = 0;
+		uint32_t colorOffsetY = 0;
+		uint32_t colorResourceWidth = 0;
+		uint32_t colorResourceHeight = 0;
+		uint32_t colorResourceFormat = 0;
+		uint32_t colorViewFormat = 0;
+		bool colorHasAlphaChannel = false;
+		uint32_t colorSubresource = 0;
+		uint32_t depthWidth = 0;
+		uint32_t depthHeight = 0;
+		uint32_t depthOffsetX = 0;
+		uint32_t depthOffsetY = 0;
+		uint32_t depthViewWidth = 0;
+		uint32_t depthViewHeight = 0;
+		uint32_t depthResourceFormat = 0;
+		uint32_t depthViewFormat = 0;
+		uint32_t depthViewMip = 0;
+		bool preLuminanceValid = false;
+		bool preAlphaValid = false;
+		bool depthValid = false;
+		bool postLuminanceValid = false;
+		bool postAlphaValid = false;
+		bool deltaValid = false;
+		bool alphaDeltaValid = false;
+		VRLoadPresentationHAMProbeLuminanceSummary preSummary{};
+		VRLoadPresentationHAMProbeLuminanceSummary postSummary{};
+		VRLoadPresentationHAMProbeAlphaSummary preAlphaSummary{};
+		VRLoadPresentationHAMProbeAlphaSummary postAlphaSummary{};
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount> preLuminance{};
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount> preAlpha{};
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount> centerDepth{};
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount> neighborhoodMinimumDepth{};
+		std::array<uint32_t, kVRLoadPresentationHAMProbeSampleCount> hiddenDepthSampleCount{};
+		std::array<uint32_t, kVRLoadPresentationHAMProbeSampleCount> clearMask{};
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount> postLuminance{};
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount> postAlpha{};
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount> luminanceDelta{};
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount> alphaDelta{};
+		uint32_t darkenedSamples = 0;
+		uint32_t brightenedSamples = 0;
+		uint32_t newlyBlackSamples = 0;
+		uint32_t newlyWhiteSamples = 0;
+		uint32_t clearMaskDarkenedSamples = 0;
+		uint32_t clearMaskBrightenedSamples = 0;
+		uint32_t clearMaskNewlyBlackSamples = 0;
+		uint32_t clearMaskNewlyWhiteSamples = 0;
+		uint32_t unmaskedDarkenedSamples = 0;
+		uint32_t unmaskedBrightenedSamples = 0;
+		uint32_t unmaskedNewlyBlackSamples = 0;
+		uint32_t unmaskedNewlyWhiteSamples = 0;
+		uint32_t newlyTransparentSamples = 0;
+		uint32_t newlyOpaqueSamples = 0;
+		uint32_t clearMaskNewlyTransparentSamples = 0;
+		uint32_t clearMaskNewlyOpaqueSamples = 0;
+		uint32_t unmaskedNewlyTransparentSamples = 0;
+		uint32_t unmaskedNewlyOpaqueSamples = 0;
+		uint32_t clearMaskSamples = 0;
+		uint32_t unmaskedSamples = 0;
+		uint32_t preClearMaskWhiteSamples = 0;
+		uint32_t preClearMaskBrightSamples = 0;
+		uint32_t preClearMaskDarkSamples = 0;
+		uint32_t preClearMaskBlackSamples = 0;
+		uint32_t postClearMaskWhiteSamples = 0;
+		uint32_t postClearMaskBrightSamples = 0;
+		uint32_t postClearMaskDarkSamples = 0;
+		uint32_t postClearMaskBlackSamples = 0;
+		uint32_t preUnmaskedWhiteSamples = 0;
+		uint32_t preUnmaskedBrightSamples = 0;
+		uint32_t preUnmaskedDarkSamples = 0;
+		uint32_t preUnmaskedBlackSamples = 0;
+		uint32_t postUnmaskedWhiteSamples = 0;
+		uint32_t postUnmaskedBrightSamples = 0;
+		uint32_t postUnmaskedDarkSamples = 0;
+		uint32_t postUnmaskedBlackSamples = 0;
+		bool preDepthAlignedWhiteHAMPattern = false;
+		bool preDepthAlignedBrightHAMPattern = false;
+		bool preDepthAlignedBlackHAMPattern = false;
+		bool preDepthAlignedDarkHAMPattern = false;
+		bool postDepthAlignedWhiteHAMPattern = false;
+		bool postDepthAlignedBrightHAMPattern = false;
+		bool postDepthAlignedBlackHAMPattern = false;
+		bool postDepthAlignedDarkHAMPattern = false;
+		bool introducedBrightHAMPattern = false;
+		bool introducedDarkHAMPattern = false;
+		bool introducedBlackHAMPattern = false;
+		bool removedWhiteHAMPattern = false;
+		bool removedBrightHAMPattern = false;
+	};
+
+	enum class VRLoadPresentationHAMProbePendingState : uint8_t
+	{
+		Free,
+		Capturing,
+		Pending
+	};
+
+	struct VRLoadPresentationHAMProbePendingReadback
+	{
+		VRLoadPresentationHAMProbePendingState state =
+			VRLoadPresentationHAMProbePendingState::Free;
+		uint64_t sequence = 0;
+		DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN;
+		uint32_t colorBytesPerPixel = 0;
+		winrt::com_ptr<ID3D11Device> ownerDevice;
+		winrt::com_ptr<ID3D11Texture2D> preColorStagingTexture;
+		winrt::com_ptr<ID3D11Texture2D> postColorStagingTexture;
+		winrt::com_ptr<ID3D11Texture2D> depthProbeTexture;
+		winrt::com_ptr<ID3D11UnorderedAccessView> depthProbeUAV;
+		winrt::com_ptr<ID3D11Texture2D> depthProbeStagingTexture;
+		winrt::com_ptr<ID3D11Query> completionQuery;
+		VRLoadPresentationHAMProbeRecord record{};
+	};
+
+	struct VRLoadPresentationHAMCaptureToken
+	{
+		bool requested = false;
+		uint32_t slotIndex = kVRLoadPresentationHAMProbeInvalidSlot;
+		VRLoadPresentationHAMProbeRecord record{};
 	};
 
 	struct VRLoadPresentationProbePendingReadback
@@ -25651,14 +25975,1745 @@ namespace
 	std::atomic<uint64_t> vrLoadPresentationProbeDroppedReadbacks{ 0 };
 	std::atomic<uint64_t> vrLoadPresentationProbeBrightCandidates{ 0 };
 	std::atomic<uint64_t> vrLoadPresentationProbeHAMCandidates{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeBlackCandidates{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeHAMBlackCandidates{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationProbeHAMDarkCandidates{ 0 };
 	std::atomic<uint64_t> vrLoadPresentationProbeHMDDispatchSequence{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeNextSequence{ 1 };
+	std::atomic<uint32_t> vrLoadPresentationHAMProbePendingReadbacks{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeQueuedReadbacks{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeCompletedReadbacks{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeDroppedReadbacks{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeBrightCandidates{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeDarkCandidates{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeStereoReleaseRecords{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeTimeoutReleaseRecords{ 0 };
+	std::atomic<uint64_t> vrLoadPresentationHAMProbeTimeoutArmCount{ 0 };
 	std::mutex vrLoadPresentationProbeMutex;
+	std::mutex vrLoadPresentationProbeObservationMutex;
+	std::mutex vrLoadPresentationHAMProbeTimeoutHandoffMutex;
+	VRLoadPresentationHAMProbeTimeoutHandoffMarker
+		vrLoadPresentationHAMProbeTimeoutHandoff{};
+	thread_local VRLoadPresentationHAMProbeSubmitContext
+		vrLoadPresentationHAMProbeSubmitContext{};
 	std::array<Upscaling::VRLoadPresentationProbeRecord, Upscaling::kVRLoadPresentationProbeRetentionCapacity> vrLoadPresentationProbeRecords{};
 	uint32_t vrLoadPresentationProbeNextIndex = 0;
 	uint32_t vrLoadPresentationProbeCount = 0;
 	uint32_t vrLoadPresentationProbeOverwrittenRecords = 0;
 	std::array<VRLoadPresentationProbePendingReadback, Upscaling::kVRLoadPresentationProbePendingCapacity> vrLoadPresentationProbePending{};
-	std::array<VRLoadPresentationHMDMaskObservation, 2> vrLoadPresentationHMDMaskObservations{};
+	std::array<std::array<VRLoadPresentationHMDMaskObservation, 4>, 2>
+		vrLoadPresentationHMDMaskObservations{};
+	std::array<VRLoadPresentationHAMProbeRecord, kVRLoadPresentationHAMProbeRetentionCapacity>
+		vrLoadPresentationHAMProbeRecords{};
+	uint32_t vrLoadPresentationHAMProbeNextIndex = 0;
+	uint32_t vrLoadPresentationHAMProbeCount = 0;
+	uint32_t vrLoadPresentationHAMProbeOverwrittenRecords = 0;
+	std::array<VRLoadPresentationHAMProbePendingReadback, kVRLoadPresentationHAMProbePendingCapacity>
+		vrLoadPresentationHAMProbePending{};
+	winrt::com_ptr<ID3D11Device> vrLoadPresentationHAMProbeResourceDevice;
+	winrt::com_ptr<ID3D11ComputeShader> vrLoadPresentationHAMProbeCS;
+	winrt::com_ptr<ID3D11Buffer> vrLoadPresentationHAMProbeCB;
+	ID3D11Device* vrLoadPresentationHAMProbeWarmAttemptDevice = nullptr;
+	DXGI_FORMAT vrLoadPresentationHAMProbeWarmAttemptFormat = DXGI_FORMAT_UNKNOWN;
+	bool vrLoadPresentationHAMProbeWarmAttempted = false;
+	bool vrLoadPresentationHAMProbeWarmReady = false;
+	uint32_t vrLoadPresentationHAMProbeWarmAttemptCount = 0;
+	uint32_t vrLoadPresentationHAMProbeWarmAttemptFrame = 0;
+
+	const char* GetVRLoadPresentationHAMProbeHandoffSourceName(
+		VRLoadPresentationHAMProbeHandoffSource a_source) noexcept
+	{
+		switch (a_source) {
+		case VRLoadPresentationHAMProbeHandoffSource::StereoRelease:
+			return "stereo-release";
+		case VRLoadPresentationHAMProbeHandoffSource::TimeoutRelease:
+			return "timeout-release";
+		default:
+			return "none";
+		}
+	}
+
+	const char* GetVRLoadPresentationHAMProbeHandoffRouteName(
+		VRLoadPresentationHAMProbeHandoffRoute a_route) noexcept
+	{
+		switch (a_route) {
+		case VRLoadPresentationHAMProbeHandoffRoute::MainMenuLoad:
+			return "main-menu-load";
+		case VRLoadPresentationHAMProbeHandoffRoute::InGameLoad:
+			return "in-game-load";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* GetVRLoadPresentationHAMProbeTimeoutSubmitCorrelationName(
+		VRLoadPresentationHAMProbeTimeoutSubmitCorrelation a_correlation) noexcept
+	{
+		switch (a_correlation) {
+		case VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::Matched:
+			return "Matched";
+		case VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::
+			NoSubmitStageClearBeforeSubmit:
+			return "NoSubmitStageClearBeforeSubmit";
+		case VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::
+			ClearFailedBeforeSubmit:
+			return "ClearFailedBeforeSubmit";
+		case VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::IdentityMismatch:
+			return "IdentityMismatch";
+		case VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::InvalidSubmitTexture:
+			return "InvalidSubmitTexture";
+		default:
+			return "NotApplicable";
+		}
+	}
+
+	void ResetVRLoadPresentationHAMProbeTimeoutHandoff() noexcept
+	{
+		try {
+			std::scoped_lock lock(
+				vrLoadPresentationHAMProbeTimeoutHandoffMutex);
+			vrLoadPresentationHAMProbeTimeoutHandoff = {};
+		} catch (...) {
+			// A diagnostic latch must never affect presentation ownership.
+		}
+	}
+
+	void ArmVRLoadPresentationHAMProbeTimeoutHandoff(
+		const VRLoadPresentationHAMProbeHandoff& a_handoff) noexcept
+	{
+		if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire) ||
+			a_handoff.source !=
+				VRLoadPresentationHAMProbeHandoffSource::TimeoutRelease ||
+			a_handoff.protectionEpoch == 0 ||
+			a_handoff.compositorCycleToken == 0) {
+			return;
+		}
+
+		const uint64_t sessionID =
+			vrLoadPresentationProbeSessionID.load(std::memory_order_acquire);
+		if (sessionID == 0)
+			return;
+
+		try {
+			std::scoped_lock lock(
+				vrLoadPresentationHAMProbeTimeoutHandoffMutex);
+			if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire) ||
+				sessionID !=
+					vrLoadPresentationProbeSessionID.load(std::memory_order_acquire)) {
+				return;
+			}
+			vrLoadPresentationHAMProbeTimeoutHandoff = {
+				.sessionID = sessionID,
+				.handoff = a_handoff,
+			};
+			vrLoadPresentationHAMProbeTimeoutArmCount.fetch_add(
+				1,
+				std::memory_order_relaxed);
+		} catch (...) {
+			// Timeout release remains fail-open if the diagnostic latch fails.
+		}
+	}
+
+	std::optional<VRLoadPresentationHAMProbeHandoff>
+	TryClaimVRLoadPresentationHAMProbeTimeoutClear(
+		uint64_t a_compositorCycleToken,
+		uint32_t a_requestedEyeIndex,
+		uint32_t a_clearEyeIndex) noexcept
+	{
+		if (a_compositorCycleToken == 0 ||
+			a_requestedEyeIndex >= 2 ||
+			a_clearEyeIndex != a_requestedEyeIndex ||
+			!vrLoadPresentationProbeActive.load(std::memory_order_acquire)) {
+			return std::nullopt;
+		}
+
+		try {
+			std::scoped_lock lock(
+				vrLoadPresentationHAMProbeTimeoutHandoffMutex);
+			auto& marker = vrLoadPresentationHAMProbeTimeoutHandoff;
+			if (marker.sessionID == 0 ||
+				marker.sessionID !=
+					vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) ||
+				marker.handoff.compositorCycleToken != a_compositorCycleToken ||
+				marker.eyes[a_clearEyeIndex].submitSeen ||
+				marker.eyes[a_clearEyeIndex].clearSeen) {
+				return std::nullopt;
+			}
+			marker.eyes[a_clearEyeIndex].clearDecisionSeen = true;
+			marker.eyes[a_clearEyeIndex].clearSeen = true;
+			return marker.handoff;
+		} catch (...) {
+			return std::nullopt;
+		}
+	}
+
+	void RecordVRLoadPresentationHAMProbeTimeoutNoClear(
+		uint64_t a_compositorCycleToken,
+		uint32_t a_requestedEyeIndex,
+		uint32_t a_clearEyeIndex,
+		bool a_eligible,
+		bool a_deferred,
+		uint32_t a_phase) noexcept
+	{
+		if (a_compositorCycleToken == 0 ||
+			a_requestedEyeIndex >= 2 ||
+			a_clearEyeIndex != a_requestedEyeIndex ||
+			!vrLoadPresentationProbeActive.load(std::memory_order_acquire)) {
+			return;
+		}
+		try {
+			std::scoped_lock lock(
+				vrLoadPresentationHAMProbeTimeoutHandoffMutex);
+			auto& marker = vrLoadPresentationHAMProbeTimeoutHandoff;
+			if (marker.sessionID == 0 ||
+				marker.sessionID !=
+					vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) ||
+				marker.handoff.compositorCycleToken != a_compositorCycleToken ||
+				marker.eyes[a_clearEyeIndex].submitSeen ||
+				marker.eyes[a_clearEyeIndex].clearSeen) {
+				return;
+			}
+			auto& eye = marker.eyes[a_clearEyeIndex];
+			eye.clearDecisionSeen = true;
+			eye.clearEligible = a_eligible;
+			eye.clearDeferred = a_deferred;
+			eye.clearExecuted = false;
+			eye.clearPhase = a_phase;
+		} catch (...) {
+			// A no-clear observation must not affect the real submit path.
+		}
+	}
+
+	void CompleteVRLoadPresentationHAMProbeTimeoutClear(
+		const VRLoadPresentationHAMProbeHandoff& a_handoff,
+		uint32_t a_eyeIndex,
+		uintptr_t a_colorIdentity,
+		bool a_eligible,
+		bool a_deferred,
+		bool a_executed,
+		uint32_t a_phase,
+		uint64_t a_dispatchSequence,
+		const VRLoadPresentationHAMCaptureToken& a_capture) noexcept
+	{
+		if (a_eyeIndex >= 2 ||
+			a_handoff.source !=
+				VRLoadPresentationHAMProbeHandoffSource::TimeoutRelease) {
+			return;
+		}
+		try {
+			std::scoped_lock lock(
+				vrLoadPresentationHAMProbeTimeoutHandoffMutex);
+			auto& marker = vrLoadPresentationHAMProbeTimeoutHandoff;
+			if (marker.sessionID == 0 ||
+				marker.sessionID !=
+					vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) ||
+				marker.handoff.compositorCycleToken !=
+					a_handoff.compositorCycleToken ||
+				!marker.eyes[a_eyeIndex].clearSeen) {
+				return;
+			}
+			auto& eye = marker.eyes[a_eyeIndex];
+			eye.clearEligible = a_eligible;
+			eye.clearDeferred = a_deferred;
+			eye.clearExecuted = a_executed;
+			eye.clearColorIdentity = a_colorIdentity;
+			eye.clearPhase = a_phase;
+			eye.clearDispatchSequence = a_dispatchSequence;
+			eye.captureRequested = a_capture.requested;
+			eye.captureSequence =
+				a_capture.requested ? a_capture.record.sequence : 0;
+			eye.captureStatus =
+				a_capture.requested ?
+					a_capture.record.captureStatus :
+					Upscaling::VRLoadPresentationProbeCaptureStatus::Pending;
+		} catch (...) {
+			// The real HAM clear has already completed; diagnostics stay fail-open.
+		}
+	}
+
+	std::optional<VRLoadPresentationHAMProbeTimeoutSubmitClaim>
+	TryClaimVRLoadPresentationHAMProbeTimeoutSubmit(
+		uint64_t a_compositorCycleToken,
+		uint32_t a_eyeIndex) noexcept
+	{
+		if (a_compositorCycleToken == 0 || a_eyeIndex >= 2 ||
+			!vrLoadPresentationProbeActive.load(std::memory_order_acquire)) {
+			return std::nullopt;
+		}
+		try {
+			std::scoped_lock lock(
+				vrLoadPresentationHAMProbeTimeoutHandoffMutex);
+			auto& marker = vrLoadPresentationHAMProbeTimeoutHandoff;
+			if (marker.sessionID == 0 ||
+				marker.sessionID !=
+					vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) ||
+				marker.handoff.compositorCycleToken != a_compositorCycleToken ||
+				marker.eyes[a_eyeIndex].submitSeen) {
+				return std::nullopt;
+			}
+			marker.eyes[a_eyeIndex].submitSeen = true;
+			return VRLoadPresentationHAMProbeTimeoutSubmitClaim{
+				.handoff = marker.handoff,
+				.eye = marker.eyes[a_eyeIndex],
+			};
+		} catch (...) {
+			return std::nullopt;
+		}
+	}
+
+	VRLoadPresentationHAMProbeTimeoutHandoffMarker
+	GetVRLoadPresentationHAMProbeTimeoutHandoffSnapshot() noexcept
+	{
+		try {
+			std::scoped_lock lock(
+				vrLoadPresentationHAMProbeTimeoutHandoffMutex);
+			return vrLoadPresentationHAMProbeTimeoutHandoff;
+		} catch (...) {
+			return {};
+		}
+	}
+
+	void ApplyVRLoadPresentationHAMProbeTimeoutSubmitClaim(
+		Upscaling::VRLoadPresentationProbeRecord& a_record,
+		const VRLoadPresentationHAMProbeTimeoutSubmitClaim& a_claim,
+		uintptr_t a_submitTextureIdentity,
+		bool a_validSubmitTexture) noexcept
+	{
+		a_record.handoffSource = static_cast<uint32_t>(a_claim.handoff.source);
+		a_record.handoffRoute = static_cast<uint32_t>(a_claim.handoff.route);
+		a_record.handoffProtectionEpoch = a_claim.handoff.protectionEpoch;
+		a_record.handoffLoadingSerial = a_claim.handoff.loadingSerial;
+		a_record.handoffCompositorCycleToken =
+			a_claim.handoff.compositorCycleToken;
+		a_record.handoffTimeoutElapsedMs = a_claim.handoff.timeoutElapsedMs;
+		a_record.handoffTimeoutBudgetMs = a_claim.handoff.timeoutBudgetMs;
+		a_record.firstPostTimeoutSubmit = true;
+		a_record.hamClearObserved =
+			a_claim.eye.clearDecisionSeen || a_claim.eye.clearSeen;
+		a_record.hamClearEligible = a_claim.eye.clearEligible;
+		a_record.hamClearDeferred = a_claim.eye.clearDeferred;
+		a_record.hamClearExecuted = a_claim.eye.clearExecuted;
+		a_record.hamClearPhase = a_claim.eye.clearPhase;
+		a_record.hamClearDispatchSequence =
+			a_claim.eye.clearDispatchSequence;
+		a_record.hamCaptureRequested = a_claim.eye.captureRequested;
+		a_record.hamCaptureSequence = a_claim.eye.captureSequence;
+		a_record.hamCaptureStatus = a_claim.eye.captureStatus;
+
+		VRLoadPresentationHAMProbeTimeoutSubmitCorrelation correlation =
+			VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::Matched;
+		if (!a_validSubmitTexture || a_submitTextureIdentity == 0) {
+			correlation =
+				VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::InvalidSubmitTexture;
+		} else if (!a_claim.eye.clearSeen) {
+			correlation = VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::
+				NoSubmitStageClearBeforeSubmit;
+		} else if (!a_claim.eye.clearExecuted) {
+			correlation = VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::
+				ClearFailedBeforeSubmit;
+		} else if (a_claim.eye.clearColorIdentity == 0 ||
+				   a_claim.eye.clearColorIdentity != a_submitTextureIdentity) {
+			correlation =
+				VRLoadPresentationHAMProbeTimeoutSubmitCorrelation::IdentityMismatch;
+		}
+		a_record.timeoutSubmitCorrelation = static_cast<uint32_t>(correlation);
+	}
+
+	uint32_t GetVRLoadPresentationProbeFormatFamily(DXGI_FORMAT a_format) noexcept
+	{
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+			return 1;
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+			return 2;
+		case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+			return 3;
+		case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+			return 4;
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+			return 5;
+		case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		case DXGI_FORMAT_R16G16B16A16_UNORM:
+			return 6;
+		case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+			return 7;
+		default:
+			return 0;
+		}
+	}
+
+	bool AreVRLoadPresentationProbeCopyFormatsCompatible(
+		DXGI_FORMAT a_resourceFormat,
+		DXGI_FORMAT a_viewFormat) noexcept
+	{
+		const uint32_t resourceFamily =
+			GetVRLoadPresentationProbeFormatFamily(a_resourceFormat);
+		return resourceFamily != 0 &&
+		       resourceFamily == GetVRLoadPresentationProbeFormatFamily(a_viewFormat);
+	}
+
+	bool HasVRLoadPresentationProbeAlphaChannel(DXGI_FORMAT a_format) noexcept
+	{
+		switch (a_format) {
+		case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+			return false;
+		default:
+			return GetVRLoadPresentationProbeFormatFamily(a_format) != 0;
+		}
+	}
+
+	bool IsVRLoadPresentationHAMProbeDepthFormat(DXGI_FORMAT a_format) noexcept
+	{
+		return a_format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS ||
+		       a_format == DXGI_FORMAT_R32_FLOAT;
+	}
+
+	uint32_t ResolveVRLoadPresentationHAMProbeCoordinate(
+		uint32_t a_index,
+		uint32_t a_extent) noexcept
+	{
+		if (!a_extent)
+			return 0;
+		return std::min(
+			static_cast<uint32_t>(
+				(static_cast<uint64_t>(2u * a_index + 1u) * a_extent) /
+				(2u * kVRLoadPresentationHAMProbeGridSize)),
+			a_extent - 1u);
+	}
+
+	bool IsVRLoadPresentationHAMProbeEdge(uint32_t a_x, uint32_t a_y) noexcept
+	{
+		return a_x == 0 ||
+		       a_y == 0 ||
+		       a_x + 1u == kVRLoadPresentationHAMProbeGridSize ||
+		       a_y + 1u == kVRLoadPresentationHAMProbeGridSize;
+	}
+
+	const char* GetVRLoadPresentationHAMProbePolarityName(
+		const VRLoadPresentationHAMProbeLuminanceSummary& a_summary) noexcept
+	{
+		if (a_summary.brightHAMPattern && a_summary.darkHAMPattern)
+			return "mixed";
+		if (a_summary.brightHAMPattern)
+			return "bright";
+		if (a_summary.darkHAMPattern)
+			return "dark";
+		return "none";
+	}
+
+	bool AnalyzeVRLoadPresentationHAMProbeLuminance(
+		DXGI_FORMAT a_format,
+		uint32_t a_bytesPerPixel,
+		const D3D11_MAPPED_SUBRESOURCE& a_mapped,
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount>& a_luminance,
+		VRLoadPresentationHAMProbeLuminanceSummary& a_summary,
+		std::array<float, kVRLoadPresentationHAMProbeSampleCount>& a_alpha,
+		VRLoadPresentationHAMProbeAlphaSummary& a_alphaSummary) noexcept
+	{
+		if (!a_mapped.pData || !a_bytesPerPixel)
+			return false;
+
+		VRLoadPresentationHAMProbeLuminanceSummary summary{};
+		VRLoadPresentationHAMProbeAlphaSummary alphaSummary{};
+		summary.minimum = std::numeric_limits<float>::max();
+		alphaSummary.minimum = std::numeric_limits<float>::max();
+		summary.edgeBrightMinimum = std::numeric_limits<float>::max();
+		summary.edgeDarkMinimum = std::numeric_limits<float>::max();
+		float sum = 0.0f;
+		float edgeSum = 0.0f;
+		float alphaSum = 0.0f;
+		uint32_t decodedSamples = 0;
+		for (uint32_t y = 0; y < kVRLoadPresentationHAMProbeGridSize; ++y) {
+			for (uint32_t x = 0; x < kVRLoadPresentationHAMProbeGridSize; ++x) {
+				const uint32_t index = y * kVRLoadPresentationHAMProbeGridSize + x;
+				const auto* pixel =
+					static_cast<const std::byte*>(a_mapped.pData) +
+					static_cast<size_t>(y) * a_mapped.RowPitch +
+					static_cast<size_t>(x) * a_bytesPerPixel;
+				float red = 0.0f;
+				float green = 0.0f;
+				float blue = 0.0f;
+				float alpha = 0.0f;
+				if (!DecodeVRLoadPresentationProbePixel(
+						a_format,
+						pixel,
+						red,
+						green,
+						blue,
+						&alpha) ||
+					!std::isfinite(red) ||
+					!std::isfinite(green) ||
+					!std::isfinite(blue) ||
+					!std::isfinite(alpha)) {
+					return false;
+				}
+
+				const float luminance =
+					std::max(0.0f, 0.2126f * red + 0.7152f * green + 0.0722f * blue);
+				a_luminance[index] = luminance;
+				a_alpha[index] = alpha;
+				summary.minimum = std::min(summary.minimum, luminance);
+				summary.maximum = std::max(summary.maximum, luminance);
+				sum += luminance;
+				alphaSummary.minimum = std::min(alphaSummary.minimum, alpha);
+				alphaSummary.maximum = std::max(alphaSummary.maximum, alpha);
+				alphaSum += alpha;
+				if (alpha <= kVRLoadPresentationProbeTransparentAlpha)
+					++alphaSummary.transparentSamples;
+				if (alpha >= kVRLoadPresentationProbeOpaqueAlpha)
+					++alphaSummary.opaqueSamples;
+				++decodedSamples;
+
+				const bool edge = IsVRLoadPresentationHAMProbeEdge(x, y);
+				if (edge)
+					edgeSum += luminance;
+				if (luminance >= kVRLoadPresentationProbeWhiteLuminance) {
+					++summary.whiteSamples;
+					if (edge)
+						++summary.edgeWhiteSamples;
+				}
+				if (luminance >= kVRLoadPresentationProbeBrightLuminance) {
+					++summary.brightSamples;
+					if (edge) {
+						++summary.edgeBrightSamples;
+						summary.edgeBrightMinimum =
+							std::min(summary.edgeBrightMinimum, luminance);
+						summary.edgeBrightMaximum =
+							std::max(summary.edgeBrightMaximum, luminance);
+					}
+				}
+				if (luminance <= kVRLoadPresentationProbeDarkLuminance) {
+					++summary.darkSamples;
+					if (edge) {
+						++summary.edgeDarkSamples;
+						summary.edgeDarkMinimum =
+							std::min(summary.edgeDarkMinimum, luminance);
+						summary.edgeDarkMaximum =
+							std::max(summary.edgeDarkMaximum, luminance);
+					}
+				}
+				if (luminance <= kVRLoadPresentationProbeBlackLuminance) {
+					++summary.blackSamples;
+					if (edge)
+						++summary.edgeBlackSamples;
+				}
+			}
+		}
+
+		if (decodedSamples != kVRLoadPresentationHAMProbeSampleCount)
+			return false;
+
+		summary.valid = true;
+		alphaSummary.valid = true;
+		summary.mean = sum / static_cast<float>(decodedSamples);
+		alphaSummary.mean = alphaSum / static_cast<float>(decodedSamples);
+		summary.edgeMean =
+			edgeSum / static_cast<float>(kVRLoadPresentationHAMProbeEdgeSampleCount);
+		summary.center = a_luminance[kVRLoadPresentationHAMProbeSampleCount / 2u];
+		summary.predominantlyWhite =
+			summary.whiteSamples >= kVRLoadPresentationHAMProbeSampleCount - 16u;
+		summary.predominantlyBlack =
+			summary.blackSamples >= kVRLoadPresentationHAMProbeSampleCount - 16u;
+		if (!summary.edgeBrightSamples) {
+			summary.edgeBrightMinimum = 0.0f;
+			summary.edgeBrightMaximum = 0.0f;
+		}
+		if (!summary.edgeDarkSamples) {
+			summary.edgeDarkMinimum = 0.0f;
+			summary.edgeDarkMaximum = 0.0f;
+		}
+
+		const float brightSpread =
+			summary.edgeBrightMaximum - summary.edgeBrightMinimum;
+		const float darkSpread =
+			summary.edgeDarkMaximum - summary.edgeDarkMinimum;
+		const bool darkCenter =
+			summary.center <= kVRLoadPresentationProbeHAMMaximumCenter &&
+			summary.edgeMean >=
+				summary.center + kVRLoadPresentationProbeHAMMinimumContrast;
+		const bool brightCenter =
+			summary.center >= kVRLoadPresentationProbeDarkLuminance &&
+			summary.center >=
+				summary.edgeMean + kVRLoadPresentationProbeHAMMinimumContrast;
+		const bool strictBrightPattern =
+			summary.edgeWhiteSamples >= kVRLoadPresentationHAMProbeWhiteEdgeSamples &&
+			summary.edgeMean >= kVRLoadPresentationProbeHAMWhiteEdgeMean &&
+			darkCenter;
+		const bool broadBrightPattern =
+			summary.edgeBrightSamples >= kVRLoadPresentationHAMProbeBrightEdgeSamples &&
+			summary.edgeMean >= kVRLoadPresentationProbeHAMBrightEdgeMean &&
+			brightSpread <= kVRLoadPresentationProbeHAMBrightEdgeSpread &&
+			darkCenter;
+		const bool strictDarkPattern =
+			summary.edgeBlackSamples >= kVRLoadPresentationHAMProbeBlackEdgeSamples &&
+			summary.edgeMean <= kVRLoadPresentationHAMProbeMaximumBlackEdgeMean &&
+			brightCenter;
+		const bool broadDarkPattern =
+			summary.edgeDarkSamples >= kVRLoadPresentationHAMProbeDarkEdgeSamples &&
+			summary.edgeMean <= kVRLoadPresentationHAMProbeMaximumDarkEdgeMean &&
+			darkSpread <= kVRLoadPresentationProbeHAMBrightEdgeSpread &&
+			brightCenter;
+		summary.whiteHAMPattern = strictBrightPattern;
+		summary.brightHAMPattern = strictBrightPattern || broadBrightPattern;
+		summary.blackHAMPattern = strictDarkPattern;
+		summary.darkHAMPattern = strictDarkPattern || broadDarkPattern;
+		a_summary = summary;
+		a_alphaSummary = alphaSummary;
+		return true;
+	}
+
+	bool AnalyzeVRLoadPresentationHAMProbeDepth(
+		const D3D11_MAPPED_SUBRESOURCE& a_mapped,
+		VRLoadPresentationHAMProbeRecord& a_record) noexcept
+	{
+		if (!a_mapped.pData)
+			return false;
+		for (uint32_t y = 0; y < kVRLoadPresentationHAMProbeGridSize; ++y) {
+			for (uint32_t x = 0; x < kVRLoadPresentationHAMProbeGridSize; ++x) {
+				const uint32_t index = y * kVRLoadPresentationHAMProbeGridSize + x;
+				const auto* values = reinterpret_cast<const float*>(
+					static_cast<const std::byte*>(a_mapped.pData) +
+					static_cast<size_t>(y) * a_mapped.RowPitch +
+					static_cast<size_t>(x) * sizeof(float) * 4u);
+				if (!std::isfinite(values[0]) ||
+					!std::isfinite(values[1]) ||
+					!std::isfinite(values[2]) ||
+					!std::isfinite(values[3]) ||
+					values[0] < 0.0f ||
+					values[1] < 0.0f ||
+					values[2] < 0.0f ||
+					values[2] > 25.0f) {
+					return false;
+				}
+				a_record.centerDepth[index] = values[0];
+				a_record.neighborhoodMinimumDepth[index] = values[1];
+				a_record.hiddenDepthSampleCount[index] =
+					static_cast<uint32_t>(std::lround(values[2]));
+				a_record.clearMask[index] = values[3] >= 0.5f ? 1u : 0u;
+			}
+		}
+		return true;
+	}
+
+	void AnalyzeVRLoadPresentationHAMProbeDelta(
+		VRLoadPresentationHAMProbeRecord& a_record) noexcept
+	{
+		if (!a_record.preLuminanceValid ||
+			!a_record.preAlphaValid ||
+			!a_record.postLuminanceValid ||
+			!a_record.postAlphaValid ||
+			!a_record.depthValid) {
+			return;
+		}
+
+		for (uint32_t i = 0; i < kVRLoadPresentationHAMProbeSampleCount; ++i) {
+			const float pre = a_record.preLuminance[i];
+			const float post = a_record.postLuminance[i];
+			const float delta = post - pre;
+			a_record.luminanceDelta[i] = delta;
+			const float preAlpha = a_record.preAlpha[i];
+			const float postAlpha = a_record.postAlpha[i];
+			a_record.alphaDelta[i] = postAlpha - preAlpha;
+			const bool darkened = delta <= -kVRLoadPresentationHAMProbeMinimumDelta;
+			const bool brightened = delta >= kVRLoadPresentationHAMProbeMinimumDelta;
+			const bool newlyBlack =
+				pre > kVRLoadPresentationProbeBlackLuminance &&
+				post <= kVRLoadPresentationProbeBlackLuminance;
+			const bool newlyWhite =
+				pre < kVRLoadPresentationProbeWhiteLuminance &&
+				post >= kVRLoadPresentationProbeWhiteLuminance;
+			const bool preWhite = pre >= kVRLoadPresentationProbeWhiteLuminance;
+			const bool preBright = pre >= kVRLoadPresentationProbeBrightLuminance;
+			const bool preDark = pre <= kVRLoadPresentationProbeDarkLuminance;
+			const bool preBlack = pre <= kVRLoadPresentationProbeBlackLuminance;
+			const bool postWhite = post >= kVRLoadPresentationProbeWhiteLuminance;
+			const bool postBright = post >= kVRLoadPresentationProbeBrightLuminance;
+			const bool postDark = post <= kVRLoadPresentationProbeDarkLuminance;
+			const bool postBlack = post <= kVRLoadPresentationProbeBlackLuminance;
+			const bool newlyTransparent =
+				preAlpha > kVRLoadPresentationProbeTransparentAlpha &&
+				postAlpha <= kVRLoadPresentationProbeTransparentAlpha;
+			const bool newlyOpaque =
+				preAlpha < kVRLoadPresentationProbeOpaqueAlpha &&
+				postAlpha >= kVRLoadPresentationProbeOpaqueAlpha;
+			const bool masked = a_record.clearMask[i] != 0;
+			if (darkened)
+				++a_record.darkenedSamples;
+			if (brightened)
+				++a_record.brightenedSamples;
+			if (newlyBlack)
+				++a_record.newlyBlackSamples;
+			if (newlyWhite)
+				++a_record.newlyWhiteSamples;
+			if (newlyTransparent)
+				++a_record.newlyTransparentSamples;
+			if (newlyOpaque)
+				++a_record.newlyOpaqueSamples;
+			if (masked) {
+				++a_record.clearMaskSamples;
+				if (preWhite)
+					++a_record.preClearMaskWhiteSamples;
+				if (preBright)
+					++a_record.preClearMaskBrightSamples;
+				if (preDark)
+					++a_record.preClearMaskDarkSamples;
+				if (preBlack)
+					++a_record.preClearMaskBlackSamples;
+				if (postWhite)
+					++a_record.postClearMaskWhiteSamples;
+				if (postBright)
+					++a_record.postClearMaskBrightSamples;
+				if (postDark)
+					++a_record.postClearMaskDarkSamples;
+				if (postBlack)
+					++a_record.postClearMaskBlackSamples;
+				if (darkened)
+					++a_record.clearMaskDarkenedSamples;
+				if (brightened)
+					++a_record.clearMaskBrightenedSamples;
+				if (newlyBlack)
+					++a_record.clearMaskNewlyBlackSamples;
+				if (newlyWhite)
+					++a_record.clearMaskNewlyWhiteSamples;
+				if (newlyTransparent)
+					++a_record.clearMaskNewlyTransparentSamples;
+				if (newlyOpaque)
+					++a_record.clearMaskNewlyOpaqueSamples;
+			} else {
+				++a_record.unmaskedSamples;
+				if (preWhite)
+					++a_record.preUnmaskedWhiteSamples;
+				if (preBright)
+					++a_record.preUnmaskedBrightSamples;
+				if (preDark)
+					++a_record.preUnmaskedDarkSamples;
+				if (preBlack)
+					++a_record.preUnmaskedBlackSamples;
+				if (postWhite)
+					++a_record.postUnmaskedWhiteSamples;
+				if (postBright)
+					++a_record.postUnmaskedBrightSamples;
+				if (postDark)
+					++a_record.postUnmaskedDarkSamples;
+				if (postBlack)
+					++a_record.postUnmaskedBlackSamples;
+				if (darkened)
+					++a_record.unmaskedDarkenedSamples;
+				if (brightened)
+					++a_record.unmaskedBrightenedSamples;
+				if (newlyBlack)
+					++a_record.unmaskedNewlyBlackSamples;
+				if (newlyWhite)
+					++a_record.unmaskedNewlyWhiteSamples;
+				if (newlyTransparent)
+					++a_record.unmaskedNewlyTransparentSamples;
+				if (newlyOpaque)
+					++a_record.unmaskedNewlyOpaqueSamples;
+			}
+		}
+		a_record.deltaValid = true;
+		a_record.alphaDeltaValid = true;
+		const auto isDepthAligned = [](
+										uint32_t a_maskSamples,
+										uint32_t a_maskMatches,
+										uint32_t a_unmaskedSamples,
+										uint32_t a_unmaskedMatches) {
+			if (a_maskSamples < kVRLoadPresentationHAMProbeMinimumTopologySamples ||
+				a_unmaskedSamples < kVRLoadPresentationHAMProbeMinimumTopologySamples) {
+				return false;
+			}
+			const float maskedRatio =
+				static_cast<float>(a_maskMatches) / static_cast<float>(a_maskSamples);
+			const float unmaskedRatio =
+				static_cast<float>(a_unmaskedMatches) / static_cast<float>(a_unmaskedSamples);
+			return maskedRatio >= kVRLoadPresentationHAMProbeMinimumTopologyMatchRatio &&
+			       maskedRatio >=
+			           unmaskedRatio + kVRLoadPresentationHAMProbeMinimumTopologyRatioContrast;
+		};
+		a_record.preDepthAlignedWhiteHAMPattern = isDepthAligned(
+			a_record.clearMaskSamples,
+			a_record.preClearMaskWhiteSamples,
+			a_record.unmaskedSamples,
+			a_record.preUnmaskedWhiteSamples);
+		a_record.preDepthAlignedBrightHAMPattern = isDepthAligned(
+			a_record.clearMaskSamples,
+			a_record.preClearMaskBrightSamples,
+			a_record.unmaskedSamples,
+			a_record.preUnmaskedBrightSamples);
+		a_record.preDepthAlignedBlackHAMPattern = isDepthAligned(
+			a_record.clearMaskSamples,
+			a_record.preClearMaskBlackSamples,
+			a_record.unmaskedSamples,
+			a_record.preUnmaskedBlackSamples);
+		a_record.preDepthAlignedDarkHAMPattern = isDepthAligned(
+			a_record.clearMaskSamples,
+			a_record.preClearMaskDarkSamples,
+			a_record.unmaskedSamples,
+			a_record.preUnmaskedDarkSamples);
+		a_record.postDepthAlignedWhiteHAMPattern = isDepthAligned(
+			a_record.clearMaskSamples,
+			a_record.postClearMaskWhiteSamples,
+			a_record.unmaskedSamples,
+			a_record.postUnmaskedWhiteSamples);
+		a_record.postDepthAlignedBrightHAMPattern = isDepthAligned(
+			a_record.clearMaskSamples,
+			a_record.postClearMaskBrightSamples,
+			a_record.unmaskedSamples,
+			a_record.postUnmaskedBrightSamples);
+		a_record.postDepthAlignedBlackHAMPattern = isDepthAligned(
+			a_record.clearMaskSamples,
+			a_record.postClearMaskBlackSamples,
+			a_record.unmaskedSamples,
+			a_record.postUnmaskedBlackSamples);
+		a_record.postDepthAlignedDarkHAMPattern = isDepthAligned(
+			a_record.clearMaskSamples,
+			a_record.postClearMaskDarkSamples,
+			a_record.unmaskedSamples,
+			a_record.postUnmaskedDarkSamples);
+		const bool preBrightHAM =
+			a_record.preSummary.brightHAMPattern ||
+			a_record.preDepthAlignedBrightHAMPattern;
+		const bool postBrightHAM =
+			a_record.postSummary.brightHAMPattern ||
+			a_record.postDepthAlignedBrightHAMPattern;
+		const bool preDarkHAM =
+			a_record.preSummary.darkHAMPattern ||
+			a_record.preDepthAlignedDarkHAMPattern;
+		const bool postDarkHAM =
+			a_record.postSummary.darkHAMPattern ||
+			a_record.postDepthAlignedDarkHAMPattern;
+		const bool preWhiteHAM =
+			a_record.preSummary.whiteHAMPattern ||
+			a_record.preDepthAlignedWhiteHAMPattern;
+		const bool postWhiteHAM =
+			a_record.postSummary.whiteHAMPattern ||
+			a_record.postDepthAlignedWhiteHAMPattern;
+		const bool preBlackHAM =
+			a_record.preSummary.blackHAMPattern ||
+			a_record.preDepthAlignedBlackHAMPattern;
+		const bool postBlackHAM =
+			a_record.postSummary.blackHAMPattern ||
+			a_record.postDepthAlignedBlackHAMPattern;
+		a_record.introducedBrightHAMPattern =
+			!preBrightHAM && postBrightHAM;
+		a_record.introducedDarkHAMPattern =
+			!preDarkHAM && postDarkHAM;
+		a_record.introducedBlackHAMPattern =
+			!preBlackHAM && postBlackHAM;
+		a_record.removedWhiteHAMPattern =
+			preWhiteHAM && !postWhiteHAM;
+		a_record.removedBrightHAMPattern =
+			preBrightHAM && !postBrightHAM;
+	}
+
+	void PublishVRLoadPresentationHAMProbeRecord(
+		const VRLoadPresentationHAMProbeRecord& a_record) noexcept
+	{
+		if (a_record.sessionID !=
+			vrLoadPresentationProbeSessionID.load(std::memory_order_acquire)) {
+			return;
+		}
+		try {
+			std::scoped_lock lock(vrLoadPresentationProbeMutex);
+			if (a_record.sessionID !=
+				vrLoadPresentationProbeSessionID.load(std::memory_order_acquire)) {
+				return;
+			}
+			vrLoadPresentationHAMProbeRecords[vrLoadPresentationHAMProbeNextIndex] =
+				a_record;
+			vrLoadPresentationHAMProbeNextIndex =
+				(vrLoadPresentationHAMProbeNextIndex + 1u) %
+				kVRLoadPresentationHAMProbeRetentionCapacity;
+			if (vrLoadPresentationHAMProbeCount <
+				kVRLoadPresentationHAMProbeRetentionCapacity) {
+				++vrLoadPresentationHAMProbeCount;
+			} else if (vrLoadPresentationHAMProbeOverwrittenRecords !=
+					   std::numeric_limits<uint32_t>::max()) {
+				++vrLoadPresentationHAMProbeOverwrittenRecords;
+			}
+		} catch (...) {
+			vrLoadPresentationHAMProbeDroppedReadbacks.fetch_add(
+				1,
+				std::memory_order_relaxed);
+		}
+	}
+
+	void AccountAndPublishVRLoadPresentationHAMProbeRecord(
+		const VRLoadPresentationHAMProbeRecord& a_record) noexcept
+	{
+		if (a_record.sessionID !=
+			vrLoadPresentationProbeSessionID.load(std::memory_order_acquire)) {
+			return;
+		}
+		if (a_record.captureStatus ==
+			Upscaling::VRLoadPresentationProbeCaptureStatus::Complete) {
+			vrLoadPresentationHAMProbeCompletedReadbacks.fetch_add(
+				1,
+				std::memory_order_relaxed);
+		} else {
+			vrLoadPresentationHAMProbeDroppedReadbacks.fetch_add(
+				1,
+				std::memory_order_relaxed);
+		}
+		if (a_record.preSummary.brightHAMPattern ||
+			a_record.postSummary.brightHAMPattern ||
+			a_record.preDepthAlignedBrightHAMPattern ||
+			a_record.postDepthAlignedBrightHAMPattern) {
+			vrLoadPresentationHAMProbeBrightCandidates.fetch_add(
+				1,
+				std::memory_order_relaxed);
+		}
+		if (a_record.preSummary.darkHAMPattern ||
+			a_record.postSummary.darkHAMPattern ||
+			a_record.preDepthAlignedDarkHAMPattern ||
+			a_record.postDepthAlignedDarkHAMPattern) {
+			vrLoadPresentationHAMProbeDarkCandidates.fetch_add(
+				1,
+				std::memory_order_relaxed);
+		}
+		switch (a_record.handoff.source) {
+		case VRLoadPresentationHAMProbeHandoffSource::StereoRelease:
+			vrLoadPresentationHAMProbeStereoReleaseRecords.fetch_add(
+				1,
+				std::memory_order_relaxed);
+			break;
+		case VRLoadPresentationHAMProbeHandoffSource::TimeoutRelease:
+			vrLoadPresentationHAMProbeTimeoutReleaseRecords.fetch_add(
+				1,
+				std::memory_order_relaxed);
+			break;
+		default:
+			break;
+		}
+		PublishVRLoadPresentationHAMProbeRecord(a_record);
+	}
+
+	void ResetVRLoadPresentationHAMProbeSlotResources(
+		VRLoadPresentationHAMProbePendingReadback& a_pending) noexcept
+	{
+		a_pending.colorFormat = DXGI_FORMAT_UNKNOWN;
+		a_pending.colorBytesPerPixel = 0;
+		a_pending.ownerDevice = nullptr;
+		a_pending.preColorStagingTexture = nullptr;
+		a_pending.postColorStagingTexture = nullptr;
+		a_pending.depthProbeTexture = nullptr;
+		a_pending.depthProbeUAV = nullptr;
+		a_pending.depthProbeStagingTexture = nullptr;
+		a_pending.completionQuery = nullptr;
+	}
+
+	void ResetVRLoadPresentationHAMProbeShaderResources() noexcept
+	{
+		vrLoadPresentationHAMProbeCS = nullptr;
+		vrLoadPresentationHAMProbeCB = nullptr;
+		vrLoadPresentationHAMProbeResourceDevice = nullptr;
+		vrLoadPresentationHAMProbeWarmAttempted = false;
+		vrLoadPresentationHAMProbeWarmReady = false;
+		vrLoadPresentationHAMProbeWarmAttemptCount = 0;
+		vrLoadPresentationHAMProbeWarmAttemptFrame = 0;
+		vrLoadPresentationHAMProbeWarmAttemptDevice = nullptr;
+		vrLoadPresentationHAMProbeWarmAttemptFormat = DXGI_FORMAT_UNKNOWN;
+	}
+
+	bool EnsureVRLoadPresentationHAMProbeShaderResources(
+		ID3D11Device* a_device) noexcept
+	{
+		if (!a_device)
+			return false;
+		try {
+			if (vrLoadPresentationHAMProbeResourceDevice.get() != a_device) {
+				ResetVRLoadPresentationHAMProbeShaderResources();
+				vrLoadPresentationHAMProbeResourceDevice.copy_from(a_device);
+			}
+			if (!vrLoadPresentationHAMProbeCS) {
+				vrLoadPresentationHAMProbeCS.attach(
+					static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+						L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl",
+						{},
+						"cs_5_0",
+						"DevBenchHAMProbeMain")));
+			}
+			if (!vrLoadPresentationHAMProbeCB) {
+				D3D11_BUFFER_DESC bufferDesc{};
+				bufferDesc.ByteWidth = sizeof(uint32_t) * 8u;
+				bufferDesc.Usage = D3D11_USAGE_DEFAULT;
+				bufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+				if (FAILED(a_device->CreateBuffer(
+						&bufferDesc,
+						nullptr,
+						vrLoadPresentationHAMProbeCB.put()))) {
+					vrLoadPresentationHAMProbeCB = nullptr;
+				}
+			}
+		} catch (...) {
+			ResetVRLoadPresentationHAMProbeShaderResources();
+			return false;
+		}
+		return vrLoadPresentationHAMProbeCS && vrLoadPresentationHAMProbeCB;
+	}
+
+	bool EnsureVRLoadPresentationHAMProbePendingResources(
+		VRLoadPresentationHAMProbePendingReadback& a_pending,
+		ID3D11Device* a_device,
+		DXGI_FORMAT a_colorFormat,
+		uint32_t a_colorBytesPerPixel) noexcept
+	{
+		if (!a_device || !a_colorBytesPerPixel)
+			return false;
+		try {
+			if (a_pending.ownerDevice.get() != a_device) {
+				ResetVRLoadPresentationHAMProbeSlotResources(a_pending);
+				a_pending.ownerDevice.copy_from(a_device);
+			}
+			if (a_pending.colorFormat != a_colorFormat) {
+				a_pending.preColorStagingTexture = nullptr;
+				a_pending.postColorStagingTexture = nullptr;
+				a_pending.colorFormat = a_colorFormat;
+				a_pending.colorBytesPerPixel = a_colorBytesPerPixel;
+			}
+
+			if (!a_pending.preColorStagingTexture ||
+				!a_pending.postColorStagingTexture) {
+				D3D11_TEXTURE2D_DESC colorStagingDesc{};
+				colorStagingDesc.Width = kVRLoadPresentationHAMProbeGridSize;
+				colorStagingDesc.Height = kVRLoadPresentationHAMProbeGridSize;
+				colorStagingDesc.MipLevels = 1;
+				colorStagingDesc.ArraySize = 1;
+				colorStagingDesc.Format = a_colorFormat;
+				colorStagingDesc.SampleDesc.Count = 1;
+				colorStagingDesc.Usage = D3D11_USAGE_STAGING;
+				colorStagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+				if (!a_pending.preColorStagingTexture &&
+					FAILED(a_device->CreateTexture2D(
+						&colorStagingDesc,
+						nullptr,
+						a_pending.preColorStagingTexture.put()))) {
+					return false;
+				}
+				if (!a_pending.postColorStagingTexture &&
+					FAILED(a_device->CreateTexture2D(
+						&colorStagingDesc,
+						nullptr,
+						a_pending.postColorStagingTexture.put()))) {
+					return false;
+				}
+			}
+
+			if (!a_pending.depthProbeTexture ||
+				!a_pending.depthProbeUAV ||
+				!a_pending.depthProbeStagingTexture) {
+				D3D11_TEXTURE2D_DESC depthProbeDesc{};
+				depthProbeDesc.Width = kVRLoadPresentationHAMProbeGridSize;
+				depthProbeDesc.Height = kVRLoadPresentationHAMProbeGridSize;
+				depthProbeDesc.MipLevels = 1;
+				depthProbeDesc.ArraySize = 1;
+				depthProbeDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+				depthProbeDesc.SampleDesc.Count = 1;
+				depthProbeDesc.Usage = D3D11_USAGE_DEFAULT;
+				depthProbeDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+				if (!a_pending.depthProbeTexture &&
+					FAILED(a_device->CreateTexture2D(
+						&depthProbeDesc,
+						nullptr,
+						a_pending.depthProbeTexture.put()))) {
+					return false;
+				}
+				if (!a_pending.depthProbeUAV &&
+					FAILED(a_device->CreateUnorderedAccessView(
+						a_pending.depthProbeTexture.get(),
+						nullptr,
+						a_pending.depthProbeUAV.put()))) {
+					return false;
+				}
+				if (!a_pending.depthProbeStagingTexture) {
+					depthProbeDesc.Usage = D3D11_USAGE_STAGING;
+					depthProbeDesc.BindFlags = 0;
+					depthProbeDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+					if (FAILED(a_device->CreateTexture2D(
+							&depthProbeDesc,
+							nullptr,
+							a_pending.depthProbeStagingTexture.put()))) {
+						return false;
+					}
+				}
+			}
+
+			if (!a_pending.completionQuery) {
+				D3D11_QUERY_DESC queryDesc{};
+				queryDesc.Query = D3D11_QUERY_EVENT;
+				if (FAILED(a_device->CreateQuery(
+						&queryDesc,
+						a_pending.completionQuery.put()))) {
+					return false;
+				}
+			}
+		} catch (...) {
+			return false;
+		}
+		return a_pending.preColorStagingTexture &&
+		       a_pending.postColorStagingTexture &&
+		       a_pending.depthProbeTexture &&
+		       a_pending.depthProbeUAV &&
+		       a_pending.depthProbeStagingTexture &&
+		       a_pending.completionQuery;
+	}
+
+	bool IsVRLoadPresentationHAMProbePendingReady(
+		const VRLoadPresentationHAMProbePendingReadback& a_pending,
+		ID3D11Device* a_device,
+		DXGI_FORMAT a_colorFormat,
+		uint32_t a_colorBytesPerPixel) noexcept
+	{
+		return a_pending.ownerDevice.get() == a_device &&
+		       a_pending.colorFormat == a_colorFormat &&
+		       a_pending.colorBytesPerPixel == a_colorBytesPerPixel &&
+		       a_pending.preColorStagingTexture &&
+		       a_pending.postColorStagingTexture &&
+		       a_pending.depthProbeTexture &&
+		       a_pending.depthProbeUAV &&
+		       a_pending.depthProbeStagingTexture &&
+		       a_pending.completionQuery;
+	}
+
+	void WarmVRLoadPresentationHAMProbeResources(
+		ID3D11UnorderedAccessView* a_colorUAV) noexcept
+	{
+		if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire) ||
+			!a_colorUAV) {
+			return;
+		}
+		try {
+			D3D11_UNORDERED_ACCESS_VIEW_DESC colorViewDesc{};
+			a_colorUAV->GetDesc(&colorViewDesc);
+			if (colorViewDesc.ViewDimension != D3D11_UAV_DIMENSION_TEXTURE2D)
+				return;
+			const uint32_t colorBytesPerPixel =
+				GetVRLoadPresentationProbeBytesPerPixel(colorViewDesc.Format);
+			auto* device = globals::d3d::device;
+			if (!device || !colorBytesPerPixel)
+				return;
+			const bool sameTarget =
+				vrLoadPresentationHAMProbeWarmAttempted &&
+				vrLoadPresentationHAMProbeWarmAttemptDevice == device &&
+				vrLoadPresentationHAMProbeWarmAttemptFormat == colorViewDesc.Format;
+			if (!sameTarget) {
+				vrLoadPresentationHAMProbeWarmReady = false;
+				vrLoadPresentationHAMProbeWarmAttemptCount = 0;
+				vrLoadPresentationHAMProbeWarmAttemptFrame = 0;
+			}
+			const uint32_t currentFrame =
+				globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
+			if ((sameTarget && vrLoadPresentationHAMProbeWarmReady) ||
+				(sameTarget && vrLoadPresentationHAMProbeWarmAttemptFrame == currentFrame) ||
+				(sameTarget &&
+					vrLoadPresentationHAMProbeWarmAttemptCount >=
+						kVRLoadPresentationHAMProbeMaximumWarmAttempts)) {
+				return;
+			}
+			const uint32_t nextAttemptCount =
+				sameTarget ? vrLoadPresentationHAMProbeWarmAttemptCount + 1u : 1u;
+			bool shaderReady = true;
+			if (!vrLoadPresentationHAMProbeCS ||
+				!vrLoadPresentationHAMProbeCB ||
+				vrLoadPresentationHAMProbeResourceDevice.get() != device) {
+				shaderReady = EnsureVRLoadPresentationHAMProbeShaderResources(device);
+			}
+			vrLoadPresentationHAMProbeWarmAttempted = true;
+			vrLoadPresentationHAMProbeWarmReady = false;
+			vrLoadPresentationHAMProbeWarmAttemptDevice = device;
+			vrLoadPresentationHAMProbeWarmAttemptFormat = colorViewDesc.Format;
+			vrLoadPresentationHAMProbeWarmAttemptFrame = currentFrame;
+			vrLoadPresentationHAMProbeWarmAttemptCount = nextAttemptCount;
+			if (!shaderReady) {
+				vrLoadPresentationHAMProbeWarmAttemptCount =
+					kVRLoadPresentationHAMProbeMaximumWarmAttempts;
+				return;
+			}
+			for (auto& pending : vrLoadPresentationHAMProbePending) {
+				if (pending.state != VRLoadPresentationHAMProbePendingState::Free)
+					continue;
+				(void)EnsureVRLoadPresentationHAMProbePendingResources(
+					pending,
+					device,
+					colorViewDesc.Format,
+					colorBytesPerPixel);
+			}
+			uint32_t readySlots = 0;
+			for (const auto& pending : vrLoadPresentationHAMProbePending) {
+				if (pending.state == VRLoadPresentationHAMProbePendingState::Free &&
+					IsVRLoadPresentationHAMProbePendingReady(
+						pending,
+						device,
+						colorViewDesc.Format,
+						colorBytesPerPixel)) {
+					++readySlots;
+				}
+			}
+			vrLoadPresentationHAMProbeWarmReady =
+				readySlots >= kVRLoadPresentationHAMProbeRequiredWarmSlots;
+		} catch (...) {
+			// Diagnostic prewarming is fail-open and must never affect the real clear.
+		}
+	}
+
+	VRLoadPresentationHAMCaptureToken BeginVRLoadPresentationHAMCapture(
+		uint64_t a_dispatchSequence,
+		uint32_t a_frame,
+		uint32_t a_eyeIndex,
+		uint32_t a_phase,
+		const VRLoadPresentationHAMProbeHandoff& a_handoff,
+		ID3D11UnorderedAccessView* a_colorUAV,
+		ID3D11ShaderResourceView* a_depthSRV,
+		uint32_t a_depthWidth,
+		uint32_t a_depthHeight,
+		uint32_t a_colorWidth,
+		uint32_t a_colorHeight,
+		uint32_t a_depthOffsetX,
+		uint32_t a_colorOffsetX,
+		uint32_t a_depthOffsetY,
+		uint32_t a_colorOffsetY) noexcept
+	{
+		VRLoadPresentationHAMCaptureToken token{};
+		if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire))
+			return token;
+
+		token.requested = true;
+		auto& record = token.record;
+		record.sequence =
+			vrLoadPresentationHAMProbeNextSequence.fetch_add(1, std::memory_order_relaxed);
+		record.sessionID =
+			vrLoadPresentationProbeSessionID.load(std::memory_order_acquire);
+		record.dispatchSequence = a_dispatchSequence;
+		record.queuedQpc = QueryVRLoadPresentationProbeQpc();
+		record.frame = a_frame;
+		record.eyeIndex = a_eyeIndex;
+		record.phase = a_phase;
+		record.handoff = a_handoff;
+		record.depthWidth = a_depthWidth;
+		record.depthHeight = a_depthHeight;
+		record.depthOffsetX = a_depthOffsetX;
+		record.depthOffsetY = a_depthOffsetY;
+		record.colorWidth = a_colorWidth;
+		record.colorHeight = a_colorHeight;
+		record.colorOffsetX = a_colorOffsetX;
+		record.colorOffsetY = a_colorOffsetY;
+
+		const auto fail = [&](Upscaling::VRLoadPresentationProbeCaptureStatus a_status) {
+			record.captureStatus = a_status;
+			return token;
+		};
+		if (!a_colorUAV || !a_depthSRV ||
+			!a_depthWidth || !a_depthHeight ||
+			!a_colorWidth || !a_colorHeight) {
+			return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::InvalidTexture);
+		}
+
+		try {
+			winrt::com_ptr<ID3D11Resource> colorResource;
+			winrt::com_ptr<ID3D11Resource> depthResource;
+			a_colorUAV->GetResource(colorResource.put());
+			a_depthSRV->GetResource(depthResource.put());
+			if (!colorResource || !depthResource)
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::InvalidTexture);
+			record.colorIdentity = GetCOMIdentityAddress(colorResource.get());
+			record.depthIdentity = GetCOMIdentityAddress(depthResource.get());
+
+			winrt::com_ptr<ID3D11Texture2D> colorTexture;
+			winrt::com_ptr<ID3D11Texture2D> depthTexture;
+			if (FAILED(colorResource->QueryInterface(IID_PPV_ARGS(colorTexture.put()))) ||
+				FAILED(depthResource->QueryInterface(IID_PPV_ARGS(depthTexture.put()))) ||
+				!colorTexture || !depthTexture) {
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::UnsupportedTexture);
+			}
+
+			D3D11_UNORDERED_ACCESS_VIEW_DESC colorViewDesc{};
+			D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDesc{};
+			a_colorUAV->GetDesc(&colorViewDesc);
+			a_depthSRV->GetDesc(&depthViewDesc);
+			if (colorViewDesc.ViewDimension != D3D11_UAV_DIMENSION_TEXTURE2D ||
+				depthViewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+				!IsVRLoadPresentationHAMProbeDepthFormat(depthViewDesc.Format)) {
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::UnsupportedTexture);
+			}
+
+			D3D11_TEXTURE2D_DESC colorDesc{};
+			D3D11_TEXTURE2D_DESC depthDesc{};
+			colorTexture->GetDesc(&colorDesc);
+			depthTexture->GetDesc(&depthDesc);
+			record.colorResourceWidth = colorDesc.Width;
+			record.colorResourceHeight = colorDesc.Height;
+			record.colorResourceFormat = static_cast<uint32_t>(colorDesc.Format);
+			record.colorViewFormat = static_cast<uint32_t>(colorViewDesc.Format);
+			record.colorHasAlphaChannel =
+				HasVRLoadPresentationProbeAlphaChannel(colorViewDesc.Format);
+			record.depthResourceFormat = static_cast<uint32_t>(depthDesc.Format);
+			record.depthViewFormat = static_cast<uint32_t>(depthViewDesc.Format);
+			const uint32_t colorMip = colorViewDesc.Texture2D.MipSlice;
+			const uint32_t depthMip = depthViewDesc.Texture2D.MostDetailedMip;
+			record.depthViewMip = depthMip;
+			if (!colorDesc.Width || !colorDesc.Height ||
+				!depthDesc.Width || !depthDesc.Height ||
+				colorDesc.ArraySize != 1 || depthDesc.ArraySize != 1 ||
+				colorDesc.SampleDesc.Count != 1 || depthDesc.SampleDesc.Count != 1 ||
+				colorMip >= colorDesc.MipLevels || depthMip >= depthDesc.MipLevels ||
+				(colorDesc.BindFlags & D3D11_BIND_DEPTH_STENCIL) != 0 ||
+				!AreVRLoadPresentationProbeCopyFormatsCompatible(
+					colorDesc.Format,
+					colorViewDesc.Format)) {
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::UnsupportedTexture);
+			}
+
+			const uint32_t colorViewWidth = std::max(colorDesc.Width >> colorMip, 1u);
+			const uint32_t colorViewHeight = std::max(colorDesc.Height >> colorMip, 1u);
+			const uint32_t depthViewWidth = std::max(depthDesc.Width >> depthMip, 1u);
+			const uint32_t depthViewHeight = std::max(depthDesc.Height >> depthMip, 1u);
+			if (a_colorOffsetX >= colorViewWidth ||
+				a_colorOffsetY >= colorViewHeight ||
+				a_colorWidth > colorViewWidth - a_colorOffsetX ||
+				a_colorHeight > colorViewHeight - a_colorOffsetY ||
+				a_depthOffsetX >= depthViewWidth ||
+				a_depthOffsetY >= depthViewHeight ||
+				a_depthWidth > depthViewWidth - a_depthOffsetX ||
+				a_depthHeight > depthViewHeight - a_depthOffsetY) {
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::UnsupportedTexture);
+			}
+
+			const uint32_t colorBytesPerPixel =
+				GetVRLoadPresentationProbeBytesPerPixel(colorViewDesc.Format);
+			if (!colorBytesPerPixel)
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::UnsupportedTexture);
+
+			auto* device = globals::d3d::device;
+			auto* context = globals::d3d::context;
+			winrt::com_ptr<ID3D11Device> colorDevice;
+			winrt::com_ptr<ID3D11Device> depthDevice;
+			winrt::com_ptr<ID3D11Device> contextDevice;
+			colorTexture->GetDevice(colorDevice.put());
+			depthTexture->GetDevice(depthDevice.put());
+			if (context)
+				context->GetDevice(contextDevice.put());
+			if (!device || !context ||
+				!colorDevice || !depthDevice || !contextDevice ||
+				colorDevice.get() != device ||
+				depthDevice.get() != device ||
+				contextDevice.get() != device) {
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+			}
+			record.colorSubresource =
+				D3D11CalcSubresource(colorMip, 0, colorDesc.MipLevels);
+			record.depthViewWidth = depthViewWidth;
+			record.depthViewHeight = depthViewHeight;
+
+			const auto freeIt = std::find_if(
+				vrLoadPresentationHAMProbePending.begin(),
+				vrLoadPresentationHAMProbePending.end(),
+				[](const VRLoadPresentationHAMProbePendingReadback& a_pending) {
+					return a_pending.state == VRLoadPresentationHAMProbePendingState::Free;
+				});
+			if (freeIt == vrLoadPresentationHAMProbePending.end())
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::QueueSaturated);
+			auto pendingIt = std::find_if(
+				vrLoadPresentationHAMProbePending.begin(),
+				vrLoadPresentationHAMProbePending.end(),
+				[&](const VRLoadPresentationHAMProbePendingReadback& a_pending) {
+					return a_pending.state == VRLoadPresentationHAMProbePendingState::Free &&
+				           IsVRLoadPresentationHAMProbePendingReady(
+							   a_pending,
+							   device,
+							   colorViewDesc.Format,
+							   colorBytesPerPixel);
+				});
+			if (pendingIt == vrLoadPresentationHAMProbePending.end())
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+
+			auto& pending = *pendingIt;
+			pending.state = VRLoadPresentationHAMProbePendingState::Capturing;
+			pending.sequence = record.sequence;
+			const uint32_t slotIndex =
+				static_cast<uint32_t>(
+					pendingIt - vrLoadPresentationHAMProbePending.begin());
+			token.slotIndex = slotIndex;
+			const auto releaseReservation = [&]() {
+				pending.state = VRLoadPresentationHAMProbePendingState::Free;
+				pending.sequence = 0;
+				pending.record = {};
+				token.slotIndex = kVRLoadPresentationHAMProbeInvalidSlot;
+			};
+
+			if (!vrLoadPresentationHAMProbeCS ||
+				!vrLoadPresentationHAMProbeCB ||
+				vrLoadPresentationHAMProbeResourceDevice.get() != device) {
+				releaseReservation();
+				return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+			}
+
+			for (uint32_t y = 0; y < kVRLoadPresentationHAMProbeGridSize; ++y) {
+				for (uint32_t x = 0; x < kVRLoadPresentationHAMProbeGridSize; ++x) {
+					const uint32_t sourceX =
+						a_colorOffsetX +
+						ResolveVRLoadPresentationHAMProbeCoordinate(x, a_colorWidth);
+					const uint32_t sourceY =
+						a_colorOffsetY +
+						ResolveVRLoadPresentationHAMProbeCoordinate(y, a_colorHeight);
+					const D3D11_BOX sourceBox{
+						sourceX,
+						sourceY,
+						0u,
+						sourceX + 1u,
+						sourceY + 1u,
+						1u
+					};
+					context->CopySubresourceRegion(
+						pending.preColorStagingTexture.get(),
+						0,
+						x,
+						y,
+						0,
+						colorTexture.get(),
+						record.colorSubresource,
+						&sourceBox);
+				}
+			}
+
+			const uint32_t probeParams[8] = {
+				a_depthOffsetX,
+				a_colorOffsetX,
+				a_depthOffsetY,
+				a_colorOffsetY,
+				a_depthWidth,
+				a_depthHeight,
+				a_colorWidth,
+				a_colorHeight
+			};
+			context->UpdateSubresource(
+				vrLoadPresentationHAMProbeCB.get(),
+				0,
+				nullptr,
+				probeParams,
+				0,
+				0);
+			context->CSSetShader(vrLoadPresentationHAMProbeCS.get(), nullptr, 0);
+			ID3D11ShaderResourceView* depthViews[1] = { a_depthSRV };
+			ID3D11UnorderedAccessView* probeViews[1] = { pending.depthProbeUAV.get() };
+			ID3D11Buffer* probeBuffers[1] = { vrLoadPresentationHAMProbeCB.get() };
+			context->CSSetShaderResources(0, 1, depthViews);
+			context->CSSetUnorderedAccessViews(0, 1, probeViews, nullptr);
+			context->CSSetConstantBuffers(0, 1, probeBuffers);
+			context->Dispatch(1, 1, 1);
+			ID3D11ShaderResourceView* nullSRVs[1] = { nullptr };
+			ID3D11UnorderedAccessView* nullUAVs[1] = { nullptr };
+			ID3D11Buffer* nullCBs[1] = { nullptr };
+			context->CSSetShaderResources(0, 1, nullSRVs);
+			context->CSSetUnorderedAccessViews(0, 1, nullUAVs, nullptr);
+			context->CSSetConstantBuffers(0, 1, nullCBs);
+			context->CSSetShader(nullptr, nullptr, 0);
+
+			pending.record = record;
+			return token;
+		} catch (...) {
+			if (token.slotIndex != kVRLoadPresentationHAMProbeInvalidSlot) {
+				auto& pending = vrLoadPresentationHAMProbePending[token.slotIndex];
+				pending.state = VRLoadPresentationHAMProbePendingState::Free;
+				pending.sequence = 0;
+				pending.record = {};
+				token.slotIndex = kVRLoadPresentationHAMProbeInvalidSlot;
+			}
+			return fail(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+		}
+	}
+
+	void CompleteVRLoadPresentationHAMCapture(
+		VRLoadPresentationHAMCaptureToken& a_token,
+		bool a_clearExecuted,
+		ID3D11UnorderedAccessView* a_colorUAV) noexcept
+	{
+		if (!a_token.requested)
+			return;
+		a_token.record.clearExecuted = a_clearExecuted;
+
+		const auto publishFailure = [&](Upscaling::VRLoadPresentationProbeCaptureStatus a_status) {
+			a_token.record.captureStatus = a_status;
+			a_token.record.completedQpc = QueryVRLoadPresentationProbeQpc();
+			AccountAndPublishVRLoadPresentationHAMProbeRecord(a_token.record);
+		};
+		if (a_token.slotIndex == kVRLoadPresentationHAMProbeInvalidSlot) {
+			publishFailure(a_token.record.captureStatus);
+			return;
+		}
+		if (a_token.slotIndex >= vrLoadPresentationHAMProbePending.size()) {
+			publishFailure(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+			return;
+		}
+
+		auto& pending = vrLoadPresentationHAMProbePending[a_token.slotIndex];
+		const auto releaseReservation = [&]() {
+			pending.state = VRLoadPresentationHAMProbePendingState::Free;
+			pending.sequence = 0;
+			pending.record = {};
+			a_token.slotIndex = kVRLoadPresentationHAMProbeInvalidSlot;
+		};
+		if (pending.state != VRLoadPresentationHAMProbePendingState::Capturing ||
+			pending.sequence != a_token.record.sequence) {
+			publishFailure(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+			return;
+		}
+		if (!a_clearExecuted || !a_colorUAV) {
+			releaseReservation();
+			publishFailure(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+			return;
+		}
+
+		try {
+			winrt::com_ptr<ID3D11Resource> colorResource;
+			a_colorUAV->GetResource(colorResource.put());
+			winrt::com_ptr<ID3D11Texture2D> colorTexture;
+			if (!colorResource ||
+				FAILED(colorResource->QueryInterface(IID_PPV_ARGS(colorTexture.put()))) ||
+				!colorTexture ||
+				GetCOMIdentityAddress(colorResource.get()) != pending.record.colorIdentity) {
+				releaseReservation();
+				publishFailure(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+				return;
+			}
+
+			auto* context = globals::d3d::context;
+			winrt::com_ptr<ID3D11Device> contextDevice;
+			if (context)
+				context->GetDevice(contextDevice.put());
+			if (!context ||
+				!contextDevice ||
+				contextDevice.get() != pending.ownerDevice.get() ||
+				!pending.postColorStagingTexture ||
+				!pending.depthProbeTexture ||
+				!pending.depthProbeStagingTexture ||
+				!pending.completionQuery) {
+				releaseReservation();
+				publishFailure(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+				return;
+			}
+
+			for (uint32_t y = 0; y < kVRLoadPresentationHAMProbeGridSize; ++y) {
+				for (uint32_t x = 0; x < kVRLoadPresentationHAMProbeGridSize; ++x) {
+					const uint32_t sourceX =
+						pending.record.colorOffsetX +
+						ResolveVRLoadPresentationHAMProbeCoordinate(
+							x,
+							pending.record.colorWidth);
+					const uint32_t sourceY =
+						pending.record.colorOffsetY +
+						ResolveVRLoadPresentationHAMProbeCoordinate(
+							y,
+							pending.record.colorHeight);
+					const D3D11_BOX sourceBox{
+						sourceX,
+						sourceY,
+						0u,
+						sourceX + 1u,
+						sourceY + 1u,
+						1u
+					};
+					context->CopySubresourceRegion(
+						pending.postColorStagingTexture.get(),
+						0,
+						x,
+						y,
+						0,
+						colorTexture.get(),
+						pending.record.colorSubresource,
+						&sourceBox);
+				}
+			}
+			context->CopyResource(
+				pending.depthProbeStagingTexture.get(),
+				pending.depthProbeTexture.get());
+			context->End(pending.completionQuery.get());
+
+			pending.record.clearExecuted = true;
+			pending.state = VRLoadPresentationHAMProbePendingState::Pending;
+			a_token.slotIndex = kVRLoadPresentationHAMProbeInvalidSlot;
+			vrLoadPresentationHAMProbePendingReadbacks.fetch_add(
+				1,
+				std::memory_order_relaxed);
+			vrLoadPresentationHAMProbeQueuedReadbacks.fetch_add(
+				1,
+				std::memory_order_relaxed);
+		} catch (...) {
+			releaseReservation();
+			publishFailure(Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure);
+		}
+	}
+
+	void ServiceVRLoadPresentationHAMProbeReadbacks(
+		ID3D11DeviceContext* a_context) noexcept
+	{
+		if (!a_context)
+			return;
+		winrt::com_ptr<ID3D11Device> contextDevice;
+		a_context->GetDevice(contextDevice.put());
+		if (!contextDevice)
+			return;
+
+		for (auto& pending : vrLoadPresentationHAMProbePending) {
+			if (pending.state != VRLoadPresentationHAMProbePendingState::Pending ||
+				!pending.completionQuery ||
+				!pending.preColorStagingTexture ||
+				!pending.postColorStagingTexture ||
+				!pending.depthProbeStagingTexture) {
+				continue;
+			}
+			if (pending.ownerDevice.get() != contextDevice.get()) {
+				auto record = pending.record;
+				record.completedQpc = QueryVRLoadPresentationProbeQpc();
+				record.captureStatus =
+					Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure;
+				pending.state = VRLoadPresentationHAMProbePendingState::Free;
+				pending.sequence = 0;
+				pending.record = {};
+				ResetVRLoadPresentationHAMProbeSlotResources(pending);
+				vrLoadPresentationHAMProbePendingReadbacks.fetch_sub(
+					1,
+					std::memory_order_relaxed);
+				AccountAndPublishVRLoadPresentationHAMProbeRecord(record);
+				continue;
+			}
+
+			const HRESULT queryResult = a_context->GetData(
+				pending.completionQuery.get(),
+				nullptr,
+				0,
+				D3D11_ASYNC_GETDATA_DONOTFLUSH);
+			if (queryResult == S_FALSE)
+				continue;
+
+			auto record = pending.record;
+			record.completedQpc = QueryVRLoadPresentationProbeQpc();
+			bool defer = false;
+			bool preMapped = false;
+			bool depthMapped = false;
+			bool postMapped = false;
+			D3D11_MAPPED_SUBRESOURCE preMap{};
+			D3D11_MAPPED_SUBRESOURCE depthMap{};
+			D3D11_MAPPED_SUBRESOURCE postMap{};
+			if (FAILED(queryResult)) {
+				record.captureStatus =
+					Upscaling::VRLoadPresentationProbeCaptureStatus::ResourceFailure;
+			} else {
+				const HRESULT preResult = a_context->Map(
+					pending.preColorStagingTexture.get(),
+					0,
+					D3D11_MAP_READ,
+					D3D11_MAP_FLAG_DO_NOT_WAIT,
+					&preMap);
+				if (preResult == DXGI_ERROR_WAS_STILL_DRAWING) {
+					defer = true;
+				} else if (SUCCEEDED(preResult) && preMap.pData) {
+					preMapped = true;
+				} else {
+					record.captureStatus =
+						Upscaling::VRLoadPresentationProbeCaptureStatus::MapFailure;
+				}
+
+				if (!defer && preMapped) {
+					const HRESULT depthResult = a_context->Map(
+						pending.depthProbeStagingTexture.get(),
+						0,
+						D3D11_MAP_READ,
+						D3D11_MAP_FLAG_DO_NOT_WAIT,
+						&depthMap);
+					if (depthResult == DXGI_ERROR_WAS_STILL_DRAWING) {
+						defer = true;
+					} else if (SUCCEEDED(depthResult) && depthMap.pData) {
+						depthMapped = true;
+					} else {
+						record.captureStatus =
+							Upscaling::VRLoadPresentationProbeCaptureStatus::MapFailure;
+					}
+				}
+
+				if (!defer && preMapped && depthMapped) {
+					const HRESULT postResult = a_context->Map(
+						pending.postColorStagingTexture.get(),
+						0,
+						D3D11_MAP_READ,
+						D3D11_MAP_FLAG_DO_NOT_WAIT,
+						&postMap);
+					if (postResult == DXGI_ERROR_WAS_STILL_DRAWING) {
+						defer = true;
+					} else if (SUCCEEDED(postResult) && postMap.pData) {
+						postMapped = true;
+					} else {
+						record.captureStatus =
+							Upscaling::VRLoadPresentationProbeCaptureStatus::MapFailure;
+					}
+				}
+
+				if (!defer && preMapped && depthMapped && postMapped) {
+					record.preLuminanceValid =
+						AnalyzeVRLoadPresentationHAMProbeLuminance(
+							pending.colorFormat,
+							pending.colorBytesPerPixel,
+							preMap,
+							record.preLuminance,
+							record.preSummary,
+							record.preAlpha,
+							record.preAlphaSummary);
+					record.preAlphaValid = record.preAlphaSummary.valid;
+					record.depthValid =
+						AnalyzeVRLoadPresentationHAMProbeDepth(depthMap, record);
+					record.postLuminanceValid =
+						AnalyzeVRLoadPresentationHAMProbeLuminance(
+							pending.colorFormat,
+							pending.colorBytesPerPixel,
+							postMap,
+							record.postLuminance,
+							record.postSummary,
+							record.postAlpha,
+							record.postAlphaSummary);
+					record.postAlphaValid = record.postAlphaSummary.valid;
+					AnalyzeVRLoadPresentationHAMProbeDelta(record);
+					record.captureStatus =
+						record.preLuminanceValid &&
+								record.depthValid &&
+								record.postLuminanceValid &&
+								record.preAlphaValid &&
+								record.postAlphaValid &&
+								record.deltaValid &&
+								record.alphaDeltaValid ?
+							Upscaling::VRLoadPresentationProbeCaptureStatus::Complete :
+							Upscaling::VRLoadPresentationProbeCaptureStatus::MapFailure;
+				}
+			}
+
+			if (postMapped)
+				a_context->Unmap(pending.postColorStagingTexture.get(), 0);
+			if (depthMapped)
+				a_context->Unmap(pending.depthProbeStagingTexture.get(), 0);
+			if (preMapped)
+				a_context->Unmap(pending.preColorStagingTexture.get(), 0);
+			if (defer)
+				continue;
+
+			pending.state = VRLoadPresentationHAMProbePendingState::Free;
+			pending.sequence = 0;
+			pending.record = {};
+			vrLoadPresentationHAMProbePendingReadbacks.fetch_sub(
+				1,
+				std::memory_order_relaxed);
+			AccountAndPublishVRLoadPresentationHAMProbeRecord(record);
+		}
+	}
 
 	void ResetVRLoadPresentationProbeRetainedState()
 	{
@@ -25667,12 +27722,43 @@ namespace
 			vrLoadPresentationProbeNextIndex = 0;
 			vrLoadPresentationProbeCount = 0;
 			vrLoadPresentationProbeOverwrittenRecords = 0;
+			vrLoadPresentationHAMProbeNextIndex = 0;
+			vrLoadPresentationHAMProbeCount = 0;
+			vrLoadPresentationHAMProbeOverwrittenRecords = 0;
+		}
+		{
+			std::scoped_lock lock(vrLoadPresentationProbeObservationMutex);
+			vrLoadPresentationHMDMaskObservations = {};
 		}
 		vrLoadPresentationProbeQueuedReadbacks.store(0, std::memory_order_release);
 		vrLoadPresentationProbeCompletedReadbacks.store(0, std::memory_order_release);
 		vrLoadPresentationProbeDroppedReadbacks.store(0, std::memory_order_release);
 		vrLoadPresentationProbeBrightCandidates.store(0, std::memory_order_release);
 		vrLoadPresentationProbeHAMCandidates.store(0, std::memory_order_release);
+		vrLoadPresentationProbeBlackCandidates.store(0, std::memory_order_release);
+		vrLoadPresentationProbeHAMBlackCandidates.store(0, std::memory_order_release);
+		vrLoadPresentationProbeHAMDarkCandidates.store(0, std::memory_order_release);
+		vrLoadPresentationHAMProbeQueuedReadbacks.store(0, std::memory_order_release);
+		vrLoadPresentationHAMProbeCompletedReadbacks.store(0, std::memory_order_release);
+		vrLoadPresentationHAMProbeDroppedReadbacks.store(0, std::memory_order_release);
+		vrLoadPresentationHAMProbeBrightCandidates.store(0, std::memory_order_release);
+		vrLoadPresentationHAMProbeDarkCandidates.store(0, std::memory_order_release);
+		vrLoadPresentationHAMProbeStereoReleaseRecords.store(
+			0,
+			std::memory_order_release);
+		vrLoadPresentationHAMProbeTimeoutReleaseRecords.store(
+			0,
+			std::memory_order_release);
+		vrLoadPresentationHAMProbeTimeoutArmCount.store(
+			0,
+			std::memory_order_release);
+		ResetVRLoadPresentationHAMProbeTimeoutHandoff();
+		vrLoadPresentationHAMProbeWarmAttempted = false;
+		vrLoadPresentationHAMProbeWarmReady = false;
+		vrLoadPresentationHAMProbeWarmAttemptCount = 0;
+		vrLoadPresentationHAMProbeWarmAttemptFrame = 0;
+		vrLoadPresentationHAMProbeWarmAttemptDevice = nullptr;
+		vrLoadPresentationHAMProbeWarmAttemptFormat = DXGI_FORMAT_UNKNOWN;
 	}
 }
 
@@ -25705,6 +27791,7 @@ void Upscaling::ServiceVRLoadPresentationProbeReadbacks() noexcept
 	auto* context = globals::d3d::context;
 	if (!context)
 		return;
+	ServiceVRLoadPresentationHAMProbeReadbacks(context);
 
 	for (auto& pending : vrLoadPresentationProbePending) {
 		if (!pending.pending || !pending.completionQuery || !pending.stagingTexture)
@@ -25787,8 +27874,16 @@ void Upscaling::ServiceVRLoadPresentationProbeReadbacks() noexcept
 									std::max(record.edgeBrightMaximumLuminance, luminance);
 							}
 						}
-						if (luminance <= 0.05f)
+						if (luminance <= kVRLoadPresentationProbeDarkLuminance) {
+							++record.darkSampleCount;
+							if (edge)
+								++record.edgeDarkSampleCount;
+						}
+						if (luminance <= kVRLoadPresentationProbeBlackLuminance) {
 							++record.blackSampleCount;
+							if (edge)
+								++record.edgeBlackSampleCount;
+						}
 					}
 				}
 				context->Unmap(pending.stagingTexture.get(), 0);
@@ -25832,7 +27927,26 @@ void Upscaling::ServiceVRLoadPresentationProbeReadbacks() noexcept
 						edgeBrightSpread <=
 							kVRLoadPresentationProbeHAMBrightEdgeSpread &&
 						darkHAMCenter;
-					record.hamWhitePattern = whiteHAMPattern || brightHAMPattern;
+					const bool brightHAMCenter =
+						record.centerLuminance >= kVRLoadPresentationProbeDarkLuminance &&
+						record.centerLuminance >=
+							record.edgeMeanLuminance +
+								kVRLoadPresentationProbeHAMMinimumContrast;
+					record.hamBrightPattern = whiteHAMPattern || brightHAMPattern;
+					record.hamWhitePattern = record.hamBrightPattern;
+					record.hamBlackPattern =
+						record.edgeBlackSampleCount >=
+							kVRLoadPresentationProbeHAMBlackEdgeSamples &&
+						record.edgeMeanLuminance <=
+							kVRLoadPresentationProbeHAMMaximumBlackEdgeMean &&
+						brightHAMCenter;
+					record.hamDarkPattern =
+						record.hamBlackPattern ||
+						(record.edgeDarkSampleCount >=
+								kVRLoadPresentationProbeHAMDarkEdgeSamples &&
+							record.edgeMeanLuminance <=
+								kVRLoadPresentationProbeHAMMaximumDarkEdgeMean &&
+							brightHAMCenter);
 				} else {
 					record.captureStatus = VRLoadPresentationProbeCaptureStatus::MapFailure;
 				}
@@ -25847,8 +27961,14 @@ void Upscaling::ServiceVRLoadPresentationProbeReadbacks() noexcept
 		if (record.sessionID == vrLoadPresentationProbeSessionID.load(std::memory_order_acquire)) {
 			if (record.predominantlyWhite)
 				vrLoadPresentationProbeBrightCandidates.fetch_add(1, std::memory_order_relaxed);
+			if (record.predominantlyBlack)
+				vrLoadPresentationProbeBlackCandidates.fetch_add(1, std::memory_order_relaxed);
 			if (record.hamWhitePattern)
 				vrLoadPresentationProbeHAMCandidates.fetch_add(1, std::memory_order_relaxed);
+			if (record.hamBlackPattern)
+				vrLoadPresentationProbeHAMBlackCandidates.fetch_add(1, std::memory_order_relaxed);
+			if (record.hamDarkPattern)
+				vrLoadPresentationProbeHAMDarkCandidates.fetch_add(1, std::memory_order_relaxed);
 			if (record.captureStatus == VRLoadPresentationProbeCaptureStatus::Complete)
 				vrLoadPresentationProbeCompletedReadbacks.fetch_add(1, std::memory_order_relaxed);
 			else
@@ -25864,25 +27984,38 @@ uint64_t Upscaling::BeginVRLoadPresentationProbeSubmit(
 	const vr::Texture_t* a_texture,
 	const vr::VRTextureBounds_t* a_bounds,
 	vr::EVRSubmitFlags a_flags,
+	uint64_t a_compositorCycleToken,
+	bool a_openVRAttempt,
 	const VRRenderScalePresentationObservation* a_presentationObservation) noexcept
 {
 	if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire) &&
-		vrLoadPresentationProbePendingReadbacks.load(std::memory_order_acquire) == 0) {
+		vrLoadPresentationProbePendingReadbacks.load(std::memory_order_acquire) == 0 &&
+		vrLoadPresentationHAMProbePendingReadbacks.load(std::memory_order_acquire) == 0) {
 		return 0;
 	}
 	ServiceVRLoadPresentationProbeReadbacks();
 	if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire))
 		return 0;
 
+	VRLoadPresentationProbeRecord record{};
+	std::optional<VRLoadPresentationHAMProbeTimeoutSubmitClaim>
+		timeoutSubmitClaim;
 	try {
-		VRLoadPresentationProbeRecord record{};
 		record.sequence = vrLoadPresentationProbeNextSequence.fetch_add(1, std::memory_order_relaxed);
 		record.sessionID = vrLoadPresentationProbeSessionID.load(std::memory_order_acquire);
 		record.queuedQpc = QueryVRLoadPresentationProbeQpc();
+		record.compositorCycleToken = a_compositorCycleToken;
 		record.frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 		record.lastCompletedWorldFrame = globals::state ? globals::state->lastCompletedWorldRenderFrame : 0u;
 		record.loadingCloseFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
 		record.eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+		if (a_openVRAttempt &&
+			(a_eye == vr::Eye_Left || a_eye == vr::Eye_Right)) {
+			timeoutSubmitClaim =
+				TryClaimVRLoadPresentationHAMProbeTimeoutSubmit(
+					a_compositorCycleToken,
+					record.eyeIndex);
+		}
 		record.submitPath = ParseVRLoadPresentationProbeSubmitPath(a_path);
 		record.submitFlags = static_cast<uint32_t>(a_flags);
 		record.textureColorSpace =
@@ -25926,17 +28059,8 @@ uint64_t Upscaling::BeginVRLoadPresentationProbeSubmit(
 			record.transitionEpoch = controller.targetEpoch;
 		}
 
-		if (!compositorKeepalive) {
+		if (!compositorKeepalive)
 			record.hamClearDeferred = ShouldDeferHMDClearMask();
-			const auto& ham = vrLoadPresentationHMDMaskObservations[record.eyeIndex];
-			if (ham.observed && ham.frame == record.frame) {
-				record.hamClearObserved = true;
-				record.hamClearEligible = ham.eligible;
-				record.hamClearDeferred = ham.deferred;
-				record.hamClearExecuted = ham.executed;
-				record.hamClearPhase = ham.phase;
-			}
-		}
 
 		const bool finiteBounds =
 			std::isfinite(record.boundsUMin) &&
@@ -25948,6 +28072,13 @@ uint64_t Upscaling::BeginVRLoadPresentationProbeSubmit(
 			!a_texture->handle ||
 			a_texture->eType != vr::TextureType_DirectX ||
 			(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)) {
+			if (timeoutSubmitClaim) {
+				ApplyVRLoadPresentationHAMProbeTimeoutSubmitClaim(
+					record,
+					*timeoutSubmitClaim,
+					0,
+					false);
+			}
 			record.captureStatus = VRLoadPresentationProbeCaptureStatus::InvalidTexture;
 			record.completedQpc = QueryVRLoadPresentationProbeQpc();
 			vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
@@ -25959,12 +28090,46 @@ uint64_t Upscaling::BeginVRLoadPresentationProbeSubmit(
 		D3D11_TEXTURE2D_DESC sourceDesc{};
 		sourceTexture->GetDesc(&sourceDesc);
 		record.textureAddress = reinterpret_cast<uintptr_t>(sourceTexture);
+		record.textureIdentity = GetCOMIdentityAddress(sourceTexture);
 		record.textureWidth = sourceDesc.Width;
 		record.textureHeight = sourceDesc.Height;
 		record.textureFormat = static_cast<uint32_t>(sourceDesc.Format);
 		record.textureArraySize = sourceDesc.ArraySize;
 		record.textureSampleCount = sourceDesc.SampleDesc.Count;
 		record.sourceSubresource = 0;
+
+		if (!compositorKeepalive) {
+			std::scoped_lock lock(vrLoadPresentationProbeObservationMutex);
+			const auto& ham =
+				vrLoadPresentationHMDMaskObservations[record.eyeIndex]
+													 [static_cast<uint32_t>(HMDMaskClearPhase::SubmitStageOutput)];
+			if (ham.observed &&
+				ham.sessionID == record.sessionID &&
+				record.compositorCycleToken != 0 &&
+				ham.compositorCycleToken == record.compositorCycleToken &&
+				ham.frame == record.frame &&
+				ham.eyeIndex == record.eyeIndex &&
+				ham.requestedEyeIndex == record.eyeIndex &&
+				ham.phase == static_cast<uint32_t>(HMDMaskClearPhase::SubmitStageOutput) &&
+				ham.colorIdentity == record.textureIdentity) {
+				record.hamClearObserved = true;
+				record.hamClearEligible = ham.eligible;
+				record.hamClearDeferred = ham.deferred;
+				record.hamClearExecuted = ham.executed;
+				record.hamClearPhase = ham.phase;
+				record.hamClearDispatchSequence = ham.dispatchSequence;
+				record.hamCaptureRequested = ham.captureRequested;
+				record.hamCaptureSequence = ham.captureSequence;
+				record.hamCaptureStatus = ham.captureStatus;
+			}
+		}
+		if (timeoutSubmitClaim) {
+			ApplyVRLoadPresentationHAMProbeTimeoutSubmitClaim(
+				record,
+				*timeoutSubmitClaim,
+				record.textureIdentity,
+				true);
+		}
 
 		const uint32_t bytesPerPixel =
 			GetVRLoadPresentationProbeBytesPerPixel(sourceDesc.Format);
@@ -26123,6 +28288,18 @@ uint64_t Upscaling::BeginVRLoadPresentationProbeSubmit(
 		return record.sequence;
 	} catch (...) {
 		vrLoadPresentationProbeDroppedReadbacks.fetch_add(1, std::memory_order_relaxed);
+		if (timeoutSubmitClaim && record.sequence != 0) {
+			ApplyVRLoadPresentationHAMProbeTimeoutSubmitClaim(
+				record,
+				*timeoutSubmitClaim,
+				record.textureIdentity,
+				record.textureIdentity != 0);
+			record.captureStatus =
+				VRLoadPresentationProbeCaptureStatus::ResourceFailure;
+			record.completedQpc = QueryVRLoadPresentationProbeQpc();
+			PublishVRLoadPresentationProbeRecord(record);
+			return record.sequence;
+		}
 		return 0;
 	}
 }
@@ -26140,6 +28317,19 @@ void Upscaling::CompleteVRLoadPresentationProbeSubmit(
 			return;
 		}
 	}
+	try {
+		std::scoped_lock lock(vrLoadPresentationProbeMutex);
+		for (uint32_t i = 0; i < vrLoadPresentationProbeCount; ++i) {
+			auto& record = vrLoadPresentationProbeRecords[i];
+			if (record.sequence != a_sequence)
+				continue;
+			record.compositorResult = static_cast<uint32_t>(a_result);
+			record.compositorResultKnown = true;
+			return;
+		}
+	} catch (...) {
+		// Result annotation is diagnostic-only and must never affect Submit.
+	}
 }
 
 void Upscaling::StartVRLoadPresentationProbe()
@@ -26147,6 +28337,7 @@ void Upscaling::StartVRLoadPresentationProbe()
 	vrLoadPresentationProbeActive.store(false, std::memory_order_release);
 	vrLoadPresentationProbeSessionID.fetch_add(1, std::memory_order_acq_rel);
 	ResetVRLoadPresentationProbeRetainedState();
+	(void)EnsureVRLoadPresentationHAMProbeShaderResources(globals::d3d::device);
 	vrLoadPresentationProbeActive.store(true, std::memory_order_release);
 }
 
@@ -26166,27 +28357,102 @@ json Upscaling::BuildVRLoadPresentationProbeStatus() const
 {
 	uint32_t retainedRecords = 0;
 	uint32_t overwrittenRecords = 0;
+	uint32_t retainedHAMDispatches = 0;
+	uint32_t overwrittenHAMDispatches = 0;
 	{
 		std::scoped_lock lock(vrLoadPresentationProbeMutex);
 		retainedRecords = vrLoadPresentationProbeCount;
 		overwrittenRecords = vrLoadPresentationProbeOverwrittenRecords;
+		retainedHAMDispatches = vrLoadPresentationHAMProbeCount;
+		overwrittenHAMDispatches = vrLoadPresentationHAMProbeOverwrittenRecords;
 	}
+	const auto timeoutHandoff =
+		GetVRLoadPresentationHAMProbeTimeoutHandoffSnapshot();
+	uint32_t timeoutClearEyeMask = 0;
+	uint32_t timeoutSubmitEyeMask = 0;
+	json timeoutEyes = json::array();
+	for (uint32_t eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
+		const auto& eye = timeoutHandoff.eyes[eyeIndex];
+		if (eye.clearSeen)
+			timeoutClearEyeMask |= 1u << eyeIndex;
+		if (eye.submitSeen)
+			timeoutSubmitEyeMask |= 1u << eyeIndex;
+		timeoutEyes.push_back({
+			{ "eye", eyeIndex },
+			{ "clearDecisionSeen", eye.clearDecisionSeen },
+			{ "clearSeen", eye.clearSeen },
+			{ "clearEligible", eye.clearEligible },
+			{ "clearDeferred", eye.clearDeferred },
+			{ "clearExecuted", eye.clearExecuted },
+			{ "clearPhase", eye.clearPhase },
+			{ "clearColorIdentity", eye.clearColorIdentity },
+			{ "clearDispatchSequence", eye.clearDispatchSequence },
+			{ "captureRequested", eye.captureRequested },
+			{ "captureSequence", eye.captureSequence },
+			{ "captureQueueStatus", eye.captureRequested ?
+										GetVRLoadPresentationProbeCaptureStatusName(eye.captureStatus) :
+										"NotRequested" },
+			{ "submitSeen", eye.submitSeen },
+		});
+	}
+	const bool timeoutHandoffRetained = timeoutHandoff.sessionID != 0;
+	const bool timeoutHandoffComplete =
+		timeoutHandoffRetained && (timeoutSubmitEyeMask & 0x3u) == 0x3u;
+	const bool probeActive =
+		vrLoadPresentationProbeActive.load(std::memory_order_acquire);
 	LARGE_INTEGER frequency{};
 	(void)::QueryPerformanceFrequency(&frequency);
 	return {
-		{ "active", vrLoadPresentationProbeActive.load(std::memory_order_acquire) },
+		{ "active", probeActive },
 		{ "sessionID", vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) },
 		{ "qpcFrequency", frequency.QuadPart },
 		{ "gridSize", kVRLoadPresentationProbeGridSize },
 		{ "retentionCapacity", kVRLoadPresentationProbeRetentionCapacity },
+		{ "pendingCapacity", kVRLoadPresentationProbePendingCapacity },
 		{ "retainedRecords", retainedRecords },
 		{ "overwrittenRecords", overwrittenRecords },
 		{ "pendingReadbacks", vrLoadPresentationProbePendingReadbacks.load(std::memory_order_acquire) },
+		{ "totalPendingReadbacks", vrLoadPresentationProbePendingReadbacks.load(std::memory_order_acquire) + vrLoadPresentationHAMProbePendingReadbacks.load(std::memory_order_acquire) },
 		{ "queuedReadbacks", vrLoadPresentationProbeQueuedReadbacks.load(std::memory_order_acquire) },
 		{ "completedReadbacks", vrLoadPresentationProbeCompletedReadbacks.load(std::memory_order_acquire) },
 		{ "droppedReadbacks", vrLoadPresentationProbeDroppedReadbacks.load(std::memory_order_acquire) },
 		{ "predominantlyWhiteCandidates", vrLoadPresentationProbeBrightCandidates.load(std::memory_order_acquire) },
+		{ "predominantlyBlackCandidates", vrLoadPresentationProbeBlackCandidates.load(std::memory_order_acquire) },
 		{ "hamWhitePatternCandidates", vrLoadPresentationProbeHAMCandidates.load(std::memory_order_acquire) },
+		{ "hamBrightPatternCandidates", vrLoadPresentationProbeHAMCandidates.load(std::memory_order_acquire) },
+		{ "hamBlackPatternCandidates", vrLoadPresentationProbeHAMBlackCandidates.load(std::memory_order_acquire) },
+		{ "hamDarkPatternCandidates", vrLoadPresentationProbeHAMDarkCandidates.load(std::memory_order_acquire) },
+		{ "hamDispatchProbe", {
+								  { "gridSize", kVRLoadPresentationHAMProbeGridSize },
+								  { "retentionCapacity", kVRLoadPresentationHAMProbeRetentionCapacity },
+								  { "pendingCapacity", kVRLoadPresentationHAMProbePendingCapacity },
+								  { "retainedDispatches", retainedHAMDispatches },
+								  { "overwrittenDispatches", overwrittenHAMDispatches },
+								  { "pendingReadbacks", vrLoadPresentationHAMProbePendingReadbacks.load(std::memory_order_acquire) },
+								  { "queuedReadbacks", vrLoadPresentationHAMProbeQueuedReadbacks.load(std::memory_order_acquire) },
+								  { "completedReadbacks", vrLoadPresentationHAMProbeCompletedReadbacks.load(std::memory_order_acquire) },
+								  { "droppedReadbacks", vrLoadPresentationHAMProbeDroppedReadbacks.load(std::memory_order_acquire) },
+								  { "brightPatternCandidates", vrLoadPresentationHAMProbeBrightCandidates.load(std::memory_order_acquire) },
+								  { "darkPatternCandidates", vrLoadPresentationHAMProbeDarkCandidates.load(std::memory_order_acquire) },
+								  { "stereoReleaseRecords", vrLoadPresentationHAMProbeStereoReleaseRecords.load(std::memory_order_acquire) },
+								  { "timeoutReleaseRecords", vrLoadPresentationHAMProbeTimeoutReleaseRecords.load(std::memory_order_acquire) },
+								  { "timeoutHandoff", {
+														  { "armCount", vrLoadPresentationHAMProbeTimeoutArmCount.load(std::memory_order_acquire) },
+														  { "retained", timeoutHandoffRetained },
+														  { "armed", probeActive && timeoutHandoffRetained && !timeoutHandoffComplete },
+														  { "complete", timeoutHandoffComplete },
+														  { "sessionID", timeoutHandoff.sessionID },
+														  { "route", GetVRLoadPresentationHAMProbeHandoffRouteName(timeoutHandoff.handoff.route) },
+														  { "protectionEpoch", timeoutHandoff.handoff.protectionEpoch },
+														  { "loadingSerial", timeoutHandoff.handoff.loadingSerial },
+														  { "compositorCycle", timeoutHandoff.handoff.compositorCycleToken },
+														  { "elapsedMs", timeoutHandoff.handoff.timeoutElapsedMs },
+														  { "budgetMs", timeoutHandoff.handoff.timeoutBudgetMs },
+														  { "clearEyeMask", timeoutClearEyeMask },
+														  { "submitEyeMask", timeoutSubmitEyeMask },
+														  { "eyes", std::move(timeoutEyes) },
+													  } },
+							  } },
 	};
 }
 
@@ -26207,6 +28473,7 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 		}
 	};
 	std::vector<VRLoadPresentationProbeRecord> retained;
+	std::vector<VRLoadPresentationHAMProbeRecord> retainedHAMDispatches;
 	{
 		std::scoped_lock lock(vrLoadPresentationProbeMutex);
 		retained.reserve(vrLoadPresentationProbeCount);
@@ -26218,16 +28485,56 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 			retained.push_back(
 				vrLoadPresentationProbeRecords[(firstIndex + i) % kVRLoadPresentationProbeRetentionCapacity]);
 		}
+		retainedHAMDispatches.reserve(vrLoadPresentationHAMProbeCount);
+		const uint32_t firstHAMIndex =
+			vrLoadPresentationHAMProbeCount == kVRLoadPresentationHAMProbeRetentionCapacity ?
+				vrLoadPresentationHAMProbeNextIndex :
+				0u;
+		for (uint32_t i = 0; i < vrLoadPresentationHAMProbeCount; ++i) {
+			retainedHAMDispatches.push_back(
+				vrLoadPresentationHAMProbeRecords[(firstHAMIndex + i) % kVRLoadPresentationHAMProbeRetentionCapacity]);
+		}
 	}
 	std::ranges::sort(retained, {}, &VRLoadPresentationProbeRecord::sequence);
+	std::ranges::sort(
+		retainedHAMDispatches,
+		{},
+		&VRLoadPresentationHAMProbeRecord::sequence);
 
 	json records = json::array();
 	for (const auto& record : retained) {
+		const auto retainedHAMCapture =
+			record.hamCaptureRequested && record.hamCaptureSequence != 0 ?
+				std::find_if(
+					retainedHAMDispatches.begin(),
+					retainedHAMDispatches.end(),
+					[&](const VRLoadPresentationHAMProbeRecord& a_capture) {
+						return a_capture.sequence == record.hamCaptureSequence;
+					}) :
+				retainedHAMDispatches.end();
+		const bool hamCaptureRecordRetained =
+			retainedHAMCapture != retainedHAMDispatches.end();
+		const auto hamCaptureStatus =
+			hamCaptureRecordRetained ?
+				retainedHAMCapture->captureStatus :
+				record.hamCaptureStatus;
+		const bool hamCaptureStillPending =
+			!hamCaptureRecordRetained &&
+			record.hamCaptureStatus == VRLoadPresentationProbeCaptureStatus::Pending &&
+			vrLoadPresentationHAMProbePendingReadbacks.load(std::memory_order_acquire) != 0;
+		const bool hamCaptureStatusResolved =
+			hamCaptureRecordRetained ||
+			record.hamCaptureStatus != VRLoadPresentationProbeCaptureStatus::Pending;
+		const char* hamCaptureStatusName =
+			hamCaptureRecordRetained || hamCaptureStillPending || hamCaptureStatusResolved ?
+				GetVRLoadPresentationProbeCaptureStatusName(hamCaptureStatus) :
+				"Unavailable";
 		json item{
 			{ "sequence", record.sequence },
 			{ "sessionID", record.sessionID },
 			{ "queuedQpc", record.queuedQpc },
 			{ "completedQpc", record.completedQpc },
+			{ "compositorCycle", record.compositorCycleToken },
 			{ "frame", record.frame },
 			{ "lastCompletedWorldFrame", record.lastCompletedWorldFrame },
 			{ "loadingCloseFrame", record.loadingCloseFrame },
@@ -26237,6 +28544,7 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 			{ "captureStatus", GetVRLoadPresentationProbeCaptureStatusName(record.captureStatus) },
 			{ "texture", {
 							 { "address", record.textureAddress },
+							 { "identity", record.textureIdentity },
 							 { "width", record.textureWidth },
 							 { "height", record.textureHeight },
 							 { "format", record.textureFormat },
@@ -26273,6 +28581,17 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 			{ "compositorResult", record.compositorResult },
 			{ "transitionEpoch", record.transitionEpoch },
 			{ "contractGeneration", record.contractGeneration },
+			{ "handoff", {
+							 { "source", GetVRLoadPresentationHAMProbeHandoffSourceName(static_cast<VRLoadPresentationHAMProbeHandoffSource>(record.handoffSource)) },
+							 { "route", GetVRLoadPresentationHAMProbeHandoffRouteName(static_cast<VRLoadPresentationHAMProbeHandoffRoute>(record.handoffRoute)) },
+							 { "protectionEpoch", record.handoffProtectionEpoch },
+							 { "loadingSerial", record.handoffLoadingSerial },
+							 { "compositorCycle", record.handoffCompositorCycleToken },
+							 { "timeoutElapsedMs", record.handoffTimeoutElapsedMs },
+							 { "timeoutBudgetMs", record.handoffTimeoutBudgetMs },
+							 { "firstPostTimeoutSubmit", record.firstPostTimeoutSubmit },
+							 { "timeoutSubmitCorrelation", GetVRLoadPresentationHAMProbeTimeoutSubmitCorrelationName(static_cast<VRLoadPresentationHAMProbeTimeoutSubmitCorrelation>(record.timeoutSubmitCorrelation)) },
+						 } },
 			{ "context", {
 							 { "loadingMenu", record.loadingMenu },
 							 { "mainMenu", record.mainMenu },
@@ -26288,6 +28607,13 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 							  { "executed", record.hamClearExecuted },
 							  { "phase", record.hamClearPhase },
 							  { "phaseName", record.hamClearObserved ? getHMDMaskPhaseName(record.hamClearPhase) : "None" },
+							  { "dispatchSequence", record.hamClearDispatchSequence },
+							  { "captureRequested", record.hamCaptureRequested },
+							  { "captureSequence", record.hamCaptureSequence },
+							  { "captureQueueStatus", record.hamCaptureRequested ? GetVRLoadPresentationProbeCaptureStatusName(record.hamCaptureStatus) : "NotRequested" },
+							  { "captureRecordRetained", hamCaptureRecordRetained },
+							  { "captureStatusResolved", !record.hamCaptureRequested || hamCaptureStatusResolved },
+							  { "captureStatus", record.hamCaptureRequested ? hamCaptureStatusName : "NotRequested" },
 						  } },
 			{ "luminance", {
 							   { "valid", record.luminanceValid },
@@ -26298,14 +28624,21 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 							   { "center", record.centerLuminance },
 							   { "whiteSamples", record.whiteSampleCount },
 							   { "brightSamples", record.brightSampleCount },
+							   { "darkSamples", record.darkSampleCount },
 							   { "blackSamples", record.blackSampleCount },
 							   { "edgeWhiteSamples", record.edgeWhiteSampleCount },
 							   { "edgeBrightSamples", record.edgeBrightSampleCount },
+							   { "edgeDarkSamples", record.edgeDarkSampleCount },
+							   { "edgeBlackSamples", record.edgeBlackSampleCount },
 							   { "edgeBrightMinimum", record.edgeBrightMinimumLuminance },
 							   { "edgeBrightMaximum", record.edgeBrightMaximumLuminance },
 							   { "predominantlyWhite", record.predominantlyWhite },
 							   { "predominantlyBlack", record.predominantlyBlack },
 							   { "hamWhitePattern", record.hamWhitePattern },
+							   { "hamBrightPattern", record.hamBrightPattern },
+							   { "hamBlackPattern", record.hamBlackPattern },
+							   { "hamDarkPattern", record.hamDarkPattern },
+							   { "hamPatternPolarity", record.hamBrightPattern ? (record.hamDarkPattern ? "mixed" : "bright") : (record.hamDarkPattern ? "dark" : "none") },
 						   } },
 		};
 		if (record.luminanceValid)
@@ -26313,11 +28646,276 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 		records.push_back(std::move(item));
 	}
 
+	const auto buildHAMStage = [](
+								   const VRLoadPresentationHAMProbeLuminanceSummary& a_summary,
+								   const std::array<float, kVRLoadPresentationHAMProbeSampleCount>& a_grid,
+								   bool a_valid,
+								   const VRLoadPresentationHAMProbeAlphaSummary& a_alphaSummary,
+								   const std::array<float, kVRLoadPresentationHAMProbeSampleCount>& a_alphaGrid,
+								   bool a_alphaValid) {
+		json stage{
+			{ "valid", a_valid },
+			{ "minimum", a_summary.minimum },
+			{ "maximum", a_summary.maximum },
+			{ "mean", a_summary.mean },
+			{ "edgeMean", a_summary.edgeMean },
+			{ "center", a_summary.center },
+			{ "whiteSamples", a_summary.whiteSamples },
+			{ "brightSamples", a_summary.brightSamples },
+			{ "darkSamples", a_summary.darkSamples },
+			{ "blackSamples", a_summary.blackSamples },
+			{ "edgeWhiteSamples", a_summary.edgeWhiteSamples },
+			{ "edgeBrightSamples", a_summary.edgeBrightSamples },
+			{ "edgeDarkSamples", a_summary.edgeDarkSamples },
+			{ "edgeBlackSamples", a_summary.edgeBlackSamples },
+			{ "edgeBrightMinimum", a_summary.edgeBrightMinimum },
+			{ "edgeBrightMaximum", a_summary.edgeBrightMaximum },
+			{ "edgeDarkMinimum", a_summary.edgeDarkMinimum },
+			{ "edgeDarkMaximum", a_summary.edgeDarkMaximum },
+			{ "predominantlyWhite", a_summary.predominantlyWhite },
+			{ "predominantlyBlack", a_summary.predominantlyBlack },
+			{ "whiteHAMPattern", a_summary.whiteHAMPattern },
+			{ "brightHAMPattern", a_summary.brightHAMPattern },
+			{ "blackHAMPattern", a_summary.blackHAMPattern },
+			{ "darkHAMPattern", a_summary.darkHAMPattern },
+			{ "hamPatternPolarity", GetVRLoadPresentationHAMProbePolarityName(a_summary) },
+		};
+		if (a_valid)
+			stage["grid"] = a_grid;
+		json alpha{
+			{ "valid", a_alphaValid },
+			{ "minimum", a_alphaSummary.minimum },
+			{ "maximum", a_alphaSummary.maximum },
+			{ "mean", a_alphaSummary.mean },
+			{ "transparentSamples", a_alphaSummary.transparentSamples },
+			{ "opaqueSamples", a_alphaSummary.opaqueSamples },
+		};
+		if (a_alphaValid)
+			alpha["grid"] = a_alphaGrid;
+		stage["alpha"] = std::move(alpha);
+		return stage;
+	};
+
+	json hamDispatches = json::array();
+	for (const auto& record : retainedHAMDispatches) {
+		uint32_t clearMaskSamples = 0;
+		if (record.depthValid) {
+			for (const uint32_t sample : record.clearMask)
+				clearMaskSamples += sample != 0 ? 1u : 0u;
+		}
+		json depth{
+			{ "valid", record.depthValid },
+			{ "hiddenDepthThreshold", kVRLoadPresentationHAMProbeDepthThreshold },
+			{ "dilationRadius", kVRLoadPresentationHAMProbeDepthDilationRadius },
+			{ "clearMaskSamples", clearMaskSamples },
+		};
+		if (record.depthValid) {
+			depth["centerGrid"] = record.centerDepth;
+			depth["neighborhoodMinimumGrid"] = record.neighborhoodMinimumDepth;
+			depth["hiddenSampleCountGrid"] = record.hiddenDepthSampleCount;
+			depth["clearMaskGrid"] = record.clearMask;
+		}
+
+		json delta{
+			{ "valid", record.deltaValid },
+			{ "minimumMeaningfulChange", kVRLoadPresentationHAMProbeMinimumDelta },
+			{ "darkenedSamples", record.darkenedSamples },
+			{ "brightenedSamples", record.brightenedSamples },
+			{ "newlyBlackSamples", record.newlyBlackSamples },
+			{ "newlyWhiteSamples", record.newlyWhiteSamples },
+			{ "clearMask", {
+							   { "darkenedSamples", record.clearMaskDarkenedSamples },
+							   { "brightenedSamples", record.clearMaskBrightenedSamples },
+							   { "newlyBlackSamples", record.clearMaskNewlyBlackSamples },
+							   { "newlyWhiteSamples", record.clearMaskNewlyWhiteSamples },
+						   } },
+			{ "unmasked", {
+							  { "darkenedSamples", record.unmaskedDarkenedSamples },
+							  { "brightenedSamples", record.unmaskedBrightenedSamples },
+							  { "newlyBlackSamples", record.unmaskedNewlyBlackSamples },
+							  { "newlyWhiteSamples", record.unmaskedNewlyWhiteSamples },
+						  } },
+			{ "alpha", {
+						   { "valid", record.alphaDeltaValid },
+						   { "newlyTransparentSamples", record.newlyTransparentSamples },
+						   { "newlyOpaqueSamples", record.newlyOpaqueSamples },
+						   { "clearMask", {
+											  { "newlyTransparentSamples", record.clearMaskNewlyTransparentSamples },
+											  { "newlyOpaqueSamples", record.clearMaskNewlyOpaqueSamples },
+										  } },
+						   { "unmasked", {
+											 { "newlyTransparentSamples", record.unmaskedNewlyTransparentSamples },
+											 { "newlyOpaqueSamples", record.unmaskedNewlyOpaqueSamples },
+										 } },
+					   } },
+		};
+		if (record.deltaValid)
+			delta["grid"] = record.luminanceDelta;
+		if (record.alphaDeltaValid)
+			delta["alpha"]["grid"] = record.alphaDelta;
+		json depthAlignedTopology{
+			{ "valid", record.deltaValid },
+			{ "clearMaskSamples", record.clearMaskSamples },
+			{ "unmaskedSamples", record.unmaskedSamples },
+			{ "preHAM", {
+							{ "clearMask", {
+											   { "whiteSamples", record.preClearMaskWhiteSamples },
+											   { "brightSamples", record.preClearMaskBrightSamples },
+											   { "darkSamples", record.preClearMaskDarkSamples },
+											   { "blackSamples", record.preClearMaskBlackSamples },
+										   } },
+							{ "unmasked", {
+											  { "whiteSamples", record.preUnmaskedWhiteSamples },
+											  { "brightSamples", record.preUnmaskedBrightSamples },
+											  { "darkSamples", record.preUnmaskedDarkSamples },
+											  { "blackSamples", record.preUnmaskedBlackSamples },
+										  } },
+							{ "whiteHAMPattern", record.preDepthAlignedWhiteHAMPattern },
+							{ "brightHAMPattern", record.preDepthAlignedBrightHAMPattern },
+							{ "blackHAMPattern", record.preDepthAlignedBlackHAMPattern },
+							{ "darkHAMPattern", record.preDepthAlignedDarkHAMPattern },
+						} },
+			{ "postHAM", {
+							 { "clearMask", {
+												{ "whiteSamples", record.postClearMaskWhiteSamples },
+												{ "brightSamples", record.postClearMaskBrightSamples },
+												{ "darkSamples", record.postClearMaskDarkSamples },
+												{ "blackSamples", record.postClearMaskBlackSamples },
+											} },
+							 { "unmasked", {
+											   { "whiteSamples", record.postUnmaskedWhiteSamples },
+											   { "brightSamples", record.postUnmaskedBrightSamples },
+											   { "darkSamples", record.postUnmaskedDarkSamples },
+											   { "blackSamples", record.postUnmaskedBlackSamples },
+										   } },
+							 { "whiteHAMPattern", record.postDepthAlignedWhiteHAMPattern },
+							 { "brightHAMPattern", record.postDepthAlignedBrightHAMPattern },
+							 { "blackHAMPattern", record.postDepthAlignedBlackHAMPattern },
+							 { "darkHAMPattern", record.postDepthAlignedDarkHAMPattern },
+						 } },
+		};
+
+		json item{
+			{ "sequence", record.sequence },
+			{ "sessionID", record.sessionID },
+			{ "dispatchSequence", record.dispatchSequence },
+			{ "queuedQpc", record.queuedQpc },
+			{ "completedQpc", record.completedQpc },
+			{ "frame", record.frame },
+			{ "eye", record.eyeIndex },
+			{ "phase", record.phase },
+			{ "phaseName", getHMDMaskPhaseName(record.phase) },
+			{ "captureStatus", GetVRLoadPresentationProbeCaptureStatusName(record.captureStatus) },
+			{ "clearExecuted", record.clearExecuted },
+			{ "handoff", {
+							 { "source", GetVRLoadPresentationHAMProbeHandoffSourceName(record.handoff.source) },
+							 { "route", GetVRLoadPresentationHAMProbeHandoffRouteName(record.handoff.route) },
+							 { "protectionEpoch", record.handoff.protectionEpoch },
+							 { "loadingSerial", record.handoff.loadingSerial },
+							 { "compositorCycle", record.handoff.compositorCycleToken },
+							 { "timeoutElapsedMs", record.handoff.timeoutElapsedMs },
+							 { "timeoutBudgetMs", record.handoff.timeoutBudgetMs },
+						 } },
+			{ "color", {
+						   { "identity", record.colorIdentity },
+						   { "width", record.colorWidth },
+						   { "height", record.colorHeight },
+						   { "offsetX", record.colorOffsetX },
+						   { "offsetY", record.colorOffsetY },
+						   { "resourceWidth", record.colorResourceWidth },
+						   { "resourceHeight", record.colorResourceHeight },
+						   { "resourceFormat", record.colorResourceFormat },
+						   { "viewFormat", record.colorViewFormat },
+						   { "hasAlphaChannel", record.colorHasAlphaChannel },
+						   { "subresource", record.colorSubresource },
+					   } },
+			{ "depthSource", {
+								 { "identity", record.depthIdentity },
+								 { "width", record.depthWidth },
+								 { "height", record.depthHeight },
+								 { "offsetX", record.depthOffsetX },
+								 { "offsetY", record.depthOffsetY },
+								 { "viewWidth", record.depthViewWidth },
+								 { "viewHeight", record.depthViewHeight },
+								 { "resourceFormat", record.depthResourceFormat },
+								 { "viewFormat", record.depthViewFormat },
+								 { "viewMip", record.depthViewMip },
+							 } },
+			{ "preHAM", buildHAMStage(record.preSummary, record.preLuminance, record.preLuminanceValid, record.preAlphaSummary, record.preAlpha, record.preAlphaValid) },
+			{ "depth", std::move(depth) },
+			{ "postHAM", buildHAMStage(record.postSummary, record.postLuminance, record.postLuminanceValid, record.postAlphaSummary, record.postAlpha, record.postAlphaValid) },
+			{ "delta", std::move(delta) },
+			{ "depthAlignedTopology", std::move(depthAlignedTopology) },
+			{ "classification", {
+									{ "preWhiteHAMPattern", record.preSummary.whiteHAMPattern || record.preDepthAlignedWhiteHAMPattern },
+									{ "preBrightHAMPattern", record.preSummary.brightHAMPattern || record.preDepthAlignedBrightHAMPattern },
+									{ "preBlackHAMPattern", record.preSummary.blackHAMPattern || record.preDepthAlignedBlackHAMPattern },
+									{ "preDarkHAMPattern", record.preSummary.darkHAMPattern || record.preDepthAlignedDarkHAMPattern },
+									{ "postWhiteHAMPattern", record.postSummary.whiteHAMPattern || record.postDepthAlignedWhiteHAMPattern },
+									{ "postBrightHAMPattern", record.postSummary.brightHAMPattern || record.postDepthAlignedBrightHAMPattern },
+									{ "postBlackHAMPattern", record.postSummary.blackHAMPattern || record.postDepthAlignedBlackHAMPattern },
+									{ "postDarkHAMPattern", record.postSummary.darkHAMPattern || record.postDepthAlignedDarkHAMPattern },
+									{ "introducedBrightHAMPattern", record.introducedBrightHAMPattern },
+									{ "introducedDarkHAMPattern", record.introducedDarkHAMPattern },
+									{ "introducedBlackHAMPattern", record.introducedBlackHAMPattern },
+									{ "removedWhiteHAMPattern", record.removedWhiteHAMPattern },
+									{ "removedBrightHAMPattern", record.removedBrightHAMPattern },
+								} },
+		};
+		hamDispatches.push_back(std::move(item));
+	}
+
 	return {
-		{ "schemaVersion", 2 },
+		{ "schemaVersion", kVRLoadPresentationProbeSchemaVersion },
 		{ "status", BuildVRLoadPresentationProbeStatus() },
 		{ "samplePositions", kVRLoadPresentationProbeSamplePositions },
+		{ "hamSamplePositions", kVRLoadPresentationHAMProbeSamplePositions },
+		{ "hamDepthThreshold", kVRLoadPresentationHAMProbeDepthThreshold },
+		{ "hamDepthDilationRadius", kVRLoadPresentationHAMProbeDepthDilationRadius },
+		{ "classificationThresholds", {
+										  { "whiteLuminance", kVRLoadPresentationProbeWhiteLuminance },
+										  { "brightLuminance", kVRLoadPresentationProbeBrightLuminance },
+										  { "darkLuminance", kVRLoadPresentationProbeDarkLuminance },
+										  { "blackLuminance", kVRLoadPresentationProbeBlackLuminance },
+										  { "transparentAlpha", kVRLoadPresentationProbeTransparentAlpha },
+										  { "opaqueAlpha", kVRLoadPresentationProbeOpaqueAlpha },
+										  { "minimumMeaningfulDelta", kVRLoadPresentationHAMProbeMinimumDelta },
+										  { "depthAlignedMinimumRegionSamples", kVRLoadPresentationHAMProbeMinimumTopologySamples },
+										  { "depthAlignedMinimumMatchRatio", kVRLoadPresentationHAMProbeMinimumTopologyMatchRatio },
+										  { "depthAlignedMinimumRatioContrast", kVRLoadPresentationHAMProbeMinimumTopologyRatioContrast },
+										  { "finalSubmitPattern", {
+																	  { "edgeSamples", 4u * (kVRLoadPresentationProbeGridSize - 1u) },
+																	  { "predominantSamples", kVRLoadPresentationProbeSampleCount - 5u },
+																	  { "whiteEdgeSamples", kVRLoadPresentationProbeHAMWhiteEdgeSamples },
+																	  { "whiteEdgeMean", kVRLoadPresentationProbeHAMWhiteEdgeMean },
+																	  { "brightEdgeSamples", kVRLoadPresentationProbeHAMBrightEdgeSamples },
+																	  { "brightEdgeMean", kVRLoadPresentationProbeHAMBrightEdgeMean },
+																	  { "brightEdgeMaximumSpread", kVRLoadPresentationProbeHAMBrightEdgeSpread },
+																	  { "blackEdgeSamples", kVRLoadPresentationProbeHAMBlackEdgeSamples },
+																	  { "blackEdgeMaximumMean", kVRLoadPresentationProbeHAMMaximumBlackEdgeMean },
+																	  { "darkEdgeSamples", kVRLoadPresentationProbeHAMDarkEdgeSamples },
+																	  { "darkEdgeMaximumMean", kVRLoadPresentationProbeHAMMaximumDarkEdgeMean },
+																	  { "maximumDarkCenter", kVRLoadPresentationProbeHAMMaximumCenter },
+																	  { "minimumCenterContrast", kVRLoadPresentationProbeHAMMinimumContrast },
+																  } },
+										  { "hamDispatchPattern", {
+																	  { "edgeSamples", kVRLoadPresentationHAMProbeEdgeSampleCount },
+																	  { "predominantSamples", kVRLoadPresentationHAMProbeSampleCount - 16u },
+																	  { "whiteEdgeSamples", kVRLoadPresentationHAMProbeWhiteEdgeSamples },
+																	  { "brightEdgeSamples", kVRLoadPresentationHAMProbeBrightEdgeSamples },
+																	  { "darkEdgeSamples", kVRLoadPresentationHAMProbeDarkEdgeSamples },
+																	  { "blackEdgeSamples", kVRLoadPresentationHAMProbeBlackEdgeSamples },
+																	  { "whiteEdgeMean", kVRLoadPresentationProbeHAMWhiteEdgeMean },
+																	  { "brightEdgeMean", kVRLoadPresentationProbeHAMBrightEdgeMean },
+																	  { "brightOrDarkMaximumSpread", kVRLoadPresentationProbeHAMBrightEdgeSpread },
+																	  { "blackEdgeMaximumMean", kVRLoadPresentationHAMProbeMaximumBlackEdgeMean },
+																	  { "darkEdgeMaximumMean", kVRLoadPresentationHAMProbeMaximumDarkEdgeMean },
+																	  { "maximumDarkCenter", kVRLoadPresentationProbeHAMMaximumCenter },
+																	  { "minimumCenterContrast", kVRLoadPresentationProbeHAMMinimumContrast },
+																  } },
+									  } },
 		{ "records", std::move(records) },
+		{ "hamDispatches", std::move(hamDispatches) },
 	};
 }
 #endif
@@ -31965,11 +34563,6 @@ bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11
 		CS_PROFILE_SCOPE("Upscaling::ClearHMDMask");
 		context->Dispatch(dispatchX, dispatchY, 1);
 	}
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	if (vrLoadPresentationProbeActive.load(std::memory_order_acquire))
-		vrLoadPresentationProbeHMDDispatchSequence.fetch_add(1, std::memory_order_relaxed);
-#endif
-
 	return true;
 }
 
@@ -32181,17 +34774,56 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 		maskRepairDeferred &&
 		!validatedFixedVendorRepair &&
 		!validatedStabilizingRenderScaleRepair;
-	const auto recordObservation = [&](bool a_executed) {
+	const auto recordObservation = [&](
+									   bool a_executed,
+									   uint64_t a_dispatchSequence = 0,
+									   const VRLoadPresentationHAMCaptureToken* a_capture = nullptr) {
 		if (!vrLoadPresentationProbeActive.load(std::memory_order_acquire))
 			return;
-		auto& observation = vrLoadPresentationHMDMaskObservations[a_eyeIndex];
+		uintptr_t colorIdentity = 0;
+		uintptr_t depthIdentity = 0;
+		if (colorUAV) {
+			winrt::com_ptr<ID3D11Resource> resource;
+			colorUAV->GetResource(resource.put());
+			colorIdentity = GetCOMIdentityAddress(resource.get());
+		}
+		if (depthSRV) {
+			winrt::com_ptr<ID3D11Resource> resource;
+			depthSRV->GetResource(resource.put());
+			depthIdentity = GetCOMIdentityAddress(resource.get());
+		}
+		std::scoped_lock lock(vrLoadPresentationProbeObservationMutex);
+		auto& observation =
+			vrLoadPresentationHMDMaskObservations[a_eyeIndex]
+												 [static_cast<uint32_t>(a_phase)];
+		observation.sessionID =
+			vrLoadPresentationProbeSessionID.load(std::memory_order_acquire);
+		observation.compositorCycleToken =
+			vrLoadPresentationHAMProbeSubmitContext.compositorCycleToken;
+		observation.dispatchSequence = a_dispatchSequence;
+		observation.captureSequence =
+			a_capture && a_capture->requested ? a_capture->record.sequence : 0;
+		observation.colorIdentity = colorIdentity;
+		observation.depthIdentity = depthIdentity;
 		observation.frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+		observation.eyeIndex = a_eyeIndex;
+		observation.requestedEyeIndex =
+			vrLoadPresentationHAMProbeSubmitContext.requestedEyeIndex;
 		observation.phase = static_cast<uint32_t>(a_phase);
 		observation.observed = true;
 		observation.eligible = shouldClear;
 		observation.deferred = deferred;
 		observation.executed = a_executed;
+		observation.captureRequested = a_capture && a_capture->requested;
+		observation.captureStatus =
+			observation.captureRequested ?
+				a_capture->record.captureStatus :
+				VRLoadPresentationProbeCaptureStatus::Pending;
 	};
+	if (postLoadHoldState == VRPostLoadCompositorHoldState::Holding &&
+		a_phase == HMDMaskClearPhase::SubmitStageOutput) {
+		WarmVRLoadPresentationHAMProbeResources(colorUAV);
+	}
 #endif
 	if (!shouldClear) {
 		RecordVRPostLoadHMDMaskRepair(
@@ -32209,10 +34841,82 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 			colorOffsetY,
 			false);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_phase == HMDMaskClearPhase::SubmitStageOutput) {
+			RecordVRLoadPresentationHAMProbeTimeoutNoClear(
+				vrLoadPresentationHAMProbeSubmitContext.compositorCycleToken,
+				vrLoadPresentationHAMProbeSubmitContext.requestedEyeIndex,
+				a_eyeIndex,
+				shouldClear,
+				deferred,
+				static_cast<uint32_t>(a_phase));
+		}
 		recordObservation(false);
 #endif
 		return;
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	uint64_t probeDispatchSequence = 0;
+	VRLoadPresentationHAMCaptureToken hamCapture{};
+	std::optional<VRLoadPresentationHAMProbeHandoff> hamHandoff;
+	if (vrLoadPresentationProbeActive.load(std::memory_order_acquire)) {
+		probeDispatchSequence =
+			vrLoadPresentationProbeHMDDispatchSequence.fetch_add(
+				1,
+				std::memory_order_relaxed) +
+			1u;
+		const bool requestedSubmitEye =
+			vrLoadPresentationHAMProbeSubmitContext.requestedEyeIndex ==
+			a_eyeIndex;
+		const bool terminalSubmitHandoff =
+			postLoadHoldState == VRPostLoadCompositorHoldState::ReleaseScheduled &&
+			a_phase == HMDMaskClearPhase::SubmitStageOutput &&
+			requestedSubmitEye;
+		if (terminalSubmitHandoff) {
+			const auto holdRoute = static_cast<VRPostLoadCompositorHoldRoute>(
+				vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire));
+			const auto route =
+				holdRoute == VRPostLoadCompositorHoldRoute::MainMenuLoad ?
+					VRLoadPresentationHAMProbeHandoffRoute::MainMenuLoad :
+				holdRoute == VRPostLoadCompositorHoldRoute::InGameLoad ?
+					VRLoadPresentationHAMProbeHandoffRoute::InGameLoad :
+					VRLoadPresentationHAMProbeHandoffRoute::Unknown;
+			hamHandoff = VRLoadPresentationHAMProbeHandoff{
+				.source = VRLoadPresentationHAMProbeHandoffSource::StereoRelease,
+				.route = route,
+				.protectionEpoch = vrPostLoadCompositorHoldEpoch.load(
+					std::memory_order_acquire),
+				.loadingSerial = vrPostLoadCompositorHoldLoadingSerial.load(
+					std::memory_order_acquire),
+				.compositorCycleToken =
+					vrLoadPresentationHAMProbeSubmitContext.compositorCycleToken,
+			};
+		} else if (a_phase == HMDMaskClearPhase::SubmitStageOutput) {
+			hamHandoff = TryClaimVRLoadPresentationHAMProbeTimeoutClear(
+				vrLoadPresentationHAMProbeSubmitContext.compositorCycleToken,
+				vrLoadPresentationHAMProbeSubmitContext.requestedEyeIndex,
+				a_eyeIndex);
+		}
+		if (hamHandoff) {
+			hamCapture = BeginVRLoadPresentationHAMCapture(
+				probeDispatchSequence,
+				globals::state ? std::max(globals::state->frameCount, 1u) : 0u,
+				a_eyeIndex,
+				static_cast<uint32_t>(a_phase),
+				*hamHandoff,
+				colorUAV,
+				depthSRV,
+				depthWidth,
+				depthHeight,
+				colorWidth,
+				colorHeight,
+				depthOffsetX,
+				colorOffsetX,
+				depthOffsetY,
+				colorOffsetY);
+		}
+	}
+#endif
 
 	const bool executed = DispatchHMDMaskClear(
 		colorUAV,
@@ -32227,6 +34931,34 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 		colorOffsetY,
 		validatedFixedVendorRepair ||
 			validatedStabilizingRenderScaleRepair);
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CompleteVRLoadPresentationHAMCapture(hamCapture, executed, colorUAV);
+	if (hamHandoff &&
+		hamHandoff->source ==
+			VRLoadPresentationHAMProbeHandoffSource::TimeoutRelease) {
+		uintptr_t clearColorIdentity = hamCapture.record.colorIdentity;
+		if (clearColorIdentity == 0 && colorUAV) {
+			try {
+				winrt::com_ptr<ID3D11Resource> resource;
+				colorUAV->GetResource(resource.put());
+				clearColorIdentity = GetCOMIdentityAddress(resource.get());
+			} catch (...) {
+				// Keep the failed identity explicit in the correlation result.
+			}
+		}
+		CompleteVRLoadPresentationHAMProbeTimeoutClear(
+			*hamHandoff,
+			a_eyeIndex,
+			clearColorIdentity,
+			shouldClear,
+			deferred,
+			executed,
+			static_cast<uint32_t>(a_phase),
+			probeDispatchSequence,
+			hamCapture);
+	}
+#endif
 
 	RecordVRPostLoadHMDMaskRepair(
 		a_phase,
@@ -32244,7 +34976,7 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 		executed);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	recordObservation(executed);
+	recordObservation(executed, probeDispatchSequence, &hamCapture);
 #endif
 }
 
@@ -32789,9 +35521,12 @@ void Upscaling::ClearShaderCache()
 	vrDesktopMirrorBlitPS = nullptr;   // com_ptr automatically releases
 	vrDesktopMirrorBlitRTV = nullptr;  // com_ptr automatically releases
 	vrDesktopMirrorBlitTarget = nullptr;
-	vrMenuLayerCompositePS = nullptr;     // com_ptr automatically releases
-	vrClearHMDMaskCS = nullptr;           // com_ptr automatically releases
-	vrClearHMDMaskCB = nullptr;           // com_ptr automatically releases
+	vrMenuLayerCompositePS = nullptr;  // com_ptr automatically releases
+	vrClearHMDMaskCS = nullptr;        // com_ptr automatically releases
+	vrClearHMDMaskCB = nullptr;        // com_ptr automatically releases
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	ResetVRLoadPresentationHAMProbeShaderResources();
+#endif
 	copyDepthToSharedBufferPS = nullptr;  // com_ptr automatically releases
 	rcas.ClearShaderCache();
 	lumaSharpen.ClearShaderCache();
@@ -33828,6 +36563,34 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 			// Fail open only before either eye of this compositor cycle submits.
 			// Relatch and recovery ownership remain untouched and continue behind
 			// the visible world after the bounded presentation hold ends.
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const auto holdRoute = static_cast<VRPostLoadCompositorHoldRoute>(
+				vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire));
+			const auto probeRoute =
+				holdRoute == VRPostLoadCompositorHoldRoute::MainMenuLoad ?
+					VRLoadPresentationHAMProbeHandoffRoute::MainMenuLoad :
+				holdRoute == VRPostLoadCompositorHoldRoute::InGameLoad ?
+					VRLoadPresentationHAMProbeHandoffRoute::InGameLoad :
+					VRLoadPresentationHAMProbeHandoffRoute::Unknown;
+			const VRLoadPresentationHAMProbeHandoff timeoutHandoff{
+				.source = VRLoadPresentationHAMProbeHandoffSource::TimeoutRelease,
+				.route = probeRoute,
+				.protectionEpoch = vrPostLoadCompositorHoldEpoch.load(
+					std::memory_order_acquire),
+				.loadingSerial = vrPostLoadCompositorHoldLoadingSerial.load(
+					std::memory_order_acquire),
+				.compositorCycleToken = a_compositorCycleToken,
+				.timeoutElapsedMs = currentTickMs - holdStartTickMs,
+				.timeoutBudgetMs = timeoutMs,
+			};
+#endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			// WaitGetPoses publishes this fresh cycle token only after Notify
+			// returns, so no Submit can claim the marker before the production
+			// timeout reset below. Publishing first also leaves no reset-to-marker
+			// observation gap for the first real submit.
+			ArmVRLoadPresentationHAMProbeTimeoutHandoff(timeoutHandoff);
+#endif
 			FinishVRInitialLoadPresentationProtectionLocked();
 		}
 	}
@@ -33845,6 +36608,10 @@ void Upscaling::ArmVRPostLoadCompositorHold(
 	uint64_t a_loadingSerial)
 {
 	const std::scoped_lock lock(vrPostLoadCompositorHoldMutex);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_beginLoadProtection)
+		ResetVRLoadPresentationHAMProbeTimeoutHandoff();
+#endif
 	if ((!a_beginLoadProtection &&
 			!vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire)) ||
 		!globals::game::isVR ||
@@ -33872,7 +36639,6 @@ void Upscaling::ArmVRPostLoadCompositorHold(
 		FinishVRInitialLoadPresentationProtectionLocked();
 		return;
 	}
-
 	// Keep the lock-free Submit-hook gate observably active throughout the
 	// reset/arm transaction. A hook call that sees Armed blocks on this mutex
 	// until the new epoch and all of its fields are coherent.
@@ -35611,6 +38377,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 	if (a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)
 		return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto previousProbeSubmitContext =
+		vrLoadPresentationHAMProbeSubmitContext;
+	vrLoadPresentationHAMProbeSubmitContext = {
+		.compositorCycleToken = a_compositorCycleToken,
+		.requestedEyeIndex = a_eye == vr::Eye_Right ? 1u : 0u,
+	};
+	const auto restoreProbeSubmitContext = ScopeExit([&]() noexcept {
+		vrLoadPresentationHAMProbeSubmitContext = previousProbeSubmitContext;
+	});
+#endif
 	if (IsSubmitStageDeviceLost())
 		return false;
 

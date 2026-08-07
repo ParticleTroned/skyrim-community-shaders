@@ -19,6 +19,8 @@
 #include <filesystem>
 #include <format>
 #include <imgui.h>
+#include <limits>
+#include <numeric>
 #include <thread>
 #include <utility>
 
@@ -28,6 +30,42 @@ namespace
 	constexpr std::size_t kMaxOutstandingScreenshots = 2;
 	constexpr auto kReadbackMapTimeout = std::chrono::milliseconds(500);
 	constexpr auto kReadbackMapRetryDelay = std::chrono::milliseconds(1);
+	constexpr uint32_t kFramedEyeOutputWidth = 2560;
+	constexpr uint32_t kFramedEyeOutputHeight = 1440;
+	constexpr float kStereoFeatherFraction = 0.08f;
+	constexpr float kFrameCoverageSafetyScale = 0.995f;
+	constexpr uint32_t kMaxHiddenAreaTriangles = 4096;
+	constexpr std::size_t kProjectionLeft = 0;
+	constexpr std::size_t kProjectionRight = 1;
+	constexpr std::size_t kProjectionBottom = 2;
+	constexpr std::size_t kProjectionTop = 3;
+
+	bool IsFramedCapture(ScreenshotFeature::VRCaptureSource a_source)
+	{
+		return a_source == ScreenshotFeature::VRCaptureSource::FramedEye ||
+		       a_source == ScreenshotFeature::VRCaptureSource::FramedStereo;
+	}
+
+	bool IsSubmittedEyeCapture(ScreenshotFeature::VRCaptureSource a_source)
+	{
+		return a_source == ScreenshotFeature::VRCaptureSource::HMDSubmission ||
+		       IsFramedCapture(a_source);
+	}
+
+	const char* DescribeCaptureSource(ScreenshotFeature::VRCaptureSource a_source)
+	{
+		switch (a_source) {
+		case ScreenshotFeature::VRCaptureSource::HMDSubmission:
+			return "the accepted HMD submission";
+		case ScreenshotFeature::VRCaptureSource::FramedEye:
+			return "a framed HMD eye";
+		case ScreenshotFeature::VRCaptureSource::FramedStereo:
+			return "a combined framed HMD view";
+		case ScreenshotFeature::VRCaptureSource::DesktopMirror:
+		default:
+			return "the desktop mirror";
+		}
+	}
 
 	// Capture source for the current runtime. SRV is non-owning - the texture's
 	// lifetime is owned by the slot or a caller-held com_ptr.
@@ -185,6 +223,749 @@ namespace
 		// OpenVR Auto treats 8-bit-per-component sources as gamma and all
 		// other formats as linear.
 		return !IsEightBitPerComponentFormat(a_format);
+	}
+
+	bool CenterCropAndResize(
+		const DirectX::Image& a_source,
+		uint32_t a_targetWidth,
+		uint32_t a_targetHeight,
+		vr::EColorSpace a_colorSpace,
+		DirectX::ScratchImage& a_croppedImage,
+		DirectX::ScratchImage& a_resizedImage)
+	{
+		if (!a_source.pixels || a_source.width == 0 || a_source.height == 0 ||
+			a_targetWidth == 0 || a_targetHeight == 0) {
+			return false;
+		}
+
+		const size_t aspectDivisor = std::gcd<size_t>(a_targetWidth, a_targetHeight);
+		const size_t aspectWidth = a_targetWidth / aspectDivisor;
+		const size_t aspectHeight = a_targetHeight / aspectDivisor;
+		const size_t aspectScale = std::min(
+			a_source.width / aspectWidth,
+			a_source.height / aspectHeight);
+		if (aspectScale == 0) {
+			return false;
+		}
+
+		const size_t cropWidth = aspectScale * aspectWidth;
+		const size_t cropHeight = aspectScale * aspectHeight;
+		const size_t cropX = (a_source.width - cropWidth) / 2;
+		const size_t cropY = (a_source.height - cropHeight) / 2;
+		if (FAILED(a_croppedImage.Initialize2D(a_source.format, cropWidth, cropHeight, 1, 1))) {
+			return false;
+		}
+
+		const auto* cropped = a_croppedImage.GetImage(0, 0, 0);
+		const DirectX::Rect cropRect(cropX, cropY, cropWidth, cropHeight);
+		if (!cropped || FAILED(DirectX::CopyRectangle(
+							a_source,
+							cropRect,
+							*cropped,
+							DirectX::TEX_FILTER_DEFAULT,
+							0,
+							0))) {
+			return false;
+		}
+
+		DirectX::Image resizeSource = *cropped;
+		uint32_t filterFlags = DirectX::TEX_FILTER_CUBIC | DirectX::TEX_FILTER_SEPARATE_ALPHA;
+		if (a_colorSpace == vr::ColorSpace_Linear) {
+			// Prevent an _SRGB resource format from overriding OpenVR's explicit
+			// linear declaration inside DirectXTex's automatic filter flags.
+			resizeSource.format = DirectX::MakeLinear(resizeSource.format);
+		} else if (!IsLinearCapture(a_colorSpace, resizeSource.format)) {
+			filterFlags |= DirectX::TEX_FILTER_SRGB;
+		}
+		return SUCCEEDED(DirectX::Resize(
+			resizeSource,
+			a_targetWidth,
+			a_targetHeight,
+			static_cast<DirectX::TEX_FILTER_FLAGS>(filterFlags),
+			a_resizedImage));
+	}
+
+	struct HeadTangentBounds
+	{
+		float left = std::numeric_limits<float>::max();
+		float right = std::numeric_limits<float>::lowest();
+		float bottom = std::numeric_limits<float>::max();
+		float top = std::numeric_limits<float>::lowest();
+	};
+
+	bool IsValidProjectionTangents(const std::array<float, 4>& a_tangents)
+	{
+		return std::ranges::all_of(a_tangents, [](float a_value) { return std::isfinite(a_value); }) &&
+		       a_tangents[kProjectionRight] > a_tangents[kProjectionLeft] &&
+		       a_tangents[kProjectionTop] > a_tangents[kProjectionBottom];
+	}
+
+	bool IsValidEyeRotation(const vr::HmdMatrix34_t& a_eyeToHead)
+	{
+		for (std::size_t row = 0; row < 3; ++row) {
+			for (std::size_t column = 0; column < 3; ++column) {
+				if (!std::isfinite(a_eyeToHead.m[row][column])) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	void TransformEyeDirectionToHead(
+		const vr::HmdMatrix34_t& a_eyeToHead,
+		float a_eyeX,
+		float a_eyeY,
+		float a_eyeZ,
+		float& a_headX,
+		float& a_headY,
+		float& a_headZ)
+	{
+		a_headX = a_eyeToHead.m[0][0] * a_eyeX + a_eyeToHead.m[0][1] * a_eyeY + a_eyeToHead.m[0][2] * a_eyeZ;
+		a_headY = a_eyeToHead.m[1][0] * a_eyeX + a_eyeToHead.m[1][1] * a_eyeY + a_eyeToHead.m[1][2] * a_eyeZ;
+		a_headZ = a_eyeToHead.m[2][0] * a_eyeX + a_eyeToHead.m[2][1] * a_eyeY + a_eyeToHead.m[2][2] * a_eyeZ;
+	}
+
+	void TransformHeadDirectionToEye(
+		const vr::HmdMatrix34_t& a_eyeToHead,
+		float a_headX,
+		float a_headY,
+		float a_headZ,
+		float& a_eyeX,
+		float& a_eyeY,
+		float& a_eyeZ)
+	{
+		// Eye-to-head is rigid, so the inverse rotation is its transpose.
+		a_eyeX = a_eyeToHead.m[0][0] * a_headX + a_eyeToHead.m[1][0] * a_headY + a_eyeToHead.m[2][0] * a_headZ;
+		a_eyeY = a_eyeToHead.m[0][1] * a_headX + a_eyeToHead.m[1][1] * a_headY + a_eyeToHead.m[2][1] * a_headZ;
+		a_eyeZ = a_eyeToHead.m[0][2] * a_headX + a_eyeToHead.m[1][2] * a_headY + a_eyeToHead.m[2][2] * a_headZ;
+	}
+
+	bool ComputeHeadTangentBounds(
+		const std::array<float, 4>& a_tangents,
+		const vr::HmdMatrix34_t& a_eyeToHead,
+		HeadTangentBounds& a_bounds)
+	{
+		if (!IsValidProjectionTangents(a_tangents) || !IsValidEyeRotation(a_eyeToHead)) {
+			return false;
+		}
+
+		constexpr float kMinForward = 1.0e-4f;
+		const std::array horizontal{ a_tangents[kProjectionLeft], a_tangents[kProjectionRight] };
+		const std::array vertical{ a_tangents[kProjectionBottom], a_tangents[kProjectionTop] };
+		for (float eyeY : vertical) {
+			for (float eyeX : horizontal) {
+				float headX = 0.0f;
+				float headY = 0.0f;
+				float headZ = 0.0f;
+				TransformEyeDirectionToHead(a_eyeToHead, eyeX, eyeY, -1.0f, headX, headY, headZ);
+				const float forward = -headZ;
+				if (!std::isfinite(forward) || forward <= kMinForward) {
+					return false;
+				}
+				const float tangentX = headX / forward;
+				const float tangentY = headY / forward;
+				if (!std::isfinite(tangentX) || !std::isfinite(tangentY)) {
+					return false;
+				}
+				a_bounds.left = std::min(a_bounds.left, tangentX);
+				a_bounds.right = std::max(a_bounds.right, tangentX);
+				a_bounds.bottom = std::min(a_bounds.bottom, tangentY);
+				a_bounds.top = std::max(a_bounds.top, tangentY);
+			}
+		}
+
+		return a_bounds.right > a_bounds.left && a_bounds.top > a_bounds.bottom;
+	}
+
+	bool MapHeadTangentToEyeUV(
+		float a_headTangentX,
+		float a_headTangentY,
+		const std::array<float, 4>& a_tangents,
+		const vr::HmdMatrix34_t& a_eyeToHead,
+		float& a_u,
+		float& a_v)
+	{
+		float eyeX = 0.0f;
+		float eyeY = 0.0f;
+		float eyeZ = 0.0f;
+		TransformHeadDirectionToEye(
+			a_eyeToHead,
+			a_headTangentX,
+			a_headTangentY,
+			-1.0f,
+			eyeX,
+			eyeY,
+			eyeZ);
+		const float forward = -eyeZ;
+		if (!std::isfinite(forward) || forward <= 1.0e-4f) {
+			return false;
+		}
+
+		const float tangentX = eyeX / forward;
+		const float tangentY = eyeY / forward;
+		a_u = (tangentX - a_tangents[kProjectionLeft]) /
+		      (a_tangents[kProjectionRight] - a_tangents[kProjectionLeft]);
+		a_v = (a_tangents[kProjectionTop] - tangentY) /
+		      (a_tangents[kProjectionTop] - a_tangents[kProjectionBottom]);
+		constexpr float kEdgeTolerance = 1.0e-4f;
+		if (!std::isfinite(a_u) || !std::isfinite(a_v) ||
+			a_u < -kEdgeTolerance || a_u > 1.0f + kEdgeTolerance ||
+			a_v < -kEdgeTolerance || a_v > 1.0f + kEdgeTolerance) {
+			return false;
+		}
+		a_u = std::clamp(a_u, 0.0f, 1.0f);
+		a_v = std::clamp(a_v, 0.0f, 1.0f);
+		return true;
+	}
+
+	float TriangleEdge(
+		const vr::HmdVector2_t& a_start,
+		const vr::HmdVector2_t& a_end,
+		float a_u,
+		float a_v)
+	{
+		return (a_u - a_start.v[0]) * (a_end.v[1] - a_start.v[1]) -
+		       (a_v - a_start.v[1]) * (a_end.v[0] - a_start.v[0]);
+	}
+
+	bool IsPointInTriangle(
+		float a_u,
+		float a_v,
+		const vr::HmdVector2_t& a_first,
+		const vr::HmdVector2_t& a_second,
+		const vr::HmdVector2_t& a_third)
+	{
+		constexpr float kTriangleEpsilon = 1.0e-7f;
+		const float area = TriangleEdge(a_first, a_second, a_third.v[0], a_third.v[1]);
+		if (!std::isfinite(area) || std::abs(area) <= kTriangleEpsilon) {
+			return false;
+		}
+
+		const std::array edges{
+			TriangleEdge(a_first, a_second, a_u, a_v),
+			TriangleEdge(a_second, a_third, a_u, a_v),
+			TriangleEdge(a_third, a_first, a_u, a_v)
+		};
+		bool hasNegative = false;
+		bool hasPositive = false;
+		for (float edge : edges) {
+			hasNegative |= edge < -kTriangleEpsilon;
+			hasPositive |= edge > kTriangleEpsilon;
+		}
+		return !(hasNegative && hasPositive);
+	}
+
+	bool IsEyeSampleVisible(
+		const std::vector<uint8_t>& a_visibilityMask,
+		std::size_t a_width,
+		std::size_t a_height,
+		float a_u,
+		float a_v);
+
+	bool IsHeadTangentCovered(
+		float a_headTangentX,
+		float a_headTangentY,
+		const std::array<std::array<float, 4>, 2>& a_projectionTangents,
+		const std::array<vr::HmdMatrix34_t, 2>& a_eyeToHeadTransforms,
+		const std::array<std::vector<uint8_t>, 2>& a_visibilityMasks,
+		const std::array<const DirectX::Image*, 2>& a_eyeImages)
+	{
+		for (std::size_t eyeIndex = 0; eyeIndex < a_projectionTangents.size(); ++eyeIndex) {
+			float sourceU = 0.0f;
+			float sourceV = 0.0f;
+			if (MapHeadTangentToEyeUV(
+					a_headTangentX,
+					a_headTangentY,
+					a_projectionTangents[eyeIndex],
+					a_eyeToHeadTransforms[eyeIndex],
+					sourceU,
+					sourceV) &&
+				a_eyeImages[eyeIndex] &&
+				IsEyeSampleVisible(
+					a_visibilityMasks[eyeIndex],
+					a_eyeImages[eyeIndex]->width,
+					a_eyeImages[eyeIndex]->height,
+					sourceU,
+					sourceV)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool IsFrameCoverageSampled(
+		float a_centerX,
+		float a_centerY,
+		float a_frameWidth,
+		float a_frameHeight,
+		const std::array<std::array<float, 4>, 2>& a_projectionTangents,
+		const std::array<vr::HmdMatrix34_t, 2>& a_eyeToHeadTransforms,
+		const std::array<std::vector<uint8_t>, 2>& a_visibilityMasks,
+		const std::array<const DirectX::Image*, 2>& a_eyeImages)
+	{
+		// A modest interior grid catches gaps introduced by reducing rotated eye
+		// frusta to axis-aligned bounds. The per-pixel compositor still validates
+		// coverage, so this is only a cheap way to fit the frame before allocation.
+		constexpr int kCoverageSamples = 64;
+		for (int y = 0; y <= kCoverageSamples; ++y) {
+			const float normalizedY = static_cast<float>(y) / static_cast<float>(kCoverageSamples) - 0.5f;
+			const float tangentY = a_centerY - normalizedY * a_frameHeight;
+			for (int x = 0; x <= kCoverageSamples; ++x) {
+				const float normalizedX = static_cast<float>(x) / static_cast<float>(kCoverageSamples) - 0.5f;
+				const float tangentX = a_centerX + normalizedX * a_frameWidth;
+				if (!IsHeadTangentCovered(
+						tangentX,
+						tangentY,
+						a_projectionTangents,
+						a_eyeToHeadTransforms,
+						a_visibilityMasks,
+						a_eyeImages)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	DirectX::XMFLOAT4 LerpColor(
+		const DirectX::XMFLOAT4& a_from,
+		const DirectX::XMFLOAT4& a_to,
+		float a_weight)
+	{
+		return {
+			a_from.x + (a_to.x - a_from.x) * a_weight,
+			a_from.y + (a_to.y - a_from.y) * a_weight,
+			a_from.z + (a_to.z - a_from.z) * a_weight,
+			a_from.w + (a_to.w - a_from.w) * a_weight
+		};
+	}
+
+	bool SampleLinearFloatImage(
+		const DirectX::Image& a_image,
+		float a_u,
+		float a_v,
+		DirectX::XMFLOAT4& a_color)
+	{
+		if (!a_image.pixels || a_image.format != DXGI_FORMAT_R32G32B32A32_FLOAT ||
+			a_image.width == 0 || a_image.height == 0 ||
+			a_image.rowPitch < a_image.width * sizeof(DirectX::XMFLOAT4)) {
+			return false;
+		}
+
+		const float sourceX = std::clamp(
+			a_u * static_cast<float>(a_image.width) - 0.5f,
+			0.0f,
+			static_cast<float>(a_image.width - 1));
+		const float sourceY = std::clamp(
+			a_v * static_cast<float>(a_image.height) - 0.5f,
+			0.0f,
+			static_cast<float>(a_image.height - 1));
+		const std::size_t x0 = static_cast<std::size_t>(std::floor(sourceX));
+		const std::size_t y0 = static_cast<std::size_t>(std::floor(sourceY));
+		const std::size_t x1 = std::min(x0 + 1, a_image.width - 1);
+		const std::size_t y1 = std::min(y0 + 1, a_image.height - 1);
+		const float xWeight = sourceX - static_cast<float>(x0);
+		const float yWeight = sourceY - static_cast<float>(y0);
+
+		const auto* row0 = reinterpret_cast<const DirectX::XMFLOAT4*>(a_image.pixels + y0 * a_image.rowPitch);
+		const auto* row1 = reinterpret_cast<const DirectX::XMFLOAT4*>(a_image.pixels + y1 * a_image.rowPitch);
+		const auto top = LerpColor(row0[x0], row0[x1], xWeight);
+		const auto bottom = LerpColor(row1[x0], row1[x1], xWeight);
+		a_color = LerpColor(top, bottom, yWeight);
+		return true;
+	}
+
+	bool BuildEyeVisibilityMask(
+		const std::vector<vr::HmdVector2_t>& a_hiddenAreaMesh,
+		std::size_t a_width,
+		std::size_t a_height,
+		std::vector<uint8_t>& a_visibilityMask)
+	{
+		a_visibilityMask.clear();
+		if (a_hiddenAreaMesh.empty()) {
+			return true;
+		}
+		if (a_width == 0 || a_height == 0 ||
+			a_width > std::numeric_limits<std::size_t>::max() / a_height) {
+			return false;
+		}
+
+		a_visibilityMask.assign(a_width * a_height, 1);
+		for (std::size_t vertex = 0; vertex + 2 < a_hiddenAreaMesh.size(); vertex += 3) {
+			const auto& first = a_hiddenAreaMesh[vertex];
+			const auto& second = a_hiddenAreaMesh[vertex + 1];
+			const auto& third = a_hiddenAreaMesh[vertex + 2];
+			const float minU = std::min({ first.v[0], second.v[0], third.v[0] });
+			const float maxU = std::max({ first.v[0], second.v[0], third.v[0] });
+			const float minV = std::min({ first.v[1], second.v[1], third.v[1] });
+			const float maxV = std::max({ first.v[1], second.v[1], third.v[1] });
+			if (!std::isfinite(minU) || !std::isfinite(maxU) ||
+				!std::isfinite(minV) || !std::isfinite(maxV)) {
+				return false;
+			}
+			if (maxU < 0.0f || minU > 1.0f || maxV < 0.0f || minV > 1.0f) {
+				continue;
+			}
+			const float clippedMinU = std::clamp(minU, 0.0f, 1.0f);
+			const float clippedMaxU = std::clamp(maxU, 0.0f, 1.0f);
+			const float clippedMinV = std::clamp(minV, 0.0f, 1.0f);
+			const float clippedMaxV = std::clamp(maxV, 0.0f, 1.0f);
+
+			const auto lastX = static_cast<int64_t>(a_width - 1);
+			const auto lastY = static_cast<int64_t>(a_height - 1);
+			const int64_t firstX = std::clamp(
+				static_cast<int64_t>(std::floor(static_cast<double>(clippedMinU) * a_width)) - 1,
+				int64_t{ 0 },
+				lastX);
+			const int64_t finalX = std::clamp(
+				static_cast<int64_t>(std::ceil(static_cast<double>(clippedMaxU) * a_width)) + 1,
+				int64_t{ 0 },
+				lastX);
+			const int64_t firstY = std::clamp(
+				static_cast<int64_t>(std::floor(static_cast<double>(clippedMinV) * a_height)) - 1,
+				int64_t{ 0 },
+				lastY);
+			const int64_t finalY = std::clamp(
+				static_cast<int64_t>(std::ceil(static_cast<double>(clippedMaxV) * a_height)) + 1,
+				int64_t{ 0 },
+				lastY);
+			for (int64_t y = firstY; y <= finalY; ++y) {
+				const float sampleV = (static_cast<float>(y) + 0.5f) / static_cast<float>(a_height);
+				for (int64_t x = firstX; x <= finalX; ++x) {
+					const float sampleU = (static_cast<float>(x) + 0.5f) / static_cast<float>(a_width);
+					if (IsPointInTriangle(sampleU, sampleV, first, second, third)) {
+						a_visibilityMask[static_cast<std::size_t>(y) * a_width + static_cast<std::size_t>(x)] = 0;
+					}
+				}
+			}
+		}
+		return true;
+	}
+
+	bool IsEyeSampleVisible(
+		const std::vector<uint8_t>& a_visibilityMask,
+		std::size_t a_width,
+		std::size_t a_height,
+		float a_u,
+		float a_v)
+	{
+		if (a_visibilityMask.empty()) {
+			return true;
+		}
+		if (a_width == 0 || a_height == 0 ||
+			a_width > std::numeric_limits<std::size_t>::max() / a_height ||
+			a_visibilityMask.size() != a_width * a_height) {
+			return false;
+		}
+
+		const float sourceX = std::clamp(
+			a_u * static_cast<float>(a_width) - 0.5f,
+			0.0f,
+			static_cast<float>(a_width - 1));
+		const float sourceY = std::clamp(
+			a_v * static_cast<float>(a_height) - 0.5f,
+			0.0f,
+			static_cast<float>(a_height - 1));
+		const std::size_t x0 = static_cast<std::size_t>(std::floor(sourceX));
+		const std::size_t y0 = static_cast<std::size_t>(std::floor(sourceY));
+		const std::size_t x1 = std::min(x0 + 1, a_width - 1);
+		const std::size_t y1 = std::min(y0 + 1, a_height - 1);
+		return a_visibilityMask[y0 * a_width + x0] != 0 &&
+		       a_visibilityMask[y0 * a_width + x1] != 0 &&
+		       a_visibilityMask[y1 * a_width + x0] != 0 &&
+		       a_visibilityMask[y1 * a_width + x1] != 0;
+	}
+
+	bool ConvertCaptureToLinearFloat(
+		const DirectX::Image& a_source,
+		vr::EColorSpace a_colorSpace,
+		DirectX::ScratchImage& a_output)
+	{
+		DirectX::Image conversionSource = a_source;
+		uint32_t convertFlags = DirectX::TEX_FILTER_DEFAULT;
+		if (a_colorSpace == vr::ColorSpace_Linear) {
+			// OpenVR's explicit colorspace is authoritative. DirectXTex otherwise
+			// decodes an _SRGB format automatically, even with no SRGB_IN flag.
+			conversionSource.format = DirectX::MakeLinear(conversionSource.format);
+		} else if (!IsLinearCapture(a_colorSpace, conversionSource.format)) {
+			convertFlags |= DirectX::TEX_FILTER_SRGB_IN;
+		}
+
+		return SUCCEEDED(DirectX::Convert(
+			conversionSource,
+			DXGI_FORMAT_R32G32B32A32_FLOAT,
+			static_cast<DirectX::TEX_FILTER_FLAGS>(convertFlags),
+			0.0f,
+			a_output));
+	}
+
+	bool ComposeFramedStereo(
+		const std::array<const DirectX::Image*, 2>& a_eyeImages,
+		const std::array<std::array<float, 4>, 2>& a_projectionTangents,
+		const std::array<vr::HmdMatrix34_t, 2>& a_eyeToHeadTransforms,
+		const std::array<std::vector<vr::HmdVector2_t>, 2>& a_hiddenAreaMeshes,
+		vr::EVREye a_dominantEye,
+		vr::EColorSpace a_colorSpace,
+		DirectX::ScratchImage& a_output)
+	{
+		if (!a_eyeImages[0] || !a_eyeImages[1]) {
+			return false;
+		}
+
+		std::array<HeadTangentBounds, 2> headBounds{};
+		for (std::size_t eyeIndex = 0; eyeIndex < headBounds.size(); ++eyeIndex) {
+			if (!ComputeHeadTangentBounds(
+					a_projectionTangents[eyeIndex],
+					a_eyeToHeadTransforms[eyeIndex],
+					headBounds[eyeIndex])) {
+				return false;
+			}
+		}
+		std::array<std::vector<uint8_t>, 2> eyeVisibilityMasks;
+		for (std::size_t eyeIndex = 0; eyeIndex < eyeVisibilityMasks.size(); ++eyeIndex) {
+			if (!BuildEyeVisibilityMask(
+					a_hiddenAreaMeshes[eyeIndex],
+					a_eyeImages[eyeIndex]->width,
+					a_eyeImages[eyeIndex]->height,
+					eyeVisibilityMasks[eyeIndex])) {
+				return false;
+			}
+		}
+
+		const float unionLeft = std::min(headBounds[0].left, headBounds[1].left);
+		const float unionRight = std::max(headBounds[0].right, headBounds[1].right);
+		const float unionBottom = std::min(headBounds[0].bottom, headBounds[1].bottom);
+		const float unionTop = std::max(headBounds[0].top, headBounds[1].top);
+		if (!(unionRight > unionLeft) || !(unionTop > unionBottom)) {
+			return false;
+		}
+
+		const std::size_t dominantIndex = a_dominantEye == vr::Eye_Right ? 1u : 0u;
+		float dominantHeadX = 0.0f;
+		float dominantHeadY = 0.0f;
+		float dominantHeadZ = 0.0f;
+		TransformEyeDirectionToHead(
+			a_eyeToHeadTransforms[dominantIndex],
+			0.0f,
+			0.0f,
+			-1.0f,
+			dominantHeadX,
+			dominantHeadY,
+			dominantHeadZ);
+		const float dominantForward = -dominantHeadZ;
+		if (!std::isfinite(dominantForward) || dominantForward <= 1.0e-4f) {
+			return false;
+		}
+		const float desiredCenterX = dominantHeadX / dominantForward;
+		const float desiredCenterY = dominantHeadY / dominantForward;
+
+		constexpr float targetAspect = static_cast<float>(kFramedEyeOutputWidth) /
+		                               static_cast<float>(kFramedEyeOutputHeight);
+		const float availableHalfWidth = std::min(
+			desiredCenterX - unionLeft,
+			unionRight - desiredCenterX);
+		const float availableHalfHeight = std::min(
+			desiredCenterY - unionBottom,
+			unionTop - desiredCenterY);
+		if (!(availableHalfWidth > 0.0f) || !(availableHalfHeight > 0.0f) ||
+			!IsHeadTangentCovered(
+				desiredCenterX,
+				desiredCenterY,
+				a_projectionTangents,
+				a_eyeToHeadTransforms,
+				eyeVisibilityMasks,
+				a_eyeImages)) {
+			return false;
+		}
+
+		// Keep the selected eye's optical axis at the exact center. Maximizing
+		// first and clamping afterward would silently recenter wide frames on the
+		// union midpoint, defeating the dominant-eye setting.
+		float frameHalfWidth = std::min(availableHalfWidth, availableHalfHeight * targetAspect);
+		float frameHalfHeight = frameHalfWidth / targetAspect;
+		float frameWidth = frameHalfWidth * 2.0f;
+		float frameHeight = frameHalfHeight * 2.0f;
+
+		if (!IsFrameCoverageSampled(
+				desiredCenterX,
+				desiredCenterY,
+				frameWidth,
+				frameHeight,
+				a_projectionTangents,
+				a_eyeToHeadTransforms,
+				eyeVisibilityMasks,
+				a_eyeImages)) {
+			// Rotated frusta can leave a notch inside their axis-aligned union.
+			// Find the largest sampled-safe frame without moving the chosen center.
+			float coveredScale = 0.0f;
+			float uncoveredScale = 1.0f;
+			for (int iteration = 0; iteration < 18; ++iteration) {
+				const float candidateScale = (coveredScale + uncoveredScale) * 0.5f;
+				if (IsFrameCoverageSampled(
+						desiredCenterX,
+						desiredCenterY,
+						frameWidth * candidateScale,
+						frameHeight * candidateScale,
+						a_projectionTangents,
+						a_eyeToHeadTransforms,
+						eyeVisibilityMasks,
+						a_eyeImages)) {
+					coveredScale = candidateScale;
+				} else {
+					uncoveredScale = candidateScale;
+				}
+			}
+			if (coveredScale <= 1.0e-3f) {
+				return false;
+			}
+			frameWidth *= coveredScale;
+			frameHeight *= coveredScale;
+			frameHalfWidth = frameWidth * 0.5f;
+			frameHalfHeight = frameHeight * 0.5f;
+		}
+		if (!a_hiddenAreaMeshes[0].empty() || !a_hiddenAreaMeshes[1].empty()) {
+			frameWidth *= kFrameCoverageSafetyScale;
+			frameHeight *= kFrameCoverageSafetyScale;
+			frameHalfWidth = frameWidth * 0.5f;
+			frameHalfHeight = frameHeight * 0.5f;
+		}
+
+		const float frameLeft = desiredCenterX - frameHalfWidth;
+		const float frameTop = desiredCenterY + frameHalfHeight;
+
+		if (FAILED(a_output.Initialize2D(
+				DXGI_FORMAT_R32G32B32A32_FLOAT,
+				kFramedEyeOutputWidth,
+				kFramedEyeOutputHeight,
+				1,
+				1))) {
+			return false;
+		}
+		auto* outputImage = a_output.GetImage(0, 0, 0);
+		if (!outputImage || !outputImage->pixels ||
+			outputImage->rowPitch < outputImage->width * sizeof(DirectX::XMFLOAT4)) {
+			return false;
+		}
+
+		std::vector<uint8_t> dominantWeights(outputImage->width * outputImage->height, 0);
+		DirectX::ScratchImage linearEye;
+		if (!ConvertCaptureToLinearFloat(*a_eyeImages[dominantIndex], a_colorSpace, linearEye)) {
+			return false;
+		}
+		const auto* linearEyeImage = linearEye.GetImage(0, 0, 0);
+		if (!linearEyeImage) {
+			return false;
+		}
+
+		// Store the dominant eye first and retain a compact feather weight per
+		// output pixel. Processing eyes sequentially avoids holding two full-size
+		// RGBA32F conversions at once.
+		for (std::size_t y = 0; y < outputImage->height; ++y) {
+			auto* outputRow = reinterpret_cast<DirectX::XMFLOAT4*>(outputImage->pixels + y * outputImage->rowPitch);
+			const float tangentY = frameTop -
+			                       (static_cast<float>(y) + 0.5f) /
+			                           static_cast<float>(outputImage->height) * frameHeight;
+			for (std::size_t x = 0; x < outputImage->width; ++x) {
+				const float tangentX = frameLeft +
+				                       (static_cast<float>(x) + 0.5f) /
+				                           static_cast<float>(outputImage->width) * frameWidth;
+				float sourceU = 0.0f;
+				float sourceV = 0.0f;
+				DirectX::XMFLOAT4 dominantColor{};
+				if (MapHeadTangentToEyeUV(
+						tangentX,
+						tangentY,
+						a_projectionTangents[dominantIndex],
+						a_eyeToHeadTransforms[dominantIndex],
+						sourceU,
+						sourceV) &&
+					IsEyeSampleVisible(
+						eyeVisibilityMasks[dominantIndex],
+						linearEyeImage->width,
+						linearEyeImage->height,
+						sourceU,
+						sourceV) &&
+					SampleLinearFloatImage(*linearEyeImage, sourceU, sourceV, dominantColor)) {
+					const float distanceFromPeripheralEdge = dominantIndex == 1u ? sourceU : 1.0f - sourceU;
+					float dominantWeight = std::clamp(
+						distanceFromPeripheralEdge / kStereoFeatherFraction,
+						0.0f,
+						1.0f);
+					dominantWeight = dominantWeight * dominantWeight * (3.0f - 2.0f * dominantWeight);
+					outputRow[x] = dominantColor;
+					dominantWeights[y * outputImage->width + x] = static_cast<uint8_t>(
+						std::lround(dominantWeight * 254.0f) + 1);
+				} else {
+					outputRow[x] = { 0.0f, 0.0f, 0.0f, 1.0f };
+				}
+			}
+		}
+
+		linearEye.Release();
+		const std::size_t otherIndex = 1u - dominantIndex;
+		if (!ConvertCaptureToLinearFloat(*a_eyeImages[otherIndex], a_colorSpace, linearEye)) {
+			return false;
+		}
+		linearEyeImage = linearEye.GetImage(0, 0, 0);
+		if (!linearEyeImage) {
+			return false;
+		}
+
+		for (std::size_t y = 0; y < outputImage->height; ++y) {
+			auto* outputRow = reinterpret_cast<DirectX::XMFLOAT4*>(outputImage->pixels + y * outputImage->rowPitch);
+			const float tangentY = frameTop -
+			                       (static_cast<float>(y) + 0.5f) /
+			                           static_cast<float>(outputImage->height) * frameHeight;
+			for (std::size_t x = 0; x < outputImage->width; ++x) {
+				const uint8_t dominantWeightByte = dominantWeights[y * outputImage->width + x];
+				if (dominantWeightByte == 255) {
+					continue;
+				}
+
+				const float tangentX = frameLeft +
+				                       (static_cast<float>(x) + 0.5f) /
+				                           static_cast<float>(outputImage->width) * frameWidth;
+				float sourceU = 0.0f;
+				float sourceV = 0.0f;
+				DirectX::XMFLOAT4 otherColor{};
+				const bool hasOtherColor = MapHeadTangentToEyeUV(
+											   tangentX,
+											   tangentY,
+											   a_projectionTangents[otherIndex],
+											   a_eyeToHeadTransforms[otherIndex],
+											   sourceU,
+											   sourceV) &&
+				                           IsEyeSampleVisible(
+											   eyeVisibilityMasks[otherIndex],
+											   linearEyeImage->width,
+											   linearEyeImage->height,
+											   sourceU,
+											   sourceV) &&
+				                           SampleLinearFloatImage(
+											   *linearEyeImage,
+											   sourceU,
+											   sourceV,
+											   otherColor);
+				if (!hasOtherColor) {
+					if (dominantWeightByte == 0) {
+						// Never emit a synthetic black hole. Let the caller fall back to
+						// a conventional dominant-eye frame for unusual headset geometry.
+						return false;
+					}
+					continue;
+				}
+
+				if (dominantWeightByte == 0) {
+					outputRow[x] = otherColor;
+				} else {
+					const float dominantWeight = static_cast<float>(dominantWeightByte - 1) / 254.0f;
+					outputRow[x] = LerpColor(otherColor, outputRow[x], dominantWeight);
+				}
+			}
+		}
+
+		return true;
 	}
 
 	float LinearToSrgb(float a_value)
@@ -521,10 +1302,49 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sdrUsePng = a_json["SdrUsePng"];
 	if (a_json.contains("CopyToClipboard"))
 		copyToClipboard = a_json["CopyToClipboard"];
+	vr::EVREye legacyFramedEye = vr::Eye_Left;
 	if (a_json.contains("VRCaptureSource") && a_json["VRCaptureSource"].is_string()) {
-		vrCaptureSource = a_json["VRCaptureSource"].get<std::string>() == "DesktopMirror" ?
-		                      VRCaptureSource::DesktopMirror :
-		                      VRCaptureSource::HMDSubmission;
+		const auto captureSource = a_json["VRCaptureSource"].get<std::string>();
+		if (captureSource == "DesktopMirror") {
+			vrCaptureSource = VRCaptureSource::DesktopMirror;
+		} else if (captureSource == "FramedStereo") {
+			vrCaptureSource = VRCaptureSource::FramedStereo;
+		} else if (captureSource == "FramedEye") {
+			vrCaptureSource = VRCaptureSource::FramedEye;
+		} else {
+			vrCaptureSource = VRCaptureSource::HMDSubmission;
+		}
+	}
+	if (a_json.contains("VRFramedEye") && a_json["VRFramedEye"].is_string()) {
+		legacyFramedEye = a_json["VRFramedEye"].get<std::string>() == "Right" ?
+		                      vr::Eye_Right :
+		                      vr::Eye_Left;
+	}
+	if (a_json.contains("VRFramedView") && a_json["VRFramedView"].is_string()) {
+		const auto framedView = a_json["VRFramedView"].get<std::string>();
+		if (framedView == "Combined") {
+			vrFramedView = VRFramedView::Combined;
+		} else if (framedView == "Right") {
+			vrFramedView = VRFramedView::Right;
+		} else {
+			vrFramedView = VRFramedView::Left;
+		}
+	} else if (vrCaptureSource == VRCaptureSource::FramedStereo) {
+		vrFramedView = VRFramedView::Combined;
+	} else {
+		vrFramedView = legacyFramedEye == vr::Eye_Right ? VRFramedView::Right : VRFramedView::Left;
+	}
+	if (a_json.contains("VRFramedDominantEye") && a_json["VRFramedDominantEye"].is_string()) {
+		vrFramedDominantEye = a_json["VRFramedDominantEye"].get<std::string>() == "Right" ?
+		                          vr::Eye_Right :
+		                          vr::Eye_Left;
+	} else {
+		vrFramedDominantEye = legacyFramedEye;
+	}
+	if (IsFramedCapture(vrCaptureSource)) {
+		vrCaptureSource = vrFramedView == VRFramedView::Combined ?
+		                      VRCaptureSource::FramedStereo :
+		                      VRCaptureSource::FramedEye;
 	}
 
 	subrect.LoadSettings(a_json);
@@ -538,9 +1358,38 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 	a_json["ApplyCropToScreenshot"] = applyCropToScreenshot;
 	a_json["SdrUsePng"] = sdrUsePng;
 	a_json["CopyToClipboard"] = copyToClipboard;
-	a_json["VRCaptureSource"] = vrCaptureSource == VRCaptureSource::DesktopMirror ?
-	                                "DesktopMirror" :
-	                                "HMDSubmission";
+	switch (vrCaptureSource) {
+	case VRCaptureSource::DesktopMirror:
+		a_json["VRCaptureSource"] = "DesktopMirror";
+		break;
+	case VRCaptureSource::FramedEye:
+		a_json["VRCaptureSource"] = "FramedEye";
+		break;
+	case VRCaptureSource::FramedStereo:
+		a_json["VRCaptureSource"] = "FramedStereo";
+		break;
+	case VRCaptureSource::HMDSubmission:
+	default:
+		a_json["VRCaptureSource"] = "HMDSubmission";
+		break;
+	}
+	switch (vrFramedView) {
+	case VRFramedView::Combined:
+		a_json["VRFramedView"] = "Combined";
+		break;
+	case VRFramedView::Right:
+		a_json["VRFramedView"] = "Right";
+		break;
+	case VRFramedView::Left:
+	default:
+		a_json["VRFramedView"] = "Left";
+		break;
+	}
+	a_json["VRFramedDominantEye"] = vrFramedDominantEye == vr::Eye_Right ? "Right" : "Left";
+	const auto legacyFramedEye = vrFramedView == VRFramedView::Combined ?
+	                                 vrFramedDominantEye :
+	                                 (vrFramedView == VRFramedView::Right ? vr::Eye_Right : vr::Eye_Left);
+	a_json["VRFramedEye"] = legacyFramedEye == vr::Eye_Right ? "Right" : "Left";
 	subrect.SaveSettings(a_json);
 }
 
@@ -557,16 +1406,70 @@ void ScreenshotFeature::DrawSettings()
 
 	if (globals::game::isVR) {
 		ImGui::SeparatorText("VR Capture Source");
-		int captureSource = vrCaptureSource == VRCaptureSource::DesktopMirror ? 1 : 0;
-		ImGui::RadioButton("HMD submission (best quality)", &captureSource, 0);
-		ImGui::SameLine();
-		ImGui::RadioButton("Desktop mirror", &captureSource, 1);
-		vrCaptureSource = captureSource == 1 ?
-		                      VRCaptureSource::DesktopMirror :
-		                      VRCaptureSource::HMDSubmission;
+		int captureSource = IsFramedCapture(vrCaptureSource) ?
+		                        1 :
+		                        (vrCaptureSource == VRCaptureSource::DesktopMirror ? 2 : 0);
+		ImGui::RadioButton(
+			"HMD submission (both eyes)",
+			&captureSource,
+			0);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("HMD submission captures the final accepted left and right eye textures.");
-			ImGui::TextUnformatted("Desktop mirror captures Skyrim's current desktop backbuffer, without substituting HMD eye textures.");
+			ImGui::TextUnformatted("Captures the final accepted left and right eye textures side-by-side.");
+		}
+		ImGui::SameLine();
+		ImGui::RadioButton(
+			"Framed view (2560 x 1440)",
+			&captureSource,
+			1);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Saves a left-eye, right-eye, or combined 16:9 view at 2560 x 1440.");
+		}
+		ImGui::SameLine();
+		ImGui::RadioButton(
+			"Desktop mirror",
+			&captureSource,
+			2);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Captures Skyrim's current desktop backbuffer without substituting HMD eye textures.");
+		}
+		if (captureSource == 0) {
+			vrCaptureSource = VRCaptureSource::HMDSubmission;
+		} else if (captureSource == 2) {
+			vrCaptureSource = VRCaptureSource::DesktopMirror;
+		} else if (!IsFramedCapture(vrCaptureSource)) {
+			vrCaptureSource = vrFramedView == VRFramedView::Combined ?
+			                      VRCaptureSource::FramedStereo :
+			                      VRCaptureSource::FramedEye;
+		}
+
+		if (IsFramedCapture(vrCaptureSource)) {
+			int framedView = static_cast<int>(vrFramedView);
+			ImGui::TextUnformatted("View:");
+			ImGui::SameLine();
+			ImGui::RadioButton("Left eye##FramedView", &framedView, 0);
+			ImGui::SameLine();
+			ImGui::RadioButton("Right eye##FramedView", &framedView, 1);
+			ImGui::SameLine();
+			ImGui::RadioButton("Combined##FramedView", &framedView, 2);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Combined keeps the dominant eye through the shared view and fills its outer edge from the other eye.");
+			}
+
+			vrFramedView = framedView == 2 ?
+			                   VRFramedView::Combined :
+			                   (framedView == 1 ? VRFramedView::Right : VRFramedView::Left);
+			if (vrFramedView == VRFramedView::Combined) {
+				vrCaptureSource = VRCaptureSource::FramedStereo;
+				int dominantEye = vrFramedDominantEye == vr::Eye_Right ? 1 : 0;
+				ImGui::TextUnformatted("Dominant eye:");
+				ImGui::SameLine();
+				ImGui::RadioButton("Left##DominantFramedEye", &dominantEye, 0);
+				ImGui::SameLine();
+				ImGui::RadioButton("Right##DominantFramedEye", &dominantEye, 1);
+				vrFramedDominantEye = dominantEye == 1 ? vr::Eye_Right : vr::Eye_Left;
+			} else {
+				vrCaptureSource = VRCaptureSource::FramedEye;
+			}
 		}
 	}
 
@@ -576,7 +1479,15 @@ void ScreenshotFeature::DrawSettings()
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
-	ImGui::Checkbox("Apply crop", &applyCropToScreenshot);
+	const bool usesFixedEyeFraming = globals::game::isVR && IsFramedCapture(vrCaptureSource);
+	if (usesFixedEyeFraming) {
+		bool fixedCropDisabled = false;
+		ImGui::BeginDisabled();
+		ImGui::Checkbox("Apply crop", &fixedCropDisabled);
+		ImGui::EndDisabled();
+	} else {
+		ImGui::Checkbox("Apply crop", &applyCropToScreenshot);
+	}
 
 	ImGui::SeparatorText("Output");
 
@@ -626,6 +1537,23 @@ void ScreenshotFeature::DrawSettings()
 		Util::Text::WrappedWarning(
 			"This hotkey collides with vanilla PrintScreen; both saves will fire. "
 			"Set bAllowScreenShot=0 in Skyrim.ini to suppress vanilla, or pick a different hotkey above.");
+	}
+
+	if (usesFixedEyeFraming) {
+		ImGui::SeparatorText("Framing");
+		if (vrCaptureSource == VRCaptureSource::FramedStereo) {
+			ImGui::TextWrapped(
+				"Combined aligns both submitted eyes in head-projection space. The dominant eye owns the shared view; "
+				"the other eye fills the outer periphery through a narrow feathered join. Without scene depth, nearby "
+				"objects can show a seam or duplication.");
+		} else {
+			ImGui::TextWrapped(
+				"The selected submitted eye is center-cropped to 16:9 and resized to 2560 x 1440 without stretching.");
+		}
+		ImGui::TextWrapped(
+			"The ordinary crop preset is not applied. A live eye submission is required, so framed views are "
+			"unavailable during loading screens.");
+		return;
 	}
 
 	ImGui::SeparatorText("Crop");
@@ -710,8 +1638,60 @@ ScreenshotFeature::CaptureOptions ScreenshotFeature::SnapshotCaptureOptions() co
 		.cropUV = subrect.GetUV(),
 		.applyCrop = applyCropToScreenshot,
 		.saveAsPng = sdrUsePng,
-		.copyToClipboard = copyToClipboard
+		.copyToClipboard = copyToClipboard,
+		.framedEye = vrCaptureSource == VRCaptureSource::FramedStereo ?
+		                 vrFramedDominantEye :
+		                 (vrFramedView == VRFramedView::Right ? vr::Eye_Right : vr::Eye_Left)
 	};
+}
+
+bool ScreenshotFeature::SnapshotStereoGeometry(CaptureOptions& a_options) const
+{
+	a_options.stereoProjectionValid = false;
+	a_options.hiddenAreaMeshes = {};
+	auto* openvr = RE::BSOpenVR::GetSingleton();
+	if (!openvr || !openvr->vrSystem) {
+		return false;
+	}
+
+	for (std::size_t eyeIndex = 0; eyeIndex < a_options.eyeProjectionTangents.size(); ++eyeIndex) {
+		const auto eye = eyeIndex == 1 ? vr::Eye_Right : vr::Eye_Left;
+		float left = 0.0f;
+		float right = 0.0f;
+		float bottom = 0.0f;
+		float top = 0.0f;
+		// OpenVR's third/fourth parameter names are historically reversed;
+		// their returned values are the bottom and top tangents respectively.
+		openvr->vrSystem->GetProjectionRaw(eye, &left, &right, &bottom, &top);
+		a_options.eyeProjectionTangents[eyeIndex] = { left, right, bottom, top };
+		a_options.eyeToHeadTransforms[eyeIndex] = openvr->vrSystem->GetEyeToHeadTransform(eye);
+		if (!IsValidProjectionTangents(a_options.eyeProjectionTangents[eyeIndex]) ||
+			!IsValidEyeRotation(a_options.eyeToHeadTransforms[eyeIndex])) {
+			return false;
+		}
+
+		const auto hiddenAreaMesh = openvr->vrSystem->GetHiddenAreaMesh(
+			eye,
+			vr::k_eHiddenAreaMesh_Standard);
+		if (hiddenAreaMesh.unTriangleCount > kMaxHiddenAreaTriangles ||
+			(hiddenAreaMesh.unTriangleCount != 0 && !hiddenAreaMesh.pVertexData)) {
+			return false;
+		}
+		const std::size_t hiddenVertexCount = static_cast<std::size_t>(hiddenAreaMesh.unTriangleCount) * 3;
+		if (hiddenVertexCount != 0) {
+			a_options.hiddenAreaMeshes[eyeIndex].assign(
+				hiddenAreaMesh.pVertexData,
+				hiddenAreaMesh.pVertexData + hiddenVertexCount);
+			for (const auto& vertex : a_options.hiddenAreaMeshes[eyeIndex]) {
+				if (!std::isfinite(vertex.v[0]) || !std::isfinite(vertex.v[1])) {
+					return false;
+				}
+			}
+		}
+	}
+
+	a_options.stereoProjectionValid = true;
+	return true;
 }
 
 void ScreenshotFeature::ClearActiveCapture(ActiveCapture& a_capture)
@@ -740,6 +1720,13 @@ void ScreenshotFeature::RequestCapture()
 	}
 
 	auto options = SnapshotCaptureOptions();
+	auto requestedSource = globals::game::isVR ?
+	                           vrCaptureSource :
+	                           VRCaptureSource::DesktopMirror;
+	if (requestedSource == VRCaptureSource::FramedStereo && !SnapshotStereoGeometry(options)) {
+		logger::warn("Combined-eye projection data is unavailable; this screenshot will use the dominant eye only.");
+		requestedSource = VRCaptureSource::FramedEye;
+	}
 
 	std::lock_guard lock(captureStateMutex);
 	if (!IsRuntimeEnabled()) {
@@ -755,23 +1742,25 @@ void ScreenshotFeature::RequestCapture()
 	activeCapture.pending = true;
 	activeCapture.ownsQueueSlot = true;
 	activeCapture.options = std::move(options);
-	activeCapture.source = globals::game::isVR ?
-	                           vrCaptureSource :
-	                           VRCaptureSource::DesktopMirror;
+	activeCapture.source = requestedSource;
 
-	if (globals::game::isVR &&
-		activeCapture.source == VRCaptureSource::HMDSubmission &&
-		globals::state && globals::state->isLoadingMenuOpen) {
-		activeCapture.source = VRCaptureSource::DesktopMirror;
+	if (globals::game::isVR && globals::state && globals::state->isLoadingMenuOpen) {
+		if (activeCapture.source == VRCaptureSource::HMDSubmission) {
+			activeCapture.source = VRCaptureSource::DesktopMirror;
+		} else if (IsFramedCapture(activeCapture.source)) {
+			logger::warn("Framed-view screenshot capture is unavailable during a loading screen.");
+			ClearActiveCapture(activeCapture);
+			capturePending.store(false, std::memory_order_release);
+			ShowInGameNotification("Framed-view screenshot unavailable during loading");
+			return;
+		}
 	}
 
 	capturePending.store(true, std::memory_order_release);
 
 	logger::debug(
 		"Screenshot requested from {}",
-		activeCapture.source == VRCaptureSource::HMDSubmission ?
-			"the accepted HMD submission" :
-			"the desktop mirror");
+		DescribeCaptureSource(activeCapture.source));
 }
 
 void ScreenshotFeature::SetEnabled(bool a_enabled)
@@ -1047,8 +2036,8 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 				continue;
 			}
 
-			const DXGI_FORMAT combinedFormat = planeImages[0]->format;
-			const vr::EColorSpace combinedColorSpace = screenshot.planes[0].colorSpace;
+			DXGI_FORMAT combinedFormat = planeImages[0]->format;
+			vr::EColorSpace combinedColorSpace = screenshot.planes[0].colorSpace;
 			const bool combinedTonemapSceneHdr = screenshot.planes[0].tonemapSceneHdr;
 			uint32_t planeSlotWidth = 0;
 			uint32_t combinedHeight = 0;
@@ -1063,16 +2052,48 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 				planeSlotWidth = std::max(planeSlotWidth, static_cast<uint32_t>(planeImages[index]->width));
 				combinedHeight = std::max(combinedHeight, static_cast<uint32_t>(planeImages[index]->height));
 			}
-			const uint32_t combinedWidth = planeSlotWidth * screenshot.planeCount;
+			uint32_t combinedWidth = planeSlotWidth * screenshot.planeCount;
 			if (planeFailure || combinedWidth == 0 || combinedHeight == 0) {
 				reportFailure("Screenshot planes used incompatible image contracts.");
 				continue;
 			}
 
 			DirectX::ScratchImage combinedImage;
+			DirectX::ScratchImage stereoCompositeImage;
 			DirectX::ScratchImage* assembledImage = nullptr;
 			const DirectX::Image* assembled = nullptr;
-			if (screenshot.planeCount == 1) {
+			if (screenshot.combineFramedEyes) {
+				const bool composed = screenshot.planeCount == 2 &&
+				                      screenshot.stereoProjectionValid &&
+				                      ComposeFramedStereo(
+										  planeImages,
+										  screenshot.eyeProjectionTangents,
+										  screenshot.eyeToHeadTransforms,
+										  screenshot.hiddenAreaMeshes,
+										  screenshot.dominantEye,
+										  combinedColorSpace,
+										  stereoCompositeImage);
+				if (composed) {
+					assembledImage = &stereoCompositeImage;
+					assembled = stereoCompositeImage.GetImage(0, 0, 0);
+					combinedFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
+					combinedColorSpace = vr::ColorSpace_Linear;
+					combinedWidth = kFramedEyeOutputWidth;
+					combinedHeight = kFramedEyeOutputHeight;
+					screenshot.aspectFillWidth = 0;
+					screenshot.aspectFillHeight = 0;
+				} else {
+					const std::size_t dominantIndex = screenshot.planeCount == 2 && screenshot.dominantEye == vr::Eye_Right ? 1u : 0u;
+					const auto& plane = screenshot.planes[dominantIndex];
+					assembledImage = plane.flipHorizontal || plane.flipVertical ?
+					                     &orientedPlanes[dominantIndex] :
+					                     &mappedPlanes[dominantIndex];
+					assembled = planeImages[dominantIndex];
+					combinedWidth = static_cast<uint32_t>(assembled->width);
+					combinedHeight = static_cast<uint32_t>(assembled->height);
+					logger::warn("Combined-eye screenshot composition failed; using the dominant eye only.");
+				}
+			} else if (screenshot.planeCount == 1) {
 				const auto& plane = screenshot.planes[0];
 				assembledImage = plane.flipHorizontal || plane.flipVertical ?
 				                     &orientedPlanes[0] :
@@ -1113,6 +2134,10 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 					continue;
 				}
 			}
+			if (!assembledImage || !assembled) {
+				reportFailure("Failed to access the assembled screenshot image.");
+				continue;
+			}
 
 			DirectX::ScratchImage croppedImage;
 			DirectX::ScratchImage* imageToSave = assembledImage;
@@ -1140,6 +2165,25 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 					}
 					imageToSave = &croppedImage;
 				}
+			}
+
+			DirectX::ScratchImage framingCropImage;
+			DirectX::ScratchImage framedImage;
+			if (screenshot.aspectFillWidth != 0 || screenshot.aspectFillHeight != 0) {
+				const auto* framingSource = imageToSave->GetImage(0, 0, 0);
+				if (screenshot.aspectFillWidth == 0 || screenshot.aspectFillHeight == 0 ||
+					!framingSource ||
+					!CenterCropAndResize(
+						*framingSource,
+						screenshot.aspectFillWidth,
+						screenshot.aspectFillHeight,
+						combinedColorSpace,
+						framingCropImage,
+						framedImage)) {
+					reportFailure("Failed to frame the screenshot at the requested output size.");
+					continue;
+				}
+				imageToSave = &framedImage;
 			}
 
 			Util::FileHelpers::EnsureDirectoryExists(screenshot.outputPath.parent_path());
@@ -1425,11 +2469,20 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 
 	PendingScreenshot completedScreenshot;
 	bool completed = false;
+	VRCaptureSource completedSource = VRCaptureSource::HMDSubmission;
 	{
 		std::lock_guard lock(captureStateMutex);
 		if (!IsRuntimeEnabled() ||
 			!activeCapture.pending ||
-			activeCapture.source != VRCaptureSource::HMDSubmission) {
+			!IsSubmittedEyeCapture(activeCapture.source)) {
+			return;
+		}
+		const bool framedEyeCapture = activeCapture.source == VRCaptureSource::FramedEye;
+		const bool framedStereoCapture = activeCapture.source == VRCaptureSource::FramedStereo;
+		const vr::EVREye requestedEye = activeCapture.options.framedEye == vr::Eye_Right ?
+		                                    vr::Eye_Right :
+		                                    vr::Eye_Left;
+		if (framedEyeCapture && a_eye != requestedEye) {
 			return;
 		}
 
@@ -1451,25 +2504,46 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 			return;
 		}
 
-		activeCapture.eyes[eyeIndex] = std::move(plane);
-		activeCapture.eyeMask |= static_cast<uint8_t>(1u << eyeIndex);
-		if (activeCapture.eyeMask != 0x3u) {
-			return;
+		if (framedEyeCapture) {
+			completedScreenshot.planes[0] = std::move(plane);
+			completedScreenshot.planeCount = 1;
+			completedScreenshot.applyCrop = false;
+			completedScreenshot.aspectFillWidth = kFramedEyeOutputWidth;
+			completedScreenshot.aspectFillHeight = kFramedEyeOutputHeight;
+		} else {
+			activeCapture.eyes[eyeIndex] = std::move(plane);
+			activeCapture.eyeMask |= static_cast<uint8_t>(1u << eyeIndex);
+			if (activeCapture.eyeMask != 0x3u) {
+				return;
+			}
+
+			if (activeCapture.eyes[0].format != activeCapture.eyes[1].format ||
+				activeCapture.eyes[0].colorSpace != activeCapture.eyes[1].colorSpace ||
+				activeCapture.eyes[0].tonemapSceneHdr != activeCapture.eyes[1].tonemapSceneHdr) {
+				logger::warn("Accepted VR screenshot eyes used incompatible image contracts; waiting for a coherent pair.");
+				activeCapture.eyeMask = 0;
+				activeCapture.eyes = {};
+				return;
+			}
+
+			completedScreenshot.planes = std::move(activeCapture.eyes);
+			completedScreenshot.planeCount = 2;
+			if (framedStereoCapture) {
+				completedScreenshot.applyCrop = false;
+				completedScreenshot.aspectFillWidth = kFramedEyeOutputWidth;
+				completedScreenshot.aspectFillHeight = kFramedEyeOutputHeight;
+				completedScreenshot.combineFramedEyes = true;
+				completedScreenshot.dominantEye = requestedEye;
+				completedScreenshot.eyeProjectionTangents = activeCapture.options.eyeProjectionTangents;
+				completedScreenshot.eyeToHeadTransforms = activeCapture.options.eyeToHeadTransforms;
+				completedScreenshot.hiddenAreaMeshes = std::move(activeCapture.options.hiddenAreaMeshes);
+				completedScreenshot.stereoProjectionValid = activeCapture.options.stereoProjectionValid;
+			} else {
+				completedScreenshot.cropUV = activeCapture.options.cropUV;
+				completedScreenshot.applyCrop = activeCapture.options.applyCrop;
+			}
 		}
 
-		if (activeCapture.eyes[0].format != activeCapture.eyes[1].format ||
-			activeCapture.eyes[0].colorSpace != activeCapture.eyes[1].colorSpace ||
-			activeCapture.eyes[0].tonemapSceneHdr != activeCapture.eyes[1].tonemapSceneHdr) {
-			logger::warn("Accepted HMD screenshot eyes used incompatible image contracts; waiting for a coherent pair.");
-			activeCapture.eyeMask = 0;
-			activeCapture.eyes = {};
-			return;
-		}
-
-		completedScreenshot.planes = std::move(activeCapture.eyes);
-		completedScreenshot.planeCount = 2;
-		completedScreenshot.cropUV = activeCapture.options.cropUV;
-		completedScreenshot.applyCrop = activeCapture.options.applyCrop;
 		completedScreenshot.saveAsPng = activeCapture.options.saveAsPng;
 		completedScreenshot.copyToClipboard = activeCapture.options.copyToClipboard;
 		try {
@@ -1477,26 +2551,38 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 				activeCapture.options.screenshotPath,
 				completedScreenshot.saveAsPng);
 		} catch (const std::exception& e) {
-			logger::error("Failed to prepare the HMD screenshot output path: {}", e.what());
+			logger::error("Failed to prepare the VR screenshot output path: {}", e.what());
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
 			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 			return;
 		} catch (...) {
-			logger::error("Failed to prepare the HMD screenshot output path.");
+			logger::error("Failed to prepare the VR screenshot output path.");
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
 			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 			return;
 		}
 		completedScreenshot.ownsQueueSlot = std::exchange(activeCapture.ownsQueueSlot, false);
+		completedSource = activeCapture.source;
 		ClearActiveCapture(activeCapture);
 		capturePending.store(false, std::memory_order_release);
 		completed = true;
 	}
 
 	if (completed) {
-		logger::debug("Capturing the accepted OpenVR HMD eye pair");
+		switch (completedSource) {
+		case VRCaptureSource::FramedEye:
+			logger::debug("Capturing one accepted OpenVR eye at 2560 x 1440");
+			break;
+		case VRCaptureSource::FramedStereo:
+			logger::debug("Capturing a combined accepted OpenVR eye pair at 2560 x 1440");
+			break;
+		case VRCaptureSource::HMDSubmission:
+		default:
+			logger::debug("Capturing the accepted OpenVR HMD eye pair");
+			break;
+		}
 		if (!QueueScreenshot(std::move(completedScreenshot))) {
 			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 		}
@@ -1519,6 +2605,15 @@ void ScreenshotFeature::OnBeforePresent(IDXGISwapChain* a_swapChain)
 	if (activeCapture.source == VRCaptureSource::HMDSubmission) {
 		if (activeCapture.presentsWaited >= kCaptureTimeoutPresents) {
 			FallBackToDesktopCapture(activeCapture, "no coherent accepted eye pair arrived before the timeout");
+		}
+		return;
+	}
+	if (IsFramedCapture(activeCapture.source)) {
+		if (activeCapture.presentsWaited >= kCaptureTimeoutPresents) {
+			logger::warn("Framed-view screenshot capture timed out before the required eye submission arrived.");
+			ClearActiveCapture(activeCapture);
+			capturePending.store(false, std::memory_order_release);
+			ShowInGameNotification("Framed-view screenshot failed - missing eye submission");
 		}
 		return;
 	}

@@ -21,7 +21,15 @@ struct ScreenshotFeature : public Feature
 	enum class VRCaptureSource : uint8_t
 	{
 		HMDSubmission,
-		DesktopMirror
+		DesktopMirror,
+		FramedEye,
+		FramedStereo
+	};
+	enum class VRFramedView : uint8_t
+	{
+		Left,
+		Right,
+		Combined
 	};
 
 	virtual ~ScreenshotFeature();
@@ -68,6 +76,8 @@ struct ScreenshotFeature : public Feature
 	bool sdrUsePng = true;
 	bool copyToClipboard = false;
 	VRCaptureSource vrCaptureSource = VRCaptureSource::HMDSubmission;
+	VRFramedView vrFramedView = VRFramedView::Left;
+	vr::EVREye vrFramedDominantEye = vr::Eye_Left;
 
 private:
 	struct StagedPlane
@@ -90,6 +100,11 @@ private:
 		bool applyCrop = true;
 		bool saveAsPng = true;
 		bool copyToClipboard = false;
+		vr::EVREye framedEye = vr::Eye_Left;
+		std::array<std::array<float, 4>, 2> eyeProjectionTangents{};
+		std::array<vr::HmdMatrix34_t, 2> eyeToHeadTransforms{};
+		std::array<std::vector<vr::HmdVector2_t>, 2> hiddenAreaMeshes{};
+		bool stereoProjectionValid = false;
 	};
 
 	struct PendingScreenshot
@@ -99,6 +114,14 @@ private:
 		Util::Subrect::UVRegion cropUV{};
 		bool applyCrop = true;
 		std::filesystem::path outputPath;
+		uint32_t aspectFillWidth = 0;
+		uint32_t aspectFillHeight = 0;
+		bool combineFramedEyes = false;
+		vr::EVREye dominantEye = vr::Eye_Left;
+		std::array<std::array<float, 4>, 2> eyeProjectionTangents{};
+		std::array<vr::HmdMatrix34_t, 2> eyeToHeadTransforms{};
+		std::array<std::vector<vr::HmdVector2_t>, 2> hiddenAreaMeshes{};
+		bool stereoProjectionValid = false;
 		bool saveAsPng = true;
 		bool copyToClipboard = false;
 		bool ownsQueueSlot = false;
@@ -152,6 +175,7 @@ private:
 	void ScreenshotWorkerLoop();
 	void EnsurePreviewCache(ID3D11Texture2D* sourceTexture);
 	CaptureOptions SnapshotCaptureOptions() const;
+	bool SnapshotStereoGeometry(CaptureOptions& a_options) const;
 	bool StageTexturePlane(
 		ID3D11Texture2D* a_sourceTexture,
 		const vr::VRTextureBounds_t* a_bounds,

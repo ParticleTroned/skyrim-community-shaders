@@ -4,7 +4,6 @@
 // capture does not stall the frame.
 
 #include "Features/ScreenshotFeature.h"
-#include "Features/Upscaling.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "State.h"
@@ -506,7 +505,7 @@ void ScreenshotFeature::PostPostLoad()
 		subrect.SeedDefaultPresets({
 			{ .name = "Left Eye", .uv = { 0.0f, 0.0f, 0.5f, 1.0f } },
 			{ .name = "Right Eye", .uv = { 0.5f, 0.0f, 0.5f, 1.0f } },
-			{ .name = "Full Frame", .uv = { 0.0f, 0.0f, 1.0f, 1.0f } },
+			{ .name = "Both Eyes (Side-by-Side)", .uv = { 0.0f, 0.0f, 1.0f, 1.0f } },
 		});
 	}
 }
@@ -567,7 +566,7 @@ void ScreenshotFeature::DrawSettings()
 		                      VRCaptureSource::HMDSubmission;
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("HMD submission captures the final accepted left and right eye textures.");
-			ImGui::TextUnformatted("Desktop mirror temporarily forces the improved Render Scale mirror for this capture only.");
+			ImGui::TextUnformatted("Desktop mirror captures Skyrim's current desktop backbuffer, without substituting HMD eye textures.");
 		}
 	}
 
@@ -715,31 +714,9 @@ ScreenshotFeature::CaptureOptions ScreenshotFeature::SnapshotCaptureOptions() co
 	};
 }
 
-void ScreenshotFeature::ArmDesktopMirrorOverride(ActiveCapture& a_capture)
-{
-	if (!globals::game::isVR || a_capture.desktopMirrorEpoch != 0) {
-		return;
-	}
-
-	a_capture.desktopMirrorEpoch =
-		globals::features::upscaling.BeginScreenshotDesktopMirrorQualityOverride();
-}
-
-void ScreenshotFeature::ReleaseDesktopMirrorOverride(ActiveCapture& a_capture)
-{
-	if (a_capture.desktopMirrorEpoch == 0) {
-		return;
-	}
-
-	globals::features::upscaling.EndScreenshotDesktopMirrorQualityOverride(
-		a_capture.desktopMirrorEpoch);
-	a_capture.desktopMirrorEpoch = 0;
-}
-
 void ScreenshotFeature::ClearActiveCapture(ActiveCapture& a_capture)
 {
 	const bool ownsQueueSlot = std::exchange(a_capture.ownsQueueSlot, false);
-	ReleaseDesktopMirrorOverride(a_capture);
 	a_capture = {};
 	if (ownsQueueSlot) {
 		ReleaseScreenshotSlot();
@@ -754,7 +731,6 @@ void ScreenshotFeature::FallBackToDesktopCapture(ActiveCapture& a_capture, std::
 	a_capture.eyeMask = 0;
 	a_capture.eyes = {};
 	a_capture.presentsWaited = 0;
-	ArmDesktopMirrorOverride(a_capture);
 }
 
 void ScreenshotFeature::RequestCapture()
@@ -789,9 +765,6 @@ void ScreenshotFeature::RequestCapture()
 		activeCapture.source = VRCaptureSource::DesktopMirror;
 	}
 
-	if (activeCapture.source == VRCaptureSource::DesktopMirror) {
-		ArmDesktopMirrorOverride(activeCapture);
-	}
 	capturePending.store(true, std::memory_order_release);
 
 	logger::debug(
@@ -1350,8 +1323,6 @@ bool ScreenshotFeature::StageTexturePlane(
 
 bool ScreenshotFeature::QueueDesktopCapture(
 	IDXGISwapChain* a_swapChain,
-	ID3D11Texture2D* a_mirrorTexture,
-	vr::EColorSpace a_mirrorColorSpace,
 	const CaptureOptions& a_options,
 	bool a_ownsQueueSlot)
 {
@@ -1371,15 +1342,10 @@ bool ScreenshotFeature::QueueDesktopCapture(
 	});
 	try {
 		winrt::com_ptr<ID3D11Texture2D> sourceTexture;
-		const char* sourceDescription = "refreshed Render Scale desktop mirror";
-		vr::EColorSpace sourceColorSpace = a_mirrorColorSpace;
-		bool tonemapSceneHdr = false;
-		if (a_mirrorTexture) {
-			sourceTexture.copy_from(a_mirrorTexture);
-		} else if (a_swapChain) {
-			sourceDescription = "DXGI desktop backbuffer";
-			sourceColorSpace = vr::ColorSpace_Auto;
-			tonemapSceneHdr = true;
+		const char* sourceDescription = "DXGI desktop backbuffer";
+		constexpr vr::EColorSpace sourceColorSpace = vr::ColorSpace_Auto;
+		constexpr bool tonemapSceneHdr = true;
+		if (a_swapChain) {
 			(void)a_swapChain->GetBuffer(
 				0,
 				__uuidof(ID3D11Texture2D),
@@ -1387,17 +1353,15 @@ bool ScreenshotFeature::QueueDesktopCapture(
 		}
 
 		winrt::com_ptr<ID3D11Texture2D> slotTextureKeepAlive;
-		if (!sourceTexture) {
+		if (!sourceTexture && !globals::game::isVR) {
 			const auto source = SelectCaptureSource(slotTextureKeepAlive);
 			if (source.texture) {
 				sourceTexture.copy_from(source.texture);
 				sourceDescription = source.description;
-				sourceColorSpace = vr::ColorSpace_Auto;
-				tonemapSceneHdr = true;
 			}
 		}
 		if (!sourceTexture) {
-			logger::error("Failed to acquire the desktop screenshot source.");
+			logger::error("Failed to acquire the DXGI desktop backbuffer for screenshot capture.");
 			return false;
 		}
 
@@ -1559,30 +1523,8 @@ void ScreenshotFeature::OnBeforePresent(IDXGISwapChain* a_swapChain)
 		return;
 	}
 
-	winrt::com_ptr<ID3D11Texture2D> refreshedMirrorTexture;
-	vr::EColorSpace refreshedMirrorColorSpace = vr::ColorSpace_Auto;
-	const bool renderScaleActive = globals::game::isVR &&
-	                               globals::features::upscaling.IsVRRenderScaleModeActive();
-	bool mirrorReady = !renderScaleActive;
-	if (renderScaleActive) {
-		mirrorReady = globals::features::upscaling.TryAcquireScreenshotDesktopMirror(
-			activeCapture.desktopMirrorEpoch,
-			globals::features::upscaling.GetActiveVRRenderScaleContractGeneration(),
-			refreshedMirrorTexture,
-			refreshedMirrorColorSpace);
-	}
-
-	if (!mirrorReady && activeCapture.presentsWaited < kCaptureTimeoutPresents) {
-		return;
-	}
-	if (!mirrorReady) {
-		logger::warn("Desktop screenshot mirror refresh timed out; capturing the current backbuffer.");
-	}
-
 	const bool queued = QueueDesktopCapture(
 		a_swapChain,
-		refreshedMirrorTexture.get(),
-		refreshedMirrorColorSpace,
 		activeCapture.options,
 		std::exchange(activeCapture.ownsQueueSlot, false));
 	ClearActiveCapture(activeCapture);

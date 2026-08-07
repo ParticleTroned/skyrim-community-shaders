@@ -113,7 +113,6 @@ private:
 		uint8_t eyeMask = 0;
 		std::array<StagedPlane, 2> eyes{};
 		uint32_t presentsWaited = 0;
-		uint64_t desktopMirrorEpoch = 0;
 		bool ownsQueueSlot = false;
 	};
 
@@ -162,12 +161,8 @@ private:
 		StagedPlane& a_plane);
 	bool QueueDesktopCapture(
 		IDXGISwapChain* a_swapChain,
-		ID3D11Texture2D* a_mirrorTexture,
-		vr::EColorSpace a_mirrorColorSpace,
 		const CaptureOptions& a_options,
 		bool a_ownsQueueSlot);
-	void ArmDesktopMirrorOverride(ActiveCapture& a_capture);
-	void ReleaseDesktopMirrorOverride(ActiveCapture& a_capture);
 	void ClearActiveCapture(ActiveCapture& a_capture);
 	void FallBackToDesktopCapture(ActiveCapture& a_capture, std::string_view a_reason);
 	static void ShowInGameNotification(std::string message);

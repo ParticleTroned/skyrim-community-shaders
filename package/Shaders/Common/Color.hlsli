@@ -232,16 +232,15 @@ namespace Color
 
 	float GetPointLightMultiplier(bool isLinear)
 	{
-		return (ENABLE_LL_COLOR_ADJUSTMENTS && isLinear) ? SharedData::csUtilitySettings.linearPointLightMult : SharedData::csUtilitySettings.pointLightMult;
+		return isLinear ? SharedData::csUtilitySettings.linearPointLightMult : SharedData::csUtilitySettings.pointLightMult;
 	}
 
 	float GetPointLightTypeMultiplier(bool isLinear, uint lightFlags)
 	{
-		const bool useLinearMultiplier = ENABLE_LL_COLOR_ADJUSTMENTS && isLinear;
 		if ((lightFlags & PointLightFlagSpot) != 0)
-			return useLinearMultiplier ? SharedData::csUtilitySettings.linearSpotlightMult : SharedData::csUtilitySettings.spotlightMult;
+			return isLinear ? SharedData::csUtilitySettings.linearSpotlightMult : SharedData::csUtilitySettings.spotlightMult;
 		if ((lightFlags & PointLightFlagOmnidirectionalBulb) != 0)
-			return useLinearMultiplier ? SharedData::csUtilitySettings.linearOmnidirectionalBulbMult : SharedData::csUtilitySettings.omnidirectionalBulbMult;
+			return isLinear ? SharedData::csUtilitySettings.linearOmnidirectionalBulbMult : SharedData::csUtilitySettings.omnidirectionalBulbMult;
 		return 1.0f;
 	}
 

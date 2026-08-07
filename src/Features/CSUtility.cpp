@@ -23,10 +23,13 @@ namespace
 		CSUtility::SanitizeDepthOfFieldOverride(a_settings.underwaterDof);
 	}
 
-	bool UsesPointLightTypeMultipliers(const SharedLightingSettings& a_settings)
+	bool UsesClassifiedPointLightMultipliers(const SharedLightingSettings& a_settings)
 	{
-		return a_settings.spotlightMult != 1.0f ||
-		       a_settings.omnidirectionalBulbMult != 1.0f;
+		return a_settings.linearPointLightMult != a_settings.pointLightMult ||
+		       a_settings.spotlightMult != 1.0f ||
+		       a_settings.linearSpotlightMult != 1.0f ||
+		       a_settings.omnidirectionalBulbMult != 1.0f ||
+		       a_settings.linearOmnidirectionalBulbMult != 1.0f;
 	}
 }
 
@@ -124,15 +127,15 @@ bool CSUtility::NeedsVanillaPointLightData() const
 	if (!loaded)
 		return false;
 
-	// The shared flag buffer still classifies linear point lights for Linear
-	// Lighting even when CS Utility's own runtime toggle is off.
+	// The shared flag buffer classifies linear-falloff point lights independently
+	// of Adaptive Balance and CS Utility's runtime toggles.
 	if (globals::features::linearLighting.IsRuntimeEnabled())
 		return true;
 
 	const auto& adaptiveBalance = globals::features::adaptiveBrightness;
 	return adaptiveBalance.loaded &&
 	       adaptiveBalance.settings.rendererControlsEnabled &&
-	       UsesPointLightTypeMultipliers(adaptiveBalance.settings.lighting);
+	       UsesClassifiedPointLightMultipliers(adaptiveBalance.settings.lighting);
 }
 
 void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount, uint32_t a_bufferRegister)

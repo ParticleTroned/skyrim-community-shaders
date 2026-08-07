@@ -1103,15 +1103,10 @@ void AdaptiveBrightness::DrawGlobalRendererSettings()
 			ImGui::SliderFloat("Spotlights", &settings.lighting.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			ImGui::SliderFloat("Omnidirectional Bulbs", &settings.lighting.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-			const bool linearLightingEnabled = globals::features::linearLighting.IsRuntimeEnabled();
-			ImGui::BeginDisabled(!linearLightingEnabled);
+			ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
 			ImGui::SliderFloat("Linear Point Lights", &settings.lighting.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			ImGui::SliderFloat("Linear Spotlights", &settings.lighting.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			ImGui::SliderFloat("Linear Omnidirectional Bulbs", &settings.lighting.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::EndDisabled();
-			if (!linearLightingEnabled) {
-				ImGui::TextDisabled("Enable Linear Lighting to edit the linear-only calibration values.");
-			}
 			ImGui::EndDisabled();
 			ImGui::EndTabItem();
 		}

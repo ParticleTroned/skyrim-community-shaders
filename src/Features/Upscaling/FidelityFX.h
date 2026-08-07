@@ -189,10 +189,9 @@ private:
 
 	bool runtimeUpscalerFailureLatched = false;
 	bool runtimeFsr4FailureLatched = false;
-	// Set once a runtime-provider dispatch throws. Unlike runtimeUpscalerFailureLatched
-	// (cleared by ResetRuntimeUpscalerTracking on ordinary teardown/reconfigure), this
-	// survives that reset -- a terminal exception can leave the DX12 provider's internal
-	// state unsafe to reuse for the rest of the session, so it is never re-armed.
+	// Set once a runtime-provider dispatch throws. Unlike runtimeUpscalerFailureLatched,
+	// this survives ResetRuntimeUpscalerTracking -- a terminal exception can leave the
+	// DX12 provider state unsafe to reuse, so it is never re-armed this session.
 	bool runtimeUpscalerQuarantined = false;
 	uint32_t runtimeFallbackResetDispatchesRemaining = 0;
 	bool runtimeUpscalerLastFramePathValid = false;

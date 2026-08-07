@@ -1657,10 +1657,9 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		}
 		LatchRuntimeUpscalerFailure();
 
-		// A sibling eye already published a runtime-provider frame this frame index; falling
-		// through to the host FSR3 SDK here would present a mixed-provider stereo pair that
-		// cannot be retracted. Drop this eye instead -- the caller skips finalizing the frame
-		// when any eye fails, so this costs one stale frame, not a corrupted one.
+		// A sibling eye already published a runtime-provider frame; falling through to host
+		// FSR3 here would present an unretractable mixed-provider stereo pair. Drop this eye
+		// instead -- the caller skips finalizing the frame when any eye fails.
 		if (runtimeAlreadyUsedThisFrame)
 			return false;
 	}

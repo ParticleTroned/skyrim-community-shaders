@@ -32,7 +32,7 @@ namespace Util::Subrect
 
 	// "User picks a sub-rectangle of an image" controller. Crop UV is in [0,1]
 	// of the source the caller passes to GetPixelRegion(). Hosts that want
-	// preset-based eye selection seed Left/Right/Full Frame via SeedDefaultPresets.
+	// preset-based eye selection seed Left/Right/Side-by-Side via SeedDefaultPresets.
 	class Controller
 	{
 	public:
@@ -69,6 +69,8 @@ namespace Util::Subrect
 		float dragStartUV[2] = { 0.0f, 0.0f };
 
 		void EnsureDefaultPreset();
+		void ReconcileSeededDefaults();
+		void MigrateLegacySeededPresetNames();
 		void ClampCurrentUV();
 		void ApplyPreset(int index);
 	};

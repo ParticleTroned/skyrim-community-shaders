@@ -506,7 +506,7 @@ void ScreenshotFeature::PostPostLoad()
 		subrect.SeedDefaultPresets({
 			{ .name = "Left Eye", .uv = { 0.0f, 0.0f, 0.5f, 1.0f } },
 			{ .name = "Right Eye", .uv = { 0.5f, 0.0f, 0.5f, 1.0f } },
-			{ .name = "Full Frame", .uv = { 0.0f, 0.0f, 1.0f, 1.0f } },
+			{ .name = "Both Eyes (Side-by-Side)", .uv = { 0.0f, 0.0f, 1.0f, 1.0f } },
 		});
 	}
 }

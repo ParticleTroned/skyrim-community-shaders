@@ -1752,8 +1752,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.DirLightColor = { lightRuntimeData.diffuse.red, lightRuntimeData.diffuse.green, lightRuntimeData.diffuse.blue, 1.0f };
 		data.DirLightColor *= lightRuntimeData.fade;
 
-		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-		data.DirLightColor *= !globals::game::isVR ? imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale : imageSpaceManager->GetVRRuntimeData().data.baseData.hdr.sunlightScale;
+		if (const auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton())
+			data.DirLightColor *= imageSpaceManager->GetImageSpaceData().baseData.hdr.sunlightScale;
 
 		const auto& direction = dirLight->GetWorldDirection();
 		data.DirLightDirection = { -direction.x, -direction.y, -direction.z, 0.0f };

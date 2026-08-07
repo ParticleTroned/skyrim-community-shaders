@@ -110,8 +110,18 @@ namespace Util
 
 	bool GetTemporal()
 	{
-		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-		return (!REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled : imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled);
+		auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+		if (!imageSpaceManager)
+			return false;
+
+		if (REL::Module::IsVR()) {
+			const auto* runtimeData = imageSpaceManager->GetVRRuntimeData();
+			const auto* temporalAA = runtimeData ? runtimeData->BSImagespaceShaderISTemporalAA : nullptr;
+			return temporalAA && temporalAA->taaEnabled;
+		}
+
+		const auto* temporalAA = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA;
+		return temporalAA && temporalAA->taaEnabled;
 	}
 
 	float GetVerticalFOVRad()

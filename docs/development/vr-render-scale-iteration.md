@@ -95,7 +95,7 @@ correlates the sampled luminance grid with QPC/frame time, OpenVR submit path
 and result, texture identity/format/bounds, loading and destination-world
 frames, Stabilizer synchronization state, render-scale presentation path, and
 the CSX HMD hidden-area-mask clear decision and its correlated HAM dispatch
-sequence. Schema v4 binds timeout instrumentation to the exact compositor
+sequence. Schema v5 binds hard-timeout instrumentation to the exact compositor
 cycle and requested eye, then marks the first real OpenVR attempt independently
 for each eye. It correlates that submitted texture with the preceding clear by
 session, cycle, eye, and COM identity. `Matched`,
@@ -108,7 +108,12 @@ speculative peer-eye replay from consuming the requested eye's capture.
 The exact-cycle marker remains retained until the next load lifecycle or probe
 reset so a later `WaitGetPoses` cannot discard a target-cycle submit that is
 still in flight; completed records contain copied provenance and do not depend
-on that marker's lifetime.
+on that marker's lifetime. Handoff records expose `holdElapsedMs`,
+`softDeadlineMs`, and `hardDeadlineMs` for both stereo and hard-timeout release.
+The legacy timeout elapsed/budget fields remain available for hard-timeout
+records, with the timeout budget equal to the hard deadline. The legacy
+`firstPostTimeoutSubmit` and `timeout-release` labels also denote the
+hard-timeout handoff.
 `predominantlyWhite`
 and `predominantlyBlack` mark broadly uniform
 submitted textures. The legacy `hamWhitePattern` remains available, while the
@@ -123,8 +128,20 @@ compositor could present differently. These grids are authoritative; the polarit
 diagnostic heuristics. A depth-aligned black/transparent post-HAM mask is the
 expected result of a successful clear; it is evidence of what CSX wrote, not by
 itself proof that the compositor exposed the mask as an artifact. This
-correlated record is load-presentation probe schema version 4. The main
+correlated record is load-presentation probe schema version 5. The main
 render-scale iteration schema remains version 10.
+
+The post-load black hold uses route-specific soft deadlines of 3 seconds for an
+in-game load and 6 seconds for a main-menu load. Crossing the soft deadline does
+not weaken the existing release proof: vendor work continues behind the black
+keepalive, `PresentationStretch` remains suppressed, and an exact repaired
+vendor stereo pair can release as soon as it satisfies the existing proof. A
+shared 500 ms grace places the nominal hard deadlines at 3.5 and 6.5 seconds.
+Only the hard deadline invokes the established cycle-boundary fail-open and arms
+the timeout probe. Device, menu, invalid-candidate, keepalive, and OpenVR failure
+paths retain their earlier emergency fail-open behavior. Deadline observation
+occurs at the next observed `WaitGetPoses` boundary, so a delayed boundary can
+make measured elapsed time exceed the nominal hard deadline.
 
 Start the probe at the main menu or immediately before invoking the in-game
 load command. Stop it only after the destination has visibly settled, then poll

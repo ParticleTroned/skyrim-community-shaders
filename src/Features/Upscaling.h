@@ -975,6 +975,9 @@ public:
 		uint64_t handoffProtectionEpoch = 0;
 		uint64_t handoffLoadingSerial = 0;
 		uint64_t handoffCompositorCycleToken = 0;
+		uint64_t handoffHoldElapsedMs = 0;
+		uint64_t handoffSoftDeadlineMs = 0;
+		uint64_t handoffHardDeadlineMs = 0;
 		uint64_t handoffTimeoutElapsedMs = 0;
 		uint64_t handoffTimeoutBudgetMs = 0;
 		bool firstPostTimeoutSubmit = false;
@@ -2595,7 +2598,10 @@ private:
 		uint64_t a_loadingSerial) const noexcept;
 	void NotifyVRPostLoadCompositorLoadingMenuOpened(uint64_t a_loadingSerial);
 	void NotifyVRPostLoadCompositorLoadingMenuClosed(uint64_t a_loadingSerial);
-	[[nodiscard]] uint64_t GetVRPostLoadCompositorHoldTimeoutMilliseconds() const noexcept;
+	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldSoftDeadlineMilliseconds(
+		VRPostLoadCompositorHoldRoute a_route) noexcept;
+	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(
+		VRPostLoadCompositorHoldRoute a_route) noexcept;
 	void ResetVRPostLoadCompositorHold();
 	void ResetVRPostLoadCompositorHoldLocked(
 		VRPostLoadCompositorHoldState a_finalState =

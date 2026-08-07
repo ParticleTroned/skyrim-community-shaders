@@ -166,10 +166,14 @@ namespace
 	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
 	constexpr uint32_t kVRSubmitStageVendorDoorHandoffStableFrames = 2u;
-	// The route-owned wall clock begins when the source LoadingMenu closes. It
-	// bounds only CS's black presentation extension, never Skyrim's own load.
-	constexpr uint64_t kVRPostLoadCompositorMainMenuHoldMaxMilliseconds = 5500u;
-	constexpr uint64_t kVRPostLoadCompositorInGameHoldMaxMilliseconds = 2500u;
+	// The route-owned wall clock begins when the source LoadingMenu closes. The
+	// soft deadline starts a bounded grace in which the existing black keepalive
+	// continues while an exact vendor stereo release can still qualify. The hard
+	// deadline bounds only CS's black presentation extension, never Skyrim's own
+	// load.
+	constexpr uint64_t kVRPostLoadCompositorMainMenuHoldSoftDeadlineMilliseconds = 6000u;
+	constexpr uint64_t kVRPostLoadCompositorInGameHoldSoftDeadlineMilliseconds = 3000u;
+	constexpr uint64_t kVRPostLoadCompositorHoldHardDeadlineGraceMilliseconds = 500u;
 	constexpr uint32_t kVRPostLoadCompositorStableStereoFrames = 3u;
 	constexpr uint64_t kVRPostLoadCompositorQuarantineMaxMilliseconds = 250u;
 	constexpr uint32_t kVRSubmitStageBoundsFallbackWatchdogFrames = 180u;
@@ -16514,8 +16518,8 @@ void Upscaling::NotifyGameLoadStarted(
 		!IsVRPostLoadCompositorHoldActive()) {
 		// PreLoadGame normally owns arming so presentation is protected before
 		// the destination can draw. Retain a post-load fallback for runtimes which
-		// omit or reorder that message; its deadline begins on the first eligible
-		// post-menu submit and is never renewed.
+		// omit or reorder that message; its deadline window begins on the first
+		// eligible post-menu submit and is never renewed.
 		const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 		const bool awaitingStabilizerSync =
 			!IsVendorUpscalingMethod(configuredMethod) &&
@@ -16531,9 +16535,10 @@ void Upscaling::NotifyGameLoadStarted(
 	if (!a_newGame &&
 		!IsLoadingMenuContextActive() &&
 		IsVRInitialLoadPresentationProtectionActive()) {
-		// The close event normally starts the immutable deadline. Some SKSE/UI
-		// orderings publish PostLoadGame after the destination begins drawing but
-		// without a matching close callback, so confirm that same serial here.
+		// The close event normally starts the immutable deadline window. Some
+		// SKSE/UI orderings publish PostLoadGame after the destination begins
+		// drawing but without a matching close callback, so confirm that same
+		// serial here.
 		NotifyVRPostLoadCompositorLoadingMenuClosed(
 			g_vrLoadingTransitionSerial.load(std::memory_order_acquire));
 	}
@@ -25428,7 +25433,7 @@ namespace
 			0.995f
 		};
 	constexpr float kVRLoadPresentationProbeWhiteLuminance = 0.92f;
-	constexpr uint32_t kVRLoadPresentationProbeSchemaVersion = 4;
+	constexpr uint32_t kVRLoadPresentationProbeSchemaVersion = 5;
 	constexpr float kVRLoadPresentationProbeBrightLuminance = 0.75f;
 	constexpr float kVRLoadPresentationProbeDarkLuminance = 0.25f;
 	constexpr float kVRLoadPresentationProbeBlackLuminance = 0.05f;
@@ -25777,6 +25782,9 @@ namespace
 		uint64_t protectionEpoch = 0;
 		uint64_t loadingSerial = 0;
 		uint64_t compositorCycleToken = 0;
+		uint64_t holdElapsedMs = 0;
+		uint64_t softDeadlineMs = 0;
+		uint64_t hardDeadlineMs = 0;
 		uint64_t timeoutElapsedMs = 0;
 		uint64_t timeoutBudgetMs = 0;
 	};
@@ -26285,6 +26293,9 @@ namespace
 		a_record.handoffLoadingSerial = a_claim.handoff.loadingSerial;
 		a_record.handoffCompositorCycleToken =
 			a_claim.handoff.compositorCycleToken;
+		a_record.handoffHoldElapsedMs = a_claim.handoff.holdElapsedMs;
+		a_record.handoffSoftDeadlineMs = a_claim.handoff.softDeadlineMs;
+		a_record.handoffHardDeadlineMs = a_claim.handoff.hardDeadlineMs;
 		a_record.handoffTimeoutElapsedMs = a_claim.handoff.timeoutElapsedMs;
 		a_record.handoffTimeoutBudgetMs = a_claim.handoff.timeoutBudgetMs;
 		a_record.firstPostTimeoutSubmit = true;
@@ -28403,6 +28414,7 @@ json Upscaling::BuildVRLoadPresentationProbeStatus() const
 	LARGE_INTEGER frequency{};
 	(void)::QueryPerformanceFrequency(&frequency);
 	return {
+		{ "schemaVersion", kVRLoadPresentationProbeSchemaVersion },
 		{ "active", probeActive },
 		{ "sessionID", vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) },
 		{ "qpcFrequency", frequency.QuadPart },
@@ -28446,6 +28458,9 @@ json Upscaling::BuildVRLoadPresentationProbeStatus() const
 														  { "protectionEpoch", timeoutHandoff.handoff.protectionEpoch },
 														  { "loadingSerial", timeoutHandoff.handoff.loadingSerial },
 														  { "compositorCycle", timeoutHandoff.handoff.compositorCycleToken },
+														  { "holdElapsedMs", timeoutHandoff.handoff.holdElapsedMs },
+														  { "softDeadlineMs", timeoutHandoff.handoff.softDeadlineMs },
+														  { "hardDeadlineMs", timeoutHandoff.handoff.hardDeadlineMs },
 														  { "elapsedMs", timeoutHandoff.handoff.timeoutElapsedMs },
 														  { "budgetMs", timeoutHandoff.handoff.timeoutBudgetMs },
 														  { "clearEyeMask", timeoutClearEyeMask },
@@ -28587,6 +28602,9 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 							 { "protectionEpoch", record.handoffProtectionEpoch },
 							 { "loadingSerial", record.handoffLoadingSerial },
 							 { "compositorCycle", record.handoffCompositorCycleToken },
+							 { "holdElapsedMs", record.handoffHoldElapsedMs },
+							 { "softDeadlineMs", record.handoffSoftDeadlineMs },
+							 { "hardDeadlineMs", record.handoffHardDeadlineMs },
 							 { "timeoutElapsedMs", record.handoffTimeoutElapsedMs },
 							 { "timeoutBudgetMs", record.handoffTimeoutBudgetMs },
 							 { "firstPostTimeoutSubmit", record.firstPostTimeoutSubmit },
@@ -28813,6 +28831,9 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 							 { "protectionEpoch", record.handoff.protectionEpoch },
 							 { "loadingSerial", record.handoff.loadingSerial },
 							 { "compositorCycle", record.handoff.compositorCycleToken },
+							 { "holdElapsedMs", record.handoff.holdElapsedMs },
+							 { "softDeadlineMs", record.handoff.softDeadlineMs },
+							 { "hardDeadlineMs", record.handoff.hardDeadlineMs },
 							 { "timeoutElapsedMs", record.handoff.timeoutElapsedMs },
 							 { "timeoutBudgetMs", record.handoff.timeoutBudgetMs },
 						 } },
@@ -34881,6 +34902,9 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 				holdRoute == VRPostLoadCompositorHoldRoute::InGameLoad ?
 					VRLoadPresentationHAMProbeHandoffRoute::InGameLoad :
 					VRLoadPresentationHAMProbeHandoffRoute::Unknown;
+			const uint64_t holdStartTickMs =
+				vrPostLoadCompositorHoldStartTickMs.load(std::memory_order_acquire);
+			const uint64_t currentTickMs = ::GetTickCount64();
 			hamHandoff = VRLoadPresentationHAMProbeHandoff{
 				.source = VRLoadPresentationHAMProbeHandoffSource::StereoRelease,
 				.route = route,
@@ -34890,6 +34914,12 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 					std::memory_order_acquire),
 				.compositorCycleToken =
 					vrLoadPresentationHAMProbeSubmitContext.compositorCycleToken,
+				.holdElapsedMs =
+					holdStartTickMs != 0 ? currentTickMs - holdStartTickMs : 0,
+				.softDeadlineMs =
+					GetVRPostLoadCompositorHoldSoftDeadlineMilliseconds(holdRoute),
+				.hardDeadlineMs =
+					GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(holdRoute),
 			};
 		} else if (a_phase == HMDMaskClearPhase::SubmitStageOutput) {
 			hamHandoff = TryClaimVRLoadPresentationHAMProbeTimeoutClear(
@@ -36548,24 +36578,31 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 				std::memory_order_release);
 		}
 
-		const uint64_t timeoutMs =
-			GetVRPostLoadCompositorHoldTimeoutMilliseconds();
+		const auto holdRoute = static_cast<VRPostLoadCompositorHoldRoute>(
+			vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire));
+		const uint64_t softDeadlineMs =
+			GetVRPostLoadCompositorHoldSoftDeadlineMilliseconds(holdRoute);
+		const uint64_t hardDeadlineMs =
+			GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(holdRoute);
 		const uint64_t currentTickMs = ::GetTickCount64();
 		if (holdStartTickMs != 0 &&
-			timeoutMs != 0 &&
-			currentTickMs - holdStartTickMs >= timeoutMs) {
+			hardDeadlineMs != 0 &&
+			currentTickMs - holdStartTickMs >= hardDeadlineMs) {
 			if (ShouldEmitUpscalingDiagLogs()) {
 				logger::debug(
-					"[Upscaling][Diag] Released post-load compositor hold at stereo-cycle boundary after timeout elapsedMs={} budgetMs={}.",
+					"[Upscaling][Diag] Released post-load compositor hold at stereo-cycle boundary after hard deadline elapsedMs={} softDeadlineMs={} graceMs={} hardDeadlineMs={}.",
 					currentTickMs - holdStartTickMs,
-					timeoutMs);
+					softDeadlineMs,
+					kVRPostLoadCompositorHoldHardDeadlineGraceMilliseconds,
+					hardDeadlineMs);
 			}
-			// Fail open only before either eye of this compositor cycle submits.
-			// Relatch and recovery ownership remain untouched and continue behind
-			// the visible world after the bounded presentation hold ends.
+			// Crossing the soft deadline alone deliberately leaves Holding unchanged:
+			// vendor work and exact stereo validation continue behind the black
+			// keepalive throughout the bounded grace. Fail open at the hard deadline
+			// only before either eye of this compositor cycle submits. Relatch and
+			// recovery ownership remain untouched and continue behind the visible
+			// world after the bounded presentation hold ends.
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			const auto holdRoute = static_cast<VRPostLoadCompositorHoldRoute>(
-				vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire));
 			const auto probeRoute =
 				holdRoute == VRPostLoadCompositorHoldRoute::MainMenuLoad ?
 					VRLoadPresentationHAMProbeHandoffRoute::MainMenuLoad :
@@ -36580,8 +36617,11 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 				.loadingSerial = vrPostLoadCompositorHoldLoadingSerial.load(
 					std::memory_order_acquire),
 				.compositorCycleToken = a_compositorCycleToken,
+				.holdElapsedMs = currentTickMs - holdStartTickMs,
+				.softDeadlineMs = softDeadlineMs,
+				.hardDeadlineMs = hardDeadlineMs,
 				.timeoutElapsedMs = currentTickMs - holdStartTickMs,
-				.timeoutBudgetMs = timeoutMs,
+				.timeoutBudgetMs = hardDeadlineMs,
 			};
 #endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -36723,17 +36763,27 @@ void Upscaling::NotifyVRPostLoadCompositorLoadingMenuClosed(
 		std::memory_order_acquire);
 }
 
-uint64_t Upscaling::GetVRPostLoadCompositorHoldTimeoutMilliseconds() const noexcept
+uint64_t Upscaling::GetVRPostLoadCompositorHoldSoftDeadlineMilliseconds(
+	VRPostLoadCompositorHoldRoute a_route) noexcept
 {
-	switch (static_cast<VRPostLoadCompositorHoldRoute>(
-		vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire))) {
+	switch (a_route) {
 	case VRPostLoadCompositorHoldRoute::MainMenuLoad:
-		return kVRPostLoadCompositorMainMenuHoldMaxMilliseconds;
+		return kVRPostLoadCompositorMainMenuHoldSoftDeadlineMilliseconds;
 	case VRPostLoadCompositorHoldRoute::InGameLoad:
-		return kVRPostLoadCompositorInGameHoldMaxMilliseconds;
+		return kVRPostLoadCompositorInGameHoldSoftDeadlineMilliseconds;
 	default:
 		return 0;
 	}
+}
+
+uint64_t Upscaling::GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(
+	VRPostLoadCompositorHoldRoute a_route) noexcept
+{
+	const uint64_t softDeadlineMs =
+		GetVRPostLoadCompositorHoldSoftDeadlineMilliseconds(a_route);
+	return softDeadlineMs != 0 ?
+	           softDeadlineMs + kVRPostLoadCompositorHoldHardDeadlineGraceMilliseconds :
+	           0;
 }
 
 bool Upscaling::IsVRInitialLoadPresentationProtectionActive() const noexcept
@@ -37044,7 +37094,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 				std::memory_order_acquire)) {
 			// kPreLoadGame can arrive while Skyrim's Journal/Load menu still owns
 			// presentation. Preserve the pending save-load epoch without replacing
-			// that menu or starting the post-close deadline early.
+			// that menu or starting the post-close deadline window early.
 			return false;
 		}
 		return resetAndFailOpen();
@@ -37256,7 +37306,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		candidateGeneration = a_presentationObservation->contractGeneration;
 		// Active is published only after a stereo vendor pair reaches OpenVR.
 		// Admit the exact applied Stabilizing contract to this hold's existing
-		// stereo proof so that pair can be released before the timeout ceiling.
+		// stereo proof so that pair can be released before the hard deadline.
 		const bool exactAppliedContract =
 			IsVRRenderScaleAppliedVendorContractExact(
 				transition,

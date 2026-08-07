@@ -66,12 +66,12 @@ public:
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 
-	IDXGISwapChain4* swapChain;
+	IDXGISwapChain4* swapChain = nullptr;
 
-	DXGI_SWAP_CHAIN_DESC1 swapChainDesc;
+	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
 
-	WrappedResource* swapChainBufferWrapped;
-	WrappedResource* uiBufferWrapped;
+	WrappedResource* swapChainBufferWrapped = nullptr;
+	WrappedResource* uiBufferWrapped = nullptr;
 
 	// D3D12 interop resources for frame generation
 	WrappedResource* depthBufferShared12 = nullptr;
@@ -101,12 +101,14 @@ public:
 	void CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 
 	void CreateInterop();
+	void RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc);
 
 	DXGISwapChainProxy* GetSwapChainProxy();
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 
-	HRESULT GetBuffer(void** ppSurface);
+	HRESULT GetBuffer(UINT buffer, REFIID riid, void** ppSurface);
+	HRESULT ResizeBuffers(UINT bufferCount, UINT width, UINT height, DXGI_FORMAT format, UINT flags);
 	HRESULT Present(UINT SyncInterval, UINT Flags);
 	HRESULT GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice);
 	HANDLE GetFrameLatencyWaitableObject();

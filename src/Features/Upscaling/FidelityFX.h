@@ -200,6 +200,10 @@ private:
 	std::string runtimeUpscalerProviderMatchedVersionName;
 
 	bool CanUseRuntimeUpscalerPath();
+	// True if an earlier eye already published a runtime-provider (FSR4/runtime-FSR3) frame
+	// this same frame index -- a later eye must not fall through to the host FSR3 SDK, which
+	// would present a mixed-provider stereo pair. See UpscaleRegion's failure paths.
+	bool WasRuntimeUpscalerUsedThisFrame() const;
 	uint32_t GetPreferredRuntimeUpscalerVersion() const;
 	void ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache);
 	void LatchRuntimeUpscalerFailure();

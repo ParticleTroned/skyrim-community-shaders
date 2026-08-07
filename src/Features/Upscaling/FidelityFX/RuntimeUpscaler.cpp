@@ -656,6 +656,19 @@ FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFrame
 	return a_requestedVersion == FFX_UPSCALER_VERSION ? RuntimeUpscalerFramePath::kRuntimeFsr4 : RuntimeUpscalerFramePath::kRuntimeFsr31;
 }
 
+bool FidelityFX::WasRuntimeUpscalerUsedThisFrame() const
+{
+	if (!runtimeUpscalerLastFramePathValid)
+		return false;
+
+	const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+	if (runtimeUpscalerLastFrameIndex != frame)
+		return false;
+
+	return runtimeUpscalerLastFramePath == RuntimeUpscalerFramePath::kRuntimeFsr31 ||
+	       runtimeUpscalerLastFramePath == RuntimeUpscalerFramePath::kRuntimeFsr4;
+}
+
 void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
 {
 	const uint32_t frame = globals::state ? globals::state->frameCount : 0;
@@ -1555,6 +1568,8 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 	const uint32_t runtimeContextCount = splitPerEyeContexts ? 2u : 1u;
 	const bool runtimeSelected = runtimeRequested && CanUseRuntimeUpscalerPath();
+	// Snapshot before this eye's own dispatch can update it, so it reflects only a sibling eye.
+	const bool runtimeAlreadyUsedThisFrame = WasRuntimeUpscalerUsedThisFrame();
 
 	if (runtimeSelected) {
 		auto state = globals::state;
@@ -1614,7 +1629,20 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 			runtimeFallbackResetDispatchesRemaining = std::max(runtimeFallbackResetDispatchesRemaining, runtimeContextCount);
 		}
 		LatchRuntimeUpscalerFailure();
+
+		// A sibling eye already published a runtime-provider frame this frame index; falling
+		// through to the host FSR3 SDK here would present a mixed-provider stereo pair that
+		// cannot be retracted. Drop this eye instead -- the caller skips finalizing the frame
+		// when any eye fails, so this costs one stale frame, not a corrupted one.
+		if (runtimeAlreadyUsedThisFrame)
+			return false;
 	}
+
+	// Defense in depth: CanUseRuntimeUpscalerPath() latching mid-frame (e.g. this eye's own
+	// failure above) must not let an eye that never attempted the runtime path mix providers
+	// with a sibling eye that already succeeded through it this same frame.
+	if (!runtimeSelected && runtimeAlreadyUsedThisFrame)
+		return false;
 
 	if (!runtimeRequested)
 		runtimeFallbackResetDispatchesRemaining = 0;

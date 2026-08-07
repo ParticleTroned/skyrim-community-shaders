@@ -1484,11 +1484,28 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		float wetFilmSource = rainContactVisible;
 		float wetFilmFloorScale = max(0.0, CS_WETNESS_SETTINGS.WetFilmSpecularFloorScale);
 		float wetFilmFloorResponse = lerp(0.50, 1.45, saturate(wetFilmFloorScale * (1.0 / 3.0)));
+		float wetFilmBalanceResponse = lerp(1.0, 1.25, inRainFilmSpecularBoostFromBalance * wetFilmInRainBlend);
+		float wetFilmCombinedResponse = wetFilmFloorResponse * wetFilmBalanceResponse;
+		// Preserve the established floor 2 / balance 0.25 response, then soften the
+		// coupled controls before they can push thin film into the mirror-like range.
+		// Limit only the balance boost: the wet-film floor remains authoritative.
+		const float wetFilmCombinedResponseKnee = 1.21;
+		const float wetFilmCombinedResponseLimit = 1.24;
+		if (wetFilmBalanceResponse > 1.0 && wetFilmCombinedResponse > wetFilmCombinedResponseKnee) {
+			float wetFilmCombinedResponseExcess = wetFilmCombinedResponse - wetFilmCombinedResponseKnee;
+			float wetFilmCombinedResponseRange = wetFilmCombinedResponseLimit - wetFilmCombinedResponseKnee;
+			float wetFilmCombinedResponseSoftened =
+				wetFilmCombinedResponseKnee + wetFilmCombinedResponseExcess / (1.0 + wetFilmCombinedResponseExcess / wetFilmCombinedResponseRange);
+			float wetFilmEffectiveCombinedResponse = max(
+				wetFilmFloorResponse,
+				min(wetFilmCombinedResponse, wetFilmCombinedResponseSoftened));
+			wetFilmBalanceResponse = wetFilmEffectiveCombinedResponse / wetFilmFloorResponse;
+		}
 		float wetFilmRainExposure = lerp(1.0, puddleRainExposure, wetFilmInRainBlend * 0.10 * rainContactSlopeMask);
 		wetFilmRainExposure = max(wetFilmRainExposure, lerp(1.0, 0.84, wetFilmInRainBlend));
 		float wetFilmSpecular = saturate(wetFilmSource * lerp(0.42, 0.78, wetFilmInRainBlend) * wetFilmRainExposure * wetFilmFloorResponse);
 		wetFilmSpecular *= rainContactSlopeMask;
-		wetFilmSpecular *= lerp(1.0, 1.25, inRainFilmSpecularBoostFromBalance * wetFilmInRainBlend);
+		wetFilmSpecular *= wetFilmBalanceResponse;
 		// Keep post-rain readability focused on puddles rather than a broad uniform sheen.
 		wetFilmSpecular *= lerp(1.0, 0.28, wetFilmPostRainBlend);
 		// Match the legacy Wetness Effects shore mask: no extra height or slope gate.
@@ -1596,9 +1613,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 
 		// Apply ripple normal effects
 		float raindropRippleSlopeSqr = dot(raindropInfo.xy, raindropInfo.xy);
-		float rippleSlopeMaskStart = max(0.0, CS_WETNESS_SETTINGS.DarkRippleSlopeMaskStart);
-		float rippleSlopeMaskEnd = max(rippleSlopeMaskStart + 1e-6, CS_WETNESS_SETTINGS.DarkRippleSlopeMaskEnd);
-		raindropRippleMask = smoothstep(rippleSlopeMaskStart, rippleSlopeMaskEnd, raindropRippleSlopeSqr);
+		raindropRippleMask = smoothstep(0.0025, 0.04, raindropRippleSlopeSqr);
 		if (any(raindropInfo.xyz != float3(0, 0, 1))) {
 			float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(1.0, flatnessAmount, 0.8)));
 			wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
@@ -1769,7 +1784,6 @@ struct WetnessDirectLightState
 	float3 normal;
 	float roughness;
 	float pointLightRoughness;
-	float pointLightDarkRippleMask;
 	float detailWeight;
 	WetnessDirectLightingParams params;
 };
@@ -1808,15 +1822,14 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	}
 
 	// Animated ripple normals can drive a near-mirror GGX lobe across a small HMD
-	// footprint under local lights. Tune only that point-light lobe in dark scenes;
+	// footprint under local lights. Broaden only that point-light lobe in dark scenes;
 	// sunlight, indirect reflections, and non-ripple wet surfaces keep their response.
 	const float darkRippleMask = saturate(raindropRippleMask * pointLightDarkness);
-	const float minDarkRipplePointLightRoughness = max(0.0, CS_WETNESS_SETTINGS.DarkRipplePointLightRoughnessFloor);
+	const float minDarkRipplePointLightRoughness = 0.18;
 	state.pointLightRoughness = lerp(
 		state.roughness,
 		max(state.roughness, minDarkRipplePointLightRoughness),
 		darkRippleMask);
-	state.pointLightDarkRippleMask = darkRippleMask;
 
 	// Match the direct-lighting context normalization so the prepared wet params remain
 	// identical when shared across the directional light and both point-light loops.
@@ -2043,26 +2056,7 @@ void ApplyWetnessDirectLightingOutput(
 
 	DirectLightingOutput baseLightingOutput = lightingOutput;
 	float roughness = isPointLight ? wetDirectLightState.pointLightRoughness : wetDirectLightState.roughness;
-	WetnessDirectLightingParams wetnessParams = wetDirectLightState.params;
-	float ggxPeakCompressionStrength = 0.0;
-	float ggxSoftKnee = 0.0;
-	float ggxPeakLimit = 1.0;
-	if (isPointLight) {
-		float darkRippleMask = wetDirectLightState.pointLightDarkRippleMask;
-		wetnessParams.lightColorScale *= lerp(1.0, saturate(CS_WETNESS_SETTINGS.DarkRipplePointLightSpecularScale), darkRippleMask);
-		ggxPeakCompressionStrength = darkRippleMask * saturate(CS_WETNESS_SETTINGS.DarkRippleGgxCompressionStrength);
-		ggxSoftKnee = max(0.0, CS_WETNESS_SETTINGS.DarkRippleGgxSoftKnee);
-		ggxPeakLimit = max(ggxSoftKnee + 1e-4, CS_WETNESS_SETTINGS.DarkRippleGgxPeakLimit);
-	}
-	EvaluateWetnessLighting(
-		wetDirectLightState.normal,
-		lightContext,
-		roughness,
-		wetnessParams,
-		ggxPeakCompressionStrength,
-		ggxSoftKnee,
-		ggxPeakLimit,
-		lightingOutput);
+	EvaluateWetnessLighting(wetDirectLightState.normal, lightContext, roughness, wetDirectLightState.params, lightingOutput);
 	ApplyVRLightingAuxiliaryOutputWeight(lightingOutput, baseLightingOutput, wetDirectLightState.detailWeight);
 }
 #	elif defined(WETNESS_EFFECTS)
@@ -3813,9 +3807,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Directional luminance is already available here and cleanly distinguishes
 	// bright exterior rain from dark scenes dominated by local light sources.
 	float wetDirectionalLuminance = Color::RGBToLuminance(max(0.0.xxx, SanitizeFloat3(dirLightColor)));
-	float darkRippleLuminanceStart = max(0.0, CS_WETNESS_SETTINGS.DarkRippleDarknessLuminanceStart);
-	float darkRippleLuminanceEnd = max(darkRippleLuminanceStart + 1e-4, CS_WETNESS_SETTINGS.DarkRippleDarknessLuminanceEnd);
-	float wetPointLightDarkness = 1.0 - smoothstep(darkRippleLuminanceStart, darkRippleLuminanceEnd, wetDirectionalLuminance);
+	float wetPointLightDarkness = 1.0 - smoothstep(0.06, 0.22, wetDirectionalLuminance);
 	const bool wetLightingVisible = wetnessEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
 	WetnessLightingState wetnessLightingState = CreateWetnessLightingState(
 		wetLightingVisible,

@@ -161,33 +161,6 @@ public:
 	static_assert(offsetof(ShaderSettings, ShorePersistentDarkeningStrength) == 156,
 		"Wetterness::ShaderSettings shore darkening offset changed.");
 
-	struct DarkPointLightRippleTuning
-	{
-		// Current behavior from 45e7a6abd. Set to zero to test the original wet roughness.
-		float RoughnessFloor = 0.18f;
-		// Scales only the added wet GGX lobe on masked dark-scene point-light ripples.
-		float SpecularScale = 1.0f;
-		// Optional replacement mitigation. Zero preserves the current roughness-floor-only behavior.
-		float GgxCompressionStrength = 0.0f;
-		float GgxSoftKnee = 8.0f;
-		float GgxPeakLimit = 64.0f;
-		float RippleSlopeMaskStart = 0.0025f;
-		float RippleSlopeMaskEnd = 0.04f;
-		float DarknessLuminanceStart = 0.06f;
-		float DarknessLuminanceEnd = 0.22f;
-		float pad[3]{};
-	};
-	static_assert(sizeof(DarkPointLightRippleTuning) == 48);
-	static_assert(offsetof(DarkPointLightRippleTuning, RoughnessFloor) == 0);
-	static_assert(offsetof(DarkPointLightRippleTuning, SpecularScale) == 4);
-	static_assert(offsetof(DarkPointLightRippleTuning, GgxCompressionStrength) == 8);
-	static_assert(offsetof(DarkPointLightRippleTuning, GgxSoftKnee) == 12);
-	static_assert(offsetof(DarkPointLightRippleTuning, GgxPeakLimit) == 16);
-	static_assert(offsetof(DarkPointLightRippleTuning, RippleSlopeMaskStart) == 20);
-	static_assert(offsetof(DarkPointLightRippleTuning, RippleSlopeMaskEnd) == 24);
-	static_assert(offsetof(DarkPointLightRippleTuning, DarknessLuminanceStart) == 28);
-	static_assert(offsetof(DarkPointLightRippleTuning, DarknessLuminanceEnd) == 32);
-
 	struct PerFrame
 	{
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
@@ -201,13 +174,11 @@ public:
 		uint PackedRainReflectionControl = 0;
 		uint WetnessDistanceFadeRangePacked = 0;
 		float RainContactWetnessScale = 1.75f;
-		DarkPointLightRippleTuning darkPointLightRippleTuning;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, settings) == 80, "Wetterness::PerFrame settings offset changed.");
 	static_assert(offsetof(PerFrame, PackedPostRainControl) == 240, "Wetterness::PerFrame tail-control offset changed.");
-	static_assert(offsetof(PerFrame, darkPointLightRippleTuning) == 256, "Wetterness::PerFrame dark-ripple tuning offset changed.");
-	static_assert(sizeof(PerFrame) == 304, "Wetterness::PerFrame size changed; update wetness shader/CB contract.");
+	static_assert(sizeof(PerFrame) == 256, "Wetterness::PerFrame size changed; update wetness shader/CB contract.");
 	static_assert((sizeof(PerFrame) % 16) == 0, "Wetterness::PerFrame must stay 16-byte sized");
 
 	struct DebugSettings
@@ -236,7 +207,6 @@ public:
 	static constexpr float kDefaultRainGrassSpecularStrength = 1.0f;
 	float rainGrassGlossiness = kDefaultRainGrassGlossiness;
 	float rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
-	DarkPointLightRippleTuning darkPointLightRippleTuning;
 	// Climate preset system
 	enum class ClimatePreset : uint32_t
 	{

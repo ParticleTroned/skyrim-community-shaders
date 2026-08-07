@@ -30,6 +30,64 @@ bool IsHiddenDepth(float depth)
 	return depth <= kHiddenDepthThreshold;
 }
 
+static const uint kProbeGridSize = 9;
+
+uint ResolveProbeCoordinate(uint index, uint extent)
+{
+	// Exact integer form of floor(((index + 0.5) / kProbeGridSize) * extent).
+	return min(((2 * index + 1) * extent) / (2 * kProbeGridSize), extent - 1);
+}
+
+[numthreads(9, 9, 1)] void DevBenchHAMProbeMain(uint3 dispatchID : SV_DispatchThreadID)
+{
+	if (dispatchID.x >= kProbeGridSize || dispatchID.y >= kProbeGridSize ||
+		ColorWidth == 0 || ColorHeight == 0 || DepthWidth == 0 || DepthHeight == 0) {
+		return;
+	}
+
+	uint depthTextureWidth, depthTextureHeight;
+	DepthIn.GetDimensions(depthTextureWidth, depthTextureHeight);
+
+	uint2 localColorPos = uint2(
+		ResolveProbeCoordinate(dispatchID.x, ColorWidth),
+		ResolveProbeCoordinate(dispatchID.y, ColorHeight));
+	uint2 depthPos = uint2(
+		(localColorPos.x * DepthWidth) / ColorWidth,
+		(localColorPos.y * DepthHeight) / ColorHeight) +
+		uint2(DepthOffsetX, DepthOffsetY);
+
+	if (depthPos.x >= depthTextureWidth || depthPos.y >= depthTextureHeight) {
+		ColorInOut[dispatchID.xy] = float4(-1.0, -1.0, 0.0, 0.0);
+		return;
+	}
+
+	const float centerDepth = DepthIn[depthPos];
+	float minimumDepth = centerDepth;
+	uint hiddenSampleCount = 0;
+	[unroll]
+	for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y) {
+		[unroll]
+		for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x) {
+			int2 samplePos = int2(depthPos) + int2(x, y);
+			if (any(samplePos < int2(0, 0)) ||
+				samplePos.x >= int(depthTextureWidth) ||
+				samplePos.y >= int(depthTextureHeight)) {
+				continue;
+			}
+			const float depth = DepthIn[uint2(samplePos)];
+			minimumDepth = min(minimumDepth, depth);
+			if (IsHiddenDepth(depth))
+				++hiddenSampleCount;
+		}
+	}
+
+	ColorInOut[dispatchID.xy] = float4(
+		centerDepth,
+		minimumDepth,
+		float(hiddenSampleCount),
+		hiddenSampleCount != 0 ? 1.0 : 0.0);
+}
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
 	if (dispatchID.x >= ColorWidth || dispatchID.y >= ColorHeight)

@@ -927,6 +927,7 @@ public:
 		uint64_t sessionID = 0;
 		uint64_t queuedQpc = 0;
 		uint64_t completedQpc = 0;
+		uint64_t compositorCycleToken = 0;
 		uint32_t frame = 0;
 		uint32_t lastCompletedWorldFrame = 0;
 		uint32_t loadingCloseFrame = 0;
@@ -942,6 +943,7 @@ public:
 		uint32_t textureSampleCount = 0;
 		uint32_t textureColorSpace = 0;
 		uint32_t sourceSubresource = 0;
+		uintptr_t textureIdentity = 0;
 		float boundsUMin = 0.0f;
 		float boundsVMin = 0.0f;
 		float boundsUMax = 1.0f;
@@ -968,11 +970,24 @@ public:
 		bool stabilizerSyncPending = false;
 		bool renderScaleModeActive = false;
 		bool presentationUpscalingActive = false;
+		uint32_t handoffSource = 0;
+		uint32_t handoffRoute = 0;
+		uint64_t handoffProtectionEpoch = 0;
+		uint64_t handoffLoadingSerial = 0;
+		uint64_t handoffCompositorCycleToken = 0;
+		uint64_t handoffTimeoutElapsedMs = 0;
+		uint64_t handoffTimeoutBudgetMs = 0;
+		bool firstPostTimeoutSubmit = false;
+		uint32_t timeoutSubmitCorrelation = 0;
 		bool hamClearObserved = false;
 		bool hamClearEligible = false;
 		bool hamClearDeferred = false;
 		bool hamClearExecuted = false;
 		uint32_t hamClearPhase = 0;
+		uint64_t hamClearDispatchSequence = 0;
+		bool hamCaptureRequested = false;
+		uint64_t hamCaptureSequence = 0;
+		VRLoadPresentationProbeCaptureStatus hamCaptureStatus = VRLoadPresentationProbeCaptureStatus::Pending;
 		bool luminanceValid = false;
 		float minimumLuminance = 0.0f;
 		float maximumLuminance = 0.0f;
@@ -982,13 +997,19 @@ public:
 		uint32_t whiteSampleCount = 0;
 		uint32_t brightSampleCount = 0;
 		uint32_t blackSampleCount = 0;
+		uint32_t darkSampleCount = 0;
 		uint32_t edgeWhiteSampleCount = 0;
 		uint32_t edgeBrightSampleCount = 0;
+		uint32_t edgeBlackSampleCount = 0;
+		uint32_t edgeDarkSampleCount = 0;
 		float edgeBrightMinimumLuminance = 0.0f;
 		float edgeBrightMaximumLuminance = 0.0f;
 		bool predominantlyWhite = false;
 		bool predominantlyBlack = false;
 		bool hamWhitePattern = false;
+		bool hamBrightPattern = false;
+		bool hamBlackPattern = false;
+		bool hamDarkPattern = false;
 		std::array<float, kVRLoadPresentationProbeSampleCount> luminance{};
 	};
 #endif
@@ -1192,6 +1213,8 @@ public:
 		const vr::Texture_t* a_texture,
 		const vr::VRTextureBounds_t* a_bounds,
 		vr::EVRSubmitFlags a_flags,
+		uint64_t a_compositorCycleToken,
+		bool a_openVRAttempt,
 		const VRRenderScalePresentationObservation* a_presentationObservation = nullptr) noexcept;
 	void CompleteVRLoadPresentationProbeSubmit(uint64_t a_sequence, vr::EVRCompositorError a_result) noexcept;
 #endif

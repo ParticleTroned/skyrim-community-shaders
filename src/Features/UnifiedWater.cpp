@@ -3,6 +3,7 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
+#include "State.h"
 #include "Util.h"
 
 #define I18N_KEY_PREFIX "feature.unified_water."
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <imgui_internal.h>
+#include <memory>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
@@ -33,7 +35,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
-	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 9;
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 11;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
@@ -50,7 +52,7 @@ namespace
 	constexpr float kShoreContactMinFadePixelsMax = 4.0f;
 	constexpr float kWorldCellSize = 4096.0f;
 	constexpr float kShoreDepthBlendRangeUnitsMin = 0.0f;
-	constexpr float kShoreDepthBlendRangeUnitsMax = 10.0f;
+	constexpr float kShoreDepthBlendRangeUnitsMax = 20.0f;
 	constexpr float kShallowSurfaceDepthRangeUnitsMin = 16.0f;
 	constexpr float kShallowSurfaceDepthRangeUnitsMax = 256.0f;
 	constexpr float kShallowFallbackMaxDistanceMin = 0.0f;
@@ -135,6 +137,47 @@ namespace
 			defaults.ShallowFallbackMaxDistance);
 	}
 
+	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
+	{
+		auto* tintColor = reinterpret_cast<float*>(&a_settings.WaterTintColor);
+		const ImVec4 tintPreview(tintColor[0], tintColor[1], tintColor[2], 1.0f);
+
+		ImGui::PushID("WaterTintColor");
+		if (ImGui::ColorButton("##Preview", tintPreview, ImGuiColorEditFlags_NoAlpha))
+			ImGui::OpenPopup("Picker");
+		ImGui::SameLine();
+		ImGui::ColorEdit3(
+			T(TKEY("water_tint_color"), "Water Tint Color"),
+			tintColor,
+			ImGuiColorEditFlags_NoAlpha |
+				ImGuiColorEditFlags_NoPicker |
+				ImGuiColorEditFlags_NoSmallPreview);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("water_tint_color_tooltip"), "Selects the colour of the water tint."));
+
+		if (ImGui::BeginPopup("Picker")) {
+			ImGui::ColorPicker3("##ColorPicker", tintColor, ImGuiColorEditFlags_NoAlpha);
+			ImGui::Spacing();
+			if (ImGui::Button(
+					T(TKEY("exit_tint_menu"), "Exit Tint Menu"),
+					ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		}
+		ImGui::PopID();
+
+		ImGui::SliderFloat(
+			T(TKEY("water_tint"), "Water Tint"),
+			&a_settings.WaterTintStrength,
+			kWaterTintStrengthMin,
+			kWaterTintStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("water_tint_tooltip"), "Adjusts how strongly the selected colour appears in the water."));
+	}
+
 	bool IsInteriorCellActive()
 	{
 		const auto tes = RE::TES::GetSingleton();
@@ -145,6 +188,16 @@ namespace
 		const auto player = RE::PlayerCharacter::GetSingleton();
 		const auto cell = player ? player->GetParentCell() : nullptr;
 		return cell && cell->IsInteriorCell();
+	}
+
+	void LogMeshLoadFailure(RE::BSResource::ErrorCode a_error, const char* a_dataRelativePath)
+	{
+		std::error_code error;
+		logger::error(
+			"[Unified Water] {} load failed: {}, loose file present: {}",
+			a_dataRelativePath,
+			magic_enum::enum_name(a_error),
+			std::filesystem::exists(std::filesystem::path("Data") / a_dataRelativePath, error));
 	}
 
 	bool IsShortBranch(const std::uint8_t opcode)
@@ -179,6 +232,59 @@ namespace
 		logger::error("[Unified Water] Skipping {} patch at {:X}: unexpected branch bytes {:02X} {:02X}", label, address, bytes[0], bytes[1]);
 	}
 
+	bool CanPatchBranch(const std::uintptr_t a_address)
+	{
+		const auto bytes = reinterpret_cast<const std::uint8_t*>(a_address);
+		return IsShortBranch(bytes[0]) || IsNearConditionalBranch(bytes[0], bytes[1]);
+	}
+
+	bool CanPatchRelativeCall(const std::uintptr_t a_address)
+	{
+		return *reinterpret_cast<const std::uint8_t*>(a_address) == 0xE8;
+	}
+
+	bool DisableVanillaWaterLOD()
+	{
+		// DataLoaded can be delivered more than once on reload paths. Re-patching a
+		// near branch would no longer match its original conditional encoding.
+		static bool patched = false;
+		if (patched)
+			return true;
+
+		// Unified Water owns these paths only after both replacement meshes have
+		// validated. Preflight every instruction before making any write so a
+		// runtime conflict leaves vanilla LOD and flow-map handling intact.
+		const auto attachedMeshAddLoop = REL::RelocationID(30934, 31737).address() + REL::Relocate(0x109, 0x109);
+		const auto lodWaterAddLoop = REL::RelocationID(30978, 31751).address() + REL::Relocate(0x54, 0xEA);
+		const auto flowMapCall1 = REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1B7, 0x1F7);
+		const auto flowMapCall2 = REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1EA, 0x22A);
+		const auto flowMapCall3 = REL::RelocationID(35561, 36560).address() + REL::Relocate(0x202, 0x242);
+		if (!CanPatchBranch(attachedMeshAddLoop) ||
+			!CanPatchBranch(lodWaterAddLoop) ||
+			!CanPatchRelativeCall(flowMapCall1) ||
+			!CanPatchRelativeCall(flowMapCall2) ||
+			!CanPatchRelativeCall(flowMapCall3)) {
+			logger::error(
+				"[Unified Water] Cannot disable vanilla water paths; unexpected instructions at branches {:X}/{:X} or calls {:X}/{:X}/{:X}. Another mod may patch the same code",
+				attachedMeshAddLoop,
+				lodWaterAddLoop,
+				flowMapCall1,
+				flowMapCall2,
+				flowMapCall3);
+			return false;
+		}
+
+		PatchBranchToUnconditional(attachedMeshAddLoop, "attached mesh add loop");
+		PatchBranchToUnconditional(lodWaterAddLoop, "LOD water add loop");
+
+		REL::safe_fill(flowMapCall1, REL::NOP, 5);
+		REL::safe_fill(flowMapCall2, REL::NOP, 5);
+		REL::safe_fill(flowMapCall3, REL::NOP, 5);
+
+		patched = true;
+		return true;
+	}
+
 }
 
 void UnifiedWater::LoadSettings(json& o_json)
@@ -187,6 +293,12 @@ void UnifiedWater::LoadSettings(json& o_json)
 	const auto loadedModelVersion = o_json.value("SurfaceVisibilityModelVersion", 0u);
 	if (loadedModelVersion != kSurfaceVisibilityModelVersion) {
 		const Settings defaults{};
+
+		if (loadedModelVersion < 11) {
+			// Adopt the release model's single balanced shore-contact curve instead
+			// of preserving tuning from an earlier visibility model.
+			settings.ShoreDepthBlendRangeUnits = defaults.ShoreDepthBlendRangeUnits;
+		}
 
 		if (loadedModelVersion < 9) {
 			// Appearance differences overlap between transparent shallow and
@@ -212,7 +324,9 @@ void UnifiedWater::LoadSettings(json& o_json)
 				defaults.ShallowFallbackStrength);
 			settings.ShallowFallbackMaxDistance = o_json.value(
 				"ShoreConfirmationMaxDistance",
-				defaults.ShallowFallbackMaxDistance);
+				o_json.value(
+					"ShoreConfirmationCullDistance",
+					defaults.ShallowFallbackMaxDistance));
 		}
 	}
 	settings.SurfaceVisibilityModelVersion = kSurfaceVisibilityModelVersion;
@@ -243,103 +357,13 @@ void UnifiedWater::DrawSettings()
 	}
 
 	ImGui::Spacing();
-
-	if (ImGui::TreeNodeEx(T(TKEY("water_appearance"), "Water Appearance"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::ColorEdit3(
-			T(TKEY("water_tint_color"), "Water Tint Color"),
-			reinterpret_cast<float*>(&settings.WaterTintColor));
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("water_tint_color_tooltip"), "Selects the colour of the water tint."));
-
-		ImGui::SliderFloat(
-			T(TKEY("water_tint"), "Water Tint"),
-			&settings.WaterTintStrength,
-			kWaterTintStrengthMin,
-			kWaterTintStrengthMax,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("water_tint_tooltip"), "Adjusts how strongly the selected colour appears in the water."));
-
-		ImGui::TreePop();
-	}
+	ImGui::SeparatorText(T(TKEY("water_appearance"), "Water Appearance"));
+	DrawWaterTintSettings(settings);
 
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx(T(TKEY("shallow_water_depth_stabilization"), "Shallow Water Surface Visibility"), ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx(T(TKEY("shallow_water_depth_stabilization"), "Shallow Water Surface Visibility"))) {
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
-
-		ImGui::SliderFloat(
-			T(TKEY("shallow_fallback_strength"), "Shallow Fallback Strength"),
-			&settings.ShallowFallbackStrength,
-			kShallowFallbackStrengthMin,
-			kShallowFallbackStrengthMax,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("shallow_fallback_strength_tooltip"),
-								  "Strength of the bounded surface cue used only when native/Open water is visually indistinguishable from the riverbed."));
-		}
-
-		ImGui::Spacing();
-		ImGui::SeparatorText(T(TKEY("deep_water_protection"), "Deep Water Protection"));
-
-		ImGui::SliderFloat(
-			T(TKEY("deep_connection_probe_reach"), "Connection Search Reach"),
-			&settings.DeepConnectionProbeReachUnits,
-			kDeepConnectionProbeReachUnitsMin,
-			kDeepConnectionProbeReachUnitsMax,
-			"%.0f units",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("deep_connection_probe_reach_tooltip"),
-								  "Physical distance searched toward increasing terrain depth at half and full reach.\n"
-								  "Increase this for broad shallow banks. Set to 0 to disable connected-depth protection."));
-		}
-
-		ImGui::SliderFloat(
-			T(TKEY("deep_context_depth"), "Deep Context Depth"),
-			&settings.DeepContextDepthUnits,
-			kDeepContextDepthUnitsMin,
-			kDeepContextDepthUnitsMax,
-			"%.0f units",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("deep_context_depth_tooltip"),
-								  "Plane-normal depth that gives full native/Open protection to a connected medium/deep channel.\n"
-								  "Keep this above Shallow Surface Depth so a uniformly shallow stream retains its fallback surface."));
-		}
-
-		ImGui::SliderFloat(
-			T(TKEY("deep_context_transition"), "Deep Context Transition"),
-			&settings.DeepContextTransitionUnits,
-			kDeepContextTransitionUnitsMin,
-			kDeepContextTransitionUnitsMax,
-			"%.0f units",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("deep_context_transition_tooltip"),
-								  "Depth width below Deep Context Depth over which connected deep-water protection fades in.\n"
-								  "Raise this for a softer handoff; use the minimum for the sharpest transition."));
-		}
-
-		ImGui::Spacing();
-		ImGui::SeparatorText(T(TKEY("depth_separation"), "Depth Separation"));
-
-		ImGui::SliderFloat(
-			T(TKEY("shallow_surface_depth_range"), "Shallow Surface Depth"),
-			&settings.ShallowSurfaceDepthRangeUnits,
-			kShallowSurfaceDepthRangeUnitsMin,
-			kShallowSurfaceDepthRangeUnitsMax,
-			"%.0f units",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("shallow_surface_depth_range_tooltip"),
-								  "Plane-normal water depth where the shallow surface cue has faded completely to native water.\n"
-								  "Lower this if the cue reaches medium water; raise it only when a shallow stream still loses its surface."));
-		}
-
-		ImGui::Spacing();
 		ImGui::SeparatorText(T(TKEY("shoreline"), "Shore Contact"));
 
 		ImGui::SliderFloat(
@@ -351,21 +375,8 @@ void UnifiedWater::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("shore_depth_blend_range_tooltip"),
-								  "Plane-normal water depth over which the shallow surface cue fades in at terrain contact.\n"
+								  "Plane-normal depth over which the shallow surface cue fades in from the shore.\n"
 								  "Set to 0 to disable the world-space fade; Minimum Edge Fade Width remains active."));
-		}
-
-		ImGui::SliderFloat(
-			T(TKEY("shore_contact_min_fade_pixels"), "Minimum Edge Fade Width"),
-			&settings.ShoreContactMinFadePixels,
-			kShoreContactMinFadePixelsMin,
-			kShoreContactMinFadePixelsMax,
-			"%.1f px",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("shore_contact_min_fade_pixels_tooltip"),
-								  "Minimum screen-space width of the shallow cue's terrain-contact fade.\n"
-								  "This prevents subpixel terminal seams without extra texture samples. Set to 0 to use only Edge Fade Depth."));
 		}
 
 		ImGui::SliderFloat(
@@ -381,19 +392,13 @@ void UnifiedWater::DrawSettings()
 								  "Set to 0 to use native/Open depth blending everywhere."));
 		}
 
-		ImGui::TextDisabled("%s", T(TKEY("surface_visibility_performance"), "Two scene-depth reads run only for unresolved shallow pixels inside the fallback distance."));
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("surface_visibility_performance_tooltip"),
-								  "Native/Open is always the base. Pixels outside the shallow range, disabled, or distance-culled skip the connectivity reads."));
-		}
-
 		ImGui::EndDisabled();
 		ImGui::TreePop();
 	}
 
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"), ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"))) {
 		ImGui::Checkbox(
 			T(TKEY("use_open_shaders_depth_behaviour"), "Use Open Shaders Depth Behaviour"),
 			&settings.UseOpenShadersDepthBehaviour);
@@ -403,15 +408,115 @@ void UnifiedWater::DrawSettings()
 								  "Custom visibility values are preserved and resume when disabled."));
 		}
 
-		ImGui::Spacing();
-
-		if (ImGui::Button(T(TKEY("regenerate_flowmap"), "Regenerate Flowmap")) && flowmap) {
-			if (flowmap->RegenerateAndLoadFlowmap())
-				SetFlowmapTex();
+		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
+		ImGui::SliderFloat(
+			T(TKEY("shallow_fallback_strength"), "Shallow Fallback Strength"),
+			&settings.ShallowFallbackStrength,
+			kShallowFallbackStrengthMin,
+			kShallowFallbackStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("shallow_fallback_strength_tooltip"),
+								  "Strength of the bounded surface cue used only when native/Open water is visually indistinguishable from the riverbed."));
 		}
+		ImGui::EndDisabled();
 
-		if (ImGui::Button(T(TKEY("regenerate_caches"), "Regenerate Caches")) && waterCache)
-			waterCache->RegenerateCaches();
+		if (globals::state && globals::state->IsDeveloperMode()) {
+			ImGui::Spacing();
+			ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
+
+			ImGui::SeparatorText(T(TKEY("deep_water_protection"), "Deep Water Protection"));
+
+			ImGui::SliderFloat(
+				T(TKEY("deep_connection_probe_reach"), "Connection Search Reach"),
+				&settings.DeepConnectionProbeReachUnits,
+				kDeepConnectionProbeReachUnitsMin,
+				kDeepConnectionProbeReachUnitsMax,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("deep_connection_probe_reach_tooltip"),
+									  "Physical distance searched toward increasing terrain depth at half and full reach.\n"
+									  "Increase this for broad shallow banks. Set to 0 to disable connected-depth protection."));
+			}
+
+			ImGui::SliderFloat(
+				T(TKEY("deep_context_depth"), "Deep Context Depth"),
+				&settings.DeepContextDepthUnits,
+				kDeepContextDepthUnitsMin,
+				kDeepContextDepthUnitsMax,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("deep_context_depth_tooltip"),
+									  "Plane-normal depth that gives full native/Open protection to a connected medium/deep channel.\n"
+									  "Keep this above Shallow Surface Depth so a uniformly shallow stream retains its fallback surface."));
+			}
+
+			ImGui::SliderFloat(
+				T(TKEY("deep_context_transition"), "Deep Context Transition"),
+				&settings.DeepContextTransitionUnits,
+				kDeepContextTransitionUnitsMin,
+				kDeepContextTransitionUnitsMax,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("deep_context_transition_tooltip"),
+									  "Depth width below Deep Context Depth over which connected deep-water protection fades in.\n"
+									  "Raise this for a softer handoff; use the minimum for the sharpest transition."));
+			}
+
+			ImGui::Spacing();
+			ImGui::SeparatorText(T(TKEY("depth_separation"), "Depth Separation"));
+
+			ImGui::SliderFloat(
+				T(TKEY("shallow_surface_depth_range"), "Shallow Surface Depth"),
+				&settings.ShallowSurfaceDepthRangeUnits,
+				kShallowSurfaceDepthRangeUnitsMin,
+				kShallowSurfaceDepthRangeUnitsMax,
+				"%.0f units",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("shallow_surface_depth_range_tooltip"),
+									  "Plane-normal water depth where the shallow surface cue has faded completely to native water.\n"
+									  "Lower this if the cue reaches medium water; raise it only when a shallow stream still loses its fallback surface."));
+			}
+
+			ImGui::Spacing();
+			ImGui::SeparatorText(T(TKEY("shoreline"), "Shore Contact"));
+
+			ImGui::SliderFloat(
+				T(TKEY("shore_contact_min_fade_pixels"), "Minimum Edge Fade Width"),
+				&settings.ShoreContactMinFadePixels,
+				kShoreContactMinFadePixelsMin,
+				kShoreContactMinFadePixelsMax,
+				"%.1f px",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("shore_contact_min_fade_pixels_tooltip"),
+									  "Minimum screen-space width of the shallow cue's terrain-contact fade.\n"
+									  "This prevents subpixel terminal seams without extra texture samples. Set to 0 to use only Edge Fade Depth."));
+			}
+
+			ImGui::TextDisabled("%s", T(TKEY("surface_visibility_performance"),
+				"Up to two bounded connection reads run only for unresolved shallow pixels inside the fallback distance."));
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("surface_visibility_performance_tooltip"),
+									  "Native/Open is always the base. Pixels outside the shallow range, disabled, or distance-culled skip the connectivity reads."));
+			}
+
+			ImGui::EndDisabled();
+			ImGui::Spacing();
+
+			if (ImGui::Button(T(TKEY("regenerate_flowmap"), "Regenerate Flowmap")) && flowmap) {
+				if (flowmap->RegenerateAndLoadFlowmap())
+					SetFlowmapTex();
+			}
+
+			if (ImGui::Button(T(TKEY("regenerate_caches"), "Regenerate Caches")) && waterCache)
+				waterCache->RegenerateCaches();
+		}
 
 		ImGui::TreePop();
 	}
@@ -435,6 +540,25 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
 	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
 	return data;
+}
+
+void UnifiedWater::DrawEssentialSettings()
+{
+	SanitizeSettings(settings);
+	ImGui::SeparatorText(T(TKEY("water_appearance"), "Water Appearance"));
+	DrawWaterTintSettings(settings);
+}
+
+void UnifiedWater::DrawPerformanceSettings(bool)
+{
+	ImGui::Checkbox(T(TKEY("use_optimised_meshes"), "Use Optimised Meshes"), &settings.UseOptimisedMeshes);
+}
+
+json UnifiedWater::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "UseOptimisedMeshes", settings.UseOptimisedMeshes }
+	};
 }
 
 void UnifiedWater::DrawOverlay()
@@ -507,46 +631,75 @@ bool UnifiedWater::IsOverlayVisible() const
 
 void UnifiedWater::DataLoaded()
 {
+	if (IsWaterDataReady()) {
+		logger::debug("[Unified Water] Runtime data is already initialized");
+		return;
+	}
+
 	auto args = RE::BSModelDB::DBTraits::ArgsType();
 	args.unk8 = false;
 	args.unkA = false;
 	args.postProcess = false;
 	RE::NiPointer<RE::NiNode> nif;
+	RE::NiPointer<RE::BSTriShape> loadedWaterMesh;
+	RE::NiPointer<RE::BSTriShape> loadedOptimisedWaterMesh;
+
+	const auto fail = [this](std::string a_reason) {
+		logger::error("[Unified Water] {}; distant water falls back to vanilla LOD", a_reason);
+		failedLoadedMessage = std::move(a_reason);
+	};
 
 	if (const auto error = RE::BSModelDB::Demand("meshes\\water\\watermesh.nif", nif, args); error != RE::BSResource::ErrorCode::kNone) {
-		logger::error("[Unified Water] Failed to load water mesh");
+		LogMeshLoadFailure(error, "meshes\\water\\WaterMesh.nif");
+		fail("Failed to load water mesh");
 		return;
 	}
 	if (!nif || nif->GetChildren().empty() || !nif->GetChildren().front()->AsNode() || nif->GetChildren().front()->AsNode()->GetChildren().empty()) {
-		logger::error("[Unified Water] Invalid water mesh hierarchy");
+		fail("Invalid water mesh hierarchy");
 		return;
 	}
 	const auto waterShape = nif->GetChildren().front()->AsNode()->GetChildren().front()->AsTriShape();
 	if (!waterShape) {
-		logger::error("[Unified Water] Water mesh does not contain valid TriShape");
+		fail("Water mesh does not contain valid TriShape");
 		return;
 	}
-	waterMesh = RE::NiPointer(waterShape);
+	loadedWaterMesh = RE::NiPointer(waterShape);
 	logger::debug("[Unified Water] Water mesh loaded");
 
 	if (const auto error = RE::BSModelDB::Demand("meshes\\water\\optimisedwatermesh.nif", nif, args); error != RE::BSResource::ErrorCode::kNone) {
-		logger::error("[Unified Water] Failed to load optimised water mesh");
+		LogMeshLoadFailure(error, "meshes\\water\\OptimisedWaterMesh.nif");
+		fail("Failed to load optimised water mesh");
 		return;
 	}
 	if (!nif || nif->GetChildren().empty() || !nif->GetChildren().front()->AsNode() || nif->GetChildren().front()->AsNode()->GetChildren().empty()) {
-		logger::error("[Unified Water] Invalid optimised water mesh hierarchy");
+		fail("Invalid optimised water mesh hierarchy");
 		return;
 	}
 	const auto optimisedWaterShape = nif->GetChildren().front()->AsNode()->GetChildren().front()->AsTriShape();
 	if (!optimisedWaterShape) {
-		logger::error("[Unified Water] Optimised water mesh does not contain valid TriShape");
+		fail("Optimised water mesh does not contain valid TriShape");
 		return;
 	}
-	optimisedWaterMesh = RE::NiPointer(optimisedWaterShape);
+	loadedOptimisedWaterMesh = RE::NiPointer(optimisedWaterShape);
 	logger::debug("[Unified Water] Optimised water mesh loaded");
 
-	flowmap = new Flowmap();
-	waterCache = new WaterCache();
+	// Construct every fallible resource before disabling vanilla. These remain
+	// locally owned until the executable patches have also been validated.
+	auto loadedFlowmap = std::make_unique<Flowmap>();
+	auto loadedWaterCache = std::make_unique<WaterCache>();
+
+	if (!DisableVanillaWaterLOD()) {
+		fail("Could not disable vanilla water LOD");
+		return;
+	}
+
+	// Publish the validated resources together. Hooks continue using vanilla
+	// until the cache pointer completes the readiness invariant.
+	waterMesh = std::move(loadedWaterMesh);
+	optimisedWaterMesh = std::move(loadedOptimisedWaterMesh);
+	flowmap = loadedFlowmap.release();
+	waterCache = loadedWaterCache.release();
+	failedLoadedMessage.clear();
 
 	uint64_t pendingLoadOrderHash = 0;
 
@@ -784,12 +937,6 @@ void UnifiedWater::PostPostLoad()
 
 	stl::detour_thunk<BGSTerrainBlock_Attach>(REL::RelocationID(30934, 31737));
 
-	// Skip iterating attached meshes and calling TESWaterSystem::AddLODWater, this is handled in Attach now
-	const auto addLoopOffset = REL::RelocationID(30934, 31737).address() + REL::Relocate(0x109, 0x109);
-	const auto addLoopOffset2 = REL::RelocationID(30978, 31751).address() + REL::Relocate(0x54, 0xEA);
-	PatchBranchToUnconditional(addLoopOffset, "attached mesh add loop");
-	PatchBranchToUnconditional(addLoopOffset2, "LOD water add loop");
-
 	stl::detour_thunk<BGSTerrainBlock_Detach>(REL::RelocationID(30936, 31739));
 
 	stl::detour_thunk<BGSTerrainNode_UpdateWaterMeshSubVisibility>(REL::RelocationID(31059, 31846));
@@ -797,11 +944,6 @@ void UnifiedWater::PostPostLoad()
 	stl::detour_thunk<TESWaterSystem_UpdateDisplacementMeshPosition>(REL::RelocationID(31384, 32175));
 
 	stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
-
-	// Patch out the code compute shader calls that write to the flow map in Main::RenderWaterEffects
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1B7, 0x1F7), REL::NOP, 5);
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1EA, 0x22A), REL::NOP, 5);
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x202, 0x242), REL::NOP, 5);
 
 	gWaterLOD = reinterpret_cast<RE::NiNode**>(REL::RelocationID(516171, 402322).address());
 	gFlowMapSize = reinterpret_cast<int32_t*>(REL::RelocationID(527644, 414596).address());
@@ -853,6 +995,11 @@ int32_t UnifiedWater::BSWaterShaderMaterial_ComputeCRC32::thunk(RE::BSWaterShade
 	return func(material, srcHash);
 }
 
+bool UnifiedWater::IsWaterDataReady() const
+{
+	return waterCache && waterMesh && optimisedWaterMesh;
+}
+
 bool UnifiedWater::IsExteriorWorldspaceActive() const
 {
 	// Interior cells may still inherit stale exterior worldspace state during transitions
@@ -876,7 +1023,8 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 
 	auto& singleton = globals::features::unifiedWater;
 	singleton.exteriorWorldspaceActive.store(worldSpace && isExterior, std::memory_order_release);
-	singleton.waterCache->SetCurrentWorldSpace(worldSpace);
+	if (singleton.IsWaterDataReady())
+		singleton.waterCache->SetCurrentWorldSpace(worldSpace);
 	singleton.UpdateWaterLODCull();
 }
 
@@ -886,12 +1034,18 @@ void UnifiedWater::TES_DestroySkyCell::thunk(RE::TES* tes)
 
 	auto& singleton = globals::features::unifiedWater;
 	singleton.exteriorWorldspaceActive.store(false, std::memory_order_release);
-	singleton.waterCache->SetCurrentWorldSpace(nullptr);
+	if (singleton.IsWaterDataReady())
+		singleton.waterCache->SetCurrentWorldSpace(nullptr);
 	singleton.UpdateWaterLODCull();
 }
 
 void UnifiedWater::BGSTerrainNode_UpdateWaterMeshSubVisibility::thunk(const RE::BGSTerrainNode* node, RE::BSMultiBoundNode* waterParent)
 {
+	if (!globals::features::unifiedWater.IsWaterDataReady()) {
+		func(node, waterParent);
+		return;
+	}
+
 	if (!node || !waterParent)
 		return;
 
@@ -934,6 +1088,10 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 {
 	const auto waterSystem = RE::TESWaterSystem::GetSingleton();
 	const auto& singleton = globals::features::unifiedWater;
+	if (!waterSystem || !singleton.IsWaterDataReady()) {
+		func(block);
+		return;
+	}
 
 	std::vector<std::pair<RE::BSTriShape*, const WaterCache::Instruction*>> built;
 	bool attaching = false;
@@ -1075,6 +1233,11 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 {
 	if (!block) {
+		return;
+	}
+
+	if (!globals::features::unifiedWater.IsWaterDataReady()) {
+		func(block);
 		return;
 	}
 

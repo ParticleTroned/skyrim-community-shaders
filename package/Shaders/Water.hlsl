@@ -913,6 +913,7 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 static const float UnifiedWaterFallbackCullFadeRange = 2048.0;
 static const float UnifiedWaterDeepProbeMinRadiusPixels = 4.0;
 static const float UnifiedWaterDeepProbeMaxRadiusPixels = 512.0;
+static const float UnifiedWaterDeepProbeReliableRadiusRatio = 0.75;
 
 float GetUnifiedWaterShallowFallbackAvailability(float viewDistance)
 {
@@ -1035,19 +1036,39 @@ float GetUnifiedWaterDeepContextWeight(
 			float2(
 				FrameBuffer::DynamicResolutionParams2.z,
 				FrameBuffer::DynamicResolutionParams1.y))));
-	float maximumRadiusPixels = min(
-		min(
-			maximumReach / surfaceUnitsPerPixel,
-			UnifiedWaterDeepProbeMaxRadiusPixels),
+	float requestedRadiusPixels = maximumReach / surfaceUnitsPerPixel;
+	float representableRadiusPixels = min(
+		UnifiedWaterDeepProbeMaxRadiusPixels,
 		length(float2(renderDimensions)));
-	if (!isfinite(maximumRadiusPixels) || maximumRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels)
+	if (
+		!isfinite(requestedRadiusPixels) ||
+		!isfinite(representableRadiusPixels) ||
+		requestedRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels ||
+		representableRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels)
+	{
+		return 0.0;
+	}
+
+	// Preserve connected-depth authority while the configured reach is fully
+	// representable, then release it over the final quarter of the screen-space
+	// budget instead of treating two clamped remote taps as complete evidence.
+	float reliabilityFadeStartPixels =
+		UnifiedWaterDeepProbeReliableRadiusRatio * representableRadiusPixels;
+	float probeRepresentationConfidence =
+		1.0 - smoothstep(
+			reliabilityFadeStartPixels,
+			representableRadiusPixels,
+			requestedRadiusPixels);
+	if (probeRepresentationConfidence <= 1e-4)
 		return 0.0;
 
 	// Reach is a search distance, not merely a cap on a local linear depth
 	// prediction. Coarse terrain triangles can have a very large one-quad
 	// derivative; predicting the target radius from that derivative kept both
 	// reads on the same shallow facet and made the reach slider ineffective.
-	float radiusPixels = maximumRadiusPixels;
+	float radiusPixels = min(
+		requestedRadiusPixels,
+		representableRadiusPixels);
 
 	int2 endpointOffset = int2(round(probeDirection * radiusPixels));
 	int2 midpointOffset = int2(round(0.5 * float2(endpointOffset)));
@@ -1140,17 +1161,20 @@ float GetUnifiedWaterDeepContextWeight(
 	float connectedDeepWeight = transition > 1e-4 ?
 		smoothstep(transitionStart, deepDepth, deepestConnectedColumn) :
 		step(deepDepth, deepestConnectedColumn);
-	return saturate(connectedDeepWeight);
+	return saturate(
+		connectedDeepWeight *
+		probeRepresentationConfidence);
 }
 
-float GetUnifiedWaterShoreContactWeight(float waterColumnDepthUnits)
+float GetUnifiedWaterShoreContactWeight(
+	float waterColumnDepthUnits,
+	float blendRange,
+	float depthFootprint)
 {
 	// Plane-normal water-column depth is value-continuous across connected
 	// terrain triangles. Fade the cue in only after crossing the water contact
 	// so it cannot draw a hard line over the bank itself.
-	float blendRange = max(
-		SharedData::unifiedWaterSettings.ShoreDepthBlendRangeUnits,
-		0.0);
+	blendRange = max(blendRange, 0.0);
 	float minimumFadePixels = max(
 		SharedData::unifiedWaterSettings.ShoreContactMinFadePixels,
 		0.0);
@@ -1161,7 +1185,6 @@ float GetUnifiedWaterShoreContactWeight(float waterColumnDepthUnits)
 		return 0.0;
 	// Preserve the focused world-space fade while ensuring it cannot collapse
 	// below a controllable screen-space width on steep, coarse terrain.
-	float depthFootprint = fwidth(waterColumnDepthUnits);
 	float adaptiveRange = isfinite(depthFootprint) ?
 		minimumFadePixels * max(depthFootprint, 0.0) :
 		0.0;
@@ -1348,7 +1371,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (viewDistance - 8192) / (WaterParams.x - 8192)));
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
 	float shallowFallbackAvailability = 0.0;
-	float shoreContactWeight = 1.0;
 #			if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
 	shallowFallbackAvailability =
 		GetUnifiedWaterShallowFallbackAvailability(viewDistance);
@@ -1390,10 +1412,6 @@ PS_OUTPUT main(PS_INPUT input)
 	distanceMul = all(isfinite(unclampedDistanceMul)) ?
 		saturate(unclampedDistanceMul) :
 		0.0.xxxx;
-#					if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
-	shoreContactWeight =
-		GetUnifiedWaterShoreContactWeight(waterColumnDepthUnits);
-#					endif
 #				endif
 #			endif
 
@@ -1404,6 +1422,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 waterColumnGradient = float2(
 		ddx_fine(waterColumnDepthUnits),
 		ddy_fine(waterColumnDepthUnits));
+	float shoreContactDepthFootprint = fwidth(waterColumnDepthUnits);
 	float3 waterSurfaceDx = ddx_fine(input.WPosition.xyz);
 	float3 waterSurfaceDy = ddy_fine(input.WPosition.xyz);
 #			endif
@@ -1575,9 +1594,10 @@ PS_OUTPUT main(PS_INPUT input)
 #				else
 
 	float3 sunColor = GetSunColor(normal, viewDirection, input.WPosition.xyz) * surfaceShadow;
-	// Build only the bounded shallow candidate here. Native/Open remains the base;
-	// connected medium/deep terrain rejects this fallback before either output.
-	float shallowSurfaceCandidateWeight = 0.0;
+	// Build the bounded candidate from one shore-contact curve. Its endpoint is
+	// also the probe gate, so edge fading cannot expand the pixels that pay for
+	// connected-depth reads.
+	float shallowSurfaceProbeCandidateWeight = 0.0;
 #					if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
 	// The undistorted primary depth is the stable spatial mask. Refracted depth
 	// can cross a bank as the view or animated normal changes, which previously
@@ -1589,7 +1609,15 @@ PS_OUTPUT main(PS_INPUT input)
 	// longer passes through a second threshold that can draw a terminal contour.
 	float nativeVisibilityDeficit =
 		1.0 - saturate(diffuseOutput.refractionMul);
-	shallowSurfaceCandidateWeight =
+	float shoreDepthBlendRange = max(
+		SharedData::unifiedWaterSettings.ShoreDepthBlendRangeUnits,
+		0.0);
+	float shoreContactWeight =
+		GetUnifiedWaterShoreContactWeight(
+			waterColumnDepthUnits,
+			shoreDepthBlendRange,
+			shoreContactDepthFootprint);
+	shallowSurfaceProbeCandidateWeight =
 		0.5 *
 		saturate(shoreContactWeight) *
 		shallowDepthWeight *
@@ -1603,7 +1631,7 @@ PS_OUTPUT main(PS_INPUT input)
 	// empty-looking shallow bed. Preserve the native/Open result only when the
 	// primary depth establishes a continuous under-plane path to deeper terrain.
 	float deepContextWeight = 0.0;
-	[branch] if (shallowSurfaceCandidateWeight > 1e-4)
+	[branch] if (shallowSurfaceProbeCandidateWeight > 1e-4)
 	{
 		deepContextWeight = GetUnifiedWaterDeepContextWeight(
 			screenPosition,
@@ -1616,7 +1644,7 @@ PS_OUTPUT main(PS_INPUT input)
 			waterSurfaceDy);
 	}
 	shallowSurfaceLayerWeight =
-		shallowSurfaceCandidateWeight *
+		shallowSurfaceProbeCandidateWeight *
 		(1.0 - saturate(deepContextWeight));
 	// The native refraction already contains the shadow projected onto the
 	// riverbed. Restoring the opaque-looking surface cue beneath the same caster

@@ -363,6 +363,7 @@ namespace SharedData
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
+		float4 pad;
 	};
 
 	cbuffer FeatureData : register(b6)

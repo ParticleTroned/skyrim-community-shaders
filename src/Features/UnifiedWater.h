@@ -25,19 +25,19 @@ struct UnifiedWater : OverlayFeature
 
 	struct Settings
 	{
-		std::uint32_t SurfaceVisibilityModelVersion = 9;
+		std::uint32_t SurfaceVisibilityModelVersion = 11;
 		bool UseOptimisedMeshes = true;
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
 		float ShallowFallbackStrength = 1.0f;
-		float DeepConnectionProbeReachUnits = 256.0f;
-		float DeepContextDepthUnits = 96.0f;
-		float DeepContextTransitionUnits = 32.0f;
+		float DeepConnectionProbeReachUnits = 768.0f;
+		float DeepContextDepthUnits = 192.0f;
+		float DeepContextTransitionUnits = 128.0f;
 		float ShoreContactMinFadePixels = 2.0f;
-		float ShoreDepthBlendRangeUnits = 5.0f;
-		float ShallowSurfaceDepthRangeUnits = 64.0f;
-		float ShallowFallbackMaxDistance = 16000.0f;
+		float ShoreDepthBlendRangeUnits = 10.0f;
+		float ShallowSurfaceDepthRangeUnits = 256.0f;
+		float ShallowFallbackMaxDistance = 26000.0f;
 	};
 
 	struct alignas(16) CommonBufferData
@@ -52,9 +52,10 @@ struct UnifiedWater : OverlayFeature
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
+		float4 _pad;
 	};
 	static_assert(alignof(CommonBufferData) == 16);
-	static_assert(sizeof(CommonBufferData) == 48);
+	static_assert(sizeof(CommonBufferData) == 64);
 
 	Settings settings;
 	CommonBufferData GetCommonBufferData() const;
@@ -122,6 +123,14 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.UseOptimisedMeshes; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.UseOptimisedMeshes = a_enabled; }
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override;
@@ -155,6 +164,9 @@ private:
 	std::atomic_bool mapMenuOpen{ false };
 
 	void SetFlowmapTex() const;
+	// Readiness covers safely constructed hook resources. WaterCache publishes
+	// generated instruction snapshots independently when asynchronous work ends.
+	bool IsWaterDataReady() const;
 	bool IsExteriorWorldspaceActive() const;
 	void UpdateWaterLODCull() const;
 	static bool LoadOrderChanged(uint64_t& a_hash);

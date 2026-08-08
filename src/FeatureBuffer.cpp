@@ -129,7 +129,7 @@ namespace
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 12);
 	static_assert(sizeof(SkinDataCB) == 112);
 	static_assert(sizeof(VanillaFresnelSettingsCB) == 48);
-	static_assert(sizeof(UnifiedWaterSettingsCB) == 48);
+	static_assert(sizeof(UnifiedWaterSettingsCB) == 64);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackStrength) == 0);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepConnectionProbeReachUnits) == 4);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextDepthUnits) == 8);
@@ -140,6 +140,7 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowSurfaceDepthRangeUnits) == 36);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackMaxDistance) == 40);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextTransitionUnits) == 44);
+	static_assert(offsetof(UnifiedWaterSettingsCB, _pad) == 48);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);

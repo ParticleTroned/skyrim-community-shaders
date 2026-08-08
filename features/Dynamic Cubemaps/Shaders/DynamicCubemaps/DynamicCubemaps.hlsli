@@ -27,7 +27,7 @@ namespace DynamicCubemaps
 	}
 #	endif
 
-	float3 ComputeSpecularIrradiance(float3 R, float level, float directionalAmbientColorSpecular, float skylightingSpecular)
+	float3 ComputeSpecularIrradiance(float3 R, float level, float directionalAmbientColorSpecular, float skylightingSpecular, float skylightingVisibility)
 	{
 #	if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
@@ -41,6 +41,7 @@ namespace DynamicCubemaps
 				level,
 				directionalAmbientColorSpecular,
 				skylightingSpecular,
+				skylightingVisibility,
 				envSpecular,
 				skySpecular);
 			return envSpecular + skySpecular;
@@ -105,6 +106,7 @@ namespace DynamicCubemaps
 													max(0, SharedData::GetAmbient(R)))) *
 		                                        Color::ReflectionNormalisationScale;
 		float skylightingSpecular = 1.0;
+		float skylightingVisibility = 1.0;
 
 #		if defined(IBL) && defined(LIGHTING)
 		const bool useStaticIBL = ShouldUseStaticIBL();
@@ -117,11 +119,16 @@ namespace DynamicCubemaps
 			if (!SharedData::InInterior) {
 				sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(N, V, roughness);
 				skylightingSpecular = Skylighting::EvaluateSpecular(skylighting, specularLobe);
+#			if defined(IBL)
+				if (SharedData::iblSettings.EnableIBL && SharedData::iblSettings.DALCMode == 3) {
+					skylightingVisibility = Skylighting::EvaluateVisibility(skylighting);
+				}
+#			endif
 			} else {
 				skylightingSpecular = 0.0;
 			}
 #		endif
-			finalIrradiance = ComputeSpecularIrradiance(R, level, directionalAmbientColorSpecular, skylightingSpecular);
+			finalIrradiance = ComputeSpecularIrradiance(R, level, directionalAmbientColorSpecular, skylightingSpecular, skylightingVisibility);
 		} else {
 #		if defined(IBL) && defined(LIGHTING)
 			float3 specularIrradiance = ImageBasedLighting::StaticSpecularIBLTexture.SampleLevel(SampColorSampler, R.xzy, level).xyz;
@@ -179,6 +186,7 @@ namespace DynamicCubemaps
 		float3 finalIrradiance = 0;
 		float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(R)))) * Color::ReflectionNormalisationScale;
 		float skylightingSpecular = 1.0;
+		float skylightingVisibility = 1.0;
 
 #		if defined(IBL) && defined(LIGHTING)
 		if (ShouldUseStaticIBL()) {
@@ -192,12 +200,17 @@ namespace DynamicCubemaps
 		if (!SharedData::InInterior) {
 			sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(N, V, roughness);
 			skylightingSpecular = Skylighting::EvaluateSpecular(skylighting, specularLobe);
+#			if defined(IBL)
+			if (SharedData::iblSettings.EnableIBL && SharedData::iblSettings.DALCMode == 3) {
+				skylightingVisibility = Skylighting::EvaluateVisibility(skylighting);
+			}
+#			endif
 		} else {
 			skylightingSpecular = 0.0;
 		}
 #		endif
 
-		finalIrradiance = ComputeSpecularIrradiance(R, level, directionalAmbientColorSpecular, skylightingSpecular);
+		finalIrradiance = ComputeSpecularIrradiance(R, level, directionalAmbientColorSpecular, skylightingSpecular, skylightingVisibility);
 
 		return horizon * (F0 * specularBRDF.x + specularBRDF.y) * finalIrradiance;
 #	endif

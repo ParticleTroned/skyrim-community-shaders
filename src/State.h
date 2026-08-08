@@ -116,6 +116,9 @@ public:
 	static constexpr uint32_t kSaveMutationBlockGraceFrames = 60;
 
 	bool IsSaveLoadSafeModeActive() const;
+	// Current engine-owned save/load work only. Unlike IsSaveLoadSafeModeActive,
+	// this excludes the fixed post-event grace used for mutation/persistence safety.
+	bool IsEngineSaveLoadActivityActive() const;
 	bool IsPersistentMutationBlocked() const;
 	void BeginSaveLoadSafeMode(uint32_t a_currentFrame);
 	void ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
@@ -281,6 +284,7 @@ public:
 	uint32_t lastCompletedWorldRenderFrame = std::numeric_limits<uint32_t>::max();
 	bool pendingPostLoadRuntimeReset = false;
 	std::atomic_bool saveLoadSafeModeActive{ false };
+	std::atomic_bool engineSaveLoadActivityActive{ false };
 	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };
 	std::atomic_uint32_t saveLoadSafeModeEndFrame{ 0 };
 	std::atomic_bool persistentMutationBlocked{ false };

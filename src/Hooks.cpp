@@ -11,6 +11,10 @@
 #include "TruePBR.h"
 #include "Util.h"
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/D3DTextureLifetimeTracker.h"
+#endif
+
 #include "Features/CSUtility.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -25,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <intrin.h>
 #include <shared_mutex>
 #include <string>
@@ -982,6 +987,28 @@ struct ID3D11Device_CreateVertexShader
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+struct ID3D11Device_CreateTexture2D
+{
+	static HRESULT STDMETHODCALLTYPE thunk(
+		ID3D11Device* a_device,
+		const D3D11_TEXTURE2D_DESC* a_desc,
+		const D3D11_SUBRESOURCE_DATA* a_initialData,
+		ID3D11Texture2D** a_texture)
+	{
+		const HRESULT result = func(a_device, a_desc, a_initialData, a_texture);
+		if (SUCCEEDED(result) && a_desc && a_texture && *a_texture) {
+			Diagnostics::D3DTextureLifetimeTracker::OnTextureCreated(
+				*a_texture,
+				*a_desc,
+				reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
+		}
+		return result;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+#endif
+
 struct ID3D11Device_CreatePixelShader
 {
 	static HRESULT STDMETHODCALLTYPE thunk(ID3D11Device* This, const void* pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11PixelShader** ppPixelShader)
@@ -1052,13 +1079,23 @@ struct BSShaderRenderTargets_Create
 		{
 			const std::unique_lock recreateLock(
 				g_renderTargetRecreationMutex);
-			if (a_beforeEngineCreate)
-				a_beforeEngineCreate(a_context);
-			if (a_engineCreateEntered)
-				*a_engineCreateEntered = true;
-			func();
-			if (a_afterEngineCreate)
-				a_afterEngineCreate(a_context);
+			try {
+				if (a_beforeEngineCreate)
+					a_beforeEngineCreate(a_context);
+				if (a_engineCreateEntered)
+					*a_engineCreateEntered = true;
+				func();
+			} catch (...) {
+				// Offered resources must be reclaimed while recreation still owns
+				// the unique table lock. Reachability is untrusted on this path.
+				if (a_afterEngineCreate)
+					(void)a_afterEngineCreate(a_context, true);
+				throw;
+			}
+			if (a_afterEngineCreate &&
+				!a_afterEngineCreate(a_context, false)) {
+				return false;
+			}
 		}
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
@@ -1118,6 +1155,79 @@ struct BSInputDeviceManager_PollInputDevices
 
 namespace Hooks
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	class VRFaceGenTintAssignmentBridge : public Xbyak::CodeGenerator
+	{
+	public:
+		VRFaceGenTintAssignmentBridge(std::uintptr_t a_callback, std::uintptr_t a_originalAssignment)
+		{
+			// At the native call site RCX is the material's tintTexture slot and
+			// RDX is the generated NiSourceTexture. The containing FaceGen function
+			// keeps the node, head part, and NPC in RSI, R13, and RDI respectively.
+			// Preserve the original two arguments across the diagnostic callback,
+			// then tail-call Skyrim's unmodified smart-pointer assignment helper.
+			sub(rsp, 0x38);
+			mov(qword[rsp + 0x28], rcx);
+			mov(qword[rsp + 0x30], rdx);
+			mov(r8, rsi);
+			mov(r9, r13);
+			mov(qword[rsp + 0x20], rdi);
+			mov(rax, a_callback);
+			call(rax);
+			mov(rcx, qword[rsp + 0x28]);
+			mov(rdx, qword[rsp + 0x30]);
+			add(rsp, 0x38);
+			mov(rax, a_originalAssignment);
+			jmp(rax);
+		}
+	};
+
+	void InstallVRFaceGenTintAssignmentDiagnostic()
+	{
+		if (!REL::Module::IsVR())
+			return;
+		if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+			logger::error(
+				"[Texture lifetime] FaceGen owner hook not installed: unsupported Skyrim VR runtime {}",
+				REL::Module::get().version().string());
+			return;
+		}
+
+		constexpr std::uintptr_t kTintAssignmentCallOffset = 0x3CE;
+		const auto prepareHeadPart = REL::RelocationID(26259, 26838).address();
+		const auto callsite = prepareHeadPart + kTintAssignmentCallOffset;
+		if (*reinterpret_cast<const std::uint8_t*>(callsite) != 0xE8) {
+			logger::error(
+				"[Texture lifetime] FaceGen owner hook not installed: expected CALL at SkyrimVR+0x{:x}",
+				callsite - REL::Module::get().base());
+			return;
+		}
+
+		std::int32_t displacement{};
+		std::memcpy(&displacement, reinterpret_cast<const void*>(callsite + 1), sizeof(displacement));
+		const auto originalAssignment = callsite + 5 + displacement;
+		const auto expectedAssignment = REL::Offset(0x3E3320).address();
+		if (originalAssignment != expectedAssignment) {
+			logger::error(
+				"[Texture lifetime] FaceGen owner hook not installed: unexpected target SkyrimVR+0x{:x}",
+				originalAssignment - REL::Module::get().base());
+			return;
+		}
+
+		VRFaceGenTintAssignmentBridge code(
+			reinterpret_cast<std::uintptr_t>(&Diagnostics::D3DTextureLifetimeTracker::OnFaceGenTintAssigned),
+			originalAssignment);
+		code.ready();
+
+		auto& trampoline = SKSE::GetTrampoline();
+		const auto bridge = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
+		trampoline.write_call<5>(callsite, bridge);
+		logger::info(
+			"[Texture lifetime] Installed FaceGen tint owner correlation at SkyrimVR+0x{:x}",
+			callsite - REL::Module::get().base());
+	}
+#endif
+
 	std::shared_mutex& GetRenderTargetRecreationMutex()
 	{
 		return g_renderTargetRecreationMutex;
@@ -1162,6 +1272,9 @@ namespace Hooks
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			stl::detour_vfunc<5, ID3D11Device_CreateTexture2D>(globals::d3d::device);
+#endif
 
 			auto shaderCache = globals::shaderCache;
 			if (shaderCache->IsDump()) {
@@ -1704,6 +1817,10 @@ namespace Hooks
 	 */
 	void Install()
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		InstallVRFaceGenTintAssignmentDiagnostic();
+#endif
+
 		if (!REL::Module::IsVR()) {
 			logger::info("Hooking BSImageSpace::Init::IBLF");
 			stl::detour_thunk<BSImageSpace_Init_IBLF>(REL::RelocationID(100480, 107198));

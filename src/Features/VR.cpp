@@ -1792,8 +1792,7 @@ namespace
 		if (!uiState.config.hasFadeDuration && uiState.profilesDefinedInIni) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"The Render Scale transition fade duration is missing. The recommended %.0f second value is shown and will be written when saved.",
-				Upscaling::kVRFpsStabilizerDefaultFadeDuration);
+				"The Render Scale transition fade duration is missing. CSX owns transition coverage; 0 seconds is recommended and will be written when saved.");
 		}
 
 		ImGui::Spacing();
@@ -1810,10 +1809,8 @@ namespace
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Used when an Interior/Exterior profile changes Render Scale during a door or cell transition.");
-			ImGui::Text(
-				"A %.0f second black hold is recommended for conservative relatch coverage.",
-				Upscaling::kVRFpsStabilizerDefaultFadeDuration);
+			ImGui::TextUnformatted("VR FPS Stabilizer's separate timed fade for Interior/Exterior Render Scale profile changes.");
+			ImGui::TextUnformatted("Set this to 0 seconds because CSX owns transition coverage and releases Skyrim's loading fade when stereo presentation is coherent.");
 		}
 
 		ImGui::Spacing();

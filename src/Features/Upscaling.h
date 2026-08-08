@@ -12,6 +12,7 @@
 #include <atomic>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <dxgi1_5.h>
 #include <filesystem>
 #include <limits>
 #include <mutex>
@@ -127,7 +128,9 @@ public:
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
 	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
-	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 6.0f;
+	// CSX owns renderer-transition coverage; the external Stabilizer fade must
+	// stay disabled to avoid stacking a second timed black hold.
+	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 0.0f;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
@@ -390,6 +393,7 @@ public:
 	enum class VRRenderScaleRequestQueueDisposition : uint8_t
 	{
 		Rejected,
+		Deferred,
 		Coalesced,
 		Published
 	};
@@ -411,6 +415,11 @@ public:
 		[[nodiscard]] bool Published() const
 		{
 			return disposition == VRRenderScaleRequestQueueDisposition::Published;
+		}
+
+		[[nodiscard]] bool Deferred() const
+		{
+			return disposition == VRRenderScaleRequestQueueDisposition::Deferred;
 		}
 	};
 
@@ -546,6 +555,7 @@ public:
 		bool recreateFSRResources = false;
 		bool waitForFSRDrain = false;
 		bool lowPeakNativeRestore = false;
+		bool preserveStablePresentationResources = false;
 		VRRenderScaleMemoryPressure memoryPressure = VRRenderScaleMemoryPressure::Unknown;
 		uint64_t estimatedCurrentBytes = 0;
 		uint64_t estimatedTargetBytes = 0;
@@ -593,6 +603,7 @@ public:
 		uint32_t provenPointerCount = 0;
 		uint32_t retainedUnprovenPointerCount = 0;
 		uint32_t replacedPointerCount = 0;
+		uint32_t poisonReferenceCount = 0;
 		uint32_t restoredPointerCount = 0;
 		uint32_t pendingReleaseCount = 0;
 		uint32_t lastReleasedPointerCount = 0;
@@ -644,6 +655,40 @@ public:
 		bool lastOfferUsedDecommit = false;
 	};
 
+	static constexpr std::size_t kVRRenderScaleCommonTargetOfferCapacity = 64u;
+	enum class VRRenderScaleCommonTargetOfferAPI : uint8_t
+	{
+		None,
+		Device4,
+		Device2
+	};
+
+	// One synchronous pre-recreate offer transaction. Fixed storage keeps this
+	// transition-only optimization allocation-free and preserves the exact API
+	// pair required for reclaim when the old generation remains reachable.
+	struct VRRenderScaleCommonTargetOffer
+	{
+		HRESULT result = E_NOINTERFACE;
+		VRRenderScaleCommonTargetOfferAPI api =
+			VRRenderScaleCommonTargetOfferAPI::None;
+		uint32_t resourceCount = 0;
+		bool usedDecommit = false;
+		std::array<winrt::com_ptr<IDXGIResource>,
+			kVRRenderScaleCommonTargetOfferCapacity>
+			resources{};
+		std::array<std::uintptr_t,
+			kVRRenderScaleCommonTargetOfferCapacity>
+			identities{};
+		winrt::com_ptr<IDXGIDevice4> device4;
+		winrt::com_ptr<IDXGIDevice2> device2;
+
+		[[nodiscard]] bool Succeeded() const noexcept
+		{
+			return SUCCEEDED(result) && resourceCount != 0 &&
+			       api != VRRenderScaleCommonTargetOfferAPI::None;
+		}
+	};
+
 	struct VRRenderScalePostLoadRecoverySnapshot
 	{
 		bool active = false;
@@ -652,6 +697,7 @@ public:
 		uint64_t loadingSerial = 0;
 		uint32_t startFrame = 0;
 		uint32_t lastSampleFrame = 0;
+		uint32_t admissionWaitStartFrame = 0;
 		uint32_t firstSettledFrame = 0;
 		uint32_t lastSettledFrame = 0;
 		uint32_t settledSamples = 0;
@@ -668,8 +714,21 @@ public:
 		bool trimCompleted = false;
 		bool trimSucceeded = false;
 		bool settleTimeoutUsed = false;
+		bool settleDeadlineExpired = false;
+		bool timedAttemptConsumed = false;
+		bool engineTargetCreateEntered = false;
 		bool relatchAdmitted = false;
 		bool cleanupDeferredUntilStable = false;
+	};
+
+	struct VRRenderScalePhysicalMutationSnapshot
+	{
+		uint64_t epoch = 0;
+		uint64_t serializationEpoch = 0;
+		uint64_t chainSerial = 0;
+		uint64_t startTickMs = 0;
+		bool emergencyAttemptConsumed = false;
+		bool emergencyRecoveryRequested = false;
 	};
 
 	enum class VRVendorRuntimeLifecyclePhase : uint8_t
@@ -1473,6 +1532,11 @@ public:
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;
 	UpscaleMethod GetLegacyDLSSPreferredUpscaleMethodForAPI() const;
 	UpscaleMethod GetRuntimeUpscaleMethod() const;
+	void UpdateVRStartupMainMenuRenderState();
+	bool IsVRStartupMainMenuRenderStateActive() const noexcept
+	{
+		return vrStartupMainMenuRenderStateActive.load(std::memory_order_acquire);
+	}
 	uint32_t GetRuntimeQualityMode() const;
 	uint32_t GetRuntimeDLSSPreset() const;
 	bool GetRuntimeFSR4Enabled() const;
@@ -1526,7 +1590,8 @@ public:
 		const char* a_reason = nullptr,
 		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
 		const PerfModeState::BootSnapshot* a_recoverySnapshot = nullptr,
-		uint32_t a_minDelayFrames = 0);
+		uint32_t a_minDelayFrames = 0,
+		bool a_providerNeutralNativeRecovery = false);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
@@ -1673,6 +1738,12 @@ public:
 		std::vector<winrt::com_ptr<IUnknown>> resources;
 	};
 	std::optional<RetiredVREngineTargetGeneration> retiredVREngineTargetGeneration;
+	// Reclaimed resources whose contents DXGI discarded remain poisoned until a
+	// later native checkpoint proves their identities left every live table slot.
+	std::array<winrt::com_ptr<IUnknown>,
+		kVRRenderScaleCommonTargetOfferCapacity>
+		vrRenderScalePoisonedOfferedResources{};
+	uint32_t vrRenderScalePoisonedOfferedResourceCount = 0;
 	winrt::com_ptr<ID3D11Query> vrEngineTargetRetirementFence;
 	uint32_t vrEngineTargetRetirementFenceFailures = 0;
 	std::atomic_bool vrEngineTargetRetirementCapacityLogged{ false };
@@ -1919,7 +1990,9 @@ public:
 	void ClearVRNativeRestorePresentationWatchdog();
 	bool RecordVRNativeRestorePresentationObservationIfUnprotected(
 		const VRRenderScalePresentationObservation& a_observation);
-	void RecordVRRenderScalePresentationObservation(const VRRenderScalePresentationObservation& a_observation);
+	void RecordVRRenderScalePresentationObservation(
+		const VRRenderScalePresentationObservation& a_observation,
+		bool a_compositorHoldLockOwned = false);
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		const char** a_decisionReason = nullptr);
@@ -2015,6 +2088,8 @@ public:
 	[[nodiscard]] bool CanDispatchExistingVRVendorEvaluation(
 		UpscaleMethod a_upscaleMethod,
 		const VRExistingVendorProviderSnapshot& a_provider) const;
+	[[nodiscard]] bool HasTruthfulStableVRVendorResources(
+		const VRRenderScaleProfileSnapshot& a_stable) const;
 
 	// D3D11 textures
 	Texture2D* reactiveMaskTexture = nullptr;
@@ -2090,12 +2165,21 @@ public:
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<uint64_t> vrVendorWorkGateState{ 0 };
+	std::atomic<bool> vrStartupMainMenuObserved{ false };
+	std::atomic<bool> vrStartupMainMenuRenderStateDefined{ false };
+	std::atomic<bool> vrStartupMainMenuRenderStateActive{ false };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	mutable std::mutex pendingVRRenderScaleRequestMutex;
 	std::optional<VRRenderScaleDesiredProfile> pendingVRRenderScaleRequest;
+	// User/API requests arriving after physical mutation are preserved latest-
+	// wins, but cannot supersede the mandatory recovery owner until it converges.
+	std::optional<VRRenderScaleDesiredProfile> deferredVRRenderScaleRequestAfterPhysicalRecovery;
+	// Normal Configure frames use this publication bit to avoid taking the
+	// request mutex when there is no deferred user/API work.
+	std::atomic_bool deferredVRRenderScaleRequestPending{ false };
 	std::atomic<uint64_t> nextVRRenderScaleRequestID{ 1 };
 	std::atomic<uint64_t> latestVRRenderScaleRequestID{ 0 };
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
@@ -2134,6 +2218,34 @@ public:
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateEpoch{ 0 };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateRecoveryEpoch{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
+	// Non-zero from immediately before the native target creator can mutate
+	// physical resources until the replacement physical contract is coherently
+	// published. It records unresolved physical mutation, not the longer
+	// presentation/terminal lifetime.
+	std::atomic<uint64_t> vrRenderScaleUnresolvedPhysicalMutationEpoch{ 0 };
+	// Controller/presentation ownership survives coherent physical publication.
+	// It blocks unrelated latest-wins requests until the exact transition reaches
+	// stable presentation and owns the bounded terminal chain until retirement.
+	std::atomic<uint64_t> vrRenderScalePostMutationSerializationEpoch{ 0 };
+	std::atomic<uint64_t> nextVRRenderScalePostMutationChainSerial{ 1 };
+	std::atomic<uint64_t> vrRenderScalePostMutationChainSerial{ 0 };
+	// This clock is armed only on the zero -> non-zero boundary. Retries, recovery
+	// epochs, and later LoadingMenu serials cannot renew the terminal budget.
+	mutable std::mutex vrRenderScalePhysicalMutationMutex;
+	std::atomic<uint64_t> vrRenderScaleUnresolvedPhysicalMutationStartTickMs{ 0 };
+	// These flags belong to the complete zero -> non-zero mutation chain. A
+	// recovery/controller reset cannot renew the one emergency creator attempt.
+	std::atomic_bool vrRenderScalePostMutationEmergencyAttemptConsumed{ false };
+	std::atomic<uint32_t> vrRenderScalePostMutationEmergencyAttemptFrame{ 0 };
+	std::atomic<uint64_t> vrRenderScalePostMutationEmergencyAttemptGraceDeadlineTickMs{ 0 };
+	std::atomic_bool vrRenderScaleEmergencyRecoveryRequested{ false };
+	// Exact internal native successor. It serializes ordinary requests while its
+	// matching physical worker is pending/in progress; stale markers alone are not
+	// treated as live work.
+	std::atomic<uint64_t> vrRenderScaleProviderNeutralNativeRecoveryEpoch{ 0 };
+	// One-shot owner for deliberate crash-logger-visible termination when no
+	// coherent in-process presentation can be recovered.
+	std::atomic_bool vrRenderScaleTerminalFailureSignaled{ false };
 	std::atomic<uint64_t> vrNativeRestorePresentationGuardEpoch{ 0 };
 	mutable std::mutex vrNativeRestorePresentationWatchdogMutex;
 	uint64_t vrNativeRestorePresentationWatchdogEpoch = 0;
@@ -2275,7 +2387,11 @@ public:
 	void UpscaleDepth();
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset();
-	void RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
+	[[nodiscard]] bool RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
+	bool StoreDeferredVRRenderScaleRequestLatestWinsLocked(
+		const VRRenderScaleDesiredProfile& a_request);
+	void SuspendVRRenderScaleControllerForDeferredRequest(
+		const VRRenderScaleDesiredProfile& a_request);
 	bool RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
 	uint64_t AllocateVRRenderScaleTransitionEpoch();
 	void BindVRRenderScaleRelatchEpoch(uint64_t a_epoch);
@@ -2284,7 +2400,11 @@ public:
 	void StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState a_state) noexcept;
 	void SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason = nullptr);
 	bool PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization, uint64_t a_epoch);
-	bool PublishVRRenderScaleTransitionStable(uint64_t a_expectedEpoch, uint32_t a_expectedGeneration, UpscaleMethod a_expectedMethod);
+	bool PublishVRRenderScaleTransitionStable(
+		uint64_t a_expectedEpoch,
+		uint32_t a_expectedGeneration,
+		UpscaleMethod a_expectedMethod,
+		bool a_compositorHoldLockOwned = false);
 	void ResetVRRenderScaleTransitionController(const char* a_reason = nullptr);
 	void BeginVRRenderScaleInfoTransition(uint64_t a_epoch, const char* a_reason = nullptr);
 	void CompleteVRRenderScaleInfoTransition(uint64_t a_expectedEpoch, const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
@@ -2318,17 +2438,24 @@ public:
 		uint32_t a_provenPointerCount,
 		uint32_t a_retainedUnprovenPointerCount,
 		uint32_t a_replacedPointerCount,
+		uint32_t a_poisonReferenceCount,
 		uint32_t a_restoredPointerCount,
 		std::vector<winrt::com_ptr<IUnknown>>&& a_resources);
 	bool ServiceVREngineTargetRetirement(const char* a_reason = nullptr);
 	bool SampleVRRenderScaleMemory(bool a_force = false, const char* a_reason = nullptr);
-	void PrepareVRRenderScaleCommonTargetResidencyDrain(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason);
+	[[nodiscard]] bool MarkVRRenderScalePhysicalMutationUnresolved(
+		uint64_t a_mutationEpoch);
+	[[nodiscard]] VRRenderScaleCommonTargetOffer PrepareVRRenderScaleCommonTargetResidencyDrain(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason);
+	void RecordVRRenderScaleCommonTargetResidencyDrain(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason, const VRRenderScaleCommonTargetOffer& a_offer);
 	bool ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleMemoryTrimReason a_reason);
 	bool ServiceVRRenderScaleMemoryTrim(const char* a_reason = nullptr);
 	bool HasPendingVRRenderScaleMemoryTrim() const;
+	uint64_t BeginVRRenderScalePostLoadRecoveryLocked(
+		uint64_t a_currentLoadingSerial,
+		uint32_t a_frame);
 	uint64_t BeginVRRenderScalePostLoadRecovery();
 	void PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch);
-	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
+	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t& a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void DeferVRRenderScalePostLoadRecoveryUntilStable(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void AbandonDeferredVRRenderScalePostLoadRecovery(uint64_t a_expectedRecoveryEpoch = 0, const char* a_reason = nullptr);
 	void ServiceDeferredVRRenderScalePostLoadRecovery();
@@ -2504,7 +2631,8 @@ private:
 	{
 		None,
 		MainMenuLoad,
-		InGameLoad
+		InGameLoad,
+		RenderTransition
 	};
 
 	struct VRPostLoadHMDMaskRepairEvidence
@@ -2537,6 +2665,22 @@ private:
 		static_cast<uint32_t>(VRPostLoadCompositorHoldRoute::None)
 	};
 	std::atomic<uint64_t> vrPostLoadCompositorHoldLoadingSerial{ 0 };
+	// A hard presentation deadline requests cancellation only while the queued
+	// replacement is still pre-mutation. Hold epoch is the authoritative owner;
+	// LoadingMenu serial can legitimately be zero when PreLoadGame arms first.
+	std::atomic<uint64_t> vrPostLoadCompositorDeadlineFallbackHoldEpoch{ 0 };
+	std::atomic<uint64_t> vrPostLoadCompositorDeadlineFallbackLoadingSerial{ 0 };
+	// Exact one-shot successor used only when the hard deadline cannot truthfully
+	// retain the previous physical contract. Transition epoch is the publication
+	// token; the payload is immutable while that token is nonzero and is fully
+	// overwritten before any later publisher releases a new token. Creator entry
+	// transfers liveness to the post-mutation serialization watchdog.
+	std::atomic_bool vrRenderScalePreMutationNativeFallbackAdmissionActive{ false };
+	std::atomic<uint64_t> vrRenderScalePreMutationNativeFallbackHoldEpoch{ 0 };
+	std::atomic<uint64_t> vrRenderScalePreMutationNativeFallbackLoadingSerial{ 0 };
+	std::atomic<uint64_t> vrRenderScalePreMutationNativeFallbackRecoveryEpoch{ 0 };
+	std::atomic<uint64_t> vrRenderScalePreMutationNativeFallbackStartTickMs{ 0 };
+	std::atomic<uint64_t> vrRenderScalePreMutationNativeFallbackTransitionEpoch{ 0 };
 	std::atomic_bool vrPostLoadCompositorHoldLoadingMenuClosed{ false };
 	std::atomic<uint32_t> vrPostLoadCompositorHoldStartFrame{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldStartTickMs{ 0 };
@@ -2546,6 +2690,9 @@ private:
 	};
 	std::atomic<uint32_t> vrPostLoadCompositorHoldReleaseGeneration{ 0 };
 	std::atomic_bool vrPostLoadCompositorHoldReleaseRenderScale{ false };
+	// Exact mutation owner captured when a coherent stereo release is scheduled.
+	// An older accepted pair must never clear a newer physical mutation chain.
+	std::atomic<uint64_t> vrPostLoadCompositorHoldReleaseMutationEpoch{ 0 };
 	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateMethod{
 		static_cast<uint32_t>(UpscaleMethod::kNONE)
 	};
@@ -2580,6 +2727,17 @@ private:
 	std::atomic<uint64_t> vrPostLoadCompositorHoldReleasedEyeMaskState{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldEpoch{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldAwaitingSyncEpoch{ 0 };
+	// The game-owned black FaderMenu remains at the first fade-in frame until
+	// the compositor has accepted one coherent stereo destination pair. Unlike
+	// the keepalive texture, this pauses Skyrim's fade clock so the normal
+	// fade-in is not consumed behind CSX's render-transition protection.
+	std::atomic<uint64_t> vrPostLoadFaderHoldEpoch{ 0 };
+	std::atomic<uint32_t> vrPostLoadFaderFrozenCurrentTime{
+		std::numeric_limits<uint32_t>::max()
+	};
+	std::atomic<uint32_t> vrPostLoadFaderCurrentTimeOffset{ 0 };
+	winrt::com_ptr<ID3D11Texture2D> vrPostLoadCompositorKeepaliveTexture;
+	winrt::com_ptr<ID3D11Device> vrPostLoadCompositorKeepaliveDevice;
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
 	std::mutex vrPostLoadCompositorRepairMutex;
 
@@ -2588,26 +2746,39 @@ private:
 	void ClearSubmitStageVendorResumeStability();
 	[[nodiscard]] VRPostLoadCompositorHoldRoute ResolveVRPostLoadCompositorHoldRoute(
 		bool a_initialProcessSaveLoad) const;
-	void ArmVRPostLoadCompositorHold(
+	bool ArmVRPostLoadCompositorHold(
 		bool a_awaitingStabilizerSync = false,
 		bool a_beginLoadProtection = false,
 		VRPostLoadCompositorHoldRoute a_route =
 			VRPostLoadCompositorHoldRoute::None,
 		uint64_t a_loadingSerial = 0);
+	void ArmVRRenderTransitionCompositorCover(
+		uint64_t a_loadingSerial,
+		const char* a_reason);
 	[[nodiscard]] bool IsVRPostLoadCompositorHoldOwnedByLoadingSerial(
 		uint64_t a_loadingSerial) const noexcept;
 	void NotifyVRPostLoadCompositorLoadingMenuOpened(uint64_t a_loadingSerial);
 	void NotifyVRPostLoadCompositorLoadingMenuClosed(uint64_t a_loadingSerial);
+	void CompleteVRLoadingMenuCloseOutsideLocks(uint64_t a_loadingSerial);
 	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldSoftDeadlineMilliseconds(
 		VRPostLoadCompositorHoldRoute a_route) noexcept;
 	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(
 		VRPostLoadCompositorHoldRoute a_route) noexcept;
+	void ObserveVRFaderMessage(const RE::UIMessage& a_message);
+	[[nodiscard]] bool ShouldFreezeVRLoadingFadeIn();
+	[[nodiscard]] uint32_t ResolveVRLoadingFadeCurrentTime(
+		uint32_t a_currentTime,
+		bool& a_freezeAdvance);
+	void ResetVRLoadingFadeClockLocked();
+	void ReleaseVRLoadingFadeInHoldLocked(const char* a_reason);
 	void ResetVRPostLoadCompositorHold();
 	void ResetVRPostLoadCompositorHoldLocked(
 		VRPostLoadCompositorHoldState a_finalState =
 			VRPostLoadCompositorHoldState::Idle);
 	void QuarantineVRPostLoadCompositorCycleLocked(uint64_t a_compositorCycleToken);
 	void FinishVRInitialLoadPresentationProtectionLocked(
+		bool a_preservePublishedQuarantine = false);
+	void FinishVRInitialLoadPresentationProtectionPhysicalLocked(
 		bool a_preservePublishedQuarantine = false);
 	bool PrepareVRPostLoadCompositorKeepaliveLocked(
 		const vr::Texture_t* a_candidateTexture,
@@ -2640,6 +2811,44 @@ private:
 	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame, UpscaleMethod a_upscaleMethod);
 	void ClearSubmitStageFoveatedVendorRetryBackoff();
 	void ClearVRFSRRelatchDrainGuard();
+	bool ClearVRRenderScalePhysicalMutation(uint64_t a_expectedMutationEpoch = 0);
+	bool ClearVRRenderScalePhysicalMutationLocked(
+		uint64_t a_expectedMutationEpoch);
+	bool ClearVRRenderScalePostMutationSerializationLocked(
+		uint64_t a_expectedSerializationEpoch);
+	bool TryRetireVRRenderScalePostMutationSerialization(
+		uint64_t a_expectedSerializationEpoch = 0);
+	bool TryRetireVRRenderScalePostMutationSerializationLocked(
+		uint64_t a_expectedSerializationEpoch = 0);
+	bool TransferVRRenderScalePostMutationOwner(
+		uint64_t a_expectedSourceEpoch,
+		uint64_t a_destinationEpoch,
+		uint64_t a_expectedRecoveryEpoch);
+	[[nodiscard]] VRRenderScalePhysicalMutationSnapshot GetVRRenderScalePhysicalMutationSnapshot() const;
+	bool TryClaimVRRenderScalePostMutationEmergencyAttempt(
+		uint64_t a_expectedMutationEpoch,
+		uint64_t a_expectedRecoveryEpoch);
+	bool TryArmVRRenderScalePostMutationPresentationGrace(
+		uint64_t a_expectedMutationEpoch,
+		bool a_replaceResumeGrace = false);
+	void ServiceVRRenderScalePostMutationWatchdog(const char* a_context);
+	void ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery();
+	void SignalVRRenderScaleTerminalFailure(
+		HRESULT a_result,
+		HRESULT a_deviceReason,
+		uint64_t a_mutationEpoch,
+		const char* a_cause,
+		const char* a_context,
+		bool a_claimCurrentOwner = false,
+		uint64_t a_expectedChainSerial = 0,
+		uint64_t a_expectedChainStartTickMs = 0,
+		bool a_forceTerminationOnRejectedClaim = false);
+	[[noreturn]] void ForceVRRenderScaleTerminalFailure(
+		HRESULT a_result,
+		HRESULT a_deviceReason,
+		uint64_t a_mutationEpoch,
+		const char* a_cause,
+		const char* a_context);
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);
@@ -2854,6 +3063,20 @@ private:
 
 	OpenCompositeUpscalingBlocker GetOpenCompositeUpscalingBlocker(bool a_forceRefresh = false) const;
 	bool ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh = false);
+	bool EnsureVRRenderScaleProviderNeutralNativeRecovery(
+		const char* a_reason,
+		bool a_allowSuccessor);
+	[[nodiscard]] bool HasLiveVRRenderScaleProviderNeutralRecoveryWorker() const;
+	bool PromoteVRRenderScalePresentationDeadlineToNativeRecovery(
+		uint64_t a_expectedHoldEpoch,
+		uint64_t a_expectedLoadingSerial,
+		uint64_t a_supersededTransitionEpoch,
+		uint64_t a_supersededRecoveryEpoch,
+		const char* a_reason);
+	void ClearVRRenderScalePreMutationNativeFallback(
+		uint64_t a_expectedTransitionEpoch = 0);
+	void ServiceVRRenderScalePreMutationNativeFallbackWatchdog(
+		const char* a_context);
 
 	bool openCompositeUpscalingBackendSkipLogged = false;
 	bool renderDocUpscalingBackendSkipLogged = false;
@@ -2897,6 +3120,23 @@ private:
 	struct RaceSexMenu_ChangeName
 	{
 		static void thunk(RE::RaceSexMenu* a_this, const char* a_name);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct FaderMenuProcessMessageHook
+	{
+		static RE::UI_MESSAGE_RESULTS thunk(
+			RE::FaderMenu* a_menu,
+			RE::UIMessage& a_message);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct FaderMenuAdvanceMovieHook
+	{
+		static void thunk(
+			RE::FaderMenu* a_menu,
+			float a_interval,
+			uint32_t a_currentTime);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

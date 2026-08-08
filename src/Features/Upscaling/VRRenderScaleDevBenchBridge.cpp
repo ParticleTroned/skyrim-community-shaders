@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "Diagnostics/D3DTextureLifetimeTracker.h"
 #	include "Diagnostics/VRPipelineDiagnostics.h"
 #	include "Features/Upscaling.h"
 #	include "Features/VR.h"
@@ -27,6 +28,7 @@ namespace
 
 	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_registered{ false };
+	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 
 	const char* GetUpscaleMethodName(Upscaling::UpscaleMethod a_method)
 	{
@@ -358,6 +360,12 @@ namespace
 								{ "state", Upscaling::GetVRRenderScaleTransitionStateName(controller.state) },
 								{ "targetEpoch", controller.targetEpoch },
 								{ "revision", controller.revision },
+								{ "unresolvedPhysicalMutationEpoch", a_upscaling.vrRenderScaleUnresolvedPhysicalMutationEpoch.load(std::memory_order_acquire) },
+								{ "unresolvedPhysicalMutationStartTickMs", a_upscaling.vrRenderScaleUnresolvedPhysicalMutationStartTickMs.load(std::memory_order_acquire) },
+								{ "postMutationEmergencyAttemptConsumed", a_upscaling.vrRenderScalePostMutationEmergencyAttemptConsumed.load(std::memory_order_acquire) },
+								{ "emergencyRecoveryRequested", a_upscaling.vrRenderScaleEmergencyRecoveryRequested.load(std::memory_order_acquire) },
+								{ "terminalFailureSignaled", a_upscaling.vrRenderScaleTerminalFailureSignaled.load(std::memory_order_acquire) },
+								{ "terminalDeviceLossSignaled", a_upscaling.vrRenderScaleTerminalFailureSignaled.load(std::memory_order_acquire) && a_upscaling.submitStageDeviceLost.load(std::memory_order_acquire) },
 								{ "requested", ProfileJson(controller.requested) },
 								{ "applying", ProfileJson(controller.applying) },
 								{ "applied", ProfileJson(controller.applied) },
@@ -448,7 +456,16 @@ namespace
 								{ "postLoadRecovery", {
 														  { "active", controller.postLoadRecovery.active },
 														  { "recoveryEpoch", controller.postLoadRecovery.recoveryEpoch },
+														  { "transitionEpoch", controller.postLoadRecovery.transitionEpoch },
+														  { "loadingSerial", controller.postLoadRecovery.loadingSerial },
 														  { "settledSamples", controller.postLoadRecovery.settledSamples },
+														  { "admissionWaitStartFrame", controller.postLoadRecovery.admissionWaitStartFrame },
+														  { "firstSettledFrame", controller.postLoadRecovery.firstSettledFrame },
+														  { "lastSettledFrame", controller.postLoadRecovery.lastSettledFrame },
+														  { "settleDeadlineExpired", controller.postLoadRecovery.settleDeadlineExpired },
+														  { "settleTimeoutUsed", controller.postLoadRecovery.settleTimeoutUsed },
+														  { "timedAttemptConsumed", controller.postLoadRecovery.timedAttemptConsumed },
+														  { "engineTargetCreateEntered", controller.postLoadRecovery.engineTargetCreateEntered },
 														  { "baselineUsageBytes", controller.postLoadRecovery.baselineUsageBytes },
 														  { "peakUsageBytes", controller.postLoadRecovery.peakUsageBytes },
 														  { "baselineSystemCommitBytes", controller.postLoadRecovery.baselineSystemCommitBytes },
@@ -570,6 +587,9 @@ namespace
 	json BuildRenderScaleResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
+		if (action.starts_with("texture_lifetime_") && !globals::game::isVR) {
+			return json{ { "error", "D3D11 texture-lifetime capture requires Skyrim VR" } };
+		}
 		if (action == "status") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
@@ -693,6 +713,94 @@ namespace
 			});
 		}
 
+		if (action == "trim") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "DXGI memory trimming requires Skyrim VR" } };
+				if (!globals::state || !globals::state->IsDeveloperMode())
+					return json{ { "error", "developer mode is required to request a diagnostic DXGI trim" } };
+
+				auto& upscaling = globals::features::upscaling;
+				const auto before = upscaling.GetVRRenderScaleTransitionSnapshot();
+				if (before.memoryTrim.pending)
+					return json{ { "error", "a GPU-fenced DXGI trim is already pending" }, { "status", BuildStatus(upscaling) } };
+
+				uint64_t ownerEpoch = g_nextDiagnosticTrimEpoch.fetch_add(1, std::memory_order_acq_rel);
+				if (ownerEpoch == 0)
+					ownerEpoch = g_nextDiagnosticTrimEpoch.fetch_add(1, std::memory_order_acq_rel);
+				const bool armed = upscaling.ArmVRRenderScaleMemoryTrim(
+					ownerEpoch,
+					Upscaling::VRRenderScaleMemoryTrimReason::Pressure);
+				return json{
+					{ "action", "trim" },
+					{ "armed", armed },
+					{ "ownerEpoch", ownerEpoch },
+					{ "status", BuildStatus(upscaling) },
+				};
+			});
+		}
+
+		if (action == "texture_lifetime_start") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "D3D11 texture-lifetime capture requires Skyrim VR" } };
+				if (!Diagnostics::D3DTextureLifetimeTracker::Start())
+					return json{
+						{ "error", "a D3D11 texture-lifetime capture is already active" },
+						{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+					};
+				return json{
+					{ "action", "texture_lifetime_start" },
+					{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+				};
+			});
+		}
+
+		if (action == "texture_lifetime_status") {
+			return json{
+				{ "action", "texture_lifetime_status" },
+				{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+			};
+		}
+
+		if (action == "texture_lifetime_checkpoint") {
+			if (!Diagnostics::D3DTextureLifetimeTracker::Checkpoint())
+				return {
+					{ "error", "no D3D11 texture-lifetime capture is active" },
+					{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+				};
+			return {
+				{ "action", "texture_lifetime_checkpoint" },
+				{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+			};
+		}
+
+		if (action == "texture_lifetime_stop") {
+			return RunOnMainThread([]() {
+				if (!Diagnostics::D3DTextureLifetimeTracker::Stop())
+					return json{
+						{ "error", "no D3D11 texture-lifetime capture is active" },
+						{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+					};
+				return json{
+					{ "action", "texture_lifetime_stop" },
+					{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+				};
+			});
+		}
+
+		if (action == "texture_lifetime_reset") {
+			if (!Diagnostics::D3DTextureLifetimeTracker::Reset())
+				return {
+					{ "error", "stop the active D3D11 texture-lifetime capture before resetting it" },
+					{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+				};
+			return {
+				{ "action", "texture_lifetime_reset" },
+				{ "capture", Diagnostics::D3DTextureLifetimeTracker::BuildStatus() }
+			};
+		}
+
 		if (action == "apply") {
 			if (!a_args.contains("method") || !a_args["method"].is_string())
 				return { { "error", "apply requires string parameter 'method'" } };
@@ -778,7 +886,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset" }) },
+			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
 		};
 	}
 
@@ -803,11 +911,11 @@ namespace VRRenderScaleDevBenchBridge
 			return;
 		}
 
-		static constexpr const char* descriptor =
-			R"({"description":"Control and inspect CSX VR render-scale stress iterations. status returns the optional captured startup VR pipeline environment, one coherent desired/authoritative controller view, source-resolved vendor lifecycle-mutation and existing-dispatch gate status, frame-stamped successful per-eye FSR dispatch evidence, shader-compilation gating, local-video and system-commit memory, retirement, both-eye fidelity, compositor-accepted per-eye presentation paths, and load-presentation probe status. record returns the complete schema-v10 iteration artifact plus a subsequent live status snapshot. start begins a fixed-memory stress capture. apply performs the same latest-wins transition used by the CSX menu and requires method=dlss|fsr, enabled, qualityMode=0..6 (enabled requires 1..6), and optional dlssPreset=0..5. stop closes the stress capture, writes its artifact, and returns the complete record plus a subsequent final status. reset clears only a stopped stress capture. probe_start enables a bounded diagnostic-only asynchronous 5x5 final-submit luminance timeline plus correlated 9x9 pre-HAM/depth/post-HAM stereo-release and first post-hard-timeout captures, with exact compositor-cycle, requested-eye, and submitted-texture correlation for both bright/white and dark/black HAM polarity; probe_stop disables new samples, probe_record returns both timelines, and probe_reset clears a stopped probe. Mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}},"required":["action"]}})";
+		static constexpr const char* diagnosticDescriptor =
+			R"({"description":"Control and inspect CSX VR render-scale and transition diagnostics. Existing status, stress, load-presentation probe, apply, and GPU-fenced trim actions retain their prior behavior and developer-mode guards. texture_lifetime_start/status/checkpoint/stop/reset control a bounded CreateTexture2D COM-lifetime capture; each created texture receives a non-owning private-data sentinel that D3D11 releases at actual texture destruction. checkpoint advances the creation cohort without interrupting destruction tracking. Texture-lifetime capture requires Skyrim VR but does not require a saved Debug log level. apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
-			descriptor,
+			diagnosticDescriptor,
 			&RenderScaleToolHandler,
 			nullptr);
 		g_registered.store(true, std::memory_order_release);

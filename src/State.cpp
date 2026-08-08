@@ -590,6 +590,11 @@ bool State::IsSaveLoadSafeModeActive() const
 	return saveLoadSafeModeActive.load(std::memory_order_acquire);
 }
 
+bool State::IsEngineSaveLoadActivityActive() const
+{
+	return engineSaveLoadActivityActive.load(std::memory_order_acquire);
+}
+
 bool State::IsPersistentMutationBlocked() const
 {
 	return persistentMutationBlocked.load(std::memory_order_acquire);
@@ -651,6 +656,9 @@ void State::UpdateSaveLoadSafeMode()
 			saveLoad->GetDeferInitForms() ||
 			saveLoad->GetPositioningPlayerCharacter();
 	}
+	engineSaveLoadActivityActive.store(
+		engineSaveLoadActive,
+		std::memory_order_release);
 
 	if (engineSaveLoadActive) {
 		if (!safeModeActive) {

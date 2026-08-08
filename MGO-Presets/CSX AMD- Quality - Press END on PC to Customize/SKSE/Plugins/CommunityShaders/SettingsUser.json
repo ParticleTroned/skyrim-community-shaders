@@ -497,6 +497,7 @@
         "EnableFastProbeSampling": true,
         "EnableIncrementalProbeUpdates": true,
         "EnableReducedUpdateFrequency": true,
+        "EnableSkylighting": true,
         "IncludeMarkedRoofOccluders": true,
         "MaxZenith": 1.570796251296997,
         "MinDiffuseVisibility": 0.10000000149011612,
@@ -554,7 +555,19 @@
         "enableTilingFix": 1
     },
     "Unified Water": {
-        "UseOptimisedMeshes": true
+        "DeepConnectionProbeReachUnits": 768.0,
+        "DeepContextDepthUnits": 192.0,
+        "DeepContextTransitionUnits": 128.0,
+        "ShallowFallbackMaxDistance": 26000.0,
+        "ShallowFallbackStrength": 1.0,
+        "ShallowSurfaceDepthRangeUnits": 256.0,
+        "ShoreContactMinFadePixels": 2.0,
+        "ShoreDepthBlendRangeUnits": 10.0,
+        "SurfaceVisibilityModelVersion": 11,
+        "UseOpenShadersDepthBehaviour": false,
+        "UseOptimisedMeshes": true,
+        "WaterTintColor": [0.0, 0.35, 1.0],
+        "WaterTintStrength": 0.0
     },
     "Upscaling": {
         "dlssPreset": 0,

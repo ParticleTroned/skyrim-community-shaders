@@ -546,6 +546,7 @@ public:
 		bool recreateFSRResources = false;
 		bool waitForFSRDrain = false;
 		bool lowPeakNativeRestore = false;
+		bool preserveStablePresentationResources = false;
 		VRRenderScaleMemoryPressure memoryPressure = VRRenderScaleMemoryPressure::Unknown;
 		uint64_t estimatedCurrentBytes = 0;
 		uint64_t estimatedTargetBytes = 0;

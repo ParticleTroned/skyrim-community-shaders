@@ -21250,11 +21250,38 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool stablePhysicalContractMatches =
 			plannedRelatchTargetDimensionsMatch &&
 			stablePhysicalContractEvidenceMatches;
+		const bool stableVendorContractMatchesBoot =
+			controllerForPhysicalReuse.stable.valid &&
+			controllerForPhysicalReuse.stable.active &&
+			IsVendorUpscalingMethod(controllerForPhysicalReuse.stable.method) &&
+			previousBootSnapshot.valid &&
+			previousBootSnapshot.active &&
+			controllerForPhysicalReuse.stable.contractGeneration ==
+				previousBootSnapshot.generation &&
+			controllerForPhysicalReuse.stable.method == previousBootSnapshot.method;
+		const VRVendorRelatchPolicy::StableNativeRestoreAdmission
+			stableNativeRestoreAdmission{
+				.physicalResizeNeeded =
+					plannedRelatchSizeKnown &&
+					!plannedRelatchTargetsStrictlyReady,
+				.previousBootActiveVendor =
+					previousBootWasActiveVendorRenderScale,
+				.targetRenderScaleActive =
+					relatchTargetRenderScaleActive,
+				.stableValid = controllerForPhysicalReuse.stable.valid,
+				.stableActiveVendor =
+					controllerForPhysicalReuse.stable.active &&
+					IsVendorUpscalingMethod(
+						controllerForPhysicalReuse.stable.method),
+				.stableMatchesBootContract =
+					stableVendorContractMatchesBoot,
+			};
+		const bool preserveStablePresentationResourcesForRelatch =
+			VRVendorRelatchPolicy::PreservesStableVendorContractDuringNativeRestore(
+				stableNativeRestoreAdmission);
 		const bool lowPeakNativeRestoreRelatch =
-			plannedRelatchSizeKnown &&
-			!plannedRelatchTargetsStrictlyReady &&
-			previousBootWasActiveVendorRenderScale &&
-			!relatchTargetRenderScaleActive;
+			VRVendorRelatchPolicy::UsesLowPeakNativeRestore(
+				stableNativeRestoreAdmission);
 		const auto nativeRestoreProgressAtAdmission =
 			GetVRLowPeakNativeRestoreProgress();
 		const bool epochOwnedNativeRestore =
@@ -21736,6 +21763,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.recreateFSRResources = recreateFSRResourcesDuringRelatch;
 		relatchPlan.waitForFSRDrain = forceSynchronousFSRTeardownForRelatch;
 		relatchPlan.lowPeakNativeRestore = lowPeakNativeRestoreRelatch;
+		relatchPlan.preserveStablePresentationResources =
+			preserveStablePresentationResourcesForRelatch;
 		nativeRestoreOperation = {
 			.valid = true,
 			.destroyDLSSResources = relatchPlan.destroyDLSSResources,
@@ -21884,10 +21913,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			projectedResidencyRequiresRelief &&
 			!relatchPlan.projectedResidencyPostTrimRelaxed;
 		relatchPlan.systemCommitGuardActive =
-			(!rc94PostLoadDoorRelatch || relatchTargetRenderScaleActive) &&
-			residencyOverlapAllocation &&
-			memoryAtAdmission.systemCommitValid &&
-			memoryAtAdmission.systemCommitLimitBytes != 0;
+			VRVendorRelatchPolicy::UsesSystemCommitProjectionGuard({
+				.residencyOverlapAllocation = residencyOverlapAllocation,
+				.systemCommitValid = memoryAtAdmission.systemCommitValid,
+				.systemCommitLimitKnown =
+					memoryAtAdmission.systemCommitLimitBytes != 0,
+			});
 		relatchPlan.systemCommitDeferred =
 			relatchPlan.systemCommitGuardActive &&
 			(relatchPlan.systemCommitAdmissionLimitBytes == 0 ||
@@ -21913,13 +21944,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool criticalGrowthDeferred =
 			allocationGrowth &&
 			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Critical;
-		// Keep the RC94 deactivation cadence independent from the newer planner:
-		// the low-peak path must first release the active vendor contract before
-		// allocating its full-resolution replacement. Exterior activation retains
-		// fail-closed local-video, system-commit, device-loss, and recent-OOM gates.
+		// Door transitions retain the last truthful physical contract until every
+		// allocation guard passes. Native restore uses the conservative 8x commit
+		// projection and dynamic 8-16 GiB reserve just like the bounded recovery
+		// path; only a restore with no stable contract may use serialized low-peak
+		// teardown and its startup-None fallback.
 		const bool doorHandoffHardSafetyDeferred =
 			rc94PostLoadDoorRelatch &&
-			relatchTargetRenderScaleActive &&
 			(!memoryAtAdmission.valid ||
 				!memoryAtAdmission.systemCommitValid ||
 				IsSubmitStageDeviceLost() ||
@@ -22257,7 +22288,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const uint64_t retirementSerialBeforeVendorReset =
 			vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
 		const auto vendorResetResult =
-			lowPeakNativeRestoreCleanupCompleted ?
+			(lowPeakNativeRestoreCleanupCompleted ||
+				preserveStablePresentationResourcesForRelatch) ?
 				VRVendorResourceResetResult::Ready :
 				ResetVRVendorRuntimeResources(
 					relatchPlan.destroyDLSSResources,
@@ -41597,6 +41629,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							  { "projectedResidencyDeferred", relatchPlan.projectedResidencyDeferred },
 							  { "systemCommitGuardActive", relatchPlan.systemCommitGuardActive },
 							  { "doorHandoffHardReserveOnly", relatchPlan.doorHandoffHardReserveOnly },
+							  { "preserveStablePresentationResources", relatchPlan.preserveStablePresentationResources },
 							  { "systemCommitDeferred", relatchPlan.systemCommitDeferred },
 							  { "pressureDeferred", relatchPlan.pressureDeferred } } },
 		{ "fidelity", { { "active", controller.fidelity.active },

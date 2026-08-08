@@ -943,6 +943,60 @@ namespace
 		});
 	}
 
+	constexpr bool CoversStableNativeRestorePreservation()
+	{
+		constexpr StableNativeRestoreAdmission stable{
+			.physicalResizeNeeded = true,
+			.previousBootActiveVendor = true,
+			.targetRenderScaleActive = false,
+			.stableValid = true,
+			.stableActiveVendor = true,
+			.stableMatchesBootContract = true,
+		};
+		if (!PreservesStableVendorContractDuringNativeRestore(stable) ||
+			UsesLowPeakNativeRestore(stable)) {
+			return false;
+		}
+
+		auto noStable = stable;
+		noStable.stableValid = false;
+		if (PreservesStableVendorContractDuringNativeRestore(noStable) ||
+			!UsesLowPeakNativeRestore(noStable)) {
+			return false;
+		}
+
+		auto activation = stable;
+		activation.targetRenderScaleActive = true;
+		return !PreservesStableVendorContractDuringNativeRestore(activation) &&
+		       !UsesLowPeakNativeRestore(activation);
+	}
+
+	constexpr bool CoversSystemCommitProjectionGuard()
+	{
+		if (!UsesSystemCommitProjectionGuard({
+				.residencyOverlapAllocation = true,
+				.systemCommitValid = true,
+				.systemCommitLimitKnown = true,
+			})) {
+			return false;
+		}
+		return !UsesSystemCommitProjectionGuard({
+				   .residencyOverlapAllocation = false,
+				   .systemCommitValid = true,
+				   .systemCommitLimitKnown = true,
+			   }) &&
+		       !UsesSystemCommitProjectionGuard({
+				   .residencyOverlapAllocation = true,
+				   .systemCommitValid = false,
+				   .systemCommitLimitKnown = true,
+			   }) &&
+		       !UsesSystemCommitProjectionGuard({
+				   .residencyOverlapAllocation = true,
+				   .systemCommitValid = true,
+				   .systemCommitLimitKnown = false,
+			   });
+	}
+
 	constexpr bool CoversNativeRestoreMemoryReliefOwnership()
 	{
 		return !ShouldApplyGenericMemoryReliefCleanup(false, true, true, true) &&
@@ -1092,6 +1146,8 @@ namespace
 	static_assert(CoversNativeRestoreTeardownDisposition());
 	static_assert(CoversNativeRestoreOperationStrength());
 	static_assert(CoversNativeRestoreOwnership());
+	static_assert(CoversStableNativeRestorePreservation());
+	static_assert(CoversSystemCommitProjectionGuard());
 	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
 	static_assert(CoversPostLoadRecoverySettleDeadline());

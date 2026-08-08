@@ -5779,6 +5779,54 @@ namespace
 		return true;
 	}
 
+	bool IsCommonVendorTextureCompatible(
+		const Texture2D* a_texture,
+		const D3D11_TEXTURE2D_DESC& a_expected)
+	{
+		if (!a_texture ||
+			!a_texture->resource ||
+			!a_texture->srv ||
+			!a_texture->uav ||
+			!globals::d3d::device) {
+			return false;
+		}
+
+		winrt::com_ptr<ID3D11Device> textureDevice;
+		a_texture->resource->GetDevice(textureDevice.put());
+		if (GetCOMIdentityAddress(textureDevice.get()) !=
+			GetCOMIdentityAddress(globals::d3d::device)) {
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC actual{};
+		a_texture->resource->GetDesc(&actual);
+		constexpr UINT requiredBindFlags =
+			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		return actual.Width == a_expected.Width &&
+		       actual.Height == a_expected.Height &&
+		       actual.MipLevels == a_expected.MipLevels &&
+		       actual.ArraySize == a_expected.ArraySize &&
+		       actual.Format == a_expected.Format &&
+		       actual.SampleDesc.Count == a_expected.SampleDesc.Count &&
+		       actual.SampleDesc.Quality == a_expected.SampleDesc.Quality &&
+		       (actual.BindFlags & requiredBindFlags) == requiredBindFlags;
+	}
+
+	D3D11_TEXTURE2D_DESC BuildFlatRuntimeFsrDepthDesc(
+		const D3D11_TEXTURE2D_DESC& a_mainDesc)
+	{
+		D3D11_TEXTURE2D_DESC depthDesc{};
+		depthDesc.Width = a_mainDesc.Width;
+		depthDesc.Height = a_mainDesc.Height;
+		depthDesc.MipLevels = 1;
+		depthDesc.ArraySize = 1;
+		depthDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		depthDesc.SampleDesc.Count = 1;
+		depthDesc.Usage = D3D11_USAGE_DEFAULT;
+		depthDesc.BindFlags =
+			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		return depthDesc;
+	}
 	template <class T, std::size_t N>
 	bool ViewsReferenceEitherResourceAndRelease(
 		std::array<T*, N>& a_views,
@@ -18525,6 +18573,38 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 
+	// The D3D11/D3D12 runtime bridge cannot portably share the game's
+	// R24G8_TYPELESS depth allocation. Encode flat runtime FSR depth into the
+	// same typed R32_FLOAT format already used by the VR path.
+	if (!globals::game::isVR &&
+		a_upscalemethod == UpscaleMethod::kFSR &&
+		fidelityFX.ShouldUseRuntimeUpscalerForFSR()) {
+		D3D11_TEXTURE2D_DESC mainDesc{};
+		main.texture->GetDesc(&mainDesc);
+		const auto depthDesc = BuildFlatRuntimeFsrDepthDesc(mainDesc);
+		if (runtimeFsrDepthTexture &&
+			!IsCommonVendorTextureCompatible(runtimeFsrDepthTexture, depthDesc)) {
+			UnbindUpscalingResources();
+			DestroyTexture(runtimeFsrDepthTexture);
+		}
+
+		if (!runtimeFsrDepthTexture) {
+			D3D11_SHADER_RESOURCE_VIEW_DESC depthSrvDesc{};
+			depthSrvDesc.Format = depthDesc.Format;
+			depthSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			depthSrvDesc.Texture2D.MipLevels = 1;
+
+			D3D11_UNORDERED_ACCESS_VIEW_DESC depthUavDesc{};
+			depthUavDesc.Format = depthDesc.Format;
+			depthUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+
+			runtimeFsrDepthTexture =
+				new Texture2D(depthDesc, "Upscaling::RuntimeFsrDepth");
+			runtimeFsrDepthTexture->CreateSRV(depthSrvDesc);
+			runtimeFsrDepthTexture->CreateUAV(depthUavDesc);
+		}
+	}
+
 	// Motion vector copy texture is used by DLSS and FSR encode pass.
 	if (a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR) {
 		if (!motionVectorCopyTexture) {
@@ -18583,6 +18663,9 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 	if (a_upscalemethod != UpscaleMethod::kDLSS && a_upscalemethod != UpscaleMethod::kFSR) {
 		DestroyTexture(motionVectorCopyTexture);
 	}
+	if (a_upscalemethod != UpscaleMethod::kFSR) {
+		DestroyTexture(runtimeFsrDepthTexture);
+	}
 
 	// Shared DLSS sharpener texture is only needed for DLSS.
 	if (a_upscalemethod != UpscaleMethod::kDLSS) {
@@ -18604,6 +18687,7 @@ void Upscaling::DestroyCommonUpscalingTextures()
 	DestroyTexture(reactiveMaskTexture);
 	DestroyTexture(transparencyCompositionMaskTexture);
 	DestroyTexture(motionVectorCopyTexture);
+	DestroyTexture(runtimeFsrDepthTexture);
 	DestroyTexture(sharpenerTexture);
 	DestroySubmitStageDLSSSharpenerTextures();
 }
@@ -18617,10 +18701,34 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 		return a_texture && a_texture->resource && a_texture->srv && a_texture->uav;
 	};
 
-	return textureReady(reactiveMaskTexture) &&
-	       textureReady(transparencyCompositionMaskTexture) &&
-	       (globals::game::isVR || textureReady(motionVectorCopyTexture)) &&
-	       (a_upscaleMethod != UpscaleMethod::kDLSS || textureReady(sharpenerTexture));
+	const bool baseResourcesReady =
+		textureReady(reactiveMaskTexture) &&
+		textureReady(transparencyCompositionMaskTexture) &&
+		(globals::game::isVR || textureReady(motionVectorCopyTexture)) &&
+		(a_upscaleMethod != UpscaleMethod::kDLSS || textureReady(sharpenerTexture));
+	if (!baseResourcesReady)
+		return false;
+
+	if (!globals::game::isVR &&
+		a_upscaleMethod == UpscaleMethod::kFSR &&
+		fidelityFX.ShouldUseRuntimeUpscalerForFSR()) {
+		auto* renderer = globals::game::renderer;
+		if (!renderer)
+			return false;
+		const auto& main = renderer->GetRuntimeData().renderTargets[
+			RE::RENDER_TARGETS::kMAIN];
+		if (!main.texture)
+			return false;
+
+		D3D11_TEXTURE2D_DESC mainDesc{};
+		main.texture->GetDesc(&mainDesc);
+		const auto depthDesc = BuildFlatRuntimeFsrDepthDesc(mainDesc);
+		return IsCommonVendorTextureCompatible(
+			runtimeFsrDepthTexture,
+			depthDesc);
+	}
+
+	return true;
 }
 
 bool Upscaling::IsVRRenderScalePhysicalContractConverged(
@@ -30479,11 +30587,12 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 	auto upscaleMethod = GetRuntimeUpscaleMethod();
 	uint methodIndex = (uint)upscaleMethod;
 
-	// VR FSR requires a depth-output variant so we can feed FidelityFX a typed
-	// R32_FLOAT depth texture instead of relying on typeless depth resources.
-	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kFSR) {
+	// FSR runtime sharing and VR require typed R32_FLOAT depth instead of the
+	// game's typeless depth allocation.
+	if (upscaleMethod == UpscaleMethod::kFSR &&
+		(globals::game::isVR || runtimeFsrDepthTexture)) {
 		if (!encodeTexturesCSDepthOutput) {
-			logger::debug("Compiling EncodeTexturesCS.hlsl for VR FSR (FSR + DEPTH_OUTPUT)");
+			logger::debug("Compiling EncodeTexturesCS.hlsl for FSR typed depth output");
 			std::vector<std::pair<const char*, const char*>> defines = {
 				{ "FSR", "" },
 				{ "DEPTH_OUTPUT", "" }
@@ -43585,9 +43694,15 @@ void Upscaling::Upscale()
 		auto& normals = renderer->GetRuntimeData().renderTargets[deferred->forwardRenderTargets[2]];
 		auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		auto* encodeShader = GetEncodeTexturesCS();
+		const bool requiresFlatRuntimeFsrDepth =
+			!globals::game::isVR &&
+			upscaleMethod == UpscaleMethod::kFSR &&
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR();
 		if (!temporalAAMask.SRV || !normals.SRV || !motionVector.SRV || !motionVector.texture || !depth.depthSRV || !encodeShader ||
 			!upscalingDataCB || !main.texture || !reactiveMaskTexture || !reactiveMaskTexture->resource || !reactiveMaskTexture->uav ||
-			!transparencyCompositionMaskTexture || !transparencyCompositionMaskTexture->resource || !transparencyCompositionMaskTexture->uav)
+			!transparencyCompositionMaskTexture || !transparencyCompositionMaskTexture->resource || !transparencyCompositionMaskTexture->uav ||
+			(requiresFlatRuntimeFsrDepth &&
+				(!runtimeFsrDepthTexture || !runtimeFsrDepthTexture->resource || !runtimeFsrDepthTexture->uav)))
 			return false;
 
 		auto outputSize = runtimeResolutionPlan.finalOutputSize;
@@ -43741,7 +43856,7 @@ void Upscaling::Upscale()
 				reactiveMaskTexture->uav.get(),
 				transparencyCompositionMaskTexture->uav.get(),
 				requiresCombinedEncodedMotionVectors ? motionVectorCopyTexture->uav.get() : nullptr,
-				nullptr
+				runtimeFsrDepthTexture ? runtimeFsrDepthTexture->uav.get() : nullptr
 			};
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
@@ -43820,8 +43935,14 @@ void Upscaling::Upscale()
 					motionVectorResource);
 			} else if (upscaleMethod == UpscaleMethod::kFSR) {
 				CS_PROFILE_SCOPE("Upscaling::Upscale");
+				auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+				ID3D11Resource* fsrDepth =
+					!globals::game::isVR && runtimeFsrDepthTexture ?
+						runtimeFsrDepthTexture->resource.get() :
+						depth.texture;
 				vendorDispatchCompleted = fidelityFX.Upscale(
 					main.texture,
+					fsrDepth,
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
 					motionVectorResource,

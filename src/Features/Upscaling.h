@@ -1564,7 +1564,7 @@ public:
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];          // One for each UpscaleMethod
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR + VR: converts copied per-eye depth to R32_FLOAT for FidelityFX
+	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR: converts game depth to typed R32_FLOAT for FidelityFX
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
@@ -2020,6 +2020,7 @@ public:
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
+	Texture2D* runtimeFsrDepthTexture = nullptr;
 	Texture2D* sharpenerTexture = nullptr;
 	bool dlssUpscaleOutputInSharpenerTexture = false;
 	eastl::unique_ptr<Texture2D> foveatedCenterColorIn[2];

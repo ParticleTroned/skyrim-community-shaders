@@ -3260,14 +3260,11 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	return dispatchOK;
 }
 
-bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
+bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
-	auto renderer = globals::game::renderer;
 	auto state = globals::state;
-	if (!renderer || !state)
+	if (!state || !a_depth)
 		return false;
-
-	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	float2 screenSize{};
 	float2 renderSize{};
@@ -3280,7 +3277,7 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 
 	if (splitPerEyeContexts) {
-		if (!upscaling.PreparePerEyeInputs(a_upscalingTexture, depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false, false)) {
+		if (!upscaling.PreparePerEyeInputs(a_upscalingTexture, a_depth, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false, false)) {
 			static bool loggedPrepareFailure = false;
 			if (!loggedPrepareFailure) {
 				logger::warn("[FidelityFX] VR FSR skipped because per-eye input preparation failed.");
@@ -3351,7 +3348,7 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	const bool evaluated = UpscaleRegion(
 			0,
 			a_upscalingTexture,
-			depthTexture.texture,
+			a_depth,
 			a_motionVectors,
 			a_reactiveMask,
 			a_transparencyCompositionMask,

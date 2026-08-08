@@ -1,14 +1,13 @@
 # License
 
 The following license applies to the official AMD-signed FidelityFX runtime binaries
-redistributed in this directory, including:
+distributed with this feature:
 
 - `amd_fidelityfx_framegeneration_dx12.dll`
 - `amd_fidelityfx_loader_dx12.dll`
 - `amd_fidelityfx_upscaler_dx12.dll`
-- accompanying `.pdb` files when shipped with those binaries
 
-Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (C) Advanced Micro Devices, Inc.
 
 REDISTRIBUTION: Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"), to install,

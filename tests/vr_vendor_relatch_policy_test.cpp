@@ -120,6 +120,153 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversStartupMainMenuStateDefinition()
+	{
+		StartupMainMenuStateDefinition state{};
+		if (ShouldDefineStartupMainMenuState(state))
+			return false;
+
+		state.isVR = true;
+		state.startupMainMenuObserved = true;
+		state.shaderCompilationComplete = true;
+		if (!ShouldDefineStartupMainMenuState(state))
+			return false;
+
+		state.completedWorldFrame = true;
+		if (ShouldDefineStartupMainMenuState(state))
+			return false;
+
+		state.completedWorldFrame = false;
+		state.alreadyDefined = true;
+		return !ShouldDefineStartupMainMenuState(state);
+	}
+
+	constexpr bool CoversRenderScaleRuntimeActivation()
+	{
+		RenderScaleRuntimeActivation state{};
+		if (CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.loaded = true;
+		if (!CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.isVR = true;
+		if (CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.completedWorldFrame = true;
+		if (!CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.loadingPresentationActive = true;
+		if (CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.unresolvedProfileSync = true;
+		state.postLoadResetPending = true;
+		state.establishedPhysicalContract = true;
+		if (!CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.establishedPhysicalContract = false;
+		return !CanPresentRenderScaleRuntime(state);
+	}
+
+	constexpr bool CoversRenderTransitionCoverAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 5); ++bits) {
+			const RenderTransitionCoverAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.renderChangePublished = (bits & (1u << 1)) != 0,
+				.loadingSerialMatches = (bits & (1u << 2)) != 0,
+				.loadingTransitionOpenOrTail = (bits & (1u << 3)) != 0,
+				.presentationCoverActive = (bits & (1u << 4)) != 0,
+			};
+			const bool expected =
+				state.isVR &&
+				state.renderChangePublished &&
+				state.loadingSerialMatches &&
+				state.loadingTransitionOpenOrTail &&
+				!state.presentationCoverActive;
+			if (ShouldArmRenderTransitionCover(state) != expected)
+				return false;
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversLoadingFadeHoldAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 6); ++bits) {
+			const LoadingFadeHoldAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.blackFade = (bits & (1u << 1)) != 0,
+				.fadingIn = (bits & (1u << 2)) != 0,
+				.presentationCoverActive = (bits & (1u << 3)) != 0,
+				.loadingMenuClosed = (bits & (1u << 4)) != 0,
+				.releaseAlreadyScheduled = (bits & (1u << 5)) != 0,
+			};
+			const bool expected =
+				state.isVR &&
+				state.blackFade &&
+				state.fadingIn &&
+				state.presentationCoverActive &&
+				state.loadingMenuClosed &&
+				!state.releaseAlreadyScheduled;
+			if (ShouldHoldLoadingFadeIn(state) != expected)
+				return false;
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversLoadingPresentationReleaseAdmission()
+	{
+		LoadingPresentationReleaseAdmission ready{};
+		if (!IsLoadingPresentationReleaseReady(ready))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 9; ++bit) {
+			LoadingPresentationReleaseAdmission blocked{};
+			switch (bit) {
+			case 0:
+				blocked.engineSaveLoadActivityActive = true;
+				break;
+			case 1:
+				blocked.statePostLoadResetPending = true;
+				break;
+			case 2:
+				blocked.hmdClearMaskDeferred = true;
+				break;
+			case 3:
+				blocked.upscalingPostLoadResetPending = true;
+				break;
+			case 4:
+				blocked.renderTargetRecreatePending = true;
+				break;
+			case 5:
+				blocked.renderTargetRecreateInProgress = true;
+				break;
+			case 6:
+				blocked.upscalingTransitionPending = true;
+				break;
+			case 7:
+				blocked.stabilizerSyncScheduled = true;
+				break;
+			case 8:
+				blocked.stabilizerSyncUnresolved = true;
+				break;
+			default:
+				return false;
+			}
+			if (IsLoadingPresentationReleaseReady(blocked))
+				return false;
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversBufferedDoorRequestCoalescing()
 	{
 		constexpr BufferedDoorRequestCoalescingAdmission match{
@@ -335,6 +482,8 @@ namespace
 			const bool recreatedResources = (bits & (1u << 2)) != 0;
 			if (UsesVendorEvaluation(vendorEvaluation) != vendorEvaluation ||
 				RequiresFSRCompatibility(vendorEvaluation) != vendorEvaluation ||
+				NeedsFSRResourceRecreate(vendorEvaluation, preservedResources) !=
+					(vendorEvaluation && !preservedResources) ||
 				NeedsDeferredFSRReset(vendorEvaluation, preservedResources, recreatedResources) !=
 					(vendorEvaluation && !preservedResources && !recreatedResources)) {
 				return false;
@@ -815,6 +964,78 @@ namespace
 		});
 	}
 
+	constexpr bool CoversStableNativeRestorePreservation()
+	{
+		constexpr StableNativeRestoreAdmission stable{
+			.physicalResizeNeeded = true,
+			.previousBootActiveVendor = true,
+			.targetRenderScaleActive = false,
+			.stableValid = true,
+			.stableActiveVendor = true,
+			.stableMatchesBootContract = true,
+		};
+		if (!PreservesStableVendorContractDuringNativeRestore(stable) ||
+			UsesLowPeakNativeRestore(stable)) {
+			return false;
+		}
+
+		auto noStable = stable;
+		noStable.stableValid = false;
+		if (PreservesStableVendorContractDuringNativeRestore(noStable) ||
+			!UsesLowPeakNativeRestore(noStable)) {
+			return false;
+		}
+
+		auto activation = stable;
+		activation.targetRenderScaleActive = true;
+		return !PreservesStableVendorContractDuringNativeRestore(activation) &&
+		       !UsesLowPeakNativeRestore(activation);
+	}
+
+	constexpr bool CoversSystemCommitProjectionGuard()
+	{
+		if (!UsesSystemCommitProjectionGuard({
+				.residencyOverlapAllocation = true,
+				.systemCommitValid = true,
+				.systemCommitLimitKnown = true,
+			})) {
+			return false;
+		}
+		return !UsesSystemCommitProjectionGuard({
+				   .residencyOverlapAllocation = false,
+				   .systemCommitValid = true,
+				   .systemCommitLimitKnown = true,
+			   }) &&
+		       !UsesSystemCommitProjectionGuard({
+				   .residencyOverlapAllocation = true,
+				   .systemCommitValid = false,
+				   .systemCommitLimitKnown = true,
+			   }) &&
+		       !UsesSystemCommitProjectionGuard({
+				   .residencyOverlapAllocation = true,
+				   .systemCommitValid = true,
+				   .systemCommitLimitKnown = false,
+			   });
+	}
+
+	constexpr bool CoversStableDoorContractRetention()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
+			const bool doorHandoff = (bits & (1u << 0)) != 0;
+			const bool hardSafetyDeferred = (bits & (1u << 1)) != 0;
+			const bool physicalMutationOccurred = (bits & (1u << 2)) != 0;
+			const bool expected =
+				doorHandoff && hardSafetyDeferred && !physicalMutationOccurred;
+			if (ShouldRetainStableDoorContract(
+					doorHandoff,
+					hardSafetyDeferred,
+					physicalMutationOccurred) != expected) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	constexpr bool CoversNativeRestoreMemoryReliefOwnership()
 	{
 		return !ShouldApplyGenericMemoryReliefCleanup(false, true, true, true) &&
@@ -842,9 +1063,674 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversPostLoadRecoverySettleDeadline()
+	{
+		PostLoadRecoverySettleAdmission state{
+			.cleanupDrained = false,
+			.currentFrame = 200,
+			.admissionWaitStartFrame = 80,
+			.settledSamples = 0,
+			.requiredSettledSamples = 2,
+			.timeoutFrames = 120,
+		};
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::EvaluateDeadlineOnce) {
+			return false;
+		}
+
+		state.cleanupDrained = true;
+		state.currentFrame = 199;
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::WaitForSettledSamples) {
+			return false;
+		}
+
+		state.settledSamples = 2;
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::UseSettledSamples) {
+			return false;
+		}
+
+		state.currentFrame = 200;
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::EvaluateDeadlineOnce) {
+			return false;
+		}
+
+		// The absolute deadline is owned by the recovery, not cleanup completion or
+		// the first passing sample. Cleanup stalls and changing samples cannot
+		// bypass or restart it once it expires.
+		state.settledSamples = 0;
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::EvaluateDeadlineOnce) {
+			return false;
+		}
+		state.settledSamples = 1;
+		return SelectPostLoadRecoverySettleAction(state) ==
+		       PostLoadRecoverySettleAction::EvaluateDeadlineOnce;
+	}
+
+	constexpr bool CoversPostLoadRecoveryDeadlineAdmission()
+	{
+		PostLoadRecoveryDeadlineAdmission ready{
+			.deadlineExpired = true,
+			.attemptConsumed = false,
+			.physicalMutationStarted = false,
+			.recoveryOwned = true,
+			.loadingSerialOwned = true,
+			.cleanupAndTrimComplete = true,
+			.retirementReady = true,
+			.memorySampleFresh = true,
+			.pressureAcceptable = true,
+			.gpuHeadroomSufficient = true,
+			.projectedSystemCommitSafe = true,
+			.deviceHealthy = true,
+			.noRecentOutOfMemory = true,
+		};
+		if (SelectPostLoadRecoveryDeadlineAction(ready) !=
+			PostLoadRecoveryDeadlineAction::AttemptOnce) {
+			return false;
+		}
+
+		auto blocked = ready;
+		blocked.deadlineExpired = false;
+		if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+			PostLoadRecoveryDeadlineAction::NotExpired) {
+			return false;
+		}
+		blocked.physicalMutationStarted = true;
+		if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+			PostLoadRecoveryDeadlineAction::NotExpired) {
+			return false;
+		}
+
+		auto mutated = ready;
+		mutated.physicalMutationStarted = true;
+		if (SelectPostLoadRecoveryDeadlineAction(mutated) !=
+			PostLoadRecoveryDeadlineAction::ContinueMutatedRecovery) {
+			return false;
+		}
+		mutated.attemptConsumed = true;
+		mutated.projectedSystemCommitSafe = false;
+		if (SelectPostLoadRecoveryDeadlineAction(mutated) !=
+			PostLoadRecoveryDeadlineAction::ContinueMutatedRecovery) {
+			return false;
+		}
+		mutated.loadingSerialOwned = false;
+		if (SelectPostLoadRecoveryDeadlineAction(mutated) !=
+			PostLoadRecoveryDeadlineAction::RetainStableContract) {
+			return false;
+		}
+
+		blocked = ready;
+		blocked.attemptConsumed = true;
+		if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+			PostLoadRecoveryDeadlineAction::RetainStableContract) {
+			return false;
+		}
+
+		for (std::uint32_t bit = 0; bit < 10; ++bit) {
+			blocked = ready;
+			switch (bit) {
+			case 0:
+				blocked.recoveryOwned = false;
+				break;
+			case 1:
+				blocked.loadingSerialOwned = false;
+				break;
+			case 2:
+				blocked.cleanupAndTrimComplete = false;
+				break;
+			case 3:
+				blocked.retirementReady = false;
+				break;
+			case 4:
+				blocked.memorySampleFresh = false;
+				break;
+			case 5:
+				blocked.pressureAcceptable = false;
+				break;
+			case 6:
+				blocked.gpuHeadroomSufficient = false;
+				break;
+			case 7:
+				blocked.projectedSystemCommitSafe = false;
+				break;
+			case 8:
+				blocked.deviceHealthy = false;
+				break;
+			case 9:
+				blocked.noRecentOutOfMemory = false;
+				break;
+			default:
+				return false;
+			}
+			if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+				PostLoadRecoveryDeadlineAction::RetainStableContract) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	constexpr bool CoversPostLoadRecoveryStableFallbackOwnership()
+	{
+		PostLoadRecoveryStableFallbackOwnership owner{
+			.recoveryActive = true,
+			.physicalMutationStarted = false,
+			.recoveryEpoch = 7,
+			.expectedRecoveryEpoch = 7,
+			.transitionEpoch = 11,
+			.expectedTransitionEpoch = 11,
+			.loadingSerial = 13,
+			.currentLoadingSerial = 13,
+		};
+		if (!CanClaimPostLoadRecoveryStableFallback(owner))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 7; ++bit) {
+			auto stale = owner;
+			switch (bit) {
+			case 0:
+				stale.recoveryActive = false;
+				break;
+			case 1:
+				stale.physicalMutationStarted = true;
+				break;
+			case 2:
+				stale.expectedRecoveryEpoch = 0;
+				break;
+			case 3:
+				++stale.recoveryEpoch;
+				break;
+			case 4:
+				stale.expectedTransitionEpoch = 0;
+				break;
+			case 5:
+				++stale.transitionEpoch;
+				break;
+			case 6:
+				++stale.currentLoadingSerial;
+				break;
+			default:
+				return false;
+			}
+			if (CanClaimPostLoadRecoveryStableFallback(stale))
+				return false;
+		}
+		return true;
+	}
+
+	constexpr bool CoversBoundedPostMutationRecovery()
+	{
+		PostMutationRecoveryAdmission state{
+			.mutationEpoch = 17,
+			.mutationStartTickMs = 1000,
+			.currentTickMs = 2999,
+			.emergencyAttemptDelayMs = 2000,
+			.attemptConsumed = false,
+			.recoveryOwned = true,
+			.loadingSerialOwned = true,
+			.cleanupAndTrimComplete = true,
+			.retirementReady = true,
+			.deviceHealthy = true,
+			.targetValid = true,
+		};
+		if (SelectPostMutationRecoveryAction(state) !=
+			PostMutationRecoveryAction::ContinueConservative) {
+			return false;
+		}
+		state.currentTickMs = 3000;
+		if (SelectPostMutationRecoveryAction(state) !=
+			PostMutationRecoveryAction::AttemptOnce) {
+			return false;
+		}
+
+		for (std::uint32_t bit = 0; bit < 7; ++bit) {
+			auto blocked = state;
+			switch (bit) {
+			case 0:
+				blocked.attemptConsumed = true;
+				break;
+			case 1:
+				blocked.recoveryOwned = false;
+				break;
+			case 2:
+				blocked.loadingSerialOwned = false;
+				break;
+			case 3:
+				blocked.cleanupAndTrimComplete = false;
+				break;
+			case 4:
+				blocked.retirementReady = false;
+				break;
+			case 5:
+				blocked.deviceHealthy = false;
+				break;
+			case 6:
+				blocked.targetValid = false;
+				break;
+			default:
+				return false;
+			}
+			if (SelectPostMutationRecoveryAction(blocked) !=
+				PostMutationRecoveryAction::ContinueConservative) {
+				return false;
+			}
+		}
+
+		// Wall-clock termination is centralized outside this admission helper so
+		// the caller can run one final fence/provider poll before failing. Even an
+		// expired admission remains conservative here.
+		state.attemptConsumed = true;
+		state.currentTickMs = 16000;
+		if (SelectPostMutationRecoveryAction(state) !=
+			PostMutationRecoveryAction::ContinueConservative) {
+			return false;
+		}
+
+		state.mutationEpoch = 0;
+		if (SelectPostMutationRecoveryAction(state) !=
+			PostMutationRecoveryAction::NotApplicable) {
+			return false;
+		}
+		state.mutationEpoch = 17;
+		state.mutationStartTickMs = 0;
+		return SelectPostMutationRecoveryAction(state) ==
+		       PostMutationRecoveryAction::NotApplicable;
+	}
+
+	constexpr bool CoversPostMutationRecoveryTransitionTransfer()
+	{
+		PostMutationRecoveryTransitionTransfer transfer{
+			.recoveryActive = true,
+			.physicalMutationStarted = true,
+			.recoveryEpoch = 3,
+			.expectedRecoveryEpoch = 3,
+			.transitionEpoch = 5,
+			.expectedSourceTransitionEpoch = 5,
+			.destinationTransitionEpoch = 7,
+			.loadingSerial = 11,
+			.currentLoadingSerial = 11,
+		};
+		if (!CanTransferPostMutationRecoveryTransition(transfer))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 8; ++bit) {
+			auto stale = transfer;
+			switch (bit) {
+			case 0:
+				stale.recoveryActive = false;
+				break;
+			case 1:
+				stale.physicalMutationStarted = false;
+				break;
+			case 2:
+				stale.expectedRecoveryEpoch = 0;
+				break;
+			case 3:
+				++stale.recoveryEpoch;
+				break;
+			case 4:
+				stale.expectedSourceTransitionEpoch = 0;
+				break;
+			case 5:
+				++stale.transitionEpoch;
+				break;
+			case 6:
+				stale.destinationTransitionEpoch = 0;
+				break;
+			case 7:
+				++stale.currentLoadingSerial;
+				break;
+			default:
+				return false;
+			}
+			if (CanTransferPostMutationRecoveryTransition(stale))
+				return false;
+		}
+		return true;
+	}
+
+	constexpr bool CoversPostLoadRecoveryTransitionBinding()
+	{
+		PostLoadRecoveryTransitionBinding owner{
+			.recoveryActive = true,
+			.physicalMutationStarted = false,
+			.recoveryEpoch = 7,
+			.expectedRecoveryEpoch = 7,
+			.transitionEpoch = 0,
+			.expectedTransitionEpoch = 11,
+			.loadingSerial = 13,
+			.currentLoadingSerial = 13,
+		};
+		if (!CanBindPostLoadRecoveryTransition(owner))
+			return false;
+		owner.transitionEpoch = owner.expectedTransitionEpoch;
+		if (!CanBindPostLoadRecoveryTransition(owner))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 7; ++bit) {
+			auto stale = owner;
+			switch (bit) {
+			case 0:
+				stale.recoveryActive = false;
+				break;
+			case 1:
+				stale.physicalMutationStarted = true;
+				break;
+			case 2:
+				stale.expectedRecoveryEpoch = 0;
+				break;
+			case 3:
+				++stale.recoveryEpoch;
+				break;
+			case 4:
+				stale.expectedTransitionEpoch = 0;
+				break;
+			case 5:
+				++stale.transitionEpoch;
+				break;
+			case 6:
+				++stale.currentLoadingSerial;
+				break;
+			default:
+				return false;
+			}
+			if (CanBindPostLoadRecoveryTransition(stale))
+				return false;
+		}
+		return true;
+	}
+
+	constexpr bool CoversPostLoadRecoveryRelatchOwnerSelection()
+	{
+		PostLoadRecoveryRelatchOwnership owner{
+			.recoveryActive = true,
+			.physicalMutationStarted = false,
+			.recoveryEpoch = 7,
+			.expectedRecoveryEpoch = 7,
+			.transitionEpoch = 0,
+			.targetTransitionEpoch = 11,
+			.serializationEpoch = 0,
+			.loadingSerial = 13,
+			.currentLoadingSerial = 13,
+		};
+		if (SelectPostLoadRecoveryRelatchOwnerAction(owner) !=
+			PostLoadRecoveryRelatchOwnerAction::BindTarget) {
+			return false;
+		}
+		owner.transitionEpoch = owner.targetTransitionEpoch;
+		if (SelectPostLoadRecoveryRelatchOwnerAction(owner) !=
+			PostLoadRecoveryRelatchOwnerAction::EvaluateTarget) {
+			return false;
+		}
+
+		owner.physicalMutationStarted = true;
+		owner.transitionEpoch = 17;
+		owner.serializationEpoch = 17;
+		if (SelectPostLoadRecoveryRelatchOwnerAction(owner) !=
+			PostLoadRecoveryRelatchOwnerAction::EvaluateTransferSource) {
+			return false;
+		}
+		owner.targetTransitionEpoch = owner.serializationEpoch;
+		if (SelectPostLoadRecoveryRelatchOwnerAction(owner) !=
+			PostLoadRecoveryRelatchOwnerAction::EvaluateTarget) {
+			return false;
+		}
+
+		owner.targetTransitionEpoch = 11;
+		owner.transitionEpoch = 19;
+		if (SelectPostLoadRecoveryRelatchOwnerAction(owner) !=
+			PostLoadRecoveryRelatchOwnerAction::RejectStale) {
+			return false;
+		}
+		owner.transitionEpoch = owner.serializationEpoch;
+		owner.serializationEpoch = 0;
+		if (SelectPostLoadRecoveryRelatchOwnerAction(owner) !=
+			PostLoadRecoveryRelatchOwnerAction::RejectStale) {
+			return false;
+		}
+		owner.serializationEpoch = owner.transitionEpoch;
+		owner.recoveryActive = false;
+		return SelectPostLoadRecoveryRelatchOwnerAction(owner) ==
+		       PostLoadRecoveryRelatchOwnerAction::RejectStale;
+	}
+
+	constexpr bool CoversMissedLoadingMenuCloseReconciliation()
+	{
+		MissedLoadingMenuCloseAdmission state{
+			.armed = true,
+			.eventOpen = true,
+			.serialOpen = true,
+			.stateMirrorAvailable = true,
+			.stateMirrorClosed = true,
+			.uiMirrorAvailable = true,
+			.uiMirrorClosed = true,
+			.openGenerationAuthorized = true,
+			.completedWorldFrameAvailable = true,
+			.firstClosedWorldFrameRecorded = false,
+			.eventGeneration = 5,
+			.expectedEventGeneration = 5,
+			.loadingSerial = 7,
+			.expectedLoadingSerial = 7,
+			.completedWorldFrame = 101,
+			.armWorldFrame = 100,
+			.firstClosedWorldFrame = 0,
+		};
+		if (SelectMissedLoadingMenuCloseAction(state) !=
+			MissedLoadingMenuCloseAction::RecordFirstClosedWorldFrame) {
+			return false;
+		}
+		state.firstClosedWorldFrameRecorded = true;
+		state.firstClosedWorldFrame = state.completedWorldFrame;
+		if (SelectMissedLoadingMenuCloseAction(state) !=
+			MissedLoadingMenuCloseAction::Wait) {
+			return false;
+		}
+		++state.completedWorldFrame;
+		if (SelectMissedLoadingMenuCloseAction(state) !=
+			MissedLoadingMenuCloseAction::PublishClose) {
+			return false;
+		}
+
+		auto stale = state;
+		++stale.eventGeneration;
+		if (SelectMissedLoadingMenuCloseAction(stale) !=
+			MissedLoadingMenuCloseAction::Disarm) {
+			return false;
+		}
+		stale = state;
+		stale.uiMirrorClosed = false;
+		if (SelectMissedLoadingMenuCloseAction(stale) !=
+			MissedLoadingMenuCloseAction::ResetClosedWorldFrame) {
+			return false;
+		}
+		stale = state;
+		stale.completedWorldFrame = stale.armWorldFrame;
+		if (SelectMissedLoadingMenuCloseAction(stale) !=
+			MissedLoadingMenuCloseAction::ResetClosedWorldFrame) {
+			return false;
+		}
+		stale = state;
+		stale.openGenerationAuthorized = false;
+		return SelectMissedLoadingMenuCloseAction(stale) ==
+		       MissedLoadingMenuCloseAction::ResetClosedWorldFrame;
+	}
+
+	constexpr bool CoversPresentationDeadlineActions()
+	{
+		return SelectPresentationDeadlineAction(false, false) ==
+		           PresentationDeadlineAction::ReleasePresentation &&
+		       SelectPresentationDeadlineAction(true, false) ==
+		           PresentationDeadlineAction::RequestPreMutationFallback &&
+		       SelectPresentationDeadlineAction(false, true) ==
+		           PresentationDeadlineAction::ContinueCoveredRecovery &&
+		       SelectPresentationDeadlineAction(true, true) ==
+		           PresentationDeadlineAction::ContinueCoveredRecovery &&
+		       !OwnsPresentationDeadlineFallback(5, 5, 0, 13) &&
+		       OwnsPresentationDeadlineFallback(5, 5, 0, 0) &&
+		       OwnsPresentationDeadlineFallback(5, 5, 13, 13) &&
+		       !OwnsPresentationDeadlineFallback(0, 5, 0, 13) &&
+		       !OwnsPresentationDeadlineFallback(5, 7, 13, 13) &&
+		       !OwnsPresentationDeadlineFallback(5, 5, 11, 13);
+	}
+
+	constexpr bool CoversPreMutationNativeFallbackDeadlineTransfer()
+	{
+		PreMutationNativeFallbackDeadlineClock clock{
+			.fallbackLoadingSerial = 13,
+			.currentLoadingSerial = 13,
+			.fallbackStartTickMs = 1000,
+			.currentLoadingCloseTickMs = 0,
+			.currentLoadingSerialOpen = false,
+		};
+		if (SelectPreMutationNativeFallbackStartTick(clock) != 1000)
+			return false;
+
+		clock.currentLoadingSerial = 14;
+		clock.currentLoadingSerialOpen = true;
+		clock.currentLoadingCloseTickMs = 20000;
+		if (SelectPreMutationNativeFallbackStartTick(clock) != 0)
+			return false;
+
+		clock.currentLoadingSerialOpen = false;
+		clock.currentLoadingCloseTickMs = 25000;
+		const auto transferredStartTickMs =
+			SelectPreMutationNativeFallbackStartTick(clock);
+		if (transferredStartTickMs != 25000 ||
+			HasElapsedMonotonicDeadline(
+				transferredStartTickMs,
+				39999,
+				15000) ||
+			!HasElapsedMonotonicDeadline(
+				transferredStartTickMs,
+				40000,
+				15000)) {
+			return false;
+		}
+
+		// Once the transferred tuple is published, repeated callbacks for that
+		// same serial retain its original close tick rather than renewing it.
+		clock.fallbackLoadingSerial = 14;
+		clock.fallbackStartTickMs = 25000;
+		clock.currentLoadingCloseTickMs = 31000;
+		if (SelectPreMutationNativeFallbackStartTick(clock) != 25000)
+			return false;
+
+		clock.currentLoadingSerial = 15;
+		clock.currentLoadingCloseTickMs = 0;
+		if (SelectPreMutationNativeFallbackStartTick(clock) != 0)
+			return false;
+		clock.currentLoadingCloseTickMs = 50000;
+		return SelectPreMutationNativeFallbackStartTick(clock) == 50000;
+	}
+
+	constexpr PostMutationTerminalAdmission MakePostMutationTerminalAdmission()
+	{
+		return {
+			.serializationEpoch = 17,
+			.expectedSerializationEpoch = 17,
+			.unresolvedPhysicalMutationEpoch = 17,
+			.chainSerial = 23,
+			.expectedChainSerial = 23,
+			.chainStartTickMs = 1000,
+			.expectedChainStartTickMs = 1000,
+			.currentTickMs = 16000,
+			.terminalDeadlineMs = 15000,
+			.terminalAlreadySignaled = false,
+		};
+	}
+
+	constexpr bool CoversPostMutationTerminalLiveOwnerAdmission()
+	{
+		auto state = MakePostMutationTerminalAdmission();
+		if (!CanClaimPostMutationTerminalFailure(state))
+			return false;
+
+		// Coherent physical publication may clear the physical epoch while the
+		// serialization owner remains live until stereo presentation retires it.
+		state.unresolvedPhysicalMutationEpoch = 0;
+		if (!CanClaimPostMutationTerminalFailure(state))
+			return false;
+
+		state = MakePostMutationTerminalAdmission();
+		state.serializationEpoch = 0;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state = MakePostMutationTerminalAdmission();
+		state.expectedSerializationEpoch = 0;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state = MakePostMutationTerminalAdmission();
+		++state.serializationEpoch;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state = MakePostMutationTerminalAdmission();
+		++state.unresolvedPhysicalMutationEpoch;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state = MakePostMutationTerminalAdmission();
+		state.terminalAlreadySignaled = true;
+		return !CanClaimPostMutationTerminalFailure(state);
+	}
+
+	constexpr bool CoversPostMutationTerminalExactChainAdmission()
+	{
+		auto state = MakePostMutationTerminalAdmission();
+		state.chainSerial = 0;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state = MakePostMutationTerminalAdmission();
+		state.expectedChainSerial = 0;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state = MakePostMutationTerminalAdmission();
+		++state.chainSerial;
+		return !CanClaimPostMutationTerminalFailure(state);
+	}
+
+	constexpr bool CoversPostMutationTerminalDeadlineAdmission()
+	{
+		auto state = MakePostMutationTerminalAdmission();
+		state.currentTickMs = 15999;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state.currentTickMs = 16000;
+		if (!CanClaimPostMutationTerminalFailure(state))
+			return false;
+
+		// Zero is an explicit immediate-terminal request, not an elapsed timeout.
+		state.currentTickMs = state.chainStartTickMs;
+		state.terminalDeadlineMs = 0;
+		return CanClaimPostMutationTerminalFailure(state);
+	}
+
+	constexpr bool CoversPostMutationTerminalNonRenewal()
+	{
+		auto state = MakePostMutationTerminalAdmission();
+		// Rewriting the start tick under the same chain identity cannot extend the
+		// original deadline or manufacture a different terminal claim.
+		state.chainStartTickMs = 2000;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state = MakePostMutationTerminalAdmission();
+		state.expectedChainStartTickMs = 2000;
+		if (CanClaimPostMutationTerminalFailure(state))
+			return false;
+		state = MakePostMutationTerminalAdmission();
+		state.expectedChainStartTickMs = 0;
+		return !CanClaimPostMutationTerminalFailure(state);
+	}
+
 	static_assert(CoversWorkGateMasks());
 	static_assert(CoversWorkGateState());
 	static_assert(CoversGameEntryConvergence());
+	static_assert(CoversStartupMainMenuStateDefinition());
+	static_assert(CoversRenderScaleRuntimeActivation());
+	static_assert(CoversRenderTransitionCoverAdmission());
+	static_assert(CoversLoadingFadeHoldAdmission());
+	static_assert(CoversLoadingPresentationReleaseAdmission());
 	static_assert(CoversStabilizerDestinationSyncReadiness());
 	static_assert(CoversBufferedDoorRequestCoalescing());
 	static_assert(CoversLifecycleMutationAdmission());
@@ -859,8 +1745,25 @@ namespace
 	static_assert(CoversNativeRestoreTeardownDisposition());
 	static_assert(CoversNativeRestoreOperationStrength());
 	static_assert(CoversNativeRestoreOwnership());
+	static_assert(CoversStableNativeRestorePreservation());
+	static_assert(CoversSystemCommitProjectionGuard());
+	static_assert(CoversStableDoorContractRetention());
 	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
+	static_assert(CoversPostLoadRecoverySettleDeadline());
+	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
+	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
+	static_assert(CoversBoundedPostMutationRecovery());
+	static_assert(CoversPostLoadRecoveryTransitionBinding());
+	static_assert(CoversPostLoadRecoveryRelatchOwnerSelection());
+	static_assert(CoversPostMutationRecoveryTransitionTransfer());
+	static_assert(CoversPresentationDeadlineActions());
+	static_assert(CoversPreMutationNativeFallbackDeadlineTransfer());
+	static_assert(CoversMissedLoadingMenuCloseReconciliation());
+	static_assert(CoversPostMutationTerminalLiveOwnerAdmission());
+	static_assert(CoversPostMutationTerminalExactChainAdmission());
+	static_assert(CoversPostMutationTerminalDeadlineAdmission());
+	static_assert(CoversPostMutationTerminalNonRenewal());
 }
 
 int main() {}

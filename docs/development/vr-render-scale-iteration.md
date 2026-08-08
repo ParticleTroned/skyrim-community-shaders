@@ -143,6 +143,19 @@ paths retain their earlier emergency fail-open behavior. Deadline observation
 occurs at the next observed `WaitGetPoses` boundary, so a delayed boundary can
 make measured elapsed time exceed the nominal hard deadline.
 
+The hard-deadline token does not count itself as pending work. Before physical
+mutation, a truthful stable contract is retained immediately. If reduced targets
+remain active but that resource proof is unavailable, the exact owner may publish
+one internal provider-neutral native relatch. It does not alter the selected
+DLSS/FSR profile: that profile is deferred with a fresh transaction identity and
+replayed after coherent native recovery. The internal worker has a 2-second
+same-generation creator-entry bound, then transfers to the nonrenewing 15-second
+post-mutation bound. A new load removes the old fast-path waiver and lets the same
+worker use the normal safe-point gates; it does not create a second successor.
+The pre-creator watchdog does not charge time while the newer LoadingMenu serial
+is open. Its longer 15-second bound begins at that serial's authoritative close
+tick, and repeated same-serial callbacks cannot move the start tick.
+
 Start the probe at the main menu or immediately before invoking the in-game
 load command. Stop it only after the destination has visibly settled, then poll
 both `status.loadPresentationProbe.pendingReadbacks` and
@@ -254,23 +267,53 @@ grew by approximately 1.45--1.89 GiB. DLAA/Hoshipa grew by approximately
 that a post-allocation trim alone cannot prevent the released and replacement
 engine target tables from overlapping in WDDM residency.
 
-Before a protected recreate, the controller now unbinds all texture and UAV
-stages, invalidates Skyrim's matching renderer-resource caches, flushes queued
-D3D11 work, and offers the size-dependent engine, depth, deferred, underwater,
-and display targets to DXGI at low priority. `IDXGIDevice4::OfferResources1`
-uses `DXGI_OFFER_RESOURCE_FLAG_ALLOW_DECOMMIT` when available; older DXGI
-devices fall back to `IDXGIDevice2::OfferResources`. The engine immediately
-releases those offered resources while rebuilding the table, and the existing
-GPU-fenced post-recreate trim remains the final destruction barrier. Offered
-resources are never reclaimed or reused.
+Before a protected recreate, the controller unbinds texture and UAV stages,
+invalidates Skyrim's matching renderer-resource caches, offers eligible common
+targets to DXGI at low priority, and flushes queued D3D11 work. This path is
+provider-independent but deliberately resource-scoped: it covers Skyrim render,
+depth, deferred, underwater, and non-shared display targets, not DLSS/FSR runtime
+resources or shared compositor textures. Device4 uses
+`DXGI_OFFER_RESOURCE_FLAG_ALLOW_DECOMMIT`; Device2 remains the fallback. The
+exact offered COM identities and matching device interface live in a fixed-size
+transaction until Skyrim's creator reaches its checkpoint under the same unique
+target-table lock. The checkpoint reconciles the table and calls the matching
+`ReclaimResources*` API before global or CSX setup may read a surviving identity.
 
-This pre-drain runs only for rapid relatches, native restores, pressure, and
-post-load recovery. An isolated ordinary CSX-menu change keeps the original fast
-path. Status and schema-v3 records expose pre-recreate drain counts, failures,
-the last offered resource count, and whether decommit was used. The
-`common_target_predrain` gate rejects an unavailable offer during a captured
-protected transition; `steady_state_memory_growth` remains the authoritative
-plateau check.
+Immutable, CPU-backed, shared, and previously poisoned resources are excluded
+from subsequent offers. A reclaim result of `OK` makes a surviving identity safe
+for normal use. `DISCARDED`, `NOT_COMMITTED`, a failed reclaim call, or failure
+to retain every unsafe identity as poison terminates synchronously at the
+checkpoint; rendering cannot resume and defer replacement to another
+transition. Poison retention is a defensive identity invariant, not a recovery
+queue. If the Offer call itself never succeeded, no resource acquired offered
+state, so that remains pre-drain failure telemetry rather than an unsafe-reclaim
+terminal case.
+
+Successfully displaced engine-target references follow a separate correctness
+path: their owning COM references remain queued until a GPU event fence permits
+release. `IDXGIDevice3::Trim` is an independent, best-effort residency hint
+behind its own fence, not the reclaim checkpoint or the displaced-reference
+lifetime barrier. Missing Trim support therefore does not make a safe retired
+identity unsafe, and a successful Trim cannot make an unsafe reclaim usable.
+
+The pre-drain remains limited to rapid relatches, native restores, pressure, and
+post-load recovery, so the ordinary isolated CSX-menu and steady-state render
+paths gain no scan or allocation churn. This is preventive hardening for PR10's
+new fallback interactions, not evidence that OfferResources caused, or a claim
+that it fixes, the RC194 screenshot. The available RC194 log supports the earlier
+pre-creator memory-admission/liveness stall and never records this creator
+checkpoint; the screenshot alone does not establish a cause. Pre-drain telemetry
+remains authoritative alongside `steady_state_memory_growth`.
+
+LoadingMenu edge publication is also generation-owned. Event state, serial, and
+the LoadingMenu work-gate bit change under one transaction. An exact open edge
+keeps a zero-cost missed-close token; if its close callback is absent, repair
+requires the unchanged serial/generation, physical-open or exact load-completion
+authorization, both independent menu mirrors closed, and two distinct completed
+world frames. A newer event cancels the token, and there is no time-based mirror
+bypass. This prevents a lost callback from leaving pre-creator admission
+structurally blocked without weakening renderer-mutation exclusion during a real
+load.
 
 To evaluate this gate, complete at least three transitions to each of two exact
 profiles in alternating order. Prefer two resolutions on one backend or native

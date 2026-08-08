@@ -140,6 +140,189 @@ namespace VRVendorRelatchPolicy
 		       !a_state.profileTransitionPending;
 	}
 
+	enum class MissedLoadingMenuCloseAction : std::uint8_t
+	{
+		Wait,
+		Disarm,
+		ResetClosedWorldFrame,
+		RecordFirstClosedWorldFrame,
+		PublishClose
+	};
+
+	struct MissedLoadingMenuCloseAdmission
+	{
+		bool armed = false;
+		bool eventOpen = false;
+		bool serialOpen = false;
+		bool stateMirrorAvailable = false;
+		bool stateMirrorClosed = false;
+		bool uiMirrorAvailable = false;
+		bool uiMirrorClosed = false;
+		bool openGenerationAuthorized = false;
+		bool completedWorldFrameAvailable = false;
+		bool firstClosedWorldFrameRecorded = false;
+		std::uint64_t eventGeneration = 0;
+		std::uint64_t expectedEventGeneration = 0;
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t expectedLoadingSerial = 0;
+		std::uint32_t completedWorldFrame = 0;
+		std::uint32_t armWorldFrame = 0;
+		std::uint32_t firstClosedWorldFrame = 0;
+	};
+
+	// A missing UI close may be synthesized only for the exact observed open edge,
+	// after both independent physical mirrors remain closed across two newly
+	// completed world frames. A newer open/close event invalidates the candidate.
+	[[nodiscard]] constexpr MissedLoadingMenuCloseAction SelectMissedLoadingMenuCloseAction(
+		const MissedLoadingMenuCloseAdmission& a_state) noexcept
+	{
+		if (!a_state.armed)
+			return MissedLoadingMenuCloseAction::Wait;
+		if (!a_state.eventOpen ||
+			!a_state.serialOpen ||
+			a_state.eventGeneration != a_state.expectedEventGeneration ||
+			a_state.expectedLoadingSerial == 0 ||
+			a_state.loadingSerial != a_state.expectedLoadingSerial) {
+			return MissedLoadingMenuCloseAction::Disarm;
+		}
+		if (!a_state.stateMirrorAvailable ||
+			!a_state.stateMirrorClosed ||
+			!a_state.uiMirrorAvailable ||
+			!a_state.uiMirrorClosed ||
+			!a_state.openGenerationAuthorized ||
+			!a_state.completedWorldFrameAvailable ||
+			a_state.completedWorldFrame == a_state.armWorldFrame) {
+			return a_state.firstClosedWorldFrameRecorded ?
+			           MissedLoadingMenuCloseAction::ResetClosedWorldFrame :
+			           MissedLoadingMenuCloseAction::Wait;
+		}
+		if (!a_state.firstClosedWorldFrameRecorded)
+			return MissedLoadingMenuCloseAction::RecordFirstClosedWorldFrame;
+		if (a_state.completedWorldFrame == a_state.firstClosedWorldFrame)
+			return MissedLoadingMenuCloseAction::Wait;
+		return MissedLoadingMenuCloseAction::PublishClose;
+	}
+
+	struct StartupMainMenuStateDefinition
+	{
+		bool isVR = false;
+		bool startupMainMenuObserved = false;
+		bool shaderCompilationComplete = false;
+		bool completedWorldFrame = false;
+		bool alreadyDefined = false;
+	};
+
+	[[nodiscard]] constexpr bool ShouldDefineStartupMainMenuState(
+		const StartupMainMenuStateDefinition& a_state) noexcept
+	{
+		return a_state.isVR &&
+		       a_state.startupMainMenuObserved &&
+		       a_state.shaderCompilationComplete &&
+		       !a_state.completedWorldFrame &&
+		       !a_state.alreadyDefined;
+	}
+
+	struct RenderScaleRuntimeActivation
+	{
+		bool loaded = false;
+		bool isVR = false;
+		bool establishedPhysicalContract = false;
+		bool unresolvedProfileSync = false;
+		bool completedWorldFrame = false;
+		bool postLoadResetPending = false;
+		bool loadingPresentationActive = false;
+	};
+
+	[[nodiscard]] constexpr bool CanPresentRenderScaleRuntime(
+		const RenderScaleRuntimeActivation& a_state) noexcept
+	{
+		if (!a_state.loaded)
+			return false;
+		if (!a_state.isVR)
+			return true;
+
+		// Loading and save-load ownership may block lifecycle mutation, but an
+		// already-proven physical contract remains the safest presentation state.
+		// Preserve it until a replacement can be applied at a safe point.
+		if (a_state.establishedPhysicalContract)
+			return true;
+
+		return !a_state.unresolvedProfileSync &&
+		       a_state.completedWorldFrame &&
+		       !a_state.postLoadResetPending &&
+		       !a_state.loadingPresentationActive;
+	}
+
+	struct RenderTransitionCoverAdmission
+	{
+		bool isVR = false;
+		bool renderChangePublished = false;
+		bool loadingSerialMatches = false;
+		bool loadingTransitionOpenOrTail = false;
+		bool presentationCoverActive = false;
+	};
+
+	[[nodiscard]] constexpr bool ShouldArmRenderTransitionCover(
+		const RenderTransitionCoverAdmission& a_state) noexcept
+	{
+		return a_state.isVR &&
+		       a_state.renderChangePublished &&
+		       a_state.loadingSerialMatches &&
+		       a_state.loadingTransitionOpenOrTail &&
+		       !a_state.presentationCoverActive;
+	}
+
+	struct LoadingFadeHoldAdmission
+	{
+		bool isVR = false;
+		bool blackFade = false;
+		bool fadingIn = false;
+		bool presentationCoverActive = false;
+		bool loadingMenuClosed = false;
+		bool releaseAlreadyScheduled = false;
+	};
+
+	[[nodiscard]] constexpr bool ShouldHoldLoadingFadeIn(
+		const LoadingFadeHoldAdmission& a_state) noexcept
+	{
+		return a_state.isVR &&
+		       a_state.blackFade &&
+		       a_state.fadingIn &&
+		       a_state.presentationCoverActive &&
+		       a_state.loadingMenuClosed &&
+		       !a_state.releaseAlreadyScheduled;
+	}
+
+	struct LoadingPresentationReleaseAdmission
+	{
+		bool engineSaveLoadActivityActive = false;
+		bool statePostLoadResetPending = false;
+		bool hmdClearMaskDeferred = false;
+		bool upscalingPostLoadResetPending = false;
+		bool renderTargetRecreatePending = false;
+		bool renderTargetRecreateInProgress = false;
+		bool upscalingTransitionPending = false;
+		bool stabilizerSyncScheduled = false;
+		bool stabilizerSyncUnresolved = false;
+	};
+
+	// Presentation follows concrete renderer/engine activity. The broader
+	// save-load safe-mode grace intentionally remains outside this policy so it
+	// can protect mutation and disk persistence without extending black.
+	[[nodiscard]] constexpr bool IsLoadingPresentationReleaseReady(
+		const LoadingPresentationReleaseAdmission& a_state) noexcept
+	{
+		return !a_state.engineSaveLoadActivityActive &&
+		       !a_state.statePostLoadResetPending &&
+		       !a_state.hmdClearMaskDeferred &&
+		       !a_state.upscalingPostLoadResetPending &&
+		       !a_state.renderTargetRecreatePending &&
+		       !a_state.renderTargetRecreateInProgress &&
+		       !a_state.upscalingTransitionPending &&
+		       !a_state.stabilizerSyncScheduled &&
+		       !a_state.stabilizerSyncUnresolved;
+	}
+
 	struct StabilizerDestinationSyncReadiness
 	{
 		bool completedWorldFrameAfterClose = false;
@@ -432,6 +615,66 @@ namespace VRVendorRelatchPolicy
 		std::uint64_t progressOwnerEpoch = 0;
 	};
 
+	struct StableNativeRestoreAdmission
+	{
+		bool physicalResizeNeeded = false;
+		bool previousBootActiveVendor = false;
+		bool targetRenderScaleActive = false;
+		bool stableValid = false;
+		bool stableActiveVendor = false;
+		bool stableMatchesBootContract = false;
+	};
+
+	[[nodiscard]] constexpr bool PreservesStableVendorContractDuringNativeRestore(
+		const StableNativeRestoreAdmission& a_admission) noexcept
+	{
+		return a_admission.physicalResizeNeeded &&
+		       a_admission.previousBootActiveVendor &&
+		       !a_admission.targetRenderScaleActive &&
+		       a_admission.stableValid &&
+		       a_admission.stableActiveVendor &&
+		       a_admission.stableMatchesBootContract;
+	}
+
+	[[nodiscard]] constexpr bool UsesLowPeakNativeRestore(
+		const StableNativeRestoreAdmission& a_admission) noexcept
+	{
+		return a_admission.physicalResizeNeeded &&
+		       a_admission.previousBootActiveVendor &&
+		       !a_admission.targetRenderScaleActive &&
+		       !PreservesStableVendorContractDuringNativeRestore(a_admission);
+	}
+
+	struct SystemCommitGuardAdmission
+	{
+		bool residencyOverlapAllocation = false;
+		bool systemCommitValid = false;
+		bool systemCommitLimitKnown = false;
+	};
+
+	[[nodiscard]] constexpr bool UsesSystemCommitProjectionGuard(
+		const SystemCommitGuardAdmission& a_admission) noexcept
+	{
+		return a_admission.residencyOverlapAllocation &&
+		       a_admission.systemCommitValid &&
+		       a_admission.systemCommitLimitKnown;
+	}
+
+	[[nodiscard]] constexpr bool ShouldRetainStableDoorContract(
+		bool a_stabilizerDoorHandoff,
+		bool a_hardSafetyDeferred,
+		bool a_physicalMutationOccurred) noexcept
+	{
+		// A door handoff is presentation-critical: it must not wait behind a
+		// resource request which admission has already rejected. Before any physical
+		// mutation, the last truthful stable contract (or startup None) is terminally
+		// safe and lets the owned loading fade complete. After mutation, recovery must
+		// instead follow the truthful mutated contract.
+		return a_stabilizerDoorHandoff &&
+		       a_hardSafetyDeferred &&
+		       !a_physicalMutationOccurred;
+	}
+
 	[[nodiscard]] constexpr bool UsesEpochOwnedNativeRestore(
 		const NativeRestoreOwnershipAdmission& a_admission) noexcept
 	{
@@ -698,6 +941,377 @@ namespace VRVendorRelatchPolicy
 		return DeferredDispatchAction::PresentationStretch;
 	}
 
+	enum class PostLoadRecoverySettleAction : std::uint8_t
+	{
+		WaitForCleanup,
+		WaitForSettledSamples,
+		UseSettledSamples,
+		EvaluateDeadlineOnce
+	};
+
+	struct PostLoadRecoverySettleAdmission
+	{
+		bool cleanupDrained = false;
+		std::uint32_t currentFrame = 0;
+		std::uint32_t admissionWaitStartFrame = 0;
+		std::uint32_t settledSamples = 0;
+		std::uint32_t requiredSettledSamples = 0;
+		std::uint32_t timeoutFrames = 0;
+	};
+
+	[[nodiscard]] constexpr PostLoadRecoverySettleAction SelectPostLoadRecoverySettleAction(
+		const PostLoadRecoverySettleAdmission& a_state) noexcept
+	{
+		if (a_state.admissionWaitStartFrame == 0)
+			return PostLoadRecoverySettleAction::WaitForCleanup;
+		if (a_state.currentFrame - a_state.admissionWaitStartFrame >= a_state.timeoutFrames)
+			return PostLoadRecoverySettleAction::EvaluateDeadlineOnce;
+		if (!a_state.cleanupDrained)
+			return PostLoadRecoverySettleAction::WaitForCleanup;
+		if (a_state.settledSamples >= a_state.requiredSettledSamples)
+			return PostLoadRecoverySettleAction::UseSettledSamples;
+		return PostLoadRecoverySettleAction::WaitForSettledSamples;
+	}
+
+	enum class PostLoadRecoveryDeadlineAction : std::uint8_t
+	{
+		NotExpired,
+		AttemptOnce,
+		ContinueMutatedRecovery,
+		RetainStableContract
+	};
+
+	struct PostLoadRecoveryDeadlineAdmission
+	{
+		bool deadlineExpired = false;
+		bool attemptConsumed = false;
+		bool physicalMutationStarted = false;
+		bool recoveryOwned = false;
+		bool loadingSerialOwned = false;
+		bool cleanupAndTrimComplete = false;
+		bool retirementReady = false;
+		bool memorySampleFresh = false;
+		bool pressureAcceptable = false;
+		bool gpuHeadroomSufficient = false;
+		bool projectedSystemCommitSafe = false;
+		bool deviceHealthy = false;
+		bool noRecentOutOfMemory = false;
+	};
+
+	[[nodiscard]] constexpr PostLoadRecoveryDeadlineAction SelectPostLoadRecoveryDeadlineAction(
+		const PostLoadRecoveryDeadlineAdmission& a_state) noexcept
+	{
+		if (!a_state.deadlineExpired)
+			return PostLoadRecoveryDeadlineAction::NotExpired;
+		if (a_state.physicalMutationStarted &&
+			a_state.recoveryOwned &&
+			a_state.loadingSerialOwned) {
+			return PostLoadRecoveryDeadlineAction::ContinueMutatedRecovery;
+		}
+		if (!a_state.attemptConsumed &&
+			a_state.recoveryOwned &&
+			a_state.loadingSerialOwned &&
+			a_state.cleanupAndTrimComplete &&
+			a_state.retirementReady &&
+			a_state.memorySampleFresh &&
+			a_state.pressureAcceptable &&
+			a_state.gpuHeadroomSufficient &&
+			a_state.projectedSystemCommitSafe &&
+			a_state.deviceHealthy &&
+			a_state.noRecentOutOfMemory) {
+			return PostLoadRecoveryDeadlineAction::AttemptOnce;
+		}
+		return PostLoadRecoveryDeadlineAction::RetainStableContract;
+	}
+
+	[[nodiscard]] constexpr bool HasElapsedMonotonicDeadline(
+		std::uint64_t a_startTickMs,
+		std::uint64_t a_currentTickMs,
+		std::uint64_t a_deadlineMs) noexcept
+	{
+		return a_startTickMs != 0 &&
+		       a_deadlineMs != 0 &&
+		       a_currentTickMs - a_startTickMs >= a_deadlineMs;
+	}
+
+	enum class PostMutationRecoveryAction : std::uint8_t
+	{
+		NotApplicable,
+		ContinueConservative,
+		AttemptOnce
+	};
+
+	struct PostMutationRecoveryAdmission
+	{
+		std::uint64_t mutationEpoch = 0;
+		std::uint64_t mutationStartTickMs = 0;
+		std::uint64_t currentTickMs = 0;
+		std::uint64_t emergencyAttemptDelayMs = 0;
+		bool attemptConsumed = false;
+		bool recoveryOwned = false;
+		bool loadingSerialOwned = false;
+		bool cleanupAndTrimComplete = false;
+		bool retirementReady = false;
+		bool deviceHealthy = false;
+		bool targetValid = false;
+	};
+
+	// Predictive memory admission is intentionally absent from the emergency
+	// attempt. Once physical mutation has started, one serialized attempt is
+	// preferable to a permanent black hold. Ownership, cleanup, retirement, and
+	// device health remain hard correctness gates. Their own failure is bounded by
+	// the terminal deadline rather than bypassed.
+	[[nodiscard]] constexpr PostMutationRecoveryAction SelectPostMutationRecoveryAction(
+		const PostMutationRecoveryAdmission& a_state) noexcept
+	{
+		if (a_state.mutationEpoch == 0 || a_state.mutationStartTickMs == 0)
+			return PostMutationRecoveryAction::NotApplicable;
+		if (!a_state.attemptConsumed &&
+			HasElapsedMonotonicDeadline(
+				a_state.mutationStartTickMs,
+				a_state.currentTickMs,
+				a_state.emergencyAttemptDelayMs) &&
+			a_state.recoveryOwned &&
+			a_state.loadingSerialOwned &&
+			a_state.cleanupAndTrimComplete &&
+			a_state.retirementReady &&
+			a_state.deviceHealthy &&
+			a_state.targetValid) {
+			return PostMutationRecoveryAction::AttemptOnce;
+		}
+		return PostMutationRecoveryAction::ContinueConservative;
+	}
+
+	struct PostLoadRecoveryStableFallbackOwnership
+	{
+		bool recoveryActive = false;
+		bool physicalMutationStarted = false;
+		std::uint64_t recoveryEpoch = 0;
+		std::uint64_t expectedRecoveryEpoch = 0;
+		std::uint64_t transitionEpoch = 0;
+		std::uint64_t expectedTransitionEpoch = 0;
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t currentLoadingSerial = 0;
+	};
+
+	[[nodiscard]] constexpr bool CanClaimPostLoadRecoveryStableFallback(
+		const PostLoadRecoveryStableFallbackOwnership& a_state) noexcept
+	{
+		return a_state.recoveryActive &&
+		       !a_state.physicalMutationStarted &&
+		       a_state.expectedRecoveryEpoch != 0 &&
+		       a_state.recoveryEpoch == a_state.expectedRecoveryEpoch &&
+		       a_state.expectedTransitionEpoch != 0 &&
+		       a_state.transitionEpoch == a_state.expectedTransitionEpoch &&
+		       a_state.loadingSerial == a_state.currentLoadingSerial;
+	}
+
+	struct PostLoadRecoveryTransitionBinding
+	{
+		bool recoveryActive = false;
+		bool physicalMutationStarted = false;
+		std::uint64_t recoveryEpoch = 0;
+		std::uint64_t expectedRecoveryEpoch = 0;
+		std::uint64_t transitionEpoch = 0;
+		std::uint64_t expectedTransitionEpoch = 0;
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t currentLoadingSerial = 0;
+	};
+
+	// A recovery may be bound once, before physical mutation, or observed again
+	// by the same exact transition. Zero is accepted only as the unstarted state;
+	// it is never accepted by the terminal fallback claim above.
+	[[nodiscard]] constexpr bool CanBindPostLoadRecoveryTransition(
+		const PostLoadRecoveryTransitionBinding& a_state) noexcept
+	{
+		return a_state.recoveryActive &&
+		       !a_state.physicalMutationStarted &&
+		       a_state.expectedRecoveryEpoch != 0 &&
+		       a_state.recoveryEpoch == a_state.expectedRecoveryEpoch &&
+		       a_state.expectedTransitionEpoch != 0 &&
+		       (a_state.transitionEpoch == 0 ||
+				   a_state.transitionEpoch == a_state.expectedTransitionEpoch) &&
+		       a_state.loadingSerial == a_state.currentLoadingSerial;
+	}
+
+	struct PostMutationRecoveryTransitionTransfer
+	{
+		bool recoveryActive = false;
+		bool physicalMutationStarted = false;
+		std::uint64_t recoveryEpoch = 0;
+		std::uint64_t expectedRecoveryEpoch = 0;
+		std::uint64_t transitionEpoch = 0;
+		std::uint64_t expectedSourceTransitionEpoch = 0;
+		std::uint64_t destinationTransitionEpoch = 0;
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t currentLoadingSerial = 0;
+	};
+
+	[[nodiscard]] constexpr bool CanTransferPostMutationRecoveryTransition(
+		const PostMutationRecoveryTransitionTransfer& a_state) noexcept
+	{
+		return a_state.recoveryActive &&
+		       a_state.physicalMutationStarted &&
+		       a_state.expectedRecoveryEpoch != 0 &&
+		       a_state.recoveryEpoch == a_state.expectedRecoveryEpoch &&
+		       a_state.expectedSourceTransitionEpoch != 0 &&
+		       a_state.transitionEpoch == a_state.expectedSourceTransitionEpoch &&
+		       a_state.destinationTransitionEpoch != 0 &&
+		       a_state.loadingSerial == a_state.currentLoadingSerial;
+	}
+
+	enum class PostLoadRecoveryRelatchOwnerAction : std::uint8_t
+	{
+		RejectStale,
+		BindTarget,
+		EvaluateTarget,
+		EvaluateTransferSource
+	};
+
+	struct PostLoadRecoveryRelatchOwnership
+	{
+		bool recoveryActive = false;
+		bool physicalMutationStarted = false;
+		std::uint64_t recoveryEpoch = 0;
+		std::uint64_t expectedRecoveryEpoch = 0;
+		std::uint64_t transitionEpoch = 0;
+		std::uint64_t targetTransitionEpoch = 0;
+		std::uint64_t serializationEpoch = 0;
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t currentLoadingSerial = 0;
+	};
+
+	// Before physical mutation, a recovery can bind exactly once to its target.
+	// After mutation, the immutable serialization owner remains authoritative;
+	// admission may evaluate its queued successor, but only the atomic transfer
+	// path is allowed to replace the source transition with that successor.
+	[[nodiscard]] constexpr PostLoadRecoveryRelatchOwnerAction SelectPostLoadRecoveryRelatchOwnerAction(
+		const PostLoadRecoveryRelatchOwnership& a_state) noexcept
+	{
+		if (!a_state.recoveryActive ||
+			a_state.expectedRecoveryEpoch == 0 ||
+			a_state.recoveryEpoch != a_state.expectedRecoveryEpoch ||
+			a_state.targetTransitionEpoch == 0 ||
+			a_state.loadingSerial != a_state.currentLoadingSerial) {
+			return PostLoadRecoveryRelatchOwnerAction::RejectStale;
+		}
+
+		if (!a_state.physicalMutationStarted) {
+			if (a_state.serializationEpoch != 0)
+				return PostLoadRecoveryRelatchOwnerAction::RejectStale;
+			if (a_state.transitionEpoch == 0)
+				return PostLoadRecoveryRelatchOwnerAction::BindTarget;
+			return a_state.transitionEpoch == a_state.targetTransitionEpoch ?
+			           PostLoadRecoveryRelatchOwnerAction::EvaluateTarget :
+			           PostLoadRecoveryRelatchOwnerAction::RejectStale;
+		}
+
+		if (a_state.serializationEpoch == 0 ||
+			a_state.transitionEpoch != a_state.serializationEpoch) {
+			return PostLoadRecoveryRelatchOwnerAction::RejectStale;
+		}
+		return a_state.serializationEpoch == a_state.targetTransitionEpoch ?
+		           PostLoadRecoveryRelatchOwnerAction::EvaluateTarget :
+		           PostLoadRecoveryRelatchOwnerAction::EvaluateTransferSource;
+	}
+
+	enum class PresentationDeadlineAction : std::uint8_t
+	{
+		ReleasePresentation,
+		RequestPreMutationFallback,
+		ContinueCoveredRecovery
+	};
+
+	[[nodiscard]] constexpr PresentationDeadlineAction SelectPresentationDeadlineAction(
+		bool a_transitionPendingOrApplying,
+		bool a_physicalMutationUnresolved) noexcept
+	{
+		if (a_physicalMutationUnresolved)
+			return PresentationDeadlineAction::ContinueCoveredRecovery;
+		if (a_transitionPendingOrApplying)
+			return PresentationDeadlineAction::RequestPreMutationFallback;
+		return PresentationDeadlineAction::ReleasePresentation;
+	}
+
+	[[nodiscard]] constexpr bool OwnsPresentationDeadlineFallback(
+		std::uint64_t a_fallbackHoldEpoch,
+		std::uint64_t a_currentHoldEpoch,
+		std::uint64_t a_fallbackLoadingSerial,
+		std::uint64_t a_currentLoadingSerial) noexcept
+	{
+		return a_fallbackHoldEpoch != 0 &&
+		       a_fallbackHoldEpoch == a_currentHoldEpoch &&
+		       a_fallbackLoadingSerial == a_currentLoadingSerial;
+	}
+
+	struct PreMutationNativeFallbackDeadlineClock
+	{
+		std::uint64_t fallbackLoadingSerial = 0;
+		std::uint64_t currentLoadingSerial = 0;
+		std::uint64_t fallbackStartTickMs = 0;
+		std::uint64_t currentLoadingCloseTickMs = 0;
+		bool currentLoadingSerialOpen = false;
+	};
+
+	// A real LoadingMenu owns renderer mutation and therefore cannot consume the
+	// provider-neutral worker's creator-entry budget. A newer serial transfers the
+	// longer deadline to its authoritative close edge; duplicate service for the
+	// same serial keeps the already-published start and cannot renew the clock.
+	// Zero means that the caller must wait while the serial is open, or initialize
+	// the closed generation exactly once if no diagnostic close tick was available.
+	[[nodiscard]] constexpr std::uint64_t SelectPreMutationNativeFallbackStartTick(
+		const PreMutationNativeFallbackDeadlineClock& a_clock) noexcept
+	{
+		if (a_clock.currentLoadingSerialOpen)
+			return 0;
+		if (a_clock.currentLoadingSerial != 0 &&
+			a_clock.currentLoadingSerial != a_clock.fallbackLoadingSerial) {
+			return a_clock.currentLoadingCloseTickMs;
+		}
+		return a_clock.fallbackStartTickMs;
+	}
+
+	struct PostMutationTerminalAdmission
+	{
+		std::uint64_t serializationEpoch = 0;
+		std::uint64_t expectedSerializationEpoch = 0;
+		std::uint64_t unresolvedPhysicalMutationEpoch = 0;
+		std::uint64_t chainSerial = 0;
+		std::uint64_t expectedChainSerial = 0;
+		std::uint64_t chainStartTickMs = 0;
+		std::uint64_t expectedChainStartTickMs = 0;
+		std::uint64_t currentTickMs = 0;
+		std::uint64_t terminalDeadlineMs = 0;
+		bool terminalAlreadySignaled = false;
+	};
+
+	// Terminal ownership is an exact, immutable chain tuple. A published physical
+	// mutation may already have cleared while its serialization owner remains live,
+	// but a different nonzero physical epoch is never part of the claimed chain.
+	// A zero deadline is deliberately reserved for immediate terminal conditions,
+	// such as confirmed device loss or irreparable post-mutation resource contents.
+	[[nodiscard]] constexpr bool CanClaimPostMutationTerminalFailure(
+		const PostMutationTerminalAdmission& a_state) noexcept
+	{
+		if (a_state.terminalAlreadySignaled ||
+			a_state.expectedSerializationEpoch == 0 ||
+			a_state.serializationEpoch != a_state.expectedSerializationEpoch ||
+			a_state.expectedChainSerial == 0 ||
+			a_state.chainSerial != a_state.expectedChainSerial ||
+			a_state.expectedChainStartTickMs == 0 ||
+			a_state.chainStartTickMs != a_state.expectedChainStartTickMs ||
+			(a_state.unresolvedPhysicalMutationEpoch != 0 &&
+				a_state.unresolvedPhysicalMutationEpoch != a_state.serializationEpoch)) {
+			return false;
+		}
+
+		return a_state.terminalDeadlineMs == 0 ||
+		       HasElapsedMonotonicDeadline(
+				   a_state.expectedChainStartTickMs,
+				   a_state.currentTickMs,
+				   a_state.terminalDeadlineMs);
+	}
+
 	[[nodiscard]] constexpr bool UsesVendorEvaluation(bool a_vendorMethod) noexcept
 	{
 		return a_vendorMethod;
@@ -706,6 +1320,13 @@ namespace VRVendorRelatchPolicy
 	[[nodiscard]] constexpr bool RequiresFSRCompatibility(bool a_fsrEvaluation) noexcept
 	{
 		return a_fsrEvaluation;
+	}
+
+	[[nodiscard]] constexpr bool NeedsFSRResourceRecreate(
+		bool a_fsrEvaluation,
+		bool a_preservedResources) noexcept
+	{
+		return a_fsrEvaluation && !a_preservedResources;
 	}
 
 	[[nodiscard]] constexpr bool NeedsDeferredFSRReset(

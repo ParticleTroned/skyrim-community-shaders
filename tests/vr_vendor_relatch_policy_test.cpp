@@ -120,6 +120,134 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversStartupMainMenuStateDefinition()
+	{
+		StartupMainMenuStateDefinition state{};
+		if (ShouldDefineStartupMainMenuState(state))
+			return false;
+
+		state.isVR = true;
+		state.startupMainMenuObserved = true;
+		state.shaderCompilationComplete = true;
+		if (!ShouldDefineStartupMainMenuState(state))
+			return false;
+
+		state.completedWorldFrame = true;
+		if (ShouldDefineStartupMainMenuState(state))
+			return false;
+
+		state.completedWorldFrame = false;
+		state.alreadyDefined = true;
+		return !ShouldDefineStartupMainMenuState(state);
+	}
+
+	constexpr bool CoversRenderScaleRuntimeActivation()
+	{
+		RenderScaleRuntimeActivation state{};
+		if (CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.loaded = true;
+		if (!CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.isVR = true;
+		if (CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.completedWorldFrame = true;
+		if (!CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.loadingPresentationActive = true;
+		if (CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.unresolvedProfileSync = true;
+		state.postLoadResetPending = true;
+		state.establishedPhysicalContract = true;
+		if (!CanPresentRenderScaleRuntime(state))
+			return false;
+
+		state.establishedPhysicalContract = false;
+		return !CanPresentRenderScaleRuntime(state);
+	}
+
+	constexpr bool CoversRenderTransitionCoverAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 5); ++bits) {
+			const RenderTransitionCoverAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.renderChangePublished = (bits & (1u << 1)) != 0,
+				.loadingSerialMatches = (bits & (1u << 2)) != 0,
+				.loadingTransitionOpenOrTail = (bits & (1u << 3)) != 0,
+				.presentationCoverActive = (bits & (1u << 4)) != 0,
+			};
+			const bool expected =
+				state.isVR &&
+				state.renderChangePublished &&
+				state.loadingSerialMatches &&
+				state.loadingTransitionOpenOrTail &&
+				!state.presentationCoverActive;
+			if (ShouldArmRenderTransitionCover(state) != expected)
+				return false;
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversLoadingFadeHoldAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 6); ++bits) {
+			const LoadingFadeHoldAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.blackFade = (bits & (1u << 1)) != 0,
+				.fadingIn = (bits & (1u << 2)) != 0,
+				.presentationCoverActive = (bits & (1u << 3)) != 0,
+				.loadingMenuClosed = (bits & (1u << 4)) != 0,
+				.releaseAlreadyScheduled = (bits & (1u << 5)) != 0,
+			};
+			const bool expected =
+				state.isVR &&
+				state.blackFade &&
+				state.fadingIn &&
+				state.presentationCoverActive &&
+				state.loadingMenuClosed &&
+				!state.releaseAlreadyScheduled;
+			if (ShouldHoldLoadingFadeIn(state) != expected)
+				return false;
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversLoadingPresentationReleaseAdmission()
+	{
+		LoadingPresentationReleaseAdmission ready{};
+		if (!IsLoadingPresentationReleaseReady(ready))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 9; ++bit) {
+			LoadingPresentationReleaseAdmission blocked{};
+			switch (bit) {
+			case 0: blocked.engineSaveLoadActivityActive = true; break;
+			case 1: blocked.statePostLoadResetPending = true; break;
+			case 2: blocked.hmdClearMaskDeferred = true; break;
+			case 3: blocked.upscalingPostLoadResetPending = true; break;
+			case 4: blocked.renderTargetRecreatePending = true; break;
+			case 5: blocked.renderTargetRecreateInProgress = true; break;
+			case 6: blocked.upscalingTransitionPending = true; break;
+			case 7: blocked.stabilizerSyncScheduled = true; break;
+			case 8: blocked.stabilizerSyncUnresolved = true; break;
+			default: return false;
+			}
+			if (IsLoadingPresentationReleaseReady(blocked))
+				return false;
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversBufferedDoorRequestCoalescing()
 	{
 		constexpr BufferedDoorRequestCoalescingAdmission match{
@@ -842,9 +970,114 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversPostLoadRecoverySettleDeadline()
+	{
+		PostLoadRecoverySettleAdmission state{
+			.cleanupDrained = false,
+			.currentFrame = 200,
+			.admissionWaitStartFrame = 80,
+			.settledSamples = 0,
+			.requiredSettledSamples = 2,
+			.timeoutFrames = 120,
+		};
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::WaitForCleanup) {
+			return false;
+		}
+
+		state.cleanupDrained = true;
+		state.currentFrame = 199;
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::WaitForSettledSamples) {
+			return false;
+		}
+
+		state.settledSamples = 2;
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::UseSettledSamples) {
+			return false;
+		}
+
+		state.settledSamples = 0;
+		state.currentFrame = 200;
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::EvaluateDeadlineOnce) {
+			return false;
+		}
+
+		// The deadline is owned by cleanup completion, not by the first passing
+		// memory sample; zero or alternating settled samples cannot restart it.
+		state.settledSamples = 1;
+		return SelectPostLoadRecoverySettleAction(state) ==
+		       PostLoadRecoverySettleAction::EvaluateDeadlineOnce;
+	}
+
+	constexpr bool CoversPostLoadRecoveryDeadlineAdmission()
+	{
+		PostLoadRecoveryDeadlineAdmission ready{
+			.deadlineExpired = true,
+			.attemptConsumed = false,
+			.recoveryOwned = true,
+			.loadingSerialOwned = true,
+			.cleanupAndTrimComplete = true,
+			.retirementReady = true,
+			.memorySampleFresh = true,
+			.pressureAcceptable = true,
+			.gpuHeadroomSufficient = true,
+			.projectedSystemCommitSafe = true,
+			.deviceHealthy = true,
+			.noRecentOutOfMemory = true,
+		};
+		if (SelectPostLoadRecoveryDeadlineAction(ready) !=
+			PostLoadRecoveryDeadlineAction::AttemptOnce) {
+			return false;
+		}
+
+		auto blocked = ready;
+		blocked.deadlineExpired = false;
+		if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+			PostLoadRecoveryDeadlineAction::NotExpired) {
+			return false;
+		}
+
+		blocked = ready;
+		blocked.attemptConsumed = true;
+		if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+			PostLoadRecoveryDeadlineAction::RetainStableContract) {
+			return false;
+		}
+
+		for (std::uint32_t bit = 0; bit < 10; ++bit) {
+			blocked = ready;
+			switch (bit) {
+			case 0: blocked.recoveryOwned = false; break;
+			case 1: blocked.loadingSerialOwned = false; break;
+			case 2: blocked.cleanupAndTrimComplete = false; break;
+			case 3: blocked.retirementReady = false; break;
+			case 4: blocked.memorySampleFresh = false; break;
+			case 5: blocked.pressureAcceptable = false; break;
+			case 6: blocked.gpuHeadroomSufficient = false; break;
+			case 7: blocked.projectedSystemCommitSafe = false; break;
+			case 8: blocked.deviceHealthy = false; break;
+			case 9: blocked.noRecentOutOfMemory = false; break;
+			default: return false;
+			}
+			if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+				PostLoadRecoveryDeadlineAction::RetainStableContract) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	static_assert(CoversWorkGateMasks());
 	static_assert(CoversWorkGateState());
 	static_assert(CoversGameEntryConvergence());
+	static_assert(CoversStartupMainMenuStateDefinition());
+	static_assert(CoversRenderScaleRuntimeActivation());
+	static_assert(CoversRenderTransitionCoverAdmission());
+	static_assert(CoversLoadingFadeHoldAdmission());
+	static_assert(CoversLoadingPresentationReleaseAdmission());
 	static_assert(CoversStabilizerDestinationSyncReadiness());
 	static_assert(CoversBufferedDoorRequestCoalescing());
 	static_assert(CoversLifecycleMutationAdmission());
@@ -861,6 +1094,8 @@ namespace
 	static_assert(CoversNativeRestoreOwnership());
 	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
+	static_assert(CoversPostLoadRecoverySettleDeadline());
+	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 }
 
 int main() {}

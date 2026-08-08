@@ -652,6 +652,7 @@ public:
 		uint64_t loadingSerial = 0;
 		uint32_t startFrame = 0;
 		uint32_t lastSampleFrame = 0;
+		uint32_t admissionWaitStartFrame = 0;
 		uint32_t firstSettledFrame = 0;
 		uint32_t lastSettledFrame = 0;
 		uint32_t settledSamples = 0;
@@ -668,6 +669,8 @@ public:
 		bool trimCompleted = false;
 		bool trimSucceeded = false;
 		bool settleTimeoutUsed = false;
+		bool settleDeadlineExpired = false;
+		bool timedAttemptConsumed = false;
 		bool relatchAdmitted = false;
 		bool cleanupDeferredUntilStable = false;
 	};
@@ -1473,6 +1476,11 @@ public:
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;
 	UpscaleMethod GetLegacyDLSSPreferredUpscaleMethodForAPI() const;
 	UpscaleMethod GetRuntimeUpscaleMethod() const;
+	void UpdateVRStartupMainMenuRenderState();
+	bool IsVRStartupMainMenuRenderStateActive() const noexcept
+	{
+		return vrStartupMainMenuRenderStateActive.load(std::memory_order_acquire);
+	}
 	uint32_t GetRuntimeQualityMode() const;
 	uint32_t GetRuntimeDLSSPreset() const;
 	bool GetRuntimeFSR4Enabled() const;
@@ -2090,6 +2098,9 @@ public:
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<uint64_t> vrVendorWorkGateState{ 0 };
+	std::atomic<bool> vrStartupMainMenuObserved{ false };
+	std::atomic<bool> vrStartupMainMenuRenderStateDefined{ false };
+	std::atomic<bool> vrStartupMainMenuRenderStateActive{ false };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
@@ -2504,7 +2515,8 @@ private:
 	{
 		None,
 		MainMenuLoad,
-		InGameLoad
+		InGameLoad,
+		RenderTransition
 	};
 
 	struct VRPostLoadHMDMaskRepairEvidence
@@ -2580,6 +2592,17 @@ private:
 	std::atomic<uint64_t> vrPostLoadCompositorHoldReleasedEyeMaskState{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldEpoch{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldAwaitingSyncEpoch{ 0 };
+	// The game-owned black FaderMenu remains at the first fade-in frame until
+	// the compositor has accepted one coherent stereo destination pair. Unlike
+	// the keepalive texture, this pauses Skyrim's fade clock so the normal
+	// fade-in is not consumed behind CSX's render-transition protection.
+	std::atomic<uint64_t> vrPostLoadFaderHoldEpoch{ 0 };
+	std::atomic<uint32_t> vrPostLoadFaderFrozenCurrentTime{
+		std::numeric_limits<uint32_t>::max()
+	};
+	std::atomic<uint32_t> vrPostLoadFaderCurrentTimeOffset{ 0 };
+	winrt::com_ptr<ID3D11Texture2D> vrPostLoadCompositorKeepaliveTexture;
+	winrt::com_ptr<ID3D11Device> vrPostLoadCompositorKeepaliveDevice;
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
 	std::mutex vrPostLoadCompositorRepairMutex;
 
@@ -2594,6 +2617,9 @@ private:
 		VRPostLoadCompositorHoldRoute a_route =
 			VRPostLoadCompositorHoldRoute::None,
 		uint64_t a_loadingSerial = 0);
+	void ArmVRRenderTransitionCompositorCover(
+		uint64_t a_loadingSerial,
+		const char* a_reason);
 	[[nodiscard]] bool IsVRPostLoadCompositorHoldOwnedByLoadingSerial(
 		uint64_t a_loadingSerial) const noexcept;
 	void NotifyVRPostLoadCompositorLoadingMenuOpened(uint64_t a_loadingSerial);
@@ -2602,6 +2628,13 @@ private:
 		VRPostLoadCompositorHoldRoute a_route) noexcept;
 	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(
 		VRPostLoadCompositorHoldRoute a_route) noexcept;
+	void ObserveVRFaderMessage(const RE::UIMessage& a_message);
+	[[nodiscard]] bool ShouldFreezeVRLoadingFadeIn();
+	[[nodiscard]] uint32_t ResolveVRLoadingFadeCurrentTime(
+		uint32_t a_currentTime,
+		bool& a_freezeAdvance);
+	void ResetVRLoadingFadeClockLocked();
+	void ReleaseVRLoadingFadeInHoldLocked(const char* a_reason);
 	void ResetVRPostLoadCompositorHold();
 	void ResetVRPostLoadCompositorHoldLocked(
 		VRPostLoadCompositorHoldState a_finalState =
@@ -2897,6 +2930,23 @@ private:
 	struct RaceSexMenu_ChangeName
 	{
 		static void thunk(RE::RaceSexMenu* a_this, const char* a_name);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct FaderMenuProcessMessageHook
+	{
+		static RE::UI_MESSAGE_RESULTS thunk(
+			RE::FaderMenu* a_menu,
+			RE::UIMessage& a_message);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct FaderMenuAdvanceMovieHook
+	{
+		static void thunk(
+			RE::FaderMenu* a_menu,
+			float a_interval,
+			uint32_t a_currentTime);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

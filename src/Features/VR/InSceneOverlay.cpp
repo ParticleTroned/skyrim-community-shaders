@@ -1349,26 +1349,38 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					static std::atomic_bool loggedRenderScaleCurrentFallback{ false };
 					if (!loggedRenderScaleCurrentFallback.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(
-							"[VRRenderScale] Final-size fallback is unavailable during a transition or menu transaction; submitting the current reduced texture so the compositor cannot reuse a stale frame.");
+							"[VRRenderScale] Final-size presentation is unavailable during a transition or menu transaction; rejecting the reduced texture so OpenVR retains its last accepted full-size state.");
 					}
-					// A current reduced frame is preferable to a false-success no-submit:
-					// the latter makes ASW reproject an unrelated stale accepted frame.
-					const auto result = submit(
-						"current-reduced-fallback",
+					// Do not publish a reduced candidate under full-size bounds. An honest
+					// failure leaves the compositor's previously accepted stereo state
+					// intact while the retained runtime contract remains authoritative.
+					// Startup has no retained contract; its separately defined runtime
+					// fallback is UpscaleMethod::kNONE until the first world frame.
+				#ifdef DEVBENCH_BRIDGE_ENABLED
+					const uint64_t rejectedProbeSequence =
+						upscaling.BeginVRLoadPresentationProbeSubmit(
+							"reduced-candidate-rejected",
+							eEye,
+							pTexture,
+							pBounds,
+							nSubmitFlags,
+							compositorCycleToken,
+							false,
+							presentationObservation.valid ?
+								&presentationObservation :
+								nullptr);
+					upscaling.CompleteVRLoadPresentationProbeSubmit(
+						rejectedProbeSequence,
+						vr::VRCompositorError_RequestFailed);
+				#endif
+					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
+						"reduced-candidate-rejected",
+						eEye,
 						pTexture,
 						pBounds,
 						nSubmitFlags,
-						0,
-						0,
-						presentationObservation.valid ?
-							&presentationObservation :
-							nullptr);
-					if (result == vr::VRCompositorError_None &&
-						presentationObservation.valid) {
-						upscaling.RecordVRRenderScalePresentationObservation(
-							presentationObservation);
-					}
-					return result;
+						vr::VRCompositorError_RequestFailed);
+					return vr::VRCompositorError_RequestFailed;
 				}
 
 				if (postLoadReleaseToken == 0 &&

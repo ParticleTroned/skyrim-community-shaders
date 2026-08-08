@@ -15,8 +15,9 @@ namespace CSPluginAPI
 	inline constexpr unsigned int CSInterfaceRevision003 = 3;
 	inline constexpr unsigned int CSInterfaceRevision004 = 4;
 	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision004;
-	// Deprecated source-compatibility aliases. CSX now owns render-transition
-	// coverage and external controllers must not add a fixed-duration fade.
+	// Deprecated source-compatibility aliases. CSX build 11 and newer own
+	// render-transition coverage and external controllers must not add a
+	// fixed-duration fade. Older binaries retain their previously inlined values.
 	[[deprecated("CSX owns VR render-transition fade coverage")]]
 	inline constexpr float CSVRRenderScaleTransitionFadeOutSeconds = 0.0f;
 	[[deprecated("CSX owns VR render-transition fade coverage")]]

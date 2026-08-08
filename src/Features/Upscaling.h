@@ -127,7 +127,9 @@ public:
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
 	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
-	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 6.0f;
+	// CSX owns renderer-transition coverage; the external Stabilizer fade must
+	// stay disabled to avoid stacking a second timed black hold.
+	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 0.0f;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
@@ -672,6 +674,7 @@ public:
 		bool settleTimeoutUsed = false;
 		bool settleDeadlineExpired = false;
 		bool timedAttemptConsumed = false;
+		bool engineTargetCreateEntered = false;
 		bool relatchAdmitted = false;
 		bool cleanupDeferredUntilStable = false;
 	};
@@ -2024,6 +2027,8 @@ public:
 	[[nodiscard]] bool CanDispatchExistingVRVendorEvaluation(
 		UpscaleMethod a_upscaleMethod,
 		const VRExistingVendorProviderSnapshot& a_provider) const;
+	[[nodiscard]] bool HasTruthfulStableVRVendorResources(
+		const VRRenderScaleProfileSnapshot& a_stable) const;
 
 	// D3D11 textures
 	Texture2D* reactiveMaskTexture = nullptr;

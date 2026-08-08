@@ -580,6 +580,9 @@ namespace
 	json BuildRenderScaleResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
+		if (action.starts_with("texture_lifetime_") && !globals::game::isVR) {
+			return json{ { "error", "D3D11 texture-lifetime capture requires Skyrim VR" } };
+		}
 		if (action == "status") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)

@@ -899,12 +899,14 @@ namespace VRVendorRelatchPolicy
 	[[nodiscard]] constexpr PostLoadRecoverySettleAction SelectPostLoadRecoverySettleAction(
 		const PostLoadRecoverySettleAdmission& a_state) noexcept
 	{
-		if (!a_state.cleanupDrained || a_state.admissionWaitStartFrame == 0)
+		if (a_state.admissionWaitStartFrame == 0)
+			return PostLoadRecoverySettleAction::WaitForCleanup;
+		if (a_state.currentFrame - a_state.admissionWaitStartFrame >= a_state.timeoutFrames)
+			return PostLoadRecoverySettleAction::EvaluateDeadlineOnce;
+		if (!a_state.cleanupDrained)
 			return PostLoadRecoverySettleAction::WaitForCleanup;
 		if (a_state.settledSamples >= a_state.requiredSettledSamples)
 			return PostLoadRecoverySettleAction::UseSettledSamples;
-		if (a_state.currentFrame - a_state.admissionWaitStartFrame >= a_state.timeoutFrames)
-			return PostLoadRecoverySettleAction::EvaluateDeadlineOnce;
 		return PostLoadRecoverySettleAction::WaitForSettledSamples;
 	}
 
@@ -912,6 +914,7 @@ namespace VRVendorRelatchPolicy
 	{
 		NotExpired,
 		AttemptOnce,
+		ContinueMutatedRecovery,
 		RetainStableContract
 	};
 
@@ -919,6 +922,7 @@ namespace VRVendorRelatchPolicy
 	{
 		bool deadlineExpired = false;
 		bool attemptConsumed = false;
+		bool physicalMutationStarted = false;
 		bool recoveryOwned = false;
 		bool loadingSerialOwned = false;
 		bool cleanupAndTrimComplete = false;
@@ -936,6 +940,11 @@ namespace VRVendorRelatchPolicy
 	{
 		if (!a_state.deadlineExpired)
 			return PostLoadRecoveryDeadlineAction::NotExpired;
+		if (a_state.physicalMutationStarted &&
+			a_state.recoveryOwned &&
+			a_state.loadingSerialOwned) {
+			return PostLoadRecoveryDeadlineAction::ContinueMutatedRecovery;
+		}
 		if (!a_state.attemptConsumed &&
 			a_state.recoveryOwned &&
 			a_state.loadingSerialOwned &&
@@ -952,6 +961,30 @@ namespace VRVendorRelatchPolicy
 		return PostLoadRecoveryDeadlineAction::RetainStableContract;
 	}
 
+	struct PostLoadRecoveryStableFallbackOwnership
+	{
+		bool recoveryActive = false;
+		bool physicalMutationStarted = false;
+		std::uint64_t recoveryEpoch = 0;
+		std::uint64_t expectedRecoveryEpoch = 0;
+		std::uint64_t transitionEpoch = 0;
+		std::uint64_t expectedTransitionEpoch = 0;
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t currentLoadingSerial = 0;
+	};
+
+	[[nodiscard]] constexpr bool CanClaimPostLoadRecoveryStableFallback(
+		const PostLoadRecoveryStableFallbackOwnership& a_state) noexcept
+	{
+		return a_state.recoveryActive &&
+		       !a_state.physicalMutationStarted &&
+		       a_state.expectedRecoveryEpoch != 0 &&
+		       a_state.recoveryEpoch == a_state.expectedRecoveryEpoch &&
+		       a_state.expectedTransitionEpoch != 0 &&
+		       a_state.transitionEpoch == a_state.expectedTransitionEpoch &&
+		       a_state.loadingSerial == a_state.currentLoadingSerial;
+	}
+
 	[[nodiscard]] constexpr bool UsesVendorEvaluation(bool a_vendorMethod) noexcept
 	{
 		return a_vendorMethod;
@@ -960,6 +993,13 @@ namespace VRVendorRelatchPolicy
 	[[nodiscard]] constexpr bool RequiresFSRCompatibility(bool a_fsrEvaluation) noexcept
 	{
 		return a_fsrEvaluation;
+	}
+
+	[[nodiscard]] constexpr bool NeedsFSRResourceRecreate(
+		bool a_fsrEvaluation,
+		bool a_preservedResources) noexcept
+	{
+		return a_fsrEvaluation && !a_preservedResources;
 	}
 
 	[[nodiscard]] constexpr bool NeedsDeferredFSRReset(

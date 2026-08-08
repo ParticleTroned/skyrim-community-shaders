@@ -23,93 +23,93 @@ contract is available.
 
 ## Integrated behavior
 
-- Render Scale state remains transactional. Replacement presentation textures
-  are allocated and validated before publication; allocation failure leaves the
-  prior pair intact.
-- A reduced candidate that cannot be presented at final eye dimensions is
-  rejected with `VRCompositorError_RequestFailed`, allowing OpenVR to retain its
-  last accepted full-size stereo state.
-- The startup state is defined as Upscaling None until a completed world frame
-  exists when no stable contract is available. Configured gameplay settings are
-  not overwritten.
-- Render state is not logically invalidated during loading transitions. The
-  stable profile remains authoritative until the target is physically proven
-  and accepted for both eyes.
-- Loading fade interval and Scaleform time remain frozen until a coherent
-  destination stereo pair is accepted. The transition cover uses a 1000 ms soft
-  deadline, 1500 ms hard/keepalive budget in the current upstream path, and
-  stereo acceptance rather than settings publication.
-- Non-door post-load recovery has an epoch-owned monotonic admission clock and
-  a 120-frame deadline. Two consecutive safe samples remain the normal path.
-  The deadline permits one exact evaluation only; it does not waive fresh
-  memory, pressure, GPU headroom, commit projection, retirement, device-loss,
-  OOM, loading-serial, or transition-epoch checks. A presentation-critical
-  Stabilizer door handoff instead terminates immediately on hard-safety
-  rejection, retaining the current contract without mutation rather than
-  consuming the fade while waiting.
-- Unsafe deadline evaluation ends before mutation and retains the stable
-  contract. With no truthful stable contract, the boot latch is reset so the
-  startup None fallback applies.
-- System commit reserve remains:
+-   Render Scale state remains transactional. Replacement presentation textures
+    are allocated and validated before publication; allocation failure leaves the
+    prior pair intact.
+-   A reduced candidate that cannot be presented at final eye dimensions is
+    rejected with `VRCompositorError_RequestFailed`, allowing OpenVR to retain its
+    last accepted full-size stereo state.
+-   The startup state is defined as Upscaling None until a completed world frame
+    exists when no stable contract is available. Configured gameplay settings are
+    not overwritten.
+-   Render state is not logically invalidated during loading transitions. The
+    stable profile remains authoritative until the target is physically proven
+    and accepted for both eyes.
+-   Loading fade interval and Scaleform time remain frozen until a coherent
+    destination stereo pair is accepted. The transition cover uses a 1000 ms soft
+    deadline, 1500 ms hard/keepalive budget in the current upstream path, and
+    stereo acceptance rather than settings publication.
+-   Non-door post-load recovery has an epoch-owned monotonic admission clock and
+    an absolute 120-frame deadline which cleanup or fence stalls cannot restart.
+    Two consecutive safe samples remain the normal path. The deadline permits
+    one exact evaluation only; it does not waive fresh memory, pressure, GPU
+    headroom, commit projection, retirement, device-loss, OOM, loading-serial,
+    or transition-epoch checks. A Stabilizer door instead terminates immediately
+    on hard-safety rejection without physical mutation.
+-   Unsafe deadline evaluation ends before mutation and retains a resource-proven
+    stable contract. The startup None fallback is used only when reduced physical
+    targets are not active; otherwise guarded recovery continues rather than
+    mislabeling reduced targets as native.
+-   System commit reserve remains:
 
-  ```text
-  reserve = clamp(commit_limit / 8, 8 GiB, 16 GiB)
-  ```
+    ```text
+    reserve = clamp(commit_limit / 8, 8 GiB, 16 GiB)
+    ```
 
-- Estimated system-commit growth remains deliberately conservative: 4x normal
-  overlap allocation and 8x full-resolution native restore.
-- A stable active FSR/DLSS contract now makes destructive low-peak native
-  restore ineligible. Shared presentation resources are retained through
-  physical native-target recreation. Low-peak teardown remains available only
-  when there is no stable contract to preserve.
-- Terminal vendor recovery is provider-neutral. FSR-specific request-key
-  latching remains FSR-specific; controller recovery outcomes apply to FSR and
-  DLSS.
+-   Estimated system-commit growth remains deliberately conservative: 4x normal
+    overlap allocation and 8x full-resolution native restore.
+-   A stable active FSR/DLSS contract now makes destructive low-peak native
+    restore ineligible. Shared presentation resources are retained through
+    physical native-target recreation. Low-peak teardown remains available only
+    when there is no stable contract to preserve.
+-   Terminal vendor recovery is provider-neutral. FSR-specific request-key
+    latching remains FSR-specific; controller recovery outcomes apply to FSR and
+    DLSS.
 
 ## Live observations on 2026-08-08
 
 Environment:
 
-- Skyrim VR test modlist: `D:\Games\Skyrim\MadGod2`
-- GPU: AMD Radeon RX 7900 XT
-- DevBench: 1.12.0, VR port 8921
-- Stabby profiles: Hoshipa interior, Ultra Quality exterior; Render Scale off
-  interior and on exterior
-- TestLimit: Sysinternals 5.24 at
-  `K:\Utils\SysInternals\Testlimit64.exe`
-- Tested DLL before the newest planner correction: integration commit
-  `dfe824e4`
+-   Skyrim VR test modlist: `D:\Games\Skyrim\MadGod2`
+-   GPU: AMD Radeon RX 7900 XT
+-   DevBench: 1.12.0, VR port 8921
+-   Stabby profiles: Hoshipa interior, Ultra Quality exterior; Render Scale off
+    interior and on exterior
+-   TestLimit: Sysinternals 5.24 at
+    `K:\Utils\SysInternals\Testlimit64.exe`
+-   Tested DLL before the newest planner correction: integration commit
+    `dfe824e4`
 
 Unpressured baseline:
 
-- Breezehome to Whiterun to Breezehome completed without OOM, device loss,
-  fidelity mismatch, retirement backlog, or dimension-mismatch fallback.
-- The cold transition held presentation for 172 frames / approximately 3.234 s,
-  above the 120-frame fast-path latency target. GPU pressure briefly reached
-  High and process-private/system commit rose substantially.
-- The next warm exit completed its handoff in approximately 1.516 s and did not
-  have a comparable latency spike.
-- The user initially reported a possible brief PiP on exit, then withdrew
-  certainty after discovering the player/camera was clipped inside the door.
-  The screenshot shows near-plane door geometry crossing the view and is not
-  reliable evidence of PiP. Treat the visual result as inconclusive.
-- Subsequent repeated Breezehome in/out cycles repeatedly left the player
-  trapped in the door, including after changing position before activating it.
-  Similar trapping had occurred once or twice previously. Track this as a
-  separate low-priority transition/placement issue; no causal link to Render
-  Scale has been established. It is also a test confounder because near-plane
-  door geometry can be mistaken for a presentation artifact.
-- In a later series of Breezehome door transitions, most fade-ins appeared
-  correct but the reduced-live-region/stale-remainder PiP morphology was
-  briefly visible on several transitions. Treat this repeated observation as
-  a credible reproduction on the deployed `dfe824e4` DLL, distinct from the
-  earlier door-clipping ambiguity. It is also distinct from the known flash at
-  the beginning of some transitions, currently assumed to be a single stale
-  frame associated with OCU ASW; that attribution remains unproven.
-- DevBench recorded zero bounds-mismatch original fallback observations and
-  zero vendor-failure stretch observations. This does not exclude a full-size
-  texture whose contents are only partially updated; dimensions alone cannot
-  detect that morphology.
+-   Breezehome to Whiterun to Breezehome completed without OOM, device loss,
+    fidelity mismatch, retirement backlog, or dimension-mismatch fallback.
+-   The cold transition held presentation for 172 frames / approximately 3.234 s,
+    above the 120-frame fast-path latency target. GPU pressure briefly reached
+    High and process-private/system commit rose substantially.
+-   The next warm exit completed its handoff in approximately 1.516 s and did not
+    have a comparable latency spike.
+-   The user initially reported a possible brief PiP on exit, then withdrew
+    certainty after discovering the player/camera was clipped inside the door.
+    The screenshot shows near-plane door geometry crossing the view and is not
+    reliable evidence of PiP. Treat the visual result as inconclusive.
+-   Subsequent repeated Breezehome in/out cycles repeatedly left the player
+    trapped in the door, including after changing position before activating it.
+    Similar trapping had occurred once or twice previously. Track this as a
+    separate low-priority transition/placement issue; no causal link to Render
+    Scale has been established. It is also a test confounder because near-plane
+    door geometry can be mistaken for a presentation artifact.
+-   In a later series of Breezehome door transitions, most fade-ins appeared
+    correct but the reduced-live-region/stale-remainder PiP morphology was
+    briefly visible on several transitions. Treat this repeated observation as
+    a credible reproduction on the deployed `dfe824e4` DLL, distinct from the
+    earlier door-clipping ambiguity. It is also distinct from the known flash at
+    the beginning of some transitions, currently assumed to be a single stale
+    frame associated with OCU ASW; that attribution remains unproven.
+-   DevBench recorded zero bounds-mismatch original fallback observations and
+    zero vendor-failure stretch observations. This does not exclude a full-size
+    texture whose contents are only partially updated; dimensions alone cannot
+    detect that morphology.
 
 Pressured exterior-to-interior run:
 
@@ -163,16 +163,16 @@ commit charge released. System commit fell from approximately 95.3 GB to
 The current source, not yet represented by the DLL used for the observations
 above, changes native-restore admission as follows:
 
-- `UsesSystemCommitProjectionGuard` depends only on overlap allocation plus a
-  valid commit sample/limit. Door direction no longer disables it.
-- RC94 hard-safety deferral applies to activation and deactivation.
-- A stable vendor contract must be valid, active, vendor-backed, and match the
-  physical boot method/generation before it can be preserved.
-- With such a contract, native restore skips pre-recreation vendor/shared
-  teardown and keeps stable presentation resources alive through target
-  recreation.
-- Low-peak teardown is selected only when no stable contract satisfies that
-  proof.
+-   `UsesSystemCommitProjectionGuard` depends only on overlap allocation plus a
+    valid commit sample/limit. Door direction no longer disables it.
+-   RC94 hard-safety deferral applies to activation and deactivation.
+-   A stable vendor contract must be valid, active, vendor-backed, and match the
+    physical boot method/generation before it can be preserved.
+-   With such a contract, native restore skips pre-recreation vendor/shared
+    teardown and keeps stable presentation resources alive through target
+    recreation.
+-   Low-peak teardown is selected only when no stable contract satisfies that
+    proof.
 
 Policy tests cover stable-contract preservation, no-stable low-peak fallback,
 activation exclusion, and commit-guard prerequisites.
@@ -320,41 +320,42 @@ and live testing remain required.
 4. Run at least two unpressured exterior/interior cycles. Record cold and warm
    latency separately.
 5. Settle outside and verify all of the following before pressure:
-   - controller state Active;
-   - stable/requested profiles match the exterior target;
-   - both eyes are current `VendorEvaluated` frames;
-   - actual dispatch backend converges to the authoritative backend;
-   - shader compilation is inactive;
-   - no retirement or trim is pending;
-   - memory pressure is Normal or Elevated.
+    - controller state Active;
+    - stable/requested profiles match the exterior target;
+    - both eyes are current `VendorEvaluated` frames;
+    - actual dispatch backend converges to the authoritative backend;
+    - shader compilation is inactive;
+    - no retirement or trim is pending;
+    - memory pressure is Normal or Elevated.
 6. Calculate TestLimit charge from the current DevBench sample:
 
-   ```text
-   admission_limit = commit_limit - clamp(commit_limit / 8, 8 GiB, 16 GiB)
-   desired_charge ~= admission_limit
-                     - current_commit
-                     - projected_system_commit_additional
-                     + 256..512 MiB controlled overshoot
-   N = ceil(desired_charge / 256 MiB)
-   ```
+    ```text
+    admission_limit = commit_limit - clamp(commit_limit / 8, 8 GiB, 16 GiB)
+    desired_charge ~= admission_limit
+                      - current_commit
+                      - projected_system_commit_additional
+                      + 256..512 MiB controlled overshoot
+    N = ceil(desired_charge / 256 MiB)
+    ```
 
 7. Start exactly one hidden TestLimit process:
 
-   ```powershell
-   K:\Utils\SysInternals\Testlimit64.exe -accepteula -m 256 -c N
-   ```
+    ```powershell
+    K:\Utils\SysInternals\Testlimit64.exe -accepteula -m 256 -c N
+    ```
 
-   `-m` charges commit. Do not use `-r`, which reserves address space without
-   charging commit, or `-d`, which adds unnecessary physical-memory pressure.
-   `-c` must be last.
+    `-m` charges commit. Do not use `-r`, which reserves address space without
+    charging commit, or `-d`, which adds unnecessary physical-memory pressure.
+    `-c` must be last.
+
 8. Verify the exact PID, executable path, private bytes, live system commit, and
    real remaining headroom before opening the door.
 9. Reset/start the presentation probe, enter the interior, remain still for
    approximately five seconds, and immediately stop the probe to preserve the
    transition window.
 10. Under the corrected build, expected rejection behavior is:
-    - the rejected door request terminates for this transition and remains
-      restart-required in settings;
+    - the rejected controller request is cleared while the configured native
+      profile remains restart-required;
     - stable exterior vendor contract remains authoritative;
     - no physical mutation occurs while projected commit is unsafe; the
       controller may transiently enter Applying while it evaluates the plan,
@@ -373,23 +374,23 @@ and live testing remain required.
 
 ## Review and GPU test requests
 
-- NVIDIA review/test is required for every provider-neutral and mirrored
-  change. In particular, verify that retaining the stable DLSS presentation
-  resources through native target recreation is safe and that a later DLSS
-  activation correctly reuses or retires them.
-- AMD/FSR4 should repeat the pressured rejection case and the post-pressure
-  convergence case with the corrected DLL.
-- Review the lifetime of retained shared presentation resources. The current
-  design keeps a bounded last-stable set rather than destroying it before the
-  replacement is accepted. It must not become an accumulating set across door
-  cycles.
-- Consider extending the presentation probe with regional temporal hashes or a
-  live-region bounding box. Current dimension/bounds telemetry cannot prove or
-  disprove a full-size surface containing a live reduced region plus stale
-  remainder.
-- The acceptance helper currently expects a fresh vendor presentation even when
-  a test intentionally finishes in native mode; test tooling should make its
-  terminal presentation expectation profile-aware.
+-   NVIDIA review/test is required for every provider-neutral and mirrored
+    change. In particular, verify that retaining the stable DLSS presentation
+    resources through native target recreation is safe and that a later DLSS
+    activation correctly reuses or retires them.
+-   AMD/FSR4 should repeat the pressured rejection case and the post-pressure
+    convergence case with the corrected DLL.
+-   Review the lifetime of retained shared presentation resources. The current
+    design keeps a bounded last-stable set rather than destroying it before the
+    replacement is accepted. It must not become an accumulating set across door
+    cycles.
+-   Consider extending the presentation probe with regional temporal hashes or a
+    live-region bounding box. Current dimension/bounds telemetry cannot prove or
+    disprove a full-size surface containing a live reduced region plus stale
+    remainder.
+-   The acceptance helper currently expects a fresh vendor presentation even when
+    a test intentionally finishes in native mode; test tooling should make its
+    terminal presentation expectation profile-aware.
 
 ## Evidence limits
 

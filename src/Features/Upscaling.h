@@ -2151,6 +2151,12 @@ public:
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateEpoch{ 0 };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateRecoveryEpoch{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
+	// Non-zero from immediately before the native target creator can mutate
+	// physical resources until a coherent contract is published/presented.
+	std::atomic<uint64_t> vrRenderScaleUnresolvedPhysicalMutationEpoch{ 0 };
+	// One-shot owner for the deliberate crash-logger-visible termination used
+	// when confirmed device loss makes that mutation impossible to reconcile.
+	std::atomic_bool vrRenderScaleTerminalDeviceLossSignaled{ false };
 	std::atomic<uint64_t> vrNativeRestorePresentationGuardEpoch{ 0 };
 	mutable std::mutex vrNativeRestorePresentationWatchdogMutex;
 	uint64_t vrNativeRestorePresentationWatchdogEpoch = 0;
@@ -2555,6 +2561,9 @@ private:
 		static_cast<uint32_t>(VRPostLoadCompositorHoldRoute::None)
 	};
 	std::atomic<uint64_t> vrPostLoadCompositorHoldLoadingSerial{ 0 };
+	// A hard presentation deadline requests cancellation only while the queued
+	// replacement is still pre-mutation. Apply consumes the exact loading owner.
+	std::atomic<uint64_t> vrPostLoadCompositorDeadlineFallbackLoadingSerial{ 0 };
 	std::atomic_bool vrPostLoadCompositorHoldLoadingMenuClosed{ false };
 	std::atomic<uint32_t> vrPostLoadCompositorHoldStartFrame{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorHoldStartTickMs{ 0 };
@@ -2679,6 +2688,11 @@ private:
 	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame, UpscaleMethod a_upscaleMethod);
 	void ClearSubmitStageFoveatedVendorRetryBackoff();
 	void ClearVRFSRRelatchDrainGuard();
+	void SignalVRRenderScaleTerminalDeviceLoss(
+		HRESULT a_result,
+		HRESULT a_deviceReason,
+		uint64_t a_mutationEpoch,
+		const char* a_context);
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);

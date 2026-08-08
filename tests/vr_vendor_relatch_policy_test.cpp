@@ -1261,6 +1261,77 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversPostLoadRecoveryTransitionBinding()
+	{
+		PostLoadRecoveryTransitionBinding owner{
+			.recoveryActive = true,
+			.physicalMutationStarted = false,
+			.recoveryEpoch = 7,
+			.expectedRecoveryEpoch = 7,
+			.transitionEpoch = 0,
+			.expectedTransitionEpoch = 11,
+			.loadingSerial = 13,
+			.currentLoadingSerial = 13,
+		};
+		if (!CanBindPostLoadRecoveryTransition(owner))
+			return false;
+		owner.transitionEpoch = owner.expectedTransitionEpoch;
+		if (!CanBindPostLoadRecoveryTransition(owner))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 7; ++bit) {
+			auto stale = owner;
+			switch (bit) {
+			case 0:
+				stale.recoveryActive = false;
+				break;
+			case 1:
+				stale.physicalMutationStarted = true;
+				break;
+			case 2:
+				stale.expectedRecoveryEpoch = 0;
+				break;
+			case 3:
+				++stale.recoveryEpoch;
+				break;
+			case 4:
+				stale.expectedTransitionEpoch = 0;
+				break;
+			case 5:
+				++stale.transitionEpoch;
+				break;
+			case 6:
+				++stale.currentLoadingSerial;
+				break;
+			default:
+				return false;
+			}
+			if (CanBindPostLoadRecoveryTransition(stale))
+				return false;
+		}
+		return true;
+	}
+
+	constexpr bool CoversPresentationDeadlineActions()
+	{
+		return SelectPresentationDeadlineAction(false, false) ==
+				   PresentationDeadlineAction::ReleasePresentation &&
+		       SelectPresentationDeadlineAction(true, false) ==
+				   PresentationDeadlineAction::RequestPreMutationFallback &&
+		       SelectPresentationDeadlineAction(false, true) ==
+				   PresentationDeadlineAction::ContinueCoveredRecovery &&
+		       SelectPresentationDeadlineAction(true, true) ==
+				   PresentationDeadlineAction::ContinueCoveredRecovery;
+	}
+
+	constexpr bool CoversTerminalPostMutationDeviceLoss()
+	{
+		return ShouldTerminateAfterPostMutationDeviceLoss(true, 17) &&
+		       !ShouldTerminateAfterPostMutationDeviceLoss(false, 17) &&
+		       !ShouldTerminateAfterPostMutationDeviceLoss(true, 0) &&
+		       !ShouldTerminateAfterPostMutationDeviceLoss(false, 0);
+	}
+
 	static_assert(CoversWorkGateMasks());
 	static_assert(CoversWorkGateState());
 	static_assert(CoversGameEntryConvergence());
@@ -1291,6 +1362,9 @@ namespace
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
+	static_assert(CoversPostLoadRecoveryTransitionBinding());
+	static_assert(CoversPresentationDeadlineActions());
+	static_assert(CoversTerminalPostMutationDeviceLoss());
 }
 
 int main() {}

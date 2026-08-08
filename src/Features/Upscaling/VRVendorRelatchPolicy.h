@@ -985,6 +985,64 @@ namespace VRVendorRelatchPolicy
 		       a_state.loadingSerial == a_state.currentLoadingSerial;
 	}
 
+	struct PostLoadRecoveryTransitionBinding
+	{
+		bool recoveryActive = false;
+		bool physicalMutationStarted = false;
+		std::uint64_t recoveryEpoch = 0;
+		std::uint64_t expectedRecoveryEpoch = 0;
+		std::uint64_t transitionEpoch = 0;
+		std::uint64_t expectedTransitionEpoch = 0;
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t currentLoadingSerial = 0;
+	};
+
+	// A recovery may be bound once, before physical mutation, or observed again
+	// by the same exact transition. Zero is accepted only as the unstarted state;
+	// it is never accepted by the terminal fallback claim above.
+	[[nodiscard]] constexpr bool CanBindPostLoadRecoveryTransition(
+		const PostLoadRecoveryTransitionBinding& a_state) noexcept
+	{
+		return a_state.recoveryActive &&
+		       !a_state.physicalMutationStarted &&
+		       a_state.expectedRecoveryEpoch != 0 &&
+		       a_state.recoveryEpoch == a_state.expectedRecoveryEpoch &&
+		       a_state.expectedTransitionEpoch != 0 &&
+		       (a_state.transitionEpoch == 0 ||
+			       a_state.transitionEpoch == a_state.expectedTransitionEpoch) &&
+		       a_state.loadingSerial == a_state.currentLoadingSerial;
+	}
+
+	enum class PresentationDeadlineAction : std::uint8_t
+	{
+		ReleasePresentation,
+		RequestPreMutationFallback,
+		ContinueCoveredRecovery
+	};
+
+	[[nodiscard]] constexpr PresentationDeadlineAction SelectPresentationDeadlineAction(
+		bool a_transitionPendingOrApplying,
+		bool a_physicalMutationUnresolved) noexcept
+	{
+		if (a_physicalMutationUnresolved)
+			return PresentationDeadlineAction::ContinueCoveredRecovery;
+		if (a_transitionPendingOrApplying)
+			return PresentationDeadlineAction::RequestPreMutationFallback;
+		return PresentationDeadlineAction::ReleasePresentation;
+	}
+
+	// Resource refusal and provider failure remain recoverable while the previous
+	// physical contract is intact. Once the D3D11 device is confirmed lost after
+	// native target mutation began, however, no truthful in-process presentation
+	// can be reconstructed without whole-device recreation.
+	[[nodiscard]] constexpr bool ShouldTerminateAfterPostMutationDeviceLoss(
+		bool a_deviceLossConfirmed,
+		std::uint64_t a_unresolvedPhysicalMutationEpoch) noexcept
+	{
+		return a_deviceLossConfirmed &&
+		       a_unresolvedPhysicalMutationEpoch != 0;
+	}
+
 	[[nodiscard]] constexpr bool UsesVendorEvaluation(bool a_vendorMethod) noexcept
 	{
 		return a_vendorMethod;

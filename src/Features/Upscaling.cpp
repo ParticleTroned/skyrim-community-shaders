@@ -172,9 +172,11 @@ namespace
 	// continues while an exact vendor stereo release can still qualify. The hard
 	// deadline bounds only CS's black presentation extension, never Skyrim's own
 	// load.
-	constexpr uint64_t kVRPostLoadCompositorMainMenuHoldSoftDeadlineMilliseconds = 6000u;
-	constexpr uint64_t kVRPostLoadCompositorInGameHoldSoftDeadlineMilliseconds = 3000u;
-	constexpr uint64_t kVRRenderTransitionCompositorHoldSoftDeadlineMilliseconds = 1000u;
+	// With the common 500 ms grace these produce hard pre-mutation cancellation
+	// caps of 5 s for first/main-menu load and 1 s for every later transition.
+	constexpr uint64_t kVRPostLoadCompositorMainMenuHoldSoftDeadlineMilliseconds = 4500u;
+	constexpr uint64_t kVRPostLoadCompositorInGameHoldSoftDeadlineMilliseconds = 500u;
+	constexpr uint64_t kVRRenderTransitionCompositorHoldSoftDeadlineMilliseconds = 500u;
 	constexpr uint64_t kVRPostLoadCompositorHoldHardDeadlineGraceMilliseconds = 500u;
 	constexpr uint32_t kVRPostLoadCompositorStableStereoFrames = 3u;
 	constexpr uint32_t kVRRenderTransitionCompositorStableStereoFrames = 2u;
@@ -202,6 +204,10 @@ namespace
 	constexpr uint64_t kVRRenderScaleSystemCommitMinimumReserveBytes = 8ull * 1024ull * 1024ull * 1024ull;
 	constexpr uint64_t kVRRenderScaleSystemCommitMaximumReserveBytes = 16ull * 1024ull * 1024ull * 1024ull;
 	constexpr uint64_t kVRRenderScaleSystemCommitReserveScaleDenominator = 8u;
+	// Application-defined noncontinuable exception: "RSC" (Render Scale
+	// Catastrophe). This intentionally reaches Crash Logger's exception path;
+	// report_and_fail/TerminateProcess alone would not provide that context.
+	constexpr DWORD kVRRenderScaleTerminalDeviceLossExceptionCode = 0xE0525343u;
 	constexpr uint32_t kVRRenderScaleRecentOutOfMemoryGuardFrames = 1800u;
 	constexpr uint64_t kVRRenderScaleMiB = 1024u * 1024u;
 	constexpr uint64_t kVRRenderScaleCriticalHeadroomBytes = 256u * kVRRenderScaleMiB;
@@ -19291,6 +19297,8 @@ namespace
 		Upscaling* upscaling = nullptr;
 		VREngineTargetGenerationSnapshot* snapshot = nullptr;
 		VREngineTargetGenerationDelta* delta = nullptr;
+		std::atomic<uint64_t>* unresolvedPhysicalMutationEpoch = nullptr;
+		uint64_t transitionEpoch = 0;
 		bool captured = false;
 		bool reached = false;
 		bool reconciled = false;
@@ -19314,6 +19322,15 @@ namespace
 		*context->delta =
 			PrepareVREngineTargetGenerationDelta(
 				*context->snapshot);
+		// The hook calls this immediately before entering the native creator.
+		// Publish the irreversible boundary before the creator can replace even
+		// one slot, so a concurrent presentation timeout cannot fail open.
+		if (context->unresolvedPhysicalMutationEpoch &&
+			context->transitionEpoch != 0) {
+			context->unresolvedPhysicalMutationEpoch->store(
+				context->transitionEpoch,
+				std::memory_order_release);
+		}
 		context->captured = true;
 	}
 
@@ -20097,6 +20114,32 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 	} else if (storeRelatchOrigin) {
 		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(0, std::memory_order_release);
 	}
+	const uint64_t queuedRecoveryEpoch =
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(
+			std::memory_order_acquire);
+	if (queuedRecoveryEpoch != 0) {
+		const uint64_t currentLoadingSerial =
+			g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
+		std::scoped_lock controllerLock(
+			vrRenderScaleTransitionControllerMutex);
+		auto& recovery =
+			vrRenderScaleTransitionController.postLoadRecovery;
+		if (VRVendorRelatchPolicy::CanBindPostLoadRecoveryTransition({
+				.recoveryActive = recovery.active,
+				.physicalMutationStarted = recovery.engineTargetCreateEntered,
+				.recoveryEpoch = recovery.recoveryEpoch,
+				.expectedRecoveryEpoch = queuedRecoveryEpoch,
+				.transitionEpoch = recovery.transitionEpoch,
+				.expectedTransitionEpoch = relatchEpoch,
+				.loadingSerial = recovery.loadingSerial,
+				.currentLoadingSerial = currentLoadingSerial,
+			})) {
+			if (recovery.transitionEpoch == 0) {
+				recovery.transitionEpoch = relatchEpoch;
+				++vrRenderScaleTransitionController.revision;
+			}
+		}
+	}
 	if (IsVRRenderScaleRecoveryOrigin(effectiveOrigin) ||
 		(effectiveOrigin == VRUpscalingTransitionOrigin::PostLoadSync &&
 			a_recoverySnapshot &&
@@ -20236,6 +20279,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	const bool previewStabilizerDoorHandoff =
 		IsCurrentVRFpsStabilizerDoorHandoff(*this, previewRelatchEpoch);
+	const uint64_t presentationDeadlineFallbackLoadingSerial =
+		vrPostLoadCompositorDeadlineFallbackLoadingSerial.load(
+			std::memory_order_acquire);
+	const bool presentationDeadlineFallbackRequested =
+		presentationDeadlineFallbackLoadingSerial != 0 &&
+		presentationDeadlineFallbackLoadingSerial ==
+			g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
 	const auto markPreviewRelatchQueued = [&](uint32_t a_delayFrames = 0) {
 		if (previewStabilizerDoorHandoff) {
 			// Preview deferrals may run after a busy, D3D, or OOM retry has
@@ -20253,12 +20303,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		MarkPerfModeRenderTargetRecreateQueued(a_delayFrames);
 	};
 
-	if (DeferVRPerfModeBootLatchForPendingDLSS(*this)) {
+	if (!presentationDeadlineFallbackRequested &&
+		DeferVRPerfModeBootLatchForPendingDLSS(*this)) {
 		markPreviewRelatchQueued();
 		return false;
 	}
 
-	if (ShouldDeferVRUpscalingTransitionSettings()) {
+	if (!presentationDeadlineFallbackRequested &&
+		ShouldDeferVRUpscalingTransitionSettings()) {
 		markPreviewRelatchQueued();
 		return false;
 	}
@@ -20285,7 +20337,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchActivationTarget);
 
 	static bool loggedRelatchRuntimeActivationDefer = false;
-	if (startupActivationProtection && !CanStartVRRenderScaleRuntime(*this)) {
+	if (!presentationDeadlineFallbackRequested &&
+		startupActivationProtection && !CanStartVRRenderScaleRuntime(*this)) {
 		markPreviewRelatchQueued(kVRRenderScalePostLoadSettleRetryFrames);
 		if (!loggedRelatchRuntimeActivationDefer) {
 			logger::debug("[VRRenderScale] Render-target relatch waiting for VR runtime activation context to clear.");
@@ -20295,7 +20348,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	loggedRelatchRuntimeActivationDefer = false;
 
-	if (ShouldWaitForPerfModeRenderTargetRecreateDelay() &&
+	if (!presentationDeadlineFallbackRequested &&
+		ShouldWaitForPerfModeRenderTargetRecreateDelay() &&
 		!TryResumeVRLowPeakNativeRestoreAfterProvenRetirement(
 			previewRelatchEpoch)) {
 		return false;
@@ -20304,7 +20358,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	// promotes a higher-priority origin. Run its absolute clock before generic
 	// cleanup waits so a stuck fence cannot hide the terminal pre-mutation
 	// fallback forever.
-	if (previewPostLoadRecoveryEpoch != 0 &&
+	if (!presentationDeadlineFallbackRequested &&
+		previewPostLoadRecoveryEpoch != 0 &&
 		!previewStabilizerDoorHandoff &&
 		!CanAdmitVRRenderScalePostLoadRecoveryRelatch(
 			previewPostLoadRecoveryEpoch,
@@ -20321,7 +20376,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		recoveryAfterPreviewAdmission.settleDeadlineExpired;
 
 	static bool loggedRelatchMemoryReliefCleanupDefer = false;
-	if (!previewRecoveryDeadlineExpired &&
+	if (!presentationDeadlineFallbackRequested &&
+		!previewRecoveryDeadlineExpired &&
 		IsVRRenderScaleMemoryReliefActive() &&
 		!vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire) &&
 		HasVRRenderScaleMemoryReliefCleanupPending()) {
@@ -20336,12 +20392,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	loggedRelatchMemoryReliefCleanupDefer = false;
 
-	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition()) {
+	if (!presentationDeadlineFallbackRequested &&
+		IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition()) {
 		return false;
 	}
 
 	static bool loggedRelatchLoadingPresentation = false;
-	if (startupActivationProtection && IsVRLoadingPresentationContextActive(state)) {
+	if (!presentationDeadlineFallbackRequested &&
+		startupActivationProtection && IsVRLoadingPresentationContextActive(state)) {
 		markPreviewRelatchQueued(kVRRenderScalePostLoadSettleRetryFrames);
 		if (!loggedRelatchLoadingPresentation) {
 			logger::debug("[VRRenderScale] Render-target relatch waiting for loading presentation context to clear.");
@@ -20362,7 +20420,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	// validation through the complete physical transaction.
 	const std::unique_lock relatchQueueOwnershipLock(
 		perfModeRenderTargetRecreateQueueMutex);
-	if (VRVendorRelatchPolicy::ShouldDeferPhysicalRelatchForStereo(
+	if (!presentationDeadlineFallbackRequested &&
+		VRVendorRelatchPolicy::ShouldDeferPhysicalRelatchForStereo(
 			state->frameCount,
 			submitStageVendorAdmissionFrame,
 			submitStageVendorAdmissionEyeMask,
@@ -20449,7 +20508,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			globals::state ?
 				std::max(globals::state->frameCount, 1u) :
 				queuedFrame;
-		if (queuedFrame != 0 &&
+		if (!presentationDeadlineFallbackRequested &&
+			queuedFrame != 0 &&
 			currentFrame - queuedFrame < queuedDelay) {
 			return false;
 		}
@@ -20489,7 +20549,38 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	const bool rc94PostLoadDoorRelatch =
 		IsCurrentVRFpsStabilizerDoorHandoff(*this, relatchEpoch);
-	if (postLoadRecoveryEpoch != 0 &&
+	if (presentationDeadlineFallbackRequested) {
+		if (postLoadRecoveryEpoch == 0)
+			postLoadRecoveryEpoch = BeginVRRenderScalePostLoadRecovery();
+		const uint64_t currentLoadingSerial =
+			g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
+		{
+			std::scoped_lock controllerLock(
+				vrRenderScaleTransitionControllerMutex);
+			auto& recovery =
+				vrRenderScaleTransitionController.postLoadRecovery;
+			if (VRVendorRelatchPolicy::CanBindPostLoadRecoveryTransition({
+					.recoveryActive = recovery.active,
+					.physicalMutationStarted = recovery.engineTargetCreateEntered,
+					.recoveryEpoch = recovery.recoveryEpoch,
+					.expectedRecoveryEpoch = postLoadRecoveryEpoch,
+					.transitionEpoch = recovery.transitionEpoch,
+					.expectedTransitionEpoch = relatchEpoch,
+					.loadingSerial = recovery.loadingSerial,
+					.currentLoadingSerial = currentLoadingSerial,
+				})) {
+				if (recovery.transitionEpoch == 0) {
+					recovery.transitionEpoch = relatchEpoch;
+					++vrRenderScaleTransitionController.revision;
+				}
+			}
+		}
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(
+			postLoadRecoveryEpoch,
+			std::memory_order_release);
+	}
+	if (!presentationDeadlineFallbackRequested &&
+		postLoadRecoveryEpoch != 0 &&
 		!rc94PostLoadDoorRelatch &&
 		!CanAdmitVRRenderScalePostLoadRecoveryRelatch(
 			postLoadRecoveryEpoch,
@@ -21340,6 +21431,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			a_reason ? a_reason : "admission rejected");
 		return false;
 	};
+	if (presentationDeadlineFallbackRequested) {
+		return retainStableContractAfterExpiredPostLoadRecovery(
+			"presentation deadline expired before physical mutation");
+	}
 	auto markActiveVendorRuntimeDirtyAfterRelatchFailure = [&]() {
 		const auto& activeBootContract = perfMode.GetBootSnapshot();
 		const auto activeMethod =
@@ -22294,10 +22389,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				postLoadRecoveryEpoch,
 				std::memory_order_release);
 		}
+		const auto recoveryBeforeDoorFallback =
+			GetVRRenderScaleTransitionSnapshot().postLoadRecovery;
+		const bool doorPhysicalMutationStarted =
+			engineTargetCreateEntered ||
+			(postLoadRecoveryEpoch != 0 &&
+				recoveryBeforeDoorFallback.active &&
+				recoveryBeforeDoorFallback.recoveryEpoch == postLoadRecoveryEpoch &&
+				recoveryBeforeDoorFallback.transitionEpoch == relatchEpoch &&
+				recoveryBeforeDoorFallback.engineTargetCreateEntered);
 		if (VRVendorRelatchPolicy::ShouldRetainStableDoorContract(
 				rc94PostLoadDoorRelatch,
 				doorHandoffHardSafetyDeferred,
-				engineTargetCreateEntered)) {
+				doorPhysicalMutationStarted)) {
 			if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
 				requeueRelatch(
 					kVRUpscalingTransitionApplyDelayFrames,
@@ -22872,7 +22976,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			VREngineTargetRecreateCheckpointContext engineTargetCheckpoint{
 				.upscaling = this,
 				.snapshot = std::addressof(engineTargetSnapshot),
-				.delta = std::addressof(engineTargetDelta)
+				.delta = std::addressof(engineTargetDelta),
+				.unresolvedPhysicalMutationEpoch =
+					std::addressof(vrRenderScaleUnresolvedPhysicalMutationEpoch),
+				.transitionEpoch = relatchEpoch
 			};
 			auto queueEngineTargetRetirement = [&]() {
 				if (!engineTargetCheckpoint.reconciled)
@@ -23280,6 +23387,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		DeferVRRenderScalePostLoadRecoveryUntilStable(postLoadRecoveryEpoch, relatchEpoch);
 	} else if (postLoadRecoveryEpoch != 0) {
 		CompleteVRRenderScalePostLoadRecovery(postLoadRecoveryEpoch, relatchEpoch);
+	}
+	if (!IsVRInitialLoadPresentationProtectionActive() &&
+		!IsVRPostLoadCompositorHoldActive()) {
+		uint64_t expectedMutationEpoch = relatchEpoch;
+		(void)vrRenderScaleUnresolvedPhysicalMutationEpoch.compare_exchange_strong(
+			expectedMutationEpoch,
+			0,
+			std::memory_order_acq_rel,
+			std::memory_order_acquire);
 	}
 	clearRelatchRetryLogs();
 	if (emitDiagLogs) {
@@ -24550,20 +24666,42 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 
 uint64_t Upscaling::BeginVRRenderScalePostLoadRecovery()
 {
-	uint64_t recoveryEpoch = nextVRRenderScalePostLoadRecoveryEpoch.fetch_add(1, std::memory_order_acq_rel);
-	if (recoveryEpoch == 0)
-		recoveryEpoch = nextVRRenderScalePostLoadRecoveryEpoch.fetch_add(1, std::memory_order_acq_rel);
-
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
+	const uint64_t currentLoadingSerial =
+		g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
+	uint64_t recoveryEpoch = 0;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		const auto memory = vrRenderScaleTransitionController.memory;
 		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+		const uint64_t unresolvedMutationEpoch =
+			vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+				std::memory_order_acquire);
+		if (recovery.active &&
+			(recovery.engineTargetCreateEntered || unresolvedMutationEpoch != 0)) {
+			// A new load may begin while a previous physical generation is still
+			// converging. Do not erase the irreversible boundary. Transfer the cover
+			// serial to the new load and keep advancing the existing exact epoch.
+			if (recovery.transitionEpoch == 0)
+				recovery.transitionEpoch = unresolvedMutationEpoch;
+			recovery.engineTargetCreateEntered = true;
+			recovery.loadingSerial = currentLoadingSerial;
+			++vrRenderScaleTransitionController.revision;
+			return recovery.recoveryEpoch;
+		}
+
+		recoveryEpoch = nextVRRenderScalePostLoadRecoveryEpoch.fetch_add(
+			1,
+			std::memory_order_acq_rel);
+		if (recoveryEpoch == 0) {
+			recoveryEpoch = nextVRRenderScalePostLoadRecoveryEpoch.fetch_add(
+				1,
+				std::memory_order_acq_rel);
+		}
 		recovery = {};
 		recovery.active = true;
 		recovery.recoveryEpoch = recoveryEpoch;
-		recovery.loadingSerial =
-			g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
+		recovery.loadingSerial = currentLoadingSerial;
 		recovery.startFrame = frame;
 		recovery.baselineUsageBytes = memory.currentUsageBytes;
 		recovery.peakUsageBytes = memory.currentUsageBytes;
@@ -37247,6 +37385,9 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 		static_cast<uint32_t>(VRPostLoadCompositorHoldRoute::None),
 		std::memory_order_release);
 	vrPostLoadCompositorHoldLoadingSerial.store(0, std::memory_order_release);
+	vrPostLoadCompositorDeadlineFallbackLoadingSerial.store(
+		0,
+		std::memory_order_release);
 	vrPostLoadCompositorHoldLoadingMenuClosed.store(false, std::memory_order_release);
 	vrPostLoadCompositorHoldStartFrame.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldStartTickMs.store(0, std::memory_order_release);
@@ -37294,6 +37435,14 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 void Upscaling::FinishVRInitialLoadPresentationProtectionLocked(
 	bool a_preservePublishedQuarantine)
 {
+	if (vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+			std::memory_order_acquire) != 0) {
+		// A timeout, failed keepalive, or unrelated reset must not expose a target
+		// generation whose native creator has run but whose coherent stereo result
+		// has not yet been accepted. The exact stereo release clears this boundary
+		// before entering here.
+		return;
+	}
 	const uint32_t exactCycleOccupiedEyeMask =
 		vrPostLoadCompositorKeepaliveOccupiedEyeMask |
 		vrPostLoadCompositorReleaseOccupiedEyeMask |
@@ -37404,20 +37553,65 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 		if (holdStartTickMs != 0 &&
 			hardDeadlineMs != 0 &&
 			currentTickMs - holdStartTickMs >= hardDeadlineMs) {
+			const bool physicalMutationUnresolved =
+				vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+					std::memory_order_acquire) != 0;
+			const bool transitionPendingOrApplying =
+				pendingPerfModeRenderTargetRecreate.load(
+					std::memory_order_acquire) ||
+				perfModeRenderTargetRecreateInProgress.load(
+					std::memory_order_acquire) ||
+				vrPostLoadCompositorDeadlineFallbackLoadingSerial.load(
+					std::memory_order_acquire) != 0;
+			const auto deadlineAction =
+				VRVendorRelatchPolicy::SelectPresentationDeadlineAction(
+					transitionPendingOrApplying,
+					physicalMutationUnresolved);
+			if (deadlineAction ==
+				VRVendorRelatchPolicy::PresentationDeadlineAction::ContinueCoveredRecovery) {
+				// The native creator has crossed the irreversible boundary. A bounded
+				// visible timeout is unsafe here: keep the black compositor contract
+				// while serialized recovery converges on a coherent stereo generation.
+				if (vrPostLoadCompositorInFlightSubmitCount == 0) {
+					(void)vrPostLoadCompositorCycleDrainPending.exchange(
+						false,
+						std::memory_order_acq_rel);
+				}
+				return;
+			}
+			if (deadlineAction ==
+				VRVendorRelatchPolicy::PresentationDeadlineAction::RequestPreMutationFallback) {
+				const uint64_t loadingSerial =
+					vrPostLoadCompositorHoldLoadingSerial.load(
+						std::memory_order_acquire);
+				uint64_t expectedSerial = 0;
+				if (loadingSerial != 0 &&
+					vrPostLoadCompositorDeadlineFallbackLoadingSerial.compare_exchange_strong(
+						expectedSerial,
+						loadingSerial,
+						std::memory_order_acq_rel,
+						std::memory_order_acquire)) {
+					logger::warn(
+						"[VRRenderScale][PostLoad] Presentation hard deadline requested pre-mutation stable fallback loadingSerial={} elapsedMs={} hardDeadlineMs={}.",
+						loadingSerial,
+						currentTickMs - holdStartTickMs,
+						hardDeadlineMs);
+				}
+				if (vrPostLoadCompositorInFlightSubmitCount == 0) {
+					(void)vrPostLoadCompositorCycleDrainPending.exchange(
+						false,
+						std::memory_order_acq_rel);
+				}
+				return;
+			}
 			if (ShouldEmitUpscalingDiagLogs()) {
 				logger::debug(
-					"[Upscaling][Diag] Released post-load compositor hold at stereo-cycle boundary after hard deadline elapsedMs={} softDeadlineMs={} graceMs={} hardDeadlineMs={}.",
+					"[Upscaling][Diag] Released proven-idle post-load compositor hold at stereo-cycle boundary after hard deadline elapsedMs={} softDeadlineMs={} graceMs={} hardDeadlineMs={}.",
 					currentTickMs - holdStartTickMs,
 					softDeadlineMs,
 					kVRPostLoadCompositorHoldHardDeadlineGraceMilliseconds,
 					hardDeadlineMs);
 			}
-			// Crossing the soft deadline alone deliberately leaves Holding unchanged:
-			// vendor work and exact stereo validation continue behind the black
-			// keepalive throughout the bounded grace. Fail open at the hard deadline
-			// only before either eye of this compositor cycle submits. Relatch and
-			// recovery ownership remain untouched and continue behind the visible
-			// world after the bounded presentation hold ends.
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			const auto probeRoute =
 				holdRoute == VRPostLoadCompositorHoldRoute::MainMenuLoad ?
@@ -39186,6 +39380,12 @@ Upscaling::CompleteVRPostLoadCompositorSubmit(
 		vrPostLoadCompositorReleaseOccupiedEpoch[0] == a_releaseToken &&
 		vrPostLoadCompositorReleaseOccupiedEpoch[1] == a_releaseToken;
 	if (releasedMask == 0x3u && exactStereoRelease) {
+		// The exact pair proves that the current physical generation is coherent.
+		// Clear the mutation boundary before Finish; all other Finish paths remain
+		// unable to expose an unresolved generation.
+		vrRenderScaleUnresolvedPhysicalMutationEpoch.store(
+			0,
+			std::memory_order_release);
 		const uint32_t currentScopeContribution =
 			a_initialLoadProtectionEpochAtSubmitEntry != 0 ? 1u : 0u;
 		if (vrPostLoadCompositorInFlightSubmitCount == currentScopeContribution) {
@@ -39406,6 +39606,76 @@ bool Upscaling::IsSubmitStageDeviceLost() const
 	return submitStageDeviceLost.load(std::memory_order_acquire);
 }
 
+void Upscaling::SignalVRRenderScaleTerminalDeviceLoss(
+	HRESULT a_result,
+	HRESULT a_deviceReason,
+	uint64_t a_mutationEpoch,
+	const char* a_context)
+{
+	if (!VRVendorRelatchPolicy::ShouldTerminateAfterPostMutationDeviceLoss(
+			true,
+			a_mutationEpoch)) {
+		return;
+	}
+
+	bool expected = false;
+	if (!vrRenderScaleTerminalDeviceLossSignaled.compare_exchange_strong(
+			expected,
+			true,
+			std::memory_order_acq_rel,
+			std::memory_order_acquire)) {
+		return;
+	}
+
+	const uint32_t frame = globals::state ?
+		std::max(globals::state->frameCount, 1u) :
+		0u;
+	const uint64_t transitionEpoch =
+		pendingPerfModeRenderTargetRecreateEpoch.load(
+			std::memory_order_acquire);
+	const uint64_t recoveryEpoch =
+		pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(
+			std::memory_order_acquire);
+	try {
+		logger::critical(
+			"[VRRenderScale][FATAL] Confirmed D3D11 device loss after physical target mutation; no coherent in-process presentation remains. Intentionally raising noncontinuable exception 0x{:08X} for crash logging. context={} mutationEpoch={} transitionEpoch={} recoveryEpoch={} frame={} result=0x{:08X} deviceReason=0x{:08X}",
+			static_cast<uint32_t>(kVRRenderScaleTerminalDeviceLossExceptionCode),
+			a_context && *a_context ? a_context : "render-scale work",
+			a_mutationEpoch,
+			transitionEpoch,
+			recoveryEpoch,
+			frame,
+			static_cast<uint32_t>(a_result),
+			static_cast<uint32_t>(a_deviceReason));
+		if (const auto log = spdlog::default_logger())
+			log->flush();
+	} catch (...) {
+		// Failure reporting must not turn an unrecoverable device loss back into
+		// an indefinite black presentation.
+	}
+
+	const ULONG_PTR exceptionArguments[]{
+		static_cast<ULONG_PTR>(a_mutationEpoch),
+		static_cast<ULONG_PTR>(static_cast<uint32_t>(a_result)),
+		static_cast<ULONG_PTR>(static_cast<uint32_t>(a_deviceReason)),
+		static_cast<ULONG_PTR>(transitionEpoch),
+		static_cast<ULONG_PTR>(recoveryEpoch),
+		static_cast<ULONG_PTR>(frame),
+	};
+	::RaiseException(
+		kVRRenderScaleTerminalDeviceLossExceptionCode,
+		EXCEPTION_NONCONTINUABLE,
+		static_cast<DWORD>(std::size(exceptionArguments)),
+		exceptionArguments);
+
+	// RaiseException should never return for a noncontinuable exception. Keep a
+	// hard final fallback in case an injected exception handler violates that
+	// contract; at this point continued execution can only expose corrupt state.
+	::TerminateProcess(
+		::GetCurrentProcess(),
+		static_cast<UINT>(kVRRenderScaleTerminalDeviceLossExceptionCode));
+}
+
 void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context)
 {
 	const HRESULT deviceReason = GetD3DDeviceRemovedReason();
@@ -39416,6 +39686,18 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 
 	RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind::DeviceLost);
 	const bool alreadyMarked = submitStageDeviceLost.exchange(true, std::memory_order_acq_rel);
+	const uint64_t unresolvedMutationEpoch =
+		vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+			std::memory_order_acquire);
+	if (VRVendorRelatchPolicy::ShouldTerminateAfterPostMutationDeviceLoss(
+			deviceReportedLoss || IsD3DDeviceRemovedResult(a_result),
+			unresolvedMutationEpoch)) {
+		SignalVRRenderScaleTerminalDeviceLoss(
+			loggedResult,
+			deviceReason,
+			unresolvedMutationEpoch,
+			a_context);
+	}
 	vrNativeRestorePresentationGuardEpoch.store(
 		0,
 		std::memory_order_release);

@@ -3,7 +3,8 @@
 ## Purpose and status
 
 This branch integrates the local VR memory-stability work and the Render Scale
-fallback fixes on the exact RC203 base (`5542e798`). It was developed in a
+fallback fixes on current upstream `cs-1.7-PL-VR` head `601f9e78` (the RC203
+lineage plus the subsequent VR-menu navigation fix). It was developed in a
 separate worktree so the RC190 memory-investigation tree and its DLL were not
 modified.
 
@@ -36,9 +37,10 @@ contract is available.
     stable profile remains authoritative until the target is physically proven
     and accepted for both eyes.
 -   Loading fade interval and Scaleform time remain frozen until a coherent
-    destination stereo pair is accepted. The transition cover uses a 1000 ms soft
-    deadline, 1500 ms hard/keepalive budget in the current upstream path, and
-    stereo acceptance rather than settings publication.
+    destination stereo pair is accepted. Pre-mutation cancellation is capped at
+    5 seconds for first/main-menu load and 1 second for later transitions. A
+    post-mutation generation remains black until coherent stereo acceptance;
+    the time cap must not expose a partially mutated target.
 -   Non-door post-load recovery has an epoch-owned monotonic admission clock and
     an absolute 120-frame deadline which cleanup or fence stalls cannot restart.
     Two consecutive safe samples remain the normal path. The deadline permits
@@ -65,6 +67,15 @@ contract is available.
 -   Terminal vendor recovery is provider-neutral. FSR-specific request-key
     latching remains FSR-specific; controller recovery outcomes apply to FSR and
     DLSS.
+-   Confirmed D3D11 device removal, reset, hang, or driver-internal failure is
+    treated differently from allocation refusal. If it occurs while the
+    physical-mutation epoch is unresolved, whole-device recovery is unavailable
+    and there is no truthful presentation to expose. The code logs and flushes
+    full transition context, then raises application-defined noncontinuable
+    exception `0xE0525343` so Crash Logger can record an attributable CTD. A
+    process termination call is retained only as the unreachable final fallback.
+    Pre-mutation device loss still follows the existing disabled-device path;
+    OOM, commit rejection, and provider failure never select this fatal policy.
 
 ## Live observations on 2026-08-08
 
@@ -391,6 +402,44 @@ and live testing remain required.
 -   The acceptance helper currently expects a fresh vendor presentation even when
     a test intentionally finishes in native mode; test tooling should make its
     terminal presentation expectation profile-aware.
+-   Explicitly review the final catastrophic policy choice. Once D3D11 reports
+    device removal after physical mutation, this branch deliberately produces a
+    crash-logger-visible CTD instead of leaving an indefinite black apparent
+    hang. Confirm that upstream agrees whole-device recreation is not practical
+    in Skyrim VR and that exception `0xE0525343` is compatible with the crash
+    loggers upstream supports. A modal desktop message is intentionally avoided
+    because it may be invisible in the HMD and resemble the hang it replaces.
+-   Explicitly review the conservative commit constants rather than weakening
+    them incidentally while reviewing the fallback:
+    - `4x estimatedAdditionalBytes` covers ordinary overlap with substantial
+      uncertainty in driver/runtime allocation and resource accounting.
+    - `8x estimatedAdditionalBytes` is used for full-resolution native restore,
+      whose replacement targets and retained stable vendor presentation can
+      overlap at the highest-cost point.
+    - `clamp(commit_limit / 8, 8 GiB, 16 GiB)` reserves meaningful breathing
+      room for Windows, the compositor, drivers, and unrelated applications
+      across small and large commit limits. The lower bound prevents a weak
+      reserve on modest systems; the upper bound avoids making very large page
+      files unusably conservative.
+    These deliberately reject well before actual exhaustion. The current
+    recommendation is to preserve them unless NVIDIA/AMD measurements establish
+    a tighter safe bound; the memory leak under investigation makes reducing
+    the margin especially unattractive.
+
+## Build and fatal-path verification
+
+- Configure and compile with CommonLibSSE-NG tag `v6.1.1`; record the resolved
+  CommonLib commit in the PR verification.
+- Unit policy coverage must prove that the fatal decision requires both a
+  confirmed device loss and a non-zero unresolved physical-mutation epoch.
+- An ordinary preflight rejection, TestLimit commit rejection, OOM before
+  mutation, and provider failure with a healthy D3D11 device must not terminate.
+- A controlled device-removal test after mutation should produce plugin log
+  marker `[VRRenderScale][FATAL]`, exception code `0xE0525343`, and a Crash Logger
+  report whose stack enters `SignalVRRenderScaleTerminalDeviceLoss`.
+- Repeat the live door protocol on AMD/FSR and NVIDIA/DLSS. The fatal test is a
+  separate destructive test and must not be conflated with TestLimit pressure,
+  which should exercise stable-contract retention rather than a CTD.
 
 ## Evidence limits
 

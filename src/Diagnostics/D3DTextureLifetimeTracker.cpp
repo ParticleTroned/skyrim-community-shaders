@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <string>
@@ -20,6 +21,10 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 	{
 		constexpr std::size_t kCapturedStackDepth = 12;
 		constexpr std::uintptr_t kFaceGenTintTextureOffset = 0xA0;
+		constexpr std::size_t kMaxTrackedTextureGroups = 4096;
+		constexpr std::size_t kMaxTrackedLiveTextures = 16384;
+		constexpr std::size_t kMaxCollectedNiSourceTextureOwners = 32768;
+		constexpr std::size_t kMaxNiTextureTraversal = 1'000'000;
 
 		// Private-data GUID used only by this diagnostic build. D3D11 owns one
 		// reference to the attached sentinel for exactly the texture lifetime.
@@ -113,6 +118,32 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		};
 
 		using NiSourceTextureOwners = std::unordered_map<uint64_t, std::vector<NiSourceTextureOwner>>;
+		struct NiSourceTextureOwnerSnapshot
+		{
+			NiSourceTextureOwners owners;
+			uint64_t droppedOwnerCount{};
+			bool traversalLimitReached{};
+		};
+
+		class CriticalSectionGuard
+		{
+		public:
+			explicit CriticalSectionGuard(CRITICAL_SECTION* a_lock) noexcept : lock(a_lock)
+			{
+				EnterCriticalSection(lock);
+			}
+
+			~CriticalSectionGuard()
+			{
+				LeaveCriticalSection(lock);
+			}
+
+			CriticalSectionGuard(const CriticalSectionGuard&) = delete;
+			CriticalSectionGuard& operator=(const CriticalSectionGuard&) = delete;
+
+		private:
+			CRITICAL_SECTION* lock;
+		};
 
 		struct TrackerState
 		{
@@ -124,9 +155,11 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			uint64_t destroyedCount{};
 			uint64_t createdEstimatedBytes{};
 			uint64_t destroyedEstimatedBytes{};
-			uint64_t attachFailures{};
-			uint64_t sentinelAllocationFailures{};
-			uint64_t faceGenAssignmentFailures{};
+			std::atomic_uint64_t attachFailures{ 0 };
+			std::atomic_uint64_t sentinelAllocationFailures{ 0 };
+			std::atomic_uint64_t faceGenAssignmentFailures{ 0 };
+			std::atomic_uint64_t recordingFailures{ 0 };
+			std::atomic_uint64_t droppedTextureRecords{ 0 };
 			std::unordered_map<DescriptorKey, GroupStats, DescriptorHash> groups;
 			std::unordered_map<uint64_t, LiveTextureRecord> liveTextures;
 			std::unordered_map<uint64_t, FaceGenTintAssignment> faceGenTintAssignments;
@@ -171,9 +204,9 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			uint64_t offset = 0;
 			HMODULE moduleHandle = nullptr;
 			if (a_address != 0 && GetModuleHandleExA(
-					GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-					reinterpret_cast<LPCSTR>(a_address),
-					&moduleHandle)) {
+									  GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+									  reinterpret_cast<LPCSTR>(a_address),
+									  &moduleHandle)) {
 				char modulePath[MAX_PATH]{};
 				if (GetModuleFileNameA(moduleHandle, modulePath, MAX_PATH) != 0) {
 					module = modulePath;
@@ -319,7 +352,7 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			return bytes * std::max(a_desc.ArraySize, 1u) * std::max(a_desc.SampleDesc.Count, 1u);
 		}
 
-		NiSourceTextureOwners CollectNiSourceTextureOwners()
+		NiSourceTextureOwnerSnapshot CollectNiSourceTextureOwners()
 		{
 			// Skyrim maintains all live NiTexture instances in this locked intrusive
 			// list. These VR offsets are confirmed both by CommonLib and by the
@@ -328,26 +361,33 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			static REL::Relocation<std::uintptr_t> niSourceTextureVtable{ RE::NiSourceTexture::VTABLE[0] };
 			auto* textureListLock = reinterpret_cast<CRITICAL_SECTION*>(REL::Offset(0x316C000).address());
 
-			NiSourceTextureOwners owners;
-			EnterCriticalSection(textureListLock);
+			NiSourceTextureOwnerSnapshot snapshot;
+			std::size_t capturedOwnerCount = 0;
+			CriticalSectionGuard textureListGuard(textureListLock);
 			auto* texture = *textureListHead;
-			for (std::size_t visited = 0; texture && visited < 1'000'000; ++visited) {
+			std::size_t visited = 0;
+			for (; texture && visited < kMaxNiTextureTraversal; ++visited) {
 				const auto vtable = *reinterpret_cast<const std::uintptr_t*>(texture);
 				if (vtable == niSourceTextureVtable.address()) {
 					auto* sourceTexture = static_cast<RE::NiSourceTexture*>(texture);
 					if (sourceTexture->rendererTexture && sourceTexture->rendererTexture->texture) {
-						const auto resource = reinterpret_cast<uint64_t>(sourceTexture->rendererTexture->texture);
-						owners[resource].push_back({
-							reinterpret_cast<uint64_t>(sourceTexture),
-							sourceTexture->GetRefCount(),
-							sourceTexture->name.c_str(),
-						});
+						if (capturedOwnerCount < kMaxCollectedNiSourceTextureOwners) {
+							const auto resource = reinterpret_cast<uint64_t>(sourceTexture->rendererTexture->texture);
+							snapshot.owners[resource].push_back({
+								reinterpret_cast<uint64_t>(sourceTexture),
+								sourceTexture->GetRefCount(),
+								sourceTexture->name.c_str(),
+							});
+							++capturedOwnerCount;
+						} else {
+							++snapshot.droppedOwnerCount;
+						}
 					}
 				}
 				texture = texture->next;
 			}
-			LeaveCriticalSection(textureListLock);
-			return owners;
+			snapshot.traversalLimitReached = texture != nullptr;
+			return snapshot;
 		}
 
 		void RecordDestroyed(
@@ -356,19 +396,23 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			uint64_t a_bytes,
 			uint64_t a_texture) noexcept
 		{
-			auto& state = GetState();
-			std::scoped_lock lock(state.mutex);
-			if (!state.active.load(std::memory_order_relaxed) ||
-				state.sessionID.load(std::memory_order_relaxed) != a_sessionID)
-				return;
-			auto it = state.groups.find(a_key);
-			if (it == state.groups.end())
-				return;
-			++it->second.destroyedCount;
-			++state.destroyedCount;
-			state.destroyedEstimatedBytes += a_bytes;
-			state.liveTextures.erase(a_texture);
-			state.faceGenTintAssignments.erase(a_texture);
+			try {
+				auto& state = GetState();
+				std::scoped_lock lock(state.mutex);
+				if (!state.active.load(std::memory_order_relaxed) ||
+					state.sessionID.load(std::memory_order_relaxed) != a_sessionID)
+					return;
+				auto it = state.groups.find(a_key);
+				if (it == state.groups.end())
+					return;
+				++it->second.destroyedCount;
+				++state.destroyedCount;
+				state.destroyedEstimatedBytes += a_bytes;
+				state.liveTextures.erase(a_texture);
+				state.faceGenTintAssignments.erase(a_texture);
+			} catch (...) {
+				// Destruction callbacks must never escape into the D3D11 runtime.
+			}
 		}
 
 		class LifetimeSentinel final : public IUnknown
@@ -433,9 +477,11 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		state.destroyedCount = 0;
 		state.createdEstimatedBytes = 0;
 		state.destroyedEstimatedBytes = 0;
-		state.attachFailures = 0;
-		state.sentinelAllocationFailures = 0;
-		state.faceGenAssignmentFailures = 0;
+		state.attachFailures.store(0, std::memory_order_relaxed);
+		state.sentinelAllocationFailures.store(0, std::memory_order_relaxed);
+		state.faceGenAssignmentFailures.store(0, std::memory_order_relaxed);
+		state.recordingFailures.store(0, std::memory_order_relaxed);
+		state.droppedTextureRecords.store(0, std::memory_order_relaxed);
 		state.cohort.store(0, std::memory_order_relaxed);
 		state.groups.clear();
 		state.liveTextures.clear();
@@ -464,9 +510,11 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		state.destroyedCount = 0;
 		state.createdEstimatedBytes = 0;
 		state.destroyedEstimatedBytes = 0;
-		state.attachFailures = 0;
-		state.sentinelAllocationFailures = 0;
-		state.faceGenAssignmentFailures = 0;
+		state.attachFailures.store(0, std::memory_order_relaxed);
+		state.sentinelAllocationFailures.store(0, std::memory_order_relaxed);
+		state.faceGenAssignmentFailures.store(0, std::memory_order_relaxed);
+		state.recordingFailures.store(0, std::memory_order_relaxed);
+		state.droppedTextureRecords.store(0, std::memory_order_relaxed);
 		state.groups.clear();
 		state.liveTextures.clear();
 		state.faceGenTintAssignments.clear();
@@ -493,50 +541,108 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		const D3D11_TEXTURE2D_DESC& a_desc,
 		std::uintptr_t a_caller) noexcept
 	{
-		auto& state = GetState();
-		if (!a_texture || !state.active.load(std::memory_order_acquire))
-			return;
+		TrackerState* statePtr = nullptr;
+		uint64_t sessionID = 0;
+		try {
+			statePtr = std::addressof(GetState());
+			auto& state = *statePtr;
+			if (!a_texture || !state.active.load(std::memory_order_acquire))
+				return;
 
-		const uint64_t sessionID = state.sessionID.load(std::memory_order_acquire);
-		const uint32_t cohort = state.cohort.load(std::memory_order_acquire);
-		std::array<void*, kCapturedStackDepth> rawStack{};
-		const auto rawStackDepth = CaptureStackBackTrace(
-			0,
-			static_cast<DWORD>(rawStack.size()),
-			rawStack.data(),
-			nullptr);
-		std::array<uint64_t, kCapturedStackDepth> stack{};
-		for (uint32_t index = 0; index < rawStackDepth; ++index)
-			stack[index] = reinterpret_cast<uint64_t>(rawStack[index]);
-		const DescriptorKey key = MakeKey(a_desc, cohort, a_caller, stack, rawStackDepth);
-		const uint64_t bytes = EstimateBytes(a_desc);
-		const auto textureAddress = reinterpret_cast<uint64_t>(a_texture);
-		auto* sentinel = new (std::nothrow) LifetimeSentinel(sessionID, key, bytes, textureAddress);
-		if (!sentinel) {
-			std::scoped_lock lock(state.mutex);
-			if (state.active.load(std::memory_order_relaxed) && state.sessionID.load(std::memory_order_relaxed) == sessionID)
-				++state.sentinelAllocationFailures;
-			return;
-		}
-
-		const HRESULT attached = a_texture->SetPrivateDataInterface(kLifetimeSentinelGuid, sentinel);
-		if (SUCCEEDED(attached)) {
-			std::scoped_lock lock(state.mutex);
-			if (state.active.load(std::memory_order_relaxed) && state.sessionID.load(std::memory_order_relaxed) == sessionID) {
-				auto& group = state.groups[key];
-				group.estimatedBytesPerTexture = bytes;
-				++group.createdCount;
-				++state.createdCount;
-				state.createdEstimatedBytes += bytes;
-				state.liveTextures.insert_or_assign(textureAddress, LiveTextureRecord{ key, bytes });
-				sentinel->Arm();
+			sessionID = state.sessionID.load(std::memory_order_acquire);
+			const uint32_t cohort = state.cohort.load(std::memory_order_acquire);
+			std::array<void*, kCapturedStackDepth> rawStack{};
+			const auto rawStackDepth = CaptureStackBackTrace(
+				0,
+				static_cast<DWORD>(rawStack.size()),
+				rawStack.data(),
+				nullptr);
+			std::array<uint64_t, kCapturedStackDepth> stack{};
+			for (uint32_t index = 0; index < rawStackDepth; ++index)
+				stack[index] = reinterpret_cast<uint64_t>(rawStack[index]);
+			const DescriptorKey key = MakeKey(a_desc, cohort, a_caller, stack, rawStackDepth);
+			const uint64_t bytes = EstimateBytes(a_desc);
+			const auto textureAddress = reinterpret_cast<uint64_t>(a_texture);
+			auto* sentinel = new (std::nothrow) LifetimeSentinel(sessionID, key, bytes, textureAddress);
+			if (!sentinel) {
+				if (state.active.load(std::memory_order_relaxed) &&
+					state.sessionID.load(std::memory_order_relaxed) == sessionID) {
+					state.sentinelAllocationFailures.fetch_add(1, std::memory_order_relaxed);
+					state.droppedTextureRecords.fetch_add(1, std::memory_order_relaxed);
+				}
+				return;
 			}
-		} else {
+			struct SentinelReference
+			{
+				LifetimeSentinel* value;
+				~SentinelReference() { value->Release(); }
+			} sentinelReference{ sentinel };
+
 			std::scoped_lock lock(state.mutex);
-			if (state.active.load(std::memory_order_relaxed) && state.sessionID.load(std::memory_order_relaxed) == sessionID)
-				++state.attachFailures;
+			if (!state.active.load(std::memory_order_relaxed) ||
+				state.sessionID.load(std::memory_order_relaxed) != sessionID) {
+				return;
+			}
+
+			auto groupIt = state.groups.find(key);
+			bool insertedGroup = false;
+			if (groupIt == state.groups.end()) {
+				if (state.groups.size() >= kMaxTrackedTextureGroups) {
+					state.droppedTextureRecords.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
+				auto inserted = state.groups.try_emplace(key);
+				groupIt = inserted.first;
+				insertedGroup = inserted.second;
+			}
+
+			if (state.liveTextures.contains(textureAddress) ||
+				state.liveTextures.size() >= kMaxTrackedLiveTextures) {
+				if (insertedGroup)
+					state.groups.erase(groupIt);
+				state.droppedTextureRecords.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+
+			try {
+				state.liveTextures.try_emplace(textureAddress, LiveTextureRecord{ key, bytes });
+			} catch (...) {
+				if (insertedGroup)
+					state.groups.erase(groupIt);
+				throw;
+			}
+
+			HRESULT attached = E_FAIL;
+			try {
+				attached = a_texture->SetPrivateDataInterface(kLifetimeSentinelGuid, sentinel);
+			} catch (...) {
+				state.liveTextures.erase(textureAddress);
+				if (insertedGroup)
+					state.groups.erase(groupIt);
+				throw;
+			}
+			if (FAILED(attached)) {
+				state.liveTextures.erase(textureAddress);
+				if (insertedGroup)
+					state.groups.erase(groupIt);
+				state.attachFailures.fetch_add(1, std::memory_order_relaxed);
+				state.droppedTextureRecords.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+
+			auto& group = groupIt->second;
+			group.estimatedBytesPerTexture = bytes;
+			++group.createdCount;
+			++state.createdCount;
+			state.createdEstimatedBytes += bytes;
+			sentinel->Arm();
+		} catch (...) {
+			if (statePtr && statePtr->active.load(std::memory_order_relaxed) &&
+				(sessionID == 0 || statePtr->sessionID.load(std::memory_order_relaxed) == sessionID)) {
+				statePtr->recordingFailures.fetch_add(1, std::memory_order_relaxed);
+				statePtr->droppedTextureRecords.fetch_add(1, std::memory_order_relaxed);
+			}
 		}
-		sentinel->Release();
 	}
 
 	void OnFaceGenTintAssigned(
@@ -546,12 +652,15 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		RE::BGSHeadPart* a_headPart,
 		RE::TESNPC* a_npc) noexcept
 	{
-		auto& state = GetState();
-		if (!a_tintTextureSlot || !a_texture || !state.active.load(std::memory_order_acquire))
-			return;
-
+		TrackerState* statePtr = nullptr;
+		uint64_t sessionID = 0;
 		try {
-			const uint64_t sessionID = state.sessionID.load(std::memory_order_acquire);
+			statePtr = std::addressof(GetState());
+			auto& state = *statePtr;
+			if (!a_tintTextureSlot || !a_texture || !state.active.load(std::memory_order_acquire))
+				return;
+
+			sessionID = state.sessionID.load(std::memory_order_acquire);
 			const uint32_t cohort = state.cohort.load(std::memory_order_acquire);
 			if (!a_texture->rendererTexture || !a_texture->rendererTexture->texture)
 				return;
@@ -573,24 +682,38 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			if (state.active.load(std::memory_order_relaxed) &&
 				state.sessionID.load(std::memory_order_relaxed) == sessionID &&
 				state.liveTextures.contains(d3dTexture)) {
-				state.faceGenTintAssignments.insert_or_assign(d3dTexture, assignment);
+				if (state.faceGenTintAssignments.contains(d3dTexture) ||
+					state.faceGenTintAssignments.size() < kMaxTrackedLiveTextures) {
+					state.faceGenTintAssignments.insert_or_assign(d3dTexture, assignment);
+				} else {
+					state.faceGenAssignmentFailures.fetch_add(1, std::memory_order_relaxed);
+				}
 			}
 		} catch (...) {
-			std::scoped_lock lock(state.mutex);
-			if (state.active.load(std::memory_order_relaxed))
-				++state.faceGenAssignmentFailures;
+			if (statePtr && statePtr->active.load(std::memory_order_relaxed) &&
+				(sessionID == 0 || statePtr->sessionID.load(std::memory_order_relaxed) == sessionID)) {
+				statePtr->faceGenAssignmentFailures.fetch_add(1, std::memory_order_relaxed);
+			}
 		}
 	}
 
 	nlohmann::json BuildStatus()
 	{
+		using json = nlohmann::json;
+		if (!REL::Module::IsVR()) {
+			return json{
+				{ "supported", false },
+				{ "error", "D3D11 texture-lifetime capture requires Skyrim VR" },
+			};
+		}
+
 		// Take Skyrim's texture-list lock before the tracker mutex. A texture
 		// destructor can release its D3D sentinel while removing itself from that
 		// list; this ordering avoids inverting those two locks.
-		const auto niSourceTextureOwners = CollectNiSourceTextureOwners();
+		const auto niSourceTextureOwnerSnapshot = CollectNiSourceTextureOwners();
+		const auto& niSourceTextureOwners = niSourceTextureOwnerSnapshot.owners;
 		auto& state = GetState();
 		std::scoped_lock lock(state.mutex);
-		using json = nlohmann::json;
 		std::unordered_map<DescriptorKey, uint64_t, DescriptorHash> niSourceMatchesByGroup;
 		std::unordered_map<DescriptorKey, uint64_t, DescriptorHash> niSourceMatchBytesByGroup;
 		json nonCurrentNiSourceMatches = json::array();
@@ -643,7 +766,8 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		json groups = json::array();
 		for (const auto& [key, stats] : state.groups) {
 			const uint64_t outstandingCount = stats.createdCount >= stats.destroyedCount ?
-				stats.createdCount - stats.destroyedCount : 0;
+			                                      stats.createdCount - stats.destroyedCount :
+			                                      0;
 			const auto caller = DescribeAddress(key.caller);
 			json callerStack = json::array();
 			for (uint32_t index = 0; index < key.stackDepth && index < key.stack.size(); ++index)
@@ -678,11 +802,14 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		});
 
 		const uint64_t outstandingCount = state.createdCount >= state.destroyedCount ?
-			state.createdCount - state.destroyedCount : 0;
+		                                      state.createdCount - state.destroyedCount :
+		                                      0;
 		const uint64_t outstandingEstimatedBytes =
 			state.createdEstimatedBytes >= state.destroyedEstimatedBytes ?
-				state.createdEstimatedBytes - state.destroyedEstimatedBytes : 0;
+				state.createdEstimatedBytes - state.destroyedEstimatedBytes :
+				0;
 		return json{
+			{ "supported", true },
 			{ "active", state.active.load(std::memory_order_relaxed) },
 			{ "sessionID", state.sessionID.load(std::memory_order_relaxed) },
 			{ "currentCohort", state.cohort.load(std::memory_order_relaxed) },
@@ -692,12 +819,18 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			{ "createdEstimatedBytes", state.createdEstimatedBytes },
 			{ "destroyedEstimatedBytes", state.destroyedEstimatedBytes },
 			{ "outstandingEstimatedBytes", outstandingEstimatedBytes },
-			{ "attachFailures", state.attachFailures },
-			{ "sentinelAllocationFailures", state.sentinelAllocationFailures },
-			{ "faceGenAssignmentFailures", state.faceGenAssignmentFailures },
+			{ "attachFailures", state.attachFailures.load(std::memory_order_relaxed) },
+			{ "sentinelAllocationFailures", state.sentinelAllocationFailures.load(std::memory_order_relaxed) },
+			{ "faceGenAssignmentFailures", state.faceGenAssignmentFailures.load(std::memory_order_relaxed) },
+			{ "recordingFailures", state.recordingFailures.load(std::memory_order_relaxed) },
+			{ "droppedTextureRecords", state.droppedTextureRecords.load(std::memory_order_relaxed) },
+			{ "maxTrackedTextureGroups", kMaxTrackedTextureGroups },
+			{ "maxTrackedLiveTextures", kMaxTrackedLiveTextures },
 			{ "liveTextureRecordCount", state.liveTextures.size() },
 			{ "faceGenTintAssignmentCount", state.faceGenTintAssignments.size() },
 			{ "niSourceTextureResourceCount", niSourceTextureOwners.size() },
+			{ "niSourceTextureOwnerRecordsDropped", niSourceTextureOwnerSnapshot.droppedOwnerCount },
+			{ "niSourceTextureTraversalLimitReached", niSourceTextureOwnerSnapshot.traversalLimitReached },
 			{ "niSourceTextureMatchedCount", niSourceMatchedCount },
 			{ "niSourceTextureMatchedEstimatedBytes", niSourceMatchedEstimatedBytes },
 			{ "nonCurrentNiSourceTextureMatches", std::move(nonCurrentNiSourceMatches) },

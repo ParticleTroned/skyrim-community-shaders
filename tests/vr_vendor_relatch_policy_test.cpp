@@ -230,16 +230,35 @@ namespace
 		for (std::uint32_t bit = 0; bit < 9; ++bit) {
 			LoadingPresentationReleaseAdmission blocked{};
 			switch (bit) {
-			case 0: blocked.engineSaveLoadActivityActive = true; break;
-			case 1: blocked.statePostLoadResetPending = true; break;
-			case 2: blocked.hmdClearMaskDeferred = true; break;
-			case 3: blocked.upscalingPostLoadResetPending = true; break;
-			case 4: blocked.renderTargetRecreatePending = true; break;
-			case 5: blocked.renderTargetRecreateInProgress = true; break;
-			case 6: blocked.upscalingTransitionPending = true; break;
-			case 7: blocked.stabilizerSyncScheduled = true; break;
-			case 8: blocked.stabilizerSyncUnresolved = true; break;
-			default: return false;
+			case 0:
+				blocked.engineSaveLoadActivityActive = true;
+				break;
+			case 1:
+				blocked.statePostLoadResetPending = true;
+				break;
+			case 2:
+				blocked.hmdClearMaskDeferred = true;
+				break;
+			case 3:
+				blocked.upscalingPostLoadResetPending = true;
+				break;
+			case 4:
+				blocked.renderTargetRecreatePending = true;
+				break;
+			case 5:
+				blocked.renderTargetRecreateInProgress = true;
+				break;
+			case 6:
+				blocked.upscalingTransitionPending = true;
+				break;
+			case 7:
+				blocked.stabilizerSyncScheduled = true;
+				break;
+			case 8:
+				blocked.stabilizerSyncUnresolved = true;
+				break;
+			default:
+				return false;
 			}
 			if (IsLoadingPresentationReleaseReady(blocked))
 				return false;
@@ -463,6 +482,8 @@ namespace
 			const bool recreatedResources = (bits & (1u << 2)) != 0;
 			if (UsesVendorEvaluation(vendorEvaluation) != vendorEvaluation ||
 				RequiresFSRCompatibility(vendorEvaluation) != vendorEvaluation ||
+				NeedsFSRResourceRecreate(vendorEvaluation, preservedResources) !=
+					(vendorEvaluation && !preservedResources) ||
 				NeedsDeferredFSRReset(vendorEvaluation, preservedResources, recreatedResources) !=
 					(vendorEvaluation && !preservedResources && !recreatedResources)) {
 				return false;
@@ -1053,7 +1074,7 @@ namespace
 			.timeoutFrames = 120,
 		};
 		if (SelectPostLoadRecoverySettleAction(state) !=
-			PostLoadRecoverySettleAction::WaitForCleanup) {
+			PostLoadRecoverySettleAction::EvaluateDeadlineOnce) {
 			return false;
 		}
 
@@ -1070,15 +1091,20 @@ namespace
 			return false;
 		}
 
-		state.settledSamples = 0;
 		state.currentFrame = 200;
 		if (SelectPostLoadRecoverySettleAction(state) !=
 			PostLoadRecoverySettleAction::EvaluateDeadlineOnce) {
 			return false;
 		}
 
-		// The deadline is owned by cleanup completion, not by the first passing
-		// memory sample; zero or alternating settled samples cannot restart it.
+		// The absolute deadline is owned by the recovery, not cleanup completion or
+		// the first passing sample. Cleanup stalls and changing samples cannot
+		// bypass or restart it once it expires.
+		state.settledSamples = 0;
+		if (SelectPostLoadRecoverySettleAction(state) !=
+			PostLoadRecoverySettleAction::EvaluateDeadlineOnce) {
+			return false;
+		}
 		state.settledSamples = 1;
 		return SelectPostLoadRecoverySettleAction(state) ==
 		       PostLoadRecoverySettleAction::EvaluateDeadlineOnce;
@@ -1089,6 +1115,7 @@ namespace
 		PostLoadRecoveryDeadlineAdmission ready{
 			.deadlineExpired = true,
 			.attemptConsumed = false,
+			.physicalMutationStarted = false,
 			.recoveryOwned = true,
 			.loadingSerialOwned = true,
 			.cleanupAndTrimComplete = true,
@@ -1111,6 +1138,29 @@ namespace
 			PostLoadRecoveryDeadlineAction::NotExpired) {
 			return false;
 		}
+		blocked.physicalMutationStarted = true;
+		if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+			PostLoadRecoveryDeadlineAction::NotExpired) {
+			return false;
+		}
+
+		auto mutated = ready;
+		mutated.physicalMutationStarted = true;
+		if (SelectPostLoadRecoveryDeadlineAction(mutated) !=
+			PostLoadRecoveryDeadlineAction::ContinueMutatedRecovery) {
+			return false;
+		}
+		mutated.attemptConsumed = true;
+		mutated.projectedSystemCommitSafe = false;
+		if (SelectPostLoadRecoveryDeadlineAction(mutated) !=
+			PostLoadRecoveryDeadlineAction::ContinueMutatedRecovery) {
+			return false;
+		}
+		mutated.loadingSerialOwned = false;
+		if (SelectPostLoadRecoveryDeadlineAction(mutated) !=
+			PostLoadRecoveryDeadlineAction::RetainStableContract) {
+			return false;
+		}
 
 		blocked = ready;
 		blocked.attemptConsumed = true;
@@ -1122,22 +1172,91 @@ namespace
 		for (std::uint32_t bit = 0; bit < 10; ++bit) {
 			blocked = ready;
 			switch (bit) {
-			case 0: blocked.recoveryOwned = false; break;
-			case 1: blocked.loadingSerialOwned = false; break;
-			case 2: blocked.cleanupAndTrimComplete = false; break;
-			case 3: blocked.retirementReady = false; break;
-			case 4: blocked.memorySampleFresh = false; break;
-			case 5: blocked.pressureAcceptable = false; break;
-			case 6: blocked.gpuHeadroomSufficient = false; break;
-			case 7: blocked.projectedSystemCommitSafe = false; break;
-			case 8: blocked.deviceHealthy = false; break;
-			case 9: blocked.noRecentOutOfMemory = false; break;
-			default: return false;
+			case 0:
+				blocked.recoveryOwned = false;
+				break;
+			case 1:
+				blocked.loadingSerialOwned = false;
+				break;
+			case 2:
+				blocked.cleanupAndTrimComplete = false;
+				break;
+			case 3:
+				blocked.retirementReady = false;
+				break;
+			case 4:
+				blocked.memorySampleFresh = false;
+				break;
+			case 5:
+				blocked.pressureAcceptable = false;
+				break;
+			case 6:
+				blocked.gpuHeadroomSufficient = false;
+				break;
+			case 7:
+				blocked.projectedSystemCommitSafe = false;
+				break;
+			case 8:
+				blocked.deviceHealthy = false;
+				break;
+			case 9:
+				blocked.noRecentOutOfMemory = false;
+				break;
+			default:
+				return false;
 			}
 			if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
 				PostLoadRecoveryDeadlineAction::RetainStableContract) {
 				return false;
 			}
+		}
+		return true;
+	}
+
+	constexpr bool CoversPostLoadRecoveryStableFallbackOwnership()
+	{
+		PostLoadRecoveryStableFallbackOwnership owner{
+			.recoveryActive = true,
+			.physicalMutationStarted = false,
+			.recoveryEpoch = 7,
+			.expectedRecoveryEpoch = 7,
+			.transitionEpoch = 11,
+			.expectedTransitionEpoch = 11,
+			.loadingSerial = 13,
+			.currentLoadingSerial = 13,
+		};
+		if (!CanClaimPostLoadRecoveryStableFallback(owner))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 7; ++bit) {
+			auto stale = owner;
+			switch (bit) {
+			case 0:
+				stale.recoveryActive = false;
+				break;
+			case 1:
+				stale.physicalMutationStarted = true;
+				break;
+			case 2:
+				stale.expectedRecoveryEpoch = 0;
+				break;
+			case 3:
+				++stale.recoveryEpoch;
+				break;
+			case 4:
+				stale.expectedTransitionEpoch = 0;
+				break;
+			case 5:
+				++stale.transitionEpoch;
+				break;
+			case 6:
+				++stale.currentLoadingSerial;
+				break;
+			default:
+				return false;
+			}
+			if (CanClaimPostLoadRecoveryStableFallback(stale))
+				return false;
 		}
 		return true;
 	}
@@ -1171,6 +1290,7 @@ namespace
 	static_assert(CoversDeferredDispatchSelection());
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
+	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
 }
 
 int main() {}

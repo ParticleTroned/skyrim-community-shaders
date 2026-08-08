@@ -22,7 +22,7 @@ This is for **consumer plugins** (mods that want to call into CSX).
 -   VR Render Scale Mode control with transition-time render-target relatching
 -   VR upscaling apply-safety query for external transition controllers
 -   Target-aware VR transition-profile decisions that distinguish blocked, already-matched, and required applies
--   Advisory VR transition fade timing constants for controllers that want to hide render-scale relatches behind a fade-to-black
+-   Deprecated, zero-valued VR transition fade aliases retained for source compatibility; CSX owns transition coverage
 
 The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. `DLSSMode` remains a type alias for `UpscalePreset` so old enum values keep their numeric layout. DLSS profile control is DLSS-only. In VR, presets below native enable Render Scale Mode and Native AA/DLAA disables it. Render Scale Mode requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch. Legacy revision-1 upscaling calls keep DLSS-first behavior on DLSS-capable systems. Revision 2 adds method-explicit calls for controllers that must select FSR/FSR4 or otherwise distinguish DLSS from FSR/FSR4 instead of relying on legacy DLSS behavior. Revision 3 adds the strict global apply-safety query. Revision 4 adds the target-aware atomic-profile decision used to stage a door relatch early without releasing unrelated CSX settings.
 
@@ -148,7 +148,7 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 -   `VRUpscalingTransitionProfileDecision::kNoChange` — the requested settings and physical contract already match; do not call the setter
 -   `VRUpscalingTransitionProfileDecision::kApply` — immediately call the method-specific atomic setter synchronously
 
-The former advisory timed-fade constants remain as deprecated, zero-valued source-compatibility aliases. They must not be used to schedule a separate transition fade; CSX now owns render-change coverage.
+The former advisory timed-fade constants remain as deprecated, zero-valued source-compatibility aliases. They must not be used to schedule a separate transition fade; CSX now owns render-change coverage. Build 11 identifies this behavior at runtime because already-compiled consumers retain the former inline values until rebuilt.
 
 ## Behavior Notes
 

@@ -11,7 +11,9 @@
 #include "TruePBR.h"
 #include "Util.h"
 
-#include "Diagnostics/D3DTextureLifetimeTracker.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/D3DTextureLifetimeTracker.h"
+#endif
 
 #include "Features/CSUtility.h"
 #include "Features/InteriorSun.h"
@@ -985,6 +987,7 @@ struct ID3D11Device_CreateVertexShader
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 struct ID3D11Device_CreateTexture2D
 {
 	static HRESULT STDMETHODCALLTYPE thunk(
@@ -1004,6 +1007,7 @@ struct ID3D11Device_CreateTexture2D
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
+#endif
 
 struct ID3D11Device_CreatePixelShader
 {
@@ -1141,6 +1145,7 @@ struct BSInputDeviceManager_PollInputDevices
 
 namespace Hooks
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	class VRFaceGenTintAssignmentBridge : public Xbyak::CodeGenerator
 	{
 	public:
@@ -1211,6 +1216,7 @@ namespace Hooks
 			"[Texture lifetime] Installed FaceGen tint owner correlation at SkyrimVR+0x{:x}",
 			callsite - REL::Module::get().base());
 	}
+#endif
 
 	std::shared_mutex& GetRenderTargetRecreationMutex()
 	{
@@ -1256,7 +1262,9 @@ namespace Hooks
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			stl::detour_vfunc<5, ID3D11Device_CreateTexture2D>(globals::d3d::device);
+#endif
 
 			auto shaderCache = globals::shaderCache;
 			if (shaderCache->IsDump()) {
@@ -1799,7 +1807,9 @@ namespace Hooks
 	 */
 	void Install()
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();
+#endif
 
 		if (!REL::Module::IsVR()) {
 			logger::info("Hooking BSImageSpace::Init::IBLF");

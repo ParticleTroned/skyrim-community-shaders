@@ -5792,6 +5792,39 @@ namespace
 		return true;
 	}
 
+	bool IsCommonVendorTextureCompatible(
+		const Texture2D* a_texture,
+		const D3D11_TEXTURE2D_DESC& a_expected)
+	{
+		if (!a_texture ||
+			!a_texture->resource ||
+			!a_texture->srv ||
+			!a_texture->uav ||
+			!globals::d3d::device) {
+			return false;
+		}
+
+		winrt::com_ptr<ID3D11Device> textureDevice;
+		a_texture->resource->GetDevice(textureDevice.put());
+		if (GetCOMIdentityAddress(textureDevice.get()) !=
+			GetCOMIdentityAddress(globals::d3d::device)) {
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC actual{};
+		a_texture->resource->GetDesc(&actual);
+		constexpr UINT requiredBindFlags =
+			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		return actual.Width == a_expected.Width &&
+		       actual.Height == a_expected.Height &&
+		       actual.MipLevels == a_expected.MipLevels &&
+		       actual.ArraySize == a_expected.ArraySize &&
+		       actual.Format == a_expected.Format &&
+		       actual.SampleDesc.Count == a_expected.SampleDesc.Count &&
+		       actual.SampleDesc.Quality == a_expected.SampleDesc.Quality &&
+		       (actual.BindFlags & requiredBindFlags) == requiredBindFlags;
+	}
+
 	template <class T, std::size_t N>
 	bool ViewsReferenceEitherResourceAndRelease(
 		std::array<T*, N>& a_views,
@@ -16274,6 +16307,87 @@ bool Upscaling::CanDispatchExistingVRVendorEvaluation(
 	});
 }
 
+bool Upscaling::HasTruthfulStableVRVendorResources(
+	const VRRenderScaleProfileSnapshot& a_stable) const
+{
+	if (!globals::game::isVR ||
+		!a_stable.valid ||
+		!a_stable.active ||
+		a_stable.transitionEpoch == 0 ||
+		a_stable.contractGeneration == 0 ||
+		!IsVendorUpscalingMethod(a_stable.method)) {
+		return false;
+	}
+
+	const auto& resources = a_stable.resources;
+	const bool resourceKeyMatches =
+		resources.valid &&
+		resources.active &&
+		resources.method == a_stable.method &&
+		resources.backend != VRRenderScaleBackendKind::None &&
+		resources.qualityMode == std::min(a_stable.qualityMode, kQualityModeMaxIndex) &&
+		resources.dlssPreset == ClampDLSSPresetUInt(a_stable.dlssPreset) &&
+		resources.renderEyeWidth == a_stable.renderEyeWidth &&
+		resources.renderEyeHeight == a_stable.renderEyeHeight &&
+		resources.displayEyeWidth == a_stable.displayEyeWidth &&
+		resources.displayEyeHeight == a_stable.displayEyeHeight &&
+		resources.contextCount == 2u;
+	if (!resourceKeyMatches)
+		return false;
+
+	const auto& boot = perfMode.GetBootSnapshot();
+	if (!boot.valid ||
+		!boot.active ||
+		!boot.renderScaleEnabled ||
+		!boot.perfModeEnabled ||
+		!boot.submitStageVendorAllowed ||
+		boot.method != a_stable.method ||
+		boot.generation != a_stable.contractGeneration ||
+		boot.qualityMode != a_stable.qualityMode ||
+		boot.dlssPreset != a_stable.dlssPreset ||
+		boot.renderEyeWidth != a_stable.renderEyeWidth ||
+		boot.renderEyeHeight != a_stable.renderEyeHeight ||
+		boot.displayEyeWidth != a_stable.displayEyeWidth ||
+		boot.displayEyeHeight != a_stable.displayEyeHeight ||
+		vrIntermediateTextureGeneration != a_stable.contractGeneration ||
+		!IsVendorRuntimeReadyForActiveContract(a_stable.method) ||
+		!AreCommonVendorTexturesReady(a_stable.method)) {
+		return false;
+	}
+
+	if (!vrIntermediateColorIn[0] || !vrIntermediateColorIn[0]->resource ||
+		!vrIntermediateMotionVectors[0] || !vrIntermediateMotionVectors[0]->resource ||
+		!vrIntermediateReactiveMask[0] || !vrIntermediateReactiveMask[0]->resource ||
+		!vrIntermediateTransparencyMask[0] || !vrIntermediateTransparencyMask[0]->resource) {
+		return false;
+	}
+
+	const VRExistingVendorProviderSnapshot provider{
+		.valid = true,
+		.renderScaleActive = true,
+		.method = a_stable.method,
+		.qualityMode = std::min(a_stable.qualityMode, kQualityModeMaxIndex),
+		.dlssPreset = ClampDLSSPresetUInt(a_stable.dlssPreset),
+		.renderEyeWidth = a_stable.renderEyeWidth,
+		.renderEyeHeight = a_stable.renderEyeHeight,
+		.displayEyeWidth = a_stable.displayEyeWidth,
+		.displayEyeHeight = a_stable.displayEyeHeight,
+		.contractGeneration = a_stable.contractGeneration,
+	};
+	return AreExistingVRSubmitVendorResourcesCompatible(
+		a_stable.method,
+		provider,
+		a_stable.renderEyeWidth,
+		a_stable.renderEyeHeight,
+		a_stable.displayEyeWidth,
+		a_stable.displayEyeHeight,
+		vrIntermediateColorIn[0]->resource.get(),
+		vrIntermediateMotionVectors[0]->resource.get(),
+		vrIntermediateReactiveMask[0]->resource.get(),
+		vrIntermediateTransparencyMask[0]->resource.get(),
+		a_stable.contractGeneration);
+}
+
 bool Upscaling::IsVRVendorLifecycleGateRelevant() const
 {
 	if (!globals::game::isVR)
@@ -18642,11 +18756,30 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 	main.UAV->GetDesc(&uavDesc);
 
 	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	bool unboundForReplacement = false;
+	const auto unbindOnceForReplacement = [&]() {
+		if (unboundForReplacement)
+			return;
+		UnbindUpscalingResources();
+		unboundForReplacement = true;
+	};
 
 	if (a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR) {
 		texDesc.Format = DXGI_FORMAT_R8_UNORM;
 		srvDesc.Format = texDesc.Format;
 		uavDesc.Format = texDesc.Format;
+		if (reactiveMaskTexture &&
+			!IsCommonVendorTextureCompatible(reactiveMaskTexture, texDesc)) {
+			unbindOnceForReplacement();
+			DestroyTexture(reactiveMaskTexture);
+		}
+		if (transparencyCompositionMaskTexture &&
+			!IsCommonVendorTextureCompatible(
+				transparencyCompositionMaskTexture,
+				texDesc)) {
+			unbindOnceForReplacement();
+			DestroyTexture(transparencyCompositionMaskTexture);
+		}
 
 		if (!reactiveMaskTexture) {
 			reactiveMaskTexture = new Texture2D(texDesc);
@@ -18662,13 +18795,18 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 	}
 
 	// Motion vector copy texture is used by DLSS and FSR encode pass.
-	if (a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR) {
+	if (!globals::game::isVR &&
+		(a_upscalemethod == UpscaleMethod::kDLSS ||
+			a_upscalemethod == UpscaleMethod::kFSR)) {
+		auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+		D3D11_TEXTURE2D_DESC motionTexDesc{};
+		motionVector.texture->GetDesc(&motionTexDesc);
+		if (motionVectorCopyTexture &&
+			!IsCommonVendorTextureCompatible(motionVectorCopyTexture, motionTexDesc)) {
+			unbindOnceForReplacement();
+			DestroyTexture(motionVectorCopyTexture);
+		}
 		if (!motionVectorCopyTexture) {
-			auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-
-			D3D11_TEXTURE2D_DESC motionTexDesc{};
-			motionVector.texture->GetDesc(&motionTexDesc);
-
 			texDesc.Format = motionTexDesc.Format;
 			srvDesc.Format = texDesc.Format;
 			uavDesc.Format = texDesc.Format;
@@ -18681,12 +18819,15 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 	// Shared DLSS sharpener texture - matches kMAIN format for HDR sharpening
 	if (a_upscalemethod == UpscaleMethod::kDLSS) {
+		main.texture->GetDesc(&texDesc);
+		main.SRV->GetDesc(&srvDesc);
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		if (sharpenerTexture &&
+			!IsCommonVendorTextureCompatible(sharpenerTexture, texDesc)) {
+			unbindOnceForReplacement();
+			DestroyTexture(sharpenerTexture);
+		}
 		if (!sharpenerTexture) {
-			main.texture->GetDesc(&texDesc);
-			main.SRV->GetDesc(&srvDesc);
-
-			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-
 			srvDesc.Format = texDesc.Format;
 			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 			srvDesc.Texture2D.MostDetailedMip = 0;
@@ -18749,14 +18890,37 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 	if (!IsVendorUpscalingMethod(a_upscaleMethod))
 		return true;
 
-	const auto textureReady = [](const Texture2D* a_texture) {
-		return a_texture && a_texture->resource && a_texture->srv && a_texture->uav;
-	};
+	auto* renderer = globals::game::renderer;
+	if (!renderer)
+		return false;
+	const auto& targets = renderer->GetRuntimeData().renderTargets;
+	const auto& main = targets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture)
+		return false;
 
-	return textureReady(reactiveMaskTexture) &&
-	       textureReady(transparencyCompositionMaskTexture) &&
-	       (globals::game::isVR || textureReady(motionVectorCopyTexture)) &&
-	       (a_upscaleMethod != UpscaleMethod::kDLSS || textureReady(sharpenerTexture));
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	main.texture->GetDesc(&mainDesc);
+	auto maskDesc = mainDesc;
+	maskDesc.Format = DXGI_FORMAT_R8_UNORM;
+	maskDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	if (!IsCommonVendorTextureCompatible(reactiveMaskTexture, maskDesc) ||
+		!IsCommonVendorTextureCompatible(transparencyCompositionMaskTexture, maskDesc)) {
+		return false;
+	}
+
+	if (!globals::game::isVR) {
+		const auto& motionVector = targets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+		if (!motionVector.texture)
+			return false;
+		D3D11_TEXTURE2D_DESC motionDesc{};
+		motionVector.texture->GetDesc(&motionDesc);
+		if (!IsCommonVendorTextureCompatible(motionVectorCopyTexture, motionDesc))
+			return false;
+	}
+
+	mainDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	return a_upscaleMethod != UpscaleMethod::kDLSS ||
+	       IsCommonVendorTextureCompatible(sharpenerTexture, mainDesc);
 }
 
 bool Upscaling::IsVRRenderScalePhysicalContractConverged(
@@ -20136,9 +20300,29 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			previewRelatchEpoch)) {
 		return false;
 	}
+	// The bound recovery epoch remains authoritative when request coalescing
+	// promotes a higher-priority origin. Run its absolute clock before generic
+	// cleanup waits so a stuck fence cannot hide the terminal pre-mutation
+	// fallback forever.
+	if (previewPostLoadRecoveryEpoch != 0 &&
+		!previewStabilizerDoorHandoff &&
+		!CanAdmitVRRenderScalePostLoadRecoveryRelatch(
+			previewPostLoadRecoveryEpoch,
+			previewRelatchEpoch)) {
+		markPreviewRelatchQueued(kVRRenderScalePostLoadSettleRetryFrames);
+		return false;
+	}
+	const auto recoveryAfterPreviewAdmission =
+		GetVRRenderScaleTransitionSnapshot().postLoadRecovery;
+	const bool previewRecoveryDeadlineExpired =
+		recoveryAfterPreviewAdmission.active &&
+		recoveryAfterPreviewAdmission.recoveryEpoch == previewPostLoadRecoveryEpoch &&
+		recoveryAfterPreviewAdmission.transitionEpoch == previewRelatchEpoch &&
+		recoveryAfterPreviewAdmission.settleDeadlineExpired;
 
 	static bool loggedRelatchMemoryReliefCleanupDefer = false;
-	if (IsVRRenderScaleMemoryReliefActive() &&
+	if (!previewRecoveryDeadlineExpired &&
+		IsVRRenderScaleMemoryReliefActive() &&
 		!vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire) &&
 		HasVRRenderScaleMemoryReliefCleanupPending()) {
 		ServiceVRIntermediateTextureCleanup();
@@ -20151,17 +20335,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 	}
 	loggedRelatchMemoryReliefCleanupDefer = false;
-	// The bound recovery epoch remains authoritative when request coalescing
-	// promotes a higher-priority origin. Never let that promotion bypass the
-	// retirement and memory admission which the relatch will later complete.
-	if (previewPostLoadRecoveryEpoch != 0 &&
-		!previewStabilizerDoorHandoff &&
-		!CanAdmitVRRenderScalePostLoadRecoveryRelatch(
-			previewPostLoadRecoveryEpoch,
-			previewRelatchEpoch)) {
-		markPreviewRelatchQueued(kVRRenderScalePostLoadSettleRetryFrames);
-		return false;
-	}
 
 	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition()) {
 		return false;
@@ -20381,9 +20554,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			a_reason);
 	};
 	const auto recoverTerminalVendorRelatchAfterTargetMutation = [&](
-																  UpscaleMethod a_failedMethod,
-																  const char* a_reason,
-																  const VRRenderScaleProfileSnapshot& a_physicalProfile) {
+																	 UpscaleMethod a_failedMethod,
+																	 const char* a_reason,
+																	 const VRRenderScaleProfileSnapshot& a_physicalProfile) {
 		// Once the engine targets have changed, the pre-relatch profile is no
 		// longer a truthful physical fallback. Latch this immutable provider failure
 		// and recover through the existing serialized native-target path instead
@@ -20944,12 +21117,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	float2 relatchTargetEngineSize{ 0.0f, 0.0f };
 	bool bootContractChanged = false;
 	bool renderTargetsRelatched = false;
-	bool renderTargetMutationOccurred = false;
+	bool engineTargetCreateEntered = false;
 	bool reconciledPhysicalMutation = false;
 	bool timedPostLoadRecoveryAttempt = false;
 	VRRenderScaleProfileSnapshot targetResourceProfile{};
-	auto continueTimedRecoveryAfterMutation = ScopeExit([&]() {
-		if (!timedPostLoadRecoveryAttempt || !renderTargetMutationOccurred)
+	auto persistPostLoadRecoveryTargetCreateEntry = ScopeExit([&]() {
+		if (!engineTargetCreateEntered || postLoadRecoveryEpoch == 0)
 			return;
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
@@ -20958,17 +21131,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			recovery.transitionEpoch != relatchEpoch) {
 			return;
 		}
-		// Physical mutation transfers failure handling to the existing serialized
-		// recovery path. Give that path a new bounded admission window; never apply
-		// the pre-mutation stable-contract fallback to a contract that has changed.
-		recovery.timedAttemptConsumed = false;
-		recovery.settleDeadlineExpired = false;
-		recovery.settleTimeoutUsed = false;
-		recovery.admissionWaitStartFrame = std::max(state->frameCount, 1u);
-		recovery.firstSettledFrame = 0;
-		recovery.lastSettledFrame = 0;
-		recovery.settledSamples = 0;
-		++vrRenderScaleTransitionController.revision;
+		// Entering the engine creator conservatively transfers failure handling to
+		// the serialized recovery path. Persist that fact for every owned attempt so
+		// a later deadline cannot publish the pre-create stable contract.
+		if (!recovery.engineTargetCreateEntered) {
+			recovery.engineTargetCreateEntered = true;
+			++vrRenderScaleTransitionController.revision;
+		}
 	});
 	auto restorePreviousBootContract = [&]() {
 		perfMode.RestoreBootLatch(relatchReferenceSnapshot);
@@ -20977,12 +21146,79 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
 	};
 	const auto retainStableContractAfterExpiredPostLoadRecovery = [&](const char* a_reason) {
-		clearRelatchDelay(true);
-		ClearOwnedVRLowPeakNativeRestoreProgress(relatchEpoch);
-		ClearVRFSRRelatchDrainGuard();
-		ClearVRRenderScaleInfoTransition();
-		postLoadRuntimeResetPending.store(false, std::memory_order_release);
+		const uint64_t currentLoadingSerial =
+			g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
+		VRRenderScaleProfileSnapshot stableCandidate{};
+		bool exactRecoveryOwner = false;
+		{
+			std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+			const auto& controller = vrRenderScaleTransitionController;
+			const auto& recovery = controller.postLoadRecovery;
+			const auto* transitionOwner =
+				controller.applying.valid &&
+						controller.applying.transitionEpoch == relatchEpoch ?
+					std::addressof(controller.applying) :
+				controller.requested.valid &&
+						controller.requested.transitionEpoch == relatchEpoch ?
+					std::addressof(controller.requested) :
+					nullptr;
+			const bool exactTransitionOwner =
+				controller.targetEpoch == relatchEpoch &&
+				transitionOwner &&
+				(!rc94PostLoadDoorRelatch ||
+					transitionOwner->stabilizerDoorHandoffSerial == 0 ||
+					transitionOwner->stabilizerDoorHandoffSerial == currentLoadingSerial);
+			exactRecoveryOwner =
+				exactTransitionOwner &&
+				VRVendorRelatchPolicy::CanClaimPostLoadRecoveryStableFallback({
+					.recoveryActive = recovery.active,
+					.physicalMutationStarted = recovery.engineTargetCreateEntered,
+					.recoveryEpoch = recovery.recoveryEpoch,
+					.expectedRecoveryEpoch = postLoadRecoveryEpoch,
+					.transitionEpoch = recovery.transitionEpoch,
+					.expectedTransitionEpoch = relatchEpoch,
+					.loadingSerial = recovery.loadingSerial,
+					.currentLoadingSerial = currentLoadingSerial,
+				});
+			if (exactRecoveryOwner)
+				stableCandidate = controller.stable;
+		}
+		if (!exactRecoveryOwner) {
+			requeueRelatch(
+				kVRRenderScalePostLoadSettleRetryFrames,
+				false,
+				VRRenderScaleRetryKind::Other);
+			logger::warn(
+				"[VRRenderScale][PostLoad] Ignored stale stable-contract fallback claim. epoch={} recoveryEpoch={} reason={}.",
+				relatchEpoch,
+				postLoadRecoveryEpoch,
+				a_reason ? a_reason : "admission rejected");
+			return false;
+		}
 
+		const bool stableResourcesTruthful =
+			stableCandidate.valid &&
+			(!stableCandidate.active ||
+				HasTruthfulStableVRVendorResources(stableCandidate));
+		const auto& physicalBoot = perfMode.GetBootSnapshot();
+		const bool reducedPhysicalContract =
+			physicalBoot.valid &&
+			physicalBoot.active &&
+			physicalBoot.renderScaleEnabled &&
+			physicalBoot.perfModeEnabled;
+		if (reducedPhysicalContract && !stableResourcesTruthful) {
+			requeueRelatch(
+				kVRRenderScalePostLoadSettleRetryFrames,
+				false,
+				VRRenderScaleRetryKind::Backend);
+			logger::error(
+				"[VRRenderScale][PostLoad] Refused startup fallback while reduced physical targets remain active; retrying guarded recovery. epoch={} recoveryEpoch={} reason={}.",
+				relatchEpoch,
+				postLoadRecoveryEpoch,
+				a_reason ? a_reason : "stable resource proof failed");
+			return false;
+		}
+		bool claimedExactRecoveryOwner = false;
 		bool retainedStableContract = false;
 		uint64_t retainedLoadingSerial = 0;
 		{
@@ -20998,15 +21234,35 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					std::addressof(controller.requested) :
 					nullptr;
 			const bool exactTransitionOwner =
-				controller.targetEpoch == relatchEpoch && transitionOwner;
-			const bool exactRecoveryOwner =
+				controller.targetEpoch == relatchEpoch &&
+				transitionOwner &&
+				(!rc94PostLoadDoorRelatch ||
+					transitionOwner->stabilizerDoorHandoffSerial == 0 ||
+					transitionOwner->stabilizerDoorHandoffSerial ==
+						g_vrLoadingTransitionSerial.load(
+							std::memory_order_acquire));
+			const bool ownerStillExact =
 				exactTransitionOwner &&
-				((postLoadRecoveryEpoch == 0 && rc94PostLoadDoorRelatch) ||
-					(recovery.active &&
-						recovery.recoveryEpoch == postLoadRecoveryEpoch &&
-						(recovery.transitionEpoch == 0 ||
-							recovery.transitionEpoch == relatchEpoch)));
-			if (exactRecoveryOwner) {
+				VRVendorRelatchPolicy::CanClaimPostLoadRecoveryStableFallback({
+					.recoveryActive = recovery.active,
+					.physicalMutationStarted = recovery.engineTargetCreateEntered,
+					.recoveryEpoch = recovery.recoveryEpoch,
+					.expectedRecoveryEpoch = postLoadRecoveryEpoch,
+					.transitionEpoch = recovery.transitionEpoch,
+					.expectedTransitionEpoch = relatchEpoch,
+					.loadingSerial = recovery.loadingSerial,
+					.currentLoadingSerial =
+						g_vrLoadingTransitionSerial.load(
+							std::memory_order_acquire),
+				});
+			const bool stableCandidateStillOwned =
+				controller.stable.valid == stableCandidate.valid &&
+				controller.stable.active == stableCandidate.active &&
+				controller.stable.transitionEpoch == stableCandidate.transitionEpoch &&
+				controller.stable.contractGeneration == stableCandidate.contractGeneration &&
+				controller.stable.method == stableCandidate.method;
+			if (ownerStillExact && stableCandidateStillOwned) {
+				claimedExactRecoveryOwner = true;
 				retainedLoadingSerial =
 					recovery.loadingSerial != 0 ?
 						recovery.loadingSerial :
@@ -21015,7 +21271,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				controller.applying = {};
 				controller.relatchPlan = {};
 				controller.fidelity = {};
-				if (controller.stable.valid) {
+				if (stableResourcesTruthful) {
 					controller.applied = controller.stable;
 					controller.targetEpoch = controller.stable.transitionEpoch;
 					StoreVRRenderScaleTransitionStateLocked(
@@ -21023,6 +21279,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					retainedStableContract = true;
 				} else {
 					controller.applied = {};
+					controller.stable = {};
 					controller.targetEpoch = 0;
 					StoreVRRenderScaleTransitionStateLocked(
 						VRRenderScaleTransitionState::Idle);
@@ -21034,11 +21291,29 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				++controller.revision;
 			}
 		}
+		if (!claimedExactRecoveryOwner) {
+			requeueRelatch(
+				kVRRenderScalePostLoadSettleRetryFrames,
+				false,
+				VRRenderScaleRetryKind::Other);
+			logger::warn(
+				"[VRRenderScale][PostLoad] Stable-contract fallback ownership changed during resource proof. epoch={} recoveryEpoch={} reason={}.",
+				relatchEpoch,
+				postLoadRecoveryEpoch,
+				a_reason ? a_reason : "admission rejected");
+			return false;
+		}
+
+		clearRelatchDelay(true);
+		ClearOwnedVRLowPeakNativeRestoreProgress(relatchEpoch);
+		ClearVRFSRRelatchDrainGuard();
+		ClearVRRenderScaleInfoTransition();
+		postLoadRuntimeResetPending.store(false, std::memory_order_release);
 
 		if (!retainedStableContract) {
-			// No physical contract has ever been established. Resetting the latch
-			// leaves the transplanted startup definition (None, Render Scale off)
-			// as the only runtime presentation fallback without changing settings.
+			// No resource-backed stable contract remains provable. Resetting the
+			// latch leaves the transplanted startup definition (None, Render Scale
+			// off) as the only runtime fallback without changing settings.
 			perfMode.ResetBootLatch();
 		}
 		perfMode.UpdateRestartRequiredState(
@@ -21699,13 +21974,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool preserveFSRResourcesForRelatch =
 			canPreserveSelectedFSRResourcesForRelatch() ||
 			retainWarmFSRResourcesForRelatch;
-		const bool missingCompatibleFSRResourcesForActiveRelatch =
-			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			relatchTargetRenderScaleActive &&
-			!preserveFSRResourcesForRelatch;
+		// Render Scale-off FSR is still a live 1:1 vendor evaluation. Any FSR
+		// target therefore needs a compatible context even when the target is
+		// native-sized.
+		const bool missingCompatibleFSRResourcesForTargetRelatch =
+			VRVendorRelatchPolicy::NeedsFSRResourceRecreate(
+				relatchUpscaleMethod == UpscaleMethod::kFSR,
+				preserveFSRResourcesForRelatch);
 		const bool recreateFSRResourcesDuringRelatch =
-			(forceFSRResourceRecreateForRelatch || missingCompatibleFSRResourcesForActiveRelatch) &&
-			!preserveFSRResourcesForRelatch;
+			missingCompatibleFSRResourcesForTargetRelatch;
 		const bool fsrResourcesNeedTeardownForRelatch = fidelityFX.HasFSRResourcesPendingTeardown();
 		const bool destroyFSRResourcesForRelatch =
 			!preserveFSRResourcesForRelatch &&
@@ -21996,10 +22273,31 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				relatchPlan.projectedResidencyDeferred ||
 				relatchPlan.systemCommitDeferred;
 		}
+		if (rc94PostLoadDoorRelatch &&
+			relatchPlan.pressureDeferred &&
+			postLoadRecoveryEpoch == 0) {
+			// Ordinary Stabilizer doors do not have a save-load recovery owner.
+			// Create one for this exact rejected transition before terminally
+			// retaining its resource-proven stable contract.
+			postLoadRecoveryEpoch = BeginVRRenderScalePostLoadRecovery();
+			{
+				std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+				auto& recovery =
+					vrRenderScaleTransitionController.postLoadRecovery;
+				if (recovery.active &&
+					recovery.recoveryEpoch == postLoadRecoveryEpoch) {
+					recovery.transitionEpoch = relatchEpoch;
+					++vrRenderScaleTransitionController.revision;
+				}
+			}
+			pendingPerfModeRenderTargetRecreateRecoveryEpoch.store(
+				postLoadRecoveryEpoch,
+				std::memory_order_release);
+		}
 		if (VRVendorRelatchPolicy::ShouldRetainStableDoorContract(
 				rc94PostLoadDoorRelatch,
 				doorHandoffHardSafetyDeferred,
-				renderTargetMutationOccurred)) {
+				engineTargetCreateEntered)) {
 			if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
 				requeueRelatch(
 					kVRUpscalingTransitionApplyDelayFrames,
@@ -22009,17 +22307,55 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return retainStableContractAfterExpiredPostLoadRecovery(
 				"door handoff resource admission rejected before mutation");
 		}
-		const auto& postLoadRecoveryAtAdmission =
-			controllerAtAdmission.postLoadRecovery;
-		const bool postLoadRecoveryOwned =
+		auto postLoadRecoveryAtAdmission =
+			GetVRRenderScaleTransitionSnapshot().postLoadRecovery;
+		bool postLoadRecoveryOwned =
 			postLoadRecoveryEpoch != 0 &&
 			postLoadRecoveryAtAdmission.active &&
 			postLoadRecoveryAtAdmission.recoveryEpoch == postLoadRecoveryEpoch &&
-			postLoadRecoveryAtAdmission.transitionEpoch == relatchEpoch;
+			(postLoadRecoveryAtAdmission.transitionEpoch == relatchEpoch ||
+				(rc94PostLoadDoorRelatch &&
+					postLoadRecoveryAtAdmission.transitionEpoch == 0));
 		const uint64_t currentLoadingSerial =
 			g_vrLoadingTransitionSerial.load(std::memory_order_acquire);
-		const bool postLoadLoadingSerialOwned =
+		bool postLoadLoadingSerialOwned =
 			postLoadRecoveryAtAdmission.loadingSerial == currentLoadingSerial;
+		if (rc94PostLoadDoorRelatch &&
+			postLoadRecoveryOwned &&
+			postLoadLoadingSerialOwned) {
+			const uint32_t currentFrame = std::max(state->frameCount, 1u);
+			std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+			auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
+			if (recovery.active &&
+				recovery.recoveryEpoch == postLoadRecoveryEpoch &&
+				(recovery.transitionEpoch == 0 ||
+					recovery.transitionEpoch == relatchEpoch) &&
+				recovery.loadingSerial == currentLoadingSerial) {
+				if (recovery.transitionEpoch == 0)
+					recovery.transitionEpoch = relatchEpoch;
+				// Door handoffs intentionally skip post-load cleanup. Start their
+				// non-destructive deadline only when the complete planner first
+				// rejects the target for pressure, and retain it across requeues.
+				if (recovery.admissionWaitStartFrame == 0 &&
+					relatchPlan.pressureDeferred) {
+					recovery.admissionWaitStartFrame = currentFrame;
+				}
+				if (recovery.admissionWaitStartFrame != 0 &&
+					currentFrame - recovery.admissionWaitStartFrame >=
+						kVRRenderScalePostLoadMemorySettleTimeoutFrames) {
+					recovery.settleDeadlineExpired = true;
+					recovery.settleTimeoutUsed = true;
+				}
+				postLoadRecoveryAtAdmission = recovery;
+				++vrRenderScaleTransitionController.revision;
+			}
+			postLoadRecoveryOwned =
+				postLoadRecoveryAtAdmission.active &&
+				postLoadRecoveryAtAdmission.recoveryEpoch == postLoadRecoveryEpoch &&
+				postLoadRecoveryAtAdmission.transitionEpoch == relatchEpoch;
+			postLoadLoadingSerialOwned =
+				postLoadRecoveryAtAdmission.loadingSerial == currentLoadingSerial;
+		}
 		const bool postLoadRetirementReady =
 			CanAdmitVRIntermediateRetirement(relatchEpoch) &&
 			CanAdmitVREngineTargetRetirement(relatchEpoch);
@@ -22029,12 +22365,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					postLoadRecoveryOwned &&
 					postLoadRecoveryAtAdmission.settleDeadlineExpired,
 				.attemptConsumed = postLoadRecoveryAtAdmission.timedAttemptConsumed,
+				.physicalMutationStarted =
+					postLoadRecoveryAtAdmission.engineTargetCreateEntered,
 				.recoveryOwned = postLoadRecoveryOwned &&
-					IsVRRenderScaleTransitionEpochCurrent(relatchEpoch),
+		                         IsVRRenderScaleTransitionEpochCurrent(relatchEpoch),
 				.loadingSerialOwned = postLoadLoadingSerialOwned,
 				.cleanupAndTrimComplete =
-					postLoadRecoveryAtAdmission.cleanupDrained &&
-					postLoadRecoveryAtAdmission.trimCompleted,
+					rc94PostLoadDoorRelatch ||
+					(postLoadRecoveryAtAdmission.cleanupDrained &&
+						postLoadRecoveryAtAdmission.trimCompleted),
 				.retirementReady = postLoadRetirementReady,
 				.memorySampleFresh =
 					memoryAtAdmission.valid &&
@@ -22077,10 +22416,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					"deadline attempt ownership changed");
 			}
 			timedPostLoadRecoveryAttempt = true;
-			// The deadline waives only the second consecutive settled sample. These
-			// normal planner guards have already passed unchanged: the 4x/8x commit
-			// projection, dynamic 8-16 GiB reserve, GPU headroom, pressure, cleanup,
-			// retirement, device-loss, and recent-OOM checks.
+			// The deadline waives only settling cadence (and the cleanup phase which
+			// door handoffs deliberately never enter). The normal planner's 4x/8x
+			// commit projection, dynamic 8-16 GiB reserve, GPU headroom, pressure,
+			// retirement, device-loss, and recent-OOM checks remain unchanged.
 			relatchPlan.pressureCleanupRequired = false;
 			relatchPlan.pressureDeferred = false;
 			logger::warn(
@@ -22195,7 +22534,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					} :
 					relatchDiagDisplaySize;
 			logger::debug(
-				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} lowPeakFullResolutionRestore={} targetsStrictlyReady={} dimensionsMatch={} stableEvidence={} stableTargetReuse={} sharedReuse={} vendorDimensionsUnchanged={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} compatibleFSRReuse={} preserveFSRIntermediates={} missingFSRForActive={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} lowPeakFullResolutionRestore={} targetsStrictlyReady={} dimensionsMatch={} stableEvidence={} stableTargetReuse={} sharedReuse={} vendorDimensionsUnchanged={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} compatibleFSRReuse={} preserveFSRIntermediates={} missingFSRForTarget={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
 				magic_enum::enum_name(relatchUpscaleMethod),
 				magic_enum::enum_name(relatchOrigin),
 				BoolText(preserveActiveContractForRecovery),
@@ -22213,7 +22552,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(forceFSRResourceRecreateForRelatch),
 				BoolText(reuseCompatibleFSRResourcesForRelatch),
 				BoolText(preserveCompatibleFSRIntermediatesForRelatch),
-				BoolText(missingCompatibleFSRResourcesForActiveRelatch),
+				BoolText(missingCompatibleFSRResourcesForTargetRelatch),
 				BoolText(preserveFSRResourcesForRelatch),
 				BoolText(retainWarmFSRResourcesForRelatch),
 				BoolText(relatchPlan.reuseWarmTargetRuntime),
@@ -22568,7 +22907,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 						CaptureVREngineTargetGenerationPreparation,
 						ReconcileVREngineTargetGenerationCheckpoint,
 						std::addressof(engineTargetCheckpoint),
-						std::addressof(renderTargetMutationOccurred));
+						std::addressof(engineTargetCreateEntered));
 			} catch (...) {
 				// The original recreation runs before CSX reinitialization and can
 				// therefore have partially replaced slots before an exception.
@@ -22586,20 +22925,25 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			// pressure/device-loss gates.
 			if (engineTargetDelta.restoredPointerCount != 0)
 				engineTargetsRecreated = false;
+			if (engineTargetsRecreated &&
+				engineTargetCheckpoint.reconciled &&
+				engineTargetDelta.restoredPointerCount == 0) {
+				reconciledPhysicalMutation = true;
+			}
 			if (!engineTargetsRecreated) {
 				if (releasedDeferredTargetsForRelief)
 					globals::deferred->SetupResources();
 				if (bootContractChanged &&
 					!renderTargetsRelatched &&
-					!renderTargetMutationOccurred) {
+					!engineTargetCreateEntered) {
 					restorePreviousBootContract();
-				} else if (renderTargetMutationOccurred) {
+				} else if (engineTargetCreateEntered) {
 					markActiveVendorRuntimeDirtyAfterRelatchFailure();
 					ClearSubmitStageVendorResumeStability();
 					InvalidateFrameScopedUpscalingState();
 				}
 				if (timedPostLoadRecoveryAttempt &&
-					!renderTargetMutationOccurred) {
+					!engineTargetCreateEntered) {
 					return retainStableContractAfterExpiredPostLoadRecovery(
 						"deadline attempt could not recreate render targets before mutation");
 				}
@@ -22715,7 +23059,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				fsrResourcesRecreatedDuringRelatch);
 		if (relatchPlan.recreateFSRResources && !fsrResourcesRecreatedDuringRelatch) {
 			logger::warn("[VRRenderScale] Render-target relatch could not recreate FSR resources immediately; scheduling deferred rebuild.");
-			if (missingCompatibleFSRResourcesForActiveRelatch) {
+			if (missingCompatibleFSRResourcesForTargetRelatch) {
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
 				InvalidateFrameScopedUpscalingState();
 				ClearSubmitStageVendorResumeStability();
@@ -22771,12 +23115,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	} catch (const std::exception& e) {
 		if (bootContractChanged &&
 			!renderTargetsRelatched &&
-			!renderTargetMutationOccurred) {
+			!engineTargetCreateEntered) {
 			restorePreviousBootContract();
 		}
-		if (bootContractChanged || renderTargetMutationOccurred)
+		if (bootContractChanged || engineTargetCreateEntered)
 			markActiveVendorRuntimeDirtyAfterRelatchFailure();
-		if (renderTargetMutationOccurred) {
+		if (engineTargetCreateEntered) {
 			ClearSubmitStageVendorResumeStability();
 			InvalidateFrameScopedUpscalingState();
 		}
@@ -22799,7 +23143,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		}
 		if (timedPostLoadRecoveryAttempt &&
-			!renderTargetMutationOccurred &&
+			!engineTargetCreateEntered &&
 			!deviceLost) {
 			RecordVRRenderScaleTransitionFailure(
 				outOfMemory ? VRRenderScaleFailureKind::OutOfMemory : VRRenderScaleFailureKind::Unknown);
@@ -22827,12 +23171,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	} catch (...) {
 		if (bootContractChanged &&
 			!renderTargetsRelatched &&
-			!renderTargetMutationOccurred) {
+			!engineTargetCreateEntered) {
 			restorePreviousBootContract();
 		}
-		if (bootContractChanged || renderTargetMutationOccurred)
+		if (bootContractChanged || engineTargetCreateEntered)
 			markActiveVendorRuntimeDirtyAfterRelatchFailure();
-		if (renderTargetMutationOccurred) {
+		if (engineTargetCreateEntered) {
 			ClearSubmitStageVendorResumeStability();
 			InvalidateFrameScopedUpscalingState();
 		}
@@ -22853,7 +23197,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		}
 		if (timedPostLoadRecoveryAttempt &&
-			!renderTargetMutationOccurred &&
+			!engineTargetCreateEntered &&
 			!deviceLost) {
 			RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind::Unknown);
 			logger::error(
@@ -24210,7 +24554,7 @@ uint64_t Upscaling::BeginVRRenderScalePostLoadRecovery()
 	if (recoveryEpoch == 0)
 		recoveryEpoch = nextVRRenderScalePostLoadRecoveryEpoch.fetch_add(1, std::memory_order_acq_rel);
 
-	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		const auto memory = vrRenderScaleTransitionController.memory;
@@ -24251,6 +24595,7 @@ void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
 	bool trimArmed = false;
 	bool preserveActiveIntermediates = false;
 	uint64_t transitionEpoch = 0;
+	VRRenderScaleProfileSnapshot stableProfile{};
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		const auto& controller = vrRenderScaleTransitionController;
@@ -24259,15 +24604,12 @@ void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
 		cleanupArmed = recovery.cleanupArmed;
 		trimArmed = recovery.trimArmed;
 		transitionEpoch = recovery.transitionEpoch;
-		preserveActiveIntermediates =
-			recovery.cleanupDeferredUntilStable &&
-			controller.state == VRRenderScaleTransitionState::Active &&
-			controller.stable.valid &&
-			controller.stable.active &&
-			controller.stable.transitionEpoch == recovery.transitionEpoch;
+		stableProfile = controller.stable;
 	}
 	if (!active)
 		return;
+	preserveActiveIntermediates =
+		HasTruthfulStableVRVendorResources(stableProfile);
 
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
 	if (!IsVRRenderScaleMemoryReliefActive()) {
@@ -24294,6 +24636,11 @@ void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
 	auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
 	if (!recovery.active || recovery.recoveryEpoch != a_recoveryEpoch)
 		return;
+	// Start the absolute recovery deadline on the first post-loading cleanup
+	// service, before any cleanup/fence can drain. Time spent while LoadingMenu
+	// still owns renderer mutation is deliberately excluded.
+	if (recovery.admissionWaitStartFrame == 0)
+		recovery.admissionWaitStartFrame = frame;
 	recovery.cleanupArmed = cleanupArmed;
 	recovery.trimArmed = recovery.trimArmed || trimArmed;
 	const auto& trim = vrRenderScaleTransitionController.memoryTrim;
@@ -24344,8 +24691,6 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 			pressureSettled &&
 			memory.systemCommitValid &&
 			systemCommitSettled;
-		if (recovery.cleanupDrained && recovery.admissionWaitStartFrame == 0)
-			recovery.admissionWaitStartFrame = frame;
 		if (recovery.cleanupDrained && memorySettled) {
 			if (recovery.firstSettledFrame == 0)
 				recovery.firstSettledFrame = frame;
@@ -24365,6 +24710,8 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recovery
 			VRVendorRelatchPolicy::SelectPostLoadRecoverySettleAction({
 				.cleanupDrained = recovery.cleanupDrained,
 				.currentFrame = frame,
+				// The deadline begins on the first post-loading cleanup service and
+				// cannot be restarted or hidden by cleanup/fence stalls.
 				.admissionWaitStartFrame = recovery.admissionWaitStartFrame,
 				.settledSamples = recovery.settledSamples,
 				.requiredSettledSamples = requiredSettledSamples,
@@ -29858,6 +30205,13 @@ Upscaling::VRVendorResourceResetResult Upscaling::RecreateVendorRuntimeResources
 			BoolText(fidelityFX.HasFSRResources()));
 	}
 	CreateUpscalingTextureResources(a_upscaleMethod);
+	if (!AreCommonVendorTexturesReady(a_upscaleMethod)) {
+		MarkVendorRuntimeResourcesDirty(a_upscaleMethod);
+		logger::error(
+			"[Upscaling] Refusing to publish {} vendor runtime with incomplete or dimension-incompatible common textures.",
+			magic_enum::enum_name(a_upscaleMethod));
+		return VRVendorResourceResetResult::Failed;
+	}
 	auto fsrCreateResult = FidelityFX::LifecycleResult::Ready;
 	if (a_recreateTemporalResources && a_upscaleMethod == UpscaleMethod::kFSR)
 		fsrCreateResult = fidelityFX.CreateFSRResources();
@@ -38297,8 +38651,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 				vrPostLoadCompositorHoldFixedRepair;
 		const bool repairProven =
 			expectedNative || consumeRepairEvidence(
-				repairEvidence,
-				expectedGeneration);
+								  repairEvidence,
+								  expectedGeneration);
 		const uint32_t sourceFormat = static_cast<uint32_t>(sourceDesc.Format);
 		const uint32_t sourceColorSpace =
 			static_cast<uint32_t>(a_texture->eColorSpace);

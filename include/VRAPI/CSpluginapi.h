@@ -12,7 +12,9 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 10;
+// Build 11 distinguishes CS-owned transition coverage from build 10 callers
+// which may still have the former advisory fade timings compiled in.
+inline constexpr unsigned int CSBuildNumber = 11;
 
 namespace CSPluginAPI
 {

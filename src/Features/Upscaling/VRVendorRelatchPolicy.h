@@ -597,6 +597,21 @@ namespace VRVendorRelatchPolicy
 		       a_admission.systemCommitLimitKnown;
 	}
 
+	[[nodiscard]] constexpr bool ShouldRetainStableDoorContract(
+		bool a_stabilizerDoorHandoff,
+		bool a_hardSafetyDeferred,
+		bool a_physicalMutationOccurred) noexcept
+	{
+		// A door handoff is presentation-critical: it must not wait behind a
+		// resource request which admission has already rejected. Before any physical
+		// mutation, the last truthful stable contract (or startup None) is terminally
+		// safe and lets the owned loading fade complete. After mutation, recovery must
+		// instead follow the truthful mutated contract.
+		return a_stabilizerDoorHandoff &&
+		       a_hardSafetyDeferred &&
+		       !a_physicalMutationOccurred;
+	}
+
 	[[nodiscard]] constexpr bool UsesEpochOwnedNativeRestore(
 		const NativeRestoreOwnershipAdmission& a_admission) noexcept
 	{

@@ -39,11 +39,14 @@ contract is available.
   destination stereo pair is accepted. The transition cover uses a 1000 ms soft
   deadline, 1500 ms hard/keepalive budget in the current upstream path, and
   stereo acceptance rather than settings publication.
-- Post-load recovery has an epoch-owned monotonic admission clock and a
-  120-frame deadline. Two consecutive safe samples remain the normal path. The
-  deadline permits one exact evaluation only; it does not waive fresh memory,
-  pressure, GPU headroom, commit projection, retirement, device-loss, OOM,
-  loading-serial, or transition-epoch checks.
+- Non-door post-load recovery has an epoch-owned monotonic admission clock and
+  a 120-frame deadline. Two consecutive safe samples remain the normal path.
+  The deadline permits one exact evaluation only; it does not waive fresh
+  memory, pressure, GPU headroom, commit projection, retirement, device-loss,
+  OOM, loading-serial, or transition-epoch checks. A presentation-critical
+  Stabilizer door handoff instead terminates immediately on hard-safety
+  rejection, retaining the current contract without mutation rather than
+  consuming the fade while waiting.
 - Unsafe deadline evaluation ends before mutation and retains the stable
   contract. With no truthful stable contract, the boot latch is reset so the
   startup None fallback applies.
@@ -174,6 +177,77 @@ above, changes native-restore admission as follows:
 Policy tests cover stable-contract preservation, no-stable low-peak fallback,
 activation exclusion, and commit-guard prerequisites.
 
+## PR-head verification and newly found latch
+
+The next live session used integration build `23ad3de4`, which includes the
+planner correction above.
+
+Unpressured results:
+
+- Repeated Breezehome/Whiterun round trips converged to native interior and
+  FSR4 exterior contracts in both eyes. No bounds-mismatch unsafe fallback,
+  vendor-failure stretch, OOM, device loss, fidelity mismatch, or retained
+  unproven retirement remained after settling.
+- Fade/compositor protection generally released in approximately 1.5-1.6 s.
+  One transition had an indistinct end flash; another exterior transition was
+  visually smooth. No clear PiP was reported in this PR-head series.
+- One return trapped the player in the doorway. A later interior fade appeared
+  to begin bright/correct and rapidly dim to normal illumination. Both remain
+  observations, not established Render Scale causes.
+- Presentation probing materially retains diagnostic capacity. A round trip
+  performed without the heavy probe changed process private bytes by only
+  16,457,728 bytes (approximately 16 MiB), rather than the 0.3-0.5 GiB steps
+  seen during probe-heavy cycles. This does not prove absence of a longer-term
+  leak, but it rules out treating those probe-heavy increments as direct code
+  leakage.
+
+The corrected guard was then forced to reject a native restore while leaving
+substantial real commit headroom:
+
+```text
+TestLimit command: Testlimit64.exe -accepteula -m 256 -c 38
+TestLimit PID:     35968
+TestLimit private: 10,221,875,200 bytes
+
+live system commit after charge:       93,226,274,816 bytes
+actual commit headroom:                16,484,433,920 bytes
+8x projected native addition:           3,220,512,768 bytes
+projected commit:                       96,446,787,584 bytes
+bounded admission limit:                95,996,870,144 bytes
+controlled projected overshoot:            449,917,440 bytes
+```
+
+The transition retained animated content but never completed its fade. Stopping
+the exact TestLimit PID released the pressure but did not recover the
+transition. DevBench's off-thread health continued to advance render frames,
+while `lastTaskFrame` remained 45153 and queued main-thread tasks accumulated.
+
+Source inspection established the cause:
+
+- RC94/Stabilizer door relatches intentionally bypass
+  `CanAdmitVRRenderScalePostLoadRecoveryRelatch` so cleanup cannot destroy the
+  current stable presentation.
+- That bypass also omitted the only code which binds `transitionEpoch`, starts
+  the admission clock, and publishes `settleDeadlineExpired`.
+- The hard-safety branch nevertheless waited for that deadline before its
+  retain-stable decision. It therefore requeued forever under a rejected door
+  allocation, leaving the compositor/FaderMenu transition cover owned.
+
+A diagnostic minidump was captured before restart:
+
+```text
+b/diagnostics/SkyrimVR_1282412824_pressured-transition-stuck_2026-08-08_0547.dmp
+size:   135,675,616 bytes
+SHA256: 7A41F0DF171875F0BB99027B9E39DC684CB762A120E26E755805AA675599C5B8
+```
+
+The dump is intentionally untracked. The follow-up source correction keeps the
+door cleanup bypass, but makes hard-safety rejection terminal before any
+physical mutation. It restores the stable controller contract (or startup
+None), completes the exact recovery owner even when its transition epoch has
+not yet been bound, and releases only the compositor/fade cover owned by that
+loading serial. It does not reduce the 8x projection or 8-16 GiB reserve.
+
 ## Repeatable DevBench/TestLimit protocol
 
 1. Enable Community Shaders developer mode and Debug logging. Confirm DevBench
@@ -219,18 +293,23 @@ activation exclusion, and commit-guard prerequisites.
    approximately five seconds, and immediately stop the probe to preserve the
    transition window.
 10. Under the corrected build, expected rejection behavior is:
-    - requested native profile remains pending;
+    - the rejected door request terminates for this transition and remains
+      restart-required in settings;
     - stable exterior vendor contract remains authoritative;
-    - no Applying/physical mutation occurs while projected commit is unsafe;
+    - no physical mutation occurs while projected commit is unsafe; the
+      controller may transiently enter Applying while it evaluates the plan,
+      then returns to the stable Active contract;
     - `systemCommitGuardActive=true`;
     - `systemCommitDeferred=true` and `pressureDeferred=true`;
-    - the monotonic deadline produces one terminal retain-stable decision;
+    - hard-safety rejection immediately produces one terminal retain-stable
+      decision and releases the owned fade/compositor cover;
+    - the door transition completes rather than remaining black/latched;
     - neither eye submits a reduced raw target or mixed provider;
     - `sessionBoundsMismatchOriginalFallbackEyeObservations` remains zero;
     - no OOM or device loss occurs.
 11. Terminate only the verified TestLimit PID. Confirm commit recovery, then
     explicitly retry or cross the door again and verify convergence to the
-    pending target.
+    configured target.
 
 ## Review and GPU test requests
 
@@ -254,8 +333,9 @@ activation exclusion, and commit-guard prerequisites.
 
 ## Evidence limits
 
-The live run proves that RC203's native-door commit projection could be
-calculated but not enforced. It also proves coherent completion for that one
-pressured transition. It does not prove that the uncertain clipped-door visual
-was PiP, nor does it yet prove the newest guard correction on AMD or NVIDIA.
-Those claims require the corrected DLL and the protocol above.
+The first live run proves that RC203's native-door commit projection could be
+calculated but not enforced. The PR-head run proves the guard is now reached,
+and exposes the pre-follow-up infinite-requeue/fade latch under rejection. It
+does not prove that the uncertain clipped-door visual was PiP, nor does it yet
+prove the newest terminal fallback on AMD or NVIDIA. Those claims require the
+new DLL and the protocol above.

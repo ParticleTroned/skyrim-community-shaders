@@ -997,6 +997,24 @@ namespace
 			   });
 	}
 
+	constexpr bool CoversStableDoorContractRetention()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
+			const bool doorHandoff = (bits & (1u << 0)) != 0;
+			const bool hardSafetyDeferred = (bits & (1u << 1)) != 0;
+			const bool physicalMutationOccurred = (bits & (1u << 2)) != 0;
+			const bool expected =
+				doorHandoff && hardSafetyDeferred && !physicalMutationOccurred;
+			if (ShouldRetainStableDoorContract(
+					doorHandoff,
+					hardSafetyDeferred,
+					physicalMutationOccurred) != expected) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	constexpr bool CoversNativeRestoreMemoryReliefOwnership()
 	{
 		return !ShouldApplyGenericMemoryReliefCleanup(false, true, true, true) &&
@@ -1148,6 +1166,7 @@ namespace
 	static_assert(CoversNativeRestoreOwnership());
 	static_assert(CoversStableNativeRestorePreservation());
 	static_assert(CoversSystemCommitProjectionGuard());
+	static_assert(CoversStableDoorContractRetention());
 	static_assert(CoversNativeRestoreMemoryReliefOwnership());
 	static_assert(CoversDeferredDispatchSelection());
 	static_assert(CoversPostLoadRecoverySettleDeadline());

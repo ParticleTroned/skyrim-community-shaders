@@ -20984,15 +20984,33 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		postLoadRuntimeResetPending.store(false, std::memory_order_release);
 
 		bool retainedStableContract = false;
+		uint64_t retainedLoadingSerial = 0;
 		{
 			std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 			auto& controller = vrRenderScaleTransitionController;
 			const auto& recovery = controller.postLoadRecovery;
+			const auto* transitionOwner =
+				controller.applying.valid &&
+						controller.applying.transitionEpoch == relatchEpoch ?
+					std::addressof(controller.applying) :
+				controller.requested.valid &&
+						controller.requested.transitionEpoch == relatchEpoch ?
+					std::addressof(controller.requested) :
+					nullptr;
+			const bool exactTransitionOwner =
+				controller.targetEpoch == relatchEpoch && transitionOwner;
 			const bool exactRecoveryOwner =
-				recovery.active &&
-				recovery.recoveryEpoch == postLoadRecoveryEpoch &&
-				recovery.transitionEpoch == relatchEpoch;
+				exactTransitionOwner &&
+				((postLoadRecoveryEpoch == 0 && rc94PostLoadDoorRelatch) ||
+					(recovery.active &&
+						recovery.recoveryEpoch == postLoadRecoveryEpoch &&
+						(recovery.transitionEpoch == 0 ||
+							recovery.transitionEpoch == relatchEpoch)));
 			if (exactRecoveryOwner) {
+				retainedLoadingSerial =
+					recovery.loadingSerial != 0 ?
+						recovery.loadingSerial :
+						transitionOwner->stabilizerDoorHandoffSerial;
 				controller.requested = {};
 				controller.applying = {};
 				controller.relatchPlan = {};
@@ -21029,6 +21047,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		CompleteVRRenderScalePostLoadRecovery(
 			postLoadRecoveryEpoch,
 			relatchEpoch);
+		if (retainedLoadingSerial != 0 &&
+			IsVRPostLoadCompositorHoldOwnedByLoadingSerial(
+				retainedLoadingSerial)) {
+			// Terminal retention has no destination contract left to prove. Finish
+			// this exact transition's compositor/fader ownership so Skyrim can
+			// complete the native fade on the unchanged physical presentation.
+			ResetVRPostLoadCompositorHold();
+		}
 		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
 		logger::warn(
@@ -21969,6 +21995,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				criticalGrowthDeferred ||
 				relatchPlan.projectedResidencyDeferred ||
 				relatchPlan.systemCommitDeferred;
+		}
+		if (VRVendorRelatchPolicy::ShouldRetainStableDoorContract(
+				rc94PostLoadDoorRelatch,
+				doorHandoffHardSafetyDeferred,
+				renderTargetMutationOccurred)) {
+			if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
+				requeueRelatch(
+					kVRUpscalingTransitionApplyDelayFrames,
+					false);
+				return false;
+			}
+			return retainStableContractAfterExpiredPostLoadRecovery(
+				"door handoff resource admission rejected before mutation");
 		}
 		const auto& postLoadRecoveryAtAdmission =
 			controllerAtAdmission.postLoadRecovery;

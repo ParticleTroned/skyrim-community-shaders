@@ -834,6 +834,8 @@ Use this after the FOV masks and normal culling settings are already tuned:
 
 VR FPS Stabilizer uses its own config syntax, for example `CS>Setting=value`. Follow that mod's description for the exact file and rule format. The useful CSX settings are **SSS**, **SSGI**, **VLExterior**, and **DLSSMode**.
 
+When using CSX render-scale transition handling, set `CSVRFadeToBlackDuration = 0` in `VRFpsStabilizer.ini`. CSX holds Skyrim's existing loading fade only until the requested render state is coherent, so Stabby's separate fixed-duration fade is redundant and can produce multiple fade-ins. This setting disables only Stabby's timed visual cover; its CS profile and upscaling changes remain active.
+
 The legacy CS API names are technical. **SSS** means **Screen Space Shadows** here, not Subsurface Scattering. The legacy **DLSSMode** API name controls the shared upscaling preset for **DLSS**, **FSR 3.1.5**, and runtime **FSR4**; for FSR/FSR4 the DLAA/native preset behaves as **Native AA**. If a config rule uses numeric presets, the stable values are `0` DLAA/Native AA, `1` Quality, `2` Balanced, `3` Performance, and `4` Ultra Performance. This fork also defines `5` Hoshipa and `6` Ultra Quality for compatible configs, and exposes **Light Limit Fix Contact Shadows** through the API so a compatible dynamic config can switch contact shadows with the same scene/weather logic.
 
 Conceptually, a dynamic profile can look like this:

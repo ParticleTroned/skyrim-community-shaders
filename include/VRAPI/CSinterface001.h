@@ -15,13 +15,14 @@ namespace CSPluginAPI
 	inline constexpr unsigned int CSInterfaceRevision003 = 3;
 	inline constexpr unsigned int CSInterfaceRevision004 = 4;
 	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision004;
-	// Guidance for VR transition controllers that hide render-scale relatches
-	// behind a game fade. These constants are advisory only and do not change
-	// the ABI; CSX does not drive Game.FadeOutGame itself.
-	inline constexpr float CSVRRenderScaleTransitionFadeOutSeconds = 1.0f;
-	inline constexpr float CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds = 6.0f;
-	inline constexpr float CSVRRenderScaleTransitionFadeInSeconds = 1.0f;
-
+	// Deprecated source-compatibility aliases. CSX now owns render-transition
+	// coverage and external controllers must not add a fixed-duration fade.
+	[[deprecated("CSX owns VR render-transition fade coverage")]]
+	inline constexpr float CSVRRenderScaleTransitionFadeOutSeconds = 0.0f;
+	[[deprecated("CSX owns VR render-transition fade coverage")]]
+	inline constexpr float CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds = 0.0f;
+	[[deprecated("CSX owns VR render-transition fade coverage")]]
+	inline constexpr float CSVRRenderScaleTransitionFadeInSeconds = 0.0f;
 	// A message used to fetch CSX' interface.
 	struct CSMessage
 	{
@@ -150,8 +151,9 @@ namespace CSPluginAPI
 		// destination profile during a real Stabilizer LoadingMenu handoff without
 		// authorizing unrelated CSX setters. kNoChange means both settings and the
 		// physical render-scale contract already match, so the caller must not
-		// schedule a fade or invoke the setter. kApply means schedule the existing
-		// door fade and immediately call SetVRUpscalingTransitionProfileForMethod.
+		// invoke the setter. kApply means immediately call
+		// SetVRUpscalingTransitionProfileForMethod. CSX covers actual renderer work
+		// with Skyrim's existing loading fade; callers must not add a timed fade.
 		virtual VRUpscalingTransitionProfileDecision GetVRUpscalingTransitionProfileDecision(
 			UpscaleMethod method,
 			bool renderScaleModeEnabled,

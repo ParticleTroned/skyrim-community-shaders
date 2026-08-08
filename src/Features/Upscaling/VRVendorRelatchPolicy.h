@@ -140,6 +140,126 @@ namespace VRVendorRelatchPolicy
 		       !a_state.profileTransitionPending;
 	}
 
+	struct StartupMainMenuStateDefinition
+	{
+		bool isVR = false;
+		bool startupMainMenuObserved = false;
+		bool shaderCompilationComplete = false;
+		bool completedWorldFrame = false;
+		bool alreadyDefined = false;
+	};
+
+	[[nodiscard]] constexpr bool ShouldDefineStartupMainMenuState(
+		const StartupMainMenuStateDefinition& a_state) noexcept
+	{
+		return a_state.isVR &&
+		       a_state.startupMainMenuObserved &&
+		       a_state.shaderCompilationComplete &&
+		       !a_state.completedWorldFrame &&
+		       !a_state.alreadyDefined;
+	}
+
+	struct RenderScaleRuntimeActivation
+	{
+		bool loaded = false;
+		bool isVR = false;
+		bool establishedPhysicalContract = false;
+		bool unresolvedProfileSync = false;
+		bool completedWorldFrame = false;
+		bool postLoadResetPending = false;
+		bool loadingPresentationActive = false;
+	};
+
+	[[nodiscard]] constexpr bool CanPresentRenderScaleRuntime(
+		const RenderScaleRuntimeActivation& a_state) noexcept
+	{
+		if (!a_state.loaded)
+			return false;
+		if (!a_state.isVR)
+			return true;
+
+		// Loading and save-load ownership may block lifecycle mutation, but an
+		// already-proven physical contract remains the safest presentation state.
+		// Preserve it until a replacement can be applied at a safe point.
+		if (a_state.establishedPhysicalContract)
+			return true;
+
+		return !a_state.unresolvedProfileSync &&
+		       a_state.completedWorldFrame &&
+		       !a_state.postLoadResetPending &&
+		       !a_state.loadingPresentationActive;
+	}
+
+	struct RenderTransitionCoverAdmission
+	{
+		bool isVR = false;
+		bool renderChangePublished = false;
+		bool loadingSerialMatches = false;
+		bool loadingTransitionOpenOrTail = false;
+		bool presentationCoverActive = false;
+	};
+
+	[[nodiscard]] constexpr bool ShouldArmRenderTransitionCover(
+		const RenderTransitionCoverAdmission& a_state) noexcept
+	{
+		return a_state.isVR &&
+		       a_state.renderChangePublished &&
+		       a_state.loadingSerialMatches &&
+		       a_state.loadingTransitionOpenOrTail &&
+		       !a_state.presentationCoverActive;
+	}
+
+	struct LoadingFadeHoldAdmission
+	{
+		bool isVR = false;
+		bool blackFade = false;
+		bool fadingIn = false;
+		bool presentationCoverActive = false;
+		bool loadingMenuClosed = false;
+		bool releaseAlreadyScheduled = false;
+	};
+
+	[[nodiscard]] constexpr bool ShouldHoldLoadingFadeIn(
+		const LoadingFadeHoldAdmission& a_state) noexcept
+	{
+		return a_state.isVR &&
+		       a_state.blackFade &&
+		       a_state.fadingIn &&
+		       a_state.presentationCoverActive &&
+		       a_state.loadingMenuClosed &&
+		       !a_state.releaseAlreadyScheduled;
+	}
+
+	struct LoadingPresentationReleaseAdmission
+	{
+		bool engineSaveLoadActivityActive = false;
+		bool statePostLoadResetPending = false;
+		bool hmdClearMaskDeferred = false;
+		bool upscalingPostLoadResetPending = false;
+		bool renderTargetRecreatePending = false;
+		bool renderTargetRecreateInProgress = false;
+		bool upscalingTransitionPending = false;
+		bool stabilizerSyncScheduled = false;
+		bool stabilizerSyncUnresolved = false;
+	};
+
+	// Presentation follows concrete renderer/engine activity. The broader
+	// save-load safe-mode grace intentionally remains outside this policy so it
+	// can protect mutation and disk persistence without extending black.
+	[[nodiscard]] constexpr bool IsLoadingPresentationReleaseReady(
+		const LoadingPresentationReleaseAdmission& a_state) noexcept
+	{
+		return !a_state.engineSaveLoadActivityActive &&
+		       !a_state.statePostLoadResetPending &&
+		       !a_state.hmdClearMaskDeferred &&
+		       !a_state.upscalingPostLoadResetPending &&
+		       !a_state.renderTargetRecreatePending &&
+		       !a_state.renderTargetRecreateInProgress &&
+		       !a_state.upscalingTransitionPending &&
+		       !a_state.stabilizerSyncScheduled &&
+		       !a_state.stabilizerSyncUnresolved;
+	}
+
 	struct StabilizerDestinationSyncReadiness
 	{
 		bool completedWorldFrameAfterClose = false;
@@ -696,6 +816,80 @@ namespace VRVendorRelatchPolicy
 			return DeferredDispatchAction::EvaluateExisting;
 
 		return DeferredDispatchAction::PresentationStretch;
+	}
+
+	enum class PostLoadRecoverySettleAction : std::uint8_t
+	{
+		WaitForCleanup,
+		WaitForSettledSamples,
+		UseSettledSamples,
+		EvaluateDeadlineOnce
+	};
+
+	struct PostLoadRecoverySettleAdmission
+	{
+		bool cleanupDrained = false;
+		std::uint32_t currentFrame = 0;
+		std::uint32_t admissionWaitStartFrame = 0;
+		std::uint32_t settledSamples = 0;
+		std::uint32_t requiredSettledSamples = 0;
+		std::uint32_t timeoutFrames = 0;
+	};
+
+	[[nodiscard]] constexpr PostLoadRecoverySettleAction SelectPostLoadRecoverySettleAction(
+		const PostLoadRecoverySettleAdmission& a_state) noexcept
+	{
+		if (!a_state.cleanupDrained || a_state.admissionWaitStartFrame == 0)
+			return PostLoadRecoverySettleAction::WaitForCleanup;
+		if (a_state.settledSamples >= a_state.requiredSettledSamples)
+			return PostLoadRecoverySettleAction::UseSettledSamples;
+		if (a_state.currentFrame - a_state.admissionWaitStartFrame >= a_state.timeoutFrames)
+			return PostLoadRecoverySettleAction::EvaluateDeadlineOnce;
+		return PostLoadRecoverySettleAction::WaitForSettledSamples;
+	}
+
+	enum class PostLoadRecoveryDeadlineAction : std::uint8_t
+	{
+		NotExpired,
+		AttemptOnce,
+		RetainStableContract
+	};
+
+	struct PostLoadRecoveryDeadlineAdmission
+	{
+		bool deadlineExpired = false;
+		bool attemptConsumed = false;
+		bool recoveryOwned = false;
+		bool loadingSerialOwned = false;
+		bool cleanupAndTrimComplete = false;
+		bool retirementReady = false;
+		bool memorySampleFresh = false;
+		bool pressureAcceptable = false;
+		bool gpuHeadroomSufficient = false;
+		bool projectedSystemCommitSafe = false;
+		bool deviceHealthy = false;
+		bool noRecentOutOfMemory = false;
+	};
+
+	[[nodiscard]] constexpr PostLoadRecoveryDeadlineAction SelectPostLoadRecoveryDeadlineAction(
+		const PostLoadRecoveryDeadlineAdmission& a_state) noexcept
+	{
+		if (!a_state.deadlineExpired)
+			return PostLoadRecoveryDeadlineAction::NotExpired;
+		if (!a_state.attemptConsumed &&
+			a_state.recoveryOwned &&
+			a_state.loadingSerialOwned &&
+			a_state.cleanupAndTrimComplete &&
+			a_state.retirementReady &&
+			a_state.memorySampleFresh &&
+			a_state.pressureAcceptable &&
+			a_state.gpuHeadroomSufficient &&
+			a_state.projectedSystemCommitSafe &&
+			a_state.deviceHealthy &&
+			a_state.noRecentOutOfMemory) {
+			return PostLoadRecoveryDeadlineAction::AttemptOnce;
+		}
+		return PostLoadRecoveryDeadlineAction::RetainStableContract;
 	}
 
 	[[nodiscard]] constexpr bool UsesVendorEvaluation(bool a_vendorMethod) noexcept

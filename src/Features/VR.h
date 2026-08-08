@@ -262,7 +262,7 @@ public:
 		bool StabilizeRenderScaleDesktopMirror = false;           ///< Blit render-scale output back to the desktop mirror when direct copy is incompatible
 
 		// CSX menu navigation settings
-		bool UseRuntimeDefaultMenuNavigation = false;  ///< Use the explicit Wand Navigation default unless the user selects mouse navigation
+		bool UseRuntimeDefaultMenuNavigation = true;   ///< Use mouse navigation by default until the user selects a mode explicitly
 		bool EnableWandPointing = true;                ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
 
 		// Visual customization

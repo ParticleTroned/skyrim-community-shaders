@@ -959,6 +959,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					keepalive{};
 				if (!upscaling.PrepareVRNativeRestoreCompositorKeepalive(
 						nativeRestoreGuardEpoch,
+						compositorCycleToken,
 						pTexture,
 						pBounds,
 						keepalive)) {
@@ -1356,7 +1357,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					// intact while the retained runtime contract remains authoritative.
 					// Startup has no retained contract; its separately defined runtime
 					// fallback is UpscaleMethod::kNONE until the first world frame.
-				#ifdef DEVBENCH_BRIDGE_ENABLED
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					const uint64_t rejectedProbeSequence =
 						upscaling.BeginVRLoadPresentationProbeSubmit(
 							"reduced-candidate-rejected",
@@ -1372,7 +1373,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					upscaling.CompleteVRLoadPresentationProbeSubmit(
 						rejectedProbeSequence,
 						vr::VRCompositorError_RequestFailed);
-				#endif
+#endif
 					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 						"reduced-candidate-rejected",
 						eEye,

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 
 namespace VRVendorRelatchPolicy
@@ -1034,6 +1035,115 @@ namespace VRVendorRelatchPolicy
 		       a_currentTickMs - a_startTickMs >= a_deadlineMs;
 	}
 
+	struct ExtendedRecoveryLivenessState
+	{
+		std::uint64_t holdEpoch = 0;
+		std::uint64_t holdStartTickMs = 0;
+		std::uint64_t currentTickMs = 0;
+		std::uint64_t cueStartDelayMs = 0;
+		bool terminalFailureClaimed = false;
+	};
+
+	// The cue is generated entirely from the protected keepalive; it never makes
+	// an incoherent render target eligible. A missing clock or terminal claim
+	// fails back to opaque black.
+	[[nodiscard]] constexpr bool ShouldShowExtendedRecoveryLivenessCue(
+		const ExtendedRecoveryLivenessState& a_state) noexcept
+	{
+		return a_state.holdEpoch != 0 &&
+		       !a_state.terminalFailureClaimed &&
+		       HasElapsedMonotonicDeadline(
+				   a_state.holdStartTickMs,
+				   a_state.currentTickMs,
+				   a_state.cueStartDelayMs);
+	}
+
+	enum class PostMutationProgressPhase : std::uint8_t
+	{
+		None,
+		MutationEntered,
+		EmergencyRecoveryRequested,
+		RecoveryResourcesReady,
+		EmergencyCreatorClaimed,
+		EngineTargetsReconciled,
+		ContractPublished,
+		PresentationStabilizing
+	};
+
+	[[nodiscard]] constexpr bool IsPostMutationRecoveryActivelyProgressing(
+		PostMutationProgressPhase a_phase) noexcept
+	{
+		return a_phase >= PostMutationProgressPhase::RecoveryResourcesReady;
+	}
+
+	struct PostMutationTerminalDeadlinePolicy
+	{
+		PostMutationProgressPhase progressPhase =
+			PostMutationProgressPhase::None;
+		bool debuggerAttached = false;
+		std::uint64_t stalledDeadlineMs = 0;
+		std::uint64_t progressingDeadlineMs = 0;
+		std::uint64_t debuggerDeadlineMs = 0;
+	};
+
+	// Time alone does not make a coherent recovery impossible. A chain which has
+	// crossed a one-way resource/creator/publication milestone receives the longer
+	// recovery ceiling, while a debugger receives its own deliberately generous
+	// ceiling. The caller keeps the chain start immutable, so retry/owner churn
+	// cannot renew any of these budgets.
+	[[nodiscard]] constexpr std::uint64_t SelectPostMutationTerminalDeadline(
+		const PostMutationTerminalDeadlinePolicy& a_policy) noexcept
+	{
+		if (a_policy.debuggerAttached)
+			return a_policy.debuggerDeadlineMs;
+		return IsPostMutationRecoveryActivelyProgressing(
+				   a_policy.progressPhase) ?
+		           a_policy.progressingDeadlineMs :
+		           a_policy.stalledDeadlineMs;
+	}
+
+	struct PostMutationEmergencyMemoryAdmission
+	{
+		bool systemCommitValid = false;
+		std::uint64_t currentCommitBytes = 0;
+		std::uint64_t commitLimitBytes = 0;
+		std::uint64_t estimatedAdditionalBytes = 0;
+		std::uint64_t projectionMultiplier = 0;
+		std::uint64_t reserveBytes = 0;
+	};
+
+	// Emergency recovery may consume the normal conservative reserve, but it must
+	// not consume the machine's final commit. The smaller multiplier and reserve
+	// are policy inputs rather than truths; callers deliberately identify their
+	// current values as provisional until live TestLimit evidence determines them.
+	[[nodiscard]] constexpr bool CanAdmitPostMutationEmergencyMemory(
+		const PostMutationEmergencyMemoryAdmission& a_state) noexcept
+	{
+		if (!a_state.systemCommitValid ||
+			a_state.commitLimitBytes == 0 ||
+			a_state.projectionMultiplier == 0 ||
+			a_state.commitLimitBytes <= a_state.reserveBytes ||
+			a_state.estimatedAdditionalBytes >
+				std::numeric_limits<std::uint64_t>::max() /
+					a_state.projectionMultiplier) {
+			return false;
+		}
+
+		const std::uint64_t projectedAdditionalBytes =
+			a_state.estimatedAdditionalBytes * a_state.projectionMultiplier;
+		if (a_state.currentCommitBytes >
+			std::numeric_limits<std::uint64_t>::max() -
+				projectedAdditionalBytes) {
+			return false;
+		}
+
+		const std::uint64_t projectedCommitBytes =
+			a_state.currentCommitBytes + projectedAdditionalBytes;
+		const std::uint64_t admissionLimitBytes =
+			a_state.commitLimitBytes - a_state.reserveBytes;
+		return projectedCommitBytes < admissionLimitBytes;
+	}
+
 	enum class PostMutationRecoveryAction : std::uint8_t
 	{
 		NotApplicable,
@@ -1054,13 +1164,14 @@ namespace VRVendorRelatchPolicy
 		bool retirementReady = false;
 		bool deviceHealthy = false;
 		bool targetValid = false;
+		bool emergencyMemorySafe = false;
 	};
 
-	// Predictive memory admission is intentionally absent from the emergency
-	// attempt. Once physical mutation has started, one serialized attempt is
-	// preferable to a permanent black hold. Ownership, cleanup, retirement, and
-	// device health remain hard correctness gates. Their own failure is bounded by
-	// the terminal deadline rather than bypassed.
+	// Emergency admission relaxes the normal conservative projection but retains
+	// a smaller system-commit projection and final reserve. Once physical mutation
+	// has started, one serialized attempt is preferable to a permanent black hold;
+	// it is not a free pass to consume all remaining machine commit. Ownership,
+	// cleanup, retirement, target validity, and device health also remain hard.
 	[[nodiscard]] constexpr PostMutationRecoveryAction SelectPostMutationRecoveryAction(
 		const PostMutationRecoveryAdmission& a_state) noexcept
 	{
@@ -1076,7 +1187,8 @@ namespace VRVendorRelatchPolicy
 			a_state.cleanupAndTrimComplete &&
 			a_state.retirementReady &&
 			a_state.deviceHealthy &&
-			a_state.targetValid) {
+			a_state.targetValid &&
+			a_state.emergencyMemorySafe) {
 			return PostMutationRecoveryAction::AttemptOnce;
 		}
 		return PostMutationRecoveryAction::ContinueConservative;

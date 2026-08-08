@@ -148,13 +148,45 @@ mutation, a truthful stable contract is retained immediately. If reduced targets
 remain active but that resource proof is unavailable, the exact owner may publish
 one internal provider-neutral native relatch. It does not alter the selected
 DLSS/FSR profile: that profile is deferred with a fresh transaction identity and
-replayed after coherent native recovery. The internal worker has a 2-second
-same-generation creator-entry bound, then transfers to the nonrenewing 15-second
-post-mutation bound. A new load removes the old fast-path waiver and lets the same
-worker use the normal safe-point gates; it does not create a second successor.
-The pre-creator watchdog does not charge time while the newer LoadingMenu serial
-is open. Its longer 15-second bound begins at that serial's authoritative close
-tick, and repeated same-serial callbacks cannot move the start tick.
+replayed after coherent native recovery. The internal worker may request one
+emergency creator-service turn after two seconds, then remains covered by a
+nonrenewing recoverable deadline. The current provisional policy uses a
+15-second absolute deadline until recovery resources are admitted, a 60-second
+absolute ceiling while recovery is constructively progressing, and a 120-second
+ceiling while a debugger is attached. These are suggested initial values, not
+determined optima. A failed creator entry or native fallback publication stays
+black-covered and retryable until the applicable deadline; it is not an
+immediate integrity failure. A new load removes the old fast-path waiver and
+lets the same worker use the normal safe-point gates; it does not create a second
+successor. The pre-creator watchdog does not charge time while the newer
+LoadingMenu serial is open. Its recoverable bound begins at that serial's
+authoritative close tick, and repeated same-serial callbacks cannot move the
+start tick.
+
+A failed native-fallback publication uses a separate immutable clock beginning
+at the first exact hard-deadline token. Missing clock state is initialized once
+under the full owner transaction instead of becoming an unbounded retry. At
+expiry, terminal ownership is claimed before releasing those locks and blocks a
+new physical mutation from racing the forced-exit decision.
+
+The emergency service turn relaxes but does not eliminate system-commit
+admission. Its suggested starting guard projects twice the estimated additional
+commit and retains a final 2 GiB system reserve. Normal operation continues to
+use the deliberately conservative 4x/8x projections and 8-16 GiB reserve. The
+emergency values must be calibrated on AMD and NVIDIA; they are explicitly
+provisional. Emergency admission queries system commit at that exact evaluation
+rather than reusing a controller sample retained across retry frames. Iteration
+records expose the current post-mutation progress phase,
+last progress tick, emergency-attempt state, selected terminal deadline, and
+debugger state so an extended deadline can be distinguished from retry churn.
+After 6.5 seconds, an exact recoverable owner also changes the protected opaque
+black keepalive to a very dim 1.8-second blue pulse. The clear color is generated
+without sampling or publishing the incoherent game target, and terminal claim
+returns it to black. The delay, period, and intensity are provisional usability
+values. Records expose `livenessCueActive`, its delay/period, and that provisional
+status; live AMD/NVIDIA review should determine whether the cue is perceptible
+without resembling the known transition flash. A securely composed OpenVR
+notification remains outside this change.
 
 Start the probe at the main menu or immediately before invoking the in-game
 load command. Stop it only after the destination has visibly settled, then poll

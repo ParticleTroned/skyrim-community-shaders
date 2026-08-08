@@ -3,8 +3,8 @@
 ## Purpose and status
 
 This branch integrates the local VR memory-stability work and the Render Scale
-fallback fixes on current upstream `cs-1.7-PL-VR` head `601f9e78` (the RC203
-lineage plus the subsequent VR-menu navigation fix). It was developed in a
+fallback fixes on current upstream `cs-1.7-PL-VR` head `64d837d3` (the merged
+RC203 recovery lineage plus subsequent upstream review fixes). It was developed in a
 separate worktree so the RC190 memory-investigation tree and its DLL were not
 modified.
 
@@ -42,6 +42,15 @@ contract is available.
     transitions; the shared 500 ms grace makes the hard caps 6.5 s, 3.5 s, and
     1.5 s. A post-mutation generation remains black until coherent stereo
     acceptance; the time cap must not expose a partially mutated target.
+-   If a recoverable pre- or post-mutation owner remains black-covered beyond
+    6.5 s, the protected keepalive changes from opaque black to a very dim,
+    slow blue pulse. The cue is generated only by clearing the already-validated
+    keepalive candidate; it never samples the incoherent game target, changes its
+    eligibility, allocates a notification surface, or weakens stereo proof. It
+    returns to black if terminal failure is claimed and disappears immediately
+    when the coherent handoff/reset completes. The 6.5 s delay, 1.8 s period, and
+    0.2-0.8% raw blue intensity are provisional usability values for HMD review,
+    not a substitute for a future securely composed OpenVR notification.
 -   LoadingMenu event state, serial identity, and its vendor-work-gate bit are
     published as one gate-owned transaction. Each open edge also owns a
     non-renewable missed-close candidate. If a close callback is lost, the exact
@@ -58,13 +67,21 @@ contract is available.
     or transition-epoch checks. Once the recreate checkpoint publishes the
     broader post-mutation serialization owner immediately before native creator
     entry, a separate non-renewable wall clock may request one recovery-creator
-    service turn after 2 s. That one-shot path may
-    waive predictive memory admission only; exact ownership, cleanup,
-    retirement, target validity, device health, and coherent stereo release stay
-    mandatory. The serialization chain is terminal at 15 s, except that a
-    just-completed creator or covered presentation handoff may retain its current
-    frame and at most one following presentation turn, capped at an additional
-    500 ms. This grace cannot renew the 15 s clock. The narrower physical-mutation
+    service turn after 2 s. That one-shot path relaxes normal predictive memory
+    admission, but it does not eliminate it: the current suggested starting
+    policy projects `2x estimatedAdditionalBytes` and preserves a final 2 GiB of
+    system commit. Exact ownership, cleanup, retirement, target validity, device
+    health, and coherent stereo release stay mandatory. These emergency memory
+    values are deliberately provisional tuning suggestions, not determined
+    safety constants. The immutable serialization clock selects a provisional
+    15 s terminal deadline while recovery has not demonstrated constructive
+    progress, a 60 s ceiling once recovery resources are admitted and progress
+    advances through creator/target/publication phases, or 120 s while a debugger
+    is attached. A just-completed creator or covered presentation handoff may
+    retain its current frame and at most one following presentation turn, capped
+    at an additional 500 ms. This grace cannot renew the selected absolute clock,
+    and phase transitions are monotonic so retry churn cannot manufacture extra
+    time. The narrower physical-mutation
     marker can clear after coherent target publication while serialization
     remains owned through presentation retirement. A Stabilizer door still
     retains its stable contract immediately on hard-safety rejection before
@@ -80,14 +97,25 @@ contract is available.
     once to an internal provider-neutral native relatch. The user's fidelity
     profile is kept as a fresh latest-wins replay request rather than being
     rewritten to None. Ordinary requests remain deferred behind that worker.
-    Creator entry transfers it to the unchanged 15 s post-mutation chain; failure
-    to enter the creator within 2 s for the same hold/loading generation is
-    terminal instead of renewing the black hold. A newer loading generation
-    removes the 2 s waiver and returns the same worker to normal safe-point
+    Creator entry transfers it to the same post-mutation chain; failure to enter
+    the creator within the same hold/loading generation is terminal only after a
+    provisional 15 s recoverable fallback bound, or 120 s with a debugger
+    attached, instead of renewing the black hold. A failed attempt to publish the
+    promoted native fallback retains and requeues the exact covered fallback
+    under that same bound; it is not treated as an immediate integrity failure.
+    Its immutable clock begins when the exact hard-deadline fallback token is
+    first published. If legacy/corrupt state presents that token without a clock,
+    the complete owner lock set initializes it once rather than granting an
+    infinite waiver. Terminal selection atomically closes further physical
+    mutation before locks are released, so a successor cannot race a decided CTD.
+    A newer loading generation removes the 2 s emergency-service waiver and
+    returns the same worker to normal safe-point
     admission. While that exact LoadingMenu serial is open, Skyrim owns renderer
-    mutation and its time is not charged. The longer 15 s pre-creator bound starts
-    at the authoritative close timestamp for that serial; duplicate callbacks for
-    the same serial cannot renew it, and no second native successor is created.
+    mutation and its time is not charged. A successfully published worker starts
+    its own pre-creator clock once; adoption by a newer loading serial transfers
+    charging to that serial's authoritative close timestamp. Duplicate callbacks
+    for the same serial cannot renew either clock, and no second native successor
+    is created.
 -   System commit reserve remains:
 
     ```text
@@ -96,6 +124,21 @@ contract is available.
 
 -   Estimated system-commit growth remains deliberately conservative: 4x normal
     overlap allocation and 8x full-resolution native restore.
+-   The one-shot emergency path uses a separately visible, relaxed guard:
+
+    ```text
+    emergency_projected_commit = current_commit + 2 * estimatedAdditionalBytes
+    emergency_admission_limit = commit_limit - 2 GiB
+    require emergency_projected_commit < emergency_admission_limit
+    ```
+
+    The `2x` multiplier and 2 GiB final reserve are suggested initial values for
+    upstream review and AMD/NVIDIA measurement. They are not claimed to be
+    determined optima or safety constants. Emergency recovery is a legitimate
+    use of part of the normal reserve, but not a free pass for a leaking process
+    to consume the system's final commit headroom. The emergency decision takes
+    a fresh `GlobalMemoryStatusEx` sample at the exact evaluation; relaxed
+    admission cannot reuse a controller sample retained across retry frames.
 -   PR10's provider-independent DXGI pre-recreate offer remains in place for
     protected memory-relief transitions. Its scope is Skyrim's eligible common
     render, depth, deferred, underwater, and display targets; it does not offer
@@ -136,14 +179,16 @@ contract is available.
     marker has already cleared. Unsafe DXGI reclaim results and a creator
     exception after the physical boundary also terminate synchronously because
     no truthful live target table can be exposed. Other healthy-device provider,
-    retirement, publication, or ownership stalls receive the bounded recovery
-    and 15 s plus next-frame/500 ms maximum grace above. The code logs and
+    retirement, publication, or ownership stalls receive bounded recovery with
+    the provisional progress-sensitive 15 s/60 s deadline (120 s under a
+    debugger) plus next-frame/500 ms maximum grace above. The code logs and
     flushes full transition context, then raises application-defined
     noncontinuable exception `0xE0525343` for Crash Logger. Ordinary pre-mutation
     OOM, commit rejection, and provider failure retain the truthful stable
     contract and do not terminate. The distinct terminal pre-mutation case is an
     already-promoted native liveness fallback which still cannot enter its
-    creator within the same exact 2 s deadline generation.
+    creator or publish a coherent fallback within its exact recoverable deadline
+    generation.
 
 ## Live observations on 2026-08-08
 
@@ -485,14 +530,26 @@ and live testing remain required.
     immediately, including after the narrower physical marker has cleared.
     Unsafe reclaim identities and a creator exception after the physical
     boundary are likewise synchronous integrity failures. Other healthy-device
-    unresolved chains receive one emergency service turn after 2 s and a 15 s
-    non-renewable bound; only a just-completed creator or covered presentation
-    handoff may add the next presentation frame, capped at 500 ms. Failure then
-    produces a crash-logger-visible CTD instead of an indefinite black apparent
-    hang.
+    unresolved chains receive one emergency service turn after 2 s. The proposed
+    progress policy uses a non-renewable 15 s absolute bound before constructive
+    recovery is demonstrated, a 60 s absolute ceiling after resources are
+    admitted and recovery is actively progressing, and 120 s while a debugger is
+    attached; only a just-completed creator or covered presentation handoff may
+    add the next presentation frame, capped at 500 ms. Failure then produces a
+    crash-logger-visible CTD instead of an indefinite black apparent hang. These
+    durations are suggested starting values for review, not empirically
+    determined optima. In particular, review whether the phase threshold used to
+    earn the longer ceiling is strict enough to prevent churn from masquerading
+    as recovery while still tolerating real driver/debugger latency.
     Confirm that exception `0xE0525343` is compatible with the crash loggers
     upstream supports. A modal desktop message is intentionally avoided because
     it may be invisible in the HMD and resemble the hang it replaces.
+-   Review the provisional extended-black liveness cue on both AMD and NVIDIA,
+    with Gamma and Linear compositor color spaces where available. Confirm that
+    it is visible enough to distinguish recovery from a hang without resembling
+    a transition flash, causing discomfort, or changing keepalive identity and
+    stereo ownership. The cue is intentionally basic and remains in the current
+    recovery scope; a secure OpenVR notification layer is deferred.
 -   Explicitly review the conservative commit constants rather than weakening
     them incidentally while reviewing the fallback:
     -   `4x estimatedAdditionalBytes` covers ordinary overlap with substantial
@@ -509,6 +566,12 @@ and live testing remain required.
         recommendation is to preserve them unless NVIDIA/AMD measurements establish
         a tighter safe bound; the memory leak under investigation makes reducing
         the margin especially unattractive.
+    -   The one-shot emergency recovery path is intentionally less conservative,
+        currently `2x estimatedAdditionalBytes` with a final 2 GiB system-commit
+        reserve. Those two values are suggested starting points, not determined
+        constants. Review whether they provide enough room for Windows, the
+        compositor, and the driver on both AMD and NVIDIA while allowing recovery
+        to use reserve that normal operation must leave untouched.
 
 ## Build and fatal-path verification
 
@@ -518,21 +581,33 @@ and live testing remain required.
     both confirmed loss and a non-zero current post-mutation serialization owner.
     Cover both an active physical marker and the presentation phase after that
     narrower marker has cleared.
--   Unit policy coverage must also prove the 2 s one-shot attempt, 15 s terminal
-    bound, and at-most-500-ms/next-presentation-frame grace cannot be renewed by a
-    retry, successor epoch, or loading serial.
+-   Unit policy coverage must also prove the 2 s one-shot attempt, provisional
+    15 s stalled / 60 s progressing / 120 s debugger terminal selection, and
+    at-most-500-ms/next-presentation-frame grace cannot be renewed by a retry,
+    successor epoch, phase regression, or loading serial. It must prove that only
+    admission of recovery resources earns the progressing ceiling.
+-   Unit policy coverage must prove the emergency commit guard rejects invalid or
+    overflowing samples, equality at the final-reserve boundary, and projections
+    above that boundary, while accepting a strictly lower `2x` projection. These
+    values remain reviewable tuning inputs rather than test-asserted optima.
+-   Live/log review must confirm each emergency evaluation records a fresh system
+    commit sample; staleness is not one of the relaxed constraints.
+-   Unit policy coverage must prove the liveness cue stays black before 6.5 s,
+    without an exact hold/clock, and after terminal ownership is claimed; the cue
+    becomes eligible exactly at the threshold without publishing game content.
 -   Verify the pre-mutation native deadline promotion preserves selected settings,
     gives a synthesized fidelity replay a fresh request/transition identity, keeps
     a genuinely newer deferred request, and cannot renew itself within one loading
     generation. OpenComposite and a newer LoadingMenu generation may remove only
     its fast-path waiver; they must not erase a live provider-neutral physical
-    worker. Prove an open newer serial cannot consume the terminal budget, its 15 s
-    bound begins at the matching close tick, and duplicate same-serial adoption
-    cannot rebase that tick.
+    worker. Prove an open newer serial cannot consume the terminal budget, its
+    recoverable bound begins at the matching close tick, duplicate same-serial
+    adoption cannot rebase that tick, and failed publication stays covered and
+    retryable until that same bound rather than terminating immediately.
 -   Inject `DISCARDED`, `NOT_COMMITTED`, reclaim-call failure, and poison-retention
     failure at the creator checkpoint. Each must select terminal handling
     synchronously before global/CSX setup or rendering can consume the identity;
-    none may enter the healthy-device 15 s retry path.
+    none may enter the healthy-device recoverable retry path.
 -   An ordinary preflight rejection, TestLimit commit rejection, or OOM before
     mutation must not terminate. A provider failure with a healthy device must
     retain the stable contract when pre-mutation; after reconciled target mutation,

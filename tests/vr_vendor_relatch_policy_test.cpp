@@ -1275,6 +1275,7 @@ namespace
 			.retirementReady = true,
 			.deviceHealthy = true,
 			.targetValid = true,
+			.emergencyMemorySafe = true,
 		};
 		if (SelectPostMutationRecoveryAction(state) !=
 			PostMutationRecoveryAction::ContinueConservative) {
@@ -1286,7 +1287,7 @@ namespace
 			return false;
 		}
 
-		for (std::uint32_t bit = 0; bit < 7; ++bit) {
+		for (std::uint32_t bit = 0; bit < 8; ++bit) {
 			auto blocked = state;
 			switch (bit) {
 			case 0:
@@ -1309,6 +1310,9 @@ namespace
 				break;
 			case 6:
 				blocked.targetValid = false;
+				break;
+			case 7:
+				blocked.emergencyMemorySafe = false;
 				break;
 			default:
 				return false;
@@ -1338,6 +1342,112 @@ namespace
 		state.mutationStartTickMs = 0;
 		return SelectPostMutationRecoveryAction(state) ==
 		       PostMutationRecoveryAction::NotApplicable;
+	}
+
+	constexpr bool CoversPostMutationEmergencyMemoryAdmission()
+	{
+		PostMutationEmergencyMemoryAdmission admission{
+			.systemCommitValid = true,
+			.currentCommitBytes = 60,
+			.commitLimitBytes = 100,
+			.estimatedAdditionalBytes = 10,
+			.projectionMultiplier = 2,
+			.reserveBytes = 2,
+		};
+		if (!CanAdmitPostMutationEmergencyMemory(admission))
+			return false;
+
+		// Equality with the final reserve is deliberately rejected.
+		admission.currentCommitBytes = 78;
+		if (CanAdmitPostMutationEmergencyMemory(admission))
+			return false;
+		admission.currentCommitBytes = 60;
+		admission.systemCommitValid = false;
+		if (CanAdmitPostMutationEmergencyMemory(admission))
+			return false;
+		admission.systemCommitValid = true;
+		admission.commitLimitBytes = admission.reserveBytes;
+		if (CanAdmitPostMutationEmergencyMemory(admission))
+			return false;
+		admission.commitLimitBytes = 100;
+		admission.projectionMultiplier = 0;
+		if (CanAdmitPostMutationEmergencyMemory(admission))
+			return false;
+		admission.projectionMultiplier = 2;
+		admission.estimatedAdditionalBytes =
+			std::numeric_limits<std::uint64_t>::max();
+		if (CanAdmitPostMutationEmergencyMemory(admission))
+			return false;
+
+		admission.projectionMultiplier = 1;
+		admission.estimatedAdditionalBytes = 10;
+		admission.currentCommitBytes =
+			std::numeric_limits<std::uint64_t>::max() - 5;
+		return !CanAdmitPostMutationEmergencyMemory(admission);
+	}
+
+	constexpr bool CoversPostMutationProgressDeadlineSelection()
+	{
+		PostMutationTerminalDeadlinePolicy policy{
+			.progressPhase = PostMutationProgressPhase::MutationEntered,
+			.debuggerAttached = false,
+			.stalledDeadlineMs = 15000,
+			.progressingDeadlineMs = 60000,
+			.debuggerDeadlineMs = 120000,
+		};
+		if (SelectPostMutationTerminalDeadline(policy) != 15000)
+			return false;
+		policy.progressPhase = PostMutationProgressPhase::None;
+		if (IsPostMutationRecoveryActivelyProgressing(policy.progressPhase) ||
+			SelectPostMutationTerminalDeadline(policy) != 15000) {
+			return false;
+		}
+		policy.progressPhase =
+			PostMutationProgressPhase::EmergencyRecoveryRequested;
+		if (IsPostMutationRecoveryActivelyProgressing(
+				policy.progressPhase) ||
+			SelectPostMutationTerminalDeadline(policy) != 15000) {
+			return false;
+		}
+
+		policy.progressPhase =
+			PostMutationProgressPhase::RecoveryResourcesReady;
+		if (!IsPostMutationRecoveryActivelyProgressing(policy.progressPhase) ||
+			SelectPostMutationTerminalDeadline(policy) != 60000) {
+			return false;
+		}
+		policy.progressPhase =
+			PostMutationProgressPhase::PresentationStabilizing;
+		if (SelectPostMutationTerminalDeadline(policy) != 60000)
+			return false;
+		policy.debuggerAttached = true;
+		return SelectPostMutationTerminalDeadline(policy) == 120000;
+	}
+
+	constexpr bool CoversExtendedRecoveryLivenessCue()
+	{
+		ExtendedRecoveryLivenessState state{
+			.holdEpoch = 7,
+			.holdStartTickMs = 100,
+			.currentTickMs = 6599,
+			.cueStartDelayMs = 6500,
+			.terminalFailureClaimed = false,
+		};
+		if (ShouldShowExtendedRecoveryLivenessCue(state))
+			return false;
+		state.currentTickMs = 6600;
+		if (!ShouldShowExtendedRecoveryLivenessCue(state))
+			return false;
+		state.terminalFailureClaimed = true;
+		if (ShouldShowExtendedRecoveryLivenessCue(state))
+			return false;
+		state.terminalFailureClaimed = false;
+		state.holdEpoch = 0;
+		if (ShouldShowExtendedRecoveryLivenessCue(state))
+			return false;
+		state.holdEpoch = 7;
+		state.holdStartTickMs = 0;
+		return !ShouldShowExtendedRecoveryLivenessCue(state);
 	}
 
 	constexpr bool CoversPostMutationRecoveryTransitionTransfer()
@@ -1754,6 +1864,9 @@ namespace
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
 	static_assert(CoversBoundedPostMutationRecovery());
+	static_assert(CoversPostMutationEmergencyMemoryAdmission());
+	static_assert(CoversExtendedRecoveryLivenessCue());
+	static_assert(CoversPostMutationProgressDeadlineSelection());
 	static_assert(CoversPostLoadRecoveryTransitionBinding());
 	static_assert(CoversPostLoadRecoveryRelatchOwnerSelection());
 	static_assert(CoversPostMutationRecoveryTransitionTransfer());

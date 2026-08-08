@@ -552,6 +552,51 @@ namespace VRVendorRelatchPolicy
 		std::uint64_t progressOwnerEpoch = 0;
 	};
 
+	struct StableNativeRestoreAdmission
+	{
+		bool physicalResizeNeeded = false;
+		bool previousBootActiveVendor = false;
+		bool targetRenderScaleActive = false;
+		bool stableValid = false;
+		bool stableActiveVendor = false;
+		bool stableMatchesBootContract = false;
+	};
+
+	[[nodiscard]] constexpr bool PreservesStableVendorContractDuringNativeRestore(
+		const StableNativeRestoreAdmission& a_admission) noexcept
+	{
+		return a_admission.physicalResizeNeeded &&
+		       a_admission.previousBootActiveVendor &&
+		       !a_admission.targetRenderScaleActive &&
+		       a_admission.stableValid &&
+		       a_admission.stableActiveVendor &&
+		       a_admission.stableMatchesBootContract;
+	}
+
+	[[nodiscard]] constexpr bool UsesLowPeakNativeRestore(
+		const StableNativeRestoreAdmission& a_admission) noexcept
+	{
+		return a_admission.physicalResizeNeeded &&
+		       a_admission.previousBootActiveVendor &&
+		       !a_admission.targetRenderScaleActive &&
+		       !PreservesStableVendorContractDuringNativeRestore(a_admission);
+	}
+
+	struct SystemCommitGuardAdmission
+	{
+		bool residencyOverlapAllocation = false;
+		bool systemCommitValid = false;
+		bool systemCommitLimitKnown = false;
+	};
+
+	[[nodiscard]] constexpr bool UsesSystemCommitProjectionGuard(
+		const SystemCommitGuardAdmission& a_admission) noexcept
+	{
+		return a_admission.residencyOverlapAllocation &&
+		       a_admission.systemCommitValid &&
+		       a_admission.systemCommitLimitKnown;
+	}
+
 	[[nodiscard]] constexpr bool UsesEpochOwnedNativeRestore(
 		const NativeRestoreOwnershipAdmission& a_admission) noexcept
 	{

@@ -90,6 +90,12 @@ Unpressured baseline:
   certainty after discovering the player/camera was clipped inside the door.
   The screenshot shows near-plane door geometry crossing the view and is not
   reliable evidence of PiP. Treat the visual result as inconclusive.
+- Subsequent repeated Breezehome in/out cycles repeatedly left the player
+  trapped in the door, including after changing position before activating it.
+  Similar trapping had occurred once or twice previously. Track this as a
+  separate low-priority transition/placement issue; no causal link to Render
+  Scale has been established. It is also a test confounder because near-plane
+  door geometry can be mistaken for a presentation artifact.
 - DevBench recorded zero bounds-mismatch original fallback observations and
   zero vendor-failure stretch observations. This does not exclude a full-size
   texture whose contents are only partially updated; dimensions alone cannot

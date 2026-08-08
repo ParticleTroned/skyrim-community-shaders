@@ -201,17 +201,94 @@
     "CS Editor": null,
     "CS Utility": {
         "enabled": false,
-        "fixUnderwaterFogDofBlur": false
+        "fixUnderwaterFogDofBlur": false,
+        "sceneDof": {
+            "baseline": {
+                "autoFocus": false,
+                "autoFocusSettings": {
+                    "blurMultiplier": 1.0,
+                    "farBlur": 0.0,
+                    "farDistance": 0.0,
+                    "farRange": 0.0,
+                    "nearBlur": 0.0,
+                    "nearDistance": 0.0,
+                    "nearRange": 0.0
+                },
+                "blurRadius": 2,
+                "distance": 0.0,
+                "excludeSky": false,
+                "mode": 2,
+                "range": 0.0,
+                "strength": 0.0
+            },
+            "locked": false,
+            "values": {
+                "autoFocus": false,
+                "autoFocusSettings": {
+                    "blurMultiplier": 1.0,
+                    "farBlur": 0.0,
+                    "farDistance": 0.0,
+                    "farRange": 0.0,
+                    "nearBlur": 0.0,
+                    "nearDistance": 0.0,
+                    "nearRange": 0.0
+                },
+                "blurRadius": 2,
+                "distance": 0.0,
+                "excludeSky": false,
+                "mode": 2,
+                "range": 0.0,
+                "strength": 0.0
+            }
+        },
+        "underwaterDof": {
+            "baseline": {
+                "autoFocus": false,
+                "autoFocusSettings": {
+                    "blurMultiplier": 1.0,
+                    "farBlur": 0.0,
+                    "farDistance": 0.0,
+                    "farRange": 0.0,
+                    "nearBlur": 0.0,
+                    "nearDistance": 0.0,
+                    "nearRange": 0.0
+                },
+                "blurRadius": 2,
+                "distance": 0.0,
+                "excludeSky": false,
+                "mode": 2,
+                "range": 0.0,
+                "strength": 0.0
+            },
+            "locked": false,
+            "values": {
+                "autoFocus": false,
+                "autoFocusSettings": {
+                    "blurMultiplier": 1.0,
+                    "farBlur": 0.0,
+                    "farDistance": 0.0,
+                    "farRange": 0.0,
+                    "nearBlur": 0.0,
+                    "nearDistance": 0.0,
+                    "nearRange": 0.0
+                },
+                "blurRadius": 2,
+                "distance": 0.0,
+                "excludeSky": false,
+                "mode": 2,
+                "range": 0.0,
+                "strength": 0.0
+            }
+        }
     },
     "Cloud Shadows": {
+        "Enabled": 1,
         "Opacity": 0.800000011920929
     },
     "Disable at Boot": {
-        "ExponentialHeightFog": true,
         "RenderDoc": false,
         "ScreenSpaceGI": false,
         "ScreenSpaceShadows": false,
-        "Skin": true,
         "Skylighting": false,
         "SubsurfaceScattering": false,
         "UnifiedWater": false,
@@ -237,6 +314,7 @@
         "AlphaReduction": 0.15000000596046448,
         "AlphaSoftness": 0.0,
         "AlphaStrength": 0.0,
+        "Enabled": true,
         "SkinnedOnly": true
     },
     "General": {
@@ -253,6 +331,7 @@
         "BasicGrassBrightness": 0.7,
         "ComplexGrassThreshold": 0.029999999329447746,
         "EnableWrappedLighting": 0,
+        "Enabled": 1,
         "Glossiness": 20.0,
         "OverrideComplexGrassSettings": 1,
         "SpecularStrength": 0.5,
@@ -294,6 +373,7 @@
         "UseStaticIBL": 1
     },
     "Interior Sun": {
+        "Enabled": true,
         "ForceDoubleSidedRendering": true,
         "ForceSingleShadowCascade": true,
         "InteriorShadowDistance": 5000.0
@@ -301,7 +381,8 @@
     "Inverse Square Lighting": null,
     "LOD Blending": {
         "DisableTerrainVertexColors": 0,
-        "EnableWaterReflectionStrength": true,
+        "Enabled": true,
+        "EnableWaterReflectionStrength": false,
         "LODObjectBrightness": 1.0,
         "LODObjectGamma": 1.0,
         "LODObjectSnowBrightness": 1.0,
@@ -418,7 +499,7 @@
         "Water": true
     },
     "Screen Space GI": {
-        "AOInteriorsOnly": true,
+        "AOInteriorsOnly": false,
         "AOPower": 1.7999999523162842,
         "AORadius": 256.0,
         "BlurRadius": 2.0,
@@ -444,7 +525,7 @@
         "NormalDisocclusion": 0.10000000149011612,
         "NumSlices": 3,
         "NumSteps": 6,
-        "ResolutionMode": 0,
+        "ResolutionMode": 1,
         "ResourceProfile": 1,
         "Thickness": 32.0,
         "UseStereoReproject": false,
@@ -456,7 +537,7 @@
         "EnableFoveated": 1,
         "EnableStereoSync": false,
         "SampleCount": 1,
-        "ShadowContrast": 1.0499999523162842,
+        "ShadowContrast": 1.0,
         "SurfaceThickness": 0.019999999552965164,
         "UseStereoReproject": false,
         "VRBaseSamplesAtReference": 16.0,
@@ -542,7 +623,7 @@
     "Terrain Blending": {
         "BlendStrength": 0.5,
         "Enabled": 1,
-        "TerrainCullDistance": 728.0
+        "TerrainCullDistance": 725.0
     },
     "Terrain Helper": {
         "EnableTerrainHelper": true
@@ -590,8 +671,7 @@
         "periphery_taa_center_blend_feather": 0.05000000074505806,
         "periphery_taa_enable": false,
         "periphery_taa_outer_scale": 0.8,
-        "perfMode": 1,
-        "qualityMode": 3,
+        "qualityMode": 4,
         "qualityModeSchemaVersion": 2,
         "reflexFPSLimit": 60.0,
         "reflexLowLatencyBoost": false,
@@ -600,7 +680,7 @@
         "reflexUseMarkersToOptimize": true,
         "renderScaleMode": 1,
         "sharpnessDLSS": 0.8999999761581421,
-        "sharpnessFSR": 0.8999999761581421,
+        "sharpnessFSR": 0.699999988079071,
         "streamlineLogLevel": 0,
         "upscaleMethod": 2,
         "upscaleMethodNoDLSS": 2
@@ -654,18 +734,8 @@
         ],
         "VRMenuPositioningMethod": 1,
         "VRMenuScale": 1.0,
-        "VROverlayCloseKeys": [
-            {
-                "Device": "Secondary",
-                "Key": 32
-            }
-        ],
-        "VROverlayOpenKeys": [
-            {
-                "Device": "Primary",
-                "Key": 32
-            }
-        ],
+        "VROverlayCloseKeys": [],
+        "VROverlayOpenKeys": [],
         "attachMode": 0,
         "comboTimeout": 3.0,
         "dragHighlightColor": [1.0, 1.0, 0.0, 0.30000001192092896],
@@ -702,6 +772,12 @@
     },
     "Volumetric Shadows": null,
     "Water Effects": null,
+    "Weather Picker": {
+        "Enabled": false,
+        "Position": [50.0, 50.0],
+        "PositionSet": false,
+        "ShowInOverlay": false
+    },
     "Wetness Effects": {
         "DebugSettings": {
             "EnableIntExOverride": false,
@@ -800,6 +876,6 @@
         "WetDarkeningStrength": 0.8500000238418579,
         "WetFilmSpecularFloorScale": 2.0,
         "WetHighlightReduction": 2.5,
-        "WetternessFadeRange": 7002.80126953125
+        "WetternessFadeRange": 5000.0
     }
 }

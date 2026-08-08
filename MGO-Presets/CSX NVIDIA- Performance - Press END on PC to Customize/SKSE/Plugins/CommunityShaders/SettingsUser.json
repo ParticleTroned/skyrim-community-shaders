@@ -62,7 +62,7 @@
     "Version": "CSX 3.18-VR",
     "Upscaling": {
         "dlssPreset": 1,
-        "dlssSharpener": 2,
+        "dlssSharpener": 1,
         "foveatedCenterArea": 0.3,
         "foveatedCenterHorizontalScale": 1.0,
         "foveatedLeftEyeMaskOffsetX": 0.0,
@@ -81,8 +81,7 @@
         "periphery_taa_center_blend_feather": 0.05000000074505806,
         "periphery_taa_enable": false,
         "periphery_taa_outer_scale": 0.8,
-        "perfMode": 1,
-        "qualityMode": 3,
+        "qualityMode": 4,
         "qualityModeSchemaVersion": 2,
         "reflexFPSLimit": 60.0,
         "reflexLowLatencyBoost": false,
@@ -90,7 +89,7 @@
         "reflexUseFPSLimit": false,
         "reflexUseMarkersToOptimize": true,
         "renderScaleMode": 1,
-        "sharpnessDLSS": 0.8999999761581421,
+        "sharpnessDLSS": 0.699999988079071,
         "sharpnessFSR": 0.8999999761581421,
         "streamlineLogLevel": 0,
         "upscaleMethod": 3,
@@ -607,7 +606,7 @@
         "waterGamma": 1.7999999523162842
     },
     "Screen Space GI": {
-        "AOInteriorsOnly": true,
+        "AOInteriorsOnly": false,
         "AOPower": 1.7999999523162842,
         "AORadius": 256.0,
         "BlurRadius": 2.0,
@@ -645,7 +644,7 @@
         "EnableFoveated": 1,
         "EnableStereoSync": false,
         "SampleCount": 1,
-        "ShadowContrast": 1.0069999694824219,
+        "ShadowContrast": 1.0,
         "SurfaceThickness": 0.019999999552965164,
         "UseStereoReproject": false,
         "VRBaseSamplesAtReference": 16.0,
@@ -659,7 +658,7 @@
         "IncludeMarkedRoofOccluders": true,
         "MaxZenith": 1.570796251296997,
         "MinDiffuseVisibility": 0.10000000149011612,
-        "MinSpecularVisibility": 0.10000000149011612,
+        "MinSpecularVisibility": 0.05000000074505806,
         "OcclusionUpdateInterval": 8,
         "ProbeFieldSize": 10240.0,
         "ProbeGridQuality": 0,
@@ -731,7 +730,7 @@
     },
     "LOD Blending": {
         "DisableTerrainVertexColors": 0,
-        "EnableWaterReflectionStrength": true,
+        "EnableWaterReflectionStrength": false,
         "Enabled": true,
         "LODObjectBrightness": 1.0,
         "LODObjectGamma": 1.0,
@@ -744,7 +743,7 @@
     "Terrain Blending": {
         "BlendStrength": 0.5,
         "Enabled": 1,
-        "TerrainCullDistance": 763.0
+        "TerrainCullDistance": 725.0
     },
     "Terrain Helper": {
         "EnableTerrainHelper": true

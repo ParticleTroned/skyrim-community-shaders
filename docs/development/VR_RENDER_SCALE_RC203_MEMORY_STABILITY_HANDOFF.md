@@ -96,6 +96,13 @@ Unpressured baseline:
   separate low-priority transition/placement issue; no causal link to Render
   Scale has been established. It is also a test confounder because near-plane
   door geometry can be mistaken for a presentation artifact.
+- In a later series of Breezehome door transitions, most fade-ins appeared
+  correct but the reduced-live-region/stale-remainder PiP morphology was
+  briefly visible on several transitions. Treat this repeated observation as
+  a credible reproduction on the deployed `dfe824e4` DLL, distinct from the
+  earlier door-clipping ambiguity. It is also distinct from the known flash at
+  the beginning of some transitions, currently assumed to be a single stale
+  frame associated with OCU ASW; that attribution remains unproven.
 - DevBench recorded zero bounds-mismatch original fallback observations and
   zero vendor-failure stretch observations. This does not exclude a full-size
   texture whose contents are only partially updated; dimensions alone cannot

@@ -1079,13 +1079,23 @@ struct BSShaderRenderTargets_Create
 		{
 			const std::unique_lock recreateLock(
 				g_renderTargetRecreationMutex);
-			if (a_beforeEngineCreate)
-				a_beforeEngineCreate(a_context);
-			if (a_engineCreateEntered)
-				*a_engineCreateEntered = true;
-			func();
-			if (a_afterEngineCreate)
-				a_afterEngineCreate(a_context);
+			try {
+				if (a_beforeEngineCreate)
+					a_beforeEngineCreate(a_context);
+				if (a_engineCreateEntered)
+					*a_engineCreateEntered = true;
+				func();
+			} catch (...) {
+				// Offered resources must be reclaimed while recreation still owns
+				// the unique table lock. Reachability is untrusted on this path.
+				if (a_afterEngineCreate)
+					(void)a_afterEngineCreate(a_context, true);
+				throw;
+			}
+			if (a_afterEngineCreate &&
+				!a_afterEngineCreate(a_context, false)) {
+				return false;
+			}
 		}
 		globals::ReInit();
 		if (!CanSetupRenderingResources())

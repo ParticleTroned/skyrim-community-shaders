@@ -28,9 +28,11 @@ namespace Hooks
 	std::shared_mutex& GetRenderTargetRecreationMutex();
 	bool RecreateRenderTargets();
 	using VRRenderTargetRecreatePreparation = void (*)(void*);
-	// Runs synchronously after Skyrim's native target creator returns and
-	// before global or CSX render-target state is reinitialized.
-	using VRRenderTargetRecreateCheckpoint = void (*)(void*) noexcept;
+	// Runs synchronously after Skyrim's native target creator returns and before
+	// global or CSX render-target state is reinitialized. Returning true proves
+	// that recovery setup may run; it does not by itself prove that every output
+	// slot was replaced by this generation.
+	using VRRenderTargetRecreateCheckpoint = bool (*)(void*, bool) noexcept;
 	bool RecreateRenderTargetsForVRRenderScale(
 		VRRenderTargetRecreatePreparation a_beforeEngineCreate = nullptr,
 		VRRenderTargetRecreateCheckpoint a_afterEngineCreate = nullptr,

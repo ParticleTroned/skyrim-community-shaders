@@ -579,6 +579,15 @@ public:
 		bool doorHandoffHardReserveOnly = false;
 		bool systemCommitDeferred = false;
 		bool pressureDeferred = false;
+		bool emergencySystemCommitGuardActive = false;
+		uint64_t emergencySystemCommitProjectionMultiplier = 0;
+		uint64_t emergencySystemCommitMinimumProjectionBytes = 0;
+		bool emergencySystemCommitProjectionValid = false;
+		uint64_t emergencyProjectedSystemCommitAdditionalBytes = 0;
+		uint64_t emergencyProjectedSystemCommitBytes = 0;
+		uint64_t emergencySystemCommitReserveBytes = 0;
+		uint64_t emergencySystemCommitAdmissionLimitBytes = 0;
+		bool emergencySystemCommitSafe = false;
 	};
 
 	struct VRRenderScaleRetirementSnapshot
@@ -727,6 +736,9 @@ public:
 		uint64_t serializationEpoch = 0;
 		uint64_t chainSerial = 0;
 		uint64_t startTickMs = 0;
+		VRVendorRelatchPolicy::PostMutationProgressPhase progressPhase =
+			VRVendorRelatchPolicy::PostMutationProgressPhase::None;
+		uint64_t lastProgressTickMs = 0;
 		bool emergencyAttemptConsumed = false;
 		bool emergencyRecoveryRequested = false;
 	};
@@ -1972,6 +1984,7 @@ public:
 		VRRenderScalePresentationObservation& a_presentationObservation) const;
 	bool PrepareVRNativeRestoreCompositorKeepalive(
 		uint64_t a_expectedGuardEpoch,
+		uint64_t a_compositorCycleToken,
 		const vr::Texture_t* a_candidateTexture,
 		const vr::VRTextureBounds_t* a_candidateBounds,
 		VRNativeRestoreCompositorKeepaliveSubmission& a_submission);
@@ -2233,12 +2246,20 @@ public:
 	// epochs, and later LoadingMenu serials cannot renew the terminal budget.
 	mutable std::mutex vrRenderScalePhysicalMutationMutex;
 	std::atomic<uint64_t> vrRenderScaleUnresolvedPhysicalMutationStartTickMs{ 0 };
+	std::atomic<VRVendorRelatchPolicy::PostMutationProgressPhase>
+		vrRenderScalePostMutationProgressPhase{
+			VRVendorRelatchPolicy::PostMutationProgressPhase::None
+		};
+	std::atomic<uint64_t> vrRenderScalePostMutationLastProgressTickMs{ 0 };
 	// These flags belong to the complete zero -> non-zero mutation chain. A
 	// recovery/controller reset cannot renew the one emergency creator attempt.
 	std::atomic_bool vrRenderScalePostMutationEmergencyAttemptConsumed{ false };
 	std::atomic<uint32_t> vrRenderScalePostMutationEmergencyAttemptFrame{ 0 };
 	std::atomic<uint64_t> vrRenderScalePostMutationEmergencyAttemptGraceDeadlineTickMs{ 0 };
 	std::atomic_bool vrRenderScaleEmergencyRecoveryRequested{ false };
+	std::atomic_bool vrRenderScaleEmergencyCommitRejectionLogged{ false };
+	std::atomic_bool vrRenderScaleEmergencyClaimCommitRejectionLogged{ false };
+	std::atomic_bool vrRenderScaleExtendedRecoveryDeadlineLogged{ false };
 	// Exact internal native successor. It serializes ordinary requests while its
 	// matching physical worker is pending/in progress; stale markers alone are not
 	// treated as live work.
@@ -2670,6 +2691,7 @@ private:
 	// LoadingMenu serial can legitimately be zero when PreLoadGame arms first.
 	std::atomic<uint64_t> vrPostLoadCompositorDeadlineFallbackHoldEpoch{ 0 };
 	std::atomic<uint64_t> vrPostLoadCompositorDeadlineFallbackLoadingSerial{ 0 };
+	std::atomic<uint64_t> vrPostLoadCompositorDeadlineFallbackStartTickMs{ 0 };
 	// Exact one-shot successor used only when the hard deadline cannot truthfully
 	// retain the previous physical contract. Transition epoch is the publication
 	// token; the payload is immutable while that token is nonzero and is fully
@@ -2738,6 +2760,20 @@ private:
 	std::atomic<uint32_t> vrPostLoadFaderCurrentTimeOffset{ 0 };
 	winrt::com_ptr<ID3D11Texture2D> vrPostLoadCompositorKeepaliveTexture;
 	winrt::com_ptr<ID3D11Device> vrPostLoadCompositorKeepaliveDevice;
+	std::atomic<bool> vrPostLoadRecoveryLivenessCueActive{ false };
+#if defined(_DEBUG)
+	std::atomic<uint64_t> vrPostLoadRecoveryLivenessCueActivationCount{ 0 };
+	std::atomic<uint64_t> vrPostLoadRecoveryLivenessCueLastActivationTickMs{ 0 };
+	std::atomic<uint64_t> vrPostLoadRecoveryLivenessCueLastActivationHoldEpoch{ 0 };
+	std::atomic<uint64_t> vrPostLoadRecoveryLivenessCueLastActivationCycleToken{ 0 };
+	std::atomic<uint32_t> vrPostLoadRecoveryLivenessCueLastActivationColorSpace{
+		static_cast<uint32_t>(vr::ColorSpace_Auto)
+	};
+	uint64_t vrPostLoadRecoveryLivenessCueCachedHoldEpoch = 0;
+	uint64_t vrPostLoadRecoveryLivenessCueCachedCycleToken = 0;
+	bool vrPostLoadRecoveryLivenessCueCachedActive = false;
+	float vrPostLoadRecoveryLivenessCueCachedLinearIntensity = 0.0f;
+#endif
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
 	std::mutex vrPostLoadCompositorRepairMutex;
 
@@ -2783,15 +2819,19 @@ private:
 	bool PrepareVRPostLoadCompositorKeepaliveLocked(
 		const vr::Texture_t* a_candidateTexture,
 		const vr::VRTextureBounds_t* a_candidateBounds,
+		uint64_t a_compositorCycleToken,
 		VRPostLoadCompositorKeepaliveSubmission& a_submission);
 	bool PrepareVRCompositorKeepaliveSubmissionLocked(
 		const vr::Texture_t* a_candidateTexture,
 		const vr::VRTextureBounds_t* a_candidateBounds,
+		uint64_t a_compositorCycleToken,
 		vr::Texture_t& a_texture,
 		vr::VRTextureBounds_t& a_bounds,
 		winrt::com_ptr<ID3D11Texture2D>& a_lifetime);
-	bool ClearVRCompositorCandidateBlackLocked(
-		ID3D11Texture2D* a_candidateTexture);
+	bool ClearVRCompositorCandidateKeepaliveLocked(
+		ID3D11Texture2D* a_candidateTexture,
+		vr::EColorSpace a_colorSpace,
+		uint64_t a_compositorCycleToken);
 	bool TryRepairVRPostLoadFixedCompositorCandidate(
 		ID3D11Texture2D* a_candidateTexture,
 		const D3D11_TEXTURE2D_DESC& a_candidateDesc,
@@ -2824,6 +2864,9 @@ private:
 		uint64_t a_expectedSourceEpoch,
 		uint64_t a_destinationEpoch,
 		uint64_t a_expectedRecoveryEpoch);
+	bool RecordVRRenderScalePostMutationProgress(
+		uint64_t a_expectedSerializationEpoch,
+		VRVendorRelatchPolicy::PostMutationProgressPhase a_phase);
 	[[nodiscard]] VRRenderScalePhysicalMutationSnapshot GetVRRenderScalePhysicalMutationSnapshot() const;
 	bool TryClaimVRRenderScalePostMutationEmergencyAttempt(
 		uint64_t a_expectedMutationEpoch,

@@ -248,6 +248,66 @@ None), completes the exact recovery owner even when its transition epoch has
 not yet been bound, and releases only the compositor/fade cover owned by that
 loading serial. It does not reduce the 8x projection or 8-16 GiB reserve.
 
+## Terminal-fallback live verification (`a20fa4e9`)
+
+The corrected DLL identified itself through DevBench as
+`RC203-6-ga20fa4e9`. The critical AMD/FSR4 test used the same exterior FSR4 and
+interior native Stabby profiles as the failed run above. Before charging
+commit, the exterior contract was stable and current in both eyes.
+
+```text
+TestLimit command: Testlimit64.exe -accepteula -m 256 -c 43
+TestLimit PID:     33064
+TestLimit private: 11,566,792,704 bytes
+
+live system commit after charge:       93,251,461,120 bytes
+actual commit headroom:                16,459,247,616 bytes
+8x projected native addition:           3,220,512,768 bytes
+projected commit:                       96,471,973,888 bytes
+bounded admission limit:                95,996,870,144 bytes
+controlled projected overshoot:            475,103,744 bytes
+```
+
+The pressured Whiterun-to-Breezehome request was rejected before physical
+mutation and the door completed. The controller returned to Active with the
+previous exterior FSR4 contract (1928x1928 to 2508x2508, generation 6) still
+authoritative and coherent in both eyes. The rejected request was cleared,
+settings reported `Restart required`, engine-target retirement did not begin,
+and the compositor cover completed its 1500 ms owned timeout handoff with both
+eyes accounted for. There were no bounds mismatches, vendor-failure stretches,
+OOMs, device losses, or pending retirement sets.
+
+The exact TestLimit PID and executable path were reverified before termination.
+After release, system commit fell to 81,638,047,744 bytes with
+28,072,660,992 bytes of real headroom. The retained FSR4 presentation remained
+stable and the controller remained responsive.
+
+Post-pressure convergence was then exercised without restarting Skyrim:
+
+- Breezehome-to-Whiterun completed on coherent FSR4 in both eyes with zero
+  mismatch or lifecycle failure. The relatch produced a new stable generation;
+  six unproven pointers were conservatively retained at the first sample, with
+  no fence or retirement set pending.
+- The following Whiterun-to-Breezehome transition admitted the previously
+  rejected native restore. It converged to the configured 2508x2508
+  `NativeOriginal` path in both eyes in 14 transition frames. Retirement drained
+  completely, including the six retained pointers, with zero mismatch,
+  vendor-failure stretch, OOM, device loss, or lifecycle failure.
+- The focused native-return record is intentionally below the generic
+  acceptance helper's two-request minimum and ends on `NativeOriginal`, while
+  that helper currently requires a fresh `VendorEvaluated` terminal frame.
+  Its overall false verdict is therefore not a transition failure; every
+  applicable safety, latency, memory, cleanup, and retirement gate passed.
+- The longer combined record also reports a false terminal-state gate after
+  the rejected epoch: the live controller was Active with no requested or
+  applying contract, but the rejected epoch's still-valid current metrics made
+  the helper reject its own `Active or Idle` condition. The underlying record
+  contains zero transition failures and a recovered coherent FSR4 presentation.
+
+This is positive AMD/FSR4 evidence for the unsafe-fallback correction and for
+later convergence once commit becomes available. Equivalent NVIDIA/DLSS review
+and live testing remain required.
+
 ## Repeatable DevBench/TestLimit protocol
 
 1. Enable Community Shaders developer mode and Debug logging. Confirm DevBench
@@ -334,8 +394,10 @@ loading serial. It does not reduce the 8x projection or 8-16 GiB reserve.
 ## Evidence limits
 
 The first live run proves that RC203's native-door commit projection could be
-calculated but not enforced. The PR-head run proves the guard is now reached,
-and exposes the pre-follow-up infinite-requeue/fade latch under rejection. It
-does not prove that the uncertain clipped-door visual was PiP, nor does it yet
-prove the newest terminal fallback on AMD or NVIDIA. Those claims require the
-new DLL and the protocol above.
+calculated but not enforced. The `23ad3de4` run proves the guard is reached and
+exposes the former infinite-requeue/fade latch under rejection. The
+`a20fa4e9` run proves on AMD/FSR4 that rejection can terminate without physical
+mutation, preserve coherent last-stable presentation, complete the door, and
+later converge to native after commit recovery. It does not prove that the
+uncertain clipped-door visual was PiP, nor does it substitute for the requested
+NVIDIA/DLSS review and live test.

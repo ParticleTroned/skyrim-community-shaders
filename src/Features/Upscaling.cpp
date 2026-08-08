@@ -181,10 +181,14 @@ namespace
 	constexpr uint64_t kVRPostLoadCompositorInGameHoldSoftDeadlineMilliseconds = 3000u;
 	constexpr uint64_t kVRRenderTransitionCompositorHoldSoftDeadlineMilliseconds = 1000u;
 	constexpr uint64_t kVRPostLoadCompositorHoldHardDeadlineGraceMilliseconds = 500u;
-	// Once every ordinary presentation-hold cap has elapsed, a very dim pulse in
-	// CS-generated protected keepalive content provides basic HMD-visible liveness without sampling
-	// or publishing the incoherent game target. The cue is intentionally modest;
-	// these values are a reviewable starting point rather than a notification UI.
+	// Debug builds can make unusually long protected recovery visible without
+	// sampling or publishing an incoherent game target. Production keepalive is
+	// always opaque black.
+#if defined(_DEBUG)
+	constexpr bool kVRPostLoadRecoveryLivenessCueCompiled = true;
+#else
+	constexpr bool kVRPostLoadRecoveryLivenessCueCompiled = false;
+#endif
 	constexpr uint64_t kVRPostLoadRecoveryLivenessCueDelayMilliseconds = 6500u;
 	constexpr uint64_t kVRPostLoadRecoveryLivenessCuePeriodMilliseconds = 1800u;
 	constexpr float kVRPostLoadRecoveryLivenessCueMinimum = 0.002f;
@@ -193,7 +197,9 @@ namespace
 	// remained unresolved for two seconds, one exact-owner attempt may use the
 	// deliberately relaxed emergency commit policy below. Stalled ownership or
 	// provider paths retain the 15-second ceiling; one-way evidence that recovery
-	// is actively advancing extends the immutable chain ceiling to 60 seconds.
+	// has claimed the exact one-shot creator, or reached a later irreversible
+	// reconciliation/publication milestone, extends the immutable chain ceiling to
+	// 60 seconds. Reversible memory/resource readiness remains on 15 seconds.
 	// An attached debugger receives 120 seconds because wall time is then weak
 	// liveness evidence. These timings are suggested starting values, not values
 	// established by live qualification.
@@ -230,12 +236,10 @@ namespace
 	constexpr uint64_t kVRRenderScaleSystemCommitMinimumReserveBytes = 8ull * 1024ull * 1024ull * 1024ull;
 	constexpr uint64_t kVRRenderScaleSystemCommitMaximumReserveBytes = 16ull * 1024ull * 1024ull * 1024ull;
 	constexpr uint64_t kVRRenderScaleSystemCommitReserveScaleDenominator = 8u;
-	// These emergency values are intentionally provisional suggestions for
-	// upstream/TestLimit evaluation, not determined safety constants. They relax
-	// normal 4x/8x plus 8-16 GiB admission to 2x plus a final 2 GiB system floor.
-	constexpr uint64_t kVRRenderScaleSuggestedEmergencySystemCommitNumerator = 2u;
-	constexpr uint64_t kVRRenderScaleSuggestedEmergencySystemCommitReserveBytes =
-		2ull * 1024ull * 1024ull * 1024ull;
+	// Emergency recovery keeps the target-specific 4x/8x projection, applies a
+	// fixed floor for creator/system transients not modeled by the resource key,
+	// and relaxes only the normal dynamic 8-16 GiB reserve. The final 2 GiB commit
+	// reserve remains mandatory.
 	// Application-defined noncontinuable exception: "RSC" (Render Scale
 	// Catastrophe). This intentionally reaches Crash Logger's exception path;
 	// report_and_fail/TerminateProcess alone would not provide that context.
@@ -10384,6 +10388,39 @@ namespace
 			return false;
 
 		return (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) != 0;
+	}
+
+	bool SupportsFloatUnorderedAccessClear(DXGI_FORMAT a_format) noexcept
+	{
+		// ClearUnorderedAccessViewFloat is defined only for FLOAT, UNORM, and
+		// SNORM typed UAVs. Typeless, integer, sRGB, raw, and structured views
+		// must use a different clear contract.
+		switch (a_format) {
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+		case DXGI_FORMAT_R32G32B32_FLOAT:
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		case DXGI_FORMAT_R16G16B16A16_UNORM:
+		case DXGI_FORMAT_R16G16B16A16_SNORM:
+		case DXGI_FORMAT_R32G32_FLOAT:
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_SNORM:
+		case DXGI_FORMAT_R16G16_FLOAT:
+		case DXGI_FORMAT_R16G16_UNORM:
+		case DXGI_FORMAT_R16G16_SNORM:
+		case DXGI_FORMAT_R32_FLOAT:
+		case DXGI_FORMAT_R8G8_UNORM:
+		case DXGI_FORMAT_R8G8_SNORM:
+		case DXGI_FORMAT_R16_FLOAT:
+		case DXGI_FORMAT_R16_UNORM:
+		case DXGI_FORMAT_R16_SNORM:
+		case DXGI_FORMAT_R8_UNORM:
+		case DXGI_FORMAT_R8_SNORM:
+			return true;
+		default:
+			return false;
+		}
 	}
 
 	struct RuntimeResolutionPlanLogKey
@@ -24389,14 +24426,37 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.memoryPressure = memoryAtAdmission.pressure;
 		relatchPlan.estimatedCurrentBytes = EstimateVRRenderScaleResourceBytes(relatchPlan.current);
 		relatchPlan.estimatedTargetBytes = EstimateVRRenderScaleResourceBytes(relatchPlan.target);
-		const bool requiresParallelAllocation =
-			!relatchPlan.compatibility.canReuseRenderTargets ||
-			(!relatchPlan.compatibility.canReuseVendorRuntime && !relatchPlan.reuseWarmTargetRuntime);
-		relatchPlan.estimatedAdditionalBytes = requiresParallelAllocation ?
-		                                           relatchPlan.estimatedTargetBytes :
-		                                           (relatchPlan.estimatedTargetBytes > relatchPlan.estimatedCurrentBytes ?
-														   relatchPlan.estimatedTargetBytes - relatchPlan.estimatedCurrentBytes :
-														   0u);
+		const bool commonTargetVendorResourcesReady =
+			AreCommonVendorTexturesReady(relatchUpscaleMethod);
+		const bool targetUsesVendorEvaluation =
+			VRVendorRelatchPolicy::UsesVendorEvaluation(
+				IsVendorUpscalingMethod(relatchUpscaleMethod));
+		const bool targetVendorRuntimeReady =
+			!targetUsesVendorEvaluation ||
+			IsVendorRuntimeReadyForActiveContract(relatchUpscaleMethod);
+		const bool targetVendorRuntimeReset =
+			(relatchUpscaleMethod == UpscaleMethod::kDLSS &&
+				relatchPlan.destroyDLSSResources) ||
+			(relatchUpscaleMethod == UpscaleMethod::kFSR &&
+				(relatchPlan.destroyFSRResources ||
+					relatchPlan.recreateFSRResources));
+		const auto relatchAllocation =
+			VRVendorRelatchPolicy::EvaluateRelatchAllocation({
+				.currentBytes = relatchPlan.estimatedCurrentBytes,
+				.targetBytes = relatchPlan.estimatedTargetBytes,
+				.reuseRenderTargets = relatchPlan.reuseRenderTargets,
+				.targetUsesVendorResources = targetUsesVendorEvaluation,
+				.reuseSharedVendorResources =
+					relatchPlan.reuseSharedSubmitResources,
+				.canReuseVendorRuntime =
+					relatchPlan.compatibility.canReuseVendorRuntime,
+				.reuseWarmTargetRuntime = relatchPlan.reuseWarmTargetRuntime,
+				.targetVendorRuntimeReady = targetVendorRuntimeReady,
+				.recreateTargetVendorResources = targetVendorRuntimeReset,
+				.commonTargetVendorResourcesReady =
+					commonTargetVendorResourcesReady,
+			});
+		relatchPlan.estimatedAdditionalBytes = relatchAllocation.additionalBytes;
 		const bool memoryReducingTransition =
 			relatchPlan.estimatedTargetBytes < relatchPlan.estimatedCurrentBytes;
 		const bool allocationGrowth =
@@ -24404,10 +24464,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!memoryReducingTransition;
 		const bool residencyOverlapAllocation =
 			relatchPlan.estimatedAdditionalBytes != 0 &&
-			(plannedRelatchWillResizeRenderTargets ||
-				relatchPlan.destroyDLSSResources ||
-				relatchPlan.destroyFSRResources ||
-				!AreCommonVendorTexturesReady(relatchUpscaleMethod));
+			(relatchAllocation.requiresFullTargetAllocation ||
+				plannedRelatchWillResizeRenderTargets);
 		const auto saturatingAdd = [](uint64_t a_lhs, uint64_t a_rhs) {
 			return a_rhs > std::numeric_limits<uint64_t>::max() - a_lhs ?
 			           std::numeric_limits<uint64_t>::max() :
@@ -24715,37 +24773,37 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			// than trusting a controller sample retained across retry frames.
 			emergencySystemCommit = QueryVRRenderScaleSystemCommit();
 		}
-		relatchPlan.emergencyProjectedSystemCommitAdditionalBytes =
-			saturatingScale(
-				relatchPlan.estimatedAdditionalBytes,
-				kVRRenderScaleSuggestedEmergencySystemCommitNumerator,
-				1u);
-		relatchPlan.emergencyProjectedSystemCommitBytes =
-			emergencySystemCommit.valid ?
-				saturatingAdd(
-					emergencySystemCommit.usageBytes,
-					relatchPlan.emergencyProjectedSystemCommitAdditionalBytes) :
-				0u;
+		relatchPlan.emergencySystemCommitProjectionMultiplier =
+			VRVendorRelatchPolicy::GetPostMutationEmergencyProjectionMultiplier(
+				relatchTargetRenderScaleActive);
+		relatchPlan.emergencySystemCommitMinimumProjectionBytes =
+			VRVendorRelatchPolicy::kPostMutationEmergencyMinimumProjectionBytes;
 		relatchPlan.emergencySystemCommitReserveBytes =
-			kVRRenderScaleSuggestedEmergencySystemCommitReserveBytes;
-		relatchPlan.emergencySystemCommitAdmissionLimitBytes =
-			emergencySystemCommit.limitBytes >
-					kVRRenderScaleSuggestedEmergencySystemCommitReserveBytes ?
-				emergencySystemCommit.limitBytes -
-					kVRRenderScaleSuggestedEmergencySystemCommitReserveBytes :
-				0u;
-		relatchPlan.emergencySystemCommitSafe =
-			VRVendorRelatchPolicy::CanAdmitPostMutationEmergencyMemory({
+			VRVendorRelatchPolicy::kPostMutationEmergencyCommitReserveBytes;
+		const auto emergencyMemoryEvaluation =
+			VRVendorRelatchPolicy::EvaluatePostMutationEmergencyMemory({
 				.systemCommitValid = emergencySystemCommit.valid,
 				.currentCommitBytes = emergencySystemCommit.usageBytes,
 				.commitLimitBytes = emergencySystemCommit.limitBytes,
 				.estimatedAdditionalBytes =
 					relatchPlan.estimatedAdditionalBytes,
 				.projectionMultiplier =
-					kVRRenderScaleSuggestedEmergencySystemCommitNumerator,
+					relatchPlan.emergencySystemCommitProjectionMultiplier,
+				.minimumProjectedAdditionalBytes =
+					relatchPlan.emergencySystemCommitMinimumProjectionBytes,
 				.reserveBytes =
-					kVRRenderScaleSuggestedEmergencySystemCommitReserveBytes,
+					relatchPlan.emergencySystemCommitReserveBytes,
 			});
+		relatchPlan.emergencyProjectedSystemCommitAdditionalBytes =
+			emergencyMemoryEvaluation.projectedAdditionalBytes;
+		relatchPlan.emergencySystemCommitProjectionValid =
+			emergencyMemoryEvaluation.projectionValid;
+		relatchPlan.emergencyProjectedSystemCommitBytes =
+			emergencyMemoryEvaluation.projectedCommitBytes;
+		relatchPlan.emergencySystemCommitAdmissionLimitBytes =
+			emergencyMemoryEvaluation.admissionLimitBytes;
+		relatchPlan.emergencySystemCommitSafe =
+			emergencyMemoryEvaluation.safe;
 		const bool postMutationHardGatesReady =
 			exactPostLoadRecoveryOwned &&
 			postLoadLoadingSerialOwned &&
@@ -24802,11 +24860,17 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				true,
 				std::memory_order_acq_rel)) {
 			logger::warn(
-				"[VRRenderScale][PostLoad] Emergency creator remains blocked by the provisional commit floor. epoch={} currentCommit={} MiB estimatedAdditional={} MiB suggestedMultiplier={} projectedCommit={} MiB admissionLimit={} MiB suggestedReserve={} MiB. Values are suggested starting points pending TestLimit qualification.",
+				"[VRRenderScale][PostLoad] Emergency creator remains blocked by commit admission. epoch={} sampleValid={} projectionValid={} currentCommit={} MiB estimatedAdditional={} MiB multiplier={} minimumProjection={} MiB projectedAdditional={} MiB projectedCommit={} MiB admissionLimit={} MiB reserve={} MiB.",
 				postMutation.serializationEpoch,
+				BoolText(emergencySystemCommit.valid),
+				BoolText(emergencyMemoryEvaluation.projectionValid),
 				emergencySystemCommit.usageBytes / kVRRenderScaleMiB,
 				relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
-				kVRRenderScaleSuggestedEmergencySystemCommitNumerator,
+				relatchPlan.emergencySystemCommitProjectionMultiplier,
+				relatchPlan.emergencySystemCommitMinimumProjectionBytes /
+					kVRRenderScaleMiB,
+				relatchPlan.emergencyProjectedSystemCommitAdditionalBytes /
+					kVRRenderScaleMiB,
 				relatchPlan.emergencyProjectedSystemCommitBytes /
 					kVRRenderScaleMiB,
 				relatchPlan.emergencySystemCommitAdmissionLimitBytes /
@@ -24871,9 +24935,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				postMutation.serializationEpoch;
 			// This is the sole last-resort relaxation. Normal predictive GPU
 			// admission, pressure class, and recent-OOM backoff are waived, while
-			// the provisional 2x commit projection and final 2 GiB system reserve
-			// remain mandatory alongside ownership, cleanup, retirement, target
-			// validity, device health, and coherent stereo release.
+			// the target-specific 4x/8x commit projection, 4 GiB projection floor,
+			// and final 2 GiB system reserve remain mandatory alongside ownership,
+			// cleanup, retirement, target validity, device health, and coherent
+			// stereo release.
 			relatchPlan.pressureCleanupRequired = false;
 			relatchPlan.pressureDeferred = false;
 		}
@@ -25282,6 +25347,98 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			logger::warn("[VRRenderScale] Stable physical-layout reuse changed before commit; retrying without mutating shared resources.");
 			return false;
 		}
+		const auto rejectEmergencyCreatorBeforePhysicalMutation = [&]() {
+			if (bootContractChanged &&
+				!renderTargetsRelatched &&
+				!physicalMutationBoundaryEntered) {
+				restorePreviousBootContract();
+			}
+			// Vendor teardown precedes the emergency claim. A rejected claim must
+			// therefore invalidate the restored/active runtime before retrying;
+			// otherwise a logical boot contract could outlive destroyed resources.
+			markActiveVendorRuntimeDirtyAfterRelatchFailure();
+			ClearSubmitStageVendorResumeStability();
+			InvalidateFrameScopedUpscalingState();
+			requeueRelatch(
+				kVRUpscalingTransitionApplyDelayFrames,
+				false);
+		};
+		if (postMutationEmergencyRecoveryAttempt) {
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved(
+					"post-mutation emergency creator admission")) {
+				return false;
+			}
+			// Global commit can change between plan construction and the one-shot
+			// creator claim. Recheck immediately adjacent to the claim and before
+			// either target or vendor allocation path. An unsafe sample requeues
+			// without consuming the attempt; the immutable watchdog still bounds it.
+			const auto claimSystemCommit =
+				QueryVRRenderScaleSystemCommit();
+			const auto claimMemoryEvaluation =
+				VRVendorRelatchPolicy::EvaluatePostMutationEmergencyMemory({
+					.systemCommitValid = claimSystemCommit.valid,
+					.currentCommitBytes = claimSystemCommit.usageBytes,
+					.commitLimitBytes = claimSystemCommit.limitBytes,
+					.estimatedAdditionalBytes =
+						relatchPlan.estimatedAdditionalBytes,
+					.projectionMultiplier =
+						relatchPlan.emergencySystemCommitProjectionMultiplier,
+					.minimumProjectedAdditionalBytes =
+						relatchPlan.emergencySystemCommitMinimumProjectionBytes,
+					.reserveBytes =
+						relatchPlan.emergencySystemCommitReserveBytes,
+				});
+			if (!claimMemoryEvaluation.safe) {
+				if (!vrRenderScaleEmergencyClaimCommitRejectionLogged.exchange(
+						true,
+						std::memory_order_acq_rel)) {
+					logger::warn(
+						"[VRRenderScale][PostLoad] Emergency creator claim-time commit recheck rejected the immutable plan without consuming its one-shot. epoch={} sampleValid={} projectionValid={} currentCommit={} MiB estimatedAdditional={} MiB multiplier={} minimumProjection={} MiB projectedAdditional={} MiB projectedCommit={} MiB admissionLimit={} MiB reserve={} MiB.",
+						postMutationEmergencyAttemptEpoch,
+						BoolText(claimSystemCommit.valid),
+						BoolText(claimMemoryEvaluation.projectionValid),
+						claimSystemCommit.usageBytes / kVRRenderScaleMiB,
+						relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
+						relatchPlan.emergencySystemCommitProjectionMultiplier,
+						relatchPlan.emergencySystemCommitMinimumProjectionBytes /
+							kVRRenderScaleMiB,
+						claimMemoryEvaluation.projectedAdditionalBytes /
+							kVRRenderScaleMiB,
+						claimMemoryEvaluation.projectedCommitBytes /
+							kVRRenderScaleMiB,
+						claimMemoryEvaluation.admissionLimitBytes /
+							kVRRenderScaleMiB,
+						relatchPlan.emergencySystemCommitReserveBytes /
+							kVRRenderScaleMiB);
+				}
+				rejectEmergencyCreatorBeforePhysicalMutation();
+				return false;
+			}
+			if (!TryClaimVRRenderScalePostMutationEmergencyAttempt(
+					postMutationEmergencyAttemptEpoch,
+					postLoadRecoveryEpoch)) {
+				rejectEmergencyCreatorBeforePhysicalMutation();
+				return false;
+			}
+			logger::warn(
+				"[VRRenderScale][PostLoad] Entering the single post-mutation emergency creator attempt epoch={} recoveryEpoch={} mutationEpoch={} claimCurrentCommit={} MiB estimatedAdditional={} MiB multiplier={} minimumProjection={} MiB projectedAdditional={} MiB projectedCommit={} MiB admissionLimit={} MiB reserve={} MiB.",
+				relatchEpoch,
+				postLoadRecoveryEpoch,
+				postMutationEmergencyAttemptEpoch,
+				claimSystemCommit.usageBytes / kVRRenderScaleMiB,
+				relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
+				relatchPlan.emergencySystemCommitProjectionMultiplier,
+				relatchPlan.emergencySystemCommitMinimumProjectionBytes /
+					kVRRenderScaleMiB,
+				claimMemoryEvaluation.projectedAdditionalBytes /
+					kVRRenderScaleMiB,
+				claimMemoryEvaluation.projectedCommitBytes /
+					kVRRenderScaleMiB,
+				claimMemoryEvaluation.admissionLimitBytes /
+					kVRRenderScaleMiB,
+				relatchPlan.emergencySystemCommitReserveBytes /
+					kVRRenderScaleMiB);
+		}
 		if (renderTargetsAlreadySized) {
 			state->screenSize = relatchTargetEngineSize;
 			renderTargetsRelatched = true;
@@ -25387,33 +25544,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					"VR render-target recreation checkpoint");
 			};
 			try {
-				if (postMutationEmergencyRecoveryAttempt) {
-					if (MarkSubmitStageDeviceLostIfDeviceRemoved(
-							"post-mutation emergency creator admission")) {
-						return false;
-					}
-					if (!TryClaimVRRenderScalePostMutationEmergencyAttempt(
-							postMutationEmergencyAttemptEpoch,
-							postLoadRecoveryEpoch)) {
-						requeueRelatch(
-							kVRUpscalingTransitionApplyDelayFrames,
-							false);
-						return false;
-					}
-					logger::warn(
-						"[VRRenderScale][PostLoad] Entering the single post-mutation emergency creator attempt epoch={} recoveryEpoch={} mutationEpoch={} estimatedAdditional={} MiB suggestedMultiplier={} emergencyProjectedCommit={} MiB emergencyAdmissionLimit={} MiB suggestedReserve={} MiB. Emergency values are provisional pending TestLimit qualification.",
-						relatchEpoch,
-						postLoadRecoveryEpoch,
-						postMutationEmergencyAttemptEpoch,
-						relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
-						kVRRenderScaleSuggestedEmergencySystemCommitNumerator,
-						relatchPlan.emergencyProjectedSystemCommitBytes /
-							kVRRenderScaleMiB,
-						relatchPlan.emergencySystemCommitAdmissionLimitBytes /
-							kVRRenderScaleMiB,
-						relatchPlan.emergencySystemCommitReserveBytes /
-							kVRRenderScaleMiB);
-				}
 				bool previousNativeRecreateOverride = false;
 				if (deferBootLatchCommitUntilNativeTargetsConverge) {
 					previousNativeRecreateOverride =
@@ -25553,9 +25683,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		// Render Scale-off Native AA/DLAA is still a live 1:1 vendor
 		// evaluation. Preserve RC173's provider contract for both physical target
 		// layouts; only submit-stage ownership depends on Render Scale activity.
-		const bool targetUsesVendorEvaluation =
-			VRVendorRelatchPolicy::UsesVendorEvaluation(
-				IsVendorUpscalingMethod(relatchUpscaleMethod));
 		const bool warmTargetRuntimeReadyForRebind =
 			targetUsesVendorEvaluation &&
 			relatchPlan.reuseWarmTargetRuntime &&
@@ -39867,6 +39994,7 @@ bool Upscaling::TryRepairVRPostLoadFixedCompositorCandidate(
 bool Upscaling::PrepareVRPostLoadCompositorKeepaliveLocked(
 	const vr::Texture_t* a_candidateTexture,
 	const vr::VRTextureBounds_t* a_candidateBounds,
+	uint64_t a_compositorCycleToken,
 	VRPostLoadCompositorKeepaliveSubmission& a_submission)
 {
 	a_submission = {};
@@ -39879,6 +40007,7 @@ bool Upscaling::PrepareVRPostLoadCompositorKeepaliveLocked(
 	if (!PrepareVRCompositorKeepaliveSubmissionLocked(
 			a_candidateTexture,
 			a_candidateBounds,
+			a_compositorCycleToken,
 			a_submission.texture,
 			a_submission.bounds,
 			a_submission.lifetime)) {
@@ -39897,6 +40026,7 @@ bool Upscaling::PrepareVRPostLoadCompositorKeepaliveLocked(
 bool Upscaling::PrepareVRCompositorKeepaliveSubmissionLocked(
 	const vr::Texture_t* a_candidateTexture,
 	const vr::VRTextureBounds_t* a_candidateBounds,
+	uint64_t a_compositorCycleToken,
 	vr::Texture_t& a_texture,
 	vr::VRTextureBounds_t& a_bounds,
 	winrt::com_ptr<ID3D11Texture2D>& a_lifetime)
@@ -39907,20 +40037,34 @@ bool Upscaling::PrepareVRCompositorKeepaliveSubmissionLocked(
 	if (!a_candidateTexture ||
 		!a_candidateTexture->handle ||
 		a_candidateTexture->eType != vr::TextureType_DirectX) {
+#if defined(_DEBUG)
+		vrPostLoadRecoveryLivenessCueActive.store(
+			false,
+			std::memory_order_release);
+#endif
 		return false;
 	}
 
 	a_lifetime.copy_from(
 		static_cast<ID3D11Texture2D*>(a_candidateTexture->handle));
 	if (!a_lifetime ||
-		!ClearVRCompositorCandidateKeepaliveLocked(a_lifetime.get())) {
+		!ClearVRCompositorCandidateKeepaliveLocked(
+			a_lifetime.get(),
+			a_candidateTexture->eColorSpace,
+			a_compositorCycleToken)) {
+#if defined(_DEBUG)
+		vrPostLoadRecoveryLivenessCueActive.store(
+			false,
+			std::memory_order_release);
+#endif
 		a_lifetime = nullptr;
 		return false;
 	}
 
 	// Preserve the exact compositor topology that was already working: handle,
 	// full texture dimensions, color space, and per-eye bounds all remain those
-	// of the intercepted candidate. Only its pixels become opaque black.
+	// of the intercepted candidate. Release pixels are opaque black; Debug may
+	// encode the protected recovery cue below.
 	a_texture = *a_candidateTexture;
 	a_texture.handle = a_lifetime.get();
 	if (a_candidateBounds)
@@ -39929,7 +40073,9 @@ bool Upscaling::PrepareVRCompositorKeepaliveSubmissionLocked(
 }
 
 bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
-	ID3D11Texture2D* a_candidateTexture)
+	ID3D11Texture2D* a_candidateTexture,
+	vr::EColorSpace a_colorSpace,
+	uint64_t a_compositorCycleToken)
 {
 	auto* context = globals::d3d::context;
 	if (!a_candidateTexture ||
@@ -39952,6 +40098,10 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 			GetCOMIdentityAddress(contextDevice.get())) {
 		return false;
 	}
+	D3D11_TEXTURE2D_DESC candidateDesc{};
+#if defined(_DEBUG)
+	a_candidateTexture->GetDesc(&candidateDesc);
+#endif
 
 	winrt::com_ptr<ID3D11UnorderedAccessView> candidateUAV;
 	const auto adoptCandidateUAV =
@@ -39994,77 +40144,218 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 		}
 	}
 
-	float keepaliveColor[4]{ 0.0f, 0.0f, 0.0f, 1.0f };
-	const uint64_t currentTickMs = ::GetTickCount64();
+#if defined(_DEBUG)
+	bool showLivenessCue = false;
+	float livenessCueLinearIntensity = 0.0f;
 	const uint64_t holdEpoch =
 		vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire);
-	const uint64_t holdStartTickMs =
-		vrPostLoadCompositorHoldStartTickMs.load(std::memory_order_acquire);
-	const bool recoveryOwnerActive =
-		vrRenderScalePostMutationSerializationEpoch.load(
-			std::memory_order_acquire) != 0 ||
-		vrRenderScalePreMutationNativeFallbackTransitionEpoch.load(
-			std::memory_order_acquire) != 0;
-	const bool showLivenessCue =
-		recoveryOwnerActive &&
-		VRVendorRelatchPolicy::ShouldShowExtendedRecoveryLivenessCue({
-			.holdEpoch = holdEpoch,
-			.holdStartTickMs = holdStartTickMs,
-			.currentTickMs = currentTickMs,
-			.cueStartDelayMs =
-				kVRPostLoadRecoveryLivenessCueDelayMilliseconds,
-			.terminalFailureClaimed =
-				vrRenderScaleTerminalFailureSignaled.load(
-					std::memory_order_acquire),
-		});
-	if (showLivenessCue) {
-		const uint64_t pulseElapsedMs =
-			currentTickMs - holdStartTickMs -
-			kVRPostLoadRecoveryLivenessCueDelayMilliseconds;
-		const uint64_t halfPeriodMs =
-			kVRPostLoadRecoveryLivenessCuePeriodMilliseconds / 2u;
-		const uint64_t pulsePhaseMs =
-			pulseElapsedMs %
-			kVRPostLoadRecoveryLivenessCuePeriodMilliseconds;
-		const float triangle =
-			pulsePhaseMs <= halfPeriodMs ?
-				static_cast<float>(pulsePhaseMs) /
-					static_cast<float>(halfPeriodMs) :
-				static_cast<float>(
-					kVRPostLoadRecoveryLivenessCuePeriodMilliseconds -
-					pulsePhaseMs) /
-					static_cast<float>(halfPeriodMs);
-		const float intensity =
-			kVRPostLoadRecoveryLivenessCueMinimum +
-			kVRPostLoadRecoveryLivenessCueAmplitude * triangle;
-		keepaliveColor[0] = intensity * 0.35f;
-		keepaliveColor[1] = intensity * 0.60f;
-		keepaliveColor[2] = intensity;
+	if (a_compositorCycleToken != 0) {
+		if (vrPostLoadRecoveryLivenessCueCachedHoldEpoch != holdEpoch ||
+			vrPostLoadRecoveryLivenessCueCachedCycleToken !=
+				a_compositorCycleToken) {
+			const uint64_t currentTickMs = ::GetTickCount64();
+			const uint64_t holdStartTickMs =
+				vrPostLoadCompositorHoldStartTickMs.load(
+					std::memory_order_acquire);
+			const bool recoveryOwnerActive =
+				vrRenderScalePostMutationSerializationEpoch.load(
+					std::memory_order_acquire) != 0 ||
+				vrRenderScalePreMutationNativeFallbackTransitionEpoch.load(
+					std::memory_order_acquire) != 0;
+			vrPostLoadRecoveryLivenessCueCachedHoldEpoch = holdEpoch;
+			vrPostLoadRecoveryLivenessCueCachedCycleToken =
+				a_compositorCycleToken;
+			vrPostLoadRecoveryLivenessCueCachedActive =
+				recoveryOwnerActive &&
+				VRVendorRelatchPolicy::ShouldShowExtendedRecoveryLivenessCue({
+					.holdEpoch = holdEpoch,
+					.holdStartTickMs = holdStartTickMs,
+					.currentTickMs = currentTickMs,
+					.cueStartDelayMs =
+						kVRPostLoadRecoveryLivenessCueDelayMilliseconds,
+					.terminalFailureClaimed =
+						vrRenderScaleTerminalFailureSignaled.load(
+							std::memory_order_acquire),
+				});
+			vrPostLoadRecoveryLivenessCueCachedLinearIntensity = 0.0f;
+			if (vrPostLoadRecoveryLivenessCueCachedActive) {
+				const uint64_t pulseElapsedMs =
+					currentTickMs - holdStartTickMs -
+					kVRPostLoadRecoveryLivenessCueDelayMilliseconds;
+				const uint64_t halfPeriodMs =
+					kVRPostLoadRecoveryLivenessCuePeriodMilliseconds / 2u;
+				const uint64_t pulsePhaseMs =
+					pulseElapsedMs %
+					kVRPostLoadRecoveryLivenessCuePeriodMilliseconds;
+				const float triangle =
+					pulsePhaseMs <= halfPeriodMs ?
+						static_cast<float>(pulsePhaseMs) /
+							static_cast<float>(halfPeriodMs) :
+						static_cast<float>(
+							kVRPostLoadRecoveryLivenessCuePeriodMilliseconds -
+							pulsePhaseMs) /
+							static_cast<float>(halfPeriodMs);
+				vrPostLoadRecoveryLivenessCueCachedLinearIntensity =
+					kVRPostLoadRecoveryLivenessCueMinimum +
+					kVRPostLoadRecoveryLivenessCueAmplitude * triangle;
+			}
+		}
+		showLivenessCue = vrPostLoadRecoveryLivenessCueCachedActive;
+		livenessCueLinearIntensity =
+			vrPostLoadRecoveryLivenessCueCachedLinearIntensity;
 	}
-	const bool livenessCueWasActive =
-		vrPostLoadRecoveryLivenessCueActive.exchange(
-			showLivenessCue,
-			std::memory_order_acq_rel);
-	if (showLivenessCue && !livenessCueWasActive) {
-		logger::warn(
-			"[VRRenderScale][PostLoad] Extended black recovery remains alive; enabling the provisional dim keepalive pulse. holdEpoch={} elapsedMs={} postMutationEpoch={} preMutationFallbackEpoch={}.",
+#else
+	(void)a_colorSpace;
+	(void)a_compositorCycleToken;
+#endif
+
+	float keepaliveColor[4]{ 0.0f, 0.0f, 0.0f, 1.0f };
+#if defined(_DEBUG)
+	bool cueVisibleForCandidate = false;
+	const auto isEightBitPerComponentFormat = [](DXGI_FORMAT a_format) {
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_R8G8B8A8_UINT:
+		case DXGI_FORMAT_R8G8B8A8_SNORM:
+		case DXGI_FORMAT_R8G8B8A8_SINT:
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+			return true;
+		default:
+			return false;
+		}
+	};
+	const auto isSrgbViewFormat = [](DXGI_FORMAT a_format) {
+		return a_format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
+		       a_format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
+		       a_format == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB;
+	};
+	const auto linearToSrgb = [](float a_value) {
+		const float linear = std::max(a_value, 0.0f);
+		return linear <= 0.0031308f ?
+		           linear * 12.92f :
+		           1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
+	};
+	const auto srgbToLinear = [](float a_value) {
+		const float encoded = std::max(a_value, 0.0f);
+		return encoded <= 0.04045f ?
+		           encoded / 12.92f :
+		           std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+	};
+	const auto populateKeepaliveColor = [&](DXGI_FORMAT a_viewFormat) {
+		keepaliveColor[0] = 0.0f;
+		keepaliveColor[1] = 0.0f;
+		keepaliveColor[2] = 0.0f;
+		keepaliveColor[3] = 1.0f;
+		cueVisibleForCandidate = false;
+		if (!showLivenessCue)
+			return;
+
+		bool sourceIsLinear = false;
+		if (a_colorSpace == vr::ColorSpace_Linear) {
+			sourceIsLinear = true;
+		} else if (a_colorSpace == vr::ColorSpace_Gamma) {
+			sourceIsLinear = false;
+		} else if (a_colorSpace == vr::ColorSpace_Auto) {
+			// Match OpenVR's Auto contract: 8-bit-per-component input is gamma;
+			// other formats are linear.
+			sourceIsLinear =
+				!isEightBitPerComponentFormat(candidateDesc.Format);
+		} else {
+			return;
+		}
+
+		const auto encodeChannel = [&](float a_linearValue) {
+			const float sourceValue = sourceIsLinear ?
+			                              a_linearValue :
+			                              linearToSrgb(a_linearValue);
+			// An sRGB RTV encodes its clear input. Invert that conversion so the
+			// stored value still matches the OpenVR source color-space contract.
+			return isSrgbViewFormat(a_viewFormat) ?
+			           srgbToLinear(sourceValue) :
+			           sourceValue;
+		};
+		keepaliveColor[0] = encodeChannel(
+			livenessCueLinearIntensity * 0.35f);
+		keepaliveColor[1] = encodeChannel(
+			livenessCueLinearIntensity * 0.60f);
+		keepaliveColor[2] = encodeChannel(livenessCueLinearIntensity);
+		cueVisibleForCandidate = true;
+	};
+	const auto publishSuccessfulClear = [&](bool a_clearSucceeded) {
+		if (!a_clearSucceeded)
+			return;
+		const bool livenessCueWasActive =
+			vrPostLoadRecoveryLivenessCueActive.exchange(
+				cueVisibleForCandidate,
+				std::memory_order_acq_rel);
+		if (!cueVisibleForCandidate || livenessCueWasActive)
+			return;
+
+		const uint64_t activationTickMs = ::GetTickCount64();
+		const uint64_t activationCount =
+			vrPostLoadRecoveryLivenessCueActivationCount.fetch_add(
+				1,
+				std::memory_order_acq_rel) +
+			1;
+		vrPostLoadRecoveryLivenessCueLastActivationTickMs.store(
+			activationTickMs,
+			std::memory_order_release);
+		vrPostLoadRecoveryLivenessCueLastActivationHoldEpoch.store(
 			holdEpoch,
-			currentTickMs - holdStartTickMs,
+			std::memory_order_release);
+		vrPostLoadRecoveryLivenessCueLastActivationCycleToken.store(
+			a_compositorCycleToken,
+			std::memory_order_release);
+		vrPostLoadRecoveryLivenessCueLastActivationColorSpace.store(
+			static_cast<uint32_t>(a_colorSpace),
+			std::memory_order_release);
+		logger::warn(
+			"[VRRenderScale][PostLoad] Debug-only extended-recovery cue was successfully cleared into a protected compositor candidate. activationCount={} holdEpoch={} compositorCycle={} elapsedMs={} colorSpace={} postMutationEpoch={} preMutationFallbackEpoch={}.",
+			activationCount,
+			holdEpoch,
+			a_compositorCycleToken,
+			activationTickMs -
+				vrPostLoadCompositorHoldStartTickMs.load(
+					std::memory_order_acquire),
+			magic_enum::enum_name(a_colorSpace),
 			vrRenderScalePostMutationSerializationEpoch.load(
 				std::memory_order_acquire),
 			vrRenderScalePreMutationNativeFallbackTransitionEpoch.load(
 				std::memory_order_acquire));
+	};
+#endif
+	D3D11_UNORDERED_ACCESS_VIEW_DESC candidateUAVDesc{};
+	if (candidateUAV) {
+		candidateUAV->GetDesc(&candidateUAVDesc);
+		if (!SupportsFloatUnorderedAccessClear(candidateUAVDesc.Format))
+			candidateUAV = nullptr;
 	}
 	if (candidateUAV) {
+#if defined(_DEBUG)
+		populateKeepaliveColor(
+			candidateUAVDesc.Format);
+#endif
 		context->ClearUnorderedAccessViewFloat(
 			candidateUAV.get(),
 			keepaliveColor);
-		return !IsD3DDeviceRemovedReason(
+		const bool clearSucceeded = !IsD3DDeviceRemovedReason(
 			candidateDevice->GetDeviceRemovedReason());
+#if defined(_DEBUG)
+		publishSuccessfulClear(clearSucceeded);
+#endif
+		return clearSucceeded;
 	}
 
-	D3D11_TEXTURE2D_DESC candidateDesc{};
+#if !defined(_DEBUG)
 	a_candidateTexture->GetDesc(&candidateDesc);
+#endif
 	const DXGI_FORMAT viewFormat =
 		GetRenderTargetViewFormat(candidateDesc.Format);
 	if ((candidateDesc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0 ||
@@ -40102,14 +40393,22 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 	}
 	Util::SetResourceName(
 		candidateRTV.get(),
-		"Upscaling::VRCompositorBlackCandidate RTV");
+		"Upscaling::VRCompositorProtectedCandidate RTV");
+#if defined(_DEBUG)
+	populateKeepaliveColor(viewFormat);
+#endif
 	context->ClearRenderTargetView(candidateRTV.get(), keepaliveColor);
-	return !IsD3DDeviceRemovedReason(
+	const bool clearSucceeded = !IsD3DDeviceRemovedReason(
 		candidateDevice->GetDeviceRemovedReason());
+#if defined(_DEBUG)
+	publishSuccessfulClear(clearSucceeded);
+#endif
+	return clearSucceeded;
 }
 
 bool Upscaling::PrepareVRNativeRestoreCompositorKeepalive(
 	uint64_t a_expectedGuardEpoch,
+	uint64_t a_compositorCycleToken,
 	const vr::Texture_t* a_candidateTexture,
 	const vr::VRTextureBounds_t* a_candidateBounds,
 	VRNativeRestoreCompositorKeepaliveSubmission& a_submission)
@@ -40154,6 +40453,7 @@ bool Upscaling::PrepareVRNativeRestoreCompositorKeepalive(
 	if (!PrepareVRCompositorKeepaliveSubmissionLocked(
 			candidateTexture,
 			candidateBounds,
+			a_compositorCycleToken,
 			a_submission.texture,
 			a_submission.bounds,
 			a_submission.lifetime)) {
@@ -40207,6 +40507,12 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 	vrPostLoadCompositorHoldStartFrame.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldStartTickMs.store(0, std::memory_order_release);
 	vrPostLoadRecoveryLivenessCueActive.store(false, std::memory_order_release);
+#if defined(_DEBUG)
+	vrPostLoadRecoveryLivenessCueCachedHoldEpoch = 0;
+	vrPostLoadRecoveryLivenessCueCachedCycleToken = 0;
+	vrPostLoadRecoveryLivenessCueCachedActive = false;
+	vrPostLoadRecoveryLivenessCueCachedLinearIntensity = 0.0f;
+#endif
 	vrPostLoadCompositorHoldReleaseFrame.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldReleaseMethod.store(
 		static_cast<uint32_t>(UpscaleMethod::kNONE),
@@ -40272,6 +40578,14 @@ void Upscaling::FinishVRInitialLoadPresentationProtectionPhysicalLocked(
 		// generation whose native creator has run but whose coherent stereo result
 		// has not yet been accepted. The exact stereo release clears this boundary
 		// before entering here.
+		return;
+	}
+	if (vrRenderScaleTerminalFailureSignaled.load(
+			std::memory_order_acquire)) {
+		// Terminal ownership freezes both serialized recovery and its compositor
+		// cover. SignalVRRenderScaleTerminalFailure holds the physical mutex while
+		// publishing this flag, so cleanup cannot expose presentation during the
+		// fatal log/exception window after a physical marker has already cleared.
 		return;
 	}
 	const uint32_t exactCycleOccupiedEyeMask =
@@ -41125,6 +41439,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			if (PrepareVRPostLoadCompositorKeepaliveLocked(
 					a_blackCandidate,
 					a_blackCandidateBounds,
+					a_compositorCycleToken,
 					a_keepaliveSubmission)) {
 				return true;
 			}
@@ -41167,6 +41482,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 						if (PrepareVRPostLoadCompositorKeepaliveLocked(
 								&currentFramebufferSubmit,
 								&framebufferEyeBounds,
+								a_compositorCycleToken,
 								a_keepaliveSubmission)) {
 							return true;
 						}
@@ -42589,6 +42905,9 @@ bool Upscaling::MarkVRRenderScalePhysicalMutationUnresolved(
 		vrRenderScaleEmergencyCommitRejectionLogged.store(
 			false,
 			std::memory_order_release);
+		vrRenderScaleEmergencyClaimCommitRejectionLogged.store(
+			false,
+			std::memory_order_release);
 		vrRenderScaleExtendedRecoveryDeadlineLogged.store(
 			false,
 			std::memory_order_release);
@@ -42642,11 +42961,16 @@ bool Upscaling::ClearVRRenderScalePostMutationSerializationLocked(
 	const uint64_t serializationEpoch =
 		vrRenderScalePostMutationSerializationEpoch.load(
 			std::memory_order_acquire);
-	if (serializationEpoch == 0 ||
-		a_expectedSerializationEpoch == 0 ||
-		serializationEpoch != a_expectedSerializationEpoch ||
-		vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
-			std::memory_order_acquire) != 0) {
+	if (!VRVendorRelatchPolicy::CanRetirePostMutationSerialization({
+			.serializationEpoch = serializationEpoch,
+			.expectedSerializationEpoch = a_expectedSerializationEpoch,
+			.unresolvedPhysicalMutationEpoch =
+				vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+					std::memory_order_acquire),
+			.terminalFailureClaimed =
+				vrRenderScaleTerminalFailureSignaled.load(
+					std::memory_order_acquire),
+		})) {
 		return false;
 	}
 	vrRenderScalePostMutationSerializationEpoch.store(
@@ -42679,6 +43003,9 @@ bool Upscaling::ClearVRRenderScalePostMutationSerializationLocked(
 	vrRenderScaleEmergencyCommitRejectionLogged.store(
 		false,
 		std::memory_order_release);
+	vrRenderScaleEmergencyClaimCommitRejectionLogged.store(
+		false,
+		std::memory_order_release);
 	vrRenderScaleExtendedRecoveryDeadlineLogged.store(
 		false,
 		std::memory_order_release);
@@ -42687,9 +43014,6 @@ bool Upscaling::ClearVRRenderScalePostMutationSerializationLocked(
 		std::memory_order_release);
 	ClearVRRenderScalePreMutationNativeFallback(
 		a_expectedSerializationEpoch);
-	vrRenderScaleTerminalFailureSignaled.store(
-		false,
-		std::memory_order_release);
 	return true;
 }
 
@@ -45701,7 +46025,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 10u;
+	constexpr uint32_t kSchemaVersion = 11u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -45711,6 +46035,30 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	const auto session = GetVRRenderScaleStressSessionSnapshot();
 	const auto vendorWorkGate = GetVRVendorWorkGateSnapshot();
 	const auto physicalMutation = GetVRRenderScalePhysicalMutationSnapshot();
+	uint64_t livenessCueSuccessfulActivationCount = 0;
+	uint64_t livenessCueLastActivationTickMs = 0;
+	uint64_t livenessCueLastActivationHoldEpoch = 0;
+	uint64_t livenessCueLastActivationCycleToken = 0;
+	vr::EColorSpace livenessCueLastActivationColorSpace =
+		vr::ColorSpace_Auto;
+#if defined(_DEBUG)
+	livenessCueSuccessfulActivationCount =
+		vrPostLoadRecoveryLivenessCueActivationCount.load(
+			std::memory_order_acquire);
+	livenessCueLastActivationTickMs =
+		vrPostLoadRecoveryLivenessCueLastActivationTickMs.load(
+			std::memory_order_acquire);
+	livenessCueLastActivationHoldEpoch =
+		vrPostLoadRecoveryLivenessCueLastActivationHoldEpoch.load(
+			std::memory_order_acquire);
+	livenessCueLastActivationCycleToken =
+		vrPostLoadRecoveryLivenessCueLastActivationCycleToken.load(
+			std::memory_order_acquire);
+	livenessCueLastActivationColorSpace =
+		static_cast<vr::EColorSpace>(
+			vrPostLoadRecoveryLivenessCueLastActivationColorSpace.load(
+				std::memory_order_acquire));
+#endif
 	const auto vendorWorkGateSourceNames = [](uint32_t a_mask) {
 		json names = json::array();
 		for (const auto source : VRVendorRelatchPolicy::kWorkGateSources) {
@@ -45728,7 +46076,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 29 }
+		{ "implementationStep", 30 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -45782,13 +46130,28 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 				0 },
 		{ "debuggerAttached", ::IsDebuggerPresent() != FALSE },
 		{ "deadlineValuesProvisional", true },
+		{ "livenessCueCompiled",
+			kVRPostLoadRecoveryLivenessCueCompiled },
 		{ "livenessCueActive",
 			vrPostLoadRecoveryLivenessCueActive.load(
 				std::memory_order_acquire) },
+		{ "livenessCueSuccessfulActivationCount",
+			livenessCueSuccessfulActivationCount },
+		{ "livenessCueLastActivationTickMs",
+			livenessCueLastActivationTickMs },
+		{ "livenessCueLastActivationHoldEpoch",
+			livenessCueLastActivationHoldEpoch },
+		{ "livenessCueLastActivationCycleToken",
+			livenessCueLastActivationCycleToken },
+		{ "livenessCueLastActivationColorSpace",
+			std::string{ magic_enum::enum_name(
+				livenessCueLastActivationColorSpace) } },
 		{ "livenessCueDelayMs",
 			kVRPostLoadRecoveryLivenessCueDelayMilliseconds },
 		{ "livenessCuePeriodMs",
 			kVRPostLoadRecoveryLivenessCuePeriodMilliseconds },
+		{ "livenessCuePhaseDomain", "holdEpoch+compositorCycle" },
+		{ "livenessCueColorEncoding", "OpenVR source color space plus D3D view" },
 		{ "livenessCueValuesProvisional", true }
 	};
 
@@ -46188,6 +46551,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							  { "systemCommitDeferred", relatchPlan.systemCommitDeferred },
 							  { "pressureDeferred", relatchPlan.pressureDeferred },
 							  { "emergencySystemCommitGuardActive", relatchPlan.emergencySystemCommitGuardActive },
+							  { "emergencySystemCommitProjectionMultiplier", relatchPlan.emergencySystemCommitProjectionMultiplier },
+							  { "emergencySystemCommitMinimumProjectionBytes", relatchPlan.emergencySystemCommitMinimumProjectionBytes },
+							  { "emergencySystemCommitProjectionValid", relatchPlan.emergencySystemCommitProjectionValid },
 							  { "emergencyProjectedSystemCommitAdditionalBytes", relatchPlan.emergencyProjectedSystemCommitAdditionalBytes },
 							  { "emergencyProjectedSystemCommitBytes", relatchPlan.emergencyProjectedSystemCommitBytes },
 							  { "emergencySystemCommitReserveBytes", relatchPlan.emergencySystemCommitReserveBytes },
@@ -47170,7 +47536,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 	}
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} previousVendor={} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB postTrimAdmissionLimit={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB cleanup={} projectedGuard={} postTrimRelaxed={} projectedDeferred={} systemGuard={} doorHardReserveOnly={} systemDeferred={} deferred={} emergencyCommitGuard={} emergencyProjectedCommit={} MiB emergencyAdmissionLimit={} MiB emergencyReserve={} MiB emergencySafe={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} previousVendor={} backend={} -> {} reuseTargets={} reuseStableTargets={} dimensionsMatch={} stableEvidence={} vendorDimensionsUnchanged={} reuseShared={} preserveDLSS={} preserveFSR={} compatibleFSRReuse={} preserveFSRIntermediates={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB postTrimAdmissionLimit={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB cleanup={} projectedGuard={} postTrimRelaxed={} projectedDeferred={} systemGuard={} doorHardReserveOnly={} systemDeferred={} deferred={} emergencyCommitGuard={} emergencyMultiplier={} emergencyMinimumProjection={} MiB emergencyProjectionValid={} emergencyProjectedAdditional={} MiB emergencyProjectedCommit={} MiB emergencyAdmissionLimit={} MiB emergencyReserve={} MiB emergencySafe={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -47215,6 +47581,10 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			BoolText(a_plan.systemCommitDeferred),
 			BoolText(a_plan.pressureDeferred),
 			BoolText(a_plan.emergencySystemCommitGuardActive),
+			a_plan.emergencySystemCommitProjectionMultiplier,
+			a_plan.emergencySystemCommitMinimumProjectionBytes / kVRRenderScaleMiB,
+			BoolText(a_plan.emergencySystemCommitProjectionValid),
+			a_plan.emergencyProjectedSystemCommitAdditionalBytes / kVRRenderScaleMiB,
 			a_plan.emergencyProjectedSystemCommitBytes / kVRRenderScaleMiB,
 			a_plan.emergencySystemCommitAdmissionLimitBytes / kVRRenderScaleMiB,
 			a_plan.emergencySystemCommitReserveBytes / kVRRenderScaleMiB,

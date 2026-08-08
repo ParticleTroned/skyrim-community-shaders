@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -9,6 +10,17 @@ namespace VRVendorRelatchPolicy
 {
 	using WorkGateMask = std::uint32_t;
 	using WorkGateState = std::uint64_t;
+
+	inline constexpr std::uint64_t kPostMutationEmergencyMinimumProjectionBytes =
+		4ull * 1024ull * 1024ull * 1024ull;
+	inline constexpr std::uint64_t kPostMutationEmergencyCommitReserveBytes =
+		2ull * 1024ull * 1024ull * 1024ull;
+
+	[[nodiscard]] constexpr std::uint64_t GetPostMutationEmergencyProjectionMultiplier(
+		bool a_targetRenderScaleActive) noexcept
+	{
+		return a_targetRenderScaleActive ? 4u : 8u;
+	}
 
 	enum class WorkGateSource : WorkGateMask
 	{
@@ -1073,7 +1085,7 @@ namespace VRVendorRelatchPolicy
 	[[nodiscard]] constexpr bool IsPostMutationRecoveryActivelyProgressing(
 		PostMutationProgressPhase a_phase) noexcept
 	{
-		return a_phase >= PostMutationProgressPhase::RecoveryResourcesReady;
+		return a_phase >= PostMutationProgressPhase::EmergencyCreatorClaimed;
 	}
 
 	struct PostMutationTerminalDeadlinePolicy
@@ -1087,8 +1099,9 @@ namespace VRVendorRelatchPolicy
 	};
 
 	// Time alone does not make a coherent recovery impossible. A chain which has
-	// crossed a one-way resource/creator/publication milestone receives the longer
-	// recovery ceiling, while a debugger receives its own deliberately generous
+	// claimed its one-shot creator, or reached a later reconciliation/publication
+	// milestone, receives the longer recovery ceiling. Reversible resource and
+	// memory readiness does not. A debugger receives its own deliberately generous
 	// ceiling. The caller keeps the chain start immutable, so retry/owner churn
 	// cannot renew any of these budgets.
 	[[nodiscard]] constexpr std::uint64_t SelectPostMutationTerminalDeadline(
@@ -1109,39 +1122,134 @@ namespace VRVendorRelatchPolicy
 		std::uint64_t commitLimitBytes = 0;
 		std::uint64_t estimatedAdditionalBytes = 0;
 		std::uint64_t projectionMultiplier = 0;
+		std::uint64_t minimumProjectedAdditionalBytes = 0;
 		std::uint64_t reserveBytes = 0;
 	};
 
+	struct PostMutationEmergencyMemoryEvaluation
+	{
+		bool projectionValid = false;
+		std::uint64_t projectedAdditionalBytes = 0;
+		std::uint64_t projectedCommitBytes = 0;
+		std::uint64_t admissionLimitBytes = 0;
+		bool safe = false;
+	};
+
 	// Emergency recovery may consume the normal conservative reserve, but it must
-	// not consume the machine's final commit. The smaller multiplier and reserve
-	// are policy inputs rather than truths; callers deliberately identify their
-	// current values as provisional until live TestLimit evidence determines them.
-	[[nodiscard]] constexpr bool CanAdmitPostMutationEmergencyMemory(
+	// not consume the machine's final commit. The target-specific normal projection
+	// remains authoritative; a minimum projection covers fixed creator/system
+	// transients which the resource-key estimate does not model.
+	[[nodiscard]] constexpr PostMutationEmergencyMemoryEvaluation
+	EvaluatePostMutationEmergencyMemory(
 		const PostMutationEmergencyMemoryAdmission& a_state) noexcept
 	{
-		if (!a_state.systemCommitValid ||
-			a_state.commitLimitBytes == 0 ||
-			a_state.projectionMultiplier == 0 ||
-			a_state.commitLimitBytes <= a_state.reserveBytes ||
+		PostMutationEmergencyMemoryEvaluation result{};
+		if (a_state.projectionMultiplier == 0 ||
 			a_state.estimatedAdditionalBytes >
 				std::numeric_limits<std::uint64_t>::max() /
 					a_state.projectionMultiplier) {
-			return false;
+			return result;
 		}
 
-		const std::uint64_t projectedAdditionalBytes =
-			a_state.estimatedAdditionalBytes * a_state.projectionMultiplier;
+		result.projectionValid = true;
+		result.projectedAdditionalBytes =
+			std::max(
+				a_state.estimatedAdditionalBytes * a_state.projectionMultiplier,
+				a_state.minimumProjectedAdditionalBytes);
+		if (!a_state.systemCommitValid ||
+			a_state.commitLimitBytes == 0 ||
+			a_state.commitLimitBytes <= a_state.reserveBytes) {
+			return result;
+		}
+
+		result.admissionLimitBytes =
+			a_state.commitLimitBytes - a_state.reserveBytes;
 		if (a_state.currentCommitBytes >
 			std::numeric_limits<std::uint64_t>::max() -
-				projectedAdditionalBytes) {
-			return false;
+				result.projectedAdditionalBytes) {
+			return result;
 		}
 
-		const std::uint64_t projectedCommitBytes =
-			a_state.currentCommitBytes + projectedAdditionalBytes;
-		const std::uint64_t admissionLimitBytes =
-			a_state.commitLimitBytes - a_state.reserveBytes;
-		return projectedCommitBytes < admissionLimitBytes;
+		result.projectedCommitBytes =
+			a_state.currentCommitBytes + result.projectedAdditionalBytes;
+		result.safe = result.projectedCommitBytes < result.admissionLimitBytes;
+		return result;
+	}
+
+	[[nodiscard]] constexpr bool CanAdmitPostMutationEmergencyMemory(
+		const PostMutationEmergencyMemoryAdmission& a_state) noexcept
+	{
+		return EvaluatePostMutationEmergencyMemory(a_state).safe;
+	}
+
+	struct RelatchAllocationEstimate
+	{
+		std::uint64_t currentBytes = 0;
+		std::uint64_t targetBytes = 0;
+		bool reuseRenderTargets = false;
+		bool targetUsesVendorResources = false;
+		bool reuseSharedVendorResources = false;
+		bool canReuseVendorRuntime = false;
+		bool reuseWarmTargetRuntime = false;
+		bool targetVendorRuntimeReady = false;
+		bool recreateTargetVendorResources = false;
+		bool commonTargetVendorResourcesReady = false;
+	};
+
+	struct RelatchAllocationEvaluation
+	{
+		std::uint64_t additionalBytes = 0;
+		bool requiresFullTargetAllocation = false;
+	};
+
+	// Logical key compatibility cannot prove that physical targets still exist.
+	// Any scheduled target/vendor recreation, shared-resource teardown, or
+	// missing physical runtime therefore budgets the complete target profile
+	// instead of only logical growth.
+	[[nodiscard]] constexpr RelatchAllocationEvaluation EvaluateRelatchAllocation(
+		const RelatchAllocationEstimate& a_state) noexcept
+	{
+		RelatchAllocationEvaluation result{};
+		result.requiresFullTargetAllocation =
+			!a_state.reuseRenderTargets ||
+			(a_state.targetUsesVendorResources &&
+				(!a_state.reuseSharedVendorResources ||
+					a_state.recreateTargetVendorResources ||
+					!a_state.commonTargetVendorResourcesReady ||
+					((!a_state.canReuseVendorRuntime ||
+						 !a_state.targetVendorRuntimeReady) &&
+						!a_state.reuseWarmTargetRuntime)));
+		result.additionalBytes = result.requiresFullTargetAllocation ?
+		                             a_state.targetBytes :
+		                         a_state.targetBytes > a_state.currentBytes ?
+		                             a_state.targetBytes - a_state.currentBytes :
+		                             0;
+		return result;
+	}
+
+	[[nodiscard]] constexpr std::uint64_t EstimateRelatchAdditionalBytes(
+		const RelatchAllocationEstimate& a_state) noexcept
+	{
+		return EvaluateRelatchAllocation(a_state).additionalBytes;
+	}
+
+	struct PostMutationSerializationRetirementAdmission
+	{
+		std::uint64_t serializationEpoch = 0;
+		std::uint64_t expectedSerializationEpoch = 0;
+		std::uint64_t unresolvedPhysicalMutationEpoch = 0;
+		bool terminalFailureClaimed = false;
+	};
+
+	[[nodiscard]] constexpr bool CanRetirePostMutationSerialization(
+		const PostMutationSerializationRetirementAdmission& a_state) noexcept
+	{
+		return a_state.serializationEpoch != 0 &&
+		       a_state.expectedSerializationEpoch != 0 &&
+		       a_state.serializationEpoch ==
+		           a_state.expectedSerializationEpoch &&
+		       a_state.unresolvedPhysicalMutationEpoch == 0 &&
+		       !a_state.terminalFailureClaimed;
 	}
 
 	enum class PostMutationRecoveryAction : std::uint8_t
@@ -1167,11 +1275,12 @@ namespace VRVendorRelatchPolicy
 		bool emergencyMemorySafe = false;
 	};
 
-	// Emergency admission relaxes the normal conservative projection but retains
-	// a smaller system-commit projection and final reserve. Once physical mutation
-	// has started, one serialized attempt is preferable to a permanent black hold;
-	// it is not a free pass to consume all remaining machine commit. Ownership,
-	// cleanup, retirement, target validity, and device health also remain hard.
+	// Emergency admission retains the target-specific projection and a fixed floor,
+	// but may consume the normal conservative reserve down to a smaller final
+	// reserve. Once physical mutation has started, one serialized attempt is
+	// preferable to a permanent black hold; it is not a free pass to consume all
+	// remaining machine commit. Ownership, cleanup, retirement, target validity,
+	// and device health also remain hard.
 	[[nodiscard]] constexpr PostMutationRecoveryAction SelectPostMutationRecoveryAction(
 		const PostMutationRecoveryAdmission& a_state) noexcept
 	{

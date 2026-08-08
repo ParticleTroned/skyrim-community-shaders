@@ -1346,22 +1346,59 @@ namespace
 
 	constexpr bool CoversPostMutationEmergencyMemoryAdmission()
 	{
+		if (kPostMutationEmergencyMinimumProjectionBytes !=
+				4ull * 1024ull * 1024ull * 1024ull ||
+			kPostMutationEmergencyCommitReserveBytes !=
+				2ull * 1024ull * 1024ull * 1024ull ||
+			GetPostMutationEmergencyProjectionMultiplier(true) != 4u ||
+			GetPostMutationEmergencyProjectionMultiplier(false) != 8u) {
+			return false;
+		}
+
 		PostMutationEmergencyMemoryAdmission admission{
 			.systemCommitValid = true,
-			.currentCommitBytes = 60,
+			.currentCommitBytes = 50,
 			.commitLimitBytes = 100,
 			.estimatedAdditionalBytes = 10,
-			.projectionMultiplier = 2,
+			.projectionMultiplier = 4,
+			.minimumProjectedAdditionalBytes = 24,
 			.reserveBytes = 2,
 		};
+		auto evaluation = EvaluatePostMutationEmergencyMemory(admission);
+		if (!evaluation.projectionValid ||
+			evaluation.projectedAdditionalBytes != 40 ||
+			evaluation.projectedCommitBytes != 90 ||
+			evaluation.admissionLimitBytes != 98 ||
+			!evaluation.safe ||
+			!CanAdmitPostMutationEmergencyMemory(admission)) {
+			return false;
+		}
+
+		// A fresh claim sample can move the same immutable 4x projection from
+		// strictly safe to equality, which is deliberately rejected.
+		admission.currentCommitBytes = 58;
+		if (CanAdmitPostMutationEmergencyMemory(admission))
+			return false;
+		admission.currentCommitBytes = 59;
+		if (CanAdmitPostMutationEmergencyMemory(admission))
+			return false;
+		admission.currentCommitBytes = 57;
 		if (!CanAdmitPostMutationEmergencyMemory(admission))
 			return false;
 
-		// Equality with the final reserve is deliberately rejected.
-		admission.currentCommitBytes = 78;
-		if (CanAdmitPostMutationEmergencyMemory(admission))
+		// The floor dominates a small estimate; native restore retains 8x.
+		admission.currentCommitBytes = 50;
+		admission.estimatedAdditionalBytes = 5;
+		if (EvaluatePostMutationEmergencyMemory(admission)
+				.projectedAdditionalBytes != 24) {
 			return false;
-		admission.currentCommitBytes = 60;
+		}
+		admission.projectionMultiplier = 8;
+		if (EvaluatePostMutationEmergencyMemory(admission)
+				.projectedAdditionalBytes != 40) {
+			return false;
+		}
+
 		admission.systemCommitValid = false;
 		if (CanAdmitPostMutationEmergencyMemory(admission))
 			return false;
@@ -1373,7 +1410,8 @@ namespace
 		admission.projectionMultiplier = 0;
 		if (CanAdmitPostMutationEmergencyMemory(admission))
 			return false;
-		admission.projectionMultiplier = 2;
+		admission.projectionMultiplier = 4;
+		admission.minimumProjectedAdditionalBytes = 0;
 		admission.estimatedAdditionalBytes =
 			std::numeric_limits<std::uint64_t>::max();
 		if (CanAdmitPostMutationEmergencyMemory(admission))
@@ -1384,6 +1422,106 @@ namespace
 		admission.currentCommitBytes =
 			std::numeric_limits<std::uint64_t>::max() - 5;
 		return !CanAdmitPostMutationEmergencyMemory(admission);
+	}
+
+	constexpr bool CoversRelatchAllocationEstimate()
+	{
+		RelatchAllocationEstimate estimate{
+			.currentBytes = 80,
+			.targetBytes = 100,
+			.reuseRenderTargets = true,
+			.targetUsesVendorResources = true,
+			.reuseSharedVendorResources = true,
+			.canReuseVendorRuntime = true,
+			.reuseWarmTargetRuntime = false,
+			.targetVendorRuntimeReady = true,
+			.recreateTargetVendorResources = false,
+			.commonTargetVendorResourcesReady = true,
+		};
+		auto evaluation = EvaluateRelatchAllocation(estimate);
+		if (evaluation.additionalBytes != 20 ||
+			evaluation.requiresFullTargetAllocation) {
+			return false;
+		}
+
+		// Identical logical keys do not reduce the estimate when the physical
+		// target table or target vendor runtime must actually be recreated.
+		estimate.currentBytes = estimate.targetBytes;
+		estimate.reuseRenderTargets = false;
+		evaluation = EvaluateRelatchAllocation(estimate);
+		if (evaluation.additionalBytes != 100 ||
+			!evaluation.requiresFullTargetAllocation) {
+			return false;
+		}
+		estimate.reuseRenderTargets = true;
+		estimate.recreateTargetVendorResources = true;
+		if (EstimateRelatchAdditionalBytes(estimate) != 100)
+			return false;
+		estimate.recreateTargetVendorResources = false;
+		estimate.commonTargetVendorResourcesReady = false;
+		if (EstimateRelatchAdditionalBytes(estimate) != 100)
+			return false;
+		estimate.commonTargetVendorResourcesReady = true;
+		estimate.canReuseVendorRuntime = false;
+		if (EstimateRelatchAdditionalBytes(estimate) != 100)
+			return false;
+		estimate.reuseWarmTargetRuntime = true;
+		if (EstimateRelatchAdditionalBytes(estimate) != 0)
+			return false;
+
+		// A plan that tears down shared resources or lacks the selected physical
+		// runtime must budget the full target even when logical keys match.
+		estimate.canReuseVendorRuntime = true;
+		estimate.reuseWarmTargetRuntime = false;
+		estimate.reuseSharedVendorResources = false;
+		if (EstimateRelatchAdditionalBytes(estimate) != 100)
+			return false;
+		estimate.reuseSharedVendorResources = true;
+		estimate.targetVendorRuntimeReady = false;
+		if (EstimateRelatchAdditionalBytes(estimate) != 100)
+			return false;
+
+		// Vendor-only readiness is irrelevant to a provider-neutral target.
+		estimate.targetUsesVendorResources = false;
+		return EstimateRelatchAdditionalBytes(estimate) == 0;
+	}
+
+	constexpr bool CoversPostMutationSerializationRetirementAdmission()
+	{
+		PostMutationSerializationRetirementAdmission admission{
+			.serializationEpoch = 11,
+			.expectedSerializationEpoch = 11,
+			.unresolvedPhysicalMutationEpoch = 0,
+			.terminalFailureClaimed = false,
+		};
+		if (!CanRetirePostMutationSerialization(admission))
+			return false;
+
+		for (std::uint32_t failure = 0; failure < 5; ++failure) {
+			auto rejected = admission;
+			switch (failure) {
+			case 0:
+				rejected.serializationEpoch = 0;
+				break;
+			case 1:
+				rejected.expectedSerializationEpoch = 0;
+				break;
+			case 2:
+				rejected.expectedSerializationEpoch = 12;
+				break;
+			case 3:
+				rejected.unresolvedPhysicalMutationEpoch = 11;
+				break;
+			case 4:
+				rejected.terminalFailureClaimed = true;
+				break;
+			default:
+				return false;
+			}
+			if (CanRetirePostMutationSerialization(rejected))
+				return false;
+		}
+		return true;
 	}
 
 	constexpr bool CoversPostMutationProgressDeadlineSelection()
@@ -1412,6 +1550,12 @@ namespace
 
 		policy.progressPhase =
 			PostMutationProgressPhase::RecoveryResourcesReady;
+		if (IsPostMutationRecoveryActivelyProgressing(policy.progressPhase) ||
+			SelectPostMutationTerminalDeadline(policy) != 15000) {
+			return false;
+		}
+		policy.progressPhase =
+			PostMutationProgressPhase::EmergencyCreatorClaimed;
 		if (!IsPostMutationRecoveryActivelyProgressing(policy.progressPhase) ||
 			SelectPostMutationTerminalDeadline(policy) != 60000) {
 			return false;
@@ -1865,6 +2009,8 @@ namespace
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
 	static_assert(CoversBoundedPostMutationRecovery());
 	static_assert(CoversPostMutationEmergencyMemoryAdmission());
+	static_assert(CoversRelatchAllocationEstimate());
+	static_assert(CoversPostMutationSerializationRetirementAdmission());
 	static_assert(CoversExtendedRecoveryLivenessCue());
 	static_assert(CoversPostMutationProgressDeadlineSelection());
 	static_assert(CoversPostLoadRecoveryTransitionBinding());

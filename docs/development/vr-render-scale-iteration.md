@@ -26,7 +26,7 @@ The registered tool is `communityshaders.renderscale`:
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, both-eye fidelity, and compositor-accepted per-eye
     presentation paths;
--   `record` returns the complete schema-v10 record without changing capture
+-   `record` returns the complete schema-v11 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CSX-menu change.
@@ -129,7 +129,7 @@ diagnostic heuristics. A depth-aligned black/transparent post-HAM mask is the
 expected result of a successful clear; it is evidence of what CSX wrote, not by
 itself proof that the compositor exposed the mask as an artifact. This
 correlated record is load-presentation probe schema version 5. The main
-render-scale iteration schema remains version 10.
+render-scale iteration schema is version 11.
 
 The post-load black hold uses route-specific soft deadlines of 3 seconds for an
 in-game load and 6 seconds for a main-menu load. Crossing the soft deadline does
@@ -151,10 +151,13 @@ DLSS/FSR profile: that profile is deferred with a fresh transaction identity and
 replayed after coherent native recovery. The internal worker may request one
 emergency creator-service turn after two seconds, then remains covered by a
 nonrenewing recoverable deadline. The current provisional policy uses a
-15-second absolute deadline until recovery resources are admitted, a 60-second
-absolute ceiling while recovery is constructively progressing, and a 120-second
+15-second absolute deadline until the exact one-shot creator is claimed or a
+later irreversible reconciliation/publication milestone is reached, a 60-second
+absolute ceiling thereafter, and a 120-second
 ceiling while a debugger is attached. These are suggested initial values, not
-determined optima. A failed creator entry or native fallback publication stays
+determined optima. Reversible resource/memory readiness remains on the 15-second
+ceiling and cannot manufacture the longer budget. A failed creator entry or
+native fallback publication stays
 black-covered and retryable until the applicable deadline; it is not an
 immediate integrity failure. A new load removes the old fast-path waiver and
 lets the same worker use the normal safe-point gates; it does not create a second
@@ -170,22 +173,27 @@ expiry, terminal ownership is claimed before releasing those locks and blocks a
 new physical mutation from racing the forced-exit decision.
 
 The emergency service turn relaxes but does not eliminate system-commit
-admission. Its suggested starting guard projects twice the estimated additional
-commit and retains a final 2 GiB system reserve. Normal operation continues to
-use the deliberately conservative 4x/8x projections and 8-16 GiB reserve. The
-emergency values must be calibrated on AMD and NVIDIA; they are explicitly
-provisional. Emergency admission queries system commit at that exact evaluation
-rather than reusing a controller sample retained across retry frames. Iteration
+admission. It retains the target-specific 4x projection (8x for native restore),
+uses at least a 4 GiB projected addition, and relaxes only the normal dynamic
+8-16 GiB reserve to a final 2 GiB reserve. Emergency admission queries system
+commit both during plan evaluation and again immediately before the creator
+claim. A claim-time rejection requeues without consuming the one-shot; the
+immutable watchdog deadline still bounds the chain. Iteration
 records expose the current post-mutation progress phase,
 last progress tick, emergency-attempt state, selected terminal deadline, and
 debugger state so an extended deadline can be distinguished from retry churn.
-After 6.5 seconds, an exact recoverable owner also changes the protected opaque
-black keepalive to a very dim 1.8-second blue pulse. The clear color is generated
-without sampling or publishing the incoherent game target, and terminal claim
-returns it to black. The delay, period, and intensity are provisional usability
-values. Records expose `livenessCueActive`, its delay/period, and that provisional
-status; live AMD/NVIDIA review should determine whether the cue is perceptible
-without resembling the known transition flash. A securely composed OpenVR
+In `_DEBUG` builds only, an exact recoverable owner beyond 6.5 seconds can change
+the protected opaque-black keepalive to a very dim 1.8-second blue pulse. Release
+builds, including Release builds with DevBench enabled, always clear opaque black.
+The Debug phase is sampled once per `{holdEpoch, compositorCycleToken}` so both
+eyes use one pulse value, then encoded for the candidate's OpenVR color space and
+D3D view. Eligibility never samples or publishes the incoherent game target, and
+a terminal claim prevents the cue on every later compositor cycle while
+preserving the already-cached stereo value for the current exact cycle.
+`livenessCueActive` changes only
+after a successful device-healthy clear; sticky activation count/tick/hold/cycle/
+color-space fields preserve evidence after reset. The delay, period, and linear
+intensity remain provisional usability values. A securely composed OpenVR
 notification remains outside this change.
 
 Start the probe at the main menu or immediately before invoking the in-game
@@ -594,7 +602,7 @@ live paths under `controller.presentation`, session deltas under
 
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 10`. Schema v10 adds `session.coalescedDuplicateCount`; acceptance thresholds and units are unchanged. Same-door Stabilizer retries that match the complete pending target are counted there without creating another request event or transition metric. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 11`. Schema v11 adds Debug-only liveness-cue compile/success evidence and the emergency projection multiplier/floor; acceptance thresholds and units are unchanged. Schema v10 added `session.coalescedDuplicateCount`. Same-door Stabilizer retries that match the complete pending target are counted there without creating another request event or transition metric. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.

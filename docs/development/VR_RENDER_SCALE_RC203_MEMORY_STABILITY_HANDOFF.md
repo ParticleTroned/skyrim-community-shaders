@@ -42,15 +42,22 @@ contract is available.
     transitions; the shared 500 ms grace makes the hard caps 6.5 s, 3.5 s, and
     1.5 s. A post-mutation generation remains black until coherent stereo
     acceptance; the time cap must not expose a partially mutated target.
--   If a recoverable pre- or post-mutation owner remains black-covered beyond
-    6.5 s, the protected keepalive changes from opaque black to a very dim,
-    slow blue pulse. The cue is generated only by clearing the already-validated
+-   In `_DEBUG` builds only, if a recoverable pre- or post-mutation owner remains
+    black-covered beyond 6.5 s, the protected keepalive changes from opaque black
+    to a very dim, slow blue pulse. Release, including Release+DevBench, remains
+    opaque black. The cue is generated only by clearing the already-validated
     keepalive candidate; it never samples the incoherent game target, changes its
-    eligibility, allocates a notification surface, or weakens stereo proof. It
-    returns to black if terminal failure is claimed and disappears immediately
-    when the coherent handoff/reset completes. The 6.5 s delay, 1.8 s period, and
-    0.2-0.8% raw blue intensity are provisional usability values for HMD review,
-    not a substitute for a future securely composed OpenVR notification.
+    eligibility, allocates a notification surface, or weakens stereo proof. A
+    terminal claim prevents the cue on each later exact compositor cycle; the
+    current cycle keeps its already-cached stereo pulse value. The cue disappears
+    immediately when the coherent handoff/reset completes. One eligibility and
+    intensity sample is cached per hold epoch and compositor cycle, and linear
+    intensity is encoded for the OpenVR color space and actual D3D clear view.
+    Diagnostics become active only after a successful device-healthy clear and
+    preserve sticky activation evidence. The 6.5 s delay, 1.8 s period, and
+    0.2-0.8% linear blue
+    intensity are provisional usability values for HMD review, not a substitute
+    for a future securely composed OpenVR notification.
 -   LoadingMenu event state, serial identity, and its vendor-work-gate bit are
     published as one gate-owned transaction. Each open edge also owns a
     non-renewable missed-close candidate. If a close callback is lost, the exact
@@ -68,16 +75,18 @@ contract is available.
     broader post-mutation serialization owner immediately before native creator
     entry, a separate non-renewable wall clock may request one recovery-creator
     service turn after 2 s. That one-shot path relaxes normal predictive memory
-    admission, but it does not eliminate it: the current suggested starting
-    policy projects `2x estimatedAdditionalBytes` and preserves a final 2 GiB of
-    system commit. Exact ownership, cleanup, retirement, target validity, device
-    health, and coherent stereo release stay mandatory. These emergency memory
-    values are deliberately provisional tuning suggestions, not determined
-    safety constants. The immutable serialization clock selects a provisional
-    15 s terminal deadline while recovery has not demonstrated constructive
-    progress, a 60 s ceiling once recovery resources are admitted and progress
-    advances through creator/target/publication phases, or 120 s while a debugger
-    is attached. A just-completed creator or covered presentation handoff may
+    admission, but it does not eliminate it: the policy projects
+    `max(targetMultiplier * estimatedAdditionalBytes, 4 GiB)`, where the target
+    multiplier remains 4x normally and 8x for native restore, and preserves a
+    final 2 GiB of system commit. Exact ownership, cleanup, retirement, target
+    validity, device health, and coherent stereo release stay mandatory. These
+    emergency memory constants are provisional conservative admission values for
+    live AMD/NVIDIA qualification.
+    The immutable serialization clock selects a provisional 15 s terminal deadline
+    until the exact one-shot creator is claimed or a later irreversible
+    reconciliation/publication milestone is reached, a 60 s ceiling thereafter,
+    or 120 s while a debugger is attached. A just-completed creator or covered
+    presentation handoff may
     retain its current frame and at most one following presentation turn, capped
     at an additional 500 ms. This grace cannot renew the selected absolute clock,
     and phase transitions are monotonic so retry churn cannot manufacture extra
@@ -124,21 +133,31 @@ contract is available.
 
 -   Estimated system-commit growth remains deliberately conservative: 4x normal
     overlap allocation and 8x full-resolution native restore.
+-   `estimatedAdditionalBytes` follows the admitted physical plan, not only
+    logical key compatibility. A forced/missing render-target recreate,
+    scheduled shared vendor-resource teardown/non-reuse, missing common vendor
+    resources, an incompatible/not-ready non-warm target runtime, or a scheduled
+    target-vendor reset budgets the complete target profile. Reusable physical
+    resources continue to budget only positive target growth.
 -   The one-shot emergency path uses a separately visible, relaxed guard:
 
     ```text
-    emergency_projected_commit = current_commit + 2 * estimatedAdditionalBytes
+    emergency_multiplier = native_restore ? 8 : 4
+    emergency_projected_additional = max(
+        emergency_multiplier * estimatedAdditionalBytes,
+        4 GiB)
+    emergency_projected_commit = current_commit + emergency_projected_additional
     emergency_admission_limit = commit_limit - 2 GiB
     require emergency_projected_commit < emergency_admission_limit
     ```
 
-    The `2x` multiplier and 2 GiB final reserve are suggested initial values for
-    upstream review and AMD/NVIDIA measurement. They are not claimed to be
-    determined optima or safety constants. Emergency recovery is a legitimate
-    use of part of the normal reserve, but not a free pass for a leaking process
-    to consume the system's final commit headroom. The emergency decision takes
-    a fresh `GlobalMemoryStatusEx` sample at the exact evaluation; relaxed
-    admission cannot reuse a controller sample retained across retry frames.
+    Emergency recovery is a legitimate use of part of the normal reserve, but
+    not a free pass for a leaking process to consume the system's final commit
+    headroom. The emergency decision takes a fresh `GlobalMemoryStatusEx` sample
+    during plan evaluation and again immediately before creator claim. If the
+    second sample rejects admission, the transition requeues without consuming
+    its one-shot; the original immutable terminal deadline continues to run.
+
 -   PR10's provider-independent DXGI pre-recreate offer remains in place for
     protected memory-relief transitions. Its scope is Skyrim's eligible common
     render, depth, deferred, underwater, and display targets; it does not offer
@@ -189,6 +208,10 @@ contract is available.
     already-promoted native liveness fallback which still cannot enter its
     creator or publish a coherent fallback within its exact recoverable deadline
     generation.
+-   Terminal claim and normal serialization retirement are linearized by the same
+    physical-mutation mutex. Retirement rejects a claimed terminal owner before
+    clearing any chain evidence; if retirement wins first, the later exact-owner
+    terminal claim sees no live serialization epoch and is rejected.
 
 ## Live observations on 2026-08-08
 
@@ -531,11 +554,12 @@ and live testing remain required.
     Unsafe reclaim identities and a creator exception after the physical
     boundary are likewise synchronous integrity failures. Other healthy-device
     unresolved chains receive one emergency service turn after 2 s. The proposed
-    progress policy uses a non-renewable 15 s absolute bound before constructive
-    recovery is demonstrated, a 60 s absolute ceiling after resources are
-    admitted and recovery is actively progressing, and 120 s while a debugger is
-    attached; only a just-completed creator or covered presentation handoff may
-    add the next presentation frame, capped at 500 ms. Failure then produces a
+    progress policy uses a non-renewable 15 s absolute bound until the exact
+    emergency creator is claimed or a later irreversible reconciliation/
+    publication milestone is reached, a 60 s absolute ceiling thereafter, and
+    120 s while a debugger is attached; only a just-completed creator or covered
+    presentation handoff may add the next presentation frame, capped at 500 ms.
+    Failure then produces a
     crash-logger-visible CTD instead of an indefinite black apparent hang. These
     durations are suggested starting values for review, not empirically
     determined optima. In particular, review whether the phase threshold used to
@@ -544,12 +568,13 @@ and live testing remain required.
     Confirm that exception `0xE0525343` is compatible with the crash loggers
     upstream supports. A modal desktop message is intentionally avoided because
     it may be invisible in the HMD and resemble the hang it replaces.
--   Review the provisional extended-black liveness cue on both AMD and NVIDIA,
+-   Review the `_DEBUG`-only extended-black liveness cue on both AMD and NVIDIA,
     with Gamma and Linear compositor color spaces where available. Confirm that
     it is visible enough to distinguish recovery from a hang without resembling
     a transition flash, causing discomfort, or changing keepalive identity and
-    stereo ownership. The cue is intentionally basic and remains in the current
-    recovery scope; a secure OpenVR notification layer is deferred.
+    stereo ownership. Confirm Release and Release+DevBench stay opaque black. The
+    cue is intentionally basic and remains in the current recovery scope; a
+    secure OpenVR notification layer is deferred.
 -   Explicitly review the conservative commit constants rather than weakening
     them incidentally while reviewing the fallback:
     -   `4x estimatedAdditionalBytes` covers ordinary overlap with substantial
@@ -566,12 +591,10 @@ and live testing remain required.
         recommendation is to preserve them unless NVIDIA/AMD measurements establish
         a tighter safe bound; the memory leak under investigation makes reducing
         the margin especially unattractive.
-    -   The one-shot emergency recovery path is intentionally less conservative,
-        currently `2x estimatedAdditionalBytes` with a final 2 GiB system-commit
-        reserve. Those two values are suggested starting points, not determined
-        constants. Review whether they provide enough room for Windows, the
-        compositor, and the driver on both AMD and NVIDIA while allowing recovery
-        to use reserve that normal operation must leave untouched.
+    -   The one-shot emergency recovery path keeps the target-specific 4x/8x
+        multiplier, floors projected additional commit at 4 GiB, and relaxes only
+        the normal reserve to a final 2 GiB. Review live AMD/NVIDIA evidence while
+        preserving this separation between projection uncertainty and reserve use.
 
 ## Build and fatal-path verification
 
@@ -584,17 +607,25 @@ and live testing remain required.
 -   Unit policy coverage must also prove the 2 s one-shot attempt, provisional
     15 s stalled / 60 s progressing / 120 s debugger terminal selection, and
     at-most-500-ms/next-presentation-frame grace cannot be renewed by a retry,
-    successor epoch, phase regression, or loading serial. It must prove that only
-    admission of recovery resources earns the progressing ceiling.
+    successor epoch, phase regression, or loading serial. It must prove that
+    reversible recovery-resource readiness stays on 15 s and only the exact
+    creator claim or a later irreversible reconciliation/publication phase earns
+    the progressing ceiling.
 -   Unit policy coverage must prove the emergency commit guard rejects invalid or
     overflowing samples, equality at the final-reserve boundary, and projections
-    above that boundary, while accepting a strictly lower `2x` projection. These
-    values remain reviewable tuning inputs rather than test-asserted optima.
--   Live/log review must confirm each emergency evaluation records a fresh system
-    commit sample; staleness is not one of the relaxed constraints.
--   Unit policy coverage must prove the liveness cue stays black before 6.5 s,
+    above that boundary, while accepting strictly lower 4x/8x projections and
+    proving the 4 GiB floor. It must also cover a safe planning sample becoming
+    unsafe at the claim-time sample. Source review must prove the rejection
+    requeues before the claim and therefore does not consume the one-shot.
+-   Live/log review must confirm planning and claim-time emergency evaluations
+    each record a fresh system-commit sample; staleness is not one of the relaxed
+    constraints.
+-   Unit policy coverage must prove liveness eligibility stays false before 6.5 s,
     without an exact hold/clock, and after terminal ownership is claimed; the cue
     becomes eligible exactly at the threshold without publishing game content.
+    Source review must separately prove that only `_DEBUG` compiles the color
+    path, the phase is cached per stereo compositor cycle, and failed clears do
+    not publish active diagnostics.
 -   Verify the pre-mutation native deadline promotion preserves selected settings,
     gives a synthesized fidelity replay a fresh request/transition identity, keeps
     a genuinely newer deferred request, and cannot renew itself within one loading

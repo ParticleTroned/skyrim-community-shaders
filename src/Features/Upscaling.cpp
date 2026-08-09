@@ -28738,11 +28738,85 @@ void Upscaling::ServiceVRNativeRestorePresentationRecovery(
 				recoveryAttempt);
 	if (recoveryAction ==
 		VRVendorRelatchPolicy::
-			NativeRestorePresentationRecoveryAction::ReleasePresentationGuard) {
+			NativeRestorePresentationRecoveryAction::PublishInactiveContractFailOpen) {
 		// Candidate validation is presentation-only. Exhausting its bounded proof
 		// budget must never mint a generation or re-enter physical target creation.
-		// Release the stale guard and let truthful native Submit continue; the
-		// desired controller target remains intact for later exact stereo proof.
+		// The guard already fails open at this boundary, so publish the exact applied
+		// inactive contract in the same terminal action. Releasing only the guard
+		// leaves the controller permanently Stabilizing and blocks every successor.
+		const auto& applied = transition.applied;
+		const auto* state = globals::state;
+		bool physicalContractPublishable = false;
+		if (state &&
+			applied.valid &&
+			!applied.active &&
+			applied.transitionEpoch == guardEpoch &&
+			applied.renderEyeWidth != 0 &&
+			applied.renderEyeHeight != 0 &&
+			applied.renderEyeWidth == applied.displayEyeWidth &&
+			applied.renderEyeHeight == applied.displayEyeHeight &&
+			vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+				std::memory_order_acquire) == 0 &&
+			!IsSubmitStageDeviceLost() &&
+			!pendingPerfModeRenderTargetRecreate.load(
+				std::memory_order_acquire) &&
+			!perfModeRenderTargetRecreateInProgress.load(
+				std::memory_order_acquire) &&
+			!HasPendingVRUpscalingTransition() &&
+			(!IsVendorUpscalingMethod(applied.method) ||
+				!HasPendingVRVendorRuntimeReset(*this, applied.method))) {
+			const float2 nativeSize{
+				static_cast<float>(applied.displayEyeWidth * 2u),
+				static_cast<float>(applied.displayEyeHeight)
+			};
+			const std::shared_lock recreateReadLock(
+				Hooks::GetRenderTargetRecreationMutex());
+			physicalContractPublishable =
+				!pendingPerfModeRenderTargetRecreate.load(
+					std::memory_order_acquire) &&
+				!perfModeRenderTargetRecreateInProgress.load(
+					std::memory_order_acquire) &&
+				IsVRRenderScalePhysicalTargetProfilePublishableLocked(
+					state,
+					nativeSize,
+					nativeSize);
+		}
+		bool stableReady =
+			physicalContractPublishable &&
+			PublishVRRenderScaleTransitionStable(
+				applied.transitionEpoch,
+				applied.contractGeneration,
+				applied.method);
+		if (!stableReady && physicalContractPublishable) {
+			const auto current = GetVRRenderScaleTransitionSnapshot();
+			stableReady =
+				current.state == VRRenderScaleTransitionState::Active &&
+				current.stable.valid &&
+				!current.stable.active &&
+				current.stable.transitionEpoch == guardEpoch &&
+				current.stable.contractGeneration ==
+					applied.contractGeneration &&
+				current.stable.method == applied.method;
+		}
+		if (!stableReady) {
+			logger::error(
+				"[VRRenderScale] Native presentation validation exhausted {} bounded attempt(s), but the inactive physical contract was not publishable; retaining guard ownership for exact recovery. epoch={} state={} appliedValid={} appliedActive={} generation={} render={}x{} display={}x{} physicalEpoch={} physicalPublishable={} deviceLost={}.",
+				recoveryAttempt,
+				guardEpoch,
+				GetVRRenderScaleTransitionStateName(transition.state),
+				BoolText(applied.valid),
+				BoolText(applied.active),
+				applied.contractGeneration,
+				applied.renderEyeWidth,
+				applied.renderEyeHeight,
+				applied.displayEyeWidth,
+				applied.displayEyeHeight,
+				vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+					std::memory_order_acquire),
+				BoolText(physicalContractPublishable),
+				BoolText(IsSubmitStageDeviceLost()));
+			return;
+		}
 		uint64_t expectedGuardEpoch = guardEpoch;
 		const bool released =
 			vrNativeRestorePresentationGuardEpoch.compare_exchange_strong(
@@ -28751,8 +28825,18 @@ void Upscaling::ServiceVRNativeRestorePresentationRecovery(
 			std::memory_order_acq_rel,
 			std::memory_order_acquire);
 		ClearVRNativeRestorePresentationWatchdog();
+		(void)TryRetireVRRenderScalePostMutationSerialization(guardEpoch);
+		CompleteVRRenderScaleInfoTransition(
+			guardEpoch,
+			"bounded native presentation fail-open",
+			false,
+			applied.method,
+			{ static_cast<float>(applied.displayEyeWidth * 2u),
+				static_cast<float>(applied.displayEyeHeight) },
+			{ static_cast<float>(applied.renderEyeWidth * 2u),
+				static_cast<float>(applied.renderEyeHeight) });
 		logger::warn(
-			"[VRRenderScale] Native presentation validation exhausted {} bounded attempt(s); presentation guard release={} epoch={} without physical relatch.",
+			"[VRRenderScale] Native presentation validation exhausted {} bounded attempt(s); published the coherent inactive contract and released presentation guard={} epoch={} without physical relatch.",
 			recoveryAttempt,
 			BoolText(released),
 			guardEpoch);
@@ -28874,10 +28958,28 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 			resolutionPlan.engineRenderSize.x) == sourceDesc.Width &&
 		ClampPositiveDimension(
 			resolutionPlan.engineRenderSize.y) == sourceDesc.Height;
+	const bool fixedVendorRuntimePlanExact =
+		IsVendorUpscalingMethod(applied.method) &&
+		resolutionPlan.vendorMethod &&
+		IsVRFixedVendorResolutionPlanOwnerExact(
+			resolutionPlan,
+			applied.method) &&
+		ClampPositiveDimension(
+			resolutionPlan.engineRenderSize.x) == sourceDesc.Width &&
+		ClampPositiveDimension(
+			resolutionPlan.engineRenderSize.y) == sourceDesc.Height;
 	const bool nativeSource =
 		IsVRNativeEngineOutputSubmitTexture(sourceTexture);
-	const bool nativePresentation =
-		nativeRuntimePlanExact && nativeSource;
+	const bool fixedVendorSource =
+		fixedVendorRuntimePlanExact &&
+		IsVRFixedVendorOutputSubmitTexture(*this, sourceTexture);
+	const bool fixedVendorEvaluationComplete =
+		!fixedVendorRuntimePlanExact ||
+		vrMainPassVendorDispatchCompletedFrame.load(
+			std::memory_order_acquire) == currentFrame;
+	const bool exactPresentationSource =
+		(nativeRuntimePlanExact && nativeSource) ||
+		(fixedVendorSource && fixedVendorEvaluationComplete);
 	const bool exactPhysicalNativeContinuity =
 		sourceDesc.ArraySize == 1 &&
 		sourceDesc.MipLevels == 1 &&
@@ -28892,15 +28994,15 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 			sourceDesc.Width &&
 		ClampPositiveDimension(resolutionPlan.finalOutputSize.y) ==
 			sourceDesc.Height &&
-		nativePresentation &&
+		exactPresentationSource &&
 		InputBoundsMatchCombinedStereoEye(a_inputBounds, eyeIndex);
 	const bool exactRuntimeContract =
 		GetRuntimeUpscaleMethod() == applied.method &&
 		GetConfiguredUpscaleMethodForTransition() == applied.method &&
-		nativePresentation;
+		(nativeRuntimePlanExact || fixedVendorRuntimePlanExact);
 	const bool exactNativeCandidate =
 		VRVendorRelatchPolicy::CanAcceptNativeRestorePresentation({
-			.targetUsesVendorEvaluation = false,
+			.targetUsesVendorEvaluation = fixedVendorRuntimePlanExact,
 			.exactPhysicalNativeContinuity =
 				exactPhysicalNativeContinuity,
 			.exactRuntimeContract = exactRuntimeContract,

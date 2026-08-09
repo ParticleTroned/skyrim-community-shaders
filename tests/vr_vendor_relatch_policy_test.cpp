@@ -590,7 +590,7 @@ namespace
 			const auto expected = attempt == 1u ?
 			                          NativeRestorePresentationRecoveryAction::RetryPresentationValidation :
 			                      attempt == 2u ?
-			                          NativeRestorePresentationRecoveryAction::ReleasePresentationGuard :
+			                          NativeRestorePresentationRecoveryAction::PublishInactiveContractFailOpen :
 			                          NativeRestorePresentationRecoveryAction::Exhausted;
 			if (SelectNativeRestorePresentationRecoveryAction(attempt) != expected)
 				return false;

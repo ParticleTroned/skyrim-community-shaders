@@ -580,7 +580,7 @@ namespace VRVendorRelatchPolicy
 	enum class NativeRestorePresentationRecoveryAction : std::uint8_t
 	{
 		RetryPresentationValidation,
-		ReleasePresentationGuard,
+		PublishInactiveContractFailOpen,
 		Exhausted
 	};
 
@@ -594,7 +594,7 @@ namespace VRVendorRelatchPolicy
 		}
 		return a_attempt == 1u ?
 		           NativeRestorePresentationRecoveryAction::RetryPresentationValidation :
-		           NativeRestorePresentationRecoveryAction::ReleasePresentationGuard;
+		           NativeRestorePresentationRecoveryAction::PublishInactiveContractFailOpen;
 	}
 
 	[[nodiscard]] constexpr bool ShouldDeferPhysicalRelatchForStereo(

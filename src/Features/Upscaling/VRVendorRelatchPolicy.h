@@ -353,6 +353,65 @@ namespace VRVendorRelatchPolicy
 		       !a_state.stabilizerSyncUnresolved;
 	}
 
+	struct SerializedPresentationReadiness
+	{
+		bool compositorHoldActive = false;
+		bool unresolvedPhysicalMutation = false;
+		bool serializationOwnsAppliedContract = false;
+		bool exactAppliedContract = false;
+		bool completedDestinationWorldFrame = false;
+		bool engineSaveLoadActivityActive = false;
+		bool statePostLoadResetPending = false;
+		bool upscalingPostLoadResetPending = false;
+		bool renderTargetRecreatePending = false;
+		bool renderTargetRecreateInProgress = false;
+		bool vendorRuntimeResetPending = false;
+		bool physicalContractConverged = false;
+	};
+
+	[[nodiscard]] constexpr bool HasSerializedPresentationReadiness(
+		const SerializedPresentationReadiness& a_state) noexcept
+	{
+		return a_state.compositorHoldActive &&
+		       !a_state.unresolvedPhysicalMutation &&
+		       a_state.serializationOwnsAppliedContract &&
+		       a_state.exactAppliedContract &&
+		       a_state.completedDestinationWorldFrame &&
+		       !a_state.engineSaveLoadActivityActive &&
+		       !a_state.statePostLoadResetPending &&
+		       !a_state.upscalingPostLoadResetPending &&
+		       !a_state.renderTargetRecreatePending &&
+		       !a_state.renderTargetRecreateInProgress &&
+		       !a_state.vendorRuntimeResetPending &&
+		       a_state.physicalContractConverged;
+	}
+
+	// A console COC does not necessarily publish the ordinary post-load completion
+	// event. Exact destination/contract evidence may arm the normal safety grace;
+	// it may not bypass that grace or the vendor lifecycle mutation gate.
+	[[nodiscard]] constexpr bool CanArmSerializedSaveLoadCompletionGrace(
+		const SerializedPresentationReadiness& a_state,
+		bool a_saveLoadSafeModeActive,
+		bool a_completionGraceAlreadyArmed) noexcept
+	{
+		return a_saveLoadSafeModeActive &&
+		       !a_completionGraceAlreadyArmed &&
+		       HasSerializedPresentationReadiness(a_state);
+	}
+
+	// Once the ordinary grace and lifecycle gate have retired, the same exact
+	// serialized contract may break the compositor-hold/promotion proof cycle.
+	// The compositor still requires a validated vendor stereo pair before release.
+	[[nodiscard]] constexpr bool CanQualifySerializedPresentationPromotion(
+		const SerializedPresentationReadiness& a_state,
+		bool a_saveLoadSafeModeActive,
+		bool a_lifecycleMutationDeferred) noexcept
+	{
+		return !a_saveLoadSafeModeActive &&
+		       !a_lifecycleMutationDeferred &&
+		       HasSerializedPresentationReadiness(a_state);
+	}
+
 	struct StabilizerDestinationSyncReadiness
 	{
 		bool completedWorldFrameAfterClose = false;

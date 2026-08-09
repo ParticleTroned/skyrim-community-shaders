@@ -292,6 +292,76 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversSerializedPresentationReadiness()
+	{
+		constexpr SerializedPresentationReadiness ready{
+			.compositorHoldActive = true,
+			.serializationOwnsAppliedContract = true,
+			.exactAppliedContract = true,
+			.completedDestinationWorldFrame = true,
+			.physicalContractConverged = true,
+		};
+		if (!CanArmSerializedSaveLoadCompletionGrace(ready, true, false) ||
+			CanArmSerializedSaveLoadCompletionGrace(ready, false, false) ||
+			CanArmSerializedSaveLoadCompletionGrace(ready, true, true) ||
+			!CanQualifySerializedPresentationPromotion(ready, false, false) ||
+			CanQualifySerializedPresentationPromotion(ready, true, false) ||
+			CanQualifySerializedPresentationPromotion(ready, false, true)) {
+			return false;
+		}
+
+		for (std::uint32_t bit = 0; bit < 12; ++bit) {
+			auto blocked = ready;
+			switch (bit) {
+			case 0:
+				blocked.compositorHoldActive = false;
+				break;
+			case 1:
+				blocked.unresolvedPhysicalMutation = true;
+				break;
+			case 2:
+				blocked.serializationOwnsAppliedContract = false;
+				break;
+			case 3:
+				blocked.exactAppliedContract = false;
+				break;
+			case 4:
+				blocked.completedDestinationWorldFrame = false;
+				break;
+			case 5:
+				blocked.engineSaveLoadActivityActive = true;
+				break;
+			case 6:
+				blocked.statePostLoadResetPending = true;
+				break;
+			case 7:
+				blocked.upscalingPostLoadResetPending = true;
+				break;
+			case 8:
+				blocked.renderTargetRecreatePending = true;
+				break;
+			case 9:
+				blocked.renderTargetRecreateInProgress = true;
+				break;
+			case 10:
+				blocked.vendorRuntimeResetPending = true;
+				break;
+			case 11:
+				blocked.physicalContractConverged = false;
+				break;
+			default:
+				return false;
+			}
+			if (HasSerializedPresentationReadiness(blocked) ||
+				CanArmSerializedSaveLoadCompletionGrace(blocked, true, false) ||
+				CanQualifySerializedPresentationPromotion(blocked, false, false)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversBufferedDoorRequestCoalescing()
 	{
 		constexpr BufferedDoorRequestCoalescingAdmission match{
@@ -2087,6 +2157,7 @@ namespace
 	static_assert(CoversRenderTransitionCoverAdmission());
 	static_assert(CoversLoadingFadeHoldAdmission());
 	static_assert(CoversLoadingPresentationReleaseAdmission());
+	static_assert(CoversSerializedPresentationReadiness());
 	static_assert(CoversStabilizerDestinationSyncReadiness());
 	static_assert(CoversBufferedDoorRequestCoalescing());
 	static_assert(CoversPhysicalRelatchFrameAdmission());

@@ -44663,12 +44663,79 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		memoryReliefFoveatedBypass;
 	if (transitionPresentationCooldown &&
 		a_vendorResumeCooldownAtCycleStart) {
-		// Mask repair remains deliberately suspended by the physical handoff while
-		// this candidate is being evaluated. Only an independently unsafe save/load
-		// context may block promotion; otherwise promotion and mask deferral would
-		// wait on each other forever.
+		// A console COC can omit the normal completion event after concrete load and
+		// physical mutation work has completed. Exact serialized destination evidence
+		// arms the ordinary safety grace; only after that grace and its mutation gate
+		// retire may the same evidence break the compositor-hold/promotion proof cycle.
 		const bool maskRepairSafetyContextActive =
 			IsVRTransitionMaskRepairSafetyContextActive(state);
+		const bool physicalContractConverged =
+			IsVRRenderScalePhysicalContractConverged(
+				upscaleMethod,
+				activeContract.qualityMode);
+		const uint64_t serializationEpoch =
+			vrRenderScalePostMutationSerializationEpoch.load(
+				std::memory_order_acquire);
+		const VRVendorRelatchPolicy::SerializedPresentationReadiness
+			serializedPresentationReadiness{
+				.compositorHoldActive = IsVRPostLoadCompositorHoldActive(),
+				.unresolvedPhysicalMutation =
+					vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+						std::memory_order_acquire) != 0,
+				.serializationOwnsAppliedContract =
+					serializationEpoch != 0 &&
+					transitionSnapshot.applied.valid &&
+					serializationEpoch ==
+						transitionSnapshot.applied.transitionEpoch,
+				.exactAppliedContract =
+					IsVRRenderScaleAppliedVendorContractExact(
+						transitionSnapshot,
+						activeContract,
+						upscaleMethod),
+				.completedDestinationWorldFrame =
+					HasCompletedVRWorldFrameAfterLatestLoad(state) &&
+					state->lastWorldRenderFrame == currentFrame &&
+					state->lastCompletedWorldRenderFrame == currentFrame,
+				.engineSaveLoadActivityActive =
+					state->IsEngineSaveLoadActivityActive(),
+				.statePostLoadResetPending = state->pendingPostLoadRuntimeReset,
+				.upscalingPostLoadResetPending =
+					postLoadRuntimeResetPending.load(std::memory_order_acquire),
+				.renderTargetRecreatePending =
+					pendingPerfModeRenderTargetRecreate.load(
+						std::memory_order_acquire),
+				.renderTargetRecreateInProgress =
+					perfModeRenderTargetRecreateInProgress.load(
+						std::memory_order_acquire),
+				.vendorRuntimeResetPending =
+					HasPendingVRVendorRuntimeReset(*this, upscaleMethod),
+				.physicalContractConverged = physicalContractConverged,
+			};
+		const bool saveLoadSafeModeActive =
+			state->IsSaveLoadSafeModeActive();
+		const bool saveLoadCompletionGraceArmed =
+			state->saveLoadSafeModeEndFrame.load(
+				std::memory_order_acquire) != 0;
+		if (VRVendorRelatchPolicy::CanArmSerializedSaveLoadCompletionGrace(
+				serializedPresentationReadiness,
+				saveLoadSafeModeActive,
+				saveLoadCompletionGraceArmed)) {
+			state->ExtendSaveLoadSafeMode(
+				currentFrame,
+				State::kSaveLoadSafeModeGraceFrames);
+			logger::info(
+				"[VRRenderScale] Armed the normal save/load completion grace from exact serialized destination convergence. epoch={} frame={}.",
+				serializationEpoch,
+				currentFrame);
+		}
+		const bool serializedPresentationHandoffReady =
+			VRVendorRelatchPolicy::CanQualifySerializedPresentationPromotion(
+				serializedPresentationReadiness,
+				state->IsSaveLoadSafeModeActive(),
+				vendorLifecycleMutationDeferred);
+		const bool protectedPresentationHandoffReady =
+			stabilizerDoorHandoffPresentationReady ||
+			serializedPresentationHandoffReady;
 		const bool cooldownStableCandidate =
 			vrRenderScaleMode &&
 			(!explicitMenuPresentationContext || stabilizerDoorHandoffPresentationReady) &&
@@ -44681,12 +44748,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
 			!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 			!HasPendingVRVendorRuntimeReset(*this, upscaleMethod) &&
-			IsVRRenderScalePhysicalContractConverged(
-				upscaleMethod,
-				activeContract.qualityMode) &&
-			(!transitionProtectionActive || stabilizerDoorHandoffPresentationReady) &&
-			(!maskRepairSafetyContextActive || stabilizerDoorHandoffPresentationReady) &&
-			(!transitionFoveatedBypass || stabilizerDoorHandoffPresentationReady) &&
+			physicalContractConverged &&
+			(!transitionProtectionActive || protectedPresentationHandoffReady) &&
+			(!maskRepairSafetyContextActive || protectedPresentationHandoffReady) &&
+			(!transitionFoveatedBypass || protectedPresentationHandoffReady) &&
 			motionVector.texture &&
 			depth.texture;
 		TryPromoteVRRenderScaleSubmitStageContract(

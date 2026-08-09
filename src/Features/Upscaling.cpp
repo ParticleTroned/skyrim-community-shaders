@@ -22301,11 +22301,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	loggedRelatchRuntimeActivationDefer = false;
 
-	if (!bypassSoftPreviewDeferrals &&
-		ShouldWaitForPerfModeRenderTargetRecreateDelay() &&
-		!TryResumeVRLowPeakNativeRestoreAfterProvenRetirement(
-			previewRelatchEpoch)) {
-		return false;
+	if (ShouldWaitForPerfModeRenderTargetRecreateDelay(
+			bypassSoftPreviewDeferrals)) {
+		if (bypassSoftPreviewDeferrals ||
+			!TryResumeVRLowPeakNativeRestoreAfterProvenRetirement(
+				previewRelatchEpoch)) {
+			return false;
+		}
 	}
 	// The bound recovery epoch remains authoritative when request coalescing
 	// promotes a higher-priority origin. Run its absolute clock before generic
@@ -22485,9 +22487,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			globals::state ?
 				std::max(globals::state->frameCount, 1u) :
 				queuedFrame;
-		if (!bypassSoftPreviewDeferrals &&
-			queuedFrame != 0 &&
-			currentFrame - queuedFrame < queuedDelay) {
+		if (VRVendorRelatchPolicy::ShouldDeferRelatchForRetryPacing({
+				.queuedFrame = queuedFrame,
+				.currentFrame = currentFrame,
+				.delayFrames = queuedDelay,
+				.bypassMultiFrameDelay = bypassSoftPreviewDeferrals,
+			})) {
 			return false;
 		}
 		const uint64_t serializationBeforeConsume =
@@ -25066,8 +25071,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				VRRenderScaleRetryKind::Pressure);
 			return false;
 		}
-		if (!CanAdmitVRIntermediateRetirement(relatchEpoch) ||
-			!CanAdmitVREngineTargetRetirement(relatchEpoch)) {
+		if (!postLoadRetirementReady) {
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Retirement);
 			return false;
 		}
@@ -48512,7 +48516,8 @@ void Upscaling::MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames)
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(delayFrames, std::memory_order_release);
 }
 
-bool Upscaling::ShouldWaitForPerfModeRenderTargetRecreateDelay() const
+bool Upscaling::ShouldWaitForPerfModeRenderTargetRecreateDelay(
+	bool a_bypassMultiFrameDelay) const
 {
 	const std::scoped_lock queueLock(
 		perfModeRenderTargetRecreateQueueMutex);
@@ -48525,7 +48530,12 @@ bool Upscaling::ShouldWaitForPerfModeRenderTargetRecreateDelay() const
 		delayFrames = kVRUpscalingTransitionApplyDelayFrames;
 
 	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : queuedFrame;
-	return currentFrame - queuedFrame < delayFrames;
+	return VRVendorRelatchPolicy::ShouldDeferRelatchForRetryPacing({
+		.queuedFrame = queuedFrame,
+		.currentFrame = currentFrame,
+		.delayFrames = delayFrames,
+		.bypassMultiFrameDelay = a_bypassMultiFrameDelay,
+	});
 }
 
 void Upscaling::ApplyPendingVRUpscalingTransition()

@@ -717,6 +717,31 @@ namespace VRVendorRelatchPolicy
 		       !fsrNativeRestoreOwnsSharedRetirement;
 	}
 
+	struct RelatchRetryPacingAdmission
+	{
+		std::uint32_t queuedFrame = 0;
+		std::uint32_t currentFrame = 0;
+		std::uint32_t delayFrames = 0;
+		bool bypassMultiFrameDelay = false;
+	};
+
+	// A render-frame retry floor is a hard serialization boundary. Emergency and
+	// presentation-deadline recovery may waive the remaining ordinary backoff,
+	// but must not consume a request requeued by an earlier SetDirtyStates call in
+	// the same frame.
+	[[nodiscard]] constexpr bool ShouldDeferRelatchForRetryPacing(
+		const RelatchRetryPacingAdmission& a_state) noexcept
+	{
+		if (a_state.queuedFrame == 0)
+			return false;
+		if (a_state.currentFrame == a_state.queuedFrame)
+			return true;
+		return !a_state.bypassMultiFrameDelay &&
+		       a_state.delayFrames != 0 &&
+		       a_state.currentFrame - a_state.queuedFrame <
+		           a_state.delayFrames;
+	}
+
 	struct NativeRestoreFenceReadyResumeAdmission
 	{
 		bool relatchPending = false;

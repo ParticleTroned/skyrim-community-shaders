@@ -2509,7 +2509,8 @@ public:
 	bool ShouldDeferVRUpscalingTransitionSettings() const;
 	bool ShouldWaitForVRUpscalingTransitionDelay() const;
 	void MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames = 0);
-	bool ShouldWaitForPerfModeRenderTargetRecreateDelay() const;
+	bool ShouldWaitForPerfModeRenderTargetRecreateDelay(
+		bool a_bypassMultiFrameDelay = false) const;
 	void ApplyPendingVRUpscalingTransition();
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);

@@ -1344,6 +1344,48 @@ namespace
 		       PostMutationRecoveryAction::NotApplicable;
 	}
 
+	constexpr bool CoversRelatchRetryPacing()
+	{
+		RelatchRetryPacingAdmission state{
+			.queuedFrame = 100,
+			.currentFrame = 100,
+			.delayFrames = 6,
+			.bypassMultiFrameDelay = false,
+		};
+		if (!ShouldDeferRelatchForRetryPacing(state))
+			return false;
+
+		// Emergency recovery cannot spin within the queueing frame.
+		state.bypassMultiFrameDelay = true;
+		if (!ShouldDeferRelatchForRetryPacing(state))
+			return false;
+
+		// On the next frame it may waive only the remaining ordinary backoff.
+		state.currentFrame = 101;
+		if (ShouldDeferRelatchForRetryPacing(state))
+			return false;
+		state.bypassMultiFrameDelay = false;
+		if (!ShouldDeferRelatchForRetryPacing(state))
+			return false;
+
+		state.currentFrame = 106;
+		if (ShouldDeferRelatchForRetryPacing(state))
+			return false;
+
+		// A zero-delay request still observes the same-frame serialization floor.
+		state.currentFrame = state.queuedFrame;
+		state.delayFrames = 0;
+		if (!ShouldDeferRelatchForRetryPacing(state))
+			return false;
+		state.currentFrame = 101;
+		if (ShouldDeferRelatchForRetryPacing(state))
+			return false;
+
+		state.queuedFrame = 0;
+		state.currentFrame = 0;
+		return !ShouldDeferRelatchForRetryPacing(state);
+	}
+
 	constexpr bool CoversPostMutationEmergencyMemoryAdmission()
 	{
 		if (kPostMutationEmergencyMinimumProjectionBytes !=
@@ -2008,6 +2050,7 @@ namespace
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
 	static_assert(CoversBoundedPostMutationRecovery());
+	static_assert(CoversRelatchRetryPacing());
 	static_assert(CoversPostMutationEmergencyMemoryAdmission());
 	static_assert(CoversRelatchAllocationEstimate());
 	static_assert(CoversPostMutationSerializationRetirementAdmission());

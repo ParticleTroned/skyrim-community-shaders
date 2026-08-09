@@ -111,6 +111,21 @@ void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& ma
 
 namespace
 {
+	// CommonLibSSE-NG models BSLightingShaderProperty as 0x160 bytes, but the
+	// Skyrim VR constructor initializes runtime fields through offset 0x170.
+	// Reserve the complete 0x178-byte VR object anywhere CS manually invokes
+	// BSLightingShaderProperty::Ctor; otherwise the constructor writes beyond
+	// the allocation and corrupts the following heap block.
+	constexpr std::size_t kVRBSLightingShaderPropertySize = 0x178;
+	static_assert(kVRBSLightingShaderPropertySize >= sizeof(RE::BSLightingShaderProperty));
+
+	std::size_t GetBSLightingShaderPropertyAllocationSize() noexcept
+	{
+		return REL::Module::IsVR() ?
+		           kVRBSLightingShaderPropertySize :
+		           sizeof(RE::BSLightingShaderProperty);
+	}
+
 	bool DrawEnabledCheckbox(TruePBR::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
@@ -1320,7 +1335,7 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 	if (land->loadedData != nullptr && land->loadedData->mesh[0] != nullptr) {
 		land->data.flags.set(static_cast<RE::OBJ_LAND::Flag>(8));
 		for (uint32_t quadIndex = 0; quadIndex < 4; ++quadIndex) {
-			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(memoryManager->Allocate(REL::Module::IsVR() ? 0x178 : sizeof(RE::BSLightingShaderProperty), 0, false));
+			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(memoryManager->Allocate(GetBSLightingShaderPropertyAllocationSize(), 0, false));
 			shaderProperty->Ctor();
 
 			{
@@ -1457,7 +1472,7 @@ struct BSTempEffectGeometryDecal_Initialize
 		auto* singleton = &globals::features::truePBR;
 
 		if (decal->decal != nullptr && singleton->IsPBRTextureSet(decal->texSet)) {
-			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(RE::MemoryManager::GetSingleton()->Allocate(sizeof(RE::BSLightingShaderProperty), 0, false));
+			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(RE::MemoryManager::GetSingleton()->Allocate(GetBSLightingShaderPropertyAllocationSize(), 0, false));
 			shaderProperty->Ctor();
 
 			{

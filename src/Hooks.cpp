@@ -1072,6 +1072,7 @@ struct BSShaderRenderTargets_Create
 
 	static bool RecreateAndSetupRenderTargetResources(
 		Hooks::VRRenderTargetRecreatePreparation a_beforeEngineCreate,
+		Hooks::VRRenderTargetRecreateMutationEntered a_onEngineCreateEntered,
 		Hooks::VRRenderTargetRecreateCheckpoint a_afterEngineCreate,
 		void* a_context,
 		bool* a_engineCreateEntered)
@@ -1082,6 +1083,8 @@ struct BSShaderRenderTargets_Create
 			try {
 				if (a_beforeEngineCreate)
 					a_beforeEngineCreate(a_context);
+				if (a_onEngineCreateEntered)
+					a_onEngineCreateEntered(a_context);
 				if (a_engineCreateEntered)
 					*a_engineCreateEntered = true;
 				func();
@@ -1243,6 +1246,7 @@ namespace Hooks
 
 	bool RecreateRenderTargetsForVRRenderScale(
 		VRRenderTargetRecreatePreparation a_beforeEngineCreate,
+		VRRenderTargetRecreateMutationEntered a_onEngineCreateEntered,
 		VRRenderTargetRecreateCheckpoint a_afterEngineCreate,
 		void* a_context,
 		bool* a_engineCreateEntered)
@@ -1254,6 +1258,7 @@ namespace Hooks
 
 		return BSShaderRenderTargets_Create::RecreateAndSetupRenderTargetResources(
 			a_beforeEngineCreate,
+			a_onEngineCreateEntered,
 			a_afterEngineCreate,
 			a_context,
 			a_engineCreateEntered);

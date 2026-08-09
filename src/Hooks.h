@@ -28,6 +28,10 @@ namespace Hooks
 	std::shared_mutex& GetRenderTargetRecreationMutex();
 	bool RecreateRenderTargets();
 	using VRRenderTargetRecreatePreparation = void (*)(void*);
+	// Runs after all fallible preparation and immediately before Skyrim's native
+	// creator. This is the first point at which post-mutation ownership may be
+	// published.
+	using VRRenderTargetRecreateMutationEntered = void (*)(void*);
 	// Runs synchronously after Skyrim's native target creator returns and before
 	// global or CSX render-target state is reinitialized. Returning true proves
 	// that recovery setup may run; it does not by itself prove that every output
@@ -35,6 +39,7 @@ namespace Hooks
 	using VRRenderTargetRecreateCheckpoint = bool (*)(void*, bool) noexcept;
 	bool RecreateRenderTargetsForVRRenderScale(
 		VRRenderTargetRecreatePreparation a_beforeEngineCreate = nullptr,
+		VRRenderTargetRecreateMutationEntered a_onEngineCreateEntered = nullptr,
 		VRRenderTargetRecreateCheckpoint a_afterEngineCreate = nullptr,
 		void* a_context = nullptr,
 		bool* a_engineCreateEntered = nullptr);

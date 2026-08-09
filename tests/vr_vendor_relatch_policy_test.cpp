@@ -300,6 +300,9 @@ namespace
 			.exactAppliedContract = true,
 			.completedDestinationWorldFrame = true,
 			.physicalContractConverged = true,
+			.serializationLoadingSerial = 41,
+			.compositorHoldLoadingSerial = 41,
+			.currentLoadingSerial = 41,
 		};
 		if (!CanArmSerializedSaveLoadCompletionGrace(ready, true, false) ||
 			CanArmSerializedSaveLoadCompletionGrace(ready, false, false) ||
@@ -310,7 +313,7 @@ namespace
 			return false;
 		}
 
-		for (std::uint32_t bit = 0; bit < 12; ++bit) {
+		for (std::uint32_t bit = 0; bit < 15; ++bit) {
 			auto blocked = ready;
 			switch (bit) {
 			case 0:
@@ -348,6 +351,15 @@ namespace
 				break;
 			case 11:
 				blocked.physicalContractConverged = false;
+				break;
+			case 12:
+				blocked.serializationLoadingSerial = 0;
+				break;
+			case 13:
+				blocked.compositorHoldLoadingSerial = 42;
+				break;
+			case 14:
+				blocked.currentLoadingSerial = 42;
 				break;
 			default:
 				return false;
@@ -555,8 +567,7 @@ namespace
 
 	constexpr bool CoversBoundedNativeRestorePresentationRecovery()
 	{
-		if (kNativeRestoreMaximumPhysicalRecoveryAttempts != 1u ||
-			kNativeRestoreMaximumRecoveryAttempts != 2u) {
+		if (kNativeRestoreMaximumRecoveryAttempts != 2u) {
 			return false;
 		}
 
@@ -577,9 +588,9 @@ namespace
 			}
 
 			const auto expected = attempt == 1u ?
-			                          NativeRestorePresentationRecoveryAction::PhysicalRetry :
+			                          NativeRestorePresentationRecoveryAction::RetryPresentationValidation :
 			                      attempt == 2u ?
-			                          NativeRestorePresentationRecoveryAction::LogicalFallback :
+			                          NativeRestorePresentationRecoveryAction::ReleasePresentationGuard :
 			                          NativeRestorePresentationRecoveryAction::Exhausted;
 			if (SelectNativeRestorePresentationRecoveryAction(attempt) != expected)
 				return false;

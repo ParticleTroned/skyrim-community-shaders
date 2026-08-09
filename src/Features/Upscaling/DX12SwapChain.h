@@ -11,16 +11,22 @@
 
 #include <directx/d3dx12.h>
 
+#include <memory>
+
 class WrappedResource
 {
 public:
 	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device);
-	~WrappedResource();
+	~WrappedResource() = default;
+	WrappedResource(const WrappedResource&) = delete;
+	WrappedResource& operator=(const WrappedResource&) = delete;
+	WrappedResource(WrappedResource&&) = delete;
+	WrappedResource& operator=(WrappedResource&&) = delete;
 
-	ID3D11Texture2D* resource11 = nullptr;
-	ID3D11ShaderResourceView* srv = nullptr;
-	ID3D11UnorderedAccessView* uav = nullptr;
-	ID3D11RenderTargetView* rtv = nullptr;
+	winrt::com_ptr<ID3D11Texture2D> resource11;
+	winrt::com_ptr<ID3D11ShaderResourceView> srv;
+	winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+	winrt::com_ptr<ID3D11RenderTargetView> rtv;
 	winrt::com_ptr<ID3D12Resource> resource;
 };
 
@@ -70,12 +76,12 @@ public:
 
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
 
-	WrappedResource* swapChainBufferWrapped = nullptr;
-	WrappedResource* uiBufferWrapped = nullptr;
+	std::unique_ptr<WrappedResource> swapChainBufferWrapped;
+	std::unique_ptr<WrappedResource> uiBufferWrapped;
 
 	// D3D12 interop resources for frame generation
-	WrappedResource* depthBufferShared12 = nullptr;
-	WrappedResource* motionVectorBufferShared12 = nullptr;
+	std::unique_ptr<WrappedResource> depthBufferShared12;
+	std::unique_ptr<WrappedResource> motionVectorBufferShared12;
 
 	winrt::com_ptr<ID3D11Device5> d3d11Device;
 	winrt::com_ptr<ID3D11DeviceContext4> d3d11Context;

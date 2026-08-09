@@ -46,6 +46,50 @@ namespace
 		}
 	}
 
+	const char* GetPhysicalPhaseName(
+		Upscaling::VRRenderScalePhysicalPhase a_phase)
+	{
+		switch (a_phase) {
+		case Upscaling::VRRenderScalePhysicalPhase::None:
+			return "none";
+		case Upscaling::VRRenderScalePhysicalPhase::Prepared:
+			return "prepared";
+		case Upscaling::VRRenderScalePhysicalPhase::CreatorEntered:
+			return "creator_entered";
+		case Upscaling::VRRenderScalePhysicalPhase::TableChanged:
+			return "table_changed";
+		case Upscaling::VRRenderScalePhysicalPhase::Reconciled:
+			return "reconciled";
+		case Upscaling::VRRenderScalePhysicalPhase::ContractPublished:
+			return "contract_published";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* GetPresentationPhaseName(
+		Upscaling::VRRenderScalePresentationPhase a_phase)
+	{
+		switch (a_phase) {
+		case Upscaling::VRRenderScalePresentationPhase::Idle:
+			return "idle";
+		case Upscaling::VRRenderScalePresentationPhase::Covered:
+			return "covered";
+		case Upscaling::VRRenderScalePresentationPhase::Repairing:
+			return "repairing";
+		case Upscaling::VRRenderScalePresentationPhase::AwaitingStereo:
+			return "awaiting_stereo";
+		case Upscaling::VRRenderScalePresentationPhase::StereoProven:
+			return "stereo_proven";
+		case Upscaling::VRRenderScalePresentationPhase::QuarantinedFailOpen:
+			return "quarantined_fail_open";
+		case Upscaling::VRRenderScalePresentationPhase::Released:
+			return "released";
+		default:
+			return "unknown";
+		}
+	}
+
 	const char* GetBackendName(Upscaling::VRRenderScaleBackendKind a_backend)
 	{
 		switch (a_backend) {
@@ -358,6 +402,25 @@ namespace
 						 } },
 			{ "controller", {
 								{ "state", Upscaling::GetVRRenderScaleTransitionStateName(controller.state) },
+								{ "physicalPhase", GetPhysicalPhaseName(controller.physicalPhase) },
+								{ "physicalPhaseValue", static_cast<uint32_t>(controller.physicalPhase) },
+								{ "presentationPhase", GetPresentationPhaseName(controller.presentationPhase) },
+								{ "presentationPhaseValue", static_cast<uint32_t>(controller.presentationPhase) },
+								{ "desiredOwner", {
+									{ "transitionEpoch", controller.desiredOwner.transitionEpoch },
+									{ "contractGeneration", controller.desiredOwner.contractGeneration },
+									{ "loadingSerial", controller.desiredOwner.loadingSerial },
+								} },
+								{ "physicalOwner", {
+									{ "transitionEpoch", controller.physicalOwner.transitionEpoch },
+									{ "contractGeneration", controller.physicalOwner.contractGeneration },
+									{ "loadingSerial", controller.physicalOwner.loadingSerial },
+								} },
+								{ "presentationOwner", {
+									{ "transitionEpoch", controller.presentationOwner.transitionEpoch },
+									{ "contractGeneration", controller.presentationOwner.contractGeneration },
+									{ "loadingSerial", controller.presentationOwner.loadingSerial },
+								} },
 								{ "targetEpoch", controller.targetEpoch },
 								{ "revision", controller.revision },
 								{ "unresolvedPhysicalMutationEpoch", a_upscaling.vrRenderScaleUnresolvedPhysicalMutationEpoch.load(std::memory_order_acquire) },

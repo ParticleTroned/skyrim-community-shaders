@@ -101,6 +101,42 @@ public:
 		Active
 	};
 
+	// Orthogonal diagnostic state. These fields deliberately have no behavioral
+	// authority yet; they expose ownership mistakes without creating a second
+	// controller during the stabilization work.
+	enum class VRRenderScalePhysicalPhase : uint8_t
+	{
+		None,
+		Prepared,
+		CreatorEntered,
+		TableChanged,
+		Reconciled,
+		ContractPublished
+	};
+
+	enum class VRRenderScalePresentationPhase : uint8_t
+	{
+		Idle,
+		Covered,
+		Repairing,
+		AwaitingStereo,
+		StereoProven,
+		QuarantinedFailOpen,
+		Released
+	};
+
+	struct VRRenderScaleOwnerKey
+	{
+		uint64_t transitionEpoch = 0;
+		uint32_t contractGeneration = 0;
+		uint64_t loadingSerial = 0;
+
+		[[nodiscard]] bool IsValid() const noexcept
+		{
+			return transitionEpoch != 0;
+		}
+	};
+
 	enum class VRUpscalingTransitionOrigin : uint8_t
 	{
 		CSMenu,
@@ -1205,6 +1241,13 @@ public:
 		VRRenderScaleMetricsSnapshot metrics{};
 		VRRenderScaleFidelitySnapshot fidelity{};
 		VRRenderScalePresentationSnapshot presentation{};
+		VRRenderScaleOwnerKey desiredOwner{};
+		VRRenderScaleOwnerKey physicalOwner{};
+		VRRenderScaleOwnerKey presentationOwner{};
+		VRRenderScalePhysicalPhase physicalPhase =
+			VRRenderScalePhysicalPhase::None;
+		VRRenderScalePresentationPhase presentationPhase =
+			VRRenderScalePresentationPhase::Idle;
 	};
 
 	struct PerfModeState
@@ -1776,27 +1819,10 @@ public:
 	uint32_t vrRenderScaleMemoryTrimRequestedFrame = 0;
 	uint32_t vrRenderScaleMemoryTrimFenceFailures = 0;
 
-	struct VRIntermediateTextureCache
-	{
-		uint32_t inWidth = 0;
-		uint32_t inHeight = 0;
-		uint32_t outWidth = 0;
-		uint32_t outHeight = 0;
-		uint32_t generation = 0;
-		eastl::unique_ptr<Texture2D> colorIn[2];
-		eastl::unique_ptr<Texture2D> colorOut[2];
-		eastl::unique_ptr<Texture2D> depth[2];
-		eastl::unique_ptr<Texture2D> linearDepth[2];
-		eastl::unique_ptr<Texture2D> motionVectors[2];
-		eastl::unique_ptr<Texture2D> reactiveMask[2];
-		eastl::unique_ptr<Texture2D> transparencyMask[2];
-	};
-	// Single alternate-size reuse cache; validated against the current layout before reuse.
-	VRIntermediateTextureCache cachedVRIntermediateTextures;
 	uint32_t vrIntermediateTextureGeneration = 0;
 
 	// Helper to create/resize per-eye buffers matching source formats
-	void CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
+	bool CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
 	void EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
@@ -1996,10 +2022,6 @@ public:
 		const char* a_reason);
 	void ServiceVRNativeRestorePresentationRecovery(
 		uint64_t a_compositorCycleToken);
-	bool QueueVRNativeRestorePresentationRecovery(
-		uint64_t a_expectedGuardEpoch,
-		uint64_t a_compositorCycleToken,
-		const char* a_reason);
 	void ClearVRNativeRestorePresentationWatchdog();
 	bool RecordVRNativeRestorePresentationObservationIfUnprotected(
 		const VRRenderScalePresentationObservation& a_observation);
@@ -2220,9 +2242,9 @@ public:
 	std::atomic<uint32_t> vrMainPassVendorDispatchCompletedFrame{ 0 };
 	mutable std::recursive_mutex perfModeRenderTargetRecreateQueueMutex;
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
-	// Queue-owned evidence that this relatch must replace physical targets even
-	// when their dimensions already match. Used only by the native-presentation
-	// watchdog, whose failure can be identity/content rather than size related.
+	// Queue-owned evidence that a provider-neutral recovery or explicitly unsafe
+	// offered-resource identity must replace physical targets even when dimensions
+	// already match. Presentation validation alone never sets this marker.
 	std::atomic<bool> pendingPerfModeRenderTargetRecreateForcePhysical{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
@@ -2266,6 +2288,7 @@ public:
 	std::atomic_bool vrRenderScaleEmergencyCommitRejectionLogged{ false };
 	std::atomic_bool vrRenderScaleEmergencyClaimCommitRejectionLogged{ false };
 	std::atomic_bool vrRenderScaleExtendedRecoveryDeadlineLogged{ false };
+	std::atomic_bool vrRenderScaleTerminalDeadlineFailOpenLogged{ false };
 	// Exact internal native successor. It serializes ordinary requests while its
 	// matching physical worker is pending/in progress; stale markers alone are not
 	// treated as live work.
@@ -2761,6 +2784,10 @@ private:
 	// the keepalive texture, this pauses Skyrim's fade clock so the normal
 	// fade-in is not consumed behind CSX's render-transition protection.
 	std::atomic<uint64_t> vrPostLoadFaderHoldEpoch{ 0 };
+	// Bind the UI-clock hold to the same LoadingMenu owner as the compositor
+	// cover. A zero serial is retained only for the startup path which can arm
+	// before LoadingMenu has published its first serial.
+	std::atomic<uint64_t> vrPostLoadFaderHoldLoadingSerial{ 0 };
 	std::atomic<uint32_t> vrPostLoadFaderFrozenCurrentTime{
 		std::numeric_limits<uint32_t>::max()
 	};
@@ -2806,7 +2833,7 @@ private:
 	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(
 		VRPostLoadCompositorHoldRoute a_route) noexcept;
 	void ObserveVRFaderMessage(const RE::UIMessage& a_message);
-	[[nodiscard]] bool ShouldFreezeVRLoadingFadeIn();
+	[[nodiscard]] bool ShouldFreezeVRLoadingFadeInLocked();
 	[[nodiscard]] uint32_t ResolveVRLoadingFadeCurrentTime(
 		uint32_t a_currentTime,
 		bool& a_freezeAdvance);

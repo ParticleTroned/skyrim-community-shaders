@@ -70,11 +70,10 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 
 void DX12SwapChain::CreateInterop()
 {
-	HANDLE sharedFenceHandle;
+	winrt::handle sharedFenceHandle;
 	DX::ThrowIfFailed(d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&d3d12Fence)));
-	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle));
-	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle, IID_PPV_ARGS(&d3d11Fence)));
-	CloseHandle(sharedFenceHandle);
+	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()));
+	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle.get(), IID_PPV_ARGS(&d3d11Fence)));
 
 	swapChainProxy = new DXGISwapChainProxy(swapChain);
 
@@ -100,10 +99,8 @@ void DX12SwapChain::RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& desc)
 	texDesc11.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	auto newUiBuffer = std::make_unique<WrappedResource>(texDesc11, d3d11Device.get(), d3d12Device.get());
 
-	delete swapChainBufferWrapped;
-	delete uiBufferWrapped;
-	swapChainBufferWrapped = newSwapChainBuffer.release();
-	uiBufferWrapped = newUiBuffer.release();
+	swapChainBufferWrapped = std::move(newSwapChainBuffer);
+	uiBufferWrapped = std::move(newUiBuffer);
 }
 
 DXGISwapChainProxy* DX12SwapChain::GetSwapChainProxy()
@@ -233,7 +230,7 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
 
 	float clearColor[4]{ 0, 0, 0, 0 };
-	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv, clearColor);
+	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv.get(), clearColor);
 
 	// If VSync is disabled, use frame limiter to prevent tearing and optimise pacing
 	if (SyncInterval == 0)
@@ -284,17 +281,21 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 {
 	// Create D3D11 shared texture directly instead of wrapping D3D12 resource
 	a_texDesc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-	DX::ThrowIfFailed(a_d3d11Device->CreateTexture2D(&a_texDesc, nullptr, &resource11));
+	winrt::com_ptr<ID3D11Texture2D> newResource11;
+	winrt::com_ptr<ID3D11ShaderResourceView> newSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> newUAV;
+	winrt::com_ptr<ID3D11RenderTargetView> newRTV;
+	winrt::com_ptr<ID3D12Resource> newResource12;
+	DX::ThrowIfFailed(a_d3d11Device->CreateTexture2D(&a_texDesc, nullptr, newResource11.put()));
 
 	// Get shared handle from D3D11 texture to enable D3D12 access
 	winrt::com_ptr<IDXGIResource1> dxgiResource;
-	DX::ThrowIfFailed(resource11->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
-	HANDLE sharedHandle = nullptr;
-	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &sharedHandle));
+	DX::ThrowIfFailed(newResource11->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
+	winrt::handle sharedHandle;
+	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, sharedHandle.put()));
 
 	// Open the shared D3D11 texture as D3D12 resource
-	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(resource.put())));
-	CloseHandle(sharedHandle);
+	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(sharedHandle.get(), IID_PPV_ARGS(newResource12.put())));
 
 	if (a_texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -303,7 +304,7 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 		srvDesc.Texture2D.MostDetailedMip = 0;
 		srvDesc.Texture2D.MipLevels = 1;
 
-		DX::ThrowIfFailed(a_d3d11Device->CreateShaderResourceView(resource11, &srvDesc, &srv));
+		DX::ThrowIfFailed(a_d3d11Device->CreateShaderResourceView(newResource11.get(), &srvDesc, newSRV.put()));
 	}
 
 	if (a_texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) {
@@ -314,14 +315,14 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 			uavDesc.Texture2DArray.FirstArraySlice = 0;
 			uavDesc.Texture2DArray.ArraySize = a_texDesc.ArraySize;
 
-			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(resource11, &uavDesc, &uav));
+			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(newResource11.get(), &uavDesc, newUAV.put()));
 		} else {
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 			uavDesc.Format = a_texDesc.Format;
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 			uavDesc.Texture2D.MipSlice = 0;
 
-			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(resource11, &uavDesc, &uav));
+			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(newResource11.get(), &uavDesc, newUAV.put()));
 		}
 	}
 
@@ -330,29 +331,17 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 		rtvDesc.Format = a_texDesc.Format;
 		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 		rtvDesc.Texture2D.MipSlice = 0;
-		DX::ThrowIfFailed(a_d3d11Device->CreateRenderTargetView(resource11, &rtvDesc, &rtv));
+		DX::ThrowIfFailed(a_d3d11Device->CreateRenderTargetView(newResource11.get(), &rtvDesc, newRTV.put()));
 	}
-}
 
-WrappedResource::~WrappedResource()
-{
-	if (resource11) {
-		resource11->Release();
-		resource11 = nullptr;
-	}
-	if (srv) {
-		srv->Release();
-		srv = nullptr;
-	}
-	if (uav) {
-		uav->Release();
-		uav = nullptr;
-	}
-	if (rtv) {
-		rtv->Release();
-		rtv = nullptr;
-	}
-	// resource (winrt::com_ptr) will be automatically released
+	// Publish members only after every requested view and cross-API resource has
+	// been created. Constructor failure therefore releases the complete candidate
+	// through the local RAII owners and leaves no partially published wrapper.
+	resource11 = std::move(newResource11);
+	srv = std::move(newSRV);
+	uav = std::move(newUAV);
+	rtv = std::move(newRTV);
+	resource = std::move(newResource12);
 }
 
 DXGISwapChainProxy::DXGISwapChainProxy(IDXGISwapChain4* a_swapChain)
@@ -461,7 +450,7 @@ void DX12SwapChain::SetUIBuffer()
 {
 	if (!globals::game::ui->GameIsPaused()) {
 		auto& data = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
-		data.RTV = uiBufferWrapped->rtv;
+		data.RTV = uiBufferWrapped->rtv.get();
 		d3d11Context->OMSetRenderTargets(1, &data.RTV, nullptr);
 	}
 }
@@ -475,10 +464,13 @@ void DX12SwapChain::CreateSharedResources()
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);
 	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
-	depthBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
+	auto newDepthBuffer = std::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	// Create motion vector buffer
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	motionVector.texture->GetDesc(&texDesc);
-	motionVectorBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
+	auto newMotionVectorBuffer = std::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+
+	depthBufferShared12 = std::move(newDepthBuffer);
+	motionVectorBufferShared12 = std::move(newMotionVectorBuffer);
 }

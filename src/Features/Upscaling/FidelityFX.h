@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -191,12 +192,13 @@ private:
 	std::array<RuntimeCommandContext, kRuntimeCommandContextCount> runtimeCommandContexts;
 	uint32_t runtimeCommandContextCursor = 0;
 
-	WrappedResource* runtimeColorShared[2]{};
-	WrappedResource* runtimeDepthShared[2]{};
-	WrappedResource* runtimeMotionShared[2]{};
-	WrappedResource* runtimeReactiveShared[2]{};
-	WrappedResource* runtimeTransparencyShared[2]{};
-	WrappedResource* runtimeOutputShared[2]{};
+	using RuntimeWrappedResources = std::array<std::unique_ptr<WrappedResource>, 2>;
+	RuntimeWrappedResources runtimeColorShared{};
+	RuntimeWrappedResources runtimeDepthShared{};
+	RuntimeWrappedResources runtimeMotionShared{};
+	RuntimeWrappedResources runtimeReactiveShared{};
+	RuntimeWrappedResources runtimeTransparencyShared{};
+	RuntimeWrappedResources runtimeOutputShared{};
 
 	HMODULE frameGenerationModule = nullptr;
 	HMODULE runtimeUpscalerModule = nullptr;

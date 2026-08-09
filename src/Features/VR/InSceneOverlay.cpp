@@ -1350,38 +1350,22 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					static std::atomic_bool loggedRenderScaleCurrentFallback{ false };
 					if (!loggedRenderScaleCurrentFallback.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(
-							"[VRRenderScale] Final-size presentation is unavailable during a transition or menu transaction; rejecting the reduced texture so OpenVR retains its last accepted full-size state.");
+							"[VRRenderScale] Final-size presentation is unavailable during a transition or menu transaction; truthfully submitting the current reduced candidate as a lower-fidelity fail-open.");
 					}
-					// Do not publish a reduced candidate under full-size bounds. An honest
-					// failure leaves the compositor's previously accepted stereo state
-					// intact while the retained runtime contract remains authoritative.
-					// Startup has no retained contract; its separately defined runtime
-					// fallback is UpscaleMethod::kNONE until the first world frame.
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					const uint64_t rejectedProbeSequence =
-						upscaling.BeginVRLoadPresentationProbeSubmit(
-							"reduced-candidate-rejected",
-							eEye,
-							pTexture,
-							pBounds,
-							nSubmitFlags,
-							compositorCycleToken,
-							false,
-							presentationObservation.valid ?
-								&presentationObservation :
-								nullptr);
-					upscaling.CompleteVRLoadPresentationProbeSubmit(
-						rejectedProbeSequence,
-						vr::VRCompositorError_RequestFailed);
-#endif
-					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
-						"reduced-candidate-rejected",
-						eEye,
+					// OpenVR accepts normalized bounds independently of the texture's pixel
+					// dimensions. A real submission of the current DirectX candidate is a
+					// truthful, lower-fidelity fail-open; omitting Submit instead asks the
+					// compositor/ASW to reuse an unrelated stale frame.
+					return submit(
+						"reduced-candidate-fail-open",
 						pTexture,
 						pBounds,
 						nSubmitFlags,
-						vr::VRCompositorError_RequestFailed);
-					return vr::VRCompositorError_RequestFailed;
+						0,
+						0,
+						presentationObservation.valid ?
+							&presentationObservation :
+							nullptr);
 				}
 
 				if (postLoadReleaseToken == 0 &&

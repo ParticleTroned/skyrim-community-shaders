@@ -648,13 +648,11 @@ namespace
 		       a_left.MiscFlags == a_right.MiscFlags;
 	}
 
-	template <size_t N>
-	void DeleteWrappedResourceArray(WrappedResource* (&a_resources)[N])
+	template <class T, size_t N>
+	void ResetOwnedResourceArray(std::array<std::unique_ptr<T>, N>& a_resources)
 	{
-		for (auto*& resource : a_resources) {
-			delete resource;
-			resource = nullptr;
-		}
+		for (auto& resource : a_resources)
+			resource.reset();
 	}
 
 	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters, bool& a_crashed)
@@ -1747,12 +1745,12 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerResources(bool a_w
 			return idleResult;
 	}
 
-	DeleteWrappedResourceArray(runtimeColorShared);
-	DeleteWrappedResourceArray(runtimeDepthShared);
-	DeleteWrappedResourceArray(runtimeMotionShared);
-	DeleteWrappedResourceArray(runtimeReactiveShared);
-	DeleteWrappedResourceArray(runtimeTransparencyShared);
-	DeleteWrappedResourceArray(runtimeOutputShared);
+	ResetOwnedResourceArray(runtimeColorShared);
+	ResetOwnedResourceArray(runtimeDepthShared);
+	ResetOwnedResourceArray(runtimeMotionShared);
+	ResetOwnedResourceArray(runtimeReactiveShared);
+	ResetOwnedResourceArray(runtimeTransparencyShared);
+	ResetOwnedResourceArray(runtimeOutputShared);
 
 	runtimeColorSharedDesc = {};
 	runtimeDepthSharedDesc = {};
@@ -1819,17 +1817,17 @@ bool FidelityFX::HasRuntimeUpscalerResources() const
 			commandContext.commandList.get() != nullptr ||
 			commandContext.fenceValue != 0;
 	}
-	for (auto* resource : runtimeColorShared)
+	for (const auto& resource : runtimeColorShared)
 		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeDepthShared)
+	for (const auto& resource : runtimeDepthShared)
 		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeMotionShared)
+	for (const auto& resource : runtimeMotionShared)
 		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeReactiveShared)
+	for (const auto& resource : runtimeReactiveShared)
 		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeTransparencyShared)
+	for (const auto& resource : runtimeTransparencyShared)
 		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeOutputShared)
+	for (const auto& resource : runtimeOutputShared)
 		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
 	return hasRuntimeResources;
 }
@@ -2611,40 +2609,47 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerSharedResources(uin
 	const auto idleResult = PollRuntimeUpscalerTeardownReady("runtime shared-resource recreation");
 	if (idleResult != LifecycleResult::Ready)
 		return idleResult;
+	// The old descriptors do not satisfy this request and the generation is now
+	// proven idle. Release it before allocating the replacement to avoid holding
+	// two complete six-surface-per-eye interop sets at peak memory. Candidate
+	// ownership remains transactional below, so a failure still cannot publish a
+	// partially populated new set.
 	const auto resourceDestroyResult = DestroyRuntimeUpscalerResources(false);
 	if (resourceDestroyResult != LifecycleResult::Ready)
 		return resourceDestroyResult;
-
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
 
+	RuntimeWrappedResources newColorShared{};
+	RuntimeWrappedResources newDepthShared{};
+	RuntimeWrappedResources newMotionShared{};
+	RuntimeWrappedResources newReactiveShared{};
+	RuntimeWrappedResources newTransparencyShared{};
+	RuntimeWrappedResources newOutputShared{};
 	try {
 		for (uint32_t i = 0; i < a_contextCount; ++i) {
-			runtimeColorShared[i] = new WrappedResource(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeDepthShared[i] = new WrappedResource(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeMotionShared[i] = new WrappedResource(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeReactiveShared[i] = new WrappedResource(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeTransparencyShared[i] = new WrappedResource(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeOutputShared[i] = new WrappedResource(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			newColorShared[i] = std::make_unique<WrappedResource>(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			newDepthShared[i] = std::make_unique<WrappedResource>(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			newMotionShared[i] = std::make_unique<WrappedResource>(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			newReactiveShared[i] = std::make_unique<WrappedResource>(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			newTransparencyShared[i] = std::make_unique<WrappedResource>(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			newOutputShared[i] = std::make_unique<WrappedResource>(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
 		}
 	} catch (const std::exception& e) {
 		logger::error("[FidelityFX] Failed to create runtime shared resources: {}", e.what());
-		const auto failureResult = ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler shared-resource creation");
-		if (failureResult == LifecycleResult::Failed) {
-			const auto cleanupResult = DestroyRuntimeUpscalerResources(false);
-			if (cleanupResult != LifecycleResult::Ready)
-				return cleanupResult;
-		}
-		return failureResult;
+		return ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler shared-resource creation");
 	} catch (...) {
 		logger::error("[FidelityFX] Failed to create runtime shared resources.");
-		const auto failureResult = ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler shared-resource creation");
-		if (failureResult == LifecycleResult::Failed) {
-			const auto cleanupResult = DestroyRuntimeUpscalerResources(false);
-			if (cleanupResult != LifecycleResult::Ready)
-				return cleanupResult;
-		}
-		return failureResult;
+		return ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler shared-resource creation");
 	}
+
+	// Publish the complete new generation in one ownership swap. Local RAII
+	// owners release every partial candidate if any later allocation fails.
+	runtimeColorShared = std::move(newColorShared);
+	runtimeDepthShared = std::move(newDepthShared);
+	runtimeMotionShared = std::move(newMotionShared);
+	runtimeReactiveShared = std::move(newReactiveShared);
+	runtimeTransparencyShared = std::move(newTransparencyShared);
+	runtimeOutputShared = std::move(newOutputShared);
 
 	runtimeColorSharedDesc = desiredColorDesc;
 	runtimeDepthSharedDesc = desiredDepthDesc;
@@ -2705,7 +2710,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a
 	if (!swapChain.d3d11Context || !swapChain.commandQueue || !runtimeD3D11Fence || !runtimeD3D12Fence)
 		return LifecycleResult::Pending;
 
-	auto isValidShared = [](WrappedResource* a_resource) {
+	auto isValidShared = [](const std::unique_ptr<WrappedResource>& a_resource) {
 		return a_resource && a_resource->resource11 && a_resource->resource.get();
 	};
 	if (!isValidShared(runtimeColorShared[a_contextIndex]) ||
@@ -2744,7 +2749,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a
 	bool commandListSubmitted = false;
 	bool commandFenceTracked = false;
 	try {
-		auto copyIntoShared = [&](ID3D11Resource* a_source, WrappedResource* a_destination, uint32_t a_width, uint32_t a_height, uint32_t a_maxWidth, uint32_t a_maxHeight) {
+		auto copyIntoShared = [&](ID3D11Resource* a_source, const std::unique_ptr<WrappedResource>& a_destination, uint32_t a_width, uint32_t a_height, uint32_t a_maxWidth, uint32_t a_maxHeight) {
 			if (!a_source || !a_destination || !a_destination->resource11)
 				return false;
 
@@ -2760,7 +2765,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a
 			sourceBox.right = copyWidth;
 			sourceBox.bottom = copyHeight;
 			sourceBox.back = 1;
-			swapChain.d3d11Context->CopySubresourceRegion(a_destination->resource11, 0, 0, 0, 0, a_source, 0, &sourceBox);
+			swapChain.d3d11Context->CopySubresourceRegion(a_destination->resource11.get(), 0, 0, 0, 0, a_source, 0, &sourceBox);
 			return true;
 		};
 
@@ -2876,7 +2881,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a
 					outputBox.right = copyWidth;
 					outputBox.bottom = copyHeight;
 					outputBox.back = 1;
-					swapChain.d3d11Context->CopySubresourceRegion(a_output, 0, 0, 0, 0, runtimeOutputShared[a_contextIndex]->resource11, 0, &outputBox);
+					swapChain.d3d11Context->CopySubresourceRegion(a_output, 0, 0, 0, 0, runtimeOutputShared[a_contextIndex]->resource11.get(), 0, &outputBox);
 				}
 			}
 		}

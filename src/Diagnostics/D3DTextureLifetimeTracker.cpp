@@ -89,6 +89,7 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			uint64_t createdCount{};
 			uint64_t destroyedCount{};
 			uint64_t estimatedBytesPerTexture{};
+			bool estimateKnown{};
 		};
 
 		struct LiveTextureRecord
@@ -295,10 +296,15 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			case DXGI_FORMAT_R32_FLOAT:
 			case DXGI_FORMAT_R32_UINT:
 			case DXGI_FORMAT_R32_SINT:
+			case DXGI_FORMAT_R24G8_TYPELESS:
+			case DXGI_FORMAT_D24_UNORM_S8_UINT:
+			case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
+			case DXGI_FORMAT_X24_TYPELESS_G8_UINT:
 			case DXGI_FORMAT_R10G10B10A2_TYPELESS:
 			case DXGI_FORMAT_R10G10B10A2_UNORM:
 			case DXGI_FORMAT_R10G10B10A2_UINT:
 			case DXGI_FORMAT_R11G11B10_FLOAT:
+			case DXGI_FORMAT_R9G9B9E5_SHAREDEXP:
 				return 4;
 			case DXGI_FORMAT_R16G16B16A16_TYPELESS:
 			case DXGI_FORMAT_R16G16B16A16_FLOAT:
@@ -310,7 +316,16 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			case DXGI_FORMAT_R32G32_FLOAT:
 			case DXGI_FORMAT_R32G32_UINT:
 			case DXGI_FORMAT_R32G32_SINT:
+			case DXGI_FORMAT_R32G8X24_TYPELESS:
+			case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+			case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+			case DXGI_FORMAT_X32_TYPELESS_G8X24_UINT:
 				return 8;
+			case DXGI_FORMAT_R32G32B32_TYPELESS:
+			case DXGI_FORMAT_R32G32B32_FLOAT:
+			case DXGI_FORMAT_R32G32B32_UINT:
+			case DXGI_FORMAT_R32G32B32_SINT:
+				return 12;
 			case DXGI_FORMAT_R32G32B32A32_TYPELESS:
 			case DXGI_FORMAT_R32G32B32A32_FLOAT:
 			case DXGI_FORMAT_R32G32B32A32_UINT:
@@ -632,6 +647,7 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 
 			auto& group = groupIt->second;
 			group.estimatedBytesPerTexture = bytes;
+			group.estimateKnown = bytes != 0;
 			++group.createdCount;
 			++state.createdCount;
 			state.createdEstimatedBytes += bytes;
@@ -764,11 +780,14 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			}
 		}
 		json groups = json::array();
+		uint64_t outstandingUnknownEstimateCount = 0;
 		for (const auto& [key, stats] : state.groups) {
 			const uint64_t outstandingCount = stats.createdCount >= stats.destroyedCount ?
 			                                      stats.createdCount - stats.destroyedCount :
 			                                      0;
 			const auto caller = DescribeAddress(key.caller);
+			if (!stats.estimateKnown)
+				outstandingUnknownEstimateCount += outstandingCount;
 			json callerStack = json::array();
 			for (uint32_t index = 0; index < key.stackDepth && index < key.stack.size(); ++index)
 				callerStack.push_back(DescribeAddress(key.stack[index]));
@@ -791,6 +810,7 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 				{ "destroyedCount", stats.destroyedCount },
 				{ "outstandingCount", outstandingCount },
 				{ "estimatedBytesPerTexture", stats.estimatedBytesPerTexture },
+				{ "estimateKnown", stats.estimateKnown },
 				{ "outstandingEstimatedBytes", outstandingCount * stats.estimatedBytesPerTexture },
 				{ "niSourceTextureMatchedCount", niSourceMatchesByGroup[key] },
 				{ "niSourceTextureMatchedEstimatedBytes", niSourceMatchBytesByGroup[key] },
@@ -819,6 +839,7 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			{ "createdEstimatedBytes", state.createdEstimatedBytes },
 			{ "destroyedEstimatedBytes", state.destroyedEstimatedBytes },
 			{ "outstandingEstimatedBytes", outstandingEstimatedBytes },
+			{ "outstandingUnknownEstimateCount", outstandingUnknownEstimateCount },
 			{ "attachFailures", state.attachFailures.load(std::memory_order_relaxed) },
 			{ "sentinelAllocationFailures", state.sentinelAllocationFailures.load(std::memory_order_relaxed) },
 			{ "faceGenAssignmentFailures", state.faceGenAssignmentFailures.load(std::memory_order_relaxed) },

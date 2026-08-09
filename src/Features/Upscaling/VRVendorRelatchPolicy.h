@@ -367,6 +367,9 @@ namespace VRVendorRelatchPolicy
 		bool renderTargetRecreateInProgress = false;
 		bool vendorRuntimeResetPending = false;
 		bool physicalContractConverged = false;
+		std::uint64_t serializationLoadingSerial = 0;
+		std::uint64_t compositorHoldLoadingSerial = 0;
+		std::uint64_t currentLoadingSerial = 0;
 	};
 
 	[[nodiscard]] constexpr bool HasSerializedPresentationReadiness(
@@ -383,7 +386,12 @@ namespace VRVendorRelatchPolicy
 		       !a_state.renderTargetRecreatePending &&
 		       !a_state.renderTargetRecreateInProgress &&
 		       !a_state.vendorRuntimeResetPending &&
-		       a_state.physicalContractConverged;
+		       a_state.physicalContractConverged &&
+		       a_state.serializationLoadingSerial != 0 &&
+		       a_state.serializationLoadingSerial ==
+			   a_state.compositorHoldLoadingSerial &&
+		       a_state.serializationLoadingSerial ==
+			   a_state.currentLoadingSerial;
 	}
 
 	// A console COC does not necessarily publish the ordinary post-load completion
@@ -556,8 +564,6 @@ namespace VRVendorRelatchPolicy
 	}
 
 	inline constexpr std::uint32_t
-		kNativeRestoreMaximumPhysicalRecoveryAttempts = 1u;
-	inline constexpr std::uint32_t
 		kNativeRestoreMaximumRecoveryAttempts = 2u;
 
 	[[nodiscard]] constexpr bool
@@ -573,8 +579,8 @@ namespace VRVendorRelatchPolicy
 
 	enum class NativeRestorePresentationRecoveryAction : std::uint8_t
 	{
-		PhysicalRetry,
-		LogicalFallback,
+		RetryPresentationValidation,
+		ReleasePresentationGuard,
 		Exhausted
 	};
 
@@ -586,9 +592,9 @@ namespace VRVendorRelatchPolicy
 			a_attempt > kNativeRestoreMaximumRecoveryAttempts) {
 			return NativeRestorePresentationRecoveryAction::Exhausted;
 		}
-		return a_attempt <= kNativeRestoreMaximumPhysicalRecoveryAttempts ?
-		           NativeRestorePresentationRecoveryAction::PhysicalRetry :
-		           NativeRestorePresentationRecoveryAction::LogicalFallback;
+		return a_attempt == 1u ?
+		           NativeRestorePresentationRecoveryAction::RetryPresentationValidation :
+		           NativeRestorePresentationRecoveryAction::ReleasePresentationGuard;
 	}
 
 	[[nodiscard]] constexpr bool ShouldDeferPhysicalRelatchForStereo(
@@ -1199,6 +1205,7 @@ namespace VRVendorRelatchPolicy
 	{
 		None,
 		MutationEntered,
+		TableChanged,
 		EmergencyRecoveryRequested,
 		RecoveryResourcesReady,
 		EmergencyCreatorClaimed,

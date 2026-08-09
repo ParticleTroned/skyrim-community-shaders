@@ -6567,6 +6567,12 @@ namespace
 			ClampPositiveDimension(plan.engineRenderSize.x);
 		const uint32_t combinedDisplayWidth =
 			ClampPositiveDimension(plan.finalOutputSize.x);
+		// Physical screenSize follows the recreated engine targets in Render Scale;
+		// fixed-vendor upscaling leaves those targets at compositor display size.
+		const uint32_t stateScreenWidth =
+			activeRenderScaleContract ? combinedRenderWidth : combinedDisplayWidth;
+		const uint32_t stateScreenHeight =
+			activeRenderScaleContract ? renderEyeHeight : displayEyeHeight;
 		if (!renderEyeWidth ||
 			!renderEyeHeight ||
 			!displayEyeWidth ||
@@ -6576,9 +6582,9 @@ namespace
 			combinedRenderWidth != renderEyeWidth * 2u ||
 			combinedDisplayWidth != displayEyeWidth * 2u ||
 			ClampPositiveDimension(a_state->screenSize.x) !=
-				combinedDisplayWidth ||
+				stateScreenWidth ||
 			ClampPositiveDimension(a_state->screenSize.y) !=
-				displayEyeHeight) {
+				stateScreenHeight) {
 			return std::nullopt;
 		}
 

@@ -279,9 +279,9 @@
         "ShowInOverlay": false
     },
     "Hair Specular": {
-        "BaseColorMult": 0.8,
-        "DiffuseIndirectMult": 1.0,
-        "DiffuseMult": 1.0,
+        "BaseColorMult": 0.7,
+        "DiffuseIndirectMult": 0.7,
+        "DiffuseMult": 0.7,
         "EnableSelfShadow": 1,
         "EnableTangentShift": 1,
         "Enabled": 1,
@@ -293,8 +293,8 @@
         "SelfShadowExponent": 0.10000000149011612,
         "SelfShadowScale": 2.5,
         "SelfShadowStrength": 1.0,
-        "SpecularIndirectMult": 2.0,
-        "SpecularMult": 1.6,
+        "SpecularIndirectMult": 3.0,
+        "SpecularMult": 1.38,
         "Transmission": 1.0
     },
     "Subsurface Scattering": {

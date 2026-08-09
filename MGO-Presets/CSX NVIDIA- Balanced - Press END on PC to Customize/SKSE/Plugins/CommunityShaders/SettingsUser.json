@@ -723,21 +723,21 @@
     "Hair Specular": {
         "Transmission": 1.0,
         "EnableSelfShadow": 1,
-        "DiffuseIndirectMult": 1.0,
+        "DiffuseIndirectMult": 0.7,
         "SelfShadowStrength": 1.0,
         "PrimaryTangentShift": 0.5,
         "SelfShadowScale": 2.5,
-        "SpecularMult": 1.6,
+        "SpecularMult": 1.38,
         "HairMode": 1,
         "EnableTangentShift": 1,
         "SecondaryTangentShift": -0.25,
         "SelfShadowExponent": 0.10000000149011612,
-        "BaseColorMult": 0.8,
+        "BaseColorMult": 0.7,
         "HairGlossiness": 70.0,
-        "SpecularIndirectMult": 2.0,
+        "SpecularIndirectMult": 3.0,
         "HairSaturation": 0.8,
         "Enabled": 1,
-        "DiffuseMult": 1.0
+        "DiffuseMult": 0.7
     },
     "Weather Picker": {
         "Position": [50.0, 50.0],

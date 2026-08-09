@@ -254,12 +254,13 @@ public:
 
 	UpscaleMethod GetUpscaleMethod() const;
 
-	void CheckResources(UpscaleMethod a_upscalemethod);
+	bool CheckResources(UpscaleMethod a_upscalemethod);
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyAllUpscalingTextureResources();
 
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[4];  // One for each UpscaleMethod
+	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[4];          // One for each UpscaleMethod
+	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // Runtime FSR: converts game depth to typed R32_FLOAT
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
@@ -288,6 +289,7 @@ public:
 	std::unique_ptr<Texture2D> reactiveMaskTexture;
 	std::unique_ptr<Texture2D> transparencyCompositionMaskTexture;
 	std::unique_ptr<Texture2D> motionVectorCopyTexture;
+	std::unique_ptr<Texture2D> runtimeFsrDepthTexture;
 	std::unique_ptr<Texture2D> sharpenerTexture;
 
 	virtual void ClearShaderCache() override;
@@ -307,6 +309,11 @@ public:
 	float dynamicResolutionHeightRatio = 1.0f;
 
 	bool previousVendorUpscalerSelected = false;
+	// FidelityFX teardown/recreation can span frames while GPU ownership drains.
+	// Keep the transition pending until CheckResources observes Ready and commits
+	// its previous/applied configuration snapshots.
+	bool fsrResourceTransitionPending = false;
+	bool upscalingResourcesReady = false;
 	bool depthUpscaleUseWideKernel = false;
 	bool dlssSharpenerOutputValid = false;
 	bool historyResetRequested = true;

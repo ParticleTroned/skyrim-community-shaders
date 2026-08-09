@@ -128,27 +128,47 @@ void DX12SwapChain::CreateInterop()
 	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle.handle, IID_PPV_ARGS(&d3d11Fence)));
 
 	swapChainProxy = std::make_unique<DXGISwapChainProxy>(swapChain);
-
-	D3D11_TEXTURE2D_DESC texDesc11{};
-	texDesc11.Width = swapChainDesc.Width;
-	texDesc11.Height = swapChainDesc.Height;
-	texDesc11.MipLevels = 1;
-	texDesc11.ArraySize = 1;
-	texDesc11.Format = swapChainDesc.Format;
-	texDesc11.SampleDesc.Count = 1;
-	texDesc11.SampleDesc.Quality = 0;
-	texDesc11.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
-
-	swapChainBufferWrapped = std::make_unique<WrappedResource>(texDesc11, d3d11Device.get(), d3d12Device.get());
-
-	// UI buffer uses R8G8B8A8_UNORM - vanilla UI is SDR and 8-bit precision
-	texDesc11.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	uiBufferWrapped = std::make_unique<WrappedResource>(texDesc11, d3d11Device.get(), d3d12Device.get());
+	RecreateWrappedResources(swapChainDesc);
 
 	// A fully recreated shared-fence path is the recovery boundary for a
 	// previously latched post-Present interop failure.
 	fenceValue = 1;
 	presentInteropFailure = S_OK;
+}
+
+void DX12SwapChain::RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& a_desc)
+{
+	if (!d3d11Device || !d3d12Device)
+		DX::ThrowIfFailed(E_POINTER);
+
+	D3D11_TEXTURE2D_DESC texDesc11{};
+	texDesc11.Width = a_desc.Width;
+	texDesc11.Height = a_desc.Height;
+	texDesc11.MipLevels = 1;
+	texDesc11.ArraySize = 1;
+	texDesc11.Format = a_desc.Format;
+	texDesc11.SampleDesc.Count = 1;
+	texDesc11.SampleDesc.Quality = 0;
+	texDesc11.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
+
+	// Build both replacements before releasing either active wrapper. A failed
+	// allocation therefore leaves the proxy's current scene/UI pair intact.
+	auto newSwapChainBuffer = std::make_unique<WrappedResource>(
+		texDesc11,
+		d3d11Device.get(),
+		d3d12Device.get(),
+		"Swap-chain scene interop");
+
+	// UI buffer uses R8G8B8A8_UNORM - vanilla UI is SDR and 8-bit precision
+	texDesc11.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	auto newUiBuffer = std::make_unique<WrappedResource>(
+		texDesc11,
+		d3d11Device.get(),
+		d3d12Device.get(),
+		"Swap-chain UI interop");
+
+	swapChainBufferWrapped = std::move(newSwapChainBuffer);
+	uiBufferWrapped = std::move(newUiBuffer);
 }
 
 DXGISwapChainProxy* DX12SwapChain::GetSwapChainProxy()
@@ -183,6 +203,96 @@ HRESULT DX12SwapChain::GetBuffer(UINT Buffer, REFIID riid, void** ppSurface)
 		return DXGI_ERROR_INVALID_CALL;
 
 	return swapChainBufferWrapped->resource11->QueryInterface(riid, ppSurface);
+}
+
+HRESULT DX12SwapChain::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags)
+{
+	if (!swapChain)
+		return DXGI_ERROR_INVALID_CALL;
+
+	// DXGI defines zero as preserving the current count. The FidelityFX frame-
+	// generation swap chain stores the supplied value verbatim, so forwarding
+	// zero can leave it with no replacement resources for the next Present.
+	const UINT effectiveBufferCount = BufferCount ? BufferCount : swapChainDesc.BufferCount;
+	if (!BufferCount)
+		logger::warn("[DX12SwapChain] Normalized ResizeBuffers count from 0 to {}", effectiveBufferCount);
+	if (effectiveBufferCount != 2) {
+		logger::error("[DX12SwapChain] Rejected unsupported resize buffer count {} (interop owns exactly 2 buffers)", effectiveBufferCount);
+		return DXGI_ERROR_UNSUPPORTED;
+	}
+
+	// Release all cached references to the FidelityFX replacement buffers before
+	// asking the provider to retire that generation.
+	swapChainBuffers[0] = nullptr;
+	swapChainBuffers[1] = nullptr;
+
+	const HRESULT resizeResult = swapChain->ResizeBuffers(effectiveBufferCount, Width, Height, NewFormat, SwapChainFlags);
+	if (FAILED(resizeResult)) {
+		logger::error(
+			"[DX12SwapChain] ResizeBuffers failed: HRESULT=0x{:08X}, count={}, size={}x{}, format={}, flags=0x{:X}",
+			static_cast<unsigned>(resizeResult),
+			effectiveBufferCount,
+			Width,
+			Height,
+			static_cast<unsigned>(NewFormat),
+			SwapChainFlags);
+
+		// A failed DXGI resize preserves the old generation. Restore our cached
+		// references so a recoverable resize rejection does not break the next
+		// otherwise-valid Present.
+		for (UINT i = 0; i < 2; ++i) {
+			const HRESULT restoreResult = swapChain->GetBuffer(i, IID_PPV_ARGS(swapChainBuffers[i].put()));
+			if (FAILED(restoreResult)) {
+				logger::error(
+					"[DX12SwapChain] Could not restore GetBuffer({}) after failed resize: HRESULT=0x{:08X}",
+					i,
+					static_cast<unsigned>(restoreResult));
+			}
+		}
+		frameIndex = swapChain->GetCurrentBackBufferIndex();
+		return resizeResult;
+	}
+
+	DXGI_SWAP_CHAIN_DESC1 resizedDesc{};
+	const HRESULT descResult = swapChain->GetDesc1(&resizedDesc);
+	if (FAILED(descResult)) {
+		logger::error("[DX12SwapChain] GetDesc1 after ResizeBuffers failed: HRESULT=0x{:08X}", static_cast<unsigned>(descResult));
+		return descResult;
+	}
+
+	winrt::com_ptr<ID3D12Resource> resizedBuffers[2];
+	for (UINT i = 0; i < 2; ++i) {
+		const HRESULT bufferResult = swapChain->GetBuffer(i, IID_PPV_ARGS(resizedBuffers[i].put()));
+		if (FAILED(bufferResult)) {
+			logger::error(
+				"[DX12SwapChain] GetBuffer({}) after ResizeBuffers failed: HRESULT=0x{:08X}",
+				i,
+				static_cast<unsigned>(bufferResult));
+			return bufferResult;
+		}
+	}
+
+	const bool wrappedResourcesChanged =
+		resizedDesc.Width != swapChainDesc.Width ||
+		resizedDesc.Height != swapChainDesc.Height ||
+		resizedDesc.Format != swapChainDesc.Format;
+	if (wrappedResourcesChanged)
+		RecreateWrappedResources(resizedDesc);
+
+	// Commit the new generation only after both back buffers and, when needed,
+	// both shared wrappers have been created successfully.
+	for (UINT i = 0; i < 2; ++i)
+		swapChainBuffers[i] = std::move(resizedBuffers[i]);
+	swapChainDesc = resizedDesc;
+	frameIndex = swapChain->GetCurrentBackBufferIndex();
+
+	logger::info(
+		"[DX12SwapChain] Resized interop buffers to {}x{} format={} (wrappers recreated={})",
+		resizedDesc.Width,
+		resizedDesc.Height,
+		static_cast<unsigned>(resizedDesc.Format),
+		wrappedResourcesChanged);
+	return S_OK;
 }
 
 HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
@@ -404,23 +514,59 @@ float DX12SwapChain::GetFrameTime() const
 	return frameTime;
 }
 
-WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device)
+WrappedResource::WrappedResource(
+	D3D11_TEXTURE2D_DESC a_texDesc,
+	ID3D11Device5* a_d3d11Device,
+	ID3D12Device* a_d3d12Device,
+	std::string_view a_debugName)
 {
-	if (!a_d3d11Device || !a_d3d12Device)
+	const std::string_view debugName = a_debugName.empty() ? "Unnamed D3D11/D3D12 interop resource" : a_debugName;
+	if (!a_d3d11Device || !a_d3d12Device) {
+		logger::error(
+			"[DX12SwapChain] Cannot construct '{}': D3D11 device present={}, D3D12 device present={}",
+			debugName,
+			a_d3d11Device != nullptr,
+			a_d3d12Device != nullptr);
 		DX::ThrowIfFailed(E_POINTER);
+	}
+
+	const auto throwIfResourceOperationFailed = [&](HRESULT a_result, std::string_view a_operation) {
+		if (FAILED(a_result)) {
+			logger::error(
+				"[DX12SwapChain] {} failed for '{}': HRESULT=0x{:08X}, size={}x{}, array={}, format={}, bind=0x{:X}, misc=0x{:X}",
+				a_operation,
+				debugName,
+				static_cast<unsigned>(a_result),
+				a_texDesc.Width,
+				a_texDesc.Height,
+				a_texDesc.ArraySize,
+				static_cast<unsigned>(a_texDesc.Format),
+				a_texDesc.BindFlags,
+				a_texDesc.MiscFlags);
+			DX::ThrowIfFailed(a_result);
+		}
+	};
 
 	// Create D3D11 shared texture directly instead of wrapping D3D12 resource
 	a_texDesc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-	DX::ThrowIfFailed(a_d3d11Device->CreateTexture2D(&a_texDesc, nullptr, resource11.put()));
+	throwIfResourceOperationFailed(
+		a_d3d11Device->CreateTexture2D(&a_texDesc, nullptr, resource11.put()),
+		"CreateTexture2D");
 
 	// Get shared handle from D3D11 texture to enable D3D12 access
 	winrt::com_ptr<IDXGIResource1> dxgiResource;
-	DX::ThrowIfFailed(resource11->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
+	throwIfResourceOperationFailed(
+		resource11->QueryInterface(IID_PPV_ARGS(dxgiResource.put())),
+		"QueryInterface(IDXGIResource1)");
 	ScopedHandle sharedHandle;
-	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &sharedHandle.handle));
+	throwIfResourceOperationFailed(
+		dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &sharedHandle.handle),
+		"CreateSharedHandle");
 
 	// Open the shared D3D11 texture as D3D12 resource
-	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(sharedHandle.handle, IID_PPV_ARGS(resource.put())));
+	throwIfResourceOperationFailed(
+		a_d3d12Device->OpenSharedHandle(sharedHandle.handle, IID_PPV_ARGS(resource.put())),
+		"OpenSharedHandle(ID3D12Resource)");
 
 	if (a_texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -429,7 +575,9 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 		srvDesc.Texture2D.MostDetailedMip = 0;
 		srvDesc.Texture2D.MipLevels = 1;
 
-		DX::ThrowIfFailed(a_d3d11Device->CreateShaderResourceView(resource11.get(), &srvDesc, srv.put()));
+		throwIfResourceOperationFailed(
+			a_d3d11Device->CreateShaderResourceView(resource11.get(), &srvDesc, srv.put()),
+			"CreateShaderResourceView");
 	}
 
 	if (a_texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) {
@@ -440,14 +588,18 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 			uavDesc.Texture2DArray.FirstArraySlice = 0;
 			uavDesc.Texture2DArray.ArraySize = a_texDesc.ArraySize;
 
-			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(resource11.get(), &uavDesc, uav.put()));
+			throwIfResourceOperationFailed(
+				a_d3d11Device->CreateUnorderedAccessView(resource11.get(), &uavDesc, uav.put()),
+				"CreateUnorderedAccessView(Texture2DArray)");
 		} else {
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 			uavDesc.Format = a_texDesc.Format;
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 			uavDesc.Texture2D.MipSlice = 0;
 
-			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(resource11.get(), &uavDesc, uav.put()));
+			throwIfResourceOperationFailed(
+				a_d3d11Device->CreateUnorderedAccessView(resource11.get(), &uavDesc, uav.put()),
+				"CreateUnorderedAccessView(Texture2D)");
 		}
 	}
 
@@ -456,7 +608,9 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 		rtvDesc.Format = a_texDesc.Format;
 		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 		rtvDesc.Texture2D.MipSlice = 0;
-		DX::ThrowIfFailed(a_d3d11Device->CreateRenderTargetView(resource11.get(), &rtvDesc, rtv.put()));
+		throwIfResourceOperationFailed(
+			a_d3d11Device->CreateRenderTargetView(resource11.get(), &rtvDesc, rtv.put()),
+			"CreateRenderTargetView");
 	}
 }
 
@@ -550,7 +704,7 @@ HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetDesc(_Out_ DXGI_SWAP_CHAIN_DESC
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags)
 {
-	return swapChain->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
+	return globals::features::upscaling.dx12SwapChain.ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::ResizeTarget(_In_ const DXGI_MODE_DESC* pNewTargetParameters)
@@ -625,9 +779,17 @@ void DX12SwapChain::CreateSharedResources()
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);
 	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
-	depthBufferShared12 = std::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+	depthBufferShared12 = std::make_unique<WrappedResource>(
+		texDesc,
+		d3d11Device.get(),
+		d3d12Device.get(),
+		"Frame-generation depth interop");
 
 	// Create motion vector buffer
 	motionVector.texture->GetDesc(&texDesc);
-	motionVectorBufferShared12 = std::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
+	motionVectorBufferShared12 = std::make_unique<WrappedResource>(
+		texDesc,
+		d3d11Device.get(),
+		d3d12Device.get(),
+		"Frame-generation motion-vector interop");
 }

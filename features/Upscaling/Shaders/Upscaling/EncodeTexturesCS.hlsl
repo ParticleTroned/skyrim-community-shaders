@@ -14,6 +14,9 @@ Texture2D<float> DepthMask : register(t3);
 RWTexture2D<float> ReactiveMask : register(u0);
 RWTexture2D<float> TransparencyCompositionMask : register(u1);
 RWTexture2D<float2> MotionVectorOutput : register(u2);
+#if defined(DEPTH_OUTPUT)
+RWTexture2D<float> DepthOutput : register(u3);
+#endif
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
@@ -64,6 +67,11 @@ RWTexture2D<float2> MotionVectorOutput : register(u2);
 
 #if defined(DLSS) || defined(FSR)
 	MotionVectorOutput[srcCoord] = outputMotionVector;
+#endif
+
+#if defined(DEPTH_OUTPUT)
+	// The D3D11/D3D12 runtime bridge requires a typed depth resource.
+	DepthOutput[srcCoord] = DepthMask[srcCoord];
 #endif
 
 	ReactiveMask[srcCoord] = reactiveMask;

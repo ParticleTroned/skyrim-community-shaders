@@ -3,6 +3,7 @@
 #include <Windows.Foundation.h>
 #include <memory>
 #include <stdio.h>
+#include <string_view>
 #include <winrt/base.h>
 #include <wrl\client.h>
 #include <wrl\wrappers\corewrappers.h>
@@ -16,7 +17,11 @@
 class WrappedResource
 {
 public:
-	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device);
+	WrappedResource(
+		D3D11_TEXTURE2D_DESC a_texDesc,
+		ID3D11Device5* a_d3d11Device,
+		ID3D12Device* a_d3d12Device,
+		std::string_view a_debugName = {});
 	~WrappedResource() = default;
 
 	winrt::com_ptr<ID3D11Texture2D> resource11;
@@ -107,12 +112,14 @@ public:
 	void CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 
 	void CreateInterop();
+	void RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& a_desc);
 
 	DXGISwapChainProxy* GetSwapChainProxy();
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 
 	HRESULT GetBuffer(UINT Buffer, REFIID riid, void** ppSurface);
+	HRESULT ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags);
 	HRESULT Present(UINT SyncInterval, UINT Flags);
 	HRESULT GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice);
 	HANDLE GetFrameLatencyWaitableObject();

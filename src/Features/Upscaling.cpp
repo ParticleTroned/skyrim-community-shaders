@@ -142,6 +142,20 @@ namespace
 		return true;
 	}
 
+	D3D11_TEXTURE2D_DESC BuildFlatRuntimeFsrDepthDesc(const D3D11_TEXTURE2D_DESC& a_mainDesc)
+	{
+		D3D11_TEXTURE2D_DESC depthDesc{};
+		depthDesc.Width = a_mainDesc.Width;
+		depthDesc.Height = a_mainDesc.Height;
+		depthDesc.MipLevels = 1;
+		depthDesc.ArraySize = 1;
+		depthDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		depthDesc.SampleDesc.Count = 1;
+		depthDesc.Usage = D3D11_USAGE_DEFAULT;
+		depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		return depthDesc;
+	}
+
 	struct ScopedFullscreenPipelineState
 	{
 		explicit ScopedFullscreenPipelineState(ID3D11DeviceContext* a_context) :
@@ -1256,6 +1270,28 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 
+	// The D3D11/D3D12 runtime bridge cannot portably share the game's
+	// typeless R24G8 depth allocation. The encode pass copies it into this
+	// typed resource before runtime FSR receives it.
+	if (a_upscalemethod == UpscaleMethod::kFSR &&
+		fidelityFX.ShouldUseRuntimeUpscalerForFSR() &&
+		!runtimeFsrDepthTexture) {
+		const auto depthDesc = BuildFlatRuntimeFsrDepthDesc(texDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC depthSrvDesc{};
+		depthSrvDesc.Format = depthDesc.Format;
+		depthSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		depthSrvDesc.Texture2D.MipLevels = 1;
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC depthUavDesc{};
+		depthUavDesc.Format = depthDesc.Format;
+		depthUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+
+		runtimeFsrDepthTexture = std::make_unique<Texture2D>(depthDesc, "Upscaling::RuntimeFsrDepth");
+		runtimeFsrDepthTexture->CreateSRV(depthSrvDesc);
+		runtimeFsrDepthTexture->CreateUAV(depthUavDesc);
+	}
+
 	// Encoded motion vectors are used by DLSS and by FSR's full-frame path.
 	if (a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR) {
 		if (!motionVectorCopyTexture) {
@@ -1314,6 +1350,10 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		motionVectorCopyTexture.reset();
 	}
 
+	if (a_upscalemethod != UpscaleMethod::kFSR) {
+		runtimeFsrDepthTexture.reset();
+	}
+
 	if (a_upscalemethod != UpscaleMethod::kDLSS) {
 		sharpenerTexture.reset();
 	}
@@ -1324,8 +1364,23 @@ void Upscaling::DestroyAllUpscalingTextureResources()
 	DestroyUpscalingTextureResources(UpscaleMethod::kNONE);
 }
 
-void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
+bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
+	const auto acceptFSRResourceLifecycleResult = [&](FidelityFX::LifecycleResult a_result, const char* a_reason) {
+		if (a_result == FidelityFX::LifecycleResult::Ready) {
+			fsrResourceTransitionPending = false;
+			return true;
+		}
+
+		fsrResourceTransitionPending = a_result == FidelityFX::LifecycleResult::Pending;
+		logger::warn(
+			"[Upscaling] FSR resource transition {} while {}; retaining the last applied resource state{}.",
+			a_result == FidelityFX::LifecycleResult::Pending ? "is pending" : "failed",
+			a_reason,
+			fsrResourceTransitionPending ? " and retrying next frame" : "");
+		return false;
+	};
+
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
 	static bool previousFrameGenMode = false;
 	static bool previousFSRRuntimePathActive = false;
@@ -1383,7 +1438,15 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousTextureSourceDescsValid &&
 		(!TextureDescMatches(previousMainDesc, mainDesc) || !TextureDescMatches(previousMotionVectorDesc, motionVectorDesc));
 
-	if (upscaleModeChanged || frameGenModeChanged || qualityModeChanged || dlssPresetChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) {
+	const bool resourceChangeDetected =
+		upscaleModeChanged ||
+		frameGenModeChanged ||
+		qualityModeChanged ||
+		dlssPresetChanged ||
+		fsrRuntimePathChanged ||
+		fsrRuntimeFsr4ConfiguredChanged ||
+		fsrRuntimeVersionChanged;
+	if (resourceChangeDetected) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
 			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
@@ -1396,9 +1459,15 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		}
 
 		if (fsrQualityModeChanged) {
-			fidelityFX.DestroyFSRResources();
+			if (!acceptFSRResourceLifecycleResult(
+					fidelityFX.DestroyFSRResources(),
+					"applying an FSR quality change"))
+				return false;
 			if (a_upscalemethod == UpscaleMethod::kFSR) {
-				fidelityFX.CreateFSRResources();
+				if (!acceptFSRResourceLifecycleResult(
+						fidelityFX.CreateFSRResources(),
+						"recreating resources for an FSR quality change"))
+					return false;
 				fsrResourcesRecreated = true;
 			}
 			RequestHistoryReset();
@@ -1408,12 +1477,21 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			if (previousVendorUpscalerSelected) {
 				if (previousUpscaleMode == UpscaleMethod::kDLSS && !dlssResourceSettingsChanged)
 					streamline.DestroyDLSSResources();
-				else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesRecreated)
-					fidelityFX.DestroyFSRResources();
+				else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesRecreated) {
+					if (!acceptFSRResourceLifecycleResult(
+							fidelityFX.DestroyFSRResources(),
+							"switching away from FSR"))
+						return false;
+				}
 			}
 			DestroyUpscalingTextureResources(a_upscalemethod);
-			if (a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreated)
-				fidelityFX.CreateFSRResources();
+			if (a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreated) {
+				if (!acceptFSRResourceLifecycleResult(
+						fidelityFX.CreateFSRResources(),
+						"switching to FSR"))
+					return false;
+				fsrResourcesRecreated = true;
+			}
 			RequestHistoryReset();
 		}
 
@@ -1421,23 +1499,26 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			CreateUpscalingTextureResources(a_upscalemethod);
 
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreated) {
-			fidelityFX.DestroyFSRResources();
-			fidelityFX.CreateFSRResources();
+			if (!acceptFSRResourceLifecycleResult(
+					fidelityFX.DestroyFSRResources(),
+					"changing the FSR runtime path"))
+				return false;
+			if (!acceptFSRResourceLifecycleResult(
+					fidelityFX.CreateFSRResources(),
+					"recreating resources for the FSR runtime path"))
+				return false;
+			fsrResourcesRecreated = true;
 			RequestHistoryReset();
 		} else if (!upscaleModeChanged && (fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreated) {
-			if (fsrRuntimeFsr4ConfiguredChanged || !fidelityFX.IsRuntimeFsr4FailureLatched())
-				fidelityFX.ResetRuntimeUpscalerResources(true);
+			if (fsrRuntimeFsr4ConfiguredChanged || !fidelityFX.IsRuntimeFsr4FailureLatched()) {
+				if (!acceptFSRResourceLifecycleResult(
+						fidelityFX.ResetRuntimeUpscalerResources(true),
+						"resetting the FSR runtime provider"))
+					return false;
+			}
 			RequestHistoryReset();
 		}
 
-		previousUpscaleMode = a_upscalemethod;
-		previousFrameGenMode = (settings.frameGenerationMode && d3d12SwapChainActive);
-		previousFSRRuntimePathActive = fsrRuntimePathCurrent;
-		previousFSRRuntimeFsr4Configured = fsrRuntimeFsr4Configured;
-		previousFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
-		previousQualityMode = qualityModeCurrent;
-		previousDLSSPreset = dlssPresetCurrent;
-		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	}
 
 	if (vendorUpscalerActive && currentTextureSourceDescsValid) {
@@ -1446,6 +1527,10 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		expectedMaskDesc.Format = DXGI_FORMAT_R8_UNORM;
 
 		D3D11_TEXTURE2D_DESC expectedMotionVectorDesc = motionVectorDesc;
+		const auto expectedRuntimeFsrDepthDesc = BuildFlatRuntimeFsrDepthDesc(mainDesc);
+		const bool requiresRuntimeFsrDepth =
+			a_upscalemethod == UpscaleMethod::kFSR &&
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR();
 
 		D3D11_TEXTURE2D_DESC expectedSharpenerDesc = mainDesc;
 		expectedSharpenerDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -1454,6 +1539,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			!TextureMatchesRequirements(reactiveMaskTexture, expectedMaskDesc, true, true) ||
 			!TextureMatchesRequirements(transparencyCompositionMaskTexture, expectedMaskDesc, true, true) ||
 			!TextureMatchesRequirements(motionVectorCopyTexture, expectedMotionVectorDesc, true, true) ||
+			(requiresRuntimeFsrDepth && !TextureMatchesRequirements(runtimeFsrDepthTexture, expectedRuntimeFsrDepthDesc, true, true)) ||
 			(a_upscalemethod == UpscaleMethod::kDLSS && !TextureMatchesRequirements(sharpenerTexture, expectedSharpenerDesc, true, true));
 
 		if (sourceTextureDescChanged || vendorTextureStateInvalid) {
@@ -1464,13 +1550,30 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			if (a_upscalemethod == UpscaleMethod::kDLSS) {
 				streamline.DestroyDLSSResources();
 			} else if (a_upscalemethod == UpscaleMethod::kFSR) {
-				fidelityFX.DestroyFSRResources();
-				fidelityFX.CreateFSRResources();
+				if (!acceptFSRResourceLifecycleResult(
+						fidelityFX.DestroyFSRResources(),
+						"replacing stale FSR source textures"))
+					return false;
+				if (!acceptFSRResourceLifecycleResult(
+						fidelityFX.CreateFSRResources(),
+						"recreating FSR after a source texture change"))
+					return false;
 			}
 			DestroyAllUpscalingTextureResources();
 			CreateUpscalingTextureResources(a_upscalemethod);
 			RequestHistoryReset();
 		}
+	}
+
+	if (resourceChangeDetected) {
+		previousUpscaleMode = a_upscalemethod;
+		previousFrameGenMode = (settings.frameGenerationMode && d3d12SwapChainActive);
+		previousFSRRuntimePathActive = fsrRuntimePathCurrent;
+		previousFSRRuntimeFsr4Configured = fsrRuntimeFsr4Configured;
+		previousFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
+		previousQualityMode = qualityModeCurrent;
+		previousDLSSPreset = dlssPresetCurrent;
+		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	}
 
 	if (currentTextureSourceDescsValid) {
@@ -1503,6 +1606,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	performanceCostAppliedResolutionScale = resolutionScale;
 	if (appliedStateChanged && globals::state)
 		performanceCostAppliedFrame = globals::state->frameCount;
+
+	fsrResourceTransitionPending = false;
+	return true;
 }
 
 bool Upscaling::IsPerformanceCostMeasurementReady() const
@@ -1557,6 +1663,19 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 {
 	auto upscaleMethod = GetUpscaleMethod();
 	uint methodIndex = (uint)upscaleMethod;
+
+	if (upscaleMethod == UpscaleMethod::kFSR && runtimeFsrDepthTexture) {
+		if (!encodeTexturesCSDepthOutput) {
+			logger::debug("Compiling EncodeTexturesCS.hlsl for FSR typed depth output");
+			std::vector<std::pair<const char*, const char*>> defines = {
+				{ "FSR", "" },
+				{ "DEPTH_OUTPUT", "" }
+			};
+			encodeTexturesCSDepthOutput.attach((ID3D11ComputeShader*)Util::CompileShader(
+				L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0"));
+		}
+		return encodeTexturesCSDepthOutput.get();
+	}
 
 	if (!encodeTexturesCS[methodIndex]) {
 		logger::debug("Compiling EncodeTexturesCS.hlsl for upscale method {}", methodIndex);
@@ -1718,7 +1837,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	dynamicResolutionHeightRatio = resolutionScale.y;
 
 	// Resource creation uses the runtime dynamic-resolution ratios via ConvertToDynamic.
-	CheckResources(upscaleMethod);
+	upscalingResourcesReady = CheckResources(upscaleMethod);
 
 	// Disable dynamic resolution unless the game explicitly enables it
 	runtimeData.dynamicResolutionLock = 1;
@@ -1793,7 +1912,7 @@ void Upscaling::SetupResources()
 	rasterizerDesc.AntialiasedLineEnable = false;
 	DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&rasterizerDesc, upscaleRasterizerState.put()));
 
-	CheckResources(GetUpscaleMethod());
+	upscalingResourcesReady = CheckResources(GetUpscaleMethod());
 
 	rcas.Initialize();
 
@@ -1813,6 +1932,7 @@ void Upscaling::ClearShaderCache()
 	for (int i = 0; i < 4; ++i) {
 		encodeTexturesCS[i] = nullptr;  // com_ptr automatically releases
 	}
+	encodeTexturesCSDepthOutput = nullptr;
 
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
@@ -2467,6 +2587,9 @@ Upscaling::BlurResources Upscaling::GetBlurResources() const
 bool Upscaling::Upscale()
 {
 	ZoneScoped;
+	if (!upscalingResourcesReady)
+		return false;
+
 	const auto upscaleMethod = GetUpscaleMethod();
 	if (upscaleMethod != UpscaleMethod::kDLSS &&
 		upscaleMethod != UpscaleMethod::kFSR) {
@@ -2493,6 +2616,9 @@ bool Upscaling::Upscale()
 	auto& normals = renderer->GetRuntimeData().renderTargets[deferred->forwardRenderTargets[2]];
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	const bool requiresFlatRuntimeFsrDepth =
+		upscaleMethod == UpscaleMethod::kFSR &&
+		fidelityFX.ShouldUseRuntimeUpscalerForFSR();
 	const bool hasEncodeResources =
 		main.texture &&
 		temporalAAMask.SRV &&
@@ -2508,7 +2634,9 @@ bool Upscaling::Upscale()
 		transparencyCompositionMaskTexture->uav &&
 		motionVectorCopyTexture &&
 		motionVectorCopyTexture->resource &&
-		motionVectorCopyTexture->uav;
+		motionVectorCopyTexture->uav &&
+		(!requiresFlatRuntimeFsrDepth ||
+			(runtimeFsrDepthTexture && runtimeFsrDepthTexture->resource && runtimeFsrDepthTexture->uav));
 	if (!hasEncodeResources)
 		return false;
 
@@ -2555,10 +2683,11 @@ bool Upscaling::Upscale()
 		context->CSSetShader(encodeShader, nullptr, 0);
 		context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
 
-		ID3D11UnorderedAccessView* uavs[3] = {
+		ID3D11UnorderedAccessView* uavs[4] = {
 			reactiveMaskTexture->uav.get(),
 			transparencyCompositionMaskTexture->uav.get(),
-			motionVectorCopyTexture->uav.get()
+			motionVectorCopyTexture->uav.get(),
+			runtimeFsrDepthTexture ? runtimeFsrDepthTexture->uav.get() : nullptr
 		};
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
@@ -2590,7 +2719,8 @@ bool Upscaling::Upscale()
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
 			upscaleSuccessful = streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
-			upscaleSuccessful = fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
+			ID3D11Resource* fsrDepth = runtimeFsrDepthTexture ? runtimeFsrDepthTexture->resource.get() : depth.texture;
+			upscaleSuccessful = fidelityFX.Upscale(main.texture, fsrDepth, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
 		}
 
 		state->EndPerfEvent();

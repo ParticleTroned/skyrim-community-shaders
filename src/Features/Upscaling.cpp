@@ -38758,7 +38758,9 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 	const bool postLoadRepairHoldActive =
 		postLoadHoldState == VRPostLoadCompositorHoldState::Holding ||
 		postLoadHoldState == VRPostLoadCompositorHoldState::ReleaseScheduled;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool maskRepairDeferred = ShouldDeferHMDClearMask();
+#endif
 	const bool validatedFixedVendorRepair =
 		postLoadRepairHoldActive &&
 		a_phase == HMDMaskClearPhase::PerEyeOutput &&

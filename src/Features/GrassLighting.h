@@ -44,7 +44,7 @@ public:
 		float SpecularStrength = 0.5f;
 		float SubsurfaceScatteringAmount = 1.0f;
 		uint OverrideComplexGrassSettings = true;
-		float BasicGrassBrightness = 0.7f;
+		float BasicGrassBrightness = 0.75f;
 		uint EnableWrappedLighting = false;
 		float ComplexGrassThreshold = 0.03f;
 		uint Enabled = true;

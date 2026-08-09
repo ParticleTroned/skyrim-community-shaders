@@ -102,6 +102,15 @@ if(CMAKE_GENERATOR MATCHES "Visual Studio")
 	)
 endif()
 
+if(MSVC)
+	# Debug information can push large translation units past MSVC's default COFF section limit.
+	target_compile_options(
+		"${PROJECT_NAME}"
+		PRIVATE
+		"$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:/bigobj>"
+	)
+endif()
+
 add_subdirectory(${CommonLibPath} ${CommonLibName} EXCLUDE_FROM_ALL)
 
 find_package(spdlog CONFIG REQUIRED)

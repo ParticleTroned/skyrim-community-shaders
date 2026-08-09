@@ -1286,6 +1286,12 @@ namespace
 			PostMutationRecoveryAction::AttemptOnce) {
 			return false;
 		}
+		if (!CanQueuePostMutationEmergencyRecovery(false, false) ||
+			CanQueuePostMutationEmergencyRecovery(true, false) ||
+			CanQueuePostMutationEmergencyRecovery(false, true) ||
+			CanQueuePostMutationEmergencyRecovery(true, true)) {
+			return false;
+		}
 
 		for (std::uint32_t bit = 0; bit < 8; ++bit) {
 			auto blocked = state;

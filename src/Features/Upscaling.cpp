@@ -43487,11 +43487,17 @@ void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 	{
 		// Pending-check, recovery creation/publication, and request publication are
 		// one queue transaction. This prevents an older watchdog service turn from
-		// overwriting the recovery epoch installed by a newer load.
+		// overwriting the recovery epoch installed by a newer load. Once the
+		// emergency creator is claimed, its published contract exclusively owns
+		// stabilization; only stereo retirement or the immutable terminal deadline
+		// may resolve it.
 		const std::scoped_lock queueLock(
 			perfModeRenderTargetRecreateQueueMutex);
-		if (!pendingPerfModeRenderTargetRecreate.load(
-				std::memory_order_acquire)) {
+		if (VRVendorRelatchPolicy::CanQueuePostMutationEmergencyRecovery(
+				pendingPerfModeRenderTargetRecreate.load(
+					std::memory_order_acquire),
+				vrRenderScalePostMutationEmergencyAttemptConsumed.load(
+					std::memory_order_acquire))) {
 			if (IsOpenCompositeUpscalingBlocked()) {
 				(void)EnsureVRRenderScaleProviderNeutralNativeRecovery(
 					"bounded Open Composite post-mutation recovery",
@@ -43514,8 +43520,8 @@ void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 		}
 	}
 	// The first request always gets one service turn, including after a debugger
-	// pause. Once that request exists, the original non-renewable terminal clock
-	// dominates any later queue churn.
+	// pause. Once its creator is claimed, the original non-renewable terminal
+	// clock dominates without publishing another physical recovery request.
 	if (firstEmergencyRequest)
 		return;
 

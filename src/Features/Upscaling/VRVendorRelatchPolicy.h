@@ -1328,6 +1328,13 @@ namespace VRVendorRelatchPolicy
 		return PostMutationRecoveryAction::ContinueConservative;
 	}
 
+	[[nodiscard]] constexpr bool CanQueuePostMutationEmergencyRecovery(
+		bool a_requestPending,
+		bool a_emergencyAttemptConsumed) noexcept
+	{
+		return !a_requestPending && !a_emergencyAttemptConsumed;
+	}
+
 	struct PostLoadRecoveryStableFallbackOwnership
 	{
 		bool recoveryActive = false;

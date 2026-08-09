@@ -2160,6 +2160,36 @@ namespace
 		return !CanClaimPostMutationTerminalFailure(state);
 	}
 
+	constexpr bool CoversMenuContextInvalidationDeferral()
+	{
+		return !ShouldDeferMenuContextInvalidation(100, 100, false) &&
+		       ShouldDeferMenuContextInvalidation(100, 100, true) &&
+		       !ShouldDeferMenuContextInvalidation(99, 100, true) &&
+		       !ShouldDeferMenuContextInvalidation(
+			       std::numeric_limits<std::uint32_t>::max(),
+			       100,
+			       true);
+	}
+
+	constexpr bool CoversMenuPresentationDecisionLatching()
+	{
+		// Closing between eyes cannot drop the peer eye out of an established
+		// committed-layer presentation.
+		const bool firstEyeAttempt = ResolveMenuPresentationAttempt(
+			false, false, false, false, true, true);
+		const bool secondEyeAfterClose = ResolveMenuPresentationAttempt(
+			true, firstEyeAttempt, false, false, true, false);
+		// Opening between eyes cannot pull only the peer eye into the menu path.
+		const bool firstEyeNoAttempt = ResolveMenuPresentationAttempt(
+			false, false, false, false, true, false);
+		const bool secondEyeAfterOpen = ResolveMenuPresentationAttempt(
+			true, firstEyeNoAttempt, false, false, true, true);
+		return firstEyeAttempt && secondEyeAfterClose &&
+		       !firstEyeNoAttempt && !secondEyeAfterOpen &&
+		       ResolveMenuPresentationAttempt(false, false, true, false, false, false) &&
+		       ResolveMenuPresentationAttempt(false, false, false, true, false, false);
+	}
+
 	static_assert(CoversWorkGateMasks());
 	static_assert(CoversWorkGateState());
 	static_assert(CoversGameEntryConvergence());
@@ -2211,6 +2241,8 @@ namespace
 	static_assert(CoversPostMutationTerminalExactChainAdmission());
 	static_assert(CoversPostMutationTerminalDeadlineAdmission());
 	static_assert(CoversPostMutationTerminalNonRenewal());
+	static_assert(CoversMenuContextInvalidationDeferral());
+	static_assert(CoversMenuPresentationDecisionLatching());
 }
 
 int main() {}

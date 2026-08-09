@@ -3011,6 +3011,7 @@ private:
 	void PoisonVRMenuFrameTransaction(const char* a_reason);
 	void InvalidateVRMenuCommittedLayer(const char* a_reason);
 	void NotifyVRMenuPresentationContextChange(const char* a_reason);
+	void ConsumeVRMenuPresentationContextChange(uint32_t a_frame);
 	bool SealVRMenuFrameTransaction(uint32_t a_frame);
 	bool EnsureVRMenuFullResolutionDepth(uint32_t a_width, uint32_t a_height);
 	bool BeginVRMenuDisplayResolutionPass();
@@ -3042,7 +3043,11 @@ private:
 		uint32_t mapDisplayEpochs = 0;
 		uint32_t drawInterfaceDepth = 0;
 		bool renderComplete = false;
+		bool presentationDecisionLatched = false;
 		bool presentationStarted = false;
+		bool presentationMenuAttempt = false;
+		bool presentationMenuTextProtectionContext = false;
+		bool presentationCommunityShadersMenuOpen = false;
 		bool sealed = false;
 		bool poisoned = false;
 		bool menuLayerRequired = false;
@@ -3083,6 +3088,8 @@ private:
 	bool vrMenuCommittedLayerOpaque = false;
 	uint32_t vrMenuDrawInterfaceDepth = 0;
 	VRMenuFrameTransaction vrMenuFrameTransaction{};
+	std::atomic<uint64_t> vrMenuPresentationContextChangeSequence{ 0 };
+	uint64_t vrMenuPresentationContextChangeConsumedSequence = 0;
 	uint32_t vrMenuAdapterPreflightFailureFrame = std::numeric_limits<uint32_t>::max();
 	bool vrMenuParallelBridgeDrawInProgress = false;
 	eastl::unique_ptr<Texture2D> vrMapMenuUISupersampleColor;

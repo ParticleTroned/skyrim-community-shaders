@@ -611,6 +611,38 @@ namespace VRVendorRelatchPolicy
 		       (stereoMask == 0x1u || stereoMask == 0x2u);
 	}
 
+	// Menu open/close events can be delivered from a UI worker while OpenVR is
+	// between the two eye submissions for one rendered frame. Once the first eye
+	// has fixed its presentation decision, the render owner must keep that
+	// transaction immutable until a later frame; the event thread may only
+	// publish the pending context change.
+	[[nodiscard]] constexpr bool ShouldDeferMenuContextInvalidation(
+		std::uint32_t a_transactionFrame,
+		std::uint32_t a_currentFrame,
+		bool a_presentationDecisionLatched) noexcept
+	{
+		return a_presentationDecisionLatched &&
+		       a_transactionFrame == a_currentFrame;
+	}
+
+	// The first eye's decision is authoritative for its peer. In particular, a
+	// close must not drop the second eye out of the menu path, and an open must
+	// not pull only the second eye into it.
+	[[nodiscard]] constexpr bool ResolveMenuPresentationAttempt(
+		bool a_decisionLatched,
+		bool a_latchedAttempt,
+		bool a_transactionSealed,
+		bool a_transactionOwnsPresentationWork,
+		bool a_committedLayerValid,
+		bool a_menuTextProtectionContext) noexcept
+	{
+		return a_decisionLatched ?
+		         a_latchedAttempt :
+		         (a_transactionSealed ||
+				 a_transactionOwnsPresentationWork ||
+				 (a_committedLayerValid && a_menuTextProtectionContext));
+	}
+
 	struct BufferedDoorRequestCoalescingAdmission
 	{
 		bool existingRequestValid = false;

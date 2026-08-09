@@ -12362,7 +12362,7 @@ bool Upscaling::BeginVRMenuDisplayResolutionPass()
 	vrMenuFrameTransaction.mapLayerRequired = true;
 	if (vrMenuFrameTransaction.poisoned)
 		return false;
-	if (vrMenuFrameTransaction.presentationStarted) {
+	if (vrMenuFrameTransaction.presentationDecisionLatched) {
 		PoisonVRMenuFrameTransaction("map-pass-after-presentation-start");
 		return false;
 	}
@@ -12518,7 +12518,7 @@ bool Upscaling::BeginVRMenuSemanticEpoch(
 		menuRenderMode &&
 		globals::state &&
 		vrMenuFrameTransaction.frame == globals::state->frameCount &&
-		vrMenuFrameTransaction.presentationStarted;
+		vrMenuFrameTransaction.presentationDecisionLatched;
 	// Map keeps its mixed 3D/depth pass on the reduced engine target, but its
 	// exact projected/HUD bridges are still eligible for transparent overlay
 	// capture. Stats, Map, and Dialogue WORLDUI consumers share this mode-24 boundary;
@@ -12561,7 +12561,7 @@ void Upscaling::EndVRMenuSemanticEpoch(
 		context.renderFlags == a_renderFlags &&
 		context.groupIndex == a_groupIndex;
 	if (!argumentsMatch &&
-		!vrMenuFrameTransaction.presentationStarted &&
+		!vrMenuFrameTransaction.presentationDecisionLatched &&
 		(context.capturedOperations != 0 || displayPassActive || vrMenuFrameTransaction.mapLayerRequired))
 		PoisonVRMenuFrameTransaction("semantic-epoch-end-mismatch");
 
@@ -12569,7 +12569,7 @@ void Upscaling::EndVRMenuSemanticEpoch(
 	if ((context.capturedOperations != 0 || displayPassActive) &&
 		g_vrMenuSemanticEpochDepth == 0 &&
 		vrMenuFrameTransaction.frame == frame &&
-		!vrMenuFrameTransaction.presentationStarted &&
+		!vrMenuFrameTransaction.presentationDecisionLatched &&
 		!vrMenuFrameTransaction.sealed) {
 		vrMenuFrameTransaction.renderComplete = true;
 	}
@@ -12902,6 +12902,7 @@ void Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 
 void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 {
+	ConsumeVRMenuPresentationContextChange(a_frame);
 	const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
 	const bool menuPresentationContextActive = IsVRMenuPresentationContextActive();
 	const bool committedPlanChanged =
@@ -12911,6 +12912,14 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 		InvalidateVRMenuCommittedLayer("plan-generation-changed");
 		if (vrMenuFrameTransaction.frame == a_frame && vrMenuFrameTransaction.presentationStarted)
 			PoisonVRMenuFrameTransaction("plan-generation-changed-after-presentation-start");
+	}
+	if (VRVendorRelatchPolicy::ShouldDeferMenuContextInvalidation(
+			vrMenuFrameTransaction.frame,
+			a_frame,
+			vrMenuFrameTransaction.presentationDecisionLatched)) {
+		// The first eye owns this transaction's immutable menu-layer decision.
+		// Asynchronous context changes remain published for the next render frame.
+		return;
 	}
 	if (vrMenuCommittedLayerValid &&
 		(!menuPresentationContextActive || communityShadersMenuOpen)) {
@@ -12979,7 +12988,7 @@ void Upscaling::PoisonVRMenuFrameTransaction(const char* a_reason)
 	if (!vrMenuFrameTransaction.failureReason) {
 		vrMenuFrameTransaction.failureReason = a_reason ? a_reason : "unknown";
 		logger::debug(
-			"[VRMenuComposite] Poisoned menu frame transaction. frame={} reason={} recognized={} captured={} suppressed={} epochs={} mapEpochs={} renderComplete={} presentationStarted={} sealed={} drawInterfaceDepth={} semanticDepth={}",
+			"[VRMenuComposite] Poisoned menu frame transaction. frame={} reason={} recognized={} captured={} suppressed={} epochs={} mapEpochs={} renderComplete={} presentationDecisionLatched={} presentationStarted={} sealed={} drawInterfaceDepth={} semanticDepth={}",
 			vrMenuFrameTransaction.frame,
 			vrMenuFrameTransaction.failureReason,
 			vrMenuFrameTransaction.recognizedOperations,
@@ -12988,6 +12997,7 @@ void Upscaling::PoisonVRMenuFrameTransaction(const char* a_reason)
 			vrMenuFrameTransaction.epochCount,
 			vrMenuFrameTransaction.mapDisplayEpochs,
 			vrMenuFrameTransaction.renderComplete,
+			vrMenuFrameTransaction.presentationDecisionLatched,
 			vrMenuFrameTransaction.presentationStarted,
 			vrMenuFrameTransaction.sealed,
 			vrMenuFrameTransaction.drawInterfaceDepth,
@@ -12996,7 +13006,7 @@ void Upscaling::PoisonVRMenuFrameTransaction(const char* a_reason)
 			"frame-transaction-poisoned",
 			[&]() {
 				return std::format(
-					"reason={} transaction(frame={},planGeneration={},recognized={},captured={},suppressed={},epochs={},mapDisplayEpochs={},renderComplete={},presentationStarted={},sealed={},layerRequired={},mapRequired={},mapCaptured={},drawInterfaceDepth={}) {}",
+					"reason={} transaction(frame={},planGeneration={},recognized={},captured={},suppressed={},epochs={},mapDisplayEpochs={},renderComplete={},presentationDecisionLatched={},presentationStarted={},sealed={},layerRequired={},mapRequired={},mapCaptured={},drawInterfaceDepth={}) {}",
 					vrMenuFrameTransaction.failureReason,
 					vrMenuFrameTransaction.frame,
 					vrMenuFrameTransaction.planGeneration,
@@ -13006,6 +13016,7 @@ void Upscaling::PoisonVRMenuFrameTransaction(const char* a_reason)
 					vrMenuFrameTransaction.epochCount,
 					vrMenuFrameTransaction.mapDisplayEpochs,
 					vrMenuFrameTransaction.renderComplete,
+					vrMenuFrameTransaction.presentationDecisionLatched,
 					vrMenuFrameTransaction.presentationStarted,
 					vrMenuFrameTransaction.sealed,
 					vrMenuFrameTransaction.menuLayerRequired,
@@ -13048,13 +13059,45 @@ void Upscaling::InvalidateVRMenuCommittedLayer(const char* a_reason)
 
 void Upscaling::NotifyVRMenuPresentationContextChange(const char* a_reason)
 {
-	InvalidateVRMenuCommittedLayer(a_reason);
-	if (!globals::game::isVR || !globals::state)
-		return;
+	(void)a_reason;
+	vrMenuPresentationContextChangeSequence.fetch_add(
+		1,
+		std::memory_order_release);
+}
 
-	const uint32_t frame = globals::state->frameCount;
-	if (vrMenuFrameTransaction.frame != frame)
+void Upscaling::ConsumeVRMenuPresentationContextChange(uint32_t a_frame)
+{
+	const uint64_t publishedSequence =
+		vrMenuPresentationContextChangeSequence.load(
+			std::memory_order_acquire);
+	if (publishedSequence ==
+		vrMenuPresentationContextChangeConsumedSequence) {
 		return;
+	}
+	if (VRVendorRelatchPolicy::ShouldDeferMenuContextInvalidation(
+			vrMenuFrameTransaction.frame,
+			a_frame,
+			vrMenuFrameTransaction.presentationDecisionLatched)) {
+		return;
+	}
+
+	InvalidateVRMenuCommittedLayer("deferred-menu-context-change");
+	if (vrMapMenuUISupersamplingActive &&
+		!IsVRMapMenuPresentationActive() &&
+		vrMenuDrawInterfaceDepth == 0 &&
+		g_vrMenuSemanticEpochDepth == 0 &&
+		!vrMenuParallelBridgeDrawInProgress) {
+		ReleaseVRMapMenuUISupersampling();
+	}
+	if (!globals::game::isVR || !globals::state) {
+		vrMenuPresentationContextChangeConsumedSequence = publishedSequence;
+		return;
+	}
+
+	if (vrMenuFrameTransaction.frame != a_frame) {
+		vrMenuPresentationContextChangeConsumedSequence = publishedSequence;
+		return;
+	}
 
 	const bool transactionInFlight =
 		!vrMenuFrameTransaction.sealed &&
@@ -13073,6 +13116,7 @@ void Upscaling::NotifyVRMenuPresentationContextChange(const char* a_reason)
 	// context must establish its own exact bridge.
 	vrMenuFrameTransaction.menuLayerRequired = false;
 	vrMenuFrameTransaction.mapLayerRequired = false;
+	vrMenuPresentationContextChangeConsumedSequence = publishedSequence;
 }
 
 bool Upscaling::SealVRMenuFrameTransaction(uint32_t a_frame)
@@ -13142,7 +13186,7 @@ void Upscaling::BeginVRMenuDrawInterface()
 		BeginVRMenuFinalCompositeFrame(frame);
 		const bool postPresentationProducer =
 			vrMenuFrameTransaction.frame == frame &&
-			vrMenuFrameTransaction.presentationStarted;
+			vrMenuFrameTransaction.presentationDecisionLatched;
 		const bool transportExpected =
 			!postPresentationProducer &&
 			!adapterEligible &&
@@ -13164,7 +13208,7 @@ void Upscaling::BeginVRMenuDrawInterface()
 		}
 	}
 	++vrMenuDrawInterfaceDepth;
-	if (vrMenuFrameTransaction.frame == frame && !vrMenuFrameTransaction.presentationStarted)
+	if (vrMenuFrameTransaction.frame == frame && !vrMenuFrameTransaction.presentationDecisionLatched)
 		vrMenuFrameTransaction.drawInterfaceDepth = vrMenuDrawInterfaceDepth;
 }
 
@@ -13188,7 +13232,7 @@ void Upscaling::EndVRMenuDrawInterface()
 	const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 	if (vrMenuFrameTransaction.frame != frame)
 		return;
-	if (vrMenuFrameTransaction.presentationStarted)
+	if (vrMenuFrameTransaction.presentationDecisionLatched)
 		return;
 	vrMenuFrameTransaction.drawInterfaceDepth = vrMenuDrawInterfaceDepth;
 	if (vrMenuFrameTransaction.drawInterfaceDepth == 0) {
@@ -13761,7 +13805,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	const bool mainMenuDirectBridge =
 		authorizedDirectBridge && !loadingDirectBridge && IsMainMenuContextActive();
 	BeginVRMenuFinalCompositeFrame(state->frameCount);
-	if (vrMenuFrameTransaction.presentationStarted)
+	if (vrMenuFrameTransaction.presentationDecisionLatched)
 		return decide("post-presentation-source-producer", false);
 	if (vrMenuFrameTransaction.sealed)
 		return decide("post-seal-source-producer", false);
@@ -14328,7 +14372,14 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 		traceResult("rejected", "base-precondition-failed");
 		return false;
 	}
-	if (IsCommunityShadersMenuOpen()) {
+	const bool presentationTransactionLocked =
+		vrMenuFrameTransaction.frame == a_frame &&
+		vrMenuFrameTransaction.presentationDecisionLatched;
+	const bool effectiveCommunityShadersMenuOpen =
+		presentationTransactionLocked ?
+			vrMenuFrameTransaction.presentationCommunityShadersMenuOpen :
+			IsCommunityShadersMenuOpen();
+	if (effectiveCommunityShadersMenuOpen) {
 		traceResult("rejected", "menu-context-policy-blocked");
 		return false;
 	}
@@ -17097,12 +17148,6 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 
 	if (a_event && a_event->menuName == RE::MapMenu::MENU_NAME) {
 		g_vrMapMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
-		if (!a_event->opening &&
-			globals::features::upscaling.vrMenuDrawInterfaceDepth == 0 &&
-			g_vrMenuSemanticEpochDepth == 0 &&
-			!globals::features::upscaling.vrMenuParallelBridgeDrawInProgress) {
-			globals::features::upscaling.ReleaseVRMapMenuUISupersampling();
-		}
 	}
 	if (a_event && a_event->menuName == "StatsMenu")
 		g_vrStatsMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
@@ -38935,6 +38980,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	if (const uint64_t reconciledLoadingSerial =
 			TryReconcileMissedVRLoadingMenuClose(*this);
 		reconciledLoadingSerial != 0) {
+		NotifyVRMenuPresentationContextChange("reconciled-loading-menu-close");
 		// The synthetic close transaction has released gate+serial ownership. Run
 		// compositor/controller work only now, matching the authoritative event path.
 		logger::warn(
@@ -44148,7 +44194,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	BeginVRMenuFinalCompositeFrame(currentFrame);
 	if (vrRenderScaleMode &&
 		vrMenuFrameTransaction.frame == currentFrame &&
-		vrMenuFrameTransaction.presentationStarted) {
+		vrMenuFrameTransaction.presentationDecisionLatched) {
 		// The first eye fixes the transaction generation. Producer scopes that
 		// begin afterward feed a later consumer frame and must not invalidate the
 		// second eye; only an explicit transaction fault remains authoritative.
@@ -44196,11 +44242,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				PoisonVRMenuFrameTransaction("menu-transaction-incomplete-at-submit");
 
 			if (vrMenuFrameTransaction.poisoned) {
+				vrMenuFrameTransaction.presentationDecisionLatched = true;
+				vrMenuFrameTransaction.presentationMenuAttempt = true;
 				vrMenuFrameTransaction.presentationStarted = true;
 				return false;
 			}
 		}
 		if (vrMenuFrameTransaction.capturedOperations != 0 && !SealVRMenuFrameTransaction(currentFrame)) {
+			vrMenuFrameTransaction.presentationDecisionLatched = true;
+			vrMenuFrameTransaction.presentationMenuAttempt = true;
 			vrMenuFrameTransaction.presentationStarted = true;
 			return false;
 		}
@@ -44231,11 +44281,26 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	bool menuPresentationSucceeded = false;
 	if (vrRenderScaleMode && vrMenuFrameTransaction.frame == currentFrame) {
 		menuPresentationAttempt =
-			vrMenuFrameTransaction.sealed ||
-			vrMenuFrameTransaction.OwnsPresentationWork() ||
-			(vrMenuCommittedLayerValid && menuTextProtectionContext);
-		if (menuPresentationAttempt)
+			VRVendorRelatchPolicy::ResolveMenuPresentationAttempt(
+				vrMenuFrameTransaction.presentationDecisionLatched,
+				vrMenuFrameTransaction.presentationMenuAttempt,
+				vrMenuFrameTransaction.sealed,
+				vrMenuFrameTransaction.OwnsPresentationWork(),
+				vrMenuCommittedLayerValid,
+				menuTextProtectionContext);
+		if (!vrMenuFrameTransaction.presentationDecisionLatched) {
+			vrMenuFrameTransaction.presentationDecisionLatched = true;
+			vrMenuFrameTransaction.presentationMenuAttempt =
+				menuPresentationAttempt;
+			vrMenuFrameTransaction.presentationMenuTextProtectionContext =
+				menuTextProtectionContext;
+			vrMenuFrameTransaction.presentationCommunityShadersMenuOpen =
+				communityShadersMenuOpen;
+		}
+		if (menuPresentationAttempt &&
+			!vrMenuFrameTransaction.presentationStarted) {
 			vrMenuFrameTransaction.presentationStarted = true;
+		}
 	}
 	auto poisonFailedMenuPresentation = ScopeExit([&]() {
 		if (menuPresentationAttempt && !menuPresentationSucceeded)
@@ -44906,10 +44971,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		upscaleMethod == UpscaleMethod::kDLSS &&
 		!vendorLifecycleMutationDeferred &&
 		ShouldApplyDLSSSharpening();
+	const bool presentationTransactionLocked =
+		vrMenuFrameTransaction.frame == currentFrame &&
+		vrMenuFrameTransaction.presentationDecisionLatched;
+	const bool effectiveMenuTextProtectionContext =
+		presentationTransactionLocked ?
+			vrMenuFrameTransaction.presentationMenuTextProtectionContext :
+			menuTextProtectionContext;
 	const bool submitStageMenuFinalCompositeRequested =
 		vrRenderScaleMode &&
 		!presentationRenderTarget &&
-		menuTextProtectionContext &&
+		effectiveMenuTextProtectionContext &&
 		vrMenuCommittedLayerValid &&
 		vrMenuCommittedLayerOperationCount != 0 &&
 		vrMenuCommittedLayerPlanGeneration == GetActiveVRRenderScaleContractGeneration();

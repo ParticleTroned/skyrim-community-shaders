@@ -181,14 +181,10 @@ namespace
 	constexpr uint64_t kVRPostLoadCompositorInGameHoldSoftDeadlineMilliseconds = 3000u;
 	constexpr uint64_t kVRRenderTransitionCompositorHoldSoftDeadlineMilliseconds = 1000u;
 	constexpr uint64_t kVRPostLoadCompositorHoldHardDeadlineGraceMilliseconds = 500u;
-	// Debug builds can make unusually long protected recovery visible without
-	// sampling or publishing an incoherent game target. Production keepalive is
-	// always opaque black.
-#if defined(_DEBUG)
+	// Make unusually long protected recovery visible without sampling or
+	// publishing an incoherent game target. Ordinary holds remain opaque black;
+	// only a live recovery owner beyond 6.5 seconds receives the low-intensity cue.
 	constexpr bool kVRPostLoadRecoveryLivenessCueCompiled = true;
-#else
-	constexpr bool kVRPostLoadRecoveryLivenessCueCompiled = false;
-#endif
 	constexpr uint64_t kVRPostLoadRecoveryLivenessCueDelayMilliseconds = 6500u;
 	constexpr uint64_t kVRPostLoadRecoveryLivenessCuePeriodMilliseconds = 1800u;
 	constexpr float kVRPostLoadRecoveryLivenessCueMinimum = 0.002f;
@@ -6430,17 +6426,22 @@ namespace
 		       applied.displayEyeHeight == a_boot.displayEyeHeight;
 	}
 
-	struct VRRenderScaleSubmitMaskRepairProof
+	bool IsVRFixedVendorResolutionPlanOwnerExact(
+		const Upscaling::RuntimeResolutionPlan& a_plan,
+		Upscaling::UpscaleMethod a_runtimeMethod);
+
+	struct VRSubmitStageMaskRepairProof
 	{
 		Upscaling::VRRenderScaleTransitionState transitionState =
 			Upscaling::VRRenderScaleTransitionState::Idle;
 		Upscaling::UpscaleMethod method = Upscaling::UpscaleMethod::kNONE;
 		uint32_t generation = 0;
 		std::uintptr_t colorIdentity = 0;
+		bool mayBypassMaskDeferral = false;
 	};
 
-	std::optional<VRRenderScaleSubmitMaskRepairProof>
-	ValidateVRRenderScaleSubmitMaskRepairContract(
+	std::optional<VRSubmitStageMaskRepairProof>
+	ValidateVRSubmitStageMaskRepairContract(
 		const Upscaling& a_upscaling,
 		const State* a_state,
 		uint32_t a_eyeIndex,
@@ -6489,22 +6490,40 @@ namespace
 		const auto transition = a_upscaling.GetVRRenderScaleTransitionSnapshot();
 		const auto& plan = a_upscaling.GetRuntimeResolutionPlan();
 		const auto& output = a_upscaling.vrIntermediateColorOut[a_eyeIndex];
-		if (a_upscaling.GetConfiguredUpscaleMethodForTransition() != runtimeMethod ||
-			!a_upscaling.IsVRRenderScaleModeLatched() ||
-			!a_upscaling.IsPresentationUpscalingActive() ||
-			!IsVRRenderScaleAppliedVendorContractExact(
+		const bool activeRenderScaleContract =
+			a_upscaling.IsVRRenderScaleModeLatched() &&
+			a_upscaling.IsPresentationUpscalingActive() &&
+			IsVRRenderScaleAppliedVendorContractExact(
 				transition,
 				boot,
-				runtimeMethod) ||
+				runtimeMethod) &&
+			plan.owner == Upscaling::ResolutionOwner::VRRenderScaleMode &&
+			IsVRRenderScaleResolutionPlanExact(plan, boot);
+		const auto& applied = transition.applied;
+		const bool stabilizingInactiveContract =
+			transition.state ==
+				Upscaling::VRRenderScaleTransitionState::Stabilizing &&
+			applied.valid &&
+			!applied.active &&
+			applied.transitionEpoch != 0 &&
+			transition.targetEpoch == applied.transitionEpoch &&
+			applied.method == runtimeMethod &&
+			applied.renderEyeWidth == applied.displayEyeWidth &&
+			applied.renderEyeHeight == applied.displayEyeHeight;
+		const bool fixedVendorSubmitStage =
+			!a_upscaling.IsVRRenderScaleModeLatched() &&
+			a_upscaling.IsPresentationUpscalingActive() &&
+			IsVRFixedVendorRuntimeStableForPostLoad(a_upscaling) &&
+			IsVRFixedVendorResolutionPlanOwnerExact(plan, runtimeMethod);
+		if (a_upscaling.GetConfiguredUpscaleMethodForTransition() != runtimeMethod ||
+			(!activeRenderScaleContract && !fixedVendorSubmitStage) ||
 			HasPendingVRVendorRuntimeReset(a_upscaling, runtimeMethod) ||
 			!plan.vendorMethod ||
 			plan.upscaleMethod != runtimeMethod ||
-			plan.owner != Upscaling::ResolutionOwner::VRRenderScaleMode ||
 			plan.menuContextActive ||
 			plan.knownMenuContextActive ||
 			plan.loadingMenuActive ||
 			plan.perfModeRestartRequired ||
-			!IsVRRenderScaleResolutionPlanExact(plan, boot) ||
 			!output ||
 			!output->resource ||
 			!output->uav ||
@@ -6524,6 +6543,45 @@ namespace
 			return std::nullopt;
 		}
 
+		const uint32_t renderEyeWidth =
+			activeRenderScaleContract ?
+				boot.renderEyeWidth :
+				std::max<uint32_t>(
+					1u,
+					ClampPositiveDimension(plan.engineRenderSize.x) / 2u);
+		const uint32_t renderEyeHeight =
+			activeRenderScaleContract ?
+				boot.renderEyeHeight :
+				ClampPositiveDimension(plan.engineRenderSize.y);
+		const uint32_t displayEyeWidth =
+			activeRenderScaleContract ?
+				boot.displayEyeWidth :
+				std::max<uint32_t>(
+					1u,
+					ClampPositiveDimension(plan.finalOutputSize.x) / 2u);
+		const uint32_t displayEyeHeight =
+			activeRenderScaleContract ?
+				boot.displayEyeHeight :
+				ClampPositiveDimension(plan.finalOutputSize.y);
+		const uint32_t combinedRenderWidth =
+			ClampPositiveDimension(plan.engineRenderSize.x);
+		const uint32_t combinedDisplayWidth =
+			ClampPositiveDimension(plan.finalOutputSize.x);
+		if (!renderEyeWidth ||
+			!renderEyeHeight ||
+			!displayEyeWidth ||
+			!displayEyeHeight ||
+			(combinedRenderWidth & 1u) != 0 ||
+			(combinedDisplayWidth & 1u) != 0 ||
+			combinedRenderWidth != renderEyeWidth * 2u ||
+			combinedDisplayWidth != displayEyeWidth * 2u ||
+			ClampPositiveDimension(a_state->screenSize.x) !=
+				combinedDisplayWidth ||
+			ClampPositiveDimension(a_state->screenSize.y) !=
+				displayEyeHeight) {
+			return std::nullopt;
+		}
+
 		D3D11_TEXTURE2D_DESC colorDesc{};
 		D3D11_TEXTURE2D_DESC depthDesc{};
 		if (!TryGetTexture2DDesc(colorResource.get(), colorDesc) ||
@@ -6531,17 +6589,17 @@ namespace
 			colorDesc.ArraySize != 1 ||
 			colorDesc.MipLevels != 1 ||
 			colorDesc.SampleDesc.Count != 1 ||
-			colorDesc.Width != boot.displayEyeWidth ||
-			colorDesc.Height != boot.displayEyeHeight ||
+			colorDesc.Width != displayEyeWidth ||
+			colorDesc.Height != displayEyeHeight ||
 			depthDesc.ArraySize != 1 ||
 			depthDesc.MipLevels != 1 ||
 			depthDesc.SampleDesc.Count != 1 ||
-			a_colorWidth != boot.displayEyeWidth ||
-			a_colorHeight != boot.displayEyeHeight ||
+			a_colorWidth != displayEyeWidth ||
+			a_colorHeight != displayEyeHeight ||
 			a_colorOffsetX != 0 ||
 			a_colorOffsetY != 0 ||
-			a_depthWidth != boot.renderEyeWidth ||
-			a_depthHeight != boot.renderEyeHeight ||
+			a_depthWidth != renderEyeWidth ||
+			a_depthHeight != renderEyeHeight ||
 			a_depthOffsetY != 0) {
 			return std::nullopt;
 		}
@@ -6559,24 +6617,20 @@ namespace
 			return std::nullopt;
 		}
 
-		const bool combinedRenderWidthSafe =
-			boot.renderEyeWidth <= std::numeric_limits<uint32_t>::max() / 2u;
-		const uint32_t combinedRenderWidth =
-			combinedRenderWidthSafe ? boot.renderEyeWidth * 2u : 0u;
 		const bool exactDepthLayout =
-			depthDesc.Height == boot.renderEyeHeight &&
-			((depthDesc.Width == boot.renderEyeWidth && a_depthOffsetX == 0) ||
-				(combinedRenderWidthSafe &&
-					depthDesc.Width == combinedRenderWidth &&
-					a_depthOffsetX == a_eyeIndex * boot.renderEyeWidth));
+			depthDesc.Height == renderEyeHeight &&
+			((depthDesc.Width == renderEyeWidth && a_depthOffsetX == 0) ||
+				(depthDesc.Width == combinedRenderWidth &&
+					a_depthOffsetX == a_eyeIndex * renderEyeWidth));
 		if (!exactDepthLayout)
 			return std::nullopt;
 
-		return VRRenderScaleSubmitMaskRepairProof{
+		return VRSubmitStageMaskRepairProof{
 			transition.state,
 			runtimeMethod,
-			boot.generation,
-			colorIdentity
+			activeRenderScaleContract ? boot.generation : 0u,
+			colorIdentity,
+			fixedVendorSubmitStage && stabilizingInactiveContract
 		};
 	}
 
@@ -22231,6 +22285,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	const bool postMutationEmergencyRecoveryRequested =
 		physicalMutationAtEntry.serializationEpoch != 0 &&
 		physicalMutationAtEntry.emergencyRecoveryRequested;
+	if (!VRVendorRelatchPolicy::CanServiceQueuedPostMutationRecovery(
+			postMutationEmergencyRecoveryRequested,
+			physicalMutationAtEntry.emergencyAttemptConsumed)) {
+		// The emergency creator is deliberately one-shot. A failed creator can
+		// leave its tuple queued, but servicing that tuple again would reach vendor
+		// teardown before the later claim rejects it. Keep it dormant while the
+		// coherent-presentation path or the immutable watchdog resolves the chain.
+		return false;
+	}
 	const bool bypassSoftPreviewDeferrals =
 		presentationDeadlineFallbackRequested ||
 		postMutationEmergencyRecoveryRequested;
@@ -22479,7 +22542,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				GetVRRenderScalePhysicalMutationSnapshot();
 			if (currentMutation.serializationEpoch !=
 					physicalMutationAtEntry.serializationEpoch ||
-				!currentMutation.emergencyRecoveryRequested) {
+				!currentMutation.emergencyRecoveryRequested ||
+				currentMutation.emergencyAttemptConsumed) {
+				// Revalidate the one-shot while queue ownership is held. The fast
+				// entry check handles the normal path; this closes the interval in
+				// which another service turn could claim the attempt before tuple
+				// consumption and provider teardown.
 				return false;
 			}
 		}
@@ -22493,6 +22561,17 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				.delayFrames = queuedDelay,
 				.bypassMultiFrameDelay = bypassSoftPreviewDeferrals,
 			})) {
+			return false;
+		}
+		if (!VRVendorRelatchPolicy::CanAttemptPhysicalRelatchThisFrame(
+				vrRenderScaleLastPhysicalAttemptFrame.load(
+					std::memory_order_acquire),
+				queuedEpoch,
+				currentFrame)) {
+			// ConfigureUpscaling and State::Draw can both service this queue, and
+			// recovery may deliberately bypass the ordinary multi-frame delay. Keep
+			// the complete tuple pending, but never let re-entrant service calls tear
+			// down the same provider repeatedly while Skyrim's frame is unchanged.
 			return false;
 		}
 		const uint64_t serializationBeforeConsume =
@@ -22638,6 +22717,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		if (!consumedPendingTuple) {
 			return true;
 		}
+		vrRenderScaleLastPhysicalAttemptFrame.store(
+			currentFrame,
+			std::memory_order_release);
 		relatchOrigin = LoadVRUpscalingTransitionOrigin(
 			pendingPerfModeRenderTargetRecreateOrigin);
 		relatchEpoch = pendingPerfModeRenderTargetRecreateEpoch.load(
@@ -28772,10 +28854,24 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 
 	const auto transition = GetVRRenderScaleTransitionSnapshot();
 	const auto& applied = transition.applied;
+	const auto& stable = transition.stable;
 	const auto* state = globals::state;
 	const uint32_t currentFrame = state ? std::max(state->frameCount, 1u) : 0u;
+	const bool stabilizingInactiveContract =
+		transition.state == VRRenderScaleTransitionState::Stabilizing;
+	const bool activeInactiveContract =
+		transition.state == VRRenderScaleTransitionState::Active &&
+		stable.valid &&
+		!stable.active &&
+		stable.transitionEpoch == applied.transitionEpoch &&
+		stable.contractGeneration == applied.contractGeneration &&
+		stable.method == applied.method &&
+		stable.renderEyeWidth == applied.renderEyeWidth &&
+		stable.renderEyeHeight == applied.renderEyeHeight &&
+		stable.displayEyeWidth == applied.displayEyeWidth &&
+		stable.displayEyeHeight == applied.displayEyeHeight;
 	if (!state ||
-		transition.state != VRRenderScaleTransitionState::Stabilizing ||
+		(!stabilizingInactiveContract && !activeInactiveContract) ||
 		!applied.valid ||
 		applied.active ||
 		applied.transitionEpoch == 0 ||
@@ -28793,8 +28889,13 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 		IsMainMenuContextActive() ||
 		IsLoadingMenuContextActive() ||
 		IsNonLoadingVRGameMenuPresentationContextActive() ||
-		IsSaveLoadTransitionContextActive(state) ||
-		ShouldDeferHMDClearMask() ||
+		state->IsEngineSaveLoadActivityActive() ||
+		// The protected hold itself keeps physical mask handoff marked active while
+		// Stabilizing. The exact full-size native candidate is the evidence that
+		// completes that handoff, so only non-stabilizing observations must wait for
+		// the broader mask-repair predicate to clear first.
+		(ShouldDeferVRLoadingPresentationMaskRepair(*this, state) &&
+			!stabilizingInactiveContract) ||
 		state->pendingPostLoadRuntimeReset ||
 		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
 		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
@@ -28829,32 +28930,17 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 	sourceTexture->GetDesc(&sourceDesc);
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	const auto& resolutionPlan = GetRuntimeResolutionPlan();
-	const bool vendorMethod = IsVendorUpscalingMethod(applied.method);
-	const bool currentFrameVendorDispatchComplete =
-		!vendorMethod ||
-		(!IsPresentationUpscalingActive() &&
-			vrMainPassVendorDispatchCompletedFrame.load(
-				std::memory_order_acquire) == currentFrame);
-	const bool runtimePlanExact =
-		vendorMethod ?
-			(IsVRFixedVendorRuntimeStableForPostLoad(*this) &&
-				currentFrameVendorDispatchComplete &&
-				IsVRFixedVendorResolutionPlanOwnerExact(
-					resolutionPlan,
-					applied.method)) :
-			(!resolutionPlan.vendorMethod &&
-				resolutionPlan.upscaleMethod == applied.method &&
-				resolutionPlan.owner == ResolutionOwner::Native &&
-				ClampPositiveDimension(
-					resolutionPlan.engineRenderSize.x) ==
-					sourceDesc.Width &&
-				ClampPositiveDimension(
-					resolutionPlan.engineRenderSize.y) ==
-					sourceDesc.Height);
-	const bool sourceIdentityExact =
-		IsVRNativeEngineOutputSubmitTexture(sourceTexture) ||
-		(vendorMethod &&
-			IsVRFixedVendorOutputSubmitTexture(*this, sourceTexture));
+	const bool nativeRuntimePlanExact =
+		!resolutionPlan.vendorMethod &&
+		resolutionPlan.owner == ResolutionOwner::Native &&
+		ClampPositiveDimension(
+			resolutionPlan.engineRenderSize.x) == sourceDesc.Width &&
+		ClampPositiveDimension(
+			resolutionPlan.engineRenderSize.y) == sourceDesc.Height;
+	const bool nativeSource =
+		IsVRNativeEngineOutputSubmitTexture(sourceTexture);
+	const bool nativePresentation =
+		nativeRuntimePlanExact && nativeSource;
 	const bool exactPhysicalNativeContinuity =
 		sourceDesc.ArraySize == 1 &&
 		sourceDesc.MipLevels == 1 &&
@@ -28869,15 +28955,15 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 			sourceDesc.Width &&
 		ClampPositiveDimension(resolutionPlan.finalOutputSize.y) ==
 			sourceDesc.Height &&
-		sourceIdentityExact &&
+		nativePresentation &&
 		InputBoundsMatchCombinedStereoEye(a_inputBounds, eyeIndex);
 	const bool exactRuntimeContract =
 		GetRuntimeUpscaleMethod() == applied.method &&
 		GetConfiguredUpscaleMethodForTransition() == applied.method &&
-		runtimePlanExact;
+		nativePresentation;
 	const bool exactNativeCandidate =
 		VRVendorRelatchPolicy::CanAcceptNativeRestorePresentation({
-			.targetUsesVendorEvaluation = vendorMethod,
+			.targetUsesVendorEvaluation = false,
 			.exactPhysicalNativeContinuity =
 				exactPhysicalNativeContinuity,
 			.exactRuntimeContract = exactRuntimeContract,
@@ -38518,9 +38604,9 @@ void Upscaling::RecordVRPostLoadHMDMaskRepair(
 
 	if (!a_clearExecuted || !a_colorUAV || !a_depthSRV)
 		return;
-	std::optional<VRRenderScaleSubmitMaskRepairProof> renderScaleRepairProof;
+	std::optional<VRSubmitStageMaskRepairProof> submitStageRepairProof;
 	if (a_phase == HMDMaskClearPhase::SubmitStageOutput) {
-		renderScaleRepairProof = ValidateVRRenderScaleSubmitMaskRepairContract(
+		submitStageRepairProof = ValidateVRSubmitStageMaskRepairContract(
 			*this,
 			globals::state,
 			a_eyeIndex,
@@ -38535,12 +38621,11 @@ void Upscaling::RecordVRPostLoadHMDMaskRepair(
 			a_depthOffsetY,
 			a_colorOffsetY);
 	}
-	const bool exactStabilizingRenderScaleRepair =
-		renderScaleRepairProof &&
-		renderScaleRepairProof->transitionState ==
-			VRRenderScaleTransitionState::Stabilizing;
+	const bool exactMaskDeferralBypass =
+		submitStageRepairProof &&
+		submitStageRepairProof->mayBypassMaskDeferral;
 	if (ShouldDeferHMDClearMask() &&
-		!exactStabilizingRenderScaleRepair) {
+		!exactMaskDeferralBypass) {
 		return;
 	}
 	if (postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
@@ -38579,11 +38664,11 @@ void Upscaling::RecordVRPostLoadHMDMaskRepair(
 			a_depthOffsetY,
 			a_colorOffsetY,
 			false);
-	} else if (renderScaleRepairProof) {
-		repairMethod = renderScaleRepairProof->method;
-		generation = renderScaleRepairProof->generation;
+	} else if (submitStageRepairProof) {
+		repairMethod = submitStageRepairProof->method;
+		generation = submitStageRepairProof->generation;
 		exactRepair =
-			repairIdentity == renderScaleRepairProof->colorIdentity;
+			repairIdentity == submitStageRepairProof->colorIdentity;
 	}
 	if (!exactRepair)
 		return;
@@ -38634,13 +38719,12 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 			depthOffsetY,
 			colorOffsetY,
 			true);
-	std::optional<VRRenderScaleSubmitMaskRepairProof>
-		stabilizingRenderScaleRepairProof;
+	std::optional<VRSubmitStageMaskRepairProof>
+		submitStageRepairProof;
 	if (postLoadRepairHoldActive &&
-		a_phase == HMDMaskClearPhase::SubmitStageOutput &&
-		maskRepairDeferred) {
-		stabilizingRenderScaleRepairProof =
-			ValidateVRRenderScaleSubmitMaskRepairContract(
+		a_phase == HMDMaskClearPhase::SubmitStageOutput) {
+		submitStageRepairProof =
+			ValidateVRSubmitStageMaskRepairContract(
 				*this,
 				globals::state,
 				a_eyeIndex,
@@ -38655,20 +38739,19 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 				depthOffsetY,
 				colorOffsetY);
 	}
-	const bool validatedStabilizingRenderScaleRepair =
-		stabilizingRenderScaleRepairProof &&
-		stabilizingRenderScaleRepairProof->transitionState ==
-			VRRenderScaleTransitionState::Stabilizing;
+	const bool validatedSubmitStageRepair =
+		submitStageRepairProof.has_value();
 	const bool ordinaryClear = ShouldClearHMDMaskInPhase(a_phase);
 	const bool shouldClear =
 		validatedFixedVendorRepair ||
-		validatedStabilizingRenderScaleRepair ||
+		validatedSubmitStageRepair ||
 		ordinaryClear;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool deferred =
 		maskRepairDeferred &&
 		!validatedFixedVendorRepair &&
-		!validatedStabilizingRenderScaleRepair;
+		!(submitStageRepairProof &&
+			submitStageRepairProof->mayBypassMaskDeferral);
 	const auto recordObservation = [&](
 									   bool a_executed,
 									   uint64_t a_dispatchSequence = 0,
@@ -38834,7 +38917,7 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 		depthOffsetY,
 		colorOffsetY,
 		validatedFixedVendorRepair ||
-			validatedStabilizingRenderScaleRepair);
+			validatedSubmitStageRepair);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CompleteVRLoadPresentationHAMCapture(hamCapture, executed, colorUAV);
@@ -40101,11 +40184,9 @@ bool Upscaling::PrepareVRCompositorKeepaliveSubmissionLocked(
 	if (!a_candidateTexture ||
 		!a_candidateTexture->handle ||
 		a_candidateTexture->eType != vr::TextureType_DirectX) {
-#if defined(_DEBUG)
 		vrPostLoadRecoveryLivenessCueActive.store(
 			false,
 			std::memory_order_release);
-#endif
 		return false;
 	}
 
@@ -40116,19 +40197,17 @@ bool Upscaling::PrepareVRCompositorKeepaliveSubmissionLocked(
 			a_lifetime.get(),
 			a_candidateTexture->eColorSpace,
 			a_compositorCycleToken)) {
-#if defined(_DEBUG)
 		vrPostLoadRecoveryLivenessCueActive.store(
 			false,
 			std::memory_order_release);
-#endif
 		a_lifetime = nullptr;
 		return false;
 	}
 
 	// Preserve the exact compositor topology that was already working: handle,
 	// full texture dimensions, color space, and per-eye bounds all remain those
-	// of the intercepted candidate. Release pixels are opaque black; Debug may
-	// encode the protected recovery cue below.
+	// of the intercepted candidate. Release pixels are opaque black except for
+	// the bounded extended-recovery cue below.
 	a_texture = *a_candidateTexture;
 	a_texture.handle = a_lifetime.get();
 	if (a_candidateBounds)
@@ -40163,9 +40242,7 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 		return false;
 	}
 	D3D11_TEXTURE2D_DESC candidateDesc{};
-#if defined(_DEBUG)
 	a_candidateTexture->GetDesc(&candidateDesc);
-#endif
 
 	winrt::com_ptr<ID3D11UnorderedAccessView> candidateUAV;
 	const auto adoptCandidateUAV =
@@ -40208,7 +40285,6 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 		}
 	}
 
-#if defined(_DEBUG)
 	bool showLivenessCue = false;
 	float livenessCueLinearIntensity = 0.0f;
 	const uint64_t holdEpoch =
@@ -40268,13 +40344,8 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 		livenessCueLinearIntensity =
 			vrPostLoadRecoveryLivenessCueCachedLinearIntensity;
 	}
-#else
-	(void)a_colorSpace;
-	(void)a_compositorCycleToken;
-#endif
 
 	float keepaliveColor[4]{ 0.0f, 0.0f, 0.0f, 1.0f };
-#if defined(_DEBUG)
 	bool cueVisibleForCandidate = false;
 	const auto isEightBitPerComponentFormat = [](DXGI_FORMAT a_format) {
 		switch (a_format) {
@@ -40381,7 +40452,7 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 			static_cast<uint32_t>(a_colorSpace),
 			std::memory_order_release);
 		logger::warn(
-			"[VRRenderScale][PostLoad] Debug-only extended-recovery cue was successfully cleared into a protected compositor candidate. activationCount={} holdEpoch={} compositorCycle={} elapsedMs={} colorSpace={} postMutationEpoch={} preMutationFallbackEpoch={}.",
+			"[VRRenderScale][PostLoad] Extended-recovery liveness cue was successfully cleared into a protected compositor candidate. activationCount={} holdEpoch={} compositorCycle={} elapsedMs={} colorSpace={} postMutationEpoch={} preMutationFallbackEpoch={}.",
 			activationCount,
 			holdEpoch,
 			a_compositorCycleToken,
@@ -40394,7 +40465,6 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 			vrRenderScalePreMutationNativeFallbackTransitionEpoch.load(
 				std::memory_order_acquire));
 	};
-#endif
 	D3D11_UNORDERED_ACCESS_VIEW_DESC candidateUAVDesc{};
 	if (candidateUAV) {
 		candidateUAV->GetDesc(&candidateUAVDesc);
@@ -40402,24 +40472,17 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 			candidateUAV = nullptr;
 	}
 	if (candidateUAV) {
-#if defined(_DEBUG)
 		populateKeepaliveColor(
 			candidateUAVDesc.Format);
-#endif
 		context->ClearUnorderedAccessViewFloat(
 			candidateUAV.get(),
 			keepaliveColor);
 		const bool clearSucceeded = !IsD3DDeviceRemovedReason(
 			candidateDevice->GetDeviceRemovedReason());
-#if defined(_DEBUG)
 		publishSuccessfulClear(clearSucceeded);
-#endif
 		return clearSucceeded;
 	}
 
-#if !defined(_DEBUG)
-	a_candidateTexture->GetDesc(&candidateDesc);
-#endif
 	const DXGI_FORMAT viewFormat =
 		GetRenderTargetViewFormat(candidateDesc.Format);
 	if ((candidateDesc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0 ||
@@ -40458,15 +40521,11 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 	Util::SetResourceName(
 		candidateRTV.get(),
 		"Upscaling::VRCompositorProtectedCandidate RTV");
-#if defined(_DEBUG)
 	populateKeepaliveColor(viewFormat);
-#endif
 	context->ClearRenderTargetView(candidateRTV.get(), keepaliveColor);
 	const bool clearSucceeded = !IsD3DDeviceRemovedReason(
 		candidateDevice->GetDeviceRemovedReason());
-#if defined(_DEBUG)
 	publishSuccessfulClear(clearSucceeded);
-#endif
 	return clearSucceeded;
 }
 
@@ -40571,18 +40630,16 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 	vrPostLoadCompositorHoldStartFrame.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldStartTickMs.store(0, std::memory_order_release);
 	vrPostLoadRecoveryLivenessCueActive.store(false, std::memory_order_release);
-#if defined(_DEBUG)
 	vrPostLoadRecoveryLivenessCueCachedHoldEpoch = 0;
 	vrPostLoadRecoveryLivenessCueCachedCycleToken = 0;
 	vrPostLoadRecoveryLivenessCueCachedActive = false;
 	vrPostLoadRecoveryLivenessCueCachedLinearIntensity = 0.0f;
-#endif
 	vrPostLoadCompositorHoldReleaseFrame.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldReleaseMethod.store(
 		static_cast<uint32_t>(UpscaleMethod::kNONE),
 		std::memory_order_release);
 	vrPostLoadCompositorHoldReleaseGeneration.store(0, std::memory_order_release);
-	vrPostLoadCompositorHoldReleaseRenderScale.store(false, std::memory_order_release);
+	vrPostLoadCompositorHoldReleaseSubmitStage.store(false, std::memory_order_release);
 	vrPostLoadCompositorHoldReleaseMutationEpoch.store(
 		0,
 		std::memory_order_release);
@@ -40590,7 +40647,7 @@ void Upscaling::ResetVRPostLoadCompositorHoldLocked(
 		static_cast<uint32_t>(UpscaleMethod::kNONE),
 		std::memory_order_release);
 	vrPostLoadCompositorHoldCandidateGeneration.store(0, std::memory_order_release);
-	vrPostLoadCompositorHoldCandidateRenderScale.store(false, std::memory_order_release);
+	vrPostLoadCompositorHoldCandidateSubmitStage.store(false, std::memory_order_release);
 	for (auto& identity : vrPostLoadCompositorHoldCandidateTextureIdentity)
 		identity.store(0, std::memory_order_release);
 	vrPostLoadCompositorHoldCandidateTextureFormat.store(
@@ -41737,10 +41794,37 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		!maskRepairDeferred;
 	bool fixedCandidate = false;
 	bool renderScaleVendorCandidate = false;
+	bool fixedSubmitStageVendorCandidate = false;
 	bool nativeCandidate = false;
+	bool inactiveContractNativeCandidate = false;
 	bool exactStabilizingRenderScaleCandidate = false;
+	bool exactStabilizingInactiveFixedSubmitCandidate = false;
 	uint32_t candidateGeneration = 0;
 	const auto& resolutionPlan = GetRuntimeResolutionPlan();
+	const auto transition = GetVRRenderScaleTransitionSnapshot();
+	const auto& applied = transition.applied;
+	const auto& stable = transition.stable;
+	const bool stabilizingInactiveContract =
+		transition.state == VRRenderScaleTransitionState::Stabilizing;
+	const bool activeInactiveContract =
+		transition.state == VRRenderScaleTransitionState::Active &&
+		stable.valid &&
+		!stable.active &&
+		stable.transitionEpoch == applied.transitionEpoch &&
+		stable.contractGeneration == applied.contractGeneration &&
+		stable.method == applied.method &&
+		stable.renderEyeWidth == applied.renderEyeWidth &&
+		stable.renderEyeHeight == applied.renderEyeHeight &&
+		stable.displayEyeWidth == applied.displayEyeWidth &&
+		stable.displayEyeHeight == applied.displayEyeHeight;
+	const bool controllerOwnsPublishedInactiveContract =
+		(stabilizingInactiveContract || activeInactiveContract) &&
+		applied.valid &&
+		!applied.active &&
+		applied.transitionEpoch != 0 &&
+		transition.targetEpoch == applied.transitionEpoch &&
+		applied.renderEyeWidth == applied.displayEyeWidth &&
+		applied.renderEyeHeight == applied.displayEyeHeight;
 	const auto isFixedCandidateContractExact =
 		[&](const RuntimeResolutionPlan& a_plan) {
 			const uint32_t expectedWidth = ClampPositiveDimension(state->screenSize.x);
@@ -41833,6 +41917,43 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			InputBoundsMatchCombinedStereoEye(a_bounds, eyeIndex);
 	}
 
+	if (!renderScaleActive &&
+		a_presentationObservation &&
+		a_presentationObservation->valid) {
+		const bool exactNativePresentationObservation =
+			a_presentationObservation->path ==
+				VRRenderScalePresentationPath::NativeOriginal &&
+			a_presentationObservation->frame == currentFrame &&
+			a_presentationObservation->eyeIndex == eyeIndex &&
+			a_presentationObservation->transitionEpoch ==
+				applied.transitionEpoch &&
+			a_presentationObservation->contractGeneration ==
+				applied.contractGeneration &&
+			a_presentationObservation->method == applied.method &&
+			a_presentationObservation->inputWidth ==
+				applied.displayEyeWidth &&
+			a_presentationObservation->inputHeight ==
+				applied.displayEyeHeight &&
+			a_presentationObservation->expectedInputWidth ==
+				applied.displayEyeWidth &&
+			a_presentationObservation->expectedInputHeight ==
+				applied.displayEyeHeight &&
+			a_presentationObservation->outputWidth ==
+				applied.displayEyeWidth &&
+			a_presentationObservation->outputHeight ==
+				applied.displayEyeHeight &&
+			!a_presentationObservation->loadingOrMenuContext &&
+			!a_presentationObservation->transitionCooldown;
+		inactiveContractNativeCandidate =
+			VRVendorRelatchPolicy::CanReleasePublishedInactiveContract({
+				.controllerOwnsPublishedInactiveContract =
+					controllerOwnsPublishedInactiveContract,
+				.exactNativePresentationObservation =
+					exactNativePresentationObservation,
+				.releaseLifecycleReady = releaseLifecycleReady,
+			});
+	}
+
 	if (textureLayoutValid &&
 		completedCurrentWorldFrame &&
 		releaseLifecycleReady &&
@@ -41840,8 +41961,6 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		a_presentationObservation &&
 		a_presentationObservation->valid) {
 		const auto& boot = perfMode.GetBootSnapshot();
-		const auto transition = GetVRRenderScaleTransitionSnapshot();
-		const auto& applied = transition.applied;
 		const auto& output = vrIntermediateColorOut[eyeIndex];
 		candidateGeneration = a_presentationObservation->contractGeneration;
 		// Active is published only after a stereo vendor pair reaches OpenVR.
@@ -41896,9 +42015,86 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			renderScaleVendorCandidate &&
 			transition.state == VRRenderScaleTransitionState::Stabilizing;
 	}
+	if (textureLayoutValid &&
+		completedCurrentWorldFrame &&
+		releaseLifecycleReady &&
+		fixedVendorActive &&
+		a_presentationObservation &&
+		a_presentationObservation->valid) {
+		const uint32_t combinedRenderWidth =
+			ClampPositiveDimension(resolutionPlan.engineRenderSize.x);
+		const uint32_t renderEyeWidth =
+			std::max<uint32_t>(1u, combinedRenderWidth / 2u);
+		const uint32_t renderEyeHeight =
+			ClampPositiveDimension(resolutionPlan.engineRenderSize.y);
+		const uint32_t combinedDisplayWidth =
+			ClampPositiveDimension(resolutionPlan.finalOutputSize.x);
+		const uint32_t displayEyeWidth =
+			std::max<uint32_t>(1u, combinedDisplayWidth / 2u);
+		const uint32_t displayEyeHeight =
+			ClampPositiveDimension(resolutionPlan.finalOutputSize.y);
+		const auto& output = vrIntermediateColorOut[eyeIndex];
+		fixedSubmitStageVendorCandidate =
+			(combinedRenderWidth & 1u) == 0 &&
+			(combinedDisplayWidth & 1u) == 0 &&
+			combinedRenderWidth == renderEyeWidth * 2u &&
+			combinedDisplayWidth == displayEyeWidth * 2u &&
+			configuredMethod == runtimeMethod &&
+			!HasPendingVRVendorRuntimeReset(*this, runtimeMethod) &&
+			IsVRFixedVendorResolutionPlanOwnerExact(
+				resolutionPlan,
+				runtimeMethod) &&
+			!resolutionPlan.menuContextActive &&
+			!resolutionPlan.knownMenuContextActive &&
+			!resolutionPlan.loadingMenuActive &&
+			!resolutionPlan.perfModeRestartRequired &&
+			ClampPositiveDimension(state->screenSize.x) ==
+				combinedDisplayWidth &&
+			ClampPositiveDimension(state->screenSize.y) ==
+				displayEyeHeight &&
+			output &&
+			output->resource &&
+			output->uav &&
+			GetCOMIdentityAddress(output->resource.get()) == sourceIdentity &&
+			output->desc.Width == displayEyeWidth &&
+			output->desc.Height == displayEyeHeight &&
+			output->desc.Format == sourceDesc.Format &&
+			sourceDesc.Width == displayEyeWidth &&
+			sourceDesc.Height == displayEyeHeight &&
+			a_presentationObservation->path ==
+				VRRenderScalePresentationPath::VendorEvaluated &&
+			a_presentationObservation->frame == currentFrame &&
+			a_presentationObservation->eyeIndex == eyeIndex &&
+			a_presentationObservation->method == runtimeMethod &&
+			a_presentationObservation->inputWidth == renderEyeWidth &&
+			a_presentationObservation->inputHeight == renderEyeHeight &&
+			a_presentationObservation->expectedInputWidth == renderEyeWidth &&
+			a_presentationObservation->expectedInputHeight == renderEyeHeight &&
+			a_presentationObservation->outputWidth == displayEyeWidth &&
+			a_presentationObservation->outputHeight == displayEyeHeight &&
+			!a_presentationObservation->loadingOrMenuContext &&
+			!a_presentationObservation->transitionCooldown &&
+			InputBoundsMatchFullTexture(a_bounds);
+		exactStabilizingInactiveFixedSubmitCandidate =
+			fixedSubmitStageVendorCandidate &&
+			stabilizingInactiveContract &&
+			controllerOwnsPublishedInactiveContract &&
+			a_presentationObservation->transitionEpoch ==
+				applied.transitionEpoch;
+	}
 	const bool renderScaleReleaseSafetyReady =
 		releaseLifecycleReady &&
 		(!maskRepairDeferred || exactStabilizingRenderScaleCandidate);
+	const bool fixedSubmitStageReleaseSafetyReady =
+		releaseLifecycleReady &&
+		(!maskRepairDeferred ||
+			exactStabilizingInactiveFixedSubmitCandidate);
+	const bool submitStageVendorCandidate =
+		renderScaleVendorCandidate || fixedSubmitStageVendorCandidate;
+	const bool submitStageReleaseSafetyReady =
+		renderScaleVendorCandidate ?
+			renderScaleReleaseSafetyReady :
+			fixedSubmitStageReleaseSafetyReady;
 
 	if (fixedCandidate) {
 		// Revalidate and repair on every eye submission. A compositor that
@@ -42072,8 +42268,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 	if (holdState == VRPostLoadCompositorHoldState::ReleaseScheduled &&
 		releaseFrame != 0 &&
 		currentFrame >= releaseFrame) {
-		const bool expectedRenderScale =
-			vrPostLoadCompositorHoldReleaseRenderScale.load(std::memory_order_acquire);
+		const bool expectedSubmitStage =
+			vrPostLoadCompositorHoldReleaseSubmitStage.load(std::memory_order_acquire);
 		const auto expectedMethod = static_cast<UpscaleMethod>(
 			vrPostLoadCompositorHoldReleaseMethod.load(std::memory_order_acquire));
 		const uint32_t expectedGeneration =
@@ -42105,12 +42301,15 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		}
 
 		const bool expectedNative = !IsVendorUpscalingMethod(expectedMethod);
+		const bool expectedNativePresentation =
+			!expectedSubmitStage &&
+			(expectedNative || inactiveContractNativeCandidate);
 		auto& repairEvidence =
-			expectedRenderScale ?
+			expectedSubmitStage ?
 				vrPostLoadCompositorHoldSubmitRepair :
 				vrPostLoadCompositorHoldFixedRepair;
 		const bool repairProven =
-			expectedNative || consumeRepairEvidence(
+			expectedNativePresentation || consumeRepairEvidence(
 								  repairEvidence,
 								  expectedGeneration);
 		const uint32_t sourceFormat = static_cast<uint32_t>(sourceDesc.Format);
@@ -42124,18 +42323,22 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			vrPostLoadCompositorHoldCandidateColorSpace.load(
 				std::memory_order_acquire) == sourceColorSpace;
 		const bool pathReleaseSafetyReady =
-			expectedRenderScale ?
-				renderScaleReleaseSafetyReady :
-				ordinaryReleaseSafetyReady;
+			expectedSubmitStage ?
+				submitStageReleaseSafetyReady :
+				inactiveContractNativeCandidate ?
+					releaseLifecycleReady :
+					ordinaryReleaseSafetyReady;
 		const bool safeCandidate =
 			pathReleaseSafetyReady &&
 			expectedMethod == runtimeMethod &&
 			stagedCandidateMatches &&
 			repairProven &&
-			(expectedRenderScale ?
+			(expectedSubmitStage ?
 					(candidateGeneration == expectedGeneration &&
-						renderScaleVendorCandidate) :
-					(expectedNative ? nativeCandidate : fixedCandidate));
+						submitStageVendorCandidate) :
+					(expectedNativePresentation ?
+						(nativeCandidate || inactiveContractNativeCandidate) :
+						fixedCandidate));
 		if (safeCandidate) {
 			if (TryRecordFrameEyeMaskState(
 					vrPostLoadCompositorHoldReleaseAttemptEyeMaskState,
@@ -42174,12 +42377,16 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		(renderScaleReleaseSafetyReady &&
 			renderScaleActive &&
 			renderScaleVendorCandidate) ||
+		(fixedSubmitStageReleaseSafetyReady &&
+			fixedVendorActive &&
+			fixedSubmitStageVendorCandidate) ||
 		(ordinaryReleaseSafetyReady &&
 			fixedVendorActive &&
 			fixedCandidate) ||
 		(ordinaryReleaseSafetyReady &&
 			nativeRuntimeActive &&
-			nativeCandidate);
+			nativeCandidate) ||
+		inactiveContractNativeCandidate;
 	if (!candidate) {
 		const uint32_t stableFrame =
 			vrPostLoadCompositorHoldCandidateStableFrame.load(
@@ -42190,13 +42397,16 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		return suppressWithKeepalive();
 	}
 
+	const bool submitStageCandidate =
+		renderScaleVendorCandidate || fixedSubmitStageVendorCandidate;
 	const uint32_t candidateContractGeneration =
-		renderScaleActive ? candidateGeneration : 0u;
+		renderScaleVendorCandidate ? candidateGeneration : 0u;
 	auto& repairEvidence =
-		renderScaleActive ?
+		submitStageCandidate ?
 			vrPostLoadCompositorHoldSubmitRepair :
 			vrPostLoadCompositorHoldFixedRepair;
 	if (!nativeCandidate &&
+		!inactiveContractNativeCandidate &&
 		!consumeRepairEvidence(
 			repairEvidence,
 			candidateContractGeneration)) {
@@ -42220,8 +42430,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 					 std::memory_order_acquire)) == runtimeMethod &&
 				vrPostLoadCompositorHoldCandidateGeneration.load(
 					std::memory_order_acquire) == candidateContractGeneration &&
-				vrPostLoadCompositorHoldCandidateRenderScale.load(
-					std::memory_order_acquire) == renderScaleActive &&
+				vrPostLoadCompositorHoldCandidateSubmitStage.load(
+					std::memory_order_acquire) == submitStageCandidate &&
 				vrPostLoadCompositorHoldCandidateTextureFormat.load(
 					std::memory_order_acquire) == sourceFormat &&
 				vrPostLoadCompositorHoldCandidateColorSpace.load(
@@ -42235,8 +42445,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		vrPostLoadCompositorHoldCandidateGeneration.store(
 			candidateContractGeneration,
 			std::memory_order_release);
-		vrPostLoadCompositorHoldCandidateRenderScale.store(
-			renderScaleActive,
+		vrPostLoadCompositorHoldCandidateSubmitStage.store(
+			submitStageCandidate,
 			std::memory_order_release);
 		vrPostLoadCompositorHoldCandidateTextureFormat.store(
 			sourceFormat,
@@ -42250,8 +42460,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 			runtimeMethod ||
 		vrPostLoadCompositorHoldCandidateGeneration.load(std::memory_order_acquire) !=
 			candidateContractGeneration ||
-		vrPostLoadCompositorHoldCandidateRenderScale.load(std::memory_order_acquire) !=
-			renderScaleActive ||
+		vrPostLoadCompositorHoldCandidateSubmitStage.load(std::memory_order_acquire) !=
+			submitStageCandidate ||
 		vrPostLoadCompositorHoldCandidateTextureFormat.load(std::memory_order_acquire) !=
 			sourceFormat ||
 		vrPostLoadCompositorHoldCandidateColorSpace.load(std::memory_order_acquire) !=
@@ -42260,7 +42470,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		return suppressWithKeepalive();
 	}
 
-	if (!renderScaleActive && existingCandidateMask != 0) {
+	if (!submitStageCandidate && existingCandidateMask != 0) {
 		const uint32_t otherEyeIndex = eyeIndex ^ 1u;
 		if ((existingCandidateMask & (1u << otherEyeIndex)) != 0 &&
 			vrPostLoadCompositorHoldCandidateTextureIdentity[otherEyeIndex].load(
@@ -42313,8 +42523,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		vrPostLoadCompositorHoldReleaseGeneration.store(
 			candidateContractGeneration,
 			std::memory_order_release);
-		vrPostLoadCompositorHoldReleaseRenderScale.store(
-			renderScaleActive,
+		vrPostLoadCompositorHoldReleaseSubmitStage.store(
+			submitStageCandidate,
 			std::memory_order_release);
 		vrPostLoadCompositorHoldReleaseMutationEpoch.store(
 			vrRenderScalePostMutationSerializationEpoch.load(
@@ -46111,7 +46321,6 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	uint64_t livenessCueLastActivationCycleToken = 0;
 	vr::EColorSpace livenessCueLastActivationColorSpace =
 		vr::ColorSpace_Auto;
-#if defined(_DEBUG)
 	livenessCueSuccessfulActivationCount =
 		vrPostLoadRecoveryLivenessCueActivationCount.load(
 			std::memory_order_acquire);
@@ -46128,7 +46337,6 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		static_cast<vr::EColorSpace>(
 			vrPostLoadRecoveryLivenessCueLastActivationColorSpace.load(
 				std::memory_order_acquire));
-#endif
 	const auto vendorWorkGateSourceNames = [](uint32_t a_mask) {
 		json names = json::array();
 		for (const auto source : VRVendorRelatchPolicy::kWorkGateSources) {

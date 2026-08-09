@@ -7,6 +7,31 @@ namespace
 {
 	using namespace VRVendorRelatchPolicy;
 
+	constexpr bool CoversPhysicalRelatchFrameAdmission()
+	{
+		if (CanAttemptPhysicalRelatchThisFrame(0, 0, 1) ||
+			CanAttemptPhysicalRelatchThisFrame(0, 1, 0)) {
+			return false;
+		}
+		if (!CanAttemptPhysicalRelatchThisFrame(0, 1, 1))
+			return false;
+		if (CanAttemptPhysicalRelatchThisFrame(10, 1, 10))
+			return false;
+		if (!CanAttemptPhysicalRelatchThisFrame(10, 1, 11))
+			return false;
+		if (CanAttemptPhysicalRelatchThisFrame(10, 2, 10))
+			return false;
+		return true;
+	}
+
+	constexpr bool CoversConsumedEmergencyRecoveryAdmission()
+	{
+		return CanServiceQueuedPostMutationRecovery(false, false) &&
+		       CanServiceQueuedPostMutationRecovery(false, true) &&
+		       CanServiceQueuedPostMutationRecovery(true, false) &&
+		       !CanServiceQueuedPostMutationRecovery(true, true);
+	}
+
 	constexpr bool CoversWorkGateMasks()
 	{
 		if (ToMask(WorkGateSource::None) != 0u ||
@@ -433,6 +458,26 @@ namespace
 				(admission.exactRuntimeContract ||
 					!admission.targetUsesVendorEvaluation);
 			if (CanAcceptNativeRestorePresentation(admission) != expected)
+				return false;
+		}
+		return true;
+	}
+
+	constexpr bool CoversInactiveContractNativeReleaseAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
+			const InactiveContractNativeReleaseAdmission admission{
+				.controllerOwnsPublishedInactiveContract =
+					(bits & (1u << 0)) != 0,
+				.exactNativePresentationObservation =
+					(bits & (1u << 1)) != 0,
+				.releaseLifecycleReady = (bits & (1u << 2)) != 0,
+			};
+			const bool expected =
+				admission.controllerOwnsPublishedInactiveContract &&
+				admission.exactNativePresentationObservation &&
+				admission.releaseLifecycleReady;
+			if (CanReleasePublishedInactiveContract(admission) != expected)
 				return false;
 		}
 		return true;
@@ -1387,6 +1432,15 @@ namespace
 		if (ShouldDeferRelatchForRetryPacing(state))
 			return false;
 
+		// A reset/wrap makes the old queued timestamp incomparable. Do not let
+		// unsigned subtraction manufacture a very long or accidental retry delay.
+		state.queuedFrame = 100;
+		state.currentFrame = 1;
+		state.delayFrames = 300;
+		state.bypassMultiFrameDelay = false;
+		if (ShouldDeferRelatchForRetryPacing(state))
+			return false;
+
 		state.queuedFrame = 0;
 		state.currentFrame = 0;
 		return !ShouldDeferRelatchForRetryPacing(state);
@@ -2035,9 +2089,12 @@ namespace
 	static_assert(CoversLoadingPresentationReleaseAdmission());
 	static_assert(CoversStabilizerDestinationSyncReadiness());
 	static_assert(CoversBufferedDoorRequestCoalescing());
+	static_assert(CoversPhysicalRelatchFrameAdmission());
+	static_assert(CoversConsumedEmergencyRecoveryAdmission());
 	static_assert(CoversLifecycleMutationAdmission());
 	static_assert(CoversDispatchAdmission());
 	static_assert(CoversNativeRestorePresentationAdmission());
+	static_assert(CoversInactiveContractNativeReleaseAdmission());
 	static_assert(CoversBoundedNativeRestorePresentationRecovery());
 	static_assert(CoversVendorResourcePredicates());
 	static_assert(CoversStereoRelatchAdmission());

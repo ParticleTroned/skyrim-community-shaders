@@ -47402,9 +47402,9 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 	const VRRenderScaleDesiredProfile& a_request)
 {
 	const auto profile = BuildVRRenderScaleRequestProfile(*this, a_request);
-	const std::scoped_lock queueLock(
+	std::unique_lock queueLock(
 		perfModeRenderTargetRecreateQueueMutex);
-	const std::scoped_lock requestLock(
+	std::unique_lock requestLock(
 		pendingVRRenderScaleRequestMutex);
 	if (!pendingVRRenderScaleRequest ||
 		pendingVRRenderScaleRequest->requestID != a_request.requestID ||
@@ -47493,6 +47493,11 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 		metrics.peakRetiredSets = vrRenderScaleTransitionController.retirement.pendingSets;
 		revision = ++vrRenderScaleTransitionController.revision;
 	}
+	// The exact-owner transaction ends with coherent controller publication.
+	// Diagnostics recursively snapshot the pending request and vendor gate, so
+	// they must run after both non-recursive ownership locks have been released.
+	requestLock.unlock();
+	queueLock.unlock();
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
 			"[VRRenderScale][Controller] revision={} {} -> Requested request={} epoch={} method={} quality={} active={} frame={}",

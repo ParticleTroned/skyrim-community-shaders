@@ -6624,13 +6624,21 @@ namespace
 					a_depthOffsetX == a_eyeIndex * renderEyeWidth));
 		if (!exactDepthLayout)
 			return std::nullopt;
+		// Preserve the original render-scale handoff rule while extending the same
+		// proof type to PR12's fixed-vendor path. Stabilizing owns the mask deferral,
+		// so its exact submit-stage repair is the evidence that may retire it.
+		const bool exactStabilizingRenderScaleContract =
+			activeRenderScaleContract &&
+			transition.state ==
+				Upscaling::VRRenderScaleTransitionState::Stabilizing;
 
 		return VRSubmitStageMaskRepairProof{
 			transition.state,
 			runtimeMethod,
 			activeRenderScaleContract ? boot.generation : 0u,
 			colorIdentity,
-			fixedVendorSubmitStage && stabilizingInactiveContract
+			exactStabilizingRenderScaleContract ||
+				(fixedVendorSubmitStage && stabilizingInactiveContract)
 		};
 	}
 
@@ -42310,8 +42318,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 				vrPostLoadCompositorHoldFixedRepair;
 		const bool repairProven =
 			expectedNativePresentation || consumeRepairEvidence(
-								  repairEvidence,
-								  expectedGeneration);
+											  repairEvidence,
+											  expectedGeneration);
 		const uint32_t sourceFormat = static_cast<uint32_t>(sourceDesc.Format);
 		const uint32_t sourceColorSpace =
 			static_cast<uint32_t>(a_texture->eColorSpace);
@@ -42325,9 +42333,9 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 		const bool pathReleaseSafetyReady =
 			expectedSubmitStage ?
 				submitStageReleaseSafetyReady :
-				inactiveContractNativeCandidate ?
-					releaseLifecycleReady :
-					ordinaryReleaseSafetyReady;
+			inactiveContractNativeCandidate ?
+				releaseLifecycleReady :
+				ordinaryReleaseSafetyReady;
 		const bool safeCandidate =
 			pathReleaseSafetyReady &&
 			expectedMethod == runtimeMethod &&
@@ -42337,8 +42345,8 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 					(candidateGeneration == expectedGeneration &&
 						submitStageVendorCandidate) :
 					(expectedNativePresentation ?
-						(nativeCandidate || inactiveContractNativeCandidate) :
-						fixedCandidate));
+							(nativeCandidate || inactiveContractNativeCandidate) :
+							fixedCandidate));
 		if (safeCandidate) {
 			if (TryRecordFrameEyeMaskState(
 					vrPostLoadCompositorHoldReleaseAttemptEyeMaskState,

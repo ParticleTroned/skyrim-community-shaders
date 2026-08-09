@@ -2232,6 +2232,11 @@ public:
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateEpoch{ 0 };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateRecoveryEpoch{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
+	// Emergency recovery may bypass ordinary multi-frame backoff, but it may not
+	// consume and mutate the same physical transition more than once per game
+	// frame. This prevents re-entrant Configure/Draw service calls from turning a
+	// retry into unbounded same-frame provider teardown/recreation.
+	std::atomic<uint32_t> vrRenderScaleLastPhysicalAttemptFrame{ 0 };
 	// Non-zero from immediately before the native target creator can mutate
 	// physical resources until the replacement physical contract is coherently
 	// published. It records unresolved physical mutation, not the longer
@@ -2713,7 +2718,7 @@ private:
 		static_cast<uint32_t>(UpscaleMethod::kNONE)
 	};
 	std::atomic<uint32_t> vrPostLoadCompositorHoldReleaseGeneration{ 0 };
-	std::atomic_bool vrPostLoadCompositorHoldReleaseRenderScale{ false };
+	std::atomic_bool vrPostLoadCompositorHoldReleaseSubmitStage{ false };
 	// Exact mutation owner captured when a coherent stereo release is scheduled.
 	// An older accepted pair must never clear a newer physical mutation chain.
 	std::atomic<uint64_t> vrPostLoadCompositorHoldReleaseMutationEpoch{ 0 };
@@ -2721,7 +2726,7 @@ private:
 		static_cast<uint32_t>(UpscaleMethod::kNONE)
 	};
 	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateGeneration{ 0 };
-	std::atomic_bool vrPostLoadCompositorHoldCandidateRenderScale{ false };
+	std::atomic_bool vrPostLoadCompositorHoldCandidateSubmitStage{ false };
 	std::array<std::atomic<uintptr_t>, 2> vrPostLoadCompositorHoldCandidateTextureIdentity{};
 	std::atomic<uint32_t> vrPostLoadCompositorHoldCandidateTextureFormat{
 		static_cast<uint32_t>(DXGI_FORMAT_UNKNOWN)
@@ -2763,7 +2768,6 @@ private:
 	winrt::com_ptr<ID3D11Texture2D> vrPostLoadCompositorKeepaliveTexture;
 	winrt::com_ptr<ID3D11Device> vrPostLoadCompositorKeepaliveDevice;
 	std::atomic<bool> vrPostLoadRecoveryLivenessCueActive{ false };
-#if defined(_DEBUG)
 	std::atomic<uint64_t> vrPostLoadRecoveryLivenessCueActivationCount{ 0 };
 	std::atomic<uint64_t> vrPostLoadRecoveryLivenessCueLastActivationTickMs{ 0 };
 	std::atomic<uint64_t> vrPostLoadRecoveryLivenessCueLastActivationHoldEpoch{ 0 };
@@ -2775,7 +2779,6 @@ private:
 	uint64_t vrPostLoadRecoveryLivenessCueCachedCycleToken = 0;
 	bool vrPostLoadRecoveryLivenessCueCachedActive = false;
 	float vrPostLoadRecoveryLivenessCueCachedLinearIntensity = 0.0f;
-#endif
 	mutable std::mutex vrPostLoadCompositorHoldMutex;
 	std::mutex vrPostLoadCompositorRepairMutex;
 

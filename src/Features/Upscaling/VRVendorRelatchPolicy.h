@@ -22,6 +22,23 @@ namespace VRVendorRelatchPolicy
 		return a_targetRenderScaleActive ? 4u : 8u;
 	}
 
+	[[nodiscard]] constexpr bool CanAttemptPhysicalRelatchThisFrame(
+		std::uint32_t a_lastAttemptFrame,
+		std::uint64_t a_candidateEpoch,
+		std::uint32_t a_currentFrame) noexcept
+	{
+		return a_candidateEpoch != 0 &&
+		       a_currentFrame != 0 &&
+		       a_lastAttemptFrame != a_currentFrame;
+	}
+
+	[[nodiscard]] constexpr bool CanServiceQueuedPostMutationRecovery(
+		bool a_emergencyRecoveryRequested,
+		bool a_emergencyAttemptConsumed) noexcept
+	{
+		return !a_emergencyRecoveryRequested || !a_emergencyAttemptConsumed;
+	}
+
 	enum class WorkGateSource : WorkGateMask
 	{
 		None = 0,
@@ -459,6 +476,26 @@ namespace VRVendorRelatchPolicy
 				   !a_admission.targetUsesVendorEvaluation);
 	}
 
+	struct InactiveContractNativeReleaseAdmission
+	{
+		bool controllerOwnsPublishedInactiveContract = false;
+		bool exactNativePresentationObservation = false;
+		bool releaseLifecycleReady = false;
+	};
+
+	// An inactive Render Scale contract still owns a concrete full-resolution
+	// presentation. Admit that exact presentation to the compositor handoff even
+	// though it is neither an active Render Scale vendor output nor an unrelated
+	// fixed/native runtime. Without this fourth class, the hold and native
+	// stabilization guard wait on one another indefinitely.
+	[[nodiscard]] constexpr bool CanReleasePublishedInactiveContract(
+		const InactiveContractNativeReleaseAdmission& a_admission) noexcept
+	{
+		return a_admission.controllerOwnsPublishedInactiveContract &&
+		       a_admission.exactNativePresentationObservation &&
+		       a_admission.releaseLifecycleReady;
+	}
+
 	inline constexpr std::uint32_t
 		kNativeRestoreMaximumPhysicalRecoveryAttempts = 1u;
 	inline constexpr std::uint32_t
@@ -734,8 +771,12 @@ namespace VRVendorRelatchPolicy
 	{
 		if (a_state.queuedFrame == 0)
 			return false;
-		if (a_state.currentFrame == a_state.queuedFrame)
-			return true;
+		if (a_state.currentFrame <= a_state.queuedFrame) {
+			// Equality is the hard same-frame floor. A lower current frame means
+			// Skyrim reset or wrapped its frame counter after this tuple was queued;
+			// the old timestamp cannot impose a meaningful multi-frame backoff.
+			return a_state.currentFrame == a_state.queuedFrame;
+		}
 		return !a_state.bypassMultiFrameDelay &&
 		       a_state.delayFrames != 0 &&
 		       a_state.currentFrame - a_state.queuedFrame <

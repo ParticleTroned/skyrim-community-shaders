@@ -308,13 +308,13 @@
         "CharacterLightingStrength": 1.0,
         "EnableCharacterLighting": 0,
         "EnableSubsurfaceScattering": true,
-        "HumanFemaleSSSBaseSaturation": 0.65,
+        "HumanFemaleSSSBaseSaturation": 1.0,
         "HumanFemaleSSSBrightness": 0.6,
-        "HumanFemaleSSSIntensity": 1.0,
+        "HumanFemaleSSSIntensity": 0.9,
         "HumanFemaleSSSSaturation": 1.0,
-        "HumanMaleSSSBaseSaturation": 0.6,
-        "HumanMaleSSSBrightness": 0.6,
-        "HumanMaleSSSIntensity": 1.0,
+        "HumanMaleSSSBaseSaturation": 1.0,
+        "HumanMaleSSSBrightness": 0.65,
+        "HumanMaleSSSIntensity": 0.9,
         "HumanMaleSSSSaturation": 1.0,
         "HumanProfile": {
             "BlurRadius": 0.5,
@@ -333,7 +333,7 @@
         "TrackRagdolls": true
     },
     "Grass Lighting": {
-        "BasicGrassBrightness": 0.7,
+        "BasicGrassBrightness": 0.75,
         "ComplexGrassThreshold": 0.029999999329447746,
         "EnableWrappedLighting": 0,
         "Enabled": 1,

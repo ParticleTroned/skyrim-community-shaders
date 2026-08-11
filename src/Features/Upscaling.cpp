@@ -116,6 +116,31 @@ uint32_t Upscaling::ScaleVRRenderDimension(uint32_t a_dimension, float a_scale)
 
 namespace
 {
+	std::optional<float2> GetVREvenStereoRenderSize(
+		const float2& a_displaySize,
+		float a_resolutionScale)
+	{
+		if (!std::isfinite(a_displaySize.x) ||
+			!std::isfinite(a_displaySize.y) ||
+			a_displaySize.x < 4.0f ||
+			a_displaySize.y < 2.0f ||
+			!std::isfinite(a_resolutionScale)) {
+			return std::nullopt;
+		}
+
+		const uint32_t displayWidth = static_cast<uint32_t>(std::floor(a_displaySize.x));
+		const uint32_t displayHeight = static_cast<uint32_t>(std::floor(a_displaySize.y));
+		if (displayWidth < 4u || displayHeight < 2u || (displayWidth & 1u) != 0u)
+			return std::nullopt;
+
+		return float2{
+			static_cast<float>(
+				Upscaling::ScaleVRRenderDimension(displayWidth / 2u, a_resolutionScale) * 2u),
+			static_cast<float>(
+				Upscaling::ScaleVRRenderDimension(displayHeight, a_resolutionScale))
+		};
+	}
+
 	constexpr float kDLSSRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
 	constexpr float kDLSSLumaSharpnessOverdrive = 2.5f;
 
@@ -882,19 +907,30 @@ namespace
 		}
 	}
 
-	bool IsVRRenderScaleDesiredProfileActive(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
+	bool IsVRRenderScaleDesiredProfileActive(
+		const Upscaling::VRRenderScaleDesiredProfile& a_desiredProfile,
+		Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		if (!globals::game::isVR)
 			return false;
 
-		const auto desiredProfile = a_upscaling.GetPendingVRRenderScaleDesiredProfile();
-		const auto desiredMethod = desiredProfile.HasPendingSettings() ? desiredProfile.method : a_upscaleMethod;
+		const auto desiredMethod =
+			a_desiredProfile.HasPendingSettings() ?
+				a_desiredProfile.method :
+				a_upscaleMethod;
 		if (!IsRenderScaleMethodEligible(desiredMethod))
 			return false;
 
-		return desiredProfile.renderScaleModeEnabled &&
-		       desiredProfile.perfModeEnabled &&
-		       IsRenderScaleQualityMode(desiredProfile.qualityMode);
+		return a_desiredProfile.renderScaleModeEnabled &&
+		       a_desiredProfile.perfModeEnabled &&
+		       IsRenderScaleQualityMode(a_desiredProfile.qualityMode);
+	}
+
+	bool IsVRRenderScaleDesiredProfileActive(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		return IsVRRenderScaleDesiredProfileActive(
+			a_upscaling.GetPendingVRRenderScaleDesiredProfile(),
+			a_upscaleMethod);
 	}
 
 	bool IsPendingVRRenderScaleActivationTarget(const Upscaling& a_upscaling)
@@ -902,6 +938,51 @@ namespace
 		return IsVRRenderScaleDesiredProfileActive(
 			a_upscaling,
 			a_upscaling.GetConfiguredUpscaleMethodForTransition());
+	}
+
+	bool IsVRStartupRenderScaleBootSizingContractExact(
+		const Upscaling& a_upscaling,
+		const Upscaling::VRRenderScaleDesiredProfile& a_desiredProfile)
+	{
+		if (!IsVRRenderScaleDesiredProfileActive(
+				a_desiredProfile,
+				a_desiredProfile.method)) {
+			return false;
+		}
+
+		const uint32_t desiredQualityMode = std::min<uint32_t>(
+			a_desiredProfile.qualityMode,
+			Upscaling::kQualityModeMaxIndex);
+		const auto& boot = a_upscaling.perfMode.GetBootSnapshot();
+		if (!boot.valid ||
+			!boot.active ||
+			!boot.renderScaleEnabled ||
+			!boot.perfModeEnabled ||
+			boot.generation == 0 ||
+			boot.method != a_desiredProfile.method ||
+			std::min<uint32_t>(boot.qualityMode, Upscaling::kQualityModeMaxIndex) !=
+				desiredQualityMode ||
+			(boot.method == Upscaling::UpscaleMethod::kDLSS &&
+				Upscaling::ClampDLSSPresetUInt(boot.dlssPreset) !=
+					Upscaling::ClampDLSSPresetUInt(a_desiredProfile.dlssPreset))) {
+			return false;
+		}
+
+		const uint32_t displayEyeWidth = a_upscaling.perfMode.trueHMDEyeWidth;
+		const uint32_t displayEyeHeight = a_upscaling.perfMode.trueHMDEyeHeight;
+		if (displayEyeWidth == 0 || displayEyeHeight == 0)
+			return false;
+
+		const float renderScale = Upscaling::GetQualityModeResolutionScale(
+			desiredQualityMode);
+		return std::isfinite(renderScale) &&
+		       renderScale > 0.0f &&
+		       boot.displayEyeWidth == displayEyeWidth &&
+		       boot.displayEyeHeight == displayEyeHeight &&
+		       boot.renderEyeWidth ==
+		           Upscaling::ScaleVRRenderDimension(displayEyeWidth, renderScale) &&
+		       boot.renderEyeHeight ==
+		           Upscaling::ScaleVRRenderDimension(displayEyeHeight, renderScale);
 	}
 
 	bool UsesVRRenderScalePostLoadSettle(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod, Upscaling::VRUpscalingTransitionOrigin a_origin)
@@ -18502,9 +18583,18 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 	if (IsVRStartupMainMenuRenderStateActive())
 		return UpscaleMethod::kNONE;
 
+	// The direct handoff suppresses only the transient full-resolution vendor
+	// contract. Once OpenVR has published the exact reduced boot sizing contract,
+	// that contract must be allowed to create its vendor resources; otherwise
+	// physical convergence waits forever on a runtime that kNONE cannot create.
 	const auto& boot = perfMode.GetBootSnapshot();
 	if (IsVRRenderScaleModeLatched() && IsVendorUpscalingMethod(boot.method))
 		return boot.method;
+	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire) &&
+		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
+		return UpscaleMethod::kNONE;
+	}
+
 	if (const auto stableProfile = GetStableVRRenderScaleRuntimeProfile()) {
 		return stableProfile->method;
 	}
@@ -18521,15 +18611,87 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 	const bool completedWorldFrame =
 		state &&
 		state->lastCompletedWorldRenderFrame != std::numeric_limits<uint32_t>::max();
+	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire)) {
+		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
+		const bool targetActive = IsVRRenderScaleDesiredProfileActive(
+			desiredProfile,
+			GetConfiguredUpscaleMethodForTransition());
+		const bool bootSizingContractExact =
+			targetActive &&
+			IsVRStartupRenderScaleBootSizingContractExact(*this, desiredProfile);
+		const bool physicalContractConverged =
+			bootSizingContractExact &&
+			IsVRRenderScaleDesiredProfilePhysicallyConverged(desiredProfile);
+		const auto handoffAction =
+			VRVendorRelatchPolicy::SelectStartupRenderScaleDirectHandoffAction({
+				.active = true,
+				.targetActive = targetActive,
+				.bootSizingContractExact = bootSizingContractExact,
+				.physicalContractConverged = physicalContractConverged,
+			});
+		switch (handoffAction) {
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract:
+			if (!vrStartupRenderScaleBootSizingRecognized.exchange(
+					true,
+					std::memory_order_acq_rel)) {
+				logger::info(
+					"[Upscaling] Recognized the startup Render Scale boot sizing contract; enabled its vendor runtime while retaining direct-handoff ownership until the physical contract converges.");
+			}
+			break;
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::Complete:
+			if (vrStartupRenderScaleDirectHandoffActive.exchange(
+					false,
+					std::memory_order_acq_rel)) {
+				vrStartupRenderScaleBootSizingRecognized.store(
+					false,
+					std::memory_order_release);
+				logger::info(
+					"[Upscaling] Observed the initial physical Render Scale contract; completed startup direct handoff while the compositor hold continues through coherent stereo presentation.");
+			}
+			break;
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::Cancel:
+			if (vrStartupRenderScaleDirectHandoffActive.exchange(
+					false,
+					std::memory_order_acq_rel)) {
+				vrStartupRenderScaleBootSizingRecognized.store(
+					false,
+					std::memory_order_release);
+				InvalidateFrameScopedUpscalingState();
+				RequestHistoryReset();
+				logger::info(
+					"[Upscaling] Cancelled the startup Render Scale direct handoff because the requested profile is no longer physically active.");
+			}
+			break;
+		default:
+			break;
+		}
+	}
 	if (vrStartupMainMenuRenderStateActive.load(std::memory_order_acquire)) {
 		if (!completedWorldFrame)
 			return;
 
+		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
+		const bool directRenderScaleHandoff =
+			IsVRRenderScaleDesiredProfileActive(
+				desiredProfile,
+				GetConfiguredUpscaleMethodForTransition()) &&
+			!IsVRRenderScaleDesiredProfilePhysicallyConverged(desiredProfile);
+		vrStartupRenderScaleDirectHandoffActive.store(
+			directRenderScaleHandoff,
+			std::memory_order_release);
+		vrStartupRenderScaleBootSizingRecognized.store(
+			false,
+			std::memory_order_release);
 		vrStartupMainMenuRenderStateActive.store(false, std::memory_order_release);
 		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
-		logger::info(
-			"[Upscaling] Released the startup MainMenu render state after the first completed world frame; configured upscaling may now activate.");
+		if (directRenderScaleHandoff) {
+			logger::info(
+				"[Upscaling] Released the startup MainMenu render state after the first completed world frame; native presentation remains authoritative until the requested physical Render Scale contract commits.");
+		} else {
+			logger::info(
+				"[Upscaling] Released the startup MainMenu render state after the first completed world frame; configured upscaling may now activate.");
+		}
 		return;
 	}
 
@@ -18948,6 +19110,13 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 	auto resolveVendorDynamicRenderSize = [&](const float2& a_displaySize) {
 		if (a_displaySize.x <= 0.0f || a_displaySize.y <= 0.0f)
 			return a_displaySize;
+		if (globals::game::isVR) {
+			if (const auto vrRenderSize = GetVREvenStereoRenderSize(
+					a_displaySize,
+					GetQualityModeResolutionScale(plan.qualityMode))) {
+				return *vrRenderSize;
+			}
+		}
 
 		auto resolveScale = [](float a_scale) {
 			return std::isfinite(a_scale) && a_scale > 0.0f ? std::clamp(a_scale, 0.0f, 1.0f) : 1.0f;
@@ -20369,6 +20538,21 @@ bool Upscaling::IsVRRenderScalePhysicalContractConverged(
 			   globals::state,
 			   engineSize,
 			   displaySize);
+}
+
+bool Upscaling::IsVRRenderScaleDesiredProfilePhysicallyConverged(
+	const VRRenderScaleDesiredProfile& a_desiredProfile) const
+{
+	if (!IsVRRenderScalePhysicalContractConverged(
+			a_desiredProfile.method,
+			a_desiredProfile.qualityMode,
+			a_desiredProfile.fsr4RuntimeEnabled)) {
+		return false;
+	}
+
+	const auto& boot = perfMode.GetBootSnapshot();
+	return a_desiredProfile.method != UpscaleMethod::kDLSS ||
+	       boot.dlssPreset == ClampDLSSPresetUInt(a_desiredProfile.dlssPreset);
 }
 
 namespace
@@ -26147,6 +26331,22 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			kVRUpscalingTransitionApplyDelayFrames,
 			false);
 		return false;
+	}
+	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire)) {
+		const auto startupDesiredProfile = GetPendingVRRenderScaleDesiredProfile();
+		const bool startupRenderScaleContractConverged =
+			relatchRenderScaleActive &&
+			IsVRRenderScaleDesiredProfilePhysicallyConverged(startupDesiredProfile);
+		if (startupRenderScaleContractConverged &&
+			vrStartupRenderScaleDirectHandoffActive.exchange(
+				false,
+				std::memory_order_acq_rel)) {
+			vrStartupRenderScaleBootSizingRecognized.store(
+				false,
+				std::memory_order_release);
+			logger::info(
+				"[Upscaling] Published the initial physical Render Scale contract; released startup vendor suppression while the compositor hold continues through coherent stereo presentation.");
+		}
 	}
 	const auto mutationAtPublication =
 		GetVRRenderScalePhysicalMutationSnapshot();
@@ -39209,6 +39409,16 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 		auto renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
 		auto renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
+		if (globals::game::isVR) {
+			// Match the physical Render Scale contract: VR render targets are sized
+			// per eye and constrained to even dimensions before the stereo width is
+			// recombined. Scaling the combined width directly can otherwise differ
+			// by two pixels for fractional quality ratios.
+			if (const auto vrRenderSize = GetVREvenStereoRenderSize(screenSize, resolutionScaleBase)) {
+				renderWidth = static_cast<int>(vrRenderSize->x);
+				renderHeight = static_cast<int>(vrRenderSize->y);
+			}
+		}
 
 		resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
 		resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);
@@ -44588,7 +44798,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				sourceRegion.height,
 				sourceEyeWidthIn,
 				sourceEyeHeightIn);
-			ServiceSubmitStageBoundsFallbackWatchdog(!displaySizedSubmitDuringPressure);
+			ServiceSubmitStageBoundsFallbackWatchdog(
+				VRVendorRelatchPolicy::ShouldForceSubmitBoundsRecovery({
+					.displaySizedSubmitDuringPressure = displaySizedSubmitDuringPressure,
+					.startupDirectHandoffActive =
+						vrStartupRenderScaleDirectHandoffActive.load(
+							std::memory_order_acquire),
+				}));
 		} else {
 			ClearSubmitStageBoundsFallbackWatchdog();
 		}

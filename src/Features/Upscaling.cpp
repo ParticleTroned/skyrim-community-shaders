@@ -18619,19 +18619,51 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 		const bool bootSizingContractExact =
 			targetActive &&
 			IsVRStartupRenderScaleBootSizingContractExact(*this, desiredProfile);
-		if ((!targetActive || bootSizingContractExact) &&
-			vrStartupRenderScaleDirectHandoffActive.exchange(
-				false,
-				std::memory_order_acq_rel)) {
-			if (bootSizingContractExact) {
+		const bool physicalContractConverged =
+			bootSizingContractExact &&
+			IsVRRenderScaleDesiredProfilePhysicallyConverged(desiredProfile);
+		const auto handoffAction =
+			VRVendorRelatchPolicy::SelectStartupRenderScaleDirectHandoffAction({
+				.active = true,
+				.targetActive = targetActive,
+				.bootSizingContractExact = bootSizingContractExact,
+				.physicalContractConverged = physicalContractConverged,
+			});
+		switch (handoffAction) {
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract:
+			if (!vrStartupRenderScaleBootSizingRecognized.exchange(
+					true,
+					std::memory_order_acq_rel)) {
 				logger::info(
-					"[Upscaling] Recognized the startup Render Scale boot sizing contract; enabled its vendor runtime while the compositor hold waits for coherent stereo presentation.");
-			} else {
+					"[Upscaling] Recognized the startup Render Scale boot sizing contract; enabled its vendor runtime while retaining direct-handoff ownership until the physical contract converges.");
+			}
+			break;
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::Complete:
+			if (vrStartupRenderScaleDirectHandoffActive.exchange(
+					false,
+					std::memory_order_acq_rel)) {
+				vrStartupRenderScaleBootSizingRecognized.store(
+					false,
+					std::memory_order_release);
+				logger::info(
+					"[Upscaling] Observed the initial physical Render Scale contract; completed startup direct handoff while the compositor hold continues through coherent stereo presentation.");
+			}
+			break;
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::Cancel:
+			if (vrStartupRenderScaleDirectHandoffActive.exchange(
+					false,
+					std::memory_order_acq_rel)) {
+				vrStartupRenderScaleBootSizingRecognized.store(
+					false,
+					std::memory_order_release);
 				InvalidateFrameScopedUpscalingState();
 				RequestHistoryReset();
 				logger::info(
 					"[Upscaling] Cancelled the startup Render Scale direct handoff because the requested profile is no longer physically active.");
 			}
+			break;
+		default:
+			break;
 		}
 	}
 	if (vrStartupMainMenuRenderStateActive.load(std::memory_order_acquire)) {
@@ -18646,6 +18678,9 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 			!IsVRRenderScaleDesiredProfilePhysicallyConverged(desiredProfile);
 		vrStartupRenderScaleDirectHandoffActive.store(
 			directRenderScaleHandoff,
+			std::memory_order_release);
+		vrStartupRenderScaleBootSizingRecognized.store(
+			false,
 			std::memory_order_release);
 		vrStartupMainMenuRenderStateActive.store(false, std::memory_order_release);
 		InvalidateFrameScopedUpscalingState();
@@ -26306,6 +26341,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vrStartupRenderScaleDirectHandoffActive.exchange(
 				false,
 				std::memory_order_acq_rel)) {
+			vrStartupRenderScaleBootSizingRecognized.store(
+				false,
+				std::memory_order_release);
 			logger::info(
 				"[Upscaling] Published the initial physical Render Scale contract; released startup vendor suppression while the compositor hold continues through coherent stereo presentation.");
 		}
@@ -44760,7 +44798,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				sourceRegion.height,
 				sourceEyeWidthIn,
 				sourceEyeHeightIn);
-			ServiceSubmitStageBoundsFallbackWatchdog(!displaySizedSubmitDuringPressure);
+			ServiceSubmitStageBoundsFallbackWatchdog(
+				VRVendorRelatchPolicy::ShouldForceSubmitBoundsRecovery({
+					.displaySizedSubmitDuringPressure = displaySizedSubmitDuringPressure,
+					.startupDirectHandoffActive =
+						vrStartupRenderScaleDirectHandoffActive.load(
+							std::memory_order_acquire),
+				}));
 		} else {
 			ClearSubmitStageBoundsFallbackWatchdog();
 		}

@@ -2205,6 +2205,7 @@ public:
 	std::atomic<bool> vrStartupMainMenuRenderStateDefined{ false };
 	std::atomic<bool> vrStartupMainMenuRenderStateActive{ false };
 	std::atomic<bool> vrStartupRenderScaleDirectHandoffActive{ false };
+	std::atomic<bool> vrStartupRenderScaleBootSizingRecognized{ false };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };

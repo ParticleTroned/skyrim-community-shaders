@@ -252,6 +252,62 @@ namespace VRVendorRelatchPolicy
 		       !a_state.alreadyDefined;
 	}
 
+	// Boot sizing establishes the logical vendor contract and permits resource
+	// creation. The handoff still owns serialization until the corresponding
+	// physical targets converge, so a startup bridge frame cannot release it.
+	enum class StartupRenderScaleDirectHandoffAction : std::uint8_t
+	{
+		Inactive,
+		WaitForBootSizing,
+		WaitForPhysicalContract,
+		Complete,
+		Cancel,
+	};
+
+	struct StartupRenderScaleDirectHandoff
+	{
+		bool active = false;
+		bool targetActive = false;
+		bool bootSizingContractExact = false;
+		bool physicalContractConverged = false;
+	};
+
+	// Select the next handoff action without coupling the lifecycle policy to
+	// renderer state, logging, or atomic publication details.
+	[[nodiscard]] constexpr StartupRenderScaleDirectHandoffAction
+	SelectStartupRenderScaleDirectHandoffAction(
+		const StartupRenderScaleDirectHandoff& a_state) noexcept
+	{
+		if (!a_state.active)
+			return StartupRenderScaleDirectHandoffAction::Inactive;
+		if (!a_state.targetActive)
+			return StartupRenderScaleDirectHandoffAction::Cancel;
+		if (!a_state.bootSizingContractExact)
+			return StartupRenderScaleDirectHandoffAction::WaitForBootSizing;
+		if (!a_state.physicalContractConverged)
+			return StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract;
+		return StartupRenderScaleDirectHandoffAction::Complete;
+	}
+
+	struct SubmitBoundsRecoveryAdmission
+	{
+		bool displaySizedSubmitDuringPressure = false;
+		bool startupDirectHandoffActive = false;
+	};
+
+	// Decide whether a display-sized submit is an immediate contract failure or
+	// remains eligible for the ordinary bounded fallback watchdog.
+	[[nodiscard]] constexpr bool ShouldForceSubmitBoundsRecovery(
+		const SubmitBoundsRecoveryAdmission& a_state) noexcept
+	{
+		// A direct startup handoff has already proven the requested boot tuple,
+		// but its creator may need a stereo cycle to publish the matching physical
+		// targets. Preserve the ordinary watchdog grace instead of turning that
+		// expected bridge frame into an immediate recovery allocation.
+		return !a_state.displaySizedSubmitDuringPressure &&
+		       !a_state.startupDirectHandoffActive;
+	}
+
 	struct RenderScaleRuntimeActivation
 	{
 		bool loaded = false;

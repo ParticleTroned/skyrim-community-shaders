@@ -166,6 +166,52 @@ namespace
 		return !ShouldDefineStartupMainMenuState(state);
 	}
 
+	constexpr bool CoversStartupRenderScaleDirectHandoff()
+	{
+		StartupRenderScaleDirectHandoff state{};
+		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
+			StartupRenderScaleDirectHandoffAction::Inactive) {
+			return false;
+		}
+
+		state.active = true;
+		state.targetActive = true;
+		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
+			StartupRenderScaleDirectHandoffAction::WaitForBootSizing) {
+			return false;
+		}
+
+		state.bootSizingContractExact = true;
+		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
+			StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract) {
+			return false;
+		}
+
+		state.physicalContractConverged = true;
+		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
+			StartupRenderScaleDirectHandoffAction::Complete) {
+			return false;
+		}
+
+		state.targetActive = false;
+		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
+			StartupRenderScaleDirectHandoffAction::Cancel) {
+			return false;
+		}
+
+		if (!ShouldForceSubmitBoundsRecovery({}) ||
+			ShouldForceSubmitBoundsRecovery({
+				.displaySizedSubmitDuringPressure = true,
+			}) ||
+			ShouldForceSubmitBoundsRecovery({
+				.startupDirectHandoffActive = true,
+			})) {
+			return false;
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversRenderScaleRuntimeActivation()
 	{
 		RenderScaleRuntimeActivation state{};
@@ -2194,6 +2240,7 @@ namespace
 	static_assert(CoversWorkGateState());
 	static_assert(CoversGameEntryConvergence());
 	static_assert(CoversStartupMainMenuStateDefinition());
+	static_assert(CoversStartupRenderScaleDirectHandoff());
 	static_assert(CoversRenderScaleRuntimeActivation());
 	static_assert(CoversRenderTransitionCoverAdmission());
 	static_assert(CoversLoadingFadeHoldAdmission());

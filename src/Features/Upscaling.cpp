@@ -907,19 +907,30 @@ namespace
 		}
 	}
 
-	bool IsVRRenderScaleDesiredProfileActive(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
+	bool IsVRRenderScaleDesiredProfileActive(
+		const Upscaling::VRRenderScaleDesiredProfile& a_desiredProfile,
+		Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		if (!globals::game::isVR)
 			return false;
 
-		const auto desiredProfile = a_upscaling.GetPendingVRRenderScaleDesiredProfile();
-		const auto desiredMethod = desiredProfile.HasPendingSettings() ? desiredProfile.method : a_upscaleMethod;
+		const auto desiredMethod =
+			a_desiredProfile.HasPendingSettings() ?
+				a_desiredProfile.method :
+				a_upscaleMethod;
 		if (!IsRenderScaleMethodEligible(desiredMethod))
 			return false;
 
-		return desiredProfile.renderScaleModeEnabled &&
-		       desiredProfile.perfModeEnabled &&
-		       IsRenderScaleQualityMode(desiredProfile.qualityMode);
+		return a_desiredProfile.renderScaleModeEnabled &&
+		       a_desiredProfile.perfModeEnabled &&
+		       IsRenderScaleQualityMode(a_desiredProfile.qualityMode);
+	}
+
+	bool IsVRRenderScaleDesiredProfileActive(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		return IsVRRenderScaleDesiredProfileActive(
+			a_upscaling.GetPendingVRRenderScaleDesiredProfile(),
+			a_upscaleMethod);
 	}
 
 	bool IsPendingVRRenderScaleActivationTarget(const Upscaling& a_upscaling)
@@ -18526,6 +18537,10 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 		return requestedMethod;
 	if (IsVRStartupMainMenuRenderStateActive())
 		return UpscaleMethod::kNONE;
+	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire) &&
+		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
+		return UpscaleMethod::kNONE;
+	}
 
 	const auto& boot = perfMode.GetBootSnapshot();
 	if (IsVRRenderScaleModeLatched() && IsVendorUpscalingMethod(boot.method))
@@ -18546,15 +18561,37 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 	const bool completedWorldFrame =
 		state &&
 		state->lastCompletedWorldRenderFrame != std::numeric_limits<uint32_t>::max();
+	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire) &&
+		!IsPendingVRRenderScaleActivationTarget(*this)) {
+		vrStartupRenderScaleDirectHandoffActive.store(false, std::memory_order_release);
+		InvalidateFrameScopedUpscalingState();
+		RequestHistoryReset();
+		logger::info(
+			"[Upscaling] Cancelled the startup Render Scale direct handoff because the requested profile is no longer physically active.");
+	}
 	if (vrStartupMainMenuRenderStateActive.load(std::memory_order_acquire)) {
 		if (!completedWorldFrame)
 			return;
 
+		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
+		const bool directRenderScaleHandoff =
+			IsVRRenderScaleDesiredProfileActive(
+				desiredProfile,
+				GetConfiguredUpscaleMethodForTransition()) &&
+			!IsVRRenderScaleDesiredProfilePhysicallyConverged(desiredProfile);
+		vrStartupRenderScaleDirectHandoffActive.store(
+			directRenderScaleHandoff,
+			std::memory_order_release);
 		vrStartupMainMenuRenderStateActive.store(false, std::memory_order_release);
 		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
-		logger::info(
-			"[Upscaling] Released the startup MainMenu render state after the first completed world frame; configured upscaling may now activate.");
+		if (directRenderScaleHandoff) {
+			logger::info(
+				"[Upscaling] Released the startup MainMenu render state after the first completed world frame; native presentation remains authoritative until the requested physical Render Scale contract commits.");
+		} else {
+			logger::info(
+				"[Upscaling] Released the startup MainMenu render state after the first completed world frame; configured upscaling may now activate.");
+		}
 		return;
 	}
 
@@ -20401,6 +20438,21 @@ bool Upscaling::IsVRRenderScalePhysicalContractConverged(
 			   globals::state,
 			   engineSize,
 			   displaySize);
+}
+
+bool Upscaling::IsVRRenderScaleDesiredProfilePhysicallyConverged(
+	const VRRenderScaleDesiredProfile& a_desiredProfile) const
+{
+	if (!IsVRRenderScalePhysicalContractConverged(
+			a_desiredProfile.method,
+			a_desiredProfile.qualityMode,
+			a_desiredProfile.fsr4RuntimeEnabled)) {
+		return false;
+	}
+
+	const auto& boot = perfMode.GetBootSnapshot();
+	return a_desiredProfile.method != UpscaleMethod::kDLSS ||
+	       boot.dlssPreset == ClampDLSSPresetUInt(a_desiredProfile.dlssPreset);
 }
 
 namespace
@@ -26179,6 +26231,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			kVRUpscalingTransitionApplyDelayFrames,
 			false);
 		return false;
+	}
+	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire)) {
+		const auto startupDesiredProfile = GetPendingVRRenderScaleDesiredProfile();
+		const bool startupRenderScaleContractConverged =
+			relatchRenderScaleActive &&
+			IsVRRenderScaleDesiredProfilePhysicallyConverged(startupDesiredProfile);
+		if (startupRenderScaleContractConverged &&
+			vrStartupRenderScaleDirectHandoffActive.exchange(
+				false,
+				std::memory_order_acq_rel)) {
+			logger::info(
+				"[Upscaling] Published the initial physical Render Scale contract; released the native startup presentation hold.");
+		}
 	}
 	const auto mutationAtPublication =
 		GetVRRenderScalePhysicalMutationSnapshot();

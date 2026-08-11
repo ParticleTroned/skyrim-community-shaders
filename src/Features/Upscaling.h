@@ -2204,6 +2204,7 @@ public:
 	std::atomic<bool> vrStartupMainMenuObserved{ false };
 	std::atomic<bool> vrStartupMainMenuRenderStateDefined{ false };
 	std::atomic<bool> vrStartupMainMenuRenderStateActive{ false };
+	std::atomic<bool> vrStartupRenderScaleDirectHandoffActive{ false };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
@@ -2938,6 +2939,8 @@ private:
 		UpscaleMethod a_upscaleMethod,
 		uint32_t a_qualityMode,
 		std::optional<bool> a_fsr4RuntimeEnable = std::nullopt) const;
+	bool IsVRRenderScaleDesiredProfilePhysicallyConverged(
+		const VRRenderScaleDesiredProfile& a_desiredProfile) const;
 	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
 	enum class HMDMaskClearPhase : uint8_t

@@ -14,6 +14,7 @@
 #include "../../Util.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
+#include "ReflexPolicy.h"
 
 namespace
 {
@@ -1681,11 +1682,15 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		return false;
 	updateOptionsCacheDiagnostics();
 
-	const bool emitPCLMarkers =
-		!submitStageVRDLSS &&
+	// These markers currently surround only a DLSS evaluation, not Skyrim's
+	// complete render submission. Keep marker-driven scheduling disabled on every
+	// runtime until CSX can publish an authoritative full-frame marker sequence.
+	const bool emitPCLMarkers = ReflexPolicy::ResolveCSXMarkerOptimization(
+		featureReflex,
+		featurePCL,
 		upscaling.settings.reflexUseMarkersToOptimize &&
-		reflexOptionsCache.useMarkersToOptimize &&
-		featurePCL;
+			reflexOptionsCache.useMarkersToOptimize)
+			.enabled;
 	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
 		if (!emitPCLMarkers || !slPCLSetMarker || !frameToken)
 			return;
@@ -2241,7 +2246,11 @@ void Streamline::UpdateReflex()
 	}
 	const float fpsLimit = std::clamp(reflexFPSLimit, 20.0f, 240.0f);
 	options.frameLimitUs = settings.reflexUseFPSLimit ? static_cast<uint32_t>(std::lround(1000000.0 / static_cast<double>(fpsLimit))) : 0u;
-	options.useMarkersToOptimize = settings.reflexUseMarkersToOptimize && featurePCL;
+	const auto markerOptimization = ReflexPolicy::ResolveCSXMarkerOptimization(
+		featureReflex,
+		featurePCL,
+		settings.reflexUseMarkersToOptimize);
+	options.useMarkersToOptimize = markerOptimization.enabled;
 
 	if (!reflexOptionsCache.valid ||
 		reflexOptionsCache.mode != options.mode ||
@@ -2254,6 +2263,13 @@ void Streamline::UpdateReflex()
 			reflexOptionsCache.mode = options.mode;
 			reflexOptionsCache.frameLimitUs = options.frameLimitUs;
 			reflexOptionsCache.useMarkersToOptimize = options.useMarkersToOptimize;
+			logger::info(
+				"[Streamline] Applied Reflex options: mode={} frameLimitUs={} markersRequested={} markersAvailable={} markersEffective={}",
+				magic_enum::enum_name(options.mode),
+				options.frameLimitUs,
+				settings.reflexUseMarkersToOptimize,
+				markerOptimization.available,
+				options.useMarkersToOptimize);
 		}
 	}
 

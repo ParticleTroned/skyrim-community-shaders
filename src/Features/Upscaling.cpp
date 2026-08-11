@@ -19,6 +19,7 @@
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
@@ -15316,7 +15317,10 @@ void Upscaling::DrawSettings()
 
 	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex")) {
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
-		const bool markerOptimizationAvailable = reflexAvailable && streamline.featurePCL;
+		const auto markerOptimization = ReflexPolicy::ResolveCSXMarkerOptimization(
+			reflexAvailable,
+			streamline.featurePCL,
+			settings.reflexUseMarkersToOptimize);
 		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
 		const char* toggleModes[] = { "Disabled", "Enabled" };
 
@@ -15354,23 +15358,26 @@ void Upscaling::DrawSettings()
 		if (!settings.reflexLowLatencyMode)
 			ImGui::EndDisabled();
 
-		if (!markerOptimizationAvailable)
+		if (!markerOptimization.available)
 			ImGui::BeginDisabled();
 
-		int markersToOptimize = settings.reflexUseMarkersToOptimize ? 1 : 0;
+		int markersToOptimize = markerOptimization.enabled ? 1 : 0;
 		ImGui::SliderInt("Use Markers To Optimize", &markersToOptimize, 0, 1, toggleModes[markersToOptimize]);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Uses frame markers for tighter Reflex timing.");
-			ImGui::TextUnformatted("Try On first; turn Off if it causes stutter on your setup.");
+			ImGui::TextUnformatted("Requires authoritative full-frame marker coverage.");
 		}
-		settings.reflexUseMarkersToOptimize = markersToOptimize > 0;
+		if (markerOptimization.available)
+			settings.reflexUseMarkersToOptimize = markersToOptimize > 0;
 
-		if (!markerOptimizationAvailable)
+		if (!markerOptimization.available)
 			ImGui::EndDisabled();
 
-		if (!markerOptimizationAvailable) {
-			ImGui::TextDisabled("Marker optimization unavailable (PCL not loaded).");
-		}
+		if (!markerOptimization.available)
+			ImGui::TextDisabled(
+				reflexAvailable && streamline.featurePCL ?
+					"Marker optimization is disabled until authoritative full-frame marker coverage is available." :
+					"Marker optimization unavailable (Reflex/PCL not loaded).");
 
 		int useFPSLimit = settings.reflexUseFPSLimit ? 1 : 0;
 		ImGui::SliderInt("Use FPS Limit", &useFPSLimit, 0, 1, toggleModes[useFPSLimit]);

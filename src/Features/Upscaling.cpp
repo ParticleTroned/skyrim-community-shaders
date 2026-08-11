@@ -940,6 +940,51 @@ namespace
 			a_upscaling.GetConfiguredUpscaleMethodForTransition());
 	}
 
+	bool IsVRStartupRenderScaleBootSizingContractExact(
+		const Upscaling& a_upscaling,
+		const Upscaling::VRRenderScaleDesiredProfile& a_desiredProfile)
+	{
+		if (!IsVRRenderScaleDesiredProfileActive(
+				a_desiredProfile,
+				a_desiredProfile.method)) {
+			return false;
+		}
+
+		const uint32_t desiredQualityMode = std::min<uint32_t>(
+			a_desiredProfile.qualityMode,
+			Upscaling::kQualityModeMaxIndex);
+		const auto& boot = a_upscaling.perfMode.GetBootSnapshot();
+		if (!boot.valid ||
+			!boot.active ||
+			!boot.renderScaleEnabled ||
+			!boot.perfModeEnabled ||
+			boot.generation == 0 ||
+			boot.method != a_desiredProfile.method ||
+			std::min<uint32_t>(boot.qualityMode, Upscaling::kQualityModeMaxIndex) !=
+				desiredQualityMode ||
+			(boot.method == Upscaling::UpscaleMethod::kDLSS &&
+				Upscaling::ClampDLSSPresetUInt(boot.dlssPreset) !=
+					Upscaling::ClampDLSSPresetUInt(a_desiredProfile.dlssPreset))) {
+			return false;
+		}
+
+		const uint32_t displayEyeWidth = a_upscaling.perfMode.trueHMDEyeWidth;
+		const uint32_t displayEyeHeight = a_upscaling.perfMode.trueHMDEyeHeight;
+		if (displayEyeWidth == 0 || displayEyeHeight == 0)
+			return false;
+
+		const float renderScale = Upscaling::GetQualityModeResolutionScale(
+			desiredQualityMode);
+		return std::isfinite(renderScale) &&
+		       renderScale > 0.0f &&
+		       boot.displayEyeWidth == displayEyeWidth &&
+		       boot.displayEyeHeight == displayEyeHeight &&
+		       boot.renderEyeWidth ==
+		           Upscaling::ScaleVRRenderDimension(displayEyeWidth, renderScale) &&
+		       boot.renderEyeHeight ==
+		           Upscaling::ScaleVRRenderDimension(displayEyeHeight, renderScale);
+	}
+
 	bool UsesVRRenderScalePostLoadSettle(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod, Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
 		if (IsExplicitVRUpscalingTransitionOrigin(a_origin))
@@ -18537,14 +18582,19 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 		return requestedMethod;
 	if (IsVRStartupMainMenuRenderStateActive())
 		return UpscaleMethod::kNONE;
+
+	// The direct handoff suppresses only the transient full-resolution vendor
+	// contract. Once OpenVR has published the exact reduced boot sizing contract,
+	// that contract must be allowed to create its vendor resources; otherwise
+	// physical convergence waits forever on a runtime that kNONE cannot create.
+	const auto& boot = perfMode.GetBootSnapshot();
+	if (IsVRRenderScaleModeLatched() && IsVendorUpscalingMethod(boot.method))
+		return boot.method;
 	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire) &&
 		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
 		return UpscaleMethod::kNONE;
 	}
 
-	const auto& boot = perfMode.GetBootSnapshot();
-	if (IsVRRenderScaleModeLatched() && IsVendorUpscalingMethod(boot.method))
-		return boot.method;
 	if (const auto stableProfile = GetStableVRRenderScaleRuntimeProfile()) {
 		return stableProfile->method;
 	}
@@ -18561,13 +18611,28 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 	const bool completedWorldFrame =
 		state &&
 		state->lastCompletedWorldRenderFrame != std::numeric_limits<uint32_t>::max();
-	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire) &&
-		!IsPendingVRRenderScaleActivationTarget(*this)) {
-		vrStartupRenderScaleDirectHandoffActive.store(false, std::memory_order_release);
-		InvalidateFrameScopedUpscalingState();
-		RequestHistoryReset();
-		logger::info(
-			"[Upscaling] Cancelled the startup Render Scale direct handoff because the requested profile is no longer physically active.");
+	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire)) {
+		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
+		const bool targetActive = IsVRRenderScaleDesiredProfileActive(
+			desiredProfile,
+			GetConfiguredUpscaleMethodForTransition());
+		const bool bootSizingContractExact =
+			targetActive &&
+			IsVRStartupRenderScaleBootSizingContractExact(*this, desiredProfile);
+		if ((!targetActive || bootSizingContractExact) &&
+			vrStartupRenderScaleDirectHandoffActive.exchange(
+				false,
+				std::memory_order_acq_rel)) {
+			if (bootSizingContractExact) {
+				logger::info(
+					"[Upscaling] Recognized the startup Render Scale boot sizing contract; enabled its vendor runtime while the compositor hold waits for coherent stereo presentation.");
+			} else {
+				InvalidateFrameScopedUpscalingState();
+				RequestHistoryReset();
+				logger::info(
+					"[Upscaling] Cancelled the startup Render Scale direct handoff because the requested profile is no longer physically active.");
+			}
+		}
 	}
 	if (vrStartupMainMenuRenderStateActive.load(std::memory_order_acquire)) {
 		if (!completedWorldFrame)
@@ -26242,7 +26307,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				false,
 				std::memory_order_acq_rel)) {
 			logger::info(
-				"[Upscaling] Published the initial physical Render Scale contract; released the native startup presentation hold.");
+				"[Upscaling] Published the initial physical Render Scale contract; released startup vendor suppression while the compositor hold continues through coherent stereo presentation.");
 		}
 	}
 	const auto mutationAtPublication =

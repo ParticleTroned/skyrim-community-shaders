@@ -1914,9 +1914,15 @@ PS_OUTPUT main(PS_INPUT input)
 		dirColor *= dirShadow;
 
 #					if defined(SKYLIGHTING)
-		ambientColor = Color::IrradianceToLinear(ambientColor);
-		ambientColor *= diffuseOutput.skylightingDiffuse;
-		ambientColor = Color::IrradianceToGamma(ambientColor);
+
+#						if defined(IBL) && !defined(INTERIOR)
+		if (!SharedData::iblSettings.EnableIBL)
+#						endif
+		{
+			ambientColor = Color::IrradianceToLinear(ambientColor);
+			ambientColor *= diffuseOutput.skylightingDiffuse;
+			ambientColor = Color::IrradianceToGamma(ambientColor);
+		}
 #					endif
 
 		diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;

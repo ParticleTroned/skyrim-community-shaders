@@ -801,8 +801,10 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
+			const auto saved = *a_properties;
 			globals::state->ModifyRenderTarget(a_target, *a_properties);
 			func(This, a_target, a_properties);
+			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -811,8 +813,10 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
+			const auto saved = *a_properties;
 			globals::state->ModifyRenderTarget(a_target, *a_properties);
 			func(This, a_target, a_properties);
+			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -821,8 +825,10 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
+			const auto saved = *a_properties;
 			globals::state->ModifyRenderTarget(a_target, *a_properties);
 			func(This, a_target, a_properties);
+			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -831,8 +837,10 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
+			const auto saved = *a_properties;
 			globals::state->ModifyRenderTarget(a_target, *a_properties);
 			func(This, a_target, a_properties);
+			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -841,10 +849,11 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			auto properties = *a_properties;
-			globals::state->ModifyRenderTarget(a_target, properties);
-			properties.copyable = true;
-			func(This, a_target, &properties);
+			const auto saved = *a_properties;
+			globals::state->ModifyRenderTarget(a_target, *a_properties);
+			a_properties->copyable = true;
+			func(This, a_target, a_properties);
+			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -853,10 +862,11 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			auto properties = *a_properties;
-			globals::state->ModifyRenderTarget(a_target, properties);
-			properties.copyable = true;
-			func(This, a_target, &properties);
+			const auto saved = *a_properties;
+			globals::state->ModifyRenderTarget(a_target, *a_properties);
+			a_properties->copyable = true;
+			func(This, a_target, a_properties);
+			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

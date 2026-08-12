@@ -42,6 +42,31 @@ The registered tool is `communityshaders.renderscale`:
     correlated pre-HAM, depth-topology, and post-HAM dispatch timeline;
 -   `probe_reset` clears a stopped probe.
 
+Some Codex sessions do not expose dynamically registered DevBench tools as
+first-class typed MCP calls even though DevBench has registered them and
+`inspect(kind=extensions)` lists them. In that case, use DevBench's typed
+`scenario` tool to dispatch the registered CS tool directly through MCP instead
+of falling back to HTTP. Example:
+
+```json
+{
+    "action": "run",
+    "steps": [
+        {
+            "tool": "communityshaders.renderscale",
+            "args": { "action": "probe_reset" }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": { "action": "probe_start" }
+        }
+    ]
+}
+```
+
+This is still direct DevBench MCP execution. Use REST only as a last-resort
+manual fallback when DevBench MCP itself is unavailable.
+
 Mutating actions fail closed outside Skyrim VR. `start` and `apply` require
 developer mode, and `apply` also requires an active capture so an automation
 client cannot make unrecorded benchmark changes. Quality modes are `0` for

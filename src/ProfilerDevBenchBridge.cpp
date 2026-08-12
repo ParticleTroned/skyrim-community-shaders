@@ -174,7 +174,7 @@ namespace
 		json result{
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.profiler" },
-			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} for profiler diagnostics.)" },
+			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. If the client has not exposed dynamic tools, dispatch it through devbench scenario with a tool step: {"tool":"communityshaders.profiler","args":{"action":"status"}}.)" },
 			{ "actions", json::array({ "status", "enable", "disable" }) },
 		};
 		const auto serialized = result.dump();

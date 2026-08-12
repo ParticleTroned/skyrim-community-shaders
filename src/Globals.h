@@ -49,6 +49,8 @@ class Profiler;
 struct TruePBR;
 class RenderDoc;
 class Menu;
+class WeatherManager;
+class SceneSettingsManager;
 
 namespace SIE
 {
@@ -208,6 +210,8 @@ namespace globals
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
 	extern Profiler* profiler;
+	extern WeatherManager* weatherManager;
+	extern SceneSettingsManager* sceneSettingsManager;
 
 	void OnInit();
 	void ReInit();

@@ -2371,7 +2371,7 @@ namespace Util
 			}
 
 			auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			auto* weatherManager = WeatherManager::GetSingleton();
+			auto* weatherManager = globals::weatherManager;
 
 			// Check if this feature has registered weather variables
 			std::string featureName = feature->GetShortName();
@@ -2444,7 +2444,7 @@ namespace Util
 
 				// Check if clicked
 				if (ImGui::IsItemClicked()) {
-					auto* weatherManager = WeatherManager::GetSingleton();
+					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
 
@@ -2457,7 +2457,7 @@ namespace Util
 				}
 
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					auto* weatherManager = WeatherManager::GetSingleton();
+					auto* weatherManager = globals::weatherManager;
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
 					RenderWeatherControlledTooltip(currentWeathers.currentWeather);
 				}
@@ -2486,7 +2486,7 @@ namespace Util
 				ImGui::PopStyleColor(2);
 
 				if (ImGui::IsItemClicked()) {
-					auto* weatherManager = WeatherManager::GetSingleton();
+					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
 
@@ -2499,7 +2499,7 @@ namespace Util
 				}
 
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					auto* weatherManager = WeatherManager::GetSingleton();
+					auto* weatherManager = globals::weatherManager;
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
 					RenderWeatherControlledTooltip(currentWeathers.currentWeather);
 				}
@@ -2526,7 +2526,7 @@ namespace Util
 				ImGui::PopStyleVar();
 
 				if (ImGui::IsItemClicked()) {
-					auto* weatherManager = WeatherManager::GetSingleton();
+					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
 
@@ -2539,7 +2539,7 @@ namespace Util
 				}
 
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					auto* weatherManager = WeatherManager::GetSingleton();
+					auto* weatherManager = globals::weatherManager;
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
 					RenderWeatherControlledTooltip(currentWeathers.currentWeather);
 				}
@@ -2566,7 +2566,7 @@ namespace Util
 				ImGui::PopStyleVar();
 
 				if (ImGui::IsItemClicked()) {
-					auto* weatherManager = WeatherManager::GetSingleton();
+					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
 
@@ -2579,7 +2579,7 @@ namespace Util
 				}
 
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					auto* weatherManager = WeatherManager::GetSingleton();
+					auto* weatherManager = globals::weatherManager;
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
 					RenderWeatherControlledTooltip(currentWeathers.currentWeather);
 				}

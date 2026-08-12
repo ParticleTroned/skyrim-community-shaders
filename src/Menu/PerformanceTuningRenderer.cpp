@@ -297,7 +297,7 @@ namespace
 		if (!feature)
 			return false;
 
-		auto* manager = SceneSettingsManager::GetSingleton();
+		auto* manager = globals::sceneSettingsManager;
 		const auto shortName = feature->GetShortName();
 		return manager &&
 		       manager->HasActiveSettingsForFeature(shortName) &&

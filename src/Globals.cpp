@@ -3,8 +3,8 @@
 #include "Deferred.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "Features/AdaptiveBrightness.h"
-#include "Features/CSUtility.h"
 #include "Features/CSEditor.h"
+#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -44,10 +44,12 @@
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
 #include "Profiler.h"
+#include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
+#include "WeatherManager.h"
 
 namespace globals
 {
@@ -167,6 +169,8 @@ namespace globals
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
+	WeatherManager* weatherManager = nullptr;
+	SceneSettingsManager* sceneSettingsManager = nullptr;
 	static Profiler profilerInstance;
 	Profiler* profiler = &profilerInstance;
 
@@ -177,6 +181,8 @@ namespace globals
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
 		deferred = Deferred::GetSingleton();
+		weatherManager = WeatherManager::GetSingleton();
+		sceneSettingsManager = SceneSettingsManager::GetSingleton();
 	}
 
 	void ReInit()

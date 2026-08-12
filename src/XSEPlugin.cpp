@@ -26,7 +26,7 @@ void ResetRuntimeStateAfterGameLoad()
 {
 	globals::game::quitGame.store(false, std::memory_order_release);
 	globals::OnDataLoaded();
-	WeatherManager::GetSingleton()->ClearCache();
+	globals::weatherManager->ClearCache();
 	globals::features::lightLimitFix.Reset();
 	globals::features::interiorSun.isInteriorWithSun = false;
 }

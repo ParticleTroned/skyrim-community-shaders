@@ -39767,8 +39767,9 @@ void Upscaling::SetupResources()
 	CheckResources(GetRuntimeUpscaleMethod());
 	RefreshRuntimeResolutionState();
 
-	rcas.Initialize();
-	if (GetDLSSSharpenerMode() == DLSSSharpenerMode::LumaUnsharp)
+	if (GetDLSSSharpenerMode() == DLSSSharpenerMode::RCAS)
+		rcas.Initialize();
+	else if (GetDLSSSharpenerMode() == DLSSSharpenerMode::LumaUnsharp)
 		lumaSharpen.Initialize();
 
 	if (d3d12SwapChainActive)
@@ -50771,37 +50772,45 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 void Upscaling::ApplySharpening()
 {
 	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Sharpening");
-
-	const bool shouldApplySharpening = ShouldApplyDLSSSharpening();
-	if (!dlssUpscaleOutputInSharpenerTexture && !shouldApplySharpening)
+	auto state = globals::state;
+	if (!state)
 		return;
+	TracyD3D11Zone(state->tracyCtx, "Upscaling - Sharpening");
 
-	if (!sharpenerTexture)
+	// A successful main-pass DLSS dispatch publishes this flag only when its
+	// coherent output is in sharpenerTexture. If submit-stage DLSS owns output or
+	// evaluation failed, there is nothing truthful to sharpen here. The old
+	// main->intermediate->main fallback added a full compute pass and copy in those
+	// cases and could mutate a non-DLSS/stale frame.
+	if (!dlssUpscaleOutputInSharpenerTexture)
 		return;
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!context || !renderer || !sharpenerTexture)
+		return;
 
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !sharpenerTexture->resource)
+		return;
+
+	// kMAIN may still be bound as an RTV. Validate first, then unbind only when a
+	// finalized DLSS output is ready to be copied or sharpened into it.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	if (dlssUpscaleOutputInSharpenerTexture) {
-		if (!main.texture || !sharpenerTexture->resource)
-			return;
-
-		if (!shouldApplySharpening || !main.UAV || !sharpenerTexture->srv || !DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV))
-			context->CopyResource(main.texture, sharpenerTexture->resource.get());
-	} else {
-		if (!main.SRV || !main.texture || !sharpenerTexture->resource || !sharpenerTexture->uav)
-			return;
-
-		if (!DispatchDLSSSharpener(*this, main.SRV, sharpenerTexture->uav.get()))
-			return;
+	const bool shouldApplySharpening = ShouldApplyDLSSSharpening();
+	if (!shouldApplySharpening ||
+		!main.UAV ||
+		!sharpenerTexture->srv ||
+		!DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV)) {
+		// Preserve DLSS output if the optional external sharpener is disabled or
+		// unavailable. This copy is the required non-aliasing finalization path,
+		// not an additional sharpening round trip.
 		context->CopyResource(main.texture, sharpenerTexture->resource.get());
 	}
 
-	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	if (globals::game::stateUpdateFlags)
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
 
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)

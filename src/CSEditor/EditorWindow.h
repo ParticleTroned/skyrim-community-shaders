@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 
+#include "LightEditor.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
 #include "Weather/LensFlareWidget.h"
@@ -10,7 +11,6 @@
 #include "Weather/ReferenceEffectWidget.h"
 #include "Weather/VolumetricLightingWidget.h"
 #include "Weather/WeatherWidget.h"
-#include "LightEditor.h"
 #include "WeatherUtils.h"
 #include "Widget.h"
 
@@ -145,8 +145,11 @@ public:
 	/// Draw the full time controls panel (pause, game time, timescale).
 	void DrawTimeControls();
 
-	// Check if ESC key should close the editor (no popups open)
-	bool ShouldHandleEscapeKey() const;
+	/** @brief Returns true if ESC should close the editor (no popup open and none just consumed ESC this frame). */
+	bool ShouldHandleEscapeKey();
+
+	/** @brief Set by popup close-on-ESC to suppress the same key-up from also closing the editor. */
+	bool suppressNextEditorEscape = false;
 
 	static bool CanBeOpen();
 	void DisableVanityCamera();
@@ -199,8 +202,8 @@ public:
 		std::vector<std::string> favoriteWidgets;
 		std::map<std::string, std::vector<std::string>> recentWidgets;
 		int maxRecentWidgets = 10;
-
 		bool showViewport = true;
+		std::string selectedCategory = "Weather";
 
 		// Per-widget-type window sizes (serialized as JSON for persistence)
 		json widgetTypeSizes;
@@ -208,7 +211,9 @@ public:
 		// Palette settings
 		struct PaletteColorEntry
 		{
-			float r, g, b;
+			float r = 0.0f;
+			float g = 0.0f;
+			float b = 0.0f;
 			int useCount = 0;
 			float lastUsedTime = 0.0f;
 			bool isFavorite = false;
@@ -216,7 +221,7 @@ public:
 		struct PaletteValueEntry
 		{
 			std::string name;
-			float value;
+			float value = 0.0f;
 			int useCount = 0;
 			float lastUsedTime = 0.0f;
 			bool isFavorite = false;

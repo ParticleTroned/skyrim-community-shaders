@@ -133,6 +133,15 @@ void OverlayRenderer::RenderOverlay(
 {
 	processInputEventQueue();
 
+	// Process editor close transitions and delayed light-reference work even when no overlay needs drawing.
+	auto* editorWindow = EditorWindow::GetSingleton();
+	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
+		editorWindow->open = false;
+		if (editorWindow->IsInPreviewMode())
+			editorWindow->ExitPreviewMode();
+	}
+	editorWindow->UpdateOpenState();
+
 	if (ShouldSkipRendering()) {
 		auto& io = ImGui::GetIO();
 		io.ClearInputKeys();
@@ -147,13 +156,6 @@ void OverlayRenderer::RenderOverlay(
 	RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
 
-	auto* editorWindow = EditorWindow::GetSingleton();
-	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
-		editorWindow->open = false;
-		if (editorWindow->IsInPreviewMode())
-			editorWindow->ExitPreviewMode();
-	}
-	editorWindow->UpdateOpenState();
 	if (editorWindow->open && menu.wantsFontPreviewAtlas) {
 		// CS Editor supersedes the main settings window without necessarily
 		// disabling it, so release previews just as if the Fonts tab were left.

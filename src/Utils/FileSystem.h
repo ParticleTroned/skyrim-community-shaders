@@ -7,6 +7,7 @@
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -216,7 +217,7 @@ namespace Util
 	namespace FileHelpers
 	{
 		/**
-		 * Result of an atomic JSON file write.
+		 * Result of an atomic file write.
 		 */
 		struct AtomicWriteResult
 		{
@@ -225,6 +226,18 @@ namespace Util
 
 			explicit operator bool() const noexcept { return success; }
 		};
+
+		/**
+		 * Writes text to a uniquely named sibling file, flushes and closes it,
+		 * then atomically replaces the destination.
+		 *
+		 * @param path Destination file.
+		 * @param contents Fully serialized text to write.
+		 * @return AtomicWriteResult with success status and failure details.
+		 */
+		AtomicWriteResult WriteTextFileAtomic(
+			const std::filesystem::path& path,
+			std::string_view contents);
 
 		/**
 		 * Result of a file deletion operation

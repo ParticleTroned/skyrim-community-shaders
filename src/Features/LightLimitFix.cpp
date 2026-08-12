@@ -308,6 +308,36 @@ namespace
 		}
 	};
 
+	class VRShadowMapCameraLateUseGuard : public VRValidatedObjectGuard
+	{
+	public:
+		VRShadowMapCameraLateUseGuard(
+			const std::array<std::uintptr_t, kVRShadowCameraVtableRVAs.size()>& a_allowedCameraVtables,
+			std::uintptr_t a_epilogue)
+		{
+			Xbyak::Label invalidCamera;
+
+			// The helper entry guard validates the descriptor supplied in RDX, but
+			// live Windhelm/Dragonsreach COC testing reproduced the same helper later
+			// consuming RBX->camera[0] after its frustum array had become null. Guard
+			// the actual late-use camera immediately before the native MOVUPS reads
+			// NiCamera::viewFrustumArray.
+			RequireKnownVtable(rdi, rax, r10, a_allowedCameraVtables, invalidCamera);
+			mov(rax, qword[rdi + kVRNiCameraViewFrustumArrayOffset]);
+			RequirePlausiblePointer(rax, r10, invalidCamera);
+			ret();
+
+			L(invalidCamera);
+			// Discard write_call's return address and run the helper's own epilogue.
+			// At this point the native frame is fully established, so returning
+			// directly would corrupt the caller's stack; the verified epilogue restores
+			// all saved registers and exits this stale shadow descriptor cleanly.
+			add(rsp, 8);
+			mov(rax, a_epilogue);
+			jmp(rax);
+		}
+	};
+
 	enum class VRRoomLightCullingUse
 	{
 		kPortalGraphEntry,
@@ -2301,14 +2331,17 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 	}
 
 	// Skyrim VR 1.4.15's shared shadow-map helper trusts
-	// ShadowmapDescriptorVR::camera[0] and NiCamera::viewFrustumArray. A
-	// reproduced Windhelm-to-Dragonsreach transition supplied a stale camera
-	// whose heap storage had already become a BSXAudio2GameSound, then crashed at
-	// SkyrimVR.exe+134C61A while reading the null frustum array. The entry and
-	// layout were verified against the live, decrypted runtime image.
+	// ShadowmapDescriptorVR::camera[0] and NiCamera::viewFrustumArray. Reproduced
+	// Windhelm-to-Dragonsreach transitions supplied both stale camera storage and a
+	// valid camera whose late-use frustum array had become null, then crashed at
+	// SkyrimVR.exe+134C61A. The entry, late-use context, and epilogue were verified
+	// against the live, decrypted runtime image.
 	constexpr std::uintptr_t helperEntryRVA = 0x134C370;
 	constexpr std::uintptr_t cameraUseContextRVA = 0x134C5F9;
+	constexpr std::uintptr_t cameraLateFrustumLoadRVA = 0x134C613;
+	constexpr std::uintptr_t helperEpilogueRVA = 0x134C99E;
 	constexpr std::size_t patchedInstructionSize = 6;
+	constexpr std::size_t lateFrustumLoadInstructionSize = 7;
 	constexpr std::uint8_t expectedHelperEntry[] = {
 		0x48, 0x8B, 0xC4,
 		0x55,
@@ -2327,12 +2360,39 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00,
 		0x0F, 0x10, 0x00
 	};
+	constexpr std::uint8_t expectedLateFrustumLoad[] = {
+		0x48, 0x8B, 0x87, 0x80, 0x01, 0x00, 0x00
+	};
+	constexpr std::uint8_t expectedHelperEpilogue[] = {
+		0x4C, 0x8D, 0x9C, 0x24, 0xF0, 0x01, 0x00, 0x00,
+		0x49, 0x8B, 0x5B, 0x38,
+		0x49, 0x8B, 0x73, 0x40,
+		0x49, 0x8B, 0x7B, 0x48,
+		0x45, 0x0F, 0x28, 0x73, 0xF0,
+		0x45, 0x0F, 0x28, 0x7B, 0xE0,
+		0x45, 0x0F, 0x28, 0x43, 0xD0,
+		0x45, 0x0F, 0x28, 0x4B, 0xC0,
+		0x45, 0x0F, 0x28, 0x53, 0xB0,
+		0x45, 0x0F, 0x28, 0x5B, 0xA0,
+		0x45, 0x0F, 0x28, 0x63, 0x90,
+		0x49, 0x8B, 0xE3,
+		0x41, 0x5F,
+		0x41, 0x5E,
+		0x41, 0x5D,
+		0x41, 0x5C,
+		0x5D,
+		0xC3
+	};
 
 	const auto moduleBase = REL::Module::get().base();
 	const auto helperEntry = moduleBase + helperEntryRVA;
 	const auto cameraUseContext = moduleBase + cameraUseContextRVA;
+	const auto cameraLateFrustumLoad = moduleBase + cameraLateFrustumLoadRVA;
+	const auto helperEpilogue = moduleBase + helperEpilogueRVA;
 	if (!MatchesInstructions(helperEntry, expectedHelperEntry) ||
-		!MatchesInstructions(cameraUseContext, expectedCameraUseContext)) {
+		!MatchesInstructions(cameraUseContext, expectedCameraUseContext) ||
+		!MatchesInstructions(cameraLateFrustumLoad, expectedLateFrustumLoad) ||
+		!MatchesInstructions(helperEpilogue, expectedHelperEpilogue)) {
 		logger::error("[LLF] VR shadow-map camera guard not installed: unexpected SkyrimVR.exe instructions");
 		return;
 	}
@@ -2363,11 +2423,16 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 	}
 
 	VRShadowMapCameraGuard code{ allowedCameraVtables, helperEntry + patchedInstructionSize };
+	VRShadowMapCameraLateUseGuard lateUseCode{ allowedCameraVtables, helperEpilogue };
 	code.ready();
+	lateUseCode.ready();
 
 	auto& trampoline = SKSE::GetTrampoline();
 	const auto guard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
+	const auto lateUseGuard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(lateUseCode));
 	trampoline.write_branch<patchedInstructionSize>(helperEntry, guard);
+	trampoline.write_call<5>(cameraLateFrustumLoad, lateUseGuard);
+	REL::safe_fill(cameraLateFrustumLoad + 5, REL::NOP, lateFrustumLoadInstructionSize - 5);
 
 	logger::info("[LLF] Installed VR shadow-map camera guard");
 }

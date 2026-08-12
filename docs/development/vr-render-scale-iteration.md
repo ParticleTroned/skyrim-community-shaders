@@ -87,6 +87,78 @@ capture may satisfy the generic acceptance object while
 `memoryTrend.evaluated` remains false; automation must not treat that as memory
 acceptance.
 
+## COC endurance protocol
+
+Use this protocol to verify that an already-latched render-scale contract stays
+stable through repeated cell transitions. This is not a render-scale apply
+acceptance test: if no CSX or DevBench `apply` request occurs during the run,
+the generic capture verdict may fail `minimum_requests`, `stable_latency_bound`,
+or memory-trend gates even when the endurance result is valid. For this test,
+judge the run from the terminal presentation, fallback counters, OOM/device-loss
+state, liveness, and memory samples.
+
+The validated COC route alternates only between real different cells:
+
+```text
+Exterior: WindhelmExterior01
+Interior: WhiterunDragonsreach
+```
+
+Before starting, load into one endpoint and confirm DevBench health and scene
+identity. Do not issue a same-cell baseline `coc`; it can wedge the load/menu
+bridge and invalidates the run. Start the CS render-scale capture with
+`communityshaders.renderscale reset` followed by
+`communityshaders.renderscale start`, using DevBench's typed `scenario` dispatch
+if the registered CS tool is not exposed as a first-class MCP call.
+
+Drive the run as small synchronous fixed-wait batches, normally five real COC
+transitions per batch with a 10 s wait after every command:
+
+```json
+{
+    "action": "run",
+    "async": false,
+    "continueOnError": false,
+    "steps": [
+        {
+            "tool": "console",
+            "args": { "action": "exec", "command": "coc WhiterunDragonsreach" }
+        },
+        { "wait": 10000 },
+        {
+            "tool": "console",
+            "args": { "action": "exec", "command": "coc WindhelmExterior01" }
+        },
+        { "wait": 10000 }
+    ]
+}
+```
+
+Extend the `steps` array to five alternating COCs per batch, then verify
+`inspect(kind=health)` and `inspect(kind=scene)` between batches. Continue from
+the actual current endpoint; do not restart the sequence by issuing another COC
+to the same location. Avoid `postLoadGame`, `playerLoaded`, or other load-event
+waits inside the COC loop. In this stress path those waits can interact badly
+with Skyrim's load/menu state and are less reliable than fixed pacing.
+
+For a 40-COC run starting in Windhelm exterior, use eight five-transition
+batches:
+
+-   batches 1, 3, 5, and 7 start with `coc WhiterunDragonsreach` and end in
+    Dragonsreach;
+-   batches 2, 4, 6, and 8 start with `coc WindhelmExterior01` and end in
+    Windhelm exterior.
+
+Stop the capture only after the final 10 s recovery. A valid endurance result
+should end with a live Skyrim process, the expected final scene, no OOM or device
+loss, no bounds-mismatch original fallback, no persistent
+`PresentationStretch`, and both eyes recovered to a fresh
+`VendorEvaluated` presentation matching the stable contract. Record the maximum
+consecutive stretch duration in frames, final VRAM usage/headroom, Skyrim
+private usage, and system commit/headroom. Short stretches of one or two frames
+are acceptable for this endurance check when the terminal presentation is stable
+and no fallback path persists.
+
 ## Live Ghidra/DevBench setup
 
 Skyrim VR's Steam executable `.text` is encrypted on disk, so native crash-site

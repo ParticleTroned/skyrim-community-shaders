@@ -62,6 +62,79 @@ capture may satisfy the generic acceptance object while
 `memoryTrend.evaluated` remains false; automation must not treat that as memory
 acceptance.
 
+## Live Ghidra/DevBench setup
+
+Skyrim VR's Steam executable `.text` is encrypted on disk, so native crash-site
+analysis must use a live process or a saved live memory dump. The local working
+setup used for render-scale and LLF crash triage keeps all Ghidra projects,
+cache, settings, and dumps on `D:`:
+
+```text
+D:\Coding\GitHub\codex-ghidra-live
+```
+
+Do not place persistent Ghidra projects or dumps under `C:\tmp`. Keep the helper
+workspace outside the repository and untracked. It contains:
+
+```text
+Invoke-LiveGhidraDisasm.ps1
+PrintDisassembly.java
+README.md
+dumps\
+ghidra-cache\
+ghidra-projects\
+ghidra-settings\
+```
+
+Before collecting a live dump, confirm DevBench MCP is attached to the intended
+Skyrim VR instance. `devbench_vr.inspect(kind=health)` must report
+`exe: SkyrimVR.exe`, `vr: true`, the expected `pid`, and port `8921`. If the
+typed MCP surface is unavailable, reconnect DevBench before falling back to REST
+or manual HTTP commands.
+
+Ghidra 12.1.2 launches successfully on the local machine when JDK 25 is forced:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-25.0.3.9-hotspot'
+$env:GHIDRA_JAVA_HOME = $env:JAVA_HOME
+```
+
+The reusable helper sets these environment variables automatically and also
+redirects Ghidra config/cache to `D:\Coding\GitHub\codex-ghidra-live`.
+
+Dump and disassemble a live helper window:
+
+```powershell
+& 'D:\Coding\GitHub\codex-ghidra-live\Invoke-LiveGhidraDisasm.ps1' `
+  -Rva 0x134C370 `
+  -Length 0x700 `
+  -Name shadow-helper
+```
+
+This writes:
+
+```text
+D:\Coding\GitHub\codex-ghidra-live\dumps\<timestamp>-shadow-helper.bin
+D:\Coding\GitHub\codex-ghidra-live\dumps\<timestamp>-shadow-helper.meta.json
+D:\Coding\GitHub\codex-ghidra-live\dumps\<timestamp>-shadow-helper.disasm.txt
+```
+
+Reuse a saved dump without a live Skyrim process by passing the `dumpBaseAddress`
+from the matching `.meta.json`:
+
+```powershell
+& 'D:\Coding\GitHub\codex-ghidra-live\Invoke-LiveGhidraDisasm.ps1' `
+  -DumpPath 'D:\Coding\GitHub\codex-ghidra-live\dumps\<dump>.bin' `
+  -BaseAddress 0x7FF69492C370 `
+  -Name shadow-helper-replay
+```
+
+For LLF shadow/culling crashes, validate the live decrypted bytes around the
+reported SkyrimVR RVA before adding a guard. The guard must fail closed on
+unsupported runtime, unexpected instruction bytes, or unverified branch/epilogue
+targets. Prefer a second late-use guard when the entry guard is installed but the
+faulting native instruction reloads a different live pointer later in the helper.
+
 Performance builds keep `kEnableVRMenuPresentationTraceDiagnostics` false.
 Changing it to true creates a dedicated forensic build with high-frequency D3D
 menu detours and must not be compared against normal optimization captures.

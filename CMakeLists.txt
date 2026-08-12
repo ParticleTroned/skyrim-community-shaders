@@ -1392,6 +1392,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_vendor_relatch_policy_test.cpp
     )
     add_controller_test(
+        reflex_policy_test
+        ReflexPolicy
+        tests/reflex_policy_test.cpp
+    )
+    add_controller_test(
         fsr_host_lifecycle_policy_test
         FSRHostLifecyclePolicy
         tests/fsr_host_lifecycle_policy_test.cpp
@@ -1407,6 +1412,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
+            reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
     )

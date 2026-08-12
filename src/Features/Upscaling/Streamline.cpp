@@ -14,6 +14,7 @@
 #include "../../Util.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
+#include "ReflexPolicy.h"
 
 namespace
 {
@@ -1681,11 +1682,15 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		return false;
 	updateOptionsCacheDiagnostics();
 
-	const bool emitPCLMarkers =
-		!submitStageVRDLSS &&
+	// These markers currently surround only a DLSS evaluation, not Skyrim's
+	// complete render submission. Keep marker-driven scheduling disabled on every
+	// runtime until CSX can publish an authoritative full-frame marker sequence.
+	const bool emitPCLMarkers = ReflexPolicy::ResolveCSXMarkerOptimization(
+		featureReflex,
+		featurePCL,
 		upscaling.settings.reflexUseMarkersToOptimize &&
-		reflexOptionsCache.useMarkersToOptimize &&
-		featurePCL;
+			reflexOptionsCache.useMarkersToOptimize)
+			.enabled;
 	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
 		if (!emitPCLMarkers || !slPCLSetMarker || !frameToken)
 			return;
@@ -2002,10 +2007,9 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			return allEvaluated;
 		}
 
-		// Copy right-eye depth before eye 0 evaluation; eye 0 output can overlap right-eye input
-		// in the combined target at non-DLAA scales.
-		D3D11_BOX rightIn = { eyeWidthIn, 0, 0, eyeWidthIn * 2, eyeHeightIn, 1 };
-		context->CopySubresourceRegion(upscaling.vrIntermediateDepth[1]->resource.get(), 0, 0, 0, 0, depthTexture.texture, 0, &rightIn);
+		// PreparePerEyeInputs already copied both depth halves into distinct resources
+		// before either evaluation. Eye 0 only writes color, so the prepared right-eye
+		// depth remains stable and does not need a second full-eye copy here.
 		const bool canRestoreDirectEye0Output =
 			!outputToSharpener &&
 			upscaling.vrIntermediateColorOut[0] &&
@@ -2241,7 +2245,11 @@ void Streamline::UpdateReflex()
 	}
 	const float fpsLimit = std::clamp(reflexFPSLimit, 20.0f, 240.0f);
 	options.frameLimitUs = settings.reflexUseFPSLimit ? static_cast<uint32_t>(std::lround(1000000.0 / static_cast<double>(fpsLimit))) : 0u;
-	options.useMarkersToOptimize = settings.reflexUseMarkersToOptimize && featurePCL;
+	const auto markerOptimization = ReflexPolicy::ResolveCSXMarkerOptimization(
+		featureReflex,
+		featurePCL,
+		settings.reflexUseMarkersToOptimize);
+	options.useMarkersToOptimize = markerOptimization.enabled;
 
 	if (!reflexOptionsCache.valid ||
 		reflexOptionsCache.mode != options.mode ||
@@ -2254,6 +2262,13 @@ void Streamline::UpdateReflex()
 			reflexOptionsCache.mode = options.mode;
 			reflexOptionsCache.frameLimitUs = options.frameLimitUs;
 			reflexOptionsCache.useMarkersToOptimize = options.useMarkersToOptimize;
+			logger::info(
+				"[Streamline] Applied Reflex options: mode={} frameLimitUs={} markersRequested={} markersAvailable={} markersEffective={}",
+				magic_enum::enum_name(options.mode),
+				options.frameLimitUs,
+				settings.reflexUseMarkersToOptimize,
+				markerOptimization.available,
+				options.useMarkersToOptimize);
 		}
 	}
 

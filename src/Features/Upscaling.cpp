@@ -19,6 +19,7 @@
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
@@ -15316,7 +15317,10 @@ void Upscaling::DrawSettings()
 
 	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex")) {
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
-		const bool markerOptimizationAvailable = reflexAvailable && streamline.featurePCL;
+		const auto markerOptimization = ReflexPolicy::ResolveCSXMarkerOptimization(
+			reflexAvailable,
+			streamline.featurePCL,
+			settings.reflexUseMarkersToOptimize);
 		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
 		const char* toggleModes[] = { "Disabled", "Enabled" };
 
@@ -15354,23 +15358,26 @@ void Upscaling::DrawSettings()
 		if (!settings.reflexLowLatencyMode)
 			ImGui::EndDisabled();
 
-		if (!markerOptimizationAvailable)
+		if (!markerOptimization.available)
 			ImGui::BeginDisabled();
 
-		int markersToOptimize = settings.reflexUseMarkersToOptimize ? 1 : 0;
+		int markersToOptimize = markerOptimization.enabled ? 1 : 0;
 		ImGui::SliderInt("Use Markers To Optimize", &markersToOptimize, 0, 1, toggleModes[markersToOptimize]);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Uses frame markers for tighter Reflex timing.");
-			ImGui::TextUnformatted("Try On first; turn Off if it causes stutter on your setup.");
+			ImGui::TextUnformatted("Requires authoritative full-frame marker coverage.");
 		}
-		settings.reflexUseMarkersToOptimize = markersToOptimize > 0;
+		if (markerOptimization.available)
+			settings.reflexUseMarkersToOptimize = markersToOptimize > 0;
 
-		if (!markerOptimizationAvailable)
+		if (!markerOptimization.available)
 			ImGui::EndDisabled();
 
-		if (!markerOptimizationAvailable) {
-			ImGui::TextDisabled("Marker optimization unavailable (PCL not loaded).");
-		}
+		if (!markerOptimization.available)
+			ImGui::TextDisabled(
+				reflexAvailable && streamline.featurePCL ?
+					"Marker optimization is disabled until authoritative full-frame marker coverage is available." :
+					"Marker optimization unavailable (Reflex/PCL not loaded).");
 
 		int useFPSLimit = settings.reflexUseFPSLimit ? 1 : 0;
 		ImGui::SliderInt("Use FPS Limit", &useFPSLimit, 0, 1, toggleModes[useFPSLimit]);
@@ -39760,8 +39767,9 @@ void Upscaling::SetupResources()
 	CheckResources(GetRuntimeUpscaleMethod());
 	RefreshRuntimeResolutionState();
 
-	rcas.Initialize();
-	if (GetDLSSSharpenerMode() == DLSSSharpenerMode::LumaUnsharp)
+	if (GetDLSSSharpenerMode() == DLSSSharpenerMode::RCAS)
+		rcas.Initialize();
+	else if (GetDLSSSharpenerMode() == DLSSSharpenerMode::LumaUnsharp)
 		lumaSharpen.Initialize();
 
 	if (d3d12SwapChainActive)
@@ -50764,37 +50772,45 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 void Upscaling::ApplySharpening()
 {
 	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Sharpening");
-
-	const bool shouldApplySharpening = ShouldApplyDLSSSharpening();
-	if (!dlssUpscaleOutputInSharpenerTexture && !shouldApplySharpening)
+	auto state = globals::state;
+	if (!state)
 		return;
+	TracyD3D11Zone(state->tracyCtx, "Upscaling - Sharpening");
 
-	if (!sharpenerTexture)
+	// A successful main-pass DLSS dispatch publishes this flag only when its
+	// coherent output is in sharpenerTexture. If submit-stage DLSS owns output or
+	// evaluation failed, there is nothing truthful to sharpen here. The old
+	// main->intermediate->main fallback added a full compute pass and copy in those
+	// cases and could mutate a non-DLSS/stale frame.
+	if (!dlssUpscaleOutputInSharpenerTexture)
 		return;
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!context || !renderer || !sharpenerTexture)
+		return;
 
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !sharpenerTexture->resource)
+		return;
+
+	// kMAIN may still be bound as an RTV. Validate first, then unbind only when a
+	// finalized DLSS output is ready to be copied or sharpened into it.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	if (dlssUpscaleOutputInSharpenerTexture) {
-		if (!main.texture || !sharpenerTexture->resource)
-			return;
-
-		if (!shouldApplySharpening || !main.UAV || !sharpenerTexture->srv || !DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV))
-			context->CopyResource(main.texture, sharpenerTexture->resource.get());
-	} else {
-		if (!main.SRV || !main.texture || !sharpenerTexture->resource || !sharpenerTexture->uav)
-			return;
-
-		if (!DispatchDLSSSharpener(*this, main.SRV, sharpenerTexture->uav.get()))
-			return;
+	const bool shouldApplySharpening = ShouldApplyDLSSSharpening();
+	if (!shouldApplySharpening ||
+		!main.UAV ||
+		!sharpenerTexture->srv ||
+		!DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV)) {
+		// Preserve DLSS output if the optional external sharpener is disabled or
+		// unavailable. This copy is the required non-aliasing finalization path,
+		// not an additional sharpening round trip.
 		context->CopyResource(main.texture, sharpenerTexture->resource.get());
 	}
 
-	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	if (globals::game::stateUpdateFlags)
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
 
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)

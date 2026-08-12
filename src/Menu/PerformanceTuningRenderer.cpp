@@ -1024,7 +1024,7 @@ namespace
 					feature,
 					state,
 					failureReason ? failureReason :
-						T(TKEY("error.scene_changed"), "Stopped because the scene changed."));
+									T(TKEY("error.scene_changed"), "Stopped because the scene changed."));
 			} else if (state.restorePending) {
 				TryRestoreFeatureCostOriginalState(feature, state);
 			}
@@ -1736,7 +1736,7 @@ namespace
 						TKEY("status.post_change_soak"),
 						"Waiting for the post-change timing window to clear"));
 			} else if (state.transitionWait ==
-				FeatureCostTransitionWait::FreshPresents) {
+					   FeatureCostTransitionWait::FreshPresents) {
 				ImGui::SameLine();
 				ImGui::TextDisabled(
 					"%s",
@@ -1744,7 +1744,7 @@ namespace
 						TKEY("status.fresh_presents"),
 						"Flushing frame timings from before the state change"));
 			} else if (state.transitionWait ==
-				FeatureCostTransitionWait::SettleDelay) {
+					   FeatureCostTransitionWait::SettleDelay) {
 				ImGui::SameLine();
 				ImGui::TextDisabled(
 					"%s",
@@ -1833,15 +1833,11 @@ namespace
 			feature->IsPerformanceTuningApplicable();
 		const bool sceneControlled =
 			IsFeatureControlledBySceneSettings(feature);
-		const bool postEditTimingActive =
-			g_highlightState.pendingComparison ||
-			g_highlightState.expireTime > 0.0;
 		const bool canStart =
 			feature->SupportsPerformanceCostMeasurement() &&
 			feature->IsPerformanceCostMeasurementEnabled() &&
 			applicable &&
 			!sceneControlled &&
-			!postEditTimingActive &&
 			!anyMeasurementLocked;
 
 		ImGui::BeginDisabled(!canStart);
@@ -1851,13 +1847,6 @@ namespace
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			const auto config = feature->GetPerformanceTuningConfig();
-			if (postEditTimingActive) {
-				ImGui::TextWrapped(
-					"%s",
-					T(
-						TKEY("cost.wait_for_white"),
-						"Wait until the post-change timing colors return to white before measuring."));
-			}
 			ImGui::TextWrapped(
 				T(
 					TKEY("cost.tooltip"),
@@ -2046,7 +2035,7 @@ namespace
 			features,
 			[](Feature* feature) {
 				return feature &&
-				       feature->GetShortName() == g_selectedShortName;
+			           feature->GetShortName() == g_selectedShortName;
 			});
 		if (it != features.end())
 			return *it;
@@ -2247,7 +2236,7 @@ namespace
 		FeatureCostMeasurementState& state)
 	{
 		if ((state.stage == FeatureCostMeasurementStage::Complete ||
-			 state.stage == FeatureCostMeasurementStage::Failed) &&
+				state.stage == FeatureCostMeasurementStage::Failed) &&
 			!state.restorePending) {
 			state = {};
 		}
@@ -2293,8 +2282,8 @@ void PerformanceTuningRenderer::Render()
 		IsAnyFeatureCostMeasurementRunning();
 	SyncProfilerCaptureModeLimit();
 	const auto captureMode = measurementWasRunning ?
-	                         Profiler::CaptureMode::WholeFrameOnly :
-	                         Profiler::CaptureMode::DetailedPasses;
+	                             Profiler::CaptureMode::WholeFrameOnly :
+	                             Profiler::CaptureMode::DetailedPasses;
 	const auto featurePrefixes =
 		BuildPerformanceFeaturePrefixes(features);
 	const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(
@@ -2530,6 +2519,11 @@ void PerformanceTuningRenderer::Render()
 					selectedFeature->GetShortName());
 			}
 			if (startMeasurement && !settingsRestored) {
+				// The post-edit preview is informational and uses a separate rolling
+				// comparison. A/B/A owns its own transition gates and raw sample
+				// windows, so discard any stale preview instead of making it a
+				// prerequisite for starting an actual cost measurement.
+				g_highlightState = {};
 				StartFeatureCostMeasurement(
 					selectedFeature,
 					selectedCostState,

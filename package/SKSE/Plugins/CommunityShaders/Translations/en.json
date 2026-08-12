@@ -1975,7 +1975,6 @@
     "menu.performance_tuning.cost.tooltip_stability": "Each feature state gets its required applied-state, fresh-frame, and post-change settle waits before capture. Timing variation within a window and between the two current-state windows widens the 95% confidence interval instead of discarding the measurement.",
     "menu.performance_tuning.cost.unavailable": "Actual feature cost is unavailable.",
     "menu.performance_tuning.cost.unavailable_reason": "This feature has no runtime inactive state to compare in the current scene.",
-    "menu.performance_tuning.cost.wait_for_white": "Wait until the post-change timing colors return to white before measuring.",
     "menu.performance_tuning.counter.cpu": "CPU:",
     "menu.performance_tuning.counter.cpu_tooltip": "CPU wall time across the whole rendered game frame up to Present. It excludes Present wait.",
     "menu.performance_tuning.counter.game_fps": "Game FPS:",

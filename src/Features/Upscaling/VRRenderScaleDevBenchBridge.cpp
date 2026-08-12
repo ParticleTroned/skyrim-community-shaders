@@ -27,6 +27,7 @@ namespace
 	using json = nlohmann::json;
 
 	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
+	constexpr unsigned int kDevBenchToolExtensionRevision = 5;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 
@@ -407,20 +408,20 @@ namespace
 								{ "presentationPhase", GetPresentationPhaseName(controller.presentationPhase) },
 								{ "presentationPhaseValue", static_cast<uint32_t>(controller.presentationPhase) },
 								{ "desiredOwner", {
-									{ "transitionEpoch", controller.desiredOwner.transitionEpoch },
-									{ "contractGeneration", controller.desiredOwner.contractGeneration },
-									{ "loadingSerial", controller.desiredOwner.loadingSerial },
-								} },
+													  { "transitionEpoch", controller.desiredOwner.transitionEpoch },
+													  { "contractGeneration", controller.desiredOwner.contractGeneration },
+													  { "loadingSerial", controller.desiredOwner.loadingSerial },
+												  } },
 								{ "physicalOwner", {
-									{ "transitionEpoch", controller.physicalOwner.transitionEpoch },
-									{ "contractGeneration", controller.physicalOwner.contractGeneration },
-									{ "loadingSerial", controller.physicalOwner.loadingSerial },
-								} },
+													   { "transitionEpoch", controller.physicalOwner.transitionEpoch },
+													   { "contractGeneration", controller.physicalOwner.contractGeneration },
+													   { "loadingSerial", controller.physicalOwner.loadingSerial },
+												   } },
 								{ "presentationOwner", {
-									{ "transitionEpoch", controller.presentationOwner.transitionEpoch },
-									{ "contractGeneration", controller.presentationOwner.contractGeneration },
-									{ "loadingSerial", controller.presentationOwner.loadingSerial },
-								} },
+														   { "transitionEpoch", controller.presentationOwner.transitionEpoch },
+														   { "contractGeneration", controller.presentationOwner.contractGeneration },
+														   { "loadingSerial", controller.presentationOwner.loadingSerial },
+													   } },
 								{ "targetEpoch", controller.targetEpoch },
 								{ "revision", controller.revision },
 								{ "unresolvedPhysicalMutationEpoch", a_upscaling.vrRenderScaleUnresolvedPhysicalMutationEpoch.load(std::memory_order_acquire) },
@@ -970,6 +971,41 @@ namespace
 	{
 		RunHandler(&BuildRenderScaleResult, a_argsJson, a_sink, a_write);
 	}
+
+	void RenderScaleInspectExtensionHandler(
+		void*,
+		const char*,
+		void* a_sink,
+		DevBenchAPI::WriteFn a_write)
+	{
+		json result{
+			{ "registered", g_registered.load(std::memory_order_acquire) },
+			{ "tool", "communityshaders.renderscale" },
+			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} for full render-scale diagnostics.)" },
+			{ "actions", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
+		};
+		const auto serialized = result.dump();
+		a_write(a_sink, serialized.c_str());
+	}
+
+	DevBenchAPI::IDevBenchInterface001* GetDevBenchToolExtensionInterface()
+	{
+		const auto messaging = SKSE::GetMessagingInterface();
+		if (!messaging)
+			return nullptr;
+
+		DevBenchAPI::DevBenchMessage message;
+		messaging->Dispatch(
+			DevBenchAPI::DevBenchMessage::kMessage_GetInterface,
+			&message,
+			sizeof(DevBenchAPI::DevBenchMessage*),
+			DevBenchAPI::DevBenchPluginName);
+		if (!message.GetApiFunction)
+			return nullptr;
+
+		return static_cast<DevBenchAPI::IDevBenchInterface001*>(
+			message.GetApiFunction(kDevBenchToolExtensionRevision));
+	}
 }
 
 namespace VRRenderScaleDevBenchBridge
@@ -990,6 +1026,24 @@ namespace VRRenderScaleDevBenchBridge
 			diagnosticDescriptor,
 			&RenderScaleToolHandler,
 			nullptr);
+		if (devBench->GetBuildNumber() >= 10500) {
+			static constexpr const char* inspectDescriptor =
+				R"({"description":"Reports the Community Shaders render-scale diagnostic tool registration and points callers to the top-level communityshaders.renderscale tool."})";
+			if (auto* extensionDevBench = GetDevBenchToolExtensionInterface()) {
+				const bool inserted = extensionDevBench->RegisterToolExtension(
+					"inspect",
+					"communityshaders.renderscale",
+					inspectDescriptor,
+					&RenderScaleInspectExtensionHandler,
+					nullptr);
+				logger::info(
+					"VRRenderScaleDevBenchBridge: registered inspect extension communityshaders.renderscale with devbench build {}{}",
+					extensionDevBench->GetBuildNumber(),
+					inserted ? "" : " (replaced existing handler)");
+			} else {
+				logger::warn("VRRenderScaleDevBenchBridge: devbench revision-5 interface unavailable; inspect extension not registered");
+			}
+		}
 		g_registered.store(true, std::memory_order_release);
 		logger::info(
 			"VRRenderScaleDevBenchBridge: registered communityshaders.renderscale with devbench build {}",

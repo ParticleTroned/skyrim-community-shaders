@@ -22,6 +22,7 @@ namespace
 	using json = nlohmann::json;
 
 	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
+	constexpr unsigned int kDevBenchToolExtensionRevision = 5;
 	std::atomic_bool g_installAttempted{ false };
 	std::atomic_bool g_registered{ false };
 
@@ -163,6 +164,41 @@ namespace
 	{
 		RunHandler(&BuildProfilerResult, a_argsJson, a_sink, a_write);
 	}
+
+	void ProfilerInspectExtensionHandler(
+		void*,
+		const char*,
+		void* a_sink,
+		DevBenchAPI::WriteFn a_write)
+	{
+		json result{
+			{ "registered", g_registered.load(std::memory_order_acquire) },
+			{ "tool", "communityshaders.profiler" },
+			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} for profiler diagnostics.)" },
+			{ "actions", json::array({ "status", "enable", "disable" }) },
+		};
+		const auto serialized = result.dump();
+		a_write(a_sink, serialized.c_str());
+	}
+
+	DevBenchAPI::IDevBenchInterface001* GetDevBenchToolExtensionInterface()
+	{
+		const auto messaging = SKSE::GetMessagingInterface();
+		if (!messaging)
+			return nullptr;
+
+		DevBenchAPI::DevBenchMessage message;
+		messaging->Dispatch(
+			DevBenchAPI::DevBenchMessage::kMessage_GetInterface,
+			&message,
+			sizeof(DevBenchAPI::DevBenchMessage*),
+			DevBenchAPI::DevBenchPluginName);
+		if (!message.GetApiFunction)
+			return nullptr;
+
+		return static_cast<DevBenchAPI::IDevBenchInterface001*>(
+			message.GetApiFunction(kDevBenchToolExtensionRevision));
+	}
 }
 
 namespace ProfilerDevBenchBridge
@@ -185,6 +221,24 @@ namespace ProfilerDevBenchBridge
 			descriptor,
 			&ProfilerToolHandler,
 			nullptr);
+		if (devBench->GetBuildNumber() >= 10500) {
+			static constexpr const char* inspectDescriptor =
+				R"({"description":"Reports the Community Shaders profiler diagnostic tool registration and points callers to the top-level communityshaders.profiler tool."})";
+			if (auto* extensionDevBench = GetDevBenchToolExtensionInterface()) {
+				const bool inserted = extensionDevBench->RegisterToolExtension(
+					"inspect",
+					"communityshaders.profiler",
+					inspectDescriptor,
+					&ProfilerInspectExtensionHandler,
+					nullptr);
+				logger::info(
+					"ProfilerDevBenchBridge: registered inspect extension communityshaders.profiler with devbench build {}{}",
+					extensionDevBench->GetBuildNumber(),
+					inserted ? "" : " (replaced existing handler)");
+			} else {
+				logger::warn("ProfilerDevBenchBridge: devbench revision-5 interface unavailable; inspect extension not registered");
+			}
+		}
 		g_registered.store(true, std::memory_order_release);
 		logger::info(
 			"ProfilerDevBenchBridge: registered communityshaders.profiler with devbench build {}",

@@ -25,10 +25,10 @@
 #include "Features/Upscaling.h"
 #include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/BackgroundBlur.h"
+#include "Menu/CursorLoader.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "Menu/HomePageRenderer.h"
-#include "Menu/CursorLoader.h"
 #include "Menu/IconLoader.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
@@ -40,12 +40,12 @@
 #include "Util.h"
 #include "Utils/UI.h"
 
+#include "CSEditor/EditorWindow.h"
+#include "Features/CSEditor.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
-#include "Features/CSEditor.h"
-#include "CSEditor/EditorWindow.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -767,6 +767,11 @@ void Menu::Init()
  */
 void Menu::DrawSettings()
 {
+	// Treat the preview atlas as a per-frame request. The Fonts tab sets this
+	// back to true only while it is actually rendered.
+	const bool previewAtlasWasWanted = wantsFontPreviewAtlas;
+	wantsFontPreviewAtlas = false;
+
 	if (focusChanged) {
 		OnFocusChanged();
 		focusChanged = false;
@@ -852,6 +857,15 @@ void Menu::DrawSettings()
 		Util::DrawClearShaderCacheConfirmation();
 	}
 	ImGui::End();
+	// Rebuild only when entering or leaving the Fonts UI. This also releases
+	// previews when switching the outer settings page or closing via the title bar.
+	wantsFontPreviewAtlas = IsEnabled && wantsFontPreviewAtlas;
+	if (wantsFontPreviewAtlas && !previewAtlasWasWanted) {
+		fontPreviewAtlasSuppressed = false;
+	}
+	if (wantsFontPreviewAtlas != previewAtlasWasWanted) {
+		pendingFontReload = true;
+	}
 	if (!IsEnabled) {
 		PerformanceTuningRenderer::CancelActiveMeasurements();
 	}
@@ -956,6 +970,13 @@ void Menu::DrawFooter()
  */
 void Menu::DrawOverlay()
 {
+	// A hotkey can close the menu before DrawSettings runs, so release the
+	// preview request here as well and shrink the atlas between frames.
+	if (!IsEnabled && wantsFontPreviewAtlas) {
+		wantsFontPreviewAtlas = false;
+		pendingFontReload = true;
+	}
+
 	// Only process reloads when ImGui is NOT in an active frame
 	ImGuiContext* ctx = ImGui::GetCurrentContext();
 	bool canReload = ctx && !ctx->WithinFrameScope && ctx->WithinEndChildID == 0;

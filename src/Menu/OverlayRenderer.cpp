@@ -17,9 +17,9 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/CursorLoader.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "Menu/CursorLoader.h"
 #include "Util.h"
 
 #include "Features/PerformanceOverlay.h"
@@ -154,6 +154,12 @@ void OverlayRenderer::RenderOverlay(
 			editorWindow->ExitPreviewMode();
 	}
 	editorWindow->UpdateOpenState();
+	if (editorWindow->open && menu.wantsFontPreviewAtlas) {
+		// CS Editor supersedes the main settings window without necessarily
+		// disabling it, so release previews just as if the Fonts tab were left.
+		menu.wantsFontPreviewAtlas = false;
+		menu.pendingFontReload = true;
+	}
 	if (editorWindow->open) {
 		bool flying = editorWindow->IsPreviewFlying();
 		auto& io = ImGui::GetIO();
@@ -428,7 +434,6 @@ void OverlayRenderer::FinalizeImGuiFrame()
 	BackgroundBlur::RenderBackgroundBlur();
 
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-
 }
 
 void OverlayRenderer::RenderFirstTimeSetupOverlay()

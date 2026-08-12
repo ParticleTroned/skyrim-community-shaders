@@ -139,10 +139,10 @@ public:
 	bool settingSkipCompilationKey = false;
 	bool settingsEffectsToggle = false;
 	bool settingOverlayToggleKey = false;
-	bool settingShaderBlockPrevKey = false;      // Debug: capture shader block prev key
-	bool settingShaderBlockNextKey = false;      // Debug: capture shader block next key
-	bool settingCSEditorToggleKey = false;  // CS Editor toggle key
-	bool settingScreenshotKey = false;           // Screenshot capture key
+	bool settingShaderBlockPrevKey = false;  // Debug: capture shader block prev key
+	bool settingShaderBlockNextKey = false;  // Debug: capture shader block next key
+	bool settingCSEditorToggleKey = false;   // CS Editor toggle key
+	bool settingScreenshotKey = false;       // Screenshot capture key
 
 	// Font caching (made public for ThemeManager and OverlayRenderer access)
 	// Marked mutable because they're cache fields that may be updated from const methods
@@ -167,6 +167,10 @@ public:
 	// Deferred reload systems (public for SettingsTabRenderer access)
 	bool pendingFontReload = false;
 	bool pendingIconReload = false;
+	// Desired atlas state, reconciled once per frame by DrawSettings/DrawOverlay.
+	bool wantsFontPreviewAtlas = false;
+	// Avoid retrying a failed optional preview atlas until refresh or tab re-entry.
+	bool fontPreviewAtlasSuppressed = false;
 	bool pendingCursorReload = false;
 
 	// Display size tracking for cross-session resolution change detection
@@ -239,8 +243,8 @@ public:
 		};
 
 		float FontSize = ThemeManager::Constants::DEFAULT_FONT_SIZE;
-		std::string FontName = "Jost/Jost-Regular.ttf";         // Default font file name (legacy)
-		float GlobalScale = 0.f;  // exponential
+		std::string FontName = "Jost/Jost-Regular.ttf";  // Default font file name (legacy)
+		float GlobalScale = 0.f;                         // exponential
 		std::array<FontRoleSettings, static_cast<size_t>(FontRole::Count)> FontRoles = []() {
 			std::array<FontRoleSettings, static_cast<size_t>(FontRole::Count)> roles{};
 			auto setRole = [&roles](FontRole role, std::string family, std::string style, std::string file, float sizeScale) {
@@ -268,7 +272,7 @@ public:
 		bool CenterHeader = false;          // whether to center the header title and logo
 		float TooltipHoverDelay = 0.5f;     // tooltip hover delay in seconds
 		bool BackgroundBlurEnabled = true;  // enable background blur effect
-		bool UseCustomCursor = false;     // use theme cursor images instead of default ImGui cursors
+		bool UseCustomCursor = false;       // use theme cursor images instead of default ImGui cursors
 		struct CursorImageSettings
 		{
 			std::string File;
@@ -296,10 +300,10 @@ public:
 			ImVec4 Background{ 0.10f, 0.10f, 0.10f, 0.40f };
 			ImVec4 Text{ 1.0f, 1.0f, 1.0f, 1.0f };
 			// Separated border controls for better theming granularity
-			ImVec4 WindowBorder{ 0.5f, 0.5f, 0.5f, 0.8f };  // Outer window borders
-			ImVec4 FrameBorder{ 0.18f, 0.18f, 0.18f, 0.62f };   // Button, slider, input field borders
-			ImVec4 Separator{ 0.5f, 0.5f, 0.5f, 0.6f };     // Internal separators and dividers
-			ImVec4 ResizeGrip{ 0.6f, 0.6f, 0.6f, 0.8f };    // Window resize grips
+			ImVec4 WindowBorder{ 0.5f, 0.5f, 0.5f, 0.8f };     // Outer window borders
+			ImVec4 FrameBorder{ 0.18f, 0.18f, 0.18f, 0.62f };  // Button, slider, input field borders
+			ImVec4 Separator{ 0.5f, 0.5f, 0.5f, 0.6f };        // Internal separators and dividers
+			ImVec4 ResizeGrip{ 0.6f, 0.6f, 0.6f, 0.8f };       // Window resize grips
 		} Palette;
 		struct StatusPaletteColors
 		{
@@ -422,22 +426,22 @@ public:
 	{
 		std::vector<InputCombo> ToggleKey = { InputCombo::Keyboard(VK_END) };
 		std::vector<InputCombo> SkipCompilationKey = { InputCombo::Keyboard(VK_ESCAPE) };
-		std::vector<InputCombo> EffectToggleKey = { InputCombo::Keyboard(VK_MULTIPLY) };    // toggle all effects
-		std::vector<InputCombo> OverlayToggleKey = { InputCombo::Keyboard(VK_F10) };        // Global overlay toggle key for all overlays
-		std::vector<InputCombo> ShaderBlockPrevKey = { InputCombo::Keyboard(VK_PRIOR) };    // Debug: cycle backward through shaders (PageUp)
-		std::vector<InputCombo> ShaderBlockNextKey = { InputCombo::Keyboard(VK_NEXT) };     // Debug: cycle forward through shaders (PageDown)
+		std::vector<InputCombo> EffectToggleKey = { InputCombo::Keyboard(VK_MULTIPLY) };                               // toggle all effects
+		std::vector<InputCombo> OverlayToggleKey = { InputCombo::Keyboard(VK_F10) };                                   // Global overlay toggle key for all overlays
+		std::vector<InputCombo> ShaderBlockPrevKey = { InputCombo::Keyboard(VK_PRIOR) };                               // Debug: cycle backward through shaders (PageUp)
+		std::vector<InputCombo> ShaderBlockNextKey = { InputCombo::Keyboard(VK_NEXT) };                                // Debug: cycle forward through shaders (PageDown)
 		std::vector<InputCombo> CSEditorToggleKey = { InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(VK_END) };  // CS Editor toggle key
-		std::vector<InputCombo> ScreenshotKey = { InputCombo::Keyboard(VK_SNAPSHOT) };                                    // Screenshot capture key
-		bool EnableShaderBlocking = false;                                                  // Enable shader blocking hotkeys for debugging
-		bool BackgroundShaderCompilationOnBoot = false;                                     // Load the menu immediately and compile shaders in the background on boot
-		bool HideBackgroundCompilationAtInfoLevel = true;                                   // Hide routine background-compilation HUD only while log level is info
-		bool FirstTimeSetupCompleted = false;                                               // Track if first-time setup has been completed
-		bool SkipClearCacheConfirmation = false;                                            // Skip confirmation dialog when clearing shader cache
-		bool AutoHideFeatureList = false;                                                   // Auto-hide left feature list panel, show on hover
-		bool SkipConstraintWarning = false;                                                 // Skip popup when a setting change creates new constraints
-		int PerformanceUiMode = 0;                                                            // 0 = Essentials, 1 = Advanced
-		bool RequireShiftToDock = true;                                                     // Require holding Shift to dock windows
-		bool UseResolutionFont = true;                                                      // When true, runtime font size scales with screen resolution; when persisted to theme files, FontSize is zeroed for backward compatibility
+		std::vector<InputCombo> ScreenshotKey = { InputCombo::Keyboard(VK_SNAPSHOT) };                                 // Screenshot capture key
+		bool EnableShaderBlocking = false;                                                                             // Enable shader blocking hotkeys for debugging
+		bool BackgroundShaderCompilationOnBoot = false;                                                                // Load the menu immediately and compile shaders in the background on boot
+		bool HideBackgroundCompilationAtInfoLevel = true;                                                              // Hide routine background-compilation HUD only while log level is info
+		bool FirstTimeSetupCompleted = false;                                                                          // Track if first-time setup has been completed
+		bool SkipClearCacheConfirmation = false;                                                                       // Skip confirmation dialog when clearing shader cache
+		bool AutoHideFeatureList = false;                                                                              // Auto-hide left feature list panel, show on hover
+		bool SkipConstraintWarning = false;                                                                            // Skip popup when a setting change creates new constraints
+		int PerformanceUiMode = 0;                                                                                     // 0 = Essentials, 1 = Advanced
+		bool RequireShiftToDock = true;                                                                                // Require holding Shift to dock windows
+		bool UseResolutionFont = true;                                                                                 // When true, runtime font size scales with screen resolution; when persisted to theme files, FontSize is zeroed for backward compatibility
 		ThemeSettings Theme;
 		std::string SelectedThemePreset = "";  // Currently selected theme preset (empty = custom/user theme)
 	};

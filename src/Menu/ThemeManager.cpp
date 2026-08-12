@@ -261,6 +261,15 @@ void ThemeManager::ForceApplyDefaultTheme()
 	logger::info("ForceApplyDefaultTheme: Applied Default.json colors directly to ImGui");
 }
 
+void ThemeManager::InitDefaultFontConfig(ImFontConfig& config)
+{
+	config = {};
+	config.OversampleH = Constants::FCONF_OVERSAMPLE_H;
+	config.OversampleV = Constants::FCONF_OVERSAMPLE_V;
+	config.PixelSnapH = Constants::FCONF_PIXELSNAP_H;
+	config.RasterizerMultiply = Constants::FCONF_RASTERIZER_MULTIPLY;
+}
+
 bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 {
 	// Thread-safe reentrancy guard using atomic flag
@@ -310,137 +319,158 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		return false;
 	}
 
-	// Clear existing fonts from the atlas
-	io.Fonts->Clear();
-	io.Fonts->TexGlyphPadding = 1;
-
-	ImFontConfig font_config;
-
-	font_config.OversampleH = Constants::FCONF_OVERSAMPLE_H;
-	font_config.OversampleV = Constants::FCONF_OVERSAMPLE_V;
-	font_config.PixelSnapH = Constants::FCONF_PIXELSNAP_H;
-	font_config.RasterizerMultiply = Constants::FCONF_RASTERIZER_MULTIPLY;
+	auto clearFontAtlas = [&]() {
+		io.Fonts->Clear();
+		MenuFonts::InvalidatePreviewFonts();
+		io.FontDefault = nullptr;
+		menu.loadedFontRoles.fill(nullptr);
+	};
 
 	float fontSize = ResolveFontSize(menu);
-	auto fontsRoot = Util::PathHelpers::GetFontsPath();
-	menu.loadedFontRoles.fill(nullptr);
+	auto populateFontAtlas = [&](bool includePreviewFonts) {
+		// Recreate role fonts as well as previews so a failed optional preview
+		// can be discarded without degrading the configured UI fonts.
+		clearFontAtlas();
+		io.Fonts->TexGlyphPadding = 1;
 
-	std::unordered_map<std::string, ImFont*> atlasCache;
-	std::vector<size_t> rolesNeedingFallback;
+		ImFontConfig font_config{};
+		InitDefaultFontConfig(font_config);
 
-	for (size_t i = 0; i < static_cast<size_t>(Menu::FontRole::Count); ++i) {
-		Menu::FontRole role = static_cast<Menu::FontRole>(i);
-		auto& mutableRoleSettings = const_cast<Menu&>(menu).GetFontRoleSettings(role);
-		Menu::ThemeSettings::FontRoleSettings effective = themeSettings.FontRoles[i];
+		auto fontsRoot = Util::PathHelpers::GetFontsPath();
+		std::unordered_map<std::string, ImFont*> atlasCache;
+		std::vector<size_t> rolesNeedingFallback;
 
-		if (effective.SizeScale <= 0.f) {
-			effective.SizeScale = Menu::GetFontRoleDefaultScale(role);
-		}
+		for (size_t i = 0; i < static_cast<size_t>(Menu::FontRole::Count); ++i) {
+			Menu::FontRole role = static_cast<Menu::FontRole>(i);
+			auto& mutableRoleSettings = const_cast<Menu&>(menu).GetFontRoleSettings(role);
+			Menu::ThemeSettings::FontRoleSettings effective = themeSettings.FontRoles[i];
 
-		if (effective.File.empty()) {
-			effective = Menu::GetDefaultFontRole(role);
-		}
-
-		float scaledSize = std::clamp(fontSize * effective.SizeScale, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
-		float roundedSize = std::round(scaledSize);
-		menu.cachedFontPixelSizesByRole[i] = roundedSize;
-
-		ImFont* loadedFont = nullptr;
-		if (!effective.File.empty()) {
-			auto fontPath = fontsRoot / effective.File;
-
-			// Security: Validate font path stays within fonts directory
-			if (!Util::IsPathWithinDirectory(fontsRoot, fontPath)) {
-				logger::error("Security: Font path traversal attempt for role '{}': {}",
-					Menu::GetFontRoleKey(role), effective.File);
-				effective = Menu::GetDefaultFontRole(role);
-				fontPath = fontsRoot / effective.File;
+			if (effective.SizeScale <= 0.f) {
+				effective.SizeScale = Menu::GetFontRoleDefaultScale(role);
 			}
 
-			if (std::filesystem::exists(fontPath)) {
-				std::string cacheKey = std::format("{}|{}", effective.File, static_cast<int>(roundedSize));
-				auto cached = atlasCache.find(cacheKey);
-				if (cached != atlasCache.end()) {
-					loadedFont = cached->second;
-				} else {
-					ImFontConfig cfg = font_config;
-					auto* font = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), roundedSize, &cfg);
-					if (font) {
-						atlasCache.emplace(cacheKey, font);
-						loadedFont = font;
+			if (effective.File.empty()) {
+				effective = Menu::GetDefaultFontRole(role);
+			}
+
+			float scaledSize = std::clamp(fontSize * effective.SizeScale, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
+			float roundedSize = std::round(scaledSize);
+			menu.cachedFontPixelSizesByRole[i] = roundedSize;
+
+			ImFont* loadedFont = nullptr;
+			if (!effective.File.empty()) {
+				auto fontPath = fontsRoot / effective.File;
+
+				// Security: Validate font path stays within fonts directory
+				if (!Util::IsPathWithinDirectory(fontsRoot, fontPath)) {
+					logger::error("Security: Font path traversal attempt for role '{}': {}",
+						Menu::GetFontRoleKey(role), effective.File);
+					effective = Menu::GetDefaultFontRole(role);
+					fontPath = fontsRoot / effective.File;
+				}
+
+				if (std::filesystem::exists(fontPath)) {
+					std::string cacheKey = std::format("{}|{}", effective.File, static_cast<int>(roundedSize));
+					auto cached = atlasCache.find(cacheKey);
+					if (cached != atlasCache.end()) {
+						loadedFont = cached->second;
+					} else {
+						ImFontConfig cfg = font_config;
+						auto* font = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), roundedSize, &cfg);
+						if (font) {
+							atlasCache.emplace(cacheKey, font);
+							loadedFont = font;
+						}
 					}
 				}
 			}
-		}
 
-		if (!loadedFont) {
-			rolesNeedingFallback.push_back(i);
-		} else {
-			menu.loadedFontRoles[i] = loadedFont;
-			mutableRoleSettings = effective;
-			const_cast<Menu&>(menu).cachedFontFilesByRole[i] = effective.File;
-		}
-	}
-
-	const size_t bodyIndex = static_cast<size_t>(Menu::FontRole::Body);
-	if (!menu.loadedFontRoles[bodyIndex]) {
-		const auto& defaults = Menu::GetDefaultFontRole(Menu::FontRole::Body);
-		float bodySize = std::clamp(fontSize * defaults.SizeScale, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
-		float roundedBodySize = std::round(bodySize);
-		menu.cachedFontPixelSizesByRole[bodyIndex] = roundedBodySize;
-
-		ImFont* bodyFont = nullptr;
-		auto defaultPath = fontsRoot / defaults.File;
-		if (std::filesystem::exists(defaultPath)) {
-			std::string cacheKey = std::format("{}|{}", defaults.File, static_cast<int>(roundedBodySize));
-			ImFontConfig cfg = font_config;
-			bodyFont = io.Fonts->AddFontFromFileTTF(defaultPath.string().c_str(), roundedBodySize, &cfg);
-			if (bodyFont) {
-				atlasCache.emplace(cacheKey, bodyFont);
+			if (!loadedFont) {
+				rolesNeedingFallback.push_back(i);
+			} else {
+				menu.loadedFontRoles[i] = loadedFont;
+				mutableRoleSettings = effective;
+				const_cast<Menu&>(menu).cachedFontFilesByRole[i] = effective.File;
 			}
 		}
+
+		const size_t bodyIndex = static_cast<size_t>(Menu::FontRole::Body);
+		if (!menu.loadedFontRoles[bodyIndex]) {
+			const auto& defaults = Menu::GetDefaultFontRole(Menu::FontRole::Body);
+			float bodySize = std::clamp(fontSize * defaults.SizeScale, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
+			float roundedBodySize = std::round(bodySize);
+			menu.cachedFontPixelSizesByRole[bodyIndex] = roundedBodySize;
+
+			ImFont* bodyFont = nullptr;
+			auto defaultPath = fontsRoot / defaults.File;
+			if (std::filesystem::exists(defaultPath)) {
+				std::string cacheKey = std::format("{}|{}", defaults.File, static_cast<int>(roundedBodySize));
+				ImFontConfig cfg = font_config;
+				bodyFont = io.Fonts->AddFontFromFileTTF(defaultPath.string().c_str(), roundedBodySize, &cfg);
+				if (bodyFont) {
+					atlasCache.emplace(cacheKey, bodyFont);
+				}
+			}
+			if (!bodyFont) {
+				bodyFont = io.Fonts->AddFontDefault();
+			}
+
+			menu.loadedFontRoles[bodyIndex] = bodyFont;
+			const_cast<Menu&>(menu).GetFontRoleSettings(Menu::FontRole::Body) = defaults;
+			const_cast<Menu&>(menu).cachedFontFilesByRole[bodyIndex] = defaults.File;
+			menu.cachedFontName = defaults.File;
+			const_cast<Menu&>(menu).GetSettings().Theme.FontName = defaults.File;
+		}
+
+		ImFont* bodyFont = menu.loadedFontRoles[bodyIndex];
+		for (size_t idx : rolesNeedingFallback) {
+			if (idx == bodyIndex) {
+				continue;
+			}
+			Menu::FontRole role = static_cast<Menu::FontRole>(idx);
+			const auto& defaults = Menu::GetDefaultFontRole(role);
+			float fallbackSize = std::clamp(fontSize * defaults.SizeScale, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
+			menu.cachedFontPixelSizesByRole[idx] = std::round(fallbackSize);
+			menu.loadedFontRoles[idx] = bodyFont;
+			const_cast<Menu&>(menu).GetFontRoleSettings(role) = defaults;
+			const_cast<Menu&>(menu).cachedFontFilesByRole[idx] = defaults.File;
+		}
+
 		if (!bodyFont) {
 			bodyFont = io.Fonts->AddFontDefault();
+			menu.loadedFontRoles[bodyIndex] = bodyFont;
 		}
 
-		menu.loadedFontRoles[bodyIndex] = bodyFont;
-		const_cast<Menu&>(menu).GetFontRoleSettings(Menu::FontRole::Body) = defaults;
-		const_cast<Menu&>(menu).cachedFontFilesByRole[bodyIndex] = defaults.File;
-		menu.cachedFontName = defaults.File;
-		const_cast<Menu&>(menu).GetSettings().Theme.FontName = defaults.File;
-	}
+		io.FontDefault = bodyFont ? bodyFont : io.Fonts->AddFontDefault();
+		menu.cachedFontName = const_cast<Menu&>(menu).GetFontRoleSettings(Menu::FontRole::Body).File;
+		cachedFontSize = fontSize;
+		const_cast<Menu&>(menu).GetSettings().Theme.FontName = menu.cachedFontName;
+		const_cast<Menu&>(menu).cachedFontSignature = const_cast<Menu&>(menu).BuildFontSignature(fontSize);
 
-	ImFont* bodyFont = menu.loadedFontRoles[bodyIndex];
-	for (size_t idx : rolesNeedingFallback) {
-		if (idx == bodyIndex) {
-			continue;
+		if (includePreviewFonts) {
+			const float previewFontSize =
+				menu.cachedFontPixelSizesByRole[static_cast<size_t>(Menu::FontRole::Body)];
+			MenuFonts::AddPreviewFontsToAtlas(previewFontSize);
 		}
-		Menu::FontRole role = static_cast<Menu::FontRole>(idx);
-		const auto& defaults = Menu::GetDefaultFontRole(role);
-		float fallbackSize = std::clamp(fontSize * defaults.SizeScale, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
-		menu.cachedFontPixelSizesByRole[idx] = std::round(fallbackSize);
-		menu.loadedFontRoles[idx] = bodyFont;
-		const_cast<Menu&>(menu).GetFontRoleSettings(role) = defaults;
-		const_cast<Menu&>(menu).cachedFontFilesByRole[idx] = defaults.File;
-	}
+	};
 
-	if (!bodyFont) {
-		bodyFont = io.Fonts->AddFontDefault();
-		menu.loadedFontRoles[bodyIndex] = bodyFont;
-	}
-
-	io.FontDefault = bodyFont ? bodyFont : io.Fonts->AddFontDefault();
-	menu.cachedFontName = const_cast<Menu&>(menu).GetFontRoleSettings(Menu::FontRole::Body).File;
-	cachedFontSize = fontSize;
-	const_cast<Menu&>(menu).GetSettings().Theme.FontName = menu.cachedFontName;
-	const_cast<Menu&>(menu).cachedFontSignature = const_cast<Menu&>(menu).BuildFontSignature(fontSize);
+	const bool previewsRequested =
+		menu.wantsFontPreviewAtlas && !menu.fontPreviewAtlasSuppressed;
+	populateFontAtlas(previewsRequested);
 
 	// Build the font atlas - this bakes all fonts into the texture
-	if (!io.Fonts->Build()) {
+	bool atlasBuilt = io.Fonts->Build();
+	if (!atlasBuilt && previewsRequested) {
+		logger::warn("ReloadFont: Preview atlas failed; retrying with configured role fonts only");
+		const_cast<Menu&>(menu).fontPreviewAtlasSuppressed = true;
+		populateFontAtlas(false);
+		atlasBuilt = io.Fonts->Build();
+	}
+	if (!atlasBuilt) {
 		logger::error("ReloadFont: Failed to build font atlas");
 
 		// Emergency fallback: try to restore with default font before giving up
-		io.Fonts->Clear();
+		clearFontAtlas();
 		ImFont* fallbackFont = io.Fonts->AddFontDefault();
 		if (fallbackFont && io.Fonts->Build()) {
 			menu.loadedFontRoles.fill(fallbackFont);
@@ -473,7 +503,7 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		logger::error("ReloadFont: Failed to create device objects");
 
 		// Emergency fallback: restore with default font and retry device objects
-		io.Fonts->Clear();
+		clearFontAtlas();
 		ImFont* fallbackFont = io.Fonts->AddFontDefault();
 
 		bool recoverySucceeded = false;

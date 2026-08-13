@@ -101,6 +101,11 @@ namespace
 	constexpr std::size_t kParticleLightCacheMaxEntries = static_cast<std::size_t>(MAX_LIGHTS) * 32u;
 	constexpr std::size_t kMaxQueuedParticleLights = static_cast<std::size_t>(MAX_LIGHTS) * 16u;
 	constexpr std::size_t kDirectionalNiLightEngineReadSize = sizeof(RE::NiDirectionalLight);
+	// BSEffectShader reads BSLight::light through +0x4F and NiLight runtime data
+	// through the end of the flat SE NiLight object.
+	constexpr std::size_t kEffectBSLightEngineReadSize = 0x50;
+	constexpr std::size_t kEffectNiLightEngineReadSize = sizeof(RE::NiLight);
+	static_assert(kEffectBSLightEngineReadSize <= sizeof(RE::BSLight));
 
 	void DrawHeatWarpStrengthSetting()
 	{
@@ -158,6 +163,45 @@ namespace
 		return a_size <= available;
 	}
 
+	bool IsSafeEffectLightRange(const void* a_ptr, std::size_t a_size) noexcept
+	{
+		return IsPlausibleRenderPointer(a_ptr) && IsReadableRange(a_ptr, a_size);
+	}
+
+	// Pointer plausibility cannot distinguish a live BSLight from stale mapped
+	// memory. Keep the guarded read free of C++ unwinding objects for MSVC SEH.
+	RE::NiLight* SafeReadNiLight(RE::BSLight* a_light) noexcept
+	{
+#if defined(_MSC_VER)
+		__try {
+			return a_light ? a_light->light.get() : nullptr;
+		} __except (1) {
+			return nullptr;
+		}
+#else
+		return a_light ? a_light->light.get() : nullptr;
+#endif
+	}
+
+	// The pass owns only a raw array of raw light pointers. Guard the array read
+	// separately so a stale list cannot fault before the pointed-to light is checked.
+	RE::BSLight* SafeReadSceneLight(RE::BSLight* const* a_sceneLights, std::uint8_t a_index) noexcept
+	{
+		if (!a_sceneLights) {
+			return nullptr;
+		}
+
+#if defined(_MSC_VER)
+		__try {
+			return a_sceneLights[a_index];
+		} __except (1) {
+			return nullptr;
+		}
+#else
+		return a_sceneLights[a_index];
+#endif
+	}
+
 	bool IsSafeDirectionalNiLight(const RE::NiLight* a_light)
 	{
 		static const RE::NiLight* validated = nullptr;
@@ -207,7 +251,7 @@ namespace
 				return false;
 			}
 
-			a_outNiLight = a_outLight->light.get();
+			a_outNiLight = SafeReadNiLight(a_outLight);
 			return IsSafeDirectionalNiLight(a_outNiLight);
 		}
 #if defined(_MSC_VER)
@@ -643,8 +687,7 @@ json LightLimitFix::CapturePerformanceTuningAuxiliaryState() const
 	                                  std::clamp(globals::state->refractionScale, 0.0f, 2.0f) :
 	                                  1.0f;
 	return {
-		{ "Advanced", {
-			{ "Refraction Scale", refractionScale } } }
+		{ "Advanced", { { "Refraction Scale", refractionScale } } }
 	};
 }
 
@@ -1079,6 +1122,8 @@ void LightLimitFix::SetupResources()
 
 void LightLimitFix::Reset()
 {
+	effectLightValidationCache.clear();
+
 	{
 		std::lock_guard<std::mutex> currentLock{ currentParticleLightsMutex };
 
@@ -2435,6 +2480,63 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
+	// The engine dereferences every raw BSLight/NiLight pair without null or
+	// lifetime checks. Validate each pair on first use per frame; cache hits still
+	// use an SEH-guarded pointer read so changed or unmapped entries are rechecked.
+	if (Pass && Pass->numLights > 0) {
+		const std::uint8_t requestedCount = Pass->numLights;
+		RE::BSLight* const* sceneLights = Pass->sceneLights;
+		std::uint8_t validCount = 0;
+		auto& validationCache = globals::features::lightLimitFix.effectLightValidationCache;
+		for (std::uint8_t i = 0; i < requestedCount; ++i) {
+			RE::BSLight* bsLight = SafeReadSceneLight(sceneLights, i);
+			if (const auto cached = validationCache.find(bsLight); cached != validationCache.end()) {
+				const auto currentNiLight = SafeReadNiLight(bsLight);
+				if (currentNiLight == cached->second) {
+					++validCount;
+					continue;
+				}
+				validationCache.erase(cached);
+			}
+
+			if (!IsSafeEffectLightRange(bsLight, kEffectBSLightEngineReadSize)) {
+				static int loggedBsLight = 0;
+				if (loggedBsLight++ < 10) {
+					logger::warn(
+						"[LLF] BSEffectShader_SetupGeometry: unsafe BSLight at "
+						"sceneLights[{}]=0x{:x} numLights={}; clamping to {}",
+						i,
+						reinterpret_cast<std::uintptr_t>(bsLight),
+						requestedCount,
+						validCount);
+				}
+				break;
+			}
+
+			RE::NiLight* niLight = SafeReadNiLight(bsLight);
+			if (!IsSafeEffectLightRange(niLight, kEffectNiLightEngineReadSize)) {
+				static int loggedNiLight = 0;
+				if (loggedNiLight++ < 10) {
+					logger::warn(
+						"[LLF] BSEffectShader_SetupGeometry: unsafe NiLight at "
+						"sceneLights[{}] (BSLight=0x{:x} NiLight=0x{:x}); clamping to {}",
+						i,
+						reinterpret_cast<std::uintptr_t>(bsLight),
+						reinterpret_cast<std::uintptr_t>(niLight),
+						validCount);
+				}
+				break;
+			}
+
+			validationCache.insert_or_assign(bsLight, niLight);
+			++validCount;
+		}
+
+		if (validCount < requestedCount) {
+			Pass->numLights = validCount;
+		}
+	}
+
 	func(This, Pass, RenderFlags);
 	ExternalEmittance::UpdatePermutation(Pass);
 	auto& singleton = globals::features::lightLimitFix;

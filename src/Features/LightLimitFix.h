@@ -258,6 +258,7 @@ public:
 	bool wasWorld = false;
 	int previousRoomIndex = -1;
 	uint previousShadowBitMask = 0;
+	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;
 	eastl::hash_map<RE::NiLight*, bool> jsonPlacedLightCache;
 	Util::FrameChecker jsonPlacedLightCacheFrameChecker;
 

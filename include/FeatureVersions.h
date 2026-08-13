@@ -24,7 +24,7 @@ namespace FeatureVersions
         {"HairSpecular"sv,         {1,1,2}},
         {"HDRDisplay"sv,           {1,1,0}},
         {"HorizonFix"sv,           {1,0,0}},
-        {"ImageBasedLighting"sv,   {1,2,6}},
+        {"ImageBasedLighting"sv,   {1,2,7}},
         {"InteriorSun"sv,          {1,0,2}},
         {"InverseSquareLighting"sv,{1,3,0}},
         {"LODBlending"sv,          {1,0,0}},

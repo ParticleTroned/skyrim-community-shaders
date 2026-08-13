@@ -915,8 +915,7 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 {
 	float tintStrength = saturate(SharedData::unifiedWaterSettings.WaterTintStrength);
-	[branch] if (tintStrength <= 0.0)
-		return baseColor;
+	[branch] if (tintStrength <= 0.0) return baseColor;
 
 	float3 baseColorLinear = Color::SkyrimGammaToLinear(max(baseColor, 0.0.xxx));
 	float3 tintColorLinear = Color::SkyrimGammaToLinear(saturate(SharedData::unifiedWaterSettings.WaterTintColor));
@@ -949,10 +948,9 @@ float GetUnifiedWaterShallowFallbackAvailability(float viewDistance)
 
 bool IsUnifiedWaterRawDepthValid(float rawDepth)
 {
-	return
-		isfinite(rawDepth) &&
-		rawDepth > 1e-5 &&
-		rawDepth < 1.0 - 1e-5;
+	return isfinite(rawDepth) &&
+	       rawDepth > 1e-5 &&
+	       rawDepth < 1.0 - 1e-5;
 }
 
 bool TryGetUnifiedWaterScenePosition(
@@ -988,8 +986,8 @@ bool TryGetUnifiedWaterProbeColumn(
 	float rawDepth = DepthTex.Load(int3(samplePixel, 0)).x;
 	float2 logicalUV =
 		FrameBuffer::DynamicResolutionParams2.xy *
-		(float2(samplePixel) + 0.5) *
-		VPOSOffset.xy +
+			(float2(samplePixel) + 0.5) *
+			VPOSOffset.xy +
 		VPOSOffset.zw;
 	float3 scenePosition;
 	if (!TryGetUnifiedWaterScenePosition(logicalUV, rawDepth, scenePosition))
@@ -1029,8 +1027,7 @@ float GetUnifiedWaterDeepContextWeight(
 		maximumReach <= 0.0 ||
 		!all(isfinite(columnGradient)) ||
 		!all(isfinite(waterSurfaceDx)) ||
-		!all(isfinite(waterSurfaceDy)))
-	{
+		!all(isfinite(waterSurfaceDy))) {
 		return 0.0;
 	}
 
@@ -1061,8 +1058,7 @@ float GetUnifiedWaterDeepContextWeight(
 		!isfinite(requestedRadiusPixels) ||
 		!isfinite(representableRadiusPixels) ||
 		requestedRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels ||
-		representableRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels)
-	{
+		representableRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels) {
 		return 0.0;
 	}
 
@@ -1073,9 +1069,9 @@ float GetUnifiedWaterDeepContextWeight(
 		UnifiedWaterDeepProbeReliableRadiusRatio * representableRadiusPixels;
 	float probeRepresentationConfidence =
 		1.0 - smoothstep(
-			reliabilityFadeStartPixels,
-			representableRadiusPixels,
-			requestedRadiusPixels);
+				  reliabilityFadeStartPixels,
+				  representableRadiusPixels,
+				  requestedRadiusPixels);
 	if (probeRepresentationConfidence <= 1e-4)
 		return 0.0;
 
@@ -1092,8 +1088,7 @@ float GetUnifiedWaterDeepContextWeight(
 	if (
 		all(endpointOffset == 0) ||
 		all(midpointOffset == 0) ||
-		all(midpointOffset == endpointOffset))
-	{
+		all(midpointOffset == endpointOffset)) {
 		return 0.0;
 	}
 
@@ -1102,8 +1097,7 @@ float GetUnifiedWaterDeepContextWeight(
 	int2 endpointPixel = centerPixel + endpointOffset;
 	if (
 		any(centerPixel < 0) ||
-		any(centerPixel >= renderDimensions))
-	{
+		any(centerPixel >= renderDimensions)) {
 		return 0.0;
 	}
 
@@ -1111,8 +1105,7 @@ float GetUnifiedWaterDeepContextWeight(
 	if (!TryGetUnifiedWaterScenePosition(
 			primaryLogicalUV,
 			primaryRawDepth,
-			centerScenePosition))
-	{
+			centerScenePosition)) {
 		return 0.0;
 	}
 
@@ -1138,8 +1131,7 @@ float GetUnifiedWaterDeepContextWeight(
 	bool midpointValid = false;
 	if (
 		all(midpointPixel >= 0) &&
-		all(midpointPixel < renderDimensions))
-	{
+		all(midpointPixel < renderDimensions)) {
 		midpointValid = TryGetUnifiedWaterProbeColumn(
 			midpointPixel,
 			waterSurfacePosition,
@@ -1152,8 +1144,7 @@ float GetUnifiedWaterDeepContextWeight(
 	bool endpointValid = false;
 	if (
 		all(endpointPixel >= 0) &&
-		all(endpointPixel < renderDimensions))
-	{
+		all(endpointPixel < renderDimensions)) {
 		endpointValid = TryGetUnifiedWaterProbeColumn(
 			endpointPixel,
 			waterSurfacePosition,
@@ -1176,8 +1167,8 @@ float GetUnifiedWaterDeepContextWeight(
 	// Transition only controls the soft interval below it. Qualifying pixels can
 	// therefore reach exactly one instead of retaining a residual shallow layer.
 	float connectedDeepWeight = transition > 1e-4 ?
-		smoothstep(transitionStart, deepDepth, deepestConnectedColumn) :
-		step(deepDepth, deepestConnectedColumn);
+	                                smoothstep(transitionStart, deepDepth, deepestConnectedColumn) :
+	                                step(deepDepth, deepestConnectedColumn);
 	return saturate(
 		connectedDeepWeight *
 		probeRepresentationConfidence);
@@ -1203,8 +1194,8 @@ float GetUnifiedWaterShoreContactWeight(
 	// Preserve the focused world-space fade while ensuring it cannot collapse
 	// below a controllable screen-space width on steep, coarse terrain.
 	float adaptiveRange = isfinite(depthFootprint) ?
-		minimumFadePixels * max(depthFootprint, 0.0) :
-		0.0;
+	                          minimumFadePixels * max(depthFootprint, 0.0) :
+	                          0.0;
 	float effectiveRange = max(blendRange, adaptiveRange);
 	if (effectiveRange <= 1e-4)
 		return 1.0;
@@ -1433,8 +1424,8 @@ PS_OUTPUT main(PS_INPUT input)
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z;
 	distanceMul = all(isfinite(unclampedDistanceMul)) ?
-		saturate(unclampedDistanceMul) :
-		0.0.xxxx;
+	                  saturate(unclampedDistanceMul) :
+	                  0.0.xxxx;
 
 #					if defined(HORIZON_FIX)
 	if (primaryRawDepth >= HorizonFix::EmptyDepthThreshold)
@@ -1554,9 +1545,14 @@ PS_OUTPUT main(PS_INPUT input)
 	dirColor *= dirShadow;
 
 #				if defined(SKYLIGHTING)
-	ambientColor = Color::IrradianceToLinear(ambientColor);
-	ambientColor *= skylightingDiffuse;
-	ambientColor = Color::IrradianceToGamma(ambientColor);
+#					if defined(IBL) && !defined(INTERIOR)
+	if (!SharedData::iblSettings.EnableIBL)
+#					endif
+	{
+		ambientColor = Color::IrradianceToLinear(ambientColor);
+		ambientColor *= skylightingDiffuse;
+		ambientColor = Color::IrradianceToGamma(ambientColor);
+	}
 #				endif
 
 	diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;

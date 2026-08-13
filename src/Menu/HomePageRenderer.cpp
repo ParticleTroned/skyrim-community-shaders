@@ -191,7 +191,7 @@ void HomePageRenderer::RenderWelcomeSection()
 	const char* forkVersion = Plugin::FORK_VERSION.data();
 	const float titleLineGap = 2.0f * scale;
 	const float titleAreaBottomY = titleBlockY + titleBlockHeight + ImGui::GetStyle().ItemSpacing.y +
-		baseLineHeightWithSpacing * FORK_NOTICE_OFFSET_LINES;
+	                               baseLineHeightWithSpacing * FORK_NOTICE_OFFSET_LINES;
 
 	ImGui::SetWindowFontScale(TITLE_PRIMARY_LINE_FONT_SCALE);
 	const float titleLineHeight = ImGui::GetTextLineHeight();
@@ -220,10 +220,11 @@ void HomePageRenderer::RenderWelcomeSection()
 	ImGui::SetCursorPosY(titleAreaBottomY);
 
 	DrawCenteredItalicTextBlock({
-		"This is an unofficial fork of Community Shaders restoring Particle Lights.",
-		"Not affiliated with or endorsed by the Community Shaders team",
-		"- Visit their Discord to get the Original and support their outstanding efforts -",
-	}, windowSize.x, forkNoticeColor);
+									"This is an unofficial fork of Community Shaders restoring Particle Lights.",
+									"Not affiliated with or endorsed by the Community Shaders team",
+									"- Visit their Discord to get the Original and support their outstanding efforts -",
+								},
+		windowSize.x, forkNoticeColor);
 
 	ImGui::Spacing();
 	RenderModeSection();
@@ -340,9 +341,9 @@ void HomePageRenderer::RenderCacheMismatchSection()
 {
 	auto* shaderCache = globals::shaderCache;
 	if (!shaderCache || (!shaderCache->IsDiskCacheHeld() &&
-	                        !shaderCache->HasFeatureSetChanges() &&
-	                        !shaderCache->HasFeatureSetRevertPending() &&
-	                        !shaderCache->HasPreviousDiskCache())) {
+							!shaderCache->HasFeatureSetChanges() &&
+							!shaderCache->HasFeatureSetRevertPending() &&
+							!shaderCache->HasPreviousDiskCache())) {
 		return;
 	}
 
@@ -396,7 +397,7 @@ void HomePageRenderer::RenderCacheMismatchSection()
 
 	using MismatchKind = Util::CacheInvalidation::CacheMismatch::Kind;
 	const auto& mismatches = (cacheHeld || featureChangeHeld) ? shaderCache->GetCacheMismatches() :
-	                                                           shaderCache->GetPreviousCacheMismatches();
+	                                                            shaderCache->GetPreviousCacheMismatches();
 	for (const auto& mismatch : mismatches) {
 		const char* detail = mismatch.detail.c_str();
 		if (mismatch.kind == MismatchKind::EnabledFlip) {
@@ -906,7 +907,10 @@ void HomePageRenderer::MarkFirstTimeSetupComplete(uint32_t closingKey, bool skip
 
 	// Immediately save settings to ensure the flag is persisted
 	// This prevents the welcome screen from showing again even if user doesn't manually save
-	globals::state->Save();
+	if (!globals::state->Save()) {
+		menu->GetSettings().FirstTimeSetupCompleted = false;
+		return;
+	}
 
 	isFirstTimeSetupShown = true;
 	keyThatClosedDialog = skipNextKeyRelease ? closingKey : 0;

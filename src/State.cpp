@@ -36,6 +36,62 @@ static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
 
 namespace
 {
+	std::vector<std::string> SaveUserOverrides(const json& a_settings)
+	{
+		std::vector<std::string> failedLayers;
+		auto* overrideManager = SettingsOverrideManager::GetSingleton();
+		if (!overrideManager->IsEnabled())
+			return failedLayers;
+
+		for (auto* feature : Feature::GetFeatureList()) {
+			std::string featureName = "<unknown>";
+			try {
+				featureName = feature->GetShortName();
+				if (!feature->loaded || !overrideManager->HasFeatureOverrides(featureName))
+					continue;
+
+				json currentSettings;
+				feature->SaveSettings(currentSettings);
+				const auto overrideSettings =
+					overrideManager->GetMergedOverrideSettings(featureName, json::object());
+				if (!overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings))
+					failedLayers.push_back(featureName);
+			} catch (const std::exception& e) {
+				logger::warn("Failed to save user override for {}: {}", featureName, e.what());
+				failedLayers.push_back(featureName);
+			} catch (...) {
+				logger::warn("Failed to save user override for {} due to an unknown error", featureName);
+				failedLayers.push_back(featureName);
+			}
+		}
+
+		try {
+			const auto globalOverrideSettings =
+				overrideManager->GetMergedOverrideSettings("Global", json::object());
+			if (!overrideManager->SaveUserOverride("Global", a_settings, globalOverrideSettings))
+				failedLayers.emplace_back("Global");
+		} catch (const std::exception& e) {
+			logger::warn("Failed to save global user override: {}", e.what());
+			failedLayers.emplace_back("Global");
+		} catch (...) {
+			logger::warn("Failed to save global user override due to an unknown error");
+			failedLayers.emplace_back("Global");
+		}
+
+		return failedLayers;
+	}
+
+	std::string JoinSettingLayerNames(const std::vector<std::string>& a_names)
+	{
+		std::string result;
+		for (const auto& name : a_names) {
+			if (!result.empty())
+				result += ", ";
+			result += name;
+		}
+		return result;
+	}
+
 	bool IsForcedDisabledFeature(const std::string& a_featureName)
 	{
 		for (auto* feature : Feature::GetFeatureList()) {
@@ -492,7 +548,9 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		Load(a_configMode, false);
 }
 
-void State::SaveToJson(nlohmann::json& settings)
+void State::SaveToJson(
+	nlohmann::json& settings,
+	bool a_includeMissingUnloadedFeatures)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 	const auto shaderCache = globals::shaderCache;
@@ -520,10 +578,6 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	settings["General"] = general;
 
-	auto& upscaling = globals::features::upscaling;
-	auto& upscalingJson = settings[upscaling.GetShortName()];
-	upscaling.SaveSettings(upscalingJson);
-
 	json originalShaders;
 	ForEachShaderTypeWithIndex([&](auto type, int classIndex) {
 		originalShaders[magic_enum::enum_name(type)] = enabledClasses[classIndex];
@@ -538,23 +592,12 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	settings["Version"] = Plugin::VERSION.string();
 
-	// Save feature settings and user overrides
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
+	// Save feature settings without performing disk I/O. Preserve an existing
+	// section for any feature which is unavailable in this session.
 	for (auto* feature : Feature::GetFeatureList()) {
-		feature->Save(settings);
-
-		// If feature has overrides, save user modifications to .user file
-		const std::string featureName = feature->GetShortName();
-		if (overrideManager->HasFeatureOverrides(featureName) && feature->loaded) {
-			json currentSettings;
-			feature->SaveSettings(currentSettings);
-
-			// Get the merged override settings (all overrides applied to empty base)
-			json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
-
-			// Save user override only if settings differ from override
-			overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings);
-		}
+		const std::string settingsName = feature->GetName();
+		if (feature->loaded || (a_includeMissingUnloadedFeatures && !settings.contains(settingsName)))
+			feature->Save(settings);
 	}
 }
 
@@ -645,33 +688,112 @@ void State::LoadFromJson(nlohmann::json& settings)
 	}
 }
 
-void State::Save(ConfigMode a_configMode)
+bool State::Save(ConfigMode a_configMode)
 {
-	std::string configPath = GetConfigPath(a_configMode);
-	std::ofstream o{ configPath };
+	const std::filesystem::path configPath = GetConfigPath(a_configMode);
+	const std::string configName = configPath.filename().string();
+	const auto reportFailure = [&](std::string a_logMessage, std::string a_userMessage) {
+		logger::warn("{}", a_logMessage);
+		if (a_configMode == ConfigMode::USER && globals::menu)
+			globals::menu->ReportSettingsSaveResult(false, std::move(a_userMessage));
+		return false;
+	};
 
-	try {
-		std::filesystem::create_directories(Util::PathHelpers::GetCommunityShaderPath());
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating directory during Save ({}) : {}\n", Util::PathHelpers::GetCommunityShaderPath().string(), e.what());
-		return;
+	json settings = json::object();
+	std::error_code existsError;
+	const bool configExists = std::filesystem::exists(configPath, existsError);
+	if (existsError) {
+		return reportFailure(
+			std::format("Failed to inspect settings file {}: {}", configPath.string(), existsError.message()),
+			std::format("Settings were not saved because {} could not be inspected: {}", configName, existsError.message()));
 	}
 
-	// Check if the file opened successfully
-	if (!o.is_open()) {
-		logger::warn("Failed to open config file for saving: {}", configPath);
-		return;  // Exit early if file cannot be opened
+	if (configExists) {
+		try {
+			std::ifstream input(configPath, std::ios::binary);
+			if (!input.is_open()) {
+				return reportFailure(
+					std::format("Failed to open existing settings file for reading: {}", configPath.string()),
+					std::format("Settings were not saved because {} could not be read.", configName));
+			}
+
+			json existingSettings;
+			input >> existingSettings;
+			if (input.bad()) {
+				return reportFailure(
+					std::format("I/O error while reading existing settings file: {}", configPath.string()),
+					std::format("Settings were not saved because an I/O error occurred while reading {}.", configName));
+			}
+			if (!existingSettings.is_object()) {
+				return reportFailure(
+					std::format("Refusing to overwrite settings file which is not a JSON object: {}", configPath.string()),
+					std::format("Settings were not saved because {} is not a JSON object. Fix or remove it, then try again.", configName));
+			}
+			settings = std::move(existingSettings);
+		} catch (const std::exception& e) {
+			return reportFailure(
+				std::format("Refusing to overwrite unreadable settings file {}: {}", configPath.string(), e.what()),
+				std::format("Settings were not saved because {} could not be read: {}", configName, e.what()));
+		}
 	}
 
-	json settings;
-	SaveToJson(settings);
-
 	try {
-		o << settings.dump(1);
-		logger::info("Saving settings to {}", configPath);
+		SaveToJson(settings, a_configMode == ConfigMode::DEFAULT);
 	} catch (const std::exception& e) {
-		logger::warn("Failed to write settings to file: {}. Error: {}", configPath, e.what());
+		return reportFailure(
+			std::format("Failed to collect settings for {}: {}", configPath.string(), e.what()),
+			std::format("Settings were not saved because the active values could not be collected: {}", e.what()));
+	} catch (...) {
+		return reportFailure(
+			std::format("Failed to collect settings for {} due to an unknown error", configPath.string()),
+			"Settings were not saved because the active values could not be collected. See CommunityShaders.log.");
 	}
+
+	const auto writeResult = Util::FileHelpers::WriteJsonFileAtomic(configPath, settings, 1);
+	if (!writeResult) {
+		return reportFailure(
+			std::format("Failed to save settings to {}: {}", configPath.string(), writeResult.errorMessage),
+			std::format("Settings were not saved to {}: {}", configName, writeResult.errorMessage));
+	}
+
+	if (a_configMode == ConfigMode::USER) {
+		std::vector<std::string> postSaveFailures;
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!feature->loaded)
+				continue;
+			try {
+				feature->OnSettingsSaved();
+			} catch (const std::exception& e) {
+				logger::warn("Post-save handling failed for {}: {}", feature->GetName(), e.what());
+				postSaveFailures.push_back(feature->GetDisplayName());
+			} catch (...) {
+				logger::warn("Post-save handling failed for {} due to an unknown error", feature->GetName());
+				postSaveFailures.push_back(feature->GetDisplayName());
+			}
+		}
+
+		const auto overrideFailures = SaveUserOverrides(settings);
+		if (!postSaveFailures.empty() || !overrideFailures.empty()) {
+			std::string failureDetails;
+			if (!overrideFailures.empty())
+				failureDetails = std::format("override customizations for {}", JoinSettingLayerNames(overrideFailures));
+			if (!postSaveFailures.empty()) {
+				if (!failureDetails.empty())
+					failureDetails += "; ";
+				failureDetails += std::format("post-save handling for {}", JoinSettingLayerNames(postSaveFailures));
+			}
+
+			return reportFailure(
+				std::format("Settings save incomplete after writing {}: failed {}", configPath.string(), failureDetails),
+				std::format("{} was written, but {} could not be persisted. Try saving again; see CommunityShaders.log.", configName, failureDetails));
+		}
+
+		if (globals::menu)
+			globals::menu->ReportSettingsSaveResult(true, std::format("Settings saved successfully to {}.", configName));
+	}
+
+	logger::info("Saved settings to {}", configPath.string());
+	return true;
 }
 
 bool State::ValidateCache(CSimpleIniA& a_ini)

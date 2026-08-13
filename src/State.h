@@ -97,14 +97,18 @@ public:
 	/**
 	 * @brief Persists current settings to the config file for the given mode.
 	 * @param a_configMode Which config file to write.
+	 * @return True only when the main file and every required user override layer
+	 *         were persisted successfully.
 	 */
-	void Save(ConfigMode a_configMode = ConfigMode::USER);
+	bool Save(ConfigMode a_configMode = ConfigMode::USER);
 
 	/**
 	 * @brief Serializes all settings to a JSON object (in-memory, no disk I/O).
 	 * @param o_json Output JSON object to populate.
 	 */
-	void SaveToJson(nlohmann::json& o_json);
+	void SaveToJson(
+		nlohmann::json& o_json,
+		bool a_includeMissingUnloadedFeatures = true);
 	/**
 	 * @brief Restores settings from a JSON object (in-memory, no disk I/O).
 	 * @param i_json Input JSON object to read from.

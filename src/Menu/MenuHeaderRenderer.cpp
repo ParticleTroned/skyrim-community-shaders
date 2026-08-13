@@ -5,12 +5,12 @@
 
 #include <algorithm>
 
-#include "Fonts.h"
 #include "Features/LightLimitFix/ParticleLights.h"
+#include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
-#include "Plugin.h"
 #include "Menu/PerformanceTuningRenderer.h"
+#include "Plugin.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "ThemeManager.h"
@@ -168,8 +168,8 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 			ImGui::TableNextColumn();
 			ImGui::BeginDisabled(performanceMeasurementActive);
 			if (Util::ButtonWithFlash(T("menu.save_settings", "Save Settings"), { -1, 0 })) {
-				globals::state->Save();
-				globals::state->SaveTheme();
+				if (globals::state->Save())
+					globals::state->SaveTheme();
 			}
 			ImGui::EndDisabled();
 
@@ -259,8 +259,8 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			uiIcons.saveSettings.texture,
 			T("menu.save_settings", "Save Settings"),
 			[]() {
-				globals::state->Save();
-				globals::state->SaveTheme();
+				if (globals::state->Save())
+					globals::state->SaveTheme();
 			},
 			!performanceMeasurementActive });
 	}
@@ -440,7 +440,7 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 	}
 
 	// Restore default style
-	ImGui::PopStyleVar(2);    // Pop both style variables: ItemSpacing and FrameBorderSize
+	ImGui::PopStyleVar(2);  // Pop both style variables: ItemSpacing and FrameBorderSize
 }
 
 void MenuHeaderRenderer::RenderWatermarkLogo(const Menu::UIIcons& uiIcons)

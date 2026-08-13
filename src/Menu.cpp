@@ -536,6 +536,18 @@ void Menu::Save(json& o_json)
 	InputCombo::ComboList::to_json(o_json["ScreenshotKey"], settings.ScreenshotKey);
 }
 
+void Menu::ReportSettingsSaveResult(bool a_success, std::string a_message)
+{
+	settingsSaveMessage = std::move(a_message);
+	settingsSaveMessageIsError = !a_success;
+}
+
+void Menu::ClearSettingsSaveResult()
+{
+	settingsSaveMessage.clear();
+	settingsSaveMessageIsError = false;
+}
+
 void Menu::LoadTheme(json& o_json)
 {
 	if (o_json["Theme"].is_object()) {

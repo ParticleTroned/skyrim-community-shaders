@@ -33,13 +33,13 @@ void ABTestingManager::Enable()
 
 		// Save current settings as TEST variant (Variant B) in memory
 		testConfigSnapshot = nlohmann::json::object();
-		state->SaveToJson(testConfigSnapshot);
+		state->SaveToJson(testConfigSnapshot, false);
 		hasTestSnapshot = true;
 
 		// Load and cache USER settings in memory (to avoid disk I/O during swaps)
 		userConfigSnapshot = nlohmann::json::object();
 		state->Load(State::ConfigMode::USER);
-		state->SaveToJson(userConfigSnapshot);
+		state->SaveToJson(userConfigSnapshot, false);
 		hasUserSnapshot = true;
 
 		// Load TEST variant to start with (user's configured test settings)

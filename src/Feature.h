@@ -217,6 +217,8 @@ public:
 
 	virtual void SaveSettings(json&) {}
 	virtual void LoadSettings(json&) {}
+	// Called only after the user settings file has been written successfully.
+	virtual void OnSettingsSaved() {}
 
 	virtual bool HasFeatureSettings() const { return true; }
 	virtual void RestoreDefaultSettings() {}

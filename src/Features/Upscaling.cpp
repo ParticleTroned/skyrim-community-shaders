@@ -976,6 +976,10 @@ void Upscaling::SaveSettings(json& o_json)
 	SanitizeUpscalingSettings(settings);
 	o_json = settings;
 	o_json["qualityModeSchemaVersion"] = kQualityModeSchemaVersion;
+}
+
+void Upscaling::OnSettingsSaved()
+{
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
 		auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");

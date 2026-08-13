@@ -112,8 +112,9 @@ public:
 	/**
 	 * @brief Saves applied overrides tracking data
 	 * @param appliedOverrides JSON object containing tracking data
+	 * @return True when the tracking file was written successfully
 	 */
-	void SaveAppliedOverridesTracking(const json& appliedOverrides) const;
+	bool SaveAppliedOverridesTracking(const json& appliedOverrides) const;
 
 	/**
 	 * @brief Gets the path to the applied overrides tracking file
@@ -157,7 +158,8 @@ public:
 	 * @param featureName The short name of the feature (or "Global")
 	 * @param currentSettings Current settings to compare and potentially save
 	 * @param overrideSettings The base override settings (after all overrides applied)
-	 * @return True if user override file was created/updated, false if no changes needed
+	 * @return True when the desired user override state was persisted, including
+	 *         when no override delta exists and any obsolete user file was removed
 	 */
 	bool SaveUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings);
 
@@ -185,7 +187,8 @@ public:
 
 	/**
 	 * @brief Validates and cleans up user override files
-	 * Deletes .user files whose corresponding override hashes have changed
+	 * Preserves user customizations when provider overrides change and removes
+	 * files only when their corresponding provider override no longer exists
 	 */
 	void CleanupStaleUserOverrides();
 

@@ -121,6 +121,10 @@ public:
 
 	void Init();
 	void DrawSettings();
+	void ReportSettingsSaveResult(bool a_success, std::string a_message);
+	void ClearSettingsSaveResult();
+	const std::string& GetSettingsSaveMessage() const { return settingsSaveMessage; }
+	bool IsSettingsSaveMessageError() const { return settingsSaveMessageIsError; }
 
 	// Search bar state
 	std::string featureSearch;  // For left pane feature search
@@ -512,6 +516,8 @@ public:
 
 private:
 	Settings settings;
+	std::string settingsSaveMessage;
+	bool settingsSaveMessageIsError = false;
 
 	std::string cachedIniPath;  // io.IniFilename must point to a string that lives for the duration of the runtime
 

@@ -48,23 +48,13 @@ namespace
 		ImGui::SliderFloat(a_label, &a_value, kMultiplierMin, kMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 
-	void DrawLinearMultiplierSlider(const char* a_label, float& a_value, bool a_linearLightingEnabled)
+	bool UsesClassifiedPointLightMultipliers(const CSUtility::Settings& a_settings)
 	{
-		ImGui::BeginDisabled(!a_linearLightingEnabled);
-		DrawMultiplierSlider(a_label, a_value);
-		ImGui::EndDisabled();
-
-		if (!a_linearLightingEnabled) {
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enable Linear Lighting to use this multiplier.");
-			}
-		}
-	}
-
-	bool UsesPointLightTypeMultipliers(const CSUtility::Settings& a_settings)
-	{
-		return a_settings.spotlightMult != 1.0f ||
-		       a_settings.omnidirectionalBulbMult != 1.0f;
+		return a_settings.linearPointLightMult != a_settings.pointLightMult ||
+		       a_settings.spotlightMult != 1.0f ||
+		       a_settings.linearSpotlightMult != 1.0f ||
+		       a_settings.omnidirectionalBulbMult != 1.0f ||
+		       a_settings.linearOmnidirectionalBulbMult != 1.0f;
 	}
 }
 
@@ -124,13 +114,13 @@ void CSUtility::DrawSettings()
 
 		if (ImGui::BeginTabItem("Multipliers")) {
 			if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
-				const bool linearLightingEnabled = globals::features::linearLighting.settings.enableLinearLighting;
+				ImGui::TextWrapped("Linear values target lights authored with linear falloff; they are independent of the Linear Lighting image pipeline.");
 				DrawMultiplierSlider("Global Point Lighting", settings.pointLightMult);
-				DrawLinearMultiplierSlider("Global Point Lighting (Linear)", settings.linearPointLightMult, linearLightingEnabled);
+				DrawMultiplierSlider("Global Point Lighting (Linear)", settings.linearPointLightMult);
 				DrawMultiplierSlider("Spotlights", settings.spotlightMult);
-				DrawLinearMultiplierSlider("Spotlights (Linear)", settings.linearSpotlightMult, linearLightingEnabled);
+				DrawMultiplierSlider("Spotlights (Linear)", settings.linearSpotlightMult);
 				DrawMultiplierSlider("Omnidirectional Bulbs", settings.omnidirectionalBulbMult);
-				DrawLinearMultiplierSlider("Omnidirectional Bulbs (Linear)", settings.linearOmnidirectionalBulbMult, linearLightingEnabled);
+				DrawMultiplierSlider("Omnidirectional Bulbs (Linear)", settings.linearOmnidirectionalBulbMult);
 				DrawMultiplierSlider("Directional Light Multiplier", settings.directionalLightMult);
 				ImGui::TreePop();
 			}
@@ -202,11 +192,16 @@ bool CSUtility::NeedsVanillaPointLightData() const
 		return false;
 
 	// Linear Lighting also consumes this buffer's linear-light classification,
-	// independently of CS Utility's runtime toggle.
+	// independently of CS Utility and Adaptive Brightness runtime state.
 	if (globals::features::linearLighting.IsRuntimeEnabled())
 		return true;
 
-	return IsRuntimeEnabled() && UsesPointLightTypeMultipliers(settings);
+	// Match the settings actually uploaded to SharedData. Adaptive Brightness can
+	// compose onto CS Utility, and authored linear/type values need the same flag
+	// classification even when the Linear Lighting image pipeline is disabled.
+	Settings effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveCSUtilitySettings(settings, IsRuntimeEnabled());
+	SanitizeSettings(effectiveSettings);
+	return UsesClassifiedPointLightMultipliers(effectiveSettings);
 }
 
 void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount, uint32_t a_bufferRegister)

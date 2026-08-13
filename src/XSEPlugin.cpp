@@ -1,3 +1,4 @@
+#include "CSEditor/EditorWindow.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -149,6 +150,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kPreLoadGame:
 		{
+			EditorWindow::ResetWeatherLock(true);
 			PerformanceTuningRenderer::CancelActiveMeasurements(
 				PerformanceTuningRenderer::CancelMode::ClearSession);
 			break;
@@ -160,6 +162,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostLoadGame:
 	case SKSE::MessagingInterface::kNewGame:
 		{
+			if (message->type == SKSE::MessagingInterface::kNewGame)
+				EditorWindow::ResetWeatherLock(false);
+
 			PerformanceTuningRenderer::CancelActiveMeasurements(
 				PerformanceTuningRenderer::CancelMode::ClearSession);
 			if (errors.empty()) {

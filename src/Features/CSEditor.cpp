@@ -30,6 +30,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Position,
 	PositionSet)
 
+void CSEditor::PostPostLoad()
+{
+	// Install before the game loop starts so both entry points change atomically while idle.
+	EditorWindow::InstallWeatherLockHooks();
+}
+
 void CSEditor::DataLoaded()
 {
 	s_dataAvailable = true;
@@ -212,15 +218,8 @@ void CSEditor::Prepass()
 		EnsureDataLoaded();
 	}
 
-	// Re-enforce weather lock if active (handles time changes)
 	auto editorWindow = EditorWindow::GetSingleton();
-	if (editorWindow->IsWeatherLocked()) {
-		auto lockedWeather = editorWindow->GetLockedWeather();
-		auto sky = globals::game::sky;
-		if (sky && lockedWeather && sky->currentWeather != lockedWeather) {
-			sky->ForceWeather(lockedWeather, false);
-		}
-	}
+	EditorWindow::MaintainWeatherLock();
 
 	// Menu membership is event-driven; polling only repairs/reconciles the resulting time state.
 	editorWindow->SyncExternalTimeScale();
@@ -747,7 +746,7 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 	// Lock Weather toggle
 	ImGui::SameLine();
 	auto editorWindow = EditorWindow::GetSingleton();
-	bool isLocked = editorWindow->IsWeatherLocked();
+	bool isLocked = editorWindow->GetLockedWeather() != nullptr;
 	const char* lockLabel = isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("lock_weather"), "Lock Weather");
 
 	if (isLocked) {
@@ -765,7 +764,11 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 		ImGui::PopStyleColor();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("lock_weather_tooltip"), isLocked ? "Unlock weather to allow natural changes" : "Lock current weather to prevent changes"));
+		if (EditorWindow::AreWeatherLockHooksInstalled()) {
+			ImGui::Text("%s", T(TKEY("lock_weather_tooltip"), isLocked ? "Unlock weather to allow natural changes" : "Lock current weather to prevent changes"));
+		} else {
+			ImGui::Text("%s", T(TKEY("lock_weather_unavailable_tooltip"), "Weather-lock hooks failed to install; the lock still works but weather may briefly flash before correcting"));
+		}
 	}
 
 	// Weather Selection - now with colored text

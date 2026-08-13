@@ -67,10 +67,6 @@ public:
 
 	LightEditor lightEditor;
 
-	// Weather locking for editing
-	RE::TESWeather* lockedWeather = nullptr;
-	bool weatherLockActive = false;
-
 	/// When true, resets all window positions/sizes on next frame (auto-cleared).
 	bool resetLayout = false;
 
@@ -127,8 +123,20 @@ public:
 
 	void LockWeather(RE::TESWeather* weather);
 	void UnlockWeather();
-	bool IsWeatherLocked() const { return weatherLockActive; }
-	RE::TESWeather* GetLockedWeather() const { return lockedWeather; }
+	bool IsWeatherLocked() const;
+	RE::TESWeather* GetLockedWeather() const;
+
+	/** @brief Installs the process-wide weather guard hooks. Call once during plugin initialization. */
+	static void InstallWeatherLockHooks();
+
+	/** @brief Returns true only after both weather guard hooks were installed atomically. */
+	static bool AreWeatherLockHooksInstalled();
+
+	/** @brief Repairs the active lock and cancels any queued override release. Call once per frame. */
+	static void MaintainWeatherLock();
+
+	/** @brief Clears lock ownership before a world transition and optionally releases the live override. */
+	static void ResetWeatherLock(bool a_releaseOverride);
 
 	// Time controls
 	void PauseTime();

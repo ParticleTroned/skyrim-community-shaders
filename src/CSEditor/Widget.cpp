@@ -300,6 +300,7 @@ void Widget::ForceWeatherReinit(RE::TESWeather* weather)
 	if (weather && sky && sky->currentWeather == weather) {
 		sky->ForceWeather(weather, true);
 		sky->ReleaseWeatherOverride();
+		EditorWindow::MaintainWeatherLock();
 	}
 }
 
@@ -309,6 +310,7 @@ void Widget::ForceCurrentWeatherReinit()
 	if (sky && sky->currentWeather) {
 		sky->ForceWeather(sky->currentWeather, true);
 		sky->ReleaseWeatherOverride();
+		EditorWindow::MaintainWeatherLock();
 	}
 }
 
@@ -342,7 +344,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		if (!showForceWeather || !weather)
 			return;
 		ImGui::SameLine();
-		bool isLocked = editorWindow->IsWeatherLocked() && editorWindow->GetLockedWeather() == weather;
+		auto* lockedWeather = editorWindow->GetLockedWeather();
+		bool isLocked = lockedWeather == weather;
 		const char* lockLabel = isLocked ? T(TKEY("unlock"), "Unlock") : T(TKEY("force_weather"), "Force Weather");
 
 		if (isLocked) {
@@ -357,7 +360,10 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		}
 		if (isLocked)
 			ImGui::PopStyleColor(2);
-		Util::AddTooltip(isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"));
+		if (isLocked && !EditorWindow::AreWeatherLockHooksInstalled())
+			Util::AddTooltip(T(TKEY("unlock_weather_hooks_unavailable"), "Unlock Weather (weather-lock hooks failed to install; weather may briefly flash before correcting)"));
+		else
+			Util::AddTooltip(isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"));
 	};
 
 	auto drawUnsavedIndicator = [&]() {

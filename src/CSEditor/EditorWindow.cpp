@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
@@ -1235,7 +1236,8 @@ void EditorWindow::RenderUI()
 		// Weather lock text
 		float weatherLockX = 0;
 		char weatherLockBuf[128] = {};
-		bool showWeatherLock = weatherLockActive && lockedWeather;
+		auto* lockedWeather = GetLockedWeather();
+		bool showWeatherLock = lockedWeather != nullptr;
 		if (showWeatherLock) {
 			const char* weatherName = lockedWeather->GetFormEditorID();
 			std::snprintf(weatherLockBuf, sizeof(weatherLockBuf), T(TKEY("locked_weather_status"), " [LOCKED: %s]"), weatherName ? weatherName : T(TKEY("unknown"), "Unknown"));
@@ -1499,14 +1501,6 @@ void EditorWindow::Draw()
 		if (viewportActive != prevViewportActive) {
 			BackgroundBlur::SetCSEditorActive(viewportActive);
 			prevViewportActive = viewportActive;
-		}
-	}
-
-	// Re-enforce weather lock if active (handles time changes)
-	if (weatherLockActive && lockedWeather) {
-		auto sky = RE::Sky::GetSingleton();
-		if (sky && sky->currentWeather != lockedWeather) {
-			sky->ForceWeather(lockedWeather, false);
 		}
 	}
 
@@ -1832,39 +1826,200 @@ void EditorWindow::Load()
 	LoadSettings();
 }
 
+// A plain ForceWeather does not hold: scripts, climate timers, cell transitions, and
+// other plugins can immediately select another weather. Guard both engine entry points
+// and retain a per-frame repair path if hook installation is unavailable.
+namespace
+{
+	std::atomic<RE::TESWeather*> g_lockedWeather{ nullptr };
+	std::atomic_bool g_weatherLockHooksInstalled{ false };
+	std::atomic_bool g_weatherLockHookInstallAttempted{ false };
+
+	RE::TESWeather* GetActiveWeatherLock()
+	{
+		return g_lockedWeather.load(std::memory_order_acquire);
+	}
+
+	struct SetWeatherHook
+	{
+		static void thunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride, bool accelerate);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ForceWeatherHook
+	{
+		static void thunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	void CancelPendingWeatherRelease(RE::Sky* sky)
+	{
+		if (sky)
+			sky->flags.reset(RE::Sky::Flags::kReleaseWeatherOverride);
+	}
+
+	void ReapplyWeatherLock(RE::Sky* sky, RE::TESWeather* weather)
+	{
+		if (!sky || !weather)
+			return;
+
+		CancelPendingWeatherRelease(sky);
+
+		// After detouring, func points to the original trampoline. Calling Sky::ForceWeather
+		// here would re-enter the hook; before installation, the method is the fallback.
+		if (ForceWeatherHook::func.address() != 0)
+			ForceWeatherHook::func(sky, weather, true);
+		else
+			sky->ForceWeather(weather, true);
+	}
+
+	void SetWeatherHook::thunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride, bool accelerate)
+	{
+		auto* locked = GetActiveWeatherLock();
+		if (!locked) {
+			func(sky, weather, isOverride, accelerate);
+			return;
+		}
+		if (!sky)
+			return;
+
+		CancelPendingWeatherRelease(sky);
+		if (weather == locked) {
+			func(sky, locked, true, accelerate);
+			return;
+		}
+
+		// Suppress competing selections unless the sky has already drifted from the lock.
+		if (sky->currentWeather != locked || sky->overrideWeather != locked)
+			ReapplyWeatherLock(sky, locked);
+	}
+
+	void ForceWeatherHook::thunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride)
+	{
+		auto* locked = GetActiveWeatherLock();
+		if (!locked) {
+			func(sky, weather, isOverride);
+			return;
+		}
+		if (sky)
+			ReapplyWeatherLock(sky, locked);
+	}
+}  // namespace
+
+void EditorWindow::InstallWeatherLockHooks()
+{
+	if (g_weatherLockHookInstallAttempted.exchange(true, std::memory_order_acq_rel)) {
+		logger::debug("[CSEditor] Weather-lock hook installation already attempted");
+		return;
+	}
+
+	SetWeatherHook::func = REL::RelocationID(25694, 26241).address();
+	ForceWeatherHook::func = REL::RelocationID(25696, 26243).address();
+
+	LONG result = DetourTransactionBegin();
+	if (result != NO_ERROR) {
+		logger::error("[CSEditor] Could not begin atomic weather-lock hook transaction (error {})", result);
+		return;
+	}
+
+	result = DetourUpdateThread(GetCurrentThread());
+	if (result == NO_ERROR) {
+		result = DetourAttach(
+			reinterpret_cast<PVOID*>(&SetWeatherHook::func),
+			reinterpret_cast<PVOID>(SetWeatherHook::thunk));
+	}
+	if (result == NO_ERROR) {
+		result = DetourAttach(
+			reinterpret_cast<PVOID*>(&ForceWeatherHook::func),
+			reinterpret_cast<PVOID>(ForceWeatherHook::thunk));
+	}
+
+	if (result != NO_ERROR) {
+		const LONG abortResult = DetourTransactionAbort();
+		logger::error(
+			"[CSEditor] Could not queue both weather-lock hooks (error {}, abort result {}); using per-frame fallback",
+			result,
+			abortResult);
+		return;
+	}
+
+	result = DetourTransactionCommit();
+	if (result != NO_ERROR) {
+		logger::error(
+			"[CSEditor] Could not commit atomic weather-lock hooks (error {}); using per-frame fallback",
+			result);
+		return;
+	}
+
+	g_weatherLockHooksInstalled.store(true, std::memory_order_release);
+	logger::info("[CSEditor] Installed atomic SetWeather and ForceWeather lock hooks");
+}
+
+bool EditorWindow::AreWeatherLockHooksInstalled()
+{
+	return g_weatherLockHooksInstalled.load(std::memory_order_acquire);
+}
+
+void EditorWindow::MaintainWeatherLock()
+{
+	auto* locked = GetActiveWeatherLock();
+	auto* sky = globals::game::sky ? globals::game::sky : RE::Sky::GetSingleton();
+	if (!locked || !sky)
+		return;
+
+	const bool releasePending = sky->flags.any(RE::Sky::Flags::kReleaseWeatherOverride);
+	if (!releasePending && sky->currentWeather == locked && sky->overrideWeather == locked)
+		return;
+
+	// ReleaseWeatherOverride is deferred until the next sky update. Cancel it before
+	// restoring a true override so fallback maintenance cannot immediately undo itself.
+	ReapplyWeatherLock(sky, locked);
+}
+
+bool EditorWindow::IsWeatherLocked() const
+{
+	return GetActiveWeatherLock() != nullptr;
+}
+
+RE::TESWeather* EditorWindow::GetLockedWeather() const
+{
+	return GetActiveWeatherLock();
+}
+
 void EditorWindow::LockWeather(RE::TESWeather* weather)
 {
 	if (!weather)
 		return;
 
-	auto sky = RE::Sky::GetSingleton();
-	if (!sky)
-		return;
-
-	// Force the weather to be active
-	sky->ForceWeather(weather, false);
-
-	lockedWeather = weather;
-	weatherLockActive = true;
+	g_lockedWeather.store(weather, std::memory_order_release);
+	MaintainWeatherLock();
 
 	logger::info("Weather locked: {}", weather->GetFormEditorID() ? weather->GetFormEditorID() : "Unknown");
 }
 
 void EditorWindow::UnlockWeather()
 {
-	if (!weatherLockActive)
+	if (!g_lockedWeather.exchange(nullptr, std::memory_order_acq_rel))
 		return;
 
-	auto sky = RE::Sky::GetSingleton();
-	if (sky) {
-		// Release weather override to allow natural progression
+	if (auto* sky = globals::game::sky ? globals::game::sky : RE::Sky::GetSingleton())
 		sky->ReleaseWeatherOverride();
+
+	logger::info("Weather unlocked");
+}
+
+void EditorWindow::ResetWeatherLock(bool a_releaseOverride)
+{
+	if (!g_lockedWeather.exchange(nullptr, std::memory_order_acq_rel))
+		return;
+
+	if (a_releaseOverride) {
+		// Resolve the live singleton directly: cached globals may be changing during loads.
+		if (auto* sky = RE::Sky::GetSingleton())
+			sky->ReleaseWeatherOverride();
 	}
 
-	logger::info("Weather unlocked: {}", lockedWeather && lockedWeather->GetFormEditorID() ? lockedWeather->GetFormEditorID() : "Unknown");
-
-	lockedWeather = nullptr;
-	weatherLockActive = false;
+	logger::info("[CSEditor] Cleared weather lock for world transition");
 }
 
 namespace

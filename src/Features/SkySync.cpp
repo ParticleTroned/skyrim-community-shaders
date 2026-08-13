@@ -189,6 +189,7 @@ void SkySync::PostPostLoad()
 	const auto hookResult = stl::detour_thunk<Sky_Update>(REL::RelocationID(25682, 26229));
 	if (hookResult != NO_ERROR) {
 		failedLoadedMessage = fmt::format("Failed to install Sky Sync hook (error {})", hookResult);
+		loadFailed = true;
 		loaded = false;
 		settings.Enabled = false;
 		Util::SetCelestialTransitionHandlerAvailable(false);
@@ -212,12 +213,13 @@ void SkySync::DataLoaded()
 
 void SkySync::DisableOnConflict(std::string_view conflictName)
 {
-	failedLoadedMessage = fmt::format("Disabled as {} has been detected, both cannot be used together", conflictName);
+	// A detected conflict is expected environment gating, not a broken install.
+	loadFailed = false;
 	loaded = false;
 	settings.Enabled = false;
 	Util::SetCelestialTransitionHandlerAvailable(false);
 	ResetRuntimeState();
-	logger::warn("[Sky Sync] {}", failedLoadedMessage);
+	logger::warn("[Sky Sync] Disabled as {} has been detected, both cannot be used together", conflictName);
 }
 
 void SkySync::ResetRuntimeState()

@@ -2570,7 +2570,7 @@ namespace SIE
 		std::vector<Util::CacheInvalidation::FeatureState> featureStates;
 		for (auto* feature : Feature::GetFeatureList()) {
 			featureStates.push_back({ feature->GetShortName(), feature->GetDisplayName(), feature->loaded,
-				feature->version, std::string(feature->GetShaderDefineName()) });
+				feature->version, std::string(feature->GetShaderDefineName()), feature->loadFailed });
 		}
 		return featureStates;
 	}
@@ -2632,14 +2632,7 @@ namespace SIE
 
 	static bool HasMissingOrFailedFeature(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
 	{
-		return std::any_of(mismatches.begin(), mismatches.end(),
-			[](const Util::CacheInvalidation::CacheMismatch& mismatch) {
-				if (mismatch.kind != Util::CacheInvalidation::CacheMismatch::Kind::EnabledFlip || mismatch.nowPresent)
-					return false;
-
-				auto* state = globals::state;
-				return !state || !state->IsFeatureDisabled(mismatch.shortName);
-			});
+		return Util::CacheInvalidation::HasFailedFeature(mismatches);
 	}
 
 	static bool AreRestorablePreviousCacheMismatches(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
@@ -2679,25 +2672,30 @@ namespace SIE
 		return true;
 	}
 
-	static bool PartialInvalidation(const std::vector<std::string>& defines)
+	static bool PartialInvalidation(const std::vector<std::string>& defines, bool& outDestructive)
 	{
 		size_t deleted = 0;
 		size_t kept = 0;
 		const bool ok = Util::CacheInvalidation::TryPartialInvalidation(
-			DiskCachePath(), L"Data/Shaders", defines, &deleted, &kept);
+			DiskCachePath(), L"Data/Shaders", defines, &deleted, &kept, &outDestructive);
 		if (ok) {
 			logger::info("Partial disk cache invalidation: deleted {} shader dirs, kept {}", deleted, kept);
+		} else if (outDestructive) {
+			logger::warn("Partial disk cache invalidation failed after deletion began; wiping the inconsistent active cache");
 		} else {
 			logger::warn("Partial disk cache invalidation unavailable, falling back to full wipe");
 		}
 		return ok;
 	}
 
-	void ShaderCache::DeleteActiveDiskCache()
+	bool ShaderCache::DeleteActiveDiskCache()
 	{
 		std::scoped_lock lock{ compilationSet.compilationMutex };
-		if (RemovePath(DiskCachePath(), "active"))
+		if (RemovePath(DiskCachePath(), "active")) {
 			logger::info("Deleted active disk cache");
+			return true;
+		}
+		return false;
 	}
 
 	void ShaderCache::DeleteDiskCache()
@@ -2826,7 +2824,10 @@ namespace SIE
 		if (!LoadDiskCacheInfo(DiskCachePath(), ini)) {
 			if (PathExists(DiskCachePath())) {
 				logger::info("Disk cache info missing; rebuilding disk cache");
-				DeleteActiveDiskCache();
+				if (!DeleteActiveDiskCache()) {
+					diskCacheHeld.store(true, std::memory_order_relaxed);
+					logger::error("Disk cache info is missing and the active cache could not be removed; disk-cache use is held for this session");
+				}
 			} else {
 				logger::info("No disk cache found; building disk cache");
 			}
@@ -2886,10 +2887,15 @@ namespace SIE
 
 		const bool onlyFeatureVersions = std::ranges::all_of(currentMismatches,
 			[](const CacheMismatch& mismatch) { return mismatch.kind == CacheMismatch::Kind::FeatureVersion; });
-		if (onlyFeatureVersions && PartialInvalidation(versionMismatchDefines)) {
+		bool validationInvalidationDestructive = false;
+		if (onlyFeatureVersions && PartialInvalidation(versionMismatchDefines, validationInvalidationDestructive)) {
 			WriteDiskCacheInfo();
 		} else {
-			DeleteActiveDiskCache();
+			if (!DeleteActiveDiskCache()) {
+				diskCacheHeld.store(true, std::memory_order_relaxed);
+				logger::error("Could not remove the {} active shader cache; disk-cache use is held for this session",
+					validationInvalidationDestructive ? "partially invalidated" : "stale");
+			}
 		}
 	}
 
@@ -2912,8 +2918,15 @@ namespace SIE
 			heldDefines = heldMismatchDefines;
 		}
 
-		if (!committedFeatureSetBackup && !PartialInvalidation(heldDefines))
-			DeleteActiveDiskCache();
+		bool commitInvalidationDestructive = false;
+		if (!committedFeatureSetBackup && !PartialInvalidation(heldDefines, commitInvalidationDestructive)) {
+			if (!DeleteActiveDiskCache()) {
+				diskCacheHeld.store(true, std::memory_order_relaxed);
+				logger::error("Could not remove the {} active shader cache; disk-cache use remains held",
+					commitInvalidationDestructive ? "partially invalidated" : "stale");
+				return;
+			}
+		}
 
 		diskCacheHeld.store(false, std::memory_order_relaxed);
 
@@ -3067,8 +3080,21 @@ namespace SIE
 			heldDefines = heldMismatchDefines;
 		}
 
-		if (!PartialInvalidation(heldDefines))
-			DeleteActiveDiskCache();
+		if (heldDefines.empty()) {
+			if (!DeleteActiveDiskCache()) {
+				logger::error("Could not remove the stale active shader cache; rebuild remains held");
+				return;
+			}
+		} else {
+			bool acceptInvalidationDestructive = false;
+			if (!PartialInvalidation(heldDefines, acceptInvalidationDestructive)) {
+				if (!DeleteActiveDiskCache()) {
+					logger::error("Could not remove the {} active shader cache; rebuild remains held",
+						acceptInvalidationDestructive ? "partially invalidated" : "stale");
+					return;
+				}
+			}
+		}
 
 		{
 			std::scoped_lock lock{ cacheStateMutex };
@@ -3721,7 +3747,7 @@ namespace SIE
 		// still reads high briefly, which would otherwise underflow uint64_t (logs as ~2^64-1).
 		const uint64_t total = compilationSet.totalTasks.load(std::memory_order_relaxed);
 		const uint64_t done = compilationSet.completedTasks.load(std::memory_order_relaxed) +
-		                     compilationSet.failedTasks.load(std::memory_order_relaxed);
+		                      compilationSet.failedTasks.load(std::memory_order_relaxed);
 		// This task has already finished running, but Complete(task) has not yet updated the counters.
 		// Include the current task in the local progress snapshot so the logged remaining count is accurate.
 		const uint64_t doneIncludingCurrent = (done < total) ? (done + 1) : total;

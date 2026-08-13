@@ -51,6 +51,9 @@
 
 void Feature::Load(json& o_json)
 {
+	loadFailed = false;
+	failedLoadedMessage.clear();
+
 	// Convert string to wstring
 	auto ini_filename = std::format("{}.ini", GetShortName());
 	std::wstring ini_filename_w;
@@ -64,6 +67,7 @@ void Feature::Load(json& o_json)
 	if (rc < 0) {
 		if (!FeatureIssues::IsObsoleteFeature(GetShortName()))
 			logger::info("{} failed to load, feature disabled", ini_filename);
+		loadFailed = true;
 		loaded = false;
 		return;
 	}
@@ -132,6 +136,7 @@ void Feature::Load(json& o_json)
 	}
 
 	if (hasError) {
+		loadFailed = true;
 		loaded = false;
 		if (IsHiddenFromUserView()) {
 			logger::info("Hidden feature '{}' failed to load: {}", GetShortName(), failedLoadedMessage);
@@ -172,6 +177,28 @@ void Feature::Load(json& o_json)
 				RestoreDefaultSettings();
 			}
 		}
+	}
+}
+
+void Feature::ReloadSettings(json& o_json)
+{
+	// Runtime snapshot swaps must not repeat feature file validation or erase
+	// PostPostLoad/DataLoaded failure and environment gates.
+	if (!HasFeatureSettings()) {
+		return;
+	}
+
+	if (o_json[GetName()].is_structured()) {
+		logger::info("Loading {} settings", GetName());
+		try {
+			LoadSettings(o_json[GetName()]);
+		} catch (...) {
+			logger::warn("Invalid settings for {}, using default.", GetName());
+			RestoreDefaultSettings();
+		}
+	} else {
+		logger::info("Loading default settings for {}", GetName());
+		RestoreDefaultSettings();
 	}
 }
 

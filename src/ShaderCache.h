@@ -1,8 +1,8 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
-#include <efsw/efsw.hpp>
 #include <atomic>
+#include <efsw/efsw.hpp>
 #include <mutex>
 #include <vector>
 
@@ -752,7 +752,7 @@ namespace SIE
 			ValidatedBeforeMove,
 		};
 		bool BackupActiveDiskCache();
-		void DeleteActiveDiskCache();
+		bool DeleteActiveDiskCache();
 		void RefreshPreviousDiskCacheInfo();
 		bool SetPreviousCacheRestoreCandidate(std::vector<CacheMismatch> mismatches, PreviousCacheInfoValidation a_infoValidation);
 

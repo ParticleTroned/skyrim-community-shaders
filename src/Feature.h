@@ -27,6 +27,7 @@ struct Feature
 	// Nexus Mods base URL for Skyrim Special Edition
 	static constexpr std::string_view NEXUS_BASE_URL = "https://www.nexusmods.com/skyrimspecialedition/mods/";
 	bool loaded = false;
+	bool loadFailed = false;
 	std::string version;
 	std::string failedLoadedMessage;
 
@@ -211,6 +212,7 @@ public:
 	virtual void PostPostLoad() {}
 
 	void Load(json& o_json);
+	void ReloadSettings(json& o_json);
 	void Save(json& o_json);
 
 	virtual void SaveSettings(json&) {}

@@ -386,7 +386,11 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		}
 
+		// Once DataLoaded has run, a full settings reload must not repeat feature
+		// validation or lifecycle registration; only live settings may change.
+		const bool runtimeReload = globals::shaderCache->menuLoaded.load(std::memory_order_relaxed);
 		for (auto* feature : Feature::GetFeatureList()) {
+			const bool wasLoaded = feature->loaded;
 			try {
 				const std::string featureName = feature->GetShortName();
 				if (feature->IsForcedDisabledAtBoot()) {
@@ -398,13 +402,24 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				}
 				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 				if (!isDisabled) {
-					logger::info("Loading Feature: '{}'", featureName);
+					logger::info("{} Feature: '{}'", runtimeReload ? "Reloading" : "Loading", featureName);
+
+					if (runtimeReload && !wasLoaded) {
+						logger::info("Feature '{}' remains unavailable until restart", featureName);
+						continue;
+					}
 
 					// Load base feature settings from merged config (default + user)
-					feature->Load(settings);
+					if (runtimeReload) {
+						feature->ReloadSettings(settings);
+					} else {
+						feature->Load(settings);
+					}
 
 					// Register weather variables (features opt-in by implementing this)
-					feature->RegisterWeatherVariables();
+					if (!runtimeReload) {
+						feature->RegisterWeatherVariables();
+					}
 
 					// Apply feature-specific overrides on top (overrides take priority over user settings)
 					if (overridesDiscovered > 0 && overrideManager->HasFeatureOverrides(featureName)) {
@@ -433,13 +448,25 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 					// Capture current values as user settings baseline for weather overrides
 					WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(featureName);
 				} else {
+					// Initial boot gating is deliberate, not a load failure. Runtime
+					// reloads preserve lifecycle failures until a restart can retry them.
+					if (!runtimeReload) {
+						feature->loadFailed = false;
+					}
 					logger::info("Feature '{}' is disabled at boot.", featureName);
 				}
 			} catch (const std::exception& e) {
 				const auto displayName = feature->GetDisplayName();
-				feature->failedLoadedMessage = feature->failedLoadedMessage.empty() ?
-				                                   (displayName + " failed to load. Check CommunityShaders.log") :
-				                                   (feature->failedLoadedMessage + "\n" + displayName + " failed to load. Check CommunityShaders.log");
+				// Initial validation failures are fatal. A later runtime reload can
+				// fail in override/registration code after hooks already exist, so do
+				// not tear down a previously working feature without its own cleanup.
+				if (!runtimeReload || !wasLoaded) {
+					feature->loaded = false;
+					feature->loadFailed = true;
+					feature->failedLoadedMessage = feature->failedLoadedMessage.empty() ?
+					                                   (displayName + " failed to load. Check CommunityShaders.log") :
+					                                   (feature->failedLoadedMessage + "\n" + displayName + " failed to load. Check CommunityShaders.log");
+				}
 				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
 			}
 		}
@@ -613,7 +640,7 @@ void State::LoadFromJson(nlohmann::json& settings)
 	// Load feature settings (only for already-loaded features)
 	for (auto* feature : Feature::GetFeatureList()) {
 		if (feature->loaded) {
-			feature->Load(settings);
+			feature->ReloadSettings(settings);
 		}
 	}
 }

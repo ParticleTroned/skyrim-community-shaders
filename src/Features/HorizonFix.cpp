@@ -17,6 +17,7 @@ void HorizonFix::PostPostLoad()
 	// Water shaders are selected or rebuilt.
 	const bool pluginDetected = GetModuleHandleW(L"HorizonFix.dll") != nullptr;
 	if (!pluginDetected) {
+		loadFailed = false;
 		loaded = false;
 		logger::info("[Horizon Fix] HorizonFix.dll not detected, compatibility disabled");
 		return;

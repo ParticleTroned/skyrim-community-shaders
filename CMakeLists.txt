@@ -44,11 +44,7 @@ option(
     "Build shader unit tests (runs automatically before packaging)"
     ON
 )
-option(
-    BUILD_HOST_TESTS
-    "Build deterministic host-side C++ unit tests"
-    ON
-)
+option(BUILD_HOST_TESTS "Build deterministic host-side C++ unit tests" ON)
 option(
     AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
     "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
@@ -395,6 +391,33 @@ file(
     CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/features/*
 )
+
+# Drop empty leftover feature directories (for example, after a rename) before
+# they can create empty package targets or be copied into AIO/install outputs.
+set(_VALID_FEATURE_PATHS)
+foreach(_fpath IN LISTS FEATURE_PATHS)
+    if(IS_DIRECTORY "${_fpath}")
+        file(
+            GLOB_RECURSE _FEATURE_PAYLOAD_FILES
+            LIST_DIRECTORIES false
+            CONFIGURE_DEPENDS
+            "${_fpath}/*"
+        )
+        if(_FEATURE_PAYLOAD_FILES)
+            list(APPEND _VALID_FEATURE_PATHS "${_fpath}")
+        else()
+            get_filename_component(_feature_dir_name "${_fpath}" NAME)
+            message(
+                STATUS
+                "Skipping empty feature directory: ${_feature_dir_name}"
+            )
+        endif()
+    endif()
+endforeach()
+set(FEATURE_PATHS "${_VALID_FEATURE_PATHS}")
+unset(_VALID_FEATURE_PATHS)
+unset(_FEATURE_PAYLOAD_FILES)
+unset(_feature_dir_name)
 
 set(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE ${AIO_EXCLUDED_FEATURE_PACKAGES})
 
@@ -1180,8 +1203,7 @@ if(ZIP_TO_DIST)
             "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z"
         )
         if(FEATURE STREQUAL "Upscaling")
-            set(
-                FEATURE_ZIP_STAGE
+            set(FEATURE_ZIP_STAGE
                 "${CMAKE_CURRENT_BINARY_DIR}/feature_zip/${FEATURE}"
             )
             add_custom_command(
@@ -1207,8 +1229,8 @@ if(ZIP_TO_DIST)
                 POST_BUILD
                 COMMAND
                     ${CMAKE_COMMAND} -E tar cf
-                    ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z --format=7zip
-                    -- .
+                    ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z
+                    --format=7zip -- .
                 WORKING_DIRECTORY ${FEATURE_PATH}
             )
         endif()
@@ -1323,8 +1345,7 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
     set(FEATURE_PACKAGE "${DIST_PATH}/${FEATURE}-${UTC_NOW}.7z")
 
     if(FEATURE STREQUAL "Upscaling")
-        set(
-            FEATURE_PACKAGE_STAGE
+        set(FEATURE_PACKAGE_STAGE
             "${CMAKE_CURRENT_BINARY_DIR}/feature_package/${FEATURE}"
         )
         add_custom_command(
@@ -1339,8 +1360,8 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
                 "${FEATURE_PACKAGE_STAGE}" --component FidelityFXRuntime
             COMMAND
                 ${CMAKE_COMMAND} -E chdir "${FEATURE_PACKAGE_STAGE}"
-                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE}
-                --format=7zip -- .
+                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
+                .
             DEPENDS ${FEATURE_SOURCES} ${FFX_RUNTIME_FILES}
             COMMENT "Creating ${FEATURE} zip package"
         )
@@ -1348,7 +1369,8 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
         add_custom_command(
             OUTPUT ${FEATURE_PACKAGE}
             COMMAND
-                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip -- .
+                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
+                .
             WORKING_DIRECTORY "${FEATURE_PATH}"
             DEPENDS ${FEATURE_SOURCES}
             COMMENT "Creating ${FEATURE} zip package"

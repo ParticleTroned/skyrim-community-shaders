@@ -59,9 +59,8 @@ namespace SharedData
 		bool EnableTerrainParallax;
 		bool EnableHeightBlending;
 		bool EnableShadows;
-		bool ExtendShadows;
 		bool EnableParallaxWarpingFix;
-		bool pad0;
+		uint2 pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -192,11 +191,11 @@ namespace SharedData
 		uint3 pad;
 	};
 
+	/** @brief Terrain Variation feature settings. */
 	struct TerrainVariationSettings
 	{
-		uint enableTilingFix;
-		uint enableLODTerrainTilingFix;
-		float2 pad0;
+		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
+		uint3 pad;
 	};
 
 	struct IBLSettings

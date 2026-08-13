@@ -18,7 +18,7 @@
 
 #include <DirectXTex.h>
 #pragma warning(push)
-#pragma warning(disable : 4244)  // double->float conversion in third-party header
+#pragma warning(disable: 4244)  // double->float conversion in third-party header
 #include <sk_hdr_png.hpp>
 #pragma warning(pop)
 
@@ -547,9 +547,10 @@ namespace
 		const GUID& codec = saveAsPng ?
 		                        DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG) :
 		                        DirectX::GetWICCodec(DirectX::WIC_CODEC_BMP);
+		const auto wicFlags = saveAsPng ? DirectX::WIC_FLAGS_FORCE_SRGB : DirectX::WIC_FLAGS_NONE;
 		return SUCCEEDED(DirectX::SaveToWICFile(
 			*saveImage,
-			DirectX::WIC_FLAGS_NONE,
+			wicFlags,
 			codec,
 			outputPath.c_str()));
 	}

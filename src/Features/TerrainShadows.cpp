@@ -510,17 +510,20 @@ void TerrainShadows::LoadHeightmap()
 			return;
 		}
 
-		texHeightMap.release();
-		texHeightMap = std::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource), "TerrainShadows::HeightMap");
+		auto loadedHeightMap = std::make_unique<Texture2D>(reinterpret_cast<ID3D11Texture2D*>(pResource), "TerrainShadows::HeightMap");
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texHeightMap->desc.Format,
+			.Format = loadedHeightMap->desc.Format,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			.Texture2D = {
 				.MostDetailedMip = 0,
 				.MipLevels = 1 }
 		};
-		texHeightMap->CreateSRV(srvDesc);
+		loadedHeightMap->CreateSRV(srvDesc);
+
+		// Publish only a complete replacement. unique_ptr assignment destroys the
+		// old wrapper and releases its texture and views instead of leaking them.
+		texHeightMap = std::move(loadedHeightMap);
 
 		cachedHeightmap = &heightmaps[worldspace_name];
 	}
@@ -538,16 +541,6 @@ void TerrainShadows::Precompute()
 
 	logger::info("Creating shadow texture...");
 	{
-		if (texShadowHeight) {
-			auto context = globals::d3d::context;
-
-			std::array<ID3D11ShaderResourceView*, 1> srvs = { nullptr };
-			context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
-			context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
-		}
-
-		texShadowHeight.release();
-
 		D3D11_TEXTURE2D_DESC texDesc = {
 			.Width = texHeightMap->desc.Width,
 			.Height = texHeightMap->desc.Height,
@@ -571,9 +564,21 @@ void TerrainShadows::Precompute()
 			.Texture2D = { .MipSlice = 0 }
 		};
 
-		texShadowHeight = std::make_unique<Texture2D>(texDesc, "TerrainShadows::ShadowHeight");
-		texShadowHeight->CreateSRV(srvDesc);
-		texShadowHeight->CreateUAV(uavDesc);
+		auto loadedShadowHeight = std::make_unique<Texture2D>(texDesc, "TerrainShadows::ShadowHeight");
+		loadedShadowHeight->CreateSRV(srvDesc);
+		loadedShadowHeight->CreateUAV(uavDesc);
+
+		if (texShadowHeight) {
+			auto context = globals::d3d::context;
+
+			std::array<ID3D11ShaderResourceView*, 1> srvs = { nullptr };
+			context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+			context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+		}
+
+		// Keep the current map alive if creation fails; swap only after the new
+		// texture and both required views are ready.
+		texShadowHeight = std::move(loadedShadowHeight);
 	}
 #undef I18N_KEY_PREFIX
 

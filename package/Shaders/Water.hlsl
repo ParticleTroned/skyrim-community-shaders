@@ -1,3 +1,16 @@
+#if defined(HORIZON_FIX)
+namespace HorizonFix
+{
+	// Folded far water sits just inside the far plane for D24 and D32F depth,
+	// behind ordinary scene geometry but in front of the depth clear value.
+	static const float FoldedDepth = 1.0 - 8.0 / 16777216.0;
+
+	// Treat only the narrow far-depth band as empty background. This also covers
+	// depth-clamped backdrop geometry supplied by compatible external plugins.
+	static const float EmptyDepthThreshold = 1.0 - 64.0 / 16777216.0;
+}
+#endif
+
 #if defined(UNDERWATERMASK)
 
 struct VS_INPUT
@@ -164,6 +177,10 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.HPosition.xy = worldViewPos.xy;
 	vsout.HPosition.z = heightMult * 0.5 + worldViewPos.z;
 	vsout.HPosition.w = worldViewPos.w;
+
+#		if defined(HORIZON_FIX)
+	vsout.HPosition.z = min(vsout.HPosition.z, vsout.HPosition.w * HorizonFix::FoldedDepth);
+#		endif
 
 #		if defined(STENCIL)
 	vsout.WorldPosition = worldPos;
@@ -1252,7 +1269,8 @@ DiffuseOutput GetWaterDiffuseColor(
 	float refractionWaterColumnDepthUnits = waterColumnDepthUnits;
 
 #				if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH)
-	float refractionDepth = GetScreenDepthWater(refractionScreenPosition);
+	float refractionRawDepth = GetRawScreenDepthWater(refractionScreenPosition);
+	float refractionDepth = ResolveScreenDepthWater(refractionRawDepth);
 	float refractionDepthMul = length(float3((((VPOSOffset.zw + refractionUvRaw) * 2 - 1)) * refractionDepth / ProjData.xy, refractionDepth));
 
 	float3 refractionDepthAdjustedViewDirection = -viewDirection * refractionDepthMul;
@@ -1280,9 +1298,14 @@ DiffuseOutput GetWaterDiffuseColor(
 		distanceMul = saturate(unclampedRefractionDistanceMul);
 		refractionWaterColumnDepthUnits =
 			candidateRefractionWaterColumnDepthUnits;
-		refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse, float4((refractionUvRaw * 2 - 1) * float2(1, -1), DepthTex.Load(float3(refractionScreenPosition, 0)).x, 1));
+		refractionWorldPosition = mul(FrameBuffer::CameraViewProjInverse, float4((refractionUvRaw * 2 - 1) * float2(1, -1), refractionRawDepth, 1));
 		refractionWorldPosition.xyz /= refractionWorldPosition.w;
 	}
+
+#					if defined(HORIZON_FIX)
+	if (refractionRawDepth >= HorizonFix::EmptyDepthThreshold)
+		distanceMul = 1.0.xxxx;
+#					endif
 #				endif
 
 	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
@@ -1412,6 +1435,11 @@ PS_OUTPUT main(PS_INPUT input)
 	distanceMul = all(isfinite(unclampedDistanceMul)) ?
 		saturate(unclampedDistanceMul) :
 		0.0.xxxx;
+
+#					if defined(HORIZON_FIX)
+	if (primaryRawDepth >= HorizonFix::EmptyDepthThreshold)
+		distanceMul = 1.0.xxxx;
+#					endif
 #				endif
 #			endif
 

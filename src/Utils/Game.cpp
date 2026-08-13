@@ -160,8 +160,9 @@ namespace Util
 			static_cast<float>(viewport->screenHeight)
 		};
 
+		// Feature passes use the scaled render area even when the vanilla dynamic-resolution lock is set.
 		if (a_dynamic)
-			resolution = ConvertToDynamic(resolution);
+			resolution = ConvertToDynamic(resolution, true);
 
 		if (resolution.x <= 0.0f || resolution.y <= 0.0f) {
 			return { 0, 0 };

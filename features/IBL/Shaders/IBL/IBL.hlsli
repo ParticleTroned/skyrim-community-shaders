@@ -154,6 +154,7 @@ namespace ImageBasedLighting
 		float level,
 		float directionalAmbientColorSpecular,
 		float skylightingSpecular,
+		float skylightingVisibility,
 		out float3 envSpecular,
 		out float3 skySpecular)
 	{
@@ -165,7 +166,7 @@ namespace ImageBasedLighting
 			envSpecular = (linEnvSample / max(envLum, 0.001)) * Color::IrradianceToLinear(directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
 			skySpecular = max(0, linFullSample - linEnvSample) * SharedData::iblSettings.SkyIBLScale;
 #if defined(SKYLIGHTING)
-			envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
+			envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingVisibility : 1.0;
 			skySpecular *= skylightingSpecular;
 #endif
 		} else {

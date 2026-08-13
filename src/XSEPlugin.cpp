@@ -169,6 +169,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				PerformanceTuningRenderer::CancelMode::ClearSession);
 			if (errors.empty()) {
 				ResetRuntimeStateAfterGameLoad();
+				if (message->type == SKSE::MessagingInterface::kPostLoadGame)
+					Util::RequestGameLoadTransition();
 				logger::info("Handled {}", message->type == SKSE::MessagingInterface::kPostLoadGame ? "kPostLoadGame" : "kNewGame");
 			}
 

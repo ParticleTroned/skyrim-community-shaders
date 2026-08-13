@@ -67,7 +67,6 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-
 private:
 	enum class CellFlagExt : uint16_t
 	{
@@ -109,13 +108,14 @@ private:
 		Caster target = Caster::Sun;
 		Caster previousTarget = Caster::Sun;
 		float fadeTimer = 0.0f;
+		float immediateTransitionRemaining = 0.0f;
 		bool transitioning = false;
 		bool sunriseReleased = false;
 		float frozenHeading = 0.0f;
 		bool sunsetHeadingLocked = false;
 		float vlIntensityFactor = 1.0f;
 
-		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance);
+		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition);
 		void LockSunElevation(RE::NiPoint3 dirs[]);
 		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
@@ -131,7 +131,6 @@ private:
 	static constexpr float NorthernSunAngle = 90.0f + 35.0f;
 	static constexpr float VanillaSunAngle = 90.0f + 5.0f;
 	static constexpr float DefaultVolumetricLightingIntensityFactor = 1.0f;
-	static constexpr float SecondsPerGameHour = 3600.0f;
 	static constexpr float SunsetHeadingLockThreshold = 0.5f;
 	static constexpr float VLFadeStartAngle = 2.0f;
 	static constexpr float VLFadeEndAngle = 10.0f;
@@ -141,9 +140,11 @@ private:
 
 	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;
+	bool currentCellInterior = false;
+	RE::TESWorldSpace* currentCellWorldspace = nullptr;
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
-	float lastGameHour = -1.0f;
+	bool immediateTransitionReady = false;
 
 	float4 colors[3] = {};
 	float currentDim = 1.0f;
@@ -157,7 +158,8 @@ private:
 	void ResetRuntimeState();
 	static float NormalizeVolumetricLightingIntensity(float intensity);
 
-	void Update(const RE::Sky* sky);
+	void PreparePendingTransitions();
+	bool Update(const RE::Sky* sky);
 
 	void SetSunAngle();
 

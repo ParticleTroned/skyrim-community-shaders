@@ -1,7 +1,9 @@
 #pragma once
 
-#include "Buffer.h"
+#include <cstdint>
 #include <filesystem>
+
+#include "Buffer.h"
 
 struct TerrainShadows : public Feature
 {
@@ -30,6 +32,17 @@ public:
 
 	bool needPrecompute = false;
 	uint shadowUpdateIdx = 0;
+	std::uint32_t handledTimeJumpRefreshGeneration = 0;
+	std::uint32_t activeRefreshGeneration = 0;
+	bool fullRefreshActive = false;
+	bool shadowMapValid = false;
+
+	enum class ShadowUpdateResult
+	{
+		kUnavailable,
+		kIncomplete,
+		kComplete
+	};
 
 	struct HeightMapMetadata
 	{
@@ -48,7 +61,7 @@ public:
 		float2 LightDeltaZ;  // per LightUVDir, upper penumbra and lower, should be negative
 		uint StartPxCoord;
 		float2 PxSize;
-		uint pad0[1];
+		float BlendWeight;
 		float2 PosRange;
 		float2 ZRange;
 	} shadowUpdateCBData;
@@ -98,10 +111,9 @@ public:
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableTerrainShadow; }
-	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
-	{
-		settings.EnableTerrainShadow = a_enabled;
-	}
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual bool IsPerformanceCostMeasurementReady() const override;
+	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
 	{
@@ -110,9 +122,16 @@ public:
 	}
 
 	virtual void EarlyPrepass() override;
+	/** @brief Installs SE time-change hooks. */
+	virtual void PostPostLoad() override;
+	/** @brief Registers engine time-change and player-cell event handlers. */
+	virtual void DataLoaded() override;
 	void LoadHeightmap();
 	void Precompute();
-	void UpdateShadow();
+	void BeginFullRefresh(std::uint32_t a_generation);
+	void InvalidateShadowMap();
+	bool IsShadowMapRefreshPending() const;
+	ShadowUpdateResult UpdateShadow(bool a_fullRefresh);
 
 	virtual void ReflectionsPrepass() override;
 

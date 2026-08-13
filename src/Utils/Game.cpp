@@ -1,10 +1,78 @@
 #include "Game.h"
 
+#include <atomic>
+
 #include "Globals.h"
 #include "State.h"
 
+namespace
+{
+	constexpr std::uint32_t timeJumpTransitionBit = 1u << 0;
+	constexpr std::uint32_t gameLoadTransitionBit = 1u << 1;
+
+	std::atomic_bool celestialTransitionHandlerAvailable{ false };
+	std::atomic_uint32_t pendingCelestialTransitions{ 0 };
+	std::atomic_uint32_t completedCelestialTransitionGeneration{ 0 };
+
+	void MarkCelestialTransitionComplete()
+	{
+		completedCelestialTransitionGeneration.fetch_add(1, std::memory_order_release);
+	}
+
+	void RequestCelestialTransition(std::uint32_t a_transitionBit)
+	{
+		pendingCelestialTransitions.fetch_or(a_transitionBit, std::memory_order_release);
+		if (!celestialTransitionHandlerAvailable.load(std::memory_order_acquire) &&
+			pendingCelestialTransitions.exchange(0, std::memory_order_acq_rel) != 0) {
+			MarkCelestialTransitionComplete();
+		}
+	}
+}
+
 namespace Util
 {
+	void SetCelestialTransitionHandlerAvailable(bool a_available)
+	{
+		celestialTransitionHandlerAvailable.store(a_available, std::memory_order_release);
+		if (a_available)
+			return;
+
+		if (pendingCelestialTransitions.exchange(0, std::memory_order_acq_rel) != 0)
+			MarkCelestialTransitionComplete();
+	}
+
+	void RequestTimeJumpTransition()
+	{
+		RequestCelestialTransition(timeJumpTransitionBit);
+	}
+
+	void RequestGameLoadTransition()
+	{
+		RequestCelestialTransition(gameLoadTransitionBit);
+	}
+
+	CelestialTransitionRequest ConsumeCelestialTransitionRequest()
+	{
+		if (!celestialTransitionHandlerAvailable.load(std::memory_order_acquire))
+			return {};
+
+		const auto pending = pendingCelestialTransitions.exchange(0, std::memory_order_acq_rel);
+		return {
+			.timeJump = (pending & timeJumpTransitionBit) != 0,
+			.gameLoad = (pending & gameLoadTransitionBit) != 0,
+		};
+	}
+
+	void CompleteCelestialTransition()
+	{
+		MarkCelestialTransitionComplete();
+	}
+
+	std::uint32_t GetCompletedCelestialTransitionGeneration()
+	{
+		return completedCelestialTransitionGeneration.load(std::memory_order_acquire);
+	}
+
 	namespace
 	{
 		RE::ImageSpaceManager::UNK_BSImagespaceShaderISTemporalAA* GetTemporalAAShader()

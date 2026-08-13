@@ -41,7 +41,7 @@ namespace FeatureVersions
         {"SubsurfaceScattering"sv, {3,1,5}},
         {"TerrainBlending"sv,      {1,2,5}},
         {"TerrainHelper"sv,        {1,0,1}},
-        {"TerrainShadows"sv,       {1,2,0}},
+        {"TerrainShadows"sv,       {1,2,2}},
         {"TerrainVariation"sv,     {1,1,0}},
         {"TruePBR"sv,              {1,0,0}},
         {"UnifiedWater"sv,         {1,5,25}},

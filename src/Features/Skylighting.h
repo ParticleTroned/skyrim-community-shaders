@@ -8,7 +8,6 @@ private:
 	static constexpr std::string_view MOD_ID = "139352";
 
 public:
-
 	virtual inline std::string GetName() override { return "Skylighting"; }
 	virtual std::string GetDisplayName() override { return T("feature.skylighting.name", "Skylighting"); }
 	virtual inline std::string GetShortName() override { return "Skylighting"; }
@@ -87,25 +86,28 @@ public:
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
 		float4 OcclusionSHBasis4Pi;
 
-		float4 PosOffset;  // cell origin in camera model space
+		float4 PosOffset;     // cell origin in camera model space
 		uint ArrayOrigin[4];  // xyz: array origin, w: max accum frames
 		int ValidMargin[4];
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
 		uint Enabled;
-		uint _pad0;
+		uint ShadowDataAvailable;
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
 	SkylightingCB GetCommonBufferData(bool a_inWorld);
 	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting; }
+	bool HasCurrentShadowData() const;
 
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
 
 	Texture2D* texOcclusion = nullptr;
 	Texture3D* texProbeArray = nullptr;
 	Texture3D* texAccumFramesArray = nullptr;
+	Texture3D* texShadowBitmask = nullptr;
+	Texture3D* texShadowVisibility = nullptr;
 
 	winrt::com_ptr<ID3D11ComputeShader> probeUpdateCompute = nullptr;
 

@@ -787,6 +787,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef SKYLIGHTING
 #	endif
 
+#	if defined(SKYLIGHTING) && (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING) || defined(BACK_LIGHTING))
+#		define SKYLIGHTING_SHADOW_VIS
+#	endif
+
 #	include "Common/LightingCommon.hlsli"
 
 #	if defined(WATER_EFFECTS)
@@ -2305,7 +2309,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.F0 = max((enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0), material.F0 * SharedData::vanillaFresnelSettings.BaseF0Multiplier);
 	const float3 baseF0 = material.F0;
 #		endif  // VANILLA_FRESNEL
-#	endif  // TRUE_PBR
+#	endif      // TRUE_PBR
 
 #	if defined(SKIN) && defined(CS_SKIN)
 	const float ExtraRoughness = BRDF::F_Schlick(0.04, saturate(dot(worldNormal.xyz, viewDirection))) * SharedData::skinData.fuzzParams.w;
@@ -2383,7 +2387,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 		if (vfStartDynamicCubemapTest || (envSize.x == 1 && envSize.y == 1)) {
 #			else
-		if (envSize.x == 1 && envSize.y == 1) {
+	if (envSize.x == 1 && envSize.y == 1) {
 #			endif
 
 			dynamicCubemap = true;
@@ -2484,10 +2488,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(SKYLIGHTING)
 	float3 positionMSSkylight = input.WorldPosition.xyz;
+#		if defined(SKYLIGHTING_SHADOW_VIS)
+	float skylightingShadowVisibility = 1.0;
+#		endif
 #		if defined(DEFERRED)
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
+#			if defined(SKYLIGHTING_SHADOW_VIS)
+		,
+		skylightingShadowVisibility
+#			endif
+	);
 #		else
-	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal) : Skylighting::UNIT_SH;
+	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
+#			if defined(SKYLIGHTING_SHADOW_VIS)
+									  ,
+									  skylightingShadowVisibility
+#			endif
+									  ) :
+	                              Skylighting::UNIT_SH;
 #		endif
 
 #	endif
@@ -2640,6 +2658,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirSoftShadow = 1.0;
 	float dirVSMDetailedShadow = 1.0;
 
+#	if defined(SKYLIGHTING_SHADOW_VIS)
+	const bool useSkylightingShadow = Skylighting::IsEnabled() && SharedData::skylightingSettings.ShadowDataAvailable != 0;
+#	endif
+
 #	if defined(VOLUMETRIC_SHADOWS)
 	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows())
 		dirSoftShadow = ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, dirVSMDetailedShadow);
@@ -2706,6 +2728,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		vertexNormal.xyz = worldNormal.xyz;
 		worldNormal.xyz = hairT;
 	}
+#	endif
+
+#	if defined(SKYLIGHTING_SHADOW_VIS)
+	if (useSkylightingShadow)
+		dirSoftShadow = min(dirSoftShadow, skylightingShadowVisibility);
 #	endif
 
 	float3 diffuseColor = 0.0.xxx;
@@ -3169,7 +3196,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 	)
 #		endif
-	indirectLobeWeights.specular *= envMask;
+		indirectLobeWeights.specular *= envMask;
 #	endif
 
 #	if defined(SPECULAR) && !defined(TRUE_PBR)
@@ -3240,7 +3267,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
 		if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion))
 #		endif
-		specularColor += envColor * Color::IrradianceToLinear(diffuseColor);
+			specularColor += envColor * Color::IrradianceToLinear(diffuseColor);
 	indirectLobeWeights.diffuse += envColor;
 #	endif
 
@@ -3249,7 +3276,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
 	if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableGGX))
 #		endif
-	specularColor *= complexSpecular;
+		specularColor *= complexSpecular;
 #	endif  // defined (EMAT) && defined(ENVMAP)
 
 #	if defined(LOD_LAND_BLEND) && defined(TRUE_PBR)

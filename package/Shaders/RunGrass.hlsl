@@ -286,7 +286,7 @@ struct PS_OUTPUT
 #		endif
 	float4 Masks: SV_Target6;
 	float4 Masks2: SV_Target7;
-#	endif      // RENDER_DEPTH
+#	endif  // RENDER_DEPTH
 };
 #else
 struct PS_OUTPUT
@@ -353,6 +353,10 @@ cbuffer AlphaTestRefCB : register(b11)
 #	endif
 
 #	define SampColorSampler SampBaseSampler
+
+#	if defined(SKYLIGHTING)
+#		define SKYLIGHTING_SHADOW_VIS
+#	endif
 
 #	if defined(DYNAMIC_CUBEMAPS)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
@@ -434,17 +438,17 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input)
 				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
-#				if defined(ISL)
+#			if defined(ISL)
 				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
 				if (intensityMultiplier < 1e-5)
 					continue;
-#				else
+#			else
 				float intensityFactor = saturate(lightDist / light.radius);
 				if (intensityFactor == 1)
 					continue;
 
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#				endif
+#			endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
@@ -500,12 +504,12 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input)
 
 	psout.Diffuse = float4(diffuseColor, 1);
 	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition);
-#	if defined(GRASS_LIGHTING)
+#		if defined(GRASS_LIGHTING)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false)), 0, 0);
-#	else
+#		else
 	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false));
 	psout.Normal.zw = 0;
-#	endif
+#		endif
 	psout.Albedo = float4(albedo, 1);
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
 	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, 0);
@@ -549,8 +553,7 @@ float GetWrappedDiffuseMultiplier(float angle, float wrapAmount, bool useWrapped
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
-	[branch] if (!SharedData::grassLightingSettings.Enabled)
-		return RenderBasicGrass(input);
+	[branch] if (!SharedData::grassLightingSettings.Enabled) return RenderBasicGrass(input);
 
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
@@ -722,12 +725,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #				if defined(SKYLIGHTING)
 	float3 positionMSSkylight = input.WorldPosition.xyz;
-	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
+	float skylightingShadowVisibility = 1.0;
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal, skylightingShadowVisibility);
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
 #				endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
 
-	float3 subsurfaceColor = dirLightColor * dirDetailedShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
+	float dirSoftShadow = dirDetailedShadow;
+#				if defined(SKYLIGHTING_SHADOW_VIS)
+	if (Skylighting::IsEnabled() && SharedData::skylightingSettings.ShadowDataAvailable != 0)
+		dirSoftShadow = min(dirSoftShadow, skylightingShadowVisibility);
+#				endif
+
+	float3 subsurfaceColor = dirLightColor * dirSoftShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
 
 	if (complex)
 		lightsSpecularColor += dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * Color::VanillaNormalization();
@@ -844,10 +855,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 
 	specularColor += lightsSpecularColor;
-#			if defined(VANILLA_FRESNEL)
+#				if defined(VANILLA_FRESNEL)
 	if (!(SharedData::vanillaFresnelSettings.Enable && SharedData::vanillaFresnelSettings.EnableGGXOnGrass))
-#			endif
-	specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
+#				endif
+		specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
 #			endif
 
 #			if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)

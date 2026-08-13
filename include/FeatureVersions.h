@@ -37,7 +37,7 @@ namespace FeatureVersions
         {"ScreenSpaceShadows"sv,   {2,2,5}},
         {"Skin"sv,                 {1,0,0}},
         {"SkySync"sv,              {1,5,0}},
-        {"Skylighting"sv,          {1,4,0}},
+        {"Skylighting"sv,          {1,5,0}},
         {"SubsurfaceScattering"sv, {3,1,5}},
         {"TerrainBlending"sv,      {1,2,5}},
         {"TerrainHelper"sv,        {1,0,1}},

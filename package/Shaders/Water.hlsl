@@ -1565,11 +1565,27 @@ PS_OUTPUT main(PS_INPUT input)
 
 #				if defined(LIGHT_LIMIT_FIX)
 	uint lightCount = 0;
+	const bool inReflection =
+		(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
+	// Reuse LLF's bounded candidate cache. Reflection passes cannot raymarch the
+	// main-view depth buffer, and the packed flags already honor point, particle,
+	// budget, and interiors-only settings.
+	const bool contactShadowsEnabled =
+		SharedData::lightLimitFixSettings.ContactShadowFlags != 0 && inWorld && !inReflection;
+	uint contactShadowOffset = 0;
+	uint contactShadowCount = 0;
+	float contactShadowNoise = 0.0;
+	bool hasContactShadowNoise = false;
+	float2 contactShadowScreenDim = 0.0;
+	[branch] if (contactShadowsEnabled)
+		contactShadowScreenDim = LightLimitFix::GetContactShadowScreenDim();
 
 	uint clusterIndex = 0;
 	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+		[branch] if (contactShadowsEnabled)
+			LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
 		[loop] for (uint i = 0; i < lightCount; i++)
 		{
 			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
@@ -1596,9 +1612,42 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 H = normalize(normalizedLightDirection - viewDirection);
 			float HdotN = saturate(dot(H, normal));
 
+			float contactShadow = 1.0;
+			const bool isParticleLight =
+				(light.lightFlags & LightLimitFix::LightFlags::Particle) != 0;
+			[branch] if (
+				contactShadowsEnabled &&
+				contactShadowCount > 0 &&
+				HdotN > 0.0 &&
+				intensityMultiplier > 1e-5 &&
+				LightLimitFix::CanUseContactShadows(light, isParticleLight) &&
+				LightLimitFix::IsContactShadowCandidate(
+					clusteredLightIndex,
+					contactShadowOffset,
+					contactShadowCount))
+			{
+				if (!hasContactShadowNoise) {
+					contactShadowNoise = Random::InterleavedGradientNoise(
+						LightLimitFix::GetContactShadowNoiseCoord(
+							input.HPosition.xy,
+							screenUV,
+							contactShadowScreenDim),
+						SharedData::FrameCount);
+					hasContactShadowNoise = true;
+				}
+
+				contactShadow = LightLimitFix::ContactShadows(
+					viewPosition,
+					screenUV,
+					light.positionWS.xyz,
+					contactShadowNoise,
+					contactShadowScreenDim,
+					isParticleLight);
+			}
+
 			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 			float3 lightColor = Color::PointLightPreserveHDRIntensity(light.color.xyz, isPointLightLinear, light.lightFlags) * Color::VanillaNormalization() * pow(HdotN, FresnelRI.z) * light.fade;
-			specularLighting += lightColor * intensityMultiplier;
+			specularLighting += lightColor * intensityMultiplier * contactShadow;
 		}
 	}
 	specularColor += specularLighting * 3;

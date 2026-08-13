@@ -33,7 +33,7 @@ struct VanillaFresnel : public Feature
 
 	struct alignas(16) Settings
 	{
-		uint Enable = true;
+		uint Enable = false;
 		uint EnableGGX = false;
 		uint EnableGGXOnGrass = false;
 		uint EnableDynamicCubemapsConversion = false;

@@ -78,7 +78,7 @@ public:
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
 		bool EnableSkylighting = true;
-		bool IncludeMarkedRoofOccluders = false;
+		bool IncludeMarkedRoofOccluders = true;
 	} settings;
 
 	struct SkylightingCB

@@ -33,6 +33,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void CSEditor::DataLoaded()
 {
 	s_dataAvailable = true;
+	EditorWindow::MenuOpenCloseEventHandler::Register();
 }
 
 bool CSEditor::HasWidgetJsonFiles()
@@ -221,8 +222,8 @@ void CSEditor::Prepass()
 		}
 	}
 
-	// Update time controls (handles sleep/wait and external state sync)
-	editorWindow->UpdateTimeState();
+	// Menu membership is event-driven; polling only repairs/reconciles the resulting time state.
+	editorWindow->SyncExternalTimeScale();
 }
 
 void CSEditor::DrawWeatherPickerSection()

@@ -14,6 +14,7 @@
 #include "WeatherUtils.h"
 #include "Widget.h"
 
+#include <cstdint>
 #include <unordered_map>
 
 class EditorWindow
@@ -134,10 +135,33 @@ public:
 	void ResumeTime();
 	inline void TogglePause() { timePaused ? ResumeTime() : PauseTime(); }
 	void ResetTimeScale();
+	/** @brief Returns whether the editor owns a pause request, including while a menu temporarily restores time. */
 	bool IsTimePaused() const { return timePaused; }
 
-	/// Call once per frame — handles sleep/wait menu and external state sync.
-	void UpdateTimeState();
+	/**
+	 * @brief Keeps time running while a transition-sensitive menu is open and reapplies an
+	 * editor-owned pause after the final such menu closes.
+	 * @param a_needsRunningTime True while any transition-sensitive menu is open.
+	 */
+	void SetTimeRunningForMenu(bool a_needsRunningTime);
+
+	/** @brief Reconciles external time changes and completes any deferred post-menu state write. */
+	void SyncExternalTimeScale();
+
+	/** @brief Drives the time guard from menu transitions that may suspend world rendering. */
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		virtual RE::BSEventNotifyControl ProcessEvent(
+			const RE::MenuOpenCloseEvent* a_event,
+			RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
+
+		/** @brief Subscribes the singleton handler to menu open/close events. */
+		static bool Register();
+
+	private:
+		std::uint8_t openMenuMask = 0;
+	};
 
 	/// Draw a game-hour slider. Returns true if calendar is valid.
 	bool DrawGameHourSlider(const char* label = "Game Time", const char* format = "%.2f");
@@ -268,8 +292,9 @@ private:
 	bool timePaused = false;
 	float savedTimeScale = kVanillaTimeScale;
 	float timeScaleSlider = kVanillaTimeScale;
-	bool wasRestoredForWait = false;
-	bool wasPausedBeforeWait = false;
+	bool timeMenuGuardActive = false;
+	bool restoreTimeScaleAfterMenu = false;
+	bool timeStatePendingAfterMenu = false;
 
 	// Sorting state
 	enum class SortColumn

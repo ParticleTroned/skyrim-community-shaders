@@ -18,6 +18,10 @@
 
 #define I18N_KEY_PREFIX "cs_editor."
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteValueEntry, name, value, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteFavoriteColor, hasValue, r, g, b)
@@ -1863,15 +1867,86 @@ void EditorWindow::UnlockWeather()
 	weatherLockActive = false;
 }
 
+namespace
+{
+	constexpr std::array kTimeSensitiveMenus{
+		RE::LoadingMenu::MENU_NAME,
+		RE::SleepWaitMenu::MENU_NAME,
+		RE::MapMenu::MENU_NAME
+	};
+
+	float SanitizeRunningTimeScale(float a_timeScale)
+	{
+		return std::isfinite(a_timeScale) && a_timeScale > 0.0f ?
+		           a_timeScale :
+		           EditorWindow::kVanillaTimeScale;
+	}
+
+	float GetMenuRunningTimeScale(float a_timeScale)
+	{
+		return std::max(SanitizeRunningTimeScale(a_timeScale), EditorWindow::kVanillaTimeScale);
+	}
+
+	std::uint8_t GetTimeSensitiveMenuBit(const RE::BSFixedString& a_menuName)
+	{
+		for (std::size_t index = 0; index < kTimeSensitiveMenus.size(); ++index) {
+			if (a_menuName == kTimeSensitiveMenus[index])
+				return static_cast<std::uint8_t>(1u << index);
+		}
+		return 0;
+	}
+
+	std::uint8_t GetOpenTimeSensitiveMenuMask(RE::UI* a_ui)
+	{
+		std::uint8_t mask = 0;
+		if (!a_ui)
+			return mask;
+
+		for (std::size_t index = 0; index < kTimeSensitiveMenus.size(); ++index) {
+			if (a_ui->IsMenuOpen(kTimeSensitiveMenus[index]))
+				mask |= static_cast<std::uint8_t>(1u << index);
+		}
+		return mask;
+	}
+}
+
 void EditorWindow::PauseTime()
 {
-	if (timePaused)
-		return;
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
-	if (calendar && calendar->timeScale) {
-		savedTimeScale = calendar->timeScale->value;
+	if (!calendar || !calendar->timeScale)
+		return;
+
+	const float currentTimeScale = calendar->timeScale->value;
+	if (timePaused) {
+		if (timeMenuGuardActive) {
+			if (!std::isfinite(currentTimeScale) || currentTimeScale <= 0.0f)
+				calendar->timeScale->value = GetMenuRunningTimeScale(savedTimeScale);
+			return;
+		}
+		if (currentTimeScale == 0.0f)
+			return;
+	}
+
+	// A resume requested during the guard already preserved the pre-menu scale. Do not
+	// replace it with the temporary safety scale if the user pauses again before close.
+	if (restoreTimeScaleAfterMenu)
+		savedTimeScale = SanitizeRunningTimeScale(savedTimeScale);
+	else if (std::isfinite(currentTimeScale) && currentTimeScale > 0.0f)
+		savedTimeScale = currentTimeScale;
+	else if (timePaused)
+		savedTimeScale = SanitizeRunningTimeScale(savedTimeScale);
+	else
+		savedTimeScale = kVanillaTimeScale;
+
+	timePaused = true;
+	restoreTimeScaleAfterMenu = false;
+	timeStatePendingAfterMenu = false;
+	if (timeMenuGuardActive) {
+		if (!std::isfinite(currentTimeScale) || currentTimeScale <= 0.0f)
+			calendar->timeScale->value = GetMenuRunningTimeScale(savedTimeScale);
+		logger::info("Time pause deferred until menu transition completes (saved timescale: {})", savedTimeScale);
+	} else {
 		calendar->timeScale->value = 0.0f;
-		timePaused = true;
 		logger::info("Time paused (saved timescale: {})", savedTimeScale);
 	}
 }
@@ -1881,9 +1956,21 @@ void EditorWindow::ResumeTime()
 	if (!timePaused)
 		return;
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
-	if (calendar && calendar->timeScale) {
+	if (!calendar || !calendar->timeScale)
+		return;
+
+	savedTimeScale = SanitizeRunningTimeScale(savedTimeScale);
+	timePaused = false;
+	if (timeMenuGuardActive) {
+		restoreTimeScaleAfterMenu = true;
+		timeStatePendingAfterMenu = false;
+		if (!std::isfinite(calendar->timeScale->value) || calendar->timeScale->value <= 0.0f)
+			calendar->timeScale->value = GetMenuRunningTimeScale(savedTimeScale);
+		logger::info("Time pause cancelled during menu transition (timescale: {})", calendar->timeScale->value);
+	} else {
+		restoreTimeScaleAfterMenu = false;
+		timeStatePendingAfterMenu = false;
 		calendar->timeScale->value = savedTimeScale;
-		timePaused = false;
 		logger::info("Time resumed (timescale: {})", savedTimeScale);
 	}
 }
@@ -1893,46 +1980,131 @@ void EditorWindow::ResetTimeScale()
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
 	if (!calendar || !calendar->timeScale)
 		return;
-	if (timePaused)
-		savedTimeScale = kVanillaTimeScale;
-	else
+	savedTimeScale = kVanillaTimeScale;
+	restoreTimeScaleAfterMenu = false;
+	timeStatePendingAfterMenu = false;
+	if (!timePaused)
 		calendar->timeScale->value = kVanillaTimeScale;
 	timeScaleSlider = kVanillaTimeScale;
 }
 
-void EditorWindow::UpdateTimeState()
+void EditorWindow::SetTimeRunningForMenu(bool a_needsRunningTime)
+{
+	const bool wasGuardActive = timeMenuGuardActive;
+	timeMenuGuardActive = a_needsRunningTime;
+	if (a_needsRunningTime)
+		timeStatePendingAfterMenu = false;
+
+	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
+	if (a_needsRunningTime) {
+		if (calendar && calendar->timeScale &&
+			(!std::isfinite(calendar->timeScale->value) || calendar->timeScale->value <= 0.0f)) {
+			const float safetyScale = timePaused || restoreTimeScaleAfterMenu ? savedTimeScale : kVanillaTimeScale;
+			calendar->timeScale->value = GetMenuRunningTimeScale(safetyScale);
+		}
+		if (!wasGuardActive && calendar && calendar->timeScale)
+			logger::debug("Time restored for menu transition (timescale: {})", calendar->timeScale->value);
+	} else if (wasGuardActive) {
+		timeStatePendingAfterMenu = timePaused || restoreTimeScaleAfterMenu;
+		if (!calendar || !calendar->timeScale)
+			return;
+
+		if (timePaused) {
+			calendar->timeScale->value = 0.0f;
+			logger::debug("Editor-owned time pause restored after menu transition");
+		} else if (restoreTimeScaleAfterMenu) {
+			savedTimeScale = SanitizeRunningTimeScale(savedTimeScale);
+			calendar->timeScale->value = savedTimeScale;
+			logger::debug("Pre-menu timescale restored after menu transition ({})", savedTimeScale);
+		}
+		restoreTimeScaleAfterMenu = false;
+		timeStatePendingAfterMenu = false;
+	}
+}
+
+void EditorWindow::SyncExternalTimeScale()
 {
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
-	auto ui = globals::game::ui ? globals::game::ui : RE::UI::GetSingleton();
 	if (!calendar || !calendar->timeScale)
 		return;
 
-	bool needsTimeRestored = ui && (ui->IsMenuOpen(RE::SleepWaitMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
-
-	// External state sync (skip while a time-sensitive menu is open)
-	if (!needsTimeRestored) {
-		if (calendar->timeScale->value == 0.0f && !timePaused)
-			savedTimeScale = kVanillaTimeScale;
-		else if (calendar->timeScale->value > 0.0f && timePaused)
-			timePaused = false;
-	}
-
-	// Temporarily restore time during sleep/wait, fast travel, and loading screens
-	if (needsTimeRestored && calendar->timeScale->value == 0.0f) {
-		if (!wasRestoredForWait) {
-			wasPausedBeforeWait = true;
-			if (timePaused)
-				ResumeTime();
-			else
-				calendar->timeScale->value = std::max(savedTimeScale, kVanillaTimeScale);
-			wasRestoredForWait = true;
+	if (timeMenuGuardActive) {
+		if (!std::isfinite(calendar->timeScale->value) || calendar->timeScale->value <= 0.0f) {
+			const float safetyScale = timePaused || restoreTimeScaleAfterMenu ? savedTimeScale : kVanillaTimeScale;
+			calendar->timeScale->value = GetMenuRunningTimeScale(safetyScale);
 		}
-	} else if (!needsTimeRestored && wasRestoredForWait) {
-		if (wasPausedBeforeWait && !timePaused)
-			PauseTime();
-		wasRestoredForWait = false;
-		wasPausedBeforeWait = false;
+		return;
 	}
+
+	if (timeStatePendingAfterMenu) {
+		if (timePaused) {
+			calendar->timeScale->value = 0.0f;
+		} else if (restoreTimeScaleAfterMenu) {
+			savedTimeScale = SanitizeRunningTimeScale(savedTimeScale);
+			calendar->timeScale->value = savedTimeScale;
+		}
+		restoreTimeScaleAfterMenu = false;
+		timeStatePendingAfterMenu = false;
+		return;
+	}
+
+	if (!timePaused)
+		return;
+
+	const float currentTimeScale = calendar->timeScale->value;
+	if (std::isfinite(currentTimeScale) && currentTimeScale > 0.0f) {
+		timePaused = false;
+		savedTimeScale = currentTimeScale;
+		timeScaleSlider = currentTimeScale;
+		logger::info("External timescale change released editor pause ownership (timescale: {})", currentTimeScale);
+	}
+}
+
+RE::BSEventNotifyControl EditorWindow::MenuOpenCloseEventHandler::ProcessEvent(
+	const RE::MenuOpenCloseEvent* a_event,
+	RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
+{
+	if (!a_event)
+		return RE::BSEventNotifyControl::kContinue;
+
+	const std::uint8_t menuBit = GetTimeSensitiveMenuBit(a_event->menuName);
+	if (menuBit == 0)
+		return RE::BSEventNotifyControl::kContinue;
+
+	if (a_event->opening)
+		openMenuMask |= menuBit;
+	else
+		openMenuMask &= static_cast<std::uint8_t>(~menuBit);
+
+	GetSingleton()->SetTimeRunningForMenu(openMenuMask != 0);
+	return RE::BSEventNotifyControl::kContinue;
+}
+
+bool EditorWindow::MenuOpenCloseEventHandler::Register()
+{
+	static MenuOpenCloseEventHandler singleton;
+	static bool registered = false;
+	if (registered)
+		return true;
+
+	auto ui = globals::game::ui ? globals::game::ui : RE::UI::GetSingleton();
+	if (!ui) {
+		logger::error("[CSEditor] UI event source not found");
+		return false;
+	}
+
+	auto eventSource = ui->GetEventSource<RE::MenuOpenCloseEvent>();
+	if (!eventSource) {
+		logger::error("[CSEditor] MenuOpenCloseEvent source not found");
+		return false;
+	}
+
+	singleton.openMenuMask = GetOpenTimeSensitiveMenuMask(ui);
+	eventSource->AddEventSink(&singleton);
+	registered = true;
+	GetSingleton()->SetTimeRunningForMenu(singleton.openMenuMask != 0);
+	logger::info("[CSEditor] Registered MenuOpenCloseEventHandler");
+	return true;
 }
 
 bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
@@ -1946,6 +2118,8 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 
 void EditorWindow::DrawTimeControls()
 {
+	SyncExternalTimeScale();
+
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
 	if (!calendar || !calendar->gameHour || !calendar->timeScale)
 		return;

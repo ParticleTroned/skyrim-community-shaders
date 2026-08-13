@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "Buffer.h"
 
 struct ScreenSpaceGI : Feature
@@ -8,7 +10,6 @@ private:
 	static constexpr std::string_view MOD_ID = "130375";
 
 public:
-
 	virtual inline std::string GetName() override { return "Screen Space GI"; }
 	virtual std::string GetDisplayName() override { return T("feature.screen_space_gi.name", "Screen Space GI"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceGI"; }
@@ -62,6 +63,7 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
+	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 	void CompileComputeShaders();
@@ -71,12 +73,22 @@ public:
 
 	void DrawSSGI();
 	void UpdateSB();
+	void QueueHistoryReset() noexcept;
 
 	//////////////////////////////////////////////////////////////////////////////////
 
 	bool recompileFlag = false;
 	uint outputAoIdx = 0;
 	uint outputIlIdx = 0;
+	std::atomic_bool queuedResetHistory{ true };
+
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
+
+		static bool Register();
+	};
 
 	struct Settings
 	{

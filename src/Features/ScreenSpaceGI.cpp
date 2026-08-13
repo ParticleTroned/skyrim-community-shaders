@@ -55,24 +55,27 @@ namespace
 		}
 	}
 
-	void SetScreenSpaceGIEnabled(ScreenSpaceGI::Settings& a_settings, bool a_enabled)
+	void SetScreenSpaceGIEnabled(ScreenSpaceGI& a_feature, bool a_enabled)
 	{
-		if (a_settings.Enabled == a_enabled)
+		auto& settings = a_feature.settings;
+		if (settings.Enabled == a_enabled)
 			return;
 
-		a_settings.Enabled = a_enabled;
-		if (!a_settings.Enabled) {
+		settings.Enabled = a_enabled;
+		if (!settings.Enabled) {
 			ClearScreenSpaceGIProfilerTimers();
+		} else {
+			a_feature.QueueHistoryReset();
 		}
 	}
 
-	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI::Settings& a_settings, const char* a_label)
+	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI& a_feature, const char* a_label)
 	{
-		bool enabled = a_settings.Enabled;
+		bool enabled = a_feature.settings.Enabled;
 		if (!ImGui::Checkbox(a_label, &enabled))
 			return false;
 
-		SetScreenSpaceGIEnabled(a_settings, enabled);
+		SetScreenSpaceGIEnabled(a_feature, enabled);
 		return true;
 	}
 
@@ -216,6 +219,8 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 	const bool wasEnabled = settings.Enabled;
 	settings = {};
 	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
+	if (!wasEnabled && settings.Enabled)
+		QueueHistoryReset();
 	recompileFlag = true;
 }
 
@@ -233,7 +238,7 @@ void ScreenSpaceGI::DrawSettings()
 
 	if (ImGui::BeginTable("Toggles", 4)) {
 		ImGui::TableNextColumn();
-		DrawScreenSpaceGIEnabledCheckbox(settings, "Enable");
+		DrawScreenSpaceGIEnabledCheckbox(*this, "Enable");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable Screen Space Global Illumination. When disabled, all other settings are ignored."));
 		}
@@ -430,7 +435,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	if (!ShadersOK())
 		Util::Text::Error("%s", T(TKEY("shader_compile_error"), "Compute shaders failed to compile!"));
 
-	DrawScreenSpaceGIEnabledCheckbox(settings, "Enable");
+	DrawScreenSpaceGIEnabledCheckbox(*this, "Enable");
 	{
 		auto settingsGuard = Util::DisableGuard(!settings.Enabled);
 		recompileFlag |= ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI);
@@ -451,19 +456,21 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 
 void ScreenSpaceGI::DrawEssentialSettings()
 {
-	DrawScreenSpaceGIEnabledCheckbox(settings, "Enable");
+	DrawScreenSpaceGIEnabledCheckbox(*this, "Enable");
 }
 
 void ScreenSpaceGI::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (!a_enabled) {
-		SetScreenSpaceGIEnabled(settings, false);
+		SetScreenSpaceGIEnabled(*this, false);
 		return;
 	}
 
 	const bool wasEnabled = settings.Enabled;
 	settings = Settings{};
 	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
+	if (!wasEnabled && settings.Enabled)
+		QueueHistoryReset();
 	recompileFlag = true;
 }
 
@@ -484,6 +491,8 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 	settings.NumSlices = std::clamp(settings.NumSlices, 1u, 10u);
 	settings.NumSteps = std::clamp(settings.NumSteps, 1u, 20u);
 	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
+	if (!wasEnabled && settings.Enabled)
+		QueueHistoryReset();
 
 	recompileFlag = true;
 }
@@ -491,6 +500,50 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 void ScreenSpaceGI::SaveSettings(json& o_json)
 {
 	o_json = settings;
+}
+
+void ScreenSpaceGI::QueueHistoryReset() noexcept
+{
+	queuedResetHistory.store(true, std::memory_order_release);
+}
+
+RE::BSEventNotifyControl ScreenSpaceGI::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
+{
+	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
+		globals::features::screenSpaceGI.QueueHistoryReset();
+
+	return RE::BSEventNotifyControl::kContinue;
+}
+
+bool ScreenSpaceGI::MenuOpenCloseEventHandler::Register()
+{
+	static MenuOpenCloseEventHandler singleton;
+	static bool registered = false;
+
+	if (registered)
+		return true;
+
+	const auto ui = globals::game::ui;
+	if (!ui) {
+		logger::error("[Screen Space GI] UI event source not found");
+		return false;
+	}
+
+	const auto source = ui->GetEventSource<RE::MenuOpenCloseEvent>();
+	if (!source) {
+		logger::error("[Screen Space GI] MenuOpenCloseEvent source not found");
+		return false;
+	}
+
+	source->AddEventSink(&singleton);
+	registered = true;
+	logger::info("[Screen Space GI] Registered MenuOpenCloseEventHandler");
+	return true;
+}
+
+void ScreenSpaceGI::PostPostLoad()
+{
+	MenuOpenCloseEventHandler::Register();
 }
 
 void ScreenSpaceGI::SetupResources()
@@ -715,6 +768,7 @@ void ScreenSpaceGI::SetupResources()
 	}
 
 	CompileComputeShaders();
+	QueueHistoryReset();
 }
 
 void ScreenSpaceGI::ClearShaderCache()
@@ -727,6 +781,7 @@ void ScreenSpaceGI::ClearShaderCache()
 		*shader = nullptr;
 
 	CompileComputeShaders();
+	QueueHistoryReset();
 }
 
 void ScreenSpaceGI::CompileComputeShaders()
@@ -774,10 +829,10 @@ void ScreenSpaceGI::CompileComputeShaders()
 bool ScreenSpaceGI::ShadersOK() const
 {
 	if (!prefilterDepthsCompute ||
-	    !prefilterRadianceCompute ||
-	    !prefilterNormalCompute ||
-	    !radianceDisoccCompute ||
-	    !giCompute)
+		!prefilterRadianceCompute ||
+		!prefilterNormalCompute ||
+		!radianceDisoccCompute ||
+		!giCompute)
 		return false;
 
 	if (settings.EnableBlur && !blurCompute)
@@ -792,24 +847,24 @@ bool ScreenSpaceGI::RuntimeResourcesOK() const
 		return false;
 
 	if (!loaded ||
-	    !globals::d3d::device ||
-	    !globals::d3d::context ||
-	    !globals::game::renderer ||
-	    !globals::game::graphicsState ||
-	    !globals::game::shadowState ||
-	    !globals::deferred ||
-	    !globals::state ||
-	    !globals::state->sharedDataCB ||
-	    !globals::profiler)
+		!globals::d3d::device ||
+		!globals::d3d::context ||
+		!globals::game::renderer ||
+		!globals::game::graphicsState ||
+		!globals::game::shadowState ||
+		!globals::deferred ||
+		!globals::state ||
+		!globals::state->sharedDataCB ||
+		!globals::profiler)
 		return false;
 
 	if (globals::game::graphicsState->screenWidth == 0 ||
-	    globals::game::graphicsState->screenHeight == 0 ||
-	    !ssgiCB ||
-	    !ssgiCB->CB() ||
-	    !globals::state->sharedDataCB->CB() ||
-	    !pointClampSampler ||
-	    !linearClampSampler)
+		globals::game::graphicsState->screenHeight == 0 ||
+		!ssgiCB ||
+		!ssgiCB->CB() ||
+		!globals::state->sharedDataCB->CB() ||
+		!pointClampSampler ||
+		!linearClampSampler)
 		return false;
 
 	const auto hasSRV = [](const auto& a_texture) {
@@ -820,11 +875,11 @@ bool ScreenSpaceGI::RuntimeResourcesOK() const
 	};
 
 	if (!hasSRV(texNoise) ||
-	    !hasSRV(texRadiance) ||
-	    !hasSRVAndUAV(texRadianceTemp) ||
-	    !hasSRV(texWorkingDepth) ||
-	    !hasSRV(texNormal) ||
-	    !hasSRVAndUAV(texPrevGeo))
+		!hasSRV(texRadiance) ||
+		!hasSRVAndUAV(texRadianceTemp) ||
+		!hasSRV(texWorkingDepth) ||
+		!hasSRV(texNormal) ||
+		!hasSRVAndUAV(texPrevGeo))
 		return false;
 
 	for (const auto& uav : uavWorkingDepth)
@@ -839,10 +894,10 @@ bool ScreenSpaceGI::RuntimeResourcesOK() const
 
 	for (std::size_t i = 0; i < 2; ++i) {
 		if (!hasSRVAndUAV(texAccumFrames[i]) ||
-		    !hasSRVAndUAV(texAo[i]) ||
-		    !hasSRVAndUAV(texIlY[i]) ||
-		    !hasSRVAndUAV(texIlCoCg[i]) ||
-		    !hasSRVAndUAV(texGiSpecular[i]))
+			!hasSRVAndUAV(texAo[i]) ||
+			!hasSRVAndUAV(texIlY[i]) ||
+			!hasSRVAndUAV(texIlCoCg[i]) ||
+			!hasSRVAndUAV(texGiSpecular[i]))
 			return false;
 	}
 
@@ -864,9 +919,9 @@ bool ScreenSpaceGI::RuntimeResourcesOK() const
 		static_cast<float>(texRadiance->desc.Width),
 		static_cast<float>(texRadiance->desc.Height) });
 	const auto validDynamicSize = [resolutionDivisor](
-		const float2& a_size,
-		uint32_t a_allocatedWidth,
-		uint32_t a_allocatedHeight) {
+									  const float2& a_size,
+									  uint32_t a_allocatedWidth,
+									  uint32_t a_allocatedHeight) {
 		return std::isfinite(a_size.x) &&
 		       std::isfinite(a_size.y) &&
 		       a_size.x >= static_cast<float>(resolutionDivisor) &&
@@ -1018,6 +1073,14 @@ void ScreenSpaceGI::DrawSSGI()
 	static uint lastFrameAccumTexIdx = 0;
 	uint inputAoTexIdx = lastFrameAoTexIdx;
 	uint inputGITexIdx = lastFrameGITexIdx;
+
+	// A zero accumulation count makes the temporal denoiser fully accept the current frame,
+	// dropping stale history immediately instead of fading it over MaxAccumFrames.
+	if (queuedResetHistory.exchange(false, std::memory_order_acq_rel)) {
+		FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
+		for (const auto& texture : texAccumFrames)
+			context->ClearUnorderedAccessViewFloat(texture->uav.get(), clr);
+	}
 
 	//////////////////////////////////////////////////////
 

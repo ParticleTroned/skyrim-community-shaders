@@ -17,7 +17,7 @@ runs:
           shell: bash
           run: |
               # For non-PR events (like push, workflow_dispatch, release), always run.
-              if [ "${{ github.event_name }}" != "pull_request_target" ]; then
+              if [ "${{ github.event_name }}" != "pull_request" ] && [ "${{ github.event_name }}" != "pull_request_target" ]; then
                 echo "Non-PR event, proceeding with job."
                 echo "skip=false" >> $GITHUB_OUTPUT
                 exit 0

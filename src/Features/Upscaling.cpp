@@ -7,6 +7,7 @@
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -870,7 +871,10 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo)
 		const bool reflexBlockedByFrameGeneration = frameGenerationDx12PathActive;
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
 		const bool reflexControlsAvailable = reflexAvailable && !reflexBlockedByFrameGeneration;
-		const bool markerOptimizationAvailable = reflexControlsAvailable && streamline.featurePCL;
+		const auto markerOptimization = ReflexPolicy::ResolveCSMarkerOptimization(
+			reflexControlsAvailable,
+			streamline.featurePCL,
+			settings.reflexUseMarkersToOptimize);
 		if (a_showEmbeddedInfo && reflexBlockedByFrameGeneration) {
 			ImGui::TextDisabled("Reflex is unavailable while the DX12 frame-generation swapchain is active.");
 		}
@@ -897,20 +901,25 @@ void Upscaling::DrawSettingsPanel(bool a_showEmbeddedInfo)
 			ImGui::TextUnformatted("Useful if frametime jumps; costs extra power and heat.");
 		}
 
-		if (!markerOptimizationAvailable)
+		if (!markerOptimization.available)
 			ImGui::BeginDisabled();
 
-		ImGui::Checkbox("Use Markers To Optimize", &settings.reflexUseMarkersToOptimize);
+		bool markersToOptimize = markerOptimization.enabled;
+		if (ImGui::Checkbox("Use Markers To Optimize", &markersToOptimize) && markerOptimization.available)
+			settings.reflexUseMarkersToOptimize = markersToOptimize;
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Uses frame markers for tighter Reflex timing.");
-			ImGui::TextUnformatted("Try On first; turn Off if it causes stutter on your setup.");
+			ImGui::TextUnformatted("Requires authoritative full-frame marker coverage.");
 		}
 
-		if (!markerOptimizationAvailable)
+		if (!markerOptimization.available)
 			ImGui::EndDisabled();
 
-		if (a_showEmbeddedInfo && !markerOptimizationAvailable) {
-			ImGui::TextDisabled("Marker optimization unavailable (PCL not loaded).");
+		if (a_showEmbeddedInfo && !markerOptimization.available) {
+			ImGui::TextDisabled(
+				reflexControlsAvailable && streamline.featurePCL ?
+					"Marker optimization is disabled until authoritative full-frame marker coverage is available." :
+					"Marker optimization unavailable (Reflex/PCL not loaded).");
 		}
 
 		ImGui::Checkbox("Use FPS Limit", &settings.reflexUseFPSLimit);

@@ -12,6 +12,7 @@
 #include "../../Util.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
+#include "ReflexPolicy.h"
 
 namespace
 {
@@ -735,10 +736,15 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 	if (!SetDLSSOptions(vp, outputWidth, extentOut.height, colorBuffersHDR))
 		return false;
 
-	const bool emitPCLMarkers =
+	// These markers surround only DLSS evaluation, not Skyrim's complete frame.
+	// Do not expose them to marker-driven Reflex scheduling until the integration
+	// can publish an authoritative full-frame sequence.
+	const bool emitPCLMarkers = ReflexPolicy::ResolveCSMarkerOptimization(
+		featureReflex,
+		featurePCL,
 		globals::features::upscaling.settings.reflexUseMarkersToOptimize &&
-		reflexOptionsCache.useMarkersToOptimize &&
-		featurePCL;
+			reflexOptionsCache.useMarkersToOptimize)
+	                                .enabled;
 	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
 		if (!emitPCLMarkers || !slPCLSetMarker || !frameToken)
 			return;
@@ -893,18 +899,19 @@ void Streamline::UpdateReflex()
 			reflexOptionsCache.mode == options.mode &&
 			reflexOptionsCache.frameLimitUs == options.frameLimitUs &&
 			reflexOptionsCache.useMarkersToOptimize == options.useMarkersToOptimize) {
-			return;
+			return false;
 		}
 
 		if (SL_FAILED(result, slReflexSetOptions(options))) {
 			logger::error("[Streamline] {}: {}", onFailMessage, magic_enum::enum_name(result));
-			return;
+			return false;
 		}
 
 		reflexOptionsCache.valid = true;
 		reflexOptionsCache.mode = options.mode;
 		reflexOptionsCache.frameLimitUs = options.frameLimitUs;
 		reflexOptionsCache.useMarkersToOptimize = options.useMarkersToOptimize;
+		return true;
 	};
 
 	const auto& upscaling = globals::features::upscaling;
@@ -937,9 +944,21 @@ void Streamline::UpdateReflex()
 	}
 	const float fpsLimit = std::clamp(reflexFPSLimit, 20.0f, 240.0f);
 	options.frameLimitUs = settings.reflexUseFPSLimit ? static_cast<uint32_t>(std::lround(1000000.0 / static_cast<double>(fpsLimit))) : 0u;
-	options.useMarkersToOptimize = settings.reflexUseMarkersToOptimize && featurePCL;
+	const auto markerOptimization = ReflexPolicy::ResolveCSMarkerOptimization(
+		featureReflex,
+		featurePCL,
+		settings.reflexUseMarkersToOptimize);
+	options.useMarkersToOptimize = markerOptimization.enabled;
 
-	applyReflexOptionsIfChanged(options, "Failed to apply Reflex options");
+	if (applyReflexOptionsIfChanged(options, "Failed to apply Reflex options")) {
+		logger::info(
+			"[Streamline] Applied Reflex options: mode={} frameLimitUs={} markersRequested={} markersAvailable={} markersEffective={}",
+			magic_enum::enum_name(options.mode),
+			options.frameLimitUs,
+			settings.reflexUseMarkersToOptimize,
+			markerOptimization.available,
+			options.useMarkersToOptimize);
+	}
 
 	if (!slReflexSleep)
 		return;

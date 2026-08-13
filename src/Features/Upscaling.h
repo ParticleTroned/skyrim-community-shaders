@@ -65,7 +65,7 @@ public:
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
 	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
-	static constexpr float kDefaultDLSSSharpness = 0.9f;
+	static constexpr float kDefaultDLSSSharpness = 0.5f;
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
 	{

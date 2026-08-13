@@ -56,6 +56,7 @@ namespace FeatureVersions
     inline const std::unordered_set<std::string_view> FEATURE_CORE_NAMES{
         "AdaptiveBrightness"sv,
         "CSUtility"sv,
+        "CloudShadows"sv,
         "DynamicCubemaps"sv,
         "ExtendedMaterials"sv,
         "ExtendedTranslucency"sv,

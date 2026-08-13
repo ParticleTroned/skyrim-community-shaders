@@ -1518,7 +1518,6 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			}
 			RequestHistoryReset();
 		}
-
 	}
 
 	if (vendorUpscalerActive && currentTextureSourceDescsValid) {
@@ -1629,8 +1628,8 @@ void Upscaling::RecordPerformanceCostExecutedPath(
 	performanceCostExecutedPathSuccessful = a_successful;
 	performanceCostExecutedUpscaleMethod = a_method;
 	performanceCostExecutedFrame = state ?
-		state->frameCount :
-		std::numeric_limits<uint32_t>::max();
+	                                   state->frameCount :
+	                                   std::numeric_limits<uint32_t>::max();
 }
 
 void Upscaling::RecordFrameGenerationCopy(
@@ -1655,8 +1654,8 @@ void Upscaling::RecordPerformanceCostFrameGenerationPresent(
 	performanceCostFrameGenerationPresentSuccessful = a_successful;
 	performanceCostFrameGenerationPresentActive = a_active;
 	performanceCostFrameGenerationPresentFrame = state ?
-		state->frameCount :
-		std::numeric_limits<uint32_t>::max();
+	                                                 state->frameCount :
+	                                                 std::numeric_limits<uint32_t>::max();
 }
 
 ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
@@ -2928,11 +2927,11 @@ bool Upscaling::UpscaleDepth()
 
 bool Upscaling::ApplySharpening()
 {
-	if (settings.sharpnessDLSS <= 0.0f)
-		return true;
-
 	if (!dlssSharpenerOutputValid || !sharpenerTexture)
 		return false;
+	// Consume this frame's output immediately so an earlier intermediate can never
+	// be reused if a later DLSS dispatch fails before publishing a replacement.
+	dlssSharpenerOutputValid = false;
 
 	auto* state = globals::state;
 	auto* context = globals::d3d::context;
@@ -2944,18 +2943,33 @@ bool Upscaling::ApplySharpening()
 	ZoneScoped;
 	TracyD3D11Zone(state->tracyCtx, "Upscaling - Sharpening");
 
-	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
-	currentSharpness = exp2(-currentSharpness);
-
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-
-	if (!main.UAV || !sharpenerTexture->srv)
+	if (!main.texture || !sharpenerTexture->resource || main.texture == sharpenerTexture->resource.get())
 		return false;
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	if (!rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness))
-		return false;
+	static bool loggedSharpeningFallback = false;
+	const bool wantsSharpening = settings.sharpnessDLSS > 0.0f;
+	bool sharpened = false;
+	if (wantsSharpening && main.UAV && sharpenerTexture->srv) {
+		// Match FSR3's slider-to-RCAS conversion exactly.
+		float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
+		currentSharpness = exp2(-currentSharpness);
+		sharpened = rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+	}
+
+	if (!sharpened) {
+		if (wantsSharpening && !loggedSharpeningFallback) {
+			logger::warn("[Upscaling] RCAS sharpening unavailable; resolving the current DLSS output without sharpening.");
+			loggedSharpeningFallback = true;
+		}
+		context->CopyResource(main.texture, sharpenerTexture->resource.get());
+	} else {
+		loggedSharpeningFallback = false;
+	}
+	if (!wantsSharpening)
+		loggedSharpeningFallback = false;
 
 	stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 	return true;

@@ -841,24 +841,25 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	};
 	const auto renderSize = Util::ConvertToDynamic(baseSize);
 	auto& upscaling = globals::features::upscaling;
-	const bool wantsSharpenerOutput = upscaling.settings.sharpnessDLSS > 0.0f;
-	const bool useSharpenerOutput =
-		wantsSharpenerOutput &&
+	const bool hasDistinctIntermediate =
 		upscaling.sharpenerTexture &&
 		upscaling.sharpenerTexture->resource &&
-		upscaling.sharpenerTexture->srv;
-	if (wantsSharpenerOutput && !useSharpenerOutput) {
-		static bool loggedMissingSharpenerTexture = false;
+		upscaling.sharpenerTexture->srv &&
+		upscaling.sharpenerTexture->resource.get() != a_upscalingTexture;
+	static bool loggedMissingSharpenerTexture = false;
+	if (!hasDistinctIntermediate) {
 		if (!loggedMissingSharpenerTexture) {
-			logger::warn("[Streamline] DLSS sharpening requested without a valid sharpener texture; skipping DLSS evaluate until resources are rebuilt.");
+			logger::error("[Streamline] DLSS requires a distinct intermediate output; skipping evaluate until resources are rebuilt.");
 			loggedMissingSharpenerTexture = true;
 		}
 		upscaling.dlssSharpenerOutputValid = false;
 		return false;
 	}
-	ID3D11Resource* colorOut = useSharpenerOutput ?
-	                               upscaling.sharpenerTexture->resource.get() :
-	                               a_upscalingTexture;
+	loggedMissingSharpenerTexture = false;
+
+	// Streamline requires distinct input and output resources. Always resolve the
+	// intermediate into kMAIN after evaluation, with or without RCAS sharpening.
+	ID3D11Resource* colorOut = upscaling.sharpenerTexture->resource.get();
 	upscaling.dlssSharpenerOutputValid = false;
 
 	// Simple full-texture upscale.
@@ -869,13 +870,15 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		a_upscalingTexture, colorOut,
 		depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 		extentIn, extentOut, (uint)baseSize.x);
-	upscaling.dlssSharpenerOutputValid = evaluated && useSharpenerOutput;
+	upscaling.dlssSharpenerOutputValid = evaluated;
+	static bool loggedEvaluateFailure = false;
 	if (!evaluated) {
-		static bool loggedEvaluateFailure = false;
 		if (!loggedEvaluateFailure) {
 			logger::warn("[Streamline] DLSS/DLAA evaluate failed; keeping the current scene texture instead of sharpening stale output.");
 			loggedEvaluateFailure = true;
 		}
+	} else {
+		loggedEvaluateFailure = false;
 	}
 	return evaluated;
 }

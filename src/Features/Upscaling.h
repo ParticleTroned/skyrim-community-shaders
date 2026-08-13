@@ -375,9 +375,10 @@ public:
 	bool IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const;
 
 	/**
-	 * @brief Applies RCAS sharpening to the main render target after DLSS upscaling.
+	 * @brief Resolves the current DLSS intermediate into the main render target.
 	 *
-	 * Runs in HDR space before tonemapping. Only called when DLSS is active and sharpness > 0.
+	 * Runs in HDR space before tonemapping. Applies RCAS when requested and otherwise
+	 * copies the successfully evaluated output without altering it.
 	 */
 	bool ApplySharpening();
 

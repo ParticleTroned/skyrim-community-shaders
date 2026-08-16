@@ -112,6 +112,51 @@ message(
 # #######################################################################################################################
 # # Build version info from git
 # #######################################################################################################################
+function(read_git_head_revision repository output_variable)
+    set(_git_entry "${repository}/.git")
+    if(IS_DIRECTORY "${_git_entry}")
+        set(_git_dir "${_git_entry}")
+    elseif(EXISTS "${_git_entry}")
+        file(READ "${_git_entry}" _git_file)
+        string(REGEX MATCH "gitdir:[ \t]*([^\r\n]+)" _git_dir_match "${_git_file}")
+        if(CMAKE_MATCH_1)
+            get_filename_component(
+                _git_dir
+                "${CMAKE_MATCH_1}"
+                ABSOLUTE
+                BASE_DIR "${repository}"
+            )
+        endif()
+    endif()
+
+    set(_revision "")
+    if(_git_dir AND EXISTS "${_git_dir}/HEAD")
+        file(READ "${_git_dir}/HEAD" _head)
+        string(STRIP "${_head}" _head)
+        if(_head MATCHES "^[0-9a-fA-F]{40}$")
+            set(_revision "${_head}")
+        elseif(_head MATCHES "^ref:[ \t]*(.+)$")
+            set(_head_ref "${CMAKE_MATCH_1}")
+            if(EXISTS "${_git_dir}/${_head_ref}")
+                file(READ "${_git_dir}/${_head_ref}" _revision)
+                string(STRIP "${_revision}" _revision)
+            elseif(EXISTS "${_git_dir}/packed-refs")
+                file(STRINGS
+                    "${_git_dir}/packed-refs"
+                    _packed_ref
+                    REGEX "^[0-9a-fA-F]{40} ${_head_ref}$"
+                )
+                if(_packed_ref)
+                    list(GET _packed_ref 0 _packed_ref)
+                    string(SUBSTRING "${_packed_ref}" 0 40 _revision)
+                endif()
+            endif()
+        endif()
+    endif()
+
+    set(${output_variable} "${_revision}" PARENT_SCOPE)
+endfunction()
+
 find_package(Git QUIET)
 if(GIT_FOUND)
     execute_process(
@@ -121,10 +166,36 @@ if(GIT_FOUND)
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
+
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/extern/CommonLibSSE-NG
+        OUTPUT_VARIABLE COMMONLIB_GIT_REVISION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
 else()
     set(GIT_DESCRIBE "unknown")
 endif()
+if(NOT GIT_DESCRIBE)
+    read_git_head_revision("${CMAKE_SOURCE_DIR}" _source_git_revision)
+    if(_source_git_revision)
+        string(SUBSTRING "${_source_git_revision}" 0 12 GIT_DESCRIBE)
+    else()
+        set(GIT_DESCRIBE "unknown")
+    endif()
+endif()
+if(NOT COMMONLIB_GIT_REVISION)
+    read_git_head_revision(
+        "${CMAKE_SOURCE_DIR}/extern/CommonLibSSE-NG"
+        COMMONLIB_GIT_REVISION
+    )
+endif()
+if(NOT COMMONLIB_GIT_REVISION)
+    set(COMMONLIB_GIT_REVISION "unknown")
+endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
+message("\tCommonLibSSE-NG revision: ${COMMONLIB_GIT_REVISION}")
 message("\tCommunity Shaders Expanded version: CSX ${CSX_VERSION}")
 
 # #######################################################################################################################

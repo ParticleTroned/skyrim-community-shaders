@@ -101,6 +101,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 #endif
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION_LABEL);
+	logger::info("Built with CommonLibSSE-NG {}", Plugin::COMMONLIB_GIT_REVISION);
 	SKSE::Init(a_skse);
 	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();

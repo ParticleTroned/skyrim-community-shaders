@@ -4514,6 +4514,7 @@ namespace
 			return;
 		}
 
+		Util::AssertVRGraphicsStateDynamicResolutionLayout(graphicsState);
 		auto& runtimeData = graphicsState->GetRuntimeData();
 		const auto previousLock = std::exchange(runtimeData.dynamicResolutionLock, 1);
 		auto restoreLock = ScopeExit([&]() {
@@ -39438,6 +39439,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		jitter.y = a_viewport->projectionPosScaleY * screenHeight / 2.0f;
 	}
 
+	Util::AssertVRGraphicsStateDynamicResolutionLayout(a_viewport);
 	auto& runtimeData = a_viewport->GetRuntimeData();
 
 	if (!vendorUpscalingMethod) {
@@ -39483,6 +39485,7 @@ bool Upscaling::ApplyLockedFullResolutionDynamicResolutionState(RE::BSGraphics::
 	if (!a_viewport)
 		return false;
 
+	Util::AssertVRGraphicsStateDynamicResolutionLayout(a_viewport);
 	auto& runtimeData = a_viewport->GetRuntimeData();
 	bool cameraDataDirty =
 		globals::game::isVR &&
@@ -39519,6 +39522,7 @@ bool Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 		return ApplyLockedFullResolutionDynamicResolutionState(a_viewport);
 	}
 
+	Util::AssertVRGraphicsStateDynamicResolutionLayout(a_viewport);
 	auto& runtimeData = a_viewport->GetRuntimeData();
 	auto upscaleMethod = GetRuntimeUpscaleMethod();
 	if (!IsVendorUpscalingMethod(upscaleMethod))
@@ -50390,6 +50394,7 @@ void Upscaling::PerformUpscaling()
 	Upscale();
 	UpscaleDepth();
 
+	Util::AssertVRGraphicsStateDynamicResolutionLayout(globals::game::graphicsState);
 	auto& runtimeData = globals::game::graphicsState->GetRuntimeData();
 
 	// Disable dynamic resolution past this point

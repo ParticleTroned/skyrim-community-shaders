@@ -2,6 +2,10 @@
 
 #pragma once
 
+#include <cassert>
+#include <cmath>
+#include <cstdint>
+
 namespace Util::detail
 {
 	template <class T>
@@ -13,6 +17,7 @@ namespace Util::detail
 	template <class T>
 	[[nodiscard]] constexpr T& RuntimeDataRef(T* a_data) noexcept
 	{
+		assert(a_data != nullptr && "VR runtime-data accessor returned null");
 		return *a_data;
 	}
 }
@@ -45,6 +50,35 @@ namespace Util::detail
 
 namespace Util
 {
+	inline void AssertVRGraphicsStateDynamicResolutionLayout(RE::BSGraphics::State* a_state) noexcept
+	{
+#ifndef NDEBUG
+		if (!REL::Module::IsVR())
+			return;
+
+		assert(a_state != nullptr);
+		assert(a_state == RE::BSGraphics::State::GetSingleton());
+
+		auto& runtimeData = a_state->GetRuntimeData();
+#if defined(EXCLUSIVE_SKYRIM_VR)
+		const auto stateAddress = reinterpret_cast<std::uintptr_t>(a_state);
+		assert(reinterpret_cast<std::uintptr_t>(&runtimeData.dynamicResolutionWidthRatio) == stateAddress + 0x104);
+		assert(reinterpret_cast<std::uintptr_t>(&runtimeData.dynamicResolutionLock) == stateAddress + 0x118);
+#endif
+
+		const auto plausibleRatio = [](float a_ratio) {
+			return std::isfinite(a_ratio) && a_ratio >= 0.0f && a_ratio <= 4.0f;
+		};
+		assert(plausibleRatio(runtimeData.dynamicResolutionWidthRatio));
+		assert(plausibleRatio(runtimeData.dynamicResolutionHeightRatio));
+		assert(plausibleRatio(runtimeData.dynamicResolutionPreviousWidthRatio));
+		assert(plausibleRatio(runtimeData.dynamicResolutionPreviousHeightRatio));
+		assert(runtimeData.dynamicResolutionLock == 0 || runtimeData.dynamicResolutionLock == 1);
+#else
+		(void)a_state;
+#endif
+	}
+
 	inline constexpr float DirectionalLightDiscontinuityThreshold = RE::NI_PI / 180.0f;
 
 	[[nodiscard]] inline bool HasDirectionalLightDiscontinuity(const RE::NiPoint3& a_currentDirection, const RE::NiPoint3& a_previousDirection) noexcept

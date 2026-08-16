@@ -117,31 +117,6 @@ uint32_t Upscaling::ScaleVRRenderDimension(uint32_t a_dimension, float a_scale)
 
 namespace
 {
-	std::optional<float2> GetVREvenStereoRenderSize(
-		const float2& a_displaySize,
-		float a_resolutionScale)
-	{
-		if (!std::isfinite(a_displaySize.x) ||
-			!std::isfinite(a_displaySize.y) ||
-			a_displaySize.x < 4.0f ||
-			a_displaySize.y < 2.0f ||
-			!std::isfinite(a_resolutionScale)) {
-			return std::nullopt;
-		}
-
-		const uint32_t displayWidth = static_cast<uint32_t>(std::floor(a_displaySize.x));
-		const uint32_t displayHeight = static_cast<uint32_t>(std::floor(a_displaySize.y));
-		if (displayWidth < 4u || displayHeight < 2u || (displayWidth & 1u) != 0u)
-			return std::nullopt;
-
-		return float2{
-			static_cast<float>(
-				Upscaling::ScaleVRRenderDimension(displayWidth / 2u, a_resolutionScale) * 2u),
-			static_cast<float>(
-				Upscaling::ScaleVRRenderDimension(displayHeight, a_resolutionScale))
-		};
-	}
-
 	constexpr float kDLSSRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
 	constexpr float kDLSSLumaSharpnessOverdrive = 2.5f;
 
@@ -19117,13 +19092,6 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 	auto resolveVendorDynamicRenderSize = [&](const float2& a_displaySize) {
 		if (a_displaySize.x <= 0.0f || a_displaySize.y <= 0.0f)
 			return a_displaySize;
-		if (globals::game::isVR) {
-			if (const auto vrRenderSize = GetVREvenStereoRenderSize(
-					a_displaySize,
-					GetQualityModeResolutionScale(plan.qualityMode))) {
-				return *vrRenderSize;
-			}
-		}
 
 		auto resolveScale = [](float a_scale) {
 			return std::isfinite(a_scale) && a_scale > 0.0f ? std::clamp(a_scale, 0.0f, 1.0f) : 1.0f;
@@ -39438,16 +39406,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 		auto renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
 		auto renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
-		if (globals::game::isVR) {
-			// Match the physical Render Scale contract: VR render targets are sized
-			// per eye and constrained to even dimensions before the stereo width is
-			// recombined. Scaling the combined width directly can otherwise differ
-			// by two pixels for fractional quality ratios.
-			if (const auto vrRenderSize = GetVREvenStereoRenderSize(screenSize, resolutionScaleBase)) {
-				renderWidth = static_cast<int>(vrRenderSize->x);
-				renderHeight = static_cast<int>(vrRenderSize->y);
-			}
-		}
 
 		resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
 		resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);

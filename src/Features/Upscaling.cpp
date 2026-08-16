@@ -18590,17 +18590,17 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 	if (IsVRStartupMainMenuRenderStateActive())
 		return UpscaleMethod::kNONE;
 
-	// Boot sizing alone does not prove that Skyrim's scene targets have adopted
-	// the reduced dimensions. Keep the transient full-resolution source out of
-	// the vendor path until the planned physical handoff reaches creator entry.
-	// The in-progress exception lets that transaction build the target runtime.
+	// The direct handoff suppresses only the transient full-resolution vendor
+	// contract. Once OpenVR has published the exact reduced boot sizing contract,
+	// that contract must be allowed to create its vendor resources; otherwise
+	// physical convergence waits forever on a runtime that kNONE cannot create.
+	const auto& boot = perfMode.GetBootSnapshot();
+	if (IsVRRenderScaleModeLatched() && IsVendorUpscalingMethod(boot.method))
+		return boot.method;
 	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire) &&
 		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
 		return UpscaleMethod::kNONE;
 	}
-	const auto& boot = perfMode.GetBootSnapshot();
-	if (IsVRRenderScaleModeLatched() && IsVendorUpscalingMethod(boot.method))
-		return boot.method;
 
 	if (const auto stableProfile = GetStableVRRenderScaleRuntimeProfile()) {
 		return stableProfile->method;
@@ -18635,35 +18635,15 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 				.targetActive = targetActive,
 				.bootSizingContractExact = bootSizingContractExact,
 				.physicalContractConverged = physicalContractConverged,
-				.physicalRelatchPending =
-					pendingPerfModeRenderTargetRecreate.load(
-						std::memory_order_acquire),
-				.physicalRelatchInProgress =
-					perfModeRenderTargetRecreateInProgress.load(
-						std::memory_order_acquire),
 			});
-		const auto recognizeBootSizing = [&]() {
+		switch (handoffAction) {
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract:
 			if (!vrStartupRenderScaleBootSizingRecognized.exchange(
 					true,
 					std::memory_order_acq_rel)) {
 				logger::info(
-					"[Upscaling] Recognized the startup Render Scale boot sizing contract; retaining vendor suppression while one planned physical relatch publishes the matching scene targets.");
+					"[Upscaling] Recognized the startup Render Scale boot sizing contract; enabled its vendor runtime while retaining direct-handoff ownership until the physical contract converges.");
 			}
-		};
-		switch (handoffAction) {
-		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::QueuePhysicalContract:
-			RequestPerfModeRenderTargetRecreate(
-				"startup Render Scale physical handoff",
-				VRUpscalingTransitionOrigin::PostLoadSync);
-			if (pendingPerfModeRenderTargetRecreate.load(
-					std::memory_order_acquire) ||
-				perfModeRenderTargetRecreateInProgress.load(
-					std::memory_order_acquire)) {
-				recognizeBootSizing();
-			}
-			break;
-		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract:
-			recognizeBootSizing();
 			break;
 		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::Complete:
 			if (vrStartupRenderScaleDirectHandoffActive.exchange(
@@ -24679,16 +24659,24 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				2u);
 		};
 		const bool reuseCompatibleFSRResourcesForRelatch =
-			relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&
-			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			previousVendorWasFSR &&
-			!pendingFSRResetForRelatch &&
-			memoryAtAdmission.valid &&
-			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Normal &&
-			!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
-			!preserveActiveContractForRecovery &&
-			!IsSubmitStageDeviceLost() &&
-			areFSRResourcesCompatibleForRelatch();
+			VRVendorRelatchPolicy::CanReuseCompatibleFSRResources({
+				.directMenuRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				.recoveryRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::RecoveryRelatch,
+				.targetIsFSR = relatchUpscaleMethod == UpscaleMethod::kFSR,
+				.previousWasFSR = previousVendorWasFSR,
+				.resetPending = pendingFSRResetForRelatch,
+				.memoryPressureNormal =
+					memoryAtAdmission.valid &&
+					memoryAtAdmission.pressure ==
+						VRRenderScaleMemoryPressure::Normal,
+				.postLoadResetPending =
+					postLoadRuntimeResetPending.load(std::memory_order_acquire),
+				.preservingActiveContract = preserveActiveContractForRecovery,
+				.deviceLost = IsSubmitStageDeviceLost(),
+				.resourcesCompatible = areFSRResourcesCompatibleForRelatch(),
+			});
 		const bool preserveCompatibleFSRIntermediatesForRelatch =
 			reuseCompatibleFSRResourcesForRelatch &&
 			relatchTargetRenderScaleActive &&
@@ -34280,6 +34268,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		!fsrRuntimeVersionChanged &&
 		!pendingFSRReset.load(std::memory_order_acquire) &&
 		canPreserveFSRResourcesForCurrentVRPlan();
+	const bool runtimeFailureFallbackCanPreserveHostFSR =
+		VRVendorRelatchPolicy::CanReuseHostFSRAfterRuntimeFailure({
+			.isVR = globals::game::isVR,
+			.targetIsFSR = a_upscalemethod == UpscaleMethod::kFSR,
+			.runtimePathChanged = fsrRuntimePathChanged,
+			.runtimeFailureLatched =
+				fidelityFX.IsRuntimeUpscalerFailureLatched(),
+			.hostResourcesCompatible =
+				canPreserveFSRResourcesForCurrentVRPlan(),
+		});
 	const bool renderScaleTransitionRelevant = ShouldIncludeInactiveVRVendorReset(*this, a_upscalemethod);
 	const bool resourceChangeDetected =
 		upscaleModeChanged ||
@@ -34520,20 +34518,24 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			CreateUpscalingTextureResources(a_upscalemethod);
 		}
 
-		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state; rebuild on path changes.
+		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state.
+		// Ordinary path changes rebuild; provider quarantine may retain a compatible
+		// host context and reset its history while the runtime path falls back.
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
-			const auto destroyResult = fidelityFX.DestroyFSRResources();
-			if (!acceptFSRResourceLifecycleResult(
-					destroyResult,
-					"runtime-path FSR resource teardown")) {
-				return false;
+			if (!runtimeFailureFallbackCanPreserveHostFSR) {
+				const auto destroyResult = fidelityFX.DestroyFSRResources();
+				if (!acceptFSRResourceLifecycleResult(
+						destroyResult,
+						"runtime-path FSR resource teardown")) {
+					return false;
+				}
+				const auto createResult = createFSRResourcesWhenSafe();
+				if (!acceptFSRResourceLifecycleResult(
+						createResult,
+						"runtime-path FSR resource creation"))
+					return false;
+				fsrResourcesRecreatedForQuality = true;
 			}
-			const auto createResult = createFSRResourcesWhenSafe();
-			if (!acceptFSRResourceLifecycleResult(
-					createResult,
-					"runtime-path FSR resource creation"))
-				return false;
-			fsrResourcesRecreatedForQuality = true;
 			RequestHistoryReset();
 		} else if (!upscaleModeChanged && (fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
 			if (fsrRuntimeFsr4ConfiguredChanged || !fidelityFX.IsRuntimeFsr4FailureLatched()) {

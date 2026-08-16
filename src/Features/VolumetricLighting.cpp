@@ -588,11 +588,12 @@ void VolumetricLighting::DataLoaded()
 	bool& bDepthBufferCulling = *reinterpret_cast<bool*>(address);
 
 	if (REL::Module::IsVR() && bDepthBufferCulling && shaderCache->IsDiskCacheActive()) {
-		// This workaround targets shaders loaded from disk. When the disk cache is
-		// held, clearing here discards the valid memory-only preload immediately
-		// before save/load safe mode prevents those shaders being replaced.
-		logger::info("Force clearing cache due to bDepthBufferCulling");
-		shaderCache->Clear();
+		// Retain the VR depth-buffer-culling compatibility refresh, but scope it to
+		// the ImageSpace class containing the hierarchical-depth and pretest passes.
+		// Clearing the entire cache here discards the fully prepared world and feature
+		// shaders immediately before the first save load.
+		logger::info("Refreshing VR ImageSpace shader cache due to bDepthBufferCulling");
+		shaderCache->Clear(RE::BSShader::Type::ImageSpace);
 	}
 }
 

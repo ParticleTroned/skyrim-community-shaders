@@ -587,8 +587,10 @@ void VolumetricLighting::DataLoaded()
 	const static auto address = REL::Offset{ 0x1ec6b88 }.address();
 	bool& bDepthBufferCulling = *reinterpret_cast<bool*>(address);
 
-	if (REL::Module::IsVR() && bDepthBufferCulling && shaderCache->IsDiskCache()) {
-		// clear cache to fix bug caused by bDepthBufferCulling
+	if (REL::Module::IsVR() && bDepthBufferCulling && shaderCache->IsDiskCacheActive()) {
+		// This workaround targets shaders loaded from disk. When the disk cache is
+		// held, clearing here discards the valid memory-only preload immediately
+		// before save/load safe mode prevents those shaders being replaced.
 		logger::info("Force clearing cache due to bDepthBufferCulling");
 		shaderCache->Clear();
 	}

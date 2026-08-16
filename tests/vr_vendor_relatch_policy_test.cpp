@@ -183,19 +183,6 @@ namespace
 
 		state.bootSizingContractExact = true;
 		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
-			StartupRenderScaleDirectHandoffAction::QueuePhysicalContract) {
-			return false;
-		}
-
-		state.physicalRelatchPending = true;
-		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
-			StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract) {
-			return false;
-		}
-
-		state.physicalRelatchPending = false;
-		state.physicalRelatchInProgress = true;
-		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
 			StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract) {
 			return false;
 		}
@@ -674,6 +661,43 @@ namespace
 				return false;
 			}
 		}
+
+		CompatibleFSRRelatchReuseAdmission compatibleReuse{
+			.directMenuRelatch = true,
+			.targetIsFSR = true,
+			.previousWasFSR = true,
+			.memoryPressureNormal = true,
+			.resourcesCompatible = true,
+		};
+		if (!CanReuseCompatibleFSRResources(compatibleReuse))
+			return false;
+
+		compatibleReuse.directMenuRelatch = false;
+		compatibleReuse.recoveryRelatch = true;
+		if (!CanReuseCompatibleFSRResources(compatibleReuse))
+			return false;
+
+		compatibleReuse.resetPending = true;
+		if (CanReuseCompatibleFSRResources(compatibleReuse))
+			return false;
+		compatibleReuse.resetPending = false;
+		compatibleReuse.resourcesCompatible = false;
+		if (CanReuseCompatibleFSRResources(compatibleReuse))
+			return false;
+
+		RuntimeFSRFallbackReuseAdmission runtimeFallback{
+			.isVR = true,
+			.targetIsFSR = true,
+			.runtimePathChanged = true,
+			.runtimeFailureLatched = true,
+			.hostResourcesCompatible = true,
+		};
+		if (!CanReuseHostFSRAfterRuntimeFailure(runtimeFallback))
+			return false;
+
+		runtimeFallback.runtimeFailureLatched = false;
+		if (CanReuseHostFSRAfterRuntimeFailure(runtimeFallback))
+			return false;
 
 		return true;
 	}

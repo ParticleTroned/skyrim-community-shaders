@@ -40,6 +40,7 @@ Hard correctness and stability constraints are applied first. Surviving candidat
 | First pairwise interactions | Forward/reverse AMD timing and visual factorials for Skylighting × Screen Space Shadows and Wetness × IBL | [`interactions-20260817.md`](./interactions-20260817.md) |
 | Terrain Blending distance calibration | Live-control validation, AMD timing, drift-resistant stereo comparison, and provisional tier implication | [`terrain-blending-20260817.md`](./terrain-blending-20260817.md) |
 | SSGI and Volumetric Lighting calibration | Typed live/recompile/restart boundaries, AMD timing, fixed-pose and controlled-translation stereo response, and provisional tier implications | [`ssgi-volumetric-lighting-20260817.md`](./ssgi-volumetric-lighting-20260817.md) |
+| Unified provisional preset candidates | Machine-readable three-tier synthesis, capability-selected upscaler boundary, generator, and release gates | [`unified-preset-candidates-20260817.md`](./unified-preset-candidates-20260817.md) |
 | Decision log | Append-only rationale connecting evidence to adopted or rejected choices | [`decision-log.md`](./decision-log.md) |
 
 The canonical schemas are:

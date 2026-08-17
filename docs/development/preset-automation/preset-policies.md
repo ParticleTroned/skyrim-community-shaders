@@ -101,6 +101,8 @@ This is the first policy synthesis, not a release qualification. “Retain” me
 - [first quality-profile curves](./profile-curves-20260817.md); and
 - [first pairwise interactions](./interactions-20260817.md).
 
+The matrix is now materialized as the three reproducible development candidates in [`unified-preset-candidates-20260817.md`](./unified-preset-candidates-20260817.md). Generation does not promote them to release status or remove the legacy vendor-labelled sources.
+
 ### Hard composition and structure constraints
 
 - Use one Performance/Balanced/Quality shader policy for AMD and NVIDIA.

@@ -275,3 +275,21 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Consequences: SSS, Wetness, Terrain Blending, Skylighting, and SSGI can receive controlled translation screens before physical-HMD testing; Grass Collision still needs actor/controller interaction, and rotational artifacts remain a physical/custom-driver gate
 - Revalidation triggers: DevBench/Papyrus scheduling change, player-camera ownership change, continuous `TranslateTo` implementation, synthetic tracked-device driver, alternate runtime, or physical HMD
 - Supersedes: the assumption that null-HMD scene motion requires a custom tracked-device driver; it does not supersede the orientation-control requirement
+
+### `PA-2026-015` — Generate three unified development presets
+
+- Date: 2026-08-17
+- Status: adopted for development candidates; not release-qualified
+- Snapshot: first evidence-backed policy synthesis through controlled SSGI translation
+- Question: Can the six inherited AMD/NVIDIA tier folders become one Performance/Balanced/Quality path without losing provider-appropriate upscaling?
+- Scope: generated MGO development candidates and their reproducible policy source
+- Hard constraints: retain Info logging; keep SSGI disabled behind its release gates; preserve IBL ambient-replacement semantics and Volumetric Shadows; select the upscaler only at the capability boundary; pin inherited templates and reject silent source drift
+- Options considered: continue six hand-maintained files; hand-edit three merged files; generate three unified files from pinned tier templates and a machine-readable override policy
+- Evidence: [preset census](./preset-baseline-census.md) found no vendor shader-policy difference outside Upscaling; `Upscaling::GetUpscaleMethod` already chooses `upscaleMethod` when DLSS is available and `upscaleMethodNoDLSS` otherwise; [unified candidates](./unified-preset-candidates-20260817.md) pass the generator's non-writing reproduction and guard checks
+- Objective vector and uncertainty: removes duplicated shader policy, preserves active AMD FSR and NVIDIA DLSS settings in one file, and makes source drift visible; NVIDIA execution and alternate runtimes remain unmeasured
+- Pareto result: generated unification strictly reduces duplicated policy state without removing a provider capability; separate vendor trees have no demonstrated shader-policy benefit
+- Decision: add three `CSX Unified` development candidates; use DLSS primary plus FSR fallback in each; retain the six legacy folders unchanged as audit and recovery sources
+- Confidence: high for configuration structure and deterministic generation; medium-high for AMD behavior inherited from the measured lane; low until native NVIDIA and alternate-runtime execution
+- Consequences: future tier decisions change one policy; vendor overrides must remain setting-level and evidence-backed; the generated files are reviewable artifacts rather than independent sources of truth
+- Revalidation triggers: template hash change, upscaler capability-resolution change, provider setting/schema change, native NVIDIA result, alternate runtime result, or any release-gate failure
+- Supersedes: implements `PA-2026-002` for development artifacts; does not remove the legacy source presets

@@ -77,3 +77,57 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Consequences: SteamVR native OpenVR, OCU to SteamVR OpenXR, and OCU to VDXR receive distinct lane identities
 - Revalidation triggers: a calibrated harness demonstrates bounded cross-lane equivalence for a specific metric and scope
 - Supersedes: none
+
+### `PA-2026-004` — Preserve the common inherited baseline during first synthesis
+
+- Date: 2026-08-17
+- Status: proposed for provisional preset generation
+- Snapshot: census plus first screen, profile curves, and factorial interactions through commit `37f17abe3`
+- Question: What should happen to settings that are identical across all six inherited presets and have not yet produced attributable tier evidence?
+- Scope: the first AMD-informed Performance, Balanced, and Quality candidates
+- Hard constraints: do not silently change correctness, stability, lifecycle, or composition behavior; do not equate inheritance with qualification
+- Options considered: retune every serialized leaf; preserve common settings while testing semantic factors
+- Evidence: [preset census](./preset-baseline-census.md) reduced the inherited differences to seven tiered families; the [first screen](./screening-20260817.md) shows why scene and direct-timer attribution matter
+- Objective vector and uncertainty: preserves known behavior and limits regression surface, but leaves optimality and missed tier opportunities explicitly unknown
+- Pareto result: unmeasured alternatives cannot displace the known common baseline yet
+- Decision: retain common inherited settings in the first generated candidates; change them only through a correctness constraint or attributable factor decision
+- Confidence: high as a safe synthesis rule; low that every inherited common value is optimal
+- Consequences: provisional files remain reviewable and differences stay semantic rather than becoming a 600-leaf rewrite
+- Revalidation triggers: cluster review, new attributable ablation/curve, shader architecture change, or correctness finding
+- Supersedes: none
+
+### `PA-2026-005` — Adopt first Skylighting and SSS tier gradients
+
+- Date: 2026-08-17
+- Status: proposed for provisional preset generation
+- Snapshot: forward/reverse AMD timing and visual curves plus Skylighting × SSS factorials
+- Question: Which inherited Skylighting and SSS settings should represent the first three policy tiers?
+- Scope: AMD `SVR-OVR-NULL`, fixed Guardian Stones clear-day anchor; vendor-neutral intent with portability open
+- Hard constraints: features remain enabled; exact live/recompile settle and restoration contracts remain disclosed; no stereo or temporal regression may be accepted later
+- Options considered: disable features in Performance; flatten tiers; retain the typed inherited gradients
+- Evidence: [profile curves](./profile-curves-20260817.md) and [pairwise measurements](./interactions-20260817.md)
+- Objective vector and uncertainty: Skylighting Quality has a clear cadence/cost step and broad ambient value; SSS Performance saves named-pass cost, while Balanced and Quality are close near-field; distance and moving-view evidence remain open
+- Pareto result: disabling either feature loses a repeatable visual contribution; cheaper typed profiles preserve the phenomenon and are non-dominated for Performance/Balanced at this evidence stage
+- Decision: use typed Performance/Balanced/Quality profiles for both families in the provisional candidates
+- Confidence: medium for Skylighting; medium-high for SSS near-field; low for SSS Quality's unlimited-distance value
+- Consequences: Quality is not treated as free, and Performance is not reduced to wholesale feature removal
+- Revalidation triggers: SSS distance/disocclusion test, Skylighting moving-view stability, new anchor, physical HMD, runtime lane, GPU vendor, or shader/resource change
+- Supersedes: none
+
+### `PA-2026-006` — Keep Wetness enabled and evaluate it with IBL
+
+- Date: 2026-08-17
+- Status: proposed for provisional preset generation
+- Snapshot: Wetness feature ablation, profile curves, and Wetness × IBL forward/reverse factorials
+- Question: Can Wetness be tiered or judged independently from the ambient/IBL policy?
+- Scope: AMD `SVR-OVR-NULL`, Guardian Stones storm anchor
+- Hard constraints: IBL ambient replacement remains correct; Wetness Performance's requested 5,000-unit fade must not be misreported because runtime clamps it to 7,002.801
+- Options considered: disable Wetness in Performance; select tiers from IBL-off tests; keep the feature and inherited density/range gradient coupled to IBL
+- Evidence: [first screen](./screening-20260817.md), [profile curves](./profile-curves-20260817.md), and [factorial interactions](./interactions-20260817.md)
+- Objective vector and uncertainty: Wetness has a large conditional visual contribution and strong non-additive IBL interaction; current tier GPU ordering and range cutoff are unresolved
+- Pareto result: disabling Wetness loses a major storm material response, while cheaper parameter profiles may reduce secondary density/range without removing the phenomenon
+- Decision: keep Wetness enabled in all provisional tiers, retain its typed gradient, and require IBL-active evidence for future selection
+- Confidence: high for the coupling constraint; medium for keeping the feature; low for exact tier performance/range optimality
+- Consequences: Wetness and IBL become one visual review cluster, though they retain separate controls
+- Revalidation triggers: material/range anchor, precipitation-motion sequence, dedicated timing instrumentation, physical HMD, runtime lane, GPU vendor, or material/lighting code change
+- Supersedes: none

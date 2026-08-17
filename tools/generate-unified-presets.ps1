@@ -153,7 +153,7 @@ foreach ($tierProperty in $policy.tiers.psobject.Properties) {
     }
 
     $settings = Get-Content -Raw -LiteralPath $templatePath | ConvertFrom-Json
-    foreach ($override in @($policy.commonOverrides) + @($definition.overrides)) {
+    foreach ($override in @($policy.schemaDefaults) + @($policy.commonOverrides) + @($definition.overrides)) {
         Set-JsonPathValue -Root $settings -Path $override.path -Value $override.value
     }
     Assert-GuardValues -Settings $settings

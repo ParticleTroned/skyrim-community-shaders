@@ -326,7 +326,8 @@
     "UnifiedWater": false,
     "Upscaling": false,
     "VolumetricLighting": false,
-    "Wetterness": false
+    "Wetterness": false,
+    "TruePBR": false
   },
   "Dynamic Cubemaps": {
     "EnabledCreator": 0,
@@ -410,7 +411,9 @@
     "ForceSingleShadowCascade": true,
     "InteriorShadowDistance": 5000.0
   },
-  "Inverse Square Lighting": null,
+  "Inverse Square Lighting": {
+    "Enabled": true
+  },
   "LOD Blending": {
     "DisableTerrainVertexColors": 0,
     "Enabled": true,
@@ -496,7 +499,8 @@
     "SkipCompilationKey": 27,
     "SkipConstraintWarning": false,
     "ToggleKey": 35,
-    "UseResolutionFont": true
+    "UseResolutionFont": true,
+    "SmartClearShaderCacheDefault": false
   },
   "Performance Overlay": {
     "BackgroundOpacity": 0.5,
@@ -603,7 +607,15 @@
     "ScreenshotPath": "Screenshots",
     "SdrUsePng": true,
     "SelectedPresetIndex": 0,
-    "VRCaptureSource": "HMDSubmission"
+    "VRCaptureSource": "HMDSubmission",
+    "SequenceFrameCount": 30,
+    "SequenceFrameInterval": 6,
+    "SequencePreviewFramesPerSecond": 15,
+    "SequenceSaveSeparateEyes": true,
+    "SequenceWritePreviewVideo": true,
+    "VRFramedDominantEye": "Left",
+    "VRFramedEye": "Left",
+    "VRFramedView": "Left"
   },
   "Sky Sync": {
     "CustomAngle": -35.0,
@@ -754,7 +766,9 @@
     "sharpnessFSR": 0.699999988079071,
     "streamlineLogLevel": 0,
     "upscaleMethod": 3,
-    "upscaleMethodNoDLSS": 2
+    "upscaleMethodNoDLSS": 2,
+    "pipelineDiagnostics": false,
+    "pipelineDiagnosticsStructured": false
   },
   "VR": {
     "EnableDepthBufferCullingExterior": true,
@@ -818,7 +832,8 @@
     "kAutoHideSeconds": 30,
     "menuOverlayPath": 0,
     "mouseDeadzone": 0.10000000149011612,
-    "mouseSpeed": 10.0
+    "mouseSpeed": 10.0,
+    "VRControllerBindingsVersion": 1
   },
   "Version": "CSX 3.18-VR",
   "Volumetric Lighting": {

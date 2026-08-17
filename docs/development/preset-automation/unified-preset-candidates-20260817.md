@@ -12,11 +12,13 @@ The first synthesis produces three shader-policy presets rather than six vendor 
 
 | Tier | Generated `SettingsUser.json` SHA-256 |
 | --- | --- |
-| Performance | `19E4776D3A76DAC82EE4D77A1BB658A5C81A6342F96BCEABF7C0A3FBEAA2C8BB` |
-| Balanced | `D6AB5714F069E58E7F47D5422EC08F7C8EB57FC2D1624FE3DA2AEAB52758CC6A` |
-| Quality | `C2F42D54D91F6868843209D2A88C3ADCB77238498AC36E663D8DFF64E19A7B53` |
+| Performance | `9C96C35DDD4C1D14380F3AC4E956431C0B0471F850AEC08D013E187101072A25` |
+| Balanced | `A767C6CF6018F3FEBCE5C3FEB1DAF123E26142F862481D7DB87AD48657902D26` |
+| Quality | `C996E46A1F8233D61259618C7FA39D0A97B81EE3D9BF3A7B518472C822777311` |
 
-[`unified-preset-policy.json`](./unified-preset-policy.json) is the machine-readable source. [`generate-unified-presets.ps1`](../../../tools/generate-unified-presets.ps1) pins each inherited AMD tier template by SHA-256, applies the reviewed overrides, enforces hard guards, and supports a non-writing `-Check` mode. The legacy AMD and NVIDIA folders remain unchanged as source evidence and recovery points.
+[`unified-preset-policy.json`](./unified-preset-policy.json) is the machine-readable source. [`generate-unified-presets.ps1`](../../../tools/generate-unified-presets.ps1) pins each inherited AMD tier template by SHA-256, adds the current serialized-schema defaults, applies the reviewed overrides, enforces hard guards, and supports a non-writing `-Check` mode. The legacy AMD and NVIDIA folders remain unchanged as source evidence and recovery points.
+
+The schema-default layer is intentionally separate from policy. It adds the 14 fields now written by the current DLL—TruePBR boot state, Inverse Square Lighting enablement, safe menu/capture defaults, disabled upscaling diagnostics, and the VR controller-binding version—without importing machine/session state such as compiler-thread count, UI mode, crop selection, or render-scale latching from the calibration profile.
 
 ## Vendor-united upscaling boundary
 

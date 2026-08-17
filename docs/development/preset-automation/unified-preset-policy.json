@@ -3,6 +3,22 @@
   "status": "provisional-development",
   "generatedAtEvidenceDate": "2026-08-17",
   "policy": "one shader tier policy with capability-selected DLSS primary and FSR fallback",
+  "schemaDefaults": [
+    { "path": ["Disable at Boot", "TruePBR"], "value": false },
+    { "path": ["Inverse Square Lighting", "Enabled"], "value": true },
+    { "path": ["Menu", "SmartClearShaderCacheDefault"], "value": false },
+    { "path": ["Screenshot", "SequenceFrameCount"], "value": 30 },
+    { "path": ["Screenshot", "SequenceFrameInterval"], "value": 6 },
+    { "path": ["Screenshot", "SequencePreviewFramesPerSecond"], "value": 15 },
+    { "path": ["Screenshot", "SequenceSaveSeparateEyes"], "value": true },
+    { "path": ["Screenshot", "SequenceWritePreviewVideo"], "value": true },
+    { "path": ["Screenshot", "VRFramedDominantEye"], "value": "Left" },
+    { "path": ["Screenshot", "VRFramedEye"], "value": "Left" },
+    { "path": ["Screenshot", "VRFramedView"], "value": "Left" },
+    { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
+    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false },
+    { "path": ["VR", "VRControllerBindingsVersion"], "value": 1 }
+  ],
   "commonOverrides": [
     {
       "path": ["Image Based Lighting", "EnableIBL"],
@@ -127,7 +143,9 @@
     { "path": ["Screen Space GI", "EnableExperimentalSpecularGI"], "value": false },
     { "path": ["Screen Space GI", "EnableVanillaSSAO"], "value": false },
     { "path": ["Upscaling", "upscaleMethod"], "value": 3 },
-    { "path": ["Upscaling", "upscaleMethodNoDLSS"], "value": 2 }
+    { "path": ["Upscaling", "upscaleMethodNoDLSS"], "value": 2 },
+    { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
+    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false }
   ],
   "releaseGates": [
     "IBL x Skylighting x SSGI ambient-composition screen and Vanilla SSAO audit before enabling SSGI",

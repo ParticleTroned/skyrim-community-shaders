@@ -46,6 +46,14 @@ The inherited tier values remain the base for Grass Collision, Screen Space Shad
 
 The SSGI resolution values are deliberately serialized while `Enabled=false`. The accepted AMD fixed-pose and translation evidence is sufficient to preserve the experimental Quarter/Half/Full hypothesis, but not to turn it on in a normal generated preset.
 
+## AMD unified-Quality smoke result
+
+[`unified-quality-smoke-20260817.json`](./unified-quality-smoke-20260817.json) records the first live generated-preset check. The exact Quality file with SHA-256 `C996E46A1F8233D61259618C7FA39D0A97B81EE3D9BF3A7B518472C822777311` loaded in `SVR-OVR-NULL` on the RX 7900 XT. Typed readback matched IBL on, Volumetric Shadows on, Volumetric Lighting High/High, SSGI disabled with the AO-only Full-resolution dormant policy, and the inherited Quality profiles.
+
+The file requested DLSS primary and FSR fallback. Streamline reported DLSS unavailable on the non-NVIDIA adapter; after Dragonsreach entry, the render-scale controller stabilized after 19 frames as `method=fsr`, `backend=fsr4_runtime`, rendering 1162 × 1292 per eye to 1512 × 1680. Both eyes were valid, with zero lifecycle failures, zero fidelity mismatches, and no FSR4-to-older-runtime fallback. This directly validates the AMD half of the unified provider boundary. It does not validate DLSS on NVIDIA.
+
+MO2 remained below 1 GiB observed working set. The test produced no screenshot/capture artifacts; the exact pre-test profile was restored and the temporary mod removed before finalisation.
+
 ## Known inherited limitation
 
 Performance still serializes `WetternessFadeRange=5000`, which the runtime normalizes to approximately `7002.801` game units. The generator preserves this inherited request because the distance-boundary screen remains open. The manifest and policy treat the effective value—not 5,000—as the current rendered behavior.

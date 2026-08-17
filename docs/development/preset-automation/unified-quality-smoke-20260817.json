@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "runId": "20260817-amd-svr-ovr-null-unified-quality-smoke-r01",
+  "status": "valid",
+  "purpose": "Verify that one unified Quality SettingsUser.json loads the intended shader policy and resolves DLSS-primary to FSR on an AMD adapter.",
+  "candidate": {
+    "tier": "Quality",
+    "settingsSha256": "C996E46A1F8233D61259618C7FA39D0A97B81EE3D9BF3A7B518472C822777311",
+    "policy": "unified-preset-policy.json",
+    "generator": "tools/generate-unified-presets.ps1"
+  },
+  "source": {
+    "branch": "feat/preset-calibration-automation",
+    "presetCommit": "d896f0238",
+    "dllCommit": "d0682bf57",
+    "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+    "build": "VR Release; Info logging; Release+DevBench bridge"
+  },
+  "environment": {
+    "adapterName": "AMD Radeon RX 7900 XT",
+    "runtimeLane": "SVR-OVR-NULL",
+    "displayEyeSize": [1512, 1680],
+    "scene": {
+      "cellEditorId": "WhiterunDragonsreach",
+      "cellFormId": "0x000165A3",
+      "playerLoaded": true
+    }
+  },
+  "serializedIntent": {
+    "upscaleMethod": 3,
+    "upscaleMethodMeaning": "DLSS primary",
+    "upscaleMethodNoDLSS": 2,
+    "upscaleMethodNoDLSSMeaning": "FSR fallback",
+    "qualityMode": 2,
+    "dlssPreset": 1,
+    "fsr4RuntimeEnable": true
+  },
+  "runtimeResult": {
+    "streamlineDLSSAvailable": false,
+    "stableState": "Active",
+    "stableMethod": "fsr",
+    "stableBackend": "fsr4_runtime",
+    "renderEyeSize": [1162, 1292],
+    "renderScale": 0.7692307829856873,
+    "stableAfterFrames": 19,
+    "bothEyesValid": true,
+    "lifecycleFailures": 0,
+    "fidelityMismatches": 0,
+    "runtimeFallbackObserved": false,
+    "memoryPressure": "Normal",
+    "systemCommitRatio": 0.4015244712870076
+  },
+  "controlReadback": {
+    "infoLogLevel": 2,
+    "iblEnabled": true,
+    "volumetricShadowsEnabled": true,
+    "volumetricLightingExteriorQuality": 2,
+    "volumetricLightingInteriorQuality": 2,
+    "ssgiEnabled": false,
+    "ssgiAOInteriorsOnly": true,
+    "ssgiResolutionMode": 0,
+    "ssgiResourceProfile": 1,
+    "screenSpaceShadowsProfile": "Quality",
+    "screenSpaceShadowsReady": true,
+    "screenSpaceShadowsCompiledSamplesLeft": 25,
+    "screenSpaceShadowsCompiledSamplesRight": 25
+  },
+  "resourceObservation": {
+    "mo2PeakObservedWorkingGiB": 0.98,
+    "skyrimPeakObservedWorkingGiB": 6.46,
+    "skyrimPeakObservedPrivateGiB": 16.13,
+    "scope": "bounded startup and one cell entry; not a leak or long-duration stability test"
+  },
+  "cleanup": {
+    "skyrimStopped": true,
+    "mo2Stopped": true,
+    "profileModlistRestored": true,
+    "restoredModlistSha256": "9D4CAD39340D90E23CBAFFAAD569DC40947B2E5767A9EFA972102A24B26FB608",
+    "temporaryModRemoved": true,
+    "captureStagingAbsent": true,
+    "mo2CaptureTreesAbsent": true
+  },
+  "validity": {
+    "accepted": true,
+    "reasons": [
+      "The generated Quality file hash matched the documented candidate.",
+      "Typed control readback matched the intended common and Quality-tier settings.",
+      "The AMD adapter rejected DLSS capability and CSX selected the serialized FSR fallback.",
+      "FSR4 runtime evaluation converged for both eyes with no lifecycle failure or fidelity mismatch.",
+      "The MO2 profile and temporary test mod were restored and removed after the stopped runtime boundary."
+    ],
+    "doesNotQualify": [
+      "NVIDIA DLSS execution",
+      "physical HMD behavior",
+      "OpenXR, VDXR, or Open Composite Unleashed",
+      "long-duration memory stability",
+      "Performance or Balanced runtime behavior"
+    ]
+  }
+}

@@ -1777,6 +1777,65 @@ namespace VRVendorRelatchPolicy
 		return a_fsrEvaluation;
 	}
 
+	struct CompatibleFSRRelatchReuseAdmission
+	{
+		bool directMenuRelatch = false;
+		bool recoveryRelatch = false;
+		bool targetIsFSR = false;
+		bool previousWasFSR = false;
+		bool resetPending = false;
+		bool memoryPressureNormal = false;
+		bool postLoadResetPending = false;
+		bool preservingActiveContract = false;
+		bool deviceLost = false;
+		bool resourcesCompatible = false;
+	};
+
+	// A presentation-only recovery relatch must not turn a compatible, live FSR
+	// context into teardown/recreation work. Explicit reset, incompatibility,
+	// pressure, or device-loss evidence still owns replacement.
+	[[nodiscard]] constexpr bool CanReuseCompatibleFSRResources(
+		const CompatibleFSRRelatchReuseAdmission& a_state) noexcept
+	{
+		return (a_state.directMenuRelatch || a_state.recoveryRelatch) &&
+		       a_state.targetIsFSR &&
+		       a_state.previousWasFSR &&
+		       !a_state.resetPending &&
+		       a_state.memoryPressureNormal &&
+		       !a_state.postLoadResetPending &&
+		       !a_state.preservingActiveContract &&
+		       !a_state.deviceLost &&
+		       a_state.resourcesCompatible;
+	}
+
+	struct RuntimeFSRFallbackReuseAdmission
+	{
+		bool isVR = false;
+		bool targetIsFSR = false;
+		bool runtimePathChanged = false;
+		bool runtimeFailureLatched = false;
+		bool fsrResetPending = false;
+		bool postLoadResetPending = false;
+		bool primaryDeviceLost = false;
+		bool hostResourcesCompatible = false;
+	};
+
+	// Runtime-provider quarantine or device-loss handling retires or detaches only
+	// the optional D3D12 ownership domain. Keep a compatible D3D11 host context
+	// and reset its temporal history instead of repeatedly rebuilding it.
+	[[nodiscard]] constexpr bool CanReuseHostFSRAfterRuntimeFailure(
+		const RuntimeFSRFallbackReuseAdmission& a_state) noexcept
+	{
+		return a_state.isVR &&
+		       a_state.targetIsFSR &&
+		       a_state.runtimePathChanged &&
+		       a_state.runtimeFailureLatched &&
+		       !a_state.fsrResetPending &&
+		       !a_state.postLoadResetPending &&
+		       !a_state.primaryDeviceLost &&
+		       a_state.hostResourcesCompatible;
+	}
+
 	[[nodiscard]] constexpr bool NeedsFSRResourceRecreate(
 		bool a_fsrEvaluation,
 		bool a_preservedResources) noexcept

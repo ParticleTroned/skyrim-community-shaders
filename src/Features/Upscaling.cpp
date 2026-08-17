@@ -24678,17 +24678,27 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				perfMode.trueHMDEyeHeight,
 				2u);
 		};
+		// VRAPI also owns FPS Stabilizer door handoffs. Its tested reuse behavior is
+		// kept in a separate follow-up so that path remains independently bisectable.
 		const bool reuseCompatibleFSRResourcesForRelatch =
-			relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&
-			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			previousVendorWasFSR &&
-			!pendingFSRResetForRelatch &&
-			memoryAtAdmission.valid &&
-			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Normal &&
-			!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
-			!preserveActiveContractForRecovery &&
-			!IsSubmitStageDeviceLost() &&
-			areFSRResourcesCompatibleForRelatch();
+			VRVendorRelatchPolicy::CanReuseCompatibleFSRResources({
+				.directMenuRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				.recoveryRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::RecoveryRelatch,
+				.targetIsFSR = relatchUpscaleMethod == UpscaleMethod::kFSR,
+				.previousWasFSR = previousVendorWasFSR,
+				.resetPending = pendingFSRResetForRelatch,
+				.memoryPressureNormal =
+					memoryAtAdmission.valid &&
+					memoryAtAdmission.pressure ==
+						VRRenderScaleMemoryPressure::Normal,
+				.postLoadResetPending =
+					postLoadRuntimeResetPending.load(std::memory_order_acquire),
+				.preservingActiveContract = preserveActiveContractForRecovery,
+				.deviceLost = IsSubmitStageDeviceLost(),
+				.resourcesCompatible = areFSRResourcesCompatibleForRelatch(),
+			});
 		const bool preserveCompatibleFSRIntermediatesForRelatch =
 			reuseCompatibleFSRResourcesForRelatch &&
 			relatchTargetRenderScaleActive &&
@@ -34280,6 +34290,25 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		!fsrRuntimeVersionChanged &&
 		!pendingFSRReset.load(std::memory_order_acquire) &&
 		canPreserveFSRResourcesForCurrentVRPlan();
+	const bool activeFSRContractNeedsRebuild =
+		pendingFSRReset.load(std::memory_order_acquire) ||
+		!IsVendorRuntimeReadyForActiveContract(UpscaleMethod::kFSR);
+	// An inactive DLSS retirement is independently serialized and does not make
+	// the active D3D11 host FSR contexts unsafe to retain.
+	const bool runtimeFailureFallbackCanPreserveHostFSR =
+		VRVendorRelatchPolicy::CanReuseHostFSRAfterRuntimeFailure({
+			.isVR = globals::game::isVR,
+			.targetIsFSR = a_upscalemethod == UpscaleMethod::kFSR,
+			.runtimePathChanged = fsrRuntimePathChanged,
+			.runtimeFailureLatched =
+				fidelityFX.IsRuntimeUpscalerFailureLatched(),
+			.fsrResetPending = activeFSRContractNeedsRebuild,
+			.postLoadResetPending =
+				postLoadRuntimeResetPending.load(std::memory_order_acquire),
+			.primaryDeviceLost = IsSubmitStageDeviceLost(),
+			.hostResourcesCompatible =
+				canPreserveFSRResourcesForCurrentVRPlan(),
+		});
 	const bool renderScaleTransitionRelevant = ShouldIncludeInactiveVRVendorReset(*this, a_upscalemethod);
 	const bool resourceChangeDetected =
 		upscaleModeChanged ||
@@ -34520,20 +34549,24 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			CreateUpscalingTextureResources(a_upscalemethod);
 		}
 
-		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state; rebuild on path changes.
+		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state.
+		// Ordinary path changes rebuild; provider quarantine may retain a compatible
+		// host context and reset its history while the runtime path falls back.
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
-			const auto destroyResult = fidelityFX.DestroyFSRResources();
-			if (!acceptFSRResourceLifecycleResult(
-					destroyResult,
-					"runtime-path FSR resource teardown")) {
-				return false;
+			if (!runtimeFailureFallbackCanPreserveHostFSR) {
+				const auto destroyResult = fidelityFX.DestroyFSRResources();
+				if (!acceptFSRResourceLifecycleResult(
+						destroyResult,
+						"runtime-path FSR resource teardown")) {
+					return false;
+				}
+				const auto createResult = createFSRResourcesWhenSafe();
+				if (!acceptFSRResourceLifecycleResult(
+						createResult,
+						"runtime-path FSR resource creation"))
+					return false;
+				fsrResourcesRecreatedForQuality = true;
 			}
-			const auto createResult = createFSRResourcesWhenSafe();
-			if (!acceptFSRResourceLifecycleResult(
-					createResult,
-					"runtime-path FSR resource creation"))
-				return false;
-			fsrResourcesRecreatedForQuality = true;
 			RequestHistoryReset();
 		} else if (!upscaleModeChanged && (fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
 			if (fsrRuntimeFsr4ConfiguredChanged || !fidelityFX.IsRuntimeFsr4FailureLatched()) {

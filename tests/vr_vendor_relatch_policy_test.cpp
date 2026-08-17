@@ -678,6 +678,69 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversCompatibleFSRRelatchReuseAdmission()
+	{
+		// Neither supported origin represents VRAPI and other transition owners;
+		// VRAPI admission is kept in a separately bisectable follow-up.
+		for (std::uint32_t bits = 0; bits < (1u << 10); ++bits) {
+			const CompatibleFSRRelatchReuseAdmission state{
+				.directMenuRelatch = (bits & (1u << 0)) != 0,
+				.recoveryRelatch = (bits & (1u << 1)) != 0,
+				.targetIsFSR = (bits & (1u << 2)) != 0,
+				.previousWasFSR = (bits & (1u << 3)) != 0,
+				.resetPending = (bits & (1u << 4)) != 0,
+				.memoryPressureNormal = (bits & (1u << 5)) != 0,
+				.postLoadResetPending = (bits & (1u << 6)) != 0,
+				.preservingActiveContract = (bits & (1u << 7)) != 0,
+				.deviceLost = (bits & (1u << 8)) != 0,
+				.resourcesCompatible = (bits & (1u << 9)) != 0,
+			};
+			const bool expected =
+				(state.directMenuRelatch || state.recoveryRelatch) &&
+				state.targetIsFSR &&
+				state.previousWasFSR &&
+				!state.resetPending &&
+				state.memoryPressureNormal &&
+				!state.postLoadResetPending &&
+				!state.preservingActiveContract &&
+				!state.deviceLost &&
+				state.resourcesCompatible;
+			if (CanReuseCompatibleFSRResources(state) != expected)
+				return false;
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversRuntimeFSRFallbackReuseAdmission()
+	{
+		for (std::uint32_t bits = 0; bits < (1u << 8); ++bits) {
+			const RuntimeFSRFallbackReuseAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.targetIsFSR = (bits & (1u << 1)) != 0,
+				.runtimePathChanged = (bits & (1u << 2)) != 0,
+				.runtimeFailureLatched = (bits & (1u << 3)) != 0,
+				.fsrResetPending = (bits & (1u << 4)) != 0,
+				.postLoadResetPending = (bits & (1u << 5)) != 0,
+				.primaryDeviceLost = (bits & (1u << 6)) != 0,
+				.hostResourcesCompatible = (bits & (1u << 7)) != 0,
+			};
+			const bool expected =
+				state.isVR &&
+				state.targetIsFSR &&
+				state.runtimePathChanged &&
+				state.runtimeFailureLatched &&
+				!state.fsrResetPending &&
+				!state.postLoadResetPending &&
+				!state.primaryDeviceLost &&
+				state.hostResourcesCompatible;
+			if (CanReuseHostFSRAfterRuntimeFailure(state) != expected)
+				return false;
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversStereoRelatchAdmission()
 	{
 		for (std::uint32_t currentFrame = 0; currentFrame < 3; ++currentFrame) {
@@ -2269,6 +2332,8 @@ namespace
 	static_assert(CoversInactiveContractNativeReleaseAdmission());
 	static_assert(CoversBoundedNativeRestorePresentationRecovery());
 	static_assert(CoversVendorResourcePredicates());
+	static_assert(CoversCompatibleFSRRelatchReuseAdmission());
+	static_assert(CoversRuntimeFSRFallbackReuseAdmission());
 	static_assert(CoversStereoRelatchAdmission());
 	static_assert(CoversNativeRestoreSequence());
 	static_assert(CoversProvenNativeRestoreRetirementResume());

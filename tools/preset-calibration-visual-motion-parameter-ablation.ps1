@@ -52,12 +52,20 @@ param(
 
     [string]$ExpectedWorldspace,
 
+    [ValidateCount(3, 3)]
+    [double[]]$ExpectedPosition,
+
+    [ValidateRange(0.01, 8.0)]
+    [double]$PositionTolerance = 0.25,
+
     [double]$ExpectedYaw,
 
     [ValidateRange(0.0, 1000.0)]
     [double]$RestoreTimescale = 20.0,
 
     [switch]$UseExistingSnapshot,
+
+    [switch]$ReuseLoadedAnchor,
 
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[A-Fa-f0-9]{64}$')]
@@ -160,6 +168,23 @@ function Invoke-ConsoleCommand {
     Invoke-DevBenchTool -Tool 'console' -Payload @{ action = 'exec'; command = $Command } | Out-Null
 }
 
+function Invoke-EntryCommand {
+    $gatewayTimedOut = $false
+    try {
+        Invoke-ConsoleCommand -Command $EntryCommand
+    }
+    catch {
+        if ($_.Exception.Message -notmatch '504|Gateway Timeout') {
+            throw
+        }
+        # A cell load may block the game/main thread longer than DevBench's
+        # HTTP gateway allowance even though the queued command succeeds. The
+        # subsequent full anchor readback is authoritative.
+        $gatewayTimedOut = $true
+    }
+    $gatewayTimedOut
+}
+
 function Get-AnchorState {
     [ordered]@{
         scene = Invoke-DevBenchTool -Tool 'inspect' -Payload @{ kind = 'scene' }
@@ -190,13 +215,34 @@ function Assert-AnchorState {
     if ($hasExpectedYaw -and [Math]::Abs([double]$Anchor.camera.camYaw - $ExpectedYaw) -gt 0.0001) {
         throw "Anchor yaw mismatch: expected $ExpectedYaw, got $($Anchor.camera.camYaw)"
     }
+    if ($ExpectedPosition) {
+        for ($index = 0; $index -lt 3; $index++) {
+            if ([Math]::Abs([double]$Anchor.scene.position[$index] - $ExpectedPosition[$index]) -gt $PositionTolerance) {
+                throw "Anchor position mismatch at index $index`: expected $($ExpectedPosition[$index]), got $($Anchor.scene.position[$index])"
+            }
+        }
+    }
 }
 
 function Establish-AnchorState {
-    Invoke-ConsoleCommand -Command $EntryCommand
-    Start-Sleep -Seconds $PostEntryWaitSeconds
+    param([Parameter(Mandatory = $true)][bool]$ReloadEntry)
+
+    $entryGatewayTimedOut = $false
+    if ($ReloadEntry) {
+        $entryGatewayTimedOut = Invoke-EntryCommand
+        Start-Sleep -Seconds $PostEntryWaitSeconds
+    } elseif (-not $ExpectedPosition) {
+        throw 'ReuseLoadedAnchor requires ExpectedPosition so the prior motion step can be reversed exactly'
+    }
     Invoke-ConsoleCommand -Command 'set timescale to 0'
     Start-Sleep -Milliseconds 250
+    if ($ExpectedPosition) {
+        for ($index = 0; $index -lt 3; $index++) {
+            $axis = @('x', 'y', 'z')[$index]
+            Invoke-ConsoleCommand -Command ("player.setpos {0} {1:R}" -f $axis, $ExpectedPosition[$index])
+            Wait-PositionComponent -ExpectedValue $ExpectedPosition[$index] -Axis $axis | Out-Null
+        }
+    }
     if ($hasGameHour) {
         Invoke-ConsoleCommand -Command "set gamehour to $GameHour"
         Start-Sleep -Milliseconds 1500
@@ -206,6 +252,8 @@ function Establish-AnchorState {
         Start-Sleep -Seconds 3
     }
     $anchor = Get-AnchorState
+    $anchor['entryReloaded'] = $ReloadEntry
+    $anchor['entryCommandGatewayTimedOut'] = $entryGatewayTimedOut
     Assert-AnchorState -Anchor $anchor
     $anchor
 }
@@ -224,26 +272,30 @@ function Get-PositionComponent {
 }
 
 function Wait-PositionComponent {
-    param([Parameter(Mandatory = $true)][double]$ExpectedValue)
+    param(
+        [Parameter(Mandatory = $true)][double]$ExpectedValue,
+        [Parameter(Mandatory = $true)][ValidateSet('x', 'y', 'z')][string]$Axis
+    )
     $deadline = (Get-Date).AddSeconds(5)
     do {
         Start-Sleep -Milliseconds 50
         $scene = Invoke-DevBenchTool -Tool 'inspect' -Payload @{ kind = 'scene' }
-        $actual = Get-PositionComponent -Scene $scene -Axis $MotionAxis
+        $actual = Get-PositionComponent -Scene $scene -Axis $Axis
         if ([Math]::Abs($actual - $ExpectedValue) -le 0.25) {
             return $scene
         }
     } while ((Get-Date) -lt $deadline)
-    throw "Motion step did not settle on $MotionAxis at $ExpectedValue; last readback was $actual"
+    throw "Position did not settle on $Axis at $ExpectedValue; last readback was $actual"
 }
 
 function Capture-MotionPhase {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][bool]$EffectiveValue
+        [Parameter(Mandatory = $true)][bool]$EffectiveValue,
+        [Parameter(Mandatory = $true)][bool]$ReloadEntry
     )
 
-    $anchor = Establish-AnchorState
+    $anchor = Establish-AnchorState -ReloadEntry $ReloadEntry
     $settledControl = Wait-ParameterValue -ExpectedValue $EffectiveValue
     $startCoordinate = Get-PositionComponent -Scene $anchor.scene -Axis $MotionAxis
     $targetCoordinate = $startCoordinate + $MotionOffset
@@ -281,7 +333,7 @@ function Capture-MotionPhase {
 
     $commandIssuedAtUtc = [DateTime]::UtcNow.ToString('o')
     Invoke-ConsoleCommand -Command ("player.setpos {0} {1:R}" -f $MotionAxis, $targetCoordinate)
-    $postStepScene = Wait-PositionComponent -ExpectedValue $targetCoordinate
+    $postStepScene = Wait-PositionComponent -ExpectedValue $targetCoordinate -Axis $MotionAxis
     $postStepStatus = (Invoke-DevBenchTool -Tool 'communityshaders.capture' -Payload @{ action = 'status' }).status
 
     $completionDeadline = (Get-Date).AddSeconds(240)
@@ -346,6 +398,9 @@ $record = [ordered]@{
         entryCommand = $EntryCommand
         gameHour = if ($hasGameHour) { $GameHour } else { $null }
         weatherForm = if ($WeatherForm) { $WeatherForm } else { $null }
+        expectedPosition = if ($ExpectedPosition) { @($ExpectedPosition) } else { $null }
+        positionTolerance = $PositionTolerance
+        reuseLoadedAnchor = [bool]$ReuseLoadedAnchor
         motionAxis = $MotionAxis
         motionOffset = $MotionOffset
         frames = $Frames
@@ -398,13 +453,13 @@ try {
         Start-Sleep -Milliseconds 500
     }
 
-    $record.phases.Add((Capture-MotionPhase -Name 'baseline-before' -EffectiveValue $true))
+    $record.phases.Add((Capture-MotionPhase -Name 'baseline-before' -EffectiveValue $true -ReloadEntry $true))
     $off = Set-ParameterValue -Value $false
     $record.transitions.Add($off)
-    $record.phases.Add((Capture-MotionPhase -Name 'ablated' -EffectiveValue $false))
+    $record.phases.Add((Capture-MotionPhase -Name 'ablated' -EffectiveValue $false -ReloadEntry (-not [bool]$ReuseLoadedAnchor)))
     $on = Set-ParameterValue -Value $true
     $record.transitions.Add($on)
-    $record.phases.Add((Capture-MotionPhase -Name 'baseline-return' -EffectiveValue $true))
+    $record.phases.Add((Capture-MotionPhase -Name 'baseline-return' -EffectiveValue $true -ReloadEntry (-not [bool]$ReuseLoadedAnchor)))
 
     $restore = Invoke-DevBenchTool -Tool 'communityshaders.controls' -Payload @{
         action = 'restore'

@@ -84,6 +84,9 @@ namespace
 		WetternessQualityProfile{ "Quality", 1400.0f, 10000.0f, 3.00f, 0.50f, 0.80f, 6.0f, 0.30f },
 	};
 	constexpr float kWetternessMinimumFadeRange = 100.0f / Util::Units::GAME_UNIT_TO_M;
+	constexpr float kWetternessMaximumFadeRange = 25000.0f;
+	constexpr float kWetternessMinimumRaindropRange = 1.0f / Util::Units::GAME_UNIT_TO_M;
+	constexpr float kWetternessMaximumRaindropRange = 75.0f / Util::Units::GAME_UNIT_TO_M;
 
 	bool NearlyEqual(float a_left, float a_right)
 	{
@@ -549,28 +552,84 @@ namespace
 		};
 	}
 
-	json BuildQualityParameterRecord()
+	json BuildQualityParameterRecord(const std::string& a_featureName)
 	{
-		auto record = BuildQualityProfileRecord("ScreenSpaceShadows");
+		auto record = BuildQualityProfileRecord(a_featureName);
 		record["control"] = "qualityParameters";
 		record["valueType"] = "object";
 		record.erase("allowedValues");
 		record.erase("profileDefinitions");
-		record["parameterDefinitions"] = {
-			{ "VRBaseSamplesAtReference", {
-				{ "valueType", "number" },
-				{ "minimum", 16.0f },
-				{ "maximum", 96.0f },
-				{ "effect", "changes the compiled per-eye ray-march sample count" },
-			} },
-			{ "VRCullDistance", {
-				{ "valueType", "number" },
-				{ "minimum", 0.0f },
-				{ "maximum", 20480.0f },
-				{ "zeroMeaning", "distance culling disabled" },
-				{ "effect", "fades SSS over the final 20 percent, clamped to a 200-1200 unit fade band" },
-			} },
-		};
+		if (a_featureName == "ScreenSpaceShadows") {
+			record["parameterDefinitions"] = {
+				{ "VRBaseSamplesAtReference", {
+					{ "valueType", "number" },
+					{ "minimum", 16.0f },
+					{ "maximum", 96.0f },
+					{ "effect", "changes the compiled per-eye ray-march sample count" },
+				} },
+				{ "VRCullDistance", {
+					{ "valueType", "number" },
+					{ "minimum", 0.0f },
+					{ "maximum", 20480.0f },
+					{ "zeroMeaning", "distance culling disabled" },
+					{ "effect", "fades SSS over the final 20 percent, clamped to a 200-1200 unit fade band" },
+				} },
+			};
+		} else if (a_featureName == "Wetterness") {
+			const auto& settings = globals::features::wetterness.settings;
+			const float gridArea = settings.RaindropGridSize * settings.RaindropGridSize;
+			const float opportunityRate = settings.RaindropChance / std::max(gridArea * settings.RaindropInterval, 0.001f);
+			record["parameterDefinitions"] = {
+				{ "RaindropFxRangeWorldUnits", {
+					{ "valueType", "number" },
+					{ "minimum", kWetternessMinimumRaindropRange },
+					{ "maximum", kWetternessMaximumRaindropRange },
+					{ "effect", "sets the raindrop full-strength and fade coverage radius for surfaces and water" },
+				} },
+				{ "WetnessDistanceFadeRange", {
+					{ "valueType", "number" },
+					{ "minimum", kWetternessMinimumFadeRange },
+					{ "maximum", kWetternessMaximumFadeRange },
+					{ "effect", "linearly fades material wetness to zero by view depth" },
+				} },
+				{ "RaindropGridSize", {
+					{ "valueType", "number" },
+					{ "minimum", 1.0f },
+					{ "maximum", 10.0f },
+					{ "effect", "sets world-space cell size; larger cells reduce event opportunities per area" },
+				} },
+				{ "RaindropInterval", {
+					{ "valueType", "number" },
+					{ "minimum", 0.1f },
+					{ "maximum", 2.0f },
+					{ "effect", "sets the temporal interval between raindrop opportunities" },
+				} },
+				{ "RaindropChance", {
+					{ "valueType", "number" },
+					{ "minimum", 0.0f },
+					{ "maximum", 1.0f },
+					{ "effect", "sets the probability that a cell-time opportunity contains a raindrop" },
+				} },
+				{ "SplashesLifetime", {
+					{ "valueType", "number" },
+					{ "minimum", 0.001f },
+					{ "maximum", 120.0f },
+					{ "effect", "sets splash persistence" },
+				} },
+				{ "RippleLifetime", {
+					{ "valueType", "number" },
+					{ "minimum", 0.001f },
+					{ "maximum", 60.0f },
+					{ "effect", "sets ripple persistence" },
+				} },
+			};
+			record["derivedEffectiveParameters"] = {
+				{ "materialWetnessFadeRangeMeters", globals::features::wetterness.wetnessDistanceFadeRange * Util::Units::GAME_UNIT_TO_M },
+				{ "raindropFullStrengthRadiusWorldUnits", settings.RaindropFxRangeWorldUnits * std::sqrt(2.0f) },
+				{ "raindropCutoffRadiusWorldUnits", settings.RaindropFxRangeWorldUnits * std::sqrt(3.0f) },
+				{ "raindropOpportunityRatePerSquareWorldUnitSecond", opportunityRate },
+			};
+		}
 		record["requestedValue"] = record["effectiveParameters"];
 		record["effectiveValue"] = record["effectiveParameters"];
 		return record;
@@ -597,7 +656,8 @@ namespace
 			controls.push_back(std::move(control));
 		for (auto& control : BuildQualityProfileControlList())
 			controls.push_back(std::move(control));
-		controls.push_back(BuildQualityParameterRecord());
+		controls.push_back(BuildQualityParameterRecord("ScreenSpaceShadows"));
+		controls.push_back(BuildQualityParameterRecord("Wetterness"));
 		return controls;
 	}
 
@@ -618,7 +678,9 @@ namespace
 		if (a_control == "qualityProfile" && SupportsQualityProfiles(a_feature))
 			return BuildQualityProfileRecord(a_feature);
 		if (a_feature == "ScreenSpaceShadows" && a_control == "qualityParameters")
-			return BuildQualityParameterRecord();
+			return BuildQualityParameterRecord(a_feature);
+		if (a_feature == "Wetterness" && a_control == "qualityParameters")
+			return BuildQualityParameterRecord(a_feature);
 		return {
 			{ "error", "unknown control" },
 			{ "feature", a_feature },
@@ -725,42 +787,82 @@ namespace
 
 	json SetQualityParameterControl(const std::string& a_feature, const json& a_parameters)
 	{
-		if (a_feature != "ScreenSpaceShadows")
+		if (a_feature != "ScreenSpaceShadows" && a_feature != "Wetterness")
 			return FindControl(a_feature, "qualityParameters");
+		auto buildControl = [&]() { return BuildQualityParameterRecord(a_feature); };
 		auto* feature = FindFeatureByShortName(a_feature);
 		if (!feature || !feature->loaded)
-			return { { "error", "quality parameter control is unavailable" }, { "control", BuildQualityParameterRecord() } };
+			return { { "error", "quality parameter control is unavailable" }, { "control", buildControl() } };
 		if (g_performanceSnapshots.contains(a_feature))
-			return { { "error", "restore the outstanding performanceActive snapshot before changing qualityParameters" }, { "control", BuildQualityParameterRecord() } };
+			return { { "error", "restore the outstanding performanceActive snapshot before changing qualityParameters" }, { "control", buildControl() } };
 		if (a_parameters.empty())
-			return { { "error", "qualityParameters requires at least one parameter" }, { "control", BuildQualityParameterRecord() } };
+			return { { "error", "qualityParameters requires at least one parameter" }, { "control", buildControl() } };
 
 		for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter) {
-			if (parameter.key() != "VRBaseSamplesAtReference" && parameter.key() != "VRCullDistance") {
+			double minimum = 0.0;
+			double maximum = 0.0;
+			bool known = true;
+			if (a_feature == "ScreenSpaceShadows") {
+				if (parameter.key() == "VRBaseSamplesAtReference") {
+					minimum = 16.0;
+					maximum = 96.0;
+				} else if (parameter.key() == "VRCullDistance") {
+					minimum = 0.0;
+					maximum = 20480.0;
+				} else {
+					known = false;
+				}
+			} else if (parameter.key() == "RaindropFxRangeWorldUnits") {
+				minimum = kWetternessMinimumRaindropRange;
+				maximum = kWetternessMaximumRaindropRange;
+			} else if (parameter.key() == "WetnessDistanceFadeRange") {
+				minimum = kWetternessMinimumFadeRange;
+				maximum = kWetternessMaximumFadeRange;
+			} else if (parameter.key() == "RaindropGridSize") {
+				minimum = 1.0;
+				maximum = 10.0;
+			} else if (parameter.key() == "RaindropInterval") {
+				minimum = 0.1;
+				maximum = 2.0;
+			} else if (parameter.key() == "RaindropChance") {
+				minimum = 0.0;
+				maximum = 1.0;
+			} else if (parameter.key() == "SplashesLifetime") {
+				minimum = 0.001;
+				maximum = 120.0;
+			} else if (parameter.key() == "RippleLifetime") {
+				minimum = 0.001;
+				maximum = 60.0;
+			} else {
+				known = false;
+			}
+
+			if (!known) {
 				return {
-					{ "error", "unknown Screen Space Shadows quality parameter" },
+					{ "error", "unknown quality parameter" },
+					{ "feature", a_feature },
 					{ "parameter", parameter.key() },
-					{ "control", BuildQualityParameterRecord() },
+					{ "control", buildControl() },
 				};
 			}
 			if (!parameter.value().is_number()) {
 				return {
-					{ "error", "Screen Space Shadows quality parameters require numeric values" },
+					{ "error", "quality parameters require numeric values" },
+					{ "feature", a_feature },
 					{ "parameter", parameter.key() },
-					{ "control", BuildQualityParameterRecord() },
+					{ "control", buildControl() },
 				};
 			}
 			const double value = parameter.value().get<double>();
-			const double minimum = parameter.key() == "VRBaseSamplesAtReference" ? 16.0 : 0.0;
-			const double maximum = parameter.key() == "VRBaseSamplesAtReference" ? 96.0 : 20480.0;
 			if (!std::isfinite(value) || value < minimum || value > maximum) {
 				return {
-					{ "error", "Screen Space Shadows quality parameter is outside its allowed range" },
+					{ "error", "quality parameter is outside its allowed range" },
+					{ "feature", a_feature },
 					{ "parameter", parameter.key() },
 					{ "requestedValue", parameter.value() },
 					{ "minimum", minimum },
 					{ "maximum", maximum },
-					{ "control", BuildQualityParameterRecord() },
+					{ "control", buildControl() },
 				};
 			}
 		}
@@ -769,10 +871,21 @@ namespace
 		if (inserted)
 			g_qualityProfileSnapshots.emplace(a_feature, CaptureQualityProfileState(a_feature));
 		try {
-			auto state = globals::features::screenSpaceShadows.CapturePerformanceCostMeasurementState();
-			for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter)
-				state["Settings"][parameter.key()] = parameter.value();
-			globals::features::screenSpaceShadows.RestorePerformanceCostMeasurementState(state);
+			if (a_feature == "ScreenSpaceShadows") {
+				auto state = globals::features::screenSpaceShadows.CapturePerformanceCostMeasurementState();
+				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter)
+					state["Settings"][parameter.key()] = parameter.value();
+				globals::features::screenSpaceShadows.RestorePerformanceCostMeasurementState(state);
+			} else {
+				auto state = globals::features::wetterness.CapturePerformanceCostMeasurementState();
+				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter) {
+					if (parameter.key() == "WetnessDistanceFadeRange")
+						state[parameter.key()] = parameter.value();
+					else
+						state["Settings"][parameter.key()] = parameter.value();
+				}
+				globals::features::wetterness.RestorePerformanceCostMeasurementState(state);
+			}
 		} catch (...) {
 			if (inserted)
 				g_qualityProfileSnapshots.erase(a_feature);
@@ -783,14 +896,14 @@ namespace
 			{ "action", "set" },
 			{ "persisted", false },
 			{ "restoredSnapshot", false },
-			{ "control", BuildQualityParameterRecord() },
+			{ "control", buildControl() },
 		};
 	}
 
 	json RestoreQualityProfileSnapshot(const std::string& a_feature, const std::string& a_control)
 	{
 		auto buildControl = [&]() {
-			return a_control == "qualityParameters" ? BuildQualityParameterRecord() : BuildQualityProfileRecord(a_feature);
+			return a_control == "qualityParameters" ? BuildQualityParameterRecord(a_feature) : BuildQualityProfileRecord(a_feature);
 		};
 		const auto snapshot = g_qualityProfileSnapshots.find(a_feature);
 		if (snapshot == g_qualityProfileSnapshots.end()) {
@@ -1002,7 +1115,7 @@ namespace FeatureControlDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. Skylighting, Screen Space Shadows, and Wetterness expose reversible Performance/Balanced/Quality profile clusters, including readiness, history reset, resource, and runtime shader-recompile metadata. Screen Space Shadows additionally exposes bounded qualityParameters so sample count and cull range can be calibrated independently. restore reverts one held quality snapshot; restoreAll is the session safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]},{"type":"object","properties":{"VRBaseSamplesAtReference":{"type":"number","minimum":16,"maximum":96},"VRCullDistance":{"type":"number","minimum":0,"maximum":20480}},"additionalProperties":false,"minProperties":1}]}},"required":["action"]}})";
+			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. Skylighting, Screen Space Shadows, and Wetterness expose reversible Performance/Balanced/Quality profile clusters, including readiness, history reset, resource, and runtime shader-recompile metadata. Screen Space Shadows and Wetterness additionally expose bounded qualityParameters so their coupled profile parameters can be calibrated independently. Wetterness reports derived coverage and event-opportunity values. restore reverts one held quality snapshot; restoreAll is the session safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]},{"type":"object","properties":{"VRBaseSamplesAtReference":{"type":"number","minimum":16,"maximum":96},"VRCullDistance":{"type":"number","minimum":0,"maximum":20480},"RaindropFxRangeWorldUnits":{"type":"number"},"WetnessDistanceFadeRange":{"type":"number"},"RaindropGridSize":{"type":"number"},"RaindropInterval":{"type":"number"},"RaindropChance":{"type":"number"},"SplashesLifetime":{"type":"number"},"RippleLifetime":{"type":"number"}},"additionalProperties":false,"minProperties":1}]}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.controls",
 			descriptor,

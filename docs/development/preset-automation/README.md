@@ -38,6 +38,7 @@ Hard correctness and stability constraints are applied first. Surviving candidat
 | First-pass screening | AMD native-OpenVR timing and visual A/B/A results, artifact hashes, interpretation, and follow-up routing | [`screening-20260817.md`](./screening-20260817.md) |
 | First quality-profile curves | Forward/reverse AMD timing and visual curves for Skylighting, Screen Space Shadows, and Wetness | [`profile-curves-20260817.md`](./profile-curves-20260817.md) |
 | First pairwise interactions | Forward/reverse AMD timing and visual factorials for Skylighting × Screen Space Shadows and Wetness × IBL | [`interactions-20260817.md`](./interactions-20260817.md) |
+| Terrain Blending distance calibration | Live-control validation, AMD timing, drift-resistant stereo comparison, and provisional tier implication | [`terrain-blending-20260817.md`](./terrain-blending-20260817.md) |
 | Decision log | Append-only rationale connecting evidence to adopted or rejected choices | [`decision-log.md`](./decision-log.md) |
 
 The canonical schemas are:

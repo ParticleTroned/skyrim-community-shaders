@@ -36,8 +36,11 @@ The next control proof should use a synthetic tracked-device/controller driver w
 | `exterior-guardian-stones-clear-night` | Same pose under starlight and local emissive lighting; shadow/exposure floor | Same entry; 00:30; `fw 81A`; 3 s | `-1.5500009060` | `CS_Capture_2026-08-17_12-24-28_187_guardian-stones-clear-night-0030_0004` |
 | `exterior-guardian-stones-fog-dawn` | Same pose under low-contrast depth fog and dawn exposure | Same entry; 07:00; `fw C821E`; 3 s | `-1.5500009060` | `CS_Capture_2026-08-17_12-24-50_131_guardian-stones-fog-dawn-0700_0005` |
 | `exterior-windhelm-snow-midday` | High-albedo snow, dark carved stone, metal, firelight, foreground shadow | `coc WindhelmExterior01`; 12 s; `set gamehour to 12.0`; 1.5 s; retain natural `SkyrimCloudySN` | `-0.0450205393` | `CS_Capture_2026-08-17_12-25-29_941_windhelm-cloudy-snow-midday_0006` |
+| `exterior-winterhold-seam-clear-day` | Diagnostic snow/stone contact edges with little foliage; close-wall framing limits general composition use | `coc WinterholdExterior01`; 12 s; freeze time; 14:00; `fw 81A`; 3 s | `-0.5312061906` | `CS_Capture_2026-08-17_20-35-56_801_Scout-WinterholdExterior01_0016` |
 
 Proof captures are archived under `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\20260817-anchor-scout`. Every listed capture completed one raw `hmd_stereo` pair with separate eyes and combined derivative, zero failed frames, zero incomplete-pair drops, and zero backpressure drops.
+
+The Winterhold proof was produced after the storage-policy change and is staged under campaign locator `anchor-scout/WinterholdExterior01-clear-1400`; the session finaliser moves it to the dated L: archive. It saved raw separate eyes without a redundant combined derivative. A second fresh `coc` reproduced its position and submitted-view yaw exactly.
 
 The Whiterun multi-depth proof remains useful as rejected historical evidence at `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\20260817-distance-scout\CS_Capture_2026-08-17_16-16-34_026_Scout-WhiterunExterior01_0064`. Do not use it in a reproducible campaign until a save, synthetic HMD pose, or another validated recipe recreates its view.
 
@@ -59,7 +62,7 @@ Use the console form without the leading zeroes, for example `fw C8220`. Do not 
 ## Execution contract
 
 1. Start from a loaded, responsive game and confirm the intended runtime lane and Info shader-cache identity.
-2. Submit the anchor's `coc`, wait 12 seconds, set time, wait 1.5 seconds, then apply exterior weather and wait 2.5-3 seconds.
+2. Submit the anchor's `coc`, wait 12 seconds, freeze timescale for a static visual comparison, set time, wait 1.5 seconds, then apply exterior weather and wait 2.5-3 seconds. Restore the declared prior timescale in cleanup.
 3. Read `inspect scene` and `camera get`; reject any mismatch against [`anchor-scenes.json`](./anchor-scenes.json).
 4. Warm the scene before timing. Keep capture disabled during timing.
 5. Run a separate visual pass with exact `hmd_stereo` pairs and preserve the per-eye images and manifest.

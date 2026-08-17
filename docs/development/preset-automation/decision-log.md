@@ -185,3 +185,39 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Consequences: this workstation uses `L:\CSX Preset Automation`; historical absolute evidence paths follow the archive move; campaign locators and hashes remain the stable identities
 - Revalidation triggers: MO2/RootBuilder behavior change, archive-drive change, capture-path permission failure, or introduction of a session orchestrator that enforces an equivalent boundary
 - Supersedes: none
+
+### `PA-2026-010` — Stage capture on NVMe, then archive to HDD
+
+- Date: 2026-08-17
+- Status: adopted
+- Snapshot: first direct-to-L lossless Terrain Blending visual curve after storage remediation
+- Question: Should active lossless capture write directly to the persistent HDD archive?
+- Scope: screenshot sequences, stereo pairs, preview videos, profiler payloads, and derived diagnostics produced by preset calibration
+- Hard constraints: active staging must remain outside MO2 and SkyrimVR; exact-pair validity gates remain mandatory; the completed session must be drained to persistent storage
+- Options considered: write directly to L:; temporarily use a game or overwrite path on D:; use an independent D: staging root and move it to L: at session end
+- Evidence: direct-to-L PNG capture produced 41 backpressure drops at a 10-cycle interval and one drop at 45 cycles; a 60-cycle interval was valid, showing that HDD write/encode drain can constrain capture cadence even when file accumulation is safe
+- Objective vector and uncertainty: independent NVMe staging improves capture headroom and remains invisible to RootBuilder; finalisation adds one bounded D:-to-L transfer; exact throughput varies by compression and scene
+- Pareto result: an independent D: root keeps the speed benefit without the RootBuilder risk of game or overwrite staging
+- Decision: default calibration tools to repository-local `csx.calibrationStagingRoot`, use `D:\CSX Preset Automation Staging` on this workstation, and move the dated session tree to `csx.calibrationArchiveRoot` during the existing stopped-runtime finaliser
+- Confidence: high
+- Consequences: L: remains the evidence archive; D: is temporary and must be empty of completed sessions; failed-run metadata is preserved until finalisation
+- Revalidation triggers: staging-drive change, sustained zero-drop direct-to-archive capture at target cadence, finaliser verification failure, or a future capture API with bounded asynchronous spill management
+- Supersedes: the direct-to-archive default in `PA-2026-009`; its prohibition on persistence beneath MO2 or SkyrimVR remains active
+
+### `PA-2026-011` — Retain the inherited Terrain Blending distance tiers provisionally
+
+- Date: 2026-08-17
+- Status: adopted provisionally
+- Snapshot: first live scalar-parameter timing and drift-resistant stereo campaign
+- Question: Should `TerrainCullDistance` remain `725` for Performance and `1024` for Balanced/Quality?
+- Scope: Terrain Blending distance only; `BlendStrength` and package enablement are unchanged
+- Hard constraints: exact live readback and restoration; no stereo regression; no visual conclusion from unbalanced temporal drift
+- Options considered: `1024` in all tiers; inherited `725/1024/1024`; `0` for Quality to disable distance culling
+- Evidence: [Terrain Blending distance calibration](./terrain-blending-20260817.md), including 120-frame `0/725/1024` timing phases and three bracketing-baseline `725/1024` visual cycles
+- Objective vector and uncertainty: Guardian feature timers were flat at about 0.34 ms render passes plus 0.02 ms depth blend; the Winterhold three-cycle mean visual residual was about 0.215 luma with p95 0.607 and no pixels above 3 luma; no repeatable spatial response was detected, but the expected performance saving remained below noise and scene coverage is narrow
+- Pareto result: `725` has no demonstrated visual disadvantage and an architectural opportunity to cull more landscape bounds, but it is not yet a measured performance win
+- Decision: retain `725` for Performance and `1024` for Balanced/Quality pending a distance-targeted moving-scene campaign
+- Confidence: medium for tested-anchor visual equivalence; low for performance benefit and runtime/vendor portability
+- Consequences: preset generation keeps one vendor-neutral tier path; the result must be labelled provisional rather than promoted as a qualified optimization
+- Revalidation triggers: visible terrain/static seam spanning 10.35–14.62 m, moving or physical HMD, foliage-free exterior, OpenXR/VDXR/OCU lane, NVIDIA hardware, or Terrain Blending pass/culling changes
+- Supersedes: none

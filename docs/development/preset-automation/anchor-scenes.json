@@ -80,6 +80,22 @@
         "camera": { "x": 135038.59375, "y": 33143.40625, "z": -12532.8681640625, "pitch": 0.0, "yaw": -0.045020539313554764, "freeCam": false }
       },
       "proofCapture": "CS_Capture_2026-08-17_12-25-29_941_windhelm-cloudy-snow-midday_0006"
+    },
+    {
+      "id": "exterior-winterhold-seam-clear-day",
+      "coverage": ["snow", "stone", "terrain-object-contact", "low-foliage", "diagnostic-close-wall"],
+      "commands": ["coc WinterholdExterior01", "set timescale to 0", "set gamehour to 14.0", "fw 81A"],
+      "restoreCommands": ["set timescale to 20"],
+      "expected": {
+        "cell": { "editorId": "WinterholdExterior01", "formId": "0x00008EA2" },
+        "worldspace": { "editorId": "Tamriel", "formId": "0x0000003C" },
+        "position": [109972.90625, 105870.2734375, -8511.1318359375],
+        "gameHourTarget": 14.0,
+        "weather": "clear",
+        "camera": { "x": 109972.90625, "y": 105870.2734375, "z": -8478.0068359375, "pitch": 0.0, "yaw": -0.5312061905860901, "freeCam": false }
+      },
+      "proofCaptureRoot": "anchor-scout\\WinterholdExterior01-clear-1400",
+      "proofCapture": "CS_Capture_2026-08-17_20-35-56_801_Scout-WinterholdExterior01_0016"
     }
   ],
   "rejectedCandidates": [

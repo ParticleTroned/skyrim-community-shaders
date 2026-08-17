@@ -82,6 +82,7 @@ namespace
 			{ "requestedFrameCount", status.request.frameCount },
 			{ "frameIntervalCompositorCycles", status.request.frameInterval },
 			{ "previewFramesPerSecond", status.request.previewFramesPerSecond },
+			{ "format", status.request.saveAsPng ? "png" : "bmp" },
 			{ "saveCombined", status.request.saveCombined },
 			{ "saveSeparateEyes", status.request.saveSeparateEyes },
 			{ "previewVideoRequested", status.request.writePreviewVideo },
@@ -112,6 +113,7 @@ namespace
 			{ "tool", "communityshaders.capture" },
 			{ "runtime", globals::game::isVR ? "VR" : "flat" },
 			{ "sources", json::array({ "hmd_stereo", "framed_stereo", "framed_eye" }) },
+			{ "formats", json::array({ "png", "bmp" }) },
 			{ "maxFrameCount", ScreenshotCaptureSessionPolicy::kMaxFrameCount },
 			{ "maxFrameIntervalCompositorCycles", ScreenshotCaptureSessionPolicy::kMaxFrameInterval },
 			{ "maxPreviewFramesPerSecond", ScreenshotCaptureSessionPolicy::kMaxPreviewFramesPerSecond },
@@ -233,6 +235,10 @@ namespace
 			request.frameCount = *frameCount;
 			request.frameInterval = *frameInterval;
 			request.previewFramesPerSecond = *previewFramesPerSecond;
+			const auto format = a_args.value("format", std::string("png"));
+			if (format != "png" && format != "bmp")
+				return json{ { "error", "format must be png or bmp" } };
+			request.saveAsPng = format == "png";
 			request.saveCombined = a_args.value("saveCombined", true);
 			request.saveSeparateEyes = a_args.value("saveSeparateEyes", sourceName != "framed_eye");
 			request.writePreviewVideo = a_args.value("writePreviewVideo", true);
@@ -344,7 +350,7 @@ namespace ScreenshotDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Capture exact accepted OpenVR stereo pairs or bounded lossless frame sequences through CSX's production screenshot path. Automated start/cancel are log-level-independent and do not require Developer Mode; developer-only diagnostic texture capture is not exposed. Capture is intentionally separate from profiler measurement; run visual and timing passes independently. status reports every accepted compositor cycle, output path, failure, and dropped-pair/backpressure count.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["capabilities","status","start","cancel"],"default":"status"},"source":{"type":"string","enum":["hmd_stereo","framed_stereo","framed_eye"]},"label":{"type":"string"},"frameCount":{"type":"integer","minimum":1,"maximum":240},"frameInterval":{"type":"integer","minimum":1,"maximum":120},"previewFramesPerSecond":{"type":"integer","minimum":1,"maximum":60},"saveCombined":{"type":"boolean"},"saveSeparateEyes":{"type":"boolean"},"writePreviewVideo":{"type":"boolean"},"outputPath":{"type":"string"}},"required":["action"]}})";
+			R"({"description":"Capture exact accepted OpenVR stereo pairs or bounded lossless frame sequences through CSX's production screenshot path. PNG is compact; BMP is larger but avoids PNG compression CPU cost for dense temporal calibration. Automated start/cancel are log-level-independent and do not require Developer Mode; developer-only diagnostic texture capture is not exposed. Capture is intentionally separate from profiler measurement; run visual and timing passes independently. status reports every accepted compositor cycle, output path, failure, and dropped-pair/backpressure count.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["capabilities","status","start","cancel"],"default":"status"},"source":{"type":"string","enum":["hmd_stereo","framed_stereo","framed_eye"]},"label":{"type":"string"},"frameCount":{"type":"integer","minimum":1,"maximum":240},"frameInterval":{"type":"integer","minimum":1,"maximum":120},"previewFramesPerSecond":{"type":"integer","minimum":1,"maximum":60},"format":{"type":"string","enum":["png","bmp"],"default":"png"},"saveCombined":{"type":"boolean"},"saveSeparateEyes":{"type":"boolean"},"writePreviewVideo":{"type":"boolean"},"outputPath":{"type":"string"}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.capture",
 			descriptor,

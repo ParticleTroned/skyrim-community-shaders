@@ -2425,6 +2425,7 @@ json ScreenshotFeature::BuildCaptureSessionManifestLocked()
 		{ "requestedFrameCount", status.request.frameCount },
 		{ "frameIntervalCompositorCycles", status.request.frameInterval },
 		{ "previewFramesPerSecond", status.request.previewFramesPerSecond },
+		{ "format", status.request.saveAsPng ? "png" : "bmp" },
 		{ "saveCombined", status.request.saveCombined },
 		{ "saveSeparateEyes", status.request.saveSeparateEyes },
 		{ "previewVideoRequested", status.request.writePreviewVideo },
@@ -2616,6 +2617,7 @@ bool ScreenshotFeature::StartCaptureSession(
 
 	auto options = SnapshotCaptureOptions();
 	options.copyToClipboard = false;
+	options.saveAsPng = request.saveAsPng;
 	if (request.source == VRCaptureSource::FramedStereo && !SnapshotStereoGeometry(options)) {
 		a_error = "combined-eye projection data is unavailable";
 		return false;

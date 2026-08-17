@@ -50,6 +50,7 @@ struct ScreenshotFeature : public Feature
 		uint32_t previewFramesPerSecond = 15;
 		bool saveCombined = true;
 		bool saveSeparateEyes = true;
+		bool saveAsPng = true;
 		bool writePreviewVideo = true;
 		std::string outputPath;
 	};

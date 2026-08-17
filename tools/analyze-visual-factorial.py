@@ -24,6 +24,29 @@ def stats(values: np.ndarray) -> dict[str, float]:
     }
 
 
+def spatial_grid(values: np.ndarray, stable: np.ndarray) -> dict[str, object]:
+    rows, columns = 3, 3
+    height, width = values.shape
+    result: dict[str, object] = {}
+    for row in range(rows):
+        y0, y1 = height * row // rows, height * (row + 1) // rows
+        for column in range(columns):
+            x0, x1 = width * column // columns, width * (column + 1) // columns
+            region_values = values[y0:y1, x0:x1]
+            region_stable = stable[y0:y1, x0:x1]
+            key = f"row{row + 1}-column{column + 1}"
+            result[key] = {
+                "stablePixelFraction": float(np.mean(region_stable)),
+                "stableAbsoluteLuma": stats(np.abs(region_values[region_stable]))
+                if np.any(region_stable)
+                else None,
+                "stableMeanSignedLuma": float(np.mean(region_values[region_stable]))
+                if np.any(region_stable)
+                else None,
+            }
+    return result
+
+
 def load_phase(directory: Path, stride: int) -> tuple[np.ndarray, np.ndarray]:
     frames = sorted(directory.glob("frame_*_stereo.bmp"))
     if not frames:
@@ -128,6 +151,7 @@ def main() -> None:
                 "absoluteLuma": stats(absolute),
                 "meanSignedLuma": float(np.mean(values)),
                 "stableRegionAbsoluteLuma": stats(absolute[stable]) if np.any(stable) else None,
+                "stableSpatialGrid": spatial_grid(values, stable),
             }
         result["eyes"][eye] = {
             "enabledReturnDriftAbsolute": stats(drift),

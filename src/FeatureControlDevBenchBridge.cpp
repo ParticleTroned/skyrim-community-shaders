@@ -549,6 +549,33 @@ namespace
 		};
 	}
 
+	json BuildQualityParameterRecord()
+	{
+		auto record = BuildQualityProfileRecord("ScreenSpaceShadows");
+		record["control"] = "qualityParameters";
+		record["valueType"] = "object";
+		record.erase("allowedValues");
+		record.erase("profileDefinitions");
+		record["parameterDefinitions"] = {
+			{ "VRBaseSamplesAtReference", {
+				{ "valueType", "number" },
+				{ "minimum", 16.0f },
+				{ "maximum", 96.0f },
+				{ "effect", "changes the compiled per-eye ray-march sample count" },
+			} },
+			{ "VRCullDistance", {
+				{ "valueType", "number" },
+				{ "minimum", 0.0f },
+				{ "maximum", 20480.0f },
+				{ "zeroMeaning", "distance culling disabled" },
+				{ "effect", "fades SSS over the final 20 percent, clamped to a 200-1200 unit fade band" },
+			} },
+		};
+		record["requestedValue"] = record["effectiveParameters"];
+		record["effectiveValue"] = record["effectiveParameters"];
+		return record;
+	}
+
 	json BuildQualityProfileControlList()
 	{
 		return json::array({
@@ -570,6 +597,7 @@ namespace
 			controls.push_back(std::move(control));
 		for (auto& control : BuildQualityProfileControlList())
 			controls.push_back(std::move(control));
+		controls.push_back(BuildQualityParameterRecord());
 		return controls;
 	}
 
@@ -589,6 +617,8 @@ namespace
 		}
 		if (a_control == "qualityProfile" && SupportsQualityProfiles(a_feature))
 			return BuildQualityProfileRecord(a_feature);
+		if (a_feature == "ScreenSpaceShadows" && a_control == "qualityParameters")
+			return BuildQualityParameterRecord();
 		return {
 			{ "error", "unknown control" },
 			{ "feature", a_feature },
@@ -617,7 +647,7 @@ namespace
 			if (!feature->loaded || !feature->SupportsPerformanceCostMeasurement())
 				return { { "error", "performance control is unavailable" }, { "control", BuildPerformanceRecord(*feature) } };
 			if (g_qualityProfileSnapshots.contains(a_feature))
-				return { { "error", "restore the outstanding qualityProfile snapshot before changing performanceActive" }, { "control", BuildPerformanceRecord(*feature) } };
+				return { { "error", "restore the outstanding quality snapshot before changing performanceActive" }, { "control", BuildPerformanceRecord(*feature) } };
 
 			bool restoredSnapshot = false;
 			if (!a_value) {
@@ -693,15 +723,82 @@ namespace
 		};
 	}
 
-	json RestoreQualityProfileSnapshot(const std::string& a_feature)
+	json SetQualityParameterControl(const std::string& a_feature, const json& a_parameters)
 	{
+		if (a_feature != "ScreenSpaceShadows")
+			return FindControl(a_feature, "qualityParameters");
+		auto* feature = FindFeatureByShortName(a_feature);
+		if (!feature || !feature->loaded)
+			return { { "error", "quality parameter control is unavailable" }, { "control", BuildQualityParameterRecord() } };
+		if (g_performanceSnapshots.contains(a_feature))
+			return { { "error", "restore the outstanding performanceActive snapshot before changing qualityParameters" }, { "control", BuildQualityParameterRecord() } };
+		if (a_parameters.empty())
+			return { { "error", "qualityParameters requires at least one parameter" }, { "control", BuildQualityParameterRecord() } };
+
+		for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter) {
+			if (parameter.key() != "VRBaseSamplesAtReference" && parameter.key() != "VRCullDistance") {
+				return {
+					{ "error", "unknown Screen Space Shadows quality parameter" },
+					{ "parameter", parameter.key() },
+					{ "control", BuildQualityParameterRecord() },
+				};
+			}
+			if (!parameter.value().is_number()) {
+				return {
+					{ "error", "Screen Space Shadows quality parameters require numeric values" },
+					{ "parameter", parameter.key() },
+					{ "control", BuildQualityParameterRecord() },
+				};
+			}
+			const double value = parameter.value().get<double>();
+			const double minimum = parameter.key() == "VRBaseSamplesAtReference" ? 16.0 : 0.0;
+			const double maximum = parameter.key() == "VRBaseSamplesAtReference" ? 96.0 : 20480.0;
+			if (!std::isfinite(value) || value < minimum || value > maximum) {
+				return {
+					{ "error", "Screen Space Shadows quality parameter is outside its allowed range" },
+					{ "parameter", parameter.key() },
+					{ "requestedValue", parameter.value() },
+					{ "minimum", minimum },
+					{ "maximum", maximum },
+					{ "control", BuildQualityParameterRecord() },
+				};
+			}
+		}
+
+		const bool inserted = !g_qualityProfileSnapshots.contains(a_feature);
+		if (inserted)
+			g_qualityProfileSnapshots.emplace(a_feature, CaptureQualityProfileState(a_feature));
+		try {
+			auto state = globals::features::screenSpaceShadows.CapturePerformanceCostMeasurementState();
+			for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter)
+				state["Settings"][parameter.key()] = parameter.value();
+			globals::features::screenSpaceShadows.RestorePerformanceCostMeasurementState(state);
+		} catch (...) {
+			if (inserted)
+				g_qualityProfileSnapshots.erase(a_feature);
+			throw;
+		}
+
+		return {
+			{ "action", "set" },
+			{ "persisted", false },
+			{ "restoredSnapshot", false },
+			{ "control", BuildQualityParameterRecord() },
+		};
+	}
+
+	json RestoreQualityProfileSnapshot(const std::string& a_feature, const std::string& a_control)
+	{
+		auto buildControl = [&]() {
+			return a_control == "qualityParameters" ? BuildQualityParameterRecord() : BuildQualityProfileRecord(a_feature);
+		};
 		const auto snapshot = g_qualityProfileSnapshots.find(a_feature);
 		if (snapshot == g_qualityProfileSnapshots.end()) {
 			return {
 				{ "action", "restore" },
 				{ "persisted", false },
 				{ "restoredSnapshot", false },
-				{ "control", BuildQualityProfileRecord(a_feature) },
+				{ "control", buildControl() },
 			};
 		}
 		RestoreQualityProfileState(a_feature, snapshot->second);
@@ -710,7 +807,7 @@ namespace
 			{ "action", "restore" },
 			{ "persisted", false },
 			{ "restoredSnapshot", true },
-			{ "control", BuildQualityProfileRecord(a_feature) },
+			{ "control", buildControl() },
 		};
 	}
 
@@ -792,9 +889,9 @@ namespace
 		if (action == "get")
 			return RunOnMainThread([feature, control]() { return json{ { "action", "get" }, { "control", FindControl(feature, control) } }; });
 		if (action == "restore") {
-			if (control != "qualityProfile")
-				return { { "error", "restore currently supports qualityProfile; performanceActive restores through set value true" } };
-			return RunOnMainThread([feature]() { return RestoreQualityProfileSnapshot(feature); });
+			if (control != "qualityProfile" && control != "qualityParameters")
+				return { { "error", "restore supports qualityProfile and qualityParameters; performanceActive restores through set value true" } };
+			return RunOnMainThread([feature, control]() { return RestoreQualityProfileSnapshot(feature, control); });
 		}
 
 		const auto value = a_args.find("value");
@@ -804,6 +901,14 @@ namespace
 			const auto requestedValue = value->get<std::string>();
 			return RunOnMainThread([feature, requestedValue]() {
 				return SetQualityProfileControl(feature, requestedValue);
+			});
+		}
+		if (control == "qualityParameters") {
+			if (value == a_args.end() || !value->is_object())
+				return { { "error", "setting qualityParameters requires an object value" } };
+			const auto requestedValue = *value;
+			return RunOnMainThread([feature, requestedValue]() {
+				return SetQualityParameterControl(feature, requestedValue);
 			});
 		}
 		if (value == a_args.end() || !value->is_boolean())
@@ -897,7 +1002,7 @@ namespace FeatureControlDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. Skylighting, Screen Space Shadows, and Wetterness expose reversible Performance/Balanced/Quality profile clusters, including readiness, history reset, resource, and runtime shader-recompile metadata. restore reverts one held qualityProfile snapshot; restoreAll is the session safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]}]}},"required":["action"]}})";
+			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. Skylighting, Screen Space Shadows, and Wetterness expose reversible Performance/Balanced/Quality profile clusters, including readiness, history reset, resource, and runtime shader-recompile metadata. Screen Space Shadows additionally exposes bounded qualityParameters so sample count and cull range can be calibrated independently. restore reverts one held quality snapshot; restoreAll is the session safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]},{"type":"object","properties":{"VRBaseSamplesAtReference":{"type":"number","minimum":16,"maximum":96},"VRCullDistance":{"type":"number","minimum":0,"maximum":20480}},"additionalProperties":false,"minProperties":1}]}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.controls",
 			descriptor,

@@ -114,6 +114,14 @@ Records expose the profile definitions and effective parameter readback. Mutabil
 
 The first runtime proof switched all three features across profiles and restored the original Quality state with zero outstanding snapshots. At the null-HMD render size, Screen Space Shadows produced cached per-eye variants with 12, 23, and 33 compiled samples for Performance, Balanced, and Quality respectively.
 
+Screen Space Shadows also exposes a bounded `qualityParameters` object for attributable calibration. Fields are optional but at least one is required; unknown, non-numeric, non-finite, or out-of-range values are rejected rather than silently normalized:
+
+```json
+{"action":"set","feature":"ScreenSpaceShadows","control":"qualityParameters","value":{"VRBaseSamplesAtReference":30,"VRCullDistance":0}}
+```
+
+`VRBaseSamplesAtReference` accepts `16`–`96`; `VRCullDistance` accepts `0`–`20480`, with zero disabling distance culling. The control shares the feature's original-state snapshot with `qualityProfile`, so a calibration may alternate named profiles and partial parameter overrides before restoring either control. Effective readback includes the requested settings and compiled left/right sample counts. This permits a range-only comparison at a fixed sample count and a sample-only comparison at a fixed range without creating artificial preset names. It retains the same `live-recompile-settle` and runtime shader-cache disclosures as the profile control.
+
 ## Promotion toward live transitions
 
 Converting a control to `live` requires feature-specific proof that enable, disable, and repeated A/B/A transitions:

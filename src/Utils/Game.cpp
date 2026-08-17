@@ -1,6 +1,7 @@
 #include "Game.h"
 
 #include "State.h"
+#include "VRDynamicResolutionPolicy.h"
 
 namespace Util
 {
@@ -142,9 +143,16 @@ namespace Util
 		if (runtimeData.dynamicResolutionLock && !a_ignoreLock)
 			return a_size;
 
-		return float2(
+		float2 dynamicSize(
 			a_size.x * runtimeData.dynamicResolutionWidthRatio,
 			a_size.y * runtimeData.dynamicResolutionHeightRatio);
+		if (REL::Module::IsVR()) {
+			// Remove only one-ULP reconstruction noise around an integer VR pixel
+			// contract. Preserve genuine fractional Skyrim-owned dynamic ratios.
+			dynamicSize.x = VRDynamicResolutionPolicy::SnapNearIntegerPixelExtent(dynamicSize.x);
+			dynamicSize.y = VRDynamicResolutionPolicy::SnapNearIntegerPixelExtent(dynamicSize.y);
+		}
+		return dynamicSize;
 	}
 
 	DispatchCount GetScreenDispatchCount(bool a_dynamic, bool a_ignoreDynamicResolutionLock)

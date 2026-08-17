@@ -1406,6 +1406,11 @@ if(BUILD_CONTROLLER_TESTS)
         OverlayPolicy
         tests/overlay_policy_test.cpp
     )
+    add_controller_test(
+        vr_dynamic_resolution_policy_test
+        VRDynamicResolutionPolicy
+        tests/vr_dynamic_resolution_policy_test.cpp
+    )
 
     add_custom_target(
         controller_tests
@@ -1415,6 +1420,7 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
+            vr_dynamic_resolution_policy_test
     )
 endif()
 

@@ -29,6 +29,7 @@
 #include "Utils/NormalizedCoordinates.h"
 #include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
+#include "Utils/VRDynamicResolutionPolicy.h"
 #include "VR.h"
 #include <Psapi.h>
 #include <Windows.h>
@@ -140,6 +141,41 @@ namespace
 			static_cast<float>(
 				Upscaling::ScaleVRRenderDimension(displayHeight, a_resolutionScale))
 		};
+	}
+
+	std::optional<VRDynamicResolutionPolicy::StereoContract> ResolveVRDynamicResolutionPixelContract(
+		const Upscaling::RuntimeResolutionPlan& a_plan,
+		const float2& a_currentDisplaySize)
+	{
+		if (a_plan.owner != Upscaling::ResolutionOwner::VendorDynamicResolution ||
+			!a_plan.vendorMethod) {
+			return std::nullopt;
+		}
+
+		std::uint32_t displayWidth = 0;
+		std::uint32_t displayHeight = 0;
+		std::uint32_t renderWidth = 0;
+		std::uint32_t renderHeight = 0;
+		std::uint32_t currentDisplayWidth = 0;
+		std::uint32_t currentDisplayHeight = 0;
+		if (!VRDynamicResolutionPolicy::TryResolvePixelExtent(a_plan.finalOutputSize.x, displayWidth) ||
+			!VRDynamicResolutionPolicy::TryResolvePixelExtent(a_plan.finalOutputSize.y, displayHeight) ||
+			!VRDynamicResolutionPolicy::TryResolvePixelExtent(a_plan.engineRenderSize.x, renderWidth) ||
+			!VRDynamicResolutionPolicy::TryResolvePixelExtent(a_plan.engineRenderSize.y, renderHeight) ||
+			!VRDynamicResolutionPolicy::TryResolvePixelExtent(a_currentDisplaySize.x, currentDisplayWidth) ||
+			!VRDynamicResolutionPolicy::TryResolvePixelExtent(a_currentDisplaySize.y, currentDisplayHeight) ||
+			displayWidth != currentDisplayWidth ||
+			displayHeight != currentDisplayHeight) {
+			return std::nullopt;
+		}
+
+		VRDynamicResolutionPolicy::StereoContract contract{
+			.horizontal = { displayWidth, renderWidth },
+			.vertical = { displayHeight, renderHeight },
+		};
+		if (!contract.IsValid())
+			return std::nullopt;
+		return contract;
 	}
 
 	constexpr float kDLSSRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
@@ -51089,11 +51125,47 @@ void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left
 
 	const bool vrNativeLayoutSubmitProtectedTarget = globals::game::isVR && IsCurrentRenderTargetVRNativeLayoutSubmitProtectedTexture();
 	if (!runtimeData.dynamicResolutionLock && !vrNativeLayoutSubmitProtectedTarget) {
-		a_left = static_cast<int>(a_left * runtimeData.dynamicResolutionWidthRatio);
-		a_right = static_cast<int>(a_right * runtimeData.dynamicResolutionWidthRatio);
+		bool usedIntegerVRContract = false;
+		if (globals::game::isVR && globals::state) {
+			const auto& resolutionPlan = globals::features::upscaling.GetRuntimeResolutionPlan();
+			if (const auto pixelContract = ResolveVRDynamicResolutionPixelContract(
+					resolutionPlan,
+					globals::state->screenSize);
+				pixelContract &&
+				VRDynamicResolutionPolicy::MatchesPublishedRatio(
+					runtimeData.dynamicResolutionWidthRatio,
+					pixelContract->horizontal) &&
+				VRDynamicResolutionPolicy::MatchesPublishedRatio(
+					runtimeData.dynamicResolutionHeightRatio,
+					pixelContract->vertical)) {
+				a_left = VRDynamicResolutionPolicy::MapBoundaryTruncated(
+					a_left,
+					pixelContract->horizontal);
+				a_right = VRDynamicResolutionPolicy::MapBoundaryTruncated(
+					a_right,
+					pixelContract->horizontal);
+				a_top = VRDynamicResolutionPolicy::MapBoundaryTruncated(
+					a_top,
+					pixelContract->vertical);
+				a_bottom = VRDynamicResolutionPolicy::MapBoundaryTruncated(
+					a_bottom,
+					pixelContract->vertical);
+				usedIntegerVRContract = true;
+			}
+		}
 
-		a_top = static_cast<int>(a_top * runtimeData.dynamicResolutionHeightRatio);
-		a_bottom = static_cast<int>(a_bottom * runtimeData.dynamicResolutionHeightRatio);
+		if (!usedIntegerVRContract) {
+			auto scaleBoundary = [&](int a_boundary, float a_ratio) {
+				float scaled = static_cast<float>(a_boundary) * a_ratio;
+				if (globals::game::isVR)
+					scaled = VRDynamicResolutionPolicy::SnapNearIntegerPixelExtent(scaled);
+				return static_cast<int>(scaled);
+			};
+			a_left = scaleBoundary(a_left, runtimeData.dynamicResolutionWidthRatio);
+			a_right = scaleBoundary(a_right, runtimeData.dynamicResolutionWidthRatio);
+			a_top = scaleBoundary(a_top, runtimeData.dynamicResolutionHeightRatio);
+			a_bottom = scaleBoundary(a_bottom, runtimeData.dynamicResolutionHeightRatio);
+		}
 	}
 
 	func(This, a_left, a_top, a_right, a_bottom);

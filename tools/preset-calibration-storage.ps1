@@ -1,21 +1,5 @@
 $presetCalibrationStorageRepositoryRoot = Split-Path -Parent $PSScriptRoot
 
-function Assert-PresetCalibrationRootSafe {
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Purpose)
-
-    $resolved = [System.IO.Path]::GetFullPath($Root.Trim())
-    $unsafeRoots = @(
-        [System.IO.Path]::GetFullPath('D:\Games\Skyrim\MadGod2'),
-        [System.IO.Path]::GetFullPath('D:\SteamLibrary\steamapps\common\SkyrimVR')
-    )
-    foreach ($unsafeRoot in $unsafeRoots) {
-        if ($resolved.StartsWith($unsafeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "$Purpose must be outside MO2 and SkyrimVR: $resolved"
-        }
-    }
-    $resolved
-}
-
 function Get-PresetCalibrationArchiveRoot {
     param([string]$ConfiguredRoot)
 
@@ -29,7 +13,13 @@ function Get-PresetCalibrationArchiveRoot {
     if ([string]::IsNullOrWhiteSpace($archiveRoot)) {
         throw "No calibration archive is configured. Set repository-local git config csx.calibrationArchiveRoot or CSX_CALIBRATION_ARCHIVE_ROOT. Repository lookup: '$presetCalibrationStorageRepositoryRoot'."
     }
-    Assert-PresetCalibrationRootSafe -Root $archiveRoot -Purpose 'Calibration archive'
+    $resolved = [System.IO.Path]::GetFullPath($archiveRoot.Trim())
+    foreach ($unsafeRoot in @('D:\Games\Skyrim\MadGod2', 'D:\SteamLibrary\steamapps\common\SkyrimVR')) {
+        if ($resolved.StartsWith([System.IO.Path]::GetFullPath($unsafeRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Calibration archive must be outside MO2 and SkyrimVR: $resolved"
+        }
+    }
+    $resolved
 }
 
 Set-Item -Path Function:\Get-PresetCalibrationArchiveRoot -Value ((Get-Item Function:\Get-PresetCalibrationArchiveRoot).ScriptBlock.GetNewClosure())
@@ -47,7 +37,13 @@ function Get-PresetCalibrationStagingRoot {
     if ([string]::IsNullOrWhiteSpace($stagingRoot)) {
         throw "No calibration staging root is configured. Set repository-local git config csx.calibrationStagingRoot or CSX_CALIBRATION_STAGING_ROOT. Repository lookup: '$presetCalibrationStorageRepositoryRoot'."
     }
-    Assert-PresetCalibrationRootSafe -Root $stagingRoot -Purpose 'Calibration staging root'
+    $resolved = [System.IO.Path]::GetFullPath($stagingRoot.Trim())
+    foreach ($unsafeRoot in @('D:\Games\Skyrim\MadGod2', 'D:\SteamLibrary\steamapps\common\SkyrimVR')) {
+        if ($resolved.StartsWith([System.IO.Path]::GetFullPath($unsafeRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Calibration staging root must be outside MO2 and SkyrimVR: $resolved"
+        }
+    }
+    $resolved
 }
 
 Set-Item -Path Function:\Get-PresetCalibrationStagingRoot -Value ((Get-Item Function:\Get-PresetCalibrationStagingRoot).ScriptBlock.GetNewClosure())

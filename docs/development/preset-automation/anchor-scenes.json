@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "validatedAt": "2026-08-17",
+  "runtimeLane": "SVR-OVR-NULL",
+  "captureRoot": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\CSX Baselines\\20260817-anchor-scout",
+  "recipeDefaults": {
+    "postCocWaitMs": 12000,
+    "postTimeWaitMs": 1500,
+    "postWeatherWaitMs": 3000,
+    "capture": {
+      "source": "hmd_stereo",
+      "frameCount": 1,
+      "frameIntervalCompositorCycles": 120,
+      "saveSeparateEyes": true,
+      "saveCombined": true
+    }
+  },
+  "weathers": {
+    "clear": { "editorId": "SkyrimClear", "formId": "0x0000081A" },
+    "fog": { "editorId": "SkyrimFog", "formId": "0x000C821E" },
+    "overcastRain": { "editorId": "SkyrimOvercastRain", "formId": "0x000C821F" },
+    "stormRain": { "editorId": "SkyrimStormRain", "formId": "0x000C8220" },
+    "cloudy": { "editorId": "SkyrimCloudyFF", "formId": "0x0010A23F" },
+    "cloudySnow": { "editorId": "SkyrimCloudySN", "formId": "0x0010A245" }
+  },
+  "anchors": [
+    {
+      "id": "interior-dragonsreach-midday",
+      "coverage": ["bright-interior", "mixed-materials", "volumetric-light", "deep-shadow"],
+      "commands": ["coc WhiterunDragonsreach", "set gamehour to 12.0"],
+      "expected": {
+        "cell": { "editorId": "WhiterunDragonsreach", "formId": "0x000165A3" },
+        "worldspace": null,
+        "position": [-447.9999694824219, -127.99999237060547, -318.0],
+        "gameHourTarget": 12.0,
+        "camera": { "x": -447.9999694824219, "y": -127.99999237060547, "z": -284.8748779296875, "pitch": 0.0, "yaw": 0.016795607283711433, "freeCam": false }
+      },
+      "proofCapture": "CS_Capture_2026-08-17_12-13-59_571_dragonsreach-midday_0004"
+    },
+    {
+      "id": "interior-bleak-falls-night",
+      "coverage": ["dark-interior", "firelight", "specular", "deep-shadow"],
+      "commands": ["coc BleakFallsBarrow02", "set gamehour to 0.5"],
+      "expected": {
+        "cell": { "editorId": "BleakFallsBarrow02", "formId": "0x000371DD" },
+        "worldspace": null,
+        "position": [6082.85546875, 2579.11572265625, -888.36572265625],
+        "gameHourTarget": 0.5,
+        "camera": { "x": 6082.85546875, "y": 2579.11572265625, "z": -855.2406005859375, "pitch": 0.0, "yaw": -1.6507827043533325, "freeCam": false }
+      },
+      "proofCapture": "CS_Capture_2026-08-17_12-20-15_971_bleak-falls-sanctum-night_0001"
+    },
+    {
+      "id": "exterior-guardian-stones",
+      "coverage": ["foliage", "distant-terrain", "sky", "stone", "direct-shadow", "weather-matrix"],
+      "entryCommand": "coc GuardianStones",
+      "expected": {
+        "cell": { "editorId": "GuardianStones", "formId": "0x00009B91" },
+        "worldspace": { "editorId": "Tamriel", "formId": "0x0000003C" },
+        "position": [3266.89599609375, -59044.23828125, 1442.030517578125],
+        "camera": { "x": 3266.89599609375, "y": -59044.23828125, "z": 1475.1556396484375, "pitch": 0.0, "yaw": -1.5500009059906006, "freeCam": false }
+      },
+      "variants": [
+        { "id": "clear-day", "time": 14.0, "weather": "clear", "proofCapture": "CS_Capture_2026-08-17_12-23-12_869_guardian-stones-clear-1400_0002" },
+        { "id": "storm-day", "time": 14.0, "weather": "stormRain", "proofCapture": "CS_Capture_2026-08-17_12-23-55_104_guardian-stones-storm-rain-1400_0003" },
+        { "id": "clear-night", "time": 0.5, "weather": "clear", "proofCapture": "CS_Capture_2026-08-17_12-24-28_187_guardian-stones-clear-night-0030_0004" },
+        { "id": "fog-dawn", "time": 7.0, "weather": "fog", "proofCapture": "CS_Capture_2026-08-17_12-24-50_131_guardian-stones-fog-dawn-0700_0005" }
+      ]
+    },
+    {
+      "id": "exterior-windhelm-snow-midday",
+      "coverage": ["snow", "high-albedo", "dark-stone", "metal", "firelight", "direct-shadow"],
+      "commands": ["coc WindhelmExterior01", "set gamehour to 12.0"],
+      "expected": {
+        "cell": { "editorId": "WindhelmExterior01", "formId": "0x0000B4BB" },
+        "worldspace": { "editorId": "Tamriel", "formId": "0x0000003C" },
+        "position": [135038.59375, 33143.40625, -12565.9931640625],
+        "gameHourTarget": 12.0,
+        "weather": "cloudySnow",
+        "camera": { "x": 135038.59375, "y": 33143.40625, "z": -12532.8681640625, "pitch": 0.0, "yaw": -0.045020539313554764, "freeCam": false }
+      },
+      "proofCapture": "CS_Capture_2026-08-17_12-25-29_941_windhelm-cloudy-snow-midday_0006"
+    }
+  ],
+  "hmdControl": {
+    "active": true,
+    "arbitraryPoseControl": false,
+    "entryPoseReproducible": true,
+    "freecamResult": "crash",
+    "playerYawChangesSubmittedView": false,
+    "nextCandidate": "synthetic tracked-device/controller driver plus explicit SteamVR action binding"
+  }
+}

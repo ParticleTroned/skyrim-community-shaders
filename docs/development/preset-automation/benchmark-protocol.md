@@ -68,6 +68,8 @@ The `SVR-OVR-NULL` proof of concept succeeds only when all of the following are 
 
 ## Controlled run
 
+Use the validated recipes and live readback tolerances in [`anchor-scenes.md`](./anchor-scenes.md) and [`anchor-scenes.json`](./anchor-scenes.json). In the current null-HMD stack, cell-entry poses are reproducible but arbitrary HMD steering is not: DevBench free-camera activation crashes Skyrim VR, and changing player yaw does not change the submitted-eye view. A run must therefore use the declared entry pose until synthetic tracked-device input or a VR-safe camera control is validated.
+
 Before each candidate:
 
 1. Record the repository commit, built DLL digest/version, dependency snapshot when relevant, driver, runtime lane, HMD geometry, game configuration, mod list/profile, and complete CSX settings digest.

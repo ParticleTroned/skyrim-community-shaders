@@ -47,6 +47,7 @@ The response advertises the access contract explicitly:
   "frameCount": 30,
   "frameInterval": 6,
   "previewFramesPerSecond": 15,
+  "format": "png",
   "saveCombined": true,
   "saveSeparateEyes": true,
   "writePreviewVideo": true
@@ -61,7 +62,7 @@ The response advertises the access contract explicitly:
 {"action":"cancel"}
 ```
 
-Allowed sources are `hmd_stereo`, `framed_stereo`, and `framed_eye`. Numeric values outside the advertised limits are rejected rather than silently wrapped or clamped by the DevBench boundary.
+Allowed sources are `hmd_stereo`, `framed_stereo`, and `framed_eye`. Allowed lossless formats are `png` and `bmp`; PNG is the compact archival default, while BMP avoids PNG compression CPU cost at the expense of much larger files. Numeric values outside the advertised limits and unknown formats are rejected rather than silently wrapped or clamped by the DevBench boundary.
 
 Status and the manifest report every accepted frame index and compositor-cycle token, all output paths, encoding results, incomplete stereo-pair drops, and queue-backpressure drops. A left/right pair is accepted only when both submissions share the same accepted OpenVR compositor-cycle token. A new cycle discards an incomplete old pair.
 
@@ -76,6 +77,8 @@ Do visual and timing runs separately:
 3. Repeat the same candidate with `communityshaders.capture` for visual evidence.
 4. Retain the manifest with the images. Treat any backpressure or incomplete-pair count as evidence about the capture run, not as a missing game frame.
 5. Compare lossless combined images for the ordinary view, left/right images for stereo-specific defects, and the AVI only for temporal inspection.
+
+Calibrate the format and interval on the actual output volume before a campaign. A zero-drop envelope measured on the current AMD/SteamVR-null lane is recorded in [sequence capture calibration](preset-automation/sequence-capture-calibration.md); it is a lane-specific starting point, not a portable throughput guarantee.
 
 The profiler normally resolves GPU data several frames late. Compare `frame_count` with `capturedFrameCount`, prefer `resolvedTotalMs` for the nesting-correct GPU total, and use rolling `avgMs`, `p95Ms`, and `p99Ms` rather than a single current sample.
 

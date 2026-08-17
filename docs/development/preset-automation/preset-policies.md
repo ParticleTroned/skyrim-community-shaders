@@ -120,6 +120,7 @@ This is the first policy synthesis, not a release qualification. “Retain” me
 | Grass Collision | Off | On | On | Retain inherited gradient | Low; static null pose did not exercise collision. Requires reproducible controller/player/grass movement |
 | SSGI | Retain inherited Performance values | Retain inherited Balanced values | Retain inherited Quality values | Unqualified inheritance only | Low; inactive in the current runtime baseline and no response curve yet |
 | Terrain Blending | 725 cull distance | 1,024 | 1,024 | Retain inherited gradient | Low-medium; continuous pass floor measured near 0.0205 ms, but distance response and cutoff visibility are open |
+| Volumetric Shadows | Enabled | Enabled | Enabled | Keep common; no on/off tier split | Medium on AMD `SVR-OVR-NULL`; six named passes cost ~0.0384 ms continuously, while fog/day visual effects are subtle and drift-limited. Shared cross-material directional-shadow semantics outweigh the small saving; moving/physical-HMD and runtime portability remain open |
 | Upscaling quality | Intent corresponding to inherited mode 4 | Intent corresponding to inherited mode 3 | Intent corresponding to inherited mode 2 | Retain tier intent; resolve provider by capability | Low for current visual/performance quality because no provider curve was run; high that vendor selection belongs at this boundary |
 
 ### Common inherited baseline
@@ -135,7 +136,7 @@ The common baseline should be reviewed cluster-by-cluster. A common setting may 
 
 ### Provisional tier reading
 
-- **Performance:** preserve IBL, Wetness, Skylighting, SSS, and the common correctness baseline; buy headroom through cheaper Skylighting/SSS/Wetness parameters, inherited upscaling intent, shorter terrain range, and disabled Grass Collision. This is not an “effects off” tier.
+- **Performance:** preserve IBL, Wetness, Skylighting, SSS, Volumetric Shadows, and the common correctness baseline; buy headroom through cheaper Skylighting/SSS/Wetness parameters, inherited upscaling intent, shorter terrain range, and disabled Grass Collision. This is not an “effects off” tier.
 - **Balanced:** use the measured centre profiles for Skylighting and SSS, the inherited Wetness centre profile, enabled Grass Collision, the middle upscaling intent, and otherwise the common baseline. This is the current recommended development reference.
 - **Quality:** use the high profiles where they represent fuller range/coverage, but retain hard constraints. Skylighting's higher cadence is a real cost; SSS unlimited range now has direct factor evidence above the interior noise floor but still needs known-distance and moving-view qualification; experimental/inactive features do not become enabled merely because budget is higher.
 

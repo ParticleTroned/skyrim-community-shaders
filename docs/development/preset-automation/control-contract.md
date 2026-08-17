@@ -52,7 +52,7 @@ Capability discovery must expose control metadata before mutation. At minimum, e
   "mutability": "live",
   "settle": {
     "kind": "frames",
-    "minimum": 2,
+    "minimumFrames": 2,
     "requiresMenuClose": false,
     "resetsHistory": false
   },
@@ -83,6 +83,15 @@ The Release+DevBench build now exposes those first controls through `communitysh
 ```
 
 Every response distinguishes the setting's effective value from `runtimeActive`, which may additionally depend on scene state such as an IBL interior exclusion or the presence of directional shadows. Package-level `packageEnabled` records are read-only and report `restart`; they must not be confused with the live inner controls.
+
+The timing and visual ablation runners accept an explicit control name rather
+than assuming `performanceActive`. They now consume both settle-contract shapes:
+package measurement controls expose readiness plus per-direction seconds, while
+inner live switches expose `minimumFrames`. For the latter, the runners verify
+the requested effective Boolean after the declared frame count and always
+restore the exact starting Boolean even though these controls do not use the
+quality/performance snapshot registry. Optional expected cell, worldspace,
+weather, hour, and yaw values turn scene readback mismatches into rejected runs.
 
 Commit `9218ec2e8` extends the same tool with `performanceActive` for every feature that implements CSX's production Performance Tuning measurement contract. This is a reversible ablation surface, not arbitrary settings mutation:
 

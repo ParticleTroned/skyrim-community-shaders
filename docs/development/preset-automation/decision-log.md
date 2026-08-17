@@ -149,3 +149,21 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Consequences: generated preset documentation must distinguish requested 5,000-unit Performance fade from the 7,002.801-unit runtime minimum until the preset definition is normalized
 - Revalidation triggers: named Wetness timing, known-depth material target, moving/physical HMD, runtime lane, GPU vendor, weather/material code change, or normalization of the Performance fade request
 - Supersedes: narrows the uncertainty in `PA-2026-006` without replacing its IBL-coupling rule
+
+### `PA-2026-008` — Keep Volumetric Shadows enabled across tiers
+
+- Date: 2026-08-17
+- Status: proposed for provisional preset generation
+- Snapshot: live inner-control timing plus fog/dawn and clear/day lossless A/B/A captures through DLL commit `ab359c4d9`
+- Question: Does disabling the shared Volumetric Shadows provider offer a defensible Performance-tier trade?
+- Scope: AMD `SVR-OVR-NULL`, fixed Guardian Stones pose, Info logging; vendor-neutral intent with portability open
+- Hard constraints: do not conflate this provider with the separate Volumetric Lighting feature; preserve lighting/particle/water/effect shadow semantics unless a saving dominates their loss; rejected backpressured captures are not evidence
+- Options considered: disable in Performance; disable in Performance and Balanced; keep enabled in all tiers
+- Evidence: [Volumetric Shadows live-control follow-up](./screening-20260817.md#volumetric-shadows-live-control-follow-up), including 120-frame timing phases and accepted separate-eye fog/day visual sequences
+- Objective vector and uncertainty: six named passes cost a repeatable ~0.0384 ms; stable visual differences are subtle (~0.28 luma fog, ~0.41 luma clear day) and signed direction is not stable across anchors; moving-view and portability remain unmeasured
+- Pareto result: the small saving does not dominate the provider's shared cross-material directional-shadow behavior, and there is no lower numeric quality state between enabled and disabled
+- Decision: keep the inner `Enabled` value true in Performance, Balanced, and Quality
+- Confidence: medium in this AMD null-HMD lane; low for physical-HMD and cross-runtime portability
+- Consequences: preset generation retains one common Boolean and does not create a vendor fork; future tuning should seek a quality gradient before reconsidering wholesale disable
+- Revalidation triggers: moving/physical HMD, SteamVR/OpenXR/VDXR/OCU lane, NVIDIA GPU, shadow-provider algorithm/resource change, or a new anchor with materially larger attributable response
+- Supersedes: none

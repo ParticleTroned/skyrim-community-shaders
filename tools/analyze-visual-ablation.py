@@ -88,10 +88,35 @@ def analyze_eye(
     }
 
 
+def write_diagnostic(
+    output_directory: Path,
+    eye: str,
+    before: np.ndarray,
+    off: np.ndarray,
+    returned: np.ndarray,
+    amplification: float,
+) -> None:
+    """Write enabled/off and amplified signed-difference panels at analysis resolution."""
+    output_directory.mkdir(parents=True, exist_ok=True)
+    reference = np.clip((before + returned) * 0.5, 0.0, 255.0)
+    signed = off - reference
+    signed_panel = np.clip(127.5 + signed * amplification, 0.0, 255.0)
+    absolute = np.max(np.abs(signed), axis=2)
+    absolute_panel = np.zeros_like(reference)
+    absolute_panel[..., 0] = np.clip(absolute * amplification, 0.0, 255.0)
+    absolute_panel[..., 1] = np.clip(absolute * amplification * 0.25, 0.0, 255.0)
+    panels = np.concatenate((reference, off, signed_panel, absolute_panel), axis=1)
+    Image.fromarray(np.rint(panels).astype(np.uint8), mode="RGB").save(
+        output_directory / f"{eye}-enabled_off_signed_abs.png"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--stride", type=int, default=4)
+    parser.add_argument("--diagnostic-output", type=Path)
+    parser.add_argument("--diagnostic-amplification", type=float, default=8.0)
     args = parser.parse_args()
 
     run = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -128,6 +153,15 @@ def main() -> None:
             medians["baseline-return"][:, section],
             tuple(temporal[name][:, section] for name in required),
         )
+        if args.diagnostic_output:
+            write_diagnostic(
+                args.diagnostic_output,
+                eye,
+                medians["baseline-before"][:, section],
+                medians["ablated"][:, section],
+                medians["baseline-return"][:, section],
+                args.diagnostic_amplification,
+            )
 
     print(json.dumps(result, indent=2))
 

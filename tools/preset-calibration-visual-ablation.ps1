@@ -3,6 +3,9 @@ param(
     [ValidatePattern('^[A-Za-z0-9_-]+$')]
     [string]$Feature,
 
+    [ValidatePattern('^[A-Za-z0-9_-]+$')]
+    [string]$Control = 'performanceActive',
+
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string]$RunId,
@@ -13,6 +16,12 @@ param(
     [ValidatePattern('^[A-Fa-f0-9]+$')]
     [string]$WeatherForm,
 
+    [string]$ExpectedCell,
+
+    [string]$ExpectedWorldspace,
+
+    [double]$ExpectedYaw,
+
     [ValidateRange(10, 240)]
     [int]$Frames = 60,
 
@@ -22,14 +31,28 @@ param(
     [ValidateRange(1, 60)]
     [int]$PreviewFramesPerSecond = 30,
 
+    [switch]$SaveSeparateEyes,
+
+    [switch]$LeaveHudVisible,
+
+    [ValidatePattern('^[A-Fa-f0-9]{7,40}$')]
+    [string]$SourceCommit = 'ab359c4d9',
+
+    [ValidatePattern('^[A-Fa-f0-9]{64}$')]
+    [string]$DllSha256 = '7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043',
+
     [string]$OutputRoot = 'D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-visual'
 )
 
 $ErrorActionPreference = 'Stop'
 $baseUri = 'http://127.0.0.1:8921/api/tool/'
-$controlName = 'performanceActive'
+$controlName = $Control
 $snapshotHeld = $false
+$mutationStarted = $false
+$baselineValue = $null
 $hasGameHour = $PSBoundParameters.ContainsKey('GameHour')
+$hasExpectedYaw = $PSBoundParameters.ContainsKey('ExpectedYaw')
+$hudToggled = $false
 $runFailure = $null
 
 function Invoke-DevBenchTool {
@@ -50,15 +73,36 @@ function Get-Control {
 }
 
 function Wait-ControlSettle {
-    param([Parameter(Mandatory = $true)][double]$MinimumSeconds)
+    param(
+        [Parameter(Mandatory = $true)][object]$TransitionControl,
+        [Parameter(Mandatory = $true)][bool]$ExpectedValue
+    )
 
+    $minimumSeconds = 0.0
+    if ($ExpectedValue -and $null -ne $TransitionControl.settle.whenEnabledSeconds) {
+        $minimumSeconds = [double]$TransitionControl.settle.whenEnabledSeconds
+    } elseif (-not $ExpectedValue -and $null -ne $TransitionControl.settle.whenDisabledSeconds) {
+        $minimumSeconds = [double]$TransitionControl.settle.whenDisabledSeconds
+    }
+    $minimumFrames = if ($null -ne $TransitionControl.settle.minimumFrames) {
+        [uint32]$TransitionControl.settle.minimumFrames
+    } else { [uint32]0 }
+    $startFrame = if ($minimumFrames -gt 0) {
+        [uint32](Invoke-DevBenchTool -Tool 'communityshaders.profiler' -Payload @{ action = 'status' }).status.frame_count
+    } else { [uint32]0 }
     if ($MinimumSeconds -gt 0) {
         Start-Sleep -Milliseconds ([int][Math]::Ceiling($MinimumSeconds * 1000.0))
     }
     $deadline = (Get-Date).AddSeconds([Math]::Max(10.0, $MinimumSeconds + 10.0))
     do {
         $control = Get-Control
-        if ($control.ready) {
+        $frameReady = $true
+        if ($minimumFrames -gt 0) {
+            $currentFrame = [uint32](Invoke-DevBenchTool -Tool 'communityshaders.profiler' -Payload @{ action = 'status' }).status.frame_count
+            $frameReady = ($currentFrame - $startFrame) -ge $minimumFrames
+        }
+        $reportedReady = if ($null -ne $control.ready) { [bool]$control.ready } else { $true }
+        if ($reportedReady -and $frameReady -and [bool]$control.effectiveValue -eq $ExpectedValue) {
             return $control
         }
         Start-Sleep -Milliseconds 100
@@ -81,10 +125,29 @@ function Set-AnchorState {
         } | Out-Null
         Start-Sleep -Seconds 3
     }
-    [ordered]@{
+    $anchor = [ordered]@{
         scene = Invoke-DevBenchTool -Tool 'inspect' -Payload @{ kind = 'scene' }
         camera = Invoke-DevBenchTool -Tool 'camera' -Payload @{ action = 'get' }
     }
+    if ($ExpectedCell -and $anchor.scene.cell.editorId -ne $ExpectedCell) {
+        throw "Anchor cell mismatch: expected $ExpectedCell, got $($anchor.scene.cell.editorId)"
+    }
+    if ($ExpectedWorldspace -and $anchor.scene.worldspace.editorId -ne $ExpectedWorldspace) {
+        throw "Anchor worldspace mismatch: expected $ExpectedWorldspace, got $($anchor.scene.worldspace.editorId)"
+    }
+    if ($WeatherForm) {
+        $expectedWeather = '0x{0:X8}' -f [Convert]::ToUInt32($WeatherForm, 16)
+        if ($anchor.scene.weather.formId -ne $expectedWeather) {
+            throw "Anchor weather mismatch: expected $expectedWeather, got $($anchor.scene.weather.formId)"
+        }
+    }
+    if ($hasGameHour -and [Math]::Abs([double]$anchor.scene.gameHour - $GameHour) -gt 0.10) {
+        throw "Anchor hour mismatch: expected $GameHour, got $($anchor.scene.gameHour)"
+    }
+    if ($hasExpectedYaw -and [Math]::Abs([double]$anchor.camera.camYaw - $ExpectedYaw) -gt 0.0001) {
+        throw "Anchor yaw mismatch: expected $ExpectedYaw, got $($anchor.camera.camYaw)"
+    }
+    $anchor
 }
 
 function Capture-Phase {
@@ -96,13 +159,13 @@ function Capture-Phase {
     $start = Invoke-DevBenchTool -Tool 'communityshaders.capture' -Payload @{
         action = 'start'
         source = 'hmd_stereo'
-        label = "$Feature-$Name"
+        label = "$Feature-$Control-$Name"
         frameCount = $Frames
         frameInterval = $FrameInterval
         previewFramesPerSecond = $PreviewFramesPerSecond
         format = 'bmp'
         saveCombined = $true
-        saveSeparateEyes = $false
+        saveSeparateEyes = [bool]$SaveSeparateEyes
         writePreviewVideo = $true
         outputPath = $captureRoot
     }
@@ -149,8 +212,8 @@ $record = [ordered]@{
     startedAt = [DateTime]::UtcNow.ToString('o')
     source = [ordered]@{
         branch = 'feat/preset-calibration-automation'
-        commit = '9218ec2e8'
-        dllSha256 = '03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D'
+        commit = $SourceCommit
+        dllSha256 = $DllSha256.ToUpperInvariant()
         build = 'VR Release; Info logging; Release+DevBench bridge'
     }
     requested = [ordered]@{
@@ -160,7 +223,7 @@ $record = [ordered]@{
         frameIntervalCompositorCycles = $FrameInterval
         previewFramesPerSecond = $PreviewFramesPerSecond
         format = 'bmp'
-        output = 'combined stereo'
+        output = if ($SaveSeparateEyes) { 'combined stereo and separate eyes' } else { 'combined stereo' }
     }
     baselineControl = $null
     transitions = [System.Collections.Generic.List[object]]::new()
@@ -171,11 +234,18 @@ $record = [ordered]@{
 try {
     $baseline = Get-Control
     $record.baselineControl = $baseline
+    $baselineValue = [bool]$baseline.effectiveValue
     if (-not $baseline.available -or -not $baseline.writable -or -not $baseline.effectiveValue) {
         throw "$Feature requires an available, active baseline"
     }
     if ($baseline.snapshotHeld) {
         throw "$Feature already has an outstanding automation snapshot"
+    }
+
+    if (-not $LeaveHudVisible) {
+        Invoke-DevBenchTool -Tool 'console' -Payload @{ action = 'exec'; command = 'tm' } | Out-Null
+        $hudToggled = $true
+        Start-Sleep -Milliseconds 500
     }
 
     $record.phases.Add((Capture-Phase -Name 'baseline-before'))
@@ -187,8 +257,9 @@ try {
         value = $false
     }
     $record.transitions.Add($off)
+    $mutationStarted = $true
     $snapshotHeld = [bool]$off.control.snapshotHeld
-    Wait-ControlSettle -MinimumSeconds ([double]$off.control.settle.whenDisabledSeconds) | Out-Null
+    Wait-ControlSettle -TransitionControl $off.control -ExpectedValue $false | Out-Null
     $record.phases.Add((Capture-Phase -Name 'ablated'))
 
     $restore = Invoke-DevBenchTool -Tool 'communityshaders.controls' -Payload @{
@@ -199,29 +270,30 @@ try {
     }
     $record.transitions.Add($restore)
     $snapshotHeld = [bool]$restore.control.snapshotHeld
-    if (-not $restore.restoredSnapshot) {
+    if ($controlName -eq 'performanceActive' -and -not $restore.restoredSnapshot) {
         throw "$Feature restore did not use the held baseline snapshot"
     }
-    Wait-ControlSettle -MinimumSeconds ([double]$restore.control.settle.whenEnabledSeconds) | Out-Null
+    Wait-ControlSettle -TransitionControl $restore.control -ExpectedValue $true | Out-Null
+    $mutationStarted = $false
     $record.phases.Add((Capture-Phase -Name 'baseline-return'))
 
     $record.validity.accepted = $true
     $record.validity.reasons.Add('Every phase saved the requested exact stereo pairs with zero backpressure or incomplete-pair drops.')
     $record.validity.reasons.Add('Each phase re-applied and read back the requested time/weather anchor state.')
-    $record.validity.reasons.Add('The candidate used the production off transition and exact in-memory baseline restore.')
+    $record.validity.reasons.Add('The candidate used its exposed live Boolean off transition and restored the exact starting Boolean value.')
 }
 catch {
     $runFailure = $_.Exception.Message
     $record.validity.reasons.Add("Run rejected: $runFailure")
 }
 finally {
-    if ($snapshotHeld) {
+    if ($snapshotHeld -or $mutationStarted) {
         try {
             Invoke-DevBenchTool -Tool 'communityshaders.controls' -Payload @{
                 action = 'set'
                 feature = $Feature
                 control = $controlName
-                value = $true
+                value = $baselineValue
             } | Out-Null
         }
         catch {
@@ -233,6 +305,10 @@ finally {
                 Write-Warning "restoreAll also failed: $_"
             }
         }
+    }
+    if ($hudToggled) {
+        try { Invoke-DevBenchTool -Tool 'console' -Payload @{ action = 'exec'; command = 'tm' } | Out-Null }
+        catch { Write-Warning "HUD restore failed: $_" }
     }
     $record.finishedAt = [DateTime]::UtcNow.ToString('o')
 }

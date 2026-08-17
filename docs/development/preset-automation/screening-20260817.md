@@ -71,6 +71,51 @@ Wetterness is the strongest perceptual change in this screen and is intentionall
 
 The subsequent typed-profile proof exposed one effective-state caveat before response curves began: Wetterness Performance requests a 5,000-unit fade range, but the feature sanitizes it to its 100-metre minimum (approximately 7,003 units). Profile measurements must label the effective value and must not claim to have measured a 5,000-unit cutoff.
 
+## Volumetric Shadows live-control follow-up
+
+This is distinct from the `Volumetric Lighting` package screened above. The
+Volumetric Shadows provider copies two directional-shadow cascades into
+downsampled 512/256 VSM levels, applies separable blur, and binds the result as
+the shared shadow map used by lighting, particles, water, and effect geometry.
+Its inner `Enabled` control is live, retains its lazily allocated resources, and
+declares a two-frame settle with no shader compile or game restart.
+
+The follow-up used DLL commit `ab359c4d9`, SHA-256
+`7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043`,
+in the same AMD `SVR-OVR-NULL` and Info-logging lane. The timing anchor was the
+fixed Guardian Stones fog/dawn recipe. Each A/B/A phase contained 120 unique
+resolved frames with capture disabled:
+
+| Measurement | Enabled A1 | Disabled | Enabled A2 | Interpretation |
+| --- | ---: | ---: | ---: | --- |
+| Whole-frame GPU mean | 4.953762 | 4.880517 | 4.865887 | Drift is larger than this feature's small cost; do not use as the isolated estimate |
+| Sum of six named Volumetric Shadows passes | 0.038429 | 0 | 0.038420 | Continuous and repeatable to 0.00001 ms across the two enabled phases |
+
+The accepted lossless visual sequences retained separate eyes, hid the HUD,
+reapplied the exact time/weather/cell/pose before every phase, and restored the
+starting Boolean value. The fog run contains 60 pairs per phase at a six-cycle
+interval. The clear-day run contains 30 pairs per phase at a ten-cycle interval.
+Earlier four- and six-cycle attempts that reported backpressure were rejected
+and are not included below.
+
+| Anchor | Stable pixels | Stable-region mean absolute luma | Stable-region p95 | Off minus enabled mean luma | Reading |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Guardian fog/dawn | 82.5–82.7% | 0.283–0.285 | 1.16–1.18 | +0.245 to +0.296 | No obvious scene-wide loss; weak response under low-contrast fog |
+| Guardian clear/day | 58.5–58.8% | 0.409–0.417 | 1.54–1.57 | -0.282 to -0.286 | Subtle response concentrated around foliage, directional-shadow edges, terrain, and nearby objects |
+
+The clear-day enabled-return drift exceeds the ablation signal, and the signed
+whole-frame direction reverses between weather anchors. The amplified
+diagnostics localize much of the apparent difference to moving foliage and
+shadow edges rather than a stable global exposure change. This fixed-pose lane
+therefore establishes a small perceptual magnitude, not a reliable signed
+brightness effect or moving-view stability result.
+
+The provider remains enabled in all provisional tiers. A repeatable ~0.038 ms
+saving does not dominate the cross-material directional-shadow consistency it
+supplies, and there is no lower-quality numeric profile between on and off.
+Physical/moving-HMD and other-runtime validation remain portability gates, not
+reasons to disable the feature in the first generated presets.
+
 ## Artifact hashes
 
 Each path is `<timing root>/<run id>/ablation-profiler-raw.json`.
@@ -86,6 +131,19 @@ Each path is `<timing root>/<run id>/ablation-profiler-raw.json`.
 | `20260817-amd-svr-ovr-null-guardian-clear-info-sss-ablation-r01` | `E0C0DCDD8C5FA7E4FCC68F0AD90632BF36CFA7970CD39A1A7C71DB8C14D0C945` |
 | `20260817-amd-svr-ovr-null-guardian-clear-info-terrainblending-ablation-r01` | `D81270AC74C752CB8B82084F4007FEE9283C0C3101A05332AB3FD97269704372` |
 | `20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-ablation-r01` | `DA0C565408F9716D3B36D4146A5033040CC13E35E18866B2C2BE8AF1EA3E6BA0` |
+| `20260817-amd-null-guardian-fog-dawn-volumetricshadows-enabled-r02` | `1A077E9A0516B6A64A6B2829FFDAFDBCEC0747BBDCC8372E9BA975E5025E2C61` |
+
+The accepted visual run manifests are under the visual root:
+
+| Run id | SHA-256 |
+| --- | --- |
+| `20260817-amd-null-guardian-fog-dawn-hudoff-volumetricshadows-enabled-r02` | `54FD10B1F1968468378A9C2C49BF8A056AF4DD4E609E124CB1064B9D4292A4F9` |
+| `20260817-amd-null-guardian-clear-day-hudoff-volumetricshadows-enabled-r02` | `12808C151338265115B82FAD72EF2114CA0FF744F2F79312DBB3F56C58FBCB8A` |
+
+The clear-day analysis directory also retains four-panel enabled/off/signed/
+absolute diagnostics. Left and right SHA-256 values are respectively
+`0A3E0BF2AAAC6A3A4B4474504EB1815A71625A11FB927C7A04BA4F3075F4F0F8`
+and `2D3F876971E1E7BAA01AFDD7AB69D9835E1D477D45EE1825C68AC3E6E35B38AF`.
 
 ## Routing decisions
 

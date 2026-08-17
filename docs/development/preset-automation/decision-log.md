@@ -293,3 +293,21 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Consequences: future tier decisions change one policy; vendor overrides must remain setting-level and evidence-backed; the generated files are reviewable artifacts rather than independent sources of truth
 - Revalidation triggers: template hash change, upscaler capability-resolution change, provider setting/schema change, native NVIDIA result, alternate runtime result, or any release-gate failure
 - Supersedes: implements `PA-2026-002` for development artifacts; does not remove the legacy source presets
+
+### `PA-2026-016` — Retain the four tier gradients after controlled translation
+
+- Date: 2026-08-17
+- Status: adopted as evidence qualification; no preset-value change
+- Snapshot: first generalized profile/scalar baseline-ablation-baseline motion screen
+- Question: Do controlled player translations expose a stereo or temporal reason to change the provisional Skylighting, SSS, Wetterness, or Volumetric Lighting gradients?
+- Scope: AMD `SVR-OVR-NULL`; fixed Guardian Stones clear, storm, and fog recipes; separate-eye lossless capture; abrupt player translation only
+- Hard constraints: exact typed readback, readiness and snapshot restoration; no inference from a residual smaller than returning-baseline drift; no promotion to rotation, physical HMD, alternate runtimes, or NVIDIA
+- Options considered: change a tier immediately; reject the gradients on any transient; retain the gradients and narrow their remaining qualification gates
+- Evidence: [controlled tier-motion screen](./motion-tier-screen-20260817.md), four accepted 90-pair A/B/A runs with zero failed, incomplete, or backpressured pairs
+- Objective vector and uncertainty: Skylighting, Wetterness, and Volumetric Lighting tails remained below return drift; SSS unlimited versus 20,480 range was about 1.48× return drift with close eye agreement; step convergence was about 167 ms, 100 ms, 67 ms, and 467 ms respectively; abrupt translation is not continuous view motion
+- Pareto result: no tested gradient is dominated by the screened alternative; SSS gains positive moving-scene support, while the other three gain bounded temporal observations but not new perceptual ordering
+- Decision: retain all four provisional gradients unchanged; treat Volumetric Lighting's slower fog convergence as a targeted follow-up, not a failure; require known-distance and continuous/rotating tests where listed in preset policy
+- Confidence: medium-high for AMD/null-HMD SSS range response; medium for absence of a gross persistent step artifact in the tested lanes; low for physical/runtime/vendor portability
+- Consequences: generated unified candidates remain unchanged; motion coverage claims now distinguish abrupt position steps from continuous or rotational disocclusion
+- Revalidation triggers: known-distance targets, continuous `TranslateTo` or synthetic tracked pose, physical occupied HMD, OpenXR/VDXR/OCU, NVIDIA, or feature history/resource changes
+- Supersedes: none

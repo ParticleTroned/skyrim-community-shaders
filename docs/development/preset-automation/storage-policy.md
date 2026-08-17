@@ -12,6 +12,10 @@ The repository-local setting `csx.calibrationStagingRoot` is the canonical fast,
 
 The repository-local setting `csx.calibrationArchiveRoot` is the persistent archive destination. On this workstation, staging is on the D: NVMe and the archive is on the L: HDD. Both roots must remain outside MO2 and SkyrimVR. An explicit `-OutputRoot` remains available for controlled exceptions.
 
+The independent D: root is the normal active-session path because it combines NVMe throughput with RootBuilder isolation. A bounded D: game-directory path is an acceptable single-session exception when a game-process permission or path constraint requires it, but it must be explicitly included in the stopped-runtime drain; the finaliser does not discover arbitrary game-directory roots. Never carry such an exception into a later MO2 launch.
+
+Keep machine-local collection and run labels short. One full-label motion attempt reached 272 characters at `capture-manifest.json.tmp` and failed before writing a frame; the same recipe succeeded under the short `M/<run id>` collection. Full semantic provenance belongs in the run record, not every directory component.
+
 ## Session boundary
 
 Before starting MO2:

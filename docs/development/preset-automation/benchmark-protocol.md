@@ -1,6 +1,6 @@
 # Benchmark and capture protocol
 
-Status: initial protocol; synthetic-HMD proof of concept not yet executed
+Status: initial protocol; synthetic-HMD execution path demonstrated, with the first run retained as invalid benchmark evidence
 
 ## Objective
 
@@ -36,6 +36,12 @@ For example, native Skyrim VR through SteamVR and Skyrim VR through OCU into Ste
 
 The matrix describes planned comparisons, not presumed equivalence. A lane that cannot remain active without occupancy is recorded as unavailable rather than approximated. The built-in SteamVR null lane does not include OCU and cannot validate either OCU/OpenXR lane.
 
+## First synthetic-HMD result
+
+Run `20260817-amd-svr-ovr-null-honeyside-poc-r01` demonstrated the complete unattended native-OpenVR path: SteamVR selected its null HMD, Skyrim VR reached DataLoaded, DevBench loaded a settled Honeyside save, CSX returned resolved profiler data, and three visually coherent left/right submission pairs were saved. The physical Virtual Desktop headset remained live, and its SteamVR driver loaded, but the null driver retained HMD ownership.
+
+The run is not accepted as benchmark evidence. All three requested pairs completed, but the six-cycle capture cadence produced eight queue-backpressure rejections. Repeat the visual pass at a slower cadence and quantify fixed-pose repeatability before promoting the lane. This result establishes viability of the harness, not equivalence to a physical HMD or any OCU/OpenXR path.
+
 ## First proof-of-concept acceptance
 
 The `SVR-OVR-NULL` proof of concept succeeds only when all of the following are demonstrated and recorded:
@@ -65,6 +71,23 @@ Before each candidate:
 7. Repeat candidates in a balanced order and include a return-to-baseline check to expose drift.
 
 Change one declared factor per paired comparison. If an interaction is the subject, declare the complete combination as that factor.
+
+## Shader-cache lanes
+
+Shader compilation is a controlled preparation phase and must not be silently folded into a timing or visual pass. Preserve a completed cache as an atomic set containing the entire `ShaderCache` tree and its matching `Info.ini`. Keep at least separate `Info` and `Debug` sets whenever both have completed successfully.
+
+A cache identity record must include:
+
+- repository commit and built DLL SHA-256;
+- build configuration, compiler-affecting defines, and dependency revisions;
+- complete feature-package identity and feature versions;
+- settings digest, log level, and developer-mode state;
+- GPU vendor and runtime lane when either can affect generated content; and
+- cache schema/plugin version from `Info.ini`.
+
+Switch the cache set and the matching settings/preset together. In MO2, enable exactly one named cache mod for the lane and leave the other cache mods disabled. Confirm the selected log level and the `Using disk cache` startup message before accepting a run.
+
+Do not promote a cache when CSX reports it as held, missing, disabled, mismatched, or memory-only. Source or dependency changes may legitimately invalidate part or all of a preserved set; allow that rebuild to finish outside a measured pass, then snapshot the new complete state under a new identity. Never merge arbitrary files from unlike identities. A small overwrite overlay may be merged only into the exact active cache identity after Skyrim has exited cleanly.
 
 ## Timing evidence
 

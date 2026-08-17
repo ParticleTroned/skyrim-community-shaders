@@ -1,0 +1,247 @@
+{
+  "$schema": "../schemas/measurement-run.schema.json",
+  "schemaVersion": 1,
+  "runId": "20260817-amd-svr-ovr-null-honeyside-poc-r01",
+  "recordedAt": "2026-08-17T05:29:57Z",
+  "status": "invalid",
+  "purpose": "Demonstrate unattended Skyrim VR startup, scene loading, resolved CSX profiling, and exact submitted-eye capture through SteamVR's synthetic null HMD.",
+  "sourceSnapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "feat/preset-calibration-automation",
+    "commit": "f971c9122ffc666268066851e91b10d79a081742",
+    "buildConfiguration": "VR Release; DEVBENCH_BRIDGE=ON; AUTO_PLUGIN_DEPLOYMENT=OFF; full AIO staged from the source snapshot",
+    "dllVersion": "CSX 3.18-VR",
+    "dllSha256": "565002FFA2E88CE0303F857DC410C7FF3CD2B5F916BA266EC5738E22ACA16EF6",
+    "settingsSha256": "9D2B613F22611CB2D51548DB8506A89B6C453AB767EFD77CF6378F1408C6E90A",
+    "settingsArtifact": "mo2-mod://CSX Preset Automation POC - f971c9122/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+    "dependencies": [
+      {
+        "name": "CommonLibSSE-NG",
+        "revision": "ac9ec534882535793e4aa1c932113720f2f40f30",
+        "dirty": false,
+        "notes": "Revision and clean state verified directly in the submodule after the run. The rebuilt DLL's embedded build metadata reported unknown, so this Git provenance closes that metadata gap."
+      }
+    ]
+  },
+  "hardware": {
+    "gpuVendor": "AMD",
+    "adapterName": "AMD Radeon RX 7900 XT",
+    "deviceId": "PCI\\VEN_1002&DEV_744C&SUBSYS_E4711DA2&REV_CC",
+    "driverVersion": "32.0.31035.1003",
+    "vramBytes": null,
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "operatingSystem": "Microsoft Windows 11 Pro 10.0.26200 build 26200"
+  },
+  "runtimeLane": {
+    "laneId": "SVR-OVR-NULL",
+    "applicationVrApi": "OpenVR",
+    "compatibilityLayer": "none",
+    "compatibilityLayerVersion": null,
+    "targetRuntimeApi": "OpenVR",
+    "runtimeImplementation": "SteamVR",
+    "runtimeVersion": "2.16.7",
+    "compositorTransport": "SteamVR compositor",
+    "notes": "The game loaded the vanilla openvr_api.dll. OCU was disabled. Virtual Desktop's SteamVR driver also loaded, but the SteamVR null driver owned the active HMD. This lane provides no OCU or OpenXR evidence."
+  },
+  "hmd": {
+    "mode": "synthetic",
+    "driver": "SteamVR null",
+    "profile": "CSX Null HMD POC; 1512x1680 per eye; 90 Hz; IPD 0.063 m; forcedDriver=null; requireHmd=false",
+    "presenceState": "not-applicable",
+    "renderTarget": {
+      "width": 1512,
+      "height": 1680,
+      "layout": "per-eye"
+    },
+    "refreshHz": 90,
+    "projection": {
+      "source": "driver-configuration",
+      "leftEye": null,
+      "rightEye": null,
+      "eyeToHeadArtifact": null,
+      "hiddenAreaMeshArtifact": null
+    },
+    "poseSource": "static-driver-pose",
+    "controllerProfile": "none"
+  },
+  "scene": {
+    "sceneId": "honeyside-save2-static-null-pose",
+    "saveArtifact": "Save2_C90D9AE3_0_507269736F6E6572_RiftenHoneyside_000017_20260814041631_1_1",
+    "location": "Honeyside (RiftenHoneyside, 0x00016BDD), player position [-36.0, -115.99998, 65.48605]",
+    "weather": "Helios_SkyrimCloudyFF (0xFE02BA86)",
+    "gameTime": "day 0.52055025; hour 12.493206",
+    "poseScript": "SteamVR null-driver fixed HMD pose; no controller input; camera observed at [-36.0, -115.99998, 98.61119], yaw -0.083826",
+    "motionProfile": "static",
+    "controlledVariables": [
+      "Settled save loaded through DevBench loadLast",
+      "No startup modal",
+      "CSX AMD Quality settings with Developer Mode enabled only for capture",
+      "Profiler and screenshot capture executed as separate passes"
+    ]
+  },
+  "passes": [
+    {
+      "kind": "timing",
+      "status": "complete",
+      "warmupFrames": 4177,
+      "sampleFrames": 8,
+      "profilerArtifact": null,
+      "profilerMetrics": [
+        {
+          "name": "CSX resolved top-level GPU total",
+          "unit": "ms",
+          "samples": 1,
+          "minimum": null,
+          "average": 4.915829658508301,
+          "median": null,
+          "p95": 4.915829658508301,
+          "p99": 4.915829658508301,
+          "maximum": null
+        },
+        {
+          "name": "CSX resolved CPU total",
+          "unit": "ms",
+          "samples": 1,
+          "minimum": null,
+          "average": 0.5494999885559082,
+          "median": null,
+          "p95": 0.5494999885559082,
+          "p99": 0.5494999885559082,
+          "maximum": null
+        },
+        {
+          "name": "Upscaling::Upscale GPU",
+          "unit": "ms",
+          "samples": 8,
+          "minimum": null,
+          "average": 4.563027381896973,
+          "median": null,
+          "p95": 5.053711414337158,
+          "p99": 5.12755012512207,
+          "maximum": null
+        }
+      ],
+      "capture": null,
+      "issues": [
+        "This sample proves profiler resolution only; it is not a sufficiently repeated preset-performance benchmark.",
+        "The top-level resolved total is a final snapshot, while the Upscaling distribution contains eight history samples."
+      ]
+    },
+    {
+      "kind": "visual",
+      "status": "invalid",
+      "warmupFrames": 0,
+      "sampleFrames": 3,
+      "profilerArtifact": null,
+      "profilerMetrics": [],
+      "capture": {
+        "source": "hmd_stereo",
+        "manifestArtifact": "capture-manifest",
+        "complete": true,
+        "capturedFrameCount": 3,
+        "incompleteStereoPairDrops": 0,
+        "queueBackpressureDrops": 8
+      },
+      "issues": [
+        "The six-compositor-cycle interval was too aggressive for lossless stereo PNG encoding and caused eight backpressure rejections.",
+        "All three requested pairs nevertheless completed successfully at compositor cycle tokens 6274, 6280, and 6334."
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "settings-user",
+      "role": "Exact CSX settings used by the test profile",
+      "locator": "mo2-mod://CSX Preset Automation POC - f971c9122/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\mods\\CSX Preset Automation POC - f971c9122\\SKSE\\Plugins\\CommunityShaders\\SettingsUser.json",
+      "mediaType": "application/json",
+      "bytes": 28886,
+      "sha256": "9D2B613F22611CB2D51548DB8506A89B6C453AB767EFD77CF6378F1408C6E90A",
+      "retention": "external-retained"
+    },
+    {
+      "id": "capture-manifest",
+      "role": "Authoritative stereo capture session manifest",
+      "locator": "campaign://20260817-amd-svr-ovr-null-honeyside-poc-r01/capture/capture-manifest.json",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\Screenshots\\CS_Capture_2026-08-17_06-29-57_245_null-hmd-poc_0001\\capture-manifest.json",
+      "mediaType": "application/json",
+      "bytes": 2794,
+      "sha256": "D7DAD9A88D8A29A65A669241E564D49AEFD94A7D37D5B19A44349DC5141F1F02",
+      "retention": "external-retained"
+    },
+    {
+      "id": "frame-000001-left",
+      "role": "Lossless submitted left eye",
+      "locator": "campaign://20260817-amd-svr-ovr-null-honeyside-poc-r01/capture/frame_000001_left.png",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\Screenshots\\CS_Capture_2026-08-17_06-29-57_245_null-hmd-poc_0001\\frame_000001_left.png",
+      "mediaType": "image/png",
+      "bytes": 3271711,
+      "sha256": "65D02941D477D50FB72B893799B545BD4721D375791315C3B5E6EE2E7D671976",
+      "retention": "external-retained"
+    },
+    {
+      "id": "frame-000001-right",
+      "role": "Lossless submitted right eye",
+      "locator": "campaign://20260817-amd-svr-ovr-null-honeyside-poc-r01/capture/frame_000001_right.png",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\Screenshots\\CS_Capture_2026-08-17_06-29-57_245_null-hmd-poc_0001\\frame_000001_right.png",
+      "mediaType": "image/png",
+      "bytes": 3270019,
+      "sha256": "3918E48D1421122AD88A77961981941E0C9F0BFF764032E6813B2975D42AAFCC",
+      "retention": "external-retained"
+    },
+    {
+      "id": "frame-000001-stereo",
+      "role": "Derived side-by-side stereo image for inspection",
+      "locator": "campaign://20260817-amd-svr-ovr-null-honeyside-poc-r01/capture/frame_000001_stereo.png",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\Screenshots\\CS_Capture_2026-08-17_06-29-57_245_null-hmd-poc_0001\\frame_000001_stereo.png",
+      "mediaType": "image/png",
+      "bytes": 6529350,
+      "sha256": "AB5D1F83E4F3AECF6E9637D6D0A9EA60159167A9B5EAB32376A1AA964506345F",
+      "retention": "external-retained"
+    },
+    {
+      "id": "debug-cache-identity",
+      "role": "Identity record for the completed branch-matched Debug shader cache",
+      "locator": "mo2-mod://Community Shaders VR Shader Cache - CSX3.18-f971c9122-Debug/cache-identity.json",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\mods\\Community Shaders VR Shader Cache - CSX3.18-f971c9122-Debug\\cache-identity.json",
+      "mediaType": "application/json",
+      "bytes": 615,
+      "sha256": "CE7D212A899F24ADDED4F6F4D494BFAA5FC53AB8883B03DD4C0400B771719643",
+      "retention": "external-retained"
+    }
+  ],
+  "comparability": {
+    "baselineRunId": null,
+    "scope": "standalone",
+    "controlledVariables": [
+      "One source snapshot and DLL",
+      "One AMD Quality settings snapshot",
+      "One SteamVR null-HMD profile",
+      "One save, scene, and static driver pose"
+    ],
+    "deviations": [
+      "Virtual Desktop's SteamVR driver was resident even though the null driver owned the HMD.",
+      "The capture cadence caused queue backpressure and must be increased for the next run."
+    ]
+  },
+  "validity": {
+    "accepted": false,
+    "reasons": [
+      "Eight queue-backpressure drops violate the first-proof-of-concept acceptance gate.",
+      "Fixed-pose repeatability has been demonstrated once but not yet quantified across repeated starts.",
+      "Profiler output is sufficient to prove the endpoint but not to support a preset comparison."
+    ]
+  },
+  "conclusions": [
+    "SteamVR's built-in null HMD can run this Skyrim VR, DevBench, CSX profiler, and exact stereo capture path without an occupied physical HMD.",
+    "A live physical Virtual Desktop headset did not prevent the null driver from owning the active HMD during this run.",
+    "The three captured eye pairs are visually complete and show coherent left/right parallax without an obvious duplicated-eye failure.",
+    "The next capture should use a substantially larger compositor-cycle interval before the lane is accepted for benchmark work.",
+    "This native OpenVR result says nothing about OCU, SteamVR OpenXR, or VDXR equivalence."
+  ],
+  "notes": [
+    "IBL 1.1.3 loaded successfully. CSX accepted the disk cache and selectively rebuilt content-digest changes in 90 seconds before DataLoaded.",
+    "The completed Debug cache was preserved as the MO2 mod Community Shaders VR Shader Cache - CSX3.18-f971c9122-Debug; its Info.ini SHA-256 is 1B4604FB8AF6C66A06DA9FE213791F30DB03FA2AA769833F5D1CE5F27466680E.",
+    "Temporary SteamVR and MO2 configuration changes were restored byte-for-byte after the run."
+  ]
+}

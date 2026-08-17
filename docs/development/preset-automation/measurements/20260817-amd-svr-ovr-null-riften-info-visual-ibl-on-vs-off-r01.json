@@ -1,0 +1,184 @@
+{
+  "$schema": "../schemas/measurement-run.schema.json",
+  "schemaVersion": 1,
+  "status": "valid",
+  "sourceSnapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "feat/preset-calibration-automation",
+    "commit": "410cab14e70af0a21357aa9c0f6d9736aa5fe7a3",
+    "buildConfiguration": "VR Release; DEVBENCH_BRIDGE=ON; AUTO_PLUGIN_DEPLOYMENT=OFF; DLL-only capture-policy override staged over the f971c9122 AIO",
+    "dllVersion": "CSX 3.18-VR",
+    "dllSha256": "2D946190762C08DEFFE2AE827EDFF898DE534C821A0692F7F6CF0EB74AC71A2A",
+    "dependencies": [
+      {
+        "name": "CommonLibSSE-NG",
+        "revision": "ac9ec534882535793e4aa1c932113720f2f40f30",
+        "dirty": false,
+        "notes": "Revision and clean state verified directly before the Info visual campaign."
+      }
+    ],
+    "settingsSha256": "16A756C87ABF0E7B429A6C520B814708A2BF78ABD63C3B271548C767E00A87B4",
+    "settingsArtifact": "mo2-mod://CSX Preset Automation Settings - Info IBLOn VSOff/SKSE/Plugins/CommunityShaders/SettingsUser.json"
+  },
+  "hardware": {
+    "gpuVendor": "AMD",
+    "adapterName": "AMD Radeon RX 7900 XT",
+    "deviceId": "PCI\\VEN_1002&DEV_744C&SUBSYS_E4711DA2&REV_CC",
+    "driverVersion": "32.0.31035.1003",
+    "vramBytes": null,
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "operatingSystem": "Microsoft Windows 11 Pro 10.0.26200 build 26200"
+  },
+  "runtimeLane": {
+    "laneId": "SVR-OVR-NULL",
+    "applicationVrApi": "OpenVR",
+    "compatibilityLayer": "none",
+    "compatibilityLayerVersion": null,
+    "targetRuntimeApi": "OpenVR",
+    "runtimeImplementation": "SteamVR",
+    "runtimeVersion": "2.16.7",
+    "compositorTransport": "SteamVR compositor",
+    "notes": "Vanilla openvr_api.dll with OCU disabled; the SteamVR null driver owned the active HMD."
+  },
+  "hmd": {
+    "mode": "synthetic",
+    "driver": "SteamVR null",
+    "profile": "CSX Null HMD Info Visual; 1512x1680 per eye; 90 Hz; IPD 0.063 m; forcedDriver=null; requireHmd=false",
+    "presenceState": "not-applicable",
+    "renderTarget": {
+      "width": 1512,
+      "height": 1680,
+      "layout": "per-eye"
+    },
+    "refreshHz": 90,
+    "projection": {
+      "source": "driver-configuration",
+      "leftEye": null,
+      "rightEye": null,
+      "eyeToHeadArtifact": null,
+      "hiddenAreaMeshArtifact": null
+    },
+    "poseSource": "static-driver-pose",
+    "controllerProfile": "none"
+  },
+  "runId": "20260817-amd-svr-ovr-null-riften-info-visual-ibl-on-vs-off-r01",
+  "recordedAt": "2026-08-17T08:59:08.241Z",
+  "purpose": "Capture the matched Info-mode Volumetric-Shadows-off counterfactual while IBL remains enabled.",
+  "scene": {
+    "sceneId": "riften-city-north-save3-info-visual-ibl-on-vs-off",
+    "saveArtifact": "Save3_2FC025CB_0_776964646C65_RiftenWorld_000002_20260812061218_1_1",
+    "location": "RiftenCityNorth (0x00042249) in RiftenWorld (0x00016BB4), player position [172837.375, -93980.4453125, 11136.375]",
+    "weather": "SkyrimCloudyFF (0x0010A23F)",
+    "gameTime": "verified capture start day 0.3086773157, hour 7.4082551003",
+    "poseScript": "SteamVR null-driver fixed HMD pose; camera [172837.375, -93980.4453125, 11169.5], pitch -0.0, yaw 1.6824611425",
+    "motionProfile": "static HMD pose with live exterior scene",
+    "controlledVariables": [
+      "CSX Log Level 2 (Info)",
+      "Image Based Lighting EnableIBL=1",
+      "Volumetric Shadows Enabled=false",
+      "AMD Quality stack otherwise unchanged",
+      "A 1.5-second barrier followed the queued set gamehour to 7.4 command",
+      "Scene, weather, position, and camera were read back immediately before capture",
+      "Five exact submitted-eye pairs at 120 compositor-cycle spacing"
+    ]
+  },
+  "passes": [
+    {
+      "kind": "visual",
+      "status": "complete",
+      "warmupFrames": 0,
+      "sampleFrames": 5,
+      "profilerArtifact": null,
+      "profilerMetrics": [],
+      "capture": {
+        "source": "hmd_stereo",
+        "manifestArtifact": "capture-manifest",
+        "complete": true,
+        "capturedFrameCount": 5,
+        "incompleteStereoPairDrops": 0,
+        "queueBackpressureDrops": 0
+      },
+      "issues": [
+        "The exterior scene remains live; NPC, cloud, vegetation, and other temporal state can differ across process-separated candidates.",
+        "Warm-up duration was not expressed in renderer frames; the capture-path preparation is recorded in notes."
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "settings-user",
+      "role": "Exact Info-mode CSX settings selected for this candidate",
+      "locator": "mo2-mod://CSX Preset Automation Settings - Info IBLOn VSOff/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\mods\\CSX Preset Automation Settings - Info IBLOn VSOff\\SKSE\\Plugins\\CommunityShaders\\SettingsUser.json",
+      "mediaType": "application/json",
+      "bytes": 28885,
+      "sha256": "16A756C87ABF0E7B429A6C520B814708A2BF78ABD63C3B271548C767E00A87B4",
+      "retention": "external-retained"
+    },
+      {
+        "id": "capture-checksums",
+        "role": "SHA-256 inventory for every accepted manifest, raw eye, and combined stereo file in the three-candidate visual campaign",
+        "locator": "./20260817-amd-svr-ovr-null-riften-info-visual.sha256",
+        "localPath": null,
+        "mediaType": "text/plain",
+        "bytes": 7421,
+        "sha256": "C703930EE2390355E7DFF74E3B77B0C8D81C6A39BAD87D5240DA3F99EA20F7E5",
+        "retention": "source-control"
+      },
+      {
+        "id": "capture-manifest",
+      "role": "Authoritative five-pair stereo capture session manifest",
+      "locator": "campaign://20260817-amd-svr-ovr-null-riften-info-visual/CS_Capture_2026-08-17_09-59-08_241_ibl-on-vs-off-r01-410cab14e_0002/capture-manifest.json",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\CSX Baselines\\20260817-amd-svr-ovr-null-riften-info-visual\\CS_Capture_2026-08-17_09-59-08_241_ibl-on-vs-off-r01-410cab14e_0002\\capture-manifest.json",
+      "mediaType": "application/json",
+      "bytes": 5086,
+      "sha256": "9BB5A4CA7B9B65E30B0E7E4F554696A545B68E8A4090F43B05DD1FD4311C2189",
+      "retention": "external-retained"
+    },
+    {
+      "id": "frame-000003-stereo",
+      "role": "Representative side-by-side stereo image; raw eyes remain beside it and are indexed by the manifest",
+      "locator": "campaign://20260817-amd-svr-ovr-null-riften-info-visual/CS_Capture_2026-08-17_09-59-08_241_ibl-on-vs-off-r01-410cab14e_0002/frame_000003_stereo.png",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\CSX Baselines\\20260817-amd-svr-ovr-null-riften-info-visual\\CS_Capture_2026-08-17_09-59-08_241_ibl-on-vs-off-r01-410cab14e_0002\\frame_000003_stereo.png",
+      "mediaType": "image/png",
+      "bytes": 5013372,
+      "sha256": "5AF0F659AE1BF67323FB074500B1BF31A0369E66F942B515C49193FC785C3461",
+      "retention": "external-retained"
+    }
+  ],
+  "comparability": {
+    "baselineRunId": "20260817-amd-svr-ovr-null-riften-info-visual-ibl-vs-r01",
+    "scope": "within-lane",
+    "controlledVariables": [
+      "One capture DLL, dependency revision, hardware configuration, runtime lane, null-HMD profile, save, weather identity, player position, and camera pose",
+      "Per-eye dimensions 1512x1680 and combined stereo dimensions 3024x1680",
+      "Capture-start game-hour spread across the three candidates was 0.0000658 hour",
+      "All accepted sessions used five frames at 120 compositor-cycle spacing with zero reported drops"
+    ],
+    "deviations": [
+      "Each settings candidate used a separate Skyrim process because the harness currently selects on-disk settings before launch.",
+      "A one-frame preparatory warm-up capture was deliberately rejected before this five-pair sequence."
+    ]
+  },
+  "validity": {
+    "accepted": true,
+    "reasons": [
+      "The authoritative manifest is complete with five saved pairs, zero failed frames, zero incomplete-eye drops, and zero backpressure drops.",
+      "Both raw eye files and the combined stereo output exist for every requested frame.",
+      "Scene, weather, player position, camera pose, and start time passed the visual-campaign alignment checks.",
+      "Acceptance covers capture integrity and exploratory within-lane comparison, not deterministic single-feature attribution in a live exterior scene."
+    ]
+  },
+  "conclusions": [
+    "The Info-capable automation API produced a complete lossless HMD-stereo sequence without Developer Mode or Debug logging.",
+    "The five-frame combined-stereo average had descriptive raw sRGB channel means [26.2482, 22.8153, 22.3762].",
+    "Its mean-image absolute difference from the all-on reference was 1.8606 8-bit code values, above the 0.3874-0.4930 within-condition mean absolute deviation observed in this campaign.",
+    "The picture set is suitable for human/LLM review and for designing more deterministic shader-isolation scenes."
+  ],
+  "notes": [
+    "One preparatory stereo pair warmed the capture path.",
+    "Image statistics used five combined-stereo frames per candidate, downsampled to 756x420 without linear-light conversion; they are descriptive rather than perceptual or attribution metrics.",
+    "IBL EnableIBL and Volumetric Shadows Enabled are audited as live renderer controls, but this campaign restarted because typed API mutation and effective-state readback are not implemented yet.",
+    "Temporary MO2 and SteamVR configuration changes were restored byte-for-byte after the campaign."
+  ]
+}

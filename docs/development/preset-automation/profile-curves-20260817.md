@@ -148,6 +148,44 @@ the exact packed-stereo SSS factor buffer as the bounded, Info-level
 Developer-Mode boundary for arbitrary texture readback and is the required
 evidence source for the next range decision.
 
+### Direct SSS factor result
+
+The Info-level factor path was then run in both factor orders at the canonical
+Guardian Stones clear-day anchor and at Dragonsreach as a static interior
+negative control. Every state in all four accepted runs saved its requested
+ordinary stereo frames, five factor frames, and factor statistics; all controls
+returned to the exact 44-sample/unlimited baseline. The paired-order consensus
+retains only pixels that changed by more than one `R8` code in both orders with
+the same sign.
+
+At 44 samples, candidate-minus-reference is unlimited minus 20,480-capped. A
+negative factor means unlimited range added shadow:
+
+| Scene / eye | Order 1 mean abs | Order 2 mean abs | Robust consensus mean abs | Robust signed mean | Same-sign share of changed pixels |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Guardian left | `0.02449` | `0.02137` | `0.01245` | `-0.001295` | `0.411` |
+| Guardian right | `0.01089` | `0.01126` | `0.00628` | `-0.000867` | `0.410` |
+| Dragonsreach left | `0.01102` | `0.00496` | `0.00202` | `+0.000057` | `0.207` |
+| Dragonsreach right | `0.00353` | `0.00300` | `0.000915` | `-0.000035` | `0.206` |
+
+Guardian's sign-agreeing response is therefore about 6.2× the interior left-eye
+floor and 6.9× the interior right-eye floor. Its two order correlations on
+changed pixels are positive (`0.292` left, `0.345` right); the interior controls
+are slightly negative. The Guardian robust grid localizes mean-absolute response
+to the upper third (`0.0279`-`0.0335` left and up to `0.0249` right), falling to
+near zero across the bottom third. Raising 30 to 44 samples also has stable
+direction and magnitude in both orders, independently of the range setting.
+
+This is direct evidence that Quality's unlimited range changes the shader output
+above the order-balanced static-interior noise floor while sample count is held
+constant. It supports retaining unlimited range in the provisional Quality tier.
+It is not yet release qualification: the Guardian response is foliage-heavy,
+order residual remains larger than the consensus mean, the active foveated SSS
+coverage leaves part of the right-eye factor target at the unshadowed clear
+value, and no object in the response has a verified 19,280-20,480-unit depth.
+A known-distance mostly-static target plus moving-view/disocclusion inspection
+remains required before treating the cutoff as perceptually indispensable.
+
 ## Provisional policy constraints
 
 These curves support constraints, not yet a complete preset:
@@ -178,5 +216,11 @@ Timing hashes refer to `<timing root>/<run id>/profile-curve-profiler-raw.json`;
 | `20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-curve-qbp-r01` | `EDFFD3BFB5B82C5E6524A906626A306B15AA76032912084AA763E96F58DB9AE6` |
 | `20260817-amd-null-whiterun-clear-sss-distance-bq-r01` | `B7C783434AC216B17980F82EC83E253E52CA1A291D0225DF2627DB92BB5182E0` |
 | `20260817-amd-null-whiterun-clear-sss-distance-qb-r01` | `4D2B6D2743240F4953608045153EEBA4ED7F340D27F3D409BA1CB8CB1F7E1147` |
+| `20260817-amd-null-guardian-clear-hudoff-sss-factor-mask-rangefirst-r01` | `99EF48621650472245DC0A399974A8B6430B3D83D1EEDA537C66FBAEF140008A` |
+| `20260817-amd-null-guardian-clear-hudoff-sss-factor-mask-samplesfirst-r01` | `0A18B866467DA93ED65593B90269EC2961740282A3BD308365107CC0C3DCF4E1` |
+| `20260817-amd-null-guardian-clear-hudoff-sss-factor-mask-consensus-r01` | `ABE38607A73DA5FB2DFA860D30B00A02048036855528EDEF89B31E4F93661C01` |
+| `20260817-amd-null-dragonsreach-midday-hudoff-sss-factor-mask-rangefirst-r01` | `E2CBC664A136BBF10166CFC43F78AA5F6233AEAE7EA5D29C9BAD9BF8E4D8D6F5` |
+| `20260817-amd-null-dragonsreach-midday-hudoff-sss-factor-mask-samplesfirst-r01` | `BCDBB9D1EE00F4F7C9C976D471E8DF9E33BF760E784462D5E5810DB52AAA3668` |
+| `20260817-amd-null-dragonsreach-midday-hudoff-sss-factor-mask-consensus-r01` | `4E9E9F4EE2BA4D487D146FC4EBDCDEEE0BEA62F290C61A00C3E300DDA2BAC41F` |
 
 Additional retained Windhelm evidence: rejected four-cycle BQ `D14ED72D82B62597FE93247B763F28FEC3E8CF870D1A54938DE89E254E7CD697`; accepted six-cycle BQ `EC228FA178A25AA5F8EDC89776F3CBAFB91771AC5EB1BA90425296459204D91D`; accepted six-cycle QB `6A8F4092E85499020B528F24D45EA0F4AC394072774BB255FCA9EAF8FC99BD30`.

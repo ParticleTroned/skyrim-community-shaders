@@ -90,7 +90,11 @@ left and right eyes side-by-side; split it at half width for per-eye analysis.
 `tools/preset-calibration-visual-sss-parameter-factorial.ps1` records a small
 factor-frame set for every factorial state. Analyze it with
 `tools/analyze-sss-factor-measurements.py`; red heatmap pixels mean the candidate
-added shadow, while cyan pixels mean it removed shadow.
+added shadow, while cyan pixels mean it removed shadow. Use
+`tools/analyze-sss-factor-consensus.py` on reversed-order pairs to retain
+same-sign changes and quantify the order residual against a negative-control
+scene. Heatmaps auto-scale independently; compare their JSON magnitudes rather
+than relative display brightness.
 
 The first live Info-level proof used VR Release+DevBench DLL SHA-256
 `26B6110286FB5A088BF0DEDABADC4AE12028CDB466E39E296833081C41ECE9B5`

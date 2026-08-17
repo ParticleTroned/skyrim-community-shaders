@@ -1,0 +1,2014 @@
+{
+  "schemaVersion": 1,
+  "recordCount": 92,
+  "validCount": 7,
+  "incompleteCount": 70,
+  "invalidCount": 15,
+  "plannedCount": 0,
+  "vendors": [
+    "AMD"
+  ],
+  "records": [
+    {
+      "runId": "20260817-amd-svr-ovr-null-honeyside-poc-r01",
+      "path": "20260817-amd-svr-ovr-null-honeyside-poc-r01.json",
+      "recordedAt": "2026-08-17T05:29:57Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing",
+        "visual"
+      ],
+      "sourceCommit": "f971c9122ffc666268066851e91b10d79a081742",
+      "dllSha256": "565002FFA2E88CE0303F857DC410C7FF3CD2B5F916BA266EC5738E22ACA16EF6",
+      "settingsSha256": "9D2B613F22611CB2D51548DB8506A89B6C453AB767EFD77CF6378F1408C6E90A",
+      "provenanceGaps": []
+    },
+    {
+      "runId": "skylighting-guardian-clear-motion-quality-performance-b-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/skylighting-guardian-clear-motion-quality-performance-b-20260817.json",
+      "recordedAt": "2026-08-17T21:39:16.1566934Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "skylighting-guardian-clear-motion-quality-performance-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/skylighting-guardian-clear-motion-quality-performance-a-20260817.json",
+      "recordedAt": "2026-08-17T21:38:09.329095Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "sky-gc-qp-m1",
+      "path": "retrospective/20260817-amd-svr-ovr-null/sky-gc-qp-m1.json",
+      "recordedAt": "2026-08-17T21:41:11.7699643Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-r01.json",
+      "recordedAt": "2026-08-17T13:10:55.5432928Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-curve-qbp-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-curve-qbp-r01.json",
+      "recordedAt": "2026-08-17T14:34:11.7984551Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-curve-pbq-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-curve-pbq-r01.json",
+      "recordedAt": "2026-08-17T14:25:31.9451285Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-ibl-factorial-bfirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-ibl-factorial-bfirst-r01.json",
+      "recordedAt": "2026-08-17T14:50:07.7400614Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-ibl-factorial-afirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-ibl-factorial-afirst-r01.json",
+      "recordedAt": "2026-08-17T14:51:47.434443Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-curve-qbp-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-curve-qbp-r01.json",
+      "recordedAt": "2026-08-17T14:14:52.7345673Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-curve-pbq-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-curve-pbq-r01.json",
+      "recordedAt": "2026-08-17T14:12:54.4767707Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:53:02.0364972Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-terrainblending-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-terrainblending-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:51:50.4052687Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-sss-visual-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-sss-visual-r01.json",
+      "recordedAt": "2026-08-17T13:09:35.4749867Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-sss-visual-curve-qbp-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-sss-visual-curve-qbp-r01.json",
+      "recordedAt": "2026-08-17T14:32:50.2874282Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-sss-visual-curve-pbq-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-sss-visual-curve-pbq-r01.json",
+      "recordedAt": "2026-08-17T14:23:45.5787498Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-sss-curve-qbp-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-sss-curve-qbp-r01.json",
+      "recordedAt": "2026-08-17T14:10:07.6456968Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-sss-curve-pbq-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-sss-curve-pbq-r01.json",
+      "recordedAt": "2026-08-17T14:08:16.2388783Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-sss-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-sss-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:49:32.4966769Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-visual-r02",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-visual-r02.json",
+      "recordedAt": "2026-08-17T13:08:30.925619Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "ssgi-dragonsreach-enabled-curve-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/ssgi-dragonsreach-enabled-curve-a-20260817.json",
+      "recordedAt": "2026-08-17T20:24:06.3243063Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-visual-curve-qbp-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-visual-curve-qbp-r01.json",
+      "recordedAt": "2026-08-17T14:31:28.6821678Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "ssgi-dragonsreach-enabled-visual-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/ssgi-dragonsreach-enabled-visual-a-20260817.json",
+      "recordedAt": "2026-08-17T20:24:52.5112254Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "ssgi-dragonsreach-motion-step-b-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/ssgi-dragonsreach-motion-step-b-20260817.json",
+      "recordedAt": "2026-08-17T20:51:57.8208413Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "vl-guardian-clear-quality-visual-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/vl-guardian-clear-quality-visual-a-20260817.json",
+      "recordedAt": "2026-08-17T20:08:48.7714623Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "vl-guardian-clear-quality-curve-b-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/vl-guardian-clear-quality-curve-b-20260817.json",
+      "recordedAt": "2026-08-17T20:07:25.0851134Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "vl-guardian-clear-quality-curve-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/vl-guardian-clear-quality-curve-a-20260817.json",
+      "recordedAt": "2026-08-17T20:04:40.8819801Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "vl-gf-hl-m1",
+      "path": "retrospective/20260817-amd-svr-ovr-null/vl-gf-hl-m1.json",
+      "recordedAt": "2026-08-17T21:46:38.7293396Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-winterhold-clear-interleaved-725-1024-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-winterhold-clear-interleaved-725-1024-a-20260817.json",
+      "recordedAt": "2026-08-17T19:40:30.6174699Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-winterhold-clear-frozen-bmp-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-winterhold-clear-frozen-bmp-a-20260817.json",
+      "recordedAt": "2026-08-17T19:36:53.1506441Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-guardian-storm-frozen-bmp-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-guardian-storm-frozen-bmp-a-20260817.json",
+      "recordedAt": "2026-08-17T19:34:18.3971256Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-guardian-clear-day-visual-c-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-guardian-clear-day-visual-c-20260817.json",
+      "recordedAt": "2026-08-17T19:20:16.2480133Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-guardian-clear-day-visual-b-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-guardian-clear-day-visual-b-20260817.json",
+      "recordedAt": "2026-08-17T19:18:47.5203067Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-guardian-clear-day-visual-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-guardian-clear-day-visual-a-20260817.json",
+      "recordedAt": "2026-08-17T19:18:11.8753595Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-guardian-clear-day-frozen-visual-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-guardian-clear-day-frozen-visual-a-20260817.json",
+      "recordedAt": "2026-08-17T19:28:34.3566267Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-guardian-clear-day-frozen-bmp-b-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-guardian-clear-day-frozen-bmp-b-20260817.json",
+      "recordedAt": "2026-08-17T19:30:44.5095416Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-guardian-clear-day-frozen-bmp-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-guardian-clear-day-frozen-bmp-a-20260817.json",
+      "recordedAt": "2026-08-17T19:29:41.948672Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "terrain-guardian-clear-day-curve-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/terrain-guardian-clear-day-curve-a-20260817.json",
+      "recordedAt": "2026-08-17T19:15:19.2878496Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "e9a498403101907274abe88995868ddb4258f739",
+      "dllSha256": "8CD3C4F37ED26127835DD7FDF54EC4CA45A9F16F5025D4FA32D5F14B8E1A0EA6",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "sss-gc-range-m1",
+      "path": "retrospective/20260817-amd-svr-ovr-null/sss-gc-range-m1.json",
+      "recordedAt": "2026-08-17T21:43:14.0311993Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "ssgi-guardian-clear-resolution-curve-b-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/ssgi-guardian-clear-resolution-curve-b-20260817.json",
+      "recordedAt": "2026-08-17T20:17:19.7754723Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "ssgi-guardian-clear-resolution-curve-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/ssgi-guardian-clear-resolution-curve-a-20260817.json",
+      "recordedAt": "2026-08-17T20:14:02.7852104Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "ssgi-dragonsreach-resolution-visual-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/ssgi-dragonsreach-resolution-visual-a-20260817.json",
+      "recordedAt": "2026-08-17T20:20:27.2899376Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "ssgi-dragonsreach-motion-step-c-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/ssgi-dragonsreach-motion-step-c-20260817.json",
+      "recordedAt": "2026-08-17T20:57:52.1628654Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "ssgi-dragonsreach-motion-step-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/ssgi-dragonsreach-motion-step-a-20260817.json",
+      "recordedAt": "2026-08-17T20:49:03.8197721Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-visual-curve-pbq-r02",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-visual-curve-pbq-r02.json",
+      "recordedAt": "2026-08-17T14:20:53.3032498Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-visual-curve-pbq-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-visual-curve-pbq-r01.json",
+      "recordedAt": "2026-08-17T14:18:34.2303831Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-sss-factorial-bfirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-sss-factorial-bfirst-r01.json",
+      "recordedAt": "2026-08-17T14:43:58.7395793Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-fog-dawn-hudoff-volumetricshadows-enabled-r02",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-fog-dawn-hudoff-volumetricshadows-enabled-r02.json",
+      "recordedAt": "2026-08-17T17:27:51.478659Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-fog-dawn-hudoff-volumetricshadows-enabled-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-fog-dawn-hudoff-volumetricshadows-enabled-r01.json",
+      "recordedAt": "2026-08-17T17:27:01.9104321Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-clear-sky-sss-b-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-clear-sky-sss-b-r01.json",
+      "recordedAt": "2026-08-17T14:57:20.0920451Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-clear-sky-sss-a-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-clear-sky-sss-a-r01.json",
+      "recordedAt": "2026-08-17T14:58:27.0236476Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-clear-hudoff-sss-factor-samplesfirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-clear-hudoff-sss-factor-samplesfirst-r01.json",
+      "recordedAt": "2026-08-17T15:59:46.1655892Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "69b49efce",
+      "dllSha256": "3D8719C628E21A03CABAFD550733ABC871C68E8A9DEE11FDB2890A8BA7E9B801",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-clear-hudoff-sss-factor-rangefirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-clear-hudoff-sss-factor-rangefirst-r01.json",
+      "recordedAt": "2026-08-17T15:58:33.4419986Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "69b49efce",
+      "dllSha256": "3D8719C628E21A03CABAFD550733ABC871C68E8A9DEE11FDB2890A8BA7E9B801",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-clear-hudoff-sss-factor-mask-samplesfirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-clear-hudoff-sss-factor-mask-samplesfirst-r01.json",
+      "recordedAt": "2026-08-17T16:35:57.4037579Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "8dc482976",
+      "dllSha256": "26B6110286FB5A088BF0DEDABADC4AE12028CDB466E39E296833081C41ECE9B5",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-clear-hudoff-sss-factor-mask-rangefirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-clear-hudoff-sss-factor-mask-rangefirst-r01.json",
+      "recordedAt": "2026-08-17T16:34:24.1129589Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "8dc482976",
+      "dllSha256": "26B6110286FB5A088BF0DEDABADC4AE12028CDB466E39E296833081C41ECE9B5",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-clear-day-hudoff-volumetricshadows-enabled-r02",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-clear-day-hudoff-volumetricshadows-enabled-r02.json",
+      "recordedAt": "2026-08-17T17:30:30.4567802Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-clear-day-hudoff-volumetricshadows-enabled-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-clear-day-hudoff-volumetricshadows-enabled-r01.json",
+      "recordedAt": "2026-08-17T17:29:32.5337699Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-dragonsreach-midday-hudoff-sss-factor-mask-samplesfirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-dragonsreach-midday-hudoff-sss-factor-mask-samplesfirst-r01.json",
+      "recordedAt": "2026-08-17T16:38:47.2297144Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "8dc482976",
+      "dllSha256": "26B6110286FB5A088BF0DEDABADC4AE12028CDB466E39E296833081C41ECE9B5",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-dragonsreach-midday-hudoff-sss-factor-mask-rangefirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-dragonsreach-midday-hudoff-sss-factor-mask-rangefirst-r01.json",
+      "recordedAt": "2026-08-17T16:37:46.8293796Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "8dc482976",
+      "dllSha256": "26B6110286FB5A088BF0DEDABADC4AE12028CDB466E39E296833081C41ECE9B5",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-riften-info-visual-ibl-vs-r01",
+      "path": "20260817-amd-svr-ovr-null-riften-info-visual-ibl-vs-r01.json",
+      "recordedAt": "2026-08-17T08:51:07.258Z",
+      "status": "valid",
+      "accepted": true,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "410cab14e70af0a21357aa9c0f6d9736aa5fe7a3",
+      "dllSha256": "2D946190762C08DEFFE2AE827EDFF898DE534C821A0692F7F6CF0EB74AC71A2A",
+      "settingsSha256": "7DF1EF7BD040A402E496E9D5F6B92C21641A5230E9AFCA51918D3FB8BFD23D53",
+      "provenanceGaps": []
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-riften-info-visual-ibl-on-vs-off-r01",
+      "path": "20260817-amd-svr-ovr-null-riften-info-visual-ibl-on-vs-off-r01.json",
+      "recordedAt": "2026-08-17T08:59:08.241Z",
+      "status": "valid",
+      "accepted": true,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "410cab14e70af0a21357aa9c0f6d9736aa5fe7a3",
+      "dllSha256": "2D946190762C08DEFFE2AE827EDFF898DE534C821A0692F7F6CF0EB74AC71A2A",
+      "settingsSha256": "16A756C87ABF0E7B429A6C520B814708A2BF78ABD63C3B271548C767E00A87B4",
+      "provenanceGaps": []
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-riften-info-visual-ibl-off-vs-on-r01",
+      "path": "20260817-amd-svr-ovr-null-riften-info-visual-ibl-off-vs-on-r01.json",
+      "recordedAt": "2026-08-17T08:55:14.867Z",
+      "status": "valid",
+      "accepted": true,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "410cab14e70af0a21357aa9c0f6d9736aa5fe7a3",
+      "dllSha256": "2D946190762C08DEFFE2AE827EDFF898DE534C821A0692F7F6CF0EB74AC71A2A",
+      "settingsSha256": "02E63F3C05E4BE7AD3B6C31EB2FC18E26EF74C54627A99AA1E2644EDFBFA7CFA",
+      "provenanceGaps": []
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-riften-info-ibl-vs-r02",
+      "path": "20260817-amd-svr-ovr-null-riften-info-ibl-vs-r02.json",
+      "recordedAt": "2026-08-17T06:58:52.6211223Z",
+      "status": "valid",
+      "accepted": true,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "f971c9122ffc666268066851e91b10d79a081742",
+      "dllSha256": "565002FFA2E88CE0303F857DC410C7FF3CD2B5F916BA266EC5738E22ACA16EF6",
+      "settingsSha256": "7DF1EF7BD040A402E496E9D5F6B92C21641A5230E9AFCA51918D3FB8BFD23D53",
+      "provenanceGaps": []
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-riften-info-ibl-vs-r01",
+      "path": "20260817-amd-svr-ovr-null-riften-info-ibl-vs-r01.json",
+      "recordedAt": "2026-08-17T06:10:38.8946757Z",
+      "status": "valid",
+      "accepted": true,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "f971c9122ffc666268066851e91b10d79a081742",
+      "dllSha256": "565002FFA2E88CE0303F857DC410C7FF3CD2B5F916BA266EC5738E22ACA16EF6",
+      "settingsSha256": "7DF1EF7BD040A402E496E9D5F6B92C21641A5230E9AFCA51918D3FB8BFD23D53",
+      "provenanceGaps": []
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-riften-info-ibl-on-vs-off-r03",
+      "path": "20260817-amd-svr-ovr-null-riften-info-ibl-on-vs-off-r03.json",
+      "recordedAt": "2026-08-17T06:47:18.0944217Z",
+      "status": "valid",
+      "accepted": true,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "f971c9122ffc666268066851e91b10d79a081742",
+      "dllSha256": "565002FFA2E88CE0303F857DC410C7FF3CD2B5F916BA266EC5738E22ACA16EF6",
+      "settingsSha256": "16A756C87ABF0E7B429A6C520B814708A2BF78ABD63C3B271548C767E00A87B4",
+      "provenanceGaps": []
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-riften-info-ibl-off-vs-on-r02",
+      "path": "20260817-amd-svr-ovr-null-riften-info-ibl-off-vs-on-r02.json",
+      "recordedAt": "2026-08-17T06:53:08.1901922Z",
+      "status": "valid",
+      "accepted": true,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "f971c9122ffc666268066851e91b10d79a081742",
+      "dllSha256": "565002FFA2E88CE0303F857DC410C7FF3CD2B5F916BA266EC5738E22ACA16EF6",
+      "settingsSha256": "02E63F3C05E4BE7AD3B6C31EB2FC18E26EF74C54627A99AA1E2644EDFBFA7CFA",
+      "provenanceGaps": []
+    },
+    {
+      "runId": "20260817-amd-null-guardian-fog-dawn-volumetricshadows-enabled-r02",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-fog-dawn-volumetricshadows-enabled-r02.json",
+      "recordedAt": "2026-08-17T17:26:08.192573Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-storm-hudoff-wetness-ranges-afirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-storm-hudoff-wetness-ranges-afirst-r01.json",
+      "recordedAt": "2026-08-17T17:06:58.3106515Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-storm-hudoff-wetness-ranges-bfirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-storm-hudoff-wetness-ranges-bfirst-r01.json",
+      "recordedAt": "2026-08-17T17:08:42.2711248Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-storm-hudoff-wetness-temporal-afirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-storm-hudoff-wetness-temporal-afirst-r01.json",
+      "recordedAt": "2026-08-17T17:10:59.2157685Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-sss-factorial-afirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-sss-factorial-afirst-r01.json",
+      "recordedAt": "2026-08-17T14:45:43.7212922Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-curve-qbp-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-curve-qbp-r01.json",
+      "recordedAt": "2026-08-17T14:06:08.2978554Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-curve-pbq-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-curve-pbq-r01.json",
+      "recordedAt": "2026-08-17T14:04:00.984727Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:50:59.6481789Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-grasslighting-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-grasslighting-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:54:57.3400274Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-grasscollision-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-guardian-clear-info-grasscollision-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:54:09.0991216Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-dragonsreach-info-volumetriclighting-visual-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-dragonsreach-info-volumetriclighting-visual-r01.json",
+      "recordedAt": "2026-08-17T13:02:54.634922Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-dragonsreach-info-volumetriclighting-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-dragonsreach-info-volumetriclighting-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:57:18.2858263Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-dragonsreach-info-sss-subsurface-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-dragonsreach-info-sss-subsurface-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:58:09.3086983Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "vl-guardian-fog-quality-visual-a-20260817",
+      "path": "retrospective/20260817-amd-svr-ovr-null/vl-guardian-fog-quality-visual-a-20260817.json",
+      "recordedAt": "2026-08-17T20:11:12.2949391Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "16a8ec96b",
+      "dllSha256": "D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-svr-ovr-null-dragonsreach-info-lightlimitfix-ablation-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-svr-ovr-null-dragonsreach-info-lightlimitfix-ablation-r01.json",
+      "recordedAt": "2026-08-17T12:56:26.4098728Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "timing"
+      ],
+      "sourceCommit": "9218ec2e8",
+      "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-windhelm-snow-sss-distance-bq-r02",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-windhelm-snow-sss-distance-bq-r02.json",
+      "recordedAt": "2026-08-17T15:12:35.982603Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-windhelm-snow-sss-distance-bq-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-windhelm-snow-sss-distance-bq-r01.json",
+      "recordedAt": "2026-08-17T15:11:11.3187188Z",
+      "status": "invalid",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-whiterun-yaw2283-sss-factor-samplesfirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-whiterun-yaw2283-sss-factor-samplesfirst-r01.json",
+      "recordedAt": "2026-08-17T15:51:21.3244407Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "69b49efce",
+      "dllSha256": "3D8719C628E21A03CABAFD550733ABC871C68E8A9DEE11FDB2890A8BA7E9B801",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-whiterun-yaw2283-sss-factor-rangefirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-whiterun-yaw2283-sss-factor-rangefirst-r01.json",
+      "recordedAt": "2026-08-17T15:50:19.7916756Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "69b49efce",
+      "dllSha256": "3D8719C628E21A03CABAFD550733ABC871C68E8A9DEE11FDB2890A8BA7E9B801",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-whiterun-clear-sss-distance-qb-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-whiterun-clear-sss-distance-qb-r01.json",
+      "recordedAt": "2026-08-17T15:22:58.6217724Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-whiterun-clear-sss-distance-bq-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-whiterun-clear-sss-distance-bq-r01.json",
+      "recordedAt": "2026-08-17T15:21:18.331883Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-storm-wet-ibl-b-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-storm-wet-ibl-b-r01.json",
+      "recordedAt": "2026-08-17T14:59:34.0770913Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-storm-wet-ibl-a-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-storm-wet-ibl-a-r01.json",
+      "recordedAt": "2026-08-17T15:00:37.2819523Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-guardian-storm-hudoff-wetness-temporal-bfirst-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-guardian-storm-hudoff-wetness-temporal-bfirst-r01.json",
+      "recordedAt": "2026-08-17T17:12:32.0738357Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "ab359c4d9",
+      "dllSha256": "7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "20260817-amd-null-windhelm-snow-sss-distance-qb-r01",
+      "path": "retrospective/20260817-amd-svr-ovr-null/20260817-amd-null-windhelm-snow-sss-distance-qb-r01.json",
+      "recordedAt": "2026-08-17T15:13:40.3202083Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "dbad76d12",
+      "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    },
+    {
+      "runId": "wet-gs-qp-m1",
+      "path": "retrospective/20260817-amd-svr-ovr-null/wet-gs-qp-m1.json",
+      "recordedAt": "2026-08-17T21:45:01.2646461Z",
+      "status": "incomplete",
+      "accepted": false,
+      "gpuVendor": "AMD",
+      "adapterName": "AMD Radeon RX 7900 XT",
+      "runtimeLane": "SVR-OVR-NULL",
+      "applicationVrApi": "OpenVR",
+      "hmdMode": "synthetic",
+      "passKinds": [
+        "visual"
+      ],
+      "sourceCommit": "d0682bf57",
+      "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+      "settingsSha256": null,
+      "provenanceGaps": [
+        "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+        "Dependency revision and dirty state were not serialized by the archived runner record."
+      ]
+    }
+  ]
+}

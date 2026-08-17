@@ -1,39 +1,39 @@
 {
   "$schema": "../schemas/measurement-run.schema.json",
   "schemaVersion": 2,
-  "runId": "20260817-amd-svr-ovr-null-replace-r01",
-  "recordedAt": "2026-08-17T00:00:00Z",
+  "runId": "20260818-nvidia-svr-ovr-physical-scene-candidate-r01",
+  "recordedAt": "2026-08-18T00:00:00Z",
   "status": "planned",
-  "purpose": "Replace with the hypothesis or proof-of-concept objective.",
+  "purpose": "Replace with the NVIDIA hypothesis or comparison objective.",
   "sourceSnapshot": {
     "repository": "Community Shaders Expanded",
-    "branch": "replace-with-branch",
+    "branch": "feat/preset-calibration-automation",
     "commit": "0000000",
-    "buildConfiguration": "Replace with the exact build configuration.",
-    "dllVersion": "Replace with the built DLL version.",
+    "buildConfiguration": "VR Release; DEVBENCH_BRIDGE=ON; record all material compiler options",
+    "dllVersion": "CSX 3.18-VR",
     "dllSha256": "0000000000000000000000000000000000000000000000000000000000000000",
     "settingsSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "settingsArtifact": null,
+    "settingsArtifact": "artifact://replace-with-stable-settings-locator",
     "dependencies": [
       {
-        "name": "CommonLib",
-        "revision": "replace-with-revision",
+        "name": "CommonLibSSE-NG",
+        "revision": "replace-with-full-revision",
         "dirty": null,
-        "notes": "Verify the exact dependency and dirty state before the run."
+        "notes": "Verify dependency revision and dirty state before the run."
       }
     ]
   },
   "hardware": {
-    "gpuVendor": "AMD",
-    "adapterName": "Replace with adapter name.",
-    "deviceId": "Replace with PCI or API device identifier.",
-    "driverVersion": "Replace with driver version.",
+    "gpuVendor": "NVIDIA",
+    "adapterName": "Replace with exact NVIDIA adapter name",
+    "deviceId": "Replace with PCI or API device identifier",
+    "driverVersion": "Replace with NVIDIA driver version",
     "vramBytes": null,
     "cpu": null,
     "operatingSystem": null
   },
   "runtimeLane": {
-    "laneId": "SVR-OVR-NULL",
+    "laneId": "SVR-OVR-PHYSICAL",
     "applicationVrApi": "OpenVR",
     "compatibilityLayer": "none",
     "compatibilityLayerVersion": null,
@@ -41,36 +41,36 @@
     "runtimeImplementation": "SteamVR",
     "runtimeVersion": null,
     "compositorTransport": "SteamVR compositor",
-    "notes": "This lane cannot provide OCU or OpenXR evidence."
+    "notes": "Change every field needed to describe the actual lane; do not label an OpenXR or OCU path as this lane."
   },
   "hmd": {
-    "mode": "synthetic",
-    "driver": "SteamVR null",
-    "profile": "Record the exact null-driver settings and revision.",
-    "presenceState": "not-applicable",
+    "mode": "occupied-physical",
+    "driver": "Replace with active HMD driver",
+    "profile": "Replace with headset, render target, refresh, projection and relevant runtime settings",
+    "presenceState": "worn",
     "renderTarget": {
-      "width": 1512,
-      "height": 1680,
+      "width": 1,
+      "height": 1,
       "layout": "per-eye"
     },
     "refreshHz": 90,
     "projection": {
-      "source": "unknown",
+      "source": "runtime-query",
       "leftEye": null,
       "rightEye": null,
       "eyeToHeadArtifact": null,
       "hiddenAreaMeshArtifact": null
     },
-    "poseSource": "runtime-default",
-    "controllerProfile": "none"
+    "poseSource": "runtime-tracking",
+    "controllerProfile": "Replace with controller profile or none"
   },
   "scene": {
     "sceneId": "replace-scene",
     "saveArtifact": null,
-    "location": "Replace with cell and world position.",
-    "weather": "Replace with weather identity.",
-    "gameTime": "Replace with game date and time.",
-    "poseScript": "Replace with pose or automation script identity.",
+    "location": "Replace with cell, worldspace and verified position",
+    "weather": "Replace with editor ID and form ID",
+    "gameTime": "Replace with verified game day and hour",
+    "poseScript": "Replace with repeatable entry pose or motion procedure",
     "motionProfile": "static",
     "controlledVariables": []
   },

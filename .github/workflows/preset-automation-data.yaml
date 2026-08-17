@@ -1,0 +1,32 @@
+name: Preset automation data
+
+on:
+    push:
+        paths:
+            - ".github/workflows/preset-automation-data.yaml"
+            - "docs/development/preset-automation/measurements/**"
+            - "docs/development/preset-automation/imports/**"
+            - "docs/development/preset-automation/schemas/measurement-run.schema.json"
+            - "tools/import-preset-calibration-archive.ps1"
+            - "tools/validate-preset-measurements.ps1"
+    pull_request:
+        paths:
+            - ".github/workflows/preset-automation-data.yaml"
+            - "docs/development/preset-automation/measurements/**"
+            - "docs/development/preset-automation/imports/**"
+            - "docs/development/preset-automation/schemas/measurement-run.schema.json"
+            - "tools/import-preset-calibration-archive.ps1"
+            - "tools/validate-preset-measurements.ps1"
+
+permissions:
+    contents: read
+
+jobs:
+    validate:
+        runs-on: windows-latest
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Validate measurement corpus
+              shell: pwsh
+              run: ./tools/validate-preset-measurements.ps1

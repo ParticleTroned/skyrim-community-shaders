@@ -33,6 +33,7 @@ Hard correctness and stability constraints are applied first. Surviving candidat
 | Sequence capture calibration | Measured lossless throughput envelopes and temporal/stereo capture profiles | [`sequence-capture-calibration.md`](./sequence-capture-calibration.md) |
 | Anchor scenes | Validated scene recipes, time/weather variants, expected pose, and retained proof captures | [`anchor-scenes.md`](./anchor-scenes.md) |
 | Measurement run | Machine-readable provenance and results for one controlled run | [`measurements/`](./measurements/README.md) |
+| Contributor workflow | Vendor-neutral record creation, artifact policy, validation, and review checklist, including an NVIDIA path | [`CONTRIBUTING.md`](./CONTRIBUTING.md) |
 | Preset policy | Vendor-neutral intent, constraints, priorities, and selection rules for each tier | [`preset-policies.md`](./preset-policies.md) |
 | Existing preset census | Structural comparison of the six inherited MGO vendor/tier files and the resulting screening priorities | [`preset-baseline-census.md`](./preset-baseline-census.md) |
 | First-pass screening | AMD native-OpenVR timing and visual A/B/A results, artifact hashes, interpretation, and follow-up routing | [`screening-20260817.md`](./screening-20260817.md) |
@@ -50,6 +51,8 @@ The canonical schemas are:
 
 - [`feature-dossier.schema.json`](./schemas/feature-dossier.schema.json);
 - [`measurement-run.schema.json`](./schemas/measurement-run.schema.json).
+
+The generated [measurement corpus index](./measurements/corpus-index.json) exposes the current vendor, lane, status, source and provenance coverage without requiring the external large-artifact archive. Pull requests validate the complete corpus and index automatically.
 
 Schema version changes are required when a field changes meaning or units, not merely when an optional field is added.
 

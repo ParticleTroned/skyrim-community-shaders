@@ -1,0 +1,251 @@
+{
+  "$schema": "../../../schemas/measurement-run.schema.json",
+  "schemaVersion": 2,
+  "runId": "20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-curve-pbq-r01",
+  "recordedAt": "2026-08-17T14:12:54.4767707Z",
+  "status": "incomplete",
+  "purpose": "Retrospectively normalize the Wetterness timing campaign while preserving its original runner disposition.",
+  "sourceSnapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "feat/preset-calibration-automation",
+    "commit": "dbad76d12",
+    "buildConfiguration": "VR Release; Info logging; Release+DevBench bridge",
+    "dllVersion": "CSX 3.18-VR",
+    "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+    "settingsSha256": null,
+    "settingsArtifact": null,
+    "dependencies": [
+      {
+        "name": "CommonLibSSE-NG",
+        "revision": "not-recorded-in-source-run",
+        "dirty": null,
+        "notes": "The retrospective runner record did not serialize dependency provenance."
+      }
+    ]
+  },
+  "hardware": {
+    "gpuVendor": "AMD",
+    "adapterName": "AMD Radeon RX 7900 XT",
+    "deviceId": "PCI\\VEN_1002&DEV_744C&SUBSYS_E4711DA2&REV_CC",
+    "driverVersion": "32.0.31035.1003",
+    "vramBytes": null,
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "operatingSystem": "Microsoft Windows 11 Pro 10.0.26200 build 26200"
+  },
+  "runtimeLane": {
+    "laneId": "SVR-OVR-NULL",
+    "applicationVrApi": "OpenVR",
+    "compatibilityLayer": "none",
+    "compatibilityLayerVersion": null,
+    "targetRuntimeApi": "OpenVR",
+    "runtimeImplementation": "SteamVR",
+    "runtimeVersion": "2.16.7",
+    "compositorTransport": "SteamVR compositor",
+    "notes": "Vanilla openvr_api.dll with OCU disabled; SteamVR null driver owned the active HMD."
+  },
+  "hmd": {
+    "mode": "synthetic",
+    "driver": "SteamVR null",
+    "profile": "CSX Null HMD; 1512x1680 per eye; 90 Hz; IPD 0.063 m; forcedDriver=null; requireHmd=false",
+    "presenceState": "not-applicable",
+    "renderTarget": {
+      "width": 1512,
+      "height": 1680,
+      "layout": "per-eye"
+    },
+    "refreshHz": 90,
+    "projection": {
+      "source": "driver-configuration",
+      "leftEye": null,
+      "rightEye": null,
+      "eyeToHeadArtifact": null,
+      "hiddenAreaMeshArtifact": null
+    },
+    "poseSource": "static-driver-pose",
+    "controllerProfile": "none"
+  },
+  "scene": {
+    "sceneId": "GuardianStones",
+    "saveArtifact": null,
+    "location": "cell=GuardianStones (0x00009B91); worldspace=Tamriel (0x0000003C); position=3266.81030273438,-59044.234375,1442.01635742188",
+    "weather": "SkyrimStormRain (0x000C8220)",
+    "gameTime": "daysPassed=0.58437180519104; gameHour=14.0249223709106",
+    "poseScript": "Recorded fixed null-HMD scene snapshot; see source record.",
+    "motionProfile": "static null-HMD pose",
+    "controlledVariables": [
+      "feature=Wetterness",
+      "control=qualityProfile",
+      "retrospective import from the immutable archived runner record"
+    ]
+  },
+  "passes": [
+    {
+      "kind": "timing",
+      "status": "incomplete",
+      "warmupFrames": 0,
+      "sampleFrames": 600,
+      "profilerArtifact": "source-record",
+      "profilerMetrics": [
+        {
+          "name": "baseline-before total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.205150127410889,
+          "average": 5.120719103018443,
+          "median": 5.044869899749756,
+          "p95": 6.03046989440918,
+          "p99": 6.234999656677246,
+          "maximum": 6.3938398361206055
+        },
+        {
+          "name": "baseline-before total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.5561999678611755,
+          "average": 0.9261308416724205,
+          "median": 0.7591999769210815,
+          "p95": 2.002200126647949,
+          "p99": 2.6310994625091553,
+          "maximum": 2.962799549102783
+        },
+        {
+          "name": "profile-performance total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.2011799812316895,
+          "average": 5.116142507394155,
+          "median": 5.1080403327941895,
+          "p95": 5.822259902954102,
+          "p99": 6.072690486907959,
+          "maximum": 6.125249862670898
+        },
+        {
+          "name": "profile-performance total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.599399983882904,
+          "average": 0.9616616601745288,
+          "median": 0.7659000158309937,
+          "p95": 2.0201001167297363,
+          "p99": 2.811899185180664,
+          "maximum": 3.2291994094848633
+        },
+        {
+          "name": "profile-balanced total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.293090343475342,
+          "average": 4.972239100933075,
+          "median": 4.938109874725342,
+          "p95": 5.765460014343262,
+          "p99": 5.882969856262207,
+          "maximum": 5.906590461730957
+        },
+        {
+          "name": "profile-balanced total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.5923000574111938,
+          "average": 0.8713816747069358,
+          "median": 0.7319999933242798,
+          "p95": 1.3598002195358276,
+          "p99": 2.1512999534606934,
+          "maximum": 2.4028003215789795
+        },
+        {
+          "name": "profile-quality total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.172510147094727,
+          "average": 4.992986504236857,
+          "median": 4.998199462890625,
+          "p95": 5.697570323944092,
+          "p99": 5.984180450439453,
+          "maximum": 6.196829795837402
+        },
+        {
+          "name": "profile-quality total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.5622999668121338,
+          "average": 0.9110091666380564,
+          "median": 0.7155999541282654,
+          "p95": 2.0638999938964844,
+          "p99": 2.748499870300293,
+          "maximum": 3.4756999015808105
+        },
+        {
+          "name": "baseline-return total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.174149990081787,
+          "average": 4.966985921065013,
+          "median": 4.878439903259277,
+          "p95": 5.750230312347412,
+          "p99": 6.056759834289551,
+          "maximum": 6.328590393066406
+        },
+        {
+          "name": "baseline-return total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.5919999480247498,
+          "average": 0.8527208422621091,
+          "median": 0.7084999680519104,
+          "p95": 1.6398000717163086,
+          "p99": 2.2197999954223633,
+          "maximum": 2.387899875640869
+        }
+      ],
+      "capture": null,
+      "issues": [
+        "Exact full settings snapshot provenance is absent from the archived runner record."
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "source-record",
+      "role": "archived runner record and campaign manifest",
+      "locator": "archive://csx-preset-automation/2026-08-17/MO2-overwrite/CSX Baselines/preset-automation-curves/20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-curve-pbq-r01/profile-curve-profiler-raw.json",
+      "mediaType": "application/json",
+      "bytes": 18562683,
+      "sha256": "0BE1473BF2ABEB40B1C65F8D7309F3FE1FB9646DCAE4C602AD9C41EFBEC20C49",
+      "retention": "external-retained"
+    }
+  ],
+  "comparability": {
+    "baselineRunId": null,
+    "scope": "within-lane",
+    "controlledVariables": [
+      "feature=Wetterness",
+      "control=qualityProfile",
+      "retrospective import from the immutable archived runner record"
+    ],
+    "deviations": [
+      "The exact complete settings snapshot digest was not retained, so this record cannot enter a cross-vendor frontier comparison."
+    ]
+  },
+  "validity": {
+    "accepted": false,
+    "reasons": [
+      "The original runner marked the archived campaign accepted within its recorded lane.",
+      "Canonical acceptance is withheld because the exact complete settings snapshot digest is missing.",
+      "Every phase retained the requested number of unique resolved post-arm profiler frames.",
+      "Every profile reached exact effective enum readback and its declared readiness/settle gate.",
+      "The run restored the exact in-memory baseline profile state and did not overlap screenshot capture."
+    ]
+  },
+  "conclusions": [
+    "The archived source runner disposition was accepted.",
+    "Reviewed interpretation is retained in ../../../profile-curves-20260817.md.",
+    "This retrospective normalization is searchable and machine-readable but is not canonical cross-vendor evidence until the missing settings identity is recovered."
+  ],
+  "provenanceGaps": [
+    "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+    "Dependency revision and dirty state were not serialized by the archived runner record."
+  ],
+  "notes": [
+    "Generated by tools/import-preset-calibration-archive.ps1 from the immutable archived source record."
+  ]
+}

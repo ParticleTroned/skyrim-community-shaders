@@ -27,7 +27,10 @@
       "type": "string"
     },
     "schemaVersion": {
-      "const": 1
+      "enum": [
+        1,
+        2
+      ]
     },
     "runId": {
       "type": "string",
@@ -82,7 +85,14 @@
           "$ref": "#/$defs/sha256"
         },
         "settingsSha256": {
-          "$ref": "#/$defs/sha256"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "settingsArtifact": {
           "type": [
@@ -588,10 +598,94 @@
     "conclusions": {
       "$ref": "#/$defs/stringArray"
     },
+    "provenanceGaps": {
+      "$ref": "#/$defs/stringArray"
+    },
     "notes": {
       "$ref": "#/$defs/stringArray"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "schemaVersion"
+        ]
+      },
+      "then": {
+        "properties": {
+          "sourceSnapshot": {
+            "properties": {
+              "settingsSha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "const": 2
+          }
+        },
+        "required": [
+          "schemaVersion"
+        ]
+      },
+      "then": {
+        "required": [
+          "provenanceGaps"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "sourceSnapshot": {
+            "properties": {
+              "settingsSha256": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "settingsSha256"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "invalid",
+              "incomplete"
+            ]
+          },
+          "validity": {
+            "properties": {
+              "accepted": {
+                "const": false
+              }
+            }
+          },
+          "provenanceGaps": {
+            "minItems": 1
+          }
+        },
+        "required": [
+          "provenanceGaps"
+        ]
+      }
+    }
+  ],
   "$defs": {
     "nonEmptyString": {
       "type": "string",

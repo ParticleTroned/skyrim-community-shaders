@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "validatedAt": "2026-08-17",
   "runtimeLane": "SVR-OVR-NULL",
-  "captureRoot": "L:\\CSX Preset Automation\\Sessions\\2026-08-17\\MO2-overwrite\\CSX Baselines\\20260817-anchor-scout",
+  "captureRoot": "archive://csx-preset-automation/2026-08-17/anchor-scout",
   "recipeDefaults": {
     "postCocWaitMs": 12000,
     "postTimeWaitMs": 1500,

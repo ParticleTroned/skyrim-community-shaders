@@ -1,0 +1,250 @@
+{
+  "$schema": "../../../schemas/measurement-run.schema.json",
+  "schemaVersion": 2,
+  "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-sss-factorial-afirst-r01",
+  "recordedAt": "2026-08-17T14:45:43.7212922Z",
+  "status": "incomplete",
+  "purpose": "Retrospectively normalize the multi-factor rendering controls timing campaign while preserving its original runner disposition.",
+  "sourceSnapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "feat/preset-calibration-automation",
+    "commit": "dbad76d12",
+    "buildConfiguration": "VR Release; Info logging; Release+DevBench bridge",
+    "dllVersion": "CSX 3.18-VR",
+    "dllSha256": "35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D",
+    "settingsSha256": null,
+    "settingsArtifact": null,
+    "dependencies": [
+      {
+        "name": "CommonLibSSE-NG",
+        "revision": "not-recorded-in-source-run",
+        "dirty": null,
+        "notes": "The retrospective runner record did not serialize dependency provenance."
+      }
+    ]
+  },
+  "hardware": {
+    "gpuVendor": "AMD",
+    "adapterName": "AMD Radeon RX 7900 XT",
+    "deviceId": "PCI\\VEN_1002&DEV_744C&SUBSYS_E4711DA2&REV_CC",
+    "driverVersion": "32.0.31035.1003",
+    "vramBytes": null,
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "operatingSystem": "Microsoft Windows 11 Pro 10.0.26200 build 26200"
+  },
+  "runtimeLane": {
+    "laneId": "SVR-OVR-NULL",
+    "applicationVrApi": "OpenVR",
+    "compatibilityLayer": "none",
+    "compatibilityLayerVersion": null,
+    "targetRuntimeApi": "OpenVR",
+    "runtimeImplementation": "SteamVR",
+    "runtimeVersion": "2.16.7",
+    "compositorTransport": "SteamVR compositor",
+    "notes": "Vanilla openvr_api.dll with OCU disabled; SteamVR null driver owned the active HMD."
+  },
+  "hmd": {
+    "mode": "synthetic",
+    "driver": "SteamVR null",
+    "profile": "CSX Null HMD; 1512x1680 per eye; 90 Hz; IPD 0.063 m; forcedDriver=null; requireHmd=false",
+    "presenceState": "not-applicable",
+    "renderTarget": {
+      "width": 1512,
+      "height": 1680,
+      "layout": "per-eye"
+    },
+    "refreshHz": 90,
+    "projection": {
+      "source": "driver-configuration",
+      "leftEye": null,
+      "rightEye": null,
+      "eyeToHeadArtifact": null,
+      "hiddenAreaMeshArtifact": null
+    },
+    "poseSource": "static-driver-pose",
+    "controllerProfile": "none"
+  },
+  "scene": {
+    "sceneId": "GuardianStones",
+    "saveArtifact": null,
+    "location": "cell=GuardianStones (0x00009B91); worldspace=Tamriel (0x0000003C); position=3266.81030273438,-59044.234375,1442.01635742188",
+    "weather": "SkyrimClear (0x0000081A)",
+    "gameTime": "daysPassed=0.584371566772461; gameHour=14.0249166488647",
+    "poseScript": "Recorded fixed null-HMD scene snapshot; see source record.",
+    "motionProfile": "static null-HMD pose",
+    "controlledVariables": [
+      "factors={\"A\":{\"feature\":\"Skylighting\",\"control\":\"performanceActive\"},\"B\":{\"feature\":\"ScreenSpaceShadows\",\"control\":\"performanceActive\"}}",
+      "retrospective import from the immutable archived runner record"
+    ]
+  },
+  "passes": [
+    {
+      "kind": "timing",
+      "status": "incomplete",
+      "warmupFrames": 0,
+      "sampleFrames": 600,
+      "profilerArtifact": "source-record",
+      "profilerMetrics": [
+        {
+          "name": "state-11-before total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.138920307159424,
+          "average": 4.975802568594615,
+          "median": 4.977640151977539,
+          "p95": 5.665800094604492,
+          "p99": 5.7790303230285645,
+          "maximum": 5.83765983581543
+        },
+        {
+          "name": "state-11-before total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.4284000098705292,
+          "average": 0.695959151784579,
+          "median": 0.5598999261856079,
+          "p95": 1.6872000694274902,
+          "p99": 2.2406997680664062,
+          "maximum": 2.4203999042510986
+        },
+        {
+          "name": "state-01 total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.003429889678955,
+          "average": 4.725158139069875,
+          "median": 4.67503023147583,
+          "p95": 5.482709884643555,
+          "p99": 6.366680145263672,
+          "maximum": 6.708309650421143
+        },
+        {
+          "name": "state-01 total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.4081000089645386,
+          "average": 0.5439699875811735,
+          "median": 0.5322999954223633,
+          "p95": 0.7001000046730042,
+          "p99": 0.8093999028205872,
+          "maximum": 0.8758000135421753
+        },
+        {
+          "name": "state-00 total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 3.9623899459838867,
+          "average": 4.629722060759862,
+          "median": 4.604489326477051,
+          "p95": 5.173029899597168,
+          "p99": 5.394929885864258,
+          "maximum": 5.518750190734863
+        },
+        {
+          "name": "state-00 total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.4124000072479248,
+          "average": 0.5348241500556469,
+          "median": 0.5287999510765076,
+          "p95": 0.6598999500274658,
+          "p99": 0.7188999652862549,
+          "maximum": 0.7710999250411987
+        },
+        {
+          "name": "state-10 total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.155220031738281,
+          "average": 4.831505831082662,
+          "median": 4.736219882965088,
+          "p95": 5.363649845123291,
+          "p99": 5.957559585571289,
+          "maximum": 5.986850261688232
+        },
+        {
+          "name": "state-10 total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.3887999951839447,
+          "average": 0.720664981007576,
+          "median": 0.5333999991416931,
+          "p95": 1.7186000347137451,
+          "p99": 3.04360032081604,
+          "maximum": 3.180399179458618
+        },
+        {
+          "name": "state-11-return total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.273029804229736,
+          "average": 4.960890225569407,
+          "median": 4.892950534820557,
+          "p95": 5.639979839324951,
+          "p99": 5.944619655609131,
+          "maximum": 6.767250061035156
+        },
+        {
+          "name": "state-11-return total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.3744000494480133,
+          "average": 0.6668699870506922,
+          "median": 0.557200014591217,
+          "p95": 1.1447999477386475,
+          "p99": 2.061800003051758,
+          "maximum": 2.1442999839782715
+        }
+      ],
+      "capture": null,
+      "issues": [
+        "Exact full settings snapshot provenance is absent from the archived runner record."
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "source-record",
+      "role": "archived runner record and campaign manifest",
+      "locator": "archive://csx-preset-automation/2026-08-17/MO2-overwrite/CSX Baselines/preset-automation-interactions/20260817-amd-svr-ovr-null-guardian-clear-info-skylighting-sss-factorial-afirst-r01/factorial-profiler-raw.json",
+      "mediaType": "application/json",
+      "bytes": 18403987,
+      "sha256": "AA8723AB141434EFEA9BEE7AB18E383CE480E68AB71F638F5AAE6AA1F7479F82",
+      "retention": "external-retained"
+    }
+  ],
+  "comparability": {
+    "baselineRunId": null,
+    "scope": "within-lane",
+    "controlledVariables": [
+      "factors={\"A\":{\"feature\":\"Skylighting\",\"control\":\"performanceActive\"},\"B\":{\"feature\":\"ScreenSpaceShadows\",\"control\":\"performanceActive\"}}",
+      "retrospective import from the immutable archived runner record"
+    ],
+    "deviations": [
+      "The exact complete settings snapshot digest was not retained, so this record cannot enter a cross-vendor frontier comparison."
+    ]
+  },
+  "validity": {
+    "accepted": false,
+    "reasons": [
+      "The original runner marked the archived campaign accepted within its recorded lane.",
+      "Canonical acceptance is withheld because the exact complete settings snapshot digest is missing.",
+      "All five phases retained the requested unique resolved profiler samples.",
+      "Both factors used typed reversible controls and returned to exact enabled readback.",
+      "The requested time and weather anchor was reapplied before every phase.",
+      "No screenshot capture overlapped the timing pass."
+    ]
+  },
+  "conclusions": [
+    "The archived source runner disposition was accepted.",
+    "Reviewed interpretation is retained in ../../../interactions-20260817.md.",
+    "This retrospective normalization is searchable and machine-readable but is not canonical cross-vendor evidence until the missing settings identity is recovered."
+  ],
+  "provenanceGaps": [
+    "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+    "Dependency revision and dirty state were not serialized by the archived runner record."
+  ],
+  "notes": [
+    "Generated by tools/import-preset-calibration-archive.ps1 from the immutable archived source record."
+  ]
+}

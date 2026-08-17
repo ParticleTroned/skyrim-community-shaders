@@ -1,0 +1,207 @@
+{
+  "$schema": "../../../schemas/measurement-run.schema.json",
+  "schemaVersion": 2,
+  "runId": "20260817-amd-svr-ovr-null-guardian-clear-info-sss-ablation-r01",
+  "recordedAt": "2026-08-17T12:49:32.4966769Z",
+  "status": "incomplete",
+  "purpose": "Retrospectively normalize the ScreenSpaceShadows timing campaign while preserving its original runner disposition.",
+  "sourceSnapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "feat/preset-calibration-automation",
+    "commit": "9218ec2e8",
+    "buildConfiguration": "VR Release; Info logging; Release+DevBench bridge",
+    "dllVersion": "CSX 3.18-VR",
+    "dllSha256": "03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D",
+    "settingsSha256": null,
+    "settingsArtifact": null,
+    "dependencies": [
+      {
+        "name": "CommonLibSSE-NG",
+        "revision": "not-recorded-in-source-run",
+        "dirty": null,
+        "notes": "The retrospective runner record did not serialize dependency provenance."
+      }
+    ]
+  },
+  "hardware": {
+    "gpuVendor": "AMD",
+    "adapterName": "AMD Radeon RX 7900 XT",
+    "deviceId": "PCI\\VEN_1002&DEV_744C&SUBSYS_E4711DA2&REV_CC",
+    "driverVersion": "32.0.31035.1003",
+    "vramBytes": null,
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "operatingSystem": "Microsoft Windows 11 Pro 10.0.26200 build 26200"
+  },
+  "runtimeLane": {
+    "laneId": "SVR-OVR-NULL",
+    "applicationVrApi": "OpenVR",
+    "compatibilityLayer": "none",
+    "compatibilityLayerVersion": null,
+    "targetRuntimeApi": "OpenVR",
+    "runtimeImplementation": "SteamVR",
+    "runtimeVersion": "2.16.7",
+    "compositorTransport": "SteamVR compositor",
+    "notes": "Vanilla openvr_api.dll with OCU disabled; SteamVR null driver owned the active HMD."
+  },
+  "hmd": {
+    "mode": "synthetic",
+    "driver": "SteamVR null",
+    "profile": "CSX Null HMD; 1512x1680 per eye; 90 Hz; IPD 0.063 m; forcedDriver=null; requireHmd=false",
+    "presenceState": "not-applicable",
+    "renderTarget": {
+      "width": 1512,
+      "height": 1680,
+      "layout": "per-eye"
+    },
+    "refreshHz": 90,
+    "projection": {
+      "source": "driver-configuration",
+      "leftEye": null,
+      "rightEye": null,
+      "eyeToHeadArtifact": null,
+      "hiddenAreaMeshArtifact": null
+    },
+    "poseSource": "static-driver-pose",
+    "controllerProfile": "none"
+  },
+  "scene": {
+    "sceneId": "GuardianStones",
+    "saveArtifact": null,
+    "location": "cell=GuardianStones (0x00009B91); worldspace=Tamriel (0x0000003C); position=3266.89599609375,-59044.23828125,1442.03051757812",
+    "weather": "SkyrimClear (0x0000081A)",
+    "gameTime": "daysPassed=0.602315008640289; gameHour=14.4555597305298",
+    "poseScript": "Recorded fixed null-HMD scene snapshot; see source record.",
+    "motionProfile": "static null-HMD pose",
+    "controlledVariables": [
+      "feature=ScreenSpaceShadows",
+      "control=performanceActive",
+      "retrospective import from the immutable archived runner record"
+    ]
+  },
+  "passes": [
+    {
+      "kind": "timing",
+      "status": "incomplete",
+      "warmupFrames": 0,
+      "sampleFrames": 360,
+      "profilerArtifact": "source-record",
+      "profilerMetrics": [
+        {
+          "name": "baseline-before total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.066220283508301,
+          "average": 4.772900346914927,
+          "median": 4.7405500411987305,
+          "p95": 5.398280143737793,
+          "p99": 5.910369396209717,
+          "maximum": 5.978099822998047
+        },
+        {
+          "name": "baseline-before total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.40309998393058777,
+          "average": 0.6854883164167405,
+          "median": 0.5173999071121216,
+          "p95": 1.8819999694824219,
+          "p99": 2.5893001556396484,
+          "maximum": 3.5418992042541504
+        },
+        {
+          "name": "ablated total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.0447998046875,
+          "average": 4.714447788397471,
+          "median": 4.611999988555908,
+          "p95": 5.383730411529541,
+          "p99": 5.699679851531982,
+          "maximum": 5.8196797370910645
+        },
+        {
+          "name": "ablated total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.3978999853134155,
+          "average": 0.6367291594545047,
+          "median": 0.5017999410629272,
+          "p95": 1.5794000625610352,
+          "p99": 2.2180001735687256,
+          "maximum": 2.5164995193481445
+        },
+        {
+          "name": "baseline-return total GPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 4.031430244445801,
+          "average": 4.786984407901764,
+          "median": 4.736110210418701,
+          "p95": 5.471100330352783,
+          "p99": 5.749889850616455,
+          "maximum": 5.764060020446777
+        },
+        {
+          "name": "baseline-return total CPU",
+          "unit": "ms",
+          "samples": 120,
+          "minimum": 0.3829999566078186,
+          "average": 0.6875266616543134,
+          "median": 0.48989999294281006,
+          "p95": 1.8474000692367554,
+          "p99": 2.437299966812134,
+          "maximum": 2.5836000442504883
+        }
+      ],
+      "capture": null,
+      "issues": [
+        "Exact full settings snapshot provenance is absent from the archived runner record."
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "source-record",
+      "role": "archived runner record and campaign manifest",
+      "locator": "archive://csx-preset-automation/2026-08-17/MO2-overwrite/CSX Baselines/preset-automation-screening/20260817-amd-svr-ovr-null-guardian-clear-info-sss-ablation-r01/ablation-profiler-raw.json",
+      "mediaType": "application/json",
+      "bytes": 10818236,
+      "sha256": "E0C0DCDD8C5FA7E4FCC68F0AD90632BF36CFA7970CD39A1A7C71DB8C14D0C945",
+      "retention": "external-retained"
+    }
+  ],
+  "comparability": {
+    "baselineRunId": null,
+    "scope": "within-lane",
+    "controlledVariables": [
+      "feature=ScreenSpaceShadows",
+      "control=performanceActive",
+      "retrospective import from the immutable archived runner record"
+    ],
+    "deviations": [
+      "The exact complete settings snapshot digest was not retained, so this record cannot enter a cross-vendor frontier comparison."
+    ]
+  },
+  "validity": {
+    "accepted": false,
+    "reasons": [
+      "The original runner marked the archived campaign accepted within its recorded lane.",
+      "Canonical acceptance is withheld because the exact complete settings snapshot digest is missing.",
+      "Every phase retained the requested number of unique resolved post-arm profiler frames.",
+      "The feature used its production Performance Tuning off transition and exact in-memory state restore.",
+      "No screenshot capture overlapped the timing pass."
+    ]
+  },
+  "conclusions": [
+    "The archived source runner disposition was accepted.",
+    "Reviewed interpretation is retained in ../../../screening-20260817.md.",
+    "This retrospective normalization is searchable and machine-readable but is not canonical cross-vendor evidence until the missing settings identity is recovered."
+  ],
+  "provenanceGaps": [
+    "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+    "Dependency revision and dirty state were not serialized by the archived runner record."
+  ],
+  "notes": [
+    "Generated by tools/import-preset-calibration-archive.ps1 from the immutable archived source record."
+  ]
+}

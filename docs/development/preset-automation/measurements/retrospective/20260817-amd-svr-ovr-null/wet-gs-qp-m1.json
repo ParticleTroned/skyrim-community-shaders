@@ -1,0 +1,150 @@
+{
+  "$schema": "../../../schemas/measurement-run.schema.json",
+  "schemaVersion": 2,
+  "runId": "wet-gs-qp-m1",
+  "recordedAt": "2026-08-17T21:45:01.2646461Z",
+  "status": "incomplete",
+  "purpose": "Retrospectively normalize the Wetterness visual campaign while preserving its original runner disposition.",
+  "sourceSnapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "feat/preset-calibration-automation",
+    "commit": "d0682bf57",
+    "buildConfiguration": "VR Release; Info logging; Release+DevBench bridge",
+    "dllVersion": "CSX 3.18-VR",
+    "dllSha256": "1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4",
+    "settingsSha256": null,
+    "settingsArtifact": null,
+    "dependencies": [
+      {
+        "name": "CommonLibSSE-NG",
+        "revision": "not-recorded-in-source-run",
+        "dirty": null,
+        "notes": "The retrospective runner record did not serialize dependency provenance."
+      }
+    ]
+  },
+  "hardware": {
+    "gpuVendor": "AMD",
+    "adapterName": "AMD Radeon RX 7900 XT",
+    "deviceId": "PCI\\VEN_1002&DEV_744C&SUBSYS_E4711DA2&REV_CC",
+    "driverVersion": "32.0.31035.1003",
+    "vramBytes": null,
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "operatingSystem": "Microsoft Windows 11 Pro 10.0.26200 build 26200"
+  },
+  "runtimeLane": {
+    "laneId": "SVR-OVR-NULL",
+    "applicationVrApi": "OpenVR",
+    "compatibilityLayer": "none",
+    "compatibilityLayerVersion": null,
+    "targetRuntimeApi": "OpenVR",
+    "runtimeImplementation": "SteamVR",
+    "runtimeVersion": "2.16.7",
+    "compositorTransport": "SteamVR compositor",
+    "notes": "Vanilla openvr_api.dll with OCU disabled; SteamVR null driver owned the active HMD."
+  },
+  "hmd": {
+    "mode": "synthetic",
+    "driver": "SteamVR null",
+    "profile": "CSX Null HMD; 1512x1680 per eye; 90 Hz; IPD 0.063 m; forcedDriver=null; requireHmd=false",
+    "presenceState": "not-applicable",
+    "renderTarget": {
+      "width": 1512,
+      "height": 1680,
+      "layout": "per-eye"
+    },
+    "refreshHz": 90,
+    "projection": {
+      "source": "driver-configuration",
+      "leftEye": null,
+      "rightEye": null,
+      "eyeToHeadArtifact": null,
+      "hiddenAreaMeshArtifact": null
+    },
+    "poseSource": "static-driver-pose",
+    "controllerProfile": "none"
+  },
+  "scene": {
+    "sceneId": "GuardianStones",
+    "saveArtifact": null,
+    "location": "cell=GuardianStones (0x00009B91); worldspace=Tamriel (0x0000003C); position=3266.89599609375,-59044.23828125,1442.03039550781",
+    "weather": "SkyrimStormRain (0x000C8220)",
+    "gameTime": "daysPassed=0.583333373069763; gameHour=14",
+    "poseScript": "Recorded repeatable player-space translation; see source record.",
+    "motionProfile": "controlled player translation",
+    "controlledVariables": [
+      "feature=Wetterness",
+      "control=qualityProfile",
+      "parameter=Profile",
+      "retrospective import from the immutable archived runner record"
+    ]
+  },
+  "passes": [
+    {
+      "kind": "visual",
+      "status": "incomplete",
+      "warmupFrames": 0,
+      "sampleFrames": 90,
+      "profilerArtifact": null,
+      "profilerMetrics": [],
+      "capture": {
+        "source": "hmd_stereo",
+        "manifestArtifact": "source-record",
+        "complete": true,
+        "capturedFrameCount": 90,
+        "incompleteStereoPairDrops": 0,
+        "queueBackpressureDrops": 0
+      },
+      "issues": [
+        "Exact full settings snapshot provenance is absent from the archived runner record."
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "source-record",
+      "role": "archived runner record and campaign manifest",
+      "locator": "archive://csx-preset-automation/2026-08-17/CSX Baselines/M/wet-gs-qp-m1/visual-motion-parameter-ablation-run.json",
+      "mediaType": "application/json",
+      "bytes": 41706,
+      "sha256": "B29A074FB4B153B95AA07E2268F1401D66771301F9D5A9D16997CBACA7DF53E9",
+      "retention": "external-retained"
+    }
+  ],
+  "comparability": {
+    "baselineRunId": null,
+    "scope": "within-lane",
+    "controlledVariables": [
+      "feature=Wetterness",
+      "control=qualityProfile",
+      "parameter=Profile",
+      "retrospective import from the immutable archived runner record"
+    ],
+    "deviations": [
+      "The exact complete settings snapshot digest was not retained, so this record cannot enter a cross-vendor frontier comparison."
+    ]
+  },
+  "validity": {
+    "accepted": false,
+    "reasons": [
+      "The original runner marked the archived campaign accepted within its recorded lane.",
+      "Canonical acceptance is withheld because the exact complete settings snapshot digest is missing.",
+      "Every phase reproduced and verified the declared anchor before the same player-space translation step.",
+      "Every phase saved exact separate-eye pairs with zero failed, incomplete, or backpressured pairs.",
+      "The native Papyrus position call was issued only after the declared number of compositor pairs had queued, and effective player-position readback verified the step.",
+      "The selected control followed a baseline/ablated/baseline order with exact effective readback and the original quality snapshot was restored."
+    ]
+  },
+  "conclusions": [
+    "The archived source runner disposition was accepted.",
+    "Reviewed interpretation is retained in ../../../motion-tier-screen-20260817.md.",
+    "This retrospective normalization is searchable and machine-readable but is not canonical cross-vendor evidence until the missing settings identity is recovered."
+  ],
+  "provenanceGaps": [
+    "The exact complete SettingsUser.json snapshot and SHA-256 were not retained in the archived runner record.",
+    "Dependency revision and dirty state were not serialized by the archived runner record."
+  ],
+  "notes": [
+    "Generated by tools/import-preset-calibration-archive.ps1 from the immutable archived source record."
+  ]
+}

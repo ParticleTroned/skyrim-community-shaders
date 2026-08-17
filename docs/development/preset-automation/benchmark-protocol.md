@@ -42,6 +42,8 @@ Run `20260817-amd-svr-ovr-null-honeyside-poc-r01` demonstrated the complete unat
 
 The run is not accepted as benchmark evidence. All three requested pairs completed, but the six-cycle capture cadence produced eight queue-backpressure rejections. Repeat the visual pass at a slower cadence and quantify fixed-pose repeatability before promoting the lane. This result establishes viability of the harness, not equivalence to a physical HMD or any OCU/OpenXR path.
 
+Run `20260817-amd-svr-ovr-null-riften-info-ibl-vs-r01` establishes the first valid timing-only Info baseline. It uses the AMD Quality stack in exterior Riften with IBL and Volumetric Shadows enabled. Thirty-eight unique resolved frames completed with no profiler slot refusals. Automated stereo capture was intentionally not performed: CSX restricts that control surface to Developer Mode, and changing from Info would change the performance lane. A separately paired visual run is still required before this candidate supports visual conclusions.
+
 ## First proof-of-concept acceptance
 
 The `SVR-OVR-NULL` proof of concept succeeds only when all of the following are demonstrated and recorded:
@@ -87,7 +89,7 @@ A cache identity record must include:
 
 Switch the cache set and the matching settings/preset together. In MO2, enable exactly one named cache mod for the lane and leave the other cache mods disabled. Confirm the selected log level and the `Using disk cache` startup message before accepting a run.
 
-Do not promote a cache when CSX reports it as held, missing, disabled, mismatched, or memory-only. Source or dependency changes may legitimately invalidate part or all of a preserved set; allow that rebuild to finish outside a measured pass, then snapshot the new complete state under a new identity. Never merge arbitrary files from unlike identities. A small overwrite overlay may be merged only into the exact active cache identity after Skyrim has exited cleanly.
+Do not promote a cache when CSX reports it as held, missing, disabled, mismatched, or memory-only. Source or dependency changes may legitimately invalidate part or all of a preserved set; allow that rebuild to finish outside a measured pass, then snapshot the new complete state under a new identity. Never merge arbitrary files from unlike identities. A small overwrite overlay may be merged only into the exact active cache identity after Skyrim has exited cleanly. Remove or archive the verified overlay after merging it so it cannot override a different named cache mod later.
 
 ## Timing evidence
 

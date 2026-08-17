@@ -173,6 +173,8 @@
     "The Info-capable automation API produced a complete lossless HMD-stereo sequence without Developer Mode or Debug logging.",
     "The five-frame combined-stereo average had descriptive raw sRGB channel means [30.3148, 26.5053, 25.5109].",
     "Its mean-image absolute difference from the all-on reference was 3.3491 8-bit code values, above the 0.3874-0.4930 within-condition mean absolute deviation observed in this campaign.",
+    "Disabling IBL restores Skyrim's vanilla ambient lighting rather than merely subtracting an added effect. In this scene it raises shadowed roof, timber, walkway, foliage, and foreground-stone levels, making the settlement more legible but flatter and less sheltered.",
+    "Bright sky and emissive windows change little. Because the enabled candidate used FogAmount=0, differences in the distant fog bank are not evidence of an IBL fog effect and remain process-separated exterior-scene variation.",
     "The picture set is suitable for human/LLM review and for designing more deterministic shader-isolation scenes."
   ],
   "notes": [

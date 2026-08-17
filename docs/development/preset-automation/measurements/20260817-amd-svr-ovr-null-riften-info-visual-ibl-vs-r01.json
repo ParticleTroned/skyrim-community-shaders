@@ -172,11 +172,14 @@
   "conclusions": [
     "The Info-capable automation API produced a complete lossless HMD-stereo sequence without Developer Mode or Debug logging.",
     "The five-frame combined-stereo average had descriptive raw sRGB channel means [27.6366, 24.0155, 23.6318].",
+    "Relative to IBL-off, enabled IBL lowers the ambient floor on roofs, deep timber, stone, and the walkway while leaving the bright sky and emissive windows broadly stable; this increases plane separation, material relief, and the scene's sheltered, high-contrast character.",
+    "Relative to Volumetric-Shadows-off, enabled Volumetric Shadows produces softer, slightly lifted shadowed geometry and a brighter, more graduated distant cliff-haze region in this capture.",
     "The picture set is suitable for human/LLM review and for designing more deterministic shader-isolation scenes."
   ],
   "notes": [
     "The prior rejected sequence also warmed the capture path.",
     "Image statistics used five combined-stereo frames per candidate, downsampled to 756x420 without linear-light conversion; they are descriptive rather than perceptual or attribution metrics.",
+    "The all-on IBL settings were DALCMode=0, DALCAmount=0, EnvIBLScale=0.75, SkyIBLScale=1.5, FogAmount=0, and PreserveFogLuminance=0. IBL therefore replaces the vanilla diffuse ambient term in this scene and does not directly recolour fog.",
     "IBL EnableIBL and Volumetric Shadows Enabled are audited as live renderer controls, but this campaign restarted because typed API mutation and effective-state readback are not implemented yet.",
     "Temporary MO2 and SteamVR configuration changes were restored byte-for-byte after the campaign."
   ]

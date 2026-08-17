@@ -173,6 +173,8 @@
     "The Info-capable automation API produced a complete lossless HMD-stereo sequence without Developer Mode or Debug logging.",
     "The five-frame combined-stereo average had descriptive raw sRGB channel means [26.2482, 22.8153, 22.3762].",
     "Its mean-image absolute difference from the all-on reference was 1.8606 8-bit code values, above the 0.3874-0.4930 within-condition mean absolute deviation observed in this campaign.",
+    "Disabling Volumetric Shadows makes deep timber, the walkway, and foreground stone darker and harder-edged, while the distant cliff-haze region becomes markedly darker and clearer in this capture.",
+    "The observed surface change is consistent with the implementation's broad reach: its filtered directional variance-shadow map is consumed by ordinary Lighting as well as volumetric, particle, effect, and water paths. The toggle is not only a fog-quality switch.",
     "The picture set is suitable for human/LLM review and for designing more deterministic shader-isolation scenes."
   ],
   "notes": [

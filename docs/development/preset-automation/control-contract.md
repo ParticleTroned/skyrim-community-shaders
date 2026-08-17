@@ -98,6 +98,22 @@ The first disable stores the feature's complete measurement state in memory and 
 
 Each record includes per-direction settle seconds, readiness, wait text, menu-close requirements, history-reset disclosure, cache impact, resource impact, and whether a snapshot is outstanding. The loaded shader set remains retained, but feature-specific runtime resources may be reset or recreated. The initial native-OpenVR null-HMD validation discovered 15 performance surfaces, 14 available in the selected loadout. Grass Collision and Skylighting completed on/off/restore transitions with effective readback and zero remaining snapshots; this validates the bridge path, not every feature's visual or lifetime correctness.
 
+The response-curve extension adds `qualityProfile` enum controls for the inherited Performance/Balanced/Quality clusters in Skylighting, Screen Space Shadows, and Wetterness:
+
+```json
+{"action":"set","feature":"Skylighting","control":"qualityProfile","value":"Performance"}
+```
+
+The first profile selection holds the complete feature state; later selections in the same sweep retain that original snapshot. `restore` returns one feature to the exact baseline, while `restoreAll` remains the interruption-safety path. A feature cannot hold a `performanceActive` and `qualityProfile` snapshot simultaneously.
+
+Records expose the profile definitions and effective parameter readback. Mutability is feature-specific:
+
+- Skylighting recreates probe-grid resources, resets its history, and reports readiness after a five-second settle;
+- Wetterness resets owned temporal weather state and reports a five-second settle; and
+- Screen Space Shadows may release and compile new per-eye raymarch variants, reports `live-recompile-settle`, and is ready only when the required compiled sample counts match the selected profile.
+
+The first runtime proof switched all three features across profiles and restored the original Quality state with zero outstanding snapshots. At the null-HMD render size, Screen Space Shadows produced cached per-eye variants with 12, 23, and 33 compiled samples for Performance, Balanced, and Quality respectively.
+
 ## Promotion toward live transitions
 
 Converting a control to `live` requires feature-specific proof that enable, disable, and repeated A/B/A transitions:

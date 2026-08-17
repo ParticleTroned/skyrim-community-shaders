@@ -69,6 +69,8 @@ The accepted outdoor visual runs use 60 combined stereo BMP frames per phase at 
 
 Wetterness is the strongest perceptual change in this screen and is intentionally weather-conditional. Screen Space Shadows contributes comparatively localized depth cues. Skylighting affects a much broader spatial field and also carries the largest measured scheduling cost. Volumetric Lighting needs a different anchor with an unquestionably active ray/fog path; a global disable decision from this null result would be invalid.
 
+The subsequent typed-profile proof exposed one effective-state caveat before response curves began: Wetterness Performance requests a 5,000-unit fade range, but the feature sanitizes it to its 100-metre minimum (approximately 7,003 units). Profile measurements must label the effective value and must not claim to have measured a 5,000-unit cutoff.
+
 ## Artifact hashes
 
 Each path is `<timing root>/<run id>/ablation-profiler-raw.json`.

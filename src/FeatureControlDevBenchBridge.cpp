@@ -3,15 +3,21 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Features/IBL.h"
+#	include "Features/ScreenSpaceShadows.h"
+#	include "Features/Skylighting.h"
 #	include "Features/VolumetricShadows.h"
+#	include "Features/Wetterness.h"
 #	include "Globals.h"
 #	include "State.h"
+#	include "Utils/Game.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 
 #	include <atomic>
+#	include <array>
 #	include <chrono>
+#	include <cmath>
 #	include <functional>
 #	include <future>
 #	include <memory>
@@ -28,6 +34,61 @@ namespace
 	std::atomic_bool g_installAttempted{ false };
 	std::atomic_bool g_registered{ false };
 	std::unordered_map<std::string, json> g_performanceSnapshots;
+	std::unordered_map<std::string, json> g_qualityProfileSnapshots;
+
+	struct SkylightingQualityProfile
+	{
+		const char* Name;
+		uint ProbeGridQuality;
+		uint OcclusionUpdateInterval;
+		uint ProbeUpdateInterval;
+		uint StableSliceCount;
+		float ProbeFieldSize;
+		float MinSpecularVisibility;
+	};
+
+	struct ScreenSpaceShadowsQualityProfile
+	{
+		const char* Name;
+		float VRBaseSamplesAtReference;
+		float VRCullDistance;
+	};
+
+	struct WetternessQualityProfile
+	{
+		const char* Name;
+		float RaindropFxRangeWorldUnits;
+		float WetnessDistanceFadeRange;
+		float RaindropGridSize;
+		float RaindropInterval;
+		float RaindropChance;
+		float SplashesLifetime;
+		float RippleLifetime;
+	};
+
+	constexpr std::array kSkylightingQualityProfiles{
+		SkylightingQualityProfile{ "Performance", 0u, 8u, 16u, 8u, 10240.0f, 0.05f },
+		SkylightingQualityProfile{ "Balanced", 1u, 6u, 13u, 11u, 12970.667f, 0.10f },
+		SkylightingQualityProfile{ "Quality", 2u, 5u, 9u, 13u, 15701.333f, 0.10f },
+	};
+
+	constexpr std::array kScreenSpaceShadowsQualityProfiles{
+		ScreenSpaceShadowsQualityProfile{ "Performance", 16.0f, 20480.0f },
+		ScreenSpaceShadowsQualityProfile{ "Balanced", 30.0f, 20480.0f },
+		ScreenSpaceShadowsQualityProfile{ "Quality", 44.0f, 0.0f },
+	};
+
+	constexpr std::array kWetternessQualityProfiles{
+		WetternessQualityProfile{ "Performance", 700.0f, 5000.0f, 3.60f, 0.65f, 0.60f, 4.5f, 0.22f },
+		WetternessQualityProfile{ "Balanced", 1000.0f, 7500.0f, 3.25f, 0.58f, 0.70f, 5.2f, 0.26f },
+		WetternessQualityProfile{ "Quality", 1400.0f, 10000.0f, 3.00f, 0.50f, 0.80f, 6.0f, 0.30f },
+	};
+	constexpr float kWetternessMinimumFadeRange = 100.0f / Util::Units::GAME_UNIT_TO_M;
+
+	bool NearlyEqual(float a_left, float a_right)
+	{
+		return std::abs(a_left - a_right) <= 0.001f;
+	}
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
@@ -203,6 +264,300 @@ namespace
 		return controls;
 	}
 
+	bool SupportsQualityProfiles(const std::string& a_featureName)
+	{
+		return a_featureName == "Skylighting" ||
+		       a_featureName == "ScreenSpaceShadows" ||
+		       a_featureName == "Wetterness";
+	}
+
+	template <class TProfile, size_t N, class TMatches>
+	std::string FindQualityProfileName(const std::array<TProfile, N>& a_profiles, TMatches a_matches)
+	{
+		for (const auto& profile : a_profiles) {
+			if (a_matches(profile))
+				return profile.Name;
+		}
+		return "Custom";
+	}
+
+	std::string GetQualityProfileName(const std::string& a_featureName)
+	{
+		if (a_featureName == "Skylighting") {
+			const auto& settings = globals::features::skylighting.settings;
+			return FindQualityProfileName(kSkylightingQualityProfiles, [&](const auto& profile) {
+				return settings.ProbeGridQuality == profile.ProbeGridQuality &&
+				       settings.OcclusionUpdateInterval == profile.OcclusionUpdateInterval &&
+				       settings.ProbeUpdateInterval == profile.ProbeUpdateInterval &&
+				       settings.StableSliceCount == profile.StableSliceCount &&
+				       NearlyEqual(settings.ProbeFieldSize, profile.ProbeFieldSize) &&
+				       NearlyEqual(settings.MinSpecularVisibility, profile.MinSpecularVisibility) &&
+				       settings.EnableReducedUpdateFrequency &&
+				       settings.EnableIncrementalProbeUpdates &&
+				       settings.EnableFastProbeSampling;
+			});
+		}
+		if (a_featureName == "ScreenSpaceShadows") {
+			const auto& settings = globals::features::screenSpaceShadows.bendSettings;
+			return FindQualityProfileName(kScreenSpaceShadowsQualityProfiles, [&](const auto& profile) {
+				return NearlyEqual(settings.VRBaseSamplesAtReference, profile.VRBaseSamplesAtReference) &&
+				       NearlyEqual(settings.VRCullDistance, profile.VRCullDistance);
+			});
+		}
+		if (a_featureName == "Wetterness") {
+			const auto& feature = globals::features::wetterness;
+			const auto& settings = feature.settings;
+			return FindQualityProfileName(kWetternessQualityProfiles, [&](const auto& profile) {
+				return NearlyEqual(settings.RaindropFxRangeWorldUnits, profile.RaindropFxRangeWorldUnits) &&
+				       NearlyEqual(feature.wetnessDistanceFadeRange, std::max(profile.WetnessDistanceFadeRange, kWetternessMinimumFadeRange)) &&
+				       NearlyEqual(settings.RaindropGridSize, profile.RaindropGridSize) &&
+				       NearlyEqual(settings.RaindropInterval, profile.RaindropInterval) &&
+				       NearlyEqual(settings.RaindropChance, profile.RaindropChance) &&
+				       NearlyEqual(settings.SplashesLifetime, profile.SplashesLifetime) &&
+				       NearlyEqual(settings.RippleLifetime, profile.RippleLifetime);
+			});
+		}
+		return "Unavailable";
+	}
+
+	json CaptureQualityProfileState(const std::string& a_featureName)
+	{
+		if (a_featureName == "Skylighting")
+			return globals::features::skylighting.CapturePerformanceCostMeasurementState();
+		if (a_featureName == "ScreenSpaceShadows")
+			return globals::features::screenSpaceShadows.CapturePerformanceCostMeasurementState();
+		if (a_featureName == "Wetterness")
+			return globals::features::wetterness.CapturePerformanceCostMeasurementState();
+		return json();
+	}
+
+	void RestoreQualityProfileState(const std::string& a_featureName, const json& a_state)
+	{
+		if (a_featureName == "Skylighting") {
+			globals::features::skylighting.RestorePerformanceCostMeasurementState(a_state);
+			return;
+		}
+		if (a_featureName == "ScreenSpaceShadows") {
+			globals::features::screenSpaceShadows.RestorePerformanceCostMeasurementState(a_state);
+			return;
+		}
+		if (a_featureName == "Wetterness") {
+			globals::features::wetterness.RestorePerformanceCostMeasurementState(a_state);
+			return;
+		}
+		throw std::runtime_error("feature does not expose quality profiles");
+	}
+
+	template <class TProfile, size_t N>
+	const TProfile* FindQualityProfile(const std::array<TProfile, N>& a_profiles, const std::string& a_name)
+	{
+		for (const auto& profile : a_profiles) {
+			if (a_name == profile.Name)
+				return &profile;
+		}
+		return nullptr;
+	}
+
+	bool ApplyQualityProfile(const std::string& a_featureName, const std::string& a_profileName)
+	{
+		if (a_featureName == "Skylighting") {
+			const auto* profile = FindQualityProfile(kSkylightingQualityProfiles, a_profileName);
+			if (!profile)
+				return false;
+			auto state = globals::features::skylighting.CapturePerformanceCostMeasurementState();
+			state["ProbeGridQuality"] = profile->ProbeGridQuality;
+			state["OcclusionUpdateInterval"] = profile->OcclusionUpdateInterval;
+			state["ProbeUpdateInterval"] = profile->ProbeUpdateInterval;
+			state["StableSliceCount"] = profile->StableSliceCount;
+			state["ProbeFieldSize"] = profile->ProbeFieldSize;
+			state["MinSpecularVisibility"] = profile->MinSpecularVisibility;
+			state["EnableReducedUpdateFrequency"] = true;
+			state["EnableIncrementalProbeUpdates"] = true;
+			state["EnableFastProbeSampling"] = true;
+			globals::features::skylighting.RestorePerformanceCostMeasurementState(state);
+			return true;
+		}
+		if (a_featureName == "ScreenSpaceShadows") {
+			const auto* profile = FindQualityProfile(kScreenSpaceShadowsQualityProfiles, a_profileName);
+			if (!profile)
+				return false;
+			auto state = globals::features::screenSpaceShadows.CapturePerformanceCostMeasurementState();
+			state["Settings"]["VRBaseSamplesAtReference"] = profile->VRBaseSamplesAtReference;
+			state["Settings"]["VRCullDistance"] = profile->VRCullDistance;
+			globals::features::screenSpaceShadows.RestorePerformanceCostMeasurementState(state);
+			return true;
+		}
+		if (a_featureName == "Wetterness") {
+			const auto* profile = FindQualityProfile(kWetternessQualityProfiles, a_profileName);
+			if (!profile)
+				return false;
+			auto state = globals::features::wetterness.CapturePerformanceCostMeasurementState();
+			state["Settings"]["RaindropFxRangeWorldUnits"] = profile->RaindropFxRangeWorldUnits;
+			state["WetnessDistanceFadeRange"] = profile->WetnessDistanceFadeRange;
+			state["Settings"]["RaindropGridSize"] = profile->RaindropGridSize;
+			state["Settings"]["RaindropInterval"] = profile->RaindropInterval;
+			state["Settings"]["RaindropChance"] = profile->RaindropChance;
+			state["Settings"]["SplashesLifetime"] = profile->SplashesLifetime;
+			state["Settings"]["RippleLifetime"] = profile->RippleLifetime;
+			globals::features::wetterness.RestorePerformanceCostMeasurementState(state);
+			return true;
+		}
+		return false;
+	}
+
+	json BuildQualityProfileDefinitions(const std::string& a_featureName)
+	{
+		json definitions = json::array();
+		if (a_featureName == "Skylighting") {
+			for (const auto& profile : kSkylightingQualityProfiles) {
+				definitions.push_back({
+					{ "name", profile.Name },
+					{ "parameters", {
+						{ "ProbeGridQuality", profile.ProbeGridQuality },
+						{ "OcclusionUpdateInterval", profile.OcclusionUpdateInterval },
+						{ "ProbeUpdateInterval", profile.ProbeUpdateInterval },
+						{ "StableSliceCount", profile.StableSliceCount },
+						{ "ProbeFieldSize", profile.ProbeFieldSize },
+						{ "MinSpecularVisibility", profile.MinSpecularVisibility },
+					} },
+				});
+			}
+		} else if (a_featureName == "ScreenSpaceShadows") {
+			for (const auto& profile : kScreenSpaceShadowsQualityProfiles) {
+				definitions.push_back({
+					{ "name", profile.Name },
+					{ "parameters", {
+						{ "VRBaseSamplesAtReference", profile.VRBaseSamplesAtReference },
+						{ "VRCullDistance", profile.VRCullDistance },
+					} },
+				});
+			}
+		} else if (a_featureName == "Wetterness") {
+			for (const auto& profile : kWetternessQualityProfiles) {
+				const float effectiveFadeRange = std::max(profile.WetnessDistanceFadeRange, kWetternessMinimumFadeRange);
+				definitions.push_back({
+					{ "name", profile.Name },
+					{ "parameters", {
+						{ "RaindropFxRangeWorldUnits", profile.RaindropFxRangeWorldUnits },
+						{ "WetnessDistanceFadeRange", profile.WetnessDistanceFadeRange },
+						{ "RaindropGridSize", profile.RaindropGridSize },
+						{ "RaindropInterval", profile.RaindropInterval },
+						{ "RaindropChance", profile.RaindropChance },
+						{ "SplashesLifetime", profile.SplashesLifetime },
+						{ "RippleLifetime", profile.RippleLifetime },
+					} },
+					{ "effectiveNormalization", {
+						{ "WetnessDistanceFadeRange", effectiveFadeRange },
+					} },
+				});
+			}
+		}
+		return definitions;
+	}
+
+	json BuildEffectiveQualityParameters(const std::string& a_featureName)
+	{
+		if (a_featureName == "Skylighting") {
+			const auto& settings = globals::features::skylighting.settings;
+			return {
+				{ "ProbeGridQuality", settings.ProbeGridQuality },
+				{ "OcclusionUpdateInterval", settings.OcclusionUpdateInterval },
+				{ "ProbeUpdateInterval", settings.ProbeUpdateInterval },
+				{ "StableSliceCount", settings.StableSliceCount },
+				{ "ProbeFieldSize", settings.ProbeFieldSize },
+				{ "MinSpecularVisibility", settings.MinSpecularVisibility },
+			};
+		}
+		if (a_featureName == "ScreenSpaceShadows") {
+			const auto& settings = globals::features::screenSpaceShadows.bendSettings;
+			return {
+				{ "VRBaseSamplesAtReference", settings.VRBaseSamplesAtReference },
+				{ "VRCullDistance", settings.VRCullDistance },
+				{ "compiledSamplesLeft", globals::features::screenSpaceShadows.compiledSampleCount },
+				{ "compiledSamplesRight", globals::features::screenSpaceShadows.compiledSampleCountRight },
+			};
+		}
+		if (a_featureName == "Wetterness") {
+			const auto& feature = globals::features::wetterness;
+			const auto& settings = feature.settings;
+			return {
+				{ "RaindropFxRangeWorldUnits", settings.RaindropFxRangeWorldUnits },
+				{ "WetnessDistanceFadeRange", feature.wetnessDistanceFadeRange },
+				{ "RaindropGridSize", settings.RaindropGridSize },
+				{ "RaindropInterval", settings.RaindropInterval },
+				{ "RaindropChance", settings.RaindropChance },
+				{ "SplashesLifetime", settings.SplashesLifetime },
+				{ "RippleLifetime", settings.RippleLifetime },
+			};
+		}
+		return json::object();
+	}
+
+	json BuildQualityProfileRecord(const std::string& a_featureName)
+	{
+		auto* feature = FindFeatureByShortName(a_featureName);
+		const bool supported = SupportsQualityProfiles(a_featureName);
+		const bool available = feature && feature->loaded && supported;
+		bool ready = available;
+		const char* mutability = "live-settle";
+		const char* cacheImpact = "loaded-shader-set-retained";
+		const char* resourceImpact = "retained";
+		double settleSeconds = 1.0;
+		bool resetsHistory = false;
+		if (a_featureName == "Skylighting") {
+			ready = available && globals::features::skylighting.IsPerformanceCostMeasurementReady();
+			resourceImpact = "recreate-probe-grid-and-reset-history";
+			settleSeconds = 5.0;
+			resetsHistory = true;
+		} else if (a_featureName == "ScreenSpaceShadows") {
+			auto& shadows = globals::features::screenSpaceShadows;
+			const uint expectedSamples = available ? shadows.GetScaledSampleCount(false) : 0u;
+			ready = available && (!shadows.IsPerformanceCostMeasurementEnabled() ||
+			                     (shadows.compiledSampleCount == expectedSamples &&
+			                         (shadows.useStereoReproject || shadows.compiledSampleCountRight == expectedSamples)));
+			mutability = "live-recompile-settle";
+			cacheImpact = "runtime-raymarch-shader-variant";
+			resourceImpact = "release-and-recompile-per-eye-raymarch-shaders";
+			settleSeconds = 2.0;
+		} else if (a_featureName == "Wetterness") {
+			resourceImpact = "reset-temporal-weather-state";
+			settleSeconds = 5.0;
+			resetsHistory = true;
+		}
+
+		return {
+			{ "feature", a_featureName },
+			{ "displayName", feature ? feature->GetDisplayName() : a_featureName },
+			{ "control", "qualityProfile" },
+			{ "valueType", "enum" },
+			{ "allowedValues", json::array({ "Performance", "Balanced", "Quality" }) },
+			{ "profileDefinitions", BuildQualityProfileDefinitions(a_featureName) },
+			{ "effectiveParameters", available ? BuildEffectiveQualityParameters(a_featureName) : json::object() },
+			{ "requestedValue", available ? json(GetQualityProfileName(a_featureName)) : json(nullptr) },
+			{ "effectiveValue", available ? json(GetQualityProfileName(a_featureName)) : json(nullptr) },
+			{ "runtimeActive", available && feature->IsPerformanceCostMeasurementEnabled() },
+			{ "ready", ready },
+			{ "mutability", mutability },
+			{ "settle", { { "kind", "seconds-and-readiness" }, { "minimumSeconds", settleSeconds }, { "requiresMenuClose", false }, { "resetsHistory", resetsHistory } } },
+			{ "cacheImpact", cacheImpact },
+			{ "resourceImpact", resourceImpact },
+			{ "canRestoreInSession", true },
+			{ "snapshotHeld", g_qualityProfileSnapshots.contains(a_featureName) },
+			{ "writable", available },
+			{ "available", available },
+			{ "unavailableReason", available ? json(nullptr) : json(feature ? "feature does not expose typed quality profiles" : "feature is not registered") },
+		};
+	}
+
+	json BuildQualityProfileControlList()
+	{
+		return json::array({
+			BuildQualityProfileRecord("Skylighting"),
+			BuildQualityProfileRecord("ScreenSpaceShadows"),
+			BuildQualityProfileRecord("Wetterness"),
+		});
+	}
+
 	json BuildControlList()
 	{
 		json controls = json::array({
@@ -212,6 +567,8 @@ namespace
 			BuildVolumetricShadowsRecord(),
 		});
 		for (auto& control : BuildPerformanceControlList())
+			controls.push_back(std::move(control));
+		for (auto& control : BuildQualityProfileControlList())
 			controls.push_back(std::move(control));
 		return controls;
 	}
@@ -230,6 +587,8 @@ namespace
 			if (auto* feature = FindFeatureByShortName(a_feature))
 				return BuildPerformanceRecord(*feature);
 		}
+		if (a_control == "qualityProfile" && SupportsQualityProfiles(a_feature))
+			return BuildQualityProfileRecord(a_feature);
 		return {
 			{ "error", "unknown control" },
 			{ "feature", a_feature },
@@ -257,6 +616,8 @@ namespace
 				return FindControl(a_feature, a_control);
 			if (!feature->loaded || !feature->SupportsPerformanceCostMeasurement())
 				return { { "error", "performance control is unavailable" }, { "control", BuildPerformanceRecord(*feature) } };
+			if (g_qualityProfileSnapshots.contains(a_feature))
+				return { { "error", "restore the outstanding qualityProfile snapshot before changing performanceActive" }, { "control", BuildPerformanceRecord(*feature) } };
 
 			bool restoredSnapshot = false;
 			if (!a_value) {
@@ -294,6 +655,65 @@ namespace
 		return FindControl(a_feature, a_control);
 	}
 
+	json SetQualityProfileControl(const std::string& a_feature, const std::string& a_profile)
+	{
+		if (!SupportsQualityProfiles(a_feature))
+			return FindControl(a_feature, "qualityProfile");
+		auto* feature = FindFeatureByShortName(a_feature);
+		if (!feature || !feature->loaded)
+			return { { "error", "quality profile control is unavailable" }, { "control", BuildQualityProfileRecord(a_feature) } };
+		if (g_performanceSnapshots.contains(a_feature))
+			return { { "error", "restore the outstanding performanceActive snapshot before changing qualityProfile" }, { "control", BuildQualityProfileRecord(a_feature) } };
+
+		const bool inserted = !g_qualityProfileSnapshots.contains(a_feature);
+		if (inserted)
+			g_qualityProfileSnapshots.emplace(a_feature, CaptureQualityProfileState(a_feature));
+		try {
+			if (!ApplyQualityProfile(a_feature, a_profile)) {
+				if (inserted)
+					g_qualityProfileSnapshots.erase(a_feature);
+				return {
+					{ "error", "unknown quality profile" },
+					{ "requestedValue", a_profile },
+					{ "allowedValues", json::array({ "Performance", "Balanced", "Quality" }) },
+					{ "control", BuildQualityProfileRecord(a_feature) },
+				};
+			}
+		} catch (...) {
+			if (inserted)
+				g_qualityProfileSnapshots.erase(a_feature);
+			throw;
+		}
+
+		return {
+			{ "action", "set" },
+			{ "persisted", false },
+			{ "restoredSnapshot", false },
+			{ "control", BuildQualityProfileRecord(a_feature) },
+		};
+	}
+
+	json RestoreQualityProfileSnapshot(const std::string& a_feature)
+	{
+		const auto snapshot = g_qualityProfileSnapshots.find(a_feature);
+		if (snapshot == g_qualityProfileSnapshots.end()) {
+			return {
+				{ "action", "restore" },
+				{ "persisted", false },
+				{ "restoredSnapshot", false },
+				{ "control", BuildQualityProfileRecord(a_feature) },
+			};
+		}
+		RestoreQualityProfileState(a_feature, snapshot->second);
+		g_qualityProfileSnapshots.erase(snapshot);
+		return {
+			{ "action", "restore" },
+			{ "persisted", false },
+			{ "restoredSnapshot", true },
+			{ "control", BuildQualityProfileRecord(a_feature) },
+		};
+	}
+
 	json RestoreAllPerformanceSnapshots()
 	{
 		json restored = json::array();
@@ -317,12 +737,27 @@ namespace
 				++snapshot;
 			}
 		}
+		for (auto snapshot = g_qualityProfileSnapshots.begin(); snapshot != g_qualityProfileSnapshots.end();) {
+			try {
+				RestoreQualityProfileState(snapshot->first, snapshot->second);
+				restored.push_back(snapshot->first + ":qualityProfile");
+				snapshot = g_qualityProfileSnapshots.erase(snapshot);
+			} catch (const std::exception& e) {
+				failed.push_back({ { "feature", snapshot->first }, { "control", "qualityProfile" }, { "error", e.what() } });
+				++snapshot;
+			} catch (...) {
+				failed.push_back({ { "feature", snapshot->first }, { "control", "qualityProfile" }, { "error", "restore failed" } });
+				++snapshot;
+			}
+		}
 		return {
 			{ "action", "restoreAll" },
 			{ "persisted", false },
 			{ "restored", std::move(restored) },
 			{ "failed", std::move(failed) },
-			{ "remainingSnapshots", g_performanceSnapshots.size() },
+			{ "remainingPerformanceSnapshots", g_performanceSnapshots.size() },
+			{ "remainingQualityProfileSnapshots", g_qualityProfileSnapshots.size() },
+			{ "remainingSnapshots", g_performanceSnapshots.size() + g_qualityProfileSnapshots.size() },
 		};
 	}
 
@@ -341,11 +776,11 @@ namespace
 		if (action == "restoreAll")
 			return RunOnMainThread([]() { return RestoreAllPerformanceSnapshots(); });
 
-		if (action != "get" && action != "set") {
+		if (action != "get" && action != "set" && action != "restore") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "list", "get", "set", "restoreAll" }) },
+				{ "supported", json::array({ "list", "get", "set", "restore", "restoreAll" }) },
 			};
 		}
 
@@ -356,10 +791,23 @@ namespace
 
 		if (action == "get")
 			return RunOnMainThread([feature, control]() { return json{ { "action", "get" }, { "control", FindControl(feature, control) } }; });
+		if (action == "restore") {
+			if (control != "qualityProfile")
+				return { { "error", "restore currently supports qualityProfile; performanceActive restores through set value true" } };
+			return RunOnMainThread([feature]() { return RestoreQualityProfileSnapshot(feature); });
+		}
 
 		const auto value = a_args.find("value");
+		if (control == "qualityProfile") {
+			if (value == a_args.end() || !value->is_string())
+				return { { "error", "setting qualityProfile requires a string value" } };
+			const auto requestedValue = value->get<std::string>();
+			return RunOnMainThread([feature, requestedValue]() {
+				return SetQualityProfileControl(feature, requestedValue);
+			});
+		}
 		if (value == a_args.end() || !value->is_boolean())
-			return { { "error", "set requires a boolean value" } };
+			return { { "error", "setting this control requires a boolean value" } };
 		const bool requestedValue = value->get<bool>();
 		return RunOnMainThread([feature, control, requestedValue]() {
 			return SetControl(feature, control, requestedValue);
@@ -412,7 +860,7 @@ namespace
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.controls" },
 			{ "usage", R"(Invoke communityshaders.controls directly, or dispatch it through a DevBench scenario tool step.)" },
-			{ "actions", json::array({ "list", "get", "set", "restoreAll" }) },
+			{ "actions", json::array({ "list", "get", "set", "restore", "restoreAll" }) },
 		};
 		const auto serialized = result.dump();
 		a_write(a_sink, serialized.c_str());
@@ -449,7 +897,7 @@ namespace FeatureControlDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. restoreAll is a safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive"]},"value":{"type":"boolean"}},"required":["action"]}})";
+			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. Skylighting, Screen Space Shadows, and Wetterness expose reversible Performance/Balanced/Quality profile clusters, including readiness, history reset, resource, and runtime shader-recompile metadata. restore reverts one held qualityProfile snapshot; restoreAll is the session safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]}]}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.controls",
 			descriptor,

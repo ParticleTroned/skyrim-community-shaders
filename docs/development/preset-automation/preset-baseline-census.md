@@ -55,6 +55,10 @@ Performance → Balanced changes 18 leaves, Balanced → Quality changes 16, and
 
 Everything else is inherited identically across tiers. That may reflect an intentional invariant, an unmeasured choice, or a missing tier opportunity; the census cannot distinguish those cases.
 
+### Requested versus effective Wetterness range
+
+The serialized Performance value `WetternessFadeRange = 5000` is below Wetterness's current runtime/UI minimum of 100 metres. With `GAME_UNIT_TO_M = 0.01428`, sanitization raises the effective value to approximately `7002.8013` game units. The typed profile API reports both the requested profile definition and this effective normalization. This is a real policy/implementation mismatch: the 5,000-unit inherited value is not authoritative in the renderer. The present screen preserves the existing safety clamp; changing the minimum or the preset definition requires a visual cutoff and performance response test.
+
 ## Screening implications
 
 The first response-curve campaign should prioritize the seven tiered families because they already encode the intended tier gradient. On/off ablations should then cover the other loaded Performance Tuning features to identify expensive or perceptually weak invariants. Architectural and hard-correctness review remains necessary for features that cannot be reduced to a safe inner toggle.

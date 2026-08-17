@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Align and summarize an on/off/on stereo player-translation sequence."""
+"""Align and summarize a baseline/ablated/baseline stereo translation sequence."""
 
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ def main() -> None:
         "parameter": run["parameter"],
         "acceptedCapture": bool(run["validity"]["accepted"]),
         "analysis": (
-            "motion-aligned native-eye luma comparison; on reference is the mean "
+            "motion-aligned native-eye luma comparison; baseline reference is the mean "
             "of baseline-before and baseline-return, and drift is their absolute difference"
         ),
         "stride": args.stride,
@@ -187,10 +187,10 @@ def main() -> None:
     eye_effect_maps: dict[str, list[np.ndarray]] = {}
     for eye in EYES:
         a1 = aligned["baseline-before"][eye]
-        off = aligned["ablated"][eye]
+        ablated = aligned["ablated"][eye]
         a2 = aligned["baseline-return"][eye]
-        on_reference = 0.5 * (a1 + a2)
-        effect = on_reference - off
+        baseline_reference = 0.5 * (a1 + a2)
+        effect = baseline_reference - ablated
         drift = np.abs(a1 - a2)
         eye_effect_maps[eye] = [effect[index] for index in range(effect.shape[0])]
 

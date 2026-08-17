@@ -7,6 +7,13 @@ param(
     [ValidatePattern('^[A-Za-z0-9]+$')]
     [string]$Parameter,
 
+    [ValidateSet('qualityParameters', 'qualityProfile')]
+    [string]$Control = 'qualityParameters',
+
+    [string]$BaselineValue = '',
+
+    [string]$AblatedValue = '',
+
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string]$RunId,
@@ -89,9 +96,11 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'preset-calibration-storage.ps1')
 $OutputRoot = Resolve-PresetCalibrationOutputRoot -OutputRoot $OutputRoot -Collection 'preset-automation-visual-motion'
 $baseUri = 'http://127.0.0.1:8921/api/tool/'
-$controlName = 'qualityParameters'
+$controlName = $Control
 $hasGameHour = $PSBoundParameters.ContainsKey('GameHour')
 $hasExpectedYaw = $PSBoundParameters.ContainsKey('ExpectedYaw')
+$hasBaselineValue = $PSBoundParameters.ContainsKey('BaselineValue')
+$hasAblatedValue = $PSBoundParameters.ContainsKey('AblatedValue')
 $snapshotHeld = $false
 $hudToggled = $false
 $timeFrozen = $false
@@ -101,6 +110,9 @@ $restorePosition = $null
 
 if ($PreStepFrames -ge $Frames) {
     throw 'PreStepFrames must be less than Frames'
+}
+if ($hasBaselineValue -ne $hasAblatedValue) {
+    throw 'BaselineValue and AblatedValue must be supplied together'
 }
 
 function Invoke-DevBenchTool {
@@ -120,50 +132,112 @@ function Get-Control {
     }).control
 }
 
-function Get-BooleanParameterValue {
-    param([Parameter(Mandatory = $true)]$Control)
-    $definition = $Control.parameterDefinitions.PSObject.Properties[$Parameter]
+function Get-ParameterDefinition {
+    param([Parameter(Mandatory = $true)]$ControlState)
+    if ($controlName -eq 'qualityProfile') {
+        return $null
+    }
+    $definition = $ControlState.parameterDefinitions.PSObject.Properties[$Parameter]
     if (-not $definition) {
         throw "$Feature does not define quality parameter $Parameter"
     }
-    if ($definition.Value.valueType -ne 'boolean') {
-        throw "$Feature parameter $Parameter is not Boolean"
+    $definition.Value
+}
+
+function Convert-RequestedValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$RawValue,
+        [Parameter(Mandatory = $true)]$ControlState
+    )
+    if ($controlName -eq 'qualityProfile') {
+        return $RawValue
     }
-    $effective = $Control.effectiveValue.PSObject.Properties[$Parameter]
+    $definition = Get-ParameterDefinition -ControlState $ControlState
+    switch ([string]$definition.valueType) {
+        'boolean' {
+            if ($RawValue -match '^(?i:true|1)$') { return $true }
+            if ($RawValue -match '^(?i:false|0)$') { return $false }
+            throw "$Feature parameter $Parameter requires true/false or 1/0"
+        }
+        'integer' {
+            $parsed = 0
+            if (-not [int]::TryParse($RawValue, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
+                throw "$Feature parameter $Parameter requires an integer value"
+            }
+            return $parsed
+        }
+        default {
+            $parsed = 0.0
+            if (-not [double]::TryParse($RawValue, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed) -or
+                [double]::IsNaN($parsed) -or [double]::IsInfinity($parsed)) {
+                throw "$Feature parameter $Parameter requires a finite numeric value"
+            }
+            return $parsed
+        }
+    }
+}
+
+function Get-EffectiveValue {
+    param([Parameter(Mandatory = $true)]$ControlState)
+    if ($controlName -eq 'qualityProfile') {
+        return [string]$ControlState.effectiveValue
+    }
+    $effective = $ControlState.effectiveValue.PSObject.Properties[$Parameter]
     if (-not $effective) {
         throw "$Feature does not report effective parameter $Parameter"
     }
-    [bool]$effective.Value
+    $effective.Value
 }
 
-function Wait-ParameterValue {
-    param([Parameter(Mandatory = $true)][bool]$ExpectedValue)
-    $deadline = (Get-Date).AddSeconds(20)
+function Test-ControlValueEquivalent {
+    param($Actual, $Expected)
+    if ($Expected -is [bool]) {
+        return [bool]$Actual -eq $Expected
+    }
+    if ($Expected -is [string]) {
+        return [string]::Equals([string]$Actual, $Expected, [StringComparison]::OrdinalIgnoreCase)
+    }
+    [Math]::Abs([double]$Actual - [double]$Expected) -le 0.001
+}
+
+function Wait-ControlValue {
+    param(
+        [Parameter(Mandatory = $true)]$ExpectedValue,
+        [double]$MinimumSeconds = 0.0
+    )
+    if ($MinimumSeconds -gt 0) {
+        Start-Sleep -Milliseconds ([int][Math]::Ceiling($MinimumSeconds * 1000.0))
+    }
+    $deadline = (Get-Date).AddSeconds([Math]::Max(20.0, $MinimumSeconds + 15.0))
     do {
         Start-Sleep -Milliseconds 100
         $current = Get-Control
-        if ($current.ready -and (Get-BooleanParameterValue -Control $current) -eq $ExpectedValue) {
+        if ($current.ready -and (Test-ControlValueEquivalent -Actual (Get-EffectiveValue -ControlState $current) -Expected $ExpectedValue)) {
             return $current
         }
     } while ((Get-Date) -lt $deadline)
-    throw "$Feature parameter $Parameter did not settle at $ExpectedValue"
+    throw "$Feature $controlName/$Parameter did not settle at $ExpectedValue"
 }
 
-function Set-ParameterValue {
-    param([Parameter(Mandatory = $true)][bool]$Value)
+function Set-ControlValue {
+    param([Parameter(Mandatory = $true)]$Value)
+    $requestValue = if ($controlName -eq 'qualityProfile') { $Value } else { @{ $Parameter = $Value } }
     $transition = Invoke-DevBenchTool -Tool 'communityshaders.controls' -Payload @{
         action = 'set'
         feature = $Feature
         control = $controlName
-        value = @{ $Parameter = $Value }
+        value = $requestValue
     }
     if ($transition.error) {
-        throw "$Feature parameter set failed: $($transition.error)"
+        throw "$Feature $controlName set failed: $($transition.error)"
     }
     $script:snapshotHeld = [bool]$transition.control.snapshotHeld
+    $minimumSeconds = if ($transition.control.settle.minimumSeconds -ne $null) {
+        [double]$transition.control.settle.minimumSeconds
+    } else { 0.0 }
     [ordered]@{
         transition = $transition
-        settled = Wait-ParameterValue -ExpectedValue $Value
+        settled = Wait-ControlValue -ExpectedValue $Value -MinimumSeconds $minimumSeconds
     }
 }
 
@@ -309,12 +383,12 @@ function Wait-PositionComponent {
 function Capture-MotionPhase {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][bool]$EffectiveValue,
+        [Parameter(Mandatory = $true)]$EffectiveValue,
         [Parameter(Mandatory = $true)][bool]$ReloadEntry
     )
 
     $anchor = Establish-AnchorState -ReloadEntry $ReloadEntry
-    $settledControl = Wait-ParameterValue -ExpectedValue $EffectiveValue
+    $settledControl = Wait-ControlValue -ExpectedValue $EffectiveValue
     $script:restorePosition = @($anchor.scene.position)
     $startCoordinate = Get-PositionComponent -Scene $anchor.scene -Axis $MotionAxis
     $targetCoordinate = $startCoordinate + $MotionOffset
@@ -444,7 +518,7 @@ function Capture-MotionPhase {
 }
 
 $record = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     runId = $RunId
     feature = $Feature
     control = $controlName
@@ -472,6 +546,8 @@ $record = [ordered]@{
         format = $Format
         output = 'separate eyes only'
         previewVideo = [bool]$WritePreviewVideo
+        baselineValue = if ($hasBaselineValue) { $BaselineValue } else { 'true (implicit Boolean default)' }
+        ablatedValue = if ($hasAblatedValue) { $AblatedValue } else { 'false (implicit Boolean default)' }
     }
     baselineControl = $null
     transitions = [System.Collections.Generic.List[object]]::new()
@@ -496,15 +572,25 @@ try {
     $baseline = Get-Control
     $record.baselineControl = $baseline
     if (-not $baseline.available -or -not $baseline.writable) {
-        throw "$Feature qualityParameters is unavailable: $($baseline.unavailableReason)"
+        throw "$Feature $controlName is unavailable: $($baseline.unavailableReason)"
     }
     $snapshotHeld = [bool]$baseline.snapshotHeld
     if ($snapshotHeld -and -not $UseExistingSnapshot) {
-        throw "$Feature already has an outstanding qualityParameters snapshot; pass -UseExistingSnapshot only when this run owns that deliberate preconfiguration snapshot"
+        throw "$Feature already has an outstanding $controlName snapshot; pass -UseExistingSnapshot only when this run owns that deliberate preconfiguration snapshot"
     }
-    $baselineParameterValue = Get-BooleanParameterValue -Control $baseline
-    if (-not $baselineParameterValue) {
-        throw "$Feature parameter $Parameter must be active at the beginning of the motion ablation"
+    if ($hasBaselineValue) {
+        $baselineParameterValue = Convert-RequestedValue -RawValue $BaselineValue -ControlState $baseline
+        $ablationParameterValue = Convert-RequestedValue -RawValue $AblatedValue -ControlState $baseline
+    } else {
+        if ($controlName -ne 'qualityParameters' -or (Get-ParameterDefinition -ControlState $baseline).valueType -ne 'boolean') {
+            throw 'Explicit BaselineValue and AblatedValue are required unless the target is a Boolean quality parameter'
+        }
+        $baselineParameterValue = $true
+        $ablationParameterValue = $false
+    }
+    $actualBaselineValue = Get-EffectiveValue -ControlState $baseline
+    if (-not (Test-ControlValueEquivalent -Actual $actualBaselineValue -Expected $baselineParameterValue)) {
+        throw "$Feature $controlName/$Parameter must begin at requested baseline $baselineParameterValue; effective value is $actualBaselineValue"
     }
 
     Invoke-ConsoleCommand -Command 'set timescale to 0'
@@ -516,13 +602,13 @@ try {
         Start-Sleep -Milliseconds 500
     }
 
-    $record.phases.Add((Capture-MotionPhase -Name 'baseline-before' -EffectiveValue $true -ReloadEntry $true))
-    $off = Set-ParameterValue -Value $false
-    $record.transitions.Add($off)
-    $record.phases.Add((Capture-MotionPhase -Name 'ablated' -EffectiveValue $false -ReloadEntry (-not [bool]$ReuseLoadedAnchor)))
-    $on = Set-ParameterValue -Value $true
-    $record.transitions.Add($on)
-    $record.phases.Add((Capture-MotionPhase -Name 'baseline-return' -EffectiveValue $true -ReloadEntry (-not [bool]$ReuseLoadedAnchor)))
+    $record.phases.Add((Capture-MotionPhase -Name 'baseline-before' -EffectiveValue $baselineParameterValue -ReloadEntry $true))
+    $ablated = Set-ControlValue -Value $ablationParameterValue
+    $record.transitions.Add($ablated)
+    $record.phases.Add((Capture-MotionPhase -Name 'ablated' -EffectiveValue $ablationParameterValue -ReloadEntry (-not [bool]$ReuseLoadedAnchor)))
+    $returned = Set-ControlValue -Value $baselineParameterValue
+    $record.transitions.Add($returned)
+    $record.phases.Add((Capture-MotionPhase -Name 'baseline-return' -EffectiveValue $baselineParameterValue -ReloadEntry (-not [bool]$ReuseLoadedAnchor)))
 
     $restore = Invoke-DevBenchTool -Tool 'communityshaders.controls' -Payload @{
         action = 'restore'
@@ -531,7 +617,7 @@ try {
     }
     $record.transitions.Add($restore)
     if (-not $restore.restoredSnapshot) {
-        throw "$Feature parameter restore did not use the held quality snapshot"
+        throw "$Feature $controlName restore did not use the held quality snapshot"
     }
     $snapshotHeld = [bool]$restore.control.snapshotHeld
     $record.restoredControl = Get-Control
@@ -540,7 +626,7 @@ try {
     $record.validity.reasons.Add('Every phase reproduced and verified the declared anchor before the same player-space translation step.')
     $record.validity.reasons.Add('Every phase saved exact separate-eye pairs with zero failed, incomplete, or backpressured pairs.')
     $record.validity.reasons.Add('The native Papyrus position call was issued only after the declared number of compositor pairs had queued, and effective player-position readback verified the step.')
-    $record.validity.reasons.Add('The Boolean feature parameter followed an on/off/on order and the original quality snapshot was restored.')
+    $record.validity.reasons.Add('The selected control followed a baseline/ablated/baseline order with exact effective readback and the original quality snapshot was restored.')
 }
 catch {
     $runFailure = $_.Exception.Message

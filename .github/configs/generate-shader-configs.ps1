@@ -64,8 +64,77 @@ try {
     $null = Get-Command "hlslkit-generate" -ErrorAction Stop
     Write-Host "hlslkit-generate found" -ForegroundColor Green
 } catch {
-    Write-Error "hlslkit-generate not found. Please install hlslkit: pip install hlslkit"
+    Write-Error "hlslkit-generate not found. Install tools/shader-cache-requirements.txt in the shader-cache virtual environment and add its Scripts directory to PATH."
     exit 1
+}
+
+# Generate from a clean runtime trace without silently losing logger records.
+# The pinned hlslkit parser expects an unpadded thread ID such as [196], while
+# spdlog can emit [ 196 ]. Normalize only that logger-prefix field in a temporary
+# copy, then verify the generated inventory has one entry per captured source
+# compilation before replacing the requested output.
+function Invoke-ShaderConfigGeneration {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$InputLog,
+
+        [Parameter(Mandatory=$true)]
+        [string]$OutputPath
+    )
+
+    $resolvedLog = (Resolve-Path $InputLog -ErrorAction Stop).Path
+    $fullOutputPath = [IO.Path]::GetFullPath($OutputPath)
+    $outputParent = [IO.Path]::GetDirectoryName($fullOutputPath)
+    $temporaryLog = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+    $temporaryOutput = Join-Path $outputParent ".$((Split-Path $fullOutputPath -Leaf)).$([IO.Path]::GetRandomFileName()).generating"
+    $temporaryBackup = "$temporaryOutput.previous"
+
+    $compilePattern = '(?m)^\[(\d{2}:\d{2}:\d{2}\.\d{3})\] \[\s*(\d+)\s*\] \[D\] Compiling (.*?)\s+([^:]+:[^:]+:[0-9a-fA-F]+)\s+to\s+(.*)$'
+    $strictCompilePattern = '(?m)^\[(\d{2}:\d{2}:\d{2}\.\d{3})\] \[(\d+)\] \[D\] Compiling (.*?)\s+([^:]+:[^:]+:[0-9a-fA-F]+)\s+to\s+(.*)$'
+    $threadPrefixPattern = '(?m)^(\[\d{2}:\d{2}:\d{2}\.\d{3}\]) \[\s*(\d+)\s*\]'
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+
+    try {
+        $logContent = [IO.File]::ReadAllText($resolvedLog)
+        $capturedVariants = [regex]::Matches($logContent, $compilePattern).Count
+        if ($capturedVariants -eq 0) {
+            throw "No engine-managed shader source compilations were found in $resolvedLog"
+        }
+
+        $normalizedLog = [regex]::Replace($logContent, $threadPrefixPattern, '$1 [$2]')
+        $normalizedVariants = [regex]::Matches($normalizedLog, $strictCompilePattern).Count
+        if ($normalizedVariants -ne $capturedVariants) {
+            throw "Thread-ID normalization retained $normalizedVariants of $capturedVariants captured shader variants"
+        }
+        [IO.File]::WriteAllText($temporaryLog, $normalizedLog, $utf8NoBom)
+
+        Write-Host "Captured $capturedVariants engine-managed shader variants" -ForegroundColor Gray
+        Write-Host "Running: hlslkit-generate --log <normalized temporary log> --output <validated temporary output>" -ForegroundColor Gray
+        & hlslkit-generate --log $temporaryLog --output $temporaryOutput
+        $generateExitCode = $LASTEXITCODE
+        if ($generateExitCode -ne 0) {
+            throw "hlslkit-generate failed (exit code: $generateExitCode)"
+        }
+
+        $generatedYaml = [IO.File]::ReadAllText($temporaryOutput)
+        $generatedVariants = [regex]::Matches($generatedYaml, '(?m)^\s+- entry:\s').Count
+        if ($generatedVariants -ne $capturedVariants) {
+            throw "Generated inventory contains $generatedVariants variants, but the clean runtime capture contains $capturedVariants"
+        }
+
+        $generatedYaml = "captured_shader_variants: $capturedVariants`n$generatedYaml"
+        [IO.File]::WriteAllText($temporaryOutput, $generatedYaml, $utf8NoBom)
+        if ([IO.File]::Exists($fullOutputPath)) {
+            [IO.File]::Replace($temporaryOutput, $fullOutputPath, $temporaryBackup)
+        } else {
+            [IO.File]::Move($temporaryOutput, $fullOutputPath)
+        }
+        Write-Host "Validated $generatedVariants generated shader variants" -ForegroundColor Green
+    } finally {
+        Remove-Item -LiteralPath $temporaryLog -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $temporaryOutput -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $temporaryBackup -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Function to find Skyrim installation paths
@@ -166,17 +235,9 @@ if ($LogFile) {
     $outputPath = Join-Path $OutputDir $OutputName
     try {
         Write-Host "Generating $OutputName..." -ForegroundColor Blue
-        Write-Host "Running: hlslkit-generate --log `"$LogFile`" --output `"$outputPath`"" -ForegroundColor Gray
-
-        & hlslkit-generate --log $LogFile --output $outputPath
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Successfully generated $OutputName" -ForegroundColor Green
-            Write-Host "File saved to: $outputPath" -ForegroundColor Gray
-        } else {
-            Write-Error "Failed to generate $OutputName (exit code: $LASTEXITCODE)"
-            exit 1
-        }
+        Invoke-ShaderConfigGeneration -InputLog $LogFile -OutputPath $outputPath
+        Write-Host "Successfully generated $OutputName" -ForegroundColor Green
+        Write-Host "File saved to: $outputPath" -ForegroundColor Gray
     } catch {
         Write-Error "Error generating $OutputName`: $($_.Exception.Message)"
         exit 1
@@ -211,16 +272,9 @@ foreach ($skyrim in $skyrimPaths) {
 
     try {
         Write-Host "Generating $($skyrim.ConfigName)..." -ForegroundColor Blue
-        Write-Host "Running: hlslkit-generate --log `"$($skyrim.LogPath)`" --output `"$outputPath`"" -ForegroundColor Gray
-
-        & hlslkit-generate --log $skyrim.LogPath --output $outputPath
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Successfully generated $($skyrim.ConfigName)" -ForegroundColor Green
-            $generated++
-        } else {
-            Write-Error "Failed to generate $($skyrim.ConfigName) (exit code: $LASTEXITCODE)"
-        }
+        Invoke-ShaderConfigGeneration -InputLog $skyrim.LogPath -OutputPath $outputPath
+        Write-Host "Successfully generated $($skyrim.ConfigName)" -ForegroundColor Green
+        $generated++
     } catch {
         Write-Error "Error generating $($skyrim.ConfigName): $($_.Exception.Message)"
     }

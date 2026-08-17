@@ -48,12 +48,20 @@ jobs:
             run-shader-tests: ${{ github.event_name != 'workflow_dispatch' || inputs.validate-shaders == true }}
             cache-key-suffix: ${{ inputs.cache-key-suffix || '' }}
 
+    shader-cache:
+        name: Build prebuilt SE shader cache
+        if: github.event.action != 'published'
+        uses: ./.github/workflows/shader-cache.yaml
+        with:
+            target_ref: ${{ github.ref }}
+
     release:
         name: Post Release for Draft, Manual Run, or Tag
-        needs: [build]
+        needs: [build, shader-cache]
         if: >
             always() && !cancelled() &&
             needs.build.outputs.cpp-built == 'true' &&
+            needs.shader-cache.result == 'success' &&
             github.event.action != 'published' &&
             (github.event_name == 'workflow_dispatch' ||
              startsWith(github.ref, 'refs/tags/v') ||
@@ -77,6 +85,12 @@ jobs:
               uses: actions/download-artifact@v7
               with:
                   name: dist-artifacts
+                  path: dist/
+
+            - name: Download SE shader cache artifact
+              uses: actions/download-artifact@v7
+              with:
+                  name: ShaderCache-SE
                   path: dist/
 
             # The Feature Metadata Summary is already in this body (appended

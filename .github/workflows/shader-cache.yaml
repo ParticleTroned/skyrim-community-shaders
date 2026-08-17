@@ -1,0 +1,115 @@
+name: "Release: Prebuilt SE Shader Cache"
+
+on:
+    workflow_call:
+        inputs:
+            target_ref:
+                description: "Git ref, tag, or commit to build the cache from"
+                type: string
+                required: false
+                default: ""
+            plugin_version:
+                description: "Optional SE plugin version override for Info.ini"
+                type: string
+                required: false
+                default: ""
+    workflow_dispatch:
+        inputs:
+            target_ref:
+                description: "Git ref, tag, or commit to build from (blank = current workflow commit)"
+                required: false
+                default: ""
+            plugin_version:
+                description: "Optional SE plugin version override for Info.ini"
+                required: false
+                default: ""
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        name: Build SE shader cache
+        runs-on: windows-2025
+        steps:
+            - name: Resolve target ref
+              id: resolve
+              shell: bash
+              env:
+                  INPUT_TARGET_REF: ${{ inputs.target_ref }}
+              run: |
+                  set -euo pipefail
+
+                  case "$INPUT_TARGET_REF" in
+                    *$'\r'*|*$'\n'*)
+                      echo "::error::target_ref must be a single-line Git ref, tag, or commit"
+                      exit 1
+                      ;;
+                  esac
+
+                  if [ -n "$INPUT_TARGET_REF" ]; then
+                    target_ref="$INPUT_TARGET_REF"
+                    label="$INPUT_TARGET_REF"
+                  else
+                    target_ref="${GITHUB_SHA}"
+                    label="${GITHUB_REF_NAME:-${GITHUB_SHA:0:7}}"
+                  fi
+
+                  case "$label" in
+                    refs/tags/*|refs/heads/*) label="${label##*/}" ;;
+                  esac
+
+                  safe_label="$(
+                    printf '%s' "$label" |
+                      LC_ALL=C sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+//; s/-+$//'
+                  )"
+                  if [ -z "$safe_label" ]; then
+                    safe_label="${GITHUB_SHA:0:7}"
+                  fi
+
+                  echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
+                  echo "artifact_label=$safe_label" >> "$GITHUB_OUTPUT"
+
+            - name: Checkout target source
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ steps.resolve.outputs.target_ref }}
+
+            - name: Setup Python
+              uses: actions/setup-python@v6
+              with:
+                  python-version: "3.12"
+
+            - name: Install shader cache tools
+              shell: bash
+              run: python -m pip install -r tools/shader-cache-requirements.txt
+
+            - name: Build, validate, and package shader cache
+              shell: pwsh
+              env:
+                  PLUGIN_VERSION: ${{ inputs.plugin_version }}
+              run: |
+                  $args = @(
+                    'tools/build-shader-cache.py',
+                    '--out', 'dist/shader-cache',
+                    '--jobs', '4',
+                    '--package',
+                    '--package-label', '${{ steps.resolve.outputs.artifact_label }}'
+                  )
+
+                  if ($env:PLUGIN_VERSION -ne '') {
+                    $args += @('--plugin-version', $env:PLUGIN_VERSION)
+                  }
+
+                  & python @args
+                  if ($LASTEXITCODE -ne 0) {
+                    exit $LASTEXITCODE
+                  }
+
+            - name: Upload SE shader cache artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ShaderCache-SE
+                  path: dist/shader-cache/ShaderCache-SE-${{ steps.resolve.outputs.artifact_label }}.7z
+                  if-no-files-found: error
+                  retention-days: 30

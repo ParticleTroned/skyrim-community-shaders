@@ -1,5 +1,8 @@
 # Shader Development Workflow
 
+For the distributable release cache and its manifest contract, see the
+[Prebuilt SE Shader Cache runbook](./prebuilt-shader-cache.md).
+
 ## Quick Reference
 
 ```bash

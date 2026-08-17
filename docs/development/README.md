@@ -4,6 +4,7 @@
 
 -   **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
+-   **[Prebuilt SE Shader Cache](./prebuilt-shader-cache.md)** - Release cache generation, validation, and packaging
 
 ## Quick Links
 

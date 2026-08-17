@@ -27,6 +27,7 @@
         "pystring",
         "renderdoc",
         "stb",
+        "xxhash",
         {
             "name": "tracy",
             "features": ["on-demand"]

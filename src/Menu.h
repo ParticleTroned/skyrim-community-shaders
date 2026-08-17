@@ -441,6 +441,7 @@ public:
 		bool HideBackgroundCompilationAtInfoLevel = true;                                                              // Hide routine background-compilation HUD only while log level is info
 		bool FirstTimeSetupCompleted = false;                                                                          // Track if first-time setup has been completed
 		bool SkipClearCacheConfirmation = false;                                                                       // Skip confirmation dialog when clearing shader cache
+		bool SmartClearShaderCacheDefault = false;                                                                     // Plain-click clears active shaders; Shift-click selects the other clear scope
 		bool AutoHideFeatureList = false;                                                                              // Auto-hide left feature list panel, show on hover
 		bool SkipConstraintWarning = false;                                                                            // Skip popup when a setting change creates new constraints
 		int PerformanceUiMode = 0;                                                                                     // 0 = Essentials, 1 = Advanced

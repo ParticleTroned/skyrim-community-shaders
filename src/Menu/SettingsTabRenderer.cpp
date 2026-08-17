@@ -273,6 +273,16 @@ void SettingsTabRenderer::RenderShadersTab()
 			ImGui::Text("%s", T("menu.settings.skip_clear_cache_dialogue_tooltip", "When checked, the shader cache will be cleared immediately without asking for confirmation."));
 		}
 
+		bool smartClearDefault = menuSettings.SmartClearShaderCacheDefault;
+		if (ImGui::Checkbox(T("menu.settings.smart_clear_default", "Smart Clear by Default"), &smartClearDefault)) {
+			menuSettings.SmartClearShaderCacheDefault = smartClearDefault;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextWrapped(
+				"When checked, a normal click clears only shaders drawing the current scene; Shift-click performs "
+				"a full clear. When unchecked, those roles are reversed.");
+		}
+
 		if (shaderCache->GetTotalTasks() > 0) {
 			ImGui::Text(T("menu.settings.last_shader_cache_duration", "Last shader cache build duration: %s"),
 				shaderCache->GetShaderStatsString(true, true).c_str());

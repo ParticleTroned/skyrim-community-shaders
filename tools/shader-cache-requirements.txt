@@ -1,0 +1,3 @@
+# Keep hlslkit pinned: its shader_digest contract is mirrored by the C++ runtime.
+PyYAML>=6.0.2,<7
+git+https://github.com/alandtse/hlslkit.git@6fa0bab8642af2ee78597140778b29ac8542eb48

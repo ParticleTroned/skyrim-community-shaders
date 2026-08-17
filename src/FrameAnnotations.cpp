@@ -1,5 +1,7 @@
 #include "FrameAnnotations.h"
 
+#include <limits>
+
 #include "State.h"
 #include "Util.h"
 
@@ -9,6 +11,19 @@ namespace FrameAnnotations
 {
 	namespace
 	{
+		std::string_view CachedDefinesSuffix()
+		{
+			thread_local uint64_t generation = std::numeric_limits<uint64_t>::max();
+			thread_local std::string suffix;
+			const auto currentGeneration = globals::state->GetShaderDefinesGeneration();
+			if (currentGeneration != generation) {
+				const auto snapshot = globals::state->GetShaderDefinesSnapshot();
+				suffix = Util::GetShaderDefinesSuffix(snapshot->canonicalText);
+				generation = currentGeneration;
+			}
+			return suffix;
+		}
+
 		static std::string BuildEventName(RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType)
 		{
 			auto enumName = RE::ImageSpaceManager::GetImageSpaceEffectName(EffectType);
@@ -34,8 +49,7 @@ namespace FrameAnnotations
 				if (globals::game::currentPixelShader && *globals::game::currentPixelShader) {
 					descriptor = (*globals::game::currentPixelShader)->id;
 				}
-				const std::string definesSuffix = Util::GetShaderDefinesSuffix(globals::state->shaderDefinesString);
-				std::string diskPath = std::format("Data/ShaderCache/{}/{:X}{}.pso", shader->fxpFilename, descriptor, definesSuffix);
+				std::string diskPath = std::format("Data/ShaderCache/{}/{:X}{}.pso", shader->fxpFilename, descriptor, CachedDefinesSuffix());
 				const std::string passName = std::format("[{}:{:X}] ({:X}) <{}> {} -> {}", magic_enum::enum_name(ShaderType), descriptor, pass->passEnum,
 					pass->accumulationHint, pass->geometry->name.c_str(), diskPath);
 				globals::state->BeginPerfEvent(passName);

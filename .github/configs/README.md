@@ -11,7 +11,8 @@ This directory contains configuration files used by the CI/CD pipeline for build
 These configuration files can be regenerated using the `generate-shader-configs.ps1` script in this directory. This script requires:
 
 1. A valid Skyrim Special Edition installation
-2. The [hlslkit](https://github.com/alandtse/hlslkit) package installed (`pip install hlslkit`)
+2. The repository-pinned hlslkit requirements installed from
+   `tools/shader-cache-requirements.txt`
 3. Community Shaders to be run once with specific settings to generate the required log data
 
 ### Prerequisites
@@ -42,15 +43,23 @@ The script will:
 
 1. Detect available Skyrim installations
 2. Check for required log files
-3. Generate configuration files using hlslkit
-4. Update the files in `.github\configs\`
+3. Normalize padded logger thread IDs in a temporary copy for pinned hlslkit
+4. Verify that every captured engine-managed source compilation is represented
+5. Record `captured_shader_variants` for build-time inventory validation
+6. Update the files in `.github\configs\`
 
-### Manual Generation
+### Direct Log Generation
 
-You can also generate the files manually using hlslkit:
+Use the repository wrapper for a saved clean log. Do not invoke
+`hlslkit-generate` directly: pinned versions do not recognize padded logger
+thread IDs and can silently produce an incomplete inventory.
 
-```bash
-hlslkit-generate --log "%USERPROFILE%\Documents\My Games\Skyrim Special Edition\SKSE\CommunityShaders.log" --output .\.github\configs\shader-validation.yaml
+```powershell
+.\.github\configs\generate-shader-configs.ps1 `
+    -LogFile "C:\Path\To\CommunityShaders.log" `
+    -OutputDir ".\.github\configs" `
+    -OutputName "shader-validation.yaml" `
+    -Force
 ```
 
 ## Usage in CI/CD

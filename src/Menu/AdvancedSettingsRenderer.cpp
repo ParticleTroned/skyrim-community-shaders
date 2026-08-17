@@ -107,7 +107,7 @@ void AdvancedSettingsRenderer::RenderLoggingSection()
 	}
 
 	// Shader Defines input
-	auto& shaderDefines = globals::state->shaderDefinesString;
+	auto shaderDefines = globals::state->GetShaderDefinesSnapshot()->canonicalText;
 	if (ImGui::InputText(T("menu.advanced.shader_defines", "Shader Defines"), &shaderDefines)) {
 		globals::state->SetDefines(shaderDefines);
 	}
@@ -187,11 +187,18 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 	}
 
 	// Clear Shader Cache button
+	const bool capturing = shaderCache->IsCapturingActiveShaders();
+	const bool awaitingMenuClose = shaderCache->IsAwaitingMenuCloseCapture();
+	ImGui::BeginDisabled(capturing || awaitingMenuClose);
 	if (ImGui::Button(T("menu.advanced.clear_shader_cache", "Clear Shader Cache"), { -1, 0 })) {
-		shaderCache->Clear();
+		Util::RequestClearShaderCacheConfirmation(Util::ResolveShaderCacheClearScope());
 	}
+	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("menu.advanced.clear_shader_cache_tooltip", "Clear all compiled shaders from memory. Forces recompilation of all shaders on next use."));
+		ImGui::TextWrapped("%s", Util::GetClearShaderCacheTooltip());
+	}
+	if (auto count = shaderCache->GetLastScopedClearCount(); count > 0) {
+		ImGui::TextDisabled("Last smart clear: %zu shader(s) (%.1f ms)", count, shaderCache->GetLastScopedClearMs());
 	}
 
 	ImGui::Spacing();

@@ -6,6 +6,7 @@
 
 #include <Buffer.h>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -14,11 +15,16 @@ using json = nlohmann::json;
 #include <FeatureBuffer.h>
 
 #include <Hooks.h>
-#include <mutex>
 
 class State
 {
 public:
+	struct ShaderDefinesSnapshot
+	{
+		std::string canonicalText;
+		std::vector<std::pair<std::string, std::string>> defines;
+	};
+
 	State()
 	{
 		std::lock_guard<std::mutex> lock(statsMutex);
@@ -54,8 +60,6 @@ public:
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
 	spdlog::level::level_enum logLevel = spdlog::level::info;
-	std::string shaderDefinesString = "";
-	std::vector<std::pair<std::string, std::string>> shaderDefines{};  // data structure to parse string into; needed to avoid dangling pointers
 
 	float timer = 0;
 	float refractionScale = 0.5f;  // Default LLF heat warp strength
@@ -144,7 +148,11 @@ public:
 	 * @param defines Semicolon-separated define string (e.g. "FOO=1;BAR=2").
 	 */
 	void SetDefines(std::string defines);
-	std::vector<std::pair<std::string, std::string>>* GetDefines();
+	std::shared_ptr<const ShaderDefinesSnapshot> GetShaderDefinesSnapshot() const;
+	uint64_t GetShaderDefinesGeneration() const
+	{
+		return shaderDefinesGeneration.load(std::memory_order_acquire);
+	}
 
 	/**
 	 * @brief Checks whether the given shader type is enabled.
@@ -418,6 +426,10 @@ public:
 	}
 
 private:
+	std::atomic<std::shared_ptr<const ShaderDefinesSnapshot>> shaderDefinesSnapshot{
+		std::make_shared<const ShaderDefinesSnapshot>()
+	};
+	std::atomic<uint64_t> shaderDefinesGeneration{ 0 };
 	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };

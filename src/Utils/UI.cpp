@@ -251,32 +251,60 @@ namespace Util
 	// Static state for clear shader cache confirmation popup
 	static bool showClearCacheConfirmation = false;
 	static bool dontAskAgainCheckbox = false;
+	static ShaderCacheClearScope pendingClearScope = ShaderCacheClearScope::Full;
+
+	ShaderCacheClearScope ResolveShaderCacheClearScope()
+	{
+		auto* menu = globals::menu;
+		const bool smartDefault = menu && menu->GetSettings().SmartClearShaderCacheDefault;
+		return ResolveShaderCacheClearScope(smartDefault, ImGui::GetIO().KeyShift);
+	}
+
+	const char* GetClearShaderCacheTooltip()
+	{
+		if (ResolveShaderCacheClearScope() == ShaderCacheClearScope::ActiveOnly) {
+			return "Clears only shaders drawing the current scene. They recompile as the scene redraws; "
+			       "everything else stays cached. Shift-click selects a full clear.";
+		}
+		return "Clears all compiled shaders from memory and disk cache (if enabled). They recompile when "
+		       "the game next encounters them. Shift-click selects a scene-only smart clear.";
+	}
 
 	// Helper function to perform the actual cache clearing
-	static void PerformClearShaderCache()
+	static void PerformClearShaderCache(ShaderCacheClearScope a_scope)
 	{
 		auto* shaderCache = globals::shaderCache;
-		if (shaderCache) {
-			shaderCache->Clear();
-			if (shaderCache->IsDiskCache()) {
-				shaderCache->DeleteDiskCache();
-			}
+		if (!shaderCache)
+			return;
+
+		if (a_scope == ShaderCacheClearScope::ActiveOnly) {
+			shaderCache->BeginActiveShaderCapture();
+			return;
+		}
+
+		shaderCache->Clear();
+		if (shaderCache->IsDiskCache()) {
+			shaderCache->DeleteDiskCache();
 		}
 	}
 
-	void RequestClearShaderCacheConfirmation()
+	void RequestClearShaderCacheConfirmation(ShaderCacheClearScope a_scope)
 	{
 		auto* menu = globals::menu;
 		if (!menu)
 			return;
+		if (globals::shaderCache &&
+			(globals::shaderCache->IsCapturingActiveShaders() || globals::shaderCache->IsAwaitingMenuCloseCapture()))
+			return;
 
 		// If user has opted to skip confirmation, clear immediately
 		if (menu->GetSettings().SkipClearCacheConfirmation) {
-			PerformClearShaderCache();
+			PerformClearShaderCache(a_scope);
 			return;
 		}
 
 		// Show confirmation popup
+		pendingClearScope = a_scope;
 		showClearCacheConfirmation = true;
 		dontAskAgainCheckbox = false;
 	}
@@ -286,16 +314,25 @@ namespace Util
 		if (!showClearCacheConfirmation)
 			return;
 
-		ImGui::OpenPopup(T("ui.clear_shader_cache", "Clear Shader Cache?"));
+		const bool isSmart = pendingClearScope == ShaderCacheClearScope::ActiveOnly;
+		const char* title = isSmart ? "Clear Active Shaders?" : T("ui.clear_shader_cache", "Clear Shader Cache?");
+		ImGui::OpenPopup(title);
 
-		if (auto popup = CenteredPopupModal(T("ui.clear_shader_cache", "Clear Shader Cache?"), &showClearCacheConfirmation)) {
-			ImGui::Text("%s", T("ui.clear_cache_confirm", "Are you sure you want to clear the shader cache?"));
+		if (auto popup = CenteredPopupModal(title, &showClearCacheConfirmation)) {
+			ImGui::Text("%s", isSmart ? "Are you sure you want to clear active shaders?" : T("ui.clear_cache_confirm", "Are you sure you want to clear the shader cache?"));
 			ImGui::Spacing();
 			ImGui::Spacing();
-			ImGui::TextWrapped(
-				"%s", T("ui.clear_cache_desc",
-						  "This will clear all compiled shaders from memory and disk cache (if enabled). "
-						  "Shaders will be recompiled when the game next encounters them."));
+			if (isSmart) {
+				ImGui::TextWrapped(
+					"This watches the current scene, clears only shaders drawing it, then watches once more "
+					"after this menu closes to catch passes hidden by the overlay. Keep the affected area visible. "
+					"Use a full clear if the problem remains.");
+			} else {
+				ImGui::TextWrapped(
+					"%s", T("ui.clear_cache_desc",
+							  "This will clear all compiled shaders from memory and disk cache (if enabled). "
+							  "Shaders will be recompiled when the game next encounters them."));
+			}
 			ImGui::Spacing();
 			ImGui::Spacing();
 			ImGui::Separator();
@@ -322,7 +359,7 @@ namespace Util
 					}
 				}
 
-				PerformClearShaderCache();
+				PerformClearShaderCache(pendingClearScope);
 				showClearCacheConfirmation = false;
 				ImGui::CloseCurrentPopup();
 			}

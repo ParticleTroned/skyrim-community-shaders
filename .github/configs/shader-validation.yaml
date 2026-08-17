@@ -1,3 +1,4 @@
+captured_shader_variants: 2926
 common_defines:
     - D3DCOMPILE_DEBUG
     - D3DCOMPILE_SKIP_OPTIMIZATION

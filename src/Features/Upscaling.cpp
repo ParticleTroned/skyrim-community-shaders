@@ -18566,17 +18566,17 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 	if (IsVRStartupMainMenuRenderStateActive())
 		return UpscaleMethod::kNONE;
 
-	// The direct handoff suppresses only the transient full-resolution vendor
-	// contract. Once OpenVR has published the exact reduced boot sizing contract,
-	// that contract must be allowed to create its vendor resources; otherwise
-	// physical convergence waits forever on a runtime that kNONE cannot create.
-	const auto& boot = perfMode.GetBootSnapshot();
-	if (IsVRRenderScaleModeLatched() && IsVendorUpscalingMethod(boot.method))
-		return boot.method;
+	// Boot sizing alone does not prove that Skyrim's scene targets have adopted
+	// the reduced dimensions. Keep the transient full-resolution source out of
+	// the vendor path until the planned physical handoff reaches creator entry.
+	// The in-progress exception lets that transaction build the target runtime.
 	if (vrStartupRenderScaleDirectHandoffActive.load(std::memory_order_acquire) &&
 		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
 		return UpscaleMethod::kNONE;
 	}
+	const auto& boot = perfMode.GetBootSnapshot();
+	if (IsVRRenderScaleModeLatched() && IsVendorUpscalingMethod(boot.method))
+		return boot.method;
 
 	if (const auto stableProfile = GetStableVRRenderScaleRuntimeProfile()) {
 		return stableProfile->method;
@@ -18611,15 +18611,35 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 				.targetActive = targetActive,
 				.bootSizingContractExact = bootSizingContractExact,
 				.physicalContractConverged = physicalContractConverged,
+				.physicalRelatchPending =
+					pendingPerfModeRenderTargetRecreate.load(
+						std::memory_order_acquire),
+				.physicalRelatchInProgress =
+					perfModeRenderTargetRecreateInProgress.load(
+						std::memory_order_acquire),
 			});
-		switch (handoffAction) {
-		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract:
+		const auto recognizeBootSizing = [&]() {
 			if (!vrStartupRenderScaleBootSizingRecognized.exchange(
 					true,
 					std::memory_order_acq_rel)) {
 				logger::info(
-					"[Upscaling] Recognized the startup Render Scale boot sizing contract; enabled its vendor runtime while retaining direct-handoff ownership until the physical contract converges.");
+					"[Upscaling] Recognized the startup Render Scale boot sizing contract; retaining vendor suppression while one planned physical relatch publishes the matching scene targets.");
 			}
+		};
+		switch (handoffAction) {
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::QueuePhysicalContract:
+			RequestPerfModeRenderTargetRecreate(
+				"startup Render Scale physical handoff",
+				VRUpscalingTransitionOrigin::PostLoadSync);
+			if (pendingPerfModeRenderTargetRecreate.load(
+					std::memory_order_acquire) ||
+				perfModeRenderTargetRecreateInProgress.load(
+					std::memory_order_acquire)) {
+				recognizeBootSizing();
+			}
+			break;
+		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract:
+			recognizeBootSizing();
 			break;
 		case VRVendorRelatchPolicy::StartupRenderScaleDirectHandoffAction::Complete:
 			if (vrStartupRenderScaleDirectHandoffActive.exchange(

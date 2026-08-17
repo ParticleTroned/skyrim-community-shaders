@@ -252,13 +252,15 @@ namespace VRVendorRelatchPolicy
 		       !a_state.alreadyDefined;
 	}
 
-	// Boot sizing establishes the logical vendor contract and permits resource
-	// creation. The handoff still owns serialization until the corresponding
-	// physical targets converge, so a startup bridge frame cannot release it.
+	// Boot sizing proves the requested dimensions, but it does not prove that
+	// Skyrim's scene targets have been physically recreated at those dimensions.
+	// Schedule that handoff explicitly so the bounds watchdog remains emergency
+	// recovery rather than the ordinary startup scheduler.
 	enum class StartupRenderScaleDirectHandoffAction : std::uint8_t
 	{
 		Inactive,
 		WaitForBootSizing,
+		QueuePhysicalContract,
 		WaitForPhysicalContract,
 		Complete,
 		Cancel,
@@ -270,6 +272,8 @@ namespace VRVendorRelatchPolicy
 		bool targetActive = false;
 		bool bootSizingContractExact = false;
 		bool physicalContractConverged = false;
+		bool physicalRelatchPending = false;
+		bool physicalRelatchInProgress = false;
 	};
 
 	// Select the next handoff action without coupling the lifecycle policy to
@@ -284,9 +288,13 @@ namespace VRVendorRelatchPolicy
 			return StartupRenderScaleDirectHandoffAction::Cancel;
 		if (!a_state.bootSizingContractExact)
 			return StartupRenderScaleDirectHandoffAction::WaitForBootSizing;
-		if (!a_state.physicalContractConverged)
+		if (a_state.physicalContractConverged)
+			return StartupRenderScaleDirectHandoffAction::Complete;
+		if (a_state.physicalRelatchPending ||
+			a_state.physicalRelatchInProgress) {
 			return StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract;
-		return StartupRenderScaleDirectHandoffAction::Complete;
+		}
+		return StartupRenderScaleDirectHandoffAction::QueuePhysicalContract;
 	}
 
 	struct SubmitBoundsRecoveryAdmission
@@ -300,10 +308,9 @@ namespace VRVendorRelatchPolicy
 	[[nodiscard]] constexpr bool ShouldForceSubmitBoundsRecovery(
 		const SubmitBoundsRecoveryAdmission& a_state) noexcept
 	{
-		// A direct startup handoff has already proven the requested boot tuple,
-		// but its creator may need a stereo cycle to publish the matching physical
-		// targets. Preserve the ordinary watchdog grace instead of turning that
-		// expected bridge frame into an immediate recovery allocation.
+		// A direct startup handoff owns the normal physical relatch. Preserve the
+		// ordinary watchdog grace instead of allocating a duplicate recovery while
+		// that planned transaction is pending or entering its creator.
 		return !a_state.displaySizedSubmitDuringPressure &&
 		       !a_state.startupDirectHandoffActive;
 	}

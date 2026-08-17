@@ -26,6 +26,10 @@ param(
     [ValidatePattern('^[A-Fa-f0-9]{64}$')]
     [string]$DllSha256,
 
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[A-Fa-f0-9]{7,40}$')]
+    [string]$SourceCommit,
+
     [string]$OutputRoot = 'D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-curves',
 
     [ValidateRange(10, 300)]
@@ -40,8 +44,6 @@ $profilerWasEnabled = $false
 $profilerStateKnown = $false
 $hasGameHour = $PSBoundParameters.ContainsKey('GameHour')
 $runFailure = $null
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
 
 function Invoke-DevBenchTool {
     param(
@@ -205,7 +207,7 @@ $record = [ordered]@{
     }
     source = [ordered]@{
         branch = 'feat/preset-calibration-automation'
-        commit = $sourceCommit
+        commit = $SourceCommit
         dllSha256 = $DllSha256.ToUpperInvariant()
         build = 'VR Release; Info logging; Release+DevBench bridge'
     }

@@ -17,6 +17,7 @@
 #	include <memory>
 #	include <stdexcept>
 #	include <string>
+#	include <unordered_map>
 
 namespace
 {
@@ -26,6 +27,7 @@ namespace
 	constexpr unsigned int kDevBenchToolExtensionRevision = 5;
 	std::atomic_bool g_installAttempted{ false };
 	std::atomic_bool g_registered{ false };
+	std::unordered_map<std::string, json> g_performanceSnapshots;
 
 	json RunOnMainThread(std::function<json()> a_run)
 	{
@@ -120,14 +122,98 @@ namespace
 		};
 	}
 
+	Feature* FindFeatureByShortName(const std::string& a_featureName)
+	{
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature && a_featureName == feature->GetShortName())
+				return feature;
+		}
+		return nullptr;
+	}
+
+	bool ResetsHistoryForPerformanceToggle(const std::string& a_featureName)
+	{
+		return a_featureName == "Skylighting" ||
+		       a_featureName == "ScreenSpaceGI" ||
+		       a_featureName == "Wetterness" ||
+		       a_featureName == "WetnessEffects" ||
+		       a_featureName == "Upscaling";
+	}
+
+	const char* GetPerformanceResourceImpact(const std::string& a_featureName)
+	{
+		if (a_featureName == "Upscaling")
+			return "render-target-relatch-and-vendor-resources";
+		if (a_featureName == "VolumetricLighting")
+			return "recreate-volumetric-targets";
+		if (a_featureName == "Skylighting")
+			return "reset-probe-resources-and-history";
+		if (a_featureName == "Wetterness" || a_featureName == "WetnessEffects")
+			return "reset-temporal-weather-state";
+		if (a_featureName == "VR")
+			return "shared-multi-feature-vr-state";
+		return "retained";
+	}
+
+	json BuildPerformanceRecord(Feature& a_feature)
+	{
+		const std::string featureName = a_feature.GetShortName();
+		const bool supported = a_feature.SupportsPerformanceCostMeasurement();
+		const bool available = a_feature.loaded && supported;
+		const bool value = available && a_feature.IsPerformanceCostMeasurementEnabled();
+		return {
+			{ "feature", featureName },
+			{ "displayName", a_feature.GetDisplayName() },
+			{ "settingsSection", a_feature.GetName() },
+			{ "control", "performanceActive" },
+			{ "valueType", "boolean" },
+			{ "requestedValue", value },
+			{ "effectiveValue", value },
+			{ "runtimeActive", value },
+			{ "ready", available && a_feature.IsPerformanceCostMeasurementReady() },
+			{ "waitText", a_feature.GetPerformanceCostMeasurementWaitText() },
+			{ "mutability", "live-settle" },
+			{ "settle",
+				{
+					{ "kind", "seconds-and-readiness" },
+					{ "whenEnabledSeconds", a_feature.GetPerformanceCostMeasurementSettleSeconds(true) },
+					{ "whenDisabledSeconds", a_feature.GetPerformanceCostMeasurementSettleSeconds(false) },
+					{ "requiresMenuCloseWhenEnabled", a_feature.RequiresMenuCloseForPerformanceCostMeasurement(true) },
+					{ "requiresMenuCloseWhenDisabled", a_feature.RequiresMenuCloseForPerformanceCostMeasurement(false) },
+					{ "menuCloseWaitMs", a_feature.GetPerformanceCostMeasurementMenuCloseWaitMs() },
+					{ "resetsHistory", ResetsHistoryForPerformanceToggle(featureName) },
+				} },
+			{ "cacheImpact", "loaded-shader-set-retained" },
+			{ "resourceImpact", GetPerformanceResourceImpact(featureName) },
+			{ "canRestoreInSession", true },
+			{ "snapshotHeld", g_performanceSnapshots.contains(featureName) },
+			{ "writable", available },
+			{ "available", available },
+			{ "unavailableReason", available ? json(nullptr) : json(a_feature.loaded ? "feature does not expose the Performance Tuning measurement contract" : "feature package is not loaded") },
+		};
+	}
+
+	json BuildPerformanceControlList()
+	{
+		json controls = json::array();
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature && feature->SupportsPerformanceCostMeasurement())
+				controls.push_back(BuildPerformanceRecord(*feature));
+		}
+		return controls;
+	}
+
 	json BuildControlList()
 	{
-		return json::array({
+		json controls = json::array({
 			BuildPackageRecord(globals::features::ibl, "ImageBasedLighting"),
 			BuildIBLRecord(),
 			BuildPackageRecord(globals::features::volumetricShadows, "VolumetricShadows"),
 			BuildVolumetricShadowsRecord(),
 		});
+		for (auto& control : BuildPerformanceControlList())
+			controls.push_back(std::move(control));
+		return controls;
 	}
 
 	json FindControl(const std::string& a_feature, const std::string& a_control)
@@ -140,6 +226,10 @@ namespace
 			return BuildPackageRecord(globals::features::volumetricShadows, "VolumetricShadows");
 		if (a_feature == "VolumetricShadows" && a_control == "Enabled")
 			return BuildVolumetricShadowsRecord();
+		if (a_control == "performanceActive") {
+			if (auto* feature = FindFeatureByShortName(a_feature))
+				return BuildPerformanceRecord(*feature);
+		}
 		return {
 			{ "error", "unknown control" },
 			{ "feature", a_feature },
@@ -161,6 +251,40 @@ namespace
 			globals::features::volumetricShadows.settings.Enabled = a_value;
 			return { { "action", "set" }, { "persisted", false }, { "control", BuildVolumetricShadowsRecord() } };
 		}
+		if (a_control == "performanceActive") {
+			auto* feature = FindFeatureByShortName(a_feature);
+			if (!feature)
+				return FindControl(a_feature, a_control);
+			if (!feature->loaded || !feature->SupportsPerformanceCostMeasurement())
+				return { { "error", "performance control is unavailable" }, { "control", BuildPerformanceRecord(*feature) } };
+
+			bool restoredSnapshot = false;
+			if (!a_value) {
+				const bool inserted = !g_performanceSnapshots.contains(a_feature);
+				if (inserted)
+					g_performanceSnapshots.emplace(a_feature, feature->CapturePerformanceCostMeasurementState());
+				try {
+					feature->SetPerformanceCostMeasurementEnabled(false);
+				} catch (...) {
+					if (inserted)
+						g_performanceSnapshots.erase(a_feature);
+					throw;
+				}
+			} else if (const auto snapshot = g_performanceSnapshots.find(a_feature); snapshot != g_performanceSnapshots.end()) {
+				feature->RestorePerformanceCostMeasurementState(snapshot->second);
+				g_performanceSnapshots.erase(snapshot);
+				restoredSnapshot = true;
+			} else {
+				feature->SetPerformanceCostMeasurementEnabled(true);
+			}
+
+			return {
+				{ "action", "set" },
+				{ "persisted", false },
+				{ "restoredSnapshot", restoredSnapshot },
+				{ "control", BuildPerformanceRecord(*feature) },
+			};
+		}
 		if (a_control == "packageEnabled") {
 			return {
 				{ "error", "package control requires a process restart and is read-only in this session" },
@@ -168,6 +292,38 @@ namespace
 			};
 		}
 		return FindControl(a_feature, a_control);
+	}
+
+	json RestoreAllPerformanceSnapshots()
+	{
+		json restored = json::array();
+		json failed = json::array();
+		for (auto snapshot = g_performanceSnapshots.begin(); snapshot != g_performanceSnapshots.end();) {
+			auto* feature = FindFeatureByShortName(snapshot->first);
+			if (!feature) {
+				failed.push_back({ { "feature", snapshot->first }, { "error", "feature is no longer registered" } });
+				++snapshot;
+				continue;
+			}
+			try {
+				feature->RestorePerformanceCostMeasurementState(snapshot->second);
+				restored.push_back(snapshot->first);
+				snapshot = g_performanceSnapshots.erase(snapshot);
+			} catch (const std::exception& e) {
+				failed.push_back({ { "feature", snapshot->first }, { "error", e.what() } });
+				++snapshot;
+			} catch (...) {
+				failed.push_back({ { "feature", snapshot->first }, { "error", "restore failed" } });
+				++snapshot;
+			}
+		}
+		return {
+			{ "action", "restoreAll" },
+			{ "persisted", false },
+			{ "restored", std::move(restored) },
+			{ "failed", std::move(failed) },
+			{ "remainingSnapshots", g_performanceSnapshots.size() },
+		};
 	}
 
 	json BuildControlResult(const json& a_args)
@@ -182,12 +338,14 @@ namespace
 				};
 			});
 		}
+		if (action == "restoreAll")
+			return RunOnMainThread([]() { return RestoreAllPerformanceSnapshots(); });
 
 		if (action != "get" && action != "set") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "list", "get", "set" }) },
+				{ "supported", json::array({ "list", "get", "set", "restoreAll" }) },
 			};
 		}
 
@@ -254,7 +412,7 @@ namespace
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.controls" },
 			{ "usage", R"(Invoke communityshaders.controls directly, or dispatch it through a DevBench scenario tool step.)" },
-			{ "actions", json::array({ "list", "get", "set" }) },
+			{ "actions", json::array({ "list", "get", "set", "restoreAll" }) },
 		};
 		const auto serialized = result.dump();
 		a_write(a_sink, serialized.c_str());
@@ -291,7 +449,7 @@ namespace FeatureControlDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. The initial writable surface contains the audited live inner controls for IBL and Volumetric Shadows; package enablement is reported as restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set"],"default":"list"},"feature":{"type":"string","enum":["ImageBasedLighting","VolumetricShadows"]},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled"]},"value":{"type":"boolean"}},"required":["action"]}})";
+			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. restoreAll is a safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive"]},"value":{"type":"boolean"}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.controls",
 			descriptor,

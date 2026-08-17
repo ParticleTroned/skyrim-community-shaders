@@ -131,3 +131,21 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Consequences: Wetness and IBL become one visual review cluster, though they retain separate controls
 - Revalidation triggers: material/range anchor, precipitation-motion sequence, dedicated timing instrumentation, physical HMD, runtime lane, GPU vendor, or material/lighting code change
 - Supersedes: none
+
+### `PA-2026-007` — Treat Wetness tiers as perceptual coverage/event gradients
+
+- Date: 2026-08-17
+- Status: proposed for provisional preset generation
+- Snapshot: four independent-parameter Wetness factorials through DLL commit `ab359c4d9`
+- Question: Do range, event density, and persistence provide distinct enough responses to retain a three-tier Wetness gradient?
+- Scope: AMD `SVR-OVR-NULL`, fixed Guardian Stones storm anchor, IBL active
+- Hard constraints: Wetness remains enabled; no aggregate-frame timing is relabelled as Wetness cost; fixed-pose null-HMD motion is not physical-HMD stability evidence
+- Options considered: flatten Wetness across tiers; disable it in Performance; retain the inherited gradient as a perceptual policy; claim a performance gradient
+- Evidence: [independent Wetness parameter follow-up](./profile-curves-20260817.md#wetness-independent-parameter-follow-up), with 30-frame paired range orders and 60-frame paired temporal orders
+- Objective vector and uncertainty: material fade, raindrop coverage, opportunity density, and persistence all produce repeatable absolute separation with close left/right agreement; signed temporal energy reverses with order and no named GPU timer exists
+- Pareto result: the lower settings preserve the dominant wet-material phenomenon while reducing secondary coverage/event representation, so they remain a plausible non-dominated perceptual tier; their cost benefit is unknown
+- Decision: retain the typed Performance/Balanced/Quality Wetness gradient provisionally, describe it as coverage and event richness, and attach no measured GPU-saving or temporal-stability claim
+- Confidence: medium-high for perceptual separation in this lane; low for GPU ordering and moving-headset stability
+- Consequences: generated preset documentation must distinguish requested 5,000-unit Performance fade from the 7,002.801-unit runtime minimum until the preset definition is normalized
+- Revalidation triggers: named Wetness timing, known-depth material target, moving/physical HMD, runtime lane, GPU vendor, weather/material code change, or normalization of the Performance fade request
+- Supersedes: narrows the uncertainty in `PA-2026-006` without replacing its IBL-coupling rule

@@ -102,6 +102,66 @@ Representative full frames support the quantitative reading:
 - Screen Space Shadows Performance slightly relaxes contact/relief shading; higher tiers retain more fine shadow structure and Quality removes the inherited distance cutoff.
 - Wetness itself remains a large storm-conditioned material effect, but the three tier variants look close from this static near-field viewpoint. The inherited tier differences primarily change precipitation density/lifetime and effect range, which this composition does not isolate well.
 
+## Wetness independent-parameter follow-up
+
+Commit `ab359c4d9` added bounded, reversible Wetterness
+`qualityParameters` at Info logging. The runtime rejects invalid bounds,
+reports shader-derived coverage and event-opportunity values, resets owned
+temporal state, waits five seconds, and restores the exact original state. No
+shader variant is compiled. At the Quality values, readback reports a
+`142.8 m` material fade, raindrop full-strength/cutoff radii of approximately
+`1,980`/`2,425` game units, and a nominal cell-time opportunity rate of
+`0.17778` per square world unit per second.
+
+Four accepted Guardian Stones storm runs separated the inherited seven-field
+cluster into two two-factor screens. Every phase reapplied and verified
+`GuardianStones`, `Tamriel`, `14:00`, `SkyrimStormRain`, and camera yaw
+`-1.550000906`; IBL remained active. Range runs captured 30 separate-eye BMP
+pairs per state at a six-cycle cadence. Temporal runs captured 60 pairs per
+state at a four-cycle cadence. All 900 pairs completed with zero failed,
+incomplete, or backpressure drops, and every run restored its original
+in-memory state.
+
+Stable-region mean absolute luma effects across both orders and eyes were:
+
+| Independent factor | Other factor on | Other factor off | Interaction |
+| --- | ---: | ---: | ---: |
+| Material wetness fade, `7,003` → `10,000` | `0.46`–`0.51` | `0.51`–`0.64` | `0.74`–`0.79` with raindrop range |
+| Raindrop range, `700` → `1,400` | `0.43`–`0.46` | `0.57`–`0.64` | same screen |
+| Opportunity density, `0.0712` → `0.1778` nominal rate | `0.69`–`0.86` | `0.67`–`0.78` | `1.01`–`1.04` with persistence |
+| Splash/ripple persistence, `4.5/0.22` → `6.0/0.30` | `0.78`–`0.82` | `0.84`–`0.95` | same screen |
+
+The absolute magnitudes and left/right response repeat. Signed whole-scene
+direction and raw consecutive-frame-delta ratios do not: for example, the
+low-density/high-persistence state measured `0.44`–`0.45×` the both-high
+frame-delta baseline when density changed first, but `1.33`–`1.34×` when
+persistence changed first. Storm and foliage evolution therefore still
+dominate a simple motion-energy ordering. The correct conclusion is that the
+controls visibly redistribute rain events and coverage; it is not that the
+lower tier has proved more temporally stable or cheaper.
+
+Representative lossless frames preserve the large wet/dark material response
+in both states. Differences appear primarily as rain-streak/surface-event
+distribution and subtle stone/ground coverage rather than a wholesale scene
+brightness change. The inherited Wetness gradient remains suitable for a
+provisional perceptual tier, but no GPU-saving claim is attached until a named
+timer or equivalent attributable instrumentation exists.
+
+Evidence root:
+`D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-wetness-factorial`
+
+| Paired-order run | Manifest SHA-256 | Primary analysis SHA-256 |
+| --- | --- | --- |
+| ranges, material-first | `5A5CEBFA7DB9E64DFE767692A579E19BC78C3985DC30CC4D574AEDAC52FFFEF4` | `0CEF7F5795DFA365B1E99E71AC06A8EAA27417F2DD36B9C752B2CBABC50106A7` |
+| ranges, raindrop-first | `7F4D76E72A9D2DEB3E59E4431DC56DA6C1EB3DFDAA8BA148713479CFE1375984` | `BA213ED4D97C6C0CD4C17A28D695D06D237145BFC13A67477D6938098867CC13` |
+| temporal, density-first | `1C6857EAAD3A8AA2A3F72CE1E206D78C564F99BD6E36A96537B278DAECF929D1` | `F7F7AA12D435BD8104966BEDCFD5DB4440A4DF8A8C7657525DB484776E1E60DB` |
+| temporal, persistence-first | `D90A394DA23C7A7E523747D134B4CBA10FB34858E361A8181F4488F65DCDE280` | `9B9706F083F46A5A85E814F04610896145525EF63862056A3D72EAEE557D3FDD` |
+
+The temporal-analysis hashes are
+`81AAF0718A2DF39946F62B97A6AD8A459B75E7A879A8B219CD68E7E1983674ED`
+and
+`9AB1DE3537B4343CA21ED659BCE3258126539939CA5FB9185CBE7C62CACA8C77`.
+
 ## SSS distance and separate-eye follow-up
 
 The first distance follow-up added separate-eye output and a 3 × 3 stable-region spatial grid to the profile-curve tooling. Combined-stereo plus separate-eye BMP capture at the earlier four-cycle cadence caused two backpressure drops in the first Windhelm run, so that run is rejected. A six-cycle cadence completed all later runs with 30 frames per phase and zero failed, incomplete-pair, or backpressure drops.

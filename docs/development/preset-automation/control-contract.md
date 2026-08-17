@@ -122,6 +122,34 @@ Screen Space Shadows also exposes a bounded `qualityParameters` object for attri
 
 `VRBaseSamplesAtReference` accepts `16`–`96`; `VRCullDistance` accepts `0`–`20480`, with zero disabling distance culling. The control shares the feature's original-state snapshot with `qualityProfile`, so a calibration may alternate named profiles and partial parameter overrides before restoring either control. Effective readback includes the requested settings and compiled left/right sample counts. This permits a range-only comparison at a fixed sample count and a sample-only comparison at a fixed range without creating artificial preset names. It retains the same `live-recompile-settle` and runtime shader-cache disclosures as the profile control.
 
+Wetterness exposes the same reversible `qualityParameters` shape for its seven
+tiered numeric controls:
+
+```json
+{"action":"set","feature":"Wetterness","control":"qualityParameters","value":{"RaindropGridSize":3.6,"RaindropInterval":0.65,"RaindropChance":0.6}}
+```
+
+The fields are `RaindropFxRangeWorldUnits`, `WetnessDistanceFadeRange`,
+`RaindropGridSize`, `RaindropInterval`, `RaindropChance`, `SplashesLifetime`,
+and `RippleLifetime`. Bounds follow the production UI/sanitizer contract. The
+material fade therefore cannot be requested below `7002.801` game units (100
+metres); out-of-range requests are rejected before mutation rather than
+silently producing a different effective tier. Readback additionally reports:
+
+- material fade range in metres;
+- the raindrop full-strength and cutoff radii implied by the lighting shader;
+  and
+- the cell-time opportunity rate `chance / (gridSize² × interval)`.
+
+Those derived values describe coverage and candidate event density, not visible
+raindrop count or GPU cost. Rain intensity, occlusion, surface orientation,
+radius tests, and the splash/ripple lifetime functions still determine the
+real contribution. Every change resets Wetterness-owned temporal state and
+retains the five-second settle gate, but uses the already loaded shaders and
+does not compile a new variant. Runtime proof rejected a `7000`-unit fade,
+accepted a partial chance mutation, and restored the exact original seven-field
+state with no outstanding snapshot at Info logging.
+
 ## Promotion toward live transitions
 
 Converting a control to `live` requires feature-specific proof that enable, disable, and repeated A/B/A transitions:

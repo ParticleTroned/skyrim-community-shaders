@@ -1,0 +1,112 @@
+{
+  "$schema": "../schemas/measurement-run.schema.json",
+  "schemaVersion": 1,
+  "runId": "20260817-amd-svr-ovr-null-replace-r01",
+  "recordedAt": "2026-08-17T00:00:00Z",
+  "status": "planned",
+  "purpose": "Replace with the hypothesis or proof-of-concept objective.",
+  "sourceSnapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "replace-with-branch",
+    "commit": "0000000",
+    "buildConfiguration": "Replace with the exact build configuration.",
+    "dllVersion": "Replace with the built DLL version.",
+    "dllSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "settingsSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "settingsArtifact": null,
+    "dependencies": [
+      {
+        "name": "CommonLib",
+        "revision": "replace-with-revision",
+        "dirty": null,
+        "notes": "Verify the exact dependency and dirty state before the run."
+      }
+    ]
+  },
+  "hardware": {
+    "gpuVendor": "AMD",
+    "adapterName": "Replace with adapter name.",
+    "deviceId": "Replace with PCI or API device identifier.",
+    "driverVersion": "Replace with driver version.",
+    "vramBytes": null,
+    "cpu": null,
+    "operatingSystem": null
+  },
+  "runtimeLane": {
+    "laneId": "SVR-OVR-NULL",
+    "applicationVrApi": "OpenVR",
+    "compatibilityLayer": "none",
+    "compatibilityLayerVersion": null,
+    "targetRuntimeApi": "OpenVR",
+    "runtimeImplementation": "SteamVR",
+    "runtimeVersion": null,
+    "compositorTransport": "SteamVR compositor",
+    "notes": "This lane cannot provide OCU or OpenXR evidence."
+  },
+  "hmd": {
+    "mode": "synthetic",
+    "driver": "SteamVR null",
+    "profile": "Record the exact null-driver settings and revision.",
+    "presenceState": "not-applicable",
+    "renderTarget": {
+      "width": 1512,
+      "height": 1680,
+      "layout": "per-eye"
+    },
+    "refreshHz": 90,
+    "projection": {
+      "source": "unknown",
+      "leftEye": null,
+      "rightEye": null,
+      "eyeToHeadArtifact": null,
+      "hiddenAreaMeshArtifact": null
+    },
+    "poseSource": "runtime-default",
+    "controllerProfile": "none"
+  },
+  "scene": {
+    "sceneId": "replace-scene",
+    "saveArtifact": null,
+    "location": "Replace with cell and world position.",
+    "weather": "Replace with weather identity.",
+    "gameTime": "Replace with game date and time.",
+    "poseScript": "Replace with pose or automation script identity.",
+    "motionProfile": "static",
+    "controlledVariables": []
+  },
+  "passes": [
+    {
+      "kind": "timing",
+      "status": "planned",
+      "warmupFrames": 0,
+      "sampleFrames": 0,
+      "profilerArtifact": null,
+      "profilerMetrics": [],
+      "capture": null,
+      "issues": []
+    },
+    {
+      "kind": "visual",
+      "status": "planned",
+      "warmupFrames": 0,
+      "sampleFrames": 0,
+      "profilerArtifact": null,
+      "profilerMetrics": [],
+      "capture": null,
+      "issues": []
+    }
+  ],
+  "artifacts": [],
+  "comparability": {
+    "baselineRunId": null,
+    "scope": "standalone",
+    "controlledVariables": [],
+    "deviations": []
+  },
+  "validity": {
+    "accepted": null,
+    "reasons": []
+  },
+  "conclusions": [],
+  "notes": []
+}

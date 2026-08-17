@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://community-shaders.dev/schemas/preset-automation/feature-dossier.schema.json",
+  "title": "Community Shaders feature dossier",
+  "description": "Maintained intent, implementation, controls, constraints, performance shape, and evidence for one rendering phenomenon.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "identity",
+    "snapshot",
+    "intent",
+    "implementation",
+    "controls",
+    "performance",
+    "correctness",
+    "evidence"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "maturity",
+        "operationalStatus"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "maturity": {
+          "enum": [
+            "draft",
+            "reviewed",
+            "measured",
+            "qualified"
+          ]
+        },
+        "operationalStatus": {
+          "enum": [
+            "default-enabled",
+            "default-disabled",
+            "experimental",
+            "deprecated",
+            "unknown"
+          ]
+        },
+        "aliases": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "owners": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit",
+        "reviewedAt"
+      ],
+      "properties": {
+        "repository": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "branch": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,40}$"
+        },
+        "reviewedAt": {
+          "type": "string",
+          "format": "date"
+        }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phenomenon",
+        "perceptualContribution",
+        "shouldNotDo"
+      ],
+      "properties": {
+        "phenomenon": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "perceptualContribution": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "shouldNotDo": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sceneCoverage": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "producers",
+        "representation",
+        "consumers",
+        "compositionRule",
+        "lifecycle",
+        "resolutionAndEyeLayout"
+      ],
+      "properties": {
+        "producers": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "representation": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "consumers": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "compositionRule": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "resolutionAndEyeLayout": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sourcePaths": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "controls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "setting",
+          "valueType",
+          "range",
+          "expectedMonotonicity",
+          "safeBounds",
+          "defaultBehavior"
+        ],
+        "properties": {
+          "setting": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "valueType": {
+            "enum": [
+              "boolean",
+              "integer",
+              "number",
+              "enum",
+              "object",
+              "unknown"
+            ]
+          },
+          "range": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "expectedMonotonicity": {
+            "enum": [
+              "increasing-cost-and-benefit",
+              "decreasing-cost-and-benefit",
+              "non-monotonic",
+              "no-quality-order",
+              "unknown"
+            ]
+          },
+          "safeBounds": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "defaultBehavior": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "validation": {
+            "$ref": "#/$defs/stringArray"
+          }
+        }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measurementRunIds",
+        "costShape",
+        "sceneSensitivity",
+        "interactionIds",
+        "vendorEvidence"
+      ],
+      "properties": {
+        "measurementRunIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "costShape": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sceneSensitivity": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "interactionIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "vendorEvidence": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "unmeasured",
+              "preliminary",
+              "measured",
+              "qualified"
+            ]
+          }
+        }
+      }
+    },
+    "correctness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hardConstraints",
+        "knownArtifacts",
+        "failureSignatures",
+        "stereoRequirements",
+        "temporalRequirements"
+      ],
+      "properties": {
+        "hardConstraints": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "knownArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "failureSignatures": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "stereoRequirements": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "temporalRequirements": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claims",
+        "openQuestions"
+      ],
+      "properties": {
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "grade",
+              "statement",
+              "sources",
+              "confidence"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "grade": {
+                "enum": [
+                  "D",
+                  "S",
+                  "I",
+                  "?"
+                ]
+              },
+              "statement": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "sources": {
+                "$ref": "#/$defs/stringArray"
+              },
+              "confidence": {
+                "enum": [
+                  "high",
+                  "medium",
+                  "low",
+                  "unknown"
+                ]
+              }
+            }
+          }
+        },
+        "openQuestions": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stringArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      },
+      "uniqueItems": true
+    }
+  }
+}

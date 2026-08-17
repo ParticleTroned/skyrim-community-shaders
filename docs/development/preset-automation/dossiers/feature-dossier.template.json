@@ -1,0 +1,71 @@
+{
+  "$schema": "../schemas/feature-dossier.schema.json",
+  "schemaVersion": 1,
+  "id": "replace-me",
+  "identity": {
+    "name": "Replace with the rendering phenomenon",
+    "maturity": "draft",
+    "operationalStatus": "unknown",
+    "aliases": [],
+    "owners": []
+  },
+  "snapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "replace-with-branch",
+    "commit": "0000000",
+    "reviewedAt": "2026-08-17"
+  },
+  "intent": {
+    "phenomenon": "Describe the physical or perceptual phenomenon.",
+    "perceptualContribution": [
+      "Describe the intended visible contribution."
+    ],
+    "shouldNotDo": [
+      "Describe a nearby effect this feature must not duplicate or replace."
+    ],
+    "sceneCoverage": []
+  },
+  "implementation": {
+    "producers": [],
+    "representation": [],
+    "consumers": [],
+    "compositionRule": [],
+    "lifecycle": [],
+    "resolutionAndEyeLayout": [],
+    "sourcePaths": []
+  },
+  "controls": [],
+  "performance": {
+    "measurementRunIds": [],
+    "costShape": [],
+    "sceneSensitivity": [],
+    "interactionIds": [],
+    "vendorEvidence": {
+      "AMD": "unmeasured",
+      "NVIDIA": "unmeasured"
+    }
+  },
+  "correctness": {
+    "hardConstraints": [
+      "Replace with a correctness or stability condition that cannot be traded for performance."
+    ],
+    "knownArtifacts": [],
+    "failureSignatures": [],
+    "stereoRequirements": [],
+    "temporalRequirements": []
+  },
+  "evidence": {
+    "claims": [
+      {
+        "id": "claim-001",
+        "grade": "?",
+        "statement": "Replace with one attributable claim.",
+        "sources": [
+          "Replace with a repository path, review section, or measurement run ID."
+        ],
+        "confidence": "unknown"
+      }
+    ],
+    "openQuestions": []
+  }
+}

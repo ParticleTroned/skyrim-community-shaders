@@ -1,0 +1,79 @@
+# Preset automation evidence system
+
+Status: initialized
+
+Initial hardware focus: AMD
+
+## Purpose
+
+This directory is the evidence and decision layer for LLM-assisted and human-reviewed preset generation. It records what a rendering feature is intended to do, how it composes with other features, what it costs under controlled conditions, and why a setting belongs in a Performance, Balanced, or Quality policy.
+
+It deliberately does not reduce a feature to one score. A candidate retains a multi-objective evidence vector:
+
+- GPU cost, including tail latency;
+- perceptual contribution;
+- temporal stability;
+- VR stereo correctness;
+- interaction and regression risk;
+- scene coverage;
+- memory and resource cost; and
+- evidence maturity and confidence.
+
+Hard correctness and stability constraints are applied first. Surviving candidates are compared using Pareto dominance: a candidate is dominated only when another is no worse in every relevant objective and better in at least one. A tier policy then chooses among the non-dominated candidates and records the rationale.
+
+## Record topology
+
+| Record | Role | Canonical location |
+| --- | --- | --- |
+| Feature dossier | The maintained “essence” of one rendering phenomenon or feature contract | [`dossiers/`](./dossiers/README.md) |
+| Interaction ledger | Producer, consumer, composition, correctness, and performance relationships | [`interaction-ledger.md`](./interaction-ledger.md) |
+| Benchmark protocol | Controlled scenes, capture procedure, runtime lanes, and validity gates | [`benchmark-protocol.md`](./benchmark-protocol.md) |
+| Measurement run | Machine-readable provenance and results for one controlled run | [`measurements/`](./measurements/README.md) |
+| Preset policy | Vendor-neutral intent, constraints, priorities, and selection rules for each tier | [`preset-policies.md`](./preset-policies.md) |
+| Decision log | Append-only rationale connecting evidence to adopted or rejected choices | [`decision-log.md`](./decision-log.md) |
+
+The canonical schemas are:
+
+- [`feature-dossier.schema.json`](./schemas/feature-dossier.schema.json);
+- [`measurement-run.schema.json`](./schemas/measurement-run.schema.json).
+
+Schema version changes are required when a field changes meaning or units, not merely when an optional field is added.
+
+## Seed evidence
+
+The following existing documents remain authoritative source evidence and are not duplicated here:
+
+- the [shader and feature interaction survey](../shader-feature-interaction-survey.md) supplies the first architectural map and the `D`/`S`/`I`/`?` evidence notation;
+- the [IBL interaction review](../ibl-interaction-review.md) is the first focused feature essence, including the ambient-replacement contract and unresolved ownership boundaries; and
+- [capture and calibration evidence](../capture-calibration.md) defines the current CSX capture and profiler contract.
+
+The survey and IBL review predate the machine-readable dossier schema. They are valid seed reviews, not silently “qualified” dossiers. Their claims should be promoted into dossier records only with source links and unchanged evidence grades.
+
+## Evidence flow
+
+1. Select a rendering phenomenon rather than an arbitrary HLSL file.
+2. Create a dossier from [`dossiers/feature-dossier.template.json`](./dossiers/feature-dossier.template.json).
+3. Register material producer/consumer or composition relationships in the interaction ledger.
+4. Define the controlled scene, runtime lane, pose, settings snapshot, and comparison before running it.
+5. Record timing and visual passes separately using a measurement-run record.
+6. Reject runs that fail correctness, provenance, capture, or comparability gates.
+7. Compare valid candidates as an evidence vector and retain the Pareto frontier.
+8. Apply the appropriate preset policy and append the decision, confidence, and revalidation triggers.
+
+## Scope boundaries
+
+- AMD is the first measurement target. The schema is vendor-neutral and does not convert AMD observations into NVIDIA conclusions.
+- Performance, Balanced, and Quality express visual intent and budget. They are not AMD and NVIDIA preset forks.
+- Vendor-specific behavior belongs in a narrow capability or safety override backed by evidence. It must not create an independent policy tree by default.
+- Synthetic-HMD runs are an automation lane. They do not establish parity with a physical, occupied headset or with another VR runtime.
+- “SteamVR” and “OpenXR” are not mutually exclusive labels. Records keep the application VR API, compatibility layer, target runtime API, runtime implementation, compositor/transport, HMD mode, and HMD profile separate.
+- The initial SteamVR null-HMD proof of concept is native OpenVR through SteamVR. It cannot be used as Open Composite Unleashed evidence.
+
+## Terms
+
+- **Feature essence:** the maintained intent, representation, consumers, controls, constraints, artifacts, and evidence for a rendering phenomenon.
+- **Hard constraint:** a correctness, stability, safety, or compatibility condition that a candidate must satisfy before performance or preference trade-offs are considered.
+- **Evidence vector:** the set of independently retained objectives and confidence values for a candidate.
+- **Pareto frontier:** the candidates not dominated across the objectives relevant to the decision.
+- **Runtime lane:** one exact application-API, translation-layer, target-API, runtime, compositor/transport, HMD-mode, and HMD-profile combination.
+- **Qualified:** supported by repeatable measurements in its stated lane and scope; it does not mean portable to other lanes or GPU vendors.

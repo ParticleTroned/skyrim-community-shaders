@@ -1,0 +1,708 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://community-shaders.dev/schemas/preset-automation/measurement-run.schema.json",
+  "title": "Community Shaders preset-automation measurement run",
+  "description": "Provenance, separated timing/visual passes, results, and validity for one controlled preset-automation run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "recordedAt",
+    "status",
+    "purpose",
+    "sourceSnapshot",
+    "hardware",
+    "runtimeLane",
+    "hmd",
+    "scene",
+    "passes",
+    "artifacts",
+    "comparability",
+    "validity",
+    "conclusions"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "recordedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "planned",
+        "valid",
+        "invalid",
+        "incomplete"
+      ]
+    },
+    "purpose": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "sourceSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "branch",
+        "commit",
+        "buildConfiguration",
+        "dllVersion",
+        "dllSha256",
+        "settingsSha256",
+        "dependencies"
+      ],
+      "properties": {
+        "repository": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "branch": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,40}$"
+        },
+        "buildConfiguration": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "dllVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "dllSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "settingsSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "settingsArtifact": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "revision",
+              "dirty"
+            ],
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "revision": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "dirty": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gpuVendor",
+        "adapterName",
+        "deviceId",
+        "driverVersion",
+        "vramBytes"
+      ],
+      "properties": {
+        "gpuVendor": {
+          "enum": [
+            "AMD",
+            "NVIDIA",
+            "Intel",
+            "other",
+            "unknown"
+          ]
+        },
+        "adapterName": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "deviceId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "driverVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "vramBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cpu": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operatingSystem": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "runtimeLane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "laneId",
+        "applicationVrApi",
+        "compatibilityLayer",
+        "targetRuntimeApi",
+        "runtimeImplementation",
+        "compositorTransport"
+      ],
+      "properties": {
+        "laneId": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]+(?:-[A-Z0-9]+)*$"
+        },
+        "applicationVrApi": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "compatibilityLayer": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "compatibilityLayerVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "targetRuntimeApi": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "runtimeImplementation": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "runtimeVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compositorTransport": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "hmd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "driver",
+        "profile",
+        "presenceState",
+        "renderTarget",
+        "refreshHz",
+        "projection",
+        "poseSource",
+        "controllerProfile"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "occupied-physical",
+            "unoccupied-physical",
+            "synthetic"
+          ]
+        },
+        "driver": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "profile": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "presenceState": {
+          "enum": [
+            "worn",
+            "not-worn",
+            "not-applicable",
+            "unknown"
+          ]
+        },
+        "renderTarget": {
+          "$ref": "#/$defs/dimensions"
+        },
+        "refreshHz": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "projection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "leftEye",
+            "rightEye",
+            "eyeToHeadArtifact"
+          ],
+          "properties": {
+            "source": {
+              "enum": [
+                "runtime-query",
+                "driver-configuration",
+                "unknown"
+              ]
+            },
+            "leftEye": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/projectionRaw"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rightEye": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/projectionRaw"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "eyeToHeadArtifact": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hiddenAreaMeshArtifact": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "poseSource": {
+          "enum": [
+            "runtime-tracking",
+            "manual-script",
+            "static-driver-pose",
+            "runtime-default",
+            "unknown"
+          ]
+        },
+        "controllerProfile": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sceneId",
+        "saveArtifact",
+        "location",
+        "weather",
+        "gameTime",
+        "poseScript",
+        "motionProfile",
+        "controlledVariables"
+      ],
+      "properties": {
+        "sceneId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "saveArtifact": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "weather": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "gameTime": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "poseScript": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "motionProfile": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "controlledVariables": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "passes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "status",
+          "warmupFrames",
+          "sampleFrames",
+          "profilerMetrics",
+          "capture"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "timing",
+              "visual"
+            ]
+          },
+          "status": {
+            "enum": [
+              "planned",
+              "complete",
+              "invalid",
+              "incomplete"
+            ]
+          },
+          "warmupFrames": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sampleFrames": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "profilerArtifact": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profilerMetrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/metricDistribution"
+            }
+          },
+          "capture": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "manifestArtifact",
+              "complete",
+              "capturedFrameCount",
+              "incompleteStereoPairDrops",
+              "queueBackpressureDrops"
+            ],
+            "properties": {
+              "source": {
+                "enum": [
+                  "hmd_stereo",
+                  "framed_stereo",
+                  "framed_eye"
+                ]
+              },
+              "manifestArtifact": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "complete": {
+                "type": "boolean"
+              },
+              "capturedFrameCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "incompleteStereoPairDrops": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "queueBackpressureDrops": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "issues": {
+            "$ref": "#/$defs/stringArray"
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "role",
+          "locator",
+          "mediaType",
+          "bytes",
+          "sha256",
+          "retention"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "role": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "locator": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "localPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mediaType": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "sha256": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/sha256"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retention": {
+            "enum": [
+              "source-control",
+              "external-retained",
+              "local-temporary",
+              "missing"
+            ]
+          }
+        }
+      }
+    },
+    "comparability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baselineRunId",
+        "scope",
+        "controlledVariables",
+        "deviations"
+      ],
+      "properties": {
+        "baselineRunId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "standalone",
+            "within-lane",
+            "cross-lane-exploratory",
+            "cross-lane-calibrated"
+          ]
+        },
+        "controlledVariables": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "deviations": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted",
+        "reasons"
+      ],
+      "properties": {
+        "accepted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "reasons": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "conclusions": {
+      "$ref": "#/$defs/stringArray"
+    },
+    "notes": {
+      "$ref": "#/$defs/stringArray"
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stringArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "layout"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "layout": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "projectionRaw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "right",
+        "top",
+        "bottom"
+      ],
+      "properties": {
+        "left": {
+          "type": "number"
+        },
+        "right": {
+          "type": "number"
+        },
+        "top": {
+          "type": "number"
+        },
+        "bottom": {
+          "type": "number"
+        }
+      }
+    },
+    "metricDistribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "unit",
+        "samples",
+        "average",
+        "p95",
+        "p99"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "unit": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "average": {
+          "type": "number"
+        },
+        "median": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "p95": {
+          "type": "number"
+        },
+        "p99": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

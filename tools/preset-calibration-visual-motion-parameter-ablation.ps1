@@ -33,6 +33,9 @@ param(
     [ValidateRange(2, 100)]
     [int]$PreStepFrames = 12,
 
+    [ValidateRange(30.0, 240.0)]
+    [double]$CompositorHz = 90.0,
+
     [ValidateRange(1, 60)]
     [int]$PreviewFramesPerSecond = 30,
 
@@ -94,6 +97,7 @@ $hudToggled = $false
 $timeFrozen = $false
 $runFailure = $null
 $baselineParameterValue = $null
+$restorePosition = $null
 
 if ($PreStepFrames -ge $Frames) {
     throw 'PreStepFrames must be less than Frames'
@@ -185,6 +189,21 @@ function Invoke-EntryCommand {
     $gatewayTimedOut
 }
 
+function Set-PlayerPosition {
+    param([Parameter(Mandatory = $true)][ValidateCount(3, 3)][double[]]$Position)
+    $result = Invoke-DevBenchTool -Tool 'papyrus' -Payload @{
+        action = 'call'
+        script = 'ObjectReference'
+        function = 'SetPosition'
+        self = @{ form = '0x14' }
+        args = @($Position)
+        timeoutMs = 5000
+    }
+    if (-not $result.called) {
+        throw "Papyrus ObjectReference.SetPosition failed: $($result.error)"
+    }
+}
+
 function Get-AnchorState {
     [ordered]@{
         scene = Invoke-DevBenchTool -Tool 'inspect' -Payload @{ kind = 'scene' }
@@ -237,11 +256,10 @@ function Establish-AnchorState {
     Invoke-ConsoleCommand -Command 'set timescale to 0'
     Start-Sleep -Milliseconds 250
     if ($ExpectedPosition) {
-        for ($index = 0; $index -lt 3; $index++) {
-            $axis = @('x', 'y', 'z')[$index]
-            Invoke-ConsoleCommand -Command ("player.setpos {0} {1:R}" -f $axis, $ExpectedPosition[$index])
-            Wait-PositionComponent -ExpectedValue $ExpectedPosition[$index] -Axis $axis | Out-Null
-        }
+        Set-PlayerPosition -Position $ExpectedPosition
+        Wait-PositionComponent -ExpectedValue $ExpectedPosition[0] -Axis 'x' | Out-Null
+        Wait-PositionComponent -ExpectedValue $ExpectedPosition[1] -Axis 'y' | Out-Null
+        Wait-PositionComponent -ExpectedValue $ExpectedPosition[2] -Axis 'z' | Out-Null
     }
     if ($hasGameHour) {
         Invoke-ConsoleCommand -Command "set gamehour to $GameHour"
@@ -297,8 +315,16 @@ function Capture-MotionPhase {
 
     $anchor = Establish-AnchorState -ReloadEntry $ReloadEntry
     $settledControl = Wait-ParameterValue -ExpectedValue $EffectiveValue
+    $script:restorePosition = @($anchor.scene.position)
     $startCoordinate = Get-PositionComponent -Scene $anchor.scene -Axis $MotionAxis
     $targetCoordinate = $startCoordinate + $MotionOffset
+    $targetPosition = @($anchor.scene.position | ForEach-Object { [double]$_ })
+    $targetIndex = switch ($MotionAxis) {
+        'x' { 0 }
+        'y' { 1 }
+        'z' { 2 }
+    }
+    $targetPosition[$targetIndex] = $targetCoordinate
     $captureRoot = Join-Path $OutputRoot $RunId
     [System.IO.Directory]::CreateDirectory($captureRoot) | Out-Null
 
@@ -319,22 +345,55 @@ function Capture-MotionPhase {
         throw "Capture start failed: $($start.error)"
     }
 
-    $triggerDeadline = (Get-Date).AddSeconds(30)
-    do {
-        Start-Sleep -Milliseconds 25
-        $preStepStatus = (Invoke-DevBenchTool -Tool 'communityshaders.capture' -Payload @{ action = 'status' }).status
-    } while ($preStepStatus.state -eq 'capturing' -and
-        [int]$preStepStatus.framesQueued -lt $PreStepFrames -and
-        (Get-Date) -lt $triggerDeadline)
-
-    if ([int]$preStepStatus.framesQueued -lt $PreStepFrames) {
-        throw "Capture reached state $($preStepStatus.state) before the requested motion trigger"
+    # Capture status is marshalled through the game thread and can be delivered
+    # only after a short lossless sequence has already completed. Schedule the
+    # motion on DevBench's server-side scenario clock instead of polling that
+    # delayed status surface.
+    $scheduledDelayMs = [int][Math]::Max(1.0, [Math]::Round(
+        1000.0 * $PreStepFrames * $FrameInterval / $CompositorHz))
+    $scenarioPayload = @{
+        action = 'run'
+        steps = @(
+            @{ wait = $scheduledDelayMs },
+            @{
+                tool = 'papyrus'
+                args = @{
+                    action = 'call'
+                    script = 'ObjectReference'
+                    function = 'SetPosition'
+                    self = @{ form = '0x14' }
+                    args = @($targetPosition)
+                    timeoutMs = 5000
+                }
+            }
+        )
     }
+    $scenarioJson = $scenarioPayload | ConvertTo-Json -Compress -Depth 20
+    $scenarioContent = [System.Net.Http.StringContent]::new(
+        $scenarioJson,
+        [System.Text.Encoding]::UTF8,
+        'application/json')
+    $scenarioClient = [System.Net.Http.HttpClient]::new()
+    $scenarioClient.Timeout = [TimeSpan]::FromSeconds(15)
+    $scenarioStartedAtUtc = [DateTime]::UtcNow
+    $scenarioTask = $scenarioClient.PostAsync(($baseUri + 'scenario'), $scenarioContent)
 
-    $commandIssuedAtUtc = [DateTime]::UtcNow.ToString('o')
-    Invoke-ConsoleCommand -Command ("player.setpos {0} {1:R}" -f $MotionAxis, $targetCoordinate)
+    if (-not $scenarioTask.Wait(15000)) {
+        throw 'Timed out waiting for the scheduled motion scenario'
+    }
+    $scenarioResponse = $scenarioTask.Result
+    $scenarioText = $scenarioResponse.Content.ReadAsStringAsync().Result
+    if (-not $scenarioResponse.IsSuccessStatusCode) {
+        throw "Motion scenario failed with HTTP $([int]$scenarioResponse.StatusCode): $scenarioText"
+    }
+    $scenario = $scenarioText | ConvertFrom-Json
+    if (-not $scenario.ok) {
+        throw "Motion scenario reported failure: $scenarioText"
+    }
     $postStepScene = Wait-PositionComponent -ExpectedValue $targetCoordinate -Axis $MotionAxis
     $postStepStatus = (Invoke-DevBenchTool -Tool 'communityshaders.capture' -Payload @{ action = 'status' }).status
+    $scenarioClient.Dispose()
+    $scenarioContent.Dispose()
 
     $completionDeadline = (Get-Date).AddSeconds(240)
     do {
@@ -360,11 +419,14 @@ function Capture-MotionPhase {
         anchor = $anchor
         motion = [ordered]@{
             axis = $MotionAxis
+            method = 'Papyrus ObjectReference.SetPosition on player form 0x14'
             startCoordinate = $startCoordinate
             requestedOffset = $MotionOffset
             targetCoordinate = $targetCoordinate
-            commandIssuedAtUtc = $commandIssuedAtUtc
-            queuedFramesBeforeCommand = [int]$preStepStatus.framesQueued
+            scenarioStartedAtUtc = $scenarioStartedAtUtc.ToString('o')
+            scheduledPreStepFrames = $PreStepFrames
+            scheduledDelayMs = $scheduledDelayMs
+            scenario = $scenario
             queuedFramesAfterObservedMove = [int]$postStepStatus.framesQueued
             observedPosition = @($postStepScene.position)
         }
@@ -405,6 +467,7 @@ $record = [ordered]@{
         motionOffset = $MotionOffset
         frames = $Frames
         preStepFrames = $PreStepFrames
+        compositorHz = $CompositorHz
         frameIntervalCompositorCycles = $FrameInterval
         format = $Format
         output = 'separate eyes only'
@@ -476,7 +539,7 @@ try {
     $record.validity.accepted = $true
     $record.validity.reasons.Add('Every phase reproduced and verified the declared anchor before the same player-space translation step.')
     $record.validity.reasons.Add('Every phase saved exact separate-eye pairs with zero failed, incomplete, or backpressured pairs.')
-    $record.validity.reasons.Add('The motion command was issued only after the declared number of compositor pairs had queued, and effective player-position readback verified the step.')
+    $record.validity.reasons.Add('The native Papyrus position call was issued only after the declared number of compositor pairs had queued, and effective player-position readback verified the step.')
     $record.validity.reasons.Add('The Boolean feature parameter followed an on/off/on order and the original quality snapshot was restored.')
 }
 catch {
@@ -490,6 +553,17 @@ finally {
         }
         catch {
             Write-Warning "restoreAll failed: $_"
+        }
+    }
+    if ($restorePosition) {
+        try {
+            Set-PlayerPosition -Position $restorePosition
+            Wait-PositionComponent -ExpectedValue $restorePosition[0] -Axis 'x' | Out-Null
+            Wait-PositionComponent -ExpectedValue $restorePosition[1] -Axis 'y' | Out-Null
+            Wait-PositionComponent -ExpectedValue $restorePosition[2] -Axis 'z' | Out-Null
+        }
+        catch {
+            Write-Warning "Player-position restore failed: $_"
         }
     }
     if ($hudToggled) {

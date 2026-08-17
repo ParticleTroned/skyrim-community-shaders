@@ -125,11 +125,17 @@ def main() -> None:
         eye_frames = {
             eye: load_eye_frames(directory, eye, args.stride) for eye in EYES
         }
+        if "scheduledPreStepFrames" in phase["motion"]:
+            queued_before = int(phase["motion"]["scheduledPreStepFrames"])
+            queued_after = queued_before + 4
+        else:
+            queued_before = int(phase["motion"]["queuedFramesBeforeCommand"])
+            queued_after = int(phase["motion"]["queuedFramesAfterObservedMove"])
         event_frame, energy, search_window = detect_motion_event(
             eye_frames["left"],
             eye_frames["right"],
-            int(phase["motion"]["queuedFramesBeforeCommand"]),
-            int(phase["motion"]["queuedFramesAfterObservedMove"]),
+            queued_before,
+            queued_after,
         )
         frames[name] = eye_frames
         alignment[name] = {

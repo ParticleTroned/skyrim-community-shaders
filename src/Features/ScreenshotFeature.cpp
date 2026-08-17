@@ -3613,8 +3613,11 @@ bool ScreenshotFeature::QueueDiagnosticTextureCapture(
 	bool a_tonemapSceneHdr,
 	bool a_writeStatistics)
 {
+	const auto access = ScreenshotCaptureSessionPolicy::ResolveAccess(
+		ScreenshotCaptureSessionPolicy::CaptureSurface::DiagnosticTexture,
+		globals::state && globals::state->IsDeveloperMode());
 	if (!a_sourceResource || a_outputPath.empty() ||
-		!globals::state || !globals::state->IsDeveloperMode()) {
+		!access.allowed) {
 		return false;
 	}
 	if (!TryReserveScreenshotSlot(kMaxOutstandingDiagnosticScreenshots)) {

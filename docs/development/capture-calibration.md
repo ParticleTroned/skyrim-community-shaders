@@ -1,6 +1,6 @@
 # Capture and calibration evidence
 
-CSX can capture bounded VR image sequences through the production screenshot path. The same facility is available from the Screenshot page and, in Developer Mode, from DevBench as `communityshaders.capture`.
+CSX can capture bounded VR image sequences through the production screenshot path. The same facility is available from the Screenshot page and, when the Release+DevBench bridge is built and registered, from DevBench as `communityshaders.capture` at any log level.
 
 The lossless PNG/BMP images and `capture-manifest.json` are the authoritative evidence. `preview.avi` is an optional MJPEG derivative generated only after image capture and encoding have finished. It is intended for quick motion review, not pixel comparison.
 
@@ -18,10 +18,25 @@ Short sequences require an HMD submitted-eye source. `HMD submission` records th
 
 ## DevBench API
 
-Automated start and cancel operations require CSX Developer Mode. Capability and status queries are read-only.
+Automated start and cancel operations are log-level-independent and do not require CSX Developer Mode. The opt-in boundary is the Release+DevBench build option together with a present DevBench host. Diagnostic texture readback and unrelated behavioural or test mutations remain Developer-Mode-only. Capability and status queries are read-only.
 
 ```json
 {"action":"capabilities"}
+```
+
+The response advertises the access contract explicitly:
+
+```json
+{
+  "action": "capabilities",
+  "capabilities": {
+    "automatedControl": {
+      "available": true,
+      "requiresDeveloperMode": false,
+      "logLevelIndependent": true
+    }
+  }
+}
 ```
 
 ```json

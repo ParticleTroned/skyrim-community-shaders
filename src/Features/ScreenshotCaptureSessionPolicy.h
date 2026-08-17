@@ -9,6 +9,37 @@ namespace ScreenshotCaptureSessionPolicy
 	inline constexpr std::uint32_t kMaxFrameInterval = 120;
 	inline constexpr std::uint32_t kMaxPreviewFramesPerSecond = 60;
 
+	enum class CaptureSurface
+	{
+		BoundedProductionSession,
+		DiagnosticTexture
+	};
+
+	struct AccessDecision
+	{
+		bool allowed = false;
+		bool requiresDeveloperMode = true;
+	};
+
+	/**
+	 * Keeps ordinary, bounded screenshot sessions independent of the saved log
+	 * level while retaining the Developer Mode boundary for diagnostic readback.
+	 * The DevBench build option and a present DevBench host remain the opt-in
+	 * boundary for external automation control.
+	 */
+	[[nodiscard]] constexpr AccessDecision ResolveAccess(
+		CaptureSurface a_surface,
+		bool a_developerMode) noexcept
+	{
+		switch (a_surface) {
+		case CaptureSurface::BoundedProductionSession:
+			return { true, false };
+		case CaptureSurface::DiagnosticTexture:
+			return { a_developerMode, true };
+		}
+		return {};
+	}
+
 	struct ValidatedRequest
 	{
 		std::uint32_t frameCount = 1;

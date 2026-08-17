@@ -4,7 +4,6 @@
 
 #	include "Features/ScreenshotFeature.h"
 #	include "Globals.h"
-#	include "State.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
@@ -106,6 +105,9 @@ namespace
 
 	json BuildCapabilities()
 	{
+		constexpr auto automationAccess = ScreenshotCaptureSessionPolicy::ResolveAccess(
+			ScreenshotCaptureSessionPolicy::CaptureSurface::BoundedProductionSession,
+			false);
 		return {
 			{ "tool", "communityshaders.capture" },
 			{ "runtime", globals::game::isVR ? "VR" : "flat" },
@@ -118,6 +120,12 @@ namespace
 			{ "losslessFrameSequence", true },
 			{ "previewVideo", "mjpeg-avi" },
 			{ "performanceMeasurementSeparated", true },
+			{ "automatedControl",
+				{
+					{ "available", globals::game::isVR && automationAccess.allowed },
+					{ "requiresDeveloperMode", automationAccess.requiresDeveloperMode },
+					{ "logLevelIndependent", true },
+				} },
 		};
 	}
 
@@ -177,8 +185,11 @@ namespace
 		}
 		if (action == "cancel") {
 			return RunOnMainThread([]() {
-				if (!globals::state || !globals::state->IsDeveloperMode())
-					return json{ { "error", "developer mode is required to cancel an automated capture session" } };
+				constexpr auto access = ScreenshotCaptureSessionPolicy::ResolveAccess(
+					ScreenshotCaptureSessionPolicy::CaptureSurface::BoundedProductionSession,
+					false);
+				if (!access.allowed)
+					return json{ { "error", "automated capture control is unavailable" } };
 				auto& feature = globals::features::screenshotFeature;
 				if (!feature.CancelCaptureSession("cancelled by DevBench"))
 					return json{ { "error", "no capture session is active" }, { "status", BuildStatus(feature) } };
@@ -230,8 +241,11 @@ namespace
 			return RunOnMainThread([request = std::move(request)]() {
 				if (!globals::game::isVR)
 					return json{ { "error", "submitted-eye capture sessions require Skyrim VR" } };
-				if (!globals::state || !globals::state->IsDeveloperMode())
-					return json{ { "error", "developer mode is required to start an automated capture session" } };
+				constexpr auto access = ScreenshotCaptureSessionPolicy::ResolveAccess(
+					ScreenshotCaptureSessionPolicy::CaptureSurface::BoundedProductionSession,
+					false);
+				if (!access.allowed)
+					return json{ { "error", "automated capture control is unavailable" } };
 				auto& feature = globals::features::screenshotFeature;
 				std::string error;
 				if (!feature.StartCaptureSession(request, error))
@@ -330,7 +344,7 @@ namespace ScreenshotDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Capture exact accepted OpenVR stereo pairs or bounded lossless frame sequences through CSX's production screenshot path. Automated start/cancel require Developer Mode. Capture is intentionally separate from profiler measurement; run visual and timing passes independently. status reports every accepted compositor cycle, output path, failure, and dropped-pair/backpressure count.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["capabilities","status","start","cancel"],"default":"status"},"source":{"type":"string","enum":["hmd_stereo","framed_stereo","framed_eye"]},"label":{"type":"string"},"frameCount":{"type":"integer","minimum":1,"maximum":240},"frameInterval":{"type":"integer","minimum":1,"maximum":120},"previewFramesPerSecond":{"type":"integer","minimum":1,"maximum":60},"saveCombined":{"type":"boolean"},"saveSeparateEyes":{"type":"boolean"},"writePreviewVideo":{"type":"boolean"},"outputPath":{"type":"string"}},"required":["action"]}})";
+			R"({"description":"Capture exact accepted OpenVR stereo pairs or bounded lossless frame sequences through CSX's production screenshot path. Automated start/cancel are log-level-independent and do not require Developer Mode; developer-only diagnostic texture capture is not exposed. Capture is intentionally separate from profiler measurement; run visual and timing passes independently. status reports every accepted compositor cycle, output path, failure, and dropped-pair/backpressure count.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["capabilities","status","start","cancel"],"default":"status"},"source":{"type":"string","enum":["hmd_stereo","framed_stereo","framed_eye"]},"label":{"type":"string"},"frameCount":{"type":"integer","minimum":1,"maximum":240},"frameInterval":{"type":"integer","minimum":1,"maximum":120},"previewFramesPerSecond":{"type":"integer","minimum":1,"maximum":60},"saveCombined":{"type":"boolean"},"saveSeparateEyes":{"type":"boolean"},"writePreviewVideo":{"type":"boolean"},"outputPath":{"type":"string"}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.capture",
 			descriptor,

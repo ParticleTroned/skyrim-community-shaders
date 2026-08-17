@@ -19,6 +19,30 @@ namespace
 		       high.previewFramesPerSecond == kMaxPreviewFramesPerSecond;
 	}
 
+	constexpr bool CoversAccessPolicy()
+	{
+		const auto infoProduction = ResolveAccess(
+			CaptureSurface::BoundedProductionSession,
+			false);
+		const auto debugProduction = ResolveAccess(
+			CaptureSurface::BoundedProductionSession,
+			true);
+		const auto infoDiagnostic = ResolveAccess(
+			CaptureSurface::DiagnosticTexture,
+			false);
+		const auto debugDiagnostic = ResolveAccess(
+			CaptureSurface::DiagnosticTexture,
+			true);
+		return infoProduction.allowed &&
+		       !infoProduction.requiresDeveloperMode &&
+		       debugProduction.allowed &&
+		       !debugProduction.requiresDeveloperMode &&
+		       !infoDiagnostic.allowed &&
+		       infoDiagnostic.requiresDeveloperMode &&
+		       debugDiagnostic.allowed &&
+		       debugDiagnostic.requiresDeveloperMode;
+	}
+
 	constexpr bool CoversCycleSelection()
 	{
 		CycleGate gate;
@@ -54,6 +78,7 @@ namespace
 	}
 
 	static_assert(CoversValidation());
+	static_assert(CoversAccessPolicy());
 	static_assert(CoversCycleSelection());
 	static_assert(CoversCycleOverflow());
 	static_assert(CoversCompletionStates());
@@ -65,4 +90,6 @@ int main()
 	assert(request.frameCount == 30);
 	assert(request.frameInterval == 6);
 	assert(request.previewFramesPerSecond == 15);
+	assert(ResolveAccess(CaptureSurface::BoundedProductionSession, false).allowed);
+	assert(!ResolveAccess(CaptureSurface::DiagnosticTexture, false).allowed);
 }

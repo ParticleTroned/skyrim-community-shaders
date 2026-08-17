@@ -244,6 +244,7 @@ function Capture-MotionPhase {
     )
 
     $anchor = Establish-AnchorState
+    $settledControl = Wait-ParameterValue -ExpectedValue $EffectiveValue
     $startCoordinate = Get-PositionComponent -Scene $anchor.scene -Axis $MotionAxis
     $targetCoordinate = $startCoordinate + $MotionOffset
     $captureRoot = Join-Path $OutputRoot $RunId
@@ -303,6 +304,7 @@ function Capture-MotionPhase {
     [ordered]@{
         name = $Name
         effectiveValue = $EffectiveValue
+        settledControl = $settledControl
         anchor = $anchor
         motion = [ordered]@{
             axis = $MotionAxis

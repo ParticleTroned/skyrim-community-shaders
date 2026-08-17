@@ -1,4 +1,5 @@
 #include <winres.h>
+#include "CommonLibProvenance.rc"
 
 1 VERSIONINFO
 	FILEVERSION @PROJECT_VERSION_MAJOR@, @PROJECT_VERSION_MINOR@, @PROJECT_VERSION_PATCH@, 0
@@ -21,6 +22,11 @@ BEGIN
 			VALUE "FileVersion", "@PROJECT_VERSION@.0"
 			VALUE "InternalName", "@PROJECT_NAME@"
 			VALUE "LegalCopyright", "GPL-3.0 License"
+			VALUE "CommonLibCheckoutRevision", CSX_COMMONLIB_CHECKOUT_REVISION
+			VALUE "CommonLibExpectedRevision", CSX_COMMONLIB_EXPECTED_REVISION
+			VALUE "CommonLibState", CSX_COMMONLIB_CHECKOUT_STATE
+			VALUE "CommonLibProvenance", CSX_COMMONLIB_PROVENANCE_STATUS
+			VALUE "CommonLibLinkage", CSX_COMMONLIB_LINKAGE
 			VALUE "ProductName", "@PROJECT_DESCRIPTION@"
 			VALUE "ProductVersion", "CSX @CSX_VERSION@"
 		END

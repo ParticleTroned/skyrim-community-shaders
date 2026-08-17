@@ -113,6 +113,12 @@ endif()
 
 add_subdirectory(${CommonLibPath} ${CommonLibName} EXCLUDE_FROM_ALL)
 
+csx_configure_commonlib_provenance(
+	"${PROJECT_NAME}"
+	"CommonLibSSE"
+	"${CommonLibPath}"
+)
+
 find_package(spdlog CONFIG REQUIRED)
 
 target_include_directories(

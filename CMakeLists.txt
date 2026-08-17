@@ -130,6 +130,31 @@ option(
     "Build dependency-free controller state regression tests"
     OFF
 )
+set(_CSX_COMMONLIB_PROVENANCE_POLICY_DEFAULT "WARN")
+if(DEFINED ENV{CI} AND NOT "$ENV{CI}" MATCHES "^(|0|false|off|no)$")
+    set(_CSX_COMMONLIB_PROVENANCE_POLICY_DEFAULT "STRICT")
+endif()
+set(CSX_COMMONLIB_PROVENANCE_POLICY
+    "${_CSX_COMMONLIB_PROVENANCE_POLICY_DEFAULT}"
+    CACHE STRING
+    "CommonLib provenance policy: WARN for local diagnostics or STRICT for reproducible builds."
+)
+string(TOUPPER "${CSX_COMMONLIB_PROVENANCE_POLICY}" CSX_COMMONLIB_PROVENANCE_POLICY)
+set_property(
+    CACHE CSX_COMMONLIB_PROVENANCE_POLICY
+    PROPERTY STRINGS WARN STRICT
+)
+if(NOT CSX_COMMONLIB_PROVENANCE_POLICY MATCHES "^(WARN|STRICT)$")
+    message(
+        FATAL_ERROR
+        "CSX_COMMONLIB_PROVENANCE_POLICY must be WARN or STRICT."
+    )
+endif()
+set(CSX_COMMONLIB_ARCHIVE_REVISION
+    ""
+    CACHE STRING
+    "Declared CommonLib revision for metadata-free source archives (diagnostic only)."
+)
 option(
     AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
     "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
@@ -147,6 +172,7 @@ message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
 message("\tController tests: ${BUILD_CONTROLLER_TESTS}")
+message("\tCommonLib provenance policy: ${CSX_COMMONLIB_PROVENANCE_POLICY}")
 message(
     "\tExclude hidden AIO feature packages: ${AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES}"
 )
@@ -174,6 +200,8 @@ else()
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
 message("\tCommunity Shaders Expanded version: CSX ${CSX_VERSION}")
+
+include(CommonLibProvenance)
 
 # #######################################################################################################################
 # # Add CMake features
@@ -1478,6 +1506,21 @@ if(BUILD_CONTROLLER_TESTS)
         OverlayPolicy
         tests/overlay_policy_test.cpp
     )
+
+    if(GIT_FOUND)
+        add_test(
+            NAME CommonLibProvenance
+            COMMAND
+                "${CMAKE_COMMAND}"
+                "-DPROVENANCE_UPDATER:FILEPATH=${CMAKE_SOURCE_DIR}/cmake/UpdateCommonLibProvenance.cmake"
+                "-DPROVENANCE_HEADER_TEMPLATE:FILEPATH=${CMAKE_SOURCE_DIR}/cmake/CommonLibProvenance.h.in"
+                "-DPROVENANCE_RESOURCE_TEMPLATE:FILEPATH=${CMAKE_SOURCE_DIR}/cmake/CommonLibProvenance.rc.in"
+                "-DTEST_GIT_EXECUTABLE:FILEPATH=${GIT_EXECUTABLE}"
+                "-DTEST_PARENT_ROOT:PATH=${CMAKE_CURRENT_BINARY_DIR}/tests"
+                "-DTEST_ROOT:PATH=${CMAKE_CURRENT_BINARY_DIR}/tests/commonlib-provenance"
+                -P "${CMAKE_SOURCE_DIR}/tests/commonlib_provenance_test.cmake"
+        )
+    endif()
 
     add_custom_target(
         controller_tests

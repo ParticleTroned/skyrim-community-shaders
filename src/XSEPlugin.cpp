@@ -101,6 +101,18 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 #endif
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION_LABEL);
+	logger::info(
+		"CommonLibSSE-NG provenance: expected {}, checkout {}, state {}, status {}, linkage {}",
+		Plugin::COMMONLIB_EXPECTED_REVISION,
+		Plugin::COMMONLIB_CHECKOUT_REVISION,
+		Plugin::COMMONLIB_CHECKOUT_STATE,
+		Plugin::COMMONLIB_PROVENANCE_STATUS,
+		Plugin::COMMONLIB_LINKAGE);
+	if (Plugin::COMMONLIB_PROVENANCE_STATUS != "clean-match") {
+		logger::warn(
+			"CommonLibSSE-NG provenance was not verified as a clean gitlink match ({})",
+			Plugin::COMMONLIB_PROVENANCE_STATUS);
+	}
 	SKSE::Init(a_skse);
 	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();

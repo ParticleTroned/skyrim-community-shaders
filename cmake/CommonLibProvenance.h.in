@@ -1,0 +1,12 @@
+#pragma once
+
+#include <string_view>
+
+namespace Plugin
+{
+	inline constexpr std::string_view COMMONLIB_EXPECTED_REVISION = "@CSX_COMMONLIB_EXPECTED_REVISION@";
+	inline constexpr std::string_view COMMONLIB_CHECKOUT_REVISION = "@CSX_COMMONLIB_CHECKOUT_REVISION@";
+	inline constexpr std::string_view COMMONLIB_CHECKOUT_STATE = "@CSX_COMMONLIB_CHECKOUT_STATE@";
+	inline constexpr std::string_view COMMONLIB_PROVENANCE_STATUS = "@CSX_COMMONLIB_PROVENANCE_STATUS@";
+	inline constexpr std::string_view COMMONLIB_LINKAGE = "@CSX_COMMONLIB_LINKAGE@";
+}

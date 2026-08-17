@@ -593,7 +593,8 @@ Move-Item -LiteralPath $temporaryPath -Destination $outputPath -Force
             name = $_.name
             effectiveValue = $_.effectiveValue
             frameCount = $_.frameCount
-            queuedFramesBeforeCommand = $_.motion.queuedFramesBeforeCommand
+            scheduledPreStepFrames = $_.motion.scheduledPreStepFrames
+            scheduledDelayMs = $_.motion.scheduledDelayMs
             queuedFramesAfterObservedMove = $_.motion.queuedFramesAfterObservedMove
             outputDirectory = $_.outputDirectory
         }

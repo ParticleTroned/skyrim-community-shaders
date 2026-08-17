@@ -64,7 +64,11 @@ def detect_motion_event(
 
     # Delta index k describes frame k -> k+1. The command is issued after at
     # least queued_before frames. Readback may lag until queued_after frames.
-    search_start = max(0, queued_before - 2)
+    # The scenario clock starts after capture-start acknowledgement, while the
+    # first accepted compositor pair may already be in flight. Allow several
+    # frames of lead and align to the observed image-space event, not merely
+    # the nominal wall-clock estimate.
+    search_start = max(0, queued_before - 5)
     search_stop = min(len(energy), max(queued_before + 3, queued_after + 2))
     if search_start >= search_stop:
         search_start, search_stop = 0, len(energy)

@@ -3,9 +3,11 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Features/IBL.h"
+#	include "Features/ScreenSpaceGI.h"
 #	include "Features/ScreenSpaceShadows.h"
 #	include "Features/Skylighting.h"
 #	include "Features/TerrainBlending.h"
+#	include "Features/VolumetricLighting.h"
 #	include "Features/VolumetricShadows.h"
 #	include "Features/Wetterness.h"
 #	include "Globals.h"
@@ -334,6 +336,10 @@ namespace
 			return globals::features::wetterness.CapturePerformanceCostMeasurementState();
 		if (a_featureName == "TerrainBlending")
 			return globals::features::terrainBlending.CapturePerformanceCostMeasurementState();
+		if (a_featureName == "ScreenSpaceGI")
+			return globals::features::screenSpaceGI.CapturePerformanceCostMeasurementState();
+		if (a_featureName == "VolumetricLighting")
+			return globals::features::volumetricLighting.CapturePerformanceCostMeasurementState();
 		return json();
 	}
 
@@ -353,6 +359,14 @@ namespace
 		}
 		if (a_featureName == "TerrainBlending") {
 			globals::features::terrainBlending.RestorePerformanceCostMeasurementState(a_state);
+			return;
+		}
+		if (a_featureName == "ScreenSpaceGI") {
+			globals::features::screenSpaceGI.RestorePerformanceCostMeasurementState(a_state);
+			return;
+		}
+		if (a_featureName == "VolumetricLighting") {
+			globals::features::volumetricLighting.RestorePerformanceCostMeasurementState(a_state);
 			return;
 		}
 		throw std::runtime_error("feature does not expose quality profiles");
@@ -505,6 +519,28 @@ namespace
 				{ "TerrainCullDistance", globals::features::terrainBlending.settings.TerrainCullDistance },
 			};
 		}
+		if (a_featureName == "ScreenSpaceGI") {
+			const auto& feature = globals::features::screenSpaceGI;
+			const auto& settings = feature.settings;
+			return {
+				{ "Enabled", settings.Enabled },
+				{ "AOInteriorsOnly", settings.AOInteriorsOnly },
+				{ "ResolutionMode", settings.ResolutionMode },
+				{ "NumSlices", settings.NumSlices },
+				{ "NumSteps", settings.NumSteps },
+				{ "VRCullDistance", settings.VRCullDistance },
+				{ "ResourceProfile", settings.ResourceProfile },
+				{ "activeResourceProfile", feature.activeResourceProfile },
+				{ "resourceProfileRestartPending", feature.IsResourceProfileRestartPending() },
+			};
+		}
+		if (a_featureName == "VolumetricLighting") {
+			const auto& settings = globals::features::volumetricLighting.settings;
+			return {
+				{ "ExteriorQuality", settings.ExteriorQuality },
+				{ "InteriorQuality", settings.InteriorQuality },
+			};
+		}
 		return json::object();
 	}
 
@@ -566,6 +602,77 @@ namespace
 
 	json BuildQualityParameterRecord(const std::string& a_featureName)
 	{
+		if (a_featureName == "ScreenSpaceGI") {
+			auto* feature = FindFeatureByShortName(a_featureName);
+			const bool available = feature && feature->loaded;
+			const auto effective = available ? BuildEffectiveQualityParameters(a_featureName) : json::object();
+			auto& ssgi = globals::features::screenSpaceGI;
+			return {
+				{ "feature", a_featureName },
+				{ "displayName", feature ? feature->GetDisplayName() : a_featureName },
+				{ "control", "qualityParameters" },
+				{ "valueType", "object" },
+				{ "parameterDefinitions", {
+					{ "Enabled", { { "valueType", "boolean" }, { "effect", "runs or bypasses the already-loaded SSGI package" } } },
+					{ "AOInteriorsOnly", { { "valueType", "boolean" }, { "effect", "when true, bypasses AO in exteriors without unloading resources" } } },
+					{ "ResolutionMode", { { "valueType", "integer" }, { "minimum", 0 }, { "maximum", 2 }, { "enumLabels", json::array({ "Full", "Half", "Quarter" }) }, { "effect", "selects the SSGI dispatch resolution and recompiles the loaded SSGI shader variants" } } },
+					{ "NumSlices", { { "valueType", "integer" }, { "minimum", 1 }, { "maximum", 10 }, { "effect", "changes live angular sample directions" } } },
+					{ "NumSteps", { { "valueType", "integer" }, { "minimum", 1 }, { "maximum", 20 }, { "effect", "changes live samples per direction" } } },
+					{ "VRCullDistance", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 20480.0f }, { "zeroMeaning", "distance culling disabled" }, { "effect", "sets the live AO/IL distance cutoff" } } },
+				} },
+				{ "readOnlyParameters", {
+					{ "ResourceProfile", { { "effect", "requested AO-only or full-GI allocation profile" }, { "mutability", "restart" } } },
+					{ "activeResourceProfile", { { "effect", "resource profile allocated for this process" }, { "mutability", "read-only" } } },
+				} },
+				{ "effectiveParameters", effective },
+				{ "requestedValue", effective },
+				{ "effectiveValue", effective },
+				{ "runtimeActive", available && ssgi.settings.Enabled },
+				{ "ready", available && !ssgi.recompileFlag && ssgi.ShadersOK() },
+				{ "mutability", "mixed-live-and-live-recompile-settle" },
+				{ "settle", { { "kind", "frames-and-readiness" }, { "minimumFrames", 8 }, { "requiresMenuClose", false }, { "resetsHistory", true } } },
+				{ "cacheImpact", "resolution-and-adaptive-settings-select-runtime-shader-variants; Info cache lane is retained" },
+				{ "resourceImpact", "retained; ResourceProfile is deliberately read-only and restart-bound" },
+				{ "canRestoreInSession", true },
+				{ "snapshotHeld", g_qualityProfileSnapshots.contains(a_featureName) },
+				{ "writable", available },
+				{ "available", available },
+				{ "unavailableReason", available ? json(nullptr) : json(feature ? "feature package is not loaded" : "feature is not registered") },
+			};
+		}
+		if (a_featureName == "VolumetricLighting") {
+			auto* feature = FindFeatureByShortName(a_featureName);
+			const bool available = feature && feature->loaded;
+			const auto effective = available ? BuildEffectiveQualityParameters(a_featureName) : json::object();
+			return {
+				{ "feature", a_featureName },
+				{ "displayName", feature ? feature->GetDisplayName() : a_featureName },
+				{ "control", "qualityParameters" },
+				{ "valueType", "object" },
+				{ "parameterDefinitions", {
+					{ "ExteriorQuality", { { "valueType", "integer" }, { "minimum", 0 }, { "maximum", 2 }, { "enumLabels", json::array({ "Low", "Medium", "High" }) }, { "effect", "selects a preallocated engine volumetric grid for exteriors" } } },
+					{ "InteriorQuality", { { "valueType", "integer" }, { "minimum", 0 }, { "maximum", 2 }, { "enumLabels", json::array({ "Low", "Medium", "High" }) }, { "effect", "selects a preallocated engine volumetric grid for interiors" } } },
+				} },
+				{ "readOnlyParameters", {
+					{ "ExteriorCustomSize", { { "mutability", "restart" }, { "reason", "custom VR volumetric target dimensions change resource allocation" } } },
+					{ "InteriorCustomSize", { { "mutability", "restart" }, { "reason", "custom VR volumetric target dimensions change resource allocation" } } },
+				} },
+				{ "effectiveParameters", effective },
+				{ "requestedValue", effective },
+				{ "effectiveValue", effective },
+				{ "runtimeActive", available && globals::features::volumetricLighting.IsPerformanceCostMeasurementEnabled() },
+				{ "ready", available },
+				{ "mutability", "live-resource-rebind-settle" },
+				{ "settle", { { "kind", "frames" }, { "minimumFrames", 8 }, { "requiresMenuClose", false }, { "resetsHistory", false } } },
+				{ "cacheImpact", "none for Low/Medium/High" },
+				{ "resourceImpact", "rebinds and clears preallocated volumetric targets for the active location" },
+				{ "canRestoreInSession", true },
+				{ "snapshotHeld", g_qualityProfileSnapshots.contains(a_featureName) },
+				{ "writable", available },
+				{ "available", available },
+				{ "unavailableReason", available ? json(nullptr) : json(feature ? "feature package is not loaded" : "feature is not registered") },
+			};
+		}
 		if (a_featureName == "TerrainBlending") {
 			auto* feature = FindFeatureByShortName(a_featureName);
 			const bool available = feature && feature->loaded;
@@ -708,6 +815,8 @@ namespace
 		controls.push_back(BuildQualityParameterRecord("ScreenSpaceShadows"));
 		controls.push_back(BuildQualityParameterRecord("Wetterness"));
 		controls.push_back(BuildQualityParameterRecord("TerrainBlending"));
+		controls.push_back(BuildQualityParameterRecord("ScreenSpaceGI"));
+		controls.push_back(BuildQualityParameterRecord("VolumetricLighting"));
 		return controls;
 	}
 
@@ -732,6 +841,10 @@ namespace
 		if (a_feature == "Wetterness" && a_control == "qualityParameters")
 			return BuildQualityParameterRecord(a_feature);
 		if (a_feature == "TerrainBlending" && a_control == "qualityParameters")
+			return BuildQualityParameterRecord(a_feature);
+		if (a_feature == "ScreenSpaceGI" && a_control == "qualityParameters")
+			return BuildQualityParameterRecord(a_feature);
+		if (a_feature == "VolumetricLighting" && a_control == "qualityParameters")
 			return BuildQualityParameterRecord(a_feature);
 		return {
 			{ "error", "unknown control" },
@@ -839,7 +952,8 @@ namespace
 
 	json SetQualityParameterControl(const std::string& a_feature, const json& a_parameters)
 	{
-		if (a_feature != "ScreenSpaceShadows" && a_feature != "Wetterness" && a_feature != "TerrainBlending")
+		if (a_feature != "ScreenSpaceShadows" && a_feature != "Wetterness" && a_feature != "TerrainBlending" &&
+			a_feature != "ScreenSpaceGI" && a_feature != "VolumetricLighting")
 			return FindControl(a_feature, "qualityParameters");
 		auto buildControl = [&]() { return BuildQualityParameterRecord(a_feature); };
 		auto* feature = FindFeatureByShortName(a_feature);
@@ -854,6 +968,19 @@ namespace
 			double minimum = 0.0;
 			double maximum = 0.0;
 			bool known = true;
+			bool requiresInteger = false;
+			if (a_feature == "ScreenSpaceGI" &&
+				(parameter.key() == "Enabled" || parameter.key() == "AOInteriorsOnly")) {
+				if (!parameter.value().is_boolean()) {
+					return {
+						{ "error", "quality parameter requires a boolean value" },
+						{ "feature", a_feature },
+						{ "parameter", parameter.key() },
+						{ "control", buildControl() },
+					};
+				}
+				continue;
+			}
 			if (a_feature == "ScreenSpaceShadows") {
 				if (parameter.key() == "VRBaseSamplesAtReference") {
 					minimum = 16.0;
@@ -868,6 +995,33 @@ namespace
 				if (parameter.key() == "TerrainCullDistance") {
 					minimum = 0.0;
 					maximum = 8192.0;
+				} else {
+					known = false;
+				}
+			} else if (a_feature == "ScreenSpaceGI") {
+				if (parameter.key() == "ResolutionMode") {
+					minimum = 0.0;
+					maximum = 2.0;
+					requiresInteger = true;
+				} else if (parameter.key() == "NumSlices") {
+					minimum = 1.0;
+					maximum = 10.0;
+					requiresInteger = true;
+				} else if (parameter.key() == "NumSteps") {
+					minimum = 1.0;
+					maximum = 20.0;
+					requiresInteger = true;
+				} else if (parameter.key() == "VRCullDistance") {
+					minimum = 0.0;
+					maximum = 20480.0;
+				} else {
+					known = false;
+				}
+			} else if (a_feature == "VolumetricLighting") {
+				if (parameter.key() == "ExteriorQuality" || parameter.key() == "InteriorQuality") {
+					minimum = 0.0;
+					maximum = 2.0;
+					requiresInteger = true;
 				} else {
 					known = false;
 				}
@@ -912,6 +1066,14 @@ namespace
 					{ "control", buildControl() },
 				};
 			}
+			if (requiresInteger && !parameter.value().is_number_integer()) {
+				return {
+					{ "error", "quality parameter requires an integer value" },
+					{ "feature", a_feature },
+					{ "parameter", parameter.key() },
+					{ "control", buildControl() },
+				};
+			}
 			const double value = parameter.value().get<double>();
 			if (!std::isfinite(value) || value < minimum || value > maximum) {
 				return {
@@ -944,11 +1106,21 @@ namespace
 						state["Settings"][parameter.key()] = parameter.value();
 				}
 				globals::features::wetterness.RestorePerformanceCostMeasurementState(state);
-			} else {
+			} else if (a_feature == "TerrainBlending") {
 				auto state = globals::features::terrainBlending.CapturePerformanceCostMeasurementState();
 				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter)
 					state[parameter.key()] = parameter.value();
 				globals::features::terrainBlending.RestorePerformanceCostMeasurementState(state);
+			} else if (a_feature == "ScreenSpaceGI") {
+				auto state = globals::features::screenSpaceGI.CapturePerformanceCostMeasurementState();
+				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter)
+					state[parameter.key()] = parameter.value();
+				globals::features::screenSpaceGI.RestorePerformanceCostMeasurementState(state);
+			} else {
+				auto state = globals::features::volumetricLighting.CapturePerformanceCostMeasurementState();
+				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter)
+					state[parameter.key()] = parameter.value();
+				globals::features::volumetricLighting.RestorePerformanceCostMeasurementState(state);
 			}
 		} catch (...) {
 			if (inserted)
@@ -1179,7 +1351,7 @@ namespace FeatureControlDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. Skylighting, Screen Space Shadows, and Wetterness expose reversible Performance/Balanced/Quality profile clusters, including readiness, history reset, resource, and runtime shader-recompile metadata. Screen Space Shadows, Wetterness, and Terrain Blending additionally expose bounded qualityParameters for independent calibration. Wetterness reports derived coverage and event-opportunity values, and Terrain Blending reports its distance in game units and metres. restore reverts one held quality snapshot; restoreAll is the session safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]},{"type":"object","properties":{"VRBaseSamplesAtReference":{"type":"number","minimum":16,"maximum":96},"VRCullDistance":{"type":"number","minimum":0,"maximum":20480},"TerrainCullDistance":{"type":"number","minimum":0,"maximum":8192},"RaindropFxRangeWorldUnits":{"type":"number"},"WetnessDistanceFadeRange":{"type":"number"},"RaindropGridSize":{"type":"number"},"RaindropInterval":{"type":"number"},"RaindropChance":{"type":"number"},"SplashesLifetime":{"type":"number"},"RippleLifetime":{"type":"number"}},"additionalProperties":false,"minProperties":1}]}},"required":["action"]}})";
+			R"({"description":"Discover and mutate typed, session-only CSX feature controls with effective readback and explicit live, shader-recompile, resource-rebind, reload, and restart metadata. Reversible qualityParameters cover Screen Space Shadows, Wetterness, Terrain Blending, SSGI, and Volumetric Lighting. SSGI resource-profile and custom VR volumetric-target changes remain restart-bound and read-only. restore reverts one held quality snapshot; restoreAll restores every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]},{"type":"object","properties":{"Enabled":{"type":"boolean"},"AOInteriorsOnly":{"type":"boolean"},"ResolutionMode":{"type":"integer","minimum":0,"maximum":2},"NumSlices":{"type":"integer","minimum":1,"maximum":10},"NumSteps":{"type":"integer","minimum":1,"maximum":20},"ExteriorQuality":{"type":"integer","minimum":0,"maximum":2},"InteriorQuality":{"type":"integer","minimum":0,"maximum":2},"VRBaseSamplesAtReference":{"type":"number","minimum":16,"maximum":96},"VRCullDistance":{"type":"number","minimum":0,"maximum":20480},"TerrainCullDistance":{"type":"number","minimum":0,"maximum":8192},"RaindropFxRangeWorldUnits":{"type":"number"},"WetnessDistanceFadeRange":{"type":"number"},"RaindropGridSize":{"type":"number"},"RaindropInterval":{"type":"number"},"RaindropChance":{"type":"number"},"SplashesLifetime":{"type":"number"},"RippleLifetime":{"type":"number"}},"additionalProperties":false,"minProperties":1}]}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.controls",
 			descriptor,

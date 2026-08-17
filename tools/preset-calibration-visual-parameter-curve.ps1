@@ -12,6 +12,7 @@ param(
     [ValidatePattern('^[A-Fa-f0-9]+$')][string]$WeatherForm,
     [ValidateRange(0.0, 1000.0)][double]$RestoreTimescale = 20.0,
     [switch]$LeaveTimeRunning,
+    [switch]$UseExistingSnapshot,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$DllSha256,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9]{7,40}$')][string]$SourceCommit,
     [switch]$LeaveHudVisible,
@@ -138,7 +139,8 @@ try {
     if ($profiler.status.enabled) { throw 'Visual capture must not overlap profiler measurement' }
     $baseline = Get-Control; $record.baselineControl = $baseline
     if (-not $baseline.available -or -not $baseline.writable) { throw "$Feature qualityParameters is unavailable: $($baseline.unavailableReason)" }
-    if ($baseline.snapshotHeld) { throw "$Feature already has an outstanding qualityParameters snapshot" }
+    $snapshotHeld = [bool]$baseline.snapshotHeld
+    if ($snapshotHeld -and -not $UseExistingSnapshot) { throw "$Feature already has an outstanding qualityParameters snapshot; pass -UseExistingSnapshot only when this run owns that deliberate preconfiguration snapshot" }
     $baselineValue = Get-EffectiveValue -Control $baseline
 
     if ($hasGameHour -and -not $LeaveTimeRunning) {

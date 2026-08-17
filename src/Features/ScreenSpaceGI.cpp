@@ -927,6 +927,7 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 		return;
 
 	const bool wasEnabled = settings.Enabled;
+	const auto previousSettings = settings;
 	settings = a_state.get<Settings>();
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
@@ -935,6 +936,17 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 		ResetVRSpecificSettings(settings);
 	else
 		SyncResolvedSharedMaskScale(settings);
+	const bool shaderPermutationChanged =
+		previousSettings.ResolutionMode != settings.ResolutionMode ||
+		previousSettings.ResourceProfile != settings.ResourceProfile ||
+		previousSettings.EnableGI != settings.EnableGI ||
+		previousSettings.EnableExperimentalSpecularGI != settings.EnableExperimentalSpecularGI ||
+		previousSettings.EnableAdaptiveSampling != settings.EnableAdaptiveSampling ||
+		previousSettings.EnableTemporalDenoiser != settings.EnableTemporalDenoiser ||
+		previousSettings.EnableFoveated != settings.EnableFoveated;
+	if (shaderPermutationChanged)
+		recompileFlag = true;
+	queuedResetHistory.store(true, std::memory_order_release);
 	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 }
 

@@ -1,6 +1,7 @@
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/ScreenshotDevBenchBridge.h"
 #include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
@@ -190,6 +191,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				ProfilerDevBenchBridge::Install();
+				ScreenshotDevBenchBridge::Install();
 			}
 
 			break;

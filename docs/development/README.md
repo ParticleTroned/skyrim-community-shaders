@@ -8,6 +8,7 @@
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
 -   **[Shader and Feature Interaction Survey](./shader-feature-interaction-survey.md)** - Evidence-graded first-pass map of shader families, feature producers/consumers, and high-value interaction clusters
 -   **[Image Based Lighting Interaction Review](./ibl-interaction-review.md)** - Static review of IBL's ambient-light contract, consumers, lifecycle exclusions, and unresolved ownership boundaries
+-   **[Capture and Calibration Evidence](./capture-calibration.md)** - VR stereo sequences, DevBench capture, manifests, and timing protocol
 
 ## Quick Links
 

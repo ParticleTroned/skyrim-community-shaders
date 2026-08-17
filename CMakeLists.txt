@@ -1477,6 +1477,16 @@ if(BUILD_CONTROLLER_TESTS)
         OverlayPolicy
         tests/overlay_policy_test.cpp
     )
+    add_controller_test(
+        screenshot_capture_session_policy_test
+        ScreenshotCaptureSessionPolicy
+        tests/screenshot_capture_session_policy_test.cpp
+    )
+    add_controller_test(
+        screenshot_capture_video_test
+        ScreenshotCaptureVideo
+        tests/screenshot_capture_video_test.cpp
+    )
 
     add_custom_target(
         controller_tests
@@ -1486,6 +1496,8 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
+            screenshot_capture_session_policy_test
+            screenshot_capture_video_test
     )
 endif()
 

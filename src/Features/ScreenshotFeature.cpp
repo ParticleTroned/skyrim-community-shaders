@@ -4,6 +4,8 @@
 // capture does not stall the frame.
 
 #include "Features/ScreenshotFeature.h"
+#include "Features/ScreenshotCaptureVideo.h"
+#include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "State.h"
@@ -13,11 +15,13 @@
 #include <DirectXTex.h>
 #include <PCH.h>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <imgui.h>
 #include <limits>
 #include <numeric>
@@ -28,6 +32,7 @@ namespace
 {
 	constexpr uint32_t kCaptureTimeoutPresents = 6;
 	constexpr std::size_t kMaxOutstandingScreenshots = 2;
+	constexpr std::size_t kMaxOutstandingDiagnosticScreenshots = 8;
 	constexpr auto kReadbackMapTimeout = std::chrono::milliseconds(500);
 	constexpr auto kReadbackMapRetryDelay = std::chrono::milliseconds(1);
 	constexpr uint32_t kFramedEyeOutputWidth = 2560;
@@ -1355,6 +1360,135 @@ namespace
 		return true;
 	}
 
+	nlohmann::json ComputeDiagnosticImageStatistics(const DirectX::Image& a_image)
+	{
+		struct Accumulator
+		{
+			std::array<double, 4> minimum{
+				std::numeric_limits<double>::infinity(),
+				std::numeric_limits<double>::infinity(),
+				std::numeric_limits<double>::infinity(),
+				std::numeric_limits<double>::infinity(),
+			};
+			std::array<double, 4> maximum{
+				-std::numeric_limits<double>::infinity(),
+				-std::numeric_limits<double>::infinity(),
+				-std::numeric_limits<double>::infinity(),
+				-std::numeric_limits<double>::infinity(),
+			};
+			std::array<long double, 4> sum{};
+			std::array<uint64_t, 3> luminanceAbove{};
+			uint64_t finitePixels = 0;
+			uint64_t nonFinitePixels = 0;
+			uint32_t nonBlackMinX = std::numeric_limits<uint32_t>::max();
+			uint32_t nonBlackMinY = std::numeric_limits<uint32_t>::max();
+			uint32_t nonBlackMaxX = 0;
+			uint32_t nonBlackMaxY = 0;
+		};
+
+		Accumulator accumulator;
+		const HRESULT result = DirectX::EvaluateImage(
+			a_image,
+			[&accumulator](const DirectX::XMVECTOR* a_pixels, size_t a_width, size_t a_y) {
+				for (size_t x = 0; x < a_width; ++x) {
+					DirectX::XMFLOAT4 value{};
+					DirectX::XMStoreFloat4(&value, a_pixels[x]);
+					const std::array<double, 4> channels{ value.x, value.y, value.z, value.w };
+					if (!std::ranges::all_of(channels, [](double a_channel) { return std::isfinite(a_channel); })) {
+						++accumulator.nonFinitePixels;
+						continue;
+					}
+					++accumulator.finitePixels;
+					for (size_t channel = 0; channel < channels.size(); ++channel) {
+						accumulator.minimum[channel] = std::min(accumulator.minimum[channel], channels[channel]);
+						accumulator.maximum[channel] = std::max(accumulator.maximum[channel], channels[channel]);
+						accumulator.sum[channel] += channels[channel];
+					}
+					const double luminance = std::max(
+						0.0,
+						0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]);
+					constexpr std::array<double, 3> thresholds{ 1.0e-6, 1.0e-4, 1.0e-2 };
+					for (size_t threshold = 0; threshold < thresholds.size(); ++threshold) {
+						if (luminance > thresholds[threshold])
+							++accumulator.luminanceAbove[threshold];
+					}
+					if (luminance > thresholds[1]) {
+						const auto pixelX = static_cast<uint32_t>(x);
+						const auto pixelY = static_cast<uint32_t>(a_y);
+						accumulator.nonBlackMinX = std::min(accumulator.nonBlackMinX, pixelX);
+						accumulator.nonBlackMinY = std::min(accumulator.nonBlackMinY, pixelY);
+						accumulator.nonBlackMaxX = std::max(accumulator.nonBlackMaxX, pixelX);
+						accumulator.nonBlackMaxY = std::max(accumulator.nonBlackMaxY, pixelY);
+					}
+				}
+			});
+
+		nlohmann::json statistics{
+			{ "width", a_image.width },
+			{ "height", a_image.height },
+			{ "format", static_cast<uint32_t>(a_image.format) },
+			{ "finitePixels", accumulator.finitePixels },
+			{ "nonFinitePixels", accumulator.nonFinitePixels },
+			{ "evaluateHRESULT", static_cast<uint32_t>(result) },
+			{ "luminanceThresholds", {
+				{ "above1e-6", accumulator.luminanceAbove[0] },
+				{ "above1e-4", accumulator.luminanceAbove[1] },
+				{ "above1e-2", accumulator.luminanceAbove[2] },
+			} },
+		};
+		if (SUCCEEDED(result) && accumulator.finitePixels != 0) {
+			nlohmann::json minimum = nlohmann::json::array();
+			nlohmann::json maximum = nlohmann::json::array();
+			nlohmann::json mean = nlohmann::json::array();
+			for (size_t channel = 0; channel < accumulator.minimum.size(); ++channel) {
+				minimum.push_back(accumulator.minimum[channel]);
+				maximum.push_back(accumulator.maximum[channel]);
+				mean.push_back(static_cast<double>(accumulator.sum[channel] / accumulator.finitePixels));
+			}
+			statistics["minimumRGBA"] = std::move(minimum);
+			statistics["maximumRGBA"] = std::move(maximum);
+			statistics["meanRGBA"] = std::move(mean);
+		}
+		if (accumulator.nonBlackMinX != std::numeric_limits<uint32_t>::max()) {
+			statistics["nonBlackBoundsAt1e-4"] = {
+				{ "left", accumulator.nonBlackMinX },
+				{ "top", accumulator.nonBlackMinY },
+				{ "right", accumulator.nonBlackMaxX + 1u },
+				{ "bottom", accumulator.nonBlackMaxY + 1u },
+			};
+		} else {
+			statistics["nonBlackBoundsAt1e-4"] = nullptr;
+		}
+		return statistics;
+	}
+
+	bool WriteDiagnosticStatistics(
+		const std::filesystem::path& a_imagePath,
+		const DirectX::Image& a_image)
+	{
+		auto statisticsPath = a_imagePath;
+		statisticsPath += ".stats.json";
+		auto temporaryPath = statisticsPath;
+		temporaryPath += ".tmp";
+		Util::FileHelpers::EnsureDirectoryExists(statisticsPath.parent_path());
+		std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
+		if (!output.is_open())
+			return false;
+		output << ComputeDiagnosticImageStatistics(a_image).dump(2);
+		output.close();
+		if (!output)
+			return false;
+		if (!MoveFileExW(
+				temporaryPath.c_str(),
+				statisticsPath.c_str(),
+				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+			std::error_code ec;
+			std::filesystem::remove(temporaryPath, ec);
+			return false;
+		}
+		return true;
+	}
+
 	const DirectX::Image* PrepareSdrImage(
 		DirectX::ScratchImage& sourceImage,
 		DirectX::ScratchImage& convertedImage,
@@ -1506,6 +1640,29 @@ namespace
 			outputPath.c_str()));
 	}
 
+	bool EncodeJpegFrame(
+		DirectX::ScratchImage& a_source,
+		DirectX::Blob& a_jpeg,
+		uint32_t& a_width,
+		uint32_t& a_height)
+	{
+		DirectX::ScratchImage converted;
+		const auto* image = PrepareSdrImage(
+			a_source,
+			converted,
+			vr::ColorSpace_Auto,
+			false);
+		if (!image || image->width == 0 || image->height == 0 || image->width > UINT32_MAX || image->height > UINT32_MAX)
+			return false;
+		a_width = static_cast<uint32_t>(image->width);
+		a_height = static_cast<uint32_t>(image->height);
+		return SUCCEEDED(DirectX::SaveToWICMemory(
+			*image,
+			DirectX::WIC_FLAGS_FORCE_SRGB,
+			DirectX::GetWICCodec(DirectX::WIC_CODEC_JPEG),
+			a_jpeg));
+	}
+
 	// Resolves the slot's underlying texture, falling back to QueryInterface on
 	// SRV/RTV when slot.texture is null (kFRAMEBUFFER on flat aliases the swap-
 	// chain backbuffer that way). `holder` keeps the QI refcount alive across
@@ -1591,6 +1748,60 @@ namespace
 		return ResolveToAbsoluteGamePath(std::filesystem::path(screenshotPath) / buf);
 	}
 
+	std::string SanitizeCaptureLabel(std::string_view a_label)
+	{
+		std::string sanitized;
+		sanitized.reserve(std::min<std::size_t>(a_label.size(), 48));
+		for (const unsigned char value : a_label) {
+			if (sanitized.size() >= 48)
+				break;
+			const char c = static_cast<char>(value);
+			if (std::isalnum(value) || c == '-' || c == '_') {
+				sanitized.push_back(c);
+			} else if (c == ' ' || c == '.') {
+				sanitized.push_back('_');
+			}
+		}
+		while (!sanitized.empty() && sanitized.back() == '_')
+			sanitized.pop_back();
+		return sanitized.empty() ? "capture" : sanitized;
+	}
+
+	std::filesystem::path BuildCaptureSessionDirectory(
+		const std::string& a_basePath,
+		std::string_view a_label,
+		uint64_t a_sessionId)
+	{
+		SYSTEMTIME st;
+		GetLocalTime(&st);
+		const auto folderName = std::format(
+			"CS_Capture_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}_{:03}_{}_{:04}",
+			st.wYear,
+			st.wMonth,
+			st.wDay,
+			st.wHour,
+			st.wMinute,
+			st.wSecond,
+			st.wMilliseconds,
+			SanitizeCaptureLabel(a_label),
+			a_sessionId % 10000u);
+		return ResolveToAbsoluteGamePath(std::filesystem::path(a_basePath) / folderName);
+	}
+
+	std::filesystem::path BuildCaptureSessionFramePath(
+		const std::filesystem::path& a_directory,
+		uint32_t a_frameIndex,
+		std::string_view a_suffix,
+		bool a_usePng)
+	{
+		return a_directory /
+		       std::format(
+				   "frame_{:06}_{}{}",
+				   a_frameIndex,
+				   a_suffix,
+				   a_usePng ? ".png" : ".bmp");
+	}
+
 }
 
 ScreenshotFeature::~ScreenshotFeature()
@@ -1647,6 +1858,15 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sdrUsePng = a_json["SdrUsePng"];
 	if (a_json.contains("CopyToClipboard"))
 		copyToClipboard = a_json["CopyToClipboard"];
+	const auto sequenceRequest = ScreenshotCaptureSessionPolicy::Validate(
+		a_json.value("SequenceFrameCount", sequenceFrameCount),
+		a_json.value("SequenceFrameInterval", sequenceFrameInterval),
+		a_json.value("SequencePreviewFramesPerSecond", sequencePreviewFramesPerSecond));
+	sequenceFrameCount = sequenceRequest.frameCount;
+	sequenceFrameInterval = sequenceRequest.frameInterval;
+	sequencePreviewFramesPerSecond = sequenceRequest.previewFramesPerSecond;
+	sequenceSaveSeparateEyes = a_json.value("SequenceSaveSeparateEyes", sequenceSaveSeparateEyes);
+	sequenceWritePreviewVideo = a_json.value("SequenceWritePreviewVideo", sequenceWritePreviewVideo);
 	vr::EVREye legacyFramedEye = vr::Eye_Left;
 	if (a_json.contains("VRCaptureSource") && a_json["VRCaptureSource"].is_string()) {
 		const auto captureSource = a_json["VRCaptureSource"].get<std::string>();
@@ -1703,6 +1923,11 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 	a_json["ApplyCropToScreenshot"] = applyCropToScreenshot;
 	a_json["SdrUsePng"] = sdrUsePng;
 	a_json["CopyToClipboard"] = copyToClipboard;
+	a_json["SequenceFrameCount"] = sequenceFrameCount;
+	a_json["SequenceFrameInterval"] = sequenceFrameInterval;
+	a_json["SequencePreviewFramesPerSecond"] = sequencePreviewFramesPerSecond;
+	a_json["SequenceSaveSeparateEyes"] = sequenceSaveSeparateEyes;
+	a_json["SequenceWritePreviewVideo"] = sequenceWritePreviewVideo;
 	switch (vrCaptureSource) {
 	case VRCaptureSource::DesktopMirror:
 		a_json["VRCaptureSource"] = "DesktopMirror";
@@ -1832,6 +2057,80 @@ void ScreenshotFeature::DrawSettings()
 		ImGui::EndDisabled();
 	} else {
 		ImGui::Checkbox("Apply crop", &applyCropToScreenshot);
+	}
+
+	if (globals::game::isVR) {
+		ImGui::SeparatorText("Short Sequence");
+		int frameCount = static_cast<int>(sequenceFrameCount);
+		int frameInterval = static_cast<int>(sequenceFrameInterval);
+		int previewFps = static_cast<int>(sequencePreviewFramesPerSecond);
+		ImGui::SliderInt(
+			"Frames##ScreenshotSequence",
+			&frameCount,
+			1,
+			static_cast<int>(ScreenshotCaptureSessionPolicy::kMaxFrameCount));
+		ImGui::SliderInt(
+			"Compositor-cycle interval##ScreenshotSequence",
+			&frameInterval,
+			1,
+			static_cast<int>(ScreenshotCaptureSessionPolicy::kMaxFrameInterval));
+		ImGui::SliderInt(
+			"Preview FPS##ScreenshotSequence",
+			&previewFps,
+			1,
+			static_cast<int>(ScreenshotCaptureSessionPolicy::kMaxPreviewFramesPerSecond));
+		sequenceFrameCount = static_cast<uint32_t>(frameCount);
+		sequenceFrameInterval = static_cast<uint32_t>(frameInterval);
+		sequencePreviewFramesPerSecond = static_cast<uint32_t>(previewFps);
+		ImGui::Checkbox("Save separate left/right frames", &sequenceSaveSeparateEyes);
+		ImGui::Checkbox("Create MJPEG AVI preview after capture", &sequenceWritePreviewVideo);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Lossless frames are authoritative; preview-video encoding runs only after capture finishes.");
+			ImGui::TextUnformatted("Measure performance in a separate pass because GPU readback itself has a cost.");
+		}
+
+		const auto session = GetCaptureSessionStatus();
+		const bool captureActive = session.state == CaptureSessionState::Capturing ||
+		                           session.state == CaptureSessionState::Draining;
+		const bool sessionBusy = captureActive ||
+		                         (session.id != 0 && session.request.writePreviewVideo && !session.previewVideoFinished);
+		const bool submittedEyeSource = vrCaptureSource == VRCaptureSource::HMDSubmission ||
+		                                IsFramedCapture(vrCaptureSource);
+		ImGui::BeginDisabled(!IsRuntimeEnabled() || sessionBusy || !submittedEyeSource);
+		if (ImGui::Button("Capture Short Sequence")) {
+			CaptureSessionRequest request;
+			request.label = "manual";
+			request.source = vrCaptureSource;
+			request.frameCount = sequenceFrameCount;
+			request.frameInterval = sequenceFrameInterval;
+			request.previewFramesPerSecond = sequencePreviewFramesPerSecond;
+			request.saveCombined = true;
+			request.saveSeparateEyes = sequenceSaveSeparateEyes && vrCaptureSource != VRCaptureSource::FramedEye;
+			request.writePreviewVideo = sequenceWritePreviewVideo;
+			std::string error;
+			if (!StartCaptureSession(request, error)) {
+				logger::warn("Could not start screenshot sequence: {}", error);
+				ShowInGameNotification(std::format("Sequence capture not started: {}", error));
+			}
+		}
+		ImGui::EndDisabled();
+		if (captureActive) {
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel Sequence"))
+				CancelCaptureSession("cancelled from CSX menu");
+		}
+		if (!submittedEyeSource)
+			ImGui::TextDisabled("Short sequences currently require an HMD submitted-eye source.");
+		if (session.id != 0) {
+			ImGui::TextDisabled(
+				"Session %llu: %s, %u/%u frames saved",
+				static_cast<unsigned long long>(session.id),
+				GetCaptureSessionStateName(session.state),
+				session.framesSaved,
+				session.request.frameCount);
+			if (!session.error.empty())
+				Util::Text::WrappedWarning("%s", session.error.c_str());
+		}
 	}
 
 	ImGui::SeparatorText("Output");
@@ -2058,6 +2357,493 @@ void ScreenshotFeature::FallBackToDesktopCapture(ActiveCapture& a_capture, std::
 	a_capture.presentsWaited = 0;
 }
 
+const char* ScreenshotFeature::GetCaptureSessionStateName(CaptureSessionState a_state)
+{
+	switch (a_state) {
+	case CaptureSessionState::Capturing:
+		return "capturing";
+	case CaptureSessionState::Draining:
+		return "draining";
+	case CaptureSessionState::Complete:
+		return "complete";
+	case CaptureSessionState::Cancelled:
+		return "cancelled";
+	case CaptureSessionState::Failed:
+		return "failed";
+	case CaptureSessionState::Idle:
+	default:
+		return "idle";
+	}
+}
+
+const char* ScreenshotFeature::GetCaptureSourceName(VRCaptureSource a_source)
+{
+	switch (a_source) {
+	case VRCaptureSource::HMDSubmission:
+		return "hmd_stereo";
+	case VRCaptureSource::FramedEye:
+		return "framed_eye";
+	case VRCaptureSource::FramedStereo:
+		return "framed_stereo";
+	case VRCaptureSource::DesktopMirror:
+	default:
+		return "desktop_mirror";
+	}
+}
+
+ScreenshotFeature::CaptureSessionStatus ScreenshotFeature::GetCaptureSessionStatus() const
+{
+	std::lock_guard lock(captureStateMutex);
+	return captureSession.status;
+}
+
+json ScreenshotFeature::BuildCaptureSessionManifestLocked()
+{
+	const auto& status = captureSession.status;
+	const auto revision = ++captureSession.manifestRevision;
+	json frames = json::array();
+	for (const auto& frame : status.frames) {
+		frames.push_back({
+			{ "index", frame.index },
+			{ "compositorCycleToken", frame.compositorCycleToken },
+			{ "finished", frame.finished },
+			{ "succeeded", frame.succeeded },
+			{ "combinedPath", frame.combinedPath.string() },
+			{ "leftEyePath", frame.eyePaths[0].string() },
+			{ "rightEyePath", frame.eyePaths[1].string() },
+			{ "error", frame.error },
+		});
+	}
+
+	return {
+		{ "schemaVersion", 1 },
+		{ "revision", revision },
+		{ "sessionId", status.id },
+		{ "state", GetCaptureSessionStateName(status.state) },
+		{ "source", GetCaptureSourceName(status.request.source) },
+		{ "label", status.request.label },
+		{ "requestedFrameCount", status.request.frameCount },
+		{ "frameIntervalCompositorCycles", status.request.frameInterval },
+		{ "previewFramesPerSecond", status.request.previewFramesPerSecond },
+		{ "saveCombined", status.request.saveCombined },
+		{ "saveSeparateEyes", status.request.saveSeparateEyes },
+		{ "previewVideoRequested", status.request.writePreviewVideo },
+		{ "outputDirectory", status.outputDirectory.string() },
+		{ "manifestPath", status.manifestPath.string() },
+		{ "previewVideoPath", status.previewVideoPath.string() },
+		{ "previewVideoFinished", status.previewVideoFinished },
+		{ "previewVideoSucceeded", status.previewVideoSucceeded },
+		{ "previewVideoError", status.previewVideoError },
+		{ "framesQueued", status.framesQueued },
+		{ "framesFinished", status.framesFinished },
+		{ "framesSaved", status.framesSaved },
+		{ "framesFailed", status.framesFailed },
+		{ "backpressureDrops", status.backpressureDrops },
+		{ "incompleteStereoDrops", status.incompleteStereoDrops },
+		{ "cancelRequested", status.cancelRequested },
+		{ "error", status.error },
+		{ "frames", std::move(frames) },
+	};
+}
+
+bool ScreenshotFeature::WriteCaptureSessionManifest(
+	const json& a_manifest,
+	const std::filesystem::path& a_path) const
+{
+	if (a_path.empty())
+		return false;
+	const auto revision = a_manifest.value("revision", uint64_t{ 0 });
+	std::lock_guard manifestLock(captureManifestMutex);
+	if (a_path == lastCaptureManifestPath && revision != 0 && revision <= lastCaptureManifestRevision)
+		return true;
+	try {
+		Util::FileHelpers::EnsureDirectoryExists(a_path.parent_path());
+		auto temporaryPath = a_path;
+		temporaryPath += ".tmp";
+		{
+			std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
+			if (!output)
+				throw std::runtime_error("could not open temporary manifest");
+			output << a_manifest.dump(2) << '\n';
+			if (!output)
+				throw std::runtime_error("could not write temporary manifest");
+		}
+		if (!MoveFileExW(
+				temporaryPath.c_str(),
+				a_path.c_str(),
+				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+			const auto error = GetLastError();
+			std::error_code ignored;
+			std::filesystem::remove(temporaryPath, ignored);
+			throw std::runtime_error(std::format("could not replace manifest (Win32 error {})", error));
+		}
+		lastCaptureManifestPath = a_path;
+		lastCaptureManifestRevision = revision;
+		return true;
+	} catch (const std::exception& e) {
+		logger::error("Failed to write capture-session manifest {}: {}", a_path.string(), e.what());
+	} catch (...) {
+		logger::error("Failed to write capture-session manifest {}", a_path.string());
+	}
+	return false;
+}
+
+void ScreenshotFeature::FinishCaptureSessionProducerLocked()
+{
+	auto& status = captureSession.status;
+	captureSession.producerFinished = true;
+	if (activeCapture.sessionId == status.id)
+		ClearActiveCapture(activeCapture);
+	capturePending.store(false, std::memory_order_release);
+
+	const auto completion = ScreenshotCaptureSessionPolicy::ResolveCompletion(
+		status.framesQueued,
+		status.framesFinished,
+		status.framesSaved,
+		status.framesFailed,
+		status.cancelRequested,
+		!status.error.empty());
+	switch (completion.state) {
+	case ScreenshotCaptureSessionPolicy::CompletionState::Draining:
+		status.state = CaptureSessionState::Draining;
+		break;
+	case ScreenshotCaptureSessionPolicy::CompletionState::Cancelled:
+		status.state = CaptureSessionState::Cancelled;
+		break;
+	case ScreenshotCaptureSessionPolicy::CompletionState::Failed:
+		status.state = CaptureSessionState::Failed;
+		if (completion.needsDefaultError)
+			status.error = "one or more requested frames failed";
+		break;
+	case ScreenshotCaptureSessionPolicy::CompletionState::Complete:
+		status.state = CaptureSessionState::Complete;
+		break;
+	}
+	if (status.framesSaved == 0 && status.request.writePreviewVideo &&
+		status.state != CaptureSessionState::Draining) {
+		status.previewVideoFinished = true;
+		status.previewVideoSucceeded = false;
+		status.previewVideoError = "no successful combined frames were available for preview video";
+	}
+}
+
+void ScreenshotFeature::CancelCaptureSessionLocked(std::string_view a_reason)
+{
+	auto& status = captureSession.status;
+	if (status.state != CaptureSessionState::Capturing &&
+		status.state != CaptureSessionState::Draining) {
+		return;
+	}
+	status.cancelRequested = true;
+	if (status.error.empty() && !a_reason.empty())
+		status.error = std::string(a_reason);
+	FinishCaptureSessionProducerLocked();
+}
+
+bool ScreenshotFeature::CancelCaptureSession(std::string_view a_reason)
+{
+	json manifest;
+	std::filesystem::path manifestPath;
+	uint64_t terminalSessionId = 0;
+	bool cancelled = false;
+	{
+		std::lock_guard lock(captureStateMutex);
+		const auto previousState = captureSession.status.state;
+		CancelCaptureSessionLocked(a_reason);
+		cancelled = previousState == CaptureSessionState::Capturing ||
+		            previousState == CaptureSessionState::Draining;
+		if (cancelled) {
+			manifest = BuildCaptureSessionManifestLocked();
+			manifestPath = captureSession.status.manifestPath;
+			if (captureSession.status.state == CaptureSessionState::Cancelled)
+				terminalSessionId = captureSession.status.id;
+		}
+	}
+	if (cancelled) {
+		WriteCaptureSessionManifest(manifest, manifestPath);
+		if (terminalSessionId != 0)
+			GenerateCaptureSessionPreviewVideo(terminalSessionId);
+	}
+	return cancelled;
+}
+
+bool ScreenshotFeature::StartCaptureSession(
+	const CaptureSessionRequest& a_request,
+	std::string& a_error)
+{
+	a_error.clear();
+	if (!IsRuntimeEnabled()) {
+		a_error = "Community Shaders screenshot capture is disabled";
+		return false;
+	}
+	if (!globals::game::isVR) {
+		a_error = "submitted-eye capture sessions require Skyrim VR";
+		return false;
+	}
+	if (a_request.source != VRCaptureSource::HMDSubmission &&
+		a_request.source != VRCaptureSource::FramedEye &&
+		a_request.source != VRCaptureSource::FramedStereo) {
+		a_error = "capture sessions currently require an HMD submitted-eye source";
+		return false;
+	}
+	if (!a_request.saveCombined && !a_request.saveSeparateEyes) {
+		a_error = "capture session must save a combined frame, separate eyes, or both";
+		return false;
+	}
+	if (a_request.writePreviewVideo && !a_request.saveCombined) {
+		a_error = "preview video requires combined frames";
+		return false;
+	}
+	if (a_request.source == VRCaptureSource::FramedEye && a_request.saveSeparateEyes) {
+		a_error = "framed-eye capture cannot save a stereo pair";
+		return false;
+	}
+	if (!globals::features::vr.InstallSubmitHook(false)) {
+		a_error = "OpenVR submit interception is unavailable";
+		return false;
+	}
+
+	const auto validated = ScreenshotCaptureSessionPolicy::Validate(
+		a_request.frameCount,
+		a_request.frameInterval,
+		a_request.previewFramesPerSecond);
+	CaptureSessionRequest request = a_request;
+	request.frameCount = validated.frameCount;
+	request.frameInterval = validated.frameInterval;
+	request.previewFramesPerSecond = validated.previewFramesPerSecond;
+	if (request.outputPath.empty())
+		request.outputPath = screenshotPath;
+
+	auto options = SnapshotCaptureOptions();
+	options.copyToClipboard = false;
+	if (request.source == VRCaptureSource::FramedStereo && !SnapshotStereoGeometry(options)) {
+		a_error = "combined-eye projection data is unavailable";
+		return false;
+	}
+
+	json manifest;
+	std::filesystem::path manifestPath;
+	{
+		std::lock_guard lock(captureStateMutex);
+		if (captureSession.status.state == CaptureSessionState::Capturing ||
+			captureSession.status.state == CaptureSessionState::Draining) {
+			a_error = "a capture session is already active";
+			return false;
+		}
+		if (captureSession.status.id != 0 && captureSession.status.request.writePreviewVideo &&
+			!captureSession.status.previewVideoFinished) {
+			a_error = "the previous capture session is still finalizing its preview video";
+			return false;
+		}
+		if (activeCapture.pending) {
+			a_error = "a screenshot capture is already pending";
+			return false;
+		}
+
+		uint64_t sessionId = nextCaptureSessionId++;
+		if (sessionId == 0)
+			sessionId = nextCaptureSessionId++;
+		const auto outputDirectory = BuildCaptureSessionDirectory(
+			request.outputPath,
+			request.label,
+			sessionId);
+
+		captureSession = {};
+		auto& status = captureSession.status;
+		status.id = sessionId;
+		status.state = CaptureSessionState::Capturing;
+		status.request = request;
+		status.outputDirectory = outputDirectory;
+		status.manifestPath = outputDirectory / "capture-manifest.json";
+		if (request.writePreviewVideo)
+			status.previewVideoPath = outputDirectory / "preview.avi";
+
+		activeCapture = {};
+		activeCapture.pending = true;
+		activeCapture.options = std::move(options);
+		activeCapture.source = request.source;
+		activeCapture.sessionId = sessionId;
+		capturePending.store(true, std::memory_order_release);
+
+		manifest = BuildCaptureSessionManifestLocked();
+		manifestPath = status.manifestPath;
+	}
+
+	if (!WriteCaptureSessionManifest(manifest, manifestPath)) {
+		std::lock_guard lock(captureStateMutex);
+		if (captureSession.status.id != 0 && captureSession.status.manifestPath == manifestPath) {
+			captureSession.status.error = "could not initialize the capture-session output directory";
+			FinishCaptureSessionProducerLocked();
+		}
+		a_error = "could not initialize the capture-session output directory";
+		return false;
+	}
+	logger::info(
+		"Started screenshot capture session {}: source={} frames={} interval={} output={}",
+		GetCaptureSessionStatus().id,
+		GetCaptureSourceName(request.source),
+		request.frameCount,
+		request.frameInterval,
+		GetCaptureSessionStatus().outputDirectory.string());
+	return true;
+}
+
+void ScreenshotFeature::GenerateCaptureSessionPreviewVideo(uint64_t a_sessionId)
+{
+	const auto status = GetCaptureSessionStatus();
+	if (status.id != a_sessionId || !status.request.writePreviewVideo || status.previewVideoFinished)
+		return;
+
+	bool succeeded = false;
+	std::string error;
+	try {
+		ScreenshotCaptureVideo::MjpegAviWriter writer;
+		bool opened = false;
+		uint32_t expectedWidth = 0;
+		uint32_t expectedHeight = 0;
+		for (const auto& frame : status.frames) {
+			if (!frame.succeeded || frame.combinedPath.empty())
+				continue;
+			DirectX::ScratchImage image;
+			if (FAILED(DirectX::LoadFromWICFile(
+					frame.combinedPath.c_str(),
+					DirectX::WIC_FLAGS_NONE,
+					nullptr,
+					image))) {
+				error = std::format("could not load {}", frame.combinedPath.filename().string());
+				break;
+			}
+			DirectX::Blob jpeg;
+			uint32_t width = 0;
+			uint32_t height = 0;
+			if (!EncodeJpegFrame(image, jpeg, width, height)) {
+				error = std::format("could not encode {}", frame.combinedPath.filename().string());
+				break;
+			}
+			if (!opened) {
+				expectedWidth = width;
+				expectedHeight = height;
+				if (!writer.Open(
+						status.previewVideoPath,
+						expectedWidth,
+						expectedHeight,
+						status.request.previewFramesPerSecond)) {
+					error = "could not create MJPEG AVI preview";
+					break;
+				}
+				opened = true;
+			} else if (width != expectedWidth || height != expectedHeight) {
+				error = "combined frame dimensions changed during the capture session";
+				break;
+			}
+			const auto* jpegBytes = static_cast<const uint8_t*>(jpeg.GetConstBufferPointer());
+			if (!jpegBytes || !writer.AddFrame({ jpegBytes, jpeg.GetBufferSize() })) {
+				error = "could not append an MJPEG AVI frame";
+				break;
+			}
+		}
+		if (error.empty()) {
+			if (!opened) {
+				error = "no successful combined frames were available for preview video";
+			} else if (!writer.Finalize()) {
+				error = "could not finalize MJPEG AVI preview";
+			} else {
+				succeeded = true;
+			}
+		}
+	} catch (const std::exception& e) {
+		error = e.what();
+	} catch (...) {
+		error = "unknown preview-video error";
+	}
+	if (!succeeded) {
+		std::error_code ignored;
+		std::filesystem::remove(status.previewVideoPath, ignored);
+	}
+
+	json manifest;
+	std::filesystem::path manifestPath;
+	{
+		std::lock_guard lock(captureStateMutex);
+		if (captureSession.status.id != a_sessionId)
+			return;
+		captureSession.status.previewVideoFinished = true;
+		captureSession.status.previewVideoSucceeded = succeeded;
+		captureSession.status.previewVideoError = std::move(error);
+		manifest = BuildCaptureSessionManifestLocked();
+		manifestPath = captureSession.status.manifestPath;
+	}
+	WriteCaptureSessionManifest(manifest, manifestPath);
+	if (succeeded) {
+		logger::info(
+			"Saved capture-session preview video to {}",
+			status.previewVideoPath.string());
+	} else {
+		logger::warn(
+			"Capture session {} saved lossless frames but preview video generation failed: {}",
+			a_sessionId,
+			GetCaptureSessionStatus().previewVideoError);
+	}
+}
+
+void ScreenshotFeature::RecordCaptureSessionFrameResult(
+	uint64_t a_sessionId,
+	uint32_t a_frameIndex,
+	bool a_succeeded,
+	std::string a_error)
+{
+	json manifest;
+	std::filesystem::path manifestPath;
+	bool terminal = false;
+	{
+		std::lock_guard lock(captureStateMutex);
+		auto& status = captureSession.status;
+		if (status.id != a_sessionId || a_frameIndex == 0 || a_frameIndex > status.frames.size())
+			return;
+		auto& frame = status.frames[a_frameIndex - 1];
+		if (frame.finished)
+			return;
+		frame.finished = true;
+		frame.succeeded = a_succeeded;
+		frame.error = std::move(a_error);
+		status.framesFinished++;
+		if (a_succeeded) {
+			status.framesSaved++;
+		} else {
+			status.framesFailed++;
+			if (status.error.empty())
+				status.error = frame.error.empty() ? "frame encoding failed" : frame.error;
+		}
+
+		if (captureSession.producerFinished && status.framesFinished >= status.framesQueued) {
+			FinishCaptureSessionProducerLocked();
+			terminal = true;
+		}
+		manifest = BuildCaptureSessionManifestLocked();
+		manifestPath = status.manifestPath;
+	}
+	WriteCaptureSessionManifest(manifest, manifestPath);
+	if (terminal) {
+		const auto terminalStatus = GetCaptureSessionStatus();
+		if (terminalStatus.request.writePreviewVideo)
+			GenerateCaptureSessionPreviewVideo(a_sessionId);
+		const auto status = GetCaptureSessionStatus();
+		logger::info(
+			"Screenshot capture session {} {}: saved={} failed={} backpressureDrops={} incompleteStereoDrops={}",
+			status.id,
+			GetCaptureSessionStateName(status.state),
+			status.framesSaved,
+			status.framesFailed,
+			status.backpressureDrops,
+			status.incompleteStereoDrops);
+		ShowInGameNotification(std::format(
+			"Capture session {}: {} frame{} saved",
+			GetCaptureSessionStateName(status.state),
+			status.framesSaved,
+			status.framesSaved == 1 ? "" : "s"));
+	}
+}
+
 void ScreenshotFeature::RequestCapture()
 {
 	if (!IsRuntimeEnabled()) {
@@ -2075,6 +2861,12 @@ void ScreenshotFeature::RequestCapture()
 
 	std::lock_guard lock(captureStateMutex);
 	if (!IsRuntimeEnabled()) {
+		return;
+	}
+	if (captureSession.status.state == CaptureSessionState::Capturing ||
+		captureSession.status.state == CaptureSessionState::Draining) {
+		logger::warn("Screenshot request rejected while capture session {} is active.", captureSession.status.id);
+		ShowInGameNotification("Capture session active - screenshot not started");
 		return;
 	}
 	ClearActiveCapture(activeCapture);
@@ -2112,6 +2904,8 @@ void ScreenshotFeature::SetEnabled(bool a_enabled)
 {
 	bool wasEnabled = false;
 	bool cancelledPendingCapture = false;
+	json sessionManifest;
+	std::filesystem::path sessionManifestPath;
 	{
 		std::lock_guard lock(captureStateMutex);
 		wasEnabled = enabled.exchange(a_enabled, std::memory_order_acq_rel);
@@ -2120,9 +2914,18 @@ void ScreenshotFeature::SetEnabled(bool a_enabled)
 			// reserved encoder slot. Completed or queued encoder work remains committed.
 			capturePending.store(false, std::memory_order_release);
 			cancelledPendingCapture = activeCapture.pending;
-			ClearActiveCapture(activeCapture);
+			if (captureSession.status.state == CaptureSessionState::Capturing ||
+				captureSession.status.state == CaptureSessionState::Draining) {
+				CancelCaptureSessionLocked("screenshot feature disabled");
+				sessionManifest = BuildCaptureSessionManifestLocked();
+				sessionManifestPath = captureSession.status.manifestPath;
+			} else {
+				ClearActiveCapture(activeCapture);
+			}
 		}
 	}
+	if (!sessionManifestPath.empty())
+		WriteCaptureSessionManifest(sessionManifest, sessionManifestPath);
 
 	if (wasEnabled != a_enabled) {
 		logger::debug("Community Shaders screenshot capture {}", a_enabled ? "enabled" : "disabled");
@@ -2132,10 +2935,10 @@ void ScreenshotFeature::SetEnabled(bool a_enabled)
 	}
 }
 
-bool ScreenshotFeature::TryReserveScreenshotSlot()
+bool ScreenshotFeature::TryReserveScreenshotSlot(std::size_t a_maxOutstanding)
 {
 	std::lock_guard queueLock(screenshotQueueMutex);
-	if (outstandingScreenshotCount >= kMaxOutstandingScreenshots) {
+	if (a_maxOutstanding == 0 || outstandingScreenshotCount >= a_maxOutstanding) {
 		return false;
 	}
 	++outstandingScreenshotCount;
@@ -2295,7 +3098,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 	if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
 		logger::warn("Screenshot worker COM initialization failed: 0x{:08X}", static_cast<uint32_t>(comResult));
 	}
-	auto reportFailure = [](std::string_view message) {
+	auto reportLegacyFailure = [](std::string_view message) {
 		logger::error("{}", message);
 		ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 	};
@@ -2322,6 +3125,34 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 			screenshotQueue.pop();
 		}
 		ownsQueueSlot = screenshot.ownsQueueSlot;
+		bool frameSucceeded = false;
+		std::string frameFailure;
+		const SKSE::stl::scope_exit finishSessionFrame([this, &screenshot, &frameSucceeded, &frameFailure]() noexcept {
+			if (screenshot.sessionId == 0)
+				return;
+			if (!frameSucceeded && frameFailure.empty())
+				frameFailure = "screenshot worker did not complete the frame";
+			try {
+				RecordCaptureSessionFrameResult(
+					screenshot.sessionId,
+					screenshot.sessionFrameIndex,
+					frameSucceeded,
+					std::move(frameFailure));
+			} catch (const std::exception& e) {
+				logger::error("Capture-session frame completion failed: {}", e.what());
+			} catch (...) {
+				logger::error("Capture-session frame completion failed with an unknown exception.");
+			}
+		});
+		auto reportFailure = [&screenshot, &frameFailure, &reportLegacyFailure](std::string_view message) {
+			if (screenshot.sessionId != 0) {
+				logger::error("{}", message);
+				if (frameFailure.empty())
+					frameFailure = std::string(message);
+			} else {
+				reportLegacyFailure(message);
+			}
+		};
 
 		try {
 			if (screenshot.planeCount == 0 || screenshot.planeCount > screenshot.planes.size()) {
@@ -2531,25 +3362,74 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 				imageToSave = &framedImage;
 			}
 
-			Util::FileHelpers::EnsureDirectoryExists(screenshot.outputPath.parent_path());
-			const bool saveOk = SaveSdrScreenshot(
-				*imageToSave,
-				screenshot.outputPath,
-				screenshot.saveAsPng,
-				combinedColorSpace,
-				combinedTonemapSceneHdr);
+			if (screenshot.writeDiagnosticStatistics) {
+				const auto* statisticsImage = imageToSave->GetImage(0, 0, 0);
+				if (!statisticsImage || !WriteDiagnosticStatistics(screenshot.outputPath, *statisticsImage)) {
+					logger::warn(
+						"Failed to write diagnostic image statistics for {}.",
+						screenshot.outputPath.string());
+				}
+			}
+
+			bool saveOk = true;
+			if (screenshot.saveStereoEyesSeparately) {
+				for (uint32_t index = 0; index < 2; ++index) {
+					if (!planeImages[index] || screenshot.eyeOutputPaths[index].empty()) {
+						saveOk = false;
+						break;
+					}
+					Util::FileHelpers::EnsureDirectoryExists(screenshot.eyeOutputPaths[index].parent_path());
+					const auto& plane = screenshot.planes[index];
+					auto& planeImage = plane.flipHorizontal || plane.flipVertical ?
+					                       orientedPlanes[index] :
+					                       mappedPlanes[index];
+					if (!SaveSdrScreenshot(
+							planeImage,
+							screenshot.eyeOutputPaths[index],
+							screenshot.saveAsPng,
+							plane.colorSpace,
+							plane.tonemapSceneHdr)) {
+						saveOk = false;
+						break;
+					}
+				}
+			}
+			if (saveOk && screenshot.saveCombined) {
+				if (screenshot.outputPath.empty()) {
+					saveOk = false;
+				} else {
+					Util::FileHelpers::EnsureDirectoryExists(screenshot.outputPath.parent_path());
+					saveOk = SaveSdrScreenshot(
+						*imageToSave,
+						screenshot.outputPath,
+						screenshot.saveAsPng,
+						combinedColorSpace,
+						combinedTonemapSceneHdr);
+				}
+			}
 
 			if (!saveOk) {
 				reportFailure("Failed to save screenshot.");
 			} else {
-				CopySavedPathToClipboard(screenshot.copyToClipboard, screenshot.outputPath);
-				logger::info("Saved screenshot to {}", screenshot.outputPath.string());
-				ShowInGameNotification(std::format("Screenshot saved: {}",
-					screenshot.outputPath.filename().string()));
+				frameSucceeded = true;
+				if (screenshot.saveCombined) {
+					CopySavedPathToClipboard(screenshot.copyToClipboard, screenshot.outputPath);
+					logger::info("Saved screenshot to {}", screenshot.outputPath.string());
+				}
+				if (!screenshot.suppressNotification) {
+					const auto notificationPath = screenshot.saveCombined ?
+					                                  screenshot.outputPath :
+					                                  screenshot.eyeOutputPaths[0];
+					ShowInGameNotification(std::format(
+						"Screenshot saved: {}",
+						notificationPath.filename().string()));
+				}
 			}
 		} catch (const std::exception& e) {
 			logger::error("Screenshot worker failed with an exception: {}", e.what());
-			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
+			frameFailure = e.what();
+			if (screenshot.sessionId == 0)
+				ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 		} catch (...) {
 			reportFailure("Screenshot worker failed with an unknown exception.");
 		}
@@ -2576,7 +3456,8 @@ bool ScreenshotFeature::StageTexturePlane(
 	uint32_t a_eyeIndex,
 	vr::EColorSpace a_colorSpace,
 	bool a_tonemapSceneHdr,
-	StagedPlane& a_plane)
+	StagedPlane& a_plane,
+	const D3D11_BOX* a_exactSourceRegion)
 {
 	a_plane = {};
 	if (!a_sourceTexture) {
@@ -2629,20 +3510,35 @@ bool ScreenshotFeature::StageTexturePlane(
 		return false;
 	}
 
-	const uint32_t sourceLeft = std::min(
+	uint32_t sourceLeft = std::min(
 		sourceDesc.Width - 1,
 		Util::NormalizedCoordinates::ResolvePixelBoundary(leftUV, sourceDesc.Width));
-	const uint32_t sourceTop = std::min(
+	uint32_t sourceTop = std::min(
 		sourceDesc.Height - 1,
 		Util::NormalizedCoordinates::ResolvePixelBoundary(topUV, sourceDesc.Height));
-	const uint32_t sourceRight = std::clamp(
+	uint32_t sourceRight = std::clamp(
 		Util::NormalizedCoordinates::ResolvePixelBoundary(rightUV, sourceDesc.Width),
 		sourceLeft + 1,
 		sourceDesc.Width);
-	const uint32_t sourceBottom = std::clamp(
+	uint32_t sourceBottom = std::clamp(
 		Util::NormalizedCoordinates::ResolvePixelBoundary(bottomUV, sourceDesc.Height),
 		sourceTop + 1,
 		sourceDesc.Height);
+	if (a_exactSourceRegion) {
+		if (a_exactSourceRegion->left >= a_exactSourceRegion->right ||
+			a_exactSourceRegion->top >= a_exactSourceRegion->bottom ||
+			a_exactSourceRegion->right > sourceDesc.Width ||
+			a_exactSourceRegion->bottom > sourceDesc.Height ||
+			a_exactSourceRegion->front != 0 || a_exactSourceRegion->back != 1) {
+			return false;
+		}
+		sourceLeft = a_exactSourceRegion->left;
+		sourceTop = a_exactSourceRegion->top;
+		sourceRight = a_exactSourceRegion->right;
+		sourceBottom = a_exactSourceRegion->bottom;
+		a_plane.flipHorizontal = false;
+		a_plane.flipVertical = false;
+	}
 	const uint32_t copyWidth = sourceRight - sourceLeft;
 	const uint32_t copyHeight = sourceBottom - sourceTop;
 
@@ -2708,6 +3604,56 @@ bool ScreenshotFeature::StageTexturePlane(
 	a_plane.colorSpace = a_colorSpace;
 	a_plane.tonemapSceneHdr = a_tonemapSceneHdr;
 	return true;
+}
+
+bool ScreenshotFeature::QueueDiagnosticTextureCapture(
+	ID3D11Resource* a_sourceResource,
+	const D3D11_BOX& a_sourceRegion,
+	const std::filesystem::path& a_outputPath,
+	bool a_tonemapSceneHdr,
+	bool a_writeStatistics)
+{
+	if (!a_sourceResource || a_outputPath.empty() ||
+		!globals::state || !globals::state->IsDeveloperMode()) {
+		return false;
+	}
+	if (!TryReserveScreenshotSlot(kMaxOutstandingDiagnosticScreenshots)) {
+		logger::warn("Diagnostic texture capture queue is saturated; skipped {}.", a_outputPath.string());
+		return false;
+	}
+
+	bool ownsQueueSlot = true;
+	const SKSE::stl::scope_exit releaseOnFailure([this, &ownsQueueSlot]() noexcept {
+		if (ownsQueueSlot)
+			ReleaseScreenshotSlot();
+	});
+	winrt::com_ptr<ID3D11Texture2D> sourceTexture;
+	if (FAILED(a_sourceResource->QueryInterface(IID_PPV_ARGS(sourceTexture.put()))) || !sourceTexture)
+		return false;
+
+	PendingScreenshot screenshot;
+	if (!StageTexturePlane(
+			sourceTexture.get(),
+			nullptr,
+			0,
+			vr::ColorSpace_Auto,
+			a_tonemapSceneHdr,
+			screenshot.planes[0],
+			&a_sourceRegion)) {
+		logger::warn("Failed to stage diagnostic texture capture {}.", a_outputPath.string());
+		return false;
+	}
+
+	screenshot.planeCount = 1;
+	screenshot.applyCrop = false;
+	screenshot.saveAsPng = true;
+	screenshot.copyToClipboard = false;
+	screenshot.writeDiagnosticStatistics = a_writeStatistics;
+	screenshot.ownsQueueSlot = true;
+	screenshot.outputPath = a_outputPath;
+	screenshot.suppressNotification = true;
+	ownsQueueSlot = false;
+	return QueueScreenshot(std::move(screenshot));
 }
 
 bool ScreenshotFeature::QueueDesktopCapture(
@@ -2814,12 +3760,32 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 
 	PendingScreenshot completedScreenshot;
 	bool completed = false;
+	bool sessionFrame = false;
+	json sessionManifest;
+	std::filesystem::path sessionManifestPath;
+	bool sessionManifestWritten = false;
+	uint64_t terminalPreviewSessionId = 0;
+	const SKSE::stl::scope_exit finalizeTerminalPreview([this, &terminalPreviewSessionId]() noexcept {
+		if (terminalPreviewSessionId != 0)
+			GenerateCaptureSessionPreviewVideo(terminalPreviewSessionId);
+	});
+	const SKSE::stl::scope_exit persistSessionManifest([this, &sessionManifest, &sessionManifestPath, &sessionManifestWritten]() noexcept {
+		if (!sessionManifestWritten && !sessionManifestPath.empty())
+			WriteCaptureSessionManifest(sessionManifest, sessionManifestPath);
+	});
 	VRCaptureSource completedSource = VRCaptureSource::HMDSubmission;
 	{
 		std::lock_guard lock(captureStateMutex);
 		if (!IsRuntimeEnabled() ||
 			!activeCapture.pending ||
 			!IsSubmittedEyeCapture(activeCapture.source)) {
+			return;
+		}
+		const bool managedSession = activeCapture.sessionId != 0;
+		if (managedSession &&
+			(activeCapture.sessionId != captureSession.status.id ||
+				captureSession.status.state != CaptureSessionState::Capturing ||
+				captureSession.producerFinished)) {
 			return;
 		}
 		const bool framedEyeCapture = activeCapture.source == VRCaptureSource::FramedEye;
@@ -2832,9 +3798,30 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 		}
 
 		if (activeCapture.compositorCycleToken != a_compositorCycleToken) {
+			if (managedSession && (activeCapture.eyeMask != 0 || activeCapture.ownsQueueSlot)) {
+				captureSession.status.incompleteStereoDrops++;
+				if (activeCapture.ownsQueueSlot) {
+					activeCapture.ownsQueueSlot = false;
+					ReleaseScreenshotSlot();
+				}
+			}
 			activeCapture.compositorCycleToken = a_compositorCycleToken;
 			activeCapture.eyeMask = 0;
 			activeCapture.eyes = {};
+		}
+		if (managedSession && !captureSession.cycleGate.IsEligible(a_compositorCycleToken))
+			return;
+		if (managedSession && !activeCapture.ownsQueueSlot) {
+			if (!TryReserveScreenshotSlot()) {
+				captureSession.status.backpressureDrops++;
+				captureSession.cycleGate.RecordAccepted(
+					a_compositorCycleToken,
+					captureSession.status.request.frameInterval);
+				sessionManifest = BuildCaptureSessionManifestLocked();
+				sessionManifestPath = captureSession.status.manifestPath;
+				return;
+			}
+			activeCapture.ownsQueueSlot = true;
 		}
 
 		const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
@@ -2881,7 +3868,7 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 				completedScreenshot.dominantEye = requestedEye;
 				completedScreenshot.eyeProjectionTangents = activeCapture.options.eyeProjectionTangents;
 				completedScreenshot.eyeToHeadTransforms = activeCapture.options.eyeToHeadTransforms;
-				completedScreenshot.hiddenAreaMeshes = std::move(activeCapture.options.hiddenAreaMeshes);
+				completedScreenshot.hiddenAreaMeshes = activeCapture.options.hiddenAreaMeshes;
 				completedScreenshot.stereoProjectionValid = activeCapture.options.stereoProjectionValid;
 			} else {
 				completedScreenshot.cropUV = activeCapture.options.cropUV;
@@ -2890,29 +3877,105 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 		}
 
 		completedScreenshot.saveAsPng = activeCapture.options.saveAsPng;
-		completedScreenshot.copyToClipboard = activeCapture.options.copyToClipboard;
+		completedScreenshot.copyToClipboard = managedSession ? false : activeCapture.options.copyToClipboard;
 		try {
-			completedScreenshot.outputPath = BuildScreenshotPath(
-				activeCapture.options.screenshotPath,
-				completedScreenshot.saveAsPng);
+			if (managedSession) {
+				auto& status = captureSession.status;
+				const uint32_t frameIndex = status.framesQueued + 1;
+				CaptureSessionFrameStatus frame;
+				frame.index = frameIndex;
+				frame.compositorCycleToken = a_compositorCycleToken;
+				if (status.request.saveCombined) {
+					frame.combinedPath = BuildCaptureSessionFramePath(
+						status.outputDirectory,
+						frameIndex,
+						framedEyeCapture ? "eye" : "stereo",
+						completedScreenshot.saveAsPng);
+					completedScreenshot.outputPath = frame.combinedPath;
+				}
+				if (status.request.saveSeparateEyes && !framedEyeCapture) {
+					frame.eyePaths[0] = BuildCaptureSessionFramePath(
+						status.outputDirectory,
+						frameIndex,
+						"left",
+						completedScreenshot.saveAsPng);
+					frame.eyePaths[1] = BuildCaptureSessionFramePath(
+						status.outputDirectory,
+						frameIndex,
+						"right",
+						completedScreenshot.saveAsPng);
+					completedScreenshot.eyeOutputPaths = frame.eyePaths;
+					completedScreenshot.saveStereoEyesSeparately = true;
+				}
+				completedScreenshot.sessionId = status.id;
+				completedScreenshot.sessionFrameIndex = frameIndex;
+				completedScreenshot.compositorCycleToken = a_compositorCycleToken;
+				completedScreenshot.saveCombined = status.request.saveCombined;
+				completedScreenshot.suppressNotification = true;
+				status.frames.push_back(std::move(frame));
+				status.framesQueued++;
+				captureSession.cycleGate.RecordAccepted(
+					a_compositorCycleToken,
+					status.request.frameInterval);
+			} else {
+				completedScreenshot.outputPath = BuildScreenshotPath(
+					activeCapture.options.screenshotPath,
+					completedScreenshot.saveAsPng);
+			}
 		} catch (const std::exception& e) {
 			logger::error("Failed to prepare the VR screenshot output path: {}", e.what());
+			if (managedSession) {
+				captureSession.status.error = std::format("failed to prepare frame output path: {}", e.what());
+				FinishCaptureSessionProducerLocked();
+				if (captureSession.status.state != CaptureSessionState::Draining)
+					terminalPreviewSessionId = captureSession.status.id;
+				sessionManifest = BuildCaptureSessionManifestLocked();
+				sessionManifestPath = captureSession.status.manifestPath;
+			}
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
-			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
+			ShowInGameNotification(managedSession ?
+									   "Capture session failed - see CommunityShaders.log" :
+									   "Screenshot failed - see CommunityShaders.log");
 			return;
 		} catch (...) {
 			logger::error("Failed to prepare the VR screenshot output path.");
+			if (managedSession) {
+				captureSession.status.error = "failed to prepare frame output path";
+				FinishCaptureSessionProducerLocked();
+				if (captureSession.status.state != CaptureSessionState::Draining)
+					terminalPreviewSessionId = captureSession.status.id;
+				sessionManifest = BuildCaptureSessionManifestLocked();
+				sessionManifestPath = captureSession.status.manifestPath;
+			}
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
-			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
+			ShowInGameNotification(managedSession ?
+									   "Capture session failed - see CommunityShaders.log" :
+									   "Screenshot failed - see CommunityShaders.log");
 			return;
 		}
 		completedScreenshot.ownsQueueSlot = std::exchange(activeCapture.ownsQueueSlot, false);
 		completedSource = activeCapture.source;
-		ClearActiveCapture(activeCapture);
-		capturePending.store(false, std::memory_order_release);
+		if (managedSession) {
+			sessionFrame = true;
+			activeCapture.compositorCycleToken = 0;
+			activeCapture.eyeMask = 0;
+			activeCapture.eyes = {};
+			activeCapture.presentsWaited = 0;
+			if (captureSession.status.framesQueued >= captureSession.status.request.frameCount)
+				FinishCaptureSessionProducerLocked();
+			sessionManifest = BuildCaptureSessionManifestLocked();
+			sessionManifestPath = captureSession.status.manifestPath;
+		} else {
+			ClearActiveCapture(activeCapture);
+			capturePending.store(false, std::memory_order_release);
+		}
 		completed = true;
+	}
+	if (!sessionManifestPath.empty()) {
+		WriteCaptureSessionManifest(sessionManifest, sessionManifestPath);
+		sessionManifestWritten = true;
 	}
 
 	if (completed) {
@@ -2928,8 +3991,18 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 			logger::debug("Capturing the accepted OpenVR HMD eye pair");
 			break;
 		}
+		const uint64_t sessionId = completedScreenshot.sessionId;
+		const uint32_t frameIndex = completedScreenshot.sessionFrameIndex;
 		if (!QueueScreenshot(std::move(completedScreenshot))) {
-			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
+			if (sessionFrame) {
+				RecordCaptureSessionFrameResult(
+					sessionId,
+					frameIndex,
+					false,
+					"failed to queue staged frame");
+			} else {
+				ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
+			}
 		}
 	}
 }
@@ -2941,35 +4014,68 @@ void ScreenshotFeature::OnBeforePresent(IDXGISwapChain* a_swapChain)
 		return;
 	}
 
-	std::lock_guard lock(captureStateMutex);
-	if (!IsRuntimeEnabled() || !activeCapture.pending) {
-		return;
-	}
-
-	++activeCapture.presentsWaited;
-	if (activeCapture.source == VRCaptureSource::HMDSubmission) {
-		if (activeCapture.presentsWaited >= kCaptureTimeoutPresents) {
-			FallBackToDesktopCapture(activeCapture, "no coherent accepted eye pair arrived before the timeout");
+	json sessionManifest;
+	std::filesystem::path sessionManifestPath;
+	std::string terminalNotification;
+	uint64_t terminalSessionId = 0;
+	bool queued = true;
+	{
+		std::lock_guard lock(captureStateMutex);
+		if (!IsRuntimeEnabled() || !activeCapture.pending) {
+			return;
 		}
-		return;
-	}
-	if (IsFramedCapture(activeCapture.source)) {
-		if (activeCapture.presentsWaited >= kCaptureTimeoutPresents) {
-			logger::warn("Framed-view screenshot capture timed out before the required eye submission arrived.");
+
+		const bool managedSession = activeCapture.sessionId != 0;
+		if (!managedSession || activeCapture.ownsQueueSlot || activeCapture.eyeMask != 0)
+			++activeCapture.presentsWaited;
+		if (activeCapture.source == VRCaptureSource::HMDSubmission) {
+			if (activeCapture.presentsWaited >= kCaptureTimeoutPresents) {
+				if (managedSession) {
+					captureSession.status.error = "no coherent accepted stereo pair arrived before the timeout";
+					FinishCaptureSessionProducerLocked();
+					sessionManifest = BuildCaptureSessionManifestLocked();
+					sessionManifestPath = captureSession.status.manifestPath;
+					if (captureSession.status.state == CaptureSessionState::Failed) {
+						terminalSessionId = captureSession.status.id;
+						terminalNotification = "Stereo capture session failed - missing eye submission";
+					}
+				} else {
+					FallBackToDesktopCapture(activeCapture, "no coherent accepted eye pair arrived before the timeout");
+				}
+			}
+		} else if (IsFramedCapture(activeCapture.source)) {
+			if (activeCapture.presentsWaited >= kCaptureTimeoutPresents) {
+				logger::warn("Framed-view screenshot capture timed out before the required eye submission arrived.");
+				if (managedSession) {
+					captureSession.status.error = "framed-view capture timed out before the required eye submission arrived";
+					FinishCaptureSessionProducerLocked();
+					sessionManifest = BuildCaptureSessionManifestLocked();
+					sessionManifestPath = captureSession.status.manifestPath;
+					if (captureSession.status.state == CaptureSessionState::Failed) {
+						terminalSessionId = captureSession.status.id;
+						terminalNotification = "Framed-view capture session failed - missing eye submission";
+					}
+				} else {
+					ClearActiveCapture(activeCapture);
+					capturePending.store(false, std::memory_order_release);
+					terminalNotification = "Framed-view screenshot failed - missing eye submission";
+				}
+			}
+		} else {
+			queued = QueueDesktopCapture(
+				a_swapChain,
+				activeCapture.options,
+				std::exchange(activeCapture.ownsQueueSlot, false));
 			ClearActiveCapture(activeCapture);
 			capturePending.store(false, std::memory_order_release);
-			ShowInGameNotification("Framed-view screenshot failed - missing eye submission");
 		}
-		return;
 	}
-
-	const bool queued = QueueDesktopCapture(
-		a_swapChain,
-		activeCapture.options,
-		std::exchange(activeCapture.ownsQueueSlot, false));
-	ClearActiveCapture(activeCapture);
-	capturePending.store(false, std::memory_order_release);
-	if (!queued) {
+	if (!sessionManifestPath.empty())
+		WriteCaptureSessionManifest(sessionManifest, sessionManifestPath);
+	if (terminalSessionId != 0)
+		GenerateCaptureSessionPreviewVideo(terminalSessionId);
+	if (!terminalNotification.empty())
+		ShowInGameNotification(std::move(terminalNotification));
+	if (!queued)
 		ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
-	}
 }

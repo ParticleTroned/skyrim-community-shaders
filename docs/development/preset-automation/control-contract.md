@@ -68,6 +68,22 @@ Mutation responses must return the accepted requested value and the effective va
 
 The first automation controls should be the audited live inner switches for IBL and Volumetric Shadows. General arbitrary JSON rewriting is not an acceptable substitute for typed validation and effective-state readback.
 
+The Release+DevBench build now exposes those first controls through `communityshaders.controls`. `list` returns the writable live controls together with their package-level restart boundary; `get` reads one record; and `set` accepts a typed Boolean value. Mutations are deliberately session-only so an interrupted experiment cannot silently rewrite the user's preset:
+
+```json
+{"action":"list"}
+```
+
+```json
+{"action":"set","feature":"ImageBasedLighting","control":"EnableIBL","value":false}
+```
+
+```json
+{"action":"set","feature":"VolumetricShadows","control":"Enabled","value":true}
+```
+
+Every response distinguishes the setting's effective value from `runtimeActive`, which may additionally depend on scene state such as an IBL interior exclusion or the presence of directional shadows. Package-level `packageEnabled` records are read-only and report `restart`; they must not be confused with the live inner controls.
+
 ## Promotion toward live transitions
 
 Converting a control to `live` requires feature-specific proof that enable, disable, and repeated A/B/A transitions:

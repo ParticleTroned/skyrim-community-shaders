@@ -167,3 +167,21 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Consequences: preset generation retains one common Boolean and does not create a vendor fork; future tuning should seek a quality gradient before reconsidering wholesale disable
 - Revalidation triggers: moving/physical HMD, SteamVR/OpenXR/VDXR/OCU lane, NVIDIA GPU, shadow-provider algorithm/resource change, or a new anchor with materially larger attributable response
 - Supersedes: none
+
+### `PA-2026-009` — Keep calibration evidence outside MO2 and SkyrimVR
+
+- Date: 2026-08-17
+- Status: adopted
+- Snapshot: RootBuilder resource-exhaustion incident after the first autonomous screening session
+- Question: Where may high-volume capture and profiler artifacts persist between MO2 launches?
+- Scope: all preset-calibration screenshots, sequences, profiler payloads, and derived diagnostics
+- Hard constraints: RootBuilder must never hash or deploy the evidence archive; SkyrimVR and MO2 must be stopped before staging is moved; evidence provenance and timestamps must survive relocation
+- Options considered: retain evidence beneath `overwrite\Root`; manually clean it occasionally; write to an external archive by default and drain accidental staging at every session boundary
+- Evidence: `overwrite\Root\CSX Baselines` contained 12,328 files and about 165.6 GB, while `Screenshots\PipelineDiagnostics` contained 530 files and about 0.829 GB. RootBuilder attempted per-file threaded hashing, exhausted open-file capacity, constructed an approximately 861,371-node virtual tree, and copied about 164.2 GB into the SkyrimVR directory before the derived installation was manually removed and SkyrimVR reinstalled.
+- Objective vector and uncertainty: external storage removes RootBuilder deployment cost and D: duplication; direct game-process writes to `L:` still require a runtime proof after reinstall
+- Pareto result: overwrite retention has no evidence-quality advantage and creates catastrophic resource and duplication risk
+- Decision: resolve automation defaults through the repository-local external archive setting; treat MO2 overwrite as session-only staging; run the bounded finaliser before any later MO2 launch
+- Confidence: high
+- Consequences: this workstation uses `L:\CSX Preset Automation`; historical absolute evidence paths follow the archive move; campaign locators and hashes remain the stable identities
+- Revalidation triggers: MO2/RootBuilder behavior change, archive-drive change, capture-path permission failure, or introduction of a session orchestrator that enforces an equivalent boundary
+- Supersedes: none

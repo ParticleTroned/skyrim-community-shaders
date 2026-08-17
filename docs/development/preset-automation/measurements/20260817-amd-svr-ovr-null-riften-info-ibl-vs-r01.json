@@ -168,7 +168,7 @@
       "id": "profiler-samples",
       "role": "Raw resolved CSX profiler responses for 38 unique captured frames",
       "locator": "campaign://20260817-amd-svr-ovr-null-riften-info-ibl-vs-r01/profiler-samples.json",
-      "localPath": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\CSX Baselines\\20260817-amd-svr-ovr-null-riften-info-ibl-vs-r01\\profiler-samples.json",
+      "localPath": "L:\\CSX Preset Automation\\Sessions\\2026-08-17\\MO2-overwrite\\CSX Baselines\\20260817-amd-svr-ovr-null-riften-info-ibl-vs-r01\\profiler-samples.json",
       "mediaType": "application/json",
       "bytes": 976921,
       "sha256": "5E78B44A674359BABB7B98F4999FCC80197CEEC432BB3577B9A398BF4802CCF9",

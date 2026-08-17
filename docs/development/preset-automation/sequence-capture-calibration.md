@@ -39,11 +39,11 @@ The combined BMP was 19.38 MiB per stereo frame. The sustained 120-frame run plu
 
 Authoritative external artifacts are retained under:
 
-`D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\20260817-sequence-calibration`
+`L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\20260817-sequence-calibration`
 
 and:
 
-`D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\20260817-sequence-calibration-bmp`
+`L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\20260817-sequence-calibration-bmp`
 
 Each session directory contains its evolving/final `capture-manifest.json`. The zero-drop sustained combined run is `CS_Capture_2026-08-17_13-30-56_112_riften-120f-i03-combined-bmp-preview30_0004`; the zero-drop dense separate-eye run is `CS_Capture_2026-08-17_13-31-34_391_riften-60f-i04-separate-bmp_0006`.
 

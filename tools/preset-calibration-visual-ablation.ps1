@@ -41,10 +41,12 @@ param(
     [ValidatePattern('^[A-Fa-f0-9]{64}$')]
     [string]$DllSha256 = '7582AD4F96662385105C9EFEE48FDD1EDDE9A9629451C082CF4E9F8E4A787043',
 
-    [string]$OutputRoot = 'D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-visual'
+    [string]$OutputRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'preset-calibration-storage.ps1')
+$OutputRoot = Resolve-PresetCalibrationOutputRoot -OutputRoot $OutputRoot -Collection 'preset-automation-visual'
 $baseUri = 'http://127.0.0.1:8921/api/tool/'
 $controlName = $Control
 $snapshotHeld = $false

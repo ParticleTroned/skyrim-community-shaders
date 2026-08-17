@@ -28,7 +28,7 @@ param(
     [ValidateRange(20, 1000)]
     [int]$PollMilliseconds = 50,
 
-    [string]$OutputRoot = 'D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-screening',
+    [string]$OutputRoot = '',
 
     [ValidateRange(10, 300)]
     [int]$PhaseTimeoutSeconds = 90,
@@ -41,6 +41,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'preset-calibration-storage.ps1')
+$OutputRoot = Resolve-PresetCalibrationOutputRoot -OutputRoot $OutputRoot -Collection 'preset-automation-screening'
 $baseUri = 'http://127.0.0.1:8921/api/tool/'
 $controlName = $Control
 $snapshotHeld = $false

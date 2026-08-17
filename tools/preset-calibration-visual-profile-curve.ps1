@@ -35,10 +35,12 @@ param(
     [ValidatePattern('^[A-Fa-f0-9]{7,40}$')]
     [string]$SourceCommit,
 
-    [string]$OutputRoot = 'D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-visual-curves'
+    [string]$OutputRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'preset-calibration-storage.ps1')
+$OutputRoot = Resolve-PresetCalibrationOutputRoot -OutputRoot $OutputRoot -Collection 'preset-automation-visual-curves'
 $baseUri = 'http://127.0.0.1:8921/api/tool/'
 $controlName = 'qualityProfile'
 $snapshotHeld = $false

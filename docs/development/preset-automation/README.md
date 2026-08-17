@@ -29,6 +29,7 @@ Hard correctness and stability constraints are applied first. Surviving candidat
 | Interaction ledger | Producer, consumer, composition, correctness, and performance relationships | [`interaction-ledger.md`](./interaction-ledger.md) |
 | Control contract | Live/reload/restart mutability, UI disclosure, and automation API requirements | [`control-contract.md`](./control-contract.md) |
 | Benchmark protocol | Controlled scenes, capture procedure, runtime lanes, and validity gates | [`benchmark-protocol.md`](./benchmark-protocol.md) |
+| Artifact storage policy | Archive resolution, safe staging, and mandatory session finalisation | [`storage-policy.md`](./storage-policy.md) |
 | Sequence capture calibration | Measured lossless throughput envelopes and temporal/stereo capture profiles | [`sequence-capture-calibration.md`](./sequence-capture-calibration.md) |
 | Anchor scenes | Validated scene recipes, time/weather variants, expected pose, and retained proof captures | [`anchor-scenes.md`](./anchor-scenes.md) |
 | Measurement run | Machine-readable provenance and results for one controlled run | [`measurements/`](./measurements/README.md) |

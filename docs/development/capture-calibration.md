@@ -106,7 +106,7 @@ and mean factor `0.96475648`:
 
 - PNG SHA-256: `748992673708358752AEB012326EC478B5DCD1416E6C56F50D94E3DED89A3E30`;
 - statistics SHA-256: `2F1E27BEC91972B76D4CAF1277CC9DEC5D210AF06B52AD0D5B1657FB33A7E659`;
-- root: `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-sss-factorial\20260817-factor-api-proof`.
+- archived root: `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\preset-automation-sss-factorial\20260817-factor-api-proof`.
 
 Status and the manifest report every accepted frame index and compositor-cycle token, all output paths, encoding results, incomplete stereo-pair drops, and queue-backpressure drops. A left/right pair is accepted only when both submissions share the same accepted OpenVR compositor-cycle token. A new cycle discards an incomplete old pair.
 

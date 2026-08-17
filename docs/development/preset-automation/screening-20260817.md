@@ -7,8 +7,8 @@ Status: accepted source evidence; sufficient for response-curve routing, not fin
 This screen used an AMD GPU in the native OpenVR → SteamVR null-HMD lane (`SVR-OVR-NULL`), Skyrim VR, Info logging, and the Release+DevBench bridge from commit `9218ec2e8`:
 
 - DLL SHA-256: `03E8062D9401F03DBD0190E9EA119F3EAC8BD5D01FDF1433B1D0D5362D1E7B8D`;
-- timing root: `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-screening`;
-- visual root: `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-visual`.
+- archived timing root: `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\preset-automation-screening`;
+- archived visual root: `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\preset-automation-visual`.
 
 The timing runner collected an A/B/A sequence with 120 unique, resolved, post-arm profiler samples in every phase. Capture was disabled during timing. The visual runner separately collected temporal A/B/A sequences from the production HMD submission path and required exact frame counts, zero failed or incomplete stereo pairs, zero backpressure drops, effective-state readback, and exact in-memory baseline restoration.
 

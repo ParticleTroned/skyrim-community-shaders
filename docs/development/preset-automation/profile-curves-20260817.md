@@ -7,8 +7,8 @@ Status: accepted source evidence; enough to constrain provisional tier choices f
 These runs extend the first AMD screen in the native OpenVR → SteamVR null-HMD lane (`SVR-OVR-NULL`). They use Skyrim VR at the fixed Guardian Stones pose, Info logging, and the Release+DevBench bridge built from commit `dbad76d12`:
 
 - DLL SHA-256: `35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D`;
-- timing root: `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-curves`;
-- visual root: `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-visual-curves`.
+- archived timing root: `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\preset-automation-curves`;
+- archived visual root: `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\preset-automation-visual-curves`.
 
 Every accepted timing sweep collected a Quality baseline, Performance/Balanced/Quality phases, and a restored Quality baseline with 120 unique resolved profiler samples per phase. Every accepted visual sweep captured the same five phases as 30 combined-stereo BMP pairs at a four-compositor-cycle cadence, with exact frame counts and zero backpressure or incomplete-pair drops. Each feature was measured in both PBQ and reverse QBP order. Capture and profiling were kept separate.
 
@@ -148,7 +148,7 @@ provisional perceptual tier, but no GPU-saving claim is attached until a named
 timer or equivalent attributable instrumentation exists.
 
 Evidence root:
-`D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-wetness-factorial`
+`L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\preset-automation-wetness-factorial`
 
 | Paired-order run | Manifest SHA-256 | Primary analysis SHA-256 |
 | --- | --- | --- |

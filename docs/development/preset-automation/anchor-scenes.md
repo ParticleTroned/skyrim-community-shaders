@@ -37,9 +37,9 @@ The next control proof should use a synthetic tracked-device/controller driver w
 | `exterior-guardian-stones-fog-dawn` | Same pose under low-contrast depth fog and dawn exposure | Same entry; 07:00; `fw C821E`; 3 s | `-1.5500009060` | `CS_Capture_2026-08-17_12-24-50_131_guardian-stones-fog-dawn-0700_0005` |
 | `exterior-windhelm-snow-midday` | High-albedo snow, dark carved stone, metal, firelight, foreground shadow | `coc WindhelmExterior01`; 12 s; `set gamehour to 12.0`; 1.5 s; retain natural `SkyrimCloudySN` | `-0.0450205393` | `CS_Capture_2026-08-17_12-25-29_941_windhelm-cloudy-snow-midday_0006` |
 
-Proof captures are under `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\20260817-anchor-scout`. Every listed capture completed one raw `hmd_stereo` pair with separate eyes and combined derivative, zero failed frames, zero incomplete-pair drops, and zero backpressure drops.
+Proof captures are archived under `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\20260817-anchor-scout`. Every listed capture completed one raw `hmd_stereo` pair with separate eyes and combined derivative, zero failed frames, zero incomplete-pair drops, and zero backpressure drops.
 
-The Whiterun multi-depth proof remains useful as rejected historical evidence at `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\20260817-distance-scout\CS_Capture_2026-08-17_16-16-34_026_Scout-WhiterunExterior01_0064`. Do not use it in a reproducible campaign until a save, synthetic HMD pose, or another validated recipe recreates its view.
+The Whiterun multi-depth proof remains useful as rejected historical evidence at `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\20260817-distance-scout\CS_Capture_2026-08-17_16-16-34_026_Scout-WhiterunExterior01_0064`. Do not use it in a reproducible campaign until a save, synthetic HMD pose, or another validated recipe recreates its view.
 
 The earlier Riften waterfront save remains useful for continuity with the first IBL campaign, but it is not the canonical entry for this new inventory. Its entry is `Save3_2FC025CB_0_776964646C65_RiftenWorld_000002_20260812061218_1_1`, cell `RiftenCityNorth` (`0x00042249`) in `RiftenWorld` (`0x00016BB4`).
 

@@ -12,10 +12,12 @@ param(
     [ValidatePattern('^[A-Fa-f0-9]+$')][string]$WeatherForm,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$DllSha256,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9]{7,40}$')][string]$SourceCommit,
-    [string]$OutputRoot = 'D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-interactions'
+    [string]$OutputRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'preset-calibration-storage.ps1')
+$OutputRoot = Resolve-PresetCalibrationOutputRoot -OutputRoot $OutputRoot -Collection 'preset-automation-interactions'
 $baseUri = 'http://127.0.0.1:8921/api/tool/'
 $hasGameHour = $PSBoundParameters.ContainsKey('GameHour')
 $profilerWasEnabled = $false

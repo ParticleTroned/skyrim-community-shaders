@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "validatedAt": "2026-08-17",
   "runtimeLane": "SVR-OVR-NULL",
-  "captureRoot": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\CSX Baselines\\20260817-anchor-scout",
+  "captureRoot": "L:\\CSX Preset Automation\\Sessions\\2026-08-17\\MO2-overwrite\\CSX Baselines\\20260817-anchor-scout",
   "recipeDefaults": {
     "postCocWaitMs": 12000,
     "postTimeWaitMs": 1500,
@@ -90,7 +90,7 @@
       "actualRepeatedCocCameraYaw": 2.2832105,
       "retainedProofPosition": [18963.80078125, -11937.5205078125, -4515.8876953125],
       "retainedProofCameraYaw": -1.5154038667678833,
-      "proofCaptureRoot": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\CSX Baselines\\20260817-distance-scout",
+      "proofCaptureRoot": "L:\\CSX Preset Automation\\Sessions\\2026-08-17\\MO2-overwrite\\CSX Baselines\\20260817-distance-scout",
       "proofCapture": "CS_Capture_2026-08-17_16-16-34_026_Scout-WhiterunExterior01_0064"
     }
   ],

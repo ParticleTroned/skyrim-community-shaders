@@ -8,8 +8,8 @@ These tests use the same AMD native OpenVR → SteamVR null-HMD lane (`SVR-OVR-N
 
 - source commit: `dbad76d12`;
 - DLL SHA-256: `35D76E9B86EA8928E56CA52C83727B102AF7A10597394A4967E7B3728315453D`;
-- timing root: `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-interactions`;
-- visual root: `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-interaction-visual`.
+- archived timing root: `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\preset-automation-interactions`;
+- archived visual root: `L:\CSX Preset Automation\Sessions\2026-08-17\MO2-overwrite\CSX Baselines\preset-interaction-visual`.
 
 Each pair used a full `2 × 2` factorial:
 

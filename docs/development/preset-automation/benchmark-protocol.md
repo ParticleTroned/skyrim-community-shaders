@@ -70,6 +70,8 @@ The `SVR-OVR-NULL` proof of concept succeeds only when all of the following are 
 
 Use the validated recipes and live readback tolerances in [`anchor-scenes.md`](./anchor-scenes.md) and [`anchor-scenes.json`](./anchor-scenes.json). In the current null-HMD stack, cell-entry poses are reproducible but arbitrary HMD steering is not: DevBench free-camera activation crashes Skyrim VR, and changing player yaw does not change the submitted-eye view. A run must therefore use the declared entry pose until synthetic tracked-device input or a VR-safe camera control is validated.
 
+Before the first MO2 launch of a session, apply the [artifact storage policy](./storage-policy.md): the external archive must be available and retained prior-session evidence must not remain beneath `overwrite\Root`. Calibration scripts write to the configured external archive by default.
+
 Before each candidate:
 
 1. Record the repository commit, built DLL digest/version, dependency snapshot when relevant, driver, runtime lane, HMD geometry, game configuration, mod list/profile, and complete CSX settings digest.
@@ -79,6 +81,8 @@ Before each candidate:
 5. Run the visual pass separately using the same candidate and pose/motion script.
 6. Preserve raw left and right submissions for stereo analysis. Treat combined or preview output as derivative evidence.
 7. Repeat candidates in a balanced order and include a return-to-baseline check to expose drift.
+
+After the final candidate, stop Skyrim and MO2 and run the session finaliser. Do not begin another MO2 launch while calibration or screenshot trees remain in overwrite staging.
 
 DevBench console writes and other fire-and-forget mutations are not evidence that the requested state has already taken effect. After such a mutation, wait through an explicit settle barrier and read the affected state back. Record the verified snapshot, not the pre-mutation request time.
 

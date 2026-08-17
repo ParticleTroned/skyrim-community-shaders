@@ -57,6 +57,10 @@ function Set-ParameterValue {
         if ([Math]::Abs($Value - [Math]::Round($Value)) -gt 0.000001) { throw "$Feature parameter $Parameter requires an integer value" }
         $requestValue = [int][Math]::Round($Value)
     }
+    elseif ($definitionProperty.Value.valueType -eq 'boolean') {
+        if ($Value -ne 0.0 -and $Value -ne 1.0) { throw "$Feature parameter $Parameter requires 0 or 1 for Boolean automation" }
+        $requestValue = [bool][int]$Value
+    }
     $transition = Invoke-DevBenchTool -Tool 'communityshaders.controls' -Payload @{
         action = 'set'; feature = $Feature; control = $controlName; value = @{ $Parameter = $requestValue }
     }

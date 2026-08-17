@@ -118,8 +118,9 @@ This is the first policy synthesis, not a release qualification. “Retain” me
 | Screen Space Shadows | 16 reference samples, 20,480 cull | 30 samples, 20,480 cull | 44 samples, unlimited range | Provisional evidence-backed gradient; keep enabled | Medium-high for sample cost/direction and fixed-pose eye symmetry; direct factor capture with sample count held constant finds a Guardian unlimited-range response about 6× the static-interior robust floor, supporting the Quality candidate. Known-distance attribution and moving stereo edges remain open |
 | Wetness | Typed Performance density/lifetime/range profile | Typed Balanced profile | Typed Quality profile | Keep enabled; preserve the now independently visible coverage/event gradient, but do not claim a measured tier cost | Medium-high for feature importance, IBL interaction, and perceptual tier separation on AMD `SVR-OVR-NULL`; low for tier GPU cost and directional temporal stability. Performance fade is effectively 7,002.801, not requested 5,000 |
 | Grass Collision | Off | On | On | Retain inherited gradient | Low; static null pose did not exercise collision. Requires reproducible controller/player/grass movement |
-| SSGI | Retain inherited Performance values | Retain inherited Balanced values | Retain inherited Quality values | Unqualified inheritance only | Low; inactive in the current runtime baseline and no response curve yet |
+| SSGI | Evaluation candidate: AO-only, interiors only, Quarter resolution | Evaluation candidate: AO-only, interiors only, Half resolution | Evaluation candidate: AO-only, interiors only, Full resolution | Strong AO contribution and monotonic cost curve; keep disabled in release-safe fallback until ambient/stereo gates pass | Medium-high for AMD fixed-pose AO magnitude and cost; low for ambient-cluster interaction, moving stereo, runtime, and vendor portability |
 | Terrain Blending | 725 cull distance | 1,024 | 1,024 | Retain inherited gradient | Low-medium; continuous pass floor measured near 0.0205 ms, but distance response and cutoff visibility are open |
+| Volumetric Lighting | Low exterior/interior quality | Medium exterior/interior quality | High exterior/interior quality | Provisional measured gradient; retain enabled | High for named-pass cost ordering and live mutability; low for perceptual ordering because clear/fog static captures were drift-limited and no strong shaft anchor is reproducible yet |
 | Volumetric Shadows | Enabled | Enabled | Enabled | Keep common; no on/off tier split | Medium on AMD `SVR-OVR-NULL`; six named passes cost ~0.0384 ms continuously, while fog/day visual effects are subtle and drift-limited. Shared cross-material directional-shadow semantics outweigh the small saving; moving/physical-HMD and runtime portability remain open |
 | Upscaling quality | Intent corresponding to inherited mode 4 | Intent corresponding to inherited mode 3 | Intent corresponding to inherited mode 2 | Retain tier intent; resolve provider by capability | Low for current visual/performance quality because no provider curve was run; high that vendor selection belongs at this boundary |
 
@@ -148,8 +149,10 @@ The minimum remaining gates are:
 2. Wetness known-depth near/far material target plus physical/moving-HMD precipitation sequence with IBL active; the fixed-pose 60-frame paired-order sequences now qualify the independent magnitude but not signed motion stability;
 3. Terrain Blending 725/1,024 boundary scene;
 4. Grass Collision controlled movement scene;
-5. an active volumetric-light/fog scene, because the first Dragonsreach anchor did not exercise it;
+5. a reproducible strong volumetric-shaft/dense-fog scene; Guardian clear/fog now establishes cost and a low-confidence visual floor, but not perceptual tier ordering;
 6. at least one interior/day, interior/night, exterior/day, exterior/night, and adverse-weather coverage pass;
 7. occupied physical-HMD comparison in native SteamVR/OpenVR;
 8. OCU/OpenXR via SteamVR OpenXR and VDXR as distinct lanes; and
 9. NVIDIA validation against the same policy, introducing only evidence-backed provider/capability overrides.
+
+Before enabling the SSGI candidate in generated release presets, add a paired IBL × Skylighting × SSGI ambient-composition screen and a moving/physical-HMD stereo/disocclusion sequence. The accepted Dragonsreach on/off result proves that AO is meaningful; it does not yet prove that the combined ambient stack is correctly balanced.

@@ -221,3 +221,39 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Consequences: preset generation keeps one vendor-neutral tier path; the result must be labelled provisional rather than promoted as a qualified optimization
 - Revalidation triggers: visible terrain/static seam spanning 10.35–14.62 m, moving or physical HMD, foliage-free exterior, OpenXR/VDXR/OCU lane, NVIDIA hardware, or Terrain Blending pass/culling changes
 - Supersedes: none
+
+### `PA-2026-012` — Use the preallocated Volumetric Lighting tier gradient provisionally
+
+- Date: 2026-08-17
+- Status: adopted provisionally
+- Snapshot: first typed Low/Medium/High exterior timing and clear/fog lossless stereo curves
+- Question: Should Volumetric Lighting remain High in every tier or use the engine's preallocated quality gradient?
+- Scope: AMD `SVR-OVR-NULL`, Guardian Stones clear day and fog dawn, Info logging
+- Hard constraints: retain the feature; do not conflate it with Volumetric Shadows; custom target sizes remain restart-bound; no perceptual claim beyond the tested fixed poses
+- Options considered: High common; Low common; Low/Medium/High tier gradient
+- Evidence: [SSGI and Volumetric Lighting calibration](./ssgi-volumetric-lighting-20260817.md), with 120-frame timing phases and two lossless visual anchors
+- Objective vector and uncertainty: named-pass medians rise monotonically from about 0.12 to 0.14 to 0.20 ms; visual Low/High differences were not confidently separable from returning-baseline drift; strong volumetric shafts and moving-view stability remain open
+- Pareto result: Low is cheaper with no detected loss in the tested compositions, but untested shaft/fog structure prevents declaring High dominated globally; the gradient preserves a conservative Quality ceiling
+- Decision: use Low / Medium / High for Performance / Balanced / Quality as a provisional vendor-neutral candidate
+- Confidence: high for AMD cost ordering and control mutability; low for perceptual ordering and portability
+- Consequences: expose the same gradient to AMD and NVIDIA; never use custom target dimensions in unattended live sweeps
+- Revalidation triggers: reproducible strong godrays, dense fog, physical/moving HMD, another runtime lane, NVIDIA, or volumetric resource implementation changes
+- Supersedes: none
+
+### `PA-2026-013` — Promote SSGI AO to a gated tier candidate
+
+- Date: 2026-08-17
+- Status: proposed; blocked from release generation by ambient-composition and moving-stereo gates
+- Snapshot: first AO-only enable and Full/Half/Quarter curves with owned preconfiguration restoration
+- Question: Should the inherited all-disabled SSGI state remain common, or should AO become a tiered preset component?
+- Scope: AMD `SVR-OVR-NULL`, Guardian Stones timing and Dragonsreach visual/on-off timing, Info logging, AO-only resources
+- Hard constraints: `ResourceProfile=AO-only`; no GI/IL/specular activation; no double ambient/double AO; exact restoration to the original disabled state; physical/moving-HMD stereo remains unqualified
+- Options considered: remain disabled; enable Quality only; enable interiors in all tiers with Quarter/Half/Full resolution
+- Evidence: [SSGI and Volumetric Lighting calibration](./ssgi-volumetric-lighting-20260817.md). Half-resolution AO costs about 0.15–0.18 ms whole-frame in Dragonsreach and produces a repeatable ~1.16–1.20 mean-luma contribution with ~0.79 residual correlation. Named SSGI work is about 0.35–0.37 ms Full, 0.14 ms Half, and 0.06 ms Quarter.
+- Objective vector and uncertainty: AO contribution and cost are repeatable with close eye agreement; resolution visual ordering is subtler and NPC-contaminated; interaction with IBL/Skylighting/engine ambient and moving stereo is not yet qualified
+- Pareto result: inexpensive Quarter/Half AO supplies a real perceptual contribution, so the inherited dormant values are not an adequate final policy; correctness gates still dominate the apparent benefit
+- Decision: evaluate interiors-only AO at Quarter / Half / Full for Performance / Balanced / Quality; retain all-disabled as the release-safe fallback until the ambient and stereo gates pass
+- Confidence: medium-high for fixed-pose AMD magnitude and cost; low for release correctness and portability
+- Consequences: generated development candidates may carry the gradient behind an explicit experimental/gated status; release presets must not enable it silently yet
+- Revalidation triggers: IBL × Skylighting × SSGI factorial, Vanilla SSAO state audit, moving/physical HMD, disocclusion sequence, alternate runtime, NVIDIA, or SSGI history/resource changes
+- Supersedes: the unqualified SSGI inheritance row, but not the current release-safe disabled fallback

@@ -628,7 +628,7 @@ namespace
 				{ "requestedValue", effective },
 				{ "effectiveValue", effective },
 				{ "runtimeActive", available && ssgi.settings.Enabled },
-				{ "ready", available && !ssgi.recompileFlag && ssgi.ShadersOK() },
+				{ "ready", available && (!ssgi.settings.Enabled || (!ssgi.recompileFlag && ssgi.ShadersOK())) },
 				{ "mutability", "mixed-live-and-live-recompile-settle" },
 				{ "settle", { { "kind", "frames-and-readiness" }, { "minimumFrames", 8 }, { "requiresMenuClose", false }, { "resetsHistory", true } } },
 				{ "cacheImpact", "resolution-and-adaptive-settings-select-runtime-shader-variants; Info cache lane is retained" },

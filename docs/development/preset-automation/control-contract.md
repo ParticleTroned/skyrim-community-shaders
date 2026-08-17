@@ -23,7 +23,9 @@ The long-term objective is to convert controls to safe live transitions wherever
 - The main feature-list switch changes the boot-disabled feature list. It is currently `restart` for every feature and does not unload or initialize a feature in the running process.
 - IBL's inner `EnableIBL` setting is `live`: render-time state checks the setting and scene exclusions. It is distinct from disabling the complete IBL feature package in the feature list.
 - Volumetric Shadows' inner `Enabled` setting is `live`: disabling it stops the copy/compute path and clears the shared shadow-map binding. It is distinct from disabling the complete feature package in the feature list.
-- Known examples of genuine restart boundaries include VR Dynamic Cubemaps SSR enablement, SSGI resource-profile changes, VR Volumetric Lighting resource changes, selected upscaler/frame-generation resource options, and compute-shader define changes.
+- Volumetric Lighting Low/Medium/High selection is `live-resource-rebind-settle`: the engine's preallocated grid tiers are rebound and cleared without shader compilation. Custom VR grid dimensions remain restart-bound because they change target allocation.
+- SSGI enablement, interior gating, slice/step counts, and cull distance are live. Full/Half/Quarter resolution is `live-recompile-settle` and resets history. The AO-only/full-GI `ResourceProfile` remains restart-bound because it determines buffer allocation and the available shader set.
+- Known examples of other genuine restart boundaries include VR Dynamic Cubemaps SSR enablement, selected upscaler/frame-generation resource options, and compute-shader define changes that are not served by an audited runtime compiler path.
 - A restart used merely because automation can only replace an on-disk settings file is a harness limitation, not evidence that the underlying renderer control is restart-bound.
 
 This list is a seed audit, not a complete inventory. Each feature dossier should link its audited controls here or carry the equivalent structured records.
@@ -118,6 +120,8 @@ The first profile selection holds the complete feature state; later selections i
 Records expose the profile definitions and effective parameter readback. Mutability is feature-specific:
 
 - Skylighting recreates probe-grid resources, resets its history, and reports readiness after a five-second settle;
+- SSGI exposes a mixed typed object: Boolean and scalar sampling controls are live, resolution reports shader readiness, and allocation-profile fields are read-only/restart-bound;
+- Volumetric Lighting exposes only its safe `0..2` preallocated quality tiers; custom target dimensions are disclosed but not writable;
 - Wetterness resets owned temporal weather state and reports a five-second settle; and
 - Screen Space Shadows may release and compile new per-eye raymarch variants, reports `live-recompile-settle`, and is ready only when the required compiled sample counts match the selected profile.
 

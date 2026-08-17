@@ -58,6 +58,7 @@ the supplied cache.
 | Runtime content digest                          | `src/Utils/ContentHash.h` and `src/ShaderCache.cpp` |
 | Runtime manifest schema and atomic persistence  | `src/Utils/ShaderCacheManifest.h`                   |
 | Plugin versions written to `Info.ini`           | `CMakePresets.json`                                 |
+| Core compatibility marker                       | `CSX_VERSION` in `CMakeLists.txt`                   |
 | Feature versions written to `Info.ini`          | `features/*/Shaders/Features/*.ini`                 |
 | Standalone/reusable cache CI                    | `.github/workflows/shader-cache.yaml`               |
 | Release integration                             | `.github/workflows/release-build.yaml`              |
@@ -191,8 +192,9 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 6. writes `Info.ini` with plugin and feature versions;
 7. validates metadata, every manifest entry, every blob, and the `DXBC`
    signature;
-8. adds FOMOD metadata that preserves the required `ShaderCache` directory in
-   Mod Organizer 2 and prepares install-ready archives;
+8. derives an exact `CSX<major>.<minor>-<SE|VR>.marker` dependency from each
+   runtime's `Info.ini`, adds fail-closed FOMOD metadata, and prepares
+   install-ready archives;
 9. publishes output only after every requested runtime has passed the earlier
    stages.
 
@@ -276,9 +278,12 @@ VR or combine the two archives.
 
 ### Override plugin versions
 
-Normally, do not override these values. The builder derives SE from the
-`AIO-Release` preset and VR from `ALL`/`ALL-VS2022` in
-`CMakePresets.json`.
+Normally, do not override these values. Official releases ship one
+multi-runtime core from the `ALL`/`ALL-VS2022` preset, so the builder derives
+both cache identities from that same preset. A cache's SE/VR permutation
+inventory remains runtime-specific; its compatibility marker identifies the
+core DLL package. Use an override only when deliberately pairing a cache with
+an independently built runtime-specific core.
 
 For one runtime:
 
@@ -318,6 +323,9 @@ Successful builder completion already proves:
 -   the archive was created and is nonempty;
 -   the archive contains `ShaderCache/Info.ini`,
     `ShaderCache/Manifest.json`, and both required FOMOD installer files.
+-   the archived FOMOD requires both the active Community Shaders DLL and the
+    exact generated CSX compatibility marker with `operator="And"`;
+-   the archived FOMOD maps only `ShaderCache` to `Data/ShaderCache`.
 
 Optional operator checks:
 
@@ -355,7 +363,24 @@ contract and rerun the supported builder.
 
 ## Install and ship
 
-Each archive contains a top-level `ShaderCache` directory and FOMOD metadata.
+Each core/AIO build generates exactly one compatibility marker from its
+configured `CSX_VERSION` under
+`SKSE/Plugins/CommunityShaders/CSX<major>.<minor>-<SE|VR>.marker`. The shader
+cache builder derives the same marker name from `Info.ini`; version bumps need
+no marker or FOMOD source edit.
+
+Each cache archive contains a top-level `ShaderCache` directory and FOMOD
+metadata. The FOMOD refuses installation unless both the Community Shaders DLL
+and its exact version marker are active. This is a package handshake: FOMOD
+cannot inspect the DLL's embedded product-version bytes, so core packages must
+never ship a marker from another build.
+
+When upgrading through a mod manager, replace the old core mod instead of
+merging versions or leaving multiple core packages active. Otherwise an old
+marker can remain visible beside the winning DLL, which no declarative FOMOD
+dependency can correlate back to its original package. Remove any stale
+`SKSE/Plugins/CommunityShaders/CSX*.marker` entries before installing the
+matching cache.
 
 -   For manual installation, it becomes
     `<Skyrim>\Data\ShaderCache`.
@@ -363,6 +388,11 @@ Each archive contains a top-level `ShaderCache` directory and FOMOD metadata.
     `ShaderCache` and choose **Set data directory** in the manual installer;
     that strips the required directory and incorrectly exposes the cache as
     `Data\Info.ini`, `Data\Lighting`, and so on.
+-   MO2's built-in **Fomod Installer** defaults to checking only
+    `.esp`/`.esm`/`.esl` dependencies. Before installing the cache, enable
+    **Settings > Plugins > Fomod Installer > use_any_file** so the DLL and
+    marker dependencies can be evaluated. With that option disabled, the
+    installer intentionally fails closed even when the matching core exists.
 -   In a mod-manager package whose root maps to Skyrim's `Data`, place
     `ShaderCache` alongside `Shaders` and `SKSE`.
 -   Offer separate, clearly labelled SE and VR files.

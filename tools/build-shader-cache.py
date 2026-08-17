@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,10 @@ FOMOD_DIRECTORY = "fomod"
 FOMOD_CONFIG_FILE_NAME = "ModuleConfig.xml"
 FOMOD_INFO_FILE_NAME = "info.xml"
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
+CSX_PLUGIN_VERSION_PATTERN = re.compile(
+    r"^CSX (?P<version>[0-9]+\.[0-9]+)-(?P<runtime>SE|VR)$"
+)
+CSX_MARKER_RELATIVE_DIRECTORY = "SKSE/Plugins/CommunityShaders"
 
 
 RUNTIME_EXCLUDED_FEATURES = {
@@ -582,7 +587,11 @@ def default_plugin_version(source_root: Path, runtime: str) -> str:
         ) from exc
 
     candidates = {
-        "SE": ["AIO-Release", "FLATRIM", "SE"],
+        # Official releases ship one ALL core binary for every supported
+        # runtime, so every cache must default to that binary's identity.
+        # Runtime-specific core builds remain available through the explicit
+        # --plugin-version overrides.
+        "SE": ["ALL", "ALL-VS2022", "AIO-Release", "FLATRIM", "SE"],
         "VR": ["ALL", "ALL-VS2022", "VR"],
     }
 
@@ -604,6 +613,17 @@ def default_plugin_version(source_root: Path, runtime: str) -> str:
     raise SystemExit(
         f"cannot derive {runtime} plugin version from CMakePresets.json; pass --plugin-version"
     )
+
+
+def csx_compatibility_tag(plugin_version: str) -> str:
+    """Return the exact core marker tag represented by a CSX plugin label."""
+    match = CSX_PLUGIN_VERSION_PATTERN.fullmatch(plugin_version)
+    if not match:
+        raise SystemExit(
+            "packaged plugin versions must use the "
+            "'CSX <major>.<minor>-<SE|VR>' format"
+        )
+    return f"CSX{match.group('version')}-{match.group('runtime')}"
 
 
 def locate_fxc(explicit: str | None) -> str:
@@ -944,8 +964,102 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
     return destination
 
 
-def write_fomod_installer(runtime_root: Path, runtime: str, label: str) -> Path:
-    """Stage an MO2 installer that maps ShaderCache to Data/ShaderCache."""
+def validate_fomod_installer(fomod_dir: Path, compatibility_tag: str) -> None:
+    """Require one exact fail-closed dependency set and cache mapping."""
+    config_path = fomod_dir / FOMOD_CONFIG_FILE_NAME
+    try:
+        root = ET.parse(config_path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise SystemExit(f"invalid cache FOMOD config {config_path}: {exc}") from exc
+
+    expected_top_level = [
+        "moduleName",
+        "moduleDependencies",
+        "requiredInstallFiles",
+    ]
+    if root.tag != "config" or [child.tag for child in root] != expected_top_level:
+        raise SystemExit(
+            "cache FOMOD config must use the ordered moduleName, "
+            "moduleDependencies, and requiredInstallFiles structure"
+        )
+    module_name = root.find("./moduleName")
+    if module_name is None or not (module_name.text or "").strip():
+        raise SystemExit("cache FOMOD moduleName must not be empty")
+
+    dependency_groups = root.findall("./moduleDependencies")
+    if len(dependency_groups) != 1:
+        raise SystemExit(
+            "cache FOMOD must contain exactly one moduleDependencies group"
+        )
+    dependency_group = dependency_groups[0]
+    if dependency_group.get("operator") != "And":
+        raise SystemExit("cache FOMOD moduleDependencies must use operator=And")
+
+    dependency_children = list(dependency_group)
+    dependencies = [
+        (
+            dependency.get("file", "").replace("\\", "/"),
+            dependency.get("state", ""),
+        )
+        for dependency in dependency_children
+        if dependency.tag == "fileDependency"
+    ]
+    expected_dependencies = [
+        ("SKSE/Plugins/CommunityShaders.dll", "Active"),
+        (
+            f"{CSX_MARKER_RELATIVE_DIRECTORY}/"
+            f"{compatibility_tag}.marker",
+            "Active",
+        ),
+    ]
+    if (
+        len(dependency_children) != len(expected_dependencies)
+        or sorted(dependencies) != sorted(expected_dependencies)
+    ):
+        raise SystemExit(
+            "cache FOMOD must require exactly the active CommunityShaders.dll "
+            f"and {compatibility_tag}.marker"
+        )
+
+    install_groups = root.findall("./requiredInstallFiles")
+    install_folders = root.findall("./requiredInstallFiles/folder")
+    if (
+        len(install_groups) != 1
+        or len(list(install_groups[0])) != 1
+        or len(install_folders) != 1
+        or install_folders[0].get("source") != CACHE_DIRECTORY
+        or install_folders[0].get("destination") != CACHE_DIRECTORY
+        or install_folders[0].get("priority") != "0"
+    ):
+        raise SystemExit(
+            "cache FOMOD must install only ShaderCache at Data/ShaderCache "
+            "with priority 0"
+        )
+
+    info_path = fomod_dir / FOMOD_INFO_FILE_NAME
+    try:
+        info_root = ET.parse(info_path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise SystemExit(f"invalid cache FOMOD info {info_path}: {exc}") from exc
+    expected_info_children = ["Name", "Author", "Version", "Description"]
+    if (
+        info_root.tag != "fomod"
+        or [child.tag for child in info_root] != expected_info_children
+        or any(not (child.text or "").strip() for child in info_root)
+    ):
+        raise SystemExit(
+            "cache FOMOD info must contain nonempty ordered Name, Author, "
+            "Version, and Description fields"
+        )
+
+
+def write_fomod_installer(
+    runtime_root: Path,
+    runtime: str,
+    label: str,
+    plugin_version: str,
+) -> Path:
+    """Stage an installer gated on the exact active CSX core identity."""
     fomod_dir = runtime_root / FOMOD_DIRECTORY
     if path_entry_exists(fomod_dir):
         raise SystemExit(
@@ -954,15 +1068,20 @@ def write_fomod_installer(runtime_root: Path, runtime: str, label: str) -> Path:
 
     fomod_dir.mkdir()
     display_label = safe_label(label)
+    compatibility_tag = csx_compatibility_tag(plugin_version)
     module_name = f"Community Shaders {runtime} Shader Cache - {display_label}"
     description = (
-        "Installs the precompiled shader cache at Data\\ShaderCache without "
-        "flattening its required directory."
+        f"Requires an active {compatibility_tag} core installation, then installs "
+        "the matching precompiled shader cache at Data\\ShaderCache."
     )
     module_config = f"""<?xml version="1.0" encoding="UTF-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
   <moduleName>{module_name}</moduleName>
+  <moduleDependencies operator="And">
+    <fileDependency file="SKSE/Plugins/CommunityShaders.dll" state="Active" />
+    <fileDependency file="{CSX_MARKER_RELATIVE_DIRECTORY}/{compatibility_tag}.marker" state="Active" />
+  </moduleDependencies>
   <requiredInstallFiles>
     <folder source="{CACHE_DIRECTORY}" destination="{CACHE_DIRECTORY}" priority="0" />
   </requiredInstallFiles>
@@ -984,13 +1103,22 @@ def write_fomod_installer(runtime_root: Path, runtime: str, label: str) -> Path:
         (fomod_dir / FOMOD_INFO_FILE_NAME).write_text(
             info, encoding="utf-8", newline="\n"
         )
+        validate_fomod_installer(fomod_dir, compatibility_tag)
     except OSError as exc:
         shutil.rmtree(fomod_dir, ignore_errors=True)
         raise SystemExit(f"failed to stage cache installer: {fomod_dir}") from exc
+    except SystemExit:
+        shutil.rmtree(fomod_dir, ignore_errors=True)
+        raise
     return fomod_dir
 
 
-def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
+def validate_cache_archive(
+    archive: Path,
+    cmake: str,
+    runtime: str,
+    plugin_version: str,
+) -> None:
     """Verify the archive is installable without flattening ShaderCache."""
     command = [cmake, "-E", "tar", "tf", str(archive)]
     result = subprocess.run(command, capture_output=True, text=True)
@@ -999,11 +1127,12 @@ def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
             f"failed to inspect packaged {runtime} cache (exit {result.returncode})"
         )
 
-    entries = {
+    entry_list = [
         entry.strip().replace("\\", "/")
         for entry in result.stdout.splitlines()
         if entry.strip()
-    }
+    ]
+    entries = set(entry_list)
     required_entries = {
         f"{CACHE_DIRECTORY}/{INFO_FILE_NAME}",
         f"{CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
@@ -1017,11 +1146,57 @@ def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
             f"{', '.join(missing_entries)}"
         )
 
+    duplicate_required_entries = sorted(
+        entry for entry in required_entries if entry_list.count(entry) != 1
+    )
+    if duplicate_required_entries:
+        raise SystemExit(
+            f"packaged {runtime} cache has duplicate install metadata: "
+            f"{', '.join(duplicate_required_entries)}"
+        )
+
     flattened_entries = sorted({INFO_FILE_NAME, MANIFEST_FILE_NAME} & entries)
     if flattened_entries:
         raise SystemExit(
             f"packaged {runtime} cache contains flattened metadata: "
             f"{', '.join(flattened_entries)}"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix=f".shader-cache-{runtime}-archive-"
+    ) as temporary:
+        extract_root = Path(temporary)
+        extract_result = subprocess.run(
+            [cmake, "-E", "tar", "xf", str(archive)],
+            cwd=extract_root,
+            capture_output=True,
+            text=True,
+        )
+        if extract_result.returncode != 0:
+            raise SystemExit(
+                f"failed to extract packaged {runtime} cache for validation "
+                f"(exit {extract_result.returncode})"
+            )
+
+        info = configparser.ConfigParser(interpolation=None)
+        try:
+            with (extract_root / CACHE_DIRECTORY / INFO_FILE_NAME).open(
+                "r", encoding="utf-8-sig"
+            ) as stream:
+                info.read_file(stream)
+        except (configparser.Error, OSError, UnicodeError) as exc:
+            raise SystemExit(
+                f"packaged {runtime} cache has invalid {INFO_FILE_NAME}: {exc}"
+            ) from exc
+        archived_version = info.get("Cache", "PluginVersion", fallback=None)
+        if archived_version != plugin_version:
+            raise SystemExit(
+                f"packaged {runtime} cache plugin version is {archived_version!r}; "
+                f"expected {plugin_version!r}"
+            )
+        validate_fomod_installer(
+            extract_root / FOMOD_DIRECTORY,
+            csx_compatibility_tag(archived_version),
         )
 
 
@@ -1030,12 +1205,18 @@ def prepare_cache_archive(
     workspace: Path,
     runtime: str,
     label: str,
+    plugin_version: str,
     cmake: str,
 ) -> Path:
     """Create a validated candidate archive without changing published output."""
     archive_name = f"ShaderCache-{runtime}-{safe_label(label)}.7z"
     temporary_archive = workspace / archive_name
-    fomod_dir = write_fomod_installer(runtime_root, runtime, label)
+    fomod_dir = write_fomod_installer(
+        runtime_root,
+        runtime,
+        label,
+        plugin_version,
+    )
     try:
         command = [
             cmake,
@@ -1066,7 +1247,12 @@ def prepare_cache_archive(
             f"failed to package {runtime} cache (exit {result.returncode})"
         )
 
-    validate_cache_archive(temporary_archive, cmake, runtime)
+    validate_cache_archive(
+        temporary_archive,
+        cmake,
+        runtime,
+        plugin_version,
+    )
     print(
         f"{runtime}: prepared {temporary_archive.name} "
         f"({temporary_archive.stat().st_size} bytes)"
@@ -1239,6 +1425,8 @@ def main() -> int:
             or default_plugin_version(source_root, runtime)
         )
         validate_ini_value(plugin_version, f"{runtime} plugin version")
+        if args.package:
+            csx_compatibility_tag(plugin_version)
         plugin_versions[runtime] = plugin_version
 
     out_root = Path(args.out).resolve()
@@ -1291,6 +1479,7 @@ def main() -> int:
                     workspace,
                     runtime,
                     args.package_label or plugin_version,
+                    plugin_version,
                     cmake,
                 )
             prepared.append(

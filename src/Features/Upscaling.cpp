@@ -24664,10 +24664,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				perfMode.trueHMDEyeHeight,
 				2u);
 		};
+		// VRAPI admission changes only compatible resource retention. FPS Stabilizer
+		// door-handoff ownership and cadence are enforced before this planner.
 		const bool reuseCompatibleFSRResourcesForRelatch =
 			VRVendorRelatchPolicy::CanReuseCompatibleFSRResources({
 				.directMenuRelatch =
 					relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				.apiRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::VRAPI,
 				.recoveryRelatch =
 					relatchOrigin == VRUpscalingTransitionOrigin::RecoveryRelatch,
 				.targetIsFSR = relatchUpscaleMethod == UpscaleMethod::kFSR,

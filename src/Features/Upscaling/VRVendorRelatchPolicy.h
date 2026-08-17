@@ -1780,6 +1780,7 @@ namespace VRVendorRelatchPolicy
 	struct CompatibleFSRRelatchReuseAdmission
 	{
 		bool directMenuRelatch = false;
+		bool apiRelatch = false;
 		bool recoveryRelatch = false;
 		bool targetIsFSR = false;
 		bool previousWasFSR = false;
@@ -1797,7 +1798,9 @@ namespace VRVendorRelatchPolicy
 	[[nodiscard]] constexpr bool CanReuseCompatibleFSRResources(
 		const CompatibleFSRRelatchReuseAdmission& a_state) noexcept
 	{
-		return (a_state.directMenuRelatch || a_state.recoveryRelatch) &&
+		return (a_state.directMenuRelatch ||
+		       a_state.apiRelatch ||
+		       a_state.recoveryRelatch) &&
 		       a_state.targetIsFSR &&
 		       a_state.previousWasFSR &&
 		       !a_state.resetPending &&

@@ -84,6 +84,20 @@ The Release+DevBench build now exposes those first controls through `communitysh
 
 Every response distinguishes the setting's effective value from `runtimeActive`, which may additionally depend on scene state such as an IBL interior exclusion or the presence of directional shadows. Package-level `packageEnabled` records are read-only and report `restart`; they must not be confused with the live inner controls.
 
+Commit `9218ec2e8` extends the same tool with `performanceActive` for every feature that implements CSX's production Performance Tuning measurement contract. This is a reversible ablation surface, not arbitrary settings mutation:
+
+```json
+{"action":"set","feature":"Skylighting","control":"performanceActive","value":false}
+```
+
+The first disable stores the feature's complete measurement state in memory and applies the feature's own off transition. A later `value:true` restores that snapshot when one is held; if no snapshot exists it applies the feature's production measurement-on default. Callers must inspect `restoredSnapshot` and effective readback because restoring a baseline that was already off can legitimately remain off. `restoreAll` is the session safety operation:
+
+```json
+{"action":"restoreAll"}
+```
+
+Each record includes per-direction settle seconds, readiness, wait text, menu-close requirements, history-reset disclosure, cache impact, resource impact, and whether a snapshot is outstanding. The loaded shader set remains retained, but feature-specific runtime resources may be reset or recreated. The initial native-OpenVR null-HMD validation discovered 15 performance surfaces, 14 available in the selected loadout. Grass Collision and Skylighting completed on/off/restore transitions with effective readback and zero remaining snapshots; this validates the bridge path, not every feature's visual or lifetime correctness.
+
 ## Promotion toward live transitions
 
 Converting a control to `live` requires feature-specific proof that enable, disable, and repeated A/B/A transitions:

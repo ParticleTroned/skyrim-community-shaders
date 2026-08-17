@@ -33,6 +33,8 @@ Hard correctness and stability constraints are applied first. Surviving candidat
 | Anchor scenes | Validated scene recipes, time/weather variants, expected pose, and retained proof captures | [`anchor-scenes.md`](./anchor-scenes.md) |
 | Measurement run | Machine-readable provenance and results for one controlled run | [`measurements/`](./measurements/README.md) |
 | Preset policy | Vendor-neutral intent, constraints, priorities, and selection rules for each tier | [`preset-policies.md`](./preset-policies.md) |
+| Existing preset census | Structural comparison of the six inherited MGO vendor/tier files and the resulting screening priorities | [`preset-baseline-census.md`](./preset-baseline-census.md) |
+| First-pass screening | AMD native-OpenVR timing and visual A/B/A results, artifact hashes, interpretation, and follow-up routing | [`screening-20260817.md`](./screening-20260817.md) |
 | Decision log | Append-only rationale connecting evidence to adopted or rejected choices | [`decision-log.md`](./decision-log.md) |
 
 The canonical schemas are:

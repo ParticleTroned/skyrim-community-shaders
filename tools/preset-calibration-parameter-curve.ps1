@@ -188,12 +188,16 @@ try {
     $record.transitions.Add($restore); $snapshotHeld = [bool]$restore.control.snapshotHeld
     if (-not $restore.restoredSnapshot) { throw "$Feature parameter restore did not use the held baseline snapshot" }
     $restored = Get-Control
-    if (-not $restored.ready -or [Math]::Abs((Get-EffectiveValue -Control $restored) - $baselineValue) -gt 0.001) { throw "$Feature did not restore $Parameter to $baselineValue" }
-    $record.phases.Add((Collect-ProfilerPhase -Name 'baseline-return' -EffectiveValue $baselineValue -Scene (Set-AnchorState)))
+    $record['restoredControl'] = $restored
+    if (-not $UseExistingSnapshot) {
+        if (-not $restored.ready -or [Math]::Abs((Get-EffectiveValue -Control $restored) - $baselineValue) -gt 0.001) { throw "$Feature did not restore $Parameter to $baselineValue" }
+        $record.phases.Add((Collect-ProfilerPhase -Name 'baseline-return' -EffectiveValue $baselineValue -Scene (Set-AnchorState)))
+    }
     $record.validity.accepted = $true
     $record.validity.reasons.Add('Every phase retained the requested number of unique resolved post-arm profiler frames.')
     $record.validity.reasons.Add('Every scalar value reached exact effective readback before measurement.')
-    $record.validity.reasons.Add('The run restored the exact in-memory baseline parameter state and did not overlap screenshot capture.')
+    if ($UseExistingSnapshot) { $record.validity.reasons.Add('The run consumed its deliberate preconfiguration snapshot and recorded the earlier state restored by that snapshot; a post-restore measurement was intentionally omitted because the restored feature may be inactive.') }
+    else { $record.validity.reasons.Add('The run restored the exact in-memory baseline parameter state and did not overlap screenshot capture.') }
 }
 catch { $runFailure = $_.Exception.Message; $record.validity.reasons.Add("Run rejected: $runFailure") }
 finally {

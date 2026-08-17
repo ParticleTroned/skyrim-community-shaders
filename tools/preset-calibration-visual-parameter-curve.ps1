@@ -170,12 +170,16 @@ try {
     $record.transitions.Add($restore); $snapshotHeld = [bool]$restore.control.snapshotHeld
     if (-not $restore.restoredSnapshot) { throw "$Feature parameter restore did not use the held baseline snapshot" }
     $restored = Get-Control
-    if (-not $restored.ready -or [Math]::Abs((Get-EffectiveValue -Control $restored) - $baselineValue) -gt 0.001) { throw "$Feature did not restore $Parameter to $baselineValue" }
-    $record.phases.Add((Capture-Phase -Name 'baseline-return' -Label 'PARAM-A2' -EffectiveValue $baselineValue))
+    $record['restoredControl'] = $restored
+    if (-not $UseExistingSnapshot) {
+        if (-not $restored.ready -or [Math]::Abs((Get-EffectiveValue -Control $restored) - $baselineValue) -gt 0.001) { throw "$Feature did not restore $Parameter to $baselineValue" }
+        $record.phases.Add((Capture-Phase -Name 'baseline-return' -Label 'PARAM-A2' -EffectiveValue $baselineValue))
+    }
     $record.validity.accepted = $true
     $record.validity.reasons.Add('Every phase saved exact separate-eye pairs with zero failed, incomplete, or backpressured pairs; combined stereo was optional derivative output.')
     $record.validity.reasons.Add('Every scalar value reached exact effective readback before capture.')
-    $record.validity.reasons.Add('The requested time and weather were reapplied before each phase, and the exact baseline parameter was restored.')
+    if ($UseExistingSnapshot) { $record.validity.reasons.Add('The requested time and weather were reapplied before each phase. The run consumed its deliberate preconfiguration snapshot and recorded the earlier state restored by that snapshot; a post-restore capture was intentionally omitted because the restored feature may be inactive.') }
+    else { $record.validity.reasons.Add('The requested time and weather were reapplied before each phase, and the exact baseline parameter was restored.') }
 }
 catch { $runFailure = $_.Exception.Message; $record.validity.reasons.Add("Run rejected: $runFailure") }
 finally {

@@ -1261,6 +1261,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	if (terrainPassCount != 0 || noBlendPassCount != 0) {
 		tbHookDiagnostics.renderPassExecutedCalls++;
 		TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Render Passes");
+		CS_PROFILE_SCOPE("TerrainBlending::RenderPasses");
 		if (globals::state->frameAnnotations)
 			globals::state->BeginPerfEvent("Terrain Blending - Render Passes");
 

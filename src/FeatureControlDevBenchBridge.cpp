@@ -5,6 +5,7 @@
 #	include "Features/IBL.h"
 #	include "Features/ScreenSpaceShadows.h"
 #	include "Features/Skylighting.h"
+#	include "Features/TerrainBlending.h"
 #	include "Features/VolumetricShadows.h"
 #	include "Features/Wetterness.h"
 #	include "Globals.h"
@@ -30,7 +31,7 @@ namespace
 	using json = nlohmann::json;
 
 	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
-	constexpr unsigned int kDevBenchToolExtensionRevision = 5;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 6;
 	std::atomic_bool g_installAttempted{ false };
 	std::atomic_bool g_registered{ false };
 	std::unordered_map<std::string, json> g_performanceSnapshots;
@@ -331,6 +332,8 @@ namespace
 			return globals::features::screenSpaceShadows.CapturePerformanceCostMeasurementState();
 		if (a_featureName == "Wetterness")
 			return globals::features::wetterness.CapturePerformanceCostMeasurementState();
+		if (a_featureName == "TerrainBlending")
+			return globals::features::terrainBlending.CapturePerformanceCostMeasurementState();
 		return json();
 	}
 
@@ -346,6 +349,10 @@ namespace
 		}
 		if (a_featureName == "Wetterness") {
 			globals::features::wetterness.RestorePerformanceCostMeasurementState(a_state);
+			return;
+		}
+		if (a_featureName == "TerrainBlending") {
+			globals::features::terrainBlending.RestorePerformanceCostMeasurementState(a_state);
 			return;
 		}
 		throw std::runtime_error("feature does not expose quality profiles");
@@ -493,6 +500,11 @@ namespace
 				{ "RippleLifetime", settings.RippleLifetime },
 			};
 		}
+		if (a_featureName == "TerrainBlending") {
+			return {
+				{ "TerrainCullDistance", globals::features::terrainBlending.settings.TerrainCullDistance },
+			};
+		}
 		return json::object();
 	}
 
@@ -554,6 +566,43 @@ namespace
 
 	json BuildQualityParameterRecord(const std::string& a_featureName)
 	{
+		if (a_featureName == "TerrainBlending") {
+			auto* feature = FindFeatureByShortName(a_featureName);
+			const bool available = feature && feature->loaded;
+			const auto effective = available ? BuildEffectiveQualityParameters(a_featureName) : json::object();
+			return {
+				{ "feature", a_featureName },
+				{ "displayName", feature ? feature->GetDisplayName() : a_featureName },
+				{ "control", "qualityParameters" },
+				{ "valueType", "object" },
+				{ "parameterDefinitions", {
+					{ "TerrainCullDistance", {
+						{ "valueType", "number" },
+						{ "minimum", 0.0f },
+						{ "maximum", 8192.0f },
+						{ "zeroMeaning", "terrain-depth distance culling disabled" },
+						{ "effect", "skips a landscape bound when distance from the average eye to the bound surface exceeds this cutoff" },
+					} },
+				} },
+				{ "effectiveParameters", effective },
+				{ "derivedEffectiveParameters", {
+					{ "TerrainCullDistanceMeters", available ? json(globals::features::terrainBlending.settings.TerrainCullDistance * Util::Units::GAME_UNIT_TO_M) : json(nullptr) },
+				} },
+				{ "requestedValue", effective },
+				{ "effectiveValue", effective },
+				{ "runtimeActive", available && globals::features::terrainBlending.settings.Enabled != 0 },
+				{ "ready", available },
+				{ "mutability", "live" },
+				{ "settle", { { "kind", "frames" }, { "minimumFrames", 2 }, { "requiresMenuClose", false }, { "resetsHistory", false } } },
+				{ "cacheImpact", "none" },
+				{ "resourceImpact", "retained" },
+				{ "canRestoreInSession", true },
+				{ "snapshotHeld", g_qualityProfileSnapshots.contains(a_featureName) },
+				{ "writable", available },
+				{ "available", available },
+				{ "unavailableReason", available ? json(nullptr) : json(feature ? "feature package is not loaded" : "feature is not registered") },
+			};
+		}
 		auto record = BuildQualityProfileRecord(a_featureName);
 		record["control"] = "qualityParameters";
 		record["valueType"] = "object";
@@ -658,6 +707,7 @@ namespace
 			controls.push_back(std::move(control));
 		controls.push_back(BuildQualityParameterRecord("ScreenSpaceShadows"));
 		controls.push_back(BuildQualityParameterRecord("Wetterness"));
+		controls.push_back(BuildQualityParameterRecord("TerrainBlending"));
 		return controls;
 	}
 
@@ -680,6 +730,8 @@ namespace
 		if (a_feature == "ScreenSpaceShadows" && a_control == "qualityParameters")
 			return BuildQualityParameterRecord(a_feature);
 		if (a_feature == "Wetterness" && a_control == "qualityParameters")
+			return BuildQualityParameterRecord(a_feature);
+		if (a_feature == "TerrainBlending" && a_control == "qualityParameters")
 			return BuildQualityParameterRecord(a_feature);
 		return {
 			{ "error", "unknown control" },
@@ -787,7 +839,7 @@ namespace
 
 	json SetQualityParameterControl(const std::string& a_feature, const json& a_parameters)
 	{
-		if (a_feature != "ScreenSpaceShadows" && a_feature != "Wetterness")
+		if (a_feature != "ScreenSpaceShadows" && a_feature != "Wetterness" && a_feature != "TerrainBlending")
 			return FindControl(a_feature, "qualityParameters");
 		auto buildControl = [&]() { return BuildQualityParameterRecord(a_feature); };
 		auto* feature = FindFeatureByShortName(a_feature);
@@ -809,6 +861,13 @@ namespace
 				} else if (parameter.key() == "VRCullDistance") {
 					minimum = 0.0;
 					maximum = 20480.0;
+				} else {
+					known = false;
+				}
+			} else if (a_feature == "TerrainBlending") {
+				if (parameter.key() == "TerrainCullDistance") {
+					minimum = 0.0;
+					maximum = 8192.0;
 				} else {
 					known = false;
 				}
@@ -876,7 +935,7 @@ namespace
 				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter)
 					state["Settings"][parameter.key()] = parameter.value();
 				globals::features::screenSpaceShadows.RestorePerformanceCostMeasurementState(state);
-			} else {
+			} else if (a_feature == "Wetterness") {
 				auto state = globals::features::wetterness.CapturePerformanceCostMeasurementState();
 				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter) {
 					if (parameter.key() == "WetnessDistanceFadeRange")
@@ -885,6 +944,11 @@ namespace
 						state["Settings"][parameter.key()] = parameter.value();
 				}
 				globals::features::wetterness.RestorePerformanceCostMeasurementState(state);
+			} else {
+				auto state = globals::features::terrainBlending.CapturePerformanceCostMeasurementState();
+				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter)
+					state[parameter.key()] = parameter.value();
+				globals::features::terrainBlending.RestorePerformanceCostMeasurementState(state);
 			}
 		} catch (...) {
 			if (inserted)
@@ -1115,7 +1179,7 @@ namespace FeatureControlDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. Skylighting, Screen Space Shadows, and Wetterness expose reversible Performance/Balanced/Quality profile clusters, including readiness, history reset, resource, and runtime shader-recompile metadata. Screen Space Shadows and Wetterness additionally expose bounded qualityParameters so their coupled profile parameters can be calibrated independently. Wetterness reports derived coverage and event-opportunity values. restore reverts one held quality snapshot; restoreAll is the session safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]},{"type":"object","properties":{"VRBaseSamplesAtReference":{"type":"number","minimum":16,"maximum":96},"VRCullDistance":{"type":"number","minimum":0,"maximum":20480},"RaindropFxRangeWorldUnits":{"type":"number"},"WetnessDistanceFadeRange":{"type":"number"},"RaindropGridSize":{"type":"number"},"RaindropInterval":{"type":"number"},"RaindropChance":{"type":"number"},"SplashesLifetime":{"type":"number"},"RippleLifetime":{"type":"number"}},"additionalProperties":false,"minProperties":1}]}},"required":["action"]}})";
+			R"({"description":"Discover and mutate typed CSX feature controls with effective readback and explicit live/reload/restart metadata. Mutations are session-only and never rewrite arbitrary settings JSON. IBL and Volumetric Shadows expose audited inner toggles. Features that implement CSX's production Performance Tuning measurement contract also expose a reversible performanceActive control: the first disable snapshots the complete feature state, and enabling restores that snapshot. Skylighting, Screen Space Shadows, and Wetterness expose reversible Performance/Balanced/Quality profile clusters, including readiness, history reset, resource, and runtime shader-recompile metadata. Screen Space Shadows, Wetterness, and Terrain Blending additionally expose bounded qualityParameters for independent calibration. Wetterness reports derived coverage and event-opportunity values, and Terrain Blending reports its distance in game units and metres. restore reverts one held quality snapshot; restoreAll is the session safety action for every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]},{"type":"object","properties":{"VRBaseSamplesAtReference":{"type":"number","minimum":16,"maximum":96},"VRCullDistance":{"type":"number","minimum":0,"maximum":20480},"TerrainCullDistance":{"type":"number","minimum":0,"maximum":8192},"RaindropFxRangeWorldUnits":{"type":"number"},"WetnessDistanceFadeRange":{"type":"number"},"RaindropGridSize":{"type":"number"},"RaindropInterval":{"type":"number"},"RaindropChance":{"type":"number"},"SplashesLifetime":{"type":"number"},"RippleLifetime":{"type":"number"}},"additionalProperties":false,"minProperties":1}]}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.controls",
 			descriptor,

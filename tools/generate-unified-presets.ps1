@@ -158,7 +158,7 @@ foreach ($tierProperty in $policy.tiers.psobject.Properties) {
     }
     Assert-GuardValues -Settings $settings
 
-    $json = ($settings | ConvertTo-Json -Depth 100) + [Environment]::NewLine
+    $json = (($settings | ConvertTo-Json -Depth 100) -replace "`r`n", "`n") + "`n"
     $meta = Get-GeneratedMetaIni -Tier $tier
     $outputDirectory = [System.IO.Path]::GetFullPath((Join-Path $resolvedOutputRoot $definition.outputDirectory))
     if (-not $outputDirectory.StartsWith($resolvedOutputRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {

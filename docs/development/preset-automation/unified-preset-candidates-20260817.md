@@ -12,9 +12,9 @@ The first synthesis produces three shader-policy presets rather than six vendor 
 
 | Tier | Generated `SettingsUser.json` SHA-256 |
 | --- | --- |
-| Performance | `03B828550F54DB784916EB2A1A2E1CF4B047BBD17E9F32212B85F02613432308` |
-| Balanced | `211BB91AF01B8AD3AD9326C1C1C84CB2EEB2B97C2814FDB87AE7EE460C60AA3C` |
-| Quality | `78DB6C53CD1C6E753812CFAFDBF69685602FBD6343575175267D2262DD358140` |
+| Performance | `19E4776D3A76DAC82EE4D77A1BB658A5C81A6342F96BCEABF7C0A3FBEAA2C8BB` |
+| Balanced | `D6AB5714F069E58E7F47D5422EC08F7C8EB57FC2D1624FE3DA2AEAB52758CC6A` |
+| Quality | `C2F42D54D91F6868843209D2A88C3ADCB77238498AC36E663D8DFF64E19A7B53` |
 
 [`unified-preset-policy.json`](./unified-preset-policy.json) is the machine-readable source. [`generate-unified-presets.ps1`](../../../tools/generate-unified-presets.ps1) pins each inherited AMD tier template by SHA-256, applies the reviewed overrides, enforces hard guards, and supports a non-writing `-Check` mode. The legacy AMD and NVIDIA folders remain unchanged as source evidence and recovery points.
 

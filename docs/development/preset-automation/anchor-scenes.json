@@ -80,6 +80,21 @@
         "camera": { "x": 135038.59375, "y": 33143.40625, "z": -12532.8681640625, "pitch": 0.0, "yaw": -0.045020539313554764, "freeCam": false }
       },
       "proofCapture": "CS_Capture_2026-08-17_12-25-29_941_windhelm-cloudy-snow-midday_0006"
+    },
+    {
+      "id": "exterior-whiterun-multidepth-clear-day",
+      "coverage": ["foreground-materials", "foliage", "architecture", "distant-terrain", "sky", "depth-bands"],
+      "commands": ["coc WhiterunExterior01", "set gamehour to 14.0", "fw 81A"],
+      "expected": {
+        "cell": { "editorId": "WhiterunExterior01", "formId": "0x0000961B" },
+        "worldspace": { "editorId": "Tamriel", "formId": "0x0000003C" },
+        "position": [18963.80078125, -11937.5205078125, -4515.8876953125],
+        "gameHourTarget": 14.0,
+        "weather": "clear",
+        "camera": { "x": 18963.80078125, "y": -11937.5205078125, "z": -4482.7626953125, "pitch": 0.0, "yaw": -1.5154038667678833, "freeCam": false }
+      },
+      "proofCaptureRoot": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\CSX Baselines\\20260817-distance-scout",
+      "proofCapture": "CS_Capture_2026-08-17_16-16-34_026_Scout-WhiterunExterior01_0064"
     }
   ],
   "hmdControl": {

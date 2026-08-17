@@ -19,6 +19,8 @@ param(
     [ValidateRange(1, 60)]
     [int]$PreviewFramesPerSecond = 30,
 
+    [switch]$SaveSeparateEyes,
+
     [ValidateRange(0.0, 24.0)]
     [double]$GameHour,
 
@@ -129,7 +131,7 @@ function Capture-Phase {
         previewFramesPerSecond = $PreviewFramesPerSecond
         format = 'bmp'
         saveCombined = $true
-        saveSeparateEyes = $false
+        saveSeparateEyes = [bool]$SaveSeparateEyes
         writePreviewVideo = $true
         outputPath = $captureRoot
     }
@@ -189,7 +191,7 @@ $record = [ordered]@{
         frameIntervalCompositorCycles = $FrameInterval
         previewFramesPerSecond = $PreviewFramesPerSecond
         format = 'bmp'
-        output = 'combined stereo'
+        output = if ($SaveSeparateEyes) { 'combined stereo and separate eyes' } else { 'combined stereo' }
     }
     baselineControl = $null
     transitions = [System.Collections.Generic.List[object]]::new()

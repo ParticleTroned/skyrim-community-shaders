@@ -102,6 +102,23 @@ Representative full frames support the quantitative reading:
 - Screen Space Shadows Performance slightly relaxes contact/relief shading; higher tiers retain more fine shadow structure and Quality removes the inherited distance cutoff.
 - Wetness itself remains a large storm-conditioned material effect, but the three tier variants look close from this static near-field viewpoint. The inherited tier differences primarily change precipitation density/lifetime and effect range, which this composition does not isolate well.
 
+## SSS distance and separate-eye follow-up
+
+The first distance follow-up added separate-eye output and a 3 × 3 stable-region spatial grid to the profile-curve tooling. Combined-stereo plus separate-eye BMP capture at the earlier four-cycle cadence caused two backpressure drops in the first Windhelm run, so that run is rejected. A six-cycle cadence completed all later runs with 30 frames per phase and zero failed, incomplete-pair, or backpressure drops.
+
+Windhelm's fixed entry pose faces a near gate and is unsuitable for deciding the value of Quality's unlimited range. Its accepted forward/reverse pair also failed the directional validity check: the signed Balanced-versus-Quality result changed direction and the mean absolute separation expanded from roughly `0.52` to `1.55` luma. It remains useful negative evidence about anchor selection, not a distance-policy result.
+
+The new `exterior-whiterun-multidepth-clear-day` anchor supplies foreground ground, tree and horse detail, middle-distance city geometry, distant mountains, and open sky. Its accepted Balanced→Quality and Quality→Balanced sweeps agree in both eyes:
+
+| Sweep | Stable mean absolute B↔Q separation, left/right | Signed B−Q, left/right | Reading |
+| --- | ---: | ---: | --- |
+| Balanced→Quality | `0.90` / `0.88` | `+0.39` / `+0.42` | Quality is locally darker/more shadowed |
+| Quality→Balanced | `0.74` / `0.74` | `-0.69` / `-0.72` when evaluated Q−B | Same physical direction after order reversal |
+
+The spatial grid localizes the largest stable difference to the bottom/foreground row (`1.25`–`1.72` luma). The open-sky upper-right cell is about `0.10`, with upper-centre and upper-left cells around `0.39`–`0.43` and `0.77`–`0.80`. Left and right grids are nearly identical at this fixed pose.
+
+This confirms a repeatable local/fine-shadow improvement from Balanced to Quality and provides additional fixed-pose eye-symmetry evidence. It does **not** demonstrate that unlimited SSS distance is valuable: the observed response is foreground-dominant, while sample count and cull distance change together. A cutoff decision still requires either a known-distance target with equal sample count or a control that separates sample-count and range factors, followed by moving-view/disocclusion inspection.
+
 ## Provisional policy constraints
 
 These curves support constraints, not yet a complete preset:
@@ -130,3 +147,7 @@ Timing hashes refer to `<timing root>/<run id>/profile-curve-profiler-raw.json`;
 | `20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-curve-qbp-r01` | `A17D4E6207E03B4F3ACF16C965CEDF07C11B85954E39D353A4485CCBFB0423F2` |
 | `20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-curve-pbq-r01` | `E1EB8BBE6C3DF8D1C668332469EA4BD8B31358B130E405A5CF38AD6084331441` |
 | `20260817-amd-svr-ovr-null-guardian-storm-info-wetterness-visual-curve-qbp-r01` | `EDFFD3BFB5B82C5E6524A906626A306B15AA76032912084AA763E96F58DB9AE6` |
+| `20260817-amd-null-whiterun-clear-sss-distance-bq-r01` | `B7C783434AC216B17980F82EC83E253E52CA1A291D0225DF2627DB92BB5182E0` |
+| `20260817-amd-null-whiterun-clear-sss-distance-qb-r01` | `4D2B6D2743240F4953608045153EEBA4ED7F340D27F3D409BA1CB8CB1F7E1147` |
+
+Additional retained Windhelm evidence: rejected four-cycle BQ `D14ED72D82B62597FE93247B763F28FEC3E8CF870D1A54938DE89E254E7CD697`; accepted six-cycle BQ `EC228FA178A25AA5F8EDC89776F3CBAFB91771AC5EB1BA90425296459204D91D`; accepted six-cycle QB `6A8F4092E85499020B528F24D45EA0F4AC394072774BB255FCA9EAF8FC99BD30`.

@@ -115,7 +115,7 @@ This is the first policy synthesis, not a release qualification. “Retain” me
 | Family | Performance | Balanced | Quality | Current disposition | Confidence and gate |
 | --- | --- | --- | --- | --- | --- |
 | Skylighting | Typed Performance profile: smaller field/grid and 16/8 update cadence | Typed Balanced profile | Typed Quality profile | Provisional evidence-backed gradient; keep enabled in all tiers | Medium on AMD `SVR-OVR-NULL`; Quality cost is clear, signed brightness ordering is not; moving-view stability and other anchors required |
-| Screen Space Shadows | 16 reference samples, 20,480 cull | 30 samples, 20,480 cull | 44 samples, unlimited range | Provisional evidence-backed gradient; keep enabled | Medium-high for near-field cost/direction; Quality-vs-Balanced distance benefit and moving stereo edges still open |
+| Screen Space Shadows | 16 reference samples, 20,480 cull | 30 samples, 20,480 cull | 44 samples, unlimited range | Provisional evidence-backed gradient; keep enabled | Medium-high for near-field cost/direction and fixed-pose eye symmetry; Whiterun confirms repeatable Quality darkening but it is foreground-dominant, so unlimited-range benefit and moving stereo edges remain open |
 | Wetness | Typed Performance density/lifetime/range profile | Typed Balanced profile | Typed Quality profile | Keep enabled; preserve gradient, but do not claim a measured tier cost | Medium for feature importance and IBL interaction; low for tier performance/range. Performance fade is effectively 7,002.801, not requested 5,000 |
 | Grass Collision | Off | On | On | Retain inherited gradient | Low; static null pose did not exercise collision. Requires reproducible controller/player/grass movement |
 | SSGI | Retain inherited Performance values | Retain inherited Balanced values | Retain inherited Quality values | Unqualified inheritance only | Low; inactive in the current runtime baseline and no response curve yet |
@@ -143,7 +143,7 @@ The common baseline should be reviewed cluster-by-cluster. A common setting may 
 
 The minimum remaining gates are:
 
-1. SSS near/far cutoff and disocclusion sequence with separate-eye analysis;
+1. SSS near/far cutoff with sample count held constant, plus a disocclusion sequence with separate-eye analysis;
 2. Wetness near/far material and precipitation-motion sequence with IBL active;
 3. Terrain Blending 725/1,024 boundary scene;
 4. Grass Collision controlled movement scene;

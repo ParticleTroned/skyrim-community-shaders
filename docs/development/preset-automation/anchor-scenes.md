@@ -31,8 +31,11 @@ The next control proof should use a synthetic tracked-device/controller driver w
 | `exterior-guardian-stones-clear-night` | Same pose under starlight and local emissive lighting; shadow/exposure floor | Same entry; 00:30; `fw 81A`; 3 s | `-1.5500009060` | `CS_Capture_2026-08-17_12-24-28_187_guardian-stones-clear-night-0030_0004` |
 | `exterior-guardian-stones-fog-dawn` | Same pose under low-contrast depth fog and dawn exposure | Same entry; 07:00; `fw C821E`; 3 s | `-1.5500009060` | `CS_Capture_2026-08-17_12-24-50_131_guardian-stones-fog-dawn-0700_0005` |
 | `exterior-windhelm-snow-midday` | High-albedo snow, dark carved stone, metal, firelight, foreground shadow | `coc WindhelmExterior01`; 12 s; `set gamehour to 12.0`; 1.5 s; retain natural `SkyrimCloudySN` | `-0.0450205393` | `CS_Capture_2026-08-17_12-25-29_941_windhelm-cloudy-snow-midday_0006` |
+| `exterior-whiterun-multidepth-clear-day` | Foreground ground/tree/horse, city walls and buildings, distant terrain/mountains, open sky | `coc WhiterunExterior01`; 12 s; 14:00; `fw 81A`; 3 s | `-1.5154038668` | `CS_Capture_2026-08-17_16-16-34_026_Scout-WhiterunExterior01_0064` |
 
-All proof captures are under `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\20260817-anchor-scout`. Every listed capture completed one raw `hmd_stereo` pair with separate eyes and combined derivative, zero failed frames, zero incomplete-pair drops, and zero backpressure drops.
+Proof captures are under `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\20260817-anchor-scout`, except the Whiterun multi-depth proof under `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\20260817-distance-scout`. Every listed capture completed one raw `hmd_stereo` pair with separate eyes and combined derivative, zero failed frames, zero incomplete-pair drops, and zero backpressure drops.
+
+The Whiterun entry is the preferred first static distance-composition anchor because its fixed null-HMD view contains useful foreground, middle-distance architecture, distant terrain, and sky in one frame. It does not by itself identify a shader's physical cutoff boundary; use spatial masks or a known-distance target before interpreting a foreground-versus-background difference as range evidence.
 
 The earlier Riften waterfront save remains useful for continuity with the first IBL campaign, but it is not the canonical entry for this new inventory. Its entry is `Save3_2FC025CB_0_776964646C65_RiftenWorld_000002_20260812061218_1_1`, cell `RiftenCityNorth` (`0x00042249`) in `RiftenWorld` (`0x00016BB4`).
 

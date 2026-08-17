@@ -128,7 +128,35 @@ namespace DisplayMapping
 		return XYZToRGB(col);
 	}
 
-	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol)
+	float3 ApplyBloom(
+		float3 mappedColor,
+		float3 vanillaBloomColor,
+		float3 enhancedBloomColor,
+		float nativeBloomMaskLimit,
+		float blendWeight)
+	{
+		float3 vanillaMask = saturate(nativeBloomMaskLimit - mappedColor);
+		float3 vanillaContribution = vanillaMask * vanillaBloomColor;
+		float3 result = mappedColor + vanillaContribution;
+
+		// Skyrim's native mask can close completely over bright daytime pixels. Keep
+		// that mask unchanged for vanilla Bloom, but give the opt-in enhancement at
+		// least normalized display headroom without ever reducing the native mask.
+		[branch] if (blendWeight > 0.0) {
+			float3 enhancedMask = max(vanillaMask, saturate(1.0 - mappedColor));
+			float3 enhancedContribution = enhancedMask * enhancedBloomColor;
+			result += saturate(blendWeight) * (enhancedContribution - vanillaContribution);
+		}
+
+		return result;
+	}
+
+#if defined(PSHADER) && defined(BLEND)
+	float3 HuePreservingHejlBurgessDawson(
+		float3 col,
+		float3 vanillaBloomCol,
+		float3 enhancedBloomCol,
+		float bloomBlendWeight)
 	{
 		float3 ictcp = RGBToICtCp(col);
 
@@ -138,7 +166,7 @@ namespace DisplayMapping
 
 		// Non-hue preserving mapping
 		float3 perChannelCompressed = GetTonemapFactorHejlBurgessDawson(col);
-		perChannelCompressed += saturate(Param.x - perChannelCompressed) * bloomCol;
+		perChannelCompressed = ApplyBloom(perChannelCompressed, vanillaBloomCol, enhancedBloomCol, Param.x, bloomBlendWeight);
 
 		col = perChannelCompressed;
 
@@ -156,6 +184,7 @@ namespace DisplayMapping
 
 		return col;
 	}
+#endif
 }
 
 #endif  // __DISPLAY_MAPPING_DEPENDENCY_HLSL__

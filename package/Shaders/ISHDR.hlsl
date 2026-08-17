@@ -125,9 +125,9 @@ float3 SampleVanillaBloomEnhanced(float2 a_uv, out float3 a_vanillaBloom)
 			float2 sampleUV = ClampBloomSampleUV(a_uv + INNER_DIAGONAL_OFFSETS[diagonalIndex] * sampleStep, eyeIndex, bloomWidth);
 			wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * BLOOM_INNER_DIAGONAL_WEIGHT;
 		}
-		[unroll] for (uint cardinalIndex = 0; cardinalIndex < 4; ++cardinalIndex)
+		[unroll] for (uint outerCardinalIndex = 0; outerCardinalIndex < 4; ++outerCardinalIndex)
 		{
-			float2 sampleUV = ClampBloomSampleUV(a_uv + OUTER_CARDINAL_OFFSETS[cardinalIndex] * sampleStep, eyeIndex, bloomWidth);
+			float2 sampleUV = ClampBloomSampleUV(a_uv + OUTER_CARDINAL_OFFSETS[outerCardinalIndex] * sampleStep, eyeIndex, bloomWidth);
 			wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * BLOOM_OUTER_CARDINAL_WEIGHT;
 		}
 
@@ -176,20 +176,21 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
 
 	float3 bloomColor = 0;
-#		if defined(CS_UTILITY)
 	float3 vanillaBloomColor = 0;
-#		endif
+	float bloomBlendWeight = 0.0;
 	if (Flags.x > 0.5) {
 #		if defined(CS_UTILITY)
 		bloomColor = SampleVanillaBloomEnhanced(uv, vanillaBloomColor);
 #		else
 		bloomColor = ImageTex.Sample(ImageSampler, uv).xyz;
+		vanillaBloomColor = bloomColor;
 #		endif
 	} else {
 #		if defined(CS_UTILITY)
 		bloomColor = SampleVanillaBloomEnhanced(input.TexCoord.xy, vanillaBloomColor);
 #		else
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
+		vanillaBloomColor = bloomColor;
 #		endif
 	}
 
@@ -205,7 +206,7 @@ PS_OUTPUT main(PS_INPUT input)
 		                                     0.0;
 		float bloomScale = compressedBloomLuminance / max(bloomLuminance, EPSILON_DIVISION);
 		bloomColor *= bloomScale;
-		bloomColor = lerp(vanillaBloomColor, bloomColor, saturate(SharedData::bloomSettings.BlendWeight));
+		bloomBlendWeight = saturate(SharedData::bloomSettings.BlendWeight);
 	}
 #		endif
 
@@ -221,15 +222,14 @@ PS_OUTPUT main(PS_INPUT input)
 
 	[branch] if (Param.z > 0.5)
 	{
-		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
+		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, vanillaBloomColor, bloomColor, bloomBlendWeight);
 	}
 	else
 	{
 		float maxCol = Color::RGBToLuminance(inputColor);
 		float mappedMax = GetTonemapFactorReinhard(maxCol).x;
 		float3 compressedHuePreserving = inputColor * mappedMax / max(maxCol, EPSILON_DIVISION);
-		float3 bloomContribution = saturate(Param.x - compressedHuePreserving) * bloomColor;
-		blendedColor = compressedHuePreserving + bloomContribution;
+		blendedColor = DisplayMapping::ApplyBloom(compressedHuePreserving, vanillaBloomColor, bloomColor, Param.x, bloomBlendWeight);
 	}
 
 	float blendedLuminance = Color::RGBToLuminance(blendedColor);

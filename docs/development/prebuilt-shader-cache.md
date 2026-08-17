@@ -19,7 +19,7 @@ following:
 -   compiler flags and custom shader defines;
 -   the permutation inventory in the matching validation YAML.
 
-The current release profile:
+The default `shipped` release profile:
 
 -   merges `package/Shaders` and feature `Shaders` trees;
 -   excludes every `Tests` directory;
@@ -28,6 +28,10 @@ The current release profile:
 -   enables `WETTERNESS` for `Lighting.hlsl` and `Water.hlsl`;
 -   omits the VR feature metadata from an SE cache;
 -   compiles optimized release bytecode, without developer/debug defines.
+
+Named tester profiles are opt-in. Omitting `--profile` always selects
+`shipped`; release workflows and existing maintainer commands therefore keep
+their current behavior.
 
 The builder removes the five debug-profile defines itself. Do not replace that
 filter with hlslkit's `--strip-debug-defines`: the pinned implementation also
@@ -52,12 +56,14 @@ the supplied cache.
 | Concern                                         | Source of truth                                     |
 | ----------------------------------------------- | --------------------------------------------------- |
 | Local build, staging, validation, and packaging | `tools/build-shader-cache.py`                       |
+| Named cache profiles                            | `CACHE_PROFILES` in `tools/build-shader-cache.py`   |
 | Python dependencies and pinned hlslkit revision | `tools/shader-cache-requirements.txt`               |
 | SE permutation inventory                        | `.github/configs/shader-validation.yaml`            |
 | VR permutation inventory                        | `.github/configs/shader-validation-vr.yaml`         |
 | Runtime content digest                          | `src/Utils/ContentHash.h` and `src/ShaderCache.cpp` |
 | Runtime manifest schema and atomic persistence  | `src/Utils/ShaderCacheManifest.h`                   |
 | Plugin versions written to `Info.ini`           | `CMakePresets.json`                                 |
+| Core compatibility marker                       | `CSX_VERSION` in `CMakeLists.txt`                   |
 | Feature versions written to `Info.ini`          | `features/*/Shaders/Features/*.ini`                 |
 | Standalone/reusable cache CI                    | `.github/workflows/shader-cache.yaml`               |
 | Release integration                             | `.github/workflows/release-build.yaml`              |
@@ -184,15 +190,16 @@ if ($LASTEXITCODE -ne 0) {
 This compiles HLSL but does not build the C++ plugin. The builder:
 
 1. assembles the release shader tree in an isolated temporary directory;
-2. applies the shipped feature profile;
+2. applies the selected cache profile (`shipped` by default);
 3. compiles the complete SE and VR inventories with the pinned hlslkit;
 4. remaps runtime ImageSpace directories;
 5. writes `Manifest.json` from source and recursive-include content;
 6. writes `Info.ini` with plugin and feature versions;
 7. validates metadata, every manifest entry, every blob, and the `DXBC`
    signature;
-8. adds FOMOD metadata that preserves the required `ShaderCache` directory in
-   Mod Organizer 2 and prepares install-ready archives;
+8. derives an exact `CSX<major>.<minor>-<SE|VR>.marker` dependency from each
+   runtime's `Info.ini`, adds fail-closed FOMOD metadata, and prepares
+   install-ready archives;
 9. publishes output only after every requested runtime has passed the earlier
    stages.
 
@@ -261,6 +268,51 @@ only source compilation records produce distinct distributable variants.
 Use `VR` instead of `SE` for a VR-only cache. Do not distribute an SE cache as
 VR or combine the two archives.
 
+### Build the Patka tester profile
+
+`patka` is a persistent, VR-only projection of Patka's provided
+`SettingsUser.json` cache contract. When asked to build a shader cache for
+Patka, use:
+
+```powershell
+& $cachePython tools/build-shader-cache.py `
+    --runtime VR `
+    --profile patka `
+    --package
+```
+
+Without `--profile patka`, build the normal `shipped` cache exactly as before.
+The default Patka archive label includes both the derived core identity and
+`Patka`; `--package-label` can still provide a release-specific label.
+
+The profile is derived from the cache-relevant fields in the tester snapshot
+with SHA-256
+`7FB038E6F237E1A397282CF7BE3624729E361CE3E1D1D07D2A088B4C06D9063A`.
+It records the following features as disabled:
+
+-   Cloud Shadows, CS Editor, Extended Translucency, Grass Collision, Hair
+    Specular, Linear Lighting, Performance Overlay, RenderDoc, Screenshot,
+    Terrain Blending, Volumetric Shadows, Weather Picker, and Wetterness;
+-   Horizon Fix, because the captured tester setup does not have its external
+    plugin active. Activating that plugin later intentionally invalidates this
+    profile and lets the runtime rebuild compatible entries.
+
+It keeps the optimized VR compile state, an empty custom Shader Defines value,
+Partial Precision off, the absent/default-off Avoid Flow Control setting, and
+Unified Water enabled. The tester may use either Info or Off logging because
+neither enables Developer Mode; use Info for validation evidence. Debug or
+Trace changes the compile state and invalidates these optimized blobs.
+
+The stale `ExponentialHeightFog` and `Skin` entries in the supplied Disable at
+Boot object are intentionally ignored because neither is a current cache
+feature with canonical metadata.
+
+This is not a copy of every numeric rendering preference. Numeric settings that
+do not affect feature enablement, shader defines, or compiler flags remain in
+the user's settings and do not belong in cache metadata. If the tester changes
+any cache-contract field, update the named profile and rebuild it; never edit
+`Info.ini` without recompiling the matching bytecode.
+
 ### Override `fxc.exe` or worker count
 
 ```powershell
@@ -276,9 +328,12 @@ VR or combine the two archives.
 
 ### Override plugin versions
 
-Normally, do not override these values. The builder derives SE from the
-`AIO-Release` preset and VR from `ALL`/`ALL-VS2022` in
-`CMakePresets.json`.
+Normally, do not override these values. Official releases ship one
+multi-runtime core from the `ALL`/`ALL-VS2022` preset, so the builder derives
+both cache identities from that same preset. A cache's SE/VR permutation
+inventory remains runtime-specific; its compatibility marker identifies the
+core DLL package. Use an override only when deliberately pairing a cache with
+an independently built runtime-specific core.
 
 For one runtime:
 
@@ -318,6 +373,9 @@ Successful builder completion already proves:
 -   the archive was created and is nonempty;
 -   the archive contains `ShaderCache/Info.ini`,
     `ShaderCache/Manifest.json`, and both required FOMOD installer files.
+-   the archived FOMOD requires both the active Community Shaders DLL and the
+    exact generated CSX compatibility marker with `operator="And"`;
+-   the archived FOMOD maps only `ShaderCache` to `Data/ShaderCache`.
 
 Optional operator checks:
 
@@ -355,7 +413,24 @@ contract and rerun the supported builder.
 
 ## Install and ship
 
-Each archive contains a top-level `ShaderCache` directory and FOMOD metadata.
+Each core/AIO build generates exactly one compatibility marker from its
+configured `CSX_VERSION` under
+`SKSE/Plugins/CommunityShaders/CSX<major>.<minor>-<SE|VR>.marker`. The shader
+cache builder derives the same marker name from `Info.ini`; version bumps need
+no marker or FOMOD source edit.
+
+Each cache archive contains a top-level `ShaderCache` directory and FOMOD
+metadata. The FOMOD refuses installation unless both the Community Shaders DLL
+and its exact version marker are active. This is a package handshake: FOMOD
+cannot inspect the DLL's embedded product-version bytes, so core packages must
+never ship a marker from another build.
+
+When upgrading through a mod manager, replace the old core mod instead of
+merging versions or leaving multiple core packages active. Otherwise an old
+marker can remain visible beside the winning DLL, which no declarative FOMOD
+dependency can correlate back to its original package. Remove any stale
+`SKSE/Plugins/CommunityShaders/CSX*.marker` entries before installing the
+matching cache.
 
 -   For manual installation, it becomes
     `<Skyrim>\Data\ShaderCache`.
@@ -363,6 +438,11 @@ Each archive contains a top-level `ShaderCache` directory and FOMOD metadata.
     `ShaderCache` and choose **Set data directory** in the manual installer;
     that strips the required directory and incorrectly exposes the cache as
     `Data\Info.ini`, `Data\Lighting`, and so on.
+-   MO2's built-in **Fomod Installer** defaults to checking only
+    `.esp`/`.esm`/`.esl` dependencies. Before installing the cache, enable
+    **Settings > Plugins > Fomod Installer > use_any_file** so the DLL and
+    marker dependencies can be evaluated. With that option disabled, the
+    installer intentionally fails closed even when the matching core exists.
 -   In a mod-manager package whose root maps to Skyrim's `Data`, place
     `ShaderCache` alongside `Shaders` and `SKSE`.
 -   Offer separate, clearly labelled SE and VR files.
@@ -419,7 +499,7 @@ draft release. No separate manual cache run is required for that path.
 | Shipped `.hlsl` or `.hlsli` content                                                          | Audit/bump the owning feature version as required; rebuild affected SE and VR caches              |
 | Feature `[Info] Version` or shipped enabled profile                                          | Rebuild and verify generated `Info.ini`                                                           |
 | SE/VR validation YAML or permutation inventory                                               | Rebuild that runtime; rebuild both if shared assumptions changed                                  |
-| Profile constants, excluded packages, or ImageSpace mapping in the builder                   | Rebuild both runtimes                                                                             |
+| Selected profile constants, excluded packages, or ImageSpace mapping in the builder          | Rebuild every affected profile/runtime                                                            |
 | Plugin version label                                                                         | Update `CMakePresets.json`, then rebuild matching runtime caches                                  |
 | Compiler flags, macro ordering, cache filename/key, descriptor mapping, or source resolution | Coordinate runtime and builder changes, then rebuild                                              |
 | Digest algorithm or manifest shape                                                           | Update both languages, bump the schema, update the pin, then rebuild everything                   |
@@ -434,7 +514,7 @@ draft release. No separate manual cache run is required for that path.
    `features/<Feature>/Shaders/Features/<ShortName>.ini`.
 4. Ensure the SE and VR validation YAMLs still enumerate every intended
    permutation.
-5. If the release profile changed, update the profile constants in
+5. If a cache profile changed, update its profile constants in
    `tools/build-shader-cache.py`.
 6. Build and validate both runtime caches.
 7. Smoke-test the exact packaged source, plugin, and cache together.
@@ -555,7 +635,9 @@ An AI agent maintaining this system must:
 8. Keep dependency pins in `tools/shader-cache-requirements.txt` rather than
    duplicating them in docs or workflows.
 9. Distinguish the plugin version in `Info.ini` from the archive/package label.
-10. Report the exact scope boundary and any validation not performed.
+10. Use `--profile patka` only when explicitly asked for Patka's cache; omit
+    `--profile` for normal release caches.
+11. Report the exact scope boundary and any validation not performed.
 
 When builds are forbidden, the minimum static validation is:
 

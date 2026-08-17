@@ -111,6 +111,15 @@ jobs:
               shell: bash
               run: python -m pip install -r tools/shader-cache-requirements.txt
 
+            - name: Test shader cache packaging contract
+              shell: bash
+              run: |
+                  if [ -f tests/shader_cache_packaging_test.py ]; then
+                    python tests/shader_cache_packaging_test.py
+                  else
+                    echo "Target ref predates shader-cache packaging tests; skipping."
+                  fi
+
             - name: Build, validate, and package shader cache
               shell: pwsh
               env:

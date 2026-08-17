@@ -9,11 +9,9 @@ Produces the layout the runtime consumes at Data/ShaderCache/:
 Packaged archives also contain a FOMOD installer that preserves the required
 ShaderCache directory when installing through Mod Organizer 2.
 
-The generated cache targets this repo's shipped distribution profile:
-  - the VR feature is omitted on SE
-  - shipped features are treated as active
-  - plugin-detected compatibility features are inactive until detected at runtime
-  - WetnessEffects is legacy, default-off, and not shipped
+The default cache targets this repo's shipped distribution profile. Named
+profiles can preserve a maintainer-approved tester feature set without changing
+the default release behavior.
 
 Usage:
   python tools/build-shader-cache.py --runtime both --package
@@ -30,7 +28,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,10 @@ FOMOD_DIRECTORY = "fomod"
 FOMOD_CONFIG_FILE_NAME = "ModuleConfig.xml"
 FOMOD_INFO_FILE_NAME = "info.xml"
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
+CSX_PLUGIN_VERSION_PATTERN = re.compile(
+    r"^CSX (?P<version>[0-9]+\.[0-9]+)-(?P<runtime>SE|VR)$"
+)
+CSX_MARKER_RELATIVE_DIRECTORY = "SKSE/Plugins/CommunityShaders"
 
 
 RUNTIME_EXCLUDED_FEATURES = {
@@ -53,20 +57,14 @@ RUNTIME_EXCLUDED_FEATURES = {
 }
 
 # Distribution profile transforms. The source validation configs are still
-# useful as compile inventories, but the shipped cache profile is different:
-# WetnessEffects is legacy/non-shipped, while Wetterness and UnifiedWater ship on.
+# useful as compile inventories, but cache profiles select the feature state
+# represented by the compiled bytecode and Info.ini metadata.
 NON_SHIPPED_FEATURES = {
     "WetnessEffects": {
         "define": "WETNESS_EFFECTS",
         "package": "Wetness Effects",
     },
 }
-GLOBAL_SHIPPED_DEFINES = ("UNIFIED_WATER",)
-FILE_SHIPPED_DEFINES = {
-    "Lighting.hlsl": ("WETTERNESS",),
-    "Water.hlsl": ("WETTERNESS",),
-}
-CACHE_DEFAULT_DISABLED_FEATURES = frozenset({"HorizonFix"})
 NON_SHIPPED_DEFINES = {
     feature["define"]
     for feature in NON_SHIPPED_FEATURES.values()
@@ -78,10 +76,84 @@ DEBUG_PROFILE_DEFINES = {
     "D3DCOMPILE_DEBUG",
     "D3DCOMPILE_SKIP_OPTIMIZATION",
 }
-PROFILE_EXCLUDED_DEFINES = NON_SHIPPED_DEFINES | DEBUG_PROFILE_DEFINES
 NON_SHIPPED_PACKAGES = {
     feature["package"]
     for feature in NON_SHIPPED_FEATURES.values()
+}
+
+
+@dataclass(frozen=True)
+class CacheProfile:
+    name: str
+    display_name: str
+    supported_runtimes: frozenset[str]
+    disabled_features: frozenset[str]
+    excluded_defines: frozenset[str]
+    global_defines: tuple[str, ...]
+    file_defines: dict[str, tuple[str, ...]]
+
+
+BASE_EXCLUDED_DEFINES = frozenset(NON_SHIPPED_DEFINES | DEBUG_PROFILE_DEFINES)
+SHIPPED_CACHE_PROFILE = CacheProfile(
+    name="shipped",
+    display_name="Shipped",
+    supported_runtimes=frozenset({"SE", "VR"}),
+    disabled_features=frozenset({"HorizonFix"}),
+    excluded_defines=BASE_EXCLUDED_DEFINES,
+    global_defines=("UNIFIED_WATER",),
+    file_defines={
+        "Lighting.hlsl": ("WETTERNESS",),
+        "Water.hlsl": ("WETTERNESS",),
+    },
+)
+
+# Stable VR tester profile derived from Patka's SettingsUser.json
+# (SHA-256 7FB038E6F237E1A397282CF7BE3624729E361CE3E1D1D07D2A088B4C06D9063A).
+# Only cache-contract inputs live here; numeric rendering preferences remain
+# user settings and do not belong in a distributable shader cache profile.
+PATKA_DISABLED_FEATURES = frozenset(
+    {
+        "CloudShadows",
+        "CSEditor",
+        "ExtendedTranslucency",
+        "GrassCollision",
+        "HairSpecular",
+        "HorizonFix",
+        "LinearLighting",
+        "PerformanceOverlay",
+        "RenderDoc",
+        "Screenshot",
+        "TerrainBlending",
+        "VolumetricShadows",
+        "WeatherPicker",
+        "Wetterness",
+    }
+)
+PATKA_EXCLUDED_DEFINES = frozenset(
+    {
+        "CLOUD_SHADOWS",
+        "CS_EDITOR",
+        "CS_HAIR",
+        "EXTENDED_TRANSLUCENCY",
+        "GRASS_COLLISION",
+        "HORIZON_FIX",
+        "TERRAIN_BLENDING",
+        "VOLUMETRIC_SHADOWS",
+        "WETTERNESS",
+    }
+)
+PATKA_CACHE_PROFILE = CacheProfile(
+    name="patka",
+    display_name="Patka",
+    supported_runtimes=frozenset({"VR"}),
+    disabled_features=PATKA_DISABLED_FEATURES,
+    excluded_defines=BASE_EXCLUDED_DEFINES | PATKA_EXCLUDED_DEFINES,
+    global_defines=("UNIFIED_WATER",),
+    file_defines={},
+)
+CACHE_PROFILES = {
+    profile.name: profile
+    for profile in (SHIPPED_CACHE_PROFILE, PATKA_CACHE_PROFILE)
 }
 
 IMAGESPACE_DIRS = {
@@ -311,7 +383,7 @@ def append_missing_defines(defines: object, names: tuple[str, ...]) -> None:
             defines.append(name)
 
 
-def apply_shipped_profile_defines(config: object) -> object:
+def apply_cache_profile_defines(config: object, profile: CacheProfile) -> object:
     def scrub(node: object) -> object:
         if isinstance(node, dict):
             return {key: scrub(value) for key, value in node.items()}
@@ -321,7 +393,7 @@ def apply_shipped_profile_defines(config: object) -> object:
                 for value in node
                 if not (
                     isinstance(value, str)
-                    and normalized_define_name(value) in PROFILE_EXCLUDED_DEFINES
+                    and normalized_define_name(value) in profile.excluded_defines
                 )
             ]
         return node
@@ -333,11 +405,11 @@ def apply_shipped_profile_defines(config: object) -> object:
     common_defines = config.get("common_defines")
     if not isinstance(common_defines, list):
         raise SystemExit("shader config common_defines must be a list")
-    append_missing_defines(common_defines, GLOBAL_SHIPPED_DEFINES)
+    append_missing_defines(common_defines, profile.global_defines)
 
     file_common_defines = config.get("file_common_defines")
     if isinstance(file_common_defines, dict):
-        for file_name, defines_to_add in FILE_SHIPPED_DEFINES.items():
+        for file_name, defines_to_add in profile.file_defines.items():
             stage_defines = file_common_defines.get(file_name)
             if isinstance(stage_defines, dict):
                 for defines in stage_defines.values():
@@ -358,7 +430,7 @@ def apply_shipped_profile_defines(config: object) -> object:
             continue
 
         file_name = shader.get("file")
-        defines_to_add = FILE_SHIPPED_DEFINES.get(file_name)
+        defines_to_add = profile.file_defines.get(file_name)
         if not defines_to_add or not isinstance(file_name, str):
             continue
 
@@ -382,10 +454,10 @@ def apply_shipped_profile_defines(config: object) -> object:
             )
         updated_files.add(file_name)
 
-    missing_files = sorted(set(FILE_SHIPPED_DEFINES) - updated_files)
+    missing_files = sorted(set(profile.file_defines) - updated_files)
     if missing_files:
         raise SystemExit(
-            "shader config is missing shipped-profile entries for: "
+            f"shader config is missing {profile.name}-profile entries for: "
             + ", ".join(missing_files)
         )
 
@@ -430,13 +502,18 @@ def validate_captured_variant_count(config: dict[str, object], config_path: Path
     print(f"shader config: validated {actual} captured variants from {config_path}")
 
 
-def filter_profile_defines(config_path: Path, out_path: Path, yaml: Any) -> Path:
+def filter_profile_defines(
+    config_path: Path,
+    out_path: Path,
+    yaml: Any,
+    profile: CacheProfile,
+) -> Path:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise SystemExit(f"shader config must be a YAML mapping: {config_path}")
 
     validate_captured_variant_count(config, config_path)
-    config = apply_shipped_profile_defines(config)
+    config = apply_cache_profile_defines(config, profile)
     out_path.write_text(
         yaml.safe_dump(config, sort_keys=False),
         encoding="utf-8",
@@ -535,15 +612,23 @@ def prune_non_cache_files(cache_dir: Path) -> None:
             directory.rmdir()
 
 
-def write_info_ini(cache_dir: Path, stage: Path, plugin_version: str, runtime: str) -> int:
+def write_info_ini(
+    cache_dir: Path,
+    stage: Path,
+    plugin_version: str,
+    runtime: str,
+    profile: CacheProfile,
+) -> int:
     validate_ini_value(plugin_version, "plugin version")
     lines = ["[Cache]", f"PluginVersion = {plugin_version}", "", ""]
     count = 0
+    seen_features: set[str] = set()
 
     for ini_path in sorted((stage / "Features").glob("*.ini")):
         stem = ini_path.stem
         if stem in RUNTIME_EXCLUDED_FEATURES[runtime] or stem in NON_SHIPPED_FEATURES:
             continue
+        seen_features.add(stem)
 
         config = configparser.ConfigParser(interpolation=None)
         try:
@@ -557,9 +642,16 @@ def write_info_ini(cache_dir: Path, stage: Path, plugin_version: str, runtime: s
             raise SystemExit(f"{ini_path.name} has no Info/Version")
         validate_ini_value(version, f"{ini_path.name} feature version")
 
-        enabled = "false" if stem in CACHE_DEFAULT_DISABLED_FEATURES else "true"
+        enabled = "false" if stem in profile.disabled_features else "true"
         lines += [f"[{stem}]", f"Enabled = {enabled}", f"Version = {version}", "", ""]
         count += 1
+
+    missing_features = sorted(profile.disabled_features - seen_features)
+    if missing_features:
+        raise SystemExit(
+            f"cache profile {profile.name!r} references missing feature metadata: "
+            + ", ".join(missing_features)
+        )
 
     (cache_dir / INFO_FILE_NAME).write_bytes(
         b"\xef\xbb\xbf" + "\r\n".join(lines).encode("utf-8")
@@ -582,7 +674,11 @@ def default_plugin_version(source_root: Path, runtime: str) -> str:
         ) from exc
 
     candidates = {
-        "SE": ["AIO-Release", "FLATRIM", "SE"],
+        # Official releases ship one ALL core binary for every supported
+        # runtime, so every cache must default to that binary's identity.
+        # Runtime-specific core builds remain available through the explicit
+        # --plugin-version overrides.
+        "SE": ["ALL", "ALL-VS2022", "AIO-Release", "FLATRIM", "SE"],
         "VR": ["ALL", "ALL-VS2022", "VR"],
     }
 
@@ -604,6 +700,17 @@ def default_plugin_version(source_root: Path, runtime: str) -> str:
     raise SystemExit(
         f"cannot derive {runtime} plugin version from CMakePresets.json; pass --plugin-version"
     )
+
+
+def csx_compatibility_tag(plugin_version: str) -> str:
+    """Return the exact core marker tag represented by a CSX plugin label."""
+    match = CSX_PLUGIN_VERSION_PATTERN.fullmatch(plugin_version)
+    if not match:
+        raise SystemExit(
+            "packaged plugin versions must use the "
+            "'CSX <major>.<minor>-<SE|VR>' format"
+        )
+    return f"CSX{match.group('version')}-{match.group('runtime')}"
 
 
 def locate_fxc(explicit: str | None) -> str:
@@ -769,6 +876,48 @@ def positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
     return parsed
+
+
+def validate_cache_profile(profile: CacheProfile, runtimes: list[str]) -> None:
+    unsupported = sorted(set(runtimes) - profile.supported_runtimes)
+    if unsupported:
+        raise SystemExit(
+            f"cache profile {profile.name!r} does not support runtime(s): "
+            + ", ".join(unsupported)
+        )
+
+    noncanonical_exclusions = sorted(
+        define
+        for define in profile.excluded_defines
+        if define != normalized_define_name(define)
+    )
+    if noncanonical_exclusions:
+        raise SystemExit(
+            f"cache profile {profile.name!r} has noncanonical exclusions: "
+            + ", ".join(noncanonical_exclusions)
+        )
+
+    injected_defines = {
+        normalized_define_name(define)
+        for define in profile.global_defines
+    }
+    injected_defines.update(
+        normalized_define_name(define)
+        for defines in profile.file_defines.values()
+        for define in defines
+    )
+    conflicts = sorted(injected_defines & profile.excluded_defines)
+    if conflicts:
+        raise SystemExit(
+            f"cache profile {profile.name!r} both injects and excludes: "
+            + ", ".join(conflicts)
+        )
+
+
+def default_package_label(profile: CacheProfile, plugin_version: str) -> str:
+    if profile.name == SHIPPED_CACHE_PROFILE.name:
+        return plugin_version
+    return f"{plugin_version}-{profile.display_name}"
 
 
 def require_compile_tools() -> tuple[tuple[str, ...], Any, Callable[..., int]]:
@@ -944,8 +1093,102 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
     return destination
 
 
-def write_fomod_installer(runtime_root: Path, runtime: str, label: str) -> Path:
-    """Stage an MO2 installer that maps ShaderCache to Data/ShaderCache."""
+def validate_fomod_installer(fomod_dir: Path, compatibility_tag: str) -> None:
+    """Require one exact fail-closed dependency set and cache mapping."""
+    config_path = fomod_dir / FOMOD_CONFIG_FILE_NAME
+    try:
+        root = ET.parse(config_path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise SystemExit(f"invalid cache FOMOD config {config_path}: {exc}") from exc
+
+    expected_top_level = [
+        "moduleName",
+        "moduleDependencies",
+        "requiredInstallFiles",
+    ]
+    if root.tag != "config" or [child.tag for child in root] != expected_top_level:
+        raise SystemExit(
+            "cache FOMOD config must use the ordered moduleName, "
+            "moduleDependencies, and requiredInstallFiles structure"
+        )
+    module_name = root.find("./moduleName")
+    if module_name is None or not (module_name.text or "").strip():
+        raise SystemExit("cache FOMOD moduleName must not be empty")
+
+    dependency_groups = root.findall("./moduleDependencies")
+    if len(dependency_groups) != 1:
+        raise SystemExit(
+            "cache FOMOD must contain exactly one moduleDependencies group"
+        )
+    dependency_group = dependency_groups[0]
+    if dependency_group.get("operator") != "And":
+        raise SystemExit("cache FOMOD moduleDependencies must use operator=And")
+
+    dependency_children = list(dependency_group)
+    dependencies = [
+        (
+            dependency.get("file", "").replace("\\", "/"),
+            dependency.get("state", ""),
+        )
+        for dependency in dependency_children
+        if dependency.tag == "fileDependency"
+    ]
+    expected_dependencies = [
+        ("SKSE/Plugins/CommunityShaders.dll", "Active"),
+        (
+            f"{CSX_MARKER_RELATIVE_DIRECTORY}/"
+            f"{compatibility_tag}.marker",
+            "Active",
+        ),
+    ]
+    if (
+        len(dependency_children) != len(expected_dependencies)
+        or sorted(dependencies) != sorted(expected_dependencies)
+    ):
+        raise SystemExit(
+            "cache FOMOD must require exactly the active CommunityShaders.dll "
+            f"and {compatibility_tag}.marker"
+        )
+
+    install_groups = root.findall("./requiredInstallFiles")
+    install_folders = root.findall("./requiredInstallFiles/folder")
+    if (
+        len(install_groups) != 1
+        or len(list(install_groups[0])) != 1
+        or len(install_folders) != 1
+        or install_folders[0].get("source") != CACHE_DIRECTORY
+        or install_folders[0].get("destination") != CACHE_DIRECTORY
+        or install_folders[0].get("priority") != "0"
+    ):
+        raise SystemExit(
+            "cache FOMOD must install only ShaderCache at Data/ShaderCache "
+            "with priority 0"
+        )
+
+    info_path = fomod_dir / FOMOD_INFO_FILE_NAME
+    try:
+        info_root = ET.parse(info_path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise SystemExit(f"invalid cache FOMOD info {info_path}: {exc}") from exc
+    expected_info_children = ["Name", "Author", "Version", "Description"]
+    if (
+        info_root.tag != "fomod"
+        or [child.tag for child in info_root] != expected_info_children
+        or any(not (child.text or "").strip() for child in info_root)
+    ):
+        raise SystemExit(
+            "cache FOMOD info must contain nonempty ordered Name, Author, "
+            "Version, and Description fields"
+        )
+
+
+def write_fomod_installer(
+    runtime_root: Path,
+    runtime: str,
+    label: str,
+    plugin_version: str,
+) -> Path:
+    """Stage an installer gated on the exact active CSX core identity."""
     fomod_dir = runtime_root / FOMOD_DIRECTORY
     if path_entry_exists(fomod_dir):
         raise SystemExit(
@@ -954,15 +1197,20 @@ def write_fomod_installer(runtime_root: Path, runtime: str, label: str) -> Path:
 
     fomod_dir.mkdir()
     display_label = safe_label(label)
+    compatibility_tag = csx_compatibility_tag(plugin_version)
     module_name = f"Community Shaders {runtime} Shader Cache - {display_label}"
     description = (
-        "Installs the precompiled shader cache at Data\\ShaderCache without "
-        "flattening its required directory."
+        f"Requires an active {compatibility_tag} core installation, then installs "
+        "the matching precompiled shader cache at Data\\ShaderCache."
     )
     module_config = f"""<?xml version="1.0" encoding="UTF-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
   <moduleName>{module_name}</moduleName>
+  <moduleDependencies operator="And">
+    <fileDependency file="SKSE/Plugins/CommunityShaders.dll" state="Active" />
+    <fileDependency file="{CSX_MARKER_RELATIVE_DIRECTORY}/{compatibility_tag}.marker" state="Active" />
+  </moduleDependencies>
   <requiredInstallFiles>
     <folder source="{CACHE_DIRECTORY}" destination="{CACHE_DIRECTORY}" priority="0" />
   </requiredInstallFiles>
@@ -984,13 +1232,22 @@ def write_fomod_installer(runtime_root: Path, runtime: str, label: str) -> Path:
         (fomod_dir / FOMOD_INFO_FILE_NAME).write_text(
             info, encoding="utf-8", newline="\n"
         )
+        validate_fomod_installer(fomod_dir, compatibility_tag)
     except OSError as exc:
         shutil.rmtree(fomod_dir, ignore_errors=True)
         raise SystemExit(f"failed to stage cache installer: {fomod_dir}") from exc
+    except SystemExit:
+        shutil.rmtree(fomod_dir, ignore_errors=True)
+        raise
     return fomod_dir
 
 
-def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
+def validate_cache_archive(
+    archive: Path,
+    cmake: str,
+    runtime: str,
+    plugin_version: str,
+) -> None:
     """Verify the archive is installable without flattening ShaderCache."""
     command = [cmake, "-E", "tar", "tf", str(archive)]
     result = subprocess.run(command, capture_output=True, text=True)
@@ -999,11 +1256,12 @@ def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
             f"failed to inspect packaged {runtime} cache (exit {result.returncode})"
         )
 
-    entries = {
+    entry_list = [
         entry.strip().replace("\\", "/")
         for entry in result.stdout.splitlines()
         if entry.strip()
-    }
+    ]
+    entries = set(entry_list)
     required_entries = {
         f"{CACHE_DIRECTORY}/{INFO_FILE_NAME}",
         f"{CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
@@ -1017,11 +1275,57 @@ def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
             f"{', '.join(missing_entries)}"
         )
 
+    duplicate_required_entries = sorted(
+        entry for entry in required_entries if entry_list.count(entry) != 1
+    )
+    if duplicate_required_entries:
+        raise SystemExit(
+            f"packaged {runtime} cache has duplicate install metadata: "
+            f"{', '.join(duplicate_required_entries)}"
+        )
+
     flattened_entries = sorted({INFO_FILE_NAME, MANIFEST_FILE_NAME} & entries)
     if flattened_entries:
         raise SystemExit(
             f"packaged {runtime} cache contains flattened metadata: "
             f"{', '.join(flattened_entries)}"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix=f".shader-cache-{runtime}-archive-"
+    ) as temporary:
+        extract_root = Path(temporary)
+        extract_result = subprocess.run(
+            [cmake, "-E", "tar", "xf", str(archive)],
+            cwd=extract_root,
+            capture_output=True,
+            text=True,
+        )
+        if extract_result.returncode != 0:
+            raise SystemExit(
+                f"failed to extract packaged {runtime} cache for validation "
+                f"(exit {extract_result.returncode})"
+            )
+
+        info = configparser.ConfigParser(interpolation=None)
+        try:
+            with (extract_root / CACHE_DIRECTORY / INFO_FILE_NAME).open(
+                "r", encoding="utf-8-sig"
+            ) as stream:
+                info.read_file(stream)
+        except (configparser.Error, OSError, UnicodeError) as exc:
+            raise SystemExit(
+                f"packaged {runtime} cache has invalid {INFO_FILE_NAME}: {exc}"
+            ) from exc
+        archived_version = info.get("Cache", "PluginVersion", fallback=None)
+        if archived_version != plugin_version:
+            raise SystemExit(
+                f"packaged {runtime} cache plugin version is {archived_version!r}; "
+                f"expected {plugin_version!r}"
+            )
+        validate_fomod_installer(
+            extract_root / FOMOD_DIRECTORY,
+            csx_compatibility_tag(archived_version),
         )
 
 
@@ -1030,12 +1334,18 @@ def prepare_cache_archive(
     workspace: Path,
     runtime: str,
     label: str,
+    plugin_version: str,
     cmake: str,
 ) -> Path:
     """Create a validated candidate archive without changing published output."""
     archive_name = f"ShaderCache-{runtime}-{safe_label(label)}.7z"
     temporary_archive = workspace / archive_name
-    fomod_dir = write_fomod_installer(runtime_root, runtime, label)
+    fomod_dir = write_fomod_installer(
+        runtime_root,
+        runtime,
+        label,
+        plugin_version,
+    )
     try:
         command = [
             cmake,
@@ -1066,7 +1376,12 @@ def prepare_cache_archive(
             f"failed to package {runtime} cache (exit {result.returncode})"
         )
 
-    validate_cache_archive(temporary_archive, cmake, runtime)
+    validate_cache_archive(
+        temporary_archive,
+        cmake,
+        runtime,
+        plugin_version,
+    )
     print(
         f"{runtime}: prepared {temporary_archive.name} "
         f"({temporary_archive.stat().st_size} bytes)"
@@ -1100,6 +1415,7 @@ def build_runtime(
     compiler: tuple[str, ...],
     yaml: Any,
     write_manifest: Callable[..., int],
+    profile: CacheProfile,
 ) -> tuple[Path, int, int]:
     runtime_root = workspace / runtime
     cache_dir = runtime_root / CACHE_DIRECTORY
@@ -1109,6 +1425,7 @@ def build_runtime(
         config_path,
         workspace / f"config-{runtime}.yaml",
         yaml,
+        profile,
     )
     command = [
         *compiler,
@@ -1147,7 +1464,13 @@ def build_runtime(
         write_manifest,
     )
 
-    section_count = write_info_ini(cache_dir, stage, plugin_version, runtime)
+    section_count = write_info_ini(
+        cache_dir,
+        stage,
+        plugin_version,
+        runtime,
+        profile,
+    )
     blob_count = validate_cache(cache_dir, runtime, plugin_version)
     return runtime_root, blob_count, section_count
 
@@ -1159,6 +1482,16 @@ def main() -> int:
         choices=["SE", "VR", "both"],
         default="both",
         help="Target runtime(s).",
+    )
+    parser.add_argument(
+        "--profile",
+        type=str.lower,
+        choices=sorted(CACHE_PROFILES),
+        default=SHIPPED_CACHE_PROFILE.name,
+        help=(
+            "Cache feature profile (default: shipped). Patka is the persistent "
+            "VR profile for the main tester configuration."
+        ),
     )
     parser.add_argument(
         "--source-root",
@@ -1198,7 +1531,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--package-label",
-        help="Archive label (default: the runtime's plugin version).",
+        help=(
+            "Archive label (default: the runtime's plugin version; named "
+            "profiles append their display name)."
+        ),
     )
     args = parser.parse_args()
     if args.plugin_version and (
@@ -1221,6 +1557,9 @@ def main() -> int:
     if not source_root.is_dir():
         raise SystemExit(f"source root does not exist: {source_root}")
     runtimes = ["SE", "VR"] if args.runtime == "both" else [args.runtime]
+    profile = CACHE_PROFILES[args.profile]
+    validate_cache_profile(profile, runtimes)
+    print(f"cache profile: {profile.display_name} ({profile.name})")
     configs = configs_for(source_root)
     for runtime in runtimes:
         config_path = configs[runtime]
@@ -1239,6 +1578,8 @@ def main() -> int:
             or default_plugin_version(source_root, runtime)
         )
         validate_ini_value(plugin_version, f"{runtime} plugin version")
+        if args.package:
+            csx_compatibility_tag(plugin_version)
         plugin_versions[runtime] = plugin_version
 
     out_root = Path(args.out).resolve()
@@ -1283,6 +1624,7 @@ def main() -> int:
                 compiler=compiler,
                 yaml=yaml,
                 write_manifest=write_manifest,
+                profile=profile,
             )
             archive_candidate = None
             if args.package:
@@ -1290,7 +1632,9 @@ def main() -> int:
                     candidate_root,
                     workspace,
                     runtime,
-                    args.package_label or plugin_version,
+                    args.package_label
+                    or default_package_label(profile, plugin_version),
+                    plugin_version,
                     cmake,
                 )
             prepared.append(

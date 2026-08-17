@@ -49,8 +49,16 @@ function Get-EffectiveValue {
 
 function Set-ParameterValue {
     param([Parameter(Mandatory = $true)][double]$Value)
+    $current = Get-Control
+    $definitionProperty = $current.parameterDefinitions.PSObject.Properties[$Parameter]
+    if (-not $definitionProperty) { throw "$Feature does not define quality parameter $Parameter" }
+    $requestValue = $Value
+    if ($definitionProperty.Value.valueType -eq 'integer') {
+        if ([Math]::Abs($Value - [Math]::Round($Value)) -gt 0.000001) { throw "$Feature parameter $Parameter requires an integer value" }
+        $requestValue = [int][Math]::Round($Value)
+    }
     $transition = Invoke-DevBenchTool -Tool 'communityshaders.controls' -Payload @{
-        action = 'set'; feature = $Feature; control = $controlName; value = @{ $Parameter = $Value }
+        action = 'set'; feature = $Feature; control = $controlName; value = @{ $Parameter = $requestValue }
     }
     if ($transition.error) { throw "$Feature parameter set failed: $($transition.error)" }
     $script:snapshotHeld = [bool]$transition.control.snapshotHeld

@@ -183,6 +183,19 @@ namespace
 
 		state.bootSizingContractExact = true;
 		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
+			StartupRenderScaleDirectHandoffAction::QueuePhysicalContract) {
+			return false;
+		}
+
+		state.physicalRelatchPending = true;
+		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
+			StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract) {
+			return false;
+		}
+
+		state.physicalRelatchPending = false;
+		state.physicalRelatchInProgress = true;
+		if (SelectStartupRenderScaleDirectHandoffAction(state) !=
 			StartupRenderScaleDirectHandoffAction::WaitForPhysicalContract) {
 			return false;
 		}

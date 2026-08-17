@@ -12,10 +12,11 @@ They are benchmark entry points, not complete scene determinism. NPCs, particles
 
 ## HMD control result
 
-The SteamVR null HMD is active and produces exact accepted left/right OpenVR submissions at 1512 x 1680 per eye, 90 Hz. It is not yet arbitrarily steerable in this stack:
+The SteamVR null HMD is active and produces exact accepted left/right OpenVR submissions at 1512 x 1680 per eye, 90 Hz. The stack now has deterministic player-space translation, but not arbitrary HMD-pose control:
 
 - DevBench `camera.freecam on` crashed Skyrim VR at `SkyrimVR.exe+08768CF`, with `devbench.dll+009D524` on the task call stack. The retained crash log is `C:\Users\Mark\Documents\My Games\Skyrim VR\SKSE\crash-2026-08-17-12-07-43.log`.
 - `player.setangle z 0` and `player.setangle z 90` changed the actor request but did not change the submitted-eye camera. All three readbacks remained at yaw `1.682461142539978`, and the retained stereo captures kept the same framing.
+- A typed Papyrus `ObjectReference.SetPosition` call on player form `0x14` moved the submitted view by the requested `+32` units on X in three SSGI on/off/on phases. Each phase reproduced the Dragonsreach anchor, captured 30 separate-eye pairs at a three-cycle cadence, and verified the destination position. All 90 pairs completed without failed, incomplete, or backpressured submissions.
 - `coc` establishes stable entry poses for the validated anchors below, but a
   retained pose must still be rechecked from a fresh `coc`. The attractive
   Whiterun multi-depth proof failed that test: repeated entry produced position
@@ -23,7 +24,9 @@ The SteamVR null HMD is active and produces exact accepted left/right OpenVR sub
   proof position/yaw. Player position could be corrected, but submitted-view
   yaw could not. It is therefore a rejected candidate, not an anchor.
 
-The next control proof should use a synthetic tracked-device/controller driver with an explicit SteamVR action binding, or a VR-safe correction to DevBench free-camera handling. SteamVR's input-binding debug option can help diagnose that work. Global overlay input is relevant only if an overlay emits actions; Arcade Mode is unrelated; Quick Calibrate changes the tracking origin and must not be used during a benchmark campaign.
+The accepted translation proof is archived under campaign locator `preset-automation-visual-motion/ssgi-dragonsreach-motion-step-c-20260817`; its run record SHA-256 is `C3AB8A97BC1F97F6EAA684B3CF3566AE9828DE92C53263AD18C5FEF29CCDACAF`. It qualifies controlled translational scene motion in this null-HMD lane, not HMD rotation, controller motion, physical-head motion, or room-scale tracking.
+
+The next control proof should add submitted-view orientation through a synthetic tracked-device/controller driver with an explicit SteamVR action binding, or a VR-safe correction to DevBench free-camera handling. SteamVR's input-binding debug option can help diagnose that work. Global overlay input is relevant only if an overlay emits actions; Arcade Mode is unrelated; Quick Calibrate changes the tracking origin and must not be used during a benchmark campaign.
 
 ## Validated inventory
 
@@ -66,5 +69,6 @@ Use the console form without the leading zeroes, for example `fw C8220`. Do not 
 3. Read `inspect scene` and `camera get`; reject any mismatch against [`anchor-scenes.json`](./anchor-scenes.json).
 4. Warm the scene before timing. Keep capture disabled during timing.
 5. Run a separate visual pass with exact `hmd_stereo` pairs and preserve the per-eye images and manifest.
+6. For controlled translation, invoke typed Papyrus `ObjectReference.SetPosition` only from a compositor-scheduled DevBench scenario, verify the effective player position, and align analysis to the observed image transition rather than the nominal request time. Restore the anchor position in cleanup.
 
 Named-save creation through the current DevBench `game save` route did not produce a file in this VR session, so these first anchors intentionally use validated, self-checking recipes. Do not silently replace them with unverified saves.

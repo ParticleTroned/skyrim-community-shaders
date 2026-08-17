@@ -243,17 +243,35 @@ This is an append-only record. Supersede a decision with a new entry rather than
 ### `PA-2026-013` — Promote SSGI AO to a gated tier candidate
 
 - Date: 2026-08-17
-- Status: proposed; blocked from release generation by ambient-composition and moving-stereo gates
-- Snapshot: first AO-only enable and Full/Half/Quarter curves with owned preconfiguration restoration
+- Status: proposed; blocked from release generation by ambient-composition and rotating/physical-stereo gates
+- Snapshot: AO-only enable, Full/Half/Quarter curves, and the first controlled player-translation sequence with owned preconfiguration restoration
 - Question: Should the inherited all-disabled SSGI state remain common, or should AO become a tiered preset component?
 - Scope: AMD `SVR-OVR-NULL`, Guardian Stones timing and Dragonsreach visual/on-off timing, Info logging, AO-only resources
-- Hard constraints: `ResourceProfile=AO-only`; no GI/IL/specular activation; no double ambient/double AO; exact restoration to the original disabled state; physical/moving-HMD stereo remains unqualified
+- Hard constraints: `ResourceProfile=AO-only`; no GI/IL/specular activation; no double ambient/double AO; exact restoration to the original disabled state; submitted-view rotation and physical-HMD stereo remain unqualified
 - Options considered: remain disabled; enable Quality only; enable interiors in all tiers with Quarter/Half/Full resolution
-- Evidence: [SSGI and Volumetric Lighting calibration](./ssgi-volumetric-lighting-20260817.md). Half-resolution AO costs about 0.15–0.18 ms whole-frame in Dragonsreach and produces a repeatable ~1.16–1.20 mean-luma contribution with ~0.79 residual correlation. Named SSGI work is about 0.35–0.37 ms Full, 0.14 ms Half, and 0.06 ms Quarter.
-- Objective vector and uncertainty: AO contribution and cost are repeatable with close eye agreement; resolution visual ordering is subtler and NPC-contaminated; interaction with IBL/Skylighting/engine ambient and moving stereo is not yet qualified
+- Evidence: [SSGI and Volumetric Lighting calibration](./ssgi-volumetric-lighting-20260817.md). Half-resolution AO costs about 0.15–0.18 ms whole-frame in Dragonsreach and produces a repeatable ~1.16–1.20 mean-luma contribution with ~0.79 residual correlation. Named SSGI work is about 0.35–0.37 ms Full, 0.14 ms Half, and 0.06 ms Quarter. A 32-unit translation retained a `1.609/1.573`-luma AO effect against `0.470/0.458` return drift and recovered within about 100 ms in both eyes.
+- Objective vector and uncertainty: AO contribution and cost are repeatable with close eye agreement, and one position-step sequence has a stable settled response; resolution visual ordering is subtler and NPC-contaminated; interaction with IBL/Skylighting/engine ambient, rotating disocclusion, and physical-HMD reprojection are not yet qualified
 - Pareto result: inexpensive Quarter/Half AO supplies a real perceptual contribution, so the inherited dormant values are not an adequate final policy; correctness gates still dominate the apparent benefit
 - Decision: evaluate interiors-only AO at Quarter / Half / Full for Performance / Balanced / Quality; retain all-disabled as the release-safe fallback until the ambient and stereo gates pass
-- Confidence: medium-high for fixed-pose AMD magnitude and cost; low for release correctness and portability
+- Confidence: medium-high for AMD magnitude, cost, and controlled translation; low for release composition correctness, rotating/physical stereo, and portability
 - Consequences: generated development candidates may carry the gradient behind an explicit experimental/gated status; release presets must not enable it silently yet
-- Revalidation triggers: IBL × Skylighting × SSGI factorial, Vanilla SSAO state audit, moving/physical HMD, disocclusion sequence, alternate runtime, NVIDIA, or SSGI history/resource changes
+- Revalidation triggers: IBL × Skylighting × SSGI factorial, Vanilla SSAO state audit, rotating/physical HMD, continuous disocclusion sequence, alternate runtime, NVIDIA, or SSGI history/resource changes
 - Supersedes: the unqualified SSGI inheritance row, but not the current release-safe disabled fallback
+
+### `PA-2026-014` — Accept typed player translation as the null-HMD motion primitive
+
+- Date: 2026-08-17
+- Status: adopted for controlled translational campaigns
+- Snapshot: first accepted SSGI on/off/on motion ablation after rejecting console-position and free-camera routes
+- Question: Can the existing null-HMD lane produce reproducible scene motion without adding a custom SteamVR driver?
+- Scope: player-space translation in `SVR-OVR-NULL`; no claim of arbitrary HMD pose, rotation, controller input, or physical-headset equivalence
+- Hard constraints: invoke typed Papyrus only through a compositor-scheduled DevBench scenario; verify both endpoints; align comparisons to the observed image transition; restore the anchor and feature snapshot; retain exact separate-eye pairs
+- Options considered: console `setpos`/`modpos`; DevBench free camera; custom tracked-device driver; typed Papyrus `ObjectReference.SetPosition`
+- Evidence: `ssgi-dragonsreach-motion-step-c-20260817`, archived under campaign locator `preset-automation-visual-motion`, with run-record SHA-256 `C3AB8A97BC1F97F6EAA684B3CF3566AE9828DE92C53263AD18C5FEF29CCDACAF` and analysis SHA-256 `373865914F2DC49D70394075D4E504ACDD59A7AB34C863AE8576FDEB09C5F8C6`. Three 32-unit X translations produced 90 accepted stereo pairs with no capture drops and exact destination readback.
+- Objective vector and uncertainty: reuses the official DevBench surface, avoids a runtime driver, and supplies deterministic translation; main-thread response timing varies by a few retained frames, abrupt stepping is not continuous locomotion, and view orientation remains fixed
+- Pareto result: typed Papyrus translation is the smallest validated primitive for position-disocclusion screens; a custom driver remains necessary only for submitted-view orientation or controller-dependent phenomena
+- Decision: use typed player translation for null-HMD position-step and later `TranslateTo` campaigns, with content-aligned analysis; never label it arbitrary HMD control
+- Confidence: high for exact translation and cleanup in this lane; medium for temporal-analysis generality; none for rotation or other runtime lanes
+- Consequences: SSS, Wetness, Terrain Blending, Skylighting, and SSGI can receive controlled translation screens before physical-HMD testing; Grass Collision still needs actor/controller interaction, and rotational artifacts remain a physical/custom-driver gate
+- Revalidation triggers: DevBench/Papyrus scheduling change, player-camera ownership change, continuous `TranslateTo` implementation, synthetic tracked-device driver, alternate runtime, or physical HMD
+- Supersedes: the assumption that null-HMD scene motion requires a custom tracked-device driver; it does not supersede the orientation-control requirement

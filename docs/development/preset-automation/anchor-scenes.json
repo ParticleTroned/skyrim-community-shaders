@@ -113,9 +113,23 @@
   "hmdControl": {
     "active": true,
     "arbitraryPoseControl": false,
+    "playerTranslationControl": true,
+    "playerTranslationMethod": "typed Papyrus ObjectReference.SetPosition on player form 0x14, scheduled through a DevBench scenario",
+    "submittedViewOrientationControl": false,
     "validatedAnchorEntryPosesReproducible": true,
     "freecamResult": "crash",
     "playerYawChangesSubmittedView": false,
-    "nextCandidate": "synthetic tracked-device/controller driver plus explicit SteamVR action binding"
+    "translationProof": {
+      "runId": "ssgi-dragonsreach-motion-step-c-20260817",
+      "anchorId": "interior-dragonsreach-midday",
+      "axis": "x",
+      "offset": 32.0,
+      "phases": 3,
+      "pairsPerPhase": 30,
+      "frameIntervalCompositorCycles": 3,
+      "accepted": true,
+      "recordSha256": "C3AB8A97BC1F97F6EAA684B3CF3566AE9828DE92C53263AD18C5FEF29CCDACAF"
+    },
+    "nextCandidate": "submitted-view orientation through a synthetic tracked-device/controller driver plus explicit SteamVR action binding"
   }
 }

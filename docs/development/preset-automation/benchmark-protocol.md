@@ -1,6 +1,6 @@
 # Benchmark and capture protocol
 
-Status: initial protocol; synthetic-HMD execution path demonstrated, with the first run retained as invalid benchmark evidence
+Status: synthetic-HMD timing, fixed-pose stereo, and controlled-translation paths demonstrated
 
 ## Objective
 
@@ -68,14 +68,16 @@ The `SVR-OVR-NULL` proof of concept succeeds only when all of the following are 
 
 ## Controlled run
 
-Use the validated recipes and live readback tolerances in [`anchor-scenes.md`](./anchor-scenes.md) and [`anchor-scenes.json`](./anchor-scenes.json). In the current null-HMD stack, cell-entry poses are reproducible but arbitrary HMD steering is not: DevBench free-camera activation crashes Skyrim VR, and changing player yaw does not change the submitted-eye view. A run must therefore use the declared entry pose until synthetic tracked-device input or a VR-safe camera control is validated.
+Use the validated recipes and live readback tolerances in [`anchor-scenes.md`](./anchor-scenes.md) and [`anchor-scenes.json`](./anchor-scenes.json). In the current null-HMD stack, cell-entry poses and typed Papyrus player translations are reproducible, but arbitrary HMD steering is not: DevBench free-camera activation crashes Skyrim VR, and changing player yaw does not change the submitted-eye view. A run may use a declared entry pose or a verified player-space translation script; submitted-view orientation remains fixed until synthetic tracked-device input or a VR-safe camera control is validated.
+
+Run `ssgi-dragonsreach-motion-step-c-20260817` is the first accepted controlled-translation proof. It applies the same 32-unit X step after eight nominal pre-step frames in SSGI on/off/on phases, captures 30 separate-eye BMP pairs per phase at a three-compositor-cycle cadence, and verifies the exact destination. All 90 pairs completed without failed, incomplete, or backpressured submissions. Analysis aligns each phase to the observed frame transition because Skyrim's main-thread response may lag the compositor-scheduled request. This method qualifies translational response in `SVR-OVR-NULL`; it does not emulate HMD rotation, physical-head motion, controller interaction, or another runtime lane.
 
 Before the first MO2 launch of a session, apply the [artifact storage policy](./storage-policy.md): the fast external staging root must be empty of completed prior sessions, the persistent archive must be available for finalisation, and retained prior-session evidence must not remain beneath `overwrite\Root`. Calibration scripts write to the configured independent fast staging root by default.
 
 Before each candidate:
 
 1. Record the repository commit, built DLL digest/version, dependency snapshot when relevant, driver, runtime lane, HMD geometry, game configuration, mod list/profile, and complete CSX settings digest.
-2. Load the same save and establish scene ID, location, weather, time, pose, visible targets, and motion script.
+2. Load the same save and establish scene ID, location, weather, time, pose, visible targets, and motion script. For translated runs, record and verify both endpoints and restore the anchor in cleanup.
 3. Reach a defined warm state. Do not mix shader compilation, cache creation, loading transition, or history initialization with steady-state samples unless one is the phenomenon being studied.
 4. Run the timing pass with screenshot capture disabled.
 5. Run the visual pass separately using the same candidate and pose/motion script.

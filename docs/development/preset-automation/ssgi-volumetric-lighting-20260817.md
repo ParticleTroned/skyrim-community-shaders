@@ -4,11 +4,11 @@ Status: first AMD null-HMD qualification pass, 2026-08-17
 
 ## Scope and provenance
 
-These runs use the native OpenVR → SteamVR null-HMD lane (`SVR-OVR-NULL`), an AMD GPU, Info logging, the fixed Guardian Stones and Dragonsreach anchors, and a VR Release+DevBench DLL built from commit `16a8ec96b` with SHA-256 `D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605`.
+The timing and initial visual runs use the native OpenVR → SteamVR null-HMD lane (`SVR-OVR-NULL`), an AMD GPU, Info logging, the fixed Guardian Stones and Dragonsreach anchors, and a VR Release+DevBench DLL built from commit `16a8ec96b` with SHA-256 `D1A3F0BAA32ED16140A04DA90706E2A0D0D18CCEC0A46D41DB08D5FD9D821605`. The controlled-translation follow-up uses commit `d0682bf57` with DLL SHA-256 `1287E6DE6A0795A1E63FCCDE17CFCC86D463B0D9FF2438866C5DCB0207240CF4`.
 
 Timing and lossless stereo capture were separate workloads. Every accepted timing phase retained 120 unique resolved frames. Every visual phase saved six exact left/right BMP pairs with zero failed, incomplete, or backpressured pairs. The stopped-runtime finaliser moved the completed D: staging tree to `L:\CSX Preset Automation\Sessions\2026-08-17\CSX Baselines`; neither the game directory nor MO2 overwrite retains evidence.
 
-This is AMD fixed-pose evidence. It does not qualify a physical or moving HMD, NVIDIA, OpenXR, VDXR, or Open Composite Unleashed.
+This is AMD fixed-pose evidence plus one deterministic player-translation sequence. It does not qualify submitted-view rotation, a physical HMD, NVIDIA, OpenXR, VDXR, or Open Composite Unleashed.
 
 ## Volumetric Lighting essence and control boundary
 
@@ -70,6 +70,21 @@ AO visibly deepens broad contact and recess shading rather than merely changing 
 
 Resolution differences are much subtler. Full-minus-bracketing-Half averaged `0.760/0.744` luma MAE with only `0.248/0.255` cycle correlation; Quarter-minus-Half was about `-0.167/-0.165` signed luma. NPC movement contaminated parts of the frame, but same-Half drift was only `0.314/0.311` MAE. This supports the performance ordering and a small Full-resolution quality response, not a strong perceptual ranking from this one interior.
 
+### Controlled translation and recovery
+
+At the same Dragonsreach anchor, `ssgi-dragonsreach-motion-step-c-20260817` performed a compositor-scheduled 32-unit player translation on X in an on/off/on order. Every phase captured 30 separate-eye BMP pairs at a three-cycle cadence and verified the translated player position. All 90 pairs completed with zero failed, incomplete, or backpressured submissions.
+
+The observed image transition occurred at one-based frames 9, 8, and 7 in the three phases, so analysis aligned the sequences to image content rather than the nominal request frame. In the settled five-frame tail:
+
+| Eye | AO-on minus AO-off signed luma | Absolute MAE | Returning-on drift MAE | Effect/drift | First three-frame recovery within 10% of tail |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Left | `-1.437` | `1.609` | `0.470` | `3.42×` | relative frame `3` |
+| Right | `-1.405` | `1.573` | `0.458` | `3.43×` | relative frame `3` |
+
+At 90 Hz with one retained pair every three compositor cycles, relative frame 3 is about 100 ms after the aligned transition. The stable negative sign agrees with the fixed-pose result: AO darkens contact and recess structure. No gross persistent smear or divergent eye failure is apparent in the retained sequences. The same-pixel left/right effect correlation is not used as a stereo-correctness score because stereo parallax places corresponding scene points at different pixels.
+
+This is useful translational temporal evidence, not full disocclusion qualification. The motion is a position step with fixed submitted-view orientation; physical head rotation, continuous motion, reprojection behavior, and headset/runtime portability remain open.
+
 ## Preset implication
 
 All inherited AMD and NVIDIA presets currently set SSGI `Enabled=false`; their `AOInteriorsOnly` and `ResolutionMode` differences are therefore dormant. The measured AO contribution is strong enough, and Half/Quarter cost low enough, to promote an **evaluation candidate** rather than silently preserving inactive tier values:
@@ -80,7 +95,7 @@ All inherited AMD and NVIDIA presets currently set SSGI `Enabled=false`; their `
 | Balanced | AO-only, interiors only, Half resolution |
 | Quality | AO-only, interiors only, Full resolution |
 
-This candidate is not yet cleared for generated release presets. SSGI belongs to the ambient cluster with IBL, Skylighting, engine ambient/DALC, and deferred composition. A paired interaction screen must show that enabling AO does not over-darken the intended IBL/Skylighting baseline, and moving/physical-HMD capture must qualify stereo and disocclusion stability. Until those gates pass, the release-safe fallback remains disabled in all tiers.
+This candidate is not yet cleared for generated release presets. SSGI belongs to the ambient cluster with IBL, Skylighting, engine ambient/DALC, and deferred composition. A paired interaction screen must show that enabling AO does not over-darken the intended IBL/Skylighting baseline. The controlled-translation result reduces temporal uncertainty, but rotating/physical-HMD stereo and disocclusion remain unqualified. Until those gates pass, the release-safe fallback remains disabled in all tiers.
 
 ## Accepted artifact identities
 
@@ -93,5 +108,7 @@ This candidate is not yet cleared for generated release presets. SSGI belongs to
 | `ssgi-dragonsreach-enabled-curve-a-20260817` | `2D359EDB9879446F4885FF112270C5CE13DDFA11A72B7CF89C06AE52F0F78B66` |
 | `ssgi-dragonsreach-resolution-visual-a-20260817` | `A994BB0FED9C65E65A2AB3F118A78D97623BEBD7E8B8EDC02D9D1CABADABAA3A` |
 | `ssgi-dragonsreach-enabled-visual-a-20260817` | `1AF62E28C8A2F9164B4F621B57A236E4DEFD6D2388C078D86B5018D8D98FE6E1` |
+| `ssgi-dragonsreach-motion-step-c-20260817` run record | `C3AB8A97BC1F97F6EAA684B3CF3566AE9828DE92C53263AD18C5FEF29CCDACAF` |
+| `ssgi-dragonsreach-motion-step-c-20260817` analysis | `373865914F2DC49D70394075D4E504ACDD59A7AB34C863AE8576FDEB09C5F8C6` |
 
 Failed or conservatively rejected setup runs remain in the same archive for audit but are not used as accepted evidence.

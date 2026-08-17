@@ -43,6 +43,7 @@ Hard correctness and stability constraints are applied first. Surviving candidat
 | Controlled tier-motion screen | AMD/null-HMD translational response for Skylighting, SSS range, Wetterness, and Volumetric Lighting, with exact restoration and separate-eye analysis | [`motion-tier-screen-20260817.md`](./motion-tier-screen-20260817.md) |
 | Unified provisional preset candidates | Machine-readable three-tier synthesis, capability-selected upscaler boundary, generator, and release gates | [`unified-preset-candidates-20260817.md`](./unified-preset-candidates-20260817.md) |
 | Unified Quality smoke record | Machine-readable AMD/null-HMD provider-resolution and control-readback proof for the generated Quality file | [`unified-quality-smoke-20260817.json`](./unified-quality-smoke-20260817.json) |
+| Balanced style prototypes | Natural Reference, Mythic High Fantasy, and Bleak Dark Fantasy as reproducible overlays on one vendor-unified Balanced budget | [`style-prototypes-20260817.md`](./style-prototypes-20260817.md) |
 | Decision log | Append-only rationale connecting evidence to adopted or rejected choices | [`decision-log.md`](./decision-log.md) |
 
 The canonical schemas are:

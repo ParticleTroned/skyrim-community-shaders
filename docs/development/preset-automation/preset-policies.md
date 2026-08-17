@@ -17,6 +17,8 @@ The selection order is:
 
 A vendor-specific override is allowed only when a capability, driver behavior, correctness failure, or material performance-shape difference is demonstrated. It should be the narrowest setting-level constraint possible and must retain a link to its evidence.
 
+Visual style is a separate policy dimension from performance budget and GPU capability. A style may shape context lighting, tone, colour, atmosphere, and material emphasis, but must not silently substitute cheaper or more expensive shader settings for the selected Performance/Balanced/Quality budget. The first reproducible examples are the [Balanced style prototypes](./style-prototypes-20260817.md).
+
 ## Objective vector
 
 Each candidate comparison may contain:

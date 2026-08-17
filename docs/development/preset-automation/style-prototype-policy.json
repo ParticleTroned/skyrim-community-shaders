@@ -1,0 +1,263 @@
+{
+  "schemaVersion": 1,
+  "status": "provisional-visual-prototypes",
+  "generatedAtEvidenceDate": "2026-08-17",
+  "architecture": "style intent x Balanced performance budget x capability-selected GPU provider",
+  "basePreset": {
+    "tier": "Balanced",
+    "settingsPath": "MGO-Presets/CSX Unified- Balanced - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+    "settingsSha256": "A767C6CF6018F3FEBCE5C3FEB1DAF123E26142F862481D7DB87AD48657902D26"
+  },
+  "allowedPathPrefixes": [
+    ["Adaptive Balance"]
+  ],
+  "styles": [
+    {
+      "id": "NaturalReference",
+      "displayName": "Natural Reference",
+      "intent": "Exact Balanced control: neutral renderer controls, no enhanced bloom, and no stylistic lighting bias.",
+      "outputDirectory": "CSX Style Prototype- Natural Reference - Balanced - Press END on PC to Customize",
+      "overrides": []
+    },
+    {
+      "id": "MythicHighFantasy",
+      "displayName": "Mythic High Fantasy",
+      "intent": "Luminous, warm, heroic rendering with conspicuous but bounded halation and gently lifted context brightness.",
+      "outputDirectory": "CSX Style Prototype- Mythic High Fantasy - Balanced - Press END on PC to Customize",
+      "overrides": [
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Enabled"],
+          "expectedBase": 0,
+          "value": 1,
+          "reason": "activate the current daylight-corrected bloom enhancement"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "SelectedPreset"],
+          "expectedBase": 0,
+          "value": 1,
+          "reason": "select the built-in warm Fantasy profile"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 0, "brightness"],
+          "expectedBase": 1.0,
+          "value": 1.05,
+          "reason": "slightly lift exterior daylight without flattening it"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 1, "brightness"],
+          "expectedBase": 1.0,
+          "value": 1.08,
+          "reason": "make moonlit exteriors more legible and enchanted"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 2, "brightness"],
+          "expectedBase": 1.0,
+          "value": 1.04,
+          "reason": "retain luminous interiors"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 3, "brightness"],
+          "expectedBase": 1.0,
+          "value": 1.02,
+          "reason": "keep dungeons readable without removing their contrast role"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 4, "brightness"],
+          "expectedBase": 1.0,
+          "value": 1.06,
+          "reason": "give dwellings a warm welcoming lift"
+        }
+      ]
+    },
+    {
+      "id": "BleakDarkFantasy",
+      "displayName": "Bleak Dark Fantasy",
+      "intent": "Cold restrained highlights, reduced ambient visibility, and preserved practical-light pools for navigable gloom.",
+      "outputDirectory": "CSX Style Prototype- Bleak Dark Fantasy - Balanced - Press END on PC to Customize",
+      "overrides": [
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Enabled"],
+          "expectedBase": 0,
+          "value": 1,
+          "reason": "use controlled highlight halation rather than a uniformly flat darkening pass"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "EnhancementIntensity"],
+          "expectedBase": 1.0,
+          "value": 1.35,
+          "reason": "retain a visible but restrained cold halo"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "HaloRadius"],
+          "expectedBase": 3.5,
+          "value": 2.75,
+          "reason": "keep highlights tighter than the reference profile"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "HaloSpread"],
+          "expectedBase": 0.85,
+          "value": 0.55,
+          "reason": "avoid dreamy diffusion"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "BloomSaturation"],
+          "expectedBase": 0.9,
+          "value": 0.45,
+          "reason": "desaturate bloom without altering the source material colours"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "BloomTint", 0],
+          "expectedBase": 1.0,
+          "value": 0.68,
+          "reason": "cool the red component of the halo"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "BloomTint", 1],
+          "expectedBase": 0.98,
+          "value": 0.78,
+          "reason": "cool the green component of the halo"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "BloomTint", 2],
+          "expectedBase": 0.94,
+          "value": 0.92,
+          "reason": "retain the blue component of the halo"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "CompressionThreshold"],
+          "expectedBase": 0.0,
+          "value": 0.1,
+          "reason": "keep subdued surfaces out of the enhanced halo"
+        },
+        {
+          "path": ["Adaptive Balance", "bloomEnhancement", "Default", "CompressionCeiling"],
+          "expectedBase": 1.5,
+          "value": 0.62,
+          "reason": "constrain extreme highlights in the prototype"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 0, "brightness"],
+          "expectedBase": 1.0,
+          "value": 0.92,
+          "reason": "subdue exterior daylight while preserving broad visibility"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 1, "brightness"],
+          "expectedBase": 1.0,
+          "value": 0.78,
+          "reason": "make exterior night materially darker"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 1, "advanced"],
+          "expectedBase": false,
+          "value": true,
+          "reason": "separate practical-light readability from ambient darkness at night"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 1, "ambientMult"],
+          "expectedBase": 1.0,
+          "value": 0.9,
+          "reason": "deepen ambient night shadow"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 1, "pointLightMult"],
+          "expectedBase": 1.0,
+          "value": 1.12,
+          "reason": "preserve local light pools for VR navigation"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 1, "emitColorMult"],
+          "expectedBase": 1.0,
+          "value": 1.15,
+          "reason": "retain readable emissive materials"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 1, "glowmapMult"],
+          "expectedBase": 1.0,
+          "value": 1.15,
+          "reason": "retain readable glowmaps"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 1, "effectLightingMult"],
+          "expectedBase": 1.0,
+          "value": 1.08,
+          "reason": "avoid obscuring gameplay-relevant lit effects"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 2, "brightness"],
+          "expectedBase": 1.0,
+          "value": 0.88,
+          "reason": "subdue ordinary interiors"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 3, "brightness"],
+          "expectedBase": 1.0,
+          "value": 0.72,
+          "reason": "make dungeons the darkest context"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 3, "advanced"],
+          "expectedBase": false,
+          "value": true,
+          "reason": "preserve practical-light readability independently in dungeons"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 3, "ambientMult"],
+          "expectedBase": 1.0,
+          "value": 0.82,
+          "reason": "create deep dungeon ambient shadow"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 3, "pointLightMult"],
+          "expectedBase": 1.0,
+          "value": 1.18,
+          "reason": "retain torch and local-light pools"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 3, "emitColorMult"],
+          "expectedBase": 1.0,
+          "value": 1.25,
+          "reason": "retain dungeon emissive landmarks"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 3, "glowmapMult"],
+          "expectedBase": 1.0,
+          "value": 1.25,
+          "reason": "retain dungeon glowmap landmarks"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 3, "effectLightingMult"],
+          "expectedBase": 1.0,
+          "value": 1.12,
+          "reason": "avoid obscuring gameplay-relevant effects"
+        },
+        {
+          "path": ["Adaptive Balance", "profiles", 4, "brightness"],
+          "expectedBase": 1.0,
+          "value": 0.9,
+          "reason": "keep dwellings subdued but more readable than dungeons"
+        }
+      ]
+    }
+  ],
+  "guards": [
+    { "path": ["Advanced", "Log Level"], "value": 2 },
+    { "path": ["Image Based Lighting", "EnableIBL"], "value": 1 },
+    { "path": ["Volumetric Shadows", "Enabled"], "value": true },
+    { "path": ["Screen Space GI", "Enabled"], "value": false },
+    { "path": ["Volumetric Lighting", "ExteriorQuality"], "value": 1 },
+    { "path": ["Volumetric Lighting", "InteriorQuality"], "value": 1 },
+    { "path": ["Upscaling", "upscaleMethod"], "value": 3 },
+    { "path": ["Upscaling", "upscaleMethodNoDLSS"], "value": 2 },
+    { "path": ["Upscaling", "qualityMode"], "value": 3 },
+    { "path": ["Upscaling", "renderScaleMode"], "value": 1 },
+    { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
+    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false }
+  ],
+  "qualificationGates": [
+    "paired fixed-pose and separate-eye comparison at exterior day, exterior night, interior, dungeon, and dwelling anchors",
+    "continuous or rotating physical-HMD check for bloom stability and exposure comfort",
+    "native AMD and NVIDIA performance confirmation against the Natural Reference control",
+    "SteamVR OpenVR, SteamVR OpenXR, VDXR, and Open Composite Unleashed lane comparison where applicable"
+  ]
+}

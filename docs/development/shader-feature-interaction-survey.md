@@ -1,7 +1,9 @@
 # CSX shader and feature interaction survey
 
-Status: first-pass static survey  
-Snapshot: `debug/vr-followup-20260816` at `4f7f0db58eb37493d37e23602a4b4ab3c667d95b`  
+Status: first-pass static survey
+
+Snapshot: `debug/vr-followup-20260816` at `4f7f0db58eb37493d37e23602a4b4ab3c667d95b`
+
 Survey date: 2026-08-16
 
 ## Purpose

@@ -587,10 +587,18 @@ void VolumetricLighting::DataLoaded()
 	const static auto address = REL::Offset{ 0x1ec6b88 }.address();
 	bool& bDepthBufferCulling = *reinterpret_cast<bool*>(address);
 
-	if (REL::Module::IsVR() && bDepthBufferCulling && shaderCache->IsDiskCache()) {
-		// clear cache to fix bug caused by bDepthBufferCulling
-		logger::info("Force clearing cache due to bDepthBufferCulling");
-		shaderCache->Clear();
+	if (REL::Module::IsVR() && bDepthBufferCulling && shaderCache->IsDiskCacheActive()) {
+		// Preserve the historical depth-culling compatibility refresh while limiting
+		// it to the ImageSpace cache class. The legacy full clear discarded all
+		// prepared world shaders immediately before the first save load.
+		if (shaderCache->IsCompiling()) {
+			logger::warn(
+				"VR ImageSpace shader-cache refresh for depth-buffer-culling compatibility skipped because shader compilation is still active");
+			return;
+		}
+
+		logger::info("Refreshing VR ImageSpace shader cache for depth-buffer-culling compatibility");
+		shaderCache->Clear(RE::BSShader::Type::ImageSpace);
 	}
 }
 

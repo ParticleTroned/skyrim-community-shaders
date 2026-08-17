@@ -1,3 +1,5 @@
+$script:PresetCalibrationStorageRepositoryRoot = Split-Path -Parent $PSScriptRoot
+
 function Get-PresetCalibrationArchiveRoot {
     param([string]$ConfiguredRoot)
 
@@ -6,9 +8,7 @@ function Get-PresetCalibrationArchiveRoot {
         $archiveRoot = $env:CSX_CALIBRATION_ARCHIVE_ROOT
     }
     if ([string]::IsNullOrWhiteSpace($archiveRoot)) {
-        $definitionPath = $MyInvocation.MyCommand.ScriptBlock.File
-        $repositoryRoot = Split-Path -Parent (Split-Path -Parent $definitionPath)
-        $archiveRoot = (& git -C $repositoryRoot config --local --get csx.calibrationArchiveRoot 2>$null)
+        $archiveRoot = (& git -C $script:PresetCalibrationStorageRepositoryRoot config --local --get csx.calibrationArchiveRoot 2>$null)
     }
     if ([string]::IsNullOrWhiteSpace($archiveRoot)) {
         throw 'No calibration archive is configured. Set repository-local git config csx.calibrationArchiveRoot or CSX_CALIBRATION_ARCHIVE_ROOT.'

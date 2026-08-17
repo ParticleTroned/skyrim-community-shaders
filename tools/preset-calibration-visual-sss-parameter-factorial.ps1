@@ -5,6 +5,7 @@ param(
     [ValidateRange(16.0, 96.0)][double]$HighSamples = 44.0,
     [ValidateRange(0.0, 20480.0)][double]$CappedDistance = 20480.0,
     [ValidateRange(10, 120)][int]$Frames = 30,
+    [ValidateRange(1, 30)][int]$FactorFrames = 5,
     [ValidateRange(1, 120)][int]$FrameInterval = 6,
     [ValidateRange(1, 60)][int]$PreviewFramesPerSecond = 30,
     [ValidateRange(0.0, 24.0)][double]$GameHour,
@@ -78,6 +79,37 @@ function Set-AnchorState {
     }
 }
 
+function Capture-FactorMeasurements {
+    param(
+        [Parameter(Mandatory = $true)][string]$PhaseName,
+        [Parameter(Mandatory = $true)][string]$CaptureRoot
+    )
+    $measurements = [System.Collections.Generic.List[object]]::new()
+    for ($index = 1; $index -le $FactorFrames; $index++) {
+        $outputPath = Join-Path $CaptureRoot ('{0}_factor_{1:D3}.png' -f $PhaseName, $index)
+        $start = Invoke-DevBenchTool -Tool 'communityshaders.capture' -Payload @{
+            action = 'measure'; source = 'screen_space_shadows_factor'; outputPath = $outputPath
+        }
+        if ($start.error) { throw "Factor measurement start failed for $PhaseName/$index`: $($start.error)" }
+        $measurementId = [uint64]$start.status.id
+        $deadline = (Get-Date).AddSeconds(30)
+        do {
+            Start-Sleep -Milliseconds 100
+            $status = (Invoke-DevBenchTool -Tool 'communityshaders.capture' -Payload @{ action = 'measurementStatus' }).status
+        } while ($status.id -eq $measurementId -and $status.state -in @('pending', 'queued') -and (Get-Date) -lt $deadline)
+        if ($status.id -ne $measurementId -or $status.state -ne 'complete') {
+            throw "Factor measurement failed for $PhaseName/$index`: id=$($status.id), state=$($status.state), error=$($status.error)"
+        }
+        if (-not (Test-Path -LiteralPath $status.outputPath) -or -not (Test-Path -LiteralPath $status.statisticsPath)) {
+            throw "Factor measurement artifacts are incomplete for $PhaseName/$index"
+        }
+        $measurements.Add([ordered]@{
+            id = $measurementId; outputPath = $status.outputPath; statisticsPath = $status.statisticsPath
+        })
+    }
+    $measurements
+}
+
 function Capture-Phase {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -108,6 +140,7 @@ function Capture-Phase {
         $status.incompleteStereoDrops -ne 0 -or -not $status.previewVideoSucceeded) {
         throw "Capture $Name failed: state=$($status.state), saved=$($status.framesSaved), backpressure=$($status.backpressureDrops), incomplete=$($status.incompleteStereoDrops), preview=$($status.previewVideoSucceeded)"
     }
+    $factorMeasurements = @(Capture-FactorMeasurements -PhaseName $Name -CaptureRoot $captureRoot)
     [ordered]@{
         name = $Name
         state = [ordered]@{ A = $A; B = $B; VRBaseSamplesAtReference = $Samples; VRCullDistance = $Distance }
@@ -118,6 +151,7 @@ function Capture-Phase {
         backpressureDrops = $status.backpressureDrops; incompleteStereoDrops = $status.incompleteStereoDrops
         outputDirectory = $status.outputDirectory; manifestPath = $status.manifestPath
         previewVideoPath = $status.previewVideoPath
+        factorMeasurements = $factorMeasurements
     }
 }
 
@@ -131,6 +165,7 @@ $record = [ordered]@{
     requested = [ordered]@{
         gameHour = if ($hasGameHour) { $GameHour } else { $null }; weatherForm = $WeatherForm
         frames = $Frames; frameIntervalCompositorCycles = $FrameInterval
+        factorFramesPerPhase = $FactorFrames
         previewFramesPerSecond = $PreviewFramesPerSecond; format = 'bmp'
         output = 'combined stereo and separate eyes'
     }
@@ -186,6 +221,7 @@ try {
     $record.validity.accepted = $true
     $record.validity.reasons.Add('Every phase saved exact combined and separate-eye pairs with zero failed, incomplete, or backpressured pairs.')
     $record.validity.reasons.Add('Every parameter state reached exact effective readback and the declared shader-readiness gate.')
+    $record.validity.reasons.Add("Every phase saved $FactorFrames raw packed-stereo SSS factor frames and statistics sidecars through the bounded Info-level measurement path.")
     $record.validity.reasons.Add('The requested time and weather anchor was reapplied before every phase.')
     $record.validity.reasons.Add('The exact original SSS state was restored from the in-memory snapshot.')
 }

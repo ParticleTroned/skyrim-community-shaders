@@ -3615,8 +3615,40 @@ bool ScreenshotFeature::QueueDiagnosticTextureCapture(
 	bool a_tonemapSceneHdr,
 	bool a_writeStatistics)
 {
+	return QueueTextureCapture(
+		a_sourceResource,
+		a_sourceRegion,
+		a_outputPath,
+		a_tonemapSceneHdr,
+		a_writeStatistics,
+		ScreenshotCaptureSessionPolicy::CaptureSurface::DiagnosticTexture);
+}
+
+bool ScreenshotFeature::QueueBoundedFeatureMeasurementCapture(
+	ID3D11Resource* a_sourceResource,
+	const D3D11_BOX& a_sourceRegion,
+	const std::filesystem::path& a_outputPath,
+	bool a_writeStatistics)
+{
+	return QueueTextureCapture(
+		a_sourceResource,
+		a_sourceRegion,
+		a_outputPath,
+		false,
+		a_writeStatistics,
+		ScreenshotCaptureSessionPolicy::CaptureSurface::BoundedFeatureMeasurement);
+}
+
+bool ScreenshotFeature::QueueTextureCapture(
+	ID3D11Resource* a_sourceResource,
+	const D3D11_BOX& a_sourceRegion,
+	const std::filesystem::path& a_outputPath,
+	bool a_tonemapSceneHdr,
+	bool a_writeStatistics,
+	ScreenshotCaptureSessionPolicy::CaptureSurface a_surface)
+{
 	const auto access = ScreenshotCaptureSessionPolicy::ResolveAccess(
-		ScreenshotCaptureSessionPolicy::CaptureSurface::DiagnosticTexture,
+		a_surface,
 		globals::state && globals::state->IsDeveloperMode());
 	if (!a_sourceResource || a_outputPath.empty() ||
 		!access.allowed) {

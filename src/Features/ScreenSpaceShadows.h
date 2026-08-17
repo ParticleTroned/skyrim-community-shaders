@@ -2,6 +2,11 @@
 
 #include "Buffer.h"
 
+#include <filesystem>
+#include <mutex>
+#include <string>
+#include <string_view>
+
 struct ScreenSpaceShadows : Feature
 {
 private:
@@ -139,7 +144,24 @@ public:
 	void DrawShadows();
 	void DrawStereoSync();
 
+	struct FactorMeasurementStatus
+	{
+		uint64_t id = 0;
+		std::string state = "idle";
+		std::filesystem::path outputPath;
+		std::string error;
+	};
+	bool RequestFactorMeasurement(const std::filesystem::path& a_outputPath, std::string& a_error);
+	FactorMeasurementStatus GetFactorMeasurementStatus();
+
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; };
+
+private:
+	void ServiceFactorMeasurement();
+	void FailPendingFactorMeasurement(std::string_view a_error);
+	mutable std::mutex factorMeasurementMutex;
+	FactorMeasurementStatus factorMeasurementStatus;
+	uint64_t nextFactorMeasurementId = 1;
 };

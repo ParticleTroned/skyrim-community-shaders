@@ -27,6 +27,9 @@ namespace
 		const auto debugProduction = ResolveAccess(
 			CaptureSurface::BoundedProductionSession,
 			true);
+		const auto infoMeasurement = ResolveAccess(
+			CaptureSurface::BoundedFeatureMeasurement,
+			false);
 		const auto infoDiagnostic = ResolveAccess(
 			CaptureSurface::DiagnosticTexture,
 			false);
@@ -37,6 +40,8 @@ namespace
 		       !infoProduction.requiresDeveloperMode &&
 		       debugProduction.allowed &&
 		       !debugProduction.requiresDeveloperMode &&
+		       infoMeasurement.allowed &&
+		       !infoMeasurement.requiresDeveloperMode &&
 		       !infoDiagnostic.allowed &&
 		       infoDiagnostic.requiresDeveloperMode &&
 		       debugDiagnostic.allowed &&
@@ -91,5 +96,6 @@ int main()
 	assert(request.frameInterval == 6);
 	assert(request.previewFramesPerSecond == 15);
 	assert(ResolveAccess(CaptureSurface::BoundedProductionSession, false).allowed);
+	assert(ResolveAccess(CaptureSurface::BoundedFeatureMeasurement, false).allowed);
 	assert(!ResolveAccess(CaptureSurface::DiagnosticTexture, false).allowed);
 }

@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Features/ScreenshotFeature.h"
+#	include "Features/ScreenSpaceShadows.h"
 #	include "Globals.h"
 
 #	include <DevBenchAPI.h>
@@ -109,6 +110,9 @@ namespace
 		constexpr auto automationAccess = ScreenshotCaptureSessionPolicy::ResolveAccess(
 			ScreenshotCaptureSessionPolicy::CaptureSurface::BoundedProductionSession,
 			false);
+		constexpr auto measurementAccess = ScreenshotCaptureSessionPolicy::ResolveAccess(
+			ScreenshotCaptureSessionPolicy::CaptureSurface::BoundedFeatureMeasurement,
+			false);
 		return {
 			{ "tool", "communityshaders.capture" },
 			{ "runtime", globals::game::isVR ? "VR" : "flat" },
@@ -122,12 +126,33 @@ namespace
 			{ "losslessFrameSequence", true },
 			{ "previewVideo", "mjpeg-avi" },
 			{ "performanceMeasurementSeparated", true },
+			{ "featureMeasurements",
+				{
+					{ "sources", json::array({ "screen_space_shadows_factor" }) },
+					{ "format", "png" },
+					{ "statisticsSidecar", true },
+					{ "requiresDeveloperMode", measurementAccess.requiresDeveloperMode },
+					{ "logLevelIndependent", true },
+				} },
 			{ "automatedControl",
 				{
 					{ "available", globals::game::isVR && automationAccess.allowed },
 					{ "requiresDeveloperMode", automationAccess.requiresDeveloperMode },
 					{ "logLevelIndependent", true },
 				} },
+		};
+	}
+
+	json BuildFactorMeasurementStatus()
+	{
+		const auto status = globals::features::screenSpaceShadows.GetFactorMeasurementStatus();
+		return {
+			{ "id", status.id },
+			{ "state", status.state },
+			{ "source", "screen_space_shadows_factor" },
+			{ "outputPath", status.outputPath.string() },
+			{ "statisticsPath", status.outputPath.empty() ? std::string() : status.outputPath.string() + ".stats.json" },
+			{ "error", status.error },
 		};
 	}
 
@@ -183,6 +208,37 @@ namespace
 					{ "action", "status" },
 					{ "status", BuildStatus(globals::features::screenshotFeature) },
 				};
+			});
+		}
+		if (action == "measurementStatus") {
+			return RunOnMainThread([]() {
+				return json{
+					{ "action", "measurementStatus" },
+					{ "status", BuildFactorMeasurementStatus() },
+				};
+			});
+		}
+		if (action == "measure") {
+			const auto source = a_args.value("source", std::string());
+			if (source != "screen_space_shadows_factor")
+				return { { "error", "source must be screen_space_shadows_factor" } };
+			const auto outputPath = a_args.value("outputPath", std::string());
+			if (outputPath.empty())
+				return { { "error", "outputPath is required" } };
+
+			return RunOnMainThread([outputPath]() {
+				constexpr auto access = ScreenshotCaptureSessionPolicy::ResolveAccess(
+					ScreenshotCaptureSessionPolicy::CaptureSurface::BoundedFeatureMeasurement,
+					false);
+				if (!access.allowed)
+					return json{ { "error", "bounded feature measurement is unavailable" } };
+				auto& feature = globals::features::screenSpaceShadows;
+				if (!feature.loaded || feature.bendSettings.Enable == 0)
+					return json{ { "error", "Screen Space Shadows is not active" } };
+				std::string error;
+				if (!feature.RequestFactorMeasurement(outputPath, error))
+					return json{ { "error", error }, { "status", BuildFactorMeasurementStatus() } };
+				return json{ { "action", "measure" }, { "status", BuildFactorMeasurementStatus() } };
 			});
 		}
 		if (action == "cancel") {
@@ -263,7 +319,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "capabilities", "status", "start", "cancel" }) },
+			{ "supported", json::array({ "capabilities", "status", "start", "cancel", "measure", "measurementStatus" }) },
 		};
 	}
 
@@ -313,7 +369,7 @@ namespace
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.capture" },
 			{ "usage", R"(Invoke communityshaders.capture directly, or dispatch it through a DevBench scenario tool step when dynamic tools are not exposed.)" },
-			{ "actions", json::array({ "capabilities", "status", "start", "cancel" }) },
+			{ "actions", json::array({ "capabilities", "status", "start", "cancel", "measure", "measurementStatus" }) },
 		};
 		const auto serialized = result.dump();
 		a_write(a_sink, serialized.c_str());
@@ -350,7 +406,7 @@ namespace ScreenshotDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Capture exact accepted OpenVR stereo pairs or bounded lossless frame sequences through CSX's production screenshot path. PNG is compact; BMP is larger but avoids PNG compression CPU cost for dense temporal calibration. Automated start/cancel are log-level-independent and do not require Developer Mode; developer-only diagnostic texture capture is not exposed. Capture is intentionally separate from profiler measurement; run visual and timing passes independently. status reports every accepted compositor cycle, output path, failure, and dropped-pair/backpressure count.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["capabilities","status","start","cancel"],"default":"status"},"source":{"type":"string","enum":["hmd_stereo","framed_stereo","framed_eye"]},"label":{"type":"string"},"frameCount":{"type":"integer","minimum":1,"maximum":240},"frameInterval":{"type":"integer","minimum":1,"maximum":120},"previewFramesPerSecond":{"type":"integer","minimum":1,"maximum":60},"format":{"type":"string","enum":["png","bmp"],"default":"png"},"saveCombined":{"type":"boolean"},"saveSeparateEyes":{"type":"boolean"},"writePreviewVideo":{"type":"boolean"},"outputPath":{"type":"string"}},"required":["action"]}})";
+			R"({"description":"Capture exact accepted OpenVR stereo pairs or bounded lossless frame sequences through CSX's production screenshot path. The allowlisted screen_space_shadows_factor measurement captures the packed-stereo R8 factor buffer with a statistics sidecar. Automated capture and named feature measurement are log-level-independent and do not require Developer Mode; arbitrary diagnostic texture readback remains developer-only. Capture is intentionally separate from profiler measurement; run visual and timing passes independently. status reports every accepted compositor cycle, output path, failure, and dropped-pair/backpressure count.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["capabilities","status","start","cancel","measure","measurementStatus"],"default":"status"},"source":{"type":"string","enum":["hmd_stereo","framed_stereo","framed_eye","screen_space_shadows_factor"]},"label":{"type":"string"},"frameCount":{"type":"integer","minimum":1,"maximum":240},"frameInterval":{"type":"integer","minimum":1,"maximum":120},"previewFramesPerSecond":{"type":"integer","minimum":1,"maximum":60},"format":{"type":"string","enum":["png","bmp"],"default":"png"},"saveCombined":{"type":"boolean"},"saveSeparateEyes":{"type":"boolean"},"writePreviewVideo":{"type":"boolean"},"outputPath":{"type":"string"}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.capture",
 			descriptor,

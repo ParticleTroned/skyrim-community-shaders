@@ -12,6 +12,7 @@ namespace ScreenshotCaptureSessionPolicy
 	enum class CaptureSurface
 	{
 		BoundedProductionSession,
+		BoundedFeatureMeasurement,
 		DiagnosticTexture
 	};
 
@@ -22,9 +23,10 @@ namespace ScreenshotCaptureSessionPolicy
 	};
 
 	/**
-	 * Keeps ordinary, bounded screenshot sessions independent of the saved log
-	 * level while retaining the Developer Mode boundary for diagnostic readback.
-	 * The DevBench build option and a present DevBench host remain the opt-in
+	 * Keeps ordinary screenshot sessions and strictly allowlisted, bounded
+	 * feature measurements independent of the saved log level while retaining
+	 * the Developer Mode boundary for arbitrary diagnostic readback. The
+	 * DevBench build option and a present DevBench host remain the opt-in
 	 * boundary for external automation control.
 	 */
 	[[nodiscard]] constexpr AccessDecision ResolveAccess(
@@ -33,6 +35,7 @@ namespace ScreenshotCaptureSessionPolicy
 	{
 		switch (a_surface) {
 		case CaptureSurface::BoundedProductionSession:
+		case CaptureSurface::BoundedFeatureMeasurement:
 			return { true, false };
 		case CaptureSurface::DiagnosticTexture:
 			return { a_developerMode, true };

@@ -141,6 +141,16 @@ struct ScreenshotFeature : public Feature
 		const std::filesystem::path& a_outputPath,
 		bool a_tonemapSceneHdr = true,
 		bool a_writeStatistics = false);
+	/**
+	 * Stages one allowlisted feature measurement through the bounded production
+	 * path. External callers cannot select arbitrary resources; the owning
+	 * feature must provide the resource from its render-thread prepass.
+	 */
+	bool QueueBoundedFeatureMeasurementCapture(
+		ID3D11Resource* a_sourceResource,
+		const D3D11_BOX& a_sourceRegion,
+		const std::filesystem::path& a_outputPath,
+		bool a_writeStatistics = true);
 
 	bool applyCropToScreenshot = true;
 
@@ -284,6 +294,13 @@ private:
 		bool a_tonemapSceneHdr,
 		StagedPlane& a_plane,
 		const D3D11_BOX* a_exactSourceRegion = nullptr);
+	bool QueueTextureCapture(
+		ID3D11Resource* a_sourceResource,
+		const D3D11_BOX& a_sourceRegion,
+		const std::filesystem::path& a_outputPath,
+		bool a_tonemapSceneHdr,
+		bool a_writeStatistics,
+		ScreenshotCaptureSessionPolicy::CaptureSurface a_surface);
 	bool QueueDesktopCapture(
 		IDXGISwapChain* a_swapChain,
 		const CaptureOptions& a_options,

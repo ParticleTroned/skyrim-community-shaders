@@ -119,6 +119,35 @@ The spatial grid localizes the largest stable difference to the bottom/foregroun
 
 This confirms a repeatable local/fine-shadow improvement from Balanced to Quality and provides additional fixed-pose eye-symmetry evidence. It does **not** demonstrate that unlimited SSS distance is valuable: the observed response is foreground-dominant, while sample count and cull distance change together. A cutoff decision still requires either a known-distance target with equal sample count or a control that separates sample-count and range factors, followed by moving-view/disocclusion inspection.
 
+That Whiterun conclusion is retained as historical evidence but the scene is no
+longer a validated anchor. A fresh `coc WhiterunExterior01` repeatedly produced
+position `[18245.435, -10745.442, -4616.525]` and yaw `2.2832105`, rather than
+the proof pose at `[18963.801, -11937.521, -4515.888]`, yaw `-1.5154`.
+Correcting player position did not correct the submitted HMD yaw. The original
+proof and its direction-balanced result remain real, but its view is not yet a
+reproducible campaign input.
+
+The subsequent separated-parameter factorial runs proved the `qualityParameters`
+API, shader recompilation/readiness barrier, exact restoration, separate-eye
+capture, and order reversal. Their ordinary pictures are rejected for a range
+decision:
+
+- the Whiterun pair used the repeatable near-wall entry rather than the historic
+  multi-depth view and also contained HUD completion text;
+- the Guardian Stones pair completed 30 frames in all five phases with zero
+  drops and close left/right results, but foliage motion left only about
+  `0.39`-`0.51` of pixels inside the stable mask and the signed range effects
+  reversed with test order.
+
+The shader source independently establishes the intended distance behavior. At
+a `20,480`-unit cutoff, SSS fades to the unshadowed factor over
+`19,280`-`20,480` units, then writes `1.0` beyond the cutoff. Whole-frame colour
+differences cannot reliably isolate that band. The next build therefore exposes
+the exact packed-stereo SSS factor buffer as the bounded, Info-level
+`screen_space_shadows_factor` measurement. This named path retains the
+Developer-Mode boundary for arbitrary texture readback and is the required
+evidence source for the next range decision.
+
 ## Provisional policy constraints
 
 These curves support constraints, not yet a complete preset:

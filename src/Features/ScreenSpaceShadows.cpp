@@ -1,6 +1,7 @@
 #include "ScreenSpaceShadows.h"
 
 #include "Features/TerrainBlending.h"
+#include "Features/ScreenshotFeature.h"
 #include "FoveatedCommon.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -10,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <system_error>
 #include <vector>
 
 #pragma warning(push)
@@ -831,6 +833,7 @@ void ScreenSpaceShadows::Prepass()
 		!screenSpaceShadowsTexture->srv ||
 		!raymarchCB ||
 		!pointBorderSampler) {
+		FailPendingFactorMeasurement("screen-space shadow resources are unavailable");
 		clearOutputView();
 		return;
 	}
@@ -846,6 +849,93 @@ void ScreenSpaceShadows::Prepass()
 
 	auto view = screenSpaceShadowsTexture->srv.get();
 	context->PSSetShaderResources(45, 1, &view);
+	ServiceFactorMeasurement();
+}
+
+bool ScreenSpaceShadows::RequestFactorMeasurement(
+	const std::filesystem::path& a_outputPath,
+	std::string& a_error)
+{
+	if (a_outputPath.empty()) {
+		a_error = "outputPath is required";
+		return false;
+	}
+	if (a_outputPath.extension() != ".png") {
+		a_error = "outputPath must use the .png extension";
+		return false;
+	}
+	std::error_code ec;
+	if (std::filesystem::exists(a_outputPath, ec)) {
+		a_error = "outputPath already exists";
+		return false;
+	}
+
+	std::lock_guard lock(factorMeasurementMutex);
+	if (factorMeasurementStatus.state == "pending" || factorMeasurementStatus.state == "queued") {
+		a_error = "a screen-space shadow factor measurement is already active";
+		return false;
+	}
+	factorMeasurementStatus = {
+		.id = nextFactorMeasurementId++,
+		.state = "pending",
+		.outputPath = a_outputPath,
+	};
+	return true;
+}
+
+ScreenSpaceShadows::FactorMeasurementStatus ScreenSpaceShadows::GetFactorMeasurementStatus()
+{
+	std::lock_guard lock(factorMeasurementMutex);
+	if (factorMeasurementStatus.state == "queued") {
+		std::error_code ec;
+		auto statisticsPath = factorMeasurementStatus.outputPath;
+		statisticsPath += ".stats.json";
+		if (std::filesystem::exists(factorMeasurementStatus.outputPath, ec) &&
+			std::filesystem::exists(statisticsPath, ec))
+			factorMeasurementStatus.state = "complete";
+	}
+	return factorMeasurementStatus;
+}
+
+void ScreenSpaceShadows::FailPendingFactorMeasurement(std::string_view a_error)
+{
+	std::lock_guard lock(factorMeasurementMutex);
+	if (factorMeasurementStatus.state != "pending")
+		return;
+	factorMeasurementStatus.state = "failed";
+	factorMeasurementStatus.error = a_error;
+}
+
+void ScreenSpaceShadows::ServiceFactorMeasurement()
+{
+	FactorMeasurementStatus request;
+	{
+		std::lock_guard lock(factorMeasurementMutex);
+		if (factorMeasurementStatus.state != "pending")
+			return;
+		request = factorMeasurementStatus;
+	}
+
+	const D3D11_BOX region{
+		0,
+		0,
+		0,
+		screenSpaceShadowsTexture->desc.Width,
+		screenSpaceShadowsTexture->desc.Height,
+		1
+	};
+	const bool queued = globals::features::screenshotFeature.QueueBoundedFeatureMeasurementCapture(
+		screenSpaceShadowsTexture->resource.get(),
+		region,
+		request.outputPath,
+		true);
+
+	std::lock_guard lock(factorMeasurementMutex);
+	if (factorMeasurementStatus.id != request.id || factorMeasurementStatus.state != "pending")
+		return;
+	factorMeasurementStatus.state = queued ? "queued" : "failed";
+	if (!queued)
+		factorMeasurementStatus.error = "the bounded screenshot readback queue rejected the measurement";
 }
 
 void ScreenSpaceShadows::LoadSettings(json& o_json)

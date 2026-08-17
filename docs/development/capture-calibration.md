@@ -18,7 +18,7 @@ Short sequences require an HMD submitted-eye source. `HMD submission` records th
 
 ## DevBench API
 
-Automated start and cancel operations are log-level-independent and do not require CSX Developer Mode. The opt-in boundary is the Release+DevBench build option together with a present DevBench host. Diagnostic texture readback and unrelated behavioural or test mutations remain Developer-Mode-only. Capability and status queries are read-only.
+Automated start/cancel and strictly allowlisted feature measurements are log-level-independent and do not require CSX Developer Mode. The opt-in boundary is the Release+DevBench build option together with a present DevBench host. Arbitrary diagnostic texture readback and unrelated behavioural or test mutations remain Developer-Mode-only. Capability and status queries are read-only.
 
 ```json
 {"action":"capabilities"}
@@ -63,6 +63,46 @@ The response advertises the access contract explicitly:
 ```
 
 Allowed sources are `hmd_stereo`, `framed_stereo`, and `framed_eye`. Allowed lossless formats are `png` and `bmp`; PNG is the compact archival default, while BMP avoids PNG compression CPU cost at the expense of much larger files. Numeric values outside the advertised limits and unknown formats are rejected rather than silently wrapped or clamped by the DevBench boundary.
+
+### Named feature measurement
+
+`screen_space_shadows_factor` is the first allowlisted feature measurement. It
+captures the exact packed-stereo `R8_UNORM` factor buffer produced by the SSS
+prepass. `1.0` means unshadowed; lower values are the factor later multiplied
+into lighting. This makes sample/range attribution independent of exposure,
+post-processing, HUD text, and most unrelated scene changes.
+
+```json
+{
+  "action": "measure",
+  "source": "screen_space_shadows_factor",
+  "outputPath": "D:\\CSX Evidence\\state-10-factor-001.png"
+}
+```
+
+Poll `{"action":"measurementStatus"}` until `state` is `complete`. Completion
+requires both the lossless PNG and its `.png.stats.json` sidecar. Only one named
+measurement may be pending or queued at once, an existing output is rejected,
+and the request uses the screenshot worker's bounded diagnostic queue. The API
+does not expose arbitrary GPU resources. The current factor target packs the
+left and right eyes side-by-side; split it at half width for per-eye analysis.
+
+`tools/preset-calibration-visual-sss-parameter-factorial.ps1` records a small
+factor-frame set for every factorial state. Analyze it with
+`tools/analyze-sss-factor-measurements.py`; red heatmap pixels mean the candidate
+added shadow, while cyan pixels mean it removed shadow.
+
+The first live Info-level proof used VR Release+DevBench DLL SHA-256
+`26B6110286FB5A088BF0DEDABADC4AE12028CDB466E39E296833081C41ECE9B5`
+at the canonical Guardian Stones entry. Capabilities advertised the named source
+without Developer Mode; an unknown source and an existing output path were both
+rejected. Measurement id 1 completed with a 3024 × 1680 factor PNG (1512 × 1680
+per eye) and statistics covering 5,080,320 finite pixels, zero non-finite pixels,
+and mean factor `0.96475648`:
+
+- PNG SHA-256: `748992673708358752AEB012326EC478B5DCD1416E6C56F50D94E3DED89A3E30`;
+- statistics SHA-256: `2F1E27BEC91972B76D4CAF1277CC9DEC5D210AF06B52AD0D5B1657FB33A7E659`;
+- root: `D:\Games\Skyrim\MadGod2\overwrite\Root\CSX Baselines\preset-automation-sss-factorial\20260817-factor-api-proof`.
 
 Status and the manifest report every accepted frame index and compositor-cycle token, all output paths, encoding results, incomplete stereo-pair drops, and queue-backpressure drops. A left/right pair is accepted only when both submissions share the same accepted OpenVR compositor-cycle token. A new cycle discards an incomplete old pair.
 

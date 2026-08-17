@@ -6,6 +6,7 @@
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 -   **[Prebuilt Shader Cache](./prebuilt-shader-cache.md)** - Release build, update, validation, and AI-agent runbook
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
+-   **[Shader and Feature Interaction Survey](./shader-feature-interaction-survey.md)** - Evidence-graded first-pass map of shader families, feature producers/consumers, and high-value interaction clusters
 
 ## Quick Links
 

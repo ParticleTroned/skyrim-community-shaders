@@ -44,6 +44,10 @@ The run is not accepted as benchmark evidence. All three requested pairs complet
 
 Run `20260817-amd-svr-ovr-null-riften-info-ibl-vs-r01` establishes the first valid timing-only Info baseline. It uses the AMD Quality stack in exterior Riften with IBL and Volumetric Shadows enabled. Thirty-eight unique resolved frames completed with no profiler slot refusals. Automated stereo capture was intentionally not performed: CSX restricts that control surface to Developer Mode, and changing from Info would change the performance lane. A separately paired visual run is still required before this candidate supports visual conclusions.
 
+The follow-up Info ablation campaign retained accepted runs `20260817-amd-svr-ovr-null-riften-info-ibl-off-vs-on-r02`, `20260817-amd-svr-ovr-null-riften-info-ibl-on-vs-off-r03`, and the all-on return `20260817-amd-svr-ovr-null-riften-info-ibl-vs-r02`. Preparatory artifacts were rejected when their scene snapshot preceded an asynchronous console time reset or their first resolved profiler frame predated the current arming boundary. The accepted runs use a 1.5-second mutation-settle barrier, verify the resulting scene time, and require every retained `capturedFrameCount` to be newer than the recorded arming frame.
+
+The campaign did not resolve a trustworthy marginal top-level cost for either feature. The all-on average moved by 0.1392 ms between the original and return baselines, exceeding the IBL-off versus return difference of 0.0093 ms and the Volumetric-Shadows-off versus return difference of 0.0387 ms. Volumetric Shadows' directly instrumented compute passes remained measurable at about 0.0338 ms in the return run, but unrelated Upscaling variation dominated the top-level differences. Treat these runs as valid timing observations and a noise-floor finding, not as preset-ranking evidence.
+
 ## First proof-of-concept acceptance
 
 The `SVR-OVR-NULL` proof of concept succeeds only when all of the following are demonstrated and recorded:
@@ -72,6 +76,8 @@ Before each candidate:
 6. Preserve raw left and right submissions for stereo analysis. Treat combined or preview output as derivative evidence.
 7. Repeat candidates in a balanced order and include a return-to-baseline check to expose drift.
 
+DevBench console writes and other fire-and-forget mutations are not evidence that the requested state has already taken effect. After such a mutation, wait through an explicit settle barrier and read the affected state back. Record the verified snapshot, not the pre-mutation request time.
+
 Change one declared factor per paired comparison. If an interaction is the subject, declare the complete combination as that factor.
 
 ## Shader-cache lanes
@@ -94,6 +100,7 @@ Do not promote a cache when CSX reports it as held, missing, disabled, mismatche
 ## Timing evidence
 
 - Prefer resolved CSX GPU timing over a current unresolved sample.
+- Record a profiler arming frame. Accept only unique, resolved samples whose `capturedFrameCount` is newer than that boundary; count and report stale or duplicate rejections.
 - Retain sample count, warmup count, average, median when available, `p95`, `p99`, and observed variance.
 - Record frame budget and refresh rate; milliseconds remain the comparison unit.
 - Measure settle or history-reset cost separately from steady-state cost.

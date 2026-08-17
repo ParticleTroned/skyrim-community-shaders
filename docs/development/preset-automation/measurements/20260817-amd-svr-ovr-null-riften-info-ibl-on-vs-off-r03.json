@@ -1,0 +1,235 @@
+{
+  "$schema": "../schemas/measurement-run.schema.json",
+  "schemaVersion": 1,
+  "runId": "20260817-amd-svr-ovr-null-riften-info-ibl-on-vs-off-r03",
+  "recordedAt": "2026-08-17T06:47:18.0944217Z",
+  "status": "valid",
+  "purpose": "Measure the Volumetric-Shadows-off counterfactual against the time-aligned all-on Info return baseline while IBL remains enabled.",
+  "sourceSnapshot": {
+    "repository": "Community Shaders Expanded",
+    "branch": "feat/preset-calibration-automation",
+    "commit": "f971c9122ffc666268066851e91b10d79a081742",
+    "buildConfiguration": "VR Release; DEVBENCH_BRIDGE=ON; AUTO_PLUGIN_DEPLOYMENT=OFF; full AIO staged from the source snapshot",
+    "dllVersion": "CSX 3.18-VR",
+    "dllSha256": "565002FFA2E88CE0303F857DC410C7FF3CD2B5F916BA266EC5738E22ACA16EF6",
+    "settingsSha256": "16A756C87ABF0E7B429A6C520B814708A2BF78ABD63C3B271548C767E00A87B4",
+    "settingsArtifact": "mo2-mod://CSX Preset Automation Settings - Info IBLOn VSOff/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+    "dependencies": [
+      {
+        "name": "CommonLibSSE-NG",
+        "revision": "ac9ec534882535793e4aa1c932113720f2f40f30",
+        "dirty": false,
+        "notes": "Revision and clean state were verified directly in the submodule."
+      }
+    ]
+  },
+  "hardware": {
+    "gpuVendor": "AMD",
+    "adapterName": "AMD Radeon RX 7900 XT",
+    "deviceId": "PCI\\VEN_1002&DEV_744C&SUBSYS_E4711DA2&REV_CC",
+    "driverVersion": "32.0.31035.1003",
+    "vramBytes": null,
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "operatingSystem": "Microsoft Windows 11 Pro 10.0.26200 build 26200"
+  },
+  "runtimeLane": {
+    "laneId": "SVR-OVR-NULL",
+    "applicationVrApi": "OpenVR",
+    "compatibilityLayer": "none",
+    "compatibilityLayerVersion": null,
+    "targetRuntimeApi": "OpenVR",
+    "runtimeImplementation": "SteamVR",
+    "runtimeVersion": "2.16.7",
+    "compositorTransport": "SteamVR compositor",
+    "notes": "Vanilla openvr_api.dll with OCU disabled; the SteamVR null driver owned the active HMD."
+  },
+  "hmd": {
+    "mode": "synthetic",
+    "driver": "SteamVR null",
+    "profile": "CSX Null HMD Info Ablation; 1512x1680 per eye; 90 Hz; IPD 0.063 m; forcedDriver=null; requireHmd=false",
+    "presenceState": "not-applicable",
+    "renderTarget": {
+      "width": 1512,
+      "height": 1680,
+      "layout": "per-eye"
+    },
+    "refreshHz": 90,
+    "projection": {
+      "source": "driver-configuration",
+      "leftEye": null,
+      "rightEye": null,
+      "eyeToHeadArtifact": null,
+      "hiddenAreaMeshArtifact": null
+    },
+    "poseSource": "static-driver-pose",
+    "controllerProfile": "none"
+  },
+  "scene": {
+    "sceneId": "riften-city-north-save3-info-ibl-on-vs-off",
+    "saveArtifact": "Save3_2FC025CB_0_776964646C65_RiftenWorld_000002_20260812061218_1_1",
+    "location": "RiftenCityNorth (0x00042249) in RiftenWorld (0x00016BB4), player position [172837.375, -93980.4453125, 11136.375]",
+    "weather": "SkyrimCloudyFF (0x0010A23F)",
+    "gameTime": "verified start day 0.3102886379, hour 7.4469270706; end day 0.3126161098, hour 7.5027861595",
+    "poseScript": "SteamVR null-driver fixed HMD pose; camera [172837.375, -93980.4453125, 11169.5], yaw 1.6824611425",
+    "motionProfile": "static HMD pose with live exterior scene",
+    "controlledVariables": [
+      "CSX Log Level 2 (Info)",
+      "Image Based Lighting EnableIBL=1",
+      "Volumetric Shadows Enabled=false",
+      "AMD Quality stack otherwise unchanged",
+      "A 1.5-second barrier followed the queued time reset",
+      "Scene, weather, position, camera, and start/end time window were read back",
+      "Only unique resolved frames newer than profiler arming frame 25029 were retained"
+    ]
+  },
+  "passes": [
+    {
+      "kind": "timing",
+      "status": "complete",
+      "warmupFrames": 17745,
+      "sampleFrames": 38,
+      "profilerArtifact": "profiler-samples",
+      "profilerMetrics": [
+        {
+          "name": "CSX resolved top-level GPU total",
+          "unit": "ms",
+          "samples": 38,
+          "minimum": 4.775290012359619,
+          "average": 5.272197648098595,
+          "median": 5.326910018920898,
+          "p95": 5.690279960632324,
+          "p99": 5.859569549560547,
+          "maximum": 5.859569549560547
+        },
+        {
+          "name": "CSX resolved CPU total",
+          "unit": "ms",
+          "samples": 38,
+          "minimum": 0.46639999747276306,
+          "average": 0.532110510688079,
+          "median": 0.5334500074386597,
+          "p95": 0.5896000266075134,
+          "p99": 0.6503000259399414,
+          "maximum": 0.6503000259399414
+        },
+        {
+          "name": "ImageBasedLighting explicit SH projection dispatches (sum)",
+          "unit": "ms",
+          "samples": 38,
+          "minimum": 0.0,
+          "average": 0.0000378947370336391,
+          "median": 0.0,
+          "p95": 0.00007999999797903001,
+          "p99": 0.001280000011320226,
+          "maximum": 0.001280000011320226
+        },
+        {
+          "name": "VolumetricShadows explicit compute dispatches (sum)",
+          "unit": "ms",
+          "samples": 38,
+          "minimum": 0.0,
+          "average": 0.0,
+          "median": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "maximum": 0.0
+        },
+        {
+          "name": "Upscaling::Upscale GPU",
+          "unit": "ms",
+          "samples": 38,
+          "minimum": 3.976289987564087,
+          "average": 4.410898691729495,
+          "median": 4.469580173492432,
+          "p95": 4.875999927520752,
+          "p99": 5.053450107574463,
+          "maximum": 5.053450107574463
+        }
+      ],
+      "capture": null,
+      "issues": [
+        "The accepted pass followed two rejected method-correction attempts and therefore had a longer warm state than the other candidates.",
+        "The explicit VolumetricShadows timers cover its downsample and blur compute passes, not all downstream consumption cost.",
+        "Automated stereo capture remains unavailable at Info because CSX requires Developer Mode for that mutation."
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "settings-user",
+      "role": "Exact Info, IBL-on, Volumetric-Shadows-off settings",
+      "locator": "mo2-mod://CSX Preset Automation Settings - Info IBLOn VSOff/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\mods\\CSX Preset Automation Settings - Info IBLOn VSOff\\SKSE\\Plugins\\CommunityShaders\\SettingsUser.json",
+      "mediaType": "application/json",
+      "bytes": 28885,
+      "sha256": "16A756C87ABF0E7B429A6C520B814708A2BF78ABD63C3B271548C767E00A87B4",
+      "retention": "external-retained"
+    },
+    {
+      "id": "profiler-samples",
+      "role": "Raw resolved CSX profiler responses for 38 accepted frames",
+      "locator": "campaign://20260817-amd-svr-ovr-null-riften-info-ibl-on-vs-off-r03/profiler-samples.json",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\overwrite\\Root\\CSX Baselines\\20260817-amd-svr-ovr-null-riften-info-ibl-on-vs-off-r03\\profiler-samples.json",
+      "mediaType": "application/json",
+      "bytes": 865316,
+      "sha256": "8329A60799BBE1A686750FDC9607D97190CC80C125644214F448E14D1ED0AE01",
+      "retention": "external-retained"
+    },
+    {
+      "id": "info-cache-identity",
+      "role": "Completed identity for the Volumetric-Shadows-off Info cache lane",
+      "locator": "mo2-mod://Community Shaders VR Shader Cache - CSX3.18-f971c9122-Info-VSOff/cache-identity.json",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\mods\\Community Shaders VR Shader Cache - CSX3.18-f971c9122-Info-VSOff\\cache-identity.json",
+      "mediaType": "application/json",
+      "bytes": 1092,
+      "sha256": "A359B30672A990D394A4700E218836155DD81238C6FF9093A86BA303F8BF9694",
+      "retention": "external-retained"
+    },
+    {
+      "id": "info-cache-manifest",
+      "role": "Deterministic manifest for the completed Volumetric-Shadows-off ShaderCache tree",
+      "locator": "mo2-mod://Community Shaders VR Shader Cache - CSX3.18-f971c9122-Info-VSOff/cache-manifest.sha256",
+      "localPath": "D:\\Games\\Skyrim\\MadGod2\\mods\\Community Shaders VR Shader Cache - CSX3.18-f971c9122-Info-VSOff\\cache-manifest.sha256",
+      "mediaType": "text/plain",
+      "bytes": 307394,
+      "sha256": "7F00669C29B61D2DD5F013C13B8356BE000E6A59EAF1138530F1A7F93BC26434",
+      "retention": "external-retained"
+    }
+  ],
+  "comparability": {
+    "baselineRunId": "20260817-amd-svr-ovr-null-riften-info-ibl-vs-r02",
+    "scope": "within-lane",
+    "controlledVariables": [
+      "One source DLL and dependency snapshot",
+      "One SteamVR null-HMD session definition",
+      "One save, cell, weather, position, static camera, and matched time window",
+      "One Info cache superset with setting-specific identity",
+      "One sample count and post-arm acceptance rule"
+    ],
+    "deviations": [
+      "Only Volumetric Shadows Enabled changed from the all-on return baseline.",
+      "The counterfactual preceded its return baseline in the run order.",
+      "Additional rejected attempts extended the warm state before the accepted pass."
+    ]
+  },
+  "validity": {
+    "accepted": true,
+    "reasons": [
+      "CSX used Info logging and a completed disk cache without compilation overlapping samples.",
+      "The scene and time reset were verified after the settle barrier.",
+      "All 38 retained frames were unique, resolved, newer than the arming boundary, and reported zero slot refusals.",
+      "Exact settings, raw profiler output, cache identity, runtime, scene, and hardware are retained."
+    ]
+  },
+  "conclusions": [
+    "The Volumetric-Shadows-off GPU average was 5.2722 ms versus 5.2335 ms for the matched all-on return, an apparent +0.0387 ms rather than a saving.",
+    "The direction conflicts with the removed 0.0338 ms of directly timed shadow compute and is explained more plausibly by unrelated run variation, including a +0.0872 ms Upscaling difference.",
+    "The 0.0387 ms top-level difference is smaller than the 0.1392 ms all-on run-to-run drift, so this pass does not resolve the feature's marginal total cost.",
+    "The directly instrumented Volumetric Shadows compute cost remains usable as a component observation, not as the complete feature cost."
+  ],
+  "notes": [
+    "Preparatory r01 and r02 artifacts are retained externally but rejected for pre-settle scene evidence and a retained pre-arm resolved frame respectively.",
+    "The settings-only MO2 override and its 3616-file cache lane remain available for switching without a full recompile.",
+    "No ShaderCache overlay files were generated; the setting-specific manifest matches the all-on Info cache superset."
+  ]
+}

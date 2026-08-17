@@ -2944,7 +2944,7 @@ namespace SIE
 		const auto featureStates = GetCurrentFeatureStates();
 		const auto cacheEntries = GetCacheEntries(ini, featureStates);
 		return Util::CacheInvalidation::ClassifyMismatches(
-			Plugin::VERSION.string(), cachedPluginVersion, featureStates, cacheEntries);
+			std::string{ Plugin::VERSION_LABEL }, cachedPluginVersion, featureStates, cacheEntries);
 	}
 
 	static std::vector<std::string> GetDefinesForMismatches(
@@ -3511,7 +3511,7 @@ namespace SIE
 		const uint64_t diskCacheGeneration = GetDiskCacheGeneration();
 		CSimpleIniA ini;
 		ini.SetUnicode();
-		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION.string().c_str());
+		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION_LABEL.data());
 		globals::state->WriteDiskCacheInfo(ini);
 
 		std::shared_lock lock{ g_diskCacheMutationMutex };
@@ -3531,7 +3531,7 @@ namespace SIE
 			logger::error("Failed to save shader cache Info.ini");
 			return;
 		}
-		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION.string());
+		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION_LABEL);
 	}
 
 	void ShaderCache::WriteDiskCacheInfoWhenReady()

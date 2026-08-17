@@ -9,7 +9,7 @@ on:
                 required: false
                 default: ""
             plugin_version:
-                description: "Optional SE plugin version override for Info.ini"
+                description: "Optional Info.ini override (CSX <major>.<minor>-SE)"
                 type: string
                 required: false
                 default: ""
@@ -20,7 +20,7 @@ on:
                 required: false
                 default: ""
             plugin_version:
-                description: "Optional SE plugin version override for Info.ini"
+                description: "Optional Info.ini override (CSX <major>.<minor>-SE)"
                 required: false
                 default: ""
 

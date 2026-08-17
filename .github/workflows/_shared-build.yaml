@@ -104,13 +104,16 @@ jobs:
               shell: pwsh
               run: |
                   $tag = '${{ github.ref_name }}'
-                  $expected = ($tag -replace '^v([0-9]+\.[0-9]+\.[0-9]+).*', '$1')
+                  if ($tag -notmatch '^CSX([0-9]+\.[0-9]+)-SE$') {
+                    Write-Error "Release tag '$tag' must use CSX<major>.<minor>-SE." -ErrorAction Stop
+                  }
+                  $expected = "$($Matches[1]).0"
                   $version = '${{ steps.get_version.outputs.version }}'
                   if (-not $version -or $version -eq "") {
                     Write-Error "Version extraction failed: no version found in previous step" -ErrorAction Stop
                   }
                   if ($version -ne $expected) {
-                    Write-Error "CMakeLists.txt version '$version' does not match tag version '$expected'. Please update CMakeLists.txt before tagging." -ErrorAction Stop
+                    Write-Error "CMake project version '$version' does not match CSX tag version '$expected'." -ErrorAction Stop
                   } else {
                     Write-Host "CMakeLists.txt version matches tag."
                   }

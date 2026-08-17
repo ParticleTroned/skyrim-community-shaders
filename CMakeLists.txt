@@ -2,12 +2,46 @@ cmake_minimum_required(VERSION 4.2)
 cmake_policy(SET CMP0116 NEW)
 set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 
+set(CSX_VERSION
+    "3.18-SE"
+    CACHE STRING
+    "Display version for Community Shaders Expanded."
+)
+if(NOT CSX_VERSION MATCHES [[^([0-9]+)\.([0-9]+)-SE$]])
+    message(
+        FATAL_ERROR
+        "CSX_VERSION must use the <major>.<minor>-SE format on this branch."
+    )
+endif()
+set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
+
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 1.8.3
+    VERSION "${_CSX_PROJECT_VERSION}"
+    DESCRIPTION "Community Shaders Expanded (CSX)"
     LANGUAGES CXX
 )
+
+set(CSX_PACKAGE_NAME "CSX")
+set(CSX_RELEASE_TAG "CSX${CSX_VERSION}")
+set(CSX_CACHE_MARKER_DIRECTORY
+    "${CMAKE_SOURCE_DIR}/package/SKSE/Plugins/CommunityShaders"
+)
+set(CSX_CACHE_MARKER
+    "${CSX_CACHE_MARKER_DIRECTORY}/${CSX_RELEASE_TAG}.marker"
+)
+file(GLOB _CSX_CACHE_MARKERS "${CSX_CACHE_MARKER_DIRECTORY}/CSX*.marker")
+list(LENGTH _CSX_CACHE_MARKERS _CSX_CACHE_MARKER_COUNT)
+if(
+    NOT _CSX_CACHE_MARKER_COUNT EQUAL 1
+    OR NOT "${_CSX_CACHE_MARKERS}" STREQUAL "${CSX_CACHE_MARKER}"
+)
+    message(
+        FATAL_ERROR
+        "The core package must contain exactly ${CSX_RELEASE_TAG}.marker and no other CSX compatibility marker."
+    )
+endif()
 
 # default install path
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
@@ -84,32 +118,7 @@ else()
     set(GIT_DESCRIBE "unknown")
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
-set(CS_PL_FORK_VERSION_DEFAULT "PL3.16-SE")
-set(CS_PL_FORK_VERSION_HELP
-    "Display version label for the Particle Lights fork."
-)
-if(
-    NOT DEFINED CS_PL_FORK_VERSION
-    OR CS_PL_FORK_VERSION STREQUAL ""
-    OR CS_PL_FORK_VERSION STREQUAL "PL3.15-SE"
-    OR CS_PL_FORK_VERSION STREQUAL "PL3.15-VR"
-)
-    set(CS_PL_FORK_VERSION
-        "${CS_PL_FORK_VERSION_DEFAULT}"
-        CACHE STRING
-        "${CS_PL_FORK_VERSION_HELP}"
-        FORCE
-    )
-else()
-    set(CS_PL_FORK_VERSION
-        "${CS_PL_FORK_VERSION}"
-        CACHE STRING
-        "${CS_PL_FORK_VERSION_HELP}"
-    )
-endif()
-unset(CS_PL_FORK_VERSION_DEFAULT)
-unset(CS_PL_FORK_VERSION_HELP)
-message("\tParticle Lights fork version: ${CS_PL_FORK_VERSION}")
+message("\tCommunity Shaders Expanded version: CSX ${CSX_VERSION}")
 
 # #######################################################################################################################
 # # Add CMake features
@@ -1185,7 +1194,7 @@ if(ZIP_TO_DIST)
         COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}/Shaders/Tests"
     )
 
-    set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.7z")
+    set(TARGET_ZIP "${CSX_PACKAGE_NAME}-${UTC_NOW}.7z")
     message("Zipping ${ZIP_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}")
     add_custom_command(
         TARGET ${PROJECT_NAME}
@@ -1255,7 +1264,7 @@ if(AIO_ZIP_TO_DIST)
     # only rebuilds the archive when its inputs change. The archive filename
     # keeps the UTC timestamp as before, but the command writes a stable
     # stamp file that CMake can track as OUTPUT.
-    set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
+    set(TARGET_AIO_ZIP "${CSX_PACKAGE_NAME}_AIO-${UTC_NOW}.7z")
     set(AIO_ARCHIVE "${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP}")
     set(AIO_ZIP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/aio_package.stamp")
 
@@ -1289,7 +1298,7 @@ endif()
 set(DIST_PATH "${CMAKE_SOURCE_DIR}/dist")
 file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
 
-set(CORE_PACKAGE "${DIST_PATH}/${PROJECT_NAME}-${UTC_NOW}.7z")
+set(CORE_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}-${UTC_NOW}.7z")
 
 # CORE_SOURCES = all content copied to the AIO directory + the SKSE plugin dll
 file(
@@ -1412,7 +1421,7 @@ if(TARGET AIO_ZIP_PACKAGE)
     add_custom_target("Package-AIO-Manual")
     add_dependencies("Package-AIO-Manual" AIO_ZIP_PACKAGE)
 else()
-    set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
+    set(AIO_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}_AIO-${UTC_NOW}.7z")
     add_custom_command(
         OUTPUT ${AIO_PACKAGE}
         DEPENDS ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
@@ -1483,7 +1492,7 @@ if(BUILD_HOST_TESTS)
 endif()
 
 message("*************************************************************")
-message("Community Shaders configuration complete")
+message("Community Shaders Expanded configuration complete")
 message("To prepare a ZIP package of AIO, Core, or Features")
 message("  Build cmake targets:")
 message("    - Package-Core: Core package")

@@ -564,15 +564,20 @@ def extract_feature_metadata(feature_headers_dir, nexus_metadata=None):
 def get_latest_release_tag(ref="HEAD"):
     try:
         output = subprocess.check_output(
-            ["git", "tag", "--merged", ref, "--list", "v*.*.*"],
+            ["git", "tag", "--merged", ref, "--list", "CSX*-SE"],
             stderr=subprocess.DEVNULL,
         ).decode("utf-8")
-        tags = [t.strip() for t in output.splitlines() if re.match(r"^v\d+\.\d+\.\d+$", t.strip())]
+        tags = [
+            tag.strip()
+            for tag in output.splitlines()
+            if re.fullmatch(r"CSX\d+\.\d+-SE", tag.strip())
+        ]
         if not tags:
             return None
         # Sort tags by version
         def tag_key(tag):
-            return tuple(map(int, tag.lstrip('v').split('.')))
+            version = tag.removeprefix('CSX').removesuffix('-SE')
+            return tuple(map(int, version.split('.')))
         tags.sort(key=tag_key, reverse=True)
         return tags[0]
     except Exception:
@@ -1012,7 +1017,7 @@ def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core
         # are skipped via check_existing once a version is on file.
         file_description = ''
         if release_version and mod_version:
-            file_description = f'{mod_filename} {mod_version} — released for Community Shaders {release_version}.'
+            file_description = f'{mod_filename} {mod_version} — released for CSX {release_version}.'
 
         file_group_id = ini_metadata.get('file_group_id', '').strip()
         if auto_upload and (not file_group_id or file_group_id == '000000'):
@@ -1164,7 +1169,7 @@ def generate_audit_report(
     return output
 
 def main():
-    parser = argparse.ArgumentParser(description="Feature version audit for Skyrim Community Shaders.")
+    parser = argparse.ArgumentParser(description="Feature version audit for Community Shaders Expanded (CSX).")
     parser.add_argument('--output', type=str, help='Output markdown filename')
     parser.add_argument('--ci', action='store_true', help='Exit 1 if actionable items found (alias for --fail-on-actionable)')
     parser.add_argument('--base', type=str, default=None, help='Base tag/branch/commit to compare against')
@@ -1177,8 +1182,8 @@ def main():
     parser.add_argument('--nexus-metadata-file', type=str, help='Optional Nexus metadata JSON file exported from nexus_mods_api')
     parser.add_argument('--all-features', action='store_true', help='Include all Nexus-capable features in export, not just version-changed ones')
     parser.add_argument('--core-mod-id', type=str, default='86492', help='Core Nexus mod ID for the generated upload matrix')
-    parser.add_argument('--core-filename', type=str, default='Community Shaders', help='Core Nexus filename for the generated upload matrix')
-    parser.add_argument('--core-artifact-pattern', type=str, default='CommunityShaders-*.7z', help='Core artifact pattern for the generated upload matrix')
+    parser.add_argument('--core-filename', type=str, default='Community Shaders Expanded (CSX)', help='Core Nexus filename for the generated upload matrix')
+    parser.add_argument('--core-artifact-pattern', type=str, default='CSX-*.7z', help='Core artifact pattern for the generated upload matrix')
     parser.add_argument('--release-version', type=str, default=None, help='Community Shaders release version (e.g. "1.5.2") used to anchor file_description on each upload row. When omitted, file_description is empty and the upstream Nexus action default ("See mod description for details.") is preserved.')
     args = parser.parse_args()
 

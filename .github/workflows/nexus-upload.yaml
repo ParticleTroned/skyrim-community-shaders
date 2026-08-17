@@ -17,11 +17,11 @@ on:
             artifact_pattern:
                 description: "Artifact glob pattern to select the package to upload"
                 required: false
-                default: "CommunityShaders-*.7z"
+                default: "CSX-*.7z"
             mod_filename:
                 description: "Filename used for the Nexus mod upload"
                 required: false
-                default: "Community Shaders"
+                default: "Community Shaders Expanded (CSX)"
             dry_run:
                 description: "If true, do not upload to Nexus; only report the planned upload"
                 required: false
@@ -54,11 +54,11 @@ on:
             artifact_pattern:
                 required: false
                 type: string
-                default: "CommunityShaders-*.7z"
+                default: "CSX-*.7z"
             mod_filename:
                 required: false
                 type: string
-                default: "Community Shaders"
+                default: "Community Shaders Expanded (CSX)"
             dry_run:
                 required: false
                 type: string
@@ -121,7 +121,7 @@ jobs:
                     echo "ERROR: Release '$TAG' is not published. Publish the GitHub release before uploading to Nexus." >&2
                     exit 1
                   fi
-                  VERSION="${TAG#v}"
+                  VERSION="${TAG#CSX}"
                   echo "tag=$TAG" >> $GITHUB_OUTPUT
                   echo "version=$VERSION" >> $GITHUB_OUTPUT
               env:
@@ -143,8 +143,8 @@ jobs:
               id: generate
               run: |
                   ARGS=( --export-nexus-matrix --matrix-output nexus-matrix-raw.json )
-                  PREVIOUS_TAG=$(git tag --merged "$RELEASE_TAG" --list 'v*.*.*' --sort=-v:refname 2>/dev/null \
-                    | grep -v -- '-' \
+                  PREVIOUS_TAG=$(git tag --merged "$RELEASE_TAG" --list 'CSX*-SE' --sort=-v:refname 2>/dev/null \
+                    | grep -E '^CSX[0-9]+\.[0-9]+-SE$' \
                     | awk -v current="$RELEASE_TAG" '$0 != current { print; exit }')
                   if [ -n "$PREVIOUS_TAG" ]; then
                     ARGS+=( --base "$PREVIOUS_TAG" )
@@ -160,10 +160,9 @@ jobs:
                   if [ -n "$INPUT_ARTIFACT_PATTERN" ]; then
                     ARGS+=( --core-artifact-pattern "$INPUT_ARTIFACT_PATTERN" )
                   fi
-                  # Strip the leading 'v' so we get e.g. "1.5.2" — the value
-                  # is rendered into Nexus file descriptions, where the
-                  # bare semver is what users see in the UI.
-                  RELEASE_VER="${RELEASE_TAG#v}"
+                  # Strip the CSX prefix so Nexus shows the branch-qualified
+                  # release identity, for example "3.18-SE".
+                  RELEASE_VER="${RELEASE_TAG#CSX}"
                   ARGS+=( --release-version "$RELEASE_VER" )
                   python tools/feature_version_audit.py "${ARGS[@]}"
 

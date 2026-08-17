@@ -528,8 +528,9 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		}
 
-		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
-			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
+		const auto currentVersion = std::string{ Plugin::VERSION_LABEL };
+		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != currentVersion) {
+			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], currentVersion);
 			Save(a_configMode);  // Use original config mode
 		}
 
@@ -591,7 +592,7 @@ void State::SaveToJson(
 	}
 	settings["Disable at Boot"] = disabledFeaturesJson;
 
-	settings["Version"] = Plugin::VERSION.string();
+	settings["Version"] = std::string{ Plugin::VERSION_LABEL };
 
 	// Save feature settings without performing disk I/O. Preserve an existing
 	// section for any feature which is unavailable in this session.

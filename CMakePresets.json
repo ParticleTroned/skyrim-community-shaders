@@ -58,7 +58,8 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "OFF",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "COMMONLIB_PREBUILT_MULTICONFIG": "ON"
+                "COMMONLIB_PREBUILT_MULTICONFIG": "ON",
+                "CSX_VERSION": "3.18-SE"
             },
             "inherits": "skyrim"
         },
@@ -70,7 +71,8 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "OFF",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "COMMONLIB_PREBUILT_MULTICONFIG": "ON"
+                "COMMONLIB_PREBUILT_MULTICONFIG": "ON",
+                "CSX_VERSION": "3.18-SE"
             },
             "inherits": "skyrim"
         },
@@ -87,7 +89,8 @@
             "description": "Release configure preset for an AIO output without hidden packaged features.",
             "inherits": "ALL",
             "cacheVariables": {
-                "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON"
+                "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON",
+                "CSX_VERSION": "3.18-SE"
             }
         }
     ],
@@ -129,7 +132,7 @@
         },
         {
             "name": "Debug",
-            "description": "Debug build for CS SKSE plugin, generate an AIO folder thats ready to copy",
+            "description": "Debug build for CSX SKSE plugin, generate an AIO folder thats ready to copy",
             "configurePreset": "ALL-DEBUG",
             "configuration": "Debug",
             "targets": ["CommunityShaders", "AIO"]

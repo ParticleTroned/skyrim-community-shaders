@@ -48,3 +48,6 @@ Volumetric Lighting required about 467 ms to enter its final tail in both eyes, 
 
 No tier value changes are justified. Retain the existing Skylighting, SSS, Wetterness, and Volumetric Lighting gradients. Raise confidence in SSS unlimited range as a real moving-scene distinction, record bounded null-HMD step recovery for all four systems, and narrow the remaining work to known-distance targets, continuous/rotating motion, physical HMD, alternate runtimes, and NVIDIA portability.
 
+## Post-capture upstream sync
+
+After this stopped session, `origin/main-VR` advanced by four commits and was merged as `310292719`. CommonLibSSE-NG now points at tagged v6.3.2 (`9c9ac1295`), which includes an upstream commit with a byte-identical copy of the required VR `State.h` build-layout fix. Shader-cache publication changes do not alter these captured pixels. However, `a0a6218b0` changes Bloom/display mapping to retain enhancement in daylight; all visual metrics above therefore remain snapshot evidence for DLL commit `d0682bf57`, not post-Bloom visual qualification. Re-run daylight-sensitive visual comparisons before release promotion. Typed control restoration, capture validity, stereo pairing, and the storage result are unaffected by that later shader change.

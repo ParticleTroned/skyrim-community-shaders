@@ -309,5 +309,5 @@ This is an append-only record. Supersede a decision with a new entry rather than
 - Decision: retain all four provisional gradients unchanged; treat Volumetric Lighting's slower fog convergence as a targeted follow-up, not a failure; require known-distance and continuous/rotating tests where listed in preset policy
 - Confidence: medium-high for AMD/null-HMD SSS range response; medium for absence of a gross persistent step artifact in the tested lanes; low for physical/runtime/vendor portability
 - Consequences: generated unified candidates remain unchanged; motion coverage claims now distinguish abrupt position steps from continuous or rotational disocclusion
-- Revalidation triggers: known-distance targets, continuous `TranslateTo` or synthetic tracked pose, physical occupied HMD, OpenXR/VDXR/OCU, NVIDIA, or feature history/resource changes
+- Revalidation triggers: known-distance targets, continuous `TranslateTo` or synthetic tracked pose, physical occupied HMD, OpenXR/VDXR/OCU, NVIDIA, or feature history/resource changes. The post-capture daylight Bloom/display-mapping change `a0a6218b0` is an active visual revalidation trigger before release promotion
 - Supersedes: none

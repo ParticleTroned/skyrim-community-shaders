@@ -14,8 +14,8 @@ namespace PerformanceTuning
 
 	struct Moments
 	{
-		double sum = 0.0;
-		double squaredSum = 0.0;
+		double mean = 0.0;
+		double squaredDeviationSum = 0.0;
 		double sampleWeight = 0.0;
 
 		void Add(double value, double weight);

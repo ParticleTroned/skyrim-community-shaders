@@ -329,6 +329,20 @@ TEST_CASE(
 }
 
 TEST_CASE(
+	"Constant weighted samples retain exactly zero variance",
+	"[performance-tuning][moments][precision]")
+{
+	Moments moments;
+	for (int i = 0; i < 188; ++i)
+		moments.Add(15.95, 1.0);
+	moments.Add(15.95, 0.0877742946708464);
+
+	REQUIRE(moments.Mean() == 15.95);
+	REQUIRE(moments.Variance() == 0.0);
+	REQUIRE(moments.StandardError() == 0.0);
+}
+
+TEST_CASE(
 	"Small differences are significant when their confidence interval excludes zero",
 	"[performance-tuning][uncertainty][significance]")
 {

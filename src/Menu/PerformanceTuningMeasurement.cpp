@@ -89,12 +89,12 @@ namespace PerformanceTuning
 			const double temporalVariance = std::max(
 				0.0,
 				(halfMeanDifference * halfMeanDifference -
-				 firstHalfError * firstHalfError -
-				 secondHalfError * secondHalfError) *
+					firstHalfError * firstHalfError -
+					secondHalfError * secondHalfError) *
 					0.5);
 			const double temporalMeanVariance =
 				(firstHalfWeight * firstHalfWeight +
-				 secondHalfWeight * secondHalfWeight) *
+					secondHalfWeight * secondHalfWeight) *
 				temporalVariance;
 			return std::max(
 				standardErrorVariance,
@@ -107,7 +107,7 @@ namespace PerformanceTuning
 		{
 			const double withinCurrentVariance =
 				(CalculateWindowMeanVariance(currentBefore) +
-				 CalculateWindowMeanVariance(currentAfter)) *
+					CalculateWindowMeanVariance(currentAfter)) *
 				0.25;
 			const double currentMeanDifference =
 				currentBefore.total.Mean() -
@@ -163,14 +163,17 @@ namespace PerformanceTuning
 		if (!IsPositiveFinite(value) || !std::isfinite(weight) || weight <= 0.0)
 			return;
 
-		sum += value * weight;
-		squaredSum += value * value * weight;
-		sampleWeight += weight;
+		const double updatedSampleWeight = sampleWeight + weight;
+		const double delta = value - mean;
+		mean += delta * (weight / updatedSampleWeight);
+		const double updatedDelta = value - mean;
+		squaredDeviationSum += weight * delta * updatedDelta;
+		sampleWeight = updatedSampleWeight;
 	}
 
 	double Moments::Mean() const
 	{
-		return sampleWeight > 0.0 ? sum / sampleWeight : 0.0;
+		return sampleWeight > 0.0 ? mean : 0.0;
 	}
 
 	double Moments::Variance() const
@@ -178,8 +181,7 @@ namespace PerformanceTuning
 		if (sampleWeight <= 0.0)
 			return 0.0;
 
-		const double mean = Mean();
-		return std::max(0.0, squaredSum / sampleWeight - mean * mean);
+		return std::max(0.0, squaredDeviationSum / sampleWeight);
 	}
 
 	double Moments::StandardDeviation() const
@@ -392,16 +394,16 @@ namespace PerformanceTuning
 	{
 		const bool metricDiscontinuous =
 			(&metric == &window.wholeFrameGpu &&
-			 window.wholeFrameGpuCoverageDiscontinuous) ||
+				window.wholeFrameGpuCoverageDiscontinuous) ||
 			(&metric == &window.wholeFrameCpu &&
-			 window.wholeFrameCpuCoverageDiscontinuous);
+				window.wholeFrameCpuCoverageDiscontinuous);
 		return !window.wholeFrameSourceDiscontinuous &&
 		       !metricDiscontinuous &&
 		       window.present.sampleWeight > 0.0 &&
 		       std::abs(
 				   metric.sampleWeight -
 				   window.present.sampleWeight) <=
-			       kSampleWeightEpsilon;
+		           kSampleWeightEpsilon;
 	}
 
 	bool IsFramePaced(const SampleWindow& window)

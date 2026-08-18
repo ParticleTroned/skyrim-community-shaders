@@ -11,8 +11,9 @@ ShaderCache directory when installing through Mod Organizer 2.
 
 The generated cache targets this repo's shipped distribution profile:
   - shipped features are treated as active
-  - plugin-detected compatibility features are inactive until detected at runtime
-  - WetnessEffects is legacy, default-off, and not shipped
+  - features hidden from the AIO package are omitted
+  - WetnessEffects ships with the AIO and is treated as active
+  - Horizon Fix receives separate disabled and enabled cache variants
 
 Usage:
   python tools/build-shader-cache.py --package
@@ -31,6 +32,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,31 +48,40 @@ FOMOD_CONFIG_FILE_NAME = "ModuleConfig.xml"
 FOMOD_INFO_FILE_NAME = "info.xml"
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
 TARGET_RUNTIME = "SE"
+HORIZON_FIX_SHORT_NAME = "HorizonFix"
+HORIZON_FIX_CACHE_DIRECTORY = f"{CACHE_DIRECTORY}-HorizonFix"
+HORIZON_FIX_DLL_PATH = "SKSE/Plugins/HorizonFix.dll"
+HORIZON_FIX_SHADER_FILE = "Water.hlsl"
 CSX_PLUGIN_VERSION_PATTERN = re.compile(r"^CSX (?P<version>[0-9]+\.[0-9]+)-SE$")
 CSX_VERSION_FILE = Path("cmake/CSXVersion.cmake")
 CSX_VERSION_DECLARATION_PATTERN = re.compile(
     r'^\s*set\(CSX_VERSION\s+"(?P<version>[0-9]+\.[0-9]+-SE)"\)\s*$',
     re.MULTILINE,
 )
+HIDDEN_FEATURE_PATTERN = re.compile(
+    r"IsHiddenFromUserView[^\{]*\{\s*return\s+true\s*;",
+    re.DOTALL,
+)
+FEATURE_SHORT_NAME_PATTERN = re.compile(
+    r'GetShortName[^\{]*\{\s*return\s+"([^"]+)"',
+    re.DOTALL,
+)
+FEATURE_SHORT_NAME_CONSTANT_PATTERN = re.compile(
+    r'kFeatureShortName\s*=\s*"([^"]+)"',
+    re.DOTALL,
+)
+FEATURE_SHADER_DEFINE_PATTERN = re.compile(
+    r'GetShaderDefineName[^\{]*\{\s*return\s+"([^"]+)"',
+    re.DOTALL,
+)
 
-# Distribution profile transforms. The source validation configs are still
-# useful as compile inventories, but the shipped cache profile is different:
-# WetnessEffects is legacy/non-shipped, while Wetterness and UnifiedWater ship on.
-NON_SHIPPED_FEATURES = {
-    "WetnessEffects": {
-        "define": "WETNESS_EFFECTS",
-        "package": "Wetness Effects",
-    },
-}
+# Distribution profile transforms. The source validation config remains the
+# compile inventory. Feature-package inclusion is derived from the same hidden
+# feature declarations used by the AIO-Release CMake preset.
 GLOBAL_SHIPPED_DEFINES = ("UNIFIED_WATER",)
 FILE_SHIPPED_DEFINES = {
     "Lighting.hlsl": ("WETTERNESS",),
     "Water.hlsl": ("WETTERNESS",),
-}
-CACHE_DEFAULT_DISABLED_FEATURES = frozenset({"HorizonFix"})
-NON_SHIPPED_DEFINES = {
-    feature["define"]
-    for feature in NON_SHIPPED_FEATURES.values()
 }
 DEBUG_PROFILE_DEFINES = {
     "DEBUG",
@@ -79,11 +90,34 @@ DEBUG_PROFILE_DEFINES = {
     "D3DCOMPILE_DEBUG",
     "D3DCOMPILE_SKIP_OPTIMIZATION",
 }
-PROFILE_EXCLUDED_DEFINES = NON_SHIPPED_DEFINES | DEBUG_PROFILE_DEFINES
-NON_SHIPPED_PACKAGES = {
-    feature["package"]
-    for feature in NON_SHIPPED_FEATURES.values()
-}
+
+
+@dataclass(frozen=True)
+class FeatureContract:
+    short_name: str
+    package_name: str
+    shader_define: str | None
+
+
+@dataclass(frozen=True)
+class DistributionProfile:
+    excluded_short_names: frozenset[str]
+    excluded_packages: frozenset[str]
+    excluded_defines: frozenset[str]
+    horizon_fix_define: str
+
+
+@dataclass(frozen=True)
+class CacheVariant:
+    name: str
+    directory: str
+    horizon_fix_enabled: bool
+
+
+CACHE_VARIANTS = (
+    CacheVariant("standard", CACHE_DIRECTORY, False),
+    CacheVariant("horizon-fix", HORIZON_FIX_CACHE_DIRECTORY, True),
+)
 
 IMAGESPACE_DIRS = {
     (0, 0): "WorldMap",
@@ -245,6 +279,130 @@ IMAGESPACE_DIRS = {
 }
 
 
+def feature_short_name_from_header(contents: str) -> str | None:
+    match = FEATURE_SHORT_NAME_PATTERN.search(contents)
+    if match:
+        return match.group(1)
+
+    match = FEATURE_SHORT_NAME_CONSTANT_PATTERN.search(contents)
+    return match.group(1) if match else None
+
+
+def packaged_feature_directories(source_root: Path) -> dict[str, str]:
+    """Map feature short names to their package directories."""
+    features_root = source_root / "features"
+    if not features_root.is_dir():
+        raise SystemExit(f"missing feature directory: {features_root}")
+
+    packages: dict[str, str] = {}
+    for ini_path in sorted(features_root.glob("*/Shaders/Features/*.ini")):
+        short_name = ini_path.stem
+        package_name = ini_path.parents[2].name
+        previous = packages.setdefault(short_name, package_name)
+        if previous != package_name:
+            raise SystemExit(
+                f"feature {short_name} is supplied by both {previous} and "
+                f"{package_name}"
+            )
+
+    if not packages:
+        raise SystemExit(f"no packaged feature metadata found under {features_root}")
+    return packages
+
+
+def feature_contracts(source_root: Path) -> dict[str, FeatureContract]:
+    """Read the AIO-relevant short-name and shader-define contracts."""
+    packages = packaged_feature_directories(source_root)
+    headers_root = source_root / "src/Features"
+    if not headers_root.is_dir():
+        raise SystemExit(f"missing feature header directory: {headers_root}")
+
+    contracts: dict[str, FeatureContract] = {}
+    for header in sorted(headers_root.rglob("*.h")):
+        try:
+            contents = header.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise SystemExit(f"cannot read feature header {header}: {exc}") from exc
+
+        short_name = feature_short_name_from_header(contents)
+        if not short_name or short_name not in packages:
+            continue
+
+        define_match = FEATURE_SHADER_DEFINE_PATTERN.search(contents)
+        shader_define = define_match.group(1) if define_match else None
+        contract = FeatureContract(short_name, packages[short_name], shader_define)
+        previous = contracts.setdefault(short_name, contract)
+        if previous != contract:
+            raise SystemExit(
+                f"feature contract {short_name} is declared inconsistently in "
+                f"{header}"
+            )
+
+    return contracts
+
+
+def derive_distribution_profile(source_root: Path) -> DistributionProfile:
+    """Mirror AIO-Release hidden-feature exclusion and Horizon Fix metadata."""
+    packages = packaged_feature_directories(source_root)
+    contracts = feature_contracts(source_root)
+    headers_root = source_root / "src/Features"
+
+    hidden_short_names: set[str] = set()
+    for header in sorted(headers_root.rglob("*.h")):
+        try:
+            contents = header.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise SystemExit(f"cannot read feature header {header}: {exc}") from exc
+        if not HIDDEN_FEATURE_PATTERN.search(contents):
+            continue
+
+        short_name = feature_short_name_from_header(contents)
+        if not short_name:
+            raise SystemExit(
+                f"cannot derive the short name of hidden feature header {header}"
+            )
+        if short_name not in packages:
+            raise SystemExit(
+                f"hidden feature {short_name} has no matching packaged feature"
+            )
+        hidden_short_names.add(short_name)
+
+    horizon_fix = contracts.get(HORIZON_FIX_SHORT_NAME)
+    if horizon_fix is None or not horizon_fix.shader_define:
+        raise SystemExit("cannot derive the Horizon Fix shader feature contract")
+    if HORIZON_FIX_SHORT_NAME in hidden_short_names:
+        raise SystemExit("Horizon Fix must remain in the AIO for cache auto-selection")
+
+    water_source = source_root / "package/Shaders" / HORIZON_FIX_SHADER_FILE
+    try:
+        water_contents = water_source.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise SystemExit(f"cannot read Horizon Fix shader {water_source}: {exc}") from exc
+    if horizon_fix.shader_define not in water_contents:
+        raise SystemExit(
+            f"{water_source} does not consume {horizon_fix.shader_define}"
+        )
+
+    missing_contracts = sorted(hidden_short_names - contracts.keys())
+    if missing_contracts:
+        raise SystemExit(
+            "cannot derive hidden feature contracts: " + ", ".join(missing_contracts)
+        )
+
+    return DistributionProfile(
+        excluded_short_names=frozenset(hidden_short_names),
+        excluded_packages=frozenset(
+            packages[short_name] for short_name in hidden_short_names
+        ),
+        excluded_defines=frozenset(
+            contract.shader_define
+            for short_name, contract in contracts.items()
+            if short_name in hidden_short_names and contract.shader_define
+        ),
+        horizon_fix_define=horizon_fix.shader_define,
+    )
+
+
 def shader_source_roots(source_root: Path) -> tuple[Path, ...]:
     """Return every tree that could be copied into the merged shader stage."""
     package_shaders = source_root / "package/Shaders"
@@ -265,7 +423,11 @@ def config_for(source_root: Path) -> Path:
     return source_root / ".github/configs/shader-validation.yaml"
 
 
-def stage_merged_shaders(source_root: Path, stage: Path) -> None:
+def stage_merged_shaders(
+    source_root: Path,
+    stage: Path,
+    excluded_packages: frozenset[str],
+) -> None:
     if stage.exists():
         raise RuntimeError(f"staging directory already exists: {stage}")
 
@@ -281,7 +443,7 @@ def stage_merged_shaders(source_root: Path, stage: Path) -> None:
     shutil.copytree(package_shaders, stage, ignore=ignore_tests)
     for shaders_dir in source_roots[1:]:
         feature_dir = shaders_dir.parent
-        if feature_dir.name in NON_SHIPPED_PACKAGES:
+        if feature_dir.name in excluded_packages:
             continue
         shutil.copytree(
             shaders_dir,
@@ -309,7 +471,16 @@ def append_missing_defines(defines: object, names: tuple[str, ...]) -> None:
             defines.append(name)
 
 
-def apply_shipped_profile_defines(config: object) -> object:
+def apply_shipped_profile_defines(
+    config: object,
+    excluded_defines: frozenset[str],
+    variant_file_defines: dict[str, tuple[str, ...]],
+) -> object:
+    profile_excluded_defines = {
+        normalized_define_name(define)
+        for define in excluded_defines | DEBUG_PROFILE_DEFINES
+    }
+
     def scrub(node: object) -> object:
         if isinstance(node, dict):
             return {key: scrub(value) for key, value in node.items()}
@@ -319,7 +490,7 @@ def apply_shipped_profile_defines(config: object) -> object:
                 for value in node
                 if not (
                     isinstance(value, str)
-                    and normalized_define_name(value) in PROFILE_EXCLUDED_DEFINES
+                    and normalized_define_name(value) in profile_excluded_defines
                 )
             ]
         return node
@@ -333,9 +504,16 @@ def apply_shipped_profile_defines(config: object) -> object:
         raise SystemExit("shader config common_defines must be a list")
     append_missing_defines(common_defines, GLOBAL_SHIPPED_DEFINES)
 
+    profile_file_defines = {
+        file_name: (*FILE_SHIPPED_DEFINES.get(file_name, ()), *defines)
+        for file_name, defines in variant_file_defines.items()
+    }
+    for file_name, defines in FILE_SHIPPED_DEFINES.items():
+        profile_file_defines.setdefault(file_name, defines)
+
     file_common_defines = config.get("file_common_defines")
     if isinstance(file_common_defines, dict):
-        for file_name, defines_to_add in FILE_SHIPPED_DEFINES.items():
+        for file_name, defines_to_add in profile_file_defines.items():
             stage_defines = file_common_defines.get(file_name)
             if isinstance(stage_defines, dict):
                 for defines in stage_defines.values():
@@ -356,7 +534,7 @@ def apply_shipped_profile_defines(config: object) -> object:
             continue
 
         file_name = shader.get("file")
-        defines_to_add = FILE_SHIPPED_DEFINES.get(file_name)
+        defines_to_add = profile_file_defines.get(file_name)
         if not defines_to_add or not isinstance(file_name, str):
             continue
 
@@ -380,7 +558,7 @@ def apply_shipped_profile_defines(config: object) -> object:
             )
         updated_files.add(file_name)
 
-    missing_files = sorted(set(FILE_SHIPPED_DEFINES) - updated_files)
+    missing_files = sorted(set(profile_file_defines) - updated_files)
     if missing_files:
         raise SystemExit(
             "shader config is missing shipped-profile entries for: "
@@ -428,13 +606,23 @@ def validate_captured_variant_count(config: dict[str, object], config_path: Path
     print(f"shader config: validated {actual} captured variants from {config_path}")
 
 
-def filter_profile_defines(config_path: Path, out_path: Path, yaml: Any) -> Path:
+def filter_profile_defines(
+    config_path: Path,
+    out_path: Path,
+    yaml: Any,
+    excluded_defines: frozenset[str],
+    variant_file_defines: dict[str, tuple[str, ...]],
+) -> Path:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise SystemExit(f"shader config must be a YAML mapping: {config_path}")
 
     validate_captured_variant_count(config, config_path)
-    config = apply_shipped_profile_defines(config)
+    config = apply_shipped_profile_defines(
+        config,
+        excluded_defines,
+        variant_file_defines,
+    )
     out_path.write_text(
         yaml.safe_dump(config, sort_keys=False),
         encoding="utf-8",
@@ -531,15 +719,18 @@ def prune_non_cache_files(cache_dir: Path) -> None:
             directory.rmdir()
 
 
-def write_info_ini(cache_dir: Path, stage: Path, plugin_version: str) -> int:
+def write_info_ini(
+    cache_dir: Path,
+    stage: Path,
+    plugin_version: str,
+    feature_overrides: dict[str, bool],
+) -> dict[str, bool]:
     validate_ini_value(plugin_version, "plugin version")
     lines = ["[Cache]", f"PluginVersion = {plugin_version}", "", ""]
-    count = 0
+    feature_states: dict[str, bool] = {}
 
     for ini_path in sorted((stage / "Features").glob("*.ini")):
         stem = ini_path.stem
-        if stem in NON_SHIPPED_FEATURES:
-            continue
 
         config = configparser.ConfigParser(interpolation=None)
         try:
@@ -553,14 +744,28 @@ def write_info_ini(cache_dir: Path, stage: Path, plugin_version: str) -> int:
             raise SystemExit(f"{ini_path.name} has no Info/Version")
         validate_ini_value(version, f"{ini_path.name} feature version")
 
-        enabled = "false" if stem in CACHE_DEFAULT_DISABLED_FEATURES else "true"
-        lines += [f"[{stem}]", f"Enabled = {enabled}", f"Version = {version}", "", ""]
-        count += 1
+        enabled = feature_overrides.get(stem, True)
+        feature_states[stem] = enabled
+        enabled_text = "true" if enabled else "false"
+        lines += [
+            f"[{stem}]",
+            f"Enabled = {enabled_text}",
+            f"Version = {version}",
+            "",
+            "",
+        ]
+
+    missing_overrides = sorted(set(feature_overrides) - feature_states.keys())
+    if missing_overrides:
+        raise SystemExit(
+            "cache feature overrides are absent from the staged AIO: "
+            + ", ".join(missing_overrides)
+        )
 
     (cache_dir / INFO_FILE_NAME).write_bytes(
         b"\xef\xbb\xbf" + "\r\n".join(lines).encode("utf-8")
     )
-    return count
+    return feature_states
 
 
 def default_plugin_version(source_root: Path) -> str:
@@ -635,7 +840,11 @@ def locate_fxc(explicit: str | None) -> str:
     )
 
 
-def validate_cache(cache_dir: Path, plugin_version: str) -> int:
+def validate_cache(
+    cache_dir: Path,
+    plugin_version: str,
+    expected_feature_states: dict[str, bool],
+) -> int:
     """Fail before packaging if the cache is incomplete or malformed."""
     info_path = cache_dir / INFO_FILE_NAME
     manifest_path = cache_dir / MANIFEST_FILE_NAME
@@ -657,6 +866,27 @@ def validate_cache(cache_dir: Path, plugin_version: str) -> int:
             f"SE: Info.ini plugin version is {actual_version!r}; "
             f"expected {plugin_version!r}"
         )
+
+    actual_feature_names = set(info.sections()) - {"Cache"}
+    expected_feature_names = set(expected_feature_states)
+    if actual_feature_names != expected_feature_names:
+        missing = sorted(expected_feature_names - actual_feature_names)
+        unexpected = sorted(actual_feature_names - expected_feature_names)
+        raise SystemExit(
+            "SE: Info.ini feature set does not match the staged AIO; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    for feature_name, expected_enabled in expected_feature_states.items():
+        actual_enabled = info.getboolean(
+            feature_name,
+            "Enabled",
+            fallback=None,
+        )
+        if actual_enabled is not expected_enabled:
+            raise SystemExit(
+                f"SE: Info.ini {feature_name}/Enabled is {actual_enabled!r}; "
+                f"expected {expected_enabled!r}"
+            )
 
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -953,13 +1183,22 @@ def validate_fomod_installer(
         ),
         None,
     )
-    cache_plugin = next(
-        (plugin for plugin in plugins if plugin.find("./files/folder") is not None),
-        None,
-    )
-    if warning_plugin is None or cache_plugin is None:
+    cache_plugins = [
+        plugin for plugin in plugins if plugin.find("./files/folder") is not None
+    ]
+    if warning_plugin is None or len(cache_plugins) != len(CACHE_VARIANTS):
         raise SystemExit(
-            "cache FOMOD is missing its visible MO2 warning or compatibility step"
+            "cache FOMOD is missing its visible MO2 warning or cache variants"
+        )
+
+    cache_plugins_by_source = {
+        plugin.find("./files/folder").get("source", ""): plugin
+        for plugin in cache_plugins
+    }
+    expected_cache_sources = {variant.directory for variant in CACHE_VARIANTS}
+    if set(cache_plugins_by_source) != expected_cache_sources:
+        raise SystemExit(
+            "cache FOMOD sources do not match the generated cache variants"
         )
 
     warning_type = warning_plugin.find("./typeDescriptor/type")
@@ -972,7 +1211,10 @@ def validate_fomod_installer(
             (
                 info_root.findtext("./Description"),
                 warning_plugin.findtext("./description"),
-                cache_plugin.findtext("./description"),
+                *(
+                    plugin.findtext("./description")
+                    for plugin in cache_plugins
+                ),
             ),
         )
     )
@@ -982,6 +1224,7 @@ def validate_fomod_installer(
         "Fomod Installer",
         "use_any_file",
         "true",
+        "reinstall this shader-cache FOMOD",
     )
     missing_guidance = [text for text in required_guidance if text not in descriptions]
     if missing_guidance:
@@ -990,60 +1233,69 @@ def validate_fomod_installer(
             + ", ".join(missing_guidance)
         )
 
-    dependencies = {
-        (
-            dependency.get("file", "").replace("\\", "/"),
-            dependency.get("state", ""),
-        )
-        for dependency in cache_plugin.findall(
-            "./typeDescriptor/dependencyType/patterns/pattern/"
-            "dependencies/fileDependency"
-        )
-    }
-    expected_dependencies = {
-        (
-            "SKSE/Plugins/CommunityShaders/"
-            f"{compatibility_tag}.marker",
-            "Active",
-        ),
-    }
-    missing_dependencies = expected_dependencies - dependencies
-    if missing_dependencies:
-        formatted = ", ".join(
-            f"{path} ({state})" for path, state in sorted(missing_dependencies)
-        )
-        raise SystemExit(
-            f"cache FOMOD is missing required CSX dependencies: {formatted}"
-        )
-
-    dependency_type = cache_plugin.find("./typeDescriptor/dependencyType")
-    default_type = (
-        dependency_type.find("./defaultType") if dependency_type is not None else None
+    core_dependency = (
+        f"SKSE/Plugins/CommunityShaders/{compatibility_tag}.marker",
+        "Active",
     )
-    matched_type = (
-        dependency_type.find("./patterns/pattern/type")
-        if dependency_type is not None
-        else None
-    )
-    if (
-        default_type is None
-        or default_type.get("name") != "NotUsable"
-        or matched_type is None
-        or matched_type.get("name") != "Required"
-    ):
-        raise SystemExit(
-            "cache FOMOD must disable installation by default and require it only "
-            "for the matching active CSX marker"
-        )
+    horizon_dependency = HORIZON_FIX_DLL_PATH.replace("\\", "/")
+    expected_patterns = {
+        CACHE_DIRECTORY: {
+            frozenset({core_dependency, (horizon_dependency, "Missing")}),
+            frozenset({core_dependency, (horizon_dependency, "Inactive")}),
+        },
+        HORIZON_FIX_CACHE_DIRECTORY: {
+            frozenset({core_dependency, (horizon_dependency, "Active")}),
+        },
+    }
 
-    install_folder = cache_plugin.find("./files/folder")
-    if install_folder is None or (
-        install_folder.get("source") != CACHE_DIRECTORY
-        or install_folder.get("destination") != CACHE_DIRECTORY
-    ):
-        raise SystemExit(
-            "cache FOMOD does not install ShaderCache at Data/ShaderCache"
+    for source, cache_plugin in cache_plugins_by_source.items():
+        dependency_type = cache_plugin.find("./typeDescriptor/dependencyType")
+        default_type = (
+            dependency_type.find("./defaultType")
+            if dependency_type is not None
+            else None
         )
+        patterns = (
+            dependency_type.findall("./patterns/pattern")
+            if dependency_type is not None
+            else []
+        )
+        actual_patterns: set[frozenset[tuple[str, str]]] = set()
+        for pattern in patterns:
+            matched_type = pattern.find("./type")
+            if matched_type is None or matched_type.get("name") != "Required":
+                raise SystemExit(
+                    f"cache FOMOD variant {source} has a non-required match"
+                )
+            actual_patterns.add(
+                frozenset(
+                    (
+                        dependency.get("file", "").replace("\\", "/"),
+                        dependency.get("state", ""),
+                    )
+                    for dependency in pattern.findall(
+                        "./dependencies/fileDependency"
+                    )
+                )
+            )
+
+        if default_type is None or default_type.get("name") != "NotUsable":
+            raise SystemExit(
+                f"cache FOMOD variant {source} must be unavailable by default"
+            )
+        if actual_patterns != expected_patterns[source]:
+            raise SystemExit(
+                f"cache FOMOD variant {source} has incorrect compatibility rules"
+            )
+
+        install_folder = cache_plugin.find("./files/folder")
+        if install_folder is None or (
+            install_folder.get("source") != source
+            or install_folder.get("destination") != CACHE_DIRECTORY
+        ):
+            raise SystemExit(
+                f"cache FOMOD variant {source} does not install at Data/ShaderCache"
+            )
 
 
 def write_fomod_installer(
@@ -1066,8 +1318,10 @@ def write_fomod_installer(
         "MOD ORGANIZER 2 USERS: before installing, open Settings > Plugins, "
         "select Fomod Installer in the left-hand plugin list, set use_any_file "
         f"to true in the right-hand settings table, and enable the {compatibility_tag} "
-        "core/AIO. The installer then verifies the exact active core marker and "
-        "installs its matching precompiled cache at Data\\ShaderCache."
+        "core/AIO. The installer verifies the exact active core marker and selects "
+        "the standard or Horizon Fix shader cache from the active HorizonFix.dll. "
+        "IMPORTANT: reinstall this shader-cache FOMOD whenever Horizon Fix is "
+        "enabled or disabled."
     )
     option_description = (
         "MOD ORGANIZER 2 SETUP REQUIRED:\n\n"
@@ -1086,13 +1340,23 @@ def write_fomod_installer(
         "missing even when the core mod is active. This option stays disabled "
         "until MO2 detects SKSE\\Plugins\\CommunityShaders\\"
         f"{compatibility_tag}.marker "
-        "from an active mod."
+        "from an active mod.\n\n"
+        "HORIZON FIX PROFILE: this installer checks the active virtual file "
+        "SKSE\\Plugins\\HorizonFix.dll and selects Water shaders compiled for "
+        "that state. Reinstall this shader-cache FOMOD whenever Horizon Fix is "
+        "enabled or disabled after the cache was installed."
     )
-    compatibility_description = (
-        f"Installs the precompiled shader cache only when {compatibility_tag}.marker "
-        "is visible from an active core/AIO mod. If this option is disabled, "
-        "return to the previous page, apply the MO2 setting exactly as shown, "
-        "verify that the matching core/AIO is enabled, and reopen the installer."
+    standard_description = (
+        f"Installs the {compatibility_tag} standard cache because HorizonFix.dll "
+        "is missing or inactive. Its Water shaders are compiled without Horizon "
+        "Fix compatibility. Reinstall this shader-cache FOMOD if Horizon Fix is "
+        "enabled later."
+    )
+    horizon_description = (
+        f"Installs the {compatibility_tag} Horizon Fix cache because an active "
+        "SKSE\\Plugins\\HorizonFix.dll was detected. Its Water shaders are "
+        "compiled with Horizon Fix compatibility. Reinstall this shader-cache "
+        "FOMOD if Horizon Fix is disabled later."
     )
     module_config = f"""<?xml version="1.0" encoding="UTF-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -1116,12 +1380,12 @@ def write_fomod_installer(
         </group>
       </optionalFileGroups>
     </installStep>
-    <installStep name="Verify the active CSX core">
+    <installStep name="Select the active Horizon Fix profile">
       <optionalFileGroups order="Explicit">
-        <group name="Exact-version compatibility check" type="SelectExactlyOne">
+        <group name="Exact CSX and Horizon Fix compatibility" type="SelectExactlyOne">
           <plugins order="Explicit">
-            <plugin name="Install cache for {compatibility_tag}">
-              <description>{compatibility_description}</description>
+            <plugin name="Standard cache: Horizon Fix inactive">
+              <description>{standard_description}</description>
               <files>
                 <folder source="{CACHE_DIRECTORY}"
                         destination="{CACHE_DIRECTORY}"
@@ -1130,11 +1394,51 @@ def write_fomod_installer(
               <typeDescriptor>
                 <dependencyType>
                   <defaultType name="NotUsable" />
-                  <patterns>
+                  <patterns order="Explicit">
                     <pattern>
                       <dependencies operator="And">
                         <fileDependency
                           file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker"
+                          state="Active" />
+                        <fileDependency
+                          file="SKSE\\Plugins\\HorizonFix.dll"
+                          state="Missing" />
+                      </dependencies>
+                      <type name="Required" />
+                    </pattern>
+                    <pattern>
+                      <dependencies operator="And">
+                        <fileDependency
+                          file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker"
+                          state="Active" />
+                        <fileDependency
+                          file="SKSE\\Plugins\\HorizonFix.dll"
+                          state="Inactive" />
+                      </dependencies>
+                      <type name="Required" />
+                    </pattern>
+                  </patterns>
+                </dependencyType>
+              </typeDescriptor>
+            </plugin>
+            <plugin name="Horizon Fix cache: HorizonFix.dll active">
+              <description>{horizon_description}</description>
+              <files>
+                <folder source="{HORIZON_FIX_CACHE_DIRECTORY}"
+                        destination="{CACHE_DIRECTORY}"
+                        priority="0" />
+              </files>
+              <typeDescriptor>
+                <dependencyType>
+                  <defaultType name="NotUsable" />
+                  <patterns order="Explicit">
+                    <pattern>
+                      <dependencies operator="And">
+                        <fileDependency
+                          file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker"
+                          state="Active" />
+                        <fileDependency
+                          file="SKSE\\Plugins\\HorizonFix.dll"
                           state="Active" />
                       </dependencies>
                       <type name="Required" />
@@ -1190,6 +1494,8 @@ def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
     required_entries = {
         f"{CACHE_DIRECTORY}/{INFO_FILE_NAME}",
         f"{CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
+        f"{HORIZON_FIX_CACHE_DIRECTORY}/{INFO_FILE_NAME}",
+        f"{HORIZON_FIX_CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
         f"{FOMOD_DIRECTORY}/{FOMOD_CONFIG_FILE_NAME}",
         f"{FOMOD_DIRECTORY}/{FOMOD_INFO_FILE_NAME}",
     }
@@ -1234,6 +1540,7 @@ def prepare_cache_archive(
             str(temporary_archive),
             "--format=7zip",
             CACHE_DIRECTORY,
+            HORIZON_FIX_CACHE_DIRECTORY,
             FOMOD_DIRECTORY,
         ]
         print("run:", " ".join(command))
@@ -1278,67 +1585,176 @@ def publish_cache_archive(candidate: Path, out_root: Path, runtime: str) -> Path
     return archive_path
 
 
+def validate_horizon_variant_delta(
+    standard_cache: Path,
+    horizon_cache: Path,
+    standard_feature_states: dict[str, bool],
+    horizon_feature_states: dict[str, bool],
+) -> None:
+    """Ensure Horizon Fix changes only its state and Water shader artifacts."""
+    expected_horizon_states = dict(standard_feature_states)
+    expected_horizon_states[HORIZON_FIX_SHORT_NAME] = True
+    if standard_feature_states.get(HORIZON_FIX_SHORT_NAME) is not False:
+        raise SystemExit("standard cache must record Horizon Fix disabled")
+    if horizon_feature_states != expected_horizon_states:
+        raise SystemExit(
+            "Horizon Fix cache feature metadata differs outside HorizonFix/Enabled"
+        )
+
+    def cache_blobs(cache_dir: Path) -> dict[str, Path]:
+        return {
+            path.relative_to(cache_dir).as_posix(): path
+            for path in cache_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() in CACHE_EXTENSIONS
+        }
+
+    standard_blobs = cache_blobs(standard_cache)
+    horizon_blobs = cache_blobs(horizon_cache)
+    if standard_blobs.keys() != horizon_blobs.keys():
+        missing = sorted(standard_blobs.keys() - horizon_blobs.keys())
+        unexpected = sorted(horizon_blobs.keys() - standard_blobs.keys())
+        raise SystemExit(
+            "Horizon Fix cache changed the permutation inventory; "
+            f"missing={missing[:5]}, unexpected={unexpected[:5]}"
+        )
+
+    changed_blobs = {
+        relative_path
+        for relative_path, standard_path in standard_blobs.items()
+        if standard_path.read_bytes() != horizon_blobs[relative_path].read_bytes()
+    }
+    water_prefix = f"{Path(HORIZON_FIX_SHADER_FILE).stem}/"
+    unexpected_changes = sorted(
+        path for path in changed_blobs if not path.startswith(water_prefix)
+    )
+    if unexpected_changes:
+        raise SystemExit(
+            "Horizon Fix altered non-Water shader blobs; first: "
+            + ", ".join(unexpected_changes[:5])
+        )
+    if not changed_blobs:
+        raise SystemExit("Horizon Fix did not alter any compiled Water shader blobs")
+
+    for cache_dir in (standard_cache, horizon_cache):
+        manifest = json.loads(
+            (cache_dir / MANIFEST_FILE_NAME).read_text(encoding="utf-8")
+        )
+        if set(manifest["entries"]) != set(standard_blobs):
+            raise SystemExit(
+                f"Horizon variant manifest does not match its blobs: {cache_dir}"
+            )
+
+    print(
+        f"SE: Horizon Fix variant changes {len(changed_blobs)} Water blobs and "
+        "no unrelated shader blobs"
+    )
+
+
 def build_runtime(
     stage: Path,
     workspace: Path,
     runtime: str,
     config_path: Path,
     plugin_version: str,
+    profile: DistributionProfile,
     jobs: int,
     fxc: str,
     compiler: tuple[str, ...],
     yaml: Any,
     write_manifest: Callable[..., int],
-) -> tuple[Path, int, int]:
+) -> tuple[Path, dict[str, int], int]:
     runtime_root = workspace / runtime
-    cache_dir = runtime_root / CACHE_DIRECTORY
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    build_results: dict[str, tuple[Path, int, dict[str, bool]]] = {}
+    excluded_defines = profile.excluded_defines | {
+        profile.horizon_fix_define
+    }
 
-    filtered_config = filter_profile_defines(
-        config_path,
-        workspace / f"config-{runtime}.yaml",
-        yaml,
-    )
-    command = [
-        *compiler,
-        "--shader-dir",
-        str(stage),
-        "--output-dir",
-        str(cache_dir),
-        "--config",
-        str(filtered_config),
-        "--optimization-level",
-        "3",
-        "--suppress-warnings",
-        "X1519",
-        "--max-warnings",
-        "999999",
-        "--jobs",
-        str(jobs),
-        "--fxc",
-        fxc,
-    ]
+    for variant in CACHE_VARIANTS:
+        cache_dir = runtime_root / variant.directory
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        variant_file_defines = (
+            {HORIZON_FIX_SHADER_FILE: (profile.horizon_fix_define,)}
+            if variant.horizon_fix_enabled
+            else {}
+        )
+        filtered_config = filter_profile_defines(
+            config_path,
+            workspace / f"config-{runtime}-{variant.name}.yaml",
+            yaml,
+            excluded_defines,
+            variant_file_defines,
+        )
+        command = [
+            *compiler,
+            "--shader-dir",
+            str(stage),
+            "--output-dir",
+            str(cache_dir),
+            "--config",
+            str(filtered_config),
+            "--optimization-level",
+            "3",
+            "--suppress-warnings",
+            "X1519",
+            "--max-warnings",
+            "999999",
+            "--jobs",
+            str(jobs),
+            "--fxc",
+            fxc,
+        ]
 
-    print("run:", " ".join(command))
-    result = subprocess.run(command)
-    if result.returncode != 0:
-        raise SystemExit(
-            f"hlslkit-compile failed for {runtime} (exit {result.returncode})"
+        print("run:", " ".join(command))
+        result = subprocess.run(command)
+        if result.returncode != 0:
+            raise SystemExit(
+                f"hlslkit-compile failed for {runtime}/{variant.name} "
+                f"(exit {result.returncode})"
+            )
+
+        prune_non_cache_files(cache_dir)
+        imagespace_remap = remap_imagespace_dirs(
+            cache_dir,
+            f"{runtime}/{variant.name}",
+        )
+        write_shader_cache_manifest(
+            cache_dir,
+            stage,
+            f"{runtime}/{variant.name}",
+            imagespace_remap,
+            write_manifest,
         )
 
-    prune_non_cache_files(cache_dir)
-    imagespace_remap = remap_imagespace_dirs(cache_dir, runtime)
-    write_shader_cache_manifest(
-        cache_dir,
-        stage,
-        runtime,
-        imagespace_remap,
-        write_manifest,
+        feature_states = write_info_ini(
+            cache_dir,
+            stage,
+            plugin_version,
+            {HORIZON_FIX_SHORT_NAME: variant.horizon_fix_enabled},
+        )
+        blob_count = validate_cache(
+            cache_dir,
+            plugin_version,
+            feature_states,
+        )
+        build_results[variant.name] = (cache_dir, blob_count, feature_states)
+
+    standard_cache, _, standard_states = build_results["standard"]
+    horizon_cache, _, horizon_states = build_results["horizon-fix"]
+    validate_horizon_variant_delta(
+        standard_cache,
+        horizon_cache,
+        standard_states,
+        horizon_states,
     )
 
-    section_count = write_info_ini(cache_dir, stage, plugin_version)
-    blob_count = validate_cache(cache_dir, plugin_version)
-    return runtime_root, blob_count, section_count
+    feature_counts = {len(result[2]) for result in build_results.values()}
+    if len(feature_counts) != 1:
+        raise SystemExit("shader-cache variants contain different feature counts")
+    blob_counts = {
+        variant_name: result[1]
+        for variant_name, result in build_results.items()
+    }
+    return runtime_root, blob_counts, feature_counts.pop()
 
 
 def main() -> int:
@@ -1390,6 +1806,11 @@ def main() -> int:
     plugin_version = args.plugin_version or default_plugin_version(source_root)
     validate_ini_value(plugin_version, "SE plugin version")
     compatibility_tag = validate_csx_plugin_version(plugin_version)
+    profile = derive_distribution_profile(source_root)
+    print(
+        "AIO profile: excluding hidden features "
+        + ", ".join(sorted(profile.excluded_short_names))
+    )
 
     out_root = Path(args.out).resolve()
     if source_root == out_root or source_root.is_relative_to(out_root):
@@ -1416,15 +1837,20 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix=".shader-cache-build-", dir=out_root) as temporary:
         workspace = Path(temporary)
         stage = workspace / "staged-shaders"
-        stage_merged_shaders(source_root, stage)
+        stage_merged_shaders(
+            source_root,
+            stage,
+            profile.excluded_packages,
+        )
         print("staged merged shader tree")
 
-        candidate_root, blob_count, section_count = build_runtime(
+        candidate_root, blob_counts, section_count = build_runtime(
             stage=stage,
             workspace=workspace,
             runtime=TARGET_RUNTIME,
             config_path=config_path,
             plugin_version=plugin_version,
+            profile=profile,
             jobs=jobs,
             fxc=fxc,
             compiler=compiler,
@@ -1453,8 +1879,13 @@ def main() -> int:
             TARGET_RUNTIME,
         )
         print(
-            f"SE: {blob_count} cache blobs, Info.ini with "
-            f"{section_count} feature sections -> {runtime_root / CACHE_DIRECTORY}"
+            "SE: "
+            + ", ".join(
+                f"{variant_name}={blob_count} cache blobs"
+                for variant_name, blob_count in blob_counts.items()
+            )
+            + f", each Info.ini has {section_count} feature sections -> "
+            + str(runtime_root)
         )
         if archive_candidate:
             publish_cache_archive(

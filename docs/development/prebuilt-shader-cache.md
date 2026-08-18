@@ -14,6 +14,10 @@ ShaderCache/
 |-- Info.ini
 |-- Manifest.json
 `-- <shader directories and .pso/.vso/.cso blobs>
+ShaderCache-HorizonFix/
+|-- Info.ini
+|-- Manifest.json
+`-- <shader directories and .pso/.vso/.cso blobs>
 fomod/
 |-- info.xml
 `-- ModuleConfig.xml
@@ -23,12 +27,21 @@ The cache is tied to the plugin version, feature versions and enabled states,
 shader and recursive-include content, compile flags, custom defines, and the SE
 permutation inventory. It is not a GPU-driver cache and is not vendor-specific.
 
-The shipped profile merges `package/Shaders` with feature shader trees, omits
-`Tests` and legacy Wetness Effects content, enables `UNIFIED_WATER`, enables
-`WETTERNESS` for lighting and water, and leaves detected compatibility features
-inactive until the runtime detects them. `HorizonFix` is recorded disabled by
-default. Feature-specific shaders compiled through independent helpers are not
-covered unless they have a declared deterministic inventory.
+The shipped profile merges `package/Shaders` with the feature shader trees from
+the AIO-Release package and omits `Tests`. Hidden AIO features are discovered
+from their C++ `IsHiddenFromUserView()` contracts and excluded exactly as they
+are from AIO-Release; this currently excludes Exponential Height Fog and Skin.
+Wetness Effects remains included and enabled. The profile also enables
+`UNIFIED_WATER` globally and `WETTERNESS` for lighting and water.
+
+Every build produces two complete, independently validated cache profiles. The
+standard `ShaderCache` records `HorizonFix` disabled and compiles Water without
+`HORIZON_FIX`. `ShaderCache-HorizonFix` records it enabled and compiles Water
+with the shader define derived from the feature's C++ contract. Validation
+requires an identical permutation inventory and rejects any changed blob outside
+the Water shader directory. Feature-specific shaders compiled through
+independent helpers are not covered unless they have a declared deterministic
+inventory.
 
 ## Contract files
 
@@ -98,16 +111,18 @@ testing another `CSX <major>.<minor>-SE` build. The release tag belongs in
 `--package-label`, not `Info.ini`.
 
 The builder stages a merged shader tree, applies the shipped profile, validates
-any `captured_shader_variants` guard, compiles the SE inventory, remaps
-ImageSpace output directories, writes the digest manifest and feature metadata,
-checks every blob for a DXBC signature, creates FOMOD metadata, validates the
-archive, and only then publishes output.
+any `captured_shader_variants` guard, compiles the standard and Horizon Fix SE
+inventories, remaps ImageSpace output directories, writes each profile's digest
+manifest and feature metadata, checks every blob for a DXBC signature, verifies
+that only Water bytecode differs between profiles, creates FOMOD metadata,
+validates the archive, and only then publishes output.
 
 Expected output:
 
 ```text
 dist/shader-cache/
 |-- SE/ShaderCache/...
+|-- SE/ShaderCache-HorizonFix/...
 `-- ShaderCache-SE-<release-label>.7z
 ```
 
@@ -169,10 +184,14 @@ bytecode.
 
 Successful builder completion verifies:
 
--   at least one cache blob exists and every blob begins with `DXBC`;
--   every blob has one lowercase 128-bit manifest digest and no entry is orphaned;
--   `Info.ini` contains the expected plugin and feature metadata;
--   the archive contains the cache root and both FOMOD files.
+-   both profiles have the same non-empty permutation inventory and every blob
+    begins with `DXBC`;
+-   every blob has one lowercase 128-bit manifest digest and no entry is
+    orphaned;
+-   both `Info.ini` files contain the expected AIO feature set and differ only
+    in the `HorizonFix/Enabled` state;
+-   only Water blobs differ between the standard and Horizon Fix profiles;
+-   the archive contains both cache roots and both FOMOD files.
 
 Inspect an archive with:
 
@@ -208,12 +227,20 @@ the cache installer. Otherwise MO2 reports every DLL or marker dependency as
 missing even when the file is active.
 
 The generated FOMOD repeats these directions on a required first page. A second
-page performs the compatibility check: its cache option is disabled by default
-and becomes required only when the exact versioned marker is active. Moving the
-check out of the module-level prerequisites keeps the instructions visible when
-MO2 is misconfigured or the wrong core is installed. Other installers should
-evaluate the standard `fileDependency` directly. The runtime independently
-rejects a cache whose `Info.ini` plugin identity does not match the loaded DLL.
+page performs the compatibility checks. Both cache options are disabled by
+default. When the exact versioned CSX marker is active, the standard cache is
+required if `SKSE\Plugins\HorizonFix.dll` is missing or inactive; the Horizon
+Fix cache is required when that DLL is active. Horizon Fix support is included
+in every packaged cache FOMOD without a separate build option.
+
+The installer can inspect the active virtual files only while it is running. If
+Horizon Fix is enabled or disabled later, reinstall the shader-cache FOMOD so it
+installs the matching Water bytecode and metadata. This warning appears on the
+required setup page and in both profile descriptions. Moving the checks out of
+the module-level prerequisites keeps the instructions visible when MO2 is
+misconfigured or the wrong core is installed. Other installers should evaluate
+the standard `fileDependency` directly. The runtime independently rejects a
+cache whose plugin identity or feature state does not match the loaded DLL.
 
 Manually setting the `ShaderCache` folder itself as the data directory bypasses
 the installer gate, flattens the layout, and is invalid.

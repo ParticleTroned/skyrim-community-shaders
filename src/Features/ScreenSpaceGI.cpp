@@ -1036,10 +1036,8 @@ void ScreenSpaceGI::DrawSSGI()
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 	if (imageSpaceManager) {
 		auto& ssaoBlur = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
-		if (ssaoBlur) {
-			auto* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(ssaoBlur.get()) + 0x50LL);
-			*enableSSAO = settings.EnableVanillaSSAO;
-		}
+		if (ssaoBlur)
+			ssaoBlur->enableSAO = settings.EnableVanillaSSAO;
 	}
 
 	if (settings.Enabled && recompileFlag && RuntimeResourcesOK())

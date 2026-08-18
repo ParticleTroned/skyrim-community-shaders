@@ -7,7 +7,7 @@ set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 option(
     DEVBENCH_BRIDGE
     "Expose render-scale iteration controls through the devbench MCP host"
-    ON
+    OFF
 )
 if(DEVBENCH_BRIDGE)
     list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")

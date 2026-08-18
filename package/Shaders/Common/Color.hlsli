@@ -10,7 +10,7 @@
 #endif
 
 #define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
-#define ENABLE_ADAPTIVE_BRIGHTNESS SharedData::linearLightingSettings.enableAdaptiveBrightness
+#define ENABLE_ADAPTIVE_BRIGHTNESS_COLOR_ADJUSTMENTS SharedData::linearLightingSettings.enableAdaptiveBrightnessColorAdjustments
 
 // Object shaders opt into this so LL material/effect adjustments skip menu and
 // out-of-world draws while image-space scene passes keep the global LL state.
@@ -18,13 +18,13 @@
 #	define ENABLE_LL_COLOR_ADJUSTMENTS \
 		(ENABLE_LL && ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0))
 #	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS \
-		(ENABLE_ADAPTIVE_BRIGHTNESS && ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0))
+		(ENABLE_ADAPTIVE_BRIGHTNESS_COLOR_ADJUSTMENTS && ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0))
 #else
 #	define ENABLE_LL_COLOR_ADJUSTMENTS ENABLE_LL
-#	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ENABLE_ADAPTIVE_BRIGHTNESS
+#	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ENABLE_ADAPTIVE_BRIGHTNESS_COLOR_ADJUSTMENTS
 #endif
 
-// Adaptive Brightness shares Linear Lighting's settings payload, but it must
+// Adaptive Balance shares Linear Lighting's settings payload, but it must
 // not enable Linear Lighting's color-space conversion path.
 #define ENABLE_BRIGHTNESS_ADJUSTMENTS (ENABLE_LL_COLOR_ADJUSTMENTS || ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS)
 
@@ -37,15 +37,15 @@ cbuffer LLPerGeometry : register(b8)
 };
 #endif
 
-#if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
-#	if defined(CS_UTILITY_WATER_POINT_LIGHT_DATA)
-cbuffer CSUtilityPerGeometry : register(b7)
+#if defined(PSHADER) && defined(ADAPTIVE_BALANCE) && (defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
+#	if defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA)
+cbuffer AdaptiveBalancePerGeometry : register(b7)
 #	else
-cbuffer CSUtilityPerGeometry : register(b3)
+cbuffer AdaptiveBalancePerGeometry : register(b3)
 #	endif
 {
-	uint4 CSUtilityPointLightFlags0;
-	uint4 CSUtilityPointLightFlags1;
+	uint4 AdaptiveBalancePointLightFlags0;
+	uint4 AdaptiveBalancePointLightFlags1;
 };
 #endif
 
@@ -342,20 +342,20 @@ namespace Color
 	{
 		return Light(color, isLinear) *
 		       ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		       SharedData::csUtilitySettings.directionalLightMult;
+		       SharedData::adaptiveBalanceSettings.directionalLightMult;
 	}
 
 	float GetPointLightMultiplier(bool isLinear)
 	{
-		return isLinear ? SharedData::csUtilitySettings.linearPointLightMult : SharedData::csUtilitySettings.pointLightMult;
+		return isLinear ? SharedData::adaptiveBalanceSettings.linearPointLightMult : SharedData::adaptiveBalanceSettings.pointLightMult;
 	}
 
 	float GetPointLightTypeMultiplier(bool isLinear, uint lightFlags)
 	{
 		if ((lightFlags & PointLightFlagSpot) != 0)
-			return isLinear ? SharedData::csUtilitySettings.linearSpotlightMult : SharedData::csUtilitySettings.spotlightMult;
+			return isLinear ? SharedData::adaptiveBalanceSettings.linearSpotlightMult : SharedData::adaptiveBalanceSettings.spotlightMult;
 		if ((lightFlags & PointLightFlagOmnidirectionalBulb) != 0)
-			return isLinear ? SharedData::csUtilitySettings.linearOmnidirectionalBulbMult : SharedData::csUtilitySettings.omnidirectionalBulbMult;
+			return isLinear ? SharedData::adaptiveBalanceSettings.linearOmnidirectionalBulbMult : SharedData::adaptiveBalanceSettings.omnidirectionalBulbMult;
 		return 1.0f;
 	}
 
@@ -374,11 +374,11 @@ namespace Color
 
 	uint GetVanillaPointLightFlags(uint lightIndex)
 	{
-#	if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
+#	if defined(PSHADER) && defined(ADAPTIVE_BALANCE) && (defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
 		if (lightIndex >= MaxVanillaPointLightFlags)
 			return 0;
 		const uint packedLightIndex = lightIndex % PackedPointLightFlagVectorSize;
-		return lightIndex < PackedPointLightFlagVectorSize ? CSUtilityPointLightFlags0[packedLightIndex] : CSUtilityPointLightFlags1[packedLightIndex];
+		return lightIndex < PackedPointLightFlagVectorSize ? AdaptiveBalancePointLightFlags0[packedLightIndex] : AdaptiveBalancePointLightFlags1[packedLightIndex];
 #	else
 		return 0;
 #	endif
@@ -390,7 +390,7 @@ namespace Color
 			return pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult;
 		}
 
-		// Adaptive Brightness only adjusts the multiplier. Keep the engine-authored
+		// Adaptive Balance only adjusts the multiplier. Keep the engine-authored
 		// emissive value intact so this path does not depend on LLPerGeometry.
 		return ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.emitColorMult : color;
 	}

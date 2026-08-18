@@ -193,7 +193,7 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor.xyz = Color::Sky(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
-	float skyBrightnessMultiplier = SharedData::csUtilitySettings.skyBrightness;
+	float skyBrightnessMultiplier = SharedData::adaptiveBalanceSettings.skyBrightness;
 
 #		ifdef HDR_OUTPUT
 	float hdrSunGain = HDRSun::GetHdrSunGain(

@@ -4,6 +4,7 @@
 #include "FeatureVersions.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
+#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"

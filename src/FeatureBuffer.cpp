@@ -2,7 +2,8 @@
 
 #include <array>
 
-#include "Features/CSUtility.h"
+#include "Features/AdaptiveBrightness.h"
+#include "Features/Bloom.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -45,7 +46,7 @@ namespace
 	using TerrainVariationSettingsCB = TerrainVariation::Settings;
 	using IBLSettingsCB = IBL::CommonBufferData;
 	using ExtendedTranslucencySettingsCB = ExtendedTranslucency::PerFrame;
-	using CSUtilitySettingsCB = CSUtility::PerFrameData;
+	using AdaptiveBalanceSettingsCB = AdaptiveBrightness::PerFrameData;
 	using LinearLightingSettingsCB = LinearLighting::PerFrameData;
 	using TerrainBlendingSettingsCB = TerrainBlending::Settings;
 	using ExponentialHeightFogSettingsCB = ExponentialHeightFog::Settings;
@@ -53,6 +54,7 @@ namespace
 	using SkinDataCB = Skin::SkinData;
 	using VanillaFresnelSettingsCB = VanillaFresnel::Settings;
 	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
+	using BloomSettingsCB = Bloom::Settings;
 
 	// Keep these in lock-step with package/Shaders/Common/SharedData.hlsli::FeatureData.
 	struct FeatureDataLayout
@@ -70,7 +72,7 @@ namespace
 		TerrainVariationSettingsCB terrainVariationSettings;
 		IBLSettingsCB iblSettings;
 		ExtendedTranslucencySettingsCB extendedTranslucencySettings;
-		CSUtilitySettingsCB csUtilitySettings;
+		AdaptiveBalanceSettingsCB adaptiveBalanceSettings;
 		LinearLightingSettingsCB linearLightingSettings;
 		TerrainBlendingSettingsCB terrainBlendingSettings;
 		ExponentialHeightFogSettingsCB exponentialHeightFogSettings;
@@ -78,6 +80,7 @@ namespace
 		SkinDataCB skinData;
 		VanillaFresnelSettingsCB vanillaFresnelSettings;
 		UnifiedWaterSettingsCB unifiedWaterSettings;
+		BloomSettingsCB bloomSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -94,14 +97,15 @@ namespace
 		TerrainVariationSettingsCB,
 		IBLSettingsCB,
 		ExtendedTranslucencySettingsCB,
-		CSUtilitySettingsCB,
+		AdaptiveBalanceSettingsCB,
 		LinearLightingSettingsCB,
 		TerrainBlendingSettingsCB,
 		ExponentialHeightFogSettingsCB,
 		TruePBRSettingsCB,
 		SkinDataCB,
 		VanillaFresnelSettingsCB,
-		UnifiedWaterSettingsCB>;
+		UnifiedWaterSettingsCB,
+		BloomSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
@@ -120,9 +124,9 @@ namespace
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
-	static_assert(sizeof(CSUtilitySettingsCB) == 32);
+	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 32);
 	static_assert(sizeof(LinearLightingSettingsCB) == 128);
-	static_assert(offsetof(LinearLightingSettingsCB, enableAdaptiveBrightness) == 108);
+	static_assert(offsetof(LinearLightingSettingsCB, enableAdaptiveBrightnessColorAdjustments) == 108);
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
 	static_assert(sizeof(ExponentialHeightFogSettingsCB) == 192);
 	static_assert(sizeof(TruePBRSettingsCB) == 16);
@@ -141,6 +145,12 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackMaxDistance) == 40);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextTransitionUnits) == 44);
 	static_assert(offsetof(UnifiedWaterSettingsCB, _pad) == 48);
+	static_assert(sizeof(BloomSettingsCB) == 48);
+	static_assert(offsetof(BloomSettingsCB, Enabled) == 0);
+	static_assert(offsetof(BloomSettingsCB, BloomTint) == 20);
+	static_assert(offsetof(BloomSettingsCB, CompressionThreshold) == 32);
+	static_assert(offsetof(BloomSettingsCB, CompressionCeiling) == 36);
+	static_assert(offsetof(BloomSettingsCB, BlendWeight) == 40);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);
@@ -158,15 +168,16 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, terrainVariationSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, iblSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, extendedTranslucencySettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB));
-	static_assert(offsetof(FeatureDataLayout, csUtilitySettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB));
-	static_assert(offsetof(FeatureDataLayout, linearLightingSettings) == offsetof(FeatureDataLayout, csUtilitySettings) + sizeof(CSUtilitySettingsCB));
+	static_assert(offsetof(FeatureDataLayout, adaptiveBalanceSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB));
+	static_assert(offsetof(FeatureDataLayout, linearLightingSettings) == offsetof(FeatureDataLayout, adaptiveBalanceSettings) + sizeof(AdaptiveBalanceSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, terrainBlendingSettings) == offsetof(FeatureDataLayout, linearLightingSettings) + sizeof(LinearLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, exponentialHeightFogSettings) == offsetof(FeatureDataLayout, terrainBlendingSettings) + sizeof(TerrainBlendingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == offsetof(FeatureDataLayout, exponentialHeightFogSettings) + sizeof(ExponentialHeightFogSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, skinData) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, vanillaFresnelSettings) == offsetof(FeatureDataLayout, skinData) + sizeof(SkinDataCB));
 	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, vanillaFresnelSettings) + sizeof(VanillaFresnelSettingsCB));
-	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -214,12 +225,13 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::terrainVariation.settings,
 		globals::features::ibl.GetCommonBufferData(),
 		globals::features::extendedTranslucency.GetCommonBufferData(),
-		globals::features::csUtility.GetCommonBufferData(),
+		globals::features::adaptiveBrightness.GetCommonBufferData(),
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::exponentialHeightFog.settings,
 		globals::features::truePBR.settings,
 		globals::features::skin.GetCommonBufferData(),
 		globals::features::vanillaFresnel.settings,
-		globals::features::unifiedWater.GetCommonBufferData());
+		globals::features::unifiedWater.GetCommonBufferData(),
+		globals::features::adaptiveBrightness.GetEffectiveBloomSettings());
 }

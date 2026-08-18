@@ -11,7 +11,7 @@
 #include "TruePBR.h"
 #include "Util.h"
 
-#include "Features/CSUtility.h"
+#include "Features/AdaptiveBrightness.h"
 #include "Features/HDRDisplay.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenshotFeature.h"
@@ -1181,8 +1181,11 @@ namespace Hooks
 				globals::features::lightLimitFix.BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass);
 			} else {
 				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, 0);
-				if (globals::features::csUtility.NeedsVanillaPointLightData())
-					globals::features::csUtility.UpdateVanillaPointLightData(Pass, LightCount, CSUtility::kLightingPointLightCBRegister);
+				if (globals::features::adaptiveBrightness.NeedsVanillaPointLightData())
+					globals::features::adaptiveBrightness.UpdateVanillaPointLightData(
+						Pass,
+						LightCount,
+						AdaptiveBrightness::kLightingPointLightCBRegister);
 			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

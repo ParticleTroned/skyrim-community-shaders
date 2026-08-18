@@ -1,8 +1,10 @@
 #include "UnderwaterDepthOfField.h"
 
 #include "Buffer.h"
+#include "CSUtility.h"
 #include "Deferred.h"
 #include "Globals.h"
+#include "Profiler.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
@@ -75,6 +77,12 @@ namespace
 	bool waitingForDepthOfFieldInputDraw = false;
 	bool insideDepthOfFieldInputPass = false;
 	RE::ImageSpaceEffectParam* pendingDownsampleParam = nullptr;
+
+	bool IsCorrectionEnabled()
+	{
+		const auto& csUtility = globals::features::csUtility;
+		return csUtility.IsRuntimeEnabled() && csUtility.settings.fixUnderwaterFogDofBlur;
+	}
 
 	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 4> kDepthOfFieldInputTargets{
 		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
@@ -406,9 +414,16 @@ namespace
 		D3D11_PRIMITIVE_TOPOLOGY savedTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
 	};
 
-	void DrawDepthOfFieldInputPass(RE::BSGraphics::RenderTargetData& a_target, ScratchTarget& a_scratch, ID3D11ShaderResourceView* a_maskSRV)
+	bool DrawDepthOfFieldInputPass(RE::BSGraphics::RenderTargetData& a_target, ScratchTarget& a_scratch, ID3D11ShaderResourceView* a_maskSRV)
 	{
 		auto* context = globals::d3d::context;
+		auto* vertexShader = GetDepthOfFieldInputVS();
+		auto* pixelShader = GetDepthOfFieldInputPS();
+		auto* inputRasterizerState = GetRasterizerState();
+		ID3D11SamplerState* samplers[] = { GetLinearSampler(), GetPointSampler() };
+		if (!context || !vertexShader || !pixelShader || !inputRasterizerState || !samplers[0] || !samplers[1])
+			return false;
+
 		context->OMSetRenderTargets(0, nullptr, nullptr);
 		context->CopyResource(a_scratch.texture->resource.get(), a_target.texture);
 
@@ -418,7 +433,7 @@ namespace
 		viewport.MinDepth = 0.0f;
 		viewport.MaxDepth = 1.0f;
 		context->RSSetViewports(1, &viewport);
-		context->RSSetState(GetRasterizerState());
+		context->RSSetState(inputRasterizerState);
 		context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
 		context->OMSetDepthStencilState(nullptr, 0);
 
@@ -427,7 +442,6 @@ namespace
 		context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-		ID3D11SamplerState* samplers[] = { GetLinearSampler(), GetPointSampler() };
 		context->PSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		ID3D11ShaderResourceView* srvs[] = {
@@ -446,8 +460,8 @@ namespace
 
 		ID3D11RenderTargetView* rtvs[] = { a_target.RTV };
 		context->OMSetRenderTargets(1, rtvs, nullptr);
-		context->VSSetShader(GetDepthOfFieldInputVS(), nullptr, 0);
-		context->PSSetShader(GetDepthOfFieldInputPS(), nullptr, 0);
+		context->VSSetShader(vertexShader, nullptr, 0);
+		context->PSSetShader(pixelShader, nullptr, 0);
 		insideDepthOfFieldInputPass = true;
 		{
 			const SKSE::stl::scope_exit resetInputPass([]() noexcept {
@@ -458,6 +472,7 @@ namespace
 
 		ID3D11ShaderResourceView* nullSRV[3]{};
 		context->PSSetShaderResources(0, ARRAYSIZE(nullSRV), nullSRV);
+		return true;
 	}
 
 	RE::BSGraphics::RenderTargetData* FindDepthOfFieldInputTarget(ID3D11ShaderResourceView* a_sourceSRV)
@@ -500,7 +515,7 @@ namespace
 
 	void ApplyUnderwaterFogToDepthOfFieldInput(RE::ImageSpaceEffectParam* a_downsampleParam)
 	{
-		if (!insideDepthOfFieldRender || appliedFogToDepthOfFieldInput || !currentOptions.fogged)
+		if (!IsCorrectionEnabled() || !insideDepthOfFieldRender || appliedFogToDepthOfFieldInput || !currentOptions.fogged)
 			return;
 
 		auto* renderer = globals::game::renderer;
@@ -508,15 +523,18 @@ namespace
 		if (!renderer || !context)
 			return;
 
-		auto& runtimeData = renderer->GetRuntimeData();
+		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 		auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		auto* inputTarget = GetBoundDepthOfFieldInputTarget();
-		auto& underwaterMask = runtimeData.renderTargets[RE::RENDER_TARGETS::kUNDERWATER_MASK];
+		auto& underwaterMask = renderTargets[RE::RENDER_TARGETS::kUNDERWATER_MASK];
 
 		if (!inputTarget || !inputTarget->RTV || !depth.depthSRV || !EnsureScratchTarget(*inputTarget, sharpScratch, "UnderwaterDepthOfField::SharpScratch"))
 			return;
 
 		auto* maskSRV = currentOptions.masked ? underwaterMask.SRV : nullptr;
+		if (currentOptions.masked && !maskSRV)
+			return;
+
 		DepthOfFieldInputConstants constants{};
 		if (currentFog.valid) {
 			constants = currentFog.values;
@@ -530,9 +548,9 @@ namespace
 			depthOfFieldInputCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<DepthOfFieldInputConstants>(), "UnderwaterDepthOfField::InputFogCB");
 		depthOfFieldInputCB->Update(constants);
 
+		CS_PROFILE_SCOPE("UnderwaterDepthOfField::InputFog");
 		GraphicsStateScope graphicsScope(context);
-		DrawDepthOfFieldInputPass(*inputTarget, sharpScratch, maskSRV);
-		appliedFogToDepthOfFieldInput = true;
+		appliedFogToDepthOfFieldInput = DrawDepthOfFieldInputPass(*inputTarget, sharpScratch, maskSRV);
 	}
 
 	void RunPendingDepthOfFieldInputPass()
@@ -662,6 +680,9 @@ namespace UnderwaterDepthOfField
 
 		currentFog = {};
 		currentOptions = {};
+		if (!IsCorrectionEnabled())
+			return;
+
 		currentOptions.fogged = GetOption(a_effect, kFoggedOptionIndex);
 		currentOptions.masked = GetOption(a_effect, kMaskedOptionIndex);
 		currentOptions.fogged = currentOptions.fogged || currentOptions.masked;
@@ -682,10 +703,14 @@ namespace UnderwaterDepthOfField
 
 	void BeginRender()
 	{
-		insideDepthOfFieldRender = true;
+		insideDepthOfFieldRender = IsCorrectionEnabled();
 		appliedFogToDepthOfFieldInput = false;
 		waitingForDepthOfFieldInputDraw = false;
 		pendingDownsampleParam = nullptr;
+		if (!insideDepthOfFieldRender) {
+			currentFog = {};
+			currentOptions = {};
+		}
 	}
 
 	void EndRender()

@@ -186,7 +186,39 @@ namespace DisplayMapping
 	}
 
 #if defined(PSHADER) && defined(BLEND)
-	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol, bool isHDR = false)
+	float3 ApplyBloom(
+		float3 mappedColor,
+		float3 vanillaBloomColor,
+		float3 enhancedBloomColor,
+		float nativeBloomMaskLimit,
+		float blendWeight,
+		bool isHDR = false)
+	{
+		// Preserve Skyrim's current SDR/HDR bloom mask exactly for the vanilla
+		// contribution. The opt-in enhancement can use remaining display headroom
+		// so daylight bloom does not disappear when the native mask closes.
+		float3 vanillaMask = isHDR ?
+		                         saturate(nativeBloomMaskLimit - (1.0 - exp2(-mappedColor))) :
+		                         saturate(nativeBloomMaskLimit - mappedColor);
+		float3 vanillaContribution = vanillaMask * vanillaBloomColor;
+		float3 result = mappedColor + vanillaContribution;
+
+		[branch] if (blendWeight > 0.0)
+		{
+			float3 enhancedMask = max(vanillaMask, saturate(1.0 - mappedColor));
+			float3 enhancedContribution = enhancedMask * enhancedBloomColor;
+			result += saturate(blendWeight) * (enhancedContribution - vanillaContribution);
+		}
+
+		return result;
+	}
+
+	float3 HuePreservingHejlBurgessDawson(
+		float3 col,
+		float3 vanillaBloomCol,
+		float3 enhancedBloomCol,
+		float bloomBlendWeight,
+		bool isHDR = false)
 	{
 		float3 ictcp = RGBToICtCp(col);
 
@@ -196,7 +228,13 @@ namespace DisplayMapping
 
 		// Non-hue preserving mapping
 		float3 perChannelCompressed = GetTonemapFactorHejlBurgessDawson(col, isHDR);
-		perChannelCompressed += saturate(Param.x - perChannelCompressed) * bloomCol;
+		perChannelCompressed = ApplyBloom(
+			perChannelCompressed,
+			vanillaBloomCol,
+			enhancedBloomCol,
+			Param.x,
+			bloomBlendWeight,
+			isHDR);
 
 		col = perChannelCompressed;
 

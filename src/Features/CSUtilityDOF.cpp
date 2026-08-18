@@ -716,34 +716,48 @@ void CSUtility::SanitizeDepthOfFieldOverride(DepthOfFieldOverride& a_override)
 
 void CSUtility::DrawDepthOfFieldSettings()
 {
-	if (ImGui::BeginTabItem(T(TKEY("tab_vanilla_dof"), "Vanilla DOF"))) {
-		static Util::ConfirmationPopup sceneLockPopup;
-		static Util::ConfirmationPopup underwaterLockPopup;
+	ImGui::SeparatorText(T(TKEY("tab_vanilla_dof"), "Vanilla Depth of Field"));
+	static Util::ConfirmationPopup sceneLockPopup;
+	static Util::ConfirmationPopup underwaterLockPopup;
 
-		DrawDepthOfFieldSection(
-			T(TKEY("dof_scene"), "Scene"),
-			"Scene",
-			settings.sceneDof,
-			ReadSceneDepthOfField(),
-			sceneLockPopup,
-			true,
-			true,
-			T(TKEY("dof_scene_no_data"), "No live scene image space data is available."));
-
-		ImGui::Separator();
-
-		DrawDepthOfFieldSection(
-			T(TKEY("dof_underwater"), "Underwater"),
-			"Underwater",
-			settings.underwaterDof,
-			ReadUnderwaterDepthOfField(),
-			underwaterLockPopup,
-			false,
-			false,
-			T(TKEY("dof_underwater_no_data"), "No underwater image space record is currently applied."));
-
-		ImGui::EndTabItem();
+	ImGui::Checkbox(
+		T(TKEY("underwater_fog_blur_fix"), "Enable Underwater Fog DOF Blur Fix"),
+		&settings.fixUnderwaterFogDofBlur);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T(
+			TKEY("underwater_fog_blur_fix_tooltip"),
+			"Correctly blurs underwater fog with vanilla DOF. This affects only the fix and takes effect immediately."));
 	}
+	ImGui::Separator();
+
+	if (!IsRuntimeEnabled()) {
+		Util::TextUnformattedDisabled(T(
+			TKEY("dof_disabled"),
+			"CS Utility is disabled. Saved DOF settings and the fog-blur fix are not applied."));
+		ImGui::Separator();
+	}
+
+	DrawDepthOfFieldSection(
+		T(TKEY("dof_scene"), "Scene"),
+		"Scene",
+		settings.sceneDof,
+		ReadSceneDepthOfField(),
+		sceneLockPopup,
+		true,
+		true,
+		T(TKEY("dof_scene_no_data"), "No live scene image space data is available."));
+
+	ImGui::Separator();
+
+	DrawDepthOfFieldSection(
+		T(TKEY("dof_underwater"), "Underwater"),
+		"Underwater",
+		settings.underwaterDof,
+		ReadUnderwaterDepthOfField(),
+		underwaterLockPopup,
+		false,
+		false,
+		T(TKEY("dof_underwater_no_data"), "No underwater image space record is currently applied."));
 }
 
 void CSUtility::InstallDepthOfFieldHooks()

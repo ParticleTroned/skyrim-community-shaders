@@ -1,9 +1,12 @@
 #include "AdaptiveBrightness.h"
 
+#include "Globals.h"
+#include "InverseSquareLighting.h"
 #include "LocationContext.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Form.h"
+#include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
 
 #include "RE/B/BGSLocation.h"
@@ -29,19 +32,21 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::ProfileSettings,
 	brightness,
 	advanced,
+	skyBrightnessMult,
 	directionalLightMult,
 	pointLightMult,
 	ambientMult,
 	emitColorMult,
 	glowmapMult,
 	effectLightingMult,
-	whiteDiffuseMult,
-	animalWhiteDiffuseMult,
 	skyGammaOffset,
 	fogGammaOffset,
 	fogAlphaGammaOffset,
 	waterGammaOffset,
-	vlGammaOffset)
+	vlGammaOffset,
+	bloomOverride,
+	bloomEnabled,
+	bloom)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::LocationOverride,
@@ -54,22 +59,25 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
+	rendererControlsEnabled,
 	dayStartHour,
 	nightStartHour,
 	transitionHours,
+	lighting,
+	bloomEnhancement,
 	profiles,
 	locationOverrides)
 
 namespace
 {
+	constexpr uint32_t kMaxVanillaPointLights = 7;
+	constexpr uint32_t kFirstPointLightSceneIndex = 1;
 	constexpr float kBrightnessMin = 0.25f;
 	constexpr float kBrightnessMax = 2.0f;
-	constexpr float kWhiteDiffuseMultiplierMin = 0.0f;
-	constexpr float kWhiteDiffuseMultiplierMax = 1.0f;
-	constexpr float kWhiteDiffuseSliderKnee = 0.25f;
-	constexpr float kWhiteDiffuseValueKnee = 0.75f;
 	constexpr float kGammaOffsetMin = -1.0f;
 	constexpr float kGammaOffsetMax = 1.0f;
+	constexpr float kGlobalSkyBrightnessMax = 2.0f;
+	constexpr float kGlobalLightingMultiplierMax = 5.0f;
 
 	using Profile = AdaptiveBrightness::Profile;
 
@@ -91,19 +99,13 @@ namespace
 
 	constexpr const char* kOverrideTypeLocation = "Location";
 	constexpr const char* kOverrideTypeCell = "Cell";
-	constexpr const char* kPresetVersion = "1.0.0";
+	constexpr const char* kPresetVersion = "2.0.0";
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
-	constexpr std::array<std::string_view, 2> kFeatureJsonRootNames{
-		AdaptiveBrightness::kFeatureName,
-		AdaptiveBrightness::kFeatureShortName
-	};
-	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBrightness_Global";
-	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBrightness_LocationOverrides";
-	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBrightness_Full";
-	constexpr const char* kImportedChangesSaveHint =
-		"Import changes the current settings immediately, but those changes are not saved automatically. Use the main Save Settings button to keep them after closing the game.";
-	constexpr const char* kImportedChangesSaveStatusSuffix = " Use Save Settings to keep these changes after closing the game.";
+	constexpr std::string_view kPresetDirectoryName = "AdaptiveBalance";
+	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBalance_Global";
+	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBalance_LocationOverrides";
+	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBalance_Full";
 
 	enum class PresetKind
 	{
@@ -148,33 +150,6 @@ namespace
 		return std::clamp(SafeFinite(a_value, 1.0f), 0.1f, 3.0f);
 	}
 
-	float ClampWhiteDiffuseMultiplier(float a_value)
-	{
-		return std::clamp(SafeFinite(a_value, 1.0f), kWhiteDiffuseMultiplierMin, kWhiteDiffuseMultiplierMax);
-	}
-
-	float WhiteDiffuseValueFromSlider(float a_sliderValue)
-	{
-		const float sliderValue = std::clamp(SafeFinite(a_sliderValue, 1.0f), 0.0f, 1.0f);
-		if (sliderValue <= kWhiteDiffuseSliderKnee)
-			return sliderValue * (kWhiteDiffuseValueKnee / kWhiteDiffuseSliderKnee);
-
-		const float highSliderRange = kWhiteDiffuseMultiplierMax - kWhiteDiffuseSliderKnee;
-		const float highValueRange = kWhiteDiffuseMultiplierMax - kWhiteDiffuseValueKnee;
-		return kWhiteDiffuseValueKnee + ((sliderValue - kWhiteDiffuseSliderKnee) / highSliderRange) * highValueRange;
-	}
-
-	float WhiteDiffuseSliderFromValue(float a_value)
-	{
-		const float value = ClampWhiteDiffuseMultiplier(a_value);
-		if (value <= kWhiteDiffuseValueKnee)
-			return value * (kWhiteDiffuseSliderKnee / kWhiteDiffuseValueKnee);
-
-		const float highValueRange = kWhiteDiffuseMultiplierMax - kWhiteDiffuseValueKnee;
-		const float highSliderRange = kWhiteDiffuseMultiplierMax - kWhiteDiffuseSliderKnee;
-		return kWhiteDiffuseSliderKnee + ((value - kWhiteDiffuseValueKnee) / highValueRange) * highSliderRange;
-	}
-
 	float ClampGammaOffset(float a_value)
 	{
 		return std::clamp(SafeFinite(a_value, 0.0f), kGammaOffsetMin, kGammaOffsetMax);
@@ -183,6 +158,32 @@ namespace
 	float ClampBrightness(float a_value)
 	{
 		return std::clamp(SafeFinite(a_value, 1.0f), kBrightnessMin, kBrightnessMax);
+	}
+
+	bool UsesClassifiedPointLightMultipliers(const SharedLightingSettings& a_settings)
+	{
+		return a_settings.linearPointLightMult != a_settings.pointLightMult ||
+		       a_settings.spotlightMult != 1.0f ||
+		       a_settings.linearSpotlightMult != 1.0f ||
+		       a_settings.omnidirectionalBulbMult != 1.0f ||
+		       a_settings.linearOmnidirectionalBulbMult != 1.0f;
+	}
+
+	void SanitizeSharedLightingSettings(SharedLightingSettings& a_settings)
+	{
+		const SharedLightingSettings defaults{};
+		const auto clamp = [](float a_value, float a_max, float a_default) {
+			return std::clamp(SafeFinite(a_value, a_default), 0.0f, a_max);
+		};
+
+		a_settings.skyBrightness = clamp(a_settings.skyBrightness, kGlobalSkyBrightnessMax, defaults.skyBrightness);
+		a_settings.directionalLightMult = clamp(a_settings.directionalLightMult, kGlobalLightingMultiplierMax, defaults.directionalLightMult);
+		a_settings.pointLightMult = clamp(a_settings.pointLightMult, kGlobalLightingMultiplierMax, defaults.pointLightMult);
+		a_settings.linearPointLightMult = clamp(a_settings.linearPointLightMult, kGlobalLightingMultiplierMax, defaults.linearPointLightMult);
+		a_settings.spotlightMult = clamp(a_settings.spotlightMult, kGlobalLightingMultiplierMax, defaults.spotlightMult);
+		a_settings.linearSpotlightMult = clamp(a_settings.linearSpotlightMult, kGlobalLightingMultiplierMax, defaults.linearSpotlightMult);
+		a_settings.omnidirectionalBulbMult = clamp(a_settings.omnidirectionalBulbMult, kGlobalLightingMultiplierMax, defaults.omnidirectionalBulbMult);
+		a_settings.linearOmnidirectionalBulbMult = clamp(a_settings.linearOmnidirectionalBulbMult, kGlobalLightingMultiplierMax, defaults.linearOmnidirectionalBulbMult);
 	}
 
 	float WrapHour(float a_hour)
@@ -315,24 +316,11 @@ namespace
 		return std::format("{}{}.json", GetPresetModName(a_name, a_kind), GetPresetFilenameSuffix(a_kind).data());
 	}
 
-	std::string_view GetPresetDescription(PresetKind a_kind)
-	{
-		switch (a_kind) {
-		case PresetKind::Global:
-			return "Adaptive Brightness global preset";
-		case PresetKind::Full:
-			return "Adaptive Brightness full preset";
-		case PresetKind::Location:
-		default:
-			return "Adaptive Brightness location override preset";
-		}
-	}
-
 	std::filesystem::path GetPresetDirectory()
 	{
 		// Keep exported presets outside the live Overrides folder so sharing a preset
 		// does not implicitly turn it into an active feature override on next load.
-		return Util::PathHelpers::GetCommunityShaderPath() / AdaptiveBrightness::kFeatureShortName.data() / "Presets";
+		return Util::PathHelpers::GetCommunityShaderPath() / kPresetDirectoryName / "Presets";
 	}
 
 	std::filesystem::path GetPresetPath(std::string_view a_name, PresetKind a_kind)
@@ -473,19 +461,19 @@ namespace
 	void ClampProfileSettings(AdaptiveBrightness::ProfileSettings& a_profile)
 	{
 		a_profile.brightness = ClampBrightness(a_profile.brightness);
+		a_profile.skyBrightnessMult = ClampMultiplier(a_profile.skyBrightnessMult);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
 		a_profile.pointLightMult = ClampMultiplier(a_profile.pointLightMult);
 		a_profile.ambientMult = ClampMultiplier(a_profile.ambientMult);
 		a_profile.emitColorMult = ClampMultiplier(a_profile.emitColorMult);
 		a_profile.glowmapMult = ClampMultiplier(a_profile.glowmapMult);
 		a_profile.effectLightingMult = ClampMultiplier(a_profile.effectLightingMult);
-		a_profile.whiteDiffuseMult = ClampWhiteDiffuseMultiplier(a_profile.whiteDiffuseMult);
-		a_profile.animalWhiteDiffuseMult = ClampWhiteDiffuseMultiplier(a_profile.animalWhiteDiffuseMult);
 		a_profile.skyGammaOffset = ClampGammaOffset(a_profile.skyGammaOffset);
 		a_profile.fogGammaOffset = ClampGammaOffset(a_profile.fogGammaOffset);
 		a_profile.fogAlphaGammaOffset = ClampGammaOffset(a_profile.fogAlphaGammaOffset);
 		a_profile.waterGammaOffset = ClampGammaOffset(a_profile.waterGammaOffset);
 		a_profile.vlGammaOffset = ClampGammaOffset(a_profile.vlGammaOffset);
+		Bloom::SanitizeProfile(a_profile.bloom);
 	}
 
 	void NormalizeBaseProfiles(std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>& a_profiles)
@@ -520,7 +508,7 @@ namespace
 	json MakePresetMetadata(std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
-			{ "feature", AdaptiveBrightness::kFeatureShortName.data() },
+			{ "feature", AdaptiveBrightness::kFeatureName.data() },
 			{ "modName", GetPresetModName(a_name, a_kind) },
 			{ "type", std::string(a_type) },
 			{ "version", kPresetVersion },
@@ -531,6 +519,9 @@ namespace
 	json MakeBasePresetJson(const AdaptiveBrightness::Settings& a_settings, std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
+			{ "rendererControlsEnabled", a_settings.rendererControlsEnabled },
+			{ "lighting", a_settings.lighting },
+			{ "bloomEnhancement", a_settings.bloomEnhancement },
 			{ "dayStartHour", a_settings.dayStartHour },
 			{ "nightStartHour", a_settings.nightStartHour },
 			{ "transitionHours", a_settings.transitionHours },
@@ -564,7 +555,7 @@ namespace
 				NormalizeImportedLocationOverride(locationOverride);
 				o_locationOverrides.push_back(std::move(locationOverride));
 				++stats.imported;
-			} catch (const std::exception&) {
+			} catch (const json::exception&) {
 				++stats.skipped;
 			}
 		}
@@ -572,29 +563,40 @@ namespace
 		return stats;
 	}
 
-	bool HasAdvancedControlsOpen(const AdaptiveBrightness::Settings& a_settings)
+	bool NormalizeLocationOverrideList(std::vector<AdaptiveBrightness::LocationOverride>& a_locationOverrides)
 	{
-		const auto profileHasAdvancedControls = [](const AdaptiveBrightness::ProfileSettings& a_profile) {
-			return a_profile.advanced;
-		};
+		bool changedLookup = false;
 
-		return std::any_of(a_settings.profiles.begin(), a_settings.profiles.end(), profileHasAdvancedControls) ||
-		       std::any_of(a_settings.locationOverrides.begin(), a_settings.locationOverrides.end(), [&](const AdaptiveBrightness::LocationOverride& a_locationOverride) {
-				   return profileHasAdvancedControls(a_locationOverride.profile);
-			   });
-	}
+		for (auto it = a_locationOverrides.begin(); it != a_locationOverrides.end();) {
+			if (!IsValidFormKey(it->key)) {
+				it = a_locationOverrides.erase(it);
+				changedLookup = true;
+				continue;
+			}
 
-	const json* FindNamedFeatureJson(const json& a_json)
-	{
-		if (!a_json.is_object())
-			return nullptr;
-
-		for (const auto featureName : kFeatureJsonRootNames) {
-			if (auto it = a_json.find(featureName.data()); it != a_json.end() && it->is_object())
-				return &*it;
+			NormalizeImportedLocationOverride(*it);
+			++it;
 		}
 
-		return nullptr;
+		if (a_locationOverrides.size() > 1) {
+			std::unordered_set<std::string> seenKeys;
+			std::vector<AdaptiveBrightness::LocationOverride> dedupedOverrides;
+			dedupedOverrides.reserve(a_locationOverrides.size());
+
+			for (auto it = a_locationOverrides.rbegin(); it != a_locationOverrides.rend(); ++it) {
+				if (seenKeys.insert(it->key).second)
+					dedupedOverrides.push_back(*it);
+				else
+					changedLookup = true;
+			}
+
+			if (changedLookup) {
+				std::reverse(dedupedOverrides.begin(), dedupedOverrides.end());
+				a_locationOverrides = std::move(dedupedOverrides);
+			}
+		}
+
+		return changedLookup;
 	}
 
 	const json* FindBasePresetJson(const json& a_json)
@@ -610,9 +612,9 @@ namespace
 				return &*it;
 		}
 
-		if (const auto* featureJson = FindNamedFeatureJson(a_json)) {
-			if (auto profilesIt = featureJson->find(kProfilesFieldName.data()); profilesIt != featureJson->end() && profilesIt->is_array())
-				return featureJson;
+		if (auto it = a_json.find(AdaptiveBrightness::kFeatureName.data()); it != a_json.end() && it->is_object()) {
+			if (auto profilesIt = it->find(kProfilesFieldName.data()); profilesIt != it->end() && profilesIt->is_array())
+				return &*it;
 		}
 
 		return nullptr;
@@ -627,14 +629,27 @@ namespace
 		}
 
 		try {
+			auto importedSettings = a_settings;
 			auto importedProfiles = presetJson->at(kProfilesFieldName.data()).get<std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>>();
 			NormalizeBaseProfiles(importedProfiles);
 
-			a_settings.dayStartHour = GetOptionalFloat(*presetJson, "dayStartHour", a_settings.dayStartHour);
-			a_settings.nightStartHour = GetOptionalFloat(*presetJson, "nightStartHour", a_settings.nightStartHour);
-			a_settings.transitionHours = GetOptionalFloat(*presetJson, "transitionHours", a_settings.transitionHours);
-			NormalizeExteriorTimeSettings(a_settings);
-			a_settings.profiles = std::move(importedProfiles);
+			if (const auto it = presetJson->find("rendererControlsEnabled"); it != presetJson->end() && it->is_boolean())
+				importedSettings.rendererControlsEnabled = it->get<bool>();
+			if (const auto it = presetJson->find("lighting"); it != presetJson->end() && it->is_object()) {
+				importedSettings.lighting = it->get<SharedLightingSettings>();
+				SanitizeSharedLightingSettings(importedSettings.lighting);
+			}
+			if (const auto it = presetJson->find("bloomEnhancement"); it != presetJson->end() && it->is_object()) {
+				importedSettings.bloomEnhancement = it->get<Bloom::PresetSettings>();
+				Bloom::SanitizeSettings(importedSettings.bloomEnhancement);
+			}
+
+			importedSettings.dayStartHour = GetOptionalFloat(*presetJson, "dayStartHour", importedSettings.dayStartHour);
+			importedSettings.nightStartHour = GetOptionalFloat(*presetJson, "nightStartHour", importedSettings.nightStartHour);
+			importedSettings.transitionHours = GetOptionalFloat(*presetJson, "transitionHours", importedSettings.transitionHours);
+			NormalizeExteriorTimeSettings(importedSettings);
+			importedSettings.profiles = std::move(importedProfiles);
+			a_settings = std::move(importedSettings);
 			return true;
 		} catch (const json::exception& e) {
 			o_status = std::format("Import failed: invalid profile data ({})", e.what());
@@ -653,8 +668,8 @@ namespace
 		if (auto it = a_json.find(kLocationOverridesFieldName.data()); it != a_json.end())
 			return &*it;
 
-		if (const auto* featureJson = FindNamedFeatureJson(a_json)) {
-			if (auto overridesIt = featureJson->find(kLocationOverridesFieldName.data()); overridesIt != featureJson->end())
+		if (auto it = a_json.find(AdaptiveBrightness::kFeatureName.data()); it != a_json.end() && it->is_object()) {
+			if (auto overridesIt = it->find(kLocationOverridesFieldName.data()); overridesIt != it->end())
 				return &*overridesIt;
 		}
 
@@ -702,12 +717,6 @@ namespace
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
 		ImGui::TextDisabled("%s", a_text);
 		ImGui::PopTextWrapPos();
-	}
-
-	std::string AppendImportedChangesSaveReminder(std::string a_status)
-	{
-		a_status += kImportedChangesSaveStatusSuffix;
-		return a_status;
 	}
 
 	void DrawPresetNameInput(const char* a_label, const char* a_id, std::string& a_name, const std::filesystem::path& a_exportPath, const std::filesystem::path* a_alternateImportPath = nullptr)
@@ -761,7 +770,11 @@ namespace
 
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
-	ImGui::Checkbox("Enable", &settings.enabled);
+	ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Blend the active lighting, atmosphere, and Bloom profile by location and exterior time.");
+		ImGui::Text("Global calibration and Bloom defaults remain available when adaptive profiles are disabled.");
+	}
 
 	if (settings.enabled) {
 		const auto contextLabel = GetContextLabel();
@@ -771,51 +784,94 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 
 void AdaptiveBrightness::DrawSettings()
 {
-	ImGui::BeginDisabled(!settings.enabled);
+	const auto contextSectionToSelect = SyncContextSection();
+	const ImGuiTabItemFlags profileSectionFlags =
+		contextSectionToSelect == ContextSection::Profiles ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+	const ImGuiTabItemFlags locationSectionFlags =
+		contextSectionToSelect == ContextSection::Locations ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
 
-	DrawGlobalPresetControls();
+	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
+		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
+			ImGui::TextWrapped("Tune the lighting, atmosphere, and Bloom used for each time and location type.");
+			if (!settings.enabled)
+				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
 
-	const auto profileTabToSelect = SyncSelectedProfileTabToContext();
+			ImGui::BeginDisabled(!settings.enabled);
+			DrawExteriorTimeSettings();
+			ImGui::EndDisabled();
 
-	ImGui::SeparatorText("Profiles");
-	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
-		for (auto profile : kProfileOrder) {
-			const ImGuiTabItemFlags tabFlags =
-				profileTabToSelect && *profileTabToSelect == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-			if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
-				selectedProfileTab = profile;
-				DrawProfile(profile);
-				ImGui::EndTabItem();
+			const auto profileTabToSelect = SyncSelectedProfileTabToContext(ProfileTabSurface::Advanced);
+			if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
+				for (auto profile : kProfileOrder) {
+					const ImGuiTabItemFlags tabFlags =
+						profileTabToSelect && *profileTabToSelect == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+					if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
+						DrawProfile(profile, settings.enabled);
+						ImGui::EndTabItem();
+					}
+				}
+				ImGui::EndTabBar();
 			}
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Global")) {
+			ImGui::TextWrapped("Set the shared renderer baseline and the Bloom defaults inherited by profiles.");
+			DrawGlobalRendererSettings();
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Locations", nullptr, locationSectionFlags)) {
+			ImGui::TextWrapped("Create precise profile overrides for individual locations or cells.");
+			if (!settings.enabled)
+				ImGui::TextDisabled("Adaptive profile switching is off. Saved overrides can still be reviewed.");
+			DrawLocationOverrides(false, true, settings.enabled);
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Presets")) {
+			ImGui::TextWrapped("Import or export complete balance configurations and location override collections.");
+			DrawGlobalPresetControls();
+			DrawLocationOverridePresetControls();
+			DrawFullPresetControls();
+			ImGui::EndTabItem();
 		}
 
 		ImGui::EndTabBar();
 	}
-
-	DrawLocationOverrides();
-	DrawFullPresetControls();
-
-	ImGui::EndDisabled();
 }
 
 void AdaptiveBrightness::DrawEssentialSettings()
 {
-	ImGui::BeginDisabled(!settings.enabled);
-	const auto profileTabToSelect = SyncSelectedProfileTabToContext();
+	ImGui::SeparatorText("Quick Controls");
+	ImGui::Checkbox("Enable Global Adjustments", &settings.rendererControlsEnabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Applies global lighting calibration and Bloom enhancement.");
+		ImGui::Text("Adaptive profiles remain active over neutral calibration when this is off.");
+	}
 
-	ImGui::SeparatorText("Profiles");
+	ImGui::BeginDisabled(!settings.rendererControlsEnabled);
+	bool bloomEnabled = settings.bloomEnhancement.Enabled != 0;
+	if (ImGui::Checkbox("Enable Bloom Enhancement", &bloomEnabled))
+		settings.bloomEnhancement.Enabled = bloomEnabled;
+	ImGui::EndDisabled();
+
+	if (!settings.enabled)
+		ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
+
+	ImGui::BeginDisabled(!settings.enabled);
+	DrawExteriorTimeSettings();
+	ImGui::EndDisabled();
+
+	const auto profileTabToSelect = SyncSelectedProfileTabToContext(ProfileTabSurface::Essentials);
 	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfilesEssentials", ImGuiTabBarFlags_None)) {
 		for (auto profile : kProfileOrder) {
 			const ImGuiTabItemFlags tabFlags =
 				profileTabToSelect && *profileTabToSelect == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
 			if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
-				selectedProfileTab = profile;
 				auto& profileSettings = settings.profiles[ProfileIndex(profile)];
-				const bool exteriorProfile = profile == Profile::ExteriorDay || profile == Profile::ExteriorNight;
 				ImGui::PushID(static_cast<int>(ProfileIndex(profile)));
-				if (exteriorProfile)
-					DrawExteriorTimeSettings();
-				DrawProfileSettings(profileSettings, "Profile Values", false);
+				DrawProfileSettings(profileSettings, "Profile Values", false, settings.enabled);
 				ImGui::PopID();
 				ImGui::EndTabItem();
 			}
@@ -823,17 +879,16 @@ void AdaptiveBrightness::DrawEssentialSettings()
 		ImGui::EndTabBar();
 	}
 
-	DrawLocationOverrides(false, false);
-
-	ImGui::EndDisabled();
+	DrawLocationSummary();
 }
 
 void AdaptiveBrightness::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SanitizeSharedLightingSettings(settings.lighting);
+	Bloom::SanitizeSettings(settings.bloomEnhancement);
 	NormalizeExteriorTimeSettings(settings);
 	NormalizeBaseProfiles(settings.profiles);
-	SetAdvancedControlsOpen(HasAdvancedControlsOpen(settings));
 	globalPresetStatus.clear();
 	if (globalPresetName.empty())
 		globalPresetName = kDefaultGlobalPresetName;
@@ -851,6 +906,8 @@ void AdaptiveBrightness::LoadSettings(json& o_json)
 
 void AdaptiveBrightness::SaveSettings(json& o_json)
 {
+	SanitizeSharedLightingSettings(settings.lighting);
+	Bloom::SanitizeSettings(settings.bloomEnhancement);
 	NormalizeExteriorTimeSettings(settings);
 	NormalizeBaseProfiles(settings.profiles);
 	NormalizeLocationOverrides();
@@ -859,7 +916,6 @@ void AdaptiveBrightness::SaveSettings(json& o_json)
 
 void AdaptiveBrightness::RestoreDefaultSettings()
 {
-	const bool keepAdvancedControlsOpen = advancedControlsOpen;
 	settings = {};
 	NormalizeExteriorTimeSettings(settings);
 	globalPresetName = kDefaultGlobalPresetName;
@@ -870,8 +926,14 @@ void AdaptiveBrightness::RestoreDefaultSettings()
 	fullPresetStatus.clear();
 	ClearLocationOverrideSelection();
 	InvalidateProfileTabSync();
-	SetAdvancedControlsOpen(keepAdvancedControlsOpen);
 	MarkLocationOverrideLookupDirty();
+}
+
+void AdaptiveBrightness::SetupResources()
+{
+	vanillaPointLightCB = new ConstantBuffer(
+		ConstantBufferDesc<VanillaPointLightData>(),
+		"AdaptiveBalance::VanillaPointLightData");
 }
 
 const char* AdaptiveBrightness::GetProfileName(Profile a_profile)
@@ -879,7 +941,7 @@ const char* AdaptiveBrightness::GetProfileName(Profile a_profile)
 	return kProfileNames[ProfileIndex(a_profile)];
 }
 
-std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfileTabToContext()
+std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfileTabToContext(ProfileTabSurface a_surface)
 {
 	const auto currentProfile = GetCurrentProfileForUI();
 	std::string currentProfileTabSyncKey = std::to_string(static_cast<uint32_t>(currentProfile));
@@ -888,23 +950,46 @@ std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfi
 		currentProfileTabSyncKey += activeOverride->key;
 	}
 
+	auto& syncState = profileTabSyncStates[static_cast<std::size_t>(a_surface)];
 	const int currentFrame = ImGui::GetFrameCount();
 	const bool profileTabsWereVisible =
-		profileTabLastDrawFrame >= 0 &&
-		(currentFrame == profileTabLastDrawFrame || currentFrame == profileTabLastDrawFrame + 1);
-	profileTabLastDrawFrame = currentFrame;
+		syncState.lastDrawFrame >= 0 &&
+		(currentFrame == syncState.lastDrawFrame || currentFrame == syncState.lastDrawFrame + 1);
+	syncState.lastDrawFrame = currentFrame;
 
-	if (profileTabsWereVisible && profileTabSyncInitialized && profileTabSyncKey == currentProfileTabSyncKey)
+	if (profileTabsWereVisible && syncState.initialized && syncState.key == currentProfileTabSyncKey)
 		return std::nullopt;
-	selectedProfileTab = currentProfile;
-	profileTabSyncKey = std::move(currentProfileTabSyncKey);
-	profileTabSyncInitialized = true;
+
+	syncState.key = std::move(currentProfileTabSyncKey);
+	syncState.initialized = true;
 	return currentProfile;
+}
+
+std::optional<AdaptiveBrightness::ContextSection> AdaptiveBrightness::SyncContextSection()
+{
+	const auto* activeOverride = GetActiveLocationOverride();
+	const std::string currentKey = activeOverride ? std::format("override:{}", activeOverride->key) : "base";
+	const int currentFrame = ImGui::GetFrameCount();
+	const bool sectionsWereVisible =
+		contextSectionLastDrawFrame >= 0 &&
+		(currentFrame == contextSectionLastDrawFrame || currentFrame == contextSectionLastDrawFrame + 1);
+	contextSectionLastDrawFrame = currentFrame;
+
+	if (sectionsWereVisible && contextSectionSyncInitialized && contextSectionSyncKey == currentKey)
+		return std::nullopt;
+
+	contextSectionSyncKey = currentKey;
+	contextSectionSyncInitialized = true;
+	if (activeOverride) {
+		selectedLocationOverrideKey = activeOverride->key;
+		return ContextSection::Locations;
+	}
+	return ContextSection::Profiles;
 }
 
 void AdaptiveBrightness::DrawExteriorTimeSettings()
 {
-	ImGui::SeparatorText("Exterior Time");
+	ImGui::SeparatorText("Exterior Schedule");
 	ImGui::SliderFloat("Day Blend Start", &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Hour when the Exterior Day profile starts blending in.");
@@ -923,22 +1008,16 @@ void AdaptiveBrightness::DrawExteriorTimeSettings()
 	NormalizeExteriorTimeSettings(settings);
 }
 
-void AdaptiveBrightness::DrawProfile(Profile a_profile)
+void AdaptiveBrightness::DrawProfile(Profile a_profile, bool a_allowEdits)
 {
 	auto& profile = settings.profiles[ProfileIndex(a_profile)];
-	const bool exteriorProfile = a_profile == Profile::ExteriorDay || a_profile == Profile::ExteriorNight;
 
 	ImGui::PushID(static_cast<int>(ProfileIndex(a_profile)));
-	if (exteriorProfile) {
-		DrawExteriorTimeSettings();
-		DrawProfileSettings(profile, "Profile Values");
-	} else {
-		DrawProfileSettings(profile);
-	}
+	DrawProfileSettings(profile, "Profile Values", true, a_allowEdits);
 	ImGui::PopID();
 }
 
-void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls)
+void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls, bool a_allowEdits)
 {
 	ClampProfileSettings(a_profile);
 
@@ -949,86 +1028,177 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 		}
 	};
 
-	const auto drawWhiteDiffuseSlider = [](const char* a_label, float& a_value, const char* a_tooltip) {
-		float sliderValue = WhiteDiffuseSliderFromValue(a_value);
-		const std::string preview = std::format("{:.2f}", ClampWhiteDiffuseMultiplier(a_value));
-		if (ImGui::SliderFloat(a_label, &sliderValue, 0.0f, 1.0f, preview.c_str(), ImGuiSliderFlags_AlwaysClamp))
-			a_value = WhiteDiffuseValueFromSlider(sliderValue);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", a_tooltip);
-			ImGui::Text(
-				"Non-linear response: slider 0.00-%.2f maps to value 0.00-%.2f, slider %.2f-1.00 maps to value %.2f-1.00.",
-				kWhiteDiffuseSliderKnee,
-				kWhiteDiffuseValueKnee,
-				kWhiteDiffuseSliderKnee,
-				kWhiteDiffuseValueKnee);
-		}
-	};
-
 	ImGui::SeparatorText(a_sectionTitle);
 	ImGui::Indent();
-
-	ImGui::Spacing();
+	ImGui::BeginDisabled(!a_allowEdits);
 	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
+	ImGui::EndDisabled();
 
-	if (a_showAdvancedControls) {
-		bool advancedControls = advancedControlsOpen;
-		if (ImGui::Checkbox("Advanced Controls", &advancedControls))
-			SetAdvancedControlsOpen(advancedControls);
-		a_profile.advanced = advancedControlsOpen;
+	if (!a_showAdvancedControls) {
+		ImGui::SeparatorText("Bloom");
+		ImGui::BeginDisabled(!a_allowEdits);
+		DrawProfileBloomSettings(a_profile, false, false);
+		ImGui::EndDisabled();
+		ImGui::Unindent();
+		ClampProfileSettings(a_profile);
+		return;
 	}
 
-	if (a_showAdvancedControls && advancedControlsOpen) {
-		ImGui::SeparatorText("Light Multipliers");
-		ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, 3.0f, "%.2f");
+	ImGui::BeginDisabled(!a_allowEdits);
+	ImGui::Checkbox("Use Detailed Lighting Adjustments", &a_profile.advanced);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enables the detailed lighting and atmosphere values for this profile only.");
+		ImGui::Text("Bloom is configured separately.");
+	}
+	ImGui::EndDisabled();
 
-		ImGui::SeparatorText("White Diffuse Brightness");
-		drawWhiteDiffuseSlider(
-			"Objects",
-			a_profile.whiteDiffuseMult,
-			"Caps over-bright white object diffuse colors. Lower values reduce clipped whites above the threshold without changing darker surfaces.");
-		drawWhiteDiffuseSlider(
-			"Animoils",
-			a_profile.animalWhiteDiffuseMult,
-			"Caps over-bright white animal diffuse colors, including horses when their actor keyword data is available. Missing or untagged animals use the object value.");
+	if (ImGui::BeginTabBar("##AdaptiveBalanceProfileSections", ImGuiTabBarFlags_None)) {
+		if (ImGui::BeginTabItem("Lighting & Atmosphere")) {
+			ImGui::BeginDisabled(!a_allowEdits);
+			if (a_profile.advanced) {
+				ImGui::SeparatorText("Direct Lighting");
+				ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, 2.0f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Contextual multiplier applied to the global Sky Brightness value. This is separate from Sky Gamma.");
+				ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
+				ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
 
-		ImGui::SeparatorText("Atmosphere Gamma Offsets");
-		ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::SliderFloat("Water", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SeparatorText("Indirect and Material Lighting");
+				ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, 3.0f, "%.2f");
+				ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, 3.0f, "%.2f");
+				ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, 3.0f, "%.2f");
+				ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, 3.0f, "%.2f");
+
+				ImGui::SeparatorText("Atmosphere Gamma Offsets");
+				ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SliderFloat("Water", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+			} else {
+				ImGui::TextDisabled("Detailed lighting and atmosphere adjustments are not used by this profile.");
+			}
+			ImGui::EndDisabled();
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Bloom")) {
+			ImGui::BeginDisabled(!a_allowEdits);
+			DrawProfileBloomSettings(a_profile, true);
+			ImGui::EndDisabled();
+			ImGui::EndTabItem();
+		}
+
+		ImGui::EndTabBar();
 	}
 
 	ImGui::Unindent();
 	ClampProfileSettings(a_profile);
 }
 
-void AdaptiveBrightness::SetAdvancedControlsOpen(bool a_open)
+void AdaptiveBrightness::DrawGlobalRendererSettings()
 {
-	advancedControlsOpen = a_open;
+	ImGui::Checkbox("Enable Global Adjustments", &settings.rendererControlsEnabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Applies global lighting calibration and Bloom enhancement.");
+		ImGui::Text("Adaptive profiles remain active over neutral calibration when this is off.");
+	}
+	if (!settings.rendererControlsEnabled)
+		ImGui::TextDisabled("Global lighting calibration and Bloom enhancement are currently inactive.");
 
-	for (auto& profile : settings.profiles)
-		profile.advanced = advancedControlsOpen;
+	if (ImGui::BeginTabBar("##AdaptiveBalanceGlobalSections", ImGuiTabBarFlags_None)) {
+		if (ImGui::BeginTabItem("Lighting")) {
+			ImGui::BeginDisabled(!settings.rendererControlsEnabled);
+			ImGui::TextWrapped("These baseline values apply to every location. The active profile is multiplied on top.");
+			ImGui::SeparatorText("Shared Baseline");
+			ImGui::SliderFloat("Sky Brightness", &settings.lighting.skyBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Directional Light", &settings.lighting.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Point Lights", &settings.lighting.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-	for (auto& locationOverride : settings.locationOverrides)
-		locationOverride.profile.advanced = advancedControlsOpen;
+			ImGui::SeparatorText("Point-light Type Balance");
+			ImGui::TextWrapped("Subtype values are additional multipliers applied after the active profile's Point Lights value.");
+			ImGui::SliderFloat("Spotlights", &settings.lighting.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Omnidirectional Bulbs", &settings.lighting.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-	if (locationOverrideEditProfile)
-		locationOverrideEditProfile->advanced = advancedControlsOpen;
+			ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
+			ImGui::SliderFloat("Linear Point Lights", &settings.lighting.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Linear Spotlights", &settings.lighting.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Linear Omnidirectional Bulbs", &settings.lighting.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::EndDisabled();
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Bloom")) {
+			ImGui::BeginDisabled(!settings.rendererControlsEnabled);
+			ImGui::TextWrapped("Profiles inherit this Bloom configuration unless custom Bloom is enabled for that profile.");
+			Bloom::DrawSettings(settings.bloomEnhancement);
+			ImGui::EndDisabled();
+			ImGui::EndTabItem();
+		}
+
+		ImGui::EndTabBar();
+	}
+
+	SanitizeSharedLightingSettings(settings.lighting);
+	Bloom::SanitizeSettings(settings.bloomEnhancement);
+}
+
+void AdaptiveBrightness::DrawProfileBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_showPresetActions)
+{
+	if (a_showAdvancedControls)
+		ImGui::TextWrapped("Inherit Global Bloom or tune Bloom specifically for this profile.");
+	if (!settings.rendererControlsEnabled)
+		ImGui::TextDisabled("Global Adjustments are off, so Bloom is currently inactive.");
+
+	ImGui::BeginDisabled(!settings.rendererControlsEnabled);
+	bool useProfileBloom = a_profile.bloomOverride;
+	if (ImGui::Checkbox("Use Custom Bloom for This Profile", &useProfileBloom)) {
+		if (useProfileBloom && !a_profile.bloomOverride) {
+			a_profile.bloom = Bloom::GetSelectedProfile(settings.bloomEnhancement);
+			a_profile.bloomEnabled = settings.bloomEnhancement.Enabled != 0;
+		}
+		a_profile.bloomOverride = useProfileBloom;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Override Global Bloom for this time or location profile.");
+
+	if (a_profile.bloomOverride) {
+		ImGui::Indent();
+		ImGui::Checkbox("Enable Bloom for This Profile", &a_profile.bloomEnabled);
+		if (a_showPresetActions) {
+			ImGui::TextUnformatted("Copy Global Bloom Preset");
+			if (ImGui::BeginTable("##ProfileBloomPresetButtons", 3, ImGuiTableFlags_SizingStretchProp)) {
+				for (uint preset = 0; preset < 3; ++preset)
+					ImGui::TableSetupColumn(Bloom::GetPresetName(preset), ImGuiTableColumnFlags_WidthStretch, 1.0f);
+				ImGui::TableNextRow();
+				for (uint preset = 0; preset < 3; ++preset) {
+					ImGui::TableNextColumn();
+					const auto label = std::format("Copy {}", Bloom::GetPresetName(preset));
+					if (ImGui::Button(label.c_str(), ImVec2(-1.0f, 0.0f)))
+						a_profile.bloom = Bloom::GetPresetProfile(settings.bloomEnhancement, preset);
+				}
+				ImGui::EndTable();
+			}
+		}
+
+		ImGui::BeginDisabled(!a_profile.bloomEnabled);
+		Bloom::DrawProfileSettings(a_profile.bloom, a_showAdvancedControls);
+		ImGui::EndDisabled();
+		ImGui::Unindent();
+	} else {
+		ImGui::TextDisabled(
+			"Using Global Bloom: %s (%s).",
+			Bloom::GetPresetName(settings.bloomEnhancement.SelectedPreset),
+			settings.bloomEnhancement.Enabled ? "Enabled" : "Disabled");
+	}
+	ImGui::EndDisabled();
 }
 
 void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets store the five profile tabs and exterior timing.");
+	DrawHintText("Global presets store global light calibration, Bloom defaults, the five profile tabs, and exterior timing.");
 	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
-	DrawHintText(kImportedChangesSaveHint);
 	ImGui::PushID("GlobalPresetControls");
 
 	const auto presetPath = GetPresetPath(globalPresetName, PresetKind::Global);
@@ -1039,7 +1209,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export exterior timing and the five profile tabs. Location overrides are not included.");
+		ImGui::Text("Export global calibration, Bloom defaults, exterior timing, and the five profiles. Location overrides are not included.");
 	}
 
 	ImGui::SameLine();
@@ -1047,8 +1217,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the five profile tabs in the current settings. Saved location overrides stay unchanged.");
-		ImGui::Text("%s", kImportedChangesSaveHint);
+		ImGui::Text("Replace global calibration, Bloom defaults, exterior timing, and the five profiles. Saved location overrides stay unchanged.");
 	}
 
 	if (!globalPresetStatus.empty())
@@ -1057,13 +1226,36 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 	ImGui::PopID();
 }
 
-void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls)
+void AdaptiveBrightness::DrawLocationSummary()
+{
+	ImGui::SeparatorText("Location Overrides");
+	const auto target = GetCurrentLocationOverrideTarget();
+	const auto* activeOverride = GetActiveLocationOverride();
+	const auto currentProfile = GetCurrentProfileForUI();
+
+	if (activeOverride) {
+		ImGui::TextWrapped(
+			"Current location uses saved override \"%s\" (%s).",
+			activeOverride->name.c_str(),
+			activeOverride->type.c_str());
+	} else {
+		ImGui::TextWrapped("Current location uses the %s base profile.", GetProfileName(currentProfile));
+	}
+
+	if (target)
+		ImGui::TextDisabled("Current target: %s", target->name.c_str());
+	else
+		ImGui::TextDisabled("No current location or cell form is available.");
+	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
+	ImGui::TextDisabled("Switch this feature to Advanced to manage location overrides.");
+}
+
+void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
 {
 	ImGui::SeparatorText("Location Override Profiles");
 	DrawHintText("Location overrides are per-place profiles. A saved override is used when its location or cell matches where you are.");
 	if (a_includePresetControls) {
 		DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
-		DrawHintText(kImportedChangesSaveHint);
 	}
 
 	const auto target = GetCurrentLocationOverrideTarget();
@@ -1078,14 +1270,21 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 		ImGui::TextWrapped("Using base profile %s here. No saved override matches this place.", GetProfileName(currentProfile));
 	}
 
-	ImGui::BeginDisabled(!target.has_value());
+	ImGui::BeginDisabled(!target.has_value() || (!a_allowEdits && !hasSavedTarget));
 	if (ImGui::Button(currentOverrideButtonLabel)) {
-		SaveCurrentLocationOverride();
+		if (a_allowEdits) {
+			SaveCurrentLocationOverride();
+		} else {
+			ClearLocationOverrideSelection();
+			selectedLocationOverrideKey = target->key;
+		}
 	}
 	ImGui::EndDisabled();
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Save this place as an override, or open its existing override.");
+		ImGui::Text(a_allowEdits ?
+						"Save this place as an override, or open its existing override." :
+						"Open this place's existing override for review.");
 	}
 
 	ImGui::SameLine();
@@ -1100,7 +1299,9 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	if (a_includePresetControls)
 		DrawLocationOverridePresetControls();
 	ImGui::SeparatorText("Saved Overrides");
-	DrawHintText("These saved overrides are matched by location or cell. Click a row to edit it.");
+	DrawHintText(a_allowEdits ?
+					 "These saved overrides are matched by location or cell. Click a row to edit it." :
+					 "These saved overrides are matched by location or cell. Click a row to review it.");
 
 	if (settings.locationOverrides.empty()) {
 		ClearLocationOverrideSelection();
@@ -1222,7 +1423,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			}
 
 			ImGui::TableSetColumnIndex(4);
-			if (ImGui::SmallButton("Edit")) {
+			if (ImGui::SmallButton(a_allowEdits ? "Edit" : "View")) {
 				selectedLocationOverrideKey = locationOverride.key;
 			}
 			ImGui::SameLine();
@@ -1235,9 +1436,11 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Copy the coc command for this saved cell.");
 			}
+			ImGui::BeginDisabled(!a_allowEdits);
 			if (ImGui::SmallButton("Delete")) {
 				deleteIndex = overrideIndex;
 			}
+			ImGui::EndDisabled();
 
 			ImGui::PopID();
 		}
@@ -1255,24 +1458,29 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	}
 
 	if (auto* selectedOverride = FindLocationOverride(selectedLocationOverrideKey)) {
-		ImGui::SeparatorText("Edit Location Override Profile");
+		ImGui::SeparatorText(a_allowEdits ? "Edit Location Override Profile" : "View Location Override Profile");
 		ImGui::TextWrapped("%s (%s, %s)", selectedOverride->name.c_str(), selectedOverride->type.c_str(), selectedOverride->key.c_str());
 		ImGui::PushID(selectedOverride->key.c_str());
 		if (auto* editProfile = GetLocationOverrideEditProfile(*selectedOverride)) {
-			DrawProfileSettings(*editProfile, "Override Profile Values", a_showAdvancedControls);
-			if (ImGui::Button("Save Edit")) {
+			DrawProfileSettings(*editProfile, "Override Profile Values", a_showAdvancedControls, a_allowEdits);
+			if (a_allowEdits && ImGui::Button("Save Edit")) {
 				selectedOverride->profile = *editProfile;
 				ClearLocationOverrideSelection();
 			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Save these values to the selected override.");
+			if (a_allowEdits) {
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Save these values to the selected override.");
 			}
-			ImGui::SameLine();
-			if (ImGui::Button("Cancel")) {
+			if (a_allowEdits)
+				ImGui::SameLine();
+			if (ImGui::Button(a_allowEdits ? "Cancel" : "Close")) {
 				ClearLocationOverrideSelection();
 			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Discard changes to the selected override.");
+			if (a_allowEdits) {
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Discard changes to the selected override.");
+			} else if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Close the read-only override view.");
 			}
 		}
 		ImGui::PopID();
@@ -1307,7 +1515,6 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Add overrides from this preset to the override list below.");
-		ImGui::Text("%s", kImportedChangesSaveHint);
 	}
 
 	if (!locationOverridePresetStatus.empty())
@@ -1319,9 +1526,8 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 void AdaptiveBrightness::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets store exterior timing, the five profile tabs, and all saved location overrides.");
+	DrawHintText("Full presets store global calibration, Bloom defaults, exterior timing, the five profile tabs, and all saved location overrides.");
 	DrawHintText("Import replaces the profile tabs and the saved override list in the current settings.");
-	DrawHintText(kImportedChangesSaveHint);
 	ImGui::PushID("FullPresetControls");
 
 	const auto presetPath = GetPresetPath(fullPresetName, PresetKind::Full);
@@ -1332,7 +1538,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ExportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export exterior timing, the five profile tabs, and all saved overrides.");
+		ImGui::Text("Export global calibration, Bloom defaults, exterior timing, the five profiles, and all saved overrides.");
 	}
 
 	ImGui::SameLine();
@@ -1340,8 +1546,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ImportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the profile tabs and saved override list in the current settings.");
-		ImGui::Text("%s", kImportedChangesSaveHint);
+		ImGui::Text("Replace global calibration, Bloom defaults, exterior timing, the five profiles, and the saved override list.");
 	}
 
 	if (!fullPresetStatus.empty())
@@ -1364,7 +1569,7 @@ bool AdaptiveBrightness::ExportGlobalPreset()
 			globalPresetName,
 			PresetKind::Global,
 			"global",
-			GetPresetDescription(PresetKind::Global));
+			"Adaptive Balance global preset");
 
 		if (!WriteJsonFileAtomic(path, exportJson)) {
 			globalPresetStatus = std::format("Export failed: could not write {}.", path.string());
@@ -1394,8 +1599,7 @@ bool AdaptiveBrightness::ImportGlobalPreset()
 	if (!ApplyBasePresetJson(importedJson, settings, globalPresetStatus))
 		return false;
 
-	advancedControlsOpen = HasAdvancedControlsOpen(settings);
-	globalPresetStatus = AppendImportedChangesSaveReminder(std::format("Imported global preset from {}.", resolvedPath->filename().string()));
+	globalPresetStatus = std::format("Imported global preset from {}.", resolvedPath->filename().string());
 	return true;
 }
 
@@ -1418,7 +1622,7 @@ bool AdaptiveBrightness::ExportLocationOverrides()
 			locationOverridePresetName,
 			PresetKind::Location,
 			"locations",
-			GetPresetDescription(PresetKind::Location));
+			"Adaptive Balance location override preset");
 
 		if (!WriteJsonFileAtomic(path, exportJson)) {
 			locationOverridePresetStatus = std::format("Export failed: could not write {}.", path.string());
@@ -1435,8 +1639,6 @@ bool AdaptiveBrightness::ExportLocationOverrides()
 
 bool AdaptiveBrightness::ImportLocationOverrides()
 {
-	NormalizeLocationOverrides();
-
 	const auto resolvedPath = ResolvePresetImportPath(locationOverridePresetName, PresetKind::Location);
 	if (!resolvedPath) {
 		locationOverridePresetStatus = GetPresetNotFoundMessage(locationOverridePresetName, PresetKind::Location);
@@ -1455,10 +1657,13 @@ bool AdaptiveBrightness::ImportLocationOverrides()
 		return false;
 	}
 
+	auto mergedOverrides = settings.locationOverrides;
+	NormalizeLocationOverrideList(mergedOverrides);
+
 	std::unordered_map<std::string, std::size_t> existingIndices;
-	existingIndices.reserve(settings.locationOverrides.size() + overridesJson->size());
-	for (std::size_t i = 0; i < settings.locationOverrides.size(); ++i) {
-		const auto& locationOverride = settings.locationOverrides[i];
+	existingIndices.reserve(mergedOverrides.size() + overridesJson->size());
+	for (std::size_t i = 0; i < mergedOverrides.size(); ++i) {
+		const auto& locationOverride = mergedOverrides[i];
 		if (IsValidFormKey(locationOverride.key))
 			existingIndices[locationOverride.key] = i;
 	}
@@ -1472,29 +1677,31 @@ bool AdaptiveBrightness::ImportLocationOverrides()
 		return false;
 	}
 
+	std::string lastImportedKey;
 	for (auto& locationOverride : importedOverrides) {
 		const auto key = locationOverride.key;
-		if (auto it = existingIndices.find(key); it != existingIndices.end() && it->second < settings.locationOverrides.size()) {
-			settings.locationOverrides[it->second] = std::move(locationOverride);
+		if (auto it = existingIndices.find(key); it != existingIndices.end() && it->second < mergedOverrides.size()) {
+			mergedOverrides[it->second] = std::move(locationOverride);
 			++stats.replaced;
 		} else {
-			existingIndices[key] = settings.locationOverrides.size();
-			settings.locationOverrides.push_back(std::move(locationOverride));
+			existingIndices[key] = mergedOverrides.size();
+			mergedOverrides.push_back(std::move(locationOverride));
 		}
 
-		selectedLocationOverrideKey = key;
+		lastImportedKey = key;
 	}
 
+	NormalizeLocationOverrideList(mergedOverrides);
+	settings.locationOverrides = std::move(mergedOverrides);
+	selectedLocationOverrideKey = std::move(lastImportedKey);
 	ResetLocationOverrideEdit();
-	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
-	advancedControlsOpen = HasAdvancedControlsOpen(settings);
-	locationOverridePresetStatus = AppendImportedChangesSaveReminder(std::format(
+	locationOverridePresetStatus = std::format(
 		"Imported {} location override(s) from {} ({} replaced, {} skipped).",
 		stats.imported,
 		path.filename().string(),
 		stats.replaced,
-		stats.skipped));
+		stats.skipped);
 	return true;
 }
 
@@ -1513,7 +1720,7 @@ bool AdaptiveBrightness::ExportFullPreset()
 			fullPresetName,
 			PresetKind::Full,
 			"full",
-			GetPresetDescription(PresetKind::Full));
+			"Adaptive Balance full preset");
 		exportJson["locationOverrides"] = settings.locationOverrides;
 
 		if (!WriteJsonFileAtomic(path, exportJson)) {
@@ -1569,12 +1776,11 @@ bool AdaptiveBrightness::ImportFullPreset()
 	ClearLocationOverrideSelection();
 	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
-	advancedControlsOpen = HasAdvancedControlsOpen(settings);
-	fullPresetStatus = AppendImportedChangesSaveReminder(std::format(
+	fullPresetStatus = std::format(
 		"Imported full preset from {} ({} location override(s), {} skipped).",
 		resolvedPath->filename().string(),
 		settings.locationOverrides.size(),
-		stats.skipped));
+		stats.skipped);
 	return true;
 }
 
@@ -1691,9 +1897,14 @@ void AdaptiveBrightness::ClearLocationOverrideSelection()
 
 void AdaptiveBrightness::InvalidateProfileTabSync()
 {
-	profileTabSyncKey.clear();
-	profileTabSyncInitialized = false;
-	profileTabLastDrawFrame = -1;
+	for (auto& syncState : profileTabSyncStates) {
+		syncState.key.clear();
+		syncState.initialized = false;
+		syncState.lastDrawFrame = -1;
+	}
+	contextSectionSyncKey.clear();
+	contextSectionSyncInitialized = false;
+	contextSectionLastDrawFrame = -1;
 }
 
 void AdaptiveBrightness::ResetLocationOverrideEdit()
@@ -1795,43 +2006,7 @@ std::size_t AdaptiveBrightness::ResolveLocationOverrideIndex() const
 
 void AdaptiveBrightness::NormalizeLocationOverrides()
 {
-	bool changedLookup = false;
-
-	for (auto it = settings.locationOverrides.begin(); it != settings.locationOverrides.end();) {
-		if (!IsValidFormKey(it->key)) {
-			it = settings.locationOverrides.erase(it);
-			changedLookup = true;
-			continue;
-		}
-
-		if (it->name.empty())
-			it->name = it->key;
-
-		if (it->type != kOverrideTypeCell)
-			it->type = kOverrideTypeLocation;
-
-		ClampProfileSettings(it->profile);
-		++it;
-	}
-
-	if (settings.locationOverrides.size() > 1) {
-		std::unordered_set<std::string> seenKeys;
-		std::vector<LocationOverride> dedupedOverrides;
-		dedupedOverrides.reserve(settings.locationOverrides.size());
-
-		for (auto it = settings.locationOverrides.rbegin(); it != settings.locationOverrides.rend(); ++it) {
-			if (seenKeys.insert(it->key).second)
-				dedupedOverrides.push_back(*it);
-			else
-				changedLookup = true;
-		}
-
-		std::reverse(dedupedOverrides.begin(), dedupedOverrides.end());
-		if (dedupedOverrides.size() != settings.locationOverrides.size())
-			settings.locationOverrides = std::move(dedupedOverrides);
-	}
-
-	if (changedLookup)
+	if (NormalizeLocationOverrideList(settings.locationOverrides))
 		MarkLocationOverrideLookupDirty();
 }
 
@@ -1908,8 +2083,6 @@ LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings() 
 	neutral.vlGamma = 1.0f;
 	neutral.glowmapMult = 1.0f;
 	neutral.effectLightingMult = 1.0f;
-	neutral.whiteDiffuseMult = 1.0f;
-	neutral.animalWhiteDiffuseMult = 1.0f;
 
 	return neutral;
 }
@@ -1927,9 +2100,6 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 	const auto advancedMult = [&](float a_multiplier) {
 		return a_profile.advanced ? ClampMultiplier(a_multiplier) : 1.0f;
 	};
-	const auto advancedWhiteMult = [&](float a_multiplier) {
-		return a_profile.advanced ? ClampWhiteDiffuseMultiplier(a_multiplier) : 1.0f;
-	};
 	const auto advancedOffset = [&](float a_offset) {
 		return a_profile.advanced ? ClampGammaOffset(a_offset) : 0.0f;
 	};
@@ -1938,8 +2108,6 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 	out.emitColorMult = ClampMultiplier(out.emitColorMult * masterScale(0.35f) * advancedMult(a_profile.emitColorMult));
 	out.glowmapMult = ClampMultiplier(out.glowmapMult * masterScale(0.35f) * advancedMult(a_profile.glowmapMult));
 	out.effectLightingMult = ClampMultiplier(out.effectLightingMult * masterScale(0.55f) * advancedMult(a_profile.effectLightingMult));
-	out.whiteDiffuseMult = ClampWhiteDiffuseMultiplier(out.whiteDiffuseMult * advancedWhiteMult(a_profile.whiteDiffuseMult));
-	out.animalWhiteDiffuseMult = ClampWhiteDiffuseMultiplier(out.animalWhiteDiffuseMult * advancedWhiteMult(a_profile.animalWhiteDiffuseMult));
 
 	out.skyGamma = ClampGamma(out.skyGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.skyGammaOffset));
 	out.fogGamma = ClampGamma(out.fogGamma + masterGammaOffset * 0.75f + advancedOffset(a_profile.fogGammaOffset));
@@ -1950,7 +2118,28 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 	return out;
 }
 
-CSUtility::Settings AdaptiveBrightness::ApplyProfile(const CSUtility::Settings& a_base, const ProfileSettings& a_profile) const
+namespace
+{
+	bool HasAdaptiveBrightnessColorAdjustments(
+		const LinearLighting::Settings& a_base,
+		const LinearLighting::Settings& a_effective)
+	{
+		// Keep this list aligned with the fields changed by the Linear Lighting
+		// ApplyProfile overload. Exact comparisons preserve the original shader
+		// path for a fully neutral profile instead of evaluating identity curves.
+		return a_effective.ambientMult != a_base.ambientMult ||
+		       a_effective.emitColorMult != a_base.emitColorMult ||
+		       a_effective.glowmapMult != a_base.glowmapMult ||
+		       a_effective.effectLightingMult != a_base.effectLightingMult ||
+		       a_effective.skyGamma != a_base.skyGamma ||
+		       a_effective.fogGamma != a_base.fogGamma ||
+		       a_effective.fogAlphaGamma != a_base.fogAlphaGamma ||
+		       a_effective.waterGamma != a_base.waterGamma ||
+		       a_effective.vlGamma != a_base.vlGamma;
+	}
+}
+
+SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSettings& a_base, const ProfileSettings& a_profile) const
 {
 	auto out = a_base;
 	const float brightness = ClampBrightness(a_profile.brightness);
@@ -1963,6 +2152,7 @@ CSUtility::Settings AdaptiveBrightness::ApplyProfile(const CSUtility::Settings& 
 		return a_profile.advanced ? ClampMultiplier(a_multiplier) : 1.0f;
 	};
 
+	out.skyBrightness = ClampMultiplier(out.skyBrightness * advancedMult(a_profile.skyBrightnessMult));
 	out.directionalLightMult = ClampMultiplier(out.directionalLightMult * masterScale(0.70f) * advancedMult(a_profile.directionalLightMult));
 
 	const float pointLightScale = masterScale(0.75f) * advancedMult(a_profile.pointLightMult);
@@ -1997,8 +2187,6 @@ LinearLighting::Settings AdaptiveBrightness::LerpSettings(const LinearLighting::
 	out.emitColorMult = lerp(a_a.emitColorMult, a_b.emitColorMult);
 	out.glowmapMult = lerp(a_a.glowmapMult, a_b.glowmapMult);
 	out.effectLightingMult = lerp(a_a.effectLightingMult, a_b.effectLightingMult);
-	out.whiteDiffuseMult = lerp(a_a.whiteDiffuseMult, a_b.whiteDiffuseMult);
-	out.animalWhiteDiffuseMult = lerp(a_a.animalWhiteDiffuseMult, a_b.animalWhiteDiffuseMult);
 	out.membraneEffectMult = lerp(a_a.membraneEffectMult, a_b.membraneEffectMult);
 	out.bloodEffectMult = lerp(a_a.bloodEffectMult, a_b.bloodEffectMult);
 	out.projectedEffectMult = lerp(a_a.projectedEffectMult, a_b.projectedEffectMult);
@@ -2008,7 +2196,7 @@ LinearLighting::Settings AdaptiveBrightness::LerpSettings(const LinearLighting::
 	return out;
 }
 
-CSUtility::Settings AdaptiveBrightness::LerpSettings(const CSUtility::Settings& a_a, const CSUtility::Settings& a_b, float a_t) const
+SharedLightingSettings AdaptiveBrightness::LerpSettings(const SharedLightingSettings& a_a, const SharedLightingSettings& a_b, float a_t) const
 {
 	auto out = a_a;
 	const float t = std::clamp(SafeFinite(a_t, 0.0f), 0.0f, 1.0f);
@@ -2028,36 +2216,83 @@ CSUtility::Settings AdaptiveBrightness::LerpSettings(const CSUtility::Settings& 
 	return out;
 }
 
-LinearLighting::Settings AdaptiveBrightness::GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const
+AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffectiveLinearLightingSettings(
+	const LinearLighting::Settings& a_linearLightingSettings,
+	bool a_linearLightingEnabled) const
 {
-	auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
+	const auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
+	auto effectiveSettings = baseSettings;
 
-	if (!IsRuntimeEnabled())
-		return baseSettings;
+	if (IsRuntimeEnabled()) {
+		const auto activeProfiles = GetActiveProfileBlend();
+		if (activeProfiles.from == activeProfiles.to) {
+			effectiveSettings = ApplyProfile(baseSettings, *activeProfiles.from);
+		} else {
+			const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
+			const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
+			effectiveSettings = LerpSettings(fromSettings, toSettings, activeProfiles.factor);
+		}
+	}
 
-	const auto activeProfiles = GetActiveProfileBlend();
-	if (activeProfiles.from == activeProfiles.to)
-		return ApplyProfile(baseSettings, *activeProfiles.from);
-
-	const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
-	const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
-	return LerpSettings(fromSettings, toSettings, activeProfiles.factor);
+	return {
+		.settings = effectiveSettings,
+		.hasColorAdjustments = HasAdaptiveBrightnessColorAdjustments(baseSettings, effectiveSettings)
+	};
 }
 
-CSUtility::Settings AdaptiveBrightness::GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings, bool a_csUtilityEnabled) const
+SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() const
 {
-	auto baseSettings = a_csUtilityEnabled ? a_csUtilitySettings : CSUtility::GetNeutralSettings();
+	auto baseSettings = loaded && settings.rendererControlsEnabled ? settings.lighting : SharedLightingSettings{};
+	SanitizeSharedLightingSettings(baseSettings);
+	auto effectiveSettings = baseSettings;
+
+	if (IsRuntimeEnabled()) {
+		const auto activeProfiles = GetActiveProfileBlend();
+		if (activeProfiles.from == activeProfiles.to) {
+			effectiveSettings = ApplyProfile(baseSettings, *activeProfiles.from);
+		} else {
+			const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
+			const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
+			effectiveSettings = LerpSettings(fromSettings, toSettings, activeProfiles.factor);
+		}
+	}
+
+	return effectiveSettings;
+}
+
+Bloom::Profile AdaptiveBrightness::ResolveBloomProfile(const ProfileSettings& a_profile) const
+{
+	auto profile = a_profile.bloomOverride ? a_profile.bloom : Bloom::GetSelectedProfile(settings.bloomEnhancement);
+	Bloom::SanitizeProfile(profile);
+	return profile;
+}
+
+Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
+{
+	const bool rendererControlsActive = loaded && settings.rendererControlsEnabled;
+	auto globalProfile = Bloom::GetSelectedProfile(settings.bloomEnhancement);
+	Bloom::SanitizeProfile(globalProfile);
+	const float globalBlendWeight = rendererControlsActive && settings.bloomEnhancement.Enabled != 0 ? 1.0f : 0.0f;
 
 	if (!IsRuntimeEnabled())
-		return baseSettings;
+		return Bloom::GetCommonBufferData(globalProfile, globalBlendWeight);
 
 	const auto activeProfiles = GetActiveProfileBlend();
-	if (activeProfiles.from == activeProfiles.to)
-		return ApplyProfile(baseSettings, *activeProfiles.from);
+	const auto getBlendWeight = [&](const ProfileSettings& a_profile) {
+		if (!rendererControlsActive)
+			return 0.0f;
+		return a_profile.bloomOverride ? (a_profile.bloomEnabled ? 1.0f : 0.0f) : globalBlendWeight;
+	};
 
-	const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
-	const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
-	return LerpSettings(fromSettings, toSettings, activeProfiles.factor);
+	const auto fromProfile = ResolveBloomProfile(*activeProfiles.from);
+	const float fromBlendWeight = getBlendWeight(*activeProfiles.from);
+	if (activeProfiles.from == activeProfiles.to)
+		return Bloom::GetCommonBufferData(fromProfile, fromBlendWeight);
+
+	const auto toProfile = ResolveBloomProfile(*activeProfiles.to);
+	const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
+	const auto effectiveProfile = Bloom::LerpProfiles(fromProfile, toProfile, t);
+	return Bloom::GetCommonBufferData(effectiveProfile, std::lerp(fromBlendWeight, getBlendWeight(*activeProfiles.to), t));
 }
 
 AdaptiveBrightness::ActiveProfileBlend AdaptiveBrightness::GetActiveProfileBlend() const
@@ -2082,7 +2317,7 @@ AdaptiveBrightness::ActiveProfileBlend AdaptiveBrightness::GetActiveProfileBlend
 
 std::string AdaptiveBrightness::GetContextLabel() const
 {
-	const std::string displayName = T(AdaptiveBrightness::kFeatureDisplayNameKey, AdaptiveBrightness::kFeatureName.data());
+	constexpr auto displayName = kFeatureDisplayName;
 
 	if (!settings.enabled)
 		return std::format("{} is disabled.", displayName);
@@ -2102,4 +2337,100 @@ std::string AdaptiveBrightness::GetContextLabel() const
 	const float nightFactor = GetExteriorNightFactor();
 	const auto dominantProfile = GetCurrentProfileForUI();
 	return std::format("Current profile: {} ({:.0f}% night blend)", GetProfileName(dominantProfile), nightFactor * 100.0f);
+}
+
+AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
+{
+	const auto effectiveSettings = GetEffectiveSharedLightingSettings();
+
+	PerFrameData data{};
+	data.skyBrightness = effectiveSettings.skyBrightness;
+	data.directionalLightMult = effectiveSettings.directionalLightMult;
+	data.pointLightMult = effectiveSettings.pointLightMult;
+	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
+	data.spotlightMult = effectiveSettings.spotlightMult;
+	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;
+	data.omnidirectionalBulbMult = effectiveSettings.omnidirectionalBulbMult;
+	data.linearOmnidirectionalBulbMult = effectiveSettings.linearOmnidirectionalBulbMult;
+	return data;
+}
+
+bool AdaptiveBrightness::NeedsVanillaPointLightData() const
+{
+	if (!loaded)
+		return false;
+
+	if (globals::features::linearLighting.IsRuntimeEnabled())
+		return true;
+
+	return settings.rendererControlsEnabled &&
+	       UsesClassifiedPointLightMultipliers(settings.lighting);
+}
+
+void AdaptiveBrightness::UpdateVanillaPointLightData(
+	RE::BSRenderPass* a_pass,
+	uint32_t a_lightCount,
+	uint32_t a_bufferRegister)
+{
+	if (!vanillaPointLightCB || !globals::d3d::context || !a_pass || !a_pass->sceneLights)
+		return;
+
+	VanillaPointLightData data{};
+	const uint32_t lightCount = std::min(a_lightCount, kMaxVanillaPointLights);
+	for (uint32_t lightIndex = 0; lightIndex < lightCount; ++lightIndex) {
+		const uint32_t sceneLightIndex = lightIndex + kFirstPointLightSceneIndex;
+		if (sceneLightIndex >= a_pass->numLights)
+			break;
+
+		auto* bsLight = a_pass->sceneLights[sceneLightIndex];
+		if (!bsLight)
+			continue;
+
+		auto* niLight = bsLight->light.get();
+		auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
+		if (!globals::features::inverseSquareLighting.IsEnabled())
+			pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
+		data.pointLightFlags[lightIndex] = pointLightFlags;
+	}
+
+	vanillaPointLightCB->Update(data);
+
+	ID3D11Buffer* buffer = vanillaPointLightCB->CB();
+	globals::d3d::context->PSSetConstantBuffers(a_bufferRegister, 1, &buffer);
+}
+
+struct AdaptiveBrightness::Hooks
+{
+	struct BSWaterShader_SetupGeometry
+	{
+		static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
+		{
+			func(a_shader, a_pass, a_renderFlags);
+
+			auto& adaptiveBalance = globals::features::adaptiveBrightness;
+			if (!adaptiveBalance.NeedsVanillaPointLightData())
+				return;
+
+			const uint32_t lightCount =
+				a_pass && a_pass->numLights > 0 ?
+					a_pass->numLights - kFirstPointLightSceneIndex :
+					0;
+			adaptiveBalance.UpdateVanillaPointLightData(
+				a_pass,
+				lightCount,
+				kWaterPointLightCBRegister);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	static void Install()
+	{
+		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
+		logger::info("[AdaptiveBalance] Installed shared-light hooks");
+	}
+};
+
+void AdaptiveBrightness::PostPostLoad()
+{
+	Hooks::Install();
 }

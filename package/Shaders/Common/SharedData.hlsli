@@ -222,7 +222,7 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
-	struct CSUtilitySettings
+	struct AdaptiveBalanceSettings
 	{
 		float skyBrightness;
 		float directionalLightMult;
@@ -263,7 +263,7 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint enableAdaptiveBrightness;
+		uint enableAdaptiveBrightnessColorAdjustments;
 		uint4 pad0;
 	};
 
@@ -364,6 +364,21 @@ namespace SharedData
 		float4 pad;
 	};
 
+	struct BloomSettings
+	{
+		uint Enabled;
+		float EnhancementIntensity;
+		float HaloRadius;
+		float HaloSpread;
+
+		float BloomSaturation;
+		float3 BloomTint;
+		float CompressionThreshold;
+		float CompressionCeiling;
+		float BlendWeight;
+		float pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -379,7 +394,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
-		CSUtilitySettings csUtilitySettings;
+		AdaptiveBalanceSettings adaptiveBalanceSettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
@@ -387,6 +402,7 @@ namespace SharedData
 		SkinData skinData;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		UnifiedWaterSettings unifiedWaterSettings;
+		BloomSettings bloomSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

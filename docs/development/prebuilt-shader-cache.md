@@ -117,6 +117,13 @@ manifest and feature metadata, checks every blob for a DXBC signature, verifies
 that only Water bytecode differs between profiles, creates FOMOD metadata,
 validates the archive, and only then publishes output.
 
+The captured validation inventory describes one clean runtime profile. The
+release builder supplements it with the known SE-only permutations in
+`CROSS_MODLIST_SHADER_VARIANTS`; this keeps the distributed cache useful across
+different modlists without mixing VR-only descriptors into the SE package.
+Runtime requests that are absent even from this union remain safe: matching
+entries load from disk and only the unseen permutation compiles from source.
+
 Expected output:
 
 ```text
@@ -217,6 +224,8 @@ exact versioned marker generated and installed beside the active
 `CommunityShaders.dll` by the matching core/AIO package. A missing or different
 CSX release blocks installation before the cache files are selected.
 
+### Mod Organizer 2
+
 MO2's FOMOD Installer disables dependencies on non-plugin files by default. In
 MO2's main window, open **Tools > Settings** (or click the top-toolbar
 wrench-and-screwdriver Settings button), open the **Plugins** tab, select
@@ -226,21 +235,35 @@ right-hand settings table and change its value from `false` to `true`. Click
 the cache installer. Otherwise MO2 reports every DLL or marker dependency as
 missing even when the file is active.
 
-The generated FOMOD repeats these directions on a required first page. A second
-page performs the compatibility checks. Both cache options are disabled by
-default. When the exact versioned CSX marker is active, the standard cache is
-required if `SKSE\Plugins\HorizonFix.dll` is missing or inactive; the Horizon
-Fix cache is required when that DLL is active. Horizon Fix support is included
-in every packaged cache FOMOD without a separate build option.
+![MO2 Fomod Installer use_any_file setting](../images/mo2-fomod-use-any-file.png)
+
+The FOMOD format cannot resize MO2's installer window or open its internal
+Settings page. The generated installer therefore presents the setup as two
+short, required pages which fit MO2's description pane, followed by a separate
+Horizon Fix notice. Blank lines keep each action visually distinct. The
+`use_any_file` page also displays a screenshot of the exact **Fomod Installer**
+selection and setting, and explicitly tells users to click the image for MO2's
+enlarged view. The installer's **Website** link opens this section for the
+complete explanation.
+
+The final page recommends the matching cache when MO2 can evaluate the exact
+versioned CSX marker and `SKSE\Plugins\HorizonFix.dll`. Both choices remain
+selectable so a failed MO2 dependency check cannot silently force the wrong
+cache. The Horizon Fix cache is listed first and is the fallback default; choose
+the standard cache manually only when Horizon Fix is missing or inactive.
+Horizon Fix support is included in every packaged cache FOMOD without a separate
+build option.
 
 The installer can inspect the active virtual files only while it is running. If
 Horizon Fix is enabled or disabled later, reinstall the shader-cache FOMOD so it
 installs the matching Water bytecode and metadata. This warning appears on the
 required setup page and in both profile descriptions. Moving the checks out of
 the module-level prerequisites keeps the instructions visible when MO2 is
-misconfigured or the wrong core is installed. Other installers should evaluate
-the standard `fileDependency` directly. The runtime independently rejects a
-cache whose plugin identity or feature state does not match the loaded DLL.
+misconfigured or the wrong core is installed. If `use_any_file` is disabled,
+automatic detection is unavailable and the user must verify the selectable
+profile manually. Other installers should evaluate the standard
+`fileDependency` directly. The runtime independently rejects a cache whose
+plugin identity or feature state does not match the loaded DLL.
 
 Manually setting the `ShaderCache` folder itself as the data directory bypasses
 the installer gate, flattens the layout, and is invalid.

@@ -926,19 +926,79 @@ def validate_fomod_installer(
     fomod_dir: Path,
     compatibility_tag: str,
 ) -> None:
-    """Verify the installer blocks unless the exact active CSX core is present."""
+    """Verify the installer explains and enforces its exact CSX requirement."""
     config_path = fomod_dir / FOMOD_CONFIG_FILE_NAME
+    info_path = fomod_dir / FOMOD_INFO_FILE_NAME
     try:
         root = ET.parse(config_path).getroot()
+        info_root = ET.parse(info_path).getroot()
     except (ET.ParseError, OSError) as exc:
-        raise SystemExit(f"invalid cache FOMOD config {config_path}: {exc}") from exc
+        raise SystemExit(f"invalid cache FOMOD metadata in {fomod_dir}: {exc}") from exc
+
+    if root.find("./moduleDependencies") is not None:
+        raise SystemExit(
+            "cache FOMOD must expose compatibility failures inside its visible "
+            "install step"
+        )
+
+    plugins = root.findall(
+        "./installSteps/installStep/optionalFileGroups/group/plugins/plugin"
+    )
+    warning_plugin = next(
+        (
+            plugin
+            for plugin in plugins
+            if plugin.find("./conditionFlags/flag[@name='CSXMO2SetupNotice']")
+            is not None
+        ),
+        None,
+    )
+    cache_plugin = next(
+        (plugin for plugin in plugins if plugin.find("./files/folder") is not None),
+        None,
+    )
+    if warning_plugin is None or cache_plugin is None:
+        raise SystemExit(
+            "cache FOMOD is missing its visible MO2 warning or compatibility step"
+        )
+
+    warning_type = warning_plugin.find("./typeDescriptor/type")
+    if warning_type is None or warning_type.get("name") != "Required":
+        raise SystemExit("cache FOMOD must present the MO2 setup warning as required")
+
+    descriptions = "\n".join(
+        filter(
+            None,
+            (
+                info_root.findtext("./Description"),
+                warning_plugin.findtext("./description"),
+                cache_plugin.findtext("./description"),
+            ),
+        )
+    )
+    required_guidance = (
+        "Settings",
+        "Plugins",
+        "Fomod Installer",
+        "use_any_file",
+        "true",
+    )
+    missing_guidance = [text for text in required_guidance if text not in descriptions]
+    if missing_guidance:
+        raise SystemExit(
+            "cache FOMOD is missing MO2 setup guidance: "
+            + ", ".join(missing_guidance)
+        )
 
     dependencies = {
         (
             dependency.get("file", "").replace("\\", "/"),
             dependency.get("state", ""),
         )
-        for dependency in root.findall("./moduleDependencies/fileDependency")
+        for dependency in cache_plugin.findall(
+            "./typeDescriptor/dependencyType/patterns/pattern/"
+            "dependencies/fileDependency"
+        )
     }
     expected_dependencies = {
         (
@@ -956,7 +1016,27 @@ def validate_fomod_installer(
             f"cache FOMOD is missing required CSX dependencies: {formatted}"
         )
 
-    install_folder = root.find("./requiredInstallFiles/folder")
+    dependency_type = cache_plugin.find("./typeDescriptor/dependencyType")
+    default_type = (
+        dependency_type.find("./defaultType") if dependency_type is not None else None
+    )
+    matched_type = (
+        dependency_type.find("./patterns/pattern/type")
+        if dependency_type is not None
+        else None
+    )
+    if (
+        default_type is None
+        or default_type.get("name") != "NotUsable"
+        or matched_type is None
+        or matched_type.get("name") != "Required"
+    ):
+        raise SystemExit(
+            "cache FOMOD must disable installation by default and require it only "
+            "for the matching active CSX marker"
+        )
+
+    install_folder = cache_plugin.find("./files/folder")
     if install_folder is None or (
         install_folder.get("source") != CACHE_DIRECTORY
         or install_folder.get("destination") != CACHE_DIRECTORY
@@ -983,20 +1063,91 @@ def write_fomod_installer(
     display_label = safe_label(label)
     module_name = f"CSX {runtime} Shader Cache - {compatibility_tag}"
     description = (
-        f"Requires the active CommunityShaders.dll from {compatibility_tag}, "
-        "then installs the matching precompiled shader cache at "
-        "Data\\ShaderCache."
+        "MOD ORGANIZER 2 USERS: before installing, open Settings > Plugins, "
+        "select Fomod Installer in the left-hand plugin list, set use_any_file "
+        f"to true in the right-hand settings table, and enable the {compatibility_tag} "
+        "core/AIO. The installer then verifies the exact active core marker and "
+        "installs its matching precompiled cache at Data\\ShaderCache."
+    )
+    option_description = (
+        "MOD ORGANIZER 2 SETUP REQUIRED:\n\n"
+        "1. If this option is disabled, close this installer.\n"
+        "2. In the main MO2 window, open Tools > Settings. You can also click "
+        "the wrench-and-screwdriver Settings button in the top toolbar.\n"
+        "3. Open the Plugins tab in the Settings window.\n"
+        "4. In the LEFT-HAND plugin list, scroll to and select Fomod Installer. "
+        "This is an installer plugin, not an option on the General tab.\n"
+        "5. In the RIGHT-HAND settings table, find use_any_file. Double-click "
+        "its value and change false to true.\n"
+        "6. Click OK. Ensure the matching core/AIO is enabled in MO2's left "
+        "pane, then reopen this cache installer. Required core: "
+        f"{compatibility_tag}.\n\n"
+        "WHY THIS IS REQUIRED: MO2 otherwise treats the version marker as "
+        "missing even when the core mod is active. This option stays disabled "
+        "until MO2 detects SKSE\\Plugins\\CommunityShaders\\"
+        f"{compatibility_tag}.marker "
+        "from an active mod."
+    )
+    compatibility_description = (
+        f"Installs the precompiled shader cache only when {compatibility_tag}.marker "
+        "is visible from an active core/AIO mod. If this option is disabled, "
+        "return to the previous page, apply the MO2 setting exactly as shown, "
+        "verify that the matching core/AIO is enabled, and reopen the installer."
     )
     module_config = f"""<?xml version="1.0" encoding="UTF-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
   <moduleName>{module_name}</moduleName>
-  <moduleDependencies operator="And">
-    <fileDependency file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker" state="Active" />
-  </moduleDependencies>
-  <requiredInstallFiles>
-    <folder source="{CACHE_DIRECTORY}" destination="{CACHE_DIRECTORY}" priority="0" />
-  </requiredInstallFiles>
+  <installSteps order="Explicit">
+    <installStep name="MO2 requirement: enable non-plugin file checks">
+      <optionalFileGroups order="Explicit">
+        <group name="Required setup instructions" type="SelectAll">
+          <plugins order="Explicit">
+            <plugin name="READ: Configure Fomod Installer before continuing">
+              <description>{option_description}</description>
+              <conditionFlags>
+                <flag name="CSXMO2SetupNotice">shown</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Required" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+    <installStep name="Verify the active CSX core">
+      <optionalFileGroups order="Explicit">
+        <group name="Exact-version compatibility check" type="SelectExactlyOne">
+          <plugins order="Explicit">
+            <plugin name="Install cache for {compatibility_tag}">
+              <description>{compatibility_description}</description>
+              <files>
+                <folder source="{CACHE_DIRECTORY}"
+                        destination="{CACHE_DIRECTORY}"
+                        priority="0" />
+              </files>
+              <typeDescriptor>
+                <dependencyType>
+                  <defaultType name="NotUsable" />
+                  <patterns>
+                    <pattern>
+                      <dependencies operator="And">
+                        <fileDependency
+                          file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker"
+                          state="Active" />
+                      </dependencies>
+                      <type name="Required" />
+                    </pattern>
+                  </patterns>
+                </dependencyType>
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+  </installSteps>
 </config>
 """
     info = f"""<?xml version="1.0" encoding="UTF-8"?>

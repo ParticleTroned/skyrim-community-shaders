@@ -198,9 +198,20 @@ exact versioned marker generated and installed beside the active
 `CommunityShaders.dll` by the matching core/AIO package. A missing or different
 CSX release blocks installation before the cache files are selected.
 
-MO2's FOMOD Installer disables dependencies on non-plugin files by default. Set
-its `use_any_file` option to `true`; otherwise MO2 reports every DLL or marker
-dependency as missing even when the file is active. Other installers should
+MO2's FOMOD Installer disables dependencies on non-plugin files by default. In
+MO2's main window, open **Tools > Settings** (or click the top-toolbar
+wrench-and-screwdriver Settings button), open the **Plugins** tab, select
+**Fomod Installer** in the left-hand plugin list, then find `use_any_file` in the
+right-hand settings table and change its value from `false` to `true`. Click
+**OK**, ensure the matching core/AIO mod is active in MO2's left pane, and reopen
+the cache installer. Otherwise MO2 reports every DLL or marker dependency as
+missing even when the file is active.
+
+The generated FOMOD repeats these directions on a required first page. A second
+page performs the compatibility check: its cache option is disabled by default
+and becomes required only when the exact versioned marker is active. Moving the
+check out of the module-level prerequisites keeps the instructions visible when
+MO2 is misconfigured or the wrong core is installed. Other installers should
 evaluate the standard `fileDependency` directly. The runtime independently
 rejects a cache whose `Info.ini` plugin identity does not match the loaded DLL.
 

@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "campaignId": "20260818-amd-svr-ovr-null-style-range-p02",
+  "status": "completed-with-rejected-runtime-experiment",
+  "hardwareRuntimeLane": "AMD native OpenVR through SteamVR null HMD",
+  "basePreset": "Unified Balanced / Natural Control",
+  "build": {
+    "configuration": "VR Release; Info logging; Release+DevBench bridge",
+    "sourceCommit": "75acca3ef",
+    "dllSha256": "B04104CC57B39C72F24503E783EB81A1ED4E30F8667448AF84A21E82237F2CE5"
+  },
+  "constraints": {
+    "restartBoundChanges": 0,
+    "shaderRecompilingControls": 0,
+    "maximumCurves": 4,
+    "framesPerPhase": 6,
+    "frameIntervalCompositorCycles": 24,
+    "saveSeparateEyes": true,
+    "saveCombined": false,
+    "timingPasses": 0,
+    "stopAfterThisBatchForReview": true
+  },
+  "anchor": {
+    "id": "interior-abandoned-prison-fog-night",
+    "coc": "AbandonedPrison01",
+    "cellForm": "0x00021594",
+    "gameHour": 0.5,
+    "playerPosition": [259.5223, -2049.6094, 1793.4269],
+    "cameraPosition": [259.5223, -2049.6094, 1826.5520],
+    "cameraYaw": 0.7853870988,
+    "cameraPitch": 0.0,
+    "freeCamera": false,
+    "coverage": ["dark-interior", "dense-interior-fog", "warm-local-light", "deep-shadow"]
+  },
+  "curves": [
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodrayShaftIntensity", "values": [0.0, 0.5, 2.0, 3.0] },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodrayOpacity", "values": [0.0, 0.5, 1.5, 2.0] },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodraySaturation", "values": [0.0, 0.5, 2.0, 4.0] },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "CustomColorContribution", "values": [0.0, 0.25, 0.75, 1.0] }
+  ],
+  "excluded": [
+    "ImageBasedLighting style controls: runtime inactive in this interior cell.",
+    "DevBench free-camera drive: excluded after a reproducible invalid camera-state write during anchor probing."
+  ],
+  "acceptedRuns": [
+    {
+      "runId": "20260818-amd-null-prison-fog-vl-shaft-intensity-r02",
+      "parameter": "GodrayShaftIntensity",
+      "maximumMeanDeltaE76": 0.433,
+      "maximumJndPixelPercent": 5.07
+    },
+    {
+      "runId": "20260818-amd-null-prison-fog-vl-opacity-r02",
+      "parameter": "GodrayOpacity",
+      "maximumMeanDeltaE76": 0.371,
+      "maximumJndPixelPercent": 3.66
+    },
+    {
+      "runId": "20260818-amd-null-prison-fog-vl-saturation-r02",
+      "parameter": "GodraySaturation",
+      "maximumMeanDeltaE76": 0.363,
+      "maximumJndPixelPercent": 2.86
+    },
+    {
+      "runId": "20260818-amd-null-prison-fog-vl-custom-colour-r02",
+      "parameter": "CustomColorContribution",
+      "maximumMeanDeltaE76": 0.475,
+      "maximumJndPixelPercent": 6.23
+    },
+    {
+      "runId": "20260818-amd-null-dragonsreach-rays-vl-shaft-intensity-r01",
+      "parameter": "GodrayShaftIntensity",
+      "maximumMeanDeltaE76": 0.277,
+      "maximumJndPixelPercent": 1.13
+    },
+    {
+      "runId": "20260818-amd-null-dragonsreach-rays-vl-custom-colour-r01",
+      "parameter": "CustomColorContribution",
+      "maximumMeanDeltaE76": 0.290,
+      "maximumJndPixelPercent": 1.02
+    }
+  ],
+  "findings": [
+    "The Abandoned Prison fog is a useful indoor-fog and white-flash negative-control anchor, but it is not an active Community Shaders Volumetric Lighting scene.",
+    "Dragonsreach also failed the interior-with-sun runtime gate in this configuration. Its apparent overhead ray field must not be used to infer Community Shaders Volumetric Lighting parameter response.",
+    "The style-control API previously reported VolumetricLighting runtimeActive from the requested interior/exterior setting. The settled head instead reports the actual location-gated runtime state.",
+    "The retained curves are valid image measurements, but they are negative-control evidence rather than calibration curves for Volumetric Lighting presets."
+  ],
+  "archive": {
+    "primary": "L:\\CSX Preset Automation\\Sessions\\2026-08-18\\CSX Baselines\\preset-automation-style-range-p02",
+    "rejectedExperiment": "L:\\CSX Preset Automation\\Sessions\\2026-08-18\\CSX Baselines\\preset-automation-style-live-fix-proof",
+    "continuousDumpSource": "C:\\Diagnostics\\Continuous\\CrashDumps"
+  },
+  "prePassIncident": {
+    "time": "2026-08-18T10:03:48+01:00",
+    "trigger": "DevBench camera freecam/drive anchor probe; no CSX style mutation was active.",
+    "exception": "EXCEPTION_ACCESS_VIOLATION writing address 0x34 from SkyrimVR.exe+08768CF",
+    "probableStack": ["SkyrimVR.exe+08768CF", "devbench.dll+009D524", "sksevr_1_4_15.dll+0022153"],
+    "crashLogger": "C:\\Users\\Mark\\Documents\\My Games\\Skyrim VR\\SKSE\\crash-2026-08-18-10-03-48.log",
+    "continuousDumpDirectory": "C:\\Diagnostics\\Continuous\\CrashDumps",
+    "crashLoggerSha256": "BC0F98AFE6CF1239AB5A9BB7B2D0B74E6A89BBE3B7EC07A664A272A16BB55FFD",
+    "continuousDumpObservation": "No matching SkyrimVR dump was present; the nearest new files were ModOrganizer/vrdashboard dumps at 10:05 during cleanup."
+  },
+  "rejectedRuntimeExperiment": {
+    "sourceCommit": "515de7cfb",
+    "dllSha256": "42074AD796EDF2342D1CF1536925059B921FE98445A36142094FB25DA2CB5EC3",
+    "reason": "The per-frame local Volumetric Lighting descriptor experiment was not visually validated and crashed the exterior transition render path. It was reverted by 6f382700e and is not present in the settled tree.",
+    "negativeControlRun": {
+      "runId": "20260818-amd-null-dragonsreach-rays-vl-shaft-livefix-r01",
+      "maximumMeanDeltaE76": 0.306,
+      "maximumJndPixelPercent": 1.51
+    },
+    "crash": {
+      "time": "2026-08-18T10:35:06+01:00",
+      "trigger": "Transition from WhiterunDragonsreach to GuardianStones before the exterior validation curve.",
+      "exception": "EXCEPTION_ACCESS_VIOLATION reading invalid memory in SkyrimVR.exe+0DC0330",
+      "probableStack": [
+        "SkyrimVR.exe+0DC0330",
+        "SkyrimVR.exe+131C5A8",
+        "SkyrimVR.exe+131C1DC",
+        "SkyrimVR.exe+131B337",
+        "CommunityShaders.dll+05BB47F VolumetricLighting::RenderDepth::thunk"
+      ],
+      "crashLogger": "C:\\Users\\Mark\\Documents\\My Games\\Skyrim VR\\SKSE\\crash-2026-08-18-10-35-06.log",
+      "crashLoggerSha256": "B8BA4B0EC44AB49109DEF350126D7F70C9D20127B9247F615113EEDBF55A1D81",
+      "continuousDumpObservation": "No new dump appeared in C:\\Diagnostics\\Continuous\\CrashDumps for this crash."
+    }
+  },
+  "completedAt": "2026-08-18T10:36:14+01:00"
+}

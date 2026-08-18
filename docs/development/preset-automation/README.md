@@ -47,6 +47,7 @@ Hard correctness and stability constraints are applied first. Surviving candidat
 | Balanced style prototypes | Natural Reference, Mythic High Fantasy, and Bleak Dark Fantasy as reproducible overlays on one vendor-unified Balanced budget | [`style-prototypes-20260817.md`](./style-prototypes-20260817.md) |
 | Experimental style range probes | Byte-identical Natural control plus intentionally unplayable Radiant Mythic and Abyssal Bleak extremes on the same Balanced budget | [`style-range-probes-20260818.md`](./style-range-probes-20260818.md) |
 | First bounded style response pass | Seven reversible IBL/volumetric scalar curves, accepted run identities, raw-archive mapping, and provisional drift-corrected AMD/null-HMD results | [`style-range-pass-20260818.json`](./style-range-pass-20260818.json), [`results`](./style-range-pass-20260818-results.json) |
+| Second bounded style response pass | Interior negative controls, colour-aware response metrics, crash provenance, and the rejected/reverted Volumetric renderer experiment | [`style-range-pass-20260818-p02.json`](./style-range-pass-20260818-p02.json) |
 | Decision log | Append-only rationale connecting evidence to adopted or rejected choices | [`decision-log.md`](./decision-log.md) |
 
 The canonical schemas are:

@@ -537,6 +537,12 @@ bool VolumetricLighting::IsPerformanceCostMeasurementEnabled() const
 	return inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled;
 }
 
+bool VolumetricLighting::IsRuntimeEnabled() const
+{
+	return loaded && initialised &&
+		LocationContext::AllowsEnabledLocations(settings.InteriorEnabled && inInteriorWithSun, settings.ExteriorEnabled, inInterior);
+}
+
 void VolumetricLighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	const Settings defaults{};

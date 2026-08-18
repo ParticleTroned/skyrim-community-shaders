@@ -893,7 +893,7 @@ namespace
 		const auto effective = available ? BuildEffectiveStyleParameters(a_featureName) : json::object();
 		const bool runtimeActive = available &&
 			(a_featureName == "ImageBasedLighting" ? globals::features::ibl.IsRuntimeEnabled() :
-			                                           globals::features::volumetricLighting.IsPerformanceCostMeasurementEnabled());
+			                                           globals::features::volumetricLighting.IsRuntimeEnabled());
 		return {
 			{ "feature", a_featureName },
 			{ "displayName", feature ? feature->GetDisplayName() : a_featureName },

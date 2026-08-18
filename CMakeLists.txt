@@ -131,6 +131,11 @@ option(
     OFF
 )
 option(
+    SHADER_VALIDATION_INCLUDE_NON_SHIPPED_FEATURES
+    "Stage non-shipped feature shaders for the validation-only prepare_shaders target."
+    OFF
+)
+option(
     AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
     "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
     OFF
@@ -464,6 +469,7 @@ file(
     CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/features/*
 )
+set(_ALL_FEATURE_PATHS ${FEATURE_PATHS})
 
 set(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE
     ${AIO_NON_SHIPPED_FEATURE_PACKAGES}
@@ -834,8 +840,23 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_all_shader_sources ${_package_shaders})
     set(_shader_copy_cmds)
 
+    set(_shader_feature_paths ${FEATURE_PATHS})
+    if(SHADER_VALIDATION_INCLUDE_NON_SHIPPED_FEATURES)
+        foreach(_fpath IN LISTS _ALL_FEATURE_PATHS)
+            get_filename_component(_feature_dir_name "${_fpath}" NAME)
+            if(_feature_dir_name IN_LIST AIO_NON_SHIPPED_FEATURE_PACKAGES)
+                list(APPEND _shader_feature_paths "${_fpath}")
+                message(
+                    STATUS
+                    "Staging non-shipped feature shaders for validation: ${_feature_dir_name}"
+                )
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES _shader_feature_paths)
+    endif()
+
     set(_feature_shader_paths "${FFX_RUNTIME_SHADER_ROOT}")
-    foreach(_fpath IN LISTS FEATURE_PATHS)
+    foreach(_fpath IN LISTS _shader_feature_paths)
         if(EXISTS "${_fpath}/Shaders")
             list(APPEND _feature_shader_paths "${_fpath}/Shaders")
         endif()
@@ -872,7 +893,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     append_copy_if_different(_shader_copy_cmds FFX_RUNTIME_FILES "${FFX_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
 
     # feature shader folders
-    foreach(_fpath IN LISTS FEATURE_PATHS)
+    foreach(_fpath IN LISTS _shader_feature_paths)
         if(EXISTS "${_fpath}/Shaders")
             file(
                 GLOB_RECURSE _feat_shaders

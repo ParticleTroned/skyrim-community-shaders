@@ -351,7 +351,7 @@ For both runtimes:
 & $cachePython tools/build-shader-cache.py `
     --runtime both `
     --plugin-version-se "CSX 3.15-SE" `
-    --plugin-version-vr "CSX 3.18-VR" `
+    --plugin-version-vr "CSX 3.19-VR" `
     --package `
     --package-label "v1.7.0"
 ```

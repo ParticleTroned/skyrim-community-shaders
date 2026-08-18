@@ -540,17 +540,21 @@ float3 GetEffectAmbientLighting(float skylightingDiffuse)
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 #		if defined(SKYLIGHTING)
-		return ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ShadowSampling::ImageBasedLightingNormal, skylightingDiffuse);
+		ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ShadowSampling::ImageBasedLightingNormal, skylightingDiffuse);
 #		else
-		return ImageBasedLighting::GetDiffuseIBL(ambientColor, ShadowSampling::ImageBasedLightingNormal);
+		ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, ShadowSampling::ImageBasedLightingNormal);
 #		endif
-	}
+	} else {
 #	endif
 
 #	if defined(SKYLIGHTING)
 	ambientColor = Color::IrradianceToLinear(ambientColor);
 	ambientColor *= skylightingDiffuse;
 	ambientColor = Color::IrradianceToGamma(ambientColor);
+#	endif
+
+#	if defined(IBL)
+	}
 #	endif
 
 	return ambientColor;

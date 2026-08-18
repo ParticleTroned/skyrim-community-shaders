@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9._-]+$')][string]$RunId,
     [ValidateRange(3, 120)][int]$Frames = 12,
     [ValidateRange(1, 120)][int]$FrameInterval = 10,
+    [ValidateRange(0, 2)][int]$MaxIncompleteStereoDrops = 0,
     [ValidateRange(1, 60)][int]$PreviewFramesPerSecond = 30,
     [ValidateSet('png', 'bmp')][string]$Format = 'png',
     [switch]$SaveCombined,
@@ -114,8 +115,17 @@ function Capture-Phase {
         $status = (Invoke-DevBenchTool -Tool 'communityshaders.capture' -Payload @{ action = 'status' }).status
     } while (($status.state -in @('capturing', 'draining') -or ($previewRequired -and -not $status.previewVideoFinished)) -and (Get-Date) -lt $deadline)
     if ($status.state -ne 'complete' -or $status.framesSaved -ne $Frames -or $status.framesFailed -ne 0 -or
-        $status.backpressureDrops -ne 0 -or $status.incompleteStereoDrops -ne 0 -or ($previewRequired -and -not $status.previewVideoSucceeded)) {
+        $status.backpressureDrops -ne 0 -or $status.incompleteStereoDrops -gt $MaxIncompleteStereoDrops -or
+        ($previewRequired -and -not $status.previewVideoSucceeded)) {
         throw "Capture $Name failed: state=$($status.state), saved=$($status.framesSaved), failed=$($status.framesFailed), backpressure=$($status.backpressureDrops), incomplete=$($status.incompleteStereoDrops), preview=$($status.previewVideoSucceeded)"
+    }
+    $captureManifest = Get-Content -LiteralPath $status.manifestPath -Raw | ConvertFrom-Json
+    $completeFrames = @($captureManifest.frames | Where-Object {
+        $_.succeeded -and $_.finished -and $_.leftEyePath -and $_.rightEyePath -and
+        (Test-Path -LiteralPath $_.leftEyePath) -and (Test-Path -LiteralPath $_.rightEyePath)
+    })
+    if ($captureManifest.frames.Count -ne $Frames -or $completeFrames.Count -ne $Frames) {
+        throw "Capture $Name manifest does not contain $Frames successful retained stereo pairs"
     }
     [ordered]@{
         name = $Name; effectiveValue = $EffectiveValue; scene = $scene; format = $status.format
@@ -123,6 +133,7 @@ function Capture-Phase {
         firstCompositorCycleToken = $status.frames[0].compositorCycleToken
         lastCompositorCycleToken = $status.frames[-1].compositorCycleToken
         backpressureDrops = $status.backpressureDrops; incompleteStereoDrops = $status.incompleteStereoDrops
+        retainedStereoPairsValidated = $completeFrames.Count
         outputDirectory = $status.outputDirectory; manifestPath = $status.manifestPath; previewVideoPath = $status.previewVideoPath
     }
 }
@@ -134,6 +145,7 @@ $record = [ordered]@{
         gameHour = if ($hasGameHour) { $GameHour } else { $null }; weatherForm = $WeatherForm
         timeFrozen = $hasGameHour -and -not $LeaveTimeRunning; restoreTimescale = $RestoreTimescale
         frames = $Frames; frameIntervalCompositorCycles = $FrameInterval; previewFramesPerSecond = $PreviewFramesPerSecond
+        maxIncompleteStereoDrops = $MaxIncompleteStereoDrops
         format = $Format; output = if ($SaveCombined) { 'combined stereo and separate eyes' } else { 'separate eyes only' }
     }
     source = [ordered]@{
@@ -181,7 +193,7 @@ try {
         $record.phases.Add((Capture-Phase -Name 'baseline-return' -Label 'PARAM-A2' -EffectiveValue $baselineValue))
     }
     $record.validity.accepted = $true
-    $record.validity.reasons.Add('Every phase saved exact separate-eye pairs with zero failed, incomplete, or backpressured pairs; combined stereo was optional derivative output.')
+    $record.validity.reasons.Add("Every phase retained exactly $Frames manifest-validated separate-eye pairs with zero failed or backpressured pairs; at most $MaxIncompleteStereoDrops discarded start-boundary incomplete pair(s) were permitted.")
     $record.validity.reasons.Add('Every scalar value reached exact effective readback before capture.')
     if ($UseExistingSnapshot) { $record.validity.reasons.Add('The requested time and weather were reapplied before each phase. The run consumed its deliberate preconfiguration snapshot and recorded the earlier state restored by that snapshot; a post-restore capture was intentionally omitted because the restored feature may be inactive.') }
     else { $record.validity.reasons.Add('The requested time and weather were reapplied before each phase, and the exact baseline parameter was restored.') }

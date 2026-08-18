@@ -15,6 +15,39 @@ def luma(rgb: np.ndarray) -> np.ndarray:
     return rgb[..., 0] * 0.2126 + rgb[..., 1] * 0.7152 + rgb[..., 2] * 0.0722
 
 
+def rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
+    srgb = np.clip(rgb / 255.0, 0.0, 1.0)
+    linear = np.where(
+        srgb <= 0.04045,
+        srgb / 12.92,
+        np.power((srgb + 0.055) / 1.055, 2.4),
+    )
+    red, green, blue = linear[..., 0], linear[..., 1], linear[..., 2]
+    xyz = np.stack(
+        (
+            (red * 0.4124564 + green * 0.3575761 + blue * 0.1804375)
+            / 0.95047,
+            red * 0.2126729 + green * 0.7151522 + blue * 0.0721750,
+            (red * 0.0193339 + green * 0.1191920 + blue * 0.9503041)
+            / 1.08883,
+        ),
+        axis=-1,
+    )
+    epsilon = 216.0 / 24389.0
+    kappa = 24389.0 / 27.0
+    transformed = np.where(
+        xyz > epsilon, np.cbrt(xyz), (kappa * xyz + 16.0) / 116.0
+    )
+    return np.stack(
+        (
+            116.0 * transformed[..., 1] - 16.0,
+            500.0 * (transformed[..., 0] - transformed[..., 1]),
+            200.0 * (transformed[..., 1] - transformed[..., 2]),
+        ),
+        axis=-1,
+    )
+
+
 def stats(values: np.ndarray) -> dict[str, float]:
     return {
         "mean": float(np.mean(values)),
@@ -121,7 +154,7 @@ def main() -> None:
         raise ValueError("baseline compositor-token order is invalid")
 
     result: dict[str, object] = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "runId": run["runId"],
         "feature": run["feature"],
         "control": run["control"],
@@ -149,11 +182,17 @@ def main() -> None:
         before_luma = luma(before)
         returned_luma = luma(returned)
         drift = np.abs(before_luma - returned_luma)
+        before_lab = rgb_to_lab(before)
+        returned_lab = rgb_to_lab(returned)
+        colour_drift = np.linalg.norm(before_lab - returned_lab, axis=2)
         max_temporal = np.maximum.reduce(list(temporal.values()))
         stable = (drift <= 2.0) & (max_temporal <= 2.0)
+        colour_stable = stable & (colour_drift <= 2.3)
         eye_result: dict[str, object] = {
             "baselineReturnDriftAbsoluteLuma": stats(drift),
+            "baselineReturnDeltaE76": stats(colour_drift),
             "stablePixelFraction": float(np.mean(stable)),
+            "colourStablePixelFraction": float(np.mean(colour_stable)),
             "baselineBeforeOccupancy": image_occupancy(before),
             "baselineReturnOccupancy": image_occupancy(returned),
             "values": [],
@@ -168,6 +207,13 @@ def main() -> None:
             delta_rgb = medians[name] - interpolated_rgb
             delta_luma = luma(delta_rgb)
             absolute = np.abs(delta_luma)
+            sample_lab = rgb_to_lab(medians[name])
+            baseline_lab = rgb_to_lab(interpolated_rgb)
+            delta_lab = sample_lab - baseline_lab
+            delta_e = np.linalg.norm(delta_lab, axis=2)
+            sample_chroma = np.linalg.norm(sample_lab[..., 1:3], axis=2)
+            baseline_chroma = np.linalg.norm(baseline_lab[..., 1:3], axis=2)
+            chroma_delta = sample_chroma - baseline_chroma
             above_drift = absolute > np.maximum(2.0, drift * 2.0)
             value_result = {
                 "phase": name,
@@ -178,6 +224,17 @@ def main() -> None:
                 "meanSignedRgbDifference": {
                     channel: float(np.mean(delta_rgb[..., index]))
                     for index, channel in enumerate(("red", "green", "blue"))
+                },
+                "deltaE76": stats(delta_e),
+                "deltaE76AboveJndPixelFraction": float(np.mean(delta_e > 2.3)),
+                "colourStableRegionDeltaE76": stats(delta_e[colour_stable])
+                if np.any(colour_stable)
+                else None,
+                "absoluteChromaDifference": stats(np.abs(chroma_delta)),
+                "meanSignedChromaDifference": float(np.mean(chroma_delta)),
+                "meanSignedLabDifference": {
+                    channel: float(np.mean(delta_lab[..., index]))
+                    for index, channel in enumerate(("lightness", "a", "b"))
                 },
                 "differenceAboveTwiceDriftPixelFraction": float(
                     np.mean(above_drift)

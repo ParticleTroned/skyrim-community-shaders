@@ -5524,6 +5524,24 @@ namespace
 		return hash;
 	}
 
+	uint64_t BuildCommonResourceRecoveryRequestKey(
+		const Upscaling& a_upscaling,
+		Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		uint64_t hash = BuildResourceCheckStableKey(a_upscaling, a_upscaleMethod);
+		const auto add = [&](uint64_t a_value) {
+			hash = HashResourceCheckValue(hash, a_value);
+		};
+
+		add(a_upscaling.GetActiveVRRenderScaleContractGeneration());
+		add(a_upscaling.GetVRRenderScaleTransitionSnapshot().targetEpoch);
+		add(a_upscaling.pendingDLSSResetGeneration.load(std::memory_order_acquire));
+		add(a_upscaling.pendingFSRResetGeneration.load(std::memory_order_acquire));
+		add(a_upscaling.pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire));
+		add(a_upscaling.IsSubmitStageDeviceLost());
+		return hash;
+	}
+
 	uint64_t BuildFSRResourceLifecycleRequestKey(
 		const Upscaling& a_upscaling,
 		Upscaling::UpscaleMethod a_upscaleMethod)
@@ -34263,6 +34281,11 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			.runtimePathChanged = fsrRuntimePathChanged,
 			.runtimeFailureLatched =
 				fidelityFX.IsRuntimeUpscalerFailureLatched(),
+			.fsrResetPending =
+				pendingFSRReset.load(std::memory_order_acquire),
+			.postLoadResetPending =
+				postLoadRuntimeResetPending.load(std::memory_order_acquire),
+			.primaryDeviceLost = IsSubmitStageDeviceLost(),
 			.hostResourcesCompatible =
 				canPreserveFSRResourcesForCurrentVRPlan(),
 		});
@@ -34582,30 +34605,62 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			return false;
 		}
 
-		const auto requeueMissingCommonRecreate = [&]() {
-			RequestPerfModeRenderTargetRecreate(
-				"missing common vendor resources",
-				VRUpscalingTransitionOrigin::RecoveryRelatch,
-				nullptr,
-				kVRRenderScaleRelatchBusyRetryFrames);
+		const uint64_t commonResourceRequestKey =
+			BuildCommonResourceRecoveryRequestKey(*this, a_upscalemethod);
+		if (commonResourceFailureRequestKey &&
+			*commonResourceFailureRequestKey != commonResourceRequestKey) {
+			commonResourceFailureRequestKey.reset();
+		}
+		const bool sameTerminalRequest =
+			commonResourceFailureRequestKey &&
+			*commonResourceFailureRequestKey == commonResourceRequestKey;
+		if (!VRVendorRelatchPolicy::CanAttemptCommonResourceRecovery({
+				.resourcesMissing = true,
+				.lifecycleOwnerActive = deferForVRRenderScaleRelatch,
+				.deviceLost = IsSubmitStageDeviceLost(),
+				.sameTerminalRequest = sameTerminalRequest,
+			})) {
+			return false;
+		}
+
+		const auto latchMissingCommonFailure = [&](const char* a_reason) {
+			commonResourceFailureRequestKey = commonResourceRequestKey;
 			if (a_upscalemethod == UpscaleMethod::kDLSS)
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
-			else if (a_upscalemethod == UpscaleMethod::kFSR)
+			else if (a_upscalemethod == UpscaleMethod::kFSR) {
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR);
+				fsrResourceFailureRequestKey = fsrResourceRequestKey;
+			}
+			RecordVRVendorRuntimeLifecycle(
+				a_upscalemethod,
+				VRVendorRuntimeLifecyclePhase::Failed,
+				GetActiveVRRenderScaleContractGeneration(),
+				a_reason);
 		};
 
 		try {
 			logger::debug("[Upscaling] Recreating missing common texture resources for method {}", magic_enum::enum_name(a_upscalemethod));
 			DestroyCommonUpscalingTextures();
 			CreateUpscalingTextureResources(a_upscalemethod);
+			if (!AreCommonVendorTexturesReady(a_upscalemethod)) {
+				if (vrRelatchRecoveryRelevant) {
+					latchMissingCommonFailure("missing common texture recreation incomplete");
+					logger::error(
+						"[VRRenderScale] Common texture recreation for {} returned an incomplete or dimension-incompatible set; latched the unchanged request terminal.",
+						magic_enum::enum_name(a_upscalemethod));
+					return false;
+				}
+				throw std::runtime_error("common upscaling texture recreation returned an incomplete set");
+			}
+			commonResourceFailureRequestKey.reset();
 		} catch (const std::exception& e) {
 			if (vrRelatchRecoveryRelevant) {
 				if (MarkSubmitStageDeviceLostIfNeeded(e, "missing common texture recreation"))
 					return false;
 
-				requeueMissingCommonRecreate();
+				latchMissingCommonFailure("missing common texture recreation failed");
 				logger::warn(
-					"[VRRenderScale] Deferred missing common texture recreation for {} after failure: {}",
+					"[VRRenderScale] Common texture recreation for {} failed; latched the unchanged request terminal: {}",
 					magic_enum::enum_name(a_upscalemethod),
 					e.what());
 				return false;
@@ -34616,15 +34671,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				if (MarkSubmitStageDeviceLostIfDeviceRemoved("missing common texture recreation"))
 					return false;
 
-				requeueMissingCommonRecreate();
+				latchMissingCommonFailure("missing common texture recreation failed");
 				logger::warn(
-					"[VRRenderScale] Deferred missing common texture recreation for {} after an unknown failure",
+					"[VRRenderScale] Common texture recreation for {} failed; latched the unchanged request terminal after an unknown failure",
 					magic_enum::enum_name(a_upscalemethod));
 				return false;
 			}
 			throw;
 		}
 	}
+	commonResourceFailureRequestKey.reset();
 
 	resourceCheckLastCompletedFrame = GetFrameScopedUpscalingWorkFrame();
 	resourceCheckLastCompletedMethod = a_upscalemethod;

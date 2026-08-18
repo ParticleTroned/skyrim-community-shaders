@@ -1478,6 +1478,16 @@ if(BUILD_CONTROLLER_TESTS)
         OverlayPolicy
         tests/overlay_policy_test.cpp
     )
+    add_controller_test(
+        volumetric_lighting_cache_refresh_policy_test
+        VolumetricLightingCacheRefreshPolicy
+        tests/volumetric_lighting_cache_refresh_policy_test.cpp
+    )
+    add_controller_test(
+        vr_depth_culling_policy_test
+        VRDepthCullingPolicy
+        tests/vr_depth_culling_policy_test.cpp
+    )
 
     add_custom_target(
         controller_tests
@@ -1487,6 +1497,8 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
+            volumetric_lighting_cache_refresh_policy_test
+            vr_depth_culling_policy_test
     )
 endif()
 

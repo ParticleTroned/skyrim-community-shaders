@@ -17,6 +17,7 @@
 #include "ShaderCache.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
+#include "VRDepthCullingPolicy.h"
 #include "WaterEffects.h"
 #include "WetnessEffects.h"
 #include "Wetterness.h"
@@ -423,15 +424,10 @@ namespace
 
 	DepthCullingTestPose depthCullingTestPose{};
 
-	constexpr double kDepthCullingMaxCoherentRotationRadians = 0.0008726646259971648;  // 0.05 degrees
-	constexpr float kDepthCullingMaxCoherentTranslation = 0.1f;                       // Skyrim world units
 	constexpr std::uint32_t kDepthCullingMaximumObjects = 0x1000u;
 
 	bool IsDepthCullingViewCoherent(const RE::NiTransform& a_currentView)
 	{
-		if (!depthCullingTestPose.valid)
-			return false;
-
 		double relativeRotationTrace = 0.0;
 		for (std::size_t row = 0; row < 3; ++row) {
 			for (std::size_t column = 0; column < 3; ++column) {
@@ -440,14 +436,11 @@ namespace
 			}
 		}
 		const double rotationCosine = std::clamp((relativeRotationTrace - 1.0) * 0.5, -1.0, 1.0);
-		const double minimumCoherentCosine = std::cos(kDepthCullingMaxCoherentRotationRadians);
-		if (rotationCosine < minimumCoherentCosine)
-			return false;
-
 		const auto translationDelta = a_currentView.translate - depthCullingTestPose.translation;
-		const float maximumTranslationSquared =
-			kDepthCullingMaxCoherentTranslation * kDepthCullingMaxCoherentTranslation;
-		return translationDelta.SqrLength() <= maximumTranslationSquared;
+		return VRDepthCullingPolicy::IsViewCoherent(
+			depthCullingTestPose.valid,
+			rotationCosine,
+			translationDelta.SqrLength());
 	}
 
 	void CaptureDepthCullingTestPose()
@@ -480,8 +473,7 @@ namespace
 			return;
 
 		for (std::uint32_t index = 0; index < objectCount; ++index) {
-			if (results[index] == 0)
-				results[index] = 1;
+			results[index] = VRDepthCullingPolicy::ResolveVisibility(results[index], false);
 		}
 	}
 

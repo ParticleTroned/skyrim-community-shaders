@@ -1814,6 +1814,9 @@ namespace VRVendorRelatchPolicy
 		bool targetIsFSR = false;
 		bool runtimePathChanged = false;
 		bool runtimeFailureLatched = false;
+		bool fsrResetPending = false;
+		bool postLoadResetPending = false;
+		bool primaryDeviceLost = false;
 		bool hostResourcesCompatible = false;
 	};
 
@@ -1827,7 +1830,31 @@ namespace VRVendorRelatchPolicy
 		       a_state.targetIsFSR &&
 		       a_state.runtimePathChanged &&
 		       a_state.runtimeFailureLatched &&
+		       !a_state.fsrResetPending &&
+		       !a_state.postLoadResetPending &&
+		       !a_state.primaryDeviceLost &&
 		       a_state.hostResourcesCompatible;
+	}
+
+	struct CommonResourceRecoveryAdmission
+	{
+		bool resourcesMissing = false;
+		bool lifecycleOwnerActive = false;
+		bool deviceLost = false;
+		bool sameTerminalRequest = false;
+	};
+
+	// Common resource creation is synchronous. Once an unchanged request has
+	// failed or returned an incomplete set, keep presentation in its coherent
+	// fallback and wait for a real key-changing event instead of destroying and
+	// recreating the same resources every frame.
+	[[nodiscard]] constexpr bool CanAttemptCommonResourceRecovery(
+		const CommonResourceRecoveryAdmission& a_state) noexcept
+	{
+		return a_state.resourcesMissing &&
+		       !a_state.lifecycleOwnerActive &&
+		       !a_state.deviceLost &&
+		       !a_state.sameTerminalRequest;
 	}
 
 	[[nodiscard]] constexpr bool NeedsFSRResourceRecreate(

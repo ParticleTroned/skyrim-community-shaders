@@ -97,76 +97,56 @@ float3 GetTonemapFactorHejlBurgessDawson(float3 luminance, bool isHDR = false)
 #	include "Common/DisplayMapping.hlsli"
 
 #	if defined(BLEND) && defined(ADAPTIVE_BALANCE)
-float2 ClampBloomSampleUV(float2 a_uv, uint a_bloomWidth, uint a_bloomHeight)
+float2 ClampBloomSampleUV(float2 a_uv)
 {
-	const float2 halfTexel = 0.5 / max(float2(a_bloomWidth, a_bloomHeight), float2(1.0, 1.0));
-	return clamp(a_uv, halfTexel, 1.0 - halfTexel);
+	// Match Open Shaders' flat-screen path. The sampler handles vertical
+	// addressing; only horizontal halo samples are kept inside the SE frame.
+	a_uv.x = saturate(a_uv.x);
+	return a_uv;
 }
 
-float3 SampleVanillaBloomEnhanced(float2 a_uv, out float3 a_vanillaBloom)
+float3 SampleVanillaBloomEnhanced(float2 a_uv, float3 a_vanillaBloom)
 {
-	float3 center = ImageTex.Sample(ImageSampler, a_uv).xyz;
-	a_vanillaBloom = center;
+	float3 center = a_vanillaBloom;
 	float3 bloom = center;
 
 	if (SharedData::bloomSettings.Enabled) {
 		uint bloomWidth = 1;
 		uint bloomHeight = 1;
 		ImageTex.GetDimensions(bloomWidth, bloomHeight);
-		// Truncated 5x5 binomial Gaussian: center, inner 3x3, and outer
-		// cardinal taps, renormalized to a 13-sample kernel.
+		// Normalized 5x5 separable Gaussian kernel. The outer cardinal samples
+		// are one Halo Radius from the center.
+		static const uint BLOOM_GAUSSIAN_KERNEL_SIZE = 5;
+		static const uint BLOOM_GAUSSIAN_KERNEL_CENTER = 2;
+		static const float BLOOM_GAUSSIAN_RADIUS_SCALE = 0.5;
+		static const float BLOOM_GAUSSIAN_WEIGHT_OUTER = 0.0625;
+		static const float BLOOM_GAUSSIAN_WEIGHT_INNER = 0.25;
+		static const float BLOOM_GAUSSIAN_WEIGHT_CENTER = 0.375;
+		static const float BLOOM_GAUSSIAN_WEIGHTS[BLOOM_GAUSSIAN_KERNEL_SIZE] = {
+			BLOOM_GAUSSIAN_WEIGHT_OUTER,
+			BLOOM_GAUSSIAN_WEIGHT_INNER,
+			BLOOM_GAUSSIAN_WEIGHT_CENTER,
+			BLOOM_GAUSSIAN_WEIGHT_INNER,
+			BLOOM_GAUSSIAN_WEIGHT_OUTER
+		};
 		float2 sampleStep =
-			(SharedData::bloomSettings.HaloRadius * 0.5) /
+			(SharedData::bloomSettings.HaloRadius * BLOOM_GAUSSIAN_RADIUS_SCALE) /
 			max(float2(bloomWidth, bloomHeight), float2(1.0, 1.0));
+		float3 wide = 0.0;
 
-		static const float BLOOM_CENTER_WEIGHT = 36.0 / 220.0;
-		static const float BLOOM_INNER_CARDINAL_WEIGHT = 24.0 / 220.0;
-		static const float BLOOM_INNER_DIAGONAL_WEIGHT = 16.0 / 220.0;
-		static const float BLOOM_OUTER_CARDINAL_WEIGHT = 6.0 / 220.0;
-		float3 wide = center * BLOOM_CENTER_WEIGHT;
-
-		static const float2 INNER_CARDINAL_OFFSETS[4] = {
-			float2(-1.0, 0.0),
-			float2(1.0, 0.0),
-			float2(0.0, -1.0),
-			float2(0.0, 1.0)
-		};
-		static const float2 INNER_DIAGONAL_OFFSETS[4] = {
-			float2(-1.0, -1.0),
-			float2(1.0, -1.0),
-			float2(-1.0, 1.0),
-			float2(1.0, 1.0)
-		};
-		static const float2 OUTER_CARDINAL_OFFSETS[4] = {
-			float2(-2.0, 0.0),
-			float2(2.0, 0.0),
-			float2(0.0, -2.0),
-			float2(0.0, 2.0)
-		};
-
-		[unroll] for (uint cardinalIndex = 0; cardinalIndex < 4; ++cardinalIndex)
+		[unroll] for (uint y = 0; y < BLOOM_GAUSSIAN_KERNEL_SIZE; ++y)
 		{
-			float2 sampleUV = ClampBloomSampleUV(
-				a_uv + INNER_CARDINAL_OFFSETS[cardinalIndex] * sampleStep,
-				bloomWidth,
-				bloomHeight);
-			wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * BLOOM_INNER_CARDINAL_WEIGHT;
-		}
-		[unroll] for (uint diagonalIndex = 0; diagonalIndex < 4; ++diagonalIndex)
-		{
-			float2 sampleUV = ClampBloomSampleUV(
-				a_uv + INNER_DIAGONAL_OFFSETS[diagonalIndex] * sampleStep,
-				bloomWidth,
-				bloomHeight);
-			wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * BLOOM_INNER_DIAGONAL_WEIGHT;
-		}
-		[unroll] for (uint outerCardinalIndex = 0; outerCardinalIndex < 4; ++outerCardinalIndex)
-		{
-			float2 sampleUV = ClampBloomSampleUV(
-				a_uv + OUTER_CARDINAL_OFFSETS[outerCardinalIndex] * sampleStep,
-				bloomWidth,
-				bloomHeight);
-			wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * BLOOM_OUTER_CARDINAL_WEIGHT;
+			[unroll] for (uint x = 0; x < BLOOM_GAUSSIAN_KERNEL_SIZE; ++x)
+			{
+				float weight = BLOOM_GAUSSIAN_WEIGHTS[x] * BLOOM_GAUSSIAN_WEIGHTS[y];
+				if (x == BLOOM_GAUSSIAN_KERNEL_CENTER && y == BLOOM_GAUSSIAN_KERNEL_CENTER) {
+					wide += center * weight;
+				} else {
+					float2 offset = (float2(x, y) - float(BLOOM_GAUSSIAN_KERNEL_CENTER)) * sampleStep;
+					float2 sampleUV = ClampBloomSampleUV(a_uv + offset);
+					wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * weight;
+				}
+			}
 		}
 
 		bloom = lerp(center, wide, SharedData::bloomSettings.HaloSpread);
@@ -220,7 +200,6 @@ PS_OUTPUT main(PS_INPUT input)
 	const float2 bloomUV = Flags.x > 0.5 ? uv : input.TexCoord.xy;
 	float3 vanillaBloomColor = ImageTex.Sample(ImageSampler, bloomUV).xyz;
 	float3 bloomColor = vanillaBloomColor;
-	float bloomBlendWeight = 0.0;
 #		if defined(ADAPTIVE_BALANCE)
 	bloomColor = SampleVanillaBloomEnhanced(bloomUV, vanillaBloomColor);
 	if (SharedData::bloomSettings.Enabled) {
@@ -237,7 +216,10 @@ PS_OUTPUT main(PS_INPUT input)
 													 compressionThreshold + bloomExcess / (1.0 + bloomExcess / softRange)) :
 		                                     0.0;
 		bloomColor *= compressedBloomLuminance / max(bloomLuminance, EPSILON_DIVISION);
-		bloomBlendWeight = saturate(SharedData::bloomSettings.BlendWeight);
+		bloomColor = lerp(
+			vanillaBloomColor,
+			bloomColor,
+			saturate(SharedData::bloomSettings.BlendWeight));
 	}
 #		endif
 
@@ -260,25 +242,20 @@ PS_OUTPUT main(PS_INPUT input)
 
 	[branch] if (Param.z > 0.5)
 	{
-		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(
-			inputColor,
-			vanillaBloomColor,
-			bloomColor,
-			bloomBlendWeight,
-			isHDR);
+		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor, isHDR);
 	}
 	else
 	{
 		float maxCol = Color::RGBToLuminance(inputColor);
 		float mappedMax = GetTonemapFactorReinhard(maxCol, isHDR).x;
 		float3 compressedHuePreserving = inputColor * mappedMax / max(maxCol, EPSILON_DIVISION);
-		blendedColor = DisplayMapping::ApplyBloom(
-			compressedHuePreserving,
-			vanillaBloomColor,
-			bloomColor,
-			Param.x,
-			bloomBlendWeight,
-			isHDR);
+		blendedColor = compressedHuePreserving;
+		// Keep Open Shaders' native Skyrim mask: SDR retains the hard cutoff,
+		// while HDR uses the existing soft-saturation form.
+		float3 bloomMask = isHDR ?
+		                       saturate(Param.x - (1.0 - exp2(-blendedColor))) :
+		                       saturate(Param.x - blendedColor);
+		blendedColor += bloomMask * bloomColor;
 	}
 
 	float blendedLuminance = Color::RGBToLuminance(blendedColor);

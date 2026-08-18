@@ -148,19 +148,30 @@ function Get-GeneratedMetaIni {
         [Parameter(Mandatory = $true)][string]$DisplayName
     )
 
+    $version = 'd2026.08.17.0'
+    $installationFile = "CSX-Style-$Id-Balanced-Provisional.7z"
+    $notes = "PROVISIONAL $DisplayName Balanced style prototype generated from docs/development/preset-automation/style-prototype-policy.json"
+    if ($null -ne $policy.artifact) {
+        if ($policy.artifact.version) { $version = [string]$policy.artifact.version }
+        if ($policy.artifact.installationPrefix) { $installationFile = "$($policy.artifact.installationPrefix)-$Id-Balanced.7z" }
+        if ($policy.artifact.classification -and $policy.artifact.sourcePolicy) {
+            $notes = "$($policy.artifact.classification) $DisplayName Balanced style artifact generated from $($policy.artifact.sourcePolicy)"
+        }
+    }
+
     @"
 [General]
 gameName=SkyrimVR
 modid=0
-version=d2026.08.17.0
+version=$version
 newestVersion=
 category="-1,"
 nexusFileStatus=1
-installationFile=CSX-Style-$Id-Balanced-Provisional.7z
+installationFile=$installationFile
 repository=Nexus
 ignoredVersion=
 comments=WABBAJACK_ALWAYS_ENABLE
-notes=PROVISIONAL $DisplayName Balanced style prototype generated from docs/development/preset-automation/style-prototype-policy.json
+notes=$notes
 nexusDescription=
 url=
 hasCustomURL=false

@@ -9,6 +9,11 @@ on:
             - "docs/development/preset-automation/schemas/measurement-run.schema.json"
             - "tools/import-preset-calibration-archive.ps1"
             - "tools/validate-preset-measurements.ps1"
+            - "docs/development/preset-automation/style-*-policy.json"
+            - "MGO-Presets/CSX Style Prototype-*/**"
+            - "MGO-Presets/CSX Style Range Probe-*/**"
+            - "tools/generate-style-prototypes.ps1"
+            - "tools/generate-style-range-probes.ps1"
     pull_request:
         paths:
             - ".github/workflows/preset-automation-data.yaml"
@@ -17,6 +22,11 @@ on:
             - "docs/development/preset-automation/schemas/measurement-run.schema.json"
             - "tools/import-preset-calibration-archive.ps1"
             - "tools/validate-preset-measurements.ps1"
+            - "docs/development/preset-automation/style-*-policy.json"
+            - "MGO-Presets/CSX Style Prototype-*/**"
+            - "MGO-Presets/CSX Style Range Probe-*/**"
+            - "tools/generate-style-prototypes.ps1"
+            - "tools/generate-style-range-probes.ps1"
 
 permissions:
     contents: read
@@ -30,3 +40,9 @@ jobs:
             - name: Validate measurement corpus
               shell: pwsh
               run: ./tools/validate-preset-measurements.ps1
+
+            - name: Validate generated style artifacts
+              shell: pwsh
+              run: |
+                  ./tools/generate-style-prototypes.ps1 -Check
+                  ./tools/generate-style-range-probes.ps1 -Check

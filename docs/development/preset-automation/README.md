@@ -45,6 +45,7 @@ Hard correctness and stability constraints are applied first. Surviving candidat
 | Unified provisional preset candidates | Machine-readable three-tier synthesis, capability-selected upscaler boundary, generator, and release gates | [`unified-preset-candidates-20260817.md`](./unified-preset-candidates-20260817.md) |
 | Unified Quality smoke record | Machine-readable AMD/null-HMD provider-resolution and control-readback proof for the generated Quality file | [`unified-quality-smoke-20260817.json`](./unified-quality-smoke-20260817.json) |
 | Balanced style prototypes | Natural Reference, Mythic High Fantasy, and Bleak Dark Fantasy as reproducible overlays on one vendor-unified Balanced budget | [`style-prototypes-20260817.md`](./style-prototypes-20260817.md) |
+| Experimental style range probes | Byte-identical Natural control plus intentionally unplayable Radiant Mythic and Abyssal Bleak extremes on the same Balanced budget | [`style-range-probes-20260818.md`](./style-range-probes-20260818.md) |
 | Decision log | Append-only rationale connecting evidence to adopted or rejected choices | [`decision-log.md`](./decision-log.md) |
 
 The canonical schemas are:

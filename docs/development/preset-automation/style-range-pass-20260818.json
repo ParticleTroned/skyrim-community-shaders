@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "campaignId": "20260818-amd-svr-ovr-null-style-range-p01",
-  "status": "bounded-first-pass",
+  "status": "complete-provisional",
   "hardwareRuntimeLane": "AMD native OpenVR through SteamVR null HMD",
   "basePreset": "Unified Balanced / Natural Control",
   "build": {
@@ -12,11 +12,14 @@
     "restartBoundChanges": 0,
     "shaderRecompilingControls": 0,
     "maximumCurves": 7,
-    "framesPerPhase": 8,
+    "framesPerPhase": 6,
     "saveSeparateEyes": true,
     "saveCombined": false,
     "timingPasses": 0,
-    "stopAfterThisBatchForReview": true
+    "stopAfterThisBatchForReview": true,
+    "acceptedCurves": 7,
+    "acceptedPhases": 42,
+    "acceptedStereoPairs": 252
   },
   "anchors": {
     "ibl": {
@@ -35,12 +38,25 @@
     }
   },
   "curves": [
-    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "EnvIBLScale", "values": [0.0, 0.25, 1.25, 2.0], "anchor": "ibl" },
-    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "SkyIBLScale", "values": [0.0, 0.5, 1.0, 2.0], "anchor": "ibl" },
-    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "EnvIBLSaturation", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "ibl" },
-    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "SkyIBLSaturation", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "ibl" },
-    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodrayShaftIntensity", "values": [0.0, 0.5, 2.0, 3.0], "anchor": "volumetric" },
-    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodrayOpacity", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "volumetric" },
-    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodraySaturation", "values": [0.0, 0.5, 2.0, 4.0], "anchor": "volumetric" }
-  ]
+    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "EnvIBLScale", "values": [0.0, 0.25, 1.25, 2.0], "anchor": "ibl", "frameInterval": 12, "acceptedRunId": "20260818-amd-null-guardian-clear-ibl-env-scale-r02" },
+    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "SkyIBLScale", "values": [0.0, 0.5, 1.0, 2.0], "anchor": "ibl", "frameInterval": 12, "acceptedRunId": "20260818-amd-null-guardian-clear-ibl-sky-scale-r01" },
+    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "EnvIBLSaturation", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "ibl", "frameInterval": 12, "acceptedRunId": "20260818-amd-null-guardian-clear-ibl-env-saturation-r02" },
+    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "SkyIBLSaturation", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "ibl", "frameInterval": 12, "acceptedRunId": "20260818-amd-null-guardian-clear-ibl-sky-saturation-r01" },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodrayShaftIntensity", "values": [0.0, 0.5, 2.0, 3.0], "anchor": "volumetric", "frameInterval": 16, "acceptedRunId": "20260818-amd-null-guardian-fog-vl-shaft-intensity-r02" },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodrayOpacity", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "volumetric", "frameInterval": 16, "acceptedRunId": "20260818-amd-null-guardian-fog-vl-opacity-r01" },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodraySaturation", "values": [0.0, 0.5, 2.0, 4.0], "anchor": "volumetric", "frameInterval": 24, "acceptedRunId": "20260818-amd-null-guardian-fog-vl-saturation-r02" }
+  ],
+  "rejectedRuns": [
+    { "runId": "20260818-amd-null-guardian-clear-ibl-env-scale-r01", "reason": "PNG encoder backpressure" },
+    { "runId": "20260818-amd-null-guardian-clear-ibl-env-saturation-r01", "reason": "one incomplete stereo pair" },
+    { "runId": "20260818-amd-null-guardian-fog-vl-shaft-intensity-r01", "reason": "one incomplete stereo pair" },
+    { "runId": "20260818-amd-null-guardian-fog-vl-saturation-r01", "reason": "one incomplete stereo pair" }
+  ],
+  "storage": {
+    "archiveRoot": "L:\\CSX Preset Automation\\Sessions\\2026-08-18\\CSX Baselines\\preset-automation-style-range",
+    "captureManifest": "visual-parameter-curve-run.json",
+    "analysisArtifact": "visual-parameter-curve-analysis.json",
+    "stagingRelocation": "Absolute D: outputDirectory fields in capture manifests map below this archive root by run directory after session archival."
+  },
+  "distilledResults": "style-range-pass-20260818-results.json"
 }

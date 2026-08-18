@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "campaignId": "20260818-amd-svr-ovr-null-style-range-p01",
+  "status": "provisional-single-scene-response-curves",
+  "method": {
+    "measurement": "mean of separate-eye, drift-corrected temporal-median results",
+    "nativeFramesPerPhase": 6,
+    "analysisStride": 4,
+    "absoluteLumaUnits": "8-bit RGB-derived luma",
+    "changedPixelDefinition": "absolute luma difference greater than max(2, twice A1/A2 drift)",
+    "warning": "Use these measurements to select follow-up ranges and anchors. Non-monotonic results are scene interactions until repeated; they are not universal parameter laws."
+  },
+  "curves": {
+    "EnvIBLScale": {
+      "baseline": 0.75,
+      "stablePixelPercent": 44.06,
+      "samples": [
+        { "value": 0.0, "meanAbsoluteLuma": 6.13, "p95AbsoluteLuma": 14.12, "meanSignedLuma": -4.91, "changedPixelPercent": 57.05 },
+        { "value": 0.25, "meanAbsoluteLuma": 5.07, "p95AbsoluteLuma": 15.24, "meanSignedLuma": -2.84, "changedPixelPercent": 47.43 },
+        { "value": 1.25, "meanAbsoluteLuma": 7.0, "p95AbsoluteLuma": 24.42, "meanSignedLuma": 3.62, "changedPixelPercent": 52.86 },
+        { "value": 2.0, "meanAbsoluteLuma": 8.88, "p95AbsoluteLuma": 18.5, "meanSignedLuma": 7.92, "changedPixelPercent": 65.07 }
+      ]
+    },
+    "SkyIBLScale": {
+      "baseline": 1.5,
+      "stablePixelPercent": 43.07,
+      "samples": [
+        { "value": 0.0, "meanAbsoluteLuma": 26.41, "p95AbsoluteLuma": 56.39, "meanSignedLuma": -23.16, "changedPixelPercent": 78.01 },
+        { "value": 0.5, "meanAbsoluteLuma": 16.41, "p95AbsoluteLuma": 36.93, "meanSignedLuma": -13.17, "changedPixelPercent": 72.19 },
+        { "value": 1.0, "meanAbsoluteLuma": 7.23, "p95AbsoluteLuma": 15.35, "meanSignedLuma": -6.05, "changedPixelPercent": 57.76 },
+        { "value": 2.0, "meanAbsoluteLuma": 5.82, "p95AbsoluteLuma": 12.15, "meanSignedLuma": 5.29, "changedPixelPercent": 54.56 }
+      ]
+    },
+    "EnvIBLSaturation": {
+      "baseline": 1.0,
+      "stablePixelPercent": 44.33,
+      "samples": [
+        { "value": 0.0, "meanAbsoluteLuma": 3.09, "p95AbsoluteLuma": 12.53, "meanSignedLuma": -0.1, "changedPixelPercent": 10.72 },
+        { "value": 0.5, "meanAbsoluteLuma": 4.67, "p95AbsoluteLuma": 19.63, "meanSignedLuma": -0.3, "changedPixelPercent": 18.33 },
+        { "value": 1.5, "meanAbsoluteLuma": 2.75, "p95AbsoluteLuma": 11.67, "meanSignedLuma": 0.01, "changedPixelPercent": 8.91 },
+        { "value": 2.0, "meanAbsoluteLuma": 2.27, "p95AbsoluteLuma": 9.29, "meanSignedLuma": 0.14, "changedPixelPercent": 7.05 }
+      ]
+    },
+    "SkyIBLSaturation": {
+      "baseline": 1.0,
+      "stablePixelPercent": 43.16,
+      "samples": [
+        { "value": 0.0, "meanAbsoluteLuma": 2.06, "p95AbsoluteLuma": 8.59, "meanSignedLuma": 0.14, "changedPixelPercent": 5.7 },
+        { "value": 0.5, "meanAbsoluteLuma": 5.75, "p95AbsoluteLuma": 25.97, "meanSignedLuma": 0.42, "changedPixelPercent": 21.96 },
+        { "value": 1.5, "meanAbsoluteLuma": 4.11, "p95AbsoluteLuma": 17.15, "meanSignedLuma": -0.2, "changedPixelPercent": 15.8 },
+        { "value": 2.0, "meanAbsoluteLuma": 2.4, "p95AbsoluteLuma": 8.94, "meanSignedLuma": -0.39, "changedPixelPercent": 6.56 }
+      ]
+    },
+    "GodrayShaftIntensity": {
+      "baseline": 1.0,
+      "stablePixelPercent": 73.17,
+      "samples": [
+        { "value": 0.0, "meanAbsoluteLuma": 1.61, "p95AbsoluteLuma": 6.72, "meanSignedLuma": -0.01, "changedPixelPercent": 2.9 },
+        { "value": 0.5, "meanAbsoluteLuma": 5.3, "p95AbsoluteLuma": 31.89, "meanSignedLuma": 0.29, "changedPixelPercent": 12.21 },
+        { "value": 2.0, "meanAbsoluteLuma": 5.27, "p95AbsoluteLuma": 30.83, "meanSignedLuma": 0.23, "changedPixelPercent": 11.6 },
+        { "value": 3.0, "meanAbsoluteLuma": 1.52, "p95AbsoluteLuma": 6.36, "meanSignedLuma": 0.01, "changedPixelPercent": 2.93 }
+      ]
+    },
+    "GodrayOpacity": {
+      "baseline": 1.0,
+      "stablePixelPercent": 73.05,
+      "samples": [
+        { "value": 0.0, "meanAbsoluteLuma": 4.22, "p95AbsoluteLuma": 22.84, "meanSignedLuma": -0.15, "changedPixelPercent": 3.53 },
+        { "value": 0.5, "meanAbsoluteLuma": 3.0, "p95AbsoluteLuma": 15.99, "meanSignedLuma": -0.12, "changedPixelPercent": 2.37 },
+        { "value": 1.5, "meanAbsoluteLuma": 2.44, "p95AbsoluteLuma": 13.77, "meanSignedLuma": -0.08, "changedPixelPercent": 2.8 },
+        { "value": 2.0, "meanAbsoluteLuma": 2.79, "p95AbsoluteLuma": 14.85, "meanSignedLuma": -0.04, "changedPixelPercent": 4.06 }
+      ]
+    },
+    "GodraySaturation": {
+      "baseline": 1.0,
+      "stablePixelPercent": 72.54,
+      "samples": [
+        { "value": 0.0, "meanAbsoluteLuma": 1.82, "p95AbsoluteLuma": 8.89, "meanSignedLuma": -0.02, "changedPixelPercent": 5.45 },
+        { "value": 0.5, "meanAbsoluteLuma": 2.56, "p95AbsoluteLuma": 13.17, "meanSignedLuma": -0.05, "changedPixelPercent": 5.14 },
+        { "value": 2.0, "meanAbsoluteLuma": 2.21, "p95AbsoluteLuma": 11.36, "meanSignedLuma": 0.03, "changedPixelPercent": 4.69 },
+        { "value": 4.0, "meanAbsoluteLuma": 1.46, "p95AbsoluteLuma": 7.08, "meanSignedLuma": 0.03, "changedPixelPercent": 2.83 }
+      ]
+    }
+  },
+  "initialInterpretation": [
+    "SkyIBLScale is the dominant broad scene-lighting lever at this exterior anchor.",
+    "EnvIBLScale is also strong and approximately directionally monotonic around its baseline.",
+    "Saturation controls materially alter colour while producing little signed-luma shift, but require colour-space and multi-anchor follow-up rather than luma-only ranking.",
+    "The three volumetric controls affect smaller spatial regions at this anchor; shaft and saturation non-monotonicity requires a repeated fog anchor before preset inference."
+  ]
+}

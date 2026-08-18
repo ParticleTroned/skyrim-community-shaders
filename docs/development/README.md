@@ -6,6 +6,7 @@
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 -   **[Prebuilt Shader Cache](./prebuilt-shader-cache.md)** - Release build, update, validation, and AI-agent runbook
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
+-   **[VR Depth-Culling Temporal Validity](./vr-depth-culling-temporal-validity.md)** - Diagnosis, correction, and physical-HMD validation of one-frame missing-geometry flashes
 
 ## Quick Links
 

@@ -163,6 +163,25 @@ does not compile a new variant. Runtime proof rejected a `7000`-unit fade,
 accepted a partial chance mutation, and restored the exact original seven-field
 state with no outstanding snapshot at Info logging.
 
+The first bounded style-range extension adds a separate `styleParameters`
+object. It does not conflate artistic response controls with quality/workload
+controls:
+
+- Image Based Lighting exposes environment and sky scale plus their saturation,
+  all over the production `0..2` range. Effective readback comes from the same
+  runtime common-buffer calculation consumed by the shaders, so a weather
+  override cannot be mistaken for the requested base value.
+- Volumetric Lighting exposes shaft intensity (`0..3`), opacity (`0..2`),
+  saturation (`0..4`), custom-colour contribution (`0..1`), and the three
+  custom-colour channels (`0..1`). These values are read for each volumetric
+  descriptor application and do not select a shader variant or reallocate the
+  volumetric grid.
+
+The controls are session-only, live, reversible, and mutually exclusive with an
+outstanding performance or quality snapshot for the same feature. Invalid,
+unknown, non-numeric, non-finite, and out-of-range fields are rejected without
+changing the held state. `restore` and `restoreAll` include style snapshots.
+
 ## Promotion toward live transitions
 
 Converting a control to `live` requires feature-specific proof that enable, disable, and repeated A/B/A transitions:

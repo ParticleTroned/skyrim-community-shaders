@@ -38,6 +38,7 @@ namespace
 	std::atomic_bool g_registered{ false };
 	std::unordered_map<std::string, json> g_performanceSnapshots;
 	std::unordered_map<std::string, json> g_qualityProfileSnapshots;
+	std::unordered_map<std::string, json> g_styleParameterSnapshots;
 
 	struct SkylightingQualityProfile
 	{
@@ -800,6 +801,122 @@ namespace
 		});
 	}
 
+	bool SupportsStyleParameters(const std::string& a_featureName)
+	{
+		return a_featureName == "ImageBasedLighting" || a_featureName == "VolumetricLighting";
+	}
+
+	json BuildEffectiveStyleParameters(const std::string& a_featureName)
+	{
+		if (a_featureName == "ImageBasedLighting") {
+			const auto effective = globals::features::ibl.GetCommonBufferData();
+			return {
+				{ "EnvIBLScale", effective.EnvIBLScale },
+				{ "SkyIBLScale", effective.SkyIBLScale },
+				{ "EnvIBLSaturation", effective.EnvIBLSaturation },
+				{ "SkyIBLSaturation", effective.SkyIBLSaturation },
+			};
+		}
+		if (a_featureName == "VolumetricLighting") {
+			const auto& settings = globals::features::volumetricLighting.settings;
+			return {
+				{ "GodrayShaftIntensity", settings.GodrayShaftIntensity },
+				{ "GodrayOpacity", settings.GodrayOpacity },
+				{ "GodraySaturation", settings.GodraySaturation },
+				{ "CustomColorContribution", settings.CustomColorContribution },
+				{ "CustomColorRed", settings.CustomColorRed },
+				{ "CustomColorGreen", settings.CustomColorGreen },
+				{ "CustomColorBlue", settings.CustomColorBlue },
+			};
+		}
+		return json::object();
+	}
+
+	json CaptureStyleParameterState(const std::string& a_featureName)
+	{
+		if (a_featureName == "ImageBasedLighting") {
+			const auto& settings = globals::features::ibl.settings;
+			return {
+				{ "EnvIBLScale", settings.EnvIBLScale },
+				{ "SkyIBLScale", settings.SkyIBLScale },
+				{ "EnvIBLSaturation", settings.EnvIBLSaturation },
+				{ "SkyIBLSaturation", settings.SkyIBLSaturation },
+			};
+		}
+		if (a_featureName == "VolumetricLighting")
+			return globals::features::volumetricLighting.CapturePerformanceCostMeasurementState();
+		return json::object();
+	}
+
+	void RestoreStyleParameterState(const std::string& a_featureName, const json& a_state)
+	{
+		if (a_featureName == "ImageBasedLighting") {
+			auto& settings = globals::features::ibl.settings;
+			settings.EnvIBLScale = a_state.at("EnvIBLScale").get<float>();
+			settings.SkyIBLScale = a_state.at("SkyIBLScale").get<float>();
+			settings.EnvIBLSaturation = a_state.at("EnvIBLSaturation").get<float>();
+			settings.SkyIBLSaturation = a_state.at("SkyIBLSaturation").get<float>();
+			return;
+		}
+		if (a_featureName == "VolumetricLighting") {
+			globals::features::volumetricLighting.RestorePerformanceCostMeasurementState(a_state);
+			return;
+		}
+		throw std::runtime_error("feature does not expose style parameters");
+	}
+
+	json BuildStyleParameterRecord(const std::string& a_featureName)
+	{
+		auto* feature = FindFeatureByShortName(a_featureName);
+		const bool supported = SupportsStyleParameters(a_featureName);
+		const bool available = feature && feature->loaded && supported;
+		json definitions = json::object();
+		if (a_featureName == "ImageBasedLighting") {
+			definitions = {
+				{ "EnvIBLScale", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 2.0f }, { "effect", "scales environment-cubemap diffuse IBL" } } },
+				{ "SkyIBLScale", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 2.0f }, { "effect", "scales native-sky diffuse IBL" } } },
+				{ "EnvIBLSaturation", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 2.0f }, { "effect", "controls environment IBL colour saturation" } } },
+				{ "SkyIBLSaturation", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 2.0f }, { "effect", "controls sky IBL colour saturation" } } },
+			};
+		} else if (a_featureName == "VolumetricLighting") {
+			definitions = {
+				{ "GodrayShaftIntensity", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 3.0f }, { "effect", "scales shaft brightness" } } },
+				{ "GodrayOpacity", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 2.0f }, { "effect", "controls shaft opacity and presence" } } },
+				{ "GodraySaturation", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 4.0f }, { "effect", "controls weather-derived shaft colour saturation" } } },
+				{ "CustomColorContribution", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 1.0f }, { "effect", "blends the custom colour into the weather shaft colour" } } },
+				{ "CustomColorRed", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 1.0f }, { "effect", "sets custom shaft colour red" } } },
+				{ "CustomColorGreen", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 1.0f }, { "effect", "sets custom shaft colour green" } } },
+				{ "CustomColorBlue", { { "valueType", "number" }, { "minimum", 0.0f }, { "maximum", 1.0f }, { "effect", "sets custom shaft colour blue" } } },
+			};
+		}
+
+		const auto effective = available ? BuildEffectiveStyleParameters(a_featureName) : json::object();
+		const bool runtimeActive = available &&
+			(a_featureName == "ImageBasedLighting" ? globals::features::ibl.IsRuntimeEnabled() :
+			                                           globals::features::volumetricLighting.IsPerformanceCostMeasurementEnabled());
+		return {
+			{ "feature", a_featureName },
+			{ "displayName", feature ? feature->GetDisplayName() : a_featureName },
+			{ "control", "styleParameters" },
+			{ "valueType", "object" },
+			{ "parameterDefinitions", std::move(definitions) },
+			{ "effectiveParameters", effective },
+			{ "requestedValue", effective },
+			{ "effectiveValue", effective },
+			{ "runtimeActive", runtimeActive },
+			{ "ready", available },
+			{ "mutability", "live" },
+			{ "settle", { { "kind", "frames" }, { "minimumFrames", 2 }, { "requiresMenuClose", false }, { "resetsHistory", false } } },
+			{ "cacheImpact", "none" },
+			{ "resourceImpact", "retained" },
+			{ "canRestoreInSession", true },
+			{ "snapshotHeld", g_styleParameterSnapshots.contains(a_featureName) },
+			{ "writable", available },
+			{ "available", available },
+			{ "unavailableReason", available ? json(nullptr) : json(feature ? "feature package is not loaded" : "feature is not registered") },
+		};
+	}
+
 	json BuildControlList()
 	{
 		json controls = json::array({
@@ -817,6 +934,8 @@ namespace
 		controls.push_back(BuildQualityParameterRecord("TerrainBlending"));
 		controls.push_back(BuildQualityParameterRecord("ScreenSpaceGI"));
 		controls.push_back(BuildQualityParameterRecord("VolumetricLighting"));
+		controls.push_back(BuildStyleParameterRecord("ImageBasedLighting"));
+		controls.push_back(BuildStyleParameterRecord("VolumetricLighting"));
 		return controls;
 	}
 
@@ -846,6 +965,8 @@ namespace
 			return BuildQualityParameterRecord(a_feature);
 		if (a_feature == "VolumetricLighting" && a_control == "qualityParameters")
 			return BuildQualityParameterRecord(a_feature);
+		if (SupportsStyleParameters(a_feature) && a_control == "styleParameters")
+			return BuildStyleParameterRecord(a_feature);
 		return {
 			{ "error", "unknown control" },
 			{ "feature", a_feature },
@@ -873,8 +994,8 @@ namespace
 				return FindControl(a_feature, a_control);
 			if (!feature->loaded || !feature->SupportsPerformanceCostMeasurement())
 				return { { "error", "performance control is unavailable" }, { "control", BuildPerformanceRecord(*feature) } };
-			if (g_qualityProfileSnapshots.contains(a_feature))
-				return { { "error", "restore the outstanding quality snapshot before changing performanceActive" }, { "control", BuildPerformanceRecord(*feature) } };
+			if (g_qualityProfileSnapshots.contains(a_feature) || g_styleParameterSnapshots.contains(a_feature))
+				return { { "error", "restore the outstanding quality or style snapshot before changing performanceActive" }, { "control", BuildPerformanceRecord(*feature) } };
 
 			bool restoredSnapshot = false;
 			if (!a_value) {
@@ -921,6 +1042,8 @@ namespace
 			return { { "error", "quality profile control is unavailable" }, { "control", BuildQualityProfileRecord(a_feature) } };
 		if (g_performanceSnapshots.contains(a_feature))
 			return { { "error", "restore the outstanding performanceActive snapshot before changing qualityProfile" }, { "control", BuildQualityProfileRecord(a_feature) } };
+		if (g_styleParameterSnapshots.contains(a_feature))
+			return { { "error", "restore the outstanding styleParameters snapshot before changing qualityProfile" }, { "control", BuildQualityProfileRecord(a_feature) } };
 
 		const bool inserted = !g_qualityProfileSnapshots.contains(a_feature);
 		if (inserted)
@@ -961,6 +1084,8 @@ namespace
 			return { { "error", "quality parameter control is unavailable" }, { "control", buildControl() } };
 		if (g_performanceSnapshots.contains(a_feature))
 			return { { "error", "restore the outstanding performanceActive snapshot before changing qualityParameters" }, { "control", buildControl() } };
+		if (g_styleParameterSnapshots.contains(a_feature))
+			return { { "error", "restore the outstanding styleParameters snapshot before changing qualityParameters" }, { "control", buildControl() } };
 		if (a_parameters.empty())
 			return { { "error", "qualityParameters requires at least one parameter" }, { "control", buildControl() } };
 
@@ -1136,6 +1261,124 @@ namespace
 		};
 	}
 
+	json SetStyleParameterControl(const std::string& a_feature, const json& a_parameters)
+	{
+		auto buildControl = [&]() { return BuildStyleParameterRecord(a_feature); };
+		if (!SupportsStyleParameters(a_feature))
+			return FindControl(a_feature, "styleParameters");
+		auto* feature = FindFeatureByShortName(a_feature);
+		if (!feature || !feature->loaded)
+			return { { "error", "style parameter control is unavailable" }, { "control", buildControl() } };
+		if (g_performanceSnapshots.contains(a_feature) || g_qualityProfileSnapshots.contains(a_feature))
+			return { { "error", "restore the outstanding performance or quality snapshot before changing styleParameters" }, { "control", buildControl() } };
+		if (a_parameters.empty())
+			return { { "error", "styleParameters requires at least one parameter" }, { "control", buildControl() } };
+
+		for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter) {
+			double minimum = 0.0;
+			double maximum = 0.0;
+			bool known = true;
+			if (a_feature == "ImageBasedLighting") {
+				if (parameter.key() == "EnvIBLScale" || parameter.key() == "SkyIBLScale" ||
+					parameter.key() == "EnvIBLSaturation" || parameter.key() == "SkyIBLSaturation") {
+					maximum = 2.0;
+				} else {
+					known = false;
+				}
+			} else if (parameter.key() == "GodrayShaftIntensity") {
+				maximum = 3.0;
+			} else if (parameter.key() == "GodrayOpacity") {
+				maximum = 2.0;
+			} else if (parameter.key() == "GodraySaturation") {
+				maximum = 4.0;
+			} else if (parameter.key() == "CustomColorContribution" || parameter.key() == "CustomColorRed" ||
+				parameter.key() == "CustomColorGreen" || parameter.key() == "CustomColorBlue") {
+				maximum = 1.0;
+			} else {
+				known = false;
+			}
+
+			if (!known) {
+				return {
+					{ "error", "unknown style parameter" },
+					{ "feature", a_feature },
+					{ "parameter", parameter.key() },
+					{ "control", buildControl() },
+				};
+			}
+			if (!parameter.value().is_number()) {
+				return {
+					{ "error", "style parameters require numeric values" },
+					{ "feature", a_feature },
+					{ "parameter", parameter.key() },
+					{ "control", buildControl() },
+				};
+			}
+			const double value = parameter.value().get<double>();
+			if (!std::isfinite(value) || value < minimum || value > maximum) {
+				return {
+					{ "error", "style parameter is outside its allowed range" },
+					{ "feature", a_feature },
+					{ "parameter", parameter.key() },
+					{ "requestedValue", parameter.value() },
+					{ "minimum", minimum },
+					{ "maximum", maximum },
+					{ "control", buildControl() },
+				};
+			}
+		}
+
+		const bool inserted = !g_styleParameterSnapshots.contains(a_feature);
+		if (inserted)
+			g_styleParameterSnapshots.emplace(a_feature, CaptureStyleParameterState(a_feature));
+		try {
+			if (a_feature == "ImageBasedLighting") {
+				auto& settings = globals::features::ibl.settings;
+				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter) {
+					const float value = parameter.value().get<float>();
+					if (parameter.key() == "EnvIBLScale")
+						settings.EnvIBLScale = value;
+					else if (parameter.key() == "SkyIBLScale")
+						settings.SkyIBLScale = value;
+					else if (parameter.key() == "EnvIBLSaturation")
+						settings.EnvIBLSaturation = value;
+					else if (parameter.key() == "SkyIBLSaturation")
+						settings.SkyIBLSaturation = value;
+				}
+			} else {
+				auto& settings = globals::features::volumetricLighting.settings;
+				for (auto parameter = a_parameters.begin(); parameter != a_parameters.end(); ++parameter) {
+					const float value = parameter.value().get<float>();
+					if (parameter.key() == "GodrayShaftIntensity")
+						settings.GodrayShaftIntensity = value;
+					else if (parameter.key() == "GodrayOpacity")
+						settings.GodrayOpacity = value;
+					else if (parameter.key() == "GodraySaturation")
+						settings.GodraySaturation = value;
+					else if (parameter.key() == "CustomColorContribution")
+						settings.CustomColorContribution = value;
+					else if (parameter.key() == "CustomColorRed")
+						settings.CustomColorRed = value;
+					else if (parameter.key() == "CustomColorGreen")
+						settings.CustomColorGreen = value;
+					else if (parameter.key() == "CustomColorBlue")
+						settings.CustomColorBlue = value;
+				}
+			}
+		} catch (...) {
+			if (inserted)
+				g_styleParameterSnapshots.erase(a_feature);
+			throw;
+		}
+
+		return {
+			{ "action", "set" },
+			{ "persisted", false },
+			{ "restoredSnapshot", false },
+			{ "control", buildControl() },
+		};
+	}
+
 	json RestoreQualityProfileSnapshot(const std::string& a_feature, const std::string& a_control)
 	{
 		auto buildControl = [&]() {
@@ -1157,6 +1400,27 @@ namespace
 			{ "persisted", false },
 			{ "restoredSnapshot", true },
 			{ "control", buildControl() },
+		};
+	}
+
+	json RestoreStyleParameterSnapshot(const std::string& a_feature)
+	{
+		const auto snapshot = g_styleParameterSnapshots.find(a_feature);
+		if (snapshot == g_styleParameterSnapshots.end()) {
+			return {
+				{ "action", "restore" },
+				{ "persisted", false },
+				{ "restoredSnapshot", false },
+				{ "control", BuildStyleParameterRecord(a_feature) },
+			};
+		}
+		RestoreStyleParameterState(a_feature, snapshot->second);
+		g_styleParameterSnapshots.erase(snapshot);
+		return {
+			{ "action", "restore" },
+			{ "persisted", false },
+			{ "restoredSnapshot", true },
+			{ "control", BuildStyleParameterRecord(a_feature) },
 		};
 	}
 
@@ -1196,6 +1460,19 @@ namespace
 				++snapshot;
 			}
 		}
+		for (auto snapshot = g_styleParameterSnapshots.begin(); snapshot != g_styleParameterSnapshots.end();) {
+			try {
+				RestoreStyleParameterState(snapshot->first, snapshot->second);
+				restored.push_back(snapshot->first + ":styleParameters");
+				snapshot = g_styleParameterSnapshots.erase(snapshot);
+			} catch (const std::exception& e) {
+				failed.push_back({ { "feature", snapshot->first }, { "control", "styleParameters" }, { "error", e.what() } });
+				++snapshot;
+			} catch (...) {
+				failed.push_back({ { "feature", snapshot->first }, { "control", "styleParameters" }, { "error", "restore failed" } });
+				++snapshot;
+			}
+		}
 		return {
 			{ "action", "restoreAll" },
 			{ "persisted", false },
@@ -1203,7 +1480,8 @@ namespace
 			{ "failed", std::move(failed) },
 			{ "remainingPerformanceSnapshots", g_performanceSnapshots.size() },
 			{ "remainingQualityProfileSnapshots", g_qualityProfileSnapshots.size() },
-			{ "remainingSnapshots", g_performanceSnapshots.size() + g_qualityProfileSnapshots.size() },
+			{ "remainingStyleParameterSnapshots", g_styleParameterSnapshots.size() },
+			{ "remainingSnapshots", g_performanceSnapshots.size() + g_qualityProfileSnapshots.size() + g_styleParameterSnapshots.size() },
 		};
 	}
 
@@ -1238,8 +1516,10 @@ namespace
 		if (action == "get")
 			return RunOnMainThread([feature, control]() { return json{ { "action", "get" }, { "control", FindControl(feature, control) } }; });
 		if (action == "restore") {
-			if (control != "qualityProfile" && control != "qualityParameters")
-				return { { "error", "restore supports qualityProfile and qualityParameters; performanceActive restores through set value true" } };
+			if (control != "qualityProfile" && control != "qualityParameters" && control != "styleParameters")
+				return { { "error", "restore supports qualityProfile, qualityParameters, and styleParameters; performanceActive restores through set value true" } };
+			if (control == "styleParameters")
+				return RunOnMainThread([feature]() { return RestoreStyleParameterSnapshot(feature); });
 			return RunOnMainThread([feature, control]() { return RestoreQualityProfileSnapshot(feature, control); });
 		}
 
@@ -1258,6 +1538,14 @@ namespace
 			const auto requestedValue = *value;
 			return RunOnMainThread([feature, requestedValue]() {
 				return SetQualityParameterControl(feature, requestedValue);
+			});
+		}
+		if (control == "styleParameters") {
+			if (value == a_args.end() || !value->is_object())
+				return { { "error", "setting styleParameters requires an object value" } };
+			const auto requestedValue = *value;
+			return RunOnMainThread([feature, requestedValue]() {
+				return SetStyleParameterControl(feature, requestedValue);
 			});
 		}
 		if (value == a_args.end() || !value->is_boolean())
@@ -1350,8 +1638,10 @@ namespace FeatureControlDevBenchBridge
 			return;
 		}
 
-		static constexpr const char* descriptor =
+		[[maybe_unused]] static constexpr const char* legacyDescriptor =
 			R"({"description":"Discover and mutate typed, session-only CSX feature controls with effective readback and explicit live, shader-recompile, resource-rebind, reload, and restart metadata. Reversible qualityParameters cover Screen Space Shadows, Wetterness, Terrain Blending, SSGI, and Volumetric Lighting. SSGI resource-profile and custom VR volumetric-target changes remain restart-bound and read-only. restore reverts one held quality snapshot; restoreAll restores every outstanding snapshot. Package enablement remains restart-bound and read-only.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string","enum":["Performance","Balanced","Quality"]},{"type":"object","properties":{"Enabled":{"type":"boolean"},"AOInteriorsOnly":{"type":"boolean"},"ResolutionMode":{"type":"integer","minimum":0,"maximum":2},"NumSlices":{"type":"integer","minimum":1,"maximum":10},"NumSteps":{"type":"integer","minimum":1,"maximum":20},"ExteriorQuality":{"type":"integer","minimum":0,"maximum":2},"InteriorQuality":{"type":"integer","minimum":0,"maximum":2},"VRBaseSamplesAtReference":{"type":"number","minimum":16,"maximum":96},"VRCullDistance":{"type":"number","minimum":0,"maximum":20480},"TerrainCullDistance":{"type":"number","minimum":0,"maximum":8192},"RaindropFxRangeWorldUnits":{"type":"number"},"WetnessDistanceFadeRange":{"type":"number"},"RaindropGridSize":{"type":"number"},"RaindropInterval":{"type":"number"},"RaindropChance":{"type":"number"},"SplashesLifetime":{"type":"number"},"RippleLifetime":{"type":"number"}},"additionalProperties":false,"minProperties":1}]}},"required":["action"]}})";
+		static constexpr const char* descriptor =
+			R"({"description":"Discover and mutate typed, session-only CSX feature controls. Reversible styleParameters expose IBL energy/saturation and Volumetric Lighting shaft energy/colour without shader recompilation; list/get provide exact per-parameter bounds and effective readback.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","get","set","restore","restoreAll"],"default":"list"},"feature":{"type":"string"},"control":{"type":"string","enum":["packageEnabled","EnableIBL","Enabled","performanceActive","qualityProfile","qualityParameters","styleParameters"]},"value":{"oneOf":[{"type":"boolean"},{"type":"string"},{"type":"object","minProperties":1}]}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.controls",
 			descriptor,

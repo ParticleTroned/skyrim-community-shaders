@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "campaignId": "20260818-amd-svr-ovr-null-style-range-p01",
+  "status": "bounded-first-pass",
+  "hardwareRuntimeLane": "AMD native OpenVR through SteamVR null HMD",
+  "basePreset": "Unified Balanced / Natural Control",
+  "build": {
+    "configuration": "VR Release; Info logging; Release+DevBench bridge",
+    "dllSha256": "B04104CC57B39C72F24503E783EB81A1ED4E30F8667448AF84A21E82237F2CE5"
+  },
+  "constraints": {
+    "restartBoundChanges": 0,
+    "shaderRecompilingControls": 0,
+    "maximumCurves": 7,
+    "framesPerPhase": 8,
+    "saveSeparateEyes": true,
+    "saveCombined": false,
+    "timingPasses": 0,
+    "stopAfterThisBatchForReview": true
+  },
+  "anchors": {
+    "ibl": {
+      "id": "exterior-guardian-stones-clear-day",
+      "coc": "GuardianStones",
+      "gameHour": 14.0,
+      "weatherForm": "81A",
+      "expectedYaw": -1.550000906
+    },
+    "volumetric": {
+      "id": "exterior-guardian-stones-fog-dawn",
+      "coc": "GuardianStones",
+      "gameHour": 7.0,
+      "weatherForm": "C821E",
+      "expectedYaw": -1.550000906
+    }
+  },
+  "curves": [
+    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "EnvIBLScale", "values": [0.0, 0.25, 1.25, 2.0], "anchor": "ibl" },
+    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "SkyIBLScale", "values": [0.0, 0.5, 1.0, 2.0], "anchor": "ibl" },
+    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "EnvIBLSaturation", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "ibl" },
+    { "feature": "ImageBasedLighting", "control": "styleParameters", "parameter": "SkyIBLSaturation", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "ibl" },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodrayShaftIntensity", "values": [0.0, 0.5, 2.0, 3.0], "anchor": "volumetric" },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodrayOpacity", "values": [0.0, 0.5, 1.5, 2.0], "anchor": "volumetric" },
+    { "feature": "VolumetricLighting", "control": "styleParameters", "parameter": "GodraySaturation", "values": [0.0, 0.5, 2.0, 4.0], "anchor": "volumetric" }
+  ]
+}

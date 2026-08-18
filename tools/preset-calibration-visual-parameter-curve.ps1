@@ -1,5 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9]+$')][string]$Feature,
+    [ValidateSet('qualityParameters', 'styleParameters')][string]$Control = 'qualityParameters',
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9]+$')][string]$Parameter,
     [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][double[]]$Values,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9._-]+$')][string]$RunId,
@@ -23,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'preset-calibration-storage.ps1')
 $OutputRoot = Resolve-PresetCalibrationOutputRoot -OutputRoot $OutputRoot -Collection 'preset-automation-visual-parameter-curves'
 $baseUri = 'http://127.0.0.1:8921/api/tool/'
-$controlName = 'qualityParameters'
+$controlName = $Control
 $snapshotHeld = $false
 $hudToggled = $false
 $hasGameHour = $PSBoundParameters.ContainsKey('GameHour')
@@ -45,7 +46,7 @@ function Get-Control {
 function Get-EffectiveValue {
     param([Parameter(Mandatory = $true)]$Control)
     $property = $Control.effectiveValue.PSObject.Properties[$Parameter]
-    if (-not $property) { throw "$Feature does not expose quality parameter $Parameter" }
+    if (-not $property) { throw "$Feature does not expose $controlName parameter $Parameter" }
     [double]$property.Value
 }
 
@@ -53,7 +54,7 @@ function Set-ParameterValue {
     param([Parameter(Mandatory = $true)][double]$Value)
     $current = Get-Control
     $definitionProperty = $current.parameterDefinitions.PSObject.Properties[$Parameter]
-    if (-not $definitionProperty) { throw "$Feature does not define quality parameter $Parameter" }
+    if (-not $definitionProperty) { throw "$Feature does not define $controlName parameter $Parameter" }
     $requestValue = $Value
     if ($definitionProperty.Value.valueType -eq 'integer') {
         if ([Math]::Abs($Value - [Math]::Round($Value)) -gt 0.000001) { throw "$Feature parameter $Parameter requires an integer value" }
@@ -150,7 +151,7 @@ try {
     $profiler = Invoke-DevBenchTool -Tool 'communityshaders.profiler' -Payload @{ action = 'status' }
     if ($profiler.status.enabled) { throw 'Visual capture must not overlap profiler measurement' }
     $baseline = Get-Control; $record.baselineControl = $baseline
-    if (-not $baseline.available -or -not $baseline.writable) { throw "$Feature qualityParameters is unavailable: $($baseline.unavailableReason)" }
+    if (-not $baseline.available -or -not $baseline.writable) { throw "$Feature $controlName is unavailable: $($baseline.unavailableReason)" }
     $snapshotHeld = [bool]$baseline.snapshotHeld
     if ($snapshotHeld -and -not $UseExistingSnapshot) { throw "$Feature already has an outstanding qualityParameters snapshot; pass -UseExistingSnapshot only when this run owns that deliberate preconfiguration snapshot" }
     $baselineValue = Get-EffectiveValue -Control $baseline

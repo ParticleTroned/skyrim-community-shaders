@@ -132,6 +132,7 @@ private:
 	static VolumetricLightingDescriptor& GetVLDescriptor();
 	static void SetVLQuality(VolumetricLightingDescriptor& descriptor, std::uint32_t quality);
 	static void RenderVolumetricLighting(VolumetricLightingDescriptor* descriptor, RE::NiCamera* camera, bool flag);
+	VolumetricLightingDescriptor BuildRuntimeDescriptor() const;
 
 	void DrawGodrayTuningSettings();
 	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType);
@@ -165,6 +166,8 @@ private:
 	bool inInterior = false;
 	bool inInteriorWithSun = false;
 	bool rainOnlySuppressionActive = false;
+	VolumetricLightingDescriptor untunedDescriptor{};
+	bool hasUntunedDescriptor = false;
 
 	struct VLData
 	{

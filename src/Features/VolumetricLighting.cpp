@@ -183,6 +183,38 @@ namespace
 		}
 	}
 
+	void ApplyGodrayRuntimeTuning(
+		RE::BSVolumetricLightingRenderData& descriptor,
+		const VolumetricLighting::Settings& settings)
+	{
+		if (!IsImageSpaceReplacementEnabled())
+			return;
+
+		ApplySkySyncIntensity(descriptor);
+		const GodrayRuntimeParams params = BuildGodrayRuntimeParams(settings);
+		if (!HasDescriptorTuning(params))
+			return;
+
+		if (!IsNear(params.shaftIntensity, kDefaultGodrayShaftIntensity))
+			ApplyGodrayShaftIntensity(descriptor, params.shaftIntensity);
+		if (!IsNear(params.opacity, kDefaultGodrayOpacity))
+			ApplyGodrayOpacity(descriptor, params.opacity);
+
+		if (!IsNear(params.saturation, kDefaultGodraySaturation) ||
+			!IsNear(params.customContribution, kDefaultCustomContribution)) {
+			const RE::NiColor weatherColor = SaturateColor(
+				GetCurrentWeatherSunColor(GetDescriptorColor(descriptor)),
+				params.saturation);
+			const RE::NiColor finalColor = LerpColor(
+				weatherColor,
+				params.customColor,
+				params.customContribution);
+
+			descriptor.customColor.contribution = 1.0f;
+			SetDescriptorColor(descriptor, finalColor);
+		}
+	}
+
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -705,6 +737,7 @@ void VolumetricLighting::SetupVL()
 		*bEnableVolumetricLighting = runtimeEnabled;
 	}
 
+	hasUntunedDescriptor = false;
 	*gVolumetricLightingSizeHigh = static_cast<Quality>(quality) == Quality::Custom ? customSize : defaultSizeHigh;
 	SetVLQuality(GetVLDescriptor(), quality);
 
@@ -761,11 +794,20 @@ void VolumetricLighting::RenderVolumetricLighting(VolumetricLightingDescriptor* 
 	func(descriptor, camera, flag);
 }
 
+VolumetricLighting::VolumetricLightingDescriptor VolumetricLighting::BuildRuntimeDescriptor() const
+{
+	VolumetricLightingDescriptor descriptor = hasUntunedDescriptor ? untunedDescriptor : GetVLDescriptor();
+	ApplyGodrayRuntimeTuning(descriptor, settings);
+	return descriptor;
+}
+
 void VolumetricLighting::RenderDepth::thunk()
 {
 	func();
-	if (globals::game::bEnableVolumetricLighting && *globals::game::bEnableVolumetricLighting)
-		RenderVolumetricLighting(&GetVLDescriptor(), RE::Main::WorldRootCamera(), false);
+	if (globals::game::bEnableVolumetricLighting && *globals::game::bEnableVolumetricLighting) {
+		auto descriptor = globals::features::volumetricLighting.BuildRuntimeDescriptor();
+		RenderVolumetricLighting(&descriptor, RE::Main::WorldRootCamera(), false);
+	}
 }
 
 VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolumetricLighting_VolumetricLightingDescriptor_Get::thunk()
@@ -775,34 +817,9 @@ VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolum
 		return nullptr;
 
 	auto& feature = globals::features::volumetricLighting;
-	const bool imageSpaceReplacementEnabled = IsImageSpaceReplacementEnabled();
-	const auto& runtimeSettings = feature.settings;
-	const GodrayRuntimeParams params = BuildGodrayRuntimeParams(runtimeSettings);
-
-	// If image-space replacement is disabled, keep vanilla descriptor behavior untouched.
-	if (!imageSpaceReplacementEnabled) {
-		return descriptor;
-	}
-
-	ApplySkySyncIntensity(*descriptor);
-
-	if (!HasDescriptorTuning(params)) {
-		return descriptor;
-	}
-
-	if (!IsNear(params.shaftIntensity, kDefaultGodrayShaftIntensity))
-		ApplyGodrayShaftIntensity(*descriptor, params.shaftIntensity);
-	if (!IsNear(params.opacity, kDefaultGodrayOpacity))
-		ApplyGodrayOpacity(*descriptor, params.opacity);
-
-	if (!IsNear(params.saturation, kDefaultGodraySaturation) || !IsNear(params.customContribution, kDefaultCustomContribution)) {
-		const RE::NiColor weatherColor = SaturateColor(GetCurrentWeatherSunColor(GetDescriptorColor(*descriptor)), params.saturation);
-		const RE::NiColor finalColor = LerpColor(weatherColor, params.customColor, params.customContribution);
-
-		// Use explicit final color each frame so saturation and custom contribution are independent.
-		descriptor->customColor.contribution = 1.0f;
-		SetDescriptorColor(*descriptor, finalColor);
-	}
+	feature.untunedDescriptor = *descriptor;
+	feature.hasUntunedDescriptor = true;
+	ApplyGodrayRuntimeTuning(*descriptor, feature.settings);
 
 	return descriptor;
 }

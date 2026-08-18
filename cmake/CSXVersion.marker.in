@@ -1,0 +1,3 @@
+[CSX]
+ReleaseTag=@CSX_RELEASE_TAG@
+PluginVersion=CSX @CSX_VERSION@

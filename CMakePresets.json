@@ -58,8 +58,7 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "OFF",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "COMMONLIB_PREBUILT_MULTICONFIG": "ON",
-                "CSX_VERSION": "3.18-SE"
+                "COMMONLIB_PREBUILT_MULTICONFIG": "ON"
             },
             "inherits": "skyrim"
         },
@@ -71,8 +70,7 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "OFF",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "COMMONLIB_PREBUILT_MULTICONFIG": "ON",
-                "CSX_VERSION": "3.18-SE"
+                "COMMONLIB_PREBUILT_MULTICONFIG": "ON"
             },
             "inherits": "skyrim"
         },
@@ -90,7 +88,8 @@
             "inherits": "ALL",
             "cacheVariables": {
                 "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON",
-                "CSX_VERSION": "3.18-SE"
+                "AIO_ZIP_TO_DIST": "OFF",
+                "ZIP_TO_DIST": "OFF"
             }
         }
     ],

@@ -32,17 +32,17 @@ covered unless they have a declared deterministic inventory.
 
 ## Contract files
 
-| Concern | Source of truth |
-| --- | --- |
-| Builder, validation, and packaging | `tools/build-shader-cache.py` |
-| Python and hlslkit pin | `tools/shader-cache-requirements.txt` |
-| SE permutation inventory | `.github/configs/shader-validation.yaml` |
-| Runtime digest and manifest | `src/Utils/ContentHash.h`, `src/Utils/ShaderCacheManifest.h`, `src/ShaderCache.cpp` |
-| CSX/plugin version | `CSX_VERSION` in `CMakePresets.json` and `CMakeLists.txt` |
-| Core compatibility marker | `package/SKSE/Plugins/CommunityShaders/CSX<version>-SE.marker` |
-| Feature versions | `features/*/Shaders/Features/*.ini` |
-| Standalone CI | `.github/workflows/shader-cache.yaml` |
-| Release integration | `.github/workflows/release-build.yaml` |
+| Concern                             | Source of truth                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------------------------- |
+| Builder, validation, and packaging  | `tools/build-shader-cache.py`                                                       |
+| Python and hlslkit pin              | `tools/shader-cache-requirements.txt`                                               |
+| SE permutation inventory            | `.github/configs/shader-validation.yaml`                                            |
+| Runtime digest and manifest         | `src/Utils/ContentHash.h`, `src/Utils/ShaderCacheManifest.h`, `src/ShaderCache.cpp` |
+| CSX/plugin version                  | `CSX_VERSION` in `cmake/CSXVersion.cmake`                                           |
+| Generated core compatibility marker | `CMakeLists.txt` and `cmake/CSXVersion.marker.in`                                   |
+| Feature versions                    | `features/*/Shaders/Features/*.ini`                                                 |
+| Standalone CI                       | `.github/workflows/shader-cache.yaml`                                               |
+| Release integration                 | `.github/workflows/release-build.yaml`                                              |
 
 The Python and C++ digest implementations form one compatibility contract:
 CRLF-normalized source and recursively resolved includes are hashed, then
@@ -75,7 +75,12 @@ if (git status --porcelain) {
     throw "Release shader caches must be built from a clean working tree."
 }
 
-$releaseLabel = "CSX3.18-SE"
+$releaseLabel = git tag --points-at HEAD |
+    Where-Object { $_ -like "SE-RC*" } |
+    Select-Object -First 1
+if (-not $releaseLabel) {
+    throw "The release commit must have an SE-RC tag."
+}
 & $cachePython tools/build-shader-cache.py `
     --package `
     --package-label $releaseLabel
@@ -84,12 +89,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 ```
 
-The builder derives the runtime `Info.ini` identity from the SE release preset
-as `CSX 3.18-SE`. The DLL startup log, saved settings, runtime-generated cache
-metadata, prebuilt cache metadata, Windows product metadata, and FOMOD
-compatibility gate all use that same CSX identity. Use `--plugin-version` only
-when intentionally testing another `CSX <major>.<minor>-SE` build. The release
-tag belongs in `--package-label`, not `Info.ini`.
+The builder derives the runtime `Info.ini` identity from the single
+`CSX_VERSION` declaration in `cmake/CSXVersion.cmake`. The DLL startup log,
+saved settings, runtime-generated cache metadata, prebuilt cache metadata,
+Windows product metadata, generated compatibility marker, and FOMOD gate all
+use that same CSX identity. Use `--plugin-version` only when intentionally
+testing another `CSX <major>.<minor>-SE` build. The release tag belongs in
+`--package-label`, not `Info.ini`.
 
 The builder stages a merged shader tree, applies the shipped profile, validates
 any `captured_shader_variants` guard, compiles the SE inventory, remaps
@@ -102,7 +108,7 @@ Expected output:
 ```text
 dist/shader-cache/
 |-- SE/ShaderCache/...
-`-- ShaderCache-SE-CSX3.18-SE.7z
+`-- ShaderCache-SE-<release-label>.7z
 ```
 
 Publication refuses arbitrary directories, links, and malformed existing
@@ -114,7 +120,7 @@ Useful overrides:
 ```powershell
 & $cachePython tools/build-shader-cache.py `
     --package `
-    --package-label "CSX3.18-SE" `
+    --package-label $releaseLabel `
     --fxc "C:\Program Files (x86)\Windows Kits\10\bin\<sdk>\x64\fxc.exe" `
     --jobs 4
 ```
@@ -163,16 +169,17 @@ bytecode.
 
 Successful builder completion verifies:
 
-- at least one cache blob exists and every blob begins with `DXBC`;
-- every blob has one lowercase 128-bit manifest digest and no entry is orphaned;
-- `Info.ini` contains the expected plugin and feature metadata;
-- the archive contains the cache root and both FOMOD files.
+-   at least one cache blob exists and every blob begins with `DXBC`;
+-   every blob has one lowercase 128-bit manifest digest and no entry is orphaned;
+-   `Info.ini` contains the expected plugin and feature metadata;
+-   the archive contains the cache root and both FOMOD files.
 
 Inspect an archive with:
 
 ```powershell
-cmake -E tar tf "dist/shader-cache/ShaderCache-SE-CSX3.18-SE.7z"
-Get-FileHash "dist/shader-cache/ShaderCache-SE-CSX3.18-SE.7z" -Algorithm SHA256
+$cacheArchive = "dist/shader-cache/ShaderCache-SE-$releaseLabel.7z"
+cmake -E tar tf $cacheArchive
+Get-FileHash $cacheArchive -Algorithm SHA256
 ```
 
 The standalone workflow uploads one fixed artifact, `ShaderCache-SE`. The
@@ -186,13 +193,19 @@ gh workflow run shader-cache.yaml `
 ```
 
 Install the archive so its top-level `ShaderCache` directory becomes
-`Data/ShaderCache`. In Mod Organizer 2, use the included FOMOD. It requires both
-an active `SKSE/Plugins/CommunityShaders.dll` and the exact active
-`SKSE/Plugins/CommunityShaders/CSX3.18-SE.marker` installed by the matching
-core/AIO package. A missing or different CSX release blocks installation before
-the cache files are selected. Manually setting the `ShaderCache` folder itself
-as the data directory bypasses that safety gate, flattens the layout, and is
-invalid.
+`Data/ShaderCache`. In Mod Organizer 2, use the included FOMOD. It checks the
+exact versioned marker generated and installed beside the active
+`CommunityShaders.dll` by the matching core/AIO package. A missing or different
+CSX release blocks installation before the cache files are selected.
+
+MO2's FOMOD Installer disables dependencies on non-plugin files by default. Set
+its `use_any_file` option to `true`; otherwise MO2 reports every DLL or marker
+dependency as missing even when the file is active. Other installers should
+evaluate the standard `fileDependency` directly. The runtime independently
+rejects a cache whose `Info.ini` plugin identity does not match the loaded DLL.
+
+Manually setting the `ShaderCache` folder itself as the data directory bypasses
+the installer gate, flattens the layout, and is invalid.
 
 ## Change checklist
 

@@ -47,7 +47,11 @@ FOMOD_INFO_FILE_NAME = "info.xml"
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
 TARGET_RUNTIME = "SE"
 CSX_PLUGIN_VERSION_PATTERN = re.compile(r"^CSX (?P<version>[0-9]+\.[0-9]+)-SE$")
-CSX_MARKER_RELATIVE_DIRECTORY = Path("package/SKSE/Plugins/CommunityShaders")
+CSX_VERSION_FILE = Path("cmake/CSXVersion.cmake")
+CSX_VERSION_DECLARATION_PATTERN = re.compile(
+    r'^\s*set\(CSX_VERSION\s+"(?P<version>[0-9]+\.[0-9]+-SE)"\)\s*$',
+    re.MULTILINE,
+)
 
 # Distribution profile transforms. The source validation configs are still
 # useful as compile inventories, but the shipped cache profile is different:
@@ -560,41 +564,22 @@ def write_info_ini(cache_dir: Path, stage: Path, plugin_version: str) -> int:
 
 
 def default_plugin_version(source_root: Path) -> str:
-    presets_path = source_root / "CMakePresets.json"
-    if not presets_path.is_file():
-        raise SystemExit(
-            "cannot derive plugin version from CMakePresets.json; "
-            "pass --plugin-version"
-        )
+    version_path = source_root / CSX_VERSION_FILE
+    if not version_path.is_file():
+        raise SystemExit(f"cannot derive plugin version from {version_path}")
 
     try:
-        presets = json.loads(presets_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SystemExit(
-            f"cannot parse {presets_path}; pass --plugin-version"
-        ) from exc
+        version_source = version_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"cannot read plugin version from {version_path}") from exc
 
-    candidates = ("AIO-Release", "ALL", "ALL-VS2022")
-    by_name = {
-        preset.get("name"): preset
-        for preset in presets.get("configurePresets", [])
-        if isinstance(preset, dict)
-    }
-    for preset_name in candidates:
-        preset = by_name.get(preset_name)
-        if not preset:
-            continue
-        cache_variables = preset.get("cacheVariables", {})
-        version = cache_variables.get("CSX_VERSION")
-        if isinstance(version, str) and version:
-            plugin_version = f"CSX {version}"
-            validate_csx_plugin_version(plugin_version)
-            return plugin_version
+    match = CSX_VERSION_DECLARATION_PATTERN.search(version_source)
+    if not match:
+        raise SystemExit(f"cannot parse CSX_VERSION from {version_path}")
 
-    raise SystemExit(
-        "cannot derive SE CSX_VERSION from CMakePresets.json; "
-        "pass --plugin-version"
-    )
+    plugin_version = f"CSX {match.group('version')}"
+    validate_csx_plugin_version(plugin_version)
+    return plugin_version
 
 
 def validate_csx_plugin_version(plugin_version: str) -> str:
@@ -605,26 +590,6 @@ def validate_csx_plugin_version(plugin_version: str) -> str:
             "plugin version must use the 'CSX <major>.<minor>-SE' format"
         )
     return f"CSX{match.group('version')}-SE"
-
-
-def validate_source_compatibility_marker(
-    source_root: Path,
-    plugin_version: str,
-    runtime: str,
-) -> str:
-    """Require one exact core marker before packaging a cache installer."""
-    if runtime != TARGET_RUNTIME:
-        raise SystemExit(f"shader-cache packaging only supports {TARGET_RUNTIME}")
-    compatibility_tag = validate_csx_plugin_version(plugin_version)
-    marker_directory = source_root / CSX_MARKER_RELATIVE_DIRECTORY
-    expected_marker = marker_directory / f"{compatibility_tag}.marker"
-    markers = sorted(marker_directory.glob("CSX*.marker"))
-    if markers != [expected_marker] or not expected_marker.is_file():
-        found = ", ".join(path.name for path in markers) or "none"
-        raise SystemExit(
-            f"the core package must contain only {expected_marker.name}; found: {found}"
-        )
-    return compatibility_tag
 
 
 def locate_fxc(explicit: str | None) -> str:
@@ -976,7 +941,6 @@ def validate_fomod_installer(
         for dependency in root.findall("./moduleDependencies/fileDependency")
     }
     expected_dependencies = {
-        ("SKSE/Plugins/CommunityShaders.dll", "Active"),
         (
             "SKSE/Plugins/CommunityShaders/"
             f"{compatibility_tag}.marker",
@@ -1019,16 +983,16 @@ def write_fomod_installer(
     display_label = safe_label(label)
     module_name = f"CSX {runtime} Shader Cache - {compatibility_tag}"
     description = (
-        f"Requires an active {compatibility_tag} core installation, then installs "
-        "the matching precompiled shader cache at Data\\ShaderCache."
+        f"Requires the active CommunityShaders.dll from {compatibility_tag}, "
+        "then installs the matching precompiled shader cache at "
+        "Data\\ShaderCache."
     )
     module_config = f"""<?xml version="1.0" encoding="UTF-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
   <moduleName>{module_name}</moduleName>
   <moduleDependencies operator="And">
-    <fileDependency file="SKSE/Plugins/CommunityShaders.dll" state="Active" />
-    <fileDependency file="SKSE/Plugins/CommunityShaders/{compatibility_tag}.marker" state="Active" />
+    <fileDependency file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker" state="Active" />
   </moduleDependencies>
   <requiredInstallFiles>
     <folder source="{CACHE_DIRECTORY}" destination="{CACHE_DIRECTORY}" priority="0" />
@@ -1275,12 +1239,6 @@ def main() -> int:
     plugin_version = args.plugin_version or default_plugin_version(source_root)
     validate_ini_value(plugin_version, "SE plugin version")
     compatibility_tag = validate_csx_plugin_version(plugin_version)
-    if args.package:
-        compatibility_tag = validate_source_compatibility_marker(
-            source_root,
-            plugin_version,
-            TARGET_RUNTIME,
-        )
 
     out_root = Path(args.out).resolve()
     if source_root == out_root or source_root.is_relative_to(out_root):

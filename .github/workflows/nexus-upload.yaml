@@ -161,7 +161,7 @@ jobs:
                     ARGS+=( --core-artifact-pattern "$INPUT_ARTIFACT_PATTERN" )
                   fi
                   # Strip the CSX prefix so Nexus shows the branch-qualified
-                  # release identity, for example "3.18-SE".
+                  # release identity in the "<major>.<minor>-SE" format.
                   RELEASE_VER="${RELEASE_TAG#CSX}"
                   ARGS+=( --release-version "$RELEASE_VER" )
                   python tools/feature_version_audit.py "${ARGS[@]}"
@@ -526,7 +526,7 @@ jobs:
               id: upload
               if: steps.version-check.outputs.should_upload == 'true'
               continue-on-error: true
-              uses: Nexus-Mods/upload-action@a746f1867153abc77beed950bf7526ece1a9f8c4  # v1.0.0-beta.5
+              uses: Nexus-Mods/upload-action@a746f1867153abc77beed950bf7526ece1a9f8c4 # v1.0.0-beta.5
               with:
                   api_key: ${{ secrets.UNEX_APIKEY }}
                   file_group_id: ${{ matrix.file_group_id }}

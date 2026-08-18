@@ -2,11 +2,8 @@ cmake_minimum_required(VERSION 4.2)
 cmake_policy(SET CMP0116 NEW)
 set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 
-set(CSX_VERSION
-    "3.18-SE"
-    CACHE STRING
-    "Display version for Community Shaders Expanded."
-)
+unset(CSX_VERSION CACHE)
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/CSXVersion.cmake")
 if(NOT CSX_VERSION MATCHES [[^([0-9]+)\.([0-9]+)-SE$]])
     message(
         FATAL_ERROR
@@ -26,22 +23,15 @@ project(
 set(CSX_PACKAGE_NAME "CSX")
 set(CSX_RELEASE_TAG "CSX${CSX_VERSION}")
 set(CSX_CACHE_MARKER_DIRECTORY
-    "${CMAKE_SOURCE_DIR}/package/SKSE/Plugins/CommunityShaders"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated-package/SKSE/Plugins/CommunityShaders"
 )
-set(CSX_CACHE_MARKER
-    "${CSX_CACHE_MARKER_DIRECTORY}/${CSX_RELEASE_TAG}.marker"
+set(CSX_CACHE_MARKER "${CSX_CACHE_MARKER_DIRECTORY}/${CSX_RELEASE_TAG}.marker")
+file(MAKE_DIRECTORY "${CSX_CACHE_MARKER_DIRECTORY}")
+configure_file(
+    "${CMAKE_CURRENT_LIST_DIR}/cmake/CSXVersion.marker.in"
+    "${CSX_CACHE_MARKER}"
+    @ONLY
 )
-file(GLOB _CSX_CACHE_MARKERS "${CSX_CACHE_MARKER_DIRECTORY}/CSX*.marker")
-list(LENGTH _CSX_CACHE_MARKERS _CSX_CACHE_MARKER_COUNT)
-if(
-    NOT _CSX_CACHE_MARKER_COUNT EQUAL 1
-    OR NOT "${_CSX_CACHE_MARKERS}" STREQUAL "${CSX_CACHE_MARKER}"
-)
-    message(
-        FATAL_ERROR
-        "The core package must contain exactly ${CSX_RELEASE_TAG}.marker and no other CSX compatibility marker."
-    )
-endif()
 
 # default install path
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
@@ -581,6 +571,11 @@ install(
     COMPONENT SKSE
 )
 install(
+    FILES "${CSX_CACHE_MARKER}"
+    DESTINATION SKSE/Plugins/CommunityShaders
+    COMPONENT SKSE
+)
+install(
     DIRECTORY ${CMAKE_SOURCE_DIR}/package/ ${FEATURE_PATHS_SLASH}
     DESTINATION .
     COMPONENT Shaders
@@ -608,6 +603,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         LIST_DIRECTORIES FALSE
         CONFIGURE_DEPENDS
         "${CMAKE_SOURCE_DIR}/package/*"
+    )
+    list(
+        APPEND _AIO_INPUT_MANIFEST_FILES
+        "${CMAKE_SOURCE_DIR}/cmake/CSXVersion.cmake"
     )
     list(FILTER _AIO_INPUT_MANIFEST_FILES EXCLUDE REGEX "/Tests/")
     foreach(_fpath IN LISTS FEATURE_PATHS)
@@ -710,6 +709,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         list(FILTER _tmp EXCLUDE REGEX "/Shaders/")
         list(APPEND _AIO_PACKAGE_FILES ${_tmp})
     endforeach()
+    list(APPEND _AIO_PACKAGE_FILES "${CSX_CACHE_MARKER}")
 
     # Prepare AIO by copying files only when different. This avoids updating
     # timestamps for unchanged files and prevents downstream incremental
@@ -747,6 +747,15 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DFEATURE_PATHS_FILE="${_feature_paths_list_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
+    )
+    list(
+        APPEND _prepare_aio_cmds
+        COMMAND
+        ${CMAKE_COMMAND}
+        -DMARKER_SOURCE=${CSX_CACHE_MARKER}
+        -DMARKER_DESTINATION=${AIO_DIR}/SKSE/Plugins/CommunityShaders/${CSX_RELEASE_TAG}.marker
+        -P
+        "${CMAKE_SOURCE_DIR}/cmake/SyncCSXMarker.cmake"
     )
 
     # Copy package files (exclude test files from production packages, and
@@ -802,6 +811,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_AIO_PACKAGE_FILES}
             ${PROJECT_NAME}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
+            ${CMAKE_SOURCE_DIR}/cmake/SyncCSXMarker.cmake
     )
 
     # If AIO was manually (or programmatically) deleted, the stamp is stale —
@@ -1157,9 +1167,7 @@ if(ZIP_TO_DIST)
     add_custom_command(
         TARGET ${PROJECT_NAME}
         POST_BUILD
-        COMMAND
-            ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}"
-            ${CMAKE_SOURCE_DIR}/dist
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}"
         COMMAND
             ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}/SKSE/Plugins"
             ${CMAKE_SOURCE_DIR}/dist
@@ -1254,8 +1262,6 @@ if(AIO_ZIP_TO_DIST)
         add_custom_command(
             TARGET ${PROJECT_NAME}
             POST_BUILD
-            COMMAND
-                ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/dist
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/dist
         )
     endif()
@@ -1309,6 +1315,7 @@ file(
 # Add SKSE plugin dll as dependency (use target-file generator expression so CMake
 # knows the actual output path of the target at build time)
 list(APPEND CORE_SOURCES "$<TARGET_FILE:${PROJECT_NAME}>")
+list(APPEND CORE_SOURCES "${CSX_CACHE_MARKER}")
 
 set(CORE_FEATURE_PATHS "${CMAKE_SOURCE_DIR}/package/")
 

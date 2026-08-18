@@ -77,7 +77,7 @@
                 "ENABLE_SKYRIM_AE": "OFF",
                 "ENABLE_SKYRIM_SE": "OFF",
                 "ENABLE_SKYRIM_VR": "ON",
-                "CSX_VERSION": "3.18-VR"
+                "CSX_VERSION": "3.19-VR"
             },
             "inherits": "skyrim"
         },
@@ -88,7 +88,7 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "CSX_VERSION": "3.18-VR"
+                "CSX_VERSION": "3.19-VR"
             },
             "inherits": "skyrim"
         },
@@ -98,7 +98,7 @@
                 "ENABLE_SKYRIM_AE": "OFF",
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
-                "CSX_VERSION": "3.18-VR"
+                "CSX_VERSION": "3.19-VR"
             },
             "inherits": "skyrim"
         },
@@ -127,7 +127,7 @@
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
                 "AUTO_PLUGIN_DEPLOYMENT": "OFF",
-                "CSX_VERSION": "3.18-VR"
+                "CSX_VERSION": "3.19-VR"
             },
             "inherits": "skyrim"
         },

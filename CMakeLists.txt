@@ -7,13 +7,13 @@ set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 option(
     DEVBENCH_BRIDGE
     "Expose render-scale iteration controls through the devbench MCP host"
-    ON
+    OFF
 )
 if(DEVBENCH_BRIDGE)
     list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
 endif()
 
-set(_CSX_VERSION_DEFAULT "3.18-VR")
+set(_CSX_VERSION_DEFAULT "3.19-VR")
 if(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\]AIO-Release$]])
     set(_CSX_VERSION_DEFAULT "3.15-SE")
 elseif(DEFINED ENABLE_SKYRIM_VR AND NOT ENABLE_SKYRIM_VR)
@@ -128,6 +128,11 @@ option(
 option(
     BUILD_CONTROLLER_TESTS
     "Build dependency-free controller state regression tests"
+    OFF
+)
+option(
+    SHADER_VALIDATION_INCLUDE_NON_SHIPPED_FEATURES
+    "Stage non-shipped feature shaders for the validation-only prepare_shaders target."
     OFF
 )
 option(
@@ -464,6 +469,7 @@ file(
     CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/features/*
 )
+set(_ALL_FEATURE_PATHS ${FEATURE_PATHS})
 
 set(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE
     ${AIO_NON_SHIPPED_FEATURE_PACKAGES}
@@ -834,8 +840,23 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_all_shader_sources ${_package_shaders})
     set(_shader_copy_cmds)
 
+    set(_shader_feature_paths ${FEATURE_PATHS})
+    if(SHADER_VALIDATION_INCLUDE_NON_SHIPPED_FEATURES)
+        foreach(_fpath IN LISTS _ALL_FEATURE_PATHS)
+            get_filename_component(_feature_dir_name "${_fpath}" NAME)
+            if(_feature_dir_name IN_LIST AIO_NON_SHIPPED_FEATURE_PACKAGES)
+                list(APPEND _shader_feature_paths "${_fpath}")
+                message(
+                    STATUS
+                    "Staging non-shipped feature shaders for validation: ${_feature_dir_name}"
+                )
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES _shader_feature_paths)
+    endif()
+
     set(_feature_shader_paths "${FFX_RUNTIME_SHADER_ROOT}")
-    foreach(_fpath IN LISTS FEATURE_PATHS)
+    foreach(_fpath IN LISTS _shader_feature_paths)
         if(EXISTS "${_fpath}/Shaders")
             list(APPEND _feature_shader_paths "${_fpath}/Shaders")
         endif()
@@ -872,7 +893,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     append_copy_if_different(_shader_copy_cmds FFX_RUNTIME_FILES "${FFX_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
 
     # feature shader folders
-    foreach(_fpath IN LISTS FEATURE_PATHS)
+    foreach(_fpath IN LISTS _shader_feature_paths)
         if(EXISTS "${_fpath}/Shaders")
             file(
                 GLOB_RECURSE _feat_shaders
@@ -1478,6 +1499,16 @@ if(BUILD_CONTROLLER_TESTS)
         OverlayPolicy
         tests/overlay_policy_test.cpp
     )
+    add_controller_test(
+        volumetric_lighting_cache_refresh_policy_test
+        VolumetricLightingCacheRefreshPolicy
+        tests/volumetric_lighting_cache_refresh_policy_test.cpp
+    )
+    add_controller_test(
+        vr_depth_culling_policy_test
+        VRDepthCullingPolicy
+        tests/vr_depth_culling_policy_test.cpp
+    )
 
     add_custom_target(
         controller_tests
@@ -1487,6 +1518,8 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
+            volumetric_lighting_cache_refresh_policy_test
+            vr_depth_culling_policy_test
     )
 endif()
 

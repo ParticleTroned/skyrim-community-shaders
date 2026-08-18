@@ -304,7 +304,7 @@ namespace FrameAnnotations
 
 	struct VR_RenderDepth_BSOBBOcclusionTestingShader
 	{
-		static void thunk(RE::BSImagespaceShader* a_this, RE::ImageSpaceEffectParam* a_param)
+		static void thunk(RE::BSImagespaceShader* a_this, std::uint32_t a_param)
 		{
 			globals::state->BeginPerfEvent("BSOBBOcclusionTestingShader");
 			func(a_this, a_param);

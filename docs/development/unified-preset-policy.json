@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "status": "provisional-development",
+  "generatedAtEvidenceDate": "2026-08-17",
+  "policy": "one shader tier policy with capability-selected DLSS primary and FSR fallback",
+  "schemaDefaults": [
+    { "path": ["Disable at Boot", "TruePBR"], "value": false },
+    { "path": ["Inverse Square Lighting", "Enabled"], "value": true },
+    { "path": ["Menu", "SmartClearShaderCacheDefault"], "value": false },
+    { "path": ["Screenshot", "SequenceFrameCount"], "value": 30 },
+    { "path": ["Screenshot", "SequenceFrameInterval"], "value": 6 },
+    { "path": ["Screenshot", "SequencePreviewFramesPerSecond"], "value": 15 },
+    { "path": ["Screenshot", "SequenceSaveSeparateEyes"], "value": true },
+    { "path": ["Screenshot", "SequenceWritePreviewVideo"], "value": true },
+    { "path": ["Screenshot", "VRFramedDominantEye"], "value": "Left" },
+    { "path": ["Screenshot", "VRFramedEye"], "value": "Left" },
+    { "path": ["Screenshot", "VRFramedView"], "value": "Left" },
+    { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
+    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false },
+    { "path": ["VR", "VRControllerBindingsVersion"], "value": 1 }
+  ],
+  "commonOverrides": [
+    {
+      "path": ["Image Based Lighting", "EnableIBL"],
+      "value": 1,
+      "reason": "retain the measured ambient-replacement baseline in every tier"
+    },
+    {
+      "path": ["Volumetric Shadows", "Enabled"],
+      "value": true,
+      "reason": "retain the low-cost shared directional-shadow provider"
+    },
+    {
+      "path": ["Screen Space GI", "Enabled"],
+      "value": false,
+      "reason": "release-safe fallback until ambient-composition and rotating/physical-stereo gates pass"
+    },
+    {
+      "path": ["Screen Space GI", "AOInteriorsOnly"],
+      "value": true,
+      "reason": "keep the dormant evaluated AO policy interior-gated"
+    },
+    {
+      "path": ["Screen Space GI", "ResourceProfile"],
+      "value": 1,
+      "reason": "AO-only allocation profile"
+    },
+    {
+      "path": ["Screen Space GI", "EnableGI"],
+      "value": false,
+      "reason": "do not activate unqualified indirect lighting"
+    },
+    {
+      "path": ["Screen Space GI", "EnableExperimentalSpecularGI"],
+      "value": false,
+      "reason": "do not activate unqualified specular GI"
+    },
+    {
+      "path": ["Screen Space GI", "EnableVanillaSSAO"],
+      "value": false,
+      "reason": "avoid an unreviewed double-AO path"
+    },
+    {
+      "path": ["Upscaling", "upscaleMethod"],
+      "value": 3,
+      "reason": "prefer DLSS when the Streamline capability check succeeds"
+    },
+    {
+      "path": ["Upscaling", "upscaleMethodNoDLSS"],
+      "value": 2,
+      "reason": "fall back to FSR when DLSS is unavailable"
+    },
+    {
+      "path": ["Upscaling", "fsr4RuntimeEnable"],
+      "value": true,
+      "reason": "retain the AMD runtime preference"
+    },
+    {
+      "path": ["Upscaling", "fsr4RuntimeSelectionSchemaVersion"],
+      "value": 1,
+      "reason": "serialize the current FSR4 provider-selection contract"
+    },
+    {
+      "path": ["Upscaling", "dlssPreset"],
+      "value": 1,
+      "reason": "retain the NVIDIA preset K provider setting"
+    },
+    {
+      "path": ["Upscaling", "dlssSharpener"],
+      "value": 1,
+      "reason": "retain the NVIDIA provider sharpener"
+    },
+    {
+      "path": ["Upscaling", "sharpnessDLSS"],
+      "value": 0.699999988079071,
+      "reason": "retain the active NVIDIA sharpness"
+    },
+    {
+      "path": ["Upscaling", "sharpnessFSR"],
+      "value": 0.699999988079071,
+      "reason": "retain the active AMD sharpness"
+    }
+  ],
+  "tiers": {
+    "Performance": {
+      "sourceTemplate": "MGO-Presets/CSX AMD- Performance - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+      "sourceSha256": "114494225EEE720D8E65BAAECC47C2A7A4E21E04AC7F5CA68C4AC8E957901AF1",
+      "outputDirectory": "CSX Unified- Performance - Press END on PC to Customize",
+      "overrides": [
+        { "path": ["Screen Space GI", "ResolutionMode"], "value": 2, "reason": "dormant Quarter-resolution AO candidate" },
+        { "path": ["Volumetric Lighting", "ExteriorQuality"], "value": 0, "reason": "measured Low-cost exterior grid" },
+        { "path": ["Volumetric Lighting", "InteriorQuality"], "value": 0, "reason": "matching Low interior policy" }
+      ]
+    },
+    "Balanced": {
+      "sourceTemplate": "MGO-Presets/CSX AMD- Balanced - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+      "sourceSha256": "85E5DC08909F189F49C4712636AD785DEC2744A126D5933D008FDFC16AFD8A6B",
+      "outputDirectory": "CSX Unified- Balanced - Press END on PC to Customize",
+      "overrides": [
+        { "path": ["Screen Space GI", "ResolutionMode"], "value": 1, "reason": "dormant Half-resolution AO candidate" },
+        { "path": ["Volumetric Lighting", "ExteriorQuality"], "value": 1, "reason": "measured Medium-cost exterior grid" },
+        { "path": ["Volumetric Lighting", "InteriorQuality"], "value": 1, "reason": "matching Medium interior policy" }
+      ]
+    },
+    "Quality": {
+      "sourceTemplate": "MGO-Presets/CSX AMD- Quality - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+      "sourceSha256": "7EA83F938398A41FBA7365F692AE2699E04AFBEF6E7098852CFE78283374DB98",
+      "outputDirectory": "CSX Unified- Quality - Press END on PC to Customize",
+      "overrides": [
+        { "path": ["Screen Space GI", "ResolutionMode"], "value": 0, "reason": "dormant Full-resolution AO candidate" },
+        { "path": ["Volumetric Lighting", "ExteriorQuality"], "value": 2, "reason": "High exterior quality ceiling" },
+        { "path": ["Volumetric Lighting", "InteriorQuality"], "value": 2, "reason": "High interior quality ceiling" }
+      ]
+    }
+  },
+  "guards": [
+    { "path": ["Advanced", "Log Level"], "value": 2 },
+    { "path": ["Image Based Lighting", "EnableIBL"], "value": 1 },
+    { "path": ["Volumetric Shadows", "Enabled"], "value": true },
+    { "path": ["Screen Space GI", "Enabled"], "value": false },
+    { "path": ["Screen Space GI", "ResourceProfile"], "value": 1 },
+    { "path": ["Screen Space GI", "EnableGI"], "value": false },
+    { "path": ["Screen Space GI", "EnableExperimentalSpecularGI"], "value": false },
+    { "path": ["Screen Space GI", "EnableVanillaSSAO"], "value": false },
+    { "path": ["Upscaling", "upscaleMethod"], "value": 3 },
+    { "path": ["Upscaling", "upscaleMethodNoDLSS"], "value": 2 },
+    { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
+    { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false }
+  ],
+  "releaseGates": [
+    "IBL x Skylighting x SSGI ambient-composition screen and Vanilla SSAO audit before enabling SSGI",
+    "rotating and physical-HMD stereo/disocclusion qualification",
+    "native NVIDIA validation of the same policy",
+    "SteamVR OpenXR, VDXR, and Open Composite Unleashed lane comparison"
+  ]
+}

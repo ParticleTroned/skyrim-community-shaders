@@ -675,6 +675,63 @@ namespace
 			}
 		}
 
+		for (std::uint32_t bits = 0; bits < (1u << 10); ++bits) {
+			const CompatibleFSRRelatchReuseAdmission state{
+				.directMenuRelatch = (bits & (1u << 0)) != 0,
+				.recoveryRelatch = (bits & (1u << 1)) != 0,
+				.targetIsFSR = (bits & (1u << 2)) != 0,
+				.previousWasFSR = (bits & (1u << 3)) != 0,
+				.resetPending = (bits & (1u << 4)) != 0,
+				.memoryPressureNormal = (bits & (1u << 5)) != 0,
+				.postLoadResetPending = (bits & (1u << 6)) != 0,
+				.preservingActiveContract = (bits & (1u << 7)) != 0,
+				.deviceLost = (bits & (1u << 8)) != 0,
+				.resourcesCompatible = (bits & (1u << 9)) != 0,
+			};
+			const bool expected =
+				(state.directMenuRelatch || state.recoveryRelatch) &&
+				state.targetIsFSR && state.previousWasFSR &&
+				!state.resetPending && state.memoryPressureNormal &&
+				!state.postLoadResetPending && !state.preservingActiveContract &&
+				!state.deviceLost && state.resourcesCompatible;
+			if (CanReuseCompatibleFSRResources(state) != expected)
+				return false;
+		}
+
+		for (std::uint32_t bits = 0; bits < (1u << 8); ++bits) {
+			const RuntimeFSRFallbackReuseAdmission state{
+				.isVR = (bits & (1u << 0)) != 0,
+				.targetIsFSR = (bits & (1u << 1)) != 0,
+				.runtimePathChanged = (bits & (1u << 2)) != 0,
+				.runtimeFailureLatched = (bits & (1u << 3)) != 0,
+				.fsrResetPending = (bits & (1u << 4)) != 0,
+				.postLoadResetPending = (bits & (1u << 5)) != 0,
+				.primaryDeviceLost = (bits & (1u << 6)) != 0,
+				.hostResourcesCompatible = (bits & (1u << 7)) != 0,
+			};
+			const bool expected =
+				state.isVR && state.targetIsFSR && state.runtimePathChanged &&
+				state.runtimeFailureLatched && !state.fsrResetPending &&
+				!state.postLoadResetPending && !state.primaryDeviceLost &&
+				state.hostResourcesCompatible;
+			if (CanReuseHostFSRAfterRuntimeFailure(state) != expected)
+				return false;
+		}
+
+		for (std::uint32_t bits = 0; bits < (1u << 4); ++bits) {
+			const CommonResourceRecoveryAdmission state{
+				.resourcesMissing = (bits & (1u << 0)) != 0,
+				.lifecycleOwnerActive = (bits & (1u << 1)) != 0,
+				.deviceLost = (bits & (1u << 2)) != 0,
+				.sameTerminalRequest = (bits & (1u << 3)) != 0,
+			};
+			const bool expected = state.resourcesMissing &&
+				!state.lifecycleOwnerActive && !state.deviceLost &&
+				!state.sameTerminalRequest;
+			if (CanAttemptCommonResourceRecovery(state) != expected)
+				return false;
+		}
+
 		return true;
 	}
 

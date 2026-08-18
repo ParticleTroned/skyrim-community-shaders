@@ -1091,11 +1091,13 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 {
 	float tintStrength = saturate(SharedData::unifiedWaterSettings.WaterTintStrength);
-	[branch] if (tintStrength <= 0.0) return baseColor;
-
-	float3 baseColorLinear = Color::SkyrimGammaToLinear(max(baseColor, 0.0.xxx));
-	float3 tintColorLinear = Color::SkyrimGammaToLinear(saturate(SharedData::unifiedWaterSettings.WaterTintColor));
-	return Color::LinearToSkyrimGamma(lerp(baseColorLinear, tintColorLinear, tintStrength));
+	float3 tintedColor = baseColor;
+	[branch] if (!(tintStrength <= 0.0)) {
+		float3 baseColorLinear = Color::SkyrimGammaToLinear(max(baseColor, 0.0.xxx));
+		float3 tintColorLinear = Color::SkyrimGammaToLinear(saturate(SharedData::unifiedWaterSettings.WaterTintColor));
+		tintedColor = Color::LinearToSkyrimGamma(lerp(baseColorLinear, tintColorLinear, tintStrength));
+	}
+	return tintedColor;
 }
 #			endif
 
@@ -1326,7 +1328,6 @@ float GetUnifiedWaterDeepContextWeight(
 		length(eyeRenderDimensions));
 	if (
 		!isfinite(requestedRadiusPixels) ||
-		!isfinite(representableRadiusPixels) ||
 		requestedRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels ||
 		representableRadiusPixels < UnifiedWaterDeepProbeMinRadiusPixels) {
 		return 0.0;

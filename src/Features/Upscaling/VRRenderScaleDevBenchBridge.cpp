@@ -689,8 +689,6 @@ namespace
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale iteration control requires Skyrim VR" } };
-				if (!globals::state || !globals::state->IsDeveloperMode())
-					return json{ { "error", "developer mode is required to start a stress capture" } };
 				auto& upscaling = globals::features::upscaling;
 				if (upscaling.GetVRRenderScaleStressSessionSnapshot().active)
 					return json{ { "error", "a stress capture is already active" }, { "status", BuildStatus(upscaling) } };
@@ -915,8 +913,6 @@ namespace
 									   requestedPreset]() {
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale iteration control requires Skyrim VR" } };
-				if (!globals::state || !globals::state->IsDeveloperMode())
-					return json{ { "error", "developer mode is required to apply an iteration profile" } };
 
 				auto& upscaling = globals::features::upscaling;
 				const auto session = upscaling.GetVRRenderScaleStressSessionSnapshot();
@@ -1020,7 +1016,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"({"description":"Control and inspect CSX VR render-scale and transition diagnostics. Existing status, stress, load-presentation probe, apply, and GPU-fenced trim actions retain their prior behavior and developer-mode guards. texture_lifetime_start/status/checkpoint/stop/reset control a bounded CreateTexture2D COM-lifetime capture; each created texture receives a non-owning private-data sentinel that D3D11 releases at actual texture destruction. checkpoint advances the creation cohort without interrupting destruction tracking. Texture-lifetime capture requires Skyrim VR but does not require a saved Debug log level. apply additionally requires an active stress capture.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}}},"required":["action"]}})";
+			R"({"description":"Control and inspect CSX VR render-scale and transition diagnostics. status, record, start, apply, stop, reset, and texture-lifetime actions are available at normal Info logging; apply additionally requires an active stress capture. The invasive load-presentation probe and GPU-fenced trim actions remain restricted to developer mode. texture_lifetime_start/status/checkpoint/stop/reset control a bounded CreateTexture2D COM-lifetime capture; each created texture receives a non-owning private-data sentinel that D3D11 releases at actual texture destruction. checkpoint advances the creation cohort without interrupting destruction tracking.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			diagnosticDescriptor,

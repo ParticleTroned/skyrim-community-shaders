@@ -8,6 +8,7 @@
 #include "ShaderCache.h"
 #include "SkySync.h"
 #include "State.h"
+#include "VolumetricLightingCacheRefreshPolicy.h"
 
 namespace
 {
@@ -583,14 +584,47 @@ void VolumetricLighting::SetExteriorEnabled(bool enabled)
 
 void VolumetricLighting::DataLoaded()
 {
-	auto shaderCache = globals::shaderCache;
 	const static auto address = REL::Offset{ 0x1ec6b88 }.address();
 	bool& bDepthBufferCulling = *reinterpret_cast<bool*>(address);
 
-	if (REL::Module::IsVR() && bDepthBufferCulling && shaderCache->IsDiskCache()) {
-		// clear cache to fix bug caused by bDepthBufferCulling
-		logger::info("Force clearing cache due to bDepthBufferCulling");
-		shaderCache->Clear();
+	if (!REL::Module::IsVR() || !bDepthBufferCulling)
+		return;
+
+	// DataLoaded may run while background compilation still owns the cache. Queue
+	// the narrow compatibility refresh and consume it from the render thread once
+	// the compiler has drained instead of mutating the cache concurrently.
+	vrImageSpaceCacheRefreshPending.store(true, std::memory_order_release);
+	TryApplyVRImageSpaceCacheRefresh();
+}
+
+void VolumetricLighting::TryApplyVRImageSpaceCacheRefresh()
+{
+	auto shaderCache = globals::shaderCache;
+	const VolumetricLightingCacheRefreshPolicy::State state{
+		.requested = vrImageSpaceCacheRefreshPending.load(std::memory_order_acquire),
+		.diskCacheActive = shaderCache->IsDiskCacheActive(),
+		.shaderCompilationActive = shaderCache->IsCompiling()
+	};
+
+	switch (VolumetricLightingCacheRefreshPolicy::SelectAction(state)) {
+	case VolumetricLightingCacheRefreshPolicy::Action::None:
+	case VolumetricLightingCacheRefreshPolicy::Action::WaitForCompiler:
+		return;
+	case VolumetricLightingCacheRefreshPolicy::Action::ConsumeWithoutRefresh:
+		vrImageSpaceCacheRefreshPending.store(false, std::memory_order_release);
+		logger::info("Skipping queued VR ImageSpace shader-cache refresh because the disk cache is no longer active");
+		return;
+	case VolumetricLightingCacheRefreshPolicy::Action::Apply:
+		if (!vrImageSpaceCacheRefreshPending.exchange(false, std::memory_order_acq_rel))
+			return;
+
+		// Retain the VR depth-buffer-culling compatibility refresh, but scope it to
+		// the ImageSpace class containing the hierarchical-depth and pretest passes.
+		// Clearing the entire cache here discards the fully prepared world and feature
+		// shaders immediately before the first save load.
+		logger::info("Refreshing VR ImageSpace shader cache due to bDepthBufferCulling");
+		shaderCache->Clear(RE::BSShader::Type::ImageSpace);
+		return;
 	}
 }
 
@@ -635,6 +669,8 @@ void VolumetricLighting::SetupResources()
 
 void VolumetricLighting::EarlyPrepass()
 {
+	TryApplyVRImageSpaceCacheRefresh();
+
 	auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
 
 	int32_t width = static_cast<int32_t>(renderSize.x);

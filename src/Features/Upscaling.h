@@ -2179,6 +2179,7 @@ public:
 	bool resourceCheckStable = false;
 	UpscaleMethod resourceCheckStableMethod = UpscaleMethod::kNONE;
 	uint64_t resourceCheckStableKey = 0;
+	std::optional<uint64_t> commonResourceFailureRequestKey;
 	std::optional<uint64_t> fsrResourceFailureRequestKey;
 	bool historyResetTrackingInitialized = false;
 	float2 previousHistoryScreenSize = { 0.0f, 0.0f };

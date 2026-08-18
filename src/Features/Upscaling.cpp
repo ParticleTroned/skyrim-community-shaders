@@ -117,31 +117,6 @@ uint32_t Upscaling::ScaleVRRenderDimension(uint32_t a_dimension, float a_scale)
 
 namespace
 {
-	std::optional<float2> GetVREvenStereoRenderSize(
-		const float2& a_displaySize,
-		float a_resolutionScale)
-	{
-		if (!std::isfinite(a_displaySize.x) ||
-			!std::isfinite(a_displaySize.y) ||
-			a_displaySize.x < 4.0f ||
-			a_displaySize.y < 2.0f ||
-			!std::isfinite(a_resolutionScale)) {
-			return std::nullopt;
-		}
-
-		const uint32_t displayWidth = static_cast<uint32_t>(std::floor(a_displaySize.x));
-		const uint32_t displayHeight = static_cast<uint32_t>(std::floor(a_displaySize.y));
-		if (displayWidth < 4u || displayHeight < 2u || (displayWidth & 1u) != 0u)
-			return std::nullopt;
-
-		return float2{
-			static_cast<float>(
-				Upscaling::ScaleVRRenderDimension(displayWidth / 2u, a_resolutionScale) * 2u),
-			static_cast<float>(
-				Upscaling::ScaleVRRenderDimension(displayHeight, a_resolutionScale))
-		};
-	}
-
 	constexpr float kDLSSRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
 	constexpr float kDLSSLumaSharpnessOverdrive = 2.5f;
 
@@ -5546,6 +5521,24 @@ namespace
 				addFloat(ClampFoveatedCenterScale(settings.foveatedCenterArea));
 			}
 		}
+		return hash;
+	}
+
+	uint64_t BuildCommonResourceRecoveryRequestKey(
+		const Upscaling& a_upscaling,
+		Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		uint64_t hash = BuildResourceCheckStableKey(a_upscaling, a_upscaleMethod);
+		const auto add = [&](uint64_t a_value) {
+			hash = HashResourceCheckValue(hash, a_value);
+		};
+
+		add(a_upscaling.GetActiveVRRenderScaleContractGeneration());
+		add(a_upscaling.GetVRRenderScaleTransitionSnapshot().targetEpoch);
+		add(a_upscaling.pendingDLSSResetGeneration.load(std::memory_order_acquire));
+		add(a_upscaling.pendingFSRResetGeneration.load(std::memory_order_acquire));
+		add(a_upscaling.pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire));
+		add(a_upscaling.IsSubmitStageDeviceLost());
 		return hash;
 	}
 
@@ -19137,13 +19130,6 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 	auto resolveVendorDynamicRenderSize = [&](const float2& a_displaySize) {
 		if (a_displaySize.x <= 0.0f || a_displaySize.y <= 0.0f)
 			return a_displaySize;
-		if (globals::game::isVR) {
-			if (const auto vrRenderSize = GetVREvenStereoRenderSize(
-					a_displaySize,
-					GetQualityModeResolutionScale(plan.qualityMode))) {
-				return *vrRenderSize;
-			}
-		}
 
 		auto resolveScale = [](float a_scale) {
 			return std::isfinite(a_scale) && a_scale > 0.0f ? std::clamp(a_scale, 0.0f, 1.0f) : 1.0f;
@@ -24679,16 +24665,24 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				2u);
 		};
 		const bool reuseCompatibleFSRResourcesForRelatch =
-			relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&
-			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			previousVendorWasFSR &&
-			!pendingFSRResetForRelatch &&
-			memoryAtAdmission.valid &&
-			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Normal &&
-			!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
-			!preserveActiveContractForRecovery &&
-			!IsSubmitStageDeviceLost() &&
-			areFSRResourcesCompatibleForRelatch();
+			VRVendorRelatchPolicy::CanReuseCompatibleFSRResources({
+				.directMenuRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				.recoveryRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::RecoveryRelatch,
+				.targetIsFSR = relatchUpscaleMethod == UpscaleMethod::kFSR,
+				.previousWasFSR = previousVendorWasFSR,
+				.resetPending = pendingFSRResetForRelatch,
+				.memoryPressureNormal =
+					memoryAtAdmission.valid &&
+					memoryAtAdmission.pressure ==
+						VRRenderScaleMemoryPressure::Normal,
+				.postLoadResetPending =
+					postLoadRuntimeResetPending.load(std::memory_order_acquire),
+				.preservingActiveContract = preserveActiveContractForRecovery,
+				.deviceLost = IsSubmitStageDeviceLost(),
+				.resourcesCompatible = areFSRResourcesCompatibleForRelatch(),
+			});
 		const bool preserveCompatibleFSRIntermediatesForRelatch =
 			reuseCompatibleFSRResourcesForRelatch &&
 			relatchTargetRenderScaleActive &&
@@ -34280,6 +34274,21 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		!fsrRuntimeVersionChanged &&
 		!pendingFSRReset.load(std::memory_order_acquire) &&
 		canPreserveFSRResourcesForCurrentVRPlan();
+	const bool runtimeFailureFallbackCanPreserveHostFSR =
+		VRVendorRelatchPolicy::CanReuseHostFSRAfterRuntimeFailure({
+			.isVR = globals::game::isVR,
+			.targetIsFSR = a_upscalemethod == UpscaleMethod::kFSR,
+			.runtimePathChanged = fsrRuntimePathChanged,
+			.runtimeFailureLatched =
+				fidelityFX.IsRuntimeUpscalerFailureLatched(),
+			.fsrResetPending =
+				pendingFSRReset.load(std::memory_order_acquire),
+			.postLoadResetPending =
+				postLoadRuntimeResetPending.load(std::memory_order_acquire),
+			.primaryDeviceLost = IsSubmitStageDeviceLost(),
+			.hostResourcesCompatible =
+				canPreserveFSRResourcesForCurrentVRPlan(),
+		});
 	const bool renderScaleTransitionRelevant = ShouldIncludeInactiveVRVendorReset(*this, a_upscalemethod);
 	const bool resourceChangeDetected =
 		upscaleModeChanged ||
@@ -34520,20 +34529,24 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			CreateUpscalingTextureResources(a_upscalemethod);
 		}
 
-		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state; rebuild on path changes.
+		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state.
+		// Ordinary path changes rebuild; provider quarantine may retain a compatible
+		// host context and reset its history while the runtime path falls back.
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
-			const auto destroyResult = fidelityFX.DestroyFSRResources();
-			if (!acceptFSRResourceLifecycleResult(
-					destroyResult,
-					"runtime-path FSR resource teardown")) {
-				return false;
+			if (!runtimeFailureFallbackCanPreserveHostFSR) {
+				const auto destroyResult = fidelityFX.DestroyFSRResources();
+				if (!acceptFSRResourceLifecycleResult(
+						destroyResult,
+						"runtime-path FSR resource teardown")) {
+					return false;
+				}
+				const auto createResult = createFSRResourcesWhenSafe();
+				if (!acceptFSRResourceLifecycleResult(
+						createResult,
+						"runtime-path FSR resource creation"))
+					return false;
+				fsrResourcesRecreatedForQuality = true;
 			}
-			const auto createResult = createFSRResourcesWhenSafe();
-			if (!acceptFSRResourceLifecycleResult(
-					createResult,
-					"runtime-path FSR resource creation"))
-				return false;
-			fsrResourcesRecreatedForQuality = true;
 			RequestHistoryReset();
 		} else if (!upscaleModeChanged && (fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
 			if (fsrRuntimeFsr4ConfiguredChanged || !fidelityFX.IsRuntimeFsr4FailureLatched()) {
@@ -34592,30 +34605,62 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			return false;
 		}
 
-		const auto requeueMissingCommonRecreate = [&]() {
-			RequestPerfModeRenderTargetRecreate(
-				"missing common vendor resources",
-				VRUpscalingTransitionOrigin::RecoveryRelatch,
-				nullptr,
-				kVRRenderScaleRelatchBusyRetryFrames);
+		const uint64_t commonResourceRequestKey =
+			BuildCommonResourceRecoveryRequestKey(*this, a_upscalemethod);
+		if (commonResourceFailureRequestKey &&
+			*commonResourceFailureRequestKey != commonResourceRequestKey) {
+			commonResourceFailureRequestKey.reset();
+		}
+		const bool sameTerminalRequest =
+			commonResourceFailureRequestKey &&
+			*commonResourceFailureRequestKey == commonResourceRequestKey;
+		if (!VRVendorRelatchPolicy::CanAttemptCommonResourceRecovery({
+				.resourcesMissing = true,
+				.lifecycleOwnerActive = deferForVRRenderScaleRelatch,
+				.deviceLost = IsSubmitStageDeviceLost(),
+				.sameTerminalRequest = sameTerminalRequest,
+			})) {
+			return false;
+		}
+
+		const auto latchMissingCommonFailure = [&](const char* a_reason) {
+			commonResourceFailureRequestKey = commonResourceRequestKey;
 			if (a_upscalemethod == UpscaleMethod::kDLSS)
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS);
-			else if (a_upscalemethod == UpscaleMethod::kFSR)
+			else if (a_upscalemethod == UpscaleMethod::kFSR) {
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR);
+				fsrResourceFailureRequestKey = fsrResourceRequestKey;
+			}
+			RecordVRVendorRuntimeLifecycle(
+				a_upscalemethod,
+				VRVendorRuntimeLifecyclePhase::Failed,
+				GetActiveVRRenderScaleContractGeneration(),
+				a_reason);
 		};
 
 		try {
 			logger::debug("[Upscaling] Recreating missing common texture resources for method {}", magic_enum::enum_name(a_upscalemethod));
 			DestroyCommonUpscalingTextures();
 			CreateUpscalingTextureResources(a_upscalemethod);
+			if (!AreCommonVendorTexturesReady(a_upscalemethod)) {
+				if (vrRelatchRecoveryRelevant) {
+					latchMissingCommonFailure("missing common texture recreation incomplete");
+					logger::error(
+						"[VRRenderScale] Common texture recreation for {} returned an incomplete or dimension-incompatible set; latched the unchanged request terminal.",
+						magic_enum::enum_name(a_upscalemethod));
+					return false;
+				}
+				throw std::runtime_error("common upscaling texture recreation returned an incomplete set");
+			}
+			commonResourceFailureRequestKey.reset();
 		} catch (const std::exception& e) {
 			if (vrRelatchRecoveryRelevant) {
 				if (MarkSubmitStageDeviceLostIfNeeded(e, "missing common texture recreation"))
 					return false;
 
-				requeueMissingCommonRecreate();
+				latchMissingCommonFailure("missing common texture recreation failed");
 				logger::warn(
-					"[VRRenderScale] Deferred missing common texture recreation for {} after failure: {}",
+					"[VRRenderScale] Common texture recreation for {} failed; latched the unchanged request terminal: {}",
 					magic_enum::enum_name(a_upscalemethod),
 					e.what());
 				return false;
@@ -34626,15 +34671,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				if (MarkSubmitStageDeviceLostIfDeviceRemoved("missing common texture recreation"))
 					return false;
 
-				requeueMissingCommonRecreate();
+				latchMissingCommonFailure("missing common texture recreation failed");
 				logger::warn(
-					"[VRRenderScale] Deferred missing common texture recreation for {} after an unknown failure",
+					"[VRRenderScale] Common texture recreation for {} failed; latched the unchanged request terminal after an unknown failure",
 					magic_enum::enum_name(a_upscalemethod));
 				return false;
 			}
 			throw;
 		}
 	}
+	commonResourceFailureRequestKey.reset();
 
 	resourceCheckLastCompletedFrame = GetFrameScopedUpscalingWorkFrame();
 	resourceCheckLastCompletedMethod = a_upscalemethod;
@@ -39436,16 +39482,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 		auto renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
 		auto renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
-		if (globals::game::isVR) {
-			// Match the physical Render Scale contract: VR render targets are sized
-			// per eye and constrained to even dimensions before the stereo width is
-			// recombined. Scaling the combined width directly can otherwise differ
-			// by two pixels for fractional quality ratios.
-			if (const auto vrRenderSize = GetVREvenStereoRenderSize(screenSize, resolutionScaleBase)) {
-				renderWidth = static_cast<int>(vrRenderSize->x);
-				renderHeight = static_cast<int>(vrRenderSize->y);
-			}
-		}
 
 		resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
 		resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);

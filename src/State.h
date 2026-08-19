@@ -281,6 +281,7 @@ public:
 	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	void UpdateFeatureData(bool a_inWorld);
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
 	bool HasDirectionalShadows() const;
 

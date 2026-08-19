@@ -16,6 +16,7 @@ namespace Util
 
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main");
 	void BindFrameBufferConstantBuffersForCS(ID3D11DeviceContext* a_context);
+	void BindSharedDataConstantBuffersForPS(ID3D11DeviceContext* a_context);
 	void BindSharedDataConstantBuffersForCS(ID3D11DeviceContext* a_context);
 	void BindGlobalConstantBuffersForCS(ID3D11DeviceContext* a_context);
 

@@ -7,6 +7,7 @@
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Form.h"
+#include "Utils/D3D.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
 
@@ -2293,6 +2294,27 @@ void AdaptiveBrightness::UpdateVanillaPointLightData(
 
 struct AdaptiveBrightness::Hooks
 {
+	template <class Tag>
+	struct HDRTonemapBlendCinematic_Render
+	{
+		static void thunk(void* a_imageSpaceShader, RE::BSTriShape* a_shape, RE::ImageSpaceEffectParam* a_param)
+		{
+			// The engine may replace pixel-shader constant buffers while preparing
+			// image-space effects. Refresh the live profile data and bind it at the
+			// consuming draw instead of relying on the earlier renderer reset.
+			if (auto* state = globals::state)
+				state->UpdateFeatureData(true);
+			Util::BindSharedDataConstantBuffersForPS(globals::d3d::context);
+
+			func(a_imageSpaceShader, a_shape, a_param);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CinematicTag;
+	struct CinematicFadeTag;
+
 	struct BSWaterShader_SetupGeometry
 	{
 		static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
@@ -2317,8 +2339,12 @@ struct AdaptiveBrightness::Hooks
 
 	static void Install()
 	{
+		stl::write_vfunc<0x1, HDRTonemapBlendCinematic_Render<CinematicTag>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[3]);
+		stl::write_vfunc<0x1, HDRTonemapBlendCinematic_Render<CinematicFadeTag>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[3]);
 		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
-		logger::info("[AdaptiveBalance] Installed shared-light hooks");
+		logger::info("[AdaptiveBalance] Installed shared-light and Bloom tonemap hooks");
 	}
 };
 

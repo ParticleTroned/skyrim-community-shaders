@@ -361,7 +361,8 @@ namespace SharedData
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
-		float4 pad;
+		float ShallowSurfaceReflectionFloor;
+		float3 pad;
 	};
 
 	struct BloomSettings

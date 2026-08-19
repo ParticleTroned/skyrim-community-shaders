@@ -1544,6 +1544,8 @@
     "feature.unified_water.shallow_water_depth_stabilization": "Shallow Water Surface Visibility",
     "feature.unified_water.shallow_surface_depth_range": "Shallow Surface Depth",
     "feature.unified_water.shallow_surface_depth_range_tooltip": "Plane-normal water depth where the shallow surface cue has faded completely to native water.\nLower this if the cue reaches medium water; raise it only when a shallow stream still loses its fallback surface.",
+    "feature.unified_water.shallow_surface_reflection_floor": "Top-Down Reflection Floor",
+    "feature.unified_water.shallow_surface_reflection_floor_tooltip": "Minimum reflection response contributed by the shallow surface cue at head-on and top-down angles.\nThis reveals animated surface normals without changing native medium or deep water. Set to 0 for physical Fresnel only.",
     "feature.unified_water.shore_contact_min_fade_pixels": "Minimum Edge Fade Width",
     "feature.unified_water.shore_contact_min_fade_pixels_tooltip": "Minimum screen-space width of the shallow cue's terrain-contact fade.\nThis prevents subpixel terminal seams without extra texture samples. Set to 0 to use only Edge Fade Depth.",
     "feature.unified_water.shore_depth_blend_range": "Edge Fade Depth",

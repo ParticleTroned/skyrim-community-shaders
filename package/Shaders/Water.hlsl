@@ -1227,6 +1227,16 @@ float GetUnifiedWaterShallowSurfaceDepthWeight(float waterColumnDepthUnits)
 	return 1.0 - smootherDepth;
 }
 
+float GetUnifiedWaterShallowSurfaceFresnel(float fresnel)
+{
+	float nativeFresnel = isfinite(fresnel) ? saturate(fresnel) : 0.0;
+	float reflectionFloor =
+		SharedData::unifiedWaterSettings.ShallowSurfaceReflectionFloor;
+	reflectionFloor =
+		isfinite(reflectionFloor) ? saturate(reflectionFloor) : 0.0;
+	return max(nativeFresnel, reflectionFloor);
+}
+
 #			endif
 
 struct DiffuseOutput
@@ -1666,7 +1676,6 @@ PS_OUTPUT main(PS_INPUT input)
 #					endif
 #				else
 
-	float3 sunColor = GetSunColor(normal, viewDirection, input.WPosition.xyz) * surfaceShadow;
 	// Build the bounded candidate from one shore-contact curve. Its endpoint is
 	// also the probe gate, so edge fading cannot expand the pixels that pay for
 	// connected-depth reads.
@@ -1719,16 +1728,14 @@ PS_OUTPUT main(PS_INPUT input)
 	shallowSurfaceLayerWeight =
 		shallowSurfaceProbeCandidateWeight *
 		(1.0 - saturate(deepContextWeight));
-	// The native refraction already contains the shadow projected onto the
-	// riverbed. Restoring the opaque-looking surface cue beneath the same caster
-	// also exposes the independently projected water-surface shadow, producing
-	// two (and across overlapping penumbrae, more) visible copies. Keep the
-	// native/Open composite wherever the water surface is shadowed so only the
-	// refracted riverbed shadow remains; unshadowed shallow water keeps the full
-	// fallback. This reuses the shadow visibility already calculated above and
-	// therefore adds no texture reads.
-	shallowSurfaceLayerWeight *= saturate(surfaceShadow);
 #					endif
+
+	// Shadows affect surface lighting, not geometric water coverage. Keeping
+	// these independent prevents the player shadow from cutting a hard hole in
+	// the shallow surface cue.
+	float3 sunColor =
+		GetSunColor(normal, viewDirection, input.WPosition.xyz) *
+		saturate(surfaceShadow);
 
 #					if defined(VC)
 	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceBlendFactor);
@@ -1738,7 +1745,10 @@ PS_OUTPUT main(PS_INPUT input)
 	// refractionMul. Restore a bounded shallow surface using the native water
 	// material colour and native Fresnel instead of forcing a white reflection.
 	float shallowSurfaceSpecularFraction =
-		lerp(1.0, fresnel, distanceBlendFactor);
+		lerp(
+			1.0,
+			GetUnifiedWaterShallowSurfaceFresnel(fresnel),
+			distanceBlendFactor);
 	float3 shallowSurfaceColor =
 		lerp(
 			diffuseOutput.refractionDiffuseColor,
@@ -1800,7 +1810,26 @@ PS_OUTPUT main(PS_INPUT input)
 #						endif
 
 #					else
-	float specularFraction = lerp(1, fresnel, distanceBlendFactor);
+	float combinedSurfaceWeight = diffuseOutput.refractionMul;
+	float surfaceFresnel = fresnel;
+#						if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
+	// Combine the native and fallback surface coverage once. The fallback's
+	// relative share controls only the additional head-on reflection response;
+	// setting the floor to zero is algebraically identical to the prior two-lerp
+	// composition.
+	float nativeSurfaceWeight = saturate(diffuseOutput.refractionMul);
+	float fallbackSurfaceWeight =
+		(1.0 - nativeSurfaceWeight) * saturate(shallowSurfaceLayerWeight);
+	combinedSurfaceWeight = nativeSurfaceWeight + fallbackSurfaceWeight;
+	float fallbackSurfaceShare = combinedSurfaceWeight > 1e-5 ?
+		fallbackSurfaceWeight / combinedSurfaceWeight :
+		0.0;
+	surfaceFresnel = lerp(
+		fresnel,
+		GetUnifiedWaterShallowSurfaceFresnel(fresnel),
+		saturate(fallbackSurfaceShare));
+#						endif
+	float specularFraction = lerp(1, surfaceFresnel, distanceBlendFactor);
 	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
 
 #						if !defined(UNIFIED_WATER)
@@ -1857,15 +1886,10 @@ PS_OUTPUT main(PS_INPUT input)
 #						endif
 	refractionColor = lerp(refractionColor, fogColor, Color::FogAlpha(fogFactor));
 
-	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
-#						if defined(UNIFIED_WATER_SHALLOW_FALLBACK)
-	// The existing continuous depth/contact feather remains the fallback target,
-	// preserving smooth river seams without modifying terrain or water geometry.
-	finalColor = lerp(
-		finalColor,
+	float3 finalColor = lerp(
+		refractionColor,
 		finalColorPreFog,
-		shallowSurfaceLayerWeight);
-#						endif
+		combinedSurfaceWeight);
 #						if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
 	// DEBUG MODE: Override water color with debug visualization
 	float3 debugColor = WetnessEffects::GetDebugWetnessColorStandard(waterData.rippleInfo, 2.0, 3.0);

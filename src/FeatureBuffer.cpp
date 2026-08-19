@@ -144,7 +144,8 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowSurfaceDepthRangeUnits) == 36);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackMaxDistance) == 40);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextTransitionUnits) == 44);
-	static_assert(offsetof(UnifiedWaterSettingsCB, _pad) == 48);
+	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowSurfaceReflectionFloor) == 48);
+	static_assert(offsetof(UnifiedWaterSettingsCB, _pad) == 52);
 	static_assert(sizeof(BloomSettingsCB) == 48);
 	static_assert(offsetof(BloomSettingsCB, Enabled) == 0);
 	static_assert(offsetof(BloomSettingsCB, BloomTint) == 20);

@@ -31,11 +31,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShoreContactMinFadePixels,
 	ShoreDepthBlendRangeUnits,
 	ShallowSurfaceDepthRangeUnits,
-	ShallowFallbackMaxDistance)
+	ShallowFallbackMaxDistance,
+	ShallowSurfaceReflectionFloor)
 
 namespace
 {
-	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 11;
+	constexpr std::uint32_t kSurfaceVisibilityModelVersion = 12;
 	constexpr float kWaterTintColorMin = 0.0f;
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
@@ -57,6 +58,8 @@ namespace
 	constexpr float kShallowSurfaceDepthRangeUnitsMax = 256.0f;
 	constexpr float kShallowFallbackMaxDistanceMin = 0.0f;
 	constexpr float kShallowFallbackMaxDistanceMax = kWorldCellSize * 16.0f;
+	constexpr float kShallowSurfaceReflectionFloorMin = 0.0f;
+	constexpr float kShallowSurfaceReflectionFloorMax = 0.5f;
 
 	// Increment when Unified Water's generated flowmap or cache contract changes.
 	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
@@ -135,6 +138,11 @@ namespace
 			kShallowFallbackMaxDistanceMin,
 			kShallowFallbackMaxDistanceMax,
 			defaults.ShallowFallbackMaxDistance);
+		a_settings.ShallowSurfaceReflectionFloor = ClampFiniteOrDefault(
+			a_settings.ShallowSurfaceReflectionFloor,
+			kShallowSurfaceReflectionFloorMin,
+			kShallowSurfaceReflectionFloorMax,
+			defaults.ShallowSurfaceReflectionFloor);
 	}
 
 	void DrawWaterTintSettings(UnifiedWater::Settings& a_settings)
@@ -294,6 +302,14 @@ void UnifiedWater::LoadSettings(json& o_json)
 	if (loadedModelVersion != kSurfaceVisibilityModelVersion) {
 		const Settings defaults{};
 
+		if (loadedModelVersion < 12) {
+			// Earlier models restored shallow coverage but retained the minimum
+			// physical Fresnel response, which remained indistinguishable from the
+			// riverbed when viewed from above.
+			settings.ShallowSurfaceReflectionFloor =
+				defaults.ShallowSurfaceReflectionFloor;
+		}
+
 		if (loadedModelVersion < 11) {
 			// Adopt the release model's single balanced shore-contact curve instead
 			// of preserving tuning from an earlier visibility model.
@@ -364,6 +380,22 @@ void UnifiedWater::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("shallow_water_depth_stabilization"), "Shallow Water Surface Visibility"))) {
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
+
+		if (globals::state && globals::state->IsDeveloperMode()) {
+			ImGui::SliderFloat(
+				T(TKEY("shallow_surface_reflection_floor"), "Top-Down Reflection Floor"),
+				&settings.ShallowSurfaceReflectionFloor,
+				kShallowSurfaceReflectionFloorMin,
+				kShallowSurfaceReflectionFloorMax,
+				"%.2f",
+				ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("shallow_surface_reflection_floor_tooltip"),
+									  "Minimum reflection response contributed by the shallow surface cue at head-on and top-down angles.\n"
+									  "This reveals animated surface normals without changing native medium or deep water. Set to 0 for physical Fresnel only."));
+			}
+		}
+
 		ImGui::SeparatorText(T(TKEY("shoreline"), "Shore Contact"));
 
 		ImGui::SliderFloat(
@@ -539,6 +571,7 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowSurfaceDepthRangeUnits = sanitizedSettings.ShallowSurfaceDepthRangeUnits;
 	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
 	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
+	data.ShallowSurfaceReflectionFloor = sanitizedSettings.ShallowSurfaceReflectionFloor;
 	return data;
 }
 

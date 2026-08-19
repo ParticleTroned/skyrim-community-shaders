@@ -72,6 +72,7 @@ struct AdaptiveBrightness : Feature
 	{
 		float brightness = 1.0f;
 		bool advanced = false;
+		bool bloomAdvanced = false;
 
 		float skyBrightnessMult = 1.0f;
 		float directionalLightMult = 1.0f;
@@ -87,8 +88,6 @@ struct AdaptiveBrightness : Feature
 		float waterGammaOffset = 0.0f;
 		float vlGammaOffset = 0.0f;
 
-		bool bloomOverride = false;
-		bool bloomEnabled = false;
 		Bloom::Profile bloom;
 	};
 
@@ -113,12 +112,11 @@ struct AdaptiveBrightness : Feature
 	struct Settings
 	{
 		bool enabled = true;
-		bool rendererControlsEnabled = true;
+		bool globalLightingEnabled = true;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;
 		SharedLightingSettings lighting;
-		Bloom::PresetSettings bloomEnhancement;
 		std::array<ProfileSettings, kProfileCount> profiles{};
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
@@ -239,7 +237,6 @@ struct AdaptiveBrightness : Feature
 	LinearLighting::Settings LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const;
 	SharedLightingSettings ApplyProfile(const SharedLightingSettings& a_base, const ProfileSettings& a_profile) const;
 	SharedLightingSettings LerpSettings(const SharedLightingSettings& a_a, const SharedLightingSettings& a_b, float a_t) const;
-	Bloom::Profile ResolveBloomProfile(const ProfileSettings& a_profile) const;
 	ActiveProfileBlend GetActiveProfileBlend() const;
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;
@@ -257,7 +254,6 @@ struct AdaptiveBrightness : Feature
 		bool a_showAdvancedControls = true,
 		bool a_allowEdits = true);
 	void DrawGlobalRendererSettings();
-	void DrawProfileBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_showPresetActions = true);
 	void DrawGlobalPresetControls();
 	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
 	void DrawLocationSummary();

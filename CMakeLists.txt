@@ -1431,7 +1431,7 @@ else()
     set(AIO_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}_AIO-${UTC_NOW}.7z")
     add_custom_command(
         OUTPUT ${AIO_PACKAGE}
-        DEPENDS ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
+        DEPENDS ${CORE_SOURCES} ${PROJECT_NAME} ${FFX_RUNTIME_FILES}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
         COMMAND
             ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}

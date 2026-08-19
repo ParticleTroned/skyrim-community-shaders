@@ -93,9 +93,9 @@ void Bloom::DrawAdvancedProfileSettings(Profile& a_profile)
 	ImGui::ColorEdit3(T(TKEY("tint"), "Bloom Tint"), reinterpret_cast<float*>(&a_profile.BloomTint));
 	DrawTooltip(T(TKEY("tint_tooltip"), "Colors the bloom halo without changing the underlying scene lighting."));
 	ImGui::SliderFloat(T(TKEY("compression_ceiling"), "Compression Ceiling"), &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("compression_ceiling_tooltip"), "The soft limiter's maximum bloom level. Bloom above the compression threshold approaches this value instead of continuing to scale."));
+	DrawTooltip(T(TKEY("compression_ceiling_tooltip"), "The soft limiter's maximum shaped Bloom level before the overall Bloom amount is applied."));
 	ImGui::SliderFloat(T(TKEY("compression_threshold"), "Compression Threshold"), &a_profile.CompressionThreshold, 0.0f, a_profile.CompressionCeiling, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("compression_threshold_tooltip"), "The post-enhancement bloom level where soft compression starts. Bloom below it is unchanged; bloom above it rolls toward Compression Ceiling."));
+	DrawTooltip(T(TKEY("compression_threshold_tooltip"), "The shaped Bloom level where soft compression starts. The overall Bloom amount is applied after this limiter."));
 
 	SanitizeProfile(a_profile);
 }

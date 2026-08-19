@@ -152,7 +152,7 @@ float3 SampleVanillaBloomEnhanced(float2 a_uv, float3 a_vanillaBloom)
 		bloom = lerp(center, wide, SharedData::bloomSettings.HaloSpread);
 		float luminance = Color::RGBToLuminance(bloom);
 		bloom = lerp(luminance.xxx, bloom, SharedData::bloomSettings.BloomSaturation);
-		bloom *= SharedData::bloomSettings.BloomTint * SharedData::bloomSettings.EnhancementIntensity;
+		bloom *= SharedData::bloomSettings.BloomTint;
 	}
 
 	return bloom;
@@ -216,6 +216,10 @@ PS_OUTPUT main(PS_INPUT input)
 													 compressionThreshold + bloomExcess / (1.0 + bloomExcess / softRange)) :
 		                                     0.0;
 		bloomColor *= compressedBloomLuminance / max(bloomLuminance, EPSILON_DIVISION);
+		// The profile's quick Bloom control is an output amount, not an input
+		// gain for the advanced limiter. Applying it after compression keeps the
+		// full 0-6 range responsive even when a bright source reaches the ceiling.
+		bloomColor *= SharedData::bloomSettings.EnhancementIntensity;
 		bloomColor = lerp(
 			vanillaBloomColor,
 			bloomColor,

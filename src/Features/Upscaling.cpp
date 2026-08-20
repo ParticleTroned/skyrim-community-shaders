@@ -40158,17 +40158,22 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	return submitStageSceneActive && !menuBlocksSubmitStage;
 }
 
-bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
+VRInSceneOverlaySubmitPolicy::SuppressionReason
+Upscaling::GetVRInSceneOverlaySubmitSuppressionReasons() const
 {
+	using VRInSceneOverlaySubmitPolicy::SuppressionReason;
+
 	if (!globals::game::isVR)
-		return false;
+		return SuppressionReason::None;
+
+	SuppressionReason reasons = SuppressionReason::None;
 
 	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition())
-		return true;
+		reasons |= SuppressionReason::RenderScaleTransitionPending;
 
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
-		return true;
+		reasons |= SuppressionReason::RenderTargetRecreatePending;
 	}
 
 	const auto requestedMethod = GetConfiguredUpscaleMethodForTransition();
@@ -40176,14 +40181,22 @@ bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
 	const bool transitionRelevant =
 		IsVRRenderScaleTransitionSafetyRelevant(*this, requestedMethod) ||
 		IsVRRenderScaleTransitionSafetyRelevant(*this, runtimeMethod);
-	if (transitionRelevant &&
-		(postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
-			HasPendingVRVendorRuntimeReset(*this, requestedMethod) ||
-			HasPendingVRVendorRuntimeReset(*this, runtimeMethod))) {
-		return true;
+	if (transitionRelevant) {
+		if (postLoadRuntimeResetPending.load(std::memory_order_acquire))
+			reasons |= SuppressionReason::RuntimeResetPending;
+		if (HasPendingVRVendorRuntimeReset(*this, requestedMethod) ||
+			HasPendingVRVendorRuntimeReset(*this, runtimeMethod)) {
+			reasons |= SuppressionReason::VendorRuntimeResetPending;
+		}
 	}
 
-	return false;
+	return reasons;
+}
+
+bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
+{
+	return GetVRInSceneOverlaySubmitSuppressionReasons() !=
+	       VRInSceneOverlaySubmitPolicy::SuppressionReason::None;
 }
 
 bool Upscaling::IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const

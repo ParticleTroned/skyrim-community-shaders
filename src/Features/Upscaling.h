@@ -8,6 +8,7 @@
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
+#include "VR/InSceneOverlaySubmitPolicy.h"
 #include <array>
 #include <atomic>
 #include <d3d11_4.h>
@@ -1892,6 +1893,7 @@ public:
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
 	void RecordVRDLSSFullEyeEvaluation(uint32_t a_eyeIndex, bool a_success);
+	VRInSceneOverlaySubmitPolicy::SuppressionReason GetVRInSceneOverlaySubmitSuppressionReasons() const;
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	enum class VRRenderScaleOriginalSubmitDisposition : uint8_t

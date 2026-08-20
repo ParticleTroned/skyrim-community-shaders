@@ -1,3 +1,4 @@
+#include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Menu/OverlayPolicy.h"
 
 #include <cstdint>
@@ -36,17 +37,26 @@ namespace
 
 	constexpr bool CoversVRInSceneOverlaySubmitAdmission()
 	{
-		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
-			const OverlayPolicy::VRInSceneOverlaySubmitAdmission admission{
-				.suppressInSceneOverlaySubmit = (bits & (1u << 0)) != 0,
-				.mainMenuOpen = (bits & (1u << 1)) != 0,
-				.submitStageUpscalingActive = (bits & (1u << 2)) != 0,
-			};
-			const bool expected =
-				!admission.suppressInSceneOverlaySubmit ||
-				(admission.mainMenuOpen && !admission.submitStageUpscalingActive);
-			if (OverlayPolicy::ShouldAdmitVRInSceneOverlaySubmit(admission) != expected)
-				return false;
+		using VRInSceneOverlaySubmitPolicy::SuppressionReason;
+
+		for (std::uint32_t reasonBits = 0; reasonBits < (1u << 4); ++reasonBits) {
+			for (std::uint32_t stateBits = 0; stateBits < (1u << 3); ++stateBits) {
+				const auto reasons = static_cast<SuppressionReason>(reasonBits);
+				const VRInSceneOverlaySubmitPolicy::Admission admission{
+					.suppressionReasons = reasons,
+					.mainMenuOpen = (stateBits & (1u << 0)) != 0,
+					.submitStageUpscalingActive = (stateBits & (1u << 1)) != 0,
+					.originalSubmitCandidateSafe = (stateBits & (1u << 2)) != 0,
+				};
+				const bool expected =
+					reasons == SuppressionReason::None ||
+					(reasons == SuppressionReason::RenderScaleTransitionPending &&
+						admission.mainMenuOpen &&
+						!admission.submitStageUpscalingActive &&
+						admission.originalSubmitCandidateSafe);
+				if (VRInSceneOverlaySubmitPolicy::ShouldAdmit(admission) != expected)
+					return false;
+			}
 		}
 		return true;
 	}

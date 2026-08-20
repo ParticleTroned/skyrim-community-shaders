@@ -1,4 +1,6 @@
 #include "ShaderCache.h"
+
+#include "ShaderCacheDisablePolicy.h"
 #include "Globals.h"
 #include "ShaderFileWatcher.h"
 #include "Util.h"
@@ -2948,7 +2950,12 @@ namespace SIE
 					Upscaling::VRRenderScaleStatus::PendingRelatch);
 		enableRequested.store(false, std::memory_order_release);
 
-		if (vrRenderScaleRelevant && IsEnabled()) {
+		const auto disableAction = ShaderCacheDisablePolicy::ResolveDisableRequest({
+			.shaderCacheEnabled = IsEnabled(),
+			.vrNativeRestoreRequired = vrRenderScaleRelevant,
+		});
+		if (disableAction ==
+			ShaderCacheDisablePolicy::DisableRequestAction::DeferUntilNativeRestore) {
 			pendingDisableAfterVRNativeRestore.store(true, std::memory_order_release);
 			globals::features::upscaling.RequestPerfModeRenderTargetRecreate(
 				"custom shaders disabled; restore native VR targets",
@@ -2963,14 +2970,19 @@ namespace SIE
 
 	void ShaderCache::ServicePendingDisable()
 	{
-		if (!pendingDisableAfterVRNativeRestore.load(std::memory_order_acquire) ||
-			IsEnableRequested()) {
-			return;
-		}
-
 		auto& upscaling = globals::features::upscaling;
-		if (upscaling.GetVRRenderScaleModeStatus() !=
-			Upscaling::VRRenderScaleStatus::Disabled) {
+		const auto action = ShaderCacheDisablePolicy::ResolvePendingDisable({
+			.pendingDisable =
+				pendingDisableAfterVRNativeRestore.load(std::memory_order_acquire),
+			.enableRequested = IsEnableRequested(),
+			.nativeTargetsRestored =
+				upscaling.GetVRRenderScaleModeStatus() ==
+				Upscaling::VRRenderScaleStatus::Disabled,
+		});
+		if (action == ShaderCacheDisablePolicy::PendingDisableAction::None)
+			return;
+		if (action == ShaderCacheDisablePolicy::PendingDisableAction::Cancel) {
+			pendingDisableAfterVRNativeRestore.store(false, std::memory_order_release);
 			return;
 		}
 

@@ -155,6 +155,8 @@ namespace
 		auto* menu = globals::menu;
 		auto& vr = globals::features::vr;
 		auto& screenshot = globals::features::screenshotFeature;
+		const auto inSceneSubmitSuppressionReasons =
+			globals::features::upscaling.GetVRInSceneOverlaySubmitSuppressionReasons();
 		auto* drawData = ImGui::GetCurrentContext() ? ImGui::GetDrawData() : nullptr;
 		return {
 			{ "menuEnabled", menu && menu->IsEnabled },
@@ -167,6 +169,7 @@ namespace
 			{ "hasOverlayInterface", vr.openVRInfo.hasOverlayInterface },
 			{ "shouldUseInSceneOverlay", vr.ShouldUseInSceneOverlay() },
 			{ "inSceneSubmitSuppressed", globals::features::upscaling.ShouldSuppressVRInSceneOverlaySubmit() },
+			{ "inSceneSubmitSuppressionReasons", static_cast<std::uint32_t>(inSceneSubmitSuppressionReasons) },
 			{ "shouldPresentOverlayInHeadset", vr.ShouldPresentOverlayInHeadset() },
 			{ "attachMode", static_cast<int>(vr.settings.attachMode) },
 			{ "menuOverlayPath", static_cast<int>(vr.settings.menuOverlayPath) },

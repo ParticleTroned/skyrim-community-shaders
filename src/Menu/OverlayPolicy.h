@@ -9,13 +9,6 @@ namespace OverlayPolicy
 		bool performanceOverlayOpen = false;
 	};
 
-	struct VRInSceneOverlaySubmitAdmission
-	{
-		bool suppressInSceneOverlaySubmit = false;
-		bool mainMenuOpen = false;
-		bool submitStageUpscalingActive = false;
-	};
-
 	[[nodiscard]] constexpr bool ShouldShowShaderCompilationStatus(
 		const ShaderCompilationStatusAdmission& a_admission) noexcept
 	{
@@ -29,12 +22,5 @@ namespace OverlayPolicy
 		bool a_showInHMD) noexcept
 	{
 		return a_statusAdmitted && a_showInHMD;
-	}
-
-	[[nodiscard]] constexpr bool ShouldAdmitVRInSceneOverlaySubmit(
-		const VRInSceneOverlaySubmitAdmission& a_admission) noexcept
-	{
-		return !a_admission.suppressInSceneOverlaySubmit ||
-		       (a_admission.mainMenuOpen && !a_admission.submitStageUpscalingActive);
 	}
 }

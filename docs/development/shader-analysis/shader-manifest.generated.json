@@ -1,0 +1,3218 @@
+{
+  "schemaVersion": 1,
+  "status": "inventory-only",
+  "generatedBy": "tools/generate-shader-manifest.ps1",
+  "inventory": {
+    "sourceRoots": [
+      "features"
+    ],
+    "featureCount": 39,
+    "shaderSourceCount": 71,
+    "passCount": 0
+  },
+  "features": [
+    {
+      "id": "adaptivebrightness",
+      "displayName": "Adaptive Brightness",
+      "featureDirectory": "features/Adaptive Brightness",
+      "iniPaths": [
+        "features/Adaptive Brightness/Shaders/Features/AdaptiveBrightness.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/AdaptiveBrightness.cpp",
+        "src/Features/AdaptiveBrightness.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "cloudshadows",
+      "displayName": "Cloud Shadows",
+      "featureDirectory": "features/Cloud Shadows",
+      "iniPaths": [
+        "features/Cloud Shadows/Shaders/Features/CloudShadows.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/CloudShadows.cpp",
+        "src/Features/CloudShadows.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "cseditor",
+      "displayName": "CS Editor",
+      "featureDirectory": "features/CS Editor",
+      "iniPaths": [
+        "features/CS Editor/Shaders/Features/CSEditor.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/CSEditor.cpp",
+        "src/Features/CSEditor.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "csutility",
+      "displayName": "CS Utility",
+      "featureDirectory": "features/CS Utility",
+      "iniPaths": [
+        "features/CS Utility/Shaders/Features/CSUtility.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/CSUtility.cpp",
+        "src/Features/CSUtility.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "dynamiccubemaps",
+      "displayName": "Dynamic Cubemaps",
+      "featureDirectory": "features/Dynamic Cubemaps",
+      "iniPaths": [
+        "features/Dynamic Cubemaps/Shaders/Features/DynamicCubemaps.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/DynamicCubemaps.cpp",
+        "src/Features/DynamicCubemaps.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "extendedmaterials",
+      "displayName": "Extended Materials",
+      "featureDirectory": "features/Extended Materials",
+      "iniPaths": [
+        "features/Extended Materials/Shaders/Features/ExtendedMaterials.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/ExtendedMaterials.cpp",
+        "src/Features/ExtendedMaterials.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "extendedtranslucency",
+      "displayName": "Extended Translucency",
+      "featureDirectory": "features/Extended Translucency",
+      "iniPaths": [
+        "features/Extended Translucency/Shaders/Features/ExtendedTranslucency.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/ExtendedTranslucency.cpp",
+        "src/Features/ExtendedTranslucency.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "grasscollision",
+      "displayName": "Grass Collision",
+      "featureDirectory": "features/Grass Collision",
+      "iniPaths": [
+        "features/Grass Collision/Shaders/Features/GrassCollision.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/GrassCollision.cpp",
+        "src/Features/GrassCollision.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "grasslighting",
+      "displayName": "Grass Lighting",
+      "featureDirectory": "features/Grass Lighting",
+      "iniPaths": [
+        "features/Grass Lighting/Shaders/Features/GrassLighting.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/GrassLighting.cpp",
+        "src/Features/GrassLighting.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "hairspecular",
+      "displayName": "Hair Specular",
+      "featureDirectory": "features/Hair Specular",
+      "iniPaths": [
+        "features/Hair Specular/Shaders/Features/HairSpecular.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/HairSpecular.cpp",
+        "src/Features/HairSpecular.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "horizonfix",
+      "displayName": "HorizonFix",
+      "featureDirectory": "features/HorizonFix",
+      "iniPaths": [
+        "features/HorizonFix/Shaders/Features/HorizonFix.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/HorizonFix.cpp",
+        "src/Features/HorizonFix.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "ibl",
+      "displayName": "IBL",
+      "featureDirectory": "features/IBL",
+      "iniPaths": [
+        "features/IBL/Shaders/Features/ImageBasedLighting.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/IBL.cpp",
+        "src/Features/IBL.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "interiorsun",
+      "displayName": "Interior Sun",
+      "featureDirectory": "features/Interior Sun",
+      "iniPaths": [
+        "features/Interior Sun/Shaders/Features/InteriorSun.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/InteriorSun.cpp",
+        "src/Features/InteriorSun.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "inversesquarelighting",
+      "displayName": "Inverse Square Lighting",
+      "featureDirectory": "features/Inverse Square Lighting",
+      "iniPaths": [
+        "features/Inverse Square Lighting/Shaders/Features/InverseSquareLighting.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/InverseSquareLighting.cpp",
+        "src/Features/InverseSquareLighting.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "lightlimitfix",
+      "displayName": "Light Limit Fix",
+      "featureDirectory": "features/Light Limit Fix",
+      "iniPaths": [
+        "features/Light Limit Fix/ParticleLights/black.ini",
+        "features/Light Limit Fix/ParticleLights/enblightglow.ini",
+        "features/Light Limit Fix/ParticleLights/fxglowenb.ini",
+        "features/Light Limit Fix/ParticleLights/glowsoft01_enbl.ini",
+        "features/Light Limit Fix/ParticleLights/po3_fullalpha.ini",
+        "features/Light Limit Fix/Shaders/Features/LightLimitFix.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/LightLimitFix.cpp",
+        "src/Features/LightLimitFix.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "linearlighting",
+      "displayName": "Linear Lighting",
+      "featureDirectory": "features/Linear Lighting",
+      "iniPaths": [
+        "features/Linear Lighting/Shaders/Features/LinearLighting.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/LinearLighting.cpp",
+        "src/Features/LinearLighting.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "lodblending",
+      "displayName": "LOD Blending",
+      "featureDirectory": "features/LOD Blending",
+      "iniPaths": [
+        "features/LOD Blending/Shaders/Features/LODBlending.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/LODBlending.cpp",
+        "src/Features/LODBlending.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "performanceoverlay",
+      "displayName": "Performance Overlay",
+      "featureDirectory": "features/Performance Overlay",
+      "iniPaths": [
+        "features/Performance Overlay/Shaders/Features/PerformanceOverlay.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/PerformanceOverlay.cpp",
+        "src/Features/PerformanceOverlay.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "renderdoc",
+      "displayName": "RenderDoc",
+      "featureDirectory": "features/RenderDoc",
+      "iniPaths": [
+        "features/RenderDoc/Shaders/Features/RenderDoc.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/RenderDoc.cpp",
+        "src/Features/RenderDoc.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "screenspacegi",
+      "displayName": "Screen Space GI",
+      "featureDirectory": "features/Screen Space GI",
+      "iniPaths": [
+        "features/Screen Space GI/Shaders/Features/ScreenSpaceGI.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/ScreenSpaceGI.cpp",
+        "src/Features/ScreenSpaceGI.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "screenspaceshadows",
+      "displayName": "Screen-Space Shadows",
+      "featureDirectory": "features/Screen-Space Shadows",
+      "iniPaths": [
+        "features/Screen-Space Shadows/Shaders/Features/ScreenSpaceShadows.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/ScreenSpaceShadows.cpp",
+        "src/Features/ScreenSpaceShadows.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "screenshot",
+      "displayName": "Screenshot",
+      "featureDirectory": "features/Screenshot",
+      "iniPaths": [
+        "features/Screenshot/Shaders/Features/Screenshot.ini"
+      ],
+      "sourceCandidates": [],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "skysync",
+      "displayName": "Sky Sync",
+      "featureDirectory": "features/Sky Sync",
+      "iniPaths": [
+        "features/Sky Sync/Shaders/Features/SkySync.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/SkySync.cpp",
+        "src/Features/SkySync.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "skylighting",
+      "displayName": "Skylighting",
+      "featureDirectory": "features/Skylighting",
+      "iniPaths": [
+        "features/Skylighting/Shaders/Features/Skylighting.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/Skylighting.cpp",
+        "src/Features/Skylighting.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "subsurfacescattering",
+      "displayName": "Subsurface Scattering",
+      "featureDirectory": "features/Subsurface Scattering",
+      "iniPaths": [
+        "features/Subsurface Scattering/Shaders/Features/SubsurfaceScattering.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/SubsurfaceScattering.cpp",
+        "src/Features/SubsurfaceScattering.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "terrainblending",
+      "displayName": "Terrain Blending",
+      "featureDirectory": "features/Terrain Blending",
+      "iniPaths": [
+        "features/Terrain Blending/Shaders/Features/TerrainBlending.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/TerrainBlending.cpp",
+        "src/Features/TerrainBlending.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "terrainhelper",
+      "displayName": "Terrain Helper",
+      "featureDirectory": "features/Terrain Helper",
+      "iniPaths": [
+        "features/Terrain Helper/Shaders/Features/TerrainHelper.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/TerrainHelper.cpp",
+        "src/Features/TerrainHelper.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "terrainshadows",
+      "displayName": "Terrain Shadows",
+      "featureDirectory": "features/Terrain Shadows",
+      "iniPaths": [
+        "features/Terrain Shadows/Shaders/Features/TerrainShadows.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/TerrainShadows.cpp",
+        "src/Features/TerrainShadows.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "terrainvariation",
+      "displayName": "Terrain Variation",
+      "featureDirectory": "features/Terrain Variation",
+      "iniPaths": [
+        "features/Terrain Variation/Shaders/Features/TerrainVariation.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/TerrainVariation.cpp",
+        "src/Features/TerrainVariation.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "truepbr",
+      "displayName": "TruePBR",
+      "featureDirectory": "features/TruePBR",
+      "iniPaths": [
+        "features/TruePBR/Shaders/Features/TruePBR.ini"
+      ],
+      "sourceCandidates": [],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "unifiedwater",
+      "displayName": "Unified Water",
+      "featureDirectory": "features/Unified Water",
+      "iniPaths": [
+        "features/Unified Water/Shaders/Features/UnifiedWater.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/UnifiedWater.cpp",
+        "src/Features/UnifiedWater.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "upscaling",
+      "displayName": "Upscaling",
+      "featureDirectory": "features/Upscaling",
+      "iniPaths": [
+        "features/Upscaling/Shaders/Features/Upscaling.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/Upscaling.cpp",
+        "src/Features/Upscaling.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "volumetriclighting",
+      "displayName": "Volumetric Lighting",
+      "featureDirectory": "features/Volumetric Lighting",
+      "iniPaths": [
+        "features/Volumetric Lighting/Shaders/Features/VolumetricLighting.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/VolumetricLighting.cpp",
+        "src/Features/VolumetricLighting.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "volumetricshadows",
+      "displayName": "Volumetric Shadows",
+      "featureDirectory": "features/Volumetric Shadows",
+      "iniPaths": [
+        "features/Volumetric Shadows/Shaders/Features/VolumetricShadows.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/VolumetricShadows.cpp",
+        "src/Features/VolumetricShadows.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "vr",
+      "displayName": "VR",
+      "featureDirectory": "features/VR",
+      "iniPaths": [
+        "features/VR/Shaders/Features/VR.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/VR.cpp",
+        "src/Features/VR.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "watereffects",
+      "displayName": "Water Effects",
+      "featureDirectory": "features/Water Effects",
+      "iniPaths": [
+        "features/Water Effects/Shaders/Features/WaterEffects.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/WaterEffects.cpp",
+        "src/Features/WaterEffects.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "weatherpicker",
+      "displayName": "Weather Picker",
+      "featureDirectory": "features/Weather Picker",
+      "iniPaths": [
+        "features/Weather Picker/Shaders/Features/WeatherPicker.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/WeatherPicker.cpp",
+        "src/Features/WeatherPicker.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "wetnesseffects",
+      "displayName": "Wetness Effects",
+      "featureDirectory": "features/Wetness Effects",
+      "iniPaths": [
+        "features/Wetness Effects/Shaders/Features/WetnessEffects.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/WetnessEffects.cpp",
+        "src/Features/WetnessEffects.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    },
+    {
+      "id": "wetterness",
+      "displayName": "Wetterness",
+      "featureDirectory": "features/Wetterness",
+      "iniPaths": [
+        "features/Wetterness/Shaders/Features/Wetterness.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/Wetterness.cpp",
+        "src/Features/Wetterness.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefineScopes": [],
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "HasShaderDefine scope and installed/resident/active behaviour require code and runtime annotation."
+      ]
+    }
+  ],
+  "shaders": [
+    {
+      "id": "features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli",
+      "path": "features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli",
+      "sha256": "73250C4D5CA2BD4AE779771D7C9D3F8ABE0E310CECB518BD1E2FBBE90B0E58A2",
+      "ownerFeature": "Cloud Shadows",
+      "family": "CloudShadows",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/BC6HEncodeCS.hlsl",
+      "path": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/BC6HEncodeCS.hlsl",
+      "sha256": "4F91CC8E932A7A79FC469F8334E955E319E2A515BA47870FBB65154BF41C1888",
+      "ownerFeature": "Dynamic Cubemaps",
+      "family": "DynamicCubemaps",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/DynamicCubemaps.hlsli",
+      "path": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/DynamicCubemaps.hlsli",
+      "sha256": "5B1FA76E38FA5ADFE184276D57E91A6B2CE043D962AFCE06A703D4107582EEAA",
+      "ownerFeature": "Dynamic Cubemaps",
+      "family": "DynamicCubemaps",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/InferCubemapCS.hlsl",
+      "path": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/InferCubemapCS.hlsl",
+      "sha256": "4F3D86506C61DAAD92F2824E551AC80147EA5970F36E2DF8EA92AA4FFC65198F",
+      "ownerFeature": "Dynamic Cubemaps",
+      "family": "DynamicCubemaps",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/SpecularIrradianceCS.hlsl",
+      "path": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/SpecularIrradianceCS.hlsl",
+      "sha256": "D6A3DCA9790D43BF8819DD2CB803560C15DFFCA1CEB18F3E7B03C1481A2305E3",
+      "ownerFeature": "Dynamic Cubemaps",
+      "family": "DynamicCubemaps",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/UpdateCubemapCS.hlsl",
+      "path": "features/Dynamic Cubemaps/Shaders/DynamicCubemaps/UpdateCubemapCS.hlsl",
+      "sha256": "0B1B3E55FA98F8E4DF91A5077AEA829B14C8FC6BF4FB4C4A70708C9D52B13D97",
+      "ownerFeature": "Dynamic Cubemaps",
+      "family": "DynamicCubemaps",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Extended Materials/Shaders/ExtendedMaterials/ExtendedMaterials.hlsli",
+      "path": "features/Extended Materials/Shaders/ExtendedMaterials/ExtendedMaterials.hlsli",
+      "sha256": "7BBB5F00005E6922CC7DEB10C94556E53321834F0C8F1FE540B1A5FFFF82CFB8",
+      "ownerFeature": "Extended Materials",
+      "family": "ExtendedMaterials",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Extended Translucency/Shaders/ExtendedTranslucency/ExtendedTranslucency.hlsli",
+      "path": "features/Extended Translucency/Shaders/ExtendedTranslucency/ExtendedTranslucency.hlsli",
+      "sha256": "7485097176366E4BA8D5E14977A3ECC0FD7BF00FD4116C630CB7C1A451F1DB3C",
+      "ownerFeature": "Extended Translucency",
+      "family": "ExtendedTranslucency",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Grass Collision/Shaders/GrassCollision/CollisionUpdateCS.hlsl",
+      "path": "features/Grass Collision/Shaders/GrassCollision/CollisionUpdateCS.hlsl",
+      "sha256": "0408E6D37AF795328272164CAB0BF49CA02DA614B4DAA8A59039FD2E10D17BC2",
+      "ownerFeature": "Grass Collision",
+      "family": "GrassCollision",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Grass Collision/Shaders/GrassCollision/GrassCollision.hlsli",
+      "path": "features/Grass Collision/Shaders/GrassCollision/GrassCollision.hlsli",
+      "sha256": "0A4EF44919DB949293368B258C27D727EB9EC696B5726D9EC3513BED335C8DCD",
+      "ownerFeature": "Grass Collision",
+      "family": "GrassCollision",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Grass Lighting/Shaders/GrassLighting/GrassLighting.hlsli",
+      "path": "features/Grass Lighting/Shaders/GrassLighting/GrassLighting.hlsli",
+      "sha256": "046D17DBC84DB23DD50E549A42F12C799FEB228D349AA878A98592C97B443295",
+      "ownerFeature": "Grass Lighting",
+      "family": "GrassLighting",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Hair Specular/Shaders/Hair/Hair.hlsli",
+      "path": "features/Hair Specular/Shaders/Hair/Hair.hlsli",
+      "sha256": "B218EFC045C42BC1FAD57C45F23CB850100DDF0249B28EDBAEBEA7E035D73305",
+      "ownerFeature": "Hair Specular",
+      "family": "Hair",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/IBL/Shaders/IBL/DiffuseIBLCS.hlsl",
+      "path": "features/IBL/Shaders/IBL/DiffuseIBLCS.hlsl",
+      "sha256": "EA0228265BB0F96244EBEF1E1BEFBAFF8700523EB02A79716DDFE912BD962BEA",
+      "ownerFeature": "IBL",
+      "family": "IBL",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/IBL/Shaders/IBL/IBL.hlsli",
+      "path": "features/IBL/Shaders/IBL/IBL.hlsli",
+      "sha256": "A965364A7B7D64C15CCD843FBD4044D139298B8B08D863B040CC978A10455111",
+      "ownerFeature": "IBL",
+      "family": "IBL",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Inverse Square Lighting/Shaders/InverseSquareLighting/InverseSquareLighting.hlsli",
+      "path": "features/Inverse Square Lighting/Shaders/InverseSquareLighting/InverseSquareLighting.hlsli",
+      "sha256": "037074070A3305A6D094F537A661CA71AC6B79FA0758DF2A73FC528B557C37D7",
+      "ownerFeature": "Inverse Square Lighting",
+      "family": "InverseSquareLighting",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Light Limit Fix/Shaders/LightLimitFix/ClusterBuildingCS.hlsl",
+      "path": "features/Light Limit Fix/Shaders/LightLimitFix/ClusterBuildingCS.hlsl",
+      "sha256": "C054714AABBE29569A650C2571EB18E5ABD287632270FF2A276FADF6F131C25C",
+      "ownerFeature": "Light Limit Fix",
+      "family": "LightLimitFix",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Light Limit Fix/Shaders/LightLimitFix/ClusterCullingCS.hlsl",
+      "path": "features/Light Limit Fix/Shaders/LightLimitFix/ClusterCullingCS.hlsl",
+      "sha256": "E5DB8F3231A2A3E50AEC5D7C428CB1FBFFEE3A7311C1160A7636BECCB4A9A08C",
+      "ownerFeature": "Light Limit Fix",
+      "family": "LightLimitFix",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli",
+      "path": "features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli",
+      "sha256": "19FAF9082192C7A8FA8EE1F5A638787463496899E645C54075D4FD992225E641",
+      "ownerFeature": "Light Limit Fix",
+      "family": "LightLimitFix",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Light Limit Fix/Shaders/LightLimitFix/LightLimitFix.hlsli",
+      "path": "features/Light Limit Fix/Shaders/LightLimitFix/LightLimitFix.hlsli",
+      "sha256": "3BAC6BE6FFD89F2B11DFDC13194B26BEA6C5332EE1F220244DBB203D64421137",
+      "ownerFeature": "Light Limit Fix",
+      "family": "LightLimitFix",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/blur.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/blur.cs.hlsl",
+      "sha256": "6184B3DD58243FAA62412E1B46242D5321B3C0AA17A6F41CC86AAD6F2EFF61F0",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/centerBlend.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/centerBlend.cs.hlsl",
+      "sha256": "42EEB3DAF6EA657B0419267D9425156D492CFBAF7D6280DADFE1193C4861A5FA",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/common.hlsli",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/common.hlsli",
+      "sha256": "3D224443F8FA588A5460A90606DF768A3C9B6356FD434A1935D9725E9514FADF",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/gi.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/gi.cs.hlsl",
+      "sha256": "8B1A98B9AC8C0C64566430CAC8AF0904E490705E0E5A1742148BB176397E41A0",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/prefilterDepths.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/prefilterDepths.cs.hlsl",
+      "sha256": "B1823A56C7DE862071880AE0AE2875566EC1EF0A1BDF8360824AA249CDD5D352",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/prefilterNormal.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/prefilterNormal.cs.hlsl",
+      "sha256": "1D61154B031022F540E6621E6AD739676131ED14AC92775A608C9A5C74A0199E",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/prefilterRadiance.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/prefilterRadiance.cs.hlsl",
+      "sha256": "1EC5278BE0E93B62E8C02E0F95A2A269BC5EC05A87A7AFB455DDE8CC9BCCF12B",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/radianceDisocc.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/radianceDisocc.cs.hlsl",
+      "sha256": "2544B478CBC03E8A2B35E27127103C190E47961F85F118729AA70252054B56EC",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/reproject.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/reproject.cs.hlsl",
+      "sha256": "C8FC0D1942C0C955FC3185D51F3823B96552BF4AC107E56ED5ABD1D2B26F3186",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/StereoReproject.hlsli",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/StereoReproject.hlsli",
+      "sha256": "0A975C2BB0454D75FAFE25853F6C52BB431C8EC442627C79B228CFCE37F06D83",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/stereoSync.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/stereoSync.cs.hlsl",
+      "sha256": "0A7F487FDDE692A523DAABE40806001439FDF28709E79045F6852CDD44BFEF46",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen Space GI/Shaders/ScreenSpaceGI/upsample.cs.hlsl",
+      "path": "features/Screen Space GI/Shaders/ScreenSpaceGI/upsample.cs.hlsl",
+      "sha256": "529E1C3800B7AA513E8D1DED0D93BDD35EF52701EC6138D4F83B264AF511368E",
+      "ownerFeature": "Screen Space GI",
+      "family": "ScreenSpaceGI",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/bend_sss_gpu.hlsli",
+      "path": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/bend_sss_gpu.hlsli",
+      "sha256": "9EDB43CDE5B154B2B3464B3C10F2B964812121B28D9FC0C6990AEBDFAA0E0D2A",
+      "ownerFeature": "Screen-Space Shadows",
+      "family": "ScreenSpaceShadows",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/RaymarchCS.hlsl",
+      "path": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/RaymarchCS.hlsl",
+      "sha256": "30285AA4B828D51BB94FDD2FD0CF2C42D595E66BA246A1CD3FCC7EBB4C467F61",
+      "ownerFeature": "Screen-Space Shadows",
+      "family": "ScreenSpaceShadows",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/ScreenSpaceShadows.hlsli",
+      "path": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/ScreenSpaceShadows.hlsli",
+      "sha256": "432009BA5B5EE0B21F8CA612EA8446C36458746095D4C94E1A6AE7B095082684",
+      "ownerFeature": "Screen-Space Shadows",
+      "family": "ScreenSpaceShadows",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/ShadowReprojectCS.hlsl",
+      "path": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/ShadowReprojectCS.hlsl",
+      "sha256": "B0617333D6C0D3C97F999848E56C4C1788237BAB0C28D2CDF767A2BDEC3E9313",
+      "ownerFeature": "Screen-Space Shadows",
+      "family": "ScreenSpaceShadows",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/StereoSyncCS.hlsl",
+      "path": "features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/StereoSyncCS.hlsl",
+      "sha256": "24C91C1EE35692107D960E6C6ECC742570356510A1C3F6C207921B4822EAB575",
+      "ownerFeature": "Screen-Space Shadows",
+      "family": "ScreenSpaceShadows",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Skylighting/Shaders/Skylighting/Skylighting.hlsli",
+      "path": "features/Skylighting/Shaders/Skylighting/Skylighting.hlsli",
+      "sha256": "D6E67D26DD0DE7BACFCFC34D05DC37320ADBE57EF154E31B5BCB9BDBAD2558D4",
+      "ownerFeature": "Skylighting",
+      "family": "Skylighting",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Skylighting/Shaders/Skylighting/UpdateProbesCS.hlsl",
+      "path": "features/Skylighting/Shaders/Skylighting/UpdateProbesCS.hlsl",
+      "sha256": "4209CFEE40262334EC056FDF16736BD254A676CEE798AA56BFD728D721F15236",
+      "ownerFeature": "Skylighting",
+      "family": "Skylighting",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Subsurface Scattering/Shaders/SubsurfaceScattering/Burley.hlsli",
+      "path": "features/Subsurface Scattering/Shaders/SubsurfaceScattering/Burley.hlsli",
+      "sha256": "B795E6F1351B611219830D36572F9BE7BDDFAF5F0D217732DCF3159AD18CE5D5",
+      "ownerFeature": "Subsurface Scattering",
+      "family": "SubsurfaceScattering",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Subsurface Scattering/Shaders/SubsurfaceScattering/SeparableSSS.hlsli",
+      "path": "features/Subsurface Scattering/Shaders/SubsurfaceScattering/SeparableSSS.hlsli",
+      "sha256": "DF6CB65FC80E5F0C0F74B02F2F825590AE930EA4031300F7B956D414CD3988E7",
+      "ownerFeature": "Subsurface Scattering",
+      "family": "SubsurfaceScattering",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Subsurface Scattering/Shaders/SubsurfaceScattering/SeparableSSSCS.hlsl",
+      "path": "features/Subsurface Scattering/Shaders/SubsurfaceScattering/SeparableSSSCS.hlsl",
+      "sha256": "940C2F18535D7401EC28FFA0BB3BEAA32CA6E3F1075E8BA2CFF65D3B8895F6B2",
+      "ownerFeature": "Subsurface Scattering",
+      "family": "SubsurfaceScattering",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Terrain Blending/Shaders/TerrainBlending/DepthBlend.hlsl",
+      "path": "features/Terrain Blending/Shaders/TerrainBlending/DepthBlend.hlsl",
+      "sha256": "03D9A37D476EEDE0845C6F94B3906E3749A1539126CD843E730249D8B5263A3C",
+      "ownerFeature": "Terrain Blending",
+      "family": "TerrainBlending",
+      "stage": "unknown",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Terrain Blending/Shaders/TerrainBlending/TerrainBlending.hlsli",
+      "path": "features/Terrain Blending/Shaders/TerrainBlending/TerrainBlending.hlsli",
+      "sha256": "94AC6482E803FD1469F369676FD4FD71D8D5854818DD400A153B55055755C0D1",
+      "ownerFeature": "Terrain Blending",
+      "family": "TerrainBlending",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Terrain Shadows/Shaders/TerrainShadows/ShadowUpdate.cs.hlsl",
+      "path": "features/Terrain Shadows/Shaders/TerrainShadows/ShadowUpdate.cs.hlsl",
+      "sha256": "4401B05E541932F551C7EF8DAC31D01CA36B0E95445C46EEAC005B10A1B7E3C7",
+      "ownerFeature": "Terrain Shadows",
+      "family": "TerrainShadows",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Terrain Shadows/Shaders/TerrainShadows/TerrainShadows.hlsli",
+      "path": "features/Terrain Shadows/Shaders/TerrainShadows/TerrainShadows.hlsli",
+      "sha256": "3C862F0E6F8D405AB996F2C2A64BC82C46B9D7C876AD433DD74B08F951871DF6",
+      "ownerFeature": "Terrain Shadows",
+      "family": "TerrainShadows",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Terrain Variation/Shaders/TerrainVariation/TerrainVariation.hlsli",
+      "path": "features/Terrain Variation/Shaders/TerrainVariation/TerrainVariation.hlsli",
+      "sha256": "903519FDF7F859F51AA11606810604C7596C3DA9ED91CD9A9962D30D4723B6AC",
+      "ownerFeature": "Terrain Variation",
+      "family": "TerrainVariation",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/CameraMotionVectorsPS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/CameraMotionVectorsPS.hlsl",
+      "sha256": "2494C7C5F1E0A467B38CC88566E45D64E31713A5190F3E3556A19BE93CDE4F79",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "pixel",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/ClearHMDMaskCS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/ClearHMDMaskCS.hlsl",
+      "sha256": "CD71BA18710C4F0770A5F88352C9C78401D20715FE08681027B8B0BE82342706",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/CopyDepthToSharedBufferPS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/CopyDepthToSharedBufferPS.hlsl",
+      "sha256": "CEBE4B379AAA31A305FACEC5C946080C6BD57F0559E5DFD9707700EDEDBC7821",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "pixel",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/DepthRefractionUpscalePS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/DepthRefractionUpscalePS.hlsl",
+      "sha256": "AB0E86EB6AAC001337AD63085BD14F8BCADCBCBC1C2D1E234BD528132FC27199",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "pixel",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/EncodeTexturesCS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/EncodeTexturesCS.hlsl",
+      "sha256": "202E7036B46A0903CA680F4EA9A580AB7F5598162906A6C1148A31163DF4E20C",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl",
+      "sha256": "B5DDDB825C2849C5B33F635FEF07A049E71BDB8853E3BB9A2C143672B9F046D8",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/FoveatedPeripheryCS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/FoveatedPeripheryCS.hlsl",
+      "sha256": "74A8F67934DBD86EB22774C9745A133488B59612E4A47BB95A19EADAE5BAAC56",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/LumaSharpen/LumaSharpen.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/LumaSharpen/LumaSharpen.hlsl",
+      "sha256": "86FA41BF9DE6A16FE47A18F46186F4986AAAA0807693A4F278133C6EB2F41685",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "unknown",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/PeripheryTAACS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/PeripheryTAACS.hlsl",
+      "sha256": "CE83AAEA1F42248109934585214F893A6B4A2CF7B7FED9D182E0B5EC7BAEF185",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/RCAS/RCAS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/RCAS/RCAS.hlsl",
+      "sha256": "E3FDAF6E03D0E90F28E1C521D1005DB19F3965A793C44236054F71411EA5953F",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "unknown",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/SubmitStageStretchCS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/SubmitStageStretchCS.hlsl",
+      "sha256": "B1DD858FE2861218BD28DB8BD8958E114A51BA4ED3AD5A875731A6D717DE6EC5",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl",
+      "sha256": "F9128FD0DB07356D47F24567881413642EF0A15199824C3AF8290B33E1519891",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "pixel",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/UpscaleVS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/UpscaleVS.hlsl",
+      "sha256": "04EDB8D300AAA763C26078043FD9819FB9A4298562E5F4322C3DA1FCCBD75952",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "vertex",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/VRDesktopMirrorBlitPS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/VRDesktopMirrorBlitPS.hlsl",
+      "sha256": "19AD0A460418BA12C5FFF082DB3BC99C9682229BD793941B809B27BD058023B4",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "pixel",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Upscaling/Shaders/Upscaling/VRMenuLayerCompositePS.hlsl",
+      "path": "features/Upscaling/Shaders/Upscaling/VRMenuLayerCompositePS.hlsl",
+      "sha256": "67109FEC9EC540CC205C5B3D678D05E585F30DB261B71DDE6DEEEB1EEF8E06B0",
+      "ownerFeature": "Upscaling",
+      "family": "Upscaling",
+      "stage": "pixel",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Volumetric Shadows/Shaders/VolumetricShadows/BlurShadowCS.hlsl",
+      "path": "features/Volumetric Shadows/Shaders/VolumetricShadows/BlurShadowCS.hlsl",
+      "sha256": "5614C45D6D176452B157C36878A9C6003E646F7CEE7A09A690955A6393F8C176",
+      "ownerFeature": "Volumetric Shadows",
+      "family": "VolumetricShadows",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Volumetric Shadows/Shaders/VolumetricShadows/DownsampleShadowCS.hlsl",
+      "path": "features/Volumetric Shadows/Shaders/VolumetricShadows/DownsampleShadowCS.hlsl",
+      "sha256": "134D9C17636DD004C856AF475EB0566BFEEB07AE02312426B04848E451401BFE",
+      "ownerFeature": "Volumetric Shadows",
+      "family": "VolumetricShadows",
+      "stage": "compute",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Volumetric Shadows/Shaders/VolumetricShadows/VolumetricShadows.hlsli",
+      "path": "features/Volumetric Shadows/Shaders/VolumetricShadows/VolumetricShadows.hlsli",
+      "sha256": "0D76E55A18DC2E90ABEB6B9143713F2AD84272ABD987CB53412F5BB00B6D4EA7",
+      "ownerFeature": "Volumetric Shadows",
+      "family": "VolumetricShadows",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Water Effects/Shaders/WaterEffects/WaterCaustics.hlsli",
+      "path": "features/Water Effects/Shaders/WaterEffects/WaterCaustics.hlsli",
+      "sha256": "10CC7BC48EE7B7BD6D452420D78453C06626EECC8C1B44AFEE9D206584E2B859",
+      "ownerFeature": "Water Effects",
+      "family": "WaterEffects",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Water Effects/Shaders/WaterEffects/WaterParallax.hlsli",
+      "path": "features/Water Effects/Shaders/WaterEffects/WaterParallax.hlsli",
+      "sha256": "1A6FAB16B826290DE6F1D4C5675C203A33349FB4CF75776472B9606938D4C912",
+      "ownerFeature": "Water Effects",
+      "family": "WaterEffects",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Wetness Effects/Shaders/WetnessEffects/optimized-ggx.hlsli",
+      "path": "features/Wetness Effects/Shaders/WetnessEffects/optimized-ggx.hlsli",
+      "sha256": "FEFFBA1ED422D87E870870F5C8D29566DD1E431DF9125CC87C82E48BA5E930FC",
+      "ownerFeature": "Wetness Effects",
+      "family": "WetnessEffects",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Wetness Effects/Shaders/WetnessEffects/WetnessEffects.hlsli",
+      "path": "features/Wetness Effects/Shaders/WetnessEffects/WetnessEffects.hlsli",
+      "sha256": "8D93B4B61916C57E9B77527DFD1FD53E2F3D345D6A54FB1B9CA53E4FD44DCEE3",
+      "ownerFeature": "Wetness Effects",
+      "family": "WetnessEffects",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Wetterness/Shaders/Wetterness/optimized-ggx.hlsli",
+      "path": "features/Wetterness/Shaders/Wetterness/optimized-ggx.hlsli",
+      "sha256": "FEFFBA1ED422D87E870870F5C8D29566DD1E431DF9125CC87C82E48BA5E930FC",
+      "ownerFeature": "Wetterness",
+      "family": "Wetterness",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Wetterness/Shaders/Wetterness/Wetterness.hlsli",
+      "path": "features/Wetterness/Shaders/Wetterness/Wetterness.hlsli",
+      "sha256": "698711EBC8D9A4A1AD44AA8396BB98A63DCB68ACBF2B2A8BA8B85FC184717317",
+      "ownerFeature": "Wetterness",
+      "family": "Wetterness",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    },
+    {
+      "id": "features/Wetterness/Shaders/Wetterness/WetternessLighting.hlsli",
+      "path": "features/Wetterness/Shaders/Wetterness/WetternessLighting.hlsli",
+      "sha256": "2DBCBBF85C67C55B03B878AE540323D3482D9CE62F3D514FDFD61446B92A6686",
+      "ownerFeature": "Wetterness",
+      "family": "Wetterness",
+      "stage": "include",
+      "profile": null,
+      "entryPoints": [],
+      "includeClosure": [],
+      "compileDefines": [],
+      "pipelines": [],
+      "resources": {
+        "inputs": [],
+        "outputs": [],
+        "constantBuffers": [],
+        "srvs": [],
+        "uavs": [],
+        "samplers": []
+      },
+      "routes": {
+        "flat": null,
+        "vr": null,
+        "stereo": null,
+        "overlay": null,
+        "vendor": null,
+        "compatibility": null
+      },
+      "classificationStatus": "inventory-only",
+      "notes": [
+        "Entry points, include closure, pipeline membership, resources, and route flags require compile-site or runtime annotation."
+      ]
+    }
+  ],
+  "passes": []
+}

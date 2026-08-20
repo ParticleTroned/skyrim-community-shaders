@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:schema:shader-manifest:1",
+  "title": "Community Shaders shader and pass manifest",
+  "type": "object",
+  "required": ["schemaVersion", "status", "generatedBy", "inventory", "features", "shaders", "passes"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["inventory-only", "annotated", "runtime-verified"] },
+    "generatedBy": { "type": "string", "minLength": 1 },
+    "inventory": {
+      "type": "object",
+      "required": ["sourceRoots", "featureCount", "shaderSourceCount", "passCount"],
+      "properties": {
+        "sourceRoots": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "featureCount": { "type": "integer", "minimum": 0 },
+        "shaderSourceCount": { "type": "integer", "minimum": 0 },
+        "passCount": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "features": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/feature" }
+    },
+    "shaders": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/shader" }
+    },
+    "passes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pass" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nullableBoolean": { "type": ["boolean", "null"] },
+    "routeFlags": {
+      "type": "object",
+      "required": ["flat", "vr", "stereo", "overlay", "vendor", "compatibility"],
+      "properties": {
+        "flat": { "$ref": "#/$defs/nullableBoolean" },
+        "vr": { "$ref": "#/$defs/nullableBoolean" },
+        "stereo": { "$ref": "#/$defs/nullableBoolean" },
+        "overlay": { "$ref": "#/$defs/nullableBoolean" },
+        "vendor": { "$ref": "#/$defs/nullableBoolean" },
+        "compatibility": { "$ref": "#/$defs/nullableBoolean" }
+      },
+      "additionalProperties": false
+    },
+    "resourceSet": {
+      "type": "object",
+      "required": ["inputs", "outputs", "constantBuffers", "srvs", "uavs", "samplers"],
+      "properties": {
+        "inputs": { "type": "array", "items": { "type": "string" } },
+        "outputs": { "type": "array", "items": { "type": "string" } },
+        "constantBuffers": { "type": "array", "items": { "type": "string" } },
+        "srvs": { "type": "array", "items": { "type": "string" } },
+        "uavs": { "type": "array", "items": { "type": "string" } },
+        "samplers": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "feature": {
+      "type": "object",
+      "required": ["id", "displayName", "featureDirectory", "iniPaths", "sourceCandidates", "stateCapability", "shaderDefineScopes", "classificationStatus", "notes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "displayName": { "type": "string", "minLength": 1 },
+        "featureDirectory": { "type": "string", "minLength": 1 },
+        "iniPaths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "sourceCandidates": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "stateCapability": {
+          "type": "object",
+          "required": ["installed", "resident", "active"],
+          "properties": {
+            "installed": { "$ref": "#/$defs/nullableBoolean" },
+            "resident": { "$ref": "#/$defs/nullableBoolean" },
+            "active": { "$ref": "#/$defs/nullableBoolean" }
+          },
+          "additionalProperties": false
+        },
+        "shaderDefineScopes": { "type": "array", "items": { "type": "string" } },
+        "classificationStatus": { "enum": ["inventory-only", "annotated", "runtime-verified"] },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "shader": {
+      "type": "object",
+      "required": ["id", "path", "sha256", "ownerFeature", "family", "stage", "profile", "entryPoints", "includeClosure", "compileDefines", "pipelines", "resources", "routes", "classificationStatus", "notes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "ownerFeature": { "type": ["string", "null"] },
+        "family": { "type": ["string", "null"] },
+        "stage": { "enum": ["vertex", "pixel", "compute", "geometry", "hull", "domain", "include", "unknown"] },
+        "profile": { "type": ["string", "null"] },
+        "entryPoints": { "type": "array", "items": { "type": "string" } },
+        "includeClosure": { "type": "array", "items": { "type": "string" } },
+        "compileDefines": { "type": "array", "items": { "type": "string" } },
+        "pipelines": { "type": "array", "items": { "type": "string" } },
+        "resources": { "$ref": "#/$defs/resourceSet" },
+        "routes": { "$ref": "#/$defs/routeFlags" },
+        "classificationStatus": { "enum": ["inventory-only", "annotated", "runtime-verified"] },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "pass": {
+      "type": "object",
+      "required": ["id", "owner", "invocationSite", "shaders", "resources", "routes", "orderingBefore", "orderingAfter", "profilerTimer", "classificationStatus", "notes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "invocationSite": { "type": ["string", "null"] },
+        "shaders": { "type": "array", "items": { "type": "string" } },
+        "resources": { "$ref": "#/$defs/resourceSet" },
+        "routes": { "$ref": "#/$defs/routeFlags" },
+        "orderingBefore": { "type": "array", "items": { "type": "string" } },
+        "orderingAfter": { "type": "array", "items": { "type": "string" } },
+        "profilerTimer": { "type": ["string", "null"] },
+        "classificationStatus": { "enum": ["inventory-only", "annotated", "runtime-verified"] },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

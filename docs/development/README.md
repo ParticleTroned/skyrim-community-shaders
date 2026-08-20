@@ -13,6 +13,7 @@
 -   **[VR Depth-Culling Temporal Validity](./vr-depth-culling-temporal-validity.md)** - Diagnosis, correction, and physical-HMD validation of one-frame missing-geometry flashes
 -   **[GPU-Unified Presets](./unified-presets.md)** - One preset path with capability-selected DLSS or FSR
 -   **[Screenshot API and Sequences](./screenshot-api-and-sequences.md)** - Versioned asynchronous still/sequence contract, acknowledgements, manifests, and implementation gates
+-   **[Shader Analysis](./shader-analysis/README.md)** - Residency/recompile plan, machine-readable ownership manifest, and versioned baselines
 
 ## Quick Links
 

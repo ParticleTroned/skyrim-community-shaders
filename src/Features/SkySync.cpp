@@ -8,6 +8,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkySync::Settings,
 	Enabled,
 	UseAlternateSunPath,
+	EnableSunLensFlare,
 	MoonLightSource,
 	SunPath,
 	CustomAngle,
@@ -42,6 +43,11 @@ void SkySync::DrawSettings()
 	ImGui::Checkbox(T(TKEY("use_alternate_sun_path"), "Use alternate sun path"), &settings.UseAlternateSunPath);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(T(TKEY("use_alternate_sun_path_tooltip"), "Calculate sun position based on time of day and season instead of vanilla movement."));
+	}
+
+	ImGui::Checkbox(T(TKEY("enable_sun_lens_flare"), "Enable weather lens flare"), &settings.EnableSunLensFlare);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(T(TKEY("enable_sun_lens_flare_tooltip"), "Show lens-flare sprites supplied by the active weather. Some weathers do not provide a lens flare, so the setting has no visible effect in those weathers."));
 	}
 
 	if (settings.UseAlternateSunPath) {
@@ -224,12 +230,41 @@ void SkySync::DisableOnConflict(std::string_view conflictName)
 
 void SkySync::ResetRuntimeState()
 {
+	RestoreWeatherLensFlares();
 	shadowFader.Reset();
 	currentDim = 1.0f;
 	sunSetting = false;
 	sunRising = false;
 	sunBelowHorizon = false;
 	volumetricLightingIntensityFactor = DefaultVolumetricLightingIntensityFactor;
+}
+
+void SkySync::ApplyWeatherLensFlareSetting(const RE::Sky* sky)
+{
+	if (!sky || !settings.Enabled || settings.EnableSunLensFlare) {
+		RestoreWeatherLensFlares();
+		return;
+	}
+
+	auto suppress = [this](RE::TESWeather* weather) {
+		if (!weather || !weather->sunGlareLensFlare)
+			return;
+
+		suppressedWeatherLensFlares.try_emplace(weather, weather->sunGlareLensFlare);
+		weather->sunGlareLensFlare = nullptr;
+	};
+
+	suppress(sky->currentWeather);
+	suppress(sky->lastWeather);
+}
+
+void SkySync::RestoreWeatherLensFlares()
+{
+	for (const auto& [weather, lensFlare] : suppressedWeatherLensFlares) {
+		if (weather && !weather->sunGlareLensFlare)
+			weather->sunGlareLensFlare = lensFlare;
+	}
+	suppressedWeatherLensFlares.clear();
 }
 
 float SkySync::NormalizeVolumetricLightingIntensity(float intensity)
@@ -259,8 +294,9 @@ void SkySync::OnSkyUpdateColors(RE::Sky* sky)
 
 void SkySync::Sky_Update::thunk(RE::Sky* sky)
 {
-	func(sky);
 	auto& skySync = globals::features::skySync;
+	skySync.ApplyWeatherLensFlareSetting(sky);
+	func(sky);
 	skySync.PreparePendingTransitions();
 	if (skySync.Update(sky))
 		Util::CompleteCelestialTransition();

@@ -30,6 +30,7 @@ public:
 	{
 		bool Enabled = true;
 		bool UseAlternateSunPath = false;
+		bool EnableSunLensFlare = true;
 		int32_t MoonLightSource = 0;
 		int32_t SunPath = 0;
 		float CustomAngle = -35.0f;
@@ -152,10 +153,13 @@ private:
 	bool sunSetting = false;
 	bool sunRising = false;
 	bool sunBelowHorizon = false;
+	std::unordered_map<RE::TESWeather*, RE::BGSLensFlare*> suppressedWeatherLensFlares;
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);
 	void ResetRuntimeState();
+	void ApplyWeatherLensFlareSetting(const RE::Sky* sky);
+	void RestoreWeatherLensFlares();
 	static float NormalizeVolumetricLightingIntensity(float intensity);
 
 	void PreparePendingTransitions();

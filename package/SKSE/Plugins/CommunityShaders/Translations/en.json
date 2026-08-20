@@ -1413,6 +1413,8 @@
     "feature.sky_sync.moon_light_source_tooltip": "Select which moon casts shadows during the night.",
     "feature.sky_sync.name": "Sky Sync",
     "feature.sky_sync.new_moon_intensity": "New Moon Intensity",
+    "feature.sky_sync.enable_sun_lens_flare": "Enable weather lens flare",
+    "feature.sky_sync.enable_sun_lens_flare_tooltip": "Show lens-flare sprites supplied by the active weather. Some weathers do not provide a lens flare, so the setting has no visible effect in those weathers.",
     "feature.sky_sync.shadow_transition_duration": "Shadow Transition Duration",
     "feature.sky_sync.shadow_transition_duration_tooltip": "How long (in game-time units) the shadow direction takes to fade between sources. 100 = ~5 seconds at timescale 20.",
     "feature.sky_sync.sun_path": "Sun path",

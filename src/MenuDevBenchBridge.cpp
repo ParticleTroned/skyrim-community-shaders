@@ -225,12 +225,13 @@ namespace
 			auto* menu = globals::menu;
 			if (!menu)
 				return { { "error", "CSX menu unavailable" } };
+			json delegatedRequest = nullptr;
 			if (action == "open") {
 				menu->OpenMenu();
 			} else if (action == "close") {
 				menu->CloseMenu();
 			} else if (action == "screenshot") {
-				globals::features::screenshotFeature.RequestCapture();
+				delegatedRequest = globals::features::screenshotFeature.RequestLegacyCapture("communityshaders.menu");
 			} else if (action == "set_path") {
 				auto& vr = globals::features::vr;
 				vr.HideOverlaysIfPresent();
@@ -245,7 +246,7 @@ namespace
 			}
 			if (action == "texture_stats")
 				return { { "action", action }, { "texture", InspectMenuTexture() }, { "status", BuildStatus() } };
-			return { { "action", action }, { "path", path }, { "status", BuildStatus() } };
+			return { { "action", action }, { "path", path }, { "delegatedRequest", std::move(delegatedRequest) }, { "status", BuildStatus() } };
 		});
 	}
 

@@ -1,0 +1,95 @@
+if(NOT DEFINED PROJECT_ROOT)
+    message(FATAL_ERROR "PROJECT_ROOT is required")
+endif()
+
+set(_json_files
+    "docs/development/schemas/screenshot-request-v1.schema.json"
+    "docs/development/schemas/screenshot-response-v1.schema.json"
+    "docs/development/schemas/screenshot-event-v1.schema.json"
+    "docs/development/schemas/screenshot-sequence-manifest-v1.schema.json"
+    "tests/data/screenshot-api/capture-request-v1.json"
+    "tests/data/screenshot-api/sequence-request-v1.json"
+    "docs/development/unified-preset-policy.json"
+)
+
+foreach(_relative IN LISTS _json_files)
+    set(_path "${PROJECT_ROOT}/${_relative}")
+    if(NOT EXISTS "${_path}")
+        message(FATAL_ERROR "Missing screenshot contract file: ${_relative}")
+    endif()
+    file(READ "${_path}" _contents)
+    string(JSON _type ERROR_VARIABLE _error TYPE "${_contents}")
+    if(_error)
+        message(FATAL_ERROR "Invalid JSON in ${_relative}: ${_error}")
+    endif()
+    if(NOT _type STREQUAL "OBJECT")
+        message(FATAL_ERROR "Expected a JSON object in ${_relative}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/docs/development/unified-preset-policy.json" _policy)
+foreach(_legacy IN ITEMS
+    SequenceFrameCount
+    SequenceFrameInterval
+    SequencePreviewFramesPerSecond
+    SequenceSaveSeparateEyes
+    SequenceWritePreviewVideo
+)
+    string(FIND "${_policy}" "${_legacy}" _legacy_position)
+    if(NOT _legacy_position EQUAL -1)
+        message(FATAL_ERROR "Legacy flat screenshot setting remains in unified preset policy: ${_legacy}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotApi.cpp" _implementation)
+foreach(_action IN ITEMS
+    capabilities status settings_get settings_validate settings_apply capture
+    sequence_start sequence_stop request_get request_list request_cancel
+    events_poll acknowledge
+)
+    string(FIND "${_implementation}" "\"${_action}\"" _action_position)
+    if(_action_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot API action is not implemented: ${_action}")
+    endif()
+endforeach()
+
+foreach(_event IN ITEMS
+    request.accepted source.waiting source.fallback artifact.queued
+    artifact.encoding artifact.written artifact.failed sequence.frame_scheduled
+    sequence.stop_requested sequence.finalizing request.terminal
+)
+    string(FIND "${_implementation}" "\"${_event}\"" _event_position)
+    if(_event_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot API event is not implemented: ${_event}")
+    endif()
+endforeach()
+
+foreach(_required_contract_text IN ITEMS
+    runtime_session persistent_user settings_default file_reference
+    maximumOutputsPerFrame retentionSeconds manifest_write_failed
+)
+    string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
+    if(_contract_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot API implementation is missing contract behavior: ${_required_contract_text}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/docs/development/schemas/screenshot-request-v1.schema.json" _request_schema)
+foreach(_required_schema_text IN ITEMS runtime_session persistent_user settings_apply frameManifest previewVideo)
+    string(FIND "${_request_schema}" "${_required_schema_text}" _schema_position)
+    if(_schema_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot request schema is missing: ${_required_schema_text}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/src/ScreenshotDevBenchBridge.cpp" _bridge)
+string(FIND "${_bridge}" "communityshaders.screenshot" _tool_position)
+if(_tool_position EQUAL -1)
+    message(FATAL_ERROR "communityshaders.screenshot is not registered")
+endif()
+string(FIND "${_bridge}" "#ifdef DEVBENCH_BRIDGE_ENABLED" _bridge_guard_position)
+if(_bridge_guard_position EQUAL -1)
+    message(FATAL_ERROR "Screenshot bridge does not use the project's DevBench compile guard")
+endif()
+
+message(STATUS "Screenshot API contract, schemas, goldens, migration, actions, and journal events are coherent")

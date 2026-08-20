@@ -1,0 +1,21 @@
+{
+  "contractMajor": 1,
+  "contractMinor": 0,
+  "clientId": "contract-test",
+  "commandId": "capture-0001",
+  "action": "capture",
+  "capture": {
+    "source": { "kind": "hmd_submission", "fallback": "reject" },
+    "outputs": [
+      {
+        "view": "framed_combined",
+        "dominantEye": "left",
+        "encoding": { "format": "png", "colourContract": "sdr_srgb" },
+        "nameSuffix": "combined"
+      }
+    ],
+    "destination": { "policy": "settings_default", "directory": null, "baseName": null, "overwrite": "never" },
+    "clipboard": "none",
+    "tags": { "suite": "contract" }
+  }
+}

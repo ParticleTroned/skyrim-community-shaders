@@ -14,8 +14,13 @@ class Profiler
 {
 public:
 	static constexpr uint32_t kMaxTimers = 128;
-	static constexpr uint32_t kFrameLatency = 3;
+	// Keep enough independent query slots for a busy GPU without blocking the
+	// render thread or immediately dropping the next whole-frame capture.
+	static constexpr uint32_t kFrameLatency = 8;
 	static constexpr uint32_t kHistorySize = 300;
+	// Longer accepted-Present gaps are treated as a timing-source discontinuity
+	// (pause, loading, or alt-tab), not as an ordinary in-scene hitch sample.
+	static constexpr float kMaxPresentIntervalMs = 1000.0f;
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
 
@@ -148,6 +153,10 @@ public:
 	uint64_t GetWholeFrameCpuSampleId() const { return wholeFrameCpuSampleId; }
 	uint64_t GetWholeFramePresentIntervalSampleId() const { return wholeFramePresentIntervalSampleId; }
 	uint64_t GetPresentIntervalSampleId() const { return presentIntervalSampleId; }
+	// Monotonic capture-integrity diagnostics. Measurements compare boundary
+	// snapshots without interpreting a missing timing value as zero.
+	uint64_t GetPresentDiscontinuityEpoch() const { return presentDiscontinuityEpoch; }
+	uint64_t GetSkippedWholeFrameCaptureCount() const { return skippedWholeFrameCaptureCount; }
 	void ClearTimers();
 	void ClearTimersForFeature(const std::string& featureName);
 
@@ -298,6 +307,8 @@ private:
 	uint64_t wholeFrameCpuSampleId = 0;
 	uint64_t wholeFramePresentIntervalSampleId = 0;
 	uint64_t presentIntervalSampleId = 0;
+	uint64_t presentDiscontinuityEpoch = 0;
+	uint64_t skippedWholeFrameCaptureCount = 0;
 	int64_t lastAcceptedPresentStartCounter = 0;
 	bool wholeFrameGpuTimingAvailable = false;
 	bool detailedPassGpuTimingAvailable = false;
@@ -320,6 +331,7 @@ private:
 	void StoreCompletedCpuTimers(FrameQueries& frame);
 	void ResetFrameState(FrameQueries& frame);
 	void ResetWholeFrameTimings();
+	void RecordPresentDiscontinuity();
 	static bool HasPendingFrameData(const FrameQueries& frame);
 };
 

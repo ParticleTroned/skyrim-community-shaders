@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -24,9 +25,17 @@ namespace
 
 	bool IsValidPresentInterval(float ms)
 	{
-		// A successful real Present is authoritative for total game-frame time. Do not apply
-		// the profiler-query sanity ceiling to this independent wall-clock stream.
-		return std::isfinite(ms) && ms > 0.0f;
+		// Keep genuine ordinary hitches, but do not let a pause, loading stall, or
+		// alt-tab gap become an in-scene frame-time sample.
+		return std::isfinite(ms) &&
+		       ms > 0.0f &&
+		       ms <= Profiler::kMaxPresentIntervalMs;
+	}
+
+	void IncrementSaturating(uint64_t& value)
+	{
+		if (value != std::numeric_limits<uint64_t>::max())
+			++value;
 	}
 
 	Profiler::CaptureMode MinCaptureMode(
@@ -121,6 +130,7 @@ void Profiler::ResetFrameState(FrameQueries& frame)
 
 void Profiler::ResetWholeFrameTimings()
 {
+	RecordPresentDiscontinuity();
 	wholeFrameGpuHistory = {};
 	wholeFrameCpuHistory = {};
 	presentIntervalHistory = {};
@@ -140,6 +150,11 @@ void Profiler::ResetWholeFrameTimings()
 	pendingPresentIsReal = false;
 	pendingPresentHasTimestamp = false;
 	pendingPresentHasProfileFrame = false;
+}
+
+void Profiler::RecordPresentDiscontinuity()
+{
+	IncrementSaturating(presentDiscontinuityEpoch);
 }
 
 bool Profiler::HasPendingFrameData(const FrameQueries& frame)
@@ -408,8 +423,10 @@ void Profiler::BeginFrame()
 	if (!initialized || !context || frameActive || !IsWholeFrameCaptureActive())
 		return;
 
-	if (!CollectResults())
+	if (!CollectResults()) {
+		IncrementSaturating(skippedWholeFrameCaptureCount);
 		return;
+	}
 
 	auto& frame = frames[writeFrame];
 	ResetFrameState(frame);
@@ -621,15 +638,23 @@ void Profiler::CompletePresent(HRESULT presentResult)
 		acceptedPresentBoundary && pendingPresentHasTimestamp;
 
 	uint64_t completedPresentIntervalSampleId = 0;
+	bool presentSourceDiscontinuous = false;
 	if (acceptedTimedPresent) {
-		if (hasLastAcceptedPresentStart &&
-		    pendingPresentStart.QuadPart > lastAcceptedPresentStartCounter) {
-			const float presentIntervalMs = static_cast<float>(
-				static_cast<double>(pendingPresentStart.QuadPart - lastAcceptedPresentStartCounter) * cpuTicksToMs);
-			if (IsValidPresentInterval(presentIntervalMs)) {
-				presentIntervalHistory.PushSample(presentIntervalMs);
-				completedPresentIntervalSampleId = ++presentIntervalSampleId;
-				latestPresentIntervalWasSynced = lastAcceptedPresentWasSynced;
+		if (hasLastAcceptedPresentStart) {
+			if (pendingPresentStart.QuadPart > lastAcceptedPresentStartCounter) {
+				const float presentIntervalMs = static_cast<float>(
+					static_cast<double>(pendingPresentStart.QuadPart - lastAcceptedPresentStartCounter) * cpuTicksToMs);
+				if (IsValidPresentInterval(presentIntervalMs)) {
+					presentIntervalHistory.PushSample(presentIntervalMs);
+					completedPresentIntervalSampleId = ++presentIntervalSampleId;
+					latestPresentIntervalWasSynced = lastAcceptedPresentWasSynced;
+				} else {
+					presentSourceDiscontinuous = true;
+				}
+			} else {
+				// QueryPerformanceCounter should be monotonic. A rollback means the
+				// direct timing source must be re-baselined before another sample.
+				presentSourceDiscontinuous = true;
 			}
 		}
 
@@ -642,7 +667,10 @@ void Profiler::CompletePresent(HRESULT presentResult)
 		lastAcceptedPresentStartCounter = 0;
 		hasLastAcceptedPresentStart = false;
 		lastAcceptedPresentWasSynced = false;
+		presentSourceDiscontinuous = true;
 	}
+	if (presentSourceDiscontinuous)
+		RecordPresentDiscontinuity();
 
 	if (pendingPresentHasProfileFrame) {
 		auto& frame = frames[pendingPresentFrame];

@@ -49,6 +49,8 @@ public:
 		uint64_t wholeFramePresentIntervalSampleId = 0;
 		uint64_t wholeFrameGpuSampleId = 0;
 		uint64_t wholeFrameCpuSampleId = 0;
+		uint64_t presentDiscontinuityEpoch = 0;
+		uint64_t skippedWholeFrameCaptureCount = 0;
 		bool hasPresentInterval = false;
 		bool hasPresentIntervalSample = false;
 		bool presentIntervalSynced = false;

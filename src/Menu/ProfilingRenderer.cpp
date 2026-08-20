@@ -1096,6 +1096,8 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	summary.wholeFramePresentIntervalSampleId = profiler.GetWholeFramePresentIntervalSampleId();
 	summary.wholeFrameGpuSampleId = profiler.GetWholeFrameGpuSampleId();
 	summary.wholeFrameCpuSampleId = profiler.GetWholeFrameCpuSampleId();
+	summary.presentDiscontinuityEpoch = profiler.GetPresentDiscontinuityEpoch();
+	summary.skippedWholeFrameCaptureCount = profiler.GetSkippedWholeFrameCaptureCount();
 	if (profiler.HasWholeFrameGpuTime()) {
 		summary.wholeFrameGpuMs = profiler.GetWholeFrameGpuTimeAverageMs(kDisplayedRollingFrameCount);
 		summary.hasWholeFrameGpu = IsPositiveFinite(summary.wholeFrameGpuMs);

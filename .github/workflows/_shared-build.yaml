@@ -83,6 +83,13 @@ jobs:
                   configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF']"
                   buildPreset: ${{ matrix.compiler.cmake-preset }}
 
+            - name: Run deterministic host unit tests
+              shell: pwsh
+              run: |
+                  cmake --build ${{ matrix.compiler.build-dir }} --config Release --target performance_tuning_tests
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                  ctest --test-dir ${{ matrix.compiler.build-dir }} -C Release --output-on-failure --no-tests=error -R PerformanceTuningTests --timeout 60
+
             - name: Extract version from CMake
               id: get_version
               shell: pwsh

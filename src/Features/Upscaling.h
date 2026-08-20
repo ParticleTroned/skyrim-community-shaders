@@ -7,6 +7,7 @@
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include <atomic>
+#include <cstdint>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
 #include <limits>
@@ -157,6 +158,72 @@ public:
 	float GetFrameGenerationFrameTime() const;
 	bool IsUpscalingActive() const;
 
+	/** @brief Default inclusive age window for applied-path and Present evidence. */
+	static constexpr uint32_t kPerformanceMeasurementRecentEvidenceFrames = 8;
+
+	struct PerformanceMeasurementFrameGenerationSettings
+	{
+		uint32_t mode = 0;
+		uint32_t forceEnable = 0;
+		bool allowInMenus = false;
+	};
+
+	struct PerformanceMeasurementFrameGenerationStatus
+	{
+		bool configured = false;
+		bool dx12PathActive = false;
+		bool requestedNow = false;
+		bool activeNow = false;
+		bool hasRecentPresentEvidence = false;
+		bool lastPresentRequested = false;
+		bool lastPresentSuccessful = false;
+		bool lastPresentActive = false;
+	};
+
+	/** @brief Returns whether frame generation is requested by persistent settings. */
+	[[nodiscard]] bool IsFrameGenerationConfigured() const;
+
+	/**
+	 * @brief Captures every frame-generation setting changed by the measurement override.
+	 *
+	 * Capture once before disabling frame generation and retain the value until all
+	 * measurement legs and their failure/cancellation cleanup have completed.
+	 */
+	[[nodiscard]] PerformanceMeasurementFrameGenerationSettings CaptureFrameGenerationSettingsForPerformanceMeasurement() const;
+
+	/**
+	 * @brief Configures frame generation off without clearing recent Present evidence.
+	 *
+	 * The caller must wait for IsFrameGenerationQuiescentForPerformanceMeasurement()
+	 * before consuming samples; retained evidence prevents the last generated frame
+	 * from being mistaken for an immediately clean transition.
+	 */
+	void DisableFrameGenerationForPerformanceMeasurement();
+
+	/** @brief Restores a snapshot returned by CaptureFrameGenerationSettingsForPerformanceMeasurement(). */
+	void RestoreFrameGenerationSettingsAfterPerformanceMeasurement(const PerformanceMeasurementFrameGenerationSettings& a_settings);
+
+	/**
+	 * @brief Returns configured, current, and latest-Present FG state.
+	 *
+	 * Present evidence must fall inside the inclusive frame-age window supplied by
+	 * the caller; the owning transition gate then requires additional fresh Presents.
+	 */
+	[[nodiscard]] PerformanceMeasurementFrameGenerationStatus GetFrameGenerationStatusForPerformanceMeasurement(
+		uint32_t a_recentEvidenceFrames = kPerformanceMeasurementRecentEvidenceFrames) const;
+
+	/**
+	 * @brief Returns true once FG is configured off and the D3D12 Present path is clean.
+	 *
+	 * With an active D3D12 proxy, the latest recent Present must have succeeded
+	 * without requesting or activating FG. Without that proxy, configured-off is
+	 * sufficient because FG cannot run.
+	 * The caller must still impose its own wall-clock transition deadline; unavailable
+	 * Present evidence is a real not-ready result and must not create an endless wait.
+	 */
+	[[nodiscard]] bool IsFrameGenerationQuiescentForPerformanceMeasurement(
+		uint32_t a_recentEvidenceFrames = kPerformanceMeasurementRecentEvidenceFrames) const;
+
 	// Feature interface overrides
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
@@ -203,6 +270,12 @@ public:
 		return configuredMethod != UpscaleMethod::kNONE ||
 		       (d3d12SwapChainActive && settings.frameGenerationMode != 0);
 	}
+	/**
+	 * @brief Proves the desired configuration has applied and its render path recently succeeded.
+	 *
+	 * A recent successful execution must match the applied configuration revision.
+	 * The owning transition gate remains responsible for a wall-clock timeout.
+	 */
 	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override
 	{
@@ -212,13 +285,13 @@ public:
 	}
 	virtual uint64_t GetPerformanceCostMeasurementFreshPresentCount(bool) const override
 	{
-		// Flush the same 60-frame rolling window shown by Performance Tuning.
-		return 60;
+		// The profiler ring is eight frames deep. Twelve fresh Presents flush it
+		// without making the bounded transition impossible at low game FPS.
+		return 12;
 	}
 	virtual double GetPerformanceCostMeasurementPostFreshSoakSeconds(bool) const override
 	{
-		// Match the time for which the post-edit timing comparison remains visible.
-		return 4.0;
+		return 0.5;
 	}
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
@@ -344,10 +417,14 @@ public:
 	bool performanceCostAppliedFSRRuntimeFsr4Active = false;
 	float2 performanceCostAppliedResolutionScale = { 1.0f, 1.0f };
 	uint32_t performanceCostAppliedFrame = std::numeric_limits<uint32_t>::max();
+	uint64_t performanceCostAppliedRevision = 0;
 	bool performanceCostExecutedPathValid = false;
 	bool performanceCostExecutedPathSuccessful = false;
 	UpscaleMethod performanceCostExecutedUpscaleMethod = UpscaleMethod::kNONE;
 	uint32_t performanceCostExecutedFrame = std::numeric_limits<uint32_t>::max();
+	uint64_t performanceCostLastSuccessfulExecutedRevision = 0;
+	UpscaleMethod performanceCostLastSuccessfulExecutedMethod = UpscaleMethod::kNONE;
+	uint32_t performanceCostLastSuccessfulExecutedFrame = std::numeric_limits<uint32_t>::max();
 	bool frameGenerationCopyValid = false;
 	bool frameGenerationCopyRequested = false;
 	bool frameGenerationCopySuccessful = false;

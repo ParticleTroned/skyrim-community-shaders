@@ -16,6 +16,7 @@
 
 namespace RE
 {
+	class BGSLocation;
 	class TESForm;
 }
 
@@ -107,6 +108,12 @@ struct AdaptiveBrightness : Feature
 		std::string type;
 		std::string cocCode;
 		Profile defaultProfile = Profile::Interior;
+	};
+
+	struct CurrentLocationOverrideTargets
+	{
+		std::optional<LocationOverrideTarget> cell;
+		std::optional<LocationOverrideTarget> location;
 	};
 
 	struct Settings
@@ -259,7 +266,7 @@ struct AdaptiveBrightness : Feature
 	void DrawLocationSummary();
 	void DrawLocationOverridePresetControls();
 	void DrawFullPresetControls();
-	void SaveCurrentLocationOverride();
+	void SaveCurrentLocationOverride(const LocationOverrideTarget& a_target);
 	void ClearLocationOverrideSelection();
 	void InvalidateProfileTabSync();
 	void ResetLocationOverrideEdit();
@@ -270,11 +277,12 @@ struct AdaptiveBrightness : Feature
 	bool ImportLocationOverrides();
 	bool ExportFullPreset();
 	bool ImportFullPreset();
-	std::optional<LocationOverrideTarget> GetCurrentLocationOverrideTarget() const;
+	CurrentLocationOverrideTargets GetCurrentLocationOverrideTargets() const;
 	LocationOverride* FindLocationOverride(const std::string& a_key);
 	const LocationOverride* FindLocationOverride(const std::string& a_key) const;
 	std::size_t FindLocationOverrideIndexByKey(const std::string& a_key) const;
 	std::size_t FindLocationOverrideIndexByForm(const RE::TESForm* a_form) const;
+	std::size_t ResolveLocationHierarchyOverrideIndex(const RE::BGSLocation* a_location) const;
 	std::size_t ResolveLocationOverrideIndex() const;
 	void NormalizeLocationOverrides();
 	void MarkLocationOverrideLookupDirty();

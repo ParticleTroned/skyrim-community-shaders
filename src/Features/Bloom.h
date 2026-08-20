@@ -4,7 +4,7 @@ struct Bloom
 {
 	struct Profile
 	{
-		float EnhancementIntensity = 1.0f;
+		float EnhancementIntensity = 0.0f;
 		float HaloRadius = 3.5f;
 		float HaloSpread = 0.85f;
 
@@ -17,7 +17,7 @@ struct Bloom
 	struct Settings
 	{
 		uint Enabled = false;
-		float EnhancementIntensity = 1.0f;
+		float EnhancementIntensity = 0.0f;
 		float HaloRadius = 3.5f;
 		float HaloSpread = 0.85f;
 

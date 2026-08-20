@@ -981,17 +981,17 @@ void AdaptiveBrightness::DrawExteriorTimeSettings()
 	ImGui::SeparatorText("Exterior Schedule");
 	ImGui::SliderFloat("Day Blend Start", &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Hour when the Exterior Day profile starts blending in.");
+		ImGui::Text("Hour when the Exterior Day profile starts blending in. It reaches full strength after Blend Duration.");
 	}
 
 	ImGui::SliderFloat("Night Blend Start", &settings.nightStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Hour when the Exterior Night profile starts blending in.");
+		ImGui::Text("Hour when the Exterior Night profile starts blending in. It reaches full strength after Blend Duration.");
 	}
 
 	ImGui::SliderFloat("Blend Duration", &settings.transitionHours, 0.0f, 4.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Hours used to blend between Exterior Day and Exterior Night.");
+		ImGui::Text("Hours used after each blend start to reach the selected Exterior profile.");
 	}
 
 	NormalizeExteriorTimeSettings(settings);
@@ -1061,7 +1061,7 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 
 	ImGui::Checkbox(T(TKEY("bloom.detailed"), "Use Detailed Bloom Adjustments"), &a_profile.bloomAdvanced);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Enables detailed Bloom shaping for this profile. The Bloom amount and presets above remain available either way."));
+		ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Enables detailed Bloom shaping for this profile. The Bloom enhancement and presets above remain available either way."));
 	if (a_profile.bloomAdvanced) {
 		ImGui::Indent();
 		Bloom::DrawAdvancedProfileSettings(a_profile.bloom);
@@ -1139,7 +1139,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 void AdaptiveBrightness::DrawLocationSummary()
 {
 	ImGui::SeparatorText("Location Overrides");
-	const auto target = GetCurrentLocationOverrideTarget();
+	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* activeOverride = GetActiveLocationOverride();
 	const auto currentProfile = GetCurrentProfileForUI();
 
@@ -1152,9 +1152,11 @@ void AdaptiveBrightness::DrawLocationSummary()
 		ImGui::TextWrapped("Current location uses the %s base profile.", GetProfileName(currentProfile));
 	}
 
-	if (target)
-		ImGui::TextDisabled("Current target: %s", target->name.c_str());
-	else
+	if (targets.cell)
+		ImGui::TextDisabled("Exact cell target: %s", targets.cell->name.c_str());
+	if (targets.location)
+		ImGui::TextDisabled("Location target: %s", targets.location->name.c_str());
+	if (!targets.cell && !targets.location)
 		ImGui::TextDisabled("No current location or cell form is available.");
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 	ImGui::TextDisabled("Switch this feature to Advanced to manage location overrides.");
@@ -1168,11 +1170,9 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 		DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
 	}
 
-	const auto target = GetCurrentLocationOverrideTarget();
+	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* activeOverride = GetActiveLocationOverride();
 	const auto currentProfile = GetCurrentProfileForUI();
-	const bool hasSavedTarget = target && FindLocationOverride(target->key) != nullptr;
-	const char* currentOverrideButtonLabel = hasSavedTarget ? "Open Current Location Override" : "Create Current Location Override";
 
 	if (activeOverride) {
 		ImGui::TextWrapped("Using saved override \"%s\" here. Base profile: %s.", activeOverride->name.c_str(), GetProfileName(currentProfile));
@@ -1180,31 +1180,44 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 		ImGui::TextWrapped("Using base profile %s here. No saved override matches this place.", GetProfileName(currentProfile));
 	}
 
-	ImGui::BeginDisabled(!target.has_value() || (!a_allowEdits && !hasSavedTarget));
-	if (ImGui::Button(currentOverrideButtonLabel)) {
-		if (a_allowEdits) {
-			SaveCurrentLocationOverride();
-		} else {
-			ClearLocationOverrideSelection();
-			selectedLocationOverrideKey = target->key;
+	const auto drawTargetAction = [&](const std::optional<LocationOverrideTarget>& a_target, const char* a_scope, const char* a_description) {
+		if (!a_target)
+			return;
+
+		const bool hasSavedTarget = FindLocationOverride(a_target->key) != nullptr;
+		const auto buttonLabel = std::format("{} {} Override", hasSavedTarget ? "Open" : "Create", a_scope);
+		ImGui::PushID(a_target->key.c_str());
+		ImGui::BeginDisabled(!a_allowEdits && !hasSavedTarget);
+		if (ImGui::Button(buttonLabel.c_str())) {
+			if (a_allowEdits) {
+				SaveCurrentLocationOverride(*a_target);
+			} else {
+				ClearLocationOverrideSelection();
+				selectedLocationOverrideKey = a_target->key;
+			}
 		}
-	}
-	ImGui::EndDisabled();
+		ImGui::EndDisabled();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", a_description);
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", a_target->name.c_str());
+		ImGui::TextDisabled("Form %s, %s, COC %s", a_target->type.c_str(), a_target->key.c_str(), GetCocLabel(a_target->cocCode));
+		ImGui::PopID();
+	};
 
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(a_allowEdits ?
-						"Save this place as an override, or open its existing override." :
-						"Open this place's existing override for review.");
-	}
+	drawTargetAction(
+		targets.cell,
+		"Exact Cell",
+		"Applies only to this exact cell and takes precedence over location overrides.");
+	drawTargetAction(
+		targets.location,
+		"Location",
+		"Applies to this location and its descendants unless an exact-cell override exists.");
 
-	ImGui::SameLine();
-	ImGui::TextDisabled("(%zu saved)", settings.locationOverrides.size());
-
-	if (target) {
-		ImGui::TextWrapped("Current target: %s (form %s, %s, COC %s)", target->name.c_str(), target->type.c_str(), target->key.c_str(), GetCocLabel(target->cocCode));
-	} else {
+	if (!targets.cell && !targets.location) {
 		ImGui::TextDisabled("No current location or cell form is available.");
 	}
+	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 
 	if (a_includePresetControls)
 		DrawLocationOverridePresetControls();
@@ -1738,7 +1751,7 @@ const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveLocatio
 	return &settings.locationOverrides[overrideIndex];
 }
 
-std::optional<AdaptiveBrightness::LocationOverrideTarget> AdaptiveBrightness::GetCurrentLocationOverrideTarget() const
+AdaptiveBrightness::CurrentLocationOverrideTargets AdaptiveBrightness::GetCurrentLocationOverrideTargets() const
 {
 	const auto forms = GetCurrentLocationForms();
 	const auto currentProfile = GetCurrentProfileForUI();
@@ -1761,37 +1774,45 @@ std::optional<AdaptiveBrightness::LocationOverrideTarget> AdaptiveBrightness::Ge
 		};
 	};
 
-	if (auto target = makeTarget(forms.location, kOverrideTypeLocation))
-		return target;
-
-	return makeTarget(forms.cell, kOverrideTypeCell);
+	return {
+		.cell = makeTarget(forms.cell, kOverrideTypeCell),
+		.location = makeTarget(forms.location, kOverrideTypeLocation),
+	};
 }
 
-void AdaptiveBrightness::SaveCurrentLocationOverride()
+void AdaptiveBrightness::SaveCurrentLocationOverride(const LocationOverrideTarget& a_target)
 {
-	const auto target = GetCurrentLocationOverrideTarget();
-	if (!target)
-		return;
-
-	if (auto* existingOverride = FindLocationOverride(target->key)) {
-		existingOverride->name = target->name;
-		existingOverride->type = target->type;
-		existingOverride->cocCode = target->cocCode;
+	if (auto* existingOverride = FindLocationOverride(a_target.key)) {
+		existingOverride->name = a_target.name;
+		existingOverride->type = a_target.type;
+		existingOverride->cocCode = a_target.cocCode;
 		ClearLocationOverrideSelection();
 		selectedLocationOverrideKey = existingOverride->key;
 		return;
 	}
 
 	LocationOverride locationOverride;
-	locationOverride.key = target->key;
-	locationOverride.name = target->name;
-	locationOverride.type = target->type;
-	locationOverride.cocCode = target->cocCode;
-	if (const auto* activeOverride = GetActiveLocationOverride()) {
-		locationOverride.profile = activeOverride->profile;
+	locationOverride.key = a_target.key;
+	locationOverride.name = a_target.name;
+	locationOverride.type = a_target.type;
+	locationOverride.cocCode = a_target.cocCode;
+
+	const LocationOverride* inheritedOverride = nullptr;
+	if (a_target.type == kOverrideTypeCell) {
+		// A new exact-cell override should begin with the profile currently
+		// inherited from its location or parent location.
+		inheritedOverride = GetActiveLocationOverride();
 	} else {
-		locationOverride.profile = settings.profiles[ProfileIndex(target->defaultProfile)];
+		// Do not promote an existing exact-cell profile into a broader location
+		// override. Only inherit from the location hierarchy in this case.
+		const auto inheritedIndex = ResolveLocationHierarchyOverrideIndex(GetCurrentLocationForms().location);
+		if (inheritedIndex != kInvalidLocationOverrideIndex && inheritedIndex < settings.locationOverrides.size())
+			inheritedOverride = &settings.locationOverrides[inheritedIndex];
 	}
+
+	locationOverride.profile = inheritedOverride ?
+	                               inheritedOverride->profile :
+	                               settings.profiles[ProfileIndex(a_target.defaultProfile)];
 
 	selectedLocationOverrideKey = locationOverride.key;
 	settings.locationOverrides.push_back(std::move(locationOverride));
@@ -1874,6 +1895,17 @@ std::size_t AdaptiveBrightness::FindLocationOverrideIndexByForm(const RE::TESFor
 	return FindLocationOverrideIndexByKey(key);
 }
 
+std::size_t AdaptiveBrightness::ResolveLocationHierarchyOverrideIndex(const RE::BGSLocation* a_location) const
+{
+	for (auto* current = a_location; current; current = current->parentLoc) {
+		const auto resolvedIndex = FindLocationOverrideIndexByForm(current);
+		if (resolvedIndex != kInvalidLocationOverrideIndex)
+			return resolvedIndex;
+	}
+
+	return kInvalidLocationOverrideIndex;
+}
+
 std::size_t AdaptiveBrightness::ResolveLocationOverrideIndex() const
 {
 	EnsureLocationOverrideLookup();
@@ -1892,16 +1924,11 @@ std::size_t AdaptiveBrightness::ResolveLocationOverrideIndex() const
 		return locationOverrideCache.overrideIndex;
 	}
 
-	auto resolvedIndex = kInvalidLocationOverrideIndex;
-
-	for (auto* current = forms.location; current; current = current->parentLoc) {
-		resolvedIndex = FindLocationOverrideIndexByForm(current);
-		if (resolvedIndex != kInvalidLocationOverrideIndex)
-			break;
-	}
-
+	// Exact-cell overrides are the most specific scope and therefore take
+	// precedence over the current location and all parent locations.
+	auto resolvedIndex = FindLocationOverrideIndexByForm(forms.cell);
 	if (resolvedIndex == kInvalidLocationOverrideIndex)
-		resolvedIndex = FindLocationOverrideIndexByForm(forms.cell);
+		resolvedIndex = ResolveLocationHierarchyOverrideIndex(forms.location);
 
 	locationOverrideCache = {
 		.locationFormID = locationFormID,
@@ -1954,25 +1981,21 @@ float AdaptiveBrightness::GetExteriorNightFactor() const
 	if (dayLength < 0.25f || dayLength > 23.75f)
 		dayLength = 12.0f;
 
+	const float nightLength = 24.0f - dayLength;
 	const float hoursIntoDay = HoursSince(dayStart, hour);
 	float transition = std::clamp(SafeFinite(settings.transitionHours, 1.0f), 0.0f, 4.0f);
-	transition = std::min(transition, dayLength * 0.5f);
+	transition = std::min(transition, std::min(dayLength, nightLength));
 
 	if (transition <= 0.0f)
 		return hoursIntoDay < dayLength ? 0.0f : 1.0f;
 
-	float dayFactor = 0.0f;
 	if (hoursIntoDay < dayLength) {
-		dayFactor = 1.0f;
-
-		if (hoursIntoDay < transition) {
-			dayFactor = SmoothStep(0.0f, transition, hoursIntoDay);
-		} else if (hoursIntoDay > dayLength - transition) {
-			dayFactor = 1.0f - SmoothStep(dayLength - transition, dayLength, hoursIntoDay);
-		}
+		const float dayFactor = SmoothStep(0.0f, transition, hoursIntoDay);
+		return 1.0f - std::clamp(dayFactor, 0.0f, 1.0f);
 	}
 
-	return 1.0f - std::clamp(dayFactor, 0.0f, 1.0f);
+	const float nightFactor = SmoothStep(dayLength, dayLength + transition, hoursIntoDay);
+	return std::clamp(nightFactor, 0.0f, 1.0f);
 }
 
 LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings() const

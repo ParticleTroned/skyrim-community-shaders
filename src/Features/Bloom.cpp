@@ -55,7 +55,7 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 	ImGui::PushID(&a_profile);
 
 	ImGui::SliderFloat(T(TKEY("amount"), "Bloom"), &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("amount_tooltip"), "Overall Bloom amount for this profile. Set it to 0 to remove Bloom; 1 is the Default preset level."));
+	DrawTooltip(T(TKEY("amount_tooltip"), "Bloom enhancement strength for this profile. 0 turns the enhancement off and keeps Skyrim's vanilla Bloom unchanged; values through 1 blend into the configured enhancement, and higher values amplify it before compression."));
 
 	if (ImGui::BeginTable("##BloomPresets", 4, ImGuiTableFlags_SizingStretchProp)) {
 		ImGui::TableSetupColumn(T(TKEY("presets"), "Bloom Presets"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -94,9 +94,9 @@ void Bloom::DrawAdvancedProfileSettings(Profile& a_profile)
 	ImGui::ColorEdit3(T(TKEY("tint"), "Bloom Tint"), reinterpret_cast<float*>(&a_profile.BloomTint));
 	DrawTooltip(T(TKEY("tint_tooltip"), "Colors the bloom halo without changing the underlying scene lighting."));
 	ImGui::SliderFloat(T(TKEY("compression_ceiling"), "Compression Ceiling"), &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("compression_ceiling_tooltip"), "The soft limiter's maximum shaped Bloom level before the overall Bloom amount is applied."));
+	DrawTooltip(T(TKEY("compression_ceiling_tooltip"), "Maximum Bloom luminance approached by the soft limiter after tint and enhancement strength are applied."));
 	ImGui::SliderFloat(T(TKEY("compression_threshold"), "Compression Threshold"), &a_profile.CompressionThreshold, 0.0f, a_profile.CompressionCeiling, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	DrawTooltip(T(TKEY("compression_threshold_tooltip"), "The shaped Bloom level where soft compression starts. The overall Bloom amount is applied after this limiter."));
+	DrawTooltip(T(TKEY("compression_threshold_tooltip"), "Bloom luminance where soft compression starts after tint and enhancement strength are applied."));
 
 	SanitizeProfile(a_profile);
 }
@@ -106,16 +106,23 @@ Bloom::Settings Bloom::GetCommonBufferData(const Profile& a_profile, float a_ble
 	auto profile = a_profile;
 	SanitizeProfile(profile);
 	const float blendWeight = std::clamp(std::isfinite(a_blendWeight) ? a_blendWeight : 0.0f, 0.0f, 1.0f);
+	const float enhancementBlend = std::clamp(profile.EnhancementIntensity, 0.0f, 1.0f);
+	const bool enhancementEnabled = blendWeight > 0.0f && enhancementBlend > 0.0f;
+	// Amount 0 is exact vanilla passthrough. Between 0 and 1, crossfade to this
+	// profile's unit-strength result so profile/time transitions remain continuous.
+	// At 1 and above, preserve Open Shaders' enhancement-intensity semantics.
+	const float processingIntensity = enhancementEnabled ? std::max(profile.EnhancementIntensity, 1.0f) : 0.0f;
+	const float effectiveBlendWeight = enhancementEnabled ? blendWeight * enhancementBlend : 0.0f;
 	return {
-		static_cast<uint>(blendWeight > 0.0f),
-		profile.EnhancementIntensity,
+		static_cast<uint>(enhancementEnabled),
+		processingIntensity,
 		profile.HaloRadius,
 		profile.HaloSpread,
 		profile.BloomSaturation,
 		profile.BloomTint,
 		profile.CompressionThreshold,
 		profile.CompressionCeiling,
-		blendWeight
+		effectiveBlendWeight
 	};
 }
 
@@ -138,8 +145,11 @@ Bloom::Profile Bloom::GetPresetProfile(uint a_preset)
 		return { 4.0f, 5.0f, 1.0f, 1.3f, { 1.0f, 0.98f, 0.94f }, 0.0f, 0.67f };
 	case 2:
 		return { 2.5f, 4.0f, 0.72f, 0.85f, { 165.0f / 255.0f, 205.0f / 255.0f, 1.0f }, 0.08f, 0.9f };
-	default:
-		return {};
+	default: {
+		auto profile = Profile{};
+		profile.EnhancementIntensity = 1.0f;
+		return profile;
+	}
 	}
 }
 

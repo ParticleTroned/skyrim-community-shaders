@@ -35,6 +35,7 @@ namespace VRInSceneOverlaySubmitPolicy
 		SuppressionReason suppressionReasons = SuppressionReason::None;
 		bool mainMenuOpen = false;
 		bool submitStageUpscalingActive = false;
+		bool renderTargetRecreateInProgress = false;
 		bool originalSubmitCandidateSafe = false;
 	};
 
@@ -43,15 +44,25 @@ namespace VRInSceneOverlaySubmitPolicy
 		if (a_admission.suppressionReasons == SuppressionReason::None)
 			return true;
 
+		if (!a_admission.mainMenuOpen ||
+			 a_admission.submitStageUpscalingActive ||
+			 !a_admission.originalSubmitCandidateSafe) {
+			return false;
+		}
+
 		// The main menu can remain at a controller safe point indefinitely because
-		// no world frame advances the transition. Admit only that single benign
-		// wait, and only after the exact original texture passed the compositor
-		// fallback classifier. Target recreation and runtime/vendor reset reasons
-		// remain hard gates even when the menu is open.
+		// no world frame advances the transition. A render-target recreate can be
+		// queued there for the same reason. Admit the already-classified original
+		// texture while the recreate is merely queued, but never after physical
+		// mutation has entered. Combined reasons and runtime/vendor resets remain
+		// hard gates.
+		if (a_admission.suppressionReasons ==
+			SuppressionReason::RenderScaleTransitionPending) {
+			return true;
+		}
+
 		return a_admission.suppressionReasons ==
-		           SuppressionReason::RenderScaleTransitionPending &&
-		       a_admission.mainMenuOpen &&
-		       !a_admission.submitStageUpscalingActive &&
-		       a_admission.originalSubmitCandidateSafe;
+		           SuppressionReason::RenderTargetRecreatePending &&
+		       !a_admission.renderTargetRecreateInProgress;
 	}
 }

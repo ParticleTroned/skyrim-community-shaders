@@ -1892,6 +1892,7 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
+	bool IsPerfModeRenderTargetRecreateInProgress() const;
 	void RecordVRDLSSFullEyeEvaluation(uint32_t a_eyeIndex, bool a_success);
 	VRInSceneOverlaySubmitPolicy::SuppressionReason GetVRInSceneOverlaySubmitSuppressionReasons() const;
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;

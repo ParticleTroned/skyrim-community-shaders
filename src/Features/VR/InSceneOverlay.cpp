@@ -1379,6 +1379,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						.mainMenuOpen = globals::state && globals::state->isMainMenuOpen,
 						.submitStageUpscalingActive =
 							upscaling.IsSubmitStageUpscalingActive(),
+						.renderTargetRecreateInProgress =
+							upscaling.IsPerfModeRenderTargetRecreateInProgress(),
 						.originalSubmitCandidateSafe =
 							!originalSubmitDecision.ShouldSuppress() &&
 							!originalSubmitDecision.IsNativeRestoreGuarded(),

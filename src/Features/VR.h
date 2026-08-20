@@ -414,6 +414,7 @@ public:
 	void ResetComboRecordingState();
 	void ReleaseMenuImGuiInputState();
 	void ResetMenuInputRuntimeState();
+	void RequestFixedWorldMenuReanchor();
 
 	void EnsureOverlayInitialized();
 	void DestroyOverlay();

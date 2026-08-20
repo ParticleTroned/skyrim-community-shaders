@@ -1358,6 +1358,19 @@ bool Menu::IsMenuSessionOpen() const
 	return IsEnabled || (editorWindow && editorWindow->open);
 }
 
+void Menu::OpenMenu()
+{
+	if (IsEnabled)
+		return;
+
+	IsEnabled = true;
+	if (globals::features::vr.IsOpenVRCompatible()) {
+		auto& vr = globals::features::vr;
+		vr.ResetMenuInputRuntimeState();
+		vr.RequestFixedWorldMenuReanchor();
+	}
+}
+
 void Menu::CloseMenu()
 {
 	auto* editorWindow = EditorWindow::GetSingleton();
@@ -1491,9 +1504,7 @@ void Menu::ProcessInputEventQueue()
 							 if (IsMenuSessionOpen()) {
 								 CloseMenu();
 							 } else {
-								 IsEnabled = true;
-								 if (globals::features::vr.IsOpenVRCompatible())
-									 globals::features::vr.ResetMenuInputRuntimeState();
+								 OpenMenu();
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
 							 }
 						 }

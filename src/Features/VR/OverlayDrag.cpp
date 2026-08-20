@@ -383,6 +383,11 @@ void VR::SetFixedOverlayToCurrentHMD()
 	UpdateFixedWorldPositioning(hmdWorld);
 }
 
+void VR::RequestFixedWorldMenuReanchor()
+{
+	fixedWorldOverlayReanchorRequested = true;
+}
+
 void VR::UpdateFixedWorldPositioning(const Matrix& a_hmdWorld)
 {
 	if (settings.VRMenuPositioningMethod != 1)

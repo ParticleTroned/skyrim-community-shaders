@@ -158,6 +158,7 @@ namespace
 		const auto inSceneSubmitSuppressionReasons =
 			globals::features::upscaling.GetVRInSceneOverlaySubmitSuppressionReasons();
 		auto* drawData = ImGui::GetCurrentContext() ? ImGui::GetDrawData() : nullptr;
+		const auto fixedWorldPosition = vr.fixedWorldOverlayPosition.m.Translation();
 		return {
 			{ "menuEnabled", menu && menu->IsEnabled },
 			{ "menuSessionOpen", menu && menu->IsMenuSessionOpen() },
@@ -176,6 +177,12 @@ namespace
 			{ "menuPositioningMethod", vr.settings.VRMenuPositioningMethod },
 			{ "effectiveFixedWorldPositioning", vr.UseFixedWorldMenuPositioning() },
 			{ "fixedWorldPositionInitialized", vr.fixedWorldOverlayPosition.initialized },
+			{ "fixedWorldReanchorRequested", vr.fixedWorldOverlayReanchorRequested },
+			{ "fixedWorldPosition", {
+				{ "x", fixedWorldPosition.x },
+				{ "y", fixedWorldPosition.y },
+				{ "z", fixedWorldPosition.z },
+			} },
 			{ "menuScale", vr.settings.VRMenuScale },
 			{ "menuOffsetX", vr.settings.VRMenuOffsetX },
 			{ "menuOffsetY", vr.settings.VRMenuOffsetY },
@@ -219,8 +226,7 @@ namespace
 			if (!menu)
 				return { { "error", "CSX menu unavailable" } };
 			if (action == "open") {
-				menu->IsEnabled = true;
-				globals::features::vr.ResetMenuInputRuntimeState();
+				menu->OpenMenu();
 			} else if (action == "close") {
 				menu->CloseMenu();
 			} else if (action == "screenshot") {

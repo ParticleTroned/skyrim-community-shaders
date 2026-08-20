@@ -40158,6 +40158,11 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	return submitStageSceneActive && !menuBlocksSubmitStage;
 }
 
+bool Upscaling::IsPerfModeRenderTargetRecreateInProgress() const
+{
+	return perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+}
+
 VRInSceneOverlaySubmitPolicy::SuppressionReason
 Upscaling::GetVRInSceneOverlaySubmitSuppressionReasons() const
 {

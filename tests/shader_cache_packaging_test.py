@@ -120,6 +120,142 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 shader["configs"]["PSHADER"]["common_defines"],
             )
 
+    def test_horizon_variants_layer_onto_the_shipped_profile(self) -> None:
+        standard_config = BUILDER.apply_cache_profile_defines(
+            copy.deepcopy(self._sample_shader_config()),
+            BUILDER.SHIPPED_CACHE_PROFILE,
+            additional_excluded_defines=frozenset({"HORIZON_FIX"}),
+            excluded_define_exceptions=frozenset({"WETNESS_EFFECTS"}),
+        )
+        standard_names = self._all_define_names(standard_config)
+        self.assertIn("WETNESS_EFFECTS", standard_names)
+        self.assertNotIn("HORIZON_FIX", standard_names)
+
+        horizon_config = BUILDER.apply_cache_profile_defines(
+            copy.deepcopy(self._sample_shader_config()),
+            BUILDER.SHIPPED_CACHE_PROFILE,
+            additional_excluded_defines=frozenset({"HORIZON_FIX"}),
+            excluded_define_exceptions=frozenset({"WETNESS_EFFECTS"}),
+            additional_file_defines={"Water.hlsl": ("HORIZON_FIX",)},
+        )
+        shaders = {
+            shader["file"]: shader
+            for shader in horizon_config["shaders"]
+        }
+        self.assertNotIn(
+            "HORIZON_FIX",
+            shaders["Lighting.hlsl"]["configs"]["PSHADER"]["common_defines"],
+        )
+        self.assertIn(
+            "HORIZON_FIX",
+            shaders["Water.hlsl"]["configs"]["PSHADER"]["common_defines"],
+        )
+
+        self.assertEqual(
+            BUILDER.cache_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
+            BUILDER.CACHE_VARIANTS,
+        )
+        self.assertEqual(
+            BUILDER.CACHE_VARIANTS[0],
+            BUILDER.STANDARD_CACHE_VARIANT,
+        )
+        self.assertEqual(
+            BUILDER.cache_variants_for(BUILDER.PATKA_CACHE_PROFILE),
+            (BUILDER.STANDARD_CACHE_VARIANT,),
+        )
+
+    def test_se_cross_modlist_overlay_adds_only_known_rungrass_variants(self) -> None:
+        config = {
+            "shaders": [
+                {
+                    "file": "RunGrass.hlsl",
+                    "configs": {
+                        "PSHADER": {"entries": []},
+                        "VSHADER": {"entries": []},
+                    },
+                }
+            ]
+        }
+        BUILDER.append_cross_modlist_variants(config)
+        stages = config["shaders"][0]["configs"]
+        self.assertEqual(
+            {
+                entry["entry"]: tuple(entry["defines"])
+                for entry in stages["PSHADER"]["entries"]
+            },
+            {
+                "Grass:Pixel:1": (),
+                "Grass:Pixel:10006": ("DO_ALPHA_TEST",),
+            },
+        )
+        self.assertEqual(
+            {
+                entry["entry"]: tuple(entry["defines"])
+                for entry in stages["VSHADER"]["entries"]
+            },
+            {
+                "Grass:Vertex:5": (),
+                "Grass:Vertex:7": (),
+            },
+        )
+
+    def test_vr_horizon_variants_write_opposite_feature_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            features_dir = root / "stage" / "Features"
+            features_dir.mkdir(parents=True)
+            for feature_name in ("CSUtility", "HorizonFix"):
+                (features_dir / f"{feature_name}.ini").write_text(
+                    "[Info]\nVersion = 1-2-3\n",
+                    encoding="utf-8",
+                )
+
+            for enabled in (False, True):
+                cache_dir = root / f"cache-{enabled}"
+                cache_dir.mkdir()
+                BUILDER.write_info_ini(
+                    cache_dir,
+                    root / "stage",
+                    "CSX 12.345-VR",
+                    "VR",
+                    BUILDER.SHIPPED_CACHE_PROFILE,
+                    enabled_overrides={"HorizonFix": enabled},
+                )
+                states = BUILDER.read_feature_states(cache_dir)
+                self.assertIs(states["HorizonFix"], enabled)
+                self.assertTrue(states["CSUtility"])
+
+    def test_horizon_variant_delta_rejects_malformed_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            standard_cache = root / "standard"
+            horizon_cache = root / "horizon"
+            for cache_dir, blob in (
+                (standard_cache, b"standard"),
+                (horizon_cache, b"horizon"),
+            ):
+                water_dir = cache_dir / "Water"
+                water_dir.mkdir(parents=True)
+                (water_dir / "variant.pso").write_bytes(blob)
+                (cache_dir / BUILDER.MANIFEST_FILE_NAME).write_text(
+                    "{\"schemaVersion\": 1, \"entries\": []}",
+                    encoding="utf-8",
+                )
+
+            with self.assertRaises(SystemExit):
+                BUILDER.validate_horizon_variant_delta(
+                    standard_cache,
+                    horizon_cache,
+                    {"HorizonFix": False},
+                    {"HorizonFix": True},
+                    runtime="VR",
+                )
+
+    def test_se_distribution_profile_derives_horizon_contract(self) -> None:
+        profile = BUILDER.derive_distribution_profile(REPO)
+        self.assertEqual(profile.horizon_fix_define, "HORIZON_FIX")
+        self.assertNotIn("HorizonFix", profile.excluded_short_names)
+
     def test_patka_profile_removes_disabled_feature_defines(self) -> None:
         self.assertEqual(
             BUILDER.PATKA_DISABLED_FEATURES,
@@ -312,7 +448,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     BUILDER.csx_compatibility_tag(plugin_version)
 
-    def test_fomod_has_exact_version_gate_and_cache_mapping(self) -> None:
+    def test_single_variant_fomod_has_guidance_and_exact_recommendation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runtime_root = Path(temporary)
             fomod_dir = BUILDER.write_fomod_installer(
@@ -320,12 +456,29 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 "VR",
                 "future-test",
                 "CSX 12.345-VR",
+                horizon_variants=False,
             )
             root = ET.parse(fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME).getroot()
-            dependencies = root.findall("./moduleDependencies/fileDependency")
+            self.assertIsNone(root.find("./moduleDependencies"))
+            cache_plugins = [
+                plugin
+                for plugin in root.findall(
+                    "./installSteps/installStep/optionalFileGroups/group/"
+                    "plugins/plugin"
+                )
+                if plugin.find("./files/folder") is not None
+            ]
+            self.assertEqual(len(cache_plugins), 1)
+            dependencies = cache_plugins[0].findall(
+                "./typeDescriptor/dependencyType/patterns/pattern/"
+                "dependencies/fileDependency"
+            )
             self.assertEqual(
                 {
-                    (dependency.get("file"), dependency.get("state"))
+                    (
+                        dependency.get("file", "").replace("\\", "/"),
+                        dependency.get("state"),
+                    )
                     for dependency in dependencies
                 },
                 {
@@ -336,7 +489,115 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     ),
                 },
             )
+            self.assertEqual(
+                cache_plugins[0].find("./typeDescriptor/dependencyType/defaultType").get(
+                    "name"
+                ),
+                "Optional",
+            )
+            notice_flags = {
+                flag.get("name")
+                for flag in root.findall(
+                    "./installSteps/installStep/optionalFileGroups/group/"
+                    "plugins/plugin/conditionFlags/flag"
+                )
+            }
+            self.assertEqual(notice_flags, set(BUILDER.FOMOD_BASE_NOTICE_FLAGS))
+            self.assertTrue(
+                (runtime_root / BUILDER.FOMOD_HELP_IMAGE_ARCHIVE_PATH).is_file()
+            )
             BUILDER.validate_fomod_installer(fomod_dir, "CSX12.345-VR")
+
+    def test_se_fomod_adds_horizon_variants_without_dropping_core_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_root = Path(temporary)
+            fomod_dir = BUILDER.write_fomod_installer(
+                runtime_root,
+                "SE",
+                "future-test",
+                "CSX 12.345-VR",
+            )
+            root = ET.parse(fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME).getroot()
+            cache_plugins = [
+                plugin
+                for plugin in root.findall(
+                    "./installSteps/installStep/optionalFileGroups/group/"
+                    "plugins/plugin"
+                )
+                if plugin.find("./files/folder") is not None
+            ]
+            sources = [
+                plugin.find("./files/folder").get("source")
+                for plugin in cache_plugins
+            ]
+            self.assertEqual(
+                sources,
+                [
+                    BUILDER.HORIZON_FIX_CACHE_DIRECTORY,
+                    BUILDER.CACHE_DIRECTORY,
+                ],
+            )
+            for plugin in cache_plugins:
+                for pattern in plugin.findall(
+                    "./typeDescriptor/dependencyType/patterns/pattern"
+                ):
+                    dependencies = {
+                        (
+                            dependency.get("file", "").replace("\\", "/"),
+                            dependency.get("state"),
+                        )
+                        for dependency in pattern.findall(
+                            "./dependencies/fileDependency"
+                        )
+                    }
+                    self.assertIn(
+                        ("SKSE/Plugins/CommunityShaders.dll", "Active"),
+                        dependencies,
+                    )
+                    self.assertIn(
+                        (
+                            "SKSE/Plugins/CommunityShaders/"
+                            "CSX12.345-VR.marker",
+                            "Active",
+                        ),
+                        dependencies,
+                    )
+            BUILDER.validate_fomod_installer(
+                fomod_dir,
+                "CSX12.345-VR",
+                horizon_variants=True,
+            )
+
+    def test_vr_fomod_also_adds_both_horizon_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_root = Path(temporary)
+            fomod_dir = BUILDER.write_fomod_installer(
+                runtime_root,
+                "VR",
+                "future-test",
+                "CSX 12.345-VR",
+            )
+            root = ET.parse(fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME).getroot()
+            sources = [
+                plugin.find("./files/folder").get("source")
+                for plugin in root.findall(
+                    "./installSteps/installStep/optionalFileGroups/group/"
+                    "plugins/plugin"
+                )
+                if plugin.find("./files/folder") is not None
+            ]
+            self.assertEqual(
+                sources,
+                [
+                    BUILDER.HORIZON_FIX_CACHE_DIRECTORY,
+                    BUILDER.CACHE_DIRECTORY,
+                ],
+            )
+            BUILDER.validate_fomod_installer(
+                fomod_dir,
+                "CSX12.345-VR",
+                horizon_variants=True,
+            )
 
     def test_fomod_validation_rejects_weakened_contracts(self) -> None:
         mutations = (
@@ -356,7 +617,18 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     )
                     config_path = fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME
                     tree = ET.parse(config_path)
-                    dependencies = tree.getroot().find("./moduleDependencies")
+                    cache_plugin = next(
+                        plugin
+                        for plugin in tree.getroot().findall(
+                            "./installSteps/installStep/optionalFileGroups/"
+                            "group/plugins/plugin"
+                        )
+                        if plugin.find("./files/folder") is not None
+                    )
+                    dependencies = cache_plugin.find(
+                        "./typeDescriptor/dependencyType/patterns/pattern/"
+                        "dependencies"
+                    )
                     self.assertIsNotNone(dependencies)
                     marker = dependencies.findall("./fileDependency")[1]
                     if mutation == "operator":
@@ -399,7 +671,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                         if mutation == "wrong_root":
                             root.tag = "not-config"
                         else:
-                            root[:] = [root[0], root[2], root[1]]
+                            root[:] = [root[1], root[0]]
                         tree.write(
                             config_path,
                             encoding="utf-8",

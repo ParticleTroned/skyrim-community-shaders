@@ -19226,6 +19226,11 @@ bool Upscaling::GetVRRenderScaleModeRequested() const
 {
 	if (!REL::Module::IsVR())
 		return false;
+	// The master shader switch cannot strand VR on a reduced physical target.
+	// While it is off (or waiting to turn off), preserve the configured setting
+	// but make native resolution the runtime request.
+	if (globals::shaderCache && !globals::shaderCache->IsEnableRequested())
+		return false;
 
 	if (IsOpenCompositeUpscalingBlocked())
 		return false;
@@ -40153,17 +40158,27 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	return submitStageSceneActive && !menuBlocksSubmitStage;
 }
 
-bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
+bool Upscaling::IsPerfModeRenderTargetRecreateInProgress() const
 {
+	return perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+}
+
+VRInSceneOverlaySubmitPolicy::SuppressionReason
+Upscaling::GetVRInSceneOverlaySubmitSuppressionReasons() const
+{
+	using VRInSceneOverlaySubmitPolicy::SuppressionReason;
+
 	if (!globals::game::isVR)
-		return false;
+		return SuppressionReason::None;
+
+	SuppressionReason reasons = SuppressionReason::None;
 
 	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition())
-		return true;
+		reasons |= SuppressionReason::RenderScaleTransitionPending;
 
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
-		return true;
+		reasons |= SuppressionReason::RenderTargetRecreatePending;
 	}
 
 	const auto requestedMethod = GetConfiguredUpscaleMethodForTransition();
@@ -40171,14 +40186,22 @@ bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
 	const bool transitionRelevant =
 		IsVRRenderScaleTransitionSafetyRelevant(*this, requestedMethod) ||
 		IsVRRenderScaleTransitionSafetyRelevant(*this, runtimeMethod);
-	if (transitionRelevant &&
-		(postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
-			HasPendingVRVendorRuntimeReset(*this, requestedMethod) ||
-			HasPendingVRVendorRuntimeReset(*this, runtimeMethod))) {
-		return true;
+	if (transitionRelevant) {
+		if (postLoadRuntimeResetPending.load(std::memory_order_acquire))
+			reasons |= SuppressionReason::RuntimeResetPending;
+		if (HasPendingVRVendorRuntimeReset(*this, requestedMethod) ||
+			HasPendingVRVendorRuntimeReset(*this, runtimeMethod)) {
+			reasons |= SuppressionReason::VendorRuntimeResetPending;
+		}
 	}
 
-	return false;
+	return reasons;
+}
+
+bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
+{
+	return GetVRInSceneOverlaySubmitSuppressionReasons() !=
+	       VRInSceneOverlaySubmitPolicy::SuppressionReason::None;
 }
 
 bool Upscaling::IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const

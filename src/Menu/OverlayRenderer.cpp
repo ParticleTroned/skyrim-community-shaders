@@ -408,6 +408,9 @@ void OverlayRenderer::RenderOverlay(
 	RenderFirstTimeSetupOverlay();
 	HandleABTesting();
 	PatchOverlappingWindowBackgrounds();
+	if (globals::features::vr.IsOpenVRCompatible()) {
+		globals::features::vr.UpdateWandHoverFeedback();
+	}
 	FinalizeImGuiFrame(drawableOverlays);
 }
 

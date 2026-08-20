@@ -5,9 +5,11 @@
 #include "OverlayFeature.h"
 #include "Utils/Input.h"
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
+#include <limits>
 #include <magic_enum/magic_enum.hpp>
 #include <openvr.h>
 #include <string>
@@ -90,12 +92,15 @@ public:
 			return CreateOverlayScaleMatrix(scale, kHMDOverlayAspect);
 		}
 
-		static constexpr float kDefaultMenuScale = 1.0f;      ///< Default overlay scale factor
+		static constexpr float kDefaultMenuScale = 2.0f;      ///< Default overlay scale factor
 		static constexpr float kMinMenuScale = 0.5f;          ///< Minimum allowed overlay scale
 		static constexpr float kMaxMenuScale = 2.0f;          ///< Maximum allowed overlay scale
 		static constexpr float kDefaultComboTimeout = 3.0f;   ///< Default timeout for button combos (seconds)
 		static constexpr float kDefaultMouseDeadzone = 0.1f;  ///< Default thumbstick deadzone for mouse input
 		static constexpr float kDefaultMouseSpeed = 10.0f;    ///< Default mouse speed multiplier
+		static constexpr float kDefaultWandAimPitchTrimDegrees = 0.0f;
+		static constexpr float kMinWandAimPitchTrimDegrees = -90.0f;
+		static constexpr float kMaxWandAimPitchTrimDegrees = 90.0f;
 		static constexpr int kDefaultAutoHideSeconds = 30;    ///< Default auto-hide timeout for overlay messages
 		static constexpr int kMaxAutoHideSeconds = 300;       ///< Maximum auto-hide timeout (5 minutes)
 		static constexpr float kMinStereoBlendDepthSigma = 0.001f;
@@ -111,7 +116,7 @@ public:
 		// Default HMD overlay offset values (in meters, relative to HMD)
 		static constexpr float kDefaultHMDOffsetX = 0.26f;      ///< Default horizontal offset from HMD
 		static constexpr float kDefaultHMDOffsetY = -0.04f;     ///< Default vertical offset from HMD
-		static constexpr float kDefaultHMDOffsetZ = -0.76875f;  ///< Default depth offset from HMD
+		static constexpr float kDefaultHMDOffsetZ = -2.25f;     ///< Default depth offset from HMD
 
 		// Default controller overlay offset values (in meters, relative to controller)
 		static constexpr float kDefaultControllerOffsetX = 0.22f;  ///< Default horizontal offset from controller
@@ -264,6 +269,7 @@ public:
 		// CSX menu navigation settings
 		bool UseRuntimeDefaultMenuNavigation = true;   ///< Use mouse navigation by default until the user selects a mode explicitly
 		bool EnableWandPointing = true;                ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
+		float WandAimPitchTrimDegrees = Config::kDefaultWandAimPitchTrimDegrees;  ///< Optional local pitch trim after resolving the runtime aim component
 
 		// Visual customization
 		std::array<float, 4> dragHighlightColor = { 1.0f, 1.0f, 0.0f, 0.3f };  ///< RGBA color for drag highlight
@@ -334,8 +340,20 @@ public:
 		void ClampToValidRanges()
 		{
 			VRMenuScale = std::clamp(VRMenuScale, Config::kMinMenuScale, Config::kMaxMenuScale);
+			// Keep one safe, always-recoverable headset presentation. Legacy fields
+			// remain serialized so old presets still load, but they cannot lose the menu.
+			VRMenuPositioningMethod = 1;
+			attachMode = OverlayAttachMode::HMDOnly;
+			VRMenuOffsetX = Config::kDefaultHMDOffsetX;
+			VRMenuOffsetY = Config::kDefaultHMDOffsetY;
+			VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
+			EnableDragToReposition = false;
 			mouseDeadzone = std::clamp(mouseDeadzone, 0.0f, 1.0f);
 			mouseSpeed = std::clamp(mouseSpeed, 0.1f, 50.0f);
+			WandAimPitchTrimDegrees = std::clamp(
+				WandAimPitchTrimDegrees,
+				Config::kMinWandAimPitchTrimDegrees,
+				Config::kMaxWandAimPitchTrimDegrees);
 			comboTimeout = std::clamp(comboTimeout, 1.0f, 10.0f);
 			kAutoHideSeconds = std::clamp(kAutoHideSeconds, 0, Config::kMaxAutoHideSeconds);
 			menuOverlayPath = std::clamp(menuOverlayPath, MenuOverlayPath::Auto, MenuOverlayPath::InScene);
@@ -352,6 +370,7 @@ public:
 	//=============================================================================
 
 	void UpdateVROverlayPosition();
+	bool UseFixedWorldMenuPositioning() const;
 	void UpdateVROverlayControllerPosition();
 
 	void ProcessVREvents(std::vector<Menu::KeyEvent>& vrEvents);
@@ -362,12 +381,27 @@ public:
 		HMD,
 		Controller
 	};
+	struct PresentedMenuSurface
+	{
+		Vector3 topLeft = Vector3::Zero;
+		Vector3 topRight = Vector3::Zero;
+		Vector3 bottomLeft = Vector3::Zero;
+		bool valid = false;
+	};
 	bool ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
 	bool ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
+	void PublishPresentedMenuSurface(OverlayType type, const Matrix& worldMatrix);
+	bool TryGetPresentedMenuSurface(OverlayType type, PresentedMenuSurface& outSurface) const;
+	void InvalidatePresentedMenuSurfaces();
 	ControllerDevice GetWandPointingControllerDevice() const;
 	vr::TrackedDeviceIndex_t GetWandPointingControllerIndex() const;
-	void UpdateCursorFromWandPointing(bool a_forceCursorUpdate = false);
+	void UpdateCursorFromWandPointing(bool a_forceCursorUpdate = false, ControllerDevice a_preferredController = ControllerDevice::Both);
 	bool UpdateWandPoseOwnershipSignal();
+	bool IsWandControllerIntersecting(ControllerDevice a_controller) const;
+	bool TryCaptureWandController(ControllerDevice a_controller);
+	void ReleaseWandControllerCapture(ControllerDevice a_controller);
+	void TriggerWandHaptic(ControllerDevice a_controller, float a_duration);
+	void UpdateWandHoverFeedback();
 	void ResetWandPointingRuntimeState();
 	void UpdateOverlayMenuStateFromInput();
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);
@@ -380,6 +414,7 @@ public:
 	void ResetComboRecordingState();
 	void ReleaseMenuImGuiInputState();
 	void ResetMenuInputRuntimeState();
+	void RequestFixedWorldMenuReanchor();
 
 	void EnsureOverlayInitialized();
 	void DestroyOverlay();
@@ -441,6 +476,7 @@ public:
 	void TryStartNewDrag();
 	void SetFixedOverlayToCurrentHMD();
 	void UpdateFixedWorldPositioning();
+	void UpdateFixedWorldPositioning(const Matrix& a_hmdWorld);
 	bool ShouldHighlightOverlayWindow() const { return overlayDragState.dragging; }
 
 	//=============================================================================
@@ -452,8 +488,10 @@ public:
 	vr::VROverlayHandle_t menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
 	winrt::com_ptr<ID3D11Texture2D> menuTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> menuRTV;
+	winrt::com_ptr<ID3D11ShaderResourceView> menuSamplingSRV;
 	winrt::com_ptr<ID3D11Texture2D> menuControllerTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> menuControllerRTV;
+	winrt::com_ptr<ID3D11ShaderResourceView> menuControllerSamplingSRV;
 	mutable double autoHideOverlayStartTimeSecs = 0.0;  ///< Starts after the welcome frame can first reach the headset
 
 	// Post-composite stereo blend resources, created lazily when the advanced option is enabled.
@@ -500,6 +538,7 @@ public:
 		Matrix m = Matrix::Identity;
 		bool initialized = false;
 	} fixedWorldOverlayPosition;
+	bool fixedWorldOverlayReanchorRequested = true;
 
 	struct OverlayDragState
 	{
@@ -570,12 +609,36 @@ public:
 	{
 		bool isIntersecting = false;
 		bool isActivelyDrivingCursor = false;
+		bool usingOCUAimPose = false;
+		bool usingPresentedSurface = false;
 		ImVec2 uvCoordinates = ImVec2(0.0f, 0.0f);
 		OverlayType overlayType = OverlayType::HMD;
 		vr::TrackedDeviceIndex_t controllerIndex = vr::k_unTrackedDeviceIndexInvalid;
 		Vector3 rayOrigin = Vector3::Zero;
 		Vector3 rayDirection = Vector3::Zero;
 	} wandState;
+	struct WandHandState
+	{
+		bool poseValid = false;
+		bool isIntersecting = false;
+		bool moved = false;
+		bool hasScreenPosition = false;
+		bool usingOCUAimPose = false;
+		bool usingPresentedSurface = false;
+		ImVec2 uvCoordinates = ImVec2(0.0f, 0.0f);
+		ImVec2 screenPosition = ImVec2(0.0f, 0.0f);
+		OverlayType overlayType = OverlayType::HMD;
+		vr::TrackedDeviceIndex_t controllerIndex = vr::k_unTrackedDeviceIndexInvalid;
+		Vector3 rayOrigin = Vector3::Zero;
+		Vector3 rayDirection = Vector3::Zero;
+		float hitDistance = (std::numeric_limits<float>::max)();
+	};
+	std::array<WandHandState, 2> wandHandStates{};
+	std::array<PresentedMenuSurface, 2> presentedMenuSurfaces{};
+	ControllerDevice activeWandController = ControllerDevice::Both;
+	ControllerDevice capturedWandController = ControllerDevice::Both;
+	std::uint32_t lastWandHoveredID = 0;
+	ControllerDevice lastWandHoveredController = ControllerDevice::Both;
 
 	bool customVRCursorVisible = false;
 	ImVec2 customVRCursorPos = ImVec2(-FLT_MAX, -FLT_MAX);
@@ -636,6 +699,8 @@ public:
 		uint32_t padding[2];
 		float quadPixels[8];
 		float quadInvW[4];
+		float menuMipLevel;
+		float padding2[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SubmitCompositeCB);
 

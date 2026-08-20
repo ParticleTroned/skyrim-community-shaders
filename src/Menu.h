@@ -107,6 +107,10 @@ public:
 
 	bool initialized = false;
 	bool IsEnabled = false;
+	double systemCommitLastRefreshTime = -1.0;
+	std::uint64_t systemCommitCurrentBytes = 0;
+	std::uint64_t systemCommitTotalBytes = 0;
+	bool systemCommitSampleValid = false;
 
 	void Load(json& o_json);
 	void Save(json& o_json);
@@ -135,6 +139,8 @@ public:
 	void DrawOverlay();
 	/// True while either the main menu or its CS Editor surface is open.
 	bool IsMenuSessionOpen() const;
+	/// Opens a fresh main-menu session and prepares VR positioning/input state.
+	void OpenMenu();
 	/// Closes the main menu and any active CS Editor surface as one UI session.
 	void CloseMenu();
 

@@ -672,9 +672,11 @@ void Deferred::EndDeferred()
 	if (!globals::state->inWorld)
 		return;
 
-	auto shaderCache = globals::shaderCache;
-
-	if (!shaderCache->IsEnabled())
+	// The master shader switch can change after StartDeferred() has replaced the
+	// engine render targets.  Always finish a pass that actually began; returning
+	// here based on the new switch value would leave the deferred attachments
+	// bound and their stale contents visible in subsequent VR frames.
+	if (!deferredPass)
 		return;
 
 	auto shadowState = globals::game::shadowState;

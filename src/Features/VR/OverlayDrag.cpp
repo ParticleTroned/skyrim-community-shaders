@@ -6,10 +6,59 @@
 #include <SimpleMath.h>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <openvr.h>
 
 using namespace DirectX::SimpleMath;
 using AttachMode = VR::Settings::OverlayAttachMode;
+
+namespace
+{
+	bool TryGetHMDWorld(Matrix& a_hmdWorld)
+	{
+		vr::TrackedDevicePose_t hmdPose{};
+		if (!Util::GetDeviceToAbsoluteTrackingPoseCompatible(
+				vr::TrackingUniverseStanding,
+				0,
+				&hmdPose,
+				1) ||
+			!hmdPose.bPoseIsValid) {
+			return false;
+		}
+
+		a_hmdWorld = Util::HmdMatrix34ToMatrix(
+			hmdPose.mDeviceToAbsoluteTracking);
+		return true;
+	}
+
+	bool MakeVerticalFacingTransform(
+		const Vector3& a_anchor,
+		const Vector3& a_hmdPosition,
+		Matrix& a_transform)
+	{
+		Vector3 panelToPlayer{
+			a_hmdPosition.x - a_anchor.x,
+			0.0f,
+			a_hmdPosition.z - a_anchor.z,
+		};
+		if (!std::isfinite(panelToPlayer.x) ||
+			!std::isfinite(panelToPlayer.z) ||
+			panelToPlayer.LengthSquared() < 1e-6f) {
+			return false;
+		}
+		panelToPlayer.Normalize();
+
+		const Vector3 up = Vector3::UnitY;
+		Vector3 right = up.Cross(panelToPlayer);
+		right.Normalize();
+		a_transform = Matrix(
+			right.x, right.y, right.z, 0.0f,
+			up.x, up.y, up.z, 0.0f,
+			panelToPlayer.x, panelToPlayer.y, panelToPlayer.z, 0.0f,
+			a_anchor.x, a_anchor.y, a_anchor.z, 1.0f);
+		return true;
+	}
+}
 
 bool VR::GetGripPressed(bool isLeft, bool isRight) const
 {
@@ -328,11 +377,57 @@ void VR::TryStartNewDrag()
 
 void VR::SetFixedOverlayToCurrentHMD()
 {
-	vr::HmdMatrix34_t transform = Util::ComputeOverlayTransformFromHMD(
-		settings.VRMenuOffsetX,
-		settings.VRMenuOffsetY,
-		settings.VRMenuOffsetZ);
-	fixedWorldOverlayPosition.m = Util::HmdMatrix34ToMatrix(transform);
+	Matrix hmdWorld;
+	if (!TryGetHMDWorld(hmdWorld))
+		return;
+	UpdateFixedWorldPositioning(hmdWorld);
+}
+
+void VR::RequestFixedWorldMenuReanchor()
+{
+	fixedWorldOverlayReanchorRequested = true;
+}
+
+void VR::UpdateFixedWorldPositioning(const Matrix& a_hmdWorld)
+{
+	if (settings.VRMenuPositioningMethod != 1)
+		return;
+
+	const Vector3 hmdPosition = a_hmdWorld.Translation();
+	if (!fixedWorldOverlayPosition.initialized || fixedWorldOverlayReanchorRequested) {
+		// The safe anchor uses fixed defaults, rather than accumulating mutable
+		// offsets, so opening the menu can always recover it.
+		Vector3 hmdBackward{ a_hmdWorld._31, 0.0f, a_hmdWorld._33 };
+		if (hmdBackward.LengthSquared() < 1e-6f)
+			hmdBackward = Vector3::UnitZ;
+		else
+			hmdBackward.Normalize();
+		Vector3 hmdRight = Vector3::UnitY.Cross(hmdBackward);
+		if (hmdRight.LengthSquared() < 1e-6f)
+			hmdRight = Vector3::UnitX;
+		else
+			hmdRight.Normalize();
+
+		const Vector3 anchor{
+			hmdPosition.x + hmdRight.x * Config::kDefaultHMDOffsetX + hmdBackward.x * Config::kDefaultHMDOffsetZ,
+			hmdPosition.y,
+			hmdPosition.z + hmdRight.z * Config::kDefaultHMDOffsetX + hmdBackward.z * Config::kDefaultHMDOffsetZ,
+		};
+		Matrix transform;
+		if (!MakeVerticalFacingTransform(anchor, hmdPosition, transform))
+			return;
+
+		fixedWorldOverlayPosition.m = transform;
+		fixedWorldOverlayPosition.initialized = true;
+		fixedWorldOverlayReanchorRequested = false;
+		return;
+	}
+
+	// Preserve the anchor exactly; only yaw the vertical panel toward the HMD.
+	const Vector3 anchor = fixedWorldOverlayPosition.m.Translation();
+	Matrix facingTransform;
+	if (MakeVerticalFacingTransform(anchor, hmdPosition, facingTransform))
+		fixedWorldOverlayPosition.m = facingTransform;
 }
 
 void VR::UpdateFixedWorldPositioning()
@@ -340,26 +435,8 @@ void VR::UpdateFixedWorldPositioning()
 	if (settings.VRMenuPositioningMethod != 1)
 		return;
 
-	if (!fixedWorldOverlayPosition.initialized) {
-		fixedWorldOverlayPosition.initialized = true;
-		SetFixedOverlayToCurrentHMD();
-		auto player = RE::PlayerCharacter::GetSingleton();
-		if (player) {
-			savedPlayerWorldPos = player->GetPosition();
-		}
+	Matrix hmdWorld;
+	if (!TryGetHMDWorld(hmdWorld))
 		return;
-	}
-
-	if (settings.VRMenuAutoResetDistance > 0.0f) {
-		auto player = RE::PlayerCharacter::GetSingleton();
-		if (player) {
-			RE::NiPoint3 playerPos = player->GetPosition();
-			float sqDist = playerPos.GetSquaredDistance(savedPlayerWorldPos);
-			float thresholdSq = settings.VRMenuAutoResetDistance * settings.VRMenuAutoResetDistance;
-			if (sqDist > thresholdSq) {
-				SetFixedOverlayToCurrentHMD();
-				savedPlayerWorldPos = playerPos;
-			}
-		}
-	}
+	UpdateFixedWorldPositioning(hmdWorld);
 }

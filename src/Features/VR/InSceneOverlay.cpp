@@ -1,6 +1,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
@@ -40,6 +41,7 @@ namespace
 	std::atomic<uint64_t> g_openVRSubmitCycleState{ 0 };
 	std::mutex g_openVRSubmitCyclePublishMutex;
 	std::mutex g_vrPostLoadCompositorSubmitMutex;
+	std::mutex g_presentedMenuSurfaceMutex;
 
 	enum class VRNativeRestoreCyclePresentationPath : uint8_t
 	{
@@ -263,6 +265,8 @@ cbuffer OverlayCompositeCB : register(b0)
 	float4 QuadPixels01;
 	float4 QuadPixels23;
 	float4 QuadInvW;
+	float MenuMipLevel;
+	float3 Padding2;
 };
 
 Texture2D<float4> MenuTexture : register(t0);
@@ -330,7 +334,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
 	uv = saturate(uv);
 
-	float4 menuColor = MenuTexture.SampleLevel(MenuSampler, uv, 0.0f);
+	float4 menuColor = MenuTexture.SampleLevel(MenuSampler, uv, MenuMipLevel);
 	menuColor.a = saturate(menuColor.a);
 	if (menuColor.a <= 0.001f) {
 		return;
@@ -1368,10 +1372,23 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							nullptr);
 				}
 
+				const bool admitInSceneOverlaySubmit =
+					VRInSceneOverlaySubmitPolicy::ShouldAdmit({
+						.suppressionReasons =
+							upscaling.GetVRInSceneOverlaySubmitSuppressionReasons(),
+						.mainMenuOpen = globals::state && globals::state->isMainMenuOpen,
+						.submitStageUpscalingActive =
+							upscaling.IsSubmitStageUpscalingActive(),
+						.renderTargetRecreateInProgress =
+							upscaling.IsPerfModeRenderTargetRecreateInProgress(),
+						.originalSubmitCandidateSafe =
+							!originalSubmitDecision.ShouldSuppress() &&
+							!originalSubmitDecision.IsNativeRestoreGuarded(),
+					});
 				if (postLoadReleaseToken == 0 &&
 					!nativeRestoreGuardActive &&
 					!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
-					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
+					admitInSceneOverlaySubmit) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
 						const auto result = submit(
@@ -1642,11 +1659,12 @@ void VR::InitInSceneResources()
 	}
 
 	D3D11_SAMPLER_DESC samplerDesc = {};
-	samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+	samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
 	samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
 	samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
 	samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
 	samplerDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+	samplerDesc.MaxAnisotropy = 8;
 	samplerDesc.MinLOD = 0;
 	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 	if (FAILED(device->CreateSamplerState(&samplerDesc, temp.sampler.put()))) {
@@ -1690,6 +1708,31 @@ void VR::InitInSceneResources()
 	inSceneResources = std::move(temp);
 	inSceneResources.initialized = true;
 	logger::debug("VR: In-Scene Overlay resources initialized.");
+}
+
+void VR::PublishPresentedMenuSurface(OverlayType a_type, const Matrix& a_worldMatrix)
+{
+	PresentedMenuSurface surface;
+	surface.topLeft = Vector3::Transform(Vector3(-0.5f, 0.5f, 0.0f), a_worldMatrix);
+	surface.topRight = Vector3::Transform(Vector3(0.5f, 0.5f, 0.0f), a_worldMatrix);
+	surface.bottomLeft = Vector3::Transform(Vector3(-0.5f, -0.5f, 0.0f), a_worldMatrix);
+	surface.valid = true;
+
+	std::lock_guard lock(g_presentedMenuSurfaceMutex);
+	presentedMenuSurfaces[static_cast<std::size_t>(a_type)] = surface;
+}
+
+bool VR::TryGetPresentedMenuSurface(OverlayType a_type, PresentedMenuSurface& a_outSurface) const
+{
+	std::lock_guard lock(g_presentedMenuSurfaceMutex);
+	a_outSurface = presentedMenuSurfaces[static_cast<std::size_t>(a_type)];
+	return a_outSurface.valid;
+}
+
+void VR::InvalidatePresentedMenuSurfaces()
+{
+	std::lock_guard lock(g_presentedMenuSurfaceMutex);
+	presentedMenuSurfaces = {};
 }
 
 void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV, bool* overlayComposited)
@@ -1789,6 +1832,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	// World-space VP (for controller attach and fixed world position modes)
 	if (hmdPose.bPoseIsValid) {
 		hmdWorld = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
+		UpdateFixedWorldPositioning(hmdWorld);
 		// SimpleMath uses row-vector transforms, so compose local-to-world as
 		// eye -> head -> tracking world. Reversing this leaves the eye offset in
 		// tracking axes and breaks stereo when the HMD is rotated.
@@ -1994,25 +2038,30 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		InSceneCB cbData;
 
 		Matrix modelMatrix;
+		Matrix worldModelMatrix;
 		Matrix vp;
-		if (settings.VRMenuPositioningMethod == 1) {  // Fixed World Position
+		if (UseFixedWorldMenuPositioning()) {  // Fixed World Position
 			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			worldModelMatrix = modelMatrix;
 			vp = vpWorldSpace;
 		} else {  // HMD Relative
 			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
 			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
+			worldModelMatrix = modelMatrix * hmdWorld;
 			vp = vpHeadSpace;
 		}
 		cbData.wvp = (modelMatrix * vp).Transpose();
 
-		overlayDrawn = drawOverlayQuad(
+		const bool hmdOverlayDrawn = drawOverlayQuad(
 						   context,
 						   cbData,
 						   menuTexture.get(),
 						   inSceneResources.menuSRV,
 						   inSceneResources.cachedMenuTexture,
-						   "HMD") ||
-		               overlayDrawn;
+						   "HMD");
+		if (hmdOverlayDrawn)
+			PublishPresentedMenuSurface(OverlayType::HMD, worldModelMatrix);
+		overlayDrawn = hmdOverlayDrawn || overlayDrawn;
 	}
 
 	// --- Render Controller Overlay ---
@@ -2041,25 +2090,27 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 				if (dot > 0.0f) {
 					InSceneCB cbData;
 					cbData.wvp = (modelMatrix * vpWorldSpace).Transpose();
+					bool controllerOverlayDrawn = false;
 					if (menuControllerTexture) {
-						overlayDrawn = drawOverlayQuad(
+						controllerOverlayDrawn = drawOverlayQuad(
 										   context,
 										   cbData,
 										   menuControllerTexture.get(),
 										   inSceneResources.menuControllerSRV,
 										   inSceneResources.cachedMenuControllerTexture,
-										   "controller") ||
-						               overlayDrawn;
+										   "controller");
 					} else {
-						overlayDrawn = drawOverlayQuad(
+						controllerOverlayDrawn = drawOverlayQuad(
 										   context,
 										   cbData,
 										   menuTexture.get(),
 										   inSceneResources.menuSRV,
 										   inSceneResources.cachedMenuTexture,
-										   "HMD") ||
-						               overlayDrawn;
+										   "HMD");
 					}
+					if (controllerOverlayDrawn)
+						PublishPresentedMenuSurface(OverlayType::Controller, modelMatrix);
+					overlayDrawn = controllerOverlayDrawn || overlayDrawn;
 				}
 			}
 		}
@@ -2152,6 +2203,7 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	}
 
 	Matrix hmdWorld = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
+	UpdateFixedWorldPositioning(hmdWorld);
 	Matrix eyeToHead = Util::HmdMatrix34ToMatrix(openvr->vrSystem->GetEyeToHeadTransform(eye));
 
 	float left, right, bottom, top;
@@ -2164,19 +2216,24 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	Matrix vpWorldSpace = eyeToWorld.Invert() * proj;
 
 	Matrix modelMatrix = Matrix::Identity;
+	Matrix worldModelMatrix = Matrix::Identity;
 	Matrix viewProjection = vpHeadSpace;
+	OverlayType presentedType = OverlayType::HMD;
 	const bool showOnHMD = settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both;
 	const bool showOnController = settings.attachMode == AttachMode::ControllerOnly;
 	if (showOnHMD) {
-		if (settings.VRMenuPositioningMethod == 1) {
+		if (UseFixedWorldMenuPositioning()) {
 			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			worldModelMatrix = modelMatrix;
 			viewProjection = vpWorldSpace;
 		} else {
 			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
 			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
+			worldModelMatrix = modelMatrix * hmdWorld;
 			viewProjection = vpHeadSpace;
 		}
 	} else if (showOnController) {
+		presentedType = OverlayType::Controller;
 		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
 		if (attachIndex == vr::k_unTrackedDeviceIndexInvalid || attachIndex >= vr::k_unMaxTrackedDeviceCount) {
 			return;
@@ -2189,6 +2246,7 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 		Matrix controllerWorld = Util::HmdMatrix34ToMatrix(controllerPose.mDeviceToAbsoluteTracking);
 		Matrix offset = Matrix::CreateTranslation(settings.VRMenuControllerOffsetX, settings.VRMenuControllerOffsetY, settings.VRMenuControllerOffsetZ);
 		modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset * controllerWorld;
+		worldModelMatrix = modelMatrix;
 		viewProjection = vpWorldSpace;
 	} else {
 		return;
@@ -2259,6 +2317,26 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 		maxY = std::max(maxY, pixelY);
 	}
 
+	// Select a mip from the actual projected quad footprint. The compute path
+	// has no implicit derivatives, so sampling mip zero aliases fine horizontal
+	// and vertical UI rules into the characteristic headset moire pattern.
+	float twiceScreenArea = 0.0f;
+	for (size_t i = 0; i < 4; ++i) {
+		const size_t next = (i + 1) % 4;
+		const float x0 = cbData.quadPixels[i * 2];
+		const float y0 = cbData.quadPixels[i * 2 + 1];
+		const float x1 = cbData.quadPixels[next * 2];
+		const float y1 = cbData.quadPixels[next * 2 + 1];
+		twiceScreenArea += x0 * y1 - y0 * x1;
+	}
+	const float screenArea = std::max(1.0f, std::abs(twiceScreenArea) * 0.5f);
+	ID3D11Texture2D* sampledTexture = showOnController && menuControllerTexture ? menuControllerTexture.get() : menuTexture.get();
+	D3D11_TEXTURE2D_DESC sampledDesc{};
+	sampledTexture->GetDesc(&sampledDesc);
+	const float sourceArea = static_cast<float>(sampledDesc.Width) * static_cast<float>(sampledDesc.Height);
+	const float maxMip = sampledDesc.MipLevels > 0 ? static_cast<float>(sampledDesc.MipLevels - 1) : 0.0f;
+	cbData.menuMipLevel = std::clamp(0.5f * std::log2(sourceArea / screenArea), 0.0f, maxMip);
+
 	const int dispatchLeft = std::clamp(static_cast<int>(std::floor(minX)) - 1, 0, static_cast<int>(targetDesc.Width));
 	const int dispatchTop = std::clamp(static_cast<int>(std::floor(minY)) - 1, 0, static_cast<int>(targetDesc.Height));
 	const int dispatchRight = std::clamp(static_cast<int>(std::ceil(maxX)) + 1, 0, static_cast<int>(targetDesc.Width));
@@ -2300,6 +2378,7 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	context->CSSetSamplers(0, 1, &sampler);
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->Dispatch((cbData.dispatchSize[0] + 7) / 8, (cbData.dispatchSize[1] + 7) / 8, 1);
+	PublishPresentedMenuSurface(presentedType, worldModelMatrix);
 	if (overlayComposited) {
 		*overlayComposited = true;
 	}

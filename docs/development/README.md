@@ -17,7 +17,7 @@
 -   **Verify shader refactor bytecode:** `pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl`
 -   **Runtime A/B shader check:** `tools/taa-renderdoc-ab.py` via RenderDoc embedded Python
 -   **Full build with deployment:** `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
--   **Run tests:** `cmake --build build/ALL --target run_shader_tests`
+-   **Run shader tests:** `cmake --build build/ALL --target run_shader_tests`
 -   **Create a worktree with submodules + local preset:** `pwsh ./tools/new-worktree.ps1 -Name my-branch`
 -   **Install optional git alias:** `pwsh ./tools/install-worktree-alias.ps1`
 
@@ -28,6 +28,19 @@
 -   `Dev` - Fast iteration preset (recommended for development)
 
 See `CMakePresets.json` for all available presets.
+
+### Complete Local Validation
+
+The main DLL target does not build every test executable. A clean pull-request validation must build both test groups explicitly before running CTest:
+
+```powershell
+cmake --preset ALL -DBUILD_CONTROLLER_TESTS=ON -DBUILD_SHADER_TESTS=ON
+cmake --build --preset CSmain -- /m:1
+cmake --build build/ALL --config Release --target controller_tests shader_tests -- /m:1
+ctest --test-dir build/ALL -C Release --output-on-failure --no-tests=error --timeout 300
+```
+
+Changes to the VR master custom-shader switch also require a headset runtime check before merge. With render scaling both active and inactive, disable custom shaders from the CSX menu and verify that native eye targets are restored before the switch completes, the scene has no stale overlay or deferred attachment, and re-enabling works. Repeat in the main menu and in-world when the submit path changes.
 
 ## Worktrees
 

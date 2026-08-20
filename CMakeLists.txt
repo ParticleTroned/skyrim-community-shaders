@@ -1472,6 +1472,7 @@ if(BUILD_CONTROLLER_TESTS)
             PRIVATE "${PROJECT_SOURCE_DIR}/src"
         )
         add_test(NAME ${TEST_NAME} COMMAND ${TARGET_NAME})
+        set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
     add_controller_test(
@@ -1500,6 +1501,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/overlay_policy_test.cpp
     )
     add_controller_test(
+        shader_cache_disable_policy_test
+        ShaderCacheDisablePolicy
+        tests/shader_cache_disable_policy_test.cpp
+    )
+    add_controller_test(
         volumetric_lighting_cache_refresh_policy_test
         VolumetricLightingCacheRefreshPolicy
         tests/volumetric_lighting_cache_refresh_policy_test.cpp
@@ -1508,6 +1514,21 @@ if(BUILD_CONTROLLER_TESTS)
         vr_depth_culling_policy_test
         VRDepthCullingPolicy
         tests/vr_depth_culling_policy_test.cpp
+    )
+    add_controller_test(
+        vr_wand_interaction_policy_test
+        VRWandInteractionPolicy
+        tests/vr_wand_interaction_policy_test.cpp
+    )
+    add_controller_test(
+        vr_wand_surface_geometry_test
+        VRWandSurfaceGeometry
+        tests/vr_wand_surface_geometry_test.cpp
+    )
+    add_controller_test(
+        vr_menu_positioning_policy_test
+        VRMenuPositioningPolicy
+        tests/vr_menu_positioning_policy_test.cpp
     )
 
     add_custom_target(
@@ -1518,8 +1539,12 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
+            shader_cache_disable_policy_test
             volumetric_lighting_cache_refresh_policy_test
             vr_depth_culling_policy_test
+            vr_wand_interaction_policy_test
+            vr_wand_surface_geometry_test
+            vr_menu_positioning_policy_test
     )
 endif()
 

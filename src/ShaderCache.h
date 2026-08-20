@@ -419,7 +419,9 @@ namespace SIE
 
 		bool IsCompiling();
 		bool IsEnabled() const;
+		bool IsEnableRequested() const;
 		void SetEnabled(bool value);
+		void ServicePendingDisable();
 		bool IsAsync() const;
 		void SetAsync(bool value);
 		bool IsDump() const;
@@ -920,7 +922,9 @@ namespace SIE
 		ShaderMapArray<RE::BSGraphics::PixelShader> pixelShaders;
 		ShaderMapArray<RE::BSGraphics::ComputeShader> computeShaders;
 
-		bool isEnabled = true;
+		std::atomic_bool isEnabled{ true };
+		std::atomic_bool enableRequested{ true };
+		std::atomic_bool pendingDisableAfterVRNativeRestore{ false };
 		std::atomic_bool isDiskCache{ true };
 		std::atomic_bool diskCacheHeld{ false };
 		bool featureSetChanged = false;

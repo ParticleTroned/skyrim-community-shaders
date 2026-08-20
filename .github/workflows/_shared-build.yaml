@@ -93,7 +93,7 @@ jobs:
 
             - name: Run controller tests
               run: |
-                  ctest --test-dir ${{ matrix.compiler.build-dir }} -C Release --output-on-failure --no-tests=error -R "PerfModeRestartState|VRVendorRelatchPolicy|FSRHostLifecyclePolicy" --timeout 60
+                  ctest --test-dir ${{ matrix.compiler.build-dir }} -C Release --output-on-failure --no-tests=error -L ControllerTests --timeout 60
 
             - name: Extract version from CMake
               id: get_version

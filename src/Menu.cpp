@@ -14,6 +14,8 @@
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <iomanip>
+#include <limits>
+#include <Psapi.h>
 #include <string>
 #include <vector>
 
@@ -48,6 +50,8 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/VR.h"
+
+#pragma comment(lib, "Psapi.lib")
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Menu::ThemeSettings::PaletteColors,
@@ -185,6 +189,45 @@ bool IsEnabled = false;
 
 namespace
 {
+	constexpr std::uint64_t kBytesPerGiB = 1024ull * 1024ull * 1024ull;
+	constexpr std::uint64_t kRecommendedSystemCommitBytes = 128ull * kBytesPerGiB;
+
+	struct SystemCommitSample
+	{
+		bool valid = false;
+		std::uint64_t currentBytes = 0;
+		std::uint64_t totalBytes = 0;
+	};
+
+	SystemCommitSample QuerySystemCommit() noexcept
+	{
+		PERFORMANCE_INFORMATION information{};
+		information.cb = sizeof(information);
+		if (!::GetPerformanceInfo(&information, sizeof(information)) || information.PageSize == 0)
+			return {};
+
+		constexpr auto maximumBytes = std::numeric_limits<std::uint64_t>::max();
+		if (information.CommitTotal > maximumBytes / information.PageSize ||
+			information.CommitLimit > maximumBytes / information.PageSize) {
+			return {};
+		}
+
+		const auto totalBytes = static_cast<std::uint64_t>(information.CommitLimit) * information.PageSize;
+		if (totalBytes == 0)
+			return {};
+
+		return {
+			.valid = true,
+			.currentBytes = static_cast<std::uint64_t>(information.CommitTotal) * information.PageSize,
+			.totalBytes = totalBytes,
+		};
+	}
+
+	double BytesToGiB(std::uint64_t a_bytes) noexcept
+	{
+		return static_cast<double>(a_bytes) / static_cast<double>(kBytesPerGiB);
+	}
+
 	constexpr const char* UI_MODE_SETTING_KEY = "UI Mode";
 	constexpr const char* LEGACY_PERFORMANCE_UI_MODE_SETTING_KEY = "PerformanceUiMode";
 	constexpr const char* SHOW_COMPILATION_HUD_IN_VR_SETTING_KEY = "ShowCompilationHUDInVR";
@@ -1017,9 +1060,15 @@ void Menu::DrawSettings()
 		vrTopStatusWindowLayoutWasActive = false;
 	}
 
-	const auto windowPosCond = (autoOffsetForTopStatusWindow || restoreAfterTopStatusWindow || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
+	const bool lockVRMenuToCanvas = REL::Module::IsVR();
+	if (lockVRMenuToCanvas) {
+		windowPos = defaultWindowPos;
+		windowSizeForOverlap = defaultWindowSize;
+		willBeDocked = false;
+	}
+	const auto windowPosCond = (lockVRMenuToCanvas || autoOffsetForTopStatusWindow || restoreAfterTopStatusWindow || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowPos(windowPos, windowPosCond, centeredPivot);
-	const auto windowSizeCond = (repairSteamVRLegacyWindowSize || autoOffsetForTopStatusWindow || restoreAfterTopStatusWindow || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
+	const auto windowSizeCond = (lockVRMenuToCanvas || repairSteamVRLegacyWindowSize || autoOffsetForTopStatusWindow || restoreAfterTopStatusWindow || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowSize(defaultWindowSize, windowSizeCond);
 	if (forceSteamVRFirstUndockedLayout) {
 		steamVRUndockedFirstOpenLayoutApplied = true;
@@ -1028,6 +1077,9 @@ void Menu::DrawSettings()
 
 	// Determine window flags based on docking state
 	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+	if (lockVRMenuToCanvas) {
+		windowFlags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+	}
 	const bool steamVRUndockedWindow = useSteamVRWindowControls && !willBeDocked;
 
 	// Only hide title bar when not docked
@@ -1123,6 +1175,7 @@ void Menu::DrawSettings()
 	UpdateSettingsDirtyState();
 
 	if (!IsEnabled) {
+		systemCommitLastRefreshTime = -1.0;
 		PerformanceTuningRenderer::NotifyMenuClosed();
 		PerformanceTuningRenderer::CancelActiveMeasurements();
 	}
@@ -1214,6 +1267,37 @@ void Menu::DrawFooter()
 	ImGui::SameLine();
 	ImGui::BulletText(std::format("D3D12 Swap Chain: {}", globals::features::upscaling.d3d12SwapChainActive ? "Active" : "Inactive").c_str());
 	ImGui::SameLine();
+
+	const double now = ImGui::GetTime();
+	if (systemCommitLastRefreshTime < 0.0 || now < systemCommitLastRefreshTime || now - systemCommitLastRefreshTime >= 1.0) {
+		const auto sample = QuerySystemCommit();
+		systemCommitSampleValid = sample.valid;
+		systemCommitCurrentBytes = sample.currentBytes;
+		systemCommitTotalBytes = sample.totalBytes;
+		systemCommitLastRefreshTime = now;
+	}
+
+	const bool belowRecommendedCommit = systemCommitSampleValid && systemCommitTotalBytes < kRecommendedSystemCommitBytes;
+	if (belowRecommendedCommit)
+		ImGui::PushStyleColor(ImGuiCol_Text, settings.Theme.StatusPalette.Error);
+	if (systemCommitSampleValid) {
+		ImGui::BulletText(
+			"Commit: %.1f / %.1f GB",
+			BytesToGiB(systemCommitCurrentBytes),
+			BytesToGiB(systemCommitTotalBytes));
+	} else {
+		ImGui::BulletText("Commit: unavailable");
+	}
+	if (belowRecommendedCommit)
+		ImGui::PopStyleColor();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextWrapped(
+			"Current Windows system commit and total commit capacity. A minimum total commit capacity "
+			"of 128 GB is recommended for all systems. This text is shown in red when the total is "
+			"below that minimum.");
+	}
+
+	ImGui::SameLine();
 	ImGui::BulletText(std::format("GPU: {}", globals::state->adapterDescription.c_str()).c_str());
 }
 
@@ -1274,6 +1358,19 @@ bool Menu::IsMenuSessionOpen() const
 	return IsEnabled || (editorWindow && editorWindow->open);
 }
 
+void Menu::OpenMenu()
+{
+	if (IsEnabled)
+		return;
+
+	IsEnabled = true;
+	if (globals::features::vr.IsOpenVRCompatible()) {
+		auto& vr = globals::features::vr;
+		vr.ResetMenuInputRuntimeState();
+		vr.RequestFixedWorldMenuReanchor();
+	}
+}
+
 void Menu::CloseMenu()
 {
 	auto* editorWindow = EditorWindow::GetSingleton();
@@ -1286,6 +1383,7 @@ void Menu::CloseMenu()
 		editorWindow->UpdateOpenState();
 	}
 	IsEnabled = false;
+	systemCommitLastRefreshTime = -1.0;
 
 	PerformanceTuningRenderer::NotifyMenuClosed();
 	PerformanceTuningRenderer::CancelActiveMeasurements();
@@ -1406,15 +1504,13 @@ void Menu::ProcessInputEventQueue()
 							 if (IsMenuSessionOpen()) {
 								 CloseMenu();
 							 } else {
-								 IsEnabled = true;
-								 if (globals::features::vr.IsOpenVRCompatible())
-									 globals::features::vr.ResetMenuInputRuntimeState();
+								 OpenMenu();
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
 							 }
 						 }
 					 } },
 					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
-					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
+					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnableRequested()); } },
 					{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
 					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
 					{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },

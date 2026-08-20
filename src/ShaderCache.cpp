@@ -4277,7 +4277,7 @@ namespace SIE
 	void ShaderCache::ManageCompilationSet(std::stop_token stoken)
 	{
 		managementThread = GetCurrentThread();
-		SetThreadPriority(managementThread, THREAD_PRIORITY_BELOW_NORMAL);
+		Util::SetCurrentThreadCooperativeBackgroundPriority();
 		while (!stoken.stop_requested()) {
 			const auto& task = compilationSet.WaitTake(stoken);
 			if (!task.has_value())
@@ -4288,7 +4288,7 @@ namespace SIE
 
 	void ShaderCache::ProcessDeferredDiskWrites(std::stop_token stoken)
 	{
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		Util::SetCurrentThreadCooperativeBackgroundPriority();
 		for (;;) {
 			std::deque<DeferredDiskWrite> writes;
 			bool flushManifest = false;
@@ -4392,8 +4392,9 @@ namespace SIE
 
 		const auto taskKey = task.GetString();
 
-		// Run all shader compilation work at below-normal priority.
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		// Run shader compilation cooperatively even when another plugin raises the
+		// entire Skyrim process to Above Normal or High priority.
+		Util::SetCurrentThreadCooperativeBackgroundPriority();
 
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);
@@ -4976,7 +4977,7 @@ namespace SIE
 
 	void UpdateListener::processQueue()
 	{
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		Util::SetCurrentThreadCooperativeBackgroundPriority();
 		std::unique_lock lock(actionMutex, std::defer_lock);
 		auto cache = globals::shaderCache;
 		while (cache->UseFileWatcher()) {

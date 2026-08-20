@@ -63,11 +63,9 @@
         "Partial Precision": false,
         "Frame Annotations": false,
         "Dump Shaders": false,
-        "Compiler Threads": 15,
         "PBR Metal Reflection Scale": 1.0,
         "Use FileWatcher": false,
         "Log Level": 2,
-        "Background Compiler Threads": 8,
         "Shader Defines": "",
         "Refraction Scale": 0.25
     },

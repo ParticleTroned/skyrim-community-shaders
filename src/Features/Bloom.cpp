@@ -1,7 +1,6 @@
 #include "Bloom.h"
 
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
 
 #include "I18n/I18n.h"
@@ -55,8 +54,11 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 	SanitizeProfile(a_profile);
 	ImGui::PushID(&a_profile);
 
-	if (ImGui::BeginTable("##BloomQuickControls", 4, ImGuiTableFlags_SizingStretchProp)) {
-		ImGui::TableSetupColumn(T(TKEY("amount"), "Bloom"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
+	ImGui::SliderFloat(T(TKEY("amount"), "Bloom"), &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	DrawTooltip(T(TKEY("amount_tooltip"), "Overall Bloom amount for this profile. Set it to 0 to remove Bloom; 1 is the Default preset level."));
+
+	if (ImGui::BeginTable("##BloomPresets", 4, ImGuiTableFlags_SizingStretchProp)) {
+		ImGui::TableSetupColumn(T(TKEY("presets"), "Bloom Presets"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		for (uint preset = 0; preset < kPresetCount; ++preset) {
 			const auto* name = GetPresetName(preset);
 			const float width = ImGui::CalcTextSize(name).x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -65,9 +67,8 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 
 		ImGui::TableNextRow();
 		ImGui::TableNextColumn();
-		ImGui::SetNextItemWidth(-FLT_MIN);
-		ImGui::SliderFloat(T(TKEY("amount"), "Bloom"), &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		DrawTooltip(T(TKEY("amount_tooltip"), "Overall Bloom amount for this profile. Set it to 0 to remove Bloom; 1 is the Default preset level."));
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted(T(TKEY("presets"), "Bloom Presets"));
 
 		for (uint preset = 0; preset < kPresetCount; ++preset) {
 			ImGui::TableNextColumn();

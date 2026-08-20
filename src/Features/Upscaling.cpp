@@ -19226,6 +19226,11 @@ bool Upscaling::GetVRRenderScaleModeRequested() const
 {
 	if (!REL::Module::IsVR())
 		return false;
+	// The master shader switch cannot strand VR on a reduced physical target.
+	// While it is off (or waiting to turn off), preserve the configured setting
+	// but make native resolution the runtime request.
+	if (globals::shaderCache && !globals::shaderCache->IsEnableRequested())
+		return false;
 
 	if (IsOpenCompositeUpscalingBlocked())
 		return false;

@@ -6,6 +6,7 @@
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
+#include "MenuDevBenchBridge.h"
 #include "Menu/ThemeManager.h"
 #include "ProfilerDevBenchBridge.h"
 #include "SceneSettingsManager.h"
@@ -189,6 +190,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				ProfilerDevBenchBridge::Install();
+				MenuDevBenchBridge::Install();
 			}
 
 			break;

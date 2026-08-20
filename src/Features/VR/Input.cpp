@@ -5,6 +5,7 @@
 #include "Utils/VRUtils.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <unordered_map>
 
@@ -31,6 +32,11 @@ namespace
 	bool gPrevSecondaryVRInputStates[kNumVRInputMappings] = {};
 	bool gVRMouseButtonDown[ImGuiMouseButton_COUNT] = {};
 	bool gLastObservedMouseButtonDown[ImGuiMouseButton_COUNT] = {};
+	std::array<ControllerDevice, ImGuiMouseButton_COUNT> gVRMouseButtonOwners = [] {
+		std::array<ControllerDevice, ImGuiMouseButton_COUNT> owners{};
+		owners.fill(ControllerDevice::Both);
+		return owners;
+	}();
 	bool gLastVRInputHandedness = false;
 	std::unordered_map<size_t, ScrollAccum> gVRScrollAccums;
 	CursorOwner gCursorOwner = CursorOwner::Desktop;
@@ -51,6 +57,7 @@ namespace
 		std::fill_n(gPrevSecondaryVRInputStates, kNumVRInputMappings, false);
 		std::fill_n(gVRMouseButtonDown, ImGuiMouseButton_COUNT, false);
 		std::fill_n(gLastObservedMouseButtonDown, ImGuiMouseButton_COUNT, false);
+		gVRMouseButtonOwners.fill(ControllerDevice::Both);
 	}
 
 	bool IsThumbstickActive(const RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone)
@@ -321,6 +328,7 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 
 	bool isPrimary = RE::BSOpenVRControllerDevice::IsPrimaryController(event.device);
 	bool isSecondary = RE::BSOpenVRControllerDevice::IsSecondaryController(event.device);
+	const ControllerDevice eventController = isPrimary ? ControllerDevice::Primary : ControllerDevice::Secondary;
 
 	if (globals::menu && globals::menu->IsEnabled && (isPrimary || isSecondary)) {
 		ImGuiIO& io = ImGui::GetIO();
@@ -352,28 +360,44 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 					if (mappings[i].isShift)
 						io.AddKeyEvent(ImGuiMod_Shift, curr);
 					io.AddKeyEvent(static_cast<ImGuiKey>(mappings[i].key), curr);
-				} else {
-					if (curr && !testMode && CanUseWandPointing()) {
-						const ControllerDevice pointingController = GetWandPointingControllerDevice();
-						const bool eventFromPointingController =
-							(pointingController == ControllerDevice::Primary && isPrimary) ||
-							(pointingController == ControllerDevice::Secondary && isSecondary);
-						if (!eventFromPointingController) {
-							continue;
+				} else if (mappings[i].logicalButton >= 0 && mappings[i].logicalButton < ImGuiMouseButton_COUNT) {
+					const int logicalButton = mappings[i].logicalButton;
+					const bool useWandPointing = !testMode && CanUseWandPointing();
+					bool emitMouseEvent = true;
+					if (useWandPointing) {
+						if (curr) {
+							UpdateCursorFromWandPointing(true, eventController);
+							emitMouseEvent =
+								IsWandControllerIntersecting(eventController) &&
+								TryCaptureWandController(eventController) &&
+								io.WantSetMousePos &&
+								HasUsableCursorPos(io.MousePos);
+							if (emitMouseEvent) {
+								gVRMouseButtonOwners[logicalButton] = eventController;
+								gCursorOwner = CursorOwner::Wand;
+								gLastControllerCursorPos = io.MousePos;
+								gHasLastControllerCursorPos = true;
+								gWandClaimedCursorThisFrame = true;
+								TriggerWandHaptic(eventController, 8.0f);
+							}
+						} else {
+							emitMouseEvent = gVRMouseButtonOwners[logicalButton] == eventController;
 						}
-						UpdateCursorFromWandPointing(true);
-						if (!io.WantSetMousePos || !HasUsableCursorPos(io.MousePos)) {
-							continue;
+					}
+
+					if (emitMouseEvent) {
+						gVRMouseButtonDown[logicalButton] = curr;
+						io.AddMouseButtonEvent(logicalButton, curr);
+						if (!curr && useWandPointing) {
+							gVRMouseButtonOwners[logicalButton] = ControllerDevice::Both;
+							const bool anyWandMouseButtonDown = std::any_of(
+								std::begin(gVRMouseButtonDown),
+								std::end(gVRMouseButtonDown),
+								[](bool a_down) { return a_down; });
+							if (!anyWandMouseButtonDown)
+								ReleaseWandControllerCapture(eventController);
 						}
-						gCursorOwner = CursorOwner::Wand;
-						gLastControllerCursorPos = io.MousePos;
-						gHasLastControllerCursorPos = true;
-						gWandClaimedCursorThisFrame = true;
 					}
-					if (mappings[i].logicalButton >= 0 && mappings[i].logicalButton < ImGuiMouseButton_COUNT) {
-						gVRMouseButtonDown[mappings[i].logicalButton] = curr;
-					}
-					io.AddMouseButtonEvent(mappings[i].logicalButton, curr);
 				}
 				prevStates[i] = curr;
 			}
@@ -591,6 +615,22 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 	if (useWandPointing) {
 		UpdateCursorFromWandPointing(false);
 		wandHandledCursor = wandState.isIntersecting;
+		const bool wandMovedWithoutHit =
+			!wandState.isIntersecting &&
+			std::any_of(
+				wandHandStates.begin(),
+				wandHandStates.end(),
+				[](const WandHandState& a_hand) { return a_hand.moved; });
+		if (wandMovedWithoutHit && !desktopMouseMoved && !desktopMouseClicked) {
+			// A moving wand that misses the displayed quad owns the cursor, but has
+			// no drawable position. Do not leave the last desktop/wand dot behind
+			// and make a failed intersection look stationary.
+			gCursorOwner = CursorOwner::Wand;
+			gHasLastControllerCursorPos = false;
+			io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+			io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+			io.WantSetMousePos = false;
+		}
 		const bool wandCursorUsable = io.WantSetMousePos && HasUsableCursorPos(io.MousePos);
 		const bool canAdoptWandCursor =
 			wandCursorUsable &&
@@ -601,6 +641,11 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 			gCursorOwner = CursorOwner::Wand;
 			gLastControllerCursorPos = io.MousePos;
 			gHasLastControllerCursorPos = true;
+		} else if (!wandState.isIntersecting && gCursorOwner == CursorOwner::Wand) {
+			gHasLastControllerCursorPos = false;
+			io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+			io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+			io.WantSetMousePos = false;
 		}
 	} else {
 		wandState.isIntersecting = false;
@@ -648,7 +693,7 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 		customVRCursorVisible = true;
 		customVRCursorPos = desktopCursorPos;
 		customVRCursorOverlayType = settings.attachMode == AttachMode::ControllerOnly ? OverlayType::Controller : OverlayType::HMD;
-	} else if (gHasLastControllerCursorPos && gCursorOwner == CursorOwner::Wand) {
+	} else if (wandState.isIntersecting && gHasLastControllerCursorPos && gCursorOwner == CursorOwner::Wand) {
 		io.MousePos = gLastControllerCursorPos;
 		io.AddMousePosEvent(gLastControllerCursorPos.x, gLastControllerCursorPos.y);
 		io.WantSetMousePos = true;

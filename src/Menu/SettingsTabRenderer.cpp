@@ -231,12 +231,12 @@ void SettingsTabRenderer::RenderShadersTab()
 	if (BeginTabItemWithFont("Shaders", Menu::FontRole::Heading)) {
 		auto shaderCache = globals::shaderCache;
 
-		bool useCustomShaders = shaderCache->IsEnabled();
+		bool useCustomShaders = shaderCache->IsEnableRequested();
 		if (ImGui::Checkbox("Use Custom Shaders", &useCustomShaders)) {
 			shaderCache->SetEnabled(useCustomShaders);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Disabling this effectively disables all features.");
+			ImGui::Text("Disabling this effectively disables all features. In VR, native render targets are restored first.");
 		}
 
 		bool useDiskCache = shaderCache->IsDiskCache();

@@ -452,6 +452,7 @@ void State::Draw()
 		{
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::PerfModeRelatch, stateDrawDiagFrame, stateDrawDiagActive);
 			globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
+			shaderCache->ServicePendingDisable();
 		}
 
 		if (pendingPostLoadRuntimeReset) {
@@ -1100,7 +1101,7 @@ void State::SaveToJson(
 	settings["Advanced"] = advanced;
 
 	json general;
-	general["Enable Shaders"] = shaderCache->IsEnabled();
+	general["Enable Shaders"] = shaderCache->IsEnableRequested();
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();

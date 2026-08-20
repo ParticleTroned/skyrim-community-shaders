@@ -1,4 +1,5 @@
 #include "VR.h"
+#include "VR/MenuPositioningPolicy.h"
 #include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
 #include "FoveatedCommon.h"
@@ -517,6 +518,8 @@ constexpr const char* kControllerOverlayName = "CSX Menu (Controller)";
 constexpr float kLegacyDefaultHMDOffsetZ = -0.41f;
 constexpr float kPreviousDefaultHMDOffsetZ = -0.5125f;
 constexpr float kCurrentDefaultHMDOffsetZ = -1.025f;
+constexpr float kRecentDefaultHMDOffsetZ = -0.76875f;
+constexpr float kPreviousDefaultMenuScale = 1.0f;
 constexpr float kDefaultOffsetEpsilon = 0.0001f;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -549,6 +552,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VRMenuAutoResetDistance,
 	UseRuntimeDefaultMenuNavigation,
 	EnableWandPointing,
+	WandAimPitchTrimDegrees,
 	EnableStereoBlend,
 	StereoBlendDepthSigma,
 	StereoBlendMaxFactor,
@@ -572,6 +576,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void VR::LoadSettings(json& o_json)
 {
 	settings = o_json.get<Settings>();
+	if (o_json.is_object() &&
+		o_json.contains("VRMenuScale") &&
+		std::abs(o_json.value("VRMenuScale", Config::kDefaultMenuScale) - kPreviousDefaultMenuScale) < kDefaultOffsetEpsilon) {
+		settings.VRMenuScale = Config::kDefaultMenuScale;
+	}
 	PopulateMissingVRControllerBindingDefaults(o_json, settings);
 	LoadVRControllerBinding(o_json, "VRMenuOpenKeys", settings.VRMenuOpenKeys);
 	LoadVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
@@ -581,7 +590,8 @@ void VR::LoadSettings(json& o_json)
 		o_json.contains("VRMenuOffsetZ") &&
 		(std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
 			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kPreviousDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
-			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kCurrentDefaultHMDOffsetZ) < kDefaultOffsetEpsilon)) {
+			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kCurrentDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
+			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kRecentDefaultHMDOffsetZ) < kDefaultOffsetEpsilon)) {
 		settings.VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
 	}
 	if (o_json.is_object() &&
@@ -621,6 +631,7 @@ void VR::RestoreDefaultSettings()
 
 	overlayDragState = OverlayDragState{};
 	fixedWorldOverlayPosition = OverlayWorldPosition{};
+	fixedWorldOverlayReanchorRequested = true;
 	wandState = WandIntersectionState{};
 	autoHideOverlayStartTimeSecs = 0.0;
 	primaryControllerState = {};
@@ -1079,7 +1090,12 @@ bool VR::ShouldUseInSceneOverlay() const
 		return true;
 	case Settings::MenuOverlayPath::Auto:
 	default:
-		return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite ||
+		// At the Skyrim main menu the render-scale controller can legitimately
+		// remain pending until a world safe point exists. Presenting through the
+		// eye-submit copy is deterministic there and does not depend on an
+		// IVROverlay transform anchored to a game world that does not yet exist.
+		return (globals::state && globals::state->isMainMenuOpen) ||
+		       openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite ||
 		       !openVRInfo.hasOverlayInterface;
 	}
 }
@@ -1158,7 +1174,6 @@ namespace
 	void DrawGeneralVRSettings();
 	void DrawMenuSettings();
 	void DrawMouseSettings();
-	void DrawDragSettings();
 	void DrawStereoSettings();
 	void DrawStereoSyncSettings();
 	void DrawStereoBlendSettings();
@@ -1181,7 +1196,6 @@ void VR::DrawSettings()
 				DrawControllerInputInstructions();
 				DrawMenuSettings();
 				DrawMouseSettings();
-				DrawDragSettings();
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();
@@ -2138,6 +2152,20 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Use controller ray-cast pointing for the CSX menu.");
 		}
+
+		if (effectiveWandNavigation) {
+			ImGui::SetNextItemWidth(220.0f);
+			ImGui::SliderFloat(
+				"Wand Aim Pitch Trim",
+				&settings.WandAimPitchTrimDegrees,
+				VR::Config::kMinWandAimPitchTrimDegrees,
+				VR::Config::kMaxWandAimPitchTrimDegrees,
+				"%+.1f deg");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Rotates the pointer around the controller aim pose's local X axis.");
+				ImGui::TextUnformatted("Positive values pitch the pointer from local forward toward local up.");
+			}
+		}
 	}
 
 	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix)
@@ -2373,16 +2401,7 @@ namespace
 			return;
 		if (ImGui::CollapsingHeader("Menu Settings")) {
 			ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
-			const char* positioningMethods[] = { "HMD Relative", "Fixed World Position" };
-			ImGui::Combo("Menu Positioning Method", &settings.VRMenuPositioningMethod, positioningMethods, IM_ARRAYSIZE(positioningMethods));
-			const char* attachModes[] = { "HMD Only", "Controller Only", "Both", "None (Desktop Only)" };
-			int attachModeInt = static_cast<int>(settings.attachMode);
-			if (ImGui::Combo("Attach Mode", &attachModeInt, attachModes, IM_ARRAYSIZE(attachModes))) {
-				settings.attachMode = static_cast<VR::Settings::OverlayAttachMode>(attachModeInt);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Use 'None (Desktop Only)' to hide the VR menu and keep the menu only on desktop.");
-			}
+			ImGui::TextWrapped("The headset menu opens 2.25 metres ahead at eye height. It remains vertical and turns to face you.");
 			const char* menuOverlayPaths[] = { "Auto", "IVROverlay", "In-scene" };
 			int menuOverlayPath = static_cast<int>(settings.menuOverlayPath);
 			if (ImGui::Combo("Menu Overlay Path", &menuOverlayPath, menuOverlayPaths, IM_ARRAYSIZE(menuOverlayPaths))) {
@@ -2392,45 +2411,6 @@ namespace
 				ImGui::Text("Auto uses in-scene for OpenComposite, IVROverlay for SteamVR when available.");
 				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
 				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
-			}
-
-			// Controller-specific settings (only show when controller mode is active)
-			if (settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
-				settings.attachMode == VR::Settings::OverlayAttachMode::Both) {
-				const char* attachControllers[] = { "Primary Controller", "Secondary Controller" };
-				int attachControllerInt = static_cast<int>(settings.VRMenuAttachController);
-				if (ImGui::Combo("Attach to Controller", &attachControllerInt, attachControllers, IM_ARRAYSIZE(attachControllers))) {
-					settings.VRMenuAttachController = static_cast<ControllerDevice>(attachControllerInt);
-				}
-
-				ImGui::Separator();
-				ImGui::Text("Controller Offset Settings");
-				ImGui::SliderFloat("Controller Offset X", &settings.VRMenuControllerOffsetX, -2.0f, 2.0f, "%.2f");
-				ImGui::SliderFloat("Controller Offset Y", &settings.VRMenuControllerOffsetY, -2.0f, 2.0f, "%.2f");
-				ImGui::SliderFloat("Controller Offset Z", &settings.VRMenuControllerOffsetZ, -2.0f, 2.0f, "%.2f");
-			}
-
-			// HMD-specific settings (only show when HMD mode is active)
-			if (settings.attachMode == VR::Settings::OverlayAttachMode::HMDOnly ||
-				settings.attachMode == VR::Settings::OverlayAttachMode::Both) {
-				ImGui::Separator();
-				ImGui::Text("HMD Offset Settings");
-				ImGui::SliderFloat("HMD Offset X", &settings.VRMenuOffsetX, -2.0f, 2.0f, "%.2f");
-				ImGui::SliderFloat("HMD Offset Y", &settings.VRMenuOffsetY, -2.0f, 2.0f, "%.2f");
-				ImGui::SliderFloat("HMD Offset Z", &settings.VRMenuOffsetZ, -2.0f, 2.0f, "%.2f");
-			}
-
-			// Fixed World Position: show auto reset distance and manual reset button
-			if (settings.VRMenuPositioningMethod == 1) {  // 1 = Fixed World Position
-				ImGui::Separator();
-				ImGui::Text("Fixed World Position Settings");
-				ImGui::SliderFloat("Auto Reset Distance (game units)", &settings.VRMenuAutoResetDistance, 100.0f, 5000.0f, "%.0f");
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("If you move farther than this distance from the menu, it will automatically reset to your HMD position. %s", Util::Units::FormatDistance(settings.VRMenuAutoResetDistance).c_str());
-				}
-				if (ImGui::Button("Reset Menu to HMD Position")) {
-					vr.SetFixedOverlayToCurrentHMD();
-				}
 			}
 		}
 	}
@@ -2454,29 +2434,6 @@ namespace
 			ImGui::SliderFloat("Mouse Speed", &settings.mouseSpeed, 0.1f, 50.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Speed multiplier for CSX menu cursor movement while Mouse Navigation is active.");
-			}
-		}
-	}
-
-	void DrawDragSettings()
-	{
-		auto& vr = globals::features::vr;
-		if (!vr.openVRInfo.isCompatible)
-			return;
-		VR::Settings& settings = vr.settings;
-		if (ImGui::CollapsingHeader("Drag Settings")) {
-			if (ImGui::CollapsingHeader("Drag Instructions")) {
-				ImGui::TextWrapped("Overlay Positioning (Grip + Drag):");
-				ImGui::BulletText("Fixed World Position: Any controller can drag (HMD-only mode) or attached controller only (Both modes)");
-				ImGui::BulletText("HMD Relative: Any controller can drag (HMD-only mode) or attached controller only (Both modes)");
-				ImGui::BulletText("Controller Attached: Only the opposite hand can drag the controller overlay");
-			}
-			ImGui::Checkbox("Enable drag to reposition overlays", &settings.EnableDragToReposition);
-			ImGui::BeginDisabled(!settings.EnableDragToReposition);
-			ImGui::ColorEdit4("Drag Highlight Color", settings.dragHighlightColor.data());
-			ImGui::EndDisabled();
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Color used to highlight draggable overlays in VR.");
 			}
 		}
 	}
@@ -3411,6 +3368,11 @@ namespace
 				ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 200.0f);
 				ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 				ImGui::TableHeadersRow();
+				const auto controllerName = [](ControllerDevice a_controller) {
+					return a_controller == ControllerDevice::Primary ? "Primary" :
+					       a_controller == ControllerDevice::Secondary ? "Secondary" :
+					                                                    "None";
+				};
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
@@ -3427,6 +3389,45 @@ namespace
 				ImGui::Text("Wand Pointing Active");
 				ImGui::TableSetColumnIndex(1);
 				ImGui::Text("%s", vr.CanUseWandPointing() ? "Yes" : "No");
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("Active Hand");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("%s", controllerName(vr.activeWandController));
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("Captured Hand");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("%s", controllerName(vr.capturedWandController));
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("Aim Pose Source");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("%s", vr.wandState.usingOCUAimPose ? "OCU OpenXR aim via render-model tip" : "Raw controller pose fallback");
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("Aim Pitch Trim");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("%+.1f degrees", settings.WandAimPitchTrimDegrees);
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("Surface Source");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("%s", vr.wandState.usingPresentedSurface ? "Presented world-space vertices" : "Reconstructed startup/legacy fallback");
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("Hand Intersections");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text(
+					"Primary: %s | Secondary: %s",
+					vr.wandHandStates[0].isIntersecting ? "Hit" : "Miss",
+					vr.wandHandStates[1].isIntersecting ? "Hit" : "Miss");
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
@@ -3482,6 +3483,15 @@ namespace
 // VR-SPECIFIC PUBLIC API
 //=============================================================================
 
+bool VR::UseFixedWorldMenuPositioning() const
+{
+	// Fixed-world mode uses OpenVR's standing tracking space, which is already
+	// available at the Skyrim main menu. The first valid HMD pose establishes a
+	// recoverable anchor; subsequent updates preserve translation and change yaw
+	// only, so the menu faces the player without following the headset.
+	return VRMenuPositioningPolicy::UseFixedWorld(settings.VRMenuPositioningMethod);
+}
+
 void VR::UpdateVROverlayPosition()
 {
 	Util::OpenVRContext ctx(true);
@@ -3505,13 +3515,14 @@ void VR::UpdateVROverlayPosition()
 	float offsetY = settings.VRMenuOffsetY;
 	float offsetZ = settings.VRMenuOffsetZ;
 
-	static int lastPositioningMethod = -1;
-	bool justSwitchedToFixed = (lastPositioningMethod != 1 && settings.VRMenuPositioningMethod == 1);
-	lastPositioningMethod = settings.VRMenuPositioningMethod;
+	const bool useFixedWorldPositioning = UseFixedWorldMenuPositioning();
+	static bool lastUsedFixedWorldPositioning = false;
+	bool justSwitchedToFixed = !lastUsedFixedWorldPositioning && useFixedWorldPositioning;
+	lastUsedFixedWorldPositioning = useFixedWorldPositioning;
 
 	// Handle HMD positioning
 	if (showOnHMD) {
-		if (settings.VRMenuPositioningMethod == 0) {
+		if (!useFixedWorldPositioning) {
 			// HMD Relative positioning
 			// Use a tracked-device-relative transform so the runtime owns the final head
 			// motion application. That avoids the subtle frame-to-frame instability from
@@ -3528,29 +3539,12 @@ void VR::UpdateVROverlayPosition()
 			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * settings.VRMenuScale);
 		}
 
-		if (settings.VRMenuPositioningMethod == 1) {
+		if (useFixedWorldPositioning) {
 			// Fixed World Position
-			// Cache player position once per frame
-			RE::NiPoint3 playerPos = savedPlayerWorldPos;
-			auto player = RE::PlayerCharacter::GetSingleton();
-			if (player) {
-				playerPos = player->GetPosition();
-			}
-
 			if (justSwitchedToFixed) {
 				SetFixedOverlayToCurrentHMD();
-				// Save player position when switching to Fixed World Position
-				savedPlayerWorldPos = playerPos;
 			}
-
-			// --- Auto reset logic using player world position ---
-			float sqDist = playerPos.GetSquaredDistance(savedPlayerWorldPos);
-			float thresholdSq = settings.VRMenuAutoResetDistance * settings.VRMenuAutoResetDistance;
-			if (sqDist > thresholdSq) {
-				SetFixedOverlayToCurrentHMD();
-				// Update saved position after reset
-				savedPlayerWorldPos = playerPos;
-			}
+			UpdateFixedWorldPositioning();
 
 			// Scale the overlay based on width/height (same as relative HMD mode)
 			vr::HmdMatrix34_t fixedTransform = Util::MatrixToHmdMatrix34(fixedWorldOverlayPosition.m);
@@ -3797,15 +3791,30 @@ void VR::RecreateOverlayTexturesIfNeeded(bool needsControllerTexture)
 		return desc.Width == static_cast<UINT>(width) &&
 		       desc.Height == static_cast<UINT>(height) &&
 		       desc.ArraySize == 1 &&
-		       desc.MipLevels == 1;
+		       desc.MipLevels > 1 &&
+		       (desc.MiscFlags & D3D11_RESOURCE_MISC_GENERATE_MIPS) != 0;
 	};
 
 	if (!isTextureValid(menuTexture.get(), menuRTV.get(), kHMDOverlayWidth, kHMDOverlayHeight)) {
+		menuSamplingSRV = nullptr;
+		inSceneResources.menuSRV = nullptr;
+		inSceneResources.cachedMenuTexture = nullptr;
 		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kHMDOverlayWidth, kHMDOverlayHeight, menuTexture.put(), menuRTV.put());
+	}
+	if (menuTexture && !menuSamplingSRV &&
+		FAILED(globals::d3d::device->CreateShaderResourceView(menuTexture.get(), nullptr, menuSamplingSRV.put()))) {
+		logger::error("VR: Failed to create mipmapped HMD menu texture SRV");
 	}
 
 	if (needsControllerTexture && !isTextureValid(menuControllerTexture.get(), menuControllerRTV.get(), kOverlayWidth, kOverlayHeight)) {
+		menuControllerSamplingSRV = nullptr;
+		inSceneResources.menuControllerSRV = nullptr;
+		inSceneResources.cachedMenuControllerTexture = nullptr;
 		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuControllerTexture.put(), menuControllerRTV.put());
+	}
+	if (needsControllerTexture && menuControllerTexture && !menuControllerSamplingSRV &&
+		FAILED(globals::d3d::device->CreateShaderResourceView(menuControllerTexture.get(), nullptr, menuControllerSamplingSRV.put()))) {
+		logger::error("VR: Failed to create mipmapped controller menu texture SRV");
 	}
 }
 
@@ -3825,6 +3834,7 @@ void VR::HideAllOverlays(vr::IVROverlay* gameOverlay)
 
 void VR::HideOverlaysIfPresent()
 {
+	InvalidatePresentedMenuSurfaces();
 	ReleaseMenuDesktopWindowManagement();
 
 	if (!openVRInfo.isCompatible || !openVRInfo.hasOverlayInterface) {
@@ -3997,11 +4007,12 @@ void VR::SubmitOverlayFrame()
 
 	UpdateMenuDesktopWindowManagement(menuJustOpened);
 
-	// In fixed-world mode, recenter once on menu open using current HMD pose,
-	// then keep it world-locked for the rest of the session.
+	// Re-anchor on every open. If the runtime has not published a valid HMD pose
+	// yet (notably at the Skyrim main menu), the first render pose completes it.
 	if (menuJustOpened &&
 		settings.VRMenuPositioningMethod == 1 &&
 		(settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both)) {
+		fixedWorldOverlayReanchorRequested = true;
 		SetFixedOverlayToCurrentHMD();
 		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 			savedPlayerWorldPos = player->GetPosition();
@@ -4041,8 +4052,6 @@ void VR::SubmitOverlayFrame()
 	}
 
 	if (shouldRenderOverlay && wantsAnyVROverlay && (useInSceneOverlay || canUseIVROverlay) && hasRequiredTextures) {
-		// Update drag logic only when overlay is active
-		UpdateOverlayDrag();
 		ID3D11RenderTargetView* oldRTV = nullptr;
 		globals::d3d::context->OMGetRenderTargets(1, &oldRTV, nullptr);
 		float clearColor[4] = { 0, 0, 0, 0 };
@@ -4091,6 +4100,12 @@ void VR::SubmitOverlayFrame()
 				ImGui_ImplDX11_RenderDrawData(renderDrawData);
 			}
 			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
+			ID3D11ShaderResourceView* mipSRV = targetOverlayType == OverlayType::HMD ?
+			                                      menuSamplingSRV.get() :
+			                                      menuControllerSamplingSRV.get();
+			if (mipSRV) {
+				globals::d3d::context->GenerateMips(mipSRV);
+			}
 		};
 
 		renderImGuiToTexture(menuRTV.get(), OverlayType::HMD);
@@ -4103,28 +4118,15 @@ void VR::SubmitOverlayFrame()
 			(controllerTextureUsedByIVROverlay || controllerTextureUsedByInScene);
 		if (shouldRenderControllerTexture) {
 			renderImGuiToTexture(menuControllerRTV.get(), OverlayType::Controller);
-
-			const bool controllerBeingDragged =
-				overlayDragState.dragging &&
-				overlayDragState.mode == OverlayDragState::DragMode::Controller;
-			Util::ApplyHighlightTintToTexture(menuControllerTexture.get(), controllerBeingDragged, settings.dragHighlightColor);
 		}
 
 		if (useInSceneOverlay) {
 			// The submit hook renders menuTexture into each eye. Keep the legacy
 			// IVROverlay handles hidden or the menu appears twice with a stereo offset.
-			const bool overlayBeingDragged = settings.EnableDragToReposition && overlayDragState.dragging;
-			Util::ApplyHighlightTintToTexture(menuTexture.get(), overlayBeingDragged, settings.dragHighlightColor);
 			UpdateFixedWorldPositioning();
 			HideAllOverlays(gameOverlay);
 		} else {
 			bool vrOverlayPresented = false;
-			// Apply highlight tint to HMD overlay if it's being dragged
-			bool hmdBeingDragged = settings.EnableDragToReposition && overlayDragState.dragging &&
-			                       (overlayDragState.mode == OverlayDragState::DragMode::HMD ||
-									   overlayDragState.mode == OverlayDragState::DragMode::FixedWorld);
-			Util::ApplyHighlightTintToTexture(menuTexture.get(), hmdBeingDragged, settings.dragHighlightColor);
-
 			// Update overlay position and submit to SteamVR
 			UpdateVROverlayPosition();
 			vr::Texture_t tex = { menuTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };

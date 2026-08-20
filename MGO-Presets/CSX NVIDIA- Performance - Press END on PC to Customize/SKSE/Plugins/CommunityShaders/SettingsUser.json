@@ -249,7 +249,7 @@
         "VRMenuControllerOffsetZ": 0.20000000298023224,
         "VRMenuOffsetX": 0.25999999046325684,
         "VRMenuOffsetY": -0.03999999910593033,
-        "VRMenuOffsetZ": -0.768750011920929,
+        "VRMenuOffsetZ": -2.25,
         "VRMenuOpenKeys": [
             {
                 "Device": "Primary",
@@ -261,7 +261,7 @@
             }
         ],
         "VRMenuPositioningMethod": 1,
-        "VRMenuScale": 1.0,
+        "VRMenuScale": 2.0,
         "VROverlayCloseKeys": [],
         "VROverlayOpenKeys": [],
         "attachMode": 0,

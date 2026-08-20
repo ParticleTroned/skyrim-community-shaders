@@ -519,12 +519,13 @@ namespace Util
 		D3D11_TEXTURE2D_DESC desc = {};
 		desc.Width = width;
 		desc.Height = height;
-		desc.MipLevels = 1;
+		desc.MipLevels = 0;
 		desc.ArraySize = 1;
 		desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		desc.SampleDesc.Count = 1;
 		desc.Usage = D3D11_USAGE_DEFAULT;
 		desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
 		HRESULT hr = device->CreateTexture2D(&desc, nullptr, outTex);
 		if (FAILED(hr)) {

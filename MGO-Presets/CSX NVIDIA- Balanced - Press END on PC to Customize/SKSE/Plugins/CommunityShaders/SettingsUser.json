@@ -1,6 +1,6 @@
 {
     "VR": {
-        "VRMenuScale": 1.0,
+        "VRMenuScale": 2.0,
         "VRMenuPositioningMethod": 1,
         "EnableDynamicCubemapFoveation": true,
         "attachMode": 0,
@@ -11,7 +11,7 @@
         "menuOverlayPath": 0,
         "VRMenuAutoResetDistance": 1000.0,
         "StereoBlendColorThreshold": 0.019999999552965164,
-        "VRMenuOffsetZ": -0.768750011920929,
+        "VRMenuOffsetZ": -2.25,
         "VRMenuControllerOffsetZ": 0.20000000298023224,
         "VRMenuAttachController": 1,
         "EnableWetternessFoveation": true,

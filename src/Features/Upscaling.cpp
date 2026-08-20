@@ -44071,35 +44071,6 @@ void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 
 	bool firstEmergencyRequest = false;
 	{
-		const std::scoped_lock lock(vrRenderScalePhysicalMutationMutex);
-		if (vrRenderScalePostMutationSerializationEpoch.load(
-				std::memory_order_acquire) != mutation.serializationEpoch ||
-			vrRenderScaleTerminalFailureSignaled.load(
-				std::memory_order_acquire)) {
-			return;
-		}
-		if (!vrRenderScaleEmergencyRecoveryRequested.load(
-				std::memory_order_acquire)) {
-			vrRenderScaleEmergencyRecoveryRequested.store(
-				true,
-				std::memory_order_release);
-			const auto currentPhase =
-				vrRenderScalePostMutationProgressPhase.load(
-					std::memory_order_acquire);
-			if (currentPhase <
-				VRVendorRelatchPolicy::PostMutationProgressPhase::EmergencyRecoveryRequested) {
-				vrRenderScalePostMutationProgressPhase.store(
-					VRVendorRelatchPolicy::PostMutationProgressPhase::EmergencyRecoveryRequested,
-					std::memory_order_release);
-				vrRenderScalePostMutationLastProgressTickMs.store(
-					std::max<uint64_t>(currentTickMs, 1u),
-					std::memory_order_release);
-			}
-			firstEmergencyRequest = true;
-		}
-	}
-
-	{
 		// Pending-check, recovery creation/publication, and request publication are
 		// one queue transaction. This prevents an older watchdog service turn from
 		// overwriting the recovery epoch installed by a newer load. Once the
@@ -44108,13 +44079,28 @@ void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 		// diagnostic only unless typed device-loss/unsafe-table evidence exists.
 		const std::scoped_lock queueLock(
 			perfModeRenderTargetRecreateQueueMutex);
+		{
+			const std::scoped_lock physicalLock(
+				vrRenderScalePhysicalMutationMutex);
+			if (vrRenderScalePostMutationSerializationEpoch.load(
+					std::memory_order_acquire) != mutation.serializationEpoch ||
+				vrRenderScaleTerminalFailureSignaled.load(
+					std::memory_order_acquire)) {
+				return;
+			}
+		}
+
+		bool recoveryRequestPublished = false;
 		if (VRVendorRelatchPolicy::CanQueuePostMutationEmergencyRecovery(
 				pendingPerfModeRenderTargetRecreate.load(
 					std::memory_order_acquire),
 				vrRenderScalePostMutationEmergencyAttemptConsumed.load(
+					std::memory_order_acquire),
+				vrRenderScaleEmergencyRecoveryRequested.load(
 					std::memory_order_acquire))) {
 			if (IsOpenCompositeUpscalingBlocked()) {
-				(void)EnsureVRRenderScaleProviderNeutralNativeRecovery(
+				recoveryRequestPublished =
+					EnsureVRRenderScaleProviderNeutralNativeRecovery(
 					"bounded Open Composite post-mutation recovery",
 					true);
 			} else {
@@ -44130,6 +44116,36 @@ void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 						recoverySnapshot.valid && recoverySnapshot.active ?
 							std::addressof(recoverySnapshot) :
 							nullptr);
+					recoveryRequestPublished =
+						pendingPerfModeRenderTargetRecreate.load(
+							std::memory_order_acquire) &&
+						pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(
+							std::memory_order_acquire) == recoveryEpoch;
+				}
+			}
+			if (recoveryRequestPublished) {
+				const std::scoped_lock physicalLock(
+					vrRenderScalePhysicalMutationMutex);
+				if (vrRenderScalePostMutationSerializationEpoch.load(
+						std::memory_order_acquire) == mutation.serializationEpoch &&
+					!vrRenderScaleTerminalFailureSignaled.load(
+						std::memory_order_acquire) &&
+					!vrRenderScaleEmergencyRecoveryRequested.exchange(
+						true,
+						std::memory_order_acq_rel)) {
+					const auto currentPhase =
+						vrRenderScalePostMutationProgressPhase.load(
+							std::memory_order_acquire);
+					if (currentPhase <
+						VRVendorRelatchPolicy::PostMutationProgressPhase::EmergencyRecoveryRequested) {
+						vrRenderScalePostMutationProgressPhase.store(
+							VRVendorRelatchPolicy::PostMutationProgressPhase::EmergencyRecoveryRequested,
+							std::memory_order_release);
+						vrRenderScalePostMutationLastProgressTickMs.store(
+							std::max<uint64_t>(currentTickMs, 1u),
+							std::memory_order_release);
+					}
+					firstEmergencyRequest = true;
 				}
 			}
 		}

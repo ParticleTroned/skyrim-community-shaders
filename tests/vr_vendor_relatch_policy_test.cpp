@@ -1528,12 +1528,20 @@ namespace
 			PostMutationRecoveryAction::AttemptOnce) {
 			return false;
 		}
-		if (!CanQueuePostMutationEmergencyRecovery(false, false) ||
-			CanQueuePostMutationEmergencyRecovery(true, false) ||
-			CanQueuePostMutationEmergencyRecovery(false, true) ||
-			CanQueuePostMutationEmergencyRecovery(true, true)) {
+		if (!CanQueuePostMutationEmergencyRecovery(false, false, false) ||
+			CanQueuePostMutationEmergencyRecovery(true, false, false) ||
+			CanQueuePostMutationEmergencyRecovery(false, true, false) ||
+			CanQueuePostMutationEmergencyRecovery(true, true, false) ||
+			CanQueuePostMutationEmergencyRecovery(true, false, true) ||
+			CanQueuePostMutationEmergencyRecovery(false, true, true) ||
+			CanQueuePostMutationEmergencyRecovery(true, true, true)) {
 			return false;
 		}
+		// Reproduce the post-load loop: consuming the queue clears pending before
+		// submit-stage stabilization can consume the emergency creator attempt. The
+		// already-published recovery must still suppress another physical relatch.
+		if (CanQueuePostMutationEmergencyRecovery(false, false, true))
+			return false;
 
 		for (std::uint32_t bit = 0; bit < 8; ++bit) {
 			auto blocked = state;

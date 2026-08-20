@@ -1532,9 +1532,16 @@ namespace VRVendorRelatchPolicy
 
 	[[nodiscard]] constexpr bool CanQueuePostMutationEmergencyRecovery(
 		bool a_requestPending,
-		bool a_emergencyAttemptConsumed) noexcept
+		bool a_emergencyAttemptConsumed,
+		bool a_emergencyRecoveryRequested) noexcept
 	{
-		return !a_requestPending && !a_emergencyAttemptConsumed;
+		// One recovery request owns the complete serialized mutation chain. The
+		// queue-ready flag clears when its consumer starts, before presentation can
+		// collect stable stereo evidence, so it cannot by itself prevent a second
+		// request from being published during that stabilization window.
+		return !a_requestPending &&
+		       !a_emergencyAttemptConsumed &&
+		       !a_emergencyRecoveryRequested;
 	}
 
 	struct PostLoadRecoveryStableFallbackOwnership

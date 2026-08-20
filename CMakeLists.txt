@@ -1531,6 +1531,21 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_menu_positioning_policy_test.cpp
     )
 
+    add_executable(
+        api_service_foundation_test
+        EXCLUDE_FROM_ALL
+        tests/api_service_foundation_test.cpp
+        src/Api/ServiceFoundation.cpp
+    )
+    target_compile_features(api_service_foundation_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_service_foundation_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(api_service_foundation_test PRIVATE nlohmann_json::nlohmann_json)
+    add_test(NAME ApiServiceFoundation COMMAND api_service_foundation_test)
+    set_tests_properties(ApiServiceFoundation PROPERTIES LABELS "ControllerTests")
+
     add_custom_target(
         controller_tests
         DEPENDS
@@ -1545,6 +1560,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test
+            api_service_foundation_test
     )
 endif()
 

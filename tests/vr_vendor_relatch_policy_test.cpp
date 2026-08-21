@@ -1475,6 +1475,141 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversPostLoadVendorTeardownOnlyAdmission()
+	{
+		PostLoadVendorTeardownAdmission highPressure{
+			.phase = PostLoadVendorTeardownPhase::Idle,
+			.deadlineExpired = true,
+			.attemptConsumed = false,
+			.physicalMutationStarted = false,
+			.recoveryOwned = true,
+			.loadingSerialOwned = true,
+			.recoveryRelatch = true,
+			.reducedDLSSContract = true,
+			.stableDLSSContractExisted = true,
+			.stableVendorResourcesTruthful = false,
+			.destroysDLSSResources = true,
+			.destroysOtherVendorResources = false,
+			.preservesStablePresentationResources = false,
+			.cleanupAndTrimComplete = true,
+			.retirementReady = true,
+			.memorySampleFresh = true,
+			.highGPUPressure = true,
+			.pressureAcceptable = false,
+			.gpuHeadroomSufficient = false,
+			.projectedSystemCommitSafe = true,
+			.deviceHealthy = true,
+			.noRecentOutOfMemory = true,
+		};
+		if (SelectPostLoadVendorTeardownAction(highPressure) !=
+			PostLoadVendorTeardownAction::BeginTeardown) {
+			return false;
+		}
+
+		auto draining = highPressure;
+		draining.phase = PostLoadVendorTeardownPhase::Draining;
+		draining.attemptConsumed = true;
+		draining.retirementReady = false;
+		draining.memorySampleFresh = false;
+		if (SelectPostLoadVendorTeardownAction(draining) !=
+			PostLoadVendorTeardownAction::ContinueTeardown) {
+			return false;
+		}
+
+		auto released = highPressure;
+		released.phase = PostLoadVendorTeardownPhase::Released;
+		released.attemptConsumed = true;
+		released.destroysDLSSResources = false;
+		if (SelectPostLoadVendorTeardownAction(released) !=
+			PostLoadVendorTeardownAction::WaitForCreatorAdmission) {
+			return false;
+		}
+		released.highGPUPressure = false;
+		released.pressureAcceptable = true;
+		released.gpuHeadroomSufficient = true;
+		if (SelectPostLoadVendorTeardownAction(released) !=
+			PostLoadVendorTeardownAction::AdmitCreator) {
+			return false;
+		}
+
+		// The release exception must remain inactive in every neighboring context:
+		// startup/menu/door work, FSR/native targets, truthful stable contracts,
+		// mixed-provider teardown, incomplete cleanup, unsafe commit, and stale owners.
+		for (std::uint32_t bit = 0; bit < 17; ++bit) {
+			auto excluded = highPressure;
+			switch (bit) {
+			case 0:
+				excluded.deadlineExpired = false;
+				break;
+			case 1:
+				excluded.attemptConsumed = true;
+				break;
+			case 2:
+				excluded.physicalMutationStarted = true;
+				break;
+			case 3:
+				excluded.recoveryOwned = false;
+				break;
+			case 4:
+				excluded.loadingSerialOwned = false;
+				break;
+			case 5:
+				excluded.recoveryRelatch = false;
+				break;
+			case 6:
+				excluded.reducedDLSSContract = false;
+				break;
+			case 7:
+				excluded.stableDLSSContractExisted = false;
+				break;
+			case 8:
+				excluded.stableVendorResourcesTruthful = true;
+				break;
+			case 9:
+				excluded.destroysDLSSResources = false;
+				break;
+			case 10:
+				excluded.destroysOtherVendorResources = true;
+				break;
+			case 11:
+				excluded.preservesStablePresentationResources = true;
+				break;
+			case 12:
+				excluded.cleanupAndTrimComplete = false;
+				break;
+			case 13:
+				excluded.retirementReady = false;
+				break;
+			case 14:
+				excluded.memorySampleFresh = false;
+				break;
+			case 15:
+				excluded.highGPUPressure = false;
+				break;
+			case 16:
+				excluded.projectedSystemCommitSafe = false;
+				break;
+			default:
+				return false;
+			}
+			if (SelectPostLoadVendorTeardownAction(excluded) !=
+				PostLoadVendorTeardownAction::Inactive) {
+				return false;
+			}
+		}
+
+		auto unhealthy = highPressure;
+		unhealthy.deviceHealthy = false;
+		if (SelectPostLoadVendorTeardownAction(unhealthy) !=
+			PostLoadVendorTeardownAction::Inactive) {
+			return false;
+		}
+		auto afterOOM = highPressure;
+		afterOOM.noRecentOutOfMemory = false;
+		return SelectPostLoadVendorTeardownAction(afterOOM) ==
+		       PostLoadVendorTeardownAction::Inactive;
+	}
+
 	constexpr bool CoversPostLoadRecoveryStableFallbackOwnership()
 	{
 		PostLoadRecoveryStableFallbackOwnership owner{
@@ -2392,6 +2527,7 @@ namespace
 	static_assert(CoversDeferredDispatchSelection());
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
+	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
 	static_assert(CoversBoundedPostMutationRecovery());
 	static_assert(CoversRelatchRetryPacing());

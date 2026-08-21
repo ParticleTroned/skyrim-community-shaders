@@ -1278,6 +1278,110 @@ namespace VRVendorRelatchPolicy
 		return PostLoadRecoveryDeadlineAction::RetainStableContract;
 	}
 
+	enum class PostLoadVendorTeardownPhase : std::uint8_t
+	{
+		Idle,
+		Draining,
+		Released
+	};
+
+	enum class PostLoadVendorTeardownAction : std::uint8_t
+	{
+		Inactive,
+		BeginTeardown,
+		ContinueTeardown,
+		WaitForCreatorAdmission,
+		AdmitCreator
+	};
+
+	struct PostLoadVendorTeardownAdmission
+	{
+		PostLoadVendorTeardownPhase phase =
+			PostLoadVendorTeardownPhase::Idle;
+		bool deadlineExpired = false;
+		bool attemptConsumed = false;
+		bool physicalMutationStarted = false;
+		bool recoveryOwned = false;
+		bool loadingSerialOwned = false;
+		bool recoveryRelatch = false;
+		bool reducedDLSSContract = false;
+		bool stableDLSSContractExisted = false;
+		bool stableVendorResourcesTruthful = false;
+		bool destroysDLSSResources = false;
+		bool destroysOtherVendorResources = false;
+		bool preservesStablePresentationResources = false;
+		bool cleanupAndTrimComplete = false;
+		bool retirementReady = false;
+		bool memorySampleFresh = false;
+		bool highGPUPressure = false;
+		bool pressureAcceptable = false;
+		bool gpuHeadroomSufficient = false;
+		bool projectedSystemCommitSafe = false;
+		bool deviceHealthy = false;
+		bool noRecentOutOfMemory = false;
+	};
+
+	// A reduced DLSS post-load recovery can otherwise deadlock when its creator
+	// admission needs GPU headroom that is still occupied by the invalid previous
+	// vendor generation. Allow that exact owner to perform only the memory-releasing
+	// teardown first. Allocation remains behind every ordinary creator gate.
+	[[nodiscard]] constexpr PostLoadVendorTeardownAction SelectPostLoadVendorTeardownAction(
+		const PostLoadVendorTeardownAdmission& a_state) noexcept
+	{
+		const bool exactRecoveryOwner =
+			a_state.recoveryOwned && a_state.loadingSerialOwned;
+		const bool exactTeardownTarget =
+			a_state.deadlineExpired &&
+			exactRecoveryOwner &&
+			!a_state.physicalMutationStarted &&
+			a_state.recoveryRelatch &&
+			a_state.reducedDLSSContract &&
+			a_state.stableDLSSContractExisted &&
+			!a_state.stableVendorResourcesTruthful &&
+			(a_state.destroysDLSSResources ||
+				a_state.phase == PostLoadVendorTeardownPhase::Released) &&
+			!a_state.destroysOtherVendorResources &&
+			!a_state.preservesStablePresentationResources;
+		if (!exactTeardownTarget)
+			return PostLoadVendorTeardownAction::Inactive;
+
+		if (a_state.phase == PostLoadVendorTeardownPhase::Draining) {
+			return a_state.attemptConsumed && a_state.deviceHealthy ?
+			           PostLoadVendorTeardownAction::ContinueTeardown :
+			           PostLoadVendorTeardownAction::Inactive;
+		}
+
+		const bool creatorAdmissionReady =
+			a_state.cleanupAndTrimComplete &&
+			a_state.retirementReady &&
+			a_state.memorySampleFresh &&
+			a_state.pressureAcceptable &&
+			a_state.gpuHeadroomSufficient &&
+			a_state.projectedSystemCommitSafe &&
+			a_state.deviceHealthy &&
+			a_state.noRecentOutOfMemory;
+		if (a_state.phase == PostLoadVendorTeardownPhase::Released) {
+			if (!a_state.attemptConsumed)
+				return PostLoadVendorTeardownAction::Inactive;
+			return creatorAdmissionReady ?
+			           PostLoadVendorTeardownAction::AdmitCreator :
+			           PostLoadVendorTeardownAction::WaitForCreatorAdmission;
+		}
+
+		const bool teardownOnlyAdmissionReady =
+			!a_state.attemptConsumed &&
+			a_state.cleanupAndTrimComplete &&
+			a_state.retirementReady &&
+			a_state.memorySampleFresh &&
+			a_state.highGPUPressure &&
+			a_state.projectedSystemCommitSafe &&
+			a_state.deviceHealthy &&
+			a_state.noRecentOutOfMemory;
+		return teardownOnlyAdmissionReady ?
+		           PostLoadVendorTeardownAction::BeginTeardown :
+		           PostLoadVendorTeardownAction::Inactive;
+	}
+
 	[[nodiscard]] constexpr bool HasElapsedMonotonicDeadline(
 		std::uint64_t a_startTickMs,
 		std::uint64_t a_currentTickMs,

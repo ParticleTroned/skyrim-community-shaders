@@ -763,6 +763,8 @@ public:
 		bool settleDeadlineExpired = false;
 		bool timedAttemptConsumed = false;
 		bool timedAttemptInProgress = false;
+		VRVendorRelatchPolicy::PostLoadVendorTeardownPhase vendorTeardownPhase =
+			VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Idle;
 		bool engineTargetCreateEntered = false;
 		bool relatchAdmitted = false;
 		bool cleanupDeferredUntilStable = false;

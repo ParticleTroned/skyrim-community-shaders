@@ -23695,6 +23695,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	bool physicalMutationBoundaryEntered = false;
 	bool reconciledPhysicalMutation = false;
 	bool timedPostLoadRecoveryAttempt = false;
+	bool preMutationDLSSVendorTeardownAttempt = false;
+	bool creatorAdmissionAfterDLSSVendorTeardown = false;
 	bool postMutationEmergencyRecoveryAttempt = false;
 	uint64_t postMutationEmergencyAttemptEpoch = 0;
 	VRRenderScaleProfileSnapshot targetResourceProfile{};
@@ -23719,6 +23721,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		if (!recovery.engineTargetCreateEntered) {
 			recovery.engineTargetCreateEntered = true;
 			recovery.timedAttemptInProgress = false;
+			recovery.vendorTeardownPhase =
+				VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Idle;
 			++vrRenderScaleTransitionController.revision;
 		}
 	});
@@ -25186,6 +25190,63 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				.deviceHealthy = !IsSubmitStageDeviceLost(),
 				.noRecentOutOfMemory = !recentOutOfMemoryFailure,
 			});
+		const bool stableDLSSContractExisted =
+			stableVendorContractMatchesBoot &&
+			previousBootWasActiveDLSS &&
+			controllerForPhysicalReuse.stable.method == UpscaleMethod::kDLSS;
+		const bool stableVendorResourcesTruthful =
+			stableDLSSContractExisted &&
+			HasTruthfulStableVRVendorResources(
+				controllerForPhysicalReuse.stable);
+		const auto vendorTeardownAction =
+			VRVendorRelatchPolicy::SelectPostLoadVendorTeardownAction({
+				.phase = postLoadRecoveryAtAdmission.vendorTeardownPhase,
+				.deadlineExpired =
+					postLoadRecoveryOwned &&
+					postLoadRecoveryAtAdmission.settleDeadlineExpired,
+				.attemptConsumed =
+					postLoadRecoveryAtAdmission.timedAttemptConsumed,
+				.physicalMutationStarted =
+					postLoadRecoveryAtAdmission.engineTargetCreateEntered,
+				.recoveryOwned = exactPostLoadRecoveryOwned,
+				.loadingSerialOwned = postLoadLoadingSerialOwned,
+				.recoveryRelatch =
+					!rc94PostLoadDoorRelatch &&
+					relatchOrigin == VRUpscalingTransitionOrigin::RecoveryRelatch,
+				.reducedDLSSContract =
+					relatchTargetRenderScaleActive &&
+					relatchUpscaleMethod == UpscaleMethod::kDLSS &&
+					previousBootWasActiveDLSS,
+				.stableDLSSContractExisted = stableDLSSContractExisted,
+				.stableVendorResourcesTruthful =
+					stableVendorResourcesTruthful,
+				.destroysDLSSResources =
+					relatchPlan.destroyDLSSResources,
+				.destroysOtherVendorResources =
+					relatchPlan.destroyFSRResources,
+				.preservesStablePresentationResources =
+					relatchPlan.preserveStablePresentationResources,
+				.cleanupAndTrimComplete = postLoadCleanupAndTrimComplete,
+				.retirementReady = postLoadRetirementReady,
+				.memorySampleFresh =
+					memoryAtAdmission.valid &&
+					memoryAtAdmission.sampleFrame == state->frameCount &&
+					memoryAtAdmission.systemCommitValid,
+				.highGPUPressure =
+					memoryAtAdmission.pressure ==
+					VRRenderScaleMemoryPressure::High,
+				.pressureAcceptable =
+					memoryAtAdmission.pressure ==
+						VRRenderScaleMemoryPressure::Normal ||
+					memoryAtAdmission.pressure ==
+						VRRenderScaleMemoryPressure::Elevated,
+				.gpuHeadroomSufficient =
+					!insufficientHeadroom &&
+					!relatchPlan.projectedResidencyDeferred,
+				.projectedSystemCommitSafe = projectedSystemCommitSafe,
+				.deviceHealthy = !IsSubmitStageDeviceLost(),
+				.noRecentOutOfMemory = !recentOutOfMemoryFailure,
+			});
 		const auto postMutation =
 			GetVRRenderScalePhysicalMutationSnapshot();
 		relatchPlan.emergencySystemCommitGuardActive =
@@ -25306,14 +25367,91 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				relatchPlan.emergencySystemCommitReserveBytes /
 					kVRRenderScaleMiB);
 		}
+		if (vendorTeardownAction ==
+				VRVendorRelatchPolicy::PostLoadVendorTeardownAction::BeginTeardown &&
+			postMutation.serializationEpoch == 0) {
+			bool claimed = false;
+			{
+				const std::scoped_lock loadingOwnerLock(
+					g_vrLoadingMenuGateReconciliationMutex,
+					g_vrLoadingTransitionSerialMutex);
+				const uint64_t currentLoadingSerial =
+					g_vrLoadingTransitionSerial.load(std::memory_order_relaxed);
+				std::scoped_lock controllerLock(
+					vrRenderScaleTransitionControllerMutex);
+				auto& recovery =
+					vrRenderScaleTransitionController.postLoadRecovery;
+				if (recovery.active &&
+					recovery.recoveryEpoch == postLoadRecoveryEpoch &&
+					recovery.transitionEpoch == relatchEpoch &&
+					recovery.loadingSerial == currentLoadingSerial &&
+					recovery.settleDeadlineExpired &&
+					!recovery.timedAttemptConsumed &&
+					recovery.vendorTeardownPhase ==
+						VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Idle) {
+					recovery.timedAttemptConsumed = true;
+					recovery.timedAttemptInProgress = true;
+					recovery.vendorTeardownPhase =
+						VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Draining;
+					claimed = true;
+					++vrRenderScaleTransitionController.revision;
+				}
+			}
+			if (!claimed) {
+				requeueRelatch(
+					kVRRenderScalePostLoadSettleRetryFrames,
+					false,
+					VRRenderScaleRetryKind::Other);
+				return false;
+			}
+			preMutationDLSSVendorTeardownAttempt = true;
+			relatchPlan.pressureCleanupRequired = false;
+			relatchPlan.pressureDeferred = false;
+			logger::warn(
+				"[VRRenderScale][PostLoad] High GPU pressure blocked the exact reduced-DLSS recovery; beginning vendor teardown-only phase before creator admission. epoch={} recoveryEpoch={} usage={} MiB headroom={} MiB estimatedAdditional={} MiB.",
+				relatchEpoch,
+				postLoadRecoveryEpoch,
+				memoryAtAdmission.currentUsageBytes / kVRRenderScaleMiB,
+				memoryAtAdmission.headroomBytes / kVRRenderScaleMiB,
+				relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB);
+		}
+		if (vendorTeardownAction ==
+				VRVendorRelatchPolicy::PostLoadVendorTeardownAction::ContinueTeardown &&
+			postMutation.serializationEpoch == 0) {
+			preMutationDLSSVendorTeardownAttempt = true;
+			relatchPlan.pressureCleanupRequired = false;
+			relatchPlan.pressureDeferred = false;
+		}
+		if (vendorTeardownAction ==
+				VRVendorRelatchPolicy::PostLoadVendorTeardownAction::WaitForCreatorAdmission &&
+			postMutation.serializationEpoch == 0) {
+			if (!RecordVRRenderScaleRelatchPlan(relatchPlan)) {
+				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+				return false;
+			}
+			requeueRelatch(
+				kVRRenderScalePostLoadSettleRetryFrames,
+				false,
+				VRRenderScaleRetryKind::Pressure);
+			return false;
+		}
+		if (vendorTeardownAction ==
+				VRVendorRelatchPolicy::PostLoadVendorTeardownAction::AdmitCreator &&
+			postMutation.serializationEpoch == 0) {
+			creatorAdmissionAfterDLSSVendorTeardown = true;
+		}
 		if (deadlineAction ==
 				VRVendorRelatchPolicy::PostLoadRecoveryDeadlineAction::RetainStableContract &&
+			vendorTeardownAction ==
+				VRVendorRelatchPolicy::PostLoadVendorTeardownAction::Inactive &&
 			postMutation.serializationEpoch == 0) {
 			return retainStableContractAfterExpiredPostLoadRecovery(
 				"deadline admission failed conservative safety checks");
 		}
 		if (deadlineAction ==
 				VRVendorRelatchPolicy::PostLoadRecoveryDeadlineAction::WaitForClaimedAttempt &&
+			vendorTeardownAction ==
+				VRVendorRelatchPolicy::PostLoadVendorTeardownAction::Inactive &&
 			postMutation.serializationEpoch == 0) {
 			// The one logical attempt remains owned, but fresh safety gates may
 			// temporarily close while its vendor drain is pending. Waiting must not
@@ -25627,7 +25765,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const uint64_t retirementSerialBeforeVendorReset =
 			vrIntermediateRetirementLastIssuedSerial.load(std::memory_order_acquire);
 		const auto vendorResetResult =
-			(lowPeakNativeRestoreCleanupCompleted ||
+			(creatorAdmissionAfterDLSSVendorTeardown ||
+				lowPeakNativeRestoreCleanupCompleted ||
 				preserveStablePresentationResourcesForRelatch) ?
 				VRVendorResourceResetResult::Ready :
 				ResetVRVendorRuntimeResources(
@@ -25728,6 +25867,49 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					logger::warn("[VRRenderScale] Render-target relatch stopped after terminal vendor resource teardown failure.");
 				loggedRelatchVendorDefer = true;
 			}
+			return false;
+		}
+		if (preMutationDLSSVendorTeardownAttempt) {
+			bool released = false;
+			{
+				const std::scoped_lock loadingOwnerLock(
+					g_vrLoadingMenuGateReconciliationMutex,
+					g_vrLoadingTransitionSerialMutex);
+				const uint64_t currentLoadingSerial =
+					g_vrLoadingTransitionSerial.load(std::memory_order_relaxed);
+				std::scoped_lock controllerLock(
+					vrRenderScaleTransitionControllerMutex);
+				auto& recovery =
+					vrRenderScaleTransitionController.postLoadRecovery;
+				if (recovery.active &&
+					recovery.recoveryEpoch == postLoadRecoveryEpoch &&
+					recovery.transitionEpoch == relatchEpoch &&
+					recovery.loadingSerial == currentLoadingSerial &&
+					recovery.timedAttemptConsumed &&
+					recovery.timedAttemptInProgress &&
+					recovery.vendorTeardownPhase ==
+						VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Draining) {
+					recovery.vendorTeardownPhase =
+						VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Released;
+					released = true;
+					++vrRenderScaleTransitionController.revision;
+				}
+			}
+			if (!released) {
+				requeueRelatch(
+					kVRUpscalingTransitionApplyDelayFrames,
+					false,
+					VRRenderScaleRetryKind::Other);
+				return false;
+			}
+			logger::warn(
+				"[VRRenderScale][PostLoad] Exact-owner DLSS vendor teardown completed; creator allocation remains gated by fresh GPU and system-memory admission. epoch={} recoveryEpoch={}.",
+				relatchEpoch,
+				postLoadRecoveryEpoch);
+			requeueRelatch(
+				kVRRenderScalePostLoadSettleRetryFrames,
+				false,
+				VRRenderScaleRetryKind::Pressure);
 			return false;
 		}
 		if ((lowPeakNativeRestoreRelatch || epochOwnedNativeRestore) &&
@@ -47439,6 +47621,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 								  { "settleTimeoutUsed", controller.postLoadRecovery.settleTimeoutUsed },
 								  { "timedAttemptConsumed", controller.postLoadRecovery.timedAttemptConsumed },
 								  { "timedAttemptInProgress", controller.postLoadRecovery.timedAttemptInProgress },
+								  { "vendorTeardownPhase", std::string{ magic_enum::enum_name(controller.postLoadRecovery.vendorTeardownPhase) } },
 								  { "relatchAdmitted", controller.postLoadRecovery.relatchAdmitted },
 								  { "cleanupDeferredUntilStable", controller.postLoadRecovery.cleanupDeferredUntilStable } } },
 		{ "resourcePlan", { { "valid", relatchPlan.valid },

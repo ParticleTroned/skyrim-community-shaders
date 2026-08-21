@@ -1,5 +1,6 @@
-#include "Deferred.h"
+#include "Api/ServiceRegistryProvider.h"
 #include "BuildProvenance.h"
+#include "Deferred.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
@@ -37,6 +38,14 @@ namespace
 		errors.push_back(std::move(errorMessage));
 	}
 
+	void CommunityShadersAPIMessageHandler(SKSE::MessagingInterface::Message* a_message)
+	{
+		// Preserve the legacy CSAP handler exactly while exposing the parallel
+		// versioned CSXR registry through the same SKSE listener.
+		CSPluginAPI::ModMessageHandler(a_message);
+		CSX::Api::HandleServiceRegistryMessage(a_message);
+	}
+
 	bool RegisterCommunityShadersAPIMessageListener()
 	{
 		auto messaging = SKSE::GetMessagingInterface();
@@ -45,12 +54,13 @@ namespace
 			return false;
 		}
 
-		if (!messaging->RegisterListener(nullptr, CSPluginAPI::ModMessageHandler)) {
+		CSX::Api::InitializeServiceRegistryProvider();
+		if (!messaging->RegisterListener(nullptr, CommunityShadersAPIMessageHandler)) {
 			PushStartupError("Failed to register CSX API message listener. Check CommunityShaders.log for details.");
 			return false;
 		}
 
-		logger::info("Registered CSX API message listener during PostLoad");
+		logger::info("Registered legacy CSAP and versioned CSXR API message listener during PostLoad");
 		return true;
 	}
 

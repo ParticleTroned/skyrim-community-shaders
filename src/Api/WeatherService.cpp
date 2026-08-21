@@ -314,7 +314,7 @@ namespace
 				.available = RE::TESDataHandler::GetSingleton() && state ? 1u : 0u,
 				.skyAvailable = sky ? 1u : 0u,
 				.stateRevision = revision,
-				.capabilities = kCapabilities,
+				.capabilities = CSX::WeatherAPI::ServiceCapabilities,
 				.transitionActive = current.lastWeather && current.lerpFactor < 1.0f ? 1u : 0u,
 				.transitionFactor = current.lerpFactor,
 				.weatherLocked = editor->IsWeatherLocked() ? 1u : 0u,

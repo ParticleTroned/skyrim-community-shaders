@@ -5,9 +5,11 @@ The native upscaling contract is declared in
 through the CSX service registry; it does not extend or replace the legacy
 `ICSInterface001` vtable.
 
-This branch defines and tests the ABI and its validation rules. It deliberately
-does not register a placeholder service. Registration must happen only when the
-domain adapter can return truthful snapshots and exact mutation outcomes.
+This branch defines, tests, and registers a live runtime-only provider. The
+provider is registered during CSX service-registry initialization only after
+its process-lifetime function table exists. It reports live renderer state and
+uses the upscaling controller's explicit apply result; no placeholder or
+optimistic success response is published.
 
 ## Contract identity
 
@@ -103,9 +105,10 @@ unsupported. The result reports both:
 The distinction prevents a valid loading-door handoff from hiding the fact
 that a loading transition exists.
 
-`ApplyProfile` copies every input before returning. It performs validation,
-revision comparison, preflight, loading-door admission, and immutable request
-publication within the domain controller's synchronization boundary. It then
+`ApplyProfile` copies every input before returning. It performs validation and
+preflight before admission. The queued main-thread transaction repeats the
+revision comparison and admission checks immediately before immutable request
+publication, closing the advisory-preflight race. It then
 returns exactly one disposition:
 
 - rejected (with status and conditions);
@@ -157,43 +160,62 @@ through `eventId`.
 
 Every function-table entry is callable from any thread, retains no caller
 pointer, and throws no exception across the DLL boundary. The adapter copies
-inputs, reads published immutable snapshots, and schedules game/render-thread
-work internally. It must not expose game objects, renderer pointers, STL
-containers, RTTI objects, or internal loading-door tokens.
+inputs and schedules state collection and controller access on the game main
+thread. Synchronous inspection/preflight calls have a bounded five-second wait;
+failure to obtain the main thread is reported as `kServiceUnavailable`.
+Mutation returns an operation receipt and performs renderer work asynchronously.
+The ABI exposes no game objects, renderer pointers, STL containers, RTTI
+objects, or internal loading-door tokens.
 
 Returned structures are caller-sized. The provider checks `structSize` before
 writing. Strings in requests are borrowed only for the duration of the call.
 The interface and its context have process lifetime, matching registry rules.
 
-## Provider implementation boundary
+## Live provider boundary
 
 The implementation should be split into three layers:
 
 1. **Domain controller** — the sole owner of admission, immutable transition
-   requests, state revision, physical convergence, and persistence-after-stable.
+   requests, exact apply disposition, and physical convergence.
 2. **Native adapter** — validates ABI structures, copies inputs, maps domain
-   snapshots/results, maintains command receipts, and exposes the event cursor.
-3. **DevBench adapter** — uses the same controller receipts and snapshots in
-   JSON form; it must not infer acceptance by comparing pending request IDs.
+   snapshots/results, publishes the monotonic API revision, maintains bounded
+   command receipts, and exposes the bounded event cursor.
+3. **DevBench adapter** — uses the same explicit controller apply result in
+   JSON form and no longer infers acceptance by comparing pending request IDs.
+
+The command journal retains at most 1,024 keys for one hour and atomically
+reserves a key before preflight. An identical concurrent call receives
+`kBusy` until the original receipt is ready; a different request using that
+key receives `kIdempotencyConflict`. The event journal retains 4,096 events and
+pages at most 500 at a time.
+
+Persistence remains deliberately unavailable in ABI 1.0. The provider does
+not advertise persistent mutation, does not claim a persisted profile, and
+rejects `kPersistWhenStable` with the persistence-unavailable condition. That
+capability can be added only when save-on-stable and durable-state tracking are
+truthful.
 
 Legacy CSAP methods can later delegate to the controller while retaining their
 existing ABI and observable compatibility behaviour. They must not become the
 implementation underneath the v1 adapter.
 
-## Integration sequence
+## Implemented integration sequence
 
-1. Add a controller-native `Inspect`, `Preflight`, and `Apply` result type with
-   explicit disposition and operation ID.
-2. Publish one monotonic state revision whenever any exposed profile,
-   transition, capability availability, dimension, or persistence fact changes.
-3. Add command receipt retention and a bounded per-process event journal.
-4. Implement the native adapter and register `csx.upscaling` only after all
-   inspection calls and runtime-only mutation paths are truthful.
-5. Advertise persistent mutation only after save-on-stable and persisted-state
-   tracking are tested.
-6. Move DevBench apply/status onto the same controller contract.
-7. Route legacy setters through compatibility translations last, preserving
-   their current public ABI.
+1. The controller returns explicit rejected, no-change, synchronous, queued,
+   deferred, or coalesced outcomes with its request and transition identifiers.
+2. The adapter publishes one monotonic state revision whenever exposed domain
+   profiles, transition state, active admitted operation, capability
+   availability, or dimensions change. A command reservation which has not yet
+   entered the renderer controller does not manufacture a state revision.
+3. Command receipt retention and a bounded per-process event journal are live.
+4. The native adapter registers `csx.upscaling` with truthful inspection and
+   runtime-only mutation paths.
+5. DevBench apply uses the exact controller receipt.
+6. Legacy entry points retain their existing calls and observable compatibility
+   behaviour while ignoring the additive result value.
+
+Persistent mutation remains the explicit next capability boundary, not an
+implicit part of runtime apply.
 
 Frame generation, Reflex, foveated dispatch, and sharpening remain outside the
 v1 transition profile. They have different safety, lifecycle, and persistence

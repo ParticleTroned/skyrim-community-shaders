@@ -296,7 +296,7 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
-	struct CSUtilitySettings
+	struct AdaptiveBalanceSettings
 	{
 		float skyBrightness;
 		float directionalLightMult;
@@ -400,7 +400,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
-		CSUtilitySettings csUtilitySettings;
+		AdaptiveBalanceSettings adaptiveBalanceSettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		TruePBRSettings truePBRSettings;

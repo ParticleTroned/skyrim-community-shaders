@@ -24,11 +24,16 @@ namespace SettingsMigrations
 		"linearOmnidirectionalBulbMult"
 	};
 
+	// Checks whether a JSON value has the same deserializable shape as a default
+	// value. Number types are intentionally interchangeable because the settings
+	// serializers accept both integral and floating-point representations.
+	bool MatchesJsonSchema(const nlohmann::json& a_value, const nlohmann::json& a_schema);
+
 	// Migrates one root-settings source layer in place. The old Adaptive Brightness
 	// root is folded into Adaptive Balance, with explicit values under the new name
 	// taking precedence. Legacy CS Utility renderer fields are then moved into the
 	// canonical root. The CS Utility enabled value is retained for DOF and copied to
-	// the renderer gate only when that layer is demonstrably legacy and explicitly
+	// the global-lighting gate only when that layer is demonstrably legacy and explicitly
 	// contains the value.
 	bool MigrateAdaptiveBalanceRootLayer(nlohmann::json& a_layer);
 

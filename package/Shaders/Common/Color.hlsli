@@ -36,15 +36,15 @@ cbuffer LLPerGeometry : register(b8)
 };
 #endif
 
-#if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
-#	if defined(CS_UTILITY_WATER_POINT_LIGHT_DATA)
-cbuffer CSUtilityPerGeometry : register(b7)
+#if defined(PSHADER) && defined(ADAPTIVE_BALANCE) && (defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
+#	if defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA)
+cbuffer AdaptiveBalancePerGeometry : register(b7)
 #	else
-cbuffer CSUtilityPerGeometry : register(b3)
+cbuffer AdaptiveBalancePerGeometry : register(b3)
 #	endif
 {
-	uint4 CSUtilityPointLightFlags0;
-	uint4 CSUtilityPointLightFlags1;
+	uint4 AdaptiveBalancePointLightFlags0;
+	uint4 AdaptiveBalancePointLightFlags1;
 };
 #endif
 
@@ -227,20 +227,20 @@ namespace Color
 	{
 		return Light(color, isLinear) *
 		       ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		       SharedData::csUtilitySettings.directionalLightMult;
+		       SharedData::adaptiveBalanceSettings.directionalLightMult;
 	}
 
 	float GetPointLightMultiplier(bool isLinear)
 	{
-		return isLinear ? SharedData::csUtilitySettings.linearPointLightMult : SharedData::csUtilitySettings.pointLightMult;
+		return isLinear ? SharedData::adaptiveBalanceSettings.linearPointLightMult : SharedData::adaptiveBalanceSettings.pointLightMult;
 	}
 
 	float GetPointLightTypeMultiplier(bool isLinear, uint lightFlags)
 	{
 		if ((lightFlags & PointLightFlagSpot) != 0)
-			return isLinear ? SharedData::csUtilitySettings.linearSpotlightMult : SharedData::csUtilitySettings.spotlightMult;
+			return isLinear ? SharedData::adaptiveBalanceSettings.linearSpotlightMult : SharedData::adaptiveBalanceSettings.spotlightMult;
 		if ((lightFlags & PointLightFlagOmnidirectionalBulb) != 0)
-			return isLinear ? SharedData::csUtilitySettings.linearOmnidirectionalBulbMult : SharedData::csUtilitySettings.omnidirectionalBulbMult;
+			return isLinear ? SharedData::adaptiveBalanceSettings.linearOmnidirectionalBulbMult : SharedData::adaptiveBalanceSettings.omnidirectionalBulbMult;
 		return 1.0f;
 	}
 
@@ -259,14 +259,14 @@ namespace Color
 
 	uint GetVanillaPointLightFlags(uint lightIndex)
 	{
-#	if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
+#	if defined(PSHADER) && defined(ADAPTIVE_BALANCE) && (defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
 		if (lightIndex >= MaxVanillaPointLightFlags)
 			return 0;
 
 		// Keep both ternary operands in range. The legacy HLSL compiler evaluates
 		// both vector indices while unrolling Water's literal local-light loop.
 		const uint componentIndex = lightIndex % PackedPointLightFlagVectorSize;
-		return lightIndex < PackedPointLightFlagVectorSize ? CSUtilityPointLightFlags0[componentIndex] : CSUtilityPointLightFlags1[componentIndex];
+		return lightIndex < PackedPointLightFlagVectorSize ? AdaptiveBalancePointLightFlags0[componentIndex] : AdaptiveBalancePointLightFlags1[componentIndex];
 #	else
 		return 0;
 #	endif

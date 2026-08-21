@@ -8,6 +8,7 @@
 #include "Features/Upscaling.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/D3D.h"
 
 #pragma comment(lib, "dxguid.lib")
 
@@ -114,6 +115,14 @@ namespace FrameAnnotations
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)
 				globals::state->BeginPerfEvent("{} Draw", BuildEventName(EffectType));
+
+			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
+			              EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade) {
+				// Image-space setup may replace PS constant buffers. Refresh the active
+				// profile and rebind b5/b6 immediately before the consuming draw.
+				globals::state->UpdateFeatureData(true);
+				Util::BindSharedDataConstantBuffersForPS(globals::d3d::context);
+			}
 
 			func(imageSpaceShader, shape, param);
 

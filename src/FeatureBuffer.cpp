@@ -2,7 +2,6 @@
 
 #include "Features/AdaptiveBrightness.h"
 #include "Features/Bloom.h"
-#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
@@ -44,7 +43,7 @@ namespace
 	using TerrainVariationSettingsCB = TerrainVariation::Settings;
 	using IBLSettingsCB = IBL::CommonBufferData;
 	using ExtendedTranslucencySettingsCB = ExtendedTranslucency::PerFrame;
-	using CSUtilitySettingsCB = CSUtility::PerFrameData;
+	using AdaptiveBalanceSettingsCB = AdaptiveBrightness::PerFrameData;
 	using LinearLightingSettingsCB = LinearLighting::PerFrameData;
 	using TerrainBlendingSettingsCB = TerrainBlending::Settings;
 	using TruePBRSettingsCB = TruePBR::Settings;
@@ -68,7 +67,7 @@ namespace
 		TerrainVariationSettingsCB terrainVariationSettings;
 		IBLSettingsCB iblSettings;
 		ExtendedTranslucencySettingsCB extendedTranslucencySettings;
-		CSUtilitySettingsCB csUtilitySettings;
+		AdaptiveBalanceSettingsCB adaptiveBalanceSettings;
 		LinearLightingSettingsCB linearLightingSettings;
 		TerrainBlendingSettingsCB terrainBlendingSettings;
 		TruePBRSettingsCB truePBRSettings;
@@ -91,7 +90,7 @@ namespace
 		TerrainVariationSettingsCB,
 		IBLSettingsCB,
 		ExtendedTranslucencySettingsCB,
-		CSUtilitySettingsCB,
+		AdaptiveBalanceSettingsCB,
 		LinearLightingSettingsCB,
 		TerrainBlendingSettingsCB,
 		TruePBRSettingsCB,
@@ -116,7 +115,7 @@ namespace
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
-	static_assert(sizeof(CSUtilitySettingsCB) == 32);
+	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 32);
 	static_assert(sizeof(LinearLightingSettingsCB) == 112);
 	static_assert(offsetof(LinearLightingSettingsCB, enableAdaptiveBrightnessColorAdjustments) == 100);
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
@@ -158,10 +157,10 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, terrainVariationSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, iblSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, extendedTranslucencySettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB));
-	static_assert(offsetof(FeatureDataLayout, csUtilitySettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB));
-	static_assert(offsetof(FeatureDataLayout, linearLightingSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB));
-	static_assert(offsetof(FeatureDataLayout, terrainBlendingSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB) + sizeof(LinearLightingSettingsCB));
-	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB) + sizeof(CSUtilitySettingsCB) + sizeof(LinearLightingSettingsCB) + sizeof(TerrainBlendingSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, adaptiveBalanceSettings) == sizeof(GrassLightingSettingsCB) + sizeof(ExtendedMaterialsSettingsCB) + sizeof(DynamicCubemapsSettingsCB) + sizeof(TerrainShadowsSettingsCB) + sizeof(LightLimitFixSettingsCB) + sizeof(WetnessEffectsSettingsCB) + sizeof(WetternessSettingsCB) + sizeof(SkylightingSettingsCB) + sizeof(CloudShadowsSettingsCB) + sizeof(LODBlendingSettingsCB) + sizeof(HairSpecularSettingsCB) + sizeof(TerrainVariationSettingsCB) + sizeof(IBLSettingsCB) + sizeof(ExtendedTranslucencySettingsCB));
+	static_assert(offsetof(FeatureDataLayout, linearLightingSettings) == offsetof(FeatureDataLayout, adaptiveBalanceSettings) + sizeof(AdaptiveBalanceSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, terrainBlendingSettings) == offsetof(FeatureDataLayout, linearLightingSettings) + sizeof(LinearLightingSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == offsetof(FeatureDataLayout, terrainBlendingSettings) + sizeof(TerrainBlendingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
@@ -222,7 +221,7 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::terrainVariation.settings,
 		globals::features::ibl.GetCommonBufferData(),
 		globals::features::extendedTranslucency.GetCommonBufferData(),
-		globals::features::csUtility.GetCommonBufferData(),
+		globals::features::adaptiveBrightness.GetCommonBufferData(),
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::truePBR.settings,

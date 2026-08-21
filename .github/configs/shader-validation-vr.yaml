@@ -39,7 +39,7 @@ file_common_defines:
         CSHADER: *id001
         PSHADER: &id003
             - CLOUD_SHADOWS
-            - CS_UTILITY
+            - ADAPTIVE_BALANCE
             - DYNAMIC_CUBEMAPS
             - ENABLESSR
             - IBL
@@ -100,7 +100,7 @@ file_common_defines:
         PSHADER:
             - CLOUD_SHADOWS
             - CS_HAIR
-            - CS_UTILITY
+            - ADAPTIVE_BALANCE
             - DYNAMIC_CUBEMAPS
             - EXTENDED_MATERIALS
             - EXTENDED_TRANSLUCENCY
@@ -123,7 +123,7 @@ file_common_defines:
         VSHADER:
             - CLOUD_SHADOWS
             - CS_HAIR
-            - CS_UTILITY
+            - ADAPTIVE_BALANCE
             - DYNAMIC_CUBEMAPS
             - EXTENDED_MATERIALS
             - EXTENDED_TRANSLUCENCY
@@ -179,7 +179,7 @@ file_common_defines:
         CSHADER: *id001
         PSHADER: &id006
             - CLOUD_SHADOWS
-            - CS_UTILITY
+            - ADAPTIVE_BALANCE
             - DYNAMIC_CUBEMAPS
             - FOG
             - IBL
@@ -11923,7 +11923,7 @@ shaders:
           PSHADER:
               common_defines: &id474
                   - CLOUD_SHADOWS
-                  - CS_UTILITY
+                  - ADAPTIVE_BALANCE
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS
@@ -11948,7 +11948,7 @@ shaders:
           VSHADER:
               common_defines: &id475
                   - CLOUD_SHADOWS
-                  - CS_UTILITY
+                  - ADAPTIVE_BALANCE
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS
@@ -12194,7 +12194,7 @@ shaders:
               common_defines:
                   - CLOUD_SHADOWS
                   - CS_HAIR
-                  - CS_UTILITY
+                  - ADAPTIVE_BALANCE
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS
@@ -16539,7 +16539,7 @@ shaders:
               common_defines:
                   - CLOUD_SHADOWS
                   - CS_HAIR
-                  - CS_UTILITY
+                  - ADAPTIVE_BALANCE
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS
@@ -20199,7 +20199,7 @@ shaders:
           PSHADER:
               common_defines:
                   - CLOUD_SHADOWS
-                  - CS_UTILITY
+                  - ADAPTIVE_BALANCE
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS
@@ -22776,7 +22776,7 @@ shaders:
           VSHADER:
               common_defines:
                   - CLOUD_SHADOWS
-                  - CS_UTILITY
+                  - ADAPTIVE_BALANCE
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS

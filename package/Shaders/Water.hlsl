@@ -64,9 +64,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/MotionBlur.hlsli"
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
-#	define CS_UTILITY_WATER_POINT_LIGHT_DATA
+#	define ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA
 #	include "Common/Color.hlsli"
-#	undef CS_UTILITY_WATER_POINT_LIGHT_DATA
+#	undef ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA
 
 #	define WATER
 

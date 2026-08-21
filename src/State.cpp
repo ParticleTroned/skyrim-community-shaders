@@ -1032,13 +1032,6 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		}
 
-		if (globals::features::adaptiveBrightness.loaded && !globals::features::csUtility.loaded) {
-			globals::features::adaptiveBrightness.loaded = false;
-			globals::features::adaptiveBrightness.failedLoadedMessage =
-				"Adaptive Balance requires CS Utility renderer support. Resolve the CS Utility load issue, then restart.";
-			logger::warn("Adaptive Balance was disabled because its CSUtility renderer dependency is unavailable");
-		}
-
 		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
 
 		const auto currentVersion = std::string{ Plugin::VERSION_LABEL };
@@ -1912,14 +1905,19 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		sharedDataCB->Update(data);
 	}
 
-	{
-		const auto [data, size] = GetFeatureBufferData(a_inWorld);
-
-		featureDataCB->Update(data, size);
-	}
+	UpdateFeatureData(a_inWorld);
 
 	auto* srv = Util::GetCurrentSceneDepthSRV(true);
 	globals::d3d::context->PSSetShaderResources(17, 1, &srv);
+}
+
+void State::UpdateFeatureData(bool a_inWorld)
+{
+	if (!featureDataCB)
+		return;
+
+	const auto [data, size] = GetFeatureBufferData(a_inWorld);
+	featureDataCB->Update(data, size);
 }
 
 void State::ClearDisabledFeatures()

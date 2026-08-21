@@ -142,7 +142,13 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
-			RegisterCommunityShadersAPIMessageListener();
+			if (RegisterCommunityShadersAPIMessageListener()) {
+				// The public registry and upscaling service are ready now. Register the
+				// diagnostic adapter before PostPostLoad cache validation and shader
+				// compilation so automation can inspect/preflight a troubled startup
+				// instead of waiting behind kDataLoaded.
+				CSX::Api::UpscalingDevBenchBridge::Install();
+			}
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
@@ -204,7 +210,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
-				CSX::Api::UpscalingDevBenchBridge::Install();
 			}
 
 			break;

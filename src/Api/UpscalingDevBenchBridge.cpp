@@ -464,6 +464,8 @@ namespace
 			UpscalingAPI::Capabilities001 value;
 			const auto status = api->GetCapabilities(api->context, &value);
 			output["status"] = Named(status);
+			if (status != UpscalingAPI::Status::kSuccess)
+				return output;
 			output["capabilities"] = {
 				{ "revision", value.revision },
 				{ "runtime", Named(value.runtime) },
@@ -488,7 +490,8 @@ namespace
 			UpscalingAPI::Snapshot001 value;
 			const auto status = api->GetSnapshot(api->context, &value);
 			output["status"] = Named(status);
-			output["snapshot"] = Snapshot(value);
+			if (status == UpscalingAPI::Status::kSuccess)
+				output["snapshot"] = Snapshot(value);
 			return output;
 		}
 
@@ -501,6 +504,12 @@ namespace
 			UpscalingAPI::PreflightResult001 result;
 			const auto status = api->PreflightProfile(api->context, &request, &result);
 			output["status"] = Named(status);
+			if (status == UpscalingAPI::Status::kServiceUnavailable ||
+				status == UpscalingAPI::Status::kInvalidArgument ||
+				status == UpscalingAPI::Status::kStructureTooSmall ||
+				status == UpscalingAPI::Status::kInternalError) {
+				return output;
+			}
 			output["preflight"] = {
 				{ "evaluatedStateRevision", result.evaluatedStateRevision },
 				{ "decision", Named(result.decision) },
@@ -538,6 +547,8 @@ namespace
 			UpscalingAPI::ApplyResult001 result;
 			const auto callStatus = api->ApplyProfile(api->context, &request, &result);
 			output["status"] = Named(callStatus);
+			if (result.status != callStatus)
+				return output;
 			output["apply"] = {
 				{ "resultStatus", Named(result.status) },
 				{ "disposition", Named(result.disposition) },
@@ -561,6 +572,8 @@ namespace
 			UpscalingAPI::OperationSnapshot001 result;
 			const auto status = api->GetOperation(api->context, operationId, &result);
 			output["status"] = Named(status);
+			if (status != UpscalingAPI::Status::kSuccess)
+				return output;
 			output["operation"] = {
 				{ "operationId", result.operationId },
 				{ "state", Named(result.state) },
@@ -585,6 +598,9 @@ namespace
 			std::vector<UpscalingAPI::Event001> events(query.limit);
 			UpscalingAPI::EventPage001 page;
 			const auto status = api->ReadEvents(api->context, &query, events.data(), static_cast<std::uint32_t>(events.size()), &page);
+			output["status"] = Named(status);
+			if (status != UpscalingAPI::Status::kSuccess)
+				return output;
 			json values = json::array();
 			for (std::uint32_t i = 0; i < page.returnedEventCount && i < events.size(); ++i) {
 				const auto& event = events[i];
@@ -599,7 +615,6 @@ namespace
 					{ "observedConditions", Conditions(event.observedConditions) },
 				});
 			}
-			output["status"] = Named(status);
 			output["eventPage"] = {
 				{ "returnedEventCount", page.returnedEventCount },
 				{ "oldestRetainedEventId", page.oldestRetainedEventId },

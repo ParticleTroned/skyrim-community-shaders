@@ -16,4 +16,9 @@ namespace CSX::Api
 		UpscalingAPI::RequestPurpose a_purpose,
 		UpscalingAPI::PersistencePolicy a_persistence,
 		bool a_persistenceSupported) noexcept;
+
+	bool IsUpscalingRuntimeNoChange(
+		bool a_transitionActive,
+		bool a_effectiveMatches,
+		bool a_stableMatches) noexcept;
 }

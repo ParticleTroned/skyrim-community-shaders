@@ -43,4 +43,14 @@ namespace CSX::Api
 		decision.route = AdmissionRoute::kLoadingDoorHandoff;
 		return decision;
 	}
+
+	bool IsUpscalingRuntimeNoChange(
+		bool a_transitionActive,
+		bool a_effectiveMatches,
+		bool a_stableMatches) noexcept
+	{
+		return !a_transitionActive &&
+		       a_effectiveMatches &&
+		       a_stableMatches;
+	}
 }

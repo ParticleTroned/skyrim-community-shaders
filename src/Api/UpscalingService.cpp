@@ -314,8 +314,13 @@ namespace
 				std::lock_guard lock(mutex);
 				TrimLocked();
 				if (const auto found = commands.find(key); found != commands.end()) {
-					if (!found->second.signature.SameRequest(signature))
+					if (!found->second.signature.SameRequest(signature)) {
+						a_output = ApplyResult001{};
+						a_output.status = Status::kIdempotencyConflict;
+						a_output.disposition = ApplyDisposition::kRejected;
+						a_output.normalizedTarget = a_request.target;
 						return Status::kIdempotencyConflict;
+					}
 					a_output = found->second.result;
 					a_output.idempotentReplay = 1;
 					return found->second.ready ? found->second.status : Status::kBusy;
@@ -364,6 +369,14 @@ namespace
 			if (preflight.decision == PreflightDecision::kNoChange) {
 				receipt.status = Status::kSuccess;
 				receipt.disposition = ApplyDisposition::kNoChange;
+				{
+					std::lock_guard lock(mutex);
+					latestAdmittedTarget = signature.target;
+				}
+				if (RefreshFromAnyThread()) {
+					std::lock_guard lock(mutex);
+					receipt.resultingStateRevision = snapshot.stateRevision;
+				}
 				CompleteCommand(key, receipt.status, receipt);
 				a_output = receipt;
 				return Status::kSuccess;
@@ -489,6 +502,7 @@ namespace
 		std::deque<std::string> commandOrder;
 		std::unordered_map<std::uint64_t, LiveOperation> operations;
 		std::deque<Event001> events;
+		std::optional<Profile001> latestAdmittedTarget;
 
 		static Status GetCapabilitiesThunk(const void* a_context, Capabilities001* a_output) noexcept
 		{
@@ -683,7 +697,9 @@ namespace
 			return output;
 		}
 
-		Snapshot001 BuildSnapshot(const Upscaling::VRRenderScaleTransitionSnapshot& a_controller) const
+		Snapshot001 BuildSnapshot(
+			const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+			const std::optional<Profile001>& a_latestAdmittedTarget) const
 		{
 			auto& upscaling = globals::features::upscaling;
 			Snapshot001 output;
@@ -691,7 +707,7 @@ namespace
 			output.configured = MakeProfile(
 				upscaling.GetConfiguredUpscaleMethodForTransition(),
 				upscaling.settings.qualityMode,
-				upscaling.IsRenderScaleModeRequested(),
+				upscaling.settings.renderScaleMode != 0,
 				upscaling.settings.dlssPreset,
 				upscaling.settings.fsr4RuntimeEnable);
 			output.effective = MakeProfile(
@@ -722,6 +738,17 @@ namespace
 				output.renderEyeWidth = static_cast<std::uint32_t>(plan.engineRenderSize.x);
 				output.renderEyeHeight = static_cast<std::uint32_t>(plan.engineRenderSize.y);
 			}
+			const bool controllerSettled =
+				a_controller.state == Upscaling::VRRenderScaleTransitionState::Idle ||
+				a_controller.state == Upscaling::VRRenderScaleTransitionState::Active;
+			if (a_latestAdmittedTarget &&
+				controllerSettled &&
+				ProfilesEqual(output.effective, *a_latestAdmittedTarget) &&
+				((output.profilePresence & kProfileStable) == 0 ||
+					ProfilesEqual(output.stable, *a_latestAdmittedTarget))) {
+				output.profilePresence |= kProfileRequested;
+				output.requested = *a_latestAdmittedTarget;
+			}
 			output.transitionState = ToAPI(a_controller.state);
 			output.renderScaleStatus = ToAPI(upscaling.GetVRRenderScaleModeStatus());
 			output.observedConditions = TranslateBlockReasons(upscaling.GetVRUpscalingApplyBlockReasonsForAPI());
@@ -745,8 +772,13 @@ namespace
 		{
 			auto& upscaling = globals::features::upscaling;
 			const auto controller = upscaling.GetVRRenderScaleTransitionSnapshot();
+			std::optional<Profile001> admittedTarget;
+			{
+				std::lock_guard lock(mutex);
+				admittedTarget = latestAdmittedTarget;
+			}
 			auto nextCapabilities = BuildCapabilities();
-			auto nextSnapshot = BuildSnapshot(controller);
+			auto nextSnapshot = BuildSnapshot(controller, admittedTarget);
 
 			std::lock_guard lock(mutex);
 			if (capabilityRevision == 0 || !CapabilitiesEqual(capabilities, nextCapabilities))
@@ -840,13 +872,15 @@ namespace
 				return evaluation;
 			}
 
-			const bool configuredMatches = ProfilesEqual(currentSnapshot.configured, a_request.target);
 			const bool effectiveMatches = ProfilesEqual(currentSnapshot.effective, a_request.target);
 			const bool stableMatches =
 				(currentSnapshot.profilePresence & kProfileStable) == 0 ||
 				ProfilesEqual(currentSnapshot.stable, a_request.target);
 			const bool transitionActive = (currentSnapshot.flags & kSnapshotTransitionActive) != 0;
-			if (configuredMatches && effectiveMatches && stableMatches && !transitionActive) {
+			if (CSX::Api::IsUpscalingRuntimeNoChange(
+					transitionActive,
+					effectiveMatches,
+					stableMatches)) {
 				result.decision = PreflightDecision::kNoChange;
 				result.admissionRoute = AdmissionRoute::kDirect;
 			} else if (globals::game::isVR) {
@@ -944,6 +978,7 @@ namespace
 					break;
 				case Upscaling::UpscalingTransitionApplyDisposition::NoChange:
 				case Upscaling::UpscalingTransitionApplyDisposition::AppliedSynchronously:
+					latestAdmittedTarget = operation.command.target;
 					live.snapshot.state = OperationState::kCompleted;
 					live.snapshot.result = Status::kSuccess;
 					live.snapshot.flags |= kOperationPhysicalStateStable;
@@ -977,6 +1012,7 @@ namespace
 				if (a_controller.stable.valid && a_controller.stable.requestID == operation.rendererRequestId) {
 					next = OperationState::kCompleted;
 					matched = true;
+					latestAdmittedTarget = operation.command.target;
 					operation.snapshot.flags |= kOperationPhysicalStateStable;
 					operation.snapshot.effective = MakeProfile(a_controller.stable);
 				} else if (a_controller.applying.valid && a_controller.applying.requestID == operation.rendererRequestId) {

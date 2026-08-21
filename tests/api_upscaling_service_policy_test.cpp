@@ -63,6 +63,37 @@ int main()
 			PersistencePolicy::kPersistWhenStable,
 			true);
 		Check(persistenceSupported.blockingConditions == 0, "supported persistence blocked a valid loading handoff");
+
+		Check(
+			CSX::Api::IsUpscalingRuntimeNoChange(
+				false,
+				true,
+				true),
+			"a converged runtime-only target depended on the separate configured profile");
+		Check(
+			CSX::Api::IsUpscalingRuntimeNoChange(
+				false,
+				true,
+				true),
+			"a settled physical target depended on a historical controller request slot");
+		Check(
+			!CSX::Api::IsUpscalingRuntimeNoChange(
+				false,
+				false,
+				true),
+			"a divergent effective target was reported as no-change");
+		Check(
+			!CSX::Api::IsUpscalingRuntimeNoChange(
+				false,
+				true,
+				false),
+			"a divergent stable target was reported as no-change");
+		Check(
+			!CSX::Api::IsUpscalingRuntimeNoChange(
+				true,
+				true,
+				true),
+			"an active transition was reported as no-change");
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

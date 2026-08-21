@@ -76,7 +76,8 @@ do not need to reverse-engineer why DLSS or FSR4 is pending or unavailable.
 `GetSnapshot` returns one coherent read model and a monotonic `stateRevision`.
 The profile-presence mask says which profile copies are authoritative:
 
-- **configured**: current in-memory configuration;
+- **configured**: current in-memory configuration, without runtime gates such
+  as startup presentation or the master shader switch;
 - **requested**: latest admitted target;
 - **applying**: target whose physical work is in progress;
 - **effective**: logical backend and settings used for current dispatch;
@@ -104,6 +105,14 @@ unsupported. The result reports both:
 
 The distinction prevents a valid loading-door handoff from hiding the fact
 that a loading transition exists.
+
+For a runtime-only request, `no-change` means the effective and stable runtime
+profiles already agree with the target and no transition is active. It does
+not require the separate configured profile to match, or depend on a
+historical controller request slot: a runtime-only target may converge without
+rewriting the user's stored configuration source. A successfully admitted API
+target is then published as the latest requested profile once the controller
+is settled at that target.
 
 `ApplyProfile` copies every input before returning. It performs validation and
 preflight before admission. The queued main-thread transaction repeats the

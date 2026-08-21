@@ -214,6 +214,20 @@ implementation underneath the v1 adapter.
 6. Legacy entry points retain their existing calls and observable compatibility
    behaviour while ignoring the additive result value.
 
+When `DEVBENCH_BRIDGE` is enabled, `communityshaders.upscaling_api` is the
+runtime conformance surface for this contract. It deliberately obtains
+`Registry001` from the native provider and queries `csx.upscaling`; it does not
+call the domain controller directly. The tool exposes registry inventory,
+capabilities, snapshots, preflight, apply, operation lookup, and bounded event
+pages. Every response carries the loaded producer identity. `apply` additionally
+requires an exact `expectedBuildId` plus `clientId` and `commandId`, so automated
+mutation fails closed against an unintended DLL and remains replay-safe.
+
+The older `communityshaders.renderscale` DevBench tool remains available for
+controller diagnostics and compatibility. It is not evidence that the public
+registry/function-table ABI is working; conformance runs must use the public-ABI
+tool and may correlate its results with the older diagnostic surface.
+
 Persistent mutation remains the explicit next capability boundary, not an
 implicit part of runtime apply.
 

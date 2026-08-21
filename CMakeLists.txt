@@ -1648,6 +1648,22 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ApiServiceRegistry COMMAND api_service_registry_test)
     set_tests_properties(ApiServiceRegistry PROPERTIES LABELS "ControllerTests")
 
+    add_executable(
+        api_weather_service_policy_test
+        EXCLUDE_FROM_ALL
+        tests/api_weather_service_policy_test.cpp
+        src/Api/WeatherServicePolicy.cpp
+    )
+    target_compile_features(api_weather_service_policy_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_weather_service_policy_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME ApiWeatherServicePolicy COMMAND api_weather_service_policy_test)
+    set_tests_properties(ApiWeatherServicePolicy PROPERTIES LABELS "ControllerTests")
+
     add_custom_target(
         controller_tests
         DEPENDS
@@ -1665,6 +1681,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_menu_positioning_policy_test
             api_service_foundation_test
             api_service_registry_test
+            api_weather_service_policy_test
     )
 endif()
 

@@ -1,4 +1,6 @@
 #include "Api/ServiceRegistryProvider.h"
+#include "Api/WeatherDevBenchBridge.h"
+#include "Api/WeatherService.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -201,8 +203,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				CSX::Api::InitializeWeatherService();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
+				CSX::Api::WeatherDevBenchBridge::Install();
 			}
 
 			break;

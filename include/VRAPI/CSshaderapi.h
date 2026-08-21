@@ -67,6 +67,15 @@ namespace CSX::ShaderAPI
 		kCapabilityPreflightTokens = 1ull << 6
 	};
 
+	inline constexpr std::uint64_t ServiceCapabilities =
+		kCapabilitySnapshot |
+		kCapabilityFeatureCatalog |
+		kCapabilityRuntimeSettings |
+		kCapabilityPersistentFeatureState |
+		kCapabilityCacheLifecycle |
+		kCapabilityCompilationControl |
+		kCapabilityPreflightTokens;
+
 	struct Snapshot001
 	{
 		std::uint32_t structSize = sizeof(Snapshot001);

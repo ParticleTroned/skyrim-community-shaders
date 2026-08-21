@@ -29,14 +29,6 @@ namespace
 	using CSX::ShaderAPI::Snapshot001;
 	using CSX::ShaderAPI::Status;
 
-	constexpr std::uint64_t kCapabilities =
-		CSX::ShaderAPI::kCapabilitySnapshot |
-		CSX::ShaderAPI::kCapabilityFeatureCatalog |
-		CSX::ShaderAPI::kCapabilityRuntimeSettings |
-		CSX::ShaderAPI::kCapabilityPersistentFeatureState |
-		CSX::ShaderAPI::kCapabilityCacheLifecycle |
-		CSX::ShaderAPI::kCapabilityCompilationControl |
-		CSX::ShaderAPI::kCapabilityPreflightTokens;
 	constexpr auto kPreflightLifetime = std::chrono::seconds(30);
 
 	struct OwnedMutation
@@ -94,7 +86,7 @@ namespace
 				.structSize = sizeof(Snapshot001),
 				.available = cache && state ? 1u : 0u,
 				.stateRevision = revision,
-				.capabilities = kCapabilities,
+				.capabilities = ShaderAPI::ServiceCapabilities,
 				.customShadersRequested = cache && cache->IsEnableRequested() ? 1u : 0u,
 				.customShadersEffective = cache && cache->IsEnabled() ? 1u : 0u,
 				.customShaderTransitionPending = cache && cache->IsEnableRequested() != cache->IsEnabled() ? 1u : 0u,

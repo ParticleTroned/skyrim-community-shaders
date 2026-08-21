@@ -197,6 +197,31 @@ namespace
 			action == "preflight" || action == "execute";
 		if (!knownAction)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
+		if (action == "registry") {
+			auto response = Foundation().MakeEnvelope(a_args, true);
+			response["result"] = {
+				{ "service", CSX::ShaderAPI::ServiceName },
+				{ "major", CSX::ShaderAPI::ServiceMajor },
+				{ "minor", CSX::ShaderAPI::ServiceMinor },
+				{ "schemaRevision", CSX::ShaderAPI::SchemaRevision },
+				{ "capabilities", CSX::ShaderAPI::ServiceCapabilities },
+				{ "mainThreadAffine", true },
+				{ "registryMainThreadAffine", false },
+				{ "preflightTokenLifetimeMs", 30000 },
+				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute" }) },
+				{ "statusCodes", json::array({
+					"success", "invalid_argument", "structure_too_small", "unavailable", "wrong_thread",
+					"revision_conflict", "preflight_required", "preflight_expired", "preflight_mismatch",
+					"feature_not_found", "busy", "blocked", "persistence_failed", "internal_error",
+				}) },
+				{ "mutations", json::array({
+					"set_custom_shaders", "set_disk_cache", "set_async_compilation", "set_skip_unchanged",
+					"set_feature_disabled_at_boot", "clear_memory_cache", "clear_disk_cache", "clear_all_caches",
+					"restore_previous_disk_cache", "accept_cache_rebuild", "stop_compilation", "capture_active_shaders",
+				}) },
+			};
+			return response;
+		}
 		if (action == "preflight" || action == "execute") {
 			// Validate the JSON contract before entering the game-thread dispatch.
 			// The request is rebuilt in the task so its borrowed string pointers are local.
@@ -213,24 +238,6 @@ namespace
 			const auto* api = CSX::Api::GetShaderService001();
 			if (!api)
 				return json{ { "error", "shader API unavailable" } };
-			if (action == "registry") {
-				return json{
-					{ "service", CSX::ShaderAPI::ServiceName }, { "major", api->major }, { "minor", api->minor },
-					{ "schemaRevision", api->schemaRevision }, { "capabilities", api->capabilities },
-					{ "mainThreadAffine", true }, { "preflightTokenLifetimeMs", 30000 },
-					{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute" }) },
-					{ "statusCodes", json::array({
-						"success", "invalid_argument", "structure_too_small", "unavailable", "wrong_thread",
-						"revision_conflict", "preflight_required", "preflight_expired", "preflight_mismatch",
-						"feature_not_found", "busy", "blocked", "persistence_failed", "internal_error",
-					}) },
-					{ "mutations", json::array({
-						"set_custom_shaders", "set_disk_cache", "set_async_compilation", "set_skip_unchanged",
-						"set_feature_disabled_at_boot", "clear_memory_cache", "clear_disk_cache", "clear_all_caches",
-						"restore_previous_disk_cache", "accept_cache_rebuild", "stop_compilation", "capture_active_shaders",
-					}) },
-				};
-			}
 			if (action == "snapshot")
 				return ReadSnapshot(*api);
 			if (action == "features") {

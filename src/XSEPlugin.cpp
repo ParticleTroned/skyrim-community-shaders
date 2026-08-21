@@ -142,12 +142,18 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
-			RegisterCommunityShadersAPIMessageListener();
+			if (RegisterCommunityShadersAPIMessageListener()) {
+				// Publish the diagnostic adapter before cache validation and shader
+				// compilation. If DevBench's PostLoad listener runs later, the
+				// PostPostLoad attempt below provides the deterministic retry.
+				CSX::Api::ShaderDevBenchBridge::Install();
+			}
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				CSX::Api::ShaderDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();

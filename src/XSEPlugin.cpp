@@ -1,3 +1,5 @@
+#include "Api/ProfilerApiDevBenchBridge.h"
+#include "Api/ProfilerService.h"
 #include "Api/ServiceRegistryProvider.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
@@ -201,8 +203,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				CSX::Api::InitializeProfilerService();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
+				CSX::Api::ProfilerApiDevBenchBridge::Install();
 			}
 
 			break;

@@ -31,6 +31,7 @@ namespace
 		constexpr const char* kBloomBlurRadius = "Bloom Blur Radius";
 		constexpr const char* kBloomThreshold = "Bloom Threshold";
 		constexpr const char* kBloomScale = "Bloom Scale";
+		constexpr const char* kReceiveBloomThreshold = "Receive Bloom Threshold";
 		constexpr const char* kWhite = "White";
 		constexpr const char* kSunlightScale = "Sunlight Scale";
 		constexpr const char* kSkyScale = "Sky Scale";
@@ -44,12 +45,13 @@ namespace
 		constexpr const char* kDofRange = "DOF Range";
 	}
 
-	constexpr std::array<ImageSpaceSettingEntry, 16> kImageSpaceSettings = { {
+	constexpr std::array<ImageSpaceSettingEntry, 17> kImageSpaceSettings = { {
 		{ ImageSpaceSetting::kEyeAdaptSpeed, ImageSpaceSection::Hdr },
 		{ ImageSpaceSetting::kEyeAdaptStrength, ImageSpaceSection::Hdr },
 		{ ImageSpaceSetting::kBloomBlurRadius, ImageSpaceSection::Hdr },
 		{ ImageSpaceSetting::kBloomThreshold, ImageSpaceSection::Hdr },
 		{ ImageSpaceSetting::kBloomScale, ImageSpaceSection::Hdr },
+		{ ImageSpaceSetting::kReceiveBloomThreshold, ImageSpaceSection::Hdr },
 		{ ImageSpaceSetting::kWhite, ImageSpaceSection::Hdr },
 		{ ImageSpaceSetting::kSunlightScale, ImageSpaceSection::Hdr },
 		{ ImageSpaceSetting::kSkyScale, ImageSpaceSection::Hdr },
@@ -71,6 +73,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	hdrBloomBlurRadius,
 	hdrBloomThreshold,
 	hdrBloomScale,
+	hdrReceiveBloomThreshold,
 	hdrWhite,
 	hdrSunlightScale,
 	hdrSkyScale,
@@ -116,6 +119,7 @@ void ImageSpaceWidget::DrawWidget()
 			changed |= PropertyDrawer::DrawFloat(ImageSpaceSetting::kBloomBlurRadius, settings.hdrBloomBlurRadius, 0.0f, 10.0f);
 			changed |= PropertyDrawer::DrawFloat(ImageSpaceSetting::kBloomThreshold, settings.hdrBloomThreshold, 0.0f, 10.0f);
 			changed |= PropertyDrawer::DrawFloat(ImageSpaceSetting::kBloomScale, settings.hdrBloomScale, 0.0f, 30.0f);
+			changed |= PropertyDrawer::DrawFloat(ImageSpaceSetting::kReceiveBloomThreshold, settings.hdrReceiveBloomThreshold, 0.0f, 10.0f);
 			changed |= PropertyDrawer::DrawFloat(ImageSpaceSetting::kWhite, settings.hdrWhite, 0.0f, 30.0f);
 			changed |= PropertyDrawer::DrawFloat(ImageSpaceSetting::kSunlightScale, settings.hdrSunlightScale, 0.0f, 50.0f);
 			changed |= PropertyDrawer::DrawFloat(ImageSpaceSetting::kSkyScale, settings.hdrSkyScale, 0.0f, 30.0f);
@@ -162,7 +166,10 @@ void ImageSpaceWidget::LoadSettings()
 {
 	try {
 		if (!js.empty() && js.contains("Settings") && js["Settings"].is_object()) {
-			settings = js["Settings"];
+			const auto& savedSettings = js["Settings"];
+			settings = savedSettings;
+			if (!savedSettings.contains("hdrReceiveBloomThreshold") || !savedSettings["hdrReceiveBloomThreshold"].is_number())
+				settings.hdrReceiveBloomThreshold = vanillaSettings.hdrReceiveBloomThreshold;
 		} else {
 			settings = vanillaSettings;
 		}
@@ -193,6 +200,7 @@ void ImageSpaceWidget::SetImageSpaceValues()
 	data.hdr.bloomBlurRadius = settings.hdrBloomBlurRadius;
 	data.hdr.bloomThreshold = settings.hdrBloomThreshold;
 	data.hdr.bloomScale = settings.hdrBloomScale;
+	data.hdr.receiveBloomThreshold = settings.hdrReceiveBloomThreshold;
 	data.hdr.white = settings.hdrWhite;
 	data.hdr.sunlightScale = settings.hdrSunlightScale;
 	data.hdr.skyScale = settings.hdrSkyScale;
@@ -227,6 +235,7 @@ void ImageSpaceWidget::LoadImageSpaceValues()
 	settings.hdrBloomBlurRadius = data.hdr.bloomBlurRadius;
 	settings.hdrBloomThreshold = data.hdr.bloomThreshold;
 	settings.hdrBloomScale = data.hdr.bloomScale;
+	settings.hdrReceiveBloomThreshold = data.hdr.receiveBloomThreshold;
 	settings.hdrWhite = data.hdr.white;
 	settings.hdrSunlightScale = data.hdr.sunlightScale;
 	settings.hdrSkyScale = data.hdr.skyScale;

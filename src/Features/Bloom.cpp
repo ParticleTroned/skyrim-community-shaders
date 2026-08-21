@@ -83,22 +83,24 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 	SanitizeProfile(a_profile);
 }
 
-void Bloom::DrawAdvancedProfileSettings(Profile& a_profile)
+bool Bloom::DrawAdvancedProfileSettings(Profile& a_profile)
 {
-	ImGui::SliderFloat(T(TKEY("halo_radius"), "Halo Radius"), &a_profile.HaloRadius, 0.0f, kHaloRadiusMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+	bool changed = false;
+	changed |= ImGui::SliderFloat(T(TKEY("halo_radius"), "Halo Radius"), &a_profile.HaloRadius, 0.0f, kHaloRadiusMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip(T(TKEY("halo_radius_tooltip"), "Controls the radius of the enhancement's additional bloom samples. Higher values create wider halos."));
-	ImGui::SliderFloat(T(TKEY("halo_spread"), "Halo Spread"), &a_profile.HaloSpread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= ImGui::SliderFloat(T(TKEY("halo_spread"), "Halo Spread"), &a_profile.HaloSpread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip(T(TKEY("halo_spread_tooltip"), "Blends between the original bloom and the widened halo samples. Higher values make the halo softer and more spread out."));
-	ImGui::SliderFloat(T(TKEY("saturation"), "Bloom Saturation"), &a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= ImGui::SliderFloat(T(TKEY("saturation"), "Bloom Saturation"), &a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip(T(TKEY("saturation_tooltip"), "Controls the color saturation of the enhanced bloom. Lower values make it whiter; higher values preserve or exaggerate its tint."));
-	ImGui::ColorEdit3(T(TKEY("tint"), "Bloom Tint"), reinterpret_cast<float*>(&a_profile.BloomTint));
+	changed |= ImGui::ColorEdit3(T(TKEY("tint"), "Bloom Tint"), reinterpret_cast<float*>(&a_profile.BloomTint));
 	DrawTooltip(T(TKEY("tint_tooltip"), "Colors the bloom halo without changing the underlying scene lighting."));
-	ImGui::SliderFloat(T(TKEY("compression_ceiling"), "Compression Ceiling"), &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= ImGui::SliderFloat(T(TKEY("compression_ceiling"), "Compression Ceiling"), &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip(T(TKEY("compression_ceiling_tooltip"), "Maximum Bloom luminance approached by the soft limiter after tint and enhancement strength are applied."));
-	ImGui::SliderFloat(T(TKEY("compression_threshold"), "Compression Threshold"), &a_profile.CompressionThreshold, 0.0f, a_profile.CompressionCeiling, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= ImGui::SliderFloat(T(TKEY("compression_threshold"), "Compression Threshold"), &a_profile.CompressionThreshold, 0.0f, a_profile.CompressionCeiling, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip(T(TKEY("compression_threshold_tooltip"), "Bloom luminance where soft compression starts after tint and enhancement strength are applied."));
 
 	SanitizeProfile(a_profile);
+	return changed;
 }
 
 Bloom::Settings Bloom::GetCommonBufferData(const Profile& a_profile, float a_blendWeight)

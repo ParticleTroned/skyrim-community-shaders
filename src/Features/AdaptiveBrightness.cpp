@@ -1059,12 +1059,13 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 		ImGui::Unindent();
 	}
 
-	ImGui::Checkbox(T(TKEY("bloom.detailed"), "Use Detailed Bloom Adjustments"), &a_profile.bloomAdvanced);
+	ImGui::Checkbox(T(TKEY("bloom.detailed"), "Show Detailed Bloom Controls"), &a_profile.bloomAdvanced);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Enables detailed Bloom shaping for this profile. The Bloom enhancement and presets above remain available either way."));
+		ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Shows detailed Bloom shaping for this profile. Editing a detailed value activates Bloom at strength 1 if it is currently off; the Bloom slider and presets remain available either way."));
 	if (a_profile.bloomAdvanced) {
 		ImGui::Indent();
-		Bloom::DrawAdvancedProfileSettings(a_profile.bloom);
+		if (Bloom::DrawAdvancedProfileSettings(a_profile.bloom) && a_profile.bloom.EnhancementIntensity <= 0.0f)
+			a_profile.bloom.EnhancementIntensity = 1.0f;
 		ImGui::Unindent();
 	}
 	ImGui::EndDisabled();

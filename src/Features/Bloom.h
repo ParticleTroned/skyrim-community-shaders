@@ -31,7 +31,7 @@ struct Bloom
 	static_assert(sizeof(Settings) == 48);
 
 	static void DrawProfileControls(Profile& a_profile);
-	static void DrawAdvancedProfileSettings(Profile& a_profile);
+	static bool DrawAdvancedProfileSettings(Profile& a_profile);
 	static Settings GetCommonBufferData(const Profile& a_profile, float a_blendWeight);
 	static const char* GetPresetName(uint a_preset);
 	static Profile GetPresetProfile(uint a_preset);

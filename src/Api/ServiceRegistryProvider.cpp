@@ -1,6 +1,7 @@
 #include "Api/ServiceRegistryProvider.h"
 
 #include "Api/ServiceRegistry.h"
+#include "Api/ShaderService.h"
 #include "BuildProvenance.h"
 
 #include <nlohmann/json.hpp>
@@ -31,6 +32,8 @@ namespace CSX::Api
 			const auto status = GetProcessServiceRegistry().SetProducerIdentity(std::move(producer));
 			if (status != ServiceAPI::Status::kSuccess)
 				logger::error("Failed to initialize CSX service-registry producer identity ({})", static_cast<std::uint32_t>(status));
+
+			InitializeShaderService();
 		});
 	}
 

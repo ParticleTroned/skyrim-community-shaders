@@ -74,7 +74,7 @@ namespace
 				.cpuTotalMs = profiler->GetCpuTotalTimeMs(),
 				.resolvedGpuTotalMs = profiler->GetResolvedTotalTimeMs(),
 				.resolvedCpuTotalMs = profiler->GetResolvedCpuTotalTimeMs(),
-				.capabilities = ProfilerAPI::ServiceCapabilities,
+				.capabilities = CSX::ProfilerAPI::ServiceCapabilities,
 				.buildId = BuildProvenance::GetBuildId().data(),
 			};
 			return a_output.available ? Status::kSuccess : Status::kUnavailable;
@@ -360,7 +360,7 @@ namespace CSX::Api
 				.major = ProfilerAPI::ServiceMajor,
 				.minor = ProfilerAPI::ServiceMinor,
 				.schemaRevision = ProfilerAPI::SchemaRevision,
-				.capabilities = kCapabilities,
+				.capabilities = ProfilerAPI::ServiceCapabilities,
 				.context = &service,
 				.GetSnapshot = ::GetSnapshot,
 				.GetTimerCount = ::GetTimerCount,

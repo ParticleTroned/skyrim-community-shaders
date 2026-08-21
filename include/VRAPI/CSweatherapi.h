@@ -69,6 +69,18 @@ namespace CSX::WeatherAPI
 		kCapabilityPreflightTokens = 1ull << 9
 	};
 
+	inline constexpr std::uint64_t ServiceCapabilities =
+		kCapabilitySnapshot |
+		kCapabilityWeatherCatalog |
+		kCapabilityFeatureCatalog |
+		kCapabilityVariableCatalog |
+		kCapabilityOverrideInspection |
+		kCapabilityRuntimeSelection |
+		kCapabilityWeatherLock |
+		kCapabilityRuntimeOverrides |
+		kCapabilityPersistentOverrides |
+		kCapabilityPreflightTokens;
+
 	enum class ValueKind : std::uint32_t
 	{
 		kUnknown = 0,

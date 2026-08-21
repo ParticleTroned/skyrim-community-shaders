@@ -216,6 +216,22 @@ namespace
 		                   action == "preflight" || action == "execute";
 		if (!known)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
+		if (action == "registry") {
+			auto response = Foundation().MakeEnvelope(a_args, true);
+			response["result"] = {
+				{ "service", CSX::WeatherAPI::ServiceName },
+				{ "major", CSX::WeatherAPI::ServiceMajor },
+				{ "minor", CSX::WeatherAPI::ServiceMinor },
+				{ "schemaRevision", CSX::WeatherAPI::SchemaRevision },
+				{ "capabilities", CSX::WeatherAPI::ServiceCapabilities },
+				{ "mainThreadAffine", true },
+				{ "registryMainThreadAffine", false },
+				{ "preflightTokenLifetimeMs", 30000 },
+				{ "actions", json::array({ "registry", "snapshot", "weathers", "features", "variables", "override", "preflight", "execute" }) },
+				{ "mutations", json::array({ "set_weather", "preview_weather", "reset_weather", "lock_weather", "unlock_weather", "set_feature_paused", "reload_overrides", "set_feature_override", "remove_feature_override" }) },
+			};
+			return response;
+		}
 		if (action == "preflight" || action == "execute") {
 			try {
 				std::string weather, feature, value, token;
@@ -229,19 +245,6 @@ namespace
 			const auto* api = CSX::Api::GetWeatherService001();
 			if (!api)
 				return json{ { "error", "weather API unavailable" } };
-			if (action == "registry") {
-				return json{
-					{ "service", CSX::WeatherAPI::ServiceName },
-					{ "major", api->major },
-					{ "minor", api->minor },
-					{ "schemaRevision", api->schemaRevision },
-					{ "capabilities", api->capabilities },
-					{ "mainThreadAffine", true },
-					{ "preflightTokenLifetimeMs", 30000 },
-					{ "actions", json::array({ "registry", "snapshot", "weathers", "features", "variables", "override", "preflight", "execute" }) },
-					{ "mutations", json::array({ "set_weather", "preview_weather", "reset_weather", "lock_weather", "unlock_weather", "set_feature_paused", "reload_overrides", "set_feature_override", "remove_feature_override" }) },
-				};
-			}
 			if (action == "snapshot")
 				return ReadSnapshot(*api);
 			if (action == "weathers") {

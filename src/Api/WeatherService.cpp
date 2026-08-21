@@ -41,17 +41,6 @@ namespace
 	using CSX::WeatherAPI::WeatherDescriptor001;
 	using json = nlohmann::json;
 
-	constexpr std::uint64_t kCapabilities =
-		CSX::WeatherAPI::kCapabilitySnapshot |
-		CSX::WeatherAPI::kCapabilityWeatherCatalog |
-		CSX::WeatherAPI::kCapabilityFeatureCatalog |
-		CSX::WeatherAPI::kCapabilityVariableCatalog |
-		CSX::WeatherAPI::kCapabilityOverrideInspection |
-		CSX::WeatherAPI::kCapabilityRuntimeSelection |
-		CSX::WeatherAPI::kCapabilityWeatherLock |
-		CSX::WeatherAPI::kCapabilityRuntimeOverrides |
-		CSX::WeatherAPI::kCapabilityPersistentOverrides |
-		CSX::WeatherAPI::kCapabilityPreflightTokens;
 	constexpr auto kPreflightLifetime = std::chrono::seconds(30);
 
 	struct OwnedMutation
@@ -943,7 +932,7 @@ namespace CSX::Api
 			.major = WeatherAPI::ServiceMajor,
 			.minor = WeatherAPI::ServiceMinor,
 			.schemaRevision = WeatherAPI::SchemaRevision,
-			.capabilities = kCapabilities,
+			.capabilities = WeatherAPI::ServiceCapabilities,
 			.context = &GetWeatherService(),
 			.GetSnapshot = &GetSnapshotFn,
 			.GetWeatherCount = &GetWeatherCountFn,

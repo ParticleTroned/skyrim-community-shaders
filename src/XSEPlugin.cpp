@@ -154,6 +154,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				// DevBench publishes its interface from its own PostLoad listener. If
+				// CSX's listener ran first, this is the first deterministic retry after
+				// all PostLoad listeners have completed.
+				CSX::Api::UpscalingDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -210,6 +214,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
+				CSX::Api::UpscalingDevBenchBridge::Install();
 			}
 
 			break;

@@ -651,13 +651,15 @@ namespace CSX::Api::UpscalingDevBenchBridge
 {
 	void Install()
 	{
-		if (g_installAttempted.exchange(true, std::memory_order_acq_rel))
+		if (g_registered.load(std::memory_order_acquire))
 			return;
 		auto* devBench = DevBenchAPI::GetDevBenchInterface001();
 		if (!devBench) {
-			logger::info("UpscalingDevBenchBridge: devbench host not present; public API tool not registered");
+			logger::info("UpscalingDevBenchBridge: devbench host not present yet; registration remains retryable");
 			return;
 		}
+		if (g_installAttempted.exchange(true, std::memory_order_acq_rel))
+			return;
 		static constexpr const char* descriptor =
 			R"({"description":"Exercise the registered public csx.upscaling ABI through DevBench. Mutations require exact build identity and idempotency keys.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["registry","capabilities","snapshot","preflight","apply","operation","events"],"default":"snapshot"},"expectedBuildId":{"type":"string"},"expectedStateRevision":{"type":"integer","minimum":0},"target":{"type":"object","properties":{"method":{"type":"string","enum":["none","taa","fsr","dlss"]},"qualityMode":{"type":"string","enum":["native_aa","hoshipa","ultra_quality","quality","balanced","performance","ultra_performance"]},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode"]},"purpose":{"type":"string","enum":["direct","environment_profile_transition"]},"persistence":{"type":"string","enum":["runtime_only","persist_when_stable"]},"clientId":{"type":"string"},"commandId":{"type":"string"},"reason":{"type":"string"},"operationId":{"type":"integer","minimum":0},"afterEventId":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}}}})";
 		devBench->RegisterTool("communityshaders.upscaling_api", descriptor, &ToolHandler, nullptr);

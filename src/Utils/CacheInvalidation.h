@@ -22,6 +22,8 @@ namespace Util::CacheInvalidation
 		enum class Kind
 		{
 			PluginVersion,
+			ShaderAbi,
+			ShaderCompiler,
 			FeatureVersion,
 			EnabledFlip,
 		};
@@ -51,6 +53,10 @@ namespace Util::CacheInvalidation
 	inline std::vector<CacheMismatch> ClassifyMismatches(
 		const std::string& currentPluginVersion,
 		const std::optional<std::string>& cachedPluginVersion,
+		const std::string& currentShaderAbi,
+		const std::optional<std::string>& cachedShaderAbi,
+		const std::string& currentShaderCompiler,
+		const std::optional<std::string>& cachedShaderCompiler,
 		const std::vector<FeatureState>& features,
 		const std::map<std::string, CacheIniEntry>& cacheEntries)
 	{
@@ -61,6 +67,22 @@ namespace Util::CacheInvalidation
 		} else if (*cachedPluginVersion != currentPluginVersion) {
 			mismatches.push_back({ CacheMismatch::Kind::PluginVersion, "Plugin", "Plugin",
 				std::format("version changed (current: {}, cached: {})", currentPluginVersion, *cachedPluginVersion) });
+		}
+
+		if (!cachedShaderAbi) {
+			mismatches.push_back({ CacheMismatch::Kind::ShaderAbi, "ShaderABI", "Shader cache ABI", "no shader cache ABI found in cache" });
+		} else if (*cachedShaderAbi != currentShaderAbi) {
+			mismatches.push_back({ CacheMismatch::Kind::ShaderAbi, "ShaderABI", "Shader cache ABI",
+				std::format("contract changed (current: {}, cached: {})", currentShaderAbi, *cachedShaderAbi) });
+		}
+
+		// Compiler identity is present only for caches produced locally at runtime.
+		// Shipped precompiled caches deliberately omit it; their packaged artifact
+		// and Build ID provide provenance, and bytecode does not require the local
+		// d3dcompiler DLL to match the build host.
+		if (cachedShaderCompiler && *cachedShaderCompiler != currentShaderCompiler) {
+			mismatches.push_back({ CacheMismatch::Kind::ShaderCompiler, "ShaderCompiler", "Shader compiler",
+				std::format("compiler changed (current: {}, cached: {})", currentShaderCompiler, *cachedShaderCompiler) });
 		}
 
 		for (const auto& feature : features) {

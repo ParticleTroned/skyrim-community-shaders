@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "BuildProvenance.h"
 #	include "Features/ScreenshotFeature.h"
 #	include "Features/Upscaling.h"
 #	include "Features/VR.h"
@@ -258,13 +259,17 @@ namespace
 				args = json::parse(a_argsJson);
 			if (!args.is_object())
 				throw std::runtime_error("arguments must be a JSON object");
-			output = BuildResult(args);
+			if (auto mismatch = BuildProvenance::ValidateExpectedBuild(args))
+				output = std::move(*mismatch);
+			else
+				output = BuildResult(args);
 		} catch (const std::exception& e) {
 			output = { { "error", "invalid request" }, { "detail", e.what() } };
 		} catch (...) {
 			output = { { "error", "unknown handler error" } };
 		}
 
+		BuildProvenance::AttachProducer(output);
 		try {
 			const std::string serialized = output.dump();
 			a_write(a_sink, serialized.c_str());
@@ -287,7 +292,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu for null-HMD automation. status reports the selected presentation route, ImGui draw counts, and concrete texture/overlay/hook readiness. open and close mirror the normal CSX menu lifecycle on the game thread. screenshot requests the normal CSX HMD capture path. set_path selects an unsaved runtime-only auto, overlay, or in_scene presentation route for diagnostic comparison. texture_stats copies menu texture mip 0 to a staging resource and reports RGBA occupancy and alpha bounds.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]}}}})";
+			R"({"description":"Inspect and control the CSX VR menu for null-HMD automation. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

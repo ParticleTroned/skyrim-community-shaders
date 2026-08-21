@@ -19,4 +19,4 @@ tests/shaders/Shaders/
 # Streamline runtime modules are copied during local builds
 features/Upscaling/Shaders/Upscaling/Streamline/sl.pcl.dll
 features/Upscaling/Shaders/Upscaling/Streamline/sl.reflex.dll
-tools/__pycache__/
+**/__pycache__/

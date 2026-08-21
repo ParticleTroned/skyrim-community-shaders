@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string_view>
+#include <BuildProvenance.generated.h>
 
 namespace Plugin
 {
@@ -23,5 +24,8 @@ namespace Plugin
 
 	/// Full git describe string, e.g. "v1.4.11", "v1.4.11-3-gabcdef1", "v1.4.11-3-gabcdef1-dirty".
 	/// Matches "v{VERSION}" exactly on a clean tagged release build.
-	inline constexpr auto BUILD_DESCRIBE = "@GIT_DESCRIBE@"sv;
+	inline constexpr auto BUILD_DESCRIBE = CSX::EmbeddedBuildProvenance::SOURCE_DESCRIBE;
+	inline constexpr auto BUILD_ID = CSX::EmbeddedBuildProvenance::BUILD_ID;
+	inline constexpr auto BUILD_ID_SHORT = CSX::EmbeddedBuildProvenance::BUILD_ID_SHORT;
+	inline constexpr auto SHADER_CACHE_ABI_ID = CSX::EmbeddedBuildProvenance::SHADER_CACHE_ABI_ID;
 }

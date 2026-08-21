@@ -1,5 +1,6 @@
 #include "Upscaling.h"
 
+#include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/LightLimitFix.h"
 #include "Features/RenderDoc.h"
@@ -29631,7 +29632,7 @@ namespace
 			0.995f
 		};
 	constexpr float kVRLoadPresentationProbeWhiteLuminance = 0.92f;
-	constexpr uint32_t kVRLoadPresentationProbeSchemaVersion = 5;
+	constexpr uint32_t kVRLoadPresentationProbeSchemaVersion = 6;
 	constexpr float kVRLoadPresentationProbeBrightLuminance = 0.75f;
 	constexpr float kVRLoadPresentationProbeDarkLuminance = 0.25f;
 	constexpr float kVRLoadPresentationProbeBlackLuminance = 0.05f;
@@ -32611,7 +32612,7 @@ json Upscaling::BuildVRLoadPresentationProbeStatus() const
 		vrLoadPresentationProbeActive.load(std::memory_order_acquire);
 	LARGE_INTEGER frequency{};
 	(void)::QueryPerformanceFrequency(&frequency);
-	return {
+	json output{
 		{ "schemaVersion", kVRLoadPresentationProbeSchemaVersion },
 		{ "active", probeActive },
 		{ "sessionID", vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) },
@@ -32667,6 +32668,7 @@ json Upscaling::BuildVRLoadPresentationProbeStatus() const
 													  } },
 							  } },
 	};
+	return output;
 }
 
 json Upscaling::BuildVRLoadPresentationProbeRecord() const
@@ -33084,7 +33086,7 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 		hamDispatches.push_back(std::move(item));
 	}
 
-	return {
+	json output{
 		{ "schemaVersion", kVRLoadPresentationProbeSchemaVersion },
 		{ "status", BuildVRLoadPresentationProbeStatus() },
 		{ "samplePositions", kVRLoadPresentationProbeSamplePositions },
@@ -33136,6 +33138,9 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 		{ "records", std::move(records) },
 		{ "hamDispatches", std::move(hamDispatches) },
 	};
+	output["producer"] = BuildProvenance::GetProducer();
+	output["producer"]["component"] = "Upscaling.LoadPresentationProbe";
+	return output;
 }
 #endif
 
@@ -46925,7 +46930,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 11u;
+	constexpr uint32_t kSchemaVersion = 12u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -46969,13 +46974,10 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	json record;
 	record["schema"] = "community-shaders.vr-render-scale.iteration";
 	record["schemaVersion"] = kSchemaVersion;
-	record["producer"] = {
-		{ "name", "Community Shaders Expanded (CSX)" },
-		{ "version", std::string{ Plugin::VERSION_LABEL } },
-		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
-		{ "component", "Upscaling" },
-		{ "implementationStep", 30 }
-	};
+	record["producer"] = BuildProvenance::GetProducer();
+	record["producer"]["component"] = "Upscaling.VRRenderScale";
+	record["producer"]["version"] = std::string{ Plugin::VERSION_LABEL };
+	record["producer"]["implementationStep"] = 30;
 	record["session"] = {
 		{ "id", session.sessionID },
 		{ "active", session.active },

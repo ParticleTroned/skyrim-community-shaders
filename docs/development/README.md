@@ -1,5 +1,7 @@
 # Development Documentation
 
+- [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
+
 ## Getting Started
 
 -   **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy

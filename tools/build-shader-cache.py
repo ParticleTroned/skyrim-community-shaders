@@ -34,6 +34,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+TOOLS_DIRECTORY = Path(__file__).resolve().parent
+if str(TOOLS_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIRECTORY))
+
+from build_provenance import (
+    DEFAULT_SHADER_CONTRACT_FILES,
+    canonical_bytes,
+    sha256_bytes,
+    shader_contract_identity,
+)
+
 
 REPO = Path(__file__).resolve().parent.parent
 CACHE_DIRECTORY = "ShaderCache"
@@ -618,9 +629,17 @@ def write_info_ini(
     plugin_version: str,
     runtime: str,
     profile: CacheProfile,
+    shader_cache_abi: str,
 ) -> int:
     validate_ini_value(plugin_version, "plugin version")
-    lines = ["[Cache]", f"PluginVersion = {plugin_version}", "", ""]
+    validate_ini_value(shader_cache_abi, "shader cache ABI")
+    lines = [
+        "[Cache]",
+        f"PluginVersion = {plugin_version}",
+        f"ShaderCacheABI = {shader_cache_abi}",
+        "",
+        "",
+    ]
     count = 0
     seen_features: set[str] = set()
 
@@ -760,6 +779,7 @@ def validate_cache(
     cache_dir: Path,
     runtime: str,
     plugin_version: str,
+    shader_cache_abi: str,
 ) -> int:
     """Fail before packaging if the cache is incomplete or malformed."""
     info_path = cache_dir / INFO_FILE_NAME
@@ -781,6 +801,12 @@ def validate_cache(
         raise SystemExit(
             f"{runtime}: Info.ini plugin version is {actual_version!r}; "
             f"expected {plugin_version!r}"
+        )
+    actual_shader_cache_abi = info.get("Cache", "ShaderCacheABI", fallback=None)
+    if actual_shader_cache_abi != shader_cache_abi:
+        raise SystemExit(
+            f"{runtime}: Info.ini shader cache ABI is {actual_shader_cache_abi!r}; "
+            f"expected {shader_cache_abi!r}"
         )
 
     try:
@@ -1405,6 +1431,7 @@ def publish_cache_archive(candidate: Path, out_root: Path, runtime: str) -> Path
 
 
 def build_runtime(
+    source_root: Path,
     stage: Path,
     workspace: Path,
     runtime: str,
@@ -1464,14 +1491,21 @@ def build_runtime(
         write_manifest,
     )
 
+    shader_contract = shader_contract_identity(
+        source_root, DEFAULT_SHADER_CONTRACT_FILES, runtime
+    )
+    shader_cache_abi = sha256_bytes(canonical_bytes(shader_contract))
     section_count = write_info_ini(
         cache_dir,
         stage,
         plugin_version,
         runtime,
         profile,
+        shader_cache_abi,
     )
-    blob_count = validate_cache(cache_dir, runtime, plugin_version)
+    blob_count = validate_cache(
+        cache_dir, runtime, plugin_version, shader_cache_abi
+    )
     return runtime_root, blob_count, section_count
 
 
@@ -1614,6 +1648,7 @@ def main() -> int:
         for runtime in runtimes:
             plugin_version = plugin_versions[runtime]
             candidate_root, blob_count, section_count = build_runtime(
+                source_root=source_root,
                 stage=stage,
                 workspace=workspace,
                 runtime=runtime,

@@ -19,14 +19,6 @@ namespace
 	using CSX::ProfilerAPI::TimerDescriptor001;
 	using CSX::ProfilerAPI::TimingDomain;
 
-	constexpr std::uint64_t kCapabilities =
-		CSX::ProfilerAPI::kCapabilitySnapshot |
-		CSX::ProfilerAPI::kCapabilityTimerCatalog |
-		CSX::ProfilerAPI::kCapabilityHistory |
-		CSX::ProfilerAPI::kCapabilityBoundedCapture |
-		CSX::ProfilerAPI::kCapabilityRuntimeControl |
-		CSX::ProfilerAPI::kCapabilityHistoryReset;
-
 	CaptureState ToApiState(Profiler::CaptureSessionState a_state)
 	{
 		switch (a_state) {
@@ -82,7 +74,7 @@ namespace
 				.cpuTotalMs = profiler->GetCpuTotalTimeMs(),
 				.resolvedGpuTotalMs = profiler->GetResolvedTotalTimeMs(),
 				.resolvedCpuTotalMs = profiler->GetResolvedCpuTotalTimeMs(),
-				.capabilities = kCapabilities,
+				.capabilities = ProfilerAPI::ServiceCapabilities,
 				.buildId = BuildProvenance::GetBuildId().data(),
 			};
 			return a_output.available ? Status::kSuccess : Status::kUnavailable;

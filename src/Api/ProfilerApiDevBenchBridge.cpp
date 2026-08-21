@@ -163,6 +163,22 @@ namespace
 		if (!known)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 
+		if (action == "registry") {
+			auto response = Foundation().MakeEnvelope(a_args, true);
+			response["result"] = {
+				{ "service", CSX::ProfilerAPI::ServiceName },
+				{ "major", CSX::ProfilerAPI::ServiceMajor },
+				{ "minor", CSX::ProfilerAPI::ServiceMinor },
+				{ "schemaRevision", CSX::ProfilerAPI::SchemaRevision },
+				{ "capabilities", CSX::ProfilerAPI::ServiceCapabilities },
+				{ "mainThreadAffine", true },
+				{ "registryMainThreadAffine", false },
+				{ "capture", { { "minimumFrames", 1 }, { "maximumFrames", 300 }, { "singleActiveSession", true }, { "requiresEnabled", true } } },
+				{ "actions", json::array({ "registry", "snapshot", "timers", "history", "set_enabled", "clear_history", "start_capture", "capture_status", "cancel_capture", "events", "acknowledge_events" }) },
+			};
+			return response;
+		}
+
 		if (action == "events" || action == "acknowledge_events") {
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			if (action == "events") {
@@ -192,14 +208,6 @@ namespace
 			const auto* api = CSX::Api::GetProfilerService001();
 			if (!api)
 				return json{ { "_dispatchError", "profiler API unavailable" } };
-			if (action == "registry") {
-				return json{
-					{ "service", CSX::ProfilerAPI::ServiceName }, { "major", api->major }, { "minor", api->minor },
-					{ "schemaRevision", api->schemaRevision }, { "capabilities", api->capabilities }, { "mainThreadAffine", true },
-					{ "capture", { { "minimumFrames", 1 }, { "maximumFrames", 300 }, { "singleActiveSession", true }, { "requiresEnabled", true } } },
-					{ "actions", json::array({ "registry", "snapshot", "timers", "history", "set_enabled", "clear_history", "start_capture", "capture_status", "cancel_capture", "events", "acknowledge_events" }) },
-				};
-			}
 			if (action == "snapshot")
 				return ReadSnapshot(*api);
 			if (action == "timers") {

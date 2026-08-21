@@ -33,6 +33,14 @@ namespace CSX::ProfilerAPI
 		kCapabilityHistoryReset = 1ull << 5
 	};
 
+	inline constexpr std::uint64_t ServiceCapabilities =
+		kCapabilitySnapshot |
+		kCapabilityTimerCatalog |
+		kCapabilityHistory |
+		kCapabilityBoundedCapture |
+		kCapabilityRuntimeControl |
+		kCapabilityHistoryReset;
+
 	enum class TimingDomain : std::uint32_t
 	{
 		kGpu = 1,

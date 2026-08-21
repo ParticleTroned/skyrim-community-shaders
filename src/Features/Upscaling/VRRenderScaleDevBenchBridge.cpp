@@ -538,6 +538,7 @@ namespace
 														  { "settleDeadlineExpired", controller.postLoadRecovery.settleDeadlineExpired },
 														  { "settleTimeoutUsed", controller.postLoadRecovery.settleTimeoutUsed },
 														  { "timedAttemptConsumed", controller.postLoadRecovery.timedAttemptConsumed },
+														  { "timedAttemptInProgress", controller.postLoadRecovery.timedAttemptInProgress },
 														  { "engineTargetCreateEntered", controller.postLoadRecovery.engineTargetCreateEntered },
 														  { "baselineUsageBytes", controller.postLoadRecovery.baselineUsageBytes },
 														  { "peakUsageBytes", controller.postLoadRecovery.peakUsageBytes },

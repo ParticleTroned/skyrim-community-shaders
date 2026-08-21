@@ -762,6 +762,7 @@ public:
 		bool settleTimeoutUsed = false;
 		bool settleDeadlineExpired = false;
 		bool timedAttemptConsumed = false;
+		bool timedAttemptInProgress = false;
 		bool engineTargetCreateEntered = false;
 		bool relatchAdmitted = false;
 		bool cleanupDeferredUntilStable = false;

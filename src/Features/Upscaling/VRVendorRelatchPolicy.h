@@ -1216,6 +1216,8 @@ namespace VRVendorRelatchPolicy
 	{
 		NotExpired,
 		AttemptOnce,
+		WaitForClaimedAttempt,
+		ContinueClaimedAttempt,
 		ContinueMutatedRecovery,
 		RetainStableContract
 	};
@@ -1224,6 +1226,7 @@ namespace VRVendorRelatchPolicy
 	{
 		bool deadlineExpired = false;
 		bool attemptConsumed = false;
+		bool attemptInProgress = false;
 		bool physicalMutationStarted = false;
 		bool recoveryOwned = false;
 		bool loadingSerialOwned = false;
@@ -1242,14 +1245,13 @@ namespace VRVendorRelatchPolicy
 	{
 		if (!a_state.deadlineExpired)
 			return PostLoadRecoveryDeadlineAction::NotExpired;
+		const bool exactRecoveryOwner =
+			a_state.recoveryOwned && a_state.loadingSerialOwned;
 		if (a_state.physicalMutationStarted &&
-			a_state.recoveryOwned &&
-			a_state.loadingSerialOwned) {
+			exactRecoveryOwner) {
 			return PostLoadRecoveryDeadlineAction::ContinueMutatedRecovery;
 		}
-		if (!a_state.attemptConsumed &&
-			a_state.recoveryOwned &&
-			a_state.loadingSerialOwned &&
+		const bool admissionReady =
 			a_state.cleanupAndTrimComplete &&
 			a_state.retirementReady &&
 			a_state.memorySampleFresh &&
@@ -1257,7 +1259,20 @@ namespace VRVendorRelatchPolicy
 			a_state.gpuHeadroomSufficient &&
 			a_state.projectedSystemCommitSafe &&
 			a_state.deviceHealthy &&
-			a_state.noRecentOutOfMemory) {
+			a_state.noRecentOutOfMemory;
+		// AttemptOnce claims one logical recovery operation, not one call into a
+		// vendor teardown API. Pending teardown/drain results must keep servicing
+		// that exact owner until it can cross the physical mutation boundary.
+		if (a_state.attemptConsumed &&
+			a_state.attemptInProgress &&
+			exactRecoveryOwner) {
+			return admissionReady ?
+			           PostLoadRecoveryDeadlineAction::ContinueClaimedAttempt :
+			           PostLoadRecoveryDeadlineAction::WaitForClaimedAttempt;
+		}
+		if (!a_state.attemptConsumed &&
+			exactRecoveryOwner &&
+			admissionReady) {
 			return PostLoadRecoveryDeadlineAction::AttemptOnce;
 		}
 		return PostLoadRecoveryDeadlineAction::RetainStableContract;
@@ -1542,6 +1557,39 @@ namespace VRVendorRelatchPolicy
 		return !a_requestPending &&
 		       !a_emergencyAttemptConsumed &&
 		       !a_emergencyRecoveryRequested;
+	}
+
+	struct PostMutationEmergencyRecoveryTiming
+	{
+		PostMutationProgressPhase progressPhase =
+			PostMutationProgressPhase::None;
+		std::uint64_t mutationStartTickMs = 0;
+		std::uint64_t lastProgressTickMs = 0;
+		std::uint64_t currentTickMs = 0;
+		std::uint64_t initialDelayMs = 0;
+		std::uint64_t progressingStallDelayMs = 0;
+	};
+
+	// A newly published or stabilizing physical generation is not a stalled
+	// generation. Anchor the emergency request to the latest forward progress and
+	// give irreversible creator/presentation phases the longer no-progress window.
+	[[nodiscard]] constexpr bool HasPostMutationEmergencyRecoveryStalled(
+		const PostMutationEmergencyRecoveryTiming& a_timing) noexcept
+	{
+		if (a_timing.mutationStartTickMs == 0)
+			return false;
+		const std::uint64_t progressAnchor =
+			a_timing.lastProgressTickMs != 0 ?
+				a_timing.lastProgressTickMs :
+				a_timing.mutationStartTickMs;
+		const std::uint64_t delay =
+			IsPostMutationRecoveryActivelyProgressing(a_timing.progressPhase) ?
+				a_timing.progressingStallDelayMs :
+				a_timing.initialDelayMs;
+		return HasElapsedMonotonicDeadline(
+			progressAnchor,
+			a_timing.currentTickMs,
+			delay);
 	}
 
 	struct PostLoadRecoveryStableFallbackOwnership

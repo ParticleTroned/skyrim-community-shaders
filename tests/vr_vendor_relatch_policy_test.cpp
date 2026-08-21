@@ -1357,6 +1357,7 @@ namespace
 		PostLoadRecoveryDeadlineAdmission ready{
 			.deadlineExpired = true,
 			.attemptConsumed = false,
+			.attemptInProgress = false,
 			.physicalMutationStarted = false,
 			.recoveryOwned = true,
 			.loadingSerialOwned = true,
@@ -1407,6 +1408,25 @@ namespace
 		blocked = ready;
 		blocked.attemptConsumed = true;
 		if (SelectPostLoadRecoveryDeadlineAction(blocked) !=
+			PostLoadRecoveryDeadlineAction::RetainStableContract) {
+			return false;
+		}
+
+		auto claimed = ready;
+		claimed.attemptConsumed = true;
+		claimed.attemptInProgress = true;
+		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
+			PostLoadRecoveryDeadlineAction::ContinueClaimedAttempt) {
+			return false;
+		}
+		claimed.gpuHeadroomSufficient = false;
+		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
+			PostLoadRecoveryDeadlineAction::WaitForClaimedAttempt) {
+			return false;
+		}
+		claimed.gpuHeadroomSufficient = true;
+		claimed.loadingSerialOwned = false;
+		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
 			PostLoadRecoveryDeadlineAction::RetainStableContract) {
 			return false;
 		}
@@ -1541,6 +1561,30 @@ namespace
 		// submit-stage stabilization can consume the emergency creator attempt. The
 		// already-published recovery must still suppress another physical relatch.
 		if (CanQueuePostMutationEmergencyRecovery(false, false, true))
+			return false;
+
+		PostMutationEmergencyRecoveryTiming timing{
+			.progressPhase = PostMutationProgressPhase::MutationEntered,
+			.mutationStartTickMs = 1000,
+			.lastProgressTickMs = 1000,
+			.currentTickMs = 2999,
+			.initialDelayMs = 2000,
+			.progressingStallDelayMs = 15000,
+		};
+		if (HasPostMutationEmergencyRecoveryStalled(timing))
+			return false;
+		timing.currentTickMs = 3000;
+		if (!HasPostMutationEmergencyRecoveryStalled(timing))
+			return false;
+		// Contract publication and presentation stabilization are forward
+		// progress. They must not be replaced by the short initial watchdog.
+		timing.progressPhase = PostMutationProgressPhase::PresentationStabilizing;
+		timing.lastProgressTickMs = 2500;
+		timing.currentTickMs = 17499;
+		if (HasPostMutationEmergencyRecoveryStalled(timing))
+			return false;
+		timing.currentTickMs = 17500;
+		if (!HasPostMutationEmergencyRecoveryStalled(timing))
 			return false;
 
 		for (std::uint32_t bit = 0; bit < 8; ++bit) {

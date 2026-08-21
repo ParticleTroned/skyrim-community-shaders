@@ -23718,6 +23718,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		// a later deadline cannot publish the pre-create stable contract.
 		if (!recovery.engineTargetCreateEntered) {
 			recovery.engineTargetCreateEntered = true;
+			recovery.timedAttemptInProgress = false;
 			++vrRenderScaleTransitionController.revision;
 		}
 	});
@@ -25164,6 +25165,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					postLoadRecoveryOwned &&
 					postLoadRecoveryAtAdmission.settleDeadlineExpired,
 				.attemptConsumed = postLoadRecoveryAtAdmission.timedAttemptConsumed,
+				.attemptInProgress = postLoadRecoveryAtAdmission.timedAttemptInProgress,
 				.physicalMutationStarted =
 					postLoadRecoveryAtAdmission.engineTargetCreateEntered,
 				.recoveryOwned = exactPostLoadRecoveryOwned,
@@ -25311,6 +25313,18 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				"deadline admission failed conservative safety checks");
 		}
 		if (deadlineAction ==
+				VRVendorRelatchPolicy::PostLoadRecoveryDeadlineAction::WaitForClaimedAttempt &&
+			postMutation.serializationEpoch == 0) {
+			// The one logical attempt remains owned, but fresh safety gates may
+			// temporarily close while its vendor drain is pending. Waiting must not
+			// demote the attempt to an untruthful reduced-target stable fallback.
+			requeueRelatch(
+				kVRRenderScalePostLoadSettleRetryFrames,
+				false,
+				VRRenderScaleRetryKind::Pressure);
+			return false;
+		}
+		if (deadlineAction ==
 				VRVendorRelatchPolicy::PostLoadRecoveryDeadlineAction::AttemptOnce &&
 			postMutation.serializationEpoch == 0) {
 			bool claimed = false;
@@ -25330,6 +25344,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					recovery.settleDeadlineExpired &&
 					!recovery.timedAttemptConsumed) {
 					recovery.timedAttemptConsumed = true;
+					recovery.timedAttemptInProgress = true;
 					claimed = true;
 					++vrRenderScaleTransitionController.revision;
 				}
@@ -25353,6 +25368,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				relatchPlan.projectedSystemCommitAdditionalBytes / kVRRenderScaleMiB,
 				relatchPlan.projectedSystemCommitBytes / kVRRenderScaleMiB,
 				relatchPlan.systemCommitAdmissionLimitBytes / kVRRenderScaleMiB);
+		}
+		if (deadlineAction ==
+				VRVendorRelatchPolicy::PostLoadRecoveryDeadlineAction::ContinueClaimedAttempt &&
+			postMutation.serializationEpoch == 0) {
+			timedPostLoadRecoveryAttempt = true;
+			// Continue the already-claimed logical attempt. This relaxes only the
+			// expired settling cadence; the policy above revalidated every ownership,
+			// retirement, device, GPU, and system-memory gate for this frame.
+			relatchPlan.pressureCleanupRequired = false;
+			relatchPlan.pressureDeferred = false;
 		}
 		if (postMutationAction ==
 			VRVendorRelatchPolicy::PostMutationRecoveryAction::AttemptOnce) {
@@ -44061,12 +44086,18 @@ void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 		}
 	}
 
-	const bool emergencyDelayElapsed =
-		VRVendorRelatchPolicy::HasElapsedMonotonicDeadline(
-			mutation.startTickMs,
-			currentTickMs,
-			kVRRenderScalePostMutationEmergencyAttemptDelayMilliseconds);
-	if (!emergencyDelayElapsed)
+	const bool emergencyRecoveryStalled =
+		VRVendorRelatchPolicy::HasPostMutationEmergencyRecoveryStalled({
+			.progressPhase = mutation.progressPhase,
+			.mutationStartTickMs = mutation.startTickMs,
+			.lastProgressTickMs = mutation.lastProgressTickMs,
+			.currentTickMs = currentTickMs,
+			.initialDelayMs =
+				kVRRenderScalePostMutationEmergencyAttemptDelayMilliseconds,
+			.progressingStallDelayMs =
+				kVRRenderScalePostMutationStalledDeadlineMilliseconds,
+		});
+	if (!emergencyRecoveryStalled)
 		return;
 
 	bool firstEmergencyRequest = false;
@@ -47406,6 +47437,8 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 								  { "trimCompleted", controller.postLoadRecovery.trimCompleted },
 								  { "trimSucceeded", controller.postLoadRecovery.trimSucceeded },
 								  { "settleTimeoutUsed", controller.postLoadRecovery.settleTimeoutUsed },
+								  { "timedAttemptConsumed", controller.postLoadRecovery.timedAttemptConsumed },
+								  { "timedAttemptInProgress", controller.postLoadRecovery.timedAttemptInProgress },
 								  { "relatchAdmitted", controller.postLoadRecovery.relatchAdmitted },
 								  { "cleanupDeferredUntilStable", controller.postLoadRecovery.cleanupDeferredUntilStable } } },
 		{ "resourcePlan", { { "valid", relatchPlan.valid },

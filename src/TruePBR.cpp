@@ -74,6 +74,15 @@ static void WarnInvalidPBRDecalTextureSetOnce(const std::string& formEditorID)
 	}
 }
 
+static void WarnInvalidPBRRenderTargetOnce(const std::string& inputFilePath, std::int32_t renderTargetIndex)
+{
+	static std::unordered_set<std::string> warned;
+	const auto warningKey = inputFilePath + '#' + std::to_string(renderTargetIndex);
+	if (warned.insert(warningKey).second) {
+		logger::warn("[TruePBR] {} has invalid diffuse render-target index {}; using its diffuse texture instead", inputFilePath, renderTargetIndex);
+	}
+}
+
 namespace PNState
 {
 	void ReadPBRRecordConfigs(const std::string& rootPath, std::function<void(const std::string&, const json&)> recordReader)
@@ -1069,9 +1078,14 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			shadowState->SetPSConstant(neutralPBRParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams1);
 		} else if (lightingType == None || lightingType == TreeAnim) {
 			auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
-			if (pbrMaterial->diffuseRenderTargetSourceIndex != -1) {
-				shadowState->SetPSTexture(0, renderer->GetRuntimeData().renderTargets[pbrMaterial->diffuseRenderTargetSourceIndex]);
+			const auto renderTargetIndex = pbrMaterial->diffuseRenderTargetSourceIndex;
+			const auto renderTargetCount = Util::GetRenderTargetCount();
+			if (renderTargetIndex >= 0 && renderTargetIndex < renderTargetCount) {
+				shadowState->SetPSTexture(0, renderer->GetRuntimeData().renderTargets[renderTargetIndex]);
 			} else {
+				if (renderTargetIndex != -1) {
+					WarnInvalidPBRRenderTargetOnce(pbrMaterial->inputFilePath, renderTargetIndex);
+				}
 				shadowState->SetPSTexture(0, pbrMaterial->diffuseTexture->rendererTexture);
 			}
 			shadowState->SetPSTextureAddressMode(0, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));

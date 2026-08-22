@@ -18,6 +18,7 @@
 #include "ShaderCache.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
+#include "VRDepthCullingEnablePolicy.h"
 #include "WaterEffects.h"
 #include "WetnessEffects.h"
 #include "Wetterness.h"
@@ -573,7 +574,6 @@ bool VR::IsPerformanceCostMeasurementEnabled() const
 		screenSpaceGI.settings.Enabled &&
 		screenSpaceGI.settings.EnableStereoSync;
 	return settings.EnableDepthBufferCullingExterior ||
-	       settings.EnableDepthBufferCullingInterior ||
 	       screenSpaceShadowsFoveatedActive ||
 	       screenSpaceShadowsStereoSyncActive ||
 	       screenSpaceGIFoveatedActive ||
@@ -1886,8 +1886,20 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		return;
 	}
 
-	bool exteriorChanged = ImGui::Checkbox("Depth Buffer Culling Exterior", &settings.EnableDepthBufferCullingExterior);
-	bool interiorChanged = ImGui::Checkbox("Depth Buffer Culling Interior", &settings.EnableDepthBufferCullingInterior);
+	bool exteriorChanged = ImGui::Checkbox("Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Improves performance where hidden-object rendering is a significant cost. Recommended on for exteriors.");
+	}
+	ImGui::Indent();
+	bool interiorChanged = false;
+	{
+		auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
+		interiorChanged = ImGui::Checkbox("Also Enable in Interiors", &settings.EnableDepthBufferCullingInterior);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Optional and default off. Missing-object faults can expose exterior lighting and are especially visible indoors.");
+		}
+	}
+	ImGui::Unindent();
 	if (exteriorChanged || interiorChanged) {
 		UpdateDepthBufferCulling();
 	}
@@ -2263,17 +2275,21 @@ namespace
 		DrawStabilizeRenderScaleDesktopMirrorSetting();
 		ImGui::Separator();
 		if (ImGui::CollapsingHeader("General Settings")) {
-			// Exteriors
-			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
+			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Improves performance in exteriors, recommended ON.");
+				ImGui::TextUnformatted("Improves performance where hidden-object rendering is a significant cost. Recommended on for exteriors.");
 			}
 
-			// Interiors
-			bool interiorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Interiors", &settings.EnableDepthBufferCullingInterior);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Improves performance in interiors, recommended ON.");
+			ImGui::Indent();
+			bool interiorChanged = false;
+			{
+				auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
+				interiorChanged = ImGui::Checkbox("Also Enable in Interiors", &settings.EnableDepthBufferCullingInterior);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Optional and default off. Missing-object faults can expose exterior lighting and are especially visible indoors.");
+				}
 			}
+			ImGui::Unindent();
 
 			if (exteriorChanged || interiorChanged) {
 				vr.UpdateDepthBufferCulling();
@@ -4081,10 +4097,10 @@ void VR::UpdateDepthBufferCulling()
 		return;
 	}
 
-	const bool desired = LocationContext::SelectInteriorExterior(
+	const bool desired = VRDepthCullingEnablePolicy::IsEnabled(
 		LocationContext::HasInteriorCell(),
-		settings.EnableDepthBufferCullingInterior,
-		settings.EnableDepthBufferCullingExterior);
+		settings.EnableDepthBufferCullingExterior,
+		settings.EnableDepthBufferCullingInterior);
 
 	const bool previous = *gDepthBufferCulling;
 	*gDepthBufferCulling = desired;

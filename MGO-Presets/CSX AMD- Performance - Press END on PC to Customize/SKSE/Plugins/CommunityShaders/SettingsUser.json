@@ -685,7 +685,7 @@
     },
     "VR": {
         "EnableDepthBufferCullingExterior": true,
-        "EnableDepthBufferCullingInterior": true,
+        "EnableDepthBufferCullingInterior": false,
         "EnableDragToReposition": false,
         "EnableDynamicCubemapFoveation": true,
         "EnableDynamicCubemapVisibilityThrottle": false,

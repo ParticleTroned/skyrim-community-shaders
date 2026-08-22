@@ -77,13 +77,17 @@ namespace ScreenshotDevBenchBridge
 {
 	void Install()
 	{
-		if (g_installAttempted.exchange(true, std::memory_order_acq_rel))
+		if (g_registered.load(std::memory_order_acquire))
 			return;
 		auto* devBench = DevBenchAPI::GetDevBenchInterface001();
 		if (!devBench) {
 			logger::info("ScreenshotDevBenchBridge: devbench host not present; screenshot tool not registered");
 			return;
 		}
+		// Do not consume the retry latch until the optional host is actually
+		// present. DevBench and CSX may receive PostLoad in either order.
+		if (g_installAttempted.exchange(true, std::memory_order_acq_rel))
+			return;
 		static constexpr const char* descriptor = R"({"description":"Versioned asynchronous CSX screenshot and frame-sequence API. Every request uses contractMajor 1 plus clientId and commandId. Capture acceptance returns a stable requestId; request_get and events_poll communicate source, queue, encoding, artifact, sequence, and terminal outcomes. status is read-only.","inputSchema":{"type":"object","required":["contractMajor","action","clientId","commandId"],"properties":{"contractMajor":{"type":"integer","const":1},"contractMinor":{"type":"integer","minimum":0},"action":{"type":"string","enum":["capabilities","status","settings_get","settings_validate","settings_apply","capture","sequence_start","sequence_stop","request_get","request_list","request_cancel","events_poll","acknowledge"]},"clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128},"requestId":{"type":"string"},"useSettings":{"type":"boolean"},"capture":{"type":"object"},"sequence":{"type":"object"},"patch":{"type":"object"},"scope":{"type":"string","enum":["runtime_session","persistent_user"]},"afterEventId":{"type":"integer","minimum":0},"throughEventId":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}}}})";
 		devBench->RegisterTool("communityshaders.screenshot", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);

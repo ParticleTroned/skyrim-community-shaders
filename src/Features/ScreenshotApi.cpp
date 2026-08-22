@@ -1,6 +1,7 @@
 #include "Features/ScreenshotApi.h"
 
 #include "Features/ScreenshotFeature.h"
+#include "BuildProvenance.h"
 #include "Globals.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "State.h"
@@ -9,14 +10,88 @@
 #include <Plugin.h>
 
 #include <algorithm>
+#include <array>
+#include <bcrypt.h>
 #include <cmath>
 #include <fstream>
 #include <format>
+#include <iomanip>
+#include <sstream>
 #include <unordered_set>
 
 namespace
 {
 	using json = nlohmann::json;
+
+	std::string FileSha256(const std::filesystem::path& a_path)
+	{
+		std::ifstream stream(a_path, std::ios::binary);
+		if (!stream)
+			throw std::runtime_error("could not open committed artifact for hashing");
+		BCRYPT_ALG_HANDLE algorithm = nullptr;
+		const auto openStatus = BCryptOpenAlgorithmProvider(
+			&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+		if (openStatus < 0)
+			throw std::runtime_error(std::format("BCryptOpenAlgorithmProvider failed ({:#x})", static_cast<std::uint32_t>(openStatus)));
+		DWORD objectBytes = 0;
+		DWORD copiedBytes = 0;
+		const auto propertyStatus = BCryptGetProperty(
+			algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes),
+			sizeof(objectBytes), &copiedBytes, 0);
+		if (propertyStatus < 0) {
+			BCryptCloseAlgorithmProvider(algorithm, 0);
+			throw std::runtime_error(std::format("BCryptGetProperty failed ({:#x})", static_cast<std::uint32_t>(propertyStatus)));
+		}
+		std::vector<UCHAR> hashObject(objectBytes);
+		BCRYPT_HASH_HANDLE hash = nullptr;
+		const auto createStatus = BCryptCreateHash(
+			algorithm, &hash, hashObject.data(), static_cast<ULONG>(hashObject.size()), nullptr, 0, 0);
+		if (createStatus < 0) {
+			BCryptCloseAlgorithmProvider(algorithm, 0);
+			throw std::runtime_error(std::format("BCryptCreateHash failed ({:#x})", static_cast<std::uint32_t>(createStatus)));
+		}
+		std::array<UCHAR, 1024 * 1024> buffer{};
+		NTSTATUS hashStatus = 0;
+		while (stream && hashStatus >= 0) {
+			stream.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
+			const auto bytesRead = stream.gcount();
+			if (bytesRead > 0)
+				hashStatus = BCryptHashData(hash, buffer.data(), static_cast<ULONG>(bytesRead), 0);
+		}
+		if (!stream.eof() && hashStatus >= 0)
+			hashStatus = static_cast<NTSTATUS>(0xC0000185L);  // STATUS_IO_DEVICE_ERROR
+		std::array<UCHAR, 32> digest{};
+		const auto finishStatus = hashStatus < 0 ? hashStatus : BCryptFinishHash(
+			hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+		BCryptDestroyHash(hash);
+		BCryptCloseAlgorithmProvider(algorithm, 0);
+		if (finishStatus < 0)
+			throw std::runtime_error(std::format("SHA-256 hashing failed ({:#x})", static_cast<std::uint32_t>(finishStatus)));
+
+		std::ostringstream result;
+		result << std::hex << std::setfill('0');
+		for (const auto value : digest)
+			result << std::setw(2) << static_cast<unsigned int>(value);
+		return result.str();
+	}
+
+	json DescribeCommittedArtifact(const std::filesystem::path& a_path)
+	{
+		std::error_code ec;
+		const auto size = std::filesystem::file_size(a_path, ec);
+		json artifact = {
+			{ "path", a_path.string() },
+			{ "bytes", ec ? json(nullptr) : json(size) },
+			{ "committed", true },
+		};
+		try {
+			artifact["sha256"] = FileSha256(a_path);
+		} catch (const std::exception& error) {
+			artifact["sha256"] = nullptr;
+			artifact["integrityError"] = error.what();
+		}
+		return artifact;
+	}
 
 	std::string SourceName(ScreenshotFeature::VRCaptureSource a_source)
 	{
@@ -76,21 +151,21 @@ ScreenshotApi::ScreenshotApi() :
 		{ "csx.screenshot", kContractMajor, kContractMinor, kSchemaRevision },
 		{ .maximumCommands = kMaximumCommands, .maximumEvents = kMaximumEvents, .commandRetention = kRetention })
 {
-	service.SetServerMetadataProvider([] {
-		return json{
+	service.SetServerMetadataProvider([this] {
+		auto metadata = BuildProvenance::GetProducer();
+		metadata.update(json{
 			{ "csxBuild", CSBuildNumber },
 			{ "csxVersion", std::string(Plugin::VERSION_LABEL) },
 			{ "featureVersion", "1.0.0" },
-			{ "binary", {
-				{ "sha256", nullptr }, { "sourceRevision", std::string(Plugin::BUILD_DESCRIBE) }, { "identityState", "partial" },
-			} },
+			{ "serviceSessionId", service.SessionId() },
 			{ "runtime", {
 				{ "game", globals::game::isVR ? "SkyrimVR" : "SkyrimSE" },
 				{ "presentation", globals::game::isVR ? "openvr" : "dxgi" }, { "hmd", "unknown" },
 			} },
 			{ "devBenchBuilt", ScreenshotDevBenchBridge::IsBuilt() },
 			{ "devBenchRegistered", ScreenshotDevBenchBridge::IsRegistered() },
-		};
+		});
+		return metadata;
 	});
 }
 
@@ -854,6 +929,7 @@ void ScreenshotApi::OnArtifactTerminal(std::string_view a_requestId, bool a_succ
 {
 	if (a_requestId.empty())
 		return;
+	const auto artifact = a_success ? DescribeCommittedArtifact(a_path) : json(nullptr);
 	std::lock_guard lock(mutex);
 	const auto found = requests.find(std::string(a_requestId));
 	if (found == requests.end() || IsTerminal(found->second.state))
@@ -862,14 +938,12 @@ void ScreenshotApi::OnArtifactTerminal(std::string_view a_requestId, bool a_succ
 	if (record.terminalArtifacts >= record.expectedArtifacts)
 		return;
 	if (a_success) {
-		std::error_code ec;
-		record.artifacts.push_back({
-			{ "path", a_path.string() }, { "bytes", std::filesystem::file_size(a_path, ec) },
-			{ "committed", true }, { "sha256", nullptr },
-		});
+		record.artifacts.push_back(artifact);
+		if (artifact.contains("integrityError"))
+			record.warnings.push_back({ { "code", "artifact_hash_failed" }, { "message", artifact["integrityError"] } });
 		++record.successfulArtifacts;
 		++completedArtifacts;
-		AppendEventLocked(record, "artifact.written", { { "path", a_path.string() } });
+		AppendEventLocked(record, "artifact.written", artifact);
 	} else {
 		++failedArtifacts;
 		record.error = { { "code", "artifact_failed" }, { "message", a_error.empty() ? "screenshot artifact failed" : std::string(a_error) }, { "phase", "encoding" } };
@@ -923,8 +997,12 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child, bool a_suc
 	} else {
 		++sequence.failed;
 	}
+	json childArtifact = nullptr;
+	if (a_success && !a_child.artifacts.empty())
+		childArtifact = a_child.artifacts.back();
 	sequence.children.push_back({
 		{ "ordinal", a_child.sequenceOrdinal }, { "requestId", a_child.requestId }, { "state", a_child.state },
+		{ "artifact", std::move(childArtifact) },
 		{ "path", a_path.empty() ? json(nullptr) : json(a_path.string()) }, { "error", a_error.empty() ? json(nullptr) : json(a_error) },
 	});
 	if ((sequence.failurePolicy == "abort" && !a_success) ||
@@ -950,6 +1028,23 @@ void ScreenshotApi::TryFinalizeSequenceLocked(SequenceRecord& a_sequence)
 		return;
 	TransitionLocked(parent->second, "finalizing", "sequence.finalizing");
 	const bool manifestWritten = WriteSequenceManifestLocked(a_sequence, true);
+	if (a_sequence.frameManifest) {
+		parent->second.expectedArtifacts = 1;
+		parent->second.terminalArtifacts = 1;
+		if (manifestWritten) {
+			const auto artifact = DescribeCommittedArtifact(a_sequence.finalManifestPath);
+			parent->second.artifacts.push_back(artifact);
+			parent->second.successfulArtifacts = 1;
+			if (artifact.contains("integrityError"))
+				parent->second.warnings.push_back({ { "code", "artifact_hash_failed" }, { "message", artifact["integrityError"] } });
+		} else {
+			parent->second.successfulArtifacts = 0;
+		}
+	} else {
+		parent->second.expectedArtifacts = 0;
+		parent->second.terminalArtifacts = 0;
+		parent->second.successfulArtifacts = 0;
+	}
 	std::string terminal;
 	if (a_sequence.cancelRequested)
 		terminal = a_sequence.written == 0 ? "cancelled" : "cancelled_partial";

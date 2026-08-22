@@ -262,6 +262,7 @@ target_link_libraries(
         Tracy::TracyClient
         Streamline
         d3d12.lib
+		bcrypt.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
 )

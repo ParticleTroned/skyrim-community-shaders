@@ -67,6 +67,7 @@ endforeach()
 foreach(_required_contract_text IN ITEMS
     runtime_session persistent_user settings_default file_reference
     maximumOutputsPerFrame retentionSeconds manifest_write_failed
+	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
@@ -90,6 +91,20 @@ endif()
 string(FIND "${_bridge}" "#ifdef DEVBENCH_BRIDGE_ENABLED" _bridge_guard_position)
 if(_bridge_guard_position EQUAL -1)
     message(FATAL_ERROR "Screenshot bridge does not use the project's DevBench compile guard")
+endif()
+string(FIND "${_bridge}" "if (g_registered.load" _registered_first_position)
+string(FIND "${_bridge}" "if (g_installAttempted.exchange" _retry_latch_position)
+string(FIND "${_bridge}" "GetDevBenchInterface001" _host_probe_position)
+if(_registered_first_position EQUAL -1 OR _retry_latch_position EQUAL -1 OR _host_probe_position EQUAL -1 OR
+   _retry_latch_position LESS _host_probe_position)
+    message(FATAL_ERROR "Screenshot bridge must preserve its PostPostLoad retry when DevBench is absent at PostLoad")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/XSEPlugin.cpp" _plugin_lifecycle)
+string(FIND "${_plugin_lifecycle}" "case SKSE::MessagingInterface::kPostLoad:" _postload_position)
+string(FIND "${_plugin_lifecycle}" "ScreenshotDevBenchBridge::Install();" _early_install_position)
+if(_postload_position EQUAL -1 OR _early_install_position LESS _postload_position)
+    message(FATAL_ERROR "Screenshot DevBench discovery must be attempted during PostLoad")
 endif()
 
 message(STATUS "Screenshot API contract, schemas, goldens, migration, actions, and journal events are coherent")

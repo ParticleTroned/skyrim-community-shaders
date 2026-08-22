@@ -1745,6 +1745,12 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ApiEditorContract COMMAND api_editor_contract_test)
     set_tests_properties(ApiEditorContract PROPERTIES LABELS "ControllerTests")
 
+    add_executable(api_feature_contract_test EXCLUDE_FROM_ALL tests/api_feature_contract_test.cpp)
+    target_compile_features(api_feature_contract_test PRIVATE cxx_std_23)
+    target_include_directories(api_feature_contract_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    add_test(NAME ApiFeatureContract COMMAND api_feature_contract_test)
+    set_tests_properties(ApiFeatureContract PROPERTIES LABELS "ControllerTests")
+
     add_custom_target(
         controller_tests
         DEPENDS
@@ -1768,6 +1774,7 @@ if(BUILD_CONTROLLER_TESTS)
             api_upscaling_service_policy_test
             api_weather_service_policy_test
             api_editor_contract_test
+            api_feature_contract_test
     )
 endif()
 

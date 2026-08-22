@@ -7,6 +7,8 @@
 #include "Api/WeatherService.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
+#include "Api/FeatureDevBenchBridge.h"
+#include "Api/FeatureService.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -154,6 +156,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
 			CSX::Api::ScheduleRuntimeMainThreadBinding();
 			CSX::Api::InitializeEditorService();
+			CSX::Api::InitializeFeatureService();
 			CSX::Api::InitializeProfilerService();
 			CSX::Api::InitializeWeatherService();
 			if (RegisterCommunityShadersAPIMessageListener()) {
@@ -165,6 +168,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::EditorDevBenchBridge::Install();
+				CSX::Api::FeatureDevBenchBridge::Install();
 			}
 			break;
 		}
@@ -179,6 +183,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::EditorDevBenchBridge::Install();
+				CSX::Api::FeatureDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -236,6 +241,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::InitializeProfilerService();
 				CSX::Api::InitializeWeatherService();
 				CSX::Api::EditorDevBenchBridge::Install();
+				CSX::Api::InitializeFeatureService();
+				CSX::Api::FeatureDevBenchBridge::Install();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();

@@ -355,7 +355,7 @@
     "Skip Unchanged Shaders": true
   },
   "Grass Collision": {
-    "EnableGrassCollision": false,
+    "EnableGrassCollision": true,
     "TrackRagdolls": true
   },
   "Grass Lighting": {
@@ -554,7 +554,7 @@
     "EnableStereoSync": false,
     "EnableTemporalDenoiser": false,
     "EnableVanillaSSAO": false,
-    "Enabled": false,
+    "Enabled": true,
     "GIDistanceCompensation": 0.0,
     "GIRadius": 256.0,
     "GISaturation": 0.7999998927116394,
@@ -565,7 +565,7 @@
     "NormalDisocclusion": 0.10000000149011612,
     "NumSlices": 3,
     "NumSteps": 6,
-    "ResolutionMode": 2,
+    "ResolutionMode": 0,
     "ResourceProfile": 1,
     "Thickness": 32.0,
     "UseStereoReproject": false,
@@ -580,8 +580,8 @@
     "ShadowContrast": 1.0,
     "SurfaceThickness": 0.019999999552965164,
     "UseStereoReproject": false,
-    "VRBaseSamplesAtReference": 16.0,
-    "VRCullDistance": 20480.0
+    "VRBaseSamplesAtReference": 44.0,
+    "VRCullDistance": 0.0
   },
   "Screenshot": {
     "ApplyCropToScreenshot": true,
@@ -631,16 +631,16 @@
     "EnableFastProbeSampling": true,
     "EnableIncrementalProbeUpdates": true,
     "EnableReducedUpdateFrequency": true,
-    "EnableSkylighting": false,
+    "EnableSkylighting": true,
     "IncludeMarkedRoofOccluders": true,
     "MaxZenith": 1.570796251296997,
     "MinDiffuseVisibility": 0.10000000149011612,
-    "MinSpecularVisibility": 0.05000000074505806,
-    "OcclusionUpdateInterval": 8,
-    "ProbeFieldSize": 10240.0,
-    "ProbeGridQuality": 0,
-    "ProbeUpdateInterval": 16,
-    "StableSliceCount": 8
+    "MinSpecularVisibility": 0.10000000149011612,
+    "OcclusionUpdateInterval": 5,
+    "ProbeFieldSize": 15701.3330078125,
+    "ProbeGridQuality": 2,
+    "ProbeUpdateInterval": 9,
+    "StableSliceCount": 13
   },
   "Subsurface Scattering": {
     "BaseProfile": {
@@ -700,7 +700,7 @@
   "Terrain Blending": {
     "BlendStrength": 0.5,
     "Enabled": 1,
-    "TerrainCullDistance": 725.0
+    "TerrainCullDistance": 1024.0
   },
   "Terrain Helper": {
     "EnableTerrainHelper": true
@@ -752,7 +752,7 @@
     "periphery_taa_center_blend_feather": 0.05000000074505806,
     "periphery_taa_enable": false,
     "periphery_taa_outer_scale": 0.8,
-    "qualityMode": 4,
+    "qualityMode": 1,
     "qualityModeSchemaVersion": 2,
     "reflexFPSLimit": 60.0,
     "reflexLowLatencyBoost": false,
@@ -900,7 +900,7 @@
     "EnableSplashes": 1,
     "EnableVanillaReflectionCompensation": 1,
     "EnableWeatherDrivenDryingModel": true,
-    "EnableWetterness": 0,
+    "EnableWetterness": 1,
     "GrassDryingMultiplier": 3.0,
     "LegacyWetIndirectSpecularScale": 0.5,
     "MaxPuddleWetness": 2.5,
@@ -920,19 +920,19 @@
     "RainGrassGlossiness": 60.0,
     "RainGrassSpecularStrength": 1.0,
     "RainReflectionBalance": 0.1,
-    "RaindropChance": 0.6000000238418579,
-    "RaindropFxRangeWorldUnits": 700.0,
-    "RaindropGridSize": 3.5999999046325684,
-    "RaindropInterval": 0.6499999761581421,
+    "RaindropChance": 0.800000011920929,
+    "RaindropFxRangeWorldUnits": 1400.0,
+    "RaindropGridSize": 3.0,
+    "RaindropInterval": 0.5,
     "RaindropTransitionFalloff": 2.0,
     "RippleBreadth": 0.4000000059604645,
-    "RippleLifetime": 0.2199999988079071,
+    "RippleLifetime": 0.30000001192092896,
     "RippleRadius": 0.6000000238418579,
     "RippleStrength": 2.0,
     "ShorePersistentDarkeningStrength": 1.100000023841858,
     "ShoreRange": 38,
     "SkinWetness": 1.0,
-    "SplashesLifetime": 4.5,
+    "SplashesLifetime": 6.0,
     "SplashesMaxRadius": 0.5,
     "SplashesMinRadius": 0.3499999940395355,
     "SplashesStrength": 1.2000000476837158,
@@ -941,6 +941,6 @@
     "WetDarkeningStrength": 0.8500000238418579,
     "WetFilmSpecularFloorScale": 2.0,
     "WetHighlightReduction": 2.5,
-    "WetternessFadeRange": 5000.0
+    "WetternessFadeRange": 10000.0
   }
 }

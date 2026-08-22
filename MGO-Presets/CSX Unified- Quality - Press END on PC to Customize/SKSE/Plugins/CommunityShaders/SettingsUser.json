@@ -554,7 +554,7 @@
     "EnableStereoSync": false,
     "EnableTemporalDenoiser": false,
     "EnableVanillaSSAO": false,
-    "Enabled": false,
+    "Enabled": true,
     "GIDistanceCompensation": 0.0,
     "GIRadius": 256.0,
     "GISaturation": 0.7999998927116394,
@@ -636,11 +636,11 @@
     "MaxZenith": 1.570796251296997,
     "MinDiffuseVisibility": 0.10000000149011612,
     "MinSpecularVisibility": 0.10000000149011612,
-    "OcclusionUpdateInterval": 5,
-    "ProbeFieldSize": 15701.3330078125,
-    "ProbeGridQuality": 2,
-    "ProbeUpdateInterval": 9,
-    "StableSliceCount": 13
+    "OcclusionUpdateInterval": 6,
+    "ProbeFieldSize": 12970.6669921875,
+    "ProbeGridQuality": 1,
+    "ProbeUpdateInterval": 13,
+    "StableSliceCount": 11
   },
   "Subsurface Scattering": {
     "BaseProfile": {
@@ -872,53 +872,6 @@
     "PositionSet": false,
     "ShowInOverlay": false
   },
-  "Wetness Effects": {
-    "DebugSettings": {
-      "EnableIntExOverride": false,
-      "EnablePuddleOverride": false,
-      "EnableRainOverride": false,
-      "EnableWetnessOverride": false,
-      "PuddleWetnessOverride": [
-        0.0,
-        0.0
-      ],
-      "RainOverride": [
-        0.0,
-        0.0
-      ],
-      "WetnessOverride": [
-        0.0,
-        0.0
-      ]
-    },
-    "EnableRaindropFx": 1,
-    "EnableRipples": 1,
-    "EnableSplashes": 1,
-    "EnableVanillaRipples": 0,
-    "EnableWetnessEffects": 1,
-    "MaxPuddleWetness": 1.5,
-    "MaxRainWetness": 1.0,
-    "MaxShoreWetness": 1.0,
-    "MinRainWetness": 0.6499999761581421,
-    "PuddleMaxAngle": 0.949999988079071,
-    "PuddleMinWetness": 0.8500000238418579,
-    "PuddleRadius": 1.0,
-    "RaindropChance": 1.0,
-    "RaindropFxRange": 1000.0,
-    "RaindropGridSize": 4.0,
-    "RaindropInterval": 1.0,
-    "RippleBreadth": 0.5,
-    "RippleLifetime": 0.5,
-    "RippleRadius": 1.0,
-    "RippleStrength": 1.0,
-    "ShoreRange": 32,
-    "SkinWetness": 0.949999988079071,
-    "SplashesLifetime": 10.0,
-    "SplashesMaxRadius": 0.5,
-    "SplashesMinRadius": 0.30000001192092896,
-    "SplashesStrength": 1.0499999523162842,
-    "WeatherTransitionSpeed": 3.0
-  },
   "Wetterness": {
     "DebugSettings": {
       "EnableIntExOverride": false,
@@ -967,19 +920,19 @@
     "RainGrassGlossiness": 60.0,
     "RainGrassSpecularStrength": 1.0,
     "RainReflectionBalance": 0.1,
-    "RaindropChance": 0.800000011920929,
-    "RaindropFxRangeWorldUnits": 1400.0,
-    "RaindropGridSize": 3.0,
-    "RaindropInterval": 0.5,
+    "RaindropChance": 0.699999988079071,
+    "RaindropFxRangeWorldUnits": 1000.0,
+    "RaindropGridSize": 3.25,
+    "RaindropInterval": 0.5799999833106995,
     "RaindropTransitionFalloff": 2.0,
     "RippleBreadth": 0.4000000059604645,
-    "RippleLifetime": 0.30000001192092896,
+    "RippleLifetime": 0.25999999046325684,
     "RippleRadius": 0.6000000238418579,
     "RippleStrength": 2.0,
     "ShorePersistentDarkeningStrength": 1.100000023841858,
     "ShoreRange": 38,
     "SkinWetness": 1.0,
-    "SplashesLifetime": 6.0,
+    "SplashesLifetime": 5.199999809265137,
     "SplashesMaxRadius": 0.5,
     "SplashesMinRadius": 0.3499999940395355,
     "SplashesStrength": 1.2000000476837158,
@@ -988,6 +941,6 @@
     "WetDarkeningStrength": 0.8500000238418579,
     "WetFilmSpecularFloorScale": 2.0,
     "WetHighlightReduction": 2.5,
-    "WetternessFadeRange": 10000.0
+    "WetternessFadeRange": 7500.0
   }
 }

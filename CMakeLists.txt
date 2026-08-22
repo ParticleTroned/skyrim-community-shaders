@@ -1672,22 +1672,6 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(ApiServiceRegistry PROPERTIES LABELS "ControllerTests")
 
     add_executable(
-        api_profiler_contract_test
-        EXCLUDE_FROM_ALL
-        tests/api_profiler_contract_test.cpp
-    )
-    target_compile_features(api_profiler_contract_test PRIVATE cxx_std_23)
-    target_include_directories(
-        api_profiler_contract_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/include"
-    )
-    add_test(NAME ApiProfilerContract COMMAND api_profiler_contract_test)
-    set_tests_properties(
-        ApiProfilerContract
-        PROPERTIES LABELS "ControllerTests"
-    )
-
-    add_executable(
         api_upscaling_contract_test
         EXCLUDE_FROM_ALL
         tests/api_upscaling_contract_test.cpp
@@ -1720,6 +1704,22 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(ApiUpscalingServicePolicy PROPERTIES LABELS "ControllerTests")
 
     add_executable(
+        api_shader_service_policy_test
+        EXCLUDE_FROM_ALL
+        tests/api_shader_service_policy_test.cpp
+        src/Api/ShaderServicePolicy.cpp
+    )
+    target_compile_features(api_shader_service_policy_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_shader_service_policy_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME ApiShaderServicePolicy COMMAND api_shader_service_policy_test)
+    set_tests_properties(ApiShaderServicePolicy PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
         api_weather_service_policy_test
         EXCLUDE_FROM_ALL
         tests/api_weather_service_policy_test.cpp
@@ -1734,6 +1734,22 @@ if(BUILD_CONTROLLER_TESTS)
     )
     add_test(NAME ApiWeatherServicePolicy COMMAND api_weather_service_policy_test)
     set_tests_properties(ApiWeatherServicePolicy PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        api_profiler_contract_test
+        EXCLUDE_FROM_ALL
+        tests/api_profiler_contract_test.cpp
+    )
+    target_compile_features(api_profiler_contract_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_profiler_contract_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    add_test(NAME ApiProfilerContract COMMAND api_profiler_contract_test)
+    set_tests_properties(
+        ApiProfilerContract
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_editor_contract_test
@@ -1769,10 +1785,11 @@ if(BUILD_CONTROLLER_TESTS)
             api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test
-            api_profiler_contract_test
             api_upscaling_contract_test
             api_upscaling_service_policy_test
+            api_shader_service_policy_test
             api_weather_service_policy_test
+            api_profiler_contract_test
             api_editor_contract_test
             api_feature_contract_test
     )

@@ -2,6 +2,7 @@
 
 - [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
 - [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
+- [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
 
 ## Getting Started
 

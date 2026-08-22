@@ -9,6 +9,7 @@
 #include "Api/EditorService.h"
 #include "Api/FeatureDevBenchBridge.h"
 #include "Api/FeatureService.h"
+#include "Api/ShaderDevBenchBridge.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -169,6 +170,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
+				CSX::Api::ShaderDevBenchBridge::Install();
 			}
 			break;
 		}
@@ -184,6 +186,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
+				CSX::Api::ShaderDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -249,6 +252,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
+				CSX::Api::ShaderDevBenchBridge::Install();
 			}
 
 			break;

@@ -50,7 +50,7 @@ namespace
 			BCryptCloseAlgorithmProvider(algorithm, 0);
 			throw std::runtime_error(std::format("BCryptCreateHash failed ({:#x})", static_cast<std::uint32_t>(createStatus)));
 		}
-		std::array<UCHAR, 1024 * 1024> buffer{};
+		std::vector<UCHAR> buffer(1024 * 1024);
 		NTSTATUS hashStatus = 0;
 		while (stream && hashStatus >= 0) {
 			stream.read(reinterpret_cast<char*>(buffer.data()), buffer.size());

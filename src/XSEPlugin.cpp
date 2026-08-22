@@ -1,4 +1,6 @@
 #include "Api/ServiceRegistryProvider.h"
+#include "Api/EditorDevBenchBridge.h"
+#include "Api/EditorService.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -142,11 +144,14 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostLoad:
 		{
 			RegisterCommunityShadersAPIMessageListener();
+			CSX::Api::InitializeEditorService();
+			CSX::Api::EditorDevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				CSX::Api::EditorDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -201,6 +206,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				CSX::Api::EditorDevBenchBridge::Install();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
 			}

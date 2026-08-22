@@ -37,6 +37,9 @@ public:
 	static void OpenEditorWindow();
 	static void ToggleEditorWindow();
 	static void UpdateWeatherLockAndTime();
+	static bool CanOpenEditorNow();
+	static bool IsDataAvailable();
+	static bool AreResourcesInitialized();
 
 	void LerpWeather(RE::TESWeather*, RE::TESWeather*, float);
 

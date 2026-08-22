@@ -1,0 +1,409 @@
+#include "Api/EditorService.h"
+
+#include "Api/ServiceFoundation.h"
+#include "Api/ServiceRegistry.h"
+#include "BuildProvenance.h"
+#include "CSEditor/EditorWindow.h"
+#include "Features/CSEditor.h"
+#include "Globals.h"
+#include "Menu.h"
+#include "State.h"
+
+#include <chrono>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+#include <unordered_map>
+
+namespace
+{
+	using CSX::EditorAPI::MutationReceipt001;
+	using CSX::EditorAPI::MutationRequest001;
+	using CSX::EditorAPI::Preflight001;
+	using CSX::EditorAPI::Snapshot001;
+	using CSX::EditorAPI::Status;
+	constexpr auto kPreflightLifetime = std::chrono::seconds(30);
+
+	struct OwnedMutation
+	{
+		CSX::EditorAPI::MutationAction action = CSX::EditorAPI::MutationAction::kOpen;
+		std::uint64_t expectedStateRevision = 0;
+		std::uint64_t flags = CSX::EditorAPI::kMutationNone;
+		bool operator==(const OwnedMutation&) const = default;
+	};
+
+	struct PendingPreflight
+	{
+		OwnedMutation mutation;
+		std::chrono::steady_clock::time_point expiresAt;
+	};
+
+	struct ResponseStrings
+	{
+		std::string unavailableReason;
+		std::string token;
+		std::string reasonCode;
+		std::string message;
+	};
+
+	struct StateSignature
+	{
+		bool available = false;
+		bool dataAvailable = false;
+		bool canOpen = false;
+		bool resourcesInitialized = false;
+		bool editorOpen = false;
+		bool menuSessionOpen = false;
+		bool mainMenuOpen = false;
+		bool loadingMenuOpen = false;
+		bool persistentMutationBlocked = false;
+		bool saveLoadSafeModeActive = false;
+		bool weatherLocked = false;
+		bool timePaused = false;
+		bool undoAvailable = false;
+		CSX::EditorAPI::PreviewMode previewMode = CSX::EditorAPI::PreviewMode::kNone;
+		bool operator==(const StateSignature&) const = default;
+	};
+
+	CSX::EditorAPI::PreviewMode ConvertPreviewMode(EditorWindow::PreviewMode a_mode)
+	{
+		using Source = EditorWindow::PreviewMode;
+		switch (a_mode) {
+		case Source::FreeCamera:
+			return CSX::EditorAPI::PreviewMode::kFreeCamera;
+		case Source::FreeCameraLocked:
+			return CSX::EditorAPI::PreviewMode::kFreeCameraLocked;
+		case Source::PlayMode:
+			return CSX::EditorAPI::PreviewMode::kPlayMode;
+		default:
+			return CSX::EditorAPI::PreviewMode::kNone;
+		}
+	}
+
+	class EditorService
+	{
+	public:
+		EditorService() : ownerThread(std::this_thread::get_id()) {}
+
+		Status GetSnapshot(Snapshot001& a_output)
+		{
+			if (!IsOwnerThread())
+				return Status::kWrongThread;
+			const auto signature = CaptureState();
+			UpdateRevision(signature);
+			strings.unavailableReason = UnavailableReason(signature);
+			a_output = {
+				.structSize = sizeof(Snapshot001),
+				.available = signature.available ? 1u : 0u,
+				.dataAvailable = signature.dataAvailable ? 1u : 0u,
+				.canOpen = signature.canOpen ? 1u : 0u,
+				.resourcesInitialized = signature.resourcesInitialized ? 1u : 0u,
+				.editorOpen = signature.editorOpen ? 1u : 0u,
+				.menuSessionOpen = signature.menuSessionOpen ? 1u : 0u,
+				.mainMenuOpen = signature.mainMenuOpen ? 1u : 0u,
+				.loadingMenuOpen = signature.loadingMenuOpen ? 1u : 0u,
+				.persistentMutationBlocked = signature.persistentMutationBlocked ? 1u : 0u,
+				.saveLoadSafeModeActive = signature.saveLoadSafeModeActive ? 1u : 0u,
+				.weatherLocked = signature.weatherLocked ? 1u : 0u,
+				.timePaused = signature.timePaused ? 1u : 0u,
+				.undoAvailable = signature.undoAvailable ? 1u : 0u,
+				.previewMode = signature.previewMode,
+				.stateRevision = revision,
+				.capabilities = CSX::EditorAPI::ServiceCapabilities,
+				.unavailableReason = strings.unavailableReason.c_str(),
+				.buildId = BuildProvenance::GetBuildId().data(),
+			};
+			return Status::kSuccess;
+		}
+
+		Status Preflight(const MutationRequest001& a_request, Preflight001& a_output)
+		{
+			if (!IsOwnerThread())
+				return FillPreflight(a_output, Status::kWrongThread, false, "wrong_thread", "editor API calls are main-thread-affine");
+			PrunePreflights();
+			const auto signature = CaptureState();
+			UpdateRevision(signature);
+			const auto mutation = Own(a_request);
+			if (mutation.expectedStateRevision != revision)
+				return FillPreflight(a_output, Status::kRevisionConflict, false, "revision_conflict", "state changed; request a fresh snapshot");
+			if (!IsKnownAction(mutation.action))
+				return FillPreflight(a_output, Status::kInvalidArgument, false, "invalid_action", "mutation action is unknown");
+
+			const bool disruptive = IsDisruptive(mutation.action, signature);
+			const auto requiredFlags = disruptive ? CSX::EditorAPI::kMutationAllowDisruptive : CSX::EditorAPI::kMutationNone;
+			if (!CanApply(mutation.action, signature))
+				return FillPreflight(a_output, Status::kBlocked, false, "blocked", BlockReason(mutation.action, signature));
+			if ((mutation.flags & requiredFlags) != requiredFlags) {
+				strings.message = "mutation requires explicit allowDisruptive acknowledgement";
+				strings.reasonCode = "acknowledgement_required";
+				a_output = { .structSize = sizeof(Preflight001), .status = Status::kBlocked, .allowed = 0,
+					.disruptive = disruptive ? 1u : 0u, .stateRevision = revision, .requiredFlags = requiredFlags,
+					.reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
+				return Status::kBlocked;
+			}
+
+			strings.token = CSX::Api::ServiceFoundation::NewId();
+			pending.insert_or_assign(strings.token, PendingPreflight{ mutation, std::chrono::steady_clock::now() + kPreflightLifetime });
+			strings.reasonCode = "allowed";
+			strings.message = "mutation may execute with the returned token";
+			a_output = { .structSize = sizeof(Preflight001), .status = Status::kSuccess, .allowed = 1,
+				.disruptive = disruptive ? 1u : 0u, .stateRevision = revision, .requiredFlags = requiredFlags,
+				.token = strings.token.c_str(), .reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
+			return Status::kSuccess;
+		}
+
+		Status Execute(const MutationRequest001& a_request, MutationReceipt001& a_output)
+		{
+			if (!IsOwnerThread())
+				return FillReceipt(a_output, Status::kWrongThread, "editor API calls are main-thread-affine");
+			PrunePreflights();
+			const auto before = CaptureState();
+			UpdateRevision(before);
+			const auto previousRevision = revision;
+			const auto mutation = Own(a_request);
+			if (!a_request.preflightToken || !*a_request.preflightToken)
+				return FillReceipt(a_output, Status::kPreflightRequired, "preflightToken is required");
+			const std::string token = a_request.preflightToken;
+			const auto found = pending.find(token);
+			if (found == pending.end())
+				return FillReceipt(a_output, Status::kPreflightExpired, "preflight token is missing or expired");
+			const auto expected = found->second.mutation;
+			pending.erase(found);
+			if (expected != mutation)
+				return FillReceipt(a_output, Status::kPreflightMismatch, "mutation does not match the preflight request");
+			if (mutation.expectedStateRevision != revision)
+				return FillReceipt(a_output, Status::kRevisionConflict, "state changed after preflight");
+			if (!CanApply(mutation.action, before))
+				return FillReceipt(a_output, Status::kBlocked, BlockReason(mutation.action, before));
+
+			auto* editor = EditorWindow::GetSingleton();
+			switch (mutation.action) {
+			case CSX::EditorAPI::MutationAction::kOpen:
+				CSEditor::OpenEditorWindow();
+				editor->UpdateOpenState();
+				break;
+			case CSX::EditorAPI::MutationAction::kClose:
+				editor->open = false;
+				editor->UpdateOpenState();
+				break;
+			case CSX::EditorAPI::MutationAction::kToggle:
+				CSEditor::ToggleEditorWindow();
+				editor->UpdateOpenState();
+				break;
+			case CSX::EditorAPI::MutationAction::kResetLayout:
+				editor->resetLayout = true;
+				break;
+			case CSX::EditorAPI::MutationAction::kExitPreview:
+				editor->ExitPreviewMode();
+				break;
+			default:
+				return FillReceipt(a_output, Status::kInvalidArgument, "mutation action is unknown");
+			}
+
+			const auto after = CaptureState();
+			const bool changed = !(before == after) || mutation.action == CSX::EditorAPI::MutationAction::kResetLayout;
+			if (changed)
+				++revision;
+			lastState = after;
+			strings.message = changed ? "editor mutation applied" : "editor already matched requested state";
+			a_output = { .structSize = sizeof(MutationReceipt001), .status = Status::kSuccess, .applied = 1,
+				.changed = changed ? 1u : 0u, .previousStateRevision = previousRevision, .stateRevision = revision,
+				.message = strings.message.c_str() };
+			return Status::kSuccess;
+		}
+
+	private:
+		std::thread::id ownerThread;
+		std::uint64_t revision = 1;
+		std::optional<StateSignature> lastState;
+		std::unordered_map<std::string, PendingPreflight> pending;
+		ResponseStrings strings;
+
+		bool IsOwnerThread() const { return std::this_thread::get_id() == ownerThread; }
+		static OwnedMutation Own(const MutationRequest001& a_request) { return { a_request.action, a_request.expectedStateRevision, a_request.flags }; }
+
+		StateSignature CaptureState() const
+		{
+			auto* feature = CSEditor::GetSingleton();
+			auto* editor = EditorWindow::GetSingleton();
+			auto* menu = Menu::GetSingleton();
+			auto* state = globals::state;
+			return {
+				.available = feature && feature->loaded && CSEditor::IsDataAvailable(),
+				.dataAvailable = CSEditor::IsDataAvailable(),
+				.canOpen = CSEditor::CanOpenEditorNow(),
+				.resourcesInitialized = CSEditor::AreResourcesInitialized(),
+				.editorOpen = editor && editor->open,
+				.menuSessionOpen = menu && menu->IsMenuSessionOpen(),
+				.mainMenuOpen = state && state->isMainMenuOpen,
+				.loadingMenuOpen = state && state->isLoadingMenuOpen,
+				.persistentMutationBlocked = state && state->IsPersistentMutationBlocked(),
+				.saveLoadSafeModeActive = state && state->IsSaveLoadSafeModeActive(),
+				.weatherLocked = editor && editor->IsWeatherLocked(),
+				.timePaused = editor && editor->IsTimePaused(),
+				.undoAvailable = editor && editor->CanUndo(),
+				.previewMode = editor ? ConvertPreviewMode(editor->GetPreviewMode()) : CSX::EditorAPI::PreviewMode::kNone,
+			};
+		}
+
+		void UpdateRevision(const StateSignature& a_state)
+		{
+			if (lastState && *lastState != a_state)
+				++revision;
+			lastState = a_state;
+		}
+
+		static std::string UnavailableReason(const StateSignature& a_state)
+		{
+			if (a_state.available)
+				return {};
+			if (!a_state.dataAvailable)
+				return "editor data is not loaded";
+			return "CS Editor feature is not loaded";
+		}
+
+		static bool IsKnownAction(CSX::EditorAPI::MutationAction a_action)
+		{
+			return a_action >= CSX::EditorAPI::MutationAction::kOpen && a_action <= CSX::EditorAPI::MutationAction::kExitPreview;
+		}
+
+		static bool IsDisruptive(CSX::EditorAPI::MutationAction a_action, const StateSignature& a_state)
+		{
+			return a_state.previewMode != CSX::EditorAPI::PreviewMode::kNone &&
+			       (a_action == CSX::EditorAPI::MutationAction::kClose || a_action == CSX::EditorAPI::MutationAction::kToggle ||
+				       a_action == CSX::EditorAPI::MutationAction::kExitPreview);
+		}
+
+		static bool CanApply(CSX::EditorAPI::MutationAction a_action, const StateSignature& a_state)
+		{
+			switch (a_action) {
+			case CSX::EditorAPI::MutationAction::kOpen:
+				return a_state.editorOpen || a_state.canOpen;
+			case CSX::EditorAPI::MutationAction::kClose:
+				return a_state.editorOpen;
+			case CSX::EditorAPI::MutationAction::kToggle:
+				return a_state.editorOpen || a_state.canOpen;
+			case CSX::EditorAPI::MutationAction::kResetLayout:
+				return a_state.editorOpen;
+			case CSX::EditorAPI::MutationAction::kExitPreview:
+				return a_state.previewMode != CSX::EditorAPI::PreviewMode::kNone;
+			default:
+				return false;
+			}
+		}
+
+		static std::string BlockReason(CSX::EditorAPI::MutationAction a_action, const StateSignature& a_state)
+		{
+			if (a_action == CSX::EditorAPI::MutationAction::kOpen || a_action == CSX::EditorAPI::MutationAction::kToggle) {
+				if (!a_state.available)
+					return UnavailableReason(a_state);
+				if (a_state.loadingMenuOpen)
+					return "editor cannot open during a loading screen";
+				if (a_state.mainMenuOpen)
+					return "enter the game world before opening the editor";
+				return "player world context is unavailable";
+			}
+			if (a_action == CSX::EditorAPI::MutationAction::kClose)
+				return "editor is already closed";
+			if (a_action == CSX::EditorAPI::MutationAction::kResetLayout)
+				return "editor must be open before resetting its layout";
+			if (a_action == CSX::EditorAPI::MutationAction::kExitPreview)
+				return "editor is not in preview mode";
+			return "mutation action is unsupported";
+		}
+
+		Status FillPreflight(Preflight001& a_output, Status a_status, bool a_allowed, std::string a_reason, std::string a_message)
+		{
+			strings.reasonCode = std::move(a_reason);
+			strings.message = std::move(a_message);
+			a_output = { .structSize = sizeof(Preflight001), .status = a_status, .allowed = a_allowed ? 1u : 0u,
+				.stateRevision = revision, .reasonCode = strings.reasonCode.c_str(), .message = strings.message.c_str() };
+			return a_status;
+		}
+
+		Status FillReceipt(MutationReceipt001& a_output, Status a_status, std::string a_message)
+		{
+			strings.message = std::move(a_message);
+			a_output = { .structSize = sizeof(MutationReceipt001), .status = a_status, .stateRevision = revision,
+				.message = strings.message.c_str() };
+			return a_status;
+		}
+
+		void PrunePreflights()
+		{
+			const auto now = std::chrono::steady_clock::now();
+			for (auto it = pending.begin(); it != pending.end();) {
+				if (it->second.expiresAt <= now)
+					it = pending.erase(it);
+				else
+					++it;
+			}
+		}
+	};
+
+	EditorService& GetEditorService()
+	{
+		static EditorService service;
+		return service;
+	}
+
+	Status GetSnapshotFn(const void* a_context, Snapshot001* a_output)
+	{
+		if (!a_context || !a_output)
+			return Status::kInvalidArgument;
+		if (a_output->structSize < sizeof(Snapshot001))
+			return Status::kStructureTooSmall;
+		try { return static_cast<EditorService*>(const_cast<void*>(a_context))->GetSnapshot(*a_output); }
+		catch (...) { return Status::kInternalError; }
+	}
+
+	Status PreflightFn(const void* a_context, const MutationRequest001* a_request, Preflight001* a_output)
+	{
+		if (!a_context || !a_request || !a_output)
+			return Status::kInvalidArgument;
+		if (a_request->structSize < sizeof(MutationRequest001) || a_output->structSize < sizeof(Preflight001))
+			return Status::kStructureTooSmall;
+		try { return static_cast<EditorService*>(const_cast<void*>(a_context))->Preflight(*a_request, *a_output); }
+		catch (...) { return Status::kInternalError; }
+	}
+
+	Status ExecuteFn(const void* a_context, const MutationRequest001* a_request, MutationReceipt001* a_output)
+	{
+		if (!a_context || !a_request || !a_output)
+			return Status::kInvalidArgument;
+		if (a_request->structSize < sizeof(MutationRequest001) || a_output->structSize < sizeof(MutationReceipt001))
+			return Status::kStructureTooSmall;
+		try { return static_cast<EditorService*>(const_cast<void*>(a_context))->Execute(*a_request, *a_output); }
+		catch (...) { return Status::kInternalError; }
+	}
+}
+
+namespace CSX::Api
+{
+	const EditorAPI::Interface001* GetEditorService001()
+	{
+		static const EditorAPI::Interface001 service{
+			.structSize = sizeof(EditorAPI::Interface001), .major = EditorAPI::ServiceMajor,
+			.minor = EditorAPI::ServiceMinor, .schemaRevision = EditorAPI::SchemaRevision,
+			.capabilities = EditorAPI::ServiceCapabilities, .context = &GetEditorService(),
+			.GetSnapshot = &GetSnapshotFn, .Preflight = &PreflightFn, .Execute = &ExecuteFn,
+		};
+		return &service;
+	}
+
+	void InitializeEditorService()
+	{
+		static std::once_flag initialized;
+		std::call_once(initialized, [] {
+			const auto status = GetProcessServiceRegistry().Register({ EditorAPI::ServiceName, EditorAPI::ServiceMajor,
+				EditorAPI::ServiceMinor, EditorAPI::SchemaRevision,
+				ServiceAPI::kCapabilityInspection | ServiceAPI::kCapabilityRuntimeMutation | ServiceAPI::kCapabilityTransactions,
+				GetEditorService001() });
+			if (status != ServiceAPI::Status::kSuccess)
+				logger::error("Failed to register CSX editor service ({})", static_cast<std::uint32_t>(status));
+			else
+				logger::info("Registered CSX editor service ABI {}.{}", EditorAPI::ServiceMajor, EditorAPI::ServiceMinor);
+		});
+	}
+}

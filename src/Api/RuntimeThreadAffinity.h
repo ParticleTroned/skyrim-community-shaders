@@ -11,6 +11,7 @@ namespace CSX::Api
 		kBound,
 		kAlreadyBound,
 		kDifferentThread,
+		kRebound,
 	};
 
 	// Runtime thread identity must come from SKSE's game-task queue. Lifecycle
@@ -20,6 +21,7 @@ namespace CSX::Api
 	{
 	public:
 		ThreadBindResult BindCurrentThread();
+		ThreadBindResult AdoptCurrentThreadFromTaskQueue();
 		bool IsBound() const;
 		bool IsCurrentThread() const;
 
@@ -30,6 +32,8 @@ namespace CSX::Api
 
 	RuntimeThreadAffinity& GetRuntimeMainThreadAffinity();
 	ThreadBindResult BindRuntimeMainThread();
+	ThreadBindResult AdoptRuntimeMainThreadFromTaskQueue();
 	bool IsRuntimeMainThread();
+	void EnterRuntimeMainThreadTask();
 	void ScheduleRuntimeMainThreadBinding();
 }

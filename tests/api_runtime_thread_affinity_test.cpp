@@ -31,6 +31,15 @@ int main()
 		Check(!other.first, "different thread was accepted as owner");
 		Check(other.second == CSX::Api::ThreadBindResult::kDifferentThread, "different thread replaced the owner");
 		Check(affinity.IsCurrentThread(), "owner changed after rejected bind");
+
+		auto adopted = std::async(std::launch::async, [&] {
+			return std::pair{ affinity.AdoptCurrentThreadFromTaskQueue(), affinity.IsCurrentThread() };
+		}).get();
+		Check(adopted.first == CSX::Api::ThreadBindResult::kRebound, "trusted task-queue transition was not adopted");
+		Check(adopted.second, "adopted task-queue thread was rejected");
+		Check(!affinity.IsCurrentThread(), "previous owner survived a trusted task-queue transition");
+		Check(affinity.AdoptCurrentThreadFromTaskQueue() == CSX::Api::ThreadBindResult::kRebound, "task queue could not transition back");
+		Check(affinity.IsCurrentThread(), "restored task-queue owner was rejected");
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

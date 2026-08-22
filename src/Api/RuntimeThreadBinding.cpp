@@ -2,6 +2,15 @@
 
 namespace CSX::Api
 {
+	void EnterRuntimeMainThreadTask()
+	{
+		const auto result = AdoptRuntimeMainThreadFromTaskQueue();
+		if (result == ThreadBindResult::kBound)
+			logger::info("Runtime API main-thread affinity bound from SKSE task queue");
+		else if (result == ThreadBindResult::kRebound)
+			logger::info("Runtime API main-thread affinity followed an SKSE task-queue thread transition");
+	}
+
 	void ScheduleRuntimeMainThreadBinding()
 	{
 		auto* tasks = SKSE::GetTaskInterface();
@@ -10,12 +19,6 @@ namespace CSX::Api
 			return;
 		}
 
-		tasks->AddTask([] {
-			const auto result = BindRuntimeMainThread();
-			if (result == ThreadBindResult::kBound)
-				logger::info("Runtime API main-thread affinity bound from SKSE task queue");
-			else if (result == ThreadBindResult::kDifferentThread)
-				logger::critical("SKSE task queue changed threads after runtime API affinity was bound");
-		});
+		tasks->AddTask([] { EnterRuntimeMainThreadTask(); });
 	}
 }

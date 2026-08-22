@@ -366,7 +366,14 @@ namespace SharedData
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
-		float4 pad;
+		float WaterBrightness;
+		float GlobalReflectionAmount;
+		float RefractionAmount;
+		float SunSpecularMultiplier;
+		float WaveAmplitude;
+		float FresnelMin;
+		float FresnelMax;
+		float Muddiness;
 	};
 
 	struct BloomSettings

@@ -14,7 +14,7 @@ struct LODBlending : Feature
 				"Enhanced terrain LOD appearance matching",
 				"Snow-specific LOD brightness adjustment",
 				"Optional terrain vertex color modification",
-				"Water reflection strength adjustment",
+				"Height-faded LOD water reflection blending",
 				"Seamless transition between detail levels" }
 		};
 	}

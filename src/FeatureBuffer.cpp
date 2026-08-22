@@ -121,7 +121,7 @@ namespace
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
 	static_assert(sizeof(TruePBRSettingsCB) == 16);
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 4);
-	static_assert(sizeof(UnifiedWaterSettingsCB) == 64);
+	static_assert(sizeof(UnifiedWaterSettingsCB) == 80);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackStrength) == 0);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepConnectionProbeReachUnits) == 4);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextDepthUnits) == 8);
@@ -132,7 +132,14 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowSurfaceDepthRangeUnits) == 36);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackMaxDistance) == 40);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextTransitionUnits) == 44);
-	static_assert(offsetof(UnifiedWaterSettingsCB, _pad) == 48);
+	static_assert(offsetof(UnifiedWaterSettingsCB, WaterBrightness) == 48);
+	static_assert(offsetof(UnifiedWaterSettingsCB, GlobalReflectionAmount) == 52);
+	static_assert(offsetof(UnifiedWaterSettingsCB, RefractionAmount) == 56);
+	static_assert(offsetof(UnifiedWaterSettingsCB, SunSpecularMultiplier) == 60);
+	static_assert(offsetof(UnifiedWaterSettingsCB, WaveAmplitude) == 64);
+	static_assert(offsetof(UnifiedWaterSettingsCB, FresnelMin) == 68);
+	static_assert(offsetof(UnifiedWaterSettingsCB, FresnelMax) == 72);
+	static_assert(offsetof(UnifiedWaterSettingsCB, Muddiness) == 76);
 	static_assert(sizeof(BloomSettingsCB) == 48);
 	static_assert(offsetof(BloomSettingsCB, Enabled) == 0);
 	static_assert(offsetof(BloomSettingsCB, BloomTint) == 20);

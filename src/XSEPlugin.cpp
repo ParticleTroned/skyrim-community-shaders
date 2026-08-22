@@ -143,6 +143,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// Establish owner-thread affinity before DataLoaded; the later lifecycle
+			// callback is not guaranteed to run on the SKSE task-queue thread.
+			CSX::Api::InitializeProfilerService();
 			if (RegisterCommunityShadersAPIMessageListener()) {
 				// Publish the diagnostic adapter before cache validation and shader
 				// compilation. If DevBench's PostLoad listener runs later, the

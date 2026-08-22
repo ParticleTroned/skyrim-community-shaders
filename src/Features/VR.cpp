@@ -18,7 +18,7 @@
 #include "ShaderCache.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
-#include "VRDepthCullingPolicy.h"
+#include "VRDepthCullingEnablePolicy.h"
 #include "WaterEffects.h"
 #include "WetnessEffects.h"
 #include "Wetterness.h"
@@ -406,105 +406,6 @@ namespace
 		}
 	}
 
-	// SkyrimVR's OBB occlusion pass is rendered every frame, but its GPU result is
-	// consumed at the start of the following frame. A zero therefore belongs to
-	// the view that produced the previous depth buffer, not necessarily the view
-	// currently being accumulated. Applying that stale zero after HMD motion is
-	// what removes foreground geometry for one frame.
-	//
-	// Keep the OBB pass running every frame. Only reject an occluded result when
-	// the current view is coherent with the view that produced it; otherwise make
-	// the stale answer conservative (visible) while the current frame computes a
-	// fresh answer.
-	struct DepthCullingTestPose
-	{
-		RE::NiMatrix3 rotation{};
-		RE::NiPoint3 translation{};
-		bool valid = false;
-	};
-
-	DepthCullingTestPose depthCullingTestPose{};
-
-	constexpr std::uint32_t kDepthCullingMaximumObjects = 0x1000u;
-
-	bool IsDepthCullingViewCoherent(const RE::NiTransform& a_currentView)
-	{
-		double relativeRotationTrace = 0.0;
-		for (std::size_t row = 0; row < 3; ++row) {
-			for (std::size_t column = 0; column < 3; ++column) {
-				relativeRotationTrace += static_cast<double>(depthCullingTestPose.rotation.entry[row][column]) *
-				                         static_cast<double>(a_currentView.rotate.entry[row][column]);
-			}
-		}
-		const double rotationCosine = std::clamp((relativeRotationTrace - 1.0) * 0.5, -1.0, 1.0);
-		const auto translationDelta = a_currentView.translate - depthCullingTestPose.translation;
-		return VRDepthCullingPolicy::IsViewCoherent(
-			depthCullingTestPose.valid,
-			rotationCosine,
-			translationDelta.SqrLength());
-	}
-
-	void CaptureDepthCullingTestPose()
-	{
-		const auto* camera = RE::Main::WorldRootCamera();
-		if (!camera) {
-			depthCullingTestPose.valid = false;
-			return;
-		}
-
-		depthCullingTestPose.rotation = camera->world.rotate;
-		depthCullingTestPose.translation = camera->world.translate;
-		depthCullingTestPose.valid = true;
-	}
-
-	void MakeStaleDepthCullingResultsConservative(void* a_culler)
-	{
-		const auto* camera = RE::Main::WorldRootCamera();
-		if (!a_culler || !camera || IsDepthCullingViewCoherent(camera->world))
-			return;
-
-		auto* bytes = static_cast<std::byte*>(a_culler);
-		const auto objectCount = *reinterpret_cast<std::uint32_t*>(bytes + 0xB0);
-		const auto bufferIndex = *reinterpret_cast<std::uint32_t*>(bytes + 0xC0);
-		if (objectCount == 0 || objectCount > kDepthCullingMaximumObjects || bufferIndex > 1)
-			return;
-
-		auto* results = *reinterpret_cast<std::uint32_t**>(bytes + 0xD0 + bufferIndex * sizeof(void*));
-		if (!results)
-			return;
-
-		for (std::uint32_t index = 0; index < objectCount; ++index) {
-			results[index] = VRDepthCullingPolicy::ResolveVisibility(results[index], false);
-		}
-	}
-
-	struct DepthCullingReadback
-	{
-		static void thunk(void* a_culler)
-		{
-			func(a_culler);
-			MakeStaleDepthCullingResultsConservative(a_culler);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct DepthCullingRender
-	{
-		static void thunk(RE::BSImagespaceShader* a_shader, std::uint32_t a_param)
-		{
-			func(a_shader, a_param);
-			CaptureDepthCullingTestPose();
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	void InstallDepthCullingTemporalValidityFix()
-	{
-		stl::write_thunk_call<DepthCullingReadback>(REL::Offset(0x132208B).address());
-		stl::write_thunk_call<DepthCullingRender>(
-			REL::RelocationID(100421, 107139).address() + REL::Relocate(0x3B1, 0));
-		logger::info("VR: installed per-frame depth-culling view-coherence fix");
-	}
 }
 
 constexpr int kOverlayWidth = VR::Config::kOverlayWidth;
@@ -673,7 +574,6 @@ bool VR::IsPerformanceCostMeasurementEnabled() const
 		screenSpaceGI.settings.Enabled &&
 		screenSpaceGI.settings.EnableStereoSync;
 	return settings.EnableDepthBufferCullingExterior ||
-	       settings.EnableDepthBufferCullingInterior ||
 	       screenSpaceShadowsFoveatedActive ||
 	       screenSpaceShadowsStereoSyncActive ||
 	       screenSpaceGIFoveatedActive ||
@@ -1006,9 +906,6 @@ void VR::PostPostLoad()
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xD9) + 0x2, 0x148);
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xE5) + 0x2, 0x14C);
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xF1) + 0x2, 0x150);
-
-	if (globals::game::isVR)
-		InstallDepthCullingTemporalValidityFix();
 }
 
 void VR::DataLoaded()
@@ -1989,8 +1886,20 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		return;
 	}
 
-	bool exteriorChanged = ImGui::Checkbox("Depth Buffer Culling Exterior", &settings.EnableDepthBufferCullingExterior);
-	bool interiorChanged = ImGui::Checkbox("Depth Buffer Culling Interior", &settings.EnableDepthBufferCullingInterior);
+	bool exteriorChanged = ImGui::Checkbox("Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Improves performance where hidden-object rendering is a significant cost. Recommended on for exteriors.");
+	}
+	ImGui::Indent();
+	bool interiorChanged = false;
+	{
+		auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
+		interiorChanged = ImGui::Checkbox("Also Enable in Interiors", &settings.EnableDepthBufferCullingInterior);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Optional and default off. Missing-object faults can expose exterior lighting and are especially visible indoors.");
+		}
+	}
+	ImGui::Unindent();
 	if (exteriorChanged || interiorChanged) {
 		UpdateDepthBufferCulling();
 	}
@@ -2366,17 +2275,21 @@ namespace
 		DrawStabilizeRenderScaleDesktopMirrorSetting();
 		ImGui::Separator();
 		if (ImGui::CollapsingHeader("General Settings")) {
-			// Exteriors
-			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
+			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Improves performance in exteriors, recommended ON.");
+				ImGui::TextUnformatted("Improves performance where hidden-object rendering is a significant cost. Recommended on for exteriors.");
 			}
 
-			// Interiors
-			bool interiorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Interiors", &settings.EnableDepthBufferCullingInterior);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Improves performance in interiors, recommended ON.");
+			ImGui::Indent();
+			bool interiorChanged = false;
+			{
+				auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
+				interiorChanged = ImGui::Checkbox("Also Enable in Interiors", &settings.EnableDepthBufferCullingInterior);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Optional and default off. Missing-object faults can expose exterior lighting and are especially visible indoors.");
+				}
 			}
+			ImGui::Unindent();
 
 			if (exteriorChanged || interiorChanged) {
 				vr.UpdateDepthBufferCulling();
@@ -4184,10 +4097,10 @@ void VR::UpdateDepthBufferCulling()
 		return;
 	}
 
-	const bool desired = LocationContext::SelectInteriorExterior(
+	const bool desired = VRDepthCullingEnablePolicy::IsEnabled(
 		LocationContext::HasInteriorCell(),
-		settings.EnableDepthBufferCullingInterior,
-		settings.EnableDepthBufferCullingExterior);
+		settings.EnableDepthBufferCullingExterior,
+		settings.EnableDepthBufferCullingInterior);
 
 	const bool previous = *gDepthBufferCulling;
 	*gDepthBufferCulling = desired;

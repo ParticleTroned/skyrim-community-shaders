@@ -1,5 +1,6 @@
 #include "Api/ProfilerService.h"
 
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistry.h"
 #include "BuildProvenance.h"
 #include "Globals.h"
@@ -48,8 +49,6 @@ namespace
 	class ProfilerService
 	{
 	public:
-		ProfilerService() : ownerThread(std::this_thread::get_id()) {}
-
 		Status GetSnapshot(Snapshot001& a_output) const
 		{
 			if (!IsOwnerThread())
@@ -250,8 +249,7 @@ namespace
 		}
 
 	private:
-		bool IsOwnerThread() const { return std::this_thread::get_id() == ownerThread; }
-		std::thread::id ownerThread;
+		bool IsOwnerThread() const { return CSX::Api::IsRuntimeMainThread(); }
 	};
 
 	ProfilerService* ServiceFrom(const void* a_context)

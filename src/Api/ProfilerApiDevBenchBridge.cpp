@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Api/ProfilerService.h"
+#	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
 
@@ -84,6 +85,7 @@ namespace
 		auto cancelled = std::make_shared<std::atomic_bool>(false);
 		auto future = promise->get_future();
 		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
+			CSX::Api::EnterRuntimeMainThreadTask();
 			if (cancelled->load(std::memory_order_acquire))
 				return;
 			try {

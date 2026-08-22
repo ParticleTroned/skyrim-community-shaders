@@ -407,6 +407,88 @@ namespace
 		}
 	}
 
+	constexpr std::ptrdiff_t kNiAVObjectDepthCullingResultOffset = 0x128;
+	constexpr std::ptrdiff_t kNiAVObjectDepthCullingFrameOffset = 0x130;
+	constexpr std::ptrdiff_t kDepthCullingObjectCountOffset = 0xB0;
+	constexpr std::array<std::ptrdiff_t, 2> kDepthCullingCpuResultOffsets{ 0xD0, 0xD8 };
+	constexpr std::ptrdiff_t kDepthCullingGpuResultOffset = 0x100;
+	constexpr std::ptrdiff_t kGpuBufferSrvOffset = 0x8;
+	constexpr std::uint32_t kDepthCullingCapacity = 0x1000;
+	constexpr std::uint32_t kCurrentFrameDepthCullingObjectIndexShift = 16;
+	constexpr std::uint32_t kCurrentFrameDepthCullingSrvSlot = 127;
+	static_assert(
+		static_cast<std::uint32_t>(State::ExtraShaderDescriptors::CurrentFrameDepthCullingObjectIndex) ==
+		((kDepthCullingCapacity - 1) << kCurrentFrameDepthCullingObjectIndexShift));
+
+	std::uint32_t* GetDepthCullingResultPointer(RE::NiAVObject* a_object)
+	{
+		if (!a_object)
+			return nullptr;
+
+		return *reinterpret_cast<std::uint32_t**>(
+			reinterpret_cast<std::byte*>(a_object) + kNiAVObjectDepthCullingResultOffset);
+	}
+
+	bool TryGetDepthCullingObjectIndex(void* a_culler, RE::NiAVObject* a_object, std::uint32_t& a_index)
+	{
+		if (!a_culler || !a_object)
+			return false;
+
+		auto* result = GetDepthCullingResultPointer(a_object);
+		if (!result)
+			return false;
+
+		const auto resultAddress = reinterpret_cast<std::uintptr_t>(result);
+		auto* culler = reinterpret_cast<std::byte*>(a_culler);
+		for (const auto resultArrayOffset : kDepthCullingCpuResultOffsets) {
+			auto* resultArray = *reinterpret_cast<std::uint32_t**>(culler + resultArrayOffset);
+			if (!resultArray)
+				continue;
+
+			const auto arrayAddress = reinterpret_cast<std::uintptr_t>(resultArray);
+			if (resultAddress < arrayAddress)
+				continue;
+
+			const auto byteOffset = resultAddress - arrayAddress;
+			if (byteOffset >= kDepthCullingCapacity * sizeof(std::uint32_t) ||
+				byteOffset % sizeof(std::uint32_t) != 0) {
+				continue;
+			}
+
+			a_index = static_cast<std::uint32_t>(byteOffset / sizeof(std::uint32_t));
+			return true;
+		}
+
+		return false;
+	}
+
+	struct CurrentFrameDepthCullingAccumulate
+	{
+		static void thunk(void* a_accumulator, RE::NiAVObject* a_object)
+		{
+			globals::features::vr.KeepPreviousDepthCullingResultVisible(a_object);
+			func(a_accumulator, a_object);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CurrentFrameDepthCullingObbRender
+	{
+		static void thunk(RE::BSImagespaceShader* a_this, std::uint32_t a_param)
+		{
+			const bool frameAnnotations = globals::state->frameAnnotations;
+			if (frameAnnotations)
+				globals::state->BeginPerfEvent("BSOBBOcclusionTestingShader");
+
+			func(a_this, a_param);
+
+			if (frameAnnotations)
+				globals::state->EndPerfEvent();
+
+			globals::features::vr.MarkCurrentFrameDepthCullingReady();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 }
 
 constexpr int kOverlayWidth = VR::Config::kOverlayWidth;
@@ -430,6 +512,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
+	EnableCurrentFrameDepthCulling,
 	MinOccludeeBoxExtent,
 	VRMenuScale,
 	VRMenuPositioningMethod,
@@ -717,6 +800,7 @@ void VR::SetupResources()
 	}
 
 	EmitVRPipelineEnvironmentDiagnosticsOnce(*this);
+
 }
 
 void VR::ClearShaderCache()
@@ -905,6 +989,25 @@ void VR::PostPostLoad()
 		logger::warn("VR: gMinOccludeeBoxExtent address not found - using fallback default (10.0)");
 	}
 
+	if (REL::Module::IsVR()) {
+		gDepthCullingState = reinterpret_cast<void**>(REL::Offset(0x36F1870).address());
+		gDepthCullingFrame = reinterpret_cast<std::uint32_t*>(REL::Offset(0x3186C5C).address());
+
+		// Keep Skyrim's native implementation intact. The first hook only prevents its
+		// previous-frame CPU result from suppressing this frame's scene submission; the
+		// engine still gathers every current OBB and runs its normal stereo GPU test.
+		CurrentFrameDepthCullingAccumulate::func = REL::Offset(0xDA1860).address();
+		DetourTransactionBegin();
+		DetourUpdateThread(GetCurrentThread());
+		DetourAttach(
+			reinterpret_cast<PVOID*>(&CurrentFrameDepthCullingAccumulate::func),
+			reinterpret_cast<PVOID>(CurrentFrameDepthCullingAccumulate::thunk));
+		DetourTransactionCommit();
+		stl::write_thunk_call<CurrentFrameDepthCullingObbRender>(
+			REL::RelocationID(100421, 107139).address() + REL::Relocate(0x3B1, 0));
+		logger::info("VR current-frame depth-culling hooks installed (experimental path defaults off)");
+	}
+
 	// Patches BSGeometry::CopyTransformAndBounds to copy the model-bound translation across correctly instead of overwriting it with the bounding sphere centre
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xD9) + 0x2, 0x148);
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xE5) + 0x2, 0x14C);
@@ -929,6 +1032,89 @@ void VR::EarlyPrepass()
 	// Apply culling setting each prepass based on current interior/exterior state.
 	UpdateDepthBufferCulling();
 	TryApplyDepthBufferCullingCacheRefresh();
+	currentFrameDepthCullingReadyFrame = std::numeric_limits<std::uint32_t>::max();
+}
+
+bool VR::IsCurrentFrameDepthCullingEnabled() const
+{
+	return REL::Module::IsVR() &&
+	       settings.EnableCurrentFrameDepthCulling &&
+	       gDepthBufferCulling && *gDepthBufferCulling &&
+	       globals::shaderCache && globals::shaderCache->IsEnabled() &&
+	       gDepthCullingState && *gDepthCullingState &&
+	       gDepthCullingFrame &&
+	       globals::d3d::context;
+}
+
+void VR::KeepPreviousDepthCullingResultVisible(RE::NiAVObject* a_object)
+{
+	if (!IsCurrentFrameDepthCullingEnabled() || !a_object)
+		return;
+
+	auto* culler = *gDepthCullingState;
+	std::uint32_t objectIndex = 0;
+	if (TryGetDepthCullingObjectIndex(culler, a_object, objectIndex)) {
+		// Skyrim consumes this pointer before replacing it with the slot assigned to
+		// the OBB being gathered now. Visible=1 makes that delayed result neutral.
+		*GetDepthCullingResultPointer(a_object) = 1;
+	}
+}
+
+void VR::MarkCurrentFrameDepthCullingReady()
+{
+	currentFrameDepthCullingReadyFrame = IsCurrentFrameDepthCullingEnabled() && globals::state ?
+		globals::state->frameCount :
+		std::numeric_limits<std::uint32_t>::max();
+}
+
+void VR::BindCurrentFrameDepthCulling(RE::BSGeometry* a_geometry)
+{
+	auto* state = globals::state;
+	constexpr auto enabledDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::CurrentFrameDepthCulling);
+	constexpr auto objectIndexDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::CurrentFrameDepthCullingObjectIndex);
+	constexpr auto descriptorMask = enabledDescriptor | objectIndexDescriptor;
+	if (state)
+		state->permutationData.ExtraShaderDescriptor &= ~descriptorMask;
+
+	auto* context = globals::d3d::context;
+	if (!context)
+		return;
+
+	if (!IsCurrentFrameDepthCullingEnabled() ||
+		!state || !state->inWorld ||
+		(state->permutationData.ExtraShaderDescriptor & static_cast<std::uint32_t>(State::ExtraShaderDescriptors::IsReflections)) != 0 ||
+		currentFrameDepthCullingReadyFrame != state->frameCount ||
+		!a_geometry) {
+		return;
+	}
+
+	auto* culler = *gDepthCullingState;
+	auto* geometryObject = static_cast<RE::NiAVObject*>(a_geometry);
+	const auto objectFrame = *reinterpret_cast<std::uint32_t*>(
+		reinterpret_cast<std::byte*>(geometryObject) + kNiAVObjectDepthCullingFrameOffset);
+	if (objectFrame != *gDepthCullingFrame)
+		return;
+
+	std::uint32_t objectIndex = 0;
+	if (!TryGetDepthCullingObjectIndex(culler, geometryObject, objectIndex))
+		return;
+
+	auto* cullerBytes = reinterpret_cast<std::byte*>(culler);
+	const auto objectCount = *reinterpret_cast<std::uint32_t*>(cullerBytes + kDepthCullingObjectCountOffset);
+	if (objectIndex >= std::min(objectCount, kDepthCullingCapacity))
+		return;
+
+	auto* resultBuffer = *reinterpret_cast<std::byte**>(cullerBytes + kDepthCullingGpuResultOffset);
+	if (!resultBuffer)
+		return;
+
+	auto* visibility = *reinterpret_cast<ID3D11ShaderResourceView**>(resultBuffer + kGpuBufferSrvOffset);
+	if (!visibility)
+		return;
+
+	context->VSSetShaderResources(kCurrentFrameDepthCullingSrvSlot, 1, &visibility);
+	state->permutationData.ExtraShaderDescriptor |=
+		enabledDescriptor | (objectIndex << kCurrentFrameDepthCullingObjectIndexShift);
 }
 
 //=============================================================================
@@ -1918,6 +2104,12 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 	if (!a_advanced)
 		return;
 
+	ImGui::Checkbox("Current-frame GPU depth culling (experimental)", &settings.EnableCurrentFrameDepthCulling);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Uses the current frame's stereo GPU occlusion result to skip hidden Lighting pixels.");
+		ImGui::TextUnformatted("When disabled, Skyrim's original delayed depth-culling path remains active.");
+	}
+
 	auto& screenSpaceShadows = globals::features::screenSpaceShadows;
 	auto& screenSpaceGI = globals::features::screenSpaceGI;
 	const bool screenSpaceShadowsEnabled = screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
@@ -2307,6 +2499,12 @@ namespace
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
+			}
+
+			ImGui::Checkbox("Current-frame GPU depth culling (experimental)", &settings.EnableCurrentFrameDepthCulling);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses the current frame's stereo GPU occlusion result to skip hidden Lighting pixels.");
+				ImGui::TextUnformatted("When disabled, Skyrim's original delayed depth-culling path remains active.");
 			}
 		}
 	}

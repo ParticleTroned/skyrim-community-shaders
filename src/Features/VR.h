@@ -154,6 +154,10 @@ public:
 
 	void UpdateDepthBufferCulling();
 	void TryApplyDepthBufferCullingCacheRefresh();
+	bool IsCurrentFrameDepthCullingEnabled() const;
+	void KeepPreviousDepthCullingResultVisible(RE::NiAVObject* a_object);
+	void MarkCurrentFrameDepthCullingReady();
+	void BindCurrentFrameDepthCulling(RE::BSGeometry* a_geometry);
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -206,6 +210,7 @@ public:
 		// Performance optimization settings
 		bool EnableDepthBufferCullingExterior = true;   ///< Master depth-culling option; enabled in exteriors
 		bool EnableDepthBufferCullingInterior = false;  ///< Also enable depth culling in interiors
+		bool EnableCurrentFrameDepthCulling = false;  ///< Consume Skyrim's GPU OBB result in the current frame instead of on the CPU next frame
 		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
 
 		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.
@@ -525,6 +530,9 @@ public:
 	float* gMinOccludeeBoxExtent = nullptr;
 	std::atomic<bool> depthCullingCacheRefreshPending = false;
 	std::atomic<bool> depthCullingCacheRefreshCompleted = false;
+	void** gDepthCullingState = nullptr;
+	std::uint32_t* gDepthCullingFrame = nullptr;
+	std::uint32_t currentFrameDepthCullingReadyFrame = std::numeric_limits<std::uint32_t>::max();
 
 	// VR Controller state and logging
 	struct VRControllerEventLog

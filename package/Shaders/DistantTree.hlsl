@@ -2,9 +2,11 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/MotionBlur.hlsli"
+#include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
+#include "Common/CurrentFrameDepthCulling.hlsli"
 
 #if !defined(DYNAMIC_CUBEMAPS) && defined(IBL)
 #	undef IBL
@@ -64,6 +66,14 @@ cbuffer PerGeometry : register(b2)
 
 VS_OUTPUT main(VS_INPUT input)
 {
+	#if !defined(RENDER_DEPTH)
+	if (CurrentFrameDepthCulling::IsOccluded()) {
+		VS_OUTPUT occluded = (VS_OUTPUT)0;
+		occluded.Position = float4(0.0, 0.0, 0.0, 1.0);
+		return occluded;
+	}
+	#endif
+
 	VS_OUTPUT vsout = (VS_OUTPUT)0;
 	uint eyeIndex = Stereo::GetEyeIndexVS(
 #	if defined(VR)

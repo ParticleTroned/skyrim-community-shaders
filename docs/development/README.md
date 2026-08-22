@@ -13,6 +13,7 @@
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 -   **[Prebuilt Shader Cache](./prebuilt-shader-cache.md)** - Release build, update, validation, and AI-agent runbook
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
+-   **[VR Current-Frame Depth Culling](./vr-depth-culling-current-frame.md)** - Engine evidence, GPU-consumption design, fallback contract, and runtime validation plan
 -   **[GPU-Unified Presets](./unified-presets.md)** - One preset path with capability-selected DLSS or FSR
 -   **[Screenshot API and Sequences](./screenshot-api-and-sequences.md)** - Versioned asynchronous still/sequence contract, acknowledgements, manifests, and implementation gates
 -   **[Shader Analysis](./shader-analysis/README.md)** - Residency/recompile plan, machine-readable ownership manifest, and versioned baselines

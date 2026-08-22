@@ -4,6 +4,7 @@
 #include "Common/Math.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
+#include "Common/CurrentFrameDepthCulling.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
@@ -192,6 +193,14 @@ float4 GetMSPosition(VS_INPUT input)
 #	ifdef GRASS_LIGHTING
 VS_OUTPUT main(VS_INPUT input)
 {
+	#if !defined(RENDER_DEPTH)
+	if (CurrentFrameDepthCulling::IsOccluded()) {
+		VS_OUTPUT occluded = (VS_OUTPUT)0;
+		occluded.HPosition = float4(0.0, 0.0, 0.0, 1.0);
+		return occluded;
+	}
+	#endif
+
 	VS_OUTPUT vsout;
 
 	uint eyeIndex = Stereo::GetEyeIndexVS(
@@ -269,6 +278,14 @@ VS_OUTPUT main(VS_INPUT input)
 #	else
 VS_OUTPUT main(VS_INPUT input)
 {
+	#if !defined(RENDER_DEPTH)
+	if (CurrentFrameDepthCulling::IsOccluded()) {
+		VS_OUTPUT occluded = (VS_OUTPUT)0;
+		occluded.HPosition = float4(0.0, 0.0, 0.0, 1.0);
+		return occluded;
+	}
+	#endif
+
 	VS_OUTPUT vsout;
 
 	uint eyeIndex = Stereo::GetEyeIndexVS(

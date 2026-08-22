@@ -1087,6 +1087,21 @@ namespace LightingExtensions
 				if (auto baseObject = userData->GetBaseObject())
 					if (baseObject->As<RE::TESObjectTREE>())
 						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
+
+			globals::features::vr.BindCurrentFrameDepthCulling(pass->geometry);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
+namespace DistantTreeExtensions
+{
+	struct BSDistantTreeShader_SetupGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			func(shader, pass, renderFlags);
+			globals::features::vr.BindCurrentFrameDepthCulling(pass->geometry);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1142,6 +1157,8 @@ namespace GrassExtensions
 					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
 				}
 			}
+
+			globals::features::vr.BindCurrentFrameDepthCulling(pass->geometry);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -2239,6 +2256,7 @@ namespace Hooks
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+		stl::write_vfunc<0x6, DistantTreeExtensions::BSDistantTreeShader_SetupGeometry>(RE::VTABLE_BSDistantTreeShader[0]);
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
 

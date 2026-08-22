@@ -311,17 +311,6 @@ namespace FrameAnnotations
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct VR_RenderDepth_BSOBBOcclusionTestingShader
-	{
-		static void thunk(RE::BSImagespaceShader* a_this, std::uint32_t a_param)
-		{
-			globals::state->BeginPerfEvent("BSOBBOcclusionTestingShader");
-			func(a_this, a_param);
-			globals::state->EndPerfEvent();
-		};
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct VR_UpscaleDepthBuffer
 	{
 		static void thunk(RE::ImageSpaceManager* a_this, unsigned int a2, RE::RENDER_TARGET a_target, RE::RENDER_TARGET a_target2, __int64 a5, bool a6)
@@ -1125,7 +1114,6 @@ namespace FrameAnnotations
 			stl::write_vfunc<0xC, BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISSetupPreTest>>(
 				RE::VTABLE_BSImagespaceShaderSetupPreTest[0]);
 			stl::write_thunk_call<VR_RenderDepth_DownscaleDepthBuffer>(REL::RelocationID(100421, 107139).address() + REL::Relocate(0x37f, 0));
-			stl::write_thunk_call<VR_RenderDepth_BSOBBOcclusionTestingShader>(REL::RelocationID(100421, 107139).address() + REL::Relocate(0x3b1, 0));
 			stl::write_thunk_call<VR_UpscaleDepthBuffer>(REL::Offset(0x13246AE).address());
 		}
 

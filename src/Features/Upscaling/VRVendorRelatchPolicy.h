@@ -452,9 +452,9 @@ namespace VRVendorRelatchPolicy
 		       a_state.physicalContractConverged &&
 		       a_state.serializationLoadingSerial != 0 &&
 		       a_state.serializationLoadingSerial ==
-			   a_state.compositorHoldLoadingSerial &&
+		           a_state.compositorHoldLoadingSerial &&
 		       a_state.serializationLoadingSerial ==
-			   a_state.currentLoadingSerial;
+		           a_state.currentLoadingSerial;
 	}
 
 	// A console COC does not necessarily publish the ordinary post-load completion
@@ -700,10 +700,10 @@ namespace VRVendorRelatchPolicy
 		bool a_menuTextProtectionContext) noexcept
 	{
 		return a_decisionLatched ?
-		         a_latchedAttempt :
-		         (a_transactionSealed ||
-				 a_transactionOwnsPresentationWork ||
-				 (a_committedLayerValid && a_menuTextProtectionContext));
+		           a_latchedAttempt :
+		           (a_transactionSealed ||
+					   a_transactionOwnsPresentationWork ||
+					   (a_committedLayerValid && a_menuTextProtectionContext));
 	}
 
 	struct BufferedDoorRequestCoalescingAdmission
@@ -1218,6 +1218,7 @@ namespace VRVendorRelatchPolicy
 		AttemptOnce,
 		WaitForClaimedAttempt,
 		ContinueClaimedAttempt,
+		FallbackClaimedAttempt,
 		ContinueMutatedRecovery,
 		RetainStableContract
 	};
@@ -1227,6 +1228,7 @@ namespace VRVendorRelatchPolicy
 		bool deadlineExpired = false;
 		bool attemptConsumed = false;
 		bool attemptInProgress = false;
+		bool attemptBudgetExpired = false;
 		bool physicalMutationStarted = false;
 		bool recoveryOwned = false;
 		bool loadingSerialOwned = false;
@@ -1266,6 +1268,8 @@ namespace VRVendorRelatchPolicy
 		if (a_state.attemptConsumed &&
 			a_state.attemptInProgress &&
 			exactRecoveryOwner) {
+			if (a_state.attemptBudgetExpired)
+				return PostLoadRecoveryDeadlineAction::FallbackClaimedAttempt;
 			return admissionReady ?
 			           PostLoadRecoveryDeadlineAction::ContinueClaimedAttempt :
 			           PostLoadRecoveryDeadlineAction::WaitForClaimedAttempt;
@@ -1291,7 +1295,9 @@ namespace VRVendorRelatchPolicy
 		BeginTeardown,
 		ContinueTeardown,
 		WaitForCreatorAdmission,
-		AdmitCreator
+		AdmitCreator,
+		AbortForDeviceLoss,
+		FallbackToNative
 	};
 
 	struct PostLoadVendorTeardownAdmission
@@ -1319,6 +1325,7 @@ namespace VRVendorRelatchPolicy
 		bool projectedSystemCommitSafe = false;
 		bool deviceHealthy = false;
 		bool noRecentOutOfMemory = false;
+		bool retryBudgetExpired = false;
 	};
 
 	// A reduced DLSS post-load recovery can otherwise deadlock when its creator
@@ -1346,9 +1353,13 @@ namespace VRVendorRelatchPolicy
 			return PostLoadVendorTeardownAction::Inactive;
 
 		if (a_state.phase == PostLoadVendorTeardownPhase::Draining) {
-			return a_state.attemptConsumed && a_state.deviceHealthy ?
-			           PostLoadVendorTeardownAction::ContinueTeardown :
-			           PostLoadVendorTeardownAction::Inactive;
+			if (!a_state.attemptConsumed)
+				return PostLoadVendorTeardownAction::Inactive;
+			if (!a_state.deviceHealthy)
+				return PostLoadVendorTeardownAction::AbortForDeviceLoss;
+			if (a_state.retryBudgetExpired)
+				return PostLoadVendorTeardownAction::FallbackToNative;
+			return PostLoadVendorTeardownAction::ContinueTeardown;
 		}
 
 		const bool creatorAdmissionReady =
@@ -1363,6 +1374,10 @@ namespace VRVendorRelatchPolicy
 		if (a_state.phase == PostLoadVendorTeardownPhase::Released) {
 			if (!a_state.attemptConsumed)
 				return PostLoadVendorTeardownAction::Inactive;
+			if (!a_state.deviceHealthy)
+				return PostLoadVendorTeardownAction::AbortForDeviceLoss;
+			if (a_state.retryBudgetExpired)
+				return PostLoadVendorTeardownAction::FallbackToNative;
 			return creatorAdmissionReady ?
 			           PostLoadVendorTeardownAction::AdmitCreator :
 			           PostLoadVendorTeardownAction::WaitForCreatorAdmission;

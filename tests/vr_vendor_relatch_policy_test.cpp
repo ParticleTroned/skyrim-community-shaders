@@ -726,8 +726,8 @@ namespace
 				.sameTerminalRequest = (bits & (1u << 3)) != 0,
 			};
 			const bool expected = state.resourcesMissing &&
-				!state.lifecycleOwnerActive && !state.deviceLost &&
-				!state.sameTerminalRequest;
+			                      !state.lifecycleOwnerActive && !state.deviceLost &&
+			                      !state.sameTerminalRequest;
 			if (CanAttemptCommonResourceRecovery(state) != expected)
 				return false;
 		}
@@ -1424,6 +1424,12 @@ namespace
 			PostLoadRecoveryDeadlineAction::WaitForClaimedAttempt) {
 			return false;
 		}
+		claimed.attemptBudgetExpired = true;
+		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
+			PostLoadRecoveryDeadlineAction::FallbackClaimedAttempt) {
+			return false;
+		}
+		claimed.attemptBudgetExpired = false;
 		claimed.gpuHeadroomSufficient = true;
 		claimed.loadingSerialOwned = false;
 		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
@@ -1515,6 +1521,18 @@ namespace
 			PostLoadVendorTeardownAction::ContinueTeardown) {
 			return false;
 		}
+		auto drainingDeviceLost = draining;
+		drainingDeviceLost.deviceHealthy = false;
+		if (SelectPostLoadVendorTeardownAction(drainingDeviceLost) !=
+			PostLoadVendorTeardownAction::AbortForDeviceLoss) {
+			return false;
+		}
+		auto drainingExpired = draining;
+		drainingExpired.retryBudgetExpired = true;
+		if (SelectPostLoadVendorTeardownAction(drainingExpired) !=
+			PostLoadVendorTeardownAction::FallbackToNative) {
+			return false;
+		}
 
 		auto released = highPressure;
 		released.phase = PostLoadVendorTeardownPhase::Released;
@@ -1522,6 +1540,18 @@ namespace
 		released.destroysDLSSResources = false;
 		if (SelectPostLoadVendorTeardownAction(released) !=
 			PostLoadVendorTeardownAction::WaitForCreatorAdmission) {
+			return false;
+		}
+		auto releasedExpired = released;
+		releasedExpired.retryBudgetExpired = true;
+		if (SelectPostLoadVendorTeardownAction(releasedExpired) !=
+			PostLoadVendorTeardownAction::FallbackToNative) {
+			return false;
+		}
+		auto releasedDeviceLost = released;
+		releasedDeviceLost.deviceHealthy = false;
+		if (SelectPostLoadVendorTeardownAction(releasedDeviceLost) !=
+			PostLoadVendorTeardownAction::AbortForDeviceLoss) {
 			return false;
 		}
 		released.highGPUPressure = false;
@@ -2469,9 +2499,9 @@ namespace
 		       ShouldDeferMenuContextInvalidation(100, 100, true) &&
 		       !ShouldDeferMenuContextInvalidation(99, 100, true) &&
 		       !ShouldDeferMenuContextInvalidation(
-			       std::numeric_limits<std::uint32_t>::max(),
-			       100,
-			       true);
+				   std::numeric_limits<std::uint32_t>::max(),
+				   100,
+				   true);
 	}
 
 	constexpr bool CoversMenuPresentationDecisionLatching()

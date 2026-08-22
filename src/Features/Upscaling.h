@@ -762,6 +762,11 @@ public:
 		bool settleTimeoutUsed = false;
 		bool settleDeadlineExpired = false;
 		bool timedAttemptConsumed = false;
+		bool timedAttemptInProgress = false;
+		uint64_t timedAttemptStartTickMs = 0;
+		VRVendorRelatchPolicy::PostLoadVendorTeardownPhase vendorTeardownPhase =
+			VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Idle;
+		bool vendorTeardownFallbackRequested = false;
 		bool engineTargetCreateEntered = false;
 		bool relatchAdmitted = false;
 		bool cleanupDeferredUntilStable = false;
@@ -3157,7 +3162,7 @@ private:
 		const char* a_reason,
 		bool a_allowSuccessor);
 	[[nodiscard]] bool HasLiveVRRenderScaleProviderNeutralRecoveryWorker() const;
-	bool PromoteVRRenderScalePresentationDeadlineToNativeRecovery(
+	bool PromoteVRRenderScalePreMutationToNativeRecovery(
 		uint64_t a_expectedHoldEpoch,
 		uint64_t a_expectedLoadingSerial,
 		uint64_t a_supersededTransitionEpoch,

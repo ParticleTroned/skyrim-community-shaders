@@ -726,8 +726,8 @@ namespace
 				.sameTerminalRequest = (bits & (1u << 3)) != 0,
 			};
 			const bool expected = state.resourcesMissing &&
-				!state.lifecycleOwnerActive && !state.deviceLost &&
-				!state.sameTerminalRequest;
+			                      !state.lifecycleOwnerActive && !state.deviceLost &&
+			                      !state.sameTerminalRequest;
 			if (CanAttemptCommonResourceRecovery(state) != expected)
 				return false;
 		}
@@ -1357,6 +1357,7 @@ namespace
 		PostLoadRecoveryDeadlineAdmission ready{
 			.deadlineExpired = true,
 			.attemptConsumed = false,
+			.attemptInProgress = false,
 			.physicalMutationStarted = false,
 			.recoveryOwned = true,
 			.loadingSerialOwned = true,
@@ -1411,6 +1412,31 @@ namespace
 			return false;
 		}
 
+		auto claimed = ready;
+		claimed.attemptConsumed = true;
+		claimed.attemptInProgress = true;
+		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
+			PostLoadRecoveryDeadlineAction::ContinueClaimedAttempt) {
+			return false;
+		}
+		claimed.gpuHeadroomSufficient = false;
+		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
+			PostLoadRecoveryDeadlineAction::WaitForClaimedAttempt) {
+			return false;
+		}
+		claimed.attemptBudgetExpired = true;
+		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
+			PostLoadRecoveryDeadlineAction::FallbackClaimedAttempt) {
+			return false;
+		}
+		claimed.attemptBudgetExpired = false;
+		claimed.gpuHeadroomSufficient = true;
+		claimed.loadingSerialOwned = false;
+		if (SelectPostLoadRecoveryDeadlineAction(claimed) !=
+			PostLoadRecoveryDeadlineAction::RetainStableContract) {
+			return false;
+		}
+
 		for (std::uint32_t bit = 0; bit < 10; ++bit) {
 			blocked = ready;
 			switch (bit) {
@@ -1453,6 +1479,165 @@ namespace
 			}
 		}
 		return true;
+	}
+
+	constexpr bool CoversPostLoadVendorTeardownOnlyAdmission()
+	{
+		PostLoadVendorTeardownAdmission highPressure{
+			.phase = PostLoadVendorTeardownPhase::Idle,
+			.deadlineExpired = true,
+			.attemptConsumed = false,
+			.physicalMutationStarted = false,
+			.recoveryOwned = true,
+			.loadingSerialOwned = true,
+			.recoveryRelatch = true,
+			.reducedDLSSContract = true,
+			.stableDLSSContractExisted = true,
+			.stableVendorResourcesTruthful = false,
+			.destroysDLSSResources = true,
+			.destroysOtherVendorResources = false,
+			.preservesStablePresentationResources = false,
+			.cleanupAndTrimComplete = true,
+			.retirementReady = true,
+			.memorySampleFresh = true,
+			.highGPUPressure = true,
+			.pressureAcceptable = false,
+			.gpuHeadroomSufficient = false,
+			.projectedSystemCommitSafe = true,
+			.deviceHealthy = true,
+			.noRecentOutOfMemory = true,
+		};
+		if (SelectPostLoadVendorTeardownAction(highPressure) !=
+			PostLoadVendorTeardownAction::BeginTeardown) {
+			return false;
+		}
+
+		auto draining = highPressure;
+		draining.phase = PostLoadVendorTeardownPhase::Draining;
+		draining.attemptConsumed = true;
+		draining.retirementReady = false;
+		draining.memorySampleFresh = false;
+		if (SelectPostLoadVendorTeardownAction(draining) !=
+			PostLoadVendorTeardownAction::ContinueTeardown) {
+			return false;
+		}
+		auto drainingDeviceLost = draining;
+		drainingDeviceLost.deviceHealthy = false;
+		if (SelectPostLoadVendorTeardownAction(drainingDeviceLost) !=
+			PostLoadVendorTeardownAction::AbortForDeviceLoss) {
+			return false;
+		}
+		auto drainingExpired = draining;
+		drainingExpired.retryBudgetExpired = true;
+		if (SelectPostLoadVendorTeardownAction(drainingExpired) !=
+			PostLoadVendorTeardownAction::FallbackToNative) {
+			return false;
+		}
+
+		auto released = highPressure;
+		released.phase = PostLoadVendorTeardownPhase::Released;
+		released.attemptConsumed = true;
+		released.destroysDLSSResources = false;
+		if (SelectPostLoadVendorTeardownAction(released) !=
+			PostLoadVendorTeardownAction::WaitForCreatorAdmission) {
+			return false;
+		}
+		auto releasedExpired = released;
+		releasedExpired.retryBudgetExpired = true;
+		if (SelectPostLoadVendorTeardownAction(releasedExpired) !=
+			PostLoadVendorTeardownAction::FallbackToNative) {
+			return false;
+		}
+		auto releasedDeviceLost = released;
+		releasedDeviceLost.deviceHealthy = false;
+		if (SelectPostLoadVendorTeardownAction(releasedDeviceLost) !=
+			PostLoadVendorTeardownAction::AbortForDeviceLoss) {
+			return false;
+		}
+		released.highGPUPressure = false;
+		released.pressureAcceptable = true;
+		released.gpuHeadroomSufficient = true;
+		if (SelectPostLoadVendorTeardownAction(released) !=
+			PostLoadVendorTeardownAction::AdmitCreator) {
+			return false;
+		}
+
+		// The release exception must remain inactive in every neighboring context:
+		// startup/menu/door work, FSR/native targets, truthful stable contracts,
+		// mixed-provider teardown, incomplete cleanup, unsafe commit, and stale owners.
+		for (std::uint32_t bit = 0; bit < 17; ++bit) {
+			auto excluded = highPressure;
+			switch (bit) {
+			case 0:
+				excluded.deadlineExpired = false;
+				break;
+			case 1:
+				excluded.attemptConsumed = true;
+				break;
+			case 2:
+				excluded.physicalMutationStarted = true;
+				break;
+			case 3:
+				excluded.recoveryOwned = false;
+				break;
+			case 4:
+				excluded.loadingSerialOwned = false;
+				break;
+			case 5:
+				excluded.recoveryRelatch = false;
+				break;
+			case 6:
+				excluded.reducedDLSSContract = false;
+				break;
+			case 7:
+				excluded.stableDLSSContractExisted = false;
+				break;
+			case 8:
+				excluded.stableVendorResourcesTruthful = true;
+				break;
+			case 9:
+				excluded.destroysDLSSResources = false;
+				break;
+			case 10:
+				excluded.destroysOtherVendorResources = true;
+				break;
+			case 11:
+				excluded.preservesStablePresentationResources = true;
+				break;
+			case 12:
+				excluded.cleanupAndTrimComplete = false;
+				break;
+			case 13:
+				excluded.retirementReady = false;
+				break;
+			case 14:
+				excluded.memorySampleFresh = false;
+				break;
+			case 15:
+				excluded.highGPUPressure = false;
+				break;
+			case 16:
+				excluded.projectedSystemCommitSafe = false;
+				break;
+			default:
+				return false;
+			}
+			if (SelectPostLoadVendorTeardownAction(excluded) !=
+				PostLoadVendorTeardownAction::Inactive) {
+				return false;
+			}
+		}
+
+		auto unhealthy = highPressure;
+		unhealthy.deviceHealthy = false;
+		if (SelectPostLoadVendorTeardownAction(unhealthy) !=
+			PostLoadVendorTeardownAction::Inactive) {
+			return false;
+		}
+		auto afterOOM = highPressure;
+		afterOOM.noRecentOutOfMemory = false;
+		return SelectPostLoadVendorTeardownAction(afterOOM) ==
+		       PostLoadVendorTeardownAction::Inactive;
 	}
 
 	constexpr bool CoversPostLoadRecoveryStableFallbackOwnership()
@@ -1528,12 +1713,44 @@ namespace
 			PostMutationRecoveryAction::AttemptOnce) {
 			return false;
 		}
-		if (!CanQueuePostMutationEmergencyRecovery(false, false) ||
-			CanQueuePostMutationEmergencyRecovery(true, false) ||
-			CanQueuePostMutationEmergencyRecovery(false, true) ||
-			CanQueuePostMutationEmergencyRecovery(true, true)) {
+		if (!CanQueuePostMutationEmergencyRecovery(false, false, false) ||
+			CanQueuePostMutationEmergencyRecovery(true, false, false) ||
+			CanQueuePostMutationEmergencyRecovery(false, true, false) ||
+			CanQueuePostMutationEmergencyRecovery(true, true, false) ||
+			CanQueuePostMutationEmergencyRecovery(true, false, true) ||
+			CanQueuePostMutationEmergencyRecovery(false, true, true) ||
+			CanQueuePostMutationEmergencyRecovery(true, true, true)) {
 			return false;
 		}
+		// Reproduce the post-load loop: consuming the queue clears pending before
+		// submit-stage stabilization can consume the emergency creator attempt. The
+		// already-published recovery must still suppress another physical relatch.
+		if (CanQueuePostMutationEmergencyRecovery(false, false, true))
+			return false;
+
+		PostMutationEmergencyRecoveryTiming timing{
+			.progressPhase = PostMutationProgressPhase::MutationEntered,
+			.mutationStartTickMs = 1000,
+			.lastProgressTickMs = 1000,
+			.currentTickMs = 2999,
+			.initialDelayMs = 2000,
+			.progressingStallDelayMs = 15000,
+		};
+		if (HasPostMutationEmergencyRecoveryStalled(timing))
+			return false;
+		timing.currentTickMs = 3000;
+		if (!HasPostMutationEmergencyRecoveryStalled(timing))
+			return false;
+		// Contract publication and presentation stabilization are forward
+		// progress. They must not be replaced by the short initial watchdog.
+		timing.progressPhase = PostMutationProgressPhase::PresentationStabilizing;
+		timing.lastProgressTickMs = 2500;
+		timing.currentTickMs = 17499;
+		if (HasPostMutationEmergencyRecoveryStalled(timing))
+			return false;
+		timing.currentTickMs = 17500;
+		if (!HasPostMutationEmergencyRecoveryStalled(timing))
+			return false;
 
 		for (std::uint32_t bit = 0; bit < 8; ++bit) {
 			auto blocked = state;
@@ -2282,9 +2499,9 @@ namespace
 		       ShouldDeferMenuContextInvalidation(100, 100, true) &&
 		       !ShouldDeferMenuContextInvalidation(99, 100, true) &&
 		       !ShouldDeferMenuContextInvalidation(
-			       std::numeric_limits<std::uint32_t>::max(),
-			       100,
-			       true);
+				   std::numeric_limits<std::uint32_t>::max(),
+				   100,
+				   true);
 	}
 
 	constexpr bool CoversMenuPresentationDecisionLatching()
@@ -2340,6 +2557,7 @@ namespace
 	static_assert(CoversDeferredDispatchSelection());
 	static_assert(CoversPostLoadRecoverySettleDeadline());
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
+	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
 	static_assert(CoversBoundedPostMutationRecovery());
 	static_assert(CoversRelatchRetryPacing());

@@ -2215,6 +2215,10 @@ public:
 	std::atomic<bool> vrStartupMainMenuRenderStateActive{ false };
 	std::atomic<bool> vrStartupRenderScaleDirectHandoffActive{ false };
 	std::atomic<bool> vrStartupRenderScaleBootSizingRecognized{ false };
+	// A pre-mutation deadline with no resource-backed stable contract leaves the
+	// process on the coherent startup None/native contract until restart (or an
+	// explicit inactive profile clears it). This must also block boot relatching.
+	std::atomic<bool> vrStartupRenderScaleNativeFallbackRestartRequired{ false };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };

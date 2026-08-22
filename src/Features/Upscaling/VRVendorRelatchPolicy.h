@@ -1735,6 +1735,43 @@ namespace VRVendorRelatchPolicy
 		       a_state.loadingSerial == a_state.currentLoadingSerial;
 	}
 
+	enum class PostLoadStableFallbackRequestAction : std::uint8_t
+	{
+		Discard,
+		ReplayAfterStableRetention,
+		HoldStartupNativeUntilRestart
+	};
+
+	struct PostLoadStableFallbackRequest
+	{
+		bool retainedStableContract = false;
+		bool desiredTargetValid = false;
+		bool desiredTargetActive = false;
+		bool desiredTargetHasImmutableIdentity = false;
+		bool desiredTargetRecoveryOrigin = false;
+	};
+
+	// A retained resource-backed contract can safely remain authoritative while a
+	// real immutable request waits for another attempt. With no stable contract,
+	// replay would immediately leave the coherent startup None presentation and
+	// re-enter physical/vendor activation against the same failed memory state.
+	[[nodiscard]] constexpr PostLoadStableFallbackRequestAction
+	SelectPostLoadStableFallbackRequestAction(
+		const PostLoadStableFallbackRequest& a_state) noexcept
+	{
+		if (!a_state.retainedStableContract) {
+			return a_state.desiredTargetValid && a_state.desiredTargetActive ?
+			           PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart :
+			           PostLoadStableFallbackRequestAction::Discard;
+		}
+
+		return a_state.desiredTargetValid &&
+		               a_state.desiredTargetHasImmutableIdentity &&
+		               !a_state.desiredTargetRecoveryOrigin ?
+		           PostLoadStableFallbackRequestAction::ReplayAfterStableRetention :
+		           PostLoadStableFallbackRequestAction::Discard;
+	}
+
 	struct PostLoadRecoveryTransitionBinding
 	{
 		bool recoveryActive = false;

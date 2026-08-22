@@ -18584,6 +18584,10 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 		return requestedMethod;
 	if (IsVRStartupMainMenuRenderStateActive())
 		return UpscaleMethod::kNONE;
+	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire)) {
+		return UpscaleMethod::kNONE;
+	}
 
 	// Boot sizing alone does not prove that Skyrim's scene targets have adopted
 	// the reduced dimensions. Keep the transient full-resolution source out of
@@ -19238,6 +19242,10 @@ bool Upscaling::GetVRRenderScaleModeRequested() const
 		return false;
 	if (IsVRStartupMainMenuRenderStateActive())
 		return false;
+	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire)) {
+		return false;
+	}
 
 	const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
 	if (desiredProfile.HasPendingSettings())
@@ -19483,6 +19491,15 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		IsVRRenderScaleTransitionSafetyRelevant(*this, previousMethod);
 	const bool targetMethodRenderScaleEligible = IsRenderScaleMethodEligible(targetMethod);
 	const bool targetRenderScaleMode = targetMethodRenderScaleEligible && a_renderScaleModeEnabled && renderScaleQuality;
+	if (!targetRenderScaleMode &&
+		vrStartupRenderScaleNativeFallbackRestartRequired.exchange(
+			false,
+			std::memory_order_acq_rel)) {
+		logger::info(
+			"[VRRenderScale] Cleared the startup native restart-required fallback for an explicitly inactive Render Scale profile.");
+		InvalidateFrameScopedUpscalingState();
+		RequestHistoryReset();
+	}
 	const bool methodChanged = previousMethod != targetMethod;
 	const bool methodRelatchRequired =
 		isVR &&
@@ -20175,6 +20192,10 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 		return false;
 	if (g_vrNativeRenderTargetRecreateOverrideActive)
 		return false;
+	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire)) {
+		return false;
+	}
 
 	if (!CanActivateVRRenderScaleRuntime(*this)) {
 		if (a_allowCreate)
@@ -24023,11 +24044,22 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		}
 
-		// Stable physical retention is a fallback result, not cancellation of the
-		// requested fidelity target. Keep the original request ID so a genuinely
-		// newer user/API request in the latest-wins slot remains authoritative.
-		if (retainedDesiredTarget.valid &&
-			!IsVRRenderScaleRecoveryOrigin(retainedDesiredTarget.origin)) {
+		const auto fallbackRequestAction =
+			VRVendorRelatchPolicy::SelectPostLoadStableFallbackRequestAction({
+				.retainedStableContract = retainedStableContract,
+				.desiredTargetValid = retainedDesiredTarget.valid,
+				.desiredTargetActive = retainedDesiredTarget.active,
+				.desiredTargetHasImmutableIdentity =
+					retainedDesiredTarget.requestID != 0 &&
+					retainedDesiredTarget.transitionEpoch != 0,
+				.desiredTargetRecoveryOrigin =
+					IsVRRenderScaleRecoveryOrigin(retainedDesiredTarget.origin),
+			});
+		// Stable physical retention is a fallback result, not cancellation of a
+		// valid immutable fidelity target. A startup None fallback has no physical
+		// contract capable of presenting that target and must not replay it.
+		if (fallbackRequestAction ==
+			VRVendorRelatchPolicy::PostLoadStableFallbackRequestAction::ReplayAfterStableRetention) {
 			VRRenderScaleDesiredProfile replay{};
 			replay.pending = true;
 			replay.method = retainedDesiredTarget.method;
@@ -24059,10 +24091,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		postLoadRuntimeResetPending.store(false, std::memory_order_release);
 
 		if (!retainedStableContract) {
-			// No resource-backed stable contract remains provable. Resetting the
-			// latch leaves the transplanted startup definition (None, Render Scale
-			// off) as the only runtime fallback without changing settings.
+			// No resource-backed stable contract remains provable. Make the native
+			// startup contract terminal for this process: neither runtime method
+			// selection nor a later OpenVR sizing query may silently reactivate the
+			// expired target. Settings remain intact and restart-required.
 			perfMode.ResetBootLatch();
+			vrStartupRenderScaleDirectHandoffActive.store(
+				false,
+				std::memory_order_release);
+			vrStartupRenderScaleBootSizingRecognized.store(
+				false,
+				std::memory_order_release);
+			vrStartupRenderScaleNativeFallbackRestartRequired.store(
+				fallbackRequestAction ==
+					VRVendorRelatchPolicy::PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart,
+				std::memory_order_release);
 		}
 		perfMode.UpdateRestartRequiredState(
 			settings,
@@ -46776,6 +46819,11 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 		IsRenderScaleMethodEligible(a_method) &&
 		a_renderScaleModeEnabled &&
 		IsRenderScaleQualityMode(qualityMode);
+	if (renderScaleModeEnabled &&
+		vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire)) {
+		return {};
+	}
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
 	const bool bufferedAPIDoorHandoff =
 		a_origin == VRUpscalingTransitionOrigin::VRAPI &&

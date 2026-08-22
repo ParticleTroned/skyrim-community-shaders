@@ -1688,6 +1688,51 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversPostLoadStableFallbackRequestAction()
+	{
+		PostLoadStableFallbackRequest request{
+			.retainedStableContract = true,
+			.desiredTargetValid = true,
+			.desiredTargetActive = true,
+			.desiredTargetHasImmutableIdentity = true,
+			.desiredTargetRecoveryOrigin = false,
+		};
+		if (SelectPostLoadStableFallbackRequestAction(request) !=
+			PostLoadStableFallbackRequestAction::ReplayAfterStableRetention) {
+			return false;
+		}
+
+		for (std::uint32_t bit = 0; bit < 3; ++bit) {
+			auto invalidReplay = request;
+			switch (bit) {
+			case 0:
+				invalidReplay.desiredTargetValid = false;
+				break;
+			case 1:
+				invalidReplay.desiredTargetHasImmutableIdentity = false;
+				break;
+			case 2:
+				invalidReplay.desiredTargetRecoveryOrigin = true;
+				break;
+			default:
+				return false;
+			}
+			if (SelectPostLoadStableFallbackRequestAction(invalidReplay) !=
+				PostLoadStableFallbackRequestAction::Discard) {
+				return false;
+			}
+		}
+
+		request.retainedStableContract = false;
+		if (SelectPostLoadStableFallbackRequestAction(request) !=
+			PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart) {
+			return false;
+		}
+		request.desiredTargetActive = false;
+		return SelectPostLoadStableFallbackRequestAction(request) ==
+		       PostLoadStableFallbackRequestAction::Discard;
+	}
+
 	constexpr bool CoversBoundedPostMutationRecovery()
 	{
 		PostMutationRecoveryAdmission state{
@@ -2559,6 +2604,7 @@ namespace
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
+	static_assert(CoversPostLoadStableFallbackRequestAction());
 	static_assert(CoversBoundedPostMutationRecovery());
 	static_assert(CoversRelatchRetryPacing());
 	static_assert(CoversPostMutationEmergencyMemoryAdmission());

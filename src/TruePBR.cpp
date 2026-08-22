@@ -9,6 +9,8 @@
 #include "State.h"
 #include "Util.h"
 
+#include <mutex>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GlintParameters,
 	enabled,
@@ -58,26 +60,35 @@ static bool PBRMaterialHasRequiredTextures(RE::BSLightingShaderMaterialBase cons
 // persistently-visible mislinked material would log every frame.
 static void WarnMissingPBRTexturesOnce(const std::string& inputFilePath)
 {
+	static std::mutex warningMutex;
 	static std::unordered_set<std::string> warned;
+	const std::scoped_lock lock(warningMutex);
 	if (warned.insert(inputFilePath).second) {
-		logger::warn("[TruePBR] {} missing required PBR texture(s); skipping setup for this draw", inputFilePath);
+		logger::warn("[TruePBR] {} missing required PBR texture(s); using neutral textures for this draw", inputFilePath);
 	}
 }
 
 // Decal creation re-probes the same invalid texture set every time a matching
 // decal spawns; without this, one bad texture set would log once per decal.
-static void WarnInvalidPBRDecalTextureSetOnce(const std::string& formEditorID)
+static void WarnInvalidPBRDecalTextureSetOnce(const RE::BGSTextureSet* textureSet)
 {
+	const std::string_view formEditorID = textureSet->GetFormEditorID();
+	const auto warningKey = !formEditorID.empty() ? std::string(formEditorID) : fmt::format("form {:08X}", textureSet->GetFormID());
+
+	static std::mutex warningMutex;
 	static std::unordered_set<std::string> warned;
-	if (warned.insert(formEditorID).second) {
-		logger::warn("[TruePBR] {} missing required PBR texture(s); skipping decal", formEditorID);
+	const std::scoped_lock lock(warningMutex);
+	if (warned.insert(warningKey).second) {
+		logger::warn("[TruePBR] {} missing required PBR texture(s); keeping the vanilla decal material", warningKey);
 	}
 }
 
 static void WarnInvalidPBRRenderTargetOnce(const std::string& inputFilePath, std::int32_t renderTargetIndex)
 {
+	static std::mutex warningMutex;
 	static std::unordered_set<std::string> warned;
 	const auto warningKey = inputFilePath + '#' + std::to_string(renderTargetIndex);
+	const std::scoped_lock lock(warningMutex);
 	if (warned.insert(warningKey).second) {
 		logger::warn("[TruePBR] {} has invalid diffuse render-target index {}; using its diffuse texture instead", inputFilePath, renderTargetIndex);
 	}
@@ -1501,7 +1512,7 @@ struct BSTempEffectSimpleDecal_SetupGeometry
 			shaderProperty != nullptr && singleton->IsPBRTextureSet(textureSet)) {
 			BSLightingShaderMaterialPBR probeMaterial;
 			if (!ProbePBRTextureSet(textureSet, probeMaterial)) {
-				WarnInvalidPBRDecalTextureSetOnce(textureSet->GetFormEditorID());
+				WarnInvalidPBRDecalTextureSetOnce(textureSet);
 				return;
 			}
 
@@ -1539,7 +1550,7 @@ struct BSTempEffectGeometryDecal_Initialize
 			// Probe before allocating so a mislinked set never allocates a decal property.
 			BSLightingShaderMaterialPBR probeMaterial;
 			if (!ProbePBRTextureSet(decal->texSet, probeMaterial)) {
-				WarnInvalidPBRDecalTextureSetOnce(decal->texSet->GetFormEditorID());
+				WarnInvalidPBRDecalTextureSetOnce(decal->texSet);
 				return;
 			}
 

@@ -1772,6 +1772,47 @@ namespace VRVendorRelatchPolicy
 		           PostLoadStableFallbackRequestAction::Discard;
 	}
 
+	struct StartupNativeFallbackExplicitRetryAdmission
+	{
+		bool fallbackActive = false;
+		bool explicitCSMenuRequest = false;
+		bool savedTargetActive = false;
+		bool startupPresentationReleased = false;
+		bool completedWorldFrame = false;
+		bool exactNativeRuntimePlan = false;
+		bool bootLatchAbsent = false;
+		bool transitionIdle = false;
+		bool physicalRecoveryResolved = false;
+		bool memorySampleFresh = false;
+		bool memoryPressureRecovered = false;
+		bool deviceHealthy = false;
+		bool noRecentOutOfMemory = false;
+		bool shaderPipelineEnabled = false;
+	};
+
+	// The terminal startup fallback blocks every automatic path. A fresh CS-menu
+	// action may create a new immutable request only after the unchanged native
+	// presentation and all admission evidence are current again. The normal
+	// relatch planner still owns projected residency and system-commit admission.
+	[[nodiscard]] constexpr bool CanAdmitStartupNativeFallbackExplicitRetry(
+		const StartupNativeFallbackExplicitRetryAdmission& a_state) noexcept
+	{
+		return a_state.fallbackActive &&
+		       a_state.explicitCSMenuRequest &&
+		       a_state.savedTargetActive &&
+		       a_state.startupPresentationReleased &&
+		       a_state.completedWorldFrame &&
+		       a_state.exactNativeRuntimePlan &&
+		       a_state.bootLatchAbsent &&
+		       a_state.transitionIdle &&
+		       a_state.physicalRecoveryResolved &&
+		       a_state.memorySampleFresh &&
+		       a_state.memoryPressureRecovered &&
+		       a_state.deviceHealthy &&
+		       a_state.noRecentOutOfMemory &&
+		       a_state.shaderPipelineEnabled;
+	}
+
 	struct PostLoadRecoveryTransitionBinding
 	{
 		bool recoveryActive = false;

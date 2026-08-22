@@ -1311,7 +1311,8 @@ public:
 		uint32_t a_dlssPreset,
 		bool a_fsr4RuntimeEnabled,
 		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
-		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0);
+		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0,
+		bool a_explicitStartupFallbackRetry = false);
 	/** @brief Atomically removes and returns the complete pending request. */
 	std::optional<VRRenderScaleDesiredProfile> TakePendingVRRenderScaleRequest();
 	/** @brief Rejects a request that was cleared or superseded before application began. */
@@ -1621,6 +1622,13 @@ public:
 	bool IsVRRenderScaleModeActive() const;
 	VRRenderScaleStatus GetVRRenderScaleModeStatus() const;
 	static const char* GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_status);
+	bool IsVRStartupNativeFallbackRestartRequired() const noexcept
+	{
+		return vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire);
+	}
+	bool IsVRStartupNativeFallbackSavedIntentActive() const;
+	bool CanRetryVRStartupNativeFallbackFromCSMenu();
 	void SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;
@@ -1635,7 +1643,8 @@ public:
 		const char* a_reason = nullptr,
 		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
 		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0,
-		std::optional<bool> a_targetFSR4RuntimeEnable = std::nullopt);
+		std::optional<bool> a_targetFSR4RuntimeEnable = std::nullopt,
+		bool a_explicitStartupFallbackRetry = false);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
 	/** @return The admitted LoadingMenu serial when an atomic Stabilizer profile may be staged; otherwise zero. */
@@ -2216,8 +2225,9 @@ public:
 	std::atomic<bool> vrStartupRenderScaleDirectHandoffActive{ false };
 	std::atomic<bool> vrStartupRenderScaleBootSizingRecognized{ false };
 	// A pre-mutation deadline with no resource-backed stable contract leaves the
-	// process on the coherent startup None/native contract until restart (or an
-	// explicit inactive profile clears it). This must also block boot relatching.
+	// process on the coherent startup None/native contract. Automatic replay and
+	// boot relatching remain blocked; only an explicit inactive profile or a new
+	// CS-menu request admitted after native/memory recovery may clear the latch.
 	std::atomic<bool> vrStartupRenderScaleNativeFallbackRestartRequired{ false };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };

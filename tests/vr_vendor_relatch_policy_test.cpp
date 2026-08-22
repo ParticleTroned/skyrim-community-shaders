@@ -1733,6 +1733,53 @@ namespace
 		       PostLoadStableFallbackRequestAction::Discard;
 	}
 
+	constexpr bool CoversStartupNativeFallbackExplicitRetryAdmission()
+	{
+		StartupNativeFallbackExplicitRetryAdmission admission{
+			.fallbackActive = true,
+			.explicitCSMenuRequest = true,
+			.savedTargetActive = true,
+			.startupPresentationReleased = true,
+			.completedWorldFrame = true,
+			.exactNativeRuntimePlan = true,
+			.bootLatchAbsent = true,
+			.transitionIdle = true,
+			.physicalRecoveryResolved = true,
+			.memorySampleFresh = true,
+			.memoryPressureRecovered = true,
+			.deviceHealthy = true,
+			.noRecentOutOfMemory = true,
+			.shaderPipelineEnabled = true,
+		};
+		if (!CanAdmitStartupNativeFallbackExplicitRetry(admission))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 14; ++bit) {
+			auto rejected = admission;
+			switch (bit) {
+			case 0: rejected.fallbackActive = false; break;
+			case 1: rejected.explicitCSMenuRequest = false; break;
+			case 2: rejected.savedTargetActive = false; break;
+			case 3: rejected.startupPresentationReleased = false; break;
+			case 4: rejected.completedWorldFrame = false; break;
+			case 5: rejected.exactNativeRuntimePlan = false; break;
+			case 6: rejected.bootLatchAbsent = false; break;
+			case 7: rejected.transitionIdle = false; break;
+			case 8: rejected.physicalRecoveryResolved = false; break;
+			case 9: rejected.memorySampleFresh = false; break;
+			case 10: rejected.memoryPressureRecovered = false; break;
+			case 11: rejected.deviceHealthy = false; break;
+			case 12: rejected.noRecentOutOfMemory = false; break;
+			case 13: rejected.shaderPipelineEnabled = false; break;
+			default: return false;
+			}
+			if (CanAdmitStartupNativeFallbackExplicitRetry(rejected))
+				return false;
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversBoundedPostMutationRecovery()
 	{
 		PostMutationRecoveryAdmission state{
@@ -2605,6 +2652,7 @@ namespace
 	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
 	static_assert(CoversPostLoadStableFallbackRequestAction());
+	static_assert(CoversStartupNativeFallbackExplicitRetryAdmission());
 	static_assert(CoversBoundedPostMutationRecovery());
 	static_assert(CoversRelatchRetryPacing());
 	static_assert(CoversPostMutationEmergencyMemoryAdmission());

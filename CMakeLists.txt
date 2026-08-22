@@ -1618,6 +1618,20 @@ if(BUILD_CONTROLLER_TESTS)
     )
 
     add_executable(
+        api_runtime_thread_affinity_test
+        EXCLUDE_FROM_ALL
+        tests/api_runtime_thread_affinity_test.cpp
+        src/Api/RuntimeThreadAffinity.cpp
+    )
+    target_compile_features(api_runtime_thread_affinity_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_runtime_thread_affinity_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME ApiRuntimeThreadAffinity COMMAND api_runtime_thread_affinity_test)
+    set_tests_properties(ApiRuntimeThreadAffinity PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
         api_service_foundation_test
         EXCLUDE_FROM_ALL
         tests/api_service_foundation_test.cpp
@@ -1695,6 +1709,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test
+            api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test
             api_upscaling_contract_test

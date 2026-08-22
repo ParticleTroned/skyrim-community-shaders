@@ -24,6 +24,8 @@ Ordinary behavioural choices should move from compile-time defines to runtime da
 - Several features already have runtime enable data inside resident shaders. Skylighting is the clearest reference implementation; Hair Specular is a promising small integrated pilot.
 - The cache comparison tooling presently identifies changed cache paths, but it does not yet attribute differences to semantic feature, pass, pipeline, resources, or invalidation cause.
 - The CSX VR menu has distinct in-scene vertex/pixel and submit-hook compute routes and must be classified separately from ordinary effect shaders.
+- The schema-v2 static dependency graph now covers the exact merged deployed namespace: 174 shader sources, 100 production entry points, 120 compile units/passes, and 421 resolved include edges. Every production entry has compile evidence; no compile sites or active include edges remain unclassified. Sources with dual roles, including `Utility.hlsl`, retain both their engine-family and independent compile routes.
+- Source-to-entry and feature-define invalidation indexes now exist. They are suitable for cache-planning experiments, but runtime resource lifetimes, final dynamically assembled independent-program defines, pass ordering, and bytecode identity remain explicit evidence gaps.
 
 ## Guardrails
 
@@ -86,6 +88,8 @@ During migration, legacy `loaded` behaviour should map to `Resident`, with expli
 - Every compilation event has a recorded reason.
 
 ## Milestone 1 — Build a machine-readable shader and pass manifest
+
+**Status:** static classification complete; runtime closure remains in progress.
 
 This is the prerequisite for safe optimisation. The existing family classification is useful, but pipeline membership, resources, ordering, and ownership are not yet complete enough.
 

@@ -1,3 +1,4 @@
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
@@ -143,6 +144,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// Establish the API owner from an actual SKSE game-thread task. The
+			// lifecycle callback itself is not a reliable thread-affinity oracle.
+			CSX::Api::ScheduleRuntimeMainThreadBinding();
 			RegisterCommunityShadersAPIMessageListener();
 			CSX::Api::InitializeEditorService();
 			CSX::Api::EditorDevBenchBridge::Install();

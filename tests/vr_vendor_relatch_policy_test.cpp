@@ -1780,6 +1780,98 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversStartupNativeFallbackControlActions()
+	{
+		StartupNativeFallbackControlRequest request{};
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::PassThrough) {
+			return false;
+		}
+
+		request.fallbackActive = true;
+		for (const bool targetActive : { false, true }) {
+			request.targetActive = targetActive;
+			request.csMenuOrigin = false;
+			request.retryAdmitted = true;
+			for (const auto control : {
+					 StartupNativeFallbackControl::None,
+					 StartupNativeFallbackControl::DisableSavedProfile,
+					 StartupNativeFallbackControl::RetrySavedProfile }) {
+				request.control = control;
+				if (SelectStartupNativeFallbackControlAction(request) !=
+					StartupNativeFallbackControlAction::Reject) {
+					return false;
+				}
+			}
+		}
+
+		request.csMenuOrigin = true;
+		request.retryAdmitted = false;
+		request.control = StartupNativeFallbackControl::None;
+		request.targetActive = false;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+		request.targetActive = true;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+
+		request.control =
+			StartupNativeFallbackControl::DisableSavedProfile;
+		request.targetActive = false;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::ResolveDisabled) {
+			return false;
+		}
+		request.targetActive = true;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+
+		request.control =
+			StartupNativeFallbackControl::RetrySavedProfile;
+		request.targetActive = false;
+		request.retryAdmitted = true;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+		request.targetActive = true;
+		request.retryAdmitted = false;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+		request.retryAdmitted = true;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::ResolveRetry) {
+			return false;
+		}
+
+		return !CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::PassThrough,
+				   true) &&
+		       !CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::Reject,
+				   true) &&
+		       !CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::ResolveDisabled,
+				   false) &&
+		       CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::ResolveDisabled,
+				   true) &&
+		       !CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::ResolveRetry,
+				   false) &&
+		       CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::ResolveRetry,
+				   true);
+	}
+
 	constexpr bool CoversBoundedPostMutationRecovery()
 	{
 		PostMutationRecoveryAdmission state{
@@ -2653,6 +2745,7 @@ namespace
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
 	static_assert(CoversPostLoadStableFallbackRequestAction());
 	static_assert(CoversStartupNativeFallbackExplicitRetryAdmission());
+	static_assert(CoversStartupNativeFallbackControlActions());
 	static_assert(CoversBoundedPostMutationRecovery());
 	static_assert(CoversRelatchRetryPacing());
 	static_assert(CoversPostMutationEmergencyMemoryAdmission());

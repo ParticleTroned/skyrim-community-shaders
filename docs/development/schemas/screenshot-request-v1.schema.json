@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:devbench:screenshot:request:1",
+  "title": "CSX screenshot command v1",
+  "type": "object",
+  "required": ["contractMajor", "action", "clientId", "commandId"],
+  "properties": {
+    "contractMajor": { "const": 1 },
+    "contractMinor": { "type": "integer", "minimum": 0 },
+    "action": {
+      "enum": [
+        "capabilities", "status", "settings_get", "settings_validate",
+        "settings_apply", "capture", "sequence_start", "sequence_stop",
+        "request_get", "request_list", "request_cancel", "events_poll",
+        "acknowledge"
+      ]
+    },
+    "clientId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "commandId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "useSettings": { "type": "boolean" },
+    "capture": { "$ref": "#/$defs/capture" },
+    "sequence": { "$ref": "#/$defs/sequence" },
+    "patch": { "type": "object" },
+    "scope": { "enum": ["runtime_session", "persistent_user"] },
+    "afterEventId": { "type": "integer", "minimum": 0 },
+    "throughEventId": { "type": "integer", "minimum": 0 },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 500 }
+  },
+  "$defs": {
+    "encoding": {
+      "type": "object",
+      "properties": {
+        "format": { "enum": ["png", "bmp"] },
+        "colourContract": { "const": "sdr_srgb" }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "required": ["view"],
+      "properties": {
+        "view": { "enum": ["source_native", "left_eye", "right_eye", "side_by_side", "framed_left", "framed_right", "framed_combined"] },
+        "dominantEye": { "enum": ["left", "right"] },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "crop": {
+          "type": ["object", "null"],
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 },
+            "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+          },
+          "required": ["x", "y", "width", "height"],
+          "additionalProperties": false
+        },
+        "encoding": { "$ref": "#/$defs/encoding" },
+        "nameSuffix": { "type": "string", "maxLength": 48 }
+      },
+      "additionalProperties": false
+    },
+    "capture": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "object",
+          "properties": {
+            "kind": { "enum": ["settings_default", "desktop_mirror", "hmd_submission"] },
+            "fallback": { "enum": ["reject", "desktop_mirror"] }
+          },
+          "additionalProperties": false
+        },
+        "outputs": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/output" } },
+        "destination": {
+          "type": "object",
+          "properties": {
+            "policy": { "enum": ["settings_default", "game_relative", "absolute"] },
+            "directory": { "type": ["string", "null"] },
+            "baseName": { "type": ["string", "null"], "maxLength": 96 },
+            "overwrite": { "const": "never" }
+          },
+          "additionalProperties": false
+        },
+        "clipboard": { "enum": ["none", "file_reference"] },
+        "tags": { "type": "object", "maxProperties": 32, "additionalProperties": { "type": "string", "maxLength": 256 } }
+      },
+      "additionalProperties": false
+    },
+    "sequence": {
+      "type": "object",
+      "required": ["frameCount"],
+      "properties": {
+        "frameCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "useSettings": { "type": "boolean" },
+        "capture": { "$ref": "#/$defs/capture" },
+        "schedule": {
+          "type": "object",
+          "properties": {
+            "basis": { "enum": ["game_frames", "wall_clock"] },
+            "intervalFrames": { "type": "integer", "minimum": 1 },
+            "intervalMs": { "type": "integer", "minimum": 1 },
+            "startDelayFrames": { "type": "integer", "minimum": 0 },
+            "startDelayMs": { "type": "integer", "minimum": 0 },
+            "pausePolicy": { "const": "hold" }
+          },
+          "additionalProperties": false
+        },
+        "backpressure": {
+          "type": "object",
+          "properties": {
+            "policy": { "enum": ["skip", "abort"] },
+            "maximumConsecutiveSkips": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "failurePolicy": { "enum": ["continue", "abort"] },
+        "packaging": {
+          "type": "object",
+          "properties": {
+            "frameManifest": { "type": "boolean" },
+            "previewVideo": {
+              "type": "object",
+              "properties": {
+                "requested": { "type": "boolean" },
+                "required": { "type": "boolean" },
+                "framesPerSecond": { "type": "integer", "minimum": 1, "maximum": 240 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "action": { "const": "settings_apply" } },
+        "required": ["action"]
+      },
+      "then": { "required": ["scope", "patch"] }
+    }
+  ],
+  "additionalProperties": true
+}

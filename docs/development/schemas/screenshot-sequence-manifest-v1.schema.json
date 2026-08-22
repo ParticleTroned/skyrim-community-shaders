@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:devbench:screenshot:sequence-manifest:1",
+  "title": "CSX screenshot sequence manifest v1",
+  "type": "object",
+  "required": ["contract", "sessionId", "requestId", "state", "capture", "counts", "children", "packaging", "updatedUtc"],
+  "properties": {
+    "contract": { "type": "object" },
+    "sessionId": { "type": "string" },
+    "requestId": { "type": "string" },
+    "state": { "enum": ["partial", "final"] },
+    "capture": { "type": "object" },
+    "counts": { "type": "object" },
+    "children": { "type": "array", "items": { "type": "object" } },
+    "packaging": { "type": "object" },
+    "updatedUtc": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

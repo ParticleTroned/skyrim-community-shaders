@@ -13,6 +13,7 @@
 #include "Menu/ThemeManager.h"
 #include "ProfilerDevBenchBridge.h"
 #include "SceneSettingsManager.h"
+#include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "VRAPI/CSpluginapi.h"
@@ -146,11 +147,13 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
 			CSX::Api::ScheduleRuntimeMainThreadBinding();
 			RegisterCommunityShadersAPIMessageListener();
+			ScreenshotDevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				ScreenshotDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -207,6 +210,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
+				ScreenshotDevBenchBridge::Install();
 			}
 
 			break;

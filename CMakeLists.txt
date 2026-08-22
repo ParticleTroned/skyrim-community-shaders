@@ -330,6 +330,7 @@ target_link_libraries(
         Tracy::TracyClient
         Streamline
         d3d12.lib
+		bcrypt.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
 )
@@ -1544,6 +1545,14 @@ endif()
 
 if(BUILD_CONTROLLER_TESTS)
     enable_testing()
+
+    add_test(
+        NAME ScreenshotApiContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/screenshot_api_contract_test.cmake"
+    )
 
     function(add_controller_test TARGET_NAME TEST_NAME SOURCE_FILE)
         add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${SOURCE_FILE})

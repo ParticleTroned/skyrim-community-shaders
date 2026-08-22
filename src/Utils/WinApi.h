@@ -9,4 +9,12 @@ namespace Util
 	/// same efficiency class, so this returns std::thread::hardware_concurrency().
 	/// Falls back to hardware_concurrency() on any API failure.
 	uint32_t GetPerformanceCoreCount();
+
+	/// Selects a cooperative priority for CPU-intensive background workers.
+	/// Windows combines process and thread priority, so BELOW_NORMAL is still
+	/// higher than ordinary desktop applications when Skyrim itself is High.
+	int GetCooperativeBackgroundThreadPriority(DWORD a_processPriorityClass);
+
+	/// Applies the process-class-aware cooperative priority to the calling thread.
+	bool SetCurrentThreadCooperativeBackgroundPriority();
 }  // namespace Util

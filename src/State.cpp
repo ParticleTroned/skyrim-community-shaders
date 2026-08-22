@@ -1156,7 +1156,12 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
-		const auto maxCompilerThreads = std::max(1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+		// The compilation pool is constructed at the responsive hardware-derived
+		// ceiling. Clamp persisted legacy/preset values to the number of workers that
+		// actually exists instead of accepting ineffective or CPU-hostile values.
+		const auto maxCompilerThreads = std::max(
+			1,
+			static_cast<int32_t>(shaderCache->compilationPool.get_thread_count()));
 		if (advanced.contains("Dump Shaders") && advanced["Dump Shaders"].is_boolean())
 			shaderCache->SetDump(advanced["Dump Shaders"]);
 		if (advanced.contains("Log Level") && advanced["Log Level"].is_number_integer()) {

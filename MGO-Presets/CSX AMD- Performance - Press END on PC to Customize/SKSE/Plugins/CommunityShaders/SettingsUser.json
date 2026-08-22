@@ -186,8 +186,6 @@
         "locationOverrides": []
     },
     "Advanced": {
-        "Background Compiler Threads": 8,
-        "Compiler Threads": 15,
         "Dump Shaders": false,
         "Frame Annotations": false,
         "Log Level": 2,

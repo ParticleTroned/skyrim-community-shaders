@@ -3,6 +3,8 @@
 #include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
 #include "Api/UpscalingDevBenchBridge.h"
+#include "Api/WeatherDevBenchBridge.h"
+#include "Api/WeatherService.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -150,6 +152,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
 			CSX::Api::ScheduleRuntimeMainThreadBinding();
 			CSX::Api::InitializeProfilerService();
+			CSX::Api::InitializeWeatherService();
 			if (RegisterCommunityShadersAPIMessageListener()) {
 				// Publish diagnostic adapters before cache validation and shader
 				// compilation. If DevBench's PostLoad listener runs later, the
@@ -157,6 +160,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::WeatherDevBenchBridge::Install();
 			}
 			break;
 		}
@@ -169,6 +173,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// CSX's listener ran first, this is the first deterministic retry after
 				// all PostLoad listeners have completed.
 				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::WeatherDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -224,11 +229,13 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				CSX::Api::InitializeProfilerService();
+				CSX::Api::InitializeWeatherService();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::WeatherDevBenchBridge::Install();
 			}
 
 			break;

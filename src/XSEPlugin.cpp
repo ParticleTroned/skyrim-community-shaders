@@ -5,6 +5,8 @@
 #include "Api/UpscalingDevBenchBridge.h"
 #include "Api/WeatherDevBenchBridge.h"
 #include "Api/WeatherService.h"
+#include "Api/EditorDevBenchBridge.h"
+#include "Api/EditorService.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -151,6 +153,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			// Establish the API owner from an actual SKSE game-thread task. The
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
 			CSX::Api::ScheduleRuntimeMainThreadBinding();
+			CSX::Api::InitializeEditorService();
 			CSX::Api::InitializeProfilerService();
 			CSX::Api::InitializeWeatherService();
 			if (RegisterCommunityShadersAPIMessageListener()) {
@@ -161,6 +164,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
+				CSX::Api::EditorDevBenchBridge::Install();
 			}
 			break;
 		}
@@ -174,6 +178,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// all PostLoad listeners have completed.
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
+				CSX::Api::EditorDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -230,6 +235,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 				CSX::Api::InitializeProfilerService();
 				CSX::Api::InitializeWeatherService();
+				CSX::Api::EditorDevBenchBridge::Install();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();

@@ -4,6 +4,7 @@
 
 #	include "Api/ServiceFoundation.h"
 #	include "Api/WeatherService.h"
+#	include "Api/RuntimeThreadAffinity.h"
 #	include "BuildProvenance.h"
 
 #	include <DevBenchAPI.h>
@@ -117,6 +118,7 @@ namespace
 		auto cancelled = std::make_shared<std::atomic_bool>(false);
 		auto future = promise->get_future();
 		tasks->AddTask([promise, cancelled, run = std::move(a_run)]() mutable {
+			CSX::Api::EnterRuntimeMainThreadTask();
 			if (cancelled->load(std::memory_order_acquire))
 				return;
 			try {
@@ -239,6 +241,14 @@ namespace
 			} catch (const std::exception& e) {
 				return Foundation().MakeError(a_args, "invalid_mutation", e.what(), "validation", false, "mutation");
 			}
+		}
+		if (action == "variables" && a_args.value("featureName", std::string{}).empty())
+			return Foundation().MakeError(a_args, "invalid_field", "featureName is required", "validation", false, "featureName");
+		if (action == "override") {
+			if (a_args.value("weatherKey", std::string{}).empty())
+				return Foundation().MakeError(a_args, "invalid_field", "weatherKey is required", "validation", false, "weatherKey");
+			if (a_args.value("featureName", std::string{}).empty())
+				return Foundation().MakeError(a_args, "invalid_field", "featureName is required", "validation", false, "featureName");
 		}
 
 		auto result = RunOnMainThread([action, a_args] {

@@ -1,5 +1,6 @@
 #include "Api/UpscalingService.h"
 
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistry.h"
 #include "Api/UpscalingContract.h"
 #include "Api/UpscalingServicePolicy.h"
@@ -254,8 +255,6 @@ namespace
 	class UpscalingServiceBundle
 	{
 	public:
-		UpscalingServiceBundle() : mainThread(std::this_thread::get_id()) {}
-
 		const Interface001* GetInterface() const noexcept
 		{
 			return &serviceInterface;
@@ -416,7 +415,10 @@ namespace
 			receipt.disposition = ApplyDisposition::kQueued;
 			receipt.operationId = operationId;
 			try {
-				tasks->AddTask([this, operationId] { ExecuteOperation(operationId); });
+				tasks->AddTask([this, operationId] {
+					CSX::Api::EnterRuntimeMainThreadTask();
+					ExecuteOperation(operationId);
+				});
 			} catch (...) {
 				receipt.status = Status::kServiceUnavailable;
 				receipt.disposition = ApplyDisposition::kRejected;
@@ -490,7 +492,6 @@ namespace
 			PreflightResult001 result{};
 		};
 
-		std::thread::id mainThread;
 		std::mutex mutex;
 		Capabilities001 capabilities{};
 		Snapshot001 snapshot{};
@@ -598,7 +599,7 @@ namespace
 		template <class T, class F>
 		std::optional<T> RunOnMainThread(F&& a_run)
 		{
-			if (std::this_thread::get_id() == mainThread)
+			if (CSX::Api::IsRuntimeMainThread())
 				return a_run();
 			auto* tasks = SKSE::GetTaskInterface();
 			if (!tasks)
@@ -607,6 +608,7 @@ namespace
 			auto cancelled = std::make_shared<std::atomic_bool>(false);
 			auto future = promise->get_future();
 			tasks->AddTask([promise, cancelled, run = std::forward<F>(a_run)]() mutable {
+				CSX::Api::EnterRuntimeMainThreadTask();
 				if (cancelled->load(std::memory_order_acquire))
 					return;
 				try {

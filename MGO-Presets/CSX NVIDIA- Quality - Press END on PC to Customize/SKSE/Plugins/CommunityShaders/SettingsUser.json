@@ -35,7 +35,7 @@
         "VROverlayOpenKeys": [],
         "EnableLightingFoveationHardCutoff": false,
         "comboTimeout": 3.0,
-        "EnableDepthBufferCullingInterior": true,
+        "EnableDepthBufferCullingInterior": false,
         "mouseDeadzone": 0.10000000149011612,
         "UseRuntimeDefaultMenuNavigation": false,
         "VRMenuOffsetY": -0.03999999910593033,

@@ -6,6 +6,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
+#include "Features/FoliageLighting.h"
 #include "Features/GrassLighting.h"
 #include "Features/HairSpecular.h"
 #include "Features/IBL.h"
@@ -47,6 +48,7 @@ namespace
 	using LinearLightingSettingsCB = LinearLighting::PerFrameData;
 	using TerrainBlendingSettingsCB = TerrainBlending::Settings;
 	using TruePBRSettingsCB = TruePBR::Settings;
+	using FoliageLightingSettingsCB = FoliageLighting::Settings;
 	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
 	using BloomSettingsCB = Bloom::Settings;
 
@@ -71,6 +73,7 @@ namespace
 		LinearLightingSettingsCB linearLightingSettings;
 		TerrainBlendingSettingsCB terrainBlendingSettings;
 		TruePBRSettingsCB truePBRSettings;
+		FoliageLightingSettingsCB foliageLightingSettings;
 		UnifiedWaterSettingsCB unifiedWaterSettings;
 		BloomSettingsCB bloomSettings;
 	};
@@ -94,6 +97,7 @@ namespace
 		LinearLightingSettingsCB,
 		TerrainBlendingSettingsCB,
 		TruePBRSettingsCB,
+		FoliageLightingSettingsCB,
 		UnifiedWaterSettingsCB,
 		BloomSettingsCB>;
 
@@ -121,6 +125,12 @@ namespace
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
 	static_assert(sizeof(TruePBRSettingsCB) == 16);
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 4);
+	static_assert(sizeof(FoliageLightingSettingsCB) == 32);
+	static_assert(offsetof(FoliageLightingSettingsCB, EnableFoliageScattering) == 0);
+	static_assert(offsetof(FoliageLightingSettingsCB, EnableFoliageAmbientBoost) == 4);
+	static_assert(offsetof(FoliageLightingSettingsCB, EnableFoliageAmbientFlip) == 8);
+	static_assert(offsetof(FoliageLightingSettingsCB, FoliageAmbientAmount) == 12);
+	static_assert(offsetof(FoliageLightingSettingsCB, EnableGrassScattering) == 16);
 	static_assert(sizeof(UnifiedWaterSettingsCB) == 80);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackStrength) == 0);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepConnectionProbeReachUnits) == 4);
@@ -168,7 +178,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, linearLightingSettings) == offsetof(FeatureDataLayout, adaptiveBalanceSettings) + sizeof(AdaptiveBalanceSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, terrainBlendingSettings) == offsetof(FeatureDataLayout, linearLightingSettings) + sizeof(LinearLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == offsetof(FeatureDataLayout, terrainBlendingSettings) + sizeof(TerrainBlendingSettingsCB));
-	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, foliageLightingSettings) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, foliageLightingSettings) + sizeof(FoliageLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
 
@@ -232,6 +243,7 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::truePBR.settings,
+		globals::features::foliageLighting.GetCommonBufferData(),
 		globals::features::unifiedWater.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetEffectiveBloomSettings());
 }

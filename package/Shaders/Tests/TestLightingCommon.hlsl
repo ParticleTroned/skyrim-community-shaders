@@ -2,6 +2,26 @@
 #include "/Shaders/Common/LightingCommon.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
 
+/// @tags lighting, foliage, transmission
+[numthreads(1, 1, 1)] void TestFoliageTransmission() {
+	float frontLit = GetFoliageTransmission(1.0f, -1.0f);
+	float grazingBacklight = GetFoliageTransmission(0.0f, -1.0f);
+	float backLit = GetFoliageTransmission(-1.0f, -1.0f);
+
+	ASSERT(IsTrue, abs(frontLit) < 0.0001f);
+	ASSERT(IsTrue, grazingBacklight > frontLit);
+	ASSERT(IsTrue, backLit > grazingBacklight);
+
+	float forwardAligned = GetFoliageTransmission(-1.0f, -1.0f);
+	float perpendicular = GetFoliageTransmission(-1.0f, 0.0f);
+	float sameDirection = GetFoliageTransmission(-1.0f, 1.0f);
+
+	ASSERT(IsTrue, forwardAligned > perpendicular);
+	ASSERT(IsTrue, abs(perpendicular - sameDirection) < 0.0001f);
+	ASSERT(IsTrue, forwardAligned >= 0.0f && forwardAligned <= 1.0f);
+	ASSERT(IsTrue, !isnan(forwardAligned) && !isinf(forwardAligned));
+}
+
 /// @tags lighting, material
 [numthreads(1, 1, 1)] void TestShininessToRoughness() {
 	// Test 1: Known conversions

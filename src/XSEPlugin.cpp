@@ -1,3 +1,4 @@
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
 #include "Api/WeatherDevBenchBridge.h"
 #include "Api/WeatherService.h"
@@ -143,6 +144,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// Establish the API owner from an actual SKSE game-thread task. The
+			// lifecycle callback itself is not a reliable thread-affinity oracle.
+			CSX::Api::ScheduleRuntimeMainThreadBinding();
 			// Establish owner-thread affinity during PostLoad, not DataLoaded. The
 			// latter may run on a different lifecycle thread from API tasks.
 			CSX::Api::InitializeWeatherService();

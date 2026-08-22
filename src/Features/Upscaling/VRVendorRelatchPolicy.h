@@ -1735,6 +1735,149 @@ namespace VRVendorRelatchPolicy
 		       a_state.loadingSerial == a_state.currentLoadingSerial;
 	}
 
+	enum class PostLoadStableFallbackRequestAction : std::uint8_t
+	{
+		Discard,
+		ReplayAfterStableRetention,
+		HoldStartupNativeUntilRestart
+	};
+
+	struct PostLoadStableFallbackRequest
+	{
+		bool retainedStableContract = false;
+		bool desiredTargetValid = false;
+		bool desiredTargetActive = false;
+		bool desiredTargetHasImmutableIdentity = false;
+		bool desiredTargetRecoveryOrigin = false;
+	};
+
+	// A retained resource-backed contract can safely remain authoritative while a
+	// real immutable request waits for another attempt. With no stable contract,
+	// replay would immediately leave the coherent startup None presentation and
+	// re-enter physical/vendor activation against the same failed memory state.
+	[[nodiscard]] constexpr PostLoadStableFallbackRequestAction
+	SelectPostLoadStableFallbackRequestAction(
+		const PostLoadStableFallbackRequest& a_state) noexcept
+	{
+		if (!a_state.retainedStableContract) {
+			return a_state.desiredTargetValid && a_state.desiredTargetActive ?
+			           PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart :
+			           PostLoadStableFallbackRequestAction::Discard;
+		}
+
+		return a_state.desiredTargetValid &&
+		               a_state.desiredTargetHasImmutableIdentity &&
+		               !a_state.desiredTargetRecoveryOrigin ?
+		           PostLoadStableFallbackRequestAction::ReplayAfterStableRetention :
+		           PostLoadStableFallbackRequestAction::Discard;
+	}
+
+	struct StartupNativeFallbackExplicitRetryAdmission
+	{
+		bool fallbackActive = false;
+		bool explicitCSMenuRequest = false;
+		bool savedTargetActive = false;
+		bool startupPresentationReleased = false;
+		bool completedWorldFrame = false;
+		bool exactNativeRuntimePlan = false;
+		bool bootLatchAbsent = false;
+		bool transitionIdle = false;
+		bool physicalRecoveryResolved = false;
+		bool memorySampleFresh = false;
+		bool memoryPressureRecovered = false;
+		bool deviceHealthy = false;
+		bool noRecentOutOfMemory = false;
+		bool shaderPipelineEnabled = false;
+	};
+
+	// The terminal startup fallback blocks every automatic path. A fresh CS-menu
+	// action may create a new immutable request only after the unchanged native
+	// presentation and all admission evidence are current again. The normal
+	// relatch planner still owns projected residency and system-commit admission.
+	[[nodiscard]] constexpr bool CanAdmitStartupNativeFallbackExplicitRetry(
+		const StartupNativeFallbackExplicitRetryAdmission& a_state) noexcept
+	{
+		return a_state.fallbackActive &&
+		       a_state.explicitCSMenuRequest &&
+		       a_state.savedTargetActive &&
+		       a_state.startupPresentationReleased &&
+		       a_state.completedWorldFrame &&
+		       a_state.exactNativeRuntimePlan &&
+		       a_state.bootLatchAbsent &&
+		       a_state.transitionIdle &&
+		       a_state.physicalRecoveryResolved &&
+		       a_state.memorySampleFresh &&
+		       a_state.memoryPressureRecovered &&
+		       a_state.deviceHealthy &&
+		       a_state.noRecentOutOfMemory &&
+		       a_state.shaderPipelineEnabled;
+	}
+
+	enum class StartupNativeFallbackControl : std::uint8_t
+	{
+		None,
+		DisableSavedProfile,
+		RetrySavedProfile
+	};
+
+	enum class StartupNativeFallbackControlAction : std::uint8_t
+	{
+		PassThrough,
+		Reject,
+		ResolveDisabled,
+		ResolveRetry
+	};
+
+	struct StartupNativeFallbackControlRequest
+	{
+		bool fallbackActive = false;
+		bool targetActive = false;
+		bool csMenuOrigin = false;
+		bool retryAdmitted = false;
+		StartupNativeFallbackControl control =
+			StartupNativeFallbackControl::None;
+	};
+
+	// Once terminal native fallback is armed, ordinary UI edits, API requests,
+	// and post-load profile sync must not release or mutate it. Only an explicit
+	// CS-menu disable, or a CS-menu retry that passed the full recovery admission,
+	// may publish the request which resolves the fallback.
+	[[nodiscard]] constexpr StartupNativeFallbackControlAction
+	SelectStartupNativeFallbackControlAction(
+		const StartupNativeFallbackControlRequest& a_request) noexcept
+	{
+		if (!a_request.fallbackActive)
+			return StartupNativeFallbackControlAction::PassThrough;
+		if (!a_request.csMenuOrigin)
+			return StartupNativeFallbackControlAction::Reject;
+
+		if (a_request.targetActive) {
+			if (a_request.control ==
+					StartupNativeFallbackControl::RetrySavedProfile &&
+				a_request.retryAdmitted) {
+				return StartupNativeFallbackControlAction::ResolveRetry;
+			}
+			return StartupNativeFallbackControlAction::Reject;
+		}
+
+		if (a_request.control ==
+			StartupNativeFallbackControl::DisableSavedProfile) {
+			return StartupNativeFallbackControlAction::ResolveDisabled;
+		}
+		return StartupNativeFallbackControlAction::Reject;
+	}
+
+	[[nodiscard]] constexpr bool CanResolveStartupNativeFallback(
+		StartupNativeFallbackControlAction a_action,
+		bool a_immutableRequestPublished) noexcept
+	{
+		return a_immutableRequestPublished &&
+		       (a_action ==
+				   StartupNativeFallbackControlAction::ResolveDisabled ||
+			   a_action ==
+				   StartupNativeFallbackControlAction::ResolveRetry);
+	}
+
 	struct PostLoadRecoveryTransitionBinding
 	{
 		bool recoveryActive = false;

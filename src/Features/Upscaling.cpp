@@ -249,6 +249,8 @@ namespace
 	constexpr uint64_t kVRRenderScaleCriticalRecoveryHeadroomBytes = 384u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleHighRecoveryHeadroomBytes = 768u * kVRRenderScaleMiB;
 	constexpr uint64_t kVRRenderScaleElevatedRecoveryHeadroomBytes = 1280u * kVRRenderScaleMiB;
+	constexpr uint32_t kVRStartupNativeFallbackRetryMemorySampleMaxAgeFrames =
+		kVRRenderScaleMemorySampleIntervalFrames;
 
 	const char* GetVRRenderScalePostMutationProgressPhaseName(
 		VRVendorRelatchPolicy::PostMutationProgressPhase a_phase) noexcept
@@ -14875,6 +14877,44 @@ namespace
 		ImGui::TextUnformatted("CSX applies changes while render targets rebuild.");
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 	}
+
+	void DrawVRStartupNativeFallbackStatus(
+		Upscaling& a_upscaling,
+		Upscaling::UpscaleMethod a_method,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset)
+	{
+		if (!a_upscaling.IsVRStartupNativeFallbackRestartRequired())
+			return;
+
+		Util::Text::WrappedWarning(
+			"Saved Render Scale: Enabled. Runtime: native/None because startup activation expired. Restart required.");
+		const bool retryReady =
+			a_upscaling.CanRetryVRStartupNativeFallbackFromCSMenu();
+		{
+			auto disabledGuard = Util::DisableGuard(!retryReady);
+			if (ImGui::Button(
+					"Retry Render Scale##VRStartupNativeFallback")) {
+				a_upscaling.ApplyCSMenuUpscalingTransition(
+					a_method,
+					true,
+					a_qualityMode,
+					a_dlssPreset,
+					"explicit startup native fallback retry",
+					Upscaling::VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					std::nullopt,
+					VRVendorRelatchPolicy::StartupNativeFallbackControl::RetrySavedProfile);
+			}
+		}
+		if (!retryReady) {
+			ImGui::TextDisabled(
+				"Retry becomes available only after native presentation is stable and GPU pressure recovers to Normal/Elevated. Restart is recommended.");
+		} else if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(
+				"Creates a fresh user-requested transition. Automatic replay of the expired startup request remains blocked.");
+		}
+	}
 }
 
 void Upscaling::DrawSettings()
@@ -15052,6 +15092,8 @@ void Upscaling::DrawSettings()
 		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
 		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
 		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
+		const bool startupNativeFallbackActive =
+			IsVRStartupNativeFallbackRestartRequired();
 		const bool vrRenderScaleRequested = GetPerfModeRequested();
 		const bool startupMainMenuStateActive =
 			IsVRStartupMainMenuRenderStateActive();
@@ -15060,7 +15102,10 @@ void Upscaling::DrawSettings()
 			perfModeRenderTargetRecreateInProgress.load(std::memory_order_relaxed) ||
 			postLoadRuntimeResetPending.load(std::memory_order_relaxed) ||
 			HasPendingVRRenderScaleTransition();
-		const bool publicRenderScaleRequested = vrRenderScaleRequested;
+		const bool publicRenderScaleRequested =
+			startupNativeFallbackActive ?
+				IsVRStartupNativeFallbackSavedIntentActive() :
+				vrRenderScaleRequested;
 		const bool publicRenderScaleCanEdit =
 			!openCompositeBlocksUpscaling &&
 			((renderScaleMethodEligible && renderScaleQualitySelected) ||
@@ -15076,12 +15121,20 @@ void Upscaling::DrawSettings()
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
 			if (ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
+				const auto fallbackControl =
+					startupNativeFallbackActive && !enableRenderScaleMode ?
+						VRVendorRelatchPolicy::StartupNativeFallbackControl::DisableSavedProfile :
+						VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
 				ApplyCSMenuUpscalingTransition(
 					upscaleMethod,
 					enableRenderScaleMode,
 					renderScaleQualityMode,
 					GetEffectiveDLSSPreset(),
-					"upscaling menu render-scale mode change");
+					"upscaling menu render-scale mode change",
+					VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					std::nullopt,
+					fallbackControl);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -15090,13 +15143,22 @@ void Upscaling::DrawSettings()
 		if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
 		}
+		DrawVRStartupNativeFallbackStatus(
+			*this,
+			upscaleMethod,
+			renderScaleQualityMode,
+			GetEffectiveDLSSPreset());
 		// The startup MainMenu override deliberately presents a native None
 		// contract while retaining the saved gameplay profile. PerfMode's legacy
 		// restart flag compares that saved profile with the (intentionally absent)
 		// Render Scale boot latch, so it is not a queued or scheduled relatch in
 		// this context. Report lifecycle status only after startup presentation
 		// relinquishes ownership to the gameplay profile.
-		if (!startupMainMenuStateActive && perfModeRelatchPending) {
+		if (startupNativeFallbackActive) {
+			// The dedicated status above reports the saved request and the exact
+			// bounded retry condition. Do not mislabel this terminal native state as
+			// an ordinary scheduled relatch.
+		} else if (!startupMainMenuStateActive && perfModeRelatchPending) {
 			Util::Text::Warning(
 				"Relatch Pending: applying the upscaling change.");
 		} else if (!startupMainMenuStateActive && perfMode.HasRestartRequiredChange()) {
@@ -15765,7 +15827,12 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
 		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
 		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
-		const bool publicRenderScaleRequested = GetPerfModeRequested();
+		const bool startupNativeFallbackActive =
+			IsVRStartupNativeFallbackRestartRequired();
+		const bool publicRenderScaleRequested =
+			startupNativeFallbackActive ?
+				IsVRStartupNativeFallbackSavedIntentActive() :
+				GetPerfModeRequested();
 		const bool publicRenderScaleCanEdit =
 			!openCompositeBlocksUpscaling &&
 			((renderScaleMethodEligible && renderScaleQualitySelected) ||
@@ -15777,12 +15844,20 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
 			if (ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
+				const auto fallbackControl =
+					startupNativeFallbackActive && !enableRenderScaleMode ?
+						VRVendorRelatchPolicy::StartupNativeFallbackControl::DisableSavedProfile :
+						VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
 				ApplyCSMenuUpscalingTransition(
 					upscaleMethod,
 					enableRenderScaleMode,
 					renderScaleQualityMode,
 					GetEffectiveDLSSPreset(),
-					"performance tuning render-scale mode change");
+					"performance tuning render-scale mode change",
+					VRUpscalingTransitionOrigin::CSMenu,
+					0,
+					std::nullopt,
+					fallbackControl);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -15791,6 +15866,11 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
 		}
+		DrawVRStartupNativeFallbackStatus(
+			*this,
+			upscaleMethod,
+			renderScaleQualityMode,
+			GetEffectiveDLSSPreset());
 
 		if (!a_advanced)
 			ImGui::SeparatorText("VR FOV");
@@ -18584,6 +18664,10 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 		return requestedMethod;
 	if (IsVRStartupMainMenuRenderStateActive())
 		return UpscaleMethod::kNONE;
+	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire)) {
+		return UpscaleMethod::kNONE;
+	}
 
 	// Boot sizing alone does not prove that Skyrim's scene targets have adopted
 	// the reduced dimensions. Keep the transient full-resolution source out of
@@ -19238,6 +19322,10 @@ bool Upscaling::GetVRRenderScaleModeRequested() const
 		return false;
 	if (IsVRStartupMainMenuRenderStateActive())
 		return false;
+	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire)) {
+		return false;
+	}
 
 	const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
 	if (desiredProfile.HasPendingSettings())
@@ -19364,6 +19452,115 @@ const char* Upscaling::GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_stat
 	}
 }
 
+bool Upscaling::IsVRStartupNativeFallbackSavedIntentActive() const
+{
+	if (!REL::Module::IsVR() ||
+		!IsVRStartupNativeFallbackRestartRequired()) {
+		return false;
+	}
+
+	return perfMode.IsEligible(
+		settings,
+		GetConfiguredUpscaleMethodForTransition());
+}
+
+bool Upscaling::CanRetryVRStartupNativeFallbackFromCSMenu(
+	bool a_forceMemorySample)
+{
+	if (!REL::Module::IsVR() ||
+		!IsVRStartupNativeFallbackRestartRequired()) {
+		return false;
+	}
+
+	auto* state = globals::state;
+	if (!state)
+		return false;
+	if (a_forceMemorySample &&
+		!SampleVRRenderScaleMemory(
+			true,
+			"explicit startup native fallback retry")) {
+		return false;
+	}
+
+	EnsureRuntimeResolutionStateCurrent();
+	const auto& plan = GetRuntimeResolutionPlan();
+	const auto controller = GetVRRenderScaleTransitionSnapshot();
+	const auto& boot = perfMode.GetBootSnapshot();
+	const uint32_t currentFrame = std::max(state->frameCount, 1u);
+	const bool memorySampleFresh =
+		controller.memory.valid &&
+		controller.memory.systemCommitValid &&
+		controller.memory.sampleFrame != 0 &&
+		currentFrame >= controller.memory.sampleFrame &&
+		currentFrame - controller.memory.sampleFrame <=
+			kVRStartupNativeFallbackRetryMemorySampleMaxAgeFrames;
+	const bool memoryPressureRecovered =
+		controller.memory.pressure == VRRenderScaleMemoryPressure::Normal ||
+		controller.memory.pressure == VRRenderScaleMemoryPressure::Elevated;
+	const uint32_t lastOutOfMemoryFrame =
+		vrRenderScaleLastOutOfMemoryFailureFrame.load(
+			std::memory_order_acquire);
+	const bool noRecentOutOfMemory =
+		lastOutOfMemoryFrame == 0 ||
+		(currentFrame >= lastOutOfMemoryFrame &&
+			currentFrame - lastOutOfMemoryFrame >
+				kVRRenderScaleRecentOutOfMemoryGuardFrames);
+	const uint32_t expectedWidth = ClampPositiveDimension(state->screenSize.x);
+	const uint32_t expectedHeight = ClampPositiveDimension(state->screenSize.y);
+	const bool exactNativeRuntimePlan =
+		GetRuntimeUpscaleMethod() == UpscaleMethod::kNONE &&
+		plan.upscaleMethod == UpscaleMethod::kNONE &&
+		plan.owner == ResolutionOwner::Native &&
+		!plan.vendorMethod &&
+		!plan.loadingMenuActive &&
+		ClampPositiveDimension(plan.engineRenderSize.x) == expectedWidth &&
+		ClampPositiveDimension(plan.engineRenderSize.y) == expectedHeight &&
+		ClampPositiveDimension(plan.finalOutputSize.x) == expectedWidth &&
+		ClampPositiveDimension(plan.finalOutputSize.y) == expectedHeight;
+	const bool transitionIdle =
+		controller.state == VRRenderScaleTransitionState::Idle &&
+		!controller.postLoadRecovery.active &&
+		!pendingPerfModeRenderTargetRecreate.load(
+			std::memory_order_acquire) &&
+		!perfModeRenderTargetRecreateInProgress.load(
+			std::memory_order_acquire) &&
+		!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
+		!HasPendingVRUpscalingTransition();
+	const bool physicalRecoveryResolved =
+		vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+			std::memory_order_acquire) == 0 &&
+		vrRenderScalePostMutationSerializationEpoch.load(
+			std::memory_order_acquire) == 0 &&
+		!vrRenderScalePreMutationNativeFallbackAdmissionActive.load(
+			std::memory_order_acquire) &&
+		!HasLiveVRRenderScaleProviderNeutralRecoveryWorker();
+
+	return VRVendorRelatchPolicy::CanAdmitStartupNativeFallbackExplicitRetry({
+		.fallbackActive = true,
+		.explicitCSMenuRequest = true,
+		.savedTargetActive = IsVRStartupNativeFallbackSavedIntentActive(),
+		.startupPresentationReleased =
+			!IsVRStartupMainMenuRenderStateActive() &&
+			!vrStartupRenderScaleDirectHandoffActive.load(
+				std::memory_order_acquire) &&
+			!vrStartupRenderScaleBootSizingRecognized.load(
+				std::memory_order_acquire),
+		.completedWorldFrame =
+			HasCompletedVRWorldFrameAfterLatestLoad(state),
+		.exactNativeRuntimePlan = exactNativeRuntimePlan,
+		.bootLatchAbsent = !boot.valid,
+		.transitionIdle = transitionIdle,
+		.physicalRecoveryResolved = physicalRecoveryResolved,
+		.memorySampleFresh = memorySampleFresh,
+		.memoryPressureRecovered = memoryPressureRecovered,
+		.deviceHealthy = !IsSubmitStageDeviceLost(),
+		.noRecentOutOfMemory = noRecentOutOfMemory,
+		.shaderPipelineEnabled =
+			globals::shaderCache &&
+			globals::shaderCache->IsEnableRequested(),
+	});
+}
+
 bool Upscaling::IsPerfModeActive() const
 {
 	if (g_vrNativeRenderTargetRecreateOverrideActive)
@@ -19455,7 +19652,7 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
 }
 
-void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin, uint64_t a_bufferedStabilizerDoorHandoffSerial, std::optional<bool> a_targetFSR4RuntimeEnable)
+void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin, uint64_t a_bufferedStabilizerDoorHandoffSerial, std::optional<bool> a_targetFSR4RuntimeEnable, VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl)
 {
 	if (ApplyOpenCompositeUpscalingBlocker(true))
 		return;
@@ -19483,6 +19680,21 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		IsVRRenderScaleTransitionSafetyRelevant(*this, previousMethod);
 	const bool targetMethodRenderScaleEligible = IsRenderScaleMethodEligible(targetMethod);
 	const bool targetRenderScaleMode = targetMethodRenderScaleEligible && a_renderScaleModeEnabled && renderScaleQuality;
+	const bool startupNativeFallbackActive =
+		vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire);
+	const bool startupFallbackControlRequested =
+		a_startupFallbackControl !=
+		VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
+	if (startupNativeFallbackActive && !startupFallbackControlRequested) {
+		logger::debug(
+			"[VRRenderScale] Ignored non-explicit transition while the terminal startup native fallback is active. origin={} method={} renderScaleMode={} reason={}.",
+			magic_enum::enum_name(a_origin),
+			magic_enum::enum_name(targetMethod),
+			BoolText(targetRenderScaleMode),
+			a_reason ? a_reason : "unspecified");
+		return;
+	}
 	const bool methodChanged = previousMethod != targetMethod;
 	const bool methodRelatchRequired =
 		isVR &&
@@ -19608,6 +19820,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 				dlssPreset));
 
 	const bool stageVRUpscalingChange =
+		(startupNativeFallbackActive && startupFallbackControlRequested) ||
 		(bufferedStabilizerDoorHandoff &&
 			(bufferedProfileChanged || bufferedPhysicalContractMismatch)) ||
 		hasPendingRequest ||
@@ -19629,7 +19842,8 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			a_origin,
 			bufferedStabilizerDoorHandoff ?
 				a_bufferedStabilizerDoorHandoffSerial :
-				0);
+				0,
+			a_startupFallbackControl);
 		if (!queueResult.Accepted()) {
 			return;
 		}
@@ -20175,6 +20389,10 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 		return false;
 	if (g_vrNativeRenderTargetRecreateOverrideActive)
 		return false;
+	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire)) {
+		return false;
+	}
 
 	if (!CanActivateVRRenderScaleRuntime(*this)) {
 		if (a_allowCreate)
@@ -24023,11 +24241,22 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		}
 
-		// Stable physical retention is a fallback result, not cancellation of the
-		// requested fidelity target. Keep the original request ID so a genuinely
-		// newer user/API request in the latest-wins slot remains authoritative.
-		if (retainedDesiredTarget.valid &&
-			!IsVRRenderScaleRecoveryOrigin(retainedDesiredTarget.origin)) {
+		const auto fallbackRequestAction =
+			VRVendorRelatchPolicy::SelectPostLoadStableFallbackRequestAction({
+				.retainedStableContract = retainedStableContract,
+				.desiredTargetValid = retainedDesiredTarget.valid,
+				.desiredTargetActive = retainedDesiredTarget.active,
+				.desiredTargetHasImmutableIdentity =
+					retainedDesiredTarget.requestID != 0 &&
+					retainedDesiredTarget.transitionEpoch != 0,
+				.desiredTargetRecoveryOrigin =
+					IsVRRenderScaleRecoveryOrigin(retainedDesiredTarget.origin),
+			});
+		// Stable physical retention is a fallback result, not cancellation of a
+		// valid immutable fidelity target. A startup None fallback has no physical
+		// contract capable of presenting that target and must not replay it.
+		if (fallbackRequestAction ==
+			VRVendorRelatchPolicy::PostLoadStableFallbackRequestAction::ReplayAfterStableRetention) {
 			VRRenderScaleDesiredProfile replay{};
 			replay.pending = true;
 			replay.method = retainedDesiredTarget.method;
@@ -24059,10 +24288,22 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		postLoadRuntimeResetPending.store(false, std::memory_order_release);
 
 		if (!retainedStableContract) {
-			// No resource-backed stable contract remains provable. Resetting the
-			// latch leaves the transplanted startup definition (None, Render Scale
-			// off) as the only runtime fallback without changing settings.
+			// No resource-backed stable contract remains provable. Make the native
+			// startup contract terminal to automatic work: neither runtime method
+			// selection nor a later OpenVR sizing query may silently reactivate the
+			// expired target. Settings remain intact and restart-required; a fresh
+			// CS-menu request must pass the explicit native/memory recovery gate.
 			perfMode.ResetBootLatch();
+			vrStartupRenderScaleDirectHandoffActive.store(
+				false,
+				std::memory_order_release);
+			vrStartupRenderScaleBootSizingRecognized.store(
+				false,
+				std::memory_order_release);
+			vrStartupRenderScaleNativeFallbackRestartRequired.store(
+				fallbackRequestAction ==
+					VRVendorRelatchPolicy::PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart,
+				std::memory_order_release);
 		}
 		perfMode.UpdateRestartRequiredState(
 			settings,
@@ -24080,12 +24321,22 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
+		const auto fallbackMemory =
+			GetVRRenderScaleTransitionSnapshot().memory;
 		logger::warn(
-			"[VRRenderScale][PostLoad] Expired recovery retained {} without render-target mutation. epoch={} recoveryEpoch={} reason={}; requested settings remain restart-required.",
+			"[VRRenderScale][PostLoad] Expired recovery retained {} without render-target mutation. epoch={} recoveryEpoch={} reason={}; requested settings remain restart-required. desiredMethod={} desiredActive={} quality={} memoryValid={} pressure={} usage={:.1f}% headroom={}MiB systemCommitValid={}.",
 			retainedStableContract ? "the last stable physical contract" : "the startup None fallback",
 			relatchEpoch,
 			postLoadRecoveryEpoch,
-			a_reason ? a_reason : "admission rejected");
+			a_reason ? a_reason : "admission rejected",
+			magic_enum::enum_name(retainedDesiredTarget.method),
+			BoolText(retainedDesiredTarget.active),
+			retainedDesiredTarget.qualityMode,
+			BoolText(fallbackMemory.valid),
+			GetVRRenderScaleMemoryPressureName(fallbackMemory.pressure),
+			fallbackMemory.usageRatio * 100.0,
+			fallbackMemory.headroomBytes / kVRRenderScaleMiB,
+			BoolText(fallbackMemory.systemCommitValid));
 		return false;
 	};
 	if (presentationDeadlineFallbackRequested &&
@@ -46769,13 +47020,37 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	uint32_t a_dlssPreset,
 	bool a_fsr4RuntimeEnabled,
 	VRUpscalingTransitionOrigin a_origin,
-	uint64_t a_bufferedStabilizerDoorHandoffSerial)
+	uint64_t a_bufferedStabilizerDoorHandoffSerial,
+	VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl)
 {
 	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
 	const bool renderScaleModeEnabled =
 		IsRenderScaleMethodEligible(a_method) &&
 		a_renderScaleModeEnabled &&
 		IsRenderScaleQualityMode(qualityMode);
+	const bool startupNativeFallbackActive =
+		vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire);
+	const bool explicitStartupFallbackRetryAdmitted =
+		renderScaleModeEnabled &&
+		startupNativeFallbackActive &&
+		a_startupFallbackControl ==
+			VRVendorRelatchPolicy::StartupNativeFallbackControl::RetrySavedProfile &&
+		a_origin == VRUpscalingTransitionOrigin::CSMenu &&
+		CanRetryVRStartupNativeFallbackFromCSMenu(true);
+	const auto startupFallbackControlAction =
+		VRVendorRelatchPolicy::SelectStartupNativeFallbackControlAction({
+			.fallbackActive = startupNativeFallbackActive,
+			.targetActive = renderScaleModeEnabled,
+			.csMenuOrigin =
+				a_origin == VRUpscalingTransitionOrigin::CSMenu,
+			.retryAdmitted = explicitStartupFallbackRetryAdmitted,
+			.control = a_startupFallbackControl,
+		});
+	if (startupFallbackControlAction ==
+		VRVendorRelatchPolicy::StartupNativeFallbackControlAction::Reject) {
+		return {};
+	}
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
 	const bool bufferedAPIDoorHandoff =
 		a_origin == VRUpscalingTransitionOrigin::VRAPI &&
@@ -46931,6 +47206,22 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 			request.transitionEpoch,
 			magic_enum::enum_name(request.origin));
 		return result;
+	}
+	if (VRVendorRelatchPolicy::CanResolveStartupNativeFallback(
+			startupFallbackControlAction,
+			result.Published() &&
+			IsLatestVRRenderScaleRequest(result.requestID)) &&
+		vrStartupRenderScaleNativeFallbackRestartRequired.exchange(
+			false,
+			std::memory_order_acq_rel)) {
+		logger::info(
+			"[VRRenderScale] Accepted explicit CS-menu {} from the coherent startup native fallback. request={} epoch={}.",
+			startupFallbackControlAction ==
+					VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry ?
+				"retry after memory recovery" :
+				"Render Scale disable",
+			request.requestID,
+			request.transitionEpoch);
 	}
 	InvalidateFrameScopedUpscalingState();
 	if (ShouldEmitUpscalingDiagLogs()) {

@@ -1,3 +1,5 @@
+#include "Api/ProfilerApiDevBenchBridge.h"
+#include "Api/ProfilerService.h"
 #include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
 #include "BuildProvenance.h"
@@ -146,14 +148,21 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			// Establish the API owner from an actual SKSE game-thread task. The
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
 			CSX::Api::ScheduleRuntimeMainThreadBinding();
-			RegisterCommunityShadersAPIMessageListener();
-			ScreenshotDevBenchBridge::Install();
+			CSX::Api::InitializeProfilerService();
+			if (RegisterCommunityShadersAPIMessageListener()) {
+				// Publish diagnostic adapters before cache validation and shader
+				// compilation. If DevBench's PostLoad listener runs later, the
+				// PostPostLoad attempt below provides the deterministic retry.
+				CSX::Api::ProfilerApiDevBenchBridge::Install();
+				ScreenshotDevBenchBridge::Install();
+			}
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
 				ScreenshotDevBenchBridge::Install();
+				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -208,9 +217,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				CSX::Api::InitializeProfilerService();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();
+				CSX::Api::ProfilerApiDevBenchBridge::Install();
 			}
 
 			break;

@@ -12,6 +12,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -75,6 +76,59 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 },
             ],
         }
+
+    def test_publication_replace_retries_transient_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staging = root / ".VR.publishing"
+            destination = root / "VR"
+            staging.mkdir()
+            (staging / "cache.pso").write_bytes(b"cache")
+            original_replace = Path.replace
+            attempts = 0
+
+            def transient_replace(path: Path, target: Path) -> Path:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise PermissionError("simulated scanner lock")
+                return original_replace(path, target)
+
+            with (
+                mock.patch.object(Path, "replace", new=transient_replace),
+                mock.patch.object(BUILDER.time, "sleep") as sleep,
+            ):
+                BUILDER.replace_publication_staging(staging, destination)
+
+            self.assertEqual(attempts, 3)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertFalse(staging.exists())
+            self.assertEqual((destination / "cache.pso").read_bytes(), b"cache")
+
+    def test_publication_replace_preserves_staging_after_retry_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staging = root / ".VR.publishing"
+            destination = root / "VR"
+            staging.mkdir()
+
+            with (
+                mock.patch.object(
+                    Path,
+                    "replace",
+                    side_effect=PermissionError("simulated persistent lock"),
+                ),
+                mock.patch.object(BUILDER.time, "sleep") as sleep,
+                self.assertRaises(PermissionError),
+            ):
+                BUILDER.replace_publication_staging(staging, destination)
+
+            self.assertEqual(
+                sleep.call_count,
+                BUILDER.PUBLICATION_REPLACE_ATTEMPTS - 1,
+            )
+            self.assertTrue(staging.is_dir())
+            self.assertFalse(destination.exists())
 
     @staticmethod
     def _all_define_names(node: object) -> set[str]:

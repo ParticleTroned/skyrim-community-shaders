@@ -1,5 +1,6 @@
 #include "Api/ShaderService.h"
 
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceFoundation.h"
 #include "Api/ServiceRegistry.h"
 #include "Api/ShaderServicePolicy.h"
@@ -69,9 +70,7 @@ namespace
 	class ShaderService
 	{
 	public:
-		ShaderService() : ownerThread(std::this_thread::get_id()) {}
-
-		bool IsOwnerThread() const { return std::this_thread::get_id() == ownerThread; }
+		bool IsOwnerThread() const { return CSX::Api::IsRuntimeMainThread(); }
 
 		Status GetSnapshot(Snapshot001& a_output)
 		{
@@ -339,7 +338,6 @@ namespace
 		}
 
 	private:
-		std::thread::id ownerThread;
 		std::uint64_t revision = 1;
 		std::string fingerprint;
 		std::unordered_map<std::string, PendingPreflight> preflights;

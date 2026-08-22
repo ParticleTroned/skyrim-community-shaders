@@ -1,4 +1,6 @@
 #include "Api/ServiceRegistryProvider.h"
+#include "Api/FeatureDevBenchBridge.h"
+#include "Api/FeatureService.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -142,11 +144,13 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostLoad:
 		{
 			RegisterCommunityShadersAPIMessageListener();
+			CSX::Api::FeatureDevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				CSX::Api::FeatureDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -201,6 +205,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				CSX::Api::InitializeFeatureService();
+				CSX::Api::FeatureDevBenchBridge::Install();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
 			}

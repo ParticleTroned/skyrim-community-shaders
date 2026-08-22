@@ -176,6 +176,7 @@ public:
 	static constexpr uint32_t kVRUpscalingApplyBlockRelatchPending = 1u << 3;
 	static constexpr uint32_t kVRUpscalingApplyBlockTransitionPending = 1u << 4;
 	static constexpr uint32_t kVRUpscalingApplyBlockOpenComposite = 1u << 5;
+	static constexpr uint32_t kVRUpscalingApplyBlockStartupNativeFallback = 1u << 6;
 	static constexpr uint32_t ClampDLSSPresetUInt(uint32_t a_preset)
 	{
 		return a_preset <= kDLSSPresetMaxIndex ? a_preset : kDLSSPresetMaxIndex;
@@ -458,6 +459,36 @@ public:
 		{
 			return disposition == VRRenderScaleRequestQueueDisposition::Deferred;
 		}
+	};
+
+	enum class UpscalingTransitionApplyDisposition : uint8_t
+	{
+		Rejected,
+		NoChange,
+		AppliedSynchronously,
+		Queued,
+		Deferred,
+		Coalesced
+	};
+
+	enum class UpscalingTransitionApplyRejection : uint8_t
+	{
+		None,
+		OpenComposite,
+		StartupNativeFallback,
+		TransitionOwnership,
+		QueueRejected
+	};
+
+	/** Exact outcome from the internal atomic profile transition entry point. */
+	struct UpscalingTransitionApplyResult
+	{
+		UpscalingTransitionApplyDisposition disposition =
+			UpscalingTransitionApplyDisposition::Rejected;
+		UpscalingTransitionApplyRejection rejection =
+			UpscalingTransitionApplyRejection::None;
+		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
 	};
 
 	struct VRRenderScaleRelatchSignature
@@ -1636,7 +1667,7 @@ public:
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void ApplyCSMenuUpscalingTransition(
+	UpscalingTransitionApplyResult ApplyCSMenuUpscalingTransition(
 		UpscaleMethod a_targetMethod,
 		bool a_renderScaleModeEnabled,
 		uint32_t a_qualityMode,

@@ -185,6 +185,21 @@ bool CSEditor::CanOpenEditor()
 	       !state->isLoadingMenuOpen && !state->isMainMenuOpen;
 }
 
+bool CSEditor::CanOpenEditorNow()
+{
+	return CanOpenEditor();
+}
+
+bool CSEditor::IsDataAvailable()
+{
+	return s_dataAvailable;
+}
+
+bool CSEditor::AreResourcesInitialized()
+{
+	return s_resourcesInitialized;
+}
+
 bool CSEditor::HasWidgetJsonFiles()
 {
 	if (s_checkedWidgetJsonFiles)

@@ -219,6 +219,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     "CSX 12.345-VR",
                     "VR",
                     BUILDER.SHIPPED_CACHE_PROFILE,
+                    "test-shader-abi",
                     enabled_overrides={"HorizonFix": enabled},
                 )
                 states = BUILDER.read_feature_states(cache_dir)
@@ -329,6 +330,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 "CSX 12.345-VR",
                 "VR",
                 BUILDER.PATKA_CACHE_PROFILE,
+                "test-shader-abi",
             )
             config = configparser.ConfigParser(interpolation=None)
             with (cache_dir / BUILDER.INFO_FILE_NAME).open(
@@ -391,6 +393,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     "CSX 12.345-VR",
                     "VR",
                     BUILDER.PATKA_CACHE_PROFILE,
+                    "test-shader-abi",
                 )
 
     def test_both_caches_default_to_the_release_core_identity(self) -> None:

@@ -1,3 +1,16 @@
+#include "Api/ProfilerApiDevBenchBridge.h"
+#include "Api/ProfilerService.h"
+#include "Api/RuntimeThreadAffinity.h"
+#include "Api/ServiceRegistryProvider.h"
+#include "Api/UpscalingDevBenchBridge.h"
+#include "Api/WeatherDevBenchBridge.h"
+#include "Api/WeatherService.h"
+#include "Api/EditorDevBenchBridge.h"
+#include "Api/EditorService.h"
+#include "Api/FeatureDevBenchBridge.h"
+#include "Api/FeatureService.h"
+#include "Api/ShaderDevBenchBridge.h"
+#include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -10,6 +23,7 @@
 #include "Menu/ThemeManager.h"
 #include "ProfilerDevBenchBridge.h"
 #include "SceneSettingsManager.h"
+#include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "VRAPI/CSpluginapi.h"
@@ -36,6 +50,14 @@ namespace
 		errors.push_back(std::move(errorMessage));
 	}
 
+	void CommunityShadersAPIMessageHandler(SKSE::MessagingInterface::Message* a_message)
+	{
+		// Preserve the legacy CSAP handler exactly while exposing the parallel
+		// versioned CSXR registry through the same SKSE listener.
+		CSPluginAPI::ModMessageHandler(a_message);
+		CSX::Api::HandleServiceRegistryMessage(a_message);
+	}
+
 	bool RegisterCommunityShadersAPIMessageListener()
 	{
 		auto messaging = SKSE::GetMessagingInterface();
@@ -44,12 +66,13 @@ namespace
 			return false;
 		}
 
-		if (!messaging->RegisterListener(nullptr, CSPluginAPI::ModMessageHandler)) {
+		CSX::Api::InitializeServiceRegistryProvider();
+		if (!messaging->RegisterListener(nullptr, CommunityShadersAPIMessageHandler)) {
 			PushStartupError("Failed to register CSX API message listener. Check CommunityShaders.log for details.");
 			return false;
 		}
 
-		logger::info("Registered CSX API message listener during PostLoad");
+		logger::info("Registered legacy CSAP and versioned CSXR API message listener during PostLoad");
 		return true;
 	}
 
@@ -102,6 +125,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 #endif
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION_LABEL);
+	BuildProvenance::LogRuntimeIdentity();
 	SKSE::Init(a_skse);
 	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();
@@ -129,12 +153,40 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
-			RegisterCommunityShadersAPIMessageListener();
+			// Establish the API owner from an actual SKSE game-thread task. The
+			// lifecycle callback itself is not a reliable thread-affinity oracle.
+			CSX::Api::ScheduleRuntimeMainThreadBinding();
+			CSX::Api::InitializeEditorService();
+			CSX::Api::InitializeFeatureService();
+			CSX::Api::InitializeProfilerService();
+			CSX::Api::InitializeWeatherService();
+			if (RegisterCommunityShadersAPIMessageListener()) {
+				// Publish diagnostic adapters before cache validation and shader
+				// compilation. If DevBench's PostLoad listener runs later, the
+				// PostPostLoad attempt below provides the deterministic retry.
+				CSX::Api::ProfilerApiDevBenchBridge::Install();
+				ScreenshotDevBenchBridge::Install();
+				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::WeatherDevBenchBridge::Install();
+				CSX::Api::EditorDevBenchBridge::Install();
+				CSX::Api::FeatureDevBenchBridge::Install();
+				CSX::Api::ShaderDevBenchBridge::Install();
+			}
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				ScreenshotDevBenchBridge::Install();
+				CSX::Api::ProfilerApiDevBenchBridge::Install();
+				// DevBench publishes its interface from its own PostLoad listener. If
+				// CSX's listener ran first, this is the first deterministic retry after
+				// all PostLoad listeners have completed.
+				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::WeatherDevBenchBridge::Install();
+				CSX::Api::EditorDevBenchBridge::Install();
+				CSX::Api::FeatureDevBenchBridge::Install();
+				CSX::Api::ShaderDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -189,8 +241,18 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				CSX::Api::InitializeProfilerService();
+				CSX::Api::InitializeWeatherService();
+				CSX::Api::EditorDevBenchBridge::Install();
+				CSX::Api::InitializeFeatureService();
+				CSX::Api::FeatureDevBenchBridge::Install();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
+				ScreenshotDevBenchBridge::Install();
+				CSX::Api::ProfilerApiDevBenchBridge::Install();
+				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::WeatherDevBenchBridge::Install();
+				CSX::Api::ShaderDevBenchBridge::Install();
 			}
 
 			break;

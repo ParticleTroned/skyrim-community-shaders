@@ -143,6 +143,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// Establish owner-thread affinity during PostLoad, not DataLoaded. The
+			// latter may run on a different lifecycle thread from API tasks.
+			CSX::Api::InitializeWeatherService();
 			if (RegisterCommunityShadersAPIMessageListener()) {
 				// Publish the diagnostic adapter before cache validation and shader
 				// compilation. If DevBench's PostLoad listener runs later, the

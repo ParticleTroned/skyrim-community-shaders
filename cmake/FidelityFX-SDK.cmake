@@ -5,7 +5,15 @@ set(FFX_FSR3 ON)
 set(FFX_FSR ON)
 set(FFX_AUTO_COMPILE_SHADERS 1)
 
-add_subdirectory(${CMAKE_SOURCE_DIR}/extern/FidelityFX-SDK/sdk)
+# Keep the vendored SDK's binary tree deliberately compact. Its DX11 shader
+# generator appends long permutation header names to the binary path and is not
+# reliable once those paths approach the legacy Windows MAX_PATH boundary.
+# Allowing CMake to mirror extern/FidelityFX-SDK/sdk below a normally nested
+# build directory made successful builds depend on ad-hoc drive mappings.
+add_subdirectory(
+  "${CMAKE_SOURCE_DIR}/extern/FidelityFX-SDK/sdk"
+  "${CMAKE_BINARY_DIR}/ffx"
+)
 
 # The vendored SDK hardcodes its static libs' output to a single shared
 # ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk directory (see its CMakeLists.txt).

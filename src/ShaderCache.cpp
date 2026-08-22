@@ -1,7 +1,7 @@
 #include "ShaderCache.h"
 
-#include "ShaderCacheDisablePolicy.h"
 #include "Globals.h"
+#include "ShaderCacheDisablePolicy.h"
 #include "ShaderFileWatcher.h"
 #include "Util.h"
 
@@ -2944,10 +2944,10 @@ namespace SIE
 		}
 
 		const bool vrRenderScaleRelevant = globals::game::isVR &&
-			(globals::features::upscaling.IsRenderScaleModeRequested() ||
-				globals::features::upscaling.IsVRRenderScaleModeLatched() ||
-				globals::features::upscaling.GetVRRenderScaleModeStatus() ==
-					Upscaling::VRRenderScaleStatus::PendingRelatch);
+		                                   (globals::features::upscaling.IsRenderScaleModeRequested() ||
+											   globals::features::upscaling.IsVRRenderScaleModeLatched() ||
+											   globals::features::upscaling.GetVRRenderScaleModeStatus() ==
+												   Upscaling::VRRenderScaleStatus::PendingRelatch);
 		enableRequested.store(false, std::memory_order_release);
 
 		const auto disableAction = ShaderCacheDisablePolicy::ResolveDisableRequest({
@@ -4277,7 +4277,9 @@ namespace SIE
 	void ShaderCache::ManageCompilationSet(std::stop_token stoken)
 	{
 		managementThread = GetCurrentThread();
-		Util::SetCurrentThreadCooperativeBackgroundPriority();
+		// This coordinator only dequeues and dispatches work. Keeping it merely
+		// below-normal avoids starving task publication when Skyrim runs High.
+		SetThreadPriority(managementThread, THREAD_PRIORITY_BELOW_NORMAL);
 		while (!stoken.stop_requested()) {
 			const auto& task = compilationSet.WaitTake(stoken);
 			if (!task.has_value())
@@ -4288,7 +4290,7 @@ namespace SIE
 
 	void ShaderCache::ProcessDeferredDiskWrites(std::stop_token stoken)
 	{
-		Util::SetCurrentThreadCooperativeBackgroundPriority();
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 		for (;;) {
 			std::deque<DeferredDiskWrite> writes;
 			bool flushManifest = false;
@@ -4392,9 +4394,28 @@ namespace SIE
 
 		const auto taskKey = task.GetString();
 
-		// Run shader compilation cooperatively even when another plugin raises the
-		// entire Skyrim process to Above Normal or High priority.
-		Util::SetCurrentThreadCooperativeBackgroundPriority();
+		// The large blocking startup batch yields to the desktop even when another
+		// plugin raises Skyrim's process class. Once DataLoaded releases the game,
+		// explicitly restore each reused pool worker to normal relative priority;
+		// in-game recompiles are constrained by the smaller background thread limit.
+		static std::atomic_bool priorityWarningLogged = false;
+		using namespace ShaderCompilationSchedulingPolicy;
+		const auto priorityMode = SelectWorkerThreadPriorityMode(
+			menuLoaded.load(std::memory_order_acquire) ?
+				CompilationPhase::InGame :
+				CompilationPhase::Startup);
+		const bool priorityApplied =
+			priorityMode == WorkerThreadPriorityMode::CooperativeBackground ?
+				Util::SetCurrentThreadCooperativeBackgroundPriority() :
+				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL) != FALSE;
+		if (!priorityApplied &&
+			!priorityWarningLogged.exchange(true, std::memory_order_acq_rel)) {
+			logger::warn(
+				"Shader compiler workers could not apply the requested {} CPU priority; continuing with the priority available to the current process class.",
+				priorityMode == WorkerThreadPriorityMode::CooperativeBackground ?
+					"startup-cooperative" :
+					"in-game normal");
+		}
 
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);
@@ -4977,7 +4998,9 @@ namespace SIE
 
 	void UpdateListener::processQueue()
 	{
-		Util::SetCurrentThreadCooperativeBackgroundPriority();
+		// File observation is latency-sensitive but not CPU-intensive. Do not inherit
+		// the compiler workers' Idle priority under a High-priority game process.
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 		std::unique_lock lock(actionMutex, std::defer_lock);
 		auto cache = globals::shaderCache;
 		while (cache->UseFileWatcher()) {

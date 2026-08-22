@@ -11,8 +11,16 @@ namespace ShaderCompilationSchedulingPolicy
 		std::int32_t a_logicalThreadCount) noexcept
 	{
 		const auto logicalThreadCount = std::max(a_logicalThreadCount, 1);
+		// Split the percentage calculation so a corrupt or synthetic large input
+		// cannot overflow before the clamp. Real hardware counts are much smaller,
+		// but this keeps the policy total over its complete integer input domain.
+		const auto wholeHundreds = logicalThreadCount / 100;
+		const auto remainder = logicalThreadCount % 100;
+		const auto workerCount =
+			wholeHundreds * kStartupCompilationCpuSharePercent +
+			(remainder * kStartupCompilationCpuSharePercent) / 100;
 		return std::max(
-			(logicalThreadCount * kStartupCompilationCpuSharePercent) / 100,
+			workerCount,
 			1);
 	}
 
@@ -20,7 +28,8 @@ namespace ShaderCompilationSchedulingPolicy
 	{
 		Standard,
 		AboveNormal,
-		HighOrRealtime,
+		High,
+		Realtime,
 	};
 
 	enum class CooperativeThreadPriority
@@ -30,11 +39,32 @@ namespace ShaderCompilationSchedulingPolicy
 		Idle,
 	};
 
+	enum class CompilationPhase
+	{
+		Startup,
+		InGame,
+	};
+
+	enum class WorkerThreadPriorityMode
+	{
+		CooperativeBackground,
+		ProcessNormal,
+	};
+
+	[[nodiscard]] constexpr WorkerThreadPriorityMode SelectWorkerThreadPriorityMode(
+		CompilationPhase a_phase) noexcept
+	{
+		return a_phase == CompilationPhase::Startup ?
+		           WorkerThreadPriorityMode::CooperativeBackground :
+		           WorkerThreadPriorityMode::ProcessNormal;
+	}
+
 	[[nodiscard]] constexpr CooperativeThreadPriority SelectCooperativeThreadPriority(
 		ProcessPriorityBand a_processPriorityBand) noexcept
 	{
 		switch (a_processPriorityBand) {
-		case ProcessPriorityBand::HighOrRealtime:
+		case ProcessPriorityBand::High:
+		case ProcessPriorityBand::Realtime:
 			return CooperativeThreadPriority::Idle;
 		case ProcessPriorityBand::AboveNormal:
 			return CooperativeThreadPriority::Lowest;

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <utility>
 
 namespace
@@ -25,7 +26,9 @@ namespace
 			if (CalculateDefaultCompilationThreadCount(logicalThreads) != expectedWorkers)
 				return false;
 		}
-		return true;
+		return CalculateDefaultCompilationThreadCount(
+				   std::numeric_limits<std::int32_t>::max()) ==
+		       1610612735;
 	}
 
 	constexpr bool CoversCooperativePrioritySelection()
@@ -34,15 +37,30 @@ namespace
 		           CooperativeThreadPriority::BelowNormal &&
 		       SelectCooperativeThreadPriority(ProcessPriorityBand::AboveNormal) ==
 		           CooperativeThreadPriority::Lowest &&
-		       SelectCooperativeThreadPriority(ProcessPriorityBand::HighOrRealtime) ==
+		       SelectCooperativeThreadPriority(ProcessPriorityBand::High) ==
+		           CooperativeThreadPriority::Idle &&
+		       SelectCooperativeThreadPriority(ProcessPriorityBand::Realtime) ==
 		           CooperativeThreadPriority::Idle;
+	}
+
+	constexpr bool CoversWorkerPriorityLifecycle()
+	{
+		return SelectWorkerThreadPriorityMode(CompilationPhase::Startup) ==
+		           WorkerThreadPriorityMode::CooperativeBackground &&
+		       SelectWorkerThreadPriorityMode(CompilationPhase::InGame) ==
+		           WorkerThreadPriorityMode::ProcessNormal;
 	}
 
 	static_assert(CoversStartupCompilationCpuShare());
 	static_assert(CoversCooperativePrioritySelection());
+	static_assert(CoversWorkerPriorityLifecycle());
 }
 
 int main()
 {
-	return CoversStartupCompilationCpuShare() && CoversCooperativePrioritySelection() ? 0 : 1;
+	return CoversStartupCompilationCpuShare() &&
+	               CoversCooperativePrioritySelection() &&
+	               CoversWorkerPriorityLifecycle() ?
+	           0 :
+	           1;
 }

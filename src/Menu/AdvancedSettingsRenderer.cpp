@@ -188,7 +188,8 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 		ImGui::Text(
 			"Number of threads used to compile shaders at startup. "
 			"Defaults to 75%% of available logical CPU threads, leaving meaningful "
-			"headroom for Windows and other applications (E-cores included). "
+			"headroom for Windows and other applications (E-cores included), while "
+			"startup compiler workers also run at cooperative OS priority. "
 			"Higher values finish compilation faster but may make the system less responsive.");
 	}
 	ImGui::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
@@ -196,6 +197,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 		ImGui::Text(
 			"Number of threads used to compile shaders during gameplay. "
 			"Defaults to half of performance cores to avoid impacting the render thread. "
+			"After startup, workers return to the game's normal relative priority. "
 			"Higher values finish compilation faster but may cause stuttering.");
 	}
 

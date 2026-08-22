@@ -1,5 +1,6 @@
 #include "Api/EditorService.h"
 
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceFoundation.h"
 #include "Api/ServiceRegistry.h"
 #include "BuildProvenance.h"
@@ -84,8 +85,6 @@ namespace
 	class EditorService
 	{
 	public:
-		EditorService() : ownerThread(std::this_thread::get_id()) {}
-
 		Status GetSnapshot(Snapshot001& a_output)
 		{
 			if (!IsOwnerThread())
@@ -214,13 +213,12 @@ namespace
 		}
 
 	private:
-		std::thread::id ownerThread;
 		std::uint64_t revision = 1;
 		std::optional<StateSignature> lastState;
 		std::unordered_map<std::string, PendingPreflight> pending;
 		ResponseStrings strings;
 
-		bool IsOwnerThread() const { return std::this_thread::get_id() == ownerThread; }
+		bool IsOwnerThread() const { return CSX::Api::IsRuntimeMainThread(); }
 		static OwnedMutation Own(const MutationRequest001& a_request) { return { a_request.action, a_request.expectedStateRevision, a_request.flags }; }
 
 		StateSignature CaptureState() const

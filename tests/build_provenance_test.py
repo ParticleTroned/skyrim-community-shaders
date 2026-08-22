@@ -96,6 +96,18 @@ class BuildProvenanceTests(unittest.TestCase):
             self.assertTrue(first[0])
             self.assertNotEqual(first[1], second[1])
 
+    def test_clean_rejection_identifies_untracked_source_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            extra = root / "runner-generated.txt"
+            extra.write_text("generated", encoding="utf-8")
+
+            diagnostic = PROVENANCE.explain_unclean_provenance(root, True, [])
+
+            self.assertIn("source status:", diagnostic)
+            self.assertIn("?? runner-generated.txt", diagnostic)
+
 
 if __name__ == "__main__":
     unittest.main()

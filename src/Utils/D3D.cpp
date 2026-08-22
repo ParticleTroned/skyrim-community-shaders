@@ -105,6 +105,18 @@ namespace Util
 		}
 	}
 
+	void BindSharedDataConstantBuffersForPS(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context || !globals::state)
+			return;
+
+		ID3D11Buffer* buffers[2] = {
+			globals::state->sharedDataCB ? globals::state->sharedDataCB->CB() : nullptr,
+			globals::state->featureDataCB ? globals::state->featureDataCB->CB() : nullptr
+		};
+		a_context->PSSetConstantBuffers(5, 2, buffers);
+	}
+
 	void BindSharedDataConstantBuffersForCS(ID3D11DeviceContext* a_context)
 	{
 		if (!a_context || !globals::state)

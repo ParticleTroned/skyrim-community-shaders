@@ -135,20 +135,10 @@ namespace DisplayMapping
 		float nativeBloomMaskLimit,
 		float blendWeight)
 	{
-		float3 vanillaMask = saturate(nativeBloomMaskLimit - mappedColor);
-		float3 vanillaContribution = vanillaMask * vanillaBloomColor;
-		float3 result = mappedColor + vanillaContribution;
-
-		// Skyrim's native mask can close completely over bright daytime pixels. Keep
-		// that mask unchanged for vanilla Bloom, but give the opt-in enhancement at
-		// least normalized display headroom without ever reducing the native mask.
-		[branch] if (blendWeight > 0.0) {
-			float3 enhancedMask = max(vanillaMask, saturate(1.0 - mappedColor));
-			float3 enhancedContribution = enhancedMask * enhancedBloomColor;
-			result += saturate(blendWeight) * (enhancedContribution - vanillaContribution);
-		}
-
-		return result;
+		// Resolve the opt-in enhancement first, then apply Skyrim's native Bloom
+		// mask to the complete signal. A zero blend is therefore exact vanilla.
+		const float3 bloomColor = lerp(vanillaBloomColor, enhancedBloomColor, saturate(blendWeight));
+		return mappedColor + saturate(nativeBloomMaskLimit - mappedColor) * bloomColor;
 	}
 
 #if defined(PSHADER) && defined(BLEND)

@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include "RE/M/Moon.h"
 
+#include <unordered_map>
+
 struct SkySync : Feature
 {
 public:
@@ -25,6 +27,7 @@ public:
 	{
 		bool Enabled = true;
 		bool UseAlternateSunPath = true;
+		bool EnableSunLensFlare = true;
 		int32_t MoonLightSource = 0;
 		int32_t SunPath = 0;
 		float CustomAngle = -35.0f;
@@ -187,10 +190,13 @@ private:
 	RE::NiPoint3 rawDirections[3];
 	RE::NiPoint3 directions[3];
 	float intensities[3] = {};
+	std::unordered_map<RE::TESWeather*, RE::BGSLensFlare*> suppressedWeatherLensFlares;
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);
 	void ResetRuntimeState();
+	void ApplyWeatherLensFlareSetting(const RE::Sky* sky);
+	void RestoreWeatherLensFlares();
 	static float NormalizeVolumetricLightingIntensity(float intensity);
 
 	void Update(const RE::Sky* sky);

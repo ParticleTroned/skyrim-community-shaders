@@ -11,7 +11,7 @@ namespace FeatureVersions
     using namespace std::literals::string_view_literals;
 
     inline const std::map<std::string_view, REL::Version> FEATURE_MINIMAL_VERSIONS{
-        {"AdaptiveBrightness"sv,   {1,6,0}},
+        {"AdaptiveBrightness"sv,   {1,7,0}},
         {"CSEditor"sv,             {2,5,0}},
         {"CSUtility"sv,            {1,6,0}},
         {"CloudShadows"sv,         {1,2,1}},

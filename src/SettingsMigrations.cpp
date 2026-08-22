@@ -6,12 +6,28 @@
 #include <string>
 #include <utility>
 
+bool SettingsMigrations::MatchesJsonSchema(const nlohmann::json& a_value, const nlohmann::json& a_schema)
+{
+	if (a_schema.is_number())
+		return a_value.is_number();
+	if (a_schema.is_array()) {
+		if (!a_value.is_array() || a_value.size() != a_schema.size())
+			return false;
+		for (std::size_t index = 0; index < a_schema.size(); ++index) {
+			if (!MatchesJsonSchema(a_value[index], a_schema[index]))
+				return false;
+		}
+		return true;
+	}
+	return a_value.type() == a_schema.type();
+}
+
 namespace
 {
 	using json = nlohmann::json;
 
 	constexpr std::string_view kLegacyBloomKey = "bloomEnhancement";
-	constexpr std::string_view kRendererControlsEnabledKey = "rendererControlsEnabled";
+	constexpr std::string_view kGlobalLightingEnabledKey = "globalLightingEnabled";
 	constexpr std::string_view kLightingKey = "lighting";
 	constexpr std::string_view kEnabledKey = "enabled";
 
@@ -32,22 +48,6 @@ namespace
 			const auto legacyIt = a_csUtility.find(a_key.data());
 			return legacyIt != a_csUtility.end() && legacyIt->is_number();
 		});
-	}
-
-	bool MatchesSchema(const json& a_value, const json& a_schema)
-	{
-		if (a_schema.is_number())
-			return a_value.is_number();
-		if (a_schema.is_array()) {
-			if (!a_value.is_array() || a_value.size() != a_schema.size())
-				return false;
-			for (std::size_t i = 0; i < a_schema.size(); ++i) {
-				if (!MatchesSchema(a_value[i], a_schema[i]))
-					return false;
-			}
-			return true;
-		}
-		return a_value.type() == a_schema.type();
 	}
 
 	bool MergeValidFallback(json& a_target, const json& a_fallback, const json& a_schema)
@@ -79,8 +79,8 @@ namespace
 					candidate[key] = std::move(child);
 					changed = true;
 				}
-			} else if (MatchesSchema(fallbackValue, *schemaIt) &&
-					   (targetIt == candidate.end() || !MatchesSchema(*targetIt, *schemaIt))) {
+			} else if (SettingsMigrations::MatchesJsonSchema(fallbackValue, *schemaIt) &&
+					   (targetIt == candidate.end() || !SettingsMigrations::MatchesJsonSchema(*targetIt, *schemaIt))) {
 				// Only a schema-valid legacy value may repair a missing or malformed
 				// destination. A valid explicit new value always wins.
 				candidate[key] = fallbackValue;
@@ -135,7 +135,13 @@ namespace
 
 	const json& GetBloomSchema()
 	{
-		static const json schema = Bloom::PresetSettings{};
+		static const json schema = {
+			{ "Enabled", 0u },
+			{ "SelectedPreset", 0u },
+			{ "Default", Bloom::GetPresetProfile(0) },
+			{ "Fantasy", Bloom::GetPresetProfile(1) },
+			{ "Dreamy", Bloom::GetPresetProfile(2) },
+		};
 		return schema;
 	}
 
@@ -194,9 +200,9 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(nlohmann::json& a_layer
 
 	const auto enabledIt = csUtilityIt->find(kEnabledKey.data());
 	if (enabledIt != csUtilityIt->end() && enabledIt->is_boolean()) {
-		auto rendererEnabledIt = adaptiveIt->find(kRendererControlsEnabledKey.data());
+		auto rendererEnabledIt = adaptiveIt->find(kGlobalLightingEnabledKey.data());
 		if (rendererEnabledIt == adaptiveIt->end() || !rendererEnabledIt->is_boolean()) {
-			(*adaptiveIt)[std::string(kRendererControlsEnabledKey)] = *enabledIt;
+			(*adaptiveIt)[std::string(kGlobalLightingEnabledKey)] = *enabledIt;
 			migrated = true;
 		}
 	}

@@ -215,7 +215,7 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 
-	float skyBrightnessMultiplier = SharedData::csUtilitySettings.skyBrightness;
+	float skyBrightnessMultiplier = SharedData::adaptiveBalanceSettings.skyBrightness;
 
 #		if defined(DITHER)
 #			if defined(VR)

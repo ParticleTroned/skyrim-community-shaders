@@ -30,6 +30,14 @@ struct UnifiedWater : OverlayFeature
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
+		float WaterBrightness = 1.0f;
+		float GlobalReflectionAmount = 1.0f;
+		float RefractionAmount = 1.0f;
+		float SunSpecularMultiplier = 1.0f;
+		float WaveAmplitude = 1.0f;
+		float FresnelMin = 0.0f;
+		float FresnelMax = 1.0f;
+		float Muddiness = 1.0f;
 		float ShallowFallbackStrength = 1.0f;
 		float DeepConnectionProbeReachUnits = 768.0f;
 		float DeepContextDepthUnits = 192.0f;
@@ -52,10 +60,17 @@ struct UnifiedWater : OverlayFeature
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
-		float4 _pad;
+		float WaterBrightness;
+		float GlobalReflectionAmount;
+		float RefractionAmount;
+		float SunSpecularMultiplier;
+		float WaveAmplitude;
+		float FresnelMin;
+		float FresnelMax;
+		float Muddiness;
 	};
 	static_assert(alignof(CommonBufferData) == 16);
-	static_assert(sizeof(CommonBufferData) == 64);
+	static_assert(sizeof(CommonBufferData) == 80);
 
 	Settings settings;
 	CommonBufferData GetCommonBufferData() const;

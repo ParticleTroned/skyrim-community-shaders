@@ -4401,7 +4401,7 @@ namespace SIE
 		static std::atomic_bool priorityWarningLogged = false;
 		using namespace ShaderCompilationSchedulingPolicy;
 		const auto priorityMode = SelectWorkerThreadPriorityMode(
-			menuLoaded.load(std::memory_order_acquire) ?
+			startupCompilationComplete.load(std::memory_order_acquire) ?
 				CompilationPhase::InGame :
 				CompilationPhase::Startup);
 		const bool priorityApplied =

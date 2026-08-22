@@ -616,6 +616,10 @@ namespace SIE
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
+		// Set only after DataLoaded's blocking startup-compile wait has ended. Keep
+		// this distinct from menu/UI lifecycle state so early menu initialization
+		// cannot accidentally raise compiler-worker priority.
+		std::atomic<bool> startupCompilationComplete = false;
 
 		enum class LightingShaderTechniques
 		{

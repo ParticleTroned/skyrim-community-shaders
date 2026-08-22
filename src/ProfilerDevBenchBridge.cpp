@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "BuildProvenance.h"
 #	include "Globals.h"
 #	include "Profiler.h"
 #	include "State.h"
@@ -141,13 +142,17 @@ namespace
 				args = json::parse(a_argsJson);
 			if (!args.is_object())
 				throw std::runtime_error("arguments must be a JSON object");
-			output = a_build(args);
+			if (auto mismatch = BuildProvenance::ValidateExpectedBuild(args))
+				output = std::move(*mismatch);
+			else
+				output = a_build(args);
 		} catch (const std::exception& e) {
 			output = { { "error", "invalid request" }, { "detail", e.what() } };
 		} catch (...) {
 			output = { { "error", "unknown handler error" } };
 		}
 
+		BuildProvenance::AttachProducer(output);
 		try {
 			const std::string serialized = output.dump();
 			a_write(a_sink, serialized.c_str());
@@ -177,6 +182,7 @@ namespace
 			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. If the client has not exposed dynamic tools, dispatch it through devbench scenario with a tool step: {"tool":"communityshaders.profiler","args":{"action":"status"}}.)" },
 			{ "actions", json::array({ "status", "enable", "disable" }) },
 		};
+		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
 		a_write(a_sink, serialized.c_str());
 	}
@@ -215,7 +221,7 @@ namespace ProfilerDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX GPU/CPU profiler. status requests a capture and returns live UI totals, resolve-consistent totals, the captured engine frame, timer capacity diagnostics, and per-timer current and rolling values. Results normally resolve after three frames and can be older while capture is idle or the game is paused; compare frame_count with capturedFrameCount. Use resolvedTotalMs with topLevelMs for nesting-correct totals. enable and disable change the profiling preference.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable"],"default":"status"}}}})";
+			R"({"description":"Inspect and control the CSX GPU/CPU profiler. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable"],"default":"status"},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool(
 			"communityshaders.profiler",
 			descriptor,

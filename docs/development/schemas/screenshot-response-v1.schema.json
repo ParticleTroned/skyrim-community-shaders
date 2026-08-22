@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:devbench:screenshot:response:1",
+  "title": "CSX screenshot response envelope v1",
+  "type": "object",
+  "required": ["ok", "contract", "server", "command", "timestampUtc"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "contract": {
+      "type": "object",
+      "required": ["name", "major", "minor", "schemaRevision"],
+      "properties": {
+        "name": { "const": "csx.screenshot" },
+        "major": { "const": 1 },
+        "minor": { "type": "integer", "minimum": 0 },
+        "schemaRevision": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "server": { "type": "object" },
+    "command": { "type": "object" },
+    "timestampUtc": { "type": "string", "format": "date-time" },
+    "result": {},
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "phase", "retryable"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "phase": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "field": { "type": ["string", "null"] },
+        "requestId": { "type": ["string", "null"] },
+        "details": { "type": "object" }
+      }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "ok": { "const": true } } }, "then": { "required": ["result"] } },
+    { "if": { "properties": { "ok": { "const": false } } }, "then": { "required": ["error"] } }
+  ]
+}

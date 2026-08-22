@@ -1,5 +1,6 @@
 #include "Upscaling.h"
 
+#include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/LightLimitFix.h"
 #include "Features/RenderDoc.h"
@@ -19652,10 +19653,13 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
 }
 
-void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin, uint64_t a_bufferedStabilizerDoorHandoffSerial, std::optional<bool> a_targetFSR4RuntimeEnable, VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl)
+Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin, uint64_t a_bufferedStabilizerDoorHandoffSerial, std::optional<bool> a_targetFSR4RuntimeEnable, VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl)
 {
 	if (ApplyOpenCompositeUpscalingBlocker(true))
-		return;
+		return {
+			.disposition = UpscalingTransitionApplyDisposition::Rejected,
+			.rejection = UpscalingTransitionApplyRejection::OpenComposite,
+		};
 
 	const bool isVR = globals::game::isVR;
 	const bool allowPendingDLSSSelection =
@@ -19693,7 +19697,11 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			magic_enum::enum_name(targetMethod),
 			BoolText(targetRenderScaleMode),
 			a_reason ? a_reason : "unspecified");
-		return;
+		return {
+			.disposition = UpscalingTransitionApplyDisposition::Rejected,
+			.rejection =
+				UpscalingTransitionApplyRejection::StartupNativeFallback,
+		};
 	}
 	const bool methodChanged = previousMethod != targetMethod;
 	const bool methodRelatchRequired =
@@ -19735,8 +19743,13 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		currentDesiredProfile.perfModeEnabled == targetRenderScaleMode &&
 		currentDesiredProfile.dlssPreset == dlssPreset &&
 		currentDesiredProfile.fsr4RuntimeEnabled == targetFSR4RuntimeEnable;
-	if (duplicatePendingTarget)
-		return;
+	if (duplicatePendingTarget) {
+		return {
+			.disposition = UpscalingTransitionApplyDisposition::Coalesced,
+			.requestID = currentDesiredProfile.requestID,
+			.transitionEpoch = currentDesiredProfile.transitionEpoch,
+		};
+	}
 
 	const bool bufferedProfileChanged =
 		methodChanged ||
@@ -19755,12 +19768,11 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			settingsChanged = true;
 			settings.qualityMode = qualityMode;
 		}
-		if (dlssPresetChanged) {
+		if (dlssPresetTargetChanged) {
 			settings.dlssPreset = dlssPreset;
 			settingsChanged = true;
 		}
-		if (targetMethod == UpscaleMethod::kFSR &&
-			settings.fsr4RuntimeEnable != targetFSR4RuntimeEnable) {
+		if (fsr4RuntimeTargetChanged) {
 			settings.fsr4RuntimeEnable = targetFSR4RuntimeEnable;
 			settingsChanged = true;
 		}
@@ -19769,7 +19781,11 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			InvalidateFrameScopedUpscalingState();
 			RequestHistoryReset();
 		}
-		return;
+		return {
+			.disposition = bufferedProfileChanged || dlssPresetTargetChanged || fsr4RuntimeTargetChanged ?
+			                   UpscalingTransitionApplyDisposition::AppliedSynchronously :
+			                   UpscalingTransitionApplyDisposition::NoChange,
+		};
 	}
 
 	const bool physicalRelatchInFlight =
@@ -19806,7 +19822,9 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
 		pendingDLSSHistoryReset.store(true, std::memory_order_release);
-		return;
+		return {
+			.disposition = UpscalingTransitionApplyDisposition::AppliedSynchronously,
+		};
 	}
 	const bool postLoadControllerPublicationRequired =
 		a_origin == VRUpscalingTransitionOrigin::PostLoadSync &&
@@ -19829,8 +19847,12 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		postLoadControllerPublicationRequired ||
 		((targetMethodRenderScaleEligible && ShouldStageVRRenderScaleTransition(targetRenderScaleMode, qualityMode)) ||
 			methodRelatchRequired);
-	if (stageVRUpscalingChange && !ShouldAcceptVRUpscalingTransitionRequest(*this, a_origin))
-		return;
+	if (stageVRUpscalingChange && !ShouldAcceptVRUpscalingTransitionRequest(*this, a_origin)) {
+		return {
+			.disposition = UpscalingTransitionApplyDisposition::Rejected,
+			.rejection = UpscalingTransitionApplyRejection::TransitionOwnership,
+		};
+	}
 
 	if (stageVRUpscalingChange) {
 		const auto queueResult = QueueVRRenderScaleRequest(
@@ -19845,10 +19867,20 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 				0,
 			a_startupFallbackControl);
 		if (!queueResult.Accepted()) {
-			return;
+			return {
+				.disposition = UpscalingTransitionApplyDisposition::Rejected,
+				.rejection = UpscalingTransitionApplyRejection::QueueRejected,
+			};
 		}
-		if (!queueResult.Published())
-			return;
+		if (!queueResult.Published()) {
+			return {
+				.disposition = queueResult.disposition == VRRenderScaleRequestQueueDisposition::Coalesced ?
+				                   UpscalingTransitionApplyDisposition::Coalesced :
+				                   UpscalingTransitionApplyDisposition::Deferred,
+				.requestID = queueResult.requestID,
+				.transitionEpoch = queueResult.transitionEpoch,
+			};
+		}
 
 		uint64_t transitionCoverLoadingSerial =
 			bufferedStabilizerDoorHandoff ?
@@ -19872,7 +19904,11 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		if (methodChanged)
 			InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
-		return;
+		return {
+			.disposition = UpscalingTransitionApplyDisposition::Queued,
+			.requestID = queueResult.requestID,
+			.transitionEpoch = queueResult.transitionEpoch,
+		};
 	}
 
 	uint32_t* currentUpscaleMode = (streamline.featureDLSS || targetMethod == UpscaleMethod::kDLSS) ? &settings.upscaleMethod : &settings.upscaleMethodNoDLSS;
@@ -19894,11 +19930,14 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		qualityChanged = true;
 		presetChanged = true;
 	}
-	if (settings.dlssPreset != dlssPreset) {
+	const bool dlssSettingChanged = settings.dlssPreset != dlssPreset;
+	if (dlssSettingChanged) {
 		settings.dlssPreset = dlssPreset;
 		presetChanged = targetMethod == UpscaleMethod::kDLSS;
 	}
-	if (settings.fsr4RuntimeEnable != targetFSR4RuntimeEnable) {
+	const bool fsr4RuntimeValueChanged =
+		settings.fsr4RuntimeEnable != targetFSR4RuntimeEnable;
+	if (fsr4RuntimeValueChanged) {
 		settings.fsr4RuntimeEnable = targetFSR4RuntimeEnable;
 		fsr4RuntimeSettingChanged = targetMethod == UpscaleMethod::kFSR;
 	}
@@ -19919,6 +19958,14 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	}
 	if (qualityChanged || renderScaleModeChanged)
 		RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
+
+	return {
+		.disposition = methodChanged || qualitySettingChanged ||
+				renderScaleModeChanged || dlssSettingChanged ||
+				fsr4RuntimeValueChanged ?
+			                   UpscalingTransitionApplyDisposition::AppliedSynchronously :
+			                   UpscalingTransitionApplyDisposition::NoChange,
+	};
 }
 
 void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason, VRUpscalingTransitionOrigin a_origin)
@@ -19959,6 +20006,11 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 
 	if (IsOpenCompositeUpscalingBlocked()) {
 		reasons |= kVRUpscalingApplyBlockOpenComposite;
+	}
+
+	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire)) {
+		reasons |= kVRUpscalingApplyBlockStartupNativeFallback;
 	}
 
 	if (raceSexMenuActive) {
@@ -30188,7 +30240,7 @@ namespace
 			0.995f
 		};
 	constexpr float kVRLoadPresentationProbeWhiteLuminance = 0.92f;
-	constexpr uint32_t kVRLoadPresentationProbeSchemaVersion = 5;
+	constexpr uint32_t kVRLoadPresentationProbeSchemaVersion = 6;
 	constexpr float kVRLoadPresentationProbeBrightLuminance = 0.75f;
 	constexpr float kVRLoadPresentationProbeDarkLuminance = 0.25f;
 	constexpr float kVRLoadPresentationProbeBlackLuminance = 0.05f;
@@ -33168,7 +33220,7 @@ json Upscaling::BuildVRLoadPresentationProbeStatus() const
 		vrLoadPresentationProbeActive.load(std::memory_order_acquire);
 	LARGE_INTEGER frequency{};
 	(void)::QueryPerformanceFrequency(&frequency);
-	return {
+	json output{
 		{ "schemaVersion", kVRLoadPresentationProbeSchemaVersion },
 		{ "active", probeActive },
 		{ "sessionID", vrLoadPresentationProbeSessionID.load(std::memory_order_acquire) },
@@ -33224,6 +33276,7 @@ json Upscaling::BuildVRLoadPresentationProbeStatus() const
 													  } },
 							  } },
 	};
+	return output;
 }
 
 json Upscaling::BuildVRLoadPresentationProbeRecord() const
@@ -33641,7 +33694,7 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 		hamDispatches.push_back(std::move(item));
 	}
 
-	return {
+	json output{
 		{ "schemaVersion", kVRLoadPresentationProbeSchemaVersion },
 		{ "status", BuildVRLoadPresentationProbeStatus() },
 		{ "samplePositions", kVRLoadPresentationProbeSamplePositions },
@@ -33693,6 +33746,9 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 		{ "records", std::move(records) },
 		{ "hamDispatches", std::move(hamDispatches) },
 	};
+	output["producer"] = BuildProvenance::GetProducer();
+	output["producer"]["component"] = "Upscaling.LoadPresentationProbe";
+	return output;
 }
 #endif
 
@@ -47544,7 +47600,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 11u;
+	constexpr uint32_t kSchemaVersion = 12u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -47588,13 +47644,10 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	json record;
 	record["schema"] = "community-shaders.vr-render-scale.iteration";
 	record["schemaVersion"] = kSchemaVersion;
-	record["producer"] = {
-		{ "name", "Community Shaders Expanded (CSX)" },
-		{ "version", std::string{ Plugin::VERSION_LABEL } },
-		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
-		{ "component", "Upscaling" },
-		{ "implementationStep", 30 }
-	};
+	record["producer"] = BuildProvenance::GetProducer();
+	record["producer"]["component"] = "Upscaling.VRRenderScale";
+	record["producer"]["version"] = std::string{ Plugin::VERSION_LABEL };
+	record["producer"]["implementationStep"] = 30;
 	record["session"] = {
 		{ "id", session.sessionID },
 		{ "active", session.active },

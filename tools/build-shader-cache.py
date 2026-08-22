@@ -35,6 +35,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+TOOLS_DIRECTORY = Path(__file__).resolve().parent
+if str(TOOLS_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIRECTORY))
+
+from build_provenance import (
+    DEFAULT_SHADER_CONTRACT_FILES,
+    canonical_bytes,
+    sha256_bytes,
+    shader_contract_identity,
+)
+
 
 REPO = Path(__file__).resolve().parent.parent
 CACHE_DIRECTORY = "ShaderCache"
@@ -950,12 +961,20 @@ def write_info_ini(
     plugin_version: str,
     runtime: str,
     profile: CacheProfile,
+    shader_cache_abi: str,
     *,
     excluded_features: frozenset[str] | set[str] | None = None,
     enabled_overrides: dict[str, bool] | None = None,
 ) -> int:
     validate_ini_value(plugin_version, "plugin version")
-    lines = ["[Cache]", f"PluginVersion = {plugin_version}", "", ""]
+    validate_ini_value(shader_cache_abi, "shader cache ABI")
+    lines = [
+        "[Cache]",
+        f"PluginVersion = {plugin_version}",
+        f"ShaderCacheABI = {shader_cache_abi}",
+        "",
+        "",
+    ]
     count = 0
     seen_features: set[str] = set()
     excluded_features = (
@@ -1155,6 +1174,7 @@ def validate_cache(
     cache_dir: Path,
     runtime: str,
     plugin_version: str,
+    shader_cache_abi: str,
 ) -> int:
     """Fail before packaging if the cache is incomplete or malformed."""
     info_path = cache_dir / INFO_FILE_NAME
@@ -1176,6 +1196,12 @@ def validate_cache(
         raise SystemExit(
             f"{runtime}: Info.ini plugin version is {actual_version!r}; "
             f"expected {plugin_version!r}"
+        )
+    actual_shader_cache_abi = info.get("Cache", "ShaderCacheABI", fallback=None)
+    if actual_shader_cache_abi != shader_cache_abi:
+        raise SystemExit(
+            f"{runtime}: Info.ini shader cache ABI is {actual_shader_cache_abi!r}; "
+            f"expected {shader_cache_abi!r}"
         )
 
     entries = read_cache_manifest_entries(cache_dir, runtime)
@@ -2260,6 +2286,7 @@ def validate_horizon_variant_delta(
 
 
 def build_runtime(
+    source_root: Path,
     stage: Path,
     workspace: Path,
     runtime: str,
@@ -2274,6 +2301,10 @@ def build_runtime(
     distribution_profile: DistributionProfile | None = None,
 ) -> tuple[Path, dict[str, int], int]:
     runtime_root = workspace / runtime
+    shader_contract = shader_contract_identity(
+        source_root, DEFAULT_SHADER_CONTRACT_FILES, runtime
+    )
+    shader_cache_abi = sha256_bytes(canonical_bytes(shader_contract))
     variants = cache_variants_for(profile)
     has_horizon_variant = HORIZON_FIX_CACHE_VARIANT in variants
     if has_horizon_variant and distribution_profile is None:
@@ -2361,6 +2392,7 @@ def build_runtime(
             plugin_version,
             runtime,
             profile,
+            shader_cache_abi,
             excluded_features=excluded_features,
             enabled_overrides=enabled_overrides,
         )
@@ -2368,6 +2400,7 @@ def build_runtime(
             cache_dir,
             f"{runtime}/{variant.name}",
             plugin_version,
+            shader_cache_abi,
         )
         build_results[variant.name] = (
             cache_dir,
@@ -2560,6 +2593,7 @@ def main() -> int:
             print(f"{runtime}: staged merged shader tree")
 
             candidate_root, blob_counts, section_count = build_runtime(
+                source_root=source_root,
                 stage=stage,
                 workspace=workspace,
                 runtime=runtime,

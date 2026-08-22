@@ -79,12 +79,34 @@ public:
 		}
 	};
 
+	enum class CaptureSessionState : uint32_t
+	{
+		None = 0,
+		Running = 1,
+		Completed = 2,
+		Cancelled = 3
+	};
+
+	struct CaptureSessionProgress
+	{
+		uint64_t sessionId = 0;
+		CaptureSessionState state = CaptureSessionState::None;
+		uint32_t requestedFrames = 0;
+		uint32_t submittedFrames = 0;
+		uint32_t resolvedFrames = 0;
+	};
+
 	void Initialize(ID3D11Device* device, ID3D11DeviceContext* context);
 	void Release();
 	void SetUserEnabled(bool a_enabled);
 	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
 	void RequestCapture();
+	bool StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, uint64_t& a_sessionId);
+	bool CancelBoundedCapture(uint64_t a_sessionId);
+	CaptureSessionProgress GetBoundedCaptureProgress() const;
+	const std::vector<TimerResult>* GetBoundedCaptureResults(uint64_t a_sessionId) const;
 	bool IsEnabled() const { return IsUserEnabled() && captureActive.load(std::memory_order_acquire); }
+	bool IsInitialized() const { return initialized; }
 
 	void SetPerfEventCallbacks(PerfEventCallback beginCb, PerfEventCallback endCb)
 	{
@@ -198,6 +220,7 @@ private:
 		std::vector<uint32_t> activeTimerStack;
 		uint32_t activeCount = 0;
 		uint32_t capturedFrame = 0;
+		uint64_t captureSessionId = 0;
 		bool inFlight = false;
 	};
 
@@ -234,6 +257,15 @@ private:
 		bool hasGpu = false;
 		bool hasCpu = false;
 	};
+	struct CaptureKnownTimer
+	{
+		std::string name;
+		RollingHistory gpu;
+		RollingHistory cpu;
+		float topLevelMs = 0.0f;
+		bool hasGpu = false;
+		bool hasCpu = false;
+	};
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
 	std::vector<CpuTimer> activeCpuTimers;
@@ -248,10 +280,20 @@ private:
 	uint32_t acquiredSlots = 0;
 	uint32_t peakAcquiredSlots = 0;
 	uint32_t slotRefusals = 0;
+	uint64_t nextCaptureSessionId = 1;
+	CaptureSessionProgress boundedCapture;
+	std::vector<CaptureKnownTimer> boundedCaptureTimers;
+	std::unordered_map<std::string, size_t> boundedCaptureTimerIndex;
+	std::vector<TimerResult> boundedCaptureResults;
 
 	bool CollectResults();
 	KnownTimer& GetOrCreateTimer(const std::string& name);
 	void RebuildResults(const std::unordered_map<std::string, ActiveTimerData>* activeTimers);
+	void StoreBoundedCaptureResults(
+		const std::unordered_map<std::string, ActiveTimerData>& a_activeTimers,
+		bool a_gpuCycleResolved,
+		bool a_cpuCycleResolved);
+	void RebuildBoundedCaptureResults();
 	void StoreCompletedCpuTimers(FrameQueries& frame);
 	void ResetFrameState(FrameQueries& frame);
 	void ResetPendingFrames();

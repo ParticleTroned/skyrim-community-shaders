@@ -1,0 +1,22 @@
+{
+  "contractMajor": 1,
+  "clientId": "contract-test",
+  "commandId": "sequence-0001",
+  "action": "sequence_start",
+  "sequence": {
+    "frameCount": 30,
+    "schedule": { "basis": "game_frames", "intervalFrames": 6, "startDelayFrames": 0, "pausePolicy": "hold" },
+    "backpressure": { "policy": "skip", "maximumConsecutiveSkips": 10 },
+    "failurePolicy": "continue",
+    "capture": {
+      "source": { "kind": "desktop_mirror", "fallback": "reject" },
+      "outputs": [
+        { "view": "source_native", "encoding": { "format": "png", "colourContract": "sdr_srgb" } }
+      ]
+    },
+    "packaging": {
+      "frameManifest": true,
+      "previewVideo": { "requested": true, "framesPerSecond": 15, "required": false }
+    }
+  }
+}

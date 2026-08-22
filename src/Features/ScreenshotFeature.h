@@ -15,12 +15,17 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <nlohmann/json_fwd.hpp>
+
+class ScreenshotApi;
 
 struct ScreenshotFeature : public Feature
 {
+	ScreenshotFeature();
 	enum class VRCaptureSource : uint8_t
 	{
 		HMDSubmission,
+		HMDEye,
 		DesktopMirror,
 		FramedEye,
 		FramedStereo
@@ -50,12 +55,18 @@ struct ScreenshotFeature : public Feature
 
 	/** Requests one capture from the render thread using an immutable settings snapshot. */
 	void RequestCapture();
+	/** Executes one versioned screenshot API command. Mutating calls must run on the game thread. */
+	nlohmann::json HandleApiRequest(const nlohmann::json& a_request);
+	/** Legacy menu delegation, returning the accepted request receipt. */
+	nlohmann::json RequestLegacyCapture(std::string_view a_origin = "csx_menu");
 	/** Returns whether Community Shaders screenshot capture is enabled at runtime. */
 	bool IsRuntimeEnabled() const noexcept { return loaded && enabled.load(std::memory_order_acquire); }
 	/** Toggles new captures, cancelling active source acquisition while committed encoder work finishes. */
 	void SetEnabled(bool a_enabled);
 	/** Returns whether a source capture is awaiting Submit or Present processing. */
 	bool HasPendingCapture() const noexcept { return capturePending.load(std::memory_order_acquire); }
+	std::size_t GetOutstandingArtifactCount() const;
+	std::string GetActiveCaptureRequestId() const;
 	/**
 	 * Observes one texture from a successful, screenshot-eligible OpenVR Submit.
 	 * Called synchronously by the compositor hook while the texture is retained.
@@ -79,7 +90,18 @@ struct ScreenshotFeature : public Feature
 	VRFramedView vrFramedView = VRFramedView::Left;
 	vr::EVREye vrFramedDominantEye = vr::Eye_Left;
 
+	struct SequenceDefaults
+	{
+		uint32_t frameCount = 30;
+		uint32_t intervalFrames = 6;
+		uint32_t previewFramesPerSecond = 15;
+		bool saveSeparateEyes = true;
+		bool writePreviewVideo = false;
+	};
+	SequenceDefaults sequenceDefaults{};
+
 private:
+	friend class ScreenshotApi;
 	struct StagedPlane
 	{
 		winrt::com_ptr<ID3D11Texture2D> stagingTexture;
@@ -91,6 +113,30 @@ private:
 		bool flipVertical = false;
 		bool tonemapSceneHdr = false;
 		vr::EColorSpace colorSpace = vr::ColorSpace_Auto;
+	};
+
+	enum class OutputView : uint8_t
+	{
+		SourceNative,
+		LeftEye,
+		RightEye,
+		SideBySide,
+		FramedLeft,
+		FramedRight,
+		FramedCombined
+	};
+
+	struct OutputPlan
+	{
+		OutputView view = OutputView::SourceNative;
+		Util::Subrect::UVRegion cropUV{};
+		bool applyCrop = false;
+		std::filesystem::path outputPath;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		bool saveAsPng = true;
+		bool copyToClipboard = false;
+		vr::EVREye dominantEye = vr::Eye_Left;
 	};
 
 	struct CaptureOptions
@@ -105,6 +151,12 @@ private:
 		std::array<vr::HmdMatrix34_t, 2> eyeToHeadTransforms{};
 		std::array<std::vector<vr::HmdVector2_t>, 2> hiddenAreaMeshes{};
 		bool stereoProjectionValid = false;
+		std::string requestId;
+		std::string parentRequestId;
+		uint32_t sequenceOrdinal = 0;
+		std::filesystem::path explicitOutputPath;
+		bool allowDesktopFallback = true;
+		std::vector<OutputPlan> outputs;
 	};
 
 	struct PendingScreenshot
@@ -125,6 +177,10 @@ private:
 		bool saveAsPng = true;
 		bool copyToClipboard = false;
 		bool ownsQueueSlot = false;
+		std::string requestId;
+		std::string parentRequestId;
+		uint32_t sequenceOrdinal = 0;
+		std::vector<OutputPlan> outputs;
 	};
 
 	struct ActiveCapture
@@ -145,7 +201,7 @@ private:
 		bool restoreToUnprotected = false;
 	};
 
-	std::mutex screenshotQueueMutex;
+	mutable std::mutex screenshotQueueMutex;
 	std::condition_variable screenshotQueueCV;
 	std::queue<PendingScreenshot> screenshotQueue;
 	std::thread screenshotWorker;
@@ -158,8 +214,9 @@ private:
 
 	std::atomic_bool enabled{ true };
 	std::atomic_bool capturePending{ false };
-	std::mutex captureStateMutex;
+	mutable std::mutex captureStateMutex;
 	ActiveCapture activeCapture;
+	std::unique_ptr<ScreenshotApi> screenshotApi;
 
 	// SRV-readable copy used when the capture source's own SRV can't be sampled
 	// directly (kFRAMEBUFFER on flat aliases the swap-chain backbuffer).
@@ -189,5 +246,12 @@ private:
 		bool a_ownsQueueSlot);
 	void ClearActiveCapture(ActiveCapture& a_capture);
 	void FallBackToDesktopCapture(ActiveCapture& a_capture, std::string_view a_reason);
+	bool TryStartApiCapture(
+		std::string a_requestId,
+		const nlohmann::json& a_effectiveDescriptor,
+		std::string a_parentRequestId = {},
+		uint32_t a_sequenceOrdinal = 0);
+	bool CancelApiCapture(std::string_view a_requestId);
+	void EnsureScreenshotApi();
 	static void ShowInGameNotification(std::string message);
 };

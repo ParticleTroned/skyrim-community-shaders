@@ -410,8 +410,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float outAlpha = 1.0;
 #	ifdef VR
 	// VR historyFlicker: zeroed when minDepth >= 1.0 (sky/void pixels get no temporal anchor).
-	// ceil(minDepth - (1.0 - EPSILON_DEPTH_SKY)) = 1 when minDepth >= 1.0, 0 otherwise → 1 - that = gate.
-	float outFlicker = saturate(blendFactor_base * (1.0 - ceil(minDepth - (1.0f - EPSILON_DEPTH_SKY))));
+	float outFlicker = minDepth < 1.0f ? saturate(blendFactor_base) : 0.0f;
 	float outMotion = 0.0;  // VR does not use prevMotion.
 #	else
 	float outFlicker = saturate(strictFeedback);  // historyFlicker for next frame

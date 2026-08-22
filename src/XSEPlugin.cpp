@@ -1,3 +1,4 @@
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
 #include "Api/FeatureDevBenchBridge.h"
 #include "Api/FeatureService.h"
@@ -143,6 +144,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// Establish the API owner from an actual SKSE game-thread task. The
+			// lifecycle callback itself is not a reliable thread-affinity oracle.
+			CSX::Api::ScheduleRuntimeMainThreadBinding();
 			RegisterCommunityShadersAPIMessageListener();
 			// Bind main-thread affinity during PostLoad. DataLoaded may be delivered
 			// by a different lifecycle thread than the SKSE task queue used by API

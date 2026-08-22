@@ -144,6 +144,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostLoad:
 		{
 			RegisterCommunityShadersAPIMessageListener();
+			// Bind main-thread affinity during PostLoad. DataLoaded may be delivered
+			// by a different lifecycle thread than the SKSE task queue used by API
+			// clients.
+			CSX::Api::InitializeFeatureService();
 			CSX::Api::FeatureDevBenchBridge::Install();
 			break;
 		}

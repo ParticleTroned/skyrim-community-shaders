@@ -1,5 +1,6 @@
 #include "Api/ProfilerApiDevBenchBridge.h"
 #include "Api/ProfilerService.h"
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
@@ -143,6 +144,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// Establish the API owner from an actual SKSE game-thread task. The
+			// lifecycle callback itself is not a reliable thread-affinity oracle.
+			CSX::Api::ScheduleRuntimeMainThreadBinding();
 			// Establish owner-thread affinity before DataLoaded; the later lifecycle
 			// callback is not guaranteed to run on the SKSE task-queue thread.
 			CSX::Api::InitializeProfilerService();

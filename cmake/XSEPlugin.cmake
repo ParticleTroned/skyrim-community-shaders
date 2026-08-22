@@ -111,6 +111,11 @@ if(MSVC)
 	)
 endif()
 
+# CSX installs several runtime guards generated with Xbyak and calls the
+# corresponding CommonLib trampoline overloads. CommonLib keeps that API
+# optional, so make the requirement explicit for clean configurations.
+set(SKSE_SUPPORT_XBYAK ON CACHE BOOL "Enable CommonLib trampoline support for Xbyak." FORCE)
+
 add_subdirectory(${CommonLibPath} ${CommonLibName} EXCLUDE_FROM_ALL)
 
 find_package(spdlog CONFIG REQUIRED)

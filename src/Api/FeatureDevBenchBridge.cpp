@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Api/FeatureService.h"
+#	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
 #	include <DevBenchAPI.h>
@@ -50,6 +51,7 @@ namespace
 		if (!tasks) return { { "error", "SKSE task interface unavailable" } };
 		auto promise = std::make_shared<std::promise<json>>(); auto cancelled = std::make_shared<std::atomic_bool>(false); auto future = promise->get_future();
 		tasks->AddTask([promise, cancelled, run = std::move(run)]() mutable {
+			CSX::Api::EnterRuntimeMainThreadTask();
 			if (cancelled->load(std::memory_order_acquire)) return;
 			try { promise->set_value(run()); } catch (const std::exception& e) { promise->set_value(json{ { "error", "main-thread task failed" }, { "detail", e.what() } }); }
 			catch (...) { promise->set_value(json{ { "error", "main-thread task failed" } }); }

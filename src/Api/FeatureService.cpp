@@ -1,5 +1,6 @@
 #include "Api/FeatureService.h"
 
+#include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceFoundation.h"
 #include "Api/ServiceRegistry.h"
 #include "BuildProvenance.h"
@@ -99,8 +100,6 @@ namespace
 	class FeatureService
 	{
 	public:
-		FeatureService() : ownerThread(std::this_thread::get_id()) {}
-
 		Status GetSnapshot(Snapshot001& a_output)
 		{
 			if (!Owner()) return Status::kWrongThread;
@@ -248,12 +247,11 @@ namespace
 		}
 
 	private:
-		std::thread::id ownerThread;
 		std::uint64_t revision = 1;
 		std::optional<std::string> lastSignature;
 		std::unordered_map<std::string, PendingPreflight> pending;
 		Strings strings;
-		bool Owner() const { return std::this_thread::get_id() == ownerThread; }
+		bool Owner() const { return CSX::Api::IsRuntimeMainThread(); }
 		static OwnedMutation Own(const MutationRequest001& value) { return { value.action, value.expectedStateRevision, value.flags,
 			value.featureShortName ? value.featureShortName : "", value.disabled != 0 }; }
 		std::string Signature() const

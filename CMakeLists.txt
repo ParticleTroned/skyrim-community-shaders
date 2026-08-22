@@ -1687,6 +1687,38 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    add_executable(
+        api_upscaling_contract_test
+        EXCLUDE_FROM_ALL
+        tests/api_upscaling_contract_test.cpp
+        src/Api/UpscalingContract.cpp
+    )
+    target_compile_features(api_upscaling_contract_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_upscaling_contract_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME ApiUpscalingContract COMMAND api_upscaling_contract_test)
+    set_tests_properties(ApiUpscalingContract PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        api_upscaling_service_policy_test
+        EXCLUDE_FROM_ALL
+        tests/api_upscaling_service_policy_test.cpp
+        src/Api/UpscalingServicePolicy.cpp
+    )
+    target_compile_features(api_upscaling_service_policy_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_upscaling_service_policy_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME ApiUpscalingServicePolicy COMMAND api_upscaling_service_policy_test)
+    set_tests_properties(ApiUpscalingServicePolicy PROPERTIES LABELS "ControllerTests")
+
     add_custom_target(
         controller_tests
         DEPENDS
@@ -1706,6 +1738,8 @@ if(BUILD_CONTROLLER_TESTS)
             api_service_foundation_test
             api_service_registry_test
             api_profiler_contract_test
+            api_upscaling_contract_test
+            api_upscaling_service_policy_test
     )
 endif()
 

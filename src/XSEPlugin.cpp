@@ -2,6 +2,7 @@
 #include "Api/ProfilerService.h"
 #include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
+#include "Api/UpscalingDevBenchBridge.h"
 #include "BuildProvenance.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
@@ -155,6 +156,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// PostPostLoad attempt below provides the deterministic retry.
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();
+				CSX::Api::UpscalingDevBenchBridge::Install();
 			}
 			break;
 		}
@@ -163,6 +165,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			if (errors.empty()) {
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
+				// DevBench publishes its interface from its own PostLoad listener. If
+				// CSX's listener ran first, this is the first deterministic retry after
+				// all PostLoad listeners have completed.
+				CSX::Api::UpscalingDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -222,6 +228,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				MenuDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
+				CSX::Api::UpscalingDevBenchBridge::Install();
 			}
 
 			break;

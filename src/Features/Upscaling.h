@@ -460,6 +460,35 @@ public:
 		}
 	};
 
+	enum class UpscalingTransitionApplyDisposition : uint8_t
+	{
+		Rejected,
+		NoChange,
+		AppliedSynchronously,
+		Queued,
+		Deferred,
+		Coalesced
+	};
+
+	enum class UpscalingTransitionApplyRejection : uint8_t
+	{
+		None,
+		OpenComposite,
+		TransitionOwnership,
+		QueueRejected
+	};
+
+	/** Exact outcome from the internal atomic profile transition entry point. */
+	struct UpscalingTransitionApplyResult
+	{
+		UpscalingTransitionApplyDisposition disposition =
+			UpscalingTransitionApplyDisposition::Rejected;
+		UpscalingTransitionApplyRejection rejection =
+			UpscalingTransitionApplyRejection::None;
+		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
+	};
+
 	struct VRRenderScaleRelatchSignature
 	{
 		bool valid = false;
@@ -1622,7 +1651,7 @@ public:
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void ApplyCSMenuUpscalingTransition(
+	UpscalingTransitionApplyResult ApplyCSMenuUpscalingTransition(
 		UpscaleMethod a_targetMethod,
 		bool a_renderScaleModeEnabled,
 		uint32_t a_qualityMode,

@@ -28,7 +28,7 @@ namespace
 	using json = nlohmann::json;
 
 	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
-	constexpr unsigned int kDevBenchToolExtensionRevision = 5;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 6;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 
@@ -121,6 +121,42 @@ namespace
 			return "recovery_relatch";
 		case Upscaling::VRUpscalingTransitionOrigin::PostLoadSync:
 			return "post_load_sync";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* GetApplyDispositionName(Upscaling::UpscalingTransitionApplyDisposition a_disposition)
+	{
+		switch (a_disposition) {
+		case Upscaling::UpscalingTransitionApplyDisposition::Rejected:
+			return "rejected";
+		case Upscaling::UpscalingTransitionApplyDisposition::NoChange:
+			return "no_change";
+		case Upscaling::UpscalingTransitionApplyDisposition::AppliedSynchronously:
+			return "applied_synchronously";
+		case Upscaling::UpscalingTransitionApplyDisposition::Queued:
+			return "queued";
+		case Upscaling::UpscalingTransitionApplyDisposition::Deferred:
+			return "deferred";
+		case Upscaling::UpscalingTransitionApplyDisposition::Coalesced:
+			return "coalesced";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* GetApplyRejectionName(Upscaling::UpscalingTransitionApplyRejection a_rejection)
+	{
+		switch (a_rejection) {
+		case Upscaling::UpscalingTransitionApplyRejection::None:
+			return "none";
+		case Upscaling::UpscalingTransitionApplyRejection::OpenComposite:
+			return "open_composite";
+		case Upscaling::UpscalingTransitionApplyRejection::TransitionOwnership:
+			return "transition_ownership";
+		case Upscaling::UpscalingTransitionApplyRejection::QueueRejected:
+			return "queue_rejected";
 		default:
 			return "unknown";
 		}
@@ -926,7 +962,7 @@ namespace
 
 				const auto before = upscaling.GetPendingVRRenderScaleDesiredProfile();
 				const uint32_t dlssPreset = requestedPreset.value_or(before.dlssPreset);
-				upscaling.ApplyCSMenuUpscalingTransition(
+				const auto applied = upscaling.ApplyCSMenuUpscalingTransition(
 					method,
 					enabled,
 					qualityMode,
@@ -934,25 +970,25 @@ namespace
 					"devbench render-scale iteration",
 					Upscaling::VRUpscalingTransitionOrigin::CSMenu);
 
-				const auto after = upscaling.GetPendingVRRenderScaleDesiredProfile();
-				const bool queued =
-					after.pending &&
-					after.requestID != 0 &&
-					after.requestID != before.requestID &&
-					after.origin == Upscaling::VRUpscalingTransitionOrigin::CSMenu;
+				const bool accepted = applied.disposition != Upscaling::UpscalingTransitionApplyDisposition::Rejected;
+				const bool asynchronous =
+					applied.disposition == Upscaling::UpscalingTransitionApplyDisposition::Queued ||
+					applied.disposition == Upscaling::UpscalingTransitionApplyDisposition::Deferred ||
+					applied.disposition == Upscaling::UpscalingTransitionApplyDisposition::Coalesced;
 				json response{
 					{ "action", "apply" },
 					{ "method", methodName },
 					{ "enabled", enabled },
 					{ "qualityMode", qualityMode },
 					{ "dlssPreset", dlssPreset },
-					{ "queued", queued },
-					{ "requestID", queued ? after.requestID : 0 },
-					{ "transitionEpoch", queued ? after.transitionEpoch : 0 },
+					{ "accepted", accepted },
+					{ "asynchronous", asynchronous },
+					{ "disposition", GetApplyDispositionName(applied.disposition) },
+					{ "rejection", GetApplyRejectionName(applied.rejection) },
+					{ "requestID", applied.requestID },
+					{ "transitionEpoch", applied.transitionEpoch },
 					{ "status", BuildStatus(upscaling) },
 				};
-				if (!queued)
-					response["note"] = "request was unchanged, applied synchronously, or rejected by transition ownership";
 				return response;
 			});
 		}

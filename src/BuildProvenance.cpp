@@ -1,108 +1,54 @@
 #include "BuildProvenance.h"
 
-#include "Utils/FileSystem.h"
-#include "Utils/WinApi.h"
-
 #include <BuildProvenance.generated.h>
-#include <bcrypt.h>
 #include <nlohmann/json.hpp>
-
-#include <array>
-#include <fstream>
-#include <iomanip>
-#include <mutex>
-#include <sstream>
+#include <winver.h>
 
 namespace
 {
 	using json = nlohmann::json;
 
-	std::string Sha256File(const std::filesystem::path& a_path)
-	{
-		BCRYPT_ALG_HANDLE algorithm = nullptr;
-		BCRYPT_HASH_HANDLE hash = nullptr;
-		DWORD objectSize = 0;
-		DWORD resultSize = 0;
-		std::vector<UCHAR> object;
-		std::array<UCHAR, 32> digest{};
-		std::ifstream stream(a_path, std::ios::binary);
-		if (!stream || BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
-			return {};
-
-		auto cleanup = [&]() {
-			if (hash)
-				BCryptDestroyHash(hash);
-			if (algorithm)
-				BCryptCloseAlgorithmProvider(algorithm, 0);
-		};
-		if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectSize), sizeof(objectSize), &resultSize, 0) < 0) {
-			cleanup();
-			return {};
-		}
-		object.resize(objectSize);
-		if (BCryptCreateHash(algorithm, &hash, object.data(), objectSize, nullptr, 0, 0) < 0) {
-			cleanup();
-			return {};
-		}
-
-		std::array<char, 1024 * 1024> buffer{};
-		while (stream) {
-			stream.read(buffer.data(), buffer.size());
-			const auto count = stream.gcount();
-			if (count > 0 && BCryptHashData(hash, reinterpret_cast<PUCHAR>(buffer.data()), static_cast<ULONG>(count), 0) < 0) {
-				cleanup();
-				return {};
-			}
-		}
-		if (BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0) {
-			cleanup();
-			return {};
-		}
-		cleanup();
-
-		std::ostringstream output;
-		output << std::hex << std::setfill('0');
-		for (const auto byte : digest)
-			output << std::setw(2) << static_cast<unsigned>(byte);
-		return output.str();
-	}
-
 	struct RuntimeIdentity
 	{
 		std::string artifactSha256;
-		std::string expectedArtifactSha256;
 		std::string sidecarError;
 		bool sidecarVerified = false;
 	};
 
 	const RuntimeIdentity& GetRuntimeIdentity()
 	{
-		static RuntimeIdentity identity = []() {
-			RuntimeIdentity result;
-			const auto modulePath = Util::PathHelpers::GetCurrentModuleRealPath();
-			result.artifactSha256 = Sha256File(modulePath);
-			try {
-				const auto manifestPath = modulePath.parent_path() / L"CSX.BuildManifest.json";
-				std::ifstream stream(manifestPath);
-				if (!stream) {
-					result.sidecarError = "CSX.BuildManifest.json not found beside DLL";
-					return result;
-				}
-				const auto manifest = json::parse(stream);
-				if (manifest.value("buildId", std::string()) != CSX::EmbeddedBuildProvenance::BUILD_ID) {
-					result.sidecarError = "sidecar Build ID does not match embedded Build ID";
-					return result;
-				}
-				result.expectedArtifactSha256 = manifest.value("artifact", json::object()).value("sha256", std::string());
-				result.sidecarVerified = !result.artifactSha256.empty() && result.artifactSha256 == result.expectedArtifactSha256;
-				if (!result.sidecarVerified)
-					result.sidecarError = "sidecar artifact SHA-256 does not match loaded DLL";
-			} catch (const std::exception& error) {
-				result.sidecarError = error.what();
-			}
-			return result;
-		}();
+		// Never open or hash the loaded DLL from SKSEPlugin_Load. MO2/USVFS may
+		// expose the module through a virtual path whose read never reaches EOF,
+		// blocking the game loader. The embedded Build ID is the runtime identity;
+		// artifact SHA verification belongs to the deployment harness, where the
+		// physical DLL and its bound sidecar are both available.
+		static const RuntimeIdentity identity{
+			.artifactSha256 = {},
+			.sidecarError = "runtime artifact verification delegated to deployment harness",
+			.sidecarVerified = false,
+		};
 		return identity;
+	}
+
+	std::string GetLoadedModuleVersion(HMODULE a_module)
+	{
+		if (!a_module)
+			return "unavailable";
+		const auto resource = FindResourceW(a_module, MAKEINTRESOURCEW(VS_VERSION_INFO), RT_VERSION);
+		const auto loaded = resource ? LoadResource(a_module, resource) : nullptr;
+		const auto data = loaded ? LockResource(loaded) : nullptr;
+		if (!data)
+			return "unknown";
+
+		VS_FIXEDFILEINFO* version = nullptr;
+		UINT versionSize = 0;
+		if (!VerQueryValueW(data, L"\\", reinterpret_cast<void**>(&version), &versionSize) ||
+			!version || versionSize < sizeof(VS_FIXEDFILEINFO) || version->dwSignature != 0xFEEF04BD) {
+			return "unknown";
+		}
+		return std::format("{}.{}.{}.{}",
+			HIWORD(version->dwFileVersionMS), LOWORD(version->dwFileVersionMS),
+			HIWORD(version->dwFileVersionLS), LOWORD(version->dwFileVersionLS));
 	}
 }
 
@@ -115,12 +61,8 @@ namespace BuildProvenance
 	const std::string& GetShaderCompilerIdentity()
 	{
 		static const std::string identity = []() {
-			wchar_t path[MAX_PATH]{};
 			const auto module = GetModuleHandleW(L"d3dcompiler_47.dll");
-			if (!module || !GetModuleFileNameW(module, path, static_cast<DWORD>(std::size(path))))
-				return std::string("d3dcompiler_47.dll:unavailable");
-			const auto version = Util::GetDllVersion(path);
-			return std::format("d3dcompiler_47.dll:{}:{}", version ? version->string() : "unknown", Sha256File(path));
+			return std::format("d3dcompiler_47.dll:{}", GetLoadedModuleVersion(module));
 		}();
 		return identity;
 	}
@@ -160,11 +102,7 @@ namespace BuildProvenance
 
 	void LogRuntimeIdentity()
 	{
-		const auto& runtime = GetRuntimeIdentity();
-		logger::info("Build provenance: ID {}, source {}, artifact SHA-256 {}, manifest verified: {}",
-			CSX::EmbeddedBuildProvenance::BUILD_ID_SHORT, CSX::EmbeddedBuildProvenance::SOURCE_DESCRIBE,
-			runtime.artifactSha256, runtime.sidecarVerified);
-		if (!runtime.sidecarVerified)
-			logger::warn("Build provenance sidecar verification failed: {}", runtime.sidecarError);
+		logger::info("Build provenance: ID {}, source {}, runtime artifact verification delegated to deployment harness",
+			CSX::EmbeddedBuildProvenance::BUILD_ID_SHORT, CSX::EmbeddedBuildProvenance::SOURCE_DESCRIBE);
 	}
 }

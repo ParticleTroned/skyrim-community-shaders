@@ -1688,6 +1688,190 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversPostLoadStableFallbackRequestAction()
+	{
+		PostLoadStableFallbackRequest request{
+			.retainedStableContract = true,
+			.desiredTargetValid = true,
+			.desiredTargetActive = true,
+			.desiredTargetHasImmutableIdentity = true,
+			.desiredTargetRecoveryOrigin = false,
+		};
+		if (SelectPostLoadStableFallbackRequestAction(request) !=
+			PostLoadStableFallbackRequestAction::ReplayAfterStableRetention) {
+			return false;
+		}
+
+		for (std::uint32_t bit = 0; bit < 3; ++bit) {
+			auto invalidReplay = request;
+			switch (bit) {
+			case 0:
+				invalidReplay.desiredTargetValid = false;
+				break;
+			case 1:
+				invalidReplay.desiredTargetHasImmutableIdentity = false;
+				break;
+			case 2:
+				invalidReplay.desiredTargetRecoveryOrigin = true;
+				break;
+			default:
+				return false;
+			}
+			if (SelectPostLoadStableFallbackRequestAction(invalidReplay) !=
+				PostLoadStableFallbackRequestAction::Discard) {
+				return false;
+			}
+		}
+
+		request.retainedStableContract = false;
+		if (SelectPostLoadStableFallbackRequestAction(request) !=
+			PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart) {
+			return false;
+		}
+		request.desiredTargetActive = false;
+		return SelectPostLoadStableFallbackRequestAction(request) ==
+		       PostLoadStableFallbackRequestAction::Discard;
+	}
+
+	constexpr bool CoversStartupNativeFallbackExplicitRetryAdmission()
+	{
+		StartupNativeFallbackExplicitRetryAdmission admission{
+			.fallbackActive = true,
+			.explicitCSMenuRequest = true,
+			.savedTargetActive = true,
+			.startupPresentationReleased = true,
+			.completedWorldFrame = true,
+			.exactNativeRuntimePlan = true,
+			.bootLatchAbsent = true,
+			.transitionIdle = true,
+			.physicalRecoveryResolved = true,
+			.memorySampleFresh = true,
+			.memoryPressureRecovered = true,
+			.deviceHealthy = true,
+			.noRecentOutOfMemory = true,
+			.shaderPipelineEnabled = true,
+		};
+		if (!CanAdmitStartupNativeFallbackExplicitRetry(admission))
+			return false;
+
+		for (std::uint32_t bit = 0; bit < 14; ++bit) {
+			auto rejected = admission;
+			switch (bit) {
+			case 0: rejected.fallbackActive = false; break;
+			case 1: rejected.explicitCSMenuRequest = false; break;
+			case 2: rejected.savedTargetActive = false; break;
+			case 3: rejected.startupPresentationReleased = false; break;
+			case 4: rejected.completedWorldFrame = false; break;
+			case 5: rejected.exactNativeRuntimePlan = false; break;
+			case 6: rejected.bootLatchAbsent = false; break;
+			case 7: rejected.transitionIdle = false; break;
+			case 8: rejected.physicalRecoveryResolved = false; break;
+			case 9: rejected.memorySampleFresh = false; break;
+			case 10: rejected.memoryPressureRecovered = false; break;
+			case 11: rejected.deviceHealthy = false; break;
+			case 12: rejected.noRecentOutOfMemory = false; break;
+			case 13: rejected.shaderPipelineEnabled = false; break;
+			default: return false;
+			}
+			if (CanAdmitStartupNativeFallbackExplicitRetry(rejected))
+				return false;
+		}
+
+		return true;
+	}
+
+	constexpr bool CoversStartupNativeFallbackControlActions()
+	{
+		StartupNativeFallbackControlRequest request{};
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::PassThrough) {
+			return false;
+		}
+
+		request.fallbackActive = true;
+		for (const bool targetActive : { false, true }) {
+			request.targetActive = targetActive;
+			request.csMenuOrigin = false;
+			request.retryAdmitted = true;
+			for (const auto control : {
+					 StartupNativeFallbackControl::None,
+					 StartupNativeFallbackControl::DisableSavedProfile,
+					 StartupNativeFallbackControl::RetrySavedProfile }) {
+				request.control = control;
+				if (SelectStartupNativeFallbackControlAction(request) !=
+					StartupNativeFallbackControlAction::Reject) {
+					return false;
+				}
+			}
+		}
+
+		request.csMenuOrigin = true;
+		request.retryAdmitted = false;
+		request.control = StartupNativeFallbackControl::None;
+		request.targetActive = false;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+		request.targetActive = true;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+
+		request.control =
+			StartupNativeFallbackControl::DisableSavedProfile;
+		request.targetActive = false;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::ResolveDisabled) {
+			return false;
+		}
+		request.targetActive = true;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+
+		request.control =
+			StartupNativeFallbackControl::RetrySavedProfile;
+		request.targetActive = false;
+		request.retryAdmitted = true;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+		request.targetActive = true;
+		request.retryAdmitted = false;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+		request.retryAdmitted = true;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::ResolveRetry) {
+			return false;
+		}
+
+		return !CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::PassThrough,
+				   true) &&
+		       !CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::Reject,
+				   true) &&
+		       !CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::ResolveDisabled,
+				   false) &&
+		       CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::ResolveDisabled,
+				   true) &&
+		       !CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::ResolveRetry,
+				   false) &&
+		       CanResolveStartupNativeFallback(
+				   StartupNativeFallbackControlAction::ResolveRetry,
+				   true);
+	}
+
 	constexpr bool CoversBoundedPostMutationRecovery()
 	{
 		PostMutationRecoveryAdmission state{
@@ -2559,6 +2743,9 @@ namespace
 	static_assert(CoversPostLoadRecoveryDeadlineAdmission());
 	static_assert(CoversPostLoadVendorTeardownOnlyAdmission());
 	static_assert(CoversPostLoadRecoveryStableFallbackOwnership());
+	static_assert(CoversPostLoadStableFallbackRequestAction());
+	static_assert(CoversStartupNativeFallbackExplicitRetryAdmission());
+	static_assert(CoversStartupNativeFallbackControlActions());
 	static_assert(CoversBoundedPostMutationRecovery());
 	static_assert(CoversRelatchRetryPacing());
 	static_assert(CoversPostMutationEmergencyMemoryAdmission());

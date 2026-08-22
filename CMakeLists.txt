@@ -1611,9 +1611,9 @@ if(BUILD_CONTROLLER_TESTS)
         tests/volumetric_lighting_cache_refresh_policy_test.cpp
     )
     add_controller_test(
-        vr_depth_culling_policy_test
-        VRDepthCullingPolicy
-        tests/vr_depth_culling_policy_test.cpp
+        vr_depth_culling_enable_policy_test
+        VRDepthCullingEnablePolicy
+        tests/vr_depth_culling_enable_policy_test.cpp
     )
     add_controller_test(
         vr_wand_interaction_policy_test
@@ -1784,7 +1784,7 @@ if(BUILD_CONTROLLER_TESTS)
             shader_cache_provenance_test
             shader_compilation_scheduling_policy_test
             volumetric_lighting_cache_refresh_policy_test
-            vr_depth_culling_policy_test
+            vr_depth_culling_enable_policy_test
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test

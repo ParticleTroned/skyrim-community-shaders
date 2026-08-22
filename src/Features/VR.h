@@ -1,5 +1,6 @@
 #pragma once
 #include "Buffer.h"
+#include "Features/VR/DepthCullingDiagnostics.h"
 #include "Features/VR/OpenVRDetection.h"
 #include "Menu.h"
 #include "OverlayFeature.h"
@@ -158,6 +159,8 @@ public:
 	void KeepPreviousDepthCullingResultVisible(RE::NiAVObject* a_object);
 	void MarkCurrentFrameDepthCullingReady();
 	void BindCurrentFrameDepthCulling(RE::BSGeometry* a_geometry);
+	CSX::VRDepthCullingDiagnostics::Counters& GetDepthCullingDiagnostics() { return depthCullingDiagnostics; }
+	const CSX::VRDepthCullingDiagnostics::Counters& GetDepthCullingDiagnostics() const { return depthCullingDiagnostics; }
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -533,6 +536,7 @@ public:
 	void** gDepthCullingState = nullptr;
 	std::uint32_t* gDepthCullingFrame = nullptr;
 	std::uint32_t currentFrameDepthCullingReadyFrame = std::numeric_limits<std::uint32_t>::max();
+	CSX::VRDepthCullingDiagnostics::Counters depthCullingDiagnostics;
 
 	// VR Controller state and logging
 	struct VRControllerEventLog

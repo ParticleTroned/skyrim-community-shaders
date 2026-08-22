@@ -1,4 +1,5 @@
 #include "Api/ProfilerApiDevBenchBridge.h"
+#include "Api/DepthCullingDevBenchBridge.h"
 #include "Api/ProfilerService.h"
 #include "Api/RuntimeThreadAffinity.h"
 #include "Api/ServiceRegistryProvider.h"
@@ -172,6 +173,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
+				CSX::Api::DepthCullingDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
 				CSX::RenderMap::DevBenchBridge::Install();
 			}
@@ -189,6 +191,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
+				CSX::Api::DepthCullingDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
 				CSX::RenderMap::DevBenchBridge::Install();
 				Deferred::Hooks::Install();
@@ -286,6 +289,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::InitializeFeatureService();
 				CSX::Api::FeatureDevBenchBridge::Install();
+				CSX::Api::DepthCullingDevBenchBridge::Install();
 				ProfilerDevBenchBridge::Install();
 				MenuDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();

@@ -22,8 +22,8 @@ vertical slice for depth culling is in
 ## Implementation status
 
 The first C++ foundation is [`Collector.h`](../../../src/RenderMap/Collector.h).
-It is deliberately inert: no Skyrim or D3D hook calls it yet. A caller must
-start an explicitly bounded session before any record can be accepted.
+A caller must start an explicitly bounded session before any record can be
+accepted.
 
 The foundation currently provides:
 
@@ -36,12 +36,23 @@ The foundation currently provides:
   after out-of-order destruction;
 - stop/start isolation, overflow accounting, and immutable stop snapshots.
 
-The controller test covers lifecycle, all budget classes, nested correlation,
-scope overflow and mismatch, stale guards, and concurrent writers. Serialization,
+The collector test covers lifecycle, all budget classes, nested correlation,
+scope overflow and mismatch, stale guards, and concurrent writers.
+
+The first live bridge is [`Runtime.h`](../../../src/RenderMap/Runtime.h). The
+existing CSX hook owners now emit bounded render-pass, technique-call, and
+geometry-setup scopes when—and only when—an explicit controller has started a
+capture. No additional detours or vtable replacements are installed. Immediate
+render-pass coverage includes the three existing callsites and Terrain
+Blending's shared draw route; geometry coverage in this slice is Lighting,
+Effect, and Grass, matching the always-installed core hook owners.
+
+There is intentionally no UI, DevBench command, or automatic capture trigger
+yet, so ordinary game execution only performs the inactive check. Serialization,
 gap-event materialization, per-thread buffer sharding, pointer-generation
-tracking, and live hook integration belong to subsequent slices. Until those
-exist, this code is a collector primitive rather than a complete capture
-producer.
+tracking, remaining geometry families, and D3D draw/dispatch observation belong
+to subsequent slices. Until those exist, this is live correlation plumbing,
+not a complete capture producer.
 
 Validate the schemas, examples, stable shader/engine references, event ordering,
 causal references, observation scopes, and derived graph references from the

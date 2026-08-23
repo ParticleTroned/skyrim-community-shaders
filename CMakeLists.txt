@@ -1660,6 +1660,21 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(RenderMapCollector PROPERTIES LABELS "ControllerTests")
 
     add_executable(
+        render_map_runtime_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_runtime_test.cpp
+        src/RenderMap/Collector.cpp
+        src/RenderMap/Runtime.cpp
+    )
+    target_compile_features(render_map_runtime_test PRIVATE cxx_std_23)
+    target_include_directories(
+        render_map_runtime_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME RenderMapRuntime COMMAND render_map_runtime_test)
+    set_tests_properties(RenderMapRuntime PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
         api_service_foundation_test
         EXCLUDE_FROM_ALL
         tests/api_service_foundation_test.cpp
@@ -1804,6 +1819,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_menu_positioning_policy_test
             api_runtime_thread_affinity_test
             render_map_collector_test
+            render_map_runtime_test
             api_service_foundation_test
             api_service_registry_test
             api_upscaling_contract_test

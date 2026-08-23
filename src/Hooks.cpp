@@ -6,6 +6,7 @@
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "RenderMap/Runtime.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
@@ -666,6 +667,20 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
+	auto& renderMap = CSX::RenderMap::GetRuntime();
+	[[maybe_unused]] CSX::RenderMap::Collector::ScopeGuard renderMapScope;
+	if (renderMap.IsCapturing()) {
+		if (state)
+			renderMap.SetCpuFrame(state->frameCount);
+		renderMapScope = renderMap.EnterTechnique({
+			.shader = reinterpret_cast<std::uintptr_t>(shader),
+			.shaderType = static_cast<std::uint32_t>(shader->shaderType.get()),
+			.vertexDescriptor = vertexDescriptor,
+			.pixelDescriptor = pixelDescriptor,
+			.callerRva = callerRva,
+			.skipPixelShader = skipPixelShader,
+		});
+	}
 	const bool phaseDiagActive = ShouldRecordCSFramePhaseDiag();
 	const uint32_t phaseDiagFrame = phaseDiagActive && state ? state->frameCount : 0;
 	const uint64_t totalStartTicks = phaseDiagActive ? ReadFrameDiagCounterTicks() : 0;
@@ -755,6 +770,20 @@ namespace EffectExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			auto& renderMap = CSX::RenderMap::GetRuntime();
+			[[maybe_unused]] CSX::RenderMap::Collector::ScopeGuard renderMapScope;
+			if (renderMap.IsCapturing()) {
+				if (globals::state)
+					renderMap.SetCpuFrame(globals::state->frameCount);
+				renderMapScope = renderMap.EnterGeometry({
+					.shader = reinterpret_cast<std::uintptr_t>(shader),
+					.renderPass = reinterpret_cast<std::uintptr_t>(pass),
+					.geometry = reinterpret_cast<std::uintptr_t>(pass ? pass->geometry : nullptr),
+					.shaderType = static_cast<std::uint32_t>(RE::BSShader::Type::Effect),
+					.passEnum = pass ? pass->passEnum : 0,
+					.renderFlags = renderFlags,
+				});
+			}
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -778,6 +807,20 @@ namespace LightingExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			auto& renderMap = CSX::RenderMap::GetRuntime();
+			[[maybe_unused]] CSX::RenderMap::Collector::ScopeGuard renderMapScope;
+			if (renderMap.IsCapturing()) {
+				if (globals::state)
+					renderMap.SetCpuFrame(globals::state->frameCount);
+				renderMapScope = renderMap.EnterGeometry({
+					.shader = reinterpret_cast<std::uintptr_t>(shader),
+					.renderPass = reinterpret_cast<std::uintptr_t>(pass),
+					.geometry = reinterpret_cast<std::uintptr_t>(pass ? pass->geometry : nullptr),
+					.shaderType = static_cast<std::uint32_t>(RE::BSShader::Type::Lighting),
+					.passEnum = pass ? pass->passEnum : 0,
+					.renderFlags = renderFlags,
+				});
+			}
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -818,6 +861,20 @@ namespace GrassExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			auto& renderMap = CSX::RenderMap::GetRuntime();
+			[[maybe_unused]] CSX::RenderMap::Collector::ScopeGuard renderMapScope;
+			if (renderMap.IsCapturing()) {
+				if (globals::state)
+					renderMap.SetCpuFrame(globals::state->frameCount);
+				renderMapScope = renderMap.EnterGeometry({
+					.shader = reinterpret_cast<std::uintptr_t>(shader),
+					.renderPass = reinterpret_cast<std::uintptr_t>(pass),
+					.geometry = reinterpret_cast<std::uintptr_t>(pass ? pass->geometry : nullptr),
+					.shaderType = static_cast<std::uint32_t>(RE::BSShader::Type::Grass),
+					.passEnum = pass ? pass->passEnum : 0,
+					.renderFlags = renderFlags,
+				});
+			}
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -1583,6 +1640,27 @@ namespace Hooks
 #endif
 	}
 
+	CSX::RenderMap::Collector::ScopeGuard EnterRenderPassBoundary(
+		RE::BSRenderPass* a_pass,
+		uint32_t a_technique,
+		bool a_alphaTest,
+		uint32_t a_renderFlags)
+	{
+		auto& renderMap = CSX::RenderMap::GetRuntime();
+		if (!renderMap.IsCapturing())
+			return {};
+		if (globals::state)
+			renderMap.SetCpuFrame(globals::state->frameCount);
+		return renderMap.EnterRenderPass({
+			.renderPass = reinterpret_cast<std::uintptr_t>(a_pass),
+			.geometry = reinterpret_cast<std::uintptr_t>(a_pass ? a_pass->geometry : nullptr),
+			.technique = a_technique,
+			.passEnum = a_pass ? a_pass->passEnum : 0,
+			.renderFlags = a_renderFlags,
+			.alphaTest = a_alphaTest,
+		});
+	}
+
 	// This is from 1.4.0 but absent in 1.4.6
 	void BSBatchRenderer_RenderPassImmediately1::thunk(
 		RE::BSRenderPass* a_pass,
@@ -1595,6 +1673,7 @@ namespace Hooks
 		}
 
 		// Original call from 1.4.0
+		[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
@@ -1638,6 +1717,7 @@ namespace Hooks
 			}
 
 			// Original call
+			[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
 			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		}
 
@@ -1646,6 +1726,7 @@ namespace Hooks
 
 	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
+		[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		if (globals::features::interiorSun.loaded) {
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 		}
@@ -1822,6 +1903,9 @@ namespace Hooks
 	 */
 	void Install()
 	{
+		// Construct the inert collector away from render-thread first use. Capture
+		// remains disabled until an explicit controller starts a bounded session.
+		(void)CSX::RenderMap::GetRuntime();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();
 #endif

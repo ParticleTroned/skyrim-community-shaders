@@ -1395,7 +1395,9 @@ set(FEATURE_PATH "${CMAKE_BINARY_DIR}/Core")
 file(MAKE_DIRECTORY ${FEATURE_PATH})
 add_custom_command(
     OUTPUT ${CORE_PACKAGE}
-    DEPENDS ${CORE_SOURCES}
+    # The install step consumes the built DLL. Depend on the target itself so
+    # a newly registered feature cannot be packaged with a stale core binary.
+    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE
@@ -1480,7 +1482,10 @@ add_custom_target(
 set(AIO_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}_AIO-${UTC_NOW}.7z")
 add_custom_command(
     OUTPUT ${AIO_PACKAGE}
-    DEPENDS ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
+    # Package-AIO-Manual can be invoked directly and AIO_ZIP_PACKAGE builds in
+    # parallel. Keep the install/archive rule ordered after the core target so
+    # feature INIs and the compiled FeatureVersions registry always agree.
+    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}

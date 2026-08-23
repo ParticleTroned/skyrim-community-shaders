@@ -19,6 +19,30 @@ correlation rules are in [`architecture.md`](./architecture.md). The first
 vertical slice for depth culling is in
 [`opaque-depth-culling-slice.md`](./opaque-depth-culling-slice.md).
 
+## Implementation status
+
+The first C++ foundation is [`Collector.h`](../../../src/RenderMap/Collector.h).
+It is deliberately inert: no Skyrim or D3D hook calls it yet. A caller must
+start an explicitly bounded session before any record can be accepted.
+
+The foundation currently provides:
+
+- fixed, preallocated event storage with frame, duration, event, and byte
+  bounds;
+- capture-generation-scoped observation IDs;
+- thread-local frame, render-pass, technique, geometry, and command-list
+  scopes;
+- move-only guards that emit balanced begin/end events and clean up safely
+  after out-of-order destruction;
+- stop/start isolation, overflow accounting, and immutable stop snapshots.
+
+The controller test covers lifecycle, all budget classes, nested correlation,
+scope overflow and mismatch, stale guards, and concurrent writers. Serialization,
+gap-event materialization, per-thread buffer sharding, pointer-generation
+tracking, and live hook integration belong to subsequent slices. Until those
+exist, this code is a collector primitive rather than a complete capture
+producer.
+
 Validate the schemas, examples, stable shader/engine references, event ordering,
 causal references, observation scopes, and derived graph references from the
 repository root:

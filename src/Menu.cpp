@@ -41,6 +41,7 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
+#include "VRAPI/CSpluginapi.h"
 
 #include "CSEditor/EditorWindow.h"
 #include "Features/CSEditor.h"
@@ -1517,7 +1518,10 @@ void Menu::ProcessInputEventQueue()
 							 CSEditor::ToggleEditorWindow();
 						 }
 					 } },
-					{ settings.ScreenshotKey, []() { globals::features::screenshotFeature.RequestCapture(); }, screenshotHotkeyActive },
+					{ settings.ScreenshotKey, []() {
+						(void)CSPluginAPI::g_captureInterface001.RequestScreenshot(
+							globals::features::screenshotFeature.screenshotEye);
+					  }, screenshotHotkeyActive },
 				};
 
 				// RenderDoc's capture key is a single, unmodified key; only consider it on key-up.

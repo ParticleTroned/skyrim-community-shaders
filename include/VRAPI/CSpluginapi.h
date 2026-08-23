@@ -4,6 +4,7 @@
 #include "Features/Upscaling.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/VolumetricLighting.h"
 #include "Globals.h"
 #include "VRAPI/CSinterface001.h"
@@ -12,9 +13,8 @@
 #include <atomic>
 #include <cstdint>
 
-// Build 11 distinguishes CS-owned transition coverage from build 10 callers
-// which may still have the former advisory fade timings compiled in.
-inline constexpr unsigned int CSBuildNumber = 11;
+// Build 12 adds the independently versioned lossless capture interface.
+inline constexpr unsigned int CSBuildNumber = 12;
 
 namespace CSPluginAPI
 {
@@ -62,6 +62,20 @@ namespace CSPluginAPI
 			bool renderScaleModeEnabled,
 			UpscalePreset preset,
 			DLSSProfile profile) override;
+		virtual ICSCaptureInterface001* GetCaptureInterface001() override;
+	};
+
+	struct CaptureInterface001 : ICSCaptureInterface001
+	{
+		virtual CaptureResult001 RequestScreenshot(CaptureEye001 eye) override;
+		virtual CaptureResult001 StartFrameSequence(CaptureEye001 eye) override;
+		virtual CaptureResult001 StopFrameSequence() override;
+		virtual CaptureResult001 GetCaptureStatus(CaptureStatus001* status) override;
+		virtual CaptureResult001 CopySequencePath(
+			std::uint64_t sessionId,
+			char* buffer,
+			std::uint32_t bufferBytes,
+			std::uint32_t* requiredBytes) override;
 	};
 
 	namespace detail
@@ -241,6 +255,7 @@ namespace CSPluginAPI
 	}
 
 	inline CSInterface001 g_interface001;
+	inline CaptureInterface001 g_captureInterface001;
 
 	// Constructs and returns an API of the revision number requested.
 	inline void* GetApi(unsigned int revisionNumber)
@@ -251,6 +266,7 @@ namespace CSPluginAPI
 		    revisionNumber != CSInterfaceRevision001 &&
 		    revisionNumber != CSInterfaceRevision002 &&
 		    revisionNumber != CSInterfaceRevision003 &&
+		    revisionNumber != CSInterfaceRevision004 &&
 		    revisionNumber != CSInterfaceRevision) {
 			return nullptr;
 		}
@@ -575,5 +591,43 @@ namespace CSPluginAPI
 		}
 
 		return VRUpscalingTransitionProfileDecision::kApply;
+	}
+
+	inline ICSCaptureInterface001* CSInterface001::GetCaptureInterface001()
+	{
+		return &g_captureInterface001;
+	}
+
+	inline CaptureResult001 CaptureInterface001::RequestScreenshot(CaptureEye001 eye)
+	{
+		return globals::features::screenshotFeature.RequestScreenshot(eye);
+	}
+
+	inline CaptureResult001 CaptureInterface001::StartFrameSequence(CaptureEye001 eye)
+	{
+		return globals::features::screenshotFeature.StartFrameSequence(eye);
+	}
+
+	inline CaptureResult001 CaptureInterface001::StopFrameSequence()
+	{
+		return globals::features::screenshotFeature.StopFrameSequence();
+	}
+
+	inline CaptureResult001 CaptureInterface001::GetCaptureStatus(CaptureStatus001* status)
+	{
+		return globals::features::screenshotFeature.GetCaptureStatus(status);
+	}
+
+	inline CaptureResult001 CaptureInterface001::CopySequencePath(
+		std::uint64_t sessionId,
+		char* buffer,
+		std::uint32_t bufferBytes,
+		std::uint32_t* requiredBytes)
+	{
+		return globals::features::screenshotFeature.CopySequencePath(
+			sessionId,
+			buffer,
+			bufferBytes,
+			requiredBytes);
 	}
 }  // namespace CSPluginAPI

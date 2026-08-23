@@ -69,4 +69,20 @@ namespace Util
 		}();
 		return cached;
 	}
+
+	std::optional<std::filesystem::path> GetWindowsKnownFolderPath(REFKNOWNFOLDERID folderId)
+	{
+		PWSTR rawPath = nullptr;
+		const HRESULT result = SHGetKnownFolderPath(folderId, KF_FLAG_CREATE, nullptr, &rawPath);
+		if (FAILED(result) || !rawPath) {
+			if (rawPath) {
+				CoTaskMemFree(rawPath);
+			}
+			return std::nullopt;
+		}
+
+		std::filesystem::path path(rawPath);
+		CoTaskMemFree(rawPath);
+		return path;
+	}
 }  // namespace Util

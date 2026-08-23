@@ -2,8 +2,10 @@
 
 #include "Feature.h"
 #include "Utils/Subrect.h"
+#include "VRAPI/CScaptureapi.h"
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +23,7 @@ struct ScreenshotFeature : public Feature
 	enum class VRCaptureSource : uint8_t
 	{
 		HMDSubmission,
+		HMDEye,
 		DesktopMirror,
 		FramedEye,
 		FramedStereo
@@ -50,6 +53,16 @@ struct ScreenshotFeature : public Feature
 
 	/** Requests one capture from the render thread using an immutable settings snapshot. */
 	void RequestCapture();
+	CSPluginAPI::CaptureResult001 RequestScreenshot(CSPluginAPI::CaptureEye001 a_eye);
+	CSPluginAPI::CaptureResult001 StartFrameSequence(CSPluginAPI::CaptureEye001 a_eye);
+	CSPluginAPI::CaptureResult001 StopFrameSequence();
+	CSPluginAPI::CaptureResult001 GetCaptureStatus(CSPluginAPI::CaptureStatus001* a_status) const;
+	CSPluginAPI::CaptureResult001 CopySequencePath(
+		uint64_t a_sessionId,
+		char* a_buffer,
+		uint32_t a_bufferBytes,
+		uint32_t* a_requiredBytes) const;
+	bool IsFrameSequenceCapturing() const;
 	/** Returns whether Community Shaders screenshot capture is enabled at runtime. */
 	bool IsRuntimeEnabled() const noexcept { return loaded && enabled.load(std::memory_order_acquire); }
 	/** Toggles new captures, cancelling active source acquisition while committed encoder work finishes. */
@@ -68,13 +81,18 @@ struct ScreenshotFeature : public Feature
 		vr::EColorSpace a_colorSpace);
 	/** Maintains readback protection and services capture immediately before Present. */
 	void OnBeforePresent(IDXGISwapChain* a_swapChain);
+	/** Draws the recording indicator after capture commands have been queued for this frame. */
+	void DrawPostCaptureIndicator();
 
 	bool applyCropToScreenshot = true;
 
 	// Settings
 	std::string screenshotPath = "Screenshots";
+	std::string frameCapturePath = "Frame Captures";
 	bool sdrUsePng = true;
 	bool copyToClipboard = false;
+	CSPluginAPI::CaptureEye001 screenshotEye = CSPluginAPI::CaptureEye001::kLeft;
+	CSPluginAPI::CaptureEye001 frameCaptureEye = CSPluginAPI::CaptureEye001::kLeft;
 	VRCaptureSource vrCaptureSource = VRCaptureSource::HMDSubmission;
 	VRFramedView vrFramedView = VRFramedView::Left;
 	vr::EVREye vrFramedDominantEye = vr::Eye_Left;
@@ -105,6 +123,12 @@ private:
 		std::array<vr::HmdMatrix34_t, 2> eyeToHeadTransforms{};
 		std::array<std::vector<vr::HmdVector2_t>, 2> hiddenAreaMeshes{};
 		bool stereoProjectionValid = false;
+		CSPluginAPI::CaptureEye001 eye = CSPluginAPI::CaptureEye001::kLeft;
+		uint64_t sequenceSessionId = 0;
+		uint64_t sequenceFrameIndex = 0;
+		uint64_t sequenceTimestampUs = 0;
+		std::array<std::filesystem::path, 2> sequenceOutputPaths{};
+		uint32_t sequenceOutputCount = 0;
 	};
 
 	struct PendingScreenshot
@@ -125,6 +149,38 @@ private:
 		bool saveAsPng = true;
 		bool copyToClipboard = false;
 		bool ownsQueueSlot = false;
+		uint64_t sequenceSessionId = 0;
+		uint64_t sequenceFrameIndex = 0;
+		uint64_t sequenceTimestampUs = 0;
+		std::array<std::filesystem::path, 2> sequenceOutputPaths{};
+		uint32_t sequenceOutputCount = 0;
+	};
+
+	struct SequenceFrameRecord
+	{
+		uint64_t index = 0;
+		uint64_t timestampUs = 0;
+		std::array<std::filesystem::path, 2> paths{};
+		uint32_t pathCount = 0;
+		bool written = false;
+		std::string error;
+	};
+
+	struct FrameSequence
+	{
+		CSPluginAPI::CaptureState001 state = CSPluginAPI::CaptureState001::kIdle;
+		CSPluginAPI::CaptureEye001 eye = CSPluginAPI::CaptureEye001::kLeft;
+		uint64_t sessionId = 0;
+		uint64_t nextFrameIndex = 1;
+		uint64_t framesScheduled = 0;
+		uint64_t framesWritten = 0;
+		uint64_t framesDropped = 0;
+		uint64_t inFlight = 0;
+		bool stopRequested = false;
+		std::filesystem::path directory;
+		std::chrono::steady_clock::time_point startedAt{};
+		std::string startedUtc;
+		std::vector<SequenceFrameRecord> frames;
 	};
 
 	struct ActiveCapture
@@ -160,6 +216,8 @@ private:
 	std::atomic_bool capturePending{ false };
 	std::mutex captureStateMutex;
 	ActiveCapture activeCapture;
+	mutable std::mutex frameSequenceMutex;
+	FrameSequence frameSequence;
 
 	// SRV-readable copy used when the capture source's own SRV can't be sampled
 	// directly (kFRAMEBUFFER on flat aliases the swap-chain backbuffer).
@@ -174,7 +232,7 @@ private:
 	void StopWorkerThread();
 	void ScreenshotWorkerLoop();
 	void EnsurePreviewCache(ID3D11Texture2D* sourceTexture);
-	CaptureOptions SnapshotCaptureOptions() const;
+	CaptureOptions SnapshotCaptureOptions(CSPluginAPI::CaptureEye001 a_eye) const;
 	bool SnapshotStereoGeometry(CaptureOptions& a_options) const;
 	bool StageTexturePlane(
 		ID3D11Texture2D* a_sourceTexture,
@@ -189,5 +247,19 @@ private:
 		bool a_ownsQueueSlot);
 	void ClearActiveCapture(ActiveCapture& a_capture);
 	void FallBackToDesktopCapture(ActiveCapture& a_capture, std::string_view a_reason);
+	CSPluginAPI::CaptureResult001 RequestCaptureInternal(CaptureOptions a_options, bool a_notifyBusy);
+	void ScheduleNextSequenceFrame();
+	void CompleteSequenceFrame(
+		uint64_t a_sessionId,
+		uint64_t a_frameIndex,
+		uint64_t a_timestampUs,
+		const std::array<std::filesystem::path, 2>& a_paths,
+		uint32_t a_pathCount,
+		bool a_written,
+		std::string a_error = {});
+	void FinalizeSequenceIfReady();
+	bool WriteSequenceManifest(const FrameSequence& a_sequence, bool a_final) const;
+	std::filesystem::path ResolveScreenshotDirectory() const;
+	std::filesystem::path ResolveFrameCaptureDirectory() const;
 	static void ShowInGameNotification(std::string message);
 };

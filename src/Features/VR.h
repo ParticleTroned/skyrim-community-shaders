@@ -420,6 +420,7 @@ public:
 	bool GetMenuCanvasSize(uint32_t& a_width, uint32_t& a_height) const;
 	void RecreateOverlayTexturesIfNeeded(bool needsControllerTexture = true);
 	void SubmitOverlayFrame();
+	void SubmitCaptureIndicator(bool a_visible);
 	void HideOverlaysIfPresent();
 	void UpdateMenuDesktopWindowManagement(bool force = false);
 	void ReleaseMenuDesktopWindowManagement();
@@ -485,6 +486,8 @@ public:
 	// OpenVR overlay handles and DirectX 11 rendering resources
 	vr::VROverlayHandle_t menuOverlayHandle = vr::k_ulOverlayHandleInvalid;
 	vr::VROverlayHandle_t menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
+	vr::VROverlayHandle_t captureIndicatorOverlayHandle = vr::k_ulOverlayHandleInvalid;
+	winrt::com_ptr<ID3D11Texture2D> captureIndicatorTexture;
 	winrt::com_ptr<ID3D11Texture2D> menuTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> menuRTV;
 	winrt::com_ptr<ID3D11ShaderResourceView> menuSamplingSRV;

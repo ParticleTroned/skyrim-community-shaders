@@ -4,6 +4,8 @@
 #include <SKSE/SKSE.h>
 #include <cstdint>
 
+#include "VRAPI/CScaptureapi.h"
+
 namespace CSPluginAPI
 {
 	// Returns an ICSInterface001 object compatible with the API shown below.
@@ -14,7 +16,8 @@ namespace CSPluginAPI
 	inline constexpr unsigned int CSInterfaceRevision002 = 2;
 	inline constexpr unsigned int CSInterfaceRevision003 = 3;
 	inline constexpr unsigned int CSInterfaceRevision004 = 4;
-	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision004;
+	inline constexpr unsigned int CSInterfaceRevision005 = 5;
+	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision005;
 	// Deprecated source-compatibility aliases. CSX build 11 and newer own
 	// render-transition coverage and external controllers must not add a
 	// fixed-duration fade. Older binaries retain their previously inlined values.
@@ -160,6 +163,10 @@ namespace CSPluginAPI
 			bool renderScaleModeEnabled,
 			UpscalePreset preset,
 			DLSSProfile profile) = 0;
+
+		// Revision 5. Capture evolves independently behind its own versioned
+		// interface. The returned pointer remains owned by CSX.
+		virtual ICSCaptureInterface001* GetCaptureInterface001() = 0;
 	};
 }  // namespace CSPluginAPI
 

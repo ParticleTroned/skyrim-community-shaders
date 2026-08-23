@@ -2,8 +2,8 @@
   "schema": {
     "name": "csx.render-capture-manifest",
     "major": 1,
-    "minor": 0,
-    "producerVersion": "design-example-1"
+    "minor": 1,
+    "producerVersion": "design-example-2"
   },
   "captureId": "capture-opaque-lighting-example",
   "status": "complete",
@@ -22,16 +22,19 @@
   ],
   "inputs": {
     "shaderManifest": {
+      "availability": "verified",
       "path": "../shader-analysis/shader-manifest.generated.json",
       "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
       "schemaMajor": 2
     },
     "engineMap": {
+      "availability": "verified",
       "path": "engine-map.example.json",
       "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
       "schemaMajor": 1
     },
     "csxBuildManifest": {
+      "availability": "verified",
       "path": "CSX.BuildManifest.json",
       "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
       "schemaMajor": 1

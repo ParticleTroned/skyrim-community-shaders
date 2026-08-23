@@ -87,7 +87,10 @@ namespace CSX::RenderMap
 	ControllerSnapshot CaptureController::GetStatus() const
 	{
 		std::lock_guard lock(mutex);
-		ControllerSnapshot output{ .active = active };
+		ControllerSnapshot output{
+			.active = active,
+			.accepting = active.has_value() && GetRuntime().IsCapturing(),
+		};
 		output.completedCaptureIds.reserve(completed.size());
 		for (const auto& capture : completed)
 			output.completedCaptureIds.push_back(capture->descriptor.captureId);

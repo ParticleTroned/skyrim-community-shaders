@@ -194,14 +194,18 @@
         "sequence": 3,
         "timestampQpc": 1000180,
         "cpuFrame": 100,
-        "eye": "both"
+        "eye": "both",
+        "readinessDomain": "cpu-observed",
+        "gpuTimestampTicks": null
       },
       "decisionDeadline": {
         "captureId": "capture-opaque-lighting-example",
         "sequence": 5,
         "timestampQpc": 1000200,
         "cpuFrame": 100,
-        "eye": "left"
+        "eye": "left",
+        "readinessDomain": "cpu-observed",
+        "gpuTimestampTicks": null
       },
       "result": "viable",
       "savings": ["gpu-vertex", "gpu-pixel"],
@@ -213,7 +217,7 @@
           "note": "Illustrative ordering only; this is not a measured Skyrim result."
         }
       ],
-      "reason": "The example visibility result precedes the left-eye draw deadline.",
+      "reason": "The example CPU-observed visibility result precedes the CPU draw-submission deadline; it makes no GPU-completion claim.",
       "extensions": {}
     }
   ],

@@ -136,7 +136,8 @@ namespace CSX::RenderMap
 			};
 		}
 		return {
-			{ "capturing", a_status.active.has_value() },
+			{ "capturing", a_status.accepting },
+			{ "state", !a_status.active ? "idle" : (a_status.accepting ? "capturing" : "awaiting-finalization") },
 			{ "active", std::move(active) },
 			{ "completedCaptureIds", a_status.completedCaptureIds },
 		};
@@ -146,8 +147,7 @@ namespace CSX::RenderMap
 	{
 		const auto& snapshot = a_capture.snapshot;
 		const auto dropped = snapshot.statistics.droppedStopped +
-			snapshot.statistics.droppedEventLimit + snapshot.statistics.droppedByteLimit +
-			snapshot.statistics.droppedFrameLimit + snapshot.statistics.droppedTimeLimit;
+			snapshot.statistics.droppedEventLimit + snapshot.statistics.droppedByteLimit;
 		return {
 			{ "captureId", a_capture.descriptor.captureId },
 			{ "numericId", a_capture.descriptor.numericId },
@@ -164,9 +164,11 @@ namespace CSX::RenderMap
 				{ "eventCount", snapshot.events.size() },
 				{ "attemptedEventCount", snapshot.statistics.attempted },
 				{ "droppedEventCount", dropped },
+				{ "boundaryRejectionCount", snapshot.statistics.droppedFrameLimit + snapshot.statistics.droppedTimeLimit },
+				{ "stopRaceRejectionCount", snapshot.statistics.droppedStopped },
 				{ "scopeOverflowCount", snapshot.statistics.scopeOverflow },
 				{ "scopeMismatchCount", snapshot.statistics.scopeMismatch },
-				{ "truncated", snapshot.stopReason == StopReason::kEventLimit || snapshot.stopReason == StopReason::kByteLimit },
+				{ "truncated", dropped != 0 },
 			} },
 		};
 	}
@@ -192,6 +194,12 @@ namespace CSX::RenderMap
 				{ "submissionEpoch", OptionalFrame(a_event.frame.submissionEpoch) },
 				{ "eye", EyeName(a_event.frame.eye) },
 				{ "eyeMask", a_event.frame.eyeMask == 0 ? json(nullptr) : json(a_event.frame.eyeMask) },
+			} },
+			{ "execution", {
+				{ "observationDomain", "cpu-call" },
+				{ "commandStreamSequence", nullptr },
+				{ "gpuTimestampTicks", nullptr },
+				{ "gpuTimestampFrequencyHz", nullptr },
 			} },
 			{ "deviceContextObservationId", nullptr },
 			{ "type", EventKindName(a_event.kind) },

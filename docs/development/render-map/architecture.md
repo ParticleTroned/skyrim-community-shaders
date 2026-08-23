@@ -140,6 +140,15 @@ Frame number alone is insufficient. The event stream distinguishes:
 - command-list execution;
 - result consumption in a later frame.
 
+QPC timestamps order CPU observations; they do not prove GPU execution or
+completion. Visibility readiness is therefore explicit as `cpu-observed`,
+`gpu-ordered`, `gpu-completed`, `gpu-resource-consumable`,
+`cpu-readback-complete`, or `unknown`. A decision-window comparison is valid
+only when its evidence domains establish readiness for the proposed consumer.
+GPU-only consumers may rely on proven command-stream ordering and resource
+hazards without CPU readback. CPU consumers require completion/readback evidence
+and must account for any synchronization stall.
+
 The derived graph records a **decision window** for every culling candidate:
 the earliest point at which the required visibility fact is valid, the last
 point at which a selected suppression mechanism can act, and whether the window
@@ -197,4 +206,3 @@ The render-map system owns identity, timing evidence, correlation, and reports.
 The depth-culling feature owns candidate generation, visibility policy, and the
 chosen suppression mechanism. Depth culling may emit domain events through the
 collector, but the collector must not decide whether an object is visible.
-

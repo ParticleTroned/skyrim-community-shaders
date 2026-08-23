@@ -232,14 +232,18 @@
     },
     "eventPoint": {
       "type": "object",
-      "required": ["captureId", "sequence", "timestampQpc", "cpuFrame", "eye"],
+      "required": ["captureId", "sequence", "timestampQpc", "cpuFrame", "eye", "readinessDomain", "gpuTimestampTicks"],
       "additionalProperties": false,
       "properties": {
         "captureId": { "type": "string", "pattern": "^capture-[A-Za-z0-9][A-Za-z0-9._-]*$" },
         "sequence": { "type": "integer", "minimum": 0 },
         "timestampQpc": { "type": "integer", "minimum": 0 },
         "cpuFrame": { "type": ["integer", "null"], "minimum": 0 },
-        "eye": { "enum": ["left", "right", "both", "mono", "unknown"] }
+        "eye": { "enum": ["left", "right", "both", "mono", "unknown"] },
+        "readinessDomain": {
+          "enum": ["cpu-observed", "gpu-ordered", "gpu-completed", "gpu-resource-consumable", "cpu-readback-complete", "unknown"]
+        },
+        "gpuTimestampTicks": { "type": ["integer", "null"], "minimum": 0 }
       }
     },
     "extensions": {

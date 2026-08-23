@@ -4,6 +4,7 @@
 
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
+#	include "RenderMap/Artifacts.h"
 #	include "RenderMap/Controller.h"
 #	include "RenderMap/Serialization.h"
 
@@ -15,8 +16,11 @@
 #	include <chrono>
 #	include <cstdint>
 #	include <limits>
+#	include <iterator>
 #	include <mutex>
 #	include <string>
+#	include <unordered_map>
+#	include <unordered_set>
 
 namespace
 {
@@ -27,6 +31,9 @@ namespace
 	constexpr std::uint64_t kMaximumEvents = 65536;
 	constexpr std::uint64_t kMaximumBytes = 32ull * 1024ull * 1024ull;
 	std::atomic_bool g_registered{ false };
+	std::mutex g_artifactMutex;
+	std::unordered_map<std::string, CSX::RenderMap::CaptureArtifactContext> g_artifactContexts;
+	std::unordered_map<std::string, CSX::RenderMap::CaptureArtifactBundle> g_artifactBundles;
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
@@ -40,6 +47,73 @@ namespace
 			});
 		});
 		return foundation;
+	}
+
+	json UnavailableInput()
+	{
+		return {
+			{ "availability", "unavailable" }, { "path", nullptr },
+			{ "sha256", nullptr }, { "schemaMajor", nullptr },
+		};
+	}
+
+	CSX::RenderMap::CaptureArtifactContext BuildArtifactContext()
+	{
+		const auto build = BuildProvenance::GetProducer();
+		const auto sourceCommit = build.value("sourceCommit", std::string{});
+		auto logDirectory = logger::log_directory();
+		return {
+			.outputRoot = logDirectory ? *logDirectory / "CSX" / "RenderMapCaptures" : std::filesystem::path{},
+			.createdAtUtc = CSX::Api::ServiceFoundation::TimestampUtc(),
+			.producer = {
+				{ "name", "CommunityShaders" },
+				{ "version", build.value("buildIdShort", std::string("unavailable")) },
+				{ "gitCommit", sourceCommit.size() == 40 ? json(sourceCommit) : json(nullptr) },
+				{ "dirty", build.value("sourceDirty", false) },
+			},
+			.capabilities = {
+				"thread-local-render-scopes", "bounded-in-memory-capture",
+				"atomic-events-jsonl", "atomic-capture-manifest", "explicit-gap-events",
+			},
+			.inputs = {
+				{ "shaderManifest", UnavailableInput() }, { "engineMap", UnavailableInput() },
+				{ "csxBuildManifest", UnavailableInput() },
+			},
+			.environment = {
+				{ "skyrim", { { "name", "SkyrimVR.exe" }, { "version", "1.4.15" }, { "sha256", nullptr } } },
+				{ "csx", { { "name", "CommunityShaders.dll" }, { "version", build.value("buildIdShort", std::string("unavailable")) }, { "sha256", nullptr } } },
+				{ "runtimeRoute", "unknown" },
+				{ "modEnvironment", {
+					{ "manager", "other" }, { "instance", nullptr }, { "profile", nullptr },
+					{ "modlistSha256", nullptr }, { "pluginLoadOrderSha256", nullptr },
+				} },
+				{ "graphics", {
+					{ "gpu", nullptr }, { "driver", nullptr }, { "renderWidth", nullptr }, { "renderHeight", nullptr },
+					{ "presetSha256", nullptr }, { "settingsSha256", nullptr },
+				} },
+				{ "shaderCache", { { "identity", "unavailable" }, { "inventorySha256", nullptr }, { "coldAtStart", false } } },
+			},
+			.scenario = {
+				{ "id", "unspecified" }, { "saveFingerprint", nullptr }, { "cell", nullptr },
+				{ "worldspace", nullptr }, { "weather", nullptr }, { "gameHour", nullptr },
+				{ "cameraMarker", nullptr }, { "notes", "No scenario metadata was supplied to the v1.0 live controller." },
+			},
+		};
+	}
+
+	void PruneArtifactState()
+	{
+		const auto status = CSX::RenderMap::GetCaptureController().GetStatus();
+		std::unordered_set<std::string> retained(
+			status.completedCaptureIds.begin(), status.completedCaptureIds.end());
+		if (status.active)
+			retained.insert(status.active->captureId);
+		for (auto it = g_artifactContexts.begin(); it != g_artifactContexts.end();) {
+			it = retained.contains(it->first) ? std::next(it) : g_artifactContexts.erase(it);
+		}
+		for (auto it = g_artifactBundles.begin(); it != g_artifactBundles.end();) {
+			it = retained.contains(it->first) ? std::next(it) : g_artifactBundles.erase(it);
+		}
 	}
 
 	json ControlFailure(const json& a_args, ControlStatus a_status)
@@ -85,6 +159,10 @@ namespace
 				{ "pointerPolicies", json::array({ "retain" }) },
 				{ "singleActiveCapture", true },
 				{ "completedCaptureHistory", 4 },
+				{ "durableArtifacts", {
+					{ "automaticOnStop", true }, { "events", "events.jsonl" },
+					{ "manifest", "capture-manifest.json" }, { "overwrite", "never" },
+				} },
 				{ "limits", {
 					{ "maximumFrames", kMaximumFrames }, { "maximumDurationMs", kMaximumDurationMs },
 					{ "maximumEvents", kMaximumEvents }, { "maximumBytes", kMaximumBytes },
@@ -125,6 +203,10 @@ namespace
 			}, descriptor);
 			if (status != ControlStatus::kSuccess)
 				return ControlFailure(a_args, status);
+			{
+				std::lock_guard lock(g_artifactMutex);
+				g_artifactContexts.insert_or_assign(descriptor.captureId, BuildArtifactContext());
+			}
 
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = {
@@ -145,8 +227,28 @@ namespace
 			const auto status = CSX::RenderMap::GetCaptureController().Stop(captureId, capture);
 			if (status != ControlStatus::kSuccess)
 				return ControlFailure(a_args, status);
+
+			CSX::RenderMap::CaptureArtifactBundle artifacts;
+			{
+				std::lock_guard lock(g_artifactMutex);
+				if (const auto found = g_artifactBundles.find(captureId); found != g_artifactBundles.end()) {
+					artifacts = found->second;
+				} else {
+					const auto context = g_artifactContexts.contains(captureId) ?
+						g_artifactContexts.at(captureId) : BuildArtifactContext();
+					artifacts = CSX::RenderMap::WriteCaptureArtifacts(*capture, context, GetCurrentProcessId());
+					g_artifactBundles.emplace(captureId, artifacts);
+					g_artifactContexts.erase(captureId);
+				}
+				PruneArtifactState();
+			}
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = CSX::RenderMap::SerializeCaptureSummary(*capture);
+			response["result"]["artifacts"] = CSX::RenderMap::SerializeArtifactBundle(artifacts);
+			if (!artifacts.success)
+				response["result"]["warnings"] = json::array({ {
+					{ "code", "artifact_write_failed" }, { "message", artifacts.error },
+				} });
 			return response;
 		}
 

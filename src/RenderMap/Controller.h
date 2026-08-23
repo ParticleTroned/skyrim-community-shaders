@@ -37,6 +37,7 @@ namespace CSX::RenderMap
 	struct ControllerSnapshot
 	{
 		std::optional<CaptureDescriptor> active;
+		bool accepting{ false };
 		std::vector<std::string> completedCaptureIds;
 	};
 

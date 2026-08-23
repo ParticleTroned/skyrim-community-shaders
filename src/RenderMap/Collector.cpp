@@ -119,6 +119,18 @@ namespace CSX::RenderMap
 				return a_fallback;
 			}
 		}
+
+		void LatchLimit(
+			std::atomic<RecordResult>& a_firstLimit,
+			std::atomic_bool& a_accepting,
+			RecordResult a_limit) noexcept
+		{
+			auto expected = RecordResult::kRecorded;
+			if (a_firstLimit.compare_exchange_strong(
+					expected, a_limit, std::memory_order_acq_rel, std::memory_order_acquire)) {
+				a_accepting.store(false, std::memory_order_release);
+			}
+		}
 	}
 
 	struct Collector::Session
@@ -365,8 +377,7 @@ namespace CSX::RenderMap
 		const auto timestamp = ReadClockTicks();
 		if (timestamp - session->startTimestampTicks >= session->maxDurationTicks) {
 			session->droppedTimeLimit.fetch_add(1, std::memory_order_relaxed);
-			auto expected = RecordResult::kRecorded;
-			session->firstLimit.compare_exchange_strong(expected, RecordResult::kTimeLimit, std::memory_order_relaxed);
+			LatchLimit(session->firstLimit, session->accepting, RecordResult::kTimeLimit);
 			releaseFlight();
 			return RecordResult::kTimeLimit;
 		}
@@ -381,8 +392,7 @@ namespace CSX::RenderMap
 			}
 			if (state.frame.cpuFrame >= firstFrame && state.frame.cpuFrame - firstFrame >= session->config.maxFrames) {
 				session->droppedFrameLimit.fetch_add(1, std::memory_order_relaxed);
-				auto expected = RecordResult::kRecorded;
-				session->firstLimit.compare_exchange_strong(expected, RecordResult::kFrameLimit, std::memory_order_relaxed);
+				LatchLimit(session->firstLimit, session->accepting, RecordResult::kFrameLimit);
 				releaseFlight();
 				return RecordResult::kFrameLimit;
 			}
@@ -394,8 +404,7 @@ namespace CSX::RenderMap
 				session->droppedEventLimit.fetch_add(1, std::memory_order_relaxed);
 			else
 				session->droppedByteLimit.fetch_add(1, std::memory_order_relaxed);
-			auto expected = RecordResult::kRecorded;
-			session->firstLimit.compare_exchange_strong(expected, session->capacityLimit, std::memory_order_relaxed);
+			LatchLimit(session->firstLimit, session->accepting, session->capacityLimit);
 			releaseFlight();
 			return session->capacityLimit;
 		}

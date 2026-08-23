@@ -1678,6 +1678,7 @@ if(BUILD_CONTROLLER_TESTS)
         render_map_controller_test
         EXCLUDE_FROM_ALL
         tests/render_map_controller_test.cpp
+		src/RenderMap/Artifacts.cpp
         src/RenderMap/Collector.cpp
         src/RenderMap/Controller.cpp
         src/RenderMap/Runtime.cpp
@@ -1688,7 +1689,7 @@ if(BUILD_CONTROLLER_TESTS)
         render_map_controller_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
-    target_link_libraries(render_map_controller_test PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(render_map_controller_test PRIVATE nlohmann_json::nlohmann_json bcrypt.lib)
     add_test(NAME RenderMapController COMMAND render_map_controller_test)
     set_tests_properties(RenderMapController PROPERTIES LABELS "ControllerTests")
 

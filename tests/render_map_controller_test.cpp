@@ -1,7 +1,11 @@
+#include "RenderMap/Artifacts.h"
 #include "RenderMap/Controller.h"
 #include "RenderMap/Serialization.h"
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <format>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -25,6 +29,46 @@ namespace
 			.maxBytes = Collector::EventRecordSize() * 32,
 			.maxDuration = std::chrono::seconds(1),
 			.maxScopeDepth = 8,
+		};
+	}
+
+	CaptureArtifactContext ArtifactContext(const std::filesystem::path& a_root)
+	{
+		const auto unavailable = nlohmann::json{
+			{ "availability", "unavailable" }, { "path", nullptr },
+			{ "sha256", nullptr }, { "schemaMajor", nullptr },
+		};
+		return {
+			.outputRoot = a_root,
+			.createdAtUtc = "2026-08-23T00:00:00Z",
+			.producer = {
+				{ "name", "render-map-test" }, { "version", "1" },
+				{ "gitCommit", nullptr }, { "dirty", false },
+			},
+			.capabilities = { "bounded-in-memory-capture", "atomic-events-jsonl" },
+			.inputs = {
+				{ "shaderManifest", unavailable }, { "engineMap", unavailable },
+				{ "csxBuildManifest", unavailable },
+			},
+			.environment = {
+				{ "skyrim", { { "name", "SkyrimVR.exe" }, { "version", "1.4.15" }, { "sha256", nullptr } } },
+				{ "csx", { { "name", "CommunityShaders.dll" }, { "version", "test" }, { "sha256", nullptr } } },
+				{ "runtimeRoute", "unknown" },
+				{ "modEnvironment", {
+					{ "manager", "none" }, { "instance", nullptr }, { "profile", nullptr },
+					{ "modlistSha256", nullptr }, { "pluginLoadOrderSha256", nullptr },
+				} },
+				{ "graphics", {
+					{ "gpu", nullptr }, { "driver", nullptr }, { "renderWidth", nullptr }, { "renderHeight", nullptr },
+					{ "presetSha256", nullptr }, { "settingsSha256", nullptr },
+				} },
+				{ "shaderCache", { { "identity", "unavailable" }, { "inventorySha256", nullptr }, { "coldAtStart", false } } },
+			},
+			.scenario = {
+				{ "id", "unit-test" }, { "saveFingerprint", nullptr }, { "cell", nullptr },
+				{ "worldspace", nullptr }, { "weather", nullptr }, { "gameHour", nullptr },
+				{ "cameraMarker", nullptr }, { "notes", "unit test" },
+			},
 		};
 	}
 
@@ -85,6 +129,7 @@ namespace
 		const auto capture = MakeCapture(controller);
 		const auto status = controller.GetStatus();
 		Check(!status.active, "capture remained active after stop");
+		Check(!status.accepting, "stopped capture remained accepting");
 		Check(status.completedCaptureIds.size() == 1, "completed capture was not retained");
 
 		const auto summary = SerializeCaptureSummary(*capture);
@@ -101,6 +146,7 @@ namespace
 		Check(first["processId"] == 42, "event process ID is wrong");
 		Check(first["threadId"].get<std::uint64_t>() != 0, "event thread ID is missing");
 		Check(first["frame"]["cpuFrame"] == 123, "event frame is wrong");
+		Check(first["execution"]["observationDomain"] == "cpu-call", "event execution domain is wrong");
 		Check(first["scopes"]["renderPass"].get<std::string>().starts_with("obs-render-pass-"),
 			"render-pass observation ID is wrong");
 		Check(first["payload"]["renderPassPointer"] == "0x1000", "pointer evidence is wrong");
@@ -118,6 +164,69 @@ namespace
 		Check(!controller.GetCompleted(first->descriptor.captureId), "old capture exceeded history bound");
 		Check(controller.GetCompleted(second->descriptor.captureId) == second, "latest capture was not retained");
 	}
+
+	void TestDurableArtifacts()
+	{
+		const auto root = std::filesystem::temp_directory_path() /
+			std::format("csx-render-map-test-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+		CaptureController controller;
+		const auto capture = MakeCapture(controller);
+		const auto bundle = WriteCaptureArtifacts(*capture, ArtifactContext(root), 42);
+		Check(bundle.success, "durable artifact write failed");
+		Check(std::filesystem::exists(bundle.directory / "events.jsonl"), "events artifact is missing");
+		Check(std::filesystem::exists(bundle.directory / "capture-manifest.json"), "capture manifest is missing");
+
+		std::ifstream manifestStream(bundle.directory / "capture-manifest.json");
+		nlohmann::json manifest;
+		manifestStream >> manifest;
+		Check(manifest["status"] == "complete", "complete capture manifest has the wrong status");
+		Check(manifest["completion"]["eventCount"] == 6, "manifest event count is wrong");
+		Check(manifest["artifacts"][0]["sha256"].get<std::string>().size() == 64, "events hash is missing");
+		Check(bundle.manifestArtifact["sha256"].get<std::string>().size() == 64, "manifest hash is missing");
+
+		const auto collision = WriteCaptureArtifacts(*capture, ArtifactContext(root), 42);
+		Check(!collision.success && collision.error.find("already exists") != std::string::npos,
+			"artifact writer overwrote an existing capture");
+		manifestStream.close();
+		std::filesystem::remove_all(root);
+	}
+
+	void TestGapArtifact()
+	{
+		const auto root = std::filesystem::temp_directory_path() /
+			std::format("csx-render-map-gap-test-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+		CaptureController controller;
+		auto config = Config();
+		config.maxEvents = 1;
+		config.maxBytes = Collector::EventRecordSize() * 4;
+		CaptureDescriptor descriptor;
+		Check(controller.Start(config, descriptor) == ControlStatus::kSuccess, "gap capture did not start");
+		{
+			auto pass = GetRuntime().EnterRenderPass({ .renderPass = 1 });
+			Check(pass.IsActive(), "gap capture event was not recorded");
+		}
+		Check(!GetRuntime().IsCapturing(), "gap capture did not quiesce at its event limit");
+		const auto quiesced = controller.GetStatus();
+		Check(quiesced.active && !quiesced.accepting, "quiesced capture was not awaiting finalization");
+		std::shared_ptr<const CompletedCapture> capture;
+		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess, "gap capture did not stop");
+		const auto bundle = WriteCaptureArtifacts(*capture, ArtifactContext(root), 42);
+		Check(bundle.success, "gap artifact write failed");
+		std::ifstream manifestStream(bundle.directory / "capture-manifest.json");
+		nlohmann::json manifest;
+		manifestStream >> manifest;
+		Check(manifest["status"] == "incomplete", "truncated capture was not marked incomplete");
+		Check(manifest["completion"]["eventCount"] == 2, "synthetic gap was not counted");
+		Check(manifest["completion"]["droppedEventCount"] == 1, "lost event count is wrong");
+		std::ifstream eventsStream(bundle.directory / "events.jsonl");
+		std::string eventLine;
+		std::getline(eventsStream, eventLine);
+		std::getline(eventsStream, eventLine);
+		Check(nlohmann::json::parse(eventLine)["type"] == "gap", "gap event was not materialized");
+		manifestStream.close();
+		eventsStream.close();
+		std::filesystem::remove_all(root);
+	}
 }
 
 int main()
@@ -125,6 +234,8 @@ int main()
 	try {
 		TestControllerAndSerialization();
 		TestCompletedHistoryBound();
+		TestDurableArtifacts();
+		TestGapArtifact();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

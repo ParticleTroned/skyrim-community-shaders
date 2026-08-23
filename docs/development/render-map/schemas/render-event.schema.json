@@ -11,6 +11,7 @@
     "processId",
     "threadId",
     "frame",
+    "execution",
     "deviceContextObservationId",
     "type",
     "scopes",
@@ -30,6 +31,7 @@
     "processId": { "type": "integer", "minimum": 0 },
     "threadId": { "type": "integer", "minimum": 0 },
     "frame": { "$ref": "#/$defs/frame" },
+    "execution": { "$ref": "#/$defs/execution" },
     "deviceContextObservationId": {
       "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
     },
@@ -130,6 +132,22 @@
           }
         }
       }
+    },
+    {
+      "if": { "properties": { "type": { "const": "visibility-result-ready" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["visibilityTestObservationId", "readinessDomain"],
+            "properties": {
+              "visibilityTestObservationId": { "$ref": "#/$defs/observationId" },
+              "readinessDomain": { "$ref": "#/$defs/readinessDomain" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -192,6 +210,29 @@
         "submissionEpoch": { "type": ["integer", "null"], "minimum": 0 },
         "eye": { "enum": ["left", "right", "both", "mono", "unknown"] },
         "eyeMask": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "readinessDomain": {
+      "enum": [
+        "cpu-observed",
+        "gpu-ordered",
+        "gpu-completed",
+        "gpu-resource-consumable",
+        "cpu-readback-complete",
+        "unknown"
+      ]
+    },
+    "execution": {
+      "type": "object",
+      "required": ["observationDomain", "commandStreamSequence", "gpuTimestampTicks", "gpuTimestampFrequencyHz"],
+      "additionalProperties": false,
+      "properties": {
+        "observationDomain": {
+          "enum": ["cpu-call", "gpu-command-stream", "gpu-completion", "cpu-readback", "unknown"]
+        },
+        "commandStreamSequence": { "type": ["integer", "null"], "minimum": 0 },
+        "gpuTimestampTicks": { "type": ["integer", "null"], "minimum": 0 },
+        "gpuTimestampFrequencyHz": { "type": ["integer", "null"], "minimum": 1 }
       }
     },
     "scopes": {

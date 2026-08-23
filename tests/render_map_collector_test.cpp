@@ -110,6 +110,9 @@ namespace
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kRecorded, "first event was rejected");
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kRecorded, "second event was rejected");
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kEventLimit, "event limit was not enforced");
+			Check(!collector.IsCapturing(), "event limit did not quiesce the collector");
+			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kStopped,
+				"quiesced event-bound collector did not use the stopped fast path");
 			auto snapshot = collector.Stop();
 			Check(snapshot->events.size() == 2, "event-bound capture exceeded capacity");
 			Check(snapshot->statistics.attempted == 3, "event-bound attempted count is wrong");
@@ -125,6 +128,7 @@ namespace
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kRecorded, "first byte-bound event was rejected");
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kRecorded, "second byte-bound event was rejected");
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kByteLimit, "byte limit was not enforced");
+			Check(!collector.IsCapturing(), "byte limit did not quiesce the collector");
 			auto snapshot = collector.Stop();
 			Check(snapshot->events.size() == 2, "byte-bound capture exceeded capacity");
 			Check(snapshot->statistics.droppedByteLimit == 1, "byte-limit drop was not counted");
@@ -144,6 +148,7 @@ namespace
 		Check(collector.Record(EventKind::kFrameBegin) == RecordResult::kRecorded, "second frame was rejected");
 		collector.SetThreadFrameContext({ 102, 102, 102, Eye::kBoth, 3 });
 		Check(collector.Record(EventKind::kFrameBegin) == RecordResult::kFrameLimit, "frame limit was not enforced");
+		Check(!collector.IsCapturing(), "frame limit did not quiesce the collector");
 		auto snapshot = collector.Stop();
 		Check(snapshot->statistics.droppedFrameLimit == 1, "frame-limit drop was not counted");
 		Check(snapshot->stopReason == StopReason::kFrameLimit, "frame limit did not determine completion reason");
@@ -196,6 +201,7 @@ namespace
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kTimeLimit,
 			"time limit was not enforced");
+		Check(!collector.IsCapturing(), "time limit did not quiesce the collector");
 		auto snapshot = collector.Stop();
 		Check(snapshot->statistics.droppedTimeLimit == 1, "time-limit drop was not counted");
 		Check(snapshot->stopReason == StopReason::kTimeLimit, "time limit did not determine completion reason");

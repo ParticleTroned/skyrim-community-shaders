@@ -56,7 +56,17 @@ explicit, versioned `start` / `status` / `stop` lifecycle and paged
 `capture_events` retrieval. It enforces one active capture, hard upper bounds,
 exact capture IDs, idempotent commands, and a four-capture in-memory history.
 Capture never starts automatically and event retrieval is unavailable until the
-capture has stopped.
+capture has stopped. Reaching any configured bound immediately quiesces the hot
+hooks while retaining the session for explicit, idempotent finalization.
+
+Finalization atomically commits `events.jsonl` followed by
+`capture-manifest.json` beneath the SKSE log directory's
+`CSX/RenderMapCaptures/<captureId>` folder. Both files are SHA-256 described in
+the stop response and existing destinations are never overwritten. Event/byte
+exhaustion produces an explicit terminal gap event and an incomplete manifest;
+frame/time boundary triggers are reported separately and do not masquerade as
+lost in-window events. Provenance that is unavailable in-process remains
+explicitly unavailable rather than receiving a zero or invented hash.
 
 The first serializer emits schema-shaped event envelopes with semantic payload
 fields and capture-local observation IDs. It preserves pointer evidence under

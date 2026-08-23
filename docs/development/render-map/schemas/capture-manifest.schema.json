@@ -77,12 +77,13 @@
     "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
     "fileInput": {
       "type": "object",
-      "required": ["path", "sha256", "schemaMajor"],
+      "required": ["availability", "path", "sha256", "schemaMajor"],
       "additionalProperties": false,
       "properties": {
-        "path": { "type": "string", "minLength": 1 },
-        "sha256": { "$ref": "#/$defs/sha256" },
-        "schemaMajor": { "type": "integer", "minimum": 1 }
+        "availability": { "enum": ["verified", "unverified", "unavailable"] },
+        "path": { "type": ["string", "null"], "minLength": 1 },
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "schemaMajor": { "type": ["integer", "null"], "minimum": 1 }
       }
     },
     "inputs": {
@@ -102,7 +103,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "version": { "type": ["string", "null"] },
-        "sha256": { "$ref": "#/$defs/sha256" }
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
       }
     },
     "environment": {
@@ -147,10 +148,10 @@
           "required": ["gpu", "driver", "renderWidth", "renderHeight", "presetSha256", "settingsSha256"],
           "additionalProperties": false,
           "properties": {
-            "gpu": { "type": "string", "minLength": 1 },
-            "driver": { "type": "string", "minLength": 1 },
-            "renderWidth": { "type": "integer", "minimum": 1 },
-            "renderHeight": { "type": "integer", "minimum": 1 },
+            "gpu": { "type": ["string", "null"], "minLength": 1 },
+            "driver": { "type": ["string", "null"], "minLength": 1 },
+            "renderWidth": { "type": ["integer", "null"], "minimum": 1 },
+            "renderHeight": { "type": ["integer", "null"], "minimum": 1 },
             "presetSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
             "settingsSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
           }

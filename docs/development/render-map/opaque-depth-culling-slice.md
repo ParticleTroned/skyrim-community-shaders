@@ -3,7 +3,7 @@
 ## Objective
 
 Prove an unambiguous, timing-complete path for one ordinary opaque object from
-Skyrim scene identity to the final D3D11 draw in both VR eyes. Then determine
+Skyrim scene identity to final D3D11 work covering both VR eyes. Then determine
 which culling decision points are actually reachable with current-frame or
 previous-frame visibility.
 
@@ -28,7 +28,7 @@ profile, executable, CSX build, and shader cache.
 
 ## Required identity chain
 
-For each eye, the derived graph must connect:
+For the work covering both eyes, the derived graph must connect:
 
 ```text
 scene-object observation
@@ -56,8 +56,19 @@ The same capture must identify, where applicable:
 5. result consumption;
 6. pass construction/submission;
 7. technique and geometry setup;
-8. left-eye draw submission;
-9. right-eye draw submission.
+8. draw or dispatch submission covering the first eye;
+9. draw or dispatch submission covering the other eye, unless one stereo route
+   is proven to cover both.
+
+Coverage may be two per-eye draws, a single stereo draw, instancing,
+array-target rendering, or another evidenced VR route. The acceptance gate does
+not assume two physical draw calls.
+
+Every visibility-ready and decision event identifies its execution/readiness
+domain. CPU QPC order proves CPU observation and submission order only. A
+decision window may claim GPU viability only from GPU command-stream ordering,
+GPU completion evidence, resource-consumability evidence, or completed CPU
+readback appropriate to the proposed suppression mechanism.
 
 The report computes a decision window for these suppression stages:
 
@@ -90,7 +101,8 @@ event-order evidence that produced the answer.
 
 - The capture validates against the v1 schemas with no dangling manifest,
   engine, event, or observation references.
-- Both eye draws are identified for the candidate in three consecutive frames.
+- Both-eye coverage is identified for the candidate in three consecutive
+  frames, including the stereo mechanism and number of physical submissions.
 - Pointer reuse cannot merge distinct observed objects.
 - Nested or unrelated draws do not inherit the candidate's context.
 - Dropped-event count is zero for the selected categories and frame range.
@@ -118,4 +130,3 @@ After this gate, add one exception class at a time:
 Each class gets its own identity-chain and decision-window result. Passing the
 opaque slice must not be generalized to a class with different scheduling,
 depth, blending, or lifetime rules without evidence.
-

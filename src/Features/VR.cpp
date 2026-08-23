@@ -1032,6 +1032,9 @@ void VR::EarlyPrepass()
 	// Apply culling setting each prepass based on current interior/exterior state.
 	UpdateDepthBufferCulling();
 	TryApplyDepthBufferCullingCacheRefresh();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	AdvanceDepthCullingDiagnosticsFrame();
+#endif
 	currentFrameDepthCullingReadyFrame = std::numeric_limits<std::uint32_t>::max();
 	if (globals::state)
 		depthCullingDiagnostics.BeginFrame(globals::state->frameCount, IsCurrentFrameDepthCullingEnabled());
@@ -1078,11 +1081,26 @@ void VR::MarkCurrentFrameDepthCullingReady()
 		depthCullingFrame = *gDepthCullingFrame;
 		auto* cullerBytes = reinterpret_cast<std::byte*>(*gDepthCullingState);
 		objectCount = *reinterpret_cast<std::uint32_t*>(cullerBytes + kDepthCullingObjectCountOffset);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (depthCullingDiagnostics.IsCollecting()) {
+			auto* resultBuffer = *reinterpret_cast<std::byte**>(cullerBytes + kDepthCullingGpuResultOffset);
+			auto* visibility = resultBuffer ?
+				*reinterpret_cast<ID3D11ShaderResourceView**>(resultBuffer + kGpuBufferSrvOffset) :
+				nullptr;
+			QueueDepthCullingVisibilityReadback(
+				visibility,
+				currentFrameDepthCullingReadyFrame,
+				objectCount);
+			BeginDepthCullingPipelineStatistics(currentFrameDepthCullingReadyFrame);
+		}
+#endif
 	}
 	depthCullingDiagnostics.RecordReady(ready, currentFrameDepthCullingReadyFrame, depthCullingFrame, objectCount);
 }
 
-void VR::BindCurrentFrameDepthCulling(RE::BSGeometry* a_geometry)
+void VR::BindCurrentFrameDepthCulling(
+	RE::BSGeometry* a_geometry,
+	CSX::VRDepthCullingDiagnostics::DrawCategory a_category)
 {
 	depthCullingDiagnostics.RecordBindAttempt();
 	auto* state = globals::state;
@@ -1157,11 +1175,378 @@ void VR::BindCurrentFrameDepthCulling(RE::BSGeometry* a_geometry)
 		return;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	visibility = GetDepthCullingDiagnosticControlSrv(visibility);
+	if (!visibility) {
+		depthCullingDiagnostics.RecordForcedVisibleSrvUnavailable();
+		return;
+	}
+#endif
 	context->VSSetShaderResources(kCurrentFrameDepthCullingSrvSlot, 1, &visibility);
 	state->permutationData.ExtraShaderDescriptor |=
 		enabledDescriptor | (objectIndex << kCurrentFrameDepthCullingObjectIndexShift);
-	depthCullingDiagnostics.RecordBoundDraw();
+	depthCullingDiagnostics.RecordBoundDraw(a_category);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordDepthCullingDiagnosticDraw(objectIndex, a_category);
+#endif
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void VR::AdvanceDepthCullingDiagnosticsFrame()
+{
+	if (activeDepthCullingReadbackSlot >= 0) {
+		depthCullingReadbackSlots[static_cast<std::size_t>(activeDepthCullingReadbackSlot)].drawsComplete = true;
+		activeDepthCullingReadbackSlot = -1;
+	}
+
+	auto* context = globals::d3d::context;
+	if (!context)
+		return;
+
+	if (activeDepthCullingPipelineStatsSlot >= 0) {
+		auto& active = depthCullingPipelineStatsSlots[static_cast<std::size_t>(activeDepthCullingPipelineStatsSlot)];
+		if (active.active && active.query && active.timestampDisjoint && active.timestampEnd) {
+			context->End(active.timestampEnd.get());
+			context->End(active.query.get());
+			context->End(active.timestampDisjoint.get());
+			active.active = false;
+			active.pending = true;
+			if (depthCullingDiagnostics.IsCollecting() && active.epoch == depthCullingDiagnostics.CollectionEpoch())
+				depthCullingDiagnostics.RecordPipelineQueryEnded();
+		}
+		activeDepthCullingPipelineStatsSlot = -1;
+	}
+
+	const auto currentEpoch = depthCullingDiagnostics.CollectionEpoch();
+	const auto collecting = depthCullingDiagnostics.IsCollecting();
+	for (auto& slot : depthCullingReadbackSlots) {
+		if (!slot.pending || !slot.drawsComplete || !slot.staging)
+			continue;
+
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		const auto result = context->Map(
+			slot.staging.get(),
+			0,
+			D3D11_MAP_READ,
+			D3D11_MAP_FLAG_DO_NOT_WAIT,
+			&mapped);
+		if (result == DXGI_ERROR_WAS_STILL_DRAWING) {
+			if (collecting && slot.epoch == currentEpoch)
+				depthCullingDiagnostics.RecordReadbackNotReady();
+			continue;
+		}
+		if (FAILED(result)) {
+			if (collecting && slot.epoch == currentEpoch)
+				depthCullingDiagnostics.RecordReadbackError();
+			slot.pending = false;
+			slot.drawsComplete = false;
+			continue;
+		}
+
+		if (collecting && slot.epoch == currentEpoch) {
+			const auto* visibility = static_cast<const std::uint32_t*>(mapped.pData);
+			std::uint32_t occludedObjects = 0;
+			std::uint32_t visibleObjects = 0;
+			std::uint32_t occludedCoveredObjects = 0;
+			std::uint32_t visibleCoveredObjects = 0;
+			CSX::VRDepthCullingDiagnostics::ClassifiedDraws draws{};
+			for (std::uint32_t index = 0; index < slot.objectCount; ++index) {
+				const bool occluded = visibility[index] == 0;
+				const auto totalDraws = slot.draws[index];
+				if (occluded) {
+					++occludedObjects;
+					draws.occluded += totalDraws;
+					draws.occludedLighting += slot.lightingDraws[index];
+					draws.occludedDistantTree += slot.distantTreeDraws[index];
+					draws.occludedGrass += slot.grassDraws[index];
+					if (totalDraws)
+						++occludedCoveredObjects;
+				} else {
+					++visibleObjects;
+					draws.visible += totalDraws;
+					draws.visibleLighting += slot.lightingDraws[index];
+					draws.visibleDistantTree += slot.distantTreeDraws[index];
+					draws.visibleGrass += slot.grassDraws[index];
+					if (totalDraws)
+						++visibleCoveredObjects;
+				}
+			}
+			depthCullingDiagnostics.RecordReadbackCompleted();
+			depthCullingDiagnostics.RecordVisibilitySample(
+				slot.epoch,
+				slot.frame,
+				slot.objectCount,
+				occludedObjects,
+				visibleObjects,
+				occludedCoveredObjects,
+				visibleCoveredObjects,
+				draws);
+		}
+		context->Unmap(slot.staging.get(), 0);
+		slot.pending = false;
+		slot.drawsComplete = false;
+		slot.frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
+	}
+
+	for (auto& slot : depthCullingPipelineStatsSlots) {
+		if (!slot.pending || !slot.query)
+			continue;
+
+		D3D11_QUERY_DATA_PIPELINE_STATISTICS statistics{};
+		D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+		std::uint64_t timestampStart = 0;
+		std::uint64_t timestampEnd = 0;
+		const auto statisticsResult = context->GetData(
+			slot.query.get(),
+			&statistics,
+			sizeof(statistics),
+			D3D11_ASYNC_GETDATA_DONOTFLUSH);
+		const auto disjointResult = context->GetData(
+			slot.timestampDisjoint.get(),
+			&disjoint,
+			sizeof(disjoint),
+			D3D11_ASYNC_GETDATA_DONOTFLUSH);
+		const auto startResult = context->GetData(
+			slot.timestampStart.get(),
+			&timestampStart,
+			sizeof(timestampStart),
+			D3D11_ASYNC_GETDATA_DONOTFLUSH);
+		const auto endResult = context->GetData(
+			slot.timestampEnd.get(),
+			&timestampEnd,
+			sizeof(timestampEnd),
+			D3D11_ASYNC_GETDATA_DONOTFLUSH);
+		if (statisticsResult == S_FALSE || disjointResult == S_FALSE || startResult == S_FALSE || endResult == S_FALSE) {
+			if (collecting && slot.epoch == currentEpoch)
+				depthCullingDiagnostics.RecordPipelineQueryNotReady();
+			continue;
+		}
+		if (FAILED(statisticsResult) || FAILED(disjointResult) || FAILED(startResult) || FAILED(endResult)) {
+			if (collecting && slot.epoch == currentEpoch)
+				depthCullingDiagnostics.RecordPipelineQueryError();
+			slot.pending = false;
+			slot.frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
+			continue;
+		}
+
+		if (collecting && slot.epoch == currentEpoch) {
+			depthCullingDiagnostics.RecordPipelineQueryCompleted();
+			if (disjoint.Disjoint || !disjoint.Frequency || timestampEnd < timestampStart) {
+				depthCullingDiagnostics.RecordPipelineTimestampDisjoint();
+			} else {
+				const auto elapsedTicks = timestampEnd - timestampStart;
+				const auto elapsedNanoseconds =
+					(elapsedTicks * 1'000'000'000ULL) / disjoint.Frequency;
+				depthCullingDiagnostics.RecordPipelineTiming(slot.epoch, elapsedNanoseconds);
+			}
+			depthCullingDiagnostics.RecordPipelineStatistics(slot.epoch, {
+				.iaVertices = statistics.IAVertices,
+				.iaPrimitives = statistics.IAPrimitives,
+				.vsInvocations = statistics.VSInvocations,
+				.gsInvocations = statistics.GSInvocations,
+				.gsPrimitives = statistics.GSPrimitives,
+				.clipperInvocations = statistics.CInvocations,
+				.clipperPrimitives = statistics.CPrimitives,
+				.psInvocations = statistics.PSInvocations,
+				.hsInvocations = statistics.HSInvocations,
+				.dsInvocations = statistics.DSInvocations,
+				.csInvocations = statistics.CSInvocations,
+			});
+		}
+		slot.pending = false;
+		slot.frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
+	}
+}
+
+void VR::QueueDepthCullingVisibilityReadback(
+	ID3D11ShaderResourceView* a_visibility,
+	std::uint32_t a_frame,
+	std::uint32_t a_objectCount)
+{
+	if (!depthCullingDiagnostics.IsCollecting() || !a_visibility || !globals::d3d::device || !globals::d3d::context) {
+		depthCullingDiagnostics.RecordReadbackError();
+		return;
+	}
+	if (activeDepthCullingReadbackSlot >= 0) {
+		const auto& active = depthCullingReadbackSlots[static_cast<std::size_t>(activeDepthCullingReadbackSlot)];
+		if (active.pending && active.frame == a_frame)
+			return;
+	}
+
+	std::size_t slotIndex = depthCullingReadbackSlots.size();
+	for (std::size_t index = 0; index < depthCullingReadbackSlots.size(); ++index) {
+		if (!depthCullingReadbackSlots[index].pending) {
+			slotIndex = index;
+			break;
+		}
+	}
+	if (slotIndex == depthCullingReadbackSlots.size()) {
+		depthCullingDiagnostics.RecordReadbackDropped();
+		return;
+	}
+
+	winrt::com_ptr<ID3D11Resource> resource;
+	a_visibility->GetResource(resource.put());
+	winrt::com_ptr<ID3D11Buffer> sourceBuffer;
+	if (!resource || FAILED(resource->QueryInterface(IID_PPV_ARGS(sourceBuffer.put())))) {
+		depthCullingDiagnostics.RecordReadbackError();
+		return;
+	}
+
+	D3D11_BUFFER_DESC sourceDesc{};
+	sourceBuffer->GetDesc(&sourceDesc);
+	if (sourceDesc.ByteWidth < sizeof(std::uint32_t)) {
+		depthCullingDiagnostics.RecordReadbackError();
+		return;
+	}
+
+	auto& slot = depthCullingReadbackSlots[slotIndex];
+	if (!slot.staging || slot.byteWidth != sourceDesc.ByteWidth) {
+		D3D11_BUFFER_DESC stagingDesc{};
+		stagingDesc.ByteWidth = sourceDesc.ByteWidth;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		if (FAILED(globals::d3d::device->CreateBuffer(&stagingDesc, nullptr, slot.staging.put()))) {
+			slot.staging = nullptr;
+			slot.byteWidth = 0;
+			depthCullingDiagnostics.RecordReadbackError();
+			return;
+		}
+		slot.byteWidth = sourceDesc.ByteWidth;
+	}
+
+	slot.epoch = depthCullingDiagnostics.CollectionEpoch();
+	slot.frame = a_frame;
+	slot.objectCount = std::min({
+		a_objectCount,
+		kDepthCullingDiagnosticCapacity,
+		sourceDesc.ByteWidth / static_cast<std::uint32_t>(sizeof(std::uint32_t)) });
+	slot.draws.fill(0);
+	slot.lightingDraws.fill(0);
+	slot.distantTreeDraws.fill(0);
+	slot.grassDraws.fill(0);
+	slot.drawsComplete = false;
+	slot.pending = true;
+	globals::d3d::context->CopyResource(slot.staging.get(), sourceBuffer.get());
+	activeDepthCullingReadbackSlot = static_cast<std::int32_t>(slotIndex);
+	depthCullingDiagnostics.RecordReadbackQueued();
+}
+
+void VR::RecordDepthCullingDiagnosticDraw(
+	std::uint32_t a_objectIndex,
+	CSX::VRDepthCullingDiagnostics::DrawCategory a_category)
+{
+	if (!depthCullingDiagnostics.IsCollecting() ||
+		activeDepthCullingReadbackSlot < 0 ||
+		a_objectIndex >= kDepthCullingDiagnosticCapacity) {
+		return;
+	}
+	auto& slot = depthCullingReadbackSlots[static_cast<std::size_t>(activeDepthCullingReadbackSlot)];
+	if (!slot.pending || !globals::state || slot.frame != globals::state->frameCount)
+		return;
+
+	++slot.draws[a_objectIndex];
+	switch (a_category) {
+	case CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting:
+		++slot.lightingDraws[a_objectIndex];
+		break;
+	case CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree:
+		++slot.distantTreeDraws[a_objectIndex];
+		break;
+	case CSX::VRDepthCullingDiagnostics::DrawCategory::Grass:
+		++slot.grassDraws[a_objectIndex];
+		break;
+	}
+}
+
+void VR::BeginDepthCullingPipelineStatistics(std::uint32_t a_frame)
+{
+	if (!depthCullingDiagnostics.IsCollecting() || !globals::d3d::device || !globals::d3d::context)
+		return;
+	if (activeDepthCullingPipelineStatsSlot >= 0)
+		return;
+
+	std::size_t slotIndex = depthCullingPipelineStatsSlots.size();
+	for (std::size_t index = 0; index < depthCullingPipelineStatsSlots.size(); ++index) {
+		if (!depthCullingPipelineStatsSlots[index].active && !depthCullingPipelineStatsSlots[index].pending) {
+			slotIndex = index;
+			break;
+		}
+	}
+	if (slotIndex == depthCullingPipelineStatsSlots.size()) {
+		depthCullingDiagnostics.RecordPipelineQueryDropped();
+		return;
+	}
+
+	auto& slot = depthCullingPipelineStatsSlots[slotIndex];
+	if (!slot.query || !slot.timestampDisjoint || !slot.timestampStart || !slot.timestampEnd) {
+		auto createQuery = [&](D3D11_QUERY a_type, winrt::com_ptr<ID3D11Query>& a_query) {
+			D3D11_QUERY_DESC queryDesc{};
+			queryDesc.Query = a_type;
+			return SUCCEEDED(globals::d3d::device->CreateQuery(&queryDesc, a_query.put()));
+		};
+		if (!createQuery(D3D11_QUERY_PIPELINE_STATISTICS, slot.query) ||
+			!createQuery(D3D11_QUERY_TIMESTAMP_DISJOINT, slot.timestampDisjoint) ||
+			!createQuery(D3D11_QUERY_TIMESTAMP, slot.timestampStart) ||
+			!createQuery(D3D11_QUERY_TIMESTAMP, slot.timestampEnd)) {
+			slot.query = nullptr;
+			slot.timestampDisjoint = nullptr;
+			slot.timestampStart = nullptr;
+			slot.timestampEnd = nullptr;
+			depthCullingDiagnostics.RecordPipelineQueryError();
+			return;
+		}
+	}
+
+	slot.epoch = depthCullingDiagnostics.CollectionEpoch();
+	slot.frame = a_frame;
+	slot.active = true;
+	slot.pending = false;
+	globals::d3d::context->Begin(slot.timestampDisjoint.get());
+	globals::d3d::context->End(slot.timestampStart.get());
+	globals::d3d::context->Begin(slot.query.get());
+	activeDepthCullingPipelineStatsSlot = static_cast<std::int32_t>(slotIndex);
+	depthCullingDiagnostics.RecordPipelineQueryBegun();
+}
+
+ID3D11ShaderResourceView* VR::GetDepthCullingDiagnosticControlSrv(ID3D11ShaderResourceView* a_liveVisibility)
+{
+	if (depthCullingDiagnostics.GetControlMode() != CSX::VRDepthCullingDiagnostics::ControlMode::ForcedVisible)
+		return a_liveVisibility;
+	if (depthCullingForcedVisibleSrv)
+		return depthCullingForcedVisibleSrv.get();
+	if (depthCullingForcedVisibleCreateAttempted || !globals::d3d::device)
+		return nullptr;
+
+	depthCullingForcedVisibleCreateAttempted = true;
+	std::array<std::uint32_t, kDepthCullingDiagnosticCapacity> visible{};
+	visible.fill(1);
+	D3D11_BUFFER_DESC bufferDesc{};
+	bufferDesc.ByteWidth = static_cast<UINT>(visible.size() * sizeof(visible[0]));
+	bufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
+	bufferDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	bufferDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+	bufferDesc.StructureByteStride = sizeof(std::uint32_t);
+	D3D11_SUBRESOURCE_DATA initialData{};
+	initialData.pSysMem = visible.data();
+	if (FAILED(globals::d3d::device->CreateBuffer(&bufferDesc, &initialData, depthCullingForcedVisibleBuffer.put())))
+		return nullptr;
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+	srvDesc.Buffer.FirstElement = 0;
+	srvDesc.Buffer.NumElements = kDepthCullingDiagnosticCapacity;
+	if (FAILED(globals::d3d::device->CreateShaderResourceView(
+			depthCullingForcedVisibleBuffer.get(),
+			&srvDesc,
+			depthCullingForcedVisibleSrv.put()))) {
+		depthCullingForcedVisibleBuffer = nullptr;
+		return nullptr;
+	}
+	return depthCullingForcedVisibleSrv.get();
+}
+#endif
 
 //=============================================================================
 // OVERLAY FEATURE OVERRIDES

@@ -25,7 +25,7 @@ namespace
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
-		static CSX::Api::ServiceFoundation foundation({ kToolName, 1, 0, 1 });
+		static CSX::Api::ServiceFoundation foundation({ kToolName, 1, 3, 4 });
 		static std::once_flag metadataInitialized;
 		std::call_once(metadataInitialized, [&] {
 			foundation.SetServerMetadataProvider([] {
@@ -42,6 +42,13 @@ namespace
 		return a_frame == CSX::VRDepthCullingDiagnostics::kNoFrame ? json(nullptr) : json(a_frame);
 	}
 
+	const char* ControlModeName(CSX::VRDepthCullingDiagnostics::ControlMode a_mode)
+	{
+		return a_mode == CSX::VRDepthCullingDiagnostics::ControlMode::ForcedVisible ?
+			"forced_visible" :
+			"live";
+	}
+
 	json SnapshotJson(const Snapshot& a_snapshot)
 	{
 		const auto failOpenDraws =
@@ -53,9 +60,27 @@ namespace
 		const auto accountedBindAttempts = a_snapshot.boundDraws + failOpenDraws;
 		const auto unaccountedBindAttempts = a_snapshot.bindAttempts > accountedBindAttempts ?
 			a_snapshot.bindAttempts - accountedBindAttempts : 0;
+		const auto occlusionRatio = a_snapshot.visibilityObjectsSampled ?
+			static_cast<double>(a_snapshot.occludedObjects) / static_cast<double>(a_snapshot.visibilityObjectsSampled) :
+			0.0;
+		const auto classifiedDrawCount = a_snapshot.occludedDraws + a_snapshot.visibleDraws;
+		const auto occludedDrawRatio = classifiedDrawCount ?
+			static_cast<double>(a_snapshot.occludedDraws) / static_cast<double>(classifiedDrawCount) :
+			0.0;
+		const auto pipelineMean = [&](std::uint64_t a_total) {
+			return a_snapshot.pipelineStatsSamples ?
+				static_cast<double>(a_total) / static_cast<double>(a_snapshot.pipelineStatsSamples) :
+				0.0;
+		};
+		const auto pipelineRegionMeanMilliseconds = a_snapshot.pipelineTimingSamples ?
+			static_cast<double>(a_snapshot.pipelineRegionNanoseconds) /
+			static_cast<double>(a_snapshot.pipelineTimingSamples) / 1'000'000.0 :
+			0.0;
 
 		return {
 			{ "collecting", a_snapshot.collecting },
+			{ "collectionEpoch", a_snapshot.collectionEpoch },
+			{ "controlMode", ControlModeName(a_snapshot.controlMode) },
 			{ "frames", {
 				{ "first", FrameValue(a_snapshot.firstFrame) },
 				{ "last", FrameValue(a_snapshot.lastFrame) },
@@ -79,6 +104,86 @@ namespace
 				{ "failOpen", failOpenDraws },
 				{ "accounted", accountedBindAttempts },
 				{ "unaccounted", unaccountedBindAttempts },
+				{ "boundByFamily", {
+					{ "lighting", a_snapshot.boundLightingDraws },
+					{ "distantTree", a_snapshot.boundDistantTreeDraws },
+					{ "grass", a_snapshot.boundGrassDraws },
+				} },
+			} },
+			{ "visibilityReadback", {
+				{ "copiesQueued", a_snapshot.readbackCopiesQueued },
+				{ "copiesCompleted", a_snapshot.readbackCopiesCompleted },
+				{ "copiesDropped", a_snapshot.readbackCopiesDropped },
+				{ "mapsNotReady", a_snapshot.readbackMapsNotReady },
+				{ "errors", a_snapshot.readbackErrors },
+				{ "sampledFrames", a_snapshot.visibilityFramesSampled },
+				{ "lastSampleFrame", FrameValue(a_snapshot.lastVisibilityFrame) },
+				{ "lastSampleObjectCount", a_snapshot.lastVisibilityObjectCount },
+				{ "lastSampleOccludedObjects", a_snapshot.lastOccludedObjects },
+				{ "objectsSampled", a_snapshot.visibilityObjectsSampled },
+				{ "occludedObjects", a_snapshot.occludedObjects },
+				{ "visibleObjects", a_snapshot.visibleObjects },
+				{ "occlusionRatio", occlusionRatio },
+				{ "occludedObjectsWithCoveredDraws", a_snapshot.occludedObjectsWithCoveredDraws },
+				{ "visibleObjectsWithCoveredDraws", a_snapshot.visibleObjectsWithCoveredDraws },
+			} },
+			{ "classifiedDraws", {
+				{ "occluded", a_snapshot.occludedDraws },
+				{ "visible", a_snapshot.visibleDraws },
+				{ "occludedRatio", occludedDrawRatio },
+				{ "lighting", {
+					{ "occluded", a_snapshot.occludedLightingDraws },
+					{ "visible", a_snapshot.visibleLightingDraws },
+				} },
+				{ "distantTree", {
+					{ "occluded", a_snapshot.occludedDistantTreeDraws },
+					{ "visible", a_snapshot.visibleDistantTreeDraws },
+				} },
+				{ "grass", {
+					{ "occluded", a_snapshot.occludedGrassDraws },
+					{ "visible", a_snapshot.visibleGrassDraws },
+				} },
+			} },
+			{ "pipelineStatistics", {
+				{ "queriesBegun", a_snapshot.pipelineQueriesBegun },
+				{ "queriesEnded", a_snapshot.pipelineQueriesEnded },
+				{ "queriesCompleted", a_snapshot.pipelineQueriesCompleted },
+				{ "queriesDropped", a_snapshot.pipelineQueriesDropped },
+				{ "queriesNotReady", a_snapshot.pipelineQueriesNotReady },
+				{ "errors", a_snapshot.pipelineQueryErrors },
+				{ "samples", a_snapshot.pipelineStatsSamples },
+				{ "gpuRegionTiming", {
+					{ "samples", a_snapshot.pipelineTimingSamples },
+					{ "disjoint", a_snapshot.pipelineTimestampDisjoint },
+					{ "totalNanoseconds", a_snapshot.pipelineRegionNanoseconds },
+					{ "meanMilliseconds", pipelineRegionMeanMilliseconds },
+				} },
+				{ "totals", {
+					{ "iaVertices", a_snapshot.pipelineIAVertices },
+					{ "iaPrimitives", a_snapshot.pipelineIAPrimitives },
+					{ "vsInvocations", a_snapshot.pipelineVSInvocations },
+					{ "gsInvocations", a_snapshot.pipelineGSInvocations },
+					{ "gsPrimitives", a_snapshot.pipelineGSPrimitives },
+					{ "clipperInvocations", a_snapshot.pipelineClipperInvocations },
+					{ "clipperPrimitives", a_snapshot.pipelineClipperPrimitives },
+					{ "psInvocations", a_snapshot.pipelinePSInvocations },
+					{ "hsInvocations", a_snapshot.pipelineHSInvocations },
+					{ "dsInvocations", a_snapshot.pipelineDSInvocations },
+					{ "csInvocations", a_snapshot.pipelineCSInvocations },
+				} },
+				{ "meanPerSample", {
+					{ "iaVertices", pipelineMean(a_snapshot.pipelineIAVertices) },
+					{ "iaPrimitives", pipelineMean(a_snapshot.pipelineIAPrimitives) },
+					{ "vsInvocations", pipelineMean(a_snapshot.pipelineVSInvocations) },
+					{ "gsInvocations", pipelineMean(a_snapshot.pipelineGSInvocations) },
+					{ "gsPrimitives", pipelineMean(a_snapshot.pipelineGSPrimitives) },
+					{ "clipperInvocations", pipelineMean(a_snapshot.pipelineClipperInvocations) },
+					{ "clipperPrimitives", pipelineMean(a_snapshot.pipelineClipperPrimitives) },
+					{ "psInvocations", pipelineMean(a_snapshot.pipelinePSInvocations) },
+					{ "hsInvocations", pipelineMean(a_snapshot.pipelineHSInvocations) },
+					{ "dsInvocations", pipelineMean(a_snapshot.pipelineDSInvocations) },
+					{ "csInvocations", pipelineMean(a_snapshot.pipelineCSInvocations) },
+				} },
 			} },
 			{ "failOpenReasons", {
 				{ "contextUnavailable", a_snapshot.contextUnavailable },
@@ -93,6 +198,7 @@ namespace
 				{ "objectIndexOutOfRange", a_snapshot.objectIndexOutOfRange },
 				{ "resultBufferUnavailable", a_snapshot.resultBufferUnavailable },
 				{ "srvUnavailable", a_snapshot.srvUnavailable },
+				{ "forcedVisibleSrvUnavailable", a_snapshot.forcedVisibleSrvUnavailable },
 			} },
 		};
 	}
@@ -100,7 +206,7 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const auto action = a_args.value("action", std::string{});
-		if (action != "registry" && action != "snapshot" && action != "start" && action != "stop" && action != "reset")
+		if (action != "registry" && action != "snapshot" && action != "start" && action != "stop" && action != "reset" && action != "configure")
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 
 		if (action == "registry") {
@@ -108,22 +214,35 @@ namespace
 			response["result"] = {
 				{ "service", kToolName },
 				{ "major", 1 },
-				{ "minor", 0 },
-				{ "schemaRevision", 1 },
+				{ "minor", 3 },
+				{ "schemaRevision", 4 },
 				{ "mainThreadAffine", false },
-				{ "actions", json::array({ "registry", "snapshot", "start", "stop", "reset" }) },
-				{ "mutations", json::array({ "start", "stop", "reset" }) },
-				{ "gpuVisibilityReadback", false },
+				{ "actions", json::array({ "registry", "snapshot", "start", "stop", "reset", "configure" }) },
+				{ "mutations", json::array({ "start", "stop", "reset", "configure" }) },
+				{ "gpuVisibilityReadback", true },
+				{ "gpuPipelineStatistics", true },
+				{ "gpuTimestampQueries", true },
+				{ "controlModes", json::array({ "live", "forced_visible" }) },
 				{ "notes", json::array({
 					"Collection is disabled by default and absent from non-DevBench builds.",
-					"boundToCurrentFrameVisibility proves SRV/object-index binding, not the number of GPU-rejected objects.",
+					"GPU results are copied to a staging ring and mapped with DO_NOT_WAIT; diagnostics never wait for the GPU.",
+					"Pipeline statistics and timestamp queries cover the post-occlusion GPU region through the following frame's early prepass and are read with D3D11_ASYNC_GETDATA_DONOTFLUSH.",
+					"forced_visible preserves the OBB pass, binding, lookup, branch, and draw submissions but binds an all-visible result buffer to suppress only the shader early exit.",
 				}) },
 			};
 			return response;
 		}
 
 		auto& diagnostics = globals::features::vr.GetDepthCullingDiagnostics();
-		if (action == "start")
+		if (action == "configure") {
+			const auto mode = a_args.value("mode", std::string{});
+			if (mode == "live")
+				diagnostics.SetControlMode(CSX::VRDepthCullingDiagnostics::ControlMode::Live);
+			else if (mode == "forced_visible")
+				diagnostics.SetControlMode(CSX::VRDepthCullingDiagnostics::ControlMode::ForcedVisible);
+			else
+				return Foundation().MakeError(a_args, "invalid_mode", "mode must be live or forced_visible", "validation", false, "mode");
+		} else if (action == "start")
 			diagnostics.Start();
 		else if (action == "stop")
 			diagnostics.Stop();
@@ -182,7 +301,7 @@ namespace CSX::Api::DepthCullingDevBenchBridge
 		}
 
 		const char* descriptor = R"({
-			"description":"Bounded, opt-in current-frame depth-culling hand-off telemetry. No GPU readback or visibility-buffer stall.",
+			"description":"Bounded, opt-in current-frame depth-culling visibility telemetry and controlled GPU-work comparison. GPU readback never stalls.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -191,7 +310,8 @@ namespace CSX::Api::DepthCullingDevBenchBridge
 					"clientId":{"type":"string","minLength":1,"maxLength":128},
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
-					"action":{"type":"string","enum":["registry","snapshot","start","stop","reset"]}
+					"action":{"type":"string","enum":["registry","snapshot","start","stop","reset","configure"]},
+					"mode":{"type":"string","enum":["live","forced_visible"]}
 				}
 			}
 		})";

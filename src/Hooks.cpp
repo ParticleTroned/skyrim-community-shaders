@@ -1088,7 +1088,9 @@ namespace LightingExtensions
 					if (baseObject->As<RE::TESObjectTREE>())
 						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
-			globals::features::vr.BindCurrentFrameDepthCulling(pass->geometry);
+			globals::features::vr.BindCurrentFrameDepthCulling(
+				pass->geometry,
+				CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1101,7 +1103,9 @@ namespace DistantTreeExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
-			globals::features::vr.BindCurrentFrameDepthCulling(pass->geometry);
+			globals::features::vr.BindCurrentFrameDepthCulling(
+				pass->geometry,
+				CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1158,7 +1162,9 @@ namespace GrassExtensions
 				}
 			}
 
-			globals::features::vr.BindCurrentFrameDepthCulling(pass->geometry);
+			globals::features::vr.BindCurrentFrameDepthCulling(
+				pass->geometry,
+				CSX::VRDepthCullingDiagnostics::DrawCategory::Grass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

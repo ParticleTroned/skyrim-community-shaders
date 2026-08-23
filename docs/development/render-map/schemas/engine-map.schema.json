@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:schema:render-engine-map:1",
+  "title": "CSX version-specific Skyrim render engine map",
+  "type": "object",
+  "required": [
+    "schema",
+    "mapId",
+    "mapRevision",
+    "engineBuild",
+    "entities",
+    "relations",
+    "evidence",
+    "unresolved",
+    "extensions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "$ref": "#/$defs/schemaIdentity" },
+    "mapId": { "type": "string", "pattern": "^engine-map-[a-z0-9][a-z0-9.-]*$" },
+    "mapRevision": { "type": "integer", "minimum": 1 },
+    "engineBuild": { "$ref": "#/$defs/engineBuild" },
+    "entities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entity" }
+    },
+    "relations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/relation" }
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/unresolved" }
+    },
+    "extensions": { "$ref": "#/$defs/extensions" }
+  },
+  "$defs": {
+    "schemaIdentity": {
+      "type": "object",
+      "required": ["name", "major", "minor", "producerVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "const": "csx.render-engine-map" },
+        "major": { "const": 1 },
+        "minor": { "type": "integer", "minimum": 0 },
+        "producerVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "confidence": {
+      "enum": ["confirmed", "high", "medium", "low", "unknown"]
+    },
+    "evidenceClass": {
+      "enum": [
+        "source-proven",
+        "static-reverse-engineered",
+        "runtime-observed",
+        "correlated",
+        "validated-across-runs",
+        "inferred"
+      ]
+    },
+    "engineBuild": {
+      "type": "object",
+      "required": ["product", "runtime", "executable", "modules"],
+      "additionalProperties": false,
+      "properties": {
+        "product": { "const": "Skyrim VR" },
+        "runtime": { "type": "string", "minLength": 1 },
+        "executable": { "$ref": "#/$defs/module" },
+        "modules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/module" }
+        }
+      }
+    },
+    "module": {
+      "type": "object",
+      "required": ["name", "version", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": ["string", "null"] },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": ["id", "kind", "name", "module", "attributes", "evidenceRefs", "extensions"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^engine-[a-z][a-z0-9-]*-[0-9]{4}$" },
+        "kind": {
+          "enum": [
+            "module",
+            "class",
+            "vtable",
+            "function",
+            "virtual-function",
+            "callsite",
+            "hook-boundary",
+            "render-phase",
+            "shader-family",
+            "technique",
+            "permutation-domain",
+            "resource-role",
+            "render-target-role"
+          ]
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "module": { "type": ["string", "null"] },
+        "attributes": {
+          "type": "object",
+          "properties": {
+            "rva": { "type": "string", "pattern": "^0x[A-Fa-f0-9]+$" },
+            "relocationId": { "type": ["integer", "string", "null"] },
+            "vfuncIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "shaderType": { "type": ["string", "null"] },
+            "techniqueId": { "type": ["integer", "string", "null"] },
+            "renderPhase": { "type": ["string", "null"] },
+            "route": { "type": ["string", "null"] }
+          },
+          "additionalProperties": true
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^evidence-[0-9]{4}$" },
+          "uniqueItems": true
+        },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "from",
+        "to",
+        "evidenceClass",
+        "confidence",
+        "evidenceRefs",
+        "attributes",
+        "extensions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^relation-[0-9]{4}$" },
+        "type": {
+          "enum": [
+            "declares",
+            "implements",
+            "invokes",
+            "selects",
+            "creates",
+            "submits",
+            "binds",
+            "orders-before",
+            "reads",
+            "writes",
+            "intercepts",
+            "replaces",
+            "corresponds-to",
+            "observed-at"
+          ]
+        },
+        "from": { "$ref": "#/$defs/namespacedRef" },
+        "to": { "$ref": "#/$defs/namespacedRef" },
+        "evidenceClass": { "$ref": "#/$defs/evidenceClass" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "evidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^evidence-[0-9]{4}$" },
+          "uniqueItems": true
+        },
+        "attributes": { "type": "object", "additionalProperties": true },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "namespacedRef": {
+      "type": "string",
+      "pattern": "^(engine:engine-[a-z][a-z0-9-]*-[0-9]{4}|shader:(compile|pass)-[0-9]{4})$"
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["id", "class", "statement", "artifact", "locator", "confidence", "extensions"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^evidence-[0-9]{4}$" },
+        "class": { "$ref": "#/$defs/evidenceClass" },
+        "statement": { "type": "string", "minLength": 1 },
+        "artifact": {
+          "type": "object",
+          "required": ["kind", "name", "version", "sha256"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": ["source", "binary", "pdb", "ghidra", "address-library", "commonlib", "runtime-capture", "other"]
+            },
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": ["string", "null"] },
+            "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+          }
+        },
+        "locator": { "type": "string", "minLength": 1 },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "unresolved": {
+      "type": "object",
+      "required": ["id", "question", "relatedRefs", "blocking", "nextEvidence", "extensions"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^unresolved-[0-9]{4}$" },
+        "question": { "type": "string", "minLength": 1 },
+        "relatedRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/namespacedRef" },
+          "uniqueItems": true
+        },
+        "blocking": { "type": "boolean" },
+        "nextEvidence": { "type": "string", "minLength": 1 },
+        "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+      "additionalProperties": true
+    }
+  }
+}

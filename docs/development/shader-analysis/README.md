@@ -19,6 +19,10 @@ pipeline ownership, and feature-state performance analysis.
 - [`baselines/`](./baselines/) contains compact, sanitized, versioned summaries.
   Raw captures, compiled caches, DLLs, screenshots, and machine configuration
   stay in the external diagnostic archive.
+- [`../render-map/`](../render-map/) defines the neighbouring version-specific
+  Skyrim engine map, bounded runtime-evidence stream, and derived render graph.
+  It joins to this manifest by stable compile/pass IDs without contaminating
+  the deterministic static inventory with capture-specific state.
 
 Regenerate the static inventory from the repository root:
 

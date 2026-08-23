@@ -17,7 +17,9 @@ The system has four artefacts:
 The contracts are defined in [`schemas/`](./schemas/). The architecture and
 correlation rules are in [`architecture.md`](./architecture.md). The first
 vertical slice for depth culling is in
-[`opaque-depth-culling-slice.md`](./opaque-depth-culling-slice.md).
+[`opaque-depth-culling-slice.md`](./opaque-depth-culling-slice.md). Findings
+from the first bounded live controller run are in
+[`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
 
 ## Implementation status
 
@@ -47,12 +49,31 @@ render-pass coverage includes the three existing callsites and Terrain
 Blending's shared draw route; geometry coverage in this slice is Lighting,
 Effect, and Grass, matching the always-installed core hook owners.
 
-There is intentionally no UI, DevBench command, or automatic capture trigger
-yet, so ordinary game execution only performs the inactive check. Serialization,
-gap-event materialization, per-thread buffer sharding, pointer-generation
-tracking, remaining geometry families, and D3D draw/dispatch observation belong
-to subsequent slices. Until those exist, this is live correlation plumbing,
-not a complete capture producer.
+There is intentionally no UI or automatic capture trigger, so ordinary game
+execution only performs the inactive check. The diagnostic DevBench service
+`communityshaders.render_map` provides an
+explicit, versioned `start` / `status` / `stop` lifecycle and paged
+`capture_events` retrieval. It enforces one active capture, hard upper bounds,
+exact capture IDs, idempotent commands, and a four-capture in-memory history.
+Capture never starts automatically and event retrieval is unavailable until the
+capture has stopped.
+
+The first serializer emits schema-shaped event envelopes with semantic payload
+fields and capture-local observation IDs. It preserves pointer evidence under
+the currently supported `retain` policy, but leaves unproven manifest, engine,
+causal, device-context, and eye relationships empty or unknown. Gap-event
+materialization, atomic artefact writing and hashing, per-thread buffer sharding,
+pointer-generation tracking, remaining geometry families, and D3D
+draw/dispatch observation belong to subsequent slices. Until those exist, this
+is bounded live evidence rather than a complete render graph.
+
+Example DevBench requests (use a unique `commandId` for each logical command):
+
+```json
+{"contractMajor":1,"clientId":"render-study","commandId":"start-1","action":"start","maxFrames":4,"maxDurationMs":2000,"maxEvents":8192}
+{"contractMajor":1,"clientId":"render-study","commandId":"stop-1","action":"stop","captureId":"capture-live-..."}
+{"contractMajor":1,"clientId":"render-study","commandId":"events-1","action":"capture_events","captureId":"capture-live-...","offset":0,"limit":500}
+```
 
 Validate the schemas, examples, stable shader/engine references, event ordering,
 causal references, observation scopes, and derived graph references from the

@@ -5,6 +5,16 @@
 #include <new>
 #include <thread>
 
+#ifdef _WIN32
+#	ifndef NOMINMAX
+#		define NOMINMAX
+#	endif
+#	ifndef WIN32_LEAN_AND_MEAN
+#		define WIN32_LEAN_AND_MEAN
+#	endif
+#	include <Windows.h>
+#endif
+
 namespace CSX::RenderMap
 {
 	namespace
@@ -31,13 +41,34 @@ namespace CSX::RenderMap
 
 		std::uint64_t ReadClockTicks() noexcept
 		{
+#ifdef _WIN32
+			LARGE_INTEGER value{};
+			return ::QueryPerformanceCounter(&value) ? static_cast<std::uint64_t>(value.QuadPart) : 0;
+#else
 			return static_cast<std::uint64_t>(Clock::now().time_since_epoch().count());
+#endif
+		}
+
+		std::uint64_t CurrentThreadId() noexcept
+		{
+#ifdef _WIN32
+			return static_cast<std::uint64_t>(::GetCurrentThreadId());
+#else
+			return static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+#endif
 		}
 
 		std::uint64_t DurationToTicks(std::chrono::nanoseconds a_duration) noexcept
 		{
+#ifdef _WIN32
+			const auto frequency = Collector::ClockFrequencyHz();
+			const long double seconds = static_cast<long double>(a_duration.count()) / 1'000'000'000.0L;
+			const auto ticks = seconds * static_cast<long double>(frequency);
+			return ticks > 0.0L ? static_cast<std::uint64_t>(ticks) : 0;
+#else
 			const auto ticks = std::chrono::duration_cast<Clock::duration>(a_duration).count();
 			return ticks > 0 ? static_cast<std::uint64_t>(ticks) : 0;
+#endif
 		}
 
 		std::size_t ScopeIndex(ScopeKind a_kind) noexcept
@@ -375,7 +406,7 @@ namespace CSX::RenderMap
 		record.sessionGeneration = session->generation;
 		record.sequence = index;
 		record.timestampTicks = timestamp;
-		record.threadId = static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+		record.threadId = CurrentThreadId();
 		record.deviceContextObservationId = a_deviceContextObservationId;
 		record.frame = state.frame;
 		record.scopes = SnapshotScopes(state);
@@ -455,7 +486,12 @@ namespace CSX::RenderMap
 
 	std::uint64_t Collector::ClockFrequencyHz() noexcept
 	{
+#ifdef _WIN32
+		LARGE_INTEGER frequency{};
+		return ::QueryPerformanceFrequency(&frequency) ? static_cast<std::uint64_t>(frequency.QuadPart) : 0;
+#else
 		return static_cast<std::uint64_t>(Clock::period::den / Clock::period::num);
+#endif
 	}
 
 	void Collector::ExitScope(

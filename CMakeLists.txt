@@ -240,7 +240,7 @@ target_compile_definitions(
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
 )
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt)
+    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32)
 endif()
 
 file(
@@ -1750,6 +1750,19 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ApiServiceRegistry COMMAND api_service_registry_test)
     set_tests_properties(ApiServiceRegistry PROPERTIES LABELS "ControllerTests")
 
+	add_executable(
+		api_screenshot_contract_test
+		EXCLUDE_FROM_ALL
+		tests/api_screenshot_contract_test.cpp
+	)
+	target_compile_features(api_screenshot_contract_test PRIVATE cxx_std_23)
+	target_include_directories(
+		api_screenshot_contract_test
+		PRIVATE "${PROJECT_SOURCE_DIR}/include"
+	)
+	add_test(NAME ApiScreenshotContract COMMAND api_screenshot_contract_test)
+	set_tests_properties(ApiScreenshotContract PROPERTIES LABELS "ControllerTests")
+
     add_executable(
         api_upscaling_contract_test
         EXCLUDE_FROM_ALL
@@ -1873,6 +1886,7 @@ if(BUILD_CONTROLLER_TESTS)
             api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test
+			api_screenshot_contract_test
             api_upscaling_contract_test
             api_upscaling_service_policy_test
             api_shader_service_policy_test

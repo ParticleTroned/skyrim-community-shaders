@@ -460,7 +460,7 @@ namespace
 			} else if (action == "close") {
 				menu->CloseMenu();
 			} else if (action == "screenshot") {
-				delegatedRequest = globals::features::screenshotFeature.RequestLegacyCapture("communityshaders.menu");
+				delegatedRequest = globals::features::screenshotFeature.RequestApiCapture("communityshaders.menu");
 			} else if (action == "set_path") {
 				auto& vr = globals::features::vr;
 				vr.HideOverlaysIfPresent();

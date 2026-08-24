@@ -24,9 +24,8 @@ cbuffer ClearHMDMaskCB : register(b0)
 };
 
 Texture2D<float> DepthIn : register(t0);
-Texture2D<uint> ReducedHMDMaskIn : register(t1);
+Texture2D<uint> PersistentHMDMaskIn : register(t1);
 RWTexture2D<float4> ColorInOut : register(u0);
-RWTexture2D<uint> ReducedHMDMaskOut : register(u1);
 RWByteAddressBuffer HMDMaskAuditCounters : register(u2);
 
 static const float kHiddenDepthThreshold = 1e-6;
@@ -235,53 +234,10 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		ColorInOut[colorPos] = float4(0.0, 0.0, 0.0, 0.0);
 }
 
-// Builds the same conservative mask as the robust final scrub while color is
-// still at vendor-input resolution. The resulting mask is reused after temporal
-// reconstruction, and this pass also prevents hidden-area color from entering
-// vendor history in the first place.
-[numthreads(8, 8, 1)] void BuildReducedHMDMaskAndClearInputMain(uint3 dispatchID : SV_DispatchThreadID)
-{
-	if (dispatchID.x >= ColorWidth || dispatchID.y >= ColorHeight)
-		return;
-
-	uint colorTexWidth, colorTexHeight;
-	ColorInOut.GetDimensions(colorTexWidth, colorTexHeight);
-	uint maskTexWidth, maskTexHeight;
-	ReducedHMDMaskOut.GetDimensions(maskTexWidth, maskTexHeight);
-
-	const uint2 localPos = dispatchID.xy;
-	const uint2 colorPos = localPos + uint2(ColorOffsetX, ColorOffsetY);
-	if (colorPos.x >= colorTexWidth || colorPos.y >= colorTexHeight ||
-		localPos.x >= maskTexWidth || localPos.y >= maskTexHeight) {
-		return;
-	}
-
-	uint depthTexWidth, depthTexHeight;
-	DepthIn.GetDimensions(depthTexWidth, depthTexHeight);
-	uint2 depthPos;
-	if (DepthWidth > 0 && DepthHeight > 0 && ColorWidth > 0 && ColorHeight > 0) {
-		depthPos = uint2(
-			(localPos.x * DepthWidth) / ColorWidth,
-			(localPos.y * DepthHeight) / ColorHeight) +
-			uint2(DepthOffsetX, DepthOffsetY);
-	} else {
-		depthPos = localPos + uint2(DepthOffsetX, DepthOffsetY);
-	}
-
-	if (depthPos.x >= depthTexWidth || depthPos.y >= depthTexHeight) {
-		ReducedHMDMaskOut[localPos] = 0;
-		return;
-	}
-
-	const bool clearPixel = IsDilatedHiddenDepth(depthPos, uint2(depthTexWidth, depthTexHeight));
-	ReducedHMDMaskOut[localPos] = clearPixel ? 1u : 0u;
-	if (clearPixel)
-		ColorInOut[colorPos] = float4(0.0, 0.0, 0.0, 0.0);
-}
-
-// The display-resolution safety scrub maps each output pixel back to the
-// conservative reduced-resolution mask and performs exactly one mask load.
-[numthreads(8, 8, 1)] void ClearHMDMaskFromReducedMain(uint3 dispatchID : SV_DispatchThreadID)
+// Maps each color pixel into the persistent runtime-derived hidden-area mask.
+// The mask is immutable between projection/resolution changes, so both vendor
+// input and display output use one lookup with no per-frame construction pass.
+[numthreads(8, 8, 1)] void ClearHMDMaskFromPersistentMain(uint3 dispatchID : SV_DispatchThreadID)
 {
 	if (dispatchID.x >= ColorWidth || dispatchID.y >= ColorHeight ||
 		DepthWidth == 0 || DepthHeight == 0) {
@@ -295,14 +251,14 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		return;
 
 	uint maskTexWidth, maskTexHeight;
-	ReducedHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
+	PersistentHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
 	const uint2 maskPos = uint2(
 		(dispatchID.x * DepthWidth) / ColorWidth,
 		(dispatchID.y * DepthHeight) / ColorHeight);
 	if (maskPos.x >= maskTexWidth || maskPos.y >= maskTexHeight)
 		return;
 
-	if (ReducedHMDMaskIn[maskPos] != 0u)
+	if (PersistentHMDMaskIn[maskPos] != 0u)
 		ColorInOut[colorPos] = float4(0.0, 0.0, 0.0, 0.0);
 }
 
@@ -350,7 +306,7 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		candidateClear = thresholdRingR2Clear;
 	} else if (AuditCandidateMode == kAuditCandidatePersistentMask) {
 		uint maskTexWidth, maskTexHeight;
-		ReducedHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
+		PersistentHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
 		const uint2 maskPos = uint2(
 			(localColorPos.x * AuditMaskWidth) / ColorWidth,
 			(localColorPos.y * AuditMaskHeight) / ColorHeight);
@@ -358,7 +314,7 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 			AuditMaskWidth == 0 || AuditMaskHeight == 0 ||
 			maskPos.x >= AuditMaskWidth || maskPos.y >= AuditMaskHeight ||
 			maskPos.x >= maskTexWidth || maskPos.y >= maskTexHeight;
-		candidateClear = !invalidMaskLookup && ReducedHMDMaskIn[maskPos] != 0u;
+		candidateClear = !invalidMaskLookup && PersistentHMDMaskIn[maskPos] != 0u;
 	}
 
 	uint ignored;

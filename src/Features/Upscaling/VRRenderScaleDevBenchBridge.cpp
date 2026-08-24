@@ -48,6 +48,18 @@ namespace
 		}
 	}
 
+	std::optional<Upscaling::HMDMaskImplementationMode> ParseHMDMaskMode(
+		const std::string& a_mode)
+	{
+		if (a_mode == "robust_depth_5x5")
+			return Upscaling::HMDMaskImplementationMode::RobustDepth5x5;
+		if (a_mode == "legacy_exact_zero")
+			return Upscaling::HMDMaskImplementationMode::LegacyExactZero;
+		if (a_mode == "reduced_resolution_mask")
+			return Upscaling::HMDMaskImplementationMode::ReducedResolutionMask;
+		return std::nullopt;
+	}
+
 	const char* GetPhysicalPhaseName(
 		Upscaling::VRRenderScalePhysicalPhase a_phase)
 	{
@@ -429,6 +441,7 @@ namespace
 			{ "fsrDispatch", FsrDispatchJson(controller, globals::shaderCache && globals::shaderCache->IsCompiling()) },
 			{ "vendorWorkGate", VendorWorkGateJson(vendorWorkGate) },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
+			{ "hmdMaskDiagnostics", a_upscaling.BuildVRHMDMaskDiagnosticsStatus() },
 			{ "session", {
 							 { "id", session.sessionID },
 							 { "active", session.active },
@@ -829,6 +842,108 @@ namespace
 			});
 		}
 
+		if (action == "ham_status" || action == "ham_quality_status") {
+			return RunOnMainThread([action]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "HMD-mask diagnostics require Skyrim VR" } };
+				return json{
+					{ "action", action },
+					{ "hamApiVersion", 1 },
+					{ "status", globals::features::upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+				};
+			});
+		}
+
+		if (action == "ham_set_mode") {
+			if (!a_args.contains("hamMode") || !a_args["hamMode"].is_string())
+				return { { "error", "ham_set_mode requires string parameter 'hamMode'" } };
+			const std::string modeName = a_args["hamMode"].get<std::string>();
+			const auto mode = ParseHMDMaskMode(modeName);
+			if (!mode) {
+				return {
+					{ "error", "hamMode must be robust_depth_5x5, legacy_exact_zero, or reduced_resolution_mask" },
+					{ "hamMode", modeName },
+				};
+			}
+			return RunOnMainThread([mode = *mode, modeName]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "HMD-mask diagnostics require Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				const auto before = upscaling.BuildVRHMDMaskDiagnosticsStatus();
+				if (before["qualityCapture"].value("active", false)) {
+					return json{
+						{ "error", "stop the active HAM quality capture before changing mode" },
+						{ "status", before },
+					};
+				}
+				const bool changed = upscaling.SetHMDMaskImplementationMode(
+					mode, "DevBench automation");
+				return json{
+					{ "action", "ham_set_mode" },
+					{ "hamMode", modeName },
+					{ "accepted", changed },
+					{ "status", upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+				};
+			});
+		}
+
+		if (action == "ham_quality_start") {
+			const int64_t maxFrames = a_args.value("maxFrames", int64_t{ 60 });
+			if (maxFrames < 1 || maxFrames > 120)
+				return { { "error", "maxFrames is outside 1..120" }, { "maxFrames", maxFrames } };
+			return RunOnMainThread([maxFrames]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "HMD-mask diagnostics require Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (!upscaling.StartVRHMDMaskQualityCapture(static_cast<uint32_t>(maxFrames))) {
+					return json{
+						{ "error", "HAM quality capture could not start; another capture/readback may still be active or GPU resources are unavailable" },
+						{ "status", upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+					};
+				}
+				return json{
+					{ "action", "ham_quality_start" },
+					{ "status", upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+				};
+			});
+		}
+
+		if (action == "ham_quality_stop") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "HMD-mask diagnostics require Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (!upscaling.StopVRHMDMaskQualityCapture()) {
+					return json{
+						{ "error", "no HAM quality capture is active" },
+						{ "status", upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+					};
+				}
+				return json{
+					{ "action", "ham_quality_stop" },
+					{ "status", upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+				};
+			});
+		}
+
+		if (action == "ham_reset") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "HMD-mask diagnostics require Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (!upscaling.ResetVRHMDMaskDiagnostics()) {
+					return json{
+						{ "error", "stop the HAM quality capture and wait for its readback before resetting" },
+						{ "status", upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+					};
+				}
+				return json{
+					{ "action", "ham_reset" },
+					{ "status", upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+				};
+			});
+		}
+
 		if (action == "trim") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
@@ -1000,7 +1115,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
+			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "ham_status", "ham_set_mode", "ham_quality_start", "ham_quality_status", "ham_quality_stop", "ham_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
 		};
 	}
 
@@ -1023,7 +1138,7 @@ namespace
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.renderscale" },
 			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. If the client has not exposed dynamic tools, dispatch it through devbench scenario with a tool step: {"tool":"communityshaders.renderscale","args":{"action":"status"}}.)" },
-			{ "actions", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
+			{ "actions", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "ham_status", "ham_set_mode", "ham_quality_start", "ham_quality_status", "ham_quality_stop", "ham_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
 		};
 		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
@@ -1062,7 +1177,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"({"description":"Control and inspect CSX VR render-scale and transition diagnostics. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}},"required":["action"]}})";
+			R"({"description":"Control and inspect CSX VR render-scale, HMD-mask A/B, and transition diagnostics. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_set_mode","ham_quality_start","ham_quality_status","ham_quality_stop","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"hamMode":{"type":"string","enum":["robust_depth_5x5","legacy_exact_zero","reduced_resolution_mask"]},"maxFrames":{"type":"integer","minimum":1,"maximum":120,"default":60},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			diagnosticDescriptor,

@@ -44,6 +44,13 @@ project(
     LANGUAGES CXX
 )
 
+# CSX does not contain C++ module interface units. CMake otherwise enables
+# MSVC's C++20+ module dependency scanner for every C++ target. Combined with
+# /MP, concurrent cl.exe processes can be assigned the same empty-basename
+# .d.json output. Disable the unnecessary scanner project-wide while retaining
+# parallel compilation.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 set(CSX_PACKAGE_NAME "CSX")
 
 # Shader-cache FOMODs use this generated marker to require the exact active

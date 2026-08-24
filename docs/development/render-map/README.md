@@ -23,6 +23,12 @@ from the first bounded live controller run are in
 The later 120-frame run that validates durable finalization and establishes the
 typed-observation gate is documented in
 [`main-menu-120-frame-capture-2026-08-23.md`](./main-menu-120-frame-capture-2026-08-23.md).
+Analysis joining that capture to the shader manifest, Skyrim's
+`BSShader::BeginTechnique` lookup, the cache-key scheme, depth-culling results,
+and residency baselines is in
+[`existing-evidence-synthesis-2026-08-24.md`](./existing-evidence-synthesis-2026-08-24.md).
+Its first non-example Skyrim VR engine-map seed is
+[`engine-map.skyrim-vr-1.4.15.main-menu-seed.json`](./engine-map.skyrim-vr-1.4.15.main-menu-seed.json).
 
 ## Implementation status
 

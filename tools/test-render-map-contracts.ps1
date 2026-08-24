@@ -57,6 +57,8 @@ foreach ($schemaFile in $schemaFiles) {
 }
 
 Assert-JsonSchema (Join-Path $exampleRoot 'engine-map.example.json') (Join-Path $schemaRoot 'engine-map.schema.json')
+$engineMapSeedPath = Join-Path $renderMapRoot 'engine-map.skyrim-vr-1.4.15.main-menu-seed.json'
+Assert-JsonSchema $engineMapSeedPath (Join-Path $schemaRoot 'engine-map.schema.json')
 Assert-JsonSchema (Join-Path $exampleRoot 'capture-manifest.example.json') (Join-Path $schemaRoot 'capture-manifest.schema.json')
 Assert-JsonSchema (Join-Path $exampleRoot 'render-graph.example.json') (Join-Path $schemaRoot 'render-graph.schema.json')
 
@@ -106,6 +108,46 @@ foreach ($relation in $engineMap.relations) {
 
     foreach ($evidenceRef in $relation.evidenceRefs) {
         Assert-True ($engineEvidenceRefs.Contains([string] $evidenceRef)) "Engine relation $($relation.id) refers to missing evidence $evidenceRef"
+    }
+}
+
+$engineMapSeed = Get-Content -Raw -LiteralPath $engineMapSeedPath | ConvertFrom-Json
+$seedEngineRefs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+foreach ($entity in $engineMapSeed.entities) {
+    $null = $seedEngineRefs.Add([string] $entity.id)
+}
+
+$seedEvidenceRefs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+foreach ($evidence in $engineMapSeed.evidence) {
+    $null = $seedEvidenceRefs.Add([string] $evidence.id)
+}
+
+Assert-Unique @($engineMapSeed.entities.id) 'Seed engine entity IDs'
+Assert-Unique @($engineMapSeed.relations.id) 'Seed engine relation IDs'
+Assert-Unique @($engineMapSeed.evidence.id) 'Seed engine evidence IDs'
+
+foreach ($entity in $engineMapSeed.entities) {
+    foreach ($evidenceRef in $entity.evidenceRefs) {
+        Assert-True ($seedEvidenceRefs.Contains([string] $evidenceRef)) "Seed engine entity $($entity.id) refers to missing evidence $evidenceRef"
+    }
+}
+
+foreach ($relation in $engineMapSeed.relations) {
+    foreach ($endpoint in @($relation.from, $relation.to)) {
+        $namespace, $value = ([string] $endpoint).Split(':', 2)
+        if ($namespace -eq 'engine') {
+            Assert-True ($seedEngineRefs.Contains($value)) "Seed engine relation $($relation.id) refers to missing engine entity $value"
+        }
+        elseif ($namespace -eq 'shader') {
+            Assert-True ($shaderRefs.Contains($value)) "Seed engine relation $($relation.id) refers to missing shader manifest ID $value"
+        }
+        else {
+            throw "Seed engine relation $($relation.id) has unknown namespace $namespace"
+        }
+    }
+
+    foreach ($evidenceRef in $relation.evidenceRefs) {
+        Assert-True ($seedEvidenceRefs.Contains([string] $evidenceRef)) "Seed engine relation $($relation.id) refers to missing evidence $evidenceRef"
     }
 }
 
@@ -200,5 +242,4 @@ foreach ($window in $renderGraph.decisionWindows) {
     Assert-True ($eventSequences.Contains([long] $window.decisionDeadline.sequence)) "Decision window $($window.id) has a missing deadline event"
 }
 
-Write-Output "Render-map contracts passed: $($schemaFiles.Count) schemas, $($events.Count) events, $($renderGraph.nodes.Count) graph nodes."
-
+Write-Output "Render-map contracts passed: $($schemaFiles.Count) schemas, 2 engine maps, $($events.Count) events, $($renderGraph.nodes.Count) graph nodes."

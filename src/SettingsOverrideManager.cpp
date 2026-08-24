@@ -211,6 +211,9 @@ size_t SettingsOverrideManager::ApplyOverrides(const std::string& featureName, j
 
 			if (override.enabled && overrideData && !overrideData->empty()) {
 				try {
+					if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName &&
+						SettingsMigrations::HasForcedLegacyWaterAppearance(*overrideData))
+						SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(featureJson);
 					MergeJson(featureJson, *overrideData);
 					appliedCount++;
 					logger::info("Applied override from {} to {}", override.modName, featureName);
@@ -239,6 +242,12 @@ size_t SettingsOverrideManager::ApplyGlobalOverrides(json& mainJson)
 	for (const auto& override : overrides) {
 		if (override.isGlobal && override.enabled) {
 			try {
+				if (auto adaptiveIt = override.overrideData.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+					adaptiveIt != override.overrideData.end() && SettingsMigrations::HasForcedLegacyWaterAppearance(*adaptiveIt)) {
+					if (auto targetAdaptiveIt = mainJson.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+						targetAdaptiveIt != mainJson.end())
+						SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(*targetAdaptiveIt);
+				}
 				MergeJson(mainJson, override.overrideData);
 				appliedCount++;
 				logger::info("Applied global override from {}", override.modName);
@@ -547,8 +556,11 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 		}
 
 		if (overrideInfo->isGlobal) {
-			if (SettingsMigrations::MigrateAdaptiveBalanceRootLayer(overrideInfo->overrideData))
+			if (SettingsMigrations::MigrateAdaptiveBalanceRootLayer(overrideInfo->overrideData, true))
 				logger::info("Migrated legacy Adaptive Balance settings in global override {}", filePath.string());
+			if (auto adaptiveIt = overrideInfo->overrideData.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+				adaptiveIt != overrideInfo->overrideData.end())
+				SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
 		} else if (overrideInfo->featureName == SettingsMigrations::kCSUtilityFeatureName) {
 			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(overrideInfo->overrideData);
 			if (!adaptiveBalancePatch.empty()) {
@@ -557,6 +569,16 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 					std::move(adaptiveBalancePatch));
 				logger::info("Routed legacy CS Utility renderer settings in {} to Adaptive Balance", filePath.string());
 			}
+		} else if (overrideInfo->featureName == SettingsMigrations::kUnifiedWaterFeatureName) {
+			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceWaterFeaturePatch(overrideInfo->overrideData);
+			if (!adaptiveBalancePatch.empty()) {
+				overrideInfo->routedFeatureData.emplace(
+					std::string(SettingsMigrations::kAdaptiveBalanceFeatureName),
+					std::move(adaptiveBalancePatch));
+				logger::info("Routed legacy Unified Water appearance settings in {} to Adaptive Balance", filePath.string());
+			}
+		} else if (overrideInfo->featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(overrideInfo->overrideData);
 		}
 
 		return overrideInfo;
@@ -1083,12 +1105,37 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 		}
 	}
 
+	// Preserve feature-scoped water customizations saved before the appearance
+	// controls moved into Adaptive Balance. Apply the native destination user
+	// layer afterward so explicitly saved profile values retain final precedence.
+	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		json legacyUnifiedWaterUser;
+		if (readUserLayer(std::string(SettingsMigrations::kUnifiedWaterFeatureName), legacyUnifiedWaterUser)) {
+			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceWaterFeaturePatch(legacyUnifiedWaterUser);
+			if (!adaptiveBalancePatch.empty()) {
+				SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(featureJson);
+				MergeJson(featureJson, adaptiveBalancePatch);
+				applied = true;
+				logger::info("Loaded legacy Unified Water user appearance settings for Adaptive Balance");
+			}
+		}
+	}
+
 	json userJson;
 	if (!readUserLayer(featureName, userJson))
 		return applied;
 
 	if (featureName == "Global") {
-		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userJson);
+		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userJson, true);
+		if (auto adaptiveIt = userJson.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+			adaptiveIt != userJson.end() && SettingsMigrations::HasForcedLegacyWaterAppearance(*adaptiveIt)) {
+			if (auto targetAdaptiveIt = featureJson.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+				targetAdaptiveIt != featureJson.end())
+				SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(*targetAdaptiveIt);
+		}
+		if (auto adaptiveIt = userJson.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+			adaptiveIt != userJson.end())
+			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
 	} else if (featureName == SettingsMigrations::kCSUtilityFeatureName) {
 		// The routed portion was applied while loading AdaptiveBrightness. Keep
 		// only the source feature's enabled/DOF values here. Retain a recoverable
@@ -1096,6 +1143,8 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 		const json originalLegacyCSUtilityUser = userJson;
 		if (!SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(userJson).empty())
 			retainLegacyRendererSource(originalLegacyCSUtilityUser, userJson);
+	} else if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(userJson);
 	}
 
 	MergeJson(featureJson, userJson);

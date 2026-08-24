@@ -22,6 +22,16 @@ bool SettingsMigrations::MatchesJsonSchema(const nlohmann::json& a_value, const 
 	return a_value.type() == a_schema.type();
 }
 
+bool SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(const nlohmann::json& a_value)
+{
+	return a_value.is_object() && std::ranges::any_of(
+									  kLegacyUnifiedWaterAppearanceKeys,
+									  [&](std::string_view a_key) {
+										  const auto valueIt = a_value.find(a_key.data());
+										  return valueIt != a_value.end() && valueIt->is_number();
+									  });
+}
+
 namespace
 {
 	using json = nlohmann::json;
@@ -30,6 +40,34 @@ namespace
 	constexpr std::string_view kGlobalLightingEnabledKey = "globalLightingEnabled";
 	constexpr std::string_view kLightingKey = "lighting";
 	constexpr std::string_view kEnabledKey = "enabled";
+	bool HasExplicitWaterProfile(const json& a_adaptiveBalance)
+	{
+		if (!a_adaptiveBalance.is_object())
+			return false;
+
+		const auto hasProfileWater = [](const json& a_profile) {
+			if (!a_profile.is_object())
+				return false;
+			const auto waterIt = a_profile.find("water");
+			return waterIt != a_profile.end() && waterIt->is_object();
+		};
+
+		if (const auto profilesIt = a_adaptiveBalance.find("profiles"); profilesIt != a_adaptiveBalance.end() && profilesIt->is_array()) {
+			if (std::ranges::any_of(*profilesIt, hasProfileWater))
+				return true;
+		}
+
+		if (const auto overridesIt = a_adaptiveBalance.find("locationOverrides"); overridesIt != a_adaptiveBalance.end() && overridesIt->is_array()) {
+			return std::ranges::any_of(*overridesIt, [&](const json& a_locationOverride) {
+				if (!a_locationOverride.is_object())
+					return false;
+				const auto profileIt = a_locationOverride.find("profile");
+				return profileIt != a_locationOverride.end() && hasProfileWater(*profileIt);
+			});
+		}
+
+		return false;
+	}
 
 	bool HasLegacyRendererSettings(const json& a_csUtility)
 	{
@@ -133,6 +171,58 @@ namespace
 		return true;
 	}
 
+	bool MigrateLegacyUnifiedWaterAppearanceRoot(
+		json& a_layer,
+		bool a_forceLegacyWaterAppearance)
+	{
+		auto unifiedWaterIt = a_layer.find(SettingsMigrations::kUnifiedWaterSettingsName.data());
+		if (unifiedWaterIt == a_layer.end() || !unifiedWaterIt->is_object())
+			return false;
+
+		if (!SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(*unifiedWaterIt))
+			return false;
+
+		auto adaptiveIt = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		if (adaptiveIt == a_layer.end()) {
+			a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)] = json::object();
+			adaptiveIt = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+		} else if (!adaptiveIt->is_object()) {
+			// A malformed destination could not have represented valid explicit
+			// profile settings. Recover it so the valid legacy water values survive.
+			*adaptiveIt = json::object();
+		}
+
+		const bool forceGlobal = a_forceLegacyWaterAppearance && !HasExplicitWaterProfile(*adaptiveIt);
+
+		auto legacyWaterIt = adaptiveIt->find(SettingsMigrations::kLegacyWaterAppearanceSettingsKey.data());
+		if (legacyWaterIt == adaptiveIt->end() || !legacyWaterIt->is_object()) {
+			(*adaptiveIt)[std::string(SettingsMigrations::kLegacyWaterAppearanceSettingsKey)] = json::object();
+			legacyWaterIt = adaptiveIt->find(SettingsMigrations::kLegacyWaterAppearanceSettingsKey.data());
+		}
+		(*legacyWaterIt)[std::string(SettingsMigrations::kLegacyWaterAppearanceForceGlobalKey)] = forceGlobal;
+
+		bool migrated = false;
+		for (const auto key : SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys) {
+			auto sourceIt = unifiedWaterIt->find(key.data());
+			if (sourceIt == unifiedWaterIt->end())
+				continue;
+
+			auto destinationIt = legacyWaterIt->find(key.data());
+			if (destinationIt != legacyWaterIt->end() && destinationIt->is_number()) {
+				// A valid destination value from this source layer wins over a stale
+				// Unified Water copy.
+				unifiedWaterIt->erase(sourceIt);
+				migrated = true;
+			} else if (sourceIt->is_number()) {
+				(*legacyWaterIt)[std::string(key)] = *sourceIt;
+				unifiedWaterIt->erase(sourceIt);
+				migrated = true;
+			}
+		}
+
+		return migrated;
+	}
+
 	const json& GetBloomSchema()
 	{
 		static const json schema = {
@@ -162,13 +252,16 @@ namespace
 	}
 }
 
-bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(nlohmann::json& a_layer)
+bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
+	nlohmann::json& a_layer,
+	bool a_forceLegacyWaterAppearance)
 {
 	if (!a_layer.is_object())
 		return false;
 
 	auto migratedLayer = a_layer;
 	bool migrated = MigrateLegacyAdaptiveBrightnessRoot(migratedLayer);
+	migrated |= MigrateLegacyUnifiedWaterAppearanceRoot(migratedLayer, a_forceLegacyWaterAppearance);
 
 	const auto sourceCSUtilityIt = migratedLayer.find(kCSUtilitySettingsName.data());
 	if (sourceCSUtilityIt == migratedLayer.end() ||
@@ -263,6 +356,78 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(nlohmann::json& a_layer
 	return migrated;
 }
 
+bool SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(nlohmann::json& a_adaptiveBalanceLayer)
+{
+	if (!a_adaptiveBalanceLayer.is_object())
+		return false;
+
+	bool marked = false;
+	const auto markProfile = [&](json& a_profile) {
+		if (!a_profile.is_object())
+			return;
+		auto waterIt = a_profile.find("water");
+		if (waterIt == a_profile.end() || !waterIt->is_object())
+			return;
+		if (!waterIt->contains(kLegacyWaterProfileExplicitKey.data()) || !(*waterIt)[kLegacyWaterProfileExplicitKey.data()].is_boolean() || !(*waterIt)[kLegacyWaterProfileExplicitKey.data()].get<bool>()) {
+			(*waterIt)[std::string(kLegacyWaterProfileExplicitKey)] = true;
+			marked = true;
+		}
+	};
+
+	if (auto profilesIt = a_adaptiveBalanceLayer.find("profiles"); profilesIt != a_adaptiveBalanceLayer.end() && profilesIt->is_array()) {
+		for (auto& profile : *profilesIt)
+			markProfile(profile);
+	}
+	if (auto overridesIt = a_adaptiveBalanceLayer.find("locationOverrides"); overridesIt != a_adaptiveBalanceLayer.end() && overridesIt->is_array()) {
+		for (auto& locationOverride : *overridesIt) {
+			if (!locationOverride.is_object())
+				continue;
+			if (auto profileIt = locationOverride.find("profile"); profileIt != locationOverride.end())
+				markProfile(*profileIt);
+		}
+	}
+
+	return marked;
+}
+
+bool SettingsMigrations::HasForcedLegacyWaterAppearance(const nlohmann::json& a_adaptiveBalanceLayer)
+{
+	if (!a_adaptiveBalanceLayer.is_object())
+		return false;
+
+	const auto waterIt = a_adaptiveBalanceLayer.find(kLegacyWaterAppearanceSettingsKey.data());
+	if (waterIt == a_adaptiveBalanceLayer.end() || !HasLegacyUnifiedWaterAppearanceValues(*waterIt))
+		return false;
+	const auto forceIt = waterIt->find(kLegacyWaterAppearanceForceGlobalKey.data());
+	return forceIt != waterIt->end() && forceIt->is_boolean() && forceIt->get<bool>();
+}
+
+void SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(nlohmann::json& a_adaptiveBalanceLayer)
+{
+	if (!a_adaptiveBalanceLayer.is_object())
+		return;
+
+	const auto clearProfile = [](json& a_profile) {
+		if (!a_profile.is_object())
+			return;
+		if (auto waterIt = a_profile.find("water"); waterIt != a_profile.end() && waterIt->is_object())
+			waterIt->erase(kLegacyWaterProfileExplicitKey.data());
+	};
+
+	if (auto profilesIt = a_adaptiveBalanceLayer.find("profiles"); profilesIt != a_adaptiveBalanceLayer.end() && profilesIt->is_array()) {
+		for (auto& profile : *profilesIt)
+			clearProfile(profile);
+	}
+	if (auto overridesIt = a_adaptiveBalanceLayer.find("locationOverrides"); overridesIt != a_adaptiveBalanceLayer.end() && overridesIt->is_array()) {
+		for (auto& locationOverride : *overridesIt) {
+			if (!locationOverride.is_object())
+				continue;
+			if (auto profileIt = locationOverride.find("profile"); profileIt != locationOverride.end())
+				clearProfile(*profileIt);
+		}
+	}
+}
+
 nlohmann::json SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(nlohmann::json& a_csUtilityLayer)
 {
 	if (!a_csUtilityLayer.is_object())
@@ -274,6 +439,21 @@ nlohmann::json SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(nlohmann::
 		return json::object();
 
 	a_csUtilityLayer = std::move(rootLayer[std::string(kCSUtilitySettingsName)]);
+	auto adaptiveIt = rootLayer.find(kAdaptiveBalanceSettingsName.data());
+	return adaptiveIt != rootLayer.end() && adaptiveIt->is_object() ? std::move(*adaptiveIt) : json::object();
+}
+
+nlohmann::json SettingsMigrations::ExtractAdaptiveBalanceWaterFeaturePatch(nlohmann::json& a_unifiedWaterLayer)
+{
+	if (!a_unifiedWaterLayer.is_object())
+		return json::object();
+
+	json rootLayer = json::object();
+	rootLayer[std::string(kUnifiedWaterSettingsName)] = a_unifiedWaterLayer;
+	if (!MigrateAdaptiveBalanceRootLayer(rootLayer, true))
+		return json::object();
+
+	a_unifiedWaterLayer = std::move(rootLayer[std::string(kUnifiedWaterSettingsName)]);
 	auto adaptiveIt = rootLayer.find(kAdaptiveBalanceSettingsName.data());
 	return adaptiveIt != rootLayer.end() && adaptiveIt->is_object() ? std::move(*adaptiveIt) : json::object();
 }

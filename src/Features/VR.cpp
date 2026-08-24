@@ -3943,6 +3943,29 @@ void VR::ReleaseMenuDesktopWindowManagement()
 
 void VR::SubmitCaptureIndicator(bool a_visible)
 {
+	captureIndicatorVisible.store(a_visible, std::memory_order_release);
+	if (IsOpenCompositeRuntime()) {
+		// OpenComposite exposes IVROverlay, but its tracked-device-relative overlays
+		// are presented in Skyrim's scene space. Composite the indicator into each
+		// submitted eye after capture instead, which makes its screen position
+		// genuinely headset locked while keeping it out of saved frames.
+		if (a_visible) {
+			InstallSubmitHook();
+			if (!inSceneResources.initialized) {
+				InitInSceneResources();
+			}
+			EnsureInSceneOverlaySubmitCopyResources();
+		}
+		if (captureIndicatorOverlayHandle != vr::k_ulOverlayHandleInvalid) {
+			if (auto* openvr = RE::BSOpenVR::GetSingleton()) {
+				if (auto* overlay = RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext)) {
+					overlay->HideOverlay(captureIndicatorOverlayHandle);
+				}
+			}
+		}
+		return;
+	}
+
 	if (!openVRInfo.isCompatible || !openVRInfo.hasOverlayInterface) {
 		return;
 	}

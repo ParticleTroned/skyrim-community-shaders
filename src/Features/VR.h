@@ -6,6 +6,7 @@
 #include "Utils/Input.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
@@ -468,6 +469,10 @@ public:
 	void MarkAutoHideOverlayPresented();
 	bool ShouldPresentOverlayInHeadset() const;
 	bool ShouldUseInSceneOverlay() const;
+	bool ShouldRenderCaptureIndicatorInScene() const
+	{
+		return IsOpenCompositeRuntime() && captureIndicatorVisible.load(std::memory_order_acquire);
+	}
 	bool CanOpenMenuFromWorld() const;
 
 	void UpdateOverlayDrag();
@@ -487,6 +492,7 @@ public:
 	vr::VROverlayHandle_t menuOverlayHandle = vr::k_ulOverlayHandleInvalid;
 	vr::VROverlayHandle_t menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
 	vr::VROverlayHandle_t captureIndicatorOverlayHandle = vr::k_ulOverlayHandleInvalid;
+	std::atomic_bool captureIndicatorVisible{ false };
 	winrt::com_ptr<ID3D11Texture2D> captureIndicatorTexture;
 	winrt::com_ptr<ID3D11Texture2D> menuTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> menuRTV;
@@ -662,6 +668,8 @@ public:
 		winrt::com_ptr<ID3D11ShaderResourceView> menuControllerSRV;
 		winrt::com_ptr<ID3D11ComputeShader> submitCompositeCS;
 		winrt::com_ptr<ID3D11Buffer> submitCompositeCB;
+		winrt::com_ptr<ID3D11ComputeShader> submitIndicatorCS;
+		winrt::com_ptr<ID3D11Buffer> submitIndicatorCB;
 		ID3D11Texture2D* cachedMenuTexture = nullptr;
 		ID3D11Texture2D* cachedMenuControllerTexture = nullptr;
 
@@ -706,6 +714,17 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(SubmitCompositeCB);
 
+	struct alignas(16) SubmitIndicatorCB
+	{
+		uint32_t targetSize[2];
+		uint32_t dispatchOrigin[2];
+		uint32_t dispatchSize[2];
+		float centrePixels[2];
+		float radiusPixels;
+		float padding[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(SubmitIndicatorCB);
+
 public:
 	//=============================================================================
 	// PRIVATE IMPLEMENTATION
@@ -730,6 +749,11 @@ public:
 		const D3D11_TEXTURE2D_DESC& targetDesc,
 		const vr::VRTextureBounds_t* bounds,
 		bool* overlayComposited = nullptr);
+	void CompositeCaptureIndicatorSubmitTexture(
+		ID3D11UnorderedAccessView* targetUAV,
+		const D3D11_TEXTURE2D_DESC& targetDesc,
+		const vr::VRTextureBounds_t* bounds,
+		bool* indicatorComposited = nullptr);
 	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
 	bool InstallSubmitHook(bool a_enableProcessing = true);
 	bool GetGripPressed(bool isLeft, bool isRight) const;

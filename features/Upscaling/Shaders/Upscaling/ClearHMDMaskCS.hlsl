@@ -68,6 +68,58 @@ bool IsDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 	return hidden;
 }
 
+void EvaluateAuditDepthCandidates(
+	uint2 depthPos,
+	uint2 depthDimensions,
+	out bool robustClear,
+	out bool thresholdCenterClear,
+	out bool threshold3x3Clear,
+	out bool thresholdCrossR2Clear,
+	out bool thresholdRingR2Clear)
+{
+	robustClear = false;
+	thresholdCenterClear = false;
+	threshold3x3Clear = false;
+	thresholdCrossR2Clear = false;
+	thresholdRingR2Clear = false;
+
+	[unroll]
+	for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y) {
+		[unroll]
+		for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x) {
+			const int2 samplePos = int2(depthPos) + int2(x, y);
+			if (any(samplePos < int2(0, 0)) ||
+				samplePos.x >= int(depthDimensions.x) ||
+				samplePos.y >= int(depthDimensions.y)) {
+				continue;
+			}
+
+			const bool hidden = IsHiddenDepth(DepthIn[uint2(samplePos)]);
+			robustClear = robustClear || hidden;
+			thresholdCenterClear = thresholdCenterClear || (hidden && x == 0 && y == 0);
+			threshold3x3Clear = threshold3x3Clear || (hidden && abs(x) <= 1 && abs(y) <= 1);
+			thresholdCrossR2Clear = thresholdCrossR2Clear ||
+				(hidden && ((x == 0 && (y == 0 || abs(y) == 2)) ||
+					(y == 0 && abs(x) == 2)));
+			thresholdRingR2Clear = thresholdRingR2Clear ||
+				(hidden && (x == 0 || abs(x) == 2) && (y == 0 || abs(y) == 2));
+		}
+	}
+}
+
+void RecordAuditCandidate(uint candidateIndex, bool robustClear, bool candidateClear, inout uint ignored)
+{
+	const uint counterBase = 32u + candidateIndex * 16u;
+	if (candidateClear)
+		HMDMaskAuditCounters.InterlockedAdd(counterBase, 1u, ignored);
+	if (robustClear && !candidateClear)
+		HMDMaskAuditCounters.InterlockedAdd(counterBase + 4u, 1u, ignored);
+	if (!robustClear && candidateClear)
+		HMDMaskAuditCounters.InterlockedAdd(counterBase + 8u, 1u, ignored);
+	if (robustClear != candidateClear)
+		HMDMaskAuditCounters.InterlockedAdd(counterBase + 12u, 1u, ignored);
+}
+
 static const uint kProbeGridSize = 9;
 
 uint ResolveProbeCoordinate(uint index, uint extent)
@@ -239,7 +291,10 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 // 2x2 stratified sample keeps captures representative and bounded while still
 // evaluating the display-domain mapping used by the production scrub.
 // Counter layout (uint32): evaluated, robust-clear, candidate-clear,
-// false-negative, false-positive, mismatch, invalid-mask-lookup, dispatches.
+// false-negative, false-positive, mismatch, invalid-mask-lookup, dispatches,
+// then four counters (candidate-clear, false-negative, false-positive,
+// mismatch) for each audit-only threshold candidate in this order:
+// center, 3x3, radius-2 cross, radius-2 ring.
 [numthreads(8, 8, 1)] void DevBenchHMDMaskQualityMain(uint3 dispatchID : SV_DispatchThreadID)
 {
 	const uint2 localColorPos = dispatchID.xy * kAuditSampleStride + 1u;
@@ -257,8 +312,19 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 	if (depthPos.x >= depthTexWidth || depthPos.y >= depthTexHeight)
 		return;
 
-	const bool robustClear =
-		IsDilatedHiddenDepth(depthPos, uint2(depthTexWidth, depthTexHeight));
+	bool robustClear;
+	bool thresholdCenterClear;
+	bool threshold3x3Clear;
+	bool thresholdCrossR2Clear;
+	bool thresholdRingR2Clear;
+	EvaluateAuditDepthCandidates(
+		depthPos,
+		uint2(depthTexWidth, depthTexHeight),
+		robustClear,
+		thresholdCenterClear,
+		threshold3x3Clear,
+		thresholdCrossR2Clear,
+		thresholdRingR2Clear);
 	bool candidateClear = robustClear;
 	bool invalidMaskLookup = false;
 	if (AuditCandidateMode == kAuditCandidateLegacySingleSample) {
@@ -292,4 +358,9 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		HMDMaskAuditCounters.InterlockedAdd(24, 1u, ignored);
 	if (dispatchID.x == 0 && dispatchID.y == 0)
 		HMDMaskAuditCounters.InterlockedAdd(28, 1u, ignored);
+
+	RecordAuditCandidate(0u, robustClear, thresholdCenterClear, ignored);
+	RecordAuditCandidate(1u, robustClear, threshold3x3Clear, ignored);
+	RecordAuditCandidate(2u, robustClear, thresholdCrossR2Clear, ignored);
+	RecordAuditCandidate(3u, robustClear, thresholdRingR2Clear, ignored);
 }

@@ -1842,9 +1842,8 @@ public:
 	std::atomic<uint64_t> vrHMDMaskFinalReducedDispatches{ 0 };
 	std::atomic<uint64_t> vrHMDMaskReducedFinalFallbacks{ 0 };
 	std::atomic<uint64_t> vrHMDMaskVerifiedRobustDispatches{ 0 };
-
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	static constexpr uint32_t kVRHMDMaskQualityCounterCount = 8;
+	static constexpr uint32_t kVRHMDMaskQualityCounterCount = 24;
 	winrt::com_ptr<ID3D11Device> vrHMDMaskQualityDevice;
 	winrt::com_ptr<ID3D11ComputeShader> vrHMDMaskQualityCS;
 	winrt::com_ptr<ID3D11Buffer> vrHMDMaskQualityCounterBuffer;

@@ -15034,9 +15034,10 @@ bool Upscaling::SetHMDMaskImplementationMode(
 	HMDMaskImplementationMode a_mode,
 	const char* a_reason)
 {
-	if (a_mode != HMDMaskImplementationMode::RobustDepth5x5 &&
-		a_mode != HMDMaskImplementationMode::LegacyExactZero &&
-		a_mode != HMDMaskImplementationMode::ReducedResolutionMask) {
+	const bool supported = a_mode == HMDMaskImplementationMode::RobustDepth5x5 ||
+		a_mode == HMDMaskImplementationMode::LegacyExactZero ||
+		a_mode == HMDMaskImplementationMode::ReducedResolutionMask;
+	if (!supported) {
 		return false;
 	}
 	if (GetHMDMaskImplementationMode() == a_mode)
@@ -40508,8 +40509,45 @@ json Upscaling::BuildVRHMDMaskDiagnosticsStatus()
 		           static_cast<double>(a_numerator) / static_cast<double>(a_denominator) :
 		           0.0;
 	};
+	const uint64_t legacyFalseNegatives = vrHMDMaskQualityResults[3];
+	json legacyMissClassification = json::array();
+	constexpr std::array<const char*, 4> candidateNames{
+		"threshold_center",
+		"threshold_3x3",
+		"threshold_cross_r2",
+		"threshold_pattern_r2"
+	};
+	constexpr std::array<uint32_t, 4> candidateTapCounts{ 1, 9, 5, 9 };
+	for (uint32_t candidateIndex = 0; candidateIndex < candidateNames.size(); ++candidateIndex) {
+		const uint32_t counterBase = 8u + candidateIndex * 4u;
+		const uint64_t falseNegatives = vrHMDMaskQualityResults[counterBase + 1u];
+		const uint64_t recoveredLegacyMisses =
+			legacyFalseNegatives >= falseNegatives ? legacyFalseNegatives - falseNegatives : 0u;
+		legacyMissClassification.push_back({
+			{ "pattern", candidateNames[candidateIndex] },
+			{ "depthTaps", candidateTapCounts[candidateIndex] },
+			{ "candidateClearSamples", vrHMDMaskQualityResults[counterBase] },
+			{ "legacyMissesRecovered", recoveredLegacyMisses },
+			{ "legacyMissRecoveryRate", ratio(recoveredLegacyMisses, legacyFalseNegatives) },
+			{ "remainingFalseNegatives", falseNegatives },
+			{ "remainingFalseNegativeRateAmongRobustClear", ratio(falseNegatives, robustClear) },
+			{ "falsePositives", vrHMDMaskQualityResults[counterBase + 2u] },
+			{ "mismatches", vrHMDMaskQualityResults[counterBase + 3u] },
+		});
+	}
+	legacyMissClassification.push_back({
+		{ "pattern", "full_5x5_reference" },
+		{ "depthTaps", 25 },
+		{ "candidateClearSamples", robustClear },
+		{ "legacyMissesRecovered", legacyFalseNegatives },
+		{ "legacyMissRecoveryRate", ratio(legacyFalseNegatives, legacyFalseNegatives) },
+		{ "remainingFalseNegatives", 0 },
+		{ "remainingFalseNegativeRateAmongRobustClear", 0.0 },
+		{ "falsePositives", 0 },
+		{ "mismatches", 0 },
+	});
 	return {
-		{ "apiVersion", 1 },
+		{ "apiVersion", 2 },
 		{ "mode", GetHMDMaskImplementationModeName(GetHMDMaskImplementationMode()) },
 		{ "modeOptions", json::array({ "robust_depth_5x5", "legacy_exact_zero", "reduced_resolution_mask" }) },
 		{ "loggingRequirement", "Info is sufficient" },
@@ -40562,6 +40600,8 @@ json Upscaling::BuildVRHMDMaskDiagnosticsStatus()
 			{ "auditedDispatches", vrHMDMaskQualityResults[7] },
 			{ "mismatchRate", ratio(mismatches, evaluated) },
 			{ "falseNegativeRateAmongRobustClear", ratio(vrHMDMaskQualityResults[3], robustClear) },
+			{ "legacyMissClassificationValid", vrHMDMaskQualityMode == HMDMaskImplementationMode::LegacyExactZero },
+			{ "legacyMissClassification", std::move(legacyMissClassification) },
 			{ "warning", "The fidelity audit adds a separate GPU pass; do not use the same run for performance conclusions." },
 		} },
 	};

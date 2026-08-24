@@ -527,7 +527,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							  const Upscaling::VRRenderScalePresentationObservation* a_probeObservation = nullptr,
 							  Upscaling::VRPostLoadCompositorKeepaliveDisposition* a_keepaliveDisposition = nullptr,
 							  bool a_allowPostLoadScopeRebase = false,
-							  bool a_allowScreenshotCapture = true) {
+							  bool a_allowScreenshotCapture = true,
+							  const vr::Texture_t* a_screenshotTexture = nullptr,
+							  const vr::VRTextureBounds_t* a_screenshotBounds = nullptr) {
 				(void)a_probeObservation;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				const uint64_t probeSequence = upscaling.BeginVRLoadPresentationProbeSubmit(
@@ -545,14 +547,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				const bool observeScreenshot =
 					a_allowScreenshotCapture &&
 					globals::features::screenshotFeature.HasPendingCapture();
+				const vr::Texture_t* screenshotTexture = a_screenshotTexture ? a_screenshotTexture : a_texture;
+				const vr::VRTextureBounds_t* screenshotBounds = a_screenshotTexture ? a_screenshotBounds : a_bounds;
 				{
 					const std::shared_lock renderTargetReadLock(
 						Hooks::GetRenderTargetRecreationMutex());
 					if (observeScreenshot &&
-						a_texture &&
-						a_texture->handle &&
-						a_texture->eType == vr::TextureType_DirectX) {
-						submitTextureLifetime = ResolveSubmitTexture2D(a_texture->handle);
+						screenshotTexture &&
+						screenshotTexture->handle &&
+						screenshotTexture->eType == vr::TextureType_DirectX) {
+						submitTextureLifetime = ResolveSubmitTexture2D(screenshotTexture->handle);
 					}
 					result = func(
 						_this,
@@ -568,8 +572,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							compositorCycleToken,
 							eEye,
 							submitTextureLifetime.get(),
-							a_bounds,
-							a_texture->eColorSpace);
+							screenshotBounds,
+							screenshotTexture->eColorSpace);
 					}
 				}
 				uint64_t completionScopeEpoch =
@@ -1276,7 +1280,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 								nSubmitFlags,
 								postLoadReleaseToken,
 								0,
-								&presentationObservation);
+								&presentationObservation,
+								nullptr,
+								false,
+								true,
+								&upscaledTexture,
+								&upscaledBounds);
 							if (result == vr::VRCompositorError_None) {
 								upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
 								if (inSceneOverlayComposited) {
@@ -1436,7 +1445,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							"in-scene-overlay",
 							&overlayTexture,
 							pBounds,
-							nSubmitFlags);
+							nSubmitFlags,
+							0,
+							0,
+							nullptr,
+							nullptr,
+							false,
+							true,
+							pTexture,
+							pBounds);
 						if (result == vr::VRCompositorError_None) {
 							vr.MarkAutoHideOverlayPresented();
 						}

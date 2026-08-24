@@ -1,6 +1,6 @@
 #pragma once
 
-namespace VolumetricLightingCacheRefreshPolicy
+namespace VRDepthCullingCacheRefreshPolicy
 {
 	enum class Action
 	{
@@ -17,7 +17,15 @@ namespace VolumetricLightingCacheRefreshPolicy
 		bool shaderCompilationActive = false;
 	};
 
-	constexpr Action SelectAction(const State& a_state)
+	constexpr bool ShouldRequest(
+		bool a_effectiveDepthCulling,
+		bool a_refreshCompleted,
+		bool a_refreshPending) noexcept
+	{
+		return a_effectiveDepthCulling && !a_refreshCompleted && !a_refreshPending;
+	}
+
+	constexpr Action SelectAction(const State& a_state) noexcept
 	{
 		if (!a_state.requested)
 			return Action::None;

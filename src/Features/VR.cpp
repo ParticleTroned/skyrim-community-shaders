@@ -3985,7 +3985,9 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 		transform.m[1][1] = 1.0f;
 		transform.m[2][2] = 1.0f;
 		transform.m[0][3] = 0.34f;
-		transform.m[1][3] = 0.20f;
+		// Keep the recording state comfortably inside the upper-right headset view.
+		// The previous 0.20 m offset sat near the lower edge on wide-FOV headsets.
+		transform.m[1][3] = 0.38f;
 		transform.m[2][3] = -1.0f;
 		cleanOverlay->SetOverlayTransformTrackedDeviceRelative(
 			captureIndicatorOverlayHandle,

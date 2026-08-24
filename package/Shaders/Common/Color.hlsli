@@ -207,7 +207,7 @@ namespace Color
 	const static float PBRLightingScale = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : 0.65;
 
 	// Attempt to normalise reflection brightness against DALC
-	const static float ReflectionNormalisationScale = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : 1.0;
+	const static float ReflectionNormalisationScale = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : 0.65;
 
 	const static float PBRLightingCompensation = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : Math::PI;
 

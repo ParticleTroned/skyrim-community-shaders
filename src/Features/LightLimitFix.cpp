@@ -3351,13 +3351,13 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 	if (directionalSlotSafe) {
 		func(This, Pass, RenderFlags);
 	} else if (auto* state = globals::state) {
-		// The shared Lighting hook normally clears this per-draw bit. LLF can
-		// deliberately skip that hook for an unsafe engine pass, so clear it here
-		// as a fail-safe against carrying a transition classification forward.
+		// The shared Lighting hook normally clears these per-draw values. LLF can
+		// deliberately skip that hook for an unsafe engine pass, so clear them here
+		// as a fail-safe against carrying a transition or LAND classification forward.
 		constexpr auto meshBlendingMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending);
-		if ((state->permutationData.ExtraShaderDescriptor & meshBlendingMask) != 0u) {
-			state->permutationData.ExtraShaderDescriptor &= ~meshBlendingMask;
-		}
+		constexpr auto landscapeClassMask = static_cast<std::uint32_t>(State::ExtraFeatureDescriptors::MeshBlendingLandscapeClasses);
+		state->permutationData.ExtraShaderDescriptor &= ~meshBlendingMask;
+		state->permutationData.ExtraFeatureDescriptor &= ~landscapeClassMask;
 	}
 	singleton.BSLightingShader_SetupGeometry_After(Pass);
 }

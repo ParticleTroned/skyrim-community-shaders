@@ -166,11 +166,13 @@ namespace
 	static_assert(offsetof(BloomSettingsCB, CompressionThreshold) == 32);
 	static_assert(offsetof(BloomSettingsCB, CompressionCeiling) == 36);
 	static_assert(offsetof(BloomSettingsCB, BlendWeight) == 40);
-	static_assert(sizeof(MeshBlendingSettingsCB) == 16);
+	static_assert(sizeof(MeshBlendingSettingsCB) == 32);
 	static_assert(offsetof(MeshBlendingSettingsCB, BlendStrength) == 0);
 	static_assert(offsetof(MeshBlendingSettingsCB, BlendWidth) == 4);
 	static_assert(offsetof(MeshBlendingSettingsCB, DepthBias) == 8);
 	static_assert(offsetof(MeshBlendingSettingsCB, MaximumGap) == 12);
+	static_assert(offsetof(MeshBlendingSettingsCB, EnableLandscapeBlending) == 16);
+	static_assert(offsetof(MeshBlendingSettingsCB, ProjectedSnowEdgeWidth) == 20);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);
 	static_assert(std::is_trivially_copyable_v<FeatureDataLayout>);

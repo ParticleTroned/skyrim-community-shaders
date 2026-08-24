@@ -960,8 +960,20 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "TerrainBlending/TerrainBlending.hlsli"
 #	endif
 
-#	if defined(MESH_BLENDING) &&                                                                                       \
-		!defined(LANDSCAPE) && !defined(LOD) && !defined(LODLANDSCAPE) &&                                               \
+#	if defined(MESH_BLENDING) && !defined(LOD) && !defined(LODLANDSCAPE) && \
+		(defined(LANDSCAPE) ||                                                                                           \
+		 (defined(MULTI_INDEX) && defined(PROJECTED_UV) && defined(SPARKLE) && !defined(BACK_LIGHTING) &&               \
+		  !defined(DO_ALPHA_TEST)))
+#		include "MeshBlending/MeshBlending.hlsli"
+#		if defined(LANDSCAPE)
+#			define MESH_BLENDING_LANDSCAPE_AVAILABLE
+#		endif
+#		if defined(MULTI_INDEX) && defined(PROJECTED_UV) && defined(SPARKLE) && !defined(BACK_LIGHTING) && \
+			!defined(DO_ALPHA_TEST)
+#			define MESH_BLENDING_PROJECTED_SNOW_AVAILABLE
+#		endif
+#	elif defined(MESH_BLENDING) &&                                                                                     \
+		!defined(LOD) && !defined(LODLANDSCAPE) &&                                                                       \
 		!defined(SKIN) && !defined(SKINNED) && !defined(HAIR) && !defined(EYE) && !defined(TREE_ANIM) &&                \
 		!defined(FACEGEN) && !defined(FACEGEN_RGB_TINT) && !defined(PROJECTED_UV) && !defined(DEPTH_WRITE_DECALS) &&    \
 		!defined(ENVMAP) &&                                                                                             \
@@ -2462,6 +2474,33 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Initialize mip levels for non-EMAT case
 	mipLevels[0] = mipLevels[1] = mipLevels[2] = mipLevels[3] = mipLevels[4] = mipLevels[5] = 0.0;
 #		endif  // EMAT
+
+#		if defined(MESH_BLENDING_LANDSCAPE_AVAILABLE)
+	// EMAT height blending, when active, has now produced its final six
+	// weights. Rebalance those weights before any LAND texture is sampled.
+	bool meshBlendingLandscapeWeightsChanged = false;
+	[branch] if (SharedData::meshBlendingSettings.EnableLandscapeBlending != 0u &&
+	             (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::MeshBlendingLandscapeClasses) != 0u)
+	{
+		float4 meshBlendingLandscapeWeights1 = input.LandBlendWeights1;
+		float2 meshBlendingLandscapeWeights2 = input.LandBlendWeights2.xy;
+		meshBlendingLandscapeWeightsChanged = MeshBlending::RemapLandscapeWeights(
+			meshBlendingLandscapeWeights1,
+			meshBlendingLandscapeWeights2,
+			Permutation::ExtraFeatureDescriptor,
+			SharedData::meshBlendingSettings.BlendStrength);
+		if (meshBlendingLandscapeWeightsChanged) {
+			input.LandBlendWeights1 = meshBlendingLandscapeWeights1;
+			input.LandBlendWeights2.xy = meshBlendingLandscapeWeights2;
+		}
+	}
+#			if !defined(TRUE_PBR)
+	if (meshBlendingLandscapeWeightsChanged) {
+		shininess = dot(input.LandBlendWeights1, LandscapeTexture1to4IsSpecPower) +
+		            dot(input.LandBlendWeights2.xy, LandscapeTexture5to6IsSpecPower.xy);
+	}
+#			endif
+#		endif
 #	endif      // LANDSCAPE
 
 #	if defined(SPARKLE)
@@ -3184,6 +3223,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float projectedMaterialWeight = 0;
 
+#	if defined(MESH_BLENDING_PROJECTED_SNOW_AVAILABLE)
+	float meshBlendingProjectedSnowCoverage = 1.0f;
+#	endif
+
 	float projWeight = 0;
 
 #	if defined(PROJECTED_UV)
@@ -3203,6 +3246,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	projWeight += (-0.5 + input.Color.w) * 2.5;
 #		endif  // LODOBJECTSHD
 #		if defined(SPARKLE)
+
+#			if defined(MESH_BLENDING_PROJECTED_SNOW_AVAILABLE)
+	// Multi-index projected snow normally has a binary projection discard. On
+	// accepted snow-overlay draws only, retain fragments in a derivative-sized
+	// edge band and pass fractional coverage to the final alpha.
+	[branch] if (SharedData::meshBlendingSettings.ProjectedSnowEdgeWidth > 0.0f && MeshBlending::ShouldApply())
+	{
+		meshBlendingProjectedSnowCoverage = MeshBlending::ComputeProjectedSnowCoverage(
+			projWeight,
+			fwidth(projWeight),
+			SharedData::meshBlendingSettings.ProjectedSnowEdgeWidth);
+		if (meshBlendingProjectedSnowCoverage <= 0.0f)
+			discard;
+	}
+	else
+#			endif
 	if (projWeight < 0)
 		discard;
 
@@ -4657,6 +4716,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif  // ANISOTROPIC_ALPHA
 
 	psout.Diffuse.w = alpha;
+#	endif
+
+#	if defined(MESH_BLENDING_PROJECTED_SNOW_AVAILABLE)
+	psout.Diffuse.w *= meshBlendingProjectedSnowCoverage;
 #	endif
 
 #	if defined(MESH_BLENDING_AVAILABLE) && !defined(DEFERRED)

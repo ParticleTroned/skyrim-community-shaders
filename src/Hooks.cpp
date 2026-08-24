@@ -780,12 +780,15 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			auto& meshBlending = globals::features::meshBlending;
-			constexpr auto meshBlendingMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending);
 			if (meshBlending.loaded) {
 				meshBlending.PrepareLightingDraw(pass);
-			} else if (auto* state = globals::state;
-				state && (state->permutationData.ExtraShaderDescriptor & meshBlendingMask) != 0u) {
-				meshBlending.PrepareLightingDraw(pass);
+			} else if (auto* state = globals::state) {
+				// PrepareLightingDraw owns per-draw cleanup while loaded. Preserve the
+				// same cleanup when the feature package is removed at runtime.
+				constexpr auto meshBlendingMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending);
+				constexpr auto landscapeClassMask = static_cast<std::uint32_t>(State::ExtraFeatureDescriptors::MeshBlendingLandscapeClasses);
+				state->permutationData.ExtraShaderDescriptor &= ~meshBlendingMask;
+				state->permutationData.ExtraFeatureDescriptor &= ~landscapeClassMask;
 			}
 			func(shader, pass, renderFlags);
 
@@ -1537,12 +1540,20 @@ namespace Hooks
 
 			// setup material for PBR
 			auto& truePBR = globals::features::truePBR;
+			bool result = vanillaResult;
 			if (truePBR.loaded && truePBR.TESObjectLAND_SetupMaterial(land)) {
-				// if PBR, we are done
-				return true;
+				result = true;
 			}
 
-			return vanillaResult;
+			// Capture only after the final vanilla/TruePBR properties have been
+			// installed. TerrainHelper intentionally runs earlier because it needs
+			// the original vanilla material hash.
+			auto& meshBlending = globals::features::meshBlending;
+			if (result && meshBlending.loaded) {
+				meshBlending.CaptureLandscapeMaterials(land);
+			}
+
+			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

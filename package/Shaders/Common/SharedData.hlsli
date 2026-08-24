@@ -415,6 +415,10 @@ namespace SharedData
 		float BlendWidth;
 		float DepthBias;
 		float MaximumGap;
+
+		uint EnableLandscapeBlending;
+		float ProjectedSnowEdgeWidth;
+		float2 pad0;
 	};
 
 	cbuffer FeatureData : register(b6)

@@ -268,6 +268,10 @@ public:
 		MeshBlending = 1 << 8
 	};
 
+	static constexpr std::uint32_t MeshBlendingLandscapeClassShift = 10u;
+	static constexpr std::uint32_t MeshBlendingLandscapeClassBits = 2u;
+	static constexpr std::uint32_t MeshBlendingLandscapeClassCount = 6u;
+
 	enum class ExtraFeatureDescriptors : uint32_t
 	{
 		THLand0HasDisplacement = 1 << 0,
@@ -277,8 +281,19 @@ public:
 		THLand4HasDisplacement = 1 << 4,
 		THLand5HasDisplacement = 1 << 5,
 		ETMaterialModel = 0b111 << 6,
-		THLandHasDisplacement = 1 << 9
+		THLandHasDisplacement = 1 << 9,
+		// Six 2-bit LAND material classes, ordered like the terrain texture layers.
+		// Values are interpreted by MeshBlending as Unknown, Hard, Soft, Reserved.
+		MeshBlendingLandscapeClasses = 0x003FFC00u
 	};
+	static_assert(
+		static_cast<std::uint32_t>(ExtraFeatureDescriptors::MeshBlendingLandscapeClasses) ==
+		(((1u << (MeshBlendingLandscapeClassBits * MeshBlendingLandscapeClassCount)) - 1u) << MeshBlendingLandscapeClassShift));
+	static_assert(
+		(static_cast<std::uint32_t>(ExtraFeatureDescriptors::MeshBlendingLandscapeClasses) &
+			(static_cast<std::uint32_t>(ExtraFeatureDescriptors::ETMaterialModel) |
+			 static_cast<std::uint32_t>(ExtraFeatureDescriptors::THLandHasDisplacement) |
+			 ((1u << MeshBlendingLandscapeClassShift) - 1u))) == 0u);
 
 	bool inWorld = false;
 	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();

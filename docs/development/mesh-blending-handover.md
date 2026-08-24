@@ -2,19 +2,19 @@
 
 ## Status
 
-- The first conservative implementation now exists on `PR/nif-blending`, based on tag `RC173`.
-- The original proposal was re-evaluated against RC173 before implementation; the decisions below supersede stale integration details in the handover.
-- Static source checks pass. In accordance with the no-build instruction, the final source, shader permutations, C++ integration, and runtime behaviour remain unbuilt and require later validation.
-- The design intentionally avoids NIF edits and new engine-address hooks.
-- The initial implementation should target the normal world `BSLightingShader` path. Reflection, cubemap, shadow, water, effect, and other specialised passes are explicitly outside the MVP.
+- The implementation is on `pr/nif-blending`, rebased onto `main-VR` at `886733e8e`.
+- It contains two independent paths: a depth-gap fade for selected NIF transition shapes and a LAND/LTEX weight remap for material boundaries inside one landscape draw.
+- In accordance with the no-build instruction, the restored source and shader integration remain unbuilt and require later SE/AE/VR runtime validation.
+- The design intentionally avoids NIF edits, extra render targets, extra draw passes, and new engine-address hooks.
+- Both paths target the normal world `BSLightingShader` path. Reflection, cubemap, shadow, water, effect, and other specialised passes remain outside the feature boundary.
 
-## RC173 implementation decisions
+## Current implementation decisions
 
 - Descriptor bit 8 is used because RC173 already mirrors `IsFemale` at bit 6 and uses bit 7 for external-emittance suppression.
 - The descriptor is prepared before the original shared Lighting `SetupGeometry` call, matching the per-draw timing used by Extended Translucency and avoiding a possible dirty-state upload inside the original call.
 - Static ownership is proven with `TESObjectREFR::Get3D()` plus a bounded ancestry walk. The nearest `BSFadeNode` is not treated as authoritative ownership.
 - Model and node rules use an active `ExtraModelSwap` path when present, falling back to the base static model. The selected model and path identities participate in cache validation.
-- The shipped default is strict automatic classification. Allow-list-only remains available for curated deployments, and deny rules always override automatic candidates.
+- The shipped default is **Automatic** classification. Allow-list-only remains available for curated deployments, and deny rules always override automatic candidates.
 - Allow rules bypass the sibling and bounds heuristic only. They do not bypass source render-state, material, static-owner, animation, pass, or distance safety gates; deny rules always win.
 - Renderer submission remains the primary visibility/frustum/portal culling mechanism. A configurable 8192-unit camera/eye-centered bubble rejects distant candidates before owner lookup, cache lookup, string construction, or sibling traversal; zero disables the bubble.
 - Classification uses a fixed 4096-entry, four-way set-associative cache with no owning references and a hard 256-object traversal cap. With no effective allow/deny rules, validated source/material/parent state can hit before owner resolution and is revalidated after a geometry-jittered 120–183 frames; configured policy retains the full model/owner signature lookup and 600–855-frame interval. Jitter avoids a cell-wide reclassification spike; distance rejects are deliberately not cached. Developer diagnostics separate pre-owner hits, full policy-signature hits, and owner-resolution attempts.
@@ -26,12 +26,19 @@
 - Known-ineligible Lighting permutations are removed at shader compile time. The remaining permutations take one uniform fast-path branch, and only CPU-qualified transition draws sample depth.
 - If Light Limit Fix skips the shared Lighting hook for an unsafe directional-light slot, it explicitly clears the Mesh Blending descriptor so stale per-draw state cannot leak.
 - The feature is intentionally non-core and its standalone package has `autoupload = false`; publication remains an explicit release decision.
-- User sliders and toggles remain in `SettingsUser.json`, while generated allow/deny policy is isolated in the atomically written `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json`.
-- The normal feature UI exposes a session-only **Discover Blendable Meshes** toggle. Discovery applies the same distance bubble and bounded strict classifier, records at most 1024 unique exact model/node candidates, performs no disk I/O while walking, and costs additional CPU time only while active.
+- User sliders and toggles remain in `SettingsUser.json`, while manual policy, detected mesh candidates, and LAND/LTEX material assignments are isolated in the atomically written `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json`.
+- The normal feature UI exposes **Record Visible Material Identities**. It records bounded, unique NIF and LTEX identities only as they stream or render; it does not scan installed files and performs no disk I/O until **Save Detected Materials** is pressed.
+- LAND material capture occurs after vanilla or True PBR installs the final quadrant properties. Each of the four quadrant draws records the default LTEX plus five overlays and publishes six 2-bit classes through a bounded registry.
+- LAND classes occupy `ExtraFeatureDescriptor` bits 10–21. They do not overlap Terrain Helper bits 0–5 and 9 or Extended Translucency bits 6–8.
+- The LAND shader remaps the six existing weights before texture sampling. It never activates an authored-inactive layer and therefore adds no texture samples.
+- Unknown or reserved material classes fail open. Soft-over-hard favours the soft layer, every already-active soft/soft overlap converges toward equal coverage, and hard/hard keeps the dominant hard layer.
 
 ## Executive summary
 
-Implement a Community Shaders feature named **Mesh Blending**. It should soften the intersection between a transparent transition layer and an opaque surface behind it.
+Implement a Community Shaders feature named **Mesh Blending**. It softens two distinct kinds of terrain seam:
+
+1. the intersection between a transparent NIF transition layer and an opaque surface behind it; and
+2. authored LTEX boundaries inside one `LANDSCAPE` draw by remapping its existing six landscape weights.
 
 The principal target is a static NIF containing:
 
@@ -50,7 +57,7 @@ The MVP should:
 6. Multiply the shape's already-computed alpha by a narrow depth-gap fade.
 7. Preserve the original blend, depth, sorting, alpha-test, and material states.
 
-The inexpensive path adds no geometry pass. Its GPU cost is one depth load and a small amount of arithmetic only on affected pixels. It does not prove that the sampled opaque depth belongs to the same NIF. A later robust mode can add receiver depth and group IDs if real-world testing shows ownership mistakes.
+Both paths avoid additional geometry and full-screen passes. The NIF path costs one depth load and a small amount of arithmetic only on accepted source pixels. The LAND path uses bounded arithmetic on accepted landscape pixels and performs no extra texture or depth reads. The NIF path cannot prove that sampled opaque depth belongs to the same asset, while the LAND path cannot invent absent layer overlap or blend a boundary baked into one diffuse texture.
 
 ## Problem statement
 
@@ -75,6 +82,8 @@ The desired result is analogous to a soft-particle intersection fade, applied on
 - Work with placed instances of replaced or modded meshes.
 - Avoid full-screen processing and additional geometry passes in the MVP.
 - Compose predictably with Extended Translucency and Terrain Blending.
+- Blend compatible soft and hard LTEX layers inside the existing LAND shader independently of Terrain Blending.
+- Keep classification, discovery, and rendering work bounded from the first implementation.
 - Keep a path open for a stricter receiver-ownership implementation later.
 
 ## Non-goals for the MVP
@@ -86,7 +95,8 @@ The desired result is analogous to a soft-particle intersection fade, applied on
 - Physically blending albedo, normal, roughness, metallic, wetness, or subsurface parameters from two materials.
 - Changing geometry, silhouettes, collision, decals, or shadow geometry.
 - Automatically processing glass, foliage, hair, skin, particles, water, refraction, decals, effects, or animated geometry.
-- Applying to landscape layer transitions inside a `LANDSCAPE` draw. Skyrim LAND already has material blend weights; that is a separate height/weight-blending problem.
+- Inventing an LTEX layer that is absent from the current LAND quadrant, repairing missing cross-quadrant overlap, or interpreting a material boundary baked inside one diffuse texture.
+- Rebuilding LAND geometry, changing `LAND` records, or editing an `LTEX` record on disk.
 - Guaranteeing correct object ownership from a single scene-depth sample.
 
 ## Important terminology
@@ -106,6 +116,27 @@ A fully opaque, non-alpha-tested, Z-tested, Z-writing sibling, or the underlying
 ### Soft intersection fade
 
 A multiplier derived from the linear depth gap between the source fragment and the nearest opaque depth behind it. The source fades out as the gap approaches zero, allowing the receiver to show through at the intersection.
+
+### LAND layer and material class
+
+Each nearby landscape quadrant is one renderer draw with a default LTEX and up to five overlay LTEX layers. The layers are not NIF siblings, so the NIF depth-fade classifier and Terrain Blending cannot operate on their internal boundary. Mesh Blending instead classifies the six LTEX identities on the CPU and remaps only the weights already supplied to that LAND pixel.
+
+The shader transport deliberately uses only four compact states: Unknown, Hard, Soft, and Reserved. The CPU rule model retains more descriptive kinds so policy can distinguish snow, ice, dirt/ash/gravel/mud/sand, grass/ground cover, stone/boulder, wood, glass, metal, and generic soft or hard materials. Exact `LandscapeAssignments` take precedence over the bounded `BGSMaterialType` parent-chain fallback. Unknown and invalid data preserve authored weights.
+
+### LAND/LTEX fast path
+
+The LAND path is independent of Terrain Blending:
+
+1. The existing `TESObjectLAND::SetupMaterial` hook first lets vanilla and True PBR install the final properties.
+2. Mesh Blending captures the default and five overlay LTEX pointers for each of four quadrants. A null or zero-form sentinel is resolved like the engine default landscape texture.
+3. Exact assignment rules or at most eight material-parent checks classify each active identity.
+4. A fixed 4096-entry, four-way registry publishes the six packed 2-bit classes under the final geometry/property/material identity. The single capture writer uses an atomic sequence; render lookup is an exact-match, lock-free probe and fails open on a concurrent update.
+5. Each Lighting draw clears the LAND class field. An exact LAND registry hit restores it; all other draws retain zero/Unknown.
+6. The pixel shader remaps the current six weights after final EMAT height weighting and before the first landscape texture sample.
+
+At full strength, a soft/hard overlap transfers `softTotal * hardTotal / knownTotal` from hard to soft, so an authored 50/50 pair becomes 75/25. All already-active soft layers receive equal shares of the target soft aggregate, including when a hard receiver is present. A hard/hard overlap retains the dominant hard material. Pair rules can disable otherwise compatible combinations. The result never gives weight to a layer whose authored weight is at or below `0.01`, and it renormalises surviving known weight without reducing the sampled total because of floating-point error.
+
+The active shader path is three unrolled six-layer arithmetic passes with no added texture fetch, depth fetch, geometry, or render target. The uniform disabled path performs no LAND registry lookup and no per-pixel remap. Bounded classification still occurs when LAND streams in so the toggle can be activated live; material recording adds bounded identity bookkeeping only while explicitly enabled and writes to disk only on Save.
 
 ## Existing CS facilities to reuse
 
@@ -201,7 +232,7 @@ The existing CMake source and feature-package globs discover these files, so no 
 
 ### GPU settings
 
-The implementation uses a 16-byte-aligned structure:
+The implementation uses a 32-byte, 16-byte-aligned structure:
 
 ```cpp
 struct alignas(16) PerFrame
@@ -210,10 +241,14 @@ struct alignas(16) PerFrame
     float BlendWidth = 12.0f;
     float DepthBias = 0.25f;
     float MaximumGap = 64.0f;
+    std::uint32_t EnableLandscapeBlending = 1u;
+    float ProjectedSnowEdgeWidth = 2.0f;
+    float Padding0 = 0.0f;
+    float Padding1 = 0.0f;
 };
 ```
 
-The numeric defaults are starting values, not validated recommendations. They must be tuned in game. `BlendWidth` and `DepthBias` should be interpreted in the same linear view-depth units returned by `SharedData::GetScreenDepth`.
+The numeric defaults are starting values, not validated recommendations. They must be tuned in game. `BlendWidth` and `DepthBias` use the same linear view-depth units returned by `SharedData::GetScreenDepth`. `ProjectedSnowEdgeWidth` scales a derivative-aware edge band on accepted projected-snow meshes; zero retains the vanilla projected-material weight and avoids evaluating derivatives.
 
 ### CPU-only settings
 
@@ -232,9 +267,10 @@ std::uint32_t RequireOverlappingBounds = 1;
 float MaximumDistance = 8192.0f;
 float BoundsExpansion = 32.0f;
 std::uint32_t DeveloperLogging = 0;
+std::uint32_t LandscapeLayerBlending = 1;
 ```
 
-Strict automatic is the product default. It remains bounded by static ownership, render-state, animation, material, sibling, bounds, traversal, cache, and distance gates; allow-list-only is available when a curated policy is preferred.
+The UI names mode 2 **Automatic**, and it remains the product default. NIF selection is bounded by static ownership, render-state, animation, material, sibling, bounds, traversal, cache, and distance gates; allow-list-only is available when a curated policy is preferred. `LandscapeLayerBlending` is a separate default-on toggle and does not depend on the NIF detection mode or Terrain Blending.
 
 ### CS-side settings and rule format
 
@@ -249,6 +285,8 @@ Strict automatic is the product default. It remains bounded by static ownership,
     "BlendWidth": 12.0,
     "DepthBias": 0.25,
     "MaximumGap": 64.0,
+    "ProjectedSnowEdgeWidth": 2.0,
+    "LandscapeLayerBlending": 1,
     "MaximumDistance": 8192.0,
     "BoundsExpansion": 32.0,
     "RequireOverlappingBounds": 1,
@@ -257,15 +295,21 @@ Strict automatic is the product default. It remains bounded by static ownership,
 }
 ```
 
-Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json` so discovery does not rewrite unrelated CS settings. It is loaded once independently of whether a Mesh Blending section exists in `SettingsUser.json`, rather than reread during live settings or performance swaps. Save/Clear re-read and validate it immediately before mutation so in-session mod-author edits are merged rather than silently replaced. The file is replaced atomically and uses this versioned shape:
+Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/MeshBlendingRules.json` so recording never rewrites unrelated CS settings. It is loaded once independently of whether a Mesh Blending section exists in `SettingsUser.json`, rather than reread during live settings or performance swaps. Save/Clear re-read and validate it immediately before mutation so in-session mod-author edits are merged rather than silently replaced. The file is replaced atomically and schema 4 separates author policy from generated observations:
 
 ```json
 {
-  "SchemaVersion": 1,
+  "SchemaVersion": 4,
   "AllowList": [
     {
       "Model": "meshes/landscape/mountains/mountaintrim01wet.nif",
       "NodePath": "mountaintrim01wet/rockskirt01wet[2]"
+    }
+  ],
+  "DetectedAllowList": [
+    {
+      "Model": "meshes/landscape/rocks/example.nif",
+      "NodePath": "root/snowoverlay[1]"
     }
   ],
   "DenyList": [
@@ -273,27 +317,55 @@ Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/Me
       "Model": "meshes/example/glasswindow.nif",
       "NodePath": "windowroot/glass[1]"
     }
+  ],
+  "LandscapeAssignments": [
+    {
+      "Kind": "Snow",
+      "Form": "0x1234~Example.esp",
+      "EditorID": "ExampleSnowLTEX",
+      "Diffuse": "textures/landscape/example_snow.dds"
+    }
+  ],
+  "SurfaceMaterials": [
+    { "Material": "MaterialSnow", "Kind": "Snow" }
+  ],
+  "BlendPairs": [
+    { "Source": "Snow", "Receiver": "Stone" },
+    { "Source": "Grass", "Receiver": "Dirt" }
+  ],
+  "DiscoveryDiagnostics": [
+    {
+      "Kind": "Snow",
+      "Form": "0x1234~Example.esp",
+      "EditorID": "ExampleSnowLTEX",
+      "Diffuse": "textures/landscape/example_snow.dds",
+      "Material": "MaterialSnow"
+    }
   ]
 }
 ```
 
-Detection modes are `0` disabled, `1` allow-list-only, and `2` strict automatic. Empty `Model` or `NodePath` fields wildcard that component; an entirely empty rule never matches. `*` and `?` wildcards are supported after ASCII lowercase/slash normalization.
+`AllowList` and `DenyList` are manual policy. `DetectedAllowList` and `DiscoveryDiagnostics` are generated only by the recording workflow. `LandscapeAssignments` override automatic LTEX classification by portable form key, editor ID, or the currently rendered seasonal diffuse path; `SurfaceMaterials` classify a `BGSMaterialType` identity. If `BlendPairs` is absent, built-in soft/hard compatibility is used; an explicitly empty array disables all automatic LAND pairs. Pair endpoints must be classified materials, and a hard source over a soft receiver is rejected because it contradicts the fixed soft-over-hard hierarchy. Schema 1–3 files are accepted as sparse predecessors and are written as schema 4 only on an explicit Save/Clear. Unknown top-level extension fields survive canonical writes; reserved-array entries are canonicalized to the documented fields.
+
+Save/Clear changes only generated observations and therefore preserves the live LAND registry. If an author edits LAND classification or pair policy while the game is running and then invokes Save/Clear, the changed policy is applied safely, but already loaded LAND entries fail open until their cell/material setup streams again.
+
+Detection modes are `0` disabled, `1` allow-list-only, and `2` automatic. Empty manual `Model` or `NodePath` fields wildcard that component; an entirely empty rule never matches. `*` and `?` wildcards are supported after ASCII lowercase/slash normalization. Generated model/node pairs are always exact. Manual plus generated allow entries share a 1024-entry cap; deny rules have an independent 1024-entry cap, and LTEX identities have an independent 4096-entry cap.
 
 An allow match should override automatic rejection only for safe render-state requirements. It must not force unsupported blend functions, disabled Z testing, water/effect shaders, or missing depth resources. A deny match always wins.
 
-### Runtime discovery workflow
+### Runtime material-recording workflow
 
-The normal Mesh Blending UI exposes one session-only toggle, **Discover Blendable Meshes**:
+The normal Mesh Blending UI exposes one session-only toggle, **Record Visible Material Identities**:
 
-1. Enable discovery and walk through the locations to test.
-2. Only rendered Lighting geometry inside `Culling Distance` is inspected.
-3. A candidate is retained only after the strict source, static-owner, deny-rule, opaque-sibling, bounds, traversal, UTF-8, and path-safety checks pass.
-4. **Save Detected Meshes** stops capture, confirms the promotion, merges exact candidates without partial overflow, and atomically updates `MeshBlendingRules.json`.
-5. **Clear Saved Allow List** stops capture, clears the session, and atomically empties the saved `AllowList`; manually authored deny rules remain intact.
+1. Enable recording and walk through the locations to test.
+2. Only rendered Lighting geometry inside `NIF culling distance` and LTEX identities from streamed LAND cells are inspected; the distance slider does not apply to LAND, and there is no directory or installed-NIF scan.
+3. A NIF candidate is retained only after the source, static-owner, deny-rule, opaque-sibling, bounds, traversal, UTF-8, and path-safety checks pass. LTEX observations reuse the bounded classification already performed when a LAND quadrant streams.
+4. **Save Detected Materials** stops capture, re-reads current author policy, merges exact NIF candidates into `DetectedAllowList`, refreshes LTEX observations in `DiscoveryDiagnostics`, and atomically updates the file. LTEX diagnostics are deduplicated by stable form/editor/diffuse identity rather than their inferred kind; later observations refresh the retained metadata, and a corrected classification refreshes the existing saved observation. One full category does not prevent the other category from saving.
+5. **Clear Detected Materials** stops capture and removes only generated `DetectedAllowList`, `DiscoveryDiagnostics`, and current-session observations. Manual allow/deny, landscape assignments, surface rules, pair rules, and unknown top-level extension fields remain intact.
 
-Discovery is not an installed-NIF inventory. It cannot see unvisited, unloaded, culled, or conditional variants. Starting or manually stopping it invalidates the bounded classification cache so stale normal-mode decisions cannot suppress capture or leak back into normal policy rendering. Capture automatically stops at 1024 unique candidates, before further cache misses can spend time on sibling traversal that cannot retain a result. No per-candidate file writes or log spam occur while walking.
+Recording is not an installed-content inventory. It cannot see unvisited, unloaded, culled, or conditional variants. Starting or manually stopping it invalidates the bounded NIF classification cache so stale normal-mode decisions cannot suppress capture or leak back into normal rendering. NIF and LTEX capacities are independent; capture stops only when both are full. No per-identity file writes or log spam occur while walking.
 
-Captured entries are candidates for visual review. The default Strict automatic mode previews them while discovery records them; Allow-list-only discovery records without changing unsaved candidates. Promoting one to an allow rule deliberately avoids repeating the automatic sibling traversal for that exact model/node pair, while all source render-state, static-owner, pass, animation, distance, and deny gates continue to apply. Feature-cost A/B measurement cannot start while discovery is active, so capture overhead cannot contaminate its baseline.
+Captured entries are candidates for visual review. The default Automatic mode previews NIF candidates while recording; Allow-list-only mode records without applying unsaved candidates. Saved exact candidates avoid repeating the automatic sibling traversal for that model/node pair, while source render-state, static-owner, pass, animation, distance, and deny gates still apply. Feature-cost A/B measurement cannot start while recording is active, so capture overhead cannot contaminate its baseline.
 
 Malformed, unreadable, or newer-schema rule files fail closed: runtime blending and discovery are disabled, Save/Clear are locked, and the existing file is never silently replaced. The UI reports that the file must be fixed or removed followed by a restart.
 
@@ -324,7 +396,7 @@ Starting from `pass->geometry`:
 2. Obtain that reference's authoritative `Get3D()` root and prove ownership with a bounded parent walk; do not infer ownership from the nearest `BSFadeNode`.
 3. Prefer a valid `ExtraModelSwap` model and path when present.
 4. Otherwise use the base static's `TESModel::GetModel()` path.
-5. Permit an explicit node-only rule to use the root-relative node path when a model path cannot be resolved; strict automatic detection still fails closed without a stable model path.
+5. Permit an explicit node-only rule to use the root-relative node path when a model path cannot be resolved; automatic detection still fails closed without a stable model path.
 
 Do not attach persistent extra data to the scenegraph in the MVP. Runtime scenegraph mutation introduces cloning, threading, and lifetime questions that are unnecessary for the first implementation.
 
@@ -376,7 +448,7 @@ Traverse geometries only under the selected owning root. A plausible receiver sh
 
 Bounding-sphere overlap is intentionally coarse. It rejects clearly unrelated siblings but cannot prove per-pixel adjacency. More precise triangle or mesh-distance analysis would cost too much for routine draw setup and still would not establish visible depth ownership.
 
-### Strict automatic decision
+### Automatic decision
 
 Enable a source automatically only when:
 
@@ -546,6 +618,8 @@ Reuse the existing `screenUV` and `SharedData` helpers in `Lighting.hlsl`. Do no
 
 `Util::GetCurrentSceneDepthSRV` returns Terrain Blending's blended depth resource when Terrain Blending is active, and the post-Z-prepass copy otherwise.
 
+This interaction applies only to the NIF transition fade. LAND/LTEX remapping does not call Terrain Blending, sample either depth resource, or depend on Terrain Blending being installed or enabled. Terrain Blending operates between landscape and separately rendered meshes; Mesh Blending's LAND path operates between texture layers inside one LAND draw.
+
 For the MVP:
 
 - reuse the normal `t17` resource;
@@ -663,6 +737,12 @@ The feature changes opacity only. It does not alter geometry or silhouettes.
 
 Depth copies and alpha coverage may differ at partially covered samples. Inspect for halos. If deferred normal/roughness blending uses stochastic coverage, ensure the fade does not introduce VR shimmer. A stable alpha-to-coverage path may be preferable for a later VR-specific refinement.
 
+### LAND overlap is still authored data
+
+The LAND fast path redistributes existing layer weights only. It cannot blend across a quadrant where one side's LTEX is not present, recover a layer discarded by the engine's six-layer limit, or distinguish two materials baked into one texture. Those cases require fixing the LAND/LTEX data in the plugin or source texture.
+
+EMAT parallax coordinates and parallax shadows are calculated before the final Mesh Blending remap. The diffuse, normal, material, and snow samples use remapped weights, but a strong remap can therefore expose a small disagreement with the earlier height-derived coordinates. Moving the remap earlier would change its semantic input and requires separate visual/performance validation.
+
 ## Robust receiver-ownership extension
 
 If the MVP produces unacceptable false blends, the next stage can remain entirely inside CS but is more expensive.
@@ -761,18 +841,22 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 - The descriptor is cleared before every unrelated lighting draw.
 - Allow and deny rules are deterministic across multiple placed instances.
 - Settings save, restore, and live enable/disable correctly.
+- A compatible LAND soft/hard boundary favours the soft layer without activating an absent layer.
+- A compatible soft/soft boundary approaches equal coverage at full strength for every already-active soft layer.
+- Hard/hard, Unknown, reserved, disallowed-pair, and single-active-layer LAND pixels preserve or harden according to policy without adding a texture sample.
 
 ### Compatibility
 
 - Terrain Blending on/off does not invert or erase the fade.
 - Extended Translucency output remains intact and is multiplied by the new fade.
 - True PBR and vanilla lighting materials produce comparable transition placement.
+- Vanilla and True PBR LAND materials resolve to the same six LTEX identities after their final properties are installed.
 - Reflections and specialised passes remain unchanged in the MVP.
 - Alpha-tested receiver candidates are rejected and remain visually unchanged.
 
 ### Robustness
 
-- Null pass, geometry, shader property, alpha property, parent, root, user data, or renderer data fails closed. A missing model path can match only an explicit node-only allow rule; strict automatic mode fails closed.
+- Null pass, geometry, shader property, alpha property, parent, root, user data, or renderer data fails closed. A missing model path can match only an explicit node-only allow rule; Automatic mode fails closed.
 - Cache entries validate current live signatures before reuse.
 - Cache size remains bounded during cell traversal and fast travel.
 - Logging is rate limited.
@@ -785,8 +869,12 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 - No scenegraph traversal on every draw after cache warm-up.
 - One depth read plus minimal ALU only for accepted source pixels.
 - No string allocation on cache hits; path strings are built only on bounded cache misses when policy or diagnostics require them.
+- LAND capture is bounded to four quadrants, six identities, and at most eight material-parent checks per identity.
+- LAND draw lookup is a bounded four-way exact probe; active pixels add three unrolled six-layer ALU passes and no texture or depth read.
+- Disabling LAND/LTEX blending removes its per-draw registry lookup and per-pixel remap. One-time bounded stream classification remains resident so live activation does not require a cell reload.
+- Material recording is deduplicated and bounded; it performs no disk I/O until Save.
 
-Because strict automatic is the default, use the built-in feature A/B toggle from a fixed camera after warming the classification cache. Record CPU classifier time, active draws, cache hit/miss/eviction counts, traversed objects, and GPU frame time for representative accepted assets and a deliberately dense worst-case view. Label zero-active results as idle-overhead samples rather than visual-effect cost. Repeat at 4096, 8192, and unlimited distance in flat-screen and VR. The inactive configuration should report no classifier work or depth samples; active cost should scale with accepted on-screen coverage rather than total loaded statics. The built-in toggle cannot measure package-install shader/hook overhead because those remain resident in both halves; compare separate loaded/unloaded captures for that question. Reconsider the default if these properties do not hold.
+Because automatic rules and LAND blending are defaults, use the built-in feature A/B toggle from a fixed camera after warming both bounded registries. Record CPU classifier time, NIF active draws, LAND registry hits, cache hit/miss/eviction counts, traversed objects, and GPU frame time for representative accepted assets and a deliberately dense six-layer LAND view. Label zero-active results as idle-overhead samples rather than visual-effect cost. Repeat the NIF test at 4096, 8192, and unlimited distance in flat-screen and VR. Run LAND comparisons with the same loaded cells and camera because its cost follows accepted on-screen LAND coverage rather than the NIF distance bubble. Material recording must be stopped before measurement. The built-in toggle cannot measure package-install shader/hook overhead because those remain resident in both halves; compare separate loaded/unloaded captures for that question.
 
 ### VR-specific
 
@@ -808,10 +896,15 @@ Pure HLSL fade tests now cover endpoints, malformed-range sanitization, and fail
 - Z-test off: reject.
 - Z-write on: reject as source.
 - Skinned/tree/decal/refraction/water/effect: reject.
-- No opaque sibling in strict automatic mode: reject.
+- No opaque sibling in Automatic mode: reject.
 - Allow-list entry with safe state: accept.
 - Deny-list entry: reject even if automatic rules pass.
 - Duplicate geometry names: resolve via root-relative child path.
+- Default/zero-form LAND sentinel: classify through the engine default LTEX.
+- Exact `LandscapeAssignments` entry: override material-parent fallback.
+- Material parent chain: classify within eight parents and fail open beyond the cap or on a cycle.
+- Missing `BlendPairs`: use built-in compatibility; explicitly empty `BlendPairs`: reject all automatic pairs.
+- Registry collision/concurrent sequence mismatch: fail open rather than returning a neighbouring LAND classification.
 
 ### Shader tests
 
@@ -821,6 +914,13 @@ Pure HLSL fade tests now cover endpoints, malformed-range sanitization, and fail
 - Large gap returns authored alpha.
 - Disabled feature or absent descriptor returns authored alpha exactly.
 - Deferred alpha propagates consistently across MRTs.
+- Soft/hard 50/50 becomes 75/25 at full strength; proportional transfer remains bounded for asymmetric inputs.
+- Soft/soft becomes 50/50 for two already-active layers; an authored-inactive layer is never promoted.
+- Hard/hard selects the dominant hard layer deterministically.
+- Unknown/reserved, packed-zero, one-active-layer, strength-zero, and exact-`0.01` cases preserve authored weights.
+- A remapped layer at or below `0.01` is removed, surviving sampled mass is conserved, and no inactive layer becomes active.
+- Layer 5/6 class decode uses bits 18–21.
+- Projected-snow coverage preserves vanilla behaviour when its edge control is disabled and uses derivative-aware coverage only on an accepted draw when enabled.
 
 ### Runtime scenarios
 
@@ -835,7 +935,7 @@ Pure HLSL fade tests now cover endpoints, malformed-range sanitization, and fail
 
 ## Remaining validation decisions
 
-The implementation fixes the feature name/category, strict-automatic default, normalized model/node wildcard policy, strict `NiAlphaProperty` source gate, alpha-test exclusion, and initial VR code path. Runtime evidence is still needed to decide:
+The implementation fixes the feature name/category, Automatic default, normalized model/node wildcard policy, strict `NiAlphaProperty` source gate, alpha-test exclusion, and initial VR code path. Runtime evidence is still needed to decide:
 
 1. Final blend-width, bias, and maximum-gap defaults after depth visualization.
 2. Whether Terrain Blending's R16 depth is adequate or its existing R32 resource is materially better on target assets.
@@ -852,7 +952,7 @@ For the first working version, implement only:
 - Z writes disabled;
 - no source alpha testing;
 - a static owning root;
-- an overlapping opaque/Z-writing sibling in strict automatic mode, or a CS allow-list match;
+- an overlapping opaque/Z-writing sibling in Automatic mode, or a CS allow-list match;
 - main world pass only;
 - the existing `t17` scene depth;
 - one final alpha multiplier; and

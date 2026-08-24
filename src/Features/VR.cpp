@@ -3956,7 +3956,7 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 
 	if (!a_visible) {
 		if (captureIndicatorOverlayHandle != vr::k_ulOverlayHandleInvalid) {
-			cleanOverlay->HideOverlay(captureIndicatorOverlayHandle);
+			gameOverlay->HideOverlay(captureIndicatorOverlayHandle);
 		}
 		return;
 	}
@@ -3977,8 +3977,8 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 				magic_enum::enum_name(error));
 			return;
 		}
-		cleanOverlay->SetOverlayWidthInMeters(captureIndicatorOverlayHandle, 0.035f);
-		cleanOverlay->SetOverlaySortOrder(captureIndicatorOverlayHandle, 255);
+		gameOverlay->SetOverlayWidthInMeters(captureIndicatorOverlayHandle, 0.035f);
+		gameOverlay->SetOverlaySortOrder(captureIndicatorOverlayHandle, 255);
 
 		vr::HmdMatrix34_t transform{};
 		transform.m[0][0] = 1.0f;
@@ -4041,10 +4041,17 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 		transform.m[0][3] = horizontalOffsetMetres;
 		transform.m[1][3] = verticalOffsetMetres;
 		transform.m[2][3] = depthOffsetMetres;
-		cleanOverlay->SetOverlayTransformTrackedDeviceRelative(
+		const auto transformError = gameOverlay->SetOverlayTransformTrackedDeviceRelative(
 			captureIndicatorOverlayHandle,
 			vr::k_unTrackedDeviceIndex_Hmd,
 			&transform);
+		if (transformError != vr::VROverlayError_None) {
+			logger::error(
+				"Could not position the CSX capture indicator overlay: {} ({})",
+				static_cast<int>(transformError),
+				magic_enum::enum_name(transformError));
+			return;
+		}
 		logger::info(
 			"VR: capture indicator positioned at optical eye line, offset=({:.3f}, {:.3f}, {:.3f}) m",
 			horizontalOffsetMetres,
@@ -4099,7 +4106,7 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 	};
 	const auto textureError = cleanOverlay->SetOverlayTexture(captureIndicatorOverlayHandle, &texture);
 	const auto showError = textureError == vr::VROverlayError_None ?
-	                           cleanOverlay->ShowOverlay(captureIndicatorOverlayHandle) :
+	                           gameOverlay->ShowOverlay(captureIndicatorOverlayHandle) :
 	                           textureError;
 	if (textureError != vr::VROverlayError_None || showError != vr::VROverlayError_None) {
 		logger::error(

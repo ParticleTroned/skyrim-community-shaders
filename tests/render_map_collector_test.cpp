@@ -42,6 +42,9 @@ namespace
 		config = Config();
 		config.maxScopeDepth = static_cast<std::uint8_t>(kMaximumScopeDepth + 1);
 		Check(collector.Start(config) == StartResult::kInvalidBounds, "oversized scope depth was accepted");
+		config = Config();
+		config.maxShaderObservations = 0;
+		Check(collector.Start(config) == StartResult::kInvalidBounds, "zero shader-observation bound was accepted");
 	}
 
 	void TestNestedScopes()
@@ -196,7 +199,7 @@ namespace
 	{
 		Collector collector;
 		auto config = Config();
-		config.maxDuration = std::chrono::nanoseconds(1);
+		config.maxDuration = std::chrono::microseconds(100);
 		Check(collector.Start(config) == StartResult::kStarted, "time-bound collector did not start");
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kTimeLimit,

@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -15,6 +16,8 @@ namespace CSX::RenderMap
 {
 	inline constexpr std::uint64_t kUnknownFrame = std::numeric_limits<std::uint64_t>::max();
 	inline constexpr std::size_t kMaximumScopeDepth = 32;
+	inline constexpr std::size_t kMaximumShaderNameLength = 127;
+	inline constexpr std::size_t kMaximumShaderDefinesSuffixLength = 95;
 
 	enum class EventKind : std::uint16_t
 	{
@@ -48,6 +51,7 @@ namespace CSX::RenderMap
 		kDispatch,
 		kFinishCommandList,
 		kExecuteCommandList,
+		kShaderObserved,
 	};
 
 	enum class Eye : std::uint8_t
@@ -106,6 +110,7 @@ namespace CSX::RenderMap
 		std::uint64_t maxBytes{ 1 };
 		std::chrono::nanoseconds maxDuration{ std::chrono::seconds(1) };
 		std::uint8_t maxScopeDepth{ 8 };
+		std::uint32_t maxShaderObservations{ 1024 };
 	};
 
 	struct FrameContext
@@ -134,13 +139,13 @@ namespace CSX::RenderMap
 	struct EventPayload
 	{
 		std::uint16_t schema{ 0 };
-		std::array<std::uint64_t, 6> words{};
+		std::array<std::uint64_t, 8> words{};
 	};
 
 	struct EventRecord
 	{
 		std::uint16_t schemaMajor{ 1 };
-		std::uint16_t schemaMinor{ 1 };
+		std::uint16_t schemaMinor{ 2 };
 		EventKind kind{ EventKind::kCaptureMarker };
 		std::uint16_t reserved{ 0 };
 		std::uint64_t captureNumericId{ 0 };
@@ -168,6 +173,38 @@ namespace CSX::RenderMap
 		std::uint64_t droppedTimeLimit{ 0 };
 		std::uint64_t scopeOverflow{ 0 };
 		std::uint64_t scopeMismatch{ 0 };
+		std::uint64_t droppedShaderObservations{ 0 };
+	};
+
+	struct ShaderObservationInput
+	{
+		std::uintptr_t shader{ 0 };
+		std::uint32_t shaderType{ 0 };
+		std::string_view fxpFilename;
+		std::string_view imageSpaceName;
+		std::string_view definesSuffix;
+	};
+
+	struct ShaderObservationRecord
+	{
+		std::uint64_t observationId{ 0 };
+		std::uintptr_t pointerEvidence{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		std::uint32_t shaderType{ 0 };
+		std::array<char, kMaximumShaderNameLength + 1> fxpFilename{};
+		std::array<char, kMaximumShaderNameLength + 1> imageSpaceName{};
+		std::array<char, kMaximumShaderDefinesSuffixLength + 1> definesSuffix{};
+		bool fxpFilenameTruncated{ false };
+		bool imageSpaceNameTruncated{ false };
+		bool definesSuffixTruncated{ false };
+	};
+
+	struct ShaderObservationResult
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint64_t sessionGeneration{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		bool firstSeen{ false };
 	};
 
 	struct CaptureSnapshot
@@ -180,6 +217,7 @@ namespace CSX::RenderMap
 		StopReason stopReason{ StopReason::kRequested };
 		CaptureStatistics statistics;
 		std::vector<EventRecord> events;
+		std::vector<ShaderObservationRecord> shaderObservations;
 	};
 
 	class Collector
@@ -235,6 +273,11 @@ namespace CSX::RenderMap
 			EventKind a_kind,
 			const EventPayload& a_payload = {},
 			std::uint64_t a_deviceContextObservationId = 0) noexcept;
+		RecordResult RecordForGeneration(
+			EventKind a_kind,
+			const EventPayload& a_payload,
+			std::uint64_t a_deviceContextObservationId,
+			std::uint64_t a_expectedGeneration) noexcept;
 
 		ScopeGuard EnterScope(
 			ScopeKind a_kind,
@@ -242,9 +285,12 @@ namespace CSX::RenderMap
 			EventKind a_beginKind,
 			EventKind a_endKind,
 			const EventPayload& a_beginPayload = {},
-			const EventPayload& a_endPayload = {}) noexcept;
+			const EventPayload& a_endPayload = {},
+			std::uint64_t a_expectedGeneration = 0) noexcept;
 
-		std::uint64_t AllocateObservationId() noexcept;
+		std::uint64_t AllocateObservationId(std::uint64_t a_expectedGeneration = 0) noexcept;
+		ShaderObservationResult ObserveShader(const ShaderObservationInput& a_input) noexcept;
+		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 		void SetThreadFrameContext(const FrameContext& a_context) noexcept;
 		FrameContext GetThreadFrameContext() const noexcept;
 		ScopeSnapshot GetThreadScopes() const noexcept;
@@ -253,12 +299,6 @@ namespace CSX::RenderMap
 		static std::uint64_t ClockFrequencyHz() noexcept;
 
 	private:
-		RecordResult RecordForGeneration(
-			EventKind a_kind,
-			const EventPayload& a_payload,
-			std::uint64_t a_deviceContextObservationId,
-			std::uint64_t a_expectedGeneration) noexcept;
-
 		void ExitScope(
 			std::uint64_t a_generation,
 			ScopeKind a_kind,

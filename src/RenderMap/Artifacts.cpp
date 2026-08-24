@@ -153,7 +153,7 @@ namespace CSX::RenderMap
 		{
 			return {
 				{ "schema", {
-					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 1 },
+					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 2 },
 					{ "producerVersion", "collector-v1" },
 				} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -202,7 +202,8 @@ namespace CSX::RenderMap
 			std::set<std::string> eventKinds;
 			std::string eventsJsonl;
 			for (const auto& event : a_capture.snapshot.events) {
-				auto serialized = SerializeEvent(event, a_capture.descriptor.captureId, a_processId);
+				auto serialized = SerializeEvent(
+					event, a_capture.descriptor.captureId, a_processId, &a_capture.snapshot);
 				eventKinds.insert(serialized["type"].get<std::string>());
 				eventsJsonl += serialized.dump();
 				eventsJsonl.push_back('\n');
@@ -225,7 +226,7 @@ namespace CSX::RenderMap
 			const auto serializedEventCount = snapshot.events.size() + (lostEvents == 0 ? 0 : 1);
 			const bool truncated = lostEvents != 0;
 			const bool structurallyIncomplete = snapshot.statistics.scopeOverflow != 0 ||
-				snapshot.statistics.scopeMismatch != 0;
+				snapshot.statistics.scopeMismatch != 0 || snapshot.statistics.droppedShaderObservations != 0;
 			const bool terminalFailure = snapshot.stopReason == StopReason::kShutdown ||
 				snapshot.stopReason == StopReason::kFailure;
 			const bool incomplete = truncated || structurallyIncomplete || terminalFailure;
@@ -237,6 +238,8 @@ namespace CSX::RenderMap
 				completionErrors.push_back("scope depth overflowed during capture");
 			if (snapshot.statistics.scopeMismatch != 0)
 				completionErrors.push_back("scope nesting mismatch occurred during capture");
+			if (snapshot.statistics.droppedShaderObservations != 0)
+				completionErrors.push_back("shader observation capacity was exceeded during capture");
 			if (terminalFailure)
 				completionErrors.push_back("capture ended during shutdown or failure handling");
 			const auto summary = SerializeCaptureSummary(a_capture);
@@ -258,6 +261,7 @@ namespace CSX::RenderMap
 					{ "maxFrames", snapshot.config.maxFrames },
 					{ "maxDurationMs", std::chrono::duration_cast<std::chrono::milliseconds>(snapshot.config.maxDuration).count() },
 					{ "maxEvents", snapshot.config.maxEvents }, { "maxBytes", snapshot.config.maxBytes },
+					{ "maxShaderObservations", snapshot.config.maxShaderObservations },
 					{ "pointerPolicy", "retain" },
 				} },
 				{ "clock", {
@@ -277,6 +281,8 @@ namespace CSX::RenderMap
 					{ "csx.acceptedEventCount", snapshot.events.size() },
 					{ "csx.boundaryRejectionCount", snapshot.statistics.droppedFrameLimit + snapshot.statistics.droppedTimeLimit },
 					{ "csx.stopRaceRejectionCount", snapshot.statistics.droppedStopped },
+					{ "csx.shaderObservationCount", snapshot.shaderObservations.size() },
+					{ "csx.droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
 				} },
 			};
 

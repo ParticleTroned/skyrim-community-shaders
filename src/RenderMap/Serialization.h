@@ -15,7 +15,8 @@ namespace CSX::RenderMap
 	nlohmann::json SerializeEvent(
 		const EventRecord& a_event,
 		std::string_view a_captureId,
-		std::uint32_t a_processId);
+		std::uint32_t a_processId,
+		const CaptureSnapshot* a_snapshot = nullptr);
 	nlohmann::json SerializeEventPage(
 		const CompletedCapture& a_capture,
 		std::size_t a_offset,

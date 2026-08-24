@@ -30,6 +30,7 @@ namespace
 	constexpr std::uint64_t kMaximumDurationMs = 10000;
 	constexpr std::uint64_t kMaximumEvents = 65536;
 	constexpr std::uint64_t kMaximumBytes = 32ull * 1024ull * 1024ull;
+	constexpr std::uint32_t kMaximumShaderObservations = 8192;
 	std::atomic_bool g_registered{ false };
 	std::mutex g_artifactMutex;
 	std::unordered_map<std::string, CSX::RenderMap::CaptureArtifactContext> g_artifactContexts;
@@ -72,7 +73,7 @@ namespace
 				{ "dirty", build.value("sourceDirty", false) },
 			},
 			.capabilities = {
-				"thread-local-render-scopes", "bounded-in-memory-capture",
+				"thread-local-render-scopes", "bounded-in-memory-capture", "typed-shader-observations",
 				"atomic-events-jsonl", "atomic-capture-manifest", "explicit-gap-events",
 			},
 			.inputs = {
@@ -154,8 +155,8 @@ namespace
 				{ "service", "communityshaders.render-map" },
 				{ "major", 1 }, { "minor", 0 }, { "schemaRevision", 1 },
 				{ "actions", json::array({ "registry", "status", "start", "stop", "capture_events" }) },
-				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v1", "geometry-boundary-v1" }) },
-				{ "eventKinds", json::array({ "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end" }) },
+				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1" }) },
+				{ "eventKinds", json::array({ "shader-observed", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end" }) },
 				{ "pointerPolicies", json::array({ "retain" }) },
 				{ "singleActiveCapture", true },
 				{ "completedCaptureHistory", 4 },
@@ -167,6 +168,7 @@ namespace
 					{ "maximumFrames", kMaximumFrames }, { "maximumDurationMs", kMaximumDurationMs },
 					{ "maximumEvents", kMaximumEvents }, { "maximumBytes", kMaximumBytes },
 					{ "maximumScopeDepth", CSX::RenderMap::kMaximumScopeDepth }, { "maximumEventPage", 500 },
+					{ "maximumShaderObservations", kMaximumShaderObservations },
 				} },
 				{ "mainThreadAffine", false },
 				{ "automaticStop", false },
@@ -187,9 +189,11 @@ namespace
 			const auto defaultBytes = CSX::RenderMap::Collector::EventRecordSize() * maxEvents;
 			const auto maxBytes = a_args.value("maxBytes", static_cast<std::uint64_t>(defaultBytes));
 			const auto maxScopeDepth = a_args.value("maxScopeDepth", 8u);
+			const auto maxShaderObservations = a_args.value("maxShaderObservations", 1024u);
 			if (maxFrames == 0 || maxFrames > kMaximumFrames || maxDurationMs == 0 || maxDurationMs > kMaximumDurationMs ||
 				maxEvents == 0 || maxEvents > kMaximumEvents || maxBytes < CSX::RenderMap::Collector::EventRecordSize() ||
-				maxBytes > kMaximumBytes || maxScopeDepth == 0 || maxScopeDepth > CSX::RenderMap::kMaximumScopeDepth) {
+				maxBytes > kMaximumBytes || maxScopeDepth == 0 || maxScopeDepth > CSX::RenderMap::kMaximumScopeDepth ||
+				maxShaderObservations == 0 || maxShaderObservations > kMaximumShaderObservations) {
 				return Foundation().MakeError(a_args, "invalid_bounds", "capture bounds exceed the advertised limits", "validation", false);
 			}
 
@@ -200,6 +204,7 @@ namespace
 				.maxBytes = maxBytes,
 				.maxDuration = std::chrono::milliseconds(maxDurationMs),
 				.maxScopeDepth = static_cast<std::uint8_t>(maxScopeDepth),
+				.maxShaderObservations = maxShaderObservations,
 			}, descriptor);
 			if (status != ControlStatus::kSuccess)
 				return ControlFailure(a_args, status);
@@ -318,6 +323,7 @@ namespace CSX::RenderMap::DevBenchBridge
 				"captureId":{"type":"string","minLength":1},"maxFrames":{"type":"integer","minimum":1,"maximum":600},
 				"maxDurationMs":{"type":"integer","minimum":1,"maximum":10000},"maxEvents":{"type":"integer","minimum":1,"maximum":65536},
 				"maxBytes":{"type":"integer","minimum":1,"maximum":33554432},"maxScopeDepth":{"type":"integer","minimum":1,"maximum":32},
+				"maxShaderObservations":{"type":"integer","minimum":1,"maximum":8192},
 				"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}
 			}}
 		})";

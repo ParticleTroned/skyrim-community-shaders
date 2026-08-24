@@ -672,6 +672,19 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	if (renderMap.IsCapturing()) {
 		if (state)
 			renderMap.SetCpuFrame(state->frameCount);
+		const auto boundedShaderString = [](const char* a_value) noexcept -> std::string_view {
+			if (!a_value)
+				return {};
+			std::size_t length = 0;
+			while (length < 1024 && a_value[length] != '\0')
+				++length;
+			return { a_value, length };
+		};
+		std::string_view imageSpaceName;
+		if (shader->shaderType.get() == RE::BSShader::Type::ImageSpace) {
+			const auto* imageSpaceShader = static_cast<const RE::BSImagespaceShader*>(shader);
+			imageSpaceName = boundedShaderString(imageSpaceShader->name);
+		}
 		renderMapScope = renderMap.EnterTechnique({
 			.shader = reinterpret_cast<std::uintptr_t>(shader),
 			.shaderType = static_cast<std::uint32_t>(shader->shaderType.get()),
@@ -679,6 +692,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			.pixelDescriptor = pixelDescriptor,
 			.callerRva = callerRva,
 			.skipPixelShader = skipPixelShader,
+			.fxpFilename = boundedShaderString(shader->fxpFilename),
+			.imageSpaceName = imageSpaceName,
 		});
 	}
 	const bool phaseDiagActive = ShouldRecordCSFramePhaseDiag();

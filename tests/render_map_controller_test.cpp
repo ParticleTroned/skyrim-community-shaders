@@ -97,6 +97,7 @@ namespace
 					.vertexDescriptor = 7,
 					.pixelDescriptor = 8,
 					.callerRva = 0x9000,
+					.fxpFilename = "Lighting",
 				});
 			}
 			{
@@ -116,7 +117,7 @@ namespace
 			"wrong capture ID stopped the active capture");
 		Check(a_controller.Stop(descriptor.captureId, completed) == ControlStatus::kSuccess,
 			"capture did not stop");
-		Check(completed && completed->snapshot.events.size() == 6, "completed capture is incomplete");
+		Check(completed && completed->snapshot.events.size() == 7, "completed capture is incomplete");
 		std::shared_ptr<const CompletedCapture> replay;
 		Check(a_controller.Stop(descriptor.captureId, replay) == ControlStatus::kSuccess && replay == completed,
 			"completed stop was not idempotent");
@@ -134,7 +135,8 @@ namespace
 
 		const auto summary = SerializeCaptureSummary(*capture);
 		Check(summary["captureId"] == capture->descriptor.captureId, "summary capture ID is wrong");
-		Check(summary["completion"]["eventCount"] == 6, "summary event count is wrong");
+		Check(summary["completion"]["eventCount"] == 7, "summary event count is wrong");
+		Check(summary["completion"]["shaderObservationCount"] == 1, "summary shader observation count is wrong");
 		Check(summary["completion"]["reason"] == "requested", "summary stop reason is wrong");
 
 		const auto firstPage = SerializeEventPage(*capture, 0, 2, 42);
@@ -150,8 +152,17 @@ namespace
 		Check(first["scopes"]["renderPass"].get<std::string>().starts_with("obs-render-pass-"),
 			"render-pass observation ID is wrong");
 		Check(first["payload"]["renderPassPointer"] == "0x1000", "pointer evidence is wrong");
+		const auto shaderPage = SerializeEventPage(*capture, 1, 2, 42);
+		const auto& observed = shaderPage["events"][0];
+		Check(observed["type"] == "shader-observed", "shader-observed event is missing");
+		Check(observed["payload"]["fxpFilename"] == "Lighting", "shader identity detail is missing");
+		Check(observed["observationRefs"][0]["kind"] == "shader", "typed shader reference is missing");
+		const auto& technique = shaderPage["events"][1];
+		Check(technique["payload"]["schema"] == "technique-boundary-v2", "technique schema did not advance");
+		Check(technique["payload"]["shaderObservationId"] == observed["payload"]["shaderObservationId"],
+			"technique did not join to the shader observation");
 
-		const auto finalPage = SerializeEventPage(*capture, 5, 100, 42);
+		const auto finalPage = SerializeEventPage(*capture, 6, 100, 42);
 		Check(finalPage["returnedCount"] == 1, "final page count is wrong");
 		Check(finalPage["moreAvailable"] == false, "final page incorrectly reports more data");
 	}
@@ -180,7 +191,7 @@ namespace
 		nlohmann::json manifest;
 		manifestStream >> manifest;
 		Check(manifest["status"] == "complete", "complete capture manifest has the wrong status");
-		Check(manifest["completion"]["eventCount"] == 6, "manifest event count is wrong");
+		Check(manifest["completion"]["eventCount"] == 7, "manifest event count is wrong");
 		Check(manifest["artifacts"][0]["sha256"].get<std::string>().size() == 64, "events hash is missing");
 		Check(bundle.manifestArtifact["sha256"].get<std::string>().size() == 64, "manifest hash is missing");
 

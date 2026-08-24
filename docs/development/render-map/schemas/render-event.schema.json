@@ -148,6 +148,33 @@
           }
         }
       }
+    },
+    {
+      "if": { "properties": { "type": { "const": "shader-observed" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "schema",
+              "shaderObservationId",
+              "shaderPointer",
+              "pointerGeneration",
+              "shaderType",
+              "identityDetailsAvailable"
+            ],
+            "properties": {
+              "schema": { "const": "shader-observation-v1" },
+              "shaderObservationId": { "$ref": "#/$defs/observationId" },
+              "shaderPointer": { "type": ["string", "null"] },
+              "pointerGeneration": { "type": "integer", "minimum": 1 },
+              "shaderType": { "type": "integer", "minimum": 0 },
+              "identityDetailsAvailable": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -197,7 +224,8 @@
         "draw",
         "dispatch",
         "finish-command-list",
-        "execute-command-list"
+        "execute-command-list",
+        "shader-observed"
       ]
     },
     "frame": {
@@ -264,6 +292,7 @@
             "device",
             "device-context",
             "command-list",
+            "shader",
             "vertex-shader",
             "pixel-shader",
             "compute-shader",

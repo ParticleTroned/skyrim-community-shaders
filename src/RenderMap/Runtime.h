@@ -12,6 +12,7 @@ namespace CSX::RenderMap
 		kRenderPassBoundary = 1,
 		kTechniqueBoundary = 2,
 		kGeometryBoundary = 3,
+		kShaderObservation = 4,
 	};
 
 	struct RenderPassBoundary
@@ -32,6 +33,9 @@ namespace CSX::RenderMap
 		std::uint32_t pixelDescriptor{ 0 };
 		std::uint32_t callerRva{ 0 };
 		bool skipPixelShader{ false };
+		std::string_view fxpFilename;
+		std::string_view imageSpaceName;
+		std::string_view definesSuffix;
 	};
 
 	struct GeometryBoundary
@@ -57,6 +61,7 @@ namespace CSX::RenderMap
 		Collector::ScopeGuard EnterRenderPass(const RenderPassBoundary& a_boundary) noexcept;
 		Collector::ScopeGuard EnterTechnique(const TechniqueBoundary& a_boundary) noexcept;
 		Collector::ScopeGuard EnterGeometry(const GeometryBoundary& a_boundary) noexcept;
+		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 
 	private:
 		Collector collector;

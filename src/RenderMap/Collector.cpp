@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <functional>
+#include <mutex>
 #include <new>
 #include <thread>
+#include <unordered_map>
 
 #ifdef _WIN32
 #	ifndef NOMINMAX
@@ -131,6 +133,61 @@ namespace CSX::RenderMap
 				a_accepting.store(false, std::memory_order_release);
 			}
 		}
+
+		template <std::size_t N>
+		bool CopyBounded(std::string_view a_source, std::array<char, N>& a_target) noexcept
+		{
+			static_assert(N > 0);
+			const auto count = std::min(a_source.size(), N - 1);
+			std::copy_n(a_source.data(), count, a_target.data());
+			a_target[count] = '\0';
+			return a_source.size() > count;
+		}
+
+		template <std::size_t N>
+		std::string_view StoredString(const std::array<char, N>& a_value) noexcept
+		{
+			return { a_value.data(), std::char_traits<char>::length(a_value.data()) };
+		}
+
+		std::uint64_t HashShaderIdentity(const ShaderObservationInput& a_input) noexcept
+		{
+			constexpr std::uint64_t offset = 14695981039346656037ull;
+			constexpr std::uint64_t prime = 1099511628211ull;
+			std::uint64_t hash = offset;
+			const auto append = [&](const auto* a_data, std::size_t a_size) {
+				const auto* bytes = reinterpret_cast<const unsigned char*>(a_data);
+				for (std::size_t index = 0; index < a_size; ++index) {
+					hash ^= bytes[index];
+					hash *= prime;
+				}
+			};
+			append(&a_input.shader, sizeof(a_input.shader));
+			append(&a_input.shaderType, sizeof(a_input.shaderType));
+			const auto appendString = [&](std::string_view a_value) {
+				append(a_value.data(), a_value.size());
+				const unsigned char separator = 0xFF;
+				append(&separator, sizeof(separator));
+			};
+			appendString(a_input.fxpFilename);
+			appendString(a_input.imageSpaceName);
+			appendString(a_input.definesSuffix);
+			return hash;
+		}
+
+		bool SameShaderIdentity(const ShaderObservationRecord& a_record, const ShaderObservationInput& a_input) noexcept
+		{
+			return !a_record.fxpFilenameTruncated && !a_record.imageSpaceNameTruncated &&
+				!a_record.definesSuffixTruncated &&
+				a_input.fxpFilename.size() <= kMaximumShaderNameLength &&
+				a_input.imageSpaceName.size() <= kMaximumShaderNameLength &&
+				a_input.definesSuffix.size() <= kMaximumShaderDefinesSuffixLength &&
+				a_record.pointerEvidence == a_input.shader &&
+				a_record.shaderType == a_input.shaderType &&
+				StoredString(a_record.fxpFilename) == a_input.fxpFilename.substr(0, kMaximumShaderNameLength) &&
+				StoredString(a_record.imageSpaceName) == a_input.imageSpaceName.substr(0, kMaximumShaderNameLength) &&
+				StoredString(a_record.definesSuffix) == a_input.definesSuffix.substr(0, kMaximumShaderDefinesSuffixLength);
+		}
 	}
 
 	struct Collector::Session
@@ -148,6 +205,11 @@ namespace CSX::RenderMap
 		std::uint64_t maxDurationTicks{ 0 };
 		std::uint64_t startTimestampTicks{ 0 };
 		std::unique_ptr<Slot[]> slots;
+		std::unique_ptr<ShaderObservationRecord[]> shaderObservations;
+		std::unique_ptr<bool[]> shaderObservationRetired;
+		std::mutex shaderObservationMutex;
+		std::unordered_multimap<std::uint64_t, std::uint32_t> shaderObservationLookup;
+		std::uint32_t shaderObservationCount{ 0 };
 
 		std::atomic_bool accepting{ true };
 		std::atomic_uint64_t inFlight{ 0 };
@@ -166,6 +228,7 @@ namespace CSX::RenderMap
 		std::atomic_uint64_t droppedTimeLimit{ 0 };
 		std::atomic_uint64_t scopeOverflow{ 0 };
 		std::atomic_uint64_t scopeMismatch{ 0 };
+		std::atomic_uint64_t droppedShaderObservations{ 0 };
 	};
 
 	Collector::ScopeGuard::ScopeGuard(
@@ -245,7 +308,8 @@ namespace CSX::RenderMap
 	{
 		if (a_config.maxFrames == 0 || a_config.maxEvents == 0 ||
 			a_config.maxBytes < sizeof(EventRecord) || a_config.maxDuration.count() <= 0 ||
-			a_config.maxScopeDepth == 0 || a_config.maxScopeDepth > kMaximumScopeDepth) {
+			a_config.maxScopeDepth == 0 || a_config.maxScopeDepth > kMaximumScopeDepth ||
+			a_config.maxShaderObservations == 0) {
 			return StartResult::kInvalidBounds;
 		}
 
@@ -264,6 +328,15 @@ namespace CSX::RenderMap
 		session->slots.reset(new (std::nothrow) Session::Slot[static_cast<std::size_t>(capacity)]);
 		if (!session->slots)
 			return StartResult::kAllocationFailed;
+		session->shaderObservations.reset(new (std::nothrow) ShaderObservationRecord[a_config.maxShaderObservations]);
+		session->shaderObservationRetired.reset(new (std::nothrow) bool[a_config.maxShaderObservations]{});
+		if (!session->shaderObservations || !session->shaderObservationRetired)
+			return StartResult::kAllocationFailed;
+		try {
+			session->shaderObservationLookup.reserve(a_config.maxShaderObservations);
+		} catch (...) {
+			return StartResult::kAllocationFailed;
+		}
 
 		session->config = a_config;
 		session->generation = nextSessionGeneration.fetch_add(1, std::memory_order_relaxed);
@@ -316,6 +389,7 @@ namespace CSX::RenderMap
 			.droppedTimeLimit = session->droppedTimeLimit.load(std::memory_order_relaxed),
 			.scopeOverflow = session->scopeOverflow.load(std::memory_order_relaxed),
 			.scopeMismatch = session->scopeMismatch.load(std::memory_order_relaxed),
+			.droppedShaderObservations = session->droppedShaderObservations.load(std::memory_order_relaxed),
 		};
 
 		const auto reserved = std::min(session->nextIndex.load(std::memory_order_acquire), session->capacity);
@@ -325,6 +399,10 @@ namespace CSX::RenderMap
 			if (slot.published.load(std::memory_order_acquire))
 				snapshot.events.push_back(slot.record);
 		}
+
+		snapshot.shaderObservations.reserve(session->shaderObservationCount);
+		for (std::uint32_t index = 0; index < session->shaderObservationCount; ++index)
+			snapshot.shaderObservations.push_back(session->shaderObservations[index]);
 
 		return snapshot;
 	}
@@ -435,10 +513,12 @@ namespace CSX::RenderMap
 		EventKind a_beginKind,
 		EventKind a_endKind,
 		const EventPayload& a_beginPayload,
-		const EventPayload& a_endPayload) noexcept
+		const EventPayload& a_endPayload,
+		std::uint64_t a_expectedGeneration) noexcept
 	{
 		auto session = activeSession.load(std::memory_order_acquire);
-		if (!session || !session->accepting.load(std::memory_order_acquire) || a_kind == ScopeKind::kCount)
+		if (!session || !session->accepting.load(std::memory_order_acquire) || a_kind == ScopeKind::kCount ||
+			(a_expectedGeneration != 0 && session->generation != a_expectedGeneration))
 			return {};
 
 		auto& state = SynchronizeThreadState(this, session->generation);
@@ -458,15 +538,100 @@ namespace CSX::RenderMap
 		return ScopeGuard(this, session->generation, a_kind, token, a_endKind, a_endPayload);
 	}
 
-	std::uint64_t Collector::AllocateObservationId() noexcept
+	std::uint64_t Collector::AllocateObservationId(std::uint64_t a_expectedGeneration) noexcept
 	{
 		const auto session = activeSession.load(std::memory_order_acquire);
-		if (!session || !session->accepting.load(std::memory_order_acquire))
+		if (!session || !session->accepting.load(std::memory_order_acquire) ||
+			(a_expectedGeneration != 0 && session->generation != a_expectedGeneration))
 			return 0;
 		const auto observationId = session->nextObservationId.fetch_add(1, std::memory_order_relaxed);
 		return activeSession.load(std::memory_order_acquire) == session &&
 				session->accepting.load(std::memory_order_acquire) ?
 			observationId : 0;
+	}
+
+	ShaderObservationResult Collector::ObserveShader(const ShaderObservationInput& a_input) noexcept
+	{
+		auto session = activeSession.load(std::memory_order_acquire);
+		if (!session || !session->accepting.load(std::memory_order_acquire) || a_input.shader == 0)
+			return {};
+
+		session->inFlight.fetch_add(1, std::memory_order_acq_rel);
+		const auto releaseFlight = [&] { session->inFlight.fetch_sub(1, std::memory_order_release); };
+		if (!session->accepting.load(std::memory_order_acquire) ||
+			activeSession.load(std::memory_order_acquire) != session) {
+			releaseFlight();
+			return {};
+		}
+
+		const auto identityHash = HashShaderIdentity(a_input);
+		ShaderObservationResult result{ .sessionGeneration = session->generation };
+		{
+			std::lock_guard lock(session->shaderObservationMutex);
+			const auto [begin, end] = session->shaderObservationLookup.equal_range(identityHash);
+			for (auto found = begin; found != end; ++found) {
+				const auto index = found->second;
+				if (!session->shaderObservationRetired[index] &&
+					SameShaderIdentity(session->shaderObservations[index], a_input)) {
+					const auto& record = session->shaderObservations[index];
+					result = { record.observationId, session->generation, record.pointerGeneration, false };
+					break;
+				}
+			}
+
+			if (result.observationId == 0) {
+				if (session->shaderObservationCount >= session->config.maxShaderObservations) {
+					session->droppedShaderObservations.fetch_add(1, std::memory_order_relaxed);
+				} else {
+					std::uint32_t pointerGeneration = 1;
+					for (std::uint32_t index = 0; index < session->shaderObservationCount; ++index) {
+						if (session->shaderObservations[index].pointerEvidence == a_input.shader)
+							pointerGeneration = std::max(pointerGeneration, session->shaderObservations[index].pointerGeneration + 1);
+					}
+
+					const auto index = session->shaderObservationCount++;
+					auto& record = session->shaderObservations[index];
+					record.observationId = session->nextObservationId.fetch_add(1, std::memory_order_relaxed);
+					record.pointerEvidence = a_input.shader;
+					record.pointerGeneration = pointerGeneration;
+					record.shaderType = a_input.shaderType;
+					record.fxpFilenameTruncated = CopyBounded(a_input.fxpFilename, record.fxpFilename);
+					record.imageSpaceNameTruncated = CopyBounded(a_input.imageSpaceName, record.imageSpaceName);
+					record.definesSuffixTruncated = CopyBounded(a_input.definesSuffix, record.definesSuffix);
+					try {
+						session->shaderObservationLookup.emplace(identityHash, index);
+						result = { record.observationId, session->generation, record.pointerGeneration, true };
+					} catch (...) {
+						--session->shaderObservationCount;
+						record = {};
+						session->droppedShaderObservations.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
+			}
+		}
+		releaseFlight();
+		return result;
+	}
+
+	void Collector::RetireShaderObservation(std::uintptr_t a_shader) noexcept
+	{
+		auto session = activeSession.load(std::memory_order_acquire);
+		if (!session || !session->accepting.load(std::memory_order_acquire) || a_shader == 0)
+			return;
+		session->inFlight.fetch_add(1, std::memory_order_acq_rel);
+		if (!session->accepting.load(std::memory_order_acquire) ||
+			activeSession.load(std::memory_order_acquire) != session) {
+			session->inFlight.fetch_sub(1, std::memory_order_release);
+			return;
+		}
+		{
+			std::lock_guard lock(session->shaderObservationMutex);
+			for (std::uint32_t index = 0; index < session->shaderObservationCount; ++index) {
+				if (session->shaderObservations[index].pointerEvidence == a_shader)
+					session->shaderObservationRetired[index] = true;
+			}
+		}
+		session->inFlight.fetch_sub(1, std::memory_order_release);
 	}
 
 	void Collector::SetThreadFrameContext(const FrameContext& a_context) noexcept

@@ -98,6 +98,27 @@ Deferred device contexts and command lists require distinct context IDs and an
 `execute-command-list` event that relates recorded work to the immediate-context
 submission epoch.
 
+### Implemented shader identity slice
+
+`BSShader_BeginTechnique` registers the engine shader as a typed, capture-local
+`shader` observation before opening the technique scope. The identity key is the
+bounded tuple `(pointer, shaderType, fxpFilename, imageSpaceName, definesSuffix)`.
+Repeated observations of the same tuple reuse one ID. A changed tuple at the same
+pointer, or an explicit retirement followed by reuse, creates the next pointer
+generation. Capture generation remains part of every serialized observation ID.
+
+The first sighting emits `shader-observed` with `shader-observation-v1`; technique
+events use `technique-boundary-v2` and carry the same typed shader observation ID.
+The registry is separately bounded by `maxShaderObservations`. Exhausting that
+bound is reported as structural incompleteness rather than silently merging an
+unknown shader.
+
+This slice does not claim to prove destruction and recreation when a pointer
+returns with an identical tuple. A destructor or creation hook may call the
+provided retirement boundary later. Compiled VS/PS wrapper identities, bytecode
+hashes, resolved descriptors, cache paths, draw calls, and bound targets remain
+later observation layers.
+
 ## Layer 4: derived render graph
 
 The render graph is regenerated from exact input hashes. It contains normalized

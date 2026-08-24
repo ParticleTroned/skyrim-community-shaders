@@ -198,6 +198,7 @@
         "maxDurationMs": { "type": "integer", "minimum": 1 },
         "maxEvents": { "type": "integer", "minimum": 1 },
         "maxBytes": { "type": "integer", "minimum": 1 },
+        "maxShaderObservations": { "type": "integer", "minimum": 1 },
         "pointerPolicy": { "enum": ["retain", "hash", "redact"] }
       }
     },

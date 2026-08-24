@@ -21,7 +21,7 @@ namespace CSX::RenderMap
 				"geometry-setup-begin", "geometry-setup-end", "pipeline-object-created", "pipeline-bind",
 				"render-target-bind", "depth-source-ready", "visibility-candidate", "visibility-result-ready",
 				"visibility-consumed", "cull-decision", "draw", "dispatch", "finish-command-list",
-				"execute-command-list",
+				"execute-command-list", "shader-observed",
 			};
 			const auto index = static_cast<std::size_t>(a_kind);
 			return index < names.size() ? names[index] : "gap";
@@ -71,7 +71,104 @@ namespace CSX::RenderMap
 				json(std::format("obs-{}-{}-g{}", a_kind, a_scope.observationId, a_generation));
 		}
 
-		json SerializePayload(const EventPayload& a_payload)
+		json ShaderObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-shader-{}-g{}", a_observationId, a_generation));
+		}
+
+		const ShaderObservationRecord* FindShaderObservation(
+			const CaptureSnapshot* a_snapshot,
+			std::uint64_t a_observationId) noexcept
+		{
+			if (!a_snapshot || a_observationId == 0)
+				return nullptr;
+			const auto found = std::find_if(
+				a_snapshot->shaderObservations.begin(), a_snapshot->shaderObservations.end(),
+				[&](const ShaderObservationRecord& a_record) {
+					return a_record.observationId == a_observationId;
+				});
+			return found == a_snapshot->shaderObservations.end() ? nullptr : std::addressof(*found);
+		}
+
+		template <std::size_t N>
+		json OptionalStoredString(const std::array<char, N>& a_value)
+		{
+			return a_value[0] == '\0' ? json(nullptr) : json(a_value.data());
+		}
+
+		json SerializeShaderObservation(
+			const ShaderObservationRecord* a_observation,
+			const EventPayload& a_payload,
+			std::uint64_t a_generation)
+		{
+			const auto observationId = a_payload.words[0];
+			if (!a_observation) {
+				return {
+					{ "schema", "shader-observation-v1" },
+					{ "shaderObservationId", ShaderObservationId(observationId, a_generation) },
+					{ "shaderPointer", PointerEvidence(a_payload.words[1]) },
+					{ "pointerGeneration", a_payload.words[2] },
+					{ "shaderType", a_payload.words[3] },
+					{ "identityDetailsAvailable", false },
+				};
+			}
+			return {
+				{ "schema", "shader-observation-v1" },
+				{ "shaderObservationId", ShaderObservationId(observationId, a_generation) },
+				{ "shaderPointer", PointerEvidence(a_observation->pointerEvidence) },
+				{ "pointerGeneration", a_observation->pointerGeneration },
+				{ "shaderType", a_observation->shaderType },
+				{ "fxpFilename", OptionalStoredString(a_observation->fxpFilename) },
+				{ "imageSpaceName", OptionalStoredString(a_observation->imageSpaceName) },
+				{ "definesSuffix", OptionalStoredString(a_observation->definesSuffix) },
+				{ "truncated", {
+					{ "fxpFilename", a_observation->fxpFilenameTruncated },
+					{ "imageSpaceName", a_observation->imageSpaceNameTruncated },
+					{ "definesSuffix", a_observation->definesSuffixTruncated },
+				} },
+				{ "identityDetailsAvailable", true },
+				{ "identityBasis", json::array({ "pointer", "shaderType", "fxpFilename", "imageSpaceName", "definesSuffix" }) },
+			};
+		}
+
+		json SerializeObservationRefs(
+			const EventRecord& a_event,
+			const CaptureSnapshot* a_snapshot)
+		{
+			std::uint64_t observationId = 0;
+			std::uint64_t pointerEvidence = 0;
+			const char* role = nullptr;
+			switch (static_cast<PayloadSchema>(a_event.payload.schema)) {
+			case PayloadSchema::kTechniqueBoundary:
+				observationId = a_event.payload.words[0];
+				pointerEvidence = a_event.payload.words[1];
+				role = "active-shader";
+				break;
+			case PayloadSchema::kShaderObservation:
+				observationId = a_event.payload.words[0];
+				pointerEvidence = a_event.payload.words[1];
+				role = "first-observed";
+				break;
+			default:
+				return json::array();
+			}
+			if (observationId == 0)
+				return json::array();
+			if (const auto* observation = FindShaderObservation(a_snapshot, observationId))
+				pointerEvidence = observation->pointerEvidence;
+			return json::array({ {
+				{ "id", ShaderObservationId(observationId, a_event.sessionGeneration) },
+				{ "kind", "shader" },
+				{ "role", role },
+				{ "pointerEvidence", PointerEvidence(pointerEvidence) },
+			} });
+		}
+
+		json SerializePayload(
+			const EventPayload& a_payload,
+			std::uint64_t a_generation,
+			const CaptureSnapshot* a_snapshot)
 		{
 			switch (static_cast<PayloadSchema>(a_payload.schema)) {
 			case PayloadSchema::kRenderPassBoundary:
@@ -86,13 +183,14 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kTechniqueBoundary:
 				return {
-					{ "schema", "technique-boundary-v1" },
-					{ "shaderPointer", PointerEvidence(a_payload.words[0]) },
-					{ "shaderType", a_payload.words[1] },
-					{ "vertexDescriptor", a_payload.words[2] },
-					{ "pixelDescriptor", a_payload.words[3] },
-					{ "callerRva", std::format("0x{:X}", a_payload.words[4]) },
-					{ "skipPixelShader", a_payload.words[5] != 0 },
+					{ "schema", "technique-boundary-v2" },
+					{ "shaderObservationId", ShaderObservationId(a_payload.words[0], a_generation) },
+					{ "shaderPointer", PointerEvidence(a_payload.words[1]) },
+					{ "shaderType", a_payload.words[2] },
+					{ "vertexDescriptor", a_payload.words[3] },
+					{ "pixelDescriptor", a_payload.words[4] },
+					{ "callerRva", std::format("0x{:X}", a_payload.words[5]) },
+					{ "skipPixelShader", a_payload.words[6] != 0 },
 				};
 			case PayloadSchema::kGeometryBoundary:
 				return {
@@ -104,6 +202,9 @@ namespace CSX::RenderMap
 					{ "passEnum", a_payload.words[4] },
 					{ "renderFlags", a_payload.words[5] },
 				};
+			case PayloadSchema::kShaderObservation:
+				return SerializeShaderObservation(
+					FindShaderObservation(a_snapshot, a_payload.words[0]), a_payload, a_generation);
 			default:
 				return {
 					{ "schema", std::format("unknown-{}", a_payload.schema) },
@@ -121,6 +222,7 @@ namespace CSX::RenderMap
 			{ "maxEvents", a_config.maxEvents },
 			{ "maxBytes", a_config.maxBytes },
 			{ "maxScopeDepth", a_config.maxScopeDepth },
+			{ "maxShaderObservations", a_config.maxShaderObservations },
 			{ "pointerPolicy", "retain" },
 		};
 	}
@@ -148,6 +250,7 @@ namespace CSX::RenderMap
 		const auto& snapshot = a_capture.snapshot;
 		const auto dropped = snapshot.statistics.droppedStopped +
 			snapshot.statistics.droppedEventLimit + snapshot.statistics.droppedByteLimit;
+		const auto structurallyTruncated = snapshot.statistics.droppedShaderObservations != 0;
 		return {
 			{ "captureId", a_capture.descriptor.captureId },
 			{ "numericId", a_capture.descriptor.numericId },
@@ -168,7 +271,9 @@ namespace CSX::RenderMap
 				{ "stopRaceRejectionCount", snapshot.statistics.droppedStopped },
 				{ "scopeOverflowCount", snapshot.statistics.scopeOverflow },
 				{ "scopeMismatchCount", snapshot.statistics.scopeMismatch },
-				{ "truncated", dropped != 0 },
+				{ "shaderObservationCount", snapshot.shaderObservations.size() },
+				{ "droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
+				{ "truncated", dropped != 0 || structurallyTruncated },
 			} },
 		};
 	}
@@ -176,7 +281,8 @@ namespace CSX::RenderMap
 	nlohmann::json SerializeEvent(
 		const EventRecord& a_event,
 		std::string_view a_captureId,
-		std::uint32_t a_processId)
+		std::uint32_t a_processId,
+		const CaptureSnapshot* a_snapshot)
 	{
 		return {
 			{ "schema", {
@@ -212,8 +318,8 @@ namespace CSX::RenderMap
 			{ "causes", json::array() },
 			{ "manifestRefs", json::array() },
 			{ "engineRefs", json::array() },
-			{ "observationRefs", json::array() },
-			{ "payload", SerializePayload(a_event.payload) },
+			{ "observationRefs", SerializeObservationRefs(a_event, a_snapshot) },
+			{ "payload", SerializePayload(a_event.payload, a_event.sessionGeneration, a_snapshot) },
 			{ "extensions", {
 				{ "csx.captureNumericId", a_event.captureNumericId },
 				{ "csx.sessionGeneration", a_event.sessionGeneration },
@@ -236,7 +342,8 @@ namespace CSX::RenderMap
 		const auto count = std::min(a_limit, records.size() - offset);
 		json events = json::array();
 		for (std::size_t index = 0; index < count; ++index)
-			events.push_back(SerializeEvent(records[offset + index], a_capture.descriptor.captureId, a_processId));
+			events.push_back(SerializeEvent(
+				records[offset + index], a_capture.descriptor.captureId, a_processId, &a_capture.snapshot));
 		return {
 			{ "captureId", a_capture.descriptor.captureId },
 			{ "offset", offset },

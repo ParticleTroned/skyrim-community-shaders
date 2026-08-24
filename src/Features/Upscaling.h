@@ -227,6 +227,7 @@ public:
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 		bool pipelineDiagnostics = false;
 		bool pipelineDiagnosticsStructured = false;
+		bool hmdMaskPersistent = false;
 		bool hmdMaskLegacySingleSample = false;
 		bool hmdMaskReducedResolutionCache = false;
 		bool foveatedVendorDispatch = false;

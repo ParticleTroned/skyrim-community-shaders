@@ -83,8 +83,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	fsr4RuntimeSelectionSchemaVersion,
 	pipelineDiagnostics,
 	pipelineDiagnosticsStructured,
-	hmdMaskLegacySingleSample,
-	hmdMaskReducedResolutionCache,
+	hmdMaskPersistent,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
@@ -4428,8 +4427,12 @@ namespace
 			settings.periphery_taa_center_area);
 		if (settings.pipelineDiagnosticsStructured)
 			settings.pipelineDiagnostics = true;
-		if (settings.hmdMaskReducedResolutionCache)
-			settings.hmdMaskLegacySingleSample = false;
+		// The old HAM A/B settings were diagnostic-only. Do not carry either
+		// implementation forward when loading a configuration written by a
+		// previous build. The persistent-mask request has its own lifecycle and
+		// must fail safely to the depth-derived kernel until its resource exists.
+		settings.hmdMaskLegacySingleSample = false;
+		settings.hmdMaskReducedResolutionCache = false;
 	}
 
 	void ApplyLegacyFsr4RuntimeSelectionMigration(
@@ -4461,6 +4464,7 @@ namespace
 		settings.perfMode = 0;
 		settings.pipelineDiagnostics = false;
 		settings.pipelineDiagnosticsStructured = false;
+		settings.hmdMaskPersistent = false;
 		settings.hmdMaskLegacySingleSample = false;
 		settings.hmdMaskReducedResolutionCache = false;
 		settings.foveatedVendorDispatch = false;
@@ -4484,6 +4488,7 @@ namespace
 		o_json.erase("vrMenuBridgeDebugMode");
 		o_json.erase("pipelineDiagnostics");
 		o_json.erase("pipelineDiagnosticsStructured");
+		o_json.erase("hmdMaskPersistent");
 		o_json.erase("hmdMaskLegacySingleSample");
 		o_json.erase("hmdMaskReducedResolutionCache");
 		o_json.erase("foveatedVendorDispatch");
@@ -15694,33 +15699,29 @@ void Upscaling::DrawSettings()
 		// VR Debug visualization -- per-eye buffers and native inputs
 		if (globals::game::isVR) {
 			ImGui::Separator();
-			ImGui::TextUnformatted("HMD Mask Scrub A/B");
-			bool reducedMaskMode =
-				GetHMDMaskImplementationMode() == HMDMaskImplementationMode::ReducedResolutionMask;
-			if (ImGui::Checkbox("Reduced-resolution reusable HAM mask", &reducedMaskMode))
-				SetHMDMaskImplementationMode(
-					reducedMaskMode ? HMDMaskImplementationMode::ReducedResolutionMask :
-					                  HMDMaskImplementationMode::RobustDepth5x5,
-					"Upscaling diagnostics UI");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Builds the thresholded, two-pixel-dilated mask at vendor-input resolution.");
-				ImGui::TextUnformatted("The mask sanitizes temporal input and replaces final 5x5 depth reads with one mask lookup.");
-				ImGui::TextUnformatted("Missing or stale mask data falls back to the current robust depth scrub.");
+			ImGui::TextUnformatted("HMD Mask Scrub");
+			if (ImGui::Checkbox("Persistent HMD mask", &settings.hmdMaskPersistent)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (vrHMDMaskQualityActive.load(std::memory_order_acquire))
+					FinalizeVRHMDMaskQualityCapture();
+#endif
+				vrReducedHMDMaskState[0] = {};
+				vrReducedHMDMaskState[1] = {};
+				RequestHistoryReset();
+				logger::info(
+					"[Upscaling][HAM] Persistent HMD mask {} by Upscaling diagnostics UI; temporal history reset requested.",
+					settings.hmdMaskPersistent ? "enabled" : "disabled");
 			}
-			bool legacyMode =
-				GetHMDMaskImplementationMode() == HMDMaskImplementationMode::LegacyExactZero;
-			if (ImGui::Checkbox("Legacy exact-zero single-sample HAM", &legacyMode))
-				SetHMDMaskImplementationMode(
-					legacyMode ? HMDMaskImplementationMode::LegacyExactZero :
-					             HMDMaskImplementationMode::RobustDepth5x5,
-					"Upscaling diagnostics UI");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("A/B mode matching the inexpensive shader kernel from 8de526eb5034.");
-				ImGui::TextUnformatted("Uses depth == 0 with no edge dilation; it can reduce HAM-edge robustness and fidelity.");
+				ImGui::TextUnformatted("Uses a headset-runtime hidden-area mask generated only when its projection or dimensions change.");
+				ImGui::TextUnformatted("While the persistent mask is unavailable or regenerating, the robust 5x5 depth scrub is used.");
 			}
 			const char* hmdMaskMode = GetHMDMaskImplementationModeName(
 				GetHMDMaskImplementationMode());
-			ImGui::Text("Active HAM scrub: %s", hmdMaskMode);
+			ImGui::Text(
+				"Active HAM scrub: %s%s",
+				hmdMaskMode,
+				settings.hmdMaskPersistent ? " (persistent requested)" : "");
 			ImGui::TextUnformatted("Changes apply live; no restart or Debug/Trace log level is required.");
 			ImGui::Separator();
 			static float debugRescale = 0.15f;

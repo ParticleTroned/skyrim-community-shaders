@@ -3702,6 +3702,10 @@ void ScreenshotFeature::DrawPostCaptureIndicator()
 	const bool recording = IsFrameSequenceCapturing();
 	if (globals::game::isVR) {
 		globals::features::vr.SubmitCaptureIndicator(recording);
+		// The OpenVR overlay is the sole VR indicator. Rendering the desktop ImGui
+		// fallback as well makes a second dot part of Skyrim's avatar-relative
+		// presentation, so it does not remain fixed to the player's gaze.
+		return;
 	}
 	if (!recording) {
 		return;

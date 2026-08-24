@@ -1999,7 +1999,7 @@ void ScreenshotFeature::DrawSettings()
 
 	ImGui::BeginDisabled(!IsRuntimeEnabled());
 	if (ImGui::Button("Take Screenshot Now")) {
-		RequestCapture();
+		RequestUiCapture();
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
@@ -2348,7 +2348,7 @@ void ScreenshotFeature::FallBackToDesktopCapture(ActiveCapture& a_capture, std::
 	a_capture.presentsWaited = 0;
 }
 
-void ScreenshotFeature::RequestCapture()
+void ScreenshotFeature::RequestUiCapture()
 {
 	(void)RequestApiCapture("ui");
 }

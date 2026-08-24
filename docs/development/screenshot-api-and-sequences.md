@@ -6,8 +6,9 @@ qualification. This document is normative where it uses **must**, **must not**,
 **required**, or **terminal**.
 
 Implemented in the candidate are the screenshot coordinator and the shared API
-service foundation for envelopes, idempotency, session identity, and journaling; the DevBench
-adapter and in-game control delegation, still and bounded sequence capture,
+service foundation for envelopes, idempotency, session identity, and journaling;
+the DevBench adapter, native service, obsolete-menu compatibility delegation,
+in-game control delegation, still and bounded sequence capture,
 multi-output/separate-eye processing, partial/final manifests, settings-schema
 migration, idempotency, acknowledgement, cancellation, and retention. Offline
 preview-video packaging remains capability-reported as unavailable. The test
@@ -23,10 +24,12 @@ failures, cancellation, and client acknowledgement.
 
 External adapters are the optional DevBench tool
 `communityshaders.screenshot` and the native `csx.screenshot` service published
-through the `CSXR` registry. The current `communityshaders.menu` screenshot
-action and CSX's in-game capture controls delegate through that same native
-service. Screenshot methods are not appended to the legacy general `CSAP`
-vtable.
+through the `CSXR` registry. The old `communityshaders.menu` screenshot action
+is **obsolete**. It remains temporarily as a compatibility adapter so legacy
+clients can migrate, and delegates through that same native service. New
+clients must not use it. CSX's in-game capture controls also dispatch through
+the native service. Screenshot methods are not appended to the legacy general
+`CSAP` vtable.
 
 A sequence is complete when its frame artifacts and final manifest are safely
 written. Creating a playable video is an optional post-capture packaging step.
@@ -913,17 +916,48 @@ not become parent errors unless the selected failure policy says so.
 10. Disabling capture cancels acquisition and sequence scheduling; committed
     encoder work remains owned until terminal.
 
-## Compatibility behavior
+## Obsolete compatibility behavior
 
-The current `communityshaders.menu` action
-`{"action":"screenshot"}` delegates to `capture` with the current settings.
-For compatibility it retains its existing `action`, `path`, and menu `status`
-fields and adds `delegatedRequest` containing the screenshot request ID and
-acceptance receipt. New clients use `communityshaders.screenshot` directly.
+The old `communityshaders.menu` action `{"action":"screenshot"}` is obsolete
+and scheduled for removal after a migration window. While retained, it
+delegates to `capture` with the current settings. Its response preserves the
+existing `action`, `path`, and menu `status` fields, adds `delegatedRequest`
+containing the screenshot request ID and acceptance receipt, and adds explicit
+`deprecation` metadata naming `communityshaders.screenshot`, contract major 1,
+action `capture` as the replacement. New clients must use
+`communityshaders.screenshot` directly.
 
-`ScreenshotFeature::RequestCapture()` is the UI/hotkey adapter. It dispatches
-through the same public `CSX::ScreenshotAPI::Interface001` entry point as native
-mods; code requiring a receipt uses the returned JSON response.
+An obsolete-action response includes migration metadata alongside its normal
+compatibility response:
+
+```json
+{
+  "action": "screenshot",
+  "delegatedRequest": { "ok": true, "request": { "requestId": "..." } },
+  "deprecation": {
+    "obsolete": true,
+    "message": "communityshaders.menu screenshot is obsolete; migrate to communityshaders.screenshot contractMajor 1",
+    "replacement": {
+      "tool": "communityshaders.screenshot",
+      "contractMajor": 1,
+      "action": "capture"
+    }
+  }
+}
+```
+
+Removal must not occur before at least one published migration release has
+carried this notice. Before removal, repeat the repository and automation-tool
+call-site audit for `communityshaders.menu` plus action `screenshot`, and record
+the removal in the release notes. Absence of known clients is not, by itself, a
+reason to skip the migration release.
+
+The native screenshot settings button and screenshot hotkey use
+`ScreenshotFeature::RequestUiCapture()`. That adapter dispatches through the
+same public `CSX::ScreenshotAPI::Interface001` entry point as native mods. It is
+not coupled to the obsolete menu action. Code requiring a receipt uses
+`RequestApiCapture()` and its returned JSON or calls the versioned service
+directly.
 
 The legacy general CSAP vtable remains unchanged. Screenshot consumers query
 the separately negotiated `csx.screenshot` service and use fixed-width POD

@@ -103,10 +103,31 @@ if(_native_registration_position EQUAL -1)
 endif()
 
 file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.cpp" _feature_controls)
+string(FIND "${_feature_controls}" "void ScreenshotFeature::RequestUiCapture()" _ui_adapter_position)
+string(FIND "${_feature_controls}" "RequestApiCapture(\"ui\")" _ui_v1_position)
 string(FIND "${_feature_controls}" "DispatchScreenshotServiceRequest" _control_dispatch_position)
-if(_control_dispatch_position EQUAL -1)
-    message(FATAL_ERROR "CSX screenshot controls do not dispatch through the public service")
+if(_ui_adapter_position EQUAL -1 OR _ui_v1_position EQUAL -1 OR _control_dispatch_position EQUAL -1)
+    message(FATAL_ERROR "Native screenshot UI must submit through the public contract-v1 screenshot service")
 endif()
+
+file(READ "${PROJECT_ROOT}/src/Menu.cpp" _menu)
+string(FIND "${_menu}" "screenshotFeature.RequestUiCapture()" _hotkey_v1_position)
+if(_hotkey_v1_position EQUAL -1)
+    message(FATAL_ERROR "Screenshot hotkey does not use the contract-v1 UI adapter")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/MenuDevBenchBridge.cpp" _menu_bridge)
+foreach(_obsolete_contract_text IN ITEMS
+    "communityshaders.menu screenshot is obsolete"
+    "\"obsolete\", true"
+    "\"tool\", \"communityshaders.screenshot\""
+    "\"contractMajor\", 1"
+)
+    string(FIND "${_menu_bridge}" "${_obsolete_contract_text}" _obsolete_position)
+    if(_obsolete_position EQUAL -1)
+        message(FATAL_ERROR "Obsolete menu screenshot adapter is missing migration metadata: ${_obsolete_contract_text}")
+    endif()
+endforeach()
 string(FIND "${_bridge}" "#ifdef DEVBENCH_BRIDGE_ENABLED" _bridge_guard_position)
 if(_bridge_guard_position EQUAL -1)
     message(FATAL_ERROR "Screenshot bridge does not use the project's DevBench compile guard")

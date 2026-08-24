@@ -15,6 +15,7 @@
 #include "RE/P/PlayerCharacter.h"
 #include "RE/S/Sky.h"
 #include "RE/T/TESObjectCELL.h"
+#include "RE/T/TESWorldSpace.h"
 
 #include <imgui_stdlib.h>
 
@@ -79,6 +80,7 @@ namespace
 	constexpr float kGammaOffsetMax = 1.0f;
 	constexpr float kGlobalSkyBrightnessMax = 2.0f;
 	constexpr float kGlobalLightingMultiplierMax = 5.0f;
+	constexpr std::size_t kMaxOverrideHierarchyDepth = 64;
 
 	using Profile = AdaptiveBrightness::Profile;
 
@@ -109,7 +111,8 @@ namespace
 
 	constexpr const char* kOverrideTypeLocation = "Location";
 	constexpr const char* kOverrideTypeCell = "Cell";
-	constexpr const char* kPresetVersion = "4.0.0";
+	constexpr const char* kOverrideTypeWorldspace = "Worldspace";
+	constexpr const char* kPresetVersion = "4.1.0";
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
 	constexpr std::string_view kLegacyGlobalWaterAppearanceFieldName = SettingsMigrations::kLegacyWaterAppearanceSettingsKey;
@@ -126,6 +129,7 @@ namespace
 
 	struct CurrentLocationForms
 	{
+		const RE::TESWorldSpace* worldspace = nullptr;
 		const RE::BGSLocation* location = nullptr;
 		const RE::TESObjectCELL* cell = nullptr;
 	};
@@ -883,7 +887,8 @@ namespace
 		if (a_locationOverride.name.empty())
 			a_locationOverride.name = a_locationOverride.key;
 
-		if (a_locationOverride.type != kOverrideTypeCell)
+		if (a_locationOverride.type != kOverrideTypeCell &&
+			a_locationOverride.type != kOverrideTypeWorldspace)
 			a_locationOverride.type = kOverrideTypeLocation;
 
 		ClampProfileSettings(a_locationOverride.profile);
@@ -1099,11 +1104,13 @@ namespace
 	{
 		const auto* player = RE::PlayerCharacter::GetSingleton();
 		const auto* cell = player ? player->parentCell : nullptr;
+		const auto* worldspace = player ? player->GetWorldspace() : nullptr;
 		auto* location = player ? player->GetCurrentLocation() : nullptr;
 		if (!location)
 			location = cell ? cell->GetLocation() : nullptr;
 
 		return {
+			.worldspace = worldspace,
 			.location = location,
 			.cell = cell,
 		};
@@ -1146,7 +1153,7 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and Unified Water appearance used for each time and location type.");
+			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and Unified Water appearance used for each time and location type. Worldspace, location, and cell overrides are managed under Locations.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
 
@@ -1176,7 +1183,7 @@ void AdaptiveBrightness::DrawSettings()
 		}
 
 		if (ImGui::BeginTabItem("Locations", nullptr, locationSectionFlags)) {
-			ImGui::TextWrapped("Create precise profile overrides for individual locations or cells.");
+			ImGui::TextWrapped("Create precise profile overrides for worldspaces, locations, or exact cells.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved overrides can still be reviewed.");
 			DrawLocationOverrides(false, true, settings.enabled);
@@ -1534,12 +1541,14 @@ void AdaptiveBrightness::DrawLocationSummary()
 		ImGui::TextWrapped("Current location uses the %s base profile.", GetProfileName(currentProfile));
 	}
 
-	if (targets.cell)
-		ImGui::TextDisabled("Exact cell target: %s", targets.cell->name.c_str());
+	if (targets.worldspace)
+		ImGui::TextDisabled("Worldspace target: %s", targets.worldspace->name.c_str());
 	if (targets.location)
 		ImGui::TextDisabled("Location target: %s", targets.location->name.c_str());
-	if (!targets.cell && !targets.location)
-		ImGui::TextDisabled("No current location or cell form is available.");
+	if (targets.cell)
+		ImGui::TextDisabled("Exact cell target: %s", targets.cell->name.c_str());
+	if (!targets.worldspace && !targets.location && !targets.cell)
+		ImGui::TextDisabled("No current worldspace, location, or cell form is available.");
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 	ImGui::TextDisabled("Switch this feature to Advanced to manage location overrides.");
 }
@@ -1547,7 +1556,7 @@ void AdaptiveBrightness::DrawLocationSummary()
 void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
 {
 	ImGui::SeparatorText("Location Override Profiles");
-	DrawHintText("Location overrides are per-place profiles. A saved override is used when its location or cell matches where you are.");
+	DrawHintText("Match priority is exact cell, current or parent location, then current or parent exterior worldspace. If none match, the interior, dungeon, dwelling, or exterior day/night base profile is used.");
 	if (a_includePresetControls) {
 		DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
 	}
@@ -1584,20 +1593,26 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 		ImGui::SameLine();
 		ImGui::TextDisabled("%s", a_target->name.c_str());
 		ImGui::TextDisabled("Form %s, %s, COC %s", a_target->type.c_str(), a_target->key.c_str(), GetCocLabel(a_target->cocCode));
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("The COC code is captured from the current cell as a navigation shortcut.");
 		ImGui::PopID();
 	};
 
 	drawTargetAction(
-		targets.cell,
-		"Exact Cell",
-		"Applies only to this exact cell and takes precedence over location overrides.");
+		targets.worldspace,
+		"Worldspace",
+		"Applies throughout this exterior worldspace and its child worldspaces unless a more specific worldspace, location, or exact-cell override exists.");
 	drawTargetAction(
 		targets.location,
 		"Location",
-		"Applies to this location and its descendants unless an exact-cell override exists.");
+		"Applies to this location and its descendants unless an exact-cell override exists; it takes precedence over worldspace overrides.");
+	drawTargetAction(
+		targets.cell,
+		"Exact Cell",
+		"Applies only to this exact cell and takes precedence over location and worldspace overrides.");
 
-	if (!targets.cell && !targets.location) {
-		ImGui::TextDisabled("No current location or cell form is available.");
+	if (!targets.worldspace && !targets.cell && !targets.location) {
+		ImGui::TextDisabled("No current worldspace, location, or cell form is available.");
 	}
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 
@@ -1605,8 +1620,8 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 		DrawLocationOverridePresetControls();
 	ImGui::SeparatorText("Saved Overrides");
 	DrawHintText(a_allowEdits ?
-					 "These saved overrides are matched by location or cell. Click a row to edit it." :
-					 "These saved overrides are matched by location or cell. Click a row to review it.");
+					 "These saved overrides are matched by worldspace, location, or cell. Click a row to edit it." :
+					 "These saved overrides are matched by worldspace, location, or cell. Click a row to review it.");
 
 	if (settings.locationOverrides.empty()) {
 		ClearLocationOverrideSelection();
@@ -1739,7 +1754,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			}
 			ImGui::EndDisabled();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Copy the coc command for this saved cell.");
+				ImGui::Text("Copy the COC command saved with this override.");
 			}
 			ImGui::BeginDisabled(!a_allowEdits);
 			if (ImGui::SmallButton("Delete")) {
@@ -1797,7 +1812,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 void AdaptiveBrightness::DrawLocationOverridePresetControls()
 {
 	ImGui::SeparatorText("Override Presets");
-	DrawHintText("Override presets store saved location and cell overrides only. They do not include the five profile tabs.");
+	DrawHintText("Override presets store saved worldspace, location, and cell overrides only. They do not include the five profile tabs.");
 	ImGui::PushID("LocationOverridePresetControls");
 
 	const auto presetPath = GetPresetPath(locationOverridePresetName, PresetKind::Location);
@@ -1831,7 +1846,7 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 void AdaptiveBrightness::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets store global calibration, Bloom and water appearance defaults, exterior timing, the five profile tabs, and all saved location overrides.");
+	DrawHintText("Full presets store global calibration, Bloom and water appearance defaults, exterior timing, the five profile tabs, and all saved worldspace, location, and cell overrides.");
 	DrawHintText("Import replaces the profile tabs and the saved override list in the current settings.");
 	ImGui::PushID("FullPresetControls");
 
@@ -2157,8 +2172,11 @@ AdaptiveBrightness::CurrentLocationOverrideTargets AdaptiveBrightness::GetCurren
 	};
 
 	return {
-		.cell = makeTarget(forms.cell, kOverrideTypeCell),
+		.worldspace = LocationContext::Get().inInterior ?
+		                  std::nullopt :
+		                  makeTarget(forms.worldspace, kOverrideTypeWorldspace),
 		.location = makeTarget(forms.location, kOverrideTypeLocation),
+		.cell = makeTarget(forms.cell, kOverrideTypeCell),
 	};
 }
 
@@ -2179,11 +2197,19 @@ void AdaptiveBrightness::SaveCurrentLocationOverride(const LocationOverrideTarge
 	locationOverride.type = a_target.type;
 	locationOverride.cocCode = a_target.cocCode;
 
+	const auto forms = GetCurrentLocationForms();
 	const LocationOverride* inheritedOverride = nullptr;
 	if (a_target.type == kOverrideTypeCell) {
 		inheritedOverride = GetActiveLocationOverride();
-	} else {
-		const auto inheritedIndex = ResolveLocationHierarchyOverrideIndex(GetCurrentLocationForms().location);
+	} else if (a_target.type == kOverrideTypeLocation) {
+		auto inheritedIndex = ResolveLocationHierarchyOverrideIndex(forms.location);
+		if (inheritedIndex == kInvalidLocationOverrideIndex && !LocationContext::Get().inInterior)
+			inheritedIndex = ResolveWorldspaceHierarchyOverrideIndex(forms.worldspace);
+		if (inheritedIndex != kInvalidLocationOverrideIndex && inheritedIndex < settings.locationOverrides.size())
+			inheritedOverride = &settings.locationOverrides[inheritedIndex];
+	} else if (a_target.type == kOverrideTypeWorldspace) {
+		const auto inheritedIndex = ResolveWorldspaceHierarchyOverrideIndex(
+			forms.worldspace ? forms.worldspace->parentWorld : nullptr);
 		if (inheritedIndex != kInvalidLocationOverrideIndex && inheritedIndex < settings.locationOverrides.size())
 			inheritedOverride = &settings.locationOverrides[inheritedIndex];
 	}
@@ -2273,9 +2299,24 @@ std::size_t AdaptiveBrightness::FindLocationOverrideIndexByForm(const RE::TESFor
 	return FindLocationOverrideIndexByKey(key);
 }
 
+std::size_t AdaptiveBrightness::ResolveWorldspaceHierarchyOverrideIndex(const RE::TESWorldSpace* a_worldspace) const
+{
+	// Parent chains are normally shallow and acyclic. The cap prevents malformed
+	// plugin data from trapping the render thread in an unbounded traversal.
+	std::size_t depth = 0;
+	for (auto* current = a_worldspace; current && depth < kMaxOverrideHierarchyDepth; current = current->parentWorld, ++depth) {
+		const auto resolvedIndex = FindLocationOverrideIndexByForm(current);
+		if (resolvedIndex != kInvalidLocationOverrideIndex)
+			return resolvedIndex;
+	}
+
+	return kInvalidLocationOverrideIndex;
+}
+
 std::size_t AdaptiveBrightness::ResolveLocationHierarchyOverrideIndex(const RE::BGSLocation* a_location) const
 {
-	for (auto* current = a_location; current; current = current->parentLoc) {
+	std::size_t depth = 0;
+	for (auto* current = a_location; current && depth < kMaxOverrideHierarchyDepth; current = current->parentLoc, ++depth) {
 		const auto resolvedIndex = FindLocationOverrideIndexByForm(current);
 		if (resolvedIndex != kInvalidLocationOverrideIndex)
 			return resolvedIndex;
@@ -2292,27 +2333,35 @@ std::size_t AdaptiveBrightness::ResolveLocationOverrideIndex() const
 		return kInvalidLocationOverrideIndex;
 
 	const auto forms = GetCurrentLocationForms();
+	const bool inInterior = LocationContext::Get().inInterior;
+	const uint32_t worldspaceFormID = forms.worldspace ? forms.worldspace->GetFormID() : 0;
 	const uint32_t locationFormID = forms.location ? forms.location->GetFormID() : 0;
 	const uint32_t cellFormID = forms.cell ? forms.cell->GetFormID() : 0;
 
 	if (locationOverrideCache.valid &&
 		locationOverrideCache.lookupVersion == locationOverrideLookupVersion &&
+		locationOverrideCache.worldspaceFormID == worldspaceFormID &&
 		locationOverrideCache.locationFormID == locationFormID &&
-		locationOverrideCache.cellFormID == cellFormID) {
+		locationOverrideCache.cellFormID == cellFormID &&
+		locationOverrideCache.inInterior == inInterior) {
 		return locationOverrideCache.overrideIndex;
 	}
 
-	// Exact-cell overrides are the most specific scope and therefore take
-	// precedence over the current location and all parent locations.
+	// Resolve from most to least specific. Semantic interior profiles and the
+	// exterior schedule are selected only when none of these saved scopes match.
 	auto resolvedIndex = FindLocationOverrideIndexByForm(forms.cell);
 	if (resolvedIndex == kInvalidLocationOverrideIndex)
 		resolvedIndex = ResolveLocationHierarchyOverrideIndex(forms.location);
+	if (resolvedIndex == kInvalidLocationOverrideIndex && !inInterior)
+		resolvedIndex = ResolveWorldspaceHierarchyOverrideIndex(forms.worldspace);
 
 	locationOverrideCache = {
+		.worldspaceFormID = worldspaceFormID,
 		.locationFormID = locationFormID,
 		.cellFormID = cellFormID,
 		.lookupVersion = locationOverrideLookupVersion,
 		.overrideIndex = resolvedIndex,
+		.inInterior = inInterior,
 		.valid = true,
 	};
 

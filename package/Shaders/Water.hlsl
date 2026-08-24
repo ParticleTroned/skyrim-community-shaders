@@ -915,9 +915,12 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 #			endif
 
 #			if defined(UNIFIED_WATER)
-	float waveAmplitude = SharedData::unifiedWaterSettings.WaveAmplitude;
-	if (waveAmplitude != 1.0)
-		finalNormal = normalize(lerp(float3(0, 0, 1), finalNormal, waveAmplitude));
+	[branch] if (SharedData::waterAppearanceSettings.Enabled)
+	{
+		float waveAmplitude = SharedData::waterAppearanceSettings.WaveAmplitude;
+		if (waveAmplitude != 1.0)
+			finalNormal = normalize(lerp(float3(0, 0, 1), finalNormal, waveAmplitude));
+	}
 #			endif
 
 	result.normal = finalNormal;
@@ -1092,13 +1095,15 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	float viewAngle = 1 - saturate(dot(-viewDirection, actualNormal));
 	float vanillaFresnel = (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 #			if defined(UNIFIED_WATER)
-	return lerp(
-		SharedData::unifiedWaterSettings.FresnelMin,
-		SharedData::unifiedWaterSettings.FresnelMax,
-		vanillaFresnel);
-#			else
-	return vanillaFresnel;
+	[branch] if (SharedData::waterAppearanceSettings.Enabled)
+	{
+		return lerp(
+			SharedData::waterAppearanceSettings.FresnelMin,
+			SharedData::waterAppearanceSettings.FresnelMax,
+			vanillaFresnel);
+	}
 #			endif
+	return vanillaFresnel;
 }
 
 #			if defined(UNIFIED_WATER)
@@ -1106,7 +1111,8 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 {
 	float tintStrength = saturate(SharedData::unifiedWaterSettings.WaterTintStrength);
 	float3 tintedColor = baseColor;
-	[branch] if (!(tintStrength <= 0.0)) {
+	[branch] if (!(tintStrength <= 0.0))
+	{
 		float3 baseColorLinear = Color::SkyrimGammaToLinear(max(baseColor, 0.0.xxx));
 		float3 tintColorLinear = Color::SkyrimGammaToLinear(saturate(SharedData::unifiedWaterSettings.WaterTintColor));
 		tintedColor = Color::LinearToSkyrimGamma(lerp(baseColorLinear, tintColorLinear, tintStrength));
@@ -1116,7 +1122,11 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 
 float3 ApplyUnifiedWaterBrightness(float3 waterColor)
 {
-	return waterColor * SharedData::unifiedWaterSettings.WaterBrightness;
+	[branch] if (SharedData::waterAppearanceSettings.Enabled)
+	{
+		return waterColor * SharedData::waterAppearanceSettings.WaterBrightness;
+	}
+	return waterColor;
 }
 #			endif
 
@@ -1580,14 +1590,21 @@ DiffuseOutput GetWaterDiffuseColor(
 	float depth)
 {
 #			if defined(REFRACTIONS)
-	float refractionAmount = 1.0;
+	float2 refractionOffset = VarAmounts.w * refractionsDepthFactor * normal.xy;
 #				if defined(UNIFIED_WATER)
-	refractionAmount = SharedData::unifiedWaterSettings.RefractionAmount;
+	[branch] if (SharedData::waterAppearanceSettings.Enabled)
+	{
+		refractionOffset =
+			VarAmounts.w *
+			SharedData::waterAppearanceSettings.RefractionAmount *
+			refractionsDepthFactor *
+			normal.xy;
+	}
 #				endif
 	float4 refractionNormal = mul(
 		transpose(TextureProj[eyeIndex]),
 		float4(
-			(VarAmounts.w * refractionAmount * refractionsDepthFactor * normal.xy) + input.MPosition.xy,
+			refractionOffset + input.MPosition.xy,
 			input.MPosition.z,
 			1));
 
@@ -1727,7 +1744,8 @@ float3 GetSunColor(float3 normal, float3 viewDirection)
 	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 sunSpecular = reflectionMul * Color::DirectionalLight((SunColor.xyz * SunDir.w) / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * (1.0 - exp(-DeepColor.w)) * llDirLightMult;
 #				if defined(UNIFIED_WATER)
-	sunSpecular *= SharedData::unifiedWaterSettings.SunSpecularMultiplier;
+	[branch] if (SharedData::waterAppearanceSettings.Enabled)
+		sunSpecular *= SharedData::waterAppearanceSettings.SunSpecularMultiplier;
 #				endif
 	return sunSpecular;
 #			endif
@@ -1925,7 +1943,8 @@ PS_OUTPUT main(PS_INPUT input)
 	// LOD Blending chooses the height-faded reflection source inside
 	// GetWaterSpecularColor. Apply the independent global amount only after that
 	// blend has completed, so neither setting changes the other's interpolation.
-	specularColor *= SharedData::unifiedWaterSettings.GlobalReflectionAmount;
+	[branch] if (SharedData::waterAppearanceSettings.Enabled)
+		specularColor *= SharedData::waterAppearanceSettings.GlobalReflectionAmount;
 #				endif
 	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(
 		input,
@@ -1947,9 +1966,12 @@ PS_OUTPUT main(PS_INPUT input)
 	float nativeRefractionMul = diffuseOutput.refractionMul;
 #				endif
 #				if defined(UNIFIED_WATER) && defined(REFRACTIONS)
-	diffuseOutput.refractionMul = saturate(
-		diffuseOutput.refractionMul *
-		SharedData::unifiedWaterSettings.Muddiness);
+	[branch] if (SharedData::waterAppearanceSettings.Enabled)
+	{
+		diffuseOutput.refractionMul = saturate(
+			diffuseOutput.refractionMul *
+			SharedData::waterAppearanceSettings.Muddiness);
+	}
 #				endif
 
 #				if defined(VOLUMETRIC_SHADOWS)

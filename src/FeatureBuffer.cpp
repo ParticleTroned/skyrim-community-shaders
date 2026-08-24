@@ -18,6 +18,7 @@
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
+#include "Features/WaterAppearance.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "TruePBR.h"
@@ -50,6 +51,7 @@ namespace
 	using TruePBRSettingsCB = TruePBR::Settings;
 	using FoliageLightingSettingsCB = FoliageLighting::Settings;
 	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
+	using WaterAppearanceSettingsCB = WaterAppearance::Settings;
 	using BloomSettingsCB = Bloom::Settings;
 
 	// Keep these in lock-step with package/Shaders/Common/SharedData.hlsli::FeatureData.
@@ -75,6 +77,7 @@ namespace
 		TruePBRSettingsCB truePBRSettings;
 		FoliageLightingSettingsCB foliageLightingSettings;
 		UnifiedWaterSettingsCB unifiedWaterSettings;
+		WaterAppearanceSettingsCB waterAppearanceSettings;
 		BloomSettingsCB bloomSettings;
 	};
 
@@ -99,6 +102,7 @@ namespace
 		TruePBRSettingsCB,
 		FoliageLightingSettingsCB,
 		UnifiedWaterSettingsCB,
+		WaterAppearanceSettingsCB,
 		BloomSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
@@ -131,7 +135,7 @@ namespace
 	static_assert(offsetof(FoliageLightingSettingsCB, EnableFoliageAmbientFlip) == 8);
 	static_assert(offsetof(FoliageLightingSettingsCB, FoliageAmbientAmount) == 12);
 	static_assert(offsetof(FoliageLightingSettingsCB, EnableGrassScattering) == 16);
-	static_assert(sizeof(UnifiedWaterSettingsCB) == 80);
+	static_assert(sizeof(UnifiedWaterSettingsCB) == 48);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackStrength) == 0);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepConnectionProbeReachUnits) == 4);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextDepthUnits) == 8);
@@ -142,14 +146,16 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowSurfaceDepthRangeUnits) == 36);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowFallbackMaxDistance) == 40);
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextTransitionUnits) == 44);
-	static_assert(offsetof(UnifiedWaterSettingsCB, WaterBrightness) == 48);
-	static_assert(offsetof(UnifiedWaterSettingsCB, GlobalReflectionAmount) == 52);
-	static_assert(offsetof(UnifiedWaterSettingsCB, RefractionAmount) == 56);
-	static_assert(offsetof(UnifiedWaterSettingsCB, SunSpecularMultiplier) == 60);
-	static_assert(offsetof(UnifiedWaterSettingsCB, WaveAmplitude) == 64);
-	static_assert(offsetof(UnifiedWaterSettingsCB, FresnelMin) == 68);
-	static_assert(offsetof(UnifiedWaterSettingsCB, FresnelMax) == 72);
-	static_assert(offsetof(UnifiedWaterSettingsCB, Muddiness) == 76);
+	static_assert(sizeof(WaterAppearanceSettingsCB) == 48);
+	static_assert(offsetof(WaterAppearanceSettingsCB, Enabled) == 0);
+	static_assert(offsetof(WaterAppearanceSettingsCB, WaterBrightness) == 4);
+	static_assert(offsetof(WaterAppearanceSettingsCB, GlobalReflectionAmount) == 8);
+	static_assert(offsetof(WaterAppearanceSettingsCB, RefractionAmount) == 12);
+	static_assert(offsetof(WaterAppearanceSettingsCB, SunSpecularMultiplier) == 16);
+	static_assert(offsetof(WaterAppearanceSettingsCB, WaveAmplitude) == 20);
+	static_assert(offsetof(WaterAppearanceSettingsCB, FresnelMin) == 24);
+	static_assert(offsetof(WaterAppearanceSettingsCB, FresnelMax) == 28);
+	static_assert(offsetof(WaterAppearanceSettingsCB, Muddiness) == 32);
 	static_assert(sizeof(BloomSettingsCB) == 48);
 	static_assert(offsetof(BloomSettingsCB, Enabled) == 0);
 	static_assert(offsetof(BloomSettingsCB, BloomTint) == 20);
@@ -180,7 +186,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == offsetof(FeatureDataLayout, terrainBlendingSettings) + sizeof(TerrainBlendingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, foliageLightingSettings) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, foliageLightingSettings) + sizeof(FoliageLightingSettingsCB));
-	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, waterAppearanceSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, waterAppearanceSettings) + sizeof(WaterAppearanceSettingsCB));
 	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
 
 	template <class T>
@@ -245,5 +252,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::truePBR.settings,
 		globals::features::foliageLighting.GetCommonBufferData(),
 		globals::features::unifiedWater.GetCommonBufferData(),
+		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
 		globals::features::adaptiveBrightness.GetEffectiveBloomSettings());
 }

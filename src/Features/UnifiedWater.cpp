@@ -24,14 +24,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UseOpenShadersDepthBehaviour,
 	WaterTintColor,
 	WaterTintStrength,
-	WaterBrightness,
-	GlobalReflectionAmount,
-	RefractionAmount,
-	SunSpecularMultiplier,
-	WaveAmplitude,
-	FresnelMin,
-	FresnelMax,
-	Muddiness,
 	ShallowFallbackStrength,
 	DeepConnectionProbeReachUnits,
 	DeepContextDepthUnits,
@@ -48,13 +40,6 @@ namespace
 	constexpr float kWaterTintColorMax = 1.0f;
 	constexpr float kWaterTintStrengthMin = 0.0f;
 	constexpr float kWaterTintStrengthMax = 1.0f;
-	constexpr float kWaterBrightnessMin = 0.0f;
-	constexpr float kWaterBrightnessMax = 2.0f;
-	constexpr float kWaterAmountMin = 0.0f;
-	constexpr float kWaterAmountMax = 2.0f;
-	constexpr float kWaterSunSpecularMax = 5.0f;
-	constexpr float kWaterFresnelMin = 0.0f;
-	constexpr float kWaterFresnelMax = 1.0f;
 	constexpr float kShallowFallbackStrengthMin = 0.0f;
 	constexpr float kShallowFallbackStrengthMax = 1.0f;
 	constexpr float kDeepConnectionProbeReachUnitsMin = 0.0f;
@@ -108,47 +93,6 @@ namespace
 			kWaterTintStrengthMin,
 			kWaterTintStrengthMax,
 			defaults.WaterTintStrength);
-		a_settings.WaterBrightness = ClampFiniteOrDefault(
-			a_settings.WaterBrightness,
-			kWaterBrightnessMin,
-			kWaterBrightnessMax,
-			defaults.WaterBrightness);
-		a_settings.GlobalReflectionAmount = ClampFiniteOrDefault(
-			a_settings.GlobalReflectionAmount,
-			kWaterAmountMin,
-			kWaterAmountMax,
-			defaults.GlobalReflectionAmount);
-		a_settings.RefractionAmount = ClampFiniteOrDefault(
-			a_settings.RefractionAmount,
-			kWaterAmountMin,
-			kWaterAmountMax,
-			defaults.RefractionAmount);
-		a_settings.SunSpecularMultiplier = ClampFiniteOrDefault(
-			a_settings.SunSpecularMultiplier,
-			kWaterAmountMin,
-			kWaterSunSpecularMax,
-			defaults.SunSpecularMultiplier);
-		a_settings.WaveAmplitude = ClampFiniteOrDefault(
-			a_settings.WaveAmplitude,
-			kWaterAmountMin,
-			kWaterAmountMax,
-			defaults.WaveAmplitude);
-		a_settings.FresnelMin = ClampFiniteOrDefault(
-			a_settings.FresnelMin,
-			kWaterFresnelMin,
-			kWaterFresnelMax,
-			defaults.FresnelMin);
-		a_settings.FresnelMax = ClampFiniteOrDefault(
-			a_settings.FresnelMax,
-			kWaterFresnelMin,
-			kWaterFresnelMax,
-			defaults.FresnelMax);
-		a_settings.FresnelMin = std::min(a_settings.FresnelMin, a_settings.FresnelMax);
-		a_settings.Muddiness = ClampFiniteOrDefault(
-			a_settings.Muddiness,
-			kWaterAmountMin,
-			kWaterAmountMax,
-			defaults.Muddiness);
 		a_settings.ShallowFallbackStrength = ClampFiniteOrDefault(
 			a_settings.ShallowFallbackStrength,
 			kShallowFallbackStrengthMin,
@@ -227,86 +171,6 @@ namespace
 			ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Adjusts how strongly the selected colour appears in the water.");
-	}
-
-	void DrawWaterSlider(
-		const char* a_label,
-		float& a_value,
-		float a_min,
-		float a_max,
-		const char* a_tooltip)
-	{
-		ImGui::SliderFloat(
-			a_label,
-			&a_value,
-			a_min,
-			a_max,
-			"%.2f",
-			ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("%s", a_tooltip);
-	}
-
-	void DrawAdvancedWaterAppearanceSettings(UnifiedWater::Settings& a_settings)
-	{
-		ImGui::SeparatorText("Output");
-		DrawWaterSlider(
-			"Water Brightness",
-			a_settings.WaterBrightness,
-			kWaterBrightnessMin,
-			kWaterBrightnessMax,
-			"Scales the final water output, including fog and additive water-light passes.");
-
-		ImGui::SeparatorText("Surface");
-		DrawWaterSlider(
-			"Wave Amplitude",
-			a_settings.WaveAmplitude,
-			kWaterAmountMin,
-			kWaterAmountMax,
-			"Scales the final water normal after flowmap, displacement, and rain-ripple detail are combined.");
-		DrawWaterSlider(
-			"Fresnel Minimum",
-			a_settings.FresnelMin,
-			kWaterFresnelMin,
-			a_settings.FresnelMax,
-			"Sets the minimum reflection response when viewing the water surface head-on.");
-		DrawWaterSlider(
-			"Fresnel Maximum",
-			a_settings.FresnelMax,
-			a_settings.FresnelMin,
-			kWaterFresnelMax,
-			"Sets the maximum reflection response at grazing view angles.");
-
-		ImGui::SeparatorText("Reflections");
-		DrawWaterSlider(
-			"Global Reflection Amount",
-			a_settings.GlobalReflectionAmount,
-			kWaterAmountMin,
-			kWaterAmountMax,
-			"Scales the complete environment, cubemap, and screen-space reflection result.\n"
-			"It is applied after LOD Blending's height-faded reflection blend, so the controls remain independent.");
-		DrawWaterSlider(
-			"Sun Specular Multiplier",
-			a_settings.SunSpecularMultiplier,
-			kWaterAmountMin,
-			kWaterSunSpecularMax,
-			"Scales the direct sun highlight reflected by the water surface.");
-
-		ImGui::SeparatorText("Refraction and Clarity");
-		DrawWaterSlider(
-			"Refraction Amount",
-			a_settings.RefractionAmount,
-			kWaterAmountMin,
-			kWaterAmountMax,
-			"Scales the distortion applied to the scene viewed through water.");
-		DrawWaterSlider(
-			"Muddiness",
-			a_settings.Muddiness,
-			kWaterAmountMin,
-			kWaterAmountMax,
-			"Scales the tinted water composition over the refracted scene without changing shallow-fallback detection.");
-
-		SanitizeSettings(a_settings);
 	}
 }
 
@@ -767,10 +631,6 @@ void UnifiedWater::DrawSettings()
 	ImGui::Spacing();
 	ImGui::SeparatorText("Water Appearance");
 	DrawWaterTintSettings(settings);
-	if (ImGui::TreeNodeEx("Water Tuning")) {
-		DrawAdvancedWaterAppearanceSettings(settings);
-		ImGui::TreePop();
-	}
 
 	ImGui::Spacing();
 
@@ -949,14 +809,6 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowSurfaceDepthRangeUnits = sanitizedSettings.ShallowSurfaceDepthRangeUnits;
 	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
 	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
-	data.WaterBrightness = sanitizedSettings.WaterBrightness;
-	data.GlobalReflectionAmount = sanitizedSettings.GlobalReflectionAmount;
-	data.RefractionAmount = sanitizedSettings.RefractionAmount;
-	data.SunSpecularMultiplier = sanitizedSettings.SunSpecularMultiplier;
-	data.WaveAmplitude = sanitizedSettings.WaveAmplitude;
-	data.FresnelMin = sanitizedSettings.FresnelMin;
-	data.FresnelMax = sanitizedSettings.FresnelMax;
-	data.Muddiness = sanitizedSettings.Muddiness;
 	return data;
 }
 

@@ -6,6 +6,7 @@
 #include "Utils/Input.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
@@ -152,6 +153,7 @@ public:
 	virtual void EarlyPrepass() override;
 
 	void UpdateDepthBufferCulling();
+	void TryApplyDepthBufferCullingCacheRefresh();
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -513,6 +515,8 @@ public:
 	// Engine hook integration points
 	bool* gDepthBufferCulling = nullptr;
 	float* gMinOccludeeBoxExtent = nullptr;
+	std::atomic<bool> depthCullingCacheRefreshPending = false;
+	std::atomic<bool> depthCullingCacheRefreshCompleted = false;
 
 	// VR Controller state and logging
 	struct VRControllerEventLog

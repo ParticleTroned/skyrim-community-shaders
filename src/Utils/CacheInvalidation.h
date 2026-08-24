@@ -4,6 +4,7 @@
 // Unknown or failed paths degrade to invalidating more, never less: serving a
 // blob compiled under a different feature set is silent corruption.
 
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <format>
@@ -21,10 +22,9 @@ namespace Util::CacheInvalidation
 	{
 		enum class Kind
 		{
-			PluginVersion,
 			ShaderAbi,
 			ShaderCompiler,
-			FeatureVersion,
+			FeatureShaderAbi,
 			EnabledFlip,
 		};
 
@@ -42,12 +42,14 @@ namespace Util::CacheInvalidation
 		bool loaded = false;
 		std::string version;
 		std::string define;
+		std::string shaderAbi;
 	};
 
 	struct CacheIniEntry
 	{
 		bool enabled = false;
 		std::optional<std::string> version;
+		std::optional<std::string> shaderAbi;
 	};
 
 	inline std::vector<CacheMismatch> ClassifyMismatches(
@@ -62,12 +64,12 @@ namespace Util::CacheInvalidation
 	{
 		std::vector<CacheMismatch> mismatches;
 
-		if (!cachedPluginVersion) {
-			mismatches.push_back({ CacheMismatch::Kind::PluginVersion, "Plugin", "Plugin", "no plugin version found in cache" });
-		} else if (*cachedPluginVersion != currentPluginVersion) {
-			mismatches.push_back({ CacheMismatch::Kind::PluginVersion, "Plugin", "Plugin",
-				std::format("version changed (current: {}, cached: {})", currentPluginVersion, *cachedPluginVersion) });
-		}
+		// Plugin and feature release versions are provenance, not shader inputs.
+		// Source/include digests validate HLSL changes. C++ or resource-binding
+		// changes that alter a compiled shader contract must bump either the
+		// global ShaderCacheABI or the affected feature's explicit shaderAbi.
+		(void)currentPluginVersion;
+		(void)cachedPluginVersion;
 
 		if (!cachedShaderAbi) {
 			mismatches.push_back({ CacheMismatch::Kind::ShaderAbi, "ShaderABI", "Shader cache ABI", "no shader cache ABI found in cache" });
@@ -97,12 +99,13 @@ namespace Util::CacheInvalidation
 				continue;
 			}
 
-			if (feature.loaded) {
-				const auto& cachedVersion = it->second.version;
-				if (!cachedVersion || *cachedVersion != feature.version) {
-					mismatches.push_back({ CacheMismatch::Kind::FeatureVersion, feature.shortName, feature.name,
-						std::format("version changed (installed: {}, cached: {})", feature.version,
-							cachedVersion ? *cachedVersion : "<none>") });
+			const std::optional<std::string> cachedFeatureShaderAbi =
+				it != cacheEntries.end() ? it->second.shaderAbi : std::nullopt;
+			if (feature.loaded && (!feature.shaderAbi.empty() || cachedFeatureShaderAbi.has_value())) {
+				if (cachedFeatureShaderAbi.value_or("") != feature.shaderAbi) {
+					mismatches.push_back({ CacheMismatch::Kind::FeatureShaderAbi, feature.shortName, feature.name,
+						std::format("shader contract changed (current: {}, cached: {})", feature.shaderAbi,
+							cachedFeatureShaderAbi ? *cachedFeatureShaderAbi : "<none>") });
 				}
 			}
 		}
@@ -160,6 +163,83 @@ namespace Util::CacheInvalidation
 		}
 	}
 
+	struct CacheFamilyPlan
+	{
+		std::vector<std::filesystem::path> affected;
+		std::vector<std::filesystem::path> retained;
+		std::vector<std::filesystem::path> unclassified;
+	};
+
+	inline std::optional<CacheFamilyPlan> PlanCacheFamilies(
+		const std::filesystem::path& cacheRoot,
+		const std::filesystem::path& shadersRoot,
+		const std::vector<std::string>& defines)
+	{
+		try {
+			if (defines.empty() || std::ranges::any_of(defines, [](const std::string& define) { return define.empty(); }))
+				return std::nullopt;
+
+			CacheFamilyPlan plan;
+			for (const auto& entry : std::filesystem::directory_iterator(cacheRoot)) {
+				if (!entry.is_directory())
+					continue;
+
+				const auto root = shadersRoot / (entry.path().filename().wstring() + L".hlsl");
+				if (!std::filesystem::exists(root)) {
+					// Packaged ImageSpace blobs are remapped from their HLSL source
+					// directory to a runtime technique directory. Without an explicit
+					// source mapping this family cannot be proven unaffected, so rebuild
+					// it while still retaining independently classified families.
+					plan.affected.push_back(entry.path());
+					plan.unclassified.push_back(entry.path());
+					continue;
+				}
+
+				bool affected = false;
+				for (const auto& define : defines) {
+					const auto refs = RootShaderReferencesToken(root, define, shadersRoot);
+					if (!refs.has_value())
+						return std::nullopt;
+					if (*refs) {
+						affected = true;
+						break;
+					}
+				}
+
+				(affected ? plan.affected : plan.retained).push_back(entry.path());
+			}
+
+			auto byName = [](const auto& left, const auto& right) {
+				return left.filename().native() < right.filename().native();
+			};
+			std::ranges::sort(plan.affected, byName);
+			std::ranges::sort(plan.retained, byName);
+			std::ranges::sort(plan.unclassified, byName);
+			return plan;
+		} catch (...) {
+			return std::nullopt;
+		}
+	}
+
+	inline bool ApplyCacheFamilyPlan(
+		const CacheFamilyPlan& plan,
+		size_t* outDeleted = nullptr,
+		size_t* outKept = nullptr)
+	{
+		try {
+			for (const auto& family : plan.affected)
+				std::filesystem::remove_all(family);
+
+			if (outDeleted)
+				*outDeleted = plan.affected.size();
+			if (outKept)
+				*outKept = plan.retained.size();
+			return true;
+		} catch (...) {
+			return false;
+		}
+	}
+
 	inline bool TryPartialInvalidation(
 		const std::filesystem::path& cacheRoot,
 		const std::filesystem::path& shadersRoot,
@@ -167,49 +247,7 @@ namespace Util::CacheInvalidation
 		size_t* outDeleted = nullptr,
 		size_t* outKept = nullptr)
 	{
-		try {
-			for (const auto& define : defines) {
-				if (define.empty())
-					return false;
-			}
-
-			size_t deleted = 0;
-			size_t kept = 0;
-
-			for (const auto& entry : std::filesystem::directory_iterator(cacheRoot)) {
-				if (!entry.is_directory())
-					continue;
-
-				const auto root = shadersRoot / (entry.path().filename().wstring() + L".hlsl");
-				if (!std::filesystem::exists(root))
-					return false;
-
-				bool affected = false;
-				for (const auto& define : defines) {
-					const auto refs = RootShaderReferencesToken(root, define, shadersRoot);
-					if (!refs.has_value())
-						return false;
-					if (*refs) {
-						affected = true;
-						break;
-					}
-				}
-
-				if (affected) {
-					std::filesystem::remove_all(entry.path());
-					++deleted;
-				} else {
-					++kept;
-				}
-			}
-
-			if (outDeleted)
-				*outDeleted = deleted;
-			if (outKept)
-				*outKept = kept;
-			return true;
-		} catch (...) {
-			return false;
-		}
+		const auto plan = PlanCacheFamilies(cacheRoot, shadersRoot, defines);
+		return plan.has_value() && ApplyCacheFamilyPlan(*plan, outDeleted, outKept);
 	}
 }

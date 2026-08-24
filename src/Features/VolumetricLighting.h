@@ -1,7 +1,5 @@
 #pragma once
 
-#include <atomic>
-
 #include "RE/B/BSVolumetricLightingRenderData.h"
 
 struct VolumetricLighting : Feature
@@ -70,7 +68,6 @@ public:
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);
-	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void EarlyPrepass() override;
@@ -141,7 +138,6 @@ private:
 	void SanitizeSettings();
 	void SetupVL();
 	void ClearVolumetricLightingTargets();
-	void TryApplyVRImageSpaceCacheRefresh();
 	static int32_t ClampQualityIndex(int32_t quality);
 	static TextureSize ClampTextureSize(const TextureSize& size);
 
@@ -168,8 +164,6 @@ private:
 	bool inInterior = false;
 	bool inInteriorWithSun = false;
 	bool rainOnlySuppressionActive = false;
-	std::atomic<bool> vrImageSpaceCacheRefreshPending = false;
-
 	struct VLData
 	{
 		int32_t screenX;

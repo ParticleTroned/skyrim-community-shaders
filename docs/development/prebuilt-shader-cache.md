@@ -23,11 +23,21 @@ The default `shipped` release profile:
 
 -   merges `package/Shaders` and feature `Shaders` trees;
 -   excludes every `Tests` directory;
--   excludes the legacy `Wetness Effects` package and `WETNESS_EFFECTS` define;
+-   mirrors the AIO hidden-feature contract for SE, including Wetness Effects
+    when it is part of the AIO, while retaining the existing VR exclusion of
+    the legacy `Wetness Effects` package and `WETNESS_EFFECTS` define;
 -   enables `UNIFIED_WATER` globally;
 -   enables `WETTERNESS` for `Lighting.hlsl` and `Water.hlsl`;
 -   omits the VR feature metadata from an SE cache;
 -   compiles optimized release bytecode, without developer/debug defines.
+
+Every shipped SE and VR build produces two complete cache variants.
+`ShaderCache` records Horizon Fix disabled and compiles Water without
+`HORIZON_FIX`; `ShaderCache-HorizonFix` records Horizon Fix enabled and compiles
+Water with the define derived from the C++ feature contract. The builder
+requires both variants for each runtime to have identical permutation
+inventories and rejects any bytecode difference outside the Water directory.
+Named profiles keep their existing single-cache behavior.
 
 Named tester profiles are opt-in. Omitting `--profile` always selects
 `shipped`; release workflows and existing maintainer commands therefore keep
@@ -41,6 +51,10 @@ runtime compile state.
 Generated inventories may include `captured_shader_variants`, written by
 `.github/configs/generate-shader-configs.ps1`. The builder verifies that exact
 number of entries before compiling so a truncated capture cannot be packaged.
+The SE release build then adds the small, reviewed
+`CROSS_MODLIST_SHADER_VARIANTS` overlay. It contains known SE-only RunGrass
+permutations which a single clean modlist may not exercise; it is never applied
+to VR or named profiles.
 
 This cache does **not** cover feature-specific shaders compiled through
 independent `Util::CompileShader` or direct `D3DCompile*` paths. Those can
@@ -191,15 +205,16 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 
 1. assembles the release shader tree in an isolated temporary directory;
 2. applies the selected cache profile (`shipped` by default);
-3. compiles the complete SE and VR inventories with the pinned hlslkit;
+3. compiles standard and Horizon Fix variants for each shipped runtime, and the
+   existing single variant for named profiles, with pinned hlslkit;
 4. remaps runtime ImageSpace directories;
 5. writes `Manifest.json` from source and recursive-include content;
 6. writes `Info.ini` with plugin and feature versions;
-7. validates metadata, every manifest entry, every blob, and the `DXBC`
-   signature;
+7. validates metadata, every manifest entry, every blob, the `DXBC` signature,
+   and the bounded Water-only delta between each runtime's variants;
 8. derives an exact `CSX<major>.<minor>-<SE|VR>.marker` dependency from each
-   runtime's `Info.ini`, adds fail-closed FOMOD metadata, and prepares
-   install-ready archives;
+   runtime's `Info.ini`, adds visible MO2 setup guidance and exact automatic
+   recommendations to the FOMOD, and prepares install-ready archives;
 9. publishes output only after every requested runtime has passed the earlier
    stages.
 
@@ -217,12 +232,20 @@ Expected output:
 ```text
 dist/shader-cache/
 |-- SE/
-|   `-- ShaderCache/
+|   |-- ShaderCache/
+|   |   |-- Info.ini
+|   |   |-- Manifest.json
+|   |   `-- <shader directories and blobs>
+|   `-- ShaderCache-HorizonFix/
 |       |-- Info.ini
 |       |-- Manifest.json
 |       `-- <shader directories and blobs>
 |-- VR/
-|   `-- ShaderCache/
+|   |-- ShaderCache/
+|   |   |-- Info.ini
+|   |   |-- Manifest.json
+|   |   `-- <shader directories and blobs>
+|   `-- ShaderCache-HorizonFix/
 |       |-- Info.ini
 |       |-- Manifest.json
 |       `-- <shader directories and blobs>
@@ -255,6 +278,13 @@ IDs in a temporary copy and refuses to replace the inventory unless the YAML
 entry count equals the clean runtime capture count. The runtime UI can show a
 slightly larger total because completed tasks include in-session cache hits;
 only source compilation records produce distinct distributable variants.
+
+The captured SE inventory describes one clean runtime profile. Release builds
+supplement it with the known SE-only permutations in
+`CROSS_MODLIST_SHADER_VARIANTS`, currently RunGrass Pixel descriptors `1` and
+`10006` and Vertex descriptors `5` and `7`. Keep this overlay separately
+reviewed so regenerating a capture cannot make the release cache specific to
+one modlist or import VR-only descriptors.
 
 ### Build one runtime
 
@@ -364,18 +394,26 @@ label. A mismatch causes the runtime to invalidate the supplied cache.
 
 Successful builder completion already proves:
 
--   at least one compiled blob exists;
+-   both variants of every shipped runtime have the same nonempty permutation
+    inventory;
+-   only Water blobs differ between each runtime's standard and Horizon Fix
+    variants;
+-   paired `Info.ini` files differ only in `HorizonFix/Enabled`;
+-   every requested single-cache named profile contains at least one compiled
+    blob;
 -   every `.pso`, `.vso`, and `.cso` starts with `DXBC`;
 -   `Manifest.json` uses the supported schema;
 -   every blob has exactly one valid 32-character lowercase digest;
 -   the manifest contains no entry without a blob;
 -   `Info.ini` contains the requested plugin version;
 -   the archive was created and is nonempty;
--   the archive contains `ShaderCache/Info.ini`,
-    `ShaderCache/Manifest.json`, and both required FOMOD installer files.
--   the archived FOMOD requires both the active Community Shaders DLL and the
-    exact generated CSX compatibility marker with `operator="And"`;
--   the archived FOMOD maps only `ShaderCache` to `Data/ShaderCache`.
+-   every archive contains `ShaderCache/Info.ini`,
+    `ShaderCache/Manifest.json`, both required FOMOD installer files, and the
+    MO2 help image; shipped SE and VR archives also contain the corresponding
+    `ShaderCache-HorizonFix` metadata;
+-   each FOMOD recommendation checks both the active Community Shaders DLL and
+    the exact generated CSX compatibility marker with `operator="And"`;
+-   the FOMOD maps exactly one selected source cache to `Data/ShaderCache`.
 
 Optional operator checks:
 
@@ -420,10 +458,13 @@ cache builder derives the same marker name from `Info.ini`; version bumps need
 no marker or FOMOD source edit.
 
 Each cache archive contains a top-level `ShaderCache` directory and FOMOD
-metadata. The FOMOD refuses installation unless both the Community Shaders DLL
-and its exact version marker are active. This is a package handshake: FOMOD
-cannot inspect the DLL's embedded product-version bytes, so core packages must
-never ship a marker from another build.
+metadata; shipped SE and VR archives also contain `ShaderCache-HorizonFix`. The
+FOMOD recommends a cache only when both `CommunityShaders.dll` and its exact
+version marker are active. Those two checks remain one package handshake:
+FOMOD cannot inspect the DLL's embedded product-version bytes, so core packages
+must never ship a marker from another build. Both choices remain manually
+selectable when MO2 cannot inspect non-plugin files; the runtime independently
+rejects mismatched plugin identity or feature state.
 
 When upgrading through a mod manager, replace the old core mod instead of
 merging versions or leaving multiple core packages active. Otherwise an old
@@ -433,16 +474,13 @@ dependency can correlate back to its original package. Remove any stale
 matching cache.
 
 -   For manual installation, it becomes
-    `<Skyrim>\Data\ShaderCache`.
+    `<Skyrim>\Data\ShaderCache`. For a shipped runtime, copy the contents of
+    exactly one source directory—`ShaderCache` without Horizon Fix or
+    `ShaderCache-HorizonFix` with it—into that destination.
 -   In Mod Organizer 2, use the included FOMOD installer. Do not select
     `ShaderCache` and choose **Set data directory** in the manual installer;
     that strips the required directory and incorrectly exposes the cache as
     `Data\Info.ini`, `Data\Lighting`, and so on.
--   MO2's built-in **Fomod Installer** defaults to checking only
-    `.esp`/`.esm`/`.esl` dependencies. Before installing the cache, enable
-    **Settings > Plugins > Fomod Installer > use_any_file** so the DLL and
-    marker dependencies can be evaluated. With that option disabled, the
-    installer intentionally fails closed even when the matching core exists.
 -   In a mod-manager package whose root maps to Skyrim's `Data`, place
     `ShaderCache` alongside `Shaders` and `SKSE`.
 -   Offer separate, clearly labelled SE and VR files.
@@ -451,6 +489,30 @@ matching cache.
 
 Do not put both SE and VR caches into one install. Do not package the cache from
 one commit with shader source or a DLL from another commit.
+
+### Mod Organizer 2
+
+MO2's built-in **Fomod Installer** defaults to checking only
+`.esp`/`.esm`/`.esl` dependencies. In MO2's main window, open **Tools >
+Settings** (or use the toolbar Settings button), open **Plugins**, select
+**Fomod Installer** in the left-hand list, then change `use_any_file` from
+`false` to `true` in the right-hand settings table. Click **OK**, ensure the
+matching core/AIO is active, and reopen the cache installer.
+
+![MO2 Fomod Installer use_any_file setting](../images/mo2-fomod-use-any-file.png)
+
+The generated FOMOD presents those directions as two short required pages so
+they remain visible before any file dependency is evaluated. The second page
+includes the screenshot above, and the FOMOD Website link opens this section.
+If `use_any_file` remains disabled, automatic recommendations are unavailable;
+verify the active DLL, exact marker, and selected cache manually.
+
+For shipped SE and VR archives, the final page recommends the Horizon Fix cache
+when `SKSE\Plugins\HorizonFix.dll` is active and the standard cache when it is
+missing or inactive. The Horizon Fix choice is listed first as the safe manual
+fallback, but both remain selectable. Reinstall the shader-cache FOMOD whenever
+Horizon Fix is enabled or disabled so Water bytecode and `Info.ini` describe
+the same state.
 
 For a smoke test, use a clean mod-manager profile, move any existing
 `ShaderCache` aside so it can be restored, install the matching artifact, and

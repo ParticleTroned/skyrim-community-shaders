@@ -452,9 +452,9 @@ namespace VRVendorRelatchPolicy
 		       a_state.physicalContractConverged &&
 		       a_state.serializationLoadingSerial != 0 &&
 		       a_state.serializationLoadingSerial ==
-			   a_state.compositorHoldLoadingSerial &&
+		           a_state.compositorHoldLoadingSerial &&
 		       a_state.serializationLoadingSerial ==
-			   a_state.currentLoadingSerial;
+		           a_state.currentLoadingSerial;
 	}
 
 	// A console COC does not necessarily publish the ordinary post-load completion
@@ -700,10 +700,10 @@ namespace VRVendorRelatchPolicy
 		bool a_menuTextProtectionContext) noexcept
 	{
 		return a_decisionLatched ?
-		         a_latchedAttempt :
-		         (a_transactionSealed ||
-				 a_transactionOwnsPresentationWork ||
-				 (a_committedLayerValid && a_menuTextProtectionContext));
+		           a_latchedAttempt :
+		           (a_transactionSealed ||
+					   a_transactionOwnsPresentationWork ||
+					   (a_committedLayerValid && a_menuTextProtectionContext));
 	}
 
 	struct BufferedDoorRequestCoalescingAdmission
@@ -1216,6 +1216,9 @@ namespace VRVendorRelatchPolicy
 	{
 		NotExpired,
 		AttemptOnce,
+		WaitForClaimedAttempt,
+		ContinueClaimedAttempt,
+		FallbackClaimedAttempt,
 		ContinueMutatedRecovery,
 		RetainStableContract
 	};
@@ -1224,6 +1227,8 @@ namespace VRVendorRelatchPolicy
 	{
 		bool deadlineExpired = false;
 		bool attemptConsumed = false;
+		bool attemptInProgress = false;
+		bool attemptBudgetExpired = false;
 		bool physicalMutationStarted = false;
 		bool recoveryOwned = false;
 		bool loadingSerialOwned = false;
@@ -1242,14 +1247,13 @@ namespace VRVendorRelatchPolicy
 	{
 		if (!a_state.deadlineExpired)
 			return PostLoadRecoveryDeadlineAction::NotExpired;
+		const bool exactRecoveryOwner =
+			a_state.recoveryOwned && a_state.loadingSerialOwned;
 		if (a_state.physicalMutationStarted &&
-			a_state.recoveryOwned &&
-			a_state.loadingSerialOwned) {
+			exactRecoveryOwner) {
 			return PostLoadRecoveryDeadlineAction::ContinueMutatedRecovery;
 		}
-		if (!a_state.attemptConsumed &&
-			a_state.recoveryOwned &&
-			a_state.loadingSerialOwned &&
+		const bool admissionReady =
 			a_state.cleanupAndTrimComplete &&
 			a_state.retirementReady &&
 			a_state.memorySampleFresh &&
@@ -1257,10 +1261,140 @@ namespace VRVendorRelatchPolicy
 			a_state.gpuHeadroomSufficient &&
 			a_state.projectedSystemCommitSafe &&
 			a_state.deviceHealthy &&
-			a_state.noRecentOutOfMemory) {
+			a_state.noRecentOutOfMemory;
+		// AttemptOnce claims one logical recovery operation, not one call into a
+		// vendor teardown API. Pending teardown/drain results must keep servicing
+		// that exact owner until it can cross the physical mutation boundary.
+		if (a_state.attemptConsumed &&
+			a_state.attemptInProgress &&
+			exactRecoveryOwner) {
+			if (a_state.attemptBudgetExpired)
+				return PostLoadRecoveryDeadlineAction::FallbackClaimedAttempt;
+			return admissionReady ?
+			           PostLoadRecoveryDeadlineAction::ContinueClaimedAttempt :
+			           PostLoadRecoveryDeadlineAction::WaitForClaimedAttempt;
+		}
+		if (!a_state.attemptConsumed &&
+			exactRecoveryOwner &&
+			admissionReady) {
 			return PostLoadRecoveryDeadlineAction::AttemptOnce;
 		}
 		return PostLoadRecoveryDeadlineAction::RetainStableContract;
+	}
+
+	enum class PostLoadVendorTeardownPhase : std::uint8_t
+	{
+		Idle,
+		Draining,
+		Released
+	};
+
+	enum class PostLoadVendorTeardownAction : std::uint8_t
+	{
+		Inactive,
+		BeginTeardown,
+		ContinueTeardown,
+		WaitForCreatorAdmission,
+		AdmitCreator,
+		AbortForDeviceLoss,
+		FallbackToNative
+	};
+
+	struct PostLoadVendorTeardownAdmission
+	{
+		PostLoadVendorTeardownPhase phase =
+			PostLoadVendorTeardownPhase::Idle;
+		bool deadlineExpired = false;
+		bool attemptConsumed = false;
+		bool physicalMutationStarted = false;
+		bool recoveryOwned = false;
+		bool loadingSerialOwned = false;
+		bool recoveryRelatch = false;
+		bool reducedDLSSContract = false;
+		bool stableDLSSContractExisted = false;
+		bool stableVendorResourcesTruthful = false;
+		bool destroysDLSSResources = false;
+		bool destroysOtherVendorResources = false;
+		bool preservesStablePresentationResources = false;
+		bool cleanupAndTrimComplete = false;
+		bool retirementReady = false;
+		bool memorySampleFresh = false;
+		bool highGPUPressure = false;
+		bool pressureAcceptable = false;
+		bool gpuHeadroomSufficient = false;
+		bool projectedSystemCommitSafe = false;
+		bool deviceHealthy = false;
+		bool noRecentOutOfMemory = false;
+		bool retryBudgetExpired = false;
+	};
+
+	// A reduced DLSS post-load recovery can otherwise deadlock when its creator
+	// admission needs GPU headroom that is still occupied by the invalid previous
+	// vendor generation. Allow that exact owner to perform only the memory-releasing
+	// teardown first. Allocation remains behind every ordinary creator gate.
+	[[nodiscard]] constexpr PostLoadVendorTeardownAction SelectPostLoadVendorTeardownAction(
+		const PostLoadVendorTeardownAdmission& a_state) noexcept
+	{
+		const bool exactRecoveryOwner =
+			a_state.recoveryOwned && a_state.loadingSerialOwned;
+		const bool exactTeardownTarget =
+			a_state.deadlineExpired &&
+			exactRecoveryOwner &&
+			!a_state.physicalMutationStarted &&
+			a_state.recoveryRelatch &&
+			a_state.reducedDLSSContract &&
+			a_state.stableDLSSContractExisted &&
+			!a_state.stableVendorResourcesTruthful &&
+			(a_state.destroysDLSSResources ||
+				a_state.phase == PostLoadVendorTeardownPhase::Released) &&
+			!a_state.destroysOtherVendorResources &&
+			!a_state.preservesStablePresentationResources;
+		if (!exactTeardownTarget)
+			return PostLoadVendorTeardownAction::Inactive;
+
+		if (a_state.phase == PostLoadVendorTeardownPhase::Draining) {
+			if (!a_state.attemptConsumed)
+				return PostLoadVendorTeardownAction::Inactive;
+			if (!a_state.deviceHealthy)
+				return PostLoadVendorTeardownAction::AbortForDeviceLoss;
+			if (a_state.retryBudgetExpired)
+				return PostLoadVendorTeardownAction::FallbackToNative;
+			return PostLoadVendorTeardownAction::ContinueTeardown;
+		}
+
+		const bool creatorAdmissionReady =
+			a_state.cleanupAndTrimComplete &&
+			a_state.retirementReady &&
+			a_state.memorySampleFresh &&
+			a_state.pressureAcceptable &&
+			a_state.gpuHeadroomSufficient &&
+			a_state.projectedSystemCommitSafe &&
+			a_state.deviceHealthy &&
+			a_state.noRecentOutOfMemory;
+		if (a_state.phase == PostLoadVendorTeardownPhase::Released) {
+			if (!a_state.attemptConsumed)
+				return PostLoadVendorTeardownAction::Inactive;
+			if (!a_state.deviceHealthy)
+				return PostLoadVendorTeardownAction::AbortForDeviceLoss;
+			if (a_state.retryBudgetExpired)
+				return PostLoadVendorTeardownAction::FallbackToNative;
+			return creatorAdmissionReady ?
+			           PostLoadVendorTeardownAction::AdmitCreator :
+			           PostLoadVendorTeardownAction::WaitForCreatorAdmission;
+		}
+
+		const bool teardownOnlyAdmissionReady =
+			!a_state.attemptConsumed &&
+			a_state.cleanupAndTrimComplete &&
+			a_state.retirementReady &&
+			a_state.memorySampleFresh &&
+			a_state.highGPUPressure &&
+			a_state.projectedSystemCommitSafe &&
+			a_state.deviceHealthy &&
+			a_state.noRecentOutOfMemory;
+		return teardownOnlyAdmissionReady ?
+		           PostLoadVendorTeardownAction::BeginTeardown :
+		           PostLoadVendorTeardownAction::Inactive;
 	}
 
 	[[nodiscard]] constexpr bool HasElapsedMonotonicDeadline(
@@ -1532,9 +1666,49 @@ namespace VRVendorRelatchPolicy
 
 	[[nodiscard]] constexpr bool CanQueuePostMutationEmergencyRecovery(
 		bool a_requestPending,
-		bool a_emergencyAttemptConsumed) noexcept
+		bool a_emergencyAttemptConsumed,
+		bool a_emergencyRecoveryRequested) noexcept
 	{
-		return !a_requestPending && !a_emergencyAttemptConsumed;
+		// One recovery request owns the complete serialized mutation chain. The
+		// queue-ready flag clears when its consumer starts, before presentation can
+		// collect stable stereo evidence, so it cannot by itself prevent a second
+		// request from being published during that stabilization window.
+		return !a_requestPending &&
+		       !a_emergencyAttemptConsumed &&
+		       !a_emergencyRecoveryRequested;
+	}
+
+	struct PostMutationEmergencyRecoveryTiming
+	{
+		PostMutationProgressPhase progressPhase =
+			PostMutationProgressPhase::None;
+		std::uint64_t mutationStartTickMs = 0;
+		std::uint64_t lastProgressTickMs = 0;
+		std::uint64_t currentTickMs = 0;
+		std::uint64_t initialDelayMs = 0;
+		std::uint64_t progressingStallDelayMs = 0;
+	};
+
+	// A newly published or stabilizing physical generation is not a stalled
+	// generation. Anchor the emergency request to the latest forward progress and
+	// give irreversible creator/presentation phases the longer no-progress window.
+	[[nodiscard]] constexpr bool HasPostMutationEmergencyRecoveryStalled(
+		const PostMutationEmergencyRecoveryTiming& a_timing) noexcept
+	{
+		if (a_timing.mutationStartTickMs == 0)
+			return false;
+		const std::uint64_t progressAnchor =
+			a_timing.lastProgressTickMs != 0 ?
+				a_timing.lastProgressTickMs :
+				a_timing.mutationStartTickMs;
+		const std::uint64_t delay =
+			IsPostMutationRecoveryActivelyProgressing(a_timing.progressPhase) ?
+				a_timing.progressingStallDelayMs :
+				a_timing.initialDelayMs;
+		return HasElapsedMonotonicDeadline(
+			progressAnchor,
+			a_timing.currentTickMs,
+			delay);
 	}
 
 	struct PostLoadRecoveryStableFallbackOwnership
@@ -1559,6 +1733,149 @@ namespace VRVendorRelatchPolicy
 		       a_state.expectedTransitionEpoch != 0 &&
 		       a_state.transitionEpoch == a_state.expectedTransitionEpoch &&
 		       a_state.loadingSerial == a_state.currentLoadingSerial;
+	}
+
+	enum class PostLoadStableFallbackRequestAction : std::uint8_t
+	{
+		Discard,
+		ReplayAfterStableRetention,
+		HoldStartupNativeUntilRestart
+	};
+
+	struct PostLoadStableFallbackRequest
+	{
+		bool retainedStableContract = false;
+		bool desiredTargetValid = false;
+		bool desiredTargetActive = false;
+		bool desiredTargetHasImmutableIdentity = false;
+		bool desiredTargetRecoveryOrigin = false;
+	};
+
+	// A retained resource-backed contract can safely remain authoritative while a
+	// real immutable request waits for another attempt. With no stable contract,
+	// replay would immediately leave the coherent startup None presentation and
+	// re-enter physical/vendor activation against the same failed memory state.
+	[[nodiscard]] constexpr PostLoadStableFallbackRequestAction
+	SelectPostLoadStableFallbackRequestAction(
+		const PostLoadStableFallbackRequest& a_state) noexcept
+	{
+		if (!a_state.retainedStableContract) {
+			return a_state.desiredTargetValid && a_state.desiredTargetActive ?
+			           PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart :
+			           PostLoadStableFallbackRequestAction::Discard;
+		}
+
+		return a_state.desiredTargetValid &&
+		               a_state.desiredTargetHasImmutableIdentity &&
+		               !a_state.desiredTargetRecoveryOrigin ?
+		           PostLoadStableFallbackRequestAction::ReplayAfterStableRetention :
+		           PostLoadStableFallbackRequestAction::Discard;
+	}
+
+	struct StartupNativeFallbackExplicitRetryAdmission
+	{
+		bool fallbackActive = false;
+		bool explicitCSMenuRequest = false;
+		bool savedTargetActive = false;
+		bool startupPresentationReleased = false;
+		bool completedWorldFrame = false;
+		bool exactNativeRuntimePlan = false;
+		bool bootLatchAbsent = false;
+		bool transitionIdle = false;
+		bool physicalRecoveryResolved = false;
+		bool memorySampleFresh = false;
+		bool memoryPressureRecovered = false;
+		bool deviceHealthy = false;
+		bool noRecentOutOfMemory = false;
+		bool shaderPipelineEnabled = false;
+	};
+
+	// The terminal startup fallback blocks every automatic path. A fresh CS-menu
+	// action may create a new immutable request only after the unchanged native
+	// presentation and all admission evidence are current again. The normal
+	// relatch planner still owns projected residency and system-commit admission.
+	[[nodiscard]] constexpr bool CanAdmitStartupNativeFallbackExplicitRetry(
+		const StartupNativeFallbackExplicitRetryAdmission& a_state) noexcept
+	{
+		return a_state.fallbackActive &&
+		       a_state.explicitCSMenuRequest &&
+		       a_state.savedTargetActive &&
+		       a_state.startupPresentationReleased &&
+		       a_state.completedWorldFrame &&
+		       a_state.exactNativeRuntimePlan &&
+		       a_state.bootLatchAbsent &&
+		       a_state.transitionIdle &&
+		       a_state.physicalRecoveryResolved &&
+		       a_state.memorySampleFresh &&
+		       a_state.memoryPressureRecovered &&
+		       a_state.deviceHealthy &&
+		       a_state.noRecentOutOfMemory &&
+		       a_state.shaderPipelineEnabled;
+	}
+
+	enum class StartupNativeFallbackControl : std::uint8_t
+	{
+		None,
+		DisableSavedProfile,
+		RetrySavedProfile
+	};
+
+	enum class StartupNativeFallbackControlAction : std::uint8_t
+	{
+		PassThrough,
+		Reject,
+		ResolveDisabled,
+		ResolveRetry
+	};
+
+	struct StartupNativeFallbackControlRequest
+	{
+		bool fallbackActive = false;
+		bool targetActive = false;
+		bool csMenuOrigin = false;
+		bool retryAdmitted = false;
+		StartupNativeFallbackControl control =
+			StartupNativeFallbackControl::None;
+	};
+
+	// Once terminal native fallback is armed, ordinary UI edits, API requests,
+	// and post-load profile sync must not release or mutate it. Only an explicit
+	// CS-menu disable, or a CS-menu retry that passed the full recovery admission,
+	// may publish the request which resolves the fallback.
+	[[nodiscard]] constexpr StartupNativeFallbackControlAction
+	SelectStartupNativeFallbackControlAction(
+		const StartupNativeFallbackControlRequest& a_request) noexcept
+	{
+		if (!a_request.fallbackActive)
+			return StartupNativeFallbackControlAction::PassThrough;
+		if (!a_request.csMenuOrigin)
+			return StartupNativeFallbackControlAction::Reject;
+
+		if (a_request.targetActive) {
+			if (a_request.control ==
+					StartupNativeFallbackControl::RetrySavedProfile &&
+				a_request.retryAdmitted) {
+				return StartupNativeFallbackControlAction::ResolveRetry;
+			}
+			return StartupNativeFallbackControlAction::Reject;
+		}
+
+		if (a_request.control ==
+			StartupNativeFallbackControl::DisableSavedProfile) {
+			return StartupNativeFallbackControlAction::ResolveDisabled;
+		}
+		return StartupNativeFallbackControlAction::Reject;
+	}
+
+	[[nodiscard]] constexpr bool CanResolveStartupNativeFallback(
+		StartupNativeFallbackControlAction a_action,
+		bool a_immutableRequestPublished) noexcept
+	{
+		return a_immutableRequestPublished &&
+		       (a_action ==
+				   StartupNativeFallbackControlAction::ResolveDisabled ||
+			   a_action ==
+				   StartupNativeFallbackControlAction::ResolveRetry);
 	}
 
 	struct PostLoadRecoveryTransitionBinding

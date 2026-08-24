@@ -1,13 +1,17 @@
 # Development Documentation
 
+- [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
+- [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
+- [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
+
 ## Getting Started
 
 -   **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 -   **[Prebuilt Shader Cache](./prebuilt-shader-cache.md)** - Release build, update, validation, and AI-agent runbook
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
--   **[VR Depth-Culling Temporal Validity](./vr-depth-culling-temporal-validity.md)** - Diagnosis, correction, and physical-HMD validation of one-frame missing-geometry flashes
 -   **[GPU-Unified Presets](./unified-presets.md)** - One preset path with capability-selected DLSS or FSR
+-   **[Screenshot API and Sequences](./screenshot-api-and-sequences.md)** - Versioned asynchronous still/sequence contract, acknowledgements, manifests, and implementation gates
 
 ## Quick Links
 
@@ -17,7 +21,7 @@
 -   **Verify shader refactor bytecode:** `pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl`
 -   **Runtime A/B shader check:** `tools/taa-renderdoc-ab.py` via RenderDoc embedded Python
 -   **Full build with deployment:** `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
--   **Run tests:** `cmake --build build/ALL --target run_shader_tests`
+-   **Run shader tests:** `cmake --build build/ALL --target run_shader_tests`
 -   **Create a worktree with submodules + local preset:** `pwsh ./tools/new-worktree.ps1 -Name my-branch`
 -   **Install optional git alias:** `pwsh ./tools/install-worktree-alias.ps1`
 
@@ -28,6 +32,19 @@
 -   `Dev` - Fast iteration preset (recommended for development)
 
 See `CMakePresets.json` for all available presets.
+
+### Complete Local Validation
+
+The main DLL target does not build every test executable. A clean pull-request validation must build both test groups explicitly before running CTest:
+
+```powershell
+cmake --preset ALL -DBUILD_CONTROLLER_TESTS=ON -DBUILD_SHADER_TESTS=ON
+cmake --build --preset CSmain -- /m:1
+cmake --build build/ALL --config Release --target controller_tests shader_tests -- /m:1
+ctest --test-dir build/ALL -C Release --output-on-failure --no-tests=error --timeout 300
+```
+
+Changes to the VR master custom-shader switch also require a headset runtime check before merge. With render scaling both active and inactive, disable custom shaders from the CSX menu and verify that native eye targets are restored before the switch completes, the scene has no stale overlay or deferred attachment, and re-enabling works. Repeat in the main menu and in-world when the submit path changes.
 
 ## Worktrees
 

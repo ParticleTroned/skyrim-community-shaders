@@ -11,13 +11,14 @@ namespace FeatureVersions
     using namespace std::literals::string_view_literals;
 
     inline const std::map<std::string_view, REL::Version> FEATURE_MINIMAL_VERSIONS{
-        {"AdaptiveBrightness"sv,   {1,6,0}},
+        {"AdaptiveBrightness"sv,   {1,7,0}},
         {"CSEditor"sv,             {2,5,0}},
         {"CSUtility"sv,            {1,6,0}},
         {"CloudShadows"sv,         {1,2,1}},
         {"DynamicCubemaps"sv,      {2,3,1}},
         {"ExtendedMaterials"sv,    {1,1,5}},
         {"ExtendedTranslucency"sv, {1,0,0}},
+        {"FoliageLighting"sv,      {1,0,0}},
         {"GrassCollision"sv,       {3,0,5}},
         {"GrassLighting"sv,        {2,0,6}},
         {"HairSpecular"sv,         {1,1,2}},
@@ -60,6 +61,7 @@ namespace FeatureVersions
         "DynamicCubemaps"sv,
         "ExtendedMaterials"sv,
         "ExtendedTranslucency"sv,
+        "FoliageLighting"sv,
         "GrassCollision"sv,
         "GrassLighting"sv,
         "HorizonFix"sv,

@@ -52,10 +52,9 @@ struct UnifiedWater : OverlayFeature
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
-		float4 _pad;
 	};
 	static_assert(alignof(CommonBufferData) == 16);
-	static_assert(sizeof(CommonBufferData) == 64);
+	static_assert(sizeof(CommonBufferData) == 48);
 
 	Settings settings;
 	CommonBufferData GetCommonBufferData() const;

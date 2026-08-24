@@ -304,6 +304,7 @@ public:
 	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	void UpdateFeatureData(bool a_inWorld);
 	bool HasDirectionalShadows() const;
 
 	struct PermutationCB

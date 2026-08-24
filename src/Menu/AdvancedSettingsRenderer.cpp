@@ -171,14 +171,11 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 
 	Util::DrawSectionHeader("Threading");
 
-	// hardware_concurrency() is permitted to return 0 if the implementation can't
-	// detect it. Fall back to the actual compile-pool thread count we ended up
-	// using at startup (which itself defaults to a sensible value when the OS
-	// query fails), then clamp to at least 1 so the slider range (min=1, max=N)
-	// stays valid and ImGui doesn't assert.
-	const uint32_t hwThreads = std::thread::hardware_concurrency();
+	// The pool is deliberately capped at the responsive startup default. Do not
+	// offer values above its actual worker count: they cannot increase throughput
+	// and previously made persisted settings misleading.
 	const int32_t poolThreads = static_cast<int32_t>(shaderCache->compilationPool.get_thread_count());
-	const int32_t maxThreads = std::max({ 1, poolThreads, static_cast<int32_t>(hwThreads) });
+	const int32_t maxThreads = std::max(1, poolThreads);
 
 	// Snap the persisted values back into the valid range — a stale config can
 	// otherwise leave compilationThreadCount above maxThreads, which would
@@ -190,7 +187,9 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Number of threads used to compile shaders at startup. "
-			"Defaults to all logical cores minus one for OS headroom (E-cores included). "
+			"Defaults to 75%% of available logical CPU threads, leaving meaningful "
+			"headroom for Windows and other applications (E-cores included), while "
+			"startup compiler workers also run at cooperative OS priority. "
 			"Higher values finish compilation faster but may make the system less responsive.");
 	}
 	ImGui::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
@@ -198,6 +197,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 		ImGui::Text(
 			"Number of threads used to compile shaders during gameplay. "
 			"Defaults to half of performance cores to avoid impacting the render thread. "
+			"After startup, workers return to the game's normal relative priority. "
 			"Higher values finish compilation faster but may cause stuttering.");
 	}
 

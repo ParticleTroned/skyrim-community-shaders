@@ -1,16 +1,21 @@
 #include "AdaptiveBrightness.h"
 
+#include "Globals.h"
+#include "InverseSquareLighting.h"
 #include "LocationContext.h"
 #include "SettingsMigrations.h"
 #include "State.h"
+#include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Form.h"
+#include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
 
 #include "RE/B/BGSLocation.h"
 #include "RE/P/PlayerCharacter.h"
 #include "RE/S/Sky.h"
 #include "RE/T/TESObjectCELL.h"
+#include "RE/T/TESWorldSpace.h"
 
 #include <imgui_stdlib.h>
 
@@ -30,6 +35,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::ProfileSettings,
 	brightness,
 	advanced,
+	bloomAdvanced,
 	skyBrightnessMult,
 	directionalLightMult,
 	pointLightMult,
@@ -42,9 +48,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	fogAlphaGammaOffset,
 	waterGammaOffset,
 	vlGammaOffset,
-	bloomOverride,
-	bloomEnabled,
-	bloom)
+	bloom,
+	water)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::LocationOverride,
@@ -57,25 +62,36 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
-	rendererControlsEnabled,
+	globalLightingEnabled,
 	dayStartHour,
 	nightStartHour,
 	transitionHours,
 	lighting,
-	bloomEnhancement,
 	profiles,
 	locationOverrides)
 
 namespace
 {
+	constexpr uint32_t kMaxVanillaPointLights = 7;
+	constexpr uint32_t kFirstPointLightSceneIndex = 1;
 	constexpr float kBrightnessMin = 0.25f;
 	constexpr float kBrightnessMax = 2.0f;
 	constexpr float kGammaOffsetMin = -1.0f;
 	constexpr float kGammaOffsetMax = 1.0f;
 	constexpr float kGlobalSkyBrightnessMax = 2.0f;
 	constexpr float kGlobalLightingMultiplierMax = 5.0f;
+	constexpr std::size_t kMaxOverrideHierarchyDepth = 64;
 
 	using Profile = AdaptiveBrightness::Profile;
+
+	bool UsesClassifiedPointLightMultipliers(const SharedLightingSettings& a_settings)
+	{
+		return a_settings.linearPointLightMult != a_settings.pointLightMult ||
+		       a_settings.spotlightMult != 1.0f ||
+		       a_settings.linearSpotlightMult != 1.0f ||
+		       a_settings.omnidirectionalBulbMult != 1.0f ||
+		       a_settings.linearOmnidirectionalBulbMult != 1.0f;
+	}
 
 	constexpr std::array<Profile, AdaptiveBrightness::kProfileCount> kProfileOrder{
 		Profile::ExteriorDay,
@@ -95,9 +111,11 @@ namespace
 
 	constexpr const char* kOverrideTypeLocation = "Location";
 	constexpr const char* kOverrideTypeCell = "Cell";
-	constexpr const char* kPresetVersion = "2.0.0";
+	constexpr const char* kOverrideTypeWorldspace = "Worldspace";
+	constexpr const char* kPresetVersion = "4.1.0";
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
+	constexpr std::string_view kLegacyGlobalWaterAppearanceFieldName = SettingsMigrations::kLegacyWaterAppearanceSettingsKey;
 	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBrightness_Global";
 	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBrightness_LocationOverrides";
 	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBrightness_Full";
@@ -111,6 +129,7 @@ namespace
 
 	struct CurrentLocationForms
 	{
+		const RE::TESWorldSpace* worldspace = nullptr;
 		const RE::BGSLocation* location = nullptr;
 		const RE::TESObjectCELL* cell = nullptr;
 	};
@@ -460,6 +479,7 @@ namespace
 		a_profile.waterGammaOffset = ClampGammaOffset(a_profile.waterGammaOffset);
 		a_profile.vlGammaOffset = ClampGammaOffset(a_profile.vlGammaOffset);
 		Bloom::SanitizeProfile(a_profile.bloom);
+		WaterAppearance::SanitizeProfile(a_profile.water);
 	}
 
 	void NormalizeBaseProfiles(std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>& a_profiles)
@@ -491,6 +511,353 @@ namespace
 		}
 	}
 
+	bool GetOptionalBool(const json& a_json, const char* a_key, bool a_fallback)
+	{
+		if (!a_json.is_object())
+			return a_fallback;
+
+		const auto it = a_json.find(a_key);
+		if (it == a_json.end())
+			return a_fallback;
+		if (it->is_boolean())
+			return it->get<bool>();
+		if (it->is_number_unsigned())
+			return it->get<uint64_t>() != 0;
+		if (it->is_number_integer())
+			return it->get<int64_t>() != 0;
+		if (it->is_number_float()) {
+			const auto value = it->get<double>();
+			return std::isfinite(value) ? value != 0.0 : a_fallback;
+		}
+		return a_fallback;
+	}
+
+	void NormalizeJsonObjectWithDefaults(json& a_value, const json& a_defaults)
+	{
+		if (!a_value.is_object() || !a_defaults.is_object())
+			return;
+
+		for (const auto& [key, defaultValue] : a_defaults.items()) {
+			auto valueIt = a_value.find(key);
+			if (valueIt == a_value.end())
+				continue;
+
+			if (defaultValue.is_object()) {
+				if (!valueIt->is_object())
+					*valueIt = defaultValue;
+				else
+					NormalizeJsonObjectWithDefaults(*valueIt, defaultValue);
+			} else if (!SettingsMigrations::MatchesJsonSchema(*valueIt, defaultValue)) {
+				*valueIt = defaultValue;
+			}
+		}
+	}
+
+	std::optional<Bloom::Profile> TryGetBloomProfile(const json& a_value)
+	{
+		if (!a_value.is_object())
+			return std::nullopt;
+
+		try {
+			auto profile = a_value.get<Bloom::Profile>();
+			Bloom::SanitizeProfile(profile);
+			return profile;
+		} catch (const json::exception&) {
+			return std::nullopt;
+		}
+	}
+
+	void SetProfileBloom(json& a_profile, const Bloom::Profile& a_bloom, bool a_advanced)
+	{
+		auto bloom = a_bloom;
+		Bloom::SanitizeProfile(bloom);
+		a_profile["bloom"] = bloom;
+		a_profile["bloomAdvanced"] = a_advanced;
+	}
+
+	std::optional<WaterAppearance::Profile> TryGetWaterAppearanceProfile(const json& a_value)
+	{
+		if (!a_value.is_object())
+			return std::nullopt;
+
+		try {
+			auto profile = a_value.get<WaterAppearance::Profile>();
+			WaterAppearance::SanitizeProfile(profile);
+			return profile;
+		} catch (const json::exception&) {
+			return std::nullopt;
+		}
+	}
+
+	void SetProfileWaterAppearance(json& a_profile, const WaterAppearance::Profile& a_water)
+	{
+		auto water = a_water;
+		WaterAppearance::SanitizeProfile(water);
+		a_profile["water"] = water;
+	}
+
+	void MigrateLegacyProfileWaterAppearance(
+		json& a_profile,
+		const WaterAppearance::Profile& a_globalProfile,
+		bool a_hasLegacyGlobal,
+		bool a_forceGlobal = false)
+	{
+		if (!a_profile.is_object())
+			return;
+
+		const auto waterIt = a_profile.find("water");
+		const bool hasExplicitWater = waterIt != a_profile.end() && waterIt->is_object() &&
+		                              GetOptionalBool(*waterIt, SettingsMigrations::kLegacyWaterProfileExplicitKey.data(), false);
+		if ((!a_forceGlobal || hasExplicitWater) && waterIt != a_profile.end() && waterIt->is_object()) {
+			// A profile-native value wins field-by-field. Missing fields inherit the
+			// migrated global value so a formerly global Unified Water configuration
+			// remains global across every Adaptive Balance profile and override.
+			json mergedWater = a_hasLegacyGlobal ? json(a_globalProfile) : json(WaterAppearance::Profile{});
+			for (const auto fieldName : SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys) {
+				if (const auto fieldIt = waterIt->find(fieldName.data()); fieldIt != waterIt->end() && fieldIt->is_number())
+					mergedWater[std::string(fieldName)] = *fieldIt;
+			}
+
+			if (const auto nativeWater = TryGetWaterAppearanceProfile(mergedWater))
+				SetProfileWaterAppearance(a_profile, *nativeWater);
+			else
+				SetProfileWaterAppearance(a_profile, WaterAppearance::Profile{});
+			return;
+		}
+
+		if (a_forceGlobal || a_hasLegacyGlobal) {
+			SetProfileWaterAppearance(a_profile, a_globalProfile);
+		} else if (waterIt != a_profile.end()) {
+			// Do not let a malformed profile-native Water field reject the whole
+			// profile or location override.
+			SetProfileWaterAppearance(a_profile, WaterAppearance::Profile{});
+		}
+	}
+
+	Bloom::Profile GetLegacyGlobalBloomProfile(const json& a_settings, bool& o_enabled)
+	{
+		o_enabled = false;
+		auto profile = Bloom::Profile{};
+		const auto bloomIt = a_settings.find("bloomEnhancement");
+		if (bloomIt == a_settings.end() || !bloomIt->is_object())
+			return profile;
+
+		const auto& legacyBloom = *bloomIt;
+		o_enabled = GetOptionalBool(legacyBloom, "Enabled", false);
+		uint preset = 0;
+		if (const auto presetIt = legacyBloom.find("SelectedPreset"); presetIt != legacyBloom.end()) {
+			if (presetIt->is_number_unsigned())
+				preset = static_cast<uint>(std::min<uint64_t>(presetIt->get<uint64_t>(), 2u));
+			else if (presetIt->is_number_integer())
+				preset = static_cast<uint>(std::clamp<int64_t>(presetIt->get<int64_t>(), 0, 2));
+		}
+		const char* profileName = preset == 1 ? "Fantasy" : preset == 2 ? "Dreamy" :
+		                                                                  "Default";
+		if (const auto profileIt = legacyBloom.find(profileName); profileIt != legacyBloom.end() && profileIt->is_object()) {
+			try {
+				profile = profileIt->get<Bloom::Profile>();
+			} catch (const json::exception&) {
+				profile = Bloom::GetPresetProfile(preset);
+			}
+		} else {
+			profile = Bloom::GetPresetProfile(preset);
+		}
+		Bloom::SanitizeProfile(profile);
+		return profile;
+	}
+
+	void MigrateLegacyProfileBloom(
+		json& a_profile,
+		const Bloom::Profile& a_globalProfile,
+		bool a_globalEnabled,
+		bool a_hasLegacyGlobal,
+		bool a_forceGlobal = false)
+	{
+		if (!a_profile.is_object())
+			return;
+
+		const auto bloomIt = a_profile.find("bloom");
+		const auto nativeBloom = bloomIt != a_profile.end() ? TryGetBloomProfile(*bloomIt) : std::nullopt;
+		const auto advancedIt = a_profile.find("bloomAdvanced");
+		const bool hasNativeAdvanced = advancedIt != a_profile.end() && advancedIt->is_boolean();
+		const bool hasLegacyProfileFields =
+			a_profile.contains("bloomOverride") || a_profile.contains("bloomEnabled");
+
+		if (!a_forceGlobal && nativeBloom && (hasNativeAdvanced || !hasLegacyProfileFields)) {
+			// A valid profile-native value wins over stale legacy fields that may
+			// remain after layered settings or override merges. A partial native
+			// profile is also valid: bloomAdvanced defaults to false.
+			SetProfileBloom(a_profile, *nativeBloom, hasNativeAdvanced && advancedIt->get<bool>());
+			a_profile.erase("bloomOverride");
+			a_profile.erase("bloomEnabled");
+			return;
+		}
+
+		if (!a_forceGlobal && !hasLegacyProfileFields &&
+			(a_profile.contains("bloom") || a_profile.contains("bloomAdvanced"))) {
+			// Do not let a malformed native Bloom field fail the entire feature load.
+			SetProfileBloom(a_profile, Bloom::Profile{}, false);
+			return;
+		}
+
+		if (!a_profile.contains("bloomOverride")) {
+			if (a_forceGlobal || a_hasLegacyGlobal) {
+				auto profile = a_globalProfile;
+				if (!a_globalEnabled)
+					profile.EnhancementIntensity = 0.0f;
+				SetProfileBloom(a_profile, profile, false);
+			}
+			return;
+		}
+
+		const bool useProfileBloom = GetOptionalBool(a_profile, "bloomOverride", false);
+		const bool profileBloomEnabled = GetOptionalBool(a_profile, "bloomEnabled", false);
+		auto profile = a_globalProfile;
+		if (useProfileBloom) {
+			if (nativeBloom)
+				profile = *nativeBloom;
+			if (!profileBloomEnabled)
+				profile.EnhancementIntensity = 0.0f;
+		} else if (!a_globalEnabled) {
+			profile.EnhancementIntensity = 0.0f;
+		}
+
+		SetProfileBloom(a_profile, profile, false);
+		a_profile.erase("bloomOverride");
+		a_profile.erase("bloomEnabled");
+	}
+
+	void NormalizeProfileArray(json& a_settings)
+	{
+		auto profilesIt = a_settings.find(kProfilesFieldName.data());
+		if (profilesIt == a_settings.end())
+			return;
+
+		const json defaultProfiles = AdaptiveBrightness::Settings{}.profiles;
+		if (!profilesIt->is_array()) {
+			*profilesIt = defaultProfiles;
+			return;
+		}
+
+		json normalizedProfiles = defaultProfiles;
+		for (std::size_t index = 0; index < std::min(profilesIt->size(), normalizedProfiles.size()); ++index) {
+			if (!(*profilesIt)[index].is_object())
+				continue;
+			normalizedProfiles[index] = (*profilesIt)[index];
+			NormalizeJsonObjectWithDefaults(normalizedProfiles[index], defaultProfiles[index]);
+		}
+		*profilesIt = std::move(normalizedProfiles);
+	}
+
+	void NormalizeLocationOverrideArray(json& a_settings)
+	{
+		auto overridesIt = a_settings.find(kLocationOverridesFieldName.data());
+		if (overridesIt == a_settings.end())
+			return;
+		if (!overridesIt->is_array()) {
+			a_settings.erase(overridesIt);
+			return;
+		}
+
+		const json defaultOverride = AdaptiveBrightness::LocationOverride{};
+		json normalizedOverrides = json::array();
+		for (const auto& locationOverride : *overridesIt) {
+			if (!locationOverride.is_object())
+				continue;
+			auto normalizedOverride = locationOverride;
+			NormalizeJsonObjectWithDefaults(normalizedOverride, defaultOverride);
+			normalizedOverrides.push_back(std::move(normalizedOverride));
+		}
+		*overridesIt = std::move(normalizedOverrides);
+	}
+
+	void NormalizeAdaptiveBalanceSettings(json& a_settings)
+	{
+		if (!a_settings.is_object())
+			return;
+
+		const json defaults = AdaptiveBrightness::Settings{};
+		for (const auto& [key, defaultValue] : defaults.items()) {
+			if (key == kProfilesFieldName || key == kLocationOverridesFieldName)
+				continue;
+			auto valueIt = a_settings.find(key);
+			if (valueIt == a_settings.end())
+				continue;
+			if (defaultValue.is_object()) {
+				if (!valueIt->is_object())
+					*valueIt = defaultValue;
+				else
+					NormalizeJsonObjectWithDefaults(*valueIt, defaultValue);
+			} else if (!SettingsMigrations::MatchesJsonSchema(*valueIt, defaultValue)) {
+				*valueIt = defaultValue;
+			}
+		}
+
+		NormalizeProfileArray(a_settings);
+		NormalizeLocationOverrideArray(a_settings);
+	}
+
+	json MigrateLegacyProfileSettings(const json& a_settings)
+	{
+		if (!a_settings.is_object())
+			return a_settings;
+
+		auto migrated = a_settings;
+		if (!migrated.contains("globalLightingEnabled")) {
+			if (const auto rendererIt = migrated.find("rendererControlsEnabled"); rendererIt != migrated.end() && rendererIt->is_boolean())
+				migrated["globalLightingEnabled"] = rendererIt->get<bool>();
+		}
+
+		const auto legacyBloomIt = migrated.find("bloomEnhancement");
+		const bool hasLegacyGlobalBloom = legacyBloomIt != migrated.end() && legacyBloomIt->is_object();
+		bool globalBloomEnabled = false;
+		const auto globalBloomProfile = GetLegacyGlobalBloomProfile(migrated, globalBloomEnabled);
+		const auto legacyWaterIt = migrated.find(kLegacyGlobalWaterAppearanceFieldName.data());
+		const bool hasLegacyGlobalWater = legacyWaterIt != migrated.end() &&
+		                                  SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(*legacyWaterIt);
+		const bool forceLegacyGlobalWater = hasLegacyGlobalWater && GetOptionalBool(*legacyWaterIt, SettingsMigrations::kLegacyWaterAppearanceForceGlobalKey.data(), false);
+		const auto globalWaterProfile = hasLegacyGlobalWater ?
+		                                    TryGetWaterAppearanceProfile(*legacyWaterIt).value_or(WaterAppearance::Profile{}) :
+		                                    WaterAppearance::Profile{};
+		const auto existingProfilesIt = migrated.find(kProfilesFieldName.data());
+		const bool createdProfilesFromLegacyGlobal =
+			(hasLegacyGlobalBloom || hasLegacyGlobalWater) &&
+			(existingProfilesIt == migrated.end() || !existingProfilesIt->is_array());
+		if (createdProfilesFromLegacyGlobal)
+			migrated[std::string(kProfilesFieldName)] = AdaptiveBrightness::Settings{}.profiles;
+		if (auto profilesIt = migrated.find(kProfilesFieldName.data()); profilesIt != migrated.end() && profilesIt->is_array()) {
+			for (auto& profile : *profilesIt) {
+				MigrateLegacyProfileBloom(
+					profile,
+					globalBloomProfile,
+					globalBloomEnabled,
+					hasLegacyGlobalBloom,
+					createdProfilesFromLegacyGlobal && hasLegacyGlobalBloom);
+				MigrateLegacyProfileWaterAppearance(
+					profile,
+					globalWaterProfile,
+					hasLegacyGlobalWater,
+					forceLegacyGlobalWater || (createdProfilesFromLegacyGlobal && hasLegacyGlobalWater));
+			}
+		}
+		if (auto overridesIt = migrated.find(kLocationOverridesFieldName.data()); overridesIt != migrated.end() && overridesIt->is_array()) {
+			for (auto& locationOverride : *overridesIt) {
+				if (!locationOverride.is_object())
+					continue;
+				if (auto profileIt = locationOverride.find("profile"); profileIt != locationOverride.end()) {
+					MigrateLegacyProfileBloom(*profileIt, globalBloomProfile, globalBloomEnabled, hasLegacyGlobalBloom);
+					MigrateLegacyProfileWaterAppearance(*profileIt, globalWaterProfile, hasLegacyGlobalWater, forceLegacyGlobalWater);
+				}
+			}
+		}
+
+		migrated.erase("rendererControlsEnabled");
+		migrated.erase("bloomEnhancement");
+		migrated.erase(kLegacyGlobalWaterAppearanceFieldName.data());
+		NormalizeAdaptiveBalanceSettings(migrated);
+		return migrated;
+	}
+
 	json MakePresetMetadata(std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
@@ -505,9 +872,8 @@ namespace
 	json MakeBasePresetJson(const AdaptiveBrightness::Settings& a_settings, std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
-			{ "rendererControlsEnabled", a_settings.rendererControlsEnabled },
+			{ "globalLightingEnabled", a_settings.globalLightingEnabled },
 			{ "lighting", a_settings.lighting },
-			{ "bloomEnhancement", a_settings.bloomEnhancement },
 			{ "dayStartHour", a_settings.dayStartHour },
 			{ "nightStartHour", a_settings.nightStartHour },
 			{ "transitionHours", a_settings.transitionHours },
@@ -521,7 +887,8 @@ namespace
 		if (a_locationOverride.name.empty())
 			a_locationOverride.name = a_locationOverride.key;
 
-		if (a_locationOverride.type != kOverrideTypeCell)
+		if (a_locationOverride.type != kOverrideTypeCell &&
+			a_locationOverride.type != kOverrideTypeWorldspace)
 			a_locationOverride.type = kOverrideTypeLocation;
 
 		ClampProfileSettings(a_locationOverride.profile);
@@ -532,7 +899,12 @@ namespace
 		LocationOverrideImportStats stats;
 		for (const auto& entry : a_json) {
 			try {
-				auto locationOverride = entry.get<AdaptiveBrightness::LocationOverride>();
+				auto migratedEntry = entry;
+				if (auto profileIt = migratedEntry.find("profile"); profileIt != migratedEntry.end()) {
+					MigrateLegacyProfileBloom(*profileIt, Bloom::Profile{}, false, false);
+					MigrateLegacyProfileWaterAppearance(*profileIt, WaterAppearance::Profile{}, false);
+				}
+				auto locationOverride = migratedEntry.get<AdaptiveBrightness::LocationOverride>();
 				if (!IsValidFormKey(locationOverride.key)) {
 					++stats.skipped;
 					continue;
@@ -617,24 +989,21 @@ namespace
 		}
 
 		try {
+			const auto migratedPreset = MigrateLegacyProfileSettings(*presetJson);
 			auto importedSettings = a_settings;
-			auto importedProfiles = presetJson->at(kProfilesFieldName.data()).get<std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>>();
+			auto importedProfiles = migratedPreset.at(kProfilesFieldName.data()).get<std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>>();
 			NormalizeBaseProfiles(importedProfiles);
 
-			if (const auto it = presetJson->find("rendererControlsEnabled"); it != presetJson->end() && it->is_boolean())
-				importedSettings.rendererControlsEnabled = it->get<bool>();
-			if (const auto it = presetJson->find("lighting"); it != presetJson->end() && it->is_object()) {
+			if (const auto it = migratedPreset.find("globalLightingEnabled"); it != migratedPreset.end() && it->is_boolean())
+				importedSettings.globalLightingEnabled = it->get<bool>();
+			if (const auto it = migratedPreset.find("lighting"); it != migratedPreset.end() && it->is_object()) {
 				importedSettings.lighting = it->get<SharedLightingSettings>();
 				SanitizeSharedLightingSettings(importedSettings.lighting);
 			}
-			if (const auto it = presetJson->find("bloomEnhancement"); it != presetJson->end() && it->is_object()) {
-				importedSettings.bloomEnhancement = it->get<Bloom::PresetSettings>();
-				Bloom::SanitizeSettings(importedSettings.bloomEnhancement);
-			}
 
-			importedSettings.dayStartHour = GetOptionalFloat(*presetJson, "dayStartHour", importedSettings.dayStartHour);
-			importedSettings.nightStartHour = GetOptionalFloat(*presetJson, "nightStartHour", importedSettings.nightStartHour);
-			importedSettings.transitionHours = GetOptionalFloat(*presetJson, "transitionHours", importedSettings.transitionHours);
+			importedSettings.dayStartHour = GetOptionalFloat(migratedPreset, "dayStartHour", importedSettings.dayStartHour);
+			importedSettings.nightStartHour = GetOptionalFloat(migratedPreset, "nightStartHour", importedSettings.nightStartHour);
+			importedSettings.transitionHours = GetOptionalFloat(migratedPreset, "transitionHours", importedSettings.transitionHours);
 			NormalizeExteriorTimeSettings(importedSettings);
 			importedSettings.profiles = std::move(importedProfiles);
 			a_settings = std::move(importedSettings);
@@ -735,11 +1104,13 @@ namespace
 	{
 		const auto* player = RE::PlayerCharacter::GetSingleton();
 		const auto* cell = player ? player->parentCell : nullptr;
+		const auto* worldspace = player ? player->GetWorldspace() : nullptr;
 		auto* location = player ? player->GetCurrentLocation() : nullptr;
 		if (!location)
 			location = cell ? cell->GetLocation() : nullptr;
 
 		return {
+			.worldspace = worldspace,
 			.location = location,
 			.cell = cell,
 		};
@@ -762,8 +1133,8 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
 	ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Blend the active lighting, atmosphere, and Bloom profile by location and exterior time.");
-		ImGui::Text("Global calibration and Bloom defaults remain available when adaptive profiles are disabled.");
+		ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
+		ImGui::Text("Each profile defines its own scene brightness, Bloom, and Unified Water appearance.");
 	}
 
 	if (settings.enabled) {
@@ -782,7 +1153,7 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			ImGui::TextWrapped("Tune the lighting, atmosphere, and Bloom used for each time and location type.");
+			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and Unified Water appearance used for each time and location type. Worldspace, location, and cell overrides are managed under Locations.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
 
@@ -806,13 +1177,13 @@ void AdaptiveBrightness::DrawSettings()
 		}
 
 		if (ImGui::BeginTabItem("Global")) {
-			ImGui::TextWrapped("Set the shared renderer baseline and the Bloom defaults inherited by profiles.");
+			ImGui::TextWrapped("Set the shared lighting baseline applied before each profile.");
 			DrawGlobalRendererSettings();
 			ImGui::EndTabItem();
 		}
 
 		if (ImGui::BeginTabItem("Locations", nullptr, locationSectionFlags)) {
-			ImGui::TextWrapped("Create precise profile overrides for individual locations or cells.");
+			ImGui::TextWrapped("Create precise profile overrides for worldspaces, locations, or exact cells.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved overrides can still be reviewed.");
 			DrawLocationOverrides(false, true, settings.enabled);
@@ -834,17 +1205,11 @@ void AdaptiveBrightness::DrawSettings()
 void AdaptiveBrightness::DrawEssentialSettings()
 {
 	ImGui::SeparatorText("Quick Controls");
-	ImGui::Checkbox("Enable Global Adjustments", &settings.rendererControlsEnabled);
+	ImGui::Checkbox("Enable Global Lighting Calibration", &settings.globalLightingEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Applies global lighting calibration and Bloom enhancement.");
-		ImGui::Text("Adaptive profiles remain active over neutral calibration when this is off.");
+		ImGui::Text("Applies the shared lighting baseline before the active profile.");
+		ImGui::Text("Scene brightness, Bloom, and water appearance profiles remain active when this is off.");
 	}
-
-	ImGui::BeginDisabled(!settings.rendererControlsEnabled);
-	bool bloomEnabled = settings.bloomEnhancement.Enabled != 0;
-	if (ImGui::Checkbox("Enable Bloom Enhancement", &bloomEnabled))
-		settings.bloomEnhancement.Enabled = bloomEnabled;
-	ImGui::EndDisabled();
 
 	if (!settings.enabled)
 		ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
@@ -874,9 +1239,8 @@ void AdaptiveBrightness::DrawEssentialSettings()
 
 void AdaptiveBrightness::LoadSettings(json& o_json)
 {
-	settings = o_json;
+	settings = MigrateLegacyProfileSettings(o_json);
 	SanitizeSharedLightingSettings(settings.lighting);
-	Bloom::SanitizeSettings(settings.bloomEnhancement);
 	NormalizeExteriorTimeSettings(settings);
 	NormalizeBaseProfiles(settings.profiles);
 	globalPresetStatus.clear();
@@ -897,7 +1261,6 @@ void AdaptiveBrightness::LoadSettings(json& o_json)
 void AdaptiveBrightness::SaveSettings(json& o_json)
 {
 	SanitizeSharedLightingSettings(settings.lighting);
-	Bloom::SanitizeSettings(settings.bloomEnhancement);
 	NormalizeExteriorTimeSettings(settings);
 	NormalizeBaseProfiles(settings.profiles);
 	NormalizeLocationOverrides();
@@ -917,6 +1280,13 @@ void AdaptiveBrightness::RestoreDefaultSettings()
 	ClearLocationOverrideSelection();
 	InvalidateProfileTabSync();
 	MarkLocationOverrideLookupDirty();
+}
+
+void AdaptiveBrightness::SetupResources()
+{
+	vanillaPointLightCB = new ConstantBuffer(
+		ConstantBufferDesc<VanillaPointLightData>(),
+		"AdaptiveBalance::VanillaPointLightData");
 }
 
 const char* AdaptiveBrightness::GetProfileName(Profile a_profile)
@@ -1014,31 +1384,26 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 	ImGui::SeparatorText(a_sectionTitle);
 	ImGui::Indent();
 	ImGui::BeginDisabled(!a_allowEdits);
-	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
-	ImGui::EndDisabled();
 
 	if (!a_showAdvancedControls) {
-		ImGui::SeparatorText("Bloom");
-		ImGui::BeginDisabled(!a_allowEdits);
-		DrawProfileBloomSettings(a_profile, false, false);
+		drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
+		Bloom::DrawProfileControls(a_profile.bloom);
 		ImGui::EndDisabled();
 		ImGui::Unindent();
 		ClampProfileSettings(a_profile);
 		return;
 	}
 
-	ImGui::BeginDisabled(!a_allowEdits);
-	ImGui::Checkbox("Use Detailed Lighting Adjustments", &a_profile.advanced);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enables the detailed lighting and atmosphere values for this profile only.");
-		ImGui::Text("Bloom is configured separately.");
-	}
-	ImGui::EndDisabled();
+	if (ImGui::BeginTabBar("##ProfileControlSections", ImGuiTabBarFlags_None)) {
+		if (ImGui::BeginTabItem("Lighting")) {
+			drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
 
-	if (ImGui::BeginTabBar("##AdaptiveBalanceProfileSections", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem("Lighting & Atmosphere")) {
-			ImGui::BeginDisabled(!a_allowEdits);
+			ImGui::Checkbox("Use Detailed Lighting Adjustments", &a_profile.advanced);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Enables the detailed lighting and atmosphere values for this profile only.");
+			}
 			if (a_profile.advanced) {
+				ImGui::Indent();
 				ImGui::SeparatorText("Direct Lighting");
 				ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, 2.0f, "%.2f");
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -1058,22 +1423,33 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 				ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
 				ImGui::SliderFloat("Water", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
 				ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-			} else {
-				ImGui::TextDisabled("Detailed lighting and atmosphere adjustments are not used by this profile.");
+				ImGui::Unindent();
 			}
-			ImGui::EndDisabled();
 			ImGui::EndTabItem();
 		}
 
 		if (ImGui::BeginTabItem("Bloom")) {
-			ImGui::BeginDisabled(!a_allowEdits);
-			DrawProfileBloomSettings(a_profile, true);
-			ImGui::EndDisabled();
+			Bloom::DrawProfileControls(a_profile.bloom);
+			ImGui::Checkbox("Show Detailed Bloom Controls", &a_profile.bloomAdvanced);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Shows detailed Bloom shaping for this profile. Editing a detailed value activates Bloom at strength 1 if it is currently off; the Bloom slider and presets remain available either way.");
+			if (a_profile.bloomAdvanced) {
+				ImGui::Indent();
+				if (Bloom::DrawAdvancedProfileSettings(a_profile.bloom) && a_profile.bloom.EnhancementIntensity <= 0.0f)
+					a_profile.bloom.EnhancementIntensity = 1.0f;
+				ImGui::Unindent();
+			}
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Water")) {
+			WaterAppearance::DrawProfileControls(a_profile.water);
 			ImGui::EndTabItem();
 		}
 
 		ImGui::EndTabBar();
 	}
+	ImGui::EndDisabled();
 
 	ImGui::Unindent();
 	ClampProfileSettings(a_profile);
@@ -1081,17 +1457,17 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 
 void AdaptiveBrightness::DrawGlobalRendererSettings()
 {
-	ImGui::Checkbox("Enable Global Adjustments", &settings.rendererControlsEnabled);
+	ImGui::Checkbox("Enable Global Lighting Calibration", &settings.globalLightingEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Applies global lighting calibration and Bloom enhancement.");
-		ImGui::Text("Adaptive profiles remain active over neutral calibration when this is off.");
+		ImGui::Text("Applies the shared lighting baseline before each profile's detailed lighting adjustments.");
+		ImGui::Text("Profile brightness, Bloom, and water appearance remain active when this is off.");
 	}
-	if (!settings.rendererControlsEnabled)
-		ImGui::TextDisabled("Global lighting calibration and Bloom enhancement are currently inactive.");
+	if (!settings.globalLightingEnabled)
+		ImGui::TextDisabled("Global lighting calibration is currently inactive.");
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceGlobalSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Lighting")) {
-			ImGui::BeginDisabled(!settings.rendererControlsEnabled);
+			ImGui::BeginDisabled(!settings.globalLightingEnabled);
 			ImGui::TextWrapped("These baseline values apply to every location. The active profile is multiplied on top.");
 			ImGui::SeparatorText("Shared Baseline");
 			ImGui::SliderFloat("Sky Brightness", &settings.lighting.skyBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -1111,76 +1487,16 @@ void AdaptiveBrightness::DrawGlobalRendererSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem("Bloom")) {
-			ImGui::BeginDisabled(!settings.rendererControlsEnabled);
-			ImGui::TextWrapped("Profiles inherit this Bloom configuration unless custom Bloom is enabled for that profile.");
-			Bloom::DrawSettings(settings.bloomEnhancement);
-			ImGui::EndDisabled();
-			ImGui::EndTabItem();
-		}
-
 		ImGui::EndTabBar();
 	}
 
 	SanitizeSharedLightingSettings(settings.lighting);
-	Bloom::SanitizeSettings(settings.bloomEnhancement);
-}
-
-void AdaptiveBrightness::DrawProfileBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_showPresetActions)
-{
-	if (a_showAdvancedControls)
-		ImGui::TextWrapped("Inherit Global Bloom or tune Bloom specifically for this profile.");
-	if (!settings.rendererControlsEnabled)
-		ImGui::TextDisabled("Global Adjustments are off, so Bloom is currently inactive.");
-
-	ImGui::BeginDisabled(!settings.rendererControlsEnabled);
-	bool useProfileBloom = a_profile.bloomOverride;
-	if (ImGui::Checkbox("Use Custom Bloom for This Profile", &useProfileBloom)) {
-		if (useProfileBloom && !a_profile.bloomOverride) {
-			a_profile.bloom = Bloom::GetSelectedProfile(settings.bloomEnhancement);
-			a_profile.bloomEnabled = settings.bloomEnhancement.Enabled != 0;
-		}
-		a_profile.bloomOverride = useProfileBloom;
-	}
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Override Global Bloom for this time or location profile.");
-
-	if (a_profile.bloomOverride) {
-		ImGui::Indent();
-		ImGui::Checkbox("Enable Bloom for This Profile", &a_profile.bloomEnabled);
-		if (a_showPresetActions) {
-			ImGui::TextUnformatted("Copy Global Bloom Preset");
-			if (ImGui::BeginTable("##ProfileBloomPresetButtons", 3, ImGuiTableFlags_SizingStretchProp)) {
-				for (uint preset = 0; preset < 3; ++preset)
-					ImGui::TableSetupColumn(Bloom::GetPresetName(preset), ImGuiTableColumnFlags_WidthStretch, 1.0f);
-				ImGui::TableNextRow();
-				for (uint preset = 0; preset < 3; ++preset) {
-					ImGui::TableNextColumn();
-					const auto label = std::format("Copy {}", Bloom::GetPresetName(preset));
-					if (ImGui::Button(label.c_str(), ImVec2(-1.0f, 0.0f)))
-						a_profile.bloom = Bloom::GetPresetProfile(settings.bloomEnhancement, preset);
-				}
-				ImGui::EndTable();
-			}
-		}
-
-		ImGui::BeginDisabled(!a_profile.bloomEnabled);
-		Bloom::DrawProfileSettings(a_profile.bloom, a_showAdvancedControls);
-		ImGui::EndDisabled();
-		ImGui::Unindent();
-	} else {
-		ImGui::TextDisabled(
-			"Using Global Bloom: %s (%s).",
-			Bloom::GetPresetName(settings.bloomEnhancement.SelectedPreset),
-			settings.bloomEnhancement.Enabled ? "Enabled" : "Disabled");
-	}
-	ImGui::EndDisabled();
 }
 
 void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets store global light calibration, Bloom defaults, the five profile tabs, and exterior timing.");
+	DrawHintText("Global presets store global light calibration, the five profiles (including Bloom and water appearance), and exterior timing.");
 	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
 	ImGui::PushID("GlobalPresetControls");
 
@@ -1192,7 +1508,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export global calibration, Bloom defaults, exterior timing, and the five profiles. Location overrides are not included.");
+		ImGui::Text("Export global lighting calibration, exterior timing, and the five profiles with their Bloom and water appearance settings. Location overrides are not included.");
 	}
 
 	ImGui::SameLine();
@@ -1200,7 +1516,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace global calibration, Bloom defaults, exterior timing, and the five profiles. Saved location overrides stay unchanged.");
+		ImGui::Text("Replace global lighting calibration, exterior timing, and the five profiles with their Bloom and water appearance settings. Saved location overrides stay unchanged.");
 	}
 
 	if (!globalPresetStatus.empty())
@@ -1212,7 +1528,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 void AdaptiveBrightness::DrawLocationSummary()
 {
 	ImGui::SeparatorText("Location Overrides");
-	const auto target = GetCurrentLocationOverrideTarget();
+	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* activeOverride = GetActiveLocationOverride();
 	const auto currentProfile = GetCurrentProfileForUI();
 
@@ -1225,10 +1541,14 @@ void AdaptiveBrightness::DrawLocationSummary()
 		ImGui::TextWrapped("Current location uses the %s base profile.", GetProfileName(currentProfile));
 	}
 
-	if (target)
-		ImGui::TextDisabled("Current target: %s", target->name.c_str());
-	else
-		ImGui::TextDisabled("No current location or cell form is available.");
+	if (targets.worldspace)
+		ImGui::TextDisabled("Worldspace target: %s", targets.worldspace->name.c_str());
+	if (targets.location)
+		ImGui::TextDisabled("Location target: %s", targets.location->name.c_str());
+	if (targets.cell)
+		ImGui::TextDisabled("Exact cell target: %s", targets.cell->name.c_str());
+	if (!targets.worldspace && !targets.location && !targets.cell)
+		ImGui::TextDisabled("No current worldspace, location, or cell form is available.");
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 	ImGui::TextDisabled("Switch this feature to Advanced to manage location overrides.");
 }
@@ -1236,16 +1556,14 @@ void AdaptiveBrightness::DrawLocationSummary()
 void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
 {
 	ImGui::SeparatorText("Location Override Profiles");
-	DrawHintText("Location overrides are per-place profiles. A saved override is used when its location or cell matches where you are.");
+	DrawHintText("Match priority is exact cell, current or parent location, then current or parent exterior worldspace. If none match, the interior, dungeon, dwelling, or exterior day/night base profile is used.");
 	if (a_includePresetControls) {
 		DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
 	}
 
-	const auto target = GetCurrentLocationOverrideTarget();
+	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* activeOverride = GetActiveLocationOverride();
 	const auto currentProfile = GetCurrentProfileForUI();
-	const bool hasSavedTarget = target && FindLocationOverride(target->key) != nullptr;
-	const char* currentOverrideButtonLabel = hasSavedTarget ? "Open Current Location Override" : "Create Current Location Override";
 
 	if (activeOverride) {
 		ImGui::TextWrapped("Using saved override \"%s\" here. Base profile: %s.", activeOverride->name.c_str(), GetProfileName(currentProfile));
@@ -1253,38 +1571,57 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 		ImGui::TextWrapped("Using base profile %s here. No saved override matches this place.", GetProfileName(currentProfile));
 	}
 
-	ImGui::BeginDisabled(!target.has_value() || (!a_allowEdits && !hasSavedTarget));
-	if (ImGui::Button(currentOverrideButtonLabel)) {
-		if (a_allowEdits) {
-			SaveCurrentLocationOverride();
-		} else {
-			ClearLocationOverrideSelection();
-			selectedLocationOverrideKey = target->key;
+	const auto drawTargetAction = [&](const std::optional<LocationOverrideTarget>& a_target, const char* a_scope, const char* a_description) {
+		if (!a_target)
+			return;
+
+		const bool hasSavedTarget = FindLocationOverride(a_target->key) != nullptr;
+		const auto buttonLabel = std::format("{} {} Override", hasSavedTarget ? "Open" : "Create", a_scope);
+		ImGui::PushID(a_target->key.c_str());
+		ImGui::BeginDisabled(!a_allowEdits && !hasSavedTarget);
+		if (ImGui::Button(buttonLabel.c_str())) {
+			if (a_allowEdits) {
+				SaveCurrentLocationOverride(*a_target);
+			} else {
+				ClearLocationOverrideSelection();
+				selectedLocationOverrideKey = a_target->key;
+			}
 		}
-	}
-	ImGui::EndDisabled();
+		ImGui::EndDisabled();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", a_description);
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", a_target->name.c_str());
+		ImGui::TextDisabled("Form %s, %s, COC %s", a_target->type.c_str(), a_target->key.c_str(), GetCocLabel(a_target->cocCode));
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("The COC code is captured from the current cell as a navigation shortcut.");
+		ImGui::PopID();
+	};
 
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(a_allowEdits ?
-						"Save this place as an override, or open its existing override." :
-						"Open this place's existing override for review.");
-	}
+	drawTargetAction(
+		targets.worldspace,
+		"Worldspace",
+		"Applies throughout this exterior worldspace and its child worldspaces unless a more specific worldspace, location, or exact-cell override exists.");
+	drawTargetAction(
+		targets.location,
+		"Location",
+		"Applies to this location and its descendants unless an exact-cell override exists; it takes precedence over worldspace overrides.");
+	drawTargetAction(
+		targets.cell,
+		"Exact Cell",
+		"Applies only to this exact cell and takes precedence over location and worldspace overrides.");
 
-	ImGui::SameLine();
-	ImGui::TextDisabled("(%zu saved)", settings.locationOverrides.size());
-
-	if (target) {
-		ImGui::TextWrapped("Current target: %s (form %s, %s, COC %s)", target->name.c_str(), target->type.c_str(), target->key.c_str(), GetCocLabel(target->cocCode));
-	} else {
-		ImGui::TextDisabled("No current location or cell form is available.");
+	if (!targets.worldspace && !targets.cell && !targets.location) {
+		ImGui::TextDisabled("No current worldspace, location, or cell form is available.");
 	}
+	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 
 	if (a_includePresetControls)
 		DrawLocationOverridePresetControls();
 	ImGui::SeparatorText("Saved Overrides");
 	DrawHintText(a_allowEdits ?
-					 "These saved overrides are matched by location or cell. Click a row to edit it." :
-					 "These saved overrides are matched by location or cell. Click a row to review it.");
+					 "These saved overrides are matched by worldspace, location, or cell. Click a row to edit it." :
+					 "These saved overrides are matched by worldspace, location, or cell. Click a row to review it.");
 
 	if (settings.locationOverrides.empty()) {
 		ClearLocationOverrideSelection();
@@ -1417,7 +1754,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			}
 			ImGui::EndDisabled();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Copy the coc command for this saved cell.");
+				ImGui::Text("Copy the COC command saved with this override.");
 			}
 			ImGui::BeginDisabled(!a_allowEdits);
 			if (ImGui::SmallButton("Delete")) {
@@ -1475,7 +1812,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 void AdaptiveBrightness::DrawLocationOverridePresetControls()
 {
 	ImGui::SeparatorText("Override Presets");
-	DrawHintText("Override presets store saved location and cell overrides only. They do not include the five profile tabs.");
+	DrawHintText("Override presets store saved worldspace, location, and cell overrides only. They do not include the five profile tabs.");
 	ImGui::PushID("LocationOverridePresetControls");
 
 	const auto presetPath = GetPresetPath(locationOverridePresetName, PresetKind::Location);
@@ -1509,7 +1846,7 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 void AdaptiveBrightness::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets store global calibration, Bloom defaults, exterior timing, the five profile tabs, and all saved location overrides.");
+	DrawHintText("Full presets store global calibration, Bloom and water appearance defaults, exterior timing, the five profile tabs, and all saved worldspace, location, and cell overrides.");
 	DrawHintText("Import replaces the profile tabs and the saved override list in the current settings.");
 	ImGui::PushID("FullPresetControls");
 
@@ -1521,7 +1858,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ExportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export global calibration, Bloom defaults, exterior timing, the five profiles, and all saved overrides.");
+		ImGui::Text("Export global calibration, Bloom and water appearance defaults, exterior timing, the five profiles, and all saved overrides.");
 	}
 
 	ImGui::SameLine();
@@ -1529,7 +1866,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ImportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace global calibration, Bloom defaults, exterior timing, the five profiles, and the saved override list.");
+		ImGui::Text("Replace global calibration, Bloom and water appearance defaults, exterior timing, the five profiles, and the saved override list.");
 	}
 
 	if (!fullPresetStatus.empty())
@@ -1811,7 +2148,7 @@ const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveLocatio
 	return &settings.locationOverrides[overrideIndex];
 }
 
-std::optional<AdaptiveBrightness::LocationOverrideTarget> AdaptiveBrightness::GetCurrentLocationOverrideTarget() const
+AdaptiveBrightness::CurrentLocationOverrideTargets AdaptiveBrightness::GetCurrentLocationOverrideTargets() const
 {
 	const auto forms = GetCurrentLocationForms();
 	const auto currentProfile = GetCurrentProfileForUI();
@@ -1834,37 +2171,52 @@ std::optional<AdaptiveBrightness::LocationOverrideTarget> AdaptiveBrightness::Ge
 		};
 	};
 
-	if (auto target = makeTarget(forms.location, kOverrideTypeLocation))
-		return target;
-
-	return makeTarget(forms.cell, kOverrideTypeCell);
+	return {
+		.worldspace = LocationContext::Get().inInterior ?
+		                  std::nullopt :
+		                  makeTarget(forms.worldspace, kOverrideTypeWorldspace),
+		.location = makeTarget(forms.location, kOverrideTypeLocation),
+		.cell = makeTarget(forms.cell, kOverrideTypeCell),
+	};
 }
 
-void AdaptiveBrightness::SaveCurrentLocationOverride()
+void AdaptiveBrightness::SaveCurrentLocationOverride(const LocationOverrideTarget& a_target)
 {
-	const auto target = GetCurrentLocationOverrideTarget();
-	if (!target)
-		return;
-
-	if (auto* existingOverride = FindLocationOverride(target->key)) {
-		existingOverride->name = target->name;
-		existingOverride->type = target->type;
-		existingOverride->cocCode = target->cocCode;
+	if (auto* existingOverride = FindLocationOverride(a_target.key)) {
+		existingOverride->name = a_target.name;
+		existingOverride->type = a_target.type;
+		existingOverride->cocCode = a_target.cocCode;
 		ClearLocationOverrideSelection();
 		selectedLocationOverrideKey = existingOverride->key;
 		return;
 	}
 
 	LocationOverride locationOverride;
-	locationOverride.key = target->key;
-	locationOverride.name = target->name;
-	locationOverride.type = target->type;
-	locationOverride.cocCode = target->cocCode;
-	if (const auto* activeOverride = GetActiveLocationOverride()) {
-		locationOverride.profile = activeOverride->profile;
-	} else {
-		locationOverride.profile = settings.profiles[ProfileIndex(target->defaultProfile)];
+	locationOverride.key = a_target.key;
+	locationOverride.name = a_target.name;
+	locationOverride.type = a_target.type;
+	locationOverride.cocCode = a_target.cocCode;
+
+	const auto forms = GetCurrentLocationForms();
+	const LocationOverride* inheritedOverride = nullptr;
+	if (a_target.type == kOverrideTypeCell) {
+		inheritedOverride = GetActiveLocationOverride();
+	} else if (a_target.type == kOverrideTypeLocation) {
+		auto inheritedIndex = ResolveLocationHierarchyOverrideIndex(forms.location);
+		if (inheritedIndex == kInvalidLocationOverrideIndex && !LocationContext::Get().inInterior)
+			inheritedIndex = ResolveWorldspaceHierarchyOverrideIndex(forms.worldspace);
+		if (inheritedIndex != kInvalidLocationOverrideIndex && inheritedIndex < settings.locationOverrides.size())
+			inheritedOverride = &settings.locationOverrides[inheritedIndex];
+	} else if (a_target.type == kOverrideTypeWorldspace) {
+		const auto inheritedIndex = ResolveWorldspaceHierarchyOverrideIndex(
+			forms.worldspace ? forms.worldspace->parentWorld : nullptr);
+		if (inheritedIndex != kInvalidLocationOverrideIndex && inheritedIndex < settings.locationOverrides.size())
+			inheritedOverride = &settings.locationOverrides[inheritedIndex];
 	}
+
+	locationOverride.profile = inheritedOverride ?
+	                               inheritedOverride->profile :
+	                               settings.profiles[ProfileIndex(a_target.defaultProfile)];
 
 	selectedLocationOverrideKey = locationOverride.key;
 	settings.locationOverrides.push_back(std::move(locationOverride));
@@ -1947,6 +2299,32 @@ std::size_t AdaptiveBrightness::FindLocationOverrideIndexByForm(const RE::TESFor
 	return FindLocationOverrideIndexByKey(key);
 }
 
+std::size_t AdaptiveBrightness::ResolveWorldspaceHierarchyOverrideIndex(const RE::TESWorldSpace* a_worldspace) const
+{
+	// Parent chains are normally shallow and acyclic. The cap prevents malformed
+	// plugin data from trapping the render thread in an unbounded traversal.
+	std::size_t depth = 0;
+	for (auto* current = a_worldspace; current && depth < kMaxOverrideHierarchyDepth; current = current->parentWorld, ++depth) {
+		const auto resolvedIndex = FindLocationOverrideIndexByForm(current);
+		if (resolvedIndex != kInvalidLocationOverrideIndex)
+			return resolvedIndex;
+	}
+
+	return kInvalidLocationOverrideIndex;
+}
+
+std::size_t AdaptiveBrightness::ResolveLocationHierarchyOverrideIndex(const RE::BGSLocation* a_location) const
+{
+	std::size_t depth = 0;
+	for (auto* current = a_location; current && depth < kMaxOverrideHierarchyDepth; current = current->parentLoc, ++depth) {
+		const auto resolvedIndex = FindLocationOverrideIndexByForm(current);
+		if (resolvedIndex != kInvalidLocationOverrideIndex)
+			return resolvedIndex;
+	}
+
+	return kInvalidLocationOverrideIndex;
+}
+
 std::size_t AdaptiveBrightness::ResolveLocationOverrideIndex() const
 {
 	EnsureLocationOverrideLookup();
@@ -1955,32 +2333,35 @@ std::size_t AdaptiveBrightness::ResolveLocationOverrideIndex() const
 		return kInvalidLocationOverrideIndex;
 
 	const auto forms = GetCurrentLocationForms();
+	const bool inInterior = LocationContext::Get().inInterior;
+	const uint32_t worldspaceFormID = forms.worldspace ? forms.worldspace->GetFormID() : 0;
 	const uint32_t locationFormID = forms.location ? forms.location->GetFormID() : 0;
 	const uint32_t cellFormID = forms.cell ? forms.cell->GetFormID() : 0;
 
 	if (locationOverrideCache.valid &&
 		locationOverrideCache.lookupVersion == locationOverrideLookupVersion &&
+		locationOverrideCache.worldspaceFormID == worldspaceFormID &&
 		locationOverrideCache.locationFormID == locationFormID &&
-		locationOverrideCache.cellFormID == cellFormID) {
+		locationOverrideCache.cellFormID == cellFormID &&
+		locationOverrideCache.inInterior == inInterior) {
 		return locationOverrideCache.overrideIndex;
 	}
 
-	auto resolvedIndex = kInvalidLocationOverrideIndex;
-
-	for (auto* current = forms.location; current; current = current->parentLoc) {
-		resolvedIndex = FindLocationOverrideIndexByForm(current);
-		if (resolvedIndex != kInvalidLocationOverrideIndex)
-			break;
-	}
-
+	// Resolve from most to least specific. Semantic interior profiles and the
+	// exterior schedule are selected only when none of these saved scopes match.
+	auto resolvedIndex = FindLocationOverrideIndexByForm(forms.cell);
 	if (resolvedIndex == kInvalidLocationOverrideIndex)
-		resolvedIndex = FindLocationOverrideIndexByForm(forms.cell);
+		resolvedIndex = ResolveLocationHierarchyOverrideIndex(forms.location);
+	if (resolvedIndex == kInvalidLocationOverrideIndex && !inInterior)
+		resolvedIndex = ResolveWorldspaceHierarchyOverrideIndex(forms.worldspace);
 
 	locationOverrideCache = {
+		.worldspaceFormID = worldspaceFormID,
 		.locationFormID = locationFormID,
 		.cellFormID = cellFormID,
 		.lookupVersion = locationOverrideLookupVersion,
 		.overrideIndex = resolvedIndex,
+		.inInterior = inInterior,
 		.valid = true,
 	};
 
@@ -2027,25 +2408,21 @@ float AdaptiveBrightness::GetExteriorNightFactor() const
 	if (dayLength < 0.25f || dayLength > 23.75f)
 		dayLength = 12.0f;
 
+	const float nightLength = 24.0f - dayLength;
 	const float hoursIntoDay = HoursSince(dayStart, hour);
 	float transition = std::clamp(SafeFinite(settings.transitionHours, 1.0f), 0.0f, 4.0f);
-	transition = std::min(transition, dayLength * 0.5f);
+	transition = std::min(transition, std::min(dayLength, nightLength));
 
 	if (transition <= 0.0f)
 		return hoursIntoDay < dayLength ? 0.0f : 1.0f;
 
-	float dayFactor = 0.0f;
 	if (hoursIntoDay < dayLength) {
-		dayFactor = 1.0f;
-
-		if (hoursIntoDay < transition) {
-			dayFactor = SmoothStep(0.0f, transition, hoursIntoDay);
-		} else if (hoursIntoDay > dayLength - transition) {
-			dayFactor = 1.0f - SmoothStep(dayLength - transition, dayLength, hoursIntoDay);
-		}
+		const float dayFactor = SmoothStep(0.0f, transition, hoursIntoDay);
+		return 1.0f - std::clamp(dayFactor, 0.0f, 1.0f);
 	}
 
-	return 1.0f - std::clamp(dayFactor, 0.0f, 1.0f);
+	const float nightFactor = SmoothStep(dayLength, dayLength + transition, hoursIntoDay);
+	return std::clamp(nightFactor, 0.0f, 1.0f);
 }
 
 LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings() const
@@ -2225,7 +2602,7 @@ AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffec
 
 SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() const
 {
-	auto baseSettings = loaded && settings.rendererControlsEnabled ? settings.lighting : SharedLightingSettings{};
+	auto baseSettings = loaded && settings.globalLightingEnabled ? settings.lighting : SharedLightingSettings{};
 	SanitizeSharedLightingSettings(baseSettings);
 	auto effectiveSettings = baseSettings;
 
@@ -2243,39 +2620,100 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 	return effectiveSettings;
 }
 
-Bloom::Profile AdaptiveBrightness::ResolveBloomProfile(const ProfileSettings& a_profile) const
-{
-	auto profile = a_profile.bloomOverride ? a_profile.bloom : Bloom::GetSelectedProfile(settings.bloomEnhancement);
-	Bloom::SanitizeProfile(profile);
-	return profile;
-}
-
 Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 {
-	const bool rendererControlsActive = loaded && settings.rendererControlsEnabled;
-	auto globalProfile = Bloom::GetSelectedProfile(settings.bloomEnhancement);
-	Bloom::SanitizeProfile(globalProfile);
-	const float globalBlendWeight = rendererControlsActive && settings.bloomEnhancement.Enabled != 0 ? 1.0f : 0.0f;
-
 	if (!IsRuntimeEnabled())
-		return Bloom::GetCommonBufferData(globalProfile, globalBlendWeight);
+		return Bloom::GetCommonBufferData(Bloom::Profile{}, 0.0f);
 
 	const auto activeProfiles = GetActiveProfileBlend();
-	const auto getBlendWeight = [&](const ProfileSettings& a_profile) {
-		if (!rendererControlsActive)
-			return 0.0f;
-		return a_profile.bloomOverride ? (a_profile.bloomEnabled ? 1.0f : 0.0f) : globalBlendWeight;
-	};
-
-	const auto fromProfile = ResolveBloomProfile(*activeProfiles.from);
-	const float fromBlendWeight = getBlendWeight(*activeProfiles.from);
+	auto fromProfile = activeProfiles.from->bloom;
+	Bloom::SanitizeProfile(fromProfile);
 	if (activeProfiles.from == activeProfiles.to)
-		return Bloom::GetCommonBufferData(fromProfile, fromBlendWeight);
+		return Bloom::GetCommonBufferData(fromProfile, 1.0f);
 
-	const auto toProfile = ResolveBloomProfile(*activeProfiles.to);
+	auto toProfile = activeProfiles.to->bloom;
+	Bloom::SanitizeProfile(toProfile);
 	const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
 	const auto effectiveProfile = Bloom::LerpProfiles(fromProfile, toProfile, t);
-	return Bloom::GetCommonBufferData(effectiveProfile, std::lerp(fromBlendWeight, getBlendWeight(*activeProfiles.to), t));
+	return Bloom::GetCommonBufferData(effectiveProfile, 1.0f);
+}
+
+WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings() const
+{
+	if (!IsRuntimeEnabled())
+		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
+
+	const auto activeProfiles = GetActiveProfileBlend();
+	auto fromProfile = activeProfiles.from->water;
+	WaterAppearance::SanitizeProfile(fromProfile);
+	if (activeProfiles.from == activeProfiles.to)
+		return WaterAppearance::GetCommonBufferData(fromProfile);
+
+	auto toProfile = activeProfiles.to->water;
+	WaterAppearance::SanitizeProfile(toProfile);
+	const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
+	const auto effectiveProfile = WaterAppearance::LerpProfiles(fromProfile, toProfile, t);
+	return WaterAppearance::GetCommonBufferData(effectiveProfile);
+}
+
+AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
+{
+	const auto effectiveSettings = GetEffectiveSharedLightingSettings();
+
+	PerFrameData data{};
+	data.skyBrightness = effectiveSettings.skyBrightness;
+	data.directionalLightMult = effectiveSettings.directionalLightMult;
+	data.pointLightMult = effectiveSettings.pointLightMult;
+	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
+	data.spotlightMult = effectiveSettings.spotlightMult;
+	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;
+	data.omnidirectionalBulbMult = effectiveSettings.omnidirectionalBulbMult;
+	data.linearOmnidirectionalBulbMult = effectiveSettings.linearOmnidirectionalBulbMult;
+	return data;
+}
+
+bool AdaptiveBrightness::NeedsVanillaPointLightData() const
+{
+	if (!loaded)
+		return false;
+
+	if (globals::features::linearLighting.IsRuntimeEnabled())
+		return true;
+
+	return settings.globalLightingEnabled &&
+	       UsesClassifiedPointLightMultipliers(settings.lighting);
+}
+
+void AdaptiveBrightness::UpdateVanillaPointLightData(
+	RE::BSRenderPass* a_pass,
+	uint32_t a_lightCount,
+	uint32_t a_bufferRegister)
+{
+	if (!vanillaPointLightCB || !globals::d3d::context || !a_pass || !a_pass->sceneLights)
+		return;
+
+	VanillaPointLightData data{};
+	const uint32_t lightCount = std::min(a_lightCount, kMaxVanillaPointLights);
+	for (uint32_t lightIndex = 0; lightIndex < lightCount; ++lightIndex) {
+		const uint32_t sceneLightIndex = lightIndex + kFirstPointLightSceneIndex;
+		if (sceneLightIndex >= a_pass->numLights)
+			break;
+
+		auto* bsLight = a_pass->sceneLights[sceneLightIndex];
+		if (!bsLight)
+			continue;
+
+		auto* niLight = bsLight->light.get();
+		auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
+		if (!globals::features::inverseSquareLighting.IsEnabled())
+			pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
+		data.pointLightFlags[lightIndex] = pointLightFlags;
+	}
+
+	vanillaPointLightCB->Update(data);
+
+	ID3D11Buffer* buffer = vanillaPointLightCB->CB();
+	globals::d3d::context->PSSetConstantBuffers(a_bufferRegister, 1, &buffer);
 }
 
 AdaptiveBrightness::ActiveProfileBlend AdaptiveBrightness::GetActiveProfileBlend() const
@@ -2320,4 +2758,40 @@ std::string AdaptiveBrightness::GetContextLabel() const
 	const float nightFactor = GetExteriorNightFactor();
 	const auto dominantProfile = GetCurrentProfileForUI();
 	return std::format("Current profile: {} ({:.0f}% night blend)", GetProfileName(dominantProfile), nightFactor * 100.0f);
+}
+
+struct AdaptiveBrightness::Hooks
+{
+	struct BSWaterShader_SetupGeometry
+	{
+		static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
+		{
+			func(a_shader, a_pass, a_renderFlags);
+
+			auto& adaptiveBalance = globals::features::adaptiveBrightness;
+			if (!adaptiveBalance.NeedsVanillaPointLightData())
+				return;
+
+			const uint32_t lightCount =
+				a_pass && a_pass->numLights > 0 ?
+					a_pass->numLights - kFirstPointLightSceneIndex :
+					0;
+			adaptiveBalance.UpdateVanillaPointLightData(
+				a_pass,
+				lightCount,
+				kWaterPointLightCBRegister);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	static void Install()
+	{
+		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
+		logger::info("[AdaptiveBalance] Installed shared-light water hook");
+	}
+};
+
+void AdaptiveBrightness::PostPostLoad()
+{
+	Hooks::Install();
 }

@@ -118,6 +118,22 @@
 	}
 }
 
+/// @tags color, hdr, colorspace
+[numthreads(1, 1, 1)] void TestBT709BT2020Roundtrip()
+{
+	float3 testColors[4] = {
+		float3(0.0, 0.0, 0.0),
+		float3(1.0, 1.0, 1.0),
+		float3(0.8, 0.2, 0.1),
+		float3(0.1, 0.6, 0.9)
+	};
+
+	for (int i = 0; i < 4; i++) {
+		float3 roundtrip = Color::BT2020ToBT709(Color::BT709ToBT2020(testColors[i]));
+		ASSERT(IsTrue, all(abs(roundtrip - testColors[i]) < 0.001f));
+	}
+}
+
 /// @tags color, luminance
 [numthreads(1, 1, 1)] void TestRGBToLuminanceVariants() {
 	float3 testColor = float3(0.6, 0.4, 0.3);

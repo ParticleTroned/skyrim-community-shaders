@@ -11,6 +11,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
+#include "Features/FoliageLighting.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/HairSpecular.h"
@@ -228,6 +229,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
 		&globals::features::truePBR,
+		&globals::features::foliageLighting,
 		&globals::features::adaptiveBrightness,
 		&globals::features::grassLighting,
 		&globals::features::grassCollision,

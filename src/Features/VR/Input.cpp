@@ -230,8 +230,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 			 return menuOpenPressed && !isEnabled && canUseMenuBindings;
 		 },
 			[&]() {
-				isEnabled = true;
-				ResetMenuInputRuntimeState();
+				globals::menu->OpenMenu();
 			} },
 
 		// Close CSX menu when open

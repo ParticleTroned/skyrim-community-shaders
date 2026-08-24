@@ -895,6 +895,9 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		if (result == SettingsSerialization::CanonicalizationResult::Error)
 			sourceConfigSafeForAutomaticSave = false;
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
+		if (auto adaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+			adaptiveIt != settings.end())
+			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
 	}
 
 	// Step 2: Apply user settings on top of defaults.
@@ -910,7 +913,16 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			const bool userDefinedAdaptiveBalance =
 				(adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object()) ||
 				(legacyAdaptiveBrightnessIt != userSettings.end() && legacyAdaptiveBrightnessIt->is_object());
-			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings);
+			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings, true);
+			if (const auto sourceAdaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+				sourceAdaptiveIt != userSettings.end() && SettingsMigrations::HasForcedLegacyWaterAppearance(*sourceAdaptiveIt)) {
+				if (auto targetAdaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+					targetAdaptiveIt != settings.end())
+					SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(*targetAdaptiveIt);
+			}
+			if (auto adaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+				adaptiveIt != userSettings.end())
+				SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
 			for (const auto& [key, value] : userSettings.items()) {
 				auto existingIt = settings.find(key);
 				if (!userDefinedAdaptiveBalance &&
@@ -1030,13 +1042,6 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				                                   (feature->failedLoadedMessage + "\n" + displayName + " failed to load. Check CommunityShaders.log");
 				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
 			}
-		}
-
-		if (globals::features::adaptiveBrightness.loaded && !globals::features::csUtility.loaded) {
-			globals::features::adaptiveBrightness.loaded = false;
-			globals::features::adaptiveBrightness.failedLoadedMessage =
-				"Adaptive Balance requires CS Utility renderer support. Resolve the CS Utility load issue, then restart.";
-			logger::warn("Adaptive Balance was disabled because its CSUtility renderer dependency is unavailable");
 		}
 
 		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
@@ -1163,7 +1168,12 @@ void State::LoadFromJson(nlohmann::json& settings, bool a_loadFeatureSettings)
 
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
-		const auto maxCompilerThreads = std::max(1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+		// The compilation pool is constructed at the responsive hardware-derived
+		// ceiling. Clamp persisted legacy/preset values to the number of workers that
+		// actually exists instead of accepting ineffective or CPU-hostile values.
+		const auto maxCompilerThreads = std::max(
+			1,
+			static_cast<int32_t>(shaderCache->compilationPool.get_thread_count()));
 		if (advanced.contains("Dump Shaders") && advanced["Dump Shaders"].is_boolean())
 			shaderCache->SetDump(advanced["Dump Shaders"]);
 		if (advanced.contains("Log Level") && advanced["Log Level"].is_number_integer()) {
@@ -1912,14 +1922,19 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		sharedDataCB->Update(data);
 	}
 
-	{
-		const auto [data, size] = GetFeatureBufferData(a_inWorld);
-
-		featureDataCB->Update(data, size);
-	}
+	UpdateFeatureData(a_inWorld);
 
 	auto* srv = Util::GetCurrentSceneDepthSRV(true);
 	globals::d3d::context->PSSetShaderResources(17, 1, &srv);
+}
+
+void State::UpdateFeatureData(bool a_inWorld)
+{
+	if (!featureDataCB)
+		return;
+
+	const auto [data, size] = GetFeatureBufferData(a_inWorld);
+	featureDataCB->Update(data, size);
 }
 
 void State::ClearDisabledFeatures()

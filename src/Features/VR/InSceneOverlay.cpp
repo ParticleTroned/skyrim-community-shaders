@@ -1,10 +1,10 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
-#include "Menu/OverlayPolicy.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/VRUtils.h"
@@ -1428,12 +1428,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				}
 
 				const bool admitInSceneOverlaySubmit =
-					OverlayPolicy::ShouldAdmitVRInSceneOverlaySubmit({
-						.suppressInSceneOverlaySubmit =
-							upscaling.ShouldSuppressVRInSceneOverlaySubmit(),
+					VRInSceneOverlaySubmitPolicy::ShouldAdmit({
+						.suppressionReasons =
+							upscaling.GetVRInSceneOverlaySubmitSuppressionReasons(),
 						.mainMenuOpen = globals::state && globals::state->isMainMenuOpen,
 						.submitStageUpscalingActive =
 							upscaling.IsSubmitStageUpscalingActive(),
+						.renderTargetRecreateInProgress =
+							upscaling.IsPerfModeRenderTargetRecreateInProgress(),
+						.originalSubmitCandidateSafe =
+							!originalSubmitDecision.ShouldSuppress() &&
+							!originalSubmitDecision.IsNativeRestoreGuarded(),
 					});
 				if (postLoadReleaseToken == 0 &&
 					!nativeRestoreGuardActive &&

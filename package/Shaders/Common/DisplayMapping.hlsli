@@ -2,6 +2,8 @@
 #ifndef __DISPLAY_MAPPING_DEPENDENCY_HLSL__
 #define __DISPLAY_MAPPING_DEPENDENCY_HLSL__
 
+#include "Common/Color.hlsli"
+
 namespace DisplayMapping
 {
 	// https://www.ea.com/frostbite/news/high-dynamic-range-color-grading-and-display-in-frostbite
@@ -38,7 +40,7 @@ namespace DisplayMapping
 	{
 		linearCol /= maxPqValue;
 
-		float3 colToPow = pow(linearCol, PQ_constant_N);
+		float3 colToPow = pow(abs(linearCol), PQ_constant_N);
 		float3 numerator = PQ_constant_C1 + PQ_constant_C2 * colToPow;
 		float3 denominator = 1.0 + PQ_constant_C3 * colToPow;
 		float3 pq = pow(numerator / denominator, PQ_constant_M);
@@ -56,6 +58,20 @@ namespace DisplayMapping
 		linearColor *= maxPqValue;
 
 		return linearColor;
+	}
+
+	float3 ConvertGameToPQ(float3 gammaColor)
+	{
+		float3 linearColor = Color::GammaToLinearSafe(gammaColor);
+		linearColor = Color::BT709ToBT2020(linearColor);
+		return LinearToPQ(linearColor, 10000.0);
+	}
+
+	float3 ConvertPQToGame(float3 pqColor)
+	{
+		float3 linearColor = PQtoLinear(pqColor, 10000.0);
+		linearColor = Color::BT2020ToBT709(linearColor);
+		return Color::LinearToGammaSafe(linearColor);
 	}
 
 	// RGB with sRGB/Rec.709 primaries to CIE XYZ
@@ -135,20 +151,10 @@ namespace DisplayMapping
 		float nativeBloomMaskLimit,
 		float blendWeight)
 	{
-		float3 vanillaMask = saturate(nativeBloomMaskLimit - mappedColor);
-		float3 vanillaContribution = vanillaMask * vanillaBloomColor;
-		float3 result = mappedColor + vanillaContribution;
-
-		// Skyrim's native mask can close completely over bright daytime pixels. Keep
-		// that mask unchanged for vanilla Bloom, but give the opt-in enhancement at
-		// least normalized display headroom without ever reducing the native mask.
-		[branch] if (blendWeight > 0.0) {
-			float3 enhancedMask = max(vanillaMask, saturate(1.0 - mappedColor));
-			float3 enhancedContribution = enhancedMask * enhancedBloomColor;
-			result += saturate(blendWeight) * (enhancedContribution - vanillaContribution);
-		}
-
-		return result;
+		// Resolve the opt-in enhancement first, then apply Skyrim's native Bloom
+		// mask to the complete signal. A zero blend is therefore exact vanilla.
+		const float3 bloomColor = lerp(vanillaBloomColor, enhancedBloomColor, saturate(blendWeight));
+		return mappedColor + saturate(nativeBloomMaskLimit - mappedColor) * bloomColor;
 	}
 
 #if defined(PSHADER) && defined(BLEND)

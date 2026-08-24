@@ -36,15 +36,15 @@ cbuffer LLPerGeometry : register(b8)
 };
 #endif
 
-#if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
-#	if defined(CS_UTILITY_WATER_POINT_LIGHT_DATA)
-cbuffer CSUtilityPerGeometry : register(b7)
+#if defined(PSHADER) && defined(ADAPTIVE_BALANCE) && (defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
+#	if defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA)
+cbuffer AdaptiveBalancePerGeometry : register(b7)
 #	else
-cbuffer CSUtilityPerGeometry : register(b3)
+cbuffer AdaptiveBalancePerGeometry : register(b3)
 #	endif
 {
-	uint4 CSUtilityPointLightFlags0;
-	uint4 CSUtilityPointLightFlags1;
+	uint4 AdaptiveBalancePointLightFlags0;
+	uint4 AdaptiveBalancePointLightFlags1;
 };
 #endif
 
@@ -168,6 +168,31 @@ namespace Color
 		return sign(color) * pow(abs(color), 1.0 / 2.2);
 	}
 
+	// Rec. 709/sRGB and Rec. 2020 primary conversion matrices. Keep these in
+	// the shared color module so every HDR image-space pass uses one canonical
+	// transform pair.
+	static const float3x3 BT709_2_BT2020 = {
+		0.627403914928436279296875f, 0.3292830288410186767578125f, 0.0433130674064159393310546875f,
+		0.069097287952899932861328125f, 0.9195404052734375f, 0.011362315155565738677978515625f,
+		0.01639143936336040496826171875f, 0.08801330626010894775390625f, 0.895595252513885498046875f
+	};
+
+	static const float3x3 BT2020_2_BT709 = {
+		1.66049098968505859375f, -0.58764111995697021484375f, -0.072849862277507781982421875f,
+		-0.12455047667026519775390625f, 1.13289988040924072265625f, -0.0083494223654270172119140625f,
+		-0.01815076358616352081298828125f, -0.100578896701335906982421875f, 1.11872971057891845703125f
+	};
+
+	float3 BT709ToBT2020(float3 color)
+	{
+		return mul(BT709_2_BT2020, color);
+	}
+
+	float3 BT2020ToBT709(float3 color)
+	{
+		return mul(BT2020_2_BT709, color);
+	}
+
 	bool UseLinearLightingColorAdjustments()
 	{
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
@@ -227,20 +252,20 @@ namespace Color
 	{
 		return Light(color, isLinear) *
 		       ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		       SharedData::csUtilitySettings.directionalLightMult;
+		       SharedData::adaptiveBalanceSettings.directionalLightMult;
 	}
 
 	float GetPointLightMultiplier(bool isLinear)
 	{
-		return isLinear ? SharedData::csUtilitySettings.linearPointLightMult : SharedData::csUtilitySettings.pointLightMult;
+		return isLinear ? SharedData::adaptiveBalanceSettings.linearPointLightMult : SharedData::adaptiveBalanceSettings.pointLightMult;
 	}
 
 	float GetPointLightTypeMultiplier(bool isLinear, uint lightFlags)
 	{
 		if ((lightFlags & PointLightFlagSpot) != 0)
-			return isLinear ? SharedData::csUtilitySettings.linearSpotlightMult : SharedData::csUtilitySettings.spotlightMult;
+			return isLinear ? SharedData::adaptiveBalanceSettings.linearSpotlightMult : SharedData::adaptiveBalanceSettings.spotlightMult;
 		if ((lightFlags & PointLightFlagOmnidirectionalBulb) != 0)
-			return isLinear ? SharedData::csUtilitySettings.linearOmnidirectionalBulbMult : SharedData::csUtilitySettings.omnidirectionalBulbMult;
+			return isLinear ? SharedData::adaptiveBalanceSettings.linearOmnidirectionalBulbMult : SharedData::adaptiveBalanceSettings.omnidirectionalBulbMult;
 		return 1.0f;
 	}
 
@@ -259,14 +284,14 @@ namespace Color
 
 	uint GetVanillaPointLightFlags(uint lightIndex)
 	{
-#	if defined(PSHADER) && defined(CS_UTILITY) && (defined(CS_UTILITY_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
+#	if defined(PSHADER) && defined(ADAPTIVE_BALANCE) && (defined(ADAPTIVE_BALANCE_WATER_POINT_LIGHT_DATA) || !defined(LIGHT_LIMIT_FIX))
 		if (lightIndex >= MaxVanillaPointLightFlags)
 			return 0;
 
 		// Keep both ternary operands in range. The legacy HLSL compiler evaluates
 		// both vector indices while unrolling Water's literal local-light loop.
 		const uint componentIndex = lightIndex % PackedPointLightFlagVectorSize;
-		return lightIndex < PackedPointLightFlagVectorSize ? CSUtilityPointLightFlags0[componentIndex] : CSUtilityPointLightFlags1[componentIndex];
+		return lightIndex < PackedPointLightFlagVectorSize ? AdaptiveBalancePointLightFlags0[componentIndex] : AdaptiveBalancePointLightFlags1[componentIndex];
 #	else
 		return 0;
 #	endif

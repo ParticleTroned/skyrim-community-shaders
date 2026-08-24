@@ -97,6 +97,22 @@ static const float4 Param = { 0, 0, 0, 0 };
 	}
 }
 
+/// @tags hdr, pq, colorspace
+[numthreads(1, 1, 1)] void TestGamePQRoundtrip()
+{
+	float3 testColors[4] = {
+		float3(0.0, 0.0, 0.0),
+		float3(1.0, 1.0, 1.0),
+		float3(0.8, 0.2, 0.1),
+		float3(0.1, 0.6, 0.9)
+	};
+
+	for (int i = 0; i < 4; i++) {
+		float3 roundtrip = DisplayMapping::ConvertPQToGame(DisplayMapping::ConvertGameToPQ(testColors[i]));
+		ASSERT(IsTrue, all(abs(roundtrip - testColors[i]) < 0.01f));
+	}
+}
+
 /// @tags hdr, colorspace
 [numthreads(1, 1, 1)] void TestRGBToXYZRoundtrip() {
 	float3 colors[4] = {

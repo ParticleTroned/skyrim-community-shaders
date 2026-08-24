@@ -203,8 +203,8 @@ public:
 		static constexpr uint32_t kButtonJoystickTrigger = 32;
 
 		// Performance optimization settings
-		bool EnableDepthBufferCullingExterior = true;  ///< Enable depth buffer culling for VR performance
-		bool EnableDepthBufferCullingInterior = true;
+		bool EnableDepthBufferCullingExterior = true;   ///< Master depth-culling option; enabled in exteriors
+		bool EnableDepthBufferCullingInterior = false;  ///< Also enable depth culling in interiors
 		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
 
 		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.
@@ -415,6 +415,7 @@ public:
 	void ResetComboRecordingState();
 	void ReleaseMenuImGuiInputState();
 	void ResetMenuInputRuntimeState();
+	void RequestFixedWorldMenuReanchor();
 
 	void EnsureOverlayInitialized();
 	void DestroyOverlay();

@@ -84,8 +84,15 @@ jobs:
               uses: lukka/run-cmake@v10
               with:
                   configurePreset: ${{ matrix.compiler.cmake-preset }}
-                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON']"
+                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON']"
                   buildPreset: ${{ matrix.compiler.cmake-preset }}
+
+            - name: Verify DLL provenance sidecar
+              shell: pwsh
+              run: |
+                  python tools/build_provenance.py verify `
+                    --manifest "${{ matrix.compiler.build-dir }}/Release/CSX.BuildManifest.json" `
+                    --artifact "${{ matrix.compiler.build-dir }}/Release/CommunityShaders.dll"
 
             - name: Build controller tests
               run: |
@@ -93,7 +100,7 @@ jobs:
 
             - name: Run controller tests
               run: |
-                  ctest --test-dir ${{ matrix.compiler.build-dir }} -C Release --output-on-failure --no-tests=error -R "PerfModeRestartState|VRVendorRelatchPolicy|FSRHostLifecyclePolicy" --timeout 60
+                  ctest --test-dir ${{ matrix.compiler.build-dir }} -C Release --output-on-failure --no-tests=error -L ControllerTests --timeout 60
 
             - name: Extract version from CMake
               id: get_version

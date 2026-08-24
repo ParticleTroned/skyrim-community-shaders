@@ -53,7 +53,7 @@ float3 GetTonemapFactorHejlBurgessDawson(float3 luminance)
 
 #	include "Common/DisplayMapping.hlsli"
 
-#	if defined(BLEND) && defined(CS_UTILITY)
+#	if defined(BLEND) && defined(ADAPTIVE_BALANCE)
 float2 ClampBloomSampleUV(float2 a_uv, uint a_eyeIndex, uint a_bloomWidth)
 {
 	const float halfTexelX = 0.5 / max(float(a_bloomWidth), 1.0);
@@ -79,56 +79,43 @@ float3 SampleVanillaBloomEnhanced(float2 a_uv, out float3 a_vanillaBloom)
 		uint bloomWidth = 1;
 		uint bloomHeight = 1;
 		ImageTex.GetDimensions(bloomWidth, bloomHeight);
-		// Truncated 5x5 binomial Gaussian: retain the center, inner 3x3, and outer
-		// cardinal taps, then renormalize. This keeps the smoother two-radius profile
-		// while using 13 samples instead of the full 25-tap kernel.
-		float2 sampleStep = (SharedData::bloomSettings.HaloRadius * 0.5) / max(float2(bloomWidth, bloomHeight), float2(1.0, 1.0));
+		// Normalized 5x5 separable Gaussian kernel. The outer samples are one
+		// Halo Radius from the center, matching the corrected SE implementation.
+		static const uint BLOOM_GAUSSIAN_KERNEL_SIZE = 5;
+		static const uint BLOOM_GAUSSIAN_KERNEL_CENTER = 2;
+		static const float BLOOM_GAUSSIAN_RADIUS_SCALE = 0.5;
+		static const float BLOOM_GAUSSIAN_WEIGHTS[BLOOM_GAUSSIAN_KERNEL_SIZE] = {
+			0.0625,
+			0.25,
+			0.375,
+			0.25,
+			0.0625
+		};
+		float2 sampleStep =
+			(SharedData::bloomSettings.HaloRadius * BLOOM_GAUSSIAN_RADIUS_SCALE) /
+			max(float2(bloomWidth, bloomHeight), float2(1.0, 1.0));
 #		ifdef VR
 		// The VR texture is side-by-side, so its reported width covers both eyes.
-		// Convert the X texel size back to per-eye pixels to keep halos circular.
+		// Convert X to per-eye pixels and retain eye-boundary clamping so both
+		// runtimes use the same kernel without cross-eye sampling.
 		sampleStep.x *= 2.0;
 #		endif
 		uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(a_uv);
+		float3 wide = 0.0;
 
-		static const float BLOOM_CENTER_WEIGHT = 36.0 / 220.0;
-		static const float BLOOM_INNER_CARDINAL_WEIGHT = 24.0 / 220.0;
-		static const float BLOOM_INNER_DIAGONAL_WEIGHT = 16.0 / 220.0;
-		static const float BLOOM_OUTER_CARDINAL_WEIGHT = 6.0 / 220.0;
-		float3 wide = center * BLOOM_CENTER_WEIGHT;
-
-		static const float2 INNER_CARDINAL_OFFSETS[4] = {
-			float2(-1.0, 0.0),
-			float2(1.0, 0.0),
-			float2(0.0, -1.0),
-			float2(0.0, 1.0)
-		};
-		static const float2 INNER_DIAGONAL_OFFSETS[4] = {
-			float2(-1.0, -1.0),
-			float2(1.0, -1.0),
-			float2(-1.0, 1.0),
-			float2(1.0, 1.0)
-		};
-		static const float2 OUTER_CARDINAL_OFFSETS[4] = {
-			float2(-2.0, 0.0),
-			float2(2.0, 0.0),
-			float2(0.0, -2.0),
-			float2(0.0, 2.0)
-		};
-
-		[unroll] for (uint cardinalIndex = 0; cardinalIndex < 4; ++cardinalIndex)
+		[unroll] for (uint y = 0; y < BLOOM_GAUSSIAN_KERNEL_SIZE; ++y)
 		{
-			float2 sampleUV = ClampBloomSampleUV(a_uv + INNER_CARDINAL_OFFSETS[cardinalIndex] * sampleStep, eyeIndex, bloomWidth);
-			wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * BLOOM_INNER_CARDINAL_WEIGHT;
-		}
-		[unroll] for (uint diagonalIndex = 0; diagonalIndex < 4; ++diagonalIndex)
-		{
-			float2 sampleUV = ClampBloomSampleUV(a_uv + INNER_DIAGONAL_OFFSETS[diagonalIndex] * sampleStep, eyeIndex, bloomWidth);
-			wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * BLOOM_INNER_DIAGONAL_WEIGHT;
-		}
-		[unroll] for (uint outerCardinalIndex = 0; outerCardinalIndex < 4; ++outerCardinalIndex)
-		{
-			float2 sampleUV = ClampBloomSampleUV(a_uv + OUTER_CARDINAL_OFFSETS[outerCardinalIndex] * sampleStep, eyeIndex, bloomWidth);
-			wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * BLOOM_OUTER_CARDINAL_WEIGHT;
+			[unroll] for (uint x = 0; x < BLOOM_GAUSSIAN_KERNEL_SIZE; ++x)
+			{
+				const float weight = BLOOM_GAUSSIAN_WEIGHTS[x] * BLOOM_GAUSSIAN_WEIGHTS[y];
+				if (x == BLOOM_GAUSSIAN_KERNEL_CENTER && y == BLOOM_GAUSSIAN_KERNEL_CENTER) {
+					wide += center * weight;
+				} else {
+					const float2 offset = (float2(x, y) - float(BLOOM_GAUSSIAN_KERNEL_CENTER)) * sampleStep;
+					const float2 sampleUV = ClampBloomSampleUV(a_uv + offset, eyeIndex, bloomWidth);
+					wide += ImageTex.Sample(ImageSampler, sampleUV).xyz * weight;
+				}
+			}
 		}
 
 		bloom = lerp(center, wide, SharedData::bloomSettings.HaloSpread);
@@ -179,14 +166,14 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 vanillaBloomColor = 0;
 	float bloomBlendWeight = 0.0;
 	if (Flags.x > 0.5) {
-#		if defined(CS_UTILITY)
+#		if defined(ADAPTIVE_BALANCE)
 		bloomColor = SampleVanillaBloomEnhanced(uv, vanillaBloomColor);
 #		else
 		bloomColor = ImageTex.Sample(ImageSampler, uv).xyz;
 		vanillaBloomColor = bloomColor;
 #		endif
 	} else {
-#		if defined(CS_UTILITY)
+#		if defined(ADAPTIVE_BALANCE)
 		bloomColor = SampleVanillaBloomEnhanced(input.TexCoord.xy, vanillaBloomColor);
 #		else
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
@@ -194,7 +181,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 	}
 
-#		if defined(CS_UTILITY)
+#		if defined(ADAPTIVE_BALANCE)
 	if (SharedData::bloomSettings.Enabled) {
 		float bloomLuminance = Color::RGBToLuminance(bloomColor);
 		float glowThreshold = min(SharedData::bloomSettings.CompressionThreshold, SharedData::bloomSettings.CompressionCeiling);

@@ -16,4 +16,12 @@ namespace Util
 
 	/** Resolves a redirected per-user Windows Known Folder. */
 	std::optional<std::filesystem::path> GetWindowsKnownFolderPath(REFKNOWNFOLDERID folderId);
+
+	/// Selects a cooperative priority for CPU-intensive background workers.
+	/// Windows combines process and thread priority, so BELOW_NORMAL is still
+	/// higher than ordinary desktop applications when Skyrim itself is High.
+	int GetCooperativeBackgroundThreadPriority(DWORD a_processPriorityClass);
+
+	/// Applies the process-class-aware cooperative priority to the calling thread.
+	bool SetCurrentThreadCooperativeBackgroundPriority();
 }  // namespace Util

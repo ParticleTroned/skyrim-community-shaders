@@ -8,6 +8,7 @@
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
+#include "VR/InSceneOverlaySubmitPolicy.h"
 #include <array>
 #include <atomic>
 #include <d3d11_4.h>
@@ -175,6 +176,7 @@ public:
 	static constexpr uint32_t kVRUpscalingApplyBlockRelatchPending = 1u << 3;
 	static constexpr uint32_t kVRUpscalingApplyBlockTransitionPending = 1u << 4;
 	static constexpr uint32_t kVRUpscalingApplyBlockOpenComposite = 1u << 5;
+	static constexpr uint32_t kVRUpscalingApplyBlockStartupNativeFallback = 1u << 6;
 	static constexpr uint32_t ClampDLSSPresetUInt(uint32_t a_preset)
 	{
 		return a_preset <= kDLSSPresetMaxIndex ? a_preset : kDLSSPresetMaxIndex;
@@ -457,6 +459,36 @@ public:
 		{
 			return disposition == VRRenderScaleRequestQueueDisposition::Deferred;
 		}
+	};
+
+	enum class UpscalingTransitionApplyDisposition : uint8_t
+	{
+		Rejected,
+		NoChange,
+		AppliedSynchronously,
+		Queued,
+		Deferred,
+		Coalesced
+	};
+
+	enum class UpscalingTransitionApplyRejection : uint8_t
+	{
+		None,
+		OpenComposite,
+		StartupNativeFallback,
+		TransitionOwnership,
+		QueueRejected
+	};
+
+	/** Exact outcome from the internal atomic profile transition entry point. */
+	struct UpscalingTransitionApplyResult
+	{
+		UpscalingTransitionApplyDisposition disposition =
+			UpscalingTransitionApplyDisposition::Rejected;
+		UpscalingTransitionApplyRejection rejection =
+			UpscalingTransitionApplyRejection::None;
+		uint64_t requestID = 0;
+		uint64_t transitionEpoch = 0;
 	};
 
 	struct VRRenderScaleRelatchSignature
@@ -761,6 +793,11 @@ public:
 		bool settleTimeoutUsed = false;
 		bool settleDeadlineExpired = false;
 		bool timedAttemptConsumed = false;
+		bool timedAttemptInProgress = false;
+		uint64_t timedAttemptStartTickMs = 0;
+		VRVendorRelatchPolicy::PostLoadVendorTeardownPhase vendorTeardownPhase =
+			VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Idle;
+		bool vendorTeardownFallbackRequested = false;
 		bool engineTargetCreateEntered = false;
 		bool relatchAdmitted = false;
 		bool cleanupDeferredUntilStable = false;
@@ -1305,7 +1342,9 @@ public:
 		uint32_t a_dlssPreset,
 		bool a_fsr4RuntimeEnabled,
 		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
-		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0);
+		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0,
+		VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl =
+			VRVendorRelatchPolicy::StartupNativeFallbackControl::None);
 	/** @brief Atomically removes and returns the complete pending request. */
 	std::optional<VRRenderScaleDesiredProfile> TakePendingVRRenderScaleRequest();
 	/** @brief Rejects a request that was cleared or superseded before application began. */
@@ -1615,13 +1654,20 @@ public:
 	bool IsVRRenderScaleModeActive() const;
 	VRRenderScaleStatus GetVRRenderScaleModeStatus() const;
 	static const char* GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_status);
+	bool IsVRStartupNativeFallbackRestartRequired() const noexcept
+	{
+		return vrStartupRenderScaleNativeFallbackRestartRequired.load(
+			std::memory_order_acquire);
+	}
+	bool IsVRStartupNativeFallbackSavedIntentActive() const;
+	bool CanRetryVRStartupNativeFallbackFromCSMenu(bool a_forceMemorySample = false);
 	void SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void ApplyCSMenuUpscalingTransition(
+	UpscalingTransitionApplyResult ApplyCSMenuUpscalingTransition(
 		UpscaleMethod a_targetMethod,
 		bool a_renderScaleModeEnabled,
 		uint32_t a_qualityMode,
@@ -1629,7 +1675,9 @@ public:
 		const char* a_reason = nullptr,
 		VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu,
 		uint64_t a_bufferedStabilizerDoorHandoffSerial = 0,
-		std::optional<bool> a_targetFSR4RuntimeEnable = std::nullopt);
+		std::optional<bool> a_targetFSR4RuntimeEnable = std::nullopt,
+		VRVendorRelatchPolicy::StartupNativeFallbackControl a_startupFallbackControl =
+			VRVendorRelatchPolicy::StartupNativeFallbackControl::None);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
 	/** @return The admitted LoadingMenu serial when an atomic Stabilizer profile may be staged; otherwise zero. */
@@ -1891,7 +1939,9 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
+	bool IsPerfModeRenderTargetRecreateInProgress() const;
 	void RecordVRDLSSFullEyeEvaluation(uint32_t a_eyeIndex, bool a_success);
+	VRInSceneOverlaySubmitPolicy::SuppressionReason GetVRInSceneOverlaySubmitSuppressionReasons() const;
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	enum class VRRenderScaleOriginalSubmitDisposition : uint8_t
@@ -2207,6 +2257,11 @@ public:
 	std::atomic<bool> vrStartupMainMenuRenderStateActive{ false };
 	std::atomic<bool> vrStartupRenderScaleDirectHandoffActive{ false };
 	std::atomic<bool> vrStartupRenderScaleBootSizingRecognized{ false };
+	// A pre-mutation deadline with no resource-backed stable contract leaves the
+	// process on the coherent startup None/native contract. Automatic replay and
+	// boot relatching remain blocked; only an explicit inactive profile or a new
+	// CS-menu request admitted after native/memory recovery may clear the latch.
+	std::atomic<bool> vrStartupRenderScaleNativeFallbackRestartRequired{ false };
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
@@ -3154,7 +3209,7 @@ private:
 		const char* a_reason,
 		bool a_allowSuccessor);
 	[[nodiscard]] bool HasLiveVRRenderScaleProviderNeutralRecoveryWorker() const;
-	bool PromoteVRRenderScalePresentationDeadlineToNativeRecovery(
+	bool PromoteVRRenderScalePreMutationToNativeRecovery(
 		uint64_t a_expectedHoldEpoch,
 		uint64_t a_expectedLoadingSerial,
 		uint64_t a_supersededTransitionEpoch,

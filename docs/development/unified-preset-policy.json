@@ -7,11 +7,16 @@
     { "path": ["Disable at Boot", "TruePBR"], "value": false },
     { "path": ["Inverse Square Lighting", "Enabled"], "value": true },
     { "path": ["Menu", "SmartClearShaderCacheDefault"], "value": false },
-    { "path": ["Screenshot", "SequenceFrameCount"], "value": 30 },
-    { "path": ["Screenshot", "SequenceFrameInterval"], "value": 6 },
-    { "path": ["Screenshot", "SequencePreviewFramesPerSecond"], "value": 15 },
-    { "path": ["Screenshot", "SequenceSaveSeparateEyes"], "value": true },
-    { "path": ["Screenshot", "SequenceWritePreviewVideo"], "value": true },
+    { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
+    { "path": ["Screenshot", "Sequence", "FrameCount"], "value": 30 },
+    { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
+    { "path": ["Screenshot", "Sequence", "Schedule", "IntervalFrames"], "value": 6 },
+    { "path": ["Screenshot", "Sequence", "Backpressure", "Policy"], "value": "skip" },
+    { "path": ["Screenshot", "Sequence", "Backpressure", "MaximumConsecutiveSkips"], "value": 10 },
+    { "path": ["Screenshot", "Sequence", "FailurePolicy"], "value": "continue" },
+    { "path": ["Screenshot", "Sequence", "Outputs", "SeparateEyes"], "value": true },
+    { "path": ["Screenshot", "Sequence", "Packaging", "PreviewVideo", "FramesPerSecond"], "value": 15 },
+    { "path": ["Screenshot", "Sequence", "Packaging", "PreviewVideo", "Requested"], "value": true },
     { "path": ["Screenshot", "VRFramedDominantEye"], "value": "Left" },
     { "path": ["Screenshot", "VRFramedEye"], "value": "Left" },
     { "path": ["Screenshot", "VRFramedView"], "value": "Left" },
@@ -104,7 +109,7 @@
   "tiers": {
     "Performance": {
       "sourceTemplate": "MGO-Presets/CSX AMD- Performance - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
-      "sourceSha256": "114494225EEE720D8E65BAAECC47C2A7A4E21E04AC7F5CA68C4AC8E957901AF1",
+      "sourceSha256": "646046212A34F628E1B5CF8490CBD7111DEF6059925D844C590D2A172FF356C0",
       "outputDirectory": "CSX Unified- Performance - Press END on PC to Customize",
       "overrides": [
         { "path": ["Screen Space GI", "ResolutionMode"], "value": 2, "reason": "dormant Quarter-resolution AO candidate" },
@@ -114,7 +119,7 @@
     },
     "Balanced": {
       "sourceTemplate": "MGO-Presets/CSX AMD- Balanced - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
-      "sourceSha256": "85E5DC08909F189F49C4712636AD785DEC2744A126D5933D008FDFC16AFD8A6B",
+      "sourceSha256": "29750DF04B9121D96FEC69D593BD0B3BB3FEE1461F8216866E5F0AE47439B60B",
       "outputDirectory": "CSX Unified- Balanced - Press END on PC to Customize",
       "overrides": [
         { "path": ["Screen Space GI", "ResolutionMode"], "value": 1, "reason": "dormant Half-resolution AO candidate" },
@@ -124,7 +129,7 @@
     },
     "Quality": {
       "sourceTemplate": "MGO-Presets/CSX AMD- Quality - Press END on PC to Customize/SKSE/Plugins/CommunityShaders/SettingsUser.json",
-      "sourceSha256": "7EA83F938398A41FBA7365F692AE2699E04AFBEF6E7098852CFE78283374DB98",
+      "sourceSha256": "052F01CBBBFFA0A2A5E017D28EE52FE5AF1D1BE0553CC61B0CDCA17D5A93FE95",
       "outputDirectory": "CSX Unified- Quality - Press END on PC to Customize",
       "overrides": [
         { "path": ["Screen Space GI", "ResolutionMode"], "value": 0, "reason": "dormant Full-resolution AO candidate" },

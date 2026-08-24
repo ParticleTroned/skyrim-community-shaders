@@ -296,7 +296,7 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
-	struct CSUtilitySettings
+	struct AdaptiveBalanceSettings
 	{
 		float skyBrightness;
 		float directionalLightMult;
@@ -354,6 +354,16 @@ namespace SharedData
 		uint2 pad;
 	};
 
+	struct FoliageLightingSettings
+	{
+		uint EnableFoliageScattering;
+		uint EnableFoliageAmbientBoost;
+		uint EnableFoliageAmbientFlip;
+		float FoliageAmbientAmount;
+		uint EnableGrassScattering;
+		uint3 pad;
+	};
+
 	struct UnifiedWaterSettings
 	{
 		float ShallowFallbackStrength;
@@ -366,7 +376,22 @@ namespace SharedData
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
-		float4 pad;
+	};
+
+	struct WaterAppearanceSettings
+	{
+		uint Enabled;
+		float WaterBrightness;
+		float GlobalReflectionAmount;
+		float RefractionAmount;
+
+		float SunSpecularMultiplier;
+		float WaveAmplitude;
+		float FresnelMin;
+		float FresnelMax;
+
+		float Muddiness;
+		float3 pad;
 	};
 
 	struct BloomSettings
@@ -400,11 +425,13 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
-		CSUtilitySettings csUtilitySettings;
+		AdaptiveBalanceSettings adaptiveBalanceSettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		TruePBRSettings truePBRSettings;
+		FoliageLightingSettings foliageLightingSettings;
 		UnifiedWaterSettings unifiedWaterSettings;
+		WaterAppearanceSettings waterAppearanceSettings;
 		BloomSettings bloomSettings;
 	};
 

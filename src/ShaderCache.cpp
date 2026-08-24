@@ -1,5 +1,8 @@
 #include "ShaderCache.h"
+#include "BuildProvenance.h"
+
 #include "Globals.h"
+#include "ShaderCacheDisablePolicy.h"
 #include "ShaderFileWatcher.h"
 #include "Util.h"
 
@@ -2942,13 +2945,18 @@ namespace SIE
 		}
 
 		const bool vrRenderScaleRelevant = globals::game::isVR &&
-			(globals::features::upscaling.IsRenderScaleModeRequested() ||
-				globals::features::upscaling.IsVRRenderScaleModeLatched() ||
-				globals::features::upscaling.GetVRRenderScaleModeStatus() ==
-					Upscaling::VRRenderScaleStatus::PendingRelatch);
+		                                   (globals::features::upscaling.IsRenderScaleModeRequested() ||
+											   globals::features::upscaling.IsVRRenderScaleModeLatched() ||
+											   globals::features::upscaling.GetVRRenderScaleModeStatus() ==
+												   Upscaling::VRRenderScaleStatus::PendingRelatch);
 		enableRequested.store(false, std::memory_order_release);
 
-		if (vrRenderScaleRelevant && IsEnabled()) {
+		const auto disableAction = ShaderCacheDisablePolicy::ResolveDisableRequest({
+			.shaderCacheEnabled = IsEnabled(),
+			.vrNativeRestoreRequired = vrRenderScaleRelevant,
+		});
+		if (disableAction ==
+			ShaderCacheDisablePolicy::DisableRequestAction::DeferUntilNativeRestore) {
 			pendingDisableAfterVRNativeRestore.store(true, std::memory_order_release);
 			globals::features::upscaling.RequestPerfModeRenderTargetRecreate(
 				"custom shaders disabled; restore native VR targets",
@@ -2963,14 +2971,19 @@ namespace SIE
 
 	void ShaderCache::ServicePendingDisable()
 	{
-		if (!pendingDisableAfterVRNativeRestore.load(std::memory_order_acquire) ||
-			IsEnableRequested()) {
-			return;
-		}
-
 		auto& upscaling = globals::features::upscaling;
-		if (upscaling.GetVRRenderScaleModeStatus() !=
-			Upscaling::VRRenderScaleStatus::Disabled) {
+		const auto action = ShaderCacheDisablePolicy::ResolvePendingDisable({
+			.pendingDisable =
+				pendingDisableAfterVRNativeRestore.load(std::memory_order_acquire),
+			.enableRequested = IsEnableRequested(),
+			.nativeTargetsRestored =
+				upscaling.GetVRRenderScaleModeStatus() ==
+				Upscaling::VRRenderScaleStatus::Disabled,
+		});
+		if (action == ShaderCacheDisablePolicy::PendingDisableAction::None)
+			return;
+		if (action == ShaderCacheDisablePolicy::PendingDisableAction::Cancel) {
+			pendingDisableAfterVRNativeRestore.store(false, std::memory_order_release);
 			return;
 		}
 
@@ -3185,11 +3198,20 @@ namespace SIE
 		std::optional<std::string> cachedPluginVersion;
 		if (auto pluginVersion = ini.GetValue("Cache", "PluginVersion"))
 			cachedPluginVersion = pluginVersion;
+		std::optional<std::string> cachedShaderAbi;
+		if (auto shaderAbi = ini.GetValue("Cache", "ShaderCacheABI"))
+			cachedShaderAbi = shaderAbi;
+		std::optional<std::string> cachedShaderCompiler;
+		if (auto shaderCompiler = ini.GetValue("Cache", "ShaderCompilerIdentity"))
+			cachedShaderCompiler = shaderCompiler;
 
 		const auto featureStates = GetCurrentFeatureStates();
 		const auto cacheEntries = GetCacheEntries(ini, featureStates);
 		return Util::CacheInvalidation::ClassifyMismatches(
-			std::string{ Plugin::VERSION_LABEL }, cachedPluginVersion, featureStates, cacheEntries);
+			std::string{ Plugin::VERSION_LABEL }, cachedPluginVersion,
+			std::string{ BuildProvenance::GetShaderCacheAbiId() }, cachedShaderAbi,
+			BuildProvenance::GetShaderCompilerIdentity(), cachedShaderCompiler,
+			featureStates, cacheEntries);
 	}
 
 	static std::vector<std::string> GetDefinesForMismatches(
@@ -3689,6 +3711,10 @@ namespace SIE
 		CSimpleIniA ini;
 		ini.SetUnicode();
 		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION_LABEL.data());
+		ini.SetValue("Cache", "BuildId", BuildProvenance::GetBuildId().data());
+		ini.SetValue("Cache", "ArtifactSHA256", BuildProvenance::GetArtifactSha256().c_str());
+		ini.SetValue("Cache", "ShaderCacheABI", BuildProvenance::GetShaderCacheAbiId().data());
+		ini.SetValue("Cache", "ShaderCompilerIdentity", BuildProvenance::GetShaderCompilerIdentity().c_str());
 		globals::state->WriteDiskCacheInfo(ini);
 
 		std::shared_lock lock{ g_diskCacheMutationMutex };
@@ -3708,7 +3734,8 @@ namespace SIE
 			logger::error("Failed to save shader cache Info.ini");
 			return;
 		}
-		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION_LABEL);
+		logger::info("Saved disk cache info (plugin version: {}, Build ID: {}, shader ABI: {})",
+			Plugin::VERSION_LABEL, BuildProvenance::GetBuildId(), BuildProvenance::GetShaderCacheAbiId());
 	}
 
 	static bool IsEnvVarTruthy(const char* a_name)
@@ -4265,6 +4292,8 @@ namespace SIE
 	void ShaderCache::ManageCompilationSet(std::stop_token stoken)
 	{
 		managementThread = GetCurrentThread();
+		// This coordinator only dequeues and dispatches work. Keeping it merely
+		// below-normal avoids starving task publication when Skyrim runs High.
 		SetThreadPriority(managementThread, THREAD_PRIORITY_BELOW_NORMAL);
 		while (!stoken.stop_requested()) {
 			const auto& task = compilationSet.WaitTake(stoken);
@@ -4380,8 +4409,28 @@ namespace SIE
 
 		const auto taskKey = task.GetString();
 
-		// Run all shader compilation work at below-normal priority.
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		// The large blocking startup batch yields to the desktop even when another
+		// plugin raises Skyrim's process class. Once DataLoaded releases the game,
+		// explicitly restore each reused pool worker to normal relative priority;
+		// in-game recompiles are constrained by the smaller background thread limit.
+		static std::atomic_bool priorityWarningLogged = false;
+		using namespace ShaderCompilationSchedulingPolicy;
+		const auto priorityMode = SelectWorkerThreadPriorityMode(
+			menuLoaded.load(std::memory_order_acquire) ?
+				CompilationPhase::InGame :
+				CompilationPhase::Startup);
+		const bool priorityApplied =
+			priorityMode == WorkerThreadPriorityMode::CooperativeBackground ?
+				Util::SetCurrentThreadCooperativeBackgroundPriority() :
+				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL) != FALSE;
+		if (!priorityApplied &&
+			!priorityWarningLogged.exchange(true, std::memory_order_acq_rel)) {
+			logger::warn(
+				"Shader compiler workers could not apply the requested {} CPU priority; continuing with the priority available to the current process class.",
+				priorityMode == WorkerThreadPriorityMode::CooperativeBackground ?
+					"startup-cooperative" :
+					"in-game normal");
+		}
 
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);
@@ -4964,6 +5013,8 @@ namespace SIE
 
 	void UpdateListener::processQueue()
 	{
+		// File observation is latency-sensitive but not CPU-intensive. Do not inherit
+		// the compiler workers' Idle priority under a High-priority game process.
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 		std::unique_lock lock(actionMutex, std::defer_lock);
 		auto cache = globals::shaderCache;

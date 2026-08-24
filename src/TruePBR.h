@@ -51,9 +51,10 @@ public:
 	{
 		float VertexAOStrength = 1.0f;
 		uint Enabled = true;
-		uint pad[2];
+		uint pad[2]{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+	static_assert(sizeof(Settings) == 16);
 
 	Settings settings;
 

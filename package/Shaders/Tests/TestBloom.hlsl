@@ -22,9 +22,9 @@ static const float4 Param = { 0, 0, 0, 0 };
 	ASSERT(IsTrue, all(actual == expected));
 }
 
-/// @tags bloom, adaptive-balance, daytime
-/// Enhancement remains visible when the native daytime mask has closed.
-[numthreads(1, 1, 1)] void TestBloomEnhancementHasDaytimeHeadroom()
+/// @tags bloom, adaptive-balance, vanilla
+/// Enhancement obeys Skyrim's native mask, including when it is fully closed.
+[numthreads(1, 1, 1)] void TestBloomEnhancementUsesNativeMask()
 {
 	float3 mappedColor = 0.8.xxx;
 	float3 bloom = 0.5.xxx;
@@ -34,8 +34,7 @@ static const float4 Param = { 0, 0, 0, 0 };
 	float3 enhanced = DisplayMapping::ApplyBloom(mappedColor, bloom, bloom, nativeMaskLimit, 1.0);
 
 	ASSERT(IsTrue, all(vanillaOnly == mappedColor));
-	ASSERT(IsTrue, all(enhanced > vanillaOnly));
-	ASSERT(IsTrue, all(abs(enhanced - 0.9.xxx) < 0.000001));
+	ASSERT(IsTrue, all(enhanced == vanillaOnly));
 }
 
 /// @tags bloom, adaptive-balance
@@ -66,7 +65,7 @@ static const float4 Param = { 0, 0, 0, 0 };
 }
 
 /// @tags bloom, adaptive-balance
-/// Enhancement must not reduce extra mask headroom supplied by the weather.
+/// Enhancement must preserve the native mask limit supplied by the weather.
 [numthreads(1, 1, 1)] void TestBloomPreservesHigherNativeMaskLimit()
 {
 	float3 mappedColor = 0.25.xxx;

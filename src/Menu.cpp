@@ -1252,12 +1252,6 @@ void Menu::DrawDisableAtBootSettings()
 				// Update the disabledFeatures map based on user interaction
 				disabledFeatures[featureName] = isDisabled;
 			}
-			if (featureName == "CSUtility" &&
-				!(disabledFeatures.contains("AdaptiveBrightness") && disabledFeatures["AdaptiveBrightness"])) {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextWrapped("Adaptive Balance requires CSUtility renderer support. Disabling CSUtility also makes Adaptive Balance unavailable after restart.");
-				}
-			}
 		}
 	}
 }
@@ -1357,6 +1351,19 @@ bool Menu::IsMenuSessionOpen() const
 {
 	const auto* editorWindow = EditorWindow::GetSingleton();
 	return IsEnabled || (editorWindow && editorWindow->open);
+}
+
+void Menu::OpenMenu()
+{
+	if (IsEnabled)
+		return;
+
+	IsEnabled = true;
+	if (globals::features::vr.IsOpenVRCompatible()) {
+		auto& vr = globals::features::vr;
+		vr.ResetMenuInputRuntimeState();
+		vr.RequestFixedWorldMenuReanchor();
+	}
 }
 
 void Menu::CloseMenu()
@@ -1492,9 +1499,7 @@ void Menu::ProcessInputEventQueue()
 							 if (IsMenuSessionOpen()) {
 								 CloseMenu();
 							 } else {
-								 IsEnabled = true;
-								 if (globals::features::vr.IsOpenVRCompatible())
-									 globals::features::vr.ResetMenuInputRuntimeState();
+								 OpenMenu();
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
 							 }
 						 }

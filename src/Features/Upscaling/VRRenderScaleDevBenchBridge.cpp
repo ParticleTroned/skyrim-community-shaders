@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
+#	include "BuildProvenance.h"
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
 #	include "Diagnostics/VRPipelineDiagnostics.h"
 #	include "Features/Upscaling.h"
@@ -27,7 +28,7 @@ namespace
 	using json = nlohmann::json;
 
 	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
-	constexpr unsigned int kDevBenchToolExtensionRevision = 5;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 6;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 
@@ -120,6 +121,42 @@ namespace
 			return "recovery_relatch";
 		case Upscaling::VRUpscalingTransitionOrigin::PostLoadSync:
 			return "post_load_sync";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* GetApplyDispositionName(Upscaling::UpscalingTransitionApplyDisposition a_disposition)
+	{
+		switch (a_disposition) {
+		case Upscaling::UpscalingTransitionApplyDisposition::Rejected:
+			return "rejected";
+		case Upscaling::UpscalingTransitionApplyDisposition::NoChange:
+			return "no_change";
+		case Upscaling::UpscalingTransitionApplyDisposition::AppliedSynchronously:
+			return "applied_synchronously";
+		case Upscaling::UpscalingTransitionApplyDisposition::Queued:
+			return "queued";
+		case Upscaling::UpscalingTransitionApplyDisposition::Deferred:
+			return "deferred";
+		case Upscaling::UpscalingTransitionApplyDisposition::Coalesced:
+			return "coalesced";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* GetApplyRejectionName(Upscaling::UpscalingTransitionApplyRejection a_rejection)
+	{
+		switch (a_rejection) {
+		case Upscaling::UpscalingTransitionApplyRejection::None:
+			return "none";
+		case Upscaling::UpscalingTransitionApplyRejection::OpenComposite:
+			return "open_composite";
+		case Upscaling::UpscalingTransitionApplyRejection::TransitionOwnership:
+			return "transition_ownership";
+		case Upscaling::UpscalingTransitionApplyRejection::QueueRejected:
+			return "queue_rejected";
 		default:
 			return "unknown";
 		}
@@ -538,6 +575,10 @@ namespace
 														  { "settleDeadlineExpired", controller.postLoadRecovery.settleDeadlineExpired },
 														  { "settleTimeoutUsed", controller.postLoadRecovery.settleTimeoutUsed },
 														  { "timedAttemptConsumed", controller.postLoadRecovery.timedAttemptConsumed },
+														  { "timedAttemptInProgress", controller.postLoadRecovery.timedAttemptInProgress },
+														  { "timedAttemptStartTickMs", controller.postLoadRecovery.timedAttemptStartTickMs },
+														  { "vendorTeardownPhase", std::string{ magic_enum::enum_name(controller.postLoadRecovery.vendorTeardownPhase) } },
+														  { "vendorTeardownFallbackRequested", controller.postLoadRecovery.vendorTeardownFallbackRequested },
 														  { "engineTargetCreateEntered", controller.postLoadRecovery.engineTargetCreateEntered },
 														  { "baselineUsageBytes", controller.postLoadRecovery.baselineUsageBytes },
 														  { "peakUsageBytes", controller.postLoadRecovery.peakUsageBytes },
@@ -613,13 +654,17 @@ namespace
 				args = json::parse(a_argsJson);
 			if (!args.is_object())
 				throw std::runtime_error("arguments must be a JSON object");
-			output = a_build(args);
+			if (auto mismatch = BuildProvenance::ValidateExpectedBuild(args))
+				output = std::move(*mismatch);
+			else
+				output = a_build(args);
 		} catch (const std::exception& e) {
 			output = { { "error", "invalid request" }, { "detail", e.what() } };
 		} catch (...) {
 			output = { { "error", "unknown handler error" } };
 		}
 
+		BuildProvenance::AttachProducer(output);
 		try {
 			const std::string serialized = output.dump();
 			a_write(a_sink, serialized.c_str());
@@ -921,7 +966,7 @@ namespace
 
 				const auto before = upscaling.GetPendingVRRenderScaleDesiredProfile();
 				const uint32_t dlssPreset = requestedPreset.value_or(before.dlssPreset);
-				upscaling.ApplyCSMenuUpscalingTransition(
+				const auto applied = upscaling.ApplyCSMenuUpscalingTransition(
 					method,
 					enabled,
 					qualityMode,
@@ -929,25 +974,25 @@ namespace
 					"devbench render-scale iteration",
 					Upscaling::VRUpscalingTransitionOrigin::CSMenu);
 
-				const auto after = upscaling.GetPendingVRRenderScaleDesiredProfile();
-				const bool queued =
-					after.pending &&
-					after.requestID != 0 &&
-					after.requestID != before.requestID &&
-					after.origin == Upscaling::VRUpscalingTransitionOrigin::CSMenu;
+				const bool accepted = applied.disposition != Upscaling::UpscalingTransitionApplyDisposition::Rejected;
+				const bool asynchronous =
+					applied.disposition == Upscaling::UpscalingTransitionApplyDisposition::Queued ||
+					applied.disposition == Upscaling::UpscalingTransitionApplyDisposition::Deferred ||
+					applied.disposition == Upscaling::UpscalingTransitionApplyDisposition::Coalesced;
 				json response{
 					{ "action", "apply" },
 					{ "method", methodName },
 					{ "enabled", enabled },
 					{ "qualityMode", qualityMode },
 					{ "dlssPreset", dlssPreset },
-					{ "queued", queued },
-					{ "requestID", queued ? after.requestID : 0 },
-					{ "transitionEpoch", queued ? after.transitionEpoch : 0 },
+					{ "accepted", accepted },
+					{ "asynchronous", asynchronous },
+					{ "disposition", GetApplyDispositionName(applied.disposition) },
+					{ "rejection", GetApplyRejectionName(applied.rejection) },
+					{ "requestID", applied.requestID },
+					{ "transitionEpoch", applied.transitionEpoch },
 					{ "status", BuildStatus(upscaling) },
 				};
-				if (!queued)
-					response["note"] = "request was unchanged, applied synchronously, or rejected by transition ownership";
 				return response;
 			});
 		}
@@ -980,6 +1025,7 @@ namespace
 			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. If the client has not exposed dynamic tools, dispatch it through devbench scenario with a tool step: {"tool":"communityshaders.renderscale","args":{"action":"status"}}.)" },
 			{ "actions", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
 		};
+		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
 		a_write(a_sink, serialized.c_str());
 	}
@@ -1016,7 +1062,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"({"description":"Control and inspect CSX VR render-scale and transition diagnostics. status, record, start, apply, stop, reset, and texture-lifetime actions are available at normal Info logging; apply additionally requires an active stress capture. The invasive load-presentation probe and GPU-fenced trim actions remain restricted to developer mode. texture_lifetime_start/status/checkpoint/stop/reset control a bounded CreateTexture2D COM-lifetime capture; each created texture receives a non-owning private-data sentinel that D3D11 releases at actual texture destruction. checkpoint advances the creation cohort without interrupting destruction tracking.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5}}},"required":["action"]}})";
+			R"({"description":"Control and inspect CSX VR render-scale and transition diagnostics. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			diagnosticDescriptor,

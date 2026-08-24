@@ -3984,15 +3984,43 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 		transform.m[0][0] = 1.0f;
 		transform.m[1][1] = 1.0f;
 		transform.m[2][2] = 1.0f;
-		transform.m[0][3] = 0.34f;
-		// Keep the recording state comfortably inside the upper-right headset view.
-		// The previous 0.20 m offset sat near the lower edge on wide-FOV headsets.
-		transform.m[1][3] = 0.38f;
+
+		constexpr float kIndicatorDistanceMetres = 1.0f;
+		constexpr float kFallbackHorizontalOffsetMetres = -0.25f;
+		float horizontalOffsetMetres = kFallbackHorizontalOffsetMetres;
+		if (openvr->vrSystem) {
+			float accumulatedProjectionWidth = 0.0f;
+			std::size_t validEyeCount = 0;
+			for (const auto eye : { vr::Eye_Left, vr::Eye_Right }) {
+				float left = 0.0f;
+				float right = 0.0f;
+				float bottom = 0.0f;
+				float top = 0.0f;
+				openvr->vrSystem->GetProjectionRaw(eye, &left, &right, &bottom, &top);
+				const float projectionWidth = right - left;
+				if (std::isfinite(projectionWidth) && projectionWidth > 0.1f && projectionWidth < 10.0f) {
+					accumulatedProjectionWidth += projectionWidth;
+					++validEyeCount;
+				}
+			}
+			if (validEyeCount != 0) {
+				const float averageProjectionWidth = accumulatedProjectionWidth / static_cast<float>(validEyeCount);
+				// One eighth of the visible width to the left of the cyclopean centre.
+				horizontalOffsetMetres = -(averageProjectionWidth * kIndicatorDistanceMetres) / 8.0f;
+			}
+		}
+
+		transform.m[0][3] = horizontalOffsetMetres;
+		// HMD-relative zero is the player's current eye line, independent of world height.
+		transform.m[1][3] = 0.0f;
 		transform.m[2][3] = -1.0f;
 		cleanOverlay->SetOverlayTransformTrackedDeviceRelative(
 			captureIndicatorOverlayHandle,
 			vr::k_unTrackedDeviceIndex_Hmd,
 			&transform);
+		logger::info(
+			"VR: capture indicator positioned at eye level, horizontal offset {:.3f} m",
+			horizontalOffsetMetres);
 	}
 
 	if (!captureIndicatorTexture && globals::d3d::device) {

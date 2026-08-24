@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -36,6 +37,12 @@ struct ScreenshotFeature : public Feature
 		Right,
 		Combined
 	};
+	enum class CaptureEye : uint8_t
+	{
+		Left,
+		Right,
+		Both
+	};
 
 	virtual ~ScreenshotFeature();
 	virtual std::string GetName() override { return "Screenshot"; }
@@ -57,8 +64,8 @@ struct ScreenshotFeature : public Feature
 	void RequestCapture();
 	/** Executes one versioned screenshot API command. Mutating calls must run on the game thread. */
 	nlohmann::json HandleApiRequest(const nlohmann::json& a_request);
-	/** Legacy menu delegation, returning the accepted request receipt. */
-	nlohmann::json RequestLegacyCapture(std::string_view a_origin = "csx_menu");
+	/** Dispatches a UI/hotkey capture through the public service and returns its receipt. */
+	nlohmann::json RequestApiCapture(std::string_view a_origin = "csx_menu");
 	/** Returns whether Community Shaders screenshot capture is enabled at runtime. */
 	bool IsRuntimeEnabled() const noexcept { return loaded && enabled.load(std::memory_order_acquire); }
 	/** Toggles new captures, cancelling active source acquisition while committed encoder work finishes. */
@@ -79,13 +86,19 @@ struct ScreenshotFeature : public Feature
 		vr::EColorSpace a_colorSpace);
 	/** Maintains readback protection and services capture immediately before Present. */
 	void OnBeforePresent(IDXGISwapChain* a_swapChain);
+	/** Draws the recording indicator only after this frame's source has been staged. */
+	void DrawPostCaptureIndicator();
 
 	bool applyCropToScreenshot = true;
 
 	// Settings
 	std::string screenshotPath = "Screenshots";
+	std::string frameCapturePath = "Frame Captures";
 	bool sdrUsePng = true;
+	bool frameCaptureUsePng = false;
 	bool copyToClipboard = false;
+	CaptureEye screenshotEye = CaptureEye::Left;
+	CaptureEye frameCaptureEye = CaptureEye::Left;
 	VRCaptureSource vrCaptureSource = VRCaptureSource::HMDSubmission;
 	VRFramedView vrFramedView = VRFramedView::Left;
 	vr::EVREye vrFramedDominantEye = vr::Eye_Left;
@@ -102,6 +115,8 @@ struct ScreenshotFeature : public Feature
 
 private:
 	friend class ScreenshotApi;
+	std::string uiSequenceRequestId;
+	std::chrono::steady_clock::time_point nextUiSequencePoll{};
 	struct StagedPlane
 	{
 		winrt::com_ptr<ID3D11Texture2D> stagingTexture;

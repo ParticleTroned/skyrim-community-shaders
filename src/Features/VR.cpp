@@ -417,6 +417,8 @@ constexpr const char* kMenuOverlayKey = "communityshaders.menu";
 constexpr const char* kMenuOverlayName = "CSX Menu";
 constexpr const char* kControllerOverlayKey = "communityshaders.menu.controller";
 constexpr const char* kControllerOverlayName = "CSX Menu (Controller)";
+constexpr const char* kCaptureIndicatorOverlayKey = "communityshaders.capture.indicator";
+constexpr const char* kCaptureIndicatorOverlayName = "CSX Capture Indicator";
 constexpr float kLegacyDefaultHMDOffsetZ = -0.41f;
 constexpr float kPreviousDefaultHMDOffsetZ = -0.5125f;
 constexpr float kCurrentDefaultHMDOffsetZ = -1.025f;
@@ -3636,6 +3638,8 @@ void VR::DestroyOverlay()
 	if (!openVRInfo.hasOverlayInterface) {
 		menuOverlayHandle = vr::k_ulOverlayHandleInvalid;
 		menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
+		captureIndicatorOverlayHandle = vr::k_ulOverlayHandleInvalid;
+		captureIndicatorTexture = nullptr;
 		return;
 	}
 
@@ -3645,6 +3649,8 @@ void VR::DestroyOverlay()
 		logger::debug("DestroyOverlay: IVROverlay is unavailable");
 		menuOverlayHandle = vr::k_ulOverlayHandleInvalid;
 		menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
+		captureIndicatorOverlayHandle = vr::k_ulOverlayHandleInvalid;
+		captureIndicatorTexture = nullptr;
 		return;
 	}
 	if (menuOverlayHandle != vr::k_ulOverlayHandleInvalid) {
@@ -3655,6 +3661,11 @@ void VR::DestroyOverlay()
 		overlay->DestroyOverlay(menuControllerOverlayHandle);
 		menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
 	}
+	if (captureIndicatorOverlayHandle != vr::k_ulOverlayHandleInvalid) {
+		overlay->DestroyOverlay(captureIndicatorOverlayHandle);
+		captureIndicatorOverlayHandle = vr::k_ulOverlayHandleInvalid;
+	}
+	captureIndicatorTexture = nullptr;
 }
 
 bool VR::GetMenuCanvasSize(uint32_t& a_width, uint32_t& a_height) const
@@ -3844,6 +3855,204 @@ void VR::ReleaseMenuDesktopWindowManagement()
 	}
 
 	ResetDesktopWindowManagementState(*this);
+}
+
+void VR::SubmitCaptureIndicator(bool a_visible)
+{
+	captureIndicatorVisible.store(a_visible, std::memory_order_release);
+	if (IsOpenCompositeRuntime()) {
+		// OpenComposite exposes IVROverlay, but its tracked-device-relative overlays
+		// are presented in Skyrim's scene space. Composite the indicator into each
+		// submitted eye after capture instead, which makes its screen position
+		// genuinely headset locked while keeping it out of saved frames.
+		if (a_visible) {
+			InstallSubmitHook();
+			if (!inSceneResources.initialized) {
+				InitInSceneResources();
+			}
+			EnsureInSceneOverlaySubmitCopyResources();
+		}
+		if (captureIndicatorOverlayHandle != vr::k_ulOverlayHandleInvalid) {
+			if (auto* openvr = RE::BSOpenVR::GetSingleton()) {
+				if (auto* overlay = RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext)) {
+					overlay->HideOverlay(captureIndicatorOverlayHandle);
+				}
+			}
+		}
+		return;
+	}
+
+	if (!openVRInfo.isCompatible || !openVRInfo.hasOverlayInterface) {
+		return;
+	}
+
+	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
+	auto* gameOverlay = openvr ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
+	auto* cleanOverlay = RE::BSOpenVR::GetCleanIVROverlay();
+	if (!gameOverlay || !cleanOverlay) {
+		return;
+	}
+
+	if (!a_visible) {
+		if (captureIndicatorOverlayHandle != vr::k_ulOverlayHandleInvalid) {
+			gameOverlay->HideOverlay(captureIndicatorOverlayHandle);
+		}
+		return;
+	}
+
+	if (captureIndicatorOverlayHandle == vr::k_ulOverlayHandleInvalid) {
+		auto error = gameOverlay->FindOverlay(kCaptureIndicatorOverlayKey, &captureIndicatorOverlayHandle);
+		if (error != vr::VROverlayError_None) {
+			error = gameOverlay->CreateOverlay(
+				kCaptureIndicatorOverlayKey,
+				kCaptureIndicatorOverlayName,
+				&captureIndicatorOverlayHandle);
+		}
+		if (error != vr::VROverlayError_None) {
+			captureIndicatorOverlayHandle = vr::k_ulOverlayHandleInvalid;
+			logger::error(
+				"Could not create the CSX capture indicator overlay: {} ({})",
+				static_cast<int>(error),
+				magic_enum::enum_name(error));
+			return;
+		}
+		gameOverlay->SetOverlayWidthInMeters(captureIndicatorOverlayHandle, 0.035f);
+		gameOverlay->SetOverlaySortOrder(captureIndicatorOverlayHandle, 255);
+
+		vr::HmdMatrix34_t transform{};
+		transform.m[0][0] = 1.0f;
+		transform.m[1][1] = 1.0f;
+		transform.m[2][2] = 1.0f;
+
+		constexpr float kIndicatorDistanceMetres = 1.0f;
+		constexpr float kFallbackHorizontalOffsetMetres = -0.25f;
+		constexpr float kFallbackVerticalOffsetMetres = 0.25f;
+		float horizontalOffsetMetres = kFallbackHorizontalOffsetMetres;
+		float verticalOffsetMetres = kFallbackVerticalOffsetMetres;
+		float depthOffsetMetres = -kIndicatorDistanceMetres;
+		if (openvr->vrSystem) {
+			float accumulatedTargetX = 0.0f;
+			float accumulatedTargetY = 0.0f;
+			float accumulatedTargetZ = 0.0f;
+			std::size_t validEyeCount = 0;
+			for (const auto eye : { vr::Eye_Left, vr::Eye_Right }) {
+				float left = 0.0f;
+				float right = 0.0f;
+				float bottom = 0.0f;
+				float top = 0.0f;
+				openvr->vrSystem->GetProjectionRaw(eye, &left, &right, &bottom, &top);
+				const float projectionWidth = right - left;
+				const float projectionHeight = top - bottom;
+				const auto eyeToHead = openvr->vrSystem->GetEyeToHeadTransform(eye);
+				bool eyeTransformValid = true;
+				for (const auto& row : eyeToHead.m) {
+					for (const float value : row) {
+						eyeTransformValid = eyeTransformValid && std::isfinite(value);
+					}
+				}
+				if (std::isfinite(projectionWidth) && projectionWidth > 0.1f && projectionWidth < 10.0f &&
+					std::isfinite(projectionHeight) && projectionHeight > 0.1f && projectionHeight < 10.0f &&
+					eyeTransformValid) {
+					const float eyeTargetX =
+						(((left + right) * 0.5f) - (projectionWidth / 8.0f)) * kIndicatorDistanceMetres;
+					const float eyeTargetY = ((bottom + top) * 0.5f) * kIndicatorDistanceMetres;
+					const float eyeTargetZ = -kIndicatorDistanceMetres;
+					accumulatedTargetX +=
+						eyeToHead.m[0][0] * eyeTargetX + eyeToHead.m[0][1] * eyeTargetY +
+						eyeToHead.m[0][2] * eyeTargetZ + eyeToHead.m[0][3];
+					accumulatedTargetY +=
+						eyeToHead.m[1][0] * eyeTargetX + eyeToHead.m[1][1] * eyeTargetY +
+						eyeToHead.m[1][2] * eyeTargetZ + eyeToHead.m[1][3];
+					accumulatedTargetZ +=
+						eyeToHead.m[2][0] * eyeTargetX + eyeToHead.m[2][1] * eyeTargetY +
+						eyeToHead.m[2][2] * eyeTargetZ + eyeToHead.m[2][3];
+					++validEyeCount;
+				}
+			}
+			if (validEyeCount != 0) {
+				const float eyeCount = static_cast<float>(validEyeCount);
+				horizontalOffsetMetres = accumulatedTargetX / eyeCount;
+				verticalOffsetMetres = accumulatedTargetY / eyeCount;
+				depthOffsetMetres = accumulatedTargetZ / eyeCount;
+			}
+		}
+
+		transform.m[0][3] = horizontalOffsetMetres;
+		transform.m[1][3] = verticalOffsetMetres;
+		transform.m[2][3] = depthOffsetMetres;
+		const auto transformError = gameOverlay->SetOverlayTransformTrackedDeviceRelative(
+			captureIndicatorOverlayHandle,
+			vr::k_unTrackedDeviceIndex_Hmd,
+			&transform);
+		if (transformError != vr::VROverlayError_None) {
+			logger::error(
+				"Could not position the CSX capture indicator overlay: {} ({})",
+				static_cast<int>(transformError),
+				magic_enum::enum_name(transformError));
+			return;
+		}
+		logger::info(
+			"VR: capture indicator positioned at optical eye line, offset=({:.3f}, {:.3f}, {:.3f}) m",
+			horizontalOffsetMetres,
+			verticalOffsetMetres,
+			depthOffsetMetres);
+	}
+
+	if (!captureIndicatorTexture && globals::d3d::device) {
+		constexpr UINT kTextureSize = 64;
+		std::array<std::uint32_t, kTextureSize * kTextureSize> pixels{};
+		const float centre = static_cast<float>(kTextureSize - 1) * 0.5f;
+		const float radius = static_cast<float>(kTextureSize) * 0.38f;
+		const float radiusSquared = radius * radius;
+		for (UINT y = 0; y < kTextureSize; ++y) {
+			for (UINT x = 0; x < kTextureSize; ++x) {
+				const float dx = static_cast<float>(x) - centre;
+				const float dy = static_cast<float>(y) - centre;
+				if (dx * dx + dy * dy <= radiusSquared) {
+					pixels[y * kTextureSize + x] = 0xFF2626EBu;
+				}
+			}
+		}
+
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = kTextureSize;
+		desc.Height = kTextureSize;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_IMMUTABLE;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		D3D11_SUBRESOURCE_DATA initialData{};
+		initialData.pSysMem = pixels.data();
+		initialData.SysMemPitch = kTextureSize * sizeof(std::uint32_t);
+		if (FAILED(globals::d3d::device->CreateTexture2D(
+				&desc,
+				&initialData,
+				captureIndicatorTexture.put()))) {
+			logger::error("Could not create the CSX capture indicator texture");
+			return;
+		}
+	}
+
+	if (!captureIndicatorTexture) {
+		return;
+	}
+	vr::Texture_t texture = {
+		captureIndicatorTexture.get(),
+		vr::TextureType_DirectX,
+		vr::ColorSpace_Auto
+	};
+	const auto textureError = cleanOverlay->SetOverlayTexture(captureIndicatorOverlayHandle, &texture);
+	const auto showError = textureError == vr::VROverlayError_None ?
+	                           gameOverlay->ShowOverlay(captureIndicatorOverlayHandle) :
+	                           textureError;
+	if (textureError != vr::VROverlayError_None || showError != vr::VROverlayError_None) {
+		logger::error(
+			"Could not present the CSX capture indicator overlay: texture={} show={}",
+			static_cast<int>(textureError),
+			static_cast<int>(showError));
+	}
 }
 
 void VR::SubmitOverlayFrame()

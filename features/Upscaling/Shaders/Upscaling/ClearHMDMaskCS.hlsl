@@ -32,8 +32,8 @@ RWByteAddressBuffer HMDMaskAuditCounters : register(u2);
 static const float kHiddenDepthThreshold = 1e-6;
 static const int kHiddenDepthDilationRadius = 2;
 static const uint kAuditCandidateRobust = 0;
-static const uint kAuditCandidateLegacySingleSample = 1;
-static const uint kAuditCandidateReducedMask = 2;
+static const uint kAuditCandidateSparseDepth9 = 1;
+static const uint kAuditCandidatePersistentMask = 2;
 static const uint kAuditSampleStride = 2;
 
 bool IsHiddenDepth(float depth)
@@ -65,6 +65,25 @@ bool IsDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 		}
 	}
 
+	return hidden;
+}
+
+bool IsSparseDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
+{
+	bool hidden = false;
+	[unroll]
+	for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; y += kHiddenDepthDilationRadius) {
+		[unroll]
+		for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; x += kHiddenDepthDilationRadius) {
+			const int2 samplePos = int2(depthPos) + int2(x, y);
+			if (any(samplePos < int2(0, 0)) ||
+				samplePos.x >= int(depthDimensions.x) ||
+				samplePos.y >= int(depthDimensions.y)) {
+				continue;
+			}
+			hidden = hidden || IsHiddenDepth(DepthIn[uint2(samplePos)]);
+		}
+	}
 	return hidden;
 }
 
@@ -206,10 +225,10 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 	if (depthPos.x >= depthTexWidth || depthPos.y >= depthTexHeight)
 		return;
 
-#if defined(HMD_MASK_LEGACY_SINGLE_SAMPLE)
-	const bool clearPixel = DepthIn[depthPos] == 0.0;
-#else
+#if defined(HMD_MASK_ROBUST_DEPTH_5X5)
 	const bool clearPixel = IsDilatedHiddenDepth(depthPos, uint2(depthTexWidth, depthTexHeight));
+#else
+	const bool clearPixel = IsSparseDilatedHiddenDepth(depthPos, uint2(depthTexWidth, depthTexHeight));
 #endif
 
 	if (clearPixel)
@@ -327,9 +346,9 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		thresholdRingR2Clear);
 	bool candidateClear = robustClear;
 	bool invalidMaskLookup = false;
-	if (AuditCandidateMode == kAuditCandidateLegacySingleSample) {
-		candidateClear = DepthIn[depthPos] == 0.0;
-	} else if (AuditCandidateMode == kAuditCandidateReducedMask) {
+	if (AuditCandidateMode == kAuditCandidateSparseDepth9) {
+		candidateClear = thresholdRingR2Clear;
+	} else if (AuditCandidateMode == kAuditCandidatePersistentMask) {
 		uint maskTexWidth, maskTexHeight;
 		ReducedHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
 		const uint2 maskPos = uint2(

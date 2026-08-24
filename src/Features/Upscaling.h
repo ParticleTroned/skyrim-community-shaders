@@ -256,8 +256,8 @@ public:
 		// These values are mirrored by ClearHMDMaskCS.hlsl's quality-audit
 		// candidate constants; keep them explicit as a shader ABI.
 		RobustDepth5x5 = 0,
-		LegacyExactZero = 1,
-		ReducedResolutionMask = 2
+		SparseDepth9 = 1,
+		PersistentMask = 2
 	};
 
 	static const char* GetHMDMaskImplementationModeName(HMDMaskImplementationMode a_mode) noexcept;
@@ -1819,6 +1819,7 @@ public:
 	winrt::com_ptr<ID3D11Buffer> vrClearHMDMaskCB;
 	bool vrClearHMDMaskLegacyCompileAttempted = false;
 	bool vrReducedHMDMaskShaderCompileAttempted = false;
+	std::optional<HMDMaskImplementationMode> vrHMDMaskAutomationOverride;
 	struct VRReducedHMDMaskState
 	{
 		uint32_t frame = 0;

@@ -15017,10 +15017,10 @@ const char* Upscaling::GetHMDMaskImplementationModeName(
 	switch (a_mode) {
 	case HMDMaskImplementationMode::RobustDepth5x5:
 		return "robust_depth_5x5";
-	case HMDMaskImplementationMode::LegacyExactZero:
-		return "legacy_exact_zero";
-	case HMDMaskImplementationMode::ReducedResolutionMask:
-		return "reduced_resolution_mask";
+	case HMDMaskImplementationMode::SparseDepth9:
+		return "sparse_depth_9tap";
+	case HMDMaskImplementationMode::PersistentMask:
+		return "persistent_hmd_mask";
 	default:
 		return "unknown";
 	}
@@ -15028,11 +15028,11 @@ const char* Upscaling::GetHMDMaskImplementationModeName(
 
 Upscaling::HMDMaskImplementationMode Upscaling::GetHMDMaskImplementationMode() const noexcept
 {
-	if (settings.hmdMaskReducedResolutionCache)
-		return HMDMaskImplementationMode::ReducedResolutionMask;
-	if (settings.hmdMaskLegacySingleSample)
-		return HMDMaskImplementationMode::LegacyExactZero;
-	return HMDMaskImplementationMode::RobustDepth5x5;
+	if (vrHMDMaskAutomationOverride)
+		return *vrHMDMaskAutomationOverride;
+	return settings.hmdMaskPersistent ?
+	           HMDMaskImplementationMode::PersistentMask :
+	           HMDMaskImplementationMode::SparseDepth9;
 }
 
 bool Upscaling::SetHMDMaskImplementationMode(
@@ -15040,8 +15040,8 @@ bool Upscaling::SetHMDMaskImplementationMode(
 	const char* a_reason)
 {
 	const bool supported = a_mode == HMDMaskImplementationMode::RobustDepth5x5 ||
-		a_mode == HMDMaskImplementationMode::LegacyExactZero ||
-		a_mode == HMDMaskImplementationMode::ReducedResolutionMask;
+		a_mode == HMDMaskImplementationMode::SparseDepth9 ||
+		a_mode == HMDMaskImplementationMode::PersistentMask;
 	if (!supported) {
 		return false;
 	}
@@ -15055,10 +15055,11 @@ bool Upscaling::SetHMDMaskImplementationMode(
 		FinalizeVRHMDMaskQualityCapture();
 #endif
 
-	settings.hmdMaskLegacySingleSample =
-		a_mode == HMDMaskImplementationMode::LegacyExactZero;
-	settings.hmdMaskReducedResolutionCache =
-		a_mode == HMDMaskImplementationMode::ReducedResolutionMask;
+	vrHMDMaskAutomationOverride = a_mode;
+	settings.hmdMaskPersistent =
+		a_mode == HMDMaskImplementationMode::PersistentMask;
+	settings.hmdMaskLegacySingleSample = false;
+	settings.hmdMaskReducedResolutionCache = false;
 	vrReducedHMDMaskState[0] = {};
 	vrReducedHMDMaskState[1] = {};
 	RequestHistoryReset();
@@ -15707,6 +15708,7 @@ void Upscaling::DrawSettings()
 #endif
 				vrReducedHMDMaskState[0] = {};
 				vrReducedHMDMaskState[1] = {};
+				vrHMDMaskAutomationOverride.reset();
 				RequestHistoryReset();
 				logger::info(
 					"[Upscaling][HAM] Persistent HMD mask {} by Upscaling diagnostics UI; temporal history reset requested.",
@@ -38458,23 +38460,10 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	if (clearPerEyeInputHMDMask)
 		(void)EnsureHMDMaskClearResources();
 
-	if (clearPerEyeInputHMDMask && depthTexture.depthSRV &&
-		settings.hmdMaskReducedResolutionCache) {
+	if (clearPerEyeInputHMDMask && depthTexture.depthSRV && vrClearHMDMaskCS && vrClearHMDMaskCB) {
 		for (uint32_t i = 0; i < 2; ++i) {
 			const uint32_t depthOffset = i == 1 ? eyeWidthIn : 0u;
-			if (!BuildReducedHMDMaskAndSanitizeInput(
-					i,
-					vrIntermediateColorIn[i]->uav.get(),
-					depthTexture.depthSRV,
-					eyeWidthIn,
-					eyeHeightIn,
-					eyeWidthIn,
-					eyeHeightIn,
-					depthOffset)) {
-				// The experimental cache must never weaken the production path. If
-				// creation, compilation, or validation fails, sanitize this input with
-				// the current robust depth kernel and let the final scrub do the same.
-				(void)DispatchHMDMaskClear(
+			(void)DispatchHMDMaskClear(
 					vrIntermediateColorIn[i]->uav.get(),
 					depthTexture.depthSRV,
 					eyeWidthIn,
@@ -38482,64 +38471,8 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 					eyeWidthIn,
 					eyeHeightIn,
 					depthOffset,
-					0u,
-					0u,
-					0u,
-					false,
-					std::numeric_limits<uint32_t>::max(),
-					true);
-			}
+					0u);
 		}
-	} else if (clearPerEyeInputHMDMask && depthTexture.depthSRV && vrClearHMDMaskCS && vrClearHMDMaskCB) {
-		auto dispatchX = (eyeWidthIn + 7) / 8;
-		auto dispatchY = (eyeHeightIn + 7) / 8;
-
-		ID3D11ComputeShader* clearShader =
-			settings.hmdMaskLegacySingleSample && vrClearHMDMaskLegacyCS ?
-				vrClearHMDMaskLegacyCS.get() :
-				vrClearHMDMaskCS.get();
-		context->CSSetShader(clearShader, nullptr, 0);
-
-		ID3D11ShaderResourceView* srvs[1] = { depthTexture.depthSRV };
-		context->CSSetShaderResources(0, 1, srvs);
-
-		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
-		context->CSSetConstantBuffers(0, 1, cbs);
-
-		const bool useLegacyInputKernel =
-			settings.hmdMaskLegacySingleSample && vrClearHMDMaskLegacyCS;
-		const char* inputTimerName = useLegacyInputKernel ?
-		                                 "Upscaling::HAM::InputLegacy" :
-		                                 "Upscaling::HAM::InputRobust";
-		CS_PROFILE_SCOPE(inputTimerName);
-		for (uint32_t i = 0; i < 2; ++i) {
-			uint32_t depthOffset = (i == 1) ? eyeWidthIn : 0;
-			const auto clearMaskParams = MakeHMDMaskClearConstants(
-				depthOffset,
-				0u,
-				0u,
-				0u,
-				eyeWidthIn,
-				eyeHeightIn,
-				eyeWidthIn,
-				eyeHeightIn);
-			context->UpdateSubresource(vrClearHMDMaskCB.get(), 0, nullptr, &clearMaskParams, 0, 0);
-
-			ID3D11UnorderedAccessView* uavs[1] = { vrIntermediateColorIn[i]->uav.get() };
-			context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-			context->Dispatch(dispatchX, dispatchY, 1);
-			(useLegacyInputKernel ? vrHMDMaskInputLegacyDispatches :
-			                        vrHMDMaskInputRobustDispatches)
-				.fetch_add(1, std::memory_order_relaxed);
-		}
-
-		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-		ID3D11Buffer* nullCB[1] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSRV);
-		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-		context->CSSetConstantBuffers(0, 1, nullCB);
-		context->CSSetShader(nullptr, nullptr, 0);
 	}
 
 	return true;
@@ -39723,29 +39656,28 @@ bool Upscaling::EnsureHMDMaskClearResources()
 		return false;
 	}
 
-	if (settings.hmdMaskLegacySingleSample &&
-		!vrClearHMDMaskLegacyCS &&
+	if (!vrClearHMDMaskLegacyCS &&
 		!vrClearHMDMaskLegacyCompileAttempted) {
 		vrClearHMDMaskLegacyCompileAttempted = true;
-		static bool loggedLegacyShaderFailure = false;
+		static bool loggedRobustShaderFailure = false;
 		try {
 			vrClearHMDMaskLegacyCS.attach(static_cast<ID3D11ComputeShader*>(
 				Util::CompileShader(
 					L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl",
-					{ { "HMD_MASK_LEGACY_SINGLE_SAMPLE", "1" } },
+					{ { "HMD_MASK_ROBUST_DEPTH_5X5", "1" } },
 					"cs_5_0")));
 		} catch (const std::exception& e) {
 			LogWarnOnce(
-				loggedLegacyShaderFailure,
-				"[Upscaling][HAM] Legacy single-sample shader unavailable; using the robust HMD mask scrub",
+				loggedRobustShaderFailure,
+				"[Upscaling][HAM] Robust 5x5 fallback shader unavailable; persistent-mask requests will be skipped",
 				e);
-			MarkSubmitStageDeviceLostIfNeeded(e, "legacy HMD mask shader creation");
+			MarkSubmitStageDeviceLostIfNeeded(e, "robust HMD mask shader creation");
 			vrClearHMDMaskLegacyCS = nullptr;
 		} catch (...) {
 			LogWarnOnce(
-				loggedLegacyShaderFailure,
-				"[Upscaling][HAM] Legacy single-sample shader unavailable; using the robust HMD mask scrub");
-			MarkSubmitStageDeviceLostIfDeviceRemoved("legacy HMD mask shader creation");
+				loggedRobustShaderFailure,
+				"[Upscaling][HAM] Robust 5x5 fallback shader unavailable; persistent-mask requests will be skipped");
+			MarkSubmitStageDeviceLostIfDeviceRemoved("robust HMD mask shader creation");
 			vrClearHMDMaskLegacyCS = nullptr;
 		}
 	}
@@ -40011,52 +39943,25 @@ bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11
 		return false;
 
 	ID3D11ComputeShader* clearShader = vrClearHMDMaskCS.get();
-	HMDMaskImplementationMode actualMode = HMDMaskImplementationMode::RobustDepth5x5;
+	HMDMaskImplementationMode actualMode = HMDMaskImplementationMode::SparseDepth9;
 	ID3D11ShaderResourceView* reducedMaskSRV = nullptr;
 	uint32_t shaderDepthWidth = depthWidth;
 	uint32_t shaderDepthHeight = depthHeight;
 	uint32_t shaderDepthOffsetX = depthOffsetX;
 	uint32_t shaderDepthOffsetY = depthOffsetY;
-	if (!a_forceRobustDepthKernel &&
-		!a_verifyBindings &&
-		settings.hmdMaskReducedResolutionCache &&
-		a_reducedMaskEyeIndex < 2 &&
-		vrClearHMDMaskFromReducedCS) {
-		auto& mask = vrReducedHMDMask[a_reducedMaskEyeIndex];
-		const auto& maskState = vrReducedHMDMaskState[a_reducedMaskEyeIndex];
-		winrt::com_ptr<ID3D11Resource> depthResource;
-		depthSRV->GetResource(depthResource.put());
-		const uintptr_t depthIdentity = GetCOMIdentityAddress(depthResource.get());
-		const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
-		const bool validCurrentMask =
-			maskState.valid && currentFrame != 0 && maskState.frame == currentFrame &&
-			maskState.depthIdentity != 0 && maskState.depthIdentity == depthIdentity &&
-			maskState.depthWidth == depthWidth && maskState.depthHeight == depthHeight &&
-			maskState.depthOffsetX == depthOffsetX && maskState.depthOffsetY == depthOffsetY &&
-			maskState.maskWidth != 0 && maskState.maskHeight != 0 &&
-			mask && mask->resource && mask->srv &&
-			mask->desc.Width >= maskState.maskWidth && mask->desc.Height >= maskState.maskHeight;
-		if (validCurrentMask) {
-			clearShader = vrClearHMDMaskFromReducedCS.get();
-			actualMode = HMDMaskImplementationMode::ReducedResolutionMask;
-			reducedMaskSRV = mask->srv.get();
-			shaderDepthWidth = maskState.maskWidth;
-			shaderDepthHeight = maskState.maskHeight;
-			shaderDepthOffsetX = 0;
-			shaderDepthOffsetY = 0;
-		}
-	} else if (!a_forceRobustDepthKernel &&
-		settings.hmdMaskLegacySingleSample &&
+	const auto requestedMode = GetHMDMaskImplementationMode();
+	if ((a_forceRobustDepthKernel || a_verifyBindings ||
+		 requestedMode != HMDMaskImplementationMode::SparseDepth9) &&
 		vrClearHMDMaskLegacyCS) {
 		clearShader = vrClearHMDMaskLegacyCS.get();
-		actualMode = HMDMaskImplementationMode::LegacyExactZero;
+		actualMode = HMDMaskImplementationMode::RobustDepth5x5;
 	}
 	const bool finalEyeDispatch = a_reducedMaskEyeIndex < 2;
 	if (finalEyeDispatch &&
 		!a_verifyBindings &&
 		!a_forceRobustDepthKernel &&
-		settings.hmdMaskReducedResolutionCache &&
-		actualMode != HMDMaskImplementationMode::ReducedResolutionMask) {
+		requestedMode == HMDMaskImplementationMode::PersistentMask &&
+		actualMode != HMDMaskImplementationMode::PersistentMask) {
 		vrHMDMaskReducedFinalFallbacks.fetch_add(1, std::memory_order_relaxed);
 	}
 
@@ -40094,14 +39999,8 @@ bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11
 			return false;
 	}
 
-	const uint32_t auditMaskWidth =
-		actualMode == HMDMaskImplementationMode::ReducedResolutionMask ?
-			vrReducedHMDMaskState[a_reducedMaskEyeIndex].maskWidth :
-			0u;
-	const uint32_t auditMaskHeight =
-		actualMode == HMDMaskImplementationMode::ReducedResolutionMask ?
-			vrReducedHMDMaskState[a_reducedMaskEyeIndex].maskHeight :
-			0u;
+	const uint32_t auditMaskWidth = 0u;
+	const uint32_t auditMaskHeight = 0u;
 	const auto clearMaskParams = MakeHMDMaskClearConstants(
 		shaderDepthOffsetX,
 		colorOffsetX,
@@ -40123,13 +40022,11 @@ bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11
 		const char* timerName = a_verifyBindings ?
 		                            "Upscaling::HAM::VerifiedRepairRobust" :
 		                        finalEyeDispatch ?
-		                            (actualMode == HMDMaskImplementationMode::ReducedResolutionMask ?
-								 "Upscaling::HAM::FinalReducedMask" :
-							 actualMode == HMDMaskImplementationMode::LegacyExactZero ?
-								 "Upscaling::HAM::FinalLegacy" :
+		                            (actualMode == HMDMaskImplementationMode::SparseDepth9 ?
+								 "Upscaling::HAM::FinalSparse9" :
 								 "Upscaling::HAM::FinalRobust") :
-		                        actualMode == HMDMaskImplementationMode::LegacyExactZero ?
-		                            "Upscaling::HAM::InputLegacy" :
+		                        actualMode == HMDMaskImplementationMode::SparseDepth9 ?
+		                            "Upscaling::HAM::InputSparse9" :
 		                            "Upscaling::HAM::InputRobust";
 		CS_PROFILE_SCOPE(timerName);
 		context->Dispatch(dispatchX, dispatchY, 1);
@@ -40137,14 +40034,12 @@ bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11
 	if (a_verifyBindings) {
 		vrHMDMaskVerifiedRobustDispatches.fetch_add(1, std::memory_order_relaxed);
 	} else if (finalEyeDispatch) {
-		auto& counter = actualMode == HMDMaskImplementationMode::ReducedResolutionMask ?
-		                    vrHMDMaskFinalReducedDispatches :
-		                actualMode == HMDMaskImplementationMode::LegacyExactZero ?
+		auto& counter = actualMode == HMDMaskImplementationMode::SparseDepth9 ?
 		                    vrHMDMaskFinalLegacyDispatches :
 		                    vrHMDMaskFinalRobustDispatches;
 		counter.fetch_add(1, std::memory_order_relaxed);
 	} else {
-		auto& counter = actualMode == HMDMaskImplementationMode::LegacyExactZero ?
+		auto& counter = actualMode == HMDMaskImplementationMode::SparseDepth9 ?
 		                    vrHMDMaskInputLegacyDispatches :
 		                    vrHMDMaskInputRobustDispatches;
 		counter.fetch_add(1, std::memory_order_relaxed);
@@ -40420,7 +40315,7 @@ void Upscaling::DispatchVRHMDMaskQualityAudit(
 		}
 	};
 	if (a_actualMode != vrHMDMaskQualityMode ||
-		(a_actualMode == HMDMaskImplementationMode::ReducedResolutionMask &&
+		(a_actualMode == HMDMaskImplementationMode::PersistentMask &&
 			!a_reducedMaskSRV)) {
 		++vrHMDMaskQualitySkippedDispatches;
 		completeEye();
@@ -40510,8 +40405,8 @@ json Upscaling::BuildVRHMDMaskDiagnosticsStatus()
 		           static_cast<double>(a_numerator) / static_cast<double>(a_denominator) :
 		           0.0;
 	};
-	const uint64_t legacyFalseNegatives = vrHMDMaskQualityResults[3];
-	json legacyMissClassification = json::array();
+	const uint64_t sparseFalseNegatives = vrHMDMaskQualityResults[3];
+	json sparseMissClassification = json::array();
 	constexpr std::array<const char*, 4> candidateNames{
 		"threshold_center",
 		"threshold_3x3",
@@ -40522,26 +40417,26 @@ json Upscaling::BuildVRHMDMaskDiagnosticsStatus()
 	for (uint32_t candidateIndex = 0; candidateIndex < candidateNames.size(); ++candidateIndex) {
 		const uint32_t counterBase = 8u + candidateIndex * 4u;
 		const uint64_t falseNegatives = vrHMDMaskQualityResults[counterBase + 1u];
-		const uint64_t recoveredLegacyMisses =
-			legacyFalseNegatives >= falseNegatives ? legacyFalseNegatives - falseNegatives : 0u;
-		legacyMissClassification.push_back({
+		const uint64_t recoveredSparseMisses =
+			sparseFalseNegatives >= falseNegatives ? sparseFalseNegatives - falseNegatives : 0u;
+		sparseMissClassification.push_back({
 			{ "pattern", candidateNames[candidateIndex] },
 			{ "depthTaps", candidateTapCounts[candidateIndex] },
 			{ "candidateClearSamples", vrHMDMaskQualityResults[counterBase] },
-			{ "legacyMissesRecovered", recoveredLegacyMisses },
-			{ "legacyMissRecoveryRate", ratio(recoveredLegacyMisses, legacyFalseNegatives) },
+			{ "sparseMissesRecovered", recoveredSparseMisses },
+			{ "sparseMissRecoveryRate", ratio(recoveredSparseMisses, sparseFalseNegatives) },
 			{ "remainingFalseNegatives", falseNegatives },
 			{ "remainingFalseNegativeRateAmongRobustClear", ratio(falseNegatives, robustClear) },
 			{ "falsePositives", vrHMDMaskQualityResults[counterBase + 2u] },
 			{ "mismatches", vrHMDMaskQualityResults[counterBase + 3u] },
 		});
 	}
-	legacyMissClassification.push_back({
+	sparseMissClassification.push_back({
 		{ "pattern", "full_5x5_reference" },
 		{ "depthTaps", 25 },
 		{ "candidateClearSamples", robustClear },
-		{ "legacyMissesRecovered", legacyFalseNegatives },
-		{ "legacyMissRecoveryRate", ratio(legacyFalseNegatives, legacyFalseNegatives) },
+		{ "sparseMissesRecovered", sparseFalseNegatives },
+		{ "sparseMissRecoveryRate", ratio(sparseFalseNegatives, sparseFalseNegatives) },
 		{ "remainingFalseNegatives", 0 },
 		{ "remainingFalseNegativeRateAmongRobustClear", 0.0 },
 		{ "falsePositives", 0 },
@@ -40550,18 +40445,18 @@ json Upscaling::BuildVRHMDMaskDiagnosticsStatus()
 	return {
 		{ "apiVersion", 2 },
 		{ "mode", GetHMDMaskImplementationModeName(GetHMDMaskImplementationMode()) },
-		{ "modeOptions", json::array({ "robust_depth_5x5", "legacy_exact_zero", "reduced_resolution_mask" }) },
+		{ "modeOptions", json::array({ "sparse_depth_9tap", "robust_depth_5x5", "persistent_hmd_mask" }) },
 		{ "loggingRequirement", "Info is sufficient" },
 		{ "performance", {
 			{ "tool", "communityshaders.profiler_api" },
 			{ "timerPrefix", "Upscaling::HAM::" },
 			{ "timers", json::array({
 				"Upscaling::HAM::InputRobust",
-				"Upscaling::HAM::InputLegacy",
+				"Upscaling::HAM::InputSparse9",
 				"Upscaling::HAM::BuildReducedMaskAndSanitizeInput",
 				"Upscaling::HAM::FinalRobust",
-				"Upscaling::HAM::FinalLegacy",
-				"Upscaling::HAM::FinalReducedMask",
+				"Upscaling::HAM::FinalSparse9",
+				"Upscaling::HAM::FinalPersistentMask",
 				"Upscaling::HAM::VerifiedRepairRobust",
 				"Upscaling::HAM::DevBenchQualityAudit" }) },
 			{ "qualityCaptureMustBeInactive", true },
@@ -40569,14 +40464,14 @@ json Upscaling::BuildVRHMDMaskDiagnosticsStatus()
 		} },
 		{ "robustness", {
 			{ "inputRobustDispatches", vrHMDMaskInputRobustDispatches.load(std::memory_order_acquire) },
-			{ "inputLegacyDispatches", vrHMDMaskInputLegacyDispatches.load(std::memory_order_acquire) },
+			{ "inputSparse9Dispatches", vrHMDMaskInputLegacyDispatches.load(std::memory_order_acquire) },
 			{ "reducedBuildAttempts", vrHMDMaskReducedBuildAttempts.load(std::memory_order_acquire) },
 			{ "reducedBuildSuccesses", vrHMDMaskReducedBuildSuccesses.load(std::memory_order_acquire) },
 			{ "reducedBuildFailures", vrHMDMaskReducedBuildFailures.load(std::memory_order_acquire) },
 			{ "finalRobustDispatches", vrHMDMaskFinalRobustDispatches.load(std::memory_order_acquire) },
-			{ "finalLegacyDispatches", vrHMDMaskFinalLegacyDispatches.load(std::memory_order_acquire) },
-			{ "finalReducedMaskDispatches", vrHMDMaskFinalReducedDispatches.load(std::memory_order_acquire) },
-			{ "reducedFinalFallbacks", vrHMDMaskReducedFinalFallbacks.load(std::memory_order_acquire) },
+			{ "finalSparse9Dispatches", vrHMDMaskFinalLegacyDispatches.load(std::memory_order_acquire) },
+			{ "finalPersistentMaskDispatches", vrHMDMaskFinalReducedDispatches.load(std::memory_order_acquire) },
+			{ "persistentMaskFallbacks", vrHMDMaskReducedFinalFallbacks.load(std::memory_order_acquire) },
 			{ "verifiedRepairRobustDispatches", vrHMDMaskVerifiedRobustDispatches.load(std::memory_order_acquire) },
 		} },
 		{ "qualityCapture", {
@@ -40601,8 +40496,8 @@ json Upscaling::BuildVRHMDMaskDiagnosticsStatus()
 			{ "auditedDispatches", vrHMDMaskQualityResults[7] },
 			{ "mismatchRate", ratio(mismatches, evaluated) },
 			{ "falseNegativeRateAmongRobustClear", ratio(vrHMDMaskQualityResults[3], robustClear) },
-			{ "legacyMissClassificationValid", vrHMDMaskQualityMode == HMDMaskImplementationMode::LegacyExactZero },
-			{ "legacyMissClassification", std::move(legacyMissClassification) },
+			{ "sparseMissClassificationValid", vrHMDMaskQualityMode == HMDMaskImplementationMode::SparseDepth9 },
+			{ "sparseMissClassification", std::move(sparseMissClassification) },
 			{ "warning", "The fidelity audit adds a separate GPU pass; do not use the same run for performance conclusions." },
 		} },
 	};

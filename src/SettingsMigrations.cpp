@@ -1,6 +1,7 @@
 #include "SettingsMigrations.h"
 
 #include "Features/Bloom.h"
+#include "Features/WaterAppearanceFallbackPolicy.h"
 
 #include <algorithm>
 #include <string>
@@ -201,26 +202,12 @@ namespace
 		}
 		(*legacyWaterIt)[std::string(SettingsMigrations::kLegacyWaterAppearanceForceGlobalKey)] = forceGlobal;
 
-		bool migrated = false;
-		for (const auto key : SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys) {
-			auto sourceIt = unifiedWaterIt->find(key.data());
-			if (sourceIt == unifiedWaterIt->end())
-				continue;
-
-			auto destinationIt = legacyWaterIt->find(key.data());
-			if (destinationIt != legacyWaterIt->end() && destinationIt->is_number()) {
-				// A valid destination value from this source layer wins over a stale
-				// Unified Water copy.
-				unifiedWaterIt->erase(sourceIt);
-				migrated = true;
-			} else if (sourceIt->is_number()) {
-				(*legacyWaterIt)[std::string(key)] = *sourceIt;
-				unifiedWaterIt->erase(sourceIt);
-				migrated = true;
-			}
-		}
-
-		return migrated;
+		// A valid Adaptive Balance value wins. The Unified Water values are not
+		// consumed: they remain the inactive/unavailable runtime fallback.
+		return WaterAppearanceFallbackPolicy::MirrorAppearanceValues(
+			*unifiedWaterIt,
+			*legacyWaterIt,
+			SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys);
 	}
 
 	const json& GetBloomSchema()

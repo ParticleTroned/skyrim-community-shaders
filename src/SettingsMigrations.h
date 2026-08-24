@@ -51,7 +51,8 @@ namespace SettingsMigrations
 	// Migrates one root-settings source layer in place. The old Adaptive Brightness
 	// root is folded into Adaptive Balance, with explicit values under the new name
 	// taking precedence. Legacy CS Utility renderer fields and Unified Water's former
-	// global appearance fields are then moved into the canonical root. The CS Utility
+	// global appearance fields are then mirrored into the canonical root while being
+	// retained by Unified Water as its runtime fallback. The CS Utility
 	// enabled value is retained for DOF and copied to the global-lighting gate only when
 	// that layer is demonstrably legacy and explicitly contains the value.
 	bool MigrateAdaptiveBalanceRootLayer(
@@ -76,8 +77,8 @@ namespace SettingsMigrations
 	// patch; enabled and DOF settings remain in the source layer.
 	nlohmann::json ExtractAdaptiveBalanceFeaturePatch(nlohmann::json& a_csUtilityLayer);
 
-	// Splits the eight legacy appearance controls from a feature-scoped UnifiedWater
-	// source layer. The moved fields are removed from a_unifiedWaterLayer and returned
-	// as an AdaptiveBrightness feature patch; all structural water settings remain.
+	// Mirrors the eight appearance controls from a feature-scoped UnifiedWater source
+	// layer into an AdaptiveBrightness feature patch. The source values are retained
+	// so Unified Water can provide the fallback when Adaptive Balance is inactive.
 	nlohmann::json ExtractAdaptiveBalanceWaterFeaturePatch(nlohmann::json& a_unifiedWaterLayer);
 }

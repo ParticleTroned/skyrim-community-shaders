@@ -1636,6 +1636,16 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_menu_positioning_policy_test.cpp
     )
 
+    add_controller_test(
+        water_appearance_fallback_policy_test
+        WaterAppearanceFallbackPolicy
+        tests/water_appearance_fallback_policy_test.cpp
+    )
+    target_link_libraries(
+        water_appearance_fallback_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     add_executable(
         api_runtime_thread_affinity_test
         EXCLUDE_FROM_ALL

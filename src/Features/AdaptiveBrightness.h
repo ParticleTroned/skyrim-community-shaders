@@ -238,7 +238,8 @@ struct AdaptiveBrightness : Feature
 		bool a_linearLightingEnabled) const;
 	SharedLightingSettings GetEffectiveSharedLightingSettings() const;
 	Bloom::Settings GetEffectiveBloomSettings() const;
-	WaterAppearance::Settings GetEffectiveWaterAppearanceSettings() const;
+	WaterAppearance::Settings GetEffectiveWaterAppearanceSettings(
+		const WaterAppearance::Profile& a_fallbackProfile) const;
 
 	struct ActiveProfileBlend
 	{

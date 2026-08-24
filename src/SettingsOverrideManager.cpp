@@ -575,7 +575,7 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 				overrideInfo->routedFeatureData.emplace(
 					std::string(SettingsMigrations::kAdaptiveBalanceFeatureName),
 					std::move(adaptiveBalancePatch));
-				logger::info("Routed legacy Unified Water appearance settings in {} to Adaptive Balance", filePath.string());
+				logger::info("Mirrored Unified Water appearance settings in {} to Adaptive Balance", filePath.string());
 			}
 		} else if (overrideInfo->featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
 			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(overrideInfo->overrideData);
@@ -1105,9 +1105,9 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 		}
 	}
 
-	// Preserve feature-scoped water customizations saved before the appearance
-	// controls moved into Adaptive Balance. Apply the native destination user
-	// layer afterward so explicitly saved profile values retain final precedence.
+	// Mirror feature-scoped water customizations into Adaptive Balance while
+	// retaining Unified Water's copy as the runtime fallback. Apply the native
+	// destination user layer afterward so explicit profile values retain precedence.
 	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
 		json legacyUnifiedWaterUser;
 		if (readUserLayer(std::string(SettingsMigrations::kUnifiedWaterFeatureName), legacyUnifiedWaterUser)) {
@@ -1116,7 +1116,7 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 				SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(featureJson);
 				MergeJson(featureJson, adaptiveBalancePatch);
 				applied = true;
-				logger::info("Loaded legacy Unified Water user appearance settings for Adaptive Balance");
+				logger::info("Mirrored Unified Water user appearance settings into Adaptive Balance");
 			}
 		}
 	}

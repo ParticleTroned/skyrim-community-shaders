@@ -10,6 +10,7 @@
 #include "Utils/Form.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
+#include "WaterAppearanceFallbackPolicy.h"
 
 #include "RE/B/BGSLocation.h"
 #include "RE/P/PlayerCharacter.h"
@@ -2638,10 +2639,12 @@ Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 	return Bloom::GetCommonBufferData(effectiveProfile, 1.0f);
 }
 
-WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings() const
+WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings(
+	const WaterAppearance::Profile& a_fallbackProfile) const
 {
-	if (!IsRuntimeEnabled())
-		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
+	if (WaterAppearanceFallbackPolicy::SelectEffectiveSource(IsRuntimeEnabled()) ==
+		WaterAppearanceFallbackPolicy::EffectiveSource::UnifiedWater)
+		return WaterAppearance::GetCommonBufferData(a_fallbackProfile);
 
 	const auto activeProfiles = GetActiveProfileBlend();
 	auto fromProfile = activeProfiles.from->water;

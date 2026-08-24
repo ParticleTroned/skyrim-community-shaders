@@ -5,6 +5,7 @@
 #include "Menu/ThemeManager.h"
 #include "State.h"
 #include "Util.h"
+#include "WaterAppearanceFallbackPolicy.h"
 
 #include "RE/L/LoadingMenu.h"
 #include "RE/M/MapMenu.h"
@@ -24,14 +25,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UseOpenShadersDepthBehaviour,
 	WaterTintColor,
 	WaterTintStrength,
-	WaterBrightness,
-	GlobalReflectionAmount,
-	RefractionAmount,
-	SunSpecularMultiplier,
-	WaveAmplitude,
-	FresnelMin,
-	FresnelMax,
-	Muddiness,
+	WaterAppearanceFallback,
 	ShallowFallbackStrength,
 	DeepConnectionProbeReachUnits,
 	DeepContextDepthUnits,
@@ -78,35 +72,6 @@ namespace
 		return std::clamp(a_value, a_min, a_max);
 	}
 
-	WaterAppearance::Profile GetWaterAppearanceProfile(const UnifiedWater::Settings& a_settings)
-	{
-		WaterAppearance::Profile profile{
-			a_settings.WaterBrightness,
-			a_settings.GlobalReflectionAmount,
-			a_settings.RefractionAmount,
-			a_settings.SunSpecularMultiplier,
-			a_settings.WaveAmplitude,
-			a_settings.FresnelMin,
-			a_settings.FresnelMax,
-			a_settings.Muddiness
-		};
-		WaterAppearance::SanitizeProfile(profile);
-		return profile;
-	}
-
-	void SetWaterAppearanceProfile(UnifiedWater::Settings& a_settings, WaterAppearance::Profile a_profile)
-	{
-		WaterAppearance::SanitizeProfile(a_profile);
-		a_settings.WaterBrightness = a_profile.WaterBrightness;
-		a_settings.GlobalReflectionAmount = a_profile.GlobalReflectionAmount;
-		a_settings.RefractionAmount = a_profile.RefractionAmount;
-		a_settings.SunSpecularMultiplier = a_profile.SunSpecularMultiplier;
-		a_settings.WaveAmplitude = a_profile.WaveAmplitude;
-		a_settings.FresnelMin = a_profile.FresnelMin;
-		a_settings.FresnelMax = a_profile.FresnelMax;
-		a_settings.Muddiness = a_profile.Muddiness;
-	}
-
 	void SanitizeSettings(UnifiedWater::Settings& a_settings)
 	{
 		const UnifiedWater::Settings defaults{};
@@ -130,7 +95,7 @@ namespace
 			kWaterTintStrengthMin,
 			kWaterTintStrengthMax,
 			defaults.WaterTintStrength);
-		SetWaterAppearanceProfile(a_settings, GetWaterAppearanceProfile(a_settings));
+		WaterAppearance::SanitizeProfile(a_settings.WaterAppearanceFallback);
 		a_settings.ShallowFallbackStrength = ClampFiniteOrDefault(
 			a_settings.ShallowFallbackStrength,
 			kShallowFallbackStrengthMin,
@@ -601,7 +566,12 @@ void UnifiedWater::TryCompleteDeferredChildWorldspaceCull(RE::TES* tes)
 
 void UnifiedWater::LoadSettings(json& o_json)
 {
-	settings = o_json;
+	auto migratedSettings = o_json;
+	WaterAppearanceFallbackPolicy::CanonicalizeAppearanceFallback(
+		migratedSettings,
+		WaterAppearanceFallbackPolicy::kFallbackKey,
+		WaterAppearanceFallbackPolicy::kAppearanceKeys);
+	settings = migratedSettings;
 	const auto loadedModelVersion = o_json.value("SurfaceVisibilityModelVersion", 0u);
 	if (loadedModelVersion != kSurfaceVisibilityModelVersion) {
 		const Settings defaults{};
@@ -669,12 +639,6 @@ void UnifiedWater::DrawSettings()
 	ImGui::Spacing();
 	ImGui::SeparatorText("Water Appearance");
 	DrawWaterTintSettings(settings);
-	ImGui::TextWrapped(
-		"These global values remain active whenever Adaptive Balance is unavailable or inactive. "
-		"An active Adaptive Balance profile replaces them for its current location and time.");
-	auto waterAppearance = GetWaterAppearanceProfile();
-	WaterAppearance::DrawProfileControls(waterAppearance);
-	SetWaterAppearanceProfile(settings, waterAppearance);
 
 	ImGui::Spacing();
 
@@ -856,9 +820,11 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	return data;
 }
 
-WaterAppearance::Profile UnifiedWater::GetWaterAppearanceProfile() const
+WaterAppearance::Profile UnifiedWater::GetWaterAppearanceFallbackProfile() const
 {
-	return ::GetWaterAppearanceProfile(settings);
+	auto profile = settings.WaterAppearanceFallback;
+	WaterAppearance::SanitizeProfile(profile);
+	return profile;
 }
 
 void UnifiedWater::DrawEssentialSettings()

@@ -1641,6 +1641,10 @@ if(BUILD_CONTROLLER_TESTS)
         WaterAppearanceFallbackPolicy
         tests/water_appearance_fallback_policy_test.cpp
     )
+    target_sources(
+        water_appearance_fallback_policy_test
+        PRIVATE src/SettingsMigrations.cpp
+    )
     target_link_libraries(
         water_appearance_fallback_policy_test
         PRIVATE nlohmann_json::nlohmann_json
@@ -1803,6 +1807,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test
+            water_appearance_fallback_policy_test
             api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test

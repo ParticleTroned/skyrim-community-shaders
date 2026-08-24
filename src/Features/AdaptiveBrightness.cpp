@@ -2643,7 +2643,7 @@ WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSetting
 	const WaterAppearance::Profile& a_fallbackProfile) const
 {
 	if (WaterAppearanceFallbackPolicy::SelectEffectiveSource(IsRuntimeEnabled()) ==
-		WaterAppearanceFallbackPolicy::EffectiveSource::UnifiedWater)
+		WaterAppearanceFallbackPolicy::EffectiveSource::UnifiedWaterFallback)
 		return WaterAppearance::GetCommonBufferData(a_fallbackProfile);
 
 	const auto activeProfiles = GetActiveProfileBlend();

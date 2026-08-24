@@ -1106,8 +1106,8 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 	}
 
 	// Mirror feature-scoped water customizations into Adaptive Balance while
-	// retaining Unified Water's copy as the runtime fallback. Apply the native
-	// destination user layer afterward so explicit profile values retain precedence.
+	// canonicalizing Unified Water's values as a compatibility fallback. Apply the
+	// native destination user layer afterward so explicit profiles retain precedence.
 	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
 		json legacyUnifiedWaterUser;
 		if (readUserLayer(std::string(SettingsMigrations::kUnifiedWaterFeatureName), legacyUnifiedWaterUser)) {
@@ -1116,7 +1116,7 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 				SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(featureJson);
 				MergeJson(featureJson, adaptiveBalancePatch);
 				applied = true;
-				logger::info("Mirrored Unified Water user appearance settings into Adaptive Balance");
+				logger::info("Migrated Unified Water user appearance fallback into Adaptive Balance");
 			}
 		}
 	}

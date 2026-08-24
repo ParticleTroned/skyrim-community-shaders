@@ -20,6 +20,9 @@ vertical slice for depth culling is in
 [`opaque-depth-culling-slice.md`](./opaque-depth-culling-slice.md). Findings
 from the first bounded live controller run are in
 [`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
+The later 120-frame run that validates durable finalization and establishes the
+typed-observation gate is documented in
+[`main-menu-120-frame-capture-2026-08-23.md`](./main-menu-120-frame-capture-2026-08-23.md).
 
 ## Implementation status
 
@@ -68,14 +71,20 @@ frame/time boundary triggers are reported separately and do not masquerade as
 lost in-window events. Provenance that is unavailable in-process remains
 explicitly unavailable rather than receiving a zero or invented hash.
 
-The first serializer emits schema-shaped event envelopes with semantic payload
-fields and capture-local observation IDs. It preserves pointer evidence under
-the currently supported `retain` policy, but leaves unproven manifest, engine,
-causal, device-context, and eye relationships empty or unknown. Gap-event
-materialization, atomic artefact writing and hashing, per-thread buffer sharding,
-pointer-generation tracking, remaining geometry families, and D3D
-draw/dispatch observation belong to subsequent slices. Until those exist, this
-is bounded live evidence rather than a complete render graph.
+The serializer emits schema-shaped event envelopes with semantic payload fields
+and capture-local scope IDs. It preserves pointer evidence under the currently
+supported `retain` policy, but leaves unproven manifest, engine, causal,
+device-context, and eye relationships empty or unknown. Atomic event/manifest
+writing, hashing, explicit gap materialization, and immediate finalization at a
+capture boundary are implemented and live-validated.
+
+The present scope IDs are not yet accompanied by typed observation declarations,
+so the live stream remains structurally valid but semantically unjoinable. The
+next gate is a generation-safe observation registry plus validation of actual
+captures. Per-thread buffer sharding, remaining geometry families, provenance
+injection, pipeline/target identity, and D3D draw/dispatch observation remain
+subsequent slices. Until those exist, this is bounded live evidence rather than
+a complete render graph.
 
 Example DevBench requests (use a unique `commandId` for each logical command):
 

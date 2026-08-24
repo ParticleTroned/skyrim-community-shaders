@@ -10,6 +10,16 @@ previous-frame visibility.
 This milestone proves the mapping and capture system. It does not require a new
 culling implementation to be enabled.
 
+## Current gate
+
+The 120-frame main-menu capture has validated bounded collection, balanced
+engine scopes, immediate boundary quiescence, durable finalization, and exact
+artifact hashing. It also exposed that the serialized scope IDs are not yet
+declared as typed, generation-safe observations. No D3D11 draw instrumentation
+should be added until every active scope can be resolved by the semantic
+validator. See
+[`main-menu-120-frame-capture-2026-08-23.md`](./main-menu-120-frame-capture-2026-08-23.md).
+
 ## Candidate constraints
 
 Start with one object that is:
@@ -85,17 +95,23 @@ event-order evidence that produced the answer.
 
 ## Instrumentation sequence
 
-1. Add capture markers for frame, scene accumulation, and eye epochs.
-2. Emit capture-local IDs for scene object, geometry, property/material, and
+1. Seed the first non-example engine map from the existing capture's shader
+   types, caller RVAs, pass values, and descriptor combinations.
+2. Declare typed, generation-safe observations for the existing render-pass,
+   technique, geometry, and shader scopes; validate every scope reference.
+3. Accept exact externally verified build, manifest, runtime, profile, cache,
+   and scenario provenance in the capture-start contract.
+4. Add capture markers for frame, scene accumulation, and eye epochs.
+5. Emit capture-local IDs for scene object, geometry, property/material, and
    `BSRenderPass` at the narrowest known engine boundary.
-3. Add thread-local pass, technique, and geometry scopes.
-4. Observe shader creation/binding and hash bytecode when available.
-5. Track D3D11 device-context and pipeline-state identities.
-6. Emit bounded draw events containing active scope tokens.
-7. Emit depth-culling candidate, result-ready, view-validity, and consume events.
-8. Join the capture without relying on pointer equality across frames unless
+6. Observe shader creation/binding and hash bytecode when available.
+7. Track D3D11 device-context, target, and pipeline-state identities.
+8. Emit bounded draw events containing active scope tokens and a monotonic
+   per-context command-stream sequence.
+9. Emit depth-culling candidate, result-ready, view-validity, and consume events.
+10. Join the capture without relying on pointer equality across frames unless
    object lifetime evidence supports it.
-9. Review every ambiguous or missing edge before adding more object families.
+11. Review every ambiguous or missing edge before adding more object families.
 
 ## Acceptance gates
 

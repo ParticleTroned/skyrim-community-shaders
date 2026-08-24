@@ -17,8 +17,11 @@ The system has four artefacts:
 The contracts are defined in [`schemas/`](./schemas/). The architecture and
 correlation rules are in [`architecture.md`](./architecture.md). The first
 vertical slice for depth culling is in
-[`opaque-depth-culling-slice.md`](./opaque-depth-culling-slice.md). Findings
-from the first bounded live controller run are in
+[`opaque-depth-culling-slice.md`](./opaque-depth-culling-slice.md).
+The device-context and command-list identity/state contract required for honest
+deferred-context coverage is in
+[`device-context-command-list-slice.md`](./device-context-command-list-slice.md).
+Findings from the first bounded live controller run are in
 [`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
 The later 120-frame run that validates durable finalization and establishes the
 typed-observation gate is documented in

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "globalAbi": "engine-cache-v2-selective-invalidation",
+  "policy": {
+    "releaseVersionsAreProvenance": true,
+    "sourceClosureIsEntryValidity": true,
+    "featureAbiIsExplicit": true
+  }
+}

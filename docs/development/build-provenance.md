@@ -7,9 +7,11 @@ branch name or display version. Every DLL build has three related identities:
 - **Build ID** is SHA-256 over canonical JSON describing the source commit and
   dirty-content digest, exact submodule checkouts, vcpkg baseline and overlay,
   compiler/toolchain, runtime, configuration, and behavior-affecting options.
-- **Shader cache ABI ID** is a narrower identity over the shader compiler and
-  cache contract. It invalidates incompatible cache blobs without discarding a
-  cache merely because unrelated C++ code changed.
+- **Shader cache ABI ID** is an explicit identity over
+  `config/shader-cache-abi.json`. It invalidates globally incompatible cache
+  blobs without changing merely because cache-controller or unrelated C++ code
+  was edited. Feature-scoped non-HLSL incompatibilities use
+  `Feature::GetShaderCacheAbiVersion()` instead.
 
 `refresh_build_provenance` runs before every DLL compilation. It intentionally
 does not rely on CMake configure time, because an existing build tree can
@@ -33,8 +35,10 @@ requested producer. Captures and comparisons should preserve the returned
 ## Shader caches
 
 Runtime-generated `Info.ini` files record `BuildId`, `ArtifactSHA256`,
-`ShaderCacheABI`, and `ShaderCompilerIdentity`. Build ID and artifact hash are
-evidence. Shader ABI and a changed runtime compiler invalidate cache contents.
+`ShaderCacheABI`, and `ShaderCompilerIdentity`; feature sections may also record
+an explicit `ShaderCacheABI`. Build ID, artifact hash, plugin version, and
+ordinary feature versions are evidence. Global/scoped shader ABI and a changed
+runtime compiler invalidate the corresponding cache scope.
 
 The prebuilt-cache generator calculates `ShaderCacheABI` using the same Python
 module and canonical contract file list as the DLL build. Precompiled caches do

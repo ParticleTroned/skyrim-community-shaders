@@ -223,12 +223,16 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				FrameAnnotations::OnDataLoaded();
 
 				auto shaderCache = globals::shaderCache;
-				shaderCache->menuLoaded = true;
 				while (shaderCache->IsCompiling() &&
 					   !shaderCache->backgroundCompilation.load(std::memory_order_relaxed) &&
 					   !globals::game::quitGame.load(std::memory_order_relaxed)) {
 					std::this_thread::sleep_for(100ms);
 				}
+				// Entering background mode releases this wait before the initial batch
+				// drains. Mark DataLoaded separately and let the last completion perform
+				// the priority transition in that path.
+				shaderCache->menuLoaded = true;
+				shaderCache->TryCompleteStartupCompilationPhase();
 
 				if (globals::game::quitGame.load(std::memory_order_relaxed)) {
 					logger::info("Game was closed, skipping feature DataLoaded methods");

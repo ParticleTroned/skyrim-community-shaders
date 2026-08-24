@@ -457,6 +457,7 @@ namespace SIE
 		inline static bool IsShaderSourceAvailable(const RE::BSShader& shader);
 
 		bool IsCompiling();
+		void TryCompleteStartupCompilationPhase();
 		bool IsEnabled() const;
 		bool IsEnableRequested() const;
 		void SetEnabled(bool value);
@@ -489,6 +490,7 @@ namespace SIE
 		bool HasFeatureSetChanges() const { return featureSetChanged; }
 		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_acquire); }
 		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp; }
+		bool HasSelectivelySeededFeatureSetCache() const { return featureSetCacheSelectivelySeeded; }
 		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable; }
 		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_acquire); }
 		bool IsDiskCacheActive() const
@@ -697,6 +699,10 @@ namespace SIE
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
+		// Set only after DataLoaded and the initial compilation batch have both
+		// completed. Keep this distinct from menu/UI lifecycle state so early menu
+		// initialization or background-mode entry cannot raise worker priority.
+		std::atomic<bool> startupCompilationComplete = false;
 
 		enum class LightingShaderTechniques
 		{
@@ -1007,7 +1013,7 @@ namespace SIE
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
 		void ProcessDeferredDiskWrites(std::stop_token stoken);
-		bool BackupActiveDiskCache();
+		bool BackupActiveDiskCache(const std::vector<std::string>& a_changedDefines);
 		void DeleteActiveDiskCache();
 		void RefreshPreviousDiskCacheInfo();
 
@@ -1030,6 +1036,7 @@ namespace SIE
 		bool featureSetChanged = false;
 		std::atomic_bool featureSetRevertPending{ false };
 		bool featureSetCacheBackedUp = false;
+		bool featureSetCacheSelectivelySeeded = false;
 		bool previousDiskCacheAvailable = false;
 		std::vector<CacheMismatch> cacheMismatches;
 		std::vector<CacheMismatch> previousCacheMismatches;
@@ -1099,7 +1106,7 @@ namespace SIE
 		 *
 		 * @return Void. Updates internal state and modifies `clearCache` and `fileDone` by reference.
 		 */
-		void UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& clearCache, bool& retFlag);
+		void UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& retFlag);
 		void processQueue();
 		void handleFileAction(efsw::WatchID, const std::string& dir, const std::string& filename, efsw::Action action, std::string) override;
 

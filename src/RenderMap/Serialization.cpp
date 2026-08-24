@@ -21,7 +21,7 @@ namespace CSX::RenderMap
 				"geometry-setup-begin", "geometry-setup-end", "pipeline-object-created", "pipeline-bind",
 				"render-target-bind", "depth-source-ready", "visibility-candidate", "visibility-result-ready",
 				"visibility-consumed", "cull-decision", "draw", "dispatch", "finish-command-list",
-				"execute-command-list", "shader-observed",
+				"execute-command-list", "shader-observed", "stage-shader-observed", "technique-resolved",
 			};
 			const auto index = static_cast<std::size_t>(a_kind);
 			return index < names.size() ? names[index] : "gap";
@@ -77,6 +77,32 @@ namespace CSX::RenderMap
 				json(std::format("obs-shader-{}-g{}", a_observationId, a_generation));
 		}
 
+		const char* ShaderStageName(ShaderStage a_stage) noexcept
+		{
+			return a_stage == ShaderStage::kPixel ? "pixel" : "vertex";
+		}
+
+		const char* ShaderSelectionRouteName(ShaderSelectionRoute a_route) noexcept
+		{
+			switch (a_route) {
+			case ShaderSelectionRoute::kEngine: return "engine";
+			case ShaderSelectionRoute::kCSXCache: return "csx-cache";
+			case ShaderSelectionRoute::kCSXFallback: return "csx-fallback";
+			case ShaderSelectionRoute::kSkipped: return "skipped";
+			case ShaderSelectionRoute::kMissing: return "missing";
+			default: return "unknown";
+			}
+		}
+
+		json StageShaderObservationId(
+			ShaderStage a_stage,
+			std::uint64_t a_observationId,
+			std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-{}-shader-{}-g{}", ShaderStageName(a_stage), a_observationId, a_generation));
+		}
+
 		const ShaderObservationRecord* FindShaderObservation(
 			const CaptureSnapshot* a_snapshot,
 			std::uint64_t a_observationId) noexcept
@@ -89,6 +115,20 @@ namespace CSX::RenderMap
 					return a_record.observationId == a_observationId;
 				});
 			return found == a_snapshot->shaderObservations.end() ? nullptr : std::addressof(*found);
+		}
+
+		const StageShaderObservationRecord* FindStageShaderObservation(
+			const CaptureSnapshot* a_snapshot,
+			std::uint64_t a_observationId) noexcept
+		{
+			if (!a_snapshot || a_observationId == 0)
+				return nullptr;
+			const auto found = std::find_if(
+				a_snapshot->stageShaderObservations.begin(), a_snapshot->stageShaderObservations.end(),
+				[&](const StageShaderObservationRecord& a_record) {
+					return a_record.observationId == a_observationId;
+				});
+			return found == a_snapshot->stageShaderObservations.end() ? nullptr : std::addressof(*found);
 		}
 
 		template <std::size_t N>
@@ -132,6 +172,48 @@ namespace CSX::RenderMap
 			};
 		}
 
+		json SerializeStageShaderObservation(
+			const StageShaderObservationRecord* a_observation,
+			const EventPayload& a_payload,
+			std::uint64_t a_generation)
+		{
+			const auto stage = static_cast<ShaderStage>(a_payload.words[4]);
+			const auto observationId = a_payload.words[0];
+			if (!a_observation) {
+				return {
+					{ "schema", "stage-shader-observation-v1" },
+					{ "stageShaderObservationId", StageShaderObservationId(stage, observationId, a_generation) },
+					{ "stage", ShaderStageName(stage) },
+					{ "d3dObjectPointer", PointerEvidence(a_payload.words[1]) },
+					{ "wrapperPointer", PointerEvidence(a_payload.words[2]) },
+					{ "pointerGeneration", a_payload.words[3] },
+					{ "wrapperDescriptor", a_payload.words[5] },
+					{ "bytecodeSize", a_payload.words[6] },
+					{ "identityDetailsAvailable", false },
+				};
+			}
+			return {
+				{ "schema", "stage-shader-observation-v1" },
+				{ "stageShaderObservationId", StageShaderObservationId(
+					a_observation->stage, observationId, a_generation) },
+				{ "stage", ShaderStageName(a_observation->stage) },
+				{ "d3dObjectPointer", PointerEvidence(a_observation->pointerEvidence) },
+				{ "wrapperPointer", PointerEvidence(a_observation->wrapperEvidence) },
+				{ "pointerGeneration", a_observation->pointerGeneration },
+				{ "wrapperDescriptor", a_observation->wrapperDescriptor },
+				{ "bytecodeSize", a_observation->bytecodeSize },
+				{ "bytecodeSha256", OptionalStoredString(a_observation->bytecodeSha256) },
+				{ "cachePath", OptionalStoredString(a_observation->cachePath) },
+				{ "truncated", {
+					{ "bytecodeSha256", a_observation->bytecodeSha256Truncated },
+					{ "cachePath", a_observation->cachePathTruncated },
+				} },
+				{ "identityDetailsAvailable", true },
+				{ "identityBasis", json::array({
+					"stage", "wrapper", "d3dObject", "wrapperDescriptor", "bytecodeSha256", "cachePath" }) },
+			};
+		}
+
 		json SerializeObservationRefs(
 			const EventRecord& a_event,
 			const CaptureSnapshot* a_snapshot)
@@ -150,6 +232,34 @@ namespace CSX::RenderMap
 				pointerEvidence = a_event.payload.words[1];
 				role = "first-observed";
 				break;
+			case PayloadSchema::kStageShaderObservation: {
+				const auto stage = static_cast<ShaderStage>(a_event.payload.words[4]);
+				const auto* observation = FindStageShaderObservation(a_snapshot, a_event.payload.words[0]);
+				return json::array({ {
+					{ "id", StageShaderObservationId(stage, a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", stage == ShaderStage::kPixel ? "pixel-shader" : "vertex-shader" },
+					{ "role", "first-observed" },
+					{ "pointerEvidence", PointerEvidence(observation ? observation->pointerEvidence : a_event.payload.words[1]) },
+				} });
+			}
+			case PayloadSchema::kTechniqueResolution: {
+				json refs = json::array();
+				for (const auto [stage, word] : std::array{
+					std::pair{ ShaderStage::kVertex, std::size_t{ 4 } },
+					std::pair{ ShaderStage::kPixel, std::size_t{ 5 } } }) {
+					const auto id = a_event.payload.words[word];
+					if (id == 0)
+						continue;
+					const auto* observation = FindStageShaderObservation(a_snapshot, id);
+					refs.push_back({
+						{ "id", StageShaderObservationId(stage, id, a_event.sessionGeneration) },
+						{ "kind", stage == ShaderStage::kPixel ? "pixel-shader" : "vertex-shader" },
+						{ "role", "selected" },
+						{ "pointerEvidence", PointerEvidence(observation ? observation->pointerEvidence : 0) },
+					});
+				}
+				return refs;
+			}
 			default:
 				return json::array();
 			}
@@ -205,6 +315,29 @@ namespace CSX::RenderMap
 			case PayloadSchema::kShaderObservation:
 				return SerializeShaderObservation(
 					FindShaderObservation(a_snapshot, a_payload.words[0]), a_payload, a_generation);
+			case PayloadSchema::kStageShaderObservation:
+				return SerializeStageShaderObservation(
+					FindStageShaderObservation(a_snapshot, a_payload.words[0]), a_payload, a_generation);
+			case PayloadSchema::kTechniqueResolution: {
+				const auto flags = a_payload.words[6];
+				return {
+					{ "schema", "technique-resolution-v1" },
+					{ "inputVertexDescriptor", a_payload.words[0] },
+					{ "inputPixelDescriptor", a_payload.words[1] },
+					{ "resolvedVertexDescriptor", a_payload.words[2] },
+					{ "resolvedPixelDescriptor", a_payload.words[3] },
+					{ "vertexShaderObservationId", StageShaderObservationId(
+						ShaderStage::kVertex, a_payload.words[4], a_generation) },
+					{ "pixelShaderObservationId", StageShaderObservationId(
+						ShaderStage::kPixel, a_payload.words[5], a_generation) },
+					{ "vertexRoute", ShaderSelectionRouteName(
+						static_cast<ShaderSelectionRoute>(flags & 0xFFu)) },
+					{ "pixelRoute", ShaderSelectionRouteName(
+						static_cast<ShaderSelectionRoute>((flags >> 8u) & 0xFFu)) },
+					{ "shaderFound", (flags & (1ull << 16u)) != 0 },
+					{ "skipPixelShader", (flags & (1ull << 17u)) != 0 },
+				};
+			}
 			default:
 				return {
 					{ "schema", std::format("unknown-{}", a_payload.schema) },
@@ -223,6 +356,7 @@ namespace CSX::RenderMap
 			{ "maxBytes", a_config.maxBytes },
 			{ "maxScopeDepth", a_config.maxScopeDepth },
 			{ "maxShaderObservations", a_config.maxShaderObservations },
+			{ "maxStageShaderObservations", a_config.maxStageShaderObservations },
 			{ "pointerPolicy", "retain" },
 		};
 	}
@@ -250,7 +384,8 @@ namespace CSX::RenderMap
 		const auto& snapshot = a_capture.snapshot;
 		const auto dropped = snapshot.statistics.droppedStopped +
 			snapshot.statistics.droppedEventLimit + snapshot.statistics.droppedByteLimit;
-		const auto structurallyTruncated = snapshot.statistics.droppedShaderObservations != 0;
+		const auto structurallyTruncated = snapshot.statistics.droppedShaderObservations != 0 ||
+			snapshot.statistics.droppedStageShaderObservations != 0;
 		return {
 			{ "captureId", a_capture.descriptor.captureId },
 			{ "numericId", a_capture.descriptor.numericId },
@@ -273,6 +408,8 @@ namespace CSX::RenderMap
 				{ "scopeMismatchCount", snapshot.statistics.scopeMismatch },
 				{ "shaderObservationCount", snapshot.shaderObservations.size() },
 				{ "droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
+				{ "stageShaderObservationCount", snapshot.stageShaderObservations.size() },
+				{ "droppedStageShaderObservationCount", snapshot.statistics.droppedStageShaderObservations },
 				{ "truncated", dropped != 0 || structurallyTruncated },
 			} },
 		};

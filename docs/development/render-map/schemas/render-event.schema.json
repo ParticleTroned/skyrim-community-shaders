@@ -175,6 +175,78 @@
           }
         }
       }
+    },
+    {
+      "if": { "properties": { "type": { "const": "stage-shader-observed" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "schema",
+              "stageShaderObservationId",
+              "stage",
+              "d3dObjectPointer",
+              "wrapperPointer",
+              "pointerGeneration",
+              "wrapperDescriptor",
+              "bytecodeSize",
+              "identityDetailsAvailable"
+            ],
+            "properties": {
+              "schema": { "const": "stage-shader-observation-v1" },
+              "stageShaderObservationId": { "$ref": "#/$defs/observationId" },
+              "stage": { "enum": ["vertex", "pixel"] },
+              "d3dObjectPointer": { "type": ["string", "null"] },
+              "wrapperPointer": { "type": ["string", "null"] },
+              "pointerGeneration": { "type": "integer", "minimum": 1 },
+              "wrapperDescriptor": { "type": "integer", "minimum": 0 },
+              "bytecodeSize": { "type": "integer", "minimum": 0 },
+              "bytecodeSha256": { "type": ["string", "null"], "pattern": "^[A-Fa-f0-9]{64}$" },
+              "cachePath": { "type": ["string", "null"] },
+              "identityDetailsAvailable": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "technique-resolved" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "schema",
+              "inputVertexDescriptor",
+              "inputPixelDescriptor",
+              "resolvedVertexDescriptor",
+              "resolvedPixelDescriptor",
+              "vertexShaderObservationId",
+              "pixelShaderObservationId",
+              "vertexRoute",
+              "pixelRoute",
+              "shaderFound",
+              "skipPixelShader"
+            ],
+            "properties": {
+              "schema": { "const": "technique-resolution-v1" },
+              "inputVertexDescriptor": { "type": "integer", "minimum": 0 },
+              "inputPixelDescriptor": { "type": "integer", "minimum": 0 },
+              "resolvedVertexDescriptor": { "type": "integer", "minimum": 0 },
+              "resolvedPixelDescriptor": { "type": "integer", "minimum": 0 },
+              "vertexShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "pixelShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "vertexRoute": { "enum": ["unknown", "engine", "csx-cache", "csx-fallback", "skipped", "missing"] },
+              "pixelRoute": { "enum": ["unknown", "engine", "csx-cache", "csx-fallback", "skipped", "missing"] },
+              "shaderFound": { "type": "boolean" },
+              "skipPixelShader": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -225,7 +297,9 @@
         "dispatch",
         "finish-command-list",
         "execute-command-list",
-        "shader-observed"
+        "shader-observed",
+        "stage-shader-observed",
+        "technique-resolved"
       ]
     },
     "frame": {

@@ -2358,6 +2358,14 @@ namespace SIE
 		return nullptr;
 	}
 
+	std::wstring ShaderCache::GetShaderDiskPath(
+		const RE::BSShader& shader, uint32_t descriptor, ShaderClass shaderClass) const
+	{
+		if (!SShaderCache::ResolveImageSpaceDescriptor(shader, descriptor))
+			return {};
+		return SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
+	}
+
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{

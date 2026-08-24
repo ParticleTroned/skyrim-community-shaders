@@ -30,13 +30,175 @@
 
 #include <algorithm>
 #include <array>
+#include <bcrypt.h>
 #include <cstring>
 #include <intrin.h>
+#include <limits>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
-std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
+namespace
+{
+	struct ShaderBytecodeRecord
+	{
+		std::vector<std::uint8_t> bytes;
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1> sha256{};
+		bool hashAvailable{ false };
+	};
+
+	std::unordered_map<void*, ShaderBytecodeRecord> g_shaderBytecodeMap;
+	std::shared_mutex g_shaderBytecodeMutex;
+
+	bool ComputeSha256Hex(
+		const void* a_data,
+		size_t a_size,
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1>& a_result)
+	{
+		if (!a_data || a_size > static_cast<size_t>(std::numeric_limits<ULONG>::max()))
+			return false;
+		struct AlgorithmProvider
+		{
+			AlgorithmProvider() noexcept
+			{
+				if (BCryptOpenAlgorithmProvider(&handle, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+					handle = nullptr;
+			}
+			~AlgorithmProvider()
+			{
+				if (handle)
+					BCryptCloseAlgorithmProvider(handle, 0);
+			}
+			BCRYPT_ALG_HANDLE handle{ nullptr };
+		};
+		static AlgorithmProvider provider;
+		if (!provider.handle)
+			return false;
+
+		DWORD objectBytes = 0;
+		DWORD copiedBytes = 0;
+		if (BCryptGetProperty(
+				provider.handle, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes),
+				sizeof(objectBytes), &copiedBytes, 0) < 0) {
+			return false;
+		}
+		std::vector<UCHAR> hashObject(objectBytes);
+		BCRYPT_HASH_HANDLE hash = nullptr;
+		if (BCryptCreateHash(
+				provider.handle, &hash, hashObject.data(), static_cast<ULONG>(hashObject.size()),
+				nullptr, 0, 0) < 0) {
+			return false;
+		}
+		std::array<UCHAR, 32> digest{};
+		const auto hashStatus = BCryptHashData(
+			hash, reinterpret_cast<PUCHAR>(const_cast<void*>(a_data)), static_cast<ULONG>(a_size), 0);
+		const auto finishStatus = hashStatus < 0 ? hashStatus :
+			BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+		BCryptDestroyHash(hash);
+		if (finishStatus < 0) {
+			return false;
+		}
+		constexpr char hex[] = "0123456789abcdef";
+		for (size_t index = 0; index < digest.size(); ++index) {
+			a_result[index * 2] = hex[digest[index] >> 4u];
+			a_result[index * 2 + 1] = hex[digest[index] & 0x0Fu];
+		}
+		a_result.back() = '\0';
+		return true;
+	}
+
+	struct BoundStageSelection
+	{
+		std::uintptr_t wrapper{ 0 };
+		std::uintptr_t d3dObject{ 0 };
+		std::uint32_t wrapperDescriptor{ 0 };
+		CSX::RenderMap::ShaderSelectionRoute route{ CSX::RenderMap::ShaderSelectionRoute::kUnknown };
+	};
+
+	struct TechniqueSelectionContext
+	{
+		BoundStageSelection vertex;
+		BoundStageSelection pixel;
+	};
+
+	thread_local TechniqueSelectionContext* g_techniqueSelectionContext = nullptr;
+
+	class TechniqueSelectionGuard
+	{
+	public:
+		explicit TechniqueSelectionGuard(TechniqueSelectionContext* a_context) noexcept :
+			previous(g_techniqueSelectionContext)
+		{
+			if (a_context) {
+				active = true;
+				g_techniqueSelectionContext = a_context;
+			}
+		}
+		~TechniqueSelectionGuard()
+		{
+			if (active)
+				g_techniqueSelectionContext = previous;
+		}
+		TechniqueSelectionGuard(const TechniqueSelectionGuard&) = delete;
+		TechniqueSelectionGuard& operator=(const TechniqueSelectionGuard&) = delete;
+
+	private:
+		TechniqueSelectionContext* previous{ nullptr };
+		bool active{ false };
+	};
+
+	template <class T>
+	void CaptureStageSelection(
+		T* a_wrapper,
+		CSX::RenderMap::ShaderStage a_stage,
+		CSX::RenderMap::ShaderSelectionRoute a_route) noexcept
+	{
+		if (!g_techniqueSelectionContext)
+			return;
+		auto& selected = a_stage == CSX::RenderMap::ShaderStage::kPixel ?
+			g_techniqueSelectionContext->pixel : g_techniqueSelectionContext->vertex;
+		selected = {
+			.wrapper = reinterpret_cast<std::uintptr_t>(a_wrapper),
+			.d3dObject = reinterpret_cast<std::uintptr_t>(a_wrapper ? a_wrapper->shader : nullptr),
+			.wrapperDescriptor = a_wrapper ? a_wrapper->id : 0,
+			.route = a_route,
+		};
+	}
+
+	std::string NarrowShaderCachePath(std::wstring_view a_path)
+	{
+		if (a_path.empty())
+			return {};
+		const auto required = WideCharToMultiByte(
+			CP_UTF8, WC_ERR_INVALID_CHARS, a_path.data(), static_cast<int>(a_path.size()),
+			nullptr, 0, nullptr, nullptr);
+		if (required <= 0)
+			return {};
+		std::string result(static_cast<size_t>(required), '\0');
+		if (WideCharToMultiByte(
+				CP_UTF8, WC_ERR_INVALID_CHARS, a_path.data(), static_cast<int>(a_path.size()),
+				result.data(), required, nullptr, nullptr) != required) {
+			return {};
+		}
+		return result;
+	}
+
+	bool GetShaderBytecodeIdentity(
+		void* a_shader,
+		std::uint64_t& a_size,
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1>& a_sha256) noexcept
+	{
+		std::shared_lock lock(g_shaderBytecodeMutex);
+		const auto found = g_shaderBytecodeMap.find(a_shader);
+		if (found == g_shaderBytecodeMap.end())
+			return false;
+		a_size = found->second.bytes.size();
+		a_sha256 = found->second.hashAvailable ? found->second.sha256 :
+			std::array<char, CSX::RenderMap::kSha256HexLength + 1>{};
+		return true;
+	}
+}
 
 namespace
 {
@@ -45,17 +207,20 @@ namespace
 
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
 {
-	// Grab a copy since the pointer isn't going to be valid forever
-	auto codeCopy = std::make_unique<uint8_t[]>(BytecodeLength);
-	memcpy(codeCopy.get(), Bytecode, BytecodeLength);
+	ShaderBytecodeRecord record;
+	record.bytes.resize(BytecodeLength);
+	memcpy(record.bytes.data(), Bytecode, BytecodeLength);
+	record.hashAvailable = ComputeSha256Hex(Bytecode, BytecodeLength, record.sha256);
 	logger::debug(fmt::runtime("Saving shader at index {:x} with {} bytes:\t{:x}"), (std::uintptr_t)Shader, BytecodeLength, (std::uintptr_t)Bytecode);
-	ShaderBytecodeMap.emplace(Shader, std::make_pair(std::move(codeCopy), BytecodeLength));
+	std::unique_lock lock(g_shaderBytecodeMutex);
+	g_shaderBytecodeMap.insert_or_assign(Shader, std::move(record));
 }
 
-const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Shader)
+std::vector<std::uint8_t> GetShaderBytecode(void* Shader)
 {
 	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
-	return ShaderBytecodeMap.at(Shader);
+	std::shared_lock lock(g_shaderBytecodeMutex);
+	return g_shaderBytecodeMap.at(Shader).bytes;
 }
 
 namespace
@@ -587,13 +752,13 @@ namespace
 }
 
 template <class ShaderType>
-void DumpShader(const REX::BSShader* thisClass, const ShaderType* shader, const std::pair<std::unique_ptr<uint8_t[]>, size_t>& bytecode)
+void DumpShader(const REX::BSShader* thisClass, const ShaderType* shader, const std::vector<std::uint8_t>& bytecode)
 {
 	static_assert(std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> || std::is_same_v<ShaderType, RE::BSGraphics::PixelShader>);
 
-	uint8_t* dxbcData = new uint8_t[bytecode.second];
-	size_t dxbcLen = bytecode.second;
-	memcpy(dxbcData, bytecode.first.get(), bytecode.second);
+	uint8_t* dxbcData = new uint8_t[bytecode.size()];
+	size_t dxbcLen = bytecode.size();
+	memcpy(dxbcData, bytecode.data(), bytecode.size());
 
 	constexpr auto shaderExtStr = std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> ? "vs" : "ps";
 	constexpr auto shaderTypeStr = std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> ? "vertex" : "pixel";
@@ -730,6 +895,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	// Only check against non-shader bits
 	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
 
+	TechniqueSelectionContext selectedStages;
+	TechniqueSelectionGuard selectedStagesGuard(renderMapScope.IsActive() ? std::addressof(selectedStages) : nullptr);
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 	if (phaseDiagActive) {
 		const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
@@ -747,6 +914,12 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		}
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
 			shaderFound = false;
+			CaptureStageSelection<RE::BSGraphics::VertexShader>(
+				nullptr, CSX::RenderMap::ShaderStage::kVertex, CSX::RenderMap::ShaderSelectionRoute::kMissing);
+			CaptureStageSelection<RE::BSGraphics::PixelShader>(
+				nullptr, CSX::RenderMap::ShaderStage::kPixel,
+				skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
+					CSX::RenderMap::ShaderSelectionRoute::kMissing);
 		} else {
 			state->settingCustomShader = true;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
@@ -759,6 +932,11 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			if (pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 			state->settingCustomShader = false;
+			CaptureStageSelection(vertexShader, CSX::RenderMap::ShaderStage::kVertex,
+				CSX::RenderMap::ShaderSelectionRoute::kCSXFallback);
+			CaptureStageSelection(pixelShader, CSX::RenderMap::ShaderStage::kPixel,
+				skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
+					CSX::RenderMap::ShaderSelectionRoute::kCSXFallback);
 			shaderFound = true;
 		}
 		if (phaseDiagActive) {
@@ -770,6 +948,69 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	state->lastModifiedVertexDescriptor = state->modifiedVertexDescriptor;
 	state->lastModifiedPixelDescriptor = state->modifiedPixelDescriptor;
+
+	if (renderMapScope.IsActive()) {
+		if (!shaderFound) {
+			selectedStages.vertex = { .route = CSX::RenderMap::ShaderSelectionRoute::kMissing };
+			selectedStages.pixel = {
+				.route = skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
+					CSX::RenderMap::ShaderSelectionRoute::kMissing,
+			};
+		} else if (skipPixelShader) {
+			selectedStages.pixel = { .route = CSX::RenderMap::ShaderSelectionRoute::kSkipped };
+		}
+
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1> vertexSha256{};
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1> pixelSha256{};
+		std::uint64_t vertexBytecodeSize = 0;
+		std::uint64_t pixelBytecodeSize = 0;
+		GetShaderBytecodeIdentity(
+			reinterpret_cast<void*>(selectedStages.vertex.d3dObject), vertexBytecodeSize, vertexSha256);
+		GetShaderBytecodeIdentity(
+			reinterpret_cast<void*>(selectedStages.pixel.d3dObject), pixelBytecodeSize, pixelSha256);
+		const auto isCSXRoute = [](CSX::RenderMap::ShaderSelectionRoute a_route) {
+			return a_route == CSX::RenderMap::ShaderSelectionRoute::kCSXCache ||
+				a_route == CSX::RenderMap::ShaderSelectionRoute::kCSXFallback;
+		};
+		const auto vertexCachePath = isCSXRoute(selectedStages.vertex.route) ?
+			NarrowShaderCachePath(shaderCache->GetShaderDiskPath(
+				*shader, state->modifiedVertexDescriptor, SIE::ShaderClass::Vertex)) : std::string{};
+		const auto pixelCachePath = isCSXRoute(selectedStages.pixel.route) ?
+			NarrowShaderCachePath(shaderCache->GetShaderDiskPath(
+				*shader, state->modifiedPixelDescriptor, SIE::ShaderClass::Pixel)) : std::string{};
+		renderMap.RecordTechniqueResolution({
+			.inputVertexDescriptor = vertexDescriptor,
+			.inputPixelDescriptor = pixelDescriptor,
+			.resolvedVertexDescriptor = state->modifiedVertexDescriptor,
+			.resolvedPixelDescriptor = state->modifiedPixelDescriptor,
+			.shaderFound = shaderFound,
+			.skipPixelShader = skipPixelShader,
+			.vertex = {
+				.route = selectedStages.vertex.route,
+				.shader = {
+					.stage = CSX::RenderMap::ShaderStage::kVertex,
+					.wrapper = selectedStages.vertex.wrapper,
+					.d3dObject = selectedStages.vertex.d3dObject,
+					.wrapperDescriptor = selectedStages.vertex.wrapperDescriptor,
+					.bytecodeSize = vertexBytecodeSize,
+					.bytecodeSha256 = vertexSha256.data(),
+					.cachePath = vertexCachePath,
+				},
+			},
+			.pixel = {
+				.route = selectedStages.pixel.route,
+				.shader = {
+					.stage = CSX::RenderMap::ShaderStage::kPixel,
+					.wrapper = selectedStages.pixel.wrapper,
+					.d3dObject = selectedStages.pixel.d3dObject,
+					.wrapperDescriptor = selectedStages.pixel.wrapperDescriptor,
+					.bytecodeSize = pixelBytecodeSize,
+					.bytecodeSha256 = pixelSha256.data(),
+					.cachePath = pixelCachePath,
+				},
+			},
+		});
+	}
 
 	if (phaseDiagActive) {
 		const uint64_t totalEndTicks = ReadFrameDiagCounterTicks();
@@ -1486,6 +1727,8 @@ namespace Hooks
 						if (state->enabledClasses[type - 1]) {
 							RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 							if (vertexShader) {
+								CaptureStageSelection(vertexShader, CSX::RenderMap::ShaderStage::kVertex,
+									CSX::RenderMap::ShaderSelectionRoute::kCSXCache);
 								globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
 								*globals::game::currentVertexShader = a_vertexShader;
 								globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
@@ -1498,6 +1741,9 @@ namespace Hooks
 
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 
+			CaptureStageSelection(a_vertexShader, CSX::RenderMap::ShaderStage::kVertex,
+				a_vertexShader ? CSX::RenderMap::ShaderSelectionRoute::kEngine :
+					CSX::RenderMap::ShaderSelectionRoute::kMissing);
 			*globals::game::currentVertexShader = a_vertexShader;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(a_vertexShader->shader), NULL, NULL);
 		}
@@ -1519,6 +1765,8 @@ namespace Hooks
 						if (state->enabledClasses[type - 1]) {
 							RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
 							if (pixelShader) {
+								CaptureStageSelection(pixelShader, CSX::RenderMap::ShaderStage::kPixel,
+									CSX::RenderMap::ShaderSelectionRoute::kCSXCache);
 								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 								*globals::game::currentPixelShader = a_pixelShader;
 								return;
@@ -1528,6 +1776,9 @@ namespace Hooks
 				}
 			}
 
+			CaptureStageSelection(a_pixelShader, CSX::RenderMap::ShaderStage::kPixel,
+				a_pixelShader ? CSX::RenderMap::ShaderSelectionRoute::kEngine :
+					CSX::RenderMap::ShaderSelectionRoute::kMissing);
 			*globals::game::currentPixelShader = a_pixelShader;
 
 			if (a_pixelShader)

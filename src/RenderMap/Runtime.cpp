@@ -52,6 +52,48 @@ namespace CSX::RenderMap
 			};
 		}
 
+		EventPayload StageShaderObservationPayload(
+			const StageShaderObservationInput& a_shader,
+			const StageShaderObservationResult& a_observation) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kStageShaderObservation),
+				.words = {
+					a_observation.observationId,
+					a_shader.d3dObject,
+					a_shader.wrapper,
+					a_observation.pointerGeneration,
+					static_cast<std::uint64_t>(a_shader.stage),
+					a_shader.wrapperDescriptor,
+					a_shader.bytecodeSize,
+					a_shader.bytecodeSha256.empty() ? 0u : 1u,
+				},
+			};
+		}
+
+		EventPayload TechniqueResolutionPayload(
+			const TechniqueResolution& a_resolution,
+			std::uint64_t a_vertexObservationId,
+			std::uint64_t a_pixelObservationId) noexcept
+		{
+			const auto flags = static_cast<std::uint64_t>(a_resolution.vertex.route) |
+				(static_cast<std::uint64_t>(a_resolution.pixel.route) << 8u) |
+				(a_resolution.shaderFound ? (1ull << 16u) : 0u) |
+				(a_resolution.skipPixelShader ? (1ull << 17u) : 0u);
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kTechniqueResolution),
+				.words = {
+					a_resolution.inputVertexDescriptor,
+					a_resolution.inputPixelDescriptor,
+					a_resolution.resolvedVertexDescriptor,
+					a_resolution.resolvedPixelDescriptor,
+					a_vertexObservationId,
+					a_pixelObservationId,
+					flags,
+				},
+			};
+		}
+
 		EventPayload GeometryPayload(const GeometryBoundary& a_boundary) noexcept
 		{
 			return {
@@ -148,6 +190,32 @@ namespace CSX::RenderMap
 	void Runtime::RetireShaderObservation(std::uintptr_t a_shader) noexcept
 	{
 		collector.RetireShaderObservation(a_shader);
+	}
+
+	void Runtime::RecordTechniqueResolution(const TechniqueResolution& a_resolution) noexcept
+	{
+		if (!collector.IsCapturing())
+			return;
+
+		const auto vertex = collector.ObserveStageShader(a_resolution.vertex.shader);
+		const auto pixel = collector.ObserveStageShader(a_resolution.pixel.shader);
+		const auto captureGeneration = vertex.sessionGeneration != 0 ? vertex.sessionGeneration :
+			(pixel.sessionGeneration != 0 ? pixel.sessionGeneration : collector.ActiveGeneration());
+		if (captureGeneration == 0)
+			return;
+		if (vertex.firstSeen) {
+			collector.RecordForGeneration(
+				EventKind::kStageShaderObserved,
+				StageShaderObservationPayload(a_resolution.vertex.shader, vertex), 0, captureGeneration);
+		}
+		if (pixel.firstSeen) {
+			collector.RecordForGeneration(
+				EventKind::kStageShaderObserved,
+				StageShaderObservationPayload(a_resolution.pixel.shader, pixel), 0, captureGeneration);
+		}
+		collector.RecordForGeneration(
+			EventKind::kTechniqueResolved,
+			TechniqueResolutionPayload(a_resolution, vertex.observationId, pixel.observationId), 0, captureGeneration);
 	}
 
 	Collector::ScopeGuard Runtime::EnterGeometry(const GeometryBoundary& a_boundary) noexcept

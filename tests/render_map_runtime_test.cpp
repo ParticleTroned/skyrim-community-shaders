@@ -196,6 +196,92 @@ namespace
 		Check(secondTechnique != snapshot->events.rend() && secondTechnique->payload.words[0] == 0,
 			"overflowed shader was silently joined to an existing observation");
 	}
+
+	void TestResolvedStageShaderIdentity()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxStageShaderObservations = 4;
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "stage identity capture did not start");
+		{
+			auto technique = runtime.EnterTechnique({
+				.shader = 0x1000, .shaderType = 6, .vertexDescriptor = 7, .pixelDescriptor = 8,
+				.fxpFilename = "Lighting",
+			});
+			runtime.RecordTechniqueResolution({
+				.inputVertexDescriptor = 7,
+				.inputPixelDescriptor = 8,
+				.resolvedVertexDescriptor = 17,
+				.resolvedPixelDescriptor = 18,
+				.shaderFound = true,
+				.vertex = {
+					.route = ShaderSelectionRoute::kCSXCache,
+					.shader = {
+						.stage = ShaderStage::kVertex, .wrapper = 0x2000, .d3dObject = 0x3000,
+						.wrapperDescriptor = 17, .bytecodeSize = 128,
+						.bytecodeSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+						.cachePath = "Data/ShaderCache/Lighting/11.vso",
+					},
+				},
+				.pixel = {
+					.route = ShaderSelectionRoute::kEngine,
+					.shader = {
+						.stage = ShaderStage::kPixel, .wrapper = 0x4000, .d3dObject = 0x5000,
+						.wrapperDescriptor = 18, .bytecodeSize = 256,
+						.bytecodeSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					},
+				},
+			});
+		}
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->stageShaderObservations.size() == 2,
+			"resolved stage shaders were not catalogued");
+		Check(snapshot->events.size() == 6, "resolved technique event sequence is wrong");
+		Check(snapshot->events[2].kind == EventKind::kStageShaderObserved,
+			"vertex stage first-seen event is missing");
+		Check(snapshot->events[3].kind == EventKind::kStageShaderObserved,
+			"pixel stage first-seen event is missing");
+		Check(snapshot->events[4].kind == EventKind::kTechniqueResolved,
+			"technique resolution event is missing");
+		Check(snapshot->events[4].payload.words[2] == 17 && snapshot->events[4].payload.words[3] == 18,
+			"resolved descriptors are wrong");
+		Check(snapshot->events[4].payload.words[4] != 0 && snapshot->events[4].payload.words[5] != 0,
+			"resolution did not reference both selected stage shaders");
+		Check(std::string_view(snapshot->stageShaderObservations[0].cachePath.data()) ==
+			"Data/ShaderCache/Lighting/11.vso", "stage cache path was not retained");
+	}
+
+	void TestStageShaderObservationBoundIsExplicit()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxStageShaderObservations = 1;
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "bounded stage capture did not start");
+		{
+			auto technique = runtime.EnterTechnique({ .shader = 1, .shaderType = 1 });
+			runtime.RecordTechniqueResolution({
+				.shaderFound = true,
+				.vertex = {
+					.route = ShaderSelectionRoute::kEngine,
+					.shader = { .stage = ShaderStage::kVertex, .wrapper = 2, .d3dObject = 3 },
+				},
+				.pixel = {
+					.route = ShaderSelectionRoute::kEngine,
+					.shader = { .stage = ShaderStage::kPixel, .wrapper = 4, .d3dObject = 5 },
+				},
+			});
+		}
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->stageShaderObservations.size() == 1,
+			"stage shader catalogue exceeded its bound");
+		Check(snapshot->statistics.droppedStageShaderObservations == 1,
+			"stage shader overflow was not reported");
+		const auto resolved = std::find_if(
+			snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kTechniqueResolved; });
+		Check(resolved != snapshot->events.end() && resolved->payload.words[4] != 0 && resolved->payload.words[5] == 0,
+			"overflowed stage shader was silently joined to an existing observation");
+	}
 }
 
 int main()
@@ -206,6 +292,8 @@ int main()
 		TestShaderIdentityGenerations();
 		TestCpuFrameUpdatePreservesEyeContext();
 		TestShaderObservationBoundIsExplicit();
+		TestResolvedStageShaderIdentity();
+		TestStageShaderObservationBoundIsExplicit();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

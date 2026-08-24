@@ -226,7 +226,8 @@ namespace CSX::RenderMap
 			const auto serializedEventCount = snapshot.events.size() + (lostEvents == 0 ? 0 : 1);
 			const bool truncated = lostEvents != 0;
 			const bool structurallyIncomplete = snapshot.statistics.scopeOverflow != 0 ||
-				snapshot.statistics.scopeMismatch != 0 || snapshot.statistics.droppedShaderObservations != 0;
+				snapshot.statistics.scopeMismatch != 0 || snapshot.statistics.droppedShaderObservations != 0 ||
+				snapshot.statistics.droppedStageShaderObservations != 0;
 			const bool terminalFailure = snapshot.stopReason == StopReason::kShutdown ||
 				snapshot.stopReason == StopReason::kFailure;
 			const bool incomplete = truncated || structurallyIncomplete || terminalFailure;
@@ -240,12 +241,14 @@ namespace CSX::RenderMap
 				completionErrors.push_back("scope nesting mismatch occurred during capture");
 			if (snapshot.statistics.droppedShaderObservations != 0)
 				completionErrors.push_back("shader observation capacity was exceeded during capture");
+			if (snapshot.statistics.droppedStageShaderObservations != 0)
+				completionErrors.push_back("stage shader observation capacity was exceeded during capture");
 			if (terminalFailure)
 				completionErrors.push_back("capture ended during shutdown or failure handling");
 			const auto summary = SerializeCaptureSummary(a_capture);
 			json manifest = {
 				{ "schema", {
-					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 1 },
+					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 2 },
 					{ "producerVersion", "collector-v1" },
 				} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -262,6 +265,7 @@ namespace CSX::RenderMap
 					{ "maxDurationMs", std::chrono::duration_cast<std::chrono::milliseconds>(snapshot.config.maxDuration).count() },
 					{ "maxEvents", snapshot.config.maxEvents }, { "maxBytes", snapshot.config.maxBytes },
 					{ "maxShaderObservations", snapshot.config.maxShaderObservations },
+					{ "maxStageShaderObservations", snapshot.config.maxStageShaderObservations },
 					{ "pointerPolicy", "retain" },
 				} },
 				{ "clock", {
@@ -283,6 +287,8 @@ namespace CSX::RenderMap
 					{ "csx.stopRaceRejectionCount", snapshot.statistics.droppedStopped },
 					{ "csx.shaderObservationCount", snapshot.shaderObservations.size() },
 					{ "csx.droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
+					{ "csx.stageShaderObservationCount", snapshot.stageShaderObservations.size() },
+					{ "csx.droppedStageShaderObservationCount", snapshot.statistics.droppedStageShaderObservations },
 				} },
 			};
 

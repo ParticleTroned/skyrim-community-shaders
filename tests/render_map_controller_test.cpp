@@ -176,6 +176,57 @@ namespace
 		Check(controller.GetCompleted(second->descriptor.captureId) == second, "latest capture was not retained");
 	}
 
+	void TestResolvedStageSerialization()
+	{
+		CaptureController controller;
+		CaptureDescriptor descriptor;
+		Check(controller.Start(Config(), descriptor) == ControlStatus::kSuccess,
+			"stage serialization capture did not start");
+		auto& runtime = GetRuntime();
+		{
+			auto technique = runtime.EnterTechnique({
+				.shader = 0x1000, .shaderType = 6, .vertexDescriptor = 7, .pixelDescriptor = 8,
+				.fxpFilename = "Lighting",
+			});
+			runtime.RecordTechniqueResolution({
+				.inputVertexDescriptor = 7,
+				.inputPixelDescriptor = 8,
+				.resolvedVertexDescriptor = 17,
+				.resolvedPixelDescriptor = 18,
+				.shaderFound = true,
+				.vertex = {
+					.route = ShaderSelectionRoute::kCSXCache,
+					.shader = {
+						.stage = ShaderStage::kVertex, .wrapper = 0x2000, .d3dObject = 0x3000,
+						.wrapperDescriptor = 17, .bytecodeSize = 128,
+						.bytecodeSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+						.cachePath = "Data/ShaderCache/Lighting/11.vso",
+					},
+				},
+				.pixel = { .route = ShaderSelectionRoute::kSkipped },
+			});
+		}
+		std::shared_ptr<const CompletedCapture> capture;
+		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess,
+			"stage serialization capture did not stop");
+		const auto page = SerializeEventPage(*capture, 0, 20, 42);
+		const auto& observed = page["events"][2];
+		Check(observed["type"] == "stage-shader-observed", "stage first-seen event type is wrong");
+		Check(observed["payload"]["stage"] == "vertex", "stage observation type is wrong");
+		Check(observed["payload"]["bytecodeSha256"] ==
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"stage bytecode identity is missing");
+		Check(observed["payload"]["cachePath"] == "Data/ShaderCache/Lighting/11.vso",
+			"stage cache path is missing");
+		const auto& resolved = page["events"][3];
+		Check(resolved["type"] == "technique-resolved", "technique resolution event type is wrong");
+		Check(resolved["payload"]["vertexRoute"] == "csx-cache", "vertex selection route is wrong");
+		Check(resolved["payload"]["pixelRoute"] == "skipped", "pixel selection route is wrong");
+		Check(resolved["observationRefs"].size() == 1 &&
+			resolved["observationRefs"][0]["kind"] == "vertex-shader",
+			"resolved stage reference is wrong");
+	}
+
 	void TestDurableArtifacts()
 	{
 		const auto root = std::filesystem::temp_directory_path() /
@@ -245,6 +296,7 @@ int main()
 	try {
 		TestControllerAndSerialization();
 		TestCompletedHistoryBound();
+		TestResolvedStageSerialization();
 		TestDurableArtifacts();
 		TestGapArtifact();
 		return 0;

@@ -115,9 +115,30 @@ unknown shader.
 
 This slice does not claim to prove destruction and recreation when a pointer
 returns with an identical tuple. A destructor or creation hook may call the
-provided retirement boundary later. Compiled VS/PS wrapper identities, bytecode
-hashes, resolved descriptors, cache paths, draw calls, and bound targets remain
-later observation layers.
+provided retirement boundary later.
+
+### Implemented technique-resolution slice
+
+`BSShader_BeginTechnique` now brackets the engine call with a thread-local
+selection context. The internal vertex/pixel binding call sites record the
+object actually passed to D3D, rather than inferring it from Skyrim's current
+wrapper globals (which intentionally retain the engine wrapper on a CSX cache
+hit). The explicit CSX fallback binding path records its selections too.
+
+Each completed attempt emits `technique-resolved` with input and modified
+descriptors, success/skip state, and a route for each stage: `engine`,
+`csx-cache`, `csx-fallback`, `skipped`, `missing`, or `unknown`. Selected D3D
+objects are capture-local typed `vertex-shader` or `pixel-shader` observations.
+Their first sighting emits `stage-shader-observed` with wrapper and D3D pointer
+evidence, pointer generation, wrapper descriptor, bytecode size and SHA-256
+when the D3D creation hook observed it, and the resolved cache path only when a
+CSX cache route actually supplied the object.
+
+The stage registry has its own `maxStageShaderObservations` bound. Its overflow
+is explicit structural incompleteness and cannot silently merge an unknown
+object. SHA-256 is calculated once at D3D shader creation; the render-thread
+observation path only copies the retained digest. Draw calls, bound targets,
+and explicit COM destruction remain later observation layers.
 
 ## Layer 4: derived render graph
 

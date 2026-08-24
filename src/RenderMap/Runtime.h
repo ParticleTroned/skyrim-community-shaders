@@ -13,6 +13,18 @@ namespace CSX::RenderMap
 		kTechniqueBoundary = 2,
 		kGeometryBoundary = 3,
 		kShaderObservation = 4,
+		kStageShaderObservation = 5,
+		kTechniqueResolution = 6,
+	};
+
+	enum class ShaderSelectionRoute : std::uint8_t
+	{
+		kUnknown,
+		kEngine,
+		kCSXCache,
+		kCSXFallback,
+		kSkipped,
+		kMissing,
 	};
 
 	struct RenderPassBoundary
@@ -48,6 +60,24 @@ namespace CSX::RenderMap
 		std::uint32_t renderFlags{ 0 };
 	};
 
+	struct TechniqueStageSelection
+	{
+		ShaderSelectionRoute route{ ShaderSelectionRoute::kUnknown };
+		StageShaderObservationInput shader;
+	};
+
+	struct TechniqueResolution
+	{
+		std::uint32_t inputVertexDescriptor{ 0 };
+		std::uint32_t inputPixelDescriptor{ 0 };
+		std::uint32_t resolvedVertexDescriptor{ 0 };
+		std::uint32_t resolvedPixelDescriptor{ 0 };
+		bool shaderFound{ false };
+		bool skipPixelShader{ false };
+		TechniqueStageSelection vertex;
+		TechniqueStageSelection pixel;
+	};
+
 	class Runtime
 	{
 	public:
@@ -61,6 +91,7 @@ namespace CSX::RenderMap
 		Collector::ScopeGuard EnterRenderPass(const RenderPassBoundary& a_boundary) noexcept;
 		Collector::ScopeGuard EnterTechnique(const TechniqueBoundary& a_boundary) noexcept;
 		Collector::ScopeGuard EnterGeometry(const GeometryBoundary& a_boundary) noexcept;
+		void RecordTechniqueResolution(const TechniqueResolution& a_resolution) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 
 	private:

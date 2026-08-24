@@ -18,6 +18,8 @@ namespace CSX::RenderMap
 	inline constexpr std::size_t kMaximumScopeDepth = 32;
 	inline constexpr std::size_t kMaximumShaderNameLength = 127;
 	inline constexpr std::size_t kMaximumShaderDefinesSuffixLength = 95;
+	inline constexpr std::size_t kMaximumShaderCachePathLength = 383;
+	inline constexpr std::size_t kSha256HexLength = 64;
 
 	enum class EventKind : std::uint16_t
 	{
@@ -52,6 +54,8 @@ namespace CSX::RenderMap
 		kFinishCommandList,
 		kExecuteCommandList,
 		kShaderObserved,
+		kStageShaderObserved,
+		kTechniqueResolved,
 	};
 
 	enum class Eye : std::uint8_t
@@ -111,6 +115,7 @@ namespace CSX::RenderMap
 		std::chrono::nanoseconds maxDuration{ std::chrono::seconds(1) };
 		std::uint8_t maxScopeDepth{ 8 };
 		std::uint32_t maxShaderObservations{ 1024 };
+		std::uint32_t maxStageShaderObservations{ 4096 };
 	};
 
 	struct FrameContext
@@ -145,7 +150,7 @@ namespace CSX::RenderMap
 	struct EventRecord
 	{
 		std::uint16_t schemaMajor{ 1 };
-		std::uint16_t schemaMinor{ 2 };
+		std::uint16_t schemaMinor{ 3 };
 		EventKind kind{ EventKind::kCaptureMarker };
 		std::uint16_t reserved{ 0 };
 		std::uint64_t captureNumericId{ 0 };
@@ -174,6 +179,13 @@ namespace CSX::RenderMap
 		std::uint64_t scopeOverflow{ 0 };
 		std::uint64_t scopeMismatch{ 0 };
 		std::uint64_t droppedShaderObservations{ 0 };
+		std::uint64_t droppedStageShaderObservations{ 0 };
+	};
+
+	enum class ShaderStage : std::uint8_t
+	{
+		kVertex = 1,
+		kPixel = 2,
 	};
 
 	struct ShaderObservationInput
@@ -207,6 +219,40 @@ namespace CSX::RenderMap
 		bool firstSeen{ false };
 	};
 
+	struct StageShaderObservationInput
+	{
+		ShaderStage stage{ ShaderStage::kVertex };
+		std::uintptr_t wrapper{ 0 };
+		std::uintptr_t d3dObject{ 0 };
+		std::uint32_t wrapperDescriptor{ 0 };
+		std::uint64_t bytecodeSize{ 0 };
+		std::string_view bytecodeSha256;
+		std::string_view cachePath;
+	};
+
+	struct StageShaderObservationRecord
+	{
+		std::uint64_t observationId{ 0 };
+		ShaderStage stage{ ShaderStage::kVertex };
+		std::uintptr_t wrapperEvidence{ 0 };
+		std::uintptr_t pointerEvidence{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		std::uint32_t wrapperDescriptor{ 0 };
+		std::uint64_t bytecodeSize{ 0 };
+		std::array<char, kSha256HexLength + 1> bytecodeSha256{};
+		std::array<char, kMaximumShaderCachePathLength + 1> cachePath{};
+		bool bytecodeSha256Truncated{ false };
+		bool cachePathTruncated{ false };
+	};
+
+	struct StageShaderObservationResult
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint64_t sessionGeneration{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		bool firstSeen{ false };
+	};
+
 	struct CaptureSnapshot
 	{
 		CollectorConfig config;
@@ -218,6 +264,7 @@ namespace CSX::RenderMap
 		CaptureStatistics statistics;
 		std::vector<EventRecord> events;
 		std::vector<ShaderObservationRecord> shaderObservations;
+		std::vector<StageShaderObservationRecord> stageShaderObservations;
 	};
 
 	class Collector
@@ -290,6 +337,7 @@ namespace CSX::RenderMap
 
 		std::uint64_t AllocateObservationId(std::uint64_t a_expectedGeneration = 0) noexcept;
 		ShaderObservationResult ObserveShader(const ShaderObservationInput& a_input) noexcept;
+		StageShaderObservationResult ObserveStageShader(const StageShaderObservationInput& a_input) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 		void SetThreadFrameContext(const FrameContext& a_context) noexcept;
 		FrameContext GetThreadFrameContext() const noexcept;

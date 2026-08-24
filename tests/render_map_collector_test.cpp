@@ -45,6 +45,9 @@ namespace
 		config = Config();
 		config.maxShaderObservations = 0;
 		Check(collector.Start(config) == StartResult::kInvalidBounds, "zero shader-observation bound was accepted");
+		config = Config();
+		config.maxStageShaderObservations = 0;
+		Check(collector.Start(config) == StartResult::kInvalidBounds, "zero stage-shader-observation bound was accepted");
 	}
 
 	void TestNestedScopes()

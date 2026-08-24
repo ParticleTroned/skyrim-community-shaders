@@ -84,18 +84,20 @@ device-context, and eye relationships empty or unknown. Atomic event/manifest
 writing, hashing, explicit gap materialization, and immediate finalization at a
 capture boundary are implemented and live-validated.
 
-The present scope IDs are not yet accompanied by typed observation declarations,
-so the live stream remains structurally valid but semantically unjoinable. The
-next gate is a generation-safe observation registry plus validation of actual
-captures. Per-thread buffer sharding, remaining geometry families, provenance
-injection, pipeline/target identity, and D3D draw/dispatch observation remain
-subsequent slices. Until those exist, this is bounded live evidence rather than
-a complete render graph.
+Engine shader families and the selected vertex/pixel D3D shader objects now
+have separately bounded, generation-scoped typed observation registries. The
+v1.1 service emits the actual selection route, input and modified descriptors,
+cache path for CSX-supplied objects, and creation-time bytecode SHA-256 when
+available. Overflow of either identity catalogue makes the capture explicitly
+incomplete. Per-thread buffer sharding, remaining geometry families,
+provenance injection, pipeline/target identity, D3D draw/dispatch observation,
+and COM destruction boundaries remain subsequent slices. Until those exist,
+this is bounded live evidence rather than a complete render graph.
 
 Example DevBench requests (use a unique `commandId` for each logical command):
 
 ```json
-{"contractMajor":1,"clientId":"render-study","commandId":"start-1","action":"start","maxFrames":4,"maxDurationMs":2000,"maxEvents":8192}
+{"contractMajor":1,"clientId":"render-study","commandId":"start-1","action":"start","maxFrames":4,"maxDurationMs":2000,"maxEvents":8192,"maxShaderObservations":1024,"maxStageShaderObservations":4096}
 {"contractMajor":1,"clientId":"render-study","commandId":"stop-1","action":"stop","captureId":"capture-live-..."}
 {"contractMajor":1,"clientId":"render-study","commandId":"events-1","action":"capture_events","captureId":"capture-live-...","offset":0,"limit":500}
 ```

@@ -60,11 +60,11 @@ struct ScreenshotFeature : public Feature
 	virtual void SaveSettings(json& a_json) override;
 	virtual void PostPostLoad() override;
 
-	/** Requests one capture from the render thread using an immutable settings snapshot. */
-	void RequestCapture();
+	/** Submits one contract-v1 capture for the native UI or screenshot hotkey. */
+	void RequestUiCapture();
 	/** Executes one versioned screenshot API command. Mutating calls must run on the game thread. */
 	nlohmann::json HandleApiRequest(const nlohmann::json& a_request);
-	/** Dispatches a UI/hotkey capture through the public service and returns its receipt. */
+	/** Dispatches a settings-based capture through the public screenshot service and returns its receipt. */
 	nlohmann::json RequestApiCapture(std::string_view a_origin = "csx_menu");
 	/** Returns whether Community Shaders screenshot capture is enabled at runtime. */
 	bool IsRuntimeEnabled() const noexcept { return loaded && enabled.load(std::memory_order_acquire); }

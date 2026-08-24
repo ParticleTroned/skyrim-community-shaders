@@ -10,7 +10,6 @@
 #include "Utils/Form.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
-#include "WaterAppearanceFallbackPolicy.h"
 
 #include "RE/B/BGSLocation.h"
 #include "RE/P/PlayerCharacter.h"
@@ -1135,7 +1134,7 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 	ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
-		ImGui::Text("Each profile defines its own scene brightness, Bloom, and Unified Water appearance.");
+		ImGui::Text("Each profile defines its own scene brightness, Bloom, and water appearance.");
 	}
 
 	if (settings.enabled) {
@@ -1154,7 +1153,7 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and Unified Water appearance used for each time and location type. Worldspace, location, and cell overrides are managed under Locations.");
+			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Worldspace, location, and cell overrides are managed under Locations.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
 
@@ -2639,12 +2638,10 @@ Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 	return Bloom::GetCommonBufferData(effectiveProfile, 1.0f);
 }
 
-WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings(
-	const WaterAppearance::Profile& a_fallbackProfile) const
+WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings() const
 {
-	if (WaterAppearanceFallbackPolicy::SelectEffectiveSource(IsRuntimeEnabled()) ==
-		WaterAppearanceFallbackPolicy::EffectiveSource::UnifiedWaterFallback)
-		return WaterAppearance::GetCommonBufferData(a_fallbackProfile);
+	if (!IsRuntimeEnabled())
+		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
 
 	const auto activeProfiles = GetActiveProfileBlend();
 	auto fromProfile = activeProfiles.from->water;

@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Features/WaterAppearanceFallbackPolicy.h"
-
 #include <nlohmann/json.hpp>
 
 #include <array>
@@ -16,11 +14,19 @@ namespace SettingsMigrations
 	inline constexpr std::string_view kCSUtilityFeatureName = "CSUtility";
 	inline constexpr std::string_view kUnifiedWaterSettingsName = "Unified Water";
 	inline constexpr std::string_view kUnifiedWaterFeatureName = "UnifiedWater";
-	inline constexpr std::string_view kUnifiedWaterAppearanceFallbackKey = WaterAppearanceFallbackPolicy::kFallbackKey;
 	inline constexpr std::string_view kLegacyWaterAppearanceSettingsKey = "waterAppearance";
 	inline constexpr std::string_view kLegacyWaterAppearanceForceGlobalKey = "forceGlobal";
 	inline constexpr std::string_view kLegacyWaterProfileExplicitKey = "legacyWaterExplicit";
-	inline constexpr auto kLegacyUnifiedWaterAppearanceKeys = WaterAppearanceFallbackPolicy::kAppearanceKeys;
+	inline constexpr std::array<std::string_view, 8> kLegacyUnifiedWaterAppearanceKeys{
+		"WaterBrightness",
+		"GlobalReflectionAmount",
+		"RefractionAmount",
+		"SunSpecularMultiplier",
+		"WaveAmplitude",
+		"FresnelMin",
+		"FresnelMax",
+		"Muddiness"
+	};
 
 	inline constexpr std::array<std::string_view, 8> kLegacyCSUtilityLightingKeys{
 		"skyBrightness",
@@ -45,8 +51,7 @@ namespace SettingsMigrations
 	// Migrates one root-settings source layer in place. The old Adaptive Brightness
 	// root is folded into Adaptive Balance, with explicit values under the new name
 	// taking precedence. Legacy CS Utility renderer fields and Unified Water's former
-	// global appearance fields are then moved into a named Unified Water fallback
-	// snapshot and mirrored into the canonical root. The CS Utility
+	// global appearance fields are then moved into the canonical root. The CS Utility
 	// enabled value is retained for DOF and copied to the global-lighting gate only when
 	// that layer is demonstrably legacy and explicitly contains the value.
 	bool MigrateAdaptiveBalanceRootLayer(
@@ -71,7 +76,8 @@ namespace SettingsMigrations
 	// patch; enabled and DOF settings remain in the source layer.
 	nlohmann::json ExtractAdaptiveBalanceFeaturePatch(nlohmann::json& a_csUtilityLayer);
 
-	// Moves the eight former top-level controls into Unified Water's compatibility
-	// fallback and mirrors them into an AdaptiveBrightness feature patch.
+	// Splits the eight legacy appearance controls from a feature-scoped UnifiedWater
+	// source layer. The moved fields are removed from a_unifiedWaterLayer and returned
+	// as an AdaptiveBrightness feature patch; all structural water settings remain.
 	nlohmann::json ExtractAdaptiveBalanceWaterFeaturePatch(nlohmann::json& a_unifiedWaterLayer);
 }

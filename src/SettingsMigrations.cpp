@@ -1,6 +1,7 @@
 #include "SettingsMigrations.h"
 
-#include "Features/WaterAppearanceFallbackPolicy.h"
+#include "Features/Bloom.h"
+#include "Features/WaterAppearanceMigration.h"
 
 #include <algorithm>
 #include <string>
@@ -24,9 +25,12 @@ bool SettingsMigrations::MatchesJsonSchema(const nlohmann::json& a_value, const 
 
 bool SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(const nlohmann::json& a_value)
 {
-	return WaterAppearanceFallbackPolicy::HasAppearanceValues(
-		a_value,
-		kLegacyUnifiedWaterAppearanceKeys);
+	return a_value.is_object() && std::ranges::any_of(
+									  kLegacyUnifiedWaterAppearanceKeys,
+									  [&](std::string_view a_key) {
+										  const auto valueIt = a_value.find(a_key.data());
+										  return valueIt != a_value.end() && valueIt->is_number();
+									  });
 }
 
 namespace
@@ -176,10 +180,9 @@ namespace
 		if (unifiedWaterIt == a_layer.end() || !unifiedWaterIt->is_object())
 			return false;
 
-		const auto fallbackIt = unifiedWaterIt->find(SettingsMigrations::kUnifiedWaterAppearanceFallbackKey.data());
-		const bool hasFallbackValues = fallbackIt != unifiedWaterIt->end() &&
-		                               SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(*fallbackIt);
-		if (!hasFallbackValues && !SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(*unifiedWaterIt))
+		if (!WaterAppearanceMigration::ContainsAnyKey(
+				*unifiedWaterIt,
+				SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys))
 			return false;
 
 		auto adaptiveIt = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
@@ -199,10 +202,9 @@ namespace
 			(*adaptiveIt)[std::string(SettingsMigrations::kLegacyWaterAppearanceSettingsKey)] = json::object();
 			legacyWaterIt = adaptiveIt->find(SettingsMigrations::kLegacyWaterAppearanceSettingsKey.data());
 		}
-		return WaterAppearanceFallbackPolicy::MigrateAppearanceValues(
+		return WaterAppearanceMigration::MoveValues(
 			*unifiedWaterIt,
 			*legacyWaterIt,
-			SettingsMigrations::kUnifiedWaterAppearanceFallbackKey,
 			SettingsMigrations::kLegacyWaterAppearanceForceGlobalKey,
 			forceGlobal,
 			SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys);
@@ -210,24 +212,12 @@ namespace
 
 	const json& GetBloomSchema()
 	{
-		// Only JSON shapes matter here. Keeping the migration schema independent of
-		// Bloom's runtime/UI implementation lets settings migrations remain a small,
-		// directly testable unit.
-		static const json profileSchema = {
-			{ "EnhancementIntensity", 0.0f },
-			{ "HaloRadius", 0.0f },
-			{ "HaloSpread", 0.0f },
-			{ "BloomSaturation", 0.0f },
-			{ "BloomTint", { 0.0f, 0.0f, 0.0f } },
-			{ "CompressionThreshold", 0.0f },
-			{ "CompressionCeiling", 0.0f },
-		};
 		static const json schema = {
 			{ "Enabled", 0u },
 			{ "SelectedPreset", 0u },
-			{ "Default", profileSchema },
-			{ "Fantasy", profileSchema },
-			{ "Dreamy", profileSchema },
+			{ "Default", Bloom::GetPresetProfile(0) },
+			{ "Fantasy", Bloom::GetPresetProfile(1) },
+			{ "Dreamy", Bloom::GetPresetProfile(2) },
 		};
 		return schema;
 	}

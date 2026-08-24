@@ -60,7 +60,7 @@ void WaterAppearance::DrawProfileControls(Profile& a_profile)
 {
 	SanitizeProfile(a_profile);
 
-	ImGui::TextWrapped("Identity values disable all water appearance processing and preserve Unified Water's native output path.");
+	ImGui::TextWrapped("Identity values disable all water appearance processing and preserve the native water output path.");
 
 	ImGui::SeparatorText("Output");
 	DrawWaterSlider(

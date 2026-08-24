@@ -5,7 +5,6 @@
 #include "Menu/ThemeManager.h"
 #include "State.h"
 #include "Util.h"
-#include "WaterAppearanceFallbackPolicy.h"
 
 #include "RE/L/LoadingMenu.h"
 #include "RE/M/MapMenu.h"
@@ -25,7 +24,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UseOpenShadersDepthBehaviour,
 	WaterTintColor,
 	WaterTintStrength,
-	WaterAppearanceFallback,
 	ShallowFallbackStrength,
 	DeepConnectionProbeReachUnits,
 	DeepContextDepthUnits,
@@ -95,7 +93,6 @@ namespace
 			kWaterTintStrengthMin,
 			kWaterTintStrengthMax,
 			defaults.WaterTintStrength);
-		WaterAppearance::SanitizeProfile(a_settings.WaterAppearanceFallback);
 		a_settings.ShallowFallbackStrength = ClampFiniteOrDefault(
 			a_settings.ShallowFallbackStrength,
 			kShallowFallbackStrengthMin,
@@ -566,12 +563,7 @@ void UnifiedWater::TryCompleteDeferredChildWorldspaceCull(RE::TES* tes)
 
 void UnifiedWater::LoadSettings(json& o_json)
 {
-	auto migratedSettings = o_json;
-	WaterAppearanceFallbackPolicy::CanonicalizeAppearanceFallback(
-		migratedSettings,
-		WaterAppearanceFallbackPolicy::kFallbackKey,
-		WaterAppearanceFallbackPolicy::kAppearanceKeys);
-	settings = migratedSettings;
+	settings = o_json;
 	const auto loadedModelVersion = o_json.value("SurfaceVisibilityModelVersion", 0u);
 	if (loadedModelVersion != kSurfaceVisibilityModelVersion) {
 		const Settings defaults{};
@@ -818,13 +810,6 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
 	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
 	return data;
-}
-
-WaterAppearance::Profile UnifiedWater::GetWaterAppearanceFallbackProfile() const
-{
-	auto profile = settings.WaterAppearanceFallback;
-	WaterAppearance::SanitizeProfile(profile);
-	return profile;
 }
 
 void UnifiedWater::DrawEssentialSettings()

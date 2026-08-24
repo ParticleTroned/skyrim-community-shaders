@@ -2,7 +2,6 @@
 #include "OverlayFeature.h"
 #include "UnifiedWater/Flowmap.h"
 #include "UnifiedWater/WaterCache.h"
-#include "WaterAppearance.h"
 
 #include <atomic>
 
@@ -31,9 +30,6 @@ struct UnifiedWater : OverlayFeature
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
-		// Compatibility snapshot used only when Adaptive Balance cannot provide an
-		// active profile. The user-facing controls remain owned by Adaptive Balance.
-		WaterAppearance::Profile WaterAppearanceFallback;
 		float ShallowFallbackStrength = 1.0f;
 		float DeepConnectionProbeReachUnits = 768.0f;
 		float DeepContextDepthUnits = 192.0f;
@@ -62,7 +58,6 @@ struct UnifiedWater : OverlayFeature
 
 	Settings settings;
 	CommonBufferData GetCommonBufferData() const;
-	WaterAppearance::Profile GetWaterAppearanceFallbackProfile() const;
 
 	struct TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams
 	{

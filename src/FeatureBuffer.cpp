@@ -252,7 +252,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::truePBR.settings,
 		globals::features::foliageLighting.GetCommonBufferData(),
 		globals::features::unifiedWater.GetCommonBufferData(),
-		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(
-			globals::features::unifiedWater.GetWaterAppearanceFallbackProfile()),
+		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
 		globals::features::adaptiveBrightness.GetEffectiveBloomSettings());
 }

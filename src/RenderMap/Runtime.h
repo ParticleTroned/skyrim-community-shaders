@@ -15,6 +15,25 @@ namespace CSX::RenderMap
 		kShaderObservation = 4,
 		kStageShaderObservation = 5,
 		kTechniqueResolution = 6,
+		kDrawCall = 7,
+		kDispatchCall = 8,
+	};
+
+	enum class DrawOperation : std::uint8_t
+	{
+		kDraw,
+		kDrawIndexed,
+		kDrawInstanced,
+		kDrawIndexedInstanced,
+		kDrawAuto,
+		kDrawInstancedIndirect,
+		kDrawIndexedInstancedIndirect,
+	};
+
+	enum class DispatchOperation : std::uint8_t
+	{
+		kDispatch,
+		kDispatchIndirect,
 	};
 
 	enum class ShaderSelectionRoute : std::uint8_t
@@ -92,10 +111,37 @@ namespace CSX::RenderMap
 		Collector::ScopeGuard EnterTechnique(const TechniqueBoundary& a_boundary) noexcept;
 		Collector::ScopeGuard EnterGeometry(const GeometryBoundary& a_boundary) noexcept;
 		void RecordTechniqueResolution(const TechniqueResolution& a_resolution) noexcept;
+		void SetImmediateContext(std::uintptr_t a_context) noexcept;
+		void BindStage(
+			std::uintptr_t a_context,
+			ShaderStage a_stage,
+			std::uintptr_t a_d3dObject) noexcept;
+		void RecordDraw(
+			std::uintptr_t a_context,
+			DrawOperation a_operation,
+			std::uint64_t a_argument0 = 0,
+			std::uint64_t a_argument1 = 0,
+			std::uint64_t a_argument2 = 0,
+			std::uint64_t a_argument3 = 0) noexcept;
+		void RecordDispatch(
+			std::uintptr_t a_context,
+			DispatchOperation a_operation,
+			std::uint64_t a_argument0 = 0,
+			std::uint64_t a_argument1 = 0,
+			std::uint64_t a_argument2 = 0,
+			std::uint64_t a_argument3 = 0) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 
 	private:
+		StageShaderObservationResult ResolveBoundStage(
+			ShaderStage a_stage,
+			std::uintptr_t a_d3dObject) noexcept;
+
 		Collector collector;
+		std::atomic_uintptr_t immediateContext{ 0 };
+		std::atomic_uintptr_t boundVertexShader{ 0 };
+		std::atomic_uintptr_t boundPixelShader{ 0 };
+		std::atomic_uintptr_t boundComputeShader{ 0 };
 	};
 
 	Runtime& GetRuntime() noexcept;

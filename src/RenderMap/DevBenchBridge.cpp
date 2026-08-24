@@ -155,10 +155,15 @@ namespace
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = {
 				{ "service", "communityshaders.render-map" },
-				{ "major", 1 }, { "minor", 1 }, { "schemaRevision", 2 },
+				{ "major", 1 }, { "minor", 2 }, { "schemaRevision", 3 },
 				{ "actions", json::array({ "registry", "status", "start", "stop", "capture_events" }) },
-				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1" }) },
-				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end" }) },
+				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "draw-call-v1", "dispatch-call-v1" }) },
+				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "draw", "dispatch" }) },
+				{ "executionCoverage", {
+					{ "deviceContext", "immediate-only" },
+					{ "deferredContexts", false },
+					{ "commandLists", false },
+				} },
 				{ "pointerPolicies", json::array({ "retain" }) },
 				{ "singleActiveCapture", true },
 				{ "completedCaptureHistory", 4 },

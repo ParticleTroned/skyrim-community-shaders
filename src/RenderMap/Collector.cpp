@@ -725,6 +725,41 @@ namespace CSX::RenderMap
 		return result;
 	}
 
+	StageShaderObservationResult Collector::FindStageShader(
+		ShaderStage a_stage,
+		std::uintptr_t a_d3dObject) noexcept
+	{
+		auto session = activeSession.load(std::memory_order_acquire);
+		if (!session || !session->accepting.load(std::memory_order_acquire) || a_d3dObject == 0)
+			return {};
+
+		session->inFlight.fetch_add(1, std::memory_order_acq_rel);
+		const auto releaseFlight = [&] { session->inFlight.fetch_sub(1, std::memory_order_release); };
+		if (!session->accepting.load(std::memory_order_acquire) || activeSession.load(std::memory_order_acquire) != session) {
+			releaseFlight();
+			return {};
+		}
+
+		StageShaderObservationResult result{ .sessionGeneration = session->generation };
+		{
+			std::lock_guard lock(session->stageShaderObservationMutex);
+			for (std::uint32_t index = 0; index < session->stageShaderObservationCount; ++index) {
+				const auto& record = session->stageShaderObservations[index];
+				if (record.stage == a_stage && record.pointerEvidence == a_d3dObject &&
+					record.observationId > result.observationId) {
+					result = {
+						.observationId = record.observationId,
+						.sessionGeneration = session->generation,
+						.pointerGeneration = record.pointerGeneration,
+						.firstSeen = false,
+					};
+				}
+			}
+		}
+		releaseFlight();
+		return result;
+	}
+
 	void Collector::RetireShaderObservation(std::uintptr_t a_shader) noexcept
 	{
 		auto session = activeSession.load(std::memory_order_acquire);

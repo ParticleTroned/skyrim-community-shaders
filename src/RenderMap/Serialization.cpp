@@ -79,7 +79,38 @@ namespace CSX::RenderMap
 
 		const char* ShaderStageName(ShaderStage a_stage) noexcept
 		{
-			return a_stage == ShaderStage::kPixel ? "pixel" : "vertex";
+			switch (a_stage) {
+			case ShaderStage::kPixel: return "pixel";
+			case ShaderStage::kCompute: return "compute";
+			default: return "vertex";
+			}
+		}
+
+		const char* StageShaderKind(ShaderStage a_stage) noexcept
+		{
+			switch (a_stage) {
+			case ShaderStage::kPixel: return "pixel-shader";
+			case ShaderStage::kCompute: return "compute-shader";
+			default: return "vertex-shader";
+			}
+		}
+
+		const char* DrawOperationName(DrawOperation a_operation) noexcept
+		{
+			switch (a_operation) {
+			case DrawOperation::kDrawIndexed: return "draw-indexed";
+			case DrawOperation::kDrawInstanced: return "draw-instanced";
+			case DrawOperation::kDrawIndexedInstanced: return "draw-indexed-instanced";
+			case DrawOperation::kDrawAuto: return "draw-auto";
+			case DrawOperation::kDrawInstancedIndirect: return "draw-instanced-indirect";
+			case DrawOperation::kDrawIndexedInstancedIndirect: return "draw-indexed-instanced-indirect";
+			default: return "draw";
+			}
+		}
+
+		const char* DispatchOperationName(DispatchOperation a_operation) noexcept
+		{
+			return a_operation == DispatchOperation::kDispatchIndirect ? "dispatch-indirect" : "dispatch";
 		}
 
 		const char* ShaderSelectionRouteName(ShaderSelectionRoute a_route) noexcept
@@ -237,7 +268,7 @@ namespace CSX::RenderMap
 				const auto* observation = FindStageShaderObservation(a_snapshot, a_event.payload.words[0]);
 				return json::array({ {
 					{ "id", StageShaderObservationId(stage, a_event.payload.words[0], a_event.sessionGeneration) },
-					{ "kind", stage == ShaderStage::kPixel ? "pixel-shader" : "vertex-shader" },
+					{ "kind", StageShaderKind(stage) },
 					{ "role", "first-observed" },
 					{ "pointerEvidence", PointerEvidence(observation ? observation->pointerEvidence : a_event.payload.words[1]) },
 				} });
@@ -253,12 +284,42 @@ namespace CSX::RenderMap
 					const auto* observation = FindStageShaderObservation(a_snapshot, id);
 					refs.push_back({
 						{ "id", StageShaderObservationId(stage, id, a_event.sessionGeneration) },
-						{ "kind", stage == ShaderStage::kPixel ? "pixel-shader" : "vertex-shader" },
+						{ "kind", StageShaderKind(stage) },
 						{ "role", "selected" },
 						{ "pointerEvidence", PointerEvidence(observation ? observation->pointerEvidence : 0) },
 					});
 				}
 				return refs;
+			}
+			case PayloadSchema::kDrawCall: {
+				json refs = json::array();
+				for (const auto [stage, word] : std::array{
+					std::pair{ ShaderStage::kVertex, std::size_t{ 2 } },
+					std::pair{ ShaderStage::kPixel, std::size_t{ 3 } } }) {
+					const auto id = a_event.payload.words[word];
+					if (id == 0)
+						continue;
+					const auto* observation = FindStageShaderObservation(a_snapshot, id);
+					refs.push_back({
+						{ "id", StageShaderObservationId(stage, id, a_event.sessionGeneration) },
+						{ "kind", StageShaderKind(stage) },
+						{ "role", "bound-at-draw" },
+						{ "pointerEvidence", PointerEvidence(observation ? observation->pointerEvidence : 0) },
+					});
+				}
+				return refs;
+			}
+			case PayloadSchema::kDispatchCall: {
+				const auto id = a_event.payload.words[2];
+				if (id == 0)
+					return json::array();
+				const auto* observation = FindStageShaderObservation(a_snapshot, id);
+				return json::array({ {
+					{ "id", StageShaderObservationId(ShaderStage::kCompute, id, a_event.sessionGeneration) },
+					{ "kind", StageShaderKind(ShaderStage::kCompute) },
+					{ "role", "bound-at-dispatch" },
+					{ "pointerEvidence", PointerEvidence(observation ? observation->pointerEvidence : 0) },
+				} });
 			}
 			default:
 				return json::array();
@@ -336,6 +397,71 @@ namespace CSX::RenderMap
 						static_cast<ShaderSelectionRoute>((flags >> 8u) & 0xFFu)) },
 					{ "shaderFound", (flags & (1ull << 16u)) != 0 },
 					{ "skipPixelShader", (flags & (1ull << 17u)) != 0 },
+				};
+			}
+			case PayloadSchema::kDrawCall: {
+				const auto operation = static_cast<DrawOperation>(a_payload.words[1]);
+				json arguments;
+				switch (operation) {
+				case DrawOperation::kDrawIndexed:
+					arguments = { { "indexCount", a_payload.words[4] },
+						{ "startIndexLocation", a_payload.words[5] },
+						{ "baseVertexLocation", static_cast<std::int32_t>(a_payload.words[6]) } };
+					break;
+				case DrawOperation::kDrawInstanced:
+					arguments = { { "vertexCountPerInstance", a_payload.words[4] },
+						{ "instanceCount", a_payload.words[5] },
+						{ "startVertexLocation", a_payload.words[6] },
+						{ "startInstanceLocation", a_payload.words[7] } };
+					break;
+				case DrawOperation::kDrawIndexedInstanced:
+					arguments = { { "indexCountPerInstance", a_payload.words[4] },
+						{ "instanceCount", a_payload.words[5] },
+						{ "startIndexLocation", a_payload.words[6] },
+						{ "baseVertexLocation", static_cast<std::int32_t>(a_payload.words[7] & 0xFFFFFFFFu) },
+						{ "startInstanceLocation", a_payload.words[7] >> 32u } };
+					break;
+				case DrawOperation::kDrawInstancedIndirect:
+				case DrawOperation::kDrawIndexedInstancedIndirect:
+					arguments = { { "argumentBufferPointer", PointerEvidence(a_payload.words[4]) },
+						{ "alignedByteOffset", a_payload.words[5] } };
+					break;
+				case DrawOperation::kDrawAuto:
+					arguments = json::object();
+					break;
+				default:
+					arguments = { { "vertexCount", a_payload.words[4] },
+						{ "startVertexLocation", a_payload.words[5] } };
+					break;
+				}
+				return {
+					{ "schema", "draw-call-v1" },
+					{ "operation", DrawOperationName(operation) },
+					{ "immediateContextPointer", PointerEvidence(a_payload.words[0]) },
+					{ "vertexShaderObservationId", StageShaderObservationId(
+						ShaderStage::kVertex, a_payload.words[2], a_generation) },
+					{ "pixelShaderObservationId", StageShaderObservationId(
+						ShaderStage::kPixel, a_payload.words[3], a_generation) },
+					{ "arguments", std::move(arguments) },
+				};
+			}
+			case PayloadSchema::kDispatchCall: {
+				const auto operation = static_cast<DispatchOperation>(a_payload.words[1]);
+				json arguments = operation == DispatchOperation::kDispatchIndirect ? json{
+					{ "argumentBufferPointer", PointerEvidence(a_payload.words[3]) },
+					{ "alignedByteOffset", a_payload.words[4] },
+				} : json{
+					{ "threadGroupCountX", a_payload.words[3] },
+					{ "threadGroupCountY", a_payload.words[4] },
+					{ "threadGroupCountZ", a_payload.words[5] },
+				};
+				return {
+					{ "schema", "dispatch-call-v1" },
+					{ "operation", DispatchOperationName(operation) },
+					{ "immediateContextPointer", PointerEvidence(a_payload.words[0]) },
+					{ "computeShaderObservationId", StageShaderObservationId(
+						ShaderStage::kCompute, a_payload.words[2], a_generation) },
+					{ "arguments", std::move(arguments) },
 				};
 			}
 			default:

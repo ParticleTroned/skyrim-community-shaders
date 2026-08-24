@@ -153,7 +153,7 @@ namespace CSX::RenderMap
 		{
 			return {
 				{ "schema", {
-					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 2 },
+					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 4 },
 					{ "producerVersion", "collector-v1" },
 				} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -248,7 +248,7 @@ namespace CSX::RenderMap
 			const auto summary = SerializeCaptureSummary(a_capture);
 			json manifest = {
 				{ "schema", {
-					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 2 },
+					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 3 },
 					{ "producerVersion", "collector-v1" },
 				} },
 				{ "captureId", a_capture.descriptor.captureId },

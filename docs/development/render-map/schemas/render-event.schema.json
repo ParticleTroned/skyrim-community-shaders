@@ -64,17 +64,33 @@
       "if": { "properties": { "type": { "const": "draw" } } },
       "then": {
         "properties": {
-          "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
           "payload": {
-            "type": "object",
-            "required": ["operation", "pipelineStateObservationId"],
-            "properties": {
-              "operation": {
-                "enum": ["Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced", "DrawAuto", "DrawInstancedIndirect", "DrawIndexedInstancedIndirect"]
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["operation", "pipelineStateObservationId"],
+                "properties": {
+                  "operation": {
+                    "enum": ["Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced", "DrawAuto", "DrawInstancedIndirect", "DrawIndexedInstancedIndirect"]
+                  },
+                  "pipelineStateObservationId": { "$ref": "#/$defs/observationId" }
+                },
+                "additionalProperties": true
               },
-              "pipelineStateObservationId": { "$ref": "#/$defs/observationId" }
-            },
-            "additionalProperties": true
+              {
+                "type": "object",
+                "required": ["schema", "operation", "immediateContextPointer", "vertexShaderObservationId", "pixelShaderObservationId", "arguments"],
+                "properties": {
+                  "schema": { "const": "draw-call-v1" },
+                  "operation": { "enum": ["draw", "draw-indexed", "draw-instanced", "draw-indexed-instanced", "draw-auto", "draw-instanced-indirect", "draw-indexed-instanced-indirect"] },
+                  "immediateContextPointer": { "type": ["string", "null"] },
+                  "vertexShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "pixelShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "arguments": { "type": "object" }
+                },
+                "additionalProperties": true
+              }
+            ]
           }
         }
       }
@@ -83,15 +99,30 @@
       "if": { "properties": { "type": { "const": "dispatch" } } },
       "then": {
         "properties": {
-          "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
           "payload": {
-            "type": "object",
-            "required": ["operation", "pipelineStateObservationId"],
-            "properties": {
-              "operation": { "enum": ["Dispatch", "DispatchIndirect"] },
-              "pipelineStateObservationId": { "$ref": "#/$defs/observationId" }
-            },
-            "additionalProperties": true
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["operation", "pipelineStateObservationId"],
+                "properties": {
+                  "operation": { "enum": ["Dispatch", "DispatchIndirect"] },
+                  "pipelineStateObservationId": { "$ref": "#/$defs/observationId" }
+                },
+                "additionalProperties": true
+              },
+              {
+                "type": "object",
+                "required": ["schema", "operation", "immediateContextPointer", "computeShaderObservationId", "arguments"],
+                "properties": {
+                  "schema": { "const": "dispatch-call-v1" },
+                  "operation": { "enum": ["dispatch", "dispatch-indirect"] },
+                  "immediateContextPointer": { "type": ["string", "null"] },
+                  "computeShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "arguments": { "type": "object" }
+                },
+                "additionalProperties": true
+              }
+            ]
           }
         }
       }
@@ -196,7 +227,7 @@
             "properties": {
               "schema": { "const": "stage-shader-observation-v1" },
               "stageShaderObservationId": { "$ref": "#/$defs/observationId" },
-              "stage": { "enum": ["vertex", "pixel"] },
+              "stage": { "enum": ["vertex", "pixel", "compute"] },
               "d3dObjectPointer": { "type": ["string", "null"] },
               "wrapperPointer": { "type": ["string", "null"] },
               "pointerGeneration": { "type": "integer", "minimum": 1 },

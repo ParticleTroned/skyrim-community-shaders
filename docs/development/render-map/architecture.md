@@ -137,8 +137,26 @@ CSX cache route actually supplied the object.
 The stage registry has its own `maxStageShaderObservations` bound. Its overflow
 is explicit structural incompleteness and cannot silently merge an unknown
 object. SHA-256 is calculated once at D3D shader creation; the render-thread
-observation path only copies the retained digest. Draw calls, bound targets,
-and explicit COM destruction remain later observation layers.
+observation path only copies the retained digest. Bound targets and explicit
+COM destruction remain later observation layers.
+
+### Implemented immediate-context execution slice
+
+The immediate D3D11 context now tracks the actual object supplied to
+`VSSetShader`, `PSSetShader`, and `CSSetShader`. Draw and dispatch detours emit
+`draw-call-v1` and `dispatch-call-v1` only during an explicitly armed capture.
+Each execution event joins the effective bound stage objects to the typed stage
+catalogue. If an object has no richer engine-wrapper observation, the collector
+creates an explicitly minimal pointer-based stage observation rather than
+inventing a wrapper, descriptor, cache path, or bytecode digest.
+
+This slice covers the immediate context only. It does not interpret a deferred
+context, command list, or command-list replay as immediate execution. Those
+capabilities remain false in the service registry until context and command-list
+identity can preserve recording order separately from execution order. Render
+targets and the remainder of the pipeline state are also not yet part of the
+draw identity. The context pointer in the execution payload is retained evidence,
+not a typed `deviceContextObservationId`.
 
 ## Layer 4: derived render graph
 
@@ -222,7 +240,9 @@ understood by CSX:
 1. `BSShader::BeginTechnique` or family-specific equivalent;
 2. `BSShader::SetupGeometry` or family-specific equivalent;
 3. `BSBatchRenderer::RenderPassImmediately`;
-4. bounded `ID3D11DeviceContext::Draw*` and `Dispatch` observation;
+4. bounded immediate-context `ID3D11DeviceContext::Draw*` and `Dispatch`
+   observation (implemented), followed by explicit deferred-context and
+   command-list coverage;
 5. render-target/depth-target changes needed to identify the active phase;
 6. depth-culling candidate, result-ready, and consume boundaries.
 

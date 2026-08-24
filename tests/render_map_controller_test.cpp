@@ -206,6 +206,9 @@ namespace
 				.pixel = { .route = ShaderSelectionRoute::kSkipped },
 			});
 		}
+		runtime.SetImmediateContext(0x9000);
+		runtime.BindStage(0x9000, ShaderStage::kVertex, 0x3000);
+		runtime.RecordDraw(0x9000, DrawOperation::kDrawIndexed, 24, 3, 2);
 		std::shared_ptr<const CompletedCapture> capture;
 		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess,
 			"stage serialization capture did not stop");
@@ -225,6 +228,15 @@ namespace
 		Check(resolved["observationRefs"].size() == 1 &&
 			resolved["observationRefs"][0]["kind"] == "vertex-shader",
 			"resolved stage reference is wrong");
+		const auto& draw = page["events"][5];
+		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v1",
+			"draw event schema is wrong");
+		Check(draw["payload"]["operation"] == "draw-indexed" &&
+			draw["payload"]["arguments"]["indexCount"] == 24,
+			"draw operation arguments are missing");
+		Check(draw["observationRefs"].size() == 1 &&
+			draw["observationRefs"][0]["role"] == "bound-at-draw",
+			"draw did not join to the selected vertex shader");
 	}
 
 	void TestDurableArtifacts()

@@ -150,7 +150,7 @@ namespace CSX::RenderMap
 	struct EventRecord
 	{
 		std::uint16_t schemaMajor{ 1 };
-		std::uint16_t schemaMinor{ 3 };
+		std::uint16_t schemaMinor{ 4 };
 		EventKind kind{ EventKind::kCaptureMarker };
 		std::uint16_t reserved{ 0 };
 		std::uint64_t captureNumericId{ 0 };
@@ -186,6 +186,7 @@ namespace CSX::RenderMap
 	{
 		kVertex = 1,
 		kPixel = 2,
+		kCompute = 3,
 	};
 
 	struct ShaderObservationInput
@@ -338,6 +339,9 @@ namespace CSX::RenderMap
 		std::uint64_t AllocateObservationId(std::uint64_t a_expectedGeneration = 0) noexcept;
 		ShaderObservationResult ObserveShader(const ShaderObservationInput& a_input) noexcept;
 		StageShaderObservationResult ObserveStageShader(const StageShaderObservationInput& a_input) noexcept;
+		StageShaderObservationResult FindStageShader(
+			ShaderStage a_stage,
+			std::uintptr_t a_d3dObject) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 		void SetThreadFrameContext(const FrameContext& a_context) noexcept;
 		FrameContext GetThreadFrameContext() const noexcept;

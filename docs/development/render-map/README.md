@@ -51,12 +51,15 @@ The collector test covers lifecycle, all budget classes, nested correlation,
 scope overflow and mismatch, stale guards, and concurrent writers.
 
 The first live bridge is [`Runtime.h`](../../../src/RenderMap/Runtime.h). The
-existing CSX hook owners now emit bounded render-pass, technique-call, and
+existing CSX hook owners emit bounded render-pass, technique-call, and
 geometry-setup scopes when—and only when—an explicit controller has started a
-capture. No additional detours or vtable replacements are installed. Immediate
-render-pass coverage includes the three existing callsites and Terrain
-Blending's shared draw route; geometry coverage in this slice is Lighting,
-Effect, and Grass, matching the always-installed core hook owners.
+capture. Immediate render-pass coverage includes the three existing callsites
+and Terrain Blending's shared draw route; geometry coverage in this slice is
+Lighting, Effect, and Grass, matching the always-installed core hook owners.
+The D3D11 observer also tracks immediate-context VS/PS/CS bindings and bounded
+draw/dispatch execution. Existing `Draw` and `DrawIndexed` hook owners compose
+the observation directly; other draw variants and dispatch have dedicated
+detours.
 
 There is intentionally no UI or automatic capture trigger, so ordinary game
 execution only performs the inactive check. The diagnostic DevBench service
@@ -86,13 +89,15 @@ capture boundary are implemented and live-validated.
 
 Engine shader families and the selected vertex/pixel D3D shader objects now
 have separately bounded, generation-scoped typed observation registries. The
-v1.1 service emits the actual selection route, input and modified descriptors,
+v1.2 service emits the actual selection route, input and modified descriptors,
 cache path for CSX-supplied objects, and creation-time bytecode SHA-256 when
-available. Overflow of either identity catalogue makes the capture explicitly
-incomplete. Per-thread buffer sharding, remaining geometry families,
-provenance injection, pipeline/target identity, D3D draw/dispatch observation,
-and COM destruction boundaries remain subsequent slices. Until those exist,
-this is bounded live evidence rather than a complete render graph.
+available. Draws join the effective bound VS/PS observations; dispatches join a
+compute-shader observation. Overflow of either identity catalogue makes the
+capture explicitly incomplete. Per-thread buffer sharding, remaining geometry
+families, provenance injection, render-target and full pipeline identity,
+deferred-context/command-list coverage, and COM destruction boundaries remain
+subsequent slices. Until those exist, this is bounded live evidence rather than
+a complete render graph.
 
 Example DevBench requests (use a unique `commandId` for each logical command):
 

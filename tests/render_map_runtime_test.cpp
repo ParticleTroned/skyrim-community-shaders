@@ -282,6 +282,58 @@ namespace
 		Check(resolved != snapshot->events.end() && resolved->payload.words[4] != 0 && resolved->payload.words[5] == 0,
 			"overflowed stage shader was silently joined to an existing observation");
 	}
+
+	void TestImmediateContextDrawAndDispatchState()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::EventRecordSize() * 64;
+		config.maxStageShaderObservations = 8;
+		runtime.SetImmediateContext(0x9000);
+		runtime.BindStage(0x9000, ShaderStage::kVertex, 0x3000);
+		runtime.BindStage(0x9000, ShaderStage::kPixel, 0x5000);
+		runtime.BindStage(0x9000, ShaderStage::kCompute, 0x7000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "draw capture did not start");
+		runtime.RecordTechniqueResolution({
+			.shaderFound = true,
+			.vertex = {
+				.route = ShaderSelectionRoute::kCSXCache,
+				.shader = { .stage = ShaderStage::kVertex, .wrapper = 0x2000, .d3dObject = 0x3000,
+					.wrapperDescriptor = 17, .bytecodeSize = 128 },
+			},
+			.pixel = {
+				.route = ShaderSelectionRoute::kEngine,
+				.shader = { .stage = ShaderStage::kPixel, .wrapper = 0x4000, .d3dObject = 0x5000,
+					.wrapperDescriptor = 18, .bytecodeSize = 256 },
+			},
+		});
+		runtime.RecordDraw(0x9000, DrawOperation::kDrawIndexed, 24, 3, 2);
+		runtime.RecordDraw(0x9001, DrawOperation::kDraw, 99);
+		runtime.RecordDispatch(0x9000, DispatchOperation::kDispatch, 8, 4, 2);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->stageShaderObservations.size() == 3,
+			"draw and dispatch did not share or create the expected stage identities");
+		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(draw != snapshot->events.end(), "immediate-context draw was not recorded");
+		Check(draw->payload.schema == static_cast<std::uint16_t>(PayloadSchema::kDrawCall),
+			"draw payload schema is wrong");
+		Check(draw->payload.words[0] == 0x9000 && draw->payload.words[2] != 0 && draw->payload.words[3] != 0,
+			"draw did not retain context and selected stage references");
+		Check(draw->payload.words[4] == 24 && draw->payload.words[5] == 3 && draw->payload.words[6] == 2,
+			"draw arguments are wrong");
+		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) == 1,
+			"non-immediate context draw was recorded");
+		const auto dispatch = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDispatch; });
+		Check(dispatch != snapshot->events.end() && dispatch->payload.words[2] != 0,
+			"dispatch did not reference its compute shader");
+		Check(dispatch->payload.words[3] == 8 && dispatch->payload.words[4] == 4 &&
+			dispatch->payload.words[5] == 2, "dispatch arguments are wrong");
+	}
 }
 
 int main()
@@ -294,6 +346,7 @@ int main()
 		TestShaderObservationBoundIsExplicit();
 		TestResolvedStageShaderIdentity();
 		TestStageShaderObservationBoundIsExplicit();
+		TestImmediateContextDrawAndDispatchState();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

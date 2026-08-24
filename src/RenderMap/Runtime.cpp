@@ -94,6 +94,54 @@ namespace CSX::RenderMap
 			};
 		}
 
+		EventPayload DrawCallPayload(
+			std::uintptr_t a_context,
+			DrawOperation a_operation,
+			std::uint64_t a_vertexObservationId,
+			std::uint64_t a_pixelObservationId,
+			std::uint64_t a_argument0,
+			std::uint64_t a_argument1,
+			std::uint64_t a_argument2,
+			std::uint64_t a_argument3) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kDrawCall),
+				.words = {
+					a_context,
+					static_cast<std::uint64_t>(a_operation),
+					a_vertexObservationId,
+					a_pixelObservationId,
+					a_argument0,
+					a_argument1,
+					a_argument2,
+					a_argument3,
+				},
+			};
+		}
+
+		EventPayload DispatchCallPayload(
+			std::uintptr_t a_context,
+			DispatchOperation a_operation,
+			std::uint64_t a_computeObservationId,
+			std::uint64_t a_argument0,
+			std::uint64_t a_argument1,
+			std::uint64_t a_argument2,
+			std::uint64_t a_argument3) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kDispatchCall),
+				.words = {
+					a_context,
+					static_cast<std::uint64_t>(a_operation),
+					a_computeObservationId,
+					a_argument0,
+					a_argument1,
+					a_argument2,
+					a_argument3,
+				},
+			};
+		}
+
 		EventPayload GeometryPayload(const GeometryBoundary& a_boundary) noexcept
 		{
 			return {
@@ -216,6 +264,108 @@ namespace CSX::RenderMap
 		collector.RecordForGeneration(
 			EventKind::kTechniqueResolved,
 			TechniqueResolutionPayload(a_resolution, vertex.observationId, pixel.observationId), 0, captureGeneration);
+	}
+
+	void Runtime::SetImmediateContext(std::uintptr_t a_context) noexcept
+	{
+		if (immediateContext.exchange(a_context, std::memory_order_acq_rel) == a_context)
+			return;
+		boundVertexShader.store(0, std::memory_order_release);
+		boundPixelShader.store(0, std::memory_order_release);
+		boundComputeShader.store(0, std::memory_order_release);
+	}
+
+	void Runtime::BindStage(
+		std::uintptr_t a_context,
+		ShaderStage a_stage,
+		std::uintptr_t a_d3dObject) noexcept
+	{
+		if (a_context == 0 || a_context != immediateContext.load(std::memory_order_acquire))
+			return;
+		switch (a_stage) {
+		case ShaderStage::kVertex:
+			boundVertexShader.store(a_d3dObject, std::memory_order_release);
+			break;
+		case ShaderStage::kPixel:
+			boundPixelShader.store(a_d3dObject, std::memory_order_release);
+			break;
+		case ShaderStage::kCompute:
+			boundComputeShader.store(a_d3dObject, std::memory_order_release);
+			break;
+		}
+	}
+
+	StageShaderObservationResult Runtime::ResolveBoundStage(
+		ShaderStage a_stage,
+		std::uintptr_t a_d3dObject) noexcept
+	{
+		if (a_d3dObject == 0)
+			return {};
+		auto observation = collector.FindStageShader(a_stage, a_d3dObject);
+		if (observation.observationId != 0)
+			return observation;
+
+		const StageShaderObservationInput input{
+			.stage = a_stage,
+			.d3dObject = a_d3dObject,
+		};
+		observation = collector.ObserveStageShader(input);
+		if (observation.firstSeen) {
+			collector.RecordForGeneration(
+				EventKind::kStageShaderObserved,
+				StageShaderObservationPayload(input, observation), 0, observation.sessionGeneration);
+		}
+		return observation;
+	}
+
+	void Runtime::RecordDraw(
+		std::uintptr_t a_context,
+		DrawOperation a_operation,
+		std::uint64_t a_argument0,
+		std::uint64_t a_argument1,
+		std::uint64_t a_argument2,
+		std::uint64_t a_argument3) noexcept
+	{
+		if (!collector.IsCapturing() || a_context == 0 ||
+			a_context != immediateContext.load(std::memory_order_acquire)) {
+			return;
+		}
+		const auto vertex = ResolveBoundStage(
+			ShaderStage::kVertex, boundVertexShader.load(std::memory_order_acquire));
+		const auto pixel = ResolveBoundStage(
+			ShaderStage::kPixel, boundPixelShader.load(std::memory_order_acquire));
+		const auto captureGeneration = vertex.sessionGeneration != 0 ? vertex.sessionGeneration :
+			(pixel.sessionGeneration != 0 ? pixel.sessionGeneration : collector.ActiveGeneration());
+		collector.RecordForGeneration(
+			EventKind::kDraw,
+			DrawCallPayload(
+				a_context, a_operation, vertex.observationId, pixel.observationId,
+				a_argument0, a_argument1, a_argument2, a_argument3),
+			0, captureGeneration);
+	}
+
+	void Runtime::RecordDispatch(
+		std::uintptr_t a_context,
+		DispatchOperation a_operation,
+		std::uint64_t a_argument0,
+		std::uint64_t a_argument1,
+		std::uint64_t a_argument2,
+		std::uint64_t a_argument3) noexcept
+	{
+		if (!collector.IsCapturing() || a_context == 0 ||
+			a_context != immediateContext.load(std::memory_order_acquire)) {
+			return;
+		}
+		const auto compute = ResolveBoundStage(
+			ShaderStage::kCompute, boundComputeShader.load(std::memory_order_acquire));
+		const auto captureGeneration = compute.sessionGeneration != 0 ?
+			compute.sessionGeneration : collector.ActiveGeneration();
+		collector.RecordForGeneration(
+			EventKind::kDispatch,
+			DispatchCallPayload(
+				a_context, a_operation, compute.observationId,
+				a_argument0, a_argument1, a_argument2, a_argument3),
+			0, captureGeneration);
 	}
 
 	Collector::ScopeGuard Runtime::EnterGeometry(const GeometryBoundary& a_boundary) noexcept

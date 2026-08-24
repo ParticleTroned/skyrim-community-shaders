@@ -1,6 +1,6 @@
 // Screenshot Feature
 // Non-blocking screenshot tool for flat (SE/AE) and VR. GPU copy runs on the
-// render thread; encoding and disk I/O run on a bounded worker pool so
+// render thread; encoding and disk I/O run on a dedicated worker thread so
 // capture does not stall the frame.
 
 #include "Features/ScreenshotFeature.h"
@@ -32,8 +32,7 @@
 namespace
 {
 	constexpr uint32_t kCaptureTimeoutPresents = 6;
-	constexpr std::size_t kScreenshotWorkerCount = 4;
-	constexpr std::size_t kMaxOutstandingScreenshots = 12;
+	constexpr std::size_t kMaxOutstandingScreenshots = 2;
 	constexpr auto kReadbackMapTimeout = std::chrono::milliseconds(500);
 	constexpr auto kReadbackMapRetryDelay = std::chrono::milliseconds(1);
 	constexpr uint32_t kFramedEyeOutputWidth = 2560;
@@ -1719,6 +1718,8 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sdrUsePng = a_json["SdrUsePng"];
 	if (a_json.contains("FrameCaptureUsePng"))
 		frameCaptureUsePng = a_json["FrameCaptureUsePng"];
+	if (a_json.contains("FrameCaptureIntervalFrames"))
+		frameCaptureIntervalFrames = std::clamp(a_json["FrameCaptureIntervalFrames"].get<uint32_t>(), 1u, 60u);
 	if (a_json.contains("CopyToClipboard"))
 		copyToClipboard = a_json["CopyToClipboard"];
 	vr::EVREye legacyFramedEye = vr::Eye_Left;
@@ -1780,6 +1781,7 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 	a_json["ApplyCropToScreenshot"] = applyCropToScreenshot;
 	a_json["SdrUsePng"] = sdrUsePng;
 	a_json["FrameCaptureUsePng"] = frameCaptureUsePng;
+	a_json["FrameCaptureIntervalFrames"] = frameCaptureIntervalFrames;
 	a_json["CopyToClipboard"] = copyToClipboard;
 	a_json["ScreenshotEye"] = CaptureEyeName(screenshotEye);
 	a_json["FrameCaptureEye"] = CaptureEyeName(frameCaptureEye);
@@ -1965,6 +1967,14 @@ void ScreenshotFeature::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Both formats are lossless.");
 		ImGui::Text("BMP is much larger but avoids PNG compression backpressure during frame capture.");
+	}
+	int intervalFrames = static_cast<int>(frameCaptureIntervalFrames);
+	if (ImGui::SliderInt("Interval (game frames)", &intervalFrames, 1, 60)) {
+		frameCaptureIntervalFrames = static_cast<uint32_t>(intervalFrames);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Captures one lossless image set every N rendered game frames.");
+		ImGui::Text("Six is the conservative default; lower values increase storage and writer pressure.");
 	}
 	if (globals::game::isVR) {
 		int eye = static_cast<int>(frameCaptureEye);
@@ -2365,6 +2375,7 @@ CSPluginAPI::CaptureResult001 ScreenshotFeature::StartFrameSequence(CSPluginAPI:
 		frameSequence.directory = directory;
 		frameSequence.startedAt = std::chrono::steady_clock::now();
 		frameSequence.startedUtc = TimestampUtc();
+		frameSequence.intervalFrames = std::clamp(frameCaptureIntervalFrames, 1u, 60u);
 		snapshot = frameSequence;
 	}
 
@@ -2459,16 +2470,19 @@ std::filesystem::path ScreenshotFeature::ResolveFrameCaptureDirectory() const
 
 void ScreenshotFeature::ScheduleNextSequenceFrame()
 {
-	if (HasPendingCapture()) {
-		return;
-	}
-
 	CaptureOptions options;
 	uint64_t sessionId = 0;
 	uint64_t frameIndex = 0;
+	uint64_t timestampUs = 0;
+	std::array<std::filesystem::path, 2> outputPaths{};
+	uint32_t outputCount = 0;
 	{
 		std::lock_guard lock(frameSequenceMutex);
 		if (frameSequence.state != CSPluginAPI::CaptureState001::kCapturing || frameSequence.stopRequested) {
+			return;
+		}
+		const auto observedFrame = frameSequence.gameFramesObserved++;
+		if (observedFrame % std::max(frameSequence.intervalFrames, 1u) != 0) {
 			return;
 		}
 
@@ -2500,17 +2514,30 @@ void ScreenshotFeature::ScheduleNextSequenceFrame()
 
 		++frameSequence.framesScheduled;
 		++frameSequence.inFlight;
+		timestampUs = options.sequenceTimestampUs;
+		outputPaths = options.sequenceOutputPaths;
+		outputCount = options.sequenceOutputCount;
+	}
+	if (HasPendingCapture()) {
+		CompleteSequenceFrame(
+			sessionId,
+			frameIndex,
+			timestampUs,
+			outputPaths,
+			outputCount,
+			false,
+			"source_busy");
+		return;
 	}
 
 	const auto result = RequestCaptureInternal(std::move(options), false);
 	if (result != CSPluginAPI::CaptureResult001::kSuccess) {
-		std::array<std::filesystem::path, 2> emptyPaths{};
 		CompleteSequenceFrame(
 			sessionId,
 			frameIndex,
-			0,
-			emptyPaths,
-			0,
+			timestampUs,
+			outputPaths,
+			outputCount,
 			false,
 			result == CSPluginAPI::CaptureResult001::kBusy ? "writer_backpressure" : "capture_unavailable");
 	}
@@ -2628,6 +2655,10 @@ bool ScreenshotFeature::WriteSequenceManifest(const FrameSequence& a_sequence, b
 			{ "state", a_final ? "complete" : "capturing" },
 			{ "eye", CaptureEyeName(a_sequence.eye) },
 			{ "audio", false },
+			{ "schedule", {
+				{ "basis", "game_frames" },
+				{ "intervalFrames", a_sequence.intervalFrames },
+			} },
 			{ "startedUtc", a_sequence.startedUtc },
 			{ "updatedUtc", TimestampUtc() },
 			{ "counts", {
@@ -2816,27 +2847,18 @@ bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
 
 	std::lock_guard lifecycleLock(screenshotWorkerLifecycleMutex);
 
-	if (screenshotWorkers.empty()) {
+	if (!screenshotWorker.joinable()) {
 		{
 			std::lock_guard queueLock(screenshotQueueMutex);
 			screenshotWorkerRunning = true;
 		}
 		try {
-			for (std::size_t index = 0; index < kScreenshotWorkerCount; ++index) {
-				screenshotWorkers.emplace_back(&ScreenshotFeature::ScreenshotWorkerLoop, this);
-			}
+			screenshotWorker = std::thread(&ScreenshotFeature::ScreenshotWorkerLoop, this);
 		} catch (const std::exception& e) {
 			{
 				std::lock_guard queueLock(screenshotQueueMutex);
 				screenshotWorkerRunning = false;
 			}
-			screenshotQueueCV.notify_all();
-			for (auto& worker : screenshotWorkers) {
-				if (worker.joinable()) {
-					worker.join();
-				}
-			}
-			screenshotWorkers.clear();
 			logger::error("Failed to start screenshot worker: {}", e.what());
 			screenshot = {};
 			ReleaseScreenshotSlot();
@@ -2846,13 +2868,6 @@ bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
 				std::lock_guard queueLock(screenshotQueueMutex);
 				screenshotWorkerRunning = false;
 			}
-			screenshotQueueCV.notify_all();
-			for (auto& worker : screenshotWorkers) {
-				if (worker.joinable()) {
-					worker.join();
-				}
-			}
-			screenshotWorkers.clear();
 			logger::error("Failed to start screenshot worker.");
 			screenshot = {};
 			ReleaseScreenshotSlot();
@@ -2893,12 +2908,9 @@ void ScreenshotFeature::StopWorkerThread()
 	}
 	screenshotQueueCV.notify_all();
 
-	for (auto& worker : screenshotWorkers) {
-		if (worker.joinable()) {
-			worker.join();
-		}
+	if (screenshotWorker.joinable()) {
+		screenshotWorker.join();
 	}
-	screenshotWorkers.clear();
 }
 
 void ScreenshotFeature::ScreenshotWorkerLoop()

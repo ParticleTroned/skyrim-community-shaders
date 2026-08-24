@@ -91,6 +91,7 @@ struct ScreenshotFeature : public Feature
 	std::string frameCapturePath = "Frame Captures";
 	bool sdrUsePng = true;
 	bool frameCaptureUsePng = false;
+	uint32_t frameCaptureIntervalFrames = 6;
 	bool copyToClipboard = false;
 	CSPluginAPI::CaptureEye001 screenshotEye = CSPluginAPI::CaptureEye001::kLeft;
 	CSPluginAPI::CaptureEye001 frameCaptureEye = CSPluginAPI::CaptureEye001::kLeft;
@@ -177,6 +178,8 @@ private:
 		uint64_t framesWritten = 0;
 		uint64_t framesDropped = 0;
 		uint64_t inFlight = 0;
+		uint64_t gameFramesObserved = 0;
+		uint32_t intervalFrames = 6;
 		bool stopRequested = false;
 		std::filesystem::path directory;
 		std::chrono::steady_clock::time_point startedAt{};
@@ -205,7 +208,7 @@ private:
 	std::mutex screenshotQueueMutex;
 	std::condition_variable screenshotQueueCV;
 	std::queue<PendingScreenshot> screenshotQueue;
-	std::vector<std::thread> screenshotWorkers;
+	std::thread screenshotWorker;
 	std::mutex screenshotWorkerLifecycleMutex;
 	bool screenshotWorkerRunning = false;
 	std::size_t outstandingScreenshotCount = 0;

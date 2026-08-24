@@ -45,7 +45,11 @@ CS_sequence_<date>_<session>/
 
 BMP is the default for frame sequences because it trades large files for much
 higher capture throughput. PNG remains available as a compact lossless option,
-and ordinary screenshots keep their own independent format setting. Flat
+and ordinary screenshots keep their own independent format setting. Sequences
+sample every six rendered game frames by default; the in-game control surface
+can adjust the interval from one through sixty. This keeps GPU staging and
+worker memory bounded while the manifest reports any sampled frame that still
+encounters source or writer pressure. Flat
 sessions use `frames/`. During capture, `sequence.json.partial` is updated
 periodically. The final `sequence.json` uses schema `csx.frame-sequence/1` and
 contains the selected eye mode, monotonic timestamps in microseconds, written

@@ -90,6 +90,7 @@ struct ScreenshotFeature : public Feature
 	std::string screenshotPath = "Screenshots";
 	std::string frameCapturePath = "Frame Captures";
 	bool sdrUsePng = true;
+	bool frameCaptureUsePng = false;
 	bool copyToClipboard = false;
 	CSPluginAPI::CaptureEye001 screenshotEye = CSPluginAPI::CaptureEye001::kLeft;
 	CSPluginAPI::CaptureEye001 frameCaptureEye = CSPluginAPI::CaptureEye001::kLeft;
@@ -204,7 +205,7 @@ private:
 	std::mutex screenshotQueueMutex;
 	std::condition_variable screenshotQueueCV;
 	std::queue<PendingScreenshot> screenshotQueue;
-	std::thread screenshotWorker;
+	std::vector<std::thread> screenshotWorkers;
 	std::mutex screenshotWorkerLifecycleMutex;
 	bool screenshotWorkerRunning = false;
 	std::size_t outstandingScreenshotCount = 0;
@@ -217,6 +218,7 @@ private:
 	std::mutex captureStateMutex;
 	ActiveCapture activeCapture;
 	mutable std::mutex frameSequenceMutex;
+	mutable std::mutex frameSequenceManifestMutex;
 	FrameSequence frameSequence;
 
 	// SRV-readable copy used when the capture source's own SRV can't be sampled

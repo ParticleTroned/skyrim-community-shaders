@@ -39,11 +39,14 @@ Each session directory contains lossless numbered images and a JSON manifest:
 ```text
 CS_sequence_<date>_<session>/
   sequence.json
-  left/frame_000000001.png
-  right/frame_000000001.png
+  left/frame_000000001.bmp
+  right/frame_000000001.bmp
 ```
 
-Flat sessions use `frames/`. During capture, `sequence.json.partial` is updated
+BMP is the default for frame sequences because it trades large files for much
+higher capture throughput. PNG remains available as a compact lossless option,
+and ordinary screenshots keep their own independent format setting. Flat
+sessions use `frames/`. During capture, `sequence.json.partial` is updated
 periodically. The final `sequence.json` uses schema `csx.frame-sequence/1` and
 contains the selected eye mode, monotonic timestamps in microseconds, written
 and dropped counts, and relative paths for every scheduled frame. `audio` is

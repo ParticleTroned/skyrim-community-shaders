@@ -3987,9 +3987,13 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 
 		constexpr float kIndicatorDistanceMetres = 1.0f;
 		constexpr float kFallbackHorizontalOffsetMetres = -0.25f;
+		constexpr float kFallbackVerticalOffsetMetres = 0.25f;
 		float horizontalOffsetMetres = kFallbackHorizontalOffsetMetres;
+		float verticalOffsetMetres = kFallbackVerticalOffsetMetres;
 		if (openvr->vrSystem) {
 			float accumulatedProjectionWidth = 0.0f;
+			float accumulatedOpticalCentreX = 0.0f;
+			float accumulatedOpticalCentreY = 0.0f;
 			std::size_t validEyeCount = 0;
 			for (const auto eye : { vr::Eye_Left, vr::Eye_Right }) {
 				float left = 0.0f;
@@ -3998,29 +4002,42 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 				float top = 0.0f;
 				openvr->vrSystem->GetProjectionRaw(eye, &left, &right, &bottom, &top);
 				const float projectionWidth = right - left;
-				if (std::isfinite(projectionWidth) && projectionWidth > 0.1f && projectionWidth < 10.0f) {
+				const float projectionHeight = top - bottom;
+				const auto eyeToHead = openvr->vrSystem->GetEyeToHeadTransform(eye);
+				if (std::isfinite(projectionWidth) && projectionWidth > 0.1f && projectionWidth < 10.0f &&
+					std::isfinite(projectionHeight) && projectionHeight > 0.1f && projectionHeight < 10.0f &&
+					std::isfinite(eyeToHead.m[0][3]) && std::isfinite(eyeToHead.m[1][3])) {
 					accumulatedProjectionWidth += projectionWidth;
+					accumulatedOpticalCentreX +=
+						eyeToHead.m[0][3] + ((left + right) * 0.5f * kIndicatorDistanceMetres);
+					accumulatedOpticalCentreY +=
+						eyeToHead.m[1][3] + ((bottom + top) * 0.5f * kIndicatorDistanceMetres);
 					++validEyeCount;
 				}
 			}
 			if (validEyeCount != 0) {
-				const float averageProjectionWidth = accumulatedProjectionWidth / static_cast<float>(validEyeCount);
+				const float eyeCount = static_cast<float>(validEyeCount);
+				const float averageProjectionWidth = accumulatedProjectionWidth / eyeCount;
+				const float opticalCentreX = accumulatedOpticalCentreX / eyeCount;
+				const float opticalCentreY = accumulatedOpticalCentreY / eyeCount;
 				// One eighth of the visible width to the left of the cyclopean centre.
-				horizontalOffsetMetres = -(averageProjectionWidth * kIndicatorDistanceMetres) / 8.0f;
+				horizontalOffsetMetres =
+					opticalCentreX - ((averageProjectionWidth * kIndicatorDistanceMetres) / 8.0f);
+				verticalOffsetMetres = opticalCentreY;
 			}
 		}
 
 		transform.m[0][3] = horizontalOffsetMetres;
-		// HMD-relative zero is the player's current eye line, independent of world height.
-		transform.m[1][3] = 0.0f;
+		transform.m[1][3] = verticalOffsetMetres;
 		transform.m[2][3] = -1.0f;
 		cleanOverlay->SetOverlayTransformTrackedDeviceRelative(
 			captureIndicatorOverlayHandle,
 			vr::k_unTrackedDeviceIndex_Hmd,
 			&transform);
 		logger::info(
-			"VR: capture indicator positioned at eye level, horizontal offset {:.3f} m",
-			horizontalOffsetMetres);
+			"VR: capture indicator positioned at optical eye line, offset=({:.3f}, {:.3f}) m",
+			horizontalOffsetMetres,
+			verticalOffsetMetres);
 	}
 
 	if (!captureIndicatorTexture && globals::d3d::device) {

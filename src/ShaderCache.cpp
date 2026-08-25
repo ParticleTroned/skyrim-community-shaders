@@ -1,4 +1,5 @@
 #include "ShaderCache.h"
+#include "BuildProvenance.h"
 #include "Feature.h"
 #include "Globals.h"
 #include "ShaderFileWatcher.h"
@@ -2940,11 +2941,20 @@ namespace SIE
 		std::optional<std::string> cachedPluginVersion;
 		if (auto pluginVersion = ini.GetValue("Cache", "PluginVersion"))
 			cachedPluginVersion = pluginVersion;
+		std::optional<std::string> cachedShaderAbi;
+		if (auto shaderAbi = ini.GetValue("Cache", "ShaderCacheABI"))
+			cachedShaderAbi = shaderAbi;
+		std::optional<std::string> cachedShaderCompiler;
+		if (auto shaderCompiler = ini.GetValue("Cache", "ShaderCompilerIdentity"))
+			cachedShaderCompiler = shaderCompiler;
 
 		const auto featureStates = GetCurrentFeatureStates();
 		const auto cacheEntries = GetCacheEntries(ini, featureStates);
 		return Util::CacheInvalidation::ClassifyMismatches(
-			std::string{ Plugin::VERSION_LABEL }, cachedPluginVersion, featureStates, cacheEntries);
+			std::string{ Plugin::VERSION_LABEL }, cachedPluginVersion,
+			std::string{ BuildProvenance::GetShaderCacheAbiId() }, cachedShaderAbi,
+			BuildProvenance::GetShaderCompilerIdentity(), cachedShaderCompiler,
+			featureStates, cacheEntries);
 	}
 
 	static std::vector<std::string> GetDefinesForMismatches(
@@ -3512,6 +3522,10 @@ namespace SIE
 		CSimpleIniA ini;
 		ini.SetUnicode();
 		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION_LABEL.data());
+		ini.SetValue("Cache", "BuildId", BuildProvenance::GetBuildId().data());
+		ini.SetValue("Cache", "ArtifactSHA256", BuildProvenance::GetArtifactSha256().c_str());
+		ini.SetValue("Cache", "ShaderCacheABI", BuildProvenance::GetShaderCacheAbiId().data());
+		ini.SetValue("Cache", "ShaderCompilerIdentity", BuildProvenance::GetShaderCompilerIdentity().c_str());
 		globals::state->WriteDiskCacheInfo(ini);
 
 		std::shared_lock lock{ g_diskCacheMutationMutex };
@@ -3531,7 +3545,8 @@ namespace SIE
 			logger::error("Failed to save shader cache Info.ini");
 			return;
 		}
-		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION_LABEL);
+		logger::info("Saved disk cache info (plugin version: {}, Build ID: {}, shader ABI: {})",
+			Plugin::VERSION_LABEL, BuildProvenance::GetBuildId(), BuildProvenance::GetShaderCacheAbiId());
 	}
 
 	void ShaderCache::WriteDiskCacheInfoWhenReady()

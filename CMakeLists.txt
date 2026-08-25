@@ -11,6 +11,8 @@ if(NOT CSX_VERSION MATCHES [[^([0-9]+)\.([0-9]+)-SE$]])
     )
 endif()
 set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
+set(CSX_RUNTIME "SE")
+set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
 
 project(
     # gersemi: ignore
@@ -70,6 +72,11 @@ option(
 )
 option(BUILD_HOST_TESTS "Build deterministic host-side C++ unit tests" ON)
 option(
+    CSX_REQUIRE_CLEAN_PROVENANCE
+    "Reject DLL builds from dirty sources or mismatched/dirty submodules"
+    OFF
+)
+option(
     AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
     "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
     OFF
@@ -107,13 +114,72 @@ if(GIT_FOUND)
 else()
     set(GIT_DESCRIBE "unknown")
 endif()
-message("\tBuild version: ${GIT_DESCRIBE}")
+message("\tConfigure-time build version: ${GIT_DESCRIBE}")
 message("\tCommunity Shaders Expanded version: CSX ${CSX_VERSION}")
 
 # #######################################################################################################################
 # # Add CMake features
 # #######################################################################################################################
 include(XSEPlugin)
+
+# Refresh provenance immediately before every DLL compilation. This is an
+# always-run target by design: configure-time git metadata becomes stale after
+# a checkout, submodule update, or local edit in an existing build directory.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(CSX_PROVENANCE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/build_provenance.py")
+set(CSX_PROVENANCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>")
+set(CSX_PROVENANCE_HEADER "${CSX_PROVENANCE_DIR}/BuildProvenance.generated.h")
+set(CSX_PROVENANCE_BASE_MANIFEST "${CSX_PROVENANCE_DIR}/CSX.BuildManifest.base.json")
+set(CSX_PROVENANCE_FINAL_MANIFEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/CSX.BuildManifest.json")
+set(_CSX_PROVENANCE_CLEAN_ARG)
+if(CSX_REQUIRE_CLEAN_PROVENANCE)
+    set(_CSX_PROVENANCE_CLEAN_ARG --require-clean)
+endif()
+add_custom_target(
+    refresh_build_provenance
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CSX_PROVENANCE_DIR}"
+    COMMAND
+        "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" generate
+        --source-dir "${CMAKE_SOURCE_DIR}"
+        --output-header "${CSX_PROVENANCE_HEADER}"
+        --output-manifest "${CSX_PROVENANCE_BASE_MANIFEST}"
+        --runtime "${CSX_RUNTIME}"
+        --plugin-version "${CSX_PLUGIN_VERSION}"
+        --configuration "$<CONFIG>"
+        --artifact-name "$<TARGET_FILE_NAME:${PROJECT_NAME}>"
+        --compiler-id "${CMAKE_CXX_COMPILER_ID}"
+        --compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
+        --compiler-path "${CMAKE_CXX_COMPILER}"
+        --generator "${CMAKE_GENERATOR}"
+        --generator-platform "${CMAKE_GENERATOR_PLATFORM}"
+        --generator-toolset "${CMAKE_GENERATOR_TOOLSET}"
+        --windows-sdk-version "${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}"
+        --cmake-version "${CMAKE_VERSION}"
+        --target-triplet "${VCPKG_TARGET_TRIPLET}"
+        --toolchain-file "${CMAKE_TOOLCHAIN_FILE}"
+        --overlay-dir "${VCPKG_OVERLAY_PORTS}"
+        --build-option "TRACY_SUPPORT=${TRACY_SUPPORT}"
+        --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}"
+        --build-option "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}"
+        --build-option "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}"
+        --build-option "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+        ${_CSX_PROVENANCE_CLEAN_ARG}
+    VERBATIM
+    COMMENT "Refreshing canonical CSX build provenance"
+)
+add_dependencies(${PROJECT_NAME} refresh_build_provenance)
+target_include_directories(${PROJECT_NAME} PRIVATE "${CSX_PROVENANCE_DIR}")
+add_custom_command(
+    TARGET ${PROJECT_NAME}
+    POST_BUILD
+    COMMAND
+        "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" finalize
+        --base-manifest "${CSX_PROVENANCE_BASE_MANIFEST}"
+        --artifact "$<TARGET_FILE:${PROJECT_NAME}>"
+        --output-manifest "${CSX_PROVENANCE_FINAL_MANIFEST}"
+    VERBATIM
+    COMMENT "Binding CSX build manifest to linked DLL"
+)
 
 # #######################################################################################################################
 # # Find dependencies
@@ -192,6 +258,7 @@ target_link_libraries(
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
         windowscodecs
+        bcrypt
 )
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
@@ -566,6 +633,11 @@ list(TRANSFORM FEATURE_PATHS_SLASH APPEND /)
 install(CODE "file(REMOVE_RECURSE \${CMAKE_INSTALL_PREFIX})")
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
 install(
+    FILES "${CSX_PROVENANCE_FINAL_MANIFEST}"
+    DESTINATION SKSE/Plugins
+    COMPONENT SKSE
+)
+install(
     FILES $<TARGET_PDB_FILE:${PROJECT_NAME}>
     DESTINATION SKSE/Plugins
     COMPONENT SKSE
@@ -844,6 +916,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_PDB_FILE:${PROJECT_NAME}>"
             "${AIO_DIR}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different
+            "${CSX_PROVENANCE_FINAL_MANIFEST}"
+            "${AIO_DIR}/SKSE/Plugins/CSX.BuildManifest.json"
         COMMENT "Copying built DLL and PDB to AIO package"
         VERBATIM
     )
@@ -1048,6 +1124,10 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     $<TARGET_PDB_FILE:${PROJECT_NAME}>
                     "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
                 COMMAND
+                    ${CMAKE_COMMAND} -E copy_if_different
+                    "${CSX_PROVENANCE_FINAL_MANIFEST}"
+                    "${DEPLOY_TARGET}/SKSE/Plugins/CSX.BuildManifest.json"
+                COMMAND
                     ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_plugin.stamp
                 # See PREPARE_AIO target-name rationale above; the target-only
                 # dependency is order-only, so also depend on the built file
@@ -1180,6 +1260,9 @@ if(ZIP_TO_DIST)
         COMMAND
             ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:${PROJECT_NAME}>
             "${ZIP_DIR}/SKSE/Plugins/"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy "${CSX_PROVENANCE_FINAL_MANIFEST}"
+            "${ZIP_DIR}/SKSE/Plugins/CSX.BuildManifest.json"
     )
     foreach(FEATURE_PATH ${FEATURE_PATHS})
         if(EXISTS "${FEATURE_PATH}/CORE")
@@ -1315,6 +1398,7 @@ file(
 # Add SKSE plugin dll as dependency (use target-file generator expression so CMake
 # knows the actual output path of the target at build time)
 list(APPEND CORE_SOURCES "$<TARGET_FILE:${PROJECT_NAME}>")
+list(APPEND CORE_SOURCES "${CSX_PROVENANCE_FINAL_MANIFEST}")
 list(APPEND CORE_SOURCES "${CSX_CACHE_MARKER}")
 
 set(CORE_FEATURE_PATHS "${CMAKE_SOURCE_DIR}/package/")

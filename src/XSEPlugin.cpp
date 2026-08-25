@@ -1,5 +1,6 @@
 #include "CSEditor/EditorWindow.h"
 #include "Deferred.h"
+#include "BuildProvenance.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
@@ -67,6 +68,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 #endif
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION_LABEL);
+	BuildProvenance::LogRuntimeIdentity();
 	SKSE::Init(a_skse);
 	SKSE::AllocTrampoline(1 << 10);
 	return Load();

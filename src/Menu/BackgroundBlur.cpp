@@ -528,7 +528,7 @@ namespace BackgroundBlur
 
 	void RenderBackgroundBlur()
 	{
-		if (!enabled) {
+		if (!enabled || globals::game::isVR) {
 			return;
 		}
 

@@ -506,11 +506,17 @@ void SettingsTabRenderer::RenderBehaviorTab()
 
 		SeparatorTextWithFont("Visual Effects", Menu::FontRole::Subheading);
 
+		ImGui::BeginDisabled(globals::game::isVR);
 		if (ImGui::Checkbox("Background Blur", &themeSettings.BackgroundBlurEnabled)) {
 			BackgroundBlur::SetEnabled(themeSettings.BackgroundBlurEnabled);
 		}
+		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Applies a blur effect to the background behind the menu window.");
+			if (globals::game::isVR) {
+				ImGui::Text("Background Blur is unavailable in VR.");
+			} else {
+				ImGui::Text("Applies a blur effect to the background behind the menu window.");
+			}
 		}
 
 		ImGui::EndTabItem();

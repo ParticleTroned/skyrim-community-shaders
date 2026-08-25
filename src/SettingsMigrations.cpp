@@ -1,6 +1,7 @@
 #include "SettingsMigrations.h"
 
 #include "Features/Bloom.h"
+#include "Features/WaterAppearanceMigration.h"
 
 #include <algorithm>
 #include <string>
@@ -179,7 +180,9 @@ namespace
 		if (unifiedWaterIt == a_layer.end() || !unifiedWaterIt->is_object())
 			return false;
 
-		if (!SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(*unifiedWaterIt))
+		if (!WaterAppearanceMigration::ContainsAnyKey(
+				*unifiedWaterIt,
+				SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys))
 			return false;
 
 		auto adaptiveIt = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
@@ -199,28 +202,12 @@ namespace
 			(*adaptiveIt)[std::string(SettingsMigrations::kLegacyWaterAppearanceSettingsKey)] = json::object();
 			legacyWaterIt = adaptiveIt->find(SettingsMigrations::kLegacyWaterAppearanceSettingsKey.data());
 		}
-		(*legacyWaterIt)[std::string(SettingsMigrations::kLegacyWaterAppearanceForceGlobalKey)] = forceGlobal;
-
-		bool migrated = false;
-		for (const auto key : SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys) {
-			auto sourceIt = unifiedWaterIt->find(key.data());
-			if (sourceIt == unifiedWaterIt->end())
-				continue;
-
-			auto destinationIt = legacyWaterIt->find(key.data());
-			if (destinationIt != legacyWaterIt->end() && destinationIt->is_number()) {
-				// A valid destination value from this source layer wins over a stale
-				// Unified Water copy.
-				unifiedWaterIt->erase(sourceIt);
-				migrated = true;
-			} else if (sourceIt->is_number()) {
-				(*legacyWaterIt)[std::string(key)] = *sourceIt;
-				unifiedWaterIt->erase(sourceIt);
-				migrated = true;
-			}
-		}
-
-		return migrated;
+		return WaterAppearanceMigration::MoveValues(
+			*unifiedWaterIt,
+			*legacyWaterIt,
+			SettingsMigrations::kLegacyWaterAppearanceForceGlobalKey,
+			forceGlobal,
+			SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys);
 	}
 
 	const json& GetBloomSchema()

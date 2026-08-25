@@ -19,13 +19,15 @@ outputs:
 runs:
     using: "composite"
     steps:
+        # Compare repository identity directly because this repository may
+        # itself be a fork, making head.repo.fork unsuitable for this check.
         - name: Determine cache-write trust
           id: trust
           shell: bash
           run: |
               if [[ "${{ github.event_name }}" != "pull_request" && "${{ github.event_name }}" != "pull_request_target" ]]; then
                   trusted=true
-              elif [[ "${{ github.event_name }}" == "pull_request_target" && "${{ github.event.pull_request.head.repo.fork }}" == "false" ]]; then
+              elif [[ "${{ github.event_name }}" == "pull_request_target" && "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.event.pull_request.base.repo.full_name }}" ]]; then
                   case "${{ github.event.pull_request.author_association }}" in
                       OWNER | MEMBER | COLLABORATOR) trusted=true ;;
                       *) trusted=false ;;

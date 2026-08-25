@@ -1305,6 +1305,47 @@ public:
 		sizeof(VRRenderScaleHotPresentationContract) <
 		sizeof(VRRenderScaleTransitionSnapshot));
 
+	struct VRRenderScaleStereoEyeResourceContract
+	{
+		uint32_t contractGeneration = 0;
+		D3D11_TEXTURE2D_DESC colorInputDesc{};
+		D3D11_TEXTURE2D_DESC colorOutputDesc{};
+		winrt::com_ptr<ID3D11Texture2D> colorInput;
+		winrt::com_ptr<ID3D11Texture2D> colorOutput;
+		winrt::com_ptr<ID3D11Texture2D> depth;
+		winrt::com_ptr<ID3D11Texture2D> linearDepth;
+		winrt::com_ptr<ID3D11Texture2D> motionVectors;
+		winrt::com_ptr<ID3D11Texture2D> reactiveMask;
+		winrt::com_ptr<ID3D11Texture2D> transparencyMask;
+		winrt::com_ptr<ID3D11Texture2D> dlssSharpener;
+	};
+
+	struct VRRenderScaleStereoResourceLifetime
+	{
+		static constexpr uint32_t kAuxiliaryLifetimeCapacity = 32;
+
+		winrt::com_ptr<ID3D11Device> device;
+		uint64_t revision = 0;
+		uint32_t intermediateGeneration = 0;
+		std::array<VRRenderScaleStereoEyeResourceContract, 2> eyes{};
+		std::array<winrt::com_ptr<ID3D11Texture2D>,
+			kAuxiliaryLifetimeCapacity>
+			auxiliaryLifetimes{};
+		uint32_t auxiliaryLifetimeCount = 0;
+	};
+
+	/** @brief Immutable stereo policy and strong resource ownership for one compositor cycle. */
+	struct VRRenderScaleStereoPresentationPacket
+	{
+		VRRenderScaleHotPresentationContract contract{};
+		std::shared_ptr<const VRRenderScaleStereoResourceLifetime> resources;
+
+		[[nodiscard]] bool IsValid() const noexcept
+		{
+			return contract.compositorCycleToken != 0 && resources;
+		}
+	};
+
 	struct PerfModeState
 	{
 		struct BootSnapshot
@@ -1835,6 +1876,12 @@ public:
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];       // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];   // per-eye render resolution
 	eastl::unique_ptr<Texture2D> submitStageDLSSSharpenerTexture[2];  // per-eye output resolution
+	mutable std::recursive_mutex vrRenderScaleStereoPresentationPacketMutex;
+	std::atomic<uint64_t> vrRenderScaleStereoResourceRevision{ 1 };
+	mutable std::shared_ptr<const VRRenderScaleStereoResourceLifetime>
+		vrRenderScaleStereoResourceLifetime;
+	mutable VRRenderScaleStereoPresentationPacket
+		vrRenderScaleStereoPresentationPacket;
 	struct RetiredVRIntermediateTextures
 	{
 		uint32_t retireFrame = 0;
@@ -2016,8 +2063,9 @@ public:
 		vr::EVREye a_eye,
 		const vr::Texture_t* a_texture,
 		const vr::VRTextureBounds_t* a_bounds) const;
-	[[nodiscard]] std::unique_lock<std::recursive_mutex>
-	AcquireVRRenderScalePresentationCommitLock() const;
+	[[nodiscard]] VRRenderScaleStereoPresentationPacket
+	CaptureVRRenderScaleStereoPresentationPacket(
+		uint64_t a_compositorCycleToken) const;
 
 	struct VRPostLoadCompositorKeepaliveSubmission
 	{
@@ -2103,11 +2151,18 @@ public:
 	void ServiceVRNativeRestorePresentationRecovery(
 		uint64_t a_compositorCycleToken);
 	void ClearVRNativeRestorePresentationWatchdog();
+	void InvalidateVRRenderScaleStereoPresentationPacket(
+		bool a_releaseResources = false);
+	[[nodiscard]] bool IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+		const VRRenderScaleStereoPresentationPacket& a_packet,
+		const VRRenderScaleHotPresentationContract& a_current) const;
 	bool RecordVRNativeRestorePresentationObservationIfUnprotected(
-		const VRRenderScalePresentationObservation& a_observation);
+		const VRRenderScalePresentationObservation& a_observation,
+		const VRRenderScaleStereoPresentationPacket* a_packet = nullptr);
 	void RecordVRRenderScalePresentationObservation(
 		const VRRenderScalePresentationObservation& a_observation,
-		bool a_compositorHoldLockOwned = false);
+		bool a_compositorHoldLockOwned = false,
+		const VRRenderScaleStereoPresentationPacket* a_packet = nullptr);
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		const char** a_decisionReason = nullptr);

@@ -1062,6 +1062,58 @@ namespace
 		       a_left.fsrSharpness == a_right.fsrSharpness;
 	}
 
+	bool HasSameVRRenderScaleResourceKey(
+		const Upscaling::VRRenderScaleResourceKey& a_left,
+		const Upscaling::VRRenderScaleResourceKey& a_right)
+	{
+		return a_left.valid == a_right.valid &&
+		       a_left.active == a_right.active &&
+		       a_left.method == a_right.method &&
+		       a_left.backend == a_right.backend &&
+		       a_left.qualityMode == a_right.qualityMode &&
+		       a_left.dlssPreset == a_right.dlssPreset &&
+		       a_left.displayEyeWidth == a_right.displayEyeWidth &&
+		       a_left.displayEyeHeight == a_right.displayEyeHeight &&
+		       a_left.renderEyeWidth == a_right.renderEyeWidth &&
+		       a_left.renderEyeHeight == a_right.renderEyeHeight &&
+		       a_left.contextCount == a_right.contextCount &&
+		       a_left.foveatedVendorDispatch == a_right.foveatedVendorDispatch &&
+		       a_left.peripheryTAA == a_right.peripheryTAA;
+	}
+
+	bool HasSameVRRenderScaleProfileContract(
+		const Upscaling::VRRenderScaleProfileSnapshot& a_left,
+		const Upscaling::VRRenderScaleProfileSnapshot& a_right)
+	{
+		return a_left.valid == a_right.valid &&
+		       a_left.active == a_right.active &&
+		       a_left.requestID == a_right.requestID &&
+		       a_left.transitionEpoch == a_right.transitionEpoch &&
+		       a_left.contractGeneration == a_right.contractGeneration &&
+		       a_left.method == a_right.method &&
+		       a_left.qualityMode == a_right.qualityMode &&
+		       a_left.dlssPreset == a_right.dlssPreset &&
+		       a_left.dlssSharpener == a_right.dlssSharpener &&
+		       a_left.dlssSharpness == a_right.dlssSharpness &&
+		       a_left.fsrSharpness == a_right.fsrSharpness &&
+		       a_left.renderScale == a_right.renderScale &&
+		       a_left.renderScaleModeEnabled == a_right.renderScaleModeEnabled &&
+		       a_left.perfModeEnabled == a_right.perfModeEnabled &&
+		       a_left.fsr4RuntimeEnabled == a_right.fsr4RuntimeEnabled &&
+		       a_left.displayEyeWidth == a_right.displayEyeWidth &&
+		       a_left.displayEyeHeight == a_right.displayEyeHeight &&
+		       a_left.renderEyeWidth == a_right.renderEyeWidth &&
+		       a_left.renderEyeHeight == a_right.renderEyeHeight &&
+		       a_left.queuedFrame == a_right.queuedFrame &&
+		       a_left.origin == a_right.origin &&
+		       a_left.stabilizerDoorHandoff == a_right.stabilizerDoorHandoff &&
+		       a_left.stabilizerDoorHandoffSerial ==
+		           a_right.stabilizerDoorHandoffSerial &&
+		       HasSameVRRenderScaleResourceKey(
+			       a_left.resources,
+			       a_right.resources);
+	}
+
 	bool IsBufferedVRFpsStabilizerDoorHandoff(
 		const Upscaling::VRRenderScaleProfileSnapshot& a_profile)
 	{
@@ -12310,6 +12362,7 @@ bool Upscaling::EnsureVRMapMenuUISupersampling()
 		vrMapMenuSavedHUDDepthSRV = hudDepth.depthSRV;
 		vrMapMenuSavedHUDStencilSRV = hudDepth.stencilSRV;
 
+		InvalidateVRRenderScaleStereoPresentationPacket(true);
 		vrMapMenuUISupersampleColor = std::move(supersampleColor);
 		vrMapMenuUISupersampleDepth = std::move(supersampleDepth);
 		vrMapMenuUISupersampleDepthViews = std::move(depthViews);
@@ -12374,6 +12427,8 @@ bool Upscaling::EnsureVRMapMenuUISupersampling()
 
 void Upscaling::ReleaseVRMapMenuUISupersampling()
 {
+	if (vrMapMenuUISupersampleColor || vrMapMenuUISupersampleDepth)
+		InvalidateVRRenderScaleStereoPresentationPacket(true);
 	if (vrMapMenuUISupersamplingActive && globals::game::renderer) {
 		auto* renderer = globals::game::renderer;
 		auto& hudTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kHUDMENU];
@@ -13632,6 +13687,7 @@ void Upscaling::VRMapMenuPostDisplayHook::thunk(RE::MapMenu* a_menu)
 
 void Upscaling::ResetVRMenuFinalCompositeLayer()
 {
+	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	ReleaseVRMapMenuUISupersampling();
 	// A resource reset can be requested while Map's semantic epoch has replaced
 	// the engine-owned targets. Restore them before releasing the replacements.
@@ -13675,6 +13731,8 @@ void Upscaling::ResetVRMenuFinalCompositeLayer()
 bool Upscaling::EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_height, DXGI_FORMAT a_format)
 {
 	auto discardLayers = [&]() {
+		const bool hadLayers =
+			vrMenuFinalCompositeLayer || vrMenuCommittedCompositeLayer;
 		InvalidateVRMenuCommittedLayer("layer-allocation-failed");
 		vrMenuFinalCompositeLayer.reset();
 		vrMenuCommittedCompositeLayer.reset();
@@ -13683,6 +13741,8 @@ bool Upscaling::EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_hei
 		vrMenuFinalCompositeLayerFormat = DXGI_FORMAT_UNKNOWN;
 		vrMenuFinalCompositeLayerClearedFrame = std::numeric_limits<uint32_t>::max();
 		vrMenuFinalCompositeLayerDrawCount = 0;
+		if (hadLayers)
+			InvalidateVRRenderScaleStereoPresentationPacket(true);
 	};
 	if (!a_width || !a_height || a_format == DXGI_FORMAT_UNKNOWN)
 		return false;
@@ -13716,6 +13776,7 @@ bool Upscaling::EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_hei
 		}
 
 		InvalidateVRMenuCommittedLayer("layer-reallocated");
+		InvalidateVRRenderScaleStereoPresentationPacket(true);
 		vrMenuFinalCompositeLayer = std::move(stagingLayer);
 		vrMenuCommittedCompositeLayer = std::move(committedLayer);
 		vrMenuFinalCompositeLayerWidth = a_width;
@@ -20811,8 +20872,14 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 void Upscaling::DestroySubmitStageDLSSSharpenerTextures()
 {
 	InvalidateFrameScopedUpscalingState();
+	const bool hadTextures = std::any_of(
+		std::begin(submitStageDLSSSharpenerTexture),
+		std::end(submitStageDLSSSharpenerTexture),
+		[](const auto& a_texture) { return a_texture != nullptr; });
 	for (auto& texture : submitStageDLSSSharpenerTexture)
 		texture.reset();
+	if (hadTextures)
+		InvalidateVRRenderScaleStereoPresentationPacket(true);
 }
 
 void Upscaling::DestroyCommonUpscalingTextures()
@@ -22232,6 +22299,7 @@ void Upscaling::ClearAllVRLowPeakNativeRestoreProgress()
 void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 {
 	InvalidateFrameScopedUpscalingState();
+	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	RetiredVRIntermediateTextures retired{};
 	retired.retireFrame = globals::state ? globals::state->frameCount : 0u;
 	const auto transitionSnapshot = GetVRRenderScaleTransitionSnapshot();
@@ -29698,11 +29766,220 @@ bool Upscaling::IsVRNativeRestorePresentationGuardActive() const
 	return GetVRNativeRestorePresentationGuardActiveEpoch() != 0;
 }
 
-std::unique_lock<std::recursive_mutex>
-Upscaling::AcquireVRRenderScalePresentationCommitLock() const
+bool Upscaling::IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+	const VRRenderScaleStereoPresentationPacket& a_packet,
+	const VRRenderScaleHotPresentationContract& a_current) const
 {
-	return std::unique_lock<std::recursive_mutex>(
+	if (!a_packet.IsValid() ||
+		a_packet.contract.compositorCycleToken !=
+			a_current.compositorCycleToken ||
+		a_packet.resources->device.get() != globals::d3d::device ||
+		a_packet.resources->revision !=
+			vrRenderScaleStereoResourceRevision.load(
+				std::memory_order_acquire) ||
+		a_packet.resources->intermediateGeneration !=
+			vrIntermediateTextureGeneration) {
+		return false;
+	}
+
+	if (a_packet.contract.revision != a_current.revision &&
+		(a_packet.contract.state != a_current.state ||
+			a_packet.contract.targetEpoch != a_current.targetEpoch ||
+			a_packet.contract.stateFrame != a_current.stateFrame ||
+			a_packet.contract.postLoadRecoveryLoadingSerial !=
+				a_current.postLoadRecoveryLoadingSerial ||
+			!HasSameVRRenderScaleProfileContract(
+				a_packet.contract.applied,
+				a_current.applied) ||
+			!HasSameVRRenderScaleProfileContract(
+				a_packet.contract.stable,
+				a_current.stable))) {
+		return false;
+	}
+
+	const auto matches = [](const winrt::com_ptr<ID3D11Texture2D>& a_owned,
+							 const eastl::unique_ptr<Texture2D>& a_currentTexture) {
+		return a_owned.get() ==
+		       (a_currentTexture ? a_currentTexture->resource.get() : nullptr);
+	};
+	const auto matchesContract = [&matches](
+		const winrt::com_ptr<ID3D11Texture2D>& a_owned,
+		const D3D11_TEXTURE2D_DESC& a_desc,
+		const eastl::unique_ptr<Texture2D>& a_currentTexture) {
+		return matches(a_owned, a_currentTexture) &&
+		       (!a_currentTexture ||
+			   SameTexture2DDesc(a_desc, a_currentTexture->desc));
+	};
+	for (uint32_t eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
+		const auto& eye = a_packet.resources->eyes[eyeIndex];
+		if (eye.contractGeneration != vrIntermediateTextureGeneration ||
+			!matchesContract(
+				eye.colorInput,
+				eye.colorInputDesc,
+				vrIntermediateColorIn[eyeIndex]) ||
+			!matchesContract(
+				eye.colorOutput,
+				eye.colorOutputDesc,
+				vrIntermediateColorOut[eyeIndex]) ||
+			!matches(eye.depth, vrIntermediateDepth[eyeIndex]) ||
+			!matches(eye.linearDepth, vrIntermediateLinearDepth[eyeIndex]) ||
+			!matches(eye.motionVectors, vrIntermediateMotionVectors[eyeIndex]) ||
+			!matches(eye.reactiveMask, vrIntermediateReactiveMask[eyeIndex]) ||
+			!matches(eye.transparencyMask, vrIntermediateTransparencyMask[eyeIndex]) ||
+			(eye.dlssSharpener &&
+				!matches(
+					eye.dlssSharpener,
+					submitStageDLSSSharpenerTexture[eyeIndex]))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+Upscaling::VRRenderScaleStereoPresentationPacket
+Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
+	uint64_t a_compositorCycleToken) const
+{
+	if (!globals::game::isVR || a_compositorCycleToken == 0)
+		return {};
+	const auto controllerState =
+		vrRenderScaleTransitionState.load(std::memory_order_acquire);
+	const bool packetRequired =
+		(controllerState != VRRenderScaleTransitionState::Idle &&
+			controllerState != VRRenderScaleTransitionState::Active) ||
+		vrNativeRestorePresentationGuardEpoch.load(
+			std::memory_order_acquire) != 0 ||
+		IsVRRenderScaleModeLatched();
+	if (!packetRequired)
+		return {};
+
+	const std::scoped_lock queueLock(
 		perfModeRenderTargetRecreateQueueMutex);
+	const uint32_t frame =
+		globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	VRRenderScaleHotPresentationContract current{};
+	{
+		std::scoped_lock controllerLock(
+			vrRenderScaleTransitionControllerMutex);
+		current = CaptureVRRenderScaleHotPresentationContractLocked(
+			a_compositorCycleToken,
+			frame);
+	}
+	std::scoped_lock packetLock(
+		vrRenderScaleStereoPresentationPacketMutex);
+	if (vrRenderScaleStereoPresentationPacket.IsValid() &&
+		IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+			vrRenderScaleStereoPresentationPacket,
+			current)) {
+		return vrRenderScaleStereoPresentationPacket;
+	}
+
+	VRRenderScaleStereoPresentationPacket packet{};
+	packet.contract = current;
+	packet.resources = vrRenderScaleStereoResourceLifetime;
+	if (packet.IsValid() &&
+		IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+			packet,
+			current)) {
+		vrRenderScaleStereoPresentationPacket = packet;
+		return packet;
+	}
+
+	auto resources =
+		std::make_shared<VRRenderScaleStereoResourceLifetime>();
+	resources->revision =
+		vrRenderScaleStereoResourceRevision.load(
+			std::memory_order_acquire);
+	resources->intermediateGeneration = vrIntermediateTextureGeneration;
+	if (globals::d3d::device)
+		resources->device.copy_from(globals::d3d::device);
+	const auto retainCore = [](const eastl::unique_ptr<Texture2D>& a_texture,
+								 winrt::com_ptr<ID3D11Texture2D>& a_lifetime,
+								 D3D11_TEXTURE2D_DESC* a_desc = nullptr) {
+		if (!a_texture || !a_texture->resource)
+			return;
+		a_lifetime = a_texture->resource;
+		if (a_desc)
+			*a_desc = a_texture->desc;
+	};
+	for (uint32_t eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
+		auto& eye = resources->eyes[eyeIndex];
+		eye.contractGeneration = vrIntermediateTextureGeneration;
+		retainCore(
+			vrIntermediateColorIn[eyeIndex],
+			eye.colorInput,
+			&eye.colorInputDesc);
+		retainCore(
+			vrIntermediateColorOut[eyeIndex],
+			eye.colorOutput,
+			&eye.colorOutputDesc);
+		retainCore(vrIntermediateDepth[eyeIndex], eye.depth);
+		retainCore(vrIntermediateLinearDepth[eyeIndex], eye.linearDepth);
+		retainCore(vrIntermediateMotionVectors[eyeIndex], eye.motionVectors);
+		retainCore(vrIntermediateReactiveMask[eyeIndex], eye.reactiveMask);
+		retainCore(vrIntermediateTransparencyMask[eyeIndex], eye.transparencyMask);
+		retainCore(
+			submitStageDLSSSharpenerTexture[eyeIndex],
+			eye.dlssSharpener);
+	}
+
+	const auto retainAuxiliary = [&](const eastl::unique_ptr<Texture2D>& a_texture) {
+		if (!a_texture || !a_texture->resource)
+			return;
+		assert(resources->auxiliaryLifetimeCount <
+			VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity);
+		if (resources->auxiliaryLifetimeCount <
+			VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity) {
+			resources->auxiliaryLifetimes[resources->auxiliaryLifetimeCount++] =
+				a_texture->resource;
+		}
+	};
+	for (uint32_t eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
+		retainAuxiliary(foveatedCenterColorIn[eyeIndex]);
+		retainAuxiliary(foveatedCenterColorOut[eyeIndex]);
+		retainAuxiliary(foveatedCenterDepth[eyeIndex]);
+		retainAuxiliary(foveatedCenterMotionVectors[eyeIndex]);
+		retainAuxiliary(foveatedCenterReactiveMask[eyeIndex]);
+		retainAuxiliary(foveatedCenterTransparencyMask[eyeIndex]);
+		for (uint32_t historyIndex = 0; historyIndex < 2; ++historyIndex) {
+			retainAuxiliary(peripheryTAAHistoryColor[eyeIndex][historyIndex]);
+			retainAuxiliary(peripheryTAAVelocityHistory[eyeIndex][historyIndex]);
+			retainAuxiliary(peripheryTAALockHistory[eyeIndex][historyIndex]);
+		}
+		retainAuxiliary(vrMenuDesktopEyePair[eyeIndex]);
+		retainAuxiliary(vrMenuDesktopRetainedEyePair[eyeIndex]);
+	}
+	retainAuxiliary(vrMenuFinalCompositeLayer);
+	retainAuxiliary(vrMenuCommittedCompositeLayer);
+	retainAuxiliary(vrMapMenuUISupersampleColor);
+	if (vrMapMenuUISupersampleDepth) {
+		assert(resources->auxiliaryLifetimeCount <
+			VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity);
+		if (resources->auxiliaryLifetimeCount <
+			VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity) {
+			resources->auxiliaryLifetimes[resources->auxiliaryLifetimeCount++] =
+				vrMapMenuUISupersampleDepth;
+		}
+	}
+
+	vrRenderScaleStereoResourceLifetime = resources;
+	packet.resources = std::move(resources);
+	vrRenderScaleStereoPresentationPacket = packet;
+	return packet;
+}
+
+void Upscaling::InvalidateVRRenderScaleStereoPresentationPacket(
+	bool a_releaseResources)
+{
+	std::scoped_lock lock(
+		vrRenderScaleStereoPresentationPacketMutex);
+	vrRenderScaleStereoPresentationPacket = {};
+	if (a_releaseResources) {
+		vrRenderScaleStereoResourceLifetime.reset();
+		vrRenderScaleStereoResourceRevision.fetch_add(
+			1,
+			std::memory_order_acq_rel);
+	}
 }
 
 uint64_t Upscaling::GetVRNativeRestorePresentationGuardActiveEpoch() const
@@ -30265,7 +30542,8 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 }
 
 bool Upscaling::RecordVRNativeRestorePresentationObservationIfUnprotected(
-	const VRRenderScalePresentationObservation& a_observation)
+	const VRRenderScalePresentationObservation& a_observation,
+	const VRRenderScaleStereoPresentationPacket* a_packet)
 {
 	if (!globals::game::isVR ||
 		!a_observation.valid ||
@@ -30276,6 +30554,27 @@ bool Upscaling::RecordVRNativeRestorePresentationObservationIfUnprotected(
 		return false;
 	}
 
+	std::unique_lock packetCommitLock(
+		perfModeRenderTargetRecreateQueueMutex,
+		std::defer_lock);
+	std::unique_lock packetStateLock(
+		vrRenderScaleStereoPresentationPacketMutex,
+		std::defer_lock);
+	if (a_packet) {
+		packetCommitLock.lock();
+		packetStateLock.lock();
+		std::scoped_lock controllerLock(
+			vrRenderScaleTransitionControllerMutex);
+		const auto current =
+			CaptureVRRenderScaleHotPresentationContractLocked(
+				a_observation.compositorCycleToken,
+				std::max(a_observation.frame, 1u));
+		if (!IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+				*a_packet,
+				current)) {
+			return false;
+		}
+	}
 	// Arm/reset/quarantine all publish under this mutex. Keep the final
 	// lifecycle validation and native-stability publication in the same
 	// critical section so a load hold cannot appear in between them.
@@ -30296,13 +30595,15 @@ bool Upscaling::RecordVRNativeRestorePresentationObservationIfUnprotected(
 
 	RecordVRRenderScalePresentationObservation(
 		a_observation,
-		true);
+		true,
+		a_packet);
 	return true;
 }
 
 void Upscaling::RecordVRRenderScalePresentationObservation(
 	const VRRenderScalePresentationObservation& a_observation,
-	bool a_compositorHoldLockOwned)
+	bool a_compositorHoldLockOwned,
+	const VRRenderScaleStereoPresentationPacket* a_packet)
 {
 	if (!globals::game::isVR ||
 		!a_observation.valid ||
@@ -30310,6 +30611,16 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 		a_observation.path == VRRenderScalePresentationPath::Unknown) {
 		return;
 	}
+	std::unique_lock packetCommitLock(
+		perfModeRenderTargetRecreateQueueMutex,
+		std::defer_lock);
+	if (a_packet)
+		packetCommitLock.lock();
+	std::unique_lock packetStateLock(
+		vrRenderScaleStereoPresentationPacketMutex,
+		std::defer_lock);
+	if (a_packet)
+		packetStateLock.lock();
 
 	bool pathChanged = false;
 	VRRenderScalePresentationEyeSnapshot published{};
@@ -30317,6 +30628,17 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		auto& controller = vrRenderScaleTransitionController;
+		if (a_packet) {
+			const auto current =
+				CaptureVRRenderScaleHotPresentationContractLocked(
+					a_observation.compositorCycleToken,
+					std::max(a_observation.frame, 1u));
+			if (!IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+					*a_packet,
+					current)) {
+				return;
+			}
+		}
 		auto& presentation = controller.presentation;
 		auto& eye = presentation.eyes[a_observation.eyeIndex];
 		const auto previous = eye;
@@ -36296,6 +36618,7 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	}
 
 	if (recreate) {
+		InvalidateVRRenderScaleStereoPresentationPacket(true);
 		static bool loggedTextureCreateFailure = false;
 		const auto createFailureMessage = [&]() {
 			return std::format(
@@ -36674,6 +36997,7 @@ bool Upscaling::BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidt
 void Upscaling::DestroyFoveatedResources()
 {
 	InvalidateFrameScopedUpscalingState();
+	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	for (uint32_t i = 0; i < 2; ++i) {
 		foveatedCenterColorIn[i].reset();
 		foveatedCenterColorOut[i].reset();
@@ -36690,6 +37014,7 @@ void Upscaling::DestroyFoveatedResources()
 void Upscaling::DestroyPeripheryTAAResources()
 {
 	InvalidateFrameScopedUpscalingState();
+	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		for (uint32_t historySlot = 0; historySlot < 2; ++historySlot) {
 			peripheryTAAHistoryColor[eye][historySlot].reset();
@@ -38373,8 +38698,9 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 		ServiceVRIntermediateTextureCleanup();
 		UpdateVRIntermediateRetirementSnapshot(
 			retiredVRIntermediateTextures.size() >=
-			kVRRetiredIntermediateTextureMaxSets);
+				kVRRetiredIntermediateTextureMaxSets);
 	}
+	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		vrIntermediateColorIn[eye] = std::move(replacementColorIn[eye]);
 		vrIntermediateColorOut[eye] = std::move(replacementColorOut[eye]);
@@ -38403,6 +38729,7 @@ bool Upscaling::EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const T
 	if (matchesOutput())
 		return true;
 
+	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	const std::string suffix = eyeIndex == 0 ? "Left" : "Right";
 	texture = CreateNamedTexture2D(
 		colorOutput.desc.Width,
@@ -38960,6 +39287,7 @@ bool Upscaling::EnsureVRMenuDesktopEyePair(
 				return false;
 			}
 		}
+		InvalidateVRRenderScaleStereoPresentationPacket(true);
 		vrMenuDesktopEyePair[0] = std::move(replacementPair[0]);
 		vrMenuDesktopEyePair[1] = std::move(replacementPair[1]);
 		vrMenuDesktopRetainedEyePair[0] = std::move(replacementRetainedPair[0]);
@@ -42206,6 +42534,7 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 {
 	if (a_compositorCycleToken == 0)
 		return;
+	InvalidateVRRenderScaleStereoPresentationPacket();
 	if (a_poseBoundaryAccepted) {
 		ServiceSubmitStageVendorResumePromotion(a_compositorCycleToken);
 		ServiceVRNativeRestorePresentationRecovery(

@@ -310,6 +310,9 @@ namespace SIE
 		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
 		void Add(const ShaderCompilationTask& task);
 		void Complete(const ShaderCompilationTask& task);
+		/** @brief Frees a dispatch slot and wakes WaitTake(). Call for every
+		 *  dispatched task, including stale-generation and stopped tasks. */
+		void ReleaseDispatchSlot();
 		/** @brief Latches timing and logs when the first real source compile begins. */
 		void MarkPhaseStarted();
 		/** @brief Returns whether a task still belongs to the active compilation batch. */
@@ -326,6 +329,7 @@ namespace SIE
 		std::atomic<uint64_t> completedTasks = 0;
 		std::atomic<uint64_t> totalTasks = 0;
 		std::atomic<uint64_t> failedTasks = 0;
+		std::atomic<uint32_t> dispatchedTasksInFlight = 0;  // tasks admitted by WaitTake's throttle
 		std::atomic<uint64_t> cacheHitTasks = 0;            // number of compiles of a previously seen shader combo
 		std::atomic<uint64_t> diskHitTasks = 0;             // tasks resolved from disk cache rather than compiled
 		std::atomic<uint64_t> sourceCompileTasks = 0;       // tasks that reached source compilation after cache lookup

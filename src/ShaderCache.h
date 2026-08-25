@@ -510,7 +510,8 @@ namespace SIE
 
 		// Startup compilation uses most of the CPU while leaving enough logical processors
 		// free for the OS and foreground applications to remain responsive. Compiler workers
-		// also run at process-aware cooperative priority (see ProcessCompilationSet()).
+		// run at process-aware cooperative priority until DataLoaded. Pool workers are
+		// restored to normal relative priority for constrained in-game recompiles.
 		// Management and file watcher run on dedicated jthreads, not pool slots.
 		// Background (in-game): half of P-cores only, to avoid starving the render thread.
 		int32_t compilationThreadCount = GetDefaultCompilationThreadCount();

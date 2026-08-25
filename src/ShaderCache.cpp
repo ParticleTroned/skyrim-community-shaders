@@ -4145,9 +4145,28 @@ namespace SIE
 
 		const auto taskKey = task.GetString();
 
-		// Run shader compilation cooperatively even when another plugin raises the
-		// entire Skyrim process to Above Normal or High priority.
-		Util::SetCurrentThreadCooperativeBackgroundPriority();
+		// The large blocking startup batch yields to the desktop even when another
+		// plugin raises Skyrim's process class. Once DataLoaded releases the game,
+		// explicitly restore each reused pool worker to normal relative priority;
+		// in-game recompiles are constrained by the smaller background thread limit.
+		static std::atomic_bool priorityWarningLogged = false;
+		using namespace ShaderCompilationSchedulingPolicy;
+		const auto priorityMode = SelectWorkerThreadPriorityMode(
+			menuLoaded.load(std::memory_order_acquire) ?
+				CompilationPhase::InGame :
+				CompilationPhase::Startup);
+		const bool priorityApplied =
+			priorityMode == WorkerThreadPriorityMode::CooperativeBackground ?
+				Util::SetCurrentThreadCooperativeBackgroundPriority() :
+				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL) != FALSE;
+		if (!priorityApplied &&
+			!priorityWarningLogged.exchange(true, std::memory_order_acq_rel)) {
+			logger::warn(
+				"Shader compiler workers could not apply the requested {} CPU priority; continuing with the priority available to the current process class.",
+				priorityMode == WorkerThreadPriorityMode::CooperativeBackground ?
+					"startup-cooperative" :
+					"in-game normal");
+		}
 
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);

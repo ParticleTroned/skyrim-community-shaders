@@ -79,8 +79,10 @@ namespace Util
 		ProcessPriorityBand processPriorityBand = ProcessPriorityBand::Standard;
 		switch (a_processPriorityClass) {
 		case HIGH_PRIORITY_CLASS:
+			processPriorityBand = ProcessPriorityBand::High;
+			break;
 		case REALTIME_PRIORITY_CLASS:
-			processPriorityBand = ProcessPriorityBand::HighOrRealtime;
+			processPriorityBand = ProcessPriorityBand::Realtime;
 			break;
 		case ABOVE_NORMAL_PRIORITY_CLASS:
 			processPriorityBand = ProcessPriorityBand::AboveNormal;
@@ -103,6 +105,14 @@ namespace Util
 	{
 		const DWORD processPriorityClass = GetPriorityClass(GetCurrentProcess());
 		const int threadPriority = GetCooperativeBackgroundThreadPriority(processPriorityClass);
-		return SetThreadPriority(GetCurrentThread(), threadPriority) != FALSE;
+		const bool priorityApplied =
+			SetThreadPriority(GetCurrentThread(), threadPriority) != FALSE;
+		// THREAD_PRIORITY_IDLE is still base priority 16 in REALTIME_PRIORITY_CLASS;
+		// Windows offers no relative thread priority that can make such a process
+		// cooperative with an ordinary desktop application. Apply the least
+		// aggressive available value, but report that the guarantee is unavailable.
+		return processPriorityClass != 0 &&
+		       processPriorityClass != REALTIME_PRIORITY_CLASS &&
+		       priorityApplied;
 	}
 }  // namespace Util

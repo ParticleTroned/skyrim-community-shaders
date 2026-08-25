@@ -65,6 +65,13 @@ if ($cmake) {
     Add-CheckFailure "cmake.exe is not available on PATH"
 }
 
+try {
+    $vcpkgRoot = Resolve-CsxVcpkgRoot -Required
+    Write-CheckPass "vcpkg root resolves to $vcpkgRoot"
+} catch {
+    Add-CheckFailure $_.Exception.Message
+}
+
 $toolTemp = Join-Path $repositoryRoot "build\tool-temp"
 try {
     New-Item -ItemType Directory -Force -Path $toolTemp | Out-Null

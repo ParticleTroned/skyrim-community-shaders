@@ -75,6 +75,16 @@ GitHub CLI authentication is separate from Git SSH authentication. `git fetch` o
 
 On Windows, this repository selects Git's OpenSSL backend to avoid Schannel-specific failures. The setup is repository-local and does not replace credential settings for unrelated hosts.
 
+The launchers propagate the repository's OpenSSL and explicit SSH settings to
+recursive child Git processes. This keeps public and nested submodule fetches
+on HTTPS while allowing authenticated child operations to use the same strict
+SSH identity as the superproject.
+
+`tools/cmake.ps1` honors an explicit `VCPKG_ROOT`, then checks `vcpkg.exe` on
+`PATH` and installed Visual Studio instances. The discovered root is scoped to
+the launcher process. `tools/dev-doctor.ps1` validates both `vcpkg.exe` and the
+toolchain file instead of treating CMake alone as a complete build toolchain.
+
 ## Recovery
 
 Run the doctor before changing global configuration or deleting caches:

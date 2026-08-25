@@ -9,6 +9,11 @@ param(
     [switch]$ForcePresetCopy
 )
 
+. (Join-Path $PSScriptRoot "tool-environment.ps1")
+
+$scriptRepositoryRoot = Split-Path -Parent $PSScriptRoot
+Enable-CsxRepositoryGitSafety -RepositoryRoot $scriptRepositoryRoot
+
 $repoRoot = ([string](git rev-parse --show-toplevel 2>$null)).Trim()
 if (-not $repoRoot) {
     Write-Error "Run this script from within a git checkout or worktree for this repository."

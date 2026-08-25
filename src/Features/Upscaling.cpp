@@ -50327,6 +50327,12 @@ void Upscaling::FillMenuCameraMotionVectors()
 	UINT previousViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 	D3D11_PRIMITIVE_TOPOLOGY previousTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
 	ID3D11InputLayout* previousInputLayout = nullptr;
+	ID3D11Buffer* previousVertexBuffer = nullptr;
+	UINT previousVertexStride = 0;
+	UINT previousVertexOffset = 0;
+	ID3D11Buffer* previousIndexBuffer = nullptr;
+	DXGI_FORMAT previousIndexFormat = DXGI_FORMAT_UNKNOWN;
+	UINT previousIndexOffset = 0;
 
 	context->VSGetShader(&previousVS, nullptr, nullptr);
 	context->PSGetShader(&previousPS, nullptr, nullptr);
@@ -50342,6 +50348,8 @@ void Upscaling::FillMenuCameraMotionVectors()
 	context->RSGetViewports(&previousViewportCount, previousViewports.data());
 	context->IAGetPrimitiveTopology(&previousTopology);
 	context->IAGetInputLayout(&previousInputLayout);
+	context->IAGetVertexBuffers(0, 1, &previousVertexBuffer, &previousVertexStride, &previousVertexOffset);
+	context->IAGetIndexBuffer(&previousIndexBuffer, &previousIndexFormat, &previousIndexOffset);
 
 	auto restoreState = ScopeExit([&]() {
 		ID3D11ShaderResourceView* nullSRV = nullptr;
@@ -50361,6 +50369,8 @@ void Upscaling::FillMenuCameraMotionVectors()
 		context->RSSetViewports(previousViewportCount, previousViewportCount ? previousViewports.data() : nullptr);
 		context->IASetPrimitiveTopology(previousTopology);
 		context->IASetInputLayout(previousInputLayout);
+		context->IASetVertexBuffers(0, 1, &previousVertexBuffer, &previousVertexStride, &previousVertexOffset);
+		context->IASetIndexBuffer(previousIndexBuffer, previousIndexFormat, previousIndexOffset);
 
 		if (previousVS)
 			previousVS->Release();
@@ -50390,10 +50400,17 @@ void Upscaling::FillMenuCameraMotionVectors()
 			previousRasterizerState->Release();
 		if (previousInputLayout)
 			previousInputLayout->Release();
+		if (previousVertexBuffer)
+			previousVertexBuffer->Release();
+		if (previousIndexBuffer)
+			previousIndexBuffer->Release();
 	});
 
 	context->IASetInputLayout(nullptr);
-	context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
+	ID3D11Buffer* nullVertexBuffer = nullptr;
+	UINT nullVertexStride = 0;
+	UINT nullVertexOffset = 0;
+	context->IASetVertexBuffers(0, 1, &nullVertexBuffer, &nullVertexStride, &nullVertexOffset);
 	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 

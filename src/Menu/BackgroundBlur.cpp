@@ -4,6 +4,7 @@
 
 #include "BackgroundBlur.h"
 #include "../Globals.h"
+#include "../State.h"
 #include "../Util.h"
 
 #include <algorithm>
@@ -529,6 +530,9 @@ namespace BackgroundBlur
 	void RenderBackgroundBlur()
 	{
 		if (!enabled || globals::game::isVR) {
+			return;
+		}
+		if (!globals::state || !globals::state->startupMenuBlurSourceReady) {
 			return;
 		}
 

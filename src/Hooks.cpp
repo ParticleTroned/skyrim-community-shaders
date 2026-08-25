@@ -865,6 +865,11 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		auto state = globals::state;
+		const bool armStartupMenuBlurSource =
+			!state->startupMenuBlurSourceReady &&
+			state->startupMenuInitializationComplete.load(std::memory_order_acquire);
+
 		const bool frameDiagActive = ShouldRecordCSFramePhaseDiag();
 		const uint64_t presentBeginTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		static uint64_t previousPresentBeginTicks = 0;
@@ -872,7 +877,6 @@ struct IDXGISwapChain_Present
 		if (frameDiagActive)
 			previousPresentBeginTicks = presentBeginTicks;
 
-		auto state = globals::state;
 		auto menu = globals::menu;
 		if (frameDiagActive) {
 			const uint32_t completedFrame = state ? state->frameCount : 0;
@@ -887,6 +891,8 @@ struct IDXGISwapChain_Present
 		const uint64_t beforePresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		HRESULT retval = func(This, SyncInterval, Flags);
 		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
+		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
+			state->startupMenuBlurSourceReady = true;
 
 		TracyD3D11Collect(state->tracyCtx);
 		if (frameDiagActive)

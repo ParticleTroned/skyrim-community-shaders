@@ -253,6 +253,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
+				globals::state->startupMenuInitializationComplete.store(true, std::memory_order_release);
 			}
 
 			break;

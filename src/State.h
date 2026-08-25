@@ -312,6 +312,10 @@ public:
 	std::atomic_bool persistentMutationBlocked{ false };
 	std::atomic_uint32_t persistentMutationBlockEndFrame{ 0 };
 	bool activeReflections = false;
+	// Set after startup work that can block the first usable render completes.
+	std::atomic_bool startupMenuInitializationComplete{ false };
+	// Set after the first successful Present following startup initialization.
+	bool startupMenuBlurSourceReady = false;
 
 	// Cached menu open states, updated once per frame in Reset().
 	// Avoids repeated IsMenuOpen calls (each constructs a BSFixedString).

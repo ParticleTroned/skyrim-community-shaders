@@ -2186,6 +2186,29 @@ public:
 		const VRRenderScaleProfileSnapshot& a_stable) const;
 
 	// D3D11 textures
+	struct CommonVendorTextureContract
+	{
+		const Texture2D* wrapper = nullptr;
+		ID3D11Texture2D* resource = nullptr;
+		ID3D11ShaderResourceView* srv = nullptr;
+		ID3D11UnorderedAccessView* uav = nullptr;
+		D3D11_TEXTURE2D_DESC desc{};
+	};
+	struct CommonVendorResourceContract
+	{
+		bool valid = false;
+		uint64_t generation = 0;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		ID3D11Device* device = nullptr;
+		ID3D11Texture2D* mainTexture = nullptr;
+		ID3D11ShaderResourceView* mainSRV = nullptr;
+		ID3D11UnorderedAccessView* mainUAV = nullptr;
+		CommonVendorTextureContract reactiveMask;
+		CommonVendorTextureContract transparencyMask;
+		CommonVendorTextureContract motionVectors;
+		CommonVendorTextureContract runtimeFsrDepth;
+		CommonVendorTextureContract sharpener;
+	};
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
@@ -2238,6 +2261,8 @@ public:
 	bool resourceCheckStable = false;
 	UpscaleMethod resourceCheckStableMethod = UpscaleMethod::kNONE;
 	uint64_t resourceCheckStableKey = 0;
+	uint64_t commonVendorResourceGeneration = 1;
+	CommonVendorResourceContract commonVendorResourceContract;
 	std::optional<uint64_t> commonResourceFailureRequestKey;
 	std::optional<uint64_t> fsrResourceFailureRequestKey;
 	bool historyResetTrackingInitialized = false;
@@ -3000,6 +3025,9 @@ private:
 	void ServiceVRIntermediateTextureCleanup(bool a_forceFence = false);
 	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool a_includePendingFSRReset = true);
 	VRVendorResourceResetResult RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
+	void InvalidateCommonVendorResourceContract();
+	void PublishCommonVendorResourceContract(UpscaleMethod a_upscaleMethod);
+	bool IsCommonVendorResourceContractCurrent(UpscaleMethod a_upscaleMethod) const;
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
 	bool IsVRRenderScalePhysicalContractConverged(
 		UpscaleMethod a_upscaleMethod,

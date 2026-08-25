@@ -6309,6 +6309,54 @@ namespace
 		return true;
 	}
 
+	bool SameTexture2DDesc(
+		const D3D11_TEXTURE2D_DESC& a_left,
+		const D3D11_TEXTURE2D_DESC& a_right)
+	{
+		return a_left.Width == a_right.Width &&
+		       a_left.Height == a_right.Height &&
+		       a_left.MipLevels == a_right.MipLevels &&
+		       a_left.ArraySize == a_right.ArraySize &&
+		       a_left.Format == a_right.Format &&
+		       a_left.SampleDesc.Count == a_right.SampleDesc.Count &&
+		       a_left.SampleDesc.Quality == a_right.SampleDesc.Quality &&
+		       a_left.Usage == a_right.Usage &&
+		       a_left.BindFlags == a_right.BindFlags &&
+		       a_left.CPUAccessFlags == a_right.CPUAccessFlags &&
+		       a_left.MiscFlags == a_right.MiscFlags;
+	}
+
+	bool ViewReferencesResource(
+		ID3D11View* a_view,
+		ID3D11Resource* a_expectedResource)
+	{
+		if (!a_view || !a_expectedResource)
+			return false;
+
+		winrt::com_ptr<ID3D11Resource> viewResource;
+		a_view->GetResource(viewResource.put());
+		return GetCOMIdentityAddress(viewResource.get()) ==
+		       GetCOMIdentityAddress(a_expectedResource);
+	}
+
+	bool HasCompatibleCommonVendorViews(
+		const Texture2D& a_texture,
+		const D3D11_TEXTURE2D_DESC& a_resourceDesc)
+	{
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		a_texture.srv->GetDesc(&srvDesc);
+		a_texture.uav->GetDesc(&uavDesc);
+		return srvDesc.Format == a_resourceDesc.Format &&
+		       srvDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D &&
+		       srvDesc.Texture2D.MostDetailedMip == 0 &&
+		       (srvDesc.Texture2D.MipLevels == a_resourceDesc.MipLevels ||
+		        srvDesc.Texture2D.MipLevels == std::numeric_limits<UINT>::max()) &&
+		       uavDesc.Format == a_resourceDesc.Format &&
+		       uavDesc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2D &&
+		       uavDesc.Texture2D.MipSlice == 0;
+	}
+
 	bool IsCommonVendorTextureCompatible(
 		const Texture2D* a_texture,
 		const D3D11_TEXTURE2D_DESC& a_expected)
@@ -6327,19 +6375,16 @@ namespace
 			GetCOMIdentityAddress(globals::d3d::device)) {
 			return false;
 		}
+		if (!ViewReferencesResource(a_texture->srv.get(), a_texture->resource.get()) ||
+			!ViewReferencesResource(a_texture->uav.get(), a_texture->resource.get())) {
+			return false;
+		}
 
 		D3D11_TEXTURE2D_DESC actual{};
 		a_texture->resource->GetDesc(&actual);
-		constexpr UINT requiredBindFlags =
-			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		return actual.Width == a_expected.Width &&
-		       actual.Height == a_expected.Height &&
-		       actual.MipLevels == a_expected.MipLevels &&
-		       actual.ArraySize == a_expected.ArraySize &&
-		       actual.Format == a_expected.Format &&
-		       actual.SampleDesc.Count == a_expected.SampleDesc.Count &&
-		       actual.SampleDesc.Quality == a_expected.SampleDesc.Quality &&
-		       (actual.BindFlags & requiredBindFlags) == requiredBindFlags;
+		return SameTexture2DDesc(actual, a_expected) &&
+		       SameTexture2DDesc(a_texture->desc, a_expected) &&
+		       HasCompatibleCommonVendorViews(*a_texture, actual);
 	}
 
 	D3D11_TEXTURE2D_DESC BuildFlatRuntimeFsrDepthDesc(
@@ -20596,6 +20641,7 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 {
+	InvalidateCommonVendorResourceContract();
 	InvalidateFrameScopedUpscalingState();
 	logger::debug("[Upscaling] Creating texture resources for method {} ({})", static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
 
@@ -20732,6 +20778,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 {
+	InvalidateCommonVendorResourceContract();
 	InvalidateFrameScopedUpscalingState();
 	logger::debug("[Upscaling] Destroying texture resources for method {} ({})", static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
 
@@ -20766,6 +20813,7 @@ void Upscaling::DestroySubmitStageDLSSSharpenerTextures()
 
 void Upscaling::DestroyCommonUpscalingTextures()
 {
+	InvalidateCommonVendorResourceContract();
 	InvalidateFrameScopedUpscalingState();
 	DestroyTexture(reactiveMaskTexture);
 	DestroyTexture(transparencyCompositionMaskTexture);
@@ -20773,6 +20821,124 @@ void Upscaling::DestroyCommonUpscalingTextures()
 	DestroyTexture(runtimeFsrDepthTexture);
 	DestroyTexture(sharpenerTexture);
 	DestroySubmitStageDLSSSharpenerTextures();
+}
+
+void Upscaling::InvalidateCommonVendorResourceContract()
+{
+	commonVendorResourceContract = {};
+	++commonVendorResourceGeneration;
+	if (commonVendorResourceGeneration == 0)
+		commonVendorResourceGeneration = 1;
+}
+
+void Upscaling::PublishCommonVendorResourceContract(
+	UpscaleMethod a_upscaleMethod)
+{
+	CommonVendorResourceContract contract{};
+	commonVendorResourceContract = contract;
+	if (!IsVendorUpscalingMethod(a_upscaleMethod)) {
+		return;
+	}
+
+	auto* renderer = globals::game::renderer;
+	if (!renderer || !globals::d3d::device)
+		return;
+
+	const auto& targets = renderer->GetRuntimeData().renderTargets;
+	const auto& main = targets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !main.SRV || !main.UAV)
+		return;
+
+	const auto captureTexture = [](
+		const Texture2D* a_texture) {
+		CommonVendorTextureContract captured{};
+		if (!a_texture)
+			return captured;
+
+		captured.wrapper = a_texture;
+		captured.resource = a_texture->resource.get();
+		captured.srv = a_texture->srv.get();
+		captured.uav = a_texture->uav.get();
+		captured.desc = a_texture->desc;
+		return captured;
+	};
+
+	contract.valid = true;
+	contract.generation = commonVendorResourceGeneration;
+	contract.method = a_upscaleMethod;
+	contract.device = globals::d3d::device;
+	contract.mainTexture = main.texture;
+	contract.mainSRV = main.SRV;
+	contract.mainUAV = main.UAV;
+	contract.reactiveMask = captureTexture(reactiveMaskTexture);
+	contract.transparencyMask = captureTexture(transparencyCompositionMaskTexture);
+	if (!globals::game::isVR) {
+		contract.motionVectors = captureTexture(motionVectorCopyTexture);
+		if (a_upscaleMethod == UpscaleMethod::kFSR &&
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR()) {
+			contract.runtimeFsrDepth = captureTexture(runtimeFsrDepthTexture);
+		}
+	}
+	if (a_upscaleMethod == UpscaleMethod::kDLSS)
+		contract.sharpener = captureTexture(sharpenerTexture);
+
+	commonVendorResourceContract = contract;
+}
+
+bool Upscaling::IsCommonVendorResourceContractCurrent(
+	UpscaleMethod a_upscaleMethod) const
+{
+	if (!IsVendorUpscalingMethod(a_upscaleMethod))
+		return true;
+
+	const auto& contract = commonVendorResourceContract;
+	if (!contract.valid ||
+		contract.generation != commonVendorResourceGeneration ||
+		contract.method != a_upscaleMethod ||
+		contract.device != globals::d3d::device) {
+		return false;
+	}
+
+	auto* renderer = globals::game::renderer;
+	if (!renderer)
+		return false;
+	const auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (contract.mainTexture != main.texture ||
+		contract.mainSRV != main.SRV ||
+		contract.mainUAV != main.UAV) {
+		return false;
+	}
+
+	const auto matchesTexture = [](
+		const CommonVendorTextureContract& a_contract,
+		const Texture2D* a_texture) {
+		return a_texture &&
+		       a_contract.wrapper == a_texture &&
+		       a_contract.resource == a_texture->resource.get() &&
+		       a_contract.srv == a_texture->srv.get() &&
+		       a_contract.uav == a_texture->uav.get() &&
+		       SameTexture2DDesc(a_contract.desc, a_texture->desc);
+	};
+
+	if (!matchesTexture(contract.reactiveMask, reactiveMaskTexture) ||
+		!matchesTexture(
+			contract.transparencyMask,
+			transparencyCompositionMaskTexture)) {
+		return false;
+	}
+
+	if (!globals::game::isVR) {
+		if (!matchesTexture(contract.motionVectors, motionVectorCopyTexture))
+			return false;
+		if (a_upscaleMethod == UpscaleMethod::kFSR &&
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR() &&
+			!matchesTexture(contract.runtimeFsrDepth, runtimeFsrDepthTexture)) {
+			return false;
+		}
+	}
+
+	return a_upscaleMethod != UpscaleMethod::kDLSS ||
+	       matchesTexture(contract.sharpener, sharpenerTexture);
 }
 
 bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const
@@ -20785,8 +20951,17 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 		return false;
 	const auto& targets = renderer->GetRuntimeData().renderTargets;
 	const auto& main = targets[RE::RENDER_TARGETS::kMAIN];
-	if (!main.texture)
+	if (!main.texture || !main.SRV || !main.UAV || !globals::d3d::device)
 		return false;
+
+	winrt::com_ptr<ID3D11Device> mainDevice;
+	main.texture->GetDevice(mainDevice.put());
+	if (GetCOMIdentityAddress(mainDevice.get()) !=
+			GetCOMIdentityAddress(globals::d3d::device) ||
+		!ViewReferencesResource(main.SRV, main.texture) ||
+		!ViewReferencesResource(main.UAV, main.texture)) {
+		return false;
+	}
 
 	D3D11_TEXTURE2D_DESC mainDesc{};
 	main.texture->GetDesc(&mainDesc);
@@ -35476,6 +35651,11 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 	commonResourceFailureRequestKey.reset();
+	PublishCommonVendorResourceContract(a_upscalemethod);
+	if (IsVendorUpscalingMethod(a_upscalemethod) &&
+		!IsCommonVendorResourceContractCurrent(a_upscalemethod)) {
+		return false;
+	}
 
 	resourceCheckLastCompletedFrame = GetFrameScopedUpscalingWorkFrame();
 	resourceCheckLastCompletedMethod = a_upscalemethod;
@@ -35519,7 +35699,7 @@ bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
 		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 		!vrRenderScaleResourceTrackingSyncPending.load(std::memory_order_acquire) &&
 		!HasPendingVRUpscalingTransition() &&
-		AreCommonVendorTexturesReady(a_upscalemethod)) {
+		IsCommonVendorResourceContractCurrent(a_upscalemethod)) {
 		const uint64_t stableKey = BuildResourceCheckStableKey(*this, a_upscalemethod);
 		if (resourceCheckStableKey == stableKey) {
 			resourceCheckLastCompletedFrame = currentFrame;

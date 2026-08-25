@@ -953,6 +953,7 @@ float GetWaterReflectionHeightFade(uint eyeIndex)
 float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float distanceFactor, float refractionsDepthFactor, uint eyeIndex = 0)
 {
+	float3 specularColor = ReflectionColor.xyz * VarAmounts.y;
 	if (Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections) {
 		float3 finalSsrReflectionColor = 0.0.xxx;
 		float ssrFraction = 0.0;
@@ -1042,15 +1043,15 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 
 		float3 finalReflectionColor = Color::IrradianceToGamma(lerp(Color::IrradianceToLinear(reflectionColor), Color::IrradianceToLinear(finalSsrReflectionColor), ssrFraction));
 		if (SharedData::lodBlendingSettings.WaterReflectionStrength < 0.0) {
-			return finalReflectionColor;
+			specularColor = finalReflectionColor;
+		} else {
+			float waterReflectionStrength = VarAmounts.y * SharedData::lodBlendingSettings.WaterReflectionStrength;
+			waterReflectionStrength = lerp(1.0, waterReflectionStrength, GetWaterReflectionHeightFade(eyeIndex));
+			waterReflectionStrength = saturate(waterReflectionStrength);
+			specularColor = lerp(ReflectionColor.xyz, finalReflectionColor, waterReflectionStrength);
 		}
-
-		float waterReflectionStrength = VarAmounts.y * SharedData::lodBlendingSettings.WaterReflectionStrength;
-		waterReflectionStrength = lerp(1.0, waterReflectionStrength, GetWaterReflectionHeightFade(eyeIndex));
-		waterReflectionStrength = saturate(waterReflectionStrength);
-		return lerp(ReflectionColor.xyz, finalReflectionColor, waterReflectionStrength);
 	}
-	return ReflectionColor.xyz * VarAmounts.y;
+	return specularColor;
 }
 
 float GetRawScreenDepthWater(float2 screenPosition)
@@ -1092,14 +1093,15 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 #			endif
 	float viewAngle = 1 - saturate(dot(-viewDirection, actualNormal));
 	float vanillaFresnel = (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
+	float fresnel = vanillaFresnel;
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 	{
-		return lerp(
+		fresnel = lerp(
 			SharedData::waterAppearanceSettings.FresnelMin,
 			SharedData::waterAppearanceSettings.FresnelMax,
 			vanillaFresnel);
 	}
-	return vanillaFresnel;
+	return fresnel;
 }
 
 #			if defined(UNIFIED_WATER)
@@ -1119,11 +1121,12 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 
 float3 ApplyWaterAppearanceBrightness(float3 waterColor)
 {
+	float3 adjustedColor = waterColor;
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 	{
-		return waterColor * SharedData::waterAppearanceSettings.WaterBrightness;
+		adjustedColor *= SharedData::waterAppearanceSettings.WaterBrightness;
 	}
-	return waterColor;
+	return adjustedColor;
 }
 
 #			if defined(UNIFIED_WATER) && defined(DEPTH) && (!defined(VERTEX_ALPHA_DEPTH) || defined(VR)) && !defined(UNDERWATER) && !defined(LOD)
@@ -1899,7 +1902,8 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(SPECULAR) && (NUM_SPECULAR_LIGHTS != 0)
 	float3 finalColor = 0.0.xxx;
 
-	for (int lightIndex = 0; lightIndex < NUM_SPECULAR_LIGHTS; ++lightIndex) {
+	[unroll] for (int lightIndex = 0; lightIndex < NUM_SPECULAR_LIGHTS; ++lightIndex)
+	{
 		float3 lightVector = LightPos[lightIndex].xyz - (PosAdjust[eyeIndex].xyz + input.WPosition.xyz);
 		float3 lightDirection = normalize(normalize(lightVector) - viewDirection);
 		float lightFade = saturate(length(lightVector) / LightPos[lightIndex].w);

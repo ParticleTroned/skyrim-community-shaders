@@ -1829,6 +1829,8 @@ public:
 	std::vector<RetiredVRIntermediateTextures> retiredVRIntermediateTextures;
 	uint32_t deferredVRIntermediateTextureCleanupFrame = 0;
 	winrt::com_ptr<ID3D11Query> vrIntermediateTextureCleanupFence;
+	// A pending fence owns only the tail-eligible prefix captured at End().
+	uint64_t vrIntermediateTextureCleanupFenceBatchMaxSerial = 0;
 	std::atomic<uint64_t> vrIntermediateRetirementNextSerial{ 1 };
 	std::atomic<uint64_t> vrIntermediateRetirementLastIssuedSerial{ 0 };
 	std::atomic<uint64_t> vrIntermediateRetirementCompletedSerial{ 0 };

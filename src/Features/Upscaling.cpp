@@ -21733,6 +21733,14 @@ namespace
 		return VRIntermediateCleanupFenceResult::Pending;
 	}
 
+	bool HasVRIntermediateRetirementTailElapsed(
+		uint32_t a_retireFrame,
+		uint32_t a_currentFrame) noexcept
+	{
+		return static_cast<int32_t>(a_currentFrame - a_retireFrame) >
+		       static_cast<int32_t>(kVRRetiredIntermediateTextureTailFrames);
+	}
+
 }
 
 Upscaling::VRLowPeakNativeRestoreProgress Upscaling::GetVRLowPeakNativeRestoreProgress() const
@@ -22043,7 +22051,6 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 			retired.retirementSerial,
 			std::memory_order_release);
 		retiredVRIntermediateTextures.push_back(std::move(retired));
-		vrIntermediateTextureCleanupFence = nullptr;
 		ScheduleVRIntermediateTextureCleanup();
 		ServiceVRIntermediateTextureCleanup();
 		UpdateVRIntermediateRetirementSnapshot(
@@ -22097,23 +22104,31 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 
 void Upscaling::ScheduleVRIntermediateTextureCleanup()
 {
-	deferredVRIntermediateTextureCleanupFrame = 0;
-	const auto scheduleFrame = [this](uint32_t a_retireFrame) {
-		const uint32_t cleanupFrame = a_retireFrame + kVRRetiredIntermediateTextureTailFrames + 1u;
-		if (deferredVRIntermediateTextureCleanupFrame == 0 ||
-			cleanupFrame < deferredVRIntermediateTextureCleanupFrame) {
-			deferredVRIntermediateTextureCleanupFrame = cleanupFrame;
-		}
-	};
+	if (retiredVRIntermediateTextures.empty()) {
+		deferredVRIntermediateTextureCleanupFrame = 0;
+		return;
+	}
 
-	for (const auto& entry : retiredVRIntermediateTextures)
-		scheduleFrame(entry.retireFrame);
+	if (vrIntermediateTextureCleanupFence) {
+		const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
+		deferredVRIntermediateTextureCleanupFrame = currentFrame + 1u;
+		if (deferredVRIntermediateTextureCleanupFrame == 0)
+			deferredVRIntermediateTextureCleanupFrame = 1u;
+		return;
+	}
+
+	deferredVRIntermediateTextureCleanupFrame =
+		retiredVRIntermediateTextures.front().retireFrame +
+		kVRRetiredIntermediateTextureTailFrames + 1u;
+	if (deferredVRIntermediateTextureCleanupFrame == 0)
+		deferredVRIntermediateTextureCleanupFrame = 1u;
 }
 
 void Upscaling::ServiceVRIntermediateTextureCleanup(bool a_forceFence)
 {
 	if (retiredVRIntermediateTextures.empty()) {
 		vrIntermediateTextureCleanupFence = nullptr;
+		vrIntermediateTextureCleanupFenceBatchMaxSerial = 0;
 		deferredVRIntermediateTextureCleanupFrame = 0;
 		vrIntermediateRetirementCapacityLogged.store(false, std::memory_order_release);
 		UpdateVRIntermediateRetirementSnapshot(false);
@@ -22131,44 +22146,112 @@ void Upscaling::ServiceVRIntermediateTextureCleanup(bool a_forceFence)
 		epochOwnedLowPeakRestoreActive || legacyLowPeakRestoreActive;
 	const bool forceFenceCleanup = a_forceFence || reliefActive || lowPeakNativeRestoreActive;
 	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
-	if (!forceFenceCleanup &&
-		deferredVRIntermediateTextureCleanupFrame != 0 &&
-		currentFrame < deferredVRIntermediateTextureCleanupFrame) {
-		UpdateVRIntermediateRetirementSnapshot(
-			retiredVRIntermediateTextures.size() >= kVRRetiredIntermediateTextureMaxSets);
-		return;
-	}
-
-	const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
-		vrIntermediateTextureCleanupFence,
+	const char* fenceReason =
 		lowPeakNativeRestoreActive ?
 			"VR full-resolution restore intermediate cleanup" :
-			(a_forceFence ? "VR intermediate retirement capacity" : "VR intermediate deferred cleanup"));
-	if (fenceResult != VRIntermediateCleanupFenceResult::Ready) {
-		deferredVRIntermediateTextureCleanupFrame = currentFrame + 1u;
+			(forceFenceCleanup ? "VR intermediate retirement capacity" : "VR intermediate deferred cleanup");
+	const auto publishPending = [&]() {
+		ScheduleVRIntermediateTextureCleanup();
 		UpdateVRIntermediateRetirementSnapshot(
 			retiredVRIntermediateTextures.size() >= kVRRetiredIntermediateTextureMaxSets);
-		return;
-	}
+	};
+	const auto completeRetirementsThrough = [&](uint64_t a_maxSerial) {
+		if (a_maxSerial == 0)
+			return uint64_t{ 0 };
 
-	uint64_t completedRetirementSerial = 0;
-	for (const auto& retired : retiredVRIntermediateTextures) {
-		completedRetirementSerial =
-			std::max(completedRetirementSerial, retired.retirementSerial);
-	}
-	retiredVRIntermediateTextures.clear();
-	if (completedRetirementSerial != 0) {
+		uint64_t completedSerial = 0;
+		auto completedEnd = retiredVRIntermediateTextures.begin();
+		while (completedEnd != retiredVRIntermediateTextures.end() &&
+			completedEnd->retirementSerial <= a_maxSerial) {
+			completedSerial = completedEnd->retirementSerial;
+			++completedEnd;
+		}
+		retiredVRIntermediateTextures.erase(
+			retiredVRIntermediateTextures.begin(),
+			completedEnd);
+		return completedSerial;
+	};
+	const auto publishCompletedSerial = [&](uint64_t a_completedSerial) {
+		if (a_completedSerial == 0)
+			return;
 		auto completedHighWater =
 			vrIntermediateRetirementCompletedSerial.load(std::memory_order_acquire);
-		while (completedHighWater < completedRetirementSerial &&
+		while (completedHighWater < a_completedSerial &&
 			   !vrIntermediateRetirementCompletedSerial.compare_exchange_weak(
 				   completedHighWater,
-				   completedRetirementSerial,
+				   a_completedSerial,
 				   std::memory_order_acq_rel,
 				   std::memory_order_acquire)) {
 		}
+	};
+
+	if (vrIntermediateTextureCleanupFence) {
+		const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
+			vrIntermediateTextureCleanupFence,
+			fenceReason);
+		if (fenceResult != VRIntermediateCleanupFenceResult::Ready) {
+			if (fenceResult == VRIntermediateCleanupFenceResult::Failed)
+				vrIntermediateTextureCleanupFenceBatchMaxSerial = 0;
+			publishPending();
+			return;
+		}
+
+		publishCompletedSerial(completeRetirementsThrough(
+			vrIntermediateTextureCleanupFenceBatchMaxSerial));
+		vrIntermediateTextureCleanupFenceBatchMaxSerial = 0;
 	}
+
+	if (!retiredVRIntermediateTextures.empty()) {
+		// Pressure requests may accelerate polling, but never make an unelapsed
+		// generation eligible for this fence batch.
+		uint64_t eligibleMaxSerial = 0;
+		if (globals::state) {
+			for (const auto& retired : retiredVRIntermediateTextures) {
+				if (!HasVRIntermediateRetirementTailElapsed(
+						retired.retireFrame,
+						currentFrame)) {
+					break;
+				}
+				eligibleMaxSerial = retired.retirementSerial;
+			}
+		} else if (!globals::d3d::context || !globals::d3d::device) {
+			eligibleMaxSerial =
+				retiredVRIntermediateTextures.back().retirementSerial;
+		}
+
+		if (eligibleMaxSerial == 0) {
+			publishPending();
+			return;
+		}
+
+		const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
+			vrIntermediateTextureCleanupFence,
+			fenceReason);
+		if (fenceResult == VRIntermediateCleanupFenceResult::Pending) {
+			vrIntermediateTextureCleanupFenceBatchMaxSerial = eligibleMaxSerial;
+			publishPending();
+			return;
+		}
+		if (fenceResult == VRIntermediateCleanupFenceResult::Failed) {
+			vrIntermediateTextureCleanupFenceBatchMaxSerial = 0;
+			publishPending();
+			return;
+		}
+
+		publishCompletedSerial(
+			completeRetirementsThrough(eligibleMaxSerial));
+	}
+
+	if (!retiredVRIntermediateTextures.empty()) {
+		publishPending();
+		return;
+	}
+
+	const uint64_t completedRetirementSerial =
+		vrIntermediateRetirementCompletedSerial.load(
+			std::memory_order_acquire);
 	vrIntermediateTextureCleanupFence = nullptr;
+	vrIntermediateTextureCleanupFenceBatchMaxSerial = 0;
 	deferredVRIntermediateTextureCleanupFrame = 0;
 	vrIntermediateRetirementCapacityLogged.store(false, std::memory_order_release);
 	const bool completedEpochOwnedLowPeakRestore =
@@ -27532,7 +27615,6 @@ void Upscaling::ClearVRRenderScaleMemoryRelief()
 	vrRenderScaleMemoryReliefEndFrame.store(0, std::memory_order_release);
 	vrRenderScaleMemoryReliefCleanEyeMask.store(0, std::memory_order_release);
 	vrRenderScaleMemoryReliefLogged.store(false, std::memory_order_release);
-	vrIntermediateTextureCleanupFence = nullptr;
 }
 
 bool Upscaling::IsVRRenderScaleMemoryReliefActive()
@@ -37986,7 +38068,6 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 			retired.retirementSerial,
 			std::memory_order_release);
 		retiredVRIntermediateTextures.push_back(std::move(retired));
-		vrIntermediateTextureCleanupFence = nullptr;
 		ScheduleVRIntermediateTextureCleanup();
 		ServiceVRIntermediateTextureCleanup();
 		UpdateVRIntermediateRetirementSnapshot(
@@ -40037,7 +40118,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	// before the first destination world frame; otherwise the handoff and cleanup
 	// can each wait for the other. Newer target retirement and trimming remain
 	// deferred by the handoff above; recovery uses its narrower stable-owner gate.
-	if (deferredVRIntermediateTextureCleanupFrame != 0)
+	if (HasPendingVRIntermediateTextureCleanup())
 		ServiceVRIntermediateTextureCleanup();
 	QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(*this);
 	ApplyPendingVRFpsStabilizerLoadSync();

@@ -2741,31 +2741,34 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a
 	bool commandListSubmitted = false;
 	bool commandFenceTracked = false;
 	try {
-		auto copyIntoShared = [&](ID3D11Resource* a_source, const std::unique_ptr<WrappedResource>& a_destination, uint32_t a_width, uint32_t a_height, uint32_t a_maxWidth, uint32_t a_maxHeight) {
+		// FFX permits oversized resources but defines input work by renderSize.
+		auto copyIntoShared = [&](ID3D11Resource* a_source, const std::unique_ptr<WrappedResource>& a_destination,
+			uint32_t a_sourceWidth, uint32_t a_sourceHeight, uint32_t a_activeWidth, uint32_t a_activeHeight,
+			uint32_t a_destinationWidth, uint32_t a_destinationHeight) {
 			if (!a_source || !a_destination || !a_destination->resource11)
 				return false;
-
-			const uint32_t copyWidth = std::min(a_width, a_maxWidth);
-			const uint32_t copyHeight = std::min(a_height, a_maxHeight);
-			if (!copyWidth || !copyHeight)
+			if (!a_activeWidth || !a_activeHeight ||
+				a_activeWidth > a_sourceWidth || a_activeHeight > a_sourceHeight ||
+				a_activeWidth > a_destinationWidth || a_activeHeight > a_destinationHeight) {
 				return false;
+			}
 
 			D3D11_BOX sourceBox{};
 			sourceBox.left = 0;
 			sourceBox.top = 0;
 			sourceBox.front = 0;
-			sourceBox.right = copyWidth;
-			sourceBox.bottom = copyHeight;
+			sourceBox.right = a_activeWidth;
+			sourceBox.bottom = a_activeHeight;
 			sourceBox.back = 1;
 			swapChain.d3d11Context->CopySubresourceRegion(a_destination->resource11.get(), 0, 0, 0, 0, a_source, 0, &sourceBox);
 			return true;
 		};
 
-		if (!copyIntoShared(a_color, runtimeColorShared[a_contextIndex], colorDesc.Width, colorDesc.Height, runtimeColorSharedDesc.Width, runtimeColorSharedDesc.Height) ||
-			!copyIntoShared(a_depth, runtimeDepthShared[a_contextIndex], depthDesc.Width, depthDesc.Height, runtimeDepthSharedDesc.Width, runtimeDepthSharedDesc.Height) ||
-			!copyIntoShared(a_motionVectors, runtimeMotionShared[a_contextIndex], motionDesc.Width, motionDesc.Height, runtimeMotionSharedDesc.Width, runtimeMotionSharedDesc.Height) ||
-			!copyIntoShared(a_reactiveMask, runtimeReactiveShared[a_contextIndex], reactiveDesc.Width, reactiveDesc.Height, runtimeReactiveSharedDesc.Width, runtimeReactiveSharedDesc.Height) ||
-			!copyIntoShared(a_transparencyCompositionMask, runtimeTransparencyShared[a_contextIndex], transparencyDesc.Width, transparencyDesc.Height, runtimeTransparencySharedDesc.Width, runtimeTransparencySharedDesc.Height)) {
+		if (!copyIntoShared(a_color, runtimeColorShared[a_contextIndex], colorDesc.Width, colorDesc.Height, a_renderWidth, a_renderHeight, runtimeColorSharedDesc.Width, runtimeColorSharedDesc.Height) ||
+			!copyIntoShared(a_depth, runtimeDepthShared[a_contextIndex], depthDesc.Width, depthDesc.Height, a_renderWidth, a_renderHeight, runtimeDepthSharedDesc.Width, runtimeDepthSharedDesc.Height) ||
+			!copyIntoShared(a_motionVectors, runtimeMotionShared[a_contextIndex], motionDesc.Width, motionDesc.Height, a_renderWidth, a_renderHeight, runtimeMotionSharedDesc.Width, runtimeMotionSharedDesc.Height) ||
+			!copyIntoShared(a_reactiveMask, runtimeReactiveShared[a_contextIndex], reactiveDesc.Width, reactiveDesc.Height, a_renderWidth, a_renderHeight, runtimeReactiveSharedDesc.Width, runtimeReactiveSharedDesc.Height) ||
+			!copyIntoShared(a_transparencyCompositionMask, runtimeTransparencyShared[a_contextIndex], transparencyDesc.Width, transparencyDesc.Height, a_renderWidth, a_renderHeight, runtimeTransparencySharedDesc.Width, runtimeTransparencySharedDesc.Height)) {
 			logger::error("[FidelityFX] Runtime upscaler shared-resource copy failed for eye {}.", a_contextIndex);
 			dispatchOk = false;
 		} else {

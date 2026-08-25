@@ -265,7 +265,7 @@ public:
 		};
 		MenuOverlayPath menuOverlayPath = MenuOverlayPath::Auto;  ///< Runtime path used to present the menu in the headset
 		bool KeepDesktopWindowFocusedForVRMenu = true;            ///< Keep the game window centered and foregrounded while the VR menu is open
-		bool StabilizeRenderScaleDesktopMirror = false;           ///< Blit render-scale output back to the desktop mirror when direct copy is incompatible
+		bool StabilizeRenderScaleDesktopMirror = false;           ///< Publish render-scale eye outputs to the desktop mirror
 
 		// CSX menu navigation settings
 		bool UseRuntimeDefaultMenuNavigation = true;   ///< Use mouse navigation by default until the user selects a mode explicitly

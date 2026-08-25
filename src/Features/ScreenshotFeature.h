@@ -65,6 +65,8 @@ struct ScreenshotFeature : public Feature
 	void SetEnabled(bool a_enabled);
 	/** Returns whether a source capture is awaiting Submit or Present processing. */
 	bool HasPendingCapture() const noexcept { return capturePending.load(std::memory_order_acquire); }
+	/** Returns whether the pending capture consumes the desktop backbuffer. */
+	bool HasPendingDesktopMirrorCapture() const;
 	std::size_t GetOutstandingArtifactCount() const;
 	std::string GetActiveCaptureRequestId() const;
 	/**

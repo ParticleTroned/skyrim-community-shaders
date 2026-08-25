@@ -6,6 +6,7 @@
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/VolumetricLighting.h"
 #include "FoveatedCommon.h"
 #include "GpuPass.h"
@@ -47795,40 +47796,27 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		eyeHeightOut,
 		true);
 	if (vrRenderScaleMode) {
-		const bool canMirrorToSource =
-			sourceDesc.ArraySize == 1 &&
-			sourceDesc.Width >= eyeWidthOut * 2 &&
-			sourceDesc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
-			vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
-			vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
-			vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
-			vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
-			vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
-
-		if (canMirrorToSource) {
+		const bool mirrorRequested =
+			globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||
+			globals::features::screenshotFeature.HasPendingDesktopMirrorCapture();
+		if (!mirrorRequested) {
 			vrDesktopMirrorBlitRTV = nullptr;
 			vrDesktopMirrorBlitTarget = nullptr;
-
-			if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
-				submitStageMirrorFrame = currentFrame;
-				submitStageMirrorSourceTexture = sourceTexture;
-				submitStageMirrorEyeReady = {};
-			}
-
-			submitStageMirrorEyeReady[eyeIndex] = true;
-			if (submitStageMirrorEyeReady[0] && submitStageMirrorEyeReady[1]) {
-				D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-				context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
-				context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
-				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
-					return false;
-				submitStageMirrorEyeReady = {};
-			}
+			submitStageMirrorEyeReady = {};
 		} else {
-			if (globals::features::vr.settings.StabilizeRenderScaleDesktopMirror) {
+			const bool canMirrorToSource =
+				sourceDesc.ArraySize == 1 &&
+				sourceDesc.Width >= eyeWidthOut * 2 &&
+				sourceDesc.Height >= eyeHeightOut &&
+				vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
+				vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
+				vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
+				vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
+				vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
+				vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
+				vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
+				vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
+			const auto consumeReadyMirrorPair = [&]() {
 				if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
 					submitStageMirrorFrame = currentFrame;
 					submitStageMirrorSourceTexture = sourceTexture;
@@ -47836,7 +47824,25 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				}
 
 				submitStageMirrorEyeReady[eyeIndex] = true;
-				if (submitStageMirrorEyeReady[0] && submitStageMirrorEyeReady[1]) {
+				if (!submitStageMirrorEyeReady[0] || !submitStageMirrorEyeReady[1])
+					return false;
+
+				submitStageMirrorEyeReady = {};
+				return true;
+			};
+			if (canMirrorToSource) {
+				vrDesktopMirrorBlitRTV = nullptr;
+				vrDesktopMirrorBlitTarget = nullptr;
+
+				if (consumeReadyMirrorPair()) {
+					D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+					context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
+					context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
+					if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
+						return false;
+				}
+			} else {
+				if (consumeReadyMirrorPair()) {
 					static bool loggedSubmitStageMirrorFallbackFailure = false;
 					const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
 					if (!mirrorUpdated && IsSubmitStageDeviceLost())
@@ -47856,12 +47862,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 							vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
 						loggedSubmitStageMirrorFallbackFailure = true;
 					}
-					submitStageMirrorEyeReady = {};
 				}
-			} else {
-				vrDesktopMirrorBlitRTV = nullptr;
-				vrDesktopMirrorBlitTarget = nullptr;
-				submitStageMirrorEyeReady = {};
 			}
 		}
 

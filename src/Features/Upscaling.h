@@ -2625,11 +2625,86 @@ public:
 		ID3D11Resource* transparencyMaskIn = nullptr;
 		ID3D11Resource* colorOut = nullptr;
 	};
+	struct SubmitStageRuntimeFSRStereoState
+	{
+		bool ready = false;
+		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		uint32_t generation = 0;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		ID3D11Texture2D* sourceTexture = nullptr;
+		std::array<ID3D11Resource*, 2> colorIn{};
+		std::array<ID3D11Resource*, 2> depthIn{};
+		std::array<ID3D11Resource*, 2> motionVectorsIn{};
+		std::array<ID3D11Resource*, 2> reactiveMaskIn{};
+		std::array<ID3D11Resource*, 2> transparencyMaskIn{};
+		std::array<ID3D11Resource*, 2> colorOut{};
+
+		[[nodiscard]] bool Matches(
+			uint32_t a_frame,
+			uint32_t a_generation,
+			uint32_t a_inputWidth,
+			uint32_t a_inputHeight,
+			uint32_t a_outputWidth,
+			uint32_t a_outputHeight,
+			ID3D11Texture2D* a_sourceTexture,
+			const std::array<FidelityFX::UpscaleRegionParameters, 2>& a_regions) const
+		{
+			if (!ready || frame != a_frame || generation != a_generation ||
+				inputWidth != a_inputWidth || inputHeight != a_inputHeight ||
+				outputWidth != a_outputWidth || outputHeight != a_outputHeight ||
+				sourceTexture != a_sourceTexture) {
+				return false;
+			}
+
+			for (uint32_t eye = 0; eye < a_regions.size(); ++eye) {
+				const auto& region = a_regions[eye];
+				if (colorIn[eye] != region.color || depthIn[eye] != region.depth ||
+					motionVectorsIn[eye] != region.motionVectors || reactiveMaskIn[eye] != region.reactiveMask ||
+					transparencyMaskIn[eye] != region.transparencyCompositionMask || colorOut[eye] != region.output) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		void Record(
+			uint32_t a_frame,
+			uint32_t a_generation,
+			uint32_t a_inputWidth,
+			uint32_t a_inputHeight,
+			uint32_t a_outputWidth,
+			uint32_t a_outputHeight,
+			ID3D11Texture2D* a_sourceTexture,
+			const std::array<FidelityFX::UpscaleRegionParameters, 2>& a_regions)
+		{
+			ready = true;
+			frame = a_frame;
+			generation = a_generation;
+			inputWidth = a_inputWidth;
+			inputHeight = a_inputHeight;
+			outputWidth = a_outputWidth;
+			outputHeight = a_outputHeight;
+			sourceTexture = a_sourceTexture;
+			for (uint32_t eye = 0; eye < a_regions.size(); ++eye) {
+				const auto& region = a_regions[eye];
+				colorIn[eye] = region.color;
+				depthIn[eye] = region.depth;
+				motionVectorsIn[eye] = region.motionVectors;
+				reactiveMaskIn[eye] = region.reactiveMask;
+				transparencyMaskIn[eye] = region.transparencyCompositionMask;
+				colorOut[eye] = region.output;
+			}
+		}
+	};
 	uint32_t submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageVendorOutputGeneration = 0;
 	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
 	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
 	std::array<SubmitStageFoveatedCenterState, 2> submitStageFoveatedCenterState = {};
+	SubmitStageRuntimeFSRStereoState submitStageRuntimeFSRStereoState{};
 	bool submitStageForceFullEyeVendorFallback = false;
 	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };

@@ -22488,6 +22488,7 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	submitStageRuntimeFSRStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -34949,6 +34950,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	submitStageRuntimeFSRStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -46124,6 +46126,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	submitStageRuntimeFSRStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -46738,6 +46741,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageVendorOutputSourceTexture = sourceTexture;
 		submitStageVendorEyeState = {};
 		submitStageFoveatedCenterState = {};
+		submitStageRuntimeFSRStereoState = {};
 		submitStageForceFullEyeVendorFallback = false;
 	}
 
@@ -47516,54 +47520,181 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		const bool replayOtherEyeFromFoveated =
 			submitStageVendorEyeState[otherEyeIndex].ready &&
 			submitStageVendorEyeState[otherEyeIndex].usedFoveatedVendorPath;
-		if (replayOtherEyeFromFoveated && !replayStoredFullEyeVendorOutput(otherEyeIndex, submitDLSSSharpening) && IsSubmitStageDeviceLost())
-			return false;
+		bool runtimeStereoDispatchFailed = false;
+		const bool sourceContainsBothEyes =
+			sourceUsesCombinedStereoLayout || sourceDesc.ArraySize > 1;
+		const bool runtimeFSRStereoRequested =
+			upscaleMethod == UpscaleMethod::kFSR &&
+			sourceContainsBothEyes &&
+			!fidelityFX.IsRuntimeUpscalerFailureLatched() &&
+			(fidelityFX.ShouldRequestRuntimeFsr4() || fidelityFX.ShouldUseRuntimeUpscalerForFSR());
+		if (runtimeFSRStereoRequested) {
+			const auto otherSourceRegion = ResolveVRSubmitSourceRegion(
+				sourceDesc,
+				otherEyeIndex,
+				sourceEyeWidthIn,
+				sourceEyeHeightIn,
+				sourceStereoLayout,
+				sourceUsesCombinedStereoLayout,
+				false,
+				nullptr);
+			bool stereoResourcesReady =
+				otherSourceRegion.valid &&
+				otherSourceRegion.matchesExpectedSize;
+			std::array<FidelityFX::UpscaleRegionParameters, 2> stereoRegions{};
+			for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye) {
+				stereoResourcesReady = stereoResourcesReady &&
+					vrIntermediateColorIn[stereoEye] && vrIntermediateColorIn[stereoEye]->resource &&
+					vrIntermediateLinearDepth[stereoEye] && vrIntermediateLinearDepth[stereoEye]->resource &&
+					vrIntermediateMotionVectors[stereoEye] && vrIntermediateMotionVectors[stereoEye]->resource &&
+					vrIntermediateReactiveMask[stereoEye] && vrIntermediateReactiveMask[stereoEye]->resource &&
+					vrIntermediateTransparencyMask[stereoEye] && vrIntermediateTransparencyMask[stereoEye]->resource &&
+					vrIntermediateColorOut[stereoEye] && vrIntermediateColorOut[stereoEye]->resource;
+				if (!stereoResourcesReady)
+					break;
 
-		static bool loggedFullEyeSubmitException[2] = {};
-		try {
-			VendorEyeDispatchParams vendorParams{};
-			vendorParams.eyeIndex = eyeIndex;
-			vendorParams.inputWidth = eyeWidthIn;
-			vendorParams.inputHeight = eyeHeightIn;
-			vendorParams.outputWidth = eyeWidthOut;
-			vendorParams.outputHeight = eyeHeightOut;
-			vendorParams.motionVectorScaleX = static_cast<float>(eyeWidthIn);
-			vendorParams.motionVectorScaleY = static_cast<float>(eyeHeightIn);
-			vendorParams.colorIn = vrIntermediateColorIn[eyeIndex]->resource.get();
-			vendorParams.depth = upscaleMethod == UpscaleMethod::kFSR ?
-			                         vrIntermediateLinearDepth[eyeIndex]->resource.get() :
-			                         vrIntermediateDepth[eyeIndex]->resource.get();
-			vendorParams.motionVectors = vrIntermediateMotionVectors[eyeIndex]->resource.get();
-			vendorParams.reactiveMask = vrIntermediateReactiveMask[eyeIndex]->resource.get();
-			vendorParams.transparencyMask = vrIntermediateTransparencyMask[eyeIndex]->resource.get();
-			vendorParams.colorOut = vendorColorOutput->resource.get();
-			vendorParams.label = "submit-stage full-eye";
-			applyAuthoritativeDLSSProfile(vendorParams);
-			{
-				CS_GPU_PASS("Upscaling::SubmitStageUpscale");
-				vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
+				stereoRegions[stereoEye] = {
+					stereoEye,
+					vrIntermediateColorIn[stereoEye]->resource.get(),
+					vrIntermediateLinearDepth[stereoEye]->resource.get(),
+					vrIntermediateMotionVectors[stereoEye]->resource.get(),
+					vrIntermediateReactiveMask[stereoEye]->resource.get(),
+					vrIntermediateTransparencyMask[stereoEye]->resource.get(),
+					vrIntermediateColorOut[stereoEye]->resource.get(),
+					eyeWidthIn,
+					eyeHeightIn,
+					eyeWidthOut,
+					eyeHeightOut,
+					static_cast<float>(eyeWidthIn),
+					static_cast<float>(eyeHeightIn),
+					settings.sharpnessFSR
+				};
 			}
-		} catch (const std::exception& e) {
-			UnbindUpscalingResources();
-			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage full-eye vendor dispatch"))
+
+			if (stereoResourcesReady) {
+				if (submitStageRuntimeFSRStereoState.Matches(
+						currentFrame,
+						activeContractGeneration,
+						eyeWidthIn,
+						eyeHeightIn,
+						eyeWidthOut,
+						eyeHeightOut,
+						sourceTexture,
+						stereoRegions)) {
+					vendorSucceeded = true;
+				} else {
+					context->CopySubresourceRegion(
+						vrIntermediateColorIn[otherEyeIndex]->resource.get(),
+						0,
+						0,
+						0,
+						0,
+						sourceTexture,
+						otherSourceRegion.subresource,
+						&otherSourceRegion.box);
+					if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage stereo source copy"))
+						return false;
+
+					FidelityFX::StereoUpscaleResult stereoResult{};
+					{
+						CS_GPU_PASS("Upscaling::SubmitStageUpscaleStereo");
+						stereoResult = fidelityFX.UpscaleStereoRegions(stereoRegions);
+					}
+					if (stereoResult == FidelityFX::StereoUpscaleResult::Ready) {
+						for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye)
+							RecordVRRenderScaleFullEyeEvaluation(upscaleMethod, stereoEye, true);
+
+						submitStageRuntimeFSRStereoState.Record(
+							currentFrame,
+							activeContractGeneration,
+							eyeWidthIn,
+							eyeHeightIn,
+							eyeWidthOut,
+							eyeHeightOut,
+							sourceTexture,
+							stereoRegions);
+						vendorSucceeded = true;
+
+						if (replayOtherEyeFromFoveated) {
+							const auto previousOtherEyeState = submitStageVendorEyeState[otherEyeIndex];
+							if (!finalizeSubmitStageEyeOutput(
+									otherEyeIndex,
+									*vrIntermediateColorOut[otherEyeIndex],
+									false,
+									previousOtherEyeState.depthWidth,
+									previousOtherEyeState.depthHeight,
+									previousOtherEyeState.depthOffsetX,
+									previousOtherEyeState.depthOffsetY)) {
+								return false;
+							}
+							auto& otherEyeState = submitStageVendorEyeState[otherEyeIndex];
+							otherEyeState.usedFoveatedVendorPath = false;
+							otherEyeState.usedDLSSSharpening = false;
+							otherEyeState.usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
+							otherEyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
+						}
+					} else if (stereoResult == FidelityFX::StereoUpscaleResult::Failed) {
+						for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye)
+							RecordVRRenderScaleFullEyeEvaluation(upscaleMethod, stereoEye, false);
+						HandleFSRLifecycleDeviceLoss(
+							fidelityFX.ProbeFSRDeviceStatus(),
+							"FSR stereo region dispatch");
+						runtimeStereoDispatchFailed = true;
+					}
+				}
+			}
+		}
+
+		if (!vendorSucceeded && !runtimeStereoDispatchFailed) {
+			if (replayOtherEyeFromFoveated && !replayStoredFullEyeVendorOutput(otherEyeIndex, submitDLSSSharpening) && IsSubmitStageDeviceLost())
 				return false;
-			LogWarnOnceFmt(
-				loggedFullEyeSubmitException[eyeIndex],
-				"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback: {}",
-				upscaleMethodName,
-				eyeIndex,
-				e.what());
-			vendorSucceeded = false;
-		} catch (...) {
-			UnbindUpscalingResources();
-			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye vendor dispatch"))
-				return false;
-			LogWarnOnceFmt(
-				loggedFullEyeSubmitException[eyeIndex],
-				"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback",
-				upscaleMethodName,
-				eyeIndex);
-			vendorSucceeded = false;
+
+			static bool loggedFullEyeSubmitException[2] = {};
+			try {
+				VendorEyeDispatchParams vendorParams{};
+				vendorParams.eyeIndex = eyeIndex;
+				vendorParams.inputWidth = eyeWidthIn;
+				vendorParams.inputHeight = eyeHeightIn;
+				vendorParams.outputWidth = eyeWidthOut;
+				vendorParams.outputHeight = eyeHeightOut;
+				vendorParams.motionVectorScaleX = static_cast<float>(eyeWidthIn);
+				vendorParams.motionVectorScaleY = static_cast<float>(eyeHeightIn);
+				vendorParams.colorIn = vrIntermediateColorIn[eyeIndex]->resource.get();
+				vendorParams.depth = upscaleMethod == UpscaleMethod::kFSR ?
+				                         vrIntermediateLinearDepth[eyeIndex]->resource.get() :
+				                         vrIntermediateDepth[eyeIndex]->resource.get();
+				vendorParams.motionVectors = vrIntermediateMotionVectors[eyeIndex]->resource.get();
+				vendorParams.reactiveMask = vrIntermediateReactiveMask[eyeIndex]->resource.get();
+				vendorParams.transparencyMask = vrIntermediateTransparencyMask[eyeIndex]->resource.get();
+				vendorParams.colorOut = vendorColorOutput->resource.get();
+				vendorParams.label = "submit-stage full-eye";
+				applyAuthoritativeDLSSProfile(vendorParams);
+				{
+					CS_GPU_PASS("Upscaling::SubmitStageUpscale");
+					vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
+				}
+			} catch (const std::exception& e) {
+				UnbindUpscalingResources();
+				if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage full-eye vendor dispatch"))
+					return false;
+				LogWarnOnceFmt(
+					loggedFullEyeSubmitException[eyeIndex],
+					"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback: {}",
+					upscaleMethodName,
+					eyeIndex,
+					e.what());
+				vendorSucceeded = false;
+			} catch (...) {
+				UnbindUpscalingResources();
+				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye vendor dispatch"))
+					return false;
+				LogWarnOnceFmt(
+					loggedFullEyeSubmitException[eyeIndex],
+					"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback",
+					upscaleMethodName,
+					eyeIndex);
+				vendorSucceeded = false;
+			}
 		}
 		if (!vendorSucceeded && MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye vendor dispatch"))
 			return false;

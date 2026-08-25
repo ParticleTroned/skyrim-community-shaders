@@ -3,6 +3,7 @@
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
 #include "InverseSquareLighting.h"
+#include "LightLimitFix/ShadowLightPolicy.h"
 #include "LinearLighting.h"
 #include "LocationContext.h"
 
@@ -639,6 +640,42 @@ namespace
 		if (a_bsLight && a_bsLight->affectWater) {
 			a_light.lightFlags.set(LightLimitFix::LightFlags::AffectWater);
 		}
+	}
+
+	struct ResolvedShadowMask
+	{
+		bool isShadowLight = false;
+		std::uint32_t maskIndex = LightLimitFixShadowPolicy::kShadowMaskChannelCount;
+
+		[[nodiscard]] bool HasValidMask() const
+		{
+			return isShadowLight && LightLimitFixShadowPolicy::IsValidShadowMask(maskIndex);
+		}
+	};
+
+	ResolvedShadowMask ResolveShadowMask(RE::BSLight* a_light)
+	{
+		ResolvedShadowMask result{};
+		if (!a_light || !a_light->IsShadowLight()) {
+			return result;
+		}
+
+		result.isShadowLight = true;
+		auto* shadowLight = static_cast<RE::BSShadowLight*>(a_light);
+		result.maskIndex = shadowLight->GetRuntimeData().maskIndex;
+		return result;
+	}
+
+	void ApplyShadowMask(
+		LightLimitFix::LightData& a_light,
+		const ResolvedShadowMask& a_shadowMask)
+	{
+		if (!a_shadowMask.HasValidMask()) {
+			return;
+		}
+
+		a_light.shadowMaskIndex = a_shadowMask.maskIndex;
+		a_light.lightFlags.set(LightLimitFix::LightFlags::Shadow);
 	}
 }
 
@@ -1305,13 +1342,9 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 			SetLightPosition(light, niLight->world.translate, inWorld);
 
-			if (i < shadowLightCount && bsLight->IsShadowLight()) {
-				auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-				const auto maskIndex = shadowLight->GetRuntimeData().maskIndex;
-				if (maskIndex < 32) {
-					light.shadowMaskIndex = maskIndex;
-					light.lightFlags.set(LightFlags::Shadow);
-				}
+			if (i < shadowLightCount) {
+				const auto shadowMask = ResolveShadowMask(bsLight);
+				ApplyShadowMask(light, shadowMask);
 			}
 
 			strictLightDataTemp.StrictLights[outIndex++] = light;
@@ -1323,10 +1356,9 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			if (!bsLight || !bsLight->IsShadowLight()) {
 				continue;
 			}
-			auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-			const auto maskIndex = shadowLight->GetRuntimeData().maskIndex;
-			if (maskIndex < 32) {
-				strictLightDataTemp.ShadowBitMask |= (1u << maskIndex);
+			const auto shadowMask = ResolveShadowMask(bsLight);
+			if (shadowMask.HasValidMask()) {
+				strictLightDataTemp.ShadowBitMask |= (1u << shadowMask.maskIndex);
 			}
 		}
 	}
@@ -2116,6 +2148,11 @@ void LightLimitFix::UpdateLights()
 			if (auto niLight = bsLight->light.get()) {
 				if (IsValidLight(bsLight)) {
 					auto& runtimeData = niLight->GetLightRuntimeData();
+					const auto shadowMask = ResolveShadowMask(bsLight);
+					const auto effectiveLodDimmer = LightLimitFixShadowPolicy::ResolveEffectiveLodDimmer(
+						shadowMask.isShadowLight,
+						bsLight->lodFade,
+						bsLight->lodDimmer);
 
 					LightData light{};
 					light.color = { runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue };
@@ -2130,7 +2167,7 @@ void LightLimitFix::UpdateLights()
 					}
 
 					SetEngineLightFlags(light, bsLight);
-					light.fade *= bsLight->lodDimmer;
+					light.fade *= effectiveLodDimmer;
 					const bool isPortalStrict = !IsGlobalLight(bsLight);
 
 					if (isPortalStrict) {
@@ -2150,21 +2187,12 @@ void LightLimitFix::UpdateLights()
 					}
 					ApplyJsonPlacedLightIntensityScale(light, bsLight, niLight, isPortalStrict, isInterior);
 
-					if (bsLight->IsShadowLight()) {
-						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-						const auto maskIndex = shadowLight->GetRuntimeData().maskIndex;
-						light.shadowMaskIndex = maskIndex;
-						light.lightFlags.set(LightFlags::Shadow);
-					}
+					ApplyShadowMask(light, shadowMask);
+					SetLightPosition(light, niLight->world.translate);
 
-					// Check for inactive shadow light
-					if (light.shadowMaskIndex != 255) {
-						SetLightPosition(light, niLight->world.translate);
-
-						if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4 &&
-							lightsData.size() < MAX_LIGHTS) {
-							lightsData.push_back(light);
-						}
+					if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4 &&
+						lightsData.size() < MAX_LIGHTS) {
+						lightsData.push_back(light);
 					}
 				}
 			}

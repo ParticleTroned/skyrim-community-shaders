@@ -7,6 +7,7 @@ endif()
 add_executable(
     performance_tuning_tests
     main.cpp
+    light_limit_fix_shadow_policy_tests.cpp
     performance_tuning_measurement_tests.cpp
     performance_tuning_json_tests.cpp
     shader_compilation_scheduling_policy_tests.cpp

@@ -241,6 +241,10 @@ namespace SIE
 		int GetPriority() const { return cachedPriority; }
 		void SetEnqueuedQpc(int64_t qpc) { enqueuedQpc = qpc; }
 		int64_t GetEnqueuedQpc() const { return enqueuedQpc; }
+		/** @brief Records the compilation batch that owns this task. */
+		void SetGeneration(uint64_t a_generation) { generation = a_generation; }
+		/** @brief Returns the compilation batch that owns this task. */
+		uint64_t GetGeneration() const { return generation; }
 
 		bool operator==(const ShaderCompilationTask& other) const;
 
@@ -253,6 +257,7 @@ namespace SIE
 		static int ComputePriority(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
 		int cachedPriority;
 		int64_t enqueuedQpc = 0;
+		uint64_t generation = 0;
 	};
 }
 
@@ -305,6 +310,13 @@ namespace SIE
 		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
 		void Add(const ShaderCompilationTask& task);
 		void Complete(const ShaderCompilationTask& task);
+		/** @brief Latches timing and logs when the first real source compile begins. */
+		void MarkPhaseStarted();
+		/** @brief Returns whether a task still belongs to the active compilation batch. */
+		bool IsCurrentGeneration(const ShaderCompilationTask& task) const
+		{
+			return task.GetGeneration() == generation.load(std::memory_order_relaxed);
+		}
 		void Clear();
 		bool IsInProgress(size_t a_taskId);
 		void Forget(const std::unordered_set<size_t>& a_taskIds);
@@ -318,13 +330,14 @@ namespace SIE
 		std::atomic<uint64_t> diskHitTasks = 0;             // tasks resolved from disk cache rather than compiled
 		std::atomic<uint64_t> sourceCompileTasks = 0;       // tasks that reached source compilation after cache lookup
 		std::atomic<uint64_t> diskHitPriorityWeight = 0;    // cumulative priority weight of disk-hit tasks
-		LARGE_INTEGER compilationPhaseStart = { 0 };        // enqueue time of first confirmed non-disk-hit task
+		LARGE_INTEGER compilationPhaseStart = { 0 };        // QPC timestamp when the first real source compile begins
 		std::atomic<bool> compilationPhaseStarted = false;  // set when first actual compilation begins
 		std::atomic<uint64_t> slowTasks = 0;                // shaders taking >= 2s
 		std::atomic<uint64_t> verySlowTasks = 0;            // shaders taking >= 8s
 		std::atomic<uint64_t> totalPriorityWeight = 0;      // sum of (GetPriority()+1) for all queued tasks
 		std::atomic<uint64_t> completedPriorityWeight = 0;  // sum of (GetPriority()+1) for completed/failed tasks
 		std::atomic<uint32_t> heavyTasksInFlight = 0;       // number of dispatched heavy (>= kHeavyPriorityThreshold) tasks still running
+		std::atomic<uint64_t> generation = 0;               // incremented by Clear() to invalidate detached workers
 		std::mutex compilationMutex;
 
 		/// Per-task timing record stored for post-mortem analysis and developer UI.
@@ -585,6 +598,8 @@ namespace SIE
 		uint64_t GetSourceCompileTasks();
 		void IncCacheHitTasks();
 		void IncSourceCompileTasks();
+		/** @brief Marks the start of a real source compilation. */
+		void MarkCompilationPhaseStarted();
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);

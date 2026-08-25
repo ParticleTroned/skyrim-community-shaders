@@ -1991,6 +1991,10 @@ namespace SIE
 				flags |= D3DCOMPILE_SKIP_VALIDATION;
 			}
 
+			// Disk-cache hits return before this point, so latch the phase at the
+			// first real compiler invocation rather than at task completion.
+			cache.MarkCompilationPhaseStarted();
+
 			// Track includes
 			TrackingIncludeHandler includeHandler(std::filesystem::path(path).parent_path());
 			const HRESULT compileResult = D3DCompileFromFile(path.c_str(), defines.data(), &includeHandler, "main",
@@ -4094,6 +4098,10 @@ namespace SIE
 	{
 		compilationSet.sourceCompileTasks++;
 	}
+	void ShaderCache::MarkCompilationPhaseStarted()
+	{
+		compilationSet.MarkPhaseStarted();
+	}
 
 	bool ShaderCache::IsHideErrors()
 	{
@@ -4656,20 +4664,28 @@ namespace SIE
 		constexpr double kSlowMs = 2000.0;
 		constexpr double kVerySlowMs = 8000.0;
 
-		// Record every task for post-mortem analysis, the developer UI, and trace export.
+		// Clear() increments the generation before clearing these records. Checking
+		// under the record lock prevents an old worker from appending afterward.
+		bool recordedForCurrentGeneration = false;
 		{
 			std::lock_guard lock(compilationSet.slowTasksMutex);
-			compilationSet.slowTaskRecords.push_back({ taskKey, elapsedMs, queueWaitMs, task.GetPriority(),
-				static_cast<int>(descriptorComplexity), sourceBytes, GetCurrentThreadId(), start.QuadPart });
+			if (compilationSet.IsCurrentGeneration(task)) {
+				compilationSet.slowTaskRecords.push_back({ taskKey, elapsedMs, queueWaitMs, task.GetPriority(),
+					static_cast<int>(descriptorComplexity), sourceBytes, GetCurrentThreadId(), start.QuadPart });
+				if (elapsedMs >= kVerySlowMs) {
+					compilationSet.verySlowTasks++;
+					compilationSet.slowTasks++;
+				} else if (elapsedMs >= kSlowMs) {
+					compilationSet.slowTasks++;
+				}
+				recordedForCurrentGeneration = true;
+			}
 		}
 
-		if (elapsedMs >= kVerySlowMs) {
-			compilationSet.verySlowTasks++;
-			compilationSet.slowTasks++;
+		if (recordedForCurrentGeneration && elapsedMs >= kVerySlowMs) {
 			logger::info("[ShaderTiming] Very slow {:.0f}ms | queue_wait={:.0f}ms | remaining={} | defines={} | src={}B | prio={} | {}",
 				elapsedMs, queueWaitMs, remaining, descriptorComplexity, sourceBytes, task.GetPriority(), taskKey);
-		} else if (elapsedMs >= kSlowMs) {
-			compilationSet.slowTasks++;
+		} else if (recordedForCurrentGeneration && elapsedMs >= kSlowMs) {
 			logger::debug("[ShaderTiming] Slow {:.0f}ms | queue_wait={:.0f}ms | remaining={} | defines={} | src={}B | prio={} | {}",
 				elapsedMs, queueWaitMs, remaining, descriptorComplexity, sourceBytes, task.GetPriority(), taskKey);
 		}
@@ -4855,6 +4871,7 @@ namespace SIE
 			QueryPerformanceCounter(&now);
 			auto queuedTask = task;
 			queuedTask.SetEnqueuedQpc(now.QuadPart);
+			queuedTask.SetGeneration(generation.load(std::memory_order_relaxed));
 			auto [_, wasAdded] = availableTasks.insert(queuedTask);
 			if (wasAdded) {
 				// Increment counters inside the lock so that WaitTake, which reads
@@ -4863,7 +4880,7 @@ namespace SIE
 				// reset the session clock via its !IsCompiling() branch.
 				// Only the first task after Clear() starts a session here. A drained queue
 				// is ambiguous: later requests may all be disk hits, so rearming here would
-				// emit a false completion for every small cache-hit burst. Complete() rearms
+				// emit a false completion for every small cache-hit burst. MarkPhaseStarted() rearms
 				// only after it confirms a real compile; Forget() handles smart clears.
 				if (totalTasks.load(std::memory_order_relaxed) == 0) {
 					lastReset = now;
@@ -4889,6 +4906,9 @@ namespace SIE
 
 		bool shouldLogCompletion = false;
 		double completionTimeMs = 0.0;
+		uint64_t completedSnapshot = 0;
+		uint64_t failedSnapshot = 0;
+		uint64_t totalSnapshot = 0;
 
 		// Determine whether this task was resolved from the disk cache or actually compiled.
 		bool wasDiskHit = cache.IsShaderLoadedFromDisk(key);
@@ -4896,6 +4916,13 @@ namespace SIE
 		// Perform all completion operations under one mutex acquisition
 		{
 			std::scoped_lock lock(compilationMutex);
+
+			// A detached worker may finish after Clear(). Its counters belong to an
+			// invalidated batch and must not corrupt the active session.
+			if (!IsCurrentGeneration(task)) {
+				return;
+			}
+
 			LARGE_INTEGER now;
 			QueryPerformanceCounter(&now);
 
@@ -4913,30 +4940,6 @@ namespace SIE
 			if (wasDiskHit) {
 				diskHitTasks++;
 				diskHitPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
-			} else {
-				// The task's enqueue timestamp is the earliest reliable boundary available
-				// once a real compile is confirmed. Starting at completion, as upstream did,
-				// makes a one-shader hot reload report approximately zero milliseconds.
-				const int64_t enqueuedQpc = task.GetEnqueuedQpc();
-				const int64_t sessionStartQpc =
-					enqueuedQpc > 0 && enqueuedQpc <= now.QuadPart ? enqueuedQpc : now.QuadPart;
-
-				if (completionTime.load(std::memory_order_relaxed) != 0) {
-					lastReset.QuadPart = sessionStartQpc;
-					lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
-					lastCalculation = lastReset;
-					totalTime = { 0 };
-					completionTime.store(0, std::memory_order_relaxed);
-					compilationPhaseStarted.store(false, std::memory_order_relaxed);
-					compilationPhaseStart = { 0 };
-				}
-
-				if (!compilationPhaseStarted.load(std::memory_order_relaxed)) {
-					// Publish the timestamp before the release-store so ETA readers that
-					// acquire compilationPhaseStarted observe the matching boundary.
-					compilationPhaseStart.QuadPart = sessionStartQpc;
-					compilationPhaseStarted.store(true, std::memory_order_release);
-				}
 			}
 
 			// Track heavy task completion for P-core concurrency limiting
@@ -4953,11 +4956,15 @@ namespace SIE
 			totalTime.QuadPart += now.QuadPart - lastCalculation.QuadPart;
 			lastCalculation = now;
 
-			// Check if compilation is complete and set completion time if needed
+			// Mixed batches log even when their last task is a disk hit. A disk-only
+			// batch never starts a source-compilation phase and stays silent.
 			if (completionTime.load(std::memory_order_relaxed) == 0 && completedTasks + failedTasks >= totalTasks) {
 				completionTime.store(now.QuadPart, std::memory_order_relaxed);
 				completionTimeMs = static_cast<double>(now.QuadPart - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
-				shouldLogCompletion = true;
+				shouldLogCompletion = compilationPhaseStarted.load(std::memory_order_relaxed);
+				completedSnapshot = completedTasks.load(std::memory_order_relaxed);
+				failedSnapshot = failedTasks.load(std::memory_order_relaxed);
+				totalSnapshot = totalTasks.load(std::memory_order_relaxed);
 			}
 
 			// Update task tracking
@@ -4965,13 +4972,46 @@ namespace SIE
 			tasksInProgress.erase(task);
 		}
 
-		// Log completion outside the lock
+		// Keep info logging outside the lock and only for phases that performed
+		// real compiler work; disk-cache-only startup remains quiet.
 		if (shouldLogCompletion) {
-			logger::debug("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
+			logger::info("Shader compilation completed: {}/{} tasks ({} failed) in {}",
+				completedSnapshot, totalSnapshot, failedSnapshot, GetHumanTime(completionTimeMs));
 			FlushShaderCacheManifest();
 		}
 
 		conditionVariable.notify_one();
+	}
+
+	void CompilationSet::MarkPhaseStarted()
+	{
+		bool shouldLog = false;
+		uint64_t queuedAtPhaseStart = 0;
+		{
+			std::scoped_lock lock(compilationMutex);
+
+			// A real compile after a completed batch unambiguously begins a new phase.
+			if (completionTime.load(std::memory_order_relaxed) != 0) {
+				QueryPerformanceCounter(&lastReset);
+				lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
+				lastCalculation = lastReset;
+				totalTime = { 0 };
+				completionTime.store(0, std::memory_order_relaxed);
+				compilationPhaseStarted.store(false, std::memory_order_relaxed);
+				compilationPhaseStart = { 0 };
+			}
+
+			if (!compilationPhaseStarted.load(std::memory_order_relaxed)) {
+				QueryPerformanceCounter(&compilationPhaseStart);
+				compilationPhaseStarted.store(true, std::memory_order_release);
+				shouldLog = true;
+				queuedAtPhaseStart = totalTasks.load(std::memory_order_relaxed);
+			}
+		}
+
+		if (shouldLog) {
+			logger::info("Shader compilation started ({} tasks queued)", queuedAtPhaseStart);
+		}
 	}
 
 	void CompilationSet::Clear()
@@ -4989,6 +5029,7 @@ namespace SIE
 		diskHitPriorityWeight = 0;
 		compilationPhaseStarted = false;
 		compilationPhaseStart = { 0 };
+		generation.fetch_add(1, std::memory_order_relaxed);
 		slowTasks = 0;
 		verySlowTasks = 0;
 		totalPriorityWeight = 0;

@@ -1004,8 +1004,8 @@ namespace Util
 			categoryIcon = menu.characters.texture;
 		} else if (strcmp(categoryName, "Display") == 0) {
 			categoryIcon = menu.display.texture;
-		} else if (strcmp(categoryName, "Grass") == 0) {
-			categoryIcon = menu.grass.texture;
+		} else if (strcmp(categoryName, "Foliage") == 0) {
+			categoryIcon = menu.foliage.texture;
 		} else if (strcmp(categoryName, "Lighting") == 0) {
 			categoryIcon = menu.lighting.texture;
 		} else if (strcmp(categoryName, "Sky") == 0) {

@@ -13,7 +13,7 @@ public:
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "GRASS_COLLISION"; }
 	virtual bool IsCore() const override { return true; };
-	virtual std::string_view GetCategory() const override { return FeatureCategories::kGrass; }
+	virtual std::string_view GetCategory() const override { return FeatureCategories::kFoliage; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{

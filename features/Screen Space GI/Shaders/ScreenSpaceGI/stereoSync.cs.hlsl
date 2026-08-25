@@ -2,6 +2,7 @@
 
 #include "Common/FrameBuffer.hlsli"
 #include "Common/VR.hlsli"
+#include "Common/VRReproject.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
 #ifdef VR

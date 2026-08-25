@@ -5,6 +5,7 @@
 // gates both the eye-0-only skip and the transfer pass so the hit/miss decisions stay aligned.
 
 #include "Common/VR.hlsli"
+#include "Common/VRReproject.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
 float LinearToRawDepth(float d)

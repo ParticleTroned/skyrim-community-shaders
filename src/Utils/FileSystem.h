@@ -248,11 +248,11 @@ namespace Util
 			std::string& errorMessage);
 
 		/**
-		 * Writes text to a sibling staging file and atomically replaces the destination.
+		 * Writes text through atomic replacement, with a direct-write fallback for virtualized files.
 		 * @param path The file to write
 		 * @param contents The complete file contents
 		 * @param errorMessage Details when the write fails
-		 * @return True when the destination was replaced successfully
+		 * @return True when either the atomic replacement or direct-write fallback succeeds
 		 */
 		bool WriteTextFileAtomic(
 			const std::filesystem::path& path,

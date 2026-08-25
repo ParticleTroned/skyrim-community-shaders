@@ -199,6 +199,31 @@ namespace Util
 	// File system utilities implementation
 	namespace FileHelpers
 	{
+		namespace
+		{
+			bool WriteTextFileDirect(
+				const std::filesystem::path& path,
+				std::string_view contents,
+				std::string& errorMessage)
+			{
+				std::ofstream output(path, std::ios::binary | std::ios::trunc);
+				if (!output.is_open()) {
+					errorMessage = std::format("Could not open {} for a direct write", path.string());
+					return false;
+				}
+
+				output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+				output.flush();
+				output.close();
+				if (!output) {
+					errorMessage = std::format("Could not finish writing {} directly", path.string());
+					return false;
+				}
+
+				return true;
+			}
+		}
+
 		DeletionResult SafeDelete(const std::string& path, const std::string& description)
 		{
 			DeletionResult result;
@@ -318,8 +343,21 @@ namespace Util
 				const auto windowsError = GetLastError();
 				std::error_code cleanupError;
 				std::filesystem::remove(stagingPath, cleanupError);
-				errorMessage = std::format("Could not replace the destination (Windows error {})", windowsError);
-				return false;
+
+				// Virtualized filesystems can reject replacement while accepting writes to an existing file.
+				logger::warn(
+					"Could not replace {} atomically (Windows error {}); retrying with a direct write",
+					path.string(),
+					windowsError);
+				std::string directWriteError;
+				if (!WriteTextFileDirect(path, contents, directWriteError)) {
+					errorMessage = std::format(
+						"Could not replace the destination (Windows error {}); direct-write fallback also failed: {}",
+						windowsError,
+						directWriteError);
+					return false;
+				}
+				logger::info("Saved {} directly after atomic replacement failed", path.string());
 			}
 
 			return true;

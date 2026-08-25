@@ -1888,7 +1888,10 @@ public:
 	winrt::com_ptr<IDXGIAdapter3> vrRenderScaleMemoryAdapter;
 	ID3D11Device* vrRenderScaleMemoryAdapterDevice = nullptr;
 	uint32_t vrRenderScaleMemoryLastSampleFrame = 0;
+	std::atomic_bool vrRenderScaleMemorySnapshotValid{ false };
 	winrt::com_ptr<ID3D11Query> vrRenderScaleMemoryTrimFence;
+	// Publishes the thread-affine trim payload to polling call sites.
+	std::atomic_bool vrRenderScaleMemoryTrimPending{ false };
 	uint64_t vrRenderScaleMemoryTrimOwnerEpoch = 0;
 	VRRenderScaleMemoryTrimReason vrRenderScaleMemoryTrimPendingReason = VRRenderScaleMemoryTrimReason::None;
 	uint32_t vrRenderScaleMemoryTrimRequestedFrame = 0;
@@ -2317,6 +2320,8 @@ public:
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
+	// Exact owner publication avoids locking for the normally empty deferred path.
+	std::atomic<uint64_t> deferredVRRenderScalePostLoadRecoveryEpoch{ 0 };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	mutable std::mutex pendingVRRenderScaleRequestMutex;
 	std::optional<VRRenderScaleDesiredProfile> pendingVRRenderScaleRequest;
@@ -2335,6 +2340,7 @@ public:
 	std::atomic<VRRenderScaleTransitionState> vrRenderScaleTransitionState{ VRRenderScaleTransitionState::Idle };
 	mutable std::mutex vrRenderScaleStressSessionMutex;
 	VRRenderScaleStressSessionSnapshot vrRenderScaleStressSession{};
+	std::atomic_bool vrRenderScaleStressSessionActive{ false };
 	std::atomic<uint64_t> nextVRRenderScaleStressSessionID{ 1 };
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };

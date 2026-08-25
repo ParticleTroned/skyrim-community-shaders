@@ -27641,6 +27641,13 @@ void Upscaling::ServiceSubmitStageVendorResumePromotion(
 {
 	if (a_compositorCycleToken == 0)
 		return;
+	const uint64_t publishedReleaseCandidateCycle =
+		submitStageVendorResumeReleaseCandidateCycle.load(
+			std::memory_order_acquire);
+	if (publishedReleaseCandidateCycle == 0 ||
+		a_compositorCycleToken <= publishedReleaseCandidateCycle) {
+		return;
+	}
 
 	const std::scoped_lock resumeStateLock(
 		submitStageVendorResumeStableEyeMaskMutex);
@@ -27719,16 +27726,18 @@ void Upscaling::ClearSubmitStageBoundsFallbackWatchdog()
 
 void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery)
 {
-	if (!globals::game::isVR)
+	const uint32_t lastFrame =
+		submitStageBoundsFallbackLastFrame.load(
+			std::memory_order_acquire);
+	if (lastFrame == 0 || !globals::game::isVR)
 		return;
 
 	auto* state = globals::state;
 	if (!state)
 		return;
 
-	const uint32_t lastFrame = submitStageBoundsFallbackLastFrame.load(std::memory_order_acquire);
 	const uint32_t startFrame = submitStageBoundsFallbackStartFrame.load(std::memory_order_acquire);
-	if (startFrame == 0 || lastFrame == 0)
+	if (startFrame == 0)
 		return;
 
 	const uint32_t currentFrame = std::max(state->frameCount, 1u);
@@ -28370,6 +28379,7 @@ bool Upscaling::ArmVRRenderScaleMemoryTrim(uint64_t a_ownerEpoch, VRRenderScaleM
 		trim.lastSucceeded = false;
 		++vrRenderScaleTransitionController.revision;
 	}
+	vrRenderScaleMemoryTrimPending.store(true, std::memory_order_release);
 	logger::debug(
 		"[VRRenderScale][Memory] Armed GPU-fenced DXGI trim. reason={} ownerEpoch={} frame={}",
 		GetVRRenderScaleMemoryTrimReasonName(a_reason),
@@ -28473,6 +28483,7 @@ bool Upscaling::ServiceVRRenderScaleMemoryTrim(const char* a_reason)
 		}
 		++vrRenderScaleTransitionController.revision;
 	}
+	vrRenderScaleMemoryTrimPending.store(false, std::memory_order_release);
 
 	if (succeeded) {
 		logger::debug(
@@ -28497,7 +28508,7 @@ bool Upscaling::ServiceVRRenderScaleMemoryTrim(const char* a_reason)
 
 bool Upscaling::HasPendingVRRenderScaleMemoryTrim() const
 {
-	return vrRenderScaleMemoryTrimOwnerEpoch != 0;
+	return vrRenderScaleMemoryTrimPending.load(std::memory_order_acquire);
 }
 
 bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
@@ -28510,8 +28521,7 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		currentFrame != 0 &&
 		vrRenderScaleMemoryLastSampleFrame != 0 &&
 		ElapsedFrames(vrRenderScaleMemoryLastSampleFrame, currentFrame) < kVRRenderScaleMemorySampleIntervalFrames) {
-		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
-		return vrRenderScaleTransitionController.memory.valid;
+		return vrRenderScaleMemorySnapshotValid.load(std::memory_order_acquire);
 	}
 	vrRenderScaleMemoryLastSampleFrame = currentFrame;
 	uint64_t transitionEpoch = 0;
@@ -28556,6 +28566,7 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 				recovery.peakPressure = snapshot.pressure;
 		}
 		++vrRenderScaleTransitionController.revision;
+		vrRenderScaleMemorySnapshotValid.store(false, std::memory_order_release);
 	};
 
 	if (vrRenderScaleMemoryAdapterDevice != globals::d3d::device) {
@@ -28666,6 +28677,7 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 				recovery.peakPressure = snapshot.pressure;
 		}
 		++vrRenderScaleTransitionController.revision;
+		vrRenderScaleMemorySnapshotValid.store(true, std::memory_order_release);
 	}
 	if (snapshot.pressure != previousPressure) {
 		const bool severe =
@@ -28743,6 +28755,14 @@ uint64_t Upscaling::BeginVRRenderScalePostLoadRecoveryLocked(
 			recovery.loadingSerial == a_currentLoadingSerial;
 		if (exactActiveOwner)
 			return recovery.recoveryEpoch;
+	}
+	if (recovery.cleanupDeferredUntilStable &&
+		recovery.recoveryEpoch != 0) {
+		uint64_t expectedDeferredEpoch = recovery.recoveryEpoch;
+		deferredVRRenderScalePostLoadRecoveryEpoch.compare_exchange_strong(
+			expectedDeferredEpoch,
+			0,
+			std::memory_order_acq_rel);
 	}
 
 	uint64_t recoveryEpoch =
@@ -29126,6 +29146,9 @@ void Upscaling::DeferVRRenderScalePostLoadRecoveryUntilStable(
 		recovery.relatchAdmitted = true;
 		recovery.cleanupDeferredUntilStable = true;
 		++vrRenderScaleTransitionController.revision;
+		deferredVRRenderScalePostLoadRecoveryEpoch.store(
+			recoveryEpoch,
+			std::memory_order_release);
 	}
 	logger::debug(
 		"[VRRenderScale][PostLoad] Deferred cleanup recoveryEpoch={} until door transitionEpoch={} is stable and visible.",
@@ -29186,6 +29209,11 @@ void Upscaling::AbandonDeferredVRRenderScalePostLoadRecovery(
 		recovery.cleanupDeferredUntilStable = false;
 		++vrRenderScaleTransitionController.revision;
 	}
+	uint64_t expectedDeferredEpoch = abandonedRecoveryEpoch;
+	deferredVRRenderScalePostLoadRecoveryEpoch.compare_exchange_strong(
+		expectedDeferredEpoch,
+		0,
+		std::memory_order_acq_rel);
 
 	// Door-created recoveries normally have no pending runtime-reset owner. Use a
 	// compare/exchange so a newer save-load epoch can never be cleared here.
@@ -29204,6 +29232,12 @@ void Upscaling::AbandonDeferredVRRenderScalePostLoadRecovery(
 
 void Upscaling::ServiceDeferredVRRenderScalePostLoadRecovery()
 {
+	const uint64_t publishedRecoveryEpoch =
+		deferredVRRenderScalePostLoadRecoveryEpoch.load(
+			std::memory_order_acquire);
+	if (publishedRecoveryEpoch == 0)
+		return;
+
 	VRRenderScalePostLoadRecoverySnapshot recovery{};
 	VRRenderScaleTransitionState controllerState =
 		VRRenderScaleTransitionState::Idle;
@@ -29217,7 +29251,7 @@ void Upscaling::ServiceDeferredVRRenderScalePostLoadRecovery()
 	if (!recovery.active ||
 		!recovery.cleanupDeferredUntilStable ||
 		!recovery.relatchAdmitted ||
-		recovery.recoveryEpoch == 0 ||
+		recovery.recoveryEpoch != publishedRecoveryEpoch ||
 		recovery.transitionEpoch == 0) {
 		return;
 	}
@@ -29320,6 +29354,11 @@ void Upscaling::CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, 
 		completed = recovery;
 		++vrRenderScaleTransitionController.revision;
 	}
+	uint64_t expectedDeferredEpoch = a_recoveryEpoch;
+	deferredVRRenderScalePostLoadRecoveryEpoch.compare_exchange_strong(
+		expectedDeferredEpoch,
+		0,
+		std::memory_order_acq_rel);
 	uint64_t expectedEpoch = a_recoveryEpoch;
 	pendingPostLoadRuntimeResetEpoch.compare_exchange_strong(expectedEpoch, 0, std::memory_order_acq_rel);
 	logger::debug(
@@ -29871,6 +29910,11 @@ void Upscaling::ServiceVRNativeRestorePresentationRecovery(
 		a_compositorCycleToken == 0) {
 		return;
 	}
+	const uint64_t guardEpoch =
+		vrNativeRestorePresentationGuardEpoch.load(
+			std::memory_order_acquire);
+	if (guardEpoch == 0)
+		return;
 	if (IsVRInitialLoadPresentationProtectionActive() ||
 		IsVRPostLoadCompositorHoldActive() ||
 		ShouldQuarantineVRPostLoadCompositorCycle(
@@ -29879,9 +29923,6 @@ void Upscaling::ServiceVRNativeRestorePresentationRecovery(
 		return;
 	}
 
-	const uint64_t guardEpoch =
-		vrNativeRestorePresentationGuardEpoch.load(
-			std::memory_order_acquire);
 	const uint32_t currentFrame =
 		globals::state ?
 			std::max(globals::state->frameCount, 1u) :
@@ -29899,8 +29940,7 @@ void Upscaling::ServiceVRNativeRestorePresentationRecovery(
 			((candidateCycle == maximumCycle &&
 				 a_compositorCycleToken == 1u) ||
 				a_compositorCycleToken > candidateCycle);
-		if (guardEpoch == 0 ||
-			vrNativeRestorePresentationWatchdogEpoch != guardEpoch ||
+		if (vrNativeRestorePresentationWatchdogEpoch != guardEpoch ||
 			!nextCycleReached) {
 			return;
 		}
@@ -40412,14 +40452,31 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire) ||
 		IsLoadingMenuContextActive() ||
 		IsLoadingMenuPhysicallyOpen();
+	const bool emitUpscalingDiagLogs = ShouldEmitUpscalingDiagLogs();
 	if (!stabilizerDoorHandoffPending && !loadingMenuOwnsMutation) {
 		if (HasPendingVREngineTargetRetirement())
 			ServiceVREngineTargetRetirement("configure");
 		if (HasPendingVRRenderScaleMemoryTrim())
 			ServiceVRRenderScaleMemoryTrim("configure");
-		SampleVRRenderScaleMemory();
+		const bool memoryTelemetryRequired =
+			vrRenderScaleTransitionState.load(std::memory_order_acquire) !=
+				VRRenderScaleTransitionState::Idle ||
+			postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+			pendingPerfModeRenderTargetRecreate.load(
+				std::memory_order_acquire) ||
+			perfModeRenderTargetRecreateInProgress.load(
+				std::memory_order_acquire) ||
+			deferredVRRenderScalePostLoadRecoveryEpoch.load(
+				std::memory_order_acquire) != 0 ||
+			vrRenderScaleMemoryReliefEndFrame.load(
+				std::memory_order_acquire) != 0 ||
+			vrRenderScaleStressSessionActive.load(
+				std::memory_order_acquire) ||
+			emitUpscalingDiagLogs;
+		if (memoryTelemetryRequired)
+			SampleVRRenderScaleMemory();
 	}
-	if (ShouldEmitUpscalingDiagLogs()) {
+	if (emitUpscalingDiagLogs) {
 		ServiceVRMenuPresentationTraceRaceSexPreRoll();
 		TraceVRRaceSexStartupSignal("configure-poll");
 	}
@@ -45563,6 +45620,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	vrRenderScaleMemoryAdapter = nullptr;
 	vrRenderScaleMemoryAdapterDevice = nullptr;
 	vrRenderScaleMemoryLastSampleFrame = 0;
+	vrRenderScaleMemorySnapshotValid.store(false, std::memory_order_release);
 	ClearAllVRLowPeakNativeRestoreProgress();
 	ClearVRRenderScaleInfoTransition();
 	ClearPendingVRUpscalingTransition();
@@ -48074,6 +48132,7 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScaleStressSession.baselinePresentationStretchEyeObservations = presentation.presentationStretchEyeObservations;
 		vrRenderScaleStressSession.baselineVendorFailureStretchEyeObservations = presentation.vendorFailureStretchEyeObservations;
 		vrRenderScaleStressSession.baselineBoundsMismatchOriginalFallbackEyeObservations = presentation.boundsMismatchOriginalFallbackEyeObservations;
+		vrRenderScaleStressSessionActive.store(true, std::memory_order_release);
 	}
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
 	logger::info("[VRRenderScale][Stress] Started deterministic CSX-menu capture session {} at frame {}.", sessionID, frame);
@@ -48095,6 +48154,7 @@ void Upscaling::StopVRRenderScaleStressSession()
 		sessionID = vrRenderScaleStressSession.sessionID;
 		count = vrRenderScaleStressSession.count;
 		overwritten = vrRenderScaleStressSession.overwrittenEvents;
+		vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
 	}
 	logger::info(
 		"[VRRenderScale][Stress] Stopped capture session {} with {} retained event(s) and {} overwritten event(s).",
@@ -48108,6 +48168,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 {
 	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
 	vrRenderScaleStressSession = {};
+	vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
 }
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
@@ -49972,10 +50033,15 @@ void Upscaling::ResetVRRenderScaleTransitionController(const char* a_reason)
 	ClearVRNativeRestorePresentationWatchdog();
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 	vrRenderScaleMemoryTrimFence = nullptr;
+	vrRenderScaleMemoryTrimPending.store(false, std::memory_order_release);
 	vrRenderScaleMemoryTrimOwnerEpoch = 0;
 	vrRenderScaleMemoryTrimPendingReason = VRRenderScaleMemoryTrimReason::None;
 	vrRenderScaleMemoryTrimRequestedFrame = 0;
 	vrRenderScaleMemoryTrimFenceFailures = 0;
+	vrRenderScaleMemorySnapshotValid.store(false, std::memory_order_release);
+	deferredVRRenderScalePostLoadRecoveryEpoch.store(
+		0,
+		std::memory_order_release);
 	VRRenderScaleTransitionState previousState;
 	uint64_t revision;
 	{

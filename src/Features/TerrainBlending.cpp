@@ -221,31 +221,14 @@ void TerrainBlending::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
-ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
-{
-	if (!terrainVertexShader) {
-		logger::debug("Compiling Utility.hlsl");
-		terrainVertexShader = (ID3D11VertexShader*)Util::CompileShader(L"Data\\Shaders\\Utility.hlsl", { { "RENDER_DEPTH", "" } }, "vs_5_0");
-	}
-	return terrainVertexShader;
-}
-
 ID3D11VertexShader* TerrainBlending::GetTerrainOffsetVertexShader()
 {
-	if (!terrainOffsetVertexShader) {
-		logger::debug("Compiling Utility.hlsl");
-		terrainOffsetVertexShader = (ID3D11VertexShader*)Util::CompileShader(L"Data\\Shaders\\Utility.hlsl", { { "RENDER_DEPTH", "" }, { "OFFSET_DEPTH", "" } }, "vs_5_0");
-	}
-	return terrainOffsetVertexShader;
+	return terrainOffsetVertexShader.Get(L"Data\\Shaders\\Utility.hlsl", { { "RENDER_DEPTH", "" }, { "OFFSET_DEPTH", "" } }, "vs_5_0");
 }
 
 ID3D11ComputeShader* TerrainBlending::GetDepthBlendShader()
 {
-	if (!depthBlendShader) {
-		logger::debug("Compiling DepthBlend.hlsl");
-		depthBlendShader = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\TerrainBlending\\DepthBlend.hlsl", {}, "cs_5_0");
-	}
-	return depthBlendShader;
+	return depthBlendShader.Get(L"Data\\Shaders\\TerrainBlending\\DepthBlend.hlsl", {}, "cs_5_0");
 }
 
 void TerrainBlending::SetupResources()
@@ -334,15 +317,16 @@ void TerrainBlending::TerrainShaderHacks()
 	if (renderTerrainDepth) {
 		auto renderer = globals::game::renderer;
 		auto context = globals::d3d::context;
+		auto shadowState = globals::game::shadowState;
+		auto& currentVertexShader = shadowState->GetRuntimeData().currentVertexShader;
 		if (renderAltTerrain) {
 			auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
-			context->VSSetShader(GetTerrainOffsetVertexShader(), NULL, NULL);
+			auto* offsetVertexShader = GetTerrainOffsetVertexShader();
+			context->VSSetShader(offsetVertexShader ? offsetVertexShader : static_cast<ID3D11VertexShader*>(currentVertexShader->shader), nullptr, 0);
 		} else {
 			auto dsv = terrainDepth.views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
-			auto shadowState = globals::game::shadowState;
-			auto& currentVertexShader = shadowState->GetRuntimeData().currentVertexShader;
 			context->VSSetShader((ID3D11VertexShader*)currentVertexShader->shader, NULL, NULL);
 		}
 		renderAltTerrain = !renderAltTerrain;
@@ -380,6 +364,10 @@ void TerrainBlending::BlendPrepassDepths()
 {
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Blend Prepass Depths");
+	auto* blendShader = GetDepthBlendShader();
+	if (!blendShader)
+		return;
+
 	if (globals::state->frameAnnotations)
 		globals::state->BeginPerfEvent("Terrain Blending - Blend Prepass Depths");
 
@@ -397,7 +385,7 @@ void TerrainBlending::BlendPrepassDepths()
 		ID3D11UnorderedAccessView* uavs[2] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-		context->CSSetShader(GetDepthBlendShader(), nullptr, 0);
+		context->CSSetShader(blendShader, nullptr, 0);
 
 		globals::profiler->BeginPass("TerrainBlending::DepthBlend");
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
@@ -427,18 +415,8 @@ void TerrainBlending::BlendPrepassDepths()
 
 void TerrainBlending::ClearShaderCache()
 {
-	if (terrainVertexShader) {
-		terrainVertexShader->Release();
-		terrainVertexShader = nullptr;
-	}
-	if (terrainOffsetVertexShader) {
-		terrainOffsetVertexShader->Release();
-		terrainOffsetVertexShader = nullptr;
-	}
-	if (depthBlendShader) {
-		depthBlendShader->Release();
-		depthBlendShader = nullptr;
-	}
+	terrainOffsetVertexShader.Reset();
+	depthBlendShader.Reset();
 }
 
 void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)

@@ -67,54 +67,24 @@ void VolumetricShadows::SetupResources()
 		Util::SetResourceName(linearSampler, "VolumetricShadows::LinearSampler");
 	}
 
-	// Compile compute shaders
-	std::vector<std::pair<const char*, const char*>> defines;
-	defines.push_back({ "DOWNSAMPLE_SHADOW_MIP0", nullptr });
-	downsampleShadowMip0CS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl", defines, "cs_5_0"));
-	defines.clear();
-	defines.push_back({ "DOWNSAMPLE_SHADOW_MIP1", nullptr });
-	downsampleShadowMip1CS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl", defines, "cs_5_0"));
+	CompileComputeShaders();
+}
 
-	defines.clear();
-	defines.push_back({ "BLUR_HORIZONTAL", nullptr });
-	blurShadowHorizontalCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", defines, "cs_5_0"));
-	defines.clear();
-	defines.push_back({ "BLUR_VERTICAL", nullptr });
-	blurShadowVerticalCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", defines, "cs_5_0"));
+void VolumetricShadows::CompileComputeShaders()
+{
+	downsampleShadowMip0CS.Get(L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl", { { "DOWNSAMPLE_SHADOW_MIP0", nullptr } }, "cs_5_0", "main", "VolumetricShadows::DownsampleShadowMip0CS");
+	downsampleShadowMip1CS.Get(L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl", { { "DOWNSAMPLE_SHADOW_MIP1", nullptr } }, "cs_5_0", "main", "VolumetricShadows::DownsampleShadowMip1CS");
+	blurShadowHorizontalCS.Get(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", { { "BLUR_HORIZONTAL", nullptr } }, "cs_5_0", "main", "VolumetricShadows::BlurShadowHorizontalCS");
+	blurShadowVerticalCS.Get(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", { { "BLUR_VERTICAL", nullptr } }, "cs_5_0", "main", "VolumetricShadows::BlurShadowVerticalCS");
 }
 
 void VolumetricShadows::ClearShaderCache()
 {
-	if (downsampleShadowMip0CS) {
-		downsampleShadowMip0CS->Release();
-		downsampleShadowMip0CS = nullptr;
-	}
-	if (downsampleShadowMip1CS) {
-		downsampleShadowMip1CS->Release();
-		downsampleShadowMip1CS = nullptr;
-	}
-	if (blurShadowHorizontalCS) {
-		blurShadowHorizontalCS->Release();
-		blurShadowHorizontalCS = nullptr;
-	}
-	if (blurShadowVerticalCS) {
-		blurShadowVerticalCS->Release();
-		blurShadowVerticalCS = nullptr;
-	}
-
-	std::vector<std::pair<const char*, const char*>> defines;
-	defines.push_back({ "DOWNSAMPLE_SHADOW_MIP0", nullptr });
-	downsampleShadowMip0CS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl", defines, "cs_5_0"));
-	defines.clear();
-	defines.push_back({ "DOWNSAMPLE_SHADOW_MIP1", nullptr });
-	downsampleShadowMip1CS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\DownsampleShadowCS.hlsl", defines, "cs_5_0"));
-
-	defines.clear();
-	defines.push_back({ "BLUR_HORIZONTAL", nullptr });
-	blurShadowHorizontalCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", defines, "cs_5_0"));
-	defines.clear();
-	defines.push_back({ "BLUR_VERTICAL", nullptr });
-	blurShadowVerticalCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VolumetricShadows\\BlurShadowCS.hlsl", defines, "cs_5_0"));
+	downsampleShadowMip0CS.Reset();
+	downsampleShadowMip1CS.Reset();
+	blurShadowHorizontalCS.Reset();
+	blurShadowVerticalCS.Reset();
+	CompileComputeShaders();
 }
 
 VolumetricShadows::RuntimeReadiness VolumetricShadows::GetRuntimeReadiness(
@@ -150,10 +120,10 @@ VolumetricShadows::RuntimeReadiness VolumetricShadows::GetRuntimeReadiness(
 	if (!shadowSceneNode || !shadowSceneNode->GetRuntimeData().sunShadowDirLight)
 		return RuntimeReadiness::NoDirectionalShadows;
 
-	if (!downsampleShadowMip0CS ||
-		!downsampleShadowMip1CS ||
-		!blurShadowHorizontalCS ||
-		!blurShadowVerticalCS) {
+	if (!downsampleShadowMip0CS.get() ||
+		!downsampleShadowMip1CS.get() ||
+		!blurShadowHorizontalCS.get() ||
+		!blurShadowVerticalCS.get()) {
 		return RuntimeReadiness::ShaderUnavailable;
 	}
 
@@ -236,6 +206,7 @@ void VolumetricShadows::CopyShadowLightData()
 
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "VolumetricShadows::CopyShadowLightData");
+	bool shadowCopyUpdated = false;
 
 	{
 		// Downsample shadow texture array to fixed 512x512 (mip1: 256x256)
@@ -339,7 +310,7 @@ void VolumetricShadows::CopyShadowLightData()
 					// Mip 0 (cascade 1)
 					ID3D11UnorderedAccessView* csUavs[1]{ shadowCopyMip0UAV };
 					context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-					context->CSSetShader(downsampleShadowMip0CS, nullptr, 0);
+					context->CSSetShader(downsampleShadowMip0CS.get(), nullptr, 0);
 					globals::profiler->BeginPass("VolumetricShadows::DownsampleMip0");
 					context->Dispatch(dispatchWidth, dispatchHeight, 1);
 					globals::profiler->EndPass();
@@ -347,7 +318,7 @@ void VolumetricShadows::CopyShadowLightData()
 					// Mip 1 (cascade 0)
 					csUavs[0] = shadowCopyMip1UAV;
 					context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-					context->CSSetShader(downsampleShadowMip1CS, nullptr, 0);
+					context->CSSetShader(downsampleShadowMip1CS.get(), nullptr, 0);
 					globals::profiler->BeginPass("VolumetricShadows::DownsampleMip1");
 					context->Dispatch(dispatchWidth, dispatchHeight, 1);
 					globals::profiler->EndPass();
@@ -371,7 +342,7 @@ void VolumetricShadows::CopyShadowLightData()
 						context->CSSetShaderResources(0, 1, blurSrvs);
 						csUavs[0] = shadowBlurTempMip0UAV;
 						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-						context->CSSetShader(blurShadowHorizontalCS, nullptr, 0);
+						context->CSSetShader(blurShadowHorizontalCS.get(), nullptr, 0);
 						globals::profiler->BeginPass("VolumetricShadows::BlurHMip0");
 						context->Dispatch((mip0Size + GROUP_SIZE - 1) / GROUP_SIZE, mip0Size, 1);
 						globals::profiler->EndPass();
@@ -387,7 +358,7 @@ void VolumetricShadows::CopyShadowLightData()
 						context->CSSetShaderResources(0, 1, blurSrvs);
 						csUavs[0] = shadowCopyMip0UAV;
 						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-						context->CSSetShader(blurShadowVerticalCS, nullptr, 0);
+						context->CSSetShader(blurShadowVerticalCS.get(), nullptr, 0);
 						globals::profiler->BeginPass("VolumetricShadows::BlurVMip0");
 						context->Dispatch(mip0Size, (mip0Size + GROUP_SIZE - 1) / GROUP_SIZE, 1);
 						globals::profiler->EndPass();
@@ -408,7 +379,7 @@ void VolumetricShadows::CopyShadowLightData()
 						context->CSSetShaderResources(0, 1, blurSrvs);
 						csUavs[0] = shadowBlurTempMip1UAV;
 						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-						context->CSSetShader(blurShadowHorizontalCS, nullptr, 0);
+						context->CSSetShader(blurShadowHorizontalCS.get(), nullptr, 0);
 						globals::profiler->BeginPass("VolumetricShadows::BlurHMip1");
 						context->Dispatch((mip1Size + GROUP_SIZE - 1) / GROUP_SIZE, mip1Size, 1);
 						globals::profiler->EndPass();
@@ -424,7 +395,7 @@ void VolumetricShadows::CopyShadowLightData()
 						context->CSSetShaderResources(0, 1, blurSrvs);
 						csUavs[0] = shadowCopyMip1UAV;
 						context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
-						context->CSSetShader(blurShadowVerticalCS, nullptr, 0);
+						context->CSSetShader(blurShadowVerticalCS.get(), nullptr, 0);
 						globals::profiler->BeginPass("VolumetricShadows::BlurVMip1");
 						context->Dispatch(mip1Size, (mip1Size + GROUP_SIZE - 1) / GROUP_SIZE, 1);
 						globals::profiler->EndPass();
@@ -440,12 +411,12 @@ void VolumetricShadows::CopyShadowLightData()
 					ID3D11SamplerState* nullSampler = nullptr;
 					context->CSSetSamplers(0, 1, &nullSampler);
 					context->CSSetShader(nullptr, nullptr, 0);
-
+					shadowCopyUpdated = true;
 				}
 			}
 		}
 
-		auto* srv = shadowView ? (shadowCopySRV ? shadowCopySRV : shadowView.get()) : nullptr;
+		auto* srv = shadowView && shadowCopyUpdated ? shadowCopySRV : nullptr;
 		SetSharedShadowMapSRV(context, srv);
 	}
 }

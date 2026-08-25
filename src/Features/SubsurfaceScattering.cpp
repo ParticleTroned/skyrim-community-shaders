@@ -380,6 +380,16 @@ void SubsurfaceScattering::DrawSSS()
 	if (!validMaterials)
 		return;
 
+	if (!GetComputeShaderPrepass())
+		return;
+	if (settings.SSMode == 0) {
+		if (!GetComputeShaderHorizontalBlur() || !GetComputeShaderVerticalBlur())
+			return;
+	} else if (settings.SSMode == 1) {
+		if (!GetComputeShaderBurley())
+			return;
+	}
+
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering");
 
@@ -397,9 +407,7 @@ void SubsurfaceScattering::DrawSSS()
 
 		blurCBData.BurleySamples = settings.BurleySamples;
 		// Burley always does full albedo removal/reapply; scatter mode only applies to Separable SSS.
-		blurCBData.ScatterMode = (settings.SSMode == 0)
-		                             ? (uint)std::clamp(settings.ScatterMode, (int)kPreScatter, (int)kPreAndPostScatter)
-		                             : (uint)kPostScatter;
+		blurCBData.ScatterMode = (settings.SSMode == 0) ? (uint)std::clamp(settings.ScatterMode, (int)kPreScatter, (int)kPreAndPostScatter) : (uint)kPostScatter;
 
 		blurCBData.MeanFreePathBase = settings.MeanFreePathBase;
 		blurCBData.MeanFreePathHuman = settings.MeanFreePathHuman;
@@ -633,58 +641,30 @@ void SubsurfaceScattering::SaveSettings(json& o_json)
 
 void SubsurfaceScattering::ClearShaderCache()
 {
-	if (prepassSS) {
-		prepassSS->Release();
-		prepassSS = nullptr;
-	}
-	if (horizontalSSBlur) {
-		horizontalSSBlur->Release();
-		horizontalSSBlur = nullptr;
-	}
-	if (verticalSSBlur) {
-		verticalSSBlur->Release();
-		verticalSSBlur = nullptr;
-	}
-	if (burleySS) {
-		burleySS->Release();
-		burleySS = nullptr;
-	}
+	prepassSS.Reset();
+	horizontalSSBlur.Reset();
+	verticalSSBlur.Reset();
+	burleySS.Reset();
 }
 
 ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderPrepass()
 {
-	if (!prepassSS) {
-		logger::debug("Compiling prepassSS");
-		prepassSS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\DiffuseExtractionCS.hlsl", {}, "cs_5_0");
-	}
-	return prepassSS;
+	return prepassSS.Get(L"Data\\Shaders\\SubsurfaceScattering\\DiffuseExtractionCS.hlsl", {}, "cs_5_0");
 }
 
 ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderHorizontalBlur()
 {
-	if (!horizontalSSBlur) {
-		logger::debug("Compiling horizontalSSBlur");
-		horizontalSSBlur = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "HORIZONTAL", "" } }, "cs_5_0");
-	}
-	return horizontalSSBlur;
+	return horizontalSSBlur.Get(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "HORIZONTAL", "" } }, "cs_5_0");
 }
 
 ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderVerticalBlur()
 {
-	if (!verticalSSBlur) {
-		logger::debug("Compiling verticalSSBlur");
-		verticalSSBlur = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", {}, "cs_5_0");
-	}
-	return verticalSSBlur;
+	return verticalSSBlur.Get(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", {}, "cs_5_0");
 }
 
 ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderBurley()
 {
-	if (!burleySS) {
-		logger::debug("Compiling burleySS");
-		burleySS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "BURLEY", "" } }, "cs_5_0");
-	}
-	return burleySS;
+	return burleySS.Get(L"Data\\Shaders\\SubsurfaceScattering\\SeparableSSSCS.hlsl", { { "BURLEY", "" } }, "cs_5_0");
 }
 
 void SubsurfaceScattering::DataLoaded()

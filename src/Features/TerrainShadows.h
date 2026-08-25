@@ -4,6 +4,7 @@
 #include <filesystem>
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 
 struct TerrainShadows : public Feature
 {
@@ -79,7 +80,7 @@ public:
 
 	PerFrame GetCommonBufferData();
 
-	winrt::com_ptr<ID3D11ComputeShader> shadowUpdateProgram = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> shadowUpdateProgram;
 
 	std::unique_ptr<Texture2D> texHeightMap = nullptr;
 	std::unique_ptr<Texture2D> texShadowHeight = nullptr;
@@ -91,6 +92,8 @@ public:
 	virtual void SetupResources() override;
 	void ParseHeightmapPath(std::filesystem::path p, bool xlodgen_style);
 	void CompileComputeShaders();
+	/** @brief Returns the shadow update compute shader, compiling on first use, or nullptr if compilation failed. */
+	ID3D11ComputeShader* GetShadowUpdateProgram();
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }

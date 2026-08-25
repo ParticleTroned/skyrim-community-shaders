@@ -57,10 +57,7 @@ void ScreenSpaceShadows::DrawSettings()
 
 void ScreenSpaceShadows::InvalidateRaymarchShaders()
 {
-	if (raymarchCS) {
-		raymarchCS->Release();
-		raymarchCS = nullptr;
-	}
+	raymarchCS.Reset();
 }
 
 void ScreenSpaceShadows::ClearShaderCache()
@@ -95,16 +92,13 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 		InvalidateRaymarchShaders();
 	}
 
-	if (!raymarchCS) {
-		auto sampleCount = std::format("{}", scaledSampleCount);
-		std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };
-		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
-		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
-		if (globals::features::terrainBlending.loaded)
-			defines.push_back({ "TERRAIN_BLENDING", "" });
-		raymarchCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0");
-	}
-	return raymarchCS;
+	auto sampleCount = std::format("{}", scaledSampleCount);
+	std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };
+	// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
+	// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
+	if (globals::features::terrainBlending.loaded)
+		defines.push_back({ "TERRAIN_BLENDING", "" });
+	return raymarchCS.Get(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0");
 }
 
 ScreenSpaceShadows::RuntimeReadiness ScreenSpaceShadows::GetRuntimeReadiness(
@@ -121,18 +115,18 @@ ScreenSpaceShadows::RuntimeReadiness ScreenSpaceShadows::GetRuntimeReadiness(
 	auto* d3dContext = globals::d3d::context;
 	auto* viewport = globals::game::graphicsState;
 	if (!globals::d3d::device ||
-	    !d3dContext ||
-	    !viewport ||
-	    !globals::state ||
-	    !globals::profiler ||
-	    !globals::shaderCache ||
-	    !pointBorderSampler ||
-	    !raymarchCB ||
-	    !raymarchCB->CB() ||
-	    !screenSpaceShadowsTexture ||
-	    !screenSpaceShadowsTexture->resource ||
-	    !screenSpaceShadowsTexture->srv ||
-	    !screenSpaceShadowsTexture->uav) {
+		!d3dContext ||
+		!viewport ||
+		!globals::state ||
+		!globals::profiler ||
+		!globals::shaderCache ||
+		!pointBorderSampler ||
+		!raymarchCB ||
+		!raymarchCB->CB() ||
+		!screenSpaceShadowsTexture ||
+		!screenSpaceShadowsTexture->resource ||
+		!screenSpaceShadowsTexture->srv ||
+		!screenSpaceShadowsTexture->uav) {
 		return RuntimeReadiness::NoRuntimeResources;
 	}
 
@@ -144,22 +138,22 @@ ScreenSpaceShadows::RuntimeReadiness ScreenSpaceShadows::GetRuntimeReadiness(
 		viewport->GetRuntimeData().dynamicResolutionHeightRatio
 	};
 	if (!depthSRV ||
-	    !std::isfinite(renderSize.x) ||
-	    !std::isfinite(renderSize.y) ||
-	    renderSize.x < 1.0f ||
-	    renderSize.y < 1.0f ||
-	    static_cast<double>(renderSize.x) >
+		!std::isfinite(renderSize.x) ||
+		!std::isfinite(renderSize.y) ||
+		renderSize.x < 1.0f ||
+		renderSize.y < 1.0f ||
+		static_cast<double>(renderSize.x) >
 			std::min<double>(
 				screenSpaceShadowsTexture->desc.Width,
 				std::numeric_limits<int>::max()) ||
-	    static_cast<double>(renderSize.y) >
+		static_cast<double>(renderSize.y) >
 			std::min<double>(
 				screenSpaceShadowsTexture->desc.Height,
 				std::numeric_limits<int>::max()) ||
-	    !std::isfinite(dynamicResolution.x) ||
-	    !std::isfinite(dynamicResolution.y) ||
-	    dynamicResolution.x <= 0.0f ||
-	    dynamicResolution.y <= 0.0f) {
+		!std::isfinite(dynamicResolution.x) ||
+		!std::isfinite(dynamicResolution.y) ||
+		dynamicResolution.x <= 0.0f ||
+		dynamicResolution.y <= 0.0f) {
 		return RuntimeReadiness::NoRuntimeResources;
 	}
 
@@ -180,14 +174,14 @@ ScreenSpaceShadows::RuntimeReadiness ScreenSpaceShadows::GetRuntimeReadiness(
 		return RuntimeReadiness::NoDirectionalLight;
 
 	if (a_requireCompiledShader &&
-	    (!raymarchCS || lastCompiledSampleCount != GetScaledSampleCount())) {
+		(!raymarchCS || lastCompiledSampleCount != GetScaledSampleCount())) {
 		return RuntimeReadiness::ShaderUnavailable;
 	}
 
 	if (a_context) {
 		a_context->context = d3dContext;
 		a_context->depthSRV = depthSRV;
-		a_context->raymarchShader = raymarchCS;
+		a_context->raymarchShader = raymarchCS.get();
 		a_context->directionalLight = directionalLight;
 		a_context->renderSize = renderSize;
 		a_context->dynamicResolution = dynamicResolution;
@@ -338,8 +332,8 @@ void ScreenSpaceShadows::Prepass()
 	if (!context)
 		return;
 	if (!screenSpaceShadowsTexture ||
-	    !screenSpaceShadowsTexture->uav ||
-	    !screenSpaceShadowsTexture->srv) {
+		!screenSpaceShadowsTexture->uav ||
+		!screenSpaceShadowsTexture->srv) {
 		ID3D11ShaderResourceView* nullView = nullptr;
 		context->PSSetShaderResources(45, 1, &nullView);
 		return;
@@ -412,8 +406,8 @@ void ScreenSpaceShadows::LoadSettings(json& o_json)
 	                                    std::clamp(bendSettings.SurfaceThickness, 0.005f, 0.05f) :
 	                                    defaults.SurfaceThickness;
 	bendSettings.BilinearThreshold = std::isfinite(bendSettings.BilinearThreshold) ?
-	                                    std::clamp(bendSettings.BilinearThreshold, 0.02f, 1.0f) :
-	                                    defaults.BilinearThreshold;
+	                                     std::clamp(bendSettings.BilinearThreshold, 0.02f, 1.0f) :
+	                                     defaults.BilinearThreshold;
 	bendSettings.ShadowContrast = std::isfinite(bendSettings.ShadowContrast) ?
 	                                  std::clamp(bendSettings.ShadowContrast, 0.0f, 4.0f) :
 	                                  defaults.ShadowContrast;

@@ -184,113 +184,57 @@ bool MenuOpenCloseEventHandler::Register()
 
 void DynamicCubemaps::ClearShaderCache()
 {
-	if (updateCubemapCS) {
-		updateCubemapCS->Release();
-		updateCubemapCS = nullptr;
-	}
-	if (updateCubemapReflectionsCS) {
-		updateCubemapReflectionsCS->Release();
-		updateCubemapReflectionsCS = nullptr;
-	}
-	if (updateCubemapFakeReflectionsCS) {
-		updateCubemapFakeReflectionsCS->Release();
-		updateCubemapFakeReflectionsCS = nullptr;
-	}
-	if (inferCubemapCS) {
-		inferCubemapCS->Release();
-		inferCubemapCS = nullptr;
-	}
-	if (inferCubemapReflectionsCS) {
-		inferCubemapReflectionsCS->Release();
-		inferCubemapReflectionsCS = nullptr;
-	}
-	if (inferCubemapFakeReflectionsCS) {
-		inferCubemapFakeReflectionsCS->Release();
-		inferCubemapFakeReflectionsCS = nullptr;
-	}
-	if (specularIrradianceCS) {
-		specularIrradianceCS->Release();
-		specularIrradianceCS = nullptr;
-	}
-	if (bc6hEncodeCS) {
-		bc6hEncodeCS->Release();
-		bc6hEncodeCS = nullptr;
-	}
+	updateCubemapCS.Reset();
+	updateCubemapReflectionsCS.Reset();
+	updateCubemapFakeReflectionsCS.Reset();
+	inferCubemapCS.Reset();
+	inferCubemapReflectionsCS.Reset();
+	inferCubemapFakeReflectionsCS.Reset();
+	specularIrradianceCS.Reset();
+	bc6hEncodeCS.Reset();
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdate()
 {
-	if (!updateCubemapCS) {
-		logger::debug("Compiling UpdateCubemapCS");
-		updateCubemapCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0"));
-	}
-	return updateCubemapCS;
+	return updateCubemapCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateReflections()
 {
-	if (!updateCubemapReflectionsCS) {
-		logger::debug("Compiling UpdateCubemapCS REFLECTIONS");
-		updateCubemapReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0"));
-	}
-	return updateCubemapReflectionsCS;
+	return updateCubemapReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateFakeReflections()
 {
-	if (!updateCubemapFakeReflectionsCS) {
-		logger::debug("Compiling UpdateCubemapCS FAKEREFLECTIONS");
-		updateCubemapFakeReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0"));
-	}
-	return updateCubemapFakeReflectionsCS;
+	return updateCubemapFakeReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrence()
 {
-	if (!inferCubemapCS) {
-		logger::debug("Compiling InferCubemapCS");
-		inferCubemapCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", {}, "cs_5_0"));
-	}
-	return inferCubemapCS;
+	return inferCubemapCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", {}, "cs_5_0");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceReflections()
 {
-	if (!inferCubemapReflectionsCS) {
-		logger::debug("Compiling InferCubemapCS REFLECTIONS");
-		inferCubemapReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0"));
-	}
-	return inferCubemapReflectionsCS;
+	return inferCubemapReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceFakeReflections()
 {
-	if (!inferCubemapFakeReflectionsCS) {
-		logger::debug("Compiling InferCubemapCS FAKEREFLECTIONS");
-		inferCubemapFakeReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0"));
-	}
-	return inferCubemapFakeReflectionsCS;
+	return inferCubemapFakeReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderSpecularIrradiance()
 {
-	if (!specularIrradianceCS) {
-		logger::debug("Compiling SpecularIrradianceCS");
-		specularIrradianceCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\SpecularIrradianceCS.hlsl", {}, "cs_5_0"));
-	}
-	return specularIrradianceCS;
+	return specularIrradianceCS.Get(L"Data\\Shaders\\DynamicCubemaps\\SpecularIrradianceCS.hlsl", {}, "cs_5_0");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderBC6HEncode()
 {
-	if (!bc6hEncodeCS) {
-		logger::debug("Compiling BC6HEncodeCS");
-		bc6hEncodeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\BC6HEncodeCS.hlsl", {}, "cs_5_0"));
-	}
-	return bc6hEncodeCS;
+	return bc6hEncodeCS.Get(L"Data\\Shaders\\DynamicCubemaps\\BC6HEncodeCS.hlsl", {}, "cs_5_0");
 }
 
-void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
+bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 {
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
@@ -340,11 +284,13 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 
 	context->CSSetSamplers(0, 1, &computeSampler);
 
-	context->CSSetShader(a_reflections ? (fakeReflections ? GetComputeShaderUpdateFakeReflections() : GetComputeShaderUpdateReflections()) : GetComputeShaderUpdate(), nullptr, 0);
-
-	globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::CaptureReflections" : "DynamicCubemaps::Capture");
-	context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
-	globals::profiler->EndPass();
+	auto* shader = a_reflections ? (fakeReflections ? GetComputeShaderUpdateFakeReflections() : GetComputeShaderUpdateReflections()) : GetComputeShaderUpdate();
+	if (shader) {
+		context->CSSetShader(shader, nullptr, 0);
+		globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::CaptureReflections" : "DynamicCubemaps::Capture");
+		context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
+		globals::profiler->EndPass();
+	}
 
 	uavs[0] = nullptr;
 	uavs[1] = nullptr;
@@ -362,9 +308,11 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 
 	ID3D11SamplerState* nullSampler = { nullptr };
 	context->CSSetSamplers(0, 1, &nullSampler);
+
+	return shader != nullptr;
 }
 
-void DynamicCubemaps::Inferrence(bool a_reflections)
+bool DynamicCubemaps::Inferrence(bool a_reflections)
 {
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
@@ -383,11 +331,13 @@ void DynamicCubemaps::Inferrence(bool a_reflections)
 
 	context->CSSetSamplers(0, 1, &computeSampler);
 
-	context->CSSetShader(a_reflections ? (fakeReflections ? GetComputeShaderInferrenceFakeReflections() : GetComputeShaderInferrenceReflections()) : GetComputeShaderInferrence(), nullptr, 0);
-
-	globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::InferReflections" : "DynamicCubemaps::Infer");
-	context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
-	globals::profiler->EndPass();
+	auto* shader = a_reflections ? (fakeReflections ? GetComputeShaderInferrenceFakeReflections() : GetComputeShaderInferrenceReflections()) : GetComputeShaderInferrence();
+	if (shader) {
+		context->CSSetShader(shader, nullptr, 0);
+		globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::InferReflections" : "DynamicCubemaps::Infer");
+		context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
+		globals::profiler->EndPass();
+	}
 
 	srvs[0] = nullptr;
 	srvs[1] = nullptr;
@@ -402,9 +352,11 @@ void DynamicCubemaps::Inferrence(bool a_reflections)
 
 	ID3D11SamplerState* sampler = nullptr;
 	context->CSSetSamplers(0, 1, &sampler);
+
+	return shader != nullptr;
 }
 
-void DynamicCubemaps::Irradiance(bool a_reflections)
+bool DynamicCubemaps::Irradiance(bool a_reflections)
 {
 	auto context = globals::d3d::context;
 
@@ -415,34 +367,37 @@ void DynamicCubemaps::Irradiance(bool a_reflections)
 	}
 
 	// Compute pre-filtered specular environment map.
+	auto* shader = GetComputeShaderSpecularIrradiance();
 	{
 		auto srv = envInferredTexture->srv.get();
 		context->GenerateMips(srv);
 
 		context->CSSetShaderResources(0, 1, &srv);
 		context->CSSetSamplers(0, 1, &computeSampler);
-		context->CSSetShader(GetComputeShaderSpecularIrradiance(), nullptr, 0);
+		if (shader) {
+			context->CSSetShader(shader, nullptr, 0);
 
-		ID3D11Buffer* buffer = spmapCB->CB();
-		context->CSSetConstantBuffers(0, 1, &buffer);
+			ID3D11Buffer* buffer = spmapCB->CB();
+			context->CSSetConstantBuffers(0, 1, &buffer);
 
-		float const delta_roughness = 1.0f / std::max(float(MIPLEVELS - 1), 1.0f);
+			float const delta_roughness = 1.0f / std::max(float(MIPLEVELS - 1), 1.0f);
 
-		std::uint32_t size = std::max(envTexture->desc.Width, envTexture->desc.Height) / 2;
+			std::uint32_t size = std::max(envTexture->desc.Width, envTexture->desc.Height) / 2;
 
-		globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::IrradianceReflections" : "DynamicCubemaps::Irradiance");
-		for (std::uint32_t level = 1; level < MIPLEVELS; level++, size /= 2) {
-			const UINT numGroups = (UINT)std::max(1u, (size + 7u) / 8u);
+			globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::IrradianceReflections" : "DynamicCubemaps::Irradiance");
+			for (std::uint32_t level = 1; level < MIPLEVELS; level++, size /= 2) {
+				const UINT numGroups = (UINT)std::max(1u, (size + 7u) / 8u);
 
-			const SpecularMapFilterSettingsCB spmapConstants = { level * delta_roughness };
-			spmapCB->Update(spmapConstants);
+				const SpecularMapFilterSettingsCB spmapConstants = { level * delta_roughness };
+				spmapCB->Update(spmapConstants);
 
-			auto uav = a_reflections ? uavReflectionsArray[level - 1] : uavArray[level - 1];
+				auto uav = a_reflections ? uavReflectionsArray[level - 1] : uavArray[level - 1];
 
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-			context->Dispatch(numGroups, numGroups, 6);
+				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+				context->Dispatch(numGroups, numGroups, 6);
+			}
+			globals::profiler->EndPass();
 		}
-		globals::profiler->EndPass();
 	}
 
 	ID3D11ShaderResourceView* nullSRV = { nullptr };
@@ -455,16 +410,18 @@ void DynamicCubemaps::Irradiance(bool a_reflections)
 	context->CSSetShader(nullptr, 0, 0);
 	context->CSSetConstantBuffers(0, 1, &nullBuffer);
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+
+	return shader != nullptr;
 }
 
-void DynamicCubemaps::CompressToBC6H(bool a_reflections)
+bool DynamicCubemaps::CompressToBC6H(bool a_reflections)
 {
 	auto context = globals::d3d::context;
 
 	auto shader = GetComputeShaderBC6HEncode();
 	if (!shader) {
 		logger::error("BC6HEncodeCS failed to compile; BC6H compression disabled");
-		return;
+		return false;
 	}
 
 	auto* srcSRV = a_reflections ? envReflectionsTextureArraySRV : envTextureArraySRV;
@@ -513,6 +470,8 @@ void DynamicCubemaps::CompressToBC6H(bool a_reflections)
 	// to a BC6H_UF16 (W × H) resource because each block is 16 bytes either way.
 	auto dst = a_reflections ? envReflectionsTextureBC6H : envTextureBC6H;
 	context->CopyResource(dst->resource.get(), bc6hScratchTexture->resource.get());
+
+	return true;
 }
 
 void DynamicCubemaps::UpdateCubemap()
@@ -549,46 +508,43 @@ void DynamicCubemaps::UpdateCubemap()
 
 	switch (nextTask) {
 	case NextTask::kCapture:
-		UpdateCubemapCapture(false);
-		nextTask = NextTask::kInferrence;
+		if (UpdateCubemapCapture(false))
+			nextTask = NextTask::kInferrence;
 		break;
 
 	case NextTask::kInferrence:
-		nextTask = NextTask::kIrradiance;
-		Inferrence(false);
+		if (Inferrence(false))
+			nextTask = NextTask::kIrradiance;
 		break;
 
 	case NextTask::kIrradiance:
-		nextTask = NextTask::kBC6HCompress;
-		Irradiance(false);
+		if (Irradiance(false))
+			nextTask = NextTask::kBC6HCompress;
 		break;
 
 	case NextTask::kBC6HCompress:
-		if (activeReflections)
-			nextTask = NextTask::kCapture2;
-		else
-			nextTask = NextTask::kCapture;
-		CompressToBC6H(false);
+		if (CompressToBC6H(false))
+			nextTask = activeReflections ? NextTask::kCapture2 : NextTask::kCapture;
 		break;
 
 	case NextTask::kCapture2:
-		UpdateCubemapCapture(true);
-		nextTask = NextTask::kInferrence2;
+		if (UpdateCubemapCapture(true))
+			nextTask = NextTask::kInferrence2;
 		break;
 
 	case NextTask::kInferrence2:
-		Inferrence(true);
-		nextTask = NextTask::kIrradiance2;
+		if (Inferrence(true))
+			nextTask = NextTask::kIrradiance2;
 		break;
 
 	case NextTask::kIrradiance2:
-		nextTask = NextTask::kBC6HCompress2;
-		Irradiance(true);
+		if (Irradiance(true))
+			nextTask = NextTask::kBC6HCompress2;
 		break;
 
 	case NextTask::kBC6HCompress2:
-		nextTask = NextTask::kCapture;
-		CompressToBC6H(true);
+		if (CompressToBC6H(true))
+			nextTask = NextTask::kCapture;
 		break;
 	}
 }

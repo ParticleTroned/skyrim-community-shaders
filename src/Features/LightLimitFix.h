@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "OverlayFeature.h"
+#include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
@@ -137,8 +138,8 @@ public:
 	bool previousEnableLightsVisualisation = false;
 	bool currentEnableLightsVisualisation = false;
 
-	ID3D11ComputeShader* clusterBuildingCS = nullptr;
-	ID3D11ComputeShader* clusterCullingCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> clusterBuildingCS;
+	Util::LazyShader<ID3D11ComputeShader> clusterCullingCS;
 
 	ConstantBuffer* lightBuildingCB = nullptr;
 	ConstantBuffer* lightCullingCB = nullptr;
@@ -282,6 +283,7 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 	virtual void ClearShaderCache() override;
+	void CompileComputeShaders();
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
 	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, const ResolvedBillboardLight* a_billboardLight = nullptr);

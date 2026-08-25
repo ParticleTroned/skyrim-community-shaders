@@ -6,6 +6,7 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+#include "Features/CSEditor.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
 #include "Features/ScreenSpaceGI.h"
@@ -13,7 +14,6 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
-#include "Features/CSEditor.h"
 
 #include "Hooks.h"
 
@@ -347,22 +347,22 @@ void Deferred::DeferredPasses()
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
 		ID3D11ShaderResourceView* srvs[16]{
-			specular.SRV,                                                                                    // t0  SpecularTexture
-			albedo.SRV,                                                                                      // t1  AlbedoTexture
-			normalRoughness.SRV,                                                                             // t2  NormalRoughnessTexture
-			masks.SRV,                                                                                       // t3  MasksTexture
-			dynamicCubemaps.loaded ? Util::GetCurrentSceneDepthSRV(false) : nullptr,                         // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
-			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                              // t5  ReflectanceTexture
-			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                        // t6  EnvTexture
-			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,             // t7  EnvReflectionsTexture
+			specular.SRV,                                                                                              // t0  SpecularTexture
+			albedo.SRV,                                                                                                // t1  AlbedoTexture
+			normalRoughness.SRV,                                                                                       // t2  NormalRoughnessTexture
+			masks.SRV,                                                                                                 // t3  MasksTexture
+			dynamicCubemaps.loaded ? Util::GetCurrentSceneDepthSRV(false) : nullptr,                                   // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
+			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                                        // t5  ReflectanceTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                                  // t6  EnvTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,                       // t7  EnvReflectionsTexture
 			dynamicCubemaps.loaded && skylighting.IsRuntimeActive() ? skylighting.texProbeArray->srv.get() : nullptr,  // t8  SkylightingProbeArray
-			masks2.SRV,                                                                                      // t9  Masks2Texture (vertexAO in .x)
-			ssgi_ao,                                                                                         // t10 SsgiAoTexture
-			ssgi_hq_spec ? nullptr : ssgi_y,                                                                 // t11 SsgiYTexture
-			ssgi_hq_spec ? nullptr : ssgi_cocg,                                                              // t12 SsgiCoCgTexture
-			ssgi_hq_spec ? ssgi_gi_spec : nullptr,                                                           // t13 SsgiSpecularTexture
-			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                             // t14 EnvIBLTexture
-			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                             // t15 SkyIBLTexture
+			masks2.SRV,                                                                                                // t9  Masks2Texture (vertexAO in .x)
+			ssgi_ao,                                                                                                   // t10 SsgiAoTexture
+			ssgi_hq_spec ? nullptr : ssgi_y,                                                                           // t11 SsgiYTexture
+			ssgi_hq_spec ? nullptr : ssgi_cocg,                                                                        // t12 SsgiCoCgTexture
+			ssgi_hq_spec ? ssgi_gi_spec : nullptr,                                                                     // t13 SsgiSpecularTexture
+			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                                       // t14 EnvIBLTexture
+			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                                       // t15 SkyIBLTexture
 		};
 
 		if (dynamicCubemaps.loaded)
@@ -373,10 +373,9 @@ void Deferred::DeferredPasses()
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-		auto shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
-		context->CSSetShader(shader, nullptr, 0);
+		if (auto* shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite()) {
+			context->CSSetShader(shader, nullptr, 0);
 
-		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Dispatch");
 			globals::profiler->BeginPass("DeferredComposite");
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
@@ -569,70 +568,54 @@ void Deferred::CopyShadowLightData()
 
 void Deferred::ClearShaderCache()
 {
-	if (mainCompositeCS) {
-		mainCompositeCS->Release();
-		mainCompositeCS = nullptr;
-	}
-	if (mainCompositeInteriorCS) {
-		mainCompositeInteriorCS->Release();
-		mainCompositeInteriorCS = nullptr;
-	}
+	mainCompositeCS.Reset();
+	mainCompositeInteriorCS.Reset();
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 {
-	if (!mainCompositeCS) {
-		logger::debug("Compiling DeferredCompositeCS");
+	std::vector<std::pair<const char*, const char*>> defines;
 
-		std::vector<std::pair<const char*, const char*>> defines;
+	if (globals::features::dynamicCubemaps.loaded)
+		defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		if (globals::features::dynamicCubemaps.loaded)
-			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
+	if (globals::features::skylighting.loaded)
+		defines.push_back({ "SKYLIGHTING", nullptr });
 
-		if (globals::features::skylighting.loaded)
-			defines.push_back({ "SKYLIGHTING", nullptr });
+	if (globals::features::screenSpaceGI.loaded)
+		defines.push_back({ "SSGI", nullptr });
 
-		if (globals::features::screenSpaceGI.loaded)
-			defines.push_back({ "SSGI", nullptr });
+	if (globals::features::ibl.loaded)
+		defines.push_back({ "IBL", nullptr });
 
-		if (globals::features::ibl.loaded)
-			defines.push_back({ "IBL", nullptr });
+	// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
+	// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
+	if (globals::features::terrainBlending.loaded)
+		defines.push_back({ "TERRAIN_BLENDING", nullptr });
 
-		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
-		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
-		if (globals::features::terrainBlending.loaded)
-			defines.push_back({ "TERRAIN_BLENDING", nullptr });
-
-		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
-	}
-	return mainCompositeCS;
+	return mainCompositeCS.Get(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0");
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 {
-	if (!mainCompositeInteriorCS) {
-		logger::debug("Compiling DeferredCompositeCS INTERIOR");
+	std::vector<std::pair<const char*, const char*>> defines;
+	defines.push_back({ "INTERIOR", nullptr });
 
-		std::vector<std::pair<const char*, const char*>> defines;
-		defines.push_back({ "INTERIOR", nullptr });
+	if (globals::features::dynamicCubemaps.loaded)
+		defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		if (globals::features::dynamicCubemaps.loaded)
-			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
+	if (globals::features::screenSpaceGI.loaded)
+		defines.push_back({ "SSGI", nullptr });
 
-		if (globals::features::screenSpaceGI.loaded)
-			defines.push_back({ "SSGI", nullptr });
+	if (globals::features::ibl.loaded)
+		defines.push_back({ "IBL", nullptr });
 
-		if (globals::features::ibl.loaded)
-			defines.push_back({ "IBL", nullptr });
+	// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
+	// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
+	if (globals::features::terrainBlending.loaded)
+		defines.push_back({ "TERRAIN_BLENDING", nullptr });
 
-		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
-		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
-		if (globals::features::terrainBlending.loaded)
-			defines.push_back({ "TERRAIN_BLENDING", nullptr });
-
-		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
-	}
-	return mainCompositeInteriorCS;
+	return mainCompositeInteriorCS.Get(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0");
 }
 
 void Deferred::Hooks::Main_RenderShadowMaps::thunk()

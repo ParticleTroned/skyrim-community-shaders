@@ -274,6 +274,7 @@ void State::Reset()
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
 	frameCount++;
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);
+	globals::shaderCache->ProcessPendingClear();
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		auto& BSImagespaceShaderApplyReflections = imageSpaceManager->GetRuntimeData().BSImagespaceShaderApplyReflections;

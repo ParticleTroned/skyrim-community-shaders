@@ -2475,6 +2475,17 @@ namespace SIE
 		}
 	}
 
+	void ShaderCache::RequestClear()
+	{
+		pendingClear.store(true, std::memory_order_release);
+	}
+
+	void ShaderCache::ProcessPendingClear()
+	{
+		if (pendingClear.exchange(false, std::memory_order_acq_rel))
+			Clear();
+	}
+
 	template <typename ShaderType, typename MutexType>
 	void ReleaseShader(ShaderType& shaders,
 		MutexType& mutex, RE::BSShader::Type type, uint32_t descriptor)
@@ -5016,7 +5027,9 @@ namespace SIE
 				}
 				if (clearCache) {
 					cache->DeleteDiskCache();
-					cache->Clear();
+					// Standalone LazyShader objects may be in use by the render thread.
+					// Defer their release, and the rest of the in-memory clear, to it.
+					cache->RequestClear();
 				}
 				queue.clear();
 			}

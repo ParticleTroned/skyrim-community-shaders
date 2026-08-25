@@ -407,6 +407,8 @@ namespace SIE
 
 		void Clear();
 		void Clear(RE::BSShader::Type a_type);
+		void RequestClear();
+		void ProcessPendingClear();
 		/**
    		* @brief Clears and marks shaders for recompilation based on the given path.
  		*
@@ -866,6 +868,7 @@ namespace SIE
 		bool isDump = false;
 		bool hideError = false;
 		bool useFileWatcher = false;
+		std::atomic<bool> pendingClear{ false };
 
 		std::stop_source ssource;
 		std::mutex vertexShadersMutex;

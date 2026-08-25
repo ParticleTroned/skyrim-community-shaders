@@ -247,10 +247,7 @@ void TerrainShadows::DrawEssentialSettings()
 
 void TerrainShadows::ClearShaderCache()
 {
-	if (shadowUpdateProgram) {
-		shadowUpdateProgram->Release();
-		shadowUpdateProgram = nullptr;
-	}
+	shadowUpdateProgram.Reset();
 
 	CompileComputeShaders();
 }
@@ -344,12 +341,17 @@ void TerrainShadows::SetupResources()
 
 void TerrainShadows::CompileComputeShaders()
 {
-	logger::debug("Compiling shaders...");
-	{
-		auto program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainShadows\\ShadowUpdate.cs.hlsl", {}, "cs_5_0"));
-		if (program_ptr)
-			shadowUpdateProgram.attach(program_ptr);
-	}
+	GetShadowUpdateProgram();
+}
+
+ID3D11ComputeShader* TerrainShadows::GetShadowUpdateProgram()
+{
+	return shadowUpdateProgram.Get(
+		L"Data\\Shaders\\TerrainShadows\\ShadowUpdate.cs.hlsl",
+		{},
+		"cs_5_0",
+		"main",
+		"TerrainShadows::ShadowUpdateProgram");
 }
 
 bool TerrainShadows::IsHeightMapReady() const
@@ -714,7 +716,7 @@ TerrainShadows::ShadowUpdateResult TerrainShadows::UpdateShadow(bool a_fullRefre
 	context->CSSetShaderResources(0, ARRAYSIZE(newer.srvs), newer.srvs);
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(newer.uavs), newer.uavs, nullptr);
 	context->CSSetConstantBuffers(0, 1, &newer.buffer);
-	context->CSSetShader(shadowUpdateProgram.get(), nullptr, 0);
+	context->CSSetShader(GetShadowUpdateProgram(), nullptr, 0);
 	globals::profiler->BeginPass("TerrainShadows::ShadowUpdate");
 	context->Dispatch(abs(shadowUpdateCBData.LightPxDir.x) >= abs(shadowUpdateCBData.LightPxDir.y) ? height : width, 1, 1);
 	globals::profiler->EndPass();
@@ -731,13 +733,14 @@ TerrainShadows::ShadowUpdateResult TerrainShadows::UpdateShadow(bool a_fullRefre
 
 void TerrainShadows::ReflectionsPrepass()
 {
-	if (texShadowHeight) {
-		auto context = globals::d3d::context;
-
-		std::array<ID3D11ShaderResourceView*, 1> srvs = { texShadowHeight->srv.get() };
-		context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
-		context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
-	}
+	auto context = globals::d3d::context;
+	if (!context)
+		return;
+	std::array<ID3D11ShaderResourceView*, 1> srvs = {
+		texShadowHeight && shadowMapValid ? texShadowHeight->srv.get() : nullptr
+	};
+	context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+	context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 }
 
 void TerrainShadows::EarlyPrepass()
@@ -774,11 +777,12 @@ void TerrainShadows::EarlyPrepass()
 		UpdateShadow(false);
 	}
 
-	if (texShadowHeight) {
-		auto context = globals::d3d::context;
-
-		std::array<ID3D11ShaderResourceView*, 1> srvs = { texShadowHeight->srv.get() };
-		context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
-		context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
-	}
+	auto context = globals::d3d::context;
+	if (!context)
+		return;
+	std::array<ID3D11ShaderResourceView*, 1> srvs = {
+		texShadowHeight && shadowMapValid ? texShadowHeight->srv.get() : nullptr
+	};
+	context->PSSetShaderResources(60, (uint)srvs.size(), srvs.data());
+	context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 }

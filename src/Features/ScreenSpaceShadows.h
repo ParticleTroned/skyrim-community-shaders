@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 
 struct ScreenSpaceShadows : Feature
 {
@@ -60,7 +61,7 @@ public:
 	ID3D11SamplerState* pointBorderSampler = nullptr;
 
 	ConstantBuffer* raymarchCB = nullptr;
-	ID3D11ComputeShader* raymarchCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> raymarchCS;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 

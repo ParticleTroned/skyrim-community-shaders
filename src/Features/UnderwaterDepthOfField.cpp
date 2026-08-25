@@ -7,6 +7,7 @@
 #include "Profiler.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
+#include "Utils/LazyShader.h"
 
 #include "RE/I/ImageSpaceEffectDepthOfField.h"
 #include "RE/I/ImageSpaceShaderParam.h"
@@ -67,8 +68,8 @@ namespace
 	UnderwaterFogConstants currentFog;
 	DepthOfFieldShaderOptions currentOptions;
 	std::unique_ptr<ConstantBuffer> depthOfFieldInputCB;
-	winrt::com_ptr<ID3D11VertexShader> depthOfFieldInputVS;
-	winrt::com_ptr<ID3D11PixelShader> depthOfFieldInputPS;
+	Util::LazyShader<ID3D11VertexShader> depthOfFieldInputVS;
+	Util::LazyShader<ID3D11PixelShader> depthOfFieldInputPS;
 	winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
 	winrt::com_ptr<ID3D11SamplerState> linearSampler;
 	winrt::com_ptr<ID3D11SamplerState> pointSampler;
@@ -180,26 +181,22 @@ namespace
 
 	ID3D11VertexShader* GetDepthOfFieldInputVS()
 	{
-		if (!depthOfFieldInputVS) {
-			depthOfFieldInputVS.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(
-				L"Data/Shaders/UnderwaterFogToDepthOfField.hlsl",
-				{ { "VSHADER", "" } },
-				"vs_5_0")));
-			Util::SetResourceName(depthOfFieldInputVS.get(), "UnderwaterDepthOfField::InputFogVS");
-		}
-		return depthOfFieldInputVS.get();
+		return depthOfFieldInputVS.Get(
+			L"Data/Shaders/UnderwaterFogToDepthOfField.hlsl",
+			{ { "VSHADER", "" } },
+			"vs_5_0",
+			"main",
+			"UnderwaterDepthOfField::InputFogVS");
 	}
 
 	ID3D11PixelShader* GetDepthOfFieldInputPS()
 	{
-		if (!depthOfFieldInputPS) {
-			depthOfFieldInputPS.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(
-				L"Data/Shaders/UnderwaterFogToDepthOfField.hlsl",
-				{ { "PSHADER", "" } },
-				"ps_5_0")));
-			Util::SetResourceName(depthOfFieldInputPS.get(), "UnderwaterDepthOfField::InputFogPS");
-		}
-		return depthOfFieldInputPS.get();
+		return depthOfFieldInputPS.Get(
+			L"Data/Shaders/UnderwaterFogToDepthOfField.hlsl",
+			{ { "PSHADER", "" } },
+			"ps_5_0",
+			"main",
+			"UnderwaterDepthOfField::InputFogPS");
 	}
 
 	ID3D11RasterizerState* GetRasterizerState()

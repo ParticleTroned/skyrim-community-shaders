@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 
 struct VolumetricShadows : Feature
 {
@@ -34,10 +35,10 @@ public:
 	Settings settings;
 
 	// Compute shaders
-	ID3D11ComputeShader* downsampleShadowMip0CS = nullptr;
-	ID3D11ComputeShader* downsampleShadowMip1CS = nullptr;
-	ID3D11ComputeShader* blurShadowHorizontalCS = nullptr;
-	ID3D11ComputeShader* blurShadowVerticalCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> downsampleShadowMip0CS;
+	Util::LazyShader<ID3D11ComputeShader> downsampleShadowMip1CS;
+	Util::LazyShader<ID3D11ComputeShader> blurShadowHorizontalCS;
+	Util::LazyShader<ID3D11ComputeShader> blurShadowVerticalCS;
 
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowView = nullptr;
 	uint32_t shadowViewCaptureFrame = UINT32_MAX;
@@ -84,6 +85,7 @@ public:
 	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
+	void CompileComputeShaders();
 
 	void CopyShadowLightData();
 

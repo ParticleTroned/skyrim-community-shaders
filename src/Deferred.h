@@ -1,7 +1,8 @@
 #pragma once
 
-#include <DirectXMath.h>
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
+#include <DirectXMath.h>
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED
@@ -60,8 +61,8 @@ public:
 
 	RE::RENDER_TARGET forwardRenderTargets[4];
 
-	ID3D11ComputeShader* mainCompositeCS = nullptr;
-	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> mainCompositeCS;
+	Util::LazyShader<ID3D11ComputeShader> mainCompositeInteriorCS;
 	ID3D11ComputeShader* mainCompositeMetadataCS = nullptr;
 	ID3D11ComputeShader* mainCompositeMetadataInteriorCS = nullptr;
 	ID3D11PixelShader* mainCompositePS = nullptr;

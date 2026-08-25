@@ -6,6 +6,7 @@
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/LazyShader.h"
 #include <atomic>
 #include <cstdint>
 #include <d3d11_4.h>
@@ -333,22 +334,22 @@ public:
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyAllUpscalingTextureResources();
 
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[4];          // One for each UpscaleMethod
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // Runtime FSR: converts game depth to typed R32_FLOAT
+	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCS[4];          // One for each UpscaleMethod
+	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // Runtime FSR: converts game depth to typed R32_FLOAT
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
-	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
+	Util::LazyShader<ID3D11PixelShader> depthRefractionUpscalePS;
 	ID3D11PixelShader* GetDepthRefractionUpscalePS();
 
-	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscalePS;
+	Util::LazyShader<ID3D11PixelShader> underwaterMaskUpscalePS;
 	ID3D11PixelShader* GetUnderwaterMaskUpscalePS();
 
-	winrt::com_ptr<ID3D11PixelShader> cameraMotionVectorsPS;
+	Util::LazyShader<ID3D11PixelShader> cameraMotionVectorsPS;
 	ID3D11PixelShader* GetCameraMotionVectorsPS();
 	void FillMenuCameraMotionVectors();
 	void PrepareMenuCameraMotionVectors();
 
-	winrt::com_ptr<ID3D11VertexShader> upscaleVS;
+	Util::LazyShader<ID3D11VertexShader> upscaleVS;
 	ID3D11VertexShader* GetUpscaleVS();
 
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
@@ -374,7 +375,7 @@ public:
 	static inline DX12SwapChain dx12SwapChain;
 	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
 
-	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
+	Util::LazyShader<ID3D11PixelShader> copyDepthToSharedBufferPS;
 
 	float projectionPosScaleX = 0.0f;
 	float projectionPosScaleY = 0.0f;

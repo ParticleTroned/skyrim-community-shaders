@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/LazyShader.h"
+
 struct IBL : Feature
 {
 public:
@@ -25,7 +27,8 @@ public:
 
 	Texture2D* envIBLTexture = nullptr;
 	Texture2D* skyIBLTexture = nullptr;
-	ID3D11ComputeShader* diffuseIBLCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> diffuseIBLCS;
+	bool dynamicIBLValid = false;
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;

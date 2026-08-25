@@ -1740,84 +1740,48 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 	uint methodIndex = (uint)upscaleMethod;
 
 	if (upscaleMethod == UpscaleMethod::kFSR && runtimeFsrDepthTexture) {
-		if (!encodeTexturesCSDepthOutput) {
-			logger::debug("Compiling EncodeTexturesCS.hlsl for FSR typed depth output");
-			std::vector<std::pair<const char*, const char*>> defines = {
-				{ "FSR", "" },
-				{ "DEPTH_OUTPUT", "" }
-			};
-			encodeTexturesCSDepthOutput.attach((ID3D11ComputeShader*)Util::CompileShader(
-				L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0"));
-		}
-		return encodeTexturesCSDepthOutput.get();
+		std::vector<std::pair<const char*, const char*>> defines = {
+			{ "FSR", "" },
+			{ "DEPTH_OUTPUT", "" }
+		};
+		return encodeTexturesCSDepthOutput.Get(L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0");
 	}
 
-	if (!encodeTexturesCS[methodIndex]) {
-		logger::debug("Compiling EncodeTexturesCS.hlsl for upscale method {}", methodIndex);
+	std::vector<std::pair<const char*, const char*>> defines;
 
-		std::vector<std::pair<const char*, const char*>> defines;
-
-		// Add upscale method define
-		switch (upscaleMethod) {
-		case UpscaleMethod::kDLSS:
-			defines.push_back({ "DLSS", "" });
-			break;
-		case UpscaleMethod::kFSR:
-			defines.push_back({ "FSR", "" });
-			break;
-		default:
-			// No define for NONE or TAA
-			break;
-		}
-
-		encodeTexturesCS[methodIndex].attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0"));
+	// Add upscale method define
+	switch (upscaleMethod) {
+	case UpscaleMethod::kDLSS:
+		defines.push_back({ "DLSS", "" });
+		break;
+	case UpscaleMethod::kFSR:
+		defines.push_back({ "FSR", "" });
+		break;
+	default:
+		// No define for NONE or TAA
+		break;
 	}
-	return encodeTexturesCS[methodIndex].get();
+	return encodeTexturesCS[methodIndex].Get(L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0");
 }
 
 ID3D11PixelShader* Upscaling::GetDepthRefractionUpscalePS()
 {
-	if (!depthRefractionUpscalePS) {
-		logger::debug("Compiling DepthRefractionUpscalePS.hlsl");
-		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
-		depthRefractionUpscalePS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/DepthRefractionUpscalePS.hlsl", defines, "ps_5_0"));
-	}
-
-	return depthRefractionUpscalePS.get();
+	return depthRefractionUpscalePS.Get(L"Data/Shaders/Upscaling/DepthRefractionUpscalePS.hlsl", { { "PSHADER", "" } }, "ps_5_0");
 }
 
 ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS()
 {
-	if (!underwaterMaskUpscalePS) {
-		logger::debug("Compiling UnderwaterMaskPS.hlsl");
-		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
-		underwaterMaskUpscalePS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines, "ps_5_0"));
-	}
-
-	return underwaterMaskUpscalePS.get();
+	return underwaterMaskUpscalePS.Get(L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", { { "PSHADER", "" } }, "ps_5_0");
 }
 
 ID3D11PixelShader* Upscaling::GetCameraMotionVectorsPS()
 {
-	if (!cameraMotionVectorsPS) {
-		logger::debug("Compiling CameraMotionVectorsPS.hlsl");
-		cameraMotionVectorsPS.attach((ID3D11PixelShader*)Util::CompileShader(
-			L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl",
-			{ { "PSHADER", "" } },
-			"ps_5_0"));
-	}
-
-	return cameraMotionVectorsPS.get();
+	return cameraMotionVectorsPS.Get(L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl", { { "PSHADER", "" } }, "ps_5_0");
 }
 
 ID3D11VertexShader* Upscaling::GetUpscaleVS()
 {
-	if (!upscaleVS) {
-		logger::debug("Compiling UpscaleVS.hlsl");
-		upscaleVS.attach((ID3D11VertexShader*)Util::CompileShader(L"Data/Shaders/Upscaling/UpscaleVS.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
-	}
-
-	return upscaleVS.get();
+	return upscaleVS.Get(L"Data/Shaders/Upscaling/UpscaleVS.hlsl", { { "VSHADER", "" } }, "vs_5_0");
 }
 
 int32_t GetJitterPhaseCount(int32_t renderWidth, int32_t displayWidth)
@@ -1994,8 +1958,6 @@ void Upscaling::SetupResources()
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
 
-	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
-
 	// Setup HDR resources only when the HDR Display feature is loaded
 	if (globals::features::hdrDisplay.loaded) {
 		globals::features::hdrDisplay.SetupResources();
@@ -2005,15 +1967,15 @@ void Upscaling::SetupResources()
 void Upscaling::ClearShaderCache()
 {
 	for (int i = 0; i < 4; ++i) {
-		encodeTexturesCS[i] = nullptr;  // com_ptr automatically releases
+		encodeTexturesCS[i].Reset();
 	}
-	encodeTexturesCSDepthOutput = nullptr;
+	encodeTexturesCSDepthOutput.Reset();
 
-	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
-	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
-	cameraMotionVectorsPS = nullptr;     // com_ptr automatically releases
-	upscaleVS = nullptr;                 // com_ptr automatically releases
-	copyDepthToSharedBufferPS = nullptr;
+	depthRefractionUpscalePS.Reset();
+	underwaterMaskUpscalePS.Reset();
+	cameraMotionVectorsPS.Reset();
+	upscaleVS.Reset();
+	copyDepthToSharedBufferPS.Reset();
 }
 
 bool Upscaling::CopySharedD3D12Resources()
@@ -2032,8 +1994,7 @@ bool Upscaling::CopySharedD3D12Resources()
 	static bool loggedMissingSharedResources = false;
 	static bool loggedMissingCopySources = false;
 
-	if (!copyDepthToSharedBufferPS)
-		copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+	auto* copyDepthShader = copyDepthToSharedBufferPS.Get(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0");
 	auto* upscaleVertexShader = GetUpscaleVS();
 
 	const bool hasSharedResources =
@@ -2047,7 +2008,7 @@ bool Upscaling::CopySharedD3D12Resources()
 		dx12SwapChain.motionVectorBufferShared12->resource11 &&
 		dx12SwapChain.depthBufferShared12 &&
 		dx12SwapChain.depthBufferShared12->rtv &&
-		copyDepthToSharedBufferPS &&
+		copyDepthShader &&
 		upscaleVertexShader &&
 		upscaleRasterizerState &&
 		upscaleBlendState;
@@ -2127,7 +2088,7 @@ bool Upscaling::CopySharedD3D12Resources()
 		ID3D11RenderTargetView* rtvs[1] = { dx12SwapChain.depthBufferShared12->rtv.get() };
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
-		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
+		context->PSSetShader(copyDepthShader, nullptr, 0);
 
 		globals::profiler->BeginPass("Upscaling::CopyDepthD3D12");
 		context->Draw(3, 0);

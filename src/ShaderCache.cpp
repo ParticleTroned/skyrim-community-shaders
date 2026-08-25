@@ -568,17 +568,16 @@ namespace SIE
 		}
 
 		ID3DBlob* LoadShaderBlobFromPack(
-			bool a_developerMode,
+			Util::ShaderCachePack::Store& a_store,
 			const std::wstring& a_diskPath,
 			const std::filesystem::path& a_shaderPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest)
 		{
-			auto* store = GetShaderPackStore(a_developerMode);
 			const auto identity = BuildShaderPackIdentity(a_diskPath, a_shaderPath, a_compileStateDigest);
-			if (!store || !identity)
+			if (!identity)
 				return nullptr;
 			std::string error;
-			const auto entry = store->Find(identity->exactKey, &error);
+			const auto entry = a_store.Find(identity->exactKey, &error);
 			if (!entry)
 				return nullptr;
 			ID3DBlob* blob = nullptr;
@@ -2121,12 +2120,13 @@ namespace SIE
 				shaderClass,
 				compileState.shaderDefines->canonicalText);
 			ID3DBlob* shaderBlob = nullptr;
-			if (useDiskCache) {
+			auto* managedPack = useDiskCache ? GetShaderPackStore(compileState.developerMode) : nullptr;
+			if (managedPack) {
 				shaderBlob = LoadShaderBlobFromPack(
-				compileState.developerMode,
-				diskPath,
-				shaderSourcePath,
-				packCompileStateDigest);
+					*managedPack,
+					diskPath,
+					shaderSourcePath,
+					packCompileStateDigest);
 				if (shaderBlob) {
 					logger::debug("Loaded shader from managed pack: {}", Util::WStringToString(diskPath));
 					cache.AddCompletedShader(
@@ -2135,7 +2135,8 @@ namespace SIE
 				}
 			}
 
-			if (useDiskCache && std::filesystem::exists(diskPath)) {
+			if (Util::ShaderCachePack::ShouldReadLooseBlob(useDiskCache, managedPack != nullptr) &&
+				std::filesystem::exists(diskPath)) {
 				// Determine whether the disk-cached shader is still valid.
 				bool diskCacheOutdated = false;
 				if (!IsSaveLoadSafeModeActive()) {

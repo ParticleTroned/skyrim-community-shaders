@@ -18,6 +18,11 @@ namespace
 
 int main(int argc, char** argv)
 {
+	static_assert(!ShouldReadLooseBlob(false, false));
+	static_assert(!ShouldReadLooseBlob(false, true));
+	static_assert(ShouldReadLooseBlob(true, false));
+	static_assert(!ShouldReadLooseBlob(true, true));
+
 	if (argc == 4) {
 		std::string error;
 		Store external(argv[1], argv[2], Lane::Optimized);

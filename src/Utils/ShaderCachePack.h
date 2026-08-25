@@ -18,6 +18,14 @@ namespace Util::ShaderCachePack
 		Developer = 2
 	};
 
+	// A complete, readable managed pack set is authoritative. A miss in that
+	// set means the exact shader contract must be compiled; consulting a legacy
+	// loose blob would bypass pack identity and compatibility validation.
+	constexpr bool ShouldReadLooseBlob(bool a_diskCacheEnabled, bool a_managedPackAvailable)
+	{
+		return a_diskCacheEnabled && !a_managedPackAvailable;
+	}
+
 	struct Entry
 	{
 		std::string logicalKey;

@@ -100,6 +100,8 @@ jobs:
             release_tag: ${{ steps.combined_notes.outputs.release_tag }}
         permissions:
             contents: write
+            id-token: write
+            attestations: write
         steps:
             - name: Ensure ref is a tag
               if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
@@ -188,6 +190,11 @@ jobs:
                   fi
                   echo "body_file=auto-release-notes.md" >> $GITHUB_OUTPUT
                   echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+            - name: Generate artifact attestations
+              uses: actions/attest-build-provenance@v4
+              with:
+                  subject-path: "dist/*.7z"
 
             - name: Create or Update Release
               id: create_release

@@ -94,10 +94,40 @@ runs:
               # artifact before the clean-provenance build gate runs.
               Remove-Item "dummy.cpp", "dummy.obj", "dummy.exe" -ErrorAction SilentlyContinue
 
+        # run-vcpkg's bootstrap has no retry, so handle that network fetch here.
+        - name: Bootstrap vcpkg.exe (retry)
+          uses: nick-fields/retry@v4
+          with:
+              timeout_minutes: 10
+              max_attempts: 3
+              retry_wait_seconds: 30
+              shell: pwsh
+              command: |
+                  $vcpkgDir = "${{ github.workspace }}/vcpkg"
+                  $vcpkgExe = Join-Path $vcpkgDir "vcpkg.exe"
+                  $commitId = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+                  if (Test-Path $vcpkgExe) {
+                      Write-Host "vcpkg.exe already present, skipping bootstrap."
+                  } else {
+                      if (-not (Test-Path $vcpkgDir)) {
+                          git clone https://github.com/microsoft/vcpkg.git $vcpkgDir
+                      }
+                      Push-Location $vcpkgDir
+                      git fetch origin $commitId
+                      git checkout $commitId
+                      & .\bootstrap-vcpkg.bat -disableMetrics
+                      Pop-Location
+                      if (-not (Test-Path $vcpkgExe)) { throw "vcpkg.exe missing after bootstrap" }
+                  }
+                  # run-vcpkg checks this sentinel rather than vcpkg.exe itself.
+                  $commitId | Out-File -FilePath (Join-Path $vcpkgDir "vcpkgLastBuiltCommitId") -NoNewline -Encoding ascii
+
         - name: Setup vcpkg
           uses: lukka/run-vcpkg@v11.6
           with:
               vcpkgJsonGlob: vcpkg.json
+              # Preserve this branch's dependency-install behavior while the
+              # executable and sentinel suppress its un-retried bootstrap.
 
         # Cache strategy is split by event trust level to avoid the
         # pull_request_target cache-poisoning class of bug (CodeQL rule

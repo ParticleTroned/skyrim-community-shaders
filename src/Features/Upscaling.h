@@ -1394,6 +1394,36 @@ public:
 		uint64_t,
 		static_cast<std::size_t>(
 			VRRenderScaleCPUPerformanceCounter::Count)>;
+
+	enum class VRRenderScaleGPUPerformanceCounter : std::size_t
+	{
+		WindowStartFrame,
+		FSRActiveInputCopyCalls,
+		FSRActiveInputPixels,
+		FSRAvoidedInputPixels,
+		RuntimeFSRStereoBatchAttempts,
+		RuntimeFSRStereoBatchReuses,
+		RuntimeFSRStereoBatchSuccesses,
+		RuntimeFSRStereoBatchNotHandled,
+		RuntimeFSRStereoBatchFailures,
+		EarlyHAMProtectedInputs,
+		EarlyHAMDirectOutputSkips,
+		EarlyHAMClearExecutions,
+		MirrorConsumerRequests,
+		MirrorConsumerSkips,
+		MirrorCopyPairs,
+		MirrorBlitPairs,
+		SpatialCompositeDispatches,
+		SpatialCompositePixels,
+		SpatialCenterPixels,
+		PeripheryTAAHistoryDispatches,
+		PeripheryTAAHistoryPixels,
+		PeripheryTAAFullEyePixels,
+		Count
+	};
+	using VRRenderScaleGPUPerformanceSnapshot = std::array<
+		uint64_t,
+		static_cast<std::size_t>(VRRenderScaleGPUPerformanceCounter::Count)>;
 #endif
 
 	struct PerfModeState
@@ -1473,6 +1503,12 @@ public:
 	void StartVRRenderScaleCPUPerformanceTelemetry() noexcept;
 	void StopVRRenderScaleCPUPerformanceTelemetry() noexcept;
 	void ResetVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	VRRenderScaleGPUPerformanceSnapshot GetVRRenderScaleGPUPerformanceSnapshot() const noexcept;
+	[[nodiscard]] bool IsVRRenderScaleGPUPerformanceTelemetryActive() const noexcept;
+	void StartVRRenderScaleGPUPerformanceTelemetry() noexcept;
+	void StopVRRenderScaleGPUPerformanceTelemetry() noexcept;
+	void ResetVRRenderScaleGPUPerformanceTelemetry() noexcept;
+	void RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter a_counter, uint64_t a_delta = 1) const noexcept;
 	void StartVRLoadPresentationProbe();
 	void StopVRLoadPresentationProbe();
 	void ResetVRLoadPresentationProbe();
@@ -1939,6 +1975,11 @@ public:
 #endif
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	mutable std::array<
+		std::atomic<uint64_t>,
+		static_cast<std::size_t>(VRRenderScaleGPUPerformanceCounter::Count)>
+		vrRenderScaleGPUPerformanceCounters{};
+	std::atomic_bool vrRenderScaleGPUPerformanceTelemetryActive{ false };
 	void ServiceVRLoadPresentationProbeReadbacks() noexcept;
 	void PublishVRLoadPresentationProbeRecord(const VRLoadPresentationProbeRecord& a_record) noexcept;
 #endif

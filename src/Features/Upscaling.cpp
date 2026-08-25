@@ -193,6 +193,46 @@ void Upscaling::RecordVRRenderScaleCPUPerformanceMaximum(
 			std::memory_order_relaxed)) {
 	}
 }
+
+Upscaling::VRRenderScaleGPUPerformanceSnapshot Upscaling::GetVRRenderScaleGPUPerformanceSnapshot() const noexcept
+{
+	VRRenderScaleGPUPerformanceSnapshot snapshot{};
+	for (std::size_t index = 0; index < snapshot.size(); ++index)
+		snapshot[index] = vrRenderScaleGPUPerformanceCounters[index].load(std::memory_order_relaxed);
+	return snapshot;
+}
+
+bool Upscaling::IsVRRenderScaleGPUPerformanceTelemetryActive() const noexcept
+{
+	return vrRenderScaleGPUPerformanceTelemetryActive.load(std::memory_order_relaxed);
+}
+
+void Upscaling::StartVRRenderScaleGPUPerformanceTelemetry() noexcept
+{
+	ResetVRRenderScaleGPUPerformanceTelemetry();
+	vrRenderScaleGPUPerformanceTelemetryActive.store(true, std::memory_order_relaxed);
+}
+
+void Upscaling::StopVRRenderScaleGPUPerformanceTelemetry() noexcept
+{
+	vrRenderScaleGPUPerformanceTelemetryActive.store(false, std::memory_order_relaxed);
+}
+
+void Upscaling::ResetVRRenderScaleGPUPerformanceTelemetry() noexcept
+{
+	StopVRRenderScaleGPUPerformanceTelemetry();
+	for (auto& counter : vrRenderScaleGPUPerformanceCounters)
+		counter.store(0, std::memory_order_relaxed);
+	vrRenderScaleGPUPerformanceCounters[static_cast<std::size_t>(VRRenderScaleGPUPerformanceCounter::WindowStartFrame)]
+		.store(globals::state ? globals::state->frameCount : 0u, std::memory_order_relaxed);
+}
+
+void Upscaling::RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter a_counter, uint64_t a_delta) const noexcept
+{
+	if (!IsVRRenderScaleGPUPerformanceTelemetryActive())
+		return;
+	vrRenderScaleGPUPerformanceCounters[static_cast<std::size_t>(a_counter)].fetch_add(a_delta, std::memory_order_relaxed);
+}
 #endif
 
 namespace
@@ -37504,6 +37544,17 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		state->BeginPerfEvent(buf);
 	}
 	context->Dispatch(dispatchGroupsX, dispatchGroupsY, 1);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (IsVRRenderScaleGPUPerformanceTelemetryActive()) {
+		RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter::PeripheryTAAHistoryDispatches);
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::PeripheryTAAHistoryPixels,
+			static_cast<uint64_t>(historyRect.Width()) * historyRect.Height());
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::PeripheryTAAFullEyePixels,
+			static_cast<uint64_t>(outputWidth) * outputHeight);
+	}
+#endif
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
@@ -37649,6 +37700,17 @@ bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* perip
 	if (state && state->frameAnnotations)
 		state->BeginPerfEvent("Foveated Spatial Composite");
 	context->Dispatch((outputWidth + 7u) >> 3, (outputHeight + 7u) >> 3, 1);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (IsVRRenderScaleGPUPerformanceTelemetryActive()) {
+		RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter::SpatialCompositeDispatches);
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::SpatialCompositePixels,
+			static_cast<uint64_t>(outputWidth) * outputHeight);
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::SpatialCenterPixels,
+			static_cast<uint64_t>(centerRect.outputWidth) * centerRect.outputHeight);
+	}
+#endif
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
@@ -38637,6 +38699,12 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	// Filtered post-processing can sample hidden pixels; direct outputs are
 	// cleared after menu composition at the final submission boundary.
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleGPUPerformanceCounter(
+		protectPostProcessInput ?
+			VRRenderScaleGPUPerformanceCounter::EarlyHAMProtectedInputs :
+			VRRenderScaleGPUPerformanceCounter::EarlyHAMDirectOutputSkips);
+#endif
 	if (protectPostProcessInput && depthTexture.depthSRV) {
 		ClearHMDMaskForEye(
 			HMDMaskClearPhase::SubmitStageFoveatedOutput,
@@ -40971,6 +41039,10 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 		true);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_phase == HMDMaskClearPhase::SubmitStageFoveatedOutput && executed) {
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::EarlyHAMClearExecutions);
+	}
 	CompleteVRLoadPresentationHAMCapture(hamCapture, executed, colorUAV);
 	if (hamHandoff &&
 		hamHandoff->source ==
@@ -47722,6 +47794,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						sourceTexture,
 						stereoRegions)) {
 					vendorSucceeded = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchReuses);
+#endif
 				} else {
 					context->CopySubresourceRegion(
 						vrIntermediateColorIn[otherEyeIndex]->resource.get(),
@@ -47736,11 +47812,19 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 						return false;
 
 					FidelityFX::StereoUpscaleResult stereoResult{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchAttempts);
+#endif
 					{
 						CS_GPU_PASS("Upscaling::SubmitStageUpscaleStereo");
 						stereoResult = fidelityFX.UpscaleStereoRegions(stereoRegions);
 					}
 					if (stereoResult == FidelityFX::StereoUpscaleResult::Ready) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						RecordVRRenderScaleGPUPerformanceCounter(
+							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchSuccesses);
+#endif
 						for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye)
 							RecordVRRenderScaleFullEyeEvaluation(upscaleMethod, stereoEye, true);
 
@@ -47774,12 +47858,21 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 							otherEyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
 						}
 					} else if (stereoResult == FidelityFX::StereoUpscaleResult::Failed) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						RecordVRRenderScaleGPUPerformanceCounter(
+							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchFailures);
+#endif
 						for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye)
 							RecordVRRenderScaleFullEyeEvaluation(upscaleMethod, stereoEye, false);
 						HandleFSRLifecycleDeviceLoss(
 							fidelityFX.ProbeFSRDeviceStatus(),
 							"FSR stereo region dispatch");
 						runtimeStereoDispatchFailed = true;
+					} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						RecordVRRenderScaleGPUPerformanceCounter(
+							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchNotHandled);
+#endif
 					}
 				}
 			}
@@ -47935,6 +48028,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		const bool mirrorRequested =
 			globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||
 			globals::features::screenshotFeature.HasPendingDesktopMirrorCapture();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleGPUPerformanceCounter(
+			mirrorRequested ?
+				VRRenderScaleGPUPerformanceCounter::MirrorConsumerRequests :
+				VRRenderScaleGPUPerformanceCounter::MirrorConsumerSkips);
+#endif
 		if (!mirrorRequested) {
 			vrDesktopMirrorBlitRTV = nullptr;
 			vrDesktopMirrorBlitTarget = nullptr;
@@ -47974,6 +48073,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
 					context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
 					context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::MirrorCopyPairs);
+#endif
 					if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
 						return false;
 				}
@@ -47981,6 +48084,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				if (consumeReadyMirrorPair()) {
 					static bool loggedSubmitStageMirrorFallbackFailure = false;
 					const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (mirrorUpdated) {
+						RecordVRRenderScaleGPUPerformanceCounter(
+							VRRenderScaleGPUPerformanceCounter::MirrorBlitPairs);
+					}
+#endif
 					if (!mirrorUpdated && IsSubmitStageDeviceLost())
 						return false;
 					if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {

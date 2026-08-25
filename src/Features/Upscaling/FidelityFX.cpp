@@ -3000,6 +3000,31 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			copyIntoShared(region.reactiveMask, runtimeReactiveShared[contextIndex], region.renderWidth, region.renderHeight);
 			copyIntoShared(region.transparencyCompositionMask, runtimeTransparencyShared[contextIndex], region.renderWidth, region.renderHeight);
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive()) {
+			uint64_t activeInputPixels = 0;
+			uint64_t allocatedInputPixels = 0;
+			for (const auto& region : a_regions) {
+				const uint64_t activePixels = static_cast<uint64_t>(region.renderWidth) * region.renderHeight;
+				activeInputPixels += activePixels * 5u;
+				allocatedInputPixels +=
+					static_cast<uint64_t>(runtimeColorSharedDesc.Width) * runtimeColorSharedDesc.Height +
+					static_cast<uint64_t>(runtimeDepthSharedDesc.Width) * runtimeDepthSharedDesc.Height +
+					static_cast<uint64_t>(runtimeMotionSharedDesc.Width) * runtimeMotionSharedDesc.Height +
+					static_cast<uint64_t>(runtimeReactiveSharedDesc.Width) * runtimeReactiveSharedDesc.Height +
+					static_cast<uint64_t>(runtimeTransparencySharedDesc.Width) * runtimeTransparencySharedDesc.Height;
+			}
+			upscaling.RecordVRRenderScaleGPUPerformanceCounter(
+				Upscaling::VRRenderScaleGPUPerformanceCounter::FSRActiveInputCopyCalls,
+				static_cast<uint64_t>(a_regions.size()) * 5u);
+			upscaling.RecordVRRenderScaleGPUPerformanceCounter(
+				Upscaling::VRRenderScaleGPUPerformanceCounter::FSRActiveInputPixels,
+				activeInputPixels);
+			upscaling.RecordVRRenderScaleGPUPerformanceCounter(
+				Upscaling::VRRenderScaleGPUPerformanceCounter::FSRAvoidedInputPixels,
+				allocatedInputPixels > activeInputPixels ? allocatedInputPixels - activeInputPixels : 0u);
+		}
+#endif
 
 		const uint64_t d3d11SubmitFence = runtimeFenceValue++;
 		DX::ThrowIfFailed(swapChain.d3d11Context->Signal(runtimeD3D11Fence.get(), d3d11SubmitFence));

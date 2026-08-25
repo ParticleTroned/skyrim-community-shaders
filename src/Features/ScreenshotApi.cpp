@@ -3,6 +3,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "BuildProvenance.h"
 #include "Globals.h"
+#include "Utils/WinApi.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "State.h"
 #include "VRAPI/CSpluginapi.h"
@@ -22,6 +23,12 @@
 namespace
 {
 	using json = nlohmann::json;
+
+	std::string PathUtf8(const std::filesystem::path& a_path)
+	{
+		const auto value = a_path.u8string();
+		return { reinterpret_cast<const char*>(value.data()), value.size() };
+	}
 
 	std::string FileSha256(const std::filesystem::path& a_path)
 	{
@@ -80,7 +87,7 @@ namespace
 		std::error_code ec;
 		const auto size = std::filesystem::file_size(a_path, ec);
 		json artifact = {
-			{ "path", a_path.string() },
+			{ "path", PathUtf8(a_path) },
 			{ "bytes", ec ? json(nullptr) : json(size) },
 			{ "committed", true },
 		};
@@ -281,6 +288,8 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 		json descriptor;
 		try {
 			descriptor = NormalizeCaptureDescriptor(a_feature, descriptorRequest);
+			descriptor["destination"]["resolvedDirectory"] =
+				PathUtf8(ResolveDestinationDirectory(a_feature, descriptor, true));
 		} catch (const std::exception& e) {
 			const std::string message = e.what();
 			const bool pathError = message.find("destination") != std::string::npos || message.find("directory") != std::string::npos;
@@ -345,14 +354,14 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			sequence.requestId = requestId;
 			sequence.nextEngineFrame = (globals::state ? globals::state->frameCount : 0u) + sequence.startDelayFrames;
 			sequence.nextWallClock = std::chrono::steady_clock::now() + std::chrono::milliseconds(schedule.value("startDelayMs", 0u));
-			sequence.directory = ResolveDestinationDirectory(a_feature, descriptor) /
+			sequence.directory = ResolveDestinationDirectory(a_feature, descriptor, true) /
 				("CS_sequence_" + ShortId(requestId));
 			sequence.partialManifestPath = sequence.directory / "sequence.json.partial";
 			sequence.finalManifestPath = sequence.directory / "sequence.json";
 			sequences.emplace(requestId, std::move(sequence));
 			auto& stored = sequences.at(requestId);
 			TransitionLocked(record, "running", "sequence.started", {
-				{ "frameCount", frameCount }, { "manifestPath", stored.partialManifestPath.string() }
+				{ "frameCount", frameCount }, { "manifestPath", PathUtf8(stored.partialManifestPath) }
 			});
 			WriteSequenceManifestLocked(stored, false);
 		}
@@ -571,7 +580,7 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(const ScreenshotFe
 		{ "clipboard", clipboard },
 		{ "tags", std::move(tags) },
 	};
-	normalized["destination"]["resolvedDirectory"] = ResolveDestinationDirectory(a_feature, normalized).string();
+	normalized["destination"]["resolvedDirectory"] = PathUtf8(ResolveDestinationDirectory(a_feature, normalized));
 	return normalized;
 }
 
@@ -589,6 +598,8 @@ ScreenshotApi::json ScreenshotApi::BuildSettings(const ScreenshotFeature& a_feat
 			{ "ApplyCrop", a_feature.applyCropToScreenshot },
 		} },
 		{ "Sequence", {
+			{ "Destination", { { "Policy", "settings_default" }, { "Directory", a_feature.frameCapturePath }, { "Overwrite", "never" } } },
+			{ "Encoding", { { "Format", a_feature.frameCaptureUsePng ? "png" : "bmp" }, { "ColourContract", "sdr_srgb" } } },
 			{ "FrameCount", a_feature.sequenceDefaults.frameCount },
 			{ "Schedule", { { "Basis", "game_frames" }, { "IntervalFrames", a_feature.sequenceDefaults.intervalFrames } } },
 			{ "Backpressure", { { "Policy", "skip" }, { "MaximumConsecutiveSkips", 10 } } },
@@ -766,6 +777,16 @@ ScreenshotApi::json ScreenshotApi::BuildStatus(const ScreenshotFeature& a_featur
 	};
 }
 
+bool ScreenshotApi::IsSequenceRecording() const
+{
+	std::lock_guard lock(mutex);
+	return std::any_of(sequences.begin(), sequences.end(), [](const auto& entry) {
+		const auto& sequence = entry.second;
+		return !sequence.finalizing && !sequence.stopRequested && !sequence.cancelRequested &&
+		       sequence.nextOrdinal <= sequence.frameCount;
+	});
+}
+
 ScreenshotApi::json ScreenshotApi::MakeEnvelope(const json& a_request, bool a_ok) const
 {
 	return service.MakeEnvelope(a_request, a_ok);
@@ -843,8 +864,8 @@ ScreenshotApi::json ScreenshotApi::MakeSequenceReceipt(const RequestRecord& a_re
 		{ "written", a_sequence->written }, { "dropped", a_sequence->dropped }, { "failed", a_sequence->failed }, { "inFlight", a_sequence->inFlight },
 	};
 	receipt["manifest"] = {
-		{ "partialPath", a_sequence->frameManifest ? json(a_sequence->partialManifestPath.string()) : json(nullptr) },
-		{ "finalPath", a_sequence->frameManifest && std::filesystem::exists(a_sequence->finalManifestPath) ? json(a_sequence->finalManifestPath.string()) : json(nullptr) },
+		{ "partialPath", a_sequence->frameManifest ? json(PathUtf8(a_sequence->partialManifestPath)) : json(nullptr) },
+		{ "finalPath", a_sequence->frameManifest && std::filesystem::exists(a_sequence->finalManifestPath) ? json(PathUtf8(a_sequence->finalManifestPath)) : json(nullptr) },
 	};
 	receipt["packaging"] = a_sequence->packaging;
 	return receipt;
@@ -915,7 +936,7 @@ void ScreenshotApi::OnArtifactQueued(std::string_view a_requestId, const std::fi
 {
 	std::lock_guard lock(mutex);
 	if (auto found = requests.find(std::string(a_requestId)); found != requests.end() && !IsTerminal(found->second.state))
-		TransitionLocked(found->second, "queued", "artifact.queued", { { "path", a_path.string() } });
+		TransitionLocked(found->second, "queued", "artifact.queued", { { "path", PathUtf8(a_path) } });
 }
 
 void ScreenshotApi::OnArtifactEncoding(std::string_view a_requestId)
@@ -997,13 +1018,12 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child, bool a_suc
 	} else {
 		++sequence.failed;
 	}
-	json childArtifact = nullptr;
-	if (a_success && !a_child.artifacts.empty())
-		childArtifact = a_child.artifacts.back();
 	sequence.children.push_back({
 		{ "ordinal", a_child.sequenceOrdinal }, { "requestId", a_child.requestId }, { "state", a_child.state },
-		{ "artifact", std::move(childArtifact) },
-		{ "path", a_path.empty() ? json(nullptr) : json(a_path.string()) }, { "error", a_error.empty() ? json(nullptr) : json(a_error) },
+		{ "scheduledEngineFrame", a_child.scheduledEngineFrame },
+		{ "scheduledTimestampUs", a_child.scheduledTimestampUs },
+		{ "artifacts", a_child.artifacts },
+		{ "path", a_path.empty() ? json(nullptr) : json(PathUtf8(a_path)) }, { "error", a_error.empty() ? json(nullptr) : json(a_error) },
 	});
 	if ((sequence.failurePolicy == "abort" && !a_success) ||
 		(sequence.backpressurePolicy == "abort" && sequence.dropped != 0) ||
@@ -1058,7 +1078,7 @@ void ScreenshotApi::TryFinalizeSequenceLocked(SequenceRecord& a_sequence)
 	else
 		terminal = "completed";
 	TransitionLocked(parent->second, terminal, "request.terminal", {
-		{ "manifestPath", a_sequence.frameManifest && manifestWritten ? json(a_sequence.finalManifestPath.string()) : json(nullptr) }
+		{ "manifestPath", a_sequence.frameManifest && manifestWritten ? json(PathUtf8(a_sequence.finalManifestPath)) : json(nullptr) }
 	});
 }
 
@@ -1072,7 +1092,7 @@ bool ScreenshotApi::WriteSequenceManifestLocked(SequenceRecord& a_sequence, bool
 		manifestPackaging["frameManifest"] = {
 			{ "requested", true },
 			{ "state", a_final ? "written" : "partial" },
-			{ "path", (a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath).string() },
+			{ "path", PathUtf8(a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath) },
 		};
 		json manifest = {
 			{ "contract", { { "name", "csx.screenshot" }, { "major", kContractMajor }, { "minor", kContractMinor }, { "schemaRevision", kSchemaRevision } } },
@@ -1129,7 +1149,7 @@ std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(uint
 		dueFrame.capture = sequence.capture;
 		dueFrame.capture["destination"] = {
 			{ "policy", "absolute" },
-			{ "directory", sequence.directory.string() },
+			{ "directory", PathUtf8(sequence.directory) },
 			{ "baseName", std::format("frame_{:06}", dueFrame.ordinal) },
 			{ "overwrite", "never" },
 		};
@@ -1142,7 +1162,13 @@ std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(uint
 			{ "commandId", std::format("frame:{}", dueFrame.ordinal) }, { "contractMajor", kContractMajor },
 		};
 		auto& child = CreateRequestLocked("sequence_frame", childRequest, dueFrame.capture, sequence.requestId, dueFrame.ordinal, dueFrame.childRequestId);
-		AppendEventLocked(child, "sequence.frame_scheduled", { { "ordinal", dueFrame.ordinal }, { "engineFrame", a_engineFrame } });
+		child.scheduledEngineFrame = a_engineFrame;
+		child.scheduledTimestampUs = static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
+		AppendEventLocked(child, "sequence.frame_scheduled", {
+			{ "ordinal", dueFrame.ordinal }, { "engineFrame", a_engineFrame },
+			{ "monotonicTimestampUs", child.scheduledTimestampUs },
+		});
 		return dueFrame;
 	}
 	return std::nullopt;
@@ -1179,7 +1205,10 @@ void ScreenshotApi::CancelAll(std::string_view a_reason)
 	}
 }
 
-std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(const ScreenshotFeature& a_feature, const json& a_capture)
+std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
+	const ScreenshotFeature& a_feature,
+	const json& a_capture,
+	bool a_sequence)
 {
 	const auto destination = a_capture.value("destination", json::object());
 	const auto policy = destination.value("policy", std::string("settings_default"));
@@ -1191,18 +1220,22 @@ std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(const Screensho
 
 	std::filesystem::path requested;
 	if (policy == "settings_default") {
-		requested = a_feature.screenshotPath;
+		requested = a_sequence ? a_feature.frameCapturePath : a_feature.screenshotPath;
 		if (requested.empty())
 			throw std::runtime_error("the configured screenshot directory is empty");
-		if (requested.is_relative())
-			requested = gameDirectory / requested;
+		if (requested.is_relative()) {
+			const auto knownFolder = a_sequence ? Util::GetVideosPath() : Util::GetPicturesPath();
+			if (!knownFolder)
+				throw std::runtime_error("the Windows capture folder is unavailable");
+			requested = *knownFolder / "Community Shaders" / requested;
+		}
 		return std::filesystem::weakly_canonical(requested);
 	}
 
 	const auto directory = destination.value("directory", std::string{});
 	if (directory.empty())
 		throw std::runtime_error("destination.directory is required by the selected policy");
-	requested = std::filesystem::path(directory);
+	requested = std::filesystem::u8path(directory);
 	if (policy == "absolute") {
 		if (!requested.is_absolute())
 			throw std::runtime_error("absolute destination policy requires an absolute directory");

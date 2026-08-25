@@ -47,6 +47,7 @@ public:
 
 	json BuildStatus(const ScreenshotFeature& a_feature) const;
 	json BuildCapabilities(const ScreenshotFeature& a_feature) const;
+	bool IsSequenceRecording() const;
 
 private:
 	struct RequestRecord
@@ -58,6 +59,8 @@ private:
 		std::string commandId;
 		std::string parentRequestId;
 		uint32_t sequenceOrdinal = 0;
+		uint64_t scheduledEngineFrame = 0;
+		uint64_t scheduledTimestampUs = 0;
 		uint64_t eventIndex = 0;
 		std::string acceptedUtc;
 		std::string terminalUtc;
@@ -169,5 +172,8 @@ private:
 	bool WriteSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
 	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame);
 
-	static std::filesystem::path ResolveDestinationDirectory(const ScreenshotFeature& a_feature, const json& a_capture);
+	static std::filesystem::path ResolveDestinationDirectory(
+		const ScreenshotFeature& a_feature,
+		const json& a_capture,
+		bool a_sequence = false);
 };

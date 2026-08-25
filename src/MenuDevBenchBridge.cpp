@@ -227,12 +227,22 @@ namespace
 			if (!menu)
 				return { { "error", "CSX menu unavailable" } };
 			json delegatedRequest = nullptr;
+			json deprecation = nullptr;
 			if (action == "open") {
 				menu->OpenMenu();
 			} else if (action == "close") {
 				menu->CloseMenu();
 			} else if (action == "screenshot") {
-				delegatedRequest = globals::features::screenshotFeature.RequestLegacyCapture("communityshaders.menu");
+				delegatedRequest = globals::features::screenshotFeature.RequestApiCapture("communityshaders.menu");
+				deprecation = {
+					{ "obsolete", true },
+					{ "message", "communityshaders.menu screenshot is obsolete; migrate to communityshaders.screenshot contractMajor 1" },
+					{ "replacement", {
+						{ "tool", "communityshaders.screenshot" },
+						{ "contractMajor", 1 },
+						{ "action", "capture" },
+					} },
+				};
 			} else if (action == "set_path") {
 				auto& vr = globals::features::vr;
 				vr.HideOverlaysIfPresent();
@@ -247,7 +257,15 @@ namespace
 			}
 			if (action == "texture_stats")
 				return { { "action", action }, { "texture", InspectMenuTexture() }, { "status", BuildStatus() } };
-			return { { "action", action }, { "path", path }, { "delegatedRequest", std::move(delegatedRequest) }, { "status", BuildStatus() } };
+			json result = {
+				{ "action", action },
+				{ "path", path },
+				{ "delegatedRequest", std::move(delegatedRequest) },
+				{ "status", BuildStatus() },
+			};
+			if (!deprecation.is_null())
+				result["deprecation"] = std::move(deprecation);
+			return result;
 		});
 	}
 
@@ -293,7 +311,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu for null-HMD automation. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX VR menu for null-HMD automation. The screenshot action is obsolete and retained temporarily for migration; use communityshaders.screenshot contractMajor 1 instead. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","description":"screenshot is obsolete; use communityshaders.screenshot contractMajor 1 action capture","enum":["status","open","close","screenshot","set_path","texture_stats"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

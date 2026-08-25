@@ -1522,7 +1522,7 @@ void Menu::ProcessInputEventQueue()
 							 CSEditor::ToggleEditorWindow();
 						 }
 					 } },
-					{ settings.ScreenshotKey, []() { globals::features::screenshotFeature.RequestCapture(); }, screenshotHotkeyActive },
+					{ settings.ScreenshotKey, []() { globals::features::screenshotFeature.RequestUiCapture(); }, screenshotHotkeyActive },
 				};
 
 				// RenderDoc's capture key is a single, unmodified key; only consider it on key-up.

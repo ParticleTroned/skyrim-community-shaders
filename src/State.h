@@ -361,6 +361,10 @@ public:
 	std::unordered_map<std::string, bool>& GetDisabledFeatures();
 
 	bool useFrameAnnotations = false;
+	// Set after all DataLoaded work that can block startup rendering completes.
+	std::atomic_bool startupMenuInitializationComplete{ false };
+	// Set after the first complete Present following startup initialization.
+	bool startupMenuBlurSourceReady = false;
 
 	// --- Utility Methods ---
 	/**

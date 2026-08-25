@@ -1,6 +1,6 @@
+#include "BuildProvenance.h"
 #include "CSEditor/EditorWindow.h"
 #include "Deferred.h"
-#include "BuildProvenance.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
@@ -146,6 +146,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				shaderCache->WriteDiskCacheInfoWhenReady();
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+				globals::state->startupMenuInitializationComplete.store(true, std::memory_order_release);
 			}
 
 			break;

@@ -514,6 +514,9 @@ struct IDXGISwapChain_Present
 		if ((Flags & DXGI_PRESENT_TEST) != 0)
 			return func(This, SyncInterval, Flags);
 
+		const bool armStartupMenuBlurSource =
+			!globals::state->startupMenuBlurSourceReady &&
+			globals::state->startupMenuInitializationComplete.load(std::memory_order_acquire);
 		globals::state->Reset();
 
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
@@ -523,6 +526,9 @@ struct IDXGISwapChain_Present
 			[&](IDXGISwapChain* swapChain, UINT syncInterval, UINT presentFlags) {
 				return func(swapChain, syncInterval, presentFlags);
 			});
+
+		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
+			globals::state->startupMenuBlurSourceReady = true;
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();
 

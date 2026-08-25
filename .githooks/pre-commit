@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+# Git runs non-push hooks from the worktree root. Keep this hook tracked and
+# delegate environment setup to the repository-owned PowerShell launcher.
+if command -v pwsh >/dev/null 2>&1; then
+    exec pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./tools/pre-commit.ps1 hook
+fi
+
+if command -v powershell.exe >/dev/null 2>&1; then
+    exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./tools/pre-commit.ps1 hook
+fi
+
+echo "PowerShell is required to run the Community Shaders pre-commit hook." >&2
+echo "Run 'pwsh ./tools/setup-dev.ps1' after installing PowerShell 7." >&2
+exit 1

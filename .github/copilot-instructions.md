@@ -1,15 +1,26 @@
 # GitHub Copilot Instructions
 
+@../AGENTS.md
+
 **ALWAYS follow these instructions first and only fallback to additional search and context gathering if the information is incomplete or found to be in error.**
 
 ## Primary Documentation
 
 **For comprehensive development guidance, architecture details, and complete build instructions, see:**
 
+-   **`AGENTS.md`** - Canonical pull-request, commit, code-quality, validation, and Git policy
 -   **`.claude/CLAUDE.md`** - Complete 400+ line guide covering all aspects of development
--   **`AI-INSTRUCTIONS.md`** - Quick reference that also points to .claude/CLAUDE.md
+-   **`AI-INSTRUCTIONS.md`** - Quick reference that points to both canonical sources
 
-This file provides Copilot-specific guidance while avoiding duplication of the comprehensive documentation above.
+This file provides Copilot-specific guidance while avoiding duplication. Do not
+override or weaken `AGENTS.md`.
+
+## Pull requests and commits
+
+-   Target `main-VR` unless the user explicitly selects another release line.
+-   Use `type(scope): description`; keep the title current and release-aware.
+-   Use the PR body structure and validation evidence required by `AGENTS.md`.
+-   Treat the PR title as the eventual squash commit consumed by release automation.
 
 ## Project Overview
 
@@ -20,7 +31,7 @@ SKSE64 plugin providing modular DirectX 11 graphics enhancements for Skyrim SE/A
 ### Windows-Only Requirements
 
 -   Visual Studio Community 2022 with "Desktop development with C++" workload
--   CMake 3.21+, Git, vcpkg with VCPKG_ROOT environment variable, Windows SDK
+-   CMake 3.21+, Git, vcpkg (the launcher discovers Visual Studio installations or honors `VCPKG_ROOT`), Windows SDK
 -   **NEVER CANCEL BUILDS**: 45-60 minutes build time, 15-30 minutes shader validation
 
 ### Linux/WSL Limitations
@@ -36,10 +47,18 @@ SKSE64 plugin providing modular DirectX 11 graphics enhancements for Skyrim SE/A
 ./BuildRelease.bat        # Same as ALL (default)
 ```
 
+Run `pwsh ./tools/setup-dev.ps1` once after cloning. For direct CMake and pre-commit commands, use the repository-owned launchers so Windows sandbox temp paths and shared hook caches are configured correctly:
+
+```powershell
+pwsh ./tools/cmake.ps1 --build build/ALL --target prepare_shaders
+pwsh ./tools/pre-commit.ps1 run --from-ref origin/main-VR --to-ref HEAD
+pwsh ./tools/dev-doctor.ps1 -Network
+```
+
 ### Essential Repository Setup
 
 ```bash
-git clone https://github.com/doodlum/skyrim-community-shaders.git --recursive
+git clone https://github.com/ParticleTroned/skyrim-community-shaders.git --recursive
 cd skyrim-community-shaders
 git submodule update --init --recursive  # If not cloned with --recursive
 ```
@@ -101,14 +120,14 @@ globals::d3d::*       // DirectX 11 device/context access
 ```bash
 # Fast shader deployment (dev iteration - no DLL build)
 # See docs/development/shader-workflow.md and docs/development/vscode-setup.md
-cmake --build ./build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS
+pwsh ./tools/cmake.ps1 --build ./build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS
 
 # Shader validation (targeted testing recommended during development)
-cmake --build ./build/ALL --target prepare_shaders
+pwsh ./tools/cmake.ps1 --build ./build/ALL --target prepare_shaders
 hlslkit-compile --shader-dir build/ALL/aio/Shaders/[specific-feature] --output-dir build/ShaderCache --config .github/configs/shader-validation.yaml
 
 # Pre-commit validation
-pre-commit run --all-files
+pwsh ./tools/pre-commit.ps1 run --from-ref origin/main-VR --to-ref HEAD
 ```
 
 ## Key Differences from .claude/CLAUDE.md
@@ -121,4 +140,5 @@ This file focuses on Copilot-specific guidance while `.claude/CLAUDE.md` provide
 -   Performance considerations and testing strategies
 -   Complete troubleshooting guide and development best practices
 
-Refer to `.claude/CLAUDE.md` for detailed technical information not covered in this Copilot-specific summary.
+Refer to `AGENTS.md` for mandatory policy and `.claude/CLAUDE.md` for detailed
+technical information not covered in this Copilot-specific summary.

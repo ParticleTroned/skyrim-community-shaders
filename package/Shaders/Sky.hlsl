@@ -231,8 +231,10 @@ PS_OUTPUT main(PS_INPUT input)
 #				endif  // TEX
 #			else
 	float2 noiseGradUv = float2(0.125, 0.125) * input.Position.xy;
+	// The 8x8 engine dither texture stores 0..63, so center it without shifting the weather color.
+	const float noiseGradCenter = 31.5 / 255.0;
 	float noiseGrad =
-		TexNoiseGradSampler.Sample(SampNoiseGradSampler, noiseGradUv).x * 0.03125 + -0.0078125;
+		(TexNoiseGradSampler.Sample(SampNoiseGradSampler, noiseGradUv).x - noiseGradCenter) * 0.03125;
 
 #				ifdef TEX
 	float3 skyVertColor = Color::UseLinearLightingColorAdjustments() ? (input.Color.xyz + noiseGrad) : input.Color.xyz;

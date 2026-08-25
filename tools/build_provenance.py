@@ -166,6 +166,48 @@ def read_submodules(source_dir: Path) -> list[dict[str, Any]]:
     return sorted(submodules, key=lambda item: item["path"].lower())
 
 
+def explain_unclean_provenance(
+    source_dir: Path,
+    source_dirty: bool,
+    submodules: list[dict[str, Any]],
+) -> str:
+    """Return actionable, relative-path diagnostics for a rejected clean build."""
+    lines = ["clean provenance required, but Git state is not reproducible"]
+    if source_dirty:
+        status = git(
+            source_dir,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        )
+        lines.append("source status:")
+        lines.extend(f"  {line}" for line in status.splitlines())
+
+    for item in submodules:
+        if not item["dirty"] and item["matchesPinned"]:
+            continue
+        lines.append(
+            "submodule "
+            f"{item['path']}: pinned={item['pinnedCommit'] or 'missing'} "
+            f"checked-out={item['checkedOutCommit'] or 'missing'} "
+            f"dirty={str(item['dirty']).lower()}"
+        )
+        checkout = source_dir / item["path"]
+        if item["dirty"] and checkout.exists():
+            status = git(
+                checkout,
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+                check=False,
+            )
+            lines.extend(f"  {line}" for line in status.splitlines())
+
+    return "\n".join(lines)
+
+
 def parse_key_values(values: list[str]) -> dict[str, str]:
     parsed: dict[str, str] = {}
     for value in values:
@@ -237,7 +279,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         item["dirty"] or not item["matchesPinned"] for item in submodules
     )
     if args.require_clean and (source_dirty or dependencies_dirty):
-        raise RuntimeError("clean provenance required, but the source tree or a submodule is dirty/mismatched")
+        raise RuntimeError(
+            explain_unclean_provenance(source_dir, source_dirty, submodules)
+        )
 
     source_commit = git(source_dir, "rev-parse", "HEAD")
     source_describe = git(source_dir, "describe", "--tags", "--always", "--dirty")

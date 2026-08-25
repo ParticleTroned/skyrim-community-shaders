@@ -1966,6 +1966,7 @@ namespace SIE
 			auto pathString = Util::WStringToString(path);
 			if (!std::filesystem::exists(path)) {
 				logger::error("Failed to compile {} shader {}::{:X}: {} does not exist", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor, pathString);
+				cache.RecordCompileFailure(key, pathString, pathString + " does not exist");
 				cache.AddCompletedShader(
 					shaderClass,
 					shader,
@@ -2008,15 +2009,20 @@ namespace SIE
 			}
 
 			if (FAILED(compileResult)) {
+				std::string errorText;
 				if (errorBlob != nullptr) {
+					// Compiler blobs are sized byte buffers and need not be NUL-terminated.
+					errorText.assign(static_cast<char*>(errorBlob->GetBufferPointer()), errorBlob->GetBufferSize());
+					if (!errorText.empty() && errorText.back() == '\0')
+						errorText.pop_back();
 					logger::error("Failed to compile {} shader {}::{:X}:\n{}",
-						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor,
-						static_cast<char*>(errorBlob->GetBufferPointer()));
+						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor, errorText);
 					errorBlob->Release();
 				} else {
 					logger::error("Failed to compile {} shader {}::{:X}",
 						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
 				}
+				cache.RecordCompileFailure(key, pathString, errorText);
 				if (shaderBlob != nullptr) {
 					shaderBlob->Release();
 				}
@@ -4076,6 +4082,25 @@ namespace SIE
 			}
 		}
 		return count;
+	}
+
+	void ShaderCache::RecordCompileFailure(std::string a_key, std::string a_path, std::string a_error)
+	{
+		constexpr size_t kMaxErrorLength = 2000;
+		if (a_error.size() > kMaxErrorLength)
+			a_error.resize(kMaxErrorLength);
+
+		CompileFailure failure{
+			.key = std::move(a_key),
+			.path = std::move(a_path),
+			.error = std::move(a_error),
+			.epoch = static_cast<uint64_t>(duration_cast<seconds>(system_clock::now().time_since_epoch()).count()),
+			.frame = globals::state ? globals::state->frameCountAtomic.load(std::memory_order_relaxed) : 0u,
+		};
+		std::lock_guard lock(compileFailuresMutex);
+		if (recentCompileFailures.size() >= kMaxRecentCompileFailures)
+			recentCompileFailures.pop_front();
+		recentCompileFailures.push_back(std::move(failure));
 	}
 
 	uint64_t ShaderCache::GetTotalTasks()

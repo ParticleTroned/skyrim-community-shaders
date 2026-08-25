@@ -408,6 +408,8 @@ public:
 
 	Util::FrameChecker frameChecker;
 	uint frameCount = 0;
+	// Render-thread publication for diagnostics recorded by shader workers.
+	std::atomic<uint32_t> frameCountAtomic{ 0 };
 
 	// Skyrim constants
 	float2 screenSize = {};

@@ -139,6 +139,21 @@ namespace
 		};
 	}
 
+	json RecentFailuresJson(const std::vector<SIE::ShaderCache::CompileFailure>& a_failures)
+	{
+		json failures = json::array();
+		for (const auto& failure : a_failures) {
+			failures.push_back({
+				{ "key", failure.key },
+				{ "path", failure.path },
+				{ "error", failure.error },
+				{ "epoch", failure.epoch },
+				{ "frame", failure.frame },
+			});
+		}
+		return failures;
+	}
+
 	json RunOnMainThread(std::function<json()> a_run)
 	{
 		auto* tasks = SKSE::GetTaskInterface();
@@ -166,7 +181,11 @@ namespace
 	{
 		Snapshot001 snapshot;
 		const auto status = a_api.GetSnapshot(a_api.context, &snapshot);
-		return { { "status", StatusName(status) }, { "snapshot", SnapshotJson(snapshot) } };
+		auto snapshotJson = SnapshotJson(snapshot);
+		snapshotJson["compilation"]["recentFailures"] = globals::shaderCache ?
+		                                                     RecentFailuresJson(globals::shaderCache->GetRecentCompileFailures()) :
+		                                                     json::array();
+		return { { "status", StatusName(status) }, { "snapshot", std::move(snapshotJson) } };
 	}
 
 	MutationRequest001 ParseMutation(const json& a_args, std::string& a_feature, std::string& a_token)
@@ -418,7 +437,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait while compilation continues on the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes.",
+			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait while compilation continues on the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],

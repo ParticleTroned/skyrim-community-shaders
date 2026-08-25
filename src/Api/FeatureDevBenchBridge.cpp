@@ -6,6 +6,7 @@
 #	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
+#	include "FeatureIssues.h"
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 #	include <atomic>
@@ -68,6 +69,26 @@ namespace
 			{ "stateRevision", v.stateRevision }, { "capabilities", v.capabilities }, { "buildId", v.buildId ? v.buildId : "" } };
 	}
 
+	json FeatureIssueJson(const FeatureIssues::FeatureIssueInfo& issue)
+	{
+		return {
+			{ "shortName", issue.shortName },
+			{ "displayName", issue.displayName },
+			{ "version", issue.version },
+			{ "issueType", magic_enum::enum_name(issue.issueType) },
+			{ "rejectionReason", issue.rejectionReason },
+			{ "replacementFeature", issue.replacementFeature },
+			{ "replacementFeatureDisplayName", issue.replacementFeatureDisplayName },
+			{ "replacementFeatureInstalled", issue.replacementFeatureInstalled },
+			{ "replacementFeatureModLink", issue.replacementFeatureModLink },
+			{ "userMessage", issue.userMessage },
+			{ "minimumVersionRequired", issue.minimumVersionRequired },
+			{ "modifiedShaderDirectory", issue.modifiedShaderDirectory },
+			{ "iniPath", issue.iniPath },
+			{ "removedInVersion", issue.removedInVersion.string(".") },
+		};
+	}
+
 	MutationRequest001 Mutation(const json& args, std::string& feature, std::string& token)
 	{
 		if (!args.contains("mutation") || !args["mutation"].is_object()) throw std::runtime_error("mutation object is required");
@@ -85,13 +106,13 @@ namespace
 	json BuildResult(const json& args)
 	{
 		const auto action = args.value("action", std::string{});
-		const bool known = action == "registry" || action == "snapshot" || action == "features" || action == "settings" || action == "constraints" || action == "preflight" || action == "execute";
+		const bool known = action == "registry" || action == "snapshot" || action == "features" || action == "issues" || action == "settings" || action == "constraints" || action == "preflight" || action == "execute";
 		if (!known) return Foundation().MakeError(args, "unknown_action", "action is not supported", "validation", false, "action");
 		if (action == "registry") {
 			auto response = Foundation().MakeEnvelope(args, true);
 			response["result"] = { { "service", ServiceName }, { "major", 1 }, { "minor", 0 }, { "schemaRevision", 1 },
 				{ "capabilities", ServiceCapabilities }, { "mainThreadAffine", true }, { "registryMainThreadAffine", false },
-				{ "preflightTokenLifetimeMs", 30000 }, { "actions", json::array({ "registry", "snapshot", "features", "settings", "constraints", "preflight", "execute" }) },
+				{ "preflightTokenLifetimeMs", 30000 }, { "actions", json::array({ "registry", "snapshot", "features", "issues", "settings", "constraints", "preflight", "execute" }) },
 				{ "mutations", json::array({ "set_disabled_at_boot" }) }, { "legacyInterfacesPreserved", true } };
 			return response;
 		}
@@ -99,6 +120,13 @@ namespace
 		auto result = OnMain([action, args] {
 			const auto* api = CSX::Api::GetFeatureService001(); if (!api) return json{ { "error", "feature API unavailable" } };
 			if (action == "snapshot") { Snapshot001 v; const auto s = api->GetSnapshot(api->context, &v); return json{ { "status", StatusName(s) }, { "snapshot", SnapshotJson(v) } }; }
+			if (action == "issues") {
+				json issues = json::array();
+				for (const auto& issue : FeatureIssues::GetFeatureIssues()) issues.push_back(FeatureIssueJson(issue));
+				return json{ { "featureIssues", std::move(issues) }, { "hasIssues", FeatureIssues::HasFeatureIssues() },
+					{ "hasObsoleteShaderModifyingFeatures", FeatureIssues::HasObsoleteShaderModifyingFeatures() },
+					{ "hasPotentialShaderModifyingFeatures", FeatureIssues::HasPotentialShaderModifyingFeatures() } };
+			}
 			if (action == "features") {
 				json values = json::array(); const auto count = api->GetFeatureCount(api->context);
 				for (std::uint32_t i = 0; i < count; ++i) { FeatureDescriptor001 v; if (api->GetFeatureDescriptor(api->context, i, &v) != Status::kSuccess) continue;
@@ -146,7 +174,7 @@ namespace CSX::Api::FeatureDevBenchBridge
 	{
 		if (g_registered.load(std::memory_order_acquire)) return;
 		auto* host = DevBenchAPI::GetDevBenchInterface001(); if (!host) { logger::info("FeatureDevBenchBridge: devbench host not present; feature API tool not registered"); return; }
-		const char* descriptor = R"({"description":"Versioned CSX feature catalog, settings/constraint inspection, and guarded boot-configuration API.","inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},"action":{"type":"string","enum":["registry","snapshot","features","settings","constraints","preflight","execute"]},"featureShortName":{"type":"string"},"mutation":{"type":"object","required":["action","expectedStateRevision","featureShortName","disabled"],"properties":{"action":{"type":"string","const":"set_disabled_at_boot"},"expectedStateRevision":{"type":"integer","minimum":0},"featureShortName":{"type":"string"},"disabled":{"type":"boolean"},"persist":{"type":"boolean"},"allowDisruptive":{"type":"boolean"},"preflightToken":{"type":"string"}}}}}})";
+		const char* descriptor = R"({"description":"Versioned CSX feature catalog, settings/constraint inspection, detected feature issues, and guarded boot-configuration API. issues returns the boot warning data for obsolete features, version mismatches, failed overrides, and unknown feature INIs.","inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},"action":{"type":"string","enum":["registry","snapshot","features","issues","settings","constraints","preflight","execute"]},"featureShortName":{"type":"string"},"mutation":{"type":"object","required":["action","expectedStateRevision","featureShortName","disabled"],"properties":{"action":{"type":"string","const":"set_disabled_at_boot"},"expectedStateRevision":{"type":"integer","minimum":0},"featureShortName":{"type":"string"},"disabled":{"type":"boolean"},"persist":{"type":"boolean"},"allowDisruptive":{"type":"boolean"},"preflightToken":{"type":"string"}}}}}})";
 		host->RegisterTool("communityshaders.feature_api", descriptor, &Handler, nullptr); g_registered.store(true, std::memory_order_release);
 		logger::info("FeatureDevBenchBridge: registered communityshaders.feature_api with devbench build {}", host->GetBuildNumber());
 	}

@@ -729,6 +729,7 @@ void State::Reset()
 	lastVertexDescriptor = 0;
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
 	frameCount++;
+	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
 	UpdateSaveLoadSafeMode();
 
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);

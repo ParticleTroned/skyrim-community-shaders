@@ -593,6 +593,23 @@ namespace SIE
 		 * entries whose status is `ShaderCompilationTask::Status::Failed`.
 		 */
 		uint64_t GetCurrentFailedCount();
+		/** @brief Diagnostic details retained for a failed source compilation. */
+		struct CompileFailure
+		{
+			std::string key;
+			std::string path;
+			std::string error;
+			uint64_t epoch = 0;
+			uint32_t frame = 0;
+		};
+		/** @brief Adds a failure to the bounded, thread-safe diagnostic history. */
+		void RecordCompileFailure(std::string a_key, std::string a_path, std::string a_error);
+		/** @brief Returns recent failures from oldest to newest. */
+		std::vector<CompileFailure> GetRecentCompileFailures() const
+		{
+			std::lock_guard lock(compileFailuresMutex);
+			return { recentCompileFailures.begin(), recentCompileFailures.end() };
+		}
 		uint64_t GetTotalTasks();
 		uint64_t GetDiskHitTasks();
 		uint64_t GetSourceCompileTasks();
@@ -986,6 +1003,9 @@ namespace SIE
 		bool previousDiskCacheAvailable = false;
 		std::vector<CacheMismatch> cacheMismatches;
 		std::vector<CacheMismatch> previousCacheMismatches;
+		static constexpr size_t kMaxRecentCompileFailures = 32;
+		mutable std::mutex compileFailuresMutex;
+		std::deque<CompileFailure> recentCompileFailures;
 		std::vector<std::string> heldMismatchDefines;
 		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
 		bool isAsync = true;

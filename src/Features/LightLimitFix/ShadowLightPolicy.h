@@ -23,4 +23,13 @@ namespace LightLimitFixShadowPolicy
 		const bool lodFaded = a_isShadowLight && a_lodFade && a_lodDimmer == 0.0f;
 		return lodFaded ? 1.0f : a_lodDimmer;
 	}
+
+	static_assert(IsValidShadowMask(0));
+	static_assert(IsValidShadowMask(kShadowMaskChannelCount - 1));
+	static_assert(!IsValidShadowMask(kShadowMaskChannelCount));
+	static_assert(!IsValidShadowMask(255));
+	static_assert(ResolveEffectiveLodDimmer(false, true, 0.0f) == 0.0f);
+	static_assert(ResolveEffectiveLodDimmer(true, true, 0.25f) == 0.25f);
+	static_assert(ResolveEffectiveLodDimmer(true, true, 0.0f) == 1.0f);
+	static_assert(ResolveEffectiveLodDimmer(true, false, 0.0f) == 0.0f);
 }

@@ -279,6 +279,7 @@ find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
+include(Streamline-Runtime)
 
 target_compile_definitions(
     ${PROJECT_NAME}
@@ -711,6 +712,11 @@ install(
     DESTINATION Shaders/Upscaling/FidelityFX
     COMPONENT FidelityFXRuntime
 )
+install(
+    FILES ${STREAMLINE_RUNTIME_FILES}
+    DESTINATION Shaders/Upscaling/Streamline
+    COMPONENT StreamlineRuntime
+)
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
 
 # #######################################################################################################################
@@ -769,7 +775,12 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_feature_paths_list_file
         "${CMAKE_CURRENT_BINARY_DIR}/feature_paths.txt"
     )
-    set(_aio_source_paths ${FEATURE_PATHS} "${FFX_RUNTIME_FEATURE_ROOT}")
+    set(
+        _aio_source_paths
+        ${FEATURE_PATHS}
+        "${FFX_RUNTIME_FEATURE_ROOT}"
+        "${STREAMLINE_RUNTIME_FEATURE_ROOT}"
+    )
     string(REPLACE ";" "\n" _feature_paths_file_content "${_aio_source_paths}")
     file(WRITE "${_feature_paths_list_file}" "${_feature_paths_file_content}")
 
@@ -929,7 +940,11 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         list(REMOVE_DUPLICATES _shader_feature_paths)
     endif()
 
-    set(_feature_shader_paths "${FFX_RUNTIME_SHADER_ROOT}")
+    set(
+        _feature_shader_paths
+        "${FFX_RUNTIME_SHADER_ROOT}"
+        "${STREAMLINE_RUNTIME_SHADER_ROOT}"
+    )
     foreach(_fpath IN LISTS _shader_feature_paths)
         if(EXISTS "${_fpath}/Shaders")
             list(APPEND _feature_shader_paths "${_fpath}/Shaders")
@@ -965,6 +980,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 
     append_copy_if_different(_shader_copy_cmds _package_shaders "${CMAKE_SOURCE_DIR}/package/Shaders" "${AIO_DIR}/Shaders")
     append_copy_if_different(_shader_copy_cmds FFX_RUNTIME_FILES "${FFX_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
+    append_copy_if_different(_shader_copy_cmds STREAMLINE_RUNTIME_FILES "${STREAMLINE_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
 
     # feature shader folders
     foreach(_fpath IN LISTS _shader_feature_paths)
@@ -991,6 +1007,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         DEPENDS
             ${_all_shader_sources}
             ${FFX_RUNTIME_FILES}
+            ${STREAMLINE_RUNTIME_FILES}
             ${_feature_shader_paths_list_file}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
@@ -1321,6 +1338,9 @@ if(ZIP_TO_DIST)
                     ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                     "${FEATURE_ZIP_STAGE}" --component FidelityFXRuntime
                 COMMAND
+                    ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
+                    "${FEATURE_ZIP_STAGE}" --component StreamlineRuntime
+                COMMAND
                     ${CMAKE_COMMAND} -E chdir "${FEATURE_ZIP_STAGE}"
                     ${CMAKE_COMMAND} -E tar cf
                     ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z
@@ -1440,10 +1460,16 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
                 ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                 "${FEATURE_PACKAGE_STAGE}" --component FidelityFXRuntime
             COMMAND
+                ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
+                "${FEATURE_PACKAGE_STAGE}" --component StreamlineRuntime
+            COMMAND
                 ${CMAKE_COMMAND} -E chdir "${FEATURE_PACKAGE_STAGE}"
                 ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE}
                 --format=7zip -- .
-            DEPENDS ${FEATURE_SOURCES} ${FFX_RUNTIME_FILES}
+            DEPENDS
+                ${FEATURE_SOURCES}
+                ${FFX_RUNTIME_FILES}
+                ${STREAMLINE_RUNTIME_FILES}
             COMMENT "Creating ${FEATURE} zip package"
         )
     else()
@@ -1473,7 +1499,7 @@ add_custom_target(
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
         --config $<CONFIG>
-    DEPENDS ${PROJECT_NAME} ${FFX_RUNTIME_FILES}
+    DEPENDS ${PROJECT_NAME} ${FFX_RUNTIME_FILES} ${STREAMLINE_RUNTIME_FILES}
     COMMENT "Installing fresh AIO folder"
     VERBATIM
 )
@@ -1485,7 +1511,11 @@ add_custom_command(
     # Package-AIO-Manual can be invoked directly and AIO_ZIP_PACKAGE builds in
     # parallel. Keep the install/archive rule ordered after the core target so
     # feature INIs and the compiled FeatureVersions registry always agree.
-    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
+    DEPENDS
+        ${PROJECT_NAME}
+        ${CORE_SOURCES}
+        ${FFX_RUNTIME_FILES}
+        ${STREAMLINE_RUNTIME_FILES}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}

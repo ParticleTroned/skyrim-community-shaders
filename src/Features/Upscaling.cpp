@@ -10569,6 +10569,30 @@ namespace
 		return (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) != 0;
 	}
 
+	constexpr DXGI_FORMAT kVRSubmitPresentationFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+	bool IsSupportedVRSubmitPresentationFormat(DXGI_FORMAT a_format) noexcept
+	{
+		return a_format == kVRSubmitPresentationFormat;
+	}
+
+	bool IsSupportedVRSubmitPresentationContract(
+		DXGI_FORMAT a_format,
+		vr::EColorSpace a_colorSpace) noexcept
+	{
+		if (!IsSupportedVRSubmitPresentationFormat(a_format))
+			return false;
+
+		switch (a_colorSpace) {
+		case vr::ColorSpace_Auto:
+		case vr::ColorSpace_Gamma:
+		case vr::ColorSpace_Linear:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	bool SupportsFloatUnorderedAccessClear(DXGI_FORMAT a_format) noexcept
 	{
 		// ClearUnorderedAccessViewFloat is defined only for FLOAT, UNORM, and
@@ -37864,8 +37888,10 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 	D3D11_TEXTURE2D_DESC colorSrcDesc{};
 	if (!TryGetTexture2DDesc(colorSrc, colorSrcDesc))
 		return false;
+	if (!IsSupportedVRSubmitPresentationFormat(colorSrcDesc.Format))
+		return false;
 
-	constexpr DXGI_FORMAT outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+	const DXGI_FORMAT outputFormat = colorSrcDesc.Format;
 	const uint32_t allocationInWidth = std::max<uint32_t>(1u, inWidth);
 	const uint32_t allocationInHeight = std::max<uint32_t>(1u, inHeight);
 	const auto matchesInput = [allocationInWidth, allocationInHeight, sourceFormat = colorSrcDesc.Format](const eastl::unique_ptr<Texture2D>& texture) {
@@ -45227,6 +45253,28 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	if (!presentationUpscalingActive && !directMenuPresentationFallbackActive)
 		return false;
 
+	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	sourceTexture->GetDesc(&sourceDesc);
+	if (!IsSupportedVRSubmitPresentationContract(sourceDesc.Format, a_inputTexture->eColorSpace)) {
+		static std::atomic_bool loggedUnsupportedPresentationContract{ false };
+		if (!loggedUnsupportedPresentationContract.exchange(true, std::memory_order_relaxed)) {
+			logger::warn(
+				"[VRRenderScale] Submit-stage upscaling skipped for unsupported presentation contract; using the original OpenVR submission. format={} colorSpace={}",
+				static_cast<uint32_t>(sourceDesc.Format),
+				static_cast<uint32_t>(a_inputTexture->eColorSpace));
+		}
+		return false;
+	}
+	if (sourceDesc.SampleDesc.Count != 1) {
+		static bool loggedMSAA = false;
+		if (!loggedMSAA) {
+			logger::warn("[Upscaling] Submit-stage {} skipped because the submitted texture is MSAA.", upscaleMethodName);
+			loggedMSAA = true;
+		}
+		return false;
+	}
+
 	BeginVRMenuFinalCompositeFrame(currentFrame);
 	if (vrRenderScaleMode &&
 		vrMenuFrameTransaction.frame == currentFrame &&
@@ -45291,7 +45339,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			return false;
 		}
 	}
-	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
 	if (IsVRNativeLayoutSubmitProtectedRenderTargetTexture(sourceTexture))
 		return false;
 
@@ -45342,17 +45389,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		if (menuPresentationAttempt && !menuPresentationSucceeded)
 			PoisonVRMenuFrameTransaction("menu-eye-presentation-failed");
 	});
-
-	D3D11_TEXTURE2D_DESC sourceDesc{};
-	sourceTexture->GetDesc(&sourceDesc);
-	if (sourceDesc.SampleDesc.Count != 1) {
-		static bool loggedMSAA = false;
-		if (!loggedMSAA) {
-			logger::warn("[Upscaling] Submit-stage {} skipped because the submitted texture is MSAA.", upscaleMethodName);
-			loggedMSAA = true;
-		}
-		return false;
-	}
 
 	const auto screenSize = state->screenSize;
 	uint32_t eyeWidthOut = 0;

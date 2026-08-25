@@ -69,6 +69,19 @@ if ($cmake) {
     Add-CheckFailure "cmake.exe is not available on PATH"
 }
 
+if ($onWindows) {
+    try {
+        if (Test-CsxMsvcEnvironment) {
+            Write-CheckPass "the MSVC build environment is active"
+        } else {
+            $vsDevCmd = Resolve-CsxVsDevCmd -Required
+            Write-CheckPass "the MSVC build environment can be initialized with $vsDevCmd"
+        }
+    } catch {
+        Add-CheckFailure $_.Exception.Message
+    }
+}
+
 try {
     $vcpkgRoot = Resolve-CsxVcpkgRoot -Required
     Write-CheckPass "vcpkg root resolves to $vcpkgRoot"

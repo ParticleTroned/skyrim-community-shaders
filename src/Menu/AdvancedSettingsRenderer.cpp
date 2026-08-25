@@ -416,7 +416,122 @@ void AdvancedSettingsRenderer::RenderShaderCompileStatistics()
 		}
 	}
 
+	if (ImGui::TreeNodeEx("All Compiled Tasks", ImGuiTreeNodeFlags_DefaultOpen)) {
+		using SlowTaskRecord = SIE::CompilationSet::SlowTaskRecord;
+
+		static std::vector<SlowTaskRecord> cachedRows;
+		static int64_t cachedResetQpc = -1;
+		const int64_t resetQpc = shaderCache->GetLastResetQpc();
+		if (resetQpc != cachedResetQpc || shaderCache->IsCompiling()) {
+			cachedResetQpc = resetQpc;
+			cachedRows = shaderCache->GetAllTaskRecords();
+		}
+
+		static char taskFilterText[256] = "";
+		static int taskSearchColumn = 0;
+		static size_t taskSortColumn = 7;
+		static bool taskSortAscending = false;
+
+		auto queuePercent = [](const SlowTaskRecord& a_record) {
+			const double total = a_record.queueWaitMs + a_record.elapsedMs;
+			return total > 0.0 ? 100.0 * a_record.queueWaitMs / total : 0.0;
+		};
+
+		const int64_t qpcFrequency = shaderCache->GetQpcFrequency();
+		auto completedSinceStartMs = [resetQpc, qpcFrequency](const SlowTaskRecord& a_record) {
+			return static_cast<double>(a_record.startQpc - resetQpc) * 1000.0 /
+			           static_cast<double>(qpcFrequency) +
+			       a_record.elapsedMs;
+		};
+
+		std::vector<Util::TableColumnConfig<SlowTaskRecord>> columns = {
+			{ "Key", "Shader file, class, and active defines", [](const SlowTaskRecord& a_record) {
+				 return a_record.key;
+			 },
+				/*truncate=*/true, /*widthWeight=*/4.0f },
+			{ "Elapsed", "Wall-clock compile time for this task", [](const SlowTaskRecord& a_record) {
+				 return Util::FormatDuration(a_record.elapsedMs);
+			 } },
+			{ "Queue Wait", "Time waiting for a free worker", [](const SlowTaskRecord& a_record) {
+				 return Util::FormatDuration(a_record.queueWaitMs);
+			 } },
+			{ "Queue %", "Queue wait as a share of wait plus compile time", [queuePercent](const SlowTaskRecord& a_record) {
+				 return Util::FormatPercent(static_cast<float>(queuePercent(a_record)));
+			 } },
+			{ "Weight", "Estimated compile-cost scheduling priority", [](const SlowTaskRecord& a_record) {
+				 return std::to_string(a_record.priority);
+			 } },
+			{ "Defines", "Active define permutations", [](const SlowTaskRecord& a_record) {
+				 return std::to_string(a_record.defineCount);
+			 } },
+			{ "Source KB", "HLSL source file size at compile time", [](const SlowTaskRecord& a_record) {
+				 return std::format("{:.1f}", static_cast<double>(a_record.sourceSizeBytes) / 1024.0);
+			 } },
+			{ "Completed", "Time from build start until task completion", [completedSinceStartMs](const SlowTaskRecord& a_record) {
+				 return Util::FormatDuration(completedSinceStartMs(a_record));
+			 } }
+		};
+
+		std::vector<std::function<bool(const SlowTaskRecord&, const SlowTaskRecord&, bool)>> sorters = {
+			[](const SlowTaskRecord& a, const SlowTaskRecord& b, bool ascending) { return ascending ? a.key < b.key : a.key > b.key; },
+			[](const SlowTaskRecord& a, const SlowTaskRecord& b, bool ascending) { return ascending ? a.elapsedMs < b.elapsedMs : a.elapsedMs > b.elapsedMs; },
+			[](const SlowTaskRecord& a, const SlowTaskRecord& b, bool ascending) { return ascending ? a.queueWaitMs < b.queueWaitMs : a.queueWaitMs > b.queueWaitMs; },
+			[queuePercent](const SlowTaskRecord& a, const SlowTaskRecord& b, bool ascending) {
+				return ascending ? queuePercent(a) < queuePercent(b) : queuePercent(a) > queuePercent(b);
+			},
+			[](const SlowTaskRecord& a, const SlowTaskRecord& b, bool ascending) { return ascending ? a.priority < b.priority : a.priority > b.priority; },
+			[](const SlowTaskRecord& a, const SlowTaskRecord& b, bool ascending) { return ascending ? a.defineCount < b.defineCount : a.defineCount > b.defineCount; },
+			[](const SlowTaskRecord& a, const SlowTaskRecord& b, bool ascending) { return ascending ? a.sourceSizeBytes < b.sourceSizeBytes : a.sourceSizeBytes > b.sourceSizeBytes; },
+			[completedSinceStartMs](const SlowTaskRecord& a, const SlowTaskRecord& b, bool ascending) {
+				return ascending ? completedSinceStartMs(a) < completedSinceStartMs(b) : completedSinceStartMs(a) > completedSinceStartMs(b);
+			}
+		};
+
+		auto getFilterableFields = [queuePercent, completedSinceStartMs](const SlowTaskRecord& a_record) -> std::vector<std::string> {
+			return {
+				a_record.key,
+				Util::FormatDuration(a_record.elapsedMs),
+				Util::FormatDuration(a_record.queueWaitMs),
+				Util::FormatPercent(static_cast<float>(queuePercent(a_record))),
+				std::to_string(a_record.priority),
+				std::to_string(a_record.defineCount),
+				std::format("{:.1f}", static_cast<double>(a_record.sourceSizeBytes) / 1024.0),
+				Util::FormatDuration(completedSinceStartMs(a_record))
+			};
+		};
+
+		Util::TableFilterState<SlowTaskRecord> filterState(getFilterableFields);
+		filterState.filterText = taskFilterText;
+		filterState.searchColumn = taskSearchColumn;
+		std::vector<Util::TableInputEvent<SlowTaskRecord>> inputEvents = {
+			{ Util::TableInputEventType::ContextMenu,
+				[](const SlowTaskRecord& a_record) { ImGui::SetClipboardText(a_record.key.c_str()); },
+				"Copy key", 1 }
+		};
+
+		Util::ShowInteractiveTable<SlowTaskRecord>(
+			"##AllCompiledTasksTable",
+			columns,
+			cachedRows,
+			taskSortColumn,
+			taskSortAscending,
+			sorters,
+			filterState,
+			inputEvents);
+
+		strncpy_s(taskFilterText, filterState.filterText.c_str(), sizeof(taskFilterText) - 1);
+		taskFilterText[sizeof(taskFilterText) - 1] = '\0';
+		taskSearchColumn = filterState.searchColumn;
+		ImGui::TreePop();
+	}
+
 	ImGui::TreePop();
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+
+	RenderCompileTraceExport();
 }
 
 // -----------------------------------------------------------------------------
@@ -440,6 +555,46 @@ void AdvancedSettingsRenderer::RenderDiagnosticsSection()
 		ImGui::Spacing();
 
 		RenderShaderBlockingPanel();
+	}
+}
+
+void AdvancedSettingsRenderer::RenderCompileTraceExport()
+{
+	Util::DrawSectionHeader("Compile Trace Export");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Writes every compiled task from the current build to Chrome Trace JSON.");
+		ImGui::Text("Open the result in Perfetto to compare compile cost with queue contention.");
+	}
+
+	auto shaderCache = globals::shaderCache;
+	const auto logPath = Util::PathHelpers::GetLogPath();
+	const bool canExport = !shaderCache->IsCompiling() && !logPath.empty();
+	static bool lastExportOk = false;
+	static std::string lastExportPath;
+
+	ImGui::BeginDisabled(!canExport);
+	if (ImGui::Button("Export Trace (Perfetto)", { -1, 0 })) {
+		const auto path = logPath.parent_path() / "compile-trace.json";
+		lastExportOk = shaderCache->ExportCompileTrace(path);
+		lastExportPath = path.string();
+	}
+	ImGui::EndDisabled();
+	if (shaderCache->IsCompiling()) {
+		Util::AddTooltip(
+			"Wait for the current build to finish before exporting.",
+			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+	} else if (logPath.empty()) {
+		Util::AddTooltip(
+			"The Community Shaders log directory is unavailable.",
+			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+	}
+
+	if (!lastExportPath.empty()) {
+		if (lastExportOk) {
+			ImGui::TextColored({ 0.4f, 0.9f, 0.4f, 1.0f }, "Exported: %s", lastExportPath.c_str());
+		} else {
+			ImGui::TextColored({ 0.9f, 0.4f, 0.4f, 1.0f }, "Export failed; check CommunityShaders.log.");
+		}
 	}
 }
 

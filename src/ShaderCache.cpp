@@ -16,10 +16,12 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <shared_mutex>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "Deferred.h"
 #include "Feature.h"
@@ -4134,6 +4136,107 @@ namespace SIE
 		return compilationSet.GetTopSlowTasks(n);
 	}
 
+	std::vector<CompilationSet::SlowTaskRecord> CompilationSet::GetAllTaskRecords() const
+	{
+		std::lock_guard lock(slowTasksMutex);
+		return slowTaskRecords;
+	}
+
+	std::vector<CompilationSet::SlowTaskRecord> ShaderCache::GetAllTaskRecords()
+	{
+		return compilationSet.GetAllTaskRecords();
+	}
+
+	int64_t ShaderCache::GetLastResetQpc()
+	{
+		return compilationSet.GetLastResetQpc();
+	}
+
+	int64_t ShaderCache::GetQpcFrequency()
+	{
+		return compilationSet.GetQpcFrequency();
+	}
+
+	bool ShaderCache::ExportCompileTrace(const std::filesystem::path& a_path)
+	{
+		const auto records = compilationSet.GetAllTaskRecords();
+		if (records.empty()) {
+			logger::warn("ExportCompileTrace: no task records for the current build");
+			return false;
+		}
+
+		const int64_t frequency = compilationSet.GetQpcFrequency();
+		int64_t baselineQpc = records.front().startQpc;
+		for (const auto& record : records) {
+			const int64_t queueWaitQpc = static_cast<int64_t>(
+				record.queueWaitMs * static_cast<double>(frequency) / 1000.0);
+			baselineQpc = std::min(baselineQpc, record.startQpc - queueWaitQpc);
+		}
+		const auto qpcToUs = [frequency, baselineQpc](int64_t a_qpc) {
+			return static_cast<double>(a_qpc - baselineQpc) * 1'000'000.0 /
+			       static_cast<double>(frequency);
+		};
+
+		nlohmann::json events = nlohmann::json::array();
+		const uint32_t processId = GetCurrentProcessId();
+		std::unordered_set<uint32_t> namedThreads;
+		for (const auto& record : records) {
+			if (namedThreads.insert(record.threadId).second) {
+				events.push_back({ { "name", "thread_name" },
+					{ "ph", "M" },
+					{ "pid", processId },
+					{ "tid", record.threadId },
+					{ "args", { { "name", "Shader Compile Worker" } } } });
+			}
+		}
+
+		for (const auto& record : records) {
+			const double startUs = qpcToUs(record.startQpc);
+			if (record.queueWaitMs > 0.0) {
+				events.push_back({ { "name", "queue_wait" },
+					{ "cat", "shader_compile" },
+					{ "ph", "X" },
+					{ "ts", startUs - record.queueWaitMs * 1000.0 },
+					{ "dur", record.queueWaitMs * 1000.0 },
+					{ "pid", processId },
+					{ "tid", record.threadId } });
+			}
+			events.push_back({ { "name", record.key },
+				{ "cat", "shader_compile" },
+				{ "ph", "X" },
+				{ "ts", startUs },
+				{ "dur", record.elapsedMs * 1000.0 },
+				{ "pid", processId },
+				{ "tid", record.threadId },
+				{ "args", { { "priority", record.priority },
+							  { "defineCount", record.defineCount },
+							  { "sourceSizeBytes", record.sourceSizeBytes } } } });
+		}
+
+		try {
+			if (!a_path.parent_path().empty()) {
+				std::filesystem::create_directories(a_path.parent_path());
+			}
+			std::ofstream file(a_path);
+			if (!file.is_open()) {
+				logger::warn("ExportCompileTrace: failed to open {} for writing", a_path.string());
+				return false;
+			}
+			file << events.dump(2);
+			file.flush();
+			if (!file.good()) {
+				logger::warn("ExportCompileTrace: write to {} failed", a_path.string());
+				return false;
+			}
+		} catch (const std::exception& e) {
+			logger::warn("ExportCompileTrace: failed writing {}: {}", a_path.string(), e.what());
+			return false;
+		}
+
+		logger::info("ExportCompileTrace: wrote {} task records to {}", records.size(), a_path.string());
+		return true;
+	}
+
 	std::optional<CompilationSet::ParallelismStats> CompilationSet::GetParallelismStats() const
 	{
 		std::vector<SlowTaskRecord> records;
@@ -4538,15 +4641,10 @@ namespace SIE
 		const auto descriptorComplexity = std::popcount(static_cast<uint32_t>(task.GetId()));
 		uintmax_t sourceBytes = 0;
 		{
-			// GetString() format: "fxpFilename:ShaderClass:defines" — filename is before the first colon.
-			const auto taskStr = task.GetString();
-			const auto sep = taskStr.find(':');
-			if (sep != std::string::npos) {
-				const auto shaderName = taskStr.substr(0, sep);
-				if (auto path = SIE::SShaderCache::GetShaderPath(shaderName); !path.empty()) {
-					std::error_code ec;
-					sourceBytes = std::filesystem::file_size(path, ec);
-				}
+			std::error_code ec;
+			sourceBytes = std::filesystem::file_size(task.GetSourcePath(), ec);
+			if (ec) {
+				sourceBytes = 0;
 			}
 		}
 
@@ -4558,11 +4656,11 @@ namespace SIE
 		constexpr double kSlowMs = 2000.0;
 		constexpr double kVerySlowMs = 8000.0;
 
-		// Record every task for post-mortem analysis and developer UI (top-N display).
+		// Record every task for post-mortem analysis, the developer UI, and trace export.
 		{
 			std::lock_guard lock(compilationSet.slowTasksMutex);
 			compilationSet.slowTaskRecords.push_back({ taskKey, elapsedMs, queueWaitMs, task.GetPriority(),
-				static_cast<int>(descriptorComplexity), sourceBytes });
+				static_cast<int>(descriptorComplexity), sourceBytes, GetCurrentThreadId(), start.QuadPart });
 		}
 
 		if (elapsedMs >= kVerySlowMs) {
@@ -4620,6 +4718,14 @@ namespace SIE
 	std::string ShaderCompilationTask::GetString() const
 	{
 		return SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
+	}
+
+	std::wstring ShaderCompilationTask::GetSourcePath() const
+	{
+		return SIE::SShaderCache::GetShaderPath(
+			shader.shaderType == RE::BSShader::Type::ImageSpace ?
+				static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
+				shader.fxpFilename);
 	}
 
 	bool ShaderCompilationTask::operator==(const ShaderCompilationTask& other) const
@@ -4712,6 +4818,7 @@ namespace SIE
 		// before the conditionVariable notification.
 		if (!shaderCache->IsCompiling()) {
 			QueryPerformanceCounter(&lastReset);
+			lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 			lastCalculation = lastReset;
 		}
 
@@ -4760,6 +4867,7 @@ namespace SIE
 				// only after it confirms a real compile; Forget() handles smart clears.
 				if (totalTasks.load(std::memory_order_relaxed) == 0) {
 					lastReset = now;
+					lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 					lastCalculation = lastReset;
 				}
 
@@ -4815,6 +4923,7 @@ namespace SIE
 
 				if (completionTime.load(std::memory_order_relaxed) != 0) {
 					lastReset.QuadPart = sessionStartQpc;
+					lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 					lastCalculation = lastReset;
 					totalTime = { 0 };
 					completionTime.store(0, std::memory_order_relaxed);
@@ -4886,6 +4995,7 @@ namespace SIE
 		completedPriorityWeight = 0;
 		heavyTasksInFlight = 0;
 		QueryPerformanceCounter(&lastReset);
+		lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 		QueryPerformanceCounter(&lastCalculation);
 		completionTime = { 0 };  // Reset completion time
 		totalTime = { 0 };
@@ -4915,6 +5025,7 @@ namespace SIE
 		// had finished. In-flight work is preserved until Complete() retires it.
 		if (erasedProcessed > 0 && completionTime.load(std::memory_order_relaxed) != 0) {
 			QueryPerformanceCounter(&lastReset);
+			lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 			lastCalculation = lastReset;
 			totalTime = { 0 };
 			completionTime.store(0, std::memory_order_relaxed);

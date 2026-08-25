@@ -232,6 +232,8 @@ namespace SIE
 		size_t GetId() const;
 		static size_t MakeId(ShaderClass shaderClass, RE::BSShader::Type shaderType, uint32_t descriptor);
 		std::string GetString() const;
+		/** @brief Returns the HLSL source path compiled by this task. */
+		std::wstring GetSourcePath() const;
 
 		/// LPT scheduling score: higher = more expensive = should be dispatched first.
 		/// Based on shader type, class, descriptor complexity, and known heavy defines.
@@ -285,6 +287,7 @@ namespace SIE
 	{
 	public:
 		LARGE_INTEGER lastReset;
+		std::atomic<int64_t> lastResetQpc{ 0 };
 		LARGE_INTEGER lastCalculation;
 		std::atomic<int64_t> completionTime;  // When compilation completed (QuadPart equivalent)
 		LARGE_INTEGER frequency;
@@ -294,6 +297,7 @@ namespace SIE
 		{
 			QueryPerformanceFrequency(&frequency);
 			QueryPerformanceCounter(&lastReset);
+			lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 			QueryPerformanceCounter(&lastCalculation);
 			completionTime.store(0, std::memory_order_relaxed);
 		}
@@ -332,6 +336,8 @@ namespace SIE
 			int priority = 0;               // estimated compile weight (see ComputePriority)
 			int defineCount = 0;            // popcount of descriptor — active define permutations
 			uintmax_t sourceSizeBytes = 0;  // HLSL source file size at compile time
+			uint32_t threadId = 0;          // worker thread id at compile time
+			int64_t startQpc = 0;           // QueryPerformanceCounter ticks at compile start
 		};
 
 		/// On-demand parallelism metrics derived from task timings.
@@ -355,6 +361,12 @@ namespace SIE
 
 		/// Returns a copy of the N records with the highest elapsedMs, sorted descending.
 		std::vector<SlowTaskRecord> GetTopSlowTasks(size_t n = 3) const;
+		/** @brief Returns every task record collected for the current build. */
+		std::vector<SlowTaskRecord> GetAllTaskRecords() const;
+		/** @brief Returns the QPC tick used as the current build generation marker. */
+		int64_t GetLastResetQpc() const { return lastResetQpc.load(std::memory_order_relaxed); }
+		/** @brief Returns QPC ticks per second for task timestamp conversion. */
+		int64_t GetQpcFrequency() const { return frequency.QuadPart; }
 
 		/// Computes parallelism metrics on demand from collected task timings.
 		std::optional<ParallelismStats> GetParallelismStats() const;
@@ -585,7 +597,19 @@ namespace SIE
 
 		/// Returns a copy of the top-N slowest task records from the last build, sorted descending.
 		std::vector<CompilationSet::SlowTaskRecord> GetTopSlowTasks(size_t n = 3);
+		/** @brief Returns every task record collected for the current build. */
+		std::vector<CompilationSet::SlowTaskRecord> GetAllTaskRecords();
+		/** @brief Returns the current build's QPC generation marker. */
+		int64_t GetLastResetQpc();
+		/** @brief Returns QPC ticks per second for task timestamp conversion. */
+		int64_t GetQpcFrequency();
 		std::optional<CompilationSet::ParallelismStats> GetParallelismStats();
+
+		/**
+		 * @brief Writes current-build task records in Chrome Trace Event Format.
+		 * @return True on success; false for an empty record set or write failure.
+		 */
+		bool ExportCompileTrace(const std::filesystem::path& a_path);
 
 		/**
 		 * @brief Clears all shaders of a specific type from the shader map.

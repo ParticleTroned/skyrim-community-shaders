@@ -8,13 +8,16 @@
 #	include "BuildProvenance.h"
 #	include "Globals.h"
 #	include "ShaderCache.h"
+#	include "Utils/FileSystem.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 
+#	include <algorithm>
 #	include <atomic>
 #	include <chrono>
 #	include <cstdint>
+#	include <filesystem>
 #	include <functional>
 #	include <future>
 #	include <memory>
@@ -198,7 +201,8 @@ namespace
 	{
 		const auto action = a_args.value("action", std::string{});
 		const bool knownAction = action == "registry" || action == "snapshot" || action == "features" ||
-			action == "preflight" || action == "execute" || action == "backgroundCompile";
+			action == "preflight" || action == "execute" || action == "backgroundCompile" ||
+			action == "exportTrace";
 		if (!knownAction)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 		if (action == "registry") {
@@ -212,8 +216,9 @@ namespace
 				{ "mainThreadAffine", true },
 				{ "registryMainThreadAffine", false },
 				{ "backgroundCompileMainThreadAffine", false },
+				{ "exportTraceMainThreadAffine", false },
 				{ "preflightTokenLifetimeMs", 30000 },
-				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute", "backgroundCompile" }) },
+				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute", "backgroundCompile", "exportTrace" }) },
 				{ "statusCodes", json::array({
 					"success", "invalid_argument", "structure_too_small", "unavailable", "wrong_thread",
 					"revision_conflict", "preflight_required", "preflight_expired", "preflight_mismatch",
@@ -237,6 +242,53 @@ namespace
 				{ "action", "backgroundCompile" },
 				{ "backgroundCompilation", true },
 				{ "changed", !wasEnabled },
+			};
+			return response;
+		}
+		if (action == "exportTrace") {
+			auto* cache = globals::shaderCache;
+			if (!cache)
+				return Foundation().MakeError(a_args, "service_unavailable", "shader cache is not initialized", "dispatch", true);
+			if (cache->IsCompiling())
+				return Foundation().MakeError(a_args, "busy", "wait for the current shader build to finish", "dispatch", true);
+
+			const auto logPath = Util::PathHelpers::GetLogPath();
+			if (logPath.empty())
+				return Foundation().MakeError(a_args, "service_unavailable", "Community Shaders log directory is unavailable", "dispatch", true);
+			const auto logDirectory = logPath.parent_path();
+			std::filesystem::path destination = logDirectory / "compile-trace.json";
+			if (a_args.contains("path")) {
+				if (!a_args["path"].is_string())
+					return Foundation().MakeError(a_args, "invalid_path", "path must be a string", "validation", false, "path");
+				const std::filesystem::path requested = a_args["path"].get<std::string>();
+				const bool hasParentTraversal = std::any_of(
+					requested.begin(), requested.end(), [](const auto& a_part) { return a_part == ".."; });
+				if (requested.empty() || requested.filename().empty() || requested.is_absolute() ||
+					requested.has_root_name() || requested.has_root_directory() || hasParentTraversal) {
+					return Foundation().MakeError(
+						a_args,
+						"invalid_path",
+						"path must name a file below the Community Shaders log directory",
+						"validation",
+						false,
+						"path");
+				}
+				destination = (logDirectory / requested).lexically_normal();
+			}
+
+			if (!cache->ExportCompileTrace(destination)) {
+				return Foundation().MakeError(
+					a_args,
+					"export_failed",
+					"trace export failed or the current build has no task records; check CommunityShaders.log",
+					"dispatch",
+					false);
+			}
+			auto response = Foundation().MakeEnvelope(a_args, true);
+			response["result"] = {
+				{ "action", "exportTrace" },
+				{ "path", destination.string() },
+				{ "success", true },
 			};
 			return response;
 		}
@@ -366,7 +418,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile is an immediate idempotent listener-thread action that releases the boot compile wait while compilation continues on the background thread budget.",
+			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait while compilation continues on the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -375,7 +427,8 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"clientId":{"type":"string","minLength":1,"maxLength":128},
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
-					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile"]},
+					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"]},
+					"path":{"type":"string","description":"exportTrace only: destination relative to the Community Shaders log directory; defaults to compile-trace.json."},
 					"mutation":{
 						"type":"object",
 						"required":["action","expectedStateRevision"],

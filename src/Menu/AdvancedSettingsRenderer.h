@@ -28,4 +28,5 @@ private:
 	static void RenderLoggingControls();
 	static void RenderRuntimeDebugControls();
 	static void RenderShaderBlockingPanel();
+	static void RenderCompileTraceExport();
 };

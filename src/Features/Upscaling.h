@@ -1577,6 +1577,21 @@ public:
 		float centerHorizontalScalePadding;
 	};
 
+	struct FoveatedSpatialCompositeCB
+	{
+		float2 outputDim;
+		float2 invOutputDim;
+		float2 invPeripherySourceDim;
+		float2 peripherySourceScale;
+		float2 peripherySourceOffset;
+		float2 jitter;
+		float2 centerRectOffset;
+		float2 centerRectDim;
+		float2 invCenterSourceDim;
+		float2 centerOffset;
+		float4 tuning;  // x=centerScale, y=centerFeather, z=centerHorizontalScale
+	};
+
 	struct PeripheryTAACB
 	{
 		float2 outputDim;
@@ -1611,6 +1626,7 @@ public:
 	static_assert(sizeof(VRMenuLayerCompositeCB) == 16, "VRMenuLayerCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(FoveatedSpatialCompositeCB) == 96, "FoveatedSpatialCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(CameraMotionVectorsCB) == 256, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
 
@@ -1685,6 +1701,7 @@ public:
 	ConstantBuffer* vrMenuLayerCompositeCB = nullptr;
 	ConstantBuffer* foveatedPeripheryCB = nullptr;
 	ConstantBuffer* foveatedCenterBlendCB = nullptr;
+	ConstantBuffer* foveatedSpatialCompositeCB = nullptr;
 	ConstantBuffer* peripheryTAACB = nullptr;
 
 	// Runtime state
@@ -1886,6 +1903,9 @@ public:
 
 	Util::LazyShader<ID3D11ComputeShader> foveatedCenterBlendCS;
 	ID3D11ComputeShader* GetFoveatedCenterBlendCS();
+
+	Util::LazyShader<ID3D11ComputeShader> foveatedSpatialCompositeCS;
+	ID3D11ComputeShader* GetFoveatedSpatialCompositeCS();
 
 	Util::LazyShader<ID3D11ComputeShader> peripheryTAACS;
 	ID3D11ComputeShader* GetPeripheryTAACS();
@@ -2923,7 +2943,7 @@ public:
 	};
 	void ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams& params, const eastl::unique_ptr<Texture2D>& sourceTexture, uint32_t validWidth, uint32_t validHeight) const;
 	bool DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params);
-	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr);
+	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, bool compositeCenter = true);
 	void DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f);
 	void DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
 		ID3D11ShaderResourceView* currentReactiveSRV, ID3D11ShaderResourceView* currentTransparencySRV, ID3D11ShaderResourceView* historyColorSRV,
@@ -2935,6 +2955,7 @@ public:
 		bool resetHistory, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY,
 		float inputTextureScaleX = 1.0f, float inputTextureScaleY = 1.0f, float inputTextureOffsetX = 0.0f, float inputTextureOffsetY = 0.0f);
 	void DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, uint32_t dispatchOffsetX, uint32_t dispatchOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather);
+	bool DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* peripherySRV, ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t peripherySourceWidth, uint32_t peripherySourceHeight, uint32_t outputWidth, uint32_t outputHeight, const FoveatedDispatchRect& centerRect, float peripherySourceScaleX, float peripherySourceScaleY, float peripherySourceOffsetX, float peripherySourceOffsetY, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather);
 
 	/**
 	 * @brief Resolves the DLSS output into the main render target after upscaling.

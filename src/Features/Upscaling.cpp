@@ -36415,6 +36415,13 @@ ID3D11ComputeShader* Upscaling::GetFoveatedCenterBlendCS()
 		"main", "Upscaling::FoveatedCenterBlendCS");
 }
 
+ID3D11ComputeShader* Upscaling::GetFoveatedSpatialCompositeCS()
+{
+	return foveatedSpatialCompositeCS.Get(
+		L"Data/Shaders/Upscaling/FoveatedSpatialCompositeCS.hlsl", {}, "cs_5_0",
+		"main", "Upscaling::FoveatedSpatialCompositeCS");
+}
+
 ID3D11ComputeShader* Upscaling::GetPeripheryTAACS()
 {
 	return peripheryTAACS.Get(
@@ -36895,12 +36902,14 @@ bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visuali
 	static bool loggedFoveatedShaderFailure = false;
 
 	try {
-		auto* peripheryCS = GetFoveatedPeripheryCS();
+		auto* peripheryCS = (usePeripheryTAA || visualizeMask) ? GetFoveatedPeripheryCS() : nullptr;
 		auto* peripheryTAA = usePeripheryTAA ? GetPeripheryTAACS() : nullptr;
-		auto* blendCS = visualizeMask ? nullptr : GetFoveatedCenterBlendCS();
-		return peripheryCS && foveatedPeripheryCB &&
+		auto* blendCS = usePeripheryTAA ? GetFoveatedCenterBlendCS() : nullptr;
+		auto* spatialCompositeCS = (!usePeripheryTAA && !visualizeMask) ? GetFoveatedSpatialCompositeCS() : nullptr;
+		return ((!usePeripheryTAA && !visualizeMask) || (peripheryCS && foveatedPeripheryCB)) &&
 		       (!usePeripheryTAA || (peripheryTAA && peripheryTAACB)) &&
-		       (visualizeMask || (blendCS && foveatedCenterBlendCB));
+		       (!usePeripheryTAA || (blendCS && foveatedCenterBlendCB)) &&
+		       ((usePeripheryTAA || visualizeMask) || (spatialCompositeCS && foveatedSpatialCompositeCB));
 	} catch (const std::exception& e) {
 		LogWarnOnceFmt(
 			loggedFoveatedShaderFailure,
@@ -37568,6 +37577,68 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
+bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* peripherySRV, ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t peripherySourceWidth, uint32_t peripherySourceHeight, uint32_t outputWidth, uint32_t outputHeight, const FoveatedDispatchRect& centerRect, float peripherySourceScaleX, float peripherySourceScaleY, float peripherySourceOffsetX, float peripherySourceOffsetY, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather)
+{
+	if (!peripherySRV || !centerSRV || !outputUAV || !peripherySourceWidth || !peripherySourceHeight ||
+		!outputWidth || !outputHeight || !centerRect.outputWidth || !centerRect.outputHeight || !foveatedSpatialCompositeCB) {
+		return false;
+	}
+
+	auto* compositeCS = GetFoveatedSpatialCompositeCS();
+	auto context = globals::d3d::context;
+	auto deferred = globals::deferred;
+	if (!compositeCS || !context || !deferred || !deferred->linearSampler)
+		return false;
+
+	FoveatedSpatialCompositeCB cbData{};
+	cbData.outputDim = { static_cast<float>(outputWidth), static_cast<float>(outputHeight) };
+	cbData.invOutputDim = { 1.0f / static_cast<float>(outputWidth), 1.0f / static_cast<float>(outputHeight) };
+	cbData.invPeripherySourceDim = { 1.0f / static_cast<float>(peripherySourceWidth), 1.0f / static_cast<float>(peripherySourceHeight) };
+	cbData.peripherySourceScale = { peripherySourceScaleX, peripherySourceScaleY };
+	cbData.peripherySourceOffset = { peripherySourceOffsetX, peripherySourceOffsetY };
+	cbData.jitter = jitter;
+	cbData.centerRectOffset = { static_cast<float>(centerRect.outputOffsetX), static_cast<float>(centerRect.outputOffsetY) };
+	cbData.centerRectDim = { static_cast<float>(centerRect.outputWidth), static_cast<float>(centerRect.outputHeight) };
+	cbData.invCenterSourceDim = { 1.0f / static_cast<float>(centerRect.outputWidth), 1.0f / static_cast<float>(centerRect.outputHeight) };
+	cbData.centerOffset = centerOffset;
+	cbData.tuning = {
+		ClampFoveatedCenterScale(centerScale),
+		ClampPeripheryTAACenterBlendFeather(
+			std::isfinite(centerFeather) ? centerFeather : FoveatedCommon::kCenterFeather),
+		ClampFoveatedCenterHorizontalScale(centerHorizontalScale),
+		0.0f
+	};
+	foveatedSpatialCompositeCB->Update(cbData);
+
+	ID3D11Buffer* cb = foveatedSpatialCompositeCB->CB();
+	ID3D11SamplerState* samplers[1] = { deferred->linearSampler };
+	ID3D11ShaderResourceView* srvs[2] = { peripherySRV, centerSRV };
+	ID3D11UnorderedAccessView* uavs[1] = { outputUAV };
+	context->CSSetShader(compositeCS, nullptr, 0);
+	context->CSSetConstantBuffers(0, 1, &cb);
+	context->CSSetSamplers(0, 1, samplers);
+	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+
+	auto state = globals::state;
+	if (state && state->frameAnnotations)
+		state->BeginPerfEvent("Foveated Spatial Composite");
+	context->Dispatch((outputWidth + 7u) >> 3, (outputHeight + 7u) >> 3, 1);
+	if (state && state->frameAnnotations)
+		state->EndPerfEvent();
+
+	ID3D11ShaderResourceView* nullSRVs[2] = {};
+	ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+	ID3D11SamplerState* nullSampler[1] = { nullptr };
+	ID3D11Buffer* nullCB[1] = { nullptr };
+	context->CSSetShaderResources(0, ARRAYSIZE(nullSRVs), nullSRVs);
+	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+	context->CSSetSamplers(0, 1, nullSampler);
+	context->CSSetConstantBuffers(0, 1, nullCB);
+	context->CSSetShader(nullptr, nullptr, 0);
+	return true;
+}
+
 bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Upscaling::VendorEyeDispatchParams& params)
 {
 	if (a_upscaleMethod == UpscaleMethod::kDLSS)
@@ -37684,7 +37755,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 	return false;
 }
 
-bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
+bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox, bool compositeCenter)
 {
 	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
 		return false;
@@ -37871,6 +37942,8 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 
 	if (!foveatedCenterColorOut[eyeIndex] || !foveatedCenterColorOut[eyeIndex]->resource || !foveatedCenterColorOut[eyeIndex]->srv)
 		return false;
+	if (!compositeCenter)
+		return true;
 	if (!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->uav || !vrIntermediateColorOut[eyeIndex]->resource)
 		return false;
 
@@ -37990,6 +38063,55 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 	}
 
 	ID3D11UnorderedAccessView* outputColorUAV = params.outputUAV ? params.outputUAV : vrIntermediateColorOut[eyeIndex]->uav.get();
+	if (!params.usePeripheryTAA && !params.visualizeMask) {
+		if (!DispatchSingleFoveatedVendorEye(
+				a_upscaleMethod,
+				eyeIndex,
+				params.centerColorInput,
+				params.centerDepthInput,
+				params.centerMotionVectorsInput,
+				params.centerReactiveMaskInput,
+				params.centerTransparencyMaskInput,
+				params.outputWidthPerEye,
+				params.outputHeight,
+				params.inputWidthPerEye,
+				params.inputHeight,
+				params.centerScale,
+				params.centerHorizontalScale,
+				centerOffset,
+				params.centerBlendFeather,
+				params.centerColorInputBaseOffsetX,
+				params.centerDepthInputBaseOffsetX,
+				params.centerAuxInputBaseOffsetX,
+				outputColorUAV,
+				params.dlssViewportRole,
+				params.submitSourceSubresource,
+				params.submitSourceBoxValid ? &params.submitSourceBox : nullptr,
+				false)) {
+			return false;
+		}
+
+		const auto& centerRect = foveatedRectCache.rects[eyeIndex];
+		auto& centerOutput = foveatedCenterColorOut[eyeIndex];
+		return centerOutput && centerOutput->srv &&
+		       DispatchFoveatedSpatialComposite(
+				   params.peripherySourceSRV,
+				   centerOutput->srv.get(),
+				   outputColorUAV,
+				   params.peripherySourceWidth,
+				   params.peripherySourceHeight,
+				   params.outputWidthPerEye,
+				   params.outputHeight,
+				   centerRect,
+				   params.peripherySourceScaleX,
+				   params.peripherySourceScaleY,
+				   params.peripherySourceOffsetX,
+				   params.peripherySourceOffsetY,
+				   params.centerScale,
+				   params.centerHorizontalScale,
+				   centerOffset,
+				   params.centerBlendFeather);
+	}
 
 	bool peripheryBindingsBound = false;
 	auto bindPeripheryBindings = [&]() -> bool {
@@ -38176,21 +38298,6 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 	} else if (params.visualizeMask) {
 		if (!dispatchPeripheryBand(0, 0, params.outputWidthPerEye, params.outputHeight))
 			return failAfterUnbind();
-	} else if (hasCenterUnderlayHole) {
-		if (!dispatchRectMinusHole(
-				0,
-				0,
-				params.outputWidthPerEye,
-				params.outputHeight,
-				underlayHole.minX,
-				underlayHole.minY,
-				underlayHole.maxX,
-				underlayHole.maxY,
-				dispatchPeripheryBand)) {
-			return failAfterUnbind();
-		}
-	} else if (!dispatchPeripheryBand(0, 0, params.outputWidthPerEye, params.outputHeight)) {
-		return failAfterUnbind();
 	}
 
 	unbindPeripheryBindings();
@@ -41410,6 +41517,8 @@ void Upscaling::SetupResources()
 	foveatedPeripheryCB = new ConstantBuffer(ConstantBufferDesc<FoveatedPeripheryCB>());
 	delete foveatedCenterBlendCB;
 	foveatedCenterBlendCB = new ConstantBuffer(ConstantBufferDesc<FoveatedCenterBlendCB>());
+	delete foveatedSpatialCompositeCB;
+	foveatedSpatialCompositeCB = new ConstantBuffer(ConstantBufferDesc<FoveatedSpatialCompositeCB>());
 	delete peripheryTAACB;
 	peripheryTAACB = new ConstantBuffer(ConstantBufferDesc<PeripheryTAACB>());
 
@@ -41484,6 +41593,7 @@ void Upscaling::ClearShaderCache()
 	upscaleVS.Reset();
 	foveatedPeripheryCS.Reset();
 	foveatedCenterBlendCS.Reset();
+	foveatedSpatialCompositeCS.Reset();
 	peripheryTAACS.Reset();
 	submitStageStretchCS.Reset();
 	vrDesktopMirrorBlitPS.Reset();

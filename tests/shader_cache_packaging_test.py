@@ -206,6 +206,10 @@ class ShaderCachePackagingTests(unittest.TestCase):
 
         self.assertEqual(
             BUILDER.cache_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
+            (BUILDER.STANDARD_CACHE_VARIANT,),
+        )
+        self.assertEqual(
+            BUILDER.compile_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
             BUILDER.CACHE_VARIANTS,
         )
         self.assertEqual(
@@ -477,6 +481,252 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 "CSX 12.345-VR",
             )
 
+	def test_compatibility_tag_is_derived_for_future_versions(self) -> None:
+        cases = {
+            "CSX 3.18-VR": "CSX3.18-VR",
+            "CSX 4.0-SE": "CSX4.0-SE",
+            "CSX 12.345-VR": "CSX12.345-VR",
+        }
+        for plugin_version, expected in cases.items():
+            with self.subTest(plugin_version=plugin_version):
+                self.assertEqual(
+                    BUILDER.csx_compatibility_tag(plugin_version),
+                    expected,
+                )
+
+    def test_compatibility_tag_rejects_noncanonical_labels(self) -> None:
+        invalid = (
+            "3.18-VR",
+            "CSX3.18-VR",
+            "CSX 3.18.0-VR",
+            "CSX 3.18-AE",
+            "CSX 3.18-vr",
+            "CSX 3.18-VR ",
+        )
+        for plugin_version in invalid:
+            with self.subTest(plugin_version=plugin_version):
+                with self.assertRaises(SystemExit):
+                    BUILDER.csx_compatibility_tag(plugin_version)
+
+    def test_single_variant_fomod_has_guidance_and_exact_recommendation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_root = Path(temporary)
+            fomod_dir = BUILDER.write_fomod_installer(
+                runtime_root,
+                "VR",
+                "future-test",
+                "CSX 12.345-VR",
+                horizon_variants=False,
+            )
+            root = ET.parse(fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME).getroot()
+            self.assertIsNone(root.find("./moduleDependencies"))
+            cache_plugins = [
+                plugin
+                for plugin in root.findall(
+                    "./installSteps/installStep/optionalFileGroups/group/"
+                    "plugins/plugin"
+                )
+                if plugin.find("./files/folder") is not None
+            ]
+            self.assertEqual(len(cache_plugins), 1)
+            dependencies = cache_plugins[0].findall(
+                "./typeDescriptor/dependencyType/patterns/pattern/"
+                "dependencies/fileDependency"
+            )
+            self.assertEqual(
+                {
+                    (
+                        dependency.get("file", "").replace("\\", "/"),
+                        dependency.get("state"),
+                    )
+                    for dependency in dependencies
+                },
+                {
+                    ("SKSE/Plugins/CommunityShaders.dll", "Active"),
+                    (
+                        "SKSE/Plugins/CommunityShaders/CSX12.345-VR.marker",
+                        "Active",
+                    ),
+                },
+            )
+            self.assertEqual(
+                cache_plugins[0].find("./typeDescriptor/dependencyType/defaultType").get(
+                    "name"
+                ),
+                "Optional",
+            )
+            notice_flags = {
+                flag.get("name")
+                for flag in root.findall(
+                    "./installSteps/installStep/optionalFileGroups/group/"
+                    "plugins/plugin/conditionFlags/flag"
+                )
+            }
+            self.assertEqual(notice_flags, set(BUILDER.FOMOD_BASE_NOTICE_FLAGS))
+            self.assertTrue(
+                (runtime_root / BUILDER.FOMOD_HELP_IMAGE_ARCHIVE_PATH).is_file()
+            )
+            BUILDER.validate_fomod_installer(fomod_dir, "CSX12.345-VR")
+
+    def test_se_fomod_installs_one_managed_cache_with_core_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_root = Path(temporary)
+            fomod_dir = BUILDER.write_fomod_installer(
+                runtime_root,
+                "SE",
+                "future-test",
+                "CSX 12.345-VR",
+            )
+            root = ET.parse(fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME).getroot()
+            cache_plugins = [
+                plugin
+                for plugin in root.findall(
+                    "./installSteps/installStep/optionalFileGroups/group/"
+                    "plugins/plugin"
+                )
+                if plugin.find("./files/folder") is not None
+            ]
+            sources = [
+                plugin.find("./files/folder").get("source")
+                for plugin in cache_plugins
+            ]
+            self.assertEqual(
+                sources,
+                [BUILDER.CACHE_DIRECTORY],
+            )
+            for plugin in cache_plugins:
+                for pattern in plugin.findall(
+                    "./typeDescriptor/dependencyType/patterns/pattern"
+                ):
+                    dependencies = {
+                        (
+                            dependency.get("file", "").replace("\\", "/"),
+                            dependency.get("state"),
+                        )
+                        for dependency in pattern.findall(
+                            "./dependencies/fileDependency"
+                        )
+                    }
+                    self.assertIn(
+                        ("SKSE/Plugins/CommunityShaders.dll", "Active"),
+                        dependencies,
+                    )
+                    self.assertIn(
+                        (
+                            "SKSE/Plugins/CommunityShaders/"
+                            "CSX12.345-VR.marker",
+                            "Active",
+                        ),
+                        dependencies,
+                    )
+                    self.assertFalse(
+                        any(path.endswith("HorizonFix.dll") for path, _ in dependencies)
+                    )
+            BUILDER.validate_fomod_installer(
+                fomod_dir,
+                "CSX12.345-VR",
+                horizon_variants=False,
+            )
+
+    def test_fomod_rejects_retired_installer_selected_horizon_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime_root = Path(temporary)
+            with self.assertRaisesRegex(
+                SystemExit,
+                "installer-selected Horizon cache variants are retired",
+            ):
+                BUILDER.write_fomod_installer(
+                    runtime_root,
+                    "VR",
+                    "future-test",
+                    "CSX 12.345-VR",
+                    horizon_variants=True,
+                )
+            self.assertFalse((runtime_root / BUILDER.FOMOD_DIRECTORY).exists())
+
+    def test_fomod_validation_rejects_weakened_contracts(self) -> None:
+        mutations = (
+            ("operator", "Or"),
+            ("marker_state", "Inactive"),
+            ("marker_name", "CSX3.18-VR.marker"),
+        )
+        for mutation, value in mutations:
+            with self.subTest(mutation=mutation):
+                with tempfile.TemporaryDirectory() as temporary:
+                    runtime_root = Path(temporary)
+                    fomod_dir = BUILDER.write_fomod_installer(
+                        runtime_root,
+                        "VR",
+                        "future-test",
+                        "CSX 12.345-VR",
+                    )
+                    config_path = fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME
+                    tree = ET.parse(config_path)
+                    cache_plugin = next(
+                        plugin
+                        for plugin in tree.getroot().findall(
+                            "./installSteps/installStep/optionalFileGroups/"
+                            "group/plugins/plugin"
+                        )
+                        if plugin.find("./files/folder") is not None
+                    )
+                    dependencies = cache_plugin.find(
+                        "./typeDescriptor/dependencyType/patterns/pattern/"
+                        "dependencies"
+                    )
+                    self.assertIsNotNone(dependencies)
+                    marker = dependencies.findall("./fileDependency")[1]
+                    if mutation == "operator":
+                        dependencies.set("operator", value)
+                    elif mutation == "marker_state":
+                        marker.set("state", value)
+                    else:
+                        marker.set(
+                            "file",
+                            f"SKSE/Plugins/CommunityShaders/{value}",
+                        )
+                    tree.write(config_path, encoding="utf-8", xml_declaration=True)
+                    with self.assertRaises(SystemExit):
+                        BUILDER.validate_fomod_installer(
+                            fomod_dir,
+                            "CSX12.345-VR",
+                        )
+
+    def test_fomod_validation_rejects_invalid_structure(self) -> None:
+        mutations = ("wrong_root", "wrong_order", "invalid_info")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with tempfile.TemporaryDirectory() as temporary:
+                    runtime_root = Path(temporary)
+                    fomod_dir = BUILDER.write_fomod_installer(
+                        runtime_root,
+                        "VR",
+                        "future-test",
+                        "CSX 12.345-VR",
+                    )
+                    config_path = fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME
+                    if mutation == "invalid_info":
+                        (fomod_dir / BUILDER.FOMOD_INFO_FILE_NAME).write_text(
+                            "<not-fomod />",
+                            encoding="utf-8",
+                        )
+                    else:
+                        tree = ET.parse(config_path)
+                        root = tree.getroot()
+                        if mutation == "wrong_root":
+                            root.tag = "not-config"
+                        else:
+                            root[:] = [root[1], root[0]]
+                        tree.write(
+                            config_path,
+                            encoding="utf-8",
+                            xml_declaration=True,
+                        )
+                    with self.assertRaises(SystemExit):
+                        BUILDER.validate_fomod_installer(
+                            fomod_dir,
+                            "CSX12.345-VR",
+                        )
 
 if __name__ == "__main__":
     unittest.main()

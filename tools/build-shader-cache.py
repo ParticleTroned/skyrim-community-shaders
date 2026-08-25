@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """Build a distributable shader disk cache for this repo.
 
-Produces the layout the runtime consumes at Data/ShaderCache/:
-  ShaderCache/<ShaderName>/<descriptor:HEX>.{pso,vso,cso}
+Produces the managed layout the runtime consumes at Data/ShaderCache/:
+  ShaderCache/Optimized.{A,B}.csxpack
+  ShaderCache/Developer.{A,B}.csxpack
   ShaderCache/Info.ini
-  ShaderCache/Manifest.json
+  ShaderCache/PackManifest.json
 
 Packaged archives contain the raw cache variants consumed by the release AIO
 FOMOD assembler. They intentionally contain no installer or runtime detection.
 
 The default cache targets this repo's shipped distribution profile. Named
 profiles can preserve a maintainer-approved tester feature set without changing
-the default release behavior. Shipped SE and VR builds add paired standard and
-Horizon Fix variants; named profiles keep their existing single-cache layout.
+the default release behavior. Shipped SE and VR builds compile compatibility
+variants into one pack; runtime selects them without an installer choice.
 
 Usage:
   python tools/build-shader-cache.py --runtime both --package
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import hashlib
 import json
 import os
 import re
@@ -30,6 +32,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import struct
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +57,32 @@ CACHE_EXTENSIONS = frozenset({".pso", ".vso", ".cso"})
 INFO_FILE_NAME = "Info.ini"
 MANIFEST_FILE_NAME = "Manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
+PACK_MANIFEST_FILE_NAME = "PackManifest.json"
+PACK_FILE_NAMES = (
+    "Optimized.A.csxpack",
+    "Optimized.B.csxpack",
+    "Developer.A.csxpack",
+    "Developer.B.csxpack",
+)
+PACK_FORMAT_VERSION = 1
+COMPATIBILITY_VARIANTS_FILE = Path("config/shader-compatibility-variants.json")
+FOMOD_DIRECTORY = "fomod"
+FOMOD_CONFIG_FILE_NAME = "ModuleConfig.xml"
+FOMOD_INFO_FILE_NAME = "info.xml"
+FOMOD_HELP_URL = (
+    "https://github.com/ParticleTroned/skyrim-community-shaders/blob/"
+    "main-VR/docs/development/prebuilt-shader-cache.md#mod-organizer-2"
+)
+FOMOD_HELP_IMAGE_SOURCE = Path("docs/images/mo2-fomod-use-any-file.png")
+FOMOD_HELP_IMAGE_ARCHIVE_PATH = "fomod/images/mo2-fomod-use-any-file.png"
+FOMOD_HELP_IMAGE_XML_PATH = FOMOD_HELP_IMAGE_ARCHIVE_PATH.replace("/", "\\")
+FOMOD_BASE_NOTICE_FLAGS = (
+    "CSXMO2OpenSettingsNotice",
+    "CSXMO2FileCheckNotice",
+)
+FOMOD_HORIZON_NOTICE_FLAG = "CSXHorizonNotice"
+FOMOD_NOTICE_MAX_LINES = 7
+FOMOD_NOTICE_MAX_LINE_LENGTH = 72
 PUBLICATION_REPLACE_ATTEMPTS = 20
 PUBLICATION_REPLACE_RETRY_SECONDS = 0.5
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
@@ -168,6 +198,308 @@ CACHE_VARIANTS = (
     STANDARD_CACHE_VARIANT,
     HORIZON_FIX_CACHE_VARIANT,
 )
+
+
+def compatibility_variant_manifest(source_root: Path) -> dict[str, dict[str, Any]]:
+    path = source_root / COMPATIBILITY_VARIANTS_FILE
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"invalid shader compatibility variant manifest {path}: {exc}") from exc
+    if (
+        not isinstance(document, dict)
+        or document.get("schema") != "csx.shader.compatibility.variants"
+        or document.get("schemaVersion") != 1
+        or not isinstance(document.get("variants"), list)
+    ):
+        raise SystemExit(f"unsupported shader compatibility variant manifest: {path}")
+    variants: dict[str, dict[str, Any]] = {}
+    for variant in document["variants"]:
+        if not isinstance(variant, dict) or not isinstance(variant.get("id"), str):
+            raise SystemExit(f"malformed shader compatibility variant in {path}")
+        if variant["id"] in variants:
+            raise SystemExit(f"duplicate shader compatibility variant {variant['id']!r}")
+        if not isinstance(variant.get("registrations"), list) or not isinstance(
+            variant.get("shaderDefinesBySource"), dict
+        ):
+            raise SystemExit(f"malformed shader compatibility variant {variant['id']!r}")
+        variants[variant["id"]] = variant
+    if "default" not in variants or "legacy-horizon-fix" not in variants:
+        raise SystemExit("compatibility manifest must define default and legacy-horizon-fix")
+    return variants
+
+
+def canonical_compatibility_registration(registration: dict[str, Any]) -> str:
+    required = (
+        "identity",
+        "contractMajor",
+        "currentMinor",
+        "minimumCompatibleMinor",
+        "maximumCompatibleMinor",
+        "resourceFingerprint",
+        "scopes",
+    )
+    if any(field not in registration for field in required):
+        raise SystemExit("compatibility registration is missing required fields")
+    identity = registration["identity"]
+    if (
+        not isinstance(identity, str)
+        or not identity
+        or len(identity) > 128
+        or identity.startswith(".")
+        or identity.endswith(".")
+        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789._-" for character in identity)
+    ):
+        raise SystemExit(f"invalid compatibility identity {identity!r}")
+    major = registration["contractMajor"]
+    current = registration["currentMinor"]
+    minimum = registration["minimumCompatibleMinor"]
+    maximum = registration["maximumCompatibleMinor"]
+    if not all(isinstance(value, int) for value in (major, current, minimum, maximum)) or major <= 0 or not minimum <= current <= maximum:
+        raise SystemExit(f"invalid shader-facing version range for {identity}")
+    scope_names = {
+        "shader-family": (1, "family"),
+        "shader-source": (2, "source"),
+        "feature": (3, "feature"),
+        "global": (4, "global"),
+    }
+    scopes: list[tuple[int, str, str]] = []
+    for scope in registration["scopes"]:
+        if not isinstance(scope, dict) or scope.get("kind") not in scope_names:
+            raise SystemExit(f"invalid compatibility scope for {identity}")
+        order, canonical_name = scope_names[scope["kind"]]
+        value = "" if scope["kind"] == "global" else scope.get("value")
+        if not isinstance(value, str) or (scope["kind"] != "global" and not value):
+            raise SystemExit(f"invalid compatibility scope value for {identity}")
+        scopes.append((order, canonical_name, value.lower()))
+    if not scopes:
+        raise SystemExit(f"compatibility registration {identity} has no scopes")
+    scopes = sorted(set(scopes))
+    lines = [
+        f"identity={identity}",
+        f"contract={major}.{current}",
+        f"compatible={minimum}-{maximum}",
+        f"resource={registration['resourceFingerprint']}",
+        *(f"scope={name}:{value}" for _, name, value in scopes),
+    ]
+    return "\n".join(lines)
+
+
+def canonical_compatibility_requirement_set(registrations: list[dict[str, Any]]) -> str:
+    canonical = sorted(
+        (registration["identity"], canonical_compatibility_registration(registration))
+        for registration in registrations
+    )
+    return "".join(f"{len(value)}:{value}\n" for _, value in canonical)
+
+
+def sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def validate_shader_pack(path: Path, expected_lane: int) -> dict[str, int]:
+    """Validate the exact committed pack format consumed by the C++ runtime."""
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"failed to read shader pack {path}: {exc}") from exc
+    if len(data) < 80:
+        raise SystemExit(f"shader pack is shorter than its file header: {path}")
+    magic, version, lane, generation, reserved1, reserved2, reserved3, header_hash = struct.unpack_from(
+        "<8sIIQ3Q32s", data, 0
+    )
+    if (
+        magic != b"CSXSPK1\0"
+        or version != PACK_FORMAT_VERSION
+        or lane != expected_lane
+        or any((reserved1, reserved2, reserved3))
+        or header_hash != hashlib.sha256(data[:48]).digest()
+    ):
+        raise SystemExit(f"shader pack has an invalid file header: {path}")
+    offset = 80
+    records = 0
+    while offset < len(data):
+        if len(data) - offset < 128:
+            raise SystemExit(f"shader pack contains an incomplete record tail: {path}")
+        (
+            record_magic,
+            record_version,
+            record_reserved,
+            sequence,
+            logical_size,
+            exact_size,
+            metadata_size,
+            record_reserved2,
+            bytecode_size,
+            payload_hash,
+        ) = struct.unpack_from("<8sIIQIIIIQ32s", data, offset)
+        payload_size = logical_size + exact_size + metadata_size + bytecode_size
+        total_size = 80 + payload_size + 48
+        if (
+            record_magic != b"CSXREC1\0"
+            or record_version != PACK_FORMAT_VERSION
+            or record_reserved
+            or record_reserved2
+            or sequence == 0
+            or offset + total_size > len(data)
+        ):
+            raise SystemExit(f"shader pack has an invalid record header: {path}")
+        payload = data[offset + 80 : offset + 80 + payload_size]
+        trailer_magic, trailer_size, trailer_hash = struct.unpack_from(
+            "<8sQ32s", data, offset + 80 + payload_size
+        )
+        actual_hash = hashlib.sha256(payload).digest()
+        if (
+            trailer_magic != b"CSXCMT1\0"
+            or trailer_size != total_size
+            or payload_hash != actual_hash
+            or trailer_hash != actual_hash
+        ):
+            raise SystemExit(f"shader pack has an invalid committed record: {path}")
+        records += 1
+        offset += total_size
+    return {"generation": generation, "recordCount": records}
+
+
+def write_shader_pack(path: Path, lane: int, generation: int, entries: list[dict[str, Any]]) -> None:
+    file_prefix = struct.pack(
+        "<8sIIQ3Q", b"CSXSPK1\0", PACK_FORMAT_VERSION, lane, generation, 0, 0, 0
+    )
+    header = file_prefix + hashlib.sha256(file_prefix).digest()
+    if len(header) != 80:
+        raise AssertionError("shader pack file header size drifted")
+    with path.open("wb") as stream:
+        stream.write(header)
+        for sequence, entry in enumerate(entries, start=1):
+            logical = entry["logicalKey"].encode("utf-8")
+            exact = entry["exactKey"].encode("utf-8")
+            metadata = entry["metadata"].encode("utf-8")
+            bytecode = entry["bytecode"]
+            payload = logical + exact + metadata + bytecode
+            payload_hash = hashlib.sha256(payload).digest()
+            record_header = struct.pack(
+                "<8sIIQIIIIQ32s",
+                b"CSXREC1\0",
+                PACK_FORMAT_VERSION,
+                0,
+                sequence,
+                len(logical),
+                len(exact),
+                len(metadata),
+                0,
+                len(bytecode),
+                payload_hash,
+            )
+            total_size = len(record_header) + len(payload) + 48
+            trailer = struct.pack("<8sQ32s", b"CSXCMT1\0", total_size, payload_hash)
+            stream.write(record_header)
+            stream.write(payload)
+            stream.write(trailer)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def build_managed_shader_packs(
+    source_root: Path,
+    standard_cache: Path,
+    horizon_cache: Path | None,
+    runtime: str,
+    shader_cache_abi: str,
+) -> dict[str, int]:
+    variants = compatibility_variant_manifest(source_root)
+    default_requirement = canonical_compatibility_requirement_set(
+        variants["default"]["registrations"]
+    )
+    horizon_requirement = canonical_compatibility_requirement_set(
+        variants["legacy-horizon-fix"]["registrations"]
+    )
+    records: dict[str, dict[str, Any]] = {}
+    variant_counts: dict[str, int] = {}
+    inputs = [("standard", standard_cache, False)]
+    if horizon_cache is not None:
+        inputs.append(("horizon-fix", horizon_cache, True))
+    for variant_name, cache_dir, horizon_enabled in inputs:
+        manifest = read_cache_manifest_entries(cache_dir, f"{runtime}/{variant_name}")
+        count = 0
+        for blob_path in cache_blob_paths(cache_dir):
+            relative = blob_path.relative_to(cache_dir).as_posix()
+            content_contract = manifest.get(relative)
+            if not isinstance(content_contract, str) or not re.fullmatch(r"[0-9a-f]{32}", content_contract):
+                raise SystemExit(f"{runtime}/{variant_name}: invalid content contract for {relative}")
+            family = relative.split("/", 1)[0].lower()
+            requirement = horizon_requirement if horizon_enabled and family == "water" else default_requirement
+            compatibility_digest = sha256_hex(requirement)
+            logical_key = f"{relative}|compat={compatibility_digest}"
+            exact_key = f"{logical_key}|content={content_contract}"
+            bytecode = blob_path.read_bytes()
+            metadata = json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "runtime": runtime,
+                    "variant": variant_name,
+                    "contentContract": content_contract,
+                    "compatibilityRequirementSet": requirement,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            previous = records.get(exact_key)
+            if previous and previous["bytecode"] != bytecode:
+                raise SystemExit(f"{runtime}: identical pack identity has differing bytecode: {relative}")
+            records.setdefault(
+                exact_key,
+                {
+                    "logicalKey": logical_key,
+                    "exactKey": exact_key,
+                    "metadata": metadata,
+                    "bytecode": bytecode,
+                },
+            )
+            count += 1
+        variant_counts[variant_name] = count
+
+    ordered = [records[key] for key in sorted(records)]
+    write_shader_pack(standard_cache / "Optimized.A.csxpack", 1, 1, ordered)
+    write_shader_pack(standard_cache / "Optimized.B.csxpack", 1, 0, [])
+    write_shader_pack(standard_cache / "Developer.A.csxpack", 2, 1, [])
+    write_shader_pack(standard_cache / "Developer.B.csxpack", 2, 0, [])
+    pack_manifest = {
+        "schema": "csx.shader-cache.pack-manifest",
+        "schemaVersion": 1,
+        "formatVersion": PACK_FORMAT_VERSION,
+        "hashAlgorithm": "sha256",
+        "runtime": runtime,
+        "shaderCacheABI": shader_cache_abi,
+        "optimizedRecordCount": len(ordered),
+        "developerRecordCount": 0,
+        "compatibilityVariants": [
+            "default",
+            *(["legacy-horizon-fix"] if horizon_cache is not None else []),
+        ],
+    }
+    (standard_cache / PACK_MANIFEST_FILE_NAME).write_text(
+        json.dumps(pack_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    for blob_path in cache_blob_paths(standard_cache):
+        blob_path.unlink()
+    for directory in sorted(
+        (path for path in standard_cache.rglob("*") if path.is_dir()), reverse=True
+    ):
+        if not any(directory.iterdir()):
+            directory.rmdir()
+    (standard_cache / MANIFEST_FILE_NAME).write_text(
+        json.dumps({"schemaVersion": MANIFEST_SCHEMA_VERSION, "entries": {}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if horizon_cache is not None:
+        shutil.rmtree(horizon_cache)
+    print(
+        f"{runtime}: packed {len(ordered)} unique optimized records from "
+        + ", ".join(f"{count} {name} blobs" for name, count in variant_counts.items())
+    )
+    return variant_counts
 
 
 BASE_EXCLUDED_DEFINES = frozenset(NON_SHIPPED_DEFINES | DEBUG_PROFILE_DEFINES)
@@ -902,9 +1234,12 @@ def write_shader_cache_manifest(
     runtime: str,
     imagespace_remap: dict[str, str],
     write_manifest: Callable[..., int],
+    shader_cache_abi: str,
 ) -> int:
     """Hash source/include content for every compiled blob."""
-    global_defines_state = "VR;" if runtime == "VR" else ""
+    global_defines_state = ("VR;" if runtime == "VR" else "") + (
+        f"ShaderCacheABI={shader_cache_abi};"
+    )
     count = write_manifest(
         cache_dir,
         shader_root,
@@ -1492,11 +1827,551 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
 
 
 def cache_variants_for(profile: CacheProfile) -> tuple[CacheVariant, ...]:
-    """Add Horizon Fix variants to each shipped runtime cache."""
+    """Return the one managed install cache."""
+    return (STANDARD_CACHE_VARIANT,)
+
+
+def compile_variants_for(profile: CacheProfile) -> tuple[CacheVariant, ...]:
+    """Return loose variants required as inputs to the managed pack."""
     if profile.name == SHIPPED_CACHE_PROFILE.name:
         return CACHE_VARIANTS
     return (STANDARD_CACHE_VARIANT,)
 
+
+def cache_variants_for_horizon_state(
+    horizon_variants: bool,
+) -> tuple[CacheVariant, ...]:
+    """Map installer/archive Horizon state to the expected cache layout."""
+    return CACHE_VARIANTS if horizon_variants else (STANDARD_CACHE_VARIANT,)
+
+
+def validate_fomod_installer(
+    fomod_dir: Path,
+    compatibility_tag: str,
+    *,
+    horizon_variants: bool | None = None,
+) -> None:
+    """Verify visible guidance, exact identity checks, and manual fallback."""
+    config_path = fomod_dir / FOMOD_CONFIG_FILE_NAME
+    info_path = fomod_dir / FOMOD_INFO_FILE_NAME
+    try:
+        root = ET.parse(config_path).getroot()
+        info_root = ET.parse(info_path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise SystemExit(f"invalid cache FOMOD metadata in {fomod_dir}: {exc}") from exc
+
+    if horizon_variants is None:
+        horizon_variants = any(
+            folder.get("source") == HORIZON_FIX_CACHE_DIRECTORY
+            for folder in root.findall(
+                "./installSteps/installStep/optionalFileGroups/group/"
+                "plugins/plugin/files/folder"
+            )
+        )
+
+    if root.tag != "config" or [child.tag for child in root] != [
+        "moduleName",
+        "installSteps",
+    ]:
+        raise SystemExit(
+            "cache FOMOD config must use the ordered moduleName and "
+            "installSteps structure"
+        )
+    module_name = root.find("./moduleName")
+    if module_name is None or not (module_name.text or "").strip():
+        raise SystemExit("cache FOMOD moduleName must not be empty")
+    if root.find("./moduleDependencies") is not None:
+        raise SystemExit(
+            "cache FOMOD must expose compatibility guidance before checking "
+            "non-plugin files"
+        )
+
+    notice_flags = (
+        *FOMOD_BASE_NOTICE_FLAGS,
+        *((FOMOD_HORIZON_NOTICE_FLAG,) if horizon_variants else ()),
+    )
+    expected_variants = cache_variants_for_horizon_state(horizon_variants)
+    install_steps = root.findall("./installSteps/installStep")
+    plugins = root.findall(
+        "./installSteps/installStep/optionalFileGroups/group/plugins/plugin"
+    )
+    notice_plugins: dict[str, ET.Element] = {}
+    for install_step in install_steps:
+        step_notices: list[tuple[str, ET.Element]] = []
+        for plugin in install_step.findall("./optionalFileGroups/group/plugins/plugin"):
+            for flag in plugin.findall("./conditionFlags/flag"):
+                flag_name = flag.get("name", "")
+                if flag_name in notice_flags:
+                    step_notices.append((flag_name, plugin))
+        if len(step_notices) > 1:
+            raise SystemExit(
+                "cache FOMOD must show each setup notice on a separate page"
+            )
+        for flag_name, plugin in step_notices:
+            if flag_name in notice_plugins:
+                raise SystemExit(f"cache FOMOD repeats setup notice {flag_name}")
+            notice_plugins[flag_name] = plugin
+
+    cache_plugins = [
+        plugin for plugin in plugins if plugin.find("./files/folder") is not None
+    ]
+    cache_groups = [
+        group
+        for group in root.findall("./installSteps/installStep/optionalFileGroups/group")
+        if group.find("./plugins/plugin/files/folder") is not None
+    ]
+    if set(notice_plugins) != set(notice_flags) or len(cache_plugins) != len(
+        expected_variants
+    ):
+        raise SystemExit(
+            "cache FOMOD is missing its visible setup notices or cache variants"
+        )
+    if len(cache_groups) != 1 or cache_groups[0].get("type") != "SelectExactlyOne":
+        raise SystemExit(
+            "cache FOMOD must require exactly one selectable cache variant"
+        )
+
+    cache_plugins_by_source = {
+        plugin.find("./files/folder").get("source", ""): plugin
+        for plugin in cache_plugins
+    }
+    expected_cache_sources = {variant.directory for variant in expected_variants}
+    if set(cache_plugins_by_source) != expected_cache_sources:
+        raise SystemExit(
+            "cache FOMOD sources do not match the generated cache variants"
+        )
+    cache_sources_in_order = [
+        plugin.find("./files/folder").get("source", "")
+        for plugin in cache_plugins
+    ]
+    if horizon_variants and cache_sources_in_order[0] != HORIZON_FIX_CACHE_DIRECTORY:
+        raise SystemExit(
+            "cache FOMOD must default its manual fallback to Horizon Fix"
+        )
+
+    for flag_name, notice_plugin in notice_plugins.items():
+        notice_type = notice_plugin.find("./typeDescriptor/type")
+        if notice_type is None or notice_type.get("name") != "Required":
+            raise SystemExit(
+                f"cache FOMOD must present setup notice {flag_name} as required"
+            )
+        notice_description = notice_plugin.findtext("./description") or ""
+        notice_lines = notice_description.splitlines()
+        if len(notice_lines) > FOMOD_NOTICE_MAX_LINES or any(
+            len(line) > FOMOD_NOTICE_MAX_LINE_LENGTH for line in notice_lines
+        ):
+            raise SystemExit(
+                f"cache FOMOD setup notice {flag_name} is too long for MO2's "
+                "description pane"
+            )
+
+    help_image = notice_plugins["CSXMO2FileCheckNotice"].find("./image")
+    if (
+        help_image is None
+        or help_image.get("path", "").replace("\\", "/")
+        != FOMOD_HELP_IMAGE_ARCHIVE_PATH
+    ):
+        raise SystemExit("cache FOMOD is missing its MO2 setting help image")
+    help_image_path = fomod_dir.parent / Path(
+        *FOMOD_HELP_IMAGE_ARCHIVE_PATH.split("/")
+    )
+    if not help_image_path.is_file():
+        raise SystemExit(f"cache FOMOD help image does not exist: {help_image_path}")
+
+    expected_info_children = ["Name", "Author", "Version", "Description", "Website"]
+    if (
+        info_root.tag != "fomod"
+        or [child.tag for child in info_root] != expected_info_children
+        or any(not (child.text or "").strip() for child in info_root)
+        or info_root.findtext("./Website") != FOMOD_HELP_URL
+    ):
+        raise SystemExit(
+            "cache FOMOD info must contain ordered identity fields and the "
+            "detailed setup help link"
+        )
+
+    descriptions = "\n".join(
+        filter(
+            None,
+            (
+                info_root.findtext("./Description"),
+                *(notice_plugins[flag].findtext("./description") for flag in notice_flags),
+                *(plugin.findtext("./description") for plugin in cache_plugins),
+            ),
+        )
+    )
+    required_guidance = (
+        "Settings",
+        "Plugins",
+        "Fomod Installer",
+        "use_any_file",
+        "true",
+    )
+    if horizon_variants:
+        required_guidance += ("reinstall this shader-cache FOMOD",)
+    missing_guidance = [text for text in required_guidance if text not in descriptions]
+    if missing_guidance:
+        raise SystemExit(
+            "cache FOMOD is missing MO2 setup guidance: "
+            + ", ".join(missing_guidance)
+        )
+
+    core_dependencies = {
+        ("SKSE/Plugins/CommunityShaders.dll", "Active"),
+        (
+            f"{CSX_MARKER_RELATIVE_DIRECTORY}/{compatibility_tag}.marker",
+            "Active",
+        ),
+    }
+    horizon_dependency = HORIZON_FIX_DLL_PATH.replace("\\", "/")
+    expected_patterns = {
+        CACHE_DIRECTORY: (
+            {
+                frozenset(core_dependencies | {(horizon_dependency, "Missing")}),
+                frozenset(core_dependencies | {(horizon_dependency, "Inactive")}),
+            }
+            if horizon_variants
+            else {frozenset(core_dependencies)}
+        ),
+        **(
+            {
+                HORIZON_FIX_CACHE_DIRECTORY: {
+                    frozenset(core_dependencies | {(horizon_dependency, "Active")})
+                }
+            }
+            if horizon_variants
+            else {}
+        ),
+    }
+
+    for source, cache_plugin in cache_plugins_by_source.items():
+        dependency_type = cache_plugin.find("./typeDescriptor/dependencyType")
+        default_type = (
+            dependency_type.find("./defaultType")
+            if dependency_type is not None
+            else None
+        )
+        patterns = (
+            dependency_type.findall("./patterns/pattern")
+            if dependency_type is not None
+            else []
+        )
+        actual_patterns: set[frozenset[tuple[str, str]]] = set()
+        for pattern in patterns:
+            matched_type = pattern.find("./type")
+            dependencies = pattern.find("./dependencies")
+            if (
+                matched_type is None
+                or matched_type.get("name") != "Recommended"
+                or dependencies is None
+                or dependencies.get("operator") != "And"
+                or any(child.tag != "fileDependency" for child in dependencies)
+            ):
+                raise SystemExit(
+                    f"cache FOMOD variant {source} has a malformed recommendation"
+                )
+            actual_patterns.add(
+                frozenset(
+                    (
+                        dependency.get("file", "").replace("\\", "/"),
+                        dependency.get("state", ""),
+                    )
+                    for dependency in dependencies.findall("./fileDependency")
+                )
+            )
+
+        if default_type is None or default_type.get("name") != "Optional":
+            raise SystemExit(
+                f"cache FOMOD variant {source} must remain manually selectable"
+            )
+        if actual_patterns != expected_patterns[source]:
+            raise SystemExit(
+                f"cache FOMOD variant {source} has incorrect compatibility rules"
+            )
+
+        install_folder = cache_plugin.find("./files/folder")
+        if install_folder is None or (
+            install_folder.get("source") != source
+            or install_folder.get("destination") != CACHE_DIRECTORY
+            or install_folder.get("priority") != "0"
+        ):
+            raise SystemExit(
+                f"cache FOMOD variant {source} does not install at Data/ShaderCache"
+            )
+
+
+def write_fomod_installer(
+    runtime_root: Path,
+    runtime: str,
+    label: str,
+    plugin_version: str,
+    *,
+    source_root: Path = REPO,
+    horizon_variants: bool | None = None,
+) -> Path:
+    """Stage one managed cache; compatibility variants live inside its packs."""
+    horizon_variants = False if horizon_variants is None else horizon_variants
+    if horizon_variants:
+        raise SystemExit(
+            "installer-selected Horizon cache variants are retired; compile them into the managed pack"
+        )
+
+    fomod_dir = runtime_root / FOMOD_DIRECTORY
+    if path_entry_exists(fomod_dir):
+        raise SystemExit(
+            f"refusing to replace unexpected cache installer directory: {fomod_dir}"
+        )
+
+    help_image_source = source_root / FOMOD_HELP_IMAGE_SOURCE
+    if not help_image_source.is_file():
+        raise SystemExit(f"missing cache FOMOD help image: {help_image_source}")
+
+    fomod_dir.mkdir()
+    display_label = safe_label(label)
+    compatibility_tag = csx_compatibility_tag(plugin_version)
+    module_name = f"Community Shaders {runtime} Shader Cache - {display_label}"
+    description = (
+        f"Requires active {compatibility_tag}. MO2 users must set Settings > "
+        "Plugins > Fomod Installer > use_any_file to true for automatic checks. "
+        + (
+            "Verify the selectable Horizon Fix profile before installing. "
+            "Reinstall after changing Horizon Fix. "
+            if horizon_variants
+            else "Verify the selectable cache before installing. "
+        )
+        + "Click Website for full setup instructions."
+    )
+    open_settings_description = (
+        "MO2 SETUP - PAGE 1 OF 2\n\n"
+        "Close this installer.\n\n"
+        "Open Tools > Settings > Plugins.\n"
+        "In the LEFT list, select Fomod Installer."
+    )
+    file_check_description = (
+        "MO2 SETUP - PAGE 2 OF 2\n\n"
+        "In the RIGHT settings table:\n"
+        "1. Find use_any_file.\n"
+        "2. Double-click its value and change false to true.\n"
+        f"3. Click OK, enable {compatibility_tag}, then reopen this installer.\n"
+        "Click the image below to enlarge it."
+    )
+    horizon_notice_description = (
+        "HORIZON FIX CACHE\n\n"
+        "The installer recommends a profile when file checks work.\n"
+        "Both profiles stay selectable for a manual correction.\n\n"
+        "IMPORTANT: reinstall this shader-cache FOMOD after enabling\n"
+        "or disabling Horizon Fix."
+    )
+    core_dependencies = f"""                        <fileDependency
+                          file="SKSE\\Plugins\\CommunityShaders.dll"
+                          state="Active" />
+                        <fileDependency
+                          file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker"
+                          state="Active" />"""
+
+    if horizon_variants:
+        horizon_notice_step = f"""    <installStep name="Horizon Fix profile notice">
+      <optionalFileGroups order="Explicit">
+        <group name="Required profile notice" type="SelectAll">
+          <plugins order="Explicit">
+            <plugin name="Reinstall after changing Horizon Fix">
+              <description>{horizon_notice_description}</description>
+              <conditionFlags>
+                <flag name="{FOMOD_HORIZON_NOTICE_FLAG}">shown</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Required" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+"""
+        standard_description = (
+            f"Choose this only when {compatibility_tag} is active and "
+            "HorizonFix.dll is missing or inactive. Its Water shaders are "
+            "compiled without Horizon Fix compatibility. Reinstall this "
+            "shader-cache FOMOD after enabling Horizon Fix."
+        )
+        horizon_description = (
+            f"Choose this when {compatibility_tag} and "
+            "SKSE\\Plugins\\HorizonFix.dll are active. Its Water shaders are "
+            "compiled with Horizon Fix compatibility. This is the fallback "
+            "default when MO2 cannot detect non-plugin files. Reinstall after "
+            "disabling Horizon Fix."
+        )
+        profile_step = f"""    <installStep name="Choose the active Horizon Fix profile">
+      <optionalFileGroups order="Explicit">
+        <group name="Select exactly one installed Horizon Fix state" type="SelectExactlyOne">
+          <plugins order="Explicit">
+            <plugin name="Horizon Fix cache: HorizonFix.dll active">
+              <description>{horizon_description}</description>
+              <files>
+                <folder source="{HORIZON_FIX_CACHE_DIRECTORY}"
+                        destination="{CACHE_DIRECTORY}"
+                        priority="0" />
+              </files>
+              <typeDescriptor>
+                <dependencyType>
+                  <defaultType name="Optional" />
+                  <patterns order="Explicit">
+                    <pattern>
+                      <dependencies operator="And">
+{core_dependencies}
+                        <fileDependency file="SKSE\\Plugins\\HorizonFix.dll" state="Active" />
+                      </dependencies>
+                      <type name="Recommended" />
+                    </pattern>
+                  </patterns>
+                </dependencyType>
+              </typeDescriptor>
+            </plugin>
+            <plugin name="Standard cache: Horizon Fix inactive">
+              <description>{standard_description}</description>
+              <files>
+                <folder source="{CACHE_DIRECTORY}" destination="{CACHE_DIRECTORY}" priority="0" />
+              </files>
+              <typeDescriptor>
+                <dependencyType>
+                  <defaultType name="Optional" />
+                  <patterns order="Explicit">
+                    <pattern>
+                      <dependencies operator="And">
+{core_dependencies}
+                        <fileDependency file="SKSE\\Plugins\\HorizonFix.dll" state="Missing" />
+                      </dependencies>
+                      <type name="Recommended" />
+                    </pattern>
+                    <pattern>
+                      <dependencies operator="And">
+{core_dependencies}
+                        <fileDependency file="SKSE\\Plugins\\HorizonFix.dll" state="Inactive" />
+                      </dependencies>
+                      <type name="Recommended" />
+                    </pattern>
+                  </patterns>
+                </dependencyType>
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+"""
+    else:
+        horizon_notice_step = ""
+        cache_description = (
+            f"Choose this cache when CommunityShaders.dll and the exact "
+            f"{compatibility_tag} marker are active. If MO2 cannot inspect "
+            "non-plugin files, verify those files manually before installing."
+        )
+        profile_step = f"""    <installStep name="Verify the active CSX core">
+      <optionalFileGroups order="Explicit">
+        <group name="Select exactly one compatible cache" type="SelectExactlyOne">
+          <plugins order="Explicit">
+            <plugin name="Install cache for {compatibility_tag}">
+              <description>{cache_description}</description>
+              <files>
+                <folder source="{CACHE_DIRECTORY}" destination="{CACHE_DIRECTORY}" priority="0" />
+              </files>
+              <typeDescriptor>
+                <dependencyType>
+                  <defaultType name="Optional" />
+                  <patterns order="Explicit">
+                    <pattern>
+                      <dependencies operator="And">
+{core_dependencies}
+                      </dependencies>
+                      <type name="Recommended" />
+                    </pattern>
+                  </patterns>
+                </dependencyType>
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+"""
+
+    module_config = f"""<?xml version="1.0" encoding="UTF-8"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
+  <moduleName>{module_name}</moduleName>
+  <installSteps order="Explicit">
+    <installStep name="MO2 setup 1/2: open Plugins settings">
+      <optionalFileGroups order="Explicit">
+        <group name="Required MO2 navigation" type="SelectAll">
+          <plugins order="Explicit">
+            <plugin name="1. Open MO2 Settings > Plugins">
+              <description>{open_settings_description}</description>
+              <conditionFlags>
+                <flag name="CSXMO2OpenSettingsNotice">shown</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Required" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+    <installStep name="MO2 setup 2/2: enable non-plugin file checks">
+      <optionalFileGroups order="Explicit">
+        <group name="Required FOMOD Installer setting" type="SelectAll">
+          <plugins order="Explicit">
+            <plugin name="2. Set use_any_file to true">
+              <description>{file_check_description}</description>
+              <image path="{FOMOD_HELP_IMAGE_XML_PATH}" />
+              <conditionFlags>
+                <flag name="CSXMO2FileCheckNotice">shown</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Required" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+{horizon_notice_step}{profile_step}  </installSteps>
+</config>
+"""
+    info = f"""<?xml version="1.0" encoding="UTF-8"?>
+<fomod>
+  <Name>{module_name}</Name>
+  <Author>Community Shaders Expanded</Author>
+  <Version>{display_label}</Version>
+  <Description>{description}</Description>
+  <Website>{FOMOD_HELP_URL}</Website>
+</fomod>
+"""
+
+    try:
+        help_image_destination = runtime_root / Path(
+            *FOMOD_HELP_IMAGE_ARCHIVE_PATH.split("/")
+        )
+        help_image_destination.parent.mkdir()
+        shutil.copy2(help_image_source, help_image_destination)
+        (fomod_dir / FOMOD_CONFIG_FILE_NAME).write_text(
+            module_config, encoding="utf-8", newline="\n"
+        )
+        (fomod_dir / FOMOD_INFO_FILE_NAME).write_text(
+            info, encoding="utf-8", newline="\n"
+        )
+        validate_fomod_installer(
+            fomod_dir,
+            compatibility_tag,
+            horizon_variants=horizon_variants,
+        )
+    except OSError as exc:
+        shutil.rmtree(fomod_dir, ignore_errors=True)
+        raise SystemExit(f"failed to stage cache installer: {fomod_dir}") from exc
+    except SystemExit:
+        shutil.rmtree(fomod_dir, ignore_errors=True)
+        raise
+    return fomod_dir
 
 def validate_cache_archive(
     archive: Path,
@@ -1533,6 +2408,11 @@ def validate_cache_archive(
             for variant in variants
             for metadata in (INFO_FILE_NAME, MANIFEST_FILE_NAME)
         ),
+		f"{FOMOD_DIRECTORY}/{FOMOD_CONFIG_FILE_NAME}",
+        f"{FOMOD_DIRECTORY}/{FOMOD_INFO_FILE_NAME}",
+        FOMOD_HELP_IMAGE_ARCHIVE_PATH,
+        *(f"{CACHE_DIRECTORY}/{name}" for name in PACK_FILE_NAMES),
+		f"{CACHE_DIRECTORY}/{PACK_MANIFEST_FILE_NAME}",
     }
     missing_entries = sorted(required_entries - entries)
     if missing_entries:
@@ -1584,6 +2464,7 @@ def validate_cache_archive(
                 f"(exit {extract_result.returncode})"
             )
 
+        archived_shader_abi: str | None = None
         for variant in variants:
             info = configparser.ConfigParser(interpolation=None)
             info_path = extract_root / variant.directory / INFO_FILE_NAME
@@ -1601,6 +2482,49 @@ def validate_cache_archive(
                     f"packaged {runtime}/{variant.name} cache plugin version is "
                     f"{archived_version!r}; expected {plugin_version!r}"
                 )
+			variant_shader_abi = info.get("Cache", "ShaderCacheABI", fallback=None)
+            if not variant_shader_abi:
+                raise SystemExit(
+                    f"packaged {runtime}/{variant.name} cache has no ShaderCacheABI"
+                )
+            if archived_shader_abi is None:
+                archived_shader_abi = variant_shader_abi
+            elif archived_shader_abi != variant_shader_abi:
+                raise SystemExit(f"packaged {runtime} caches disagree on ShaderCacheABI")
+
+        pack_root = extract_root / CACHE_DIRECTORY
+        pack_stats = {
+            "optimizedA": validate_shader_pack(pack_root / "Optimized.A.csxpack", 1),
+            "optimizedB": validate_shader_pack(pack_root / "Optimized.B.csxpack", 1),
+            "developerA": validate_shader_pack(pack_root / "Developer.A.csxpack", 2),
+            "developerB": validate_shader_pack(pack_root / "Developer.B.csxpack", 2),
+        }
+        try:
+            pack_manifest = json.loads(
+                (pack_root / PACK_MANIFEST_FILE_NAME).read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"packaged {runtime} cache has an invalid pack manifest") from exc
+        if (
+            pack_manifest.get("schema") != "csx.shader-cache.pack-manifest"
+            or pack_manifest.get("schemaVersion") != 1
+            or pack_manifest.get("formatVersion") != PACK_FORMAT_VERSION
+            or pack_manifest.get("hashAlgorithm") != "sha256"
+            or pack_manifest.get("shaderCacheABI") != archived_shader_abi
+            or pack_manifest.get("optimizedRecordCount")
+            != pack_stats["optimizedA"]["recordCount"] + pack_stats["optimizedB"]["recordCount"]
+            or pack_manifest.get("developerRecordCount")
+            != pack_stats["developerA"]["recordCount"] + pack_stats["developerB"]["recordCount"]
+        ):
+            raise SystemExit(f"packaged {runtime} cache pack manifest disagrees with its pack files")
+        for first, second in (("optimizedA", "optimizedB"), ("developerA", "developerB")):
+            if pack_stats[first]["generation"] == pack_stats[second]["generation"]:
+                raise SystemExit(f"packaged {runtime} cache has ambiguous A/B generations")
+		validate_fomod_installer(
+            extract_root / FOMOD_DIRECTORY,
+            csx_compatibility_tag(plugin_version),
+			horizon_variants=horizon_variants,
+		)
 
 
 def prepare_cache_archive(
@@ -1752,7 +2676,8 @@ def build_runtime(
         source_root, DEFAULT_SHADER_CONTRACT_FILES, runtime
     )
     shader_cache_abi = sha256_bytes(canonical_bytes(shader_contract))
-    variants = cache_variants_for(profile)
+    variants = compile_variants_for(profile)
+    compatibility_variants = compatibility_variant_manifest(source_root)
     has_horizon_variant = HORIZON_FIX_CACHE_VARIANT in variants
     if has_horizon_variant and distribution_profile is None:
         raise SystemExit("shipped cache variants require the Horizon Fix contract")
@@ -1781,9 +2706,21 @@ def build_runtime(
                 excluded_features = distribution_profile.excluded_short_names
                 add_cross_modlist = True
             if variant.horizon_fix_enabled:
-                additional_file_defines[HORIZON_FIX_SHADER_FILE] = (
-                    distribution_profile.horizon_fix_define,
-                )
+                declared_defines = compatibility_variants["legacy-horizon-fix"][
+                    "shaderDefinesBySource"
+                ].get(HORIZON_FIX_SHADER_FILE)
+                if not isinstance(declared_defines, list) or not declared_defines or not all(
+                    isinstance(value, str) and value for value in declared_defines
+                ):
+                    raise SystemExit(
+                        "legacy-horizon-fix compatibility contract must declare "
+                        f"defines for {HORIZON_FIX_SHADER_FILE}"
+                    )
+                if distribution_profile.horizon_fix_define not in declared_defines:
+                    raise SystemExit(
+                        "distribution Horizon define disagrees with the compatibility contract"
+                    )
+                additional_file_defines[HORIZON_FIX_SHADER_FILE] = tuple(declared_defines)
 
         filtered_config = filter_profile_defines(
             config_path,
@@ -1831,6 +2768,7 @@ def build_runtime(
             runtime,
             imagespace_remap,
             write_manifest,
+            shader_cache_abi,
         )
 
         section_count = write_info_ini(
@@ -1866,6 +2804,13 @@ def build_runtime(
             horizon_states,
             runtime=runtime,
         )
+    build_managed_shader_packs(
+        source_root,
+        build_results["standard"][0],
+        build_results["horizon-fix"][0] if has_horizon_variant else None,
+        runtime,
+        shader_cache_abi,
+    )
 
     section_counts = {result[2] for result in build_results.values()}
     if len(section_counts) != 1:

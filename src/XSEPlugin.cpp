@@ -10,6 +10,7 @@
 #include "Api/FeatureDevBenchBridge.h"
 #include "Api/FeatureService.h"
 #include "Api/ShaderDevBenchBridge.h"
+#include "Api/ShaderCompatibilityRegistry.h"
 #include "BuildProvenance.h"
 #include "Compatibility.h"
 #include "Deferred.h"
@@ -198,10 +199,42 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// Run feature PostPostLoad() first so features can disable themselves if needed
 				Feature::ForEachLoadedFeature("PostPostLoad", [](Feature* feature) { feature->PostPostLoad(); });
 
+				// Temporary adapter for the existing Horizon Fix integration. Future
+				// external shader providers register their own identity through
+				// csx.shader.compatibility instead of requiring a CSX exception.
+				if (GetModuleHandleW(L"HorizonFix.dll")) {
+					const CSX::ShaderCompatibilityAPI::Scope001 scope{
+						.structSize = sizeof(CSX::ShaderCompatibilityAPI::Scope001),
+						.kind = CSX::ShaderCompatibilityAPI::ScopeKind::kShaderFamily,
+						.value = "Water",
+					};
+					const CSX::ShaderCompatibilityAPI::Registration001 registration{
+						.structSize = sizeof(CSX::ShaderCompatibilityAPI::Registration001),
+						.identity = "legacy.horizonfix.water",
+						.owner = "CSX legacy adapter",
+						.displayVersion = "detected",
+						.contractMajor = 1,
+						.currentMinor = 0,
+						.minimumCompatibleMinor = 0,
+						.maximumCompatibleMinor = 0,
+						.resourceFingerprint = "",
+						.scopes = &scope,
+						.scopeCount = 1,
+					};
+					const auto result = CSX::Api::GetShaderCompatibilityRegistry().Register(registration);
+					if (result.status != CSX::ShaderCompatibilityAPI::Status::kSuccess)
+						logger::warn("Horizon Fix shader compatibility registration failed: {}", result.message);
+				}
+
 				// Register scene settings event handler (Interior Only transitions)
 				SceneSettingsManager::MenuOpenCloseEventHandler::Register();
 
-				// Now validate disk cache after features have had a chance to modify their state
+				// External shader-facing requirements must become immutable before
+				// any cache compatibility decision or shader compilation.
+				CSX::Api::FreezeShaderCompatibilityRegistrations();
+
+				// Now validate disk cache after features and external providers have
+				// had a chance to declare their shader-facing state.
 				shaderCache->ValidateDiskCache();
 
 				if (shaderCache->UseFileWatcher())

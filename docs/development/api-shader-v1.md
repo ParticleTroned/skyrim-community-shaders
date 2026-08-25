@@ -77,8 +77,8 @@ false so a controller cannot mistake a live-only change for durable state.
 | Set skip unchanged | none | optional | runtime setting |
 | Set feature disabled at boot | none | optional | restart and recompile expected |
 | Clear memory cache | disruptive | not applicable | recompile expected |
-| Clear disk cache | disruptive + destructive | not applicable | removes active and rollback disk caches |
-| Clear all caches | disruptive + destructive | not applicable | clears memory and disk caches; recompile expected |
+| Clear disk cache | disruptive + destructive | not applicable | resets managed A/B packs in place (or removes legacy active/rollback caches); recompile expected |
+| Clear all caches | disruptive + destructive | not applicable | clears memory and resets/removes disk caches; recompile expected |
 | Restore previous disk cache | disruptive + destructive | internal transaction | only while idle and a compatible previous cache exists; restart required |
 | Accept cache rebuild | disruptive | not applicable | only while the cache is held for a rebuild decision |
 | Stop compilation | disruptive | not applicable | bounded stop request |

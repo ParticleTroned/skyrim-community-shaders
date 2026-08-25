@@ -24,6 +24,7 @@ BUILD_ID_ALGORITHM = "sha256-canonical-json-v1"
 SHADER_ABI_SCHEMA_VERSION = 1
 DEFAULT_SHADER_CONTRACT_FILES = [
     "config/shader-cache-abi.json",
+    "config/shader-compatibility-variants.json",
 ]
 
 

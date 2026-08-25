@@ -62,6 +62,16 @@ jobs:
                     --apply-bumps \
                     --output /tmp/feature-version-audit.txt
 
+            # Catch incomplete automatic bumps and gaps in hand-managed bumps.
+            - name: Verify feature versions
+              run: |
+                  set +e
+                  python tools/feature_version_audit.py --ci --output feature-audit-verify.md
+                  EXIT_CODE=$?
+                  set -e
+                  cat feature-audit-verify.md
+                  exit $EXIT_CODE
+
             - name: Semantic Release
               id: semantic
               uses: cycjimmy/semantic-release-action@v6

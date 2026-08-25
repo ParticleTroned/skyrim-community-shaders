@@ -16,6 +16,44 @@
 
 namespace SIE
 {
+	bool ShaderCache::TryDeferEviction(const hlslRecord& a_record)
+	{
+		std::unique_lock lockM{ mapMutex };
+		auto it = shaderMap.find(a_record.key);
+		if (it == shaderMap.end() || it->second.status != ShaderCompilationTask::Status::Pending) {
+			return false;
+		}
+
+		deferredEvictions.insert_or_assign(a_record.key, a_record);
+		deferredEvictionCount.store(deferredEvictions.size(), std::memory_order_relaxed);
+		return true;
+	}
+
+	bool ShaderCache::ApplyDeferredEviction(const std::string& a_key)
+	{
+		if (deferredEvictionCount.load(std::memory_order_relaxed) == 0) {
+			return false;
+		}
+
+		hlslRecord record;
+		{
+			std::unique_lock lockM{ mapMutex };
+			auto it = deferredEvictions.find(a_key);
+			if (it == deferredEvictions.end()) {
+				return false;
+			}
+			record = it->second;
+			deferredEvictions.erase(it);
+			deferredEvictionCount.store(deferredEvictions.size(), std::memory_order_relaxed);
+		}
+
+		EvictShader(record.key, record.type, record.descriptor, record.shaderClass);
+		DeleteScopedDiskCacheEntries({ record.diskPath });
+		compilationSet.Forget(
+			{ ShaderCompilationTask::MakeId(record.shaderClass, record.type, record.descriptor) });
+		return true;
+	}
+
 	bool ShaderCache::IsTrackingActiveShaders() const
 	{
 		return (globals::state && globals::state->IsDeveloperMode()) ||

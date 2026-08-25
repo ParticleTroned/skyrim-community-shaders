@@ -1843,15 +1843,18 @@ namespace SIE
 							shaderBlob->Release();
 					} else {
 						logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
-						cache.AddCompletedShader(
-							shaderClass,
-							shader,
-							descriptor,
-							shaderBlob,
-							diskPath,
-							compileState.digest,
-							/*fromDisk=*/true,
-							a_taskGeneration);
+						if (!cache.AddCompletedShader(
+								shaderClass,
+								shader,
+								descriptor,
+								shaderBlob,
+								diskPath,
+								compileState.digest,
+								/*fromDisk=*/true,
+								a_taskGeneration)) {
+							shaderBlob->Release();
+							return nullptr;
+						}
 						return shaderBlob;
 					}
 				}
@@ -1955,8 +1958,18 @@ namespace SIE
 			// save shader to disk
 			if (useDiskCache || cache.IsDiskCacheActive())
 				SaveShaderBlobToDisk(shaderBlob, diskPath, path, compileState.digest, diskCacheGeneration);
-			cache.AddCompletedShader(
-				shaderClass, shader, descriptor, shaderBlob, diskPath, compileState.digest, false, a_taskGeneration);
+			if (!cache.AddCompletedShader(
+					shaderClass,
+					shader,
+					descriptor,
+					shaderBlob,
+					diskPath,
+					compileState.digest,
+					false,
+					a_taskGeneration)) {
+				shaderBlob->Release();
+				return nullptr;
+			}
 			return shaderBlob;
 		}
 
@@ -2445,6 +2458,8 @@ namespace SIE
 		{
 			std::unique_lock lockM{ mapMutex };
 			shaderMap.clear();
+			deferredEvictions.clear();
+			deferredEvictionCount.store(0, std::memory_order_relaxed);
 		}
 		mapCV.notify_all();
 		{
@@ -2562,8 +2577,10 @@ namespace SIE
 		std::vector<std::wstring> diskPaths;
 		diskPaths.reserve(entries.size());
 		for (auto& entry : entries) {
-			EvictShader(entry.key, entry.type, entry.descriptor, entry.shaderClass);
-			diskPaths.push_back(entry.diskPath);
+			if (!TryDeferEviction(entry)) {
+				EvictShader(entry.key, entry.type, entry.descriptor, entry.shaderClass);
+				diskPaths.push_back(entry.diskPath);
+			}
 		}
 		std::sort(diskPaths.begin(), diskPaths.end());
 		diskPaths.erase(std::unique(diskPaths.begin(), diskPaths.end()), diskPaths.end());
@@ -2673,6 +2690,7 @@ namespace SIE
 			}
 		}
 		if (outcome != Util::GenerationClaim::PublishOutcome::Published) {
+			ApplyDeferredEviction(key);
 			return false;
 		}
 		mapCV.notify_all();  // wake threads waiting on a Pending→Completed/Failed transition
@@ -2685,10 +2703,10 @@ namespace SIE
 		// trackable and can be invalidated by the file watcher. This allows
 		// Clear(path) to find failed shaders and mark them for recompilation.
 		std::string lowerFilePath = Util::FixFilePath(pathString);
+		hlslRecord newRecord{ key, shader.shaderType.get(), descriptor, shaderClass, a_diskPath, a_compileStateDigest };
 		{
 			std::unique_lock lockH{ hlslMapMutex };
 			auto it = hlslToShaderMap.find(lowerFilePath);
-			hlslRecord newRecord{ key, shader.shaderType.get(), descriptor, shaderClass, a_diskPath, a_compileStateDigest };
 
 			if (it != hlslToShaderMap.end()) {
 				auto& entries = it->second;
@@ -2709,7 +2727,18 @@ namespace SIE
 			}
 		}
 
-		return a_blob != nullptr;
+		const bool evicted = ApplyDeferredEviction(key);
+		const bool invalidated = evicted || IsTaskStale(a_taskGeneration) || IsShaderKeyAbsent(key);
+		if (invalidated) {
+			std::unique_lock lockH{ hlslMapMutex };
+			if (auto it = hlslToShaderMap.find(lowerFilePath); it != hlslToShaderMap.end()) {
+				it->second.erase(newRecord);
+				if (it->second.empty()) {
+					hlslToShaderMap.erase(it);
+				}
+			}
+		}
+		return a_blob != nullptr && !invalidated;
 	}
 
 	std::pair<ShaderCache::ClaimResult, ID3DBlob*> ShaderCache::ClaimCompilation(
@@ -2747,19 +2776,30 @@ namespace SIE
 		}
 	}
 
-	void ShaderCache::ResolvePendingFailure(const std::string& key)
+	void ShaderCache::ResolvePendingFailure(
+		const std::string& key,
+		std::optional<uint64_t> a_taskGeneration)
 	{
 		bool changed = false;
 		{
 			std::unique_lock lockM{ mapMutex };
 			auto it = shaderMap.find(key);
-			if (it != shaderMap.end() && it->second.status == ShaderCompilationTask::Status::Pending) {
-				it->second = ShaderCacheResult{ nullptr, ShaderCompilationTask::Status::Failed, system_clock::now() };
+			if (it != shaderMap.end() &&
+				it->second.status == ShaderCompilationTask::Status::Pending &&
+				(!a_taskGeneration || it->second.generation == *a_taskGeneration)) {
+				it->second = ShaderCacheResult{
+					nullptr,
+					ShaderCompilationTask::Status::Failed,
+					system_clock::now(),
+					false,
+					it->second.generation
+				};
 				changed = true;
 			}
 		}
 		if (changed) {
 			mapCV.notify_all();
+			ApplyDeferredEviction(key);
 		}
 	}
 
@@ -2812,6 +2852,12 @@ namespace SIE
 			return shaderMap.at(a_key).status;
 		}
 		return ShaderCompilationTask::Status::Pending;
+	}
+
+	bool ShaderCache::IsShaderKeyAbsent(const std::string& a_key)
+	{
+		std::scoped_lock lockM{ mapMutex };
+		return !shaderMap.contains(a_key);
 	}
 
 	std::string ShaderCache::GetShaderStatsString(bool a_timeOnly, bool a_elapsedOnly)
@@ -4320,10 +4366,10 @@ namespace SIE
 			task.Perform();
 		} catch (const std::exception& e) {
 			logger::error("Unhandled exception compiling shader task {}: {}", taskKey, e.what());
-			ResolvePendingFailure(taskKey);
+			ResolvePendingFailure(taskKey, task.GetGeneration());
 		} catch (...) {
 			logger::error("Unhandled non-standard exception compiling shader task {}", taskKey);
-			ResolvePendingFailure(taskKey);
+			ResolvePendingFailure(taskKey, task.GetGeneration());
 		}
 
 		QueryPerformanceCounter(&end);
@@ -4596,6 +4642,9 @@ namespace SIE
 		{
 			std::scoped_lock lock(compilationMutex);
 			if (task.GetGeneration() != generation.load(std::memory_order_relaxed)) {
+				return;
+			}
+			if (cache.IsShaderKeyAbsent(key)) {
 				return;
 			}
 

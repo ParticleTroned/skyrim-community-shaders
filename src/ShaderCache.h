@@ -447,13 +447,16 @@ namespace SIE
 		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(
 			const std::string& key,
 			std::optional<uint64_t> a_taskGeneration = std::nullopt);
-		void ResolvePendingFailure(const std::string& key);
+		void ResolvePendingFailure(
+			const std::string& key,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
 		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
 		ID3DBlob* GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
 		bool IsShaderLoadedFromDisk(const std::string& a_key);
 		ShaderCompilationTask::Status GetShaderStatus(const std::string& a_key);
+		bool IsShaderKeyAbsent(const std::string& a_key);
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
 
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
@@ -795,6 +798,8 @@ namespace SIE
 			uint32_t a_descriptor,
 			ShaderClass a_shaderClass);
 		void DeleteScopedDiskCacheEntries(const std::vector<std::wstring>& a_diskPaths);
+		bool TryDeferEviction(const hlslRecord& a_record);
+		bool ApplyDeferredEviction(const std::string& a_key);
 
 		std::atomic<uint32_t> activeShaderCaptureFramesRemaining{ 0 };
 		ActiveShaderCaptureStage activeShaderCaptureStage = ActiveShaderCaptureStage::Idle;
@@ -874,6 +879,8 @@ namespace SIE
 		std::mutex modifiedMapMutex;                                                              // guard for modifiedShaderMap
 		ankerl::unordered_dense::map<std::string, std::set<hlslRecord>> hlslToShaderMap{};        // hashmap linking specific hlsl files to shader keys in shaderMap
 		std::mutex hlslMapMutex;                                                                  // guard for hlslToShaderMap
+		ankerl::unordered_dense::map<std::string, hlslRecord> deferredEvictions;
+		std::atomic<size_t> deferredEvictionCount{ 0 };
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

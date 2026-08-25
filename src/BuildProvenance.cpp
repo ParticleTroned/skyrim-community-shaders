@@ -6,16 +6,67 @@
 #include <BuildProvenance.generated.h>
 #include <bcrypt.h>
 #include <nlohmann/json.hpp>
+#include <Psapi.h>
 
 #include <array>
 #include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
+#include <vector>
 
 namespace
 {
 	using json = nlohmann::json;
+
+	std::filesystem::path GetMappedModulePath(HMODULE a_module)
+	{
+		if (!a_module)
+			return {};
+
+		std::vector<wchar_t> mappedPath(32768);
+		const auto mappedLength = GetMappedFileNameW(
+			GetCurrentProcess(), a_module, mappedPath.data(), static_cast<DWORD>(mappedPath.size()));
+		if (mappedLength == 0 || mappedLength >= mappedPath.size())
+			return {};
+		const std::wstring mapped(mappedPath.data(), mappedLength);
+		if (mapped.starts_with(LR"(\\?\)"))
+			return std::filesystem::path(mapped.substr(4));
+		if (!mapped.starts_with(LR"(\Device\)"))
+			return std::filesystem::path(mapped);
+
+		std::array<wchar_t, 512> drives{};
+		const auto driveLength = GetLogicalDriveStringsW(static_cast<DWORD>(drives.size()), drives.data());
+		if (driveLength == 0 || driveLength >= drives.size())
+			return {};
+		for (const wchar_t* drive = drives.data(); *drive; drive += std::wcslen(drive) + 1) {
+			if (std::wcslen(drive) < 2)
+				continue;
+			const std::wstring driveName(drive, 2);
+			std::array<wchar_t, 32768> device{};
+			if (!QueryDosDeviceW(driveName.c_str(), device.data(), static_cast<DWORD>(device.size())))
+				continue;
+			const std::wstring_view deviceName(device.data());
+			if (mapped.size() < deviceName.size() ||
+				_wcsnicmp(mapped.c_str(), deviceName.data(), deviceName.size()) != 0) {
+				continue;
+			}
+			return std::filesystem::path(driveName + mapped.substr(deviceName.size()));
+		}
+		return {};
+	}
+
+	std::filesystem::path GetCurrentModuleBackingPath()
+	{
+		HMODULE selfModule = nullptr;
+		if (!GetModuleHandleExW(
+				GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCWSTR>(&GetCurrentModuleBackingPath),
+				&selfModule)) {
+			return {};
+		}
+		return GetMappedModulePath(selfModule);
+	}
 
 	std::string Sha256File(const std::filesystem::path& a_path)
 	{
@@ -79,7 +130,16 @@ namespace
 	{
 		static RuntimeIdentity identity = []() {
 			RuntimeIdentity result;
-			const auto modulePath = Util::PathHelpers::GetCurrentModuleRealPath();
+			// GetModuleFileName/GetModuleFileNameEx returns MO2's virtual Data path.
+			// Reading the loaded DLL back through that USVFS path can fail to reach
+			// EOF during SKSEPlugin_Load. Query the mapped image backing file instead;
+			// if it cannot be proven, fail verification without touching the virtual
+			// path or blocking game startup.
+			const auto modulePath = GetCurrentModuleBackingPath();
+			if (modulePath.empty()) {
+				result.sidecarError = "physical module backing path unavailable";
+				return result;
+			}
 			result.artifactSha256 = Sha256File(modulePath);
 			try {
 				const auto manifestPath = modulePath.parent_path() / L"CSX.BuildManifest.json";
@@ -115,9 +175,9 @@ namespace BuildProvenance
 	const std::string& GetShaderCompilerIdentity()
 	{
 		static const std::string identity = []() {
-			wchar_t path[MAX_PATH]{};
 			const auto module = GetModuleHandleW(L"d3dcompiler_47.dll");
-			if (!module || !GetModuleFileNameW(module, path, static_cast<DWORD>(std::size(path))))
+			const auto path = GetMappedModulePath(module);
+			if (path.empty())
 				return std::string("d3dcompiler_47.dll:unavailable");
 			const auto version = Util::GetDllVersion(path);
 			return std::format("d3dcompiler_47.dll:{}:{}", version ? version->string() : "unknown", Sha256File(path));

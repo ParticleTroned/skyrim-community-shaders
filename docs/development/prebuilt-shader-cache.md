@@ -31,13 +31,13 @@ The default `shipped` release profile:
 -   omits the VR feature metadata from an SE cache;
 -   compiles optimized release bytecode, without developer/debug defines.
 
-Every shipped SE and VR build produces two complete cache variants.
-`ShaderCache` records Horizon Fix disabled and compiles Water without
-`HORIZON_FIX`; `ShaderCache-HorizonFix` records Horizon Fix enabled and compiles
-Water with the define derived from the C++ feature contract. The builder
-requires both variants for each runtime to have identical permutation
-inventories and rejects any bytecode difference outside the Water directory.
-Named profiles keep their existing single-cache behavior.
+Every shipped SE and VR build compiles standard and Horizon Fix inputs, then
+places both compatible Water variants in one managed `ShaderCache`. Runtime
+registration selects the exact Water record; the installer no longer asks the
+user to choose a Horizon cache. The builder requires the loose inputs to have
+identical permutation inventories and rejects bytecode differences outside
+Water before packing them. Named profiles compile one input variant into the
+same managed layout.
 
 Named tester profiles are opt-in. Omitting `--profile` always selects
 `shipped`; release workflows and existing maintainer commands therefore keep
@@ -76,6 +76,9 @@ the supplied cache.
 | VR permutation inventory                        | `.github/configs/shader-validation-vr.yaml`         |
 | Runtime content digest                          | `src/Utils/ContentHash.h` and `src/ShaderCache.cpp` |
 | Runtime manifest schema and atomic persistence  | `src/Utils/ShaderCacheManifest.h`                   |
+| Managed A/B pack format and runtime store       | `src/Utils/ShaderCachePack.*`                       |
+| External compatibility ABI                      | `include/VRAPI/CSshadercompatibilityapi.h`          |
+| Offline compatibility variants                  | `config/shader-compatibility-variants.json`         |
 | Plugin versions written to `Info.ini`           | `CMakePresets.json`                                 |
 | Core compatibility marker                       | `CSX_VERSION` in `CMakeLists.txt`                   |
 | Feature versions written to `Info.ini`          | `features/*/Shaders/Features/*.ini`                 |
@@ -205,17 +208,19 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 
 1. assembles the release shader tree in an isolated temporary directory;
 2. applies the selected cache profile (`shipped` by default);
-3. compiles standard and Horizon Fix variants for each shipped runtime, and the
-   existing single variant for named profiles, with pinned hlslkit;
+3. compiles standard and Horizon Fix inputs for each shipped runtime, and one
+   input for named profiles, with pinned hlslkit;
 4. remaps runtime ImageSpace directories;
 5. writes `Manifest.json` from source and recursive-include content;
 6. writes `Info.ini` with plugin and feature versions;
 7. validates metadata, every manifest entry, every blob, the `DXBC` signature,
-   and the bounded Water-only delta between each runtime's variants;
-8. derives an exact `CSX<major>.<minor>-<SE|VR>.marker` dependency from each
-   runtime's `Info.ini`, adds visible MO2 setup guidance and exact automatic
-   recommendations to the FOMOD, and prepares install-ready archives;
-9. publishes output only after every requested runtime has passed the earlier
+   and the bounded Water-only delta between each runtime's inputs;
+8. writes optimized and developer A/B packs, verifies every SHA-256 committed
+   record and generation, and removes the thousands of loose runtime blobs;
+9. derives an exact `CSX<major>.<minor>-<SE|VR>.marker` dependency from each
+   runtime's `Info.ini`, adds visible MO2 setup guidance to the FOMOD, and
+   prepares install-ready archives;
+10. publishes output only after every requested runtime has passed the earlier
    stages.
 
 An existing runtime output is replaced only when it has the expected,
@@ -235,20 +240,20 @@ dist/shader-cache/
 |   |-- ShaderCache/
 |   |   |-- Info.ini
 |   |   |-- Manifest.json
-|   |   `-- <shader directories and blobs>
-|   `-- ShaderCache-HorizonFix/
-|       |-- Info.ini
-|       |-- Manifest.json
-|       `-- <shader directories and blobs>
+|   |   |-- PackManifest.json
+|   |   |-- Optimized.A.csxpack
+|   |   |-- Optimized.B.csxpack
+|   |   |-- Developer.A.csxpack
+|   |   `-- Developer.B.csxpack
 |-- VR/
 |   |-- ShaderCache/
 |   |   |-- Info.ini
 |   |   |-- Manifest.json
-|   |   `-- <shader directories and blobs>
-|   `-- ShaderCache-HorizonFix/
-|       |-- Info.ini
-|       |-- Manifest.json
-|       `-- <shader directories and blobs>
+|   |   |-- PackManifest.json
+|   |   |-- Optimized.A.csxpack
+|   |   |-- Optimized.B.csxpack
+|   |   |-- Developer.A.csxpack
+|   |   `-- Developer.B.csxpack
 |-- ShaderCache-SE-v1.7.0.7z
 `-- ShaderCache-VR-v1.7.0.7z
 ```
@@ -388,17 +393,18 @@ For both runtimes:
 
 `--plugin-version` cannot be used with `--runtime both`. Never use the release
 tag as the plugin version unless it is literally the plugin's runtime version
-label. A mismatch causes the runtime to invalidate the supplied cache.
+label. The label and generated marker are the package handshake; packed-record
+validity is independently determined from shader ABI, source, compile state,
+and applicable external compatibility requirements.
 
 ## Validation and artifact checks
 
 Successful builder completion already proves:
 
--   both variants of every shipped runtime have the same nonempty permutation
+-   both compile inputs of every shipped runtime have the same nonempty permutation
     inventory;
 -   only Water blobs differ between each runtime's standard and Horizon Fix
     variants;
--   paired `Info.ini` files differ only in `HorizonFix/Enabled`;
 -   every requested single-cache named profile contains at least one compiled
     blob;
 -   every `.pso`, `.vso`, and `.cso` starts with `DXBC`;
@@ -407,13 +413,14 @@ Successful builder completion already proves:
 -   the manifest contains no entry without a blob;
 -   `Info.ini` contains the requested plugin version;
 -   the archive was created and is nonempty;
--   every archive contains `ShaderCache/Info.ini`,
-    `ShaderCache/Manifest.json`, both required FOMOD installer files, and the
-    MO2 help image; shipped SE and VR archives also contain the corresponding
-    `ShaderCache-HorizonFix` metadata;
+-   every archive contains `ShaderCache/Info.ini`, `Manifest.json`,
+    `PackManifest.json`, all four managed pack files, both required FOMOD
+    installer files, and the MO2 help image;
+-   every pack header, SHA-256 record, commit trailer, record count, lane, and
+    A/B generation validates using the same binary layout consumed by C++;
 -   each FOMOD recommendation checks both the active Community Shaders DLL and
     the exact generated CSX compatibility marker with `operator="And"`;
--   the FOMOD maps exactly one selected source cache to `Data/ShaderCache`.
+-   the FOMOD maps the single managed cache to `Data/ShaderCache`.
 
 Optional operator checks:
 
@@ -424,22 +431,18 @@ cmake -E tar tf "dist/shader-cache/ShaderCache-VR-v1.7.0.7z"
 Get-FileHash "dist/shader-cache/ShaderCache-*-v1.7.0.7z" -Algorithm SHA256
 ```
 
-Inspect the loose metadata and confirm manifest/blob counts:
+Inspect the pack metadata and confirm the optimized/developer record counts:
 
 ```powershell
 foreach ($runtime in @("SE", "VR")) {
     $cacheRoot = Join-Path "dist/shader-cache" "$runtime\ShaderCache"
     Get-Content (Join-Path $cacheRoot "Info.ini")
 
-    $manifest = Get-Content (Join-Path $cacheRoot "Manifest.json") -Raw |
+    $manifest = Get-Content (Join-Path $cacheRoot "PackManifest.json") -Raw |
         ConvertFrom-Json
-    $manifestCount = $manifest.entries.PSObject.Properties.Count
-    $blobCount = (
-        Get-ChildItem $cacheRoot -Recurse -File |
-        Where-Object { $_.Extension -in @(".pso", ".vso", ".cso") }
-    ).Count
-
-    if ($manifest.schemaVersion -ne 1 -or $manifestCount -ne $blobCount) {
+    $packs = Get-ChildItem $cacheRoot -File -Filter "*.csxpack"
+    if ($manifest.schemaVersion -ne 1 -or $packs.Count -ne 4 -or
+        $manifest.optimizedRecordCount -le 0) {
         throw "$runtime manifest validation failed."
     }
 }
@@ -457,14 +460,12 @@ configured `CSX_VERSION` under
 cache builder derives the same marker name from `Info.ini`; version bumps need
 no marker or FOMOD source edit.
 
-Each cache archive contains a top-level `ShaderCache` directory and FOMOD
-metadata; shipped SE and VR archives also contain `ShaderCache-HorizonFix`. The
-FOMOD recommends a cache only when both `CommunityShaders.dll` and its exact
-version marker are active. Those two checks remain one package handshake:
+Each cache archive contains one top-level managed `ShaderCache` directory and
+FOMOD metadata. The FOMOD recommends it only when both `CommunityShaders.dll`
+and its exact version marker are active. Those two checks remain one package handshake:
 FOMOD cannot inspect the DLL's embedded product-version bytes, so core packages
-must never ship a marker from another build. Both choices remain manually
-selectable when MO2 cannot inspect non-plugin files; the runtime independently
-rejects mismatched plugin identity or feature state.
+must never ship a marker from another build. The runtime independently selects
+the exact compatible record and compiles only a missing identity.
 
 When upgrading through a mod manager, replace the old core mod instead of
 merging versions or leaving multiple core packages active. Otherwise an old
@@ -473,10 +474,8 @@ dependency can correlate back to its original package. Remove any stale
 `SKSE/Plugins/CommunityShaders/CSX*.marker` entries before installing the
 matching cache.
 
--   For manual installation, it becomes
-    `<Skyrim>\Data\ShaderCache`. For a shipped runtime, copy the contents of
-    exactly one source directory—`ShaderCache` without Horizon Fix or
-    `ShaderCache-HorizonFix` with it—into that destination.
+-   For manual installation, the one managed directory becomes
+    `<Skyrim>\Data\ShaderCache`.
 -   In Mod Organizer 2, use the included FOMOD installer. Do not select
     `ShaderCache` and choose **Set data directory** in the manual installer;
     that strips the required directory and incorrectly exposes the cache as
@@ -507,12 +506,10 @@ includes the screenshot above, and the FOMOD Website link opens this section.
 If `use_any_file` remains disabled, automatic recommendations are unavailable;
 verify the active DLL, exact marker, and selected cache manually.
 
-For shipped SE and VR archives, the final page recommends the Horizon Fix cache
-when `SKSE\Plugins\HorizonFix.dll` is active and the standard cache when it is
-missing or inactive. The Horizon Fix choice is listed first as the safe manual
-fallback, but both remain selectable. Reinstall the shader-cache FOMOD whenever
-Horizon Fix is enabled or disabled so Water bytecode and `Info.ini` describe
-the same state.
+For shipped SE and VR archives, standard and Horizon Water bytecode coexist in
+the optimized pack. The temporary runtime adapter registers Horizon's Water
+requirement when its DLL is loaded, so enabling or disabling it no longer
+requires reinstalling the cache.
 
 For a smoke test, use a clean mod-manager profile, move any existing
 `ShaderCache` aside so it can be restored, install the matching artifact, and
@@ -629,25 +626,30 @@ validation.
 
 ## Runtime behavior and user expectations
 
-At runtime, `Manifest.json` content digests are preferred over timestamps.
-This avoids false invalidation caused by download, extraction, or copy times.
-A missing/malformed manifest or a blob without an entry falls back to the older
-timestamp/file-watcher path.
+When all four managed files are present, runtime lookup uses an exact record
+identity: logical shader path, recursive source/compile-state contract, and the
+SHA-256 canonical requirement set supplied by applicable external providers.
+An identity miss compiles and appends only that shader. Standard optimized and
+developer/debug records use separate lanes, so diagnostic compilation neither
+evicts nor masks release bytecode.
 
-The runtime records newly compiled blobs through one save path and updates the
-manifest in batches and at lifecycle boundaries. It prunes manifest entries
-after partial invalidation and resets or reloads in-memory metadata when active
-and rollback cache directories are deleted or swapped. If a replaced blob's
-source digest cannot be calculated, the runtime removes any older entry for
-that blob so validation safely returns to the timestamp/file-watcher path.
-Each compilation also carries one immutable snapshot of its custom defines,
-flags, cache path, and digest. Cache-generation guards prevent work started
-before a clear, deletion, or directory swap from writing into the new active
-disk-cache generation.
+Each lane has fixed A and B files supplied by the cache mod. Runtime never
+creates, renames, copies, or deletes them. Records become visible only after a
+validated commit trailer and payload SHA-256; an incomplete tail is ignored and
+truncated before the next append. Before the main menu, compaction runs only
+when active-generation superseded bytes and fragmentation cross their bounded
+thresholds. It writes current logical records into the inactive file at a
+higher generation and leaves the old generation searchable as fallback.
+
+If any managed file is missing, the whole pack feature is unavailable and CSX
+retains the previous loose-cache behavior. `Manifest.json` remains part of that
+compatibility path. An explicit clear resets existing pack files in place;
+normal source, feature, and external-contract changes never rotate or blanket
+delete the managed cache.
 
 Users can still compile local variants when:
 
--   their plugin or feature metadata does not match;
+-   a required exact source, feature, or external compatibility identity is absent;
 -   features are enabled/disabled differently from the shipped profile;
 -   shader source/includes differ;
 -   Developer Mode is active;

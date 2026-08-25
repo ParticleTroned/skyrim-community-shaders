@@ -2,6 +2,7 @@
 
 #include "Api/ServiceRegistry.h"
 #include "Api/ShaderService.h"
+#include "Api/ShaderCompatibilityService.h"
 #include "Api/ScreenshotService.h"
 #include "Api/UpscalingService.h"
 #include "BuildProvenance.h"
@@ -36,6 +37,7 @@ namespace CSX::Api
 				logger::error("Failed to initialize CSX service-registry producer identity ({})", static_cast<std::uint32_t>(status));
 
 			InitializeShaderService();
+			InitializeShaderCompatibilityService();
 			InitializeScreenshotService();
 			InitializeUpscalingService();
 		});

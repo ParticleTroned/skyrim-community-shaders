@@ -288,9 +288,9 @@ namespace
 		}
 		std::uint32_t localFormID = 0u;
 		const auto* first = a_form.data() + 2u;
-		const auto* last = a_form.data() + separator;
-		const auto [position, error] = std::from_chars(first, last, localFormID, 16);
-		if (error != std::errc{} || position != last || localFormID == 0u || localFormID > 0x00FFFFFFu) {
+		const auto* formIDEnd = a_form.data() + separator;
+		const auto [position, error] = std::from_chars(first, formIDEnd, localFormID, 16);
+		if (error != std::errc{} || position != formIDEnd || localFormID == 0u || localFormID > 0x00FFFFFFu) {
 			return false;
 		}
 		return true;

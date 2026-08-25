@@ -721,11 +721,15 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
         note = ""
         is_attention = False
 
-        # Detect new feature (all files added, ini present)
+        # New, correctly versioned features are release information, not a CI
+        # failure. Missing version metadata remains actionable.
         if changes and all(s == "A" for s, _ in changes):
-            if ini_path:
+            if ini_path and new_ver is not None:
                 note = f"New feature (with ini v{new_ver_str})"
                 new_features.append((feature_dir.name, new_ver_str, bump_commit))
+            elif ini_path:
+                note = "New feature (missing or invalid INI version!)"
+                new_features.append((feature_dir.name, "-", bump_commit))
                 is_attention = True
             else:
                 note = "New feature (missing ini!)"
@@ -733,12 +737,15 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
                 is_attention = True
         # Detect new ini added — use pr_prior_ver (base_ref baseline) so features added
         # earlier in the release cycle are not re-reported as new in subsequent PRs.
-        if ini_path and pr_prior_ver is None and new_ver is not None:
+        elif ini_path and pr_prior_ver is None and new_ver is not None:
             note = f"New ini added (v{new_ver_str})"
             new_features.append((feature_dir.name, new_ver_str, bump_commit))
+        elif ini_path and pr_prior_ver is None:
+            note = "New ini added (missing or invalid version!)"
+            new_features.append((feature_dir.name, "-", bump_commit))
             is_attention = True
         # Detect files added but ini missing
-        if not ini_path and any(s == "A" for s, _ in changes):
+        elif not ini_path and any(s == "A" for s, _ in changes):
             note = "Files added, ini missing!"
             new_features.append((feature_dir.name, "-", bump_commit))
             is_attention = True
@@ -996,8 +1003,11 @@ def build_feature_actions(bump_suggestions, metadata_issues, new_features, get_c
             consolidated[norm] = {"actions": [], "author": None}
         consolidated[norm]["actions"].append(f"Update INI: add {', '.join(fields)}")
 
-    # Add new features with authors
-    for feat_name, _, commit in new_features:
+    # Correctly versioned new features are already reported in the dedicated
+    # table. Only incomplete registrations belong in actionable suggestions.
+    for feat_name, version, commit in new_features:
+        if version != "-":
+            continue
         norm = normalize_name(feat_name)
         display_name_map.setdefault(norm, feat_name)
         if ' ' in feat_name and ' ' not in display_name_map[norm]:
@@ -1218,9 +1228,6 @@ def main():
 
         # Recompute actionable after applying bumps
         actionable = any(fa.get('needs_bump') or "missing" in fa.get('note', '').lower() for fa in feature_analysis)
-        if new_features:
-            actionable = True
-
     if args.pr_check:
         print_actionable_suggestions(feature_actions)
     else:

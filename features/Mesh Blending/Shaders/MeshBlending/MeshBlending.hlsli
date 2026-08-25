@@ -138,31 +138,31 @@ namespace MeshBlending
 
 		float survivingTotal = 0.0f;
 		[unroll]
-		for (uint i = 0u; i < kLandscapeLayerCount; ++i) {
-			if (!active[i]) {
+		for (uint remapLayer = 0u; remapLayer < kLandscapeLayerCount; ++remapLayer) {
+			if (!active[remapLayer]) {
 				continue;
 			}
 
 			float targetWeight = 0.0f;
 			if (policy == 0u) {
-				targetWeight = classes[i] == LandscapeClass::Soft ?
+				targetWeight = classes[remapLayer] == LandscapeClass::Soft ?
 				                   targetSoftWeight :
-				                   (i == dominantHardLayer ? targetHardTotal : 0.0f);
+				                   (remapLayer == dominantHardLayer ? targetHardTotal : 0.0f);
 			} else if (policy == 1u) {
 				targetWeight = targetSoftWeight;
 			} else {
 				// Hard materials retain a crisp boundary. Exact ties resolve in
 				// favour of the lowest layer index selected above.
-				targetWeight = i == dominantHardLayer ? activeTotal : 0.0f;
+				targetWeight = remapLayer == dominantHardLayer ? activeTotal : 0.0f;
 			}
 
-			remapped[i] = lerp(original[i], targetWeight, strength);
+			remapped[remapLayer] = lerp(original[remapLayer], targetWeight, strength);
 			// Lighting would skip such a layer after the remap. Remove it exactly
 			// and return its mass to layers that will still be sampled.
-			if (!IsLandscapeLayerActive(remapped[i])) {
-				remapped[i] = 0.0f;
+			if (!IsLandscapeLayerActive(remapped[remapLayer])) {
+				remapped[remapLayer] = 0.0f;
 			} else {
-				survivingTotal += remapped[i];
+				survivingTotal += remapped[remapLayer];
 			}
 		}
 
@@ -175,12 +175,12 @@ namespace MeshBlending
 		const float survivorScale = survivingTotal < activeTotal ? activeTotal / survivingTotal : 1.0f;
 		bool changed = false;
 		[unroll]
-		for (uint i = 0u; i < kLandscapeLayerCount; ++i) {
-			if (active[i] && remapped[i] > 0.0f) {
-				remapped[i] *= survivorScale;
+		for (uint normalizeLayer = 0u; normalizeLayer < kLandscapeLayerCount; ++normalizeLayer) {
+			if (active[normalizeLayer] && remapped[normalizeLayer] > 0.0f) {
+				remapped[normalizeLayer] *= survivorScale;
 			}
-			if (active[i]) {
-				changed = changed || remapped[i] != original[i];
+			if (active[normalizeLayer]) {
+				changed = changed || remapped[normalizeLayer] != original[normalizeLayer];
 			}
 		}
 

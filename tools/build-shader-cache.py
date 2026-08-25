@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -71,6 +72,8 @@ FOMOD_NOTICE_FLAGS = (
 )
 FOMOD_NOTICE_MAX_LINES = 7
 FOMOD_NOTICE_MAX_LINE_LENGTH = 72
+PUBLICATION_REPLACE_ATTEMPTS = 20
+PUBLICATION_REPLACE_RETRY_SECONDS = 0.5
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
 TARGET_RUNTIME = "SE"
 HORIZON_FIX_SHORT_NAME = "HorizonFix"
@@ -1217,6 +1220,26 @@ def discard_publication_staging(path: Path) -> None:
         pass
 
 
+def replace_publication_staging(staging: Path, destination: Path) -> None:
+    """Atomically publish staged output despite short-lived Windows locks."""
+    last_error: OSError | None = None
+    for attempt in range(PUBLICATION_REPLACE_ATTEMPTS):
+        try:
+            staging.replace(destination)
+            return
+        except OSError as exc:
+            last_error = exc
+            if (
+                attempt + 1 == PUBLICATION_REPLACE_ATTEMPTS
+                or not path_entry_exists(staging)
+                or path_entry_exists(destination)
+            ):
+                raise
+            time.sleep(PUBLICATION_REPLACE_RETRY_SECONDS)
+
+    raise RuntimeError("publication retry loop exhausted unexpectedly") from last_error
+
+
 def copy_publication_candidate(source: Path, staging: Path, label: str) -> None:
     """Copy validated output so it inherits the destination parent's ACL.
 
@@ -1248,10 +1271,12 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
 
     if not path_entry_exists(destination):
         try:
-            staging.replace(destination)
+            replace_publication_staging(staging, destination)
         except OSError as exc:
-            discard_publication_staging(staging)
-            raise SystemExit(f"failed to publish {runtime} cache: {destination}") from exc
+            raise SystemExit(
+                f"failed to publish {runtime} cache: {destination}; "
+                f"validated staging retained at {staging} ({exc})"
+            ) from exc
         return destination
 
     backup = candidate_root.parent / f"{runtime}.previous"
@@ -1267,18 +1292,20 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
             f"could not move the existing {runtime} cache aside: {destination}"
         ) from exc
     try:
-        staging.replace(destination)
+        replace_publication_staging(staging, destination)
     except OSError as exc:
         try:
             backup.replace(destination)
         except OSError as restore_error:
-            discard_publication_staging(staging)
             raise SystemExit(
                 f"failed to publish {runtime} cache and could not restore "
-                f"the previous output: {destination}"
+                f"the previous output: {destination}; validated staging "
+                f"retained at {staging}"
             ) from restore_error
-        discard_publication_staging(staging)
-        raise SystemExit(f"failed to publish {runtime} cache: {destination}") from exc
+        raise SystemExit(
+            f"failed to publish {runtime} cache: {destination}; "
+            f"validated staging retained at {staging} ({exc})"
+        ) from exc
 
     # The old cache remains inside the isolated temporary workspace until it
     # is cleaned up after this invocation. It is never recursively deleted
@@ -1816,11 +1843,11 @@ def publish_cache_archive(candidate: Path, out_root: Path, runtime: str) -> Path
     staging = out_root / f".{candidate.name}.publishing"
     copy_publication_candidate(candidate, staging, f"{runtime} cache archive")
     try:
-        staging.replace(archive_path)
+        replace_publication_staging(staging, archive_path)
     except OSError as exc:
-        discard_publication_staging(staging)
         raise SystemExit(
-            f"failed to publish {runtime} cache archive: {archive_path}"
+            f"failed to publish {runtime} cache archive: {archive_path}; "
+            f"validated staging retained at {staging} ({exc})"
         ) from exc
     print(f"{runtime}: packaged {archive_path} ({archive_path.stat().st_size} bytes)")
     return archive_path

@@ -10,6 +10,11 @@ target_compile_features(
 	cxx_std_23
 )
 
+# CSX does not use C++20 modules.  Leaving CMake's automatic module scan
+# enabled makes parallel MSVC compilations race on the same fallback .d.json
+# dependency file for some translation-unit batches.
+set_property(TARGET "${PROJECT_NAME}" PROPERTY CXX_SCAN_FOR_MODULES OFF)
+
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 include(AddCXXFiles)

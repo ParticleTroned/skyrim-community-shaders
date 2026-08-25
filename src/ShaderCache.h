@@ -434,9 +434,11 @@ namespace SIE
 		void SetDiskCache(bool value);
 		void PersistCompiledShaderBlob(
 			ID3DBlob* a_shaderBlob,
+			bool a_developerMode,
 			const std::wstring& a_diskPath,
 			const std::filesystem::path& a_shaderPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
+			const Util::ContentHash::Hash128& a_packCompileStateDigest,
 			uint64_t a_diskCacheGeneration);
 		void SetSaveLoadDiskPersistenceBlocked(bool a_blocked);
 		void DeleteDiskCache();
@@ -895,6 +897,8 @@ namespace SIE
 			SIE::ShaderClass shaderClass;
 			std::wstring diskPath;
 			Util::ContentHash::Hash128 compileStateDigest;
+			Util::ContentHash::Hash128 packCompileStateDigest;
+			bool developerMode = false;
 
 			bool operator<(const hlslRecord& other) const
 			{
@@ -907,6 +911,8 @@ namespace SIE
 			std::wstring diskPath;
 			std::filesystem::path shaderPath;
 			Util::ContentHash::Hash128 compileStateDigest;
+			Util::ContentHash::Hash128 packCompileStateDigest;
+			bool developerMode = false;
 			uint64_t diskCacheGeneration = 0;
 		};
 		ShaderCache();

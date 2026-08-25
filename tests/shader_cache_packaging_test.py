@@ -207,6 +207,10 @@ class ShaderCachePackagingTests(unittest.TestCase):
 
         self.assertEqual(
             BUILDER.cache_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
+            (BUILDER.STANDARD_CACHE_VARIANT,),
+        )
+        self.assertEqual(
+            BUILDER.compile_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
             BUILDER.CACHE_VARIANTS,
         )
         self.assertEqual(
@@ -565,7 +569,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             )
             BUILDER.validate_fomod_installer(fomod_dir, "CSX12.345-VR")
 
-    def test_se_fomod_adds_horizon_variants_without_dropping_core_identity(self) -> None:
+    def test_se_fomod_installs_one_managed_cache_with_core_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runtime_root = Path(temporary)
             fomod_dir = BUILDER.write_fomod_installer(
@@ -589,10 +593,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             ]
             self.assertEqual(
                 sources,
-                [
-                    BUILDER.HORIZON_FIX_CACHE_DIRECTORY,
-                    BUILDER.CACHE_DIRECTORY,
-                ],
+                [BUILDER.CACHE_DIRECTORY],
             )
             for plugin in cache_plugins:
                 for pattern in plugin.findall(
@@ -619,42 +620,30 @@ class ShaderCachePackagingTests(unittest.TestCase):
                         ),
                         dependencies,
                     )
+                    self.assertFalse(
+                        any(path.endswith("HorizonFix.dll") for path, _ in dependencies)
+                    )
             BUILDER.validate_fomod_installer(
                 fomod_dir,
                 "CSX12.345-VR",
-                horizon_variants=True,
+                horizon_variants=False,
             )
 
-    def test_vr_fomod_also_adds_both_horizon_variants(self) -> None:
+    def test_fomod_rejects_retired_installer_selected_horizon_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runtime_root = Path(temporary)
-            fomod_dir = BUILDER.write_fomod_installer(
-                runtime_root,
-                "VR",
-                "future-test",
-                "CSX 12.345-VR",
-            )
-            root = ET.parse(fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME).getroot()
-            sources = [
-                plugin.find("./files/folder").get("source")
-                for plugin in root.findall(
-                    "./installSteps/installStep/optionalFileGroups/group/"
-                    "plugins/plugin"
+            with self.assertRaisesRegex(
+                SystemExit,
+                "installer-selected Horizon cache variants are retired",
+            ):
+                BUILDER.write_fomod_installer(
+                    runtime_root,
+                    "VR",
+                    "future-test",
+                    "CSX 12.345-VR",
+                    horizon_variants=True,
                 )
-                if plugin.find("./files/folder") is not None
-            ]
-            self.assertEqual(
-                sources,
-                [
-                    BUILDER.HORIZON_FIX_CACHE_DIRECTORY,
-                    BUILDER.CACHE_DIRECTORY,
-                ],
-            )
-            BUILDER.validate_fomod_installer(
-                fomod_dir,
-                "CSX12.345-VR",
-                horizon_variants=True,
-            )
+            self.assertFalse((runtime_root / BUILDER.FOMOD_DIRECTORY).exists())
 
     def test_fomod_validation_rejects_weakened_contracts(self) -> None:
         mutations = (

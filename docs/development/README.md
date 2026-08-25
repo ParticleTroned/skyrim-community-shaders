@@ -1,8 +1,9 @@
 # Development Documentation
 
-- [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
-- [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
-- [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
+-   [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
+-   [Developer tooling](tooling.md) — reliable Git hooks, GitHub transport, Codex sandbox, and Windows build setup.
+-   [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
+-   [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
 
 ## Getting Started
 
@@ -17,11 +18,13 @@
 
 ### Common Tasks
 
--   **Fast shader deployment:** `cmake --build build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS`
+-   **One-time developer setup:** `pwsh ./tools/setup-dev.ps1`
+-   **Tooling diagnostics:** `pwsh ./tools/dev-doctor.ps1 -Network`
+-   **Fast shader deployment:** `pwsh ./tools/cmake.ps1 --build build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS`
 -   **Verify shader refactor bytecode:** `pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl`
 -   **Runtime A/B shader check:** `tools/taa-renderdoc-ab.py` via RenderDoc embedded Python
 -   **Full build with deployment:** `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
--   **Run shader tests:** `cmake --build build/ALL --target run_shader_tests`
+-   **Run shader tests:** `pwsh ./tools/cmake.ps1 --build build/ALL --target run_shader_tests`
 -   **Create a worktree with submodules + local preset:** `pwsh ./tools/new-worktree.ps1 -Name my-branch`
 -   **Install optional git alias:** `pwsh ./tools/install-worktree-alias.ps1`
 
@@ -38,9 +41,9 @@ See `CMakePresets.json` for all available presets.
 The main DLL target does not build every test executable. A clean pull-request validation must build both test groups explicitly before running CTest:
 
 ```powershell
-cmake --preset ALL -DBUILD_CONTROLLER_TESTS=ON -DBUILD_SHADER_TESTS=ON
-cmake --build --preset CSmain -- /m:1
-cmake --build build/ALL --config Release --target controller_tests shader_tests -- /m:1
+pwsh ./tools/cmake.ps1 --preset ALL -DBUILD_CONTROLLER_TESTS=ON -DBUILD_SHADER_TESTS=ON
+pwsh ./tools/cmake.ps1 --build --preset CSmain -- /m:1
+pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target controller_tests shader_tests -- /m:1
 ctest --test-dir build/ALL -C Release --output-on-failure --no-tests=error --timeout 300
 ```
 

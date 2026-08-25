@@ -22,12 +22,15 @@ cbuffer ClearHMDMaskCB : register(b0)
 };
 
 Texture2D<float> DepthIn : register(t0);
+Texture2D<uint> ExactHMDMaskIn : register(t1);
 RWTexture2D<float4> ColorInOut : register(u0);
+RWTexture2D<uint> ExactHMDMaskOut : register(u1);
 RWByteAddressBuffer HMDMaskAuditCounters : register(u2);
 
 static const float kHiddenDepthThreshold = 1e-6;
 static const int kHiddenDepthDilationRadius = 2;
 static const uint kAuditCandidateSparseDepth9 = 1;
+static const uint kAuditCandidateExactReusableMask = 2;
 static const uint kAuditSampleStride = 2;
 
 bool IsHiddenDepth(float depth)
@@ -141,6 +144,24 @@ void RecordAuditCandidate(uint candidateIndex, bool robustClear, bool candidateC
 		HMDMaskAuditCounters.InterlockedAdd(counterBase + 12u, 1u, ignored);
 }
 
+void RecordPrimaryAudit(bool robustClear, bool candidateClear, uint2 auditPos)
+{
+	uint ignored;
+	HMDMaskAuditCounters.InterlockedAdd(0, 1u, ignored);
+	if (robustClear)
+		HMDMaskAuditCounters.InterlockedAdd(4, 1u, ignored);
+	if (candidateClear)
+		HMDMaskAuditCounters.InterlockedAdd(8, 1u, ignored);
+	if (robustClear && !candidateClear)
+		HMDMaskAuditCounters.InterlockedAdd(12, 1u, ignored);
+	if (!robustClear && candidateClear)
+		HMDMaskAuditCounters.InterlockedAdd(16, 1u, ignored);
+	if (robustClear != candidateClear)
+		HMDMaskAuditCounters.InterlockedAdd(20, 1u, ignored);
+	if (all(auditPos == uint2(0, 0)))
+		HMDMaskAuditCounters.InterlockedAdd(24, 1u, ignored);
+}
+
 static const uint kProbeGridSize = 9;
 
 uint ResolveProbeCoordinate(uint index, uint extent)
@@ -240,6 +261,146 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		ColorInOut[colorPos] = float4(0.0, 0.0, 0.0, 0.0);
 }
 
+// DevBench experiment: build one exact Boolean decision for every coordinate in
+// the eye-local depth domain. Color at any resolution can then point-read the
+// same decision without composing input- and output-resolution rounding.
+[numthreads(8, 8, 1)] void BuildExactHMDMaskMain(uint3 dispatchID : SV_DispatchThreadID)
+{
+	if (dispatchID.x >= DepthWidth || dispatchID.y >= DepthHeight)
+		return;
+
+	uint depthTexWidth, depthTexHeight;
+	DepthIn.GetDimensions(depthTexWidth, depthTexHeight);
+	uint maskTexWidth, maskTexHeight;
+	ExactHMDMaskOut.GetDimensions(maskTexWidth, maskTexHeight);
+	if (dispatchID.x >= maskTexWidth || dispatchID.y >= maskTexHeight)
+		return;
+
+	const uint2 depthDimensions = uint2(depthTexWidth, depthTexHeight);
+	const uint2 depthOffset = uint2(DepthOffsetX, DepthOffsetY);
+	const uint2 depthExtent = uint2(DepthWidth, DepthHeight);
+	const uint2 depthPos = dispatchID.xy + depthOffset;
+	const bool clearPixel =
+		IsDepthSampleInRegion(int2(depthPos), depthDimensions, depthOffset, depthExtent) &&
+		IsDilatedHiddenDepth(depthPos, depthDimensions, depthOffset, depthExtent);
+	ExactHMDMaskOut[dispatchID.xy] = clearPixel ? 1u : 0u;
+}
+
+// DevBench experiment: sanitize input and final color with the same exact
+// depth-domain decision. Integer mapping intentionally matches main().
+[numthreads(8, 8, 1)] void ClearHMDMaskFromExactMain(uint3 dispatchID : SV_DispatchThreadID)
+{
+	if (dispatchID.x >= ColorWidth || dispatchID.y >= ColorHeight ||
+		DepthWidth == 0 || DepthHeight == 0 || ColorWidth == 0 || ColorHeight == 0) {
+		return;
+	}
+
+	uint colorTexWidth, colorTexHeight;
+	ColorInOut.GetDimensions(colorTexWidth, colorTexHeight);
+	const uint2 colorPos = dispatchID.xy + uint2(ColorOffsetX, ColorOffsetY);
+	if (colorPos.x >= colorTexWidth || colorPos.y >= colorTexHeight)
+		return;
+
+	uint maskTexWidth, maskTexHeight;
+	ExactHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
+	const uint2 maskPos = uint2(
+		(dispatchID.x * DepthWidth) / ColorWidth,
+		(dispatchID.y * DepthHeight) / ColorHeight);
+	if (maskPos.x >= DepthWidth || maskPos.y >= DepthHeight ||
+		maskPos.x >= maskTexWidth || maskPos.y >= maskTexHeight) {
+		return;
+	}
+
+	if (ExactHMDMaskIn[maskPos] != 0u)
+		ColorInOut[colorPos] = float4(0.0, 0.0, 0.0, 0.0);
+}
+
+// DevBench experiment: preserve the exact 5x5 predicate while sharing depth
+// loads across an 8x8 color tile. In the upscaling/equal-size domain the mapped
+// depth span is at most eight texels, so a 12x12 tile includes the radius-two
+// halo. Unexpected mappings use the untiled predicate and remain exact.
+groupshared uint TiledHiddenDepth[12 * 12];
+
+[numthreads(8, 8, 1)] void ClearHMDMaskTiled5x5Main(
+	uint3 groupID : SV_GroupID,
+	uint3 groupThreadID : SV_GroupThreadID,
+	uint3 dispatchID : SV_DispatchThreadID)
+{
+	if (DepthWidth == 0 || DepthHeight == 0 || ColorWidth == 0 || ColorHeight == 0)
+		return;
+
+	uint depthTexWidth, depthTexHeight;
+	DepthIn.GetDimensions(depthTexWidth, depthTexHeight);
+	const uint2 depthDimensions = uint2(depthTexWidth, depthTexHeight);
+	const uint2 depthOffset = uint2(DepthOffsetX, DepthOffsetY);
+	const uint2 depthExtent = uint2(DepthWidth, DepthHeight);
+
+	const uint2 groupColorMin = groupID.xy * 8u;
+	const uint2 groupColorMax = min(
+		groupColorMin + 7u,
+		uint2(ColorWidth - 1u, ColorHeight - 1u));
+	const uint2 groupDepthMin = uint2(
+		(groupColorMin.x * DepthWidth) / ColorWidth,
+		(groupColorMin.y * DepthHeight) / ColorHeight) +
+		depthOffset;
+	const uint2 groupDepthMax = uint2(
+		(groupColorMax.x * DepthWidth) / ColorWidth,
+		(groupColorMax.y * DepthHeight) / ColorHeight) +
+		depthOffset;
+	const uint2 rawTileExtent = groupDepthMax - groupDepthMin + 5u;
+	const bool tileFits = all(rawTileExtent <= 12u);
+	const uint2 tileExtent = min(rawTileExtent, 12u);
+	const int2 tileOrigin = int2(groupDepthMin) - kHiddenDepthDilationRadius;
+	const uint linearThread = groupThreadID.y * 8u + groupThreadID.x;
+	const uint tileElementCount = tileExtent.x * tileExtent.y;
+	for (uint index = linearThread; index < tileElementCount; index += 64u) {
+		const uint2 tilePos = uint2(index % tileExtent.x, index / tileExtent.x);
+		const int2 samplePos = tileOrigin + int2(tilePos);
+		bool hidden = false;
+		if (IsDepthSampleInRegion(samplePos, depthDimensions, depthOffset, depthExtent))
+			hidden = IsHiddenDepth(DepthIn[uint2(samplePos)]);
+		TiledHiddenDepth[index] = hidden ? 1u : 0u;
+	}
+	GroupMemoryBarrierWithGroupSync();
+
+	if (dispatchID.x >= ColorWidth || dispatchID.y >= ColorHeight)
+		return;
+
+	const uint2 depthPos = uint2(
+		(dispatchID.x * DepthWidth) / ColorWidth,
+		(dispatchID.y * DepthHeight) / ColorHeight) +
+		depthOffset;
+	if (!IsDepthSampleInRegion(int2(depthPos), depthDimensions, depthOffset, depthExtent))
+		return;
+
+	bool tiledClear = false;
+	if (tileFits) {
+		const uint2 tileCenter = uint2(int2(depthPos) - tileOrigin);
+		[unroll] for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y)
+		{
+			[unroll] for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x)
+			{
+				const uint2 tilePos = uint2(int2(tileCenter) + int2(x, y));
+				tiledClear = tiledClear ||
+				             TiledHiddenDepth[tilePos.y * tileExtent.x + tilePos.x] != 0u;
+			}
+		}
+	} else {
+		tiledClear = IsDilatedHiddenDepth(depthPos, depthDimensions, depthOffset, depthExtent);
+	}
+
+#if defined(HMD_MASK_TILED_QUALITY_AUDIT)
+	const bool robustClear = IsDilatedHiddenDepth(depthPos, depthDimensions, depthOffset, depthExtent);
+	RecordPrimaryAudit(robustClear, tiledClear, dispatchID.xy);
+#else
+	uint colorTexWidth, colorTexHeight;
+	ColorInOut.GetDimensions(colorTexWidth, colorTexHeight);
+	const uint2 colorPos = dispatchID.xy + uint2(ColorOffsetX, ColorOffsetY);
+	if (tiledClear && colorPos.x < colorTexWidth && colorPos.y < colorTexHeight)
+		ColorInOut[colorPos] = float4(0.0, 0.0, 0.0, 0.0);
+#endif
+}
+
 // DevBench-only decision audit. It never writes presentation color. A stable
 // 2x2 stratified sample keeps captures representative and bounded while still
 // evaluating the display-domain mapping used by the production scrub.
@@ -282,24 +443,20 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		threshold3x3Clear,
 		thresholdCrossR2Clear,
 		thresholdPatternR2Clear);
-	const bool candidateClear = AuditCandidateMode == kAuditCandidateSparseDepth9 ?
-	                                thresholdPatternR2Clear :
-	                                robustClear;
+	bool candidateClear = AuditCandidateMode == kAuditCandidateSparseDepth9 ?
+	                          thresholdPatternR2Clear :
+	                          robustClear;
+	if (AuditCandidateMode == kAuditCandidateExactReusableMask) {
+		uint maskTexWidth, maskTexHeight;
+		ExactHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
+		const uint2 maskPos = depthPos - depthOffset;
+		candidateClear = maskPos.x < DepthWidth && maskPos.y < DepthHeight &&
+		                 maskPos.x < maskTexWidth && maskPos.y < maskTexHeight &&
+		                 ExactHMDMaskIn[maskPos] != 0u;
+	}
 
 	uint ignored;
-	HMDMaskAuditCounters.InterlockedAdd(0, 1u, ignored);
-	if (robustClear)
-		HMDMaskAuditCounters.InterlockedAdd(4, 1u, ignored);
-	if (candidateClear)
-		HMDMaskAuditCounters.InterlockedAdd(8, 1u, ignored);
-	if (robustClear && !candidateClear)
-		HMDMaskAuditCounters.InterlockedAdd(12, 1u, ignored);
-	if (!robustClear && candidateClear)
-		HMDMaskAuditCounters.InterlockedAdd(16, 1u, ignored);
-	if (robustClear != candidateClear)
-		HMDMaskAuditCounters.InterlockedAdd(20, 1u, ignored);
-	if (dispatchID.x == 0 && dispatchID.y == 0)
-		HMDMaskAuditCounters.InterlockedAdd(24, 1u, ignored);
+	RecordPrimaryAudit(robustClear, candidateClear, dispatchID.xy);
 
 	RecordAuditCandidate(0u, robustClear, thresholdCenterClear, ignored);
 	RecordAuditCandidate(1u, robustClear, threshold3x3Clear, ignored);

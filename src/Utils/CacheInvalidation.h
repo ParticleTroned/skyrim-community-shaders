@@ -173,6 +173,22 @@ namespace Util::CacheInvalidation
 					return false;
 			}
 
+			// ImageSpace cache directories use runtime technique names rather than source stems.
+			std::vector<std::filesystem::path> imageSpaceRoots;
+			for (const auto& entry : std::filesystem::directory_iterator(shadersRoot)) {
+				if (entry.is_regular_file() && entry.path().extension() == L".hlsl" &&
+					(entry.path().stem().wstring().starts_with(L"IS") || entry.path().stem() == L"Utility")) {
+					imageSpaceRoots.push_back(entry.path());
+				}
+			}
+			std::map<std::pair<std::filesystem::path, std::string>, std::optional<bool>> referenceCache;
+			const auto referencesDefine = [&](const std::filesystem::path& root, const std::string& define) -> const std::optional<bool>& {
+				auto [it, inserted] = referenceCache.try_emplace({ root, define });
+				if (inserted)
+					it->second = RootShaderReferencesToken(root, define, shadersRoot);
+				return it->second;
+			};
+
 			size_t deleted = 0;
 			size_t kept = 0;
 
@@ -180,19 +196,47 @@ namespace Util::CacheInvalidation
 				if (!entry.is_directory())
 					continue;
 
-				const auto root = shadersRoot / (entry.path().filename().wstring() + L".hlsl");
-				if (!std::filesystem::exists(root))
-					return false;
-
+				const auto dirName = entry.path().filename().wstring();
+				const auto root = shadersRoot / (dirName + L".hlsl");
 				bool affected = false;
-				for (const auto& define : defines) {
-					const auto refs = RootShaderReferencesToken(root, define, shadersRoot);
-					if (!refs.has_value())
-						return false;
-					if (*refs) {
-						affected = true;
-						break;
+				const bool isImageSpace = dirName.starts_with(L"IS") || dirName == L"ReflectionsRayTracing";
+				if (isImageSpace) {
+					bool sourceResolved = false;
+					for (const auto& imageSpaceRoot : imageSpaceRoots) {
+						const auto sourceName = imageSpaceRoot.stem().wstring();
+						const bool isUtility = sourceName == L"Utility";
+						const bool matchesTechnique = dirName.starts_with(sourceName) ||
+						                              (sourceName.starts_with(L"IS") && dirName.starts_with(sourceName.substr(2)));
+						if (!isUtility && !matchesTechnique)
+							continue;
+
+						sourceResolved = sourceResolved || matchesTechnique;
+						for (const auto& define : defines) {
+							const auto& refs = referencesDefine(imageSpaceRoot, define);
+							if (!refs.has_value())
+								return false;
+							if (*refs) {
+								affected = true;
+								break;
+							}
+						}
+						if (affected)
+							break;
 					}
+					// Unknown remaps cannot be proven independent of the changed feature.
+					affected = affected || !sourceResolved;
+				} else if (std::filesystem::exists(root)) {
+					for (const auto& define : defines) {
+						const auto& refs = referencesDefine(root, define);
+						if (!refs.has_value())
+							return false;
+						if (*refs) {
+							affected = true;
+							break;
+						}
+					}
+				} else {
+					return false;
 				}
 
 				if (affected) {

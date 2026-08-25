@@ -1606,6 +1606,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_cache_provenance_test.cpp
     )
     add_controller_test(
+        cache_invalidation_test
+        CacheInvalidation
+        tests/cache_invalidation_test.cpp
+    )
+    add_controller_test(
         shader_compilation_scheduling_policy_test
         ShaderCompilationSchedulingPolicy
         tests/shader_compilation_scheduling_policy_test.cpp
@@ -1797,6 +1802,7 @@ if(BUILD_CONTROLLER_TESTS)
             overlay_policy_test
             shader_cache_disable_policy_test
             shader_cache_provenance_test
+            cache_invalidation_test
             shader_compilation_scheduling_policy_test
             volumetric_lighting_cache_refresh_policy_test
             vr_depth_culling_enable_policy_test

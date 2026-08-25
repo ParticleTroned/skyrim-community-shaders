@@ -4145,8 +4145,9 @@ namespace SIE
 
 		const auto taskKey = task.GetString();
 
-		// Run all shader compilation work at below-normal priority.
-		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+		// Run shader compilation cooperatively even when another plugin raises the
+		// entire Skyrim process to Above Normal or High priority.
+		Util::SetCurrentThreadCooperativeBackgroundPriority();
 
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);

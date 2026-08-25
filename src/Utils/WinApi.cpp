@@ -1,5 +1,7 @@
 #include "WinApi.h"
 
+#include "ShaderCompilationSchedulingPolicy.h"
+
 namespace Util
 {
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath)
@@ -68,5 +70,39 @@ namespace Util
 			return count > 0 ? count : fallback;
 		}();
 		return cached;
+	}
+
+	int GetCooperativeBackgroundThreadPriority(DWORD a_processPriorityClass)
+	{
+		using namespace ShaderCompilationSchedulingPolicy;
+
+		ProcessPriorityBand processPriorityBand = ProcessPriorityBand::Standard;
+		switch (a_processPriorityClass) {
+		case HIGH_PRIORITY_CLASS:
+		case REALTIME_PRIORITY_CLASS:
+			processPriorityBand = ProcessPriorityBand::HighOrRealtime;
+			break;
+		case ABOVE_NORMAL_PRIORITY_CLASS:
+			processPriorityBand = ProcessPriorityBand::AboveNormal;
+			break;
+		default:
+			break;
+		}
+
+		switch (SelectCooperativeThreadPriority(processPriorityBand)) {
+		case CooperativeThreadPriority::Idle:
+			return THREAD_PRIORITY_IDLE;
+		case CooperativeThreadPriority::Lowest:
+			return THREAD_PRIORITY_LOWEST;
+		default:
+			return THREAD_PRIORITY_BELOW_NORMAL;
+		}
+	}
+
+	bool SetCurrentThreadCooperativeBackgroundPriority()
+	{
+		const DWORD processPriorityClass = GetPriorityClass(GetCurrentProcess());
+		const int threadPriority = GetCooperativeBackgroundThreadPriority(processPriorityClass);
+		return SetThreadPriority(GetCurrentThread(), threadPriority) != FALSE;
 	}
 }  // namespace Util

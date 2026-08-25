@@ -124,14 +124,21 @@ void AdvancedSettingsRenderer::RenderLoggingSection()
 	ImGui::Spacing();
 
 	// Compiler Thread controls
-	ImGui::SliderInt(T("menu.advanced.compiler_threads", "Compiler Threads"), &shaderCache->compilationThreadCount, 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+	const int32_t maxCompilerThreads = std::max(
+		1,
+		static_cast<int32_t>(shaderCache->compilationPool.get_thread_count()));
+	shaderCache->compilationThreadCount = std::clamp(shaderCache->compilationThreadCount, 1, maxCompilerThreads);
+	shaderCache->backgroundCompilationThreadCount = std::clamp(shaderCache->backgroundCompilationThreadCount, 1, maxCompilerThreads);
+
+	ImGui::SliderInt(T("menu.advanced.compiler_threads", "Compiler Threads"), &shaderCache->compilationThreadCount, 1, maxCompilerThreads);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("menu.advanced.compiler_threads_tooltip",
 							  "Number of threads used to compile shaders at startup. "
-							  "Defaults to all logical cores minus one for OS headroom (E-cores included). "
+							  "Defaults to 75%% of available logical CPU threads, leaving meaningful "
+							  "headroom for Windows and other applications (E-cores included). "
 							  "Higher values finish compilation faster but may make the system less responsive."));
 	}
-	ImGui::SliderInt(T("menu.advanced.background_compiler_threads", "Background Compiler Threads"), &shaderCache->backgroundCompilationThreadCount, 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+	ImGui::SliderInt(T("menu.advanced.background_compiler_threads", "Background Compiler Threads"), &shaderCache->backgroundCompilationThreadCount, 1, maxCompilerThreads);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("menu.advanced.background_compiler_threads_tooltip",
 							  "Number of threads used to compile shaders during gameplay. "

@@ -615,6 +615,12 @@ void State::LoadFromJson(nlohmann::json& settings)
 
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
+		// The compilation pool is constructed at the responsive hardware-derived
+		// ceiling. Clamp persisted legacy/preset values to the number of workers that
+		// actually exists instead of accepting ineffective or CPU-hostile values.
+		const auto maxCompilerThreads = std::max(
+			1,
+			static_cast<int32_t>(shaderCache->compilationPool.get_thread_count()));
 		if (advanced.contains("Dump Shaders") && advanced["Dump Shaders"].is_boolean())
 			shaderCache->SetDump(advanced["Dump Shaders"]);
 		if (advanced.contains("Log Level") && advanced["Log Level"].is_number_integer()) {
@@ -628,9 +634,9 @@ void State::LoadFromJson(nlohmann::json& settings)
 		if (advanced.contains("Shader Defines") && advanced["Shader Defines"].is_string())
 			SetDefines(advanced["Shader Defines"]);
 		if (advanced.contains("Compiler Threads") && advanced["Compiler Threads"].is_number_integer())
-			shaderCache->compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			shaderCache->compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Background Compiler Threads") && advanced["Background Compiler Threads"].is_number_integer())
-			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Use FileWatcher") && advanced["Use FileWatcher"].is_boolean())
 			shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
 		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean())

@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "ShaderCompilationSchedulingPolicy.h"
 #include "Utils/CacheInvalidation.h"
 #include "Utils/ContentHash.h"
 #include "Utils/WinApi.h"
@@ -501,18 +502,15 @@ namespace SIE
 
 		ShaderFileDependencyTracker* GetDependencyTracker() { return dependencyTracker.get(); }
 
-		static constexpr int32_t kLowCoreCompilationThreadThreshold = 8;
-		static constexpr int32_t kLowCoreReservedCompilationThreads = 1;
-		static constexpr int32_t kDefaultReservedCompilationThreads = 2;
-
 		static int32_t GetDefaultCompilationThreadCount()
 		{
-			const auto threadCount = static_cast<int32_t>(std::thread::hardware_concurrency());
-			const auto reservedThreads = threadCount <= kLowCoreCompilationThreadThreshold ? kLowCoreReservedCompilationThreads : kDefaultReservedCompilationThreads;
-			return std::max(threadCount - reservedThreads, 1);
+			return ShaderCompilationSchedulingPolicy::CalculateDefaultCompilationThreadCount(
+				static_cast<int32_t>(std::thread::hardware_concurrency()));
 		}
 
-		// Reserve fewer threads on low-core systems to avoid overly slow startup compilation.
+		// Startup compilation uses most of the CPU while leaving enough logical processors
+		// free for the OS and foreground applications to remain responsive. Compiler workers
+		// also run at process-aware cooperative priority (see ProcessCompilationSet()).
 		// Management and file watcher run on dedicated jthreads, not pool slots.
 		// Background (in-game): half of P-cores only, to avoid starving the render thread.
 		int32_t compilationThreadCount = GetDefaultCompilationThreadCount();

@@ -45,9 +45,15 @@ namespace
 
 	constexpr bool CoversWorkerPriorityLifecycle()
 	{
-		return SelectWorkerThreadPriorityMode(CompilationPhase::Startup) ==
+		return SelectCompilationPhase(false) == CompilationPhase::Startup &&
+		       SelectCompilationPhase(true) == CompilationPhase::InGame &&
+		       !ShouldCompleteStartupCompilation(false, false) &&
+		       !ShouldCompleteStartupCompilation(false, true) &&
+		       !ShouldCompleteStartupCompilation(true, true) &&
+		       ShouldCompleteStartupCompilation(true, false) &&
+		       SelectWorkerThreadPriorityMode(SelectCompilationPhase(false)) ==
 		           WorkerThreadPriorityMode::CooperativeBackground &&
-		       SelectWorkerThreadPriorityMode(CompilationPhase::InGame) ==
+		       SelectWorkerThreadPriorityMode(SelectCompilationPhase(true)) ==
 		           WorkerThreadPriorityMode::ProcessNormal;
 	}
 

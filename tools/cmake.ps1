@@ -21,6 +21,9 @@ Initialize-CsxToolEnvironment `
     -CommonGitDirectory $commonGitDirectory `
     -ProtectPublicGitHub | Out-Null
 
+$vcpkgRoot = Resolve-CsxVcpkgRoot -Required
+Write-Host "Using vcpkg at $vcpkgRoot"
+
 $cmake = Get-Command cmake.exe -ErrorAction SilentlyContinue
 if (-not $cmake) {
     throw "cmake.exe was not found on PATH. Install CMake or the Visual Studio CMake component."

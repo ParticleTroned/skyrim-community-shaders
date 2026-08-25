@@ -31,7 +31,7 @@ SKSE64 plugin providing modular DirectX 11 graphics enhancements for Skyrim SE/A
 ### Windows-Only Requirements
 
 -   Visual Studio Community 2022 with "Desktop development with C++" workload
--   CMake 3.21+, Git, vcpkg with VCPKG_ROOT environment variable, Windows SDK
+-   CMake 3.21+, Git, vcpkg (the launcher discovers Visual Studio installations or honors `VCPKG_ROOT`), Windows SDK
 -   **NEVER CANCEL BUILDS**: 45-60 minutes build time, 15-30 minutes shader validation
 
 ### Linux/WSL Limitations

@@ -18,8 +18,10 @@
 #include "RE/B/BSMultiBoundRoom.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -68,6 +70,10 @@ namespace
 	constexpr std::uint32_t kParticleLightCacheMaxIdleFrames = 600;
 	constexpr std::size_t kParticleLightCacheMaxEntries = static_cast<std::size_t>(MAX_LIGHTS) * 32u;
 	constexpr std::size_t kMaxQueuedParticleLights = static_cast<std::size_t>(MAX_LIGHTS) * 16u;
+	// StartGroupingAlphas has no capacity check; leave room for workers already past the guard.
+	constexpr std::uint32_t kAlphaGeometryGroupCapacityFlat = 512;
+	constexpr std::uint32_t kAlphaGeometryGroupCapacityVR = 1024;
+	constexpr std::uint32_t kAlphaGeometryGroupReserve = 64;
 	constexpr std::size_t kNiLightEngineReadSize = 0x174;
 	constexpr std::size_t kBSLightEngineReadSize = 0x50;
 	constexpr int kVRNiAVObjectFlagsOffset = 0x10C;
@@ -107,6 +113,44 @@ namespace
 		VRCullingProcessVtableSpec{ 0x190BEB0, 0x136F600 }  // BSParabolicCullingProcess
 	};
 	constexpr std::size_t kVRBSCullingProcessVisibilityVtableOffset = 0xE8;
+
+	std::uint32_t* alphaGeometryGroupCount = nullptr;
+	std::uint32_t alphaGeometryGroupLimit = 0;
+	std::atomic<std::uint32_t> alphaGeometryGroupPeak{ 0 };
+	std::atomic<std::uint64_t> alphaGeometryGroupDrops{ 0 };
+
+	struct StartGroupingAlphas
+	{
+		static void* thunk(
+			RE::BSBatchRenderer* a_this,
+			void* a_bound,
+			RE::NiCamera* a_camera,
+			bool a_sortByClosestPoint)
+		{
+			if (alphaGeometryGroupCount && a_camera) {
+				const auto live = *alphaGeometryGroupCount;
+				auto peak = alphaGeometryGroupPeak.load(std::memory_order_relaxed);
+				while (live > peak && !alphaGeometryGroupPeak.compare_exchange_weak(
+										  peak, live, std::memory_order_relaxed)) {
+				}
+
+				if (live >= alphaGeometryGroupLimit) {
+					const auto drops = alphaGeometryGroupDrops.fetch_add(1, std::memory_order_relaxed) + 1;
+					if (drops == 1 || drops % 10000 == 0) {
+						logger::warn(
+							"[LLF] Alpha GeometryGroup ceiling reached ({} live, {} refused)",
+							live,
+							drops);
+					}
+					return nullptr;
+				}
+			}
+
+			return func(a_this, a_bound, a_camera, a_sortByClosestPoint);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 
 	template <std::size_t N>
 	bool MatchesInstructions(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
@@ -2261,6 +2305,55 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLig
 	emitter.sequence = nextParticleLightSequence++;
 	queuedEmitterIndices[key] = emitterIndex;
 	return true;
+}
+
+void LightLimitFix::Hooks::InstallAlphaGeometryGroupGuard()
+{
+	// Decode the counter from ClearAlphaGeometryGroups so the guard stays portable across runtimes.
+	constexpr std::uint8_t kMovDwordImmediateOpcode = 0xC7;
+	constexpr std::uint8_t kRipRelativeModRM = 0x05;
+	constexpr std::uint8_t kReturnOpcode = 0xC3;
+	constexpr std::size_t kMovDwordImmediateSize = 10;
+
+	const auto clearFunction = REL::RelocationID(100856, 107646).address();
+	const auto* code = reinterpret_cast<const std::uint8_t*>(clearFunction);
+	std::uint32_t immediate = 1;
+	std::int32_t displacement = 0;
+	if (clearFunction) {
+		std::memcpy(&displacement, code + 2, sizeof(displacement));
+		std::memcpy(&immediate, code + 6, sizeof(immediate));
+	}
+
+	const bool shapeMatches = clearFunction && code[0] == kMovDwordImmediateOpcode &&
+	                          code[1] == kRipRelativeModRM && immediate == 0 &&
+	                          code[kMovDwordImmediateSize] == kReturnOpcode;
+	const auto counterAddress =
+		shapeMatches ? clearFunction + kMovDwordImmediateSize + displacement : 0;
+	const auto dataSegment = REL::Module::get().segment(REL::Segment::data);
+	if (counterAddress < dataSegment.address() ||
+		counterAddress >= dataSegment.address() + dataSegment.size()) {
+		alphaGeometryGroupCount = nullptr;
+		logger::error(
+			"[LLF] Alpha GeometryGroup guard not installed: "
+			"ClearAlphaGeometryGroups did not decode to a counter in .data");
+		return;
+	}
+
+	alphaGeometryGroupCount = reinterpret_cast<std::uint32_t*>(counterAddress);
+	alphaGeometryGroupLimit =
+		(globals::game::isVR ? kAlphaGeometryGroupCapacityVR : kAlphaGeometryGroupCapacityFlat) -
+		kAlphaGeometryGroupReserve;
+	if (const auto result = stl::detour_thunk<StartGroupingAlphas>(REL::RelocationID(100874, 107670));
+		result != 0) {
+		alphaGeometryGroupCount = nullptr;
+		logger::error("[LLF] Failed to install StartGroupingAlphas guard ({})", result);
+		return;
+	}
+
+	logger::info(
+		"[LLF] Installed alpha GeometryGroup guard (limit {}, reserve {})",
+		alphaGeometryGroupLimit,
+		kAlphaGeometryGroupReserve);
 }
 
 void LightLimitFix::Hooks::InstallVRNonShadowCasterLightFlagsGuard()

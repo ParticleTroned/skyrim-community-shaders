@@ -1,4 +1,5 @@
 set(FFX_RUNTIME_SDK_COMMIT "60f4ea81909200d8542eca14dccb2628b763a9a3")
+include("${CMAKE_CURRENT_LIST_DIR}/CsxDownload.cmake")
 set(
     FFX_RUNTIME_BASE_URL
     "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/${FFX_RUNTIME_SDK_COMMIT}/Kits/FidelityFX/signedbin"
@@ -13,20 +14,11 @@ file(MAKE_DIRECTORY "${FFX_RUNTIME_DIRECTORY}")
 
 function(download_ffx_runtime _filename _sha256)
     set(_destination "${FFX_RUNTIME_DIRECTORY}/${_filename}")
-    file(
-        DOWNLOAD "${FFX_RUNTIME_BASE_URL}/${_filename}" "${_destination}"
-        EXPECTED_HASH "SHA256=${_sha256}"
-        STATUS _download_status
-        TLS_VERIFY ON
-        TIMEOUT 120
-        INACTIVITY_TIMEOUT 20
+    csx_download_verified_asset(
+        "${FFX_RUNTIME_BASE_URL}/${_filename}"
+        "${_destination}"
+        "${_sha256}"
     )
-    list(GET _download_status 0 _status_code)
-    list(GET _download_status 1 _status_message)
-    if(NOT _status_code EQUAL 0)
-        file(REMOVE "${_destination}")
-        message(FATAL_ERROR "Failed to download ${_filename}: ${_status_message}")
-    endif()
     set(FFX_RUNTIME_FILES ${FFX_RUNTIME_FILES} "${_destination}" PARENT_SCOPE)
 endfunction()
 

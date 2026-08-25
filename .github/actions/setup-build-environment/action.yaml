@@ -90,7 +90,9 @@ runs:
               } else {
                   throw "MSVC version not found"
               }
-              Remove-Item "dummy.cpp" -ErrorAction SilentlyContinue
+              # cl.exe /Bv still compiles and links the probe, so clean every
+              # artifact before the clean-provenance build gate runs.
+              Remove-Item "dummy.cpp", "dummy.obj", "dummy.exe" -ErrorAction SilentlyContinue
 
         - name: Setup vcpkg
           uses: lukka/run-vcpkg@v11.6

@@ -1,91 +1,59 @@
 # VR HMD-mask measurement
 
-The versioned `communityshaders.renderscale` DevBench tool controls the
-live HMD-mask implementation and exposes its measurement contract. Include
-the `expectedBuildId` returned by discovery or status in every call. This
-makes an automation run fail closed when MO2 loaded a stale DLL.
+The VR hidden-area mask clear uses one production implementation:
+`tiled_exact_5x5`. It preserves the exact thresholded radius-two 5x5
+predicate while sharing depth reads across each 8x8 color tile. There is no
+runtime selector, in-game toggle, alternate kernel, or algorithm fallback.
 
-The available modes are:
+The shader supports equal-size and upscaling color mappings. The host rejects
+downscaling mappings and retains the original compositor path instead of
+changing the clearing predicate.
 
--   `sparse_depth_9tap`: the production default. It checks a thresholded
-    radius-2 nine-tap pattern.
--   `robust_depth_5x5`: the 25-tap reference used for controlled comparison
-    and verified post-load repair.
+## DevBench contract
 
-The Upscaling diagnostics UI does not expose HAM controls. Use
-`ham_set_mode` for a controlled live A/B test. A changed mode requests a
-temporal-history reset and logs at Info; Debug or Trace logging is not
-required.
+The `communityshaders.renderscale` tool retains two fixed-mode actions:
 
-## Performance capture
+-   `ham_status` reports implementation, timer names, dispatch counters, and
+    rejected dispatches.
+-   `ham_reset` clears those counters before a bounded capture.
 
-Call `ham_status` first. Its `performance` object identifies the
-`communityshaders.profiler_api` tool, the `Upscaling::HAM::` prefix, and
-the stable timer names. Capture profiler history only while
-`qualityCapture.active` is false. The fidelity audit is a separate GPU pass
-and would contaminate timing.
+Include the exact `expectedBuildId` returned by discovery or status in each
+call. HAM API version 3 reports diagnostic schema version 5. The stable GPU
+timers are:
 
-A controlled comparison should:
+-   `Upscaling::HAM::InputTiledExact5x5`
+-   `Upscaling::HAM::FinalTiledExact5x5`
 
-1. Apply one HAM mode.
-2. Wait until the same scene is stable and the intended render scale is
-   latched.
-3. Keep the headset resolution, quality profile, frame limit, and thermal
-   conditions unchanged.
-4. Call `ham_reset` immediately before starting a bounded profiler capture.
-5. Preserve the capture and `ham_status` counters before changing mode.
-6. Repeat the same warm-up and capture for the other mode.
+Sum the active input and final timer for each resolved profiler frame when the
+tested route uses both phases. A valid run keeps scene, render scale, quality
+profile, frame cap, headset resolution, and thermal conditions unchanged.
 
-Repeated left- and right-eye passes with one timer name are accumulated into
-one profiler frame sample. Sum any active input and final timers when the
-tested route uses both phases. Keep `VerifiedRepairRobust` separate because
-it represents bounded recovery work, not ordinary-frame cost.
+## Controlled comparison
 
-Reject a capture when its producer Build ID, resolution, render-scale state,
-resolved-frame count, or dispatch counters do not match the intended
-experiment.
+Save 14 was measured in the same loaded scene with 240 resolved profiler
+samples per implementation, split across two ABBA legs. The values below are
+combined per-frame HAM GPU time.
 
-## Fidelity capture
+| Measured implementation | Mean (ms) | Median (ms) | p95 (ms) | p99 (ms) | 90 Hz budget |
+| ----------------------- | --------: | ----------: | -------: | -------: | -----------: |
+| Tiled exact 5x5         |    0.2564 |      0.2376 |   0.5315 |   0.6001 |        2.31% |
+| Sparse depth 9-tap      |    0.2774 |      0.2611 |   0.2693 |   0.6502 |        2.50% |
+| Exact reusable mask     |    0.3248 |      0.2949 |   0.6093 |   0.7229 |        2.92% |
+| Untiled exact 5x5       |    0.4632 |      0.4301 |   0.7557 |   0.8540 |        4.17% |
 
-Fidelity is a separate bounded GPU audit:
+Tiled exact reduced mean HAM cost by 7.58% versus sparse 9-tap, 21.07%
+versus the reusable mask, and 44.65% versus untiled exact 5x5. All 960 timing
+samples were preserved with zero profiler-slot refusals. Two DevBench
+reconnects lost no samples.
 
-```json
-{
-    "action": "ham_quality_start",
-    "maxFrames": 60,
-    "expectedBuildId": "<build-id>"
-}
-```
+A separate tiled-exact fidelity audit evaluated 811,478,400 display-domain
+decisions and found zero mismatches, zero false negatives, and zero false
+positives against the exact radius-two 5x5 reference.
 
-Poll `ham_quality_status` until `qualityCapture.complete` is true. The
-capture stops after both eyes have been observed for the requested number of
-frames. `ham_quality_stop` ends it early. `ham_reset` clears completed
-quality results and all HAM dispatch counters.
+## Conclusion
 
-The audit samples a stable one-in-four display-domain pixel grid and compares
-the active decision with the thresholded, two-pixel-dilated 5x5 reference. It
-reports:
-
--   `falseNegatives`: the reference clears but the candidate retains color.
-    These can leak hidden-area color into temporal reconstruction.
--   `falsePositives`: the candidate clears where the reference retains color.
-    These can remove visible edge pixels.
--   `skippedDispatches`: the requested mode did not execute for an eligible
-    dispatch.
--   `sparseMissClassification`: the same samples evaluated as thresholded
-    center, 3x3, radius-2 cross, radius-2 nine-tap, and full 5x5 decisions.
-
-The audit has its own
-`Upscaling::HAM::DevBenchQualityAudit` timer and never writes presentation
-color.
-
-## Minimal automation sequence
-
-For each mode:
-
-```text
-ham_set_mode -> stabilize -> ham_reset -> bounded profiler capture
-             -> preserve profiler result and counters
-             -> ham_quality_start -> poll until complete
-             -> preserve fidelity result
-```
+Tiled exact 5x5 is both the fastest measured implementation and exact in the
+bounded fidelity capture. It is therefore the sole production path. The
+comparison toggles, alternate shaders, reusable-mask resources, and fidelity
+audit machinery were removed after selection; DevBench retains only the
+fixed-path timers and counters needed for regression testing.

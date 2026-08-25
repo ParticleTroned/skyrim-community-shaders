@@ -33,8 +33,6 @@ endif()
 set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
 set(CSX_RUNTIME "${CMAKE_MATCH_3}")
 set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
-set(CSX_COMPATIBILITY_TAG "CSX${CSX_VERSION}")
-set(CSX_COMPATIBILITY_MARKER_NAME "${CSX_COMPATIBILITY_TAG}.marker")
 
 project(
     # gersemi: ignore
@@ -45,50 +43,6 @@ project(
 )
 
 set(CSX_PACKAGE_NAME "CSX")
-
-# Shader-cache FOMODs use this generated marker to require the exact active
-# core identity that produced their Info.ini. Keep it out of package/ so one
-# source tree can stage either SE or VR without carrying a stale runtime marker.
-file(
-    GLOB _CSX_SOURCE_COMPATIBILITY_MARKERS CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/package/SKSE/Plugins/CommunityShaders/CSX*.marker"
-)
-if(_CSX_SOURCE_COMPATIBILITY_MARKERS)
-    message(
-        FATAL_ERROR
-        "CSX compatibility markers are generated from CSX_VERSION; "
-        "remove static markers from package/."
-    )
-endif()
-set(CSX_COMPATIBILITY_GENERATED_DIR
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/CSXCompatibility"
-)
-file(MAKE_DIRECTORY "${CSX_COMPATIBILITY_GENERATED_DIR}")
-file(
-    GLOB _CSX_STALE_GENERATED_MARKERS
-    "${CSX_COMPATIBILITY_GENERATED_DIR}/CSX*.marker"
-)
-if(_CSX_STALE_GENERATED_MARKERS)
-    file(REMOVE ${_CSX_STALE_GENERATED_MARKERS})
-endif()
-set(CSX_COMPATIBILITY_MARKER
-    "${CSX_COMPATIBILITY_GENERATED_DIR}/${CSX_COMPATIBILITY_MARKER_NAME}"
-)
-configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/CSXCompatibility.marker.in"
-    "${CSX_COMPATIBILITY_MARKER}"
-    @ONLY
-    NEWLINE_STYLE LF
-)
-set(CSX_COMPATIBILITY_INSTALL_SCRIPT
-    "${CSX_COMPATIBILITY_GENERATED_DIR}/InstallCSXCompatibilityMarker.cmake"
-)
-configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/InstallCSXCompatibilityMarker.cmake.in"
-    "${CSX_COMPATIBILITY_INSTALL_SCRIPT}"
-    @ONLY
-    NEWLINE_STYLE LF
-)
 
 # default install path
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
@@ -700,7 +654,6 @@ install(
     DESTINATION SKSE/Plugins
     COMPONENT SKSE
 )
-install(SCRIPT "${CSX_COMPATIBILITY_INSTALL_SCRIPT}" COMPONENT SKSE)
 install(
     DIRECTORY ${CMAKE_SOURCE_DIR}/package/ ${FEATURE_PATHS_SLASH}
     DESTINATION .
@@ -805,15 +758,6 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
-    list(
-        APPEND _prepare_aio_cmds
-        COMMAND
-        ${CMAKE_COMMAND}
-        -DCMAKE_INSTALL_PREFIX="${AIO_DIR}"
-        -P
-        "${CSX_COMPATIBILITY_INSTALL_SCRIPT}"
-    )
-
     # Copy package files (exclude test files and shaders from production
     # non-shader copy; shader copying is handled by copy_shaders.stamp).
     file(
@@ -869,8 +813,6 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_prepare_aio_cmds}
         DEPENDS
             ${_AIO_PACKAGE_FILES}
-            ${CSX_COMPATIBILITY_MARKER}
-            ${CSX_COMPATIBILITY_INSTALL_SCRIPT}
             ${PROJECT_NAME}
             ${_feature_paths_list_file}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
@@ -1127,11 +1069,6 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "/XD" "${AIO_DIR}/Shaders" "/COPY:DAT" "/R:1" "/W:1" "/NFL"
                     "/NDL" "/NJH" "/NJS"
                 COMMAND
-                    ${CMAKE_COMMAND}
-                    -DCMAKE_INSTALL_PREFIX="${DEPLOY_TARGET}"
-                    -P
-                    "${CSX_COMPATIBILITY_INSTALL_SCRIPT}"
-                COMMAND
                     ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_deploy.stamp
                 # Depend on the PREPARE_AIO target AND its stamp file: the
                 # target-level dependency stops the VS generator duplicating
@@ -1142,8 +1079,6 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 DEPENDS
                     PREPARE_AIO
                     ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
-                    ${CSX_COMPATIBILITY_MARKER}
-                    ${CSX_COMPATIBILITY_INSTALL_SCRIPT}
                 COMMENT
                     "Incremental deploy (excluding Shaders) to ${DEPLOY_TARGET} (robocopy-wrapper)"
             )
@@ -1270,11 +1205,6 @@ if(ZIP_TO_DIST)
             ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/package
             "${ZIP_DIR}"
         COMMAND
-            ${CMAKE_COMMAND}
-            -DCMAKE_INSTALL_PREFIX="${ZIP_DIR}"
-            -P
-            "${CSX_COMPATIBILITY_INSTALL_SCRIPT}"
-        COMMAND
             ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}>
             "${ZIP_DIR}/SKSE/Plugins/"
         COMMAND
@@ -1398,7 +1328,6 @@ file(
 # knows the actual output path of the target at build time)
 list(APPEND CORE_SOURCES "$<TARGET_FILE:${PROJECT_NAME}>")
 list(APPEND CORE_SOURCES "${CSX_PROVENANCE_FINAL_MANIFEST}")
-list(APPEND CORE_SOURCES "${CSX_COMPATIBILITY_MARKER}")
 
 set(CORE_FEATURE_PATHS "${CMAKE_SOURCE_DIR}/package/")
 

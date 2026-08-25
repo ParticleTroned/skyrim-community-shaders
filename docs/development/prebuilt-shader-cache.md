@@ -2,8 +2,9 @@
 
 This is the authoritative maintainer and AI-agent procedure for building,
 updating, validating, and shipping CSX' prebuilt shader cache.
-Use `tools/build-shader-cache.py`; do not assemble cache blobs or metadata by
-hand.
+Use `tools/build-shader-cache.py` for cache generation and
+`tools/build-fomod-package.py` for release AIO assembly. Do not assemble cache
+blobs, metadata, or installer mappings by hand.
 
 ## Purpose and scope
 
@@ -77,9 +78,9 @@ the supplied cache.
 | Runtime content digest                          | `src/Utils/ContentHash.h` and `src/ShaderCache.cpp` |
 | Runtime manifest schema and atomic persistence  | `src/Utils/ShaderCacheManifest.h`                   |
 | Plugin versions written to `Info.ini`           | `CMakePresets.json`                                 |
-| Core compatibility marker                       | `CSX_VERSION` in `CMakeLists.txt`                   |
 | Feature versions written to `Info.ini`          | `features/*/Shaders/Features/*.ini`                 |
 | Standalone/reusable cache CI                    | `.github/workflows/shader-cache.yaml`               |
+| Manual four-cache FOMOD assembly                | `tools/build-fomod-package.py`                      |
 | Release integration                             | `.github/workflows/release-build.yaml`              |
 
 The manifest algorithm exists in C++ and in pinned hlslkit because it must run
@@ -212,14 +213,13 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 6. writes `Info.ini` with plugin and feature versions;
 7. validates metadata, every manifest entry, every blob, the `DXBC` signature,
    and the bounded Water-only delta between each runtime's variants;
-8. derives an exact `CSX<major>.<minor>-<SE|VR>.marker` dependency from each
-   runtime's `Info.ini`, adds visible MO2 setup guidance and exact automatic
-   recommendations to the FOMOD, and prepares install-ready archives;
+8. packages each runtime's standard and Horizon Fix caches into a raw archive
+   with no installer metadata or automatic runtime detection;
 9. publishes output only after every requested runtime has passed the earlier
    stages.
 
 An existing runtime output is replaced only when it has the expected,
-non-link cache layout and a readable `[Cache] PluginVersion` ownership marker.
+non-link cache layout and a readable `[Cache] PluginVersion` ownership field.
 The tool refuses to replace arbitrary directories. When both runtimes are
 requested, it validates every runtime and archive destination before replacing
 any of them. It also preserves the old runtime directory if publishing its
@@ -361,9 +361,9 @@ any cache-contract field, update the named profile and rebuild it; never edit
 Normally, do not override these values. Official releases ship one
 multi-runtime core from the `ALL`/`ALL-VS2022` preset, so the builder derives
 both cache identities from that same preset. A cache's SE/VR permutation
-inventory remains runtime-specific; its compatibility marker identifies the
-core DLL package. Use an override only when deliberately pairing a cache with
-an independently built runtime-specific core.
+inventory remains runtime-specific, while its `Info.ini` plugin version
+identifies the compatible core. Use an override only when deliberately pairing
+a cache with an independently built runtime-specific core.
 
 For one runtime:
 
@@ -407,13 +407,10 @@ Successful builder completion already proves:
 -   the manifest contains no entry without a blob;
 -   `Info.ini` contains the requested plugin version;
 -   the archive was created and is nonempty;
--   every archive contains `ShaderCache/Info.ini`,
-    `ShaderCache/Manifest.json`, both required FOMOD installer files, and the
-    MO2 help image; shipped SE and VR archives also contain the corresponding
+-   every shipped archive contains `ShaderCache/Info.ini`,
+    `ShaderCache/Manifest.json`, and the corresponding
     `ShaderCache-HorizonFix` metadata;
--   each FOMOD recommendation checks both the active Community Shaders DLL and
-    the exact generated CSX compatibility marker with `operator="And"`;
--   the FOMOD maps exactly one selected source cache to `Data/ShaderCache`.
+-   raw runtime archives contain no `fomod` installer tree.
 
 Optional operator checks:
 
@@ -451,74 +448,49 @@ contract and rerun the supported builder.
 
 ## Install and ship
 
-Each core/AIO build generates exactly one compatibility marker from its
-configured `CSX_VERSION` under
-`SKSE/Plugins/CommunityShaders/CSX<major>.<minor>-<SE|VR>.marker`. The shader
-cache builder derives the same marker name from `Info.ini`; version bumps need
-no marker or FOMOD source edit.
+The standalone SE and VR archives are validated release inputs and optional
+manual-install artifacts. Each shipped archive contains two top-level cache
+directories:
 
-Each cache archive contains a top-level `ShaderCache` directory and FOMOD
-metadata; shipped SE and VR archives also contain `ShaderCache-HorizonFix`. The
-FOMOD recommends a cache only when both `CommunityShaders.dll` and its exact
-version marker are active. Those two checks remain one package handshake:
-FOMOD cannot inspect the DLL's embedded product-version bytes, so core packages
-must never ship a marker from another build. Both choices remain manually
-selectable when MO2 cannot inspect non-plugin files; the runtime independently
-rejects mismatched plugin identity or feature state.
+-   `ShaderCache` for Horizon Fix not installed;
+-   `ShaderCache-HorizonFix` for Horizon Fix installed.
 
-When upgrading through a mod manager, replace the old core mod instead of
-merging versions or leaving multiple core packages active. Otherwise an old
-marker can remain visible beside the winning DLL, which no declarative FOMOD
-dependency can correlate back to its original package. Remove any stale
-`SKSE/Plugins/CommunityShaders/CSX*.marker` entries before installing the
-matching cache.
+For manual installation, copy the contents of exactly one matching source
+directory into `<Skyrim>\\Data\\ShaderCache`. Never merge the SE/AE and VR
+caches or the standard and Horizon Fix variants.
 
--   For manual installation, it becomes
-    `<Skyrim>\Data\ShaderCache`. For a shipped runtime, copy the contents of
-    exactly one source directory—`ShaderCache` without Horizon Fix or
-    `ShaderCache-HorizonFix` with it—into that destination.
--   In Mod Organizer 2, use the included FOMOD installer. Do not select
-    `ShaderCache` and choose **Set data directory** in the manual installer;
-    that strips the required directory and incorrectly exposes the cache as
-    `Data\Info.ini`, `Data\Lighting`, and so on.
--   In a mod-manager package whose root maps to Skyrim's `Data`, place
-    `ShaderCache` alongside `Shaders` and `SKSE`.
--   Offer separate, clearly labelled SE and VR files.
--   Ship the cache with the exact DLL, shaders, and feature versions from the
-    same ref.
+The normal release path bundles the AIO and all four cache variants into one
+FOMOD archive. Its first page requires a manual choice between **Skyrim VR**,
+**Skyrim SE/AE**, and **No prebuilt shader cache**. Selecting either runtime
+shows a second page requiring **Horizon Fix installed** or **Horizon Fix not
+installed**. Selecting no cache hides the second page and installs only the AIO.
 
-Do not put both SE and VR caches into one install. Do not package the cache from
-one commit with shader source or a DLL from another commit.
+The FOMOD performs no game-version, DLL, settings-file, marker-file, load-order,
+or mod-manager-specific detection. It never preselects or recommends a cache.
+The selected flags map exactly one of these staged sources to
+`Data/ShaderCache`:
 
-### Mod Organizer 2
+```text
+ShaderCache-VR/ShaderCache
+ShaderCache-VR-HorizonFix/ShaderCache
+ShaderCache-SE-AE/ShaderCache
+ShaderCache-SE-AE-HorizonFix/ShaderCache
+```
 
-MO2's built-in **Fomod Installer** defaults to checking only
-`.esp`/`.esm`/`.esl` dependencies. In MO2's main window, open **Tools >
-Settings** (or use the toolbar Settings button), open **Plugins**, select
-**Fomod Installer** in the left-hand list, then change `use_any_file` from
-`false` to `true` in the right-hand settings table. Click **OK**, ensure the
-matching core/AIO is active, and reopen the cache installer.
+The plugin independently validates cache identity and feature state at runtime.
+A mismatched cache is rejected and compiled locally; installer heuristics are
+not part of that safety contract. Reinstall the AIO after enabling or disabling
+Horizon Fix so the selected Water bytecode and `Info.ini` agree with the active
+setup.
 
-![MO2 Fomod Installer use_any_file setting](../images/mo2-fomod-use-any-file.png)
-
-The generated FOMOD presents those directions as two short required pages so
-they remain visible before any file dependency is evaluated. The second page
-includes the screenshot above, and the FOMOD Website link opens this section.
-If `use_any_file` remains disabled, automatic recommendations are unavailable;
-verify the active DLL, exact marker, and selected cache manually.
-
-For shipped SE and VR archives, the final page recommends the Horizon Fix cache
-when `SKSE\Plugins\HorizonFix.dll` is active and the standard cache when it is
-missing or inactive. The Horizon Fix choice is listed first as the safe manual
-fallback, but both remain selectable. Reinstall the shader-cache FOMOD whenever
-Horizon Fix is enabled or disabled so Water bytecode and `Info.ini` describe
-the same state.
+Ship the caches, DLL, shaders, and feature metadata from the same ref. Do not
+package a cache from one commit with the AIO from another commit.
 
 For a smoke test, use a clean mod-manager profile, move any existing
-`ShaderCache` aside so it can be restored, install the matching artifact, and
-start the matching runtime. Check the CSX runtime log (`CommunityShaders.log`) for cache
-validation/invalidation and unexpected compilation. Test both runtimes before
-publishing a two-runtime release.
+`ShaderCache` aside so it can be restored, and install each of the four
+runtime/Horizon combinations plus the no-cache path. Start the matching runtime
+and inspect `CommunityShaders.log` for cache validation, invalidation, and
+unexpected compilation.
 
 ## CI and release workflow
 
@@ -551,8 +523,25 @@ gh run download $runId -n ShaderCache-VR -D dist/downloaded-cache
 
 For normal releases, `.github/workflows/release-build.yaml` calls the reusable
 cache workflow for both runtimes. The release job is gated on cache success,
-downloads both artifacts into `dist`, and attaches their `.7z` files to the
-draft release. No separate manual cache run is required for that path.
+downloads both artifacts into `dist`, and extracts them beside the plain AIO.
+`tools/build-fomod-package.py` validates and stages all four cache variants,
+writes the two-page manual FOMOD, and replaces the plain AIO archive only after
+the replacement is nonempty and contains every required payload. Artifact
+attestation and draft-release publication happen after that replacement. The
+standalone runtime archives remain attached for operators and manual installs.
+No separate manual cache run is required for that path.
+
+The final AIO archive contains:
+
+```text
+Core/
+fomod/ModuleConfig.xml
+fomod/info.xml
+ShaderCache-VR/ShaderCache/
+ShaderCache-VR-HorizonFix/ShaderCache/
+ShaderCache-SE-AE/ShaderCache/
+ShaderCache-SE-AE-HorizonFix/ShaderCache/
+```
 
 ## When a cache rebuild is required
 
@@ -704,8 +693,9 @@ An AI agent maintaining this system must:
 When builds are forbidden, the minimum static validation is:
 
 ```powershell
-& $cachePython -c "import ast, pathlib; ast.parse(pathlib.Path('tools/build-shader-cache.py').read_text(encoding='utf-8')); print('Python AST OK')"
+& $cachePython -c "import ast, pathlib; [ast.parse(pathlib.Path(p).read_text(encoding='utf-8')) for p in ('tools/build-shader-cache.py', 'tools/build-fomod-package.py')]; print('Python AST OK')"
 & $cachePython tools/build-shader-cache.py --help
+& $cachePython tools/build-fomod-package.py --help
 
 & $cachePython -c "import pathlib, yaml; [yaml.safe_load(pathlib.Path(p).read_text(encoding='utf-8')) for p in ('.github/workflows/shader-cache.yaml', '.github/workflows/release-build.yaml')]; print('Workflow YAML OK')"
 

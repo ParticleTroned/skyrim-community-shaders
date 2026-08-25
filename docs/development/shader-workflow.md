@@ -19,7 +19,7 @@ exec(open(r"<repo>/tools/taa-renderdoc-ab.py").read())
 # Compile only shaders affected by working-tree changes
 cmake --build ./build/ALL --target validate_changed
 
-# Build install-ready SE and VR shader-cache archives
+# Build raw SE and VR shader-cache archives for release assembly
 python tools/build-shader-cache.py --runtime both --package
 ```
 

@@ -114,9 +114,16 @@ jobs:
             - name: Test shader cache packaging contract
               shell: bash
               run: |
-                  if [ -f tests/shader_cache_packaging_test.py ]; then
-                    python tests/shader_cache_packaging_test.py
-                  else
+                  found=false
+                  for test_file in \
+                    tests/shader_cache_packaging_test.py \
+                    tests/fomod_package_test.py; do
+                    if [ -f "$test_file" ]; then
+                      python "$test_file"
+                      found=true
+                    fi
+                  done
+                  if [ "$found" = false ]; then
                     echo "Target ref predates shader-cache packaging tests; skipping."
                   fi
 

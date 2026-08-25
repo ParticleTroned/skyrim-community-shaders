@@ -237,7 +237,7 @@ jobs:
                   cat changed_files.txt || true
                   mkdir -p build/ShaderCache
                   python tools/validate_changed_shaders.py --changed-list-file changed_files.txt -- \
-                    hlslkit-compile --fxc "${{ steps.find_fxc.outputs.fxc_path }}" --shader-dir build/ALL/aio/Shaders --output-dir build/ShaderCache --config ${{ matrix.config.file }} --max-warnings 0 --suppress-warnings X1519
+                    hlslkit-compile --fxc "${{ steps.find_fxc.outputs.fxc_path }}" --shader-dir build/ALL/aio/Shaders --output-dir build/ShaderCache --config ${{ matrix.config.file }} --max-warnings 0 --suppress-warnings X1519 --timing-report "build/shader-compile-timing-${{ matrix.config.name }}.json"
 
             - name: Upload shader validation logs
               if: failure() && steps.check-hlsl.outputs.skip != 'true'
@@ -248,6 +248,16 @@ jobs:
                       build/ShaderCache/new_issues.log
                       build/ShaderCache/*.log
                   retention-days: 7
+                  if-no-files-found: ignore
+
+            # Per-shader compile durations make validation hot spots visible.
+            - name: Upload shader compile timing report
+              if: always() && steps.check-hlsl.outputs.skip != 'true'
+              uses: actions/upload-artifact@v7
+              with:
+                  name: shader-compile-timing-${{ matrix.config.name }}
+                  path: build/shader-compile-timing-${{ matrix.config.name }}.json
+                  retention-days: 30
                   if-no-files-found: ignore
 
     shader-unit-tests:

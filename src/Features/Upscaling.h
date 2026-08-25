@@ -1608,6 +1608,7 @@ public:
 		float4 tuning1;  // x=historyValid, y=centerHorizontalScale, z=tileDispatch, w=tileDispatchWidth
 		float4 tuning2;  // x=reactivityScale, y=instabilityScale, z=velocityScale, w=lockDecay
 		float4 tuning3;  // xy=min output color-write bounds, zw=max output color-write bounds
+		float4 historyRect;  // xy=full-eye offset, zw=cropped history dimensions
 		float4x4 currentViewProjInverse;
 		float4x4 previousViewProj;
 		float4 currentCameraPosAdjust;
@@ -1627,7 +1628,7 @@ public:
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedSpatialCompositeCB) == 96, "FoveatedSpatialCompositeCB layout changed; update HLSL cbuffer.");
-	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(PeripheryTAACB) == 320, "PeripheryTAACB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(CameraMotionVectorsCB) == 256, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
 
 	struct FoveatedDispatchRect
@@ -2390,6 +2391,7 @@ public:
 	eastl::unique_ptr<Texture2D> peripheryTAAHistoryColor[2][2];
 	eastl::unique_ptr<Texture2D> peripheryTAAVelocityHistory[2][2];
 	eastl::unique_ptr<Texture2D> peripheryTAALockHistory[2][2];
+	std::array<FoveatedRegionPlan::Rect, 2> peripheryTAAHistoryRects{};
 	eastl::unique_ptr<Buffer> peripheryTAATileBuffer[2];
 	uint32_t peripheryTAATileCapacity[2] = {};
 	std::array<PeripheryTAATileCacheState, 2> peripheryTAATileCache{};
@@ -2950,7 +2952,7 @@ public:
 		ID3D11ShaderResourceView* historyVelocitySRV, ID3D11ShaderResourceView* historyLockSRV, ID3D11UnorderedAccessView* outputColorUAV, ID3D11UnorderedAccessView* outputHistoryColorUAV,
 		ID3D11UnorderedAccessView* outputVelocityUAV, ID3D11UnorderedAccessView* outputLockUAV, ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount,
 		uint32_t inputWidth, uint32_t inputHeight,
-		uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight,
+		uint32_t outputWidth, uint32_t outputHeight, const FoveatedRegionPlan::Rect& historyRect, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight,
 		const float4x4& currentViewProjInverse, const float4x4& previousViewProj, const float4& currentCameraPosAdjust, const float4& previousCameraPosAdjust,
 		bool resetHistory, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY,
 		float inputTextureScaleX = 1.0f, float inputTextureScaleY = 1.0f, float inputTextureOffsetX = 0.0f, float inputTextureOffsetY = 0.0f);

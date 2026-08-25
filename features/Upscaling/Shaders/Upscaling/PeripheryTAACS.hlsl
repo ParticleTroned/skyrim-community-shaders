@@ -28,6 +28,7 @@ cbuffer PeripheryTAACB : register(b0)
 	float4 Tuning1;  // x=historyValid, y=centerHorizontalScale, z=tileDispatch, w=tileDispatchWidth
 	float4 Tuning2;  // x=reactivityScale, y=instabilityScale, z=velocityScale, w=lockDecay
 	float4 Tuning3;  // xy=min output color-write bounds, zw=max output color-write bounds
+	float4 HistoryRect;  // xy=full-eye offset, zw=cropped history dimensions
 	row_major float4x4 CurrentViewProjInverse;
 	row_major float4x4 PreviousViewProj;
 	float4 CurrentCameraPosAdjust;
@@ -124,10 +125,11 @@ float2 ClampInputUV(float2 uv)
 	return clamp(uv, halfTexel, 1.0 - halfTexel);
 }
 
-float2 ClampHistoryUV(float2 uv)
+float2 ToHistoryTextureUV(float2 outputPixelCenter)
 {
-	float2 halfTexel = InvOutputDim * 0.5;
-	return clamp(uv, halfTexel, 1.0 - halfTexel);
+	float2 historyMin = HistoryRect.xy + 0.5;
+	float2 historyMax = HistoryRect.xy + HistoryRect.zw - 0.5;
+	return (clamp(outputPixelCenter, historyMin, historyMax) - HistoryRect.xy) / HistoryRect.zw;
 }
 
 uint2 ToInputPos(float2 uv)
@@ -143,8 +145,30 @@ float2 ToInputTextureUV(float2 uv)
 
 uint2 ToHistoryPos(float2 uv)
 {
-	float2 clamped = ClampHistoryUV(uv);
-	return min((uint2)floor(clamped * OutputDim), uint2(OutputDim) - 1);
+	uint2 historyOffset = uint2(HistoryRect.xy + 0.5);
+	uint2 historyDim = uint2(HistoryRect.zw + 0.5);
+	uint2 outputPos = min((uint2)floor(saturate(uv) * OutputDim), uint2(OutputDim) - 1);
+	outputPos = clamp(outputPos, historyOffset, historyOffset + historyDim - 1u);
+	return outputPos - historyOffset;
+}
+
+bool TryGetHistoryWritePos(uint2 outputPos, out uint2 historyPos)
+{
+	uint2 historyOffset = uint2(HistoryRect.xy + 0.5);
+	uint2 historyDim = uint2(HistoryRect.zw + 0.5);
+	historyPos = outputPos - historyOffset;
+	return all(outputPos >= historyOffset) && all(historyPos < historyDim);
+}
+
+void StoreHistory(uint2 outputPos, float4 color, float2 velocity, float lockValue)
+{
+	uint2 historyPos;
+	if (!TryGetHistoryWritePos(outputPos, historyPos))
+		return;
+
+	OutVelocity[historyPos] = velocity;
+	OutLock[historyPos] = lockValue;
+	OutHistoryColor[historyPos] = color;
 }
 
 float LoadDepthClamped(int2 pos)
@@ -260,9 +284,9 @@ float3 SampleHistoryCatmullRom(float2 historyUV)
 	float2 w12 = w1 + w2;
 	float2 offset12 = w2 / max(w12, 1e-4);
 
-	float2 uv0 = ClampHistoryUV((texPos1 - 1.0) * InvOutputDim);
-	float2 uv3 = ClampHistoryUV((texPos1 + 2.0) * InvOutputDim);
-	float2 uv12 = ClampHistoryUV((texPos1 + offset12) * InvOutputDim);
+	float2 uv0 = ToHistoryTextureUV(texPos1 - 1.0);
+	float2 uv3 = ToHistoryTextureUV(texPos1 + 2.0);
+	float2 uv12 = ToHistoryTextureUV(texPos1 + offset12);
 
 	float3 result = 0.0.xxx;
 	result += HistoryColor.SampleLevel(LinearSampler, float2(uv0.x, uv0.y), 0.0).rgb * w0.x * w0.y;
@@ -303,6 +327,9 @@ float ComputeVelocityDeltaPixels(float2 historyUV, float2 historyVelocity)
 bool IsHistoryAuxValid(float2 historyUV, float centerScale, float centerFeather, float centerHorizontalScale, float taaOuterScale)
 {
 	if (any(historyUV < 0.0.xx) || any(historyUV > 1.0.xx))
+		return false;
+	float2 historyOutputPos = historyUV * OutputDim;
+	if (any(historyOutputPos < HistoryRect.xy) || any(historyOutputPos >= HistoryRect.xy + HistoryRect.zw))
 		return false;
 
 	float historyCenterWeight = FoveatedComputeCenterBlendWeight(historyUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset);
@@ -431,9 +458,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 		float4 currentSample = CurrentColor.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 		float centerWeight = FoveatedComputeCenterBlendWeight(outputUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset);
 		if (centerWeight >= 1.0 || gTileFastPathMode == kTileFastPathCenter) {
-			OutVelocity[outputPos] = 0.0.xx;
-			OutLock[outputPos] = 0.0;
-			OutHistoryColor[outputPos] = currentSample;
+			StoreHistory(outputPos, currentSample, 0.0.xx, 0.0);
 			return;
 		}
 
@@ -441,14 +466,12 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 			FoveatedComputeMaskDistance(outputUV, taaOuterScale, centerHorizontalScale, CenterOffset) > 1.0;
 		if (!historyValid || outsideTAA) {
 			float2 passthroughVelocity = CurrentMotionVectors.SampleLevel(LinearSampler, inputTextureUV, 0.0);
-			OutVelocity[outputPos] = passthroughVelocity;
-			OutLock[outputPos] = 0.0;
+			StoreHistory(outputPos, currentSample, passthroughVelocity, 0.0);
 			// Only the history padding outside this rectangle is overwritten by
 			// the later periphery fill. Curved-mask edge pixels inside it still
 			// need a final-color passthrough here.
 			if (!outsideTAA || IsInsideTAAColorWriteBounds(outputPos))
 				OutColor[outputPos] = currentSample;
-			OutHistoryColor[outputPos] = currentSample;
 			return;
 		}
 	}
@@ -457,19 +480,15 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 	float peripheryWeight = saturate(1.0 - centerWeight);
 	float4 currentSample = CurrentColor.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 	if (peripheryWeight <= 0.0) {
-		OutVelocity[outputPos] = 0.0.xx;
-		OutLock[outputPos] = 0.0;
-		OutHistoryColor[outputPos] = currentSample;
+		StoreHistory(outputPos, currentSample, 0.0.xx, 0.0);
 		return;
 	}
 
 	if (FoveatedComputeMaskDistance(outputUV, taaOuterScale, centerHorizontalScale, CenterOffset) > 1.0) {
 		float2 passthroughVelocity = CurrentMotionVectors.SampleLevel(LinearSampler, inputTextureUV, 0.0);
-		OutVelocity[outputPos] = passthroughVelocity;
-		OutLock[outputPos] = 0.0;
+		StoreHistory(outputPos, currentSample, passthroughVelocity, 0.0);
 		if (IsInsideTAAColorWriteBounds(outputPos))
 			OutColor[outputPos] = currentSample;
-		OutHistoryColor[outputPos] = currentSample;
 		return;
 	}
 
@@ -554,8 +573,6 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 		}
 	}
 
-	OutVelocity[outputPos] = rejectionVelocity;
-	OutLock[outputPos] = newLock;
+	StoreHistory(outputPos, float4(resolvedColor, currentAlpha), rejectionVelocity, newLock);
 	OutColor[outputPos] = float4(resolvedColor, currentAlpha);
-	OutHistoryColor[outputPos] = float4(resolvedColor, currentAlpha);
 }

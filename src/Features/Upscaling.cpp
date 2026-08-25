@@ -36938,6 +36938,9 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 	D3D11_TEXTURE2D_DESC colorDesc{};
 	if (!TryGetTexture2DDesc(colorSource, colorDesc))
 		return false;
+	const auto& regionPlan = foveatedRectCache.plan;
+	if (!regionPlan.IsValid() || regionPlan.outputWidthPerEye != outputWidthPerEye || regionPlan.outputHeight != outputHeight)
+		return false;
 
 	bool recreatedResources = false;
 	static bool loggedPeripheryTAAResourceFailure = false;
@@ -36945,13 +36948,26 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 	try {
 		for (uint32_t eye = 0; eye < 2; ++eye) {
 			const std::string suffix = eye == 0 ? "Left" : "Right";
+			const auto& historyRect = regionPlan.eyes[eye].peripheryTAAHistoryOutput;
+			if (!historyRect.IsValid() || historyRect.maxX > outputWidthPerEye || historyRect.maxY > outputHeight) {
+				DestroyPeripheryTAAResources();
+				return false;
+			}
+			const uint32_t historyWidth = historyRect.Width();
+			const uint32_t historyHeight = historyRect.Height();
+			const auto& activeHistoryRect = peripheryTAAHistoryRects[eye];
+			recreatedResources = recreatedResources ||
+			                     activeHistoryRect.minX != historyRect.minX ||
+			                     activeHistoryRect.minY != historyRect.minY ||
+			                     activeHistoryRect.maxX != historyRect.maxX ||
+			                     activeHistoryRect.maxY != historyRect.maxY;
 
 			for (uint32_t historySlot = 0; historySlot < 2; ++historySlot) {
 				auto& historyColorTexture = peripheryTAAHistoryColor[eye][historySlot];
 				const bool recreateHistoryColor =
 					!historyColorTexture ||
-					historyColorTexture->desc.Width != outputWidthPerEye ||
-					historyColorTexture->desc.Height != outputHeight ||
+					historyColorTexture->desc.Width != historyWidth ||
+					historyColorTexture->desc.Height != historyHeight ||
 					historyColorTexture->desc.Format != colorDesc.Format ||
 					!historyColorTexture->srv || !historyColorTexture->uav;
 				recreatedResources = recreatedResources || recreateHistoryColor;
@@ -36959,8 +36975,8 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				if (!EnsureFoveatedTexture(
 						historyColorTexture,
 						colorSource,
-						outputWidthPerEye,
-						outputHeight,
+						historyWidth,
+						historyHeight,
 						false,
 						true,
 						true,
@@ -36973,14 +36989,14 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				auto& velocityTexture = peripheryTAAVelocityHistory[eye][historySlot];
 				const bool recreateVelocity =
 					!velocityTexture ||
-					velocityTexture->desc.Width != outputWidthPerEye ||
-					velocityTexture->desc.Height != outputHeight ||
+					velocityTexture->desc.Width != historyWidth ||
+					velocityTexture->desc.Height != historyHeight ||
 					velocityTexture->desc.Format != DXGI_FORMAT_R16G16_FLOAT ||
 					!velocityTexture->srv || !velocityTexture->uav;
 				if (recreateVelocity) {
 					velocityTexture = CreateNamedTexture2D(
-						outputWidthPerEye,
-						outputHeight,
+						historyWidth,
+						historyHeight,
 						DXGI_FORMAT_R16G16_FLOAT,
 						true,
 						true,
@@ -36992,14 +37008,14 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				auto& lockTexture = peripheryTAALockHistory[eye][historySlot];
 				const bool recreateLock =
 					!lockTexture ||
-					lockTexture->desc.Width != outputWidthPerEye ||
-					lockTexture->desc.Height != outputHeight ||
+					lockTexture->desc.Width != historyWidth ||
+					lockTexture->desc.Height != historyHeight ||
 					lockTexture->desc.Format != DXGI_FORMAT_R16_FLOAT ||
 					!lockTexture->srv || !lockTexture->uav;
 				if (recreateLock) {
 					lockTexture = CreateNamedTexture2D(
-						outputWidthPerEye,
-						outputHeight,
+						historyWidth,
+						historyHeight,
 						DXGI_FORMAT_R16_FLOAT,
 						true,
 						true,
@@ -37008,6 +37024,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 					recreatedResources = true;
 				}
 			}
+			peripheryTAAHistoryRects[eye] = historyRect;
 		}
 	} catch (const std::exception& e) {
 		LogWarnOnce(
@@ -37231,6 +37248,7 @@ void Upscaling::DestroyPeripheryTAAResources()
 		peripheryTAATileBuffer[eye].reset();
 		peripheryTAATileCapacity[eye] = 0;
 		peripheryTAATileCache[eye] = {};
+		peripheryTAAHistoryRects[eye] = {};
 	}
 	peripheryTAAHistoryReadIndex = 0;
 	peripheryTAAHistoryValid = false;
@@ -37335,7 +37353,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	ID3D11ShaderResourceView* historyVelocitySRV, ID3D11ShaderResourceView* historyLockSRV, ID3D11UnorderedAccessView* outputColorUAV, ID3D11UnorderedAccessView* outputHistoryColorUAV,
 	ID3D11UnorderedAccessView* outputVelocityUAV, ID3D11UnorderedAccessView* outputLockUAV, ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount,
 	uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth,
-	uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, const float4x4& currentViewProjInverse,
+	uint32_t outputHeight, const FoveatedRegionPlan::Rect& historyRect, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, const float4x4& currentViewProjInverse,
 	const float4x4& previousViewProj, const float4& currentCameraPosAdjust, const float4& previousCameraPosAdjust, bool resetHistory, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY,
 	float inputTextureScaleX, float inputTextureScaleY, float inputTextureOffsetX, float inputTextureOffsetY)
 {
@@ -37353,7 +37371,8 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		return;
 	if (!outputColorUAV || !outputHistoryColorUAV || !outputVelocityUAV || !outputLockUAV)
 		return;
-	if (!inputWidth || !inputHeight || !outputWidth || !outputHeight)
+	if (!inputWidth || !inputHeight || !outputWidth || !outputHeight || !historyRect.IsValid() ||
+		historyRect.maxX > outputWidth || historyRect.maxY > outputHeight)
 		return;
 	const bool useTileList = tileListSRV && tileCount > 0;
 	if (!useTileList && (!dispatchWidth || !dispatchHeight))
@@ -37441,6 +37460,12 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		static_cast<float>(taaColorWriteBounds.minY),
 		static_cast<float>(taaColorWriteBounds.maxX),
 		static_cast<float>(taaColorWriteBounds.maxY)
+	};
+	cbData.historyRect = {
+		static_cast<float>(historyRect.minX),
+		static_cast<float>(historyRect.minY),
+		static_cast<float>(historyRect.Width()),
+		static_cast<float>(historyRect.Height())
 	};
 	cbData.currentViewProjInverse = currentViewProjInverse;
 	cbData.previousViewProj = previousViewProj;
@@ -38200,6 +38225,7 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 			params.inputHeight,
 			params.outputWidthPerEye,
 			params.outputHeight,
+			regionPlan.eyes[eyeIndex].peripheryTAAHistoryOutput,
 			outputOffsetX,
 			outputOffsetY,
 			dispatchWidth,

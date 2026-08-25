@@ -10,7 +10,7 @@
 struct FoveatedRegionPlan
 {
 	static constexpr uint32_t kDefaultUnderlayHolePadding = 2u;
-	static constexpr uint32_t kDefaultPeripheryHistoryPadding = 2u;
+	static constexpr uint32_t kDefaultPeripheryHistoryPadding = 2u;  // Covers the Catmull-Rom history footprint.
 	static constexpr uint32_t kDefaultPeripheryInputPadding = 2u;
 
 	struct Rect

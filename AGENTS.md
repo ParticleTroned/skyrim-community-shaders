@@ -105,6 +105,7 @@ contradict this policy.
 -   Name every new D3D11 resource for RenderDoc using `Util::SetResourceName` after raw `device->Create*` calls. For `Texture2D`, `Buffer`, and `ConstantBuffer` wrappers, pass the name to the wrapper so view names remain centralized.
 -   Use `Feature::Resource` naming for resources and the existing SRV/UAV suffix conventions for views. Do not duplicate the resource-naming GUID or reimplement the helper inline.
 -   Manage graphics resources with RAII and restore modified DirectX state. Shader or DirectX failures must disable or fall back cleanly rather than crash or corrupt subsequent passes.
+-   Instrument render-pass entry points with `CS_GPU_PASS`, using the dynamic-name form only when the label is not static. Keep raw Tracy or annotation zones for sub-dispatch detail that does not belong in the profiler table.
 -   Validate user-controlled shader parameters, buffer sizes, texture sizes, counts, paths, and configuration ranges before allocating or dispatching.
 -   Check register/buffer conflicts when adding shader resources. Consider render resolution, VR frame budgets, thread affinity, and render-thread ownership.
 -   A genuinely new concern shared under `package/Shaders/Common/` should default to a focused new `.hlsli` file instead of growing an unrelated shared header. This limits validation fan-out and merge conflicts; it does not require retroactively splitting existing headers.

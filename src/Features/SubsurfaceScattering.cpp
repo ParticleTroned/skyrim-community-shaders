@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "Features/Upscaling.h"
+#include "GpuPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -347,8 +348,7 @@ void SubsurfaceScattering::DrawSSS()
 	if (!validMaterials)
 		return;
 
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering");
+	CS_GPU_PASS("SubsurfaceScattering::DrawSSS");
 
 	validMaterials = false;
 
@@ -424,13 +424,11 @@ void SubsurfaceScattering::DrawSSS()
 		if (settings.SSMode == 0) {
 			// Horizontal pass to temporary texture
 			{
-				TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Horizontal");
-
 				auto shader = GetComputeShaderHorizontalBlur();
 				context->CSSetShader(shader, nullptr, 0);
 
 				{
-					CS_PROFILE_SCOPE("SubsurfaceScattering::HorizontalBlur");
+					CS_GPU_PASS("SubsurfaceScattering::HorizontalBlur");
 					context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 				}
 			}
@@ -440,8 +438,6 @@ void SubsurfaceScattering::DrawSSS()
 
 			// Vertical pass to main texture
 			{
-				TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Vertical");
-
 				views[0] = blurHorizontalTemp->srv.get();
 				context->CSSetShaderResources(0, 1, views);
 
@@ -452,20 +448,18 @@ void SubsurfaceScattering::DrawSSS()
 				context->CSSetShader(shader, nullptr, 0);
 
 				{
-					CS_PROFILE_SCOPE("SubsurfaceScattering::VerticalBlur");
+					CS_GPU_PASS("SubsurfaceScattering::VerticalBlur");
 					context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 				}
 			}
 		} else if (settings.SSMode == 1) {
 			// Burley pass to main texture
 			{
-				TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Burley");
-
 				auto shader = GetComputeShaderBurley();
 				context->CSSetShader(shader, nullptr, 0);
 
 				{
-					CS_PROFILE_SCOPE("SubsurfaceScattering::Burley");
+					CS_GPU_PASS("SubsurfaceScattering::Burley");
 					context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 				}
 

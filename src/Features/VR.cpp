@@ -3,6 +3,7 @@
 #include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
 #include "FoveatedCommon.h"
+#include "GpuPass.h"
 #include "LocationContext.h"
 #include "Menu.h"
 #include "Menu/FeatureListRenderer.h"
@@ -838,11 +839,7 @@ void VR::DrawStereoBlend()
 	if (resolution.x <= 0.0f || resolution.y <= 0.0f)
 		return;
 
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "VR Stereo Blend");
-
-	if (globals::state->frameAnnotations)
-		globals::state->BeginPerfEvent("VR Stereo Blend");
+	CS_GPU_PASS("VR::StereoBlend");
 
 	// Deferred composite leaves kMAIN bound as a UAV. Unbind before copying it as the source texture.
 	ID3D11UnorderedAccessView* nullUavs[3]{ nullptr, nullptr, nullptr };
@@ -881,9 +878,6 @@ void VR::DrawStereoBlend()
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 	context->CSSetConstantBuffers(1, 1, &cbPtr);
 	context->CSSetShader(nullptr, nullptr, 0);
-
-	if (globals::state->frameAnnotations)
-		globals::state->EndPerfEvent();
 }
 
 void VR::PostPostLoad()

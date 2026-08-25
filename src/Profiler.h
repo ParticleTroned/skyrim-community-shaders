@@ -115,8 +115,8 @@ public:
 	}
 
 	void BeginFrame();
-	bool BeginPass(std::string_view name);
-	void EndPass();
+	bool BeginPass(std::string_view name, bool fireCallbacks = true);
+	void EndPass(bool fireCallbacks = true);
 	bool BeginCpuPass(std::string_view name);
 	void EndCpuPass();
 	void EndFrame(uint32_t a_frameCount);
@@ -132,32 +132,6 @@ public:
 	uint32_t GetSlotRefusals() const { return slotRefusals; }
 	void ClearTimers();
 	void ClearTimersForFeature(const std::string& featureName);
-
-	class ScopedPass
-	{
-	public:
-		ScopedPass(Profiler* a_profiler, std::string_view a_name)
-		{
-			if (a_profiler && a_profiler->IsEnabled() && a_profiler->BeginPass(a_name)) {
-				profiler = a_profiler;
-			}
-		}
-
-		~ScopedPass()
-		{
-			if (profiler) {
-				profiler->EndPass();
-			}
-		}
-
-		ScopedPass(const ScopedPass&) = delete;
-		ScopedPass& operator=(const ScopedPass&) = delete;
-		ScopedPass(ScopedPass&&) = delete;
-		ScopedPass& operator=(ScopedPass&&) = delete;
-
-	private:
-		Profiler* profiler = nullptr;
-	};
 
 	class ScopedCpuPass
 	{
@@ -302,5 +276,4 @@ private:
 
 #define CS_PROFILE_SCOPE_CONCAT_INNER(a, b) a##b
 #define CS_PROFILE_SCOPE_CONCAT(a, b) CS_PROFILE_SCOPE_CONCAT_INNER(a, b)
-#define CS_PROFILE_SCOPE(name) Profiler::ScopedPass CS_PROFILE_SCOPE_CONCAT(csProfileScope_, __LINE__)(globals::profiler, name)
 #define CS_PROFILE_CPU_SCOPE(name) Profiler::ScopedCpuPass CS_PROFILE_SCOPE_CONCAT(csCpuProfileScope_, __LINE__)(globals::profiler, name)

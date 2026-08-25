@@ -5,6 +5,7 @@
 #include <cmath>
 #include <numbers>
 
+#include "GpuPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -1033,8 +1034,6 @@ void Skylighting::Prepass()
 		return;
 
 	if (probeUpdateCompute) {
-		TracyD3D11Zone(globals::state->tracyCtx, "Skylighting - Update Probes");
-
 		std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
 		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texProbeArray->uav.get(), texAccumFramesArray->uav.get() };
 		std::array<ID3D11SamplerState*, 1> samplers = { comparisonSampler.get() };
@@ -1062,7 +1061,7 @@ void Skylighting::Prepass()
 				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 				context->CSSetShader(probeUpdateCompute.get(), nullptr, 0);
 				{
-					CS_PROFILE_SCOPE("Skylighting::ProbeUpdate");
+					CS_GPU_PASS("Skylighting::ProbeUpdate");
 					context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, dispatchSliceCount);
 				}
 
@@ -1335,7 +1334,6 @@ void Skylighting::RenderOcclusion()
 	}
 
 	auto shaderCache = globals::shaderCache;
-	auto state = globals::state;
 	auto renderer = globals::game::renderer;
 	auto sky = globals::game::sky;
 	auto precip = sky ? sky->precip : nullptr;
@@ -1347,26 +1345,19 @@ void Skylighting::RenderOcclusion()
 		return;
 
 	if (!shaderCache->IsEnabled()) {
-		TracyD3D11Zone(globals::state->tracyCtx, "Precipitation Mask");
-		state->BeginPerfEvent("Precipitation Mask");
+		CS_GPU_PASS("Skylighting::PrecipitationMask");
 		Main_Precipitation_RenderOcclusion::func();
-		state->EndPerfEvent();
 		return;
 	}
 
 	{
-		TracyD3D11Zone(globals::state->tracyCtx, "Precipitation Mask");
-		state->BeginPerfEvent("Precipitation Mask");
+		CS_GPU_PASS("Skylighting::PrecipitationMask");
 
 		if (auto precipObject = GetActivePrecipitationObject(precip)) {
 			precip->SetupMask();
-			if (auto* rain = GetRainEmitter(precipObject)) {
-				CS_PROFILE_SCOPE("Skylighting::PrecipMask");
+			if (auto* rain = GetRainEmitter(precipObject))
 				precip->RenderMask(rain);
-			}
 		}
-
-		state->EndPerfEvent();
 	}
 
 	auto occlusionCamera = precip->occlusionData.camera;
@@ -1374,8 +1365,7 @@ void Skylighting::RenderOcclusion()
 		return;
 
 	{
-		TracyD3D11Zone(globals::state->tracyCtx, "Skylighting Mask");
-		state->BeginPerfEvent("Skylighting Mask");
+		CS_GPU_PASS("Skylighting::SkylightingMask");
 
 		const bool forceOcclusionRefresh = queuedResetSkylighting;
 		if (queuedResetSkylighting)
@@ -1384,10 +1374,8 @@ void Skylighting::RenderOcclusion()
 		const uint occlusionUpdateInterval = GetOcclusionUpdateInterval(settings);
 		const bool shouldUpdateOcclusion = ShouldRunPeriodicUpdate(occlusionUpdateFrameCounter, occlusionUpdateInterval, forceOcclusionRefresh);
 
-		if (!shouldUpdateOcclusion) {
-			state->EndPerfEvent();
+		if (!shouldUpdateOcclusion)
 			return;
-		}
 
 		frameCount++;
 
@@ -1448,8 +1436,7 @@ void Skylighting::RenderOcclusion()
 
 		RainEmitterProjectionCapture rainCapture{};
 		{
-			TracyD3D11Zone(state->tracyCtx, "Skylighting - Render Height Map");
-			CS_PROFILE_SCOPE("Skylighting::OcclusionMask");
+			CS_GPU_PASS("Skylighting::OcclusionMask");
 			precip->RenderMask(reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture));
 		}
 		inOcclusion = false;
@@ -1469,8 +1456,6 @@ void Skylighting::RenderOcclusion()
 			ZoneScopedN("Skylighting - Restore Projection");
 			_computeProjection(precip, occlusionCamera);
 		}
-
-		state->EndPerfEvent();
 	}
 }
 

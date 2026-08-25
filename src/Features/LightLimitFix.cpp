@@ -1,6 +1,7 @@
 #include "LightLimitFix.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "InverseSquareLighting.h"
 #include "LightLimitFix/ShadowLightPolicy.h"
 #include "LinearLighting.h"
@@ -1845,9 +1846,7 @@ void LightLimitFix::Prepass()
 		return;
 	}
 
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "LightLimitFix Prepass");
-	state->BeginPerfEvent("LightLimitFix Prepass");
+	CS_GPU_PASS("LightLimitFix::Prepass");
 	UpdateLights();
 
 	ID3D11ShaderResourceView* views[5]{};
@@ -1857,8 +1856,6 @@ void LightLimitFix::Prepass()
 	views[3] = contactShadowIndexList->srv.get();
 	views[4] = contactShadowGrid->srv.get();
 	context->PSSetShaderResources(35, ARRAYSIZE(views), views);
-
-	state->EndPerfEvent();
 }
 
 bool LightLimitFix::IsValidLight(RE::BSLight* a_light)
@@ -3294,7 +3291,6 @@ void LightLimitFix::UpdateStructure()
 	clusterSize[2] = 32;
 
 	{
-		TracyD3D11Zone(globals::state->tracyCtx, "LightLimitFix Cluster Build");
 		LightBuildingCB updateData{};
 		updateData.LightsNear = lightsNear;
 		updateData.LightsFar = lightsFar;
@@ -3310,7 +3306,7 @@ void LightLimitFix::UpdateStructure()
 
 		context->CSSetShader(clusterBuildingCS, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("LightLimitFix::ClusterBuild");
+			CS_GPU_PASS("LightLimitFix::ClusterBuild");
 			context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
 		}
 
@@ -3319,7 +3315,6 @@ void LightLimitFix::UpdateStructure()
 	}
 
 	{
-		TracyD3D11Zone(globals::state->tracyCtx, "LightLimitFix Cluster Cull");
 		LightCullingCB updateData{};
 		updateData.LightCount = lightCount;
 		updateData.ContactShadowFlags = PackContactShadowFlags(settings);
@@ -3350,7 +3345,7 @@ void LightLimitFix::UpdateStructure()
 
 		context->CSSetShader(clusterCullingCS, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("LightLimitFix::ClusterCull");
+			CS_GPU_PASS("LightLimitFix::ClusterCull");
 			context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
 		}
 	}

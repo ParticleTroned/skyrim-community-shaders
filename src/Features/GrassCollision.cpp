@@ -1,5 +1,6 @@
 #include "GrassCollision.h"
 
+#include "GpuPass.h"
 #include "State.h"
 #include "Utils/ActorUtils.h"
 #include "Utils/D3D.h"
@@ -433,7 +434,7 @@ void GrassCollision::UpdateCollisionTexture()
 
 		context->CSSetShader(GetCollisionUpdateCS(), nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("GrassCollision::CollisionUpdate");
+			CS_GPU_PASS("GrassCollision::CollisionUpdate");
 			context->Dispatch(512 / 8, 512 / 8, 1);
 		}
 	}

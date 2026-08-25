@@ -3,6 +3,7 @@
 #include <DirectXTex.h>
 #include <pystring/pystring.h>
 
+#include "GpuPass.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/Game.h"
@@ -354,7 +355,6 @@ void TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
 	if (!sunLight)
 		return;
-	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Occlusion - Update Shadows");
 
 	auto currentLightDirection = sunLight->GetWorldDirection();
 	const float currentLightDirectionLength = currentLightDirection.Unitize();
@@ -443,7 +443,7 @@ void TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	context->CSSetConstantBuffers(0, 1, &newer.buffer);
 	context->CSSetShader(shadowUpdateProgram.get(), nullptr, 0);
 	{
-		CS_PROFILE_SCOPE("TerrainShadows::ShadowUpdate");
+		CS_GPU_PASS("TerrainShadows::ShadowUpdate");
 		const uint updateCount = a_refreshImmediately ? maxUpdates : 1u;
 		for (uint update = 0; update < updateCount; ++update) {
 			shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * updateLength;

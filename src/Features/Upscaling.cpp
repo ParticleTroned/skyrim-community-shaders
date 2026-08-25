@@ -8,6 +8,7 @@
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/VolumetricLighting.h"
 #include "FoveatedCommon.h"
+#include "GpuPass.h"
 #include "Hooks.h"
 #include "Menu.h"
 #include "Menu/Fonts.h"
@@ -38215,7 +38216,7 @@ bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2
 		UnbindUpscalingResources();
 		bool sharpened = false;
 		{
-			CS_PROFILE_SCOPE("Upscaling::SubmitStageSharpen");
+			CS_GPU_PASS("Upscaling::SubmitStageSharpen");
 			sharpened = DispatchDLSSSharpener(*this, sharpenInput.srv.get(), colorOutput->uav.get(), dispatchWidth, dispatchHeight);
 		}
 		if (!sharpened) {
@@ -38264,13 +38265,7 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		return false;
 	}
 
-	const bool frameAnnotations = state->frameAnnotations;
-	if (frameAnnotations)
-		state->BeginPerfEvent("VR Upscaling Prepare");
-	auto perfEventGuard = ScopeExit([&]() {
-		if (frameAnnotations)
-			state->EndPerfEvent();
-	});
+	CS_GPU_PASS("Upscaling::PreparePerEyeInputs");
 
 	auto screenSize = runtimeResolutionPlan.finalOutputSize;
 	auto renderSize = runtimeResolutionPlan.engineRenderSize;
@@ -38564,8 +38559,6 @@ bool Upscaling::AreExistingVRSubmitVendorResourcesCompatible(
 
 void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 {
-	ZoneScoped;
-
 	if (!globals::game::isVR)
 		return;
 
@@ -38574,15 +38567,7 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 	if (!state || !context || !colorDst)
 		return;
 
-	TracyD3D11Zone(state->tracyCtx, "VR Upscaling - Finalize Per Eye");
-
-	const bool frameAnnotations = state->frameAnnotations;
-	if (frameAnnotations)
-		state->BeginPerfEvent("VR Upscaling Finalize");
-	auto perfEventGuard = ScopeExit([&]() {
-		if (frameAnnotations)
-			state->EndPerfEvent();
-	});
+	CS_GPU_PASS("Upscaling::FinalizePerEyeOutputs");
 
 	auto screenSize = runtimeResolutionPlan.finalOutputSize;
 	auto renderSize = runtimeResolutionPlan.engineRenderSize;
@@ -39676,7 +39661,7 @@ bool Upscaling::DispatchHMDMaskClear(
 		const char* timerName = a_finalDispatch ?
 		                            "Upscaling::HAM::FinalTiledExact5x5" :
 		                            "Upscaling::HAM::InputTiledExact5x5";
-		CS_PROFILE_SCOPE(timerName);
+		CS_GPU_PASS(timerName);
 		context->Dispatch(dispatchX, dispatchY, 1);
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -40718,9 +40703,7 @@ void Upscaling::ClearShaderCache()
 
 void Upscaling::CopySharedD3D12Resources()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Copy Shared D3D12 Resources");
-	globals::state->BeginPerfEvent("Copy Shared D3D12 Resources");
+	CS_GPU_PASS("Upscaling::CopySharedD3D12Resources");
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
@@ -40767,7 +40750,7 @@ void Upscaling::CopySharedD3D12Resources()
 		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
 
 		{
-			CS_PROFILE_SCOPE("Upscaling::CopyDepthD3D12");
+			CS_GPU_PASS("Upscaling::CopyDepthD3D12");
 			context->Draw(3, 0);
 		}
 	}
@@ -40779,8 +40762,6 @@ void Upscaling::CopySharedD3D12Resources()
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 	context->PSSetShader(nullptr, nullptr, 0);
 	context->VSSetShader(nullptr, nullptr, 0);
-
-	globals::state->EndPerfEvent();
 }
 
 void UpdateCameraData()
@@ -46521,7 +46502,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			vendorParams.label = "submit-stage full-eye replay";
 			applyAuthoritativeDLSSProfile(vendorParams);
 			{
-				CS_PROFILE_SCOPE("Upscaling::SubmitStageUpscale");
+				CS_GPU_PASS("Upscaling::SubmitStageUpscale");
 				if (!DispatchVendorEyeRegion(upscaleMethod, vendorParams))
 					return false;
 			}
@@ -46581,7 +46562,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		static bool loggedFoveatedSubmitException[2] = {};
 		try {
 			{
-				CS_PROFILE_SCOPE("Upscaling::SubmitStageUpscale");
+				CS_GPU_PASS("Upscaling::SubmitStageUpscale");
 				vendorSucceeded = DispatchSubmitStageFoveatedVendorEye(
 					upscaleMethod,
 					eyeIndex,
@@ -46745,7 +46726,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			vendorParams.label = "submit-stage full-eye";
 			applyAuthoritativeDLSSProfile(vendorParams);
 			{
-				CS_PROFILE_SCOPE("Upscaling::SubmitStageUpscale");
+				CS_GPU_PASS("Upscaling::SubmitStageUpscale");
 				vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
 			}
 		} catch (const std::exception& e) {
@@ -50569,7 +50550,7 @@ void Upscaling::FillMenuCameraMotionVectors()
 	if (!pixelShader || !vertexShader || !motionVector.RTV || !motionVector.texture || !depth.depthSRV)
 		return;
 
-	CS_PROFILE_SCOPE("Upscaling::MenuCameraMotionVectors");
+	CS_GPU_PASS("Upscaling::MenuCameraMotionVectors");
 
 	CameraMotionVectorsCB cbData{};
 	const uint32_t numEyes = globals::game::isVR ? 2u : 1u;
@@ -51168,14 +51149,9 @@ void Upscaling::Upscale()
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) && !foveatedTransitionBypass;
 	bool encodedVRFoveatedRegions = false;
 
-	auto encodeUpscalingTextures = [&](bool forceFullVREncode, const char* eventName) -> bool {
+	auto encodeUpscalingTextures = [&](bool forceFullVREncode) -> bool {
 		encodedVRFoveatedRegions = false;
-		state->BeginPerfEvent(eventName);
-		auto perfEventGuard = ScopeExit([&]() {
-			state->EndPerfEvent();
-		});
-		TracyD3D11Zone(state->tracyCtx, "Encode Upscaling Textures");
-		Profiler::ScopedPass profile(globals::profiler, forceFullVREncode ? "Upscaling::EncodeTexturesFallbackFull" : "Upscaling::EncodeTextures");
+		CS_GPU_PASS(forceFullVREncode ? "Upscaling::EncodeTexturesFallbackFull" : "Upscaling::EncodeTextures");
 
 		auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
 		auto& normals = renderer->GetRuntimeData().renderTargets[deferred->forwardRenderTargets[2]];
@@ -51352,17 +51328,14 @@ void Upscaling::Upscale()
 		return true;
 	};
 
-	if (!encodeUpscalingTextures(false, "Encode Upscaling Textures"))
+	if (!encodeUpscalingTextures(false))
 		return;
 
 	{
-		state->BeginPerfEvent("Upscaling");
 		ID3D11Resource* motionVectorResource = globals::game::isVR ? motionVector.texture : motionVectorCopyTexture->resource.get();
 		bool dispatched = false;
 		bool vendorDispatchCompleted = false;
 		static bool loggedFoveatedFallback = false;
-		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
-
 		// VR-only resets can leave vendor upscalers with stale viewport state.
 		if (!vendorLifecycleMutationDeferred &&
 			!ApplyPendingVendorRuntimeReset(upscaleMethod, ""))
@@ -51379,7 +51352,7 @@ void Upscaling::Upscale()
 				main.UAV;
 			ID3D11Resource* foveatedOutput = foveatedOutputToSharpener ? sharpenerTexture->resource.get() : main.texture;
 			{
-				CS_PROFILE_SCOPE("Upscaling::Upscale");
+				CS_GPU_PASS("Upscaling::Upscale");
 				dispatched = DispatchFoveatedVendorUpscaling(
 					upscaleMethod,
 					main.texture,
@@ -51409,19 +51382,19 @@ void Upscaling::Upscale()
 		if (!dispatched) {
 			bool fallbackEncodeOk = true;
 			if (encodedVRFoveatedRegions) {
-				fallbackEncodeOk = encodeUpscalingTextures(true, "Encode Upscaling Textures (Fallback Full)");
+				fallbackEncodeOk = encodeUpscalingTextures(true);
 			}
 			if (!fallbackEncodeOk) {
 				logger::warn("[Upscaling] Full-frame {} fallback skipped because input encoding failed.", magic_enum::enum_name(upscaleMethod));
 			} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-				CS_PROFILE_SCOPE("Upscaling::Upscale");
+				CS_GPU_PASS("Upscaling::Upscale");
 				vendorDispatchCompleted = streamline.Upscale(
 					main.texture,
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
 					motionVectorResource);
 			} else if (upscaleMethod == UpscaleMethod::kFSR) {
-				CS_PROFILE_SCOPE("Upscaling::Upscale");
+				CS_GPU_PASS("Upscaling::Upscale");
 				auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 				ID3D11Resource* fsrDepth =
 					!globals::game::isVR && runtimeFsrDepthTexture ?
@@ -51442,7 +51415,6 @@ void Upscaling::Upscale()
 			}
 		}
 
-		state->EndPerfEvent();
 		if (globals::game::isVR && vendorDispatchCompleted) {
 			vrMainPassVendorDispatchCompletedFrame.store(
 				std::max(state->frameCount, 1u),
@@ -51453,8 +51425,7 @@ void Upscaling::Upscale()
 
 void Upscaling::PerformUpscaling()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling");
+	CS_GPU_PASS("Upscaling::PerformUpscaling");
 	Upscale();
 	UpscaleDepth();
 
@@ -51492,8 +51463,6 @@ void Upscaling::UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_ena
 
 void Upscaling::UpscaleDepth()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth");
 	// Optimization overview:
 	// 1) Early validation exits before issuing GPU work.
 	// 2) Wide-kernel depth mode uses hysteresis to avoid frequent toggles.
@@ -51517,6 +51486,8 @@ void Upscaling::UpscaleDepth()
 	if (!depthUpscaleActive && !repairVRFullResolutionMask) {
 		return;
 	}
+
+	CS_GPU_PASS("Upscaling::UpscaleDepth");
 
 	auto state = globals::state;
 	auto renderer = globals::game::renderer;
@@ -51561,11 +51532,6 @@ void Upscaling::UpscaleDepth()
 	if (!fullscreenVS || !underwaterMaskPS || (depthUpscaleActive && !depthUpscalePS)) {
 		return;
 	}
-
-	state->BeginPerfEvent("Render Target Upscaling");
-	auto perfEvent = ScopeExit([&]() {
-		state->EndPerfEvent();
-	});
 
 	// UpscaleDepth can run without the main upscale pass on VR full-resolution
 	// mask paths. Unbind current outputs before copying depth/depthCopy.
@@ -51639,7 +51605,7 @@ void Upscaling::UpscaleDepth()
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("Upscaling::DepthUpscale");
+			CS_GPU_PASS("Upscaling::DepthUpscale");
 			context->Draw(3, 0);
 		}
 
@@ -51676,7 +51642,7 @@ void Upscaling::UpscaleDepth()
 		if (underwaterMaskPassBound) {
 			context->PSSetShader(underwaterMaskPS, nullptr, 0);
 			{
-				CS_PROFILE_SCOPE("Upscaling::UnderwaterMaskUpscale");
+				CS_GPU_PASS("Upscaling::UnderwaterMaskUpscale");
 				context->Draw(3, 0);
 			}
 		}
@@ -51756,11 +51722,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 		return;
 	}
 
-	TracyD3D11Zone(state->tracyCtx, "Upscaling - VR Render Scale Mode Underwater Mask");
-	state->BeginPerfEvent("VR Render Scale Mode Underwater Mask Refresh");
-	auto perfEvent = ScopeExit([&]() {
-		state->EndPerfEvent();
-	});
+	CS_GPU_PASS("Upscaling::UnderwaterMaskRepairStandalone");
 
 	context->IASetInputLayout(nullptr);
 	context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
@@ -51809,7 +51771,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	if (underwaterMaskPassBound) {
 		context->PSSetShader(underwaterMaskPS, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("Upscaling::SubmitStageUnderwaterMask");
+			CS_GPU_PASS("Upscaling::SubmitStageUnderwaterMask");
 			context->Draw(3, 0);
 		}
 	}
@@ -51819,11 +51781,9 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 
 void Upscaling::ApplySharpening()
 {
-	ZoneScoped;
 	auto state = globals::state;
 	if (!state)
 		return;
-	TracyD3D11Zone(state->tracyCtx, "Upscaling - Sharpening");
 
 	// A successful main-pass DLSS dispatch publishes this flag only when its
 	// coherent output is in sharpenerTexture. If submit-stage DLSS owns output or
@@ -51832,6 +51792,8 @@ void Upscaling::ApplySharpening()
 	// cases and could mutate a non-DLSS/stale frame.
 	if (!dlssUpscaleOutputInSharpenerTexture)
 		return;
+
+	CS_GPU_PASS("Upscaling::Sharpening");
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;

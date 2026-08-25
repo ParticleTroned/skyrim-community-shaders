@@ -5,6 +5,7 @@
 
 #include <DDSTextureLoader.h>
 
+#include "GpuPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 
@@ -318,8 +319,7 @@ void Deferred::SetupResources()
 
 void Deferred::CopyShadowData()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "CopyShadowData");
+	CS_GPU_PASS("Deferred::CopyShadowData");
 
 	auto context = globals::d3d::context;
 
@@ -394,8 +394,7 @@ void Deferred::SetShadowCascadeParameters(const T& lightData, DirectionalShadowL
 
 void Deferred::CopyShadowLightData()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "CopyShadowLightData");
+	CS_GPU_PASS("Deferred::CopyShadowLightData");
 
 	auto* context = globals::d3d::context;
 	if (!context)
@@ -433,8 +432,7 @@ void Deferred::CopyShadowLightData()
 
 void Deferred::ReflectionsPrepasses()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Reflections Prepass");
+	CS_GPU_PASS("Deferred::ReflectionsPrepass");
 
 	auto shaderCache = globals::shaderCache;
 
@@ -456,8 +454,7 @@ void Deferred::ReflectionsPrepasses()
 
 void Deferred::EarlyPrepasses()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Early Prepass");
+	CS_GPU_PASS("Deferred::EarlyPrepass");
 
 	auto shaderCache = globals::shaderCache;
 
@@ -478,8 +475,7 @@ void Deferred::EarlyPrepasses()
 
 void Deferred::PrepassPasses()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Prepass");
+	CS_GPU_PASS("Deferred::Prepass");
 
 	auto shaderCache = globals::shaderCache;
 
@@ -554,8 +550,7 @@ void Deferred::StartDeferred()
 
 void Deferred::DeferredPasses()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Deferred");
+	CS_GPU_PASS("Deferred::DeferredPasses");
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
@@ -639,13 +634,13 @@ void Deferred::DeferredPasses()
 
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Dispatch");
-			CS_PROFILE_SCOPE("DeferredComposite");
+			CS_GPU_PASS("DeferredComposite");
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 		}
 	}
 
 	if (globals::game::isVR && globals::features::vr.loaded) {
-		CS_PROFILE_SCOPE("VR::StereoBlend");
+		CS_GPU_PASS("VR::StereoBlend");
 		globals::features::vr.DrawStereoBlend();
 	}
 

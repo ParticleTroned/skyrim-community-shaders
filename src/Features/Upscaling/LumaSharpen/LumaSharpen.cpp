@@ -47,9 +47,6 @@ bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11Unorder
 	if (!state || !inputSRV || !outputUAV)
 		return false;
 
-	ZoneScoped;
-	TracyD3D11Zone(state->tracyCtx, "Luma Sharpening");
-
 	if (!lumaSharpenComputeShader || !lumaSharpenConfigCB)
 		Initialize();
 

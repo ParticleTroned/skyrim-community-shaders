@@ -5,6 +5,7 @@
 
 #include "Feature.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -1764,7 +1765,7 @@ namespace Hooks
 				}
 
 				if (profileName) {
-					CS_PROFILE_SCOPE(profileName);
+					CS_GPU_PASS(profileName);
 					func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
 				} else {
 					func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);

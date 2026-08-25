@@ -2,6 +2,7 @@
 
 #include "Features/TerrainBlending.h"
 #include "FoveatedCommon.h"
+#include "GpuPass.h"
 #include "State.h"
 #include "Upscaling.h"
 #include "Util.h"
@@ -409,9 +410,8 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 
 void ScreenSpaceShadows::DrawShadows()
 {
-	ZoneScopedS(8);
+	CS_GPU_PASS("ScreenSpaceShadows::DrawShadows");
 	auto state = globals::state;
-	TracyD3D11Zone(state->tracyCtx, "Screen Space Shadows");
 
 	auto context = globals::d3d::context;
 
@@ -537,14 +537,7 @@ void ScreenSpaceShadows::DrawShadows()
 	auto DispatchEye = [&](const char* eyeName, ID3D11ComputeShader* shader, uint32_t eyeIndex, const float* lightProj,
 						   float invTexSizeX, float invTexSizeY) {
 		const char* profileName = eyeName ? (eyeIndex == 0 ? "ScreenSpaceShadows::RayMarch(Left Eye)" : "ScreenSpaceShadows::RayMarch(Right Eye)") : "ScreenSpaceShadows::RayMarch";
-		CS_PROFILE_SCOPE(profileName);
-
-		if (globals::state->frameAnnotations && eyeName) {
-			std::string eventName = std::format("SSS - Ray March ({})", eyeName);
-			globals::state->BeginPerfEvent(eventName);
-		} else if (globals::state->frameAnnotations) {
-			globals::state->BeginPerfEvent("SSS - Ray March");
-		}
+		CS_GPU_PASS(profileName);
 
 		context->CSSetShader(shader, nullptr, 0);
 
@@ -552,11 +545,8 @@ void ScreenSpaceShadows::DrawShadows()
 		int maxRenderBounds[2] = { viewportSize[0], viewportSize[1] };
 		if (foveatedState.active) {
 			const auto bounds = BuildFoveatedBounds(foveatedState, eyeIndex, 0u, static_cast<uint32_t>(viewportSize[0]), static_cast<uint32_t>(viewportSize[1]));
-			if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY) {
-				if (globals::state->frameAnnotations)
-					globals::state->EndPerfEvent();
+			if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY)
 				return;
-			}
 
 			minRenderBounds[0] = bounds.minX;
 			minRenderBounds[1] = bounds.minY;
@@ -570,7 +560,7 @@ void ScreenSpaceShadows::DrawShadows()
 			auto dispatchData = dispatchList.Dispatch[i];
 
 			{
-				TracyD3D11Zone(globals::state->tracyCtx, "SSS - DispatchEye CB");
+				CS_GPU_PASS("SSS::RayMarch::DispatchEyeCB");
 
 				RaymarchCB data{};
 				data.LightCoordinate[0] = dispatchList.LightCoordinate_Shader[0];
@@ -608,13 +598,9 @@ void ScreenSpaceShadows::DrawShadows()
 			}
 
 			{
-				TracyD3D11Zone(globals::state->tracyCtx, "SSS - DispatchEye Sweep");
+				CS_GPU_PASS("SSS::RayMarch::DispatchEyeSweep");
 				context->Dispatch(dispatchData.WaveCount[0], dispatchData.WaveCount[1], dispatchData.WaveCount[2]);
 			}
-		}
-
-		if (globals::state->frameAnnotations) {
-			globals::state->EndPerfEvent();
 		}
 	};
 
@@ -625,14 +611,14 @@ void ScreenSpaceShadows::DrawShadows()
 		DispatchEye(nullptr, raymarchLeft, 0, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 	} else {
 		{
-			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Left Eye");
+			CS_GPU_PASS("SSS::LeftEye");
 			DispatchEye("Left Eye", raymarchLeft, 0, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 		}
 
 		if (!stereoReprojectActive) {
 			auto lightProjectionRightF = CalculateLightProjection(1);
 			{
-				TracyD3D11Zone(globals::state->tracyCtx, "SSS - Right Eye");
+				CS_GPU_PASS("SSS::RightEye");
 				DispatchEye("Right Eye", raymarchRight, 1, lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
 			}
 		}
@@ -676,12 +662,8 @@ void ScreenSpaceShadows::DrawStereoSync()
 	if (!stereoCS)
 		return;
 
-	ZoneScoped;
-	const char* tracyLabel = stereoCS == stereoSyncCS ? "SSS - Stereo Sync" : "SSS - Stereo Reproject";
-	TracyD3D11Zone(globals::state->tracyCtx, tracyLabel);
-
-	if (globals::state->frameAnnotations)
-		globals::state->BeginPerfEvent(tracyLabel);
+	const char* profileLabel = stereoCS == stereoSyncCS ? "ScreenSpaceShadows::StereoSync" : "ScreenSpaceShadows::StereoReproject";
+	CS_GPU_PASS(profileLabel);
 
 	auto context = globals::d3d::context;
 
@@ -689,11 +671,8 @@ void ScreenSpaceShadows::DrawStereoSync()
 	const uint32_t frameWidth = static_cast<uint32_t>(resolution.x);
 	const uint32_t frameHeight = static_cast<uint32_t>(resolution.y);
 	const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
-	if (frameWidth == 0 || frameHeight == 0) {
-		if (globals::state->frameAnnotations)
-			globals::state->EndPerfEvent();
+	if (frameWidth == 0 || frameHeight == 0)
 		return;
-	}
 
 	const bool foveatedStereoSync = foveatedState.active && frameWidth > 1;
 	std::array<FoveatedCommon::DispatchBounds, 2> syncBounds{};
@@ -753,8 +732,6 @@ void ScreenSpaceShadows::DrawStereoSync()
 	ID3D11UnorderedAccessView* uavs[1]{ screenSpaceShadowsTexture->uav.get() };
 
 	{
-		const char* profileLabel = stereoCS == stereoSyncCS ? "ScreenSpaceShadows::StereoSync" : "ScreenSpaceShadows::StereoReproject";
-		CS_PROFILE_SCOPE(profileLabel);
 		CopyStereoSyncSource();
 
 		Util::BindGlobalConstantBuffersForCS(context);
@@ -810,9 +787,6 @@ void ScreenSpaceShadows::DrawStereoSync()
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	context->CSSetConstantBuffers(1, 1, &cbPtr);
 	context->CSSetShader(nullptr, nullptr, 0);
-
-	if (globals::state->frameAnnotations)
-		globals::state->EndPerfEvent();
 }
 
 void ScreenSpaceShadows::Prepass()

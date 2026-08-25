@@ -5,6 +5,7 @@
 #include <limits>
 
 #include "Globals.h"
+#include "GpuPass.h"
 #include "Profiler.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -233,8 +234,7 @@ void VolumetricShadows::CopyShadowLightData()
 		return;
 	}
 
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "VolumetricShadows::CopyShadowLightData");
+	CS_GPU_PASS("VolumetricShadows::CopyShadowLightData");
 
 	if (!globals::state->HasDirectionalShadows()) {
 		shadowCopyValid = false;
@@ -286,7 +286,7 @@ void VolumetricShadows::CopyShadowLightData()
 		context->CSSetUnorderedAccessViews(0, 1, &csUAV, nullptr);
 		context->CSSetShader(downsampleShadowMip0CS, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("VolumetricShadows::DownsampleMip0");
+			CS_GPU_PASS("VolumetricShadows::DownsampleMip0");
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 
@@ -294,7 +294,7 @@ void VolumetricShadows::CopyShadowLightData()
 		context->CSSetUnorderedAccessViews(0, 1, &csUAV, nullptr);
 		context->CSSetShader(downsampleShadowMip1CS, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("VolumetricShadows::DownsampleMip1");
+			CS_GPU_PASS("VolumetricShadows::DownsampleMip1");
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 
@@ -307,7 +307,7 @@ void VolumetricShadows::CopyShadowLightData()
 			context->CSSetUnorderedAccessViews(0, 1, &a_tempUAV, nullptr);
 			context->CSSetShader(blurShadowHorizontalCS, nullptr, 0);
 			{
-				CS_PROFILE_SCOPE(a_hProfile);
+				CS_GPU_PASS(a_hProfile);
 				context->Dispatch((a_size + kBlurGroupSize - 1) / kBlurGroupSize, a_size, 1);
 			}
 
@@ -319,7 +319,7 @@ void VolumetricShadows::CopyShadowLightData()
 			context->CSSetUnorderedAccessViews(0, 1, &a_outputUAV, nullptr);
 			context->CSSetShader(blurShadowVerticalCS, nullptr, 0);
 			{
-				CS_PROFILE_SCOPE(a_vProfile);
+				CS_GPU_PASS(a_vProfile);
 				context->Dispatch(a_size, (a_size + kBlurGroupSize - 1) / kBlurGroupSize, 1);
 			}
 

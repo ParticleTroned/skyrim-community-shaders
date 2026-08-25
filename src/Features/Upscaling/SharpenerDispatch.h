@@ -2,6 +2,7 @@
 
 #include "../../Buffer.h"
 #include "../../Globals.h"
+#include "../../GpuPass.h"
 #include "../../Profiler.h"
 #include "../../State.h"
 
@@ -28,8 +29,6 @@ namespace UpscalingSharpener
 		if (!width || !height)
 			return false;
 
-		state->BeginPerfEvent(perfEventName);
-
 		configCB->Update(config);
 		auto bufferArray = configCB->CB();
 
@@ -45,7 +44,7 @@ namespace UpscalingSharpener
 		const uint32_t dispatchX = (width + 7) / 8;
 		const uint32_t dispatchY = (height + 7) / 8;
 		{
-			CS_PROFILE_SCOPE(perfEventName);
+			CS_GPU_PASS(perfEventName);
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 
@@ -57,7 +56,6 @@ namespace UpscalingSharpener
 
 		context->CSSetShader(nullptr, nullptr, 0);
 
-		state->EndPerfEvent();
 		return true;
 	}
 }

@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
+#include "GpuPass.h"
 #include "LocationContext.h"
 #include "Shadercache.h"
 #include "State.h"
@@ -402,7 +403,7 @@ void IBL::Prepass()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("ImageBasedLighting::EnvDiffuseIBL");
+			CS_GPU_PASS("ImageBasedLighting::EnvDiffuseIBL");
 			context->Dispatch(1, 1, 1);
 		}
 	} else {
@@ -421,7 +422,7 @@ void IBL::Prepass()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		{
-			CS_PROFILE_SCOPE("ImageBasedLighting::SkyDiffuseIBL");
+			CS_GPU_PASS("ImageBasedLighting::SkyDiffuseIBL");
 			context->Dispatch(1, 1, 1);
 		}
 	}

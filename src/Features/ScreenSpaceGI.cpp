@@ -7,6 +7,7 @@
 #include "Deferred.h"
 #include "FoveatedCommon.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "LocationContext.h"
 #include "Profiler.h"
 #include "State.h"
@@ -1764,8 +1765,7 @@ void ScreenSpaceGI::DrawSSGI()
 		return;
 	}
 
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "SSGI");
+	CS_GPU_PASS("ScreenSpaceGI::SSGI");
 
 	uint inputAoTexIdx = lastFrameAoTexIdx;
 	uint inputGITexIdx = lastFrameGITexIdx;
@@ -1863,7 +1863,7 @@ void ScreenSpaceGI::DrawSSGI()
 	};
 
 	auto dispatchCenterShader = [&](ID3D11ComputeShader* a_shader, std::string_view a_profileName) {
-		CS_PROFILE_SCOPE(a_profileName);
+		CS_GPU_PASS(a_profileName);
 		forEachCenterRect([&](const DispatchRect& rect) {
 			if (rect.width == 0 || rect.height == 0)
 				return;
@@ -1943,7 +1943,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		context->CSSetShader(a_shader, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE(a_profileName);
+			CS_GPU_PASS(a_profileName);
 			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
 		}
 
@@ -1960,8 +1960,6 @@ void ScreenSpaceGI::DrawSSGI()
 
 	// prefilter depths
 	{
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Depths");
-
 		srvs.at(0) = Util::GetCurrentSceneDepthSRV();
 		for (int i = 0; i < 5; ++i)
 			uavs.at(i) = uavWorkingDepth[i].get();
@@ -1970,15 +1968,13 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(prefilterDepthsCompute.get(), nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("ScreenSpaceGI::PrefilterDepths");
+			CS_GPU_PASS("ScreenSpaceGI::PrefilterDepths");
 			context->Dispatch((resolution[0] + 15) >> 4, (resolution[1] + 15) >> 4, 1);
 		}
 	}
 
 	// fetch radiance and disocclusion (optional in AO-only + no temporal mode)
 	if (runRadianceDisoccPass) {
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Radiance Disocc");
-
 		resetViews();
 		srvs.at(0) = runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr;
 		srvs.at(1) = texWorkingDepth->srv.get();
@@ -2012,14 +2008,12 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(activeRadianceDisoccCompute, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("ScreenSpaceGI::RadianceDisocc");
+			CS_GPU_PASS("ScreenSpaceGI::RadianceDisocc");
 			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
 		}
 
 		// Prefilter radiance texture only when GI is enabled.
 		if (runPrefilterRadiancePass) {
-			TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Radiance");
-
 			// radianceDisocc wrote mip 0 directly to texRadianceTemp above.
 			resetViews();
 			srvs.at(0) = texRadianceTemp->srv.get();
@@ -2033,7 +2027,7 @@ void ScreenSpaceGI::DrawSSGI()
 			context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 			context->CSSetShader(prefilterRadianceCompute.get(), nullptr, 0);
 			{
-				CS_PROFILE_SCOPE("ScreenSpaceGI::PrefilterRadiance");
+				CS_GPU_PASS("ScreenSpaceGI::PrefilterRadiance");
 				context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
 			}
 		}
@@ -2046,8 +2040,6 @@ void ScreenSpaceGI::DrawSSGI()
 
 	// Prefilter normals for the regular AO/GI path.
 	if (!foveatedSsgiActive) {
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Normals");
-
 		resetViews();
 		srvs.at(0) = rts[NORMALROUGHNESS].SRV;
 		uavs.at(0) = uavNormal[0].get();
@@ -2060,15 +2052,13 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 		context->CSSetShader(prefilterNormalCompute.get(), nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("ScreenSpaceGI::PrefilterNormals");
+			CS_GPU_PASS("ScreenSpaceGI::PrefilterNormals");
 			context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
 		}
 	}
 
 	// GI
 	if (!foveatedSsgiActive) {
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - GI");
-
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
 		srvs.at(1) = rts[NORMALROUGHNESS].SRV;
@@ -2097,7 +2087,7 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(useStereoReproject ? activeStereoReprojectGICompute : activeGICompute, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("ScreenSpaceGI::GI");
+			CS_GPU_PASS("ScreenSpaceGI::GI");
 			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
 		}
 
@@ -2108,8 +2098,6 @@ void ScreenSpaceGI::DrawSSGI()
 	}
 
 	if (useStereoReproject) {
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Stereo Reproject");
-
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
 		srvs.at(1) = texAo[inputAoTexIdx]->srv.get();
@@ -2128,7 +2116,7 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(activeReprojectCompute, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("ScreenSpaceGI::Reproject");
+			CS_GPU_PASS("ScreenSpaceGI::Reproject");
 			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
 		}
 
@@ -2142,8 +2130,6 @@ void ScreenSpaceGI::DrawSSGI()
 
 	// blur
 	if (blurEnabled) {
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Diffuse Blur");
-
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
 		srvs.at(1) = rts[NORMALROUGHNESS].SRV;
@@ -2159,7 +2145,7 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(blurCompute.get(), nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("ScreenSpaceGI::Blur");
+			CS_GPU_PASS("ScreenSpaceGI::Blur");
 			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
 		}
 
@@ -2170,15 +2156,7 @@ void ScreenSpaceGI::DrawSSGI()
 	}
 
 	if (stereoSyncBaseEnabled) {
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Stereo Sync");
-
-		if (globals::state->frameAnnotations)
-			globals::state->BeginPerfEvent("SSGI - Stereo Sync");
-
 		runStereoSync(activeStereoSyncCompute, false, "ScreenSpaceGI::StereoSync");
-
-		if (globals::state->frameAnnotations)
-			globals::state->EndPerfEvent();
 	}
 
 	// upsample
@@ -2203,7 +2181,7 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(activeUpsampleCompute, nullptr, 0);
 		{
-			CS_PROFILE_SCOPE("ScreenSpaceGI::Upsample");
+			CS_GPU_PASS("ScreenSpaceGI::Upsample");
 			context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
 		}
 
@@ -2221,8 +2199,6 @@ void ScreenSpaceGI::DrawSSGI()
 		}
 
 		{
-			TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Center FullRes GI");
-
 			resetViews();
 			srvs.at(0) = texWorkingDepth->srv.get();
 			srvs.at(1) = rts[NORMALROUGHNESS].SRV;
@@ -2248,8 +2224,6 @@ void ScreenSpaceGI::DrawSSGI()
 		}
 
 		if (centerBlendNeeded) {
-			TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Center Blend");
-
 			resetViews();
 
 			srvs.at(0) = texAo[inputAoTexIdx]->srv.get();
@@ -2286,15 +2260,7 @@ void ScreenSpaceGI::DrawSSGI()
 		}
 
 		if (stereoSyncCenterEnabled) {
-			TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Center Stereo Sync");
-
-			if (globals::state->frameAnnotations)
-				globals::state->BeginPerfEvent("SSGI - Center Stereo Sync");
-
 			runStereoSync(activeCenterStereoSyncCompute, true, "ScreenSpaceGI::CenterStereoSync");
-
-			if (globals::state->frameAnnotations)
-				globals::state->EndPerfEvent();
 		}
 	}
 

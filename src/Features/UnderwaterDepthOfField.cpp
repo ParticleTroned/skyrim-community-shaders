@@ -4,6 +4,7 @@
 #include "CSUtility.h"
 #include "Deferred.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "Profiler.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
@@ -548,7 +549,7 @@ namespace
 			depthOfFieldInputCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<DepthOfFieldInputConstants>(), "UnderwaterDepthOfField::InputFogCB");
 		depthOfFieldInputCB->Update(constants);
 
-		CS_PROFILE_SCOPE("UnderwaterDepthOfField::InputFog");
+		CS_GPU_PASS("UnderwaterDepthOfField::InputFog");
 		GraphicsStateScope graphicsScope(context);
 		appliedFogToDepthOfFieldInput = DrawDepthOfFieldInputPass(*inputTarget, sharpScratch, maskSRV);
 	}

@@ -44,9 +44,6 @@ bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 	if (!state || !inputSRV || !outputUAV)
 		return false;
 
-	ZoneScoped;
-	TracyD3D11Zone(state->tracyCtx, "RCAS Sharpening");
-
 	if (!rcasComputeShader || !rcasConfigCB)
 		Initialize();
 

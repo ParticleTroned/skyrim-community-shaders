@@ -3,6 +3,7 @@
 #include "Deferred.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "Hooks.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -989,7 +990,7 @@ void TerrainBlending::TerrainShaderHacks()
 
 void TerrainBlending::ResetDepth()
 {
-	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Reset Depth");
+	CS_GPU_PASS("TerrainBlending::ResetDepth");
 	auto context = globals::d3d::context;
 
 	auto dsv = terrainDepth.views[0];
@@ -998,6 +999,8 @@ void TerrainBlending::ResetDepth()
 
 void TerrainBlending::ResetTerrainDepth()
 {
+	CS_GPU_PASS("TerrainBlending::ResetTerrainDepth");
+
 	auto context = globals::d3d::context;
 
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
@@ -1009,18 +1012,13 @@ void TerrainBlending::ResetTerrainDepth()
 
 void TerrainBlending::BlendPrepassDepths()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Blend Prepass Depths");
-	if (globals::state->frameAnnotations)
-		globals::state->BeginPerfEvent("Terrain Blending - Blend Prepass Depths");
+	CS_GPU_PASS("TerrainBlending::BlendPrepassDepths");
 
 	auto context = globals::d3d::context;
 	if (!context || !depthBlendCB || !depthSRVBackup || !terrainDepth.texture || !terrainDepth.depthSRV ||
 		!blendedDepthTexture || !blendedDepthTexture->uav ||
 		!blendedDepthTexture16 || !blendedDepthTexture16->uav ||
 		!mainDepthCopy || !mainDepthCopy->uav) {
-		if (globals::state->frameAnnotations)
-			globals::state->EndPerfEvent();
 		return;
 	}
 
@@ -1035,11 +1033,8 @@ void TerrainBlending::BlendPrepassDepths()
 	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, blendedDepthTexture16->desc.Height, mainDepthCopy->desc.Height });
 	const uint32_t blendWidth = GetDepthBlendExtent(blendSize.x, maxBlendWidth);
 	const uint32_t blendHeight = GetDepthBlendExtent(blendSize.y, maxBlendHeight);
-	if (!blendWidth || !blendHeight) {
-		if (globals::state->frameAnnotations)
-			globals::state->EndPerfEvent();
+	if (!blendWidth || !blendHeight)
 		return;
-	}
 
 	DepthBlendCB depthBlendData{};
 	depthBlendData.blendWidth = blendWidth;
@@ -1063,7 +1058,7 @@ void TerrainBlending::BlendPrepassDepths()
 		const uint32_t dispatchX = (blendWidth + 7u) >> 3u;
 		const uint32_t dispatchY = (blendHeight + 7u) >> 3u;
 		{
-			CS_PROFILE_SCOPE("TerrainBlending::DepthBlend");
+			CS_GPU_PASS("TerrainBlending::DepthBlend");
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 	}
@@ -1082,9 +1077,6 @@ void TerrainBlending::BlendPrepassDepths()
 
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 	stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-
-	if (globals::state->frameAnnotations)
-		globals::state->EndPerfEvent();
 }
 
 void TerrainBlending::ClearShaderCache()
@@ -1260,9 +1252,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 
 	if (terrainPassCount != 0 || noBlendPassCount != 0) {
 		tbHookDiagnostics.renderPassExecutedCalls++;
-		TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Render Passes");
-		if (globals::state->frameAnnotations)
-			globals::state->BeginPerfEvent("Terrain Blending - Render Passes");
+		CS_GPU_PASS("TerrainBlending::RenderPasses");
 
 		GET_INSTANCE_MEMBER(alphaBlendMode, shadowState)
 		GET_INSTANCE_MEMBER(alphaBlendWriteMode, shadowState)
@@ -1292,9 +1282,6 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 
 		terrainRenderPasses.clear();
 		renderPasses.clear();
-
-		if (globals::state->frameAnnotations)
-			globals::state->EndPerfEvent();
 	}
 
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];

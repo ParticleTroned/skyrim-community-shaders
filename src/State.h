@@ -30,6 +30,21 @@ public:
 		std::vector<std::pair<std::string, std::string>> defines;
 	};
 
+	struct RenderTargetResourcePublication
+	{
+		// This is a coordinated setup acknowledgement, not an exhaustive inventory
+		// of every optional feature resource. Required physical targets are probed
+		// separately before render-scale publication.
+		uint64_t generation = 0;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		uint32_t loadedFeatureSetupCount = 0;
+		ID3D11Device* device = nullptr;
+		ID3D11DeviceContext* context = nullptr;
+		bool deferredSetupAcknowledged = false;
+		bool complete = false;
+	};
+
 	State()
 	{
 		std::lock_guard<std::mutex> lock(statsMutex);
@@ -105,6 +120,13 @@ public:
 	void Reset();
 	void Setup();
 	void SetupRenderTargetResources();
+	void InvalidateRenderTargetResourcePublication() noexcept;
+	std::shared_ptr<const RenderTargetResourcePublication> GetRenderTargetResourcePublication() const
+	{
+		return renderTargetResourcePublication.load(std::memory_order_acquire);
+	}
+	uint64_t GetCompletedRenderTargetResourcePublicationGeneration() const;
+	bool HasCompleteRenderTargetResourcePublication(uint32_t a_width, uint32_t a_height) const;
 
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
 	// Returns true only when the main settings file and every required
@@ -465,10 +487,20 @@ public:
 	}
 
 private:
+	uint64_t BeginRenderTargetResourcePublication() noexcept;
+	void CompleteRenderTargetResourcePublication(
+		uint64_t a_generation,
+		uint32_t a_loadedFeatureSetupCount);
+
 	std::atomic<std::shared_ptr<const ShaderDefinesSnapshot>> shaderDefinesSnapshot{
 		std::make_shared<const ShaderDefinesSnapshot>()
 	};
 	std::atomic<uint64_t> shaderDefinesGeneration{ 0 };
+	std::atomic<std::shared_ptr<const RenderTargetResourcePublication>> renderTargetResourcePublication{
+		std::make_shared<const RenderTargetResourcePublication>()
+	};
+	std::atomic<uint64_t> renderTargetResourcePublicationGeneration{ 0 };
+	std::atomic<uint64_t> completedRenderTargetResourcePublicationGeneration{ 0 };
 	ID3D11Device* setupResourcesDevice = nullptr;
 	ID3D11DeviceContext* setupResourcesContext = nullptr;
 	REX::W32::ComPtr<REX::W32::ID3DUserDefinedAnnotation> pPerf;

@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <imgui_impl_dx11.h>
 #include <limits>
 #include <magic_enum/magic_enum.hpp>
@@ -646,6 +647,8 @@ public:
 
 	struct InSceneResources
 	{
+		winrt::com_ptr<ID3D11DeviceContext1> immediateContext;
+		winrt::com_ptr<ID3DDeviceContextState> overlayContextState;
 		winrt::com_ptr<ID3D11VertexShader> vs;
 		winrt::com_ptr<ID3D11PixelShader> ps;
 		winrt::com_ptr<ID3D11InputLayout> inputLayout;

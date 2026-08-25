@@ -47,6 +47,7 @@ jobs:
             run-shader-validation: ${{ github.event_name != 'workflow_dispatch' || inputs.validate-shaders == true }}
             run-shader-tests: ${{ github.event_name != 'workflow_dispatch' || inputs.validate-shaders == true }}
             cache-key-suffix: ${{ inputs.cache-key-suffix || '' }}
+            exclude-hidden-aio-features: true
 
     shader-cache:
         name: Build prebuilt SE shader cache
@@ -71,6 +72,11 @@ jobs:
         permissions:
             contents: write
         steps:
+            - name: Checkout release source
+              uses: actions/checkout@v6
+              with:
+                  persist-credentials: false
+
             - name: Ensure ref is a tag
               if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
               shell: bash
@@ -91,6 +97,54 @@ jobs:
               with:
                   name: ShaderCache-SE
                   path: dist/
+
+            - name: Assemble AIO with selectable shader cache
+              shell: pwsh
+              run: |
+                  $aioArchives = @(Get-ChildItem -LiteralPath dist -Filter 'CSX_AIO-*.7z' -File)
+                  $cacheArchives = @(Get-ChildItem -LiteralPath dist -Filter 'ShaderCache-SE-*.7z' -File)
+                  if ($aioArchives.Count -ne 1) {
+                      throw "Expected exactly one AIO archive, found $($aioArchives.Count)."
+                  }
+                  if ($cacheArchives.Count -ne 1) {
+                      throw "Expected exactly one SE shader-cache archive, found $($cacheArchives.Count)."
+                  }
+                  $aioArchive = $aioArchives[0]
+                  $cacheArchive = $cacheArchives[0]
+
+                  $assemblyRoot = Join-Path $env:RUNNER_TEMP ([Guid]::NewGuid().ToString('N'))
+                  $coreRoot = Join-Path $assemblyRoot 'core'
+                  $cacheRoot = Join-Path $assemblyRoot 'cache'
+                  New-Item -ItemType Directory -Path $coreRoot, $cacheRoot -Force | Out-Null
+
+                  & cmake -E chdir $coreRoot cmake -E tar xf $aioArchive.FullName
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                  & cmake -E chdir $cacheRoot cmake -E tar xf $cacheArchive.FullName
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+                  $combinedRoot = Join-Path $assemblyRoot 'combined'
+                  $aioLabel = $aioArchive.BaseName.Substring('CSX_AIO-'.Length)
+                  & python tools/build-shader-cache.py `
+                      --assemble-aio $cacheRoot `
+                      --aio-root $coreRoot `
+                      --out $combinedRoot `
+                      --package-label $aioLabel
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+                  $combinedArchives = @(
+                      Get-ChildItem -LiteralPath $combinedRoot -Filter 'CSX_AIO-*.7z' -File
+                  )
+                  if ($combinedArchives.Count -ne 1) {
+                      throw "Expected exactly one combined AIO archive, found $($combinedArchives.Count)."
+                  }
+                  $replacement = "$($aioArchive.FullName).fomod-staging"
+                  Copy-Item -LiteralPath $combinedArchives[0].FullName -Destination $replacement
+                  if (-not (Test-Path -LiteralPath $replacement -PathType Leaf) -or
+                      (Get-Item -LiteralPath $replacement).Length -eq 0) {
+                      throw 'Combined AIO staging archive is missing or empty.'
+                  }
+                  Move-Item -LiteralPath $replacement -Destination $aioArchive.FullName -Force
+                  Remove-Item -LiteralPath $cacheArchive.FullName
 
             # The Feature Metadata Summary is already in this body (appended
             # during Semantic Release); just resolve the tag and fetch it.

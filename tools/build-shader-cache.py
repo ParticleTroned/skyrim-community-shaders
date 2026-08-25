@@ -58,27 +58,18 @@ MANIFEST_SCHEMA_VERSION = 1
 FOMOD_DIRECTORY = "fomod"
 FOMOD_CONFIG_FILE_NAME = "ModuleConfig.xml"
 FOMOD_INFO_FILE_NAME = "info.xml"
-FOMOD_HELP_URL = (
+FOMOD_WEBSITE = (
     "https://github.com/ParticleTroned/skyrim-community-shaders/blob/"
-    "cs-1.7-PL-SE/docs/development/prebuilt-shader-cache.md#mod-organizer-2"
+    "cs-1.7-PL-SE/docs/development/prebuilt-shader-cache.md"
 )
-FOMOD_HELP_IMAGE_SOURCE = Path("docs/images/mo2-fomod-use-any-file.png")
-FOMOD_HELP_IMAGE_ARCHIVE_PATH = "fomod/images/mo2-fomod-use-any-file.png"
-FOMOD_HELP_IMAGE_XML_PATH = FOMOD_HELP_IMAGE_ARCHIVE_PATH.replace("/", "\\")
-FOMOD_NOTICE_FLAGS = (
-    "CSXMO2OpenSettingsNotice",
-    "CSXMO2FileCheckNotice",
-    "CSXHorizonNotice",
-)
-FOMOD_NOTICE_MAX_LINES = 7
-FOMOD_NOTICE_MAX_LINE_LENGTH = 72
+FOMOD_INSTALL_CACHE_FLAG = "InstallShaderCache"
+AIO_CORE_DIRECTORY = "Core"
 PUBLICATION_REPLACE_ATTEMPTS = 20
 PUBLICATION_REPLACE_RETRY_SECONDS = 0.5
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
 TARGET_RUNTIME = "SE"
 HORIZON_FIX_SHORT_NAME = "HorizonFix"
 HORIZON_FIX_CACHE_DIRECTORY = f"{CACHE_DIRECTORY}-HorizonFix"
-HORIZON_FIX_DLL_PATH = "SKSE/Plugins/HorizonFix.dll"
 HORIZON_FIX_SHADER_FILE = "Water.hlsl"
 CSX_PLUGIN_VERSION_PATTERN = re.compile(r"^CSX (?P<version>[0-9]+\.[0-9]+)-SE$")
 CSX_VERSION_FILE = Path("cmake/CSXVersion.cmake")
@@ -1315,9 +1306,9 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
 
 def validate_fomod_installer(
     fomod_dir: Path,
-    compatibility_tag: str,
+    include_core: bool,
 ) -> None:
-    """Verify the installer explains compatibility and permits manual fallback."""
+    """Verify the installer is manual, deterministic, and keeps cache layout."""
     config_path = fomod_dir / FOMOD_CONFIG_FILE_NAME
     info_path = fomod_dir / FOMOD_INFO_FILE_NAME
     try:
@@ -1328,322 +1319,202 @@ def validate_fomod_installer(
 
     if root.find("./moduleDependencies") is not None:
         raise SystemExit(
-            "cache FOMOD must expose compatibility failures inside its visible "
-            "install step"
+            "cache FOMOD must not gate installation on detected files or runtimes"
         )
+    if root.findall(".//fileDependency") or root.findall(".//gameDependency"):
+        raise SystemExit("cache FOMOD must leave compatibility choices to the user")
+
+    required_folders = root.findall("./requiredInstallFiles/folder")
+    if include_core:
+        if len(required_folders) != 1:
+            raise SystemExit("AIO FOMOD must install exactly one required core tree")
+        core_folder = required_folders[0]
+        if (
+            core_folder.get("source") != AIO_CORE_DIRECTORY
+            or core_folder.get("destination") != ""
+        ):
+            raise SystemExit("AIO FOMOD core tree has an invalid install mapping")
+    elif required_folders:
+        raise SystemExit("standalone cache FOMOD must not declare a core tree")
 
     install_steps = root.findall("./installSteps/installStep")
-    plugins = root.findall(
-        "./installSteps/installStep/optionalFileGroups/group/plugins/plugin"
-    )
-    notice_plugins: dict[str, ET.Element] = {}
-    for install_step in install_steps:
-        step_notices: list[tuple[str, ET.Element]] = []
-        for plugin in install_step.findall(
-            "./optionalFileGroups/group/plugins/plugin"
-        ):
-            for flag in plugin.findall("./conditionFlags/flag"):
-                flag_name = flag.get("name", "")
-                if flag_name in FOMOD_NOTICE_FLAGS:
-                    step_notices.append((flag_name, plugin))
-        if len(step_notices) > 1:
-            raise SystemExit(
-                "cache FOMOD must show each setup notice on a separate page"
-            )
-        for flag_name, plugin in step_notices:
-            if flag_name in notice_plugins:
-                raise SystemExit(f"cache FOMOD repeats setup notice {flag_name}")
-            notice_plugins[flag_name] = plugin
+    if len(install_steps) != 2:
+        raise SystemExit("FOMOD must contain cache choice and Horizon Fix pages")
 
-    cache_plugins = [
-        plugin for plugin in plugins if plugin.find("./files/folder") is not None
-    ]
-    cache_groups = [
-        group
-        for group in root.findall(
-            "./installSteps/installStep/optionalFileGroups/group"
-        )
-        if group.find("./plugins/plugin/files/folder") is not None
-    ]
-    if set(notice_plugins) != set(FOMOD_NOTICE_FLAGS) or len(
-        cache_plugins
-    ) != len(CACHE_VARIANTS):
-        raise SystemExit(
-            "cache FOMOD is missing its visible setup notices or cache variants"
-        )
-    if len(cache_groups) != 1 or cache_groups[0].get("type") != "SelectExactlyOne":
-        raise SystemExit(
-            "cache FOMOD must require exactly one selectable cache variant"
-        )
-
-    cache_plugins_by_source = {
-        plugin.find("./files/folder").get("source", ""): plugin
-        for plugin in cache_plugins
-    }
-    expected_cache_sources = {variant.directory for variant in CACHE_VARIANTS}
-    if set(cache_plugins_by_source) != expected_cache_sources:
-        raise SystemExit(
-            "cache FOMOD sources do not match the generated cache variants"
-        )
-    cache_sources_in_order = [
-        plugin.find("./files/folder").get("source", "")
-        for plugin in cache_plugins
-    ]
-    if cache_sources_in_order[0] != HORIZON_FIX_CACHE_DIRECTORY:
-        raise SystemExit(
-            "cache FOMOD must default its manual fallback to Horizon Fix"
-        )
-
-    for flag_name, notice_plugin in notice_plugins.items():
-        notice_type = notice_plugin.find("./typeDescriptor/type")
-        if notice_type is None or notice_type.get("name") != "Required":
-            raise SystemExit(
-                f"cache FOMOD must present setup notice {flag_name} as required"
-            )
-        notice_description = notice_plugin.findtext("./description") or ""
-        notice_lines = notice_description.splitlines()
-        if len(notice_lines) > FOMOD_NOTICE_MAX_LINES or any(
-            len(line) > FOMOD_NOTICE_MAX_LINE_LENGTH for line in notice_lines
-        ):
-            raise SystemExit(
-                f"cache FOMOD setup notice {flag_name} is too long for MO2's "
-                "description pane"
-            )
-
-    help_image = notice_plugins["CSXMO2FileCheckNotice"].find("./image")
+    cache_choice_group = install_steps[0].find("./optionalFileGroups/group")
     if (
-        help_image is None
-        or help_image.get("path", "").replace("\\", "/")
-        != FOMOD_HELP_IMAGE_ARCHIVE_PATH
+        cache_choice_group is None
+        or cache_choice_group.get("type") != "SelectExactlyOne"
     ):
-        raise SystemExit("cache FOMOD is missing its MO2 setting help image")
-    help_image_path = fomod_dir.parent / Path(
-        *FOMOD_HELP_IMAGE_ARCHIVE_PATH.split("/")
-    )
-    if not help_image_path.is_file():
-        raise SystemExit(f"cache FOMOD help image does not exist: {help_image_path}")
+        raise SystemExit("FOMOD must require an explicit cache-or-no-cache choice")
+    cache_choices = cache_choice_group.findall("./plugins/plugin")
+    if len(cache_choices) != 2:
+        raise SystemExit("FOMOD cache choice page must contain exactly two options")
+    cache_flags = [
+        (
+            plugin.find("./conditionFlags/flag").get("name", ""),
+            plugin.find("./conditionFlags/flag").text or "",
+        )
+        for plugin in cache_choices
+        if plugin.find("./conditionFlags/flag") is not None
+    ]
+    if cache_flags != [
+        (FOMOD_INSTALL_CACHE_FLAG, "true"),
+        (FOMOD_INSTALL_CACHE_FLAG, "false"),
+    ]:
+        raise SystemExit("FOMOD cache choice flags are invalid")
+    cache_choice_types = [
+        plugin.find("./typeDescriptor/type").get("name", "")
+        for plugin in cache_choices
+        if plugin.find("./typeDescriptor/type") is not None
+    ]
+    if cache_choice_types != ["Recommended", "Optional"]:
+        raise SystemExit("FOMOD must default to installing the prebuilt cache")
 
-    if info_root.findtext("./Website") != FOMOD_HELP_URL:
-        raise SystemExit("cache FOMOD is missing its detailed setup help link")
+    horizon_step = install_steps[1]
+    visible_flag = horizon_step.find("./visible/dependencies/flagDependency")
+    if (
+        visible_flag is None
+        or visible_flag.get("flag") != FOMOD_INSTALL_CACHE_FLAG
+        or visible_flag.get("value") != "true"
+    ):
+        raise SystemExit("Horizon Fix page must appear only when cache is selected")
+    horizon_group = horizon_step.find("./optionalFileGroups/group")
+    if horizon_group is None or horizon_group.get("type") != "SelectExactlyOne":
+        raise SystemExit("Horizon Fix page must require exactly one cache profile")
+
+    cache_plugins = horizon_group.findall("./plugins/plugin")
+    cache_sources = []
+    for plugin in cache_plugins:
+        folder = plugin.find("./files/folder")
+        if folder is None or folder.get("destination") != CACHE_DIRECTORY:
+            raise SystemExit("cache profile does not install at Data/ShaderCache")
+        cache_sources.append(folder.get("source", ""))
+    if cache_sources != [HORIZON_FIX_CACHE_DIRECTORY, CACHE_DIRECTORY]:
+        raise SystemExit("Horizon Fix must remain the first cache profile")
+
+    cache_types = [
+        plugin.find("./typeDescriptor/type").get("name", "")
+        for plugin in cache_plugins
+        if plugin.find("./typeDescriptor/type") is not None
+    ]
+    if cache_types != ["Recommended", "Optional"]:
+        raise SystemExit("Horizon Fix must remain the default cache profile")
 
     descriptions = "\n".join(
         filter(
             None,
             (
                 info_root.findtext("./Description"),
-                *(
-                    notice_plugins[flag_name].findtext("./description")
-                    for flag_name in FOMOD_NOTICE_FLAGS
-                ),
-                *(
-                    plugin.findtext("./description")
-                    for plugin in cache_plugins
-                ),
+                *(plugin.findtext("./description") for plugin in cache_choices),
+                *(plugin.findtext("./description") for plugin in cache_plugins),
             ),
         )
     )
-    required_guidance = (
-        "Settings",
-        "Plugins",
-        "Fomod Installer",
-        "use_any_file",
-        "true",
-        "reinstall this shader-cache FOMOD",
-    )
-    missing_guidance = [text for text in required_guidance if text not in descriptions]
-    if missing_guidance:
-        raise SystemExit(
-            "cache FOMOD is missing MO2 setup guidance: "
-            + ", ".join(missing_guidance)
-        )
-
-    core_dependency = (
-        f"SKSE/Plugins/CommunityShaders/{compatibility_tag}.marker",
-        "Active",
-    )
-    horizon_dependency = HORIZON_FIX_DLL_PATH.replace("\\", "/")
-    expected_patterns = {
-        CACHE_DIRECTORY: {
-            frozenset({core_dependency, (horizon_dependency, "Missing")}),
-            frozenset({core_dependency, (horizon_dependency, "Inactive")}),
-        },
-        HORIZON_FIX_CACHE_DIRECTORY: {
-            frozenset({core_dependency, (horizon_dependency, "Active")}),
-        },
-    }
-
-    for source, cache_plugin in cache_plugins_by_source.items():
-        dependency_type = cache_plugin.find("./typeDescriptor/dependencyType")
-        default_type = (
-            dependency_type.find("./defaultType")
-            if dependency_type is not None
-            else None
-        )
-        patterns = (
-            dependency_type.findall("./patterns/pattern")
-            if dependency_type is not None
-            else []
-        )
-        actual_patterns: set[frozenset[tuple[str, str]]] = set()
-        for pattern in patterns:
-            matched_type = pattern.find("./type")
-            if matched_type is None or matched_type.get("name") != "Recommended":
-                raise SystemExit(
-                    f"cache FOMOD variant {source} has a non-recommended match"
-                )
-            actual_patterns.add(
-                frozenset(
-                    (
-                        dependency.get("file", "").replace("\\", "/"),
-                        dependency.get("state", ""),
-                    )
-                    for dependency in pattern.findall(
-                        "./dependencies/fileDependency"
-                    )
-                )
-            )
-
-        if default_type is None or default_type.get("name") != "Optional":
+    for required_text in ("Horizon Fix", "reinstall", "compile locally"):
+        if required_text not in descriptions:
             raise SystemExit(
-                f"cache FOMOD variant {source} must remain manually selectable"
+                f"cache FOMOD is missing required guidance: {required_text}"
             )
-        if actual_patterns != expected_patterns[source]:
-            raise SystemExit(
-                f"cache FOMOD variant {source} has incorrect compatibility rules"
-            )
-
-        install_folder = cache_plugin.find("./files/folder")
-        if install_folder is None or (
-            install_folder.get("source") != source
-            or install_folder.get("destination") != CACHE_DIRECTORY
-        ):
-            raise SystemExit(
-                f"cache FOMOD variant {source} does not install at Data/ShaderCache"
-            )
+    if info_root.findtext("./Website") != FOMOD_WEBSITE:
+        raise SystemExit("cache FOMOD is missing its documentation link")
 
 
 def write_fomod_installer(
     runtime_root: Path,
-    source_root: Path,
     runtime: str,
     label: str,
     compatibility_tag: str,
+    include_core: bool = False,
 ) -> Path:
-    """Stage an installer with automatic recommendations and manual fallback."""
+    """Stage a two-page, user-selected cache installer."""
     fomod_dir = runtime_root / FOMOD_DIRECTORY
     if path_entry_exists(fomod_dir):
         raise SystemExit(
             f"refusing to replace unexpected cache installer directory: {fomod_dir}"
         )
 
-    help_image_source = source_root / FOMOD_HELP_IMAGE_SOURCE
-    if not help_image_source.is_file():
-        raise SystemExit(f"missing cache FOMOD help image: {help_image_source}")
-
     fomod_dir.mkdir()
     display_label = safe_label(label)
-    module_name = f"CSX {runtime} Shader Cache - {compatibility_tag}"
+    package_kind = "AIO" if include_core else f"{runtime} Shader Cache"
+    module_name = f"CSX {package_kind} - {compatibility_tag}"
     description = (
-        f"Requires active {compatibility_tag}. MO2 users must set Settings > "
-        "Plugins > Fomod Installer > use_any_file to true for automatic checks. "
-        "Verify the selectable Horizon Fix profile before installing. Reinstall "
-        "after changing Horizon Fix. Click Website for full setup instructions."
+        f"Installs {compatibility_tag} with an optional prebuilt SE shader cache. "
+        "The installer does not inspect MO2 files or choose a profile for you."
+        if include_core
+        else (
+            f"Optional prebuilt SE shader cache for {compatibility_tag}. "
+            "The installer does not inspect MO2 files or choose a profile for you."
+        )
     )
-    open_settings_description = (
-        "MO2 SETUP - PAGE 1 OF 2\n\n"
-        "Close this installer.\n\n"
-        "Open Tools > Settings > Plugins.\n"
-        "In the LEFT list, select Fomod Installer."
+    install_cache_description = (
+        "Install the prebuilt cache for the packaged default feature state. "
+        "Matching shaders load from disk; missing or changed permutations compile locally."
     )
-    file_check_description = (
-        "MO2 SETUP - PAGE 2 OF 2\n\n"
-        "In the RIGHT settings table:\n"
-        "1. Find use_any_file.\n"
-        "2. Double-click its value and change false to true.\n"
-        f"3. Click OK, enable {compatibility_tag}, then reopen this installer.\n"
-        "Click the image below to enlarge it."
-    )
-    horizon_notice_description = (
-        "HORIZON FIX CACHE\n\n"
-        "The installer recommends a profile when file checks work.\n"
-        "Both profiles stay selectable for a manual correction.\n\n"
-        "IMPORTANT: reinstall this shader-cache FOMOD after enabling\n"
-        "or disabling Horizon Fix."
+    no_cache_description = (
+        "Do not install a prebuilt cache. All required shaders compile locally in game."
     )
     standard_description = (
-        f"Choose this only when {compatibility_tag} is active and HorizonFix.dll "
-        "is missing or inactive. Its Water shaders are compiled without Horizon "
-        "Fix compatibility. Reinstall this shader-cache FOMOD after enabling "
-        "Horizon Fix."
+        "Choose this when Horizon Fix is not active. Water shaders are compiled "
+        "without Horizon Fix compatibility. If Horizon Fix is enabled later, "
+        "reinstall this FOMOD and select the other profile. A wrong selection "
+        "is rejected safely and triggers local shader compilation."
     )
     horizon_description = (
-        f"Choose this when {compatibility_tag} and SKSE\\Plugins\\HorizonFix.dll "
-        "are active. Its Water shaders are compiled with Horizon Fix "
-        "compatibility. This is the fallback default when MO2 cannot detect "
-        "non-plugin files. Reinstall after disabling Horizon Fix."
+        "Choose this when Horizon Fix is active. Water shaders are compiled with "
+        "Horizon Fix compatibility. This is the initial selection; change it "
+        "manually when Horizon Fix is not active. If its state changes later, "
+        "reinstall this FOMOD and select the matching profile. A wrong selection "
+        "is rejected safely and triggers local shader compilation."
     )
+    required_core = ""
+    if include_core:
+        required_core = f"""
+  <requiredInstallFiles>
+    <folder source="{AIO_CORE_DIRECTORY}" destination="" priority="0" />
+  </requiredInstallFiles>"""
     module_config = f"""<?xml version="1.0" encoding="UTF-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
   <moduleName>{module_name}</moduleName>
+{required_core}
   <installSteps order="Explicit">
-    <installStep name="MO2 setup 1/2: open Plugins settings">
+    <installStep name="Choose shader-cache installation">
       <optionalFileGroups order="Explicit">
-        <group name="Required MO2 navigation" type="SelectAll">
+        <group name="Prebuilt shader cache" type="SelectExactlyOne">
           <plugins order="Explicit">
-            <plugin name="1. Open MO2 Settings > Plugins">
-              <description>{open_settings_description}</description>
+            <plugin name="Install the prebuilt shader cache">
+              <description>{install_cache_description}</description>
               <conditionFlags>
-                <flag name="CSXMO2OpenSettingsNotice">shown</flag>
+                <flag name="{FOMOD_INSTALL_CACHE_FLAG}">true</flag>
               </conditionFlags>
               <typeDescriptor>
-                <type name="Required" />
+                <type name="Recommended" />
+              </typeDescriptor>
+            </plugin>
+            <plugin name="Do not install a prebuilt shader cache">
+              <description>{no_cache_description}</description>
+              <conditionFlags>
+                <flag name="{FOMOD_INSTALL_CACHE_FLAG}">false</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Optional" />
               </typeDescriptor>
             </plugin>
           </plugins>
         </group>
       </optionalFileGroups>
     </installStep>
-    <installStep name="MO2 setup 2/2: enable non-plugin file checks">
+    <installStep name="Choose the Horizon Fix cache profile">
+      <visible>
+        <dependencies operator="And">
+          <flagDependency flag="{FOMOD_INSTALL_CACHE_FLAG}" value="true" />
+        </dependencies>
+      </visible>
       <optionalFileGroups order="Explicit">
-        <group name="Required FOMOD Installer setting" type="SelectAll">
+        <group name="Select the Horizon Fix state used in game" type="SelectExactlyOne">
           <plugins order="Explicit">
-            <plugin name="2. Set use_any_file to true">
-              <description>{file_check_description}</description>
-              <image path="{FOMOD_HELP_IMAGE_XML_PATH}" />
-              <conditionFlags>
-                <flag name="CSXMO2FileCheckNotice">shown</flag>
-              </conditionFlags>
-              <typeDescriptor>
-                <type name="Required" />
-              </typeDescriptor>
-            </plugin>
-          </plugins>
-        </group>
-      </optionalFileGroups>
-    </installStep>
-    <installStep name="Horizon Fix profile notice">
-      <optionalFileGroups order="Explicit">
-        <group name="Required profile notice" type="SelectAll">
-          <plugins order="Explicit">
-            <plugin name="Reinstall after changing Horizon Fix">
-              <description>{horizon_notice_description}</description>
-              <conditionFlags>
-                <flag name="CSXHorizonNotice">shown</flag>
-              </conditionFlags>
-              <typeDescriptor>
-                <type name="Required" />
-              </typeDescriptor>
-            </plugin>
-          </plugins>
-        </group>
-      </optionalFileGroups>
-    </installStep>
-    <installStep name="Choose the active Horizon Fix profile">
-      <optionalFileGroups order="Explicit">
-        <group name="Select exactly one installed Horizon Fix state" type="SelectExactlyOne">
-          <plugins order="Explicit">
-            <plugin name="Horizon Fix cache: HorizonFix.dll active">
+            <plugin name="With Horizon Fix">
               <description>{horizon_description}</description>
               <files>
                 <folder source="{HORIZON_FIX_CACHE_DIRECTORY}"
@@ -1651,25 +1522,10 @@ def write_fomod_installer(
                         priority="0" />
               </files>
               <typeDescriptor>
-                <dependencyType>
-                  <defaultType name="Optional" />
-                  <patterns order="Explicit">
-                    <pattern>
-                      <dependencies operator="And">
-                        <fileDependency
-                          file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker"
-                          state="Active" />
-                        <fileDependency
-                          file="SKSE\\Plugins\\HorizonFix.dll"
-                          state="Active" />
-                      </dependencies>
-                      <type name="Recommended" />
-                    </pattern>
-                  </patterns>
-                </dependencyType>
+                <type name="Recommended" />
               </typeDescriptor>
             </plugin>
-            <plugin name="Standard cache: Horizon Fix inactive">
+            <plugin name="Without Horizon Fix">
               <description>{standard_description}</description>
               <files>
                 <folder source="{CACHE_DIRECTORY}"
@@ -1677,33 +1533,7 @@ def write_fomod_installer(
                         priority="0" />
               </files>
               <typeDescriptor>
-                <dependencyType>
-                  <defaultType name="Optional" />
-                  <patterns order="Explicit">
-                    <pattern>
-                      <dependencies operator="And">
-                        <fileDependency
-                          file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker"
-                          state="Active" />
-                        <fileDependency
-                          file="SKSE\\Plugins\\HorizonFix.dll"
-                          state="Missing" />
-                      </dependencies>
-                      <type name="Recommended" />
-                    </pattern>
-                    <pattern>
-                      <dependencies operator="And">
-                        <fileDependency
-                          file="SKSE\\Plugins\\CommunityShaders\\{compatibility_tag}.marker"
-                          state="Active" />
-                        <fileDependency
-                          file="SKSE\\Plugins\\HorizonFix.dll"
-                          state="Inactive" />
-                      </dependencies>
-                      <type name="Recommended" />
-                    </pattern>
-                  </patterns>
-                </dependencyType>
+                <type name="Optional" />
               </typeDescriptor>
             </plugin>
           </plugins>
@@ -1719,23 +1549,18 @@ def write_fomod_installer(
   <Author>Community Shaders Expanded</Author>
   <Version>{display_label}</Version>
   <Description>{description}</Description>
-  <Website>{FOMOD_HELP_URL}</Website>
+  <Website>{FOMOD_WEBSITE}</Website>
 </fomod>
 """
 
     try:
-        help_image_destination = runtime_root / Path(
-            *FOMOD_HELP_IMAGE_ARCHIVE_PATH.split("/")
-        )
-        help_image_destination.parent.mkdir()
-        shutil.copy2(help_image_source, help_image_destination)
         (fomod_dir / FOMOD_CONFIG_FILE_NAME).write_text(
             module_config, encoding="utf-8", newline="\n"
         )
         (fomod_dir / FOMOD_INFO_FILE_NAME).write_text(
             info, encoding="utf-8", newline="\n"
         )
-        validate_fomod_installer(fomod_dir, compatibility_tag)
+        validate_fomod_installer(fomod_dir, include_core)
     except OSError as exc:
         shutil.rmtree(fomod_dir, ignore_errors=True)
         raise SystemExit(f"failed to stage cache installer: {fomod_dir}") from exc
@@ -1763,7 +1588,6 @@ def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
         f"{HORIZON_FIX_CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
         f"{FOMOD_DIRECTORY}/{FOMOD_CONFIG_FILE_NAME}",
         f"{FOMOD_DIRECTORY}/{FOMOD_INFO_FILE_NAME}",
-        FOMOD_HELP_IMAGE_ARCHIVE_PATH,
     }
     missing_entries = sorted(required_entries - entries)
     if missing_entries:
@@ -1782,7 +1606,6 @@ def validate_cache_archive(archive: Path, cmake: str, runtime: str) -> None:
 
 def prepare_cache_archive(
     runtime_root: Path,
-    source_root: Path,
     workspace: Path,
     runtime: str,
     label: str,
@@ -1794,7 +1617,6 @@ def prepare_cache_archive(
     temporary_archive = workspace / archive_name
     fomod_dir = write_fomod_installer(
         runtime_root,
-        source_root,
         runtime,
         label,
         compatibility_tag,
@@ -1831,6 +1653,263 @@ def prepare_cache_archive(
         )
 
     validate_cache_archive(temporary_archive, cmake, runtime)
+    print(
+        f"{runtime}: prepared {temporary_archive.name} "
+        f"({temporary_archive.stat().st_size} bytes)"
+    )
+    return temporary_archive
+
+
+def validate_aio_inputs(
+    core_root: Path,
+    cache_root: Path,
+    plugin_version: str,
+    compatibility_tag: str,
+) -> None:
+    """Reject partial or mismatched core/cache trees before staging an AIO."""
+    for path, label in ((core_root, "AIO core"), (cache_root, "cache root")):
+        path_is_junction = getattr(path, "is_junction", lambda: False)()
+        if not path.is_dir() or path.is_symlink() or path_is_junction:
+            raise SystemExit(f"{label} must be an ordinary directory: {path}")
+
+    required_core_files = (
+        core_root / "SKSE/Plugins/CommunityShaders.dll",
+        core_root
+        / "SKSE/Plugins/CommunityShaders"
+        / f"{compatibility_tag}.marker",
+    )
+    for required_file in required_core_files:
+        if not required_file.is_file():
+            raise SystemExit(f"AIO core is missing required file: {required_file}")
+
+    for forbidden_name in (
+        AIO_CORE_DIRECTORY,
+        CACHE_DIRECTORY,
+        HORIZON_FIX_CACHE_DIRECTORY,
+        FOMOD_DIRECTORY,
+    ):
+        forbidden_path = core_root / forbidden_name
+        if path_entry_exists(forbidden_path):
+            raise SystemExit(
+                f"AIO core already contains integrated staging content: {forbidden_path}"
+            )
+
+    feature_root = core_root / "Shaders/Features"
+    core_feature_versions: dict[str, str] = {}
+    for ini_path in sorted(feature_root.glob("*.ini")):
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            with ini_path.open("r", encoding="utf-8-sig") as stream:
+                parser.read_file(stream)
+        except (configparser.Error, OSError, UnicodeError) as exc:
+            raise SystemExit(f"cannot read AIO feature metadata: {ini_path}") from exc
+        version = parser.get("Info", "Version", fallback="").strip()
+        if not version:
+            raise SystemExit(f"AIO feature metadata has no version: {ini_path}")
+        core_feature_versions[ini_path.stem] = version
+    if not core_feature_versions:
+        raise SystemExit(f"AIO core has no feature metadata: {feature_root}")
+
+    cache_profiles: dict[str, tuple[Path, dict[str, bool]]] = {}
+    shader_cache_abis: set[str] = set()
+    for variant in CACHE_VARIANTS:
+        cache_dir = cache_root / variant.directory
+        info_path = cache_dir / INFO_FILE_NAME
+        manifest_path = cache_dir / MANIFEST_FILE_NAME
+        if not info_path.is_file() or not manifest_path.is_file():
+            raise SystemExit(
+                f"cache profile is incomplete: {cache_dir}"
+            )
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            with info_path.open("r", encoding="utf-8-sig") as stream:
+                parser.read_file(stream)
+        except (configparser.Error, OSError, UnicodeError) as exc:
+            raise SystemExit(f"cannot read cache metadata: {info_path}") from exc
+        actual_version = parser.get("Cache", "PluginVersion", fallback="").strip()
+        if actual_version != plugin_version:
+            raise SystemExit(
+                f"cache profile {variant.name} targets {actual_version or '<missing>'}, "
+                f"not {plugin_version}"
+            )
+        shader_cache_abi = parser.get(
+            "Cache", "ShaderCacheABI", fallback=""
+        ).strip()
+        if not shader_cache_abi:
+            raise SystemExit(
+                f"cache profile {variant.name} has no ShaderCacheABI"
+            )
+        shader_cache_abis.add(shader_cache_abi)
+
+        cache_feature_names = set(parser.sections()) - {"Cache"}
+        core_feature_names = set(core_feature_versions)
+        if cache_feature_names != core_feature_names:
+            raise SystemExit(
+                f"cache profile {variant.name} does not match the AIO feature set; "
+                f"missing={sorted(core_feature_names - cache_feature_names)}, "
+                f"unexpected={sorted(cache_feature_names - core_feature_names)}"
+            )
+
+        feature_states: dict[str, bool] = {}
+        for feature_name, core_feature_version in core_feature_versions.items():
+            cache_feature_version = parser.get(
+                feature_name, "Version", fallback=""
+            ).strip()
+            if cache_feature_version != core_feature_version:
+                raise SystemExit(
+                    f"cache profile {variant.name} has {feature_name} version "
+                    f"{cache_feature_version or '<missing>'}, not {core_feature_version}"
+                )
+            try:
+                enabled = parser.getboolean(
+                    feature_name, "Enabled", fallback=None
+                )
+            except ValueError as exc:
+                raise SystemExit(
+                    f"cache profile {variant.name} has invalid {feature_name}/Enabled"
+                ) from exc
+            if enabled is None:
+                raise SystemExit(
+                    f"cache profile {variant.name} has no {feature_name}/Enabled"
+                )
+            feature_states[feature_name] = enabled
+
+        if (
+            feature_states.get(HORIZON_FIX_SHORT_NAME)
+            is not variant.horizon_fix_enabled
+        ):
+            raise SystemExit(
+                f"cache profile {variant.name} has the wrong Horizon Fix state"
+            )
+        cache_profiles[variant.name] = (cache_dir, feature_states)
+
+    if len(shader_cache_abis) != 1:
+        raise SystemExit("cache profiles use different ShaderCacheABI values")
+    shader_cache_abi = shader_cache_abis.pop()
+    for cache_dir, feature_states in cache_profiles.values():
+        validate_cache(
+            cache_dir,
+            plugin_version,
+            feature_states,
+            shader_cache_abi,
+        )
+    validate_horizon_variant_delta(
+        cache_profiles["standard"][0],
+        cache_profiles["horizon-fix"][0],
+        cache_profiles["standard"][1],
+        cache_profiles["horizon-fix"][1],
+    )
+
+
+def validate_aio_archive(
+    archive: Path,
+    cmake: str,
+    compatibility_tag: str,
+) -> None:
+    """Verify the combined archive contains one core and both cache profiles."""
+    command = [cmake, "-E", "tar", "tf", str(archive)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(
+            f"failed to inspect packaged AIO (exit {result.returncode})"
+        )
+
+    entries = {
+        entry.strip().replace("\\", "/")
+        for entry in result.stdout.splitlines()
+        if entry.strip()
+    }
+    required_entries = {
+        f"{AIO_CORE_DIRECTORY}/SKSE/Plugins/CommunityShaders.dll",
+        (
+            f"{AIO_CORE_DIRECTORY}/SKSE/Plugins/CommunityShaders/"
+            f"{compatibility_tag}.marker"
+        ),
+        f"{CACHE_DIRECTORY}/{INFO_FILE_NAME}",
+        f"{CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
+        f"{HORIZON_FIX_CACHE_DIRECTORY}/{INFO_FILE_NAME}",
+        f"{HORIZON_FIX_CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
+        f"{FOMOD_DIRECTORY}/{FOMOD_CONFIG_FILE_NAME}",
+        f"{FOMOD_DIRECTORY}/{FOMOD_INFO_FILE_NAME}",
+    }
+    missing_entries = sorted(required_entries - entries)
+    if missing_entries:
+        raise SystemExit(
+            "packaged AIO is missing required entries: "
+            + ", ".join(missing_entries)
+        )
+
+    forbidden_entries = {
+        "SKSE/Plugins/CommunityShaders.dll",
+        INFO_FILE_NAME,
+        MANIFEST_FILE_NAME,
+    }
+    unexpected_entries = sorted(forbidden_entries & entries)
+    if unexpected_entries:
+        raise SystemExit(
+            "packaged AIO contains flattened staging files: "
+            + ", ".join(unexpected_entries)
+        )
+
+
+def prepare_aio_archive(
+    core_root: Path,
+    cache_root: Path,
+    workspace: Path,
+    runtime: str,
+    label: str,
+    plugin_version: str,
+    compatibility_tag: str,
+    cmake: str,
+) -> Path:
+    """Stage and validate a FOMOD AIO from an existing core and cache pair."""
+    validate_aio_inputs(
+        core_root,
+        cache_root,
+        plugin_version,
+        compatibility_tag,
+    )
+
+    package_root = workspace / "aio-fomod"
+    package_root.mkdir()
+    shutil.copytree(core_root, package_root / AIO_CORE_DIRECTORY)
+    for variant in CACHE_VARIANTS:
+        shutil.copytree(
+            cache_root / variant.directory,
+            package_root / variant.directory,
+        )
+    write_fomod_installer(
+        package_root,
+        runtime,
+        label,
+        compatibility_tag,
+        include_core=True,
+    )
+
+    archive_name = f"CSX_AIO-{safe_label(label)}.7z"
+    temporary_archive = workspace / archive_name
+    command = [
+        cmake,
+        "-E",
+        "tar",
+        "cf",
+        str(temporary_archive),
+        "--format=7zip",
+        AIO_CORE_DIRECTORY,
+        CACHE_DIRECTORY,
+        HORIZON_FIX_CACHE_DIRECTORY,
+        FOMOD_DIRECTORY,
+    ]
+    print("run:", " ".join(command))
+    result = subprocess.run(command, cwd=package_root)
+    if (
+        result.returncode != 0
+        or not temporary_archive.is_file()
+        or temporary_archive.stat().st_size == 0
+    ):
+        raise SystemExit(f"failed to package AIO (exit {result.returncode})")
+
+    validate_aio_archive(temporary_archive, cmake, compatibility_tag)
     print(
         f"{runtime}: prepared {temporary_archive.name} "
         f"({temporary_archive.stat().st_size} bytes)"
@@ -2069,7 +2148,24 @@ def main() -> int:
         "--package-label",
         help="Archive label (default: the CSX compatibility tag).",
     )
+    parser.add_argument(
+        "--assemble-aio",
+        metavar="CACHE_ROOT",
+        help=(
+            "Package an existing validated cache root into the AIO supplied by "
+            "--aio-root, without compiling shaders."
+        ),
+    )
+    parser.add_argument(
+        "--aio-root",
+        help="Extracted AIO-Release root used with --assemble-aio.",
+    )
     args = parser.parse_args()
+
+    if bool(args.assemble_aio) != bool(args.aio_root):
+        raise SystemExit("--assemble-aio and --aio-root must be supplied together")
+    if args.assemble_aio and args.package:
+        raise SystemExit("--assemble-aio always packages; do not also pass --package")
 
     source_root = Path(args.source_root).resolve() if args.source_root else REPO
     if not source_root.is_dir():
@@ -2081,11 +2177,6 @@ def main() -> int:
     plugin_version = args.plugin_version or default_plugin_version(source_root)
     validate_ini_value(plugin_version, "SE plugin version")
     compatibility_tag = validate_csx_plugin_version(plugin_version)
-    profile = derive_distribution_profile(source_root)
-    print(
-        "AIO profile: excluding hidden features "
-        + ", ".join(sorted(profile.excluded_short_names))
-    )
 
     out_root = Path(args.out).resolve()
     if source_root == out_root or source_root.is_relative_to(out_root):
@@ -2100,6 +2191,39 @@ def main() -> int:
                 f"{resolved_shader_source_root}"
             )
     out_root.mkdir(parents=True, exist_ok=True)
+
+    if args.assemble_aio:
+        cmake = shutil.which("cmake")
+        if not cmake:
+            raise SystemExit("cmake is required to assemble an AIO archive")
+        core_root = Path(args.aio_root).resolve()
+        cache_root = Path(args.assemble_aio).resolve()
+        for input_root in (core_root, cache_root):
+            if out_root == input_root or out_root.is_relative_to(input_root):
+                raise SystemExit("--out must not be inside an AIO assembly input")
+
+        with tempfile.TemporaryDirectory(
+            prefix=".aio-assembly-", dir=out_root
+        ) as temporary:
+            archive_candidate = prepare_aio_archive(
+                core_root=core_root,
+                cache_root=cache_root,
+                workspace=Path(temporary),
+                runtime=TARGET_RUNTIME,
+                label=args.package_label or compatibility_tag,
+                plugin_version=plugin_version,
+                compatibility_tag=compatibility_tag,
+                cmake=cmake,
+            )
+            archive_output_destination(out_root, archive_candidate)
+            publish_cache_archive(archive_candidate, out_root, "SE AIO")
+        return 0
+
+    profile = derive_distribution_profile(source_root)
+    print(
+        "AIO profile: excluding hidden features "
+        + ", ".join(sorted(profile.excluded_short_names))
+    )
 
     compiler, yaml, write_manifest = require_compile_tools()
     cmake = shutil.which("cmake") if args.package else None
@@ -2137,7 +2261,6 @@ def main() -> int:
         if args.package:
             archive_candidate = prepare_cache_archive(
                 candidate_root,
-                source_root,
                 workspace,
                 TARGET_RUNTIME,
                 args.package_label or compatibility_tag,

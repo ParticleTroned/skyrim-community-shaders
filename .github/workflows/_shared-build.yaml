@@ -35,6 +35,10 @@ on:
                 description: "Optional suffix to invalidate the build cache"
                 type: string
                 default: ""
+            exclude-hidden-aio-features:
+                description: "Exclude features hidden from the user-facing AIO"
+                type: boolean
+                default: false
         outputs:
             version:
                 description: "CMake project version extracted from the build"
@@ -80,7 +84,7 @@ jobs:
               uses: lukka/run-cmake@v10
               with:
                   configurePreset: ${{ matrix.compiler.cmake-preset }}
-                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON']"
+                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON', '-DAIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES=${{ inputs.exclude-hidden-aio-features && 'ON' || 'OFF' }}']"
                   buildPreset: ${{ matrix.compiler.cmake-preset }}
 
             - name: Verify DLL provenance sidecar

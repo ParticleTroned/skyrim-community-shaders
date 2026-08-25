@@ -1,8 +1,8 @@
 # Prebuilt SE Shader Cache
 
 This is the maintainer runbook for the distributable shader cache on the
-`cs-1.7-PL-SE` branch. Use `tools/build-shader-cache.py`; do not assemble,
-rename, or merge cache blobs by hand.
+`cs-1.7-PL-SE` branch. Use `tools/build-shader-cache.py`; do not rename or merge
+cache blobs by hand.
 
 ## Scope
 
@@ -22,6 +22,11 @@ fomod/
 |-- info.xml
 `-- ModuleConfig.xml
 ```
+
+The release AIO places its normal install tree under `Core/` and adds both
+cache profiles plus the same FOMOD at archive root. The installer always
+installs `Core`, then asks whether to install a prebuilt cache. When selected,
+it asks whether Horizon Fix is active.
 
 The cache is tied to the plugin version, feature versions and enabled states,
 shader and recursive-include content, compile flags, custom defines, and the SE
@@ -133,6 +138,25 @@ dist/shader-cache/
 `-- ShaderCache-SE-<release-label>.7z
 ```
 
+After building the matching AIO-Release tree, assemble the final archive
+without recompiling shaders:
+
+```powershell
+pwsh ./tools/cmake.ps1 --build --preset AIO-Release
+& $cachePython tools/build-shader-cache.py `
+    --assemble-aio dist/shader-cache/SE `
+    --aio-root build/AIO-Release/aio `
+    --out dist/shader-cache `
+    --package-label $releaseLabel
+```
+
+Pass the directory containing `ShaderCache/` and `ShaderCache-HorizonFix/` to
+`--assemble-aio`. `--aio-root` must be the extracted or built AIO root containing
+`SKSE/Plugins/CommunityShaders.dll` and its generated compatibility marker.
+Both roots are validated against the version derived from
+`cmake/CSXVersion.cmake`. The combined output is
+`CSX_AIO-<release-label>.7z`.
+
 Publication refuses arbitrary directories, links, and malformed existing
 outputs. Candidate files are copied through destination-owned staging so final
 ACLs follow the output root. A failed replacement preserves the prior cache.
@@ -208,9 +232,11 @@ cmake -E tar tf $cacheArchive
 Get-FileHash $cacheArchive -Algorithm SHA256
 ```
 
-The standalone workflow uploads one fixed artifact, `ShaderCache-SE`. The
-release workflow requires that job to succeed, downloads its archive into
-`dist`, and attaches it beside the plugin artifacts.
+The standalone workflow uploads one fixed intermediate artifact,
+`ShaderCache-SE`. The release workflow requires that job to succeed, combines
+its two profiles with the matching AIO artifact, and attaches the integrated
+AIO. The standalone cache and unintegrated AIO archives are removed from the
+release staging directory after the combined archive validates.
 
 ```powershell
 gh workflow run shader-cache.yaml `
@@ -218,52 +244,23 @@ gh workflow run shader-cache.yaml `
     -f target_ref=<commit-or-tag>
 ```
 
-Install the archive so its top-level `ShaderCache` directory becomes
-`Data/ShaderCache`. In Mod Organizer 2, use the included FOMOD. It checks the
-exact versioned marker generated and installed beside the active
-`CommunityShaders.dll` by the matching core/AIO package. A missing or different
-CSX release blocks installation before the cache files are selected.
+Install the archive with its included FOMOD. The first page asks whether to
+install the prebuilt shader cache. Choosing no cache still installs the complete
+core AIO and lets the game compile all required permutations locally.
 
 ### Mod Organizer 2
 
-MO2's FOMOD Installer disables dependencies on non-plugin files by default. In
-MO2's main window, open **Tools > Settings** (or click the top-toolbar
-wrench-and-screwdriver Settings button), open the **Plugins** tab, select
-**Fomod Installer** in the left-hand plugin list, then find `use_any_file` in the
-right-hand settings table and change its value from `false` to `true`. Click
-**OK**, ensure the matching core/AIO mod is active in MO2's left pane, and reopen
-the cache installer. Otherwise MO2 reports every DLL or marker dependency as
-missing even when the file is active.
+No MO2 plugin setting or virtual-file dependency check is required. The FOMOD
+deliberately leaves the cache choice to the user so MO2 cannot reject a valid
+installation or silently infer the wrong active mod state.
 
-![MO2 Fomod Installer use_any_file setting](../images/mo2-fomod-use-any-file.png)
-
-The FOMOD format cannot resize MO2's installer window or open its internal
-Settings page. The generated installer therefore presents the setup as two
-short, required pages which fit MO2's description pane, followed by a separate
-Horizon Fix notice. Blank lines keep each action visually distinct. The
-`use_any_file` page also displays a screenshot of the exact **Fomod Installer**
-selection and setting, and explicitly tells users to click the image for MO2's
-enlarged view. The installer's **Website** link opens this section for the
-complete explanation.
-
-The final page recommends the matching cache when MO2 can evaluate the exact
-versioned CSX marker and `SKSE\Plugins\HorizonFix.dll`. Both choices remain
-selectable so a failed MO2 dependency check cannot silently force the wrong
-cache. The Horizon Fix cache is listed first and is the fallback default; choose
-the standard cache manually only when Horizon Fix is missing or inactive.
-Horizon Fix support is included in every packaged cache FOMOD without a separate
-build option.
-
-The installer can inspect the active virtual files only while it is running. If
-Horizon Fix is enabled or disabled later, reinstall the shader-cache FOMOD so it
-installs the matching Water bytecode and metadata. This warning appears on the
-required setup page and in both profile descriptions. Moving the checks out of
-the module-level prerequisites keeps the instructions visible when MO2 is
-misconfigured or the wrong core is installed. If `use_any_file` is disabled,
-automatic detection is unavailable and the user must verify the selectable
-profile manually. Other installers should evaluate the standard
-`fileDependency` directly. The runtime independently rejects a cache whose
-plugin identity or feature state does not match the loaded DLL.
+When the cache is selected, the second page defaults to **With Horizon Fix**.
+Choose **Without Horizon Fix** manually when Horizon Fix is not active. If
+Horizon Fix is enabled or disabled later, reinstall the AIO FOMOD and select the
+matching cache profile. The warning appears in both profile descriptions. A
+wrong choice is safe but causes the mismatched cache to be rejected and shaders
+to compile locally; the runtime never force-loads entries whose feature metadata
+does not match.
 
 Manually setting the `ShaderCache` folder itself as the data directory bypasses
 the installer gate, flattens the layout, and is invalid.

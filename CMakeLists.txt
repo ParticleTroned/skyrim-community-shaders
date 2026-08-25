@@ -1101,8 +1101,11 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 # copies race writing the same AIO tree); the stamp file adds
                 # the mtime edge so this rule re-runs when staging changes
                 # (target-only DEPENDS is order-only and never re-triggers).
+                # Robocopy still enumerates the excluded Shaders directory, so
+                # wait for its single staging owner before traversing the tree.
                 DEPENDS
                     PREPARE_AIO
+                    prepare_shaders
                     ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
                 COMMENT
                     "Incremental deploy (excluding Shaders) to ${DEPLOY_TARGET} (robocopy-wrapper)"
@@ -1183,12 +1186,16 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders_full.stamp
-                # See the PREPARE_AIO target+stamp rationale above.
+                # Depend on shader source inputs instead of copy_shaders.stamp.
+                # Naming that custom-command output here makes Visual Studio
+                # duplicate its producer into DEPLOY_ALL and race prepare_shaders.
+                # Chain after this target's non-shader deploy for one ordered owner.
                 DEPENDS
                     prepare_shaders
                     PREPARE_AIO
-                    ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
-                    ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
+                    ${_shader_copy_inputs}
+                    ${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake
+                    ${CMAKE_CURRENT_BINARY_DIR}/${DEPLOY_TARGET_HASH}_deploy.stamp
                 COMMENT
                     "Full shader deploy to ${DEPLOY_TARGET}/Shaders (with PREPARE_AIO)"
             )

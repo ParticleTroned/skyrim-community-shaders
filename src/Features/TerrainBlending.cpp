@@ -323,7 +323,7 @@ void TerrainBlending::TerrainShaderHacks()
 			auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
 			auto* offsetVertexShader = GetTerrainOffsetVertexShader();
-			context->VSSetShader(offsetVertexShader ? offsetVertexShader : static_cast<ID3D11VertexShader*>(currentVertexShader->shader), nullptr, 0);
+			context->VSSetShader(offsetVertexShader ? offsetVertexShader : reinterpret_cast<ID3D11VertexShader*>(currentVertexShader->shader), nullptr, 0);
 		} else {
 			auto dsv = terrainDepth.views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);

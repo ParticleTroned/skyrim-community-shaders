@@ -1,6 +1,8 @@
 #include "FoliageLighting.h"
 
 #include "I18n/I18n.h"
+#include "Globals.h"
+#include "TruePBR.h"
 #include "Util.h"
 
 #include <algorithm>
@@ -15,6 +17,21 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableFoliageAmbientFlip,
 	FoliageAmbientAmount,
 	EnableGrassScattering)
+
+namespace
+{
+	void DrawTruePBRDependentTooltip(bool a_truePBRActive, const char* a_description)
+	{
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(a_description);
+			if (!a_truePBRActive) {
+				ImGui::Spacing();
+				ImGui::TextUnformatted(
+					T(TKEY("true_pbr_required"), "Requires True PBR to be loaded and enabled. The saved value is preserved."));
+			}
+		}
+	}
+}
 
 FoliageLighting::Settings FoliageLighting::GetDisabledSettings()
 {
@@ -46,6 +63,8 @@ void FoliageLighting::SanitizeSettings(Settings& a_settings)
 void FoliageLighting::DrawSettings()
 {
 	SanitizeSettings(settings);
+	const auto& truePBR = globals::features::truePBR;
+	const bool truePBRActive = truePBR.loaded && truePBR.settings.Enabled != 0;
 
 	if (ImGui::TreeNodeEx(T(TKEY("tree_foliage"), "Tree Foliage"))) {
 		bool enableFoliageScattering = settings.EnableFoliageScattering != 0;
@@ -59,12 +78,15 @@ void FoliageLighting::DrawSettings()
 		}
 
 		bool enableFoliageAmbientBoost = settings.EnableFoliageAmbientBoost != 0;
+		ImGui::BeginDisabled(!truePBRActive);
 		if (ImGui::Checkbox(T(TKEY("ambient_boost"), "Ambient Boost"), &enableFoliageAmbientBoost))
 			settings.EnableFoliageAmbientBoost = enableFoliageAmbientBoost ? 1u : 0u;
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(T(TKEY("ambient_boost_tooltip"), "Adds indirect ambient response to animated PBR foliage after ambient occlusion."));
+		ImGui::EndDisabled();
+		DrawTruePBRDependentTooltip(
+			truePBRActive,
+			T(TKEY("ambient_boost_tooltip"), "Adds indirect ambient response to animated PBR foliage after ambient occlusion."));
 
-		ImGui::BeginDisabled(!enableFoliageAmbientBoost);
+		ImGui::BeginDisabled(!truePBRActive || !enableFoliageAmbientBoost);
 		ImGui::SliderFloat(
 			T(TKEY("ambient_amount"), "Ambient Amount"),
 			&settings.FoliageAmbientAmount,
@@ -73,8 +95,9 @@ void FoliageLighting::DrawSettings()
 			"%.2f",
 			ImGuiSliderFlags_AlwaysClamp);
 		ImGui::EndDisabled();
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(T(TKEY("ambient_amount_tooltip"), "Strength of the additive indirect ambient response for animated PBR foliage."));
+		DrawTruePBRDependentTooltip(
+			truePBRActive,
+			T(TKEY("ambient_amount_tooltip"), "Strength of the additive indirect ambient response for animated PBR foliage."));
 
 		bool enableFoliageAmbientFlip = settings.EnableFoliageAmbientFlip != 0;
 		if (ImGui::Checkbox(T(TKEY("ambient_backface_flip"), "Ambient Backface Flip"), &enableFoliageAmbientFlip))

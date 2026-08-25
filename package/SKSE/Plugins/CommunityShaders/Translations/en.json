@@ -763,6 +763,7 @@
     "feature.foliage_lighting.key_feature_3": "Independent grass scattering control",
     "feature.foliage_lighting.name": "Foliage Lighting",
     "feature.foliage_lighting.tree_foliage": "Tree Foliage",
+    "feature.foliage_lighting.true_pbr_required": "Requires True PBR to be loaded and enabled. The saved value is preserved.",
     "feature.grass_collision.description": "Enables dynamic grass interactions where grass bends and moves in response to actors walking through it, creating more immersive environmental reactions.",
     "feature.grass_collision.enable": "Enable Grass Collision",
     "feature.grass_collision.grass_collision": "Grass Collision",

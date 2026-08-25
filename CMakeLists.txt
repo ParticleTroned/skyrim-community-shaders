@@ -1070,14 +1070,13 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "/NDL" "/NJH" "/NJS"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_deploy.stamp
-                # Depend on the PREPARE_AIO target AND its stamp file: the
-                # target-level dependency stops the VS generator duplicating
-                # PREPARE_AIO's producing rule into DEPLOY_ALL.vcxproj (two
-                # copies race writing the same AIO tree); the stamp file adds
-                # the mtime edge so this rule re-runs when staging changes
-                # (target-only DEPENDS is order-only and never re-triggers).
+                # Depend on both staging targets: robocopy still enumerates the
+                # excluded Shaders directory, so it must not overlap its writers.
+                # The PREPARE_AIO stamp retains the mtime edge for non-shader
+                # changes because target-only dependencies are order-only.
                 DEPENDS
                     PREPARE_AIO
+                    prepare_shaders
                     ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
                 COMMENT
                     "Incremental deploy (excluding Shaders) to ${DEPLOY_TARGET} (robocopy-wrapper)"
@@ -1129,10 +1128,16 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders.stamp
-                # See the PREPARE_AIO target+stamp rationale above.
+                # Direct source dependencies retain the mtime edge without
+                # naming copy_shaders.stamp here. Naming another custom
+                # command's output can make Visual Studio duplicate that rule
+                # into DEPLOY_ALL.vcxproj and race the real staging writer.
                 DEPENDS
                     prepare_shaders
-                    ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
+                    ${_all_shader_sources}
+                    ${FFX_RUNTIME_FILES}
+                    ${STREAMLINE_RUNTIME_FILES}
+                    ${_feature_shader_paths_list_file}
                     ${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake
                 COMMENT
                     "Content-based shader deploy to ${DEPLOY_TARGET}/Shaders"

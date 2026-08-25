@@ -22,7 +22,11 @@ SKSE plugin providing advanced DirectX 11 graphics modifications for Skyrim SE/A
 
 ### Essential Commands
 
--   **Build**: `./BuildRelease.bat [PRESET]` (WSL: use `powershell.exe -Command`)
+-   **One-time setup**: `pwsh ./tools/setup-dev.ps1`
+-   **Git in Codex/Windows worktrees**: `pwsh ./tools/git.ps1 <arguments>`
+-   **Build**: `./BuildRelease.bat [PRESET]` or `pwsh ./tools/cmake.ps1 <cmake arguments>`
+-   **Pre-commit**: `pwsh ./tools/pre-commit.ps1 run <arguments>`
+-   **Tooling diagnostics**: `pwsh ./tools/dev-doctor.ps1 -Network`
 -   **Shader Test**: `hlslkit-compile --shader-dir [target]` (install via pip first)
 -   **Feature Access**: `globals::features::*` namespace
 

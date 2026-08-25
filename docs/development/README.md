@@ -1,6 +1,7 @@
 # Development Documentation
 
-- [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
+-   [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
+-   [Developer tooling](tooling.md) — reliable Git hooks, GitHub transport, Codex sandbox, and Windows build setup.
 
 ## Getting Started
 
@@ -12,19 +13,33 @@
 
 ### Common Tasks
 
--   **Fast shader deployment:** `cmake --build build/ALL --target COPY_SHADERS`
--   **Full build with deployment:** `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
--   **Run tests:** `cmake --build build/ALL --target run_shader_tests`
+-   **One-time developer setup:** `pwsh ./tools/setup-dev.ps1`
+-   **Tooling diagnostics:** `pwsh ./tools/dev-doctor.ps1 -Network`
+-   **Fast shader deployment:** `pwsh ./tools/cmake.ps1 --build build/ALL --target COPY_SHADERS`
+-   **Verify shader refactor bytecode:** `pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl`
+-   **Runtime A/B shader check:** `tools/taa-renderdoc-ab.py` via RenderDoc embedded Python
+-   **Release AIO build:** `.\BuildRelease.bat AIO-Release`
+-   **Run shader tests:** `pwsh ./tools/cmake.ps1 --build build/ALL --target run_shader_tests`
 -   **Create a worktree with submodules + local preset:** `pwsh ./tools/new-worktree.ps1 -Name my-branch`
 -   **Install optional git alias:** `pwsh ./tools/install-worktree-alias.ps1`
 
 ### Build Presets
 
 -   `ALL` - Standard build (no auto-deployment)
--   `ALL-WITH-AUTO-DEPLOYMENT` - Build + deploy to game directory
+-   `AIO-Release` - Release AIO folder without hidden packaged features
 -   `Dev` - Fast iteration preset (recommended for development)
 
 See `CMakePresets.json` for all available presets.
+
+### Complete Local Validation
+
+The main DLL target does not build the shader-test executable. A clean pull-request validation must build both targets explicitly before running CTest:
+
+```powershell
+pwsh ./tools/cmake.ps1 --preset ALL -DBUILD_SHADER_TESTS=ON
+pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target CommunityShaders shader_tests -- /m:1
+ctest --test-dir build/ALL -C Release --output-on-failure --no-tests=error --timeout 300
+```
 
 ## Worktrees
 

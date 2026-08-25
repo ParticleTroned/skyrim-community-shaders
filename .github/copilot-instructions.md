@@ -36,6 +36,14 @@ SKSE64 plugin providing modular DirectX 11 graphics enhancements for Skyrim SE/A
 ./BuildRelease.bat        # Same as ALL (default)
 ```
 
+Run `pwsh ./tools/setup-dev.ps1` once after cloning. For direct CMake and pre-commit commands, use the repository-owned launchers so Windows sandbox temp paths and shared hook caches are configured correctly:
+
+```powershell
+pwsh ./tools/cmake.ps1 --build build/ALL --target prepare_shaders
+pwsh ./tools/pre-commit.ps1 run --from-ref origin/cs-1.7-PL-SE --to-ref HEAD
+pwsh ./tools/dev-doctor.ps1 -Network
+```
+
 ### Essential Repository Setup
 
 ```bash
@@ -101,14 +109,14 @@ globals::d3d::*       // DirectX 11 device/context access
 ```bash
 # Fast shader deployment (dev iteration - no DLL build)
 # See docs/development/shader-workflow.md and docs/development/vscode-setup.md
-cmake --build ./build/ALL --target COPY_SHADERS
+pwsh ./tools/cmake.ps1 --build ./build/ALL --target COPY_SHADERS
 
 # Shader validation (targeted testing recommended during development)
-cmake --build ./build/ALL --target prepare_shaders
+pwsh ./tools/cmake.ps1 --build ./build/ALL --target prepare_shaders
 hlslkit-compile --shader-dir build/ALL/aio/Shaders/[specific-feature] --output-dir build/ShaderCache --config .github/configs/shader-validation.yaml
 
 # Pre-commit validation
-pre-commit run --all-files
+pwsh ./tools/pre-commit.ps1 run --from-ref origin/cs-1.7-PL-SE --to-ref HEAD
 ```
 
 ## Key Differences from .claude/CLAUDE.md

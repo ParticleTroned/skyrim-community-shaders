@@ -1416,7 +1416,9 @@ set(FEATURE_PATH "${CMAKE_BINARY_DIR}/Core")
 file(MAKE_DIRECTORY ${FEATURE_PATH})
 add_custom_command(
     OUTPUT ${CORE_PACKAGE}
-    DEPENDS ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
+    # The install step consumes the built DLL. Depend on the target itself so
+    # a newly registered feature cannot be packaged with a stale core binary.
+    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE

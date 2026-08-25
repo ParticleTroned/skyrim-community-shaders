@@ -16,6 +16,70 @@
 
 namespace SIE
 {
+	bool ShaderCache::TryDeferEviction(const hlslRecord& a_record)
+	{
+		const auto taskId = ShaderCompilationTask::MakeId(
+			a_record.shaderClass,
+			a_record.type,
+			a_record.descriptor);
+		// Capture ownership before Clear(path) resets compilation bookkeeping.
+		const bool waitForTaskCompletion = compilationSet.IsInProgress(taskId);
+
+		std::unique_lock lockM{ mapMutex };
+		auto shader = shaderMap.find(a_record.key);
+		if (shader == shaderMap.end() ||
+			shader->second.status != ShaderCompilationTask::Status::Pending) {
+			return false;
+		}
+
+		auto [eviction, inserted] = deferredEvictions.try_emplace(
+			a_record.key,
+			DeferredEviction{ a_record, waitForTaskCompletion });
+		if (!inserted && !eviction->second.applying) {
+			eviction->second.record = a_record;
+			eviction->second.waitForTaskCompletion |= waitForTaskCompletion;
+		}
+		deferredEvictionCount.store(deferredEvictions.size(), std::memory_order_relaxed);
+		return true;
+	}
+
+	bool ShaderCache::ApplyDeferredEviction(const std::string& a_key, bool a_taskCompleted)
+	{
+		if (deferredEvictionCount.load(std::memory_order_relaxed) == 0)
+			return false;
+
+		std::optional<DeferredEviction> eviction;
+		{
+			std::unique_lock lockM{ mapMutex };
+			auto found = deferredEvictions.find(a_key);
+			if (found == deferredEvictions.end() ||
+				found->second.applying ||
+				(found->second.waitForTaskCompletion && !a_taskCompleted)) {
+				return false;
+			}
+			found->second.applying = true;
+			eviction.emplace(found->second);
+		}
+
+		const auto& record = eviction->record;
+		EvictShader(record.key, record.type, record.descriptor, record.shaderClass);
+		DeleteScopedDiskCacheEntries({ record.diskPath });
+		compilationSet.Forget({ ShaderCompilationTask::MakeId(
+			record.shaderClass,
+			record.type,
+			record.descriptor) });
+		{
+			std::unique_lock lockM{ mapMutex };
+			if (auto found = deferredEvictions.find(a_key);
+				found != deferredEvictions.end() && found->second.applying) {
+				deferredEvictions.erase(found);
+			}
+			deferredEvictionCount.store(deferredEvictions.size(), std::memory_order_relaxed);
+		}
+		mapCV.notify_all();
+		return true;
+	}
+
 	bool ShaderCache::IsTrackingActiveShaders() const
 	{
 		return (globals::state && globals::state->IsDeveloperMode()) ||

@@ -59,12 +59,28 @@ namespace SIE
 			return key;
 		}
 
+		void FoldClosureFingerprint(
+			Util::ContentHash::Hash128* a_fingerprint,
+			const std::string& a_key,
+			std::chrono::system_clock::time_point a_mtime)
+		{
+			if (!a_fingerprint)
+				return;
+			const int64_t ticks = a_mtime.time_since_epoch().count();
+			*a_fingerprint = Util::ContentHash::CombineHashes(
+				*a_fingerprint,
+				Util::ContentHash::CombineHashes(
+					Util::ContentHash::HashString(a_key),
+					Util::ContentHash::HashBytes(&ticks, sizeof(ticks))));
+		}
+
 		std::chrono::system_clock::time_point GetMaxShaderMTimeInternal(
 			const std::filesystem::path& a_path,
 			const std::filesystem::path& a_shadersRoot,
 			std::unordered_map<std::string, IncludeParseEntry>& a_parseCache,
 			std::mutex& a_parseCacheMutex,
-			std::unordered_map<std::string, std::chrono::system_clock::time_point>& a_callResults)
+			std::unordered_map<std::string, std::chrono::system_clock::time_point>& a_callResults,
+			Util::ContentHash::Hash128* a_fingerprint = nullptr)
 		{
 			const std::string key = NormalizedPathKey(a_path);
 			const std::string includeRootKey = NormalizedPathKey(a_shadersRoot);
@@ -80,8 +96,10 @@ namespace SIE
 				// Unreadable source should force recompilation instead of serving a stale disk cache entry.
 				const auto now = std::chrono::system_clock::now();
 				a_callResults[key] = now;
+				FoldClosureFingerprint(a_fingerprint, key, now);
 				return now;
 			}
+			FoldClosureFingerprint(a_fingerprint, key, selfMTime);
 
 			std::vector<std::filesystem::path> includes;
 			bool cached = false;
@@ -145,7 +163,13 @@ namespace SIE
 
 			auto maxTime = selfMTime;
 			for (const auto& includePath : includes)
-				maxTime = std::max(maxTime, GetMaxShaderMTimeInternal(includePath, a_shadersRoot, a_parseCache, a_parseCacheMutex, a_callResults));
+				maxTime = std::max(maxTime, GetMaxShaderMTimeInternal(
+												includePath,
+												a_shadersRoot,
+												a_parseCache,
+												a_parseCacheMutex,
+												a_callResults,
+												a_fingerprint));
 
 			a_callResults[key] = maxTime;
 			return maxTime;
@@ -156,7 +180,8 @@ namespace SIE
 
 		std::chrono::system_clock::time_point GetMaxShaderMTime(
 			const std::filesystem::path& a_path,
-			const std::filesystem::path& a_shadersRoot)
+			const std::filesystem::path& a_shadersRoot,
+			Util::ContentHash::Hash128* a_fingerprint = nullptr)
 		{
 			std::unordered_map<std::string, std::chrono::system_clock::time_point> callResults;
 			return GetMaxShaderMTimeInternal(
@@ -164,8 +189,18 @@ namespace SIE
 				a_shadersRoot,
 				g_shaderIncludeParseCache,
 				g_shaderIncludeParseCacheMutex,
-				callResults);
+				callResults,
+				a_fingerprint);
 		}
+
+		struct ClosureDigestEntry
+		{
+			Util::ContentHash::Hash128 closureFingerprint;
+			Util::ContentHash::Hash128 digest;
+		};
+
+		std::unordered_map<std::string, ClosureDigestEntry> g_shaderClosureDigestCache;
+		std::mutex g_shaderClosureDigestCacheMutex;
 
 		std::optional<Util::ContentHash::Hash128> GetShaderContentDigestInternal(
 			const std::filesystem::path& a_path,
@@ -244,16 +279,31 @@ namespace SIE
 			const std::filesystem::path& a_path,
 			const std::filesystem::path& a_shadersRoot)
 		{
-			// Populate include lists once, then hash the same recursively parsed
-			// dependency closure.
-			GetMaxShaderMTime(a_path, a_shadersRoot);
+			Util::ContentHash::Hash128 fingerprint{};
+			GetMaxShaderMTime(a_path, a_shadersRoot, &fingerprint);
+
+			const std::string rootKey = NormalizedPathKey(a_path);
+			{
+				std::lock_guard lock(g_shaderClosureDigestCacheMutex);
+				if (auto it = g_shaderClosureDigestCache.find(rootKey);
+					it != g_shaderClosureDigestCache.end() &&
+					it->second.closureFingerprint == fingerprint) {
+					return it->second.digest;
+				}
+			}
+
 			std::unordered_map<std::string, std::optional<Util::ContentHash::Hash128>> callResults;
-			return GetShaderContentDigestInternal(
+			const auto result = GetShaderContentDigestInternal(
 				a_path,
 				a_shadersRoot,
 				g_shaderIncludeParseCache,
 				g_shaderIncludeParseCacheMutex,
 				callResults);
+			if (result) {
+				std::lock_guard lock(g_shaderClosureDigestCacheMutex);
+				g_shaderClosureDigestCache[rootKey] = ClosureDigestEntry{ fingerprint, *result };
+			}
+			return result;
 		}
 
 		const std::filesystem::path& ShaderSourceRoot()
@@ -1869,14 +1919,17 @@ namespace SIE
 					}
 				} else {
 					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
-					cache.AddCompletedShader(
-						shaderClass,
-						shader,
-						descriptor,
-						shaderBlob,
-						diskPath,
-						compileState.digest,
-						/*fromDisk=*/true);
+					if (!cache.AddCompletedShader(
+							shaderClass,
+							shader,
+							descriptor,
+							shaderBlob,
+							diskPath,
+							compileState.digest,
+							/*fromDisk=*/true)) {
+						shaderBlob->Release();
+						return nullptr;
+					}
 					return shaderBlob;
 				}
 			}
@@ -1994,13 +2047,16 @@ namespace SIE
 				path,
 				compileState.digest,
 				diskCacheGeneration);
-			cache.AddCompletedShader(
-				shaderClass,
-				shader,
-				descriptor,
-				shaderBlob,
-				diskPath,
-				compileState.digest);
+			if (!cache.AddCompletedShader(
+					shaderClass,
+					shader,
+					descriptor,
+					shaderBlob,
+					diskPath,
+					compileState.digest)) {
+				shaderBlob->Release();
+				return nullptr;
+			}
 			return shaderBlob;
 		}
 
@@ -2534,7 +2590,10 @@ namespace SIE
 		{
 			std::unique_lock lockM{ mapMutex };
 			shaderMap.clear();
+			deferredEvictions.clear();
+			deferredEvictionCount.store(0, std::memory_order_relaxed);
 		}
+		mapCV.notify_all();
 		{
 			std::unique_lock lockH{ hlslMapMutex };
 			hlslToShaderMap.clear();
@@ -2649,9 +2708,14 @@ namespace SIE
 			hlslToShaderMap.erase(it);
 		}
 
-		// Step 2: Process the copied entries without holding hlslMapMutex
+		std::vector<hlslRecord> immediateEvictions;
+		immediateEvictions.reserve(entries.size());
+		// A pending entry keeps its disk blob until the in-flight reader resolves.
 		for (auto& entry : entries) {
+			if (TryDeferEviction(entry))
+				continue;
 			EvictShader(entry.key, entry.type, entry.descriptor, entry.shaderClass);
+			immediateEvictions.push_back(entry);
 		}
 
 		if (!entries.empty()) {
@@ -2664,7 +2728,7 @@ namespace SIE
 
 				auto& manifest = GetShaderCacheManifest();
 				bool manifestChanged = false;
-				for (const auto& entry : entries) {
+				for (const auto& entry : immediateEvictions) {
 					const auto& filePath = entry.diskPath;
 					const auto filePathString = Util::WStringToString(filePath);
 					std::error_code error;
@@ -2778,7 +2842,9 @@ namespace SIE
 			}
 		}
 
-		return a_blob != nullptr;
+		const bool evicted = ApplyDeferredEviction(key);
+
+		return a_blob != nullptr && !evicted;
 	}
 
 	std::pair<ShaderCache::ClaimResult, ID3DBlob*> ShaderCache::ClaimCompilation(const std::string& key)
@@ -2786,6 +2852,11 @@ namespace SIE
 		std::unique_lock lockM{ mapMutex };
 
 		for (;;) {
+			if (deferredEvictions.contains(key)) {
+				logger::debug("Shader eviction in progress, waiting: {}", key);
+				mapCV.wait(lockM);
+				continue;
+			}
 			auto it = shaderMap.find(key);
 			if (it != shaderMap.end()) {
 				auto& entry = it->second;
@@ -2825,6 +2896,7 @@ namespace SIE
 		}
 		if (changed) {
 			mapCV.notify_all();
+			ApplyDeferredEviction(key);
 		}
 	}
 
@@ -4509,6 +4581,7 @@ namespace SIE
 		}
 
 		compilationSet.Complete(task);
+		ApplyDeferredEviction(taskKey, true);
 	}
 
 	ShaderCompilationTask::ShaderCompilationTask(ShaderClass aShaderClass,

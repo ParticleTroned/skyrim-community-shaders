@@ -517,6 +517,8 @@ namespace SIE
 		*/
 		bool Clear(const std::string& a_path);
 
+		/** @brief Publishes a compile result unless a synchronous deferred eviction consumes it.
+		 *  @return True when a_blob remains usable by the caller. */
 		bool AddCompletedShader(
 			ShaderClass shaderClass,
 			const RE::BSShader& shader,
@@ -895,6 +897,18 @@ namespace SIE
 				return key < other.key;
 			}
 		};
+		struct DeferredEviction
+		{
+			hlslRecord record;
+			bool waitForTaskCompletion = false;
+			bool applying = false;
+		};
+
+		/** @brief Parks a_record while its shader-map entry is pending. */
+		bool TryDeferEviction(const hlslRecord& a_record);
+		/** @brief Applies a parked eviction when its owning compile may be retired. */
+		bool ApplyDeferredEviction(const std::string& a_key, bool a_taskCompleted = false);
+
 		struct DeferredDiskWrite
 		{
 			Microsoft::WRL::ComPtr<ID3DBlob> shaderBlob;
@@ -954,6 +968,8 @@ namespace SIE
 		std::mutex modifiedMapMutex;                                                              // guard for modifiedShaderMap
 		ankerl::unordered_dense::map<std::string, std::set<hlslRecord>> hlslToShaderMap{};        // hashmap linking specific hlsl files to shader keys in shaderMap
 		std::mutex hlslMapMutex;                                                                  // guard for hlslToShaderMap
+		ankerl::unordered_dense::map<std::string, DeferredEviction> deferredEvictions;            // pending hot-reload evictions; guarded by mapMutex
+		std::atomic<size_t> deferredEvictionCount{ 0 };                                           // lock-free empty fast path
 
 		std::deque<DeferredDiskWrite> deferredDiskWrites;
 		std::mutex deferredDiskWritesMutex;

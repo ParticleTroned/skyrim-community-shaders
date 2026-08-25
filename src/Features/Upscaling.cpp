@@ -31048,7 +31048,8 @@ namespace
 	uint32_t vrLoadPresentationProbeCount = 0;
 	uint32_t vrLoadPresentationProbeOverwrittenRecords = 0;
 	std::array<VRLoadPresentationProbePendingReadback, Upscaling::kVRLoadPresentationProbePendingCapacity> vrLoadPresentationProbePending{};
-	std::array<std::array<VRLoadPresentationHMDMaskObservation, 4>, 2>
+	// Keep the phase dimension in lockstep with HMDMaskClearPhase.
+	std::array<std::array<VRLoadPresentationHMDMaskObservation, 5>, 2>
 		vrLoadPresentationHMDMaskObservations{};
 	std::array<VRLoadPresentationHAMProbeRecord, kVRLoadPresentationHAMProbeRetentionCapacity>
 		vrLoadPresentationHAMProbeRecords{};
@@ -33522,6 +33523,8 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 			return "SubmitStageOutput";
 		case HMDMaskClearPhase::SubmitStageFoveatedOutput:
 			return "SubmitStageFoveatedOutput";
+		case HMDMaskClearPhase::SubmitStageInput:
+			return "SubmitStageInput";
 		default:
 			return "Unknown";
 		}
@@ -39647,6 +39650,7 @@ bool Upscaling::ShouldClearHMDMaskInPhase(Upscaling::HMDMaskClearPhase a_phase) 
 		break;
 	case HMDMaskClearPhase::SubmitStageOutput:
 	case HMDMaskClearPhase::SubmitStageFoveatedOutput:
+	case HMDMaskClearPhase::SubmitStageInput:
 		submitStagePhase = true;
 		break;
 	default:
@@ -46807,6 +46811,46 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
 		return false;
+
+	// Presentation RenderScale owns the temporal vendor input, so the ordinary
+	// PerEyeInput phase is intentionally disabled. Restore the same guarantee on
+	// the copied submit-stage eye before DLSS/FSR or Periphery TAA can consume it.
+	// Use the robust reference here: an under-clear can enter temporal history,
+	// while failure safely falls through to the original compositor submission.
+	if (!presentationOnly) {
+		const bool inputMaskEligible =
+			ShouldClearHMDMaskInPhase(HMDMaskClearPhase::SubmitStageInput);
+		const bool inputMaskCleared =
+			inputMaskEligible &&
+			depth.depthSRV &&
+			vrIntermediateColorIn[eyeIndex] &&
+			vrIntermediateColorIn[eyeIndex]->uav &&
+			DispatchHMDMaskClear(
+				vrIntermediateColorIn[eyeIndex]->uav.get(),
+				depth.depthSRV,
+				sourceRegion.depthWidth,
+				sourceRegion.depthHeight,
+				eyeWidthIn,
+				eyeHeightIn,
+				sourceRegion.depthOffsetX,
+				0u,
+				sourceRegion.depthOffsetY,
+				0u,
+				false,
+				eyeIndex,
+				true,
+				false);
+		if (!inputMaskCleared) {
+			static bool loggedSubmitStageInputMaskFailure[2] = {};
+			LogWarnOnceFmt(
+				loggedSubmitStageInputMaskFailure[eyeIndex],
+				"[Upscaling][HAM] Submit-stage input sanitization was unavailable for eye {}; using the original compositor submission.",
+				eyeIndex);
+			return false;
+		}
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage HMD mask input sanitization"))
+			return false;
+	}
 
 	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, VRRenderScalePresentationPath a_path) {
 		if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut) ||

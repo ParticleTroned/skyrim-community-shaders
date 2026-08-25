@@ -3072,7 +3072,8 @@ private:
 		PerEyeInput,
 		PerEyeOutput,
 		SubmitStageOutput,
-		SubmitStageFoveatedOutput
+		SubmitStageFoveatedOutput,
+		SubmitStageInput
 	};
 	void RecordVRPostLoadHMDMaskRepair(
 		HMDMaskClearPhase a_phase,

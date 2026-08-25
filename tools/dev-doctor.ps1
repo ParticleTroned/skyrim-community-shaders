@@ -34,6 +34,10 @@ if ($LASTEXITCODE -ne 0 -or -not $repositoryRoot) {
     throw "This command must run inside a Git worktree."
 }
 $commonGitDirectory = (& git rev-parse --path-format=absolute --git-common-dir).Trim()
+$toolEnvironment = Initialize-CsxToolEnvironment `
+    -RepositoryRoot $repositoryRoot `
+    -CommonGitDirectory $commonGitDirectory `
+    -ProtectPublicGitHub
 
 $hooksPath = & git config --local --get core.hooksPath 2>$null
 if ($hooksPath -eq ".githooks" -and (Test-Path -LiteralPath (Join-Path $repositoryRoot ".githooks\pre-commit"))) {
@@ -70,6 +74,31 @@ try {
     Write-CheckPass "vcpkg root resolves to $vcpkgRoot"
 } catch {
     Add-CheckFailure $_.Exception.Message
+}
+
+foreach ($cache in ([ordered]@{
+    "vcpkg downloads" = $toolEnvironment.VcpkgDownloads
+    "vcpkg registries" = $toolEnvironment.VcpkgRegistries
+    "vcpkg binary cache" = $toolEnvironment.VcpkgBinaryCache
+}).GetEnumerator()) {
+    try {
+        $probe = Join-Path $cache.Value "doctor-write-probe.txt"
+        [IO.File]::WriteAllText($probe, "ok")
+        Remove-Item -LiteralPath $probe
+        Write-CheckPass "$($cache.Key) path is writable: $($cache.Value)"
+    } catch {
+        Add-CheckFailure "$($cache.Key) path is not writable: $($_.Exception.Message)"
+    }
+}
+
+if ($env:CODEX_CI -eq "1") {
+    if ($toolEnvironment.VcpkgAssetDownloader) {
+        Write-CheckPass "vcpkg uses the isolated HTTPS downloader"
+    } elseif ($env:X_VCPKG_ASSET_SOURCES) {
+        Write-CheckPass "vcpkg uses an explicit asset source"
+    } else {
+        Add-CheckFailure "vcpkg has no usable isolated HTTPS downloader"
+    }
 }
 
 $toolTemp = Join-Path $repositoryRoot "build\tool-temp"

@@ -96,6 +96,54 @@ function Resolve-CsxVcpkgRoot {
     return $null
 }
 
+function Initialize-CsxVcpkgCacheEnvironment {
+    param(
+        [Parameter(Mandatory = $true)][string] $RepositoryRoot,
+        [Parameter(Mandatory = $true)][string] $ToolRoot
+    )
+
+    $vcpkgCacheRoot = Join-Path $ToolRoot "vcpkg"
+    $defaults = [ordered]@{
+        VCPKG_DOWNLOADS = Join-Path $vcpkgCacheRoot "downloads"
+        X_VCPKG_REGISTRIES_CACHE = Join-Path $vcpkgCacheRoot "registries"
+        VCPKG_DEFAULT_BINARY_CACHE = Join-Path $vcpkgCacheRoot "archives"
+    }
+
+    foreach ($entry in $defaults.GetEnumerator()) {
+        $configuredPath = [Environment]::GetEnvironmentVariable($entry.Key, "Process")
+        if (-not $configuredPath) {
+            $configuredPath = $entry.Value
+            [Environment]::SetEnvironmentVariable($entry.Key, $configuredPath, "Process")
+        }
+        New-Item -ItemType Directory -Force -Path $configuredPath | Out-Null
+    }
+
+    $assetDownloader = $null
+    if ($env:CODEX_CI -eq "1" -and -not $env:X_VCPKG_ASSET_SOURCES) {
+        $managedPython = if ($env:OS -eq "Windows_NT") {
+            Join-Path $ToolRoot "venv\Scripts\python.exe"
+        } else {
+            Join-Path $ToolRoot "venv/bin/python"
+        }
+
+        $assetDownloader = Join-Path $RepositoryRoot "tools\vcpkg-download.py"
+        if ((Test-Path -LiteralPath $managedPython -PathType Leaf) -and
+            (Test-Path -LiteralPath $assetDownloader -PathType Leaf)) {
+            $env:X_VCPKG_ASSET_SOURCES =
+                "x-script,`"$managedPython`" `"$assetDownloader`" {url} {dst}"
+        } else {
+            $assetDownloader = $null
+        }
+    }
+
+    return [pscustomobject]@{
+        Downloads = $env:VCPKG_DOWNLOADS
+        Registries = $env:X_VCPKG_REGISTRIES_CACHE
+        BinaryCache = $env:VCPKG_DEFAULT_BINARY_CACHE
+        AssetDownloader = $assetDownloader
+    }
+}
+
 function Initialize-CsxToolEnvironment {
     param(
         [Parameter(Mandatory = $true)][string] $RepositoryRoot,
@@ -118,6 +166,15 @@ function Initialize-CsxToolEnvironment {
     $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
     $env:GIT_TERMINAL_PROMPT = "0"
 
+    # vcpkg otherwise stores registry and package state in the user profile.
+    # That location may be unavailable to an isolated build process, producing
+    # misleading "port does not exist" errors. Keep default caches shared by
+    # all worktrees in the writable common Git tool root, while preserving
+    # explicit caller overrides.
+    $vcpkgCaches = Initialize-CsxVcpkgCacheEnvironment `
+        -RepositoryRoot $RepositoryRoot `
+        -ToolRoot $toolRoot
+
     if ($ProtectPublicGitHub) {
         $broadRewrite = @(& git config --global --get-all "url.git@github.com:.insteadof" 2>$null)
         if ($broadRewrite -contains "https://github.com/") {
@@ -134,5 +191,9 @@ function Initialize-CsxToolEnvironment {
     return [pscustomobject]@{
         ToolRoot = $toolRoot
         ToolTemp = $toolTemp
+        VcpkgDownloads = $vcpkgCaches.Downloads
+        VcpkgRegistries = $vcpkgCaches.Registries
+        VcpkgBinaryCache = $vcpkgCaches.BinaryCache
+        VcpkgAssetDownloader = $vcpkgCaches.AssetDownloader
     }
 }

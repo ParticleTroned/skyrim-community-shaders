@@ -29,16 +29,16 @@ namespace
 
 	const char* GetWaterReflectionStrengthDisplay()
 	{
-		return T(TKEY("water_reflection_strength"), "Water Reflection Strength");
+		return T(TKEY("water_reflection_strength"), "LOD Water Reflection Blend");
 	}
 
 	const char* GetWaterReflectionStrengthTooltip()
 	{
 		return T(TKEY("water_reflection_strength_tooltip"),
-			"Height-faded reflection amount for regular and LOD water.\n"
+			"Height-faded reflection blend for regular and LOD water.\n"
 			"The same value is applied to all visible water, based on camera height above the current water level.\n"
 			"1.00 blends toward the material reflection amount at high elevation, 0.00 blends toward only the reflection color.\n"
-			"Higher values move high-elevation water back toward full sky/SSR.");
+			"Higher values move high-elevation water back toward full sky/SSR. Unified Water's Global Reflection Amount scales the completed result afterward.");
 	}
 
 	float ClampWaterReflectionStrength(float a_value)
@@ -75,7 +75,7 @@ namespace
 		auto& settings = a_feature.settings;
 		auto& applyWaterReflectionStrength = a_feature.EnableWaterReflectionStrength;
 
-		ImGui::Checkbox(T(TKEY("apply_water_reflection_strength"), "Apply Water Reflection Strength"), &applyWaterReflectionStrength);
+		ImGui::Checkbox(T(TKEY("apply_water_reflection_strength"), "Apply LOD Water Reflection Blend"), &applyWaterReflectionStrength);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("apply_water_reflection_strength_tooltip"),
 								  "Toggle the height-faded water reflection strength blend at runtime.\n"

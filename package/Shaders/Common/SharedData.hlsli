@@ -362,6 +362,14 @@ namespace SharedData
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
 		float ShallowSurfaceReflectionFloor;
+		float WaterBrightness;
+		float GlobalReflectionAmount;
+		float RefractionAmount;
+		float SunSpecularMultiplier;
+		float WaveAmplitude;
+		float FresnelMin;
+		float FresnelMax;
+		float Muddiness;
 		float3 pad;
 	};
 

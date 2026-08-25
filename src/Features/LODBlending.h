@@ -15,7 +15,7 @@ struct LODBlending : Feature
 				T("feature.lod_blending.key_feature_3", "Snow-specific LOD brightness adjustment"),
 				T("feature.lod_blending.key_feature_4", "Optional terrain vertex color modification"),
 				T("feature.lod_blending.key_feature_5", "Seamless transition between detail levels"),
-				T("feature.lod_blending.key_feature_6", "Water reflection strength adjustment") } };
+				T("feature.lod_blending.key_feature_6", "Height-faded LOD water reflection blending") } };
 	};
 
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };

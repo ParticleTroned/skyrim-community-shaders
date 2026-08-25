@@ -22,13 +22,12 @@ ScopedGpuPass::ScopedGpuPass(std::string_view a_name)
 	cpuZoneCtx = ___tracy_emit_zone_begin_alloc(cpuSourceLocation, true);
 
 	if (state && state->tracyCtx) {
-		const auto gpuSourceLocation = ___tracy_alloc_srcloc_name(
-			0,
+		gpuZone.emplace(state->tracyCtx,
+			uint32_t(0),
 			"GpuPass", sizeof("GpuPass") - 1,
 			"ScopedGpuPass", sizeof("ScopedGpuPass") - 1,
 			a_name.data(), a_name.size(),
-			0);
-		gpuZone.emplace(state->tracyCtx, gpuSourceLocation, 0, true);
+			0, true);
 	}
 #endif
 

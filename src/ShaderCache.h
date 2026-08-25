@@ -787,6 +787,8 @@ namespace SIE
 		HANDLE managementThread = nullptr;
 
 	private:
+		struct hlslRecord;
+
 		bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const
 		{
 			return a_taskGeneration &&

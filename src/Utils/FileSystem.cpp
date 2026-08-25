@@ -44,6 +44,25 @@ namespace
 				ec.message());
 		}
 	}
+
+	Util::FileHelpers::AtomicWriteResult WriteTextFileDirect(
+		const std::filesystem::path& path,
+		std::string_view contents)
+	{
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		if (!output.is_open()) {
+			return { false, std::format("Failed to open '{}' for direct writing.", path.string()) };
+		}
+
+		output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+		output.flush();
+		output.close();
+		if (output.fail()) {
+			return { false, std::format("Failed to write '{}' directly.", path.string()) };
+		}
+
+		return { true, {} };
+	}
 }
 
 namespace Util
@@ -448,12 +467,27 @@ namespace Util
 					path.c_str(),
 					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
 				const DWORD replaceError = GetLastError();
-				std::string errorMessage = std::format(
+				const std::string replaceErrorMessage = std::format(
 					"Failed to atomically replace file '{}': {}",
 					path.string(),
 					GetWindowsErrorMessage(replaceError));
+				std::string errorMessage = replaceErrorMessage;
 				RemoveTemporaryFile(temporaryPath, errorMessage);
-				return { false, std::move(errorMessage) };
+
+				// Mod-manager virtual filesystems can reject replacement while still
+				// allowing a normal write to the mapped destination.
+				logger::warn("{}; retrying with a direct write", replaceErrorMessage);
+				auto directResult = WriteTextFileDirect(path, contents);
+				if (!directResult) {
+					directResult.errorMessage = std::format(
+						"{} Direct-write fallback also failed: {}",
+						errorMessage,
+						directResult.errorMessage);
+					return directResult;
+				}
+
+				logger::info("Saved '{}' directly after atomic replacement failed", path.string());
+				return directResult;
 			}
 
 			return { true, {} };

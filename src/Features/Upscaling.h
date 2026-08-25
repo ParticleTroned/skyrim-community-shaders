@@ -1346,6 +1346,55 @@ public:
 		}
 	};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	enum class VRRenderScaleCPUPerformanceCounter : std::size_t
+	{
+		WindowStartFrame,
+		ResourceFullValidations,
+		ResourceContractPublishes,
+		ResourceContractInvalidations,
+		ResourceContractStableChecks,
+		ResourceContractStableHits,
+		ResourceContractStableMisses,
+		HotContractPublishes,
+		HotContractReuses,
+		PromotionFastSkips,
+		PromotionCandidates,
+		BoundsGuardFastSkips,
+		BoundsGuardCandidates,
+		DeferredRecoveryFastSkips,
+		DeferredRecoveryCandidates,
+		NativeGuardFastSkips,
+		NativeGuardCandidates,
+		RetirementFastSkips,
+		RetirementServices,
+		TrimFastSkips,
+		TrimServices,
+		MemoryTelemetryFastSkips,
+		MemoryTelemetryCandidates,
+		PostMutationGuardFastSkips,
+		PostMutationGuardServices,
+		PresentationPacketFastSkips,
+		PresentationPacketCaptures,
+		PresentationPacketCycleReuses,
+		PresentationLifetimeReuses,
+		PresentationLifetimeRebuilds,
+		PresentationPacketInvalidations,
+		PresentationCommitValidations,
+		PresentationCommitAccepts,
+		PresentationCommitRejects,
+		PresentationQueueWaitTotalNanoseconds,
+		PresentationQueueWaitMaximumNanoseconds,
+		PresentationQueueHoldTotalNanoseconds,
+		PresentationQueueHoldMaximumNanoseconds,
+		Count
+	};
+	using VRRenderScaleCPUPerformanceSnapshot = std::array<
+		uint64_t,
+		static_cast<std::size_t>(
+			VRRenderScaleCPUPerformanceCounter::Count)>;
+#endif
+
 	struct PerfModeState
 	{
 		struct BootSnapshot
@@ -1417,6 +1466,12 @@ public:
 	json BuildVRRenderScaleIterationRecord() const;
 	bool WriteVRRenderScaleIterationRecord() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScaleCPUPerformanceSnapshot
+	GetVRRenderScaleCPUPerformanceSnapshot() const noexcept;
+	[[nodiscard]] bool IsVRRenderScaleCPUPerformanceTelemetryActive() const noexcept;
+	void StartVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	void StopVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	void ResetVRRenderScaleCPUPerformanceTelemetry() noexcept;
 	void StartVRLoadPresentationProbe();
 	void StopVRLoadPresentationProbe();
 	void ResetVRLoadPresentationProbe();
@@ -1882,6 +1937,20 @@ public:
 		vrRenderScaleStereoResourceLifetime;
 	mutable VRRenderScaleStereoPresentationPacket
 		vrRenderScaleStereoPresentationPacket;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	mutable std::atomic_bool vrRenderScaleCPUPerformanceTelemetryActive{ false };
+	mutable std::array<
+		std::atomic<uint64_t>,
+		static_cast<std::size_t>(
+			VRRenderScaleCPUPerformanceCounter::Count)>
+		vrRenderScaleCPUPerformanceCounters{};
+	void RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter a_counter,
+		uint64_t a_delta = 1) const noexcept;
+	void RecordVRRenderScaleCPUPerformanceMaximum(
+		VRRenderScaleCPUPerformanceCounter a_counter,
+		uint64_t a_value) const noexcept;
+#endif
 	struct RetiredVRIntermediateTextures
 	{
 		uint32_t retireFrame = 0;

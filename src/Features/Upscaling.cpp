@@ -38,6 +38,9 @@
 #include <atomic>
 #include <cctype>
 #include <cfloat>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <chrono>
+#endif
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -115,6 +118,80 @@ uint32_t Upscaling::ScaleVRRenderDimension(uint32_t a_dimension, float a_scale)
 		a_dimension);
 	return bounded & ~1u;
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+Upscaling::VRRenderScaleCPUPerformanceSnapshot
+Upscaling::GetVRRenderScaleCPUPerformanceSnapshot() const noexcept
+{
+	VRRenderScaleCPUPerformanceSnapshot snapshot{};
+	for (std::size_t index = 0; index < snapshot.size(); ++index) {
+		snapshot[index] = vrRenderScaleCPUPerformanceCounters[index].load(
+			std::memory_order_relaxed);
+	}
+	return snapshot;
+}
+
+bool Upscaling::IsVRRenderScaleCPUPerformanceTelemetryActive() const noexcept
+{
+	return vrRenderScaleCPUPerformanceTelemetryActive.load(
+		std::memory_order_relaxed);
+}
+
+void Upscaling::StartVRRenderScaleCPUPerformanceTelemetry() noexcept
+{
+	ResetVRRenderScaleCPUPerformanceTelemetry();
+	vrRenderScaleCPUPerformanceTelemetryActive.store(
+		true,
+		std::memory_order_relaxed);
+}
+
+void Upscaling::StopVRRenderScaleCPUPerformanceTelemetry() noexcept
+{
+	vrRenderScaleCPUPerformanceTelemetryActive.store(
+		false,
+		std::memory_order_relaxed);
+}
+
+void Upscaling::ResetVRRenderScaleCPUPerformanceTelemetry() noexcept
+{
+	StopVRRenderScaleCPUPerformanceTelemetry();
+	for (auto& counter : vrRenderScaleCPUPerformanceCounters)
+		counter.store(0, std::memory_order_relaxed);
+	vrRenderScaleCPUPerformanceCounters[static_cast<std::size_t>(
+		VRRenderScaleCPUPerformanceCounter::WindowStartFrame)]
+		.store(
+			globals::state ? globals::state->frameCount : 0u,
+			std::memory_order_relaxed);
+}
+
+void Upscaling::RecordVRRenderScaleCPUPerformanceCounter(
+	VRRenderScaleCPUPerformanceCounter a_counter,
+	uint64_t a_delta) const noexcept
+{
+	if (!IsVRRenderScaleCPUPerformanceTelemetryActive())
+		return;
+	vrRenderScaleCPUPerformanceCounters[static_cast<std::size_t>(a_counter)]
+		.fetch_add(a_delta, std::memory_order_relaxed);
+}
+
+void Upscaling::RecordVRRenderScaleCPUPerformanceMaximum(
+	VRRenderScaleCPUPerformanceCounter a_counter,
+	uint64_t a_value) const noexcept
+{
+	if (!IsVRRenderScaleCPUPerformanceTelemetryActive())
+		return;
+	auto& maximum = vrRenderScaleCPUPerformanceCounters[
+		static_cast<std::size_t>(a_counter)];
+	uint64_t current = maximum.load(std::memory_order_relaxed);
+	while (current < a_value &&
+		!maximum.compare_exchange_weak(
+			current,
+			a_value,
+			std::memory_order_relaxed,
+			std::memory_order_relaxed)) {
+	}
+}
+#endif
 
 namespace
 {
@@ -20896,6 +20973,10 @@ void Upscaling::DestroyCommonUpscalingTextures()
 
 void Upscaling::InvalidateCommonVendorResourceContract()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::ResourceContractInvalidations);
+#endif
 	commonVendorResourceContract = {};
 	++commonVendorResourceGeneration;
 	if (commonVendorResourceGeneration == 0)
@@ -20954,6 +21035,10 @@ void Upscaling::PublishCommonVendorResourceContract(
 		contract.sharpener = captureTexture(sharpenerTexture);
 
 	commonVendorResourceContract = contract;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::ResourceContractPublishes);
+#endif
 }
 
 bool Upscaling::IsCommonVendorResourceContractCurrent(
@@ -20961,6 +21046,18 @@ bool Upscaling::IsCommonVendorResourceContractCurrent(
 {
 	if (!IsVendorUpscalingMethod(a_upscaleMethod))
 		return true;
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::ResourceContractStableChecks);
+	bool contractCurrent = false;
+	const auto recordContractResult = ScopeExit([&]() {
+		RecordVRRenderScaleCPUPerformanceCounter(
+			contractCurrent ?
+				VRRenderScaleCPUPerformanceCounter::ResourceContractStableHits :
+				VRRenderScaleCPUPerformanceCounter::ResourceContractStableMisses);
+	});
+#endif
 
 	const auto& contract = commonVendorResourceContract;
 	if (!contract.valid ||
@@ -21008,14 +21105,24 @@ bool Upscaling::IsCommonVendorResourceContractCurrent(
 		}
 	}
 
-	return a_upscaleMethod != UpscaleMethod::kDLSS ||
-	       matchesTexture(contract.sharpener, sharpenerTexture);
+	const bool current =
+		a_upscaleMethod != UpscaleMethod::kDLSS ||
+		matchesTexture(contract.sharpener, sharpenerTexture);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	contractCurrent = current;
+#endif
+	return current;
 }
 
 bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const
 {
 	if (!IsVendorUpscalingMethod(a_upscaleMethod))
 		return true;
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::ResourceFullValidations);
+#endif
 
 	auto* renderer = globals::game::renderer;
 	if (!renderer)
@@ -27707,15 +27814,28 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 void Upscaling::ServiceSubmitStageVendorResumePromotion(
 	uint64_t a_compositorCycleToken)
 {
-	if (a_compositorCycleToken == 0)
+	if (a_compositorCycleToken == 0) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PromotionFastSkips);
+#endif
 		return;
+	}
 	const uint64_t publishedReleaseCandidateCycle =
 		submitStageVendorResumeReleaseCandidateCycle.load(
 			std::memory_order_acquire);
 	if (publishedReleaseCandidateCycle == 0 ||
 		a_compositorCycleToken <= publishedReleaseCandidateCycle) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PromotionFastSkips);
+#endif
 		return;
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::PromotionCandidates);
+#endif
 
 	const std::scoped_lock resumeStateLock(
 		submitStageVendorResumeStableEyeMaskMutex);
@@ -27797,8 +27917,17 @@ void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery)
 	const uint32_t lastFrame =
 		submitStageBoundsFallbackLastFrame.load(
 			std::memory_order_acquire);
-	if (lastFrame == 0 || !globals::game::isVR)
+	if (lastFrame == 0 || !globals::game::isVR) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::BoundsGuardFastSkips);
+#endif
 		return;
+	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::BoundsGuardCandidates);
+#endif
 
 	auto* state = globals::state;
 	if (!state)
@@ -29303,8 +29432,17 @@ void Upscaling::ServiceDeferredVRRenderScalePostLoadRecovery()
 	const uint64_t publishedRecoveryEpoch =
 		deferredVRRenderScalePostLoadRecoveryEpoch.load(
 			std::memory_order_acquire);
-	if (publishedRecoveryEpoch == 0)
+	if (publishedRecoveryEpoch == 0) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::DeferredRecoveryFastSkips);
+#endif
 		return;
+	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::DeferredRecoveryCandidates);
+#endif
 
 	VRRenderScalePostLoadRecoverySnapshot recovery{};
 	VRRenderScaleTransitionState controllerState =
@@ -29850,11 +29988,58 @@ Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
 		vrNativeRestorePresentationGuardEpoch.load(
 			std::memory_order_acquire) != 0 ||
 		IsVRRenderScaleModeLatched();
-	if (!packetRequired)
+	if (!packetRequired) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PresentationPacketFastSkips);
+#endif
 		return {};
+	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool captureTelemetryActive =
+		IsVRRenderScaleCPUPerformanceTelemetryActive();
+	if (captureTelemetryActive) {
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PresentationPacketCaptures);
+	}
+	const auto queueWaitStart = captureTelemetryActive ?
+		std::chrono::steady_clock::now() :
+		std::chrono::steady_clock::time_point{};
+#endif
 	const std::scoped_lock queueLock(
 		perfModeRenderTargetRecreateQueueMutex);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto queueHoldStart = captureTelemetryActive ?
+		std::chrono::steady_clock::now() :
+		std::chrono::steady_clock::time_point{};
+	if (captureTelemetryActive) {
+		const auto queueWaitNanoseconds = static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(
+				queueHoldStart - queueWaitStart)
+				.count());
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PresentationQueueWaitTotalNanoseconds,
+			queueWaitNanoseconds);
+		RecordVRRenderScaleCPUPerformanceMaximum(
+			VRRenderScaleCPUPerformanceCounter::PresentationQueueWaitMaximumNanoseconds,
+			queueWaitNanoseconds);
+	}
+	const auto recordQueueHold = ScopeExit([&]() {
+		if (!captureTelemetryActive)
+			return;
+		const auto holdNanoseconds = static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now() - queueHoldStart)
+				.count());
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PresentationQueueHoldTotalNanoseconds,
+			holdNanoseconds);
+		RecordVRRenderScaleCPUPerformanceMaximum(
+			VRRenderScaleCPUPerformanceCounter::PresentationQueueHoldMaximumNanoseconds,
+			holdNanoseconds);
+	});
+#endif
 	const uint32_t frame =
 		globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 	VRRenderScaleHotPresentationContract current{};
@@ -29871,6 +30056,10 @@ Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
 		IsVRRenderScaleStereoPresentationPacketCurrentLocked(
 			vrRenderScaleStereoPresentationPacket,
 			current)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PresentationPacketCycleReuses);
+#endif
 		return vrRenderScaleStereoPresentationPacket;
 	}
 
@@ -29882,11 +30071,19 @@ Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
 			packet,
 			current)) {
 		vrRenderScaleStereoPresentationPacket = packet;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PresentationLifetimeReuses);
+#endif
 		return packet;
 	}
 
 	auto resources =
 		std::make_shared<VRRenderScaleStereoResourceLifetime>();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::PresentationLifetimeRebuilds);
+#endif
 	resources->revision =
 		vrRenderScaleStereoResourceRevision.load(
 			std::memory_order_acquire);
@@ -29971,6 +30168,10 @@ Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
 void Upscaling::InvalidateVRRenderScaleStereoPresentationPacket(
 	bool a_releaseResources)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::PresentationPacketInvalidations);
+#endif
 	std::scoped_lock lock(
 		vrRenderScaleStereoPresentationPacketMutex);
 	vrRenderScaleStereoPresentationPacket = {};
@@ -30190,8 +30391,17 @@ void Upscaling::ServiceVRNativeRestorePresentationRecovery(
 	const uint64_t guardEpoch =
 		vrNativeRestorePresentationGuardEpoch.load(
 			std::memory_order_acquire);
-	if (guardEpoch == 0)
+	if (guardEpoch == 0) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::NativeGuardFastSkips);
+#endif
 		return;
+	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::NativeGuardCandidates);
+#endif
 	if (IsVRInitialLoadPresentationProtectionActive() ||
 		IsVRPostLoadCompositorHoldActive() ||
 		ShouldQuarantineVRPostLoadCompositorCycle(
@@ -30569,9 +30779,19 @@ bool Upscaling::RecordVRNativeRestorePresentationObservationIfUnprotected(
 			CaptureVRRenderScaleHotPresentationContractLocked(
 				a_observation.compositorCycleToken,
 				std::max(a_observation.frame, 1u));
-		if (!IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+		const bool packetCurrent =
+			IsVRRenderScaleStereoPresentationPacketCurrentLocked(
 				*a_packet,
-				current)) {
+				current);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PresentationCommitValidations);
+		RecordVRRenderScaleCPUPerformanceCounter(
+			packetCurrent ?
+				VRRenderScaleCPUPerformanceCounter::PresentationCommitAccepts :
+				VRRenderScaleCPUPerformanceCounter::PresentationCommitRejects);
+#endif
+		if (!packetCurrent) {
 			return false;
 		}
 	}
@@ -30633,9 +30853,19 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 				CaptureVRRenderScaleHotPresentationContractLocked(
 					a_observation.compositorCycleToken,
 					std::max(a_observation.frame, 1u));
-			if (!IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+			const bool packetCurrent =
+				IsVRRenderScaleStereoPresentationPacketCurrentLocked(
 					*a_packet,
-					current)) {
+					current);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordVRRenderScaleCPUPerformanceCounter(
+				VRRenderScaleCPUPerformanceCounter::PresentationCommitValidations);
+			RecordVRRenderScaleCPUPerformanceCounter(
+				packetCurrent ?
+					VRRenderScaleCPUPerformanceCounter::PresentationCommitAccepts :
+					VRRenderScaleCPUPerformanceCounter::PresentationCommitRejects);
+#endif
+			if (!packetCurrent) {
 				return;
 			}
 		}
@@ -40782,10 +41012,30 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		IsLoadingMenuPhysicallyOpen();
 	const bool emitUpscalingDiagLogs = ShouldEmitUpscalingDiagLogs();
 	if (!stabilizerDoorHandoffPending && !loadingMenuOwnsMutation) {
-		if (HasPendingVREngineTargetRetirement())
+		if (HasPendingVREngineTargetRetirement()) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordVRRenderScaleCPUPerformanceCounter(
+				VRRenderScaleCPUPerformanceCounter::RetirementServices);
+#endif
 			ServiceVREngineTargetRetirement("configure");
-		if (HasPendingVRRenderScaleMemoryTrim())
+		} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordVRRenderScaleCPUPerformanceCounter(
+				VRRenderScaleCPUPerformanceCounter::RetirementFastSkips);
+#endif
+		}
+		if (HasPendingVRRenderScaleMemoryTrim()) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordVRRenderScaleCPUPerformanceCounter(
+				VRRenderScaleCPUPerformanceCounter::TrimServices);
+#endif
 			ServiceVRRenderScaleMemoryTrim("configure");
+		} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordVRRenderScaleCPUPerformanceCounter(
+				VRRenderScaleCPUPerformanceCounter::TrimFastSkips);
+#endif
+		}
 		const bool memoryTelemetryRequired =
 			vrRenderScaleTransitionState.load(std::memory_order_acquire) !=
 				VRRenderScaleTransitionState::Idle ||
@@ -40801,8 +41051,18 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			vrRenderScaleStressSessionActive.load(
 				std::memory_order_acquire) ||
 			emitUpscalingDiagLogs;
-		if (memoryTelemetryRequired)
+		if (memoryTelemetryRequired) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordVRRenderScaleCPUPerformanceCounter(
+				VRRenderScaleCPUPerformanceCounter::MemoryTelemetryCandidates);
+#endif
 			SampleVRRenderScaleMemory();
+		} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RecordVRRenderScaleCPUPerformanceCounter(
+				VRRenderScaleCPUPerformanceCounter::MemoryTelemetryFastSkips);
+#endif
+		}
 	}
 	if (emitUpscalingDiagLogs) {
 		ServiceVRMenuPresentationTraceRaceSexPreRoll();
@@ -45380,8 +45640,16 @@ void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 	// Normal rendering pays one predictable atomic-zero check and takes no lock.
 	if (vrRenderScalePostMutationSerializationEpoch.load(
 			std::memory_order_acquire) == 0) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::PostMutationGuardFastSkips);
+#endif
 		return;
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::PostMutationGuardServices);
+#endif
 
 	const auto mutation = GetVRRenderScalePhysicalMutationSnapshot();
 	if (mutation.serializationEpoch == 0)
@@ -48304,14 +48572,23 @@ Upscaling::GetSubmitStageHotPresentationContract(
 		submitStageHotPresentationContract.frame == a_frame;
 	// One cycle keeps one controller publication. Live boot generation checks
 	// force a safe presentation fallback if physical ownership changes between eyes.
-	if (sameAuthoritativeCycle)
+	if (sameAuthoritativeCycle) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleCPUPerformanceCounter(
+			VRRenderScaleCPUPerformanceCounter::HotContractReuses);
+#endif
 		return submitStageHotPresentationContract;
+	}
 
 	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 	submitStageHotPresentationContract =
 		CaptureVRRenderScaleHotPresentationContractLocked(
 			a_compositorCycleToken,
 			a_frame);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter::HotContractPublishes);
+#endif
 	return submitStageHotPresentationContract;
 }
 

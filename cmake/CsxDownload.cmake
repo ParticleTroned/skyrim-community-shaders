@@ -21,6 +21,7 @@ function(csx_download_verified_asset URL DESTINATION EXPECTED_SHA256)
                 "$ENV{CSX_ASSET_DOWNLOADER_SCRIPT}"
                 "${URL}"
                 "${DESTINATION}"
+                "${EXPECTED_SHA256}"
             RESULT_VARIABLE _download_result
             ERROR_VARIABLE _download_error
         )

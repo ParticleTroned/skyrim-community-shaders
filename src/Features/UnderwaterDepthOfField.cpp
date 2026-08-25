@@ -670,6 +670,12 @@ namespace UnderwaterDepthOfField
 		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
 	}
 
+	void ClearShaderCache()
+	{
+		depthOfFieldInputVS.Reset();
+		depthOfFieldInputPS.Reset();
+	}
+
 	void RecordShaderConstants(const RE::ImageSpaceEffectDepthOfField* a_effect, RE::ImageSpaceEffectParam* a_param)
 	{
 		static constexpr std::uint32_t kFoggedOptionIndex = 3;

@@ -72,6 +72,7 @@ struct CSUtility : Feature
 	virtual void RestoreDefaultSettings() override;
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
+	virtual void ClearShaderCache() override;
 
 	bool IsRuntimeEnabled() const;
 	void DrawDepthOfFieldSettings();

@@ -34,7 +34,6 @@ set(STREAMLINE_RUNTIME_DIRECTORY
 )
 
 file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_ROOT}")
-file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_DIRECTORY}")
 csx_download_verified_asset(
     "${STREAMLINE_RUNTIME_ARCHIVE_URL}"
     "${STREAMLINE_RUNTIME_ARCHIVE}"
@@ -119,6 +118,9 @@ function(stage_streamline_runtime _filename)
         PARENT_SCOPE
     )
 endfunction()
+
+file(REMOVE_RECURSE "${STREAMLINE_RUNTIME_FEATURE_ROOT}")
+file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_DIRECTORY}")
 
 set(STREAMLINE_RUNTIME_FILES "")
 stage_streamline_runtime(nvngx_dlss.dll)

@@ -89,3 +89,8 @@ void CSUtility::DataLoaded()
 {
 	UnderwaterDepthOfField::InstallHooks();
 }
+
+void CSUtility::ClearShaderCache()
+{
+	UnderwaterDepthOfField::ClearShaderCache();
+}

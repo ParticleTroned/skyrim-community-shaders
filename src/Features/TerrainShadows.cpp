@@ -610,6 +610,10 @@ TerrainShadows::ShadowUpdateResult TerrainShadows::UpdateShadow(bool a_fullRefre
 	if (!sunLight)
 		return ShadowUpdateResult::kUnavailable;
 
+	auto* shadowUpdateShader = GetShadowUpdateProgram();
+	if (!shadowUpdateShader)
+		return ShadowUpdateResult::kUnavailable;
+
 	// don't forget to change NTHREADS in shader!
 	constexpr uint updateLength = 128u;
 	constexpr uint logUpdateLength = std::bit_width(128u) - 1;  // integer log2, https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
@@ -716,7 +720,7 @@ TerrainShadows::ShadowUpdateResult TerrainShadows::UpdateShadow(bool a_fullRefre
 	context->CSSetShaderResources(0, ARRAYSIZE(newer.srvs), newer.srvs);
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(newer.uavs), newer.uavs, nullptr);
 	context->CSSetConstantBuffers(0, 1, &newer.buffer);
-	context->CSSetShader(GetShadowUpdateProgram(), nullptr, 0);
+	context->CSSetShader(shadowUpdateShader, nullptr, 0);
 	globals::profiler->BeginPass("TerrainShadows::ShadowUpdate");
 	context->Dispatch(abs(shadowUpdateCBData.LightPxDir.x) >= abs(shadowUpdateCBData.LightPxDir.y) ? height : width, 1, 1);
 	globals::profiler->EndPass();

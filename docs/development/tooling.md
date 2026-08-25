@@ -85,6 +85,19 @@ SSH identity as the superproject.
 the launcher process. `tools/dev-doctor.ps1` validates both `vcpkg.exe` and the
 toolchain file instead of treating CMake alone as a complete build toolchain.
 
+The launchers keep vcpkg downloads, registries, and binary archives in the
+shared `csx-tools/vcpkg` directory under Git's common directory. This avoids
+depending on a writable user-profile cache in isolated environments and lets
+worktrees share immutable package artifacts. Explicit `VCPKG_DOWNLOADS`,
+`X_VCPKG_REGISTRIES_CACHE`, and `VCPKG_DEFAULT_BINARY_CACHE` values are
+preserved. The doctor verifies that every active cache path is writable.
+
+In a Codex sandbox, the launcher also routes vcpkg assets through the managed
+Python TLS stack because the native Windows downloader cannot access the
+interactive user's Schannel credentials. This fallback is not enabled for
+normal developer sessions and never replaces an explicit
+`X_VCPKG_ASSET_SOURCES` setting.
+
 ## Recovery
 
 Run the doctor before changing global configuration or deleting caches:

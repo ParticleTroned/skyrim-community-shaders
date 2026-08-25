@@ -248,25 +248,6 @@ public:
 
 	Settings settings;
 
-	enum class HMDMaskImplementationMode : uint8_t
-	{
-		// These values are mirrored by ClearHMDMaskCS.hlsl's quality-audit
-		// candidate constants; keep them explicit as a shader ABI.
-		RobustDepth5x5 = 0,
-		SparseDepth9 = 1,
-		ExactReusableMask = 2,
-		TiledExact5x5 = 3
-	};
-
-	/** @return The production HAM mode or a DevBench override. */
-	[[nodiscard]] HMDMaskImplementationMode GetHMDMaskImplementationMode() const noexcept;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	/** @return The stable DevBench name for a HAM implementation mode. */
-	static const char* GetHMDMaskImplementationModeName(HMDMaskImplementationMode a_mode) noexcept;
-	/** Selects a live HAM mode for a controlled DevBench comparison. */
-	bool SetHMDMaskImplementationMode(HMDMaskImplementationMode a_mode, const char* a_reason = nullptr);
-#endif
-
 	/** @brief One unconditional Interior or Exterior CSX profile from VRFpsStabilizer.ini. */
 	struct VRFpsStabilizerProfile
 	{
@@ -1392,9 +1373,7 @@ public:
 		bool a_openVRAttempt,
 		const VRRenderScalePresentationObservation* a_presentationObservation = nullptr) noexcept;
 	void CompleteVRLoadPresentationProbeSubmit(uint64_t a_sequence, vr::EVRCompositorError a_result) noexcept;
-	bool StartVRHMDMaskQualityCapture(uint32_t a_maxFrames);
-	bool StopVRHMDMaskQualityCapture();
-	bool ResetVRHMDMaskDiagnostics();
+	void ResetVRHMDMaskDiagnostics();
 	json BuildVRHMDMaskDiagnosticsStatus();
 #endif
 	/** @brief Returns a stable diagnostic name for a controller state. */
@@ -1814,80 +1793,13 @@ public:
 	winrt::com_ptr<ID3D11BlendState> vrMenuLayerCaptureBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
 
-	// Shared VR HMD Mask Clearing
-	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskSparseCS;
-	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskRobustCS;
+	// Shared VR HMD mask clearing
+	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskCS;
 	winrt::com_ptr<ID3D11Buffer> vrClearHMDMaskCB;
-	bool vrClearHMDMaskRobustCompileAttempted = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	std::optional<HMDMaskImplementationMode> vrHMDMaskAutomationOverride;
-	std::atomic<uint64_t> vrHMDMaskInputRobustDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskInputSparseDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskFinalRobustDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskFinalSparseDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskVerifiedRobustDispatches{ 0 };
-	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskTiledCS;
-	winrt::com_ptr<ID3D11ComputeShader> vrBuildExactHMDMaskCS;
-	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskFromExactCS;
-	bool vrHMDMaskTiledCompileAttempted = false;
-	bool vrHMDMaskExactCompileAttempted = false;
-	winrt::com_ptr<ID3D11Device> vrExactHMDMaskDevice;
-	eastl::unique_ptr<Texture2D> vrExactHMDMask[2];
-	struct VRExactHMDMaskState
-	{
-		uint32_t frame = 0;
-		uintptr_t depthIdentity = 0;
-		uint32_t depthWidth = 0;
-		uint32_t depthHeight = 0;
-		uint32_t depthOffsetX = 0;
-		uint32_t depthOffsetY = 0;
-		bool valid = false;
-	};
-	VRExactHMDMaskState vrExactHMDMaskState[2]{};
-	std::atomic<uint64_t> vrHMDMaskExactBuildAttempts{ 0 };
-	std::atomic<uint64_t> vrHMDMaskExactBuildSuccesses{ 0 };
-	std::atomic<uint64_t> vrHMDMaskExactBuildFailures{ 0 };
-	std::atomic<uint64_t> vrHMDMaskExactInputDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskExactFinalDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskExactFinalFallbacks{ 0 };
-	std::atomic<uint64_t> vrHMDMaskInputTiledDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskFinalTiledDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskTiledFallbacks{ 0 };
-	static constexpr uint32_t kVRHMDMaskQualityCounterCount = 23;
-	winrt::com_ptr<ID3D11Device> vrHMDMaskQualityDevice;
-	winrt::com_ptr<ID3D11ComputeShader> vrHMDMaskQualityCS;
-	winrt::com_ptr<ID3D11ComputeShader> vrHMDMaskTiledQualityCS;
-	winrt::com_ptr<ID3D11Buffer> vrHMDMaskQualityCounterBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> vrHMDMaskQualityCounterUAV;
-	winrt::com_ptr<ID3D11Buffer> vrHMDMaskQualityReadbackBuffer;
-	winrt::com_ptr<ID3D11Query> vrHMDMaskQualityReadbackQuery;
-	std::recursive_mutex vrHMDMaskQualityMutex;
-	std::atomic_bool vrHMDMaskQualityActive{ false };
-	std::atomic_bool vrHMDMaskQualityReadbackPending{ false };
-	uint64_t vrHMDMaskQualityCaptureID = 0;
-	uint32_t vrHMDMaskQualityFrameLimit = 0;
-	uint32_t vrHMDMaskQualityCapturedFrames = 0;
-	uint32_t vrHMDMaskQualityLastFrame = 0;
-	uint32_t vrHMDMaskQualityCurrentFrameEyeMask = 0;
-	uint64_t vrHMDMaskQualitySkippedDispatches = 0;
-	HMDMaskImplementationMode vrHMDMaskQualityMode = HMDMaskImplementationMode::RobustDepth5x5;
-	std::array<uint32_t, kVRHMDMaskQualityCounterCount> vrHMDMaskQualityResults{};
-	bool vrHMDMaskQualityResultsValid = false;
-	bool EnsureVRHMDMaskQualityResources() noexcept;
-	void DispatchVRHMDMaskQualityAudit(
-		uint32_t a_eyeIndex,
-		HMDMaskImplementationMode a_actualMode,
-		ID3D11ShaderResourceView* a_depthSRV,
-		uint32_t a_depthWidth,
-		uint32_t a_depthHeight,
-		uint32_t a_colorWidth,
-		uint32_t a_colorHeight,
-		uint32_t a_depthOffsetX,
-		uint32_t a_depthOffsetY,
-		ID3D11ShaderResourceView* a_exactMaskSRV = nullptr) noexcept;
-	void FinalizeVRHMDMaskQualityCapture() noexcept;
-	void ServiceVRHMDMaskQualityReadback() noexcept;
-	void ResetVRHMDMaskQualityResources() noexcept;
+	std::atomic<uint64_t> vrHMDMaskInputDispatches{ 0 };
+	std::atomic<uint64_t> vrHMDMaskFinalDispatches{ 0 };
+	std::atomic<uint64_t> vrHMDMaskRejectedDispatches{ 0 };
 #endif
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -3029,14 +2941,7 @@ private:
 	bool DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,
-		bool a_verifyBindings = false, uint32_t a_eyeIndex = std::numeric_limits<uint32_t>::max(),
-		bool a_forceRobustDepthKernel = false, bool a_finalEyeDispatch = false);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	bool EnsureExactHMDMaskTexture(uint32_t a_eyeIndex, uint32_t a_width, uint32_t a_height);
-	bool BuildExactHMDMaskAndSanitizeInput(uint32_t a_eyeIndex, ID3D11UnorderedAccessView* a_colorUAV,
-		ID3D11ShaderResourceView* a_depthSRV, uint32_t a_depthWidth, uint32_t a_depthHeight,
-		uint32_t a_colorWidth, uint32_t a_colorHeight, uint32_t a_depthOffsetX, uint32_t a_depthOffsetY = 0);
-#endif
+		bool a_verifyBindings = false, bool a_finalDispatch = false);
 	void TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
 	void ServiceSubmitStageVendorResumePromotion(uint64_t a_compositorCycleToken);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);

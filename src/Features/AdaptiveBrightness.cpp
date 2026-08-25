@@ -1134,7 +1134,7 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 	ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
-		ImGui::Text("Each profile defines its own scene brightness, Bloom, and Unified Water appearance.");
+		ImGui::Text("Each profile defines its own scene brightness, Bloom, and water appearance.");
 	}
 
 	if (settings.enabled) {
@@ -1153,7 +1153,7 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and Unified Water appearance used for each time and location type. Worldspace, location, and cell overrides are managed under Locations.");
+			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Worldspace, location, and cell overrides are managed under Locations.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
 

@@ -914,14 +914,12 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	}
 #			endif
 
-#			if defined(UNIFIED_WATER)
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 	{
 		float waveAmplitude = SharedData::waterAppearanceSettings.WaveAmplitude;
 		if (waveAmplitude != 1.0)
 			finalNormal = normalize(lerp(float3(0, 0, 1), finalNormal, waveAmplitude));
 	}
-#			endif
 
 	result.normal = finalNormal;
 	return result;
@@ -955,6 +953,7 @@ float GetWaterReflectionHeightFade(uint eyeIndex)
 float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection,
 	float distanceFactor, float refractionsDepthFactor, uint eyeIndex = 0)
 {
+	float3 specularColor = ReflectionColor.xyz * VarAmounts.y;
 	if (Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections) {
 		float3 finalSsrReflectionColor = 0.0.xxx;
 		float ssrFraction = 0.0;
@@ -1044,15 +1043,15 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 
 		float3 finalReflectionColor = Color::IrradianceToGamma(lerp(Color::IrradianceToLinear(reflectionColor), Color::IrradianceToLinear(finalSsrReflectionColor), ssrFraction));
 		if (SharedData::lodBlendingSettings.WaterReflectionStrength < 0.0) {
-			return finalReflectionColor;
+			specularColor = finalReflectionColor;
+		} else {
+			float waterReflectionStrength = VarAmounts.y * SharedData::lodBlendingSettings.WaterReflectionStrength;
+			waterReflectionStrength = lerp(1.0, waterReflectionStrength, GetWaterReflectionHeightFade(eyeIndex));
+			waterReflectionStrength = saturate(waterReflectionStrength);
+			specularColor = lerp(ReflectionColor.xyz, finalReflectionColor, waterReflectionStrength);
 		}
-
-		float waterReflectionStrength = VarAmounts.y * SharedData::lodBlendingSettings.WaterReflectionStrength;
-		waterReflectionStrength = lerp(1.0, waterReflectionStrength, GetWaterReflectionHeightFade(eyeIndex));
-		waterReflectionStrength = saturate(waterReflectionStrength);
-		return lerp(ReflectionColor.xyz, finalReflectionColor, waterReflectionStrength);
 	}
-	return ReflectionColor.xyz * VarAmounts.y;
+	return specularColor;
 }
 
 float GetRawScreenDepthWater(float2 screenPosition)
@@ -1094,16 +1093,15 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 #			endif
 	float viewAngle = 1 - saturate(dot(-viewDirection, actualNormal));
 	float vanillaFresnel = (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
-#			if defined(UNIFIED_WATER)
+	float fresnel = vanillaFresnel;
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 	{
-		return lerp(
+		fresnel = lerp(
 			SharedData::waterAppearanceSettings.FresnelMin,
 			SharedData::waterAppearanceSettings.FresnelMax,
 			vanillaFresnel);
 	}
-#			endif
-	return vanillaFresnel;
+	return fresnel;
 }
 
 #			if defined(UNIFIED_WATER)
@@ -1119,16 +1117,17 @@ float3 ApplyUnifiedWaterBaseTint(float3 baseColor)
 	}
 	return tintedColor;
 }
+#			endif
 
-float3 ApplyUnifiedWaterBrightness(float3 waterColor)
+float3 ApplyWaterAppearanceBrightness(float3 waterColor)
 {
+	float3 adjustedColor = waterColor;
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 	{
-		return waterColor * SharedData::waterAppearanceSettings.WaterBrightness;
+		adjustedColor *= SharedData::waterAppearanceSettings.WaterBrightness;
 	}
-	return waterColor;
+	return adjustedColor;
 }
-#			endif
 
 #			if defined(UNIFIED_WATER) && defined(DEPTH) && (!defined(VERTEX_ALPHA_DEPTH) || defined(VR)) && !defined(UNDERWATER) && !defined(LOD)
 #				define UNIFIED_WATER_SHALLOW_FALLBACK
@@ -1591,7 +1590,6 @@ DiffuseOutput GetWaterDiffuseColor(
 {
 #			if defined(REFRACTIONS)
 	float2 refractionOffset = VarAmounts.w * refractionsDepthFactor * normal.xy;
-#				if defined(UNIFIED_WATER)
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 	{
 		refractionOffset =
@@ -1600,7 +1598,6 @@ DiffuseOutput GetWaterDiffuseColor(
 			refractionsDepthFactor *
 			normal.xy;
 	}
-#				endif
 	float4 refractionNormal = mul(
 		transpose(TextureProj[eyeIndex]),
 		float4(
@@ -1743,10 +1740,8 @@ float3 GetSunColor(float3 normal, float3 viewDirection)
 
 	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 sunSpecular = reflectionMul * Color::DirectionalLight((SunColor.xyz * SunDir.w) / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * (1.0 - exp(-DeepColor.w)) * llDirLightMult;
-#				if defined(UNIFIED_WATER)
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 		sunSpecular *= SharedData::waterAppearanceSettings.SunSpecularMultiplier;
-#				endif
 	return sunSpecular;
 #			endif
 }
@@ -1907,7 +1902,8 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(SPECULAR) && (NUM_SPECULAR_LIGHTS != 0)
 	float3 finalColor = 0.0.xxx;
 
-	for (int lightIndex = 0; lightIndex < NUM_SPECULAR_LIGHTS; ++lightIndex) {
+	[unroll] for (int lightIndex = 0; lightIndex < NUM_SPECULAR_LIGHTS; ++lightIndex)
+	{
 		float3 lightVector = LightPos[lightIndex].xyz - (PosAdjust[eyeIndex].xyz + input.WPosition.xyz);
 		float3 lightDirection = normalize(normalize(lightVector) - viewDirection);
 		float lightFade = saturate(length(lightVector) / LightPos[lightIndex].w);
@@ -1920,9 +1916,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 	finalColor *= fresnel;
-#				if defined(UNIFIED_WATER)
-	finalColor = ApplyUnifiedWaterBrightness(finalColor);
-#				endif
+	finalColor = ApplyWaterAppearanceBrightness(finalColor);
 #				if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override specular color with debug visualization
 	float3 debugColor = CS_GET_DEBUG_WETNESS_COLOR_SPECULAR(waterData.rippleInfo, 2.5, 4.0);
@@ -1939,13 +1933,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.HPosition.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
 
 	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, depthControl.y, eyeIndex);
-#				if defined(UNIFIED_WATER)
 	// LOD Blending chooses the height-faded reflection source inside
 	// GetWaterSpecularColor. Apply the independent global amount only after that
 	// blend has completed, so neither setting changes the other's interpolation.
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 		specularColor *= SharedData::waterAppearanceSettings.GlobalReflectionAmount;
-#				endif
 	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(
 		input,
 		normal,
@@ -1965,7 +1957,7 @@ PS_OUTPUT main(PS_INPUT input)
 	// shallow-fallback coverage.
 	float nativeRefractionMul = diffuseOutput.refractionMul;
 #				endif
-#				if defined(UNIFIED_WATER) && defined(REFRACTIONS)
+#				if defined(REFRACTIONS)
 	[branch] if (SharedData::waterAppearanceSettings.Enabled)
 	{
 		diffuseOutput.refractionMul = saturate(
@@ -2114,9 +2106,7 @@ PS_OUTPUT main(PS_INPUT input)
 #				if defined(UNDERWATER)
 	float3 finalSpecularColor = lerp(Color::Water(ShallowColor.xyz), specularColor, 0.5);
 	float3 finalColor = saturate(1 - length(input.WPosition.xyz) * 0.002) * ((1 - fresnel) * (diffuseColor - finalSpecularColor)) + finalSpecularColor;
-#					if defined(UNIFIED_WATER)
-	finalColor = ApplyUnifiedWaterBrightness(finalColor);
-#					endif
+	finalColor = ApplyWaterAppearanceBrightness(finalColor);
 	// Add ripple and splash color effects for underwater
 #					if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override water color with debug visualization (darker for underwater)
@@ -2231,9 +2221,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 finalColor = lerp(finalColorPreFog, fogColor * PosAdjust[eyeIndex].w, Color::FogAlpha(fogDistanceFactor));
 
-#						if defined(UNIFIED_WATER)
-	finalColor = ApplyUnifiedWaterBrightness(finalColor);
-#						endif
+	finalColor = ApplyWaterAppearanceBrightness(finalColor);
 
 #						if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override water color with debug visualization
@@ -2283,9 +2271,7 @@ PS_OUTPUT main(PS_INPUT input)
 		finalColorPreFog,
 		shallowSurfaceLayerWeight);
 #						endif
-#						if defined(UNIFIED_WATER)
-	finalColor = ApplyUnifiedWaterBrightness(finalColor);
-#						endif
+	finalColor = ApplyWaterAppearanceBrightness(finalColor);
 #						if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override water color with debug visualization
 	float3 debugColor = CS_GET_DEBUG_WETNESS_COLOR_STANDARD(waterData.rippleInfo, 2.0, 3.0);

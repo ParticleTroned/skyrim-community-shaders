@@ -1636,6 +1636,16 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_menu_positioning_policy_test.cpp
     )
 
+    add_controller_test(
+        water_appearance_migration_test
+        WaterAppearanceMigration
+        tests/water_appearance_migration_test.cpp
+    )
+    target_link_libraries(
+        water_appearance_migration_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     add_executable(
         api_runtime_thread_affinity_test
         EXCLUDE_FROM_ALL
@@ -1793,6 +1803,7 @@ if(BUILD_CONTROLLER_TESTS)
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test
+            water_appearance_migration_test
             api_runtime_thread_affinity_test
             api_service_foundation_test
             api_service_registry_test

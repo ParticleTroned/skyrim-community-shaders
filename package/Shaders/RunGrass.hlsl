@@ -502,7 +502,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 #		endif  // SCREEN_SPACE_SHADOWS
 
 		if (dirShadow != 0.0)
-			dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition, FrameBuffer::CameraPosAdjust[eyeIndex], eyeIndex);
+			dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
 #		if defined(WATER_LIGHTING)
 		if (dirShadow > 0.0) {
@@ -516,7 +516,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	float3 directionalLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * dirDetailShadow * llDirLightMult;
 	float3 diffuseColor = directionalLightColor;
 
-	float3 normal = -normalize(cross(ddx_coarse(input.WorldPosition), ddy_coarse(input.WorldPosition)));
+	float3 normal = -normalize(cross(ddx_coarse(input.WorldPosition.xyz), ddy_coarse(input.WorldPosition.xyz)));
 	float3 viewDirection = -input.WorldPosition.xyz * rsqrt(max(dot(input.WorldPosition.xyz, input.WorldPosition.xyz), 1e-8f));
 	float3 foliageNormal = normal;
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GrassSphereNormal) && !frontFace)
@@ -541,17 +541,17 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
-#				if defined(ISL)
+#			if defined(ISL)
 				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
 				if (intensityMultiplier < 1e-5)
 					continue;
-#				else
+#			else
 				float intensityFactor = saturate(lightDist / light.radius);
 				if (intensityFactor == 1)
 					continue;
 
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#				endif
+#			endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
@@ -666,8 +666,7 @@ float GetWrappedDiffuseMultiplier(float angle, float wrapAmount, bool useWrapped
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
-	[branch] if (!SharedData::grassLightingSettings.Enabled)
-		return RenderBasicGrass(input, frontFace);
+	[branch] if (!SharedData::grassLightingSettings.Enabled) return RenderBasicGrass(input, frontFace);
 
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 

@@ -11,6 +11,7 @@
 #include "Api/FeatureService.h"
 #include "Api/ShaderDevBenchBridge.h"
 #include "BuildProvenance.h"
+#include "Compatibility.h"
 #include "Deferred.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -213,7 +214,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		{
 			for (auto it = errors.begin(); it != errors.end(); ++it) {
 				auto& errorMessage = *it;
-				RE::DebugMessageBox(std::format("CSX\n{}, will disable all hooks and features", errorMessage).c_str());
+				RE::DebugMessageBox(std::format("CSX\n{}\nAll hooks and features are disabled.", errorMessage).c_str());
 			}
 
 			if (errors.empty()) {
@@ -357,28 +358,19 @@ bool Load()
 	auto log = spdlog::default_logger();
 	log->set_level(state->GetLogLevel());
 
-	const std::array incompatibleDLLs = {
-		L"Data/SKSE/Plugins/ShaderTools.dll",
-		L"Data/SKSE/Plugins/SSEShaderTools.dll",
-		L"Data/SKSE/Plugins/SkyrimUpscaler.dll",
-		L"Data/SKSE/Plugins/EVLaS.dll",
-		L"Data/SKSE/Plugins/AELAS.dll",
-		L"Data/SKSE/Plugins/SSEReShadeHelper.dll",
-		L"Data/SKSE/Plugins/TAASharpen.dll",
-		L"Data/SKSE/Plugins/NVIDIA_Reflex.dll",
-		L"Data/SKSE/Plugins/MARA.dll"
-	};
-
-	for (const auto dll : incompatibleDLLs) {
-		if (LoadLibrary(dll)) {
-			auto errorMessage = std::format("Incompatible DLL {} detected", stl::utf16_to_utf8(dll).value_or("<unicode conversion error>"s));
+	for (const auto& plugin : Compatibility::incompatiblePlugins) {
+		if (LoadLibrary(plugin.dll)) {
+			auto dllName = stl::utf16_to_utf8(plugin.dll).value_or("<unicode conversion error>"s);
+			auto errorMessage = plugin.reason.empty() ?
+			                        std::format("Incompatible DLL {} detected. Remove it to use CSX.", dllName) :
+			                        std::format("Incompatible DLL {} detected ({}). Remove it to use CSX.", dllName, plugin.reason);
 			logger::error("{}", errorMessage);
 			errors.push_back(errorMessage);
 		}
 	}
 
 	auto pushMissingDllError = [&](std::string_view dllName) {
-		auto errorMessage = std::format("Required DLL {} was missing", dllName);
+		auto errorMessage = std::format("Required DLL {} was missing. Install it to use CSX.", dllName);
 		logger::error("{}", errorMessage);
 		errors.push_back(errorMessage);
 	};

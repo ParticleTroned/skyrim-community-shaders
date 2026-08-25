@@ -4,6 +4,7 @@
 #include <atomic>
 #include <efsw/efsw.hpp>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -164,6 +165,8 @@ namespace SIE
 		int GetPriority() const { return cachedPriority; }
 		void SetEnqueuedQpc(int64_t qpc) { enqueuedQpc = qpc; }
 		int64_t GetEnqueuedQpc() const { return enqueuedQpc; }
+		void SetGeneration(uint64_t a_generation) { generation = a_generation; }
+		uint64_t GetGeneration() const { return generation; }
 
 		bool operator==(const ShaderCompilationTask& other) const;
 
@@ -176,6 +179,7 @@ namespace SIE
 		static int ComputePriority(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
 		int cachedPriority;
 		int64_t enqueuedQpc = 0;
+		uint64_t generation = 0;
 	};
 }
 
@@ -228,6 +232,7 @@ namespace SIE
 		void Complete(const ShaderCompilationTask& task);
 		void MarkPhaseStarted();
 		void Clear();
+		void BumpGeneration() { generation.fetch_add(1, std::memory_order_release); }
 		bool IsInProgress(size_t a_taskId);
 		void Forget(const std::unordered_set<size_t>& a_taskIds);
 		static std::string GetHumanTime(double a_totalMs);
@@ -247,6 +252,7 @@ namespace SIE
 		std::atomic<uint64_t> totalPriorityWeight = 0;      // sum of (GetPriority()+1) for all queued tasks
 		std::atomic<uint64_t> completedPriorityWeight = 0;  // sum of (GetPriority()+1) for completed/failed tasks
 		std::atomic<uint32_t> heavyTasksInFlight = 0;       // number of dispatched heavy (>= kHeavyPriorityThreshold) tasks still running
+		std::atomic<uint64_t> generation = 0;               // bumped by Clear(); tags tasks so stale workers cannot republish
 		std::mutex compilationMutex;
 
 		/// Per-task timing record stored for post-mortem analysis and developer UI.
@@ -299,6 +305,7 @@ namespace SIE
 		ShaderCompilationTask::Status status;
 		system_clock::time_point compileTime = system_clock::now();
 		bool loadedFromDisk = false;  ///< true when the shader blob was read from the disk cache rather than compiled
+		uint64_t generation = 0;
 	};
 
 	class UpdateListener;
@@ -429,14 +436,17 @@ namespace SIE
 			ID3DBlob* a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
-			bool fromDisk = false);
+			bool fromDisk = false,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		enum class ClaimResult
 		{
 			CacheHit,  // Already compiled; use the returned blob
 			Claimed    // Claimed as Pending; caller must compile and call AddCompletedShader
 		};
-		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key);
+		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(
+			const std::string& key,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		void ResolvePendingFailure(const std::string& key);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
@@ -453,11 +463,14 @@ namespace SIE
 			uint32_t descriptor);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
 
@@ -769,6 +782,12 @@ namespace SIE
 		HANDLE managementThread = nullptr;
 
 	private:
+		bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const
+		{
+			return a_taskGeneration &&
+			       *a_taskGeneration != compilationSet.generation.load(std::memory_order_acquire);
+		}
+
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
 		void EvictShader(
 			const std::string& a_key,

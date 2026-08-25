@@ -38354,7 +38354,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	return true;
 }
 
-bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
+bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool protectPostProcessInput, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
 {
 	if (!globals::game::isVR || eyeIndex >= 2)
 		return false;
@@ -38501,7 +38501,9 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	}
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	if (depthTexture.depthSRV) {
+	// Filtered post-processing can sample hidden pixels; direct outputs are
+	// cleared after menu composition at the final submission boundary.
+	if (protectPostProcessInput && depthTexture.depthSRV) {
 		ClearHMDMaskForEye(
 			HMDMaskClearPhase::SubmitStageFoveatedOutput,
 			eyeIndex,
@@ -47388,6 +47390,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					eyeHeightIn,
 					eyeWidthOut,
 					eyeHeightOut,
+					submitDLSSSharpening,
 					vendorColorOutput->resource.get(),
 					vendorColorOutput->uav.get(),
 					sourceSubresource,

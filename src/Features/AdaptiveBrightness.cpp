@@ -49,7 +49,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	fogAlphaGammaOffset,
 	waterGammaOffset,
 	vlGammaOffset,
-	bloom)
+	bloom,
+	water)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::LocationOverride,
@@ -101,7 +102,7 @@ namespace
 
 	constexpr const char* kOverrideTypeLocation = "Location";
 	constexpr const char* kOverrideTypeCell = "Cell";
-	constexpr const char* kPresetVersion = "3.0.0";
+	constexpr const char* kPresetVersion = "4.0.0";
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
 	constexpr std::string_view kPresetDirectoryName = "AdaptiveBalance";
@@ -476,6 +477,7 @@ namespace
 		a_profile.waterGammaOffset = ClampGammaOffset(a_profile.waterGammaOffset);
 		a_profile.vlGammaOffset = ClampGammaOffset(a_profile.vlGammaOffset);
 		Bloom::SanitizeProfile(a_profile.bloom);
+		WaterAppearance::SanitizeProfile(a_profile.water);
 	}
 
 	void NormalizeBaseProfiles(std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>& a_profiles)
@@ -769,8 +771,8 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
 	ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Blend the active lighting, atmosphere, and Bloom profile by location and exterior time.");
-		ImGui::Text("%s", T(TKEY("profile_direct_controls_tooltip"), "Each profile defines its own scene brightness and Bloom amount directly."));
+		ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
+		ImGui::Text("%s", T(TKEY("profile_direct_controls_tooltip"), "Each profile defines its own scene brightness, Bloom, and Unified Water appearance."));
 	}
 
 	if (settings.enabled) {
@@ -789,7 +791,7 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			ImGui::TextWrapped("Tune the lighting, atmosphere, and Bloom used for each time and location type.");
+			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and Unified Water appearance used for each time and location type.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
 
@@ -844,7 +846,7 @@ void AdaptiveBrightness::DrawEssentialSettings()
 	ImGui::Checkbox(T(TKEY("global_lighting_enabled"), "Enable Global Lighting Calibration"), &settings.globalLightingEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("global_lighting_enabled_tooltip"), "Applies the shared lighting baseline before the active profile."));
-		ImGui::Text("%s", T(TKEY("global_lighting_independence_tooltip"), "Scene brightness and Bloom profiles remain active when this is off."));
+		ImGui::Text("%s", T(TKEY("global_lighting_independence_tooltip"), "Scene brightness, Bloom, and water appearance profiles remain active when this is off."));
 	}
 
 	if (!settings.enabled)
@@ -1020,53 +1022,69 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 	ImGui::SeparatorText(a_sectionTitle);
 	ImGui::Indent();
 	ImGui::BeginDisabled(!a_allowEdits);
-	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
-	Bloom::DrawProfileControls(a_profile.bloom);
-	ImGui::EndDisabled();
 
 	if (!a_showAdvancedControls) {
+		drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
+		Bloom::DrawProfileControls(a_profile.bloom);
+		ImGui::EndDisabled();
 		ImGui::Unindent();
 		ClampProfileSettings(a_profile);
 		return;
 	}
 
-	ImGui::BeginDisabled(!a_allowEdits);
-	ImGui::Checkbox("Use Detailed Lighting Adjustments", &a_profile.advanced);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enables the detailed lighting and atmosphere values for this profile only.");
-	}
-	if (a_profile.advanced) {
-		ImGui::Indent();
-		ImGui::SeparatorText("Direct Lighting");
-		ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, 2.0f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Contextual multiplier applied to the global Sky Brightness value. This is separate from Sky Gamma.");
-		ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
+	if (ImGui::BeginTabBar("##ProfileControlSections", ImGuiTabBarFlags_None)) {
+		if (ImGui::BeginTabItem("Lighting")) {
+			drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
 
-		ImGui::SeparatorText("Indirect and Material Lighting");
-		ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, 3.0f, "%.2f");
+			ImGui::Checkbox("Use Detailed Lighting Adjustments", &a_profile.advanced);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Enables the detailed lighting and atmosphere values for this profile only.");
+			if (a_profile.advanced) {
+				ImGui::Indent();
+				ImGui::SeparatorText("Direct Lighting");
+				ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, 2.0f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Contextual multiplier applied to the global Sky Brightness value. This is separate from Sky Gamma.");
+				ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
+				ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
 
-		ImGui::SeparatorText("Atmosphere Gamma Offsets");
-		ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::SliderFloat("Water", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-		ImGui::Unindent();
-	}
+				ImGui::SeparatorText("Indirect and Material Lighting");
+				ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, 3.0f, "%.2f");
+				ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, 3.0f, "%.2f");
+				ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, 3.0f, "%.2f");
+				ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, 3.0f, "%.2f");
 
-	ImGui::Checkbox(T(TKEY("bloom.detailed"), "Show Detailed Bloom Controls"), &a_profile.bloomAdvanced);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Shows detailed Bloom shaping for this profile. Editing a detailed value activates Bloom at strength 1 if it is currently off; the Bloom slider and presets remain available either way."));
-	if (a_profile.bloomAdvanced) {
-		ImGui::Indent();
-		if (Bloom::DrawAdvancedProfileSettings(a_profile.bloom) && a_profile.bloom.EnhancementIntensity <= 0.0f)
-			a_profile.bloom.EnhancementIntensity = 1.0f;
-		ImGui::Unindent();
+				ImGui::SeparatorText("Atmosphere Gamma Offsets");
+				ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SliderFloat("Water", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+				ImGui::Unindent();
+			}
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Bloom")) {
+			Bloom::DrawProfileControls(a_profile.bloom);
+			ImGui::Checkbox(T(TKEY("bloom.detailed"), "Show Detailed Bloom Controls"), &a_profile.bloomAdvanced);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Shows detailed Bloom shaping for this profile. Editing a detailed value activates Bloom at strength 1 if it is currently off; the Bloom slider and presets remain available either way."));
+			if (a_profile.bloomAdvanced) {
+				ImGui::Indent();
+				if (Bloom::DrawAdvancedProfileSettings(a_profile.bloom) && a_profile.bloom.EnhancementIntensity <= 0.0f)
+					a_profile.bloom.EnhancementIntensity = 1.0f;
+				ImGui::Unindent();
+			}
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Water")) {
+			WaterAppearance::DrawProfileControls(a_profile.water);
+			ImGui::EndTabItem();
+		}
+
+		ImGui::EndTabBar();
 	}
 	ImGui::EndDisabled();
 
@@ -1079,7 +1097,7 @@ void AdaptiveBrightness::DrawGlobalRendererSettings()
 	ImGui::Checkbox(T(TKEY("global_lighting_enabled"), "Enable Global Lighting Calibration"), &settings.globalLightingEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("global_lighting_detailed_tooltip"), "Applies the shared lighting baseline before each profile's detailed lighting adjustments."));
-		ImGui::Text("%s", T(TKEY("global_lighting_independence_detailed_tooltip"), "Profile brightness and Bloom remain active when this is off."));
+		ImGui::Text("%s", T(TKEY("global_lighting_independence_detailed_tooltip"), "Profile brightness, Bloom, and water appearance remain active when this is off."));
 	}
 	if (!settings.globalLightingEnabled)
 		ImGui::TextDisabled("%s", T(TKEY("global_lighting_inactive"), "Global lighting calibration is currently inactive."));
@@ -1108,7 +1126,7 @@ void AdaptiveBrightness::DrawGlobalRendererSettings()
 void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText(T(TKEY("presets.global_description"), "Global presets store global light calibration, the five profiles (including Bloom), and exterior timing."));
+	DrawHintText(T(TKEY("presets.global_description"), "Global presets store global light calibration, the five profiles (including Bloom and water appearance), and exterior timing."));
 	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
 	ImGui::PushID("GlobalPresetControls");
 
@@ -1120,7 +1138,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("presets.global_export_tooltip"), "Export global lighting calibration, exterior timing, and the five profiles with their Bloom settings. Location overrides are not included."));
+		ImGui::Text("%s", T(TKEY("presets.global_export_tooltip"), "Export global lighting calibration, exterior timing, and the five profiles with their Bloom and water appearance settings. Location overrides are not included."));
 	}
 
 	ImGui::SameLine();
@@ -1128,7 +1146,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("presets.global_import_tooltip"), "Replace global lighting calibration, exterior timing, and the five profiles with their Bloom settings. Saved location overrides stay unchanged."));
+		ImGui::Text("%s", T(TKEY("presets.global_import_tooltip"), "Replace global lighting calibration, exterior timing, and the five profiles with their Bloom and water appearance settings. Saved location overrides stay unchanged."));
 	}
 
 	if (!globalPresetStatus.empty())
@@ -1450,7 +1468,7 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 void AdaptiveBrightness::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
-	DrawHintText(T(TKEY("presets.full_description"), "Full presets store global lighting calibration, exterior timing, the five profiles with their Bloom settings, and all saved location overrides."));
+	DrawHintText(T(TKEY("presets.full_description"), "Full presets store global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and all saved location overrides."));
 	DrawHintText("Import replaces the profile tabs and the saved override list in the current settings.");
 	ImGui::PushID("FullPresetControls");
 
@@ -1462,7 +1480,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ExportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("presets.full_export_tooltip"), "Export global lighting calibration, exterior timing, the five profiles with their Bloom settings, and all saved overrides."));
+		ImGui::Text("%s", T(TKEY("presets.full_export_tooltip"), "Export global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and all saved overrides."));
 	}
 
 	ImGui::SameLine();
@@ -1470,7 +1488,7 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ImportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("presets.full_import_tooltip"), "Replace global lighting calibration, exterior timing, the five profiles with their Bloom settings, and the saved override list."));
+		ImGui::Text("%s", T(TKEY("presets.full_import_tooltip"), "Replace global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and the saved override list."));
 	}
 
 	if (!fullPresetStatus.empty())
@@ -2210,6 +2228,24 @@ Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 	const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
 	const auto effectiveProfile = Bloom::LerpProfiles(fromProfile, toProfile, t);
 	return Bloom::GetCommonBufferData(effectiveProfile, 1.0f);
+}
+
+WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSettings() const
+{
+	if (!IsRuntimeEnabled())
+		return WaterAppearance::GetCommonBufferData(WaterAppearance::Profile{});
+
+	const auto activeProfiles = GetActiveProfileBlend();
+	auto fromProfile = activeProfiles.from->water;
+	WaterAppearance::SanitizeProfile(fromProfile);
+	if (activeProfiles.from == activeProfiles.to)
+		return WaterAppearance::GetCommonBufferData(fromProfile);
+
+	auto toProfile = activeProfiles.to->water;
+	WaterAppearance::SanitizeProfile(toProfile);
+	const float t = std::clamp(SafeFinite(activeProfiles.factor, 0.0f), 0.0f, 1.0f);
+	const auto effectiveProfile = WaterAppearance::LerpProfiles(fromProfile, toProfile, t);
+	return WaterAppearance::GetCommonBufferData(effectiveProfile);
 }
 
 AdaptiveBrightness::ActiveProfileBlend AdaptiveBrightness::GetActiveProfileBlend() const

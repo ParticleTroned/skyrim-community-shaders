@@ -13,6 +13,7 @@
 #include "Buffer.h"
 #include "LinearLighting.h"
 #include "SharedLighting.h"
+#include "WaterAppearance.h"
 
 namespace RE
 {
@@ -51,7 +52,7 @@ struct AdaptiveBrightness : Feature
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Optional per-location overrides with COC codes",
-				"Shared light calibration and per-profile Bloom controls" }
+				"Shared light calibration with per-profile Bloom and water appearance controls" }
 		};
 	}
 
@@ -90,6 +91,7 @@ struct AdaptiveBrightness : Feature
 		float vlGammaOffset = 0.0f;
 
 		Bloom::Profile bloom;
+		WaterAppearance::Profile water;
 	};
 
 	struct LocationOverride
@@ -231,6 +233,7 @@ struct AdaptiveBrightness : Feature
 		bool a_linearLightingEnabled) const;
 	SharedLightingSettings GetEffectiveSharedLightingSettings() const;
 	Bloom::Settings GetEffectiveBloomSettings() const;
+	WaterAppearance::Settings GetEffectiveWaterAppearanceSettings() const;
 
 	struct ActiveProfileBlend
 	{

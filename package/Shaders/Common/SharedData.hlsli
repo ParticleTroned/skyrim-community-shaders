@@ -362,13 +362,20 @@ namespace SharedData
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
 		float ShallowSurfaceReflectionFloor;
+	};
+
+	struct WaterAppearanceSettings
+	{
+		uint Enabled;
 		float WaterBrightness;
 		float GlobalReflectionAmount;
 		float RefractionAmount;
+
 		float SunSpecularMultiplier;
 		float WaveAmplitude;
 		float FresnelMin;
 		float FresnelMax;
+
 		float Muddiness;
 		float3 pad;
 	};
@@ -422,6 +429,7 @@ namespace SharedData
 		SkinData skinData;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		UnifiedWaterSettings unifiedWaterSettings;
+		WaterAppearanceSettings waterAppearanceSettings;
 		BloomSettings bloomSettings;
 	};
 

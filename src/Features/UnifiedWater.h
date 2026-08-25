@@ -25,27 +25,11 @@ struct UnifiedWater : OverlayFeature
 
 	struct Settings
 	{
-		static constexpr float kIdentityScale = 1.0f;
-		static constexpr float kIdentityFresnelMin = 0.0f;
-		static constexpr float kIdentityFresnelMax = 1.0f;
-
 		std::uint32_t SurfaceVisibilityModelVersion = 12;
 		bool UseOptimisedMeshes = true;
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
-		// These defaults are the identity values for their Water.hlsl operations:
-		// multiplicative controls use 1, and Fresnel remaps over the full [0, 1]
-		// range. Keep them neutral so merely installing the controls changes no
-		// existing water output.
-		float WaterBrightness = kIdentityScale;
-		float GlobalReflectionAmount = kIdentityScale;
-		float RefractionAmount = kIdentityScale;
-		float SunSpecularMultiplier = kIdentityScale;
-		float WaveAmplitude = kIdentityScale;
-		float FresnelMin = kIdentityFresnelMin;
-		float FresnelMax = kIdentityFresnelMax;
-		float Muddiness = kIdentityScale;
 		float ShallowFallbackStrength = 1.0f;
 		float DeepConnectionProbeReachUnits = 768.0f;
 		float DeepContextDepthUnits = 192.0f;
@@ -70,18 +54,10 @@ struct UnifiedWater : OverlayFeature
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
 		float ShallowSurfaceReflectionFloor;
-		float WaterBrightness;
-		float GlobalReflectionAmount;
-		float RefractionAmount;
-		float SunSpecularMultiplier;
-		float WaveAmplitude;
-		float FresnelMin;
-		float FresnelMax;
-		float Muddiness;
 		float3 _pad;
 	};
 	static_assert(alignof(CommonBufferData) == 16);
-	static_assert(sizeof(CommonBufferData) == 96);
+	static_assert(sizeof(CommonBufferData) == 64);
 
 	Settings settings;
 	CommonBufferData GetCommonBufferData() const;

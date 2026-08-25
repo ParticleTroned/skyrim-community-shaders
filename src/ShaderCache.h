@@ -6,6 +6,7 @@
 #include <deque>
 #include <efsw/efsw.hpp>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -318,9 +319,11 @@ namespace SIE
 		/** @brief Returns whether a task still belongs to the active compilation batch. */
 		bool IsCurrentGeneration(const ShaderCompilationTask& task) const
 		{
-			return task.GetGeneration() == generation.load(std::memory_order_relaxed);
+			return task.GetGeneration() == generation.load(std::memory_order_acquire);
 		}
 		void Clear();
+		/** @brief Invalidates active tasks before cache maps begin clearing. */
+		void BumpGeneration() { generation.fetch_add(1, std::memory_order_release); }
 		bool IsInProgress(size_t a_taskId);
 		void Forget(const std::unordered_set<size_t>& a_taskIds);
 		static std::string GetHumanTime(double a_totalMs);
@@ -402,6 +405,8 @@ namespace SIE
 		ShaderCompilationTask::Status status;
 		system_clock::time_point compileTime = system_clock::now();
 		bool loadedFromDisk = false;  ///< true when the shader blob was read from the disk cache rather than compiled
+		/** Generation that owns a Pending entry. Completed entries remain valid until cleared. */
+		uint64_t generation = 0;
 	};
 
 	class UpdateListener;
@@ -546,7 +551,7 @@ namespace SIE
 		*/
 		bool Clear(const std::string& a_path);
 
-		/** @brief Publishes a compile result unless a synchronous deferred eviction consumes it.
+		/** @brief Publishes a result unless its task is stale or an eviction consumes it.
 		 *  @return True when a_blob remains usable by the caller. */
 		bool AddCompletedShader(
 			ShaderClass shaderClass,
@@ -555,15 +560,20 @@ namespace SIE
 			ID3DBlob* a_blob,
 			const std::wstring& a_diskPath,
 			const Util::ContentHash::Hash128& a_compileStateDigest,
-			bool fromDisk = false);
+			bool fromDisk = false,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		enum class ClaimResult
 		{
 			CacheHit,  // Already compiled; use the returned blob
 			Claimed    // Claimed as Pending; caller must compile and call AddCompletedShader
 		};
-		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key);
-		void ResolvePendingFailure(const std::string& key);
+		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(
+			const std::string& key,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void ResolvePendingFailure(
+			const std::string& key,
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
 		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
@@ -579,11 +589,11 @@ namespace SIE
 			uint32_t descriptor);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
 
@@ -925,6 +935,13 @@ namespace SIE
 		HANDLE managementThread = nullptr;
 
 	private:
+		/** @brief Returns true when Clear() invalidated an asynchronous task. */
+		bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const
+		{
+			return a_taskGeneration &&
+			       *a_taskGeneration != compilationSet.generation.load(std::memory_order_acquire);
+		}
+
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
 		void EvictShader(
 			const std::string& a_key,

@@ -1570,6 +1570,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_cache_provenance_test.cpp
     )
     add_controller_test(
+        generation_claim_test
+        GenerationClaim
+        tests/generation_claim_test.cpp
+    )
+    add_controller_test(
         cache_invalidation_test
         CacheInvalidation
         tests/cache_invalidation_test.cpp

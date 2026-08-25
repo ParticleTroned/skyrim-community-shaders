@@ -2951,6 +2951,8 @@ float3 LightLimitFix::Saturation(float3 color, float saturation)
 
 void LightLimitFix::UpdateLights()
 {
+	ZoneScopedN("LLF::UpdateLights");
+
 	auto clearCachedParticleLights = [&]() {
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
 		cachedParticleLights.clear();

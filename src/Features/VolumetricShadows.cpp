@@ -234,6 +234,7 @@ void VolumetricShadows::CopyShadowLightData()
 		return;
 	}
 
+	ZoneScoped;
 	CS_GPU_PASS("VolumetricShadows::CopyShadowLightData");
 
 	if (!globals::state->HasDirectionalShadows()) {
@@ -301,13 +302,13 @@ void VolumetricShadows::CopyShadowLightData()
 		ClearComputeSRVs(context, 0, 2);
 		ClearComputeUAV(context);
 
-		auto blurMip = [&](ID3D11ShaderResourceView* a_input, ID3D11UnorderedAccessView* a_tempUAV, ID3D11ShaderResourceView* a_tempSRV, ID3D11UnorderedAccessView* a_outputUAV, uint32_t a_size, const char* a_hProfile, const char* a_vProfile) {
+		auto blurMip = [&](ID3D11ShaderResourceView* a_input, ID3D11UnorderedAccessView* a_tempUAV, ID3D11ShaderResourceView* a_tempSRV, ID3D11UnorderedAccessView* a_outputUAV, uint32_t a_size, bool a_mip1) {
 			ID3D11ShaderResourceView* blurSRV = a_input;
 			context->CSSetShaderResources(0, 1, &blurSRV);
 			context->CSSetUnorderedAccessViews(0, 1, &a_tempUAV, nullptr);
 			context->CSSetShader(blurShadowHorizontalCS, nullptr, 0);
 			{
-				CS_GPU_PASS_DYNAMIC(a_hProfile);
+				CS_GPU_PASS_SELECT(a_mip1, "VolumetricShadows::BlurHMip1", "VolumetricShadows::BlurHMip0");
 				context->Dispatch((a_size + kBlurGroupSize - 1) / kBlurGroupSize, a_size, 1);
 			}
 
@@ -319,7 +320,7 @@ void VolumetricShadows::CopyShadowLightData()
 			context->CSSetUnorderedAccessViews(0, 1, &a_outputUAV, nullptr);
 			context->CSSetShader(blurShadowVerticalCS, nullptr, 0);
 			{
-				CS_GPU_PASS_DYNAMIC(a_vProfile);
+				CS_GPU_PASS_SELECT(a_mip1, "VolumetricShadows::BlurVMip1", "VolumetricShadows::BlurVMip0");
 				context->Dispatch(a_size, (a_size + kBlurGroupSize - 1) / kBlurGroupSize, 1);
 			}
 
@@ -327,8 +328,8 @@ void VolumetricShadows::CopyShadowLightData()
 			ClearComputeUAV(context);
 		};
 
-		blurMip(shadowCopyMip0SRV, shadowBlurTempMip0UAV, shadowBlurTempMip0SRV, shadowCopyMip0UAV, kShadowCopySize, "VolumetricShadows::BlurHMip0", "VolumetricShadows::BlurVMip0");
-		blurMip(shadowCopyMip1SRV, shadowBlurTempMip1UAV, shadowBlurTempMip1SRV, shadowCopyMip1UAV, kShadowCopySize / 2, "VolumetricShadows::BlurHMip1", "VolumetricShadows::BlurVMip1");
+		blurMip(shadowCopyMip0SRV, shadowBlurTempMip0UAV, shadowBlurTempMip0SRV, shadowCopyMip0UAV, kShadowCopySize, false);
+		blurMip(shadowCopyMip1SRV, shadowBlurTempMip1UAV, shadowBlurTempMip1SRV, shadowCopyMip1UAV, kShadowCopySize / 2, true);
 
 		ID3D11SamplerState* nullSampler = nullptr;
 		context->CSSetSamplers(0, 1, &nullSampler);

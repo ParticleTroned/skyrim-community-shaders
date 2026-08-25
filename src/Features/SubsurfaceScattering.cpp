@@ -348,6 +348,7 @@ void SubsurfaceScattering::DrawSSS()
 	if (!validMaterials)
 		return;
 
+	ZoneScoped;
 	CS_GPU_PASS("SubsurfaceScattering::DrawSSS");
 
 	validMaterials = false;

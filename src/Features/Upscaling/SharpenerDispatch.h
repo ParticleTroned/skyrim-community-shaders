@@ -11,6 +11,12 @@
 
 namespace UpscalingSharpener
 {
+	enum class Pass
+	{
+		RCAS,
+		LumaSharpen
+	};
+
 	template <class Config>
 	inline bool DispatchComputePass(
 		ID3D11ComputeShader* computeShader,
@@ -20,7 +26,7 @@ namespace UpscalingSharpener
 		ID3D11UnorderedAccessView* outputUAV,
 		uint32_t width,
 		uint32_t height,
-		const char* perfEventName)
+		Pass pass)
 	{
 		auto state = globals::state;
 		auto context = globals::d3d::context;
@@ -44,7 +50,7 @@ namespace UpscalingSharpener
 		const uint32_t dispatchX = (width + 7) / 8;
 		const uint32_t dispatchY = (height + 7) / 8;
 		{
-			CS_GPU_PASS_DYNAMIC(perfEventName);
+			CS_GPU_PASS_SELECT(pass == Pass::RCAS, "Upscaling::RCAS", "Upscaling::LumaSharpen");
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 

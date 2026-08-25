@@ -39284,6 +39284,7 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 			const bool usePeripheryTAAPath = IsPeripheryTAAPathActive(upscaleMethod);
 			std::array<FoveatedEncodeRegion, 2> regions{};
 			if (GetFoveatedEncodeRegions(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, usePeripheryTAAProfile, usePeripheryTAAPath, regions)) {
+				CS_GPU_PASS("FoveatedRender::EncodeUpscalingTextures");
 				bool allDispatched = true;
 				for (uint32_t eye = 0; eye < 2; ++eye) {
 					allDispatched = dispatchEyeEncode(eye, regions[eye].minX, regions[eye].minY, regions[eye].maxX, regions[eye].maxY) && allDispatched;
@@ -51288,6 +51289,7 @@ void Upscaling::Upscale()
 				const bool usePeripheryTAAPath = IsPeripheryTAAPathActive(upscaleMethod);
 				std::array<FoveatedEncodeRegion, 2> regions{};
 				if (GetFoveatedEncodeRegions(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, usePeripheryTAAProfile, usePeripheryTAAPath, regions)) {
+					CS_GPU_PASS("FoveatedRender::EncodeUpscalingTextures");
 					for (uint32_t eye = 0; eye < 2; ++eye) {
 						dispatchEyeEncode(eye, regions[eye].minX, regions[eye].minY, regions[eye].maxX, regions[eye].maxY);
 					}
@@ -51570,7 +51572,7 @@ void Upscaling::UpscaleDepth()
 	context->PSSetConstantBuffers(0, 1, &bufferArray);
 
 	if (depthUpscaleActive) {
-		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth Upscale");
+		CS_GPU_PASS("Upscaling::DepthUpscale");
 
 		// Keep kMAIN_COPY on the pre-upscale depth until the dynamic VR underwater
 		// repair has consumed it.
@@ -51601,25 +51603,23 @@ void Upscaling::UpscaleDepth()
 		context->OMSetRenderTargets(2, rtvs, depth.views[0]);
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
-		{
-			CS_GPU_PASS("Upscaling::DepthUpscale");
-			context->Draw(3, 0);
-		}
+		context->Draw(3, 0);
 
 		// Depth copy is also used on VR. The dynamic no-render-scale underwater
 		// repair needs the original dynamic depth until the mask pass completes.
 		if (isVR && !deferVRDynamicDepthCopyPropagationForUnderwaterMask) {
+			CS_GPU_PASS("Upscaling::DepthVRPropagate");
 			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 		}
 	} else {
-		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Full Resolution Underwater Mask Depth Copy");
+		CS_GPU_PASS("Upscaling::FullResolutionUnderwaterMaskDepthCopy");
 
 		// Full-resolution paths only need to refresh the underwater mask depth source.
 		CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 	}
 
 	if (!(isVR && ShouldDeferVRProjectedMaskRepair(*this, state))) {
-		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Underwater Mask");
+		CS_GPU_PASS("Upscaling::UnderwaterMaskUpscale");
 
 		viewport.Width = screenSize.x * 0.5f;
 		viewport.Height = screenSize.y * 0.5f;
@@ -51638,16 +51638,14 @@ void Upscaling::UpscaleDepth()
 
 		if (underwaterMaskPassBound) {
 			context->PSSetShader(underwaterMaskPS, nullptr, 0);
-			{
-				CS_GPU_PASS("Upscaling::UnderwaterMaskUpscale");
-				context->Draw(3, 0);
-			}
+			context->Draw(3, 0);
 		}
 	}
 
 	UnbindUnderwaterMaskPassResources(context);
 
 	if (deferVRDynamicDepthCopyPropagationForUnderwaterMask) {
+		CS_GPU_PASS("Upscaling::DepthVRPropagate");
 		CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 	}
 }

@@ -1012,6 +1012,7 @@ void TerrainBlending::ResetTerrainDepth()
 
 void TerrainBlending::BlendPrepassDepths()
 {
+	ZoneScoped;
 	CS_GPU_PASS("TerrainBlending::BlendPrepassDepths");
 
 	auto context = globals::d3d::context;

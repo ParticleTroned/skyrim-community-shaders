@@ -755,6 +755,7 @@ void DynamicCubemaps::FinishCurrentCubemapTask(bool a_cadenceEnabled)
 
 void DynamicCubemaps::UpdateCubemap()
 {
+	ZoneScoped;
 	CS_GPU_PASS("DynamicCubemaps::UpdateCubemap");
 
 	auto context = globals::d3d::context;

@@ -72,5 +72,5 @@ bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 		outputUAV,
 		screenWidth,
 		screenHeight,
-		"RCAS Sharpening");
+		UpscalingSharpener::Pass::RCAS);
 }

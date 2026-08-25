@@ -595,7 +595,7 @@ void Deferred::DeferredPasses()
 
 	// Deferred Composite
 	{
-		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
+		CS_GPU_PASS("Deferred::DeferredComposite");
 
 		// Compute features before this pass may bind their own private state.
 		// Rebind global CS constants here so deferred composite never depends on
@@ -633,7 +633,6 @@ void Deferred::DeferredPasses()
 		context->CSSetShader(shader, nullptr, 0);
 
 		{
-			TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Dispatch");
 			CS_GPU_PASS("DeferredComposite");
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 		}

@@ -485,13 +485,13 @@ void State::Draw()
 		}
 
 		if (terrainHelper.loaded) {
-			ZoneScopedN("TerrainHelper::SetShaderResouces");
+			ZoneScopedN("TerrainHelper::SetShaderResources");
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TerrainHelperResources, stateDrawDiagFrame, stateDrawDiagActive);
 			terrainHelper.SetShaderResouces(context);
 		}
 
 		if (truePBR.loaded) {
-			ZoneScopedN("TruePBR::SetShaderResouces");
+			ZoneScopedN("TruePBR::SetShaderResources");
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TruePBRResources, stateDrawDiagFrame, stateDrawDiagActive);
 			truePBR.SetShaderResouces(context);
 		}

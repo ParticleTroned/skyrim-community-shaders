@@ -839,6 +839,7 @@ void VR::DrawStereoBlend()
 	if (resolution.x <= 0.0f || resolution.y <= 0.0f)
 		return;
 
+	ZoneScoped;
 	CS_GPU_PASS("VR::StereoBlend");
 
 	// Deferred composite leaves kMAIN bound as a UAV. Unbind before copying it as the source texture.
@@ -869,7 +870,10 @@ void VR::DrawStereoBlend()
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 	context->CSSetShader(stereoBlendCS.get(), nullptr, 0);
 
-	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	{
+		CS_GPU_PASS("StereoBlend::Bilateral");
+		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	}
 
 	ID3D11ShaderResourceView* nullSrvs[2]{ nullptr, nullptr };
 	uavs[0] = nullptr;

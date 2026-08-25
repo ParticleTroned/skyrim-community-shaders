@@ -76,5 +76,5 @@ bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11Unorder
 		outputUAV,
 		screenWidth,
 		screenHeight,
-		"Luma Sharpening");
+		UpscalingSharpener::Pass::LumaSharpen);
 }

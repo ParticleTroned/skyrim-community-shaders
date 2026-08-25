@@ -410,6 +410,7 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 
 void ScreenSpaceShadows::DrawShadows()
 {
+	ZoneScopedS(8);
 	CS_GPU_PASS("ScreenSpaceShadows::DrawShadows");
 	auto state = globals::state;
 
@@ -662,6 +663,7 @@ void ScreenSpaceShadows::DrawStereoSync()
 	if (!stereoCS)
 		return;
 
+	ZoneScoped;
 	CS_GPU_PASS_SELECT(stereoCS == stereoSyncCS, "ScreenSpaceShadows::StereoSync", "ScreenSpaceShadows::StereoReproject");
 
 	auto context = globals::d3d::context;

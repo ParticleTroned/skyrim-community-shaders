@@ -48,6 +48,45 @@ jobs:
             run-shader-tests: ${{ github.event_name != 'workflow_dispatch' || inputs.validate-shaders == true }}
             cache-key-suffix: ${{ inputs.cache-key-suffix || '' }}
 
+    prune-stale-cache:
+        name: Prune superseded build-cache generations
+        needs: build
+        if: needs.build.outputs.cpp-built == 'true'
+        runs-on: ubuntu-latest
+        permissions:
+            actions: write
+        steps:
+            - name: Delete superseded CMake build caches
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  declare -A newest_id newest_time
+                  mapfile -t caches < <(
+                    gh api "repos/${{ github.repository }}/actions/caches?per_page=100" \
+                      --paginate \
+                      --jq '.actions_caches[] | select(.key | test("^Windows-cmake-msvc-")) | "\(.id)\t\(.created_at)\t\(.key)"'
+                  )
+                  for cache in "${caches[@]}"; do
+                      IFS=$'\t' read -r id created key <<< "$cache"
+                      [ -z "$id" ] && continue
+                      prefix=$(printf '%s\n' "$key" | sed -E 's/-[0-9a-f]{64}$//')
+                      if [ -z "${newest_time[$prefix]:-}" ] || [[ "$created" > "${newest_time[$prefix]}" ]]; then
+                          stale_id="${newest_id[$prefix]:-}"
+                          newest_time[$prefix]="$created"
+                          newest_id[$prefix]="$id"
+                      else
+                          stale_id="$id"
+                      fi
+                      if [ -n "$stale_id" ]; then
+                          echo "Deleting superseded cache $stale_id ($prefix)"
+                          if ! gh api -X DELETE "repos/${{ github.repository }}/actions/caches/$stale_id"; then
+                              echo "::warning::Could not delete superseded cache $stale_id"
+                          fi
+                      fi
+                  done
+
     feature-audit:
         name: Feature Version Audit (Release)
         if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release') && github.event.action != 'published'

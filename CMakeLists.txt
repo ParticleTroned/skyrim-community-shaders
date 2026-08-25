@@ -127,10 +127,16 @@ include(XSEPlugin)
 # a checkout, submodule update, or local edit in an existing build directory.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(CSX_PROVENANCE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/build_provenance.py")
-set(CSX_PROVENANCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>")
+set(CSX_PROVENANCE_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>"
+)
 set(CSX_PROVENANCE_HEADER "${CSX_PROVENANCE_DIR}/BuildProvenance.generated.h")
-set(CSX_PROVENANCE_BASE_MANIFEST "${CSX_PROVENANCE_DIR}/CSX.BuildManifest.base.json")
-set(CSX_PROVENANCE_FINAL_MANIFEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/CSX.BuildManifest.json")
+set(CSX_PROVENANCE_BASE_MANIFEST
+    "${CSX_PROVENANCE_DIR}/CSX.BuildManifest.base.json"
+)
+set(CSX_PROVENANCE_FINAL_MANIFEST
+    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/CSX.BuildManifest.json"
+)
 set(_CSX_PROVENANCE_CLEAN_ARG)
 if(CSX_REQUIRE_CLEAN_PROVENANCE)
     set(_CSX_PROVENANCE_CLEAN_ARG --require-clean)
@@ -139,30 +145,25 @@ add_custom_target(
     refresh_build_provenance
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CSX_PROVENANCE_DIR}"
     COMMAND
-        "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" generate
-        --source-dir "${CMAKE_SOURCE_DIR}"
-        --output-header "${CSX_PROVENANCE_HEADER}"
-        --output-manifest "${CSX_PROVENANCE_BASE_MANIFEST}"
-        --runtime "${CSX_RUNTIME}"
-        --plugin-version "${CSX_PLUGIN_VERSION}"
-        --configuration "$<CONFIG>"
-        --artifact-name "$<TARGET_FILE_NAME:${PROJECT_NAME}>"
-        --compiler-id "${CMAKE_CXX_COMPILER_ID}"
-        --compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
-        --compiler-path "${CMAKE_CXX_COMPILER}"
-        --generator "${CMAKE_GENERATOR}"
-        --generator-platform "${CMAKE_GENERATOR_PLATFORM}"
-        --generator-toolset "${CMAKE_GENERATOR_TOOLSET}"
-        --windows-sdk-version "${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}"
-        --cmake-version "${CMAKE_VERSION}"
-        --target-triplet "${VCPKG_TARGET_TRIPLET}"
-        --toolchain-file "${CMAKE_TOOLCHAIN_FILE}"
-        --overlay-dir "${VCPKG_OVERLAY_PORTS}"
-        --build-option "TRACY_SUPPORT=${TRACY_SUPPORT}"
-        --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}"
-        --build-option "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}"
-        --build-option "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}"
-        --build-option "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+        "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" generate --source-dir
+        "${CMAKE_SOURCE_DIR}" --output-header "${CSX_PROVENANCE_HEADER}"
+        --output-manifest "${CSX_PROVENANCE_BASE_MANIFEST}" --runtime
+        "${CSX_RUNTIME}" --plugin-version "${CSX_PLUGIN_VERSION}"
+        --configuration "$<CONFIG>" --artifact-name
+        "$<TARGET_FILE_NAME:${PROJECT_NAME}>" --compiler-id
+        "${CMAKE_CXX_COMPILER_ID}" --compiler-version
+        "${CMAKE_CXX_COMPILER_VERSION}" --compiler-path "${CMAKE_CXX_COMPILER}"
+        --generator "${CMAKE_GENERATOR}" --generator-platform
+        "${CMAKE_GENERATOR_PLATFORM}" --generator-toolset
+        "${CMAKE_GENERATOR_TOOLSET}" --windows-sdk-version
+        "${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}" --cmake-version
+        "${CMAKE_VERSION}" --target-triplet "${VCPKG_TARGET_TRIPLET}"
+        --toolchain-file "${CMAKE_TOOLCHAIN_FILE}" --overlay-dir
+        "${VCPKG_OVERLAY_PORTS}" --build-option "TRACY_SUPPORT=${TRACY_SUPPORT}"
+        --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
+        "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
+        "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
+        "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
         ${_CSX_PROVENANCE_CLEAN_ARG}
     VERBATIM
     COMMENT "Refreshing canonical CSX build provenance"
@@ -174,9 +175,9 @@ add_custom_command(
     POST_BUILD
     COMMAND
         "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" finalize
-        --base-manifest "${CSX_PROVENANCE_BASE_MANIFEST}"
-        --artifact "$<TARGET_FILE:${PROJECT_NAME}>"
-        --output-manifest "${CSX_PROVENANCE_FINAL_MANIFEST}"
+        --base-manifest "${CSX_PROVENANCE_BASE_MANIFEST}" --artifact
+        "$<TARGET_FILE:${PROJECT_NAME}>" --output-manifest
+        "${CSX_PROVENANCE_FINAL_MANIFEST}"
     VERBATIM
     COMMENT "Binding CSX build manifest to linked DLL"
 )
@@ -206,6 +207,9 @@ find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
+include(Streamline-Runtime)
+
+set(UPSCALING_RUNTIME_FILES ${FFX_RUNTIME_FILES} ${STREAMLINE_RUNTIME_FILES})
 
 target_compile_definitions(
     ${PROJECT_NAME}
@@ -658,6 +662,11 @@ install(
     DESTINATION Shaders/Upscaling/FidelityFX
     COMPONENT FidelityFXRuntime
 )
+install(
+    FILES ${STREAMLINE_RUNTIME_FILES}
+    DESTINATION ${STREAMLINE_RUNTIME_RELATIVE_DIRECTORY}
+    COMPONENT StreamlineRuntime
+)
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
 
 # #######################################################################################################################
@@ -795,7 +804,11 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_feature_paths_list_file
         "${CMAKE_CURRENT_BINARY_DIR}/feature_paths.txt"
     )
-    set(_aio_source_paths ${FEATURE_PATHS} "${FFX_RUNTIME_FEATURE_ROOT}")
+    set(_aio_source_paths
+        ${FEATURE_PATHS}
+        "${FFX_RUNTIME_FEATURE_ROOT}"
+        "${STREAMLINE_RUNTIME_FEATURE_ROOT}"
+    )
     string(REPLACE ";" "\n" _feature_paths_file_content "${_aio_source_paths}")
     file(WRITE "${_feature_paths_list_file}" "${_feature_paths_file_content}")
 
@@ -936,7 +949,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_shader_copy_cmds)
     set(_shader_copy_inputs ${_package_shaders})
 
-    set(_feature_shader_paths "${FFX_RUNTIME_SHADER_ROOT}")
+    set(_feature_shader_paths
+        "${FFX_RUNTIME_SHADER_ROOT}"
+        "${STREAMLINE_RUNTIME_SHADER_ROOT}"
+    )
     foreach(_fpath IN LISTS FEATURE_PATHS)
         if(EXISTS "${_fpath}/Shaders")
             list(APPEND _feature_shader_paths "${_fpath}/Shaders")
@@ -970,6 +986,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 
     append_copy_if_different(_shader_copy_cmds _package_shaders "${CMAKE_SOURCE_DIR}/package/Shaders" "${AIO_DIR}/Shaders")
     append_copy_if_different(_shader_copy_cmds FFX_RUNTIME_FILES "${FFX_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
+    append_copy_if_different(_shader_copy_cmds STREAMLINE_RUNTIME_FILES "${STREAMLINE_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
 
     # feature shader folders
     foreach(_fpath IN LISTS FEATURE_PATHS)
@@ -993,7 +1010,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         COMMAND ${CMAKE_COMMAND} -E touch copy_shaders.stamp
         DEPENDS
             ${_shader_copy_inputs}
-            ${FFX_RUNTIME_FILES}
+            ${UPSCALING_RUNTIME_FILES}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
     )
@@ -1425,7 +1442,7 @@ add_custom_command(
     OUTPUT ${CORE_PACKAGE}
     # The install step consumes the built DLL. Depend on the target itself so
     # a newly registered feature cannot be packaged with a stale core binary.
-    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
+    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${UPSCALING_RUNTIME_FILES}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE
@@ -1434,6 +1451,9 @@ add_custom_command(
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component FidelityFXRuntime
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
+        --component StreamlineRuntime
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
     COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .
@@ -1470,10 +1490,13 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
                 ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                 "${FEATURE_PACKAGE_STAGE}" --component FidelityFXRuntime
             COMMAND
+                ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
+                "${FEATURE_PACKAGE_STAGE}" --component StreamlineRuntime
+            COMMAND
                 ${CMAKE_COMMAND} -E chdir "${FEATURE_PACKAGE_STAGE}"
                 ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
                 .
-            DEPENDS ${FEATURE_SOURCES} ${FFX_RUNTIME_FILES}
+            DEPENDS ${FEATURE_SOURCES} ${UPSCALING_RUNTIME_FILES}
             COMMENT "Creating ${FEATURE} zip package"
         )
     else()
@@ -1509,7 +1532,7 @@ endif()
 
 add_custom_command(
     OUTPUT ${AIO_INSTALL_STAMP}
-    DEPENDS ${CORE_SOURCES} ${PROJECT_NAME} ${FFX_RUNTIME_FILES}
+    DEPENDS ${CORE_SOURCES} ${PROJECT_NAME} ${UPSCALING_RUNTIME_FILES}
     COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
     COMMAND ${CMAKE_COMMAND} -E touch ${AIO_INSTALL_STAMP}
     COMMENT "Installing to AIO folder"
@@ -1524,7 +1547,7 @@ else()
     set(AIO_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}_AIO-${UTC_NOW}.7z")
     add_custom_command(
         OUTPUT ${AIO_PACKAGE}
-        DEPENDS ${CORE_SOURCES} ${PROJECT_NAME} ${FFX_RUNTIME_FILES}
+        DEPENDS ${CORE_SOURCES} ${PROJECT_NAME} ${UPSCALING_RUNTIME_FILES}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
         COMMAND
             ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}

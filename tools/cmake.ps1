@@ -21,6 +21,11 @@ Initialize-CsxToolEnvironment `
     -CommonGitDirectory $commonGitDirectory `
     -ProtectPublicGitHub | Out-Null
 
+$vsDevCmd = Initialize-CsxMsvcEnvironment -Required
+if ($vsDevCmd) {
+    Write-Host "Initialized the MSVC environment with $vsDevCmd"
+}
+
 $vcpkgRoot = Resolve-CsxVcpkgRoot -Required
 Write-Host "Using vcpkg at $vcpkgRoot"
 

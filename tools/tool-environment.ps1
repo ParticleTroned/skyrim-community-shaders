@@ -23,12 +23,155 @@ function Enable-CsxRepositoryGitSafety {
     # values as command-scope config so every child Git process retains the same
     # strict SSH identity and OpenSSL HTTPS behavior.
     foreach ($key in @("core.sshCommand", "http.sslBackend")) {
-        $value = [string](& git -C $RepositoryRoot config --local --get $key 2>$null)
-        $value = $value.Trim()
-        if ($LASTEXITCODE -eq 0 -and $value) {
+        [string[]] $configuredValues = @(
+            & git -C $RepositoryRoot config --local --get $key 2>$null
+        )
+        $gitExitCode = $LASTEXITCODE
+        if ($gitExitCode -ne 0) {
+            continue
+        }
+
+        $value = ($configuredValues -join "`n").Trim()
+        if ($value) {
             Add-CsxGitCommandConfig -Key $key -Value $value
         }
     }
+}
+
+function Get-CsxVisualStudioInstallationPaths {
+    param([switch] $RequireMsvc)
+
+    if ($env:OS -ne "Windows_NT") {
+        return @()
+    }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    $vswhereCandidates = [System.Collections.Generic.List[string]]::new()
+    $vswhereCommand = Get-Command vswhere.exe -ErrorAction SilentlyContinue
+    if ($vswhereCommand) {
+        $vswhereCandidates.Add($vswhereCommand.Source)
+    }
+
+    $programFilesX86 = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::ProgramFilesX86)
+    if ($programFilesX86) {
+        $vswhereCandidates.Add((Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"))
+    }
+
+    foreach ($vswhere in $vswhereCandidates | Select-Object -Unique) {
+        if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+            continue
+        }
+
+        $vswhereArguments = @("-products", "*")
+        if ($RequireMsvc) {
+            $vswhereArguments += @(
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+            )
+        }
+        $vswhereArguments += @("-property", "installationPath")
+
+        foreach ($installationPath in @(& $vswhere @vswhereArguments 2>$null)) {
+            if ($installationPath) {
+                $candidates.Add($installationPath)
+            }
+        }
+        break
+    }
+
+    $programFiles = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::ProgramFiles)
+    if ($programFiles) {
+        $visualStudioRoot = Join-Path $programFiles "Microsoft Visual Studio"
+        if (Test-Path -LiteralPath $visualStudioRoot -PathType Container) {
+            foreach ($versionDirectory in Get-ChildItem -LiteralPath $visualStudioRoot -Directory | Sort-Object Name -Descending) {
+                foreach ($editionDirectory in Get-ChildItem -LiteralPath $versionDirectory.FullName -Directory) {
+                    $candidates.Add($editionDirectory.FullName)
+                }
+            }
+        }
+    }
+
+    return @(
+        $candidates |
+            Where-Object {
+                (Test-Path -LiteralPath $_ -PathType Container) -and
+                (-not $RequireMsvc -or
+                    (Test-Path -LiteralPath (Join-Path $_ "VC\Tools\MSVC") -PathType Container))
+            } |
+            Select-Object -Unique
+    )
+}
+
+function Test-CsxMsvcEnvironment {
+    return -not [string]::IsNullOrWhiteSpace($env:VCToolsInstallDir) -and
+           -not [string]::IsNullOrWhiteSpace($env:INCLUDE) -and
+           -not [string]::IsNullOrWhiteSpace($env:LIB)
+}
+
+function Resolve-CsxVsDevCmd {
+    param([switch] $Required)
+
+    if ($env:OS -ne "Windows_NT") {
+        return $null
+    }
+
+    if ($env:CSX_VSDEVCMD) {
+        if (Test-Path -LiteralPath $env:CSX_VSDEVCMD -PathType Leaf) {
+            return [IO.Path]::GetFullPath($env:CSX_VSDEVCMD)
+        }
+        throw "CSX_VSDEVCMD does not point to VsDevCmd.bat: $env:CSX_VSDEVCMD"
+    }
+
+    foreach ($installationPath in Get-CsxVisualStudioInstallationPaths -RequireMsvc) {
+        $candidate = Join-Path $installationPath "Common7\Tools\VsDevCmd.bat"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
+    }
+
+    if ($Required) {
+        throw "VsDevCmd.bat was not found. Install the Visual Studio C++ build tools or set CSX_VSDEVCMD."
+    }
+    return $null
+}
+
+function Initialize-CsxMsvcEnvironment {
+    param([switch] $Required)
+
+    if ($env:OS -ne "Windows_NT" -or (Test-CsxMsvcEnvironment)) {
+        return $null
+    }
+
+    $vsDevCmd = Resolve-CsxVsDevCmd -Required:$Required
+    if (-not $vsDevCmd) {
+        return $null
+    }
+
+    $commandProcessor = Get-Command cmd.exe -ErrorAction SilentlyContinue
+    if (-not $commandProcessor) {
+        throw "cmd.exe was not found; the Visual Studio build environment cannot be initialized."
+    }
+
+    $command = "call `"$vsDevCmd`" -no_logo -arch=x64 -host_arch=x64 >nul && set"
+    [string[]] $environmentLines = @(& $commandProcessor.Source /d /s /c $command)
+    $commandExitCode = $LASTEXITCODE
+    if ($commandExitCode -ne 0) {
+        throw "VsDevCmd.bat failed with exit code ${commandExitCode}: $vsDevCmd"
+    }
+
+    foreach ($line in $environmentLines) {
+        if ($line -match "^([^=][^=]*)=(.*)$") {
+            [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], "Process")
+        }
+    }
+
+    if (-not (Test-CsxMsvcEnvironment)) {
+        throw "VsDevCmd.bat completed without defining VCToolsInstallDir, INCLUDE, and LIB: $vsDevCmd"
+    }
+
+    return $vsDevCmd
 }
 
 function Test-CsxVcpkgRoot {
@@ -60,25 +203,8 @@ function Resolve-CsxVcpkgRoot {
     }
 
     if ($env:OS -eq "Windows_NT") {
-        $programFilesX86 = [Environment]::GetFolderPath(
-            [Environment+SpecialFolder]::ProgramFilesX86)
-        $vswhere = Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
-        if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
-            $installationPaths = @(& $vswhere -products * -property installationPath 2>$null)
-            foreach ($installationPath in $installationPaths) {
-                if ($installationPath) {
-                    $candidates.Add((Join-Path $installationPath "VC\vcpkg"))
-                }
-            }
-        }
-
-        $visualStudioRoot = Join-Path $env:ProgramFiles "Microsoft Visual Studio"
-        if (Test-Path -LiteralPath $visualStudioRoot -PathType Container) {
-            foreach ($versionDirectory in Get-ChildItem -LiteralPath $visualStudioRoot -Directory) {
-                foreach ($editionDirectory in Get-ChildItem -LiteralPath $versionDirectory.FullName -Directory) {
-                    $candidates.Add((Join-Path $editionDirectory.FullName "VC\vcpkg"))
-                }
-            }
+        foreach ($installationPath in Get-CsxVisualStudioInstallationPaths) {
+            $candidates.Add((Join-Path $installationPath "VC\vcpkg"))
         }
     }
 

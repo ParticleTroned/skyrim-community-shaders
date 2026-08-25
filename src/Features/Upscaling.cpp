@@ -4896,9 +4896,10 @@ namespace
 			currentLoadingSerial);
 	}
 
+	template <class Controller>
 	bool IsAppliedVRFpsStabilizerDoorHandoffReadyForPresentation(
 		const Upscaling& a_upscaling,
-		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		const Controller& a_controller,
 		Upscaling::UpscaleMethod a_upscaleMethod,
 		uint32_t a_contractGeneration)
 	{
@@ -6559,8 +6560,9 @@ namespace
 		       matchesDimension(a_plan.finalOutputSize.y, a_boot.displayEyeHeight);
 	}
 
+	template <class Transition>
 	bool IsVRRenderScalePhysicalVendorContractExact(
-		const Upscaling::VRRenderScaleTransitionSnapshot& a_transition,
+		const Transition& a_transition,
 		const Upscaling::PerfModeState::BootSnapshot& a_boot,
 		Upscaling::UpscaleMethod a_runtimeMethod)
 	{
@@ -6597,8 +6599,9 @@ namespace
 	// During a serialized COC handoff submitStageVendorAllowed is false until
 	// this exact contract qualifies the gate, so folding it into physical
 	// equality creates a self-blocking proof cycle.
+	template <class Transition>
 	bool IsVRRenderScaleAppliedVendorContractExact(
-		const Upscaling::VRRenderScaleTransitionSnapshot& a_transition,
+		const Transition& a_transition,
 		const Upscaling::PerfModeState::BootSnapshot& a_boot,
 		Upscaling::UpscaleMethod a_runtimeMethod)
 	{
@@ -19504,7 +19507,8 @@ Upscaling::VRRenderScaleStatus Upscaling::GetVRRenderScaleModeStatus() const
 		IsOpenCompositeUpscalingBlocked() ||
 		IsRenderDocUpscalingBlocked() ||
 		IsSubmitStageDeviceLost();
-	const auto controllerState = GetVRRenderScaleTransitionSnapshot().state;
+	const auto controllerState =
+		vrRenderScaleTransitionState.load(std::memory_order_acquire);
 	const bool controllerTransitionPending =
 		controllerState != VRRenderScaleTransitionState::Idle &&
 		controllerState != VRRenderScaleTransitionState::Active;
@@ -22302,6 +22306,7 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorAdmissionEyeMask = 0;
+	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
@@ -29459,7 +29464,8 @@ void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMeth
 
 	if (!IsVRRenderScaleMemoryReliefActive())
 		return;
-	const auto transitionState = GetVRRenderScaleTransitionSnapshot().state;
+	const auto transitionState =
+		vrRenderScaleTransitionState.load(std::memory_order_acquire);
 	if (transitionState != VRRenderScaleTransitionState::Stabilizing &&
 		transitionState != VRRenderScaleTransitionState::Active) {
 		return;
@@ -30267,6 +30273,7 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 
 	bool pathChanged = false;
 	VRRenderScalePresentationEyeSnapshot published{};
+	VRRenderScaleHotPresentationContract transition{};
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
 		auto& controller = vrRenderScaleTransitionController;
@@ -30379,6 +30386,9 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 
 		published = eye;
 		++controller.revision;
+		transition = CaptureVRRenderScaleHotPresentationContractLocked(
+			a_observation.compositorCycleToken,
+			frame);
 	}
 
 	if (pathChanged && ShouldEmitUpscalingDiagLogs()) {
@@ -30407,7 +30417,6 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 		return;
 	}
 
-	const auto transition = GetVRRenderScaleTransitionSnapshot();
 	const auto& left = transition.presentation.eyes[0];
 	const auto& right = transition.presentation.eyes[1];
 	const auto& applied = transition.applied;
@@ -34341,6 +34350,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorAdmissionEyeMask = 0;
+	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
@@ -45507,6 +45517,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorAdmissionEyeMask = 0;
+	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
@@ -45838,7 +45849,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		a_inputBounds);
 	const auto& activeContract = perfMode.GetBootSnapshot();
 	const uint32_t activeContractGeneration = activeContract.valid ? activeContract.generation : 0u;
-	const auto transitionSnapshot = GetVRRenderScaleTransitionSnapshot();
+	const auto transitionSnapshot = GetSubmitStageHotPresentationContract(
+		a_compositorCycleToken,
+		currentFrame);
 	const uint64_t activeTransitionEpoch =
 		transitionSnapshot.applied.valid &&
 				transitionSnapshot.applied.contractGeneration == activeContractGeneration ?
@@ -46185,7 +46198,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					HasPendingVRVendorRuntimeReset(*this, upscaleMethod),
 				.physicalContractConverged = physicalContractConverged,
 				.serializationLoadingSerial =
-					transitionSnapshot.postLoadRecovery.loadingSerial,
+					transitionSnapshot.postLoadRecoveryLoadingSerial,
 				.compositorHoldLoadingSerial =
 					vrPostLoadCompositorHoldLoadingSerial.load(
 						std::memory_order_acquire),
@@ -47869,6 +47882,50 @@ namespace
 			source,
 			Upscaling::VRUpscalingTransitionOrigin::CSMenu);
 	}
+}
+
+Upscaling::VRRenderScaleHotPresentationContract
+Upscaling::CaptureVRRenderScaleHotPresentationContractLocked(
+	uint64_t a_compositorCycleToken,
+	uint32_t a_frame) const
+{
+	const auto& controller = vrRenderScaleTransitionController;
+	VRRenderScaleHotPresentationContract contract{};
+	contract.compositorCycleToken = a_compositorCycleToken;
+	contract.frame = a_frame;
+	contract.revision = controller.revision;
+	contract.state = controller.state;
+	contract.targetEpoch = controller.targetEpoch;
+	contract.stateFrame = controller.stateFrame;
+	contract.applied = controller.applied;
+	contract.stable = controller.stable;
+	contract.presentation = controller.presentation;
+	contract.postLoadRecoveryLoadingSerial =
+		controller.postLoadRecovery.loadingSerial;
+	return contract;
+}
+
+Upscaling::VRRenderScaleHotPresentationContract
+Upscaling::GetSubmitStageHotPresentationContract(
+	uint64_t a_compositorCycleToken,
+	uint32_t a_frame)
+{
+	const bool sameAuthoritativeCycle =
+		a_compositorCycleToken != 0 &&
+		submitStageHotPresentationContract.compositorCycleToken ==
+			a_compositorCycleToken &&
+		submitStageHotPresentationContract.frame == a_frame;
+	// One cycle keeps one controller publication. Live boot generation checks
+	// force a safe presentation fallback if physical ownership changes between eyes.
+	if (sameAuthoritativeCycle)
+		return submitStageHotPresentationContract;
+
+	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	submitStageHotPresentationContract =
+		CaptureVRRenderScaleHotPresentationContractLocked(
+			a_compositorCycleToken,
+			a_frame);
+	return submitStageHotPresentationContract;
 }
 
 Upscaling::VRRenderScaleTransitionSnapshot Upscaling::GetVRRenderScaleTransitionSnapshot() const

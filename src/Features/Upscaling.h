@@ -1287,6 +1287,24 @@ public:
 			VRRenderScalePresentationPhase::Idle;
 	};
 
+	/** @brief Compact controller state consumed by the per-eye presentation path. */
+	struct VRRenderScaleHotPresentationContract
+	{
+		uint64_t compositorCycleToken = 0;
+		uint32_t frame = 0;
+		uint64_t revision = 0;
+		VRRenderScaleTransitionState state = VRRenderScaleTransitionState::Idle;
+		uint64_t targetEpoch = 0;
+		uint32_t stateFrame = 0;
+		VRRenderScaleProfileSnapshot applied{};
+		VRRenderScaleProfileSnapshot stable{};
+		VRRenderScalePresentationSnapshot presentation{};
+		uint64_t postLoadRecoveryLoadingSerial = 0;
+	};
+	static_assert(
+		sizeof(VRRenderScaleHotPresentationContract) <
+		sizeof(VRRenderScaleTransitionSnapshot));
+
 	struct PerfModeState
 	{
 		struct BootSnapshot
@@ -2416,6 +2434,7 @@ public:
 	uint32_t submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	uint32_t submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageVendorAdmissionEyeMask = 0;
+	VRRenderScaleHotPresentationContract submitStageHotPresentationContract{};
 	uint64_t submitStageVendorRelatchDeferredEpoch = 0;
 	struct SubmitStageVendorEyeState
 	{
@@ -3025,6 +3044,12 @@ private:
 	void ServiceVRIntermediateTextureCleanup(bool a_forceFence = false);
 	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool a_includePendingFSRReset = true);
 	VRVendorResourceResetResult RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
+	VRRenderScaleHotPresentationContract CaptureVRRenderScaleHotPresentationContractLocked(
+		uint64_t a_compositorCycleToken,
+		uint32_t a_frame) const;
+	VRRenderScaleHotPresentationContract GetSubmitStageHotPresentationContract(
+		uint64_t a_compositorCycleToken,
+		uint32_t a_frame);
 	void InvalidateCommonVendorResourceContract();
 	void PublishCommonVendorResourceContract(UpscaleMethod a_upscaleMethod);
 	bool IsCommonVendorResourceContractCurrent(UpscaleMethod a_upscaleMethod) const;

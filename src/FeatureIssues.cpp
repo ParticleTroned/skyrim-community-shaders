@@ -792,6 +792,14 @@ namespace FeatureIssues
 						continue;
 					}
 
+					// A known feature can be absent from the runtime-filtered active list.
+					if (auto* known = Feature::FindRegisteredFeatureByShortName(featureName)) {
+						if (REL::Module::IsVR() && !known->SupportsVR()) {
+							logger::info("Ignoring {}.ini, not supported on VR", featureName);
+							continue;
+						}
+					}
+
 					// This is an orphaned INI file - check if it's a known obsolete feature
 					if (IsObsoleteFeature(featureName)) {
 						// Read version from INI file

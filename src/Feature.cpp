@@ -54,6 +54,14 @@
 
 void Feature::Load(json& o_json)
 {
+	// AIO packages can contain feature INIs for every runtime. Keep an
+	// unsupported feature unloaded unless developer mode explicitly exposes it.
+	if (REL::Module::IsVR() && !SupportsVR() && !globals::state->IsDeveloperMode()) {
+		loaded = false;
+		logger::info("{} does not support VR, feature disabled", GetShortName());
+		return;
+	}
+
 	// Convert string to wstring
 	auto ini_filename = std::format("{}.ini", GetShortName());
 	std::wstring ini_filename_w;
@@ -225,54 +233,61 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 	a_ini.SetValue(ini_name.c_str(), "Version", version.c_str());
 }
 
+namespace
+{
+	const std::vector<Feature*>& GetAllFeatures()
+	{
+		static std::vector<Feature*> features = {
+			&globals::features::truePBR,
+			&globals::features::foliageLighting,
+			&globals::features::adaptiveBrightness,
+			&globals::features::grassLighting,
+			&globals::features::grassCollision,
+			&globals::features::screenSpaceShadows,
+			&globals::features::extendedMaterials,
+			&globals::features::wetnessEffects,
+			&globals::features::wetterness,
+			&globals::features::lightLimitFix,
+			&globals::features::dynamicCubemaps,
+			&globals::features::cloudShadows,
+			&globals::features::waterEffects,
+			&globals::features::performanceOverlay,
+			&globals::features::subsurfaceScattering,
+			&globals::features::terrainShadows,
+			&globals::features::screenSpaceGI,
+			&globals::features::skylighting,
+			&globals::features::skySync,
+			&globals::features::terrainBlending,
+			&globals::features::terrainHelper,
+			&globals::features::volumetricLighting,
+			&globals::features::volumetricShadows,
+			&globals::features::lodBlending,
+			&globals::features::inverseSquareLighting,
+			&globals::features::hairSpecular,
+			&globals::features::interiorSun,
+			&globals::features::terrainVariation,
+			&globals::features::ibl,
+			&globals::features::extendedTranslucency,
+			&globals::features::upscaling,
+			&globals::features::renderDoc,
+			&globals::features::csEditor,
+			&globals::features::weatherPicker,
+			&globals::features::screenshotFeature,
+			&globals::features::linearLighting,
+			&globals::features::unifiedWater,
+			&globals::features::horizonFix,
+			&globals::features::csUtility
+		};
+		return features;
+	}
+}
+
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
-	static std::vector<Feature*> features = {
-		&globals::features::truePBR,
-		&globals::features::foliageLighting,
-		&globals::features::adaptiveBrightness,
-		&globals::features::grassLighting,
-		&globals::features::grassCollision,
-		&globals::features::screenSpaceShadows,
-		&globals::features::extendedMaterials,
-		&globals::features::wetnessEffects,
-		&globals::features::wetterness,
-		&globals::features::lightLimitFix,
-		&globals::features::dynamicCubemaps,
-		&globals::features::cloudShadows,
-		&globals::features::waterEffects,
-		&globals::features::performanceOverlay,
-		&globals::features::subsurfaceScattering,
-		&globals::features::terrainShadows,
-		&globals::features::screenSpaceGI,
-		&globals::features::skylighting,
-		&globals::features::skySync,
-		&globals::features::terrainBlending,
-		&globals::features::terrainHelper,
-		&globals::features::volumetricLighting,
-		&globals::features::volumetricShadows,
-		&globals::features::lodBlending,
-		&globals::features::inverseSquareLighting,
-		&globals::features::hairSpecular,
-		&globals::features::interiorSun,
-		&globals::features::terrainVariation,
-		&globals::features::ibl,
-		&globals::features::extendedTranslucency,
-		&globals::features::upscaling,
-		&globals::features::renderDoc,
-		&globals::features::csEditor,
-		&globals::features::weatherPicker,
-		&globals::features::screenshotFeature,
-		&globals::features::linearLighting,
-		&globals::features::unifiedWater,
-		&globals::features::horizonFix,
-		&globals::features::csUtility
-	};
-
 	if (REL::Module::IsVR()) {
 		// Helper function to build VR feature list
 		static auto BuildVRList = []() -> std::vector<Feature*> {
-			auto v = features;
+			auto v = GetAllFeatures();
 			v.push_back(&globals::features::vr);
 
 			// In developer mode, keep all features for testing
@@ -295,7 +310,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 
 		return featuresVR;
 	} else {
-		return features;
+		return GetAllFeatures();
 	}
 }
 
@@ -305,6 +320,17 @@ Feature* Feature::FindFeatureByShortName(const std::string& shortName)
 		if (feature->loaded && feature->GetShortName() == shortName)
 			return feature;
 	}
+	return nullptr;
+}
+
+Feature* Feature::FindRegisteredFeatureByShortName(const std::string& shortName)
+{
+	for (auto* feature : GetAllFeatures()) {
+		if (feature->GetShortName() == shortName)
+			return feature;
+	}
+	if (shortName == "VR")
+		return &globals::features::vr;
 	return nullptr;
 }
 

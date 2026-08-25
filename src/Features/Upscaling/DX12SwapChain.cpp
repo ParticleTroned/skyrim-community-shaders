@@ -169,6 +169,10 @@ void DX12SwapChain::RecreateWrappedResources(const DXGI_SWAP_CHAIN_DESC1& a_desc
 
 	swapChainBufferWrapped = std::move(newSwapChainBuffer);
 	uiBufferWrapped = std::move(newUiBuffer);
+
+	const float clearColor[4]{};
+	d3d11Context->ClearRenderTargetView(swapChainBufferWrapped->rtv.get(), clearColor);
+	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv.get(), clearColor);
 }
 
 DXGISwapChainProxy* DX12SwapChain::GetSwapChainProxy()

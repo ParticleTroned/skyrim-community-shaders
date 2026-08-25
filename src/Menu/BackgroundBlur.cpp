@@ -132,11 +132,6 @@ namespace BackgroundBlur
 			return {};
 		}
 
-		bool IsUpscalingBlurSourceActive(const Upscaling& upscaling)
-		{
-			return upscaling.d3d12SwapChainActive || (upscaling.loaded && upscaling.IsUpscalingActive());
-		}
-
 		bool IsMainOrLoadingMenuOpen()
 		{
 			auto* state = globals::state;
@@ -148,10 +143,9 @@ namespace BackgroundBlur
 			return !shaderCache || (shaderCache->menuLoaded.load(std::memory_order_relaxed) && !shaderCache->IsCompiling());
 		}
 
-		bool ShouldSkipStartupMenuBlur(const Upscaling& upscaling)
+		bool ShouldSkipStartupMenuBlur()
 		{
-			return !IsUpscalingBlurSourceActive(upscaling) &&
-			       IsMainOrLoadingMenuOpen() &&
+			return IsMainOrLoadingMenuOpen() &&
 			       !IsStartupMenuBlurSourceReady(globals::shaderCache);
 		}
 
@@ -657,7 +651,7 @@ namespace BackgroundBlur
 		                 hdr->hdrTexture && hdr->hdrTexture->resource && hdr->hdrTexture->srv && hdr->hdrTexture->rtv;
 
 		// Startup main/loading back buffer can be black until DataLoaded and initial shader work finish.
-		if (ShouldSkipStartupMenuBlur(upscaling))
+		if (ShouldSkipStartupMenuBlur())
 			return;
 
 		winrt::com_ptr<ID3D11Texture2D> currentTexture;

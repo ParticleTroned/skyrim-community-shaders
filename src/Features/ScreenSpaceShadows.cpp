@@ -537,7 +537,7 @@ void ScreenSpaceShadows::DrawShadows()
 	auto DispatchEye = [&](const char* eyeName, ID3D11ComputeShader* shader, uint32_t eyeIndex, const float* lightProj,
 						   float invTexSizeX, float invTexSizeY) {
 		const char* profileName = eyeName ? (eyeIndex == 0 ? "ScreenSpaceShadows::RayMarch(Left Eye)" : "ScreenSpaceShadows::RayMarch(Right Eye)") : "ScreenSpaceShadows::RayMarch";
-		CS_GPU_PASS(profileName);
+		CS_GPU_PASS_DYNAMIC(profileName);
 
 		context->CSSetShader(shader, nullptr, 0);
 
@@ -662,8 +662,7 @@ void ScreenSpaceShadows::DrawStereoSync()
 	if (!stereoCS)
 		return;
 
-	const char* profileLabel = stereoCS == stereoSyncCS ? "ScreenSpaceShadows::StereoSync" : "ScreenSpaceShadows::StereoReproject";
-	CS_GPU_PASS(profileLabel);
+	CS_GPU_PASS_SELECT(stereoCS == stereoSyncCS, "ScreenSpaceShadows::StereoSync", "ScreenSpaceShadows::StereoReproject");
 
 	auto context = globals::d3d::context;
 

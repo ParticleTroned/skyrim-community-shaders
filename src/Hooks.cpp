@@ -1765,7 +1765,7 @@ namespace Hooks
 				}
 
 				if (profileName) {
-					CS_GPU_PASS(profileName);
+					CS_GPU_PASS_DYNAMIC(profileName);
 					func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
 				} else {
 					func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);

@@ -6,6 +6,7 @@
 
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
+#include "GpuPass.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/D3D.h"
@@ -368,11 +369,8 @@ namespace FrameAnnotations
 	{
 		static void thunk()
 		{
-			globals::state->BeginPerfEvent("Water Effects");
-
+			CS_GPU_PASS("Water::RenderWaterEffects");
 			func();
-
-			globals::state->EndPerfEvent();
 		};
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

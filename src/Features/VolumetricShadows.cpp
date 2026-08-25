@@ -307,7 +307,7 @@ void VolumetricShadows::CopyShadowLightData()
 			context->CSSetUnorderedAccessViews(0, 1, &a_tempUAV, nullptr);
 			context->CSSetShader(blurShadowHorizontalCS, nullptr, 0);
 			{
-				CS_GPU_PASS(a_hProfile);
+				CS_GPU_PASS_DYNAMIC(a_hProfile);
 				context->Dispatch((a_size + kBlurGroupSize - 1) / kBlurGroupSize, a_size, 1);
 			}
 
@@ -319,7 +319,7 @@ void VolumetricShadows::CopyShadowLightData()
 			context->CSSetUnorderedAccessViews(0, 1, &a_outputUAV, nullptr);
 			context->CSSetShader(blurShadowVerticalCS, nullptr, 0);
 			{
-				CS_GPU_PASS(a_vProfile);
+				CS_GPU_PASS_DYNAMIC(a_vProfile);
 				context->Dispatch(a_size, (a_size + kBlurGroupSize - 1) / kBlurGroupSize, 1);
 			}
 

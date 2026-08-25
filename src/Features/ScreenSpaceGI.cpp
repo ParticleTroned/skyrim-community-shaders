@@ -1863,7 +1863,7 @@ void ScreenSpaceGI::DrawSSGI()
 	};
 
 	auto dispatchCenterShader = [&](ID3D11ComputeShader* a_shader, std::string_view a_profileName) {
-		CS_GPU_PASS(a_profileName);
+		CS_GPU_PASS_DYNAMIC(a_profileName);
 		forEachCenterRect([&](const DispatchRect& rect) {
 			if (rect.width == 0 || rect.height == 0)
 				return;
@@ -1943,7 +1943,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		context->CSSetShader(a_shader, nullptr, 0);
 		{
-			CS_GPU_PASS(a_profileName);
+			CS_GPU_PASS_DYNAMIC(a_profileName);
 			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
 		}
 

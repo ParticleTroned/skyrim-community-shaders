@@ -39658,10 +39658,7 @@ bool Upscaling::DispatchHMDMaskClear(
 	context->CSSetConstantBuffers(0, 1, &clearCB);
 
 	{
-		const char* timerName = a_finalDispatch ?
-		                            "Upscaling::HAM::FinalTiledExact5x5" :
-		                            "Upscaling::HAM::InputTiledExact5x5";
-		CS_GPU_PASS(timerName);
+		CS_GPU_PASS_SELECT(a_finalDispatch, "Upscaling::HAM::FinalTiledExact5x5", "Upscaling::HAM::InputTiledExact5x5");
 		context->Dispatch(dispatchX, dispatchY, 1);
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -51151,7 +51148,7 @@ void Upscaling::Upscale()
 
 	auto encodeUpscalingTextures = [&](bool forceFullVREncode) -> bool {
 		encodedVRFoveatedRegions = false;
-		CS_GPU_PASS(forceFullVREncode ? "Upscaling::EncodeTexturesFallbackFull" : "Upscaling::EncodeTextures");
+		CS_GPU_PASS_SELECT(forceFullVREncode, "Upscaling::EncodeTexturesFallbackFull", "Upscaling::EncodeTextures");
 
 		auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
 		auto& normals = renderer->GetRuntimeData().renderTargets[deferred->forwardRenderTargets[2]];

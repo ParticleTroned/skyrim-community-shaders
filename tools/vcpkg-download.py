@@ -23,17 +23,54 @@ def download(url: str, destination: Path) -> None:
     try:
         for attempt in range(3):
             try:
+                offset = temporary.stat().st_size if temporary.exists() else 0
+                headers = {"User-Agent": "CSX-vcpkg-downloader/1"}
+                if offset:
+                    headers["Range"] = f"bytes={offset}-"
                 request = urllib.request.Request(
                     url,
-                    headers={"User-Agent": "CSX-vcpkg-downloader/1"},
+                    headers=headers,
                 )
                 with urllib.request.urlopen(request, timeout=60) as response:
-                    with temporary.open("wb") as output:
+                    content_length = response.headers.get("Content-Length")
+                    content_range = response.headers.get("Content-Range")
+                    if offset and response.status == 206:
+                        if not content_range:
+                            raise OSError(
+                                "resumed response has no Content-Range header"
+                            )
+                        returned_range, total_length = content_range.split("/", 1)
+                        returned_start = int(
+                            returned_range.split(" ", 1)[1].split("-", 1)[0]
+                        )
+                        if returned_start != offset:
+                            raise OSError(
+                                "invalid resumed response: "
+                                f"requested byte {offset}, received {content_range}"
+                            )
+                        expected_length = int(total_length)
+                        mode = "ab"
+                    else:
+                        offset = 0
+                        expected_length = (
+                            int(content_length)
+                            if content_length is not None
+                            else None
+                        )
+                        mode = "wb"
+
+                    with temporary.open(mode) as output:
                         shutil.copyfileobj(response, output)
+                received_length = temporary.stat().st_size
+                if expected_length is not None and received_length != expected_length:
+                    raise OSError(
+                        "incomplete download: "
+                        f"expected {expected_length} bytes, "
+                        f"received {received_length}"
+                    )
                 os.replace(temporary, destination)
                 return
-            except (OSError, urllib.error.URLError):
-                temporary.unlink(missing_ok=True)
+            except (OSError, ValueError, urllib.error.URLError):
                 if attempt == 2:
                     raise
                 time.sleep(2**attempt)

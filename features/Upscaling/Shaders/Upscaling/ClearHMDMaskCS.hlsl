@@ -35,7 +35,19 @@ bool IsHiddenDepth(float depth)
 	return depth <= kHiddenDepthThreshold;
 }
 
-bool IsDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
+bool IsDepthSampleInRegion(int2 samplePos, uint2 depthDimensions, uint2 depthOffset, uint2 depthExtent)
+{
+	if (any(samplePos < int2(0, 0)))
+		return false;
+
+	const uint2 unsignedSamplePos = uint2(samplePos);
+	if (any(unsignedSamplePos >= depthDimensions) || any(unsignedSamplePos < depthOffset))
+		return false;
+
+	return all(unsignedSamplePos - depthOffset < depthExtent);
+}
+
+bool IsDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions, uint2 depthOffset, uint2 depthExtent)
 {
 	bool hidden = false;
 	[unroll] for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y)
@@ -46,9 +58,7 @@ bool IsDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 				continue;
 
 			int2 samplePos = int2(depthPos) + int2(x, y);
-			if (any(samplePos < int2(0, 0)) ||
-				samplePos.x >= int(depthDimensions.x) ||
-				samplePos.y >= int(depthDimensions.y)) {
+			if (!IsDepthSampleInRegion(samplePos, depthDimensions, depthOffset, depthExtent)) {
 				continue;
 			}
 
@@ -62,7 +72,7 @@ bool IsDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 	return hidden;
 }
 
-bool IsSparseDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
+bool IsSparseDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions, uint2 depthOffset, uint2 depthExtent)
 {
 	bool hidden = false;
 	[unroll] for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; y += kHiddenDepthDilationRadius)
@@ -70,9 +80,7 @@ bool IsSparseDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 		[unroll] for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; x += kHiddenDepthDilationRadius)
 		{
 			const int2 samplePos = int2(depthPos) + int2(x, y);
-			if (any(samplePos < int2(0, 0)) ||
-				samplePos.x >= int(depthDimensions.x) ||
-				samplePos.y >= int(depthDimensions.y)) {
+			if (!IsDepthSampleInRegion(samplePos, depthDimensions, depthOffset, depthExtent)) {
 				continue;
 			}
 			hidden = hidden || IsHiddenDepth(DepthIn[uint2(samplePos)]);
@@ -84,6 +92,8 @@ bool IsSparseDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 void EvaluateAuditDepthCandidates(
 	uint2 depthPos,
 	uint2 depthDimensions,
+	uint2 depthOffset,
+	uint2 depthExtent,
 	out bool robustClear,
 	out bool thresholdCenterClear,
 	out bool threshold3x3Clear,
@@ -101,9 +111,7 @@ void EvaluateAuditDepthCandidates(
 		[unroll] for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x)
 		{
 			const int2 samplePos = int2(depthPos) + int2(x, y);
-			if (any(samplePos < int2(0, 0)) ||
-				samplePos.x >= int(depthDimensions.x) ||
-				samplePos.y >= int(depthDimensions.y)) {
+			if (!IsDepthSampleInRegion(samplePos, depthDimensions, depthOffset, depthExtent)) {
 				continue;
 			}
 
@@ -149,6 +157,9 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 
 	uint depthTextureWidth, depthTextureHeight;
 	DepthIn.GetDimensions(depthTextureWidth, depthTextureHeight);
+	const uint2 depthDimensions = uint2(depthTextureWidth, depthTextureHeight);
+	const uint2 depthOffset = uint2(DepthOffsetX, DepthOffsetY);
+	const uint2 depthExtent = uint2(DepthWidth, DepthHeight);
 
 	uint2 localColorPos = uint2(
 		ResolveProbeCoordinate(dispatchID.x, ColorWidth),
@@ -158,7 +169,7 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 						 (localColorPos.y * DepthHeight) / ColorHeight) +
 	                 uint2(DepthOffsetX, DepthOffsetY);
 
-	if (depthPos.x >= depthTextureWidth || depthPos.y >= depthTextureHeight) {
+	if (!IsDepthSampleInRegion(int2(depthPos), depthDimensions, depthOffset, depthExtent)) {
 		ColorInOut[dispatchID.xy] = float4(-1.0, -1.0, 0.0, 0.0);
 		return;
 	}
@@ -171,9 +182,7 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		[unroll] for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x)
 		{
 			int2 samplePos = int2(depthPos) + int2(x, y);
-			if (any(samplePos < int2(0, 0)) ||
-				samplePos.x >= int(depthTextureWidth) ||
-				samplePos.y >= int(depthTextureHeight)) {
+			if (!IsDepthSampleInRegion(samplePos, depthDimensions, depthOffset, depthExtent)) {
 				continue;
 			}
 			const float depth = DepthIn[uint2(samplePos)];
@@ -204,6 +213,9 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 
 	uint depthTexWidth, depthTexHeight;
 	DepthIn.GetDimensions(depthTexWidth, depthTexHeight);
+	const uint2 depthDimensions = uint2(depthTexWidth, depthTexHeight);
+	const uint2 depthOffset = uint2(DepthOffsetX, DepthOffsetY);
+	const uint2 depthExtent = uint2(DepthWidth, DepthHeight);
 
 	uint2 depthPos;
 	if (DepthWidth > 0 && DepthHeight > 0 && ColorWidth > 0 && ColorHeight > 0) {
@@ -215,13 +227,13 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		depthPos = dispatchID.xy + uint2(DepthOffsetX, DepthOffsetY);
 	}
 
-	if (depthPos.x >= depthTexWidth || depthPos.y >= depthTexHeight)
+	if (!IsDepthSampleInRegion(int2(depthPos), depthDimensions, depthOffset, depthExtent))
 		return;
 
 #if defined(HMD_MASK_ROBUST_DEPTH_5X5)
-	const bool clearPixel = IsDilatedHiddenDepth(depthPos, uint2(depthTexWidth, depthTexHeight));
+	const bool clearPixel = IsDilatedHiddenDepth(depthPos, depthDimensions, depthOffset, depthExtent);
 #else
-	const bool clearPixel = IsSparseDilatedHiddenDepth(depthPos, uint2(depthTexWidth, depthTexHeight));
+	const bool clearPixel = IsSparseDilatedHiddenDepth(depthPos, depthDimensions, depthOffset, depthExtent);
 #endif
 
 	if (clearPixel)
@@ -245,11 +257,14 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 
 	uint depthTexWidth, depthTexHeight;
 	DepthIn.GetDimensions(depthTexWidth, depthTexHeight);
+	const uint2 depthDimensions = uint2(depthTexWidth, depthTexHeight);
+	const uint2 depthOffset = uint2(DepthOffsetX, DepthOffsetY);
+	const uint2 depthExtent = uint2(DepthWidth, DepthHeight);
 	const uint2 depthPos = uint2(
 							   (localColorPos.x * DepthWidth) / ColorWidth,
 							   (localColorPos.y * DepthHeight) / ColorHeight) +
 	                       uint2(DepthOffsetX, DepthOffsetY);
-	if (depthPos.x >= depthTexWidth || depthPos.y >= depthTexHeight)
+	if (!IsDepthSampleInRegion(int2(depthPos), depthDimensions, depthOffset, depthExtent))
 		return;
 
 	bool robustClear;
@@ -259,7 +274,9 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 	bool thresholdPatternR2Clear;
 	EvaluateAuditDepthCandidates(
 		depthPos,
-		uint2(depthTexWidth, depthTexHeight),
+		depthDimensions,
+		depthOffset,
+		depthExtent,
 		robustClear,
 		thresholdCenterClear,
 		threshold3x3Clear,

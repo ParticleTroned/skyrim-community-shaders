@@ -17,6 +17,7 @@ struct LightLimitFix : OverlayFeature
 {
 private:
 	static constexpr std::string_view MOD_ID = "99548";
+	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;
 
 public:
 	virtual inline std::string GetName() override { return "Light Limit Fix"; }

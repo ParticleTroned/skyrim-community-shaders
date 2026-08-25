@@ -235,6 +235,7 @@ jobs:
                   fi
                   echo "Changed files for incremental validation:"
                   cat changed_files.txt || true
+                  mkdir -p build/ShaderCache
                   python tools/validate_changed_shaders.py --changed-list-file changed_files.txt -- \
                     hlslkit-compile --fxc "${{ steps.find_fxc.outputs.fxc_path }}" --shader-dir build/ALL/aio/Shaders --output-dir build/ShaderCache --config ${{ matrix.config.file }} --max-warnings 0 --suppress-warnings X1519
 

@@ -1373,6 +1373,8 @@ public:
 		bool a_openVRAttempt,
 		const VRRenderScalePresentationObservation* a_presentationObservation = nullptr) noexcept;
 	void CompleteVRLoadPresentationProbeSubmit(uint64_t a_sequence, vr::EVRCompositorError a_result) noexcept;
+	void ResetVRHMDMaskDiagnostics();
+	json BuildVRHMDMaskDiagnosticsStatus();
 #endif
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
@@ -1791,9 +1793,14 @@ public:
 	winrt::com_ptr<ID3D11BlendState> vrMenuLayerCaptureBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
 
-	// Shared VR HMD Mask Clearing
+	// Shared VR HMD mask clearing
 	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskCS;
 	winrt::com_ptr<ID3D11Buffer> vrClearHMDMaskCB;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::atomic<uint64_t> vrHMDMaskInputDispatches{ 0 };
+	std::atomic<uint64_t> vrHMDMaskFinalDispatches{ 0 };
+	std::atomic<uint64_t> vrHMDMaskRejectedDispatches{ 0 };
+#endif
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void ServiceVRLoadPresentationProbeReadbacks() noexcept;
@@ -2934,7 +2941,7 @@ private:
 	bool DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,
-		bool a_verifyBindings = false);
+		bool a_verifyBindings = false, bool a_finalDispatch = false);
 	void TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
 	void ServiceSubmitStageVendorResumePromotion(uint64_t a_compositorCycleToken);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
@@ -3007,7 +3014,8 @@ private:
 		PerEyeInput,
 		PerEyeOutput,
 		SubmitStageOutput,
-		SubmitStageFoveatedOutput
+		SubmitStageFoveatedOutput,
+		SubmitStageInput
 	};
 	void RecordVRPostLoadHMDMaskRepair(
 		HMDMaskClearPhase a_phase,

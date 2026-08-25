@@ -121,6 +121,43 @@ namespace
 	constexpr float kDLSSRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
 	constexpr float kDLSSLumaSharpnessOverdrive = 2.5f;
 
+	// Keep this layout in lockstep with ClearHMDMaskCB in
+	// ClearHMDMaskCS.hlsl.
+	struct HMDMaskClearConstants
+	{
+		uint32_t depthOffsetX = 0;
+		uint32_t colorOffsetX = 0;
+		uint32_t depthOffsetY = 0;
+		uint32_t colorOffsetY = 0;
+		uint32_t depthWidth = 0;
+		uint32_t depthHeight = 0;
+		uint32_t colorWidth = 0;
+		uint32_t colorHeight = 0;
+	};
+	static_assert(sizeof(HMDMaskClearConstants) == sizeof(uint32_t) * 8u);
+
+	HMDMaskClearConstants MakeHMDMaskClearConstants(
+		uint32_t a_depthOffsetX,
+		uint32_t a_colorOffsetX,
+		uint32_t a_depthOffsetY,
+		uint32_t a_colorOffsetY,
+		uint32_t a_depthWidth,
+		uint32_t a_depthHeight,
+		uint32_t a_colorWidth,
+		uint32_t a_colorHeight) noexcept
+	{
+		return {
+			a_depthOffsetX,
+			a_colorOffsetX,
+			a_depthOffsetY,
+			a_colorOffsetY,
+			a_depthWidth,
+			a_depthHeight,
+			a_colorWidth,
+			a_colorHeight,
+		};
+	}
+
 	template <class Fn>
 	struct ScopeExit
 	{
@@ -19991,10 +20028,10 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 
 	return {
 		.disposition = methodChanged || qualitySettingChanged ||
-				renderScaleModeChanged || dlssSettingChanged ||
-				fsr4RuntimeValueChanged ?
-			                   UpscalingTransitionApplyDisposition::AppliedSynchronously :
-			                   UpscalingTransitionApplyDisposition::NoChange,
+		                       renderScaleModeChanged || dlssSettingChanged ||
+		                       fsr4RuntimeValueChanged ?
+		                   UpscalingTransitionApplyDisposition::AppliedSynchronously :
+		                   UpscalingTransitionApplyDisposition::NoChange,
 	};
 }
 
@@ -22168,7 +22205,7 @@ void Upscaling::ServiceVRIntermediateTextureCleanup(bool a_forceFence)
 		uint64_t completedSerial = 0;
 		auto completedEnd = retiredVRIntermediateTextures.begin();
 		while (completedEnd != retiredVRIntermediateTextures.end() &&
-			completedEnd->retirementSerial <= a_maxSerial) {
+			   completedEnd->retirementSerial <= a_maxSerial) {
 			completedSerial = completedEnd->retirementSerial;
 			++completedEnd;
 		}
@@ -30954,7 +30991,8 @@ namespace
 	uint32_t vrLoadPresentationProbeCount = 0;
 	uint32_t vrLoadPresentationProbeOverwrittenRecords = 0;
 	std::array<VRLoadPresentationProbePendingReadback, Upscaling::kVRLoadPresentationProbePendingCapacity> vrLoadPresentationProbePending{};
-	std::array<std::array<VRLoadPresentationHMDMaskObservation, 4>, 2>
+	// Keep the phase dimension in lockstep with HMDMaskClearPhase.
+	std::array<std::array<VRLoadPresentationHMDMaskObservation, 5>, 2>
 		vrLoadPresentationHMDMaskObservations{};
 	std::array<VRLoadPresentationHAMProbeRecord, kVRLoadPresentationHAMProbeRetentionCapacity>
 		vrLoadPresentationHAMProbeRecords{};
@@ -31903,7 +31941,7 @@ namespace
 			}
 			if (!vrLoadPresentationHAMProbeCB) {
 				D3D11_BUFFER_DESC bufferDesc{};
-				bufferDesc.ByteWidth = sizeof(uint32_t) * 8u;
+				bufferDesc.ByteWidth = sizeof(HMDMaskClearConstants);
 				bufferDesc.Usage = D3D11_USAGE_DEFAULT;
 				bufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 				if (FAILED(a_device->CreateBuffer(
@@ -32343,7 +32381,7 @@ namespace
 				}
 			}
 
-			const uint32_t probeParams[8] = {
+			const auto probeParams = MakeHMDMaskClearConstants(
 				a_depthOffsetX,
 				a_colorOffsetX,
 				a_depthOffsetY,
@@ -32351,13 +32389,12 @@ namespace
 				a_depthWidth,
 				a_depthHeight,
 				a_colorWidth,
-				a_colorHeight
-			};
+				a_colorHeight);
 			context->UpdateSubresource(
 				vrLoadPresentationHAMProbeCB.get(),
 				0,
 				nullptr,
-				probeParams,
+				&probeParams,
 				0,
 				0);
 			context->CSSetShader(vrLoadPresentationHAMProbeCS.get(), nullptr, 0);
@@ -33429,6 +33466,8 @@ json Upscaling::BuildVRLoadPresentationProbeRecord() const
 			return "SubmitStageOutput";
 		case HMDMaskClearPhase::SubmitStageFoveatedOutput:
 			return "SubmitStageFoveatedOutput";
+		case HMDMaskClearPhase::SubmitStageInput:
+			return "SubmitStageInput";
 		default:
 			return "Unknown";
 		}
@@ -38303,50 +38342,28 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 
 	// Zero color in the HMD hidden area, including a tiny mask-edge expansion,
 	// in each per-eye buffer before temporal reuse.
-	// Bind CS/SRV/CB once for both eyes to reduce per-frame CPU overhead.
 	const bool clearPerEyeInputHMDMask = ShouldClearHMDMaskInPhase(HMDMaskClearPhase::PerEyeInput);
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	if (clearPerEyeInputHMDMask)
 		(void)EnsureHMDMaskClearResources();
 
 	if (clearPerEyeInputHMDMask && depthTexture.depthSRV && vrClearHMDMaskCS && vrClearHMDMaskCB) {
-		auto dispatchX = (eyeWidthIn + 7) / 8;
-		auto dispatchY = (eyeHeightIn + 7) / 8;
-
-		context->CSSetShader(vrClearHMDMaskCS.get(), nullptr, 0);
-
-		ID3D11ShaderResourceView* srvs[1] = { depthTexture.depthSRV };
-		context->CSSetShaderResources(0, 1, srvs);
-
-		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
-		context->CSSetConstantBuffers(0, 1, cbs);
-
 		for (uint32_t i = 0; i < 2; ++i) {
-			uint32_t depthOffset = (i == 1) ? eyeWidthIn : 0;
-			uint32_t clearMaskParams[8] = {
-				depthOffset,
-				0,
-				0,
-				0,
+			const uint32_t depthOffset = i == 1 ? eyeWidthIn : 0u;
+			(void)DispatchHMDMaskClear(
+				vrIntermediateColorIn[i]->uav.get(),
+				depthTexture.depthSRV,
 				eyeWidthIn,
 				eyeHeightIn,
 				eyeWidthIn,
-				eyeHeightIn
-			};
-			context->UpdateSubresource(vrClearHMDMaskCB.get(), 0, nullptr, clearMaskParams, 0, 0);
-
-			ID3D11UnorderedAccessView* uavs[1] = { vrIntermediateColorIn[i]->uav.get() };
-			context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-			context->Dispatch(dispatchX, dispatchY, 1);
+				eyeHeightIn,
+				depthOffset,
+				0u,
+				0u,
+				0u,
+				false,
+				false);
 		}
-
-		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-		ID3D11Buffer* nullCB[1] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSRV);
-		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-		context->CSSetConstantBuffers(0, 1, nullCB);
-		context->CSSetShader(nullptr, nullptr, 0);
 	}
 
 	return true;
@@ -39492,31 +39509,35 @@ bool Upscaling::EnsureHMDMaskClearResources()
 {
 	if (!globals::game::isVR)
 		return false;
-	if (vrClearHMDMaskCS && vrClearHMDMaskCB)
-		return true;
 
-	auto device = globals::d3d::device;
+	auto* device = globals::d3d::device;
 	if (!device)
 		return false;
 
 	static bool loggedHMDMaskClearFailure = false;
 	try {
 		if (!vrClearHMDMaskCS) {
-			vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
+			vrClearHMDMaskCS.attach(static_cast<ID3D11ComputeShader*>(
+				Util::CompileShader(
+					L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl",
+					{},
+					"cs_5_0")));
 		}
 
 		if (!vrClearHMDMaskCB) {
-			D3D11_BUFFER_DESC cbDesc = {};
-			cbDesc.ByteWidth = 32;  // 8 uints
+			D3D11_BUFFER_DESC cbDesc{};
+			cbDesc.ByteWidth = sizeof(HMDMaskClearConstants);
 			cbDesc.Usage = D3D11_USAGE_DEFAULT;
 			cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-			cbDesc.CPUAccessFlags = 0;
-			DX::ThrowIfFailed(device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
+			DX::ThrowIfFailed(
+				device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
+			Util::SetResourceName(
+				vrClearHMDMaskCB.get(), "Upscaling::HMDMaskClearConstants");
 		}
 	} catch (const std::exception& e) {
 		LogWarnOnce(
 			loggedHMDMaskClearFailure,
-			"[Upscaling] HMD mask clear resources unavailable; hidden-area clear will be skipped",
+			"[Upscaling][HAM] Tiled exact HMD mask resources unavailable; hidden-area clear will be skipped",
 			e);
 		MarkSubmitStageDeviceLostIfNeeded(e, "HMD mask clear resource creation");
 		vrClearHMDMaskCS = nullptr;
@@ -39525,7 +39546,7 @@ bool Upscaling::EnsureHMDMaskClearResources()
 	} catch (...) {
 		LogWarnOnce(
 			loggedHMDMaskClearFailure,
-			"[Upscaling] HMD mask clear resources unavailable; hidden-area clear will be skipped");
+			"[Upscaling][HAM] Tiled exact HMD mask resources unavailable; hidden-area clear will be skipped");
 		MarkSubmitStageDeviceLostIfDeviceRemoved("HMD mask clear resource creation");
 		vrClearHMDMaskCS = nullptr;
 		vrClearHMDMaskCB = nullptr;
@@ -39551,6 +39572,7 @@ bool Upscaling::ShouldClearHMDMaskInPhase(Upscaling::HMDMaskClearPhase a_phase) 
 		break;
 	case HMDMaskClearPhase::SubmitStageOutput:
 	case HMDMaskClearPhase::SubmitStageFoveatedOutput:
+	case HMDMaskClearPhase::SubmitStageInput:
 		submitStagePhase = true;
 		break;
 	default:
@@ -39568,52 +39590,75 @@ bool Upscaling::ShouldClearHMDMaskInPhase(Upscaling::HMDMaskClearPhase a_phase) 
 	       runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 }
 
-bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
-	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY, bool a_verifyBindings)
+bool Upscaling::DispatchHMDMaskClear(
+	ID3D11UnorderedAccessView* colorUAV,
+	ID3D11ShaderResourceView* depthSRV,
+	uint32_t depthWidth,
+	uint32_t depthHeight,
+	uint32_t colorWidth,
+	uint32_t colorHeight,
+	uint32_t depthOffsetX,
+	uint32_t colorOffsetX,
+	uint32_t depthOffsetY,
+	uint32_t colorOffsetY,
+	bool a_verifyBindings,
+	bool a_finalDispatch)
 {
-	if (!globals::game::isVR)
+	const auto rejectDispatch = [&]() {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		vrHMDMaskRejectedDispatches.fetch_add(1, std::memory_order_relaxed);
+#endif
 		return false;
-	if (!colorUAV || !depthSRV || !depthWidth || !depthHeight || !colorWidth || !colorHeight)
-		return false;
+	};
 
-	auto context = globals::d3d::context;
-	if (!context)
-		return false;
+	if (!globals::game::isVR ||
+		!colorUAV || !depthSRV || !depthWidth || !depthHeight ||
+		!colorWidth || !colorHeight) {
+		return rejectDispatch();
+	}
 
-	if (!EnsureHMDMaskClearResources())
-		return false;
-	if (!vrClearHMDMaskCS || !vrClearHMDMaskCB)
-		return false;
+	// An 8x8 color group maps to at most eight depth texels only for equal-size
+	// or upscaling output. Reject other mappings instead of changing predicates.
+	if (depthWidth > colorWidth || depthHeight > colorHeight) {
+		static bool loggedUnsupportedHMDMaskMapping = false;
+		LogWarnOnce(
+			loggedUnsupportedHMDMaskMapping,
+			"[Upscaling][HAM] Tiled exact HMD mask clear rejected a downscaling mapping");
+		return rejectDispatch();
+	}
 
-	auto dispatchX = (colorWidth + 7) / 8;
-	auto dispatchY = (colorHeight + 7) / 8;
+	auto* context = globals::d3d::context;
+	if (!context || !EnsureHMDMaskClearResources() ||
+		!vrClearHMDMaskCS || !vrClearHMDMaskCB) {
+		return rejectDispatch();
+	}
+
+	const uint32_t dispatchX = (colorWidth + 7u) / 8u;
+	const uint32_t dispatchY = (colorHeight + 7u) / 8u;
 
 	context->CSSetShader(vrClearHMDMaskCS.get(), nullptr, 0);
 	auto clearBindings = ScopeExit([&]() {
-		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-		ID3D11Buffer* nullCB[1] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSRV);
-		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-		context->CSSetConstantBuffers(0, 1, nullCB);
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		ID3D11Buffer* nullCB = nullptr;
+		context->CSSetShaderResources(0, 1, &nullSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+		context->CSSetConstantBuffers(0, 1, &nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
 	});
 
-	ID3D11ShaderResourceView* srvs[1] = { depthSRV };
-	context->CSSetShaderResources(0, 1, srvs);
-
-	ID3D11UnorderedAccessView* uavs[1] = { colorUAV };
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+	context->CSSetShaderResources(0, 1, &depthSRV);
+	context->CSSetUnorderedAccessViews(0, 1, &colorUAV, nullptr);
 	if (a_verifyBindings) {
 		winrt::com_ptr<ID3D11ShaderResourceView> boundSRV;
 		winrt::com_ptr<ID3D11UnorderedAccessView> boundUAV;
 		context->CSGetShaderResources(0, 1, boundSRV.put());
 		context->CSGetUnorderedAccessViews(0, 1, boundUAV.put());
 		if (boundSRV.get() != depthSRV || boundUAV.get() != colorUAV)
-			return false;
+			return rejectDispatch();
 	}
 
-	uint32_t clearMaskParams[8] = {
+	const auto clearMaskParams = MakeHMDMaskClearConstants(
 		depthOffsetX,
 		colorOffsetX,
 		depthOffsetY,
@@ -39621,19 +39666,61 @@ bool Upscaling::DispatchHMDMaskClear(ID3D11UnorderedAccessView* colorUAV, ID3D11
 		depthWidth,
 		depthHeight,
 		colorWidth,
-		colorHeight
-	};
-	context->UpdateSubresource(vrClearHMDMaskCB.get(), 0, nullptr, clearMaskParams, 0, 0);
-
-	ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
-	context->CSSetConstantBuffers(0, 1, cbs);
+		colorHeight);
+	context->UpdateSubresource(
+		vrClearHMDMaskCB.get(), 0, nullptr, &clearMaskParams, 0, 0);
+	ID3D11Buffer* clearCB = vrClearHMDMaskCB.get();
+	context->CSSetConstantBuffers(0, 1, &clearCB);
 
 	{
-		CS_PROFILE_SCOPE("Upscaling::ClearHMDMask");
+		const char* timerName = a_finalDispatch ?
+		                            "Upscaling::HAM::FinalTiledExact5x5" :
+		                            "Upscaling::HAM::InputTiledExact5x5";
+		CS_PROFILE_SCOPE(timerName);
 		context->Dispatch(dispatchX, dispatchY, 1);
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_finalDispatch) {
+		vrHMDMaskFinalDispatches.fetch_add(1, std::memory_order_relaxed);
+	} else {
+		vrHMDMaskInputDispatches.fetch_add(1, std::memory_order_relaxed);
+	}
+#endif
 	return true;
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void Upscaling::ResetVRHMDMaskDiagnostics()
+{
+	vrHMDMaskInputDispatches.store(0, std::memory_order_release);
+	vrHMDMaskFinalDispatches.store(0, std::memory_order_release);
+	vrHMDMaskRejectedDispatches.store(0, std::memory_order_release);
+}
+
+json Upscaling::BuildVRHMDMaskDiagnosticsStatus()
+{
+	return {
+		{ "apiVersion", 5 },
+		{ "implementation", "tiled_exact_5x5" },
+		{ "configurable", false },
+		{ "performance", {
+							 { "tool", "communityshaders.profiler_api" },
+							 { "timerPrefix", "Upscaling::HAM::" },
+							 { "timers", json::array({ "Upscaling::HAM::InputTiledExact5x5",
+											 "Upscaling::HAM::FinalTiledExact5x5" }) },
+						 } },
+		{ "robustness", {
+							{ "inputDispatches", vrHMDMaskInputDispatches.load(std::memory_order_acquire) },
+							{ "finalDispatches", vrHMDMaskFinalDispatches.load(std::memory_order_acquire) },
+							{ "rejectedDispatches", vrHMDMaskRejectedDispatches.load(std::memory_order_acquire) },
+						} },
+		{ "safety", {
+						{ "supportedMapping", "equal-size or upscaling output" },
+						{ "unsupportedMapping", "reject and retain the original compositor path" },
+					} },
+	};
+}
+#endif
 
 void Upscaling::RecordVRPostLoadHMDMaskRepair(
 	Upscaling::HMDMaskClearPhase a_phase,
@@ -40007,7 +40094,8 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 		depthOffsetY,
 		colorOffsetY,
 		validatedFixedVendorRepair ||
-			validatedSubmitStageRepair);
+			validatedSubmitStageRepair,
+		true);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CompleteVRLoadPresentationHAMCapture(hamCapture, executed, colorUAV);
@@ -41238,6 +41326,7 @@ bool Upscaling::TryRepairVRPostLoadFixedCompositorCandidate(
 				eyeIndex * displayEyeWidth,
 				0,
 				0,
+				true,
 				true) ||
 			MarkSubmitStageDeviceLostIfDeviceRemoved(
 				"post-load fixed compositor candidate mask repair")) {
@@ -46249,6 +46338,43 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
 		return false;
 
+	// Presentation RenderScale owns the temporal vendor input, so the ordinary
+	// PerEyeInput phase is intentionally disabled. Restore the same guarantee on
+	// the copied submit-stage eye before DLSS/FSR or Periphery TAA can consume it.
+	// The tiled exact predicate prevents hidden-area color from entering temporal
+	// history. Failure safely retains the original compositor submission.
+	if (!presentationOnly) {
+		const bool inputMaskEligible =
+			ShouldClearHMDMaskInPhase(HMDMaskClearPhase::SubmitStageInput);
+		bool inputMaskCleared = false;
+		if (inputMaskEligible && depth.depthSRV &&
+			vrIntermediateColorIn[eyeIndex] && vrIntermediateColorIn[eyeIndex]->uav) {
+			inputMaskCleared = DispatchHMDMaskClear(
+				vrIntermediateColorIn[eyeIndex]->uav.get(),
+				depth.depthSRV,
+				sourceRegion.depthWidth,
+				sourceRegion.depthHeight,
+				eyeWidthIn,
+				eyeHeightIn,
+				sourceRegion.depthOffsetX,
+				0u,
+				sourceRegion.depthOffsetY,
+				0u,
+				false,
+				false);
+		}
+		if (!inputMaskCleared) {
+			static bool loggedSubmitStageInputMaskFailure[2] = {};
+			LogWarnOnceFmt(
+				loggedSubmitStageInputMaskFailure[eyeIndex],
+				"[Upscaling][HAM] Submit-stage input sanitization was unavailable for eye {}; using the original compositor submission.",
+				eyeIndex);
+			return false;
+		}
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage HMD mask input sanitization"))
+			return false;
+	}
+
 	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, VRRenderScalePresentationPath a_path) {
 		if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut) ||
 			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource) {
@@ -47415,7 +47541,7 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	if (VRVendorRelatchPolicy::CanResolveStartupNativeFallback(
 			startupFallbackControlAction,
 			result.Published() &&
-			IsLatestVRRenderScaleRequest(result.requestID)) &&
+				IsLatestVRRenderScaleRequest(result.requestID)) &&
 		vrStartupRenderScaleNativeFallbackRestartRequired.exchange(
 			false,
 			std::memory_order_acq_rel)) {

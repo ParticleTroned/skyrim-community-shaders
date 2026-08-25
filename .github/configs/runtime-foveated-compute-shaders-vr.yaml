@@ -1,0 +1,63 @@
+warnings:
+    x4000:use of potentially uninitialized variable (loadcacheddepthclamped):
+        code: X4000
+        message: use of potentially uninitialized variable (LoadCachedDepthClamped)
+        instances:
+            peripherytaacs.hlsl:212,62:
+                entries:
+                    - Upscaling:Compute:PeripheryTAA
+    x4000:use of potentially uninitialized variable (loadcachedcurrentcolorclamped):
+        code: X4000
+        message: use of potentially uninitialized variable (LoadCachedCurrentColorClamped)
+        instances:
+            peripherytaacs.hlsl:220,66:
+                entries:
+                    - Upscaling:Compute:PeripheryTAA
+errors: {}
+shaders:
+    - file: ClearHMDMaskCS.hlsl
+      configs:
+          CSHADER:
+              common_defines: &runtime_vr_compute_defines
+                  - COMPUTESHADER
+                  - DX11
+                  - VR
+                  - WINPC
+              entries:
+                  - entry: Upscaling:Compute:ClearHMDMask
+                    defines: []
+    - file: FoveatedCenterBlendCS.hlsl
+      configs:
+          CSHADER:
+              common_defines: *runtime_vr_compute_defines
+              entries:
+                  - entry: Upscaling:Compute:FoveatedCenterBlend
+                    defines: []
+    - file: FoveatedPeripheryCS.hlsl
+      configs:
+          CSHADER:
+              common_defines: *runtime_vr_compute_defines
+              entries:
+                  - entry: Upscaling:Compute:FoveatedPeriphery
+                    defines: []
+    - file: FoveatedSpatialCompositeCS.hlsl
+      configs:
+          CSHADER:
+              common_defines: *runtime_vr_compute_defines
+              entries:
+                  - entry: Upscaling:Compute:FoveatedSpatialComposite
+                    defines: []
+    - file: PeripheryTAACS.hlsl
+      configs:
+          CSHADER:
+              common_defines: *runtime_vr_compute_defines
+              entries:
+                  - entry: Upscaling:Compute:PeripheryTAA
+                    defines: []
+    - file: SubmitStageStretchCS.hlsl
+      configs:
+          CSHADER:
+              common_defines: *runtime_vr_compute_defines
+              entries:
+                  - entry: Upscaling:Compute:SubmitStageStretch
+                    defines: []

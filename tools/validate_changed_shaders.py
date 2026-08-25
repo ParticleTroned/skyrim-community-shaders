@@ -250,8 +250,40 @@ def _run(command: list[str], dry_run: bool) -> int:
     if dry_run:
         print(f"[validate-changed] DRY RUN: {printable}")
         return 0
+
+    # hlslkit's incremental no-op still writes its report without creating the
+    # declared output directory first.
+    output_dir = _command_option(command, "--output-dir")
+    if output_dir:
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as e:
+            print(
+                f"[validate-changed] could not create output directory "
+                f"'{output_dir}': {e}",
+                file=sys.stderr,
+            )
+            return 1
+
     print(f"[validate-changed] running: {printable}")
-    return subprocess.run(command).returncode
+    try:
+        return subprocess.run(command).returncode
+    except OSError as e:
+        print(f"[validate-changed] could not run shader compiler: {e}", file=sys.stderr)
+        return 1
+
+
+def _command_option(command: list[str], option: str) -> str | None:
+    """Return a command option value from ``--name value`` or ``--name=value``."""
+    prefix = f"{option}="
+    for index, token in enumerate(command):
+        if token.startswith(prefix):
+            value = token[len(prefix) :]
+            return value or None
+        if token == option and index + 1 < len(command):
+            value = command[index + 1]
+            return value if value and not value.startswith("-") else None
+    return None
 
 
 if __name__ == "__main__":

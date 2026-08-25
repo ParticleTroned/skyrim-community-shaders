@@ -1974,6 +1974,7 @@ namespace
 		RetirementCapacityBlocked = 1ull << 17u,
 		PostLoadRecoveryActive = 1ull << 18u,
 		StateScreenDimensionsMismatch = 1ull << 19u,
+		ResourcePublicationMismatch = 1ull << 20u,
 	};
 
 	constexpr uint64_t ToMask(VRRenderScaleStableEvidenceBlocker a_blocker)
@@ -2702,6 +2703,11 @@ namespace
 
 		if (ClampPositiveDimension(a_state->screenSize.x) != ClampPositiveDimension(a_engineSize.x) ||
 			ClampPositiveDimension(a_state->screenSize.y) != ClampPositiveDimension(a_engineSize.y)) {
+			return std::nullopt;
+		}
+		if (!a_state->HasCompleteRenderTargetResourcePublication(
+				ClampPositiveDimension(a_engineSize.x),
+				ClampPositiveDimension(a_engineSize.y))) {
 			return std::nullopt;
 		}
 
@@ -24528,6 +24534,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const auto probe = ProbeVRRenderScaleRenderTargetDimensions(
 			relatchTargetEngineSize,
 			relatchTargetDisplaySize);
+		const auto resourcePublication =
+			state->GetRenderTargetResourcePublication();
+		const uint64_t completedResourcePublicationGeneration =
+			state->GetCompletedRenderTargetResourcePublicationGeneration();
 		markActiveVendorRuntimeDirtyAfterRelatchFailure();
 		ClearSubmitStageVendorResumeStability();
 		InvalidateFrameScopedUpscalingState();
@@ -24536,7 +24546,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			false,
 			VRRenderScaleRetryKind::Other);
 		logger::warn(
-			"[VRRenderScale] Physical target profile is not publishable {}; retrying epoch={} generation={} screen={}x{} expected={}x{} requiredMissingMask=0x{:X} dimensionMismatchMask=0x{:X} blockingMismatchMask=0x{:X}.",
+			"[VRRenderScale] Physical target profile is not publishable {}; retrying epoch={} generation={} screen={}x{} expected={}x{} requiredMissingMask=0x{:X} dimensionMismatchMask=0x{:X} blockingMismatchMask=0x{:X} resourcePublicationGeneration={} resourcePublicationComplete={} resourcePublication={}x{} featureSetups={} deferredAcknowledged={}.",
 			a_stage && *a_stage ? a_stage : "during relatch",
 			relatchEpoch,
 			relatchContractGeneration,
@@ -24546,7 +24556,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			ClampPositiveDimension(relatchTargetEngineSize.y),
 			probe.requiredMissingMask,
 			probe.dimensionMismatchMask,
-			probe.PublicationBlockingMismatchMask());
+			probe.PublicationBlockingMismatchMask(),
+			resourcePublication ? resourcePublication->generation : 0u,
+			BoolText(
+				resourcePublication &&
+				resourcePublication->complete &&
+				resourcePublication->generation ==
+					completedResourcePublicationGeneration),
+			resourcePublication ? resourcePublication->width : 0u,
+			resourcePublication ? resourcePublication->height : 0u,
+			resourcePublication ? resourcePublication->loadedFeatureSetupCount : 0u,
+			BoolText(
+				resourcePublication &&
+				resourcePublication->deferredSetupAcknowledged));
 		return false;
 	};
 	if (!IsVRRenderScaleTransitionEpochCurrent(relatchEpoch)) {
@@ -24651,6 +24673,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool stateScreenDimensionsMatch =
 			ClampPositiveDimension(state->screenSize.x) == ClampPositiveDimension(plannedRelatchEngineSize.x) &&
 			ClampPositiveDimension(state->screenSize.y) == ClampPositiveDimension(plannedRelatchEngineSize.y);
+		const bool resourcePublicationMatches =
+			plannedRelatchSizeKnown &&
+			state->HasCompleteRenderTargetResourcePublication(
+				ClampPositiveDimension(plannedRelatchEngineSize.x),
+				ClampPositiveDimension(plannedRelatchEngineSize.y));
 		auto getStablePhysicalContractEvidenceBlockers = [&](const VRRenderScaleTransitionSnapshot& a_controller) {
 			uint64_t blockers = 0;
 			auto blockIf = [&](bool a_condition, VRRenderScaleStableEvidenceBlocker a_blocker) {
@@ -24706,6 +24733,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			blockIf(a_controller.retirement.capacityBlocked, VRRenderScaleStableEvidenceBlocker::RetirementCapacityBlocked);
 			blockIf(a_controller.postLoadRecovery.active, VRRenderScaleStableEvidenceBlocker::PostLoadRecoveryActive);
 			blockIf(!stateScreenDimensionsMatch, VRRenderScaleStableEvidenceBlocker::StateScreenDimensionsMismatch);
+			blockIf(!resourcePublicationMatches, VRRenderScaleStableEvidenceBlocker::ResourcePublicationMismatch);
 			return blockers;
 		};
 		const uint64_t stablePhysicalContractEvidenceBlockers =
@@ -26608,6 +26636,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				(memoryReliefActiveForRelatch || lowPeakNativeRestoreRelatch) &&
 				globals::deferred;
 			bool engineTargetsRecreated = false;
+			const uint64_t resourcePublicationGenerationBeforeRecreate =
+				state->GetCompletedRenderTargetResourcePublicationGeneration();
 			VREngineTargetGenerationSnapshot engineTargetSnapshot{};
 			VREngineTargetGenerationDelta engineTargetDelta{};
 			VREngineTargetRecreateCheckpointContext engineTargetCheckpoint{
@@ -26716,7 +26746,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				}
 				engineTargetsRecreated =
 					engineTargetCheckpoint.recoverySetupCompleted &&
-					engineTargetCheckpoint.generationComplete;
+					engineTargetCheckpoint.generationComplete &&
+					state->GetCompletedRenderTargetResourcePublicationGeneration() >
+						resourcePublicationGenerationBeforeRecreate;
 			} catch (...) {
 				releaseLoadingBoundaryOwnership();
 				physicalMutationBoundaryEntered =

@@ -106,7 +106,10 @@ public:
 	 */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() { return {}; }
 	virtual void SetupResources() {}
-	// Lightweight opt-in for render-target relatches; avoid disk/world discovery here.
+	// Lightweight opt-in for render-target relatches; avoid disk/world discovery
+	// here. State publishes the new render-target resource generation only after
+	// this callback has returned for every loaded feature and Deferred setup has
+	// completed. Features own any intentional disabled/degraded resource state.
 	virtual void SetupRenderTargetResources() {}
 	virtual void Reset() {}
 	virtual void DrawSettingsHeaderControls() {}

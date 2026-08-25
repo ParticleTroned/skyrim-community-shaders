@@ -752,14 +752,23 @@ void State::Reset()
 
 void State::Setup()
 {
+	const uint64_t publicationGeneration =
+		BeginRenderTargetResourcePublication();
 	SetupResources();
 
 	// Probe typed UAV load support before features set up their resources, so any
 	// gating logic that wants to read the log can run during feature SetupResources.
 	CheckTypedUAVLoadSupport();
 
-	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
+	uint32_t loadedFeatureSetupCount = 0;
+	Feature::ForEachLoadedFeature("SetupResources", [&](Feature* feature) {
+		feature->SetupResources();
+		++loadedFeatureSetupCount;
+	});
 	globals::deferred->SetupResources();
+	CompleteRenderTargetResourcePublication(
+		publicationGeneration,
+		loadedFeatureSetupCount);
 
 	// Load per-weather settings after features are setup
 	WeatherManager::GetSingleton()->LoadPerWeatherSettingsFromDisk();
@@ -782,6 +791,8 @@ void State::SetupRenderTargetResources()
 		Setup();
 		return;
 	}
+	const uint64_t publicationGeneration =
+		BeginRenderTargetResourcePublication();
 
 	const auto mainRenderTargetSize = GetMainRenderTargetSize();
 	if (mainRenderTargetSize.x > 0.0f && mainRenderTargetSize.y > 0.0f) {
@@ -791,8 +802,125 @@ void State::SetupRenderTargetResources()
 
 	// VR render-scale relatch only needs resources tied to recreated render targets.
 	// Keep disk/world discovery and full feature setup on State::Setup().
-	Feature::ForEachLoadedFeature("SetupRenderTargetResources", [](Feature* feature) { feature->SetupRenderTargetResources(); });
+	uint32_t loadedFeatureSetupCount = 0;
+	Feature::ForEachLoadedFeature("SetupRenderTargetResources", [&](Feature* feature) {
+		feature->SetupRenderTargetResources();
+		++loadedFeatureSetupCount;
+	});
 	globals::deferred->SetupResources();
+	CompleteRenderTargetResourcePublication(
+		publicationGeneration,
+		loadedFeatureSetupCount);
+}
+
+uint64_t State::BeginRenderTargetResourcePublication() noexcept
+{
+	const uint64_t previousGeneration =
+		renderTargetResourcePublicationGeneration.fetch_add(
+			1,
+			std::memory_order_acq_rel);
+	return previousGeneration + 1;
+}
+
+void State::InvalidateRenderTargetResourcePublication() noexcept
+{
+	(void)BeginRenderTargetResourcePublication();
+}
+
+void State::CompleteRenderTargetResourcePublication(
+	uint64_t a_generation,
+	uint32_t a_loadedFeatureSetupCount)
+{
+	// The publication proves only the coordinated setup boundary: every loaded
+	// feature callback returned and Deferred completed for this main-target size.
+	// Exact required engine targets remain validated by the render-scale probe;
+	// optional feature degradation remains owned by each feature.
+	if (a_generation == 0 ||
+		a_generation != renderTargetResourcePublicationGeneration.load(
+			std::memory_order_acquire)) {
+		return;
+	}
+
+	const auto mainRenderTargetSize = GetMainRenderTargetSize();
+	const uint32_t width = mainRenderTargetSize.x > 0.0f ?
+	                           static_cast<uint32_t>(mainRenderTargetSize.x) :
+	                           0u;
+	const uint32_t height = mainRenderTargetSize.y > 0.0f ?
+	                            static_cast<uint32_t>(mainRenderTargetSize.y) :
+	                            0u;
+	auto publication = std::make_shared<RenderTargetResourcePublication>();
+	publication->generation = a_generation;
+	publication->width = width;
+	publication->height = height;
+	publication->loadedFeatureSetupCount = a_loadedFeatureSetupCount;
+	publication->device = globals::d3d::device;
+	publication->context = globals::d3d::context;
+	publication->deferredSetupAcknowledged = true;
+	publication->complete =
+		width != 0 &&
+		height != 0 &&
+		publication->device != nullptr &&
+		publication->context != nullptr &&
+		publication->device == setupResourcesDevice &&
+		publication->context == setupResourcesContext &&
+		publication->deferredSetupAcknowledged;
+	std::shared_ptr<const RenderTargetResourcePublication> completedPublication =
+		std::move(publication);
+	auto observedPublication = GetRenderTargetResourcePublication();
+	while (true) {
+		if (a_generation != renderTargetResourcePublicationGeneration.load(
+				std::memory_order_acquire)) {
+			return;
+		}
+		if (observedPublication &&
+			observedPublication->generation >= a_generation) {
+			return;
+		}
+		if (renderTargetResourcePublication.compare_exchange_weak(
+				observedPublication,
+				completedPublication,
+				std::memory_order_release,
+				std::memory_order_acquire)) {
+			break;
+		}
+	}
+	if (a_generation == renderTargetResourcePublicationGeneration.load(
+			std::memory_order_acquire)) {
+		completedRenderTargetResourcePublicationGeneration.store(
+			a_generation,
+			std::memory_order_release);
+	}
+}
+
+uint64_t State::GetCompletedRenderTargetResourcePublicationGeneration() const
+{
+	const auto publication = GetRenderTargetResourcePublication();
+	if (!publication || !publication->complete)
+		return 0u;
+
+	const uint64_t generation = publication->generation;
+	const bool isCurrent =
+		generation != 0 &&
+		generation == renderTargetResourcePublicationGeneration.load(
+			std::memory_order_acquire) &&
+		generation == completedRenderTargetResourcePublicationGeneration.load(
+			std::memory_order_acquire);
+	return isCurrent ? generation : 0u;
+}
+
+bool State::HasCompleteRenderTargetResourcePublication(
+	uint32_t a_width,
+	uint32_t a_height) const
+{
+	const auto publication = GetRenderTargetResourcePublication();
+	return publication &&
+	       publication->complete &&
+	       publication->generation ==
+		       GetCompletedRenderTargetResourcePublicationGeneration() &&
+	       publication->width == a_width &&
+	       publication->height == a_height &&
+	       publication->device == globals::d3d::device &&
+	       publication->context == globals::d3d::context;
 }
 
 static std::filesystem::path GetConfigPath(State::ConfigMode a_configMode)

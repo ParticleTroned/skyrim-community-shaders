@@ -1061,6 +1061,8 @@ struct BSShaderRenderTargets_Create
 		{
 			const std::unique_lock recreateLock(
 				g_renderTargetRecreationMutex);
+			if (globals::state)
+				globals::state->InvalidateRenderTargetResourcePublication();
 			func();
 		}
 		globals::ReInit();
@@ -1083,6 +1085,8 @@ struct BSShaderRenderTargets_Create
 			try {
 				if (a_beforeEngineCreate)
 					a_beforeEngineCreate(a_context);
+				if (globals::state)
+					globals::state->InvalidateRenderTargetResourcePublication();
 				if (a_onEngineCreateEntered)
 					a_onEngineCreateEntered(a_context);
 				if (a_engineCreateEntered)

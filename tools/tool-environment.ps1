@@ -119,7 +119,8 @@ function Initialize-CsxVcpkgCacheEnvironment {
     }
 
     $assetDownloader = $null
-    if ($env:CODEX_CI -eq "1" -and -not $env:X_VCPKG_ASSET_SOURCES) {
+    $cmakeAssetDownloader = $null
+    if ($env:CODEX_CI -eq "1") {
         $managedPython = if ($env:OS -eq "Windows_NT") {
             Join-Path $ToolRoot "venv\Scripts\python.exe"
         } else {
@@ -129,8 +130,15 @@ function Initialize-CsxVcpkgCacheEnvironment {
         $assetDownloader = Join-Path $RepositoryRoot "tools\vcpkg-download.py"
         if ((Test-Path -LiteralPath $managedPython -PathType Leaf) -and
             (Test-Path -LiteralPath $assetDownloader -PathType Leaf)) {
-            $env:X_VCPKG_ASSET_SOURCES =
-                "x-script,`"$managedPython`" `"$assetDownloader`" {url} {dst}"
+            $env:CSX_ASSET_DOWNLOADER_PYTHON = $managedPython
+            $env:CSX_ASSET_DOWNLOADER_SCRIPT = $assetDownloader
+            $cmakeAssetDownloader = $assetDownloader
+            if (-not $env:X_VCPKG_ASSET_SOURCES) {
+                $env:X_VCPKG_ASSET_SOURCES =
+                    "x-script,`"$managedPython`" `"$assetDownloader`" {url} {dst}"
+            } else {
+                $assetDownloader = $null
+            }
         } else {
             $assetDownloader = $null
         }
@@ -141,6 +149,7 @@ function Initialize-CsxVcpkgCacheEnvironment {
         Registries = $env:X_VCPKG_REGISTRIES_CACHE
         BinaryCache = $env:VCPKG_DEFAULT_BINARY_CACHE
         AssetDownloader = $assetDownloader
+        CmakeAssetDownloader = $cmakeAssetDownloader
     }
 }
 
@@ -195,5 +204,6 @@ function Initialize-CsxToolEnvironment {
         VcpkgRegistries = $vcpkgCaches.Registries
         VcpkgBinaryCache = $vcpkgCaches.BinaryCache
         VcpkgAssetDownloader = $vcpkgCaches.AssetDownloader
+        CmakeAssetDownloader = $vcpkgCaches.CmakeAssetDownloader
     }
 }

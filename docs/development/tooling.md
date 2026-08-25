@@ -92,11 +92,12 @@ worktrees share immutable package artifacts. Explicit `VCPKG_DOWNLOADS`,
 `X_VCPKG_REGISTRIES_CACHE`, and `VCPKG_DEFAULT_BINARY_CACHE` values are
 preserved. The doctor verifies that every active cache path is writable.
 
-In a Codex sandbox, the launcher also routes vcpkg assets through the managed
-Python TLS stack because the native Windows downloader cannot access the
-interactive user's Schannel credentials. This fallback is not enabled for
-normal developer sessions and never replaces an explicit
-`X_VCPKG_ASSET_SOURCES` setting.
+In a Codex sandbox, the launcher also routes vcpkg assets and the pinned
+FidelityFX runtime downloads through the managed Python TLS stack because the
+native Windows downloaders cannot access the interactive user's Schannel
+credentials. This fallback is not enabled for normal developer sessions and
+never replaces an explicit `X_VCPKG_ASSET_SOURCES` setting. Every FidelityFX
+download remains SHA-256 verified, and matching cached files are reused.
 
 ## Recovery
 

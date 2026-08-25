@@ -99,6 +99,12 @@ if ($env:CODEX_CI -eq "1") {
     } else {
         Add-CheckFailure "vcpkg has no usable isolated HTTPS downloader"
     }
+
+    if ($toolEnvironment.CmakeAssetDownloader) {
+        Write-CheckPass "CMake uses the isolated HTTPS downloader"
+    } else {
+        Add-CheckFailure "CMake has no usable isolated HTTPS downloader"
+    }
 }
 
 $toolTemp = Join-Path $repositoryRoot "build\tool-temp"

@@ -443,7 +443,7 @@
     "feature.adaptive_balance.global_lighting_inactive": "Global lighting calibration is currently inactive.",
     "feature.adaptive_balance.global_lighting_independence_detailed_tooltip": "Profile brightness, Bloom, and water appearance remain active when this is off.",
     "feature.adaptive_balance.global_lighting_independence_tooltip": "Scene brightness, Bloom, and water appearance profiles remain active when this is off.",
-    "feature.adaptive_balance.presets.full_description": "Full presets store global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and all saved location overrides.",
+    "feature.adaptive_balance.presets.full_description": "Full presets store global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and all saved worldspace, location, and cell overrides.",
     "feature.adaptive_balance.presets.full_export_tooltip": "Export global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and all saved overrides.",
     "feature.adaptive_balance.presets.full_import_tooltip": "Replace global lighting calibration, exterior timing, the five profiles with their Bloom and water appearance settings, and the saved override list.",
     "feature.adaptive_balance.presets.global_description": "Global presets store global light calibration, the five profiles (including Bloom and water appearance), and exterior timing.",

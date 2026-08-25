@@ -19,6 +19,7 @@ namespace RE
 {
 	class BGSLocation;
 	class TESForm;
+	class TESWorldSpace;
 }
 
 struct AdaptiveBrightness : Feature
@@ -51,7 +52,7 @@ struct AdaptiveBrightness : Feature
 			"Balances scene lighting, atmosphere and bloom by location and exterior time of day.",
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
-				"Optional per-location overrides with COC codes",
+				"Optional per-worldspace, location, and cell overrides with COC codes",
 				"Shared light calibration with per-profile Bloom and water appearance controls" }
 		};
 	}
@@ -114,8 +115,9 @@ struct AdaptiveBrightness : Feature
 
 	struct CurrentLocationOverrideTargets
 	{
-		std::optional<LocationOverrideTarget> cell;
+		std::optional<LocationOverrideTarget> worldspace;
 		std::optional<LocationOverrideTarget> location;
+		std::optional<LocationOverrideTarget> cell;
 	};
 
 	struct Settings
@@ -169,10 +171,12 @@ struct AdaptiveBrightness : Feature
 
 	struct LocationOverrideCache
 	{
+		uint32_t worldspaceFormID = 0;
 		uint32_t locationFormID = 0;
 		uint32_t cellFormID = 0;
 		uint64_t lookupVersion = 0;
 		std::size_t overrideIndex = kInvalidLocationOverrideIndex;
+		bool inInterior = true;
 		bool valid = false;
 	};
 
@@ -285,6 +289,7 @@ struct AdaptiveBrightness : Feature
 	const LocationOverride* FindLocationOverride(const std::string& a_key) const;
 	std::size_t FindLocationOverrideIndexByKey(const std::string& a_key) const;
 	std::size_t FindLocationOverrideIndexByForm(const RE::TESForm* a_form) const;
+	std::size_t ResolveWorldspaceHierarchyOverrideIndex(const RE::TESWorldSpace* a_worldspace) const;
 	std::size_t ResolveLocationHierarchyOverrideIndex(const RE::BGSLocation* a_location) const;
 	std::size_t ResolveLocationOverrideIndex() const;
 	void NormalizeLocationOverrides();

@@ -4,7 +4,13 @@ This file provides guidance for AI assistants working with the Community Shaders
 
 ## Primary Documentation
 
-**For comprehensive development guidance, see `.claude/CLAUDE.md`** which provides detailed information on:
+**Read `AGENTS.md` first.** It is the canonical repository-wide policy for pull
+requests, commits, code quality, runtime safety, validation, and Git operations.
+GPT/Codex and Codex Code Review load the root `AGENTS.md` directly; do not create
+a second Codex-only copy of these rules.
+
+Use `.claude/CLAUDE.md` as the detailed architecture and build reference. It
+provides information on:
 
 -   Build commands and development setup
 -   Architecture overview and critical dependencies (CommonLibSSE-NG)
@@ -29,6 +35,7 @@ SKSE plugin providing advanced DirectX 11 graphics modifications for Skyrim SE/A
 -   **Tooling diagnostics**: `pwsh ./tools/dev-doctor.ps1 -Network`
 -   **Shader Test**: `hlslkit-compile --shader-dir [target]` (install via pip first)
 -   **Feature Access**: `globals::features::*` namespace
+-   **PR and commit format**: `type(scope): description`; target `main-VR` and follow the release-aware type rules in `AGENTS.md`
 
 ### Build Options
 
@@ -56,4 +63,5 @@ For full details about manual packaging targets (Package-Core, Package-AIO-Manua
 
 **Key Focus**: Performance impact awareness, runtime compatibility (SE/AE/VR), complete working solutions, DirectX/HLSL best practices.
 
-For detailed explanations, examples, and comprehensive guidance, refer to `.claude/CLAUDE.md`.
+For behavioral rules, refer to `AGENTS.md`. For detailed technical explanations
+and examples, refer to `.claude/CLAUDE.md`.

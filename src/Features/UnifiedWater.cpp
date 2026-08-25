@@ -185,7 +185,6 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("water_tint_tooltip"), "Adjusts how strongly the selected colour appears in the water."));
 	}
-}
 
 	bool IsInteriorCellActive()
 	{
@@ -533,7 +532,7 @@ void UnifiedWater::DrawSettings()
 			}
 
 			ImGui::TextDisabled("%s", T(TKEY("surface_visibility_performance"),
-				"Up to two bounded connection reads run only for unresolved shallow pixels inside the fallback distance."));
+										  "Up to two bounded connection reads run only for unresolved shallow pixels inside the fallback distance."));
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("surface_visibility_performance_tooltip"),
 									  "Native/Open is always the base. Pixels outside the shallow range, disabled, or distance-culled skip the connectivity reads."));

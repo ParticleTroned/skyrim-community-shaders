@@ -1057,8 +1057,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 		} else if (lightingType == None || lightingType == TreeAnim) {
 			auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
 			const auto renderTargetIndex = pbrMaterial->diffuseRenderTargetSourceIndex;
-			const auto renderTargetCount = Util::GetRenderTargetCount();
-			if (renderTargetIndex >= 0 && renderTargetIndex < renderTargetCount) {
+			if (renderTargetIndex >= 0 && renderTargetIndex < RE::RENDER_TARGETS::kTOTAL) {
 				shadowState->SetPSTexture(0, renderer->GetRuntimeData().renderTargets[renderTargetIndex]);
 			} else {
 				if (renderTargetIndex != -1) {

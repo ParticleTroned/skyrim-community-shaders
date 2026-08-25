@@ -226,6 +226,7 @@ namespace SIE
 		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
 		void Add(const ShaderCompilationTask& task);
 		void Complete(const ShaderCompilationTask& task);
+		void MarkPhaseStarted();
 		void Clear();
 		bool IsInProgress(size_t a_taskId);
 		void Forget(const std::unordered_set<size_t>& a_taskIds);
@@ -475,6 +476,7 @@ namespace SIE
 		uint64_t GetSourceCompileTasks();
 		void IncCacheHitTasks();
 		void IncSourceCompileTasks();
+		void MarkCompilationPhaseStarted();
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);

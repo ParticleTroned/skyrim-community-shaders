@@ -1892,6 +1892,10 @@ namespace SIE
 				flags |= D3DCOMPILE_SKIP_VALIDATION;
 			}
 
+			// Reaching source compilation means this was not a disk-cache hit. Start the
+			// compile-phase clock here so logs and ETA use the true work boundary.
+			cache.MarkCompilationPhaseStarted();
+
 			// Track includes
 			TrackingIncludeHandler includeHandler(std::filesystem::path(path).parent_path());
 			const HRESULT compileResult = D3DCompileFromFile(path.c_str(), defines.data(), &includeHandler, "main",
@@ -3874,6 +3878,10 @@ namespace SIE
 	{
 		compilationSet.sourceCompileTasks++;
 	}
+	void ShaderCache::MarkCompilationPhaseStarted()
+	{
+		compilationSet.MarkPhaseStarted();
+	}
 
 	bool ShaderCache::IsHideErrors()
 	{
@@ -4459,6 +4467,9 @@ namespace SIE
 
 		bool shouldLogCompletion = false;
 		double completionTimeMs = 0.0;
+		uint64_t completedSnapshot = 0;
+		uint64_t failedSnapshot = 0;
+		uint64_t totalSnapshot = 0;
 		// Determine whether this task was resolved from the disk cache or actually compiled.
 		bool wasDiskHit = cache.IsShaderLoadedFromDisk(key);
 
@@ -4521,11 +4532,15 @@ namespace SIE
 			totalTime.QuadPart += now.QuadPart - lastCalculation.QuadPart;
 			lastCalculation = now;
 
-			// Check if compilation is complete and set completion time if needed
+			// A mixed batch can finish on a disk hit, so gate the message on whether
+			// this batch performed any source compilation rather than on this task.
 			if (completionTime.load(std::memory_order_relaxed) == 0 && completedTasks + failedTasks >= totalTasks) {
 				completionTime.store(now.QuadPart, std::memory_order_relaxed);
 				completionTimeMs = static_cast<double>(now.QuadPart - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
-				shouldLogCompletion = true;
+				shouldLogCompletion = compilationPhaseStarted.load(std::memory_order_relaxed);
+				completedSnapshot = completedTasks.load(std::memory_order_relaxed);
+				failedSnapshot = failedTasks.load(std::memory_order_relaxed);
+				totalSnapshot = totalTasks.load(std::memory_order_relaxed);
 			}
 
 			// Update task tracking
@@ -4533,14 +4548,43 @@ namespace SIE
 			tasksInProgress.erase(task);
 		}
 
-		// Log completion outside the lock
+		// A disk-cache-only boot stays quiet; actual source work is visible at info level.
 		if (shouldLogCompletion) {
-			logger::debug("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
+			logger::info("Shader compilation completed: {}/{} tasks ({} failed) in {}",
+				completedSnapshot, totalSnapshot, failedSnapshot, GetHumanTime(completionTimeMs));
 			FlushShaderCacheManifest();
 			cache.WritePendingDiskCacheInfoIfNeeded();
 		}
 
 		conditionVariable.notify_one();
+	}
+
+	void CompilationSet::MarkPhaseStarted()
+	{
+		bool shouldLog = false;
+		uint64_t queuedAtPhaseStart = 0;
+		{
+			std::scoped_lock lock(compilationMutex);
+
+			if (completionTime.load(std::memory_order_relaxed) != 0) {
+				QueryPerformanceCounter(&lastReset);
+				lastCalculation = lastReset;
+				totalTime = { 0 };
+				completionTime.store(0, std::memory_order_relaxed);
+				compilationPhaseStarted.store(false, std::memory_order_relaxed);
+			}
+
+			if (!compilationPhaseStarted.load(std::memory_order_relaxed)) {
+				QueryPerformanceCounter(&compilationPhaseStart);
+				compilationPhaseStarted.store(true, std::memory_order_release);
+				shouldLog = true;
+				queuedAtPhaseStart = totalTasks.load(std::memory_order_relaxed);
+			}
+		}
+
+		if (shouldLog) {
+			logger::info("Shader compilation started ({} tasks queued)", queuedAtPhaseStart);
+		}
 	}
 
 	void CompilationSet::Clear()

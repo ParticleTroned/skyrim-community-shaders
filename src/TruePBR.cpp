@@ -1352,6 +1352,8 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 		return false;
 	}
 
+	auto memoryManager = RE::MemoryManager::GetSingleton();
+
 	if (land->loadedData != nullptr && land->loadedData->mesh[0] != nullptr) {
 		land->data.flags.set(static_cast<RE::OBJ_LAND::Flag>(8));
 		for (uint32_t quadIndex = 0; quadIndex < 4; ++quadIndex) {

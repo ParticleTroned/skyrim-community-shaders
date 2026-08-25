@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 
 struct ScreenSpaceShadows : Feature
 {
@@ -88,8 +89,8 @@ public:
 	ID3D11SamplerState* pointBorderSampler = nullptr;
 
 	ConstantBuffer* raymarchCB = nullptr;
-	ID3D11ComputeShader* raymarchCS = nullptr;
-	ID3D11ComputeShader* raymarchRightCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> raymarchCS;
+	Util::LazyShader<ID3D11ComputeShader> raymarchRightCS;
 	uint compiledSampleCount = 0;
 	uint compiledSampleCountRight = 0;
 	bool raymarchUsesTerrainBlendingDepth = false;
@@ -100,11 +101,10 @@ public:
 	// VR stereo sync resources
 	Texture2D* stereoSyncCopyTex = nullptr;
 	ConstantBuffer* stereoSyncCB = nullptr;
-	ID3D11ComputeShader* stereoSyncCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> stereoSyncCS;
 	bool stereoSyncUsesTerrainBlendingDepth = false;
-	ID3D11ComputeShader* stereoReprojectCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> stereoReprojectCS;
 	bool stereoReprojectUsesTerrainBlendingDepth = false;
-	bool stereoReprojectCompileFailed = false;
 
 	ID3D11ComputeShader* GetStereoReprojectCS();
 
@@ -127,7 +127,7 @@ public:
 	virtual void ClearShaderCache() override;
 	void InvalidateRaymarchShaders();
 	uint GetScaledSampleCount(bool a_dynamic);
-	ID3D11ComputeShader* GetOrCreateRaymarchShader(ID3D11ComputeShader*& a_shader, uint& a_compiledSampleCount, bool& a_compiledUsesTerrainBlendingDepth, bool a_rightEye);
+	ID3D11ComputeShader* GetOrCreateRaymarchShader(Util::LazyShader<ID3D11ComputeShader>& a_shader, uint& a_compiledSampleCount, bool& a_compiledUsesTerrainBlendingDepth, bool a_rightEye);
 	ID3D11ComputeShader* GetComputeRaymarch();
 	ID3D11ComputeShader* GetComputeRaymarchRight();
 

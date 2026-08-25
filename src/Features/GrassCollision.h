@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 
 struct GrassCollision : Feature
 {
@@ -75,7 +76,7 @@ public:
 	virtual void ClearShaderCache() override;
 
 	ID3D11ComputeShader* GetCollisionUpdateCS();
-	ID3D11ComputeShader* collisionUpdateCS;
+	Util::LazyShader<ID3D11ComputeShader> collisionUpdateCS;
 
 	Texture2D* collisionTexture = nullptr;
 

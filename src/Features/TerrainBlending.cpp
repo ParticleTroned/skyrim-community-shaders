@@ -817,31 +817,24 @@ void TerrainBlending::OnSetDirtyStates(bool a_isCompute, uint32_t a_callerRva)
 		a_callerRva);
 }
 
-ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
-{
-	if (!terrainVertexShader) {
-		logger::debug("Compiling Utility.hlsl");
-		terrainVertexShader = (ID3D11VertexShader*)Util::CompileShader(L"Data\\Shaders\\Utility.hlsl", { { "RENDER_DEPTH", "" } }, "vs_5_0");
-	}
-	return terrainVertexShader;
-}
-
 ID3D11VertexShader* TerrainBlending::GetTerrainOffsetVertexShader()
 {
-	if (!terrainOffsetVertexShader) {
-		logger::debug("Compiling Utility.hlsl");
-		terrainOffsetVertexShader = (ID3D11VertexShader*)Util::CompileShader(L"Data\\Shaders\\Utility.hlsl", { { "RENDER_DEPTH", "" }, { "OFFSET_DEPTH", "" } }, "vs_5_0");
-	}
-	return terrainOffsetVertexShader;
+	return terrainOffsetVertexShader.Get(
+		L"Data\\Shaders\\Utility.hlsl",
+		{ { "RENDER_DEPTH", "" }, { "OFFSET_DEPTH", "" } },
+		"vs_5_0",
+		"main",
+		"TerrainBlending::TerrainOffsetVertexShader");
 }
 
 ID3D11ComputeShader* TerrainBlending::GetDepthBlendShader()
 {
-	if (!depthBlendShader) {
-		logger::debug("Compiling DepthBlend.hlsl");
-		depthBlendShader = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\TerrainBlending\\DepthBlend.hlsl", {}, "cs_5_0");
-	}
-	return depthBlendShader;
+	return depthBlendShader.Get(
+		L"Data\\Shaders\\TerrainBlending\\DepthBlend.hlsl",
+		{},
+		"cs_5_0",
+		"main",
+		"TerrainBlending::DepthBlendShader");
 }
 
 void TerrainBlending::SetupResources()
@@ -973,15 +966,19 @@ void TerrainBlending::TerrainShaderHacks()
 	if (renderTerrainDepth) {
 		auto renderer = globals::game::renderer;
 		auto context = globals::d3d::context;
+		auto shadowState = globals::game::shadowState;
+		GET_INSTANCE_MEMBER(currentVertexShader, shadowState)
 		if (renderAltTerrain) {
 			auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
-			context->VSSetShader(GetTerrainOffsetVertexShader(), NULL, NULL);
+			auto* offsetShader = GetTerrainOffsetVertexShader();
+			context->VSSetShader(
+				offsetShader ? offsetShader : (ID3D11VertexShader*)currentVertexShader->shader,
+				NULL,
+				NULL);
 		} else {
 			auto dsv = terrainDepth.views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
-			auto shadowState = globals::game::shadowState;
-			GET_INSTANCE_MEMBER(currentVertexShader, shadowState)
 			context->VSSetShader((ID3D11VertexShader*)currentVertexShader->shader, NULL, NULL);
 		}
 		renderAltTerrain = !renderAltTerrain;
@@ -1022,6 +1019,9 @@ void TerrainBlending::BlendPrepassDepths()
 		!mainDepthCopy || !mainDepthCopy->uav) {
 		return;
 	}
+	auto* depthBlend = GetDepthBlendShader();
+	if (!depthBlend)
+		return;
 
 	D3D11_TEXTURE2D_DESC terrainDepthDesc{};
 	terrainDepth.texture->GetDesc(&terrainDepthDesc);
@@ -1054,7 +1054,7 @@ void TerrainBlending::BlendPrepassDepths()
 		auto buffer = depthBlendCB->CB();
 		context->CSSetConstantBuffers(0, 1, &buffer);
 
-		context->CSSetShader(GetDepthBlendShader(), nullptr, 0);
+		context->CSSetShader(depthBlend, nullptr, 0);
 
 		const uint32_t dispatchX = (blendWidth + 7u) >> 3u;
 		const uint32_t dispatchY = (blendHeight + 7u) >> 3u;
@@ -1082,18 +1082,8 @@ void TerrainBlending::BlendPrepassDepths()
 
 void TerrainBlending::ClearShaderCache()
 {
-	if (terrainVertexShader) {
-		terrainVertexShader->Release();
-		terrainVertexShader = nullptr;
-	}
-	if (terrainOffsetVertexShader) {
-		terrainOffsetVertexShader->Release();
-		terrainOffsetVertexShader = nullptr;
-	}
-	if (depthBlendShader) {
-		depthBlendShader->Release();
-		depthBlendShader = nullptr;
-	}
+	terrainOffsetVertexShader.Reset();
+	depthBlendShader.Reset();
 }
 
 void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
@@ -1112,7 +1102,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	singleton.averageEyePosition = Util::GetAverageEyePosition();
 
 	const bool tbActive = shaderCache->IsEnabled() && singleton.settings.Enabled;
-	const bool useBlendedDepthSRV = tbActive && ShouldUseBlendedDepthSRV();
+	const bool useBlendedDepthSRV = tbActive && ShouldUseBlendedDepthSRV() && singleton.GetDepthBlendShader();
 	tbHookDiagnostics.renderDepthCalls++;
 
 	if (tbActive) {

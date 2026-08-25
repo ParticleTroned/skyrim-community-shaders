@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "OverlayFeature.h"
+#include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
@@ -139,8 +140,8 @@ public:
 	bool previousEnableLightsVisualisation = false;
 	bool currentEnableLightsVisualisation = false;
 
-	ID3D11ComputeShader* clusterBuildingCS = nullptr;
-	ID3D11ComputeShader* clusterCullingCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> clusterBuildingCS;
+	Util::LazyShader<ID3D11ComputeShader> clusterCullingCS;
 
 	ConstantBuffer* lightBuildingCB = nullptr;
 	ConstantBuffer* lightCullingCB = nullptr;
@@ -266,6 +267,7 @@ public:
 	Util::FrameChecker frameChecker;
 
 	virtual void SetupResources() override;
+	void CompileComputeShaders();
 	virtual void SetupRenderTargetResources() override;
 	virtual void Reset() override;
 

@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "RE/B/BSShadowDirectionalLight.h"
+#include "Utils/LazyShader.h"
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED
@@ -43,8 +44,8 @@ public:
 
 	RE::RENDER_TARGET forwardRenderTargets[4];
 
-	ID3D11ComputeShader* mainCompositeCS = nullptr;
-	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> mainCompositeCS;
+	Util::LazyShader<ID3D11ComputeShader> mainCompositeInteriorCS;
 
 	struct alignas(16) DirectionalShadowLightData
 	{
@@ -80,7 +81,7 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerGeometry);
 
-	ID3D11ComputeShader* copyShadowCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> copyShadowCS;
 	Buffer* perShadow = nullptr;
 	Buffer* directionalShadowLights = nullptr;
 	ID3D11ShaderResourceView* shadowView = nullptr;

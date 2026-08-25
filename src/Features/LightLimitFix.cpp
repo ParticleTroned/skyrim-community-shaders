@@ -1393,22 +1393,13 @@ void LightLimitFix::SetupResources()
 		lightCullingCB = nullptr;
 		delete strictLightDataCB;
 		strictLightDataCB = nullptr;
-		if (clusterBuildingCS) {
-			clusterBuildingCS->Release();
-			clusterBuildingCS = nullptr;
-		}
-		if (clusterCullingCS) {
-			clusterCullingCS->Release();
-			clusterCullingCS = nullptr;
-		}
+		clusterBuildingCS.Reset();
+		clusterCullingCS.Reset();
 		shaderDevice = globals::d3d::device;
 	}
 
 	{
-		if (!clusterBuildingCS)
-			clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0");
-		if (!clusterCullingCS)
-			clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0");
+		CompileComputeShaders();
 
 		if (!lightBuildingCB)
 			lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>());
@@ -2956,16 +2947,19 @@ void LightLimitFix::DataLoaded()
 
 void LightLimitFix::ClearShaderCache()
 {
-	if (clusterBuildingCS) {
-		clusterBuildingCS->Release();
-		clusterBuildingCS = nullptr;
-	}
-	if (clusterCullingCS) {
-		clusterCullingCS->Release();
-		clusterCullingCS = nullptr;
-	}
-	clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0");
-	clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0");
+	clusterBuildingCS.Reset();
+	clusterCullingCS.Reset();
+	CompileComputeShaders();
+}
+
+void LightLimitFix::CompileComputeShaders()
+{
+	clusterBuildingCS.Get(
+		L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0",
+		"main", "LightLimitFix::ClusterBuildingCS");
+	clusterCullingCS.Get(
+		L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0",
+		"main", "LightLimitFix::ClusterCullingCS");
 }
 
 float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radius)
@@ -3366,8 +3360,19 @@ void LightLimitFix::UpdateStructure()
 	auto context = globals::d3d::context;
 	if (!context || !lightBuildingCB || !lightCullingCB || !clusters || !lights ||
 		!lightIndexCounter || !lightIndexList || !lightGrid ||
-		!contactShadowIndexCounter || !contactShadowIndexList || !contactShadowGrid ||
-		!clusterBuildingCS || !clusterCullingCS) {
+		!contactShadowIndexCounter || !contactShadowIndexList || !contactShadowGrid) {
+		return;
+	}
+	auto* clusterBuilding = clusterBuildingCS.Get(
+		L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0",
+		"main", "LightLimitFix::ClusterBuildingCS");
+	auto* clusterCulling = clusterCullingCS.Get(
+		L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0",
+		"main", "LightLimitFix::ClusterCullingCS");
+	if (!clusterBuilding || !clusterCulling) {
+		const UINT zero[4]{ 0, 0, 0, 0 };
+		context->ClearUnorderedAccessViewUint(lightGrid->uav.get(), zero);
+		context->ClearUnorderedAccessViewUint(contactShadowGrid->uav.get(), zero);
 		return;
 	}
 
@@ -3399,7 +3404,7 @@ void LightLimitFix::UpdateStructure()
 		ID3D11UnorderedAccessView* clusters_uav = clusters->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &clusters_uav, nullptr);
 
-		context->CSSetShader(clusterBuildingCS, nullptr, 0);
+		context->CSSetShader(clusterBuilding, nullptr, 0);
 		{
 			CS_GPU_PASS("LightLimitFix::ClusterBuild");
 			context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
@@ -3438,7 +3443,7 @@ void LightLimitFix::UpdateStructure()
 		};
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-		context->CSSetShader(clusterCullingCS, nullptr, 0);
+		context->CSSetShader(clusterCulling, nullptr, 0);
 		{
 			CS_GPU_PASS("LightLimitFix::ClusterCull");
 			context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);

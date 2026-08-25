@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 
 #define SSSS_N_SAMPLES 21
 
@@ -73,9 +74,9 @@ public:
 
 	Texture2D* blurHorizontalTemp = nullptr;
 
-	ID3D11ComputeShader* horizontalSSBlur = nullptr;
-	ID3D11ComputeShader* verticalSSBlur = nullptr;
-	ID3D11ComputeShader* burleySS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> horizontalSSBlur;
+	Util::LazyShader<ID3D11ComputeShader> verticalSSBlur;
+	Util::LazyShader<ID3D11ComputeShader> burleySS;
 	RE::BGSKeyword* isBeastRaceKeyword = nullptr;
 
 	virtual inline std::string GetName() override { return "Subsurface Scattering"; }

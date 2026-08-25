@@ -733,6 +733,7 @@ void State::Reset()
 	UpdateSaveLoadSafeMode();
 
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);
+	globals::shaderCache->ProcessPendingClear();
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		GET_INSTANCE_MEMBER(BSImagespaceShaderApplyReflections, imageSpaceManager);

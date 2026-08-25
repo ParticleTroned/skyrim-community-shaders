@@ -84,11 +84,8 @@ json TerrainShadows::CapturePerformanceSettingsState() const
 
 void TerrainShadows::ClearShaderCache()
 {
-	if (shadowUpdateProgram) {
-		shadowUpdateProgram->Release();
-		shadowUpdateProgram = nullptr;
-	}
-
+	shadowUpdateProgram.Reset();
+	shadowHeightValid = false;
 	CompileComputeShaders();
 }
 
@@ -181,12 +178,17 @@ void TerrainShadows::SetupResources()
 
 void TerrainShadows::CompileComputeShaders()
 {
-	logger::debug("Compiling shaders...");
-	{
-		auto program_ptr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\TerrainShadows\\ShadowUpdate.cs.hlsl", {}, "cs_5_0"));
-		if (program_ptr)
-			shadowUpdateProgram.attach(program_ptr);
-	}
+	GetShadowUpdateProgram();
+}
+
+ID3D11ComputeShader* TerrainShadows::GetShadowUpdateProgram()
+{
+	return shadowUpdateProgram.Get(
+		L"Data\\Shaders\\TerrainShadows\\ShadowUpdate.cs.hlsl",
+		{},
+		"cs_5_0",
+		"main",
+		"TerrainShadows::ShadowUpdateProgram");
 }
 
 bool TerrainShadows::IsHeightMapReady()
@@ -296,6 +298,7 @@ void TerrainShadows::Precompute()
 			context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 		}
 
+		shadowHeightValid = false;
 		texShadowHeight.reset();
 
 		D3D11_TEXTURE2D_DESC texDesc = {
@@ -329,12 +332,17 @@ void TerrainShadows::Precompute()
 	needPrecompute = false;
 }
 
-void TerrainShadows::UpdateShadow(bool a_refreshImmediately)
+bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 {
 	ZoneScoped;
+	shadowHeightValid = false;
 
 	if (!IsHeightMapReady())
-		return;
+		return false;
+
+	auto* updateProgram = GetShadowUpdateProgram();
+	if (!updateProgram)
+		return false;
 
 	// don't forget to change NTHREADS in shader!
 	constexpr uint updateLength = 128u;
@@ -351,16 +359,16 @@ void TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	auto accumulator = *globals::game::currentAccumulator.get();
 	auto shadowSceneNode = accumulator->GetRuntimeData().activeShadowSceneNode;
 	if (!shadowSceneNode)
-		return;
+		return false;
 	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
 	if (!sunLight)
-		return;
+		return false;
 
 	auto currentLightDirection = sunLight->GetWorldDirection();
 	const float currentLightDirectionLength = currentLightDirection.Unitize();
 	if (!std::isfinite(currentLightDirectionLength) || currentLightDirectionLength <= FLT_EPSILON) {
 		hasPreviousLightDirection = false;
-		return;
+		return false;
 	}
 
 	if (!hasPreviousLightDirection || Util::HasDirectionalLightDiscontinuity(currentLightDirection, previousLightDirection))
@@ -441,7 +449,7 @@ void TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	context->CSSetShaderResources(0, ARRAYSIZE(newer.srvs), newer.srvs);
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(newer.uavs), newer.uavs, nullptr);
 	context->CSSetConstantBuffers(0, 1, &newer.buffer);
-	context->CSSetShader(shadowUpdateProgram.get(), nullptr, 0);
+	context->CSSetShader(updateProgram, nullptr, 0);
 	{
 		CS_GPU_PASS("TerrainShadows::ShadowUpdate");
 		const uint updateCount = a_refreshImmediately ? maxUpdates : 1u;
@@ -458,11 +466,13 @@ void TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	context->CSSetShader(old.shader, nullptr, 0);
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(old.uavs), old.uavs, nullptr);
 	context->CSSetConstantBuffers(0, 1, &old.buffer);
+	shadowHeightValid = true;
+	return true;
 }
 
 void TerrainShadows::ReflectionsPrepass()
 {
-	if (texShadowHeight) {
+	if (texShadowHeight && shadowHeightValid) {
 		auto context = globals::d3d::context;
 
 		std::array<ID3D11ShaderResourceView*, 1> srvs = { texShadowHeight->srv.get() };
@@ -484,7 +494,7 @@ void TerrainShadows::EarlyPrepass()
 
 	UpdateShadow(refreshImmediately);
 
-	if (texShadowHeight) {
+	if (texShadowHeight && shadowHeightValid) {
 		auto context = globals::d3d::context;
 
 		std::array<ID3D11ShaderResourceView*, 1> srvs = { texShadowHeight->srv.get() };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 #include <filesystem>
 
 struct TerrainShadows : public Feature
@@ -72,16 +73,18 @@ public:
 
 	PerFrame GetCommonBufferData();
 
-	winrt::com_ptr<ID3D11ComputeShader> shadowUpdateProgram = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> shadowUpdateProgram;
 
 	std::unique_ptr<Texture2D> texHeightMap = nullptr;
 	std::unique_ptr<Texture2D> texShadowHeight = nullptr;
+	bool shadowHeightValid = false;
 
 	bool IsHeightMapReady();
 
 	virtual void SetupResources() override;
 	void ParseHeightmapPath(std::filesystem::path p, bool xlodgen_style);
 	void CompileComputeShaders();
+	ID3D11ComputeShader* GetShadowUpdateProgram();
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
@@ -96,7 +99,7 @@ public:
 	virtual void EarlyPrepass() override;
 	void LoadHeightmap();
 	void Precompute();
-	void UpdateShadow(bool a_refreshImmediately);
+	bool UpdateShadow(bool a_refreshImmediately);
 
 	virtual void ReflectionsPrepass() override;
 

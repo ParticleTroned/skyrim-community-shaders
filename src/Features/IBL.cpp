@@ -355,7 +355,7 @@ void IBL::ReflectionsPrepass()
 		return;
 
 	const IBL::Settings runtimeSettings = GetSanitizedSettings(settings);
-	const bool dynamicIBLEnabled = IsRuntimeEnabled() && envIBLTexture && skyIBLTexture;
+	const bool dynamicIBLEnabled = IsRuntimeEnabled() && dynamicIBLValid && envIBLTexture && skyIBLTexture;
 	const bool staticIBLEnabled = IsStaticIBLEnabled(runtimeSettings) && staticDiffuseIBLTexture && staticSpecularIBLTexture;
 	auto* staticDiffuseSrv = staticIBLEnabled ? staticDiffuseIBLTexture->srv.get() : nullptr;
 	auto* staticSpecularSrv = staticIBLEnabled ? staticSpecularIBLTexture->srv.get() : nullptr;
@@ -386,8 +386,13 @@ void IBL::Prepass()
 	auto* staticSpecularSrv = staticIBLEnabled ? staticSpecularIBLTexture->srv.get() : nullptr;
 
 	SetIblPsSrvs(context, nullptr, nullptr, staticDiffuseSrv, staticSpecularSrv);
+	dynamicIBLValid = false;
 
 	if (!dynamicIBLEnabled)
+		return;
+
+	auto* diffuseIBLShader = GetDiffuseIBLCS();
+	if (!diffuseIBLShader)
 		return;
 
 	std::array<ID3D11ShaderResourceView*, 1> srvs = { (dynamicCubemaps.loaded && envTexture) ? envTexture->srv.get() : nullptr };
@@ -401,7 +406,7 @@ void IBL::Prepass()
 		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
+		context->CSSetShader(diffuseIBLShader, nullptr, 0);
 		{
 			CS_GPU_PASS("IBL::EnvDiffuseIBL");
 			context->Dispatch(1, 1, 1);
@@ -409,7 +414,7 @@ void IBL::Prepass()
 	} else {
 		// Still need to set sampler and shader for sky IBL dispatch below
 		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
-		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
+		context->CSSetShader(diffuseIBLShader, nullptr, 0);
 	}
 
 	// IBL with sky (use game's native reflections cubemap directly)
@@ -440,6 +445,7 @@ void IBL::Prepass()
 	}
 
 	// Set PS shader resource
+	dynamicIBLValid = true;
 	SetIblPsSrvs(context, envIBLTexture->srv.get(), skyIBLTexture->srv.get(), staticDiffuseSrv, staticSpecularSrv);
 }
 
@@ -558,9 +564,8 @@ void IBL::SetupResources()
 
 void IBL::ClearShaderCache()
 {
-	if (diffuseIBLCS)
-		diffuseIBLCS->Release();
-	diffuseIBLCS = nullptr;
+	diffuseIBLCS.Reset();
+	dynamicIBLValid = false;
 }
 
 ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
@@ -568,15 +573,18 @@ ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
 	std::vector<std::pair<const char*, const char*>> defines;
 	if (globals::features::dynamicCubemaps.loaded)
 		defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
-	if (!diffuseIBLCS)
-		diffuseIBLCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\IBL\\DiffuseIBLCS.hlsl", defines, "cs_5_0"));
-	return diffuseIBLCS;
+	return diffuseIBLCS.Get(
+		L"Data\\Shaders\\IBL\\DiffuseIBLCS.hlsl",
+		defines,
+		"cs_5_0",
+		"main",
+		"IBL::DiffuseIBLCS");
 }
 
 IBL::CommonBufferData IBL::GetCommonBufferData() const
 {
 	const IBL::Settings runtimeSettings = GetSanitizedSettings(settings);
-	const bool dynamicIBLEnabled = IsRuntimeEnabled() && envIBLTexture && skyIBLTexture;
+	const bool dynamicIBLEnabled = IsRuntimeEnabled() && dynamicIBLValid && envIBLTexture && skyIBLTexture;
 	const bool staticIBLEnabled = IsStaticIBLEnabled(runtimeSettings) && staticDiffuseIBLTexture && staticSpecularIBLTexture;
 	return {
 		.EnableIBL = dynamicIBLEnabled ? 1u : 0u,

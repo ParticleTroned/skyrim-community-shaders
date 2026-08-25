@@ -138,14 +138,8 @@ void Deferred::SetupResources()
 	auto renderer = globals::game::renderer;
 	static ID3D11Device* shaderDevice = nullptr;
 	if (shaderDevice != globals::d3d::device) {
-		if (mainCompositeCS) {
-			mainCompositeCS->Release();
-			mainCompositeCS = nullptr;
-		}
-		if (mainCompositeInteriorCS) {
-			mainCompositeInteriorCS->Release();
-			mainCompositeInteriorCS = nullptr;
-		}
+		mainCompositeCS.Reset();
+		mainCompositeInteriorCS.Reset();
 		if (linearSampler) {
 			linearSampler->Release();
 			linearSampler = nullptr;
@@ -158,10 +152,7 @@ void Deferred::SetupResources()
 		perShadow = nullptr;
 		delete directionalShadowLights;
 		directionalShadowLights = nullptr;
-		if (copyShadowCS) {
-			copyShadowCS->Release();
-			copyShadowCS = nullptr;
-		}
+		copyShadowCS.Reset();
 		shaderDevice = globals::d3d::device;
 	}
 
@@ -269,8 +260,12 @@ void Deferred::SetupResources()
 			perShadow->CreateUAV(uavDesc);
 		}
 
-		if (!copyShadowCS)
-			copyShadowCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CopyShadowDataCS.hlsl", {}, "cs_5_0"));
+		copyShadowCS.Get(
+			L"Data\\Shaders\\CopyShadowDataCS.hlsl",
+			{},
+			"cs_5_0",
+			"main",
+			"Deferred::CopyShadowDataCS");
 	}
 
 	{
@@ -320,6 +315,22 @@ void Deferred::SetupResources()
 void Deferred::CopyShadowData()
 {
 	CS_GPU_PASS("Deferred::CopyShadowData");
+	auto* copyShader = copyShadowCS.Get(
+		L"Data\\Shaders\\CopyShadowDataCS.hlsl",
+		{},
+		"cs_5_0",
+		"main",
+		"Deferred::CopyShadowDataCS");
+	if (!copyShader) {
+		auto* context = globals::d3d::context;
+		ID3D11ShaderResourceView* sourceShadow = nullptr;
+		context->PSGetShaderResources(4, 1, &sourceShadow);
+		ID3D11ShaderResourceView* fallbackSRVs[2]{ sourceShadow, nullptr };
+		context->PSSetShaderResources(18, ARRAYSIZE(fallbackSRVs), fallbackSRVs);
+		if (sourceShadow)
+			sourceShadow->Release();
+		return;
+	}
 
 	auto context = globals::d3d::context;
 
@@ -340,7 +351,7 @@ void Deferred::CopyShadowData()
 
 	context->CSSetConstantBuffers(0, 3, buffers);
 
-	context->CSSetShader(copyShadowCS, nullptr, 0);
+	context->CSSetShader(copyShader, nullptr, 0);
 
 	context->Dispatch(1, 1, 1);
 
@@ -617,8 +628,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
-			ibl.IsRuntimeEnabled() && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr,
-			ibl.IsRuntimeEnabled() && ibl.skyIBLTexture ? ibl.skyIBLTexture->srv.get() : nullptr,
+			ibl.IsRuntimeEnabled() && ibl.dynamicIBLValid && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr,
+			ibl.IsRuntimeEnabled() && ibl.dynamicIBLValid && ibl.skyIBLTexture ? ibl.skyIBLTexture->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps.loaded)
@@ -629,10 +640,8 @@ void Deferred::DeferredPasses()
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-		auto shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
-		context->CSSetShader(shader, nullptr, 0);
-
-		{
+		if (auto* shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite()) {
+			context->CSSetShader(shader, nullptr, 0);
 			CS_GPU_PASS("DeferredComposite");
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 		}
@@ -786,80 +795,71 @@ void Deferred::ResetBlendStates()
 
 void Deferred::ClearShaderCache()
 {
-	if (mainCompositeCS) {
-		mainCompositeCS->Release();
-		mainCompositeCS = nullptr;
-	}
-	if (mainCompositeInteriorCS) {
-		mainCompositeInteriorCS->Release();
-		mainCompositeInteriorCS = nullptr;
-	}
-	if (copyShadowCS) {
-		copyShadowCS->Release();
-		copyShadowCS = nullptr;
-	}
+	mainCompositeCS.Reset();
+	mainCompositeInteriorCS.Reset();
+	copyShadowCS.Reset();
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 {
-	if (!mainCompositeCS) {
-		logger::debug("Compiling DeferredCompositeCS");
+	std::vector<std::pair<const char*, const char*>> defines;
 
-		std::vector<std::pair<const char*, const char*>> defines;
+	if (globals::features::dynamicCubemaps.loaded)
+		defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		if (globals::features::dynamicCubemaps.loaded)
-			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
+	if (globals::features::skylighting.loaded)
+		defines.push_back({ "SKYLIGHTING", nullptr });
 
-		if (globals::features::skylighting.loaded)
-			defines.push_back({ "SKYLIGHTING", nullptr });
-
-		if (globals::features::screenSpaceGI.loaded) {
-			defines.push_back({ "SSGI", nullptr });
-			if (!globals::features::screenSpaceGI.HasGIResources())
-				defines.push_back({ "SSGI_AO_ONLY", nullptr });
-		}
-
-		if (globals::features::ibl.loaded)
-			defines.push_back({ "IBL", nullptr });
-
-		if (REL::Module::IsVR())
-			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		if (globals::features::terrainBlending.loaded)
-			defines.push_back({ "TERRAIN_BLENDING", nullptr });
-		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
+	if (globals::features::screenSpaceGI.loaded) {
+		defines.push_back({ "SSGI", nullptr });
+		if (!globals::features::screenSpaceGI.HasGIResources())
+			defines.push_back({ "SSGI_AO_ONLY", nullptr });
 	}
-	return mainCompositeCS;
+
+	if (globals::features::ibl.loaded)
+		defines.push_back({ "IBL", nullptr });
+
+	if (REL::Module::IsVR())
+		defines.push_back({ "FRAMEBUFFER", nullptr });
+
+	if (globals::features::terrainBlending.loaded)
+		defines.push_back({ "TERRAIN_BLENDING", nullptr });
+	return mainCompositeCS.Get(
+		L"Data\\Shaders\\DeferredCompositeCS.hlsl",
+		defines,
+		"cs_5_0",
+		"main",
+		"Deferred::MainCompositeCS");
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 {
-	if (!mainCompositeInteriorCS) {
-		logger::debug("Compiling DeferredCompositeCS INTERIOR");
+	std::vector<std::pair<const char*, const char*>> defines;
+	defines.push_back({ "INTERIOR", nullptr });
 
-		std::vector<std::pair<const char*, const char*>> defines;
-		defines.push_back({ "INTERIOR", nullptr });
+	if (globals::features::dynamicCubemaps.loaded)
+		defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		if (globals::features::dynamicCubemaps.loaded)
-			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
-
-		if (globals::features::screenSpaceGI.loaded) {
-			defines.push_back({ "SSGI", nullptr });
-			if (!globals::features::screenSpaceGI.HasGIResources())
-				defines.push_back({ "SSGI_AO_ONLY", nullptr });
-		}
-
-		if (globals::features::ibl.loaded)
-			defines.push_back({ "IBL", nullptr });
-
-		if (REL::Module::IsVR())
-			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		if (globals::features::terrainBlending.loaded)
-			defines.push_back({ "TERRAIN_BLENDING", nullptr });
-		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
+	if (globals::features::screenSpaceGI.loaded) {
+		defines.push_back({ "SSGI", nullptr });
+		if (!globals::features::screenSpaceGI.HasGIResources())
+			defines.push_back({ "SSGI_AO_ONLY", nullptr });
 	}
-	return mainCompositeInteriorCS;
+
+	if (globals::features::ibl.loaded)
+		defines.push_back({ "IBL", nullptr });
+
+	if (REL::Module::IsVR())
+		defines.push_back({ "FRAMEBUFFER", nullptr });
+
+	if (globals::features::terrainBlending.loaded)
+		defines.push_back({ "TERRAIN_BLENDING", nullptr });
+	return mainCompositeInteriorCS.Get(
+		L"Data\\Shaders\\DeferredCompositeCS.hlsl",
+		defines,
+		"cs_5_0",
+		"main",
+		"Deferred::MainCompositeInteriorCS");
 }
 
 void Deferred::Hooks::Main_RenderShadowMaps::thunk()

@@ -35542,48 +35542,39 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 	// game's typeless depth allocation.
 	if (upscaleMethod == UpscaleMethod::kFSR &&
 		(globals::game::isVR || runtimeFsrDepthTexture)) {
-		if (!encodeTexturesCSDepthOutput) {
-			logger::debug("Compiling EncodeTexturesCS.hlsl for FSR typed depth output");
-			std::vector<std::pair<const char*, const char*>> defines = {
-				{ "FSR", "" },
-				{ "DEPTH_OUTPUT", "" }
-			};
-			encodeTexturesCSDepthOutput.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0"));
-		}
-		return encodeTexturesCSDepthOutput.get();
+		std::vector<std::pair<const char*, const char*>> defines = {
+			{ "FSR", "" },
+			{ "DEPTH_OUTPUT", "" }
+		};
+		return encodeTexturesCSDepthOutput.Get(
+			L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0",
+			"main", "Upscaling::EncodeTexturesDepthOutputCS");
 	}
 
-	if (!encodeTexturesCS[methodIndex]) {
-		logger::debug("Compiling EncodeTexturesCS.hlsl for upscale method {}", methodIndex);
-		std::vector<std::pair<const char*, const char*>> defines;
-
-		// Add upscale method define
-		switch (upscaleMethod) {
-		case UpscaleMethod::kDLSS:
-			defines.push_back({ "DLSS", "" });
-			break;
-		case UpscaleMethod::kFSR:
-			defines.push_back({ "FSR", "" });
-			break;
-		default:
-			// No define for NONE or TAA
-			break;
-		}
-
-		encodeTexturesCS[methodIndex].attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0"));
+	std::vector<std::pair<const char*, const char*>> defines;
+	// Add upscale method define
+	switch (upscaleMethod) {
+	case UpscaleMethod::kDLSS:
+		defines.push_back({ "DLSS", "" });
+		break;
+	case UpscaleMethod::kFSR:
+		defines.push_back({ "FSR", "" });
+		break;
+	default:
+		// No define for NONE or TAA
+		break;
 	}
-	return encodeTexturesCS[methodIndex].get();
+	return encodeTexturesCS[methodIndex].Get(
+		L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0",
+		"main", "Upscaling::EncodeTexturesCS");
 }
 
 ID3D11PixelShader* Upscaling::GetDepthRefractionUpscalePS()
 {
-	if (!depthRefractionUpscalePS) {
-		logger::debug("Compiling DepthRefractionUpscalePS.hlsl");
-		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
-		depthRefractionUpscalePS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/DepthRefractionUpscalePS.hlsl", defines, "ps_5_0"));
-	}
-
-	return depthRefractionUpscalePS.get();
+	return depthRefractionUpscalePS.Get(
+		L"Data/Shaders/Upscaling/DepthRefractionUpscalePS.hlsl",
+		{ { "PSHADER", "" } }, "ps_5_0", "main",
+		"Upscaling::DepthRefractionUpscalePS");
 }
 
 ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVariant a_variant)
@@ -35591,107 +35582,80 @@ ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVa
 	auto& shader = a_variant == UnderwaterMaskUpscaleVariant::RawDepthNoStencil     ? underwaterMaskUpscaleRawDepthNoStencilPS :
 	               a_variant == UnderwaterMaskUpscaleVariant::DynamicDepthNoStencil ? underwaterMaskUpscaleDynamicDepthNoStencilPS :
 	                                                                                  underwaterMaskUpscalePS;
-	if (!shader) {
-		logger::debug("Compiling UnderwaterMaskPS.hlsl");
-		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
-		if (globals::game::isVR) {
-			defines.push_back({ "VR", "" });
-			if (UnderwaterMaskUpscaleVariantUsesNoHMDStencil(a_variant)) {
-				defines.push_back({ "NO_HMD_STENCIL_MASK", "" });
-			}
-			if (UnderwaterMaskUpscaleVariantUsesRawSceneDepth(a_variant)) {
-				defines.push_back({ "RAW_SCENE_DEPTH", "" });
-			}
-			if (UnderwaterMaskUpscaleVariantUsesDynamicSceneDepth(a_variant))
-				defines.push_back({ "DYNAMIC_SCENE_DEPTH", "" });
+	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
+	if (globals::game::isVR) {
+		defines.push_back({ "VR", "" });
+		if (UnderwaterMaskUpscaleVariantUsesNoHMDStencil(a_variant)) {
+			defines.push_back({ "NO_HMD_STENCIL_MASK", "" });
 		}
-		shader.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines, "ps_5_0"));
+		if (UnderwaterMaskUpscaleVariantUsesRawSceneDepth(a_variant)) {
+			defines.push_back({ "RAW_SCENE_DEPTH", "" });
+		}
+		if (UnderwaterMaskUpscaleVariantUsesDynamicSceneDepth(a_variant))
+			defines.push_back({ "DYNAMIC_SCENE_DEPTH", "" });
 	}
-
-	return shader.get();
+	return shader.Get(
+		L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines,
+		"ps_5_0", "main", "Upscaling::UnderwaterMaskUpscalePS");
 }
 
 ID3D11PixelShader* Upscaling::GetCameraMotionVectorsPS()
 {
-	if (!cameraMotionVectorsPS) {
-		logger::debug("Compiling CameraMotionVectorsPS.hlsl");
-		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
-		if (globals::game::isVR)
-			defines.push_back({ "VR", "" });
-		cameraMotionVectorsPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl", defines, "ps_5_0"));
-	}
-
-	return cameraMotionVectorsPS.get();
+	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
+	if (globals::game::isVR)
+		defines.push_back({ "VR", "" });
+	return cameraMotionVectorsPS.Get(
+		L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl", defines,
+		"ps_5_0", "main", "Upscaling::CameraMotionVectorsPS");
 }
 
 ID3D11VertexShader* Upscaling::GetUpscaleVS()
 {
-	if (!upscaleVS) {
-		logger::debug("Compiling UpscaleVS.hlsl");
-		upscaleVS.attach((ID3D11VertexShader*)Util::CompileShader(L"Data/Shaders/Upscaling/UpscaleVS.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
-	}
-
-	return upscaleVS.get();
+	return upscaleVS.Get(
+		L"Data/Shaders/Upscaling/UpscaleVS.hlsl", { { "VSHADER", "" } },
+		"vs_5_0", "main", "Upscaling::FullscreenVS");
 }
 
 ID3D11ComputeShader* Upscaling::GetFoveatedPeripheryCS()
 {
-	if (!foveatedPeripheryCS) {
-		logger::debug("Compiling FoveatedPeripheryCS.hlsl");
-		foveatedPeripheryCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/FoveatedPeripheryCS.hlsl", {}, "cs_5_0"));
-	}
-
-	return foveatedPeripheryCS.get();
+	return foveatedPeripheryCS.Get(
+		L"Data/Shaders/Upscaling/FoveatedPeripheryCS.hlsl", {}, "cs_5_0",
+		"main", "Upscaling::FoveatedPeripheryCS");
 }
 
 ID3D11ComputeShader* Upscaling::GetFoveatedCenterBlendCS()
 {
-	if (!foveatedCenterBlendCS) {
-		logger::debug("Compiling FoveatedCenterBlendCS.hlsl");
-		foveatedCenterBlendCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", {}, "cs_5_0"));
-	}
-
-	return foveatedCenterBlendCS.get();
+	return foveatedCenterBlendCS.Get(
+		L"Data/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", {}, "cs_5_0",
+		"main", "Upscaling::FoveatedCenterBlendCS");
 }
 
 ID3D11ComputeShader* Upscaling::GetPeripheryTAACS()
 {
-	if (!peripheryTAACS) {
-		logger::debug("Compiling PeripheryTAACS.hlsl");
-		peripheryTAACS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/PeripheryTAACS.hlsl", {}, "cs_5_0"));
-	}
-
-	return peripheryTAACS.get();
+	return peripheryTAACS.Get(
+		L"Data/Shaders/Upscaling/PeripheryTAACS.hlsl", {}, "cs_5_0",
+		"main", "Upscaling::PeripheryTAACS");
 }
 
 ID3D11ComputeShader* Upscaling::GetSubmitStageStretchCS()
 {
-	if (!submitStageStretchCS) {
-		logger::debug("Compiling SubmitStageStretchCS.hlsl");
-		submitStageStretchCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/SubmitStageStretchCS.hlsl", {}, "cs_5_0"));
-	}
-
-	return submitStageStretchCS.get();
+	return submitStageStretchCS.Get(
+		L"Data/Shaders/Upscaling/SubmitStageStretchCS.hlsl", {}, "cs_5_0",
+		"main", "Upscaling::SubmitStageStretchCS");
 }
 
 ID3D11PixelShader* Upscaling::GetVRDesktopMirrorBlitPS()
 {
-	if (!vrDesktopMirrorBlitPS) {
-		logger::debug("Compiling VRDesktopMirrorBlitPS.hlsl");
-		vrDesktopMirrorBlitPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/VRDesktopMirrorBlitPS.hlsl", {}, "ps_5_0"));
-	}
-
-	return vrDesktopMirrorBlitPS.get();
+	return vrDesktopMirrorBlitPS.Get(
+		L"Data/Shaders/Upscaling/VRDesktopMirrorBlitPS.hlsl", {}, "ps_5_0",
+		"main", "Upscaling::VRDesktopMirrorBlitPS");
 }
 
 ID3D11PixelShader* Upscaling::GetVRMenuLayerCompositePS()
 {
-	if (!vrMenuLayerCompositePS) {
-		logger::debug("Compiling VRMenuLayerCompositePS.hlsl");
-		vrMenuLayerCompositePS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/VRMenuLayerCompositePS.hlsl", {}, "ps_5_0"));
-	}
-
-	return vrMenuLayerCompositePS.get();
+	return vrMenuLayerCompositePS.Get(
+		L"Data/Shaders/Upscaling/VRMenuLayerCompositePS.hlsl", {}, "ps_5_0",
+		"main", "Upscaling::VRMenuLayerCompositePS");
 }
 
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
@@ -40658,9 +40622,6 @@ void Upscaling::SetupResources()
 
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
-
-	if (!copyDepthToSharedBufferPS)
-		copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
 }
 
 void Upscaling::SetupRenderTargetResources()
@@ -40671,30 +40632,30 @@ void Upscaling::SetupRenderTargetResources()
 void Upscaling::ClearShaderCache()
 {
 	for (int i = 0; i < 5; ++i) {
-		encodeTexturesCS[i] = nullptr;  // com_ptr automatically releases
+		encodeTexturesCS[i].Reset();
 	}
-	encodeTexturesCSDepthOutput = nullptr;
+	encodeTexturesCSDepthOutput.Reset();
 
-	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
-	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
-	underwaterMaskUpscaleDynamicDepthNoStencilPS = nullptr;
-	underwaterMaskUpscaleRawDepthNoStencilPS = nullptr;
-	cameraMotionVectorsPS = nullptr;   // com_ptr automatically releases
-	upscaleVS = nullptr;               // com_ptr automatically releases
-	foveatedPeripheryCS = nullptr;     // com_ptr automatically releases
-	foveatedCenterBlendCS = nullptr;   // com_ptr automatically releases
-	peripheryTAACS = nullptr;          // com_ptr automatically releases
-	submitStageStretchCS = nullptr;    // com_ptr automatically releases
-	vrDesktopMirrorBlitPS = nullptr;   // com_ptr automatically releases
+	depthRefractionUpscalePS.Reset();
+	underwaterMaskUpscalePS.Reset();
+	underwaterMaskUpscaleDynamicDepthNoStencilPS.Reset();
+	underwaterMaskUpscaleRawDepthNoStencilPS.Reset();
+	cameraMotionVectorsPS.Reset();
+	upscaleVS.Reset();
+	foveatedPeripheryCS.Reset();
+	foveatedCenterBlendCS.Reset();
+	peripheryTAACS.Reset();
+	submitStageStretchCS.Reset();
+	vrDesktopMirrorBlitPS.Reset();
 	vrDesktopMirrorBlitRTV = nullptr;  // com_ptr automatically releases
 	vrDesktopMirrorBlitTarget = nullptr;
-	vrMenuLayerCompositePS = nullptr;  // com_ptr automatically releases
-	vrClearHMDMaskCS = nullptr;        // com_ptr automatically releases
-	vrClearHMDMaskCB = nullptr;        // com_ptr automatically releases
+	vrMenuLayerCompositePS.Reset();
+	vrClearHMDMaskCS = nullptr;  // com_ptr automatically releases
+	vrClearHMDMaskCB = nullptr;  // com_ptr automatically releases
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	ResetVRLoadPresentationHAMProbeShaderResources();
 #endif
-	copyDepthToSharedBufferPS = nullptr;  // com_ptr automatically releases
+	copyDepthToSharedBufferPS.Reset();
 	rcas.ClearShaderCache();
 	lumaSharpen.ClearShaderCache();
 }
@@ -40710,6 +40671,13 @@ void Upscaling::CopySharedD3D12Resources()
 	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), motionVector.texture);
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto* vertexShader = GetUpscaleVS();
+	auto* pixelShader = copyDepthToSharedBufferPS.Get(
+		L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl",
+		{ { "PSHADER", "" } }, "ps_5_0", "main",
+		"Upscaling::CopyDepthToSharedBufferPS");
+	if (!vertexShader || !pixelShader)
+		return;
 
 	{
 		// Set up viewport for fullscreen rendering
@@ -40731,7 +40699,7 @@ void Upscaling::CopySharedD3D12Resources()
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 		// Set up vertex shader
-		context->VSSetShader(GetUpscaleVS(), nullptr, 0);
+		context->VSSetShader(vertexShader, nullptr, 0);
 
 		// Set up rasterizer and blend states
 		context->RSSetState(upscaleRasterizerState.get());
@@ -40745,7 +40713,7 @@ void Upscaling::CopySharedD3D12Resources()
 		ID3D11RenderTargetView* rtvs[1] = { dx12SwapChain.depthBufferShared12->rtv.get() };
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
-		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
+		context->PSSetShader(pixelShader, nullptr, 0);
 
 		{
 			CS_GPU_PASS("Upscaling::CopyDepthD3D12");

@@ -529,6 +529,10 @@ namespace SIE
 
 		void Clear();
 		void Clear(RE::BSShader::Type a_type);
+		/** @brief Requests a full cache clear on the render thread. */
+		void RequestClear();
+		/** @brief Drains a pending full-clear request on the render thread. */
+		void ProcessPendingClear();
 		/**
    		* @brief Clears and marks shaders for recompilation based on the given path.
  		*
@@ -1033,6 +1037,7 @@ namespace SIE
 		bool isDump = false;
 		bool hideError = false;
 		bool useFileWatcher = false;
+		std::atomic_bool pendingClear{ false };
 
 		bool ShouldUseAsyncCompilation() const;
 

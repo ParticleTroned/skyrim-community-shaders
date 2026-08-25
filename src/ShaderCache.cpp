@@ -2814,6 +2814,18 @@ namespace SIE
 		compilationSet.Clear();
 	}
 
+	void ShaderCache::RequestClear()
+	{
+		pendingClear.store(true, std::memory_order_release);
+	}
+
+	void ShaderCache::ProcessPendingClear()
+	{
+		if (pendingClear.exchange(false, std::memory_order_acq_rel)) {
+			Clear();
+		}
+	}
+
 	namespace
 	{
 		struct ShaderCacheResultTraits
@@ -5436,7 +5448,7 @@ namespace SIE
 				}
 				if (clearCache) {
 					cache->DeleteDiskCache();
-					cache->Clear();
+					cache->RequestClear();
 				}
 				queue.clear();
 			}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 
 /** Provides downsampled VSM shadow maps for transparent and volumetric shadow consumers. */
 struct VolumetricShadows : Feature
@@ -47,10 +48,10 @@ public:
 	void CopyShadowLightData();
 	void SetShaderResources(ID3D11DeviceContext* a_context);
 
-	ID3D11ComputeShader* downsampleShadowMip0CS = nullptr;
-	ID3D11ComputeShader* downsampleShadowMip1CS = nullptr;
-	ID3D11ComputeShader* blurShadowHorizontalCS = nullptr;
-	ID3D11ComputeShader* blurShadowVerticalCS = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> downsampleShadowMip0CS;
+	Util::LazyShader<ID3D11ComputeShader> downsampleShadowMip1CS;
+	Util::LazyShader<ID3D11ComputeShader> blurShadowHorizontalCS;
+	Util::LazyShader<ID3D11ComputeShader> blurShadowVerticalCS;
 
 	ID3D11ShaderResourceView* shadowView = nullptr;
 

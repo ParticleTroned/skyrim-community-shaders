@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/LazyShader.h"
 
 #include <memory>
 
@@ -64,11 +65,9 @@ public:
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
 
-	ID3D11VertexShader* GetTerrainVertexShader();
 	ID3D11VertexShader* GetTerrainOffsetVertexShader();
 
-	ID3D11VertexShader* terrainVertexShader = nullptr;
-	ID3D11VertexShader* terrainOffsetVertexShader = nullptr;
+	Util::LazyShader<ID3D11VertexShader> terrainOffsetVertexShader;
 
 	ID3D11ComputeShader* GetDepthBlendShader();
 
@@ -124,7 +123,7 @@ public:
 	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;
 
 	std::unique_ptr<ConstantBuffer> depthBlendCB = nullptr;
-	ID3D11ComputeShader* depthBlendShader = nullptr;
+	Util::LazyShader<ID3D11ComputeShader> depthBlendShader;
 
 	virtual void ClearShaderCache() override;
 

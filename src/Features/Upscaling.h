@@ -8,6 +8,7 @@
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
+#include "Utils/LazyShader.h"
 #include "VR/InSceneOverlaySubmitPolicy.h"
 #include <array>
 #include <atomic>
@@ -1733,16 +1734,16 @@ public:
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];          // One for each UpscaleMethod
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR: converts game depth to typed R32_FLOAT for FidelityFX
+	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCS[5];          // One for each UpscaleMethod
+	Util::LazyShader<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR: converts game depth to typed R32_FLOAT for FidelityFX
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
-	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
+	Util::LazyShader<ID3D11PixelShader> depthRefractionUpscalePS;
 	ID3D11PixelShader* GetDepthRefractionUpscalePS();
 
-	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscalePS;
-	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscaleDynamicDepthNoStencilPS;
-	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscaleRawDepthNoStencilPS;
+	Util::LazyShader<ID3D11PixelShader> underwaterMaskUpscalePS;
+	Util::LazyShader<ID3D11PixelShader> underwaterMaskUpscaleDynamicDepthNoStencilPS;
+	Util::LazyShader<ID3D11PixelShader> underwaterMaskUpscaleRawDepthNoStencilPS;
 	enum class UnderwaterMaskUpscaleVariant : uint8_t
 	{
 		Default,
@@ -1751,7 +1752,7 @@ public:
 	};
 	ID3D11PixelShader* GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVariant a_variant = UnderwaterMaskUpscaleVariant::Default);
 
-	winrt::com_ptr<ID3D11PixelShader> cameraMotionVectorsPS;
+	Util::LazyShader<ID3D11PixelShader> cameraMotionVectorsPS;
 	ID3D11PixelShader* GetCameraMotionVectorsPS();
 
 	/**
@@ -1763,27 +1764,27 @@ public:
 	void FillMenuCameraMotionVectors();
 	void PrepareMenuCameraMotionVectors();
 
-	winrt::com_ptr<ID3D11VertexShader> upscaleVS;
+	Util::LazyShader<ID3D11VertexShader> upscaleVS;
 	ID3D11VertexShader* GetUpscaleVS();
 
-	winrt::com_ptr<ID3D11ComputeShader> foveatedPeripheryCS;
+	Util::LazyShader<ID3D11ComputeShader> foveatedPeripheryCS;
 	ID3D11ComputeShader* GetFoveatedPeripheryCS();
 
-	winrt::com_ptr<ID3D11ComputeShader> foveatedCenterBlendCS;
+	Util::LazyShader<ID3D11ComputeShader> foveatedCenterBlendCS;
 	ID3D11ComputeShader* GetFoveatedCenterBlendCS();
 
-	winrt::com_ptr<ID3D11ComputeShader> peripheryTAACS;
+	Util::LazyShader<ID3D11ComputeShader> peripheryTAACS;
 	ID3D11ComputeShader* GetPeripheryTAACS();
 
-	winrt::com_ptr<ID3D11ComputeShader> submitStageStretchCS;
+	Util::LazyShader<ID3D11ComputeShader> submitStageStretchCS;
 	ID3D11ComputeShader* GetSubmitStageStretchCS();
 
-	winrt::com_ptr<ID3D11PixelShader> vrDesktopMirrorBlitPS;
+	Util::LazyShader<ID3D11PixelShader> vrDesktopMirrorBlitPS;
 	ID3D11PixelShader* GetVRDesktopMirrorBlitPS();
 	winrt::com_ptr<ID3D11RenderTargetView> vrDesktopMirrorBlitRTV;
 	ID3D11Texture2D* vrDesktopMirrorBlitTarget = nullptr;
 
-	winrt::com_ptr<ID3D11PixelShader> vrMenuLayerCompositePS;
+	Util::LazyShader<ID3D11PixelShader> vrMenuLayerCompositePS;
 	ID3D11PixelShader* GetVRMenuLayerCompositePS();
 
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
@@ -2216,7 +2217,7 @@ public:
 	static inline RCAS rcas;                ///< Standalone RCAS sharpening for DLSS
 	static inline LumaSharpen lumaSharpen;  ///< Luma-only adaptive unsharp mask for DLSS
 
-	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
+	Util::LazyShader<ID3D11PixelShader> copyDepthToSharedBufferPS;
 
 	float projectionPosScaleX = 0.0f;
 	float projectionPosScaleY = 0.0f;

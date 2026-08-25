@@ -10,6 +10,7 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
+#include "Features/FoliageLighting.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/HDRDisplay.h"
@@ -68,6 +69,7 @@ namespace globals
 		CloudShadows cloudShadows{};
 		DynamicCubemaps dynamicCubemaps{};
 		ExtendedMaterials extendedMaterials{};
+		FoliageLighting foliageLighting{};
 		GrassCollision grassCollision{};
 		GrassLighting grassLighting{};
 		IBL ibl{};

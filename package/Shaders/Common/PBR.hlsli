@@ -171,6 +171,16 @@ namespace PBR
 				lightingOutput.specular = lerp(lightingOutput.specular, fuzzSpecular, material.FuzzWeight);
 			}
 
+#if defined(TREE_ANIM)
+			[branch] if (SharedData::foliageLightingSettings.EnableFoliageScattering != 0)
+			{
+				// Animated foliage has no reliable thickness after wind deformation.
+				// Use only the current normal, light, and view angles.
+				float foliageTransmission = saturate(-NdotL) * BRDF::Diffuse_Lambert();
+				foliageTransmission += GetFoliageTransmission(NdotL, VdotL);
+				lightingOutput.transmission += material.BaseColor * foliageTransmission * detailedLightColor * kD;
+			}
+#endif
 			[branch] if ((PBRFlags & Flags::Subsurface) != 0)
 #	if !defined(TREE_ANIM)
 			{
@@ -278,6 +288,12 @@ namespace PBR
 		lobeWeights.diffuse *= MultiBounceAO(material.BaseColor, material.AO);
 		float alpha = material.Roughness * material.Roughness;
 		lobeWeights.specular *= SpecularOcclusion(NdotV, alpha, material.AO);
+
+#if defined(TREE_ANIM)
+		// Add a small AO-independent indirect response for animated foliage.
+		[branch] if (SharedData::foliageLightingSettings.EnableFoliageAmbientBoost != 0)
+			lobeWeights.diffuse += material.BaseColor * SharedData::foliageLightingSettings.FoliageAmbientAmount;
+#endif
 
 		const float metalReflectionScale = lerp(1.0, SharedData::truePBRSettings.PBRMetalReflectionScale, saturate(material.Metallic));
 		lobeWeights.specular *= metalReflectionScale;

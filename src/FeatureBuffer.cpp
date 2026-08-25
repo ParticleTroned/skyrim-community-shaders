@@ -9,6 +9,7 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
+#include "Features/FoliageLighting.h"
 #include "Features/GrassLighting.h"
 #include "Features/HairSpecular.h"
 #include "Features/IBL.h"
@@ -51,6 +52,7 @@ namespace
 	using TerrainBlendingSettingsCB = TerrainBlending::Settings;
 	using ExponentialHeightFogSettingsCB = ExponentialHeightFog::Settings;
 	using TruePBRSettingsCB = TruePBR::Settings;
+	using FoliageLightingSettingsCB = FoliageLighting::Settings;
 	using SkinDataCB = Skin::SkinData;
 	using VanillaFresnelSettingsCB = VanillaFresnel::Settings;
 	using UnifiedWaterSettingsCB = UnifiedWater::CommonBufferData;
@@ -77,6 +79,7 @@ namespace
 		TerrainBlendingSettingsCB terrainBlendingSettings;
 		ExponentialHeightFogSettingsCB exponentialHeightFogSettings;
 		TruePBRSettingsCB truePBRSettings;
+		FoliageLightingSettingsCB foliageLightingSettings;
 		SkinDataCB skinData;
 		VanillaFresnelSettingsCB vanillaFresnelSettings;
 		UnifiedWaterSettingsCB unifiedWaterSettings;
@@ -102,6 +105,7 @@ namespace
 		TerrainBlendingSettingsCB,
 		ExponentialHeightFogSettingsCB,
 		TruePBRSettingsCB,
+		FoliageLightingSettingsCB,
 		SkinDataCB,
 		VanillaFresnelSettingsCB,
 		UnifiedWaterSettingsCB,
@@ -131,6 +135,12 @@ namespace
 	static_assert(sizeof(ExponentialHeightFogSettingsCB) == 192);
 	static_assert(sizeof(TruePBRSettingsCB) == 16);
 	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 12);
+	static_assert(sizeof(FoliageLightingSettingsCB) == 32);
+	static_assert(offsetof(FoliageLightingSettingsCB, EnableFoliageScattering) == 0);
+	static_assert(offsetof(FoliageLightingSettingsCB, EnableFoliageAmbientBoost) == 4);
+	static_assert(offsetof(FoliageLightingSettingsCB, EnableFoliageAmbientFlip) == 8);
+	static_assert(offsetof(FoliageLightingSettingsCB, FoliageAmbientAmount) == 12);
+	static_assert(offsetof(FoliageLightingSettingsCB, EnableGrassScattering) == 16);
 	static_assert(sizeof(SkinDataCB) == 112);
 	static_assert(sizeof(VanillaFresnelSettingsCB) == 48);
 	static_assert(sizeof(UnifiedWaterSettingsCB) == 96);
@@ -182,7 +192,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, terrainBlendingSettings) == offsetof(FeatureDataLayout, linearLightingSettings) + sizeof(LinearLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, exponentialHeightFogSettings) == offsetof(FeatureDataLayout, terrainBlendingSettings) + sizeof(TerrainBlendingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, truePBRSettings) == offsetof(FeatureDataLayout, exponentialHeightFogSettings) + sizeof(ExponentialHeightFogSettingsCB));
-	static_assert(offsetof(FeatureDataLayout, skinData) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, foliageLightingSettings) == offsetof(FeatureDataLayout, truePBRSettings) + sizeof(TruePBRSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, skinData) == offsetof(FeatureDataLayout, foliageLightingSettings) + sizeof(FoliageLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, vanillaFresnelSettings) == offsetof(FeatureDataLayout, skinData) + sizeof(SkinDataCB));
 	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, vanillaFresnelSettings) + sizeof(VanillaFresnelSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
@@ -239,6 +250,7 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::terrainBlending.settings,
 		globals::features::exponentialHeightFog.settings,
 		globals::features::truePBR.settings,
+		globals::features::foliageLighting.GetCommonBufferData(),
 		globals::features::skin.GetCommonBufferData(),
 		globals::features::vanillaFresnel.settings,
 		globals::features::unifiedWater.GetCommonBufferData(),

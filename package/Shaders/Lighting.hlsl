@@ -2607,6 +2607,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	IndirectLobeWeights indirectLobeWeights;
 
 	float3 ambientNormal = worldNormal.xyz;
+#	if defined(TREE_ANIM)
+	[branch] if (SharedData::foliageLightingSettings.EnableFoliageAmbientFlip != 0)
+	{
+		if (dot(ambientNormal, viewDirection) < 0.0)
+			ambientNormal = -ambientNormal;
+	}
+#	endif
 #	if defined(HAIR) && defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		if (SharedData::hairSpecularSettings.HairMode == 1)

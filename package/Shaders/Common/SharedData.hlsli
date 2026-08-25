@@ -373,6 +373,16 @@ namespace SharedData
 		float3 pad;
 	};
 
+	struct FoliageLightingSettings
+	{
+		uint EnableFoliageScattering;
+		uint EnableFoliageAmbientBoost;
+		uint EnableFoliageAmbientFlip;
+		float FoliageAmbientAmount;
+		uint EnableGrassScattering;
+		uint3 pad;
+	};
+
 	struct BloomSettings
 	{
 		uint Enabled;
@@ -408,6 +418,7 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
+		FoliageLightingSettings foliageLightingSettings;
 		SkinData skinData;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		UnifiedWaterSettings unifiedWaterSettings;

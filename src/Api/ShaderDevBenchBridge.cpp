@@ -6,6 +6,8 @@
 #	include "Api/ShaderService.h"
 #	include "Api/RuntimeThreadAffinity.h"
 #	include "BuildProvenance.h"
+#	include "Globals.h"
+#	include "ShaderCache.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
@@ -196,7 +198,7 @@ namespace
 	{
 		const auto action = a_args.value("action", std::string{});
 		const bool knownAction = action == "registry" || action == "snapshot" || action == "features" ||
-			action == "preflight" || action == "execute";
+			action == "preflight" || action == "execute" || action == "backgroundCompile";
 		if (!knownAction)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 		if (action == "registry") {
@@ -209,8 +211,9 @@ namespace
 				{ "capabilities", CSX::ShaderAPI::ServiceCapabilities },
 				{ "mainThreadAffine", true },
 				{ "registryMainThreadAffine", false },
+				{ "backgroundCompileMainThreadAffine", false },
 				{ "preflightTokenLifetimeMs", 30000 },
-				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute" }) },
+				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute", "backgroundCompile" }) },
 				{ "statusCodes", json::array({
 					"success", "invalid_argument", "structure_too_small", "unavailable", "wrong_thread",
 					"revision_conflict", "preflight_required", "preflight_expired", "preflight_mismatch",
@@ -221,6 +224,19 @@ namespace
 					"set_feature_disabled_at_boot", "clear_memory_cache", "clear_disk_cache", "clear_all_caches",
 					"restore_previous_disk_cache", "accept_cache_rebuild", "stop_compilation", "capture_active_shaders",
 				}) },
+			};
+			return response;
+		}
+		if (action == "backgroundCompile") {
+			auto* cache = globals::shaderCache;
+			if (!cache)
+				return Foundation().MakeError(a_args, "service_unavailable", "shader cache is not initialized", "dispatch", true);
+			const bool wasEnabled = cache->backgroundCompilation.exchange(true, std::memory_order_relaxed);
+			auto response = Foundation().MakeEnvelope(a_args, true);
+			response["result"] = {
+				{ "action", "backgroundCompile" },
+				{ "backgroundCompilation", true },
+				{ "changed", !wasEnabled },
 			};
 			return response;
 		}
@@ -350,7 +366,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. Every mutation uses preflight followed by execute with the exact same arguments and returned token.",
+			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile is an immediate idempotent listener-thread action that releases the boot compile wait while compilation continues on the background thread budget.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -359,7 +375,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"clientId":{"type":"string","minLength":1,"maxLength":128},
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
-					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute"]},
+					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile"]},
 					"mutation":{
 						"type":"object",
 						"required":["action","expectedStateRevision"],

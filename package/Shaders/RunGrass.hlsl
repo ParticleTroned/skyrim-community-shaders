@@ -751,7 +751,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	PBR::SurfaceProperties pbrSurfaceProperties = PBR::InitSurfaceProperties();
 
-	pbrSurfaceProperties.Roughness = saturate(rawRMAOS.x);
+	float dryGrassRoughness = saturate(rawRMAOS.x);
+	float wetGrassRoughness = min(dryGrassRoughness, saturate(SharedData::wetternessSettings.GrassWetRoughness));
+	pbrSurfaceProperties.Roughness = lerp(dryGrassRoughness, wetGrassRoughness, saturate(SharedData::wetternessSettings.GrassWetnessPhase));
 	pbrSurfaceProperties.Metallic = saturate(rawRMAOS.y);
 	pbrSurfaceProperties.AO = rawRMAOS.z;
 	pbrSurfaceProperties.F0 = lerp(saturate(rawRMAOS.w), baseColor.xyz, pbrSurfaceProperties.Metallic);

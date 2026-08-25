@@ -1530,7 +1530,7 @@ void Wetterness::DrawSettings()
 		rainGrassGlossiness = GrassLighting::ClampGlossiness(rainGrassGlossiness, kDefaultRainGrassGlossiness);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Maximum effective grass glossiness while rain is active. Wetterness blends down from this value after rain using the grass drying time. If this is below the dry endpoint, the dry endpoint wins so rain never makes grass less glossy.");
+				"Maximum effective grass glossiness while rain is active, including TRUE_PBR roughness. Wetterness blends down from this value after rain using the grass drying time. If this is below the dry endpoint, the dry endpoint wins so rain never makes grass less glossy.");
 		}
 
 		ImGui::SliderFloat(
@@ -2527,6 +2527,13 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 		}
 	}
 	runtimeState.grassLightingWetnessPhase = grassLightingWetnessPhase;
+	const float dryGrassGlossiness = GrassLighting::ClampGlossiness(
+		globals::features::grassLighting.settings.Glossiness,
+		GrassLighting::Settings{}.Glossiness);
+	const float wetGrassGlossiness = (std::max)(dryGrassGlossiness,
+		GrassLighting::ClampGlossiness(rainGrassGlossiness, kDefaultRainGrassGlossiness));
+	data.GrassWetnessPhase = grassLightingWetnessPhase;
+	data.GrassWetRoughness = std::clamp(1.0f - wetGrassGlossiness * 0.01f, 0.0f, 1.0f);
 	const float activePuddleSkyReflectionScale = masterWetnessEnabled ?
 	                                                 ClampFiniteOrDefault(
 														 puddleSkyReflectionScale,

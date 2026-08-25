@@ -203,6 +203,10 @@ namespace SharedData
 		// View-depth fade/cull range for dev-style wetness distance fading, in game units.
 		uint WetnessDistanceFadeRangePacked;
 		float RainContactWetnessScale;
+
+		float GrassWetnessPhase;
+		float GrassWetRoughness;
+		float2 GrassWetnessPad;
 	};
 
 	struct SkylightingSettings

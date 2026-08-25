@@ -55,8 +55,6 @@ namespace
 			return Upscaling::HMDMaskImplementationMode::RobustDepth5x5;
 		if (a_mode == "sparse_depth_9tap")
 			return Upscaling::HMDMaskImplementationMode::SparseDepth9;
-		if (a_mode == "persistent_hmd_mask")
-			return Upscaling::HMDMaskImplementationMode::PersistentMask;
 		return std::nullopt;
 	}
 
@@ -861,7 +859,7 @@ namespace
 			const auto mode = ParseHMDMaskMode(modeName);
 			if (!mode) {
 				return {
-					{ "error", "hamMode must be sparse_depth_9tap, robust_depth_5x5, or persistent_hmd_mask" },
+					{ "error", "hamMode must be sparse_depth_9tap or robust_depth_5x5" },
 					{ "hamMode", modeName },
 				};
 			}
@@ -1177,7 +1175,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"({"description":"Control and inspect CSX VR render-scale, HMD-mask implementation, and transition diagnostics. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_set_mode","ham_quality_start","ham_quality_status","ham_quality_stop","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"hamMode":{"type":"string","enum":["sparse_depth_9tap","robust_depth_5x5","persistent_hmd_mask"]},"maxFrames":{"type":"integer","minimum":1,"maximum":120,"default":60},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})";
+			R"({"description":"Control and inspect CSX VR render-scale, HMD-mask implementation, and transition diagnostics. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_set_mode","ham_quality_start","ham_quality_status","ham_quality_stop","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"hamMode":{"type":"string","enum":["sparse_depth_9tap","robust_depth_5x5"]},"maxFrames":{"type":"integer","minimum":1,"maximum":120,"default":60},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			diagnosticDescriptor,

@@ -17,22 +17,17 @@ cbuffer ClearHMDMaskCB : register(b0)
 	uint DepthHeight;
 	uint ColorWidth;
 	uint ColorHeight;
-	uint AuditMaskWidth;
-	uint AuditMaskHeight;
 	uint AuditCandidateMode;
-	uint AuditPadding;
+	uint3 AuditPadding;
 };
 
 Texture2D<float> DepthIn : register(t0);
-Texture2D<uint> PersistentHMDMaskIn : register(t1);
 RWTexture2D<float4> ColorInOut : register(u0);
 RWByteAddressBuffer HMDMaskAuditCounters : register(u2);
 
 static const float kHiddenDepthThreshold = 1e-6;
 static const int kHiddenDepthDilationRadius = 2;
-static const uint kAuditCandidateRobust = 0;
 static const uint kAuditCandidateSparseDepth9 = 1;
-static const uint kAuditCandidatePersistentMask = 2;
 static const uint kAuditSampleStride = 2;
 
 bool IsHiddenDepth(float depth)
@@ -43,10 +38,10 @@ bool IsHiddenDepth(float depth)
 bool IsDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 {
 	bool hidden = false;
-	[unroll]
-	for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y) {
-		[unroll]
-		for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x) {
+	[unroll] for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y)
+	{
+		[unroll] for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x)
+		{
 			if (hidden)
 				continue;
 
@@ -70,10 +65,10 @@ bool IsDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 bool IsSparseDilatedHiddenDepth(uint2 depthPos, uint2 depthDimensions)
 {
 	bool hidden = false;
-	[unroll]
-	for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; y += kHiddenDepthDilationRadius) {
-		[unroll]
-		for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; x += kHiddenDepthDilationRadius) {
+	[unroll] for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; y += kHiddenDepthDilationRadius)
+	{
+		[unroll] for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; x += kHiddenDepthDilationRadius)
+		{
 			const int2 samplePos = int2(depthPos) + int2(x, y);
 			if (any(samplePos < int2(0, 0)) ||
 				samplePos.x >= int(depthDimensions.x) ||
@@ -93,18 +88,18 @@ void EvaluateAuditDepthCandidates(
 	out bool thresholdCenterClear,
 	out bool threshold3x3Clear,
 	out bool thresholdCrossR2Clear,
-	out bool thresholdRingR2Clear)
+	out bool thresholdPatternR2Clear)
 {
 	robustClear = false;
 	thresholdCenterClear = false;
 	threshold3x3Clear = false;
 	thresholdCrossR2Clear = false;
-	thresholdRingR2Clear = false;
+	thresholdPatternR2Clear = false;
 
-	[unroll]
-	for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y) {
-		[unroll]
-		for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x) {
+	[unroll] for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y)
+	{
+		[unroll] for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x)
+		{
 			const int2 samplePos = int2(depthPos) + int2(x, y);
 			if (any(samplePos < int2(0, 0)) ||
 				samplePos.x >= int(depthDimensions.x) ||
@@ -117,17 +112,17 @@ void EvaluateAuditDepthCandidates(
 			thresholdCenterClear = thresholdCenterClear || (hidden && x == 0 && y == 0);
 			threshold3x3Clear = threshold3x3Clear || (hidden && abs(x) <= 1 && abs(y) <= 1);
 			thresholdCrossR2Clear = thresholdCrossR2Clear ||
-				(hidden && ((x == 0 && (y == 0 || abs(y) == 2)) ||
-					(y == 0 && abs(x) == 2)));
-			thresholdRingR2Clear = thresholdRingR2Clear ||
-				(hidden && (x == 0 || abs(x) == 2) && (y == 0 || abs(y) == 2));
+			                        (hidden && ((x == 0 && (y == 0 || abs(y) == 2)) ||
+												   (y == 0 && abs(x) == 2)));
+			thresholdPatternR2Clear = thresholdPatternR2Clear ||
+			                          (hidden && (x == 0 || abs(x) == 2) && (y == 0 || abs(y) == 2));
 		}
 	}
 }
 
 void RecordAuditCandidate(uint candidateIndex, bool robustClear, bool candidateClear, inout uint ignored)
 {
-	const uint counterBase = 32u + candidateIndex * 16u;
+	const uint counterBase = 28u + candidateIndex * 16u;
 	if (candidateClear)
 		HMDMaskAuditCounters.InterlockedAdd(counterBase, 1u, ignored);
 	if (robustClear && !candidateClear)
@@ -146,8 +141,7 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 	return min(((2 * index + 1) * extent) / (2 * kProbeGridSize), extent - 1);
 }
 
-[numthreads(9, 9, 1)] void DevBenchHAMProbeMain(uint3 dispatchID : SV_DispatchThreadID)
-{
+[numthreads(9, 9, 1)] void DevBenchHAMProbeMain(uint3 dispatchID : SV_DispatchThreadID) {
 	if (dispatchID.x >= kProbeGridSize || dispatchID.y >= kProbeGridSize ||
 		ColorWidth == 0 || ColorHeight == 0 || DepthWidth == 0 || DepthHeight == 0) {
 		return;
@@ -160,9 +154,9 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		ResolveProbeCoordinate(dispatchID.x, ColorWidth),
 		ResolveProbeCoordinate(dispatchID.y, ColorHeight));
 	uint2 depthPos = uint2(
-		(localColorPos.x * DepthWidth) / ColorWidth,
-		(localColorPos.y * DepthHeight) / ColorHeight) +
-		uint2(DepthOffsetX, DepthOffsetY);
+						 (localColorPos.x * DepthWidth) / ColorWidth,
+						 (localColorPos.y * DepthHeight) / ColorHeight) +
+	                 uint2(DepthOffsetX, DepthOffsetY);
 
 	if (depthPos.x >= depthTextureWidth || depthPos.y >= depthTextureHeight) {
 		ColorInOut[dispatchID.xy] = float4(-1.0, -1.0, 0.0, 0.0);
@@ -172,10 +166,10 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 	const float centerDepth = DepthIn[depthPos];
 	float minimumDepth = centerDepth;
 	uint hiddenSampleCount = 0;
-	[unroll]
-	for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y) {
-		[unroll]
-		for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x) {
+	[unroll] for (int y = -kHiddenDepthDilationRadius; y <= kHiddenDepthDilationRadius; ++y)
+	{
+		[unroll] for (int x = -kHiddenDepthDilationRadius; x <= kHiddenDepthDilationRadius; ++x)
+		{
 			int2 samplePos = int2(depthPos) + int2(x, y);
 			if (any(samplePos < int2(0, 0)) ||
 				samplePos.x >= int(depthTextureWidth) ||
@@ -196,7 +190,7 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		hiddenSampleCount != 0 ? 1.0 : 0.0);
 }
 
-[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
+	[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
 	if (dispatchID.x >= ColorWidth || dispatchID.y >= ColorHeight)
 		return;
@@ -214,9 +208,9 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 	uint2 depthPos;
 	if (DepthWidth > 0 && DepthHeight > 0 && ColorWidth > 0 && ColorHeight > 0) {
 		depthPos = uint2(
-			(dispatchID.x * DepthWidth) / ColorWidth,
-			(dispatchID.y * DepthHeight) / ColorHeight) +
-			uint2(DepthOffsetX, DepthOffsetY);
+					   (dispatchID.x * DepthWidth) / ColorWidth,
+					   (dispatchID.y * DepthHeight) / ColorHeight) +
+		           uint2(DepthOffsetX, DepthOffsetY);
 	} else {
 		depthPos = dispatchID.xy + uint2(DepthOffsetX, DepthOffsetY);
 	}
@@ -234,44 +228,15 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		ColorInOut[colorPos] = float4(0.0, 0.0, 0.0, 0.0);
 }
 
-// Maps each color pixel into the persistent runtime-derived hidden-area mask.
-// The mask is immutable between projection/resolution changes, so both vendor
-// input and display output use one lookup with no per-frame construction pass.
-[numthreads(8, 8, 1)] void ClearHMDMaskFromPersistentMain(uint3 dispatchID : SV_DispatchThreadID)
-{
-	if (dispatchID.x >= ColorWidth || dispatchID.y >= ColorHeight ||
-		DepthWidth == 0 || DepthHeight == 0) {
-		return;
-	}
-
-	uint colorTexWidth, colorTexHeight;
-	ColorInOut.GetDimensions(colorTexWidth, colorTexHeight);
-	const uint2 colorPos = dispatchID.xy + uint2(ColorOffsetX, ColorOffsetY);
-	if (colorPos.x >= colorTexWidth || colorPos.y >= colorTexHeight)
-		return;
-
-	uint maskTexWidth, maskTexHeight;
-	PersistentHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
-	const uint2 maskPos = uint2(
-		(dispatchID.x * DepthWidth) / ColorWidth,
-		(dispatchID.y * DepthHeight) / ColorHeight);
-	if (maskPos.x >= maskTexWidth || maskPos.y >= maskTexHeight)
-		return;
-
-	if (PersistentHMDMaskIn[maskPos] != 0u)
-		ColorInOut[colorPos] = float4(0.0, 0.0, 0.0, 0.0);
-}
-
 // DevBench-only decision audit. It never writes presentation color. A stable
 // 2x2 stratified sample keeps captures representative and bounded while still
 // evaluating the display-domain mapping used by the production scrub.
 // Counter layout (uint32): evaluated, robust-clear, candidate-clear,
-// false-negative, false-positive, mismatch, invalid-mask-lookup, dispatches,
+// false-negative, false-positive, mismatch, dispatches,
 // then four counters (candidate-clear, false-negative, false-positive,
 // mismatch) for each audit-only threshold candidate in this order:
-// center, 3x3, radius-2 cross, radius-2 ring.
-[numthreads(8, 8, 1)] void DevBenchHMDMaskQualityMain(uint3 dispatchID : SV_DispatchThreadID)
-{
+// center, 3x3, radius-2 cross, radius-2 nine-tap pattern.
+[numthreads(8, 8, 1)] void DevBenchHMDMaskQualityMain(uint3 dispatchID : SV_DispatchThreadID) {
 	const uint2 localColorPos = dispatchID.xy * kAuditSampleStride + 1u;
 	if (localColorPos.x >= ColorWidth || localColorPos.y >= ColorHeight ||
 		ColorWidth == 0 || ColorHeight == 0 || DepthWidth == 0 || DepthHeight == 0) {
@@ -281,9 +246,9 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 	uint depthTexWidth, depthTexHeight;
 	DepthIn.GetDimensions(depthTexWidth, depthTexHeight);
 	const uint2 depthPos = uint2(
-		(localColorPos.x * DepthWidth) / ColorWidth,
-		(localColorPos.y * DepthHeight) / ColorHeight) +
-		uint2(DepthOffsetX, DepthOffsetY);
+							   (localColorPos.x * DepthWidth) / ColorWidth,
+							   (localColorPos.y * DepthHeight) / ColorHeight) +
+	                       uint2(DepthOffsetX, DepthOffsetY);
 	if (depthPos.x >= depthTexWidth || depthPos.y >= depthTexHeight)
 		return;
 
@@ -291,7 +256,7 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 	bool thresholdCenterClear;
 	bool threshold3x3Clear;
 	bool thresholdCrossR2Clear;
-	bool thresholdRingR2Clear;
+	bool thresholdPatternR2Clear;
 	EvaluateAuditDepthCandidates(
 		depthPos,
 		uint2(depthTexWidth, depthTexHeight),
@@ -299,23 +264,10 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		thresholdCenterClear,
 		threshold3x3Clear,
 		thresholdCrossR2Clear,
-		thresholdRingR2Clear);
-	bool candidateClear = robustClear;
-	bool invalidMaskLookup = false;
-	if (AuditCandidateMode == kAuditCandidateSparseDepth9) {
-		candidateClear = thresholdRingR2Clear;
-	} else if (AuditCandidateMode == kAuditCandidatePersistentMask) {
-		uint maskTexWidth, maskTexHeight;
-		PersistentHMDMaskIn.GetDimensions(maskTexWidth, maskTexHeight);
-		const uint2 maskPos = uint2(
-			(localColorPos.x * AuditMaskWidth) / ColorWidth,
-			(localColorPos.y * AuditMaskHeight) / ColorHeight);
-		invalidMaskLookup =
-			AuditMaskWidth == 0 || AuditMaskHeight == 0 ||
-			maskPos.x >= AuditMaskWidth || maskPos.y >= AuditMaskHeight ||
-			maskPos.x >= maskTexWidth || maskPos.y >= maskTexHeight;
-		candidateClear = !invalidMaskLookup && PersistentHMDMaskIn[maskPos] != 0u;
-	}
+		thresholdPatternR2Clear);
+	const bool candidateClear = AuditCandidateMode == kAuditCandidateSparseDepth9 ?
+	                                thresholdPatternR2Clear :
+	                                robustClear;
 
 	uint ignored;
 	HMDMaskAuditCounters.InterlockedAdd(0, 1u, ignored);
@@ -329,13 +281,11 @@ uint ResolveProbeCoordinate(uint index, uint extent)
 		HMDMaskAuditCounters.InterlockedAdd(16, 1u, ignored);
 	if (robustClear != candidateClear)
 		HMDMaskAuditCounters.InterlockedAdd(20, 1u, ignored);
-	if (invalidMaskLookup)
-		HMDMaskAuditCounters.InterlockedAdd(24, 1u, ignored);
 	if (dispatchID.x == 0 && dispatchID.y == 0)
-		HMDMaskAuditCounters.InterlockedAdd(28, 1u, ignored);
+		HMDMaskAuditCounters.InterlockedAdd(24, 1u, ignored);
 
 	RecordAuditCandidate(0u, robustClear, thresholdCenterClear, ignored);
 	RecordAuditCandidate(1u, robustClear, threshold3x3Clear, ignored);
 	RecordAuditCandidate(2u, robustClear, thresholdCrossR2Clear, ignored);
-	RecordAuditCandidate(3u, robustClear, thresholdRingR2Clear, ignored);
+	RecordAuditCandidate(3u, robustClear, thresholdPatternR2Clear, ignored);
 }

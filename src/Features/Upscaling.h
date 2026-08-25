@@ -227,7 +227,6 @@ public:
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
 		bool pipelineDiagnostics = false;
 		bool pipelineDiagnosticsStructured = false;
-		bool hmdMaskPersistent = false;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.3f;
 		float foveatedCenterHorizontalScale = 1.0f;
@@ -254,13 +253,17 @@ public:
 		// These values are mirrored by ClearHMDMaskCS.hlsl's quality-audit
 		// candidate constants; keep them explicit as a shader ABI.
 		RobustDepth5x5 = 0,
-		SparseDepth9 = 1,
-		PersistentMask = 2
+		SparseDepth9 = 1
 	};
 
-	static const char* GetHMDMaskImplementationModeName(HMDMaskImplementationMode a_mode) noexcept;
+	/** @return The production HAM mode or a DevBench override. */
 	[[nodiscard]] HMDMaskImplementationMode GetHMDMaskImplementationMode() const noexcept;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** @return The stable DevBench name for a HAM implementation mode. */
+	static const char* GetHMDMaskImplementationModeName(HMDMaskImplementationMode a_mode) noexcept;
+	/** Selects a live HAM mode for a controlled DevBench comparison. */
 	bool SetHMDMaskImplementationMode(HMDMaskImplementationMode a_mode, const char* a_reason = nullptr);
+#endif
 
 	/** @brief One unconditional Interior or Exterior CSX profile from VRFpsStabilizer.ini. */
 	struct VRFpsStabilizerProfile
@@ -1812,36 +1815,16 @@ public:
 	// Shared VR HMD Mask Clearing
 	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskSparseCS;
 	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskRobustCS;
-	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskFromPersistentCS;
 	winrt::com_ptr<ID3D11Buffer> vrClearHMDMaskCB;
 	bool vrClearHMDMaskRobustCompileAttempted = false;
-	bool vrPersistentHMDMaskShaderCompileAttempted = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	std::optional<HMDMaskImplementationMode> vrHMDMaskAutomationOverride;
-	struct VRPersistentHMDMaskState
-	{
-		uint32_t width = 0;
-		uint32_t height = 0;
-		uint32_t triangleCount = 0;
-		uint64_t geometrySignature = 0;
-		uint64_t generation = 0;
-		bool valid = false;
-	};
-	eastl::unique_ptr<Texture2D> vrPersistentHMDMask[2];
-	VRPersistentHMDMaskState vrPersistentHMDMaskState[2]{};
-	uint64_t vrPersistentHMDMaskNextGeneration = 1;
 	std::atomic<uint64_t> vrHMDMaskInputRobustDispatches{ 0 };
 	std::atomic<uint64_t> vrHMDMaskInputSparseDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskInputPersistentDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskPersistentBuildAttempts{ 0 };
-	std::atomic<uint64_t> vrHMDMaskPersistentBuildSuccesses{ 0 };
-	std::atomic<uint64_t> vrHMDMaskPersistentBuildFailures{ 0 };
 	std::atomic<uint64_t> vrHMDMaskFinalRobustDispatches{ 0 };
 	std::atomic<uint64_t> vrHMDMaskFinalSparseDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskFinalPersistentDispatches{ 0 };
-	std::atomic<uint64_t> vrHMDMaskPersistentFallbacks{ 0 };
 	std::atomic<uint64_t> vrHMDMaskVerifiedRobustDispatches{ 0 };
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	static constexpr uint32_t kVRHMDMaskQualityCounterCount = 24;
+	static constexpr uint32_t kVRHMDMaskQualityCounterCount = 23;
 	winrt::com_ptr<ID3D11Device> vrHMDMaskQualityDevice;
 	winrt::com_ptr<ID3D11ComputeShader> vrHMDMaskQualityCS;
 	winrt::com_ptr<ID3D11Buffer> vrHMDMaskQualityCounterBuffer;
@@ -1865,15 +1848,12 @@ public:
 		uint32_t a_eyeIndex,
 		HMDMaskImplementationMode a_actualMode,
 		ID3D11ShaderResourceView* a_depthSRV,
-		ID3D11ShaderResourceView* a_persistentMaskSRV,
 		uint32_t a_depthWidth,
 		uint32_t a_depthHeight,
 		uint32_t a_colorWidth,
 		uint32_t a_colorHeight,
 		uint32_t a_depthOffsetX,
-		uint32_t a_depthOffsetY,
-		uint32_t a_maskWidth,
-		uint32_t a_maskHeight) noexcept;
+		uint32_t a_depthOffsetY) noexcept;
 	void FinalizeVRHMDMaskQualityCapture() noexcept;
 	void ServiceVRHMDMaskQualityReadback() noexcept;
 	void ResetVRHMDMaskQualityResources() noexcept;
@@ -1908,7 +1888,6 @@ public:
 		eastl::unique_ptr<Texture2D> reactiveMask[2];
 		eastl::unique_ptr<Texture2D> transparencyMask[2];
 		eastl::unique_ptr<Texture2D> submitStageDLSSSharpener[2];
-		eastl::unique_ptr<Texture2D> persistentHMDMask[2];
 	};
 	// Retired submit-stage intermediates stay alive briefly so in-flight GPU work can drain.
 	std::vector<RetiredVRIntermediateTextures> retiredVRIntermediateTextures;
@@ -3138,7 +3117,6 @@ private:
 	};
 	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
 	bool EnsureHMDMaskClearResources();
-	bool EnsurePersistentHMDMask(uint32_t a_eyeIndex, uint32_t a_width, uint32_t a_height);
 	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
 	void BeginVRMenuFinalCompositeFrame(uint32_t a_frame);
 	void ResetVRMenuFinalCompositeLayer();

@@ -1,6 +1,10 @@
+@../AGENTS.md
+
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is the detailed architecture and build reference for AI coding agents.
+Repository-wide behavior, pull-request, validation, and Git rules are canonical
+in `AGENTS.md` and apply in addition to this reference.
 
 ## Build Commands
 
@@ -421,62 +425,11 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 
 ## Development Best Practices (Learned from Codebase)
 
-### Commit Message Standards
+### Pull request and commit standards
 
-Follow conventional commit format for consistency:
-
--   **Format**: `type(scope): description`
--   **Title Limit**: 50 characters maximum
--   **Body Wrap**: 72 characters per line
--   **Types**: `feat`, `fix`, `refactor`, `docs`, `style`, `test`, `chore`
--   **Examples**:
-    -   `feat(menu): extract DrawMenuVisitor helper methods`
-    -   `fix(imgui): resolve orphaned TableNextColumn calls`
-    -   `refactor(constants): centralize UI constants in ThemeManager`
-
-Conventional commits drive semantic-release. `feat:` triggers a minor bump, `fix:` triggers a patch bump, `feat!:` or `BREAKING CHANGE:` triggers a major bump. `chore:`, `docs:`, `style:`, `test:`, `refactor:` produce no release on their own. Pick the type with the version impact in mind — a refactor mislabeled `feat:` will force a minor bump on the next release.
-
-### Release Branch Model
-
-| Branch         | Role                            | Releases produced                                                               |
-| -------------- | ------------------------------- | ------------------------------------------------------------------------------- |
-| `main`         | Stable release channel          | `vX.Y.Z`                                                                        |
-| `dev`          | Integration / RC                | `vX.Y.Z-rc.N` prereleases                                                       |
-| `hotfix/X.Y.x` | Maintenance for **older** lines | `vX.Y.Z` on the `X.Y` channel (also reused as staging for current-line patches) |
-
-**Default branch for PRs is `dev`.** Feature work, fixes, and refactors all land there via normal PRs. `main` is updated only through the release workflows — never PR a feature branch directly into `main`.
-
-**Branch lineage invariant:** `main` becomes an ancestor of `dev` at **each minor/major promotion** (every tag on `main` is then reachable from `dev`). Current-line hotfixes intentionally let `main` diverge from `dev` until the next promotion folds them back in. `dev` is **never rewritten** — the `Release: Semantic Version` workflow reconciles per promotion source:
-
--   **dev → main promotion** (minor/major): if interim hotfixes have diverged `main`, the workflow first **merges `main` into `dev`** (a single ancestry-only merge commit; the merge tree equals `dev`'s, with version-bump files resolved to `dev`, and any non-`dev`-sourced divergence hard-fails before pushing). That merge is a fast-forward push of `dev` (**no force** — the App's PR-bypass authorizes it). Then `main` FFs to the merge commit, semantic-release appends `chore(release):`, and `dev` FFs to absorb it. A best-effort step dedups the new release's notes of the carried-over hotfix entries.
--   **hotfix-staging → main promotion** (current-line patch): `main` fast-forwards to the hotfix-staging SHA and semantic-release appends `chore(release):`. The workflow then **resets the maintenance branch (`hotfix/X.Y.x`) to the released `main` tip** (force-with-lease), so the next current-line patch's staging branch is built on `main` and still fast-forwards it. Without this, the maintenance branch keeps its PR merge commit and never absorbs `main`'s `chore(release):`, so the **second** consecutive current-line patch fails validation with `hotfix-staging ff_target … is not a fast-forward of main`. **`dev` is not touched** — it is reconciled at the next minor/major promotion via the merge above. No rebase, no force-push of `dev`.
-
-**Prerequisite:** the release App (`community-shaders-release-bot`) must be in the **"Allow specified actors to bypass required pull requests"** list for **both `main` and `dev`** — the app token alone cannot bypass the PR requirement, so a missing entry fails the FF push with `GH006: Changes must be made through a pull request`. `hotfix/*` is not branch-protected, so the post-patch maintenance-branch reconcile force-pushes it with the App's normal write access (no bypass entry needed).
-
-**Patch flow (current line _or_ older line, same staging mechanism):**
-
-1. Land the fix on `dev` via normal PR (if applicable).
-2. Dispatch **Actions → Release: Hotfix Candidate** — auto-creates/reuses `hotfix/X.Y.x` from the latest stable tag, cherry-picks eligible `fix:`/`perf:` commits, opens a PR.
-3. PR checks build a `vX.Y.Z-prNNNN` prerelease for verification.
-4. Merge the candidate PR.
-5. Cut the release:
-    - **Current line** (`main` is on `X.Y`): dispatch **Release: Semantic Version** on `main` with `ff_target = <hotfix-staging branch tip SHA>` — **not** the `hotfix/X.Y.x` tip, which is a merge commit that `main`'s branch protection rejects. Use the second parent of the merge commit: `git rev-parse origin/hotfix/X.Y.x^2`. After cutting the patch the workflow resets `hotfix/X.Y.x` to the new `main` tip so the next current-line patch fast-forwards cleanly; `dev` is left untouched and is reconciled at the next minor/major promotion.
-    - **Older line** (`main` has shipped a newer minor/major): dispatch **Release: Semantic Version** on `hotfix/X.Y.x` with `ff_target` empty.
-
-**Minor/major release flow:**
-
-1. Cut RCs from `dev`: dispatch **Release: Semantic Version** on `dev`, `ff_target` empty → `vX.Y.Z-rc.N`.
-2. When ready, dispatch **Release: Semantic Version** on `main` with `ff_target = <dev SHA>` (typically the latest RC's SHA). If interim hotfixes have diverged `main`, the workflow first merges `main` into `dev` (ancestry-only, no force) and retargets to that merge commit; it then FFs `main`, runs semantic-release to cut stable, dedups the notes, and FFs `dev` to absorb the `chore(release):` commit.
-
-**Things agents should not do without explicit user direction:**
-
--   Force-push or rebase `main` or `dev`. (The release workflow reconciles `dev` only via fast-forward and ancestry-only merge commits — it never rewrites `dev`.) The workflow itself does force-reset `hotfix/X.Y.x` to `main` after a current-line patch; do not do this by hand outside that flow.
--   Manually create tags matching `v*` (semantic-release owns these).
--   Bump `CMakeLists.txt`'s `VERSION` field outside the release workflow.
--   PR a feature branch directly into `main`.
--   Run `Release: Semantic Version` on `hotfix/X.Y.x` for the current line — it will fail with `cannot be published as it is out of range` because the maintenance contract requires the hotfix line to be strictly older than `main`. Use `ff_target` into `main` instead.
-
-Full details: [Developers wiki — Patch Release Process](https://github.com/community-shaders/skyrim-community-shaders/wiki/Developers#patch-release-process-any-line).
+`AGENTS.md` is canonical for PR targets, title/body format, release-aware type
+selection, commit hygiene, and attribution. Keep those rules in one place so
+Claude, Codex, and Copilot cannot drift onto different release semantics.
 
 ### Code Organization and Refactoring Patterns
 

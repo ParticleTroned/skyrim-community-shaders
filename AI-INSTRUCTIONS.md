@@ -4,7 +4,13 @@ This file provides guidance for AI assistants working with the Community Shaders
 
 ## Primary Documentation
 
-**For comprehensive development guidance, see `.claude/CLAUDE.md`** which provides detailed information on:
+**Read `AGENTS.md` first.** It is the canonical repository-wide policy for pull
+requests, commits, code quality, runtime safety, validation, and Git operations.
+GPT/Codex and Codex Code Review load the root `AGENTS.md` directly; do not create
+a second Codex-only copy of these rules.
+
+Use `.claude/CLAUDE.md` as the detailed architecture and build reference. It
+provides information on:
 
 -   Build commands and development setup
 -   Architecture overview and critical dependencies (CommonLibSSE-NG)
@@ -29,10 +35,13 @@ SKSE plugin providing advanced DirectX 11 graphics modifications for Skyrim SE/A
 -   **Tooling diagnostics**: `pwsh ./tools/dev-doctor.ps1 -Network`
 -   **Shader Test**: `hlslkit-compile --shader-dir [target]` (install via pip first)
 -   **Feature Access**: `globals::features::*` namespace
+-   **PR and commit format**: `type(scope): description`; target `cs-1.7-PL-SE` and follow the release-aware type and acknowledgement rules in `AGENTS.md`
 
 ### Build Options
 
-**Runtime Presets**: `ALL` (universal), `SE`, `AE`, `ALL-TRACY`
+**Configure Presets**: `ALL`, `ALL-VS2022`, `ALL-DEBUG`, `AIO-Release`
+
+**Build Presets**: `Dev`, `ALL`, `ALL-VS2022`, `Package`, `Shaders`, `Debug`, `AIO-Release`
 
 **CMake Options** (set in user preset):
 
@@ -56,44 +65,5 @@ For full details about manual packaging targets (Package-Core, Package-AIO-Manua
 
 **Key Focus**: Performance impact awareness, runtime compatibility (SE/AE), complete working solutions, DirectX/HLSL best practices.
 
-For detailed explanations, examples, and comprehensive guidance, refer to `.claude/CLAUDE.md`.
-
-## Commit Messages
-
-All commits on the `cs-1.7-PL-SE` branch must use a scoped subject in this format:
-
-```text
-scope(target): concise imperative summary
-```
-
-Every commit message must also include a body with both of these sections:
-
-```text
-Rationale:
-- Explain why the change is needed.
-
-Implementation:
-- Summarize how the change was made.
-```
-
-Keep the subject concise and make the rationale and implementation specific to the committed change.
-
-### Acknowledging Work from Other Contributors
-
-When any implementation is copied, ported, adapted, or materially based on another contributor's commit or pull request, the commit message must include an `Acknowledgements:` section. No acknowledgement is required when the source is exclusively the current user's own work.
-
-Each acknowledgement must include:
-
--   The original contributor's GitHub-associated email address.
--   The source repository in `owner/repository` form.
--   The source commit SHA, pull request number, or a direct link to the source.
--   A precise description of the specific code, behavior, or approach that was copied, ported, or adapted.
-
-Use this format:
-
-```text
-Acknowledgements:
-- contributor@users.noreply.github.com — owner/repository, PR #123 or commit abcdef1: adapted the named function or specific behavior.
-```
-
-Do not imply that an entire commit or pull request was ported when only part of it was used. Clearly distinguish the externally sourced portion from original implementation work in the commit.
+For behavioral rules, refer to `AGENTS.md`. For detailed technical explanations
+and examples, refer to `.claude/CLAUDE.md`.

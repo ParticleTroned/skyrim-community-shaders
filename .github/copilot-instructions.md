@@ -1,15 +1,26 @@
 # GitHub Copilot Instructions
 
+@../AGENTS.md
+
 **ALWAYS follow these instructions first and only fallback to additional search and context gathering if the information is incomplete or found to be in error.**
 
 ## Primary Documentation
 
 **For comprehensive development guidance, architecture details, and complete build instructions, see:**
 
+-   **`AGENTS.md`** - Canonical pull-request, commit, code-quality, validation, and Git policy
 -   **`.claude/CLAUDE.md`** - Complete 400+ line guide covering all aspects of development
--   **`AI-INSTRUCTIONS.md`** - Quick reference that also points to .claude/CLAUDE.md
+-   **`AI-INSTRUCTIONS.md`** - Quick reference that points to both canonical sources
 
-This file provides Copilot-specific guidance while avoiding duplication of the comprehensive documentation above.
+This file provides Copilot-specific guidance while avoiding duplication. Do not
+override or weaken `AGENTS.md`.
+
+## Pull requests and commits
+
+-   Target `cs-1.7-PL-SE` unless the user explicitly selects another release line.
+-   Use `type(scope): description`; keep the title current and release-aware.
+-   Use the PR body structure and validation evidence required by `AGENTS.md`.
+-   Treat the PR title as the eventual squash commit consumed by release automation.
 
 ## Project Overview
 
@@ -47,7 +58,7 @@ pwsh ./tools/dev-doctor.ps1 -Network
 ### Essential Repository Setup
 
 ```bash
-git clone https://github.com/doodlum/skyrim-community-shaders.git --recursive
+git clone https://github.com/ParticleTroned/skyrim-community-shaders.git --recursive
 cd skyrim-community-shaders
 git submodule update --init --recursive  # If not cloned with --recursive
 ```
@@ -129,4 +140,5 @@ This file focuses on Copilot-specific guidance while `.claude/CLAUDE.md` provide
 -   Performance considerations and testing strategies
 -   Complete troubleshooting guide and development best practices
 
-Refer to `.claude/CLAUDE.md` for detailed technical information not covered in this Copilot-specific summary.
+Refer to `AGENTS.md` for mandatory policy and `.claude/CLAUDE.md` for detailed
+technical information not covered in this Copilot-specific summary.

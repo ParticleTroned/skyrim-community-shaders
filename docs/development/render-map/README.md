@@ -33,6 +33,10 @@ API state from conservative D3D11 hazard reconstruction. It deliberately uses
 allocation-wide overlap until exact view-subresource overlap is proved.
 Its prepared no-launch validation protocol is in
 [`resource-version-live-test-plan.md`](./resource-version-live-test-plan.md).
+The bounded main-menu live gate passed; its exact runtime identity, capture
+counts, version/dependency invariants, cache observation, and retained hashes
+are recorded in
+[`resource-version-main-menu-capture-2026-08-26.md`](./resource-version-main-menu-capture-2026-08-26.md).
 Findings from the first bounded live controller run are in
 [`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
 The later 120-frame run that validates durable finalization and establishes the

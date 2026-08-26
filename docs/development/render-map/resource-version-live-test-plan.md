@@ -2,6 +2,10 @@
 
 Date prepared: 2026-08-26
 
+Outcome: **passed**. The live result and retained artifact hashes are recorded
+in
+[`resource-version-main-menu-capture-2026-08-26.md`](./resource-version-main-menu-capture-2026-08-26.md).
+
 ## Scope
 
 This protocol is the first live gate for `resource-versions-1`. It validates

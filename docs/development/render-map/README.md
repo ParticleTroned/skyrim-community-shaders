@@ -23,6 +23,8 @@ deferred-context coverage is in
 [`device-context-command-list-slice.md`](./device-context-command-list-slice.md).
 The immediate-context render-target/depth-target identity and draw-join slice is
 in [`output-merger-target-slice.md`](./output-merger-target-slice.md).
+Its bounded main-menu live-validation record is in
+[`output-merger-main-menu-capture-2026-08-26.md`](./output-merger-main-menu-capture-2026-08-26.md).
 Findings from the first bounded live controller run are in
 [`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
 The later 120-frame run that validates durable finalization and establishes the

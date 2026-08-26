@@ -65,3 +65,9 @@ live-validated, one bounded game run must establish all of the following:
    selected bound.
 6. Any apparent eye association remains labelled unknown until independently
    established; alternating pointers alone are insufficient.
+
+The bounded main-menu run on 2026-08-26 satisfies this mechanism gate. Its
+results and retained evidence hashes are recorded in
+[`output-merger-main-menu-capture-2026-08-26.md`](./output-merger-main-menu-capture-2026-08-26.md).
+That result validates observation and joining, not the semantic classification
+of targets used by an in-game world scene.

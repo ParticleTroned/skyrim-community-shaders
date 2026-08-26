@@ -2604,10 +2604,6 @@ public:
 	uint32_t vrFSRRuntimeResourceGeneration = 0;
 	std::atomic<uint32_t> vrMainPassVendorDispatchCompletedFrame{ 0 };
 	mutable std::recursive_mutex perfModeRenderTargetRecreateQueueMutex;
-	// Stable render callbacks inspect only this wake hint. The queue flag and
-	// watchdog epochs remain authoritative after the bit is observed.
-	std::atomic<VRVendorRelatchPolicy::MaintenanceWorkMask>
-		vrRenderScaleMaintenanceWork{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
 	// Queue-owned evidence that a provider-neutral recovery or explicitly unsafe
 	// offered-resource identity must replace physical targets even when dimensions
@@ -3365,13 +3361,6 @@ private:
 	bool TryArmVRRenderScalePostMutationPresentationGrace(
 		uint64_t a_expectedMutationEpoch,
 		bool a_replaceResumeGrace = false);
-	void PublishVRRenderScaleMaintenanceWork(
-		VRVendorRelatchPolicy::MaintenanceWork a_work) noexcept;
-	void ReconcileVRRenderScaleMaintenanceWork(
-		VRVendorRelatchPolicy::MaintenanceWorkMask a_work) noexcept;
-	void ServiceVRRenderScaleMaintenanceWork(
-		VRVendorRelatchPolicy::MaintenanceWorkMask a_work,
-		const char* a_context);
 	void ServiceVRRenderScalePostMutationWatchdog(const char* a_context);
 	void ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery();
 	void SignalVRRenderScaleTerminalFailure(

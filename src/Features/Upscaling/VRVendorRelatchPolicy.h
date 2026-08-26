@@ -10,48 +10,6 @@ namespace VRVendorRelatchPolicy
 {
 	using WorkGateMask = std::uint32_t;
 	using WorkGateState = std::uint64_t;
-	using MaintenanceWorkMask = std::uint32_t;
-
-	enum class MaintenanceWork : MaintenanceWorkMask
-	{
-		None = 0,
-		RenderTargetRelatch = 1u << 0,
-		PreMutationWatchdog = 1u << 1,
-		PostMutationWatchdog = 1u << 2
-	};
-
-	inline constexpr MaintenanceWorkMask kAllMaintenanceWork =
-		static_cast<MaintenanceWorkMask>(MaintenanceWork::RenderTargetRelatch) |
-		static_cast<MaintenanceWorkMask>(MaintenanceWork::PreMutationWatchdog) |
-		static_cast<MaintenanceWorkMask>(MaintenanceWork::PostMutationWatchdog);
-
-	[[nodiscard]] constexpr MaintenanceWorkMask ToMask(
-		MaintenanceWork a_work) noexcept
-	{
-		return static_cast<MaintenanceWorkMask>(a_work);
-	}
-
-	[[nodiscard]] constexpr bool HasMaintenanceWork(
-		MaintenanceWorkMask a_mask,
-		MaintenanceWork a_work) noexcept
-	{
-		return (a_mask & ToMask(a_work)) != 0;
-	}
-
-	[[nodiscard]] constexpr MaintenanceWorkMask ResolveMaintenanceWork(
-		bool a_renderTargetRelatchPending,
-		std::uint64_t a_preMutationWatchdogEpoch,
-		std::uint64_t a_postMutationWatchdogEpoch) noexcept
-	{
-		MaintenanceWorkMask work = 0;
-		if (a_renderTargetRelatchPending)
-			work |= ToMask(MaintenanceWork::RenderTargetRelatch);
-		if (a_preMutationWatchdogEpoch != 0)
-			work |= ToMask(MaintenanceWork::PreMutationWatchdog);
-		if (a_postMutationWatchdogEpoch != 0)
-			work |= ToMask(MaintenanceWork::PostMutationWatchdog);
-		return work;
-	}
 
 	inline constexpr std::uint64_t kPostMutationEmergencyMinimumProjectionBytes =
 		4ull * 1024ull * 1024ull * 1024ull;

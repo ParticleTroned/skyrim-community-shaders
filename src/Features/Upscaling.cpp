@@ -16963,8 +16963,6 @@ bool Upscaling::PromoteVRRenderScalePreMutationToNativeRecovery(
 		vrRenderScalePreMutationNativeFallbackTransitionEpoch.store(
 			request.transitionEpoch,
 			std::memory_order_release);
-		PublishVRRenderScaleMaintenanceWork(
-			VRVendorRelatchPolicy::MaintenanceWork::PreMutationWatchdog);
 	}
 
 	// The physical worker carries a local native override whether or not the
@@ -17178,8 +17176,6 @@ void Upscaling::ServiceVRRenderScalePreMutationNativeFallbackWatchdog(
 			vrRenderScalePreMutationNativeFallbackTransitionEpoch.store(
 				transitionEpoch,
 				std::memory_order_release);
-			PublishVRRenderScaleMaintenanceWork(
-				VRVendorRelatchPolicy::MaintenanceWork::PreMutationWatchdog);
 			return;
 		}
 		const uint64_t exactTerminalDeadlineMs =
@@ -23126,8 +23122,6 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 							vrRenderScalePreMutationNativeFallbackTransitionEpoch.store(
 								providerNeutralOwnerEpoch,
 								std::memory_order_release);
-							PublishVRRenderScaleMaintenanceWork(
-								VRVendorRelatchPolicy::MaintenanceWork::PreMutationWatchdog);
 						}
 					}
 				}
@@ -23342,8 +23336,6 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 	pendingPerfModeRenderTargetRecreate.store(
 		true,
 		std::memory_order_release);
-	PublishVRRenderScaleMaintenanceWork(
-		VRVendorRelatchPolicy::MaintenanceWork::RenderTargetRelatch);
 	if (wasPending)
 		return;
 
@@ -23370,114 +23362,18 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 	}
 }
 
-void Upscaling::PublishVRRenderScaleMaintenanceWork(
-	VRVendorRelatchPolicy::MaintenanceWork a_work) noexcept
-{
-	const auto publishedWork =
-		VRVendorRelatchPolicy::ToMask(a_work);
-	if (publishedWork == 0)
-		return;
-	vrRenderScaleMaintenanceWork.fetch_or(
-		publishedWork,
-		std::memory_order_release);
-}
-
-void Upscaling::ReconcileVRRenderScaleMaintenanceWork(
-	VRVendorRelatchPolicy::MaintenanceWorkMask a_work) noexcept
-{
-	a_work &= VRVendorRelatchPolicy::kAllMaintenanceWork;
-	if (a_work == 0)
-		return;
-
-	using Work = VRVendorRelatchPolicy::MaintenanceWork;
-	const auto resolveActiveWork = [&](VRVendorRelatchPolicy::MaintenanceWorkMask a_candidates) {
-		return VRVendorRelatchPolicy::ResolveMaintenanceWork(
-			VRVendorRelatchPolicy::HasMaintenanceWork(
-				a_candidates,
-				Work::RenderTargetRelatch) &&
-				pendingPerfModeRenderTargetRecreate.load(
-					std::memory_order_acquire),
-			VRVendorRelatchPolicy::HasMaintenanceWork(
-				a_candidates,
-				Work::PreMutationWatchdog) ?
-				vrRenderScalePreMutationNativeFallbackTransitionEpoch.load(
-					std::memory_order_acquire) :
-				0,
-			VRVendorRelatchPolicy::HasMaintenanceWork(
-				a_candidates,
-				Work::PostMutationWatchdog) ?
-				vrRenderScalePostMutationSerializationEpoch.load(
-					std::memory_order_acquire) :
-				0) &
-			a_candidates;
-	};
-	const auto staleWork = a_work & ~resolveActiveWork(a_work);
-	if (staleWork == 0)
-		return;
-
-	// Publishers write their owner before the bit. Rechecking after the clear
-	// preserves a publication that raced the first owner snapshot.
-	vrRenderScaleMaintenanceWork.fetch_and(
-		~staleWork,
-		std::memory_order_acq_rel);
-	const auto republishedWork = resolveActiveWork(staleWork);
-	if (republishedWork != 0) {
-		vrRenderScaleMaintenanceWork.fetch_or(
-			republishedWork,
-			std::memory_order_release);
-	}
-}
-
-void Upscaling::ServiceVRRenderScaleMaintenanceWork(
-	VRVendorRelatchPolicy::MaintenanceWorkMask a_work,
-	const char* a_context)
-{
-	using Work = VRVendorRelatchPolicy::MaintenanceWork;
-	if (VRVendorRelatchPolicy::HasMaintenanceWork(
-			a_work,
-			Work::PreMutationWatchdog)) {
-		ServiceVRRenderScalePreMutationNativeFallbackWatchdog(a_context);
-	}
-	if (VRVendorRelatchPolicy::HasMaintenanceWork(
-			a_work,
-			Work::PostMutationWatchdog)) {
-		ServiceVRRenderScalePostMutationWatchdog(a_context);
-	}
-	ReconcileVRRenderScaleMaintenanceWork(a_work);
-}
-
 bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 {
 	if (!globals::game::isVR)
 		return true;
-	const auto maintenanceWork =
-		vrRenderScaleMaintenanceWork.load(std::memory_order_acquire);
-	if (maintenanceWork == 0)
-		return true;
-	const char* serviceContext =
-		a_caller && *a_caller ? a_caller : "render-target relatch service";
-	const bool renderTargetRelatchPending =
-		VRVendorRelatchPolicy::HasMaintenanceWork(
-			maintenanceWork,
-			VRVendorRelatchPolicy::MaintenanceWork::RenderTargetRelatch) &&
-		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
-	if (!renderTargetRelatchPending) {
-		ServiceVRRenderScaleMaintenanceWork(
-			maintenanceWork,
-			serviceContext);
-		return true;
-	}
 	// Run the bounded mutation service after this call has had one final chance
 	// to poll fences/providers or publish a coherent contract. This avoids a
 	// debugger/sleep resume expiring before ready work can make progress.
 	ScopeExit postMutationWatchdog([&]() {
-		const auto currentWork =
-			vrRenderScaleMaintenanceWork.load(std::memory_order_acquire);
-		if (currentWork != 0) {
-			ServiceVRRenderScaleMaintenanceWork(
-				currentWork,
-				serviceContext);
-		}
+		ServiceVRRenderScalePreMutationNativeFallbackWatchdog(
+			a_caller && *a_caller ? a_caller : "render-target relatch service");
+		ServiceVRRenderScalePostMutationWatchdog(
+			a_caller && *a_caller ? a_caller : "render-target relatch service");
 	});
 	if (!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 		return true;
@@ -24212,8 +24108,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingPerfModeRenderTargetRecreate.store(
 				true,
 				std::memory_order_release);
-			PublishVRRenderScaleMaintenanceWork(
-				VRVendorRelatchPolicy::MaintenanceWork::RenderTargetRelatch);
 		}
 		return false;
 	}
@@ -24439,8 +24333,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingPerfModeRenderTargetRecreate.store(
 				true,
 				std::memory_order_release);
-			PublishVRRenderScaleMaintenanceWork(
-				VRVendorRelatchPolicy::MaintenanceWork::RenderTargetRelatch);
 		}
 
 		RecordVRRenderScaleTransitionRetry(a_retryKind);
@@ -41771,15 +41663,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery();
 	if (!pendingPerfModeRenderTargetRecreate.load(
 			std::memory_order_acquire)) {
-		const auto postMutationWork =
-			VRVendorRelatchPolicy::ToMask(
-				VRVendorRelatchPolicy::MaintenanceWork::PostMutationWatchdog);
-		if ((vrRenderScaleMaintenanceWork.load(std::memory_order_acquire) &
-				postMutationWork) != 0) {
-			ServiceVRRenderScaleMaintenanceWork(
-				postMutationWork,
-				"ConfigureUpscaling");
-		}
+		ServiceVRRenderScalePostMutationWatchdog("ConfigureUpscaling");
 	}
 	ApplyPendingVRUpscalingTransition();
 	QueueDeferredVRRenderScaleActivationIfReady(*this);
@@ -43580,9 +43464,7 @@ void Upscaling::NotifyVRPostLoadCompositorCycleStarted(
 						std::memory_order_acq_rel);
 				}
 				holdLock.unlock();
-				ServiceVRRenderScaleMaintenanceWork(
-					VRVendorRelatchPolicy::ToMask(
-						VRVendorRelatchPolicy::MaintenanceWork::PostMutationWatchdog),
+				ServiceVRRenderScalePostMutationWatchdog(
 					"post-load compositor hard deadline");
 				return;
 			}
@@ -45956,8 +45838,6 @@ bool Upscaling::MarkVRRenderScalePhysicalMutationUnresolved(
 		vrRenderScalePostMutationSerializationEpoch.store(
 			a_mutationEpoch,
 			std::memory_order_release);
-		PublishVRRenderScaleMaintenanceWork(
-			VRVendorRelatchPolicy::MaintenanceWork::PostMutationWatchdog);
 	}
 	// Recovery can enter the same creator epoch, but it never renews the original
 	// wall-clock budget armed above.
@@ -46167,8 +46047,6 @@ bool Upscaling::TransferVRRenderScalePostMutationOwner(
 	vrRenderScalePostMutationSerializationEpoch.store(
 		a_destinationEpoch,
 		std::memory_order_release);
-	PublishVRRenderScaleMaintenanceWork(
-		VRVendorRelatchPolicy::MaintenanceWork::PostMutationWatchdog);
 	if (canTransfer) {
 		recovery.transitionEpoch = a_destinationEpoch;
 		++vrRenderScaleTransitionController.revision;
@@ -46345,8 +46223,7 @@ bool Upscaling::TryArmVRRenderScalePostMutationPresentationGrace(
 void Upscaling::ServiceVRRenderScalePostMutationWatchdog(
 	const char* a_context)
 {
-	// The maintenance wake gate keeps the normally empty path out of this routine.
-	// Recheck the authoritative owner because it may retire after the gate load.
+	// Normal rendering pays one predictable atomic-zero check and takes no lock.
 	if (vrRenderScalePostMutationSerializationEpoch.load(
 			std::memory_order_acquire) == 0) {
 #ifdef DEVBENCH_BRIDGE_ENABLED

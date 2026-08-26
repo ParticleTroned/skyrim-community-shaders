@@ -1337,8 +1337,7 @@ bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t 
 Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	DLSSViewportRole viewportRole,
 	uint32_t qualityMode,
-	uint32_t dlssPreset,
-	bool allowRecycle)
+	uint32_t dlssPreset)
 {
 	if (!globals::game::isVR)
 		return DLSSViewportPreparationResult::Ready;
@@ -1350,16 +1349,8 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	// in one role must never consume the fence that protects another role's
 	// LRU victim, or that other role will restart its drain indefinitely.
 	auto& pendingSlotRecycleIdleFence = pendingVRDLSSSlotRecycleIdleFences[roleIndex];
-	if (!allowRecycle &&
-		(pendingDLSSResourceFreeIdleFence || pendingSlotRecycleIdleFence)) {
-		return DLSSViewportPreparationResult::Pending;
-	}
-
 	int slotIndex = FindVRDLSSViewportSlot(viewportRole, clampedQualityMode, clampedPreset);
 	if (slotIndex >= 0) {
-		if (!allowRecycle)
-			return DLSSViewportPreparationResult::Ready;
-
 		// A latest-wins request can supersede a pending miss with a cache hit.
 		// Drain that abandoned fence without delaying the already-resident target.
 		if (pendingSlotRecycleIdleFence) {
@@ -1383,12 +1374,6 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 
 	auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
 	if (slot.valid) {
-		// Profile preparation must never evict the provider that still owns visible
-		// frames. The ordinary lifecycle path will recycle this bounded slot later
-		// after its D3D idle proof succeeds.
-		if (!allowRecycle)
-			return DLSSViewportPreparationResult::Pending;
-
 		if (auto context = globals::d3d::context) {
 			const auto idleFenceResult = BeginOrPollD3D11IdleFence(context, pendingSlotRecycleIdleFence, "VR DLSS viewport slot recycle");
 			if (idleFenceResult == D3D11IdleFenceResult::Pending) {
@@ -1495,27 +1480,27 @@ bool Streamline::HasCompleteVRDLSSViewportResources(
 	const auto qualityMode =
 		std::min<uint32_t>(a_qualityMode, Upscaling::kQualityModeMaxIndex);
 	const auto dlssPreset = Upscaling::ClampDLSSPresetUInt(a_dlssPreset);
-	for (const auto& slot : vrDLSSViewportSlots[roleIndex]) {
-		if (!slot.valid || slot.qualityMode != qualityMode ||
-			slot.dlssPreset != dlssPreset) {
-			continue;
-		}
+	const int slotIndex = FindVRDLSSViewportSlot(
+		a_viewportRole,
+		qualityMode,
+		dlssPreset);
+	if (slotIndex < 0)
+		return false;
 
-		for (uint32_t eye = 0; eye < 2; ++eye) {
-			if (!IsVRDLSSViewportResourceCompatible(
-					slot,
-					eye,
-					qualityMode,
-					dlssPreset,
-					a_outputWidth,
-					a_outputHeight,
-					a_colorInput)) {
-				return false;
-			}
+	const auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		if (!IsVRDLSSViewportResourceCompatible(
+				slot,
+				eye,
+				qualityMode,
+				dlssPreset,
+				a_outputWidth,
+				a_outputHeight,
+				a_colorInput)) {
+			return false;
 		}
-		return true;
 	}
-	return false;
+	return true;
 }
 
 bool Streamline::ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport)

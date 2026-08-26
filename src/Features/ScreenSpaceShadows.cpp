@@ -363,18 +363,26 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	bool a_rightEye)
 {
 	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
+	const std::size_t variantCount = globals::game::isVR ?
+		kRaymarchShaderVariantCount :
+		1u;
+	const auto variantEnd = raymarchShaderVariants.begin() + variantCount;
 	RaymarchShaderVariant* selected = nullptr;
-	for (auto& variant : raymarchShaderVariants) {
-		if (variant.valid && variant.sampleCount == a_sampleCount &&
-			variant.usesTerrainBlendingDepth == useTerrainBlendingDepth) {
-			selected = std::addressof(variant);
+	for (auto variant = raymarchShaderVariants.begin();
+		variant != variantEnd;
+		++variant) {
+		if (variant->valid && variant->sampleCount == a_sampleCount &&
+			variant->usesTerrainBlendingDepth == useTerrainBlendingDepth) {
+			selected = std::addressof(*variant);
 			break;
 		}
 	}
 	if (!selected) {
-		for (auto& variant : raymarchShaderVariants) {
-			if (!variant.valid) {
-				selected = std::addressof(variant);
+		for (auto variant = raymarchShaderVariants.begin();
+			variant != variantEnd;
+			++variant) {
+			if (!variant->valid) {
+				selected = std::addressof(*variant);
 				break;
 			}
 		}
@@ -382,7 +390,7 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	if (!selected) {
 		selected = std::addressof(*std::min_element(
 			raymarchShaderVariants.begin(),
-			raymarchShaderVariants.end(),
+			variantEnd,
 			[](const auto& a_left, const auto& a_right) {
 				return a_left.lastUse < a_right.lastUse;
 			}));

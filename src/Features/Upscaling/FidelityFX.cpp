@@ -1833,6 +1833,36 @@ bool FidelityFX::HasRuntimeUpscalerResources() const
 	return hasRuntimeResources;
 }
 
+bool FidelityFX::HasCompleteRuntimeUpscalerSharedResources(
+	uint32_t a_contextCount) const
+{
+	if (a_contextCount == 0 ||
+		a_contextCount > std::size(runtimeColorShared)) {
+		return false;
+	}
+
+	for (uint32_t i = 0; i < a_contextCount; ++i) {
+		if (!runtimeColorShared[i] || !runtimeDepthShared[i] ||
+			!runtimeMotionShared[i] || !runtimeReactiveShared[i] ||
+			!runtimeTransparencyShared[i] || !runtimeOutputShared[i] ||
+			!runtimeColorShared[i]->resource11 ||
+			!runtimeDepthShared[i]->resource11 ||
+			!runtimeMotionShared[i]->resource11 ||
+			!runtimeReactiveShared[i]->resource11 ||
+			!runtimeTransparencyShared[i]->resource11 ||
+			!runtimeOutputShared[i]->resource11 ||
+			!runtimeColorShared[i]->resource.get() ||
+			!runtimeDepthShared[i]->resource.get() ||
+			!runtimeMotionShared[i]->resource.get() ||
+			!runtimeReactiveShared[i]->resource.get() ||
+			!runtimeTransparencyShared[i]->resource.get() ||
+			!runtimeOutputShared[i]->resource.get()) {
+			return false;
+		}
+	}
+	return true;
+}
+
 bool FidelityFX::AreRuntimeUpscalerContextsCompatible(
 	uint32_t a_fullRenderWidth,
 	uint32_t a_fullRenderHeight,
@@ -1862,6 +1892,58 @@ bool FidelityFX::AreRuntimeUpscalerContextsCompatible(
 	       runtimeUpscalerMaxDisplayWidth == a_fullDisplayWidth &&
 	       runtimeUpscalerMaxDisplayHeight == a_fullDisplayHeight &&
 	       runtimeUpscalerRequestedVersion == a_requestedVersion;
+}
+
+bool FidelityFX::AreRuntimeUpscalerResourcesCompatible(
+	uint32_t a_fullRenderWidth,
+	uint32_t a_fullRenderHeight,
+	uint32_t a_fullDisplayWidth,
+	uint32_t a_fullDisplayHeight,
+	uint32_t a_contextCount,
+	uint32_t a_requestedVersion) const
+{
+	const auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	const bool commandContextsReady = std::ranges::all_of(
+		runtimeCommandContexts,
+		[](const RuntimeCommandContext& a_context) {
+			return a_context.commandAllocator && a_context.commandList;
+		});
+	if (runtimeUpscalerFailureLatched || runtimeUpscalerSessionQuarantined ||
+		runtimeHostFallbackActive ||
+		IsRuntimeUpscalerOwnershipDetached() ||
+		pendingRuntimeTeardownD3D11FenceValue != 0 ||
+		pendingRuntimeTeardownD3D12FenceValue != 0 ||
+		!globals::d3d::device || !globals::d3d::context ||
+		!swapChain.d3d11Device || !swapChain.d3d11Context ||
+		!swapChain.d3d12Device || !swapChain.commandQueue ||
+		!runtimeD3D11Fence || !runtimeD3D12Fence ||
+		!commandContextsReady ||
+		!IsRuntimeUpscalerProviderMatchingRequestedVersion() ||
+		!AreRuntimeUpscalerContextsCompatible(
+			a_fullRenderWidth,
+			a_fullRenderHeight,
+			a_fullDisplayWidth,
+			a_fullDisplayHeight,
+			a_contextCount,
+			a_requestedVersion) ||
+		!HasCompleteRuntimeUpscalerSharedResources(a_contextCount)) {
+		return false;
+	}
+
+	const bool renderDimensionsMatch =
+		runtimeColorSharedDesc.Width == a_fullRenderWidth &&
+		runtimeColorSharedDesc.Height == a_fullRenderHeight &&
+		runtimeDepthSharedDesc.Width == a_fullRenderWidth &&
+		runtimeDepthSharedDesc.Height == a_fullRenderHeight &&
+		runtimeMotionSharedDesc.Width == a_fullRenderWidth &&
+		runtimeMotionSharedDesc.Height == a_fullRenderHeight &&
+		runtimeReactiveSharedDesc.Width == a_fullRenderWidth &&
+		runtimeReactiveSharedDesc.Height == a_fullRenderHeight &&
+		runtimeTransparencySharedDesc.Width == a_fullRenderWidth &&
+		runtimeTransparencySharedDesc.Height == a_fullRenderHeight;
+	return renderDimensionsMatch &&
+	       runtimeOutputSharedDesc.Width == a_fullDisplayWidth &&
+	       runtimeOutputSharedDesc.Height == a_fullDisplayHeight;
 }
 
 FidelityFX::LifecycleResult FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
@@ -2698,33 +2780,8 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerSharedResources(uin
 	const D3D11_TEXTURE2D_DESC desiredTransparencyDesc = MakeSharedTextureDesc(a_transparencyDesc, a_fullRenderWidth, a_fullRenderHeight, 0);
 	const D3D11_TEXTURE2D_DESC desiredOutputDesc = MakeSharedTextureDesc(a_outputDesc, a_fullDisplayWidth, a_fullDisplayHeight, D3D11_BIND_UNORDERED_ACCESS);
 
-	bool missingRequiredResource = false;
-	for (uint32_t i = 0; i < a_contextCount; ++i) {
-		if (!runtimeColorShared[i] ||
-			!runtimeDepthShared[i] ||
-			!runtimeMotionShared[i] ||
-			!runtimeReactiveShared[i] ||
-			!runtimeTransparencyShared[i] ||
-			!runtimeOutputShared[i] ||
-			!runtimeColorShared[i]->resource11 ||
-			!runtimeDepthShared[i]->resource11 ||
-			!runtimeMotionShared[i]->resource11 ||
-			!runtimeReactiveShared[i]->resource11 ||
-			!runtimeTransparencyShared[i]->resource11 ||
-			!runtimeOutputShared[i]->resource11 ||
-			!runtimeColorShared[i]->resource.get() ||
-			!runtimeDepthShared[i]->resource.get() ||
-			!runtimeMotionShared[i]->resource.get() ||
-			!runtimeReactiveShared[i]->resource.get() ||
-			!runtimeTransparencyShared[i]->resource.get() ||
-			!runtimeOutputShared[i]->resource.get()) {
-			missingRequiredResource = true;
-			break;
-		}
-	}
-
 	const bool needsRecreate =
-		missingRequiredResource ||
+		!HasCompleteRuntimeUpscalerSharedResources(a_contextCount) ||
 		!SameTextureDesc(runtimeColorSharedDesc, desiredColorDesc) ||
 		!SameTextureDesc(runtimeDepthSharedDesc, desiredDepthDesc) ||
 		!SameTextureDesc(runtimeMotionSharedDesc, desiredMotionDesc) ||

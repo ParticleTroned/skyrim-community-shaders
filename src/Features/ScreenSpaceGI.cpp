@@ -1306,8 +1306,8 @@ void ScreenSpaceGI::SetupResources()
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, pointClampSampler.put()));
 	}
 
-	if (recompileFlag || !RequiredShadersOK())
-		ClearShaderCache();
+	if (recompileFlag || !ShadersOK())
+		CompileComputeShaders();
 }
 
 void ScreenSpaceGI::SetupRenderTargetResources()
@@ -1348,7 +1348,7 @@ void ScreenSpaceGI::ClearShaderCache()
 	CompileComputeShaders();
 }
 
-void ScreenSpaceGI::CompileComputeShaders()
+bool ScreenSpaceGI::CompileComputeShaders()
 {
 	struct ShaderCompileInfo
 	{
@@ -1411,13 +1411,23 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.defines.push_back({ "ADAPTIVE_SAMPLING", "" });
 	}
 
-	for (auto& info : shaderInfos) {
+	std::vector<winrt::com_ptr<ID3D11ComputeShader>> compiledShaders(
+		shaderInfos.size());
+	bool compilationComplete = true;
+	for (std::size_t i = 0; i < shaderInfos.size(); ++i) {
+		auto& info = shaderInfos[i];
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceGI") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0")))
-			info.programPtr->attach(rawPtr);
+		compiledShaders[i].attach(reinterpret_cast<ID3D11ComputeShader*>(
+			Util::CompileShader(path.c_str(), info.defines, "cs_5_0")));
+		compilationComplete = compiledShaders[i] && compilationComplete;
+	}
+	if (compilationComplete) {
+		for (std::size_t i = 0; i < shaderInfos.size(); ++i)
+			*shaderInfos[i].programPtr = std::move(compiledShaders[i]);
 	}
 
 	recompileFlag = false;
+	return compilationComplete;
 }
 
 bool ScreenSpaceGI::ShadersOK()
@@ -1494,8 +1504,10 @@ bool ScreenSpaceGI::RequiredShadersOK() const
 
 bool ScreenSpaceGI::PrewarmShaders()
 {
-	if (recompileFlag || !RequiredShadersOK())
-		ClearShaderCache();
+	if ((recompileFlag || !RequiredShadersOK()) &&
+		!CompileComputeShaders()) {
+		return false;
+	}
 	return RequiredShadersOK();
 }
 

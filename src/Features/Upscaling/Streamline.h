@@ -247,12 +247,8 @@ public:
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
-	/** @brief Makes a bounded VR DLSS slot safe; false never recycles visible ownership. */
-	DLSSViewportPreparationResult PrepareVRDLSSViewport(
-		DLSSViewportRole viewportRole,
-		uint32_t qualityMode,
-		uint32_t dlssPreset,
-		bool allowRecycle = true);
+	/** @brief Makes the bounded VR viewport slot for a DLSS profile safe to use without dispatching DLSS. */
+	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset);
 	bool ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport);
 	int FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset) const;
 	bool TryResolveExistingVRDLSSViewport(

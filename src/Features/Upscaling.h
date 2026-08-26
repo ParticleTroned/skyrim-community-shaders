@@ -3080,8 +3080,15 @@ private:
 
 	mutable std::once_flag vrFpsStabilizerSessionConfigOnce;
 	mutable VRFpsStabilizerConfig vrFpsStabilizerSessionConfig{};
+	struct VRRenderScaleRuntimeOptionsSnapshot
+	{
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = kDLSSPresetK;
+		bool fsr4RuntimeEnabled = false;
+	};
 	std::optional<VRRenderScaleProfileSnapshot> GetStableVRRenderScaleRuntimeProfile() const;
-	std::optional<VRRenderScaleProfileSnapshot> GetVRRenderScaleRuntimeOptionsProfile() const;
+	std::optional<VRRenderScaleRuntimeOptionsSnapshot> GetVRRenderScaleRuntimeOptions() const;
 	std::atomic<bool> vrRenderScaleStableRuntimeProfileAuthoritative{ false };
 	std::atomic<uint32_t> vrRenderScaleLastOutOfMemoryFailureFrame{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackStartFrame{ 0 };

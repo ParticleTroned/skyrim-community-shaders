@@ -621,11 +621,12 @@ namespace CSX::RenderMap
 		const EventPayload& a_payload,
 		std::uint64_t a_deviceContextObservationId,
 		std::uint64_t a_commandStreamSequence,
-		std::uint64_t a_targetBindingObservationId) noexcept
+		std::uint64_t a_targetBindingObservationId,
+		std::uint64_t a_submissionObservationId) noexcept
 	{
 		return RecordForGeneration(
 			a_kind, a_payload, a_deviceContextObservationId, 0, a_commandStreamSequence,
-			a_targetBindingObservationId);
+			a_targetBindingObservationId, a_submissionObservationId);
 	}
 
 	RecordResult Collector::RecordForGeneration(
@@ -634,7 +635,8 @@ namespace CSX::RenderMap
 		std::uint64_t a_deviceContextObservationId,
 		std::uint64_t a_expectedGeneration,
 		std::uint64_t a_commandStreamSequence,
-		std::uint64_t a_targetBindingObservationId) noexcept
+		std::uint64_t a_targetBindingObservationId,
+		std::uint64_t a_submissionObservationId) noexcept
 	{
 		auto session = activeSession.load(std::memory_order_acquire);
 		if (!session)
@@ -700,6 +702,7 @@ namespace CSX::RenderMap
 		record.deviceContextObservationId = a_deviceContextObservationId;
 		record.commandStreamSequence = a_commandStreamSequence;
 		record.targetBindingObservationId = a_targetBindingObservationId;
+		record.submissionObservationId = a_submissionObservationId;
 		record.frame = state.frame;
 		record.scopes = SnapshotScopes(state);
 		record.payload = a_payload;

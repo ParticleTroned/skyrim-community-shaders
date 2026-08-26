@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <format>
 #include <string>
 
@@ -23,7 +24,7 @@ namespace CSX::RenderMap
 				"visibility-consumed", "cull-decision", "draw", "dispatch", "finish-command-list",
 				"execute-command-list", "shader-observed", "stage-shader-observed", "technique-resolved",
 				"device-context-observed", "target-view-observed", "resource-observed",
-				"resource-view-bind", "resource-flow",
+				"resource-view-bind", "resource-flow", "resource-version-observed", "eye-submitted",
 			};
 			const auto index = static_cast<std::size_t>(a_kind);
 			return index < names.size() ? names[index] : "gap";
@@ -83,6 +84,24 @@ namespace CSX::RenderMap
 		{
 			return a_observationId == 0 ? json(nullptr) :
 				json(std::format("obs-device-context-{}-g{}", a_observationId, a_generation));
+		}
+
+		json ResourceVersionObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-resource-version-{}-g{}", a_observationId, a_generation));
+		}
+
+		json SubmissionObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-submission-{}-g{}", a_observationId, a_generation));
+		}
+
+		float UnpackFloat(std::uint64_t a_value, bool a_high) noexcept
+		{
+			const auto bits = static_cast<std::uint32_t>(a_high ? a_value >> 32u : a_value);
+			return std::bit_cast<float>(bits);
 		}
 
 		const char* ShaderStageName(ShaderStage a_stage) noexcept
@@ -554,6 +573,43 @@ namespace CSX::RenderMap
 				}
 				return refs;
 			}
+			case PayloadSchema::kResourceVersion:
+				return json::array({
+					{
+						{ "id", ResourceVersionObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+						{ "kind", "resource-version" }, { "role", "first-observed" }, { "pointerEvidence", nullptr },
+					},
+					{
+						{ "id", ResourceObservationId(a_event.payload.words[1], a_event.sessionGeneration) },
+						{ "kind", "resource" }, { "role", "versioned-resource" }, { "pointerEvidence", nullptr },
+					},
+				});
+			case PayloadSchema::kVisibilityResult:
+				return json::array({ {
+					{ "id", ResourceVersionObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", "resource-version" }, { "role", "visibility-result" }, { "pointerEvidence", nullptr },
+				} });
+			case PayloadSchema::kVisibilitySubmission:
+				return json::array({
+					{
+						{ "id", SubmissionObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+						{ "kind", "submission" }, { "role", "visibility-consumer" }, { "pointerEvidence", nullptr },
+					},
+					{
+						{ "id", ResourceVersionObservationId(a_event.payload.words[4], a_event.sessionGeneration) },
+						{ "kind", "resource-version" }, { "role", "consumed-visibility-result" }, { "pointerEvidence", nullptr },
+					},
+				});
+			case PayloadSchema::kEyeSubmission:
+				return json::array({ {
+					{ "id", ResourceObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", "resource" }, { "role", "submitted-eye-texture" }, { "pointerEvidence", nullptr },
+				} });
+			case PayloadSchema::kCullDecision:
+				return json::array({ {
+					{ "id", ResourceVersionObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", "resource-version" }, { "role", "read-back-visibility-result" }, { "pointerEvidence", nullptr },
+				} });
 			case PayloadSchema::kTargetBinding: {
 				json refs = json::array();
 				appendDeviceContext(refs, "immediate-context", a_event.payload.words[1]);
@@ -579,7 +635,8 @@ namespace CSX::RenderMap
 			const EventPayload& a_payload,
 			std::uint64_t a_generation,
 			const CaptureSnapshot* a_snapshot,
-			std::uint64_t a_targetBindingObservationId)
+			std::uint64_t a_targetBindingObservationId,
+			std::uint64_t a_submissionObservationId)
 		{
 			switch (static_cast<PayloadSchema>(a_payload.schema)) {
 			case PayloadSchema::kRenderPassBoundary:
@@ -684,6 +741,8 @@ namespace CSX::RenderMap
 						ShaderStage::kPixel, a_payload.words[3], a_generation) },
 					{ "targetBindingObservationId", TargetBindingObservationId(
 						a_targetBindingObservationId, a_generation) },
+					{ "submissionObservationId", SubmissionObservationId(
+						a_submissionObservationId, a_generation) },
 					{ "arguments", std::move(arguments) },
 				};
 			}
@@ -788,6 +847,87 @@ namespace CSX::RenderMap
 					{ "destinationSubresource", a_payload.words[4] },
 				};
 			}
+			case PayloadSchema::kResourceVersion: {
+				const auto readiness = static_cast<ResourceReadinessDomain>(a_payload.words[6]);
+				const auto eye = static_cast<Eye>(a_payload.words[7] & 0xFFu);
+				return {
+					{ "schema", "resource-version-observation-v1" },
+					{ "resourceVersionObservationId", ResourceVersionObservationId(a_payload.words[0], a_generation) },
+					{ "resourceObservationId", ResourceObservationId(a_payload.words[1], a_generation) },
+					{ "subresources", { { "first", a_payload.words[2] }, { "count", a_payload.words[3] } } },
+					{ "writeEpoch", a_payload.words[4] },
+					{ "producerFrame", OptionalFrame(a_payload.words[5]) },
+					{ "readinessDomain", readiness == ResourceReadinessDomain::kSameImmediateContextOrder ?
+						"same-immediate-context-order" : "unknown" },
+					{ "eye", EyeName(eye) },
+					{ "eyeMask", (a_payload.words[7] >> 8u) == 0 ? json(nullptr) : json(a_payload.words[7] >> 8u) },
+				};
+			}
+			case PayloadSchema::kVisibilityCandidate:
+				return {
+					{ "schema", "visibility-candidate-v1" },
+					{ "objectPointer", PointerEvidence(a_payload.words[0]) },
+					{ "objectIndex", a_payload.words[1] },
+					{ "producerFrame", OptionalFrame(a_payload.words[2]) },
+				};
+			case PayloadSchema::kVisibilityResult:
+				return {
+					{ "schema", "visibility-result-ready-v1" },
+					{ "resourceVersionObservationId", ResourceVersionObservationId(a_payload.words[0], a_generation) },
+					{ "viewObservationId", TargetViewObservationId(
+						TargetViewKind::kShaderResource, a_payload.words[1], a_generation) },
+					{ "objectCount", a_payload.words[2] },
+					{ "producerFrame", OptionalFrame(a_payload.words[3]) },
+				};
+			case PayloadSchema::kVisibilitySubmission: {
+				const auto flags = a_payload.words[7];
+				return {
+					{ "schema", "visibility-submission-v1" },
+					{ "submissionObservationId", SubmissionObservationId(a_payload.words[0], a_generation) },
+					{ "renderPassPointer", PointerEvidence(a_payload.words[1]) },
+					{ "geometryPointer", PointerEvidence(a_payload.words[2]) },
+					{ "objectIndex", a_payload.words[3] },
+					{ "resourceVersionObservationId", ResourceVersionObservationId(a_payload.words[4], a_generation) },
+					{ "requestedViewObservationId", TargetViewObservationId(
+						TargetViewKind::kShaderResource, a_payload.words[5], a_generation) },
+					{ "effectiveViewObservationId", TargetViewObservationId(
+						TargetViewKind::kShaderResource, a_payload.words[6], a_generation) },
+					{ "category", flags & 0xFFFFu },
+					{ "slot", (flags >> 16u) & 0xFFFFu },
+					{ "bindingMatches", (flags & (1ull << 32u)) != 0 },
+					{ "forcedVisible", (flags & (1ull << 33u)) != 0 },
+				};
+			}
+			case PayloadSchema::kEyeSubmission:
+				return {
+					{ "schema", "eye-submission-v1" },
+					{ "resourceObservationId", ResourceObservationId(a_payload.words[0], a_generation) },
+					{ "eye", EyeName(static_cast<Eye>(a_payload.words[1])) },
+					{ "eyeMask", a_payload.words[2] == 0 ? json(nullptr) : json(a_payload.words[2]) },
+					{ "bounds", {
+						{ "uMin", UnpackFloat(a_payload.words[3], false) },
+						{ "vMin", UnpackFloat(a_payload.words[3], true) },
+						{ "uMax", UnpackFloat(a_payload.words[4], false) },
+						{ "vMax", UnpackFloat(a_payload.words[4], true) },
+					} },
+					{ "submitFlags", a_payload.words[5] },
+					{ "compositorCycle", a_payload.words[6] },
+				};
+			case PayloadSchema::kCullDecision:
+				return {
+					{ "schema", "cull-decision-v1" },
+					{ "resourceVersionObservationId", ResourceVersionObservationId(a_payload.words[0], a_generation) },
+					{ "objectIndex", a_payload.words[1] },
+					{ "producerVisible", a_payload.words[2] != 0 },
+					{ "drawCounts", {
+						{ "total", a_payload.words[3] },
+						{ "lighting", a_payload.words[4] },
+						{ "distantTree", a_payload.words[5] },
+						{ "grass", a_payload.words[6] },
+					} },
+					{ "producerFrame", OptionalFrame(a_payload.words[7]) },
+					{ "readinessDomain", "cpu-readback-complete" },
+				};
 			case PayloadSchema::kTargetBinding:
 				return SerializeTargetBinding(
 					FindTargetBindingObservation(a_snapshot, a_payload.words[0]),
@@ -913,6 +1053,8 @@ namespace CSX::RenderMap
 			} },
 			{ "deviceContextObservationId", DeviceContextObservationId(
 				a_event.deviceContextObservationId, a_event.sessionGeneration) },
+			{ "submissionObservationId", SubmissionObservationId(
+				a_event.submissionObservationId, a_event.sessionGeneration) },
 			{ "type", EventKindName(a_event.kind) },
 			{ "scopes", {
 				{ "renderPass", ScopeId(a_event.scopes.renderPass, "render-pass", a_event.sessionGeneration) },
@@ -926,7 +1068,8 @@ namespace CSX::RenderMap
 			{ "observationRefs", SerializeObservationRefs(a_event, a_snapshot) },
 			{ "payload", SerializePayload(
 				a_event.payload, a_event.sessionGeneration, a_snapshot,
-				a_event.targetBindingObservationId) },
+				a_event.targetBindingObservationId,
+				a_event.submissionObservationId) },
 			{ "extensions", {
 				{ "csx.captureNumericId", a_event.captureNumericId },
 				{ "csx.sessionGeneration", a_event.sessionGeneration },

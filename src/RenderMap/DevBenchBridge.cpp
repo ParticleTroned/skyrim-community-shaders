@@ -27,8 +27,8 @@ namespace
 	using json = nlohmann::json;
 	using CSX::RenderMap::ControlStatus;
 	constexpr std::uint32_t kContractMajor = 1;
-	constexpr std::uint32_t kContractMinor = 5;
-	constexpr std::uint32_t kSchemaRevision = 6;
+	constexpr std::uint32_t kContractMinor = 6;
+	constexpr std::uint32_t kSchemaRevision = 7;
 	constexpr std::uint64_t kMaximumFrames = 600;
 	constexpr std::uint64_t kMaximumDurationMs = 10000;
 	constexpr std::uint64_t kMaximumEvents = 65536;
@@ -167,8 +167,8 @@ namespace
 				{ "major", kContractMajor }, { "minor", kContractMinor },
 				{ "schemaRevision", kSchemaRevision },
 				{ "actions", json::array({ "registry", "status", "start", "stop", "capture_events" }) },
-				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "device-context-observation-v1", "target-view-observation-v1", "resource-observation-v1", "resource-view-binding-v1", "resource-flow-v1", "render-target-binding-v1", "draw-call-v2", "dispatch-call-v1" }) },
-				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "device-context-observed", "target-view-observed", "resource-observed", "resource-view-bind", "resource-flow", "render-target-bind", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "draw", "dispatch" }) },
+				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "device-context-observation-v1", "target-view-observation-v1", "resource-observation-v1", "resource-view-binding-v1", "resource-flow-v1", "resource-version-observation-v1", "visibility-candidate-v1", "visibility-result-ready-v1", "visibility-submission-v1", "cull-decision-v1", "eye-submission-v1", "render-target-binding-v1", "draw-call-v2", "dispatch-call-v1" }) },
+				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "device-context-observed", "target-view-observed", "resource-observed", "resource-view-bind", "resource-flow", "resource-version-observed", "render-target-bind", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "visibility-candidate", "visibility-result-ready", "visibility-consumed", "cull-decision", "eye-submitted", "draw", "dispatch" }) },
 				{ "executionCoverage", {
 					{ "deviceContext", "immediate-only" },
 					{ "typedDeviceContextIdentity", true },
@@ -177,7 +177,9 @@ namespace
 					{ "shaderResourceViews", "all-immediate-stages" },
 					{ "unorderedAccessViews", "compute-and-output-merger" },
 					{ "resourceFlow", "copy-and-resolve" },
-					{ "vrEyeAttribution", false },
+					{ "vrEyeAttribution", "accepted-openvr-submit-resource-and-bounds" },
+					{ "visibilitySubmissionJoin", "explicit-next-draw-identity" },
+					{ "visibilityBindingVerification", "effective-vs-srv-slot" },
 					{ "deferredContexts", false },
 					{ "commandLists", false },
 				} },

@@ -12,13 +12,19 @@ culling implementation to be enabled.
 
 ## Current gate
 
-The 120-frame main-menu capture has validated bounded collection, balanced
-engine scopes, immediate boundary quiescence, durable finalization, and exact
-artifact hashing. It also exposed that the serialized scope IDs are not yet
-declared as typed, generation-safe observations. No D3D11 draw instrumentation
-should be added until every active scope can be resolved by the semantic
-validator. See
-[`main-menu-120-frame-capture-2026-08-23.md`](./main-menu-120-frame-capture-2026-08-23.md).
+Draw, dispatch, immediate-context command order, output-merger targets, typed
+resources and views, copy/resolve flow, and shader selection are implemented and
+live-validated. The depth-culling producer and consumer now emit a targeted
+resource version, verify the effective VS SRV binding, and carry an explicit
+submission observation into the eventual `Draw*`; closed setup scopes are not
+used as a proximity heuristic. Accepted OpenVR submissions identify the final
+eye texture and bounds without assuming that earlier work used two physical
+draws.
+
+The present gate is a live decision-window capture that proves the native OBB
+result buffer, the candidate-to-draw association, and the resource path from
+the selected draw to an eye-submitted texture. See
+[`depth-culling-observation-sequence.md`](./depth-culling-observation-sequence.md).
 
 ## Candidate constraints
 
@@ -95,23 +101,32 @@ event-order evidence that produced the answer.
 
 ## Instrumentation sequence
 
+Completed foundations:
+
+- typed, generation-safe pass, technique, geometry, shader, context, target,
+  resource, view, and resource-version observations;
+- bounded `Draw*`/dispatch events and monotonic immediate-context order;
+- explicit visibility submission identity consumed by exactly one `Draw*`;
+- effective VS SRV slot verification after D3D11 hazard handling;
+- completed diagnostic readback decisions joined to resource version and object
+  index;
+- accepted OpenVR eye/resource/bounds observations.
+
+Remaining sequence:
+
 1. Seed the first non-example engine map from the existing capture's shader
    types, caller RVAs, pass values, and descriptor combinations.
-2. Declare typed, generation-safe observations for the existing render-pass,
-   technique, geometry, and shader scopes; validate every scope reference.
-3. Accept exact externally verified build, manifest, runtime, profile, cache,
+2. Accept exact externally verified build, manifest, runtime, profile, cache,
    and scenario provenance in the capture-start contract.
-4. Add capture markers for frame, scene accumulation, and eye epochs.
-5. Emit capture-local IDs for scene object, geometry, property/material, and
+3. Add capture markers for frame and scene accumulation epochs.
+4. Emit capture-local IDs for scene object, property/material, and
    `BSRenderPass` at the narrowest known engine boundary.
-6. Observe shader creation/binding and hash bytecode when available.
-7. Track D3D11 device-context, target, and pipeline-state identities.
-8. Emit bounded draw events containing active scope tokens and a monotonic
-   per-context command-stream sequence.
-9. Emit depth-culling candidate, result-ready, view-validity, and consume events.
-10. Join the capture without relying on pointer equality across frames unless
+5. Join the selected draw's output resource path to the accepted OpenVR eye
+   submission; preserve `eye: both` where one stereo submission is proved.
+6. Join the capture without relying on pointer equality across frames unless
    object lifetime evidence supports it.
-11. Review every ambiguous or missing edge before adding more object families.
+7. Generate and review the decision-window report before adding more object
+   families.
 
 ## Acceptance gates
 

@@ -13,6 +13,7 @@
 #include "RE/B/BSOpenVRControllerDevice.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
+#include "RenderMap/Runtime.h"
 #include "ScreenSpaceGI.h"
 #include "ScreenSpaceShadows.h"
 #include "ShaderCache.h"
@@ -55,6 +56,51 @@ bool VR::OverlayRenderContext::IsValid() const
 
 namespace
 {
+	CSX::RenderMap::ResourceViewInput DescribeDepthCullingVisibilityView(
+		ID3D11ShaderResourceView* a_view)
+	{
+		using namespace CSX::RenderMap;
+		ResourceViewInput result;
+		result.view.kind = TargetViewKind::kShaderResource;
+		result.view.d3dObject = reinterpret_cast<std::uintptr_t>(a_view);
+		if (!a_view)
+			return result;
+
+		ID3D11Resource* resource = nullptr;
+		a_view->GetResource(&resource);
+		if (resource) {
+			result.resource.d3dObject = reinterpret_cast<std::uintptr_t>(resource);
+			D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+			resource->GetType(&dimension);
+			if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
+				D3D11_BUFFER_DESC desc{};
+				reinterpret_cast<ID3D11Buffer*>(resource)->GetDesc(&desc);
+				result.resource.dimension = ResourceDimension::kBuffer;
+				result.resource.widthOrBytes = desc.ByteWidth;
+				result.resource.usage = desc.Usage;
+				result.resource.bindFlags = desc.BindFlags;
+				result.resource.cpuAccessFlags = desc.CPUAccessFlags;
+				result.resource.miscFlags = desc.MiscFlags;
+				result.resource.structureByteStride = desc.StructureByteStride;
+			}
+			resource->Release();
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		a_view->GetDesc(&desc);
+		result.view.format = desc.Format;
+		result.view.dimension = desc.ViewDimension;
+		if (desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFER) {
+			result.view.firstElement = desc.Buffer.FirstElement;
+			result.view.elementCount = desc.Buffer.NumElements;
+		} else if (desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX) {
+			result.view.firstElement = desc.BufferEx.FirstElement;
+			result.view.elementCount = desc.BufferEx.NumElements;
+			result.view.flags = desc.BufferEx.Flags;
+		}
+		return result;
+	}
+
 	void EmitVRPipelineEnvironmentDiagnosticsOnce(const VR& a_vr)
 	{
 		static std::mutex startupDiagnosticsMutex;
@@ -468,6 +514,7 @@ namespace
 		{
 			globals::features::vr.KeepPreviousDepthCullingResultVisible(a_object);
 			func(a_accumulator, a_object);
+			globals::features::vr.RecordCurrentFrameDepthCullingCandidate(a_object);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1036,6 +1083,8 @@ void VR::EarlyPrepass()
 	AdvanceDepthCullingDiagnosticsFrame();
 #endif
 	currentFrameDepthCullingReadyFrame = std::numeric_limits<std::uint32_t>::max();
+	currentFrameDepthCullingResourceVersionObservationId = 0;
+	currentFrameDepthCullingResourceVersionGeneration = 0;
 	if (globals::state)
 		depthCullingDiagnostics.BeginFrame(globals::state->frameCount, IsCurrentFrameDepthCullingEnabled());
 }
@@ -1070,6 +1119,20 @@ void VR::KeepPreviousDepthCullingResultVisible(RE::NiAVObject* a_object)
 	depthCullingDiagnostics.RecordAccumulation(false);
 }
 
+void VR::RecordCurrentFrameDepthCullingCandidate(RE::NiAVObject* a_object)
+{
+	auto& renderMap = CSX::RenderMap::GetRuntime();
+	if (!renderMap.IsCapturing() || !a_object || !gDepthCullingState ||
+		!*gDepthCullingState || !gDepthCullingFrame) {
+		return;
+	}
+	std::uint32_t objectIndex = 0;
+	if (TryGetDepthCullingObjectIndex(*gDepthCullingState, a_object, objectIndex)) {
+		renderMap.RecordVisibilityCandidate(
+			reinterpret_cast<std::uintptr_t>(a_object), objectIndex, *gDepthCullingFrame);
+	}
+}
+
 void VR::MarkCurrentFrameDepthCullingReady()
 {
 	const bool ready = IsCurrentFrameDepthCullingEnabled() && globals::state;
@@ -1081,16 +1144,39 @@ void VR::MarkCurrentFrameDepthCullingReady()
 		depthCullingFrame = *gDepthCullingFrame;
 		auto* cullerBytes = reinterpret_cast<std::byte*>(*gDepthCullingState);
 		objectCount = *reinterpret_cast<std::uint32_t*>(cullerBytes + kDepthCullingObjectCountOffset);
+		auto* resultBuffer = *reinterpret_cast<std::byte**>(cullerBytes + kDepthCullingGpuResultOffset);
+		auto* visibility = resultBuffer ?
+			*reinterpret_cast<ID3D11ShaderResourceView**>(resultBuffer + kGpuBufferSrvOffset) :
+			nullptr;
+		if (visibility) {
+			const auto view = DescribeDepthCullingVisibilityView(visibility);
+			auto& renderMap = CSX::RenderMap::GetRuntime();
+			currentFrameDepthCullingResourceVersionObservationId =
+				renderMap.RecordVisibilityResultReady(
+					reinterpret_cast<std::uintptr_t>(globals::d3d::context),
+					{
+						.resource = view.resource,
+						.firstSubresource = 0,
+						.subresourceCount = 1,
+						.writeEpoch = ++depthCullingVisibilityWriteEpoch,
+						.producerFrame = currentFrameDepthCullingReadyFrame,
+						.readinessDomain = CSX::RenderMap::ResourceReadinessDomain::kSameImmediateContextOrder,
+						.eye = CSX::RenderMap::Eye::kUnknown,
+					},
+					view,
+					objectCount);
+			currentFrameDepthCullingResourceVersionGeneration =
+				currentFrameDepthCullingResourceVersionObservationId != 0 ?
+					renderMap.ActiveCaptureGeneration() : 0;
+		}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (depthCullingDiagnostics.IsCollecting()) {
-			auto* resultBuffer = *reinterpret_cast<std::byte**>(cullerBytes + kDepthCullingGpuResultOffset);
-			auto* visibility = resultBuffer ?
-				*reinterpret_cast<ID3D11ShaderResourceView**>(resultBuffer + kGpuBufferSrvOffset) :
-				nullptr;
 			QueueDepthCullingVisibilityReadback(
 				visibility,
 				currentFrameDepthCullingReadyFrame,
-				objectCount);
+				objectCount,
+				currentFrameDepthCullingResourceVersionObservationId,
+				currentFrameDepthCullingResourceVersionGeneration);
 			BeginDepthCullingPipelineStatistics(currentFrameDepthCullingReadyFrame);
 		}
 #endif
@@ -1099,10 +1185,12 @@ void VR::MarkCurrentFrameDepthCullingReady()
 }
 
 void VR::BindCurrentFrameDepthCulling(
+	RE::BSRenderPass* a_renderPass,
 	RE::BSGeometry* a_geometry,
 	CSX::VRDepthCullingDiagnostics::DrawCategory a_category)
 {
 	depthCullingDiagnostics.RecordBindAttempt();
+	auto& renderMap = CSX::RenderMap::GetRuntime();
 	auto* state = globals::state;
 	constexpr auto enabledDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::CurrentFrameDepthCulling);
 	constexpr auto objectIndexDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::CurrentFrameDepthCullingObjectIndex);
@@ -1111,6 +1199,7 @@ void VR::BindCurrentFrameDepthCulling(
 		state->permutationData.ExtraShaderDescriptor &= ~descriptorMask;
 
 	auto* context = globals::d3d::context;
+	renderMap.ClearPendingVisibilitySubmission(reinterpret_cast<std::uintptr_t>(context));
 	if (!context) {
 		depthCullingDiagnostics.RecordContextUnavailable();
 		return;
@@ -1169,13 +1258,17 @@ void VR::BindCurrentFrameDepthCulling(
 		return;
 	}
 
-	auto* visibility = *reinterpret_cast<ID3D11ShaderResourceView**>(resultBuffer + kGpuBufferSrvOffset);
-	if (!visibility) {
+	auto* liveVisibility = *reinterpret_cast<ID3D11ShaderResourceView**>(resultBuffer + kGpuBufferSrvOffset);
+	if (!liveVisibility) {
 		depthCullingDiagnostics.RecordSrvUnavailable();
 		return;
 	}
 
+	auto* visibility = liveVisibility;
+	bool forcedVisible = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	forcedVisible = depthCullingDiagnostics.GetControlMode() ==
+		CSX::VRDepthCullingDiagnostics::ControlMode::ForcedVisible;
 	visibility = GetDepthCullingDiagnosticControlSrv(visibility);
 	if (!visibility) {
 		depthCullingDiagnostics.RecordForcedVisibleSrvUnavailable();
@@ -1183,6 +1276,30 @@ void VR::BindCurrentFrameDepthCulling(
 	}
 #endif
 	context->VSSetShaderResources(kCurrentFrameDepthCullingSrvSlot, 1, &visibility);
+	ID3D11ShaderResourceView* effectiveVisibility = nullptr;
+	context->VSGetShaderResources(kCurrentFrameDepthCullingSrvSlot, 1, &effectiveVisibility);
+	const bool bindingMatches = effectiveVisibility == visibility;
+	const auto requestedView = DescribeDepthCullingVisibilityView(visibility);
+	const auto effectiveView = DescribeDepthCullingVisibilityView(effectiveVisibility);
+	if (effectiveVisibility)
+		effectiveVisibility->Release();
+	const auto resourceVersionObservationId =
+		currentFrameDepthCullingResourceVersionGeneration == renderMap.ActiveCaptureGeneration() ?
+			currentFrameDepthCullingResourceVersionObservationId : 0;
+	renderMap.DeclareVisibilitySubmission(
+		reinterpret_cast<std::uintptr_t>(context),
+		{
+			.renderPass = reinterpret_cast<std::uintptr_t>(a_renderPass),
+			.geometry = reinterpret_cast<std::uintptr_t>(a_geometry),
+			.objectIndex = objectIndex,
+			.category = static_cast<std::uint32_t>(a_category),
+			.resourceVersionObservationId = resourceVersionObservationId,
+			.requestedView = requestedView,
+			.effectiveView = effectiveView,
+			.slot = kCurrentFrameDepthCullingSrvSlot,
+			.bindingMatches = bindingMatches,
+			.forcedVisible = forcedVisible,
+		});
 	state->permutationData.ExtraShaderDescriptor |=
 		enabledDescriptor | (objectIndex << kCurrentFrameDepthCullingObjectIndexShift);
 	depthCullingDiagnostics.RecordBoundDraw(a_category);
@@ -1253,6 +1370,18 @@ void VR::AdvanceDepthCullingDiagnosticsFrame()
 			for (std::uint32_t index = 0; index < slot.objectCount; ++index) {
 				const bool occluded = visibility[index] == 0;
 				const auto totalDraws = slot.draws[index];
+				if (totalDraws != 0) {
+					CSX::RenderMap::GetRuntime().RecordCullDecision(
+						slot.resourceVersionObservationId,
+						slot.resourceVersionGeneration,
+						index,
+						!occluded,
+						totalDraws,
+						slot.lightingDraws[index],
+						slot.distantTreeDraws[index],
+						slot.grassDraws[index],
+						slot.frame);
+				}
 				if (occluded) {
 					++occludedObjects;
 					draws.occluded += totalDraws;
@@ -1286,6 +1415,8 @@ void VR::AdvanceDepthCullingDiagnosticsFrame()
 		slot.pending = false;
 		slot.drawsComplete = false;
 		slot.frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
+		slot.resourceVersionObservationId = 0;
+		slot.resourceVersionGeneration = 0;
 	}
 
 	for (auto& slot : depthCullingPipelineStatsSlots) {
@@ -1361,7 +1492,9 @@ void VR::AdvanceDepthCullingDiagnosticsFrame()
 void VR::QueueDepthCullingVisibilityReadback(
 	ID3D11ShaderResourceView* a_visibility,
 	std::uint32_t a_frame,
-	std::uint32_t a_objectCount)
+	std::uint32_t a_objectCount,
+	std::uint64_t a_resourceVersionObservationId,
+	std::uint64_t a_resourceVersionGeneration)
 {
 	if (!depthCullingDiagnostics.IsCollecting() || !a_visibility || !globals::d3d::device || !globals::d3d::context) {
 		depthCullingDiagnostics.RecordReadbackError();
@@ -1416,6 +1549,8 @@ void VR::QueueDepthCullingVisibilityReadback(
 	}
 
 	slot.epoch = depthCullingDiagnostics.CollectionEpoch();
+	slot.resourceVersionObservationId = a_resourceVersionObservationId;
+	slot.resourceVersionGeneration = a_resourceVersionGeneration;
 	slot.frame = a_frame;
 	slot.objectCount = std::min({
 		a_objectCount,

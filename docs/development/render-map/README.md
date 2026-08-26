@@ -99,8 +99,8 @@ explicitly unavailable rather than receiving a zero or invented hash.
 
 The serializer emits schema-shaped event envelopes with semantic payload fields
 and capture-local scope IDs. It preserves pointer evidence under the currently
-supported `retain` policy, but leaves unproven manifest, engine, causal,
-device-context, and eye relationships empty or unknown. Atomic event/manifest
+supported `retain` policy, but leaves unproven manifest, engine, causal, and
+per-draw eye relationships empty or unknown. Atomic event/manifest
 writing, hashing, explicit gap materialization, and immediate finalization at a
 capture boundary are implemented and live-validated.
 
@@ -115,10 +115,17 @@ capture explicitly incomplete. State inherited before capture starts is not
 queried or guessed, so early draws may correctly carry a null target-binding
 identity until the first observed bind. Per-thread buffer sharding, remaining
 geometry families, provenance injection, the rest of full pipeline identity,
-deferred-context/command-list coverage, COM destruction boundaries, automatic
-D3D11 hazard-unbind proof, and VR-eye attribution remain subsequent slices.
+deferred-context/command-list coverage, COM destruction boundaries, and general
+D3D11 hazard reconstruction remain subsequent slices. The depth visibility SRV
+has targeted effective-binding verification, and accepted OpenVR submissions
+now provide resource-and-bounds eye attribution. Earlier draws acquire an eye
+label only through a proven resource-flow path; a combined stereo draw may
+legitimately resolve to `both`.
 The resource-flow joiner now produces a genuine bounded immediate-context
 execution/resource graph; it is not yet a complete semantic Skyrim frame graph.
+
+The depth-culling integration and next capture target are described in
+[`depth-culling-observation-sequence.md`](./depth-culling-observation-sequence.md).
 
 Example DevBench requests (use a unique `commandId` for each logical command):
 

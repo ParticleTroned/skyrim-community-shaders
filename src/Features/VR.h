@@ -157,8 +157,10 @@ public:
 	void TryApplyDepthBufferCullingCacheRefresh();
 	bool IsCurrentFrameDepthCullingEnabled() const;
 	void KeepPreviousDepthCullingResultVisible(RE::NiAVObject* a_object);
+	void RecordCurrentFrameDepthCullingCandidate(RE::NiAVObject* a_object);
 	void MarkCurrentFrameDepthCullingReady();
 	void BindCurrentFrameDepthCulling(
+		RE::BSRenderPass* a_renderPass,
 		RE::BSGeometry* a_geometry,
 		CSX::VRDepthCullingDiagnostics::DrawCategory a_category = CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting);
 	CSX::VRDepthCullingDiagnostics::Counters& GetDepthCullingDiagnostics() { return depthCullingDiagnostics; }
@@ -538,6 +540,9 @@ public:
 	void** gDepthCullingState = nullptr;
 	std::uint32_t* gDepthCullingFrame = nullptr;
 	std::uint32_t currentFrameDepthCullingReadyFrame = std::numeric_limits<std::uint32_t>::max();
+	std::uint64_t currentFrameDepthCullingResourceVersionObservationId = 0;
+	std::uint64_t currentFrameDepthCullingResourceVersionGeneration = 0;
+	std::uint64_t depthCullingVisibilityWriteEpoch = 0;
 	CSX::VRDepthCullingDiagnostics::Counters depthCullingDiagnostics;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -549,6 +554,8 @@ public:
 		winrt::com_ptr<ID3D11Buffer> staging;
 		std::uint32_t byteWidth = 0;
 		std::uint64_t epoch = 0;
+		std::uint64_t resourceVersionObservationId = 0;
+		std::uint64_t resourceVersionGeneration = 0;
 		std::uint32_t frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
 		std::uint32_t objectCount = 0;
 		bool pending = false;
@@ -581,7 +588,9 @@ public:
 	void QueueDepthCullingVisibilityReadback(
 		ID3D11ShaderResourceView* a_visibility,
 		std::uint32_t a_frame,
-		std::uint32_t a_objectCount);
+		std::uint32_t a_objectCount,
+		std::uint64_t a_resourceVersionObservationId,
+		std::uint64_t a_resourceVersionGeneration);
 	void RecordDepthCullingDiagnosticDraw(
 		std::uint32_t a_objectIndex,
 		CSX::VRDepthCullingDiagnostics::DrawCategory a_category);

@@ -1089,6 +1089,7 @@ namespace LightingExtensions
 						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
 			globals::features::vr.BindCurrentFrameDepthCulling(
+				pass,
 				pass->geometry,
 				CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting);
 		}
@@ -1104,6 +1105,7 @@ namespace DistantTreeExtensions
 		{
 			func(shader, pass, renderFlags);
 			globals::features::vr.BindCurrentFrameDepthCulling(
+				pass,
 				pass->geometry,
 				CSX::VRDepthCullingDiagnostics::DrawCategory::DistantTree);
 		}
@@ -1163,6 +1165,7 @@ namespace GrassExtensions
 			}
 
 			globals::features::vr.BindCurrentFrameDepthCulling(
+				pass,
 				pass->geometry,
 				CSX::VRDepthCullingDiagnostics::DrawCategory::Grass);
 		}

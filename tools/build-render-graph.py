@@ -65,6 +65,7 @@ class Graph:
         self.gaps: list[dict[str, Any]] = []
         self._node_ids: dict[tuple[str, str], str] = {}
         self._kind_counts: dict[str, int] = {}
+        self.eye_attribution_observed = False
 
     def node(self, key: str, kind: str, label: str, sequence: int | None, attributes: dict[str, Any]) -> str:
         identity = (kind, key)
@@ -125,6 +126,8 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
     resources: dict[str, dict[str, Any]] = {}
     views: dict[str, dict[str, Any]] = {}
     target_bindings: dict[str, dict[str, Any]] = {}
+    resource_versions: dict[str, dict[str, Any]] = {}
+    submissions: dict[str, dict[str, Any]] = {}
     srv_state: dict[tuple[str, int], str | None] = {}
     uav_state: dict[tuple[str, int], str | None] = {}
 
@@ -150,6 +153,98 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
             key = (str(payload.get("stage")), int(payload.get("slot", 0)))
             state = srv_state if payload.get("bindingKind") == "shader-resource" else uav_state
             state[key] = payload.get("viewObservationId")
+        elif event_type == "resource-version-observed":
+            version_id = payload.get("resourceVersionObservationId")
+            resource_id = payload.get("resourceObservationId")
+            if version_id:
+                resource_versions[version_id] = {"sequence": sequence, "payload": payload}
+                version_node = graph.node(
+                    version_id, "resource-version", version_id, sequence, payload
+                )
+                resource = resources.get(resource_id)
+                if resource:
+                    resource_node = graph.node(
+                        resource_id, "resource", resource_id, resource["sequence"], resource["payload"]
+                    )
+                    graph.edge(
+                        "versions", resource_node, version_node,
+                        [resource["sequence"], sequence],
+                        "A write epoch versions this observed resource and subresource range.",
+                    )
+                else:
+                    graph.gap(
+                        f"Resource version {version_id} refers to undeclared resource {resource_id}.",
+                        [version_node], True,
+                    )
+        elif event_type == "visibility-consumed":
+            submission_id = payload.get("submissionObservationId")
+            version_id = payload.get("resourceVersionObservationId")
+            if submission_id:
+                submissions[submission_id] = {"sequence": sequence, "payload": payload}
+                submission_node = graph.node(
+                    submission_id, "submission", submission_id, sequence, payload
+                )
+                version = resource_versions.get(version_id)
+                if version:
+                    version_node = graph.node(
+                        version_id, "resource-version", version_id, version["sequence"], version["payload"]
+                    )
+                    graph.edge(
+                        "consumes", version_node, submission_node,
+                        [version["sequence"], sequence],
+                        "The explicit visibility consumer names this resource version.",
+                        {"bindingMatches": payload.get("bindingMatches"), "slot": payload.get("slot")},
+                    )
+                elif version_id:
+                    graph.gap(
+                        f"Visibility submission {submission_id} refers to undeclared version {version_id}.",
+                        [submission_node], True,
+                    )
+        elif event_type == "cull-decision" and payload.get("schema") == "cull-decision-v1":
+            version_id = payload.get("resourceVersionObservationId")
+            decision_node = graph.node(
+                f"event-{sequence}", "visibility-test",
+                f"visibility decision for object {payload.get('objectIndex')} at event {sequence}",
+                sequence, payload,
+            )
+            version = resource_versions.get(version_id)
+            if version:
+                version_node = graph.node(
+                    version_id, "resource-version", version_id, version["sequence"], version["payload"]
+                )
+                graph.edge(
+                    "result-for", version_node, decision_node,
+                    [version["sequence"], sequence],
+                    "Completed CPU readback classified a covered object from this exact resource version.",
+                )
+            elif version_id:
+                graph.gap(
+                    f"Cull decision event {sequence} refers to undeclared version {version_id}.",
+                    [decision_node], True,
+                )
+        elif event_type == "eye-submitted":
+            resource_id = payload.get("resourceObservationId")
+            eye_node = graph.node(
+                f"event-{sequence}", "eye-submit",
+                f"{payload.get('eye', 'unknown')} eye submit at event {sequence}",
+                sequence, payload,
+            )
+            resource = resources.get(resource_id)
+            if resource:
+                resource_node = graph.node(
+                    resource_id, "resource", resource_id, resource["sequence"], resource["payload"]
+                )
+                graph.edge(
+                    "presents", resource_node, eye_node,
+                    [resource["sequence"], sequence],
+                    "Accepted OpenVR Submit identifies this texture resource, eye, and source bounds.",
+                )
+                graph.eye_attribution_observed = True
+            else:
+                graph.gap(
+                    f"Eye submission event {sequence} refers to undeclared resource {resource_id}.",
+                    [eye_node], True,
+                )
         elif event_type in {"draw", "dispatch", "resource-flow"}:
             execution_kind = "draw" if event_type == "draw" else ("dispatch" if event_type == "dispatch" else "copy")
             operation = payload.get("operation", event_type)
@@ -169,6 +264,23 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
             direct_reads: list[tuple[str, str]] = []
             direct_writes: list[tuple[str, str]] = []
             if event_type == "draw":
+                submission_id = event.get("submissionObservationId") or payload.get("submissionObservationId")
+                submission = submissions.get(submission_id)
+                if submission:
+                    submission_node = graph.node(
+                        submission_id, "submission", submission_id,
+                        submission["sequence"], submission["payload"]
+                    )
+                    graph.edge(
+                        "submits", submission_node, execution,
+                        [submission["sequence"], sequence],
+                        "The draw consumed this explicit pending submission identity.",
+                    )
+                elif submission_id:
+                    graph.gap(
+                        f"Draw event {sequence} refers to undeclared submission {submission_id}.",
+                        [execution], True,
+                    )
                 for (stage, slot), view_id in sorted(srv_state.items()):
                     if stage != "compute" and view_id:
                         read_views.append((view_id, stage, slot))
@@ -287,7 +399,7 @@ def main() -> int:
         "extensions": {
             "csx.executionGranularity": "individual-immediate-context-call",
             "csx.deferredContextCoverage": False,
-            "csx.vrEyeAttribution": False,
+            "csx.vrEyeAttribution": graph.eye_attribution_observed,
         },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

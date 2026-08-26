@@ -64,6 +64,8 @@ namespace CSX::RenderMap
 		kResourceObserved,
 		kResourceViewBind,
 		kResourceFlow,
+		kResourceVersionObserved,
+		kEyeSubmitted,
 	};
 
 	enum class Eye : std::uint8_t
@@ -161,7 +163,7 @@ namespace CSX::RenderMap
 	struct EventRecord
 	{
 		std::uint16_t schemaMajor{ 1 };
-		std::uint16_t schemaMinor{ 7 };
+		std::uint16_t schemaMinor{ 8 };
 		EventKind kind{ EventKind::kCaptureMarker };
 		std::uint16_t reserved{ 0 };
 		std::uint64_t captureNumericId{ 0 };
@@ -172,6 +174,7 @@ namespace CSX::RenderMap
 		std::uint64_t deviceContextObservationId{ 0 };
 		std::uint64_t commandStreamSequence{ 0 };
 		std::uint64_t targetBindingObservationId{ 0 };
+		std::uint64_t submissionObservationId{ 0 };
 		FrameContext frame;
 		ScopeSnapshot scopes;
 		EventPayload payload;
@@ -469,14 +472,16 @@ namespace CSX::RenderMap
 			const EventPayload& a_payload = {},
 			std::uint64_t a_deviceContextObservationId = 0,
 			std::uint64_t a_commandStreamSequence = 0,
-			std::uint64_t a_targetBindingObservationId = 0) noexcept;
+			std::uint64_t a_targetBindingObservationId = 0,
+			std::uint64_t a_submissionObservationId = 0) noexcept;
 		RecordResult RecordForGeneration(
 			EventKind a_kind,
 			const EventPayload& a_payload,
 			std::uint64_t a_deviceContextObservationId,
 			std::uint64_t a_expectedGeneration,
 			std::uint64_t a_commandStreamSequence = 0,
-			std::uint64_t a_targetBindingObservationId = 0) noexcept;
+			std::uint64_t a_targetBindingObservationId = 0,
+			std::uint64_t a_submissionObservationId = 0) noexcept;
 
 		ScopeGuard EnterScope(
 			ScopeKind a_kind,

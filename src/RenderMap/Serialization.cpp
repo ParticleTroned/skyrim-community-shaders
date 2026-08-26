@@ -22,6 +22,7 @@ namespace CSX::RenderMap
 				"render-target-bind", "depth-source-ready", "visibility-candidate", "visibility-result-ready",
 				"visibility-consumed", "cull-decision", "draw", "dispatch", "finish-command-list",
 				"execute-command-list", "shader-observed", "stage-shader-observed", "technique-resolved",
+				"device-context-observed",
 			};
 			const auto index = static_cast<std::size_t>(a_kind);
 			return index < names.size() ? names[index] : "gap";
@@ -75,6 +76,12 @@ namespace CSX::RenderMap
 		{
 			return a_observationId == 0 ? json(nullptr) :
 				json(std::format("obs-shader-{}-g{}", a_observationId, a_generation));
+		}
+
+		json DeviceContextObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-device-context-{}-g{}", a_observationId, a_generation));
 		}
 
 		const char* ShaderStageName(ShaderStage a_stage) noexcept
@@ -249,6 +256,17 @@ namespace CSX::RenderMap
 			const EventRecord& a_event,
 			const CaptureSnapshot* a_snapshot)
 		{
+			auto appendDeviceContext = [&](json& a_refs, const char* a_role, std::uint64_t a_pointerEvidence) {
+				if (a_event.deviceContextObservationId == 0)
+					return;
+				a_refs.push_back({
+					{ "id", DeviceContextObservationId(
+						a_event.deviceContextObservationId, a_event.sessionGeneration) },
+					{ "kind", "device-context" },
+					{ "role", a_role },
+					{ "pointerEvidence", PointerEvidence(a_pointerEvidence) },
+				});
+			};
 			std::uint64_t observationId = 0;
 			std::uint64_t pointerEvidence = 0;
 			const char* role = nullptr;
@@ -293,6 +311,7 @@ namespace CSX::RenderMap
 			}
 			case PayloadSchema::kDrawCall: {
 				json refs = json::array();
+				appendDeviceContext(refs, "immediate-context", a_event.payload.words[0]);
 				for (const auto [stage, word] : std::array{
 					std::pair{ ShaderStage::kVertex, std::size_t{ 2 } },
 					std::pair{ ShaderStage::kPixel, std::size_t{ 3 } } }) {
@@ -310,16 +329,24 @@ namespace CSX::RenderMap
 				return refs;
 			}
 			case PayloadSchema::kDispatchCall: {
+				json refs = json::array();
+				appendDeviceContext(refs, "immediate-context", a_event.payload.words[0]);
 				const auto id = a_event.payload.words[2];
 				if (id == 0)
-					return json::array();
+					return refs;
 				const auto* observation = FindStageShaderObservation(a_snapshot, id);
-				return json::array({ {
+				refs.push_back({
 					{ "id", StageShaderObservationId(ShaderStage::kCompute, id, a_event.sessionGeneration) },
 					{ "kind", StageShaderKind(ShaderStage::kCompute) },
 					{ "role", "bound-at-dispatch" },
 					{ "pointerEvidence", PointerEvidence(observation ? observation->pointerEvidence : 0) },
-				} });
+				});
+				return refs;
+			}
+			case PayloadSchema::kDeviceContextObservation: {
+				json refs = json::array();
+				appendDeviceContext(refs, "first-observed", a_event.payload.words[1]);
+				return refs;
 			}
 			default:
 				return json::array();
@@ -464,6 +491,16 @@ namespace CSX::RenderMap
 					{ "arguments", std::move(arguments) },
 				};
 			}
+			case PayloadSchema::kDeviceContextObservation:
+				return {
+					{ "schema", "device-context-observation-v1" },
+					{ "deviceContextObservationId", DeviceContextObservationId(
+						a_payload.words[0], a_generation) },
+					{ "contextPointer", PointerEvidence(a_payload.words[1]) },
+					{ "pointerGeneration", a_payload.words[2] },
+					{ "kind", a_payload.words[3] == 1 ? "immediate" : "unknown" },
+					{ "creationEvidence", "initial-immediate-context" },
+				};
 			default:
 				return {
 					{ "schema", std::format("unknown-{}", a_payload.schema) },
@@ -566,11 +603,13 @@ namespace CSX::RenderMap
 			} },
 			{ "execution", {
 				{ "observationDomain", "cpu-call" },
-				{ "commandStreamSequence", nullptr },
+				{ "commandStreamSequence", a_event.commandStreamSequence == 0 ?
+					json(nullptr) : json(a_event.commandStreamSequence) },
 				{ "gpuTimestampTicks", nullptr },
 				{ "gpuTimestampFrequencyHz", nullptr },
 			} },
-			{ "deviceContextObservationId", nullptr },
+			{ "deviceContextObservationId", DeviceContextObservationId(
+				a_event.deviceContextObservationId, a_event.sessionGeneration) },
 			{ "type", EventKindName(a_event.kind) },
 			{ "scopes", {
 				{ "renderPass", ScopeId(a_event.scopes.renderPass, "render-pass", a_event.sessionGeneration) },

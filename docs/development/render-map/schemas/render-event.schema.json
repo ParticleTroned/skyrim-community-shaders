@@ -128,6 +128,26 @@
       }
     },
     {
+      "if": { "properties": { "type": { "const": "device-context-observed" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["schema", "deviceContextObservationId", "contextPointer", "pointerGeneration", "kind", "creationEvidence"],
+            "properties": {
+              "schema": { "const": "device-context-observation-v1" },
+              "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
+              "contextPointer": { "type": ["string", "null"] },
+              "pointerGeneration": { "type": "integer", "minimum": 1 },
+              "kind": { "const": "immediate" },
+              "creationEvidence": { "const": "initial-immediate-context" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
       "if": { "properties": { "type": { "const": "gap" } } },
       "then": {
         "properties": {
@@ -330,7 +350,8 @@
         "execute-command-list",
         "shader-observed",
         "stage-shader-observed",
-        "technique-resolved"
+        "technique-resolved",
+        "device-context-observed"
       ]
     },
     "frame": {

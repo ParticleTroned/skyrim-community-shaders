@@ -26,6 +26,9 @@ namespace
 {
 	using json = nlohmann::json;
 	using CSX::RenderMap::ControlStatus;
+	constexpr std::uint32_t kContractMajor = 1;
+	constexpr std::uint32_t kContractMinor = 3;
+	constexpr std::uint32_t kSchemaRevision = 4;
 	constexpr std::uint64_t kMaximumFrames = 600;
 	constexpr std::uint64_t kMaximumDurationMs = 10000;
 	constexpr std::uint64_t kMaximumEvents = 65536;
@@ -39,7 +42,8 @@ namespace
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
-		static CSX::Api::ServiceFoundation foundation({ "communityshaders.render-map", 1, 1, 2 });
+		static CSX::Api::ServiceFoundation foundation(
+			{ "communityshaders.render-map", kContractMajor, kContractMinor, kSchemaRevision });
 		static std::once_flag metadataInitialized;
 		std::call_once(metadataInitialized, [&] {
 			foundation.SetServerMetadataProvider([] {
@@ -155,12 +159,15 @@ namespace
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = {
 				{ "service", "communityshaders.render-map" },
-				{ "major", 1 }, { "minor", 2 }, { "schemaRevision", 3 },
+				{ "major", kContractMajor }, { "minor", kContractMinor },
+				{ "schemaRevision", kSchemaRevision },
 				{ "actions", json::array({ "registry", "status", "start", "stop", "capture_events" }) },
-				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "draw-call-v1", "dispatch-call-v1" }) },
-				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "draw", "dispatch" }) },
+				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "device-context-observation-v1", "draw-call-v1", "dispatch-call-v1" }) },
+				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "device-context-observed", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "draw", "dispatch" }) },
 				{ "executionCoverage", {
 					{ "deviceContext", "immediate-only" },
+					{ "typedDeviceContextIdentity", true },
+					{ "commandStreamSequence", true },
 					{ "deferredContexts", false },
 					{ "commandLists", false },
 				} },

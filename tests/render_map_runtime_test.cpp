@@ -291,10 +291,10 @@ namespace
 		config.maxBytes = Collector::EventRecordSize() * 64;
 		config.maxStageShaderObservations = 8;
 		runtime.SetImmediateContext(0x9000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "draw capture did not start");
 		runtime.BindStage(0x9000, ShaderStage::kVertex, 0x3000);
 		runtime.BindStage(0x9000, ShaderStage::kPixel, 0x5000);
 		runtime.BindStage(0x9000, ShaderStage::kCompute, 0x7000);
-		Check(runtime.StartCapture(config) == StartResult::kStarted, "draw capture did not start");
 		runtime.RecordTechniqueResolution({
 			.shaderFound = true,
 			.vertex = {
@@ -315,6 +315,16 @@ namespace
 		auto snapshot = runtime.StopCapture();
 		Check(snapshot && snapshot->stageShaderObservations.size() == 3,
 			"draw and dispatch did not share or create the expected stage identities");
+		const auto context = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDeviceContextObserved; });
+		Check(context != snapshot->events.end(), "immediate context was not declared");
+		Check(context->deviceContextObservationId != 0 && context->payload.words[0] == context->deviceContextObservationId,
+			"immediate-context declaration identity is inconsistent");
+		Check(context->payload.words[1] == 0x9000 && context->payload.words[2] == 1,
+			"immediate-context pointer evidence is wrong");
+		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDeviceContextObserved; }) == 1,
+			"immediate context was declared more than once");
 		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
 		Check(draw != snapshot->events.end(), "immediate-context draw was not recorded");
@@ -324,6 +334,10 @@ namespace
 			"draw did not retain context and selected stage references");
 		Check(draw->payload.words[4] == 24 && draw->payload.words[5] == 3 && draw->payload.words[6] == 2,
 			"draw arguments are wrong");
+		Check(draw->deviceContextObservationId == context->deviceContextObservationId,
+			"draw did not join to the declared immediate context");
+		Check(draw->commandStreamSequence == 4,
+			"draw command-stream sequence did not include the three observed stage binds");
 		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; }) == 1,
 			"non-immediate context draw was recorded");
@@ -333,6 +347,73 @@ namespace
 			"dispatch did not reference its compute shader");
 		Check(dispatch->payload.words[3] == 8 && dispatch->payload.words[4] == 4 &&
 			dispatch->payload.words[5] == 2, "dispatch arguments are wrong");
+		Check(dispatch->deviceContextObservationId == context->deviceContextObservationId,
+			"dispatch did not join to the declared immediate context");
+		Check(dispatch->commandStreamSequence == 5,
+			"dispatch command-stream sequence is not monotonic after draw");
+	}
+
+	void TestExecutionJoinsDeclaredScopes()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::EventRecordSize() * 64;
+		runtime.SetImmediateContext(0xA000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "scope-join capture did not start");
+		runtime.BindStage(0xA000, ShaderStage::kVertex, 0xA100);
+		{
+			auto pass = runtime.EnterRenderPass({ .renderPass = 0xA200, .geometry = 0xA300 });
+			Check(pass.IsActive(), "scope-join render pass did not enter");
+			{
+				auto technique = runtime.EnterTechnique({
+					.shader = 0xA400, .shaderType = 4, .fxpFilename = "Lighting",
+				});
+				Check(technique.IsActive(), "scope-join technique did not enter");
+				{
+					auto geometry = runtime.EnterGeometry({
+						.shader = 0xA400, .renderPass = 0xA200, .geometry = 0xA300,
+						.shaderType = 4,
+					});
+					Check(geometry.IsActive(), "scope-join geometry did not enter");
+					runtime.RecordDraw(0xA000, DrawOperation::kDraw, 3, 0);
+				}
+			}
+		}
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "scope-join capture did not stop");
+		const auto draw = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(draw != snapshot->events.end(), "scope-join draw is missing");
+		Check(draw->scopes.renderPass.observationId != 0 && draw->scopes.technique.observationId != 0 &&
+			draw->scopes.geometry.observationId != 0,
+			"draw did not retain all active typed scopes");
+
+		const auto declaredBeforeDraw = [&](EventKind a_kind, std::uint64_t a_observationId, ScopeKind a_scope) {
+			const auto declaration = std::find_if(snapshot->events.begin(), draw,
+				[&](const EventRecord& a_event) {
+					if (a_event.kind != a_kind)
+						return false;
+					switch (a_scope) {
+					case ScopeKind::kRenderPass:
+						return a_event.scopes.renderPass.observationId == a_observationId;
+					case ScopeKind::kTechnique:
+						return a_event.scopes.technique.observationId == a_observationId;
+					case ScopeKind::kGeometry:
+						return a_event.scopes.geometry.observationId == a_observationId;
+					default:
+						return false;
+					}
+				});
+			return declaration != draw;
+		};
+		Check(declaredBeforeDraw(EventKind::kRenderPassEnter, draw->scopes.renderPass.observationId,
+			ScopeKind::kRenderPass), "draw references an undeclared render-pass scope");
+		Check(declaredBeforeDraw(EventKind::kTechniqueBegin, draw->scopes.technique.observationId,
+			ScopeKind::kTechnique), "draw references an undeclared technique scope");
+		Check(declaredBeforeDraw(EventKind::kGeometrySetupBegin, draw->scopes.geometry.observationId,
+			ScopeKind::kGeometry), "draw references an undeclared geometry scope");
 	}
 }
 
@@ -347,6 +428,7 @@ int main()
 		TestResolvedStageShaderIdentity();
 		TestStageShaderObservationBoundIsExplicit();
 		TestImmediateContextDrawAndDispatchState();
+		TestExecutionJoinsDeclaredScopes();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

@@ -150,13 +150,22 @@ catalogue. If an object has no richer engine-wrapper observation, the collector
 creates an explicitly minimal pointer-based stage observation rather than
 inventing a wrapper, descriptor, cache path, or bytecode digest.
 
+The first observed context call in a capture emits a
+`device-context-observation-v1` declaration with capture-local identity, pointer
+evidence, pointer generation, immediate/deferred kind, and creation evidence.
+Draw and dispatch envelopes use that typed `deviceContextObservationId`. Their
+non-null `commandStreamSequence` is monotonic within the observed immediate
+context and advances across VS/PS/CS binds as well as draw/dispatch calls. It is
+an observed CPU-call order, not a GPU completion timestamp or proof that
+unhooked D3D11 state calls did not occur.
+
 This slice covers the immediate context only. It does not interpret a deferred
 context, command list, or command-list replay as immediate execution. Those
 capabilities remain false in the service registry until context and command-list
 identity can preserve recording order separately from execution order. Render
 targets and the remainder of the pipeline state are also not yet part of the
-draw identity. The context pointer in the execution payload is retained evidence,
-not a typed `deviceContextObservationId`.
+draw identity. The context pointer remains retained evidence alongside—not in
+place of—the typed identity.
 
 ## Layer 4: derived render graph
 

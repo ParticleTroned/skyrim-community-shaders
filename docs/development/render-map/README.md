@@ -62,7 +62,11 @@ Lighting, Effect, and Grass, matching the always-installed core hook owners.
 The D3D11 observer also tracks immediate-context VS/PS/CS bindings and bounded
 draw/dispatch execution. Existing `Draw` and `DrawIndexed` hook owners compose
 the observation directly; other draw variants and dispatch have dedicated
-detours.
+detours. On first observed context activity in each capture it emits one typed
+`device-context-observed` declaration. Later execution events reference that
+capture-local identity and carry a monotonic context-local command sequence;
+the sequence also advances across observed VS/PS/CS binding calls so relative
+state-to-execution order is preserved without emitting an event for every bind.
 
 There is intentionally no UI or automatic capture trigger, so ordinary game
 execution only performs the inactive check. The diagnostic DevBench service

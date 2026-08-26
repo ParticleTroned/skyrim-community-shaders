@@ -35,6 +35,13 @@ The event envelope's `deviceContextObservationId` becomes non-null only after
 this observation exists. A raw context pointer in a payload is evidence, not a
 substitute for the typed ID.
 
+The immediate-only portion is implemented: first observed activity declares
+one capture-local immediate-context identity, and immediate draw/dispatch events
+carry both that identity and a monotonically increasing context-local command
+sequence. Observed VS/PS/CS binds advance the same sequence without generating a
+separate event. Deferred identities, recording epochs, and command-list
+materialization remain deliberately unimplemented.
+
 ### Recording epoch
 
 A deferred context has one active `command-recording` epoch. The epoch starts
@@ -141,7 +148,8 @@ observation bound.
 
 ## Implementation order
 
-1. Add capture-local typed context, recording, and command-list catalogues.
+1. Add capture-local typed context, recording, and command-list catalogues
+   (immediate-context identity complete; deferred/recording/list catalogues pending).
 2. Add schemas and serializer tests without enabling deferred capture.
 3. Consolidate/fan out existing D3D hook ownership and publish exact coverage.
 4. Observe deferred-context creation and start recording epochs.
@@ -152,3 +160,28 @@ observation bound.
 
 Only after steps 1 through 7 pass unit and bounded live tests may the service
 advertise `deferredContexts: true` and `commandLists: true`.
+
+## Live validation: 2026-08-26 main menu
+
+The immediate-context portion passed a four-frame Valve null-HMD capture against
+the integrated PR1-3 build. Capture
+`capture-live-00012b76f46a641c-1` completed on its frame bound without
+truncation or dropped events. Its durable evidence is retained at:
+
+`L:/Codex/evidence/render-map-live-capture/20260826T003444Z-device-context-command-stream/capture/capture-live-00012b76f46a641c-1`
+
+Observed results:
+
+- 537 events, including 135 draws and one immediate-context declaration;
+- context-local command sequences covered 7 through 411;
+- every draw carried a typed context ID and command-stream sequence;
+- no draw preceded its context declaration;
+- command-stream sequences were strictly increasing for the context;
+- all typed observation references resolved to an earlier declaration;
+- no event, shader-observation, or stage-observation drops were reported.
+
+The capture contained no dispatch or deferred-context work. It therefore
+validates immediate draw ordering only; it does not change the advertised
+`deferredContexts: false` or `commandLists: false` coverage. It also confirms
+the next high-value gap: render-target/depth-target identity and VR eye
+attribution are still absent from otherwise well-joined draw evidence.

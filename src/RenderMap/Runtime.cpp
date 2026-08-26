@@ -156,11 +156,33 @@ namespace CSX::RenderMap
 				},
 			};
 		}
+
+		EventPayload DeviceContextObservationPayload(
+			std::uint64_t a_observationId,
+			std::uintptr_t a_context,
+			std::uint64_t a_pointerGeneration) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kDeviceContextObservation),
+				.words = {
+					a_observationId,
+					a_context,
+					a_pointerGeneration,
+					1u,
+				},
+			};
+		}
 	}
 
 	StartResult Runtime::StartCapture(const CollectorConfig& a_config)
 	{
-		return collector.Start(a_config);
+		const auto result = collector.Start(a_config);
+		if (result == StartResult::kStarted) {
+			immediateContextObservationId.store(0, std::memory_order_release);
+			immediateContextObservationGeneration.store(0, std::memory_order_release);
+			immediateContextCommandSequence.store(0, std::memory_order_release);
+		}
+		return result;
 	}
 
 	std::optional<CaptureSnapshot> Runtime::StopCapture(StopReason a_reason)
@@ -270,6 +292,10 @@ namespace CSX::RenderMap
 	{
 		if (immediateContext.exchange(a_context, std::memory_order_acq_rel) == a_context)
 			return;
+		immediateContextPointerGeneration.fetch_add(1, std::memory_order_acq_rel);
+		immediateContextObservationId.store(0, std::memory_order_release);
+		immediateContextObservationGeneration.store(0, std::memory_order_release);
+		immediateContextCommandSequence.store(0, std::memory_order_release);
 		boundVertexShader.store(0, std::memory_order_release);
 		boundPixelShader.store(0, std::memory_order_release);
 		boundComputeShader.store(0, std::memory_order_release);
@@ -282,6 +308,11 @@ namespace CSX::RenderMap
 	{
 		if (a_context == 0 || a_context != immediateContext.load(std::memory_order_acquire))
 			return;
+		if (collector.IsCapturing()) {
+			if (EnsureImmediateContextObservation() == 0)
+				return;
+			NextCommandStreamSequence();
+		}
 		switch (a_stage) {
 		case ShaderStage::kVertex:
 			boundVertexShader.store(a_d3dObject, std::memory_order_release);
@@ -293,6 +324,45 @@ namespace CSX::RenderMap
 			boundComputeShader.store(a_d3dObject, std::memory_order_release);
 			break;
 		}
+	}
+
+	std::uint64_t Runtime::EnsureImmediateContextObservation() noexcept
+	{
+		const auto captureGeneration = collector.ActiveGeneration();
+		const auto context = immediateContext.load(std::memory_order_acquire);
+		if (captureGeneration == 0 || context == 0)
+			return 0;
+
+		if (immediateContextObservationGeneration.load(std::memory_order_acquire) == captureGeneration) {
+			return immediateContextObservationId.load(std::memory_order_acquire);
+		}
+
+		std::lock_guard lock(immediateContextObservationMutex);
+		if (immediateContextObservationGeneration.load(std::memory_order_acquire) == captureGeneration) {
+			return immediateContextObservationId.load(std::memory_order_acquire);
+		}
+
+		const auto observationId = collector.AllocateObservationId(captureGeneration);
+		if (observationId == 0)
+			return 0;
+		const auto recorded = collector.RecordForGeneration(
+			EventKind::kDeviceContextObserved,
+			DeviceContextObservationPayload(
+				observationId, context,
+				immediateContextPointerGeneration.load(std::memory_order_acquire)),
+			observationId,
+			captureGeneration);
+		if (recorded != RecordResult::kRecorded)
+			return 0;
+
+		immediateContextObservationId.store(observationId, std::memory_order_release);
+		immediateContextObservationGeneration.store(captureGeneration, std::memory_order_release);
+		return observationId;
+	}
+
+	std::uint64_t Runtime::NextCommandStreamSequence() noexcept
+	{
+		return immediateContextCommandSequence.fetch_add(1, std::memory_order_acq_rel) + 1;
 	}
 
 	StageShaderObservationResult Runtime::ResolveBoundStage(
@@ -330,6 +400,10 @@ namespace CSX::RenderMap
 			a_context != immediateContext.load(std::memory_order_acquire)) {
 			return;
 		}
+		const auto contextObservationId = EnsureImmediateContextObservation();
+		if (contextObservationId == 0)
+			return;
+		const auto commandStreamSequence = NextCommandStreamSequence();
 		const auto vertex = ResolveBoundStage(
 			ShaderStage::kVertex, boundVertexShader.load(std::memory_order_acquire));
 		const auto pixel = ResolveBoundStage(
@@ -341,7 +415,7 @@ namespace CSX::RenderMap
 			DrawCallPayload(
 				a_context, a_operation, vertex.observationId, pixel.observationId,
 				a_argument0, a_argument1, a_argument2, a_argument3),
-			0, captureGeneration);
+			contextObservationId, captureGeneration, commandStreamSequence);
 	}
 
 	void Runtime::RecordDispatch(
@@ -356,6 +430,10 @@ namespace CSX::RenderMap
 			a_context != immediateContext.load(std::memory_order_acquire)) {
 			return;
 		}
+		const auto contextObservationId = EnsureImmediateContextObservation();
+		if (contextObservationId == 0)
+			return;
+		const auto commandStreamSequence = NextCommandStreamSequence();
 		const auto compute = ResolveBoundStage(
 			ShaderStage::kCompute, boundComputeShader.load(std::memory_order_acquire));
 		const auto captureGeneration = compute.sessionGeneration != 0 ?
@@ -365,7 +443,7 @@ namespace CSX::RenderMap
 			DispatchCallPayload(
 				a_context, a_operation, compute.observationId,
 				a_argument0, a_argument1, a_argument2, a_argument3),
-			0, captureGeneration);
+			contextObservationId, captureGeneration, commandStreamSequence);
 	}
 
 	Collector::ScopeGuard Runtime::EnterGeometry(const GeometryBoundary& a_boundary) noexcept

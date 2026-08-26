@@ -3,6 +3,7 @@
 #include "RenderMap/Collector.h"
 
 #include <cstdint>
+#include <mutex>
 #include <optional>
 
 namespace CSX::RenderMap
@@ -17,6 +18,7 @@ namespace CSX::RenderMap
 		kTechniqueResolution = 6,
 		kDrawCall = 7,
 		kDispatchCall = 8,
+		kDeviceContextObservation = 9,
 	};
 
 	enum class DrawOperation : std::uint8_t
@@ -133,6 +135,8 @@ namespace CSX::RenderMap
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 
 	private:
+		std::uint64_t EnsureImmediateContextObservation() noexcept;
+		std::uint64_t NextCommandStreamSequence() noexcept;
 		StageShaderObservationResult ResolveBoundStage(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) noexcept;
@@ -142,6 +146,11 @@ namespace CSX::RenderMap
 		std::atomic_uintptr_t boundVertexShader{ 0 };
 		std::atomic_uintptr_t boundPixelShader{ 0 };
 		std::atomic_uintptr_t boundComputeShader{ 0 };
+		std::atomic_uint64_t immediateContextPointerGeneration{ 0 };
+		std::atomic_uint64_t immediateContextObservationId{ 0 };
+		std::atomic_uint64_t immediateContextObservationGeneration{ 0 };
+		std::atomic_uint64_t immediateContextCommandSequence{ 0 };
+		std::mutex immediateContextObservationMutex;
 	};
 
 	Runtime& GetRuntime() noexcept;

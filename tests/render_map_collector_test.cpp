@@ -78,7 +78,8 @@ namespace
 					EventKind::kTechniqueBegin,
 					EventKind::kTechniqueEnd);
 				Check(technique.IsActive(), "technique scope was not entered");
-				Check(collector.Record(EventKind::kDraw, {}, 99) == RecordResult::kRecorded, "draw was not recorded");
+				Check(collector.Record(EventKind::kDraw, {}, 99, 17) == RecordResult::kRecorded,
+					"draw was not recorded");
 			}
 		}
 
@@ -102,6 +103,7 @@ namespace
 		Check(snapshot->events[2].scopes.renderPass.observationId == passObservation, "draw lacks its pass scope");
 		Check(snapshot->events[2].scopes.technique.observationId == techniqueObservation, "draw lacks its technique scope");
 		Check(snapshot->events[2].deviceContextObservationId == 99, "draw lacks its device-context identity");
+		Check(snapshot->events[2].commandStreamSequence == 17, "draw lacks its command-stream sequence");
 		Check(snapshot->events[3].scopes.technique.observationId == techniqueObservation, "technique end popped too early");
 		Check(snapshot->events[4].scopes.technique.observationId == 0, "pass end retained the completed technique");
 	}

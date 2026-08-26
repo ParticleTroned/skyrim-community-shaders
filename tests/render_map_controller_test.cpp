@@ -2,6 +2,7 @@
 #include "RenderMap/Controller.h"
 #include "RenderMap/Serialization.h"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -228,15 +229,31 @@ namespace
 		Check(resolved["observationRefs"].size() == 1 &&
 			resolved["observationRefs"][0]["kind"] == "vertex-shader",
 			"resolved stage reference is wrong");
-		const auto& draw = page["events"][5];
+		const auto drawIterator = std::find_if(
+			page["events"].begin(), page["events"].end(),
+			[](const nlohmann::json& a_event) { return a_event["type"] == "draw"; });
+		Check(drawIterator != page["events"].end(), "serialized draw event is missing");
+		const auto& draw = *drawIterator;
 		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v1",
 			"draw event schema is wrong");
 		Check(draw["payload"]["operation"] == "draw-indexed" &&
 			draw["payload"]["arguments"]["indexCount"] == 24,
 			"draw operation arguments are missing");
-		Check(draw["observationRefs"].size() == 1 &&
-			draw["observationRefs"][0]["role"] == "bound-at-draw",
+		Check(draw["observationRefs"].size() == 2 &&
+			draw["observationRefs"][0]["role"] == "immediate-context" &&
+			draw["observationRefs"][1]["role"] == "bound-at-draw",
 			"draw did not join to the selected vertex shader");
+		Check(draw["deviceContextObservationId"].is_string(),
+			"draw did not serialize its typed immediate-context identity");
+		Check(draw["execution"]["commandStreamSequence"] == 2,
+			"draw did not serialize its context-local command sequence");
+		const auto contextIterator = std::find_if(
+			page["events"].begin(), page["events"].end(),
+			[](const nlohmann::json& a_event) { return a_event["type"] == "device-context-observed"; });
+		Check(contextIterator != page["events"].end(), "serialized context declaration is missing");
+		Check((*contextIterator)["payload"]["schema"] == "device-context-observation-v1" &&
+			(*contextIterator)["payload"]["kind"] == "immediate",
+			"serialized context declaration is malformed");
 	}
 
 	void TestDurableArtifacts()

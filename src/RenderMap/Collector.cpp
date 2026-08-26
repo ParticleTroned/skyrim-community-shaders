@@ -471,16 +471,19 @@ namespace CSX::RenderMap
 	RecordResult Collector::Record(
 		EventKind a_kind,
 		const EventPayload& a_payload,
-		std::uint64_t a_deviceContextObservationId) noexcept
+		std::uint64_t a_deviceContextObservationId,
+		std::uint64_t a_commandStreamSequence) noexcept
 	{
-		return RecordForGeneration(a_kind, a_payload, a_deviceContextObservationId, 0);
+		return RecordForGeneration(
+			a_kind, a_payload, a_deviceContextObservationId, 0, a_commandStreamSequence);
 	}
 
 	RecordResult Collector::RecordForGeneration(
 		EventKind a_kind,
 		const EventPayload& a_payload,
 		std::uint64_t a_deviceContextObservationId,
-		std::uint64_t a_expectedGeneration) noexcept
+		std::uint64_t a_expectedGeneration,
+		std::uint64_t a_commandStreamSequence) noexcept
 	{
 		auto session = activeSession.load(std::memory_order_acquire);
 		if (!session)
@@ -544,6 +547,7 @@ namespace CSX::RenderMap
 		record.timestampTicks = timestamp;
 		record.threadId = CurrentThreadId();
 		record.deviceContextObservationId = a_deviceContextObservationId;
+		record.commandStreamSequence = a_commandStreamSequence;
 		record.frame = state.frame;
 		record.scopes = SnapshotScopes(state);
 		record.payload = a_payload;

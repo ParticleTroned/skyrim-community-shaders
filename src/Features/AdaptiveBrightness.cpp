@@ -36,6 +36,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	brightness,
 	advanced,
 	bloomAdvanced,
+	waterAdvanced,
 	skyBrightnessMult,
 	directionalLightMult,
 	pointLightMult,
@@ -1398,9 +1399,9 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 		if (ImGui::BeginTabItem("Lighting")) {
 			drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
 
-			ImGui::Checkbox("Use Detailed Lighting Adjustments", &a_profile.advanced);
+			ImGui::Checkbox("Show Detailed Lighting Controls", &a_profile.advanced);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enables the detailed lighting and atmosphere values for this profile only.");
+				ImGui::Text("Shows and enables the detailed lighting and atmosphere values for this profile only.");
 			}
 			if (a_profile.advanced) {
 				ImGui::Indent();
@@ -1444,6 +1445,14 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 
 		if (ImGui::BeginTabItem("Water")) {
 			WaterAppearance::DrawProfileControls(a_profile.water);
+			ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Shows detailed water surface, reflection, refraction, and clarity controls for this profile.");
+			if (a_profile.waterAdvanced) {
+				ImGui::Indent();
+				WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
+				ImGui::Unindent();
+			}
 			ImGui::EndTabItem();
 		}
 

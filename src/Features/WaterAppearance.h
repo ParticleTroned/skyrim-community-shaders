@@ -37,6 +37,7 @@ struct WaterAppearance
 	static_assert(sizeof(Settings) == 48);
 
 	static void DrawProfileControls(Profile& a_profile);
+	static void DrawAdvancedProfileSettings(Profile& a_profile);
 	static Settings GetCommonBufferData(const Profile& a_profile);
 	static Profile LerpProfiles(const Profile& a_a, const Profile& a_b, float a_t);
 	static void SanitizeProfile(Profile& a_profile);

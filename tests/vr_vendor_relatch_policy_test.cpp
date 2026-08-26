@@ -32,6 +32,35 @@ namespace
 		       !CanServiceQueuedPostMutationRecovery(true, true);
 	}
 
+	constexpr bool CoversMaintenanceWorkSelection()
+	{
+		if (ToMask(MaintenanceWork::None) != 0u ||
+			ToMask(MaintenanceWork::RenderTargetRelatch) != (1u << 0) ||
+			ToMask(MaintenanceWork::PreMutationWatchdog) != (1u << 1) ||
+			ToMask(MaintenanceWork::PostMutationWatchdog) != (1u << 2) ||
+			kAllMaintenanceWork != 0b111u) {
+			return false;
+		}
+
+		for (std::uint32_t active = 0; active < 8u; ++active) {
+			const auto resolved = ResolveMaintenanceWork(
+				(active & 0b001u) != 0,
+				(active & 0b010u) != 0 ? 1u : 0u,
+				(active & 0b100u) != 0 ? 1u : 0u);
+			if (resolved != active ||
+				HasMaintenanceWork(resolved, MaintenanceWork::RenderTargetRelatch) !=
+					((active & 0b001u) != 0) ||
+				HasMaintenanceWork(resolved, MaintenanceWork::PreMutationWatchdog) !=
+					((active & 0b010u) != 0) ||
+				HasMaintenanceWork(resolved, MaintenanceWork::PostMutationWatchdog) !=
+					((active & 0b100u) != 0)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	constexpr bool CoversWorkGateMasks()
 	{
 		if (ToMask(WorkGateSource::None) != 0u ||
@@ -2770,6 +2799,7 @@ namespace
 	static_assert(CoversBufferedDoorRequestCoalescing());
 	static_assert(CoversPhysicalRelatchFrameAdmission());
 	static_assert(CoversConsumedEmergencyRecoveryAdmission());
+	static_assert(CoversMaintenanceWorkSelection());
 	static_assert(CoversLifecycleMutationAdmission());
 	static_assert(CoversDispatchAdmission());
 	static_assert(CoversNativeRestorePresentationAdmission());

@@ -26,7 +26,7 @@ file_common_defines:
             - VANILLA_FRESNEL
             - VOLUMETRIC_SHADOWS
             - WATER_EFFECTS
-            - WETNESS_EFFECTS
+            - WETTERNESS
         VSHADER: *id002
     DistantTree.hlsl:
         CSHADER: *id001
@@ -57,7 +57,7 @@ file_common_defines:
             - VANILLA_FRESNEL
             - VOLUMETRIC_SHADOWS
             - WATER_EFFECTS
-            - WETNESS_EFFECTS
+            - WETTERNESS
         VSHADER: *id003
     ISCompositeLensFlareVolumetricLighting.hlsl:
         CSHADER: *id001
@@ -123,7 +123,7 @@ file_common_defines:
             - VC
             - VOLUMETRIC_SHADOWS
             - WATER_EFFECTS
-            - WETNESS_EFFECTS
+            - WETTERNESS
         VSHADER:
             - ADAPTIVE_BALANCE
             - CLOUD_SHADOWS
@@ -145,7 +145,7 @@ file_common_defines:
             - VANILLA_FRESNEL
             - VOLUMETRIC_SHADOWS
             - WATER_EFFECTS
-            - WETNESS_EFFECTS
+            - WETTERNESS
     Particle.hlsl:
         CSHADER: *id001
         PSHADER: *id002
@@ -170,7 +170,7 @@ file_common_defines:
             - VANILLA_FRESNEL
             - VOLUMETRIC_SHADOWS
             - WATER_EFFECTS
-            - WETNESS_EFFECTS
+            - WETTERNESS
         VSHADER: *id004
     Sky.hlsl:
         CSHADER: *id001
@@ -191,7 +191,7 @@ file_common_defines:
             - VANILLA_FRESNEL
             - VOLUMETRIC_SHADOWS
             - WATER_EFFECTS
-            - WETNESS_EFFECTS
+            - WETTERNESS
         VSHADER: *id005
     Utility.hlsl:
         CSHADER: *id001
@@ -220,7 +220,7 @@ file_common_defines:
             - VOLUMETRIC_SHADOWS
             - WATER
             - WATER_EFFECTS
-            - WETNESS_EFFECTS
+            - WETTERNESS
         VSHADER: *id007
 warnings:
     x4000:use of potentially uninitialized variable (skylighting::sample):
@@ -1128,7 +1128,7 @@ shaders:
                   - VANILLA_FRESNEL
                   - VOLUMETRIC_SHADOWS
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: BloodSplatter:Pixel:0
                     defines: &id009
@@ -1156,7 +1156,7 @@ shaders:
                   - VOLUMETRIC_SHADOWS
                   - VSHADER
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: BloodSplatter:Vertex:0
                     defines: *id009
@@ -11929,7 +11929,7 @@ shaders:
                   - VANILLA_FRESNEL
                   - VOLUMETRIC_SHADOWS
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: ImageSpace:Pixel:67
                     defines: *id001
@@ -11956,7 +11956,7 @@ shaders:
                   - VOLUMETRIC_SHADOWS
                   - VSHADER
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: ImageSpace:Vertex:67
                     defines: *id001
@@ -12206,7 +12206,7 @@ shaders:
                   - VC
                   - VOLUMETRIC_SHADOWS
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: Lighting:Pixel:1
                     defines: *id001
@@ -15377,7 +15377,7 @@ shaders:
                   - VOLUMETRIC_SHADOWS
                   - VSHADER
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: Lighting:Vertex:0
                     defines: *id001
@@ -15578,7 +15578,7 @@ shaders:
                   - VANILLA_FRESNEL
                   - VOLUMETRIC_SHADOWS
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: Grass:Pixel:10007
                     defines: *id014
@@ -15610,7 +15610,7 @@ shaders:
                   - VOLUMETRIC_SHADOWS
                   - VSHADER
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: Grass:Vertex:10007
                     defines: *id014
@@ -15643,7 +15643,7 @@ shaders:
                   - VANILLA_FRESNEL
                   - VOLUMETRIC_SHADOWS
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: Sky:Pixel:0
                     defines: &id511
@@ -15743,7 +15743,7 @@ shaders:
                   - VOLUMETRIC_SHADOWS
                   - VSHADER
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: Sky:Vertex:0
                     defines: *id511
@@ -19084,7 +19084,7 @@ shaders:
                   - VOLUMETRIC_SHADOWS
                   - WATER
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: Water:Pixel:0
                     defines: &id582
@@ -21662,7 +21662,7 @@ shaders:
                   - VSHADER
                   - WATER
                   - WATER_EFFECTS
-                  - WETNESS_EFFECTS
+                  - WETTERNESS
               entries:
                   - entry: Water:Vertex:0
                     defines: *id582

@@ -7,6 +7,7 @@
 //
 // Hair.hlsli transitively includes the real Common/SharedData.hlsli -- do
 // not redeclare its types. hairSpecularSettings is shadowed below instead.
+#define COMPUTESHADER
 #define CS_HAIR
 #define HAIR
 

@@ -13,7 +13,8 @@ namespace Util::GenerationClaim
 	{
 		CacheHit,
 		Claimed,
-		MustWait
+		MustWait,
+		RejectedStale
 	};
 
 	/**
@@ -40,6 +41,10 @@ namespace Util::GenerationClaim
 		uint64_t a_liveGeneration,
 		MakePending&& a_makePending)
 	{
+		if (a_callerGeneration && *a_callerGeneration != a_liveGeneration) {
+			return { ClaimOutcome::RejectedStale, a_map.end() };
+		}
+
 		if (auto it = a_map.find(a_key); it != a_map.end()) {
 			if (Traits::IsPending(it->second)) {
 				return { ClaimOutcome::MustWait, it };

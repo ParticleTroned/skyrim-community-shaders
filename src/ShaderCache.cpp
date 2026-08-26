@@ -1847,6 +1847,9 @@ namespace SIE
 				cache.IncCacheHitTasks();
 				return cachedBlob;
 			}
+			if (claimResult == ShaderCache::ClaimResult::RejectedStale) {
+				return nullptr;
+			}
 
 			const auto type = shader.shaderType.get();
 
@@ -2939,6 +2942,15 @@ namespace SIE
 		std::unique_lock lockM{ mapMutex };
 
 		for (;;) {
+			const auto liveGeneration = compilationSet.generation.load(std::memory_order_acquire);
+			if (a_taskGeneration && *a_taskGeneration != liveGeneration) {
+				logger::debug(
+					"Discarding stale-generation shader claim (task gen {}, current {}): {}",
+					*a_taskGeneration,
+					liveGeneration,
+					key);
+				return { ClaimResult::RejectedStale, nullptr };
+			}
 			if (deferredEvictions.contains(key)) {
 				logger::debug("Shader eviction in progress, waiting: {}", key);
 				mapCV.wait(lockM);
@@ -2949,7 +2961,7 @@ namespace SIE
 				shaderMap,
 				key,
 				a_taskGeneration,
-				compilationSet.generation.load(std::memory_order_acquire),
+				liveGeneration,
 				[](uint64_t a_generation) {
 					return ShaderCacheResult{
 						nullptr,
@@ -2968,6 +2980,9 @@ namespace SIE
 				logger::debug("Shader compilation in progress, waiting: {}", key);
 				mapCV.wait(lockM);
 				continue;
+			}
+			if (outcome == ClaimOutcome::RejectedStale) {
+				return { ClaimResult::RejectedStale, nullptr };
 			}
 			return { ClaimResult::Claimed, nullptr };
 		}

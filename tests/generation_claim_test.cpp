@@ -162,6 +162,23 @@ namespace
 		Require(map.at("shader").generation == 6);
 	}
 
+	void TestStaleClaims()
+	{
+		Map map;
+		Require(Claim(map, "absent", 4, 5) == ClaimOutcome::RejectedStale);
+		Require(!map.contains("absent"));
+
+		Require(Claim(map, "pending", 5, 5) == ClaimOutcome::Claimed);
+		Require(Claim(map, "pending", 4, 5) == ClaimOutcome::RejectedStale);
+		Require(map.at("pending").status == EntryStatus::Pending);
+		Require(map.at("pending").generation == 5);
+
+		Require(Publish(map, "completed", 5, 5, true) == PublishOutcome::Published);
+		Require(Claim(map, "completed", 4, 5) == ClaimOutcome::RejectedStale);
+		Require(map.at("completed").status == EntryStatus::Completed);
+		Require(map.at("completed").generation == 5);
+	}
+
 	void TestCompletedAndFailedEntries()
 	{
 		Map map;
@@ -209,6 +226,7 @@ int main()
 {
 	TestBasicLifecycle();
 	TestStaleOwnership();
+	TestStaleClaims();
 	TestCompletedAndFailedEntries();
 	TestConcurrentClaimers();
 	return 0;

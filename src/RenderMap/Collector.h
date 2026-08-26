@@ -20,6 +20,7 @@ namespace CSX::RenderMap
 	inline constexpr std::size_t kMaximumShaderDefinesSuffixLength = 95;
 	inline constexpr std::size_t kMaximumShaderCachePathLength = 383;
 	inline constexpr std::size_t kSha256HexLength = 64;
+	inline constexpr std::size_t kMaximumRenderTargets = 8;
 
 	enum class EventKind : std::uint16_t
 	{
@@ -57,6 +58,7 @@ namespace CSX::RenderMap
 		kStageShaderObserved,
 		kTechniqueResolved,
 		kDeviceContextObserved,
+		kTargetViewObserved,
 	};
 
 	enum class Eye : std::uint8_t
@@ -117,6 +119,8 @@ namespace CSX::RenderMap
 		std::uint8_t maxScopeDepth{ 8 };
 		std::uint32_t maxShaderObservations{ 1024 };
 		std::uint32_t maxStageShaderObservations{ 4096 };
+		std::uint32_t maxTargetViewObservations{ 4096 };
+		std::uint32_t maxTargetBindingObservations{ 4096 };
 	};
 
 	struct FrameContext
@@ -151,7 +155,7 @@ namespace CSX::RenderMap
 	struct EventRecord
 	{
 		std::uint16_t schemaMajor{ 1 };
-		std::uint16_t schemaMinor{ 5 };
+		std::uint16_t schemaMinor{ 6 };
 		EventKind kind{ EventKind::kCaptureMarker };
 		std::uint16_t reserved{ 0 };
 		std::uint64_t captureNumericId{ 0 };
@@ -161,6 +165,7 @@ namespace CSX::RenderMap
 		std::uint64_t threadId{ 0 };
 		std::uint64_t deviceContextObservationId{ 0 };
 		std::uint64_t commandStreamSequence{ 0 };
+		std::uint64_t targetBindingObservationId{ 0 };
 		FrameContext frame;
 		ScopeSnapshot scopes;
 		EventPayload payload;
@@ -182,6 +187,8 @@ namespace CSX::RenderMap
 		std::uint64_t scopeMismatch{ 0 };
 		std::uint64_t droppedShaderObservations{ 0 };
 		std::uint64_t droppedStageShaderObservations{ 0 };
+		std::uint64_t droppedTargetViewObservations{ 0 };
+		std::uint64_t droppedTargetBindingObservations{ 0 };
 	};
 
 	enum class ShaderStage : std::uint8_t
@@ -256,6 +263,56 @@ namespace CSX::RenderMap
 		bool firstSeen{ false };
 	};
 
+	enum class TargetViewKind : std::uint8_t
+	{
+		kRenderTarget = 1,
+		kDepthTarget = 2,
+	};
+
+	struct TargetViewObservationInput
+	{
+		TargetViewKind kind{ TargetViewKind::kRenderTarget };
+		std::uintptr_t d3dObject{ 0 };
+	};
+
+	struct TargetViewObservationRecord
+	{
+		std::uint64_t observationId{ 0 };
+		TargetViewKind kind{ TargetViewKind::kRenderTarget };
+		std::uintptr_t pointerEvidence{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+	};
+
+	struct TargetViewObservationResult
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint64_t sessionGeneration{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		bool firstSeen{ false };
+	};
+
+	struct TargetBindingObservationInput
+	{
+		std::array<std::uint64_t, kMaximumRenderTargets> renderTargetObservationIds{};
+		std::uint64_t depthTargetObservationId{ 0 };
+		std::uint8_t renderTargetCount{ 0 };
+	};
+
+	struct TargetBindingObservationRecord
+	{
+		std::uint64_t observationId{ 0 };
+		std::array<std::uint64_t, kMaximumRenderTargets> renderTargetObservationIds{};
+		std::uint64_t depthTargetObservationId{ 0 };
+		std::uint8_t renderTargetCount{ 0 };
+	};
+
+	struct TargetBindingObservationResult
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint64_t sessionGeneration{ 0 };
+		bool firstSeen{ false };
+	};
+
 	struct CaptureSnapshot
 	{
 		CollectorConfig config;
@@ -268,6 +325,8 @@ namespace CSX::RenderMap
 		std::vector<EventRecord> events;
 		std::vector<ShaderObservationRecord> shaderObservations;
 		std::vector<StageShaderObservationRecord> stageShaderObservations;
+		std::vector<TargetViewObservationRecord> targetViewObservations;
+		std::vector<TargetBindingObservationRecord> targetBindingObservations;
 	};
 
 	class Collector
@@ -323,13 +382,15 @@ namespace CSX::RenderMap
 			EventKind a_kind,
 			const EventPayload& a_payload = {},
 			std::uint64_t a_deviceContextObservationId = 0,
-			std::uint64_t a_commandStreamSequence = 0) noexcept;
+			std::uint64_t a_commandStreamSequence = 0,
+			std::uint64_t a_targetBindingObservationId = 0) noexcept;
 		RecordResult RecordForGeneration(
 			EventKind a_kind,
 			const EventPayload& a_payload,
 			std::uint64_t a_deviceContextObservationId,
 			std::uint64_t a_expectedGeneration,
-			std::uint64_t a_commandStreamSequence = 0) noexcept;
+			std::uint64_t a_commandStreamSequence = 0,
+			std::uint64_t a_targetBindingObservationId = 0) noexcept;
 
 		ScopeGuard EnterScope(
 			ScopeKind a_kind,
@@ -346,6 +407,8 @@ namespace CSX::RenderMap
 		StageShaderObservationResult FindStageShader(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) noexcept;
+		TargetViewObservationResult ObserveTargetView(const TargetViewObservationInput& a_input) noexcept;
+		TargetBindingObservationResult ObserveTargetBinding(const TargetBindingObservationInput& a_input) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 		void SetThreadFrameContext(const FrameContext& a_context) noexcept;
 		FrameContext GetThreadFrameContext() const noexcept;

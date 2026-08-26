@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -353,6 +355,109 @@ namespace
 			"dispatch command-stream sequence is not monotonic after draw");
 	}
 
+	void TestImmediateContextOutputMergerState()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::EventRecordSize() * 64;
+		runtime.SetImmediateContext(0xB000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "output-merger capture did not start");
+
+		const std::uintptr_t renderTargets[] = { 0xB100, 0xB200, 0 };
+		runtime.BindRenderTargets(0xB000, 3, renderTargets, 0xB300);
+		runtime.BindRenderTargets(0xB000, 3, renderTargets, 0xB300);
+		runtime.RecordDraw(0xB000, DrawOperation::kDraw, 3);
+		runtime.BindRenderTargets(0xB000, 0, nullptr, 0, true);
+		runtime.RecordDraw(0xB000, DrawOperation::kDraw, 4);
+		runtime.BindRenderTargets(0xB000, 0, nullptr, 0);
+		runtime.RecordDraw(0xB000, DrawOperation::kDraw, 5);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->targetViewObservations.size() == 3,
+			"render and depth target views were not deduplicated");
+		Check(snapshot->targetBindingObservations.size() == 2,
+			"bound and explicitly unbound target sets were not catalogued exactly once");
+		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kTargetViewObserved; }) == 3,
+			"target-view first-seen declarations are wrong");
+		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kRenderTargetBind; }) == 3,
+			"output-merger bind calls were not preserved");
+
+		std::vector<const EventRecord*> draws;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kDraw)
+				draws.push_back(std::addressof(event));
+		}
+		Check(draws.size() == 3, "output-merger test draw count is wrong");
+		const auto boundId = snapshot->targetBindingObservations[0].observationId;
+		const auto unboundId = snapshot->targetBindingObservations[1].observationId;
+		Check(draws[0]->targetBindingObservationId == boundId,
+			"draw did not join to the active output-merger binding");
+		Check(draws[1]->targetBindingObservationId == boundId,
+			"KEEP_RENDER_TARGETS changed the active output-merger binding");
+		Check(draws[2]->targetBindingObservationId == unboundId,
+			"explicit target unbind was not joined to the next draw");
+		Check(draws[0]->commandStreamSequence == 3 && draws[1]->commandStreamSequence == 5 &&
+			draws[2]->commandStreamSequence == 7,
+			"output-merger calls were not included in monotonic command order");
+		Check(snapshot->targetBindingObservations[0].renderTargetCount == 3 &&
+			snapshot->targetBindingObservations[0].renderTargetObservationIds[0] != 0 &&
+			snapshot->targetBindingObservations[0].renderTargetObservationIds[1] != 0 &&
+			snapshot->targetBindingObservations[0].renderTargetObservationIds[2] == 0 &&
+			snapshot->targetBindingObservations[0].depthTargetObservationId != 0,
+			"output-merger binding did not preserve slots, nulls, and depth target");
+	}
+
+	void TestOutputMergerBoundsAreExplicit()
+	{
+		auto viewConfig = Config();
+		viewConfig.maxEvents = 32;
+		viewConfig.maxBytes = Collector::EventRecordSize() * 32;
+		viewConfig.maxTargetViewObservations = 1;
+		Runtime viewRuntime;
+		viewRuntime.SetImmediateContext(0xC000);
+		Check(viewRuntime.StartCapture(viewConfig) == StartResult::kStarted,
+			"bounded target-view capture did not start");
+		const std::uintptr_t renderTargets[] = { 0xC100, 0xC200 };
+		viewRuntime.BindRenderTargets(0xC000, 2, renderTargets, 0xC300);
+		viewRuntime.RecordDraw(0xC000, DrawOperation::kDraw, 3);
+		auto viewSnapshot = viewRuntime.StopCapture();
+		Check(viewSnapshot && viewSnapshot->targetViewObservations.size() == 1,
+			"target-view catalogue exceeded its bound");
+		Check(viewSnapshot->targetBindingObservations.empty(),
+			"incomplete target views were collapsed into a binding identity");
+		Check(viewSnapshot->statistics.droppedTargetViewObservations == 2,
+			"target-view overflow was not reported");
+		const auto viewDraw = std::find_if(viewSnapshot->events.begin(), viewSnapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(viewDraw != viewSnapshot->events.end() && viewDraw->targetBindingObservationId == 0,
+			"incomplete target views produced a draw binding join");
+
+		auto bindingConfig = Config();
+		bindingConfig.maxEvents = 32;
+		bindingConfig.maxBytes = Collector::EventRecordSize() * 32;
+		bindingConfig.maxTargetBindingObservations = 1;
+		Runtime bindingRuntime;
+		bindingRuntime.SetImmediateContext(0xD000);
+		Check(bindingRuntime.StartCapture(bindingConfig) == StartResult::kStarted,
+			"bounded target-binding capture did not start");
+		const std::uintptr_t oneTarget[] = { 0xD100 };
+		bindingRuntime.BindRenderTargets(0xD000, 1, oneTarget, 0);
+		bindingRuntime.BindRenderTargets(0xD000, 0, nullptr, 0);
+		bindingRuntime.RecordDraw(0xD000, DrawOperation::kDraw, 3);
+		auto bindingSnapshot = bindingRuntime.StopCapture();
+		Check(bindingSnapshot && bindingSnapshot->targetBindingObservations.size() == 1,
+			"target-binding catalogue exceeded its bound");
+		Check(bindingSnapshot->statistics.droppedTargetBindingObservations == 1,
+			"target-binding overflow was not reported");
+		const auto bindingDraw = std::find_if(bindingSnapshot->events.begin(), bindingSnapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
+		Check(bindingDraw != bindingSnapshot->events.end() && bindingDraw->targetBindingObservationId == 0,
+			"overflowed target binding was silently joined to an existing binding");
+	}
+
 	void TestExecutionJoinsDeclaredScopes()
 	{
 		Runtime runtime;
@@ -428,6 +533,8 @@ int main()
 		TestResolvedStageShaderIdentity();
 		TestStageShaderObservationBoundIsExplicit();
 		TestImmediateContextDrawAndDispatchState();
+		TestImmediateContextOutputMergerState();
+		TestOutputMergerBoundsAreExplicit();
 		TestExecutionJoinsDeclaredScopes();
 		return 0;
 	} catch (const std::exception& error) {

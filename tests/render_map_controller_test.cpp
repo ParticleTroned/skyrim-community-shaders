@@ -209,10 +209,16 @@ namespace
 		}
 		runtime.SetImmediateContext(0x9000);
 		runtime.BindStage(0x9000, ShaderStage::kVertex, 0x3000);
+		const std::uintptr_t renderTargets[] = { 0x9100, 0x9200 };
+		runtime.BindRenderTargets(0x9000, 2, renderTargets, 0x9300);
 		runtime.RecordDraw(0x9000, DrawOperation::kDrawIndexed, 24, 3, 2);
 		std::shared_ptr<const CompletedCapture> capture;
 		Check(controller.Stop(descriptor.captureId, capture) == ControlStatus::kSuccess,
 			"stage serialization capture did not stop");
+		const auto summary = SerializeCaptureSummary(*capture);
+		Check(summary["completion"]["targetViewObservationCount"] == 3 &&
+			summary["completion"]["targetBindingObservationCount"] == 1,
+			"target catalogue counts are missing from the capture summary");
 		const auto page = SerializeEventPage(*capture, 0, 20, 42);
 		const auto& observed = page["events"][2];
 		Check(observed["type"] == "stage-shader-observed", "stage first-seen event type is wrong");
@@ -234,18 +240,24 @@ namespace
 			[](const nlohmann::json& a_event) { return a_event["type"] == "draw"; });
 		Check(drawIterator != page["events"].end(), "serialized draw event is missing");
 		const auto& draw = *drawIterator;
-		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v1",
+		Check(draw["type"] == "draw" && draw["payload"]["schema"] == "draw-call-v2",
 			"draw event schema is wrong");
+		Check(draw["payload"]["targetBindingObservationId"].is_string(),
+			"draw did not serialize its output-merger binding");
 		Check(draw["payload"]["operation"] == "draw-indexed" &&
 			draw["payload"]["arguments"]["indexCount"] == 24,
 			"draw operation arguments are missing");
-		Check(draw["observationRefs"].size() == 2 &&
+		Check(draw["observationRefs"].size() == 6 &&
 			draw["observationRefs"][0]["role"] == "immediate-context" &&
-			draw["observationRefs"][1]["role"] == "bound-at-draw",
-			"draw did not join to the selected vertex shader");
+			draw["observationRefs"][1]["role"] == "output-merger-binding" &&
+			draw["observationRefs"][2]["role"] == "bound-render-target-0" &&
+			draw["observationRefs"][3]["role"] == "bound-render-target-1" &&
+			draw["observationRefs"][4]["role"] == "bound-depth-target" &&
+			draw["observationRefs"][5]["role"] == "bound-at-draw",
+			"draw did not join to its selected shader and output-merger state");
 		Check(draw["deviceContextObservationId"].is_string(),
 			"draw did not serialize its typed immediate-context identity");
-		Check(draw["execution"]["commandStreamSequence"] == 2,
+		Check(draw["execution"]["commandStreamSequence"] == 3,
 			"draw did not serialize its context-local command sequence");
 		const auto contextIterator = std::find_if(
 			page["events"].begin(), page["events"].end(),

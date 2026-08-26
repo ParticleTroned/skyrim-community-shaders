@@ -225,6 +225,50 @@ namespace CSX::RenderMap
 				StoredString(a_record.bytecodeSha256) == a_input.bytecodeSha256 &&
 				StoredString(a_record.cachePath) == a_input.cachePath;
 		}
+
+		std::uint64_t HashTargetViewIdentity(const TargetViewObservationInput& a_input) noexcept
+		{
+			constexpr std::uint64_t offset = 14695981039346656037ull;
+			constexpr std::uint64_t prime = 1099511628211ull;
+			std::uint64_t hash = offset;
+			const auto append = [&](const auto& a_value) {
+				const auto* bytes = reinterpret_cast<const unsigned char*>(std::addressof(a_value));
+				for (std::size_t index = 0; index < sizeof(a_value); ++index) {
+					hash ^= bytes[index];
+					hash *= prime;
+				}
+			};
+			append(a_input.kind);
+			append(a_input.d3dObject);
+			return hash;
+		}
+
+		std::uint64_t HashTargetBindingIdentity(const TargetBindingObservationInput& a_input) noexcept
+		{
+			constexpr std::uint64_t offset = 14695981039346656037ull;
+			constexpr std::uint64_t prime = 1099511628211ull;
+			std::uint64_t hash = offset;
+			const auto appendBytes = [&](const void* a_data, std::size_t a_size) {
+				const auto* bytes = static_cast<const unsigned char*>(a_data);
+				for (std::size_t index = 0; index < a_size; ++index) {
+					hash ^= bytes[index];
+					hash *= prime;
+				}
+			};
+			appendBytes(a_input.renderTargetObservationIds.data(), sizeof(a_input.renderTargetObservationIds));
+			appendBytes(&a_input.depthTargetObservationId, sizeof(a_input.depthTargetObservationId));
+			appendBytes(&a_input.renderTargetCount, sizeof(a_input.renderTargetCount));
+			return hash;
+		}
+
+		bool SameTargetBindingIdentity(
+			const TargetBindingObservationRecord& a_record,
+			const TargetBindingObservationInput& a_input) noexcept
+		{
+			return a_record.renderTargetCount == a_input.renderTargetCount &&
+				a_record.depthTargetObservationId == a_input.depthTargetObservationId &&
+				a_record.renderTargetObservationIds == a_input.renderTargetObservationIds;
+		}
 	}
 
 	struct Collector::Session
@@ -251,6 +295,14 @@ namespace CSX::RenderMap
 		std::mutex stageShaderObservationMutex;
 		std::unordered_multimap<std::uint64_t, std::uint32_t> stageShaderObservationLookup;
 		std::uint32_t stageShaderObservationCount{ 0 };
+		std::unique_ptr<TargetViewObservationRecord[]> targetViewObservations;
+		std::mutex targetViewObservationMutex;
+		std::unordered_multimap<std::uint64_t, std::uint32_t> targetViewObservationLookup;
+		std::uint32_t targetViewObservationCount{ 0 };
+		std::unique_ptr<TargetBindingObservationRecord[]> targetBindingObservations;
+		std::mutex targetBindingObservationMutex;
+		std::unordered_multimap<std::uint64_t, std::uint32_t> targetBindingObservationLookup;
+		std::uint32_t targetBindingObservationCount{ 0 };
 
 		std::atomic_bool accepting{ true };
 		std::atomic_uint64_t inFlight{ 0 };
@@ -271,6 +323,8 @@ namespace CSX::RenderMap
 		std::atomic_uint64_t scopeMismatch{ 0 };
 		std::atomic_uint64_t droppedShaderObservations{ 0 };
 		std::atomic_uint64_t droppedStageShaderObservations{ 0 };
+		std::atomic_uint64_t droppedTargetViewObservations{ 0 };
+		std::atomic_uint64_t droppedTargetBindingObservations{ 0 };
 	};
 
 	Collector::ScopeGuard::ScopeGuard(
@@ -351,7 +405,8 @@ namespace CSX::RenderMap
 		if (a_config.maxFrames == 0 || a_config.maxEvents == 0 ||
 			a_config.maxBytes < sizeof(EventRecord) || a_config.maxDuration.count() <= 0 ||
 			a_config.maxScopeDepth == 0 || a_config.maxScopeDepth > kMaximumScopeDepth ||
-			a_config.maxShaderObservations == 0 || a_config.maxStageShaderObservations == 0) {
+			a_config.maxShaderObservations == 0 || a_config.maxStageShaderObservations == 0 ||
+			a_config.maxTargetViewObservations == 0 || a_config.maxTargetBindingObservations == 0) {
 			return StartResult::kInvalidBounds;
 		}
 
@@ -374,11 +429,18 @@ namespace CSX::RenderMap
 		session->shaderObservationRetired.reset(new (std::nothrow) bool[a_config.maxShaderObservations]{});
 		session->stageShaderObservations.reset(
 			new (std::nothrow) StageShaderObservationRecord[a_config.maxStageShaderObservations]);
-		if (!session->shaderObservations || !session->shaderObservationRetired || !session->stageShaderObservations)
+		session->targetViewObservations.reset(
+			new (std::nothrow) TargetViewObservationRecord[a_config.maxTargetViewObservations]);
+		session->targetBindingObservations.reset(
+			new (std::nothrow) TargetBindingObservationRecord[a_config.maxTargetBindingObservations]);
+		if (!session->shaderObservations || !session->shaderObservationRetired || !session->stageShaderObservations ||
+			!session->targetViewObservations || !session->targetBindingObservations)
 			return StartResult::kAllocationFailed;
 		try {
 			session->shaderObservationLookup.reserve(a_config.maxShaderObservations);
 			session->stageShaderObservationLookup.reserve(a_config.maxStageShaderObservations);
+			session->targetViewObservationLookup.reserve(a_config.maxTargetViewObservations);
+			session->targetBindingObservationLookup.reserve(a_config.maxTargetBindingObservations);
 		} catch (...) {
 			return StartResult::kAllocationFailed;
 		}
@@ -436,6 +498,8 @@ namespace CSX::RenderMap
 			.scopeMismatch = session->scopeMismatch.load(std::memory_order_relaxed),
 			.droppedShaderObservations = session->droppedShaderObservations.load(std::memory_order_relaxed),
 			.droppedStageShaderObservations = session->droppedStageShaderObservations.load(std::memory_order_relaxed),
+			.droppedTargetViewObservations = session->droppedTargetViewObservations.load(std::memory_order_relaxed),
+			.droppedTargetBindingObservations = session->droppedTargetBindingObservations.load(std::memory_order_relaxed),
 		};
 
 		const auto reserved = std::min(session->nextIndex.load(std::memory_order_acquire), session->capacity);
@@ -452,6 +516,12 @@ namespace CSX::RenderMap
 		snapshot.stageShaderObservations.reserve(session->stageShaderObservationCount);
 		for (std::uint32_t index = 0; index < session->stageShaderObservationCount; ++index)
 			snapshot.stageShaderObservations.push_back(session->stageShaderObservations[index]);
+		snapshot.targetViewObservations.reserve(session->targetViewObservationCount);
+		for (std::uint32_t index = 0; index < session->targetViewObservationCount; ++index)
+			snapshot.targetViewObservations.push_back(session->targetViewObservations[index]);
+		snapshot.targetBindingObservations.reserve(session->targetBindingObservationCount);
+		for (std::uint32_t index = 0; index < session->targetBindingObservationCount; ++index)
+			snapshot.targetBindingObservations.push_back(session->targetBindingObservations[index]);
 
 		return snapshot;
 	}
@@ -472,10 +542,12 @@ namespace CSX::RenderMap
 		EventKind a_kind,
 		const EventPayload& a_payload,
 		std::uint64_t a_deviceContextObservationId,
-		std::uint64_t a_commandStreamSequence) noexcept
+		std::uint64_t a_commandStreamSequence,
+		std::uint64_t a_targetBindingObservationId) noexcept
 	{
 		return RecordForGeneration(
-			a_kind, a_payload, a_deviceContextObservationId, 0, a_commandStreamSequence);
+			a_kind, a_payload, a_deviceContextObservationId, 0, a_commandStreamSequence,
+			a_targetBindingObservationId);
 	}
 
 	RecordResult Collector::RecordForGeneration(
@@ -483,7 +555,8 @@ namespace CSX::RenderMap
 		const EventPayload& a_payload,
 		std::uint64_t a_deviceContextObservationId,
 		std::uint64_t a_expectedGeneration,
-		std::uint64_t a_commandStreamSequence) noexcept
+		std::uint64_t a_commandStreamSequence,
+		std::uint64_t a_targetBindingObservationId) noexcept
 	{
 		auto session = activeSession.load(std::memory_order_acquire);
 		if (!session)
@@ -548,6 +621,7 @@ namespace CSX::RenderMap
 		record.threadId = CurrentThreadId();
 		record.deviceContextObservationId = a_deviceContextObservationId;
 		record.commandStreamSequence = a_commandStreamSequence;
+		record.targetBindingObservationId = a_targetBindingObservationId;
 		record.frame = state.frame;
 		record.scopes = SnapshotScopes(state);
 		record.payload = a_payload;
@@ -757,6 +831,119 @@ namespace CSX::RenderMap
 						.pointerGeneration = record.pointerGeneration,
 						.firstSeen = false,
 					};
+				}
+			}
+		}
+		releaseFlight();
+		return result;
+	}
+
+	TargetViewObservationResult Collector::ObserveTargetView(
+		const TargetViewObservationInput& a_input) noexcept
+	{
+		auto session = activeSession.load(std::memory_order_acquire);
+		if (!session || !session->accepting.load(std::memory_order_acquire) || a_input.d3dObject == 0)
+			return {};
+
+		session->inFlight.fetch_add(1, std::memory_order_acq_rel);
+		const auto releaseFlight = [&] { session->inFlight.fetch_sub(1, std::memory_order_release); };
+		if (!session->accepting.load(std::memory_order_acquire) || activeSession.load(std::memory_order_acquire) != session) {
+			releaseFlight();
+			return {};
+		}
+
+		const auto identityHash = HashTargetViewIdentity(a_input);
+		TargetViewObservationResult result{ .sessionGeneration = session->generation };
+		{
+			std::lock_guard lock(session->targetViewObservationMutex);
+			const auto [begin, end] = session->targetViewObservationLookup.equal_range(identityHash);
+			for (auto found = begin; found != end; ++found) {
+				const auto& record = session->targetViewObservations[found->second];
+				if (record.kind == a_input.kind && record.pointerEvidence == a_input.d3dObject) {
+					result = { record.observationId, session->generation, record.pointerGeneration, false };
+					break;
+				}
+			}
+
+			if (result.observationId == 0) {
+				if (session->targetViewObservationCount >= session->config.maxTargetViewObservations) {
+					session->droppedTargetViewObservations.fetch_add(1, std::memory_order_relaxed);
+				} else {
+					std::uint32_t pointerGeneration = 1;
+					for (std::uint32_t index = 0; index < session->targetViewObservationCount; ++index) {
+						if (session->targetViewObservations[index].pointerEvidence == a_input.d3dObject)
+							pointerGeneration = std::max(
+								pointerGeneration, session->targetViewObservations[index].pointerGeneration + 1);
+					}
+
+					const auto index = session->targetViewObservationCount++;
+					auto& record = session->targetViewObservations[index];
+					record.observationId = session->nextObservationId.fetch_add(1, std::memory_order_relaxed);
+					record.kind = a_input.kind;
+					record.pointerEvidence = a_input.d3dObject;
+					record.pointerGeneration = pointerGeneration;
+					try {
+						session->targetViewObservationLookup.emplace(identityHash, index);
+						result = { record.observationId, session->generation, pointerGeneration, true };
+					} catch (...) {
+						--session->targetViewObservationCount;
+						record = {};
+						session->droppedTargetViewObservations.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
+			}
+		}
+		releaseFlight();
+		return result;
+	}
+
+	TargetBindingObservationResult Collector::ObserveTargetBinding(
+		const TargetBindingObservationInput& a_input) noexcept
+	{
+		auto session = activeSession.load(std::memory_order_acquire);
+		if (!session || !session->accepting.load(std::memory_order_acquire) ||
+			a_input.renderTargetCount > kMaximumRenderTargets) {
+			return {};
+		}
+
+		session->inFlight.fetch_add(1, std::memory_order_acq_rel);
+		const auto releaseFlight = [&] { session->inFlight.fetch_sub(1, std::memory_order_release); };
+		if (!session->accepting.load(std::memory_order_acquire) || activeSession.load(std::memory_order_acquire) != session) {
+			releaseFlight();
+			return {};
+		}
+
+		const auto identityHash = HashTargetBindingIdentity(a_input);
+		TargetBindingObservationResult result{ .sessionGeneration = session->generation };
+		{
+			std::lock_guard lock(session->targetBindingObservationMutex);
+			const auto [begin, end] = session->targetBindingObservationLookup.equal_range(identityHash);
+			for (auto found = begin; found != end; ++found) {
+				const auto& record = session->targetBindingObservations[found->second];
+				if (SameTargetBindingIdentity(record, a_input)) {
+					result = { record.observationId, session->generation, false };
+					break;
+				}
+			}
+
+			if (result.observationId == 0) {
+				if (session->targetBindingObservationCount >= session->config.maxTargetBindingObservations) {
+					session->droppedTargetBindingObservations.fetch_add(1, std::memory_order_relaxed);
+				} else {
+					const auto index = session->targetBindingObservationCount++;
+					auto& record = session->targetBindingObservations[index];
+					record.observationId = session->nextObservationId.fetch_add(1, std::memory_order_relaxed);
+					record.renderTargetObservationIds = a_input.renderTargetObservationIds;
+					record.depthTargetObservationId = a_input.depthTargetObservationId;
+					record.renderTargetCount = a_input.renderTargetCount;
+					try {
+						session->targetBindingObservationLookup.emplace(identityHash, index);
+						result = { record.observationId, session->generation, true };
+					} catch (...) {
+						--session->targetBindingObservationCount;
+						record = {};
+						session->droppedTargetBindingObservations.fetch_add(1, std::memory_order_relaxed);
+					}
 				}
 			}
 		}

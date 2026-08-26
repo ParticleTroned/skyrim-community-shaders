@@ -200,6 +200,8 @@
         "maxBytes": { "type": "integer", "minimum": 1 },
         "maxShaderObservations": { "type": "integer", "minimum": 1 },
         "maxStageShaderObservations": { "type": "integer", "minimum": 1 },
+        "maxTargetViewObservations": { "type": "integer", "minimum": 1 },
+        "maxTargetBindingObservations": { "type": "integer", "minimum": 1 },
         "pointerPolicy": { "enum": ["retain", "hash", "redact"] }
       }
     },

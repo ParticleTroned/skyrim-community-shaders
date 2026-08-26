@@ -153,7 +153,7 @@ namespace CSX::RenderMap
 		{
 			return {
 				{ "schema", {
-					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 4 },
+					{ "name", "csx.render-event" }, { "major", 1 }, { "minor", 6 },
 					{ "producerVersion", "collector-v1" },
 				} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -227,7 +227,9 @@ namespace CSX::RenderMap
 			const bool truncated = lostEvents != 0;
 			const bool structurallyIncomplete = snapshot.statistics.scopeOverflow != 0 ||
 				snapshot.statistics.scopeMismatch != 0 || snapshot.statistics.droppedShaderObservations != 0 ||
-				snapshot.statistics.droppedStageShaderObservations != 0;
+				snapshot.statistics.droppedStageShaderObservations != 0 ||
+				snapshot.statistics.droppedTargetViewObservations != 0 ||
+				snapshot.statistics.droppedTargetBindingObservations != 0;
 			const bool terminalFailure = snapshot.stopReason == StopReason::kShutdown ||
 				snapshot.stopReason == StopReason::kFailure;
 			const bool incomplete = truncated || structurallyIncomplete || terminalFailure;
@@ -243,12 +245,16 @@ namespace CSX::RenderMap
 				completionErrors.push_back("shader observation capacity was exceeded during capture");
 			if (snapshot.statistics.droppedStageShaderObservations != 0)
 				completionErrors.push_back("stage shader observation capacity was exceeded during capture");
+			if (snapshot.statistics.droppedTargetViewObservations != 0)
+				completionErrors.push_back("target view observation capacity was exceeded during capture");
+			if (snapshot.statistics.droppedTargetBindingObservations != 0)
+				completionErrors.push_back("target binding observation capacity was exceeded during capture");
 			if (terminalFailure)
 				completionErrors.push_back("capture ended during shutdown or failure handling");
 			const auto summary = SerializeCaptureSummary(a_capture);
 			json manifest = {
 				{ "schema", {
-					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 3 },
+					{ "name", "csx.render-capture-manifest" }, { "major", 1 }, { "minor", 4 },
 					{ "producerVersion", "collector-v1" },
 				} },
 				{ "captureId", a_capture.descriptor.captureId },
@@ -266,6 +272,8 @@ namespace CSX::RenderMap
 					{ "maxEvents", snapshot.config.maxEvents }, { "maxBytes", snapshot.config.maxBytes },
 					{ "maxShaderObservations", snapshot.config.maxShaderObservations },
 					{ "maxStageShaderObservations", snapshot.config.maxStageShaderObservations },
+					{ "maxTargetViewObservations", snapshot.config.maxTargetViewObservations },
+					{ "maxTargetBindingObservations", snapshot.config.maxTargetBindingObservations },
 					{ "pointerPolicy", "retain" },
 				} },
 				{ "clock", {
@@ -289,6 +297,10 @@ namespace CSX::RenderMap
 					{ "csx.droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
 					{ "csx.stageShaderObservationCount", snapshot.stageShaderObservations.size() },
 					{ "csx.droppedStageShaderObservationCount", snapshot.statistics.droppedStageShaderObservations },
+					{ "csx.targetViewObservationCount", snapshot.targetViewObservations.size() },
+					{ "csx.droppedTargetViewObservationCount", snapshot.statistics.droppedTargetViewObservations },
+					{ "csx.targetBindingObservationCount", snapshot.targetBindingObservations.size() },
+					{ "csx.droppedTargetBindingObservationCount", snapshot.statistics.droppedTargetBindingObservations },
 				} },
 			};
 

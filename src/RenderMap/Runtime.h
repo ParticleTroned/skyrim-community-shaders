@@ -19,6 +19,8 @@ namespace CSX::RenderMap
 		kDrawCall = 7,
 		kDispatchCall = 8,
 		kDeviceContextObservation = 9,
+		kTargetViewObservation = 10,
+		kTargetBinding = 11,
 	};
 
 	enum class DrawOperation : std::uint8_t
@@ -118,6 +120,12 @@ namespace CSX::RenderMap
 			std::uintptr_t a_context,
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) noexcept;
+		void BindRenderTargets(
+			std::uintptr_t a_context,
+			std::uint32_t a_renderTargetCount,
+			const std::uintptr_t* a_renderTargets,
+			std::uintptr_t a_depthTarget,
+			bool a_keepTargets = false) noexcept;
 		void RecordDraw(
 			std::uintptr_t a_context,
 			DrawOperation a_operation,
@@ -146,6 +154,7 @@ namespace CSX::RenderMap
 		std::atomic_uintptr_t boundVertexShader{ 0 };
 		std::atomic_uintptr_t boundPixelShader{ 0 };
 		std::atomic_uintptr_t boundComputeShader{ 0 };
+		std::atomic_uint64_t boundTargetBindingObservationId{ 0 };
 		std::atomic_uint64_t immediateContextPointerGeneration{ 0 };
 		std::atomic_uint64_t immediateContextObservationId{ 0 };
 		std::atomic_uint64_t immediateContextObservationGeneration{ 0 };

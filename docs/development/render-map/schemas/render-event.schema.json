@@ -79,13 +79,14 @@
               },
               {
                 "type": "object",
-                "required": ["schema", "operation", "immediateContextPointer", "vertexShaderObservationId", "pixelShaderObservationId", "arguments"],
+                "required": ["schema", "operation", "immediateContextPointer", "vertexShaderObservationId", "pixelShaderObservationId", "targetBindingObservationId", "arguments"],
                 "properties": {
-                  "schema": { "const": "draw-call-v1" },
+                  "schema": { "const": "draw-call-v2" },
                   "operation": { "enum": ["draw", "draw-indexed", "draw-instanced", "draw-indexed-instanced", "draw-auto", "draw-instanced-indirect", "draw-indexed-instanced-indirect"] },
                   "immediateContextPointer": { "type": ["string", "null"] },
                   "vertexShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
                   "pixelShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "targetBindingObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
                   "arguments": { "type": "object" }
                 },
                 "additionalProperties": true
@@ -141,6 +142,48 @@
               "pointerGeneration": { "type": "integer", "minimum": 1 },
               "kind": { "const": "immediate" },
               "creationEvidence": { "const": "initial-immediate-context" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "target-view-observed" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["schema", "targetViewObservationId", "kind", "d3dObjectPointer", "pointerGeneration"],
+            "properties": {
+              "schema": { "const": "target-view-observation-v1" },
+              "targetViewObservationId": { "$ref": "#/$defs/observationId" },
+              "kind": { "enum": ["render-target", "depth-target"] },
+              "d3dObjectPointer": { "type": ["string", "null"] },
+              "pointerGeneration": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "render-target-bind" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["schema", "targetBindingObservationId", "renderTargetObservationIds", "depthTargetObservationId", "identityDetailsAvailable"],
+            "properties": {
+              "schema": { "const": "render-target-binding-v1" },
+              "targetBindingObservationId": { "$ref": "#/$defs/observationId" },
+              "renderTargetObservationIds": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] }
+              },
+              "depthTargetObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "identityDetailsAvailable": { "type": "boolean" }
             },
             "additionalProperties": false
           }
@@ -351,7 +394,8 @@
         "shader-observed",
         "stage-shader-observed",
         "technique-resolved",
-        "device-context-observed"
+        "device-context-observed",
+        "target-view-observed"
       ]
     },
     "frame": {

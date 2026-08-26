@@ -144,7 +144,7 @@ COM destruction remain later observation layers.
 
 The immediate D3D11 context now tracks the actual object supplied to
 `VSSetShader`, `PSSetShader`, and `CSSetShader`. Draw and dispatch detours emit
-`draw-call-v1` and `dispatch-call-v1` only during an explicitly armed capture.
+`draw-call-v2` and `dispatch-call-v1` only during an explicitly armed capture.
 Each execution event joins the effective bound stage objects to the typed stage
 catalogue. If an object has no richer engine-wrapper observation, the collector
 creates an explicitly minimal pointer-based stage observation rather than
@@ -159,13 +159,35 @@ context and advances across VS/PS/CS binds as well as draw/dispatch calls. It is
 an observed CPU-call order, not a GPU completion timestamp or proof that
 unhooked D3D11 state calls did not occur.
 
+### Implemented output-merger target slice
+
+The immediate-context observer detours `OMSetRenderTargets` and
+`OMSetRenderTargetsAndUnorderedAccessViews`. Each non-keep call advances the
+context-local command sequence and declares first-seen render-target and
+depth-stencil view objects as capture-local, generation-scoped identities. An
+exact binding-set identity preserves the render-target count, slot positions
+(including null slots), and depth target. Repeated calls to the same set reuse
+the binding identity but remain separate ordered `render-target-bind` events.
+Draw events use `draw-call-v2` and join the last successfully catalogued binding
+set. `D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL` advances observed command
+order without changing or re-declaring target state.
+
+Both target-view and binding-set catalogues have explicit bounds. Overflow is
+reported as structural incompleteness and an uncatalogued binding is never
+silently joined to an existing identity. Capture start deliberately clears the
+observed binding: the observer does not call `OMGetRenderTargets`, so draws
+before the first in-capture bind retain a null target-binding identity. Pointer
+evidence plus a capture-local pointer generation is not yet equivalent to a
+creation/destruction proof. No render-target role or VR eye is inferred from
+slot number, pointer reuse, call order, or dimensions.
+
 This slice covers the immediate context only. It does not interpret a deferred
 context, command list, or command-list replay as immediate execution. Those
 capabilities remain false in the service registry until context and command-list
 identity can preserve recording order separately from execution order. Render
-targets and the remainder of the pipeline state are also not yet part of the
-draw identity. The context pointer remains retained evidence alongside—not in
-place of—the typed identity.
+target resource descriptions, UAV identities, and the remainder of the pipeline
+state are not yet part of the draw identity. The context pointer remains
+retained evidence alongside—not in place of—the typed identity.
 
 ## Layer 4: derived render graph
 

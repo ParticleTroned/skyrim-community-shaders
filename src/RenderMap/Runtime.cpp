@@ -1,5 +1,7 @@
 #include "RenderMap/Runtime.h"
 
+#include <algorithm>
+
 namespace CSX::RenderMap
 {
 	namespace
@@ -172,6 +174,31 @@ namespace CSX::RenderMap
 				},
 			};
 		}
+
+		EventPayload TargetViewObservationPayload(
+			const TargetViewObservationInput& a_target,
+			const TargetViewObservationResult& a_observation) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kTargetViewObservation),
+				.words = {
+					a_observation.observationId,
+					a_target.d3dObject,
+					a_observation.pointerGeneration,
+					static_cast<std::uint64_t>(a_target.kind),
+				},
+			};
+		}
+
+		EventPayload TargetBindingPayload(
+			const TargetBindingObservationResult& a_observation,
+			std::uintptr_t a_context) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kTargetBinding),
+				.words = { a_observation.observationId, a_context },
+			};
+		}
 	}
 
 	StartResult Runtime::StartCapture(const CollectorConfig& a_config)
@@ -181,6 +208,7 @@ namespace CSX::RenderMap
 			immediateContextObservationId.store(0, std::memory_order_release);
 			immediateContextObservationGeneration.store(0, std::memory_order_release);
 			immediateContextCommandSequence.store(0, std::memory_order_release);
+			boundTargetBindingObservationId.store(0, std::memory_order_release);
 		}
 		return result;
 	}
@@ -299,6 +327,7 @@ namespace CSX::RenderMap
 		boundVertexShader.store(0, std::memory_order_release);
 		boundPixelShader.store(0, std::memory_order_release);
 		boundComputeShader.store(0, std::memory_order_release);
+		boundTargetBindingObservationId.store(0, std::memory_order_release);
 	}
 
 	void Runtime::BindStage(
@@ -324,6 +353,86 @@ namespace CSX::RenderMap
 			boundComputeShader.store(a_d3dObject, std::memory_order_release);
 			break;
 		}
+	}
+
+	void Runtime::BindRenderTargets(
+		std::uintptr_t a_context,
+		std::uint32_t a_renderTargetCount,
+		const std::uintptr_t* a_renderTargets,
+		std::uintptr_t a_depthTarget,
+		bool a_keepTargets) noexcept
+	{
+		if (!collector.IsCapturing() || a_context == 0 ||
+			a_context != immediateContext.load(std::memory_order_acquire)) {
+			return;
+		}
+		const auto contextObservationId = EnsureImmediateContextObservation();
+		if (contextObservationId == 0)
+			return;
+		const auto commandStreamSequence = NextCommandStreamSequence();
+		if (a_keepTargets)
+			return;
+
+		TargetBindingObservationInput binding;
+		bool identityComplete = true;
+		binding.renderTargetCount = static_cast<std::uint8_t>(
+			std::min<std::uint32_t>(a_renderTargetCount, kMaximumRenderTargets));
+		for (std::size_t index = 0; index < binding.renderTargetCount; ++index) {
+			const auto pointer = a_renderTargets ? a_renderTargets[index] : 0;
+			if (pointer == 0)
+				continue;
+			const TargetViewObservationInput input{
+				.kind = TargetViewKind::kRenderTarget,
+				.d3dObject = pointer,
+			};
+			const auto observation = collector.ObserveTargetView(input);
+			if (observation.observationId == 0)
+				identityComplete = false;
+			binding.renderTargetObservationIds[index] = observation.observationId;
+			if (observation.firstSeen) {
+				collector.RecordForGeneration(
+					EventKind::kTargetViewObserved,
+					TargetViewObservationPayload(input, observation),
+					contextObservationId,
+					observation.sessionGeneration,
+					commandStreamSequence);
+			}
+		}
+
+		if (a_depthTarget != 0) {
+			const TargetViewObservationInput input{
+				.kind = TargetViewKind::kDepthTarget,
+				.d3dObject = a_depthTarget,
+			};
+			const auto observation = collector.ObserveTargetView(input);
+			if (observation.observationId == 0)
+				identityComplete = false;
+			binding.depthTargetObservationId = observation.observationId;
+			if (observation.firstSeen) {
+				collector.RecordForGeneration(
+					EventKind::kTargetViewObserved,
+					TargetViewObservationPayload(input, observation),
+					contextObservationId,
+					observation.sessionGeneration,
+					commandStreamSequence);
+			}
+		}
+		if (!identityComplete) {
+			boundTargetBindingObservationId.store(0, std::memory_order_release);
+			return;
+		}
+
+		const auto bindingObservation = collector.ObserveTargetBinding(binding);
+		boundTargetBindingObservationId.store(bindingObservation.observationId, std::memory_order_release);
+		if (bindingObservation.observationId == 0)
+			return;
+		collector.RecordForGeneration(
+			EventKind::kRenderTargetBind,
+			TargetBindingPayload(bindingObservation, a_context),
+			contextObservationId,
+			bindingObservation.sessionGeneration,
+			commandStreamSequence,
+			bindingObservation.observationId);
 	}
 
 	std::uint64_t Runtime::EnsureImmediateContextObservation() noexcept
@@ -415,7 +524,8 @@ namespace CSX::RenderMap
 			DrawCallPayload(
 				a_context, a_operation, vertex.observationId, pixel.observationId,
 				a_argument0, a_argument1, a_argument2, a_argument3),
-			contextObservationId, captureGeneration, commandStreamSequence);
+			contextObservationId, captureGeneration, commandStreamSequence,
+			boundTargetBindingObservationId.load(std::memory_order_acquire));
 	}
 
 	void Runtime::RecordDispatch(

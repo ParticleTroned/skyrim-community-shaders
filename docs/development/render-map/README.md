@@ -21,6 +21,8 @@ vertical slice for depth culling is in
 The device-context and command-list identity/state contract required for honest
 deferred-context coverage is in
 [`device-context-command-list-slice.md`](./device-context-command-list-slice.md).
+The immediate-context render-target/depth-target identity and draw-join slice is
+in [`output-merger-target-slice.md`](./output-merger-target-slice.md).
 Findings from the first bounded live controller run are in
 [`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
 The later 120-frame run that validates durable finalization and establishes the
@@ -60,7 +62,10 @@ capture. Immediate render-pass coverage includes the three existing callsites
 and Terrain Blending's shared draw route; geometry coverage in this slice is
 Lighting, Effect, and Grass, matching the always-installed core hook owners.
 The D3D11 observer also tracks immediate-context VS/PS/CS bindings and bounded
-draw/dispatch execution. Existing `Draw` and `DrawIndexed` hook owners compose
+draw/dispatch execution. It now records immediate-context output-merger
+render-target/depth-target calls as bounded, capture-local target-view and exact
+binding-set identities. Draws join the most recently observed binding set.
+Existing `Draw` and `DrawIndexed` hook owners compose
 the observation directly; other draw variants and dispatch have dedicated
 detours. On first observed context activity in each capture it emits one typed
 `device-context-observed` declaration. Later execution events reference that
@@ -98,18 +103,21 @@ Engine shader families and the selected vertex/pixel D3D shader objects now
 have separately bounded, generation-scoped typed observation registries. The
 v1.2 service emits the actual selection route, input and modified descriptors,
 cache path for CSX-supplied objects, and creation-time bytecode SHA-256 when
-available. Draws join the effective bound VS/PS observations; dispatches join a
-compute-shader observation. Overflow of either identity catalogue makes the
-capture explicitly incomplete. Per-thread buffer sharding, remaining geometry
-families, provenance injection, render-target and full pipeline identity,
-deferred-context/command-list coverage, and COM destruction boundaries remain
-subsequent slices. Until those exist, this is bounded live evidence rather than
-a complete render graph.
+available. Draws join the effective bound VS/PS observations and the last
+output-merger target binding observed after capture began; dispatches join a
+compute-shader observation. Overflow of any identity catalogue makes the
+capture explicitly incomplete. State inherited before capture starts is not
+queried or guessed, so early draws may correctly carry a null target-binding
+identity until the first observed bind. Per-thread buffer sharding, remaining
+geometry families, provenance injection, the rest of full pipeline identity,
+deferred-context/command-list coverage, COM destruction boundaries, and VR-eye
+attribution remain subsequent slices. Until those exist, this is bounded live
+evidence rather than a complete render graph.
 
 Example DevBench requests (use a unique `commandId` for each logical command):
 
 ```json
-{"contractMajor":1,"clientId":"render-study","commandId":"start-1","action":"start","maxFrames":4,"maxDurationMs":2000,"maxEvents":8192,"maxShaderObservations":1024,"maxStageShaderObservations":4096}
+{"contractMajor":1,"clientId":"render-study","commandId":"start-1","action":"start","maxFrames":4,"maxDurationMs":2000,"maxEvents":8192,"maxShaderObservations":1024,"maxStageShaderObservations":4096,"maxTargetViewObservations":4096,"maxTargetBindingObservations":4096}
 {"contractMajor":1,"clientId":"render-study","commandId":"stop-1","action":"stop","captureId":"capture-live-..."}
 {"contractMajor":1,"clientId":"render-study","commandId":"events-1","action":"capture_events","captureId":"capture-live-...","offset":0,"limit":500}
 ```

@@ -170,7 +170,9 @@ namespace
 			{ "runtimeType", static_cast<int>(vr.openVRInfo.runtimeType) },
 			{ "hasOverlayInterface", vr.openVRInfo.hasOverlayInterface },
 			{ "shouldUseInSceneOverlay", vr.ShouldUseInSceneOverlay() },
-			{ "inSceneSubmitSuppressed", globals::features::upscaling.ShouldSuppressVRInSceneOverlaySubmit() },
+			{ "inSceneSubmitSuppressed",
+				inSceneSubmitSuppressionReasons !=
+					VRInSceneOverlaySubmitPolicy::SuppressionReason::None },
 			{ "inSceneSubmitSuppressionReasons", static_cast<std::uint32_t>(inSceneSubmitSuppressionReasons) },
 			{ "shouldPresentOverlayInHeadset", vr.ShouldPresentOverlayInHeadset() },
 			{ "attachMode", static_cast<int>(vr.settings.attachMode) },

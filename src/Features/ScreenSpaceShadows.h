@@ -3,6 +3,10 @@
 #include "Buffer.h"
 #include "Utils/LazyShader.h"
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+
 struct ScreenSpaceShadows : Feature
 {
 private:
@@ -89,12 +93,19 @@ public:
 	ID3D11SamplerState* pointBorderSampler = nullptr;
 
 	ConstantBuffer* raymarchCB = nullptr;
-	Util::LazyShader<ID3D11ComputeShader> raymarchCS;
-	Util::LazyShader<ID3D11ComputeShader> raymarchRightCS;
+	struct RaymarchShaderVariant
+	{
+		bool valid = false;
+		uint sampleCount = 0;
+		bool usesTerrainBlendingDepth = false;
+		uint64_t lastUse = 0;
+		Util::LazyShader<ID3D11ComputeShader> left;
+		Util::LazyShader<ID3D11ComputeShader> right;
+	};
+	static constexpr std::size_t kRaymarchShaderVariantCount = 2;
+	std::array<RaymarchShaderVariant, kRaymarchShaderVariantCount> raymarchShaderVariants{};
+	uint64_t raymarchShaderUseCounter = 0;
 	uint compiledSampleCount = 0;
-	uint compiledSampleCountRight = 0;
-	bool raymarchUsesTerrainBlendingDepth = false;
-	bool raymarchRightUsesTerrainBlendingDepth = false;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 
@@ -127,9 +138,12 @@ public:
 	virtual void ClearShaderCache() override;
 	void InvalidateRaymarchShaders();
 	uint GetScaledSampleCount(bool a_dynamic);
-	ID3D11ComputeShader* GetOrCreateRaymarchShader(Util::LazyShader<ID3D11ComputeShader>& a_shader, uint& a_compiledSampleCount, bool& a_compiledUsesTerrainBlendingDepth, bool a_rightEye);
+	uint GetScaledSampleCountForRenderSize(float2 a_screenSize) const;
+	ID3D11ComputeShader* GetOrCreateRaymarchShader(uint a_sampleCount, bool a_rightEye);
 	ID3D11ComputeShader* GetComputeRaymarch();
 	ID3D11ComputeShader* GetComputeRaymarchRight();
+	/** @brief Compiles the bounded VR raymarch pair for an admitted target size. */
+	bool PrewarmVRRenderScaleShaders(uint32_t a_combinedWidth, uint32_t a_height);
 
 	virtual void Prepass() override;
 

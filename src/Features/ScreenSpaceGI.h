@@ -56,8 +56,11 @@ public:
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
 	virtual void ClearShaderCache() override;
-	void CompileComputeShaders();
+	bool CompileComputeShaders();
+	bool RequiredShadersOK() const;
 	bool ShadersOK();
+	/** @brief Compiles the currently admitted SSGI permutation set before relatch. */
+	bool PrewarmShaders();
 
 	void DrawSSGI();
 	void UpdateSB();

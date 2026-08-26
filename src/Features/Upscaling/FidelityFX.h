@@ -120,6 +120,14 @@ public:
 	LifecycleResult DestroyFSRResources(bool a_waitForIdle = true);
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
+	/** @brief Proves a complete reusable runtime FSR provider generation. */
+	bool AreRuntimeUpscalerResourcesCompatible(
+		uint32_t a_fullRenderWidth,
+		uint32_t a_fullRenderHeight,
+		uint32_t a_fullDisplayWidth,
+		uint32_t a_fullDisplayHeight,
+		uint32_t a_contextCount,
+		uint32_t a_requestedVersion) const;
 	bool HasFSRResourcesPendingTeardown() const;
 	[[nodiscard]] HRESULT GetLastFSRDeviceRemovedReason() const noexcept { return fsrLastDeviceRemovedReason; }
 	LifecycleResult ProbeFSRDeviceStatus() noexcept { return RecordFSRDeviceStatus(); }
@@ -290,6 +298,7 @@ private:
 	void ResetRuntimeCommandContexts();
 	void ReleaseIdleRuntimeUpscalerInterop();
 	bool HasRuntimeUpscalerResources() const;
+	bool HasCompleteRuntimeUpscalerSharedResources(uint32_t a_contextCount) const;
 	bool AreRuntimeUpscalerContextsCompatible(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion) const;
 	LifecycleResult PollRuntimeUpscalerTeardownReady(const char* a_reason = nullptr);
 	LifecycleResult EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);

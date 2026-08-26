@@ -1348,7 +1348,7 @@ void ScreenSpaceGI::ClearShaderCache()
 	CompileComputeShaders();
 }
 
-void ScreenSpaceGI::CompileComputeShaders()
+bool ScreenSpaceGI::CompileComputeShaders()
 {
 	struct ShaderCompileInfo
 	{
@@ -1411,17 +1411,30 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.defines.push_back({ "ADAPTIVE_SAMPLING", "" });
 	}
 
-	for (auto& info : shaderInfos) {
+	std::vector<winrt::com_ptr<ID3D11ComputeShader>> compiledShaders(
+		shaderInfos.size());
+	bool compilationComplete = true;
+	for (std::size_t i = 0; i < shaderInfos.size(); ++i) {
+		auto& info = shaderInfos[i];
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceGI") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0")))
-			info.programPtr->attach(rawPtr);
+		compiledShaders[i].attach(reinterpret_cast<ID3D11ComputeShader*>(
+			Util::CompileShader(path.c_str(), info.defines, "cs_5_0")));
+		compilationComplete = compiledShaders[i] && compilationComplete;
+	}
+	if (compilationComplete) {
+		for (std::size_t i = 0; i < shaderInfos.size(); ++i)
+			*shaderInfos[i].programPtr = std::move(compiledShaders[i]);
 	}
 
 	recompileFlag = false;
+	return compilationComplete;
 }
 
 bool ScreenSpaceGI::ShadersOK()
 {
+	if (!RequiredShadersOK())
+		return false;
+
 	const bool baseShadersOK = texNoise &&
 	                           texWorkingDepth &&
 	                           texPrevGeo &&
@@ -1429,13 +1442,7 @@ bool ScreenSpaceGI::ShadersOK()
 	                           texAo[0] &&
 	                           texAo[1] &&
 	                           texAccumFrames[0] &&
-	                           texAccumFrames[1] &&
-	                           prefilterDepthsCompute &&
-	                           prefilterNormalCompute &&
-	                           radianceDisoccAOOnlyCompute &&
-	                           giAOOnlyCompute &&
-	                           upsampleAOOnlyCompute &&
-	                           (!REL::Module::IsVR() || stereoSyncAOOnlyCompute);
+	                           texAccumFrames[1];
 
 	const float centerScale = ResolveFoveatedSharedMaskScale(settings);
 	const bool foveatedSsgiActive = IsRuntimeFoveatedActive(settings);
@@ -1448,31 +1455,60 @@ bool ScreenSpaceGI::ShadersOK()
 									 texIlCoCg[0] &&
 									 texIlCoCg[1] &&
 									 texGiSpecular[0] &&
-									 texGiSpecular[1] &&
-									 prefilterRadianceCompute &&
-									 radianceDisoccCompute &&
-									 giCompute &&
-									 blurCompute &&
-									 upsampleCompute &&
-									 (!REL::Module::IsVR() || stereoSyncCompute));
+									 texGiSpecular[1]);
 
-	const bool centerAOShadersOK = texCenterAo &&
-	                               centerGIMaskedAOOnlyCompute &&
-	                               centerBlendAOOnlyCompute &&
-	                               (!REL::Module::IsVR() || centerStereoSyncAOOnlyCompute);
+	const bool centerAOShadersOK = texCenterAo;
 	const bool centerGIShadersOK = !runtimeGIActive ||
 	                               (texCenterIlY &&
 									   texCenterIlCoCg &&
-									   texCenterGiSpecular &&
-									   centerGIMaskedCompute &&
-									   centerBlendCompute &&
-									   (!REL::Module::IsVR() || centerStereoSyncCompute));
+									   texCenterGiSpecular);
 	const bool centerMaskActive = foveatedSsgiActive && centerScale > 0.0f;
 
 	if (!centerMaskActive)
 		return baseShadersOK && fullGIShadersOK;
 
 	return baseShadersOK && fullGIShadersOK && centerAOShadersOK && centerGIShadersOK;
+}
+
+bool ScreenSpaceGI::RequiredShadersOK() const
+{
+	const bool baseShadersOK = prefilterDepthsCompute &&
+	                           prefilterNormalCompute &&
+	                           radianceDisoccAOOnlyCompute &&
+	                           giAOOnlyCompute &&
+	                           upsampleAOOnlyCompute &&
+	                           (!REL::Module::IsVR() || stereoSyncAOOnlyCompute);
+	const float centerScale = ResolveFoveatedSharedMaskScale(settings);
+	const bool foveatedSsgiActive = IsRuntimeFoveatedActive(settings);
+	const bool runtimeGIActive = !foveatedSsgiActive && IsGIActive();
+	const bool fullGIShadersOK = !runtimeGIActive ||
+	                             (prefilterRadianceCompute &&
+									 radianceDisoccCompute &&
+									 giCompute &&
+									 blurCompute &&
+									 upsampleCompute &&
+									 (!REL::Module::IsVR() || stereoSyncCompute));
+	const bool centerMaskActive = foveatedSsgiActive && centerScale > 0.0f;
+	if (!centerMaskActive)
+		return baseShadersOK && fullGIShadersOK;
+
+	const bool centerAOShadersOK = centerGIMaskedAOOnlyCompute &&
+	                               centerBlendAOOnlyCompute &&
+	                               (!REL::Module::IsVR() || centerStereoSyncAOOnlyCompute);
+	const bool centerGIShadersOK = !runtimeGIActive ||
+	                               (centerGIMaskedCompute &&
+									   centerBlendCompute &&
+									   (!REL::Module::IsVR() || centerStereoSyncCompute));
+	return baseShadersOK && fullGIShadersOK && centerAOShadersOK && centerGIShadersOK;
+}
+
+bool ScreenSpaceGI::PrewarmShaders()
+{
+	if ((recompileFlag || !RequiredShadersOK()) &&
+		!CompileComputeShaders()) {
+		return false;
+	}
+	return RequiredShadersOK();
 }
 
 void ScreenSpaceGI::UpdateSB()

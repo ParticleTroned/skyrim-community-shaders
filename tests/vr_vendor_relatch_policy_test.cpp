@@ -498,6 +498,12 @@ namespace
 				return false;
 			}
 		}
+		if (!CanBypassPreparedMenuRequestDelay(true, 7, 7) ||
+			CanBypassPreparedMenuRequestDelay(false, 7, 7) ||
+			CanBypassPreparedMenuRequestDelay(true, 0, 0) ||
+			CanBypassPreparedMenuRequestDelay(true, 7, 8)) {
+			return false;
+		}
 
 		for (std::uint32_t bits = 0; bits < (1u << 7); ++bits) {
 			const StabilizerControllerTargetAdmission admission{
@@ -661,6 +667,25 @@ namespace
 
 	constexpr bool CoversVendorResourcePredicates()
 	{
+		for (std::uint32_t bits = 0; bits < (1u << 7); ++bits) {
+			const QueuedMenuRuntimeOptionsAdmission state{
+				.stableValid = (bits & (1u << 0)) != 0,
+				.stableActive = (bits & (1u << 1)) != 0,
+				.targetValid = (bits & (1u << 2)) != 0,
+				.targetActive = (bits & (1u << 3)) != 0,
+				.sameMethod = (bits & (1u << 4)) != 0,
+				.directMenuRequest = (bits & (1u << 5)) != 0,
+				.exactRequestPrepared = (bits & (1u << 6)) != 0,
+			};
+			const bool expected =
+				state.stableValid && !state.stableActive &&
+				state.targetValid && state.targetActive &&
+				state.sameMethod && state.directMenuRequest &&
+				state.exactRequestPrepared;
+			if (CanQueuedMenuProfileOwnRuntimeOptions(state) != expected)
+				return false;
+		}
+
 		for (std::uint32_t bits = 0; bits < (1u << 3); ++bits) {
 			const bool vendorEvaluation = (bits & (1u << 0)) != 0;
 			const bool preservedResources = (bits & (1u << 1)) != 0;
@@ -695,6 +720,30 @@ namespace
 				!state.postLoadResetPending && !state.preservingActiveContract &&
 				!state.deviceLost && state.resourcesCompatible;
 			if (CanReuseCompatibleFSRResources(state) != expected)
+				return false;
+		}
+
+		for (std::uint32_t bits = 0; bits < (1u << 10); ++bits) {
+			const PreparedDLSSActivationReuseAdmission state{
+				.directMenuRelatch = (bits & (1u << 0)) != 0,
+				.targetActive = (bits & (1u << 1)) != 0,
+				.targetIsDLSS = (bits & (1u << 2)) != 0,
+				.previousWasDLSS = (bits & (1u << 3)) != 0,
+				.resetPending = (bits & (1u << 4)) != 0,
+				.memoryPressureNormal = (bits & (1u << 5)) != 0,
+				.postLoadResetPending = (bits & (1u << 6)) != 0,
+				.preservingActiveContract = (bits & (1u << 7)) != 0,
+				.deviceLost = (bits & (1u << 8)) != 0,
+				.exactFullEyeProviderReady = (bits & (1u << 9)) != 0,
+			};
+			const bool expected =
+				state.directMenuRelatch && state.targetActive &&
+				state.targetIsDLSS && state.previousWasDLSS &&
+				!state.resetPending && state.memoryPressureNormal &&
+				!state.postLoadResetPending &&
+				!state.preservingActiveContract && !state.deviceLost &&
+				state.exactFullEyeProviderReady;
+			if (CanReusePreparedDLSSForActivation(state) != expected)
 				return false;
 		}
 

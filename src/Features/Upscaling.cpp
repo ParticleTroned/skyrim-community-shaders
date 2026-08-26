@@ -323,8 +323,7 @@ namespace
 	constexpr const char* kOpenCompositeRenderScaleBlockWarning =
 		"Open Composite upscaling is active. CSX VR Render Scale Mode and VR FPS Stabilizer Sync are disabled to avoid double upscaling.";
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
-	constexpr uint32_t kVRSubmitStageVendorRelatchCooldownFrames = 30u;
-	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
+	constexpr uint32_t kVRRenderScaleMenuLifecyclePollRetryFrames = 1u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
 	constexpr uint32_t kVRSubmitStageVendorDoorHandoffStableFrames = 2u;
 	// The route-owned wall clock begins when the source LoadingMenu closes. The
@@ -18951,6 +18950,69 @@ std::optional<Upscaling::VRRenderScaleProfileSnapshot> Upscaling::GetStableVRRen
 	return vrRenderScaleTransitionController.stable;
 }
 
+std::optional<Upscaling::VRRenderScaleRuntimeOptionsSnapshot> Upscaling::GetVRRenderScaleRuntimeOptions() const
+{
+	if (!REL::Module::IsVR() ||
+		!vrRenderScaleStableRuntimeProfileAuthoritative.load(
+			std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(
+			std::memory_order_acquire)) {
+		return std::nullopt;
+	}
+
+	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	const bool stableContractAuthoritative =
+		vrRenderScaleTransitionController.state ==
+			VRRenderScaleTransitionState::Requested ||
+		vrRenderScaleTransitionController.state ==
+			VRRenderScaleTransitionState::WaitingForSafePoint;
+	const auto& stable = vrRenderScaleTransitionController.stable;
+	if (!stableContractAuthoritative || !stable.valid)
+		return std::nullopt;
+	const auto captureOptions = [](const VRRenderScaleProfileSnapshot& a_profile) {
+		return VRRenderScaleRuntimeOptionsSnapshot{
+			.method = a_profile.method,
+			.qualityMode = a_profile.qualityMode,
+			.dlssPreset = a_profile.dlssPreset,
+			.fsr4RuntimeEnabled = a_profile.fsr4RuntimeEnabled,
+		};
+	};
+	if (stable.active) {
+		return captureOptions(stable);
+	}
+
+	const VRRenderScaleProfileSnapshot* target = nullptr;
+	if (vrRenderScaleTransitionController.requested.valid &&
+		vrRenderScaleTransitionController.requested.transitionEpoch ==
+			vrRenderScaleTransitionController.targetEpoch) {
+		target = std::addressof(vrRenderScaleTransitionController.requested);
+	} else if (vrRenderScaleTransitionController.applying.valid &&
+		vrRenderScaleTransitionController.applying.transitionEpoch ==
+			vrRenderScaleTransitionController.targetEpoch) {
+		target = std::addressof(vrRenderScaleTransitionController.applying);
+	}
+	if (!target)
+		return captureOptions(stable);
+	if (VRVendorRelatchPolicy::CanQueuedMenuProfileOwnRuntimeOptions({
+			.stableValid = stable.valid,
+			.stableActive = stable.active,
+			.targetValid = target->valid,
+			.targetActive = target->active,
+			.sameMethod = target->method == stable.method,
+			.directMenuRequest =
+				target->origin == VRUpscalingTransitionOrigin::CSMenu,
+			.exactRequestPrepared =
+				target->requestID != 0 &&
+				target->requestID ==
+					preparedVRRenderScaleRequestID.load(
+						std::memory_order_acquire),
+		})) {
+		return captureOptions(*target);
+	}
+
+	return captureOptions(stable);
+}
+
 Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 {
 	const auto requestedMethod = GetUpscaleMethod();
@@ -19145,8 +19207,8 @@ uint32_t Upscaling::GetRuntimeQualityMode() const
 	const auto& boot = perfMode.GetBootSnapshot();
 	if (IsVRRenderScaleModeLatched())
 		return ClampQualityModeUInt(boot.qualityMode);
-	if (const auto stableProfile = GetStableVRRenderScaleRuntimeProfile())
-		return ClampQualityModeUInt(stableProfile->qualityMode);
+	if (const auto runtimeProfile = GetVRRenderScaleRuntimeOptions())
+		return ClampQualityModeUInt(runtimeProfile->qualityMode);
 
 	return ClampQualityModeUInt(settings.qualityMode);
 }
@@ -19156,9 +19218,9 @@ uint32_t Upscaling::GetRuntimeDLSSPreset() const
 	const auto& boot = perfMode.GetBootSnapshot();
 	if (IsVRRenderScaleModeLatched() && boot.method == UpscaleMethod::kDLSS)
 		return ClampDLSSPresetUInt(boot.dlssPreset);
-	if (const auto stableProfile = GetStableVRRenderScaleRuntimeProfile();
-		stableProfile && stableProfile->method == UpscaleMethod::kDLSS) {
-		return ClampDLSSPresetUInt(stableProfile->dlssPreset);
+	if (const auto runtimeProfile = GetVRRenderScaleRuntimeOptions();
+		runtimeProfile && runtimeProfile->method == UpscaleMethod::kDLSS) {
+		return ClampDLSSPresetUInt(runtimeProfile->dlssPreset);
 	}
 
 	return ClampDLSSPresetUInt(settings.dlssPreset);
@@ -19166,8 +19228,8 @@ uint32_t Upscaling::GetRuntimeDLSSPreset() const
 
 bool Upscaling::GetRuntimeFSR4Enabled() const
 {
-	if (const auto stableProfile = GetStableVRRenderScaleRuntimeProfile())
-		return stableProfile->fsr4RuntimeEnabled;
+	if (const auto runtimeProfile = GetVRRenderScaleRuntimeOptions())
+		return runtimeProfile->fsr4RuntimeEnabled;
 
 	return settings.fsr4RuntimeEnable;
 }
@@ -22984,15 +23046,31 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 		return;
 	}
 
+	const auto controllerSnapshot = GetVRRenderScaleTransitionSnapshot();
+	const VRRenderScaleProfileSnapshot* pendingControllerProfile = nullptr;
+	if (controllerSnapshot.requested.valid &&
+		controllerSnapshot.requested.transitionEpoch ==
+			controllerSnapshot.targetEpoch) {
+		pendingControllerProfile = std::addressof(controllerSnapshot.requested);
+	} else if (controllerSnapshot.applying.valid &&
+		controllerSnapshot.applying.transitionEpoch ==
+			controllerSnapshot.targetEpoch) {
+		pendingControllerProfile = std::addressof(controllerSnapshot.applying);
+	}
+	const bool preparedDirectMenuRelatch =
+		VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
+			a_origin == VRUpscalingTransitionOrigin::CSMenu,
+			pendingControllerProfile ? pendingControllerProfile->requestID : 0,
+			preparedVRRenderScaleRequestID.load(
+				std::memory_order_acquire));
 	const uint32_t relatchDelayFrames = std::max(
-		kVRUpscalingTransitionApplyDelayFrames,
+		preparedDirectMenuRelatch ? 1u : kVRUpscalingTransitionApplyDelayFrames,
 		a_minDelayFrames);
 	const bool requirePostLoadSettle = UsesVRRenderScalePostLoadSettle(*this, configuredMethod, a_origin);
 	const auto currentOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 	const bool wasPending =
 		pendingPerfModeRenderTargetRecreate.load(
 			std::memory_order_acquire);
-	const auto controllerSnapshot = GetVRRenderScaleTransitionSnapshot();
 	const bool controllerTransitionInFlight =
 		controllerSnapshot.state != VRRenderScaleTransitionState::Idle &&
 		controllerSnapshot.state != VRRenderScaleTransitionState::Active;
@@ -23536,6 +23614,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	uint32_t retryDelayFrames = 0;
 	uint32_t relatchContractGeneration = 0;
 	uint64_t admittedMutationSourceEpoch = 0;
+	bool preparedDirectMenuRelatch = false;
 	{
 		const std::scoped_lock queueLock(
 			perfModeRenderTargetRecreateQueueMutex);
@@ -23786,6 +23865,24 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingPerfModeRenderTargetRecreateOrigin);
 		relatchEpoch = pendingPerfModeRenderTargetRecreateEpoch.load(
 			std::memory_order_acquire);
+		const VRRenderScaleProfileSnapshot* relatchProfile = nullptr;
+		if (controllerAdmissionSnapshot.requested.valid &&
+			controllerAdmissionSnapshot.requested.transitionEpoch ==
+				relatchEpoch) {
+			relatchProfile =
+				std::addressof(controllerAdmissionSnapshot.requested);
+		} else if (controllerAdmissionSnapshot.applying.valid &&
+			controllerAdmissionSnapshot.applying.transitionEpoch ==
+				relatchEpoch) {
+			relatchProfile =
+				std::addressof(controllerAdmissionSnapshot.applying);
+		}
+		preparedDirectMenuRelatch =
+			VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
+				relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				relatchProfile ? relatchProfile->requestID : 0,
+				preparedVRRenderScaleRequestID.load(
+					std::memory_order_acquire));
 		postLoadRecoveryEpoch =
 			pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(
 				std::memory_order_acquire);
@@ -23821,6 +23918,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	const bool rc94PostLoadDoorRelatch =
 		IsExactCurrentVRFpsStabilizerDoorHandoff(*this, relatchEpoch);
+	const uint32_t lifecyclePollRetryFrames =
+		preparedDirectMenuRelatch ?
+			kVRRenderScaleMenuLifecyclePollRetryFrames :
+			kVRUpscalingTransitionApplyDelayFrames;
 	auto mutationAtAdmission =
 		GetVRRenderScalePhysicalMutationSnapshot();
 	if (mutationAtAdmission.epoch != 0) {
@@ -25271,7 +25372,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				if (outstandingTeardownDisposition ==
 					VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Retry) {
 					requeueRelatch(
-						kVRUpscalingTransitionApplyDelayFrames,
+						lifecyclePollRetryFrames,
 						false,
 						VRRenderScaleRetryKind::Backend);
 					return true;
@@ -25514,11 +25615,46 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool dlssResourcesAvailableForWarmRetention =
 			vrDLSSRuntimeResourceGeneration != 0 &&
 			dlssResourcesNeedTeardownForRelatch;
+		auto* relatchColorInput = globals::game::renderer ?
+			globals::game::renderer->GetRuntimeData()
+				.renderTargets[RE::RENDER_TARGETS::kMAIN]
+				.texture :
+			nullptr;
+		const bool exactFullEyeDLSSProviderReady =
+			plannedRelatchSizeKnown && relatchColorInput &&
+			streamline.HasCompleteVRDLSSViewportResources(
+				Streamline::DLSSViewportRole::FullEye,
+				relatchQualityMode,
+				relatchSettings.dlssPreset,
+				perfMode.trueHMDEyeWidth,
+				perfMode.trueHMDEyeHeight,
+				relatchColorInput);
+		const bool reusePreparedDLSSResourcesForActivation =
+			VRVendorRelatchPolicy::CanReusePreparedDLSSForActivation({
+				.directMenuRelatch =
+					relatchOrigin == VRUpscalingTransitionOrigin::CSMenu,
+				.targetActive = relatchTargetRenderScaleActive,
+				.targetIsDLSS = relatchUpscaleMethod == UpscaleMethod::kDLSS,
+				.previousWasDLSS = previousVendorWasDLSS,
+				.resetPending = pendingDLSSResetForRelatch,
+				.memoryPressureNormal =
+					memoryAtAdmission.valid &&
+					memoryAtAdmission.pressure ==
+						VRRenderScaleMemoryPressure::Normal,
+				.postLoadResetPending =
+					postLoadRuntimeResetPending.load(
+						std::memory_order_acquire),
+				.preservingActiveContract = preserveActiveContractForRecovery,
+				.deviceLost = IsSubmitStageDeviceLost(),
+				.exactFullEyeProviderReady = exactFullEyeDLSSProviderReady,
+			});
 		const bool retainWarmDLSSResourcesForRelatch =
-			retainWarmInactiveVendorResourcesForRelatch &&
-			!pendingDLSSResetForRelatch &&
-			dlssResourcesAvailableForWarmRetention &&
-			(relatchUpscaleMethod != UpscaleMethod::kDLSS || !previousBootWasActiveDLSS);
+			(reusePreparedDLSSResourcesForActivation ||
+				(retainWarmInactiveVendorResourcesForRelatch &&
+					!pendingDLSSResetForRelatch &&
+					dlssResourcesAvailableForWarmRetention &&
+					(relatchUpscaleMethod != UpscaleMethod::kDLSS ||
+						!previousBootWasActiveDLSS)));
 		const bool preserveActiveDLSSResourcesForRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
 			previousBootWasActiveDLSS &&
@@ -26699,7 +26835,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 						VRVendorRuntimeLifecyclePhase::WaitingForDrain,
 						relatchContractGeneration,
 						"render-target relatch FSR drain");
-					requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Backend);
+					requeueRelatch(lifecyclePollRetryFrames, false, VRRenderScaleRetryKind::Backend);
 				} else {
 					// A terminal drain failure is not made transient by retrying the
 					// same immutable transition. Leave the previous stable profile
@@ -26791,7 +26927,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 			if (teardownDisposition ==
 				VRVendorRelatchPolicy::NativeRestoreTeardownDisposition::Retry) {
-				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Backend);
+				requeueRelatch(lifecyclePollRetryFrames, false, VRRenderScaleRetryKind::Backend);
 			} else if (terminalInactiveFSRFailure) {
 				// The failed FSR allocation remains owned, but a terminal teardown
 				// result cannot become safe through another identical frame retry.
@@ -27334,7 +27470,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			InvalidateFrameScopedUpscalingState();
 			ClearSubmitStageVendorResumeStability();
 			if (vendorRecreateResult == VRVendorResourceResetResult::Pending) {
-				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false, VRRenderScaleRetryKind::Backend);
+				requeueRelatch(lifecyclePollRetryFrames, false, VRRenderScaleRetryKind::Backend);
 			} else {
 				recoverTerminalVendorRelatchAfterTargetMutation(
 					relatchUpscaleMethod,
@@ -27639,21 +27775,20 @@ void Upscaling::ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame)
 	const std::scoped_lock resumeStateLock(
 		submitStageVendorResumeStableEyeMaskMutex);
 	const uint32_t currentFrame = std::max(a_currentFrame, 1u);
-	const uint32_t resumeFrame = currentFrame + kVRSubmitStageVendorRelatchCooldownFrames;
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	perfMode.SetSubmitStageVendorAllowed(false);
-	submitStageVendorResumeStartFrame.store(currentFrame, std::memory_order_release);
 	ClearSubmitStageVendorResumeStability();
 	submitStageDLSSViewportPreparationGeneration.store(0, std::memory_order_release);
 	submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
 	submitStageDLSSViewportPreparationFailed.store(false, std::memory_order_release);
-	submitStageVendorResumeFrame.store(resumeFrame, std::memory_order_release);
+	// This is an active-guard token. Exact stereo observations, rather than an
+	// arbitrary future frame number, decide when presentation can be promoted.
+	submitStageVendorResumeFrame.store(currentFrame, std::memory_order_release);
 	if (emitDiagLogs) {
 		logger::debug(
-			"[VRRenderScale][Diag] Armed submit-stage vendor resume cooldown method={} startFrame={} resumeFrame={} pendingDLSS={} pendingFSR={} fsrResources={}",
+			"[VRRenderScale][Diag] Armed submit-stage vendor resume proof method={} guardFrame={} pendingDLSS={} pendingFSR={} fsrResources={}",
 			magic_enum::enum_name(GetRuntimeUpscaleMethod()),
 			currentFrame,
-			resumeFrame,
 			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
 			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
 			BoolText(fidelityFX.HasFSRResources()));
@@ -27665,7 +27800,6 @@ void Upscaling::ClearSubmitStageVendorResumeCooldown()
 	const std::scoped_lock resumeStateLock(
 		submitStageVendorResumeStableEyeMaskMutex);
 	submitStageVendorResumeFrame.store(0, std::memory_order_release);
-	submitStageVendorResumeStartFrame.store(0, std::memory_order_release);
 	ClearSubmitStageVendorResumeStability();
 	submitStageDLSSViewportPreparationGeneration.store(0, std::memory_order_release);
 	submitStageDLSSViewportPreparationPending.store(false, std::memory_order_release);
@@ -27688,7 +27822,7 @@ void Upscaling::ClearSubmitStageVendorResumeStability()
 		std::memory_order_release);
 }
 
-void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff)
+void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff, bool a_directMenuRelatch)
 {
 	if (!a_stableCandidate) {
 		ClearSubmitStageVendorResumeStability();
@@ -27835,12 +27969,17 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 		submitStageVendorResumeLastStableFrame.store(currentFrame, std::memory_order_release);
 	}
 
-	const uint32_t cooldownStartFrame = submitStageVendorResumeStartFrame.load(std::memory_order_acquire);
-	const uint32_t minimumCooldownFrames =
-		a_stabilizerDoorHandoff ? 0u : kVRSubmitStageVendorRelatchMinCooldownFrames;
 	const uint32_t requiredStableFrames =
 		a_stabilizerDoorHandoff ? kVRSubmitStageVendorDoorHandoffStableFrames : kVRSubmitStageVendorRelatchStableFrames;
-	if (ElapsedFrames(cooldownStartFrame, currentFrame) < minimumCooldownFrames ||
+	const uint32_t guardStartFrame =
+		submitStageVendorResumeFrame.load(std::memory_order_acquire);
+	const uint32_t minimumGuardFrames =
+		a_stabilizerDoorHandoff || a_directMenuRelatch ?
+			0u :
+			kVRUpscalingTransitionApplyDelayFrames;
+	// A prepared direct-menu request uses exact stereo observations as its release
+	// clock. Recovery/API transitions retain their established settling cadence.
+	if (ElapsedFrames(guardStartFrame, currentFrame) < minimumGuardFrames ||
 		stableFrames < requiredStableFrames ||
 		dlssViewportPreparation != Streamline::DLSSViewportPreparationResult::Ready) {
 		return;
@@ -47066,6 +47205,18 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			(!transitionFoveatedBypass || protectedPresentationHandoffReady) &&
 			motionVector.texture &&
 			depth.texture;
+		const bool directMenuRelatch =
+			transitionSnapshot.applied.valid &&
+			transitionSnapshot.applied.active &&
+			transitionSnapshot.applied.requestID != 0 &&
+			transitionSnapshot.applied.requestID ==
+				preparedVRRenderScaleRequestID.load(
+					std::memory_order_acquire) &&
+			transitionSnapshot.applied.contractGeneration ==
+				activeContractGeneration &&
+			transitionSnapshot.applied.method == upscaleMethod &&
+			transitionSnapshot.applied.origin ==
+				VRUpscalingTransitionOrigin::CSMenu;
 		TryPromoteVRRenderScaleSubmitStageContract(
 			currentFrame,
 			a_compositorCycleToken,
@@ -47077,7 +47228,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			sourceRegion.height,
 			eyeWidthOut,
 			eyeHeightOut,
-			stabilizerDoorHandoffPresentationReady);
+			stabilizerDoorHandoffPresentationReady,
+			directMenuRelatch);
 	}
 
 	if (!presentationOnly && !vendorLifecycleMutationDeferred &&
@@ -51444,6 +51596,137 @@ bool Upscaling::HasPendingVRRenderScaleTransition() const
 	return IsVRRenderScaleCurrentOrTargetRelevant(*this);
 }
 
+void Upscaling::PreparePendingVRRenderScaleTransition(
+	const VRRenderScaleDesiredProfile& a_request)
+{
+	if (!a_request.pending || a_request.requestID == 0 ||
+		a_request.origin != VRUpscalingTransitionOrigin::CSMenu ||
+		!IsRenderScaleMethodEligible(a_request.method) ||
+		!a_request.renderScaleModeEnabled ||
+		!IsRenderScaleQualityMode(a_request.qualityMode) ||
+		!globals::d3d::device ||
+		!perfMode.trueHMDEyeWidth || !perfMode.trueHMDEyeHeight ||
+		IsSubmitStageDeviceLost() ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		(a_request.method == UpscaleMethod::kDLSS &&
+			pendingDLSSReset.load(std::memory_order_acquire)) ||
+		(a_request.method == UpscaleMethod::kFSR &&
+			pendingFSRReset.load(std::memory_order_acquire)) ||
+		(globals::shaderCache && globals::shaderCache->IsCompiling())) {
+		return;
+	}
+	const uint64_t previousRequestID =
+		attemptedVRRenderScalePreparationRequestID.exchange(
+			a_request.requestID,
+			std::memory_order_acq_rel);
+	if (previousRequestID == a_request.requestID)
+		return;
+
+	{
+		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		const auto& memory = vrRenderScaleTransitionController.memory;
+		if (!memory.valid ||
+			memory.pressure != VRRenderScaleMemoryPressure::Normal) {
+			return;
+		}
+	}
+
+	const float renderScale = GetQualityModeResolutionScale(
+		ClampQualityModeUInt(a_request.qualityMode));
+	const uint32_t renderEyeWidth = ScaleVRRenderDimension(
+		perfMode.trueHMDEyeWidth,
+		renderScale);
+	const uint32_t renderEyeHeight = ScaleVRRenderDimension(
+		perfMode.trueHMDEyeHeight,
+		renderScale);
+	bool shadersReady = true;
+	if (globals::features::screenSpaceShadows.loaded &&
+		globals::features::screenSpaceShadows.bendSettings.Enable != 0) {
+		shadersReady =
+			globals::features::screenSpaceShadows.PrewarmVRRenderScaleShaders(
+				renderEyeWidth * 2u,
+				renderEyeHeight) &&
+			shadersReady;
+	}
+	if (globals::features::screenSpaceGI.loaded &&
+		globals::features::screenSpaceGI.settings.Enabled) {
+		shadersReady =
+			globals::features::screenSpaceGI.PrewarmShaders() &&
+			shadersReady;
+	}
+
+	bool vendorResourcesReady = true;
+	if (a_request.method == UpscaleMethod::kDLSS) {
+		auto renderer = globals::game::renderer;
+		auto* colorInput = renderer ?
+			renderer->GetRuntimeData()
+				.renderTargets[RE::RENDER_TARGETS::kMAIN]
+				.texture :
+			nullptr;
+		if (!streamline.initialized || !streamline.featureDLSS || !colorInput) {
+			vendorResourcesReady = false;
+		} else {
+			vendorResourcesReady =
+				streamline.HasCompleteVRDLSSViewportResources(
+					Streamline::DLSSViewportRole::FullEye,
+					a_request.qualityMode,
+					a_request.dlssPreset,
+					perfMode.trueHMDEyeWidth,
+					perfMode.trueHMDEyeHeight,
+					colorInput);
+		}
+	} else if (a_request.method == UpscaleMethod::kFSR) {
+		const bool runtimeFSR =
+			fidelityFX.ShouldUseRuntimeUpscalerForFSR() &&
+			!fidelityFX.IsRuntimeUpscalerFailureLatched();
+		if (runtimeFSR) {
+			const bool runtimeFSR4 =
+				a_request.fsr4RuntimeEnabled &&
+				!fidelityFX.IsRuntimeFsr4FailureLatched() &&
+				fidelityFX.IsRuntimeFsr4Available();
+			vendorResourcesReady =
+				fidelityFX.AreRuntimeUpscalerResourcesCompatible(
+					perfMode.trueHMDEyeWidth,
+					perfMode.trueHMDEyeHeight,
+					perfMode.trueHMDEyeWidth,
+					perfMode.trueHMDEyeHeight,
+					2u,
+					runtimeFSR4 ?
+						FFX_UPSCALER_VERSION :
+						FidelityFX::Fsr3Version);
+		} else {
+			vendorResourcesReady = fidelityFX.AreFSRResourcesCompatible(
+				renderEyeWidth,
+				renderEyeHeight,
+				perfMode.trueHMDEyeWidth,
+				perfMode.trueHMDEyeHeight,
+				2u);
+		}
+	}
+
+	const bool preparationComplete =
+		shadersReady && vendorResourcesReady;
+	if (preparationComplete) {
+		preparedVRRenderScaleRequestID.store(
+			a_request.requestID,
+			std::memory_order_release);
+	}
+
+	if (!shadersReady) {
+		logger::warn(
+			"[VRRenderScale] Optional profile preparation was incomplete for request {}; the protected relatch will retain normal fallback and recovery behavior.",
+			a_request.requestID);
+	} else if (ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][Diag] Profile preparation request {} before physical mutation: complete={} render={}x{} vendorReady={}",
+			a_request.requestID,
+			BoolText(preparationComplete),
+			renderEyeWidth * 2u,
+			renderEyeHeight,
+			BoolText(vendorResourcesReady));
+	}
+}
+
 bool Upscaling::ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const
 {
 	if (!globals::game::isVR || !IsRenderScaleMethodEligible(GetConfiguredUpscaleMethodForTransition()))
@@ -51514,6 +51797,13 @@ bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
 		IsBufferedVRFpsStabilizerDoorHandoff(desiredProfile);
 	if (!HasPendingVRRenderScaleTransition() && !bufferedStabilizerDoorHandoff)
 		return false;
+	if (VRVendorRelatchPolicy::CanBypassPreparedMenuRequestDelay(
+			desiredProfile.origin == VRUpscalingTransitionOrigin::CSMenu,
+			desiredProfile.requestID,
+			preparedVRRenderScaleRequestID.load(
+				std::memory_order_acquire))) {
+		return false;
+	}
 
 	const uint32_t queuedFrame = desiredProfile.queuedFrame;
 	if (queuedFrame == 0)
@@ -51595,6 +51885,9 @@ void Upscaling::ApplyPendingVRUpscalingTransition()
 
 	if (ApplyOpenCompositeUpscalingBlocker(true))
 		return;
+
+	PreparePendingVRRenderScaleTransition(
+		GetPendingVRRenderScaleDesiredProfile());
 
 	static bool loggedVRUpscalingTransitionDefer = false;
 	if (ShouldDeferVRUpscalingTransitionSettings()) {

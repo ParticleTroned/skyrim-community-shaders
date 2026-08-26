@@ -271,6 +271,15 @@ public:
 	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
 	bool WasLastDLSSFailureDuplicatedConstants() const { return lastDLSSFailureDuplicatedConstants; }
 	bool HasDLSSResourcesPendingTeardown() const;
+	/** @brief Verifies one eye's exact cached DLSS option contract. */
+	[[nodiscard]] bool IsVRDLSSViewportResourceCompatible(
+		const VRDLSSViewportSlot& a_slot,
+		uint32_t a_eyeIndex,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		ID3D11Resource* a_colorInput) const noexcept;
 	[[nodiscard]] bool HasCompleteVRDLSSViewportResources() const noexcept
 	{
 		if (activeDLSSViewportResourcesAllocated[0] &&
@@ -289,6 +298,14 @@ public:
 		}
 		return false;
 	}
+	/** @brief Proves exact option identity and ownership for both eyes of one slot. */
+	[[nodiscard]] bool HasCompleteVRDLSSViewportResources(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		ID3D11Resource* a_colorInput) const noexcept;
 
 	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

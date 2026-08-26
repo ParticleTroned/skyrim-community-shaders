@@ -1239,18 +1239,15 @@ bool Streamline::TryResolveExistingVRDLSSViewport(
 		return false;
 
 	const auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
-	const auto& cache = slot.optionsCache[a_eyeIndex];
 	const auto resolvedViewport = slot.viewport[a_eyeIndex];
-	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(a_colorInput);
-	if (!slot.resourcesAllocated[a_eyeIndex] ||
-		!cache.valid ||
-		cache.viewport != static_cast<uint32_t>(resolvedViewport) ||
-		cache.outputWidth != a_outputWidth ||
-		cache.outputHeight != a_outputHeight ||
-		cache.qualityMode != qualityMode ||
-		cache.dlssPreset != dlssPreset ||
-		cache.isHDR != colorBuffersHDR ||
-		cache.useLegacyProfile != isRTXBelow40series) {
+	if (!IsVRDLSSViewportResourceCompatible(
+			slot,
+			a_eyeIndex,
+			qualityMode,
+			dlssPreset,
+			a_outputWidth,
+			a_outputHeight,
+			a_colorInput)) {
 		return false;
 	}
 
@@ -1337,7 +1334,10 @@ bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t 
 	return slotResourcesFreed;
 }
 
-Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset)
+Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
+	DLSSViewportRole viewportRole,
+	uint32_t qualityMode,
+	uint32_t dlssPreset)
 {
 	if (!globals::game::isVR)
 		return DLSSViewportPreparationResult::Ready;
@@ -1349,7 +1349,6 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(DLSS
 	// in one role must never consume the fence that protects another role's
 	// LRU victim, or that other role will restart its drain indefinitely.
 	auto& pendingSlotRecycleIdleFence = pendingVRDLSSSlotRecycleIdleFences[roleIndex];
-
 	int slotIndex = FindVRDLSSViewportSlot(viewportRole, clampedQualityMode, clampedPreset);
 	if (slotIndex >= 0) {
 		// A latest-wins request can supersede a pending miss with a cache hit.
@@ -1425,6 +1424,83 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(DLSS
 	slot.viewport[0] = sl::ViewportHandle(viewportBase);
 	slot.viewport[1] = sl::ViewportHandle(viewportBase + 1);
 	return DLSSViewportPreparationResult::Ready;
+}
+
+bool Streamline::IsVRDLSSViewportResourceCompatible(
+	const VRDLSSViewportSlot& a_slot,
+	uint32_t a_eyeIndex,
+	uint32_t a_qualityMode,
+	uint32_t a_dlssPreset,
+	uint32_t a_outputWidth,
+	uint32_t a_outputHeight,
+	ID3D11Resource* a_colorInput) const noexcept
+{
+	if (!a_slot.valid || a_eyeIndex >= 2 || !a_outputWidth ||
+		!a_outputHeight || !a_colorInput) {
+		return false;
+	}
+
+	const auto qualityMode =
+		std::min<uint32_t>(a_qualityMode, Upscaling::kQualityModeMaxIndex);
+	const auto dlssPreset = Upscaling::ClampDLSSPresetUInt(a_dlssPreset);
+	const auto& options = a_slot.optionsCache[a_eyeIndex];
+	return a_slot.qualityMode == qualityMode &&
+	       a_slot.dlssPreset == dlssPreset &&
+	       a_slot.resourcesAllocated[a_eyeIndex] && options.valid &&
+	       options.viewport ==
+		       static_cast<uint32_t>(a_slot.viewport[a_eyeIndex]) &&
+	       options.outputWidth == a_outputWidth &&
+	       options.outputHeight == a_outputHeight &&
+	       options.qualityMode == qualityMode &&
+	       options.dlssPreset == dlssPreset &&
+	       options.isHDR == GetDLSSColorBuffersHDR(a_colorInput) &&
+	       options.useLegacyProfile == isRTXBelow40series;
+}
+
+bool Streamline::HasCompleteVRDLSSViewportResources(
+	DLSSViewportRole a_viewportRole,
+	uint32_t a_qualityMode,
+	uint32_t a_dlssPreset,
+	uint32_t a_outputWidth,
+	uint32_t a_outputHeight,
+	ID3D11Resource* a_colorInput) const noexcept
+{
+	if (!globals::game::isVR || !initialized || !featureDLSS ||
+		static_cast<uint32_t>(a_viewportRole) >= kVRDLSSViewportRoleCount ||
+		!a_outputWidth || !a_outputHeight || !a_colorInput) {
+		return false;
+	}
+
+	const auto roleIndex = GetDLSSViewportRoleIndex(a_viewportRole);
+	if (pendingDLSSResourceFreeIdleFence ||
+		pendingVRDLSSSlotRecycleIdleFences[roleIndex]) {
+		return false;
+	}
+
+	const auto qualityMode =
+		std::min<uint32_t>(a_qualityMode, Upscaling::kQualityModeMaxIndex);
+	const auto dlssPreset = Upscaling::ClampDLSSPresetUInt(a_dlssPreset);
+	const int slotIndex = FindVRDLSSViewportSlot(
+		a_viewportRole,
+		qualityMode,
+		dlssPreset);
+	if (slotIndex < 0)
+		return false;
+
+	const auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		if (!IsVRDLSSViewportResourceCompatible(
+				slot,
+				eye,
+				qualityMode,
+				dlssPreset,
+				a_outputWidth,
+				a_outputHeight,
+				a_colorInput)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 bool Streamline::ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport)

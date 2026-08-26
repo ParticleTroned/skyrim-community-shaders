@@ -16,6 +16,8 @@
 
 #	include <atomic>
 #	include <chrono>
+#	include <cstddef>
+#	include <format>
 #	include <functional>
 #	include <future>
 #	include <memory>
@@ -28,6 +30,8 @@ namespace
 	using json = nlohmann::json;
 
 	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
+	constexpr std::size_t kDLSSDevBenchTraceDefaultReadLimit = 32;
+	static_assert(kDLSSDevBenchTraceDefaultReadLimit <= Streamline::kDLSSDevBenchTraceCapacity);
 	constexpr unsigned int kDevBenchToolExtensionRevision = 6;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
@@ -774,6 +778,227 @@ namespace
 		};
 	}
 
+	const char* GetDLSSDevBenchTraceStageName(Streamline::DLSSDevBenchTraceStage a_stage)
+	{
+		switch (a_stage) {
+		case Streamline::DLSSDevBenchTraceStage::ConstantsCacheReuse:
+			return "constants_cache_reuse";
+		case Streamline::DLSSDevBenchTraceStage::SetConstants:
+			return "set_constants";
+		case Streamline::DLSSDevBenchTraceStage::Evaluate:
+			return "evaluate";
+		default:
+			return "unknown";
+		}
+	}
+
+	json DLSSDevBenchChangedFieldsJson(uint64_t a_mask)
+	{
+		json fields = json::array();
+		using Field = Streamline::DLSSDevBenchTraceSignatureField;
+		for (uint8_t index = 0; index < static_cast<uint8_t>(Field::Count); ++index) {
+			if ((a_mask & (uint64_t{ 1 } << index)) != 0)
+				fields.push_back(std::string(magic_enum::enum_name(static_cast<Field>(index))));
+		}
+		return fields;
+	}
+
+	std::string DLSSDevBenchHex64(uint64_t a_value)
+	{
+		return std::format("0x{:016X}", a_value);
+	}
+
+	json DLSSDevBenchTraceSignatureJson(const Streamline::DLSSDevBenchTraceSignature& a_signature)
+	{
+		const auto quantized = [](int32_t a_value) {
+			return json{
+				{ "value", static_cast<double>(a_value) / 1000000.0 },
+				{ "quantized", a_value },
+			};
+		};
+		return {
+			{ "traceSessionID", a_signature.traceSessionID },
+			{ "frame", a_signature.frame },
+			{ "frameToken", a_signature.frameToken },
+			{ "frameTokenAddress", DLSSDevBenchHex64(a_signature.frameTokenAddress) },
+			{ "requestedViewport", a_signature.requestedViewport },
+			{ "resolvedViewport", a_signature.resolvedViewport },
+			{ "eye", a_signature.eyeIndex },
+			{ "viewportRole", std::string(magic_enum::enum_name(static_cast<Streamline::DLSSViewportRole>(a_signature.viewportRole))) },
+			{ "viewportRoleValue", a_signature.viewportRole },
+			{ "output", { { "width", a_signature.outputWidth }, { "height", a_signature.outputHeight } } },
+			{ "qualityMode", a_signature.qualityMode },
+			{ "dlssPreset", a_signature.dlssPreset },
+			{ "extentIn", {
+							  { "left", a_signature.extentInLeft },
+							  { "top", a_signature.extentInTop },
+							  { "width", a_signature.extentInWidth },
+							  { "height", a_signature.extentInHeight },
+						  } },
+			{ "extentOut", {
+							   { "left", a_signature.extentOutLeft },
+							   { "top", a_signature.extentOutTop },
+							   { "width", a_signature.extentOutWidth },
+							   { "height", a_signature.extentOutHeight },
+						   } },
+			{ "viewportScale", { { "x", quantized(a_signature.viewportScaleXQ) }, { "y", quantized(a_signature.viewportScaleYQ) } } },
+			{ "pinholeOffset", { { "x", quantized(a_signature.pinholeOffsetXQ) }, { "y", quantized(a_signature.pinholeOffsetYQ) } } },
+			{ "jitter", { { "x", quantized(a_signature.jitterXQ) }, { "y", quantized(a_signature.jitterYQ) } } },
+			{ "historyReset", a_signature.historyResetRequested },
+			{ "colorBuffersHDR", a_signature.colorBuffersHDR },
+			{ "submitStageVR", a_signature.submitStageVRDLSS },
+			{ "streamlineConstants", {
+										 { "encoding", "IEEE-754 binary32 bit patterns; Boolean fields use sl::Boolean values" },
+										 { "cameraViewToClip", a_signature.constants.cameraViewToClip },
+										 { "clipToCameraView", a_signature.constants.clipToCameraView },
+										 { "clipToLensClip", a_signature.constants.clipToLensClip },
+										 { "clipToPrevClip", a_signature.constants.clipToPrevClip },
+										 { "prevClipToClip", a_signature.constants.prevClipToClip },
+										 { "jitterOffset", a_signature.constants.jitterOffset },
+										 { "motionVectorScale", a_signature.constants.motionVectorScale },
+										 { "cameraPinholeOffset", a_signature.constants.cameraPinholeOffset },
+										 { "cameraPosition", a_signature.constants.cameraPosition },
+										 { "cameraUp", a_signature.constants.cameraUp },
+										 { "cameraRight", a_signature.constants.cameraRight },
+										 { "cameraForward", a_signature.constants.cameraForward },
+										 { "cameraNear", a_signature.constants.cameraNear },
+										 { "cameraFar", a_signature.constants.cameraFar },
+										 { "cameraFOV", a_signature.constants.cameraFOV },
+										 { "cameraAspectRatio", a_signature.constants.cameraAspectRatio },
+										 { "motionVectorsInvalidValue", a_signature.constants.motionVectorsInvalidValue },
+										 { "minRelativeLinearDepthObjectSeparation", a_signature.constants.minRelativeLinearDepthObjectSeparation },
+										 { "depthInverted", a_signature.constants.depthInverted },
+										 { "cameraMotionIncluded", a_signature.constants.cameraMotionIncluded },
+										 { "motionVectors3D", a_signature.constants.motionVectors3D },
+										 { "reset", a_signature.constants.reset },
+										 { "orthographicProjection", a_signature.constants.orthographicProjection },
+										 { "motionVectorsDilated", a_signature.constants.motionVectorsDilated },
+										 { "motionVectorsJittered", a_signature.constants.motionVectorsJittered },
+									 } },
+			{ "resources", {
+							   { "colorIn", DLSSDevBenchHex64(a_signature.colorIn) },
+							   { "colorOut", DLSSDevBenchHex64(a_signature.colorOut) },
+							   { "depth", DLSSDevBenchHex64(a_signature.depth) },
+							   { "motionVectors", DLSSDevBenchHex64(a_signature.motionVectors) },
+							   { "reactiveMask", DLSSDevBenchHex64(a_signature.reactiveMask) },
+							   { "transparencyMask", DLSSDevBenchHex64(a_signature.transparencyMask) },
+						   } },
+		};
+	}
+
+	json DLSSDevBenchTraceSummaryJson(const Streamline::DLSSDevBenchTraceSnapshot& a_snapshot)
+	{
+		return {
+			{ "active", a_snapshot.active },
+			{ "sessionID", a_snapshot.sessionID },
+			{ "capacity", Streamline::kDLSSDevBenchTraceCapacity },
+			{ "timestampQPCFrequency", a_snapshot.timestampQPCFrequency },
+			{ "retainedRecords", a_snapshot.retainedRecords },
+			{ "totalRecords", a_snapshot.totalRecords },
+			{ "overwrittenRecords", a_snapshot.overwrittenRecords },
+			{ "droppedRecords", a_snapshot.droppedRecords },
+			{ "constantsCacheReuses", a_snapshot.constantsCacheReuses },
+			{ "setConstantsCalls", a_snapshot.setConstantsCalls },
+			{ "evaluateCalls", a_snapshot.evaluateCalls },
+			{ "duplicatedConstantsFailures", a_snapshot.duplicatedConstantsFailures },
+			{ "evaluateFailures", a_snapshot.evaluateFailures },
+			{ "lastDuplicatedConstantsFailureFound", a_snapshot.lastDuplicatedConstantsFailureFound },
+			{ "lastDuplicatedConstantsFailureSequence", a_snapshot.lastDuplicatedConstantsFailureSequence },
+			{ "lastEvaluateFailureFound", a_snapshot.lastEvaluateFailureFound },
+			{ "lastEvaluateFailureSequence", a_snapshot.lastEvaluateFailureSequence },
+		};
+	}
+
+	json DLSSDevBenchTraceCallJson(const Streamline::DLSSDevBenchTraceCall& a_call)
+	{
+		return {
+			{ "sequence", a_call.sequence },
+			{ "timestampQPC", a_call.timestampQPC },
+			{ "stage", GetDLSSDevBenchTraceStageName(a_call.stage) },
+			{ "resultCode", a_call.resultCode },
+			{ "result", std::string(magic_enum::enum_name(static_cast<sl::Result>(a_call.resultCode))) },
+			{ "label", std::string(a_call.label.data()) },
+			{ "threadID", a_call.threadID },
+			{ "compositorCycle", a_call.compositorCycleToken },
+			{ "compositorCycleExact", std::to_string(a_call.compositorCycleToken) },
+			{ "signature", DLSSDevBenchTraceSignatureJson(a_call.signature) },
+		};
+	}
+
+	json DLSSDevBenchTraceRecordJson(const Streamline::DLSSDevBenchTraceRecord& a_record)
+	{
+		json output{
+			{ "current", DLSSDevBenchTraceCallJson(a_record.current) },
+			{ "previousConstantsFound", a_record.previousConstantsFound },
+			{ "constantsChangedFieldMask", a_record.constantsChangedFieldMask },
+			{ "constantsChangedFieldMaskExact", DLSSDevBenchHex64(a_record.constantsChangedFieldMask) },
+			{ "constantsChangedFields", DLSSDevBenchChangedFieldsJson(a_record.constantsChangedFieldMask) },
+			{ "previousEvaluationFound", a_record.previousEvaluationFound },
+			{ "evaluationChangedFieldMask", a_record.evaluationChangedFieldMask },
+			{ "evaluationChangedFieldMaskExact", DLSSDevBenchHex64(a_record.evaluationChangedFieldMask) },
+			{ "evaluationChangedFields", DLSSDevBenchChangedFieldsJson(a_record.evaluationChangedFieldMask) },
+		};
+		if (a_record.previousConstantsFound)
+			output["previousConstants"] = DLSSDevBenchTraceCallJson(a_record.previousConstants);
+		if (a_record.previousEvaluationFound)
+			output["previousEvaluation"] = DLSSDevBenchTraceCallJson(a_record.previousEvaluation);
+		return output;
+	}
+
+	bool TryGetNonNegativeInteger(const json& a_value, uint64_t& a_result)
+	{
+		if (a_value.is_number_unsigned()) {
+			a_result = a_value.get<uint64_t>();
+			return true;
+		}
+		if (!a_value.is_number_integer())
+			return false;
+		const int64_t value = a_value.get<int64_t>();
+		if (value < 0)
+			return false;
+		a_result = static_cast<uint64_t>(value);
+		return true;
+	}
+
+	json DLSSDevBenchTraceReadJson(
+		const Streamline::DLSSDevBenchTraceSnapshot& a_snapshot,
+		uint64_t a_afterSequence,
+		std::size_t a_limit)
+	{
+		json records = json::array();
+		uint64_t lastReturnedSequence = a_afterSequence;
+		for (const auto& record : a_snapshot.records) {
+			if (record.current.sequence <= a_afterSequence)
+				continue;
+			if (records.size() >= a_limit)
+				break;
+			records.push_back(DLSSDevBenchTraceRecordJson(record));
+			lastReturnedSequence = record.current.sequence;
+		}
+		const uint64_t availableFromSequence = a_snapshot.records.empty() ? 0u : a_snapshot.records.front().current.sequence;
+		const uint64_t latestSequence = a_snapshot.records.empty() ? 0u : a_snapshot.records.back().current.sequence;
+		const bool requestedSequenceOverwritten =
+			availableFromSequence > 0 && a_afterSequence < availableFromSequence - 1u;
+		json output{
+			{ "summary", DLSSDevBenchTraceSummaryJson(a_snapshot) },
+			{ "afterSequence", a_afterSequence },
+			{ "limit", a_limit },
+			{ "availableFromSequence", availableFromSequence },
+			{ "requestedSequenceOverwritten", requestedSequenceOverwritten },
+			{ "latestSequence", latestSequence },
+			{ "lastReturnedSequence", lastReturnedSequence },
+			{ "moreAvailable", lastReturnedSequence < latestSequence },
+			{ "records", std::move(records) },
+		};
+		if (a_snapshot.lastDuplicatedConstantsFailureFound) {
+			output["lastDuplicatedConstantsFailure"] =
+				DLSSDevBenchTraceRecordJson(a_snapshot.lastDuplicatedConstantsFailure);
+		}
+		if (a_snapshot.lastEvaluateFailureFound)
+			output["lastEvaluateFailure"] = DLSSDevBenchTraceRecordJson(a_snapshot.lastEvaluateFailure);
+		return output;
+	}
+
 	json RenderScaleActions()
 	{
 		return json::array({
@@ -786,6 +1011,11 @@ namespace
 			"gpu_performance_start",
 			"gpu_performance_stop",
 			"gpu_performance_reset",
+			"dlss_trace_status",
+			"dlss_trace_start",
+			"dlss_trace_read",
+			"dlss_trace_stop",
+			"dlss_trace_reset",
 			"record",
 			"start",
 			"apply",
@@ -873,12 +1103,91 @@ namespace
 		if (action.starts_with("texture_lifetime_") && !globals::game::isVR) {
 			return json{ { "error", "D3D11 texture-lifetime capture requires Skyrim VR" } };
 		}
+		if (action.starts_with("dlss_trace_") && !globals::game::isVR) {
+			return json{ { "error", "DLSS dispatch tracing requires Skyrim VR" } };
+		}
 		if (action == "status") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale iteration control requires Skyrim VR" } };
 				return json{ { "action", "status" }, { "status", BuildStatus(globals::features::upscaling) } };
 			});
+		}
+
+		if (action == "dlss_trace_status") {
+			return {
+				{ "action", "dlss_trace_status" },
+				{ "capture", DLSSDevBenchTraceSummaryJson(globals::features::upscaling.streamline.GetDLSSDevBenchTraceSnapshot(false)) },
+			};
+		}
+
+		if (action == "dlss_trace_start") {
+			auto& streamline = globals::features::upscaling.streamline;
+			if (!streamline.StartDLSSDevBenchTrace()) {
+				return {
+					{ "error", "a DLSS dispatch trace is already active" },
+					{ "capture", DLSSDevBenchTraceSummaryJson(streamline.GetDLSSDevBenchTraceSnapshot(false)) },
+				};
+			}
+			return {
+				{ "action", "dlss_trace_start" },
+				{ "capture", DLSSDevBenchTraceSummaryJson(streamline.GetDLSSDevBenchTraceSnapshot(false)) },
+			};
+		}
+
+		if (action == "dlss_trace_read") {
+			uint64_t afterSequence = 0;
+			if (a_args.contains("afterSequence")) {
+				if (!TryGetNonNegativeInteger(a_args["afterSequence"], afterSequence))
+					return { { "error", "afterSequence must be a non-negative integer" } };
+			}
+			uint64_t limit = kDLSSDevBenchTraceDefaultReadLimit;
+			if (a_args.contains("limit")) {
+				if (!TryGetNonNegativeInteger(a_args["limit"], limit))
+					return { { "error", "limit must be a non-negative integer" } };
+				if (limit < 1 || limit > Streamline::kDLSSDevBenchTraceCapacity) {
+					return {
+						{ "error", "limit is outside the supported range" },
+						{ "minimum", 1 },
+						{ "maximum", Streamline::kDLSSDevBenchTraceCapacity },
+					};
+				}
+			}
+			return {
+				{ "action", "dlss_trace_read" },
+				{ "capture", DLSSDevBenchTraceReadJson(
+								 globals::features::upscaling.streamline.GetDLSSDevBenchTraceSnapshot(),
+								 afterSequence,
+								 static_cast<std::size_t>(limit)) },
+			};
+		}
+
+		if (action == "dlss_trace_stop") {
+			auto& streamline = globals::features::upscaling.streamline;
+			if (!streamline.StopDLSSDevBenchTrace()) {
+				return {
+					{ "error", "no DLSS dispatch trace is active" },
+					{ "capture", DLSSDevBenchTraceSummaryJson(streamline.GetDLSSDevBenchTraceSnapshot(false)) },
+				};
+			}
+			return {
+				{ "action", "dlss_trace_stop" },
+				{ "capture", DLSSDevBenchTraceSummaryJson(streamline.GetDLSSDevBenchTraceSnapshot(false)) },
+			};
+		}
+
+		if (action == "dlss_trace_reset") {
+			auto& streamline = globals::features::upscaling.streamline;
+			if (!streamline.ResetDLSSDevBenchTrace()) {
+				return {
+					{ "error", "stop the active DLSS dispatch trace before resetting it" },
+					{ "capture", DLSSDevBenchTraceSummaryJson(streamline.GetDLSSDevBenchTraceSnapshot(false)) },
+				};
+			}
+			return {
+				{ "action", "dlss_trace_reset" },
+				{ "capture", DLSSDevBenchTraceSummaryJson(streamline.GetDLSSDevBenchTraceSnapshot(false)) },
+			};
 		}
 
 		if (action == "cpu_performance_status") {
@@ -1367,7 +1676,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"({"description":"Control and inspect CSX VR render-scale, fixed tiled-exact HMD-mask, transition, and DevBench-only CPU and GPU performance diagnostics. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})";
+			R"({"description":"Control and inspect CSX VR render-scale, fixed tiled-exact HMD-mask, transition, DevBench-only DLSS dispatch tracing, and CPU/GPU performance diagnostics. DLSS tracing is opt-in and non-blocking; droppedRecords reports capture contention, and the latest failures remain pinned if the ring wraps. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			diagnosticDescriptor,

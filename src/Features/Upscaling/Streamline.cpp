@@ -9,6 +9,12 @@
 #include <string>
 #include <string_view>
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <atomic>
+#	include <cstring>
+#	include <mutex>
+#endif
+
 #include "../../Deferred.h"
 #include "../../State.h"
 #include "../../Util.h"
@@ -208,6 +214,367 @@ namespace
 
 		return static_cast<int32_t>(std::lround(scaled));
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	constexpr std::size_t kDLSSDevBenchTraceIdentityCapacity = 32;
+	thread_local uint64_t g_dlssDevBenchCompositorCycleToken = 0;
+
+	struct DLSSDevBenchTraceIdentityRecord
+	{
+		bool valid = false;
+		uint64_t lastUse = 0;
+		Streamline::DLSSDevBenchTraceCall call{};
+	};
+
+	struct DLSSDevBenchTraceState
+	{
+		std::mutex mutex;
+		std::atomic_uint64_t activeSessionID{ 0 };
+		std::atomic_uint64_t droppedRecords{ 0 };
+		uint64_t nextSessionID = 1;
+		uint64_t sessionID = 0;
+		uint64_t qpcFrequency = 0;
+		uint64_t totalRecords = 0;
+		uint64_t constantsCacheReuses = 0;
+		uint64_t setConstantsCalls = 0;
+		uint64_t evaluateCalls = 0;
+		uint64_t duplicatedConstantsFailures = 0;
+		uint64_t evaluateFailures = 0;
+		uint64_t identityUseCounter = 0;
+		std::size_t recordWriteIndex = 0;
+		std::size_t recordCount = 0;
+		bool lastDuplicatedConstantsFailureFound = false;
+		bool lastEvaluateFailureFound = false;
+		Streamline::DLSSDevBenchTraceRecord lastDuplicatedConstantsFailure{};
+		Streamline::DLSSDevBenchTraceRecord lastEvaluateFailure{};
+		std::array<Streamline::DLSSDevBenchTraceRecord, Streamline::kDLSSDevBenchTraceCapacity> records{};
+		std::array<DLSSDevBenchTraceIdentityRecord, kDLSSDevBenchTraceIdentityCapacity> acceptedConstants{};
+		std::array<DLSSDevBenchTraceIdentityRecord, kDLSSDevBenchTraceIdentityCapacity> evaluations{};
+
+		DLSSDevBenchTraceState()
+		{
+			LARGE_INTEGER frequency{};
+			if (QueryPerformanceFrequency(&frequency))
+				qpcFrequency = static_cast<uint64_t>(frequency.QuadPart);
+		}
+	};
+	DLSSDevBenchTraceState g_dlssDevBenchTraceState;
+
+	DLSSDevBenchTraceState& GetDLSSDevBenchTraceState()
+	{
+		return g_dlssDevBenchTraceState;
+	}
+
+	void ClearDLSSDevBenchTraceLocked(DLSSDevBenchTraceState& a_state)
+	{
+		a_state.droppedRecords.store(0, std::memory_order_release);
+		a_state.totalRecords = 0;
+		a_state.constantsCacheReuses = 0;
+		a_state.setConstantsCalls = 0;
+		a_state.evaluateCalls = 0;
+		a_state.duplicatedConstantsFailures = 0;
+		a_state.evaluateFailures = 0;
+		a_state.identityUseCounter = 0;
+		a_state.recordWriteIndex = 0;
+		a_state.recordCount = 0;
+		a_state.lastDuplicatedConstantsFailureFound = false;
+		a_state.lastEvaluateFailureFound = false;
+		a_state.lastDuplicatedConstantsFailure = {};
+		a_state.lastEvaluateFailure = {};
+		a_state.records = {};
+		a_state.acceptedConstants = {};
+		a_state.evaluations = {};
+	}
+
+	template <class T, std::size_t N>
+	T* FindDLSSDevBenchTraceIdentity(
+		std::array<T, N>& a_records,
+		const Streamline::DLSSDevBenchTraceSignature& a_signature)
+	{
+		for (auto& record : a_records) {
+			if (record.valid &&
+				record.call.signature.frameToken == a_signature.frameToken &&
+				record.call.signature.resolvedViewport == a_signature.resolvedViewport) {
+				return &record;
+			}
+		}
+		return nullptr;
+	}
+
+	template <class T, std::size_t N>
+	T& SelectDLSSDevBenchTraceIdentitySlot(std::array<T, N>& a_records)
+	{
+		for (auto& record : a_records) {
+			if (!record.valid)
+				return record;
+		}
+
+		return *std::min_element(
+			a_records.begin(),
+			a_records.end(),
+			[](const T& a_left, const T& a_right) {
+				return a_left.lastUse < a_right.lastUse;
+			});
+	}
+
+	uint64_t BuildDLSSDevBenchChangedFieldMask(
+		const Streamline::DLSSDevBenchTraceSignature& a_previous,
+		const Streamline::DLSSDevBenchTraceSignature& a_current)
+	{
+		using Field = Streamline::DLSSDevBenchTraceSignatureField;
+		static_assert(static_cast<uint8_t>(Field::Count) <= 64);
+		uint64_t mask = 0;
+		const auto changed = [&](Field a_field, bool a_changed) {
+			if (a_changed)
+				mask |= uint64_t{ 1 } << static_cast<uint8_t>(a_field);
+		};
+
+		changed(Field::Frame, a_previous.frame != a_current.frame);
+		changed(Field::FrameToken, a_previous.frameToken != a_current.frameToken || a_previous.frameTokenAddress != a_current.frameTokenAddress);
+		changed(Field::RequestedViewport, a_previous.requestedViewport != a_current.requestedViewport);
+		changed(Field::ResolvedViewport, a_previous.resolvedViewport != a_current.resolvedViewport);
+		changed(Field::EyeIndex, a_previous.eyeIndex != a_current.eyeIndex);
+		changed(Field::ViewportRole, a_previous.viewportRole != a_current.viewportRole);
+		changed(Field::OutputWidth, a_previous.outputWidth != a_current.outputWidth);
+		changed(Field::OutputHeight, a_previous.outputHeight != a_current.outputHeight);
+		changed(Field::QualityMode, a_previous.qualityMode != a_current.qualityMode);
+		changed(Field::DLSSPreset, a_previous.dlssPreset != a_current.dlssPreset);
+		changed(Field::ExtentInLeft, a_previous.extentInLeft != a_current.extentInLeft);
+		changed(Field::ExtentInTop, a_previous.extentInTop != a_current.extentInTop);
+		changed(Field::ExtentInWidth, a_previous.extentInWidth != a_current.extentInWidth);
+		changed(Field::ExtentInHeight, a_previous.extentInHeight != a_current.extentInHeight);
+		changed(Field::ExtentOutLeft, a_previous.extentOutLeft != a_current.extentOutLeft);
+		changed(Field::ExtentOutTop, a_previous.extentOutTop != a_current.extentOutTop);
+		changed(Field::ExtentOutWidth, a_previous.extentOutWidth != a_current.extentOutWidth);
+		changed(Field::ExtentOutHeight, a_previous.extentOutHeight != a_current.extentOutHeight);
+		changed(Field::ViewportScaleX, a_previous.viewportScaleXQ != a_current.viewportScaleXQ);
+		changed(Field::ViewportScaleY, a_previous.viewportScaleYQ != a_current.viewportScaleYQ);
+		changed(Field::PinholeOffsetX, a_previous.pinholeOffsetXQ != a_current.pinholeOffsetXQ);
+		changed(Field::PinholeOffsetY, a_previous.pinholeOffsetYQ != a_current.pinholeOffsetYQ);
+		changed(Field::JitterX, a_previous.jitterXQ != a_current.jitterXQ);
+		changed(Field::JitterY, a_previous.jitterYQ != a_current.jitterYQ);
+		changed(Field::HistoryReset, a_previous.historyResetRequested != a_current.historyResetRequested);
+		changed(Field::ColorBuffersHDR, a_previous.colorBuffersHDR != a_current.colorBuffersHDR);
+		changed(Field::SubmitStageVR, a_previous.submitStageVRDLSS != a_current.submitStageVRDLSS);
+		changed(Field::ColorInput, a_previous.colorIn != a_current.colorIn);
+		changed(Field::ColorOutput, a_previous.colorOut != a_current.colorOut);
+		changed(Field::Depth, a_previous.depth != a_current.depth);
+		changed(Field::MotionVectors, a_previous.motionVectors != a_current.motionVectors);
+		changed(Field::ReactiveMask, a_previous.reactiveMask != a_current.reactiveMask);
+		changed(Field::TransparencyMask, a_previous.transparencyMask != a_current.transparencyMask);
+		changed(Field::CameraViewToClip, a_previous.constants.cameraViewToClip != a_current.constants.cameraViewToClip);
+		changed(Field::ClipToCameraView, a_previous.constants.clipToCameraView != a_current.constants.clipToCameraView);
+		changed(Field::ClipToLensClip, a_previous.constants.clipToLensClip != a_current.constants.clipToLensClip);
+		changed(Field::ClipToPrevClip, a_previous.constants.clipToPrevClip != a_current.constants.clipToPrevClip);
+		changed(Field::PrevClipToClip, a_previous.constants.prevClipToClip != a_current.constants.prevClipToClip);
+		changed(Field::ConstantsJitterOffset, a_previous.constants.jitterOffset != a_current.constants.jitterOffset);
+		changed(Field::MotionVectorScale, a_previous.constants.motionVectorScale != a_current.constants.motionVectorScale);
+		changed(Field::CameraPinholeOffset, a_previous.constants.cameraPinholeOffset != a_current.constants.cameraPinholeOffset);
+		changed(Field::CameraPosition, a_previous.constants.cameraPosition != a_current.constants.cameraPosition);
+		changed(Field::CameraUp, a_previous.constants.cameraUp != a_current.constants.cameraUp);
+		changed(Field::CameraRight, a_previous.constants.cameraRight != a_current.constants.cameraRight);
+		changed(Field::CameraForward, a_previous.constants.cameraForward != a_current.constants.cameraForward);
+		changed(Field::CameraNear, a_previous.constants.cameraNear != a_current.constants.cameraNear);
+		changed(Field::CameraFar, a_previous.constants.cameraFar != a_current.constants.cameraFar);
+		changed(Field::CameraFOV, a_previous.constants.cameraFOV != a_current.constants.cameraFOV);
+		changed(Field::CameraAspectRatio, a_previous.constants.cameraAspectRatio != a_current.constants.cameraAspectRatio);
+		changed(Field::MotionVectorsInvalidValue, a_previous.constants.motionVectorsInvalidValue != a_current.constants.motionVectorsInvalidValue);
+		changed(Field::DepthInverted, a_previous.constants.depthInverted != a_current.constants.depthInverted);
+		changed(Field::CameraMotionIncluded, a_previous.constants.cameraMotionIncluded != a_current.constants.cameraMotionIncluded);
+		changed(Field::MotionVectors3D, a_previous.constants.motionVectors3D != a_current.constants.motionVectors3D);
+		changed(Field::Reset, a_previous.constants.reset != a_current.constants.reset);
+		changed(Field::OrthographicProjection, a_previous.constants.orthographicProjection != a_current.constants.orthographicProjection);
+		changed(Field::MotionVectorsDilated, a_previous.constants.motionVectorsDilated != a_current.constants.motionVectorsDilated);
+		changed(Field::MotionVectorsJittered, a_previous.constants.motionVectorsJittered != a_current.constants.motionVectorsJittered);
+		changed(Field::MinRelativeLinearDepthObjectSeparation, a_previous.constants.minRelativeLinearDepthObjectSeparation != a_current.constants.minRelativeLinearDepthObjectSeparation);
+		return mask;
+	}
+
+	template <std::size_t N, class T>
+	void CopyDLSSDevBenchFloatBits(const T& a_source, std::array<uint32_t, N>& a_target)
+	{
+		static_assert(sizeof(T) == sizeof(a_target));
+		std::memcpy(a_target.data(), &a_source, sizeof(a_source));
+	}
+
+	uint32_t GetDLSSDevBenchFloatBits(float a_value)
+	{
+		uint32_t bits = 0;
+		std::memcpy(&bits, &a_value, sizeof(bits));
+		return bits;
+	}
+
+	Streamline::DLSSDevBenchTraceSignature BuildDLSSDevBenchTraceSignature(
+		const Streamline::DLSSFrameConstantsCache& a_constants,
+		const Streamline::DLSSDispatchDiagnostics* a_diagnostics,
+		sl::FrameToken* a_frameToken,
+		const sl::Constants* a_streamlineConstants)
+	{
+		Streamline::DLSSDevBenchTraceSignature signature{};
+		signature.traceSessionID = GetDLSSDevBenchTraceState().activeSessionID.load(std::memory_order_acquire);
+		signature.frame = a_constants.frame;
+		signature.frameToken = a_frameToken ? static_cast<uint32_t>(*a_frameToken) : 0u;
+		signature.frameTokenAddress = reinterpret_cast<uint64_t>(a_frameToken);
+		signature.requestedViewport = a_diagnostics ? static_cast<uint32_t>(a_diagnostics->requestedViewport) : a_constants.viewport;
+		signature.resolvedViewport = a_constants.viewport;
+		signature.eyeIndex = a_constants.eyeIndex;
+		signature.viewportRole = a_constants.viewportRole;
+		signature.outputWidth = a_constants.outputWidth;
+		signature.outputHeight = a_constants.outputHeight;
+		signature.qualityMode = a_constants.qualityMode;
+		signature.dlssPreset = a_constants.dlssPreset;
+		signature.extentInLeft = a_diagnostics ? a_diagnostics->extentIn.left : 0u;
+		signature.extentInTop = a_diagnostics ? a_diagnostics->extentIn.top : 0u;
+		signature.extentInWidth = a_constants.extentInWidth;
+		signature.extentInHeight = a_constants.extentInHeight;
+		signature.extentOutLeft = a_diagnostics ? a_diagnostics->extentOut.left : 0u;
+		signature.extentOutTop = a_diagnostics ? a_diagnostics->extentOut.top : 0u;
+		signature.extentOutWidth = a_constants.extentOutWidth;
+		signature.extentOutHeight = a_constants.extentOutHeight;
+		signature.viewportScaleXQ = a_constants.viewportScaleXQ;
+		signature.viewportScaleYQ = a_constants.viewportScaleYQ;
+		signature.pinholeOffsetXQ = a_constants.pinholeOffsetXQ;
+		signature.pinholeOffsetYQ = a_constants.pinholeOffsetYQ;
+		signature.jitterXQ = a_constants.jitterXQ;
+		signature.jitterYQ = a_constants.jitterYQ;
+		signature.historyResetRequested = a_constants.historyResetRequested;
+		if (a_diagnostics) {
+			signature.colorBuffersHDR = a_diagnostics->colorBuffersHDR;
+			signature.submitStageVRDLSS = a_diagnostics->submitStageVRDLSS;
+			signature.colorIn = reinterpret_cast<uint64_t>(a_diagnostics->colorIn);
+			signature.colorOut = reinterpret_cast<uint64_t>(a_diagnostics->colorOut);
+			signature.depth = reinterpret_cast<uint64_t>(a_diagnostics->depth);
+			signature.motionVectors = reinterpret_cast<uint64_t>(a_diagnostics->motionVectors);
+			signature.reactiveMask = reinterpret_cast<uint64_t>(a_diagnostics->reactiveMask);
+			signature.transparencyMask = reinterpret_cast<uint64_t>(a_diagnostics->transparencyMask);
+		}
+		if (a_streamlineConstants) {
+			auto& constants = signature.constants;
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraViewToClip, constants.cameraViewToClip);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->clipToCameraView, constants.clipToCameraView);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->clipToLensClip, constants.clipToLensClip);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->clipToPrevClip, constants.clipToPrevClip);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->prevClipToClip, constants.prevClipToClip);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->jitterOffset, constants.jitterOffset);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->mvecScale, constants.motionVectorScale);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraPinholeOffset, constants.cameraPinholeOffset);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraPos, constants.cameraPosition);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraUp, constants.cameraUp);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraRight, constants.cameraRight);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraFwd, constants.cameraForward);
+			constants.cameraNear = GetDLSSDevBenchFloatBits(a_streamlineConstants->cameraNear);
+			constants.cameraFar = GetDLSSDevBenchFloatBits(a_streamlineConstants->cameraFar);
+			constants.cameraFOV = GetDLSSDevBenchFloatBits(a_streamlineConstants->cameraFOV);
+			constants.cameraAspectRatio = GetDLSSDevBenchFloatBits(a_streamlineConstants->cameraAspectRatio);
+			constants.motionVectorsInvalidValue = GetDLSSDevBenchFloatBits(a_streamlineConstants->motionVectorsInvalidValue);
+			constants.minRelativeLinearDepthObjectSeparation = GetDLSSDevBenchFloatBits(a_streamlineConstants->minRelativeLinearDepthObjectSeparation);
+			constants.depthInverted = static_cast<uint8_t>(a_streamlineConstants->depthInverted);
+			constants.cameraMotionIncluded = static_cast<uint8_t>(a_streamlineConstants->cameraMotionIncluded);
+			constants.motionVectors3D = static_cast<uint8_t>(a_streamlineConstants->motionVectors3D);
+			constants.reset = static_cast<uint8_t>(a_streamlineConstants->reset);
+			constants.orthographicProjection = static_cast<uint8_t>(a_streamlineConstants->orthographicProjection);
+			constants.motionVectorsDilated = static_cast<uint8_t>(a_streamlineConstants->motionVectorsDilated);
+			constants.motionVectorsJittered = static_cast<uint8_t>(a_streamlineConstants->motionVectorsJittered);
+		}
+		return signature;
+	}
+
+	void RecordDLSSDevBenchTrace(
+		Streamline::DLSSDevBenchTraceStage a_stage,
+		int32_t a_resultCode,
+		const Streamline::DLSSDispatchDiagnostics* a_diagnostics,
+		const Streamline::DLSSDevBenchTraceSignature& a_current) noexcept
+	{
+		auto& state = GetDLSSDevBenchTraceState();
+		const uint64_t traceSessionID = a_current.traceSessionID;
+		if (!traceSessionID || state.activeSessionID.load(std::memory_order_acquire) != traceSessionID)
+			return;
+		const auto countDroppedRecord = [&]() noexcept {
+			if (state.activeSessionID.load(std::memory_order_acquire) == traceSessionID)
+				state.droppedRecords.fetch_add(1, std::memory_order_relaxed);
+		};
+
+		LARGE_INTEGER timestamp{};
+		QueryPerformanceCounter(&timestamp);
+		try {
+			std::unique_lock lock(state.mutex, std::try_to_lock);
+			if (!lock.owns_lock()) {
+				countDroppedRecord();
+				return;
+			}
+			if (state.activeSessionID.load(std::memory_order_acquire) != traceSessionID)
+				return;
+
+			Streamline::DLSSDevBenchTraceRecord record{};
+			auto& current = record.current;
+			current.sequence = ++state.totalRecords;
+			current.timestampQPC = static_cast<uint64_t>(timestamp.QuadPart);
+			current.compositorCycleToken = g_dlssDevBenchCompositorCycleToken;
+			current.threadID = GetCurrentThreadId();
+			current.resultCode = a_resultCode;
+			current.stage = a_stage;
+			current.signature = a_current;
+			const std::string_view label = a_diagnostics && a_diagnostics->label ? a_diagnostics->label : "DLSS Evaluate";
+			const auto labelLength = std::min(label.size(), current.label.size() - 1u);
+			std::copy_n(label.data(), labelLength, current.label.data());
+
+			if (auto* previous = FindDLSSDevBenchTraceIdentity(state.acceptedConstants, a_current)) {
+				record.previousConstantsFound = true;
+				record.previousConstants = previous->call;
+				record.constantsChangedFieldMask = BuildDLSSDevBenchChangedFieldMask(previous->call.signature, a_current);
+				previous->lastUse = ++state.identityUseCounter;
+			}
+			if (auto* previous = FindDLSSDevBenchTraceIdentity(state.evaluations, a_current)) {
+				record.previousEvaluationFound = true;
+				record.previousEvaluation = previous->call;
+				record.evaluationChangedFieldMask = BuildDLSSDevBenchChangedFieldMask(previous->call.signature, a_current);
+				previous->lastUse = ++state.identityUseCounter;
+			}
+
+			if (a_stage == Streamline::DLSSDevBenchTraceStage::ConstantsCacheReuse) {
+				++state.constantsCacheReuses;
+			} else if (a_stage == Streamline::DLSSDevBenchTraceStage::SetConstants) {
+				++state.setConstantsCalls;
+				if (a_resultCode == static_cast<int32_t>(sl::Result::eErrorDuplicatedConstants)) {
+					++state.duplicatedConstantsFailures;
+					state.lastDuplicatedConstantsFailureFound = true;
+					state.lastDuplicatedConstantsFailure = record;
+				}
+			} else if (a_stage == Streamline::DLSSDevBenchTraceStage::Evaluate) {
+				++state.evaluateCalls;
+				if (a_resultCode != static_cast<int32_t>(sl::Result::eOk)) {
+					++state.evaluateFailures;
+					state.lastEvaluateFailureFound = true;
+					state.lastEvaluateFailure = record;
+				}
+			}
+
+			if (a_stage == Streamline::DLSSDevBenchTraceStage::SetConstants &&
+				a_resultCode == static_cast<int32_t>(sl::Result::eOk)) {
+				auto* accepted = FindDLSSDevBenchTraceIdentity(state.acceptedConstants, a_current);
+				if (!accepted)
+					accepted = &SelectDLSSDevBenchTraceIdentitySlot(state.acceptedConstants);
+				accepted->valid = true;
+				accepted->lastUse = ++state.identityUseCounter;
+				accepted->call = current;
+			}
+			if (a_stage == Streamline::DLSSDevBenchTraceStage::Evaluate) {
+				auto* evaluation = FindDLSSDevBenchTraceIdentity(state.evaluations, a_current);
+				if (!evaluation)
+					evaluation = &SelectDLSSDevBenchTraceIdentitySlot(state.evaluations);
+				evaluation->valid = true;
+				evaluation->lastUse = ++state.identityUseCounter;
+				evaluation->call = current;
+			}
+
+			state.records[state.recordWriteIndex] = record;
+			state.recordWriteIndex = (state.recordWriteIndex + 1u) % state.records.size();
+			state.recordCount = std::min(state.recordCount + 1u, state.records.size());
+		} catch (...) {
+			countDroppedRecord();
+		}
+	}
+#endif
 
 	bool ShouldEmitDLSSDiagnostic(
 		DLSSDiagnosticStage a_stage,
@@ -472,6 +839,97 @@ Streamline::~Streamline()
 {
 	ResetDLSSIdleFences();
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+bool Streamline::StartDLSSDevBenchTrace()
+{
+	auto& state = GetDLSSDevBenchTraceState();
+	std::scoped_lock lock(state.mutex);
+	if (state.activeSessionID.load(std::memory_order_acquire))
+		return false;
+
+	ClearDLSSDevBenchTraceLocked(state);
+	state.sessionID = state.nextSessionID++;
+	state.activeSessionID.store(state.sessionID, std::memory_order_release);
+	return true;
+}
+
+bool Streamline::StopDLSSDevBenchTrace()
+{
+	auto& state = GetDLSSDevBenchTraceState();
+	std::scoped_lock lock(state.mutex);
+	if (!state.activeSessionID.exchange(0, std::memory_order_acq_rel))
+		return false;
+	return true;
+}
+
+bool Streamline::ResetDLSSDevBenchTrace()
+{
+	auto& state = GetDLSSDevBenchTraceState();
+	if (state.activeSessionID.load(std::memory_order_acquire))
+		return false;
+
+	std::scoped_lock lock(state.mutex);
+	if (state.activeSessionID.load(std::memory_order_acquire))
+		return false;
+
+	ClearDLSSDevBenchTraceLocked(state);
+	state.sessionID = 0;
+	return true;
+}
+
+bool Streamline::IsDLSSDevBenchTraceActive() const noexcept
+{
+	return GetDLSSDevBenchTraceState().activeSessionID.load(std::memory_order_acquire) != 0;
+}
+
+Streamline::DLSSDevBenchTraceSnapshot Streamline::GetDLSSDevBenchTraceSnapshot(bool a_includeRecords) const
+{
+	auto& state = GetDLSSDevBenchTraceState();
+	std::scoped_lock lock(state.mutex);
+
+	DLSSDevBenchTraceSnapshot snapshot{};
+	snapshot.active = state.activeSessionID.load(std::memory_order_acquire) != 0;
+	snapshot.sessionID = state.sessionID;
+	snapshot.timestampQPCFrequency = state.qpcFrequency;
+	snapshot.retainedRecords = state.recordCount;
+	snapshot.totalRecords = state.totalRecords;
+	snapshot.overwrittenRecords = state.totalRecords - state.recordCount;
+	snapshot.droppedRecords = state.droppedRecords.load(std::memory_order_acquire);
+	snapshot.constantsCacheReuses = state.constantsCacheReuses;
+	snapshot.setConstantsCalls = state.setConstantsCalls;
+	snapshot.evaluateCalls = state.evaluateCalls;
+	snapshot.duplicatedConstantsFailures = state.duplicatedConstantsFailures;
+	snapshot.evaluateFailures = state.evaluateFailures;
+	snapshot.lastDuplicatedConstantsFailureFound = state.lastDuplicatedConstantsFailureFound;
+	snapshot.lastEvaluateFailureFound = state.lastEvaluateFailureFound;
+	if (state.lastDuplicatedConstantsFailureFound) {
+		snapshot.lastDuplicatedConstantsFailureSequence =
+			state.lastDuplicatedConstantsFailure.current.sequence;
+	}
+	if (state.lastEvaluateFailureFound)
+		snapshot.lastEvaluateFailureSequence = state.lastEvaluateFailure.current.sequence;
+	if (a_includeRecords) {
+		if (state.lastDuplicatedConstantsFailureFound)
+			snapshot.lastDuplicatedConstantsFailure = state.lastDuplicatedConstantsFailure;
+		if (state.lastEvaluateFailureFound)
+			snapshot.lastEvaluateFailure = state.lastEvaluateFailure;
+		snapshot.records.reserve(state.recordCount);
+		const std::size_t firstIndex = state.recordCount == state.records.size() ? state.recordWriteIndex : 0u;
+		for (std::size_t offset = 0; offset < state.recordCount; ++offset) {
+			snapshot.records.push_back(state.records[(firstIndex + offset) % state.records.size()]);
+		}
+	}
+	return snapshot;
+}
+
+uint64_t Streamline::SetDLSSDevBenchCompositorCycleContext(uint64_t a_compositorCycleToken) noexcept
+{
+	const uint64_t previous = g_dlssDevBenchCompositorCycleToken;
+	g_dlssDevBenchCompositorCycleToken = a_compositorCycleToken;
+	return previous;
+}
+#endif
 
 void LoggingCallback(sl::LogType type, const char* msg)
 {
@@ -790,7 +1248,12 @@ bool Streamline::EnsureFrameToken()
 	return frameToken != nullptr;
 }
 
-bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchDiagnostics* diagnostics)
+bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchDiagnostics* diagnostics
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	,
+	DLSSDevBenchTraceSignature* outFrameConstantsSignature
+#endif
+)
 {
 	if (!globals::features::upscaling.streamline.initialized)
 		return false;
@@ -975,8 +1438,25 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		(diagnostics->viewportRole == DLSSViewportRole::FullEye ||
 			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter);
 	DLSSFrameConstantsCache frameConstantsSignature{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool collectDevBenchTrace = outFrameConstantsSignature || IsDLSSDevBenchTraceActive();
+	if (canAcceptDuplicateConstants || collectDevBenchTrace)
+#else
 	if (canAcceptDuplicateConstants)
+#endif
 		frameConstantsSignature = makeFrameConstantsSignature();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	DLSSDevBenchTraceSignature devBenchTraceSignature{};
+	if (collectDevBenchTrace) {
+		devBenchTraceSignature = BuildDLSSDevBenchTraceSignature(
+			frameConstantsSignature,
+			diagnostics,
+			frameToken,
+			&slConstants);
+		if (outFrameConstantsSignature)
+			*outFrameConstantsSignature = devBenchTraceSignature;
+	}
+#endif
 	const auto hasCachedFrameConstantsSignature = [&]() {
 		if (!canAcceptDuplicateConstants)
 			return false;
@@ -988,11 +1468,32 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		return false;
 	};
 	if (hasCachedFrameConstantsSignature()) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (IsDLSSDevBenchTraceActive()) {
+			RecordDLSSDevBenchTrace(
+				DLSSDevBenchTraceStage::ConstantsCacheReuse,
+				static_cast<int32_t>(sl::Result::eOk),
+				diagnostics,
+				devBenchTraceSignature);
+		}
+#endif
 		lastDLSSFailureDuplicatedConstants = false;
 		return true;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const sl::Result res = slSetConstants(slConstants, *frameToken, p_viewport);
+	if (IsDLSSDevBenchTraceActive()) {
+		RecordDLSSDevBenchTrace(
+			DLSSDevBenchTraceStage::SetConstants,
+			static_cast<int32_t>(res),
+			diagnostics,
+			devBenchTraceSignature);
+	}
+	if (res != sl::Result::eOk) {
+#else
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
+#endif
 		const bool duplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
 		lastDLSSFailureDuplicatedConstants = duplicatedConstants;
 		const auto resultLabel = magic_enum::enum_name(res);
@@ -1678,7 +2179,11 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		globals::game::isVR &&
 		upscaling.IsPresentationUpscalingActive();
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics() || IsDLSSDevBenchTraceActive();
+#else
 	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics();
+#endif
 	DLSSDispatchDiagnostics diagnostics{};
 	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
 	diagnostics.label = label ? label : "DLSS Evaluate";
@@ -1751,7 +2256,23 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.resolvedViewport = vp;
 	updateOptionsCacheDiagnostics();
 
-	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY, diagnosticsPtr))
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	DLSSDevBenchTraceSignature devBenchFrameConstantsSignature{};
+	auto* devBenchFrameConstantsSignaturePtr = IsDLSSDevBenchTraceActive() ? &devBenchFrameConstantsSignature : nullptr;
+#endif
+	if (!CheckFrameConstants(
+			vp,
+			eyeIndex,
+			viewportScaleX,
+			viewportScaleY,
+			pinholeOffsetX,
+			pinholeOffsetY,
+			diagnosticsPtr
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			devBenchFrameConstantsSignaturePtr
+#endif
+			))
 		return false;
 	if (!existingProviderOnly &&
 		!SetDLSSOptions(viewportRole, vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset, diagnosticsPtr))
@@ -1819,6 +2340,16 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (devBenchFrameConstantsSignaturePtr) {
+		RecordDLSSDevBenchTrace(
+			DLSSDevBenchTraceStage::Evaluate,
+			static_cast<int32_t>(evalResult),
+			diagnosticsPtr,
+			devBenchFrameConstantsSignature);
+	}
+#endif
 
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();

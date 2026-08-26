@@ -46777,6 +46777,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const auto upscaleMethod = resolutionPlan.upscaleMethod;
 	if (!IsVendorUpscalingMethod(upscaleMethod))
 		return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const uint64_t previousDLSSDevBenchCompositorCycle =
+		streamline.SetDLSSDevBenchCompositorCycleContext(a_compositorCycleToken);
+	const auto restoreDLSSDevBenchCompositorCycle = ScopeExit([&]() noexcept {
+		streamline.SetDLSSDevBenchCompositorCycleContext(
+			previousDLSSDevBenchCompositorCycle);
+	});
+#endif
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
 	const uint32_t currentFrame = state->frameCount;
 	const bool presentationUpscalingActive = IsPresentationUpscalingActive();

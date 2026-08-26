@@ -4,9 +4,11 @@
 #include "../../State.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <vector>
 
 #define NV_WINDOWS
 
@@ -208,6 +210,201 @@ public:
 		ID3D11Resource* transparencyMask = nullptr;
 	};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	static constexpr std::size_t kDLSSDevBenchTraceCapacity = 256;
+	enum class DLSSDevBenchTraceStage : uint8_t
+	{
+		ConstantsCacheReuse,
+		SetConstants,
+		Evaluate
+	};
+	enum class DLSSDevBenchTraceSignatureField : uint8_t
+	{
+		Frame,
+		FrameToken,
+		RequestedViewport,
+		ResolvedViewport,
+		EyeIndex,
+		ViewportRole,
+		OutputWidth,
+		OutputHeight,
+		QualityMode,
+		DLSSPreset,
+		ExtentInLeft,
+		ExtentInTop,
+		ExtentInWidth,
+		ExtentInHeight,
+		ExtentOutLeft,
+		ExtentOutTop,
+		ExtentOutWidth,
+		ExtentOutHeight,
+		ViewportScaleX,
+		ViewportScaleY,
+		PinholeOffsetX,
+		PinholeOffsetY,
+		JitterX,
+		JitterY,
+		HistoryReset,
+		ColorBuffersHDR,
+		SubmitStageVR,
+		ColorInput,
+		ColorOutput,
+		Depth,
+		MotionVectors,
+		ReactiveMask,
+		TransparencyMask,
+		CameraViewToClip,
+		ClipToCameraView,
+		ClipToLensClip,
+		ClipToPrevClip,
+		PrevClipToClip,
+		ConstantsJitterOffset,
+		MotionVectorScale,
+		CameraPinholeOffset,
+		CameraPosition,
+		CameraUp,
+		CameraRight,
+		CameraForward,
+		CameraNear,
+		CameraFar,
+		CameraFOV,
+		CameraAspectRatio,
+		MotionVectorsInvalidValue,
+		DepthInverted,
+		CameraMotionIncluded,
+		MotionVectors3D,
+		Reset,
+		OrthographicProjection,
+		MotionVectorsDilated,
+		MotionVectorsJittered,
+		MinRelativeLinearDepthObjectSeparation,
+		Count
+	};
+	struct DLSSDevBenchConstantsPayload
+	{
+		std::array<uint32_t, 16> cameraViewToClip{};
+		std::array<uint32_t, 16> clipToCameraView{};
+		std::array<uint32_t, 16> clipToLensClip{};
+		std::array<uint32_t, 16> clipToPrevClip{};
+		std::array<uint32_t, 16> prevClipToClip{};
+		std::array<uint32_t, 2> jitterOffset{};
+		std::array<uint32_t, 2> motionVectorScale{};
+		std::array<uint32_t, 2> cameraPinholeOffset{};
+		std::array<uint32_t, 3> cameraPosition{};
+		std::array<uint32_t, 3> cameraUp{};
+		std::array<uint32_t, 3> cameraRight{};
+		std::array<uint32_t, 3> cameraForward{};
+		uint32_t cameraNear = 0;
+		uint32_t cameraFar = 0;
+		uint32_t cameraFOV = 0;
+		uint32_t cameraAspectRatio = 0;
+		uint32_t motionVectorsInvalidValue = 0;
+		uint32_t minRelativeLinearDepthObjectSeparation = 0;
+		uint8_t depthInverted = 0;
+		uint8_t cameraMotionIncluded = 0;
+		uint8_t motionVectors3D = 0;
+		uint8_t reset = 0;
+		uint8_t orthographicProjection = 0;
+		uint8_t motionVectorsDilated = 0;
+		uint8_t motionVectorsJittered = 0;
+	};
+	struct DLSSDevBenchTraceSignature
+	{
+		uint64_t traceSessionID = 0;
+		uint32_t frame = 0;
+		uint32_t frameToken = 0;
+		uint64_t frameTokenAddress = 0;
+		uint32_t requestedViewport = UINT32_MAX;
+		uint32_t resolvedViewport = UINT32_MAX;
+		uint32_t eyeIndex = 0;
+		uint32_t viewportRole = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = 0;
+		uint32_t extentInLeft = 0;
+		uint32_t extentInTop = 0;
+		uint32_t extentInWidth = 0;
+		uint32_t extentInHeight = 0;
+		uint32_t extentOutLeft = 0;
+		uint32_t extentOutTop = 0;
+		uint32_t extentOutWidth = 0;
+		uint32_t extentOutHeight = 0;
+		int32_t viewportScaleXQ = 0;
+		int32_t viewportScaleYQ = 0;
+		int32_t pinholeOffsetXQ = 0;
+		int32_t pinholeOffsetYQ = 0;
+		int32_t jitterXQ = 0;
+		int32_t jitterYQ = 0;
+		bool historyResetRequested = false;
+		bool colorBuffersHDR = false;
+		bool submitStageVRDLSS = false;
+		uint64_t colorIn = 0;
+		uint64_t colorOut = 0;
+		uint64_t depth = 0;
+		uint64_t motionVectors = 0;
+		uint64_t reactiveMask = 0;
+		uint64_t transparencyMask = 0;
+		DLSSDevBenchConstantsPayload constants{};
+	};
+	struct DLSSDevBenchTraceCall
+	{
+		uint64_t sequence = 0;
+		uint64_t timestampQPC = 0;
+		uint64_t compositorCycleToken = 0;
+		uint32_t threadID = 0;
+		int32_t resultCode = 0;
+		DLSSDevBenchTraceStage stage = DLSSDevBenchTraceStage::SetConstants;
+		std::array<char, 64> label{};
+		DLSSDevBenchTraceSignature signature{};
+	};
+	struct DLSSDevBenchTraceRecord
+	{
+		uint64_t constantsChangedFieldMask = 0;
+		uint64_t evaluationChangedFieldMask = 0;
+		bool previousConstantsFound = false;
+		bool previousEvaluationFound = false;
+		DLSSDevBenchTraceCall current{};
+		DLSSDevBenchTraceCall previousConstants{};
+		DLSSDevBenchTraceCall previousEvaluation{};
+	};
+	struct DLSSDevBenchTraceSnapshot
+	{
+		bool active = false;
+		uint64_t sessionID = 0;
+		uint64_t timestampQPCFrequency = 0;
+		uint64_t retainedRecords = 0;
+		uint64_t totalRecords = 0;
+		uint64_t overwrittenRecords = 0;
+		uint64_t droppedRecords = 0;
+		uint64_t constantsCacheReuses = 0;
+		uint64_t setConstantsCalls = 0;
+		uint64_t evaluateCalls = 0;
+		uint64_t duplicatedConstantsFailures = 0;
+		uint64_t evaluateFailures = 0;
+		uint64_t lastDuplicatedConstantsFailureSequence = 0;
+		uint64_t lastEvaluateFailureSequence = 0;
+		bool lastDuplicatedConstantsFailureFound = false;
+		bool lastEvaluateFailureFound = false;
+		DLSSDevBenchTraceRecord lastDuplicatedConstantsFailure{};
+		DLSSDevBenchTraceRecord lastEvaluateFailure{};
+		std::vector<DLSSDevBenchTraceRecord> records;
+	};
+
+	/** Starts a cleared, fixed-capacity DLSS call trace for DevBench. */
+	bool StartDLSSDevBenchTrace();
+	/** Stops DLSS trace collection while preserving its records. */
+	bool StopDLSSDevBenchTrace();
+	/** Clears a stopped DLSS trace. */
+	bool ResetDLSSDevBenchTrace();
+	/** Reports whether a DLSS trace session is accepting records. */
+	[[nodiscard]] bool IsDLSSDevBenchTraceActive() const noexcept;
+	/** Copies trace counters and, when requested, the retained records. */
+	[[nodiscard]] DLSSDevBenchTraceSnapshot GetDLSSDevBenchTraceSnapshot(bool a_includeRecords = true) const;
+	/** Sets this thread's compositor-cycle context and returns its prior value. */
+	uint64_t SetDLSSDevBenchCompositorCycleContext(uint64_t a_compositorCycleToken) noexcept;
+#endif
+
 	enum class DLSSResourceTeardownResult : uint8_t
 	{
 		Ready,
@@ -242,7 +439,12 @@ public:
 
 	void PostDevice();
 
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr);
+	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		DLSSDevBenchTraceSignature* outFrameConstantsSignature = nullptr
+#endif
+	);
 	bool EnsureFrameToken();
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);

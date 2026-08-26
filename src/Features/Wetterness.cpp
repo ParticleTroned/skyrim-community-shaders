@@ -1287,6 +1287,16 @@ void Wetterness::DrawSettings()
 
 	DrawEnabledCheckbox();
 
+	auto& weatherPicker = globals::features::weatherPicker;
+	if (weatherPicker.loaded) {
+		if (ImGui::SmallButton("Open Weather Picker")) {
+			Menu::GetSingleton()->SelectFeatureMenu(weatherPicker.GetShortName());
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Open the Weather Picker.");
+		}
+	}
+
 	ImGui::TextUnformatted("Wetterness Preset");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Quick profiles for Wetterness performance/quality balance.");
@@ -1721,16 +1731,6 @@ void Wetterness::DrawSettings()
 		}
 
 		ImGui::TreePop();
-	}
-
-	auto& weatherPicker = globals::features::weatherPicker;
-	if (weatherPicker.loaded) {
-		if (ImGui::SmallButton("Open Weather Picker")) {
-			Menu::GetSingleton()->SelectFeatureMenu(weatherPicker.GetShortName());
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Open the Weather Picker.");
-		}
 	}
 
 	if (ImGui::TreeNodeEx("Debug (Testing)")) {

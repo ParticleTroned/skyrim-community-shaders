@@ -2198,6 +2198,12 @@ public:
 	[[nodiscard]] VRRenderScaleStereoPresentationPacket
 	CaptureVRRenderScaleStereoPresentationPacket(
 		uint64_t a_compositorCycleToken) const;
+	/** @brief Prove that a submit candidate and packet own the stable both-eye generation. */
+	[[nodiscard]] bool IsVRRenderScaleStablePresentationPacketCurrent(
+		const VRRenderScaleStereoPresentationPacket& a_packet,
+		vr::EVREye a_eye,
+		const vr::Texture_t* a_texture,
+		const vr::VRTextureBounds_t* a_bounds) const;
 
 	struct VRPostLoadCompositorKeepaliveSubmission
 	{

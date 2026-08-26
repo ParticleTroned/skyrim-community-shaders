@@ -1232,6 +1232,49 @@ namespace
 			       a_right.resources);
 	}
 
+	bool HasExactVRRenderScaleStableStereoPresentation(
+		const Upscaling::VRRenderScaleProfileSnapshot& a_stable,
+		const Upscaling::VRRenderScalePresentationSnapshot& a_presentation)
+	{
+		if (!a_stable.valid ||
+			!a_stable.active ||
+			a_stable.transitionEpoch == 0 ||
+			a_stable.contractGeneration == 0 ||
+			a_stable.renderEyeWidth == 0 ||
+			a_stable.renderEyeHeight == 0 ||
+			a_stable.displayEyeWidth == 0 ||
+			a_stable.displayEyeHeight == 0 ||
+			(a_stable.method != Upscaling::UpscaleMethod::kDLSS &&
+				a_stable.method != Upscaling::UpscaleMethod::kFSR) ||
+			a_presentation.lastBothEyesVendorCycle == 0 ||
+			a_presentation.lastBothEyesVendorFrame == 0) {
+			return false;
+		}
+
+		// Generation identity and the packet's strong resource ownership are the
+		// durability proof. An age gate would recreate fixed-frame menu gaps.
+		for (const auto& eye : a_presentation.eyes) {
+			if (!eye.valid ||
+				eye.path !=
+					Upscaling::VRRenderScalePresentationPath::VendorEvaluated ||
+				eye.frame != a_presentation.lastBothEyesVendorFrame ||
+				eye.compositorCycleToken !=
+					a_presentation.lastBothEyesVendorCycle ||
+				eye.transitionEpoch != a_stable.transitionEpoch ||
+				eye.contractGeneration != a_stable.contractGeneration ||
+				eye.method != a_stable.method ||
+				eye.inputWidth != a_stable.renderEyeWidth ||
+				eye.inputHeight != a_stable.renderEyeHeight ||
+				eye.expectedInputWidth != a_stable.renderEyeWidth ||
+				eye.expectedInputHeight != a_stable.renderEyeHeight ||
+				eye.outputWidth != a_stable.displayEyeWidth ||
+				eye.outputHeight != a_stable.displayEyeHeight) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool IsBufferedVRFpsStabilizerDoorHandoff(
 		const Upscaling::VRRenderScaleProfileSnapshot& a_profile)
 	{
@@ -30150,6 +30193,155 @@ bool Upscaling::IsVRRenderScaleStereoPresentationPacketCurrentLocked(
 				!matches(
 					eye.dlssSharpener,
 					submitStageDLSSSharpenerTexture[eyeIndex]))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool Upscaling::IsVRRenderScaleStablePresentationPacketCurrent(
+	const VRRenderScaleStereoPresentationPacket& a_packet,
+	vr::EVREye a_eye,
+	const vr::Texture_t* a_texture,
+	const vr::VRTextureBounds_t* a_bounds) const
+{
+	if (!globals::game::isVR ||
+		!a_packet.IsValid() ||
+		(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right) ||
+		!a_texture ||
+		!a_texture->handle ||
+		a_texture->eType != vr::TextureType_DirectX ||
+		IsSubmitStageDeviceLost() ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		(globals::state && globals::state->pendingPostLoadRuntimeReset) ||
+		vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire) != 0 ||
+		vrRenderScalePreMutationNativeFallbackAdmissionActive.load(
+			std::memory_order_acquire) ||
+		vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+			std::memory_order_acquire) != 0 ||
+		vrRenderScalePostMutationSerializationEpoch.load(
+			std::memory_order_acquire) != 0) {
+		return false;
+	}
+
+	winrt::com_ptr<ID3D11Texture2D> sourceTexture;
+	sourceTexture.copy_from(
+		static_cast<ID3D11Texture2D*>(a_texture->handle));
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	sourceTexture->GetDesc(&sourceDesc);
+	winrt::com_ptr<ID3D11Device> sourceDevice;
+	sourceTexture->GetDevice(sourceDevice.put());
+	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+	if (!sourceDevice ||
+		!IsSupportedVRSubmitPresentationContract(
+			sourceDesc.Format,
+			a_texture->eColorSpace) ||
+		sourceDesc.ArraySize != 1 ||
+		sourceDesc.MipLevels != 1 ||
+		sourceDesc.SampleDesc.Count != 1 ||
+		!InputBoundsMatchCombinedStereoEye(a_bounds, eyeIndex)) {
+		return false;
+	}
+
+	const std::scoped_lock queueLock(
+		perfModeRenderTargetRecreateQueueMutex);
+	if (IsSubmitStageDeviceLost() ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		(globals::state && globals::state->pendingPostLoadRuntimeReset) ||
+		vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire) != 0 ||
+		vrRenderScalePreMutationNativeFallbackAdmissionActive.load(
+			std::memory_order_acquire) ||
+		vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+			std::memory_order_acquire) != 0 ||
+		vrRenderScalePostMutationSerializationEpoch.load(
+			std::memory_order_acquire) != 0) {
+		return false;
+	}
+	if (sourceDevice.get() != a_packet.resources->device.get() ||
+		!IsVRNativeEngineOutputSubmitTexture(sourceTexture.get())) {
+		return false;
+	}
+
+	const std::scoped_lock packetLock(
+		vrRenderScaleStereoPresentationPacketMutex);
+	const std::scoped_lock controllerLock(
+		vrRenderScaleTransitionControllerMutex);
+
+	const auto current = CaptureVRRenderScaleHotPresentationContractLocked(
+		a_packet.contract.compositorCycleToken,
+		globals::state ? std::max(globals::state->frameCount, 1u) : 0u);
+	const bool replacementPreMutation =
+		current.state == VRRenderScaleTransitionState::Requested ||
+		current.state == VRRenderScaleTransitionState::WaitingForSafePoint;
+	const bool stableBackendExact =
+		(current.stable.method == UpscaleMethod::kDLSS &&
+			current.stable.resources.backend == VRRenderScaleBackendKind::DLSS) ||
+		(current.stable.method == UpscaleMethod::kFSR &&
+			(current.stable.resources.backend == VRRenderScaleBackendKind::FSRHost ||
+				current.stable.resources.backend ==
+					VRRenderScaleBackendKind::FSRRuntime ||
+				current.stable.resources.backend ==
+					VRRenderScaleBackendKind::FSR4Runtime));
+	if (!replacementPreMutation ||
+		!vrRenderScaleStableRuntimeProfileAuthoritative.load(
+			std::memory_order_acquire) ||
+		!IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+			a_packet,
+			current) ||
+		!current.stable.resources.valid ||
+		!current.stable.resources.active ||
+		current.stable.resources.method != current.stable.method ||
+		!stableBackendExact ||
+		current.stable.resources.qualityMode !=
+			std::min(current.stable.qualityMode, kQualityModeMaxIndex) ||
+		current.stable.resources.dlssPreset !=
+			ClampDLSSPresetUInt(current.stable.dlssPreset) ||
+		current.stable.resources.renderEyeWidth !=
+			current.stable.renderEyeWidth ||
+		current.stable.resources.renderEyeHeight !=
+			current.stable.renderEyeHeight ||
+		current.stable.resources.displayEyeWidth !=
+			current.stable.displayEyeWidth ||
+		current.stable.resources.displayEyeHeight !=
+			current.stable.displayEyeHeight ||
+		current.stable.resources.contextCount != 2u ||
+		!HasExactVRRenderScaleStableStereoPresentation(
+			current.stable,
+			current.presentation) ||
+		a_packet.resources->intermediateGeneration !=
+			current.stable.contractGeneration) {
+		return false;
+	}
+
+	const bool stableInputLayout =
+		sourceDesc.Width % 2u == 0 &&
+		sourceDesc.Width / 2u == current.stable.renderEyeWidth &&
+		sourceDesc.Height == current.stable.renderEyeHeight;
+	const bool stableOutputLayout =
+		sourceDesc.Width % 2u == 0 &&
+		sourceDesc.Width / 2u == current.stable.displayEyeWidth &&
+		sourceDesc.Height == current.stable.displayEyeHeight;
+	if (!stableInputLayout && !stableOutputLayout)
+		return false;
+
+	for (const auto& eye : a_packet.resources->eyes) {
+		if (eye.contractGeneration != current.stable.contractGeneration ||
+			!eye.colorInput ||
+			!eye.colorOutput ||
+			eye.colorInputDesc.Format != sourceDesc.Format ||
+			eye.colorInputDesc.ArraySize != 1 ||
+			eye.colorInputDesc.MipLevels != 1 ||
+			eye.colorInputDesc.SampleDesc.Count != 1 ||
+			eye.colorInputDesc.Width < current.stable.renderEyeWidth ||
+			eye.colorInputDesc.Height < current.stable.renderEyeHeight ||
+			eye.colorOutputDesc.Format != sourceDesc.Format ||
+			eye.colorOutputDesc.ArraySize != 1 ||
+			eye.colorOutputDesc.MipLevels != 1 ||
+			eye.colorOutputDesc.SampleDesc.Count != 1 ||
+			eye.colorOutputDesc.Width != current.stable.displayEyeWidth ||
+			eye.colorOutputDesc.Height != current.stable.displayEyeHeight) {
 			return false;
 		}
 	}

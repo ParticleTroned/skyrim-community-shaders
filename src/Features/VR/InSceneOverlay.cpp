@@ -1421,11 +1421,25 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							nullptr);
 				}
 
+				const auto overlaySuppressionReasons =
+					upscaling.GetVRInSceneOverlaySubmitSuppressionReasons();
+				const bool menuSessionOpen =
+					globals::menu && globals::menu->IsMenuSessionOpen();
+				const bool stablePresentationProven =
+					menuSessionOpen &&
+					renderScalePresentationPacketPtr &&
+					VRInSceneOverlaySubmitPolicy::IsQueuedReplacementOnly(
+						overlaySuppressionReasons) &&
+					upscaling.IsVRRenderScaleStablePresentationPacketCurrent(
+						*renderScalePresentationPacketPtr,
+						eEye,
+						pTexture,
+						pBounds);
 				const bool admitInSceneOverlaySubmit =
 					VRInSceneOverlaySubmitPolicy::ShouldAdmit({
-						.suppressionReasons =
-							upscaling.GetVRInSceneOverlaySubmitSuppressionReasons(),
+						.suppressionReasons = overlaySuppressionReasons,
 						.mainMenuOpen = globals::state && globals::state->isMainMenuOpen,
+						.menuSessionOpen = menuSessionOpen,
 						.submitStageUpscalingActive =
 							upscaling.IsSubmitStageUpscalingActive(),
 						.renderTargetRecreateInProgress =
@@ -1433,6 +1447,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						.originalSubmitCandidateSafe =
 							!originalSubmitDecision.ShouldSuppress() &&
 							!originalSubmitDecision.IsNativeRestoreGuarded(),
+						.stablePresentationProven = stablePresentationProven,
+						.deviceLost = upscaling.IsSubmitStageDeviceLost(),
+						.nativeRestoreGuardActive = nativeRestoreGuardActive,
 					});
 				if (postLoadReleaseToken == 0 &&
 					!nativeRestoreGuardActive &&

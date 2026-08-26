@@ -39,24 +39,40 @@ namespace
 	{
 		using VRInSceneOverlaySubmitPolicy::SuppressionReason;
 
-		for (std::uint32_t reasonBits = 0; reasonBits < (1u << 4); ++reasonBits) {
-			for (std::uint32_t stateBits = 0; stateBits < (1u << 4); ++stateBits) {
+		// Include one unknown bit so future/invalid reasons remain fail-closed.
+		for (std::uint32_t reasonBits = 0; reasonBits < (1u << 5); ++reasonBits) {
+			for (std::uint32_t stateBits = 0; stateBits < (1u << 8); ++stateBits) {
 				const auto reasons = static_cast<SuppressionReason>(reasonBits);
 				const VRInSceneOverlaySubmitPolicy::Admission admission{
 					.suppressionReasons = reasons,
 					.mainMenuOpen = (stateBits & (1u << 0)) != 0,
-					.submitStageUpscalingActive = (stateBits & (1u << 1)) != 0,
-					.renderTargetRecreateInProgress = (stateBits & (1u << 2)) != 0,
-					.originalSubmitCandidateSafe = (stateBits & (1u << 3)) != 0,
+					.menuSessionOpen = (stateBits & (1u << 1)) != 0,
+					.submitStageUpscalingActive = (stateBits & (1u << 2)) != 0,
+					.renderTargetRecreateInProgress = (stateBits & (1u << 3)) != 0,
+					.originalSubmitCandidateSafe = (stateBits & (1u << 4)) != 0,
+					.stablePresentationProven = (stateBits & (1u << 5)) != 0,
+					.deviceLost = (stateBits & (1u << 6)) != 0,
+					.nativeRestoreGuardActive = (stateBits & (1u << 7)) != 0,
 				};
+				const bool hardFailure =
+					admission.deviceLost ||
+					admission.renderTargetRecreateInProgress ||
+					admission.nativeRestoreGuardActive ||
+					!admission.originalSubmitCandidateSafe;
+				const bool mainMenuException =
+					admission.mainMenuOpen &&
+					!admission.submitStageUpscalingActive &&
+					(reasons == SuppressionReason::RenderScaleTransitionPending ||
+						reasons == SuppressionReason::RenderTargetRecreatePending);
+				const bool csMenuStableProvider =
+					admission.menuSessionOpen &&
+					admission.stablePresentationProven &&
+					VRInSceneOverlaySubmitPolicy::IsQueuedReplacementOnly(reasons);
 				const bool expected =
-					reasons == SuppressionReason::None ||
-					(admission.mainMenuOpen &&
-						!admission.submitStageUpscalingActive &&
-						admission.originalSubmitCandidateSafe &&
-						(reasons == SuppressionReason::RenderScaleTransitionPending ||
-							(reasons == SuppressionReason::RenderTargetRecreatePending &&
-								!admission.renderTargetRecreateInProgress)));
+					!hardFailure &&
+					(reasons == SuppressionReason::None ||
+						mainMenuException ||
+						csMenuStableProvider);
 				if (VRInSceneOverlaySubmitPolicy::ShouldAdmit(admission) != expected)
 					return false;
 			}

@@ -15,8 +15,21 @@ are recorded separately. Preflight time is never hidden by extending the
 runner deadline.
 
 Invoke the distributed runner with an exact DevBench runtime, build ID, GPU
-matrix, and fixture manifest. PR mode also requires a previously accepted
-baseline evidence directory (or its `run.json`):
+matrix, and fixture manifest. Each run requires a new or empty evidence
+directory. Standalone local mode is:
+
+```powershell
+pwsh .\tools\render-scale-qualification\Invoke-CSXRenderScaleQualification.ps1 `
+    -EvidenceDirectory C:\Evidence\render-scale-local `
+    -RuntimePath $env:CSX_DEVBENCH_RUNTIME_PATH `
+    -ExpectedBuildId '<64-character CSX build ID>' `
+    -GpuVendor NVIDIA `
+    -FixtureManifestPath C:\Evidence\render-scale-fixture.json
+```
+
+PR mode also requires a previously accepted baseline evidence directory (or
+its `run.json`) and its intended Build ID. Candidate and baseline Build IDs
+must differ:
 
 ```powershell
 pwsh .\tools\render-scale-qualification\Invoke-CSXRenderScaleQualification.ps1 `
@@ -26,18 +39,28 @@ pwsh .\tools\render-scale-qualification\Invoke-CSXRenderScaleQualification.ps1 `
     -GpuVendor NVIDIA `
     -FixtureManifestPath C:\Evidence\render-scale-fixture.json `
     -PrMode `
-    -BaselinePath C:\Evidence\render-scale-baseline
+    -BaselinePath C:\Evidence\render-scale-baseline `
+    -ExpectedBaselineBuildId '<64-character baseline CSX build ID>'
 ```
 
-The automated run ends as `REVIEW_PENDING`. Review the nine selected stereo
-samples, save the completed template as `visual-review.json`, and finalize the
-same evidence directory:
+The automated run ends as `REVIEW_PENDING` with exit code 3. Review the nine
+selected stereo samples and copy `visual-review.template.json` to
+`visual-review.json` without altering its artifact bindings. Supply a reviewer
+ID, set `reviewer.kind` to `human` or `image_model`, and use an ISO-8601
+`reviewedUtc`. For every sample, set all seven verdicts to `pass` in local mode
+or `no_regression` in PR mode, then set `overallVerdict` to `pass` and finalize
+the same evidence directory:
 
 ```powershell
 pwsh .\tools\render-scale-qualification\Invoke-CSXRenderScaleQualification.ps1 `
     -EvidenceDirectory C:\Evidence\render-scale-candidate `
     -FinalizeReview
 ```
+
+Final `PASS` or `LOCAL_PASS` returns 0, qualification `FAIL` returns 2,
+`REVIEW_PENDING` returns 3, and `INFRASTRUCTURE_ERROR` returns 4. Infrastructure
+errors cover transport, exact runtime/tool/capability/fixture/baseline binding,
+and evidence-finalization setup failures.
 
 ## Fixed fixture
 
@@ -49,21 +72,27 @@ rejects a comparison when their fixture fingerprints differ.
 The `csx-render-scale-fixture-v1` manifest records a fixture ID; save ID and
 SHA-256; camera ID and configuration SHA-256; VR FPS Stabilizer version and
 configuration SHA-256; GPU vendor, device ID, and driver; and HMD model,
-runtime, runtime version, and refresh rate. The runner adds the observed eye
-dimensions, FSR runtime, service capabilities, protocol hash, and bound runtime
-identity before hashing the effective fixture. Machine-specific paths are not
-part of the manifest. Start from the distributed `fixture.example.json`; the
-runner rejects its placeholders and all-zero hashes, so it must be filled with
-the real controlled fixture before a run.
+runtime, runtime version, and refresh rate. GPU vendor, device ID, and driver
+are checked against the live D3D adapter returned by render-scale status. The
+save, camera, VR FPS Stabilizer, and HMD values are explicitly
+operator-attested; their hashes prevent silent drift between paired runs but
+the runner does not independently discover them. The runner adds the observed
+eye dimensions, FSR runtime, service capabilities, protocol hash, and bound
+runtime identity before hashing the effective fixture. Machine-specific paths
+are not part of the manifest. Start from the distributed
+`fixture.example.json`; the runner rejects its placeholders and all-zero
+hashes, so it must be filled with the real controlled fixture before a run.
+Copy `status.adapter.deviceId` and `status.adapter.driverVersion` exactly, and
+complete the operator/UTC attestation block.
 
 Start in `WindhelmExterior01`. The COC route alternates with
 `WhiterunDragonsreach`. The VR FPS Stabilizer configuration must select these
 exact profiles:
 
-| Location | NVIDIA | AMD |
-| --- | --- | --- |
+| Location | NVIDIA                                  | AMD                             |
+| -------- | --------------------------------------- | ------------------------------- |
 | Interior | DLSS Native AA (DLAA), render scale off | FSR Native AA, render scale off |
-| Exterior | FSR Hoshipa, render scale on | FSR Hoshipa, render scale on |
+| Exterior | FSR Hoshipa, render scale on            | FSR Hoshipa, render scale on    |
 
 The exterior profile follows the shared FSR configuration in the protocol; it
 is not inferred from the installed GPU vendor. If a different NVIDIA exterior
@@ -101,7 +130,9 @@ Native AA requires both eyes to present `NativeOriginal`, native dimensions,
 and cleared render-scale/foveated vendor flags. An active Hoshipa profile
 requires both eyes to present the exact current vendor evaluation, matching
 method, generation, epoch, input extent, output extent, and stable physical
-contract. Intentional `PresentationStretch` is measured separately and must
+contract. Native completes on one coherent stereo cycle; active vendor
+presentation requires two consecutive coherent stereo cycles. Intentional
+`PresentationStretch` is measured separately and must
 recover; vendor-failure stretch and bounds-mismatch fallback are failures.
 
 The assay reports wall time and stable latency in milliseconds and frames. It
@@ -135,63 +166,63 @@ unsupported method.
 
 The NVIDIA matrix is:
 
-| Step | Method | Mode |
-| ---: | --- | --- |
-| 1 | DLSS | Native AA / DLAA |
-| 2 | DLSS | Hoshipa |
-| 3 | DLSS | Ultra Quality |
-| 4 | DLSS | Quality |
-| 5 | DLSS | Balanced |
-| 6 | DLSS | Performance |
-| 7 | DLSS | Ultra Performance |
-| 8 | FSR | Ultra Performance |
-| 9 | FSR | Performance |
-| 10 | FSR | Balanced |
-| 11 | FSR | Quality |
-| 12 | FSR | Ultra Quality |
-| 13 | FSR | Hoshipa |
-| 14 | FSR | Native AA |
-| 15 | DLSS | Native AA / DLAA |
-| 16 | FSR | Native AA |
-| 17 | FSR | Hoshipa |
-| 18 | DLSS | Hoshipa |
-| 19 | DLSS | Ultra Performance |
-| 20 | FSR | Ultra Performance |
-| 21 | FSR | Native AA |
-| 22 | DLSS | Native AA / DLAA |
-| 23 | DLSS | Hoshipa |
-| 24 | FSR | Native AA |
-| 25 | FSR | Hoshipa |
+| Step | Method | Mode              |
+| ---: | ------ | ----------------- |
+|    1 | DLSS   | Native AA / DLAA  |
+|    2 | DLSS   | Hoshipa           |
+|    3 | DLSS   | Ultra Quality     |
+|    4 | DLSS   | Quality           |
+|    5 | DLSS   | Balanced          |
+|    6 | DLSS   | Performance       |
+|    7 | DLSS   | Ultra Performance |
+|    8 | FSR    | Ultra Performance |
+|    9 | FSR    | Performance       |
+|   10 | FSR    | Balanced          |
+|   11 | FSR    | Quality           |
+|   12 | FSR    | Ultra Quality     |
+|   13 | FSR    | Hoshipa           |
+|   14 | FSR    | Native AA         |
+|   15 | DLSS   | Native AA / DLAA  |
+|   16 | FSR    | Native AA         |
+|   17 | FSR    | Hoshipa           |
+|   18 | DLSS   | Hoshipa           |
+|   19 | DLSS   | Ultra Performance |
+|   20 | FSR    | Ultra Performance |
+|   21 | FSR    | Native AA         |
+|   22 | DLSS   | Native AA / DLAA  |
+|   23 | DLSS   | Hoshipa           |
+|   24 | FSR    | Native AA         |
+|   25 | FSR    | Hoshipa           |
 
 The AMD matrix cannot execute DLSS and therefore uses this FSR-only sequence:
 
-| Step | Method | Mode |
-| ---: | --- | --- |
-| 1 | FSR | Native AA |
-| 2 | FSR | Hoshipa |
-| 3 | FSR | Ultra Quality |
-| 4 | FSR | Quality |
-| 5 | FSR | Balanced |
-| 6 | FSR | Performance |
-| 7 | FSR | Ultra Performance |
-| 8 | FSR | Native AA |
-| 9 | FSR | Ultra Performance |
-| 10 | FSR | Native AA |
-| 11 | FSR | Hoshipa |
-| 12 | FSR | Native AA |
-| 13 | FSR | Ultra Quality |
-| 14 | FSR | Quality |
-| 15 | FSR | Native AA |
-| 16 | FSR | Balanced |
-| 17 | FSR | Native AA |
-| 18 | FSR | Performance |
-| 19 | FSR | Native AA |
-| 20 | FSR | Ultra Performance |
-| 21 | FSR | Hoshipa |
-| 22 | FSR | Ultra Performance |
-| 23 | FSR | Native AA |
-| 24 | FSR | Ultra Performance |
-| 25 | FSR | Hoshipa |
+| Step | Method | Mode              |
+| ---: | ------ | ----------------- |
+|    1 | FSR    | Native AA         |
+|    2 | FSR    | Hoshipa           |
+|    3 | FSR    | Ultra Quality     |
+|    4 | FSR    | Quality           |
+|    5 | FSR    | Balanced          |
+|    6 | FSR    | Performance       |
+|    7 | FSR    | Ultra Performance |
+|    8 | FSR    | Native AA         |
+|    9 | FSR    | Ultra Performance |
+|   10 | FSR    | Native AA         |
+|   11 | FSR    | Hoshipa           |
+|   12 | FSR    | Native AA         |
+|   13 | FSR    | Ultra Quality     |
+|   14 | FSR    | Quality           |
+|   15 | FSR    | Native AA         |
+|   16 | FSR    | Balanced          |
+|   17 | FSR    | Native AA         |
+|   18 | FSR    | Performance       |
+|   19 | FSR    | Native AA         |
+|   20 | FSR    | Ultra Performance |
+|   21 | FSR    | Hoshipa           |
+|   22 | FSR    | Ultra Performance |
+|   23 | FSR    | Native AA         |
+|   24 | FSR    | Ultra Performance |
+|   25 | FSR    | Hoshipa           |
 
 Every apply is bracketed by `qualification_begin` and `qualification_wait` in
 one server-side scenario. A new apply is not sent until the prior target is
@@ -207,12 +238,12 @@ every observation.
 The assay must exercise every diagnostic method added by commit
 `b46edeaed14c41ad41225641c3a4943f1db25db6`:
 
-- `dlss_trace_status` proves there is no inherited active trace;
-- `dlss_trace_reset` clears a stopped trace before each scoped DLSS sample;
-- `dlss_trace_start` starts the bounded, non-blocking trace;
-- `dlss_trace_stop` freezes it immediately after the stable result;
-- `dlss_trace_read` reads an intentionally bounded raw sample (16 records in
-  this protocol), exact summary counters, and pinned failures.
+-   `dlss_trace_status` proves there is no inherited active trace;
+-   `dlss_trace_reset` clears a stopped trace before each scoped DLSS sample;
+-   `dlss_trace_start` starts the bounded, non-blocking trace;
+-   `dlss_trace_stop` freezes it immediately after the stable result;
+-   `dlss_trace_read` reads an intentionally bounded raw sample (16 records in
+    this protocol), exact summary counters, and pinned failures.
 
 The trace correlates constants and evaluations by frame token, resolved
 viewport, eye, compositor cycle, thread, dimensions, quality, preset, resources,
@@ -280,6 +311,11 @@ diagnostic artifacts are complete, and the baseline speed gates pass. Otherwise
 the verdict is `FAIL`, `REVIEW_PENDING`, or `INFRASTRUCTURE_ERROR`; these states
 must not be rewritten as a pass.
 
+Without `-PrMode`, a successful finalization is `LOCAL_PASS`, uses the
+`csx-render-scale-local-v1` report schema, and writes
+`qualification-summary.md`. It is useful for this standalone test-suite work
+but is intentionally not acceptable as PR qualification evidence.
+
 Run the NVIDIA and AMD matrices on matching hardware when a PR claims universal
 behavior. A single-host result is still attributable evidence for that vendor,
 but it must not be presented as the missing vendor's pass.
@@ -293,7 +329,8 @@ run.raw.json
 run.json
 protocol.json
 fixture-manifest.json
-pr-summary.md
+pr-summary.md                  # PR mode
+qualification-summary.md       # local mode
 failures.json
 mcp-transcript.json
 transitions.json

@@ -71,12 +71,17 @@ foreach(_required_behavior IN ITEMS
     "QualificationPolicy::EvaluateStability"
     "QualificationPolicy::HasRequiredPresentationHistory"
     "QualificationPolicy::IsFoveationInvariantViolation"
+    "QualificationPolicy::IsTransientObservationDispatchError"
     "QualificationPolicy::OwnsTransitionInstance"
     "QualificationMonotonicRegressionsJson"
+    "BuildAdapterIdentity"
+    "{ \"adapter\", BuildAdapterIdentity() }"
+    "CheckInterfaceSupport(__uuidof(ID3D11Device)"
     "QueryPerformanceCounter"
     "expectedCellEditorId"
     "kElapsedMillisecondsReceiptField"
     "kElapsedFramesReceiptField"
+    "controller.retirement.nextCleanupFrame == 0"
     "BuildProvenance::ValidateExpectedBuild"
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)

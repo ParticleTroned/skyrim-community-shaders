@@ -170,14 +170,21 @@ namespace VRRenderScaleQualificationPolicy
 		return a_targetSupplied && !a_settingsMatch;
 	}
 
+	[[nodiscard]] constexpr bool IsTransientObservationDispatchError(
+		std::string_view a_errorCode) noexcept
+	{
+		return a_errorCode == "main_thread_timeout";
+	}
+
 	[[nodiscard]] constexpr bool HasRequiredPresentationHistory(
 		bool a_vendorPresentation,
 		std::uint32_t a_leftConsecutiveFrames,
 		std::uint32_t a_rightConsecutiveFrames,
 		std::uint32_t a_bothEyesConsecutiveFrames) noexcept
 	{
-		return a_leftConsecutiveFrames >= 2 &&
-		       a_rightConsecutiveFrames >= 2 &&
+		const std::uint32_t requiredEyeFrames = a_vendorPresentation ? 2u : 1u;
+		return a_leftConsecutiveFrames >= requiredEyeFrames &&
+		       a_rightConsecutiveFrames >= requiredEyeFrames &&
 		       (!a_vendorPresentation || a_bothEyesConsecutiveFrames >= 2);
 	}
 

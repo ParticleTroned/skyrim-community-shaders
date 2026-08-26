@@ -204,10 +204,14 @@ namespace
 		       IsFoveationInvariantViolation(true, false) &&
 		       !IsFoveationInvariantViolation(true, true) &&
 		       !IsFoveationInvariantViolation(false, false) &&
-		       !HasRequiredPresentationHistory(false, 1, 2, 0) &&
-		       HasRequiredPresentationHistory(false, 2, 2, 0) &&
+		       HasRequiredPresentationHistory(false, 1, 1, 0) &&
+		       !HasRequiredPresentationHistory(false, 0, 1, 0) &&
+		       !HasRequiredPresentationHistory(false, 1, 0, 0) &&
 		       !HasRequiredPresentationHistory(true, 1, 2, 2) &&
-		       HasRequiredPresentationHistory(true, 2, 2, 2);
+		       HasRequiredPresentationHistory(true, 2, 2, 2) &&
+		       IsTransientObservationDispatchError("main_thread_timeout") &&
+		       !IsTransientObservationDispatchError("service_unavailable") &&
+		       !IsTransientObservationDispatchError("");
 	}
 
 	constexpr bool CoversTimeoutMath()

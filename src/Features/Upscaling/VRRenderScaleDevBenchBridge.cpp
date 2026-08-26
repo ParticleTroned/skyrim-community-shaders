@@ -467,6 +467,60 @@ namespace
 		};
 	}
 
+	json BuildAdapterIdentity()
+	{
+		if (!globals::d3d::device) {
+			return {
+				{ "available", false },
+				{ "reason", "d3d11_device_unavailable" },
+			};
+		}
+
+		winrt::com_ptr<IDXGIDevice> dxgiDevice;
+		if (FAILED(globals::d3d::device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())))) {
+			return {
+				{ "available", false },
+				{ "reason", "dxgi_device_query_failed" },
+			};
+		}
+		winrt::com_ptr<IDXGIAdapter> adapter;
+		if (FAILED(dxgiDevice->GetAdapter(adapter.put()))) {
+			return {
+				{ "available", false },
+				{ "reason", "dxgi_adapter_query_failed" },
+			};
+		}
+		DXGI_ADAPTER_DESC description{};
+		if (FAILED(adapter->GetDesc(&description))) {
+			return {
+				{ "available", false },
+				{ "reason", "dxgi_adapter_description_failed" },
+			};
+		}
+
+		LARGE_INTEGER driverVersion{};
+		const bool driverVersionAvailable =
+			SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(ID3D11Device), &driverVersion));
+		const auto high = static_cast<uint32_t>(driverVersion.HighPart);
+		const auto low = static_cast<uint32_t>(driverVersion.LowPart);
+		const std::string driverVersionText = driverVersionAvailable ?
+		                                          std::format("{}.{}.{}.{}", high >> 16, high & 0xffffu, low >> 16, low & 0xffffu) :
+		                                          std::string{};
+		return {
+			{ "available", true },
+			{ "description", globals::state ? globals::state->adapterDescription : std::string{} },
+			{ "vendorId", description.VendorId },
+			{ "deviceId", description.DeviceId },
+			{ "subsystemId", description.SubSysId },
+			{ "revision", description.Revision },
+			{ "luidHigh", description.AdapterLuid.HighPart },
+			{ "luidLow", description.AdapterLuid.LowPart },
+			{ "driverVersionAvailable", driverVersionAvailable },
+			{ "driverVersion", driverVersionText },
+			{ "driverVersionRaw", static_cast<uint64_t>(driverVersion.QuadPart) },
+		};
+	}
+
 	json BuildStatus(Upscaling& a_upscaling)
 	{
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
@@ -513,6 +567,7 @@ namespace
 
 		return {
 			{ "frame", frame },
+			{ "adapter", BuildAdapterIdentity() },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
 			{ "cpuPerformance", CPUPerformanceJson(a_upscaling) },
 			{ "pipelineDiagnostics", {
@@ -2479,6 +2534,7 @@ namespace
 		facts.retirementClear = controller.retirement.pendingSets == 0 &&
 		                        !controller.retirement.fencePending &&
 		                        !controller.retirement.capacityBlocked &&
+		                        controller.retirement.nextCleanupFrame == 0 &&
 		                        !controller.engineTargetRetirement.pending &&
 		                        !controller.engineTargetRetirement.fencePending &&
 		                        !controller.engineTargetRetirement.capacityBlocked;
@@ -3231,6 +3287,9 @@ namespace
 					return receipt;
 				}
 				if (observation.contains("error")) {
+					const auto errorCode = observation.value("errorCode", std::string{});
+					if (QualificationPolicy::IsTransientObservationDispatchError(errorCode))
+						continue;
 					const uint64_t tick = QueryQualificationTick();
 					auto receipt = BuildQualificationReceipt(
 						transition, "error", &expectedCell, &target, &foveation,

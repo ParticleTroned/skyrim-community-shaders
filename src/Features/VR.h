@@ -102,8 +102,8 @@ public:
 		static constexpr float kDefaultWandAimPitchTrimDegrees = 0.0f;
 		static constexpr float kMinWandAimPitchTrimDegrees = -90.0f;
 		static constexpr float kMaxWandAimPitchTrimDegrees = 90.0f;
-		static constexpr int kDefaultAutoHideSeconds = 30;    ///< Default auto-hide timeout for overlay messages
-		static constexpr int kMaxAutoHideSeconds = 300;       ///< Maximum auto-hide timeout (5 minutes)
+		static constexpr int kDefaultAutoHideSeconds = 30;  ///< Default auto-hide timeout for overlay messages
+		static constexpr int kMaxAutoHideSeconds = 300;     ///< Maximum auto-hide timeout (5 minutes)
 		static constexpr float kMinStereoBlendDepthSigma = 0.001f;
 		static constexpr float kMaxStereoBlendDepthSigma = 0.1f;
 		static constexpr float kDefaultStereoBlendDepthSigma = 0.01f;
@@ -115,9 +115,9 @@ public:
 		static constexpr float kDefaultStereoBlendColorThreshold = 0.02f;
 
 		// Default HMD overlay offset values (in meters, relative to HMD)
-		static constexpr float kDefaultHMDOffsetX = 0.26f;      ///< Default horizontal offset from HMD
-		static constexpr float kDefaultHMDOffsetY = -0.04f;     ///< Default vertical offset from HMD
-		static constexpr float kDefaultHMDOffsetZ = -2.25f;     ///< Default depth offset from HMD
+		static constexpr float kDefaultHMDOffsetX = 0.26f;   ///< Default horizontal offset from HMD
+		static constexpr float kDefaultHMDOffsetY = -0.04f;  ///< Default vertical offset from HMD
+		static constexpr float kDefaultHMDOffsetZ = -2.25f;  ///< Default depth offset from HMD
 
 		// Default controller overlay offset values (in meters, relative to controller)
 		static constexpr float kDefaultControllerOffsetX = 0.22f;  ///< Default horizontal offset from controller
@@ -153,6 +153,8 @@ public:
 	virtual void EarlyPrepass() override;
 
 	void UpdateDepthBufferCulling();
+	void SetDepthCullingPerformanceMode(bool a_enabled);
+	[[nodiscard]] bool IsDepthCullingPerformanceMode() const;
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -203,9 +205,10 @@ public:
 		static constexpr uint32_t kButtonJoystickTrigger = 32;
 
 		// Performance optimization settings
-		bool EnableDepthBufferCullingExterior = true;   ///< Master depth-culling option; enabled in exteriors
-		bool EnableDepthBufferCullingInterior = false;  ///< Also enable depth culling in interiors
-		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
+		bool EnableDepthBufferCullingExterior = true;  ///< Master depth-culling option; enabled in exteriors
+		bool EnableDepthBufferCullingInterior = true;  ///< Also enable depth culling in interiors
+		bool DepthCullingPerformanceMode = false;      ///< Accept native stale results instead of bounded recovery
+		float MinOccludeeBoxExtent = 10.0f;            ///< Minimum bounding box size for occlusion culling
 
 		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.
 		bool EnableStereoBlend = false;
@@ -268,8 +271,8 @@ public:
 		bool StabilizeRenderScaleDesktopMirror = false;           ///< Publish render-scale eye outputs to the desktop mirror
 
 		// CSX menu navigation settings
-		bool UseRuntimeDefaultMenuNavigation = true;   ///< Use mouse navigation by default until the user selects a mode explicitly
-		bool EnableWandPointing = true;                ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
+		bool UseRuntimeDefaultMenuNavigation = true;                              ///< Use mouse navigation by default until the user selects a mode explicitly
+		bool EnableWandPointing = true;                                           ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
 		float WandAimPitchTrimDegrees = Config::kDefaultWandAimPitchTrimDegrees;  ///< Optional local pitch trim after resolving the runtime aim component
 
 		// Visual customization

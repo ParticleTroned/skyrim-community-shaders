@@ -1,5 +1,4 @@
 #include "VR.h"
-#include "VR/MenuPositioningPolicy.h"
 #include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
 #include "FoveatedCommon.h"
@@ -19,7 +18,9 @@
 #include "ShaderCache.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
+#include "VR/MenuPositioningPolicy.h"
 #include "VRDepthCullingEnablePolicy.h"
+#include "VRDepthCullingTemporal.h"
 #include "WaterEffects.h"
 #include "WetnessEffects.h"
 #include "Wetterness.h"
@@ -428,6 +429,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
+	DepthCullingPerformanceMode,
 	MinOccludeeBoxExtent,
 	VRMenuScale,
 	VRMenuPositioningMethod,
@@ -506,6 +508,7 @@ void VR::LoadSettings(json& o_json)
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
+	SetDepthCullingPerformanceMode(settings.DepthCullingPerformanceMode);
 }
 
 void VR::SaveSettings(json& o_json)
@@ -525,6 +528,7 @@ void VR::RestoreDefaultSettings()
 	settings = Settings{};
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
+	SetDepthCullingPerformanceMode(settings.DepthCullingPerformanceMode);
 	UpdateDepthBufferCulling();
 
 	if (gMinOccludeeBoxExtent) {
@@ -632,6 +636,7 @@ json VR::CapturePerformanceCostMeasurementState() const
 	return {
 		{ "EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior },
 		{ "EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior },
+		{ "DepthCullingPerformanceMode", settings.DepthCullingPerformanceMode },
 		{ "EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0 },
 		{ "EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync },
 		{ "EnableSSShadowsStereoReproject", globals::features::screenSpaceShadows.useStereoReproject },
@@ -660,6 +665,7 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 
 	settings.EnableDepthBufferCullingExterior = a_state.value("EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior);
 	settings.EnableDepthBufferCullingInterior = a_state.value("EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior);
+	settings.DepthCullingPerformanceMode = a_state.value("DepthCullingPerformanceMode", settings.DepthCullingPerformanceMode);
 	globals::features::screenSpaceShadows.bendSettings.EnableFoveated =
 		a_state.value("EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0) ? 1u : 0u;
 	globals::features::screenSpaceShadows.enableStereoSync = a_state.value("EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync);
@@ -684,6 +690,7 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	settings.StabilizeRenderScaleDesktopMirror = a_state.value("StabilizeRenderScaleDesktopMirror", settings.StabilizeRenderScaleDesktopMirror);
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
+	SetDepthCullingPerformanceMode(settings.DepthCullingPerformanceMode);
 	UpdateDepthBufferCulling();
 }
 
@@ -904,6 +911,9 @@ void VR::PostPostLoad()
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xD9) + 0x2, 0x148);
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xE5) + 0x2, 0x14C);
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xF1) + 0x2, 0x150);
+
+	SetDepthCullingPerformanceMode(settings.DepthCullingPerformanceMode);
+	VRDepthCullingTemporal::Install();
 }
 
 void VR::DataLoaded()
@@ -1877,6 +1887,60 @@ namespace
 	}
 }
 
+namespace
+{
+	void DrawDepthCullingSettings(VR& a_vr, const char* a_id)
+	{
+		auto& settings = a_vr.settings;
+		ImGui::PushID(a_id);
+		ImGui::SeparatorText("Depth Culling");
+		bool exteriorChanged = false;
+		bool interiorChanged = false;
+		if (ImGui::BeginTable("##Options", 3, ImGuiTableFlags_SizingStretchSame)) {
+			ImGui::TableNextColumn();
+			exteriorChanged = ImGui::Checkbox("Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Master switch for native GPU depth culling. It is enabled for exteriors and controls whether interior culling can run.");
+			}
+
+			ImGui::TableNextColumn();
+			{
+				auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
+				interiorChanged = ImGui::Checkbox("Enable in Interiors", &settings.EnableDepthBufferCullingInterior);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Enabled by default. It improves indoor culling, while Balanced recovery limits one-frame missing-object faults during head motion.");
+			}
+
+			ImGui::TableNextColumn();
+			bool performanceMode = a_vr.IsDepthCullingPerformanceMode();
+			{
+				auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
+				if (ImGui::Checkbox("Performance Mode", &performanceMode))
+					a_vr.SetDepthCullingPerformanceMode(performanceMode);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Off (Balanced, default): on a motion-envelope miss, test conservative OBB bounds and recover at most 64 high-risk objects.");
+				ImGui::TextUnformatted("On (Performance): accept the native one-frame-late result. This has the lowest recovery cost but can briefly hide newly visible objects during head motion.");
+			}
+			ImGui::EndTable();
+		}
+
+		if (exteriorChanged || interiorChanged)
+			a_vr.UpdateDepthBufferCulling();
+
+		ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
+		if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
+			if (a_vr.gMinOccludeeBoxExtent)
+				*a_vr.gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Minimum bounding-box extent eligible for occlusion culling. Lower values cull more small objects but can make faults more noticeable.");
+		}
+		ImGui::PopID();
+	}
+}
+
 void VR::DrawPerformanceSettings(bool a_advanced)
 {
 	if (!REL::Module::IsVR()) {
@@ -1884,29 +1948,7 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		return;
 	}
 
-	bool exteriorChanged = ImGui::Checkbox("Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Improves performance where hidden-object rendering is a significant cost. Recommended on for exteriors.");
-	}
-	ImGui::Indent();
-	bool interiorChanged = false;
-	{
-		auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
-		interiorChanged = ImGui::Checkbox("Also Enable in Interiors", &settings.EnableDepthBufferCullingInterior);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Optional and default off. Missing-object faults can expose exterior lighting and are especially visible indoors.");
-		}
-	}
-	ImGui::Unindent();
-	if (exteriorChanged || interiorChanged) {
-		UpdateDepthBufferCulling();
-	}
-
-	if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
-		if (gMinOccludeeBoxExtent) {
-			*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
-		}
-	}
+	DrawDepthCullingSettings(*this, "PerformanceSettings");
 
 	if (!a_advanced)
 		return;
@@ -2267,40 +2309,12 @@ namespace
 	void DrawGeneralVRSettings()
 	{
 		auto& vr = globals::features::vr;
-		VR::Settings& settings = vr.settings;
 		DrawCSMenuNavigationSettings();
 		DrawKeepDesktopWindowFocusedForVRMenuSetting();
 		DrawStabilizeRenderScaleDesktopMirrorSetting();
 		ImGui::Separator();
 		if (ImGui::CollapsingHeader("General Settings")) {
-			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Improves performance where hidden-object rendering is a significant cost. Recommended on for exteriors.");
-			}
-
-			ImGui::Indent();
-			bool interiorChanged = false;
-			{
-				auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
-				interiorChanged = ImGui::Checkbox("Also Enable in Interiors", &settings.EnableDepthBufferCullingInterior);
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Optional and default off. Missing-object faults can expose exterior lighting and are especially visible indoors.");
-				}
-			}
-			ImGui::Unindent();
-
-			if (exteriorChanged || interiorChanged) {
-				vr.UpdateDepthBufferCulling();
-			}
-
-			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
-				if (vr.gMinOccludeeBoxExtent) {
-					*vr.gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
-				}
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
-			}
+			DrawDepthCullingSettings(vr, "GeneralSettings");
 		}
 	}
 
@@ -3280,9 +3294,9 @@ namespace
 				ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 				ImGui::TableHeadersRow();
 				const auto controllerName = [](ControllerDevice a_controller) {
-					return a_controller == ControllerDevice::Primary ? "Primary" :
+					return a_controller == ControllerDevice::Primary   ? "Primary" :
 					       a_controller == ControllerDevice::Secondary ? "Secondary" :
-					                                                    "None";
+					                                                     "None";
 				};
 
 				ImGui::TableNextRow();
@@ -4012,8 +4026,8 @@ void VR::SubmitOverlayFrame()
 			}
 			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
 			ID3D11ShaderResourceView* mipSRV = targetOverlayType == OverlayType::HMD ?
-			                                      menuSamplingSRV.get() :
-			                                      menuControllerSamplingSRV.get();
+			                                       menuSamplingSRV.get() :
+			                                       menuControllerSamplingSRV.get();
 			if (mipSRV) {
 				globals::d3d::context->GenerateMips(mipSRV);
 			}
@@ -4106,6 +4120,17 @@ void VR::UpdateDepthBufferCulling()
 	if (previous != desired) {
 		logger::info("VR depth buffer culling set to {}", desired);
 	}
+}
+
+void VR::SetDepthCullingPerformanceMode(bool a_enabled)
+{
+	settings.DepthCullingPerformanceMode = a_enabled;
+	VRDepthCullingTemporal::SetPerformanceMode(a_enabled);
+}
+
+bool VR::IsDepthCullingPerformanceMode() const
+{
+	return settings.DepthCullingPerformanceMode;
 }
 
 //=============================================================================

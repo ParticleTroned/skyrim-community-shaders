@@ -6,6 +6,7 @@
 #	include "Features/ScreenshotFeature.h"
 #	include "Features/Upscaling.h"
 #	include "Features/VR.h"
+#	include "Features/VRDepthCullingTemporal.h"
 #	include "Globals.h"
 #	include "Menu.h"
 #	include "State.h"
@@ -158,8 +159,18 @@ namespace
 		auto& screenshot = globals::features::screenshotFeature;
 		const auto inSceneSubmitSuppressionReasons =
 			globals::features::upscaling.GetVRInSceneOverlaySubmitSuppressionReasons();
+		const auto depthCullingTemporal = VRDepthCullingTemporal::GetStatus();
 		auto* drawData = ImGui::GetCurrentContext() ? ImGui::GetDrawData() : nullptr;
 		const auto fixedWorldPosition = vr.fixedWorldOverlayPosition.m.Translation();
+		const json depthCullingTemporalStatus = {
+			{ "installed", depthCullingTemporal.installed },
+			{ "policy", depthCullingTemporal.performanceMode ? "performance" : "balanced" },
+			{ "envelopeMisses", depthCullingTemporal.envelopeMisses },
+			{ "totalPromoted", depthCullingTemporal.totalPromoted },
+			{ "lastObjectCount", depthCullingTemporal.lastObjectCount },
+			{ "lastEligibleCount", depthCullingTemporal.lastEligibleCount },
+			{ "lastPromotedCount", depthCullingTemporal.lastPromotedCount },
+		};
 		return {
 			{ "menuEnabled", menu && menu->IsEnabled },
 			{ "menuSessionOpen", menu && menu->IsMenuSessionOpen() },
@@ -182,11 +193,15 @@ namespace
 			{ "fixedWorldPositionInitialized", vr.fixedWorldOverlayPosition.initialized },
 			{ "fixedWorldReanchorRequested", vr.fixedWorldOverlayReanchorRequested },
 			{ "fixedWorldPosition", {
-				{ "x", fixedWorldPosition.x },
-				{ "y", fixedWorldPosition.y },
-				{ "z", fixedWorldPosition.z },
-			} },
+										{ "x", fixedWorldPosition.x },
+										{ "y", fixedWorldPosition.y },
+										{ "z", fixedWorldPosition.z },
+									} },
 			{ "menuScale", vr.settings.VRMenuScale },
+			{ "depthCullingExteriorEnabled", vr.settings.EnableDepthBufferCullingExterior },
+			{ "depthCullingInteriorEnabled", vr.settings.EnableDepthBufferCullingInterior },
+			{ "depthCullingPerformanceMode", vr.settings.DepthCullingPerformanceMode },
+			{ "depthCullingTemporal", depthCullingTemporalStatus },
 			{ "menuOffsetX", vr.settings.VRMenuOffsetX },
 			{ "menuOffsetY", vr.settings.VRMenuOffsetY },
 			{ "menuOffsetZ", vr.settings.VRMenuOffsetZ },
@@ -208,11 +223,11 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "texture_stats") {
+		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "texture_stats" && action != "set_depth_culling_performance_mode") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "texture_stats" }) },
+				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "texture_stats", "set_depth_culling_performance_mode" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -223,8 +238,16 @@ namespace
 				{ "path", path },
 			};
 		}
+		if (action == "set_depth_culling_performance_mode" &&
+			(!a_args.contains("enabled") || !a_args.at("enabled").is_boolean())) {
+			return {
+				{ "error", "set_depth_culling_performance_mode requires boolean enabled" },
+				{ "action", action },
+			};
+		}
+		const bool enabled = a_args.value("enabled", false);
 
-		return RunOnMainThread([action, path]() -> json {
+		return RunOnMainThread([action, path, enabled]() -> json {
 			auto* menu = globals::menu;
 			if (!menu)
 				return { { "error", "CSX menu unavailable" } };
@@ -246,6 +269,8 @@ namespace
 					vr.settings.menuOverlayPath = VR::Settings::MenuOverlayPath::Auto;
 				vr.InvalidatePresentedMenuSurfaces();
 				vr.ResetMenuInputRuntimeState();
+			} else if (action == "set_depth_culling_performance_mode") {
+				globals::features::vr.SetDepthCullingPerformanceMode(enabled);
 			}
 			if (action == "texture_stats")
 				return { { "action", action }, { "texture", InspectMenuTexture() }, { "status", BuildStatus() } };
@@ -295,7 +320,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu for null-HMD automation. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX VR menu and depth-culling A/B policy. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats","set_depth_culling_performance_mode"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Performance Mode state required by set_depth_culling_performance_mode."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

@@ -3099,6 +3099,14 @@ namespace
 		}
 	}
 
+	uint64_t AdvanceSubmitStageDLSSInputGeneration(uint64_t& a_generation) noexcept
+	{
+		++a_generation;
+		if (a_generation == 0)
+			++a_generation;
+		return a_generation;
+	}
+
 	float ClampFoveatedCenterScale(float value)
 	{
 		return FoveatedCommon::ClampCenterScale(value);
@@ -22705,6 +22713,7 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageVendorAdmissionEyeMask = 0;
 	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
+	submitStageVendorOutputCycle = 0;
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
@@ -35422,6 +35431,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	submitStageVendorAdmissionEyeMask = 0;
 	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
+	submitStageVendorOutputCycle = 0;
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
@@ -38349,11 +38359,18 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	const uint32_t activeContractGeneration = submitStageDLSSCenter ? GetActiveVRRenderScaleContractGeneration() : 0u;
 	const uint32_t runtimeQualityMode = submitStageDLSSCenter ? GetRuntimeQualityMode() : 0u;
 	const uint32_t runtimeDLSSPreset = submitStageDLSSCenter ? GetRuntimeDLSSPreset() : kDLSSPresetK;
-	const bool trackSubmitStageDLSSCenter = submitStageDLSSCenter && state && activeContractGeneration != 0 && submitSourceBox != nullptr;
+	uint64_t inputGeneration = submitStageDLSSCenter ? streamline.GetDLSSInputGenerationContext() : 0u;
+	const bool trackSubmitStageDLSSCenter =
+		submitStageDLSSCenter &&
+		state &&
+		activeContractGeneration != 0 &&
+		inputGeneration != 0 &&
+		submitSourceBox != nullptr;
 	SubmitStageFoveatedCenterState centerKey{};
 	if (trackSubmitStageDLSSCenter) {
 		centerKey.ready = true;
 		centerKey.frame = currentFrame;
+		centerKey.inputGeneration = inputGeneration;
 		centerKey.method = static_cast<uint32_t>(a_upscaleMethod);
 		centerKey.generation = activeContractGeneration;
 		centerKey.qualityMode = runtimeQualityMode;
@@ -38385,44 +38402,21 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		centerKey.transparencyMaskIn = transparencyMaskIn;
 		centerKey.colorOut = vendorParams.colorOut;
 	}
-	auto matchesSubmitStageDLSSCenter = [](const SubmitStageFoveatedCenterState& a_cached, const SubmitStageFoveatedCenterState& a_key) {
-		return a_cached.ready &&
-		       a_cached.frame == a_key.frame &&
-		       a_cached.method == a_key.method &&
-		       a_cached.generation == a_key.generation &&
-		       a_cached.qualityMode == a_key.qualityMode &&
-		       a_cached.dlssPreset == a_key.dlssPreset &&
-		       a_cached.inputWidth == a_key.inputWidth &&
-		       a_cached.inputHeight == a_key.inputHeight &&
-		       a_cached.outputWidth == a_key.outputWidth &&
-		       a_cached.outputHeight == a_key.outputHeight &&
-		       a_cached.motionVectorWidth == a_key.motionVectorWidth &&
-		       a_cached.motionVectorHeight == a_key.motionVectorHeight &&
-		       a_cached.colorInputBaseOffsetX == a_key.colorInputBaseOffsetX &&
-		       a_cached.depthInputBaseOffsetX == a_key.depthInputBaseOffsetX &&
-		       a_cached.auxInputBaseOffsetX == a_key.auxInputBaseOffsetX &&
-		       a_cached.rectInputOffsetX == a_key.rectInputOffsetX &&
-		       a_cached.rectInputOffsetY == a_key.rectInputOffsetY &&
-		       a_cached.rectOutputOffsetX == a_key.rectOutputOffsetX &&
-		       a_cached.rectOutputOffsetY == a_key.rectOutputOffsetY &&
-		       a_cached.submitSourceSubresource == a_key.submitSourceSubresource &&
-		       a_cached.submitSourceBoxLeft == a_key.submitSourceBoxLeft &&
-		       a_cached.submitSourceBoxTop == a_key.submitSourceBoxTop &&
-		       a_cached.submitSourceBoxRight == a_key.submitSourceBoxRight &&
-		       a_cached.submitSourceBoxBottom == a_key.submitSourceBoxBottom &&
-		       a_cached.pinholeOffsetX == a_key.pinholeOffsetX &&
-		       a_cached.pinholeOffsetY == a_key.pinholeOffsetY &&
-		       a_cached.colorIn == a_key.colorIn &&
-		       a_cached.depthIn == a_key.depthIn &&
-		       a_cached.motionVectorsIn == a_key.motionVectorsIn &&
-		       a_cached.reactiveMaskIn == a_key.reactiveMaskIn &&
-		       a_cached.transparencyMaskIn == a_key.transparencyMaskIn &&
-		       a_cached.colorOut == a_key.colorOut;
-	};
 	auto& centerState = submitStageFoveatedCenterState[eyeIndex];
 	const bool reuseSubmitStageDLSSCenter =
 		trackSubmitStageDLSSCenter &&
-		matchesSubmitStageDLSSCenter(centerState, centerKey);
+		centerState == centerKey;
+	if (!reuseSubmitStageDLSSCenter &&
+		trackSubmitStageDLSSCenter &&
+		centerState.ready &&
+		centerState.inputGeneration == inputGeneration) {
+		inputGeneration = AdvanceSubmitStageDLSSInputGeneration(
+			submitStageDLSSInputGeneration);
+		// Keep any full-eye fallback on this changed input generation; the outer
+		// submit scope restores the caller's thread context.
+		streamline.SetDLSSInputGenerationContext(inputGeneration);
+		centerKey.inputGeneration = inputGeneration;
+	}
 	if (!reuseSubmitStageDLSSCenter) {
 		D3D11_BOX colorSrcBox{
 			colorInputBaseOffsetX + rect.inputOffsetX,
@@ -46765,6 +46759,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorAdmissionEyeMask = 0;
 	submitStageHotPresentationContract = {};
 	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
+	submitStageVendorOutputCycle = 0;
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
@@ -47385,16 +47380,30 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	if (submitStageVendorOutputFrame != currentFrame ||
+		submitStageVendorOutputCycle != a_compositorCycleToken ||
 		submitStageVendorOutputSourceTexture != sourceTexture ||
 		submitStageVendorOutputGeneration != activeContractGeneration) {
 		submitStageVendorOutputFrame = currentFrame;
+		submitStageVendorOutputCycle = a_compositorCycleToken;
 		submitStageVendorOutputGeneration = activeContractGeneration;
 		submitStageVendorOutputSourceTexture = sourceTexture;
+		if (upscaleMethod == UpscaleMethod::kDLSS)
+			AdvanceSubmitStageDLSSInputGeneration(submitStageDLSSInputGeneration);
 		submitStageVendorEyeState = {};
 		submitStageFoveatedCenterState = {};
 		submitStageRuntimeFSRStereoState = {};
 		submitStageForceFullEyeVendorFallback = false;
 	}
+	const bool setDLSSInputGeneration = upscaleMethod == UpscaleMethod::kDLSS;
+	uint64_t previousDLSSInputGeneration = 0;
+	if (setDLSSInputGeneration) {
+		previousDLSSInputGeneration = streamline.SetDLSSInputGenerationContext(
+			submitStageDLSSInputGeneration);
+	}
+	const auto restoreDLSSInputGeneration = ScopeExit([&]() noexcept {
+		if (setDLSSInputGeneration)
+			streamline.SetDLSSInputGenerationContext(previousDLSSInputGeneration);
+	});
 
 	const bool dlssRapidTransitionBypass =
 		upscaleMethod == UpscaleMethod::kDLSS &&
@@ -47754,11 +47763,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 
 	const bool expectedFoveatedVendorPath = shouldUseFoveatedVendorThisEye;
 	const auto& cachedEyeState = submitStageVendorEyeState[eyeIndex];
-	// OpenVR can submit the same eye twice in one frame; reuse the finalized
-	// vendor output when the submit signature is identical.
+	// OpenVR can submit the same eye twice in one compositor cycle; reuse the
+	// finalized vendor output only while that cycle and signature remain exact.
 	const bool canReuseSubmitStageEyeOutput =
 		!presentationOnly &&
+		a_compositorCycleToken != 0 &&
 		cachedEyeState.ready &&
+		cachedEyeState.compositorCycleToken == a_compositorCycleToken &&
 		cachedEyeState.method == static_cast<uint32_t>(upscaleMethod) &&
 		cachedEyeState.generation == activeContractGeneration &&
 		cachedEyeState.usedFoveatedVendorPath == expectedFoveatedVendorPath &&
@@ -47929,7 +47940,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 
 	auto replayStoredFullEyeVendorOutput = [&](uint32_t targetEyeIndex, bool preferDLSSSharpening) -> bool {
 		const auto& targetEyeState = submitStageVendorEyeState[targetEyeIndex];
-		if (!targetEyeState.ready ||
+		if (a_compositorCycleToken == 0 ||
+			!targetEyeState.ready ||
+			targetEyeState.compositorCycleToken != a_compositorCycleToken ||
 			targetEyeState.generation != activeContractGeneration ||
 			!targetEyeState.usedFoveatedVendorPath) {
 			return true;
@@ -48183,7 +48196,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	if (!vendorSucceeded && fullEyeVendorFallbackAvailable) {
 		const uint32_t otherEyeIndex = eyeIndex ^ 1u;
 		const bool replayOtherEyeFromFoveated =
+			a_compositorCycleToken != 0 &&
 			submitStageVendorEyeState[otherEyeIndex].ready &&
+			submitStageVendorEyeState[otherEyeIndex].compositorCycleToken == a_compositorCycleToken &&
 			submitStageVendorEyeState[otherEyeIndex].usedFoveatedVendorPath;
 		bool runtimeStereoDispatchFailed = false;
 		const bool sourceContainsBothEyes =
@@ -48408,15 +48423,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			loggedSubmitFailure[eyeIndex] = true;
 		}
 
-		const bool duplicateDLSSConstantsFailure =
+		const bool temporalDLSSFallbackRequired =
 			upscaleMethod == UpscaleMethod::kDLSS &&
-			streamline.WasLastDLSSFailureDuplicatedConstants();
+			streamline.DoesLastDLSSFailureRequireTemporalFallback();
 
-		if (upscaleMethod == UpscaleMethod::kDLSS && !duplicateDLSSConstantsFailure) {
+		if (upscaleMethod == UpscaleMethod::kDLSS && !temporalDLSSFallbackRequired) {
 			streamline.InvalidateDLSSOptionsCache();
 			streamline.ResetFrameTracking();
 		}
-		if (!duplicateDLSSConstantsFailure)
+		if (!temporalDLSSFallbackRequired)
 			RequestHistoryReset();
 
 		if (IsSubmitStageDeviceLost())
@@ -48452,6 +48467,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	submitStageVendorEyeState[eyeIndex].usedDLSSSharpening = submitDLSSSharpening;
 	submitStageVendorEyeState[eyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
 	submitStageVendorEyeState[eyeIndex].menuLayerGeneration = submitStageMenuLayerGeneration;
+	submitStageVendorEyeState[eyeIndex].compositorCycleToken = a_compositorCycleToken;
 	submitStageVendorEyeState[eyeIndex].method = static_cast<uint32_t>(upscaleMethod);
 	submitStageVendorEyeState[eyeIndex].generation = activeContractGeneration;
 	submitStageVendorEyeState[eyeIndex].inputWidth = eyeWidthIn;

@@ -2,6 +2,7 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "DLSSFrameEvaluationPolicy.h"
 
 #include <array>
 #include <cstddef>
@@ -109,29 +110,11 @@ public:
 		bool isHDR = false;
 		bool useLegacyProfile = false;
 	};
-	struct DLSSFrameConstantsCache
+	struct DLSSFrameEvaluationTicket
 	{
-		bool valid = false;
-		uint32_t frame = 0;
-		std::uintptr_t frameToken = 0;
-		uint32_t viewport = UINT32_MAX;
-		uint32_t eyeIndex = 0;
-		uint32_t viewportRole = 0;
-		uint32_t outputWidth = 0;
-		uint32_t outputHeight = 0;
-		uint32_t qualityMode = 0;
-		uint32_t dlssPreset = 0;
-		uint32_t extentInWidth = 0;
-		uint32_t extentInHeight = 0;
-		uint32_t extentOutWidth = 0;
-		uint32_t extentOutHeight = 0;
-		int32_t viewportScaleXQ = 0;
-		int32_t viewportScaleYQ = 0;
-		int32_t pinholeOffsetXQ = 0;
-		int32_t pinholeOffsetYQ = 0;
-		int32_t jitterXQ = 0;
-		int32_t jitterYQ = 0;
-		bool historyResetRequested = false;
+		DLSSFrameEvaluationPolicy::TicketState state{};
+		uint64_t lastUse = 0;
+		winrt::com_ptr<ID3D11Resource> outputOwner{};
 	};
 
 	struct VRDLSSViewportSlot
@@ -147,8 +130,10 @@ public:
 
 	DLSSOptionsCache nonVRDLSSOptionsCache{};
 	VRDLSSViewportSlot vrDLSSViewportSlots[kVRDLSSViewportRoleCount][kVRDLSSViewportSlotCount]{};
-	static constexpr uint32_t kDLSSFrameConstantsCacheSize = 16;
-	std::array<DLSSFrameConstantsCache, kDLSSFrameConstantsCacheSize> dlssFrameConstantsCache{};
+	static constexpr uint32_t kDLSSFrameEvaluationTicketCount = 16;
+	std::array<DLSSFrameEvaluationTicket, kDLSSFrameEvaluationTicketCount> dlssFrameEvaluationTickets{};
+	uint64_t dlssFrameEvaluationTicketUseCounter = 0;
+	uint64_t dlssSessionEpoch = 1;
 	uint64_t vrDLSSViewportUseCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
@@ -163,7 +148,7 @@ public:
 	};
 	ReflexOptionsCache reflexOptionsCache{};
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
-	bool lastDLSSFailureDuplicatedConstants = false;
+	bool lastDLSSFailureRequiresTemporalFallback = false;
 
 	struct DLSSDispatchDiagnostics
 	{
@@ -280,34 +265,7 @@ public:
 		MinRelativeLinearDepthObjectSeparation,
 		Count
 	};
-	struct DLSSDevBenchConstantsPayload
-	{
-		std::array<uint32_t, 16> cameraViewToClip{};
-		std::array<uint32_t, 16> clipToCameraView{};
-		std::array<uint32_t, 16> clipToLensClip{};
-		std::array<uint32_t, 16> clipToPrevClip{};
-		std::array<uint32_t, 16> prevClipToClip{};
-		std::array<uint32_t, 2> jitterOffset{};
-		std::array<uint32_t, 2> motionVectorScale{};
-		std::array<uint32_t, 2> cameraPinholeOffset{};
-		std::array<uint32_t, 3> cameraPosition{};
-		std::array<uint32_t, 3> cameraUp{};
-		std::array<uint32_t, 3> cameraRight{};
-		std::array<uint32_t, 3> cameraForward{};
-		uint32_t cameraNear = 0;
-		uint32_t cameraFar = 0;
-		uint32_t cameraFOV = 0;
-		uint32_t cameraAspectRatio = 0;
-		uint32_t motionVectorsInvalidValue = 0;
-		uint32_t minRelativeLinearDepthObjectSeparation = 0;
-		uint8_t depthInverted = 0;
-		uint8_t cameraMotionIncluded = 0;
-		uint8_t motionVectors3D = 0;
-		uint8_t reset = 0;
-		uint8_t orthographicProjection = 0;
-		uint8_t motionVectorsDilated = 0;
-		uint8_t motionVectorsJittered = 0;
-	};
+	using DLSSDevBenchConstantsPayload = DLSSFrameEvaluationPolicy::CanonicalConstants;
 	struct DLSSDevBenchTraceSignature
 	{
 		uint64_t traceSessionID = 0;
@@ -418,6 +376,13 @@ public:
 		Pending,
 		Failed
 	};
+	enum class DLSSFrameConstantsResult : uint8_t
+	{
+		ReadyForEvaluation,
+		ReuseCompletedOutput,
+		Rejected,
+		Failed
+	};
 
 	// Helper: Execute DLSS for a single viewport with given resources
 	bool EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
@@ -429,6 +394,10 @@ public:
 		bool useAuthoritativeProfile = false,
 		uint32_t authoritativeQualityMode = 0,
 		uint32_t authoritativeDLSSPreset = 1);
+	/** Sets the current thread's DLSS input generation and returns its prior value. */
+	uint64_t SetDLSSInputGenerationContext(uint64_t a_generation) noexcept;
+	/** Returns the current thread's authoritative DLSS input generation. */
+	[[nodiscard]] uint64_t GetDLSSInputGenerationContext() const noexcept;
 
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
@@ -439,7 +408,7 @@ public:
 
 	void PostDevice();
 
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr
+	DLSSFrameConstantsResult CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, uint64_t renderedInputGeneration, uint64_t resourceGeneration, bool outputReuseProven, const DLSSDispatchDiagnostics* diagnostics, DLSSFrameEvaluationTicket*& outEvaluationTicket
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		,
 		DLSSDevBenchTraceSignature* outFrameConstantsSignature = nullptr
@@ -468,10 +437,16 @@ public:
 	DLSSOptionsCache& GetDLSSOptionsCache(DLSSViewportRole viewportRole, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
 	bool SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics = nullptr);
 	void InvalidateDLSSOptionsCache();
+	/** Retires all temporal tickets after a Streamline session or resource epoch change. */
+	void InvalidateDLSSFrameEvaluationTickets();
 	void ResetDLSSIdleFences();
 	void ResetFrameTracking();
-	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
-	bool WasLastDLSSFailureDuplicatedConstants() const { return lastDLSSFailureDuplicatedConstants; }
+	void ClearLastDLSSFailureState()
+	{
+		lastDLSSFailureRequiresTemporalFallback = false;
+	}
+	/** Reports that the last failure must retain its Streamline temporal tuple. */
+	bool DoesLastDLSSFailureRequireTemporalFallback() const { return lastDLSSFailureRequiresTemporalFallback; }
 	bool HasDLSSResourcesPendingTeardown() const;
 	/** @brief Verifies one eye's exact cached DLSS option contract. */
 	[[nodiscard]] bool IsVRDLSSViewportResourceCompatible(

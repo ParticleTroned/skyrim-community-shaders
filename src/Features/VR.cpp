@@ -1,4 +1,5 @@
 #include "VR.h"
+#include "VR/MenuPositioningPolicy.h"
 #include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
 #include "FoveatedCommon.h"
@@ -18,7 +19,6 @@
 #include "ShaderCache.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
-#include "VR/MenuPositioningPolicy.h"
 #include "VRDepthCullingEnablePolicy.h"
 #include "VRDepthCullingTemporal.h"
 #include "WaterEffects.h"
@@ -607,6 +607,7 @@ void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	auto& screenSpaceGI = globals::features::screenSpaceGI;
 	settings.EnableDepthBufferCullingExterior = a_enabled ? defaults.EnableDepthBufferCullingExterior : false;
 	settings.EnableDepthBufferCullingInterior = a_enabled ? defaults.EnableDepthBufferCullingInterior : false;
+	SetDepthCullingPerformanceMode(a_enabled ? defaults.DepthCullingPerformanceMode : true);
 	screenSpaceShadows.bendSettings.EnableFoveated = a_enabled ? screenSpaceShadowsDefaults.EnableFoveated : 0u;
 	screenSpaceShadows.enableStereoSync = false;
 	screenSpaceShadows.useStereoReproject = false;
@@ -1900,7 +1901,7 @@ namespace
 			ImGui::TableNextColumn();
 			exteriorChanged = ImGui::Checkbox("Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Master switch for native GPU depth culling. It is enabled for exteriors and controls whether interior culling can run.");
+				ImGui::TextUnformatted("Master switch for native GPU depth culling. When enabled, it applies in exteriors and controls whether interior culling can run.");
 			}
 
 			ImGui::TableNextColumn();
@@ -1909,7 +1910,7 @@ namespace
 				interiorChanged = ImGui::Checkbox("Enable in Interiors", &settings.EnableDepthBufferCullingInterior);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Enabled by default. It improves indoor culling, while Balanced recovery limits one-frame missing-object faults during head motion.");
+				ImGui::TextUnformatted("Enabled by default. It improves indoor culling; Balanced mode limits one-frame missing-object faults during head motion.");
 			}
 
 			ImGui::TableNextColumn();
@@ -3294,9 +3295,9 @@ namespace
 				ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 				ImGui::TableHeadersRow();
 				const auto controllerName = [](ControllerDevice a_controller) {
-					return a_controller == ControllerDevice::Primary   ? "Primary" :
+					return a_controller == ControllerDevice::Primary ? "Primary" :
 					       a_controller == ControllerDevice::Secondary ? "Secondary" :
-					                                                     "None";
+					                                                    "None";
 				};
 
 				ImGui::TableNextRow();
@@ -4026,8 +4027,8 @@ void VR::SubmitOverlayFrame()
 			}
 			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
 			ID3D11ShaderResourceView* mipSRV = targetOverlayType == OverlayType::HMD ?
-			                                       menuSamplingSRV.get() :
-			                                       menuControllerSamplingSRV.get();
+			                                      menuSamplingSRV.get() :
+			                                      menuControllerSamplingSRV.get();
 			if (mipSRV) {
 				globals::d3d::context->GenerateMips(mipSRV);
 			}

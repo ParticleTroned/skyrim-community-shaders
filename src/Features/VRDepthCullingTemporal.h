@@ -15,8 +15,12 @@ namespace VRDepthCullingTemporal
 		std::uint32_t lastPromotedCount = 0;
 	};
 
+	/** Install the Skyrim VR 1.4.15 producer and readback hooks. */
 	void Install();
+	/** Select native-result Performance Mode when enabled. */
 	void SetPerformanceMode(bool a_enabled);
+	/** Return the mode currently observed by the render thread. */
 	[[nodiscard]] bool IsPerformanceMode();
+	/** Return thread-safe diagnostics for DevBench inspection. */
 	[[nodiscard]] Status GetStatus();
 }

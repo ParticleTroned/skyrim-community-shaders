@@ -10,12 +10,18 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <type_traits>
 
 namespace VRDepthCullingTemporal
 {
 	namespace
 	{
 		using namespace VRDepthCullingTemporalPolicy;
+		inline constexpr std::size_t kObjectCountOffset = 0xB0;
+		inline constexpr std::size_t kTransformsOffset = 0xB8;
+		inline constexpr std::size_t kResultSelectorOffset = 0xC0;
+		inline constexpr std::size_t kResultsOffset = 0xD0;
 
 		struct ProducerPose
 		{
@@ -28,7 +34,6 @@ namespace VRDepthCullingTemporal
 		{
 			double rotationCosine = -1.0;
 			float translationSquared = 0.0f;
-			bool producerPoseValid = false;
 		};
 
 		// Both hooks execute in order on the render-depth thread.
@@ -41,12 +46,19 @@ namespace VRDepthCullingTemporal
 		std::atomic_uint32_t g_lastEligibleCount{ 0 };
 		std::atomic_uint32_t g_lastPromotedCount{ 0 };
 
-		MotionDelta CalculateMotionDelta(const RE::NiTransform& a_currentView)
+		template <class T>
+		T ReadCullerField(const std::byte* a_culler, std::size_t a_offset)
 		{
-			MotionDelta delta{};
-			delta.producerPoseValid = g_producerPose.valid;
+			static_assert(std::is_trivially_copyable_v<T>);
+			T value{};
+			std::memcpy(&value, a_culler + a_offset, sizeof(value));
+			return value;
+		}
+
+		bool TryCalculateMotionDelta(const RE::NiTransform& a_currentView, MotionDelta& a_delta)
+		{
 			if (!g_producerPose.valid)
-				return delta;
+				return false;
 
 			double relativeRotationTrace = 0.0;
 			for (std::size_t row = 0; row < 3; ++row) {
@@ -55,14 +67,16 @@ namespace VRDepthCullingTemporal
 					                         static_cast<double>(a_currentView.rotate.entry[row][column]);
 				}
 			}
-			delta.rotationCosine = std::clamp((relativeRotationTrace - 1.0) * 0.5, -1.0, 1.0);
+			a_delta.rotationCosine = std::clamp((relativeRotationTrace - 1.0) * 0.5, -1.0, 1.0);
 			const auto translationDelta = a_currentView.translate - g_producerPose.translation;
-			delta.translationSquared = translationDelta.SqrLength();
-			return delta;
+			a_delta.translationSquared = translationDelta.SqrLength();
+			return std::isfinite(a_delta.rotationCosine) && std::isfinite(a_delta.translationSquared) &&
+			       a_delta.translationSquared >= 0.0f;
 		}
 
 		void CaptureProducerPose()
 		{
+			// Keep the pose warm so switching from Performance to Balanced is valid immediately.
 			const auto* camera = RE::Main::WorldRootCamera();
 			if (!camera) {
 				g_producerPose.valid = false;
@@ -76,16 +90,24 @@ namespace VRDepthCullingTemporal
 
 		void RecoverHighRiskObjects(void* a_culler)
 		{
+			if (g_performanceMode.load(std::memory_order_acquire))
+				return;
+
 			auto* camera = RE::Main::WorldRootCamera();
 			if (!a_culler || !camera)
 				return;
 
-			const MotionDelta motion = CalculateMotionDelta(camera->world);
+			MotionDelta motion{};
+			if (!TryCalculateMotionDelta(camera->world, motion))
+				return;
 			const bool viewCoherent = IsViewCoherent(
-				motion.producerPoseValid,
+				true,
 				motion.rotationCosine,
 				motion.translationSquared);
 			if (viewCoherent)
+				return;
+			MotionEnvelope envelope{};
+			if (!TryBuildMotionEnvelope(motion.rotationCosine, motion.translationSquared, envelope))
 				return;
 
 			g_envelopeMisses.fetch_add(1, std::memory_order_relaxed);
@@ -93,18 +115,14 @@ namespace VRDepthCullingTemporal
 			g_lastPromotedCount.store(0, std::memory_order_relaxed);
 
 			auto* bytes = static_cast<std::byte*>(a_culler);
-			const auto objectCount = *reinterpret_cast<std::uint32_t*>(bytes + 0xB0);
+			const auto objectCount = ReadCullerField<std::uint32_t>(bytes, kObjectCountOffset);
 			g_lastObjectCount.store(objectCount, std::memory_order_relaxed);
-			const Mode mode = g_performanceMode.load(std::memory_order_relaxed) ? Mode::Performance : Mode::Balanced;
-			if (!ShouldEvaluateEnvelope(mode, viewCoherent))
-				return;
-
-			const auto bufferIndex = *reinterpret_cast<std::uint32_t*>(bytes + 0xC0);
+			const auto bufferIndex = ReadCullerField<std::uint32_t>(bytes, kResultSelectorOffset);
 			if (objectCount == 0 || objectCount > kMaximumObjects || bufferIndex > 1)
 				return;
 
-			auto* transforms = *reinterpret_cast<OBBTransform**>(bytes + 0xB8);
-			auto* results = *reinterpret_cast<std::uint32_t**>(bytes + 0xD0 + bufferIndex * sizeof(void*));
+			auto* transforms = ReadCullerField<OBBTransform*>(bytes, kTransformsOffset);
+			auto* results = ReadCullerField<std::uint32_t*>(bytes, kResultsOffset + bufferIndex * sizeof(void*));
 			if (!transforms || !results)
 				return;
 
@@ -120,12 +138,15 @@ namespace VRDepthCullingTemporal
 				const RE::NiPoint3 center{ sphere.center[0], sphere.center[1], sphere.center[2] };
 				const auto positionDelta = center - camera->world.translate;
 				const float distanceSquared = positionDelta.SqrLength();
-				const float motionExpansion = CalculateMotionExpansion(
-					distanceSquared,
-					motion.rotationCosine,
-					motion.translationSquared);
+				float motionExpansion = 0.0f;
+				if (!TryCalculateMotionExpansion(
+						distanceSquared,
+						envelope,
+						motionExpansion)) {
+					continue;
+				}
 				const float expandedRadius = sphere.radius + motionExpansion;
-				if (!std::isfinite(expandedRadius))
+				if (!std::isfinite(expandedRadius) || expandedRadius < sphere.radius)
 					continue;
 
 				const bool directlyVisible = camera->PointInFrustum(center, sphere.radius);
@@ -133,7 +154,7 @@ namespace VRDepthCullingTemporal
 					continue;
 
 				++eligibleCount;
-				candidates.Add({ index, CalculateRiskScore(expandedRadius, distanceSquared), directlyVisible });
+				candidates.Add({ index, CalculateRiskScore(sphere.radius, distanceSquared), directlyVisible });
 			}
 
 			for (std::size_t index = 0; index < candidates.Size(); ++index)
@@ -173,6 +194,8 @@ namespace VRDepthCullingTemporal
 
 	void Install()
 	{
+		if (g_installed.load(std::memory_order_acquire))
+			return;
 		if (!REL::Module::IsVR())
 			return;
 		if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
@@ -191,6 +214,7 @@ namespace VRDepthCullingTemporal
 		}
 
 		stl::write_thunk_call<DepthCullingReadback>(readbackCallsite);
+		// Frame annotations may already wrap this call; preserve that current target in the thunk chain.
 		stl::write_thunk_call<DepthCullingRender>(renderCallsite);
 		g_installed.store(true, std::memory_order_release);
 		logger::info(

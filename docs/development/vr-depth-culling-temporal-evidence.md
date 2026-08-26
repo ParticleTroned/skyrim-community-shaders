@@ -54,7 +54,10 @@ The native OBB upload reads `count * 0x40` bytes from `+0xB8`. A sampled
 record had three scaled oriented axes, a world-space translation in the fourth
 column, and an affine final row. This is why Balanced recovery can derive a
 conservative bound from already CPU-resident native data instead of adding a
-synchronous GPU readback.
+synchronous GPU readback. The implementation evaluates one representative from
+each antipodal pair of signed-axis combinations when deriving the enclosing
+sphere, so non-orthogonal axes cannot make the bound smaller than the
+represented box.
 
 ## Local implementation validation
 
@@ -80,10 +83,23 @@ Results:
     formatting.
 -   `clang-format` and `prettier` passed for the staged files.
 
+Adversarial review validation on `9daec10c7`:
+
+-   The focused temporal-policy target rebuilt and passed.
+-   All 27 controller tests rebuilt and passed.
+-   The full Release compilation processed the changed VR, temporal-culling,
+    and DevBench translation units without diagnostics, then failed in the
+    unchanged `ShaderCache.cpp` at line 3174 because warning C4458 is treated as
+    an error. `enableRequested` on current `main-VR` shadows the existing class
+    member of the same name. That unrelated base issue was not folded into this
+    PR.
+
 Not run:
 
 -   The candidate DLL was not deployed to the user's AIO.
 -   No post-change headset visual or frame-time A/B was run.
+-   A linked Release DLL was not produced by the post-review full build because
+    of the current-head `ShaderCache.cpp` warning described above.
 -   Shader tests were disabled because this change has no HLSL surface. An
     earlier configure attempt with shader tests enabled also encountered local
     ShaderTestFramework/NuGet SSL setup errors before generation completed.

@@ -348,42 +348,62 @@ void DynamicCubemaps::ClearShaderCache()
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdate()
 {
-	return updateCubemapCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0");
+	return updateCubemapCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::UpdateCubemapCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateReflections()
 {
-	return updateCubemapReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0");
+	return updateCubemapReflectionsCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl",
+		{ { "REFLECTIONS", "" } }, "cs_5_0", "main",
+		"DynamicCubemaps::UpdateCubemapReflectionsCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateFakeReflections()
 {
-	return updateCubemapFakeReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0");
+	return updateCubemapFakeReflectionsCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl",
+		{ { "FAKEREFLECTIONS", "" } }, "cs_5_0", "main",
+		"DynamicCubemaps::UpdateCubemapFakeReflectionsCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrence()
 {
-	return inferCubemapCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", {}, "cs_5_0");
+	return inferCubemapCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::InferCubemapCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceReflections()
 {
-	return inferCubemapReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0");
+	return inferCubemapReflectionsCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl",
+		{ { "REFLECTIONS", "" } }, "cs_5_0", "main",
+		"DynamicCubemaps::InferCubemapReflectionsCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrenceFakeReflections()
 {
-	return inferCubemapFakeReflectionsCS.Get(L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0");
+	return inferCubemapFakeReflectionsCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\InferCubemapCS.hlsl",
+		{ { "FAKEREFLECTIONS", "" } }, "cs_5_0", "main",
+		"DynamicCubemaps::InferCubemapFakeReflectionsCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderSpecularIrradiance()
 {
-	return specularIrradianceCS.Get(L"Data\\Shaders\\DynamicCubemaps\\SpecularIrradianceCS.hlsl", {}, "cs_5_0");
+	return specularIrradianceCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\SpecularIrradianceCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::SpecularIrradianceCS");
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderBC6HEncode()
 {
-	return bc6hEncodeCS.Get(L"Data\\Shaders\\DynamicCubemaps\\BC6HEncodeCS.hlsl", {}, "cs_5_0");
+	return bc6hEncodeCS.Get(
+		L"Data\\Shaders\\DynamicCubemaps\\BC6HEncodeCS.hlsl", {}, "cs_5_0", "main",
+		"DynamicCubemaps::BC6HEncodeCS");
 }
 
 bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)

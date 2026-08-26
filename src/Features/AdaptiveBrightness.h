@@ -52,7 +52,7 @@ struct AdaptiveBrightness : Feature
 			"Balances scene lighting, atmosphere and bloom by location and exterior time of day.",
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
-				"Optional per-worldspace, location, and cell overrides with COC codes",
+				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
 				"Shared light calibration with per-profile Bloom and water appearance controls" }
 		};
 	}
@@ -118,6 +118,8 @@ struct AdaptiveBrightness : Feature
 	struct CurrentLocationOverrideTargets
 	{
 		std::optional<LocationOverrideTarget> worldspace;
+		std::optional<LocationOverrideTarget> region;
+		std::optional<LocationOverrideTarget> city;
 		std::optional<LocationOverrideTarget> location;
 		std::optional<LocationOverrideTarget> cell;
 	};
@@ -189,6 +191,14 @@ struct AdaptiveBrightness : Feature
 		Count
 	};
 
+	enum class ContextProfileScope : std::size_t
+	{
+		Worldspace,
+		Region,
+		City,
+		Count
+	};
+
 	struct ProfileTabSyncState
 	{
 		std::string key;
@@ -207,6 +217,12 @@ struct AdaptiveBrightness : Feature
 	std::string selectedLocationOverrideKey;
 	std::string locationOverridePresetName = kDefaultLocationOverridePresetName;
 	std::string locationOverridePresetStatus;
+	std::array<std::string, static_cast<std::size_t>(ContextProfileScope::Count)> contextPresetNames{
+		kDefaultLocationOverridePresetName,
+		kDefaultLocationOverridePresetName,
+		kDefaultLocationOverridePresetName
+	};
+	std::array<std::string, static_cast<std::size_t>(ContextProfileScope::Count)> contextPresetStatuses{};
 	std::string fullPresetName = kDefaultFullPresetName;
 	std::string fullPresetStatus;
 	std::string locationOverrideEditKey;
@@ -258,6 +274,7 @@ struct AdaptiveBrightness : Feature
 	Profile GetCurrentProfileForUI() const;
 	const LocationOverride* GetActiveLocationOverride() const;
 	const LocationOverride* GetActiveWorldspaceOverride() const;
+	std::optional<ContextProfileScope> GetCurrentContextOverrideScope(const LocationOverride* a_locationOverride) const;
 	float GetExteriorNightFactor() const;
 	std::string GetContextLabel() const;
 	static const char* GetProfileName(Profile a_profile);
@@ -272,7 +289,16 @@ struct AdaptiveBrightness : Feature
 		bool a_allowEdits,
 		const char* a_saveLabel,
 		bool a_closeWhenFinished);
-	void DrawCurrentWorldspaceProfileTab(bool a_showAdvancedControls, bool a_allowEdits, bool a_select);
+	void DrawCurrentContextProfileTab(
+		ContextProfileScope a_scope,
+		bool a_showAdvancedControls,
+		bool a_allowEdits,
+		bool a_select);
+	void DrawContextProfilePresetControls(
+		ContextProfileScope a_scope,
+		const LocationOverrideTarget& a_target,
+		const LocationOverride* a_locationOverride,
+		bool a_allowEdits);
 	void DrawProfileSettings(
 		ProfileSettings& a_profile,
 		const char* a_sectionTitle = "Profile Values",
@@ -281,7 +307,6 @@ struct AdaptiveBrightness : Feature
 	void DrawGlobalRendererSettings();
 	void DrawGlobalPresetControls();
 	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
-	void DrawLocationSummary();
 	void DrawLocationOverridePresetControls();
 	void DrawFullPresetControls();
 	void SaveCurrentLocationOverride(const LocationOverrideTarget& a_target);
@@ -293,9 +318,15 @@ struct AdaptiveBrightness : Feature
 	bool ImportGlobalPreset();
 	bool ExportLocationOverrides();
 	bool ImportLocationOverrides();
+	bool ExportContextProfile(
+		ContextProfileScope a_scope,
+		const LocationOverrideTarget& a_target,
+		const LocationOverride& a_locationOverride);
+	bool ImportContextProfile(ContextProfileScope a_scope, const LocationOverrideTarget& a_target);
 	bool ExportFullPreset();
 	bool ImportFullPreset();
 	CurrentLocationOverrideTargets GetCurrentLocationOverrideTargets() const;
+	const LocationOverride* GetInheritedLocationOverride(const LocationOverrideTarget& a_target) const;
 	LocationOverride* FindLocationOverride(const std::string& a_key);
 	const LocationOverride* FindLocationOverride(const std::string& a_key) const;
 	std::size_t FindLocationOverrideIndexByKey(const std::string& a_key) const;

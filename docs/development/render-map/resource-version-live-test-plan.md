@@ -91,9 +91,14 @@ responses as the authoritative artifact when final files are available.
 
 ## After the main-menu mechanism gate
 
-Do not immediately collect a large free-running world trace. First capture one
-fixed opaque Lighting object, then one controlled Breezehome frame. Those
-captures should project render-pass, technique, geometry, and selected-shader
-identity over the lossless versioned execution graph. Exact subresource overlap,
-indirect argument-resource reads, map/unmap, deferred contexts, command-list
-replay, and eye attribution remain separate slices.
+The controlled Breezehome frame is complete and documented in
+[`opaque-lighting-breezehome-capture-2026-08-26.md`](./opaque-lighting-breezehome-capture-2026-08-26.md).
+It projects render-pass, technique, geometry, selected-shader, execution, and
+resource identity over the lossless versioned graph. The attempted three-frame
+unfiltered trace also proved that the current global event ceiling is reached
+before an honest three-frame fixed-object claim can be made.
+
+The next slice is therefore opt-in object/material identity plus targeted
+geometry or shader-family filtering. Exact subresource overlap, indirect
+argument-resource reads, map/unmap, deferred contexts, command-list replay,
+and eye attribution remain separate slices.

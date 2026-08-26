@@ -37,6 +37,10 @@ The bounded main-menu live gate passed; its exact runtime identity, capture
 counts, version/dependency invariants, cache observation, and retained hashes
 are recorded in
 [`resource-version-main-menu-capture-2026-08-26.md`](./resource-version-main-menu-capture-2026-08-26.md).
+The following controlled Breezehome frame confirms genuine world-scene
+Lighting/render-pass/geometry/resource correlation and records the exact
+targeted semantic-capture boundary exposed by the live event density:
+[`opaque-lighting-breezehome-capture-2026-08-26.md`](./opaque-lighting-breezehome-capture-2026-08-26.md).
 Findings from the first bounded live controller run are in
 [`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
 The later 120-frame run that validates durable finalization and establishes the

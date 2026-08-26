@@ -5,47 +5,11 @@
 #include "Common/Color.hlsli"
 #include "Common/Game.hlsli"
 #include "Common/Math.hlsli"
+#include "Hair/HairMath.hlsli"
 
 namespace Hair
 {
 	Texture2D<float> TexTangentShift : register(t73);
-
-	float3 ReorientTangent(float3 T, float3 N)
-	{
-		// Reorient tangent to be orthogonal to normal
-		float3 T_reoriented = normalize(T - N * dot(T, N));
-		return T_reoriented;
-	}
-
-	// [Kajiya et al. 1989, "Rendering fur with three dimensional textures."]
-	// https://doi.org/10.1145/74334.74361
-	float3 D_KajiyaKay(float3 T, float3 H, float n)
-	{
-		float TH = dot(T, H);
-		float sinTH = saturate(1 - TH * TH);
-		float dirAtten = saturate(TH + 1);
-		float norm = (n + 2) / (2 * Math::PI);
-		return dirAtten * norm * pow(sinTH, 0.5 * n);
-	}
-
-	float3 HairF0()
-	{
-		const float n = 1.55;
-		const float F0 = pow((1 - n) / (1 + n), 2);
-		return F0.xxx;
-	}
-
-	float3 ShiftTangent(float3 T, float3 N, float shift)
-	{
-		return normalize(T + N * shift);
-	}
-
-	float3 ShiftNormal(float3 T, float3 N, float shift)
-	{
-		float3 T_shifted = ShiftTangent(T, N, shift);
-		float3 N_shifted = normalize(cross(T_shifted, cross(N, T_shifted)));
-		return N_shifted;
-	}
 
 	float3 ShiftWorldNormal(float3 T, float3 N, float n, float2 uv)
 	{
@@ -100,11 +64,6 @@ namespace Hair
 		float3 specT = (scatterFresnel1 + scatterFresnel2 * scatterColor) * SharedData::hairSpecularSettings.Transmission;
 		dirSpecular = specR * lightColor * SharedData::hairSpecularSettings.SpecularMult;
 		dirTransmission = specT * softColor * SharedData::hairSpecularSettings.SpecularMult;
-	}
-
-	float Hair_g(float B, float Theta)
-	{
-		return exp(-0.5 * Theta * Theta / (B * B)) / (sqrt(Math::TAU) * B);
 	}
 
 	// [Marschner et al. 2003, "Light reflection from human hair fibers."]
@@ -175,25 +134,6 @@ namespace Hair
 		return max(R + TT + TRT, 0);
 	}
 
-	float3 GetHairDiffuseAttenuationKajiyaKay(float3 N, float3 V, float3 L, float shadow, float3 baseColor)
-	{
-		float NdotL = dot(N, L);
-		float NdotV = dot(N, V);
-		float3 S = 0;
-
-		float diffuseKajiya = 1 - abs(NdotL);
-
-		float3 fakeN = normalize(V - N * NdotV);
-		const float wrap = 1;
-		float wrappedNdotL = saturate((dot(fakeN, L) + wrap) / ((1 + wrap) * (1 + wrap)));
-		float diffuseScatter = (1 / Math::PI) * lerp(wrappedNdotL, diffuseKajiya, 0.33);
-		float luma = max(Color::RGBToLuminance(baseColor), 1e-4);
-		float3 scatterTint = shadow < 1 ? pow(abs(baseColor / luma), 1 - shadow) : 1;
-		S += sqrt(baseColor) * diffuseScatter * scatterTint;
-
-		return max(S, 0);
-	}
-
 	void GetHairDirectLightMarschner(out float3 dirDiffuse, out float3 dirSpecular, out float3 dirTransmission, float3 T, float3 L, float3 V, float3 N, float3 VN, DirectContext context, float shininess, float2 uv, float3 baseColor)
 	{
 		float3 lightColor = context.lightColor * Color::PBRLightingCompensation;
@@ -221,7 +161,7 @@ namespace Hair
 		const float3 VN = normalize(tbnTr[2]);
 		const float3 L = normalize(context.lightDir);
 
-	if (SharedData::hairSpecularSettings.HairMode == 0) {
+		if (SharedData::hairSpecularSettings.HairMode == 0) {
 			GetHairDirectLightScheuermann(lightingOutput.diffuse, lightingOutput.specular, lightingOutput.transmission, T, L, V, N, VN, context, material.Shininess, uv, material.BaseColor);
 		} else {
 			GetHairDirectLightMarschner(lightingOutput.diffuse, lightingOutput.specular, lightingOutput.transmission, T, L, V, N, VN, context, material.Shininess, uv, material.BaseColor);
@@ -253,12 +193,6 @@ namespace Hair
 			lobeWeights.diffuse *= (1 - hairSpecularLobe);
 			lobeWeights.specular = saturate(hairSpecularLobe * SharedData::hairSpecularSettings.SpecularIndirectMult);
 		}
-	}
-
-	float3 Saturation(float3 color, float saturation)
-	{
-		float luminance = Color::RGBToLuminance(color);
-		return saturate(lerp(float3(luminance, luminance, luminance), color, saturation));
 	}
 
 	float HairSelfShadow(float3 positionWS, float3 lightDirWS, float noise, uint eyeIndex)

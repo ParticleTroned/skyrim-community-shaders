@@ -201,26 +201,6 @@ namespace MenuFonts
 
 namespace Util
 {
-	// Security: Validate that a path stays within an allowed directory
-	bool IsPathWithinDirectory(const std::filesystem::path& basePath, const std::filesystem::path& testPath)
-	{
-		try {
-			// Canonicalize both paths to resolve all symlinks and .. sequences
-			auto canonicalBase = std::filesystem::canonical(basePath);
-			auto canonicalTest = std::filesystem::weakly_canonical(testPath);
-
-			// Check if test path is a subpath of base path
-			auto [baseIt, testIt] = std::mismatch(
-				canonicalBase.begin(), canonicalBase.end(),
-				canonicalTest.begin(), canonicalTest.end());
-
-			return baseIt == canonicalBase.end();
-		} catch (const std::filesystem::filesystem_error&) {
-			// If canonicalization fails, reject the path
-			return false;
-		}
-	}
-
 	namespace
 	{
 		// Security: Sanitize user input to prevent path traversal

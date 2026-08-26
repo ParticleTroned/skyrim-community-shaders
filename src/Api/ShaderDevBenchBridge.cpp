@@ -294,6 +294,18 @@ namespace
 				}
 				destination = (logDirectory / requested).lexically_normal();
 			}
+			std::error_code pathError;
+			const auto resolvedDestination = std::filesystem::weakly_canonical(destination, pathError);
+			if (pathError || !Util::IsPathWithinDirectory(logDirectory, resolvedDestination)) {
+				return Foundation().MakeError(
+					a_args,
+					"invalid_path",
+					"path must resolve below the Community Shaders log directory",
+					"validation",
+					false,
+					"path");
+			}
+			destination = resolvedDestination;
 
 			if (!cache->ExportCompileTrace(destination)) {
 				return Foundation().MakeError(

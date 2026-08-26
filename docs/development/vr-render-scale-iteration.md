@@ -199,6 +199,13 @@ $env:GHIDRA_JAVA_HOME = $env:JAVA_HOME
 The reusable helper sets these environment variables automatically and also
 redirects Ghidra config/cache to `D:\Coding\GitHub\codex-ghidra-live`.
 
+For MCP analysis, install the repository-pinned GhidrAssistMCP extension and
+register its loopback endpoint as described in
+[Ghidra MCP integration](ghidra-mcp.md). Prefer the managed headless controller
+so project import, reuse, readiness, and shutdown do not require the Ghidra UI.
+The extension still does not replace the live dump required to obtain Skyrim
+VR's decrypted executable bytes.
+
 Dump and disassemble a live helper window:
 
 ```powershell

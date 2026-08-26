@@ -2,6 +2,8 @@
 
 -   [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
 -   [Developer tooling](tooling.md) — reliable Git hooks, GitHub transport, Codex sandbox, and Windows build setup.
+-   [Ghidra MCP integration](ghidra-mcp.md) — pinned extension installation,
+    loopback MCP configuration, and Skyrim VR live-dump analysis.
 -   [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
 -   [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
 
@@ -27,6 +29,10 @@
 -   **Run shader tests:** `pwsh ./tools/cmake.ps1 --build build/ALL --target run_shader_tests`
 -   **Create a worktree with submodules + local preset:** `pwsh ./tools/new-worktree.ps1 -Name my-branch`
 -   **Install optional git alias:** `pwsh ./tools/install-worktree-alias.ps1`
+-   **Install optional Ghidra MCP extension:**
+    `pwsh ./tools/setup-ghidra-mcp.ps1 -GhidraInstallDir <path> -JavaHome <path>`
+-   **Manage headless Ghidra MCP:**
+    `pwsh ./tools/ghidra-mcp-control.ps1 start -GhidraInstallDir <path> -ProgramPath <binary>`
 
 ### Build Presets
 

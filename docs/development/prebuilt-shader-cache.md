@@ -262,6 +262,12 @@ wrong choice is safe but causes the mismatched cache to be rejected and shaders
 to compile locally; the runtime never force-loads entries whose feature metadata
 does not match.
 
+The integrated archive keeps both selectable caches below `CacheProfiles/`.
+Neither source payload is named `ShaderCache`, so MO2 cannot confuse the
+standard source with the common `Data/ShaderCache` destination. Packaging also
+checks each source's `Info.ini` and rejects an archive whose selected Horizon
+Fix state does not match its label.
+
 Manually setting the `ShaderCache` folder itself as the data directory bypasses
 the installer gate, flattens the layout, and is invalid.
 

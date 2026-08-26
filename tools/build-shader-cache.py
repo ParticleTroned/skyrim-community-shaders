@@ -64,6 +64,9 @@ FOMOD_WEBSITE = (
 )
 FOMOD_INSTALL_CACHE_FLAG = "InstallShaderCache"
 AIO_CORE_DIRECTORY = "Core"
+AIO_CACHE_PROFILES_DIRECTORY = "CacheProfiles"
+AIO_STANDARD_CACHE_PROFILE_DIRECTORY = "WithoutHorizonFix"
+AIO_HORIZON_CACHE_PROFILE_DIRECTORY = "WithHorizonFix"
 PUBLICATION_REPLACE_ATTEMPTS = 20
 PUBLICATION_REPLACE_RETRY_SECONDS = 0.5
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
@@ -153,6 +156,16 @@ CACHE_VARIANTS = (
     CacheVariant("standard", CACHE_DIRECTORY, False),
     CacheVariant("horizon-fix", HORIZON_FIX_CACHE_DIRECTORY, True),
 )
+
+
+def fomod_cache_sources(include_core: bool) -> tuple[str, str]:
+    """Return Horizon-enabled and standard FOMOD payload paths."""
+    if not include_core:
+        return HORIZON_FIX_CACHE_DIRECTORY, CACHE_DIRECTORY
+    return (
+        f"{AIO_CACHE_PROFILES_DIRECTORY}/{AIO_HORIZON_CACHE_PROFILE_DIRECTORY}",
+        f"{AIO_CACHE_PROFILES_DIRECTORY}/{AIO_STANDARD_CACHE_PROFILE_DIRECTORY}",
+    )
 
 IMAGESPACE_DIRS = {
     (0, 0): "WorldMap",
@@ -1383,6 +1396,7 @@ def validate_fomod_installer(
     if horizon_group is None or horizon_group.get("type") != "SelectExactlyOne":
         raise SystemExit("Horizon Fix page must require exactly one cache profile")
 
+    horizon_cache_source, standard_cache_source = fomod_cache_sources(include_core)
     cache_plugins = horizon_group.findall("./plugins/plugin")
     cache_sources = []
     for plugin in cache_plugins:
@@ -1390,8 +1404,30 @@ def validate_fomod_installer(
         if folder is None or folder.get("destination") != CACHE_DIRECTORY:
             raise SystemExit("cache profile does not install at Data/ShaderCache")
         cache_sources.append(folder.get("source", ""))
-    if cache_sources != [HORIZON_FIX_CACHE_DIRECTORY, CACHE_DIRECTORY]:
+    if cache_sources != [horizon_cache_source, standard_cache_source]:
         raise SystemExit("Horizon Fix must remain the first cache profile")
+
+    for source, expected_enabled in (
+        (horizon_cache_source, True),
+        (standard_cache_source, False),
+    ):
+        source_path = fomod_dir.parent.joinpath(*source.replace("\\", "/").split("/"))
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            with (source_path / INFO_FILE_NAME).open(
+                "r", encoding="utf-8-sig"
+            ) as stream:
+                parser.read_file(stream)
+            enabled = parser.getboolean(HORIZON_FIX_SHORT_NAME, "Enabled")
+        except (configparser.Error, OSError, ValueError) as exc:
+            raise SystemExit(
+                f"cannot validate FOMOD cache profile {source}: {exc}"
+            ) from exc
+        if enabled is not expected_enabled:
+            state = "enabled" if expected_enabled else "disabled"
+            raise SystemExit(
+                f"FOMOD cache profile {source} must record Horizon Fix {state}"
+            )
 
     cache_types = [
         plugin.find("./typeDescriptor/type").get("name", "")
@@ -1467,6 +1503,7 @@ def write_fomod_installer(
         "reinstall this FOMOD and select the matching profile. A wrong selection "
         "is rejected safely and triggers local shader compilation."
     )
+    horizon_cache_source, standard_cache_source = fomod_cache_sources(include_core)
     required_core = ""
     if include_core:
         required_core = f"""
@@ -1517,7 +1554,7 @@ def write_fomod_installer(
             <plugin name="With Horizon Fix">
               <description>{horizon_description}</description>
               <files>
-                <folder source="{HORIZON_FIX_CACHE_DIRECTORY}"
+                <folder source="{horizon_cache_source}"
                         destination="{CACHE_DIRECTORY}"
                         priority="0" />
               </files>
@@ -1528,7 +1565,7 @@ def write_fomod_installer(
             <plugin name="Without Horizon Fix">
               <description>{standard_description}</description>
               <files>
-                <folder source="{CACHE_DIRECTORY}"
+                <folder source="{standard_cache_source}"
                         destination="{CACHE_DIRECTORY}"
                         priority="0" />
               </files>
@@ -1819,16 +1856,24 @@ def validate_aio_archive(
         for entry in result.stdout.splitlines()
         if entry.strip()
     }
+    horizon_cache_root = (
+        f"{AIO_CACHE_PROFILES_DIRECTORY}/"
+        f"{AIO_HORIZON_CACHE_PROFILE_DIRECTORY}"
+    )
+    standard_cache_root = (
+        f"{AIO_CACHE_PROFILES_DIRECTORY}/"
+        f"{AIO_STANDARD_CACHE_PROFILE_DIRECTORY}"
+    )
     required_entries = {
         f"{AIO_CORE_DIRECTORY}/SKSE/Plugins/CommunityShaders.dll",
         (
             f"{AIO_CORE_DIRECTORY}/SKSE/Plugins/CommunityShaders/"
             f"{compatibility_tag}.marker"
         ),
-        f"{CACHE_DIRECTORY}/{INFO_FILE_NAME}",
-        f"{CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
-        f"{HORIZON_FIX_CACHE_DIRECTORY}/{INFO_FILE_NAME}",
-        f"{HORIZON_FIX_CACHE_DIRECTORY}/{MANIFEST_FILE_NAME}",
+        f"{horizon_cache_root}/{INFO_FILE_NAME}",
+        f"{horizon_cache_root}/{MANIFEST_FILE_NAME}",
+        f"{standard_cache_root}/{INFO_FILE_NAME}",
+        f"{standard_cache_root}/{MANIFEST_FILE_NAME}",
         f"{FOMOD_DIRECTORY}/{FOMOD_CONFIG_FILE_NAME}",
         f"{FOMOD_DIRECTORY}/{FOMOD_INFO_FILE_NAME}",
     }
@@ -1841,6 +1886,8 @@ def validate_aio_archive(
 
     forbidden_entries = {
         "SKSE/Plugins/CommunityShaders.dll",
+        f"{CACHE_DIRECTORY}/{INFO_FILE_NAME}",
+        f"{HORIZON_FIX_CACHE_DIRECTORY}/{INFO_FILE_NAME}",
         INFO_FILE_NAME,
         MANIFEST_FILE_NAME,
     }
@@ -1874,9 +1921,14 @@ def prepare_aio_archive(
     package_root.mkdir()
     shutil.copytree(core_root, package_root / AIO_CORE_DIRECTORY)
     for variant in CACHE_VARIANTS:
+        profile_directory = (
+            AIO_HORIZON_CACHE_PROFILE_DIRECTORY
+            if variant.horizon_fix_enabled
+            else AIO_STANDARD_CACHE_PROFILE_DIRECTORY
+        )
         shutil.copytree(
             cache_root / variant.directory,
-            package_root / variant.directory,
+            package_root / AIO_CACHE_PROFILES_DIRECTORY / profile_directory,
         )
     write_fomod_installer(
         package_root,
@@ -1896,8 +1948,7 @@ def prepare_aio_archive(
         str(temporary_archive),
         "--format=7zip",
         AIO_CORE_DIRECTORY,
-        CACHE_DIRECTORY,
-        HORIZON_FIX_CACHE_DIRECTORY,
+        AIO_CACHE_PROFILES_DIRECTORY,
         FOMOD_DIRECTORY,
     ]
     print("run:", " ".join(command))

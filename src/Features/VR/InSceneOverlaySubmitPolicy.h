@@ -37,9 +37,7 @@ namespace VRInSceneOverlaySubmitPolicy
 			static_cast<std::uint8_t>(
 				SuppressionReason::RenderScaleTransitionPending) |
 			static_cast<std::uint8_t>(
-				SuppressionReason::RenderTargetRecreatePending) |
-			static_cast<std::uint8_t>(
-				SuppressionReason::VendorRuntimeResetPending);
+				SuppressionReason::RenderTargetRecreatePending);
 		const auto reasonBits = static_cast<std::uint8_t>(a_reasons);
 		return reasonBits != 0 &&
 		       (reasonBits & queuedReplacementMask) == reasonBits;
@@ -85,8 +83,8 @@ namespace VRInSceneOverlaySubmitPolicy
 		}
 
 		// The in-world CS menu may retain an already-published stereo provider while
-		// its replacement is only queued. Runtime reset and unknown reasons fail
-		// closed through IsQueuedReplacementOnly.
+		// a controller relatch is only queued. Runtime and vendor resets, and
+		// unknown reasons, fail closed through IsQueuedReplacementOnly.
 		return a_admission.menuSessionOpen &&
 		       a_admission.stablePresentationProven &&
 		       IsQueuedReplacementOnly(a_admission.suppressionReasons);

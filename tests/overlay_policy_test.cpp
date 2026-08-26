@@ -38,6 +38,11 @@ namespace
 	constexpr bool CoversVRInSceneOverlaySubmitAdmission()
 	{
 		using VRInSceneOverlaySubmitPolicy::SuppressionReason;
+		constexpr auto queuedReplacementMask =
+			static_cast<std::uint8_t>(
+				SuppressionReason::RenderScaleTransitionPending) |
+			static_cast<std::uint8_t>(
+				SuppressionReason::RenderTargetRecreatePending);
 
 		// Include one unknown bit so future/invalid reasons remain fail-closed.
 		for (std::uint32_t reasonBits = 0; reasonBits < (1u << 5); ++reasonBits) {
@@ -64,10 +69,18 @@ namespace
 					!admission.submitStageUpscalingActive &&
 					(reasons == SuppressionReason::RenderScaleTransitionPending ||
 						reasons == SuppressionReason::RenderTargetRecreatePending);
+				const auto reasonBitsValue = static_cast<std::uint8_t>(reasons);
+				const bool queuedReplacementOnly =
+					reasonBitsValue != 0 &&
+					(reasonBitsValue & queuedReplacementMask) == reasonBitsValue;
+				if (VRInSceneOverlaySubmitPolicy::IsQueuedReplacementOnly(reasons) !=
+					queuedReplacementOnly) {
+					return false;
+				}
 				const bool csMenuStableProvider =
 					admission.menuSessionOpen &&
 					admission.stablePresentationProven &&
-					VRInSceneOverlaySubmitPolicy::IsQueuedReplacementOnly(reasons);
+					queuedReplacementOnly;
 				const bool expected =
 					!hardFailure &&
 					(reasons == SuppressionReason::None ||

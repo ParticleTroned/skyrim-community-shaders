@@ -4051,13 +4051,13 @@ namespace
 		return kDLSSSharpenerModeNames[index];
 	}
 
-	bool DispatchDLSSSharpener(Upscaling& a_upscaling, ID3D11ShaderResourceView* a_inputSRV, ID3D11UnorderedAccessView* a_outputUAV, uint32_t a_width = 0, uint32_t a_height = 0)
+	bool DispatchDLSSSharpener(Upscaling& a_upscaling, ID3D11ShaderResourceView* a_inputSRV, ID3D11UnorderedAccessView* a_outputUAV)
 	{
 		switch (a_upscaling.GetDLSSSharpenerMode()) {
 		case Upscaling::DLSSSharpenerMode::RCAS:
-			return Upscaling::rcas.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSRCASSharpness(a_upscaling.settings.sharpnessDLSS), a_width, a_height);
+			return Upscaling::rcas.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSRCASSharpness(a_upscaling.settings.sharpnessDLSS));
 		case Upscaling::DLSSSharpenerMode::LumaUnsharp:
-			return Upscaling::lumaSharpen.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS), a_width, a_height);
+			return Upscaling::lumaSharpen.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS));
 		case Upscaling::DLSSSharpenerMode::Off:
 		default:
 			return true;
@@ -39306,14 +39306,11 @@ bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2
 
 	static bool loggedSharpenerFailure[2] = {};
 	try {
-		const uint32_t dispatchWidth = colorOutput->desc.Width;
-		const uint32_t dispatchHeight = colorOutput->desc.Height;
-
 		UnbindUpscalingResources();
 		bool sharpened = false;
 		{
 			CS_GPU_PASS("Upscaling::SubmitStageSharpen");
-			sharpened = DispatchDLSSSharpener(*this, sharpenInput.srv.get(), colorOutput->uav.get(), dispatchWidth, dispatchHeight);
+			sharpened = DispatchDLSSSharpener(*this, sharpenInput.srv.get(), colorOutput->uav.get());
 		}
 		if (!sharpened) {
 			LogWarnOnceFmt(

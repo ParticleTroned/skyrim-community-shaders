@@ -36,29 +36,32 @@ namespace Util
 		return VRDepthLayout::Unknown;
 	}
 
+	bool GetTexture2DDesc(ID3D11View* a_view, D3D11_TEXTURE2D_DESC& o_desc)
+	{
+		o_desc = {};
+		if (!a_view)
+			return false;
+
+		winrt::com_ptr<ID3D11Resource> resource;
+		a_view->GetResource(resource.put());
+		if (!resource)
+			return false;
+
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (FAILED(resource->QueryInterface(IID_PPV_ARGS(texture.put()))))
+			return false;
+
+		texture->GetDesc(&o_desc);
+		return true;
+	}
+
 	bool TryGetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height)
 	{
 		o_width = 0;
 		o_height = 0;
-		if (!a_depthSrv)
-			return false;
-
-		ID3D11Resource* resource = nullptr;
-		a_depthSrv->GetResource(&resource);
-		if (!resource)
-			return false;
-
-		ID3D11Texture2D* texture = nullptr;
-		const HRESULT hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
-		resource->Release();
-		if (FAILED(hr) || !texture)
-			return false;
 
 		D3D11_TEXTURE2D_DESC desc{};
-		texture->GetDesc(&desc);
-		texture->Release();
-
-		if (desc.Width == 0 || desc.Height == 0)
+		if (!GetTexture2DDesc(a_depthSrv, desc) || !desc.Width || !desc.Height)
 			return false;
 
 		o_width = desc.Width;

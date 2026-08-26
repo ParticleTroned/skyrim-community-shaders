@@ -14,6 +14,14 @@ namespace Util
 	};
 
 	VRDepthLayout DetectVRDepthLayout(uint32_t a_depthWidth, int a_viewportWidthPerEye);
+
+	/**
+	 * @brief Reads the Texture2D description backing a D3D11 view.
+	 * @param a_view SRV, UAV, RTV, or DSV whose resource should be inspected.
+	 * @param o_desc Receives the underlying Texture2D description on success.
+	 * @return true when the view references a Texture2D resource.
+	 */
+	bool GetTexture2DDesc(ID3D11View* a_view, D3D11_TEXTURE2D_DESC& o_desc);
 	bool TryGetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height);
 
 	ID3D11ShaderResourceView* GetSRVFromRTV(ID3D11RenderTargetView* a_rtv);

@@ -1,9 +1,7 @@
 #pragma once
 
 #include "../../../Buffer.h"
-#include "../../../State.h"
 
-#include <cstdint>
 #include <d3d11_4.h>
 #include <winrt/base.h>
 
@@ -22,7 +20,7 @@ public:
 	void Initialize();
 	void ClearShaderCache();
 
-	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness, uint32_t width = 0, uint32_t height = 0);
+	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness);
 
 private:
 	void CreateComputeShader();

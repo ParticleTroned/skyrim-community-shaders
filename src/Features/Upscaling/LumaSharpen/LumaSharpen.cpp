@@ -41,10 +41,9 @@ void LumaSharpen::CreateComputeShader()
 	lumaSharpenComputeShader.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\LumaSharpen\\LumaSharpen.hlsl", defines, "cs_5_0"));
 }
 
-bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness, uint32_t width, uint32_t height)
+bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness)
 {
-	auto state = globals::state;
-	if (!state || !inputSRV || !outputUAV)
+	if (!inputSRV || !outputUAV)
 		return false;
 
 	if (!lumaSharpenComputeShader || !lumaSharpenConfigCB)
@@ -59,11 +58,6 @@ bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11Unorder
 		return false;
 	}
 
-	uint32_t screenWidth = width ? width : static_cast<uint32_t>(state->screenSize.x);
-	uint32_t screenHeight = height ? height : static_cast<uint32_t>(state->screenSize.y);
-	if (!screenWidth || !screenHeight)
-		return false;
-
 	LumaSharpenConfig config{};
 	config.sharpness = std::clamp(sharpness, 0.0f, 2.5f);
 	config.limit = 0.75f;
@@ -74,7 +68,5 @@ bool LumaSharpen::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11Unorder
 		config,
 		inputSRV,
 		outputUAV,
-		screenWidth,
-		screenHeight,
 		UpscalingSharpener::Pass::LumaSharpen);
 }

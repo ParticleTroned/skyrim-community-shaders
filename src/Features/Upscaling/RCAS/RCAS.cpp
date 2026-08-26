@@ -38,10 +38,9 @@ void RCAS::CreateComputeShader()
 	rcasComputeShader.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\RCAS\\RCAS.hlsl", defines, "cs_5_0"));
 }
 
-bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness, uint32_t width, uint32_t height)
+bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness)
 {
-	auto state = globals::state;
-	if (!state || !inputSRV || !outputUAV)
+	if (!inputSRV || !outputUAV)
 		return false;
 
 	if (!rcasComputeShader || !rcasConfigCB)
@@ -56,11 +55,6 @@ bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 		return false;
 	}
 
-	uint32_t screenWidth = width ? width : static_cast<uint32_t>(state->screenSize.x);
-	uint32_t screenHeight = height ? height : static_cast<uint32_t>(state->screenSize.y);
-	if (!screenWidth || !screenHeight)
-		return false;
-
 	RCASConfig config{};
 	config.sharpness = sharpness;
 
@@ -70,7 +64,5 @@ bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 		config,
 		inputSRV,
 		outputUAV,
-		screenWidth,
-		screenHeight,
 		UpscalingSharpener::Pass::RCAS);
 }

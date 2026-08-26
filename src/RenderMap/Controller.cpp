@@ -57,15 +57,17 @@ namespace CSX::RenderMap
 		std::shared_ptr<const CompletedCapture>& a_output)
 	{
 		std::lock_guard lock(mutex);
-		for (const auto& capture : completed) {
-			if (capture->descriptor.captureId == a_captureId) {
-				a_output = capture;
-				return ControlStatus::kSuccess;
+		if (!a_captureId.empty()) {
+			for (const auto& capture : completed) {
+				if (capture->descriptor.captureId == a_captureId) {
+					a_output = capture;
+					return ControlStatus::kSuccess;
+				}
 			}
 		}
 		if (!active)
 			return ControlStatus::kNotCapturing;
-		if (active->captureId != a_captureId)
+		if (!a_captureId.empty() && active->captureId != a_captureId)
 			return ControlStatus::kCaptureNotFound;
 
 		auto snapshot = GetRuntime().StopCapture();

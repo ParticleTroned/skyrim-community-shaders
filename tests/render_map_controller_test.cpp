@@ -168,6 +168,19 @@ namespace
 		Check(finalPage["moreAvailable"] == false, "final page incorrectly reports more data");
 	}
 
+	void TestStopActiveWithoutCaptureId()
+	{
+		CaptureController controller;
+		CaptureDescriptor descriptor;
+		Check(controller.Start(Config(), descriptor) == ControlStatus::kSuccess,
+			"capture for active-stop test did not start");
+		std::shared_ptr<const CompletedCapture> completed;
+		Check(controller.Stop({}, completed) == ControlStatus::kSuccess,
+			"omitted capture ID did not stop the sole active capture");
+		Check(completed && completed->descriptor.captureId == descriptor.captureId,
+			"active-stop returned the wrong capture");
+	}
+
 	void TestCompletedHistoryBound()
 	{
 		CaptureController controller(1);
@@ -336,6 +349,7 @@ int main()
 {
 	try {
 		TestControllerAndSerialization();
+		TestStopActiveWithoutCaptureId();
 		TestCompletedHistoryBound();
 		TestResolvedStageSerialization();
 		TestDurableArtifacts();

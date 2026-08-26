@@ -48,12 +48,14 @@ def main() -> int:
         envelope(3, "target-view-observed", {"schema": "target-view-observation-v1", "targetViewObservationId": "obs-render-target-4-g1", "kind": "render-target", "d3dObjectPointer": "0x4", "pointerGeneration": 1, "resourceObservationId": "obs-resource-2-g1", "format": 28, "viewDimension": 4, "subresources": {}, "flags": 0}),
         envelope(4, "resource-view-bind", {"schema": "resource-view-binding-v1", "viewObservationId": "obs-shader-resource-view-3-g1", "bindingKind": "shader-resource", "stage": "pixel", "slot": 0}),
         envelope(5, "render-target-bind", {"schema": "render-target-binding-v1", "targetBindingObservationId": "obs-target-binding-5-g1", "renderTargetObservationIds": ["obs-render-target-4-g1"], "depthTargetObservationId": None, "identityDetailsAvailable": True}),
-        envelope(6, "resource-version-observed", {"schema": "resource-version-observation-v1", "resourceVersionObservationId": "obs-resource-version-6-g1", "resourceObservationId": "obs-resource-1-g1", "subresources": {"first": 0, "count": 1}, "writeEpoch": 4, "producerFrame": 1, "readinessDomain": "same-immediate-context-order", "eye": "unknown", "eyeMask": None}),
-        envelope(7, "visibility-consumed", {"schema": "visibility-submission-v1", "submissionObservationId": "obs-submission-7-g1", "renderPassPointer": "0x7", "geometryPointer": "0x8", "objectIndex": 3, "resourceVersionObservationId": "obs-resource-version-6-g1", "requestedViewObservationId": "obs-shader-resource-view-3-g1", "effectiveViewObservationId": "obs-shader-resource-view-3-g1", "category": 1, "slot": 127, "bindingMatches": True, "forcedVisible": False}),
-        {**envelope(8, "draw", {"schema": "draw-call-v2", "operation": "draw", "immediateContextPointer": "0x9", "vertexShaderObservationId": None, "pixelShaderObservationId": None, "targetBindingObservationId": "obs-target-binding-5-g1", "submissionObservationId": "obs-submission-7-g1", "arguments": {}}), "submissionObservationId": "obs-submission-7-g1"},
-        envelope(9, "resource-flow", {"schema": "resource-flow-v1", "operation": "copy-resource", "sourceResourceObservationId": "obs-resource-2-g1", "destinationResourceObservationId": "obs-resource-1-g1", "sourceSubresource": 0, "destinationSubresource": 0}),
-        envelope(10, "cull-decision", {"schema": "cull-decision-v1", "resourceVersionObservationId": "obs-resource-version-6-g1", "objectIndex": 3, "producerVisible": False, "drawCounts": {"total": 1, "lighting": 1, "distantTree": 0, "grass": 0}, "producerFrame": 1, "readinessDomain": "cpu-readback-complete"}),
-        envelope(11, "eye-submitted", {"schema": "eye-submission-v1", "resourceObservationId": "obs-resource-1-g1", "eye": "left", "eyeMask": 1, "bounds": {"uMin": 0.0, "vMin": 0.0, "uMax": 0.5, "vMax": 1.0}, "submitFlags": 0, "compositorCycle": 2}),
+        envelope(6, "visibility-candidate", {"schema": "visibility-candidate-v1", "objectIndex": 3, "objectPointer": "0x6", "producerFrame": 1}),
+        envelope(7, "resource-version-observed", {"schema": "resource-version-observation-v1", "resourceVersionObservationId": "obs-resource-version-6-g1", "resourceObservationId": "obs-resource-1-g1", "subresources": {"first": 0, "count": 1}, "writeEpoch": 4, "producerFrame": 1, "readinessDomain": "same-immediate-context-order", "eye": "unknown", "eyeMask": None}),
+        envelope(8, "visibility-result-ready", {"schema": "visibility-result-ready-v1", "resourceVersionObservationId": "obs-resource-version-6-g1", "viewObservationId": "obs-shader-resource-view-3-g1", "objectCount": 1, "producerFrame": 1}),
+        envelope(9, "visibility-consumed", {"schema": "visibility-submission-v1", "submissionObservationId": "obs-submission-7-g1", "renderPassPointer": "0x7", "geometryPointer": "0x8", "objectIndex": 3, "resourceVersionObservationId": "obs-resource-version-6-g1", "requestedViewObservationId": "obs-shader-resource-view-3-g1", "effectiveViewObservationId": "obs-shader-resource-view-3-g1", "category": 1, "slot": 127, "bindingMatches": True, "forcedVisible": False}),
+        {**envelope(10, "draw", {"schema": "draw-call-v2", "operation": "draw", "immediateContextPointer": "0x9", "vertexShaderObservationId": None, "pixelShaderObservationId": None, "targetBindingObservationId": "obs-target-binding-5-g1", "submissionObservationId": "obs-submission-7-g1", "arguments": {}}), "submissionObservationId": "obs-submission-7-g1"},
+        envelope(11, "resource-flow", {"schema": "resource-flow-v1", "operation": "copy-resource", "sourceResourceObservationId": "obs-resource-2-g1", "destinationResourceObservationId": "obs-resource-1-g1", "sourceSubresource": 0, "destinationSubresource": 0}),
+        envelope(12, "cull-decision", {"schema": "cull-decision-v1", "resourceVersionObservationId": "obs-resource-version-6-g1", "objectIndex": 3, "producerVisible": False, "drawCounts": {"total": 1, "lighting": 1, "distantTree": 0, "grass": 0}, "producerFrame": 1, "readinessDomain": "cpu-readback-complete"}),
+        envelope(13, "eye-submitted", {"schema": "eye-submission-v1", "resourceObservationId": "obs-resource-1-g1", "eye": "left", "eyeMask": 1, "bounds": {"uMin": 0.0, "vMin": 0.0, "uMax": 0.5, "vMax": 1.0}, "submitFlags": 0, "compositorCycle": 2}),
     ]
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -64,7 +66,7 @@ def main() -> int:
         events_path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
         subprocess.run([sys.executable, str(tool), "--capture-manifest", str(manifest_path), "--events", str(events_path), "--output", str(output_path)], check=True)
         graph = json.loads(output_path.read_text(encoding="utf-8"))
-        assert len(graph["nodes"]) == 8, graph["nodes"]
+        assert len(graph["nodes"]) == 9, graph["nodes"]
         assert [edge["type"] for edge in graph["edges"]].count("reads") == 2
         assert [edge["type"] for edge in graph["edges"]].count("writes") == 2
         assert [edge["type"] for edge in graph["edges"]].count("versions") == 1
@@ -72,6 +74,11 @@ def main() -> int:
         assert [edge["type"] for edge in graph["edges"]].count("submits") == 1
         assert [edge["type"] for edge in graph["edges"]].count("presents") == 1
         assert [edge["type"] for edge in graph["edges"]].count("result-for") == 1
+        assert [edge["type"] for edge in graph["edges"]].count("tests") == 1
+        assert len(graph["decisionWindows"]) == 1
+        assert graph["decisionWindows"][0]["result"] == "viable"
+        assert graph["decisionWindows"][0]["suppressionStage"] == "vertex-shader"
+        assert graph["decisionWindows"][0]["visibilityAvailable"]["readinessDomain"] == "gpu-resource-consumable"
         assert graph["extensions"]["csx.vrEyeAttribution"] is True
         assert graph["gaps"] == []
     print("Render graph builder test passed")

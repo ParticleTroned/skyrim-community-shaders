@@ -63,6 +63,7 @@ class Graph:
         self.nodes: list[dict[str, Any]] = []
         self.edges: list[dict[str, Any]] = []
         self.gaps: list[dict[str, Any]] = []
+        self.decision_windows: list[dict[str, Any]] = []
         self._node_ids: dict[tuple[str, str], str] = {}
         self._kind_counts: dict[str, int] = {}
         self.eye_attribution_observed = False
@@ -128,6 +129,12 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
     target_bindings: dict[str, dict[str, Any]] = {}
     resource_versions: dict[str, dict[str, Any]] = {}
     submissions: dict[str, dict[str, Any]] = {}
+    submissions_by_candidate: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    draws_by_submission: dict[str, dict[str, Any]] = {}
+    candidates: list[dict[str, Any]] = []
+    results_by_frame: dict[int, dict[str, Any]] = {}
+    eye_submissions_by_frame: dict[int, list[dict[str, Any]]] = {}
+    last_event_by_frame: dict[int, dict[str, Any]] = {}
     srv_state: dict[tuple[str, int], str | None] = {}
     uav_state: dict[tuple[str, int], str | None] = {}
 
@@ -137,6 +144,9 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
         sequence = event["sequence"]
         payload = event.get("payload", {})
         event_type = event.get("type")
+        cpu_frame = event.get("frame", {}).get("cpuFrame")
+        if isinstance(cpu_frame, int):
+            last_event_by_frame[cpu_frame] = event
         if event_type == "resource-observed":
             resource_id = payload.get("resourceObservationId")
             if resource_id:
@@ -176,6 +186,30 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                         f"Resource version {version_id} refers to undeclared resource {resource_id}.",
                         [version_node], True,
                     )
+        elif event_type == "visibility-candidate":
+            producer_frame = payload.get("producerFrame")
+            object_index = payload.get("objectIndex")
+            candidate_node = graph.node(
+                f"candidate-{producer_frame}-{object_index}-{sequence}", "visibility-test",
+                f"visibility candidate {object_index} for frame {producer_frame}",
+                sequence, payload,
+            )
+            if isinstance(producer_frame, int) and isinstance(object_index, int):
+                candidates.append({
+                    "event": event,
+                    "node": candidate_node,
+                    "producerFrame": producer_frame,
+                    "objectIndex": object_index,
+                })
+            else:
+                graph.gap(
+                    f"Visibility candidate event {sequence} lacks a numeric producer frame or object index.",
+                    [candidate_node], True,
+                )
+        elif event_type == "visibility-result-ready":
+            producer_frame = payload.get("producerFrame")
+            if isinstance(producer_frame, int):
+                results_by_frame[producer_frame] = event
         elif event_type == "visibility-consumed":
             submission_id = payload.get("submissionObservationId")
             version_id = payload.get("resourceVersionObservationId")
@@ -186,6 +220,14 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 )
                 version = resource_versions.get(version_id)
                 if version:
+                    producer_frame = version["payload"].get("producerFrame")
+                    object_index = payload.get("objectIndex")
+                    if isinstance(producer_frame, int) and isinstance(object_index, int):
+                        submissions_by_candidate.setdefault((producer_frame, object_index), []).append({
+                            "event": event,
+                            "node": submission_node,
+                            "version": version,
+                        })
                     version_node = graph.node(
                         version_id, "resource-version", version_id, version["sequence"], version["payload"]
                     )
@@ -229,6 +271,8 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 f"{payload.get('eye', 'unknown')} eye submit at event {sequence}",
                 sequence, payload,
             )
+            if isinstance(cpu_frame, int):
+                eye_submissions_by_frame.setdefault(cpu_frame, []).append(event)
             resource = resources.get(resource_id)
             if resource:
                 resource_node = graph.node(
@@ -276,6 +320,7 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                         [submission["sequence"], sequence],
                         "The draw consumed this explicit pending submission identity.",
                     )
+                    draws_by_submission[submission_id] = event
                 elif submission_id:
                     graph.gap(
                         f"Draw event {sequence} refers to undeclared submission {submission_id}.",
@@ -356,6 +401,128 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                            "Ordered immediate-context output binding identifies this resource as an execution output.",
                            {"role": role})
 
+    def event_point(event: dict[str, Any], readiness_domain: str) -> dict[str, Any]:
+        return {
+            "captureId": capture_id,
+            "sequence": event["sequence"],
+            "timestampQpc": event["timestampQpc"],
+            "cpuFrame": event.get("frame", {}).get("cpuFrame"),
+            "eye": event.get("frame", {}).get("eye", "unknown"),
+            "readinessDomain": readiness_domain,
+            "gpuTimestampTicks": event.get("execution", {}).get("gpuTimestampTicks"),
+        }
+
+    for candidate in sorted(candidates, key=lambda item: item["event"]["sequence"]):
+        candidate_event = candidate["event"]
+        candidate_node = candidate["node"]
+        producer_frame = candidate["producerFrame"]
+        object_index = candidate["objectIndex"]
+        ready_event = results_by_frame.get(producer_frame)
+        version_id = ready_event and ready_event.get("payload", {}).get("resourceVersionObservationId")
+        version = resource_versions.get(version_id)
+        if version:
+            version_node = graph.node(
+                version_id, "resource-version", version_id, version["sequence"], version["payload"]
+            )
+            graph.edge(
+                "tests", candidate_node, version_node,
+                [candidate_event["sequence"], ready_event["sequence"]],
+                "The current-frame visibility resource version contains this indexed candidate's result.",
+                {"objectIndex": object_index, "producerFrame": producer_frame},
+            )
+
+        matched_submission = None
+        matched_draw = None
+        for submission in submissions_by_candidate.get((producer_frame, object_index), []):
+            submission_id = submission["event"].get("payload", {}).get("submissionObservationId")
+            draw = draws_by_submission.get(submission_id)
+            if draw and (not ready_event or submission["event"]["sequence"] > ready_event["sequence"]):
+                matched_submission = submission
+                matched_draw = draw
+                break
+
+        if ready_event:
+            visibility_available = event_point(ready_event, "gpu-resource-consumable")
+        else:
+            visibility_available = event_point(candidate_event, "unknown")
+
+        if matched_draw:
+            deadline_event = matched_draw
+            decision_deadline = event_point(deadline_event, "gpu-ordered")
+        else:
+            later_eye_submissions = [
+                item for item in eye_submissions_by_frame.get(producer_frame, [])
+                if item["sequence"] > visibility_available["sequence"]
+            ]
+            deadline_event = later_eye_submissions[0] if later_eye_submissions else last_event_by_frame.get(producer_frame, candidate_event)
+            decision_deadline = event_point(deadline_event, "cpu-observed")
+
+        viable = False
+        if ready_event and matched_submission and matched_draw and version:
+            submission_event = matched_submission["event"]
+            ready_command = ready_event.get("execution", {}).get("commandStreamSequence")
+            submission_command = submission_event.get("execution", {}).get("commandStreamSequence")
+            draw_command = matched_draw.get("execution", {}).get("commandStreamSequence")
+            same_context = (
+                ready_event.get("deviceContextObservationId") is not None and
+                ready_event.get("deviceContextObservationId") == submission_event.get("deviceContextObservationId") == matched_draw.get("deviceContextObservationId")
+            )
+            ordered = (
+                isinstance(ready_command, int) and isinstance(submission_command, int) and isinstance(draw_command, int) and
+                ready_command < submission_command <= draw_command
+            )
+            viable = (
+                same_context and ordered and
+                ready_event["sequence"] < submission_event["sequence"] < matched_draw["sequence"] and
+                matched_draw.get("frame", {}).get("cpuFrame") == producer_frame and
+                submission_event.get("payload", {}).get("resourceVersionObservationId") == version_id and
+                submission_event.get("payload", {}).get("bindingMatches") is True
+            )
+
+        evidence_sequences = [candidate_event["sequence"], visibility_available["sequence"], deadline_event["sequence"]]
+        if matched_submission:
+            evidence_sequences.append(matched_submission["event"]["sequence"])
+        forced_visible = bool(matched_submission and matched_submission["event"].get("payload", {}).get("forcedVisible"))
+        if viable:
+            control_note = " The final value was deliberately forced visible for the control." if forced_visible else ""
+            result = "viable"
+            reason = (
+                "The candidate, current-frame visibility version, effective t127 binding, and explicitly associated draw "
+                "share one producer frame and increase monotonically in the same immediate-context command stream."
+                + control_note
+            )
+        else:
+            result = "not-proven"
+            reason = (
+                "No complete same-frame candidate-to-version-to-effective-binding-to-draw chain was observed before "
+                "the captured decision deadline."
+            )
+
+        graph.decision_windows.append({
+            "id": f"decision-window-{len(graph.decision_windows) + 1:04d}",
+            "candidateNode": candidate_node,
+            "suppressionStage": "vertex-shader",
+            "visibilityAvailable": visibility_available,
+            "decisionDeadline": decision_deadline,
+            "result": result,
+            "savings": ["gpu-vertex", "gpu-pixel"],
+            "evidence": [{
+                "captureId": capture_id,
+                "eventSequences": sorted(set(evidence_sequences)),
+                "engineEvidenceRefs": [],
+                "note": "Decision-window evidence uses explicit producer-frame, resource-version, binding, submission, and draw identities.",
+            }],
+            "reason": reason,
+            "extensions": {
+                "csx.objectIndex": object_index,
+                "csx.producerFrame": producer_frame,
+                "csx.resourceVersionObservationId": version_id,
+                "csx.submissionObservationId": matched_submission and matched_submission["event"].get("payload", {}).get("submissionObservationId"),
+                "csx.bindingMatches": matched_submission and matched_submission["event"].get("payload", {}).get("bindingMatches"),
+                "csx.forcedVisible": forced_visible,
+            },
+        })
+
     completion = manifest.get("completion", {})
     if manifest.get("status") != "complete" or completion.get("truncated"):
         graph.gap("The source capture is incomplete or truncated; absence of an edge is not evidence of absence.", blocking=True)
@@ -389,13 +556,13 @@ def main() -> int:
         "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 1, "producerVersion": "resource-flow-1"},
         "reportId": f"render-graph-{manifest['captureId'].removeprefix('capture-')}",
         "generatedAtUtc": manifest.get("createdAtUtc", "1970-01-01T00:00:00Z"),
-        "generatedBy": {"name": "csx-render-map-join", "version": "0.2.0", "gitCommit": git_commit(repo)},
+        "generatedBy": {"name": "csx-render-map-join", "version": "0.3.0", "gitCommit": git_commit(repo)},
         "inputs": inputs,
         "nodes": graph.nodes,
         "edges": graph.edges,
         "ambiguities": [],
         "gaps": graph.gaps,
-        "decisionWindows": [],
+        "decisionWindows": graph.decision_windows,
         "extensions": {
             "csx.executionGranularity": "individual-immediate-context-call",
             "csx.deferredContextCoverage": False,

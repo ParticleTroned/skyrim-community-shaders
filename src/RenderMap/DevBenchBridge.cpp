@@ -265,15 +265,18 @@ namespace
 			return response;
 		}
 
-		if (!a_args.contains("captureId") || !a_args["captureId"].is_string() || a_args["captureId"].get_ref<const std::string&>().empty())
-			return Foundation().MakeError(a_args, "invalid_field", "captureId must be a non-empty string", "validation", false, "captureId");
-		const auto& captureId = a_args["captureId"].get_ref<const std::string&>();
-
 		if (action == "stop") {
+			std::string captureId;
+			if (a_args.contains("captureId")) {
+				if (!a_args["captureId"].is_string() || a_args["captureId"].get_ref<const std::string&>().empty())
+					return Foundation().MakeError(a_args, "invalid_field", "captureId must be a non-empty string when supplied", "validation", false, "captureId");
+				captureId = a_args["captureId"].get<std::string>();
+			}
 			std::shared_ptr<const CSX::RenderMap::CompletedCapture> capture;
 			const auto status = CSX::RenderMap::GetCaptureController().Stop(captureId, capture);
 			if (status != ControlStatus::kSuccess)
 				return ControlFailure(a_args, status);
+			captureId = capture->descriptor.captureId;
 
 			CSX::RenderMap::CaptureArtifactBundle artifacts;
 			{
@@ -298,6 +301,10 @@ namespace
 				} });
 			return response;
 		}
+
+		if (!a_args.contains("captureId") || !a_args["captureId"].is_string() || a_args["captureId"].get_ref<const std::string&>().empty())
+			return Foundation().MakeError(a_args, "invalid_field", "captureId must be a non-empty string", "validation", false, "captureId");
+		const auto& captureId = a_args["captureId"].get_ref<const std::string&>();
 
 		if ((a_args.contains("offset") && !HasUnsigned(a_args, "offset")) ||
 			(a_args.contains("limit") && !HasUnsigned(a_args, "limit"))) {

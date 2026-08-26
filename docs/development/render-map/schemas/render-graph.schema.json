@@ -97,6 +97,7 @@
             "draw",
             "dispatch",
             "copy",
+            "resource-operation",
             "phase"
           ]
         },

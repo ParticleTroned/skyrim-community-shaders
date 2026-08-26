@@ -27,6 +27,12 @@ Its bounded main-menu live-validation record is in
 [`output-merger-main-menu-capture-2026-08-26.md`](./output-merger-main-menu-capture-2026-08-26.md).
 The typed resource/view and producer-consumer graph slice is in
 [`resource-flow-graph-slice.md`](./resource-flow-graph-slice.md).
+The next graph-correctness slice versions resource contents by observed write,
+derives conservative RAW/WAR/WAW dependencies, and separates directly observed
+API state from conservative D3D11 hazard reconstruction. It deliberately uses
+allocation-wide overlap until exact view-subresource overlap is proved.
+Its prepared no-launch validation protocol is in
+[`resource-version-live-test-plan.md`](./resource-version-live-test-plan.md).
 Findings from the first bounded live controller run are in
 [`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
 The later 120-frame run that validates durable finalization and establishes the

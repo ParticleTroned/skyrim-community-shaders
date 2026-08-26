@@ -493,6 +493,8 @@ namespace
 		runtime.RecordDraw(0xE000, DrawOperation::kDraw, 3);
 		runtime.RecordResourceFlow(
 			0xE000, ResourceFlowOperation::kCopySubresourceRegion, destination, source, 2, 1);
+		runtime.RecordResourceFlow(
+			0xE000, ResourceFlowOperation::kClearRenderTarget, {}, destination);
 
 		auto snapshot = runtime.StopCapture();
 		Check(snapshot && snapshot->resourceObservations.size() == 2,
@@ -513,6 +515,14 @@ namespace
 		Check(flow != snapshot->events.end() && flow->payload.words[1] != 0 && flow->payload.words[2] != 0 &&
 			flow->payload.words[3] == 2 && flow->payload.words[4] == 1 && flow->commandStreamSequence == 4,
 			"copy-subresource flow did not retain ordered source and destination identities");
+		const auto clear = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) {
+				return a_event.kind == EventKind::kResourceFlow &&
+					a_event.payload.words[0] == static_cast<std::uint64_t>(ResourceFlowOperation::kClearRenderTarget);
+			});
+		Check(clear != snapshot->events.end() && clear->payload.words[1] == 0 && clear->payload.words[2] != 0 &&
+			clear->commandStreamSequence == 5,
+			"destination-only resource mutation did not retain an ordered typed destination");
 	}
 
 	void TestExecutionJoinsDeclaredScopes()

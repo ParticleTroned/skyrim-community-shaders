@@ -27,8 +27,8 @@ namespace
 	using json = nlohmann::json;
 	using CSX::RenderMap::ControlStatus;
 	constexpr std::uint32_t kContractMajor = 1;
-	constexpr std::uint32_t kContractMinor = 5;
-	constexpr std::uint32_t kSchemaRevision = 6;
+	constexpr std::uint32_t kContractMinor = 6;
+	constexpr std::uint32_t kSchemaRevision = 7;
 	constexpr std::uint64_t kMaximumFrames = 600;
 	constexpr std::uint64_t kMaximumDurationMs = 10000;
 	constexpr std::uint64_t kMaximumEvents = 65536;
@@ -85,6 +85,7 @@ namespace
 				"resolved-technique-stage-observations",
 				"typed-output-merger-target-observations",
 				"typed-resource-and-view-observations", "ordered-resource-bindings", "resource-flow-observations",
+				"resource-mutation-observations",
 				"atomic-events-jsonl", "atomic-capture-manifest", "explicit-gap-events",
 			},
 			.inputs = {

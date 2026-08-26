@@ -153,6 +153,14 @@ foreach ($relation in $engineMapSeed.relations) {
 
 $events = @()
 $eventSchema = Join-Path $schemaRoot 'render-event.schema.json'
+$mutationEventPath = Join-Path $exampleRoot 'resource-mutation-events.example.jsonl'
+$mutationEventCount = 0
+foreach ($line in Get-Content -LiteralPath $mutationEventPath) {
+    $mutationEventCount++
+    Assert-True ($line | Test-Json -SchemaFile $eventSchema) "Resource mutation event line $mutationEventCount does not validate"
+}
+Assert-True ($mutationEventCount -gt 0) 'The resource mutation example stream is empty'
+
 $eventPath = Join-Path $exampleRoot 'opaque-lighting-events.example.jsonl'
 $lineNumber = 0
 foreach ($line in Get-Content -LiteralPath $eventPath) {
@@ -242,4 +250,4 @@ foreach ($window in $renderGraph.decisionWindows) {
     Assert-True ($eventSequences.Contains([long] $window.decisionDeadline.sequence)) "Decision window $($window.id) has a missing deadline event"
 }
 
-Write-Output "Render-map contracts passed: $($schemaFiles.Count) schemas, 2 engine maps, $($events.Count) events, $($renderGraph.nodes.Count) graph nodes."
+Write-Output "Render-map contracts passed: $($schemaFiles.Count) schemas, 2 engine maps, $($events.Count + $mutationEventCount) events, $($renderGraph.nodes.Count) graph nodes."

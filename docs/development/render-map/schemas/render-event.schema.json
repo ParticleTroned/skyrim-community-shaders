@@ -232,8 +232,8 @@
         "required": ["schema", "operation", "sourceResourceObservationId", "destinationResourceObservationId", "sourceSubresource", "destinationSubresource"],
         "properties": {
           "schema": { "const": "resource-flow-v1" },
-          "operation": { "enum": ["copy-resource", "copy-subresource-region", "resolve-subresource"] },
-          "sourceResourceObservationId": { "$ref": "#/$defs/observationId" },
+          "operation": { "enum": ["copy-resource", "copy-subresource-region", "resolve-subresource", "update-subresource", "copy-structure-count", "clear-render-target", "clear-unordered-access", "clear-depth-stencil", "generate-mips"] },
+          "sourceResourceObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
           "destinationResourceObservationId": { "$ref": "#/$defs/observationId" },
           "sourceSubresource": { "type": "integer", "minimum": 0 },
           "destinationSubresource": { "type": "integer", "minimum": 0 }

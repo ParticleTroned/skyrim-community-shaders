@@ -530,6 +530,113 @@ namespace CSX::RenderMap
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
+
+		struct ID3D11DeviceContext_UpdateSubresource
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_destination,
+				UINT a_destinationSubresource, const D3D11_BOX* a_destinationBox,
+				const void* a_sourceData, UINT a_sourceRowPitch, UINT a_sourceDepthPitch)
+			{
+				func(a_context, a_destination, a_destinationSubresource, a_destinationBox,
+					a_sourceData, a_sourceRowPitch, a_sourceDepthPitch);
+				if (!GetRuntime().IsCapturing())
+					return;
+				GetRuntime().RecordResourceFlow(
+					reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kUpdateSubresource,
+					{}, DescribeResource(a_destination), 0, a_destinationSubresource);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_CopyStructureCount
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_destination,
+				UINT a_destinationAlignedByteOffset, ID3D11UnorderedAccessView* a_source)
+			{
+				func(a_context, a_destination, a_destinationAlignedByteOffset, a_source);
+				if (!GetRuntime().IsCapturing())
+					return;
+				GetRuntime().RecordResourceFlow(
+					reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kCopyStructureCount,
+					DescribeView(a_source).resource, DescribeResource(a_destination));
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_ClearRenderTargetView
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target,
+				const FLOAT a_colour[4])
+			{
+				func(a_context, a_target, a_colour);
+				if (!GetRuntime().IsCapturing())
+					return;
+				GetRuntime().RecordResourceFlow(
+					reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearRenderTarget,
+					{}, DescribeView(a_target).resource);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_ClearUnorderedAccessViewUint
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11UnorderedAccessView* a_target,
+				const UINT a_values[4])
+			{
+				func(a_context, a_target, a_values);
+				if (!GetRuntime().IsCapturing())
+					return;
+				GetRuntime().RecordResourceFlow(
+					reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearUnorderedAccess,
+					{}, DescribeView(a_target).resource);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_ClearUnorderedAccessViewFloat
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11UnorderedAccessView* a_target,
+				const FLOAT a_values[4])
+			{
+				func(a_context, a_target, a_values);
+				if (!GetRuntime().IsCapturing())
+					return;
+				GetRuntime().RecordResourceFlow(
+					reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearUnorderedAccess,
+					{}, DescribeView(a_target).resource);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_ClearDepthStencilView
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11DepthStencilView* a_target,
+				UINT a_clearFlags, FLOAT a_depth, UINT8 a_stencil)
+			{
+				func(a_context, a_target, a_clearFlags, a_depth, a_stencil);
+				if (!GetRuntime().IsCapturing())
+					return;
+				GetRuntime().RecordResourceFlow(
+					reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kClearDepthStencil,
+					{}, DescribeView(a_target).resource);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ID3D11DeviceContext_GenerateMips
+		{
+			static void thunk(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_view)
+			{
+				func(a_context, a_view);
+				if (!GetRuntime().IsCapturing())
+					return;
+				const auto resource = DescribeView(a_view).resource;
+				GetRuntime().RecordResourceFlow(
+					reinterpret_cast<std::uintptr_t>(a_context), ResourceFlowOperation::kGenerateMips,
+					resource, resource);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
 	}
 
 	void InstallD3DContextHooks(ID3D11DeviceContext* a_context)
@@ -555,6 +662,13 @@ namespace CSX::RenderMap
 		stl::detour_vfunc<42, ID3D11DeviceContext_DispatchIndirect>(a_context);
 		stl::detour_vfunc<46, ID3D11DeviceContext_CopySubresourceRegion>(a_context);
 		stl::detour_vfunc<47, ID3D11DeviceContext_CopyResource>(a_context);
+		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);
+		stl::detour_vfunc<49, ID3D11DeviceContext_CopyStructureCount>(a_context);
+		stl::detour_vfunc<50, ID3D11DeviceContext_ClearRenderTargetView>(a_context);
+		stl::detour_vfunc<51, ID3D11DeviceContext_ClearUnorderedAccessViewUint>(a_context);
+		stl::detour_vfunc<52, ID3D11DeviceContext_ClearUnorderedAccessViewFloat>(a_context);
+		stl::detour_vfunc<53, ID3D11DeviceContext_ClearDepthStencilView>(a_context);
+		stl::detour_vfunc<54, ID3D11DeviceContext_GenerateMips>(a_context);
 		stl::detour_vfunc<57, ID3D11DeviceContext_ResolveSubresource>(a_context);
 		stl::detour_vfunc<59, ID3D11DeviceContext_HSSetShaderResources>(a_context);
 		stl::detour_vfunc<63, ID3D11DeviceContext_DSSetShaderResources>(a_context);

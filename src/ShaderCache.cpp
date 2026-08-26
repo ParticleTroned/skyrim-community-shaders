@@ -2884,6 +2884,7 @@ namespace SIE
 				a_taskGeneration.value_or(liveGeneration),
 				liveGeneration,
 				keyWithDescriptor);
+			ApplyDeferredEviction(key);
 			return false;
 		}
 
@@ -3016,8 +3017,8 @@ namespace SIE
 		}
 		if (outcome != Util::GenerationClaim::PublishOutcome::RejectedStale) {
 			mapCV.notify_all();
-			ApplyDeferredEviction(key);
 		}
+		ApplyDeferredEviction(key);
 	}
 
 	ID3DBlob* ShaderCache::GetCompletedShader(const std::string& a_key)

@@ -186,6 +186,7 @@ namespace CSX::RenderMap
 					a_target.d3dObject,
 					a_observation.pointerGeneration,
 					static_cast<std::uint64_t>(a_target.kind),
+					a_target.resourceObservationId,
 				},
 			};
 		}
@@ -197,6 +198,57 @@ namespace CSX::RenderMap
 			return {
 				.schema = static_cast<std::uint16_t>(PayloadSchema::kTargetBinding),
 				.words = { a_observation.observationId, a_context },
+			};
+		}
+
+		EventPayload ResourceObservationPayload(
+			const ResourceObservationInput& a_resource,
+			const ResourceObservationResult& a_observation) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kResourceObservation),
+				.words = {
+					a_observation.observationId,
+					a_resource.d3dObject,
+					a_observation.pointerGeneration,
+					static_cast<std::uint64_t>(a_resource.dimension),
+				},
+			};
+		}
+
+		EventPayload ResourceViewBindingPayload(
+			std::uint64_t a_viewObservationId,
+			ResourceBindingKind a_bindingKind,
+			ResourceStage a_stage,
+			std::uint32_t a_slot) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kResourceViewBinding),
+				.words = {
+					a_viewObservationId,
+					static_cast<std::uint64_t>(a_bindingKind),
+					static_cast<std::uint64_t>(a_stage),
+					a_slot,
+				},
+			};
+		}
+
+		EventPayload ResourceFlowPayload(
+			ResourceFlowOperation a_operation,
+			std::uint64_t a_sourceObservationId,
+			std::uint64_t a_destinationObservationId,
+			std::uint32_t a_sourceSubresource,
+			std::uint32_t a_destinationSubresource) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kResourceFlow),
+				.words = {
+					static_cast<std::uint64_t>(a_operation),
+					a_sourceObservationId,
+					a_destinationObservationId,
+					a_sourceSubresource,
+					a_destinationSubresource,
+				},
 			};
 		}
 	}
@@ -362,6 +414,26 @@ namespace CSX::RenderMap
 		std::uintptr_t a_depthTarget,
 		bool a_keepTargets) noexcept
 	{
+		std::array<ResourceViewInput, kMaximumRenderTargets> targets{};
+		const auto count = std::min<std::uint32_t>(a_renderTargetCount, kMaximumRenderTargets);
+		for (std::uint32_t index = 0; index < count; ++index) {
+			targets[index].view.kind = TargetViewKind::kRenderTarget;
+			targets[index].view.d3dObject = a_renderTargets ? a_renderTargets[index] : 0;
+		}
+		ResourceViewInput depth{};
+		depth.view.kind = TargetViewKind::kDepthTarget;
+		depth.view.d3dObject = a_depthTarget;
+		BindRenderTargetViews(
+			a_context, a_renderTargetCount, targets.data(), a_depthTarget != 0 ? &depth : nullptr, a_keepTargets);
+	}
+
+	void Runtime::BindRenderTargetViews(
+		std::uintptr_t a_context,
+		std::uint32_t a_renderTargetCount,
+		const ResourceViewInput* a_renderTargets,
+		const ResourceViewInput* a_depthTarget,
+		bool a_keepTargets) noexcept
+	{
 		if (!collector.IsCapturing() || a_context == 0 ||
 			a_context != immediateContext.load(std::memory_order_acquire)) {
 			return;
@@ -378,44 +450,23 @@ namespace CSX::RenderMap
 		binding.renderTargetCount = static_cast<std::uint8_t>(
 			std::min<std::uint32_t>(a_renderTargetCount, kMaximumRenderTargets));
 		for (std::size_t index = 0; index < binding.renderTargetCount; ++index) {
-			const auto pointer = a_renderTargets ? a_renderTargets[index] : 0;
-			if (pointer == 0)
+			if (!a_renderTargets || a_renderTargets[index].view.d3dObject == 0)
 				continue;
-			const TargetViewObservationInput input{
-				.kind = TargetViewKind::kRenderTarget,
-				.d3dObject = pointer,
-			};
-			const auto observation = collector.ObserveTargetView(input);
+			auto input = a_renderTargets[index];
+			input.view.kind = TargetViewKind::kRenderTarget;
+			const auto observation = ObserveResourceView(input, contextObservationId, commandStreamSequence);
 			if (observation.observationId == 0)
 				identityComplete = false;
 			binding.renderTargetObservationIds[index] = observation.observationId;
-			if (observation.firstSeen) {
-				collector.RecordForGeneration(
-					EventKind::kTargetViewObserved,
-					TargetViewObservationPayload(input, observation),
-					contextObservationId,
-					observation.sessionGeneration,
-					commandStreamSequence);
-			}
 		}
 
-		if (a_depthTarget != 0) {
-			const TargetViewObservationInput input{
-				.kind = TargetViewKind::kDepthTarget,
-				.d3dObject = a_depthTarget,
-			};
-			const auto observation = collector.ObserveTargetView(input);
+		if (a_depthTarget && a_depthTarget->view.d3dObject != 0) {
+			auto input = *a_depthTarget;
+			input.view.kind = TargetViewKind::kDepthTarget;
+			const auto observation = ObserveResourceView(input, contextObservationId, commandStreamSequence);
 			if (observation.observationId == 0)
 				identityComplete = false;
 			binding.depthTargetObservationId = observation.observationId;
-			if (observation.firstSeen) {
-				collector.RecordForGeneration(
-					EventKind::kTargetViewObserved,
-					TargetViewObservationPayload(input, observation),
-					contextObservationId,
-					observation.sessionGeneration,
-					commandStreamSequence);
-			}
 		}
 		if (!identityComplete) {
 			boundTargetBindingObservationId.store(0, std::memory_order_release);
@@ -433,6 +484,123 @@ namespace CSX::RenderMap
 			bindingObservation.sessionGeneration,
 			commandStreamSequence,
 			bindingObservation.observationId);
+	}
+
+	ResourceObservationResult Runtime::ObserveResource(
+		const ResourceObservationInput& a_input,
+		std::uint64_t a_contextObservationId,
+		std::uint64_t a_commandStreamSequence) noexcept
+	{
+		if (a_input.d3dObject == 0)
+			return {};
+		const auto observation = collector.ObserveResource(a_input);
+		if (observation.firstSeen) {
+			collector.RecordForGeneration(
+				EventKind::kResourceObserved,
+				ResourceObservationPayload(a_input, observation),
+				a_contextObservationId,
+				observation.sessionGeneration,
+				a_commandStreamSequence);
+		}
+		return observation;
+	}
+
+	TargetViewObservationResult Runtime::ObserveResourceView(
+		const ResourceViewInput& a_input,
+		std::uint64_t a_contextObservationId,
+		std::uint64_t a_commandStreamSequence) noexcept
+	{
+		if (a_input.view.d3dObject == 0)
+			return {};
+		auto view = a_input.view;
+		const auto resource = ObserveResource(a_input.resource, a_contextObservationId, a_commandStreamSequence);
+		view.resourceObservationId = resource.observationId;
+		const auto observation = collector.ObserveTargetView(view);
+		if (observation.firstSeen) {
+			collector.RecordForGeneration(
+				EventKind::kTargetViewObserved,
+				TargetViewObservationPayload(view, observation),
+				a_contextObservationId,
+				observation.sessionGeneration,
+				a_commandStreamSequence);
+		}
+		return observation;
+	}
+
+	void Runtime::BindResourceViews(
+		std::uintptr_t a_context,
+		ResourceBindingKind a_bindingKind,
+		ResourceStage a_stage,
+		std::uint32_t a_startSlot,
+		std::uint32_t a_viewCount,
+		const ResourceViewInput* a_views,
+		bool a_keepViews) noexcept
+	{
+		if (!collector.IsCapturing() || a_context == 0 ||
+			a_context != immediateContext.load(std::memory_order_acquire)) {
+			return;
+		}
+		const auto contextObservationId = EnsureImmediateContextObservation();
+		if (contextObservationId == 0)
+			return;
+		const auto commandStreamSequence = NextCommandStreamSequence();
+		if (a_keepViews)
+			return;
+
+		const auto maximumSlots = a_bindingKind == ResourceBindingKind::kShaderResource ?
+			static_cast<std::uint32_t>(kMaximumShaderResourceSlots) :
+			static_cast<std::uint32_t>(kMaximumUnorderedAccessSlots);
+		const auto count = a_startSlot >= maximumSlots ? 0u :
+			std::min(a_viewCount, maximumSlots - a_startSlot);
+		for (std::uint32_t index = 0; index < count; ++index) {
+			std::uint64_t viewObservationId = 0;
+			std::uint64_t generation = collector.ActiveGeneration();
+			if (a_views && a_views[index].view.d3dObject != 0) {
+				auto input = a_views[index];
+				input.view.kind = a_bindingKind == ResourceBindingKind::kShaderResource ?
+					TargetViewKind::kShaderResource : TargetViewKind::kUnorderedAccess;
+				const auto observation = ObserveResourceView(input, contextObservationId, commandStreamSequence);
+				viewObservationId = observation.observationId;
+				if (observation.sessionGeneration != 0)
+					generation = observation.sessionGeneration;
+			}
+			collector.RecordForGeneration(
+				EventKind::kResourceViewBind,
+				ResourceViewBindingPayload(viewObservationId, a_bindingKind, a_stage, a_startSlot + index),
+				contextObservationId,
+				generation,
+				commandStreamSequence);
+		}
+	}
+
+	void Runtime::RecordResourceFlow(
+		std::uintptr_t a_context,
+		ResourceFlowOperation a_operation,
+		const ResourceObservationInput& a_source,
+		const ResourceObservationInput& a_destination,
+		std::uint32_t a_sourceSubresource,
+		std::uint32_t a_destinationSubresource) noexcept
+	{
+		if (!collector.IsCapturing() || a_context == 0 ||
+			a_context != immediateContext.load(std::memory_order_acquire)) {
+			return;
+		}
+		const auto contextObservationId = EnsureImmediateContextObservation();
+		if (contextObservationId == 0)
+			return;
+		const auto commandStreamSequence = NextCommandStreamSequence();
+		const auto source = ObserveResource(a_source, contextObservationId, commandStreamSequence);
+		const auto destination = ObserveResource(a_destination, contextObservationId, commandStreamSequence);
+		const auto generation = source.sessionGeneration != 0 ? source.sessionGeneration :
+			(destination.sessionGeneration != 0 ? destination.sessionGeneration : collector.ActiveGeneration());
+		collector.RecordForGeneration(
+			EventKind::kResourceFlow,
+			ResourceFlowPayload(
+				a_operation, source.observationId, destination.observationId,
+				a_sourceSubresource, a_destinationSubresource),
+			contextObservationId,
+			generation,
+			commandStreamSequence);
 	}
 
 	std::uint64_t Runtime::EnsureImmediateContextObservation() noexcept

@@ -458,6 +458,63 @@ namespace
 			"overflowed target binding was silently joined to an existing binding");
 	}
 
+	void TestResourceFlowStateIsTypedAndOrdered()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::EventRecordSize() * 64;
+		runtime.SetImmediateContext(0xE000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted, "resource-flow capture did not start");
+
+		const ResourceObservationInput source{
+			.d3dObject = 0xE100, .dimension = ResourceDimension::kTexture2D,
+			.widthOrBytes = 1024, .height = 512, .depthOrArraySize = 2, .mipLevels = 4,
+			.format = 28, .sampleCount = 1, .bindFlags = 0x28,
+		};
+		const ResourceObservationInput destination{
+			.d3dObject = 0xE200, .dimension = ResourceDimension::kTexture2D,
+			.widthOrBytes = 1024, .height = 512, .depthOrArraySize = 2, .mipLevels = 4,
+			.format = 28, .sampleCount = 1, .bindFlags = 0x28,
+		};
+		const ResourceViewInput srv{
+			.resource = source,
+			.view = { .kind = TargetViewKind::kShaderResource, .d3dObject = 0xE300,
+				.format = 28, .dimension = 5, .mipSlice = 1, .arraySize = 3 },
+		};
+		const ResourceViewInput rtv{
+			.resource = destination,
+			.view = { .kind = TargetViewKind::kRenderTarget, .d3dObject = 0xE400,
+				.format = 28, .dimension = 5, .mipSlice = 0, .firstArraySlice = 1, .arraySize = 1 },
+		};
+		runtime.BindResourceViews(
+			0xE000, ResourceBindingKind::kShaderResource, ResourceStage::kPixel, 7, 1, &srv);
+		runtime.BindRenderTargetViews(0xE000, 1, &rtv, nullptr);
+		runtime.RecordDraw(0xE000, DrawOperation::kDraw, 3);
+		runtime.RecordResourceFlow(
+			0xE000, ResourceFlowOperation::kCopySubresourceRegion, destination, source, 2, 1);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot && snapshot->resourceObservations.size() == 2,
+			"resource identities were not deduplicated across views and flow operations");
+		Check(snapshot->targetViewObservations.size() == 2,
+			"typed SRV and RTV observations were not retained");
+		Check(std::count_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceObserved; }) == 2,
+			"resource first-seen declarations are wrong");
+		const auto bind = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceViewBind; });
+		Check(bind != snapshot->events.end() && bind->payload.words[0] != 0 &&
+			bind->payload.words[2] == static_cast<std::uint64_t>(ResourceStage::kPixel) &&
+			bind->payload.words[3] == 7 && bind->commandStreamSequence == 1,
+			"ordered pixel SRV binding was not recorded");
+		const auto flow = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceFlow; });
+		Check(flow != snapshot->events.end() && flow->payload.words[1] != 0 && flow->payload.words[2] != 0 &&
+			flow->payload.words[3] == 2 && flow->payload.words[4] == 1 && flow->commandStreamSequence == 4,
+			"copy-subresource flow did not retain ordered source and destination identities");
+	}
+
 	void TestExecutionJoinsDeclaredScopes()
 	{
 		Runtime runtime;
@@ -535,6 +592,7 @@ int main()
 		TestImmediateContextDrawAndDispatchState();
 		TestImmediateContextOutputMergerState();
 		TestOutputMergerBoundsAreExplicit();
+		TestResourceFlowStateIsTypedAndOrdered();
 		TestExecutionJoinsDeclaredScopes();
 		return 0;
 	} catch (const std::exception& error) {

@@ -21,6 +21,22 @@ namespace CSX::RenderMap
 		kDeviceContextObservation = 9,
 		kTargetViewObservation = 10,
 		kTargetBinding = 11,
+		kResourceObservation = 12,
+		kResourceViewBinding = 13,
+		kResourceFlow = 14,
+	};
+
+	enum class ResourceFlowOperation : std::uint8_t
+	{
+		kCopyResource = 1,
+		kCopySubresourceRegion = 2,
+		kResolveSubresource = 3,
+	};
+
+	struct ResourceViewInput
+	{
+		ResourceObservationInput resource;
+		TargetViewObservationInput view;
 	};
 
 	enum class DrawOperation : std::uint8_t
@@ -126,6 +142,27 @@ namespace CSX::RenderMap
 			const std::uintptr_t* a_renderTargets,
 			std::uintptr_t a_depthTarget,
 			bool a_keepTargets = false) noexcept;
+		void BindRenderTargetViews(
+			std::uintptr_t a_context,
+			std::uint32_t a_renderTargetCount,
+			const ResourceViewInput* a_renderTargets,
+			const ResourceViewInput* a_depthTarget,
+			bool a_keepTargets = false) noexcept;
+		void BindResourceViews(
+			std::uintptr_t a_context,
+			ResourceBindingKind a_bindingKind,
+			ResourceStage a_stage,
+			std::uint32_t a_startSlot,
+			std::uint32_t a_viewCount,
+			const ResourceViewInput* a_views,
+			bool a_keepViews = false) noexcept;
+		void RecordResourceFlow(
+			std::uintptr_t a_context,
+			ResourceFlowOperation a_operation,
+			const ResourceObservationInput& a_source,
+			const ResourceObservationInput& a_destination,
+			std::uint32_t a_sourceSubresource = 0,
+			std::uint32_t a_destinationSubresource = 0) noexcept;
 		void RecordDraw(
 			std::uintptr_t a_context,
 			DrawOperation a_operation,
@@ -148,6 +185,14 @@ namespace CSX::RenderMap
 		StageShaderObservationResult ResolveBoundStage(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) noexcept;
+		TargetViewObservationResult ObserveResourceView(
+			const ResourceViewInput& a_input,
+			std::uint64_t a_contextObservationId,
+			std::uint64_t a_commandStreamSequence) noexcept;
+		ResourceObservationResult ObserveResource(
+			const ResourceObservationInput& a_input,
+			std::uint64_t a_contextObservationId,
+			std::uint64_t a_commandStreamSequence) noexcept;
 
 		Collector collector;
 		std::atomic_uintptr_t immediateContext{ 0 };

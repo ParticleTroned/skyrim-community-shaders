@@ -189,6 +189,39 @@ target resource descriptions, UAV identities, and the remainder of the pipeline
 state are not yet part of the draw identity. The context pointer remains
 retained evidence alongside—not in place of—the typed identity.
 
+### Implemented resource-flow graph slice
+
+The immediate-context observer now assigns capture-local identities to D3D11
+buffers and textures reached through RTV, DSV, SRV, UAV, copy, and resolve
+operations. Resource declarations retain the resource dimension and bounded
+descriptor fields. View declarations join a concrete view object to its
+resource and retain its format, D3D11 view dimension, subresource coordinates,
+and flags. Different views of the same resource therefore converge on one
+resource node instead of appearing as unrelated pointer-shaped targets.
+
+Ordered `resource-view-bind` events cover SRVs for every graphics and compute
+stage and UAVs for compute and the output merger. Slot-null calls are retained
+as state changes. `resource-flow` events cover `CopyResource`,
+`CopySubresourceRegion`, and `ResolveSubresource`. Ordinary `Draw` and
+`DrawIndexed` are observed alongside the instanced, auto, and indirect calls;
+this closes a coverage gap in the earlier execution slice.
+
+`tools/build-render-graph.py` deterministically joins a completed capture into
+execution and resource nodes. An SRV resource points to the draw or dispatch
+that reads it; a draw, dispatch, RTV/DSV/UAV output, copy, or resolve points to
+the resource it writes. Every edge cites the declaration and execution event
+sequences that establish it. Missing declarations, unknown pre-capture output
+state, incomplete captures, and unsupported routes become explicit graph gaps.
+The builder does not invent pass names, eye identity, GPU completion, or
+deferred-context execution.
+
+The current binding stream records the effective application-level state calls.
+D3D11 may automatically null an overlapping input/output binding. The first
+graph builder conservatively preserves the observed call order but does not yet
+prove subresource-overlap hazards or query the entire effective pipeline state.
+Graphs that require exact alias/hazard resolution must treat this as an
+unsupported semantic layer until automatic unbinds are represented explicitly.
+
 ## Layer 4: derived render graph
 
 The render graph is regenerated from exact input hashes. It contains normalized

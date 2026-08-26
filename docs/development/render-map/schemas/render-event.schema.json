@@ -154,13 +154,18 @@
         "properties": {
           "payload": {
             "type": "object",
-            "required": ["schema", "targetViewObservationId", "kind", "d3dObjectPointer", "pointerGeneration"],
+            "required": ["schema", "targetViewObservationId", "kind", "d3dObjectPointer", "pointerGeneration", "resourceObservationId", "format", "viewDimension", "subresources", "flags"],
             "properties": {
               "schema": { "const": "target-view-observation-v1" },
               "targetViewObservationId": { "$ref": "#/$defs/observationId" },
-              "kind": { "enum": ["render-target", "depth-target"] },
+              "kind": { "enum": ["render-target", "depth-target", "shader-resource-view", "unordered-access-view"] },
               "d3dObjectPointer": { "type": ["string", "null"] },
-              "pointerGeneration": { "type": "integer", "minimum": 1 }
+              "pointerGeneration": { "type": "integer", "minimum": 1 },
+              "resourceObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "format": { "type": "integer", "minimum": 0 },
+              "viewDimension": { "type": "integer", "minimum": 0 },
+              "subresources": { "type": "object" },
+              "flags": { "type": "integer", "minimum": 0 }
             },
             "additionalProperties": false
           }
@@ -189,6 +194,52 @@
           }
         }
       }
+    },
+    {
+      "if": { "properties": { "type": { "const": "resource-observed" } } },
+      "then": { "properties": { "payload": {
+        "type": "object",
+        "required": ["schema", "resourceObservationId", "d3dObjectPointer", "pointerGeneration", "dimension", "widthOrBytes", "height", "depthOrArraySize", "mipLevels", "format", "sampleCount", "sampleQuality", "usage", "bindFlags", "cpuAccessFlags", "miscFlags", "structureByteStride"],
+        "properties": {
+          "schema": { "const": "resource-observation-v1" },
+          "resourceObservationId": { "$ref": "#/$defs/observationId" },
+          "d3dObjectPointer": { "type": ["string", "null"] },
+          "pointerGeneration": { "type": "integer", "minimum": 1 },
+          "dimension": { "enum": ["unknown", "buffer", "texture-1d", "texture-2d", "texture-3d"] }
+        },
+        "additionalProperties": true
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "resource-view-bind" } } },
+      "then": { "properties": { "payload": {
+        "type": "object",
+        "required": ["schema", "viewObservationId", "bindingKind", "stage", "slot"],
+        "properties": {
+          "schema": { "const": "resource-view-binding-v1" },
+          "viewObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+          "bindingKind": { "enum": ["shader-resource", "unordered-access"] },
+          "stage": { "enum": ["vertex", "hull", "domain", "geometry", "pixel", "compute", "output-merger"] },
+          "slot": { "type": "integer", "minimum": 0, "maximum": 127 }
+        },
+        "additionalProperties": false
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "resource-flow" } } },
+      "then": { "properties": { "payload": {
+        "type": "object",
+        "required": ["schema", "operation", "sourceResourceObservationId", "destinationResourceObservationId", "sourceSubresource", "destinationSubresource"],
+        "properties": {
+          "schema": { "const": "resource-flow-v1" },
+          "operation": { "enum": ["copy-resource", "copy-subresource-region", "resolve-subresource"] },
+          "sourceResourceObservationId": { "$ref": "#/$defs/observationId" },
+          "destinationResourceObservationId": { "$ref": "#/$defs/observationId" },
+          "sourceSubresource": { "type": "integer", "minimum": 0 },
+          "destinationSubresource": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      } } }
     },
     {
       "if": { "properties": { "type": { "const": "gap" } } },
@@ -395,7 +446,10 @@
         "stage-shader-observed",
         "technique-resolved",
         "device-context-observed",
-        "target-view-observed"
+        "target-view-observed",
+        "resource-observed",
+        "resource-view-bind",
+        "resource-flow"
       ]
     },
     "frame": {

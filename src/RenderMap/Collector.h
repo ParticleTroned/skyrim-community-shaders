@@ -21,6 +21,8 @@ namespace CSX::RenderMap
 	inline constexpr std::size_t kMaximumShaderCachePathLength = 383;
 	inline constexpr std::size_t kSha256HexLength = 64;
 	inline constexpr std::size_t kMaximumRenderTargets = 8;
+	inline constexpr std::size_t kMaximumShaderResourceSlots = 128;
+	inline constexpr std::size_t kMaximumUnorderedAccessSlots = 64;
 
 	enum class EventKind : std::uint16_t
 	{
@@ -59,6 +61,9 @@ namespace CSX::RenderMap
 		kTechniqueResolved,
 		kDeviceContextObserved,
 		kTargetViewObserved,
+		kResourceObserved,
+		kResourceViewBind,
+		kResourceFlow,
 	};
 
 	enum class Eye : std::uint8_t
@@ -119,6 +124,7 @@ namespace CSX::RenderMap
 		std::uint8_t maxScopeDepth{ 8 };
 		std::uint32_t maxShaderObservations{ 1024 };
 		std::uint32_t maxStageShaderObservations{ 4096 };
+		std::uint32_t maxResourceObservations{ 4096 };
 		std::uint32_t maxTargetViewObservations{ 4096 };
 		std::uint32_t maxTargetBindingObservations{ 4096 };
 	};
@@ -155,7 +161,7 @@ namespace CSX::RenderMap
 	struct EventRecord
 	{
 		std::uint16_t schemaMajor{ 1 };
-		std::uint16_t schemaMinor{ 6 };
+		std::uint16_t schemaMinor{ 7 };
 		EventKind kind{ EventKind::kCaptureMarker };
 		std::uint16_t reserved{ 0 };
 		std::uint64_t captureNumericId{ 0 };
@@ -187,6 +193,7 @@ namespace CSX::RenderMap
 		std::uint64_t scopeMismatch{ 0 };
 		std::uint64_t droppedShaderObservations{ 0 };
 		std::uint64_t droppedStageShaderObservations{ 0 };
+		std::uint64_t droppedResourceObservations{ 0 };
 		std::uint64_t droppedTargetViewObservations{ 0 };
 		std::uint64_t droppedTargetBindingObservations{ 0 };
 	};
@@ -267,12 +274,81 @@ namespace CSX::RenderMap
 	{
 		kRenderTarget = 1,
 		kDepthTarget = 2,
+		kShaderResource = 3,
+		kUnorderedAccess = 4,
+	};
+
+	enum class ResourceDimension : std::uint8_t
+	{
+		kUnknown = 0,
+		kBuffer = 1,
+		kTexture1D = 2,
+		kTexture2D = 3,
+		kTexture3D = 4,
+	};
+
+	enum class ResourceStage : std::uint8_t
+	{
+		kVertex = 1,
+		kHull = 2,
+		kDomain = 3,
+		kGeometry = 4,
+		kPixel = 5,
+		kCompute = 6,
+		kOutputMerger = 7,
+	};
+
+	enum class ResourceBindingKind : std::uint8_t
+	{
+		kShaderResource = 1,
+		kUnorderedAccess = 2,
+	};
+
+	struct ResourceObservationInput
+	{
+		std::uintptr_t d3dObject{ 0 };
+		ResourceDimension dimension{ ResourceDimension::kUnknown };
+		std::uint64_t widthOrBytes{ 0 };
+		std::uint32_t height{ 0 };
+		std::uint32_t depthOrArraySize{ 0 };
+		std::uint32_t mipLevels{ 0 };
+		std::uint32_t format{ 0 };
+		std::uint32_t sampleCount{ 0 };
+		std::uint32_t sampleQuality{ 0 };
+		std::uint32_t usage{ 0 };
+		std::uint32_t bindFlags{ 0 };
+		std::uint32_t cpuAccessFlags{ 0 };
+		std::uint32_t miscFlags{ 0 };
+		std::uint32_t structureByteStride{ 0 };
+	};
+
+	struct ResourceObservationRecord : ResourceObservationInput
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+	};
+
+	struct ResourceObservationResult
+	{
+		std::uint64_t observationId{ 0 };
+		std::uint64_t sessionGeneration{ 0 };
+		std::uint32_t pointerGeneration{ 0 };
+		bool firstSeen{ false };
 	};
 
 	struct TargetViewObservationInput
 	{
 		TargetViewKind kind{ TargetViewKind::kRenderTarget };
 		std::uintptr_t d3dObject{ 0 };
+		std::uint64_t resourceObservationId{ 0 };
+		std::uint32_t format{ 0 };
+		std::uint32_t dimension{ 0 };
+		std::uint32_t mipSlice{ 0 };
+		std::uint32_t firstArraySlice{ 0 };
+		std::uint32_t arraySize{ 0 };
+		std::uint32_t firstElement{ 0 };
+		std::uint32_t elementCount{ 0 };
+		std::uint32_t flags{ 0 };
 	};
 
 	struct TargetViewObservationRecord
@@ -281,6 +357,15 @@ namespace CSX::RenderMap
 		TargetViewKind kind{ TargetViewKind::kRenderTarget };
 		std::uintptr_t pointerEvidence{ 0 };
 		std::uint32_t pointerGeneration{ 0 };
+		std::uint64_t resourceObservationId{ 0 };
+		std::uint32_t format{ 0 };
+		std::uint32_t dimension{ 0 };
+		std::uint32_t mipSlice{ 0 };
+		std::uint32_t firstArraySlice{ 0 };
+		std::uint32_t arraySize{ 0 };
+		std::uint32_t firstElement{ 0 };
+		std::uint32_t elementCount{ 0 };
+		std::uint32_t flags{ 0 };
 	};
 
 	struct TargetViewObservationResult
@@ -325,6 +410,7 @@ namespace CSX::RenderMap
 		std::vector<EventRecord> events;
 		std::vector<ShaderObservationRecord> shaderObservations;
 		std::vector<StageShaderObservationRecord> stageShaderObservations;
+		std::vector<ResourceObservationRecord> resourceObservations;
 		std::vector<TargetViewObservationRecord> targetViewObservations;
 		std::vector<TargetBindingObservationRecord> targetBindingObservations;
 	};
@@ -407,6 +493,7 @@ namespace CSX::RenderMap
 		StageShaderObservationResult FindStageShader(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) noexcept;
+		ResourceObservationResult ObserveResource(const ResourceObservationInput& a_input) noexcept;
 		TargetViewObservationResult ObserveTargetView(const TargetViewObservationInput& a_input) noexcept;
 		TargetBindingObservationResult ObserveTargetBinding(const TargetBindingObservationInput& a_input) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;

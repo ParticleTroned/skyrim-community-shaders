@@ -25,6 +25,8 @@ The immediate-context render-target/depth-target identity and draw-join slice is
 in [`output-merger-target-slice.md`](./output-merger-target-slice.md).
 Its bounded main-menu live-validation record is in
 [`output-merger-main-menu-capture-2026-08-26.md`](./output-merger-main-menu-capture-2026-08-26.md).
+The typed resource/view and producer-consumer graph slice is in
+[`resource-flow-graph-slice.md`](./resource-flow-graph-slice.md).
 Findings from the first bounded live controller run are in
 [`live-capture-findings-2026-08-23.md`](./live-capture-findings-2026-08-23.md).
 The later 120-frame run that validates durable finalization and establishes the
@@ -63,13 +65,14 @@ geometry-setup scopes when—and only when—an explicit controller has started 
 capture. Immediate render-pass coverage includes the three existing callsites
 and Terrain Blending's shared draw route; geometry coverage in this slice is
 Lighting, Effect, and Grass, matching the always-installed core hook owners.
-The D3D11 observer also tracks immediate-context VS/PS/CS bindings and bounded
-draw/dispatch execution. It now records immediate-context output-merger
+The D3D11 observer also tracks immediate-context shader bindings and bounded
+draw/dispatch execution. It records immediate-context output-merger
 render-target/depth-target calls as bounded, capture-local target-view and exact
-binding-set identities. Draws join the most recently observed binding set.
-Existing `Draw` and `DrawIndexed` hook owners compose
-the observation directly; other draw variants and dispatch have dedicated
-detours. On first observed context activity in each capture it emits one typed
+binding-set identities, typed resources and RTV/DSV/SRV/UAV views, ordered
+per-slot SRV/UAV state, and copy/resolve flow. Draws join the most recently
+observed binding set. `Draw`, `DrawIndexed`, other draw variants, dispatch,
+copy, and resolve have bounded observation paths. On first observed context
+activity in each capture it emits one typed
 `device-context-observed` declaration. Later execution events reference that
 capture-local identity and carry a monotonic context-local command sequence;
 the sequence also advances across observed VS/PS/CS binding calls so relative
@@ -112,14 +115,15 @@ capture explicitly incomplete. State inherited before capture starts is not
 queried or guessed, so early draws may correctly carry a null target-binding
 identity until the first observed bind. Per-thread buffer sharding, remaining
 geometry families, provenance injection, the rest of full pipeline identity,
-deferred-context/command-list coverage, COM destruction boundaries, and VR-eye
-attribution remain subsequent slices. Until those exist, this is bounded live
-evidence rather than a complete render graph.
+deferred-context/command-list coverage, COM destruction boundaries, automatic
+D3D11 hazard-unbind proof, and VR-eye attribution remain subsequent slices.
+The resource-flow joiner now produces a genuine bounded immediate-context
+execution/resource graph; it is not yet a complete semantic Skyrim frame graph.
 
 Example DevBench requests (use a unique `commandId` for each logical command):
 
 ```json
-{"contractMajor":1,"clientId":"render-study","commandId":"start-1","action":"start","maxFrames":4,"maxDurationMs":2000,"maxEvents":8192,"maxShaderObservations":1024,"maxStageShaderObservations":4096,"maxTargetViewObservations":4096,"maxTargetBindingObservations":4096}
+{"contractMajor":1,"clientId":"render-study","commandId":"start-1","action":"start","maxFrames":4,"maxDurationMs":2000,"maxEvents":8192,"maxShaderObservations":1024,"maxStageShaderObservations":4096,"maxResourceObservations":4096,"maxTargetViewObservations":4096,"maxTargetBindingObservations":4096}
 {"contractMajor":1,"clientId":"render-study","commandId":"stop-1","action":"stop","captureId":"capture-live-..."}
 {"contractMajor":1,"clientId":"render-study","commandId":"events-1","action":"capture_events","captureId":"capture-live-...","offset":0,"limit":500}
 ```
@@ -131,6 +135,16 @@ repository root:
 ```powershell
 pwsh -NoProfile -File tools/test-render-map-contracts.ps1
 ```
+
+Derive an execution/resource graph from a completed live capture:
+
+```powershell
+python tools/build-render-graph.py --capture-manifest <capture>/capture-manifest.json --events <capture>/events.jsonl --output <capture>/render-graph.json
+```
+
+The first live resource-flow graph and its exact retained hashes are documented
+in
+[`resource-flow-main-menu-capture-2026-08-26.md`](resource-flow-main-menu-capture-2026-08-26.md).
 
 ## Non-goals
 

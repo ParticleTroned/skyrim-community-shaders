@@ -228,6 +228,7 @@ namespace CSX::RenderMap
 			const bool structurallyIncomplete = snapshot.statistics.scopeOverflow != 0 ||
 				snapshot.statistics.scopeMismatch != 0 || snapshot.statistics.droppedShaderObservations != 0 ||
 				snapshot.statistics.droppedStageShaderObservations != 0 ||
+				snapshot.statistics.droppedResourceObservations != 0 ||
 				snapshot.statistics.droppedTargetViewObservations != 0 ||
 				snapshot.statistics.droppedTargetBindingObservations != 0;
 			const bool terminalFailure = snapshot.stopReason == StopReason::kShutdown ||
@@ -245,6 +246,8 @@ namespace CSX::RenderMap
 				completionErrors.push_back("shader observation capacity was exceeded during capture");
 			if (snapshot.statistics.droppedStageShaderObservations != 0)
 				completionErrors.push_back("stage shader observation capacity was exceeded during capture");
+			if (snapshot.statistics.droppedResourceObservations != 0)
+				completionErrors.push_back("resource observation capacity was exceeded during capture");
 			if (snapshot.statistics.droppedTargetViewObservations != 0)
 				completionErrors.push_back("target view observation capacity was exceeded during capture");
 			if (snapshot.statistics.droppedTargetBindingObservations != 0)
@@ -272,6 +275,7 @@ namespace CSX::RenderMap
 					{ "maxEvents", snapshot.config.maxEvents }, { "maxBytes", snapshot.config.maxBytes },
 					{ "maxShaderObservations", snapshot.config.maxShaderObservations },
 					{ "maxStageShaderObservations", snapshot.config.maxStageShaderObservations },
+					{ "maxResourceObservations", snapshot.config.maxResourceObservations },
 					{ "maxTargetViewObservations", snapshot.config.maxTargetViewObservations },
 					{ "maxTargetBindingObservations", snapshot.config.maxTargetBindingObservations },
 					{ "pointerPolicy", "retain" },
@@ -297,6 +301,8 @@ namespace CSX::RenderMap
 					{ "csx.droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
 					{ "csx.stageShaderObservationCount", snapshot.stageShaderObservations.size() },
 					{ "csx.droppedStageShaderObservationCount", snapshot.statistics.droppedStageShaderObservations },
+					{ "csx.resourceObservationCount", snapshot.resourceObservations.size() },
+					{ "csx.droppedResourceObservationCount", snapshot.statistics.droppedResourceObservations },
 					{ "csx.targetViewObservationCount", snapshot.targetViewObservations.size() },
 					{ "csx.droppedTargetViewObservationCount", snapshot.statistics.droppedTargetViewObservations },
 					{ "csx.targetBindingObservationCount", snapshot.targetBindingObservations.size() },

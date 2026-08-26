@@ -240,7 +240,71 @@ namespace CSX::RenderMap
 			};
 			append(a_input.kind);
 			append(a_input.d3dObject);
+			append(a_input.resourceObservationId);
+			append(a_input.format);
+			append(a_input.dimension);
+			append(a_input.mipSlice);
+			append(a_input.firstArraySlice);
+			append(a_input.arraySize);
+			append(a_input.firstElement);
+			append(a_input.elementCount);
+			append(a_input.flags);
 			return hash;
+		}
+
+		std::uint64_t HashResourceIdentity(const ResourceObservationInput& a_input) noexcept
+		{
+			constexpr std::uint64_t offset = 14695981039346656037ull;
+			constexpr std::uint64_t prime = 1099511628211ull;
+			std::uint64_t hash = offset;
+			const auto append = [&](const auto& a_value) {
+				const auto* bytes = reinterpret_cast<const unsigned char*>(std::addressof(a_value));
+				for (std::size_t index = 0; index < sizeof(a_value); ++index) {
+					hash ^= bytes[index];
+					hash *= prime;
+				}
+			};
+			append(a_input.d3dObject);
+			append(a_input.dimension);
+			append(a_input.widthOrBytes);
+			append(a_input.height);
+			append(a_input.depthOrArraySize);
+			append(a_input.mipLevels);
+			append(a_input.format);
+			append(a_input.sampleCount);
+			append(a_input.sampleQuality);
+			append(a_input.usage);
+			append(a_input.bindFlags);
+			append(a_input.cpuAccessFlags);
+			append(a_input.miscFlags);
+			append(a_input.structureByteStride);
+			return hash;
+		}
+
+		bool SameResourceIdentity(
+			const ResourceObservationRecord& a_record,
+			const ResourceObservationInput& a_input) noexcept
+		{
+			return a_record.d3dObject == a_input.d3dObject && a_record.dimension == a_input.dimension &&
+				a_record.widthOrBytes == a_input.widthOrBytes && a_record.height == a_input.height &&
+				a_record.depthOrArraySize == a_input.depthOrArraySize && a_record.mipLevels == a_input.mipLevels &&
+				a_record.format == a_input.format && a_record.sampleCount == a_input.sampleCount &&
+				a_record.sampleQuality == a_input.sampleQuality && a_record.usage == a_input.usage &&
+				a_record.bindFlags == a_input.bindFlags && a_record.cpuAccessFlags == a_input.cpuAccessFlags &&
+				a_record.miscFlags == a_input.miscFlags &&
+				a_record.structureByteStride == a_input.structureByteStride;
+		}
+
+		bool SameTargetViewIdentity(
+			const TargetViewObservationRecord& a_record,
+			const TargetViewObservationInput& a_input) noexcept
+		{
+			return a_record.kind == a_input.kind && a_record.pointerEvidence == a_input.d3dObject &&
+				a_record.resourceObservationId == a_input.resourceObservationId && a_record.format == a_input.format &&
+				a_record.dimension == a_input.dimension && a_record.mipSlice == a_input.mipSlice &&
+				a_record.firstArraySlice == a_input.firstArraySlice && a_record.arraySize == a_input.arraySize &&
+				a_record.firstElement == a_input.firstElement && a_record.elementCount == a_input.elementCount &&
+				a_record.flags == a_input.flags;
 		}
 
 		std::uint64_t HashTargetBindingIdentity(const TargetBindingObservationInput& a_input) noexcept
@@ -295,6 +359,10 @@ namespace CSX::RenderMap
 		std::mutex stageShaderObservationMutex;
 		std::unordered_multimap<std::uint64_t, std::uint32_t> stageShaderObservationLookup;
 		std::uint32_t stageShaderObservationCount{ 0 };
+		std::unique_ptr<ResourceObservationRecord[]> resourceObservations;
+		std::mutex resourceObservationMutex;
+		std::unordered_multimap<std::uint64_t, std::uint32_t> resourceObservationLookup;
+		std::uint32_t resourceObservationCount{ 0 };
 		std::unique_ptr<TargetViewObservationRecord[]> targetViewObservations;
 		std::mutex targetViewObservationMutex;
 		std::unordered_multimap<std::uint64_t, std::uint32_t> targetViewObservationLookup;
@@ -323,6 +391,7 @@ namespace CSX::RenderMap
 		std::atomic_uint64_t scopeMismatch{ 0 };
 		std::atomic_uint64_t droppedShaderObservations{ 0 };
 		std::atomic_uint64_t droppedStageShaderObservations{ 0 };
+		std::atomic_uint64_t droppedResourceObservations{ 0 };
 		std::atomic_uint64_t droppedTargetViewObservations{ 0 };
 		std::atomic_uint64_t droppedTargetBindingObservations{ 0 };
 	};
@@ -406,6 +475,7 @@ namespace CSX::RenderMap
 			a_config.maxBytes < sizeof(EventRecord) || a_config.maxDuration.count() <= 0 ||
 			a_config.maxScopeDepth == 0 || a_config.maxScopeDepth > kMaximumScopeDepth ||
 			a_config.maxShaderObservations == 0 || a_config.maxStageShaderObservations == 0 ||
+			a_config.maxResourceObservations == 0 ||
 			a_config.maxTargetViewObservations == 0 || a_config.maxTargetBindingObservations == 0) {
 			return StartResult::kInvalidBounds;
 		}
@@ -429,16 +499,20 @@ namespace CSX::RenderMap
 		session->shaderObservationRetired.reset(new (std::nothrow) bool[a_config.maxShaderObservations]{});
 		session->stageShaderObservations.reset(
 			new (std::nothrow) StageShaderObservationRecord[a_config.maxStageShaderObservations]);
+		session->resourceObservations.reset(
+			new (std::nothrow) ResourceObservationRecord[a_config.maxResourceObservations]);
 		session->targetViewObservations.reset(
 			new (std::nothrow) TargetViewObservationRecord[a_config.maxTargetViewObservations]);
 		session->targetBindingObservations.reset(
 			new (std::nothrow) TargetBindingObservationRecord[a_config.maxTargetBindingObservations]);
 		if (!session->shaderObservations || !session->shaderObservationRetired || !session->stageShaderObservations ||
+			!session->resourceObservations ||
 			!session->targetViewObservations || !session->targetBindingObservations)
 			return StartResult::kAllocationFailed;
 		try {
 			session->shaderObservationLookup.reserve(a_config.maxShaderObservations);
 			session->stageShaderObservationLookup.reserve(a_config.maxStageShaderObservations);
+			session->resourceObservationLookup.reserve(a_config.maxResourceObservations);
 			session->targetViewObservationLookup.reserve(a_config.maxTargetViewObservations);
 			session->targetBindingObservationLookup.reserve(a_config.maxTargetBindingObservations);
 		} catch (...) {
@@ -498,6 +572,7 @@ namespace CSX::RenderMap
 			.scopeMismatch = session->scopeMismatch.load(std::memory_order_relaxed),
 			.droppedShaderObservations = session->droppedShaderObservations.load(std::memory_order_relaxed),
 			.droppedStageShaderObservations = session->droppedStageShaderObservations.load(std::memory_order_relaxed),
+			.droppedResourceObservations = session->droppedResourceObservations.load(std::memory_order_relaxed),
 			.droppedTargetViewObservations = session->droppedTargetViewObservations.load(std::memory_order_relaxed),
 			.droppedTargetBindingObservations = session->droppedTargetBindingObservations.load(std::memory_order_relaxed),
 		};
@@ -516,6 +591,9 @@ namespace CSX::RenderMap
 		snapshot.stageShaderObservations.reserve(session->stageShaderObservationCount);
 		for (std::uint32_t index = 0; index < session->stageShaderObservationCount; ++index)
 			snapshot.stageShaderObservations.push_back(session->stageShaderObservations[index]);
+		snapshot.resourceObservations.reserve(session->resourceObservationCount);
+		for (std::uint32_t index = 0; index < session->resourceObservationCount; ++index)
+			snapshot.resourceObservations.push_back(session->resourceObservations[index]);
 		snapshot.targetViewObservations.reserve(session->targetViewObservationCount);
 		for (std::uint32_t index = 0; index < session->targetViewObservationCount; ++index)
 			snapshot.targetViewObservations.push_back(session->targetViewObservations[index]);
@@ -838,6 +916,63 @@ namespace CSX::RenderMap
 		return result;
 	}
 
+	ResourceObservationResult Collector::ObserveResource(
+		const ResourceObservationInput& a_input) noexcept
+	{
+		auto session = activeSession.load(std::memory_order_acquire);
+		if (!session || !session->accepting.load(std::memory_order_acquire) || a_input.d3dObject == 0)
+			return {};
+
+		session->inFlight.fetch_add(1, std::memory_order_acq_rel);
+		const auto releaseFlight = [&] { session->inFlight.fetch_sub(1, std::memory_order_release); };
+		if (!session->accepting.load(std::memory_order_acquire) || activeSession.load(std::memory_order_acquire) != session) {
+			releaseFlight();
+			return {};
+		}
+
+		const auto identityHash = HashResourceIdentity(a_input);
+		ResourceObservationResult result{ .sessionGeneration = session->generation };
+		{
+			std::lock_guard lock(session->resourceObservationMutex);
+			const auto [begin, end] = session->resourceObservationLookup.equal_range(identityHash);
+			for (auto found = begin; found != end; ++found) {
+				const auto& record = session->resourceObservations[found->second];
+				if (SameResourceIdentity(record, a_input)) {
+					result = { record.observationId, session->generation, record.pointerGeneration, false };
+					break;
+				}
+			}
+
+			if (result.observationId == 0) {
+				if (session->resourceObservationCount >= session->config.maxResourceObservations) {
+					session->droppedResourceObservations.fetch_add(1, std::memory_order_relaxed);
+				} else {
+					std::uint32_t pointerGeneration = 1;
+					for (std::uint32_t index = 0; index < session->resourceObservationCount; ++index) {
+						if (session->resourceObservations[index].d3dObject == a_input.d3dObject)
+							pointerGeneration = std::max(
+								pointerGeneration, session->resourceObservations[index].pointerGeneration + 1);
+					}
+					const auto index = session->resourceObservationCount++;
+					auto& record = session->resourceObservations[index];
+					static_cast<ResourceObservationInput&>(record) = a_input;
+					record.observationId = session->nextObservationId.fetch_add(1, std::memory_order_relaxed);
+					record.pointerGeneration = pointerGeneration;
+					try {
+						session->resourceObservationLookup.emplace(identityHash, index);
+						result = { record.observationId, session->generation, pointerGeneration, true };
+					} catch (...) {
+						--session->resourceObservationCount;
+						record = {};
+						session->droppedResourceObservations.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
+			}
+		}
+		releaseFlight();
+		return result;
+	}
+
 	TargetViewObservationResult Collector::ObserveTargetView(
 		const TargetViewObservationInput& a_input) noexcept
 	{
@@ -859,7 +994,7 @@ namespace CSX::RenderMap
 			const auto [begin, end] = session->targetViewObservationLookup.equal_range(identityHash);
 			for (auto found = begin; found != end; ++found) {
 				const auto& record = session->targetViewObservations[found->second];
-				if (record.kind == a_input.kind && record.pointerEvidence == a_input.d3dObject) {
+				if (SameTargetViewIdentity(record, a_input)) {
 					result = { record.observationId, session->generation, record.pointerGeneration, false };
 					break;
 				}
@@ -882,6 +1017,15 @@ namespace CSX::RenderMap
 					record.kind = a_input.kind;
 					record.pointerEvidence = a_input.d3dObject;
 					record.pointerGeneration = pointerGeneration;
+					record.resourceObservationId = a_input.resourceObservationId;
+					record.format = a_input.format;
+					record.dimension = a_input.dimension;
+					record.mipSlice = a_input.mipSlice;
+					record.firstArraySlice = a_input.firstArraySlice;
+					record.arraySize = a_input.arraySize;
+					record.firstElement = a_input.firstElement;
+					record.elementCount = a_input.elementCount;
+					record.flags = a_input.flags;
 					try {
 						session->targetViewObservationLookup.emplace(identityHash, index);
 						result = { record.observationId, session->generation, pointerGeneration, true };

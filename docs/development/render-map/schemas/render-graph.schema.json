@@ -33,7 +33,7 @@
     },
     "inputs": {
       "type": "array",
-      "minItems": 3,
+      "minItems": 2,
       "items": { "$ref": "#/$defs/input" }
     },
     "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
@@ -79,7 +79,7 @@
       "required": ["id", "kind", "label", "sourceRefs", "attributes", "extensions"],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4}$" },
+        "id": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
         "kind": {
           "enum": [
             "scene-object",
@@ -96,6 +96,7 @@
             "visibility-test",
             "draw",
             "dispatch",
+            "copy",
             "phase"
           ]
         },
@@ -122,7 +123,7 @@
       "required": ["id", "type", "from", "to", "evidenceClass", "confidence", "evidence", "ambiguityGroup", "attributes", "extensions"],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "pattern": "^edge-[0-9]{4}$" },
+        "id": { "type": "string", "pattern": "^edge-[0-9]{4,}$" },
         "type": {
           "enum": [
             "owns",
@@ -142,8 +143,8 @@
             "same-observed-object"
           ]
         },
-        "from": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4}$" },
-        "to": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4}$" },
+        "from": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
+        "to": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
         "evidenceClass": { "$ref": "#/$defs/evidenceClass" },
         "confidence": { "$ref": "#/$defs/confidence" },
         "evidence": {
@@ -151,7 +152,7 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/evidenceRef" }
         },
-        "ambiguityGroup": { "type": ["string", "null"], "pattern": "^ambiguity-[0-9]{4}$" },
+        "ambiguityGroup": { "type": ["string", "null"], "pattern": "^ambiguity-[0-9]{4,}$" },
         "attributes": { "type": "object", "additionalProperties": true },
         "extensions": { "$ref": "#/$defs/extensions" }
       }
@@ -180,12 +181,12 @@
       "required": ["id", "question", "candidateEdgeIds", "resolutionRequired", "extensions"],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "pattern": "^ambiguity-[0-9]{4}$" },
+        "id": { "type": "string", "pattern": "^ambiguity-[0-9]{4,}$" },
         "question": { "type": "string", "minLength": 1 },
         "candidateEdgeIds": {
           "type": "array",
           "minItems": 2,
-          "items": { "type": "string", "pattern": "^edge-[0-9]{4}$" },
+          "items": { "type": "string", "pattern": "^edge-[0-9]{4,}$" },
           "uniqueItems": true
         },
         "resolutionRequired": { "type": "string", "minLength": 1 },
@@ -197,12 +198,12 @@
       "required": ["id", "kind", "description", "relatedNodeIds", "blocking", "extensions"],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "pattern": "^gap-[0-9]{4}$" },
+        "id": { "type": "string", "pattern": "^gap-[0-9]{4,}$" },
         "kind": { "enum": ["missing-static-map", "missing-event", "dropped-events", "uncorrelated", "unsupported-route", "incomplete-capture", "other"] },
         "description": { "type": "string", "minLength": 1 },
         "relatedNodeIds": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4}$" },
+          "items": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
           "uniqueItems": true
         },
         "blocking": { "type": "boolean" },
@@ -215,7 +216,7 @@
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "pattern": "^decision-window-[0-9]{4}$" },
-        "candidateNode": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4}$" },
+        "candidateNode": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
         "suppressionStage": { "enum": ["before-accumulation", "before-batch-submission", "before-draw", "gpu-predication-or-indirect", "vertex-shader"] },
         "visibilityAvailable": { "$ref": "#/$defs/eventPoint" },
         "decisionDeadline": { "$ref": "#/$defs/eventPoint" },

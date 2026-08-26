@@ -1705,6 +1705,12 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME RenderMapController COMMAND render_map_controller_test)
     set_tests_properties(RenderMapController PROPERTIES LABELS "ControllerTests")
 
+	add_test(
+		NAME RenderGraphBuilder
+		COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/render_graph_builder_test.py"
+	)
+	set_tests_properties(RenderGraphBuilder PROPERTIES LABELS "ControllerTests")
+
     add_executable(
         api_service_foundation_test
         EXCLUDE_FROM_ALL

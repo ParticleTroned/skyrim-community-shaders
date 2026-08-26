@@ -27,14 +27,15 @@ namespace
 	using json = nlohmann::json;
 	using CSX::RenderMap::ControlStatus;
 	constexpr std::uint32_t kContractMajor = 1;
-	constexpr std::uint32_t kContractMinor = 4;
-	constexpr std::uint32_t kSchemaRevision = 5;
+	constexpr std::uint32_t kContractMinor = 5;
+	constexpr std::uint32_t kSchemaRevision = 6;
 	constexpr std::uint64_t kMaximumFrames = 600;
 	constexpr std::uint64_t kMaximumDurationMs = 10000;
 	constexpr std::uint64_t kMaximumEvents = 65536;
 	constexpr std::uint64_t kMaximumBytes = 32ull * 1024ull * 1024ull;
 	constexpr std::uint32_t kMaximumShaderObservations = 8192;
 	constexpr std::uint32_t kMaximumStageShaderObservations = 32768;
+	constexpr std::uint32_t kMaximumResourceObservations = 32768;
 	constexpr std::uint32_t kMaximumTargetViewObservations = 32768;
 	constexpr std::uint32_t kMaximumTargetBindingObservations = 32768;
 	std::atomic_bool g_registered{ false };
@@ -83,6 +84,7 @@ namespace
 				"thread-local-render-scopes", "bounded-in-memory-capture", "typed-shader-observations",
 				"resolved-technique-stage-observations",
 				"typed-output-merger-target-observations",
+				"typed-resource-and-view-observations", "ordered-resource-bindings", "resource-flow-observations",
 				"atomic-events-jsonl", "atomic-capture-manifest", "explicit-gap-events",
 			},
 			.inputs = {
@@ -165,13 +167,16 @@ namespace
 				{ "major", kContractMajor }, { "minor", kContractMinor },
 				{ "schemaRevision", kSchemaRevision },
 				{ "actions", json::array({ "registry", "status", "start", "stop", "capture_events" }) },
-				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "device-context-observation-v1", "target-view-observation-v1", "render-target-binding-v1", "draw-call-v2", "dispatch-call-v1" }) },
-				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "device-context-observed", "target-view-observed", "render-target-bind", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "draw", "dispatch" }) },
+				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "device-context-observation-v1", "target-view-observation-v1", "resource-observation-v1", "resource-view-binding-v1", "resource-flow-v1", "render-target-binding-v1", "draw-call-v2", "dispatch-call-v1" }) },
+				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "device-context-observed", "target-view-observed", "resource-observed", "resource-view-bind", "resource-flow", "render-target-bind", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "draw", "dispatch" }) },
 				{ "executionCoverage", {
 					{ "deviceContext", "immediate-only" },
 					{ "typedDeviceContextIdentity", true },
 					{ "commandStreamSequence", true },
 					{ "outputMergerTargets", "immediate-bind-observed" },
+					{ "shaderResourceViews", "all-immediate-stages" },
+					{ "unorderedAccessViews", "compute-and-output-merger" },
+					{ "resourceFlow", "copy-and-resolve" },
 					{ "vrEyeAttribution", false },
 					{ "deferredContexts", false },
 					{ "commandLists", false },
@@ -189,6 +194,7 @@ namespace
 					{ "maximumScopeDepth", CSX::RenderMap::kMaximumScopeDepth }, { "maximumEventPage", 500 },
 					{ "maximumShaderObservations", kMaximumShaderObservations },
 					{ "maximumStageShaderObservations", kMaximumStageShaderObservations },
+					{ "maximumResourceObservations", kMaximumResourceObservations },
 					{ "maximumTargetViewObservations", kMaximumTargetViewObservations },
 					{ "maximumTargetBindingObservations", kMaximumTargetBindingObservations },
 				} },
@@ -213,6 +219,7 @@ namespace
 			const auto maxScopeDepth = a_args.value("maxScopeDepth", 8u);
 			const auto maxShaderObservations = a_args.value("maxShaderObservations", 1024u);
 			const auto maxStageShaderObservations = a_args.value("maxStageShaderObservations", 4096u);
+			const auto maxResourceObservations = a_args.value("maxResourceObservations", 4096u);
 			const auto maxTargetViewObservations = a_args.value("maxTargetViewObservations", 4096u);
 			const auto maxTargetBindingObservations = a_args.value("maxTargetBindingObservations", 4096u);
 			if (maxFrames == 0 || maxFrames > kMaximumFrames || maxDurationMs == 0 || maxDurationMs > kMaximumDurationMs ||
@@ -220,6 +227,7 @@ namespace
 				maxBytes > kMaximumBytes || maxScopeDepth == 0 || maxScopeDepth > CSX::RenderMap::kMaximumScopeDepth ||
 				maxShaderObservations == 0 || maxShaderObservations > kMaximumShaderObservations ||
 				maxStageShaderObservations == 0 || maxStageShaderObservations > kMaximumStageShaderObservations ||
+				maxResourceObservations == 0 || maxResourceObservations > kMaximumResourceObservations ||
 				maxTargetViewObservations == 0 || maxTargetViewObservations > kMaximumTargetViewObservations ||
 				maxTargetBindingObservations == 0 || maxTargetBindingObservations > kMaximumTargetBindingObservations) {
 				return Foundation().MakeError(a_args, "invalid_bounds", "capture bounds exceed the advertised limits", "validation", false);
@@ -234,6 +242,7 @@ namespace
 				.maxScopeDepth = static_cast<std::uint8_t>(maxScopeDepth),
 				.maxShaderObservations = maxShaderObservations,
 				.maxStageShaderObservations = maxStageShaderObservations,
+				.maxResourceObservations = maxResourceObservations,
 				.maxTargetViewObservations = maxTargetViewObservations,
 				.maxTargetBindingObservations = maxTargetBindingObservations,
 			}, descriptor);
@@ -356,6 +365,7 @@ namespace CSX::RenderMap::DevBenchBridge
 				"maxBytes":{"type":"integer","minimum":1,"maximum":33554432},"maxScopeDepth":{"type":"integer","minimum":1,"maximum":32},
 				"maxShaderObservations":{"type":"integer","minimum":1,"maximum":8192},
 				"maxStageShaderObservations":{"type":"integer","minimum":1,"maximum":32768},
+				"maxResourceObservations":{"type":"integer","minimum":1,"maximum":32768},
 				"maxTargetViewObservations":{"type":"integer","minimum":1,"maximum":32768},
 				"maxTargetBindingObservations":{"type":"integer","minimum":1,"maximum":32768},
 				"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}

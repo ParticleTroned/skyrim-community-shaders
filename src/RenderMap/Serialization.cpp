@@ -22,7 +22,8 @@ namespace CSX::RenderMap
 				"render-target-bind", "depth-source-ready", "visibility-candidate", "visibility-result-ready",
 				"visibility-consumed", "cull-decision", "draw", "dispatch", "finish-command-list",
 				"execute-command-list", "shader-observed", "stage-shader-observed", "technique-resolved",
-				"device-context-observed", "target-view-observed",
+				"device-context-observed", "target-view-observed", "resource-observed",
+				"resource-view-bind", "resource-flow",
 			};
 			const auto index = static_cast<std::size_t>(a_kind);
 			return index < names.size() ? names[index] : "gap";
@@ -143,7 +144,42 @@ namespace CSX::RenderMap
 
 		const char* TargetViewKindName(TargetViewKind a_kind) noexcept
 		{
-			return a_kind == TargetViewKind::kDepthTarget ? "depth-target" : "render-target";
+			switch (a_kind) {
+			case TargetViewKind::kDepthTarget: return "depth-target";
+			case TargetViewKind::kShaderResource: return "shader-resource-view";
+			case TargetViewKind::kUnorderedAccess: return "unordered-access-view";
+			default: return "render-target";
+			}
+		}
+
+		const char* ResourceDimensionName(ResourceDimension a_dimension) noexcept
+		{
+			switch (a_dimension) {
+			case ResourceDimension::kBuffer: return "buffer";
+			case ResourceDimension::kTexture1D: return "texture-1d";
+			case ResourceDimension::kTexture2D: return "texture-2d";
+			case ResourceDimension::kTexture3D: return "texture-3d";
+			default: return "unknown";
+			}
+		}
+
+		const char* ResourceStageName(ResourceStage a_stage) noexcept
+		{
+			switch (a_stage) {
+			case ResourceStage::kHull: return "hull";
+			case ResourceStage::kDomain: return "domain";
+			case ResourceStage::kGeometry: return "geometry";
+			case ResourceStage::kPixel: return "pixel";
+			case ResourceStage::kCompute: return "compute";
+			case ResourceStage::kOutputMerger: return "output-merger";
+			default: return "vertex";
+			}
+		}
+
+		json ResourceObservationId(std::uint64_t a_observationId, std::uint64_t a_generation)
+		{
+			return a_observationId == 0 ? json(nullptr) :
+				json(std::format("obs-resource-{}-g{}", a_observationId, a_generation));
 		}
 
 		json TargetViewObservationId(
@@ -201,6 +237,20 @@ namespace CSX::RenderMap
 					return a_record.observationId == a_observationId;
 				});
 			return found == a_snapshot->targetViewObservations.end() ? nullptr : std::addressof(*found);
+		}
+
+		const ResourceObservationRecord* FindResourceObservation(
+			const CaptureSnapshot* a_snapshot,
+			std::uint64_t a_observationId) noexcept
+		{
+			if (!a_snapshot || a_observationId == 0)
+				return nullptr;
+			const auto found = std::find_if(
+				a_snapshot->resourceObservations.begin(), a_snapshot->resourceObservations.end(),
+				[&](const ResourceObservationRecord& a_record) {
+					return a_record.observationId == a_observationId;
+				});
+			return found == a_snapshot->resourceObservations.end() ? nullptr : std::addressof(*found);
 		}
 
 		const TargetBindingObservationRecord* FindTargetBindingObservation(
@@ -461,12 +511,48 @@ namespace CSX::RenderMap
 			}
 			case PayloadSchema::kTargetViewObservation: {
 				const auto kind = static_cast<TargetViewKind>(a_event.payload.words[3]);
-				return json::array({ {
+				json refs = json::array({ {
 					{ "id", TargetViewObservationId(kind, a_event.payload.words[0], a_event.sessionGeneration) },
 					{ "kind", TargetViewKindName(kind) },
 					{ "role", "first-observed" },
 					{ "pointerEvidence", PointerEvidence(a_event.payload.words[1]) },
 				} });
+				if (a_event.payload.words[4] != 0) {
+					refs.push_back({
+						{ "id", ResourceObservationId(a_event.payload.words[4], a_event.sessionGeneration) },
+						{ "kind", "resource" }, { "role", "view-resource" }, { "pointerEvidence", nullptr },
+					});
+				}
+				return refs;
+			}
+			case PayloadSchema::kResourceObservation:
+				return json::array({ {
+					{ "id", ResourceObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", "resource" }, { "role", "first-observed" },
+					{ "pointerEvidence", PointerEvidence(a_event.payload.words[1]) },
+				} });
+			case PayloadSchema::kResourceViewBinding: {
+				if (a_event.payload.words[0] == 0)
+					return json::array();
+				const auto kind = static_cast<ResourceBindingKind>(a_event.payload.words[1]) == ResourceBindingKind::kShaderResource ?
+					TargetViewKind::kShaderResource : TargetViewKind::kUnorderedAccess;
+				return json::array({ {
+					{ "id", TargetViewObservationId(kind, a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", TargetViewKindName(kind) }, { "role", "bound-view" }, { "pointerEvidence", nullptr },
+				} });
+			}
+			case PayloadSchema::kResourceFlow: {
+				json refs = json::array();
+				for (const auto [word, roleName] : std::array{
+					std::pair{ std::size_t{ 1 }, "source" }, std::pair{ std::size_t{ 2 }, "destination" } }) {
+					if (a_event.payload.words[word] != 0) {
+						refs.push_back({
+							{ "id", ResourceObservationId(a_event.payload.words[word], a_event.sessionGeneration) },
+							{ "kind", "resource" }, { "role", roleName }, { "pointerEvidence", nullptr },
+						});
+					}
+				}
+				return refs;
 			}
 			case PayloadSchema::kTargetBinding: {
 				json refs = json::array();
@@ -641,6 +727,65 @@ namespace CSX::RenderMap
 					{ "d3dObjectPointer", PointerEvidence(
 						observation ? observation->pointerEvidence : a_payload.words[1]) },
 					{ "pointerGeneration", observation ? observation->pointerGeneration : a_payload.words[2] },
+					{ "resourceObservationId", ResourceObservationId(
+						observation ? observation->resourceObservationId : a_payload.words[4], a_generation) },
+					{ "format", observation ? observation->format : 0 },
+					{ "viewDimension", observation ? observation->dimension : 0 },
+					{ "subresources", {
+						{ "mipSliceOrFirstMip", observation ? observation->mipSlice : 0 },
+						{ "firstArraySlice", observation ? observation->firstArraySlice : 0 },
+						{ "arraySizeOrMipCount", observation ? observation->arraySize : 0 },
+						{ "firstElement", observation ? observation->firstElement : 0 },
+						{ "elementCountOrArraySize", observation ? observation->elementCount : 0 },
+					} },
+					{ "flags", observation ? observation->flags : 0 },
+				};
+			}
+			case PayloadSchema::kResourceObservation: {
+				const auto* observation = FindResourceObservation(a_snapshot, a_payload.words[0]);
+				return {
+					{ "schema", "resource-observation-v1" },
+					{ "resourceObservationId", ResourceObservationId(a_payload.words[0], a_generation) },
+					{ "d3dObjectPointer", PointerEvidence(observation ? observation->d3dObject : a_payload.words[1]) },
+					{ "pointerGeneration", observation ? observation->pointerGeneration : a_payload.words[2] },
+					{ "dimension", ResourceDimensionName(observation ? observation->dimension :
+						static_cast<ResourceDimension>(a_payload.words[3])) },
+					{ "widthOrBytes", observation ? observation->widthOrBytes : 0 },
+					{ "height", observation ? observation->height : 0 },
+					{ "depthOrArraySize", observation ? observation->depthOrArraySize : 0 },
+					{ "mipLevels", observation ? observation->mipLevels : 0 },
+					{ "format", observation ? observation->format : 0 },
+					{ "sampleCount", observation ? observation->sampleCount : 0 },
+					{ "sampleQuality", observation ? observation->sampleQuality : 0 },
+					{ "usage", observation ? observation->usage : 0 },
+					{ "bindFlags", observation ? observation->bindFlags : 0 },
+					{ "cpuAccessFlags", observation ? observation->cpuAccessFlags : 0 },
+					{ "miscFlags", observation ? observation->miscFlags : 0 },
+					{ "structureByteStride", observation ? observation->structureByteStride : 0 },
+				};
+			}
+			case PayloadSchema::kResourceViewBinding: {
+				const auto bindingKind = static_cast<ResourceBindingKind>(a_payload.words[1]);
+				const auto viewKind = bindingKind == ResourceBindingKind::kShaderResource ?
+					TargetViewKind::kShaderResource : TargetViewKind::kUnorderedAccess;
+				return {
+					{ "schema", "resource-view-binding-v1" },
+					{ "viewObservationId", TargetViewObservationId(viewKind, a_payload.words[0], a_generation) },
+					{ "bindingKind", bindingKind == ResourceBindingKind::kShaderResource ? "shader-resource" : "unordered-access" },
+					{ "stage", ResourceStageName(static_cast<ResourceStage>(a_payload.words[2])) },
+					{ "slot", a_payload.words[3] },
+				};
+			}
+			case PayloadSchema::kResourceFlow: {
+				const auto operation = static_cast<ResourceFlowOperation>(a_payload.words[0]);
+				const char* name = operation == ResourceFlowOperation::kCopyResource ? "copy-resource" :
+					(operation == ResourceFlowOperation::kCopySubresourceRegion ? "copy-subresource-region" : "resolve-subresource");
+				return {
+					{ "schema", "resource-flow-v1" }, { "operation", name },
+					{ "sourceResourceObservationId", ResourceObservationId(a_payload.words[1], a_generation) },
+					{ "destinationResourceObservationId", ResourceObservationId(a_payload.words[2], a_generation) },
+					{ "sourceSubresource", a_payload.words[3] },
+					{ "destinationSubresource", a_payload.words[4] },
 				};
 			}
 			case PayloadSchema::kTargetBinding:
@@ -666,6 +811,7 @@ namespace CSX::RenderMap
 			{ "maxScopeDepth", a_config.maxScopeDepth },
 			{ "maxShaderObservations", a_config.maxShaderObservations },
 			{ "maxStageShaderObservations", a_config.maxStageShaderObservations },
+			{ "maxResourceObservations", a_config.maxResourceObservations },
 			{ "maxTargetViewObservations", a_config.maxTargetViewObservations },
 			{ "maxTargetBindingObservations", a_config.maxTargetBindingObservations },
 			{ "pointerPolicy", "retain" },
@@ -697,6 +843,7 @@ namespace CSX::RenderMap
 			snapshot.statistics.droppedEventLimit + snapshot.statistics.droppedByteLimit;
 		const auto structurallyTruncated = snapshot.statistics.droppedShaderObservations != 0 ||
 			snapshot.statistics.droppedStageShaderObservations != 0 ||
+			snapshot.statistics.droppedResourceObservations != 0 ||
 			snapshot.statistics.droppedTargetViewObservations != 0 ||
 			snapshot.statistics.droppedTargetBindingObservations != 0;
 		return {
@@ -723,6 +870,8 @@ namespace CSX::RenderMap
 				{ "droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
 				{ "stageShaderObservationCount", snapshot.stageShaderObservations.size() },
 				{ "droppedStageShaderObservationCount", snapshot.statistics.droppedStageShaderObservations },
+				{ "resourceObservationCount", snapshot.resourceObservations.size() },
+				{ "droppedResourceObservationCount", snapshot.statistics.droppedResourceObservations },
 				{ "targetViewObservationCount", snapshot.targetViewObservations.size() },
 				{ "droppedTargetViewObservationCount", snapshot.statistics.droppedTargetViewObservations },
 				{ "targetBindingObservationCount", snapshot.targetBindingObservations.size() },

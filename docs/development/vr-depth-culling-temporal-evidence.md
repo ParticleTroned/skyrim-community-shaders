@@ -87,19 +87,26 @@ Adversarial review validation on `9daec10c7`:
 
 -   The focused temporal-policy target rebuilt and passed.
 -   All 27 controller tests rebuilt and passed.
--   The full Release compilation processed the changed VR, temporal-culling,
-    and DevBench translation units without diagnostics, then failed in the
-    unchanged `ShaderCache.cpp` at line 3174 because warning C4458 is treated as
-    an error. `enableRequested` on current `main-VR` shadows the existing class
-    member of the same name. That unrelated base issue was not folded into this
-    PR.
+-   The full Release build passed after the local `enableRequested` value in
+    `ShaderCache::ServicePendingDisable` was renamed to avoid shadowing its
+    member. The built `CommunityShaders.dll` and PDB were staged by the normal
+    post-build AIO-package step; no Skyrim or MO2 deployment was performed.
+
+Final review additionally made temporal recovery inactive while native depth
+culling is off. Re-enabling culling requires one new producer pose before
+Balanced recovery resumes, so no pose from a previous enabled interval can be
+used for the new result stream.
+
+The closing review rebuilt `controller_tests` and reran all 27 controller
+tests successfully. Pinned Prettier checks and pinned clang-format dry-run
+checks on the final changed C++ ranges passed, as did `git diff --check`.
+Running the full-file clang-format hook would rewrite pre-existing formatting
+outside this PR, so those unrelated rewrites were not applied.
 
 Not run:
 
--   The candidate DLL was not deployed to the user's AIO.
 -   No post-change headset visual or frame-time A/B was run.
--   A linked Release DLL was not produced by the post-review full build because
-    of the current-head `ShaderCache.cpp` warning described above.
+-   No archive was created or deployed to Skyrim/MO2.
 -   Shader tests were disabled because this change has no HLSL surface. An
     earlier configure attempt with shader tests enabled also encountered local
     ShaderTestFramework/NuGet SSL setup errors before generation completed.

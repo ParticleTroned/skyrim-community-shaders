@@ -39,6 +39,9 @@ namespace VRDepthCullingTemporal
 		// Both hooks execute in order on the render-depth thread.
 		ProducerPose g_producerPose{};
 		std::atomic_bool g_installed{ false };
+		std::atomic_bool g_cullingEnabled{ false };
+		std::atomic_uint64_t g_cullingEpoch{ 1 };
+		std::atomic_uint64_t g_producerPoseEpoch{ 0 };
 		std::atomic_bool g_performanceMode{ false };
 		std::atomic_uint64_t g_envelopeMisses{ 0 };
 		std::atomic_uint64_t g_totalPromoted{ 0 };
@@ -76,21 +79,35 @@ namespace VRDepthCullingTemporal
 
 		void CaptureProducerPose()
 		{
+			if (!g_cullingEnabled.load(std::memory_order_acquire))
+				return;
+			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
+
 			// Keep the pose warm so switching from Performance to Balanced is valid immediately.
 			const auto* camera = RE::Main::WorldRootCamera();
 			if (!camera) {
 				g_producerPose.valid = false;
+				g_producerPoseEpoch.store(0, std::memory_order_release);
 				return;
 			}
 
 			g_producerPose.rotation = camera->world.rotate;
 			g_producerPose.translation = camera->world.translate;
 			g_producerPose.valid = true;
+			if (g_cullingEnabled.load(std::memory_order_acquire) &&
+				g_cullingEpoch.load(std::memory_order_acquire) == cullingEpoch) {
+				g_producerPoseEpoch.store(cullingEpoch, std::memory_order_release);
+			}
 		}
 
 		void RecoverHighRiskObjects(void* a_culler)
 		{
-			if (g_performanceMode.load(std::memory_order_acquire))
+			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
+			if (!g_cullingEnabled.load(std::memory_order_acquire) ||
+				g_performanceMode.load(std::memory_order_acquire)) {
+				return;
+			}
+			if (g_producerPoseEpoch.load(std::memory_order_acquire) != cullingEpoch)
 				return;
 
 			auto* camera = RE::Main::WorldRootCamera();
@@ -227,6 +244,16 @@ namespace VRDepthCullingTemporal
 		g_performanceMode.store(a_enabled, std::memory_order_release);
 	}
 
+	void SetCullingEnabled(bool a_enabled)
+	{
+		const bool wasEnabled = g_cullingEnabled.load(std::memory_order_acquire);
+		if (wasEnabled == a_enabled)
+			return;
+
+		g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
+		g_cullingEnabled.store(a_enabled, std::memory_order_release);
+	}
+
 	bool IsPerformanceMode()
 	{
 		return g_performanceMode.load(std::memory_order_acquire);
@@ -236,6 +263,7 @@ namespace VRDepthCullingTemporal
 	{
 		return {
 			.installed = g_installed.load(std::memory_order_acquire),
+			.cullingEnabled = g_cullingEnabled.load(std::memory_order_acquire),
 			.performanceMode = IsPerformanceMode(),
 			.envelopeMisses = g_envelopeMisses.load(std::memory_order_relaxed),
 			.totalPromoted = g_totalPromoted.load(std::memory_order_relaxed),

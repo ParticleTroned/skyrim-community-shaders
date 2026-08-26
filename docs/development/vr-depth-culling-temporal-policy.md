@@ -19,6 +19,14 @@ CSX keeps the native asynchronous readback and provides two policies:
     missing-object artifact during head motion. Producer-pose capture remains
     active so an in-game switch back to Balanced has a valid prior-frame pose.
 
+When native depth culling is disabled, both temporal hooks return before pose
+capture, camera lookup, motion analysis, OBB scanning, or result mutation. The
+DevBench status reports that effective state separately from the saved exterior
+and interior preferences, so an A/B run can prove that culling was active.
+After culling is enabled, Balanced waits for one new producer pose before it
+considers recovery; that transition frame accepts the native result rather than
+comparing it with a pose from an earlier enabled interval.
+
 The recovery uses the OBB data already owned by the engine. It does not add a
 GPU readback or replace the native occlusion shader. The fixed promotion budget
 bounds the number of extra objects rendered; their individual draw cost still

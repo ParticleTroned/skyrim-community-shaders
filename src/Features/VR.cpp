@@ -4117,6 +4117,7 @@ void VR::UpdateDepthBufferCulling()
 
 	const bool previous = *gDepthBufferCulling;
 	*gDepthBufferCulling = desired;
+	VRDepthCullingTemporal::SetCullingEnabled(desired);
 
 	if (previous != desired) {
 		logger::info("VR depth buffer culling set to {}", desired);

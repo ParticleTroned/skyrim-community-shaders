@@ -164,6 +164,7 @@ namespace
 		const auto fixedWorldPosition = vr.fixedWorldOverlayPosition.m.Translation();
 		const json depthCullingTemporalStatus = {
 			{ "installed", depthCullingTemporal.installed },
+			{ "cullingEnabled", depthCullingTemporal.cullingEnabled },
 			{ "policy", depthCullingTemporal.performanceMode ? "performance" : "balanced" },
 			{ "envelopeMisses", depthCullingTemporal.envelopeMisses },
 			{ "totalPromoted", depthCullingTemporal.totalPromoted },

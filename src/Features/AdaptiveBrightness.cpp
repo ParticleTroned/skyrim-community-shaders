@@ -121,6 +121,11 @@ namespace
 	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBrightness_LocationOverrides";
 	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBrightness_Full";
 
+	bool IsWorldspaceOverride(const AdaptiveBrightness::LocationOverride* a_locationOverride)
+	{
+		return a_locationOverride && a_locationOverride->type == kOverrideTypeWorldspace;
+	}
+
 	enum class PresetKind
 	{
 		Global,
@@ -1164,7 +1169,7 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Worldspace, location, and cell overrides are managed under Locations.");
+			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. The current worldspace profile appears alongside the base profiles; all saved scopes can also be managed under Locations.");
 			if (!settings.enabled)
 				ImGui::TextDisabled("Adaptive profile switching is off. Saved profile values can still be reviewed.");
 
@@ -1173,14 +1178,20 @@ void AdaptiveBrightness::DrawSettings()
 			ImGui::EndDisabled();
 
 			const auto profileTabToSelect = SyncSelectedProfileTabToContext(ProfileTabSurface::Advanced);
+			const bool selectActiveWorldspaceTab = profileTabToSelect && IsWorldspaceOverride(GetActiveLocationOverride());
 			if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
 				for (auto profile : kProfileOrder) {
 					const ImGuiTabItemFlags tabFlags =
-						profileTabToSelect && *profileTabToSelect == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+						!selectActiveWorldspaceTab && profileTabToSelect && *profileTabToSelect == profile ?
+							ImGuiTabItemFlags_SetSelected :
+							ImGuiTabItemFlags_None;
 					if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
 						DrawProfile(profile, settings.enabled);
 						ImGui::EndTabItem();
 					}
+
+					if (profile == Profile::Interior)
+						DrawCurrentWorldspaceProfileTab(true, settings.enabled, selectActiveWorldspaceTab);
 				}
 				ImGui::EndTabBar();
 			}
@@ -1230,10 +1241,13 @@ void AdaptiveBrightness::DrawEssentialSettings()
 	ImGui::EndDisabled();
 
 	const auto profileTabToSelect = SyncSelectedProfileTabToContext(ProfileTabSurface::Essentials);
+	const bool selectActiveWorldspaceTab = profileTabToSelect && IsWorldspaceOverride(GetActiveLocationOverride());
 	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfilesEssentials", ImGuiTabBarFlags_None)) {
 		for (auto profile : kProfileOrder) {
 			const ImGuiTabItemFlags tabFlags =
-				profileTabToSelect && *profileTabToSelect == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+				!selectActiveWorldspaceTab && profileTabToSelect && *profileTabToSelect == profile ?
+					ImGuiTabItemFlags_SetSelected :
+					ImGuiTabItemFlags_None;
 			if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
 				auto& profileSettings = settings.profiles[ProfileIndex(profile)];
 				ImGui::PushID(static_cast<int>(ProfileIndex(profile)));
@@ -1241,6 +1255,9 @@ void AdaptiveBrightness::DrawEssentialSettings()
 				ImGui::PopID();
 				ImGui::EndTabItem();
 			}
+
+			if (profile == Profile::Interior)
+				DrawCurrentWorldspaceProfileTab(false, settings.enabled, selectActiveWorldspaceTab);
 		}
 		ImGui::EndTabBar();
 	}
@@ -1314,9 +1331,23 @@ std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfi
 
 	const auto currentProfile = GetCurrentProfileForUI();
 	std::string currentProfileTabSyncKey = std::to_string(static_cast<uint32_t>(currentProfile));
-	if (const auto* activeOverride = GetActiveLocationOverride()) {
+	const auto* activeOverride = GetActiveLocationOverride();
+	if (activeOverride) {
 		currentProfileTabSyncKey += ':';
 		currentProfileTabSyncKey += activeOverride->key;
+	}
+	const auto* worldspaceOverride = GetActiveWorldspaceOverride();
+	if (worldspaceOverride && (!activeOverride || worldspaceOverride->key != activeOverride->key)) {
+		currentProfileTabSyncKey += ":worldspace:";
+		currentProfileTabSyncKey += worldspaceOverride->key;
+	}
+	const auto forms = GetCurrentLocationForms();
+	if (forms.worldspace) {
+		const auto currentWorldspaceKey = Util::GetFormFileKey(forms.worldspace);
+		if (IsValidFormKey(currentWorldspaceKey)) {
+			currentProfileTabSyncKey += ":current-worldspace:";
+			currentProfileTabSyncKey += currentWorldspaceKey;
+		}
 	}
 
 	auto& syncState = profileTabSyncStates[static_cast<std::size_t>(a_surface)];
@@ -1351,8 +1382,9 @@ std::optional<AdaptiveBrightness::ContextSection> AdaptiveBrightness::SyncContex
 	contextSectionSyncInitialized = true;
 	if (activeOverride) {
 		selectedLocationOverrideKey = activeOverride->key;
-		return ContextSection::Locations;
+		return IsWorldspaceOverride(activeOverride) ? ContextSection::Profiles : ContextSection::Locations;
 	}
+
 	return ContextSection::Profiles;
 }
 
@@ -1384,6 +1416,99 @@ void AdaptiveBrightness::DrawProfile(Profile a_profile, bool a_allowEdits)
 	ImGui::PushID(static_cast<int>(ProfileIndex(a_profile)));
 	DrawProfileSettings(profile, "Profile Values", true, a_allowEdits);
 	ImGui::PopID();
+}
+
+void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
+	LocationOverride& a_locationOverride,
+	const char* a_sectionTitle,
+	bool a_showAdvancedControls,
+	bool a_allowEdits,
+	const char* a_saveLabel,
+	bool a_closeWhenFinished)
+{
+	ImGui::PushID(a_locationOverride.key.c_str());
+	if (a_allowEdits) {
+		if (auto* editProfile = GetLocationOverrideEditProfile(a_locationOverride)) {
+			DrawProfileSettings(*editProfile, a_sectionTitle, a_showAdvancedControls, true);
+
+			const bool saveEdit = ImGui::Button(a_saveLabel);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Apply these profile values to the current settings. Use the main Save button to persist them.");
+			ImGui::SameLine();
+			const bool cancelEdit = ImGui::Button("Cancel");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Discard unsaved edits to this profile.");
+
+			if (saveEdit)
+				a_locationOverride.profile = *editProfile;
+			if (saveEdit || cancelEdit) {
+				if (a_closeWhenFinished)
+					ClearLocationOverrideSelection();
+				else
+					ResetLocationOverrideEdit();
+			}
+		}
+	} else {
+		auto viewProfile = a_locationOverride.profile;
+		DrawProfileSettings(viewProfile, a_sectionTitle, a_showAdvancedControls, false);
+		if (a_closeWhenFinished && ImGui::Button("Close"))
+			ClearLocationOverrideSelection();
+	}
+	ImGui::PopID();
+}
+
+void AdaptiveBrightness::DrawCurrentWorldspaceProfileTab(bool a_showAdvancedControls, bool a_allowEdits, bool a_select)
+{
+	const auto targets = GetCurrentLocationOverrideTargets();
+	if (!targets.worldspace)
+		return;
+
+	auto* worldspaceProfile = FindLocationOverride(targets.worldspace->key);
+	if (!IsWorldspaceOverride(worldspaceProfile))
+		worldspaceProfile = nullptr;
+	const auto* inheritedWorldspaceProfile = worldspaceProfile ? nullptr : GetActiveWorldspaceOverride();
+
+	const auto tabLabel = std::format("{}###AdaptiveBalanceWorldspaceProfile_{}", targets.worldspace->name, targets.worldspace->key);
+	const ImGuiTabItemFlags tabFlags = a_select ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+	const bool drawTab = ImGui::BeginTabItem(tabLabel.c_str(), nullptr, tabFlags);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		if (worldspaceProfile) {
+			ImGui::Text("Worldspace profile: %s", worldspaceProfile->name.c_str());
+			ImGui::Text("Initialized from its inherited base profile when created, then edited independently.");
+			ImGui::Text("Included in Full and Overrides exports.");
+		} else if (inheritedWorldspaceProfile) {
+			ImGui::Text("Currently inherits the parent worldspace profile %s.", inheritedWorldspaceProfile->name.c_str());
+			ImGui::Text("Create a profile to tune %s independently.", targets.worldspace->name.c_str());
+		} else {
+			ImGui::Text("Create a profile for %s from its currently inherited exterior profile.", targets.worldspace->name.c_str());
+		}
+	}
+	if (!drawTab)
+		return;
+
+	if (!worldspaceProfile) {
+		if (inheritedWorldspaceProfile) {
+			ImGui::TextWrapped("%s currently inherits the saved parent worldspace profile %s. Create a profile here to fork those values and tune Lighting, Bloom, and Water independently.", targets.worldspace->name.c_str(), inheritedWorldspaceProfile->name.c_str());
+		} else {
+			ImGui::TextWrapped("%s currently inherits the %s base profile. Create a profile here to fork those values and tune Lighting, Bloom, and Water independently.", targets.worldspace->name.c_str(), GetProfileName(targets.worldspace->defaultProfile));
+		}
+		ImGui::BeginDisabled(!a_allowEdits);
+		if (ImGui::Button("Create Worldspace Profile"))
+			SaveCurrentLocationOverride(*targets.worldspace);
+		ImGui::EndDisabled();
+		ImGui::EndTabItem();
+		return;
+	}
+
+	ImGui::TextWrapped("Worldspace profile for %s.", worldspaceProfile->name.c_str());
+	DrawLocationOverrideProfileEditor(
+		*worldspaceProfile,
+		"Profile Values",
+		a_showAdvancedControls,
+		a_allowEdits,
+		"Save Worldspace Profile",
+		false);
+	ImGui::EndTabItem();
 }
 
 void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls, bool a_allowEdits)
@@ -1580,7 +1705,7 @@ void AdaptiveBrightness::DrawLocationSummary()
 	if (!targets.worldspace && !targets.location && !targets.cell)
 		ImGui::TextDisabled("No current worldspace, location, or cell form is available.");
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
-	ImGui::TextDisabled("Switch this feature to Advanced to manage location overrides.");
+	ImGui::TextDisabled("Switch this feature to Advanced to manage location and exact-cell overrides.");
 }
 
 void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
@@ -1814,30 +1939,13 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	if (auto* selectedOverride = FindLocationOverride(selectedLocationOverrideKey)) {
 		ImGui::SeparatorText(a_allowEdits ? "Edit Location Override Profile" : "View Location Override Profile");
 		ImGui::TextWrapped("%s (%s, %s)", selectedOverride->name.c_str(), selectedOverride->type.c_str(), selectedOverride->key.c_str());
-		ImGui::PushID(selectedOverride->key.c_str());
-		if (auto* editProfile = GetLocationOverrideEditProfile(*selectedOverride)) {
-			DrawProfileSettings(*editProfile, "Override Profile Values", a_showAdvancedControls, a_allowEdits);
-			if (a_allowEdits && ImGui::Button("Save Edit")) {
-				selectedOverride->profile = *editProfile;
-				ClearLocationOverrideSelection();
-			}
-			if (a_allowEdits) {
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Save these values to the selected override.");
-			}
-			if (a_allowEdits)
-				ImGui::SameLine();
-			if (ImGui::Button(a_allowEdits ? "Cancel" : "Close")) {
-				ClearLocationOverrideSelection();
-			}
-			if (a_allowEdits) {
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Discard changes to the selected override.");
-			} else if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Close the read-only override view.");
-			}
-		}
-		ImGui::PopID();
+		DrawLocationOverrideProfileEditor(
+			*selectedOverride,
+			"Override Profile Values",
+			a_showAdvancedControls,
+			a_allowEdits,
+			"Save Edit",
+			true);
 	} else if (!selectedLocationOverrideKey.empty()) {
 		ClearLocationOverrideSelection();
 	}
@@ -2182,6 +2290,20 @@ const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveLocatio
 	return &settings.locationOverrides[overrideIndex];
 }
 
+const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveWorldspaceOverride() const
+{
+	if (LocationContext::Get().inInterior)
+		return nullptr;
+
+	const auto forms = GetCurrentLocationForms();
+	const auto overrideIndex = ResolveWorldspaceHierarchyOverrideIndex(forms.worldspace);
+	if (overrideIndex == kInvalidLocationOverrideIndex || overrideIndex >= settings.locationOverrides.size())
+		return nullptr;
+
+	const auto& locationOverride = settings.locationOverrides[overrideIndex];
+	return IsWorldspaceOverride(&locationOverride) ? &locationOverride : nullptr;
+}
+
 AdaptiveBrightness::CurrentLocationOverrideTargets AdaptiveBrightness::GetCurrentLocationOverrideTargets() const
 {
 	const auto forms = GetCurrentLocationForms();
@@ -2343,7 +2465,9 @@ std::size_t AdaptiveBrightness::ResolveWorldspaceHierarchyOverrideIndex(const RE
 	std::size_t depth = 0;
 	for (auto* current = a_worldspace; current && depth < kMaxOverrideHierarchyDepth; current = current->parentWorld, ++depth) {
 		const auto resolvedIndex = FindLocationOverrideIndexByForm(current);
-		if (resolvedIndex != kInvalidLocationOverrideIndex)
+		if (resolvedIndex != kInvalidLocationOverrideIndex &&
+			resolvedIndex < settings.locationOverrides.size() &&
+			IsWorldspaceOverride(&settings.locationOverrides[resolvedIndex]))
 			return resolvedIndex;
 	}
 

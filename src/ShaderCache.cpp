@@ -3164,19 +3164,27 @@ namespace SIE
 
 	void ShaderCache::ServicePendingDisable()
 	{
-		auto& upscaling = globals::features::upscaling;
-		const auto action = ShaderCacheDisablePolicy::ResolvePendingDisable({
-			.pendingDisable =
-				pendingDisableAfterVRNativeRestore.load(std::memory_order_acquire),
-			.enableRequested = IsEnableRequested(),
-			.nativeTargetsRestored =
-				upscaling.GetVRRenderScaleModeStatus() ==
-				Upscaling::VRRenderScaleStatus::Disabled,
-		});
-		if (action == ShaderCacheDisablePolicy::PendingDisableAction::None)
+		// Status resolution crosses render-scale controller state; stable frames
+		// must stop at the atomic pending flag.
+		const bool pendingDisable =
+			pendingDisableAfterVRNativeRestore.load(std::memory_order_acquire);
+		if (!pendingDisable)
 			return;
+
+		const bool enableRequested = IsEnableRequested();
+		const auto action = ShaderCacheDisablePolicy::ResolvePendingDisable({
+			.pendingDisable = pendingDisable,
+			.enableRequested = enableRequested,
+			.nativeTargetsRestored = false,
+		});
 		if (action == ShaderCacheDisablePolicy::PendingDisableAction::Cancel) {
 			pendingDisableAfterVRNativeRestore.store(false, std::memory_order_release);
+			return;
+		}
+
+		auto& upscaling = globals::features::upscaling;
+		if (upscaling.GetVRRenderScaleModeStatus() !=
+			Upscaling::VRRenderScaleStatus::Disabled) {
 			return;
 		}
 

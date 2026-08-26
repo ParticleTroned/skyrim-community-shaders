@@ -1844,7 +1844,7 @@ namespace SIE
 			//  - claim the slot with Pending if nobody started yet.
 			auto [claimResult, cachedBlob] = cache.ClaimCompilation(key, a_taskGeneration);
 			if (claimResult == ShaderCache::ClaimResult::CacheHit) {
-				cache.IncCacheHitTasks();
+				cache.IncCacheHitTasks(a_taskGeneration);
 				return cachedBlob;
 			}
 			if (claimResult == ShaderCache::ClaimResult::RejectedStale) {
@@ -1989,7 +1989,7 @@ namespace SIE
 					a_taskGeneration);
 				return nullptr;
 			}
-			cache.IncSourceCompileTasks();
+			cache.IncSourceCompileTasks(a_taskGeneration);
 			logger::debug("Compiling {} {}:{}:{:X} to {}", pathString, magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor, MergeDefinesString(defines));
 
 			// compile shaders — match Utils/D3D.cpp CompileShader flag policy (strictness, optional toggles, validation).
@@ -2007,7 +2007,7 @@ namespace SIE
 
 			// Disk-cache hits return before this point, so latch the phase at the
 			// first real compiler invocation rather than at task completion.
-			cache.MarkCompilationPhaseStarted();
+			cache.MarkCompilationPhaseStarted(a_taskGeneration);
 
 			// Track includes
 			TrackingIncludeHandler includeHandler(std::filesystem::path(path).parent_path());
@@ -4256,17 +4256,17 @@ namespace SIE
 	{
 		return compilationSet.sourceCompileTasks;
 	}
-	void ShaderCache::IncCacheHitTasks()
+	void ShaderCache::IncCacheHitTasks(std::optional<uint64_t> a_taskGeneration)
 	{
-		compilationSet.cacheHitTasks++;
+		compilationSet.IncCacheHit(a_taskGeneration);
 	}
-	void ShaderCache::IncSourceCompileTasks()
+	void ShaderCache::IncSourceCompileTasks(std::optional<uint64_t> a_taskGeneration)
 	{
-		compilationSet.sourceCompileTasks++;
+		compilationSet.IncSourceCompile(a_taskGeneration);
 	}
-	void ShaderCache::MarkCompilationPhaseStarted()
+	void ShaderCache::MarkCompilationPhaseStarted(std::optional<uint64_t> a_taskGeneration)
 	{
-		compilationSet.MarkPhaseStarted();
+		compilationSet.MarkPhaseStarted(a_taskGeneration);
 	}
 
 	bool ShaderCache::IsHideErrors()
@@ -5165,12 +5165,31 @@ namespace SIE
 		conditionVariable.notify_one();
 	}
 
-	void CompilationSet::MarkPhaseStarted()
+	void CompilationSet::IncCacheHit(std::optional<uint64_t> a_taskGeneration)
+	{
+		std::scoped_lock lock(compilationMutex);
+		if (!a_taskGeneration || *a_taskGeneration == generation.load(std::memory_order_relaxed)) {
+			cacheHitTasks.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+
+	void CompilationSet::IncSourceCompile(std::optional<uint64_t> a_taskGeneration)
+	{
+		std::scoped_lock lock(compilationMutex);
+		if (!a_taskGeneration || *a_taskGeneration == generation.load(std::memory_order_relaxed)) {
+			sourceCompileTasks.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+
+	void CompilationSet::MarkPhaseStarted(std::optional<uint64_t> a_taskGeneration)
 	{
 		bool shouldLog = false;
 		uint64_t queuedAtPhaseStart = 0;
 		{
 			std::scoped_lock lock(compilationMutex);
+			if (a_taskGeneration && *a_taskGeneration != generation.load(std::memory_order_relaxed)) {
+				return;
+			}
 
 			// A real compile after a completed batch unambiguously begins a new phase.
 			if (completionTime.load(std::memory_order_relaxed) != 0) {
@@ -5194,6 +5213,12 @@ namespace SIE
 		if (shouldLog) {
 			logger::info("Shader compilation started ({} tasks queued)", queuedAtPhaseStart);
 		}
+	}
+
+	void CompilationSet::BumpGeneration()
+	{
+		std::scoped_lock lock(compilationMutex);
+		generation.fetch_add(1, std::memory_order_release);
 	}
 
 	void CompilationSet::Clear()

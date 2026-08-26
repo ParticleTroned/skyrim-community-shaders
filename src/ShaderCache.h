@@ -314,8 +314,12 @@ namespace SIE
 		/** @brief Frees a dispatch slot and wakes WaitTake(). Call for every
 		 *  dispatched task, including stale-generation and stopped tasks. */
 		void ReleaseDispatchSlot();
-		/** @brief Latches timing and logs when the first real source compile begins. */
-		void MarkPhaseStarted();
+		/** @brief Counts a cache hit if it belongs to the active generation. */
+		void IncCacheHit(std::optional<uint64_t> a_taskGeneration);
+		/** @brief Counts a source compile if it belongs to the active generation. */
+		void IncSourceCompile(std::optional<uint64_t> a_taskGeneration);
+		/** @brief Latches timing when a current-generation source compile begins. */
+		void MarkPhaseStarted(std::optional<uint64_t> a_taskGeneration);
 		/** @brief Returns whether a task still belongs to the active compilation batch. */
 		bool IsCurrentGeneration(const ShaderCompilationTask& task) const
 		{
@@ -323,7 +327,7 @@ namespace SIE
 		}
 		void Clear();
 		/** @brief Invalidates active tasks before cache maps begin clearing. */
-		void BumpGeneration() { generation.fetch_add(1, std::memory_order_release); }
+		void BumpGeneration();
 		bool IsInProgress(size_t a_taskId);
 		void Forget(const std::unordered_set<size_t>& a_taskIds);
 		static std::string GetHumanTime(double a_totalMs);
@@ -632,10 +636,10 @@ namespace SIE
 		uint64_t GetTotalTasks();
 		uint64_t GetDiskHitTasks();
 		uint64_t GetSourceCompileTasks();
-		void IncCacheHitTasks();
-		void IncSourceCompileTasks();
+		void IncCacheHitTasks(std::optional<uint64_t> a_taskGeneration = std::nullopt);
+		void IncSourceCompileTasks(std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		/** @brief Marks the start of a real source compilation. */
-		void MarkCompilationPhaseStarted();
+		void MarkCompilationPhaseStarted(std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);

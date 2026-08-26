@@ -1101,14 +1101,24 @@ namespace
 		return a_lhs < a_rhs ? -1 : 1;
 	}
 
+	const RE::TESObjectCELL* GetCurrentPlayerCell(const RE::PlayerCharacter* a_player)
+	{
+		return a_player ? a_player->GetParentCell() : nullptr;
+	}
+
 	CurrentLocationForms GetCurrentLocationForms()
 	{
 		const auto* player = RE::PlayerCharacter::GetSingleton();
-		const auto* cell = player ? player->parentCell : nullptr;
-		const auto* worldspace = player ? player->GetWorldspace() : nullptr;
-		auto* location = player ? player->GetCurrentLocation() : nullptr;
+		const auto* cell = GetCurrentPlayerCell(player);
+		if (!cell)
+			return {};
+
+		// Worldspace lookup may consult incomplete save-parent state during cell
+		// transitions, so derive it from the validated parent cell instead.
+		const auto* worldspace = cell->IsExteriorCell() ? cell->GetRuntimeData().worldSpace : nullptr;
+		auto* location = player->GetCurrentLocation();
 		if (!location)
-			location = cell ? cell->GetLocation() : nullptr;
+			location = cell->GetLocation();
 
 		return {
 			.worldspace = worldspace,
@@ -1297,6 +1307,11 @@ const char* AdaptiveBrightness::GetProfileName(Profile a_profile)
 
 std::optional<AdaptiveBrightness::Profile> AdaptiveBrightness::SyncSelectedProfileTabToContext(ProfileTabSurface a_surface)
 {
+	if (!GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton())) {
+		profileTabSyncStates[static_cast<std::size_t>(a_surface)] = {};
+		return std::nullopt;
+	}
+
 	const auto currentProfile = GetCurrentProfileForUI();
 	std::string currentProfileTabSyncKey = std::to_string(static_cast<uint32_t>(currentProfile));
 	if (const auto* activeOverride = GetActiveLocationOverride()) {
@@ -1539,15 +1554,19 @@ void AdaptiveBrightness::DrawLocationSummary()
 	ImGui::SeparatorText("Location Overrides");
 	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* activeOverride = GetActiveLocationOverride();
-	const auto currentProfile = GetCurrentProfileForUI();
+	std::optional<Profile> currentProfile;
+	if (GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton()))
+		currentProfile = GetCurrentProfileForUI();
 
-	if (activeOverride) {
+	if (activeOverride && currentProfile) {
 		ImGui::TextWrapped(
 			"Current location uses saved override \"%s\" (%s).",
 			activeOverride->name.c_str(),
 			activeOverride->type.c_str());
+	} else if (currentProfile) {
+		ImGui::TextWrapped("Current location uses the %s base profile.", GetProfileName(*currentProfile));
 	} else {
-		ImGui::TextWrapped("Current location uses the %s base profile.", GetProfileName(currentProfile));
+		ImGui::TextDisabled("Current location context is unavailable while no cell is loaded.");
 	}
 
 	if (targets.worldspace)
@@ -1572,12 +1591,16 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 
 	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* activeOverride = GetActiveLocationOverride();
-	const auto currentProfile = GetCurrentProfileForUI();
+	std::optional<Profile> currentProfile;
+	if (GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton()))
+		currentProfile = GetCurrentProfileForUI();
 
-	if (activeOverride) {
-		ImGui::TextWrapped("Using saved override \"%s\" here. Base profile: %s.", activeOverride->name.c_str(), GetProfileName(currentProfile));
+	if (activeOverride && currentProfile) {
+		ImGui::TextWrapped("Using saved override \"%s\" here. Base profile: %s.", activeOverride->name.c_str(), GetProfileName(*currentProfile));
+	} else if (currentProfile) {
+		ImGui::TextWrapped("Using base profile %s here. No saved override matches this place.", GetProfileName(*currentProfile));
 	} else {
-		ImGui::TextWrapped("Using base profile %s here. No saved override matches this place.", GetProfileName(currentProfile));
+		ImGui::TextDisabled("Current location context is unavailable while no cell is loaded.");
 	}
 
 	const auto drawTargetAction = [&](const std::optional<LocationOverrideTarget>& a_target, const char* a_scope, const char* a_description) {
@@ -2122,7 +2145,7 @@ bool AdaptiveBrightness::IsRuntimeEnabled() const
 	if (state && state->IsMainOrLoadingMenuOpen())
 		return false;
 
-	return true;
+	return GetCurrentPlayerCell(RE::PlayerCharacter::GetSingleton()) != nullptr;
 }
 
 AdaptiveBrightness::Profile AdaptiveBrightness::GetInteriorProfile() const
@@ -2160,6 +2183,9 @@ const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveLocatio
 AdaptiveBrightness::CurrentLocationOverrideTargets AdaptiveBrightness::GetCurrentLocationOverrideTargets() const
 {
 	const auto forms = GetCurrentLocationForms();
+	if (!forms.cell)
+		return {};
+
 	const auto currentProfile = GetCurrentProfileForUI();
 	const auto cocCode = GetCellCocCode(forms.cell);
 

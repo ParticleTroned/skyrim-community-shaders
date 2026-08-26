@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <dxgi.h>
 #include <dxgi1_3.h>
 #include <limits>
@@ -12,6 +11,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include <atomic>
+#	include <cstring>
 #	include <mutex>
 #endif
 
@@ -24,8 +24,6 @@
 
 namespace
 {
-	thread_local uint64_t g_dlssInputGenerationContext = 0;
-
 	constexpr UINT NVIDIA_VENDOR_ID = 0x10DE;
 	constexpr uint32_t kDLSSDiagnosticMaxInitialLogs = 12;
 	constexpr uint32_t kDLSSDiagnosticRepeatFrameGap = 300;
@@ -217,52 +215,6 @@ namespace
 		return static_cast<int32_t>(std::lround(scaled));
 	}
 
-	template <std::size_t N, class T>
-	void CopyDLSSCanonicalFloatBits(const T& a_source, std::array<uint32_t, N>& a_target)
-	{
-		static_assert(sizeof(T) == sizeof(a_target));
-		std::memcpy(a_target.data(), &a_source, sizeof(a_source));
-	}
-
-	uint32_t GetDLSSCanonicalFloatBits(float a_value)
-	{
-		uint32_t bits = 0;
-		std::memcpy(&bits, &a_value, sizeof(bits));
-		return bits;
-	}
-
-	DLSSFrameEvaluationPolicy::CanonicalConstants BuildDLSSCanonicalConstants(
-		const sl::Constants& a_constants)
-	{
-		DLSSFrameEvaluationPolicy::CanonicalConstants canonical{};
-		CopyDLSSCanonicalFloatBits(a_constants.cameraViewToClip, canonical.cameraViewToClip);
-		CopyDLSSCanonicalFloatBits(a_constants.clipToCameraView, canonical.clipToCameraView);
-		CopyDLSSCanonicalFloatBits(a_constants.clipToLensClip, canonical.clipToLensClip);
-		CopyDLSSCanonicalFloatBits(a_constants.clipToPrevClip, canonical.clipToPrevClip);
-		CopyDLSSCanonicalFloatBits(a_constants.prevClipToClip, canonical.prevClipToClip);
-		CopyDLSSCanonicalFloatBits(a_constants.jitterOffset, canonical.jitterOffset);
-		CopyDLSSCanonicalFloatBits(a_constants.mvecScale, canonical.motionVectorScale);
-		CopyDLSSCanonicalFloatBits(a_constants.cameraPinholeOffset, canonical.cameraPinholeOffset);
-		CopyDLSSCanonicalFloatBits(a_constants.cameraPos, canonical.cameraPosition);
-		CopyDLSSCanonicalFloatBits(a_constants.cameraUp, canonical.cameraUp);
-		CopyDLSSCanonicalFloatBits(a_constants.cameraRight, canonical.cameraRight);
-		CopyDLSSCanonicalFloatBits(a_constants.cameraFwd, canonical.cameraForward);
-		canonical.cameraNear = GetDLSSCanonicalFloatBits(a_constants.cameraNear);
-		canonical.cameraFar = GetDLSSCanonicalFloatBits(a_constants.cameraFar);
-		canonical.cameraFOV = GetDLSSCanonicalFloatBits(a_constants.cameraFOV);
-		canonical.cameraAspectRatio = GetDLSSCanonicalFloatBits(a_constants.cameraAspectRatio);
-		canonical.motionVectorsInvalidValue = GetDLSSCanonicalFloatBits(a_constants.motionVectorsInvalidValue);
-		canonical.minRelativeLinearDepthObjectSeparation = GetDLSSCanonicalFloatBits(a_constants.minRelativeLinearDepthObjectSeparation);
-		canonical.depthInverted = static_cast<uint8_t>(a_constants.depthInverted);
-		canonical.cameraMotionIncluded = static_cast<uint8_t>(a_constants.cameraMotionIncluded);
-		canonical.motionVectors3D = static_cast<uint8_t>(a_constants.motionVectors3D);
-		canonical.reset = static_cast<uint8_t>(a_constants.reset);
-		canonical.orthographicProjection = static_cast<uint8_t>(a_constants.orthographicProjection);
-		canonical.motionVectorsDilated = static_cast<uint8_t>(a_constants.motionVectorsDilated);
-		canonical.motionVectorsJittered = static_cast<uint8_t>(a_constants.motionVectorsJittered);
-		return canonical;
-	}
-
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	constexpr std::size_t kDLSSDevBenchTraceIdentityCapacity = 32;
 	thread_local uint64_t g_dlssDevBenchCompositorCycleToken = 0;
@@ -438,56 +390,92 @@ namespace
 		return mask;
 	}
 
+	template <std::size_t N, class T>
+	void CopyDLSSDevBenchFloatBits(const T& a_source, std::array<uint32_t, N>& a_target)
+	{
+		static_assert(sizeof(T) == sizeof(a_target));
+		std::memcpy(a_target.data(), &a_source, sizeof(a_source));
+	}
+
+	uint32_t GetDLSSDevBenchFloatBits(float a_value)
+	{
+		uint32_t bits = 0;
+		std::memcpy(&bits, &a_value, sizeof(bits));
+		return bits;
+	}
+
 	Streamline::DLSSDevBenchTraceSignature BuildDLSSDevBenchTraceSignature(
-		const DLSSFrameEvaluationPolicy::EvaluationContract& a_contract,
+		const Streamline::DLSSFrameConstantsCache& a_constants,
 		const Streamline::DLSSDispatchDiagnostics* a_diagnostics,
 		sl::FrameToken* a_frameToken,
-		float a_viewportScaleX,
-		float a_viewportScaleY,
-		float a_pinholeOffsetX,
-		float a_pinholeOffsetY,
-		float a_jitterX,
-		float a_jitterY)
+		const sl::Constants* a_streamlineConstants)
 	{
 		Streamline::DLSSDevBenchTraceSignature signature{};
 		signature.traceSessionID = GetDLSSDevBenchTraceState().activeSessionID.load(std::memory_order_acquire);
-		signature.frame = a_contract.frame;
-		signature.frameToken = a_contract.frameToken;
+		signature.frame = a_constants.frame;
+		signature.frameToken = a_frameToken ? static_cast<uint32_t>(*a_frameToken) : 0u;
 		signature.frameTokenAddress = reinterpret_cast<uint64_t>(a_frameToken);
-		signature.requestedViewport = a_diagnostics ? static_cast<uint32_t>(a_diagnostics->requestedViewport) : a_contract.viewport;
-		signature.resolvedViewport = a_contract.viewport;
-		signature.eyeIndex = a_contract.eyeIndex;
-		signature.viewportRole = a_contract.viewportRole;
-		signature.outputWidth = a_contract.outputWidth;
-		signature.outputHeight = a_contract.outputHeight;
-		signature.qualityMode = a_contract.qualityMode;
-		signature.dlssPreset = a_contract.dlssPreset;
-		signature.extentInLeft = a_contract.extentInLeft;
-		signature.extentInTop = a_contract.extentInTop;
-		signature.extentInWidth = a_contract.extentInWidth;
-		signature.extentInHeight = a_contract.extentInHeight;
-		signature.extentOutLeft = a_contract.extentOutLeft;
-		signature.extentOutTop = a_contract.extentOutTop;
-		signature.extentOutWidth = a_contract.extentOutWidth;
-		signature.extentOutHeight = a_contract.extentOutHeight;
-		signature.viewportScaleXQ = QuantizeDLSSDiagnosticFloat(a_viewportScaleX);
-		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(a_viewportScaleY);
-		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(a_pinholeOffsetX);
-		signature.pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(a_pinholeOffsetY);
-		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(a_jitterX);
-		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(a_jitterY);
+		signature.requestedViewport = a_diagnostics ? static_cast<uint32_t>(a_diagnostics->requestedViewport) : a_constants.viewport;
+		signature.resolvedViewport = a_constants.viewport;
+		signature.eyeIndex = a_constants.eyeIndex;
+		signature.viewportRole = a_constants.viewportRole;
+		signature.outputWidth = a_constants.outputWidth;
+		signature.outputHeight = a_constants.outputHeight;
+		signature.qualityMode = a_constants.qualityMode;
+		signature.dlssPreset = a_constants.dlssPreset;
+		signature.extentInLeft = a_diagnostics ? a_diagnostics->extentIn.left : 0u;
+		signature.extentInTop = a_diagnostics ? a_diagnostics->extentIn.top : 0u;
+		signature.extentInWidth = a_constants.extentInWidth;
+		signature.extentInHeight = a_constants.extentInHeight;
+		signature.extentOutLeft = a_diagnostics ? a_diagnostics->extentOut.left : 0u;
+		signature.extentOutTop = a_diagnostics ? a_diagnostics->extentOut.top : 0u;
+		signature.extentOutWidth = a_constants.extentOutWidth;
+		signature.extentOutHeight = a_constants.extentOutHeight;
+		signature.viewportScaleXQ = a_constants.viewportScaleXQ;
+		signature.viewportScaleYQ = a_constants.viewportScaleYQ;
+		signature.pinholeOffsetXQ = a_constants.pinholeOffsetXQ;
+		signature.pinholeOffsetYQ = a_constants.pinholeOffsetYQ;
+		signature.jitterXQ = a_constants.jitterXQ;
+		signature.jitterYQ = a_constants.jitterYQ;
+		signature.historyResetRequested = a_constants.historyResetRequested;
 		if (a_diagnostics) {
+			signature.colorBuffersHDR = a_diagnostics->colorBuffersHDR;
 			signature.submitStageVRDLSS = a_diagnostics->submitStageVRDLSS;
+			signature.colorIn = reinterpret_cast<uint64_t>(a_diagnostics->colorIn);
+			signature.colorOut = reinterpret_cast<uint64_t>(a_diagnostics->colorOut);
+			signature.depth = reinterpret_cast<uint64_t>(a_diagnostics->depth);
+			signature.motionVectors = reinterpret_cast<uint64_t>(a_diagnostics->motionVectors);
+			signature.reactiveMask = reinterpret_cast<uint64_t>(a_diagnostics->reactiveMask);
+			signature.transparencyMask = reinterpret_cast<uint64_t>(a_diagnostics->transparencyMask);
 		}
-		signature.historyResetRequested = a_contract.constants.reset != 0;
-		signature.colorBuffersHDR = a_contract.colorBuffersHDR;
-		signature.colorIn = a_contract.resources.colorInput;
-		signature.colorOut = a_contract.resources.colorOutput;
-		signature.depth = a_contract.resources.depth;
-		signature.motionVectors = a_contract.resources.motionVectors;
-		signature.reactiveMask = a_contract.resources.reactiveMask;
-		signature.transparencyMask = a_contract.resources.transparencyMask;
-		signature.constants = a_contract.constants;
+		if (a_streamlineConstants) {
+			auto& constants = signature.constants;
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraViewToClip, constants.cameraViewToClip);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->clipToCameraView, constants.clipToCameraView);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->clipToLensClip, constants.clipToLensClip);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->clipToPrevClip, constants.clipToPrevClip);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->prevClipToClip, constants.prevClipToClip);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->jitterOffset, constants.jitterOffset);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->mvecScale, constants.motionVectorScale);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraPinholeOffset, constants.cameraPinholeOffset);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraPos, constants.cameraPosition);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraUp, constants.cameraUp);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraRight, constants.cameraRight);
+			CopyDLSSDevBenchFloatBits(a_streamlineConstants->cameraFwd, constants.cameraForward);
+			constants.cameraNear = GetDLSSDevBenchFloatBits(a_streamlineConstants->cameraNear);
+			constants.cameraFar = GetDLSSDevBenchFloatBits(a_streamlineConstants->cameraFar);
+			constants.cameraFOV = GetDLSSDevBenchFloatBits(a_streamlineConstants->cameraFOV);
+			constants.cameraAspectRatio = GetDLSSDevBenchFloatBits(a_streamlineConstants->cameraAspectRatio);
+			constants.motionVectorsInvalidValue = GetDLSSDevBenchFloatBits(a_streamlineConstants->motionVectorsInvalidValue);
+			constants.minRelativeLinearDepthObjectSeparation = GetDLSSDevBenchFloatBits(a_streamlineConstants->minRelativeLinearDepthObjectSeparation);
+			constants.depthInverted = static_cast<uint8_t>(a_streamlineConstants->depthInverted);
+			constants.cameraMotionIncluded = static_cast<uint8_t>(a_streamlineConstants->cameraMotionIncluded);
+			constants.motionVectors3D = static_cast<uint8_t>(a_streamlineConstants->motionVectors3D);
+			constants.reset = static_cast<uint8_t>(a_streamlineConstants->reset);
+			constants.orthographicProjection = static_cast<uint8_t>(a_streamlineConstants->orthographicProjection);
+			constants.motionVectorsDilated = static_cast<uint8_t>(a_streamlineConstants->motionVectorsDilated);
+			constants.motionVectorsJittered = static_cast<uint8_t>(a_streamlineConstants->motionVectorsJittered);
+		}
 		return signature;
 	}
 
@@ -941,20 +929,7 @@ uint64_t Streamline::SetDLSSDevBenchCompositorCycleContext(uint64_t a_compositor
 	g_dlssDevBenchCompositorCycleToken = a_compositorCycleToken;
 	return previous;
 }
-
 #endif
-
-uint64_t Streamline::SetDLSSInputGenerationContext(uint64_t a_generation) noexcept
-{
-	const uint64_t previous = g_dlssInputGenerationContext;
-	g_dlssInputGenerationContext = a_generation;
-	return previous;
-}
-
-uint64_t Streamline::GetDLSSInputGenerationContext() const noexcept
-{
-	return g_dlssInputGenerationContext;
-}
 
 void LoggingCallback(sl::LogType type, const char* msg)
 {
@@ -1114,7 +1089,6 @@ void Streamline::LoadInterposer()
 		featureReflex = false;
 		featurePCL = false;
 		reflexSupportedOnCurrentAdapter = false;
-		InvalidateDLSSFrameEvaluationTickets();
 		InvalidateDLSSOptionsCache();
 		reflexOptionsCache = {};
 		lastReflexSleepFrame = UINT32_MAX;
@@ -1188,7 +1162,6 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 
 void Streamline::PostDevice()
 {
-	InvalidateDLSSFrameEvaluationTickets();
 	// Hook up all of the feature functions using the sl function slGetFeatureFunction
 
 	if (featureDLSS) {
@@ -1254,10 +1227,9 @@ void Streamline::PostDevice()
 }
 
 /**
- * @brief Admits and submits one canonical constants contract per temporal tuple.
+ * @brief Updates and sets camera and frame constants for the current Streamline frame.
  *
- * Exact completed repeats may reuse a proven output. Conflicting or incomplete
- * repeats are rejected without another Streamline call.
+ * Populates and submits camera parameters, projection matrices, motion vector settings, and other per-frame constants to the Streamline SDK for the current frame. Uses cached framebuffer data and global state to ensure correct configuration for upscaling and frame generation features.
  */
 bool Streamline::EnsureFrameToken()
 {
@@ -1276,20 +1248,19 @@ bool Streamline::EnsureFrameToken()
 	return frameToken != nullptr;
 }
 
-Streamline::DLSSFrameConstantsResult Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, uint64_t renderedInputGeneration, uint64_t resourceGeneration, bool outputReuseProven, const DLSSDispatchDiagnostics* diagnostics, DLSSFrameEvaluationTicket*& outEvaluationTicket
+bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchDiagnostics* diagnostics
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	,
 	DLSSDevBenchTraceSignature* outFrameConstantsSignature
 #endif
 )
 {
-	outEvaluationTicket = nullptr;
 	if (!globals::features::upscaling.streamline.initialized)
-		return DLSSFrameConstantsResult::Failed;
+		return false;
 
 	if (!EnsureFrameToken()) {
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "unavailable", diagnostics);
-		return DLSSFrameConstantsResult::Failed;
+		return false;
 	}
 
 	// In VR, we need to set constants for each viewport/eye separately
@@ -1297,7 +1268,7 @@ Streamline::DLSSFrameConstantsResult Streamline::CheckFrameConstants(sl::Viewpor
 	auto state = globals::state;
 	auto& upscaling = globals::features::upscaling;
 	if (!state)
-		return DLSSFrameConstantsResult::Failed;
+		return false;
 	bool applyCroppedConstantsCorrection = false;
 	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
 	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
@@ -1413,128 +1384,102 @@ Streamline::DLSSFrameConstantsResult Streamline::CheckFrameConstants(sl::Viewpor
 	slConstants.motionVectorsDilated = sl::Boolean::eFalse;
 	slConstants.motionVectorsJittered = sl::Boolean::eFalse;
 
-	DLSSFrameEvaluationPolicy::EvaluationContract evaluationContract{};
-	evaluationContract.sessionEpoch = dlssSessionEpoch;
-	evaluationContract.frame = diagnostics ? diagnostics->frame : state->frameCount;
-	evaluationContract.frameToken = frameToken ? static_cast<uint32_t>(*frameToken) : 0u;
-	evaluationContract.viewport = static_cast<uint32_t>(p_viewport);
-	evaluationContract.eyeIndex = eyeIndex;
-	evaluationContract.viewportRole = diagnostics ? static_cast<uint32_t>(diagnostics->viewportRole) : static_cast<uint32_t>(DLSSViewportRole::FullEye);
-	evaluationContract.renderedInputGeneration = renderedInputGeneration;
-	evaluationContract.resourceGeneration = resourceGeneration;
-	evaluationContract.outputWidth = diagnostics ? diagnostics->outputWidth : 0u;
-	evaluationContract.outputHeight = diagnostics ? diagnostics->outputHeight : 0u;
-	evaluationContract.qualityMode = diagnostics ? diagnostics->qualityMode : 0u;
-	evaluationContract.dlssPreset = diagnostics ? diagnostics->dlssPreset : 0u;
-	evaluationContract.extentInLeft = diagnostics ? diagnostics->extentIn.left : 0u;
-	evaluationContract.extentInTop = diagnostics ? diagnostics->extentIn.top : 0u;
-	evaluationContract.extentInWidth = diagnostics ? diagnostics->extentIn.width : 0u;
-	evaluationContract.extentInHeight = diagnostics ? diagnostics->extentIn.height : 0u;
-	evaluationContract.extentOutLeft = diagnostics ? diagnostics->extentOut.left : 0u;
-	evaluationContract.extentOutTop = diagnostics ? diagnostics->extentOut.top : 0u;
-	evaluationContract.extentOutWidth = diagnostics ? diagnostics->extentOut.width : 0u;
-	evaluationContract.extentOutHeight = diagnostics ? diagnostics->extentOut.height : 0u;
-	evaluationContract.colorBuffersHDR = diagnostics && diagnostics->colorBuffersHDR;
-	evaluationContract.resources = {
-		.colorInput = reinterpret_cast<std::uintptr_t>(diagnostics ? diagnostics->colorIn : nullptr),
-		.colorOutput = reinterpret_cast<std::uintptr_t>(diagnostics ? diagnostics->colorOut : nullptr),
-		.depth = reinterpret_cast<std::uintptr_t>(diagnostics ? diagnostics->depth : nullptr),
-		.motionVectors = reinterpret_cast<std::uintptr_t>(diagnostics ? diagnostics->motionVectors : nullptr),
-		.reactiveMask = reinterpret_cast<std::uintptr_t>(diagnostics ? diagnostics->reactiveMask : nullptr),
-		.transparencyMask = reinterpret_cast<std::uintptr_t>(diagnostics ? diagnostics->transparencyMask : nullptr),
+	const auto makeFrameConstantsSignature = [&]() {
+		DLSSFrameConstantsCache signature{};
+		signature.valid = true;
+		signature.frame = diagnostics ? diagnostics->frame : state->frameCount;
+		signature.frameToken = reinterpret_cast<std::uintptr_t>(frameToken);
+		signature.viewport = static_cast<uint32_t>(p_viewport);
+		signature.eyeIndex = eyeIndex;
+		signature.viewportRole = diagnostics ? static_cast<uint32_t>(diagnostics->viewportRole) : static_cast<uint32_t>(DLSSViewportRole::FullEye);
+		signature.outputWidth = diagnostics ? diagnostics->outputWidth : 0u;
+		signature.outputHeight = diagnostics ? diagnostics->outputHeight : 0u;
+		signature.qualityMode = diagnostics ? diagnostics->qualityMode : 0u;
+		signature.dlssPreset = diagnostics ? diagnostics->dlssPreset : 0u;
+		signature.extentInWidth = diagnostics ? diagnostics->extentIn.width : 0u;
+		signature.extentInHeight = diagnostics ? diagnostics->extentIn.height : 0u;
+		signature.extentOutWidth = diagnostics ? diagnostics->extentOut.width : 0u;
+		signature.extentOutHeight = diagnostics ? diagnostics->extentOut.height : 0u;
+		signature.viewportScaleXQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleX);
+		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleY);
+		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetX);
+		signature.pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetY);
+		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.x);
+		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.y);
+		signature.historyResetRequested = requestHistoryReset;
+		return signature;
 	};
-	evaluationContract.constants = BuildDLSSCanonicalConstants(slConstants);
-
+	const auto frameConstantsMatch = [](const DLSSFrameConstantsCache& a_cached, const DLSSFrameConstantsCache& a_signature) {
+		return a_cached.valid &&
+		       a_cached.frame == a_signature.frame &&
+		       a_cached.frameToken == a_signature.frameToken &&
+		       a_cached.viewport == a_signature.viewport &&
+		       a_cached.eyeIndex == a_signature.eyeIndex &&
+		       a_cached.viewportRole == a_signature.viewportRole &&
+		       a_cached.outputWidth == a_signature.outputWidth &&
+		       a_cached.outputHeight == a_signature.outputHeight &&
+		       a_cached.qualityMode == a_signature.qualityMode &&
+		       a_cached.dlssPreset == a_signature.dlssPreset &&
+		       a_cached.extentInWidth == a_signature.extentInWidth &&
+		       a_cached.extentInHeight == a_signature.extentInHeight &&
+		       a_cached.extentOutWidth == a_signature.extentOutWidth &&
+		       a_cached.extentOutHeight == a_signature.extentOutHeight &&
+		       a_cached.viewportScaleXQ == a_signature.viewportScaleXQ &&
+		       a_cached.viewportScaleYQ == a_signature.viewportScaleYQ &&
+		       a_cached.pinholeOffsetXQ == a_signature.pinholeOffsetXQ &&
+		       a_cached.pinholeOffsetYQ == a_signature.pinholeOffsetYQ &&
+		       a_cached.jitterXQ == a_signature.jitterXQ &&
+		       a_cached.jitterYQ == a_signature.jitterYQ &&
+		       a_cached.historyResetRequested == a_signature.historyResetRequested;
+	};
+	const bool canAcceptDuplicateConstants =
+		diagnostics &&
+		diagnostics->submitStageVRDLSS &&
+		(diagnostics->viewportRole == DLSSViewportRole::FullEye ||
+			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter);
+	DLSSFrameConstantsCache frameConstantsSignature{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool collectDevBenchTrace = outFrameConstantsSignature || IsDLSSDevBenchTraceActive();
+	if (canAcceptDuplicateConstants || collectDevBenchTrace)
+#else
+	if (canAcceptDuplicateConstants)
+#endif
+		frameConstantsSignature = makeFrameConstantsSignature();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	DLSSDevBenchTraceSignature devBenchTraceSignature{};
-	if (outFrameConstantsSignature || IsDLSSDevBenchTraceActive()) {
+	if (collectDevBenchTrace) {
 		devBenchTraceSignature = BuildDLSSDevBenchTraceSignature(
-			evaluationContract,
+			frameConstantsSignature,
 			diagnostics,
 			frameToken,
-			clampedViewportScaleX,
-			clampedViewportScaleY,
-			clampedPinholeOffsetX,
-			clampedPinholeOffsetY,
-			upscaling.jitter.x,
-			upscaling.jitter.y);
+			&slConstants);
 		if (outFrameConstantsSignature)
 			*outFrameConstantsSignature = devBenchTraceSignature;
 	}
 #endif
+	const auto hasCachedFrameConstantsSignature = [&]() {
+		if (!canAcceptDuplicateConstants)
+			return false;
 
-	DLSSFrameEvaluationTicket* existingTicket = nullptr;
-	for (auto& ticket : dlssFrameEvaluationTickets) {
-		if (ticket.state.valid &&
-			DLSSFrameEvaluationPolicy::IsSameTemporalTuple(ticket.state.contract, evaluationContract)) {
-			existingTicket = &ticket;
-			break;
+		for (const auto& cachedSignature : dlssFrameConstantsCache) {
+			if (frameConstantsMatch(cachedSignature, frameConstantsSignature))
+				return true;
 		}
-	}
-	if (existingTicket) {
-		existingTicket->lastUse = ++dlssFrameEvaluationTicketUseCounter;
-		const bool outputStillOwned =
-			existingTicket->outputOwner &&
-			existingTicket->outputOwner.get() == (diagnostics ? diagnostics->colorOut : nullptr);
-		const auto admission = DLSSFrameEvaluationPolicy::ResolveAdmission(
-			&existingTicket->state,
-			evaluationContract,
-			outputStillOwned,
-			outputReuseProven);
-		if (admission == DLSSFrameEvaluationPolicy::Admission::ReuseCompletedOutput) {
+		return false;
+	};
+	if (hasCachedFrameConstantsSignature()) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			if (IsDLSSDevBenchTraceActive()) {
-				RecordDLSSDevBenchTrace(
-					DLSSDevBenchTraceStage::ConstantsCacheReuse,
-					static_cast<int32_t>(sl::Result::eOk),
-					diagnostics,
-					devBenchTraceSignature);
-			}
+		if (IsDLSSDevBenchTraceActive()) {
+			RecordDLSSDevBenchTrace(
+				DLSSDevBenchTraceStage::ConstantsCacheReuse,
+				static_cast<int32_t>(sl::Result::eOk),
+				diagnostics,
+				devBenchTraceSignature);
+		}
 #endif
-			lastDLSSFailureRequiresTemporalFallback = false;
-			outEvaluationTicket = existingTicket;
-			return DLSSFrameConstantsResult::ReuseCompletedOutput;
-		}
-
-		// The existing caller must preserve token state just as it does after the
-		// provider reports duplicated constants; retrying this tuple is illegal.
-		lastDLSSFailureRequiresTemporalFallback = true;
-		const char* rejectionReason = "same-token-output-unavailable";
-		if (admission == DLSSFrameEvaluationPolicy::Admission::RejectIncompleteAttempt)
-			rejectionReason = "same-token-incomplete-attempt";
-		else if (admission == DLSSFrameEvaluationPolicy::Admission::RejectTemporalConflict)
-			rejectionReason = "same-token-contract-conflict";
-		LogDLSSDispatchDiagnostics(
-			DLSSDiagnosticStage::SetConstants,
-			rejectionReason,
-			diagnostics);
-		return DLSSFrameConstantsResult::Rejected;
+		lastDLSSFailureDuplicatedConstants = false;
+		return true;
 	}
-
-	DLSSFrameEvaluationTicket* targetTicket = nullptr;
-	for (auto& ticket : dlssFrameEvaluationTickets) {
-		if (!ticket.state.valid) {
-			targetTicket = &ticket;
-			break;
-		}
-		if (ticket.state.contract.sessionEpoch != evaluationContract.sessionEpoch ||
-			ticket.state.contract.frameToken != evaluationContract.frameToken) {
-			if (!targetTicket || ticket.lastUse < targetTicket->lastUse)
-				targetTicket = &ticket;
-		}
-	}
-	if (!targetTicket) {
-		lastDLSSFailureRequiresTemporalFallback = true;
-		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetConstants, "temporal-ticket-capacity", diagnostics);
-		return DLSSFrameConstantsResult::Rejected;
-	}
-
-	*targetTicket = {};
-	targetTicket->state.valid = true;
-	targetTicket->state.contract = evaluationContract;
-	targetTicket->lastUse = ++dlssFrameEvaluationTicketUseCounter;
-	targetTicket->state.constantsAttempted = true;
-	outEvaluationTicket = targetTicket;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const sl::Result res = slSetConstants(slConstants, *frameToken, p_viewport);
@@ -1550,7 +1495,7 @@ Streamline::DLSSFrameConstantsResult Streamline::CheckFrameConstants(sl::Viewpor
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
 #endif
 		const bool duplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
-		lastDLSSFailureRequiresTemporalFallback = duplicatedConstants;
+		lastDLSSFailureDuplicatedConstants = duplicatedConstants;
 		const auto resultLabel = magic_enum::enum_name(res);
 		if (diagnostics) {
 			if (ShouldEmitDLSSDiagnostic(DLSSDiagnosticStage::SetConstants, diagnostics, static_cast<int32_t>(res), resultLabel)) {
@@ -1572,18 +1517,29 @@ Streamline::DLSSFrameConstantsResult Streamline::CheckFrameConstants(sl::Viewpor
 					diagnostics->viewportScaleY,
 					diagnostics->pinholeOffsetX,
 					diagnostics->pinholeOffsetY,
-					duplicatedConstants);
+					lastDLSSFailureDuplicatedConstants);
 			}
 		} else {
 			logger::error("[Streamline] Could not set constants for eye {}", eyeIndex);
 		}
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetConstants, res, diagnostics);
-		return DLSSFrameConstantsResult::Failed;
+		return false;
 	}
 
-	targetTicket->state.constantsSubmitted = true;
-	lastDLSSFailureRequiresTemporalFallback = false;
-	return DLSSFrameConstantsResult::ReadyForEvaluation;
+	if (canAcceptDuplicateConstants) {
+		auto* targetSlot = &dlssFrameConstantsCache[static_cast<uint32_t>(p_viewport) % dlssFrameConstantsCache.size()];
+		for (auto& cachedSignature : dlssFrameConstantsCache) {
+			if (!cachedSignature.valid ||
+				(cachedSignature.viewport == frameConstantsSignature.viewport &&
+					cachedSignature.eyeIndex == frameConstantsSignature.eyeIndex &&
+					cachedSignature.viewportRole == frameConstantsSignature.viewportRole)) {
+				targetSlot = &cachedSignature;
+				break;
+			}
+		}
+		*targetSlot = frameConstantsSignature;
+	}
+	return true;
 }
 
 bool Streamline::IsRTXAndBelow40Series(IDXGIAdapter* a_adapter)
@@ -2095,6 +2051,7 @@ Streamline::DLSSOptionsCache& Streamline::GetDLSSOptionsCache(DLSSViewportRole v
 void Streamline::InvalidateDLSSOptionsCache()
 {
 	nonVRDLSSOptionsCache = {};
+	dlssFrameConstantsCache = {};
 	for (auto& roleSlots : vrDLSSViewportSlots) {
 		for (auto& slot : roleSlots) {
 			for (auto& optionsCache : slot.optionsCache)
@@ -2103,19 +2060,8 @@ void Streamline::InvalidateDLSSOptionsCache()
 	}
 }
 
-void Streamline::InvalidateDLSSFrameEvaluationTickets()
-{
-	dlssFrameEvaluationTickets = {};
-	dlssFrameEvaluationTicketUseCounter = 0;
-	++dlssSessionEpoch;
-	if (dlssSessionEpoch == 0)
-		dlssSessionEpoch = 1;
-}
-
 void Streamline::ResetDLSSIdleFences()
 {
-	// Every caller is a teardown, device replacement, or terminal device-loss path.
-	InvalidateDLSSFrameEvaluationTickets();
 	ReleaseD3D11IdleFence(pendingDLSSResourceFreeIdleFence);
 	for (auto& pendingSlotRecycleIdleFence : pendingVRDLSSSlotRecycleIdleFences)
 		ReleaseD3D11IdleFence(pendingSlotRecycleIdleFence);
@@ -2125,6 +2071,7 @@ void Streamline::ResetFrameTracking()
 {
 	frameToken = nullptr;
 	frameChecker = {};
+	dlssFrameConstantsCache = {};
 }
 
 bool Streamline::HasDLSSResourcesPendingTeardown() const
@@ -2186,22 +2133,6 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	auto& upscaling = globals::features::upscaling;
 	auto state = globals::state;
-	const uint64_t effectiveInputGeneration = g_dlssInputGenerationContext != 0 ?
-	                                             g_dlssInputGenerationContext :
-	                                             (state ? static_cast<uint64_t>(state->frameCount) : 0u);
-	const uint64_t activeVRResourceGeneration = globals::game::isVR ?
-	                                                upscaling.GetActiveVRRenderScaleContractGeneration() :
-	                                                0u;
-	uint64_t effectiveResourceGeneration = activeVRResourceGeneration;
-	if (effectiveResourceGeneration == 0)
-		effectiveResourceGeneration = dlssSessionEpoch;
-	// The center output is only sampled by the spatial composite. Full-eye output
-	// may be sharpened, masked, or menu-composited after this call.
-	const bool outputReuseProven =
-		globals::game::isVR &&
-		viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter &&
-		g_dlssInputGenerationContext != 0 &&
-		activeVRResourceGeneration != 0;
 	const bool vendorLifecycleMutationDeferred =
 		globals::game::isVR &&
 		upscaling.ShouldDeferVRVendorLifecycleMutation();
@@ -2279,10 +2210,10 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.motionVectors = mvec;
 	diagnostics.reactiveMask = reactiveMask;
 	diagnostics.transparencyMask = transparencyMask;
-	diagnostics.colorBuffersHDR = colorBuffersHDR;
 	if (collectDLSSDiagnostics) {
 		diagnostics.jitterX = upscaling.jitter.x;
 		diagnostics.jitterY = upscaling.jitter.y;
+		diagnostics.colorBuffersHDR = colorBuffersHDR;
 		diagnostics.presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 		diagnostics.renderScaleActive = upscaling.IsVRRenderScaleModeActive();
 		diagnostics.foveatedDispatchEnabled = upscaling.IsFoveatedVendorDispatchEnabled(upscaling.GetRuntimeUpscaleMethod());
@@ -2329,27 +2260,19 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	DLSSDevBenchTraceSignature devBenchFrameConstantsSignature{};
 	auto* devBenchFrameConstantsSignaturePtr = IsDLSSDevBenchTraceActive() ? &devBenchFrameConstantsSignature : nullptr;
 #endif
-	DLSSFrameEvaluationTicket* evaluationTicket = nullptr;
-	const auto frameConstantsResult = CheckFrameConstants(
+	if (!CheckFrameConstants(
 			vp,
 			eyeIndex,
 			viewportScaleX,
 			viewportScaleY,
 			pinholeOffsetX,
 			pinholeOffsetY,
-			effectiveInputGeneration,
-			effectiveResourceGeneration,
-			outputReuseProven,
-			diagnosticsPtr,
-			evaluationTicket
+			diagnosticsPtr
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			,
 			devBenchFrameConstantsSignaturePtr
 #endif
-			);
-	if (frameConstantsResult == DLSSFrameConstantsResult::ReuseCompletedOutput)
-		return true;
-	if (frameConstantsResult != DLSSFrameConstantsResult::ReadyForEvaluation || !evaluationTicket)
+			))
 		return false;
 	if (!existingProviderOnly &&
 		!SetDLSSOptions(viewportRole, vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset, diagnosticsPtr))
@@ -2414,17 +2337,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	}
 
-	evaluationTicket->state.evaluationAttempted = true;
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
-	evaluationTicket->state.evaluationCompleted = true;
-	evaluationTicket->state.evaluationSucceeded = evalResult == sl::Result::eOk;
-	if (evaluationTicket->state.evaluationSucceeded &&
-		outputReuseProven && diagnostics.colorOut) {
-		evaluationTicket->outputOwner.copy_from(diagnostics.colorOut);
-		evaluationTicket->state.outputReusable = true;
-	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (devBenchFrameConstantsSignaturePtr) {

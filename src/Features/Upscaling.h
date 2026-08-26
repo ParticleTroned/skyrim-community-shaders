@@ -2696,7 +2696,6 @@ public:
 		bool usedDLSSSharpening = false;
 		bool usedMenuFinalComposite = false;
 		uint64_t menuLayerGeneration = 0;
-		uint64_t compositorCycleToken = 0;
 		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		uint32_t generation = 0;
 		uint32_t inputWidth = 0;
@@ -2717,7 +2716,6 @@ public:
 	{
 		bool ready = false;
 		uint32_t frame = std::numeric_limits<uint32_t>::max();
-		uint64_t inputGeneration = 0;
 		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		uint32_t generation = 0;
 		uint32_t qualityMode = 0;
@@ -2748,8 +2746,6 @@ public:
 		ID3D11Resource* reactiveMaskIn = nullptr;
 		ID3D11Resource* transparencyMaskIn = nullptr;
 		ID3D11Resource* colorOut = nullptr;
-
-		[[nodiscard]] bool operator==(const SubmitStageFoveatedCenterState&) const noexcept = default;
 	};
 	struct SubmitStageRuntimeFSRStereoState
 	{
@@ -2826,10 +2822,8 @@ public:
 		}
 	};
 	uint32_t submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
-	uint64_t submitStageVendorOutputCycle = 0;
 	uint32_t submitStageVendorOutputGeneration = 0;
 	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
-	uint64_t submitStageDLSSInputGeneration = 0;
 	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
 	std::array<SubmitStageFoveatedCenterState, 2> submitStageFoveatedCenterState = {};
 	SubmitStageRuntimeFSRStereoState submitStageRuntimeFSRStereoState{};

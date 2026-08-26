@@ -1572,11 +1572,6 @@ if(BUILD_CONTROLLER_TESTS)
         tests/reflex_policy_test.cpp
     )
     add_controller_test(
-        dlss_frame_evaluation_policy_test
-        DLSSFrameEvaluationPolicy
-        tests/dlss_frame_evaluation_policy_test.cpp
-    )
-    add_controller_test(
         fsr_host_lifecycle_policy_test
         FSRHostLifecyclePolicy
         tests/fsr_host_lifecycle_policy_test.cpp

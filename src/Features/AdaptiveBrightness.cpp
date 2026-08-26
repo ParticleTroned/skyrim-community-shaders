@@ -1082,7 +1082,6 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 				ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
 				ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
 				ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-				ImGui::SliderFloat("Water", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
 				ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
 				ImGui::Unindent();
 			}
@@ -1107,9 +1106,15 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 			WaterAppearance::DrawProfileControls(a_profile.water);
 			ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Shows detailed water surface, reflection, refraction, and clarity controls for this profile.");
+				ImGui::Text("Shows detailed water color, surface, reflection, refraction, and clarity controls for this profile.");
 			if (a_profile.waterAdvanced) {
 				ImGui::Indent();
+				drawSlider(
+					"Water Color Gamma",
+					a_profile.waterGammaOffset,
+					kGammaOffsetMin,
+					kGammaOffsetMax,
+					"Offsets water color gamma for this profile. This is separate from Water Brightness and the surface appearance controls below.");
 				WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
 				ImGui::Unindent();
 			}
@@ -2148,7 +2153,7 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 	out.skyGamma = ClampGamma(out.skyGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.skyGammaOffset));
 	out.fogGamma = ClampGamma(out.fogGamma + masterGammaOffset * 0.75f + advancedOffset(a_profile.fogGammaOffset));
 	out.fogAlphaGamma = ClampGamma(out.fogAlphaGamma + masterGammaOffset * 0.50f + advancedOffset(a_profile.fogAlphaGammaOffset));
-	out.waterGamma = ClampGamma(out.waterGamma + masterGammaOffset * 0.75f + advancedOffset(a_profile.waterGammaOffset));
+	out.waterGamma = ClampGamma(out.waterGamma + masterGammaOffset * 0.75f + ClampGammaOffset(a_profile.waterGammaOffset));
 	out.vlGamma = ClampGamma(out.vlGamma + masterGammaOffset * 0.85f + advancedOffset(a_profile.vlGammaOffset));
 
 	return out;

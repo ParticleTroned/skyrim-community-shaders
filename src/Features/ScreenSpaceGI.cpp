@@ -1457,7 +1457,7 @@ bool ScreenSpaceGI::ShadersOK()
 									 texGiSpecular[0] &&
 									 texGiSpecular[1]);
 
-	const bool centerAOShadersOK = texCenterAo;
+	const bool centerAOShadersOK = static_cast<bool>(texCenterAo);
 	const bool centerGIShadersOK = !runtimeGIActive ||
 	                               (texCenterIlY &&
 									   texCenterIlCoCg &&

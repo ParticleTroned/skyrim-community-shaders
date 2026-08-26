@@ -4199,6 +4199,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	IndirectLobeWeights indirectLobeWeights;
 
 	float3 ambientNormal = worldNormal.xyz;
+#	if defined(TREE_ANIM)
+	[branch] if (SharedData::foliageLightingSettings.EnableFoliageAmbientFlip != 0)
+	{
+#		if defined(VR)
+		// Use the left-eye model-space reference for both eyes. This preserves the
+		// intended backface response without introducing stereo-dependent tree normals.
+		float3 foliageAmbientViewDirection = -SafeNormalize3(
+			input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz,
+			float3(0.0, 0.0, 1.0));
+#		else
+		float3 foliageAmbientViewDirection = viewDirection;
+#		endif
+		if (dot(ambientNormal, foliageAmbientViewDirection) < 0.0)
+			ambientNormal = -ambientNormal;
+	}
+#	endif
 #	if defined(HAIR) && defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		if (SharedData::hairSpecularSettings.HairMode == 1)

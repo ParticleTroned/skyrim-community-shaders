@@ -1,0 +1,41 @@
+{
+  "schema": "csx.shader.compatibility.variants",
+  "schemaVersion": 1,
+  "variants": [
+    {
+      "id": "default",
+      "registrations": [],
+      "shaderDefinesBySource": {}
+    },
+    {
+      "id": "legacy-horizon-fix",
+      "detection": {
+        "kind": "skse-module",
+        "value": "HorizonFix.dll"
+      },
+      "registrations": [
+        {
+          "identity": "legacy.horizonfix.water",
+          "owner": "CSX legacy adapter",
+          "displayVersion": "detected",
+          "contractMajor": 1,
+          "currentMinor": 0,
+          "minimumCompatibleMinor": 0,
+          "maximumCompatibleMinor": 0,
+          "resourceFingerprint": "",
+          "scopes": [
+            {
+              "kind": "shader-family",
+              "value": "Water"
+            }
+          ]
+        }
+      ],
+      "shaderDefinesBySource": {
+        "Water.hlsl": [
+          "HORIZON_FIX"
+        ]
+      }
+    }
+  ]
+}

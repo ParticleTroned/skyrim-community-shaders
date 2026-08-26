@@ -7,6 +7,10 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
+#if defined(PSHADER)
+#	include "Common/LightingCommon.hlsli"
+#endif
+
 #define DEFERRED
 
 #ifdef GRASS_LIGHTING
@@ -460,9 +464,9 @@ cbuffer AlphaTestRefCB : register(b11)
 #	include "Common/ShadowSampling.hlsli"
 
 // This is the original non-Grass-Lighting shader path. It is shared by the
-// boot-disabled permutation and the runtime-disabled Grass Lighting path so
-// that both modes retain identical shading behavior.
-PS_OUTPUT RenderBasicGrass(PS_INPUT input)
+// boot-disabled permutation and the runtime-disabled Grass Lighting path.
+// Foliage Lighting can opt in to its small grass-scattering augmentation.
+PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
@@ -509,7 +513,16 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input)
 	}
 
 	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * dirDetailShadow * llDirLightMult;
+	float3 directionalLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * dirShadow * dirDetailShadow * llDirLightMult;
+	float3 diffuseColor = directionalLightColor;
+
+	float3 normal = -normalize(cross(ddx_coarse(input.WorldPosition), ddy_coarse(input.WorldPosition)));
+	float3 viewDirection = -input.WorldPosition.xyz * rsqrt(max(dot(input.WorldPosition.xyz, input.WorldPosition.xyz), 1e-8f));
+	float3 foliageNormal = normal;
+	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GrassSphereNormal) && !frontFace)
+		foliageNormal = -foliageNormal;
+	[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
+		diffuseColor += directionalLightColor * GetFoliageTransmission(dot(foliageNormal, SharedData::DirLightDirection.xyz), dot(viewDirection, SharedData::DirLightDirection.xyz)) * Color::VanillaNormalization();
 
 #		if defined(LIGHT_LIMIT_FIX)
 	uint clusterIndex = 0;
@@ -552,16 +565,15 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input)
 				}
 
 				lightColor *= lightShadow;
+				float3 normalizedLightDirection = lightDirection / max(lightDist, 1e-5f);
 
 				diffuseColor += lightColor;
+				[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
+					diffuseColor += lightColor * GetFoliageTransmission(dot(foliageNormal, normalizedLightDirection), dot(viewDirection, normalizedLightDirection)) * Color::VanillaNormalization();
 			}
 		}
 	}
 #		endif  // LIGHT_LIMIT_FIX
-
-	float3 ddx = ddx_coarse(input.WorldPosition);
-	float3 ddy = ddy_coarse(input.WorldPosition);
-	float3 normal = -normalize(cross(ddx, ddy));
 
 	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
 	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
@@ -655,7 +667,7 @@ float GetWrappedDiffuseMultiplier(float angle, float wrapAmount, bool useWrapped
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	[branch] if (!SharedData::grassLightingSettings.Enabled)
-		return RenderBasicGrass(input);
+		return RenderBasicGrass(input, frontFace);
 
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
@@ -815,6 +827,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	bool useVanillaGrassWrappedLighting = !complex && SharedData::grassLightingSettings.EnableWrappedLighting;
 
 	lightsDiffuseColor += dirLightColor * GetWrappedDiffuseMultiplier(dirLightAngle, vanillaGrassWrapAmount, useVanillaGrassWrappedLighting) * Color::VanillaNormalization();
+	[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
+		lightsDiffuseColor += dirLightColor * GetFoliageTransmission(dirLightAngle, dot(viewDirection, SharedData::DirLightDirection.xyz)) * Color::VanillaNormalization();
 
 	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
 	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
@@ -890,10 +904,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				lightColor *= lightShadow;
 
 				float lightAngle = dot(normal, normalizedLightDirection);
-				float lightNoL = dot(normalizedLightDirection.xyz, viewDirection);
 				float3 lightDiffuseColor;
 
 				lightDiffuseColor = lightColor * GetWrappedDiffuseMultiplier(lightAngle, vanillaGrassWrapAmount, useVanillaGrassWrappedLighting);
+				[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
+					lightDiffuseColor += lightColor * GetFoliageTransmission(lightAngle, dot(viewDirection, normalizedLightDirection));
 
 				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * Color::VanillaNormalization();
 
@@ -983,9 +998,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	return psout;
 }
 #	else
-PS_OUTPUT main(PS_INPUT input)
+PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
-	return RenderBasicGrass(input);
+	return RenderBasicGrass(input, frontFace);
 }
 #	endif
 

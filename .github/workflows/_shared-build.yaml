@@ -80,6 +80,10 @@ jobs:
                   cmake-preset: ${{ matrix.compiler.cmake-preset }}
                   build-dir: ${{ matrix.compiler.build-dir }}
 
+            - name: Test repository tool environment
+              shell: pwsh
+              run: pwsh -NoProfile -File ./tests/tool_environment_test.ps1
+
             - name: Build using run-cmake
               uses: lukka/run-cmake@v10
               with:

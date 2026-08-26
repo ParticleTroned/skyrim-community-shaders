@@ -168,6 +168,31 @@ namespace Color
 		return sign(color) * pow(abs(color), 1.0 / 2.2);
 	}
 
+	// Rec. 709/sRGB and Rec. 2020 primary conversion matrices. Keep these in
+	// the shared color module so every HDR image-space pass uses one canonical
+	// transform pair.
+	static const float3x3 BT709_2_BT2020 = {
+		0.627403914928436279296875f, 0.3292830288410186767578125f, 0.0433130674064159393310546875f,
+		0.069097287952899932861328125f, 0.9195404052734375f, 0.011362315155565738677978515625f,
+		0.01639143936336040496826171875f, 0.08801330626010894775390625f, 0.895595252513885498046875f
+	};
+
+	static const float3x3 BT2020_2_BT709 = {
+		1.66049098968505859375f, -0.58764111995697021484375f, -0.072849862277507781982421875f,
+		-0.12455047667026519775390625f, 1.13289988040924072265625f, -0.0083494223654270172119140625f,
+		-0.01815076358616352081298828125f, -0.100578896701335906982421875f, 1.11872971057891845703125f
+	};
+
+	float3 BT709ToBT2020(float3 color)
+	{
+		return mul(BT709_2_BT2020, color);
+	}
+
+	float3 BT2020ToBT709(float3 color)
+	{
+		return mul(BT2020_2_BT709, color);
+	}
+
 	bool UseLinearLightingColorAdjustments()
 	{
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
@@ -182,7 +207,7 @@ namespace Color
 	const static float PBRLightingScale = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : 0.65;
 
 	// Attempt to normalise reflection brightness against DALC
-	const static float ReflectionNormalisationScale = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : 1.0;
+	const static float ReflectionNormalisationScale = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : 0.65;
 
 	const static float PBRLightingCompensation = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : Math::PI;
 

@@ -23,6 +23,11 @@ pipeline ownership, and feature-state performance analysis.
   Skyrim engine map, bounded runtime-evidence stream, and derived render graph.
   It joins to this manifest by stable compile/pass IDs without contaminating
   the deterministic static inventory with capture-specific state.
+- [`selective-cache-stage-1.md`](./selective-cache-stage-1.md) defines the
+  implemented entry-validity, feature-transition, ABI, and fallback contract.
+- [`shader-cache-observation-contract.md`](./shader-cache-observation-contract.md)
+  defines the identities, cache inventories, logs, and controlled comparisons
+  required when qualifying later cache refinements.
 
 Regenerate the static inventory from the repository root:
 

@@ -9,6 +9,7 @@ struct AdaptiveBrightness;
 struct Wetterness;
 struct DynamicCubemaps;
 struct ExtendedMaterials;
+struct FoliageLighting;
 struct GrassCollision;
 struct GrassLighting;
 struct HairSpecular;
@@ -72,6 +73,7 @@ namespace globals
 		extern Wetterness wetterness;
 		extern DynamicCubemaps dynamicCubemaps;
 		extern ExtendedMaterials extendedMaterials;
+		extern FoliageLighting foliageLighting;
 		extern GrassCollision grassCollision;
 		extern GrassLighting grassLighting;
 		extern HairSpecular hairSpecular;

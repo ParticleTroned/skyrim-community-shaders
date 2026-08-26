@@ -168,6 +168,10 @@ namespace
 			conditions |= kConditionTransitionPending;
 		if ((a_reasons & Upscaling::kVRUpscalingApplyBlockOpenComposite) != 0)
 			conditions |= kConditionOpenCompositeUpscaling;
+		if ((a_reasons &
+				Upscaling::kVRUpscalingApplyBlockStartupNativeFallback) != 0) {
+			conditions |= kConditionRestartRequired;
+		}
 		return conditions;
 	}
 
@@ -971,6 +975,11 @@ namespace
 						live.snapshot.result = Status::kBlocked;
 						live.snapshot.observedConditions |= kConditionOpenCompositeUpscaling;
 						live.snapshot.blockingConditions |= kConditionOpenCompositeUpscaling;
+					} else if (applied.rejection ==
+							   Upscaling::UpscalingTransitionApplyRejection::StartupNativeFallback) {
+						live.snapshot.result = Status::kBlocked;
+						live.snapshot.observedConditions |= kConditionRestartRequired;
+						live.snapshot.blockingConditions |= kConditionRestartRequired;
 					} else {
 						live.snapshot.result = Status::kBusy;
 						live.snapshot.observedConditions |= kConditionTransitionPending;

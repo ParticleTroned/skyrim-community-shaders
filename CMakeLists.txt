@@ -292,7 +292,7 @@ target_compile_definitions(
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
 )
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt)
+    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32)
 endif()
 
 file(
@@ -1402,7 +1402,9 @@ set(FEATURE_PATH "${CMAKE_BINARY_DIR}/Core")
 file(MAKE_DIRECTORY ${FEATURE_PATH})
 add_custom_command(
     OUTPUT ${CORE_PACKAGE}
-    DEPENDS ${CORE_SOURCES}
+    # The install step consumes the built DLL. Depend on the target itself so
+    # a newly registered feature cannot be packaged with a stale core binary.
+    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE
@@ -1487,7 +1489,10 @@ add_custom_target(
 set(AIO_PACKAGE "${DIST_PATH}/${CSX_PACKAGE_NAME}_AIO-${UTC_NOW}.7z")
 add_custom_command(
     OUTPUT ${AIO_PACKAGE}
-    DEPENDS ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
+    # Package-AIO-Manual can be invoked directly and AIO_ZIP_PACKAGE builds in
+    # parallel. Keep the install/archive rule ordered after the core target so
+    # feature INIs and the compiled FeatureVersions registry always agree.
+    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${FFX_RUNTIME_FILES}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
@@ -1613,14 +1618,14 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_compilation_scheduling_policy_test.cpp
     )
     add_controller_test(
-        volumetric_lighting_cache_refresh_policy_test
-        VolumetricLightingCacheRefreshPolicy
-        tests/volumetric_lighting_cache_refresh_policy_test.cpp
+        vr_depth_culling_cache_refresh_policy_test
+        VRDepthCullingCacheRefreshPolicy
+        tests/vr_depth_culling_cache_refresh_policy_test.cpp
     )
     add_controller_test(
-        vr_depth_culling_policy_test
-        VRDepthCullingPolicy
-        tests/vr_depth_culling_policy_test.cpp
+        vr_depth_culling_enable_policy_test
+        VRDepthCullingEnablePolicy
+        tests/vr_depth_culling_enable_policy_test.cpp
     )
     add_controller_test(
         vr_wand_interaction_policy_test
@@ -1731,6 +1736,19 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ApiServiceRegistry COMMAND api_service_registry_test)
     set_tests_properties(ApiServiceRegistry PROPERTIES LABELS "ControllerTests")
 
+	add_executable(
+		api_screenshot_contract_test
+		EXCLUDE_FROM_ALL
+		tests/api_screenshot_contract_test.cpp
+	)
+	target_compile_features(api_screenshot_contract_test PRIVATE cxx_std_23)
+	target_include_directories(
+		api_screenshot_contract_test
+		PRIVATE "${PROJECT_SOURCE_DIR}/include"
+	)
+	add_test(NAME ApiScreenshotContract COMMAND api_screenshot_contract_test)
+	set_tests_properties(ApiScreenshotContract PROPERTIES LABELS "ControllerTests")
+
     add_executable(
         api_upscaling_contract_test
         EXCLUDE_FROM_ALL
@@ -1778,6 +1796,51 @@ if(BUILD_CONTROLLER_TESTS)
     )
     add_test(NAME ApiShaderServicePolicy COMMAND api_shader_service_policy_test)
     set_tests_properties(ApiShaderServicePolicy PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        api_shader_compatibility_registry_test
+        EXCLUDE_FROM_ALL
+        tests/api_shader_compatibility_registry_test.cpp
+        src/Api/ShaderCompatibilityRegistry.cpp
+        src/Utils/CryptoHash.cpp
+    )
+    target_compile_features(api_shader_compatibility_registry_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_shader_compatibility_registry_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(api_shader_compatibility_registry_test PRIVATE bcrypt.lib)
+    add_test(NAME ApiShaderCompatibilityRegistry COMMAND api_shader_compatibility_registry_test)
+    set_tests_properties(ApiShaderCompatibilityRegistry PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        shader_cache_pack_test
+        EXCLUDE_FROM_ALL
+        tests/shader_cache_pack_test.cpp
+        src/Utils/ShaderCachePack.cpp
+        src/Utils/CryptoHash.cpp
+    )
+    target_compile_features(shader_cache_pack_test PRIVATE cxx_std_23)
+    target_include_directories(
+        shader_cache_pack_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(shader_cache_pack_test PRIVATE bcrypt.lib)
+    add_test(NAME ShaderCachePack COMMAND shader_cache_pack_test)
+    set_tests_properties(ShaderCachePack PROPERTIES LABELS "ControllerTests")
+
+    add_test(
+        NAME ShaderCachePackBuilder
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/shader_cache_pack_builder_test.py"
+            "$<TARGET_FILE:shader_cache_pack_test>"
+    )
+    set_tests_properties(ShaderCachePackBuilder PROPERTIES LABELS "ControllerTests")
 
     add_executable(
         api_weather_service_policy_test
@@ -1838,8 +1901,8 @@ if(BUILD_CONTROLLER_TESTS)
             shader_cache_disable_policy_test
             shader_cache_provenance_test
             shader_compilation_scheduling_policy_test
-            volumetric_lighting_cache_refresh_policy_test
-            vr_depth_culling_policy_test
+            vr_depth_culling_cache_refresh_policy_test
+            vr_depth_culling_enable_policy_test
             vr_wand_interaction_policy_test
             vr_wand_surface_geometry_test
             vr_menu_positioning_policy_test
@@ -1849,9 +1912,12 @@ if(BUILD_CONTROLLER_TESTS)
             render_map_controller_test
             api_service_foundation_test
             api_service_registry_test
+			api_screenshot_contract_test
             api_upscaling_contract_test
             api_upscaling_service_policy_test
             api_shader_service_policy_test
+            api_shader_compatibility_registry_test
+            shader_cache_pack_test
             api_weather_service_policy_test
             api_profiler_contract_test
             api_editor_contract_test

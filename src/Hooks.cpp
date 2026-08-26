@@ -1193,9 +1193,10 @@ struct IDXGISwapChain_Present
 			FlushCSFrameHookPhaseDiag(completedFrame, intervalMs);
 		}
 		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
-		globals::features::screenshotFeature.OnBeforePresent(This);
 		state->Reset();
 		menu->DrawOverlay();
+		globals::features::screenshotFeature.OnBeforePresent(This);
+		globals::features::screenshotFeature.DrawPostCaptureIndicator();
 
 		const uint64_t beforePresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		HRESULT retval = func(This, SyncInterval, Flags);

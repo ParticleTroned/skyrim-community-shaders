@@ -12,6 +12,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -75,6 +76,59 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 },
             ],
         }
+
+    def test_publication_replace_retries_transient_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staging = root / ".VR.publishing"
+            destination = root / "VR"
+            staging.mkdir()
+            (staging / "cache.pso").write_bytes(b"cache")
+            original_replace = Path.replace
+            attempts = 0
+
+            def transient_replace(path: Path, target: Path) -> Path:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise PermissionError("simulated scanner lock")
+                return original_replace(path, target)
+
+            with (
+                mock.patch.object(Path, "replace", new=transient_replace),
+                mock.patch.object(BUILDER.time, "sleep") as sleep,
+            ):
+                BUILDER.replace_publication_staging(staging, destination)
+
+            self.assertEqual(attempts, 3)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertFalse(staging.exists())
+            self.assertEqual((destination / "cache.pso").read_bytes(), b"cache")
+
+    def test_publication_replace_preserves_staging_after_retry_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staging = root / ".VR.publishing"
+            destination = root / "VR"
+            staging.mkdir()
+
+            with (
+                mock.patch.object(
+                    Path,
+                    "replace",
+                    side_effect=PermissionError("simulated persistent lock"),
+                ),
+                mock.patch.object(BUILDER.time, "sleep") as sleep,
+                self.assertRaises(PermissionError),
+            ):
+                BUILDER.replace_publication_staging(staging, destination)
+
+            self.assertEqual(
+                sleep.call_count,
+                BUILDER.PUBLICATION_REPLACE_ATTEMPTS - 1,
+            )
+            self.assertTrue(staging.is_dir())
+            self.assertFalse(destination.exists())
 
     @staticmethod
     def _all_define_names(node: object) -> set[str]:
@@ -153,6 +207,10 @@ class ShaderCachePackagingTests(unittest.TestCase):
 
         self.assertEqual(
             BUILDER.cache_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
+            (BUILDER.STANDARD_CACHE_VARIANT,),
+        )
+        self.assertEqual(
+            BUILDER.compile_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
             BUILDER.CACHE_VARIANTS,
         )
         self.assertEqual(
@@ -511,7 +569,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             )
             BUILDER.validate_fomod_installer(fomod_dir, "CSX12.345-VR")
 
-    def test_se_fomod_adds_horizon_variants_without_dropping_core_identity(self) -> None:
+    def test_se_fomod_installs_one_managed_cache_with_core_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runtime_root = Path(temporary)
             fomod_dir = BUILDER.write_fomod_installer(
@@ -535,10 +593,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             ]
             self.assertEqual(
                 sources,
-                [
-                    BUILDER.HORIZON_FIX_CACHE_DIRECTORY,
-                    BUILDER.CACHE_DIRECTORY,
-                ],
+                [BUILDER.CACHE_DIRECTORY],
             )
             for plugin in cache_plugins:
                 for pattern in plugin.findall(
@@ -565,42 +620,30 @@ class ShaderCachePackagingTests(unittest.TestCase):
                         ),
                         dependencies,
                     )
+                    self.assertFalse(
+                        any(path.endswith("HorizonFix.dll") for path, _ in dependencies)
+                    )
             BUILDER.validate_fomod_installer(
                 fomod_dir,
                 "CSX12.345-VR",
-                horizon_variants=True,
+                horizon_variants=False,
             )
 
-    def test_vr_fomod_also_adds_both_horizon_variants(self) -> None:
+    def test_fomod_rejects_retired_installer_selected_horizon_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runtime_root = Path(temporary)
-            fomod_dir = BUILDER.write_fomod_installer(
-                runtime_root,
-                "VR",
-                "future-test",
-                "CSX 12.345-VR",
-            )
-            root = ET.parse(fomod_dir / BUILDER.FOMOD_CONFIG_FILE_NAME).getroot()
-            sources = [
-                plugin.find("./files/folder").get("source")
-                for plugin in root.findall(
-                    "./installSteps/installStep/optionalFileGroups/group/"
-                    "plugins/plugin"
+            with self.assertRaisesRegex(
+                SystemExit,
+                "installer-selected Horizon cache variants are retired",
+            ):
+                BUILDER.write_fomod_installer(
+                    runtime_root,
+                    "VR",
+                    "future-test",
+                    "CSX 12.345-VR",
+                    horizon_variants=True,
                 )
-                if plugin.find("./files/folder") is not None
-            ]
-            self.assertEqual(
-                sources,
-                [
-                    BUILDER.HORIZON_FIX_CACHE_DIRECTORY,
-                    BUILDER.CACHE_DIRECTORY,
-                ],
-            )
-            BUILDER.validate_fomod_installer(
-                fomod_dir,
-                "CSX12.345-VR",
-                horizon_variants=True,
-            )
+            self.assertFalse((runtime_root / BUILDER.FOMOD_DIRECTORY).exists())
 
     def test_fomod_validation_rejects_weakened_contracts(self) -> None:
         mutations = (

@@ -6,6 +6,7 @@
 #include "Utils/Input.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
@@ -152,6 +153,7 @@ public:
 	virtual void EarlyPrepass() override;
 
 	void UpdateDepthBufferCulling();
+	void TryApplyDepthBufferCullingCacheRefresh();
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -202,8 +204,8 @@ public:
 		static constexpr uint32_t kButtonJoystickTrigger = 32;
 
 		// Performance optimization settings
-		bool EnableDepthBufferCullingExterior = true;  ///< Enable depth buffer culling for VR performance
-		bool EnableDepthBufferCullingInterior = true;
+		bool EnableDepthBufferCullingExterior = true;   ///< Master depth-culling option; enabled in exteriors
+		bool EnableDepthBufferCullingInterior = false;  ///< Also enable depth culling in interiors
 		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
 
 		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.
@@ -421,6 +423,7 @@ public:
 	bool GetMenuCanvasSize(uint32_t& a_width, uint32_t& a_height) const;
 	void RecreateOverlayTexturesIfNeeded(bool needsControllerTexture = true);
 	void SubmitOverlayFrame();
+	void SubmitCaptureIndicator(bool a_visible);
 	void HideOverlaysIfPresent();
 	void UpdateMenuDesktopWindowManagement(bool force = false);
 	void ReleaseMenuDesktopWindowManagement();
@@ -468,6 +471,10 @@ public:
 	void MarkAutoHideOverlayPresented();
 	bool ShouldPresentOverlayInHeadset() const;
 	bool ShouldUseInSceneOverlay() const;
+	bool ShouldRenderCaptureIndicatorInScene() const
+	{
+		return IsOpenCompositeRuntime() && captureIndicatorVisible.load(std::memory_order_acquire);
+	}
 	bool CanOpenMenuFromWorld() const;
 
 	void UpdateOverlayDrag();
@@ -486,6 +493,9 @@ public:
 	// OpenVR overlay handles and DirectX 11 rendering resources
 	vr::VROverlayHandle_t menuOverlayHandle = vr::k_ulOverlayHandleInvalid;
 	vr::VROverlayHandle_t menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
+	vr::VROverlayHandle_t captureIndicatorOverlayHandle = vr::k_ulOverlayHandleInvalid;
+	std::atomic_bool captureIndicatorVisible{ false };
+	winrt::com_ptr<ID3D11Texture2D> captureIndicatorTexture;
 	winrt::com_ptr<ID3D11Texture2D> menuTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> menuRTV;
 	winrt::com_ptr<ID3D11ShaderResourceView> menuSamplingSRV;
@@ -513,6 +523,8 @@ public:
 	// Engine hook integration points
 	bool* gDepthBufferCulling = nullptr;
 	float* gMinOccludeeBoxExtent = nullptr;
+	std::atomic<bool> depthCullingCacheRefreshPending = false;
+	std::atomic<bool> depthCullingCacheRefreshCompleted = false;
 
 	// VR Controller state and logging
 	struct VRControllerEventLog
@@ -660,6 +672,8 @@ public:
 		winrt::com_ptr<ID3D11ShaderResourceView> menuControllerSRV;
 		winrt::com_ptr<ID3D11ComputeShader> submitCompositeCS;
 		winrt::com_ptr<ID3D11Buffer> submitCompositeCB;
+		winrt::com_ptr<ID3D11ComputeShader> submitIndicatorCS;
+		winrt::com_ptr<ID3D11Buffer> submitIndicatorCB;
 		ID3D11Texture2D* cachedMenuTexture = nullptr;
 		ID3D11Texture2D* cachedMenuControllerTexture = nullptr;
 
@@ -704,6 +718,17 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(SubmitCompositeCB);
 
+	struct alignas(16) SubmitIndicatorCB
+	{
+		uint32_t targetSize[2];
+		uint32_t dispatchOrigin[2];
+		uint32_t dispatchSize[2];
+		float centrePixels[2];
+		float radiusPixels;
+		float padding[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(SubmitIndicatorCB);
+
 public:
 	//=============================================================================
 	// PRIVATE IMPLEMENTATION
@@ -728,6 +753,11 @@ public:
 		const D3D11_TEXTURE2D_DESC& targetDesc,
 		const vr::VRTextureBounds_t* bounds,
 		bool* overlayComposited = nullptr);
+	void CompositeCaptureIndicatorSubmitTexture(
+		ID3D11UnorderedAccessView* targetUAV,
+		const D3D11_TEXTURE2D_DESC& targetDesc,
+		const vr::VRTextureBounds_t* bounds,
+		bool* indicatorComposited = nullptr);
 	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
 	bool InstallSubmitHook(bool a_enableProcessing = true);
 	bool GetGripPressed(bool isLeft, bool isRight) const;

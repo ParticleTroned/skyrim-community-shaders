@@ -11,6 +11,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
+#include "Features/FoliageLighting.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/HairSpecular.h"
@@ -204,12 +205,16 @@ bool Feature::ValidateCache(CSimpleIniA& a_ini)
 	}
 
 	if (loaded) {
-		auto versionInCache = a_ini.GetValue(ini_name.c_str(), "Version");
-		if (strcmp(versionInCache, version.c_str()) != 0) {
-			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
+		const auto shaderAbi = GetShaderCacheAbiVersion();
+		const auto shaderAbiInCache = a_ini.GetValue(ini_name.c_str(), "ShaderCacheABI");
+		const std::string_view cachedShaderAbi = shaderAbiInCache ? shaderAbiInCache : "";
+		if (cachedShaderAbi != shaderAbi) {
+			logger::info(
+				"Shader cache contract changed for {}. Installed {} but {} in Disk Cache",
+				name,
+				shaderAbi.empty() ? "<none>" : shaderAbi,
+				cachedShaderAbi.empty() ? "<none>" : cachedShaderAbi);
 			return false;
-		} else {
-			logger::info("Installed version and cached version match.");
 		}
 	}
 
@@ -222,12 +227,18 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 	auto ini_name = GetShortName();
 	a_ini.SetBoolValue(ini_name.c_str(), "Enabled", loaded);
 	a_ini.SetValue(ini_name.c_str(), "Version", version.c_str());
+	const auto shaderAbi = GetShaderCacheAbiVersion();
+	if (!shaderAbi.empty())
+		a_ini.SetValue(ini_name.c_str(), "ShaderCacheABI", std::string(shaderAbi).c_str());
+	else
+		a_ini.Delete(ini_name.c_str(), "ShaderCacheABI");
 }
 
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
 		&globals::features::truePBR,
+		&globals::features::foliageLighting,
 		&globals::features::adaptiveBrightness,
 		&globals::features::grassLighting,
 		&globals::features::grassCollision,

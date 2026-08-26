@@ -895,6 +895,9 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		if (result == SettingsSerialization::CanonicalizationResult::Error)
 			sourceConfigSafeForAutomaticSave = false;
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
+		if (auto adaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+			adaptiveIt != settings.end())
+			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
 	}
 
 	// Step 2: Apply user settings on top of defaults.
@@ -910,7 +913,16 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			const bool userDefinedAdaptiveBalance =
 				(adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object()) ||
 				(legacyAdaptiveBrightnessIt != userSettings.end() && legacyAdaptiveBrightnessIt->is_object());
-			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings);
+			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings, true);
+			if (const auto sourceAdaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+				sourceAdaptiveIt != userSettings.end() && SettingsMigrations::HasForcedLegacyWaterAppearance(*sourceAdaptiveIt)) {
+				if (auto targetAdaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+					targetAdaptiveIt != settings.end())
+					SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(*targetAdaptiveIt);
+			}
+			if (auto adaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+				adaptiveIt != userSettings.end())
+				SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
 			for (const auto& [key, value] : userSettings.items()) {
 				auto existingIt = settings.find(key);
 				if (!userDefinedAdaptiveBalance &&

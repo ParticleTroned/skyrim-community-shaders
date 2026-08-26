@@ -354,6 +354,16 @@ namespace SharedData
 		uint2 pad;
 	};
 
+	struct FoliageLightingSettings
+	{
+		uint EnableFoliageScattering;
+		uint EnableFoliageAmbientBoost;
+		uint EnableFoliageAmbientFlip;
+		float FoliageAmbientAmount;
+		uint EnableGrassScattering;
+		uint3 pad;
+	};
+
 	struct UnifiedWaterSettings
 	{
 		float ShallowFallbackStrength;
@@ -366,14 +376,22 @@ namespace SharedData
 		float ShallowSurfaceDepthRangeUnits;
 		float ShallowFallbackMaxDistance;
 		float DeepContextTransitionUnits;
+	};
+
+	struct WaterAppearanceSettings
+	{
+		uint Enabled;
 		float WaterBrightness;
 		float GlobalReflectionAmount;
 		float RefractionAmount;
+
 		float SunSpecularMultiplier;
 		float WaveAmplitude;
 		float FresnelMin;
 		float FresnelMax;
+
 		float Muddiness;
+		float3 pad;
 	};
 
 	struct BloomSettings
@@ -411,7 +429,9 @@ namespace SharedData
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		TruePBRSettings truePBRSettings;
+		FoliageLightingSettings foliageLightingSettings;
 		UnifiedWaterSettings unifiedWaterSettings;
+		WaterAppearanceSettings waterAppearanceSettings;
 		BloomSettings bloomSettings;
 	};
 

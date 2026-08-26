@@ -1,6 +1,9 @@
 build/
 bin/
 dist/
+/vcpkg/
+/vcpkg_installed/
+/*/vcpkg_cache/
 .idea/
 .vs*/
 CMakeUserPresets.json

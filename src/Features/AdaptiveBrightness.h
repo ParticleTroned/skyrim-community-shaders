@@ -256,6 +256,7 @@ struct AdaptiveBrightness : Feature
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;
 	const LocationOverride* GetActiveLocationOverride() const;
+	const LocationOverride* GetActiveWorldspaceOverride() const;
 	float GetExteriorNightFactor() const;
 	std::string GetContextLabel() const;
 	static const char* GetProfileName(Profile a_profile);
@@ -263,6 +264,14 @@ struct AdaptiveBrightness : Feature
 	std::optional<ContextSection> SyncContextSection();
 	void DrawExteriorTimeSettings();
 	void DrawProfile(Profile a_profile, bool a_allowEdits = true);
+	void DrawLocationOverrideProfileEditor(
+		LocationOverride& a_locationOverride,
+		const char* a_sectionTitle,
+		bool a_showAdvancedControls,
+		bool a_allowEdits,
+		const char* a_saveLabel,
+		bool a_closeWhenFinished);
+	void DrawCurrentWorldspaceProfileTab(bool a_showAdvancedControls, bool a_allowEdits, bool a_select);
 	void DrawProfileSettings(
 		ProfileSettings& a_profile,
 		const char* a_sectionTitle = "Profile Values",

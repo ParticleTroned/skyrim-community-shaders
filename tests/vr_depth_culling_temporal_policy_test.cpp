@@ -1,12 +1,15 @@
+#include "Features/VRDepthCullingTemporal.h"
 #include "Features/VRDepthCullingTemporalPolicy.h"
 
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <string_view>
 
 namespace
 {
 	using namespace VRDepthCullingTemporalPolicy;
+	using VRDepthCullingTemporal::Mode;
 
 	bool CoversTemporalValidityBoundary()
 	{
@@ -103,6 +106,19 @@ namespace
 		}
 		return foundThree && foundFour;
 	}
+
+	constexpr bool CoversMutuallyExclusiveModes()
+	{
+		return VRDepthCullingTemporal::SelectMode(false, false) == Mode::Balanced &&
+		       VRDepthCullingTemporal::SelectMode(true, false) == Mode::Performance &&
+		       VRDepthCullingTemporal::SelectMode(false, true) == Mode::Legacy &&
+		       VRDepthCullingTemporal::SelectMode(true, true) == Mode::Balanced &&
+		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Balanced)) == "balanced" &&
+		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Performance)) == "performance" &&
+		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Legacy)) == "legacy";
+	}
+
+	static_assert(CoversMutuallyExclusiveModes());
 }
 
 int main()
@@ -110,6 +126,7 @@ int main()
 	const bool passed = CoversTemporalValidityBoundary() &&
 	                    CoversOBBBoundingSphere() &&
 	                    CoversMotionExpansion() &&
-	                    CoversBoundedPrioritySelection();
+	                    CoversBoundedPrioritySelection() &&
+	                    CoversMutuallyExclusiveModes();
 	return passed ? 0 : 1;
 }

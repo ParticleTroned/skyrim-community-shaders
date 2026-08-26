@@ -579,6 +579,7 @@ namespace
 			json mask = MakeJsonMask({ "EnableDepthBufferCullingExterior",
 				"EnableDepthBufferCullingInterior",
 				"DepthCullingPerformanceMode",
+				"DepthCullingLegacyMode",
 				"MinOccludeeBoxExtent",
 				"EnableStereoBlend",
 				"EnableLightingFoveation",

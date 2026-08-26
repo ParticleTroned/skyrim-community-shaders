@@ -430,6 +430,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
 	DepthCullingPerformanceMode,
+	DepthCullingLegacyMode,
 	MinOccludeeBoxExtent,
 	VRMenuScale,
 	VRMenuPositioningMethod,
@@ -508,7 +509,7 @@ void VR::LoadSettings(json& o_json)
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
-	SetDepthCullingPerformanceMode(settings.DepthCullingPerformanceMode);
+	ApplyDepthCullingMode();
 }
 
 void VR::SaveSettings(json& o_json)
@@ -528,7 +529,7 @@ void VR::RestoreDefaultSettings()
 	settings = Settings{};
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
-	SetDepthCullingPerformanceMode(settings.DepthCullingPerformanceMode);
+	ApplyDepthCullingMode();
 	UpdateDepthBufferCulling();
 
 	if (gMinOccludeeBoxExtent) {
@@ -607,7 +608,9 @@ void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	auto& screenSpaceGI = globals::features::screenSpaceGI;
 	settings.EnableDepthBufferCullingExterior = a_enabled ? defaults.EnableDepthBufferCullingExterior : false;
 	settings.EnableDepthBufferCullingInterior = a_enabled ? defaults.EnableDepthBufferCullingInterior : false;
-	SetDepthCullingPerformanceMode(a_enabled ? defaults.DepthCullingPerformanceMode : true);
+	settings.DepthCullingPerformanceMode = a_enabled ? defaults.DepthCullingPerformanceMode : true;
+	settings.DepthCullingLegacyMode = false;
+	ApplyDepthCullingMode();
 	screenSpaceShadows.bendSettings.EnableFoveated = a_enabled ? screenSpaceShadowsDefaults.EnableFoveated : 0u;
 	screenSpaceShadows.enableStereoSync = false;
 	screenSpaceShadows.useStereoReproject = false;
@@ -638,6 +641,7 @@ json VR::CapturePerformanceCostMeasurementState() const
 		{ "EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior },
 		{ "EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior },
 		{ "DepthCullingPerformanceMode", settings.DepthCullingPerformanceMode },
+		{ "DepthCullingLegacyMode", settings.DepthCullingLegacyMode },
 		{ "EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0 },
 		{ "EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync },
 		{ "EnableSSShadowsStereoReproject", globals::features::screenSpaceShadows.useStereoReproject },
@@ -667,6 +671,7 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	settings.EnableDepthBufferCullingExterior = a_state.value("EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior);
 	settings.EnableDepthBufferCullingInterior = a_state.value("EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior);
 	settings.DepthCullingPerformanceMode = a_state.value("DepthCullingPerformanceMode", settings.DepthCullingPerformanceMode);
+	settings.DepthCullingLegacyMode = a_state.value("DepthCullingLegacyMode", settings.DepthCullingLegacyMode);
 	globals::features::screenSpaceShadows.bendSettings.EnableFoveated =
 		a_state.value("EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0) ? 1u : 0u;
 	globals::features::screenSpaceShadows.enableStereoSync = a_state.value("EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync);
@@ -691,7 +696,7 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	settings.StabilizeRenderScaleDesktopMirror = a_state.value("StabilizeRenderScaleDesktopMirror", settings.StabilizeRenderScaleDesktopMirror);
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
-	SetDepthCullingPerformanceMode(settings.DepthCullingPerformanceMode);
+	ApplyDepthCullingMode();
 	UpdateDepthBufferCulling();
 }
 
@@ -913,7 +918,7 @@ void VR::PostPostLoad()
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xE5) + 0x2, 0x14C);
 	REL::safe_write(REL::RelocationID(0, 0, 69528).address() + REL::Relocate(0, 0, 0xF1) + 0x2, 0x150);
 
-	SetDepthCullingPerformanceMode(settings.DepthCullingPerformanceMode);
+	ApplyDepthCullingMode();
 	VRDepthCullingTemporal::Install();
 }
 
@@ -1897,7 +1902,7 @@ namespace
 		ImGui::SeparatorText("Depth Culling");
 		bool exteriorChanged = false;
 		bool interiorChanged = false;
-		if (ImGui::BeginTable("##Options", 3, ImGuiTableFlags_SizingStretchSame)) {
+		if (ImGui::BeginTable("##Options", 2, ImGuiTableFlags_SizingStretchSame)) {
 			ImGui::TableNextColumn();
 			exteriorChanged = ImGui::Checkbox("Depth Buffer Culling", &settings.EnableDepthBufferCullingExterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1912,19 +1917,43 @@ namespace
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Enabled by default. It improves indoor culling; Balanced mode limits one-frame missing-object faults during head motion.");
 			}
-
-			ImGui::TableNextColumn();
-			bool performanceMode = a_vr.IsDepthCullingPerformanceMode();
-			{
-				auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
-				if (ImGui::Checkbox("Performance Mode", &performanceMode))
-					a_vr.SetDepthCullingPerformanceMode(performanceMode);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Off (Balanced, default): on a motion-envelope miss, test conservative OBB bounds and recover at most 64 high-risk objects.");
-				ImGui::TextUnformatted("On (Performance): accept the native one-frame-late result. This has the lowest recovery cost but can briefly hide newly visible objects during head motion.");
-			}
 			ImGui::EndTable();
+		}
+
+		ImGui::TextUnformatted("Temporal Policy");
+		{
+			auto guard = Util::DisableGuard(!settings.EnableDepthBufferCullingExterior);
+			auto mode = a_vr.GetDepthCullingMode();
+			if (ImGui::BeginTable("##TemporalPolicy", 3, ImGuiTableFlags_SizingStretchSame)) {
+				ImGui::TableNextColumn();
+				if (ImGui::RadioButton("Balanced (Default)", mode == VRDepthCullingTemporal::Mode::Balanced)) {
+					mode = VRDepthCullingTemporal::Mode::Balanced;
+					a_vr.SetDepthCullingMode(mode);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("On a motion-envelope miss, test conservative OBB bounds and recover at most 64 high-risk objects.");
+				}
+
+				ImGui::TableNextColumn();
+				if (ImGui::RadioButton("Performance", mode == VRDepthCullingTemporal::Mode::Performance)) {
+					mode = VRDepthCullingTemporal::Mode::Performance;
+					a_vr.SetDepthCullingMode(mode);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Accept the native one-frame-late result while keeping the producer pose warm for an immediate switch back to Balanced.");
+					ImGui::TextUnformatted("This skips the recovery scan but can briefly hide newly visible objects during head motion.");
+				}
+
+				ImGui::TableNextColumn();
+				if (ImGui::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
+					mode = VRDepthCullingTemporal::Mode::Legacy;
+					a_vr.SetDepthCullingMode(mode);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Off by default. Use native results without temporal pose capture or recovery.");
+				}
+				ImGui::EndTable();
+			}
 		}
 
 		if (exteriorChanged || interiorChanged)
@@ -4124,15 +4153,45 @@ void VR::UpdateDepthBufferCulling()
 	}
 }
 
-void VR::SetDepthCullingPerformanceMode(bool a_enabled)
+void VR::SetDepthCullingMode(VRDepthCullingTemporal::Mode a_mode)
 {
-	settings.DepthCullingPerformanceMode = a_enabled;
-	VRDepthCullingTemporal::SetPerformanceMode(a_enabled);
+	settings.DepthCullingPerformanceMode = a_mode == VRDepthCullingTemporal::Mode::Performance;
+	settings.DepthCullingLegacyMode = a_mode == VRDepthCullingTemporal::Mode::Legacy;
+	VRDepthCullingTemporal::SetMode(VRDepthCullingTemporal::SelectMode(
+		settings.DepthCullingPerformanceMode,
+		settings.DepthCullingLegacyMode));
 }
 
-bool VR::IsDepthCullingPerformanceMode() const
+VRDepthCullingTemporal::Mode VR::GetDepthCullingMode() const
 {
-	return settings.DepthCullingPerformanceMode;
+	return VRDepthCullingTemporal::SelectMode(
+		settings.DepthCullingPerformanceMode,
+		settings.DepthCullingLegacyMode);
+}
+
+void VR::SetDepthCullingPerformanceMode(bool a_enabled)
+{
+	auto mode = GetDepthCullingMode();
+	if (a_enabled)
+		mode = VRDepthCullingTemporal::Mode::Performance;
+	else if (mode == VRDepthCullingTemporal::Mode::Performance)
+		mode = VRDepthCullingTemporal::Mode::Balanced;
+	SetDepthCullingMode(mode);
+}
+
+void VR::SetDepthCullingLegacyMode(bool a_enabled)
+{
+	auto mode = GetDepthCullingMode();
+	if (a_enabled)
+		mode = VRDepthCullingTemporal::Mode::Legacy;
+	else if (mode == VRDepthCullingTemporal::Mode::Legacy)
+		mode = VRDepthCullingTemporal::Mode::Balanced;
+	SetDepthCullingMode(mode);
+}
+
+void VR::ApplyDepthCullingMode()
+{
+	SetDepthCullingMode(GetDepthCullingMode());
 }
 
 //=============================================================================

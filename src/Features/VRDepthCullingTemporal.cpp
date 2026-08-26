@@ -42,12 +42,29 @@ namespace VRDepthCullingTemporal
 		std::atomic_bool g_cullingEnabled{ false };
 		std::atomic_uint64_t g_cullingEpoch{ 1 };
 		std::atomic_uint64_t g_producerPoseEpoch{ 0 };
-		std::atomic_bool g_performanceMode{ false };
+		std::atomic<Mode> g_mode{ Mode::Balanced };
+		std::atomic_uint64_t g_policyEpoch{ 2 };
 		std::atomic_uint64_t g_envelopeMisses{ 0 };
 		std::atomic_uint64_t g_totalPromoted{ 0 };
 		std::atomic_uint32_t g_lastObjectCount{ 0 };
 		std::atomic_uint32_t g_lastEligibleCount{ 0 };
 		std::atomic_uint32_t g_lastPromotedCount{ 0 };
+
+		void ClearLastRecoveryStatus()
+		{
+			g_lastObjectCount.store(0, std::memory_order_relaxed);
+			g_lastEligibleCount.store(0, std::memory_order_relaxed);
+			g_lastPromotedCount.store(0, std::memory_order_relaxed);
+		}
+
+		bool IsBalancedRecoveryActive(std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch)
+		{
+			return (a_policyEpoch & 1u) == 0 &&
+			       g_cullingEnabled.load(std::memory_order_acquire) &&
+			       g_mode.load(std::memory_order_acquire) == Mode::Balanced &&
+			       g_cullingEpoch.load(std::memory_order_acquire) == a_cullingEpoch &&
+			       g_policyEpoch.load(std::memory_order_acquire) == a_policyEpoch;
+		}
 
 		template <class T>
 		T ReadCullerField(const std::byte* a_culler, std::size_t a_offset)
@@ -79,8 +96,10 @@ namespace VRDepthCullingTemporal
 
 		void CaptureProducerPose()
 		{
-			if (!g_cullingEnabled.load(std::memory_order_acquire))
+			if (!g_cullingEnabled.load(std::memory_order_acquire) ||
+				g_mode.load(std::memory_order_acquire) == Mode::Legacy) {
 				return;
+			}
 			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
 
 			// Keep the pose warm so switching from Performance to Balanced is valid immediately.
@@ -102,11 +121,14 @@ namespace VRDepthCullingTemporal
 
 		void RecoverHighRiskObjects(void* a_culler)
 		{
-			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
 			if (!g_cullingEnabled.load(std::memory_order_acquire) ||
-				g_performanceMode.load(std::memory_order_acquire)) {
+				g_mode.load(std::memory_order_acquire) != Mode::Balanced) {
 				return;
 			}
+			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
+			const auto policyEpoch = g_policyEpoch.load(std::memory_order_acquire);
+			if ((policyEpoch & 1u) != 0)
+				return;
 			if (g_producerPoseEpoch.load(std::memory_order_acquire) != cullingEpoch)
 				return;
 
@@ -128,12 +150,10 @@ namespace VRDepthCullingTemporal
 				return;
 
 			g_envelopeMisses.fetch_add(1, std::memory_order_relaxed);
-			g_lastEligibleCount.store(0, std::memory_order_relaxed);
-			g_lastPromotedCount.store(0, std::memory_order_relaxed);
+			ClearLastRecoveryStatus();
 
 			auto* bytes = static_cast<std::byte*>(a_culler);
 			const auto objectCount = ReadCullerField<std::uint32_t>(bytes, kObjectCountOffset);
-			g_lastObjectCount.store(objectCount, std::memory_order_relaxed);
 			const auto bufferIndex = ReadCullerField<std::uint32_t>(bytes, kResultSelectorOffset);
 			if (objectCount == 0 || objectCount > kMaximumObjects || bufferIndex > 1)
 				return;
@@ -174,13 +194,20 @@ namespace VRDepthCullingTemporal
 				candidates.Add({ index, CalculateRiskScore(sphere.radius, distanceSquared), directlyVisible });
 			}
 
+			if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch)) {
+				return;
+			}
+
 			for (std::size_t index = 0; index < candidates.Size(); ++index)
 				results[candidates[index].index] = 1;
 
 			const auto promotedCount = static_cast<std::uint32_t>(candidates.Size());
+			g_lastObjectCount.store(objectCount, std::memory_order_relaxed);
 			g_lastEligibleCount.store(eligibleCount, std::memory_order_relaxed);
 			g_lastPromotedCount.store(promotedCount, std::memory_order_relaxed);
 			g_totalPromoted.fetch_add(promotedCount, std::memory_order_relaxed);
+			if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch))
+				ClearLastRecoveryStatus();
 		}
 
 		struct DepthCullingReadback
@@ -239,9 +266,26 @@ namespace VRDepthCullingTemporal
 			kBalancedPromotionBudget);
 	}
 
-	void SetPerformanceMode(bool a_enabled)
+	void SetMode(Mode a_mode)
 	{
-		g_performanceMode.store(a_enabled, std::memory_order_release);
+		a_mode = SelectMode(
+			a_mode == Mode::Performance,
+			a_mode == Mode::Legacy);
+		const auto current = g_mode.load(std::memory_order_acquire);
+		if (current == a_mode)
+			return;
+		// The main-thread writer leaves an odd epoch while publishing a new policy.
+		g_policyEpoch.fetch_add(1, std::memory_order_acq_rel);
+		const auto previous = g_mode.exchange(a_mode, std::memory_order_acq_rel);
+		if (a_mode != Mode::Balanced)
+			ClearLastRecoveryStatus();
+		if (previous == Mode::Legacy || a_mode == Mode::Legacy) {
+			// Legacy does not keep a producer pose warm. Require a new pose whenever
+			// crossing that boundary so Balanced cannot consume an arbitrarily old one.
+			g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
+			g_producerPoseEpoch.store(0, std::memory_order_release);
+		}
+		g_policyEpoch.fetch_add(1, std::memory_order_release);
 	}
 
 	void SetCullingEnabled(bool a_enabled)
@@ -252,24 +296,29 @@ namespace VRDepthCullingTemporal
 
 		g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
 		g_cullingEnabled.store(a_enabled, std::memory_order_release);
+		if (!a_enabled)
+			ClearLastRecoveryStatus();
 	}
 
-	bool IsPerformanceMode()
+	Mode GetMode()
 	{
-		return g_performanceMode.load(std::memory_order_acquire);
+		return g_mode.load(std::memory_order_acquire);
 	}
 
 	Status GetStatus()
 	{
+		const auto mode = GetMode();
+		const bool cullingEnabled = g_cullingEnabled.load(std::memory_order_acquire);
+		const bool recoveryActive = cullingEnabled && mode == Mode::Balanced;
 		return {
 			.installed = g_installed.load(std::memory_order_acquire),
-			.cullingEnabled = g_cullingEnabled.load(std::memory_order_acquire),
-			.performanceMode = IsPerformanceMode(),
+			.cullingEnabled = cullingEnabled,
+			.mode = mode,
 			.envelopeMisses = g_envelopeMisses.load(std::memory_order_relaxed),
 			.totalPromoted = g_totalPromoted.load(std::memory_order_relaxed),
-			.lastObjectCount = g_lastObjectCount.load(std::memory_order_relaxed),
-			.lastEligibleCount = g_lastEligibleCount.load(std::memory_order_relaxed),
-			.lastPromotedCount = g_lastPromotedCount.load(std::memory_order_relaxed),
+			.lastObjectCount = recoveryActive ? g_lastObjectCount.load(std::memory_order_relaxed) : 0,
+			.lastEligibleCount = recoveryActive ? g_lastEligibleCount.load(std::memory_order_relaxed) : 0,
+			.lastPromotedCount = recoveryActive ? g_lastPromotedCount.load(std::memory_order_relaxed) : 0,
 		};
 	}
 }

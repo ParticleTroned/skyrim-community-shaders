@@ -25,6 +25,11 @@ namespace RE
 	class BSOpenVR;
 }
 
+namespace VRDepthCullingTemporal
+{
+	enum class Mode;
+}
+
 // Backwards compatibility aliases
 using ControllerDevice = InputDeviceType;
 using ButtonCombo = InputCombo;
@@ -153,10 +158,16 @@ public:
 	virtual void EarlyPrepass() override;
 
 	void UpdateDepthBufferCulling();
-	/** Switch between bounded recovery and native-result Performance Mode. */
+	/** Select one effective depth-culling policy and synchronize persisted toggles. */
+	void SetDepthCullingMode(VRDepthCullingTemporal::Mode a_mode);
+	/** Return the effective policy represented by the persisted toggles. */
+	[[nodiscard]] VRDepthCullingTemporal::Mode GetDepthCullingMode() const;
+	/** Select Performance Mode and clear Legacy Mode when enabled. */
 	void SetDepthCullingPerformanceMode(bool a_enabled);
-	/** Return the persisted depth-culling temporal mode. */
-	[[nodiscard]] bool IsDepthCullingPerformanceMode() const;
+	/** Select the native-result Legacy path and clear Performance Mode when enabled. */
+	void SetDepthCullingLegacyMode(bool a_enabled);
+	/** Normalize persisted toggles and publish one effective temporal policy. */
+	void ApplyDepthCullingMode();
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -207,10 +218,11 @@ public:
 		static constexpr uint32_t kButtonJoystickTrigger = 32;
 
 		// Performance optimization settings
-		bool EnableDepthBufferCullingExterior = true;   ///< Master depth-culling option; enabled in exteriors
-		bool EnableDepthBufferCullingInterior = true;   ///< Also enable depth culling in interiors
-		bool DepthCullingPerformanceMode = false;       ///< Accept native stale results instead of bounded recovery
-		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
+		bool EnableDepthBufferCullingExterior = true;  ///< Master depth-culling option; enabled in exteriors
+		bool EnableDepthBufferCullingInterior = true;  ///< Also enable depth culling in interiors
+		bool DepthCullingPerformanceMode = false;      ///< Accept native stale results instead of bounded recovery
+		bool DepthCullingLegacyMode = false;           ///< Use native results without temporal pose capture or recovery
+		float MinOccludeeBoxExtent = 10.0f;            ///< Minimum bounding box size for occlusion culling
 
 		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.
 		bool EnableStereoBlend = false;

@@ -165,7 +165,7 @@ namespace
 		const json depthCullingTemporalStatus = {
 			{ "installed", depthCullingTemporal.installed },
 			{ "cullingEnabled", depthCullingTemporal.cullingEnabled },
-			{ "policy", depthCullingTemporal.performanceMode ? "performance" : "balanced" },
+			{ "policy", VRDepthCullingTemporal::GetModeName(depthCullingTemporal.mode) },
 			{ "envelopeMisses", depthCullingTemporal.envelopeMisses },
 			{ "totalPromoted", depthCullingTemporal.totalPromoted },
 			{ "lastObjectCount", depthCullingTemporal.lastObjectCount },
@@ -202,6 +202,7 @@ namespace
 			{ "depthCullingExteriorEnabled", vr.settings.EnableDepthBufferCullingExterior },
 			{ "depthCullingInteriorEnabled", vr.settings.EnableDepthBufferCullingInterior },
 			{ "depthCullingPerformanceMode", vr.settings.DepthCullingPerformanceMode },
+			{ "depthCullingLegacyMode", vr.settings.DepthCullingLegacyMode },
 			{ "depthCullingTemporal", depthCullingTemporalStatus },
 			{ "menuOffsetX", vr.settings.VRMenuOffsetX },
 			{ "menuOffsetY", vr.settings.VRMenuOffsetY },
@@ -224,11 +225,11 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "texture_stats" && action != "set_depth_culling_performance_mode") {
+		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "texture_stats", "set_depth_culling_performance_mode" }) },
+				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -239,10 +240,10 @@ namespace
 				{ "path", path },
 			};
 		}
-		if (action == "set_depth_culling_performance_mode" &&
+		if ((action == "set_depth_culling_performance_mode" || action == "set_depth_culling_legacy_mode") &&
 			(!a_args.contains("enabled") || !a_args.at("enabled").is_boolean())) {
 			return {
-				{ "error", "set_depth_culling_performance_mode requires boolean enabled" },
+				{ "error", action + " requires boolean enabled" },
 				{ "action", action },
 			};
 		}
@@ -272,6 +273,8 @@ namespace
 				vr.ResetMenuInputRuntimeState();
 			} else if (action == "set_depth_culling_performance_mode") {
 				globals::features::vr.SetDepthCullingPerformanceMode(enabled);
+			} else if (action == "set_depth_culling_legacy_mode") {
+				globals::features::vr.SetDepthCullingLegacyMode(enabled);
 			}
 			if (action == "texture_stats")
 				return { { "action", action }, { "texture", InspectMenuTexture() }, { "status", BuildStatus() } };
@@ -321,7 +324,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu and depth-culling A/B policy. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats","set_depth_culling_performance_mode"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Performance Mode state required by set_depth_culling_performance_mode."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX VR menu and depth-culling A/B policy. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Mode state required by a depth-culling setter action."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

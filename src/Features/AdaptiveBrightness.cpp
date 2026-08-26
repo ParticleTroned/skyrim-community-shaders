@@ -1046,77 +1046,74 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 	ImGui::Indent();
 	ImGui::BeginDisabled(!a_allowEdits);
 
-	if (!a_showAdvancedControls) {
-		drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
-		Bloom::DrawProfileControls(a_profile.bloom);
-		ImGui::EndDisabled();
-		ImGui::Unindent();
-		ClampProfileSettings(a_profile);
-		return;
-	}
-
 	if (ImGui::BeginTabBar("##ProfileControlSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Lighting")) {
 			drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
 
-			ImGui::Checkbox("Show Detailed Lighting Controls", &a_profile.advanced);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Shows and enables the detailed lighting and atmosphere values for this profile only.");
-			}
-			if (a_profile.advanced) {
-				ImGui::Indent();
-				ImGui::SeparatorText("Direct Lighting");
-				ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, 2.0f, "%.2f");
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Contextual multiplier applied to the global Sky Brightness value. This is separate from Sky Gamma.");
-				ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
-				ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
+			if (a_showAdvancedControls) {
+				ImGui::Checkbox("Show Detailed Lighting Controls", &a_profile.advanced);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("Shows and enables the detailed lighting and atmosphere values for this profile only.");
+				}
+				if (a_profile.advanced) {
+					ImGui::Indent();
+					ImGui::SeparatorText("Direct Lighting");
+					ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, 2.0f, "%.2f");
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text("Contextual multiplier applied to the global Sky Brightness value. This is separate from Sky Gamma.");
+					ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
+					ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
 
-				ImGui::SeparatorText("Indirect and Material Lighting");
-				ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, 3.0f, "%.2f");
-				ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, 3.0f, "%.2f");
-				ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, 3.0f, "%.2f");
-				ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, 3.0f, "%.2f");
+					ImGui::SeparatorText("Indirect and Material Lighting");
+					ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, 3.0f, "%.2f");
+					ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, 3.0f, "%.2f");
+					ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, 3.0f, "%.2f");
+					ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, 3.0f, "%.2f");
 
-				ImGui::SeparatorText("Atmosphere Gamma Offsets");
-				ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-				ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-				ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-				ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
-				ImGui::Unindent();
+					ImGui::SeparatorText("Atmosphere Gamma Offsets");
+					ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+					ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+					ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+					ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
+					ImGui::Unindent();
+				}
 			}
 			ImGui::EndTabItem();
 		}
 
 		if (ImGui::BeginTabItem("Bloom")) {
 			Bloom::DrawProfileControls(a_profile.bloom);
-			ImGui::Checkbox(T(TKEY("bloom.detailed"), "Show Detailed Bloom Controls"), &a_profile.bloomAdvanced);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Shows detailed Bloom shaping for this profile. Editing a detailed value activates Bloom at strength 1 if it is currently off; the Bloom slider and presets remain available either way."));
-			if (a_profile.bloomAdvanced) {
-				ImGui::Indent();
-				if (Bloom::DrawAdvancedProfileSettings(a_profile.bloom) && a_profile.bloom.EnhancementIntensity <= 0.0f)
-					a_profile.bloom.EnhancementIntensity = 1.0f;
-				ImGui::Unindent();
+			if (a_showAdvancedControls) {
+				ImGui::Checkbox(T(TKEY("bloom.detailed"), "Show Detailed Bloom Controls"), &a_profile.bloomAdvanced);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("bloom.detailed_tooltip"), "Shows detailed Bloom shaping for this profile. Editing a detailed value activates Bloom at strength 1 if it is currently off; the Bloom slider and presets remain available either way."));
+				if (a_profile.bloomAdvanced) {
+					ImGui::Indent();
+					if (Bloom::DrawAdvancedProfileSettings(a_profile.bloom) && a_profile.bloom.EnhancementIntensity <= 0.0f)
+						a_profile.bloom.EnhancementIntensity = 1.0f;
+					ImGui::Unindent();
+				}
 			}
 			ImGui::EndTabItem();
 		}
 
 		if (ImGui::BeginTabItem("Water")) {
 			WaterAppearance::DrawProfileControls(a_profile.water);
-			ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Shows detailed water color, surface, reflection, refraction, and clarity controls for this profile.");
-			if (a_profile.waterAdvanced) {
-				ImGui::Indent();
-				drawSlider(
-					"Water Color Gamma",
-					a_profile.waterGammaOffset,
-					kGammaOffsetMin,
-					kGammaOffsetMax,
-					"Offsets water color gamma for this profile. This is separate from Water Brightness and the surface appearance controls below.");
-				WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
-				ImGui::Unindent();
+			if (a_showAdvancedControls) {
+				ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Shows detailed water color, surface, reflection, refraction, and clarity controls for this profile.");
+				if (a_profile.waterAdvanced) {
+					ImGui::Indent();
+					drawSlider(
+						"Water Color Gamma",
+						a_profile.waterGammaOffset,
+						kGammaOffsetMin,
+						kGammaOffsetMax,
+						"Offsets water color gamma for this profile. This is separate from Water Brightness and the surface appearance controls below.");
+					WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
+					ImGui::Unindent();
+				}
 			}
 			ImGui::EndTabItem();
 		}
@@ -1139,23 +1136,30 @@ void AdaptiveBrightness::DrawGlobalRendererSettings()
 	if (!settings.globalLightingEnabled)
 		ImGui::TextDisabled("%s", T(TKEY("global_lighting_inactive"), "Global lighting calibration is currently inactive."));
 
-	ImGui::BeginDisabled(!settings.globalLightingEnabled);
-	ImGui::TextWrapped("These baseline values apply to every location. The active profile is multiplied on top.");
-	ImGui::SeparatorText("Shared Baseline");
-	ImGui::SliderFloat("Sky Brightness", &settings.lighting.skyBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Directional Light", &settings.lighting.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Point Lights", &settings.lighting.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (ImGui::BeginTabBar("##AdaptiveBalanceGlobalSections", ImGuiTabBarFlags_None)) {
+		if (ImGui::BeginTabItem("Lighting")) {
+			ImGui::BeginDisabled(!settings.globalLightingEnabled);
+			ImGui::TextWrapped("These baseline values apply to every location. The active profile is multiplied on top.");
+			ImGui::SeparatorText("Shared Baseline");
+			ImGui::SliderFloat("Sky Brightness", &settings.lighting.skyBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Directional Light", &settings.lighting.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Point Lights", &settings.lighting.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-	ImGui::SeparatorText("Point-light Type Balance");
-	ImGui::TextWrapped("Subtype values are additional multipliers applied after the active profile's Point Lights value.");
-	ImGui::SliderFloat("Spotlights", &settings.lighting.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Omnidirectional Bulbs", &settings.lighting.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SeparatorText("Point-light Type Balance");
+			ImGui::TextWrapped("Subtype values are additional multipliers applied after the active profile's Point Lights value.");
+			ImGui::SliderFloat("Spotlights", &settings.lighting.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Omnidirectional Bulbs", &settings.lighting.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-	ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
-	ImGui::SliderFloat("Linear Point Lights", &settings.lighting.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Linear Spotlights", &settings.lighting.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Linear Omnidirectional Bulbs", &settings.lighting.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::EndDisabled();
+			ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
+			ImGui::SliderFloat("Linear Point Lights", &settings.lighting.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Linear Spotlights", &settings.lighting.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Linear Omnidirectional Bulbs", &settings.lighting.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::EndDisabled();
+			ImGui::EndTabItem();
+		}
+
+		ImGui::EndTabBar();
+	}
 
 	SanitizeSharedLightingSettings(settings.lighting);
 }

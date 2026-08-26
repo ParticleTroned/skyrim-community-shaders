@@ -2329,6 +2329,16 @@ void ScreenshotFeature::SetEnabled(bool a_enabled)
 	}
 }
 
+bool ScreenshotFeature::HasPendingDesktopMirrorCapture() const
+{
+	if (!HasPendingCapture())
+		return false;
+
+	std::lock_guard lock(captureStateMutex);
+	return activeCapture.pending &&
+	       activeCapture.source == VRCaptureSource::DesktopMirror;
+}
+
 std::size_t ScreenshotFeature::GetOutstandingArtifactCount() const
 {
 	std::lock_guard lock(screenshotQueueMutex);

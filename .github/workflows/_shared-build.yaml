@@ -157,8 +157,10 @@ jobs:
                 config:
                     - name: "Flatrim"
                       file: ".github/configs/shader-validation.yaml"
+                      runtime_file: ""
                     - name: "VR"
                       file: ".github/configs/shader-validation-vr.yaml"
+                      runtime_file: ".github/configs/runtime-foveated-compute-shaders-vr.yaml"
             fail-fast: false
         steps:
             - name: Checkout code
@@ -212,11 +214,17 @@ jobs:
                     }
                   }
 
+            - name: Test shader validation tooling
+              if: steps.check-hlsl.outputs.skip != 'true'
+              shell: pwsh
+              run: python tests/validate_changed_shaders_test.py
+
             - name: Validate shader compilation (${{ matrix.config.name }})
               if: steps.check-hlsl.outputs.skip != 'true'
               shell: bash
               env:
                   CHANGED_FILES_JSON: ${{ inputs.changed-files-json }}
+                  RUNTIME_CONFIG: ${{ matrix.config.runtime_file }}
               run: |
                   if [ -z "${{ steps.find_fxc.outputs.fxc_path }}" ]; then
                     echo "fxc.exe not found - shader validation requires fxc.exe. Set --fxc to a valid path or ensure fxc.exe is in PATH." >&2
@@ -238,6 +246,14 @@ jobs:
                   mkdir -p build/ShaderCache
                   python tools/validate_changed_shaders.py --changed-list-file changed_files.txt -- \
                     hlslkit-compile --fxc "${{ steps.find_fxc.outputs.fxc_path }}" --shader-dir build/ALL/aio/Shaders --output-dir build/ShaderCache --config ${{ matrix.config.file }} --max-warnings 0 --suppress-warnings X1519 --timing-report "build/shader-compile-timing-${{ matrix.config.name }}.json"
+                  if [ -n "$RUNTIME_CONFIG" ]; then
+                    hlslkit-compile --fxc "${{ steps.find_fxc.outputs.fxc_path }}" \
+                      --shader-dir build/ALL/aio/Shaders/Upscaling \
+                      --output-dir build/RuntimeShaderValidation \
+                      --extra-includes build/ALL/aio/Shaders \
+                      --config "$RUNTIME_CONFIG" --optimization-level 3 \
+                      --max-warnings 0 --suppress-warnings X1519
+                  fi
 
             - name: Upload shader validation logs
               if: failure() && steps.check-hlsl.outputs.skip != 'true'
@@ -247,6 +263,8 @@ jobs:
                   path: |
                       build/ShaderCache/new_issues.log
                       build/ShaderCache/*.log
+                      build/RuntimeShaderValidation/new_issues.log
+                      build/RuntimeShaderValidation/*.log
                   retention-days: 7
                   if-no-files-found: ignore
 

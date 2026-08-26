@@ -6,6 +6,9 @@ This directory contains configuration files used by the CI/CD pipeline for build
 
 -   `shader-validation.yaml`: Configuration for shader compilation validation using hlslkit (Skyrim SE)
 -   `shader-validation-vr.yaml`: VR Configuration for shader compilation validation using hlslkit (Skyrim VR)
+-   `runtime-foveated-compute-shaders-vr.yaml`: Manually maintained VR
+    foveated-pipeline compute entry points that are not present in the engine
+    shader compilation log
 
 ## Generating Configuration Files
 
@@ -72,6 +75,11 @@ These files are automatically used by the GitHub Actions workflows during shader
 -   Expected warnings (with suppression)
 -   Shader file configurations
 -   Compilation parameters
+
+`runtime-foveated-compute-shaders-vr.yaml` is intentionally not generated from
+the engine compilation log. Add or remove entries there with the corresponding
+runtime-loaded VR foveated-pipeline compute shaders, and keep its defines
+aligned with `Util::CompileShader`.
 
 The files should be regenerated when:
 

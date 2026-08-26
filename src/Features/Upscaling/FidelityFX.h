@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -54,6 +55,30 @@ public:
 		kRuntimeFsr31 = 2,
 		kRuntimeFsr4 = 3,
 		kHostFsr31Fallback = 4
+	};
+	enum class StereoUpscaleResult : uint8_t
+	{
+		NotHandled,
+		Ready,
+		Failed
+	};
+	/** @brief Complete resource and active-extent contract for one FSR context. */
+	struct UpscaleRegionParameters
+	{
+		uint32_t contextIndex = 0;
+		ID3D11Resource* color = nullptr;
+		ID3D11Resource* depth = nullptr;
+		ID3D11Resource* motionVectors = nullptr;
+		ID3D11Resource* reactiveMask = nullptr;
+		ID3D11Resource* transparencyCompositionMask = nullptr;
+		ID3D11Resource* output = nullptr;
+		uint32_t renderWidth = 0;
+		uint32_t renderHeight = 0;
+		uint32_t displayWidth = 0;
+		uint32_t displayHeight = 0;
+		float motionVectorScaleX = 0.0f;
+		float motionVectorScaleY = 0.0f;
+		float sharpness = 0.0f;
 	};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	struct RuntimeUpscalerDispatchSnapshot
@@ -133,6 +158,8 @@ public:
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
 		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool* a_usedRuntimeUpscaler = nullptr);
+	/** @brief Dispatch both ready VR runtime-FSR contexts in one interop transaction when eligible. */
+	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>& a_regions);
 
 private:
 	LifecycleResult RecordFSRDeviceStatus() noexcept;
@@ -228,7 +255,24 @@ private:
 	uint64_t runtimeUpscalerProviderMatchedVersionId = 0;
 	std::string runtimeUpscalerProviderMatchedVersionName;
 
+	struct RuntimeDispatchPlan
+	{
+		bool valid = false;
+		bool runtimeFsr4Requested = false;
+		bool runtimeRequested = false;
+		bool vendorLifecycleMutationDeferred = false;
+		bool selected = false;
+		uint32_t requestedVersion = 0;
+		uint32_t contextCount = 0;
+		uint32_t fullRenderWidth = 0;
+		uint32_t fullRenderHeight = 0;
+		uint32_t fullDisplayWidth = 0;
+		uint32_t fullDisplayHeight = 0;
+	};
+
 	bool CanUseRuntimeUpscalerPath();
+	RuntimeDispatchPlan ResolveRuntimeDispatchPlan();
+	void ArmRuntimeHostFallback(uint32_t a_contextCount);
 	uint32_t GetPreferredRuntimeUpscalerVersion() const;
 	void ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache);
 	void LatchRuntimeFsr4Failure();
@@ -257,10 +301,8 @@ private:
 		const D3D11_TEXTURE2D_DESC& a_reactiveDesc,
 		const D3D11_TEXTURE2D_DESC& a_transparencyDesc,
 		const D3D11_TEXTURE2D_DESC& a_outputDesc);
-	LifecycleResult DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
-		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
-		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness);
+	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions);
+	LifecycleResult DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions);
 	LifecycleResult DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);
 	LifecycleResult DestroyRuntimeUpscalerResources(bool a_waitForIdle = true);
 	LifecycleResult RetireQuarantinedRuntimeUpscalerResources();

@@ -6,6 +6,7 @@
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/VolumetricLighting.h"
 #include "FoveatedCommon.h"
 #include "GpuPass.h"
@@ -191,6 +192,46 @@ void Upscaling::RecordVRRenderScaleCPUPerformanceMaximum(
 			std::memory_order_relaxed,
 			std::memory_order_relaxed)) {
 	}
+}
+
+Upscaling::VRRenderScaleGPUPerformanceSnapshot Upscaling::GetVRRenderScaleGPUPerformanceSnapshot() const noexcept
+{
+	VRRenderScaleGPUPerformanceSnapshot snapshot{};
+	for (std::size_t index = 0; index < snapshot.size(); ++index)
+		snapshot[index] = vrRenderScaleGPUPerformanceCounters[index].load(std::memory_order_relaxed);
+	return snapshot;
+}
+
+bool Upscaling::IsVRRenderScaleGPUPerformanceTelemetryActive() const noexcept
+{
+	return vrRenderScaleGPUPerformanceTelemetryActive.load(std::memory_order_relaxed);
+}
+
+void Upscaling::StartVRRenderScaleGPUPerformanceTelemetry() noexcept
+{
+	ResetVRRenderScaleGPUPerformanceTelemetry();
+	vrRenderScaleGPUPerformanceTelemetryActive.store(true, std::memory_order_relaxed);
+}
+
+void Upscaling::StopVRRenderScaleGPUPerformanceTelemetry() noexcept
+{
+	vrRenderScaleGPUPerformanceTelemetryActive.store(false, std::memory_order_relaxed);
+}
+
+void Upscaling::ResetVRRenderScaleGPUPerformanceTelemetry() noexcept
+{
+	StopVRRenderScaleGPUPerformanceTelemetry();
+	for (auto& counter : vrRenderScaleGPUPerformanceCounters)
+		counter.store(0, std::memory_order_relaxed);
+	vrRenderScaleGPUPerformanceCounters[static_cast<std::size_t>(VRRenderScaleGPUPerformanceCounter::WindowStartFrame)]
+		.store(globals::state ? globals::state->frameCount : 0u, std::memory_order_relaxed);
+}
+
+void Upscaling::RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter a_counter, uint64_t a_delta) const noexcept
+{
+	if (!IsVRRenderScaleGPUPerformanceTelemetryActive())
+		return;
+	vrRenderScaleGPUPerformanceCounters[static_cast<std::size_t>(a_counter)].fetch_add(a_delta, std::memory_order_relaxed);
 }
 #endif
 
@@ -22488,6 +22529,7 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	submitStageRuntimeFSRStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -34949,6 +34991,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	submitStageRuntimeFSRStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -36412,6 +36455,13 @@ ID3D11ComputeShader* Upscaling::GetFoveatedCenterBlendCS()
 		"main", "Upscaling::FoveatedCenterBlendCS");
 }
 
+ID3D11ComputeShader* Upscaling::GetFoveatedSpatialCompositeCS()
+{
+	return foveatedSpatialCompositeCS.Get(
+		L"Data/Shaders/Upscaling/FoveatedSpatialCompositeCS.hlsl", {}, "cs_5_0",
+		"main", "Upscaling::FoveatedSpatialCompositeCS");
+}
+
 ID3D11ComputeShader* Upscaling::GetPeripheryTAACS()
 {
 	return peripheryTAACS.Get(
@@ -36892,12 +36942,14 @@ bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visuali
 	static bool loggedFoveatedShaderFailure = false;
 
 	try {
-		auto* peripheryCS = GetFoveatedPeripheryCS();
+		auto* peripheryCS = (usePeripheryTAA || visualizeMask) ? GetFoveatedPeripheryCS() : nullptr;
 		auto* peripheryTAA = usePeripheryTAA ? GetPeripheryTAACS() : nullptr;
-		auto* blendCS = visualizeMask ? nullptr : GetFoveatedCenterBlendCS();
-		return peripheryCS && foveatedPeripheryCB &&
+		auto* blendCS = usePeripheryTAA ? GetFoveatedCenterBlendCS() : nullptr;
+		auto* spatialCompositeCS = (!usePeripheryTAA && !visualizeMask) ? GetFoveatedSpatialCompositeCS() : nullptr;
+		return ((!usePeripheryTAA && !visualizeMask) || (peripheryCS && foveatedPeripheryCB)) &&
 		       (!usePeripheryTAA || (peripheryTAA && peripheryTAACB)) &&
-		       (visualizeMask || (blendCS && foveatedCenterBlendCB));
+		       (!usePeripheryTAA || (blendCS && foveatedCenterBlendCB)) &&
+		       ((usePeripheryTAA || visualizeMask) || (spatialCompositeCS && foveatedSpatialCompositeCB));
 	} catch (const std::exception& e) {
 		LogWarnOnceFmt(
 			loggedFoveatedShaderFailure,
@@ -36926,6 +36978,9 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 	D3D11_TEXTURE2D_DESC colorDesc{};
 	if (!TryGetTexture2DDesc(colorSource, colorDesc))
 		return false;
+	const auto& regionPlan = foveatedRectCache.plan;
+	if (!regionPlan.IsValid() || regionPlan.outputWidthPerEye != outputWidthPerEye || regionPlan.outputHeight != outputHeight)
+		return false;
 
 	bool recreatedResources = false;
 	static bool loggedPeripheryTAAResourceFailure = false;
@@ -36933,13 +36988,26 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 	try {
 		for (uint32_t eye = 0; eye < 2; ++eye) {
 			const std::string suffix = eye == 0 ? "Left" : "Right";
+			const auto& historyRect = regionPlan.eyes[eye].peripheryTAAHistoryOutput;
+			if (!historyRect.IsValid() || historyRect.maxX > outputWidthPerEye || historyRect.maxY > outputHeight) {
+				DestroyPeripheryTAAResources();
+				return false;
+			}
+			const uint32_t historyWidth = historyRect.Width();
+			const uint32_t historyHeight = historyRect.Height();
+			const auto& activeHistoryRect = peripheryTAAHistoryRects[eye];
+			recreatedResources = recreatedResources ||
+			                     activeHistoryRect.minX != historyRect.minX ||
+			                     activeHistoryRect.minY != historyRect.minY ||
+			                     activeHistoryRect.maxX != historyRect.maxX ||
+			                     activeHistoryRect.maxY != historyRect.maxY;
 
 			for (uint32_t historySlot = 0; historySlot < 2; ++historySlot) {
 				auto& historyColorTexture = peripheryTAAHistoryColor[eye][historySlot];
 				const bool recreateHistoryColor =
 					!historyColorTexture ||
-					historyColorTexture->desc.Width != outputWidthPerEye ||
-					historyColorTexture->desc.Height != outputHeight ||
+					historyColorTexture->desc.Width != historyWidth ||
+					historyColorTexture->desc.Height != historyHeight ||
 					historyColorTexture->desc.Format != colorDesc.Format ||
 					!historyColorTexture->srv || !historyColorTexture->uav;
 				recreatedResources = recreatedResources || recreateHistoryColor;
@@ -36947,8 +37015,8 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				if (!EnsureFoveatedTexture(
 						historyColorTexture,
 						colorSource,
-						outputWidthPerEye,
-						outputHeight,
+						historyWidth,
+						historyHeight,
 						false,
 						true,
 						true,
@@ -36961,14 +37029,14 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				auto& velocityTexture = peripheryTAAVelocityHistory[eye][historySlot];
 				const bool recreateVelocity =
 					!velocityTexture ||
-					velocityTexture->desc.Width != outputWidthPerEye ||
-					velocityTexture->desc.Height != outputHeight ||
+					velocityTexture->desc.Width != historyWidth ||
+					velocityTexture->desc.Height != historyHeight ||
 					velocityTexture->desc.Format != DXGI_FORMAT_R16G16_FLOAT ||
 					!velocityTexture->srv || !velocityTexture->uav;
 				if (recreateVelocity) {
 					velocityTexture = CreateNamedTexture2D(
-						outputWidthPerEye,
-						outputHeight,
+						historyWidth,
+						historyHeight,
 						DXGI_FORMAT_R16G16_FLOAT,
 						true,
 						true,
@@ -36980,14 +37048,14 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 				auto& lockTexture = peripheryTAALockHistory[eye][historySlot];
 				const bool recreateLock =
 					!lockTexture ||
-					lockTexture->desc.Width != outputWidthPerEye ||
-					lockTexture->desc.Height != outputHeight ||
+					lockTexture->desc.Width != historyWidth ||
+					lockTexture->desc.Height != historyHeight ||
 					lockTexture->desc.Format != DXGI_FORMAT_R16_FLOAT ||
 					!lockTexture->srv || !lockTexture->uav;
 				if (recreateLock) {
 					lockTexture = CreateNamedTexture2D(
-						outputWidthPerEye,
-						outputHeight,
+						historyWidth,
+						historyHeight,
 						DXGI_FORMAT_R16_FLOAT,
 						true,
 						true,
@@ -36996,6 +37064,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 					recreatedResources = true;
 				}
 			}
+			peripheryTAAHistoryRects[eye] = historyRect;
 		}
 	} catch (const std::exception& e) {
 		LogWarnOnce(
@@ -37219,6 +37288,7 @@ void Upscaling::DestroyPeripheryTAAResources()
 		peripheryTAATileBuffer[eye].reset();
 		peripheryTAATileCapacity[eye] = 0;
 		peripheryTAATileCache[eye] = {};
+		peripheryTAAHistoryRects[eye] = {};
 	}
 	peripheryTAAHistoryReadIndex = 0;
 	peripheryTAAHistoryValid = false;
@@ -37323,7 +37393,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	ID3D11ShaderResourceView* historyVelocitySRV, ID3D11ShaderResourceView* historyLockSRV, ID3D11UnorderedAccessView* outputColorUAV, ID3D11UnorderedAccessView* outputHistoryColorUAV,
 	ID3D11UnorderedAccessView* outputVelocityUAV, ID3D11UnorderedAccessView* outputLockUAV, ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount,
 	uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth,
-	uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, const float4x4& currentViewProjInverse,
+	uint32_t outputHeight, const FoveatedRegionPlan::Rect& historyRect, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, const float4x4& currentViewProjInverse,
 	const float4x4& previousViewProj, const float4& currentCameraPosAdjust, const float4& previousCameraPosAdjust, bool resetHistory, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY,
 	float inputTextureScaleX, float inputTextureScaleY, float inputTextureOffsetX, float inputTextureOffsetY)
 {
@@ -37341,7 +37411,8 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		return;
 	if (!outputColorUAV || !outputHistoryColorUAV || !outputVelocityUAV || !outputLockUAV)
 		return;
-	if (!inputWidth || !inputHeight || !outputWidth || !outputHeight)
+	if (!inputWidth || !inputHeight || !outputWidth || !outputHeight || !historyRect.IsValid() ||
+		historyRect.maxX > outputWidth || historyRect.maxY > outputHeight)
 		return;
 	const bool useTileList = tileListSRV && tileCount > 0;
 	if (!useTileList && (!dispatchWidth || !dispatchHeight))
@@ -37430,6 +37501,12 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		static_cast<float>(taaColorWriteBounds.maxX),
 		static_cast<float>(taaColorWriteBounds.maxY)
 	};
+	cbData.historyRect = {
+		static_cast<float>(historyRect.minX),
+		static_cast<float>(historyRect.minY),
+		static_cast<float>(historyRect.Width()),
+		static_cast<float>(historyRect.Height())
+	};
 	cbData.currentViewProjInverse = currentViewProjInverse;
 	cbData.previousViewProj = previousViewProj;
 	cbData.currentCameraPosAdjust = currentCameraPosAdjust;
@@ -37467,6 +37544,17 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		state->BeginPerfEvent(buf);
 	}
 	context->Dispatch(dispatchGroupsX, dispatchGroupsY, 1);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (IsVRRenderScaleGPUPerformanceTelemetryActive()) {
+		RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter::PeripheryTAAHistoryDispatches);
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::PeripheryTAAHistoryPixels,
+			static_cast<uint64_t>(historyRect.Width()) * historyRect.Height());
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::PeripheryTAAFullEyePixels,
+			static_cast<uint64_t>(outputWidth) * outputHeight);
+	}
+#endif
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
@@ -37563,6 +37651,79 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	context->CSSetSamplers(0, 1, nullSampler);
 	context->CSSetConstantBuffers(0, 1, nullCB);
 	context->CSSetShader(nullptr, nullptr, 0);
+}
+
+bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* peripherySRV, ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t peripherySourceWidth, uint32_t peripherySourceHeight, uint32_t outputWidth, uint32_t outputHeight, const FoveatedDispatchRect& centerRect, float peripherySourceScaleX, float peripherySourceScaleY, float peripherySourceOffsetX, float peripherySourceOffsetY, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather)
+{
+	if (!peripherySRV || !centerSRV || !outputUAV || !peripherySourceWidth || !peripherySourceHeight ||
+		!outputWidth || !outputHeight || !centerRect.outputWidth || !centerRect.outputHeight || !foveatedSpatialCompositeCB) {
+		return false;
+	}
+
+	auto* compositeCS = GetFoveatedSpatialCompositeCS();
+	auto context = globals::d3d::context;
+	auto deferred = globals::deferred;
+	if (!compositeCS || !context || !deferred || !deferred->linearSampler)
+		return false;
+
+	FoveatedSpatialCompositeCB cbData{};
+	cbData.outputDim = { static_cast<float>(outputWidth), static_cast<float>(outputHeight) };
+	cbData.invOutputDim = { 1.0f / static_cast<float>(outputWidth), 1.0f / static_cast<float>(outputHeight) };
+	cbData.invPeripherySourceDim = { 1.0f / static_cast<float>(peripherySourceWidth), 1.0f / static_cast<float>(peripherySourceHeight) };
+	cbData.peripherySourceScale = { peripherySourceScaleX, peripherySourceScaleY };
+	cbData.peripherySourceOffset = { peripherySourceOffsetX, peripherySourceOffsetY };
+	cbData.jitter = jitter;
+	cbData.centerRectOffset = { static_cast<float>(centerRect.outputOffsetX), static_cast<float>(centerRect.outputOffsetY) };
+	cbData.centerRectDim = { static_cast<float>(centerRect.outputWidth), static_cast<float>(centerRect.outputHeight) };
+	cbData.invCenterSourceDim = { 1.0f / static_cast<float>(centerRect.outputWidth), 1.0f / static_cast<float>(centerRect.outputHeight) };
+	cbData.centerOffset = centerOffset;
+	cbData.tuning = {
+		ClampFoveatedCenterScale(centerScale),
+		ClampPeripheryTAACenterBlendFeather(
+			std::isfinite(centerFeather) ? centerFeather : FoveatedCommon::kCenterFeather),
+		ClampFoveatedCenterHorizontalScale(centerHorizontalScale),
+		0.0f
+	};
+	foveatedSpatialCompositeCB->Update(cbData);
+
+	ID3D11Buffer* cb = foveatedSpatialCompositeCB->CB();
+	ID3D11SamplerState* samplers[1] = { deferred->linearSampler };
+	ID3D11ShaderResourceView* srvs[2] = { peripherySRV, centerSRV };
+	ID3D11UnorderedAccessView* uavs[1] = { outputUAV };
+	context->CSSetShader(compositeCS, nullptr, 0);
+	context->CSSetConstantBuffers(0, 1, &cb);
+	context->CSSetSamplers(0, 1, samplers);
+	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+
+	auto state = globals::state;
+	if (state && state->frameAnnotations)
+		state->BeginPerfEvent("Foveated Spatial Composite");
+	context->Dispatch((outputWidth + 7u) >> 3, (outputHeight + 7u) >> 3, 1);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (IsVRRenderScaleGPUPerformanceTelemetryActive()) {
+		RecordVRRenderScaleGPUPerformanceCounter(VRRenderScaleGPUPerformanceCounter::SpatialCompositeDispatches);
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::SpatialCompositePixels,
+			static_cast<uint64_t>(outputWidth) * outputHeight);
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::SpatialCenterPixels,
+			static_cast<uint64_t>(centerRect.outputWidth) * centerRect.outputHeight);
+	}
+#endif
+	if (state && state->frameAnnotations)
+		state->EndPerfEvent();
+
+	ID3D11ShaderResourceView* nullSRVs[2] = {};
+	ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+	ID3D11SamplerState* nullSampler[1] = { nullptr };
+	ID3D11Buffer* nullCB[1] = { nullptr };
+	context->CSSetShaderResources(0, ARRAYSIZE(nullSRVs), nullSRVs);
+	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+	context->CSSetSamplers(0, 1, nullSampler);
+	context->CSSetConstantBuffers(0, 1, nullCB);
+	context->CSSetShader(nullptr, nullptr, 0);
+	return true;
 }
 
 bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Upscaling::VendorEyeDispatchParams& params)
@@ -37681,7 +37842,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 	return false;
 }
 
-bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
+bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox, bool compositeCenter)
 {
 	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
 		return false;
@@ -37868,6 +38029,8 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 
 	if (!foveatedCenterColorOut[eyeIndex] || !foveatedCenterColorOut[eyeIndex]->resource || !foveatedCenterColorOut[eyeIndex]->srv)
 		return false;
+	if (!compositeCenter)
+		return true;
 	if (!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->uav || !vrIntermediateColorOut[eyeIndex]->resource)
 		return false;
 
@@ -37987,6 +38150,55 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 	}
 
 	ID3D11UnorderedAccessView* outputColorUAV = params.outputUAV ? params.outputUAV : vrIntermediateColorOut[eyeIndex]->uav.get();
+	if (!params.usePeripheryTAA && !params.visualizeMask) {
+		if (!DispatchSingleFoveatedVendorEye(
+				a_upscaleMethod,
+				eyeIndex,
+				params.centerColorInput,
+				params.centerDepthInput,
+				params.centerMotionVectorsInput,
+				params.centerReactiveMaskInput,
+				params.centerTransparencyMaskInput,
+				params.outputWidthPerEye,
+				params.outputHeight,
+				params.inputWidthPerEye,
+				params.inputHeight,
+				params.centerScale,
+				params.centerHorizontalScale,
+				centerOffset,
+				params.centerBlendFeather,
+				params.centerColorInputBaseOffsetX,
+				params.centerDepthInputBaseOffsetX,
+				params.centerAuxInputBaseOffsetX,
+				outputColorUAV,
+				params.dlssViewportRole,
+				params.submitSourceSubresource,
+				params.submitSourceBoxValid ? &params.submitSourceBox : nullptr,
+				false)) {
+			return false;
+		}
+
+		const auto& centerRect = foveatedRectCache.rects[eyeIndex];
+		auto& centerOutput = foveatedCenterColorOut[eyeIndex];
+		return centerOutput && centerOutput->srv &&
+		       DispatchFoveatedSpatialComposite(
+				   params.peripherySourceSRV,
+				   centerOutput->srv.get(),
+				   outputColorUAV,
+				   params.peripherySourceWidth,
+				   params.peripherySourceHeight,
+				   params.outputWidthPerEye,
+				   params.outputHeight,
+				   centerRect,
+				   params.peripherySourceScaleX,
+				   params.peripherySourceScaleY,
+				   params.peripherySourceOffsetX,
+				   params.peripherySourceOffsetY,
+				   params.centerScale,
+				   params.centerHorizontalScale,
+				   centerOffset,
+				   params.centerBlendFeather);
+	}
 
 	bool peripheryBindingsBound = false;
 	auto bindPeripheryBindings = [&]() -> bool {
@@ -38075,6 +38287,7 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 			params.inputHeight,
 			params.outputWidthPerEye,
 			params.outputHeight,
+			regionPlan.eyes[eyeIndex].peripheryTAAHistoryOutput,
 			outputOffsetX,
 			outputOffsetY,
 			dispatchWidth,
@@ -38173,21 +38386,6 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 	} else if (params.visualizeMask) {
 		if (!dispatchPeripheryBand(0, 0, params.outputWidthPerEye, params.outputHeight))
 			return failAfterUnbind();
-	} else if (hasCenterUnderlayHole) {
-		if (!dispatchRectMinusHole(
-				0,
-				0,
-				params.outputWidthPerEye,
-				params.outputHeight,
-				underlayHole.minX,
-				underlayHole.minY,
-				underlayHole.maxX,
-				underlayHole.maxY,
-				dispatchPeripheryBand)) {
-			return failAfterUnbind();
-		}
-	} else if (!dispatchPeripheryBand(0, 0, params.outputWidthPerEye, params.outputHeight)) {
-		return failAfterUnbind();
 	}
 
 	unbindPeripheryBindings();
@@ -38352,7 +38550,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	return true;
 }
 
-bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
+bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool protectPostProcessInput, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
 {
 	if (!globals::game::isVR || eyeIndex >= 2)
 		return false;
@@ -38499,7 +38697,15 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	}
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	if (depthTexture.depthSRV) {
+	// Filtered post-processing can sample hidden pixels; direct outputs are
+	// cleared after menu composition at the final submission boundary.
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleGPUPerformanceCounter(
+		protectPostProcessInput ?
+			VRRenderScaleGPUPerformanceCounter::EarlyHAMProtectedInputs :
+			VRRenderScaleGPUPerformanceCounter::EarlyHAMDirectOutputSkips);
+#endif
+	if (protectPostProcessInput && depthTexture.depthSRV) {
 		ClearHMDMaskForEye(
 			HMDMaskClearPhase::SubmitStageFoveatedOutput,
 			eyeIndex,
@@ -40833,6 +41039,10 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, uint32_
 		true);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_phase == HMDMaskClearPhase::SubmitStageFoveatedOutput && executed) {
+		RecordVRRenderScaleGPUPerformanceCounter(
+			VRRenderScaleGPUPerformanceCounter::EarlyHAMClearExecutions);
+	}
 	CompleteVRLoadPresentationHAMCapture(hamCapture, executed, colorUAV);
 	if (hamHandoff &&
 		hamHandoff->source ==
@@ -41405,6 +41615,8 @@ void Upscaling::SetupResources()
 	foveatedPeripheryCB = new ConstantBuffer(ConstantBufferDesc<FoveatedPeripheryCB>());
 	delete foveatedCenterBlendCB;
 	foveatedCenterBlendCB = new ConstantBuffer(ConstantBufferDesc<FoveatedCenterBlendCB>());
+	delete foveatedSpatialCompositeCB;
+	foveatedSpatialCompositeCB = new ConstantBuffer(ConstantBufferDesc<FoveatedSpatialCompositeCB>());
 	delete peripheryTAACB;
 	peripheryTAACB = new ConstantBuffer(ConstantBufferDesc<PeripheryTAACB>());
 
@@ -41479,6 +41691,7 @@ void Upscaling::ClearShaderCache()
 	upscaleVS.Reset();
 	foveatedPeripheryCS.Reset();
 	foveatedCenterBlendCS.Reset();
+	foveatedSpatialCompositeCS.Reset();
 	peripheryTAACS.Reset();
 	submitStageStretchCS.Reset();
 	vrDesktopMirrorBlitPS.Reset();
@@ -46124,6 +46337,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageFoveatedCenterState = {};
+	submitStageRuntimeFSRStereoState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -46738,6 +46952,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageVendorOutputSourceTexture = sourceTexture;
 		submitStageVendorEyeState = {};
 		submitStageFoveatedCenterState = {};
+		submitStageRuntimeFSRStereoState = {};
 		submitStageForceFullEyeVendorFallback = false;
 	}
 
@@ -47384,6 +47599,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					eyeHeightIn,
 					eyeWidthOut,
 					eyeHeightOut,
+					submitDLSSSharpening,
 					vendorColorOutput->resource.get(),
 					vendorColorOutput->uav.get(),
 					sourceSubresource,
@@ -47516,54 +47732,202 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		const bool replayOtherEyeFromFoveated =
 			submitStageVendorEyeState[otherEyeIndex].ready &&
 			submitStageVendorEyeState[otherEyeIndex].usedFoveatedVendorPath;
-		if (replayOtherEyeFromFoveated && !replayStoredFullEyeVendorOutput(otherEyeIndex, submitDLSSSharpening) && IsSubmitStageDeviceLost())
-			return false;
+		bool runtimeStereoDispatchFailed = false;
+		const bool sourceContainsBothEyes =
+			sourceUsesCombinedStereoLayout || sourceDesc.ArraySize > 1;
+		const bool runtimeFSRStereoRequested =
+			upscaleMethod == UpscaleMethod::kFSR &&
+			sourceContainsBothEyes &&
+			!fidelityFX.IsRuntimeUpscalerFailureLatched() &&
+			(fidelityFX.ShouldRequestRuntimeFsr4() || fidelityFX.ShouldUseRuntimeUpscalerForFSR());
+		if (runtimeFSRStereoRequested) {
+			const auto otherSourceRegion = ResolveVRSubmitSourceRegion(
+				sourceDesc,
+				otherEyeIndex,
+				sourceEyeWidthIn,
+				sourceEyeHeightIn,
+				sourceStereoLayout,
+				sourceUsesCombinedStereoLayout,
+				false,
+				nullptr);
+			bool stereoResourcesReady =
+				otherSourceRegion.valid &&
+				otherSourceRegion.matchesExpectedSize;
+			std::array<FidelityFX::UpscaleRegionParameters, 2> stereoRegions{};
+			for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye) {
+				stereoResourcesReady = stereoResourcesReady &&
+					vrIntermediateColorIn[stereoEye] && vrIntermediateColorIn[stereoEye]->resource &&
+					vrIntermediateLinearDepth[stereoEye] && vrIntermediateLinearDepth[stereoEye]->resource &&
+					vrIntermediateMotionVectors[stereoEye] && vrIntermediateMotionVectors[stereoEye]->resource &&
+					vrIntermediateReactiveMask[stereoEye] && vrIntermediateReactiveMask[stereoEye]->resource &&
+					vrIntermediateTransparencyMask[stereoEye] && vrIntermediateTransparencyMask[stereoEye]->resource &&
+					vrIntermediateColorOut[stereoEye] && vrIntermediateColorOut[stereoEye]->resource;
+				if (!stereoResourcesReady)
+					break;
 
-		static bool loggedFullEyeSubmitException[2] = {};
-		try {
-			VendorEyeDispatchParams vendorParams{};
-			vendorParams.eyeIndex = eyeIndex;
-			vendorParams.inputWidth = eyeWidthIn;
-			vendorParams.inputHeight = eyeHeightIn;
-			vendorParams.outputWidth = eyeWidthOut;
-			vendorParams.outputHeight = eyeHeightOut;
-			vendorParams.motionVectorScaleX = static_cast<float>(eyeWidthIn);
-			vendorParams.motionVectorScaleY = static_cast<float>(eyeHeightIn);
-			vendorParams.colorIn = vrIntermediateColorIn[eyeIndex]->resource.get();
-			vendorParams.depth = upscaleMethod == UpscaleMethod::kFSR ?
-			                         vrIntermediateLinearDepth[eyeIndex]->resource.get() :
-			                         vrIntermediateDepth[eyeIndex]->resource.get();
-			vendorParams.motionVectors = vrIntermediateMotionVectors[eyeIndex]->resource.get();
-			vendorParams.reactiveMask = vrIntermediateReactiveMask[eyeIndex]->resource.get();
-			vendorParams.transparencyMask = vrIntermediateTransparencyMask[eyeIndex]->resource.get();
-			vendorParams.colorOut = vendorColorOutput->resource.get();
-			vendorParams.label = "submit-stage full-eye";
-			applyAuthoritativeDLSSProfile(vendorParams);
-			{
-				CS_GPU_PASS("Upscaling::SubmitStageUpscale");
-				vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
+				stereoRegions[stereoEye] = {
+					stereoEye,
+					vrIntermediateColorIn[stereoEye]->resource.get(),
+					vrIntermediateLinearDepth[stereoEye]->resource.get(),
+					vrIntermediateMotionVectors[stereoEye]->resource.get(),
+					vrIntermediateReactiveMask[stereoEye]->resource.get(),
+					vrIntermediateTransparencyMask[stereoEye]->resource.get(),
+					vrIntermediateColorOut[stereoEye]->resource.get(),
+					eyeWidthIn,
+					eyeHeightIn,
+					eyeWidthOut,
+					eyeHeightOut,
+					static_cast<float>(eyeWidthIn),
+					static_cast<float>(eyeHeightIn),
+					settings.sharpnessFSR
+				};
 			}
-		} catch (const std::exception& e) {
-			UnbindUpscalingResources();
-			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage full-eye vendor dispatch"))
+
+			if (stereoResourcesReady) {
+				if (submitStageRuntimeFSRStereoState.Matches(
+						currentFrame,
+						activeContractGeneration,
+						eyeWidthIn,
+						eyeHeightIn,
+						eyeWidthOut,
+						eyeHeightOut,
+						sourceTexture,
+						stereoRegions)) {
+					vendorSucceeded = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchReuses);
+#endif
+				} else {
+					context->CopySubresourceRegion(
+						vrIntermediateColorIn[otherEyeIndex]->resource.get(),
+						0,
+						0,
+						0,
+						0,
+						sourceTexture,
+						otherSourceRegion.subresource,
+						&otherSourceRegion.box);
+					if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage stereo source copy"))
+						return false;
+
+					FidelityFX::StereoUpscaleResult stereoResult{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchAttempts);
+#endif
+					{
+						CS_GPU_PASS("Upscaling::SubmitStageUpscaleStereo");
+						stereoResult = fidelityFX.UpscaleStereoRegions(stereoRegions);
+					}
+					if (stereoResult == FidelityFX::StereoUpscaleResult::Ready) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						RecordVRRenderScaleGPUPerformanceCounter(
+							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchSuccesses);
+#endif
+						for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye)
+							RecordVRRenderScaleFullEyeEvaluation(upscaleMethod, stereoEye, true);
+
+						submitStageRuntimeFSRStereoState.Record(
+							currentFrame,
+							activeContractGeneration,
+							eyeWidthIn,
+							eyeHeightIn,
+							eyeWidthOut,
+							eyeHeightOut,
+							sourceTexture,
+							stereoRegions);
+						vendorSucceeded = true;
+
+						if (replayOtherEyeFromFoveated) {
+							const auto previousOtherEyeState = submitStageVendorEyeState[otherEyeIndex];
+							if (!finalizeSubmitStageEyeOutput(
+									otherEyeIndex,
+									*vrIntermediateColorOut[otherEyeIndex],
+									false,
+									previousOtherEyeState.depthWidth,
+									previousOtherEyeState.depthHeight,
+									previousOtherEyeState.depthOffsetX,
+									previousOtherEyeState.depthOffsetY)) {
+								return false;
+							}
+							auto& otherEyeState = submitStageVendorEyeState[otherEyeIndex];
+							otherEyeState.usedFoveatedVendorPath = false;
+							otherEyeState.usedDLSSSharpening = false;
+							otherEyeState.usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
+							otherEyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
+						}
+					} else if (stereoResult == FidelityFX::StereoUpscaleResult::Failed) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						RecordVRRenderScaleGPUPerformanceCounter(
+							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchFailures);
+#endif
+						for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye)
+							RecordVRRenderScaleFullEyeEvaluation(upscaleMethod, stereoEye, false);
+						HandleFSRLifecycleDeviceLoss(
+							fidelityFX.ProbeFSRDeviceStatus(),
+							"FSR stereo region dispatch");
+						runtimeStereoDispatchFailed = true;
+					} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+						RecordVRRenderScaleGPUPerformanceCounter(
+							VRRenderScaleGPUPerformanceCounter::RuntimeFSRStereoBatchNotHandled);
+#endif
+					}
+				}
+			}
+		}
+
+		if (!vendorSucceeded && !runtimeStereoDispatchFailed) {
+			if (replayOtherEyeFromFoveated && !replayStoredFullEyeVendorOutput(otherEyeIndex, submitDLSSSharpening) && IsSubmitStageDeviceLost())
 				return false;
-			LogWarnOnceFmt(
-				loggedFullEyeSubmitException[eyeIndex],
-				"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback: {}",
-				upscaleMethodName,
-				eyeIndex,
-				e.what());
-			vendorSucceeded = false;
-		} catch (...) {
-			UnbindUpscalingResources();
-			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye vendor dispatch"))
-				return false;
-			LogWarnOnceFmt(
-				loggedFullEyeSubmitException[eyeIndex],
-				"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback",
-				upscaleMethodName,
-				eyeIndex);
-			vendorSucceeded = false;
+
+			static bool loggedFullEyeSubmitException[2] = {};
+			try {
+				VendorEyeDispatchParams vendorParams{};
+				vendorParams.eyeIndex = eyeIndex;
+				vendorParams.inputWidth = eyeWidthIn;
+				vendorParams.inputHeight = eyeHeightIn;
+				vendorParams.outputWidth = eyeWidthOut;
+				vendorParams.outputHeight = eyeHeightOut;
+				vendorParams.motionVectorScaleX = static_cast<float>(eyeWidthIn);
+				vendorParams.motionVectorScaleY = static_cast<float>(eyeHeightIn);
+				vendorParams.colorIn = vrIntermediateColorIn[eyeIndex]->resource.get();
+				vendorParams.depth = upscaleMethod == UpscaleMethod::kFSR ?
+				                         vrIntermediateLinearDepth[eyeIndex]->resource.get() :
+				                         vrIntermediateDepth[eyeIndex]->resource.get();
+				vendorParams.motionVectors = vrIntermediateMotionVectors[eyeIndex]->resource.get();
+				vendorParams.reactiveMask = vrIntermediateReactiveMask[eyeIndex]->resource.get();
+				vendorParams.transparencyMask = vrIntermediateTransparencyMask[eyeIndex]->resource.get();
+				vendorParams.colorOut = vendorColorOutput->resource.get();
+				vendorParams.label = "submit-stage full-eye";
+				applyAuthoritativeDLSSProfile(vendorParams);
+				{
+					CS_GPU_PASS("Upscaling::SubmitStageUpscale");
+					vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
+				}
+			} catch (const std::exception& e) {
+				UnbindUpscalingResources();
+				if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage full-eye vendor dispatch"))
+					return false;
+				LogWarnOnceFmt(
+					loggedFullEyeSubmitException[eyeIndex],
+					"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback: {}",
+					upscaleMethodName,
+					eyeIndex,
+					e.what());
+				vendorSucceeded = false;
+			} catch (...) {
+				UnbindUpscalingResources();
+				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye vendor dispatch"))
+					return false;
+				LogWarnOnceFmt(
+					loggedFullEyeSubmitException[eyeIndex],
+					"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback",
+					upscaleMethodName,
+					eyeIndex);
+				vendorSucceeded = false;
+			}
 		}
 		if (!vendorSucceeded && MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye vendor dispatch"))
 			return false;
@@ -47661,40 +48025,33 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		eyeHeightOut,
 		true);
 	if (vrRenderScaleMode) {
-		const bool canMirrorToSource =
-			sourceDesc.ArraySize == 1 &&
-			sourceDesc.Width >= eyeWidthOut * 2 &&
-			sourceDesc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
-			vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
-			vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
-			vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
-			vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
-			vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
-			vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
-
-		if (canMirrorToSource) {
+		const bool mirrorRequested =
+			globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||
+			globals::features::screenshotFeature.HasPendingDesktopMirrorCapture();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		RecordVRRenderScaleGPUPerformanceCounter(
+			mirrorRequested ?
+				VRRenderScaleGPUPerformanceCounter::MirrorConsumerRequests :
+				VRRenderScaleGPUPerformanceCounter::MirrorConsumerSkips);
+#endif
+		if (!mirrorRequested) {
 			vrDesktopMirrorBlitRTV = nullptr;
 			vrDesktopMirrorBlitTarget = nullptr;
-
-			if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
-				submitStageMirrorFrame = currentFrame;
-				submitStageMirrorSourceTexture = sourceTexture;
-				submitStageMirrorEyeReady = {};
-			}
-
-			submitStageMirrorEyeReady[eyeIndex] = true;
-			if (submitStageMirrorEyeReady[0] && submitStageMirrorEyeReady[1]) {
-				D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-				context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
-				context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
-				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
-					return false;
-				submitStageMirrorEyeReady = {};
-			}
+			submitStageMirrorEyeReady = {};
 		} else {
-			if (globals::features::vr.settings.StabilizeRenderScaleDesktopMirror) {
+			const bool canMirrorToSource =
+				sourceDesc.ArraySize == 1 &&
+				sourceDesc.Width >= eyeWidthOut * 2 &&
+				sourceDesc.Height >= eyeHeightOut &&
+				vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
+				vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
+				vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
+				vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
+				vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
+				vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
+				vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
+				vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
+			const auto consumeReadyMirrorPair = [&]() {
 				if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
 					submitStageMirrorFrame = currentFrame;
 					submitStageMirrorSourceTexture = sourceTexture;
@@ -47702,9 +48059,37 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				}
 
 				submitStageMirrorEyeReady[eyeIndex] = true;
-				if (submitStageMirrorEyeReady[0] && submitStageMirrorEyeReady[1]) {
+				if (!submitStageMirrorEyeReady[0] || !submitStageMirrorEyeReady[1])
+					return false;
+
+				submitStageMirrorEyeReady = {};
+				return true;
+			};
+			if (canMirrorToSource) {
+				vrDesktopMirrorBlitRTV = nullptr;
+				vrDesktopMirrorBlitTarget = nullptr;
+
+				if (consumeReadyMirrorPair()) {
+					D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+					context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
+					context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::MirrorCopyPairs);
+#endif
+					if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
+						return false;
+				}
+			} else {
+				if (consumeReadyMirrorPair()) {
 					static bool loggedSubmitStageMirrorFallbackFailure = false;
 					const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (mirrorUpdated) {
+						RecordVRRenderScaleGPUPerformanceCounter(
+							VRRenderScaleGPUPerformanceCounter::MirrorBlitPairs);
+					}
+#endif
 					if (!mirrorUpdated && IsSubmitStageDeviceLost())
 						return false;
 					if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
@@ -47722,12 +48107,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 							vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
 						loggedSubmitStageMirrorFallbackFailure = true;
 					}
-					submitStageMirrorEyeReady = {};
 				}
-			} else {
-				vrDesktopMirrorBlitRTV = nullptr;
-				vrDesktopMirrorBlitTarget = nullptr;
-				submitStageMirrorEyeReady = {};
 			}
 		}
 

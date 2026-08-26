@@ -23389,35 +23389,41 @@ void Upscaling::ReconcileVRRenderScaleMaintenanceWork(
 	if (a_work == 0)
 		return;
 
-	// Publishers write their owner before the bit, so this recheck or their later
-	// fetch-or preserves work armed concurrently with the clear.
-	vrRenderScaleMaintenanceWork.fetch_and(
-		~a_work,
-		std::memory_order_acq_rel);
 	using Work = VRVendorRelatchPolicy::MaintenanceWork;
-	const auto activeWork =
-		VRVendorRelatchPolicy::ResolveMaintenanceWork(
+	const auto resolveActiveWork = [&](VRVendorRelatchPolicy::MaintenanceWorkMask a_candidates) {
+		return VRVendorRelatchPolicy::ResolveMaintenanceWork(
 			VRVendorRelatchPolicy::HasMaintenanceWork(
-				a_work,
+				a_candidates,
 				Work::RenderTargetRelatch) &&
 				pendingPerfModeRenderTargetRecreate.load(
 					std::memory_order_acquire),
 			VRVendorRelatchPolicy::HasMaintenanceWork(
-				a_work,
+				a_candidates,
 				Work::PreMutationWatchdog) ?
 				vrRenderScalePreMutationNativeFallbackTransitionEpoch.load(
 					std::memory_order_acquire) :
 				0,
 			VRVendorRelatchPolicy::HasMaintenanceWork(
-				a_work,
+				a_candidates,
 				Work::PostMutationWatchdog) ?
 				vrRenderScalePostMutationSerializationEpoch.load(
 					std::memory_order_acquire) :
 				0) &
-		a_work;
-	if (activeWork != 0) {
+			a_candidates;
+	};
+	const auto staleWork = a_work & ~resolveActiveWork(a_work);
+	if (staleWork == 0)
+		return;
+
+	// Publishers write their owner before the bit. Rechecking after the clear
+	// preserves a publication that raced the first owner snapshot.
+	vrRenderScaleMaintenanceWork.fetch_and(
+		~staleWork,
+		std::memory_order_acq_rel);
+	const auto republishedWork = resolveActiveWork(staleWork);
+	if (republishedWork != 0) {
 		vrRenderScaleMaintenanceWork.fetch_or(
-			activeWork,
+			republishedWork,
 			std::memory_order_release);
 	}
 }

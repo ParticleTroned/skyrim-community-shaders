@@ -76,6 +76,7 @@ struct AdaptiveBrightness : Feature
 		float brightness = 1.0f;
 		bool advanced = false;
 		bool bloomAdvanced = false;
+		bool waterAdvanced = false;
 
 		float skyBrightnessMult = 1.0f;
 		float directionalLightMult = 1.0f;

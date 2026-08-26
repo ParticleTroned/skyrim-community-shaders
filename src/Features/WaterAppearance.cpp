@@ -62,16 +62,20 @@ namespace
 void WaterAppearance::DrawProfileControls(Profile& a_profile)
 {
 	SanitizeProfile(a_profile);
-
-	ImGui::TextWrapped("%s", T(TKEY("profile_identity_tooltip"), "Identity values disable all water appearance processing and preserve Unified Water's native output path."));
-
-	ImGui::SeparatorText(T(TKEY("water_tuning_output"), "Output"));
 	DrawWaterSlider(
 		T(TKEY("water_brightness"), "Water Brightness"),
 		a_profile.WaterBrightness,
 		kWaterBrightnessMin,
 		kWaterBrightnessMax,
 		T(TKEY("water_brightness_tooltip"), "Scales the final water output, including fog and additive water-light passes."));
+	SanitizeProfile(a_profile);
+}
+
+void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
+{
+	SanitizeProfile(a_profile);
+
+	ImGui::TextWrapped("%s", T(TKEY("profile_identity_tooltip"), "Identity values disable all water appearance processing and preserve Unified Water's native output path."));
 
 	ImGui::SeparatorText(T(TKEY("water_tuning_surface"), "Surface"));
 	DrawWaterSlider(

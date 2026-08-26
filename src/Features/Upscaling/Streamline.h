@@ -247,8 +247,12 @@ public:
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
-	/** @brief Makes the bounded VR viewport slot for a DLSS profile safe to use without dispatching DLSS. */
-	DLSSViewportPreparationResult PrepareVRDLSSViewport(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset);
+	/** @brief Makes a bounded VR DLSS slot safe; false never recycles visible ownership. */
+	DLSSViewportPreparationResult PrepareVRDLSSViewport(
+		DLSSViewportRole viewportRole,
+		uint32_t qualityMode,
+		uint32_t dlssPreset,
+		bool allowRecycle = true);
 	bool ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport);
 	int FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset) const;
 	bool TryResolveExistingVRDLSSViewport(
@@ -271,6 +275,15 @@ public:
 	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
 	bool WasLastDLSSFailureDuplicatedConstants() const { return lastDLSSFailureDuplicatedConstants; }
 	bool HasDLSSResourcesPendingTeardown() const;
+	/** @brief Verifies one eye's exact cached DLSS option contract. */
+	[[nodiscard]] bool IsVRDLSSViewportResourceCompatible(
+		const VRDLSSViewportSlot& a_slot,
+		uint32_t a_eyeIndex,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		ID3D11Resource* a_colorInput) const noexcept;
 	[[nodiscard]] bool HasCompleteVRDLSSViewportResources() const noexcept
 	{
 		if (activeDLSSViewportResourcesAllocated[0] &&
@@ -289,6 +302,14 @@ public:
 		}
 		return false;
 	}
+	/** @brief Proves exact option identity and ownership for both eyes of one slot. */
+	[[nodiscard]] bool HasCompleteVRDLSSViewportResources(
+		DLSSViewportRole a_viewportRole,
+		uint32_t a_qualityMode,
+		uint32_t a_dlssPreset,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		ID3D11Resource* a_colorInput) const noexcept;
 
 	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

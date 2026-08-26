@@ -570,6 +570,35 @@ namespace VRVendorRelatchPolicy
 				   !a_state.relatchInProgress);
 	}
 
+	struct QueuedMenuRuntimeOptionsAdmission
+	{
+		bool stableValid = false;
+		bool stableActive = false;
+		bool targetValid = false;
+		bool targetActive = false;
+		bool sameMethod = false;
+		bool directMenuRequest = false;
+		bool exactRequestPrepared = false;
+	};
+
+	[[nodiscard]] constexpr bool CanQueuedMenuProfileOwnRuntimeOptions(
+		const QueuedMenuRuntimeOptionsAdmission& a_state) noexcept
+	{
+		return a_state.stableValid && !a_state.stableActive &&
+		       a_state.targetValid && a_state.targetActive &&
+		       a_state.sameMethod && a_state.directMenuRequest &&
+		       a_state.exactRequestPrepared;
+	}
+
+	[[nodiscard]] constexpr bool CanBypassPreparedMenuRequestDelay(
+		bool a_directMenuRequest,
+		std::uint64_t a_requestID,
+		std::uint64_t a_preparedRequestID) noexcept
+	{
+		return a_directMenuRequest && a_requestID != 0 &&
+		       a_requestID == a_preparedRequestID;
+	}
+
 	struct DispatchAdmission
 	{
 		bool isVR = false;
@@ -2123,6 +2152,39 @@ namespace VRVendorRelatchPolicy
 		       !a_state.preservingActiveContract &&
 		       !a_state.deviceLost &&
 		       a_state.resourcesCompatible;
+	}
+
+	struct PreparedDLSSActivationReuseAdmission
+	{
+		bool directMenuRelatch = false;
+		bool targetActive = false;
+		bool targetIsDLSS = false;
+		bool previousWasDLSS = false;
+		bool resetPending = false;
+		bool memoryPressureNormal = false;
+		bool postLoadResetPending = false;
+		bool preservingActiveContract = false;
+		bool deviceLost = false;
+		bool exactFullEyeProviderReady = false;
+	};
+
+	// A 1:1 DLSS provider and a Render Scale DLSS target share bounded, keyed
+	// Streamline viewports. Preserve those vendor allocations only when both eyes
+	// of the exact target profile are already proven and no recovery signal owns
+	// teardown. Target-sized common textures remain generation-owned separately.
+	[[nodiscard]] constexpr bool CanReusePreparedDLSSForActivation(
+		const PreparedDLSSActivationReuseAdmission& a_state) noexcept
+	{
+		return a_state.directMenuRelatch &&
+		       a_state.targetActive &&
+		       a_state.targetIsDLSS &&
+		       a_state.previousWasDLSS &&
+		       !a_state.resetPending &&
+		       a_state.memoryPressureNormal &&
+		       !a_state.postLoadResetPending &&
+		       !a_state.preservingActiveContract &&
+		       !a_state.deviceLost &&
+		       a_state.exactFullEyeProviderReady;
 	}
 
 	struct RuntimeFSRFallbackReuseAdmission

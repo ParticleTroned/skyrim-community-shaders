@@ -272,12 +272,16 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 
 void ScreenSpaceShadows::InvalidateRaymarchShaders()
 {
-	raymarchCS.Reset();
-	raymarchRightCS.Reset();
+	for (auto& variant : raymarchShaderVariants) {
+		variant.left.Reset();
+		variant.right.Reset();
+		variant.valid = false;
+		variant.sampleCount = 0;
+		variant.usesTerrainBlendingDepth = false;
+		variant.lastUse = 0;
+	}
+	raymarchShaderUseCounter = 0;
 	compiledSampleCount = 0;
-	compiledSampleCountRight = 0;
-	raymarchUsesTerrainBlendingDepth = false;
-	raymarchRightUsesTerrainBlendingDepth = false;
 }
 
 void ScreenSpaceShadows::ClearShaderCache()
@@ -295,8 +299,12 @@ uint ScreenSpaceShadows::GetScaledSampleCount(bool a_dynamic)
 
 	if (a_dynamic)
 		screenSize = Util::ConvertToDynamic(globals::state->screenSize);
+	return GetScaledSampleCountForRenderSize(screenSize);
+}
 
-	float2 renderSize = screenSize;
+uint ScreenSpaceShadows::GetScaledSampleCountForRenderSize(float2 a_screenSize) const
+{
+	float2 renderSize = a_screenSize;
 	if (globals::game::isVR) {
 		// Per-eye raymarch dispatch in VR.
 		renderSize.x *= 0.5f;
@@ -328,12 +336,12 @@ uint ScreenSpaceShadows::GetScaledSampleCount(bool a_dynamic)
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 {
-	return GetOrCreateRaymarchShader(raymarchCS, compiledSampleCount, raymarchUsesTerrainBlendingDepth, false);
+	return GetOrCreateRaymarchShader(GetScaledSampleCount(false), false);
 }
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarchRight()
 {
-	return GetOrCreateRaymarchShader(raymarchRightCS, compiledSampleCountRight, raymarchRightUsesTerrainBlendingDepth, true);
+	return GetOrCreateRaymarchShader(GetScaledSampleCount(false), true);
 }
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetStereoReprojectCS()
@@ -351,32 +359,74 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetStereoReprojectCS()
 }
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
-	Util::LazyShader<ID3D11ComputeShader>& a_shader,
-	uint& a_compiledSampleCount,
-	bool& a_compiledUsesTerrainBlendingDepth,
+	uint a_sampleCount,
 	bool a_rightEye)
 {
-	const uint scaledSampleCount = GetScaledSampleCount(false);
 	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
-	if (a_compiledSampleCount != scaledSampleCount || a_compiledUsesTerrainBlendingDepth != useTerrainBlendingDepth) {
-		a_shader.Reset();
-		a_compiledSampleCount = scaledSampleCount;
-		a_compiledUsesTerrainBlendingDepth = useTerrainBlendingDepth;
+	RaymarchShaderVariant* selected = nullptr;
+	for (auto& variant : raymarchShaderVariants) {
+		if (variant.valid && variant.sampleCount == a_sampleCount &&
+			variant.usesTerrainBlendingDepth == useTerrainBlendingDepth) {
+			selected = std::addressof(variant);
+			break;
+		}
 	}
+	if (!selected) {
+		for (auto& variant : raymarchShaderVariants) {
+			if (!variant.valid) {
+				selected = std::addressof(variant);
+				break;
+			}
+		}
+	}
+	if (!selected) {
+		selected = std::addressof(*std::min_element(
+			raymarchShaderVariants.begin(),
+			raymarchShaderVariants.end(),
+			[](const auto& a_left, const auto& a_right) {
+				return a_left.lastUse < a_right.lastUse;
+			}));
+	}
+	if (!selected->valid || selected->sampleCount != a_sampleCount ||
+		selected->usesTerrainBlendingDepth != useTerrainBlendingDepth) {
+		selected->left.Reset();
+		selected->right.Reset();
+		selected->valid = true;
+		selected->sampleCount = a_sampleCount;
+		selected->usesTerrainBlendingDepth = useTerrainBlendingDepth;
+	}
+	selected->lastUse = ++raymarchShaderUseCounter;
+	compiledSampleCount = a_sampleCount;
 
-	std::string sampleCount = std::format("{}", scaledSampleCount);
+	std::string sampleCount = std::format("{}", a_sampleCount);
 	std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };
 	if (a_rightEye)
 		defines.push_back({ "RIGHT", "" });
 	if (useTerrainBlendingDepth)
 		defines.push_back({ "TERRAIN_BLENDING", "" });
 
-	return a_shader.Get(
+	auto& shader = a_rightEye ? selected->right : selected->left;
+	return shader.Get(
 		L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl",
 		defines,
 		"cs_5_0",
 		"main",
 		a_rightEye ? "ScreenSpaceShadows::RaymarchRightCS" : "ScreenSpaceShadows::RaymarchCS");
+}
+
+bool ScreenSpaceShadows::PrewarmVRRenderScaleShaders(
+	uint32_t a_combinedWidth,
+	uint32_t a_height)
+{
+	if (!globals::game::isVR || !a_combinedWidth || !a_height)
+		return false;
+
+	const uint sampleCount = GetScaledSampleCountForRenderSize({
+		static_cast<float>(a_combinedWidth),
+		static_cast<float>(a_height),
+	});
+	return GetOrCreateRaymarchShader(sampleCount, false) &&
+	       GetOrCreateRaymarchShader(sampleCount, true);
 }
 
 void ScreenSpaceShadows::DrawShadows()
@@ -499,8 +549,6 @@ void ScreenSpaceShadows::DrawShadows()
 	}
 
 	uint maxCompiledSamples = compiledSampleCount > 0 ? compiledSampleCount : GetScaledSampleCount(false);
-	if (raymarchRight && compiledSampleCountRight > 0)
-		maxCompiledSamples = std::min(maxCompiledSamples, compiledSampleCountRight);
 
 	uint dynamicSampleCount = std::min(GetScaledSampleCount(true), maxCompiledSamples);
 	dynamicSampleCount = std::max(dynamicSampleCount, 1u);

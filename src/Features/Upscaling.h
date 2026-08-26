@@ -2521,6 +2521,8 @@ public:
 	std::atomic_bool deferredVRRenderScaleRequestPending{ false };
 	std::atomic<uint64_t> nextVRRenderScaleRequestID{ 1 };
 	std::atomic<uint64_t> latestVRRenderScaleRequestID{ 0 };
+	std::atomic<uint64_t> attemptedVRRenderScalePreparationRequestID{ 0 };
+	std::atomic<uint64_t> preparedVRRenderScaleRequestID{ 0 };
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
 	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
@@ -2770,7 +2772,6 @@ public:
 	SubmitStageRuntimeFSRStereoState submitStageRuntimeFSRStereoState{};
 	bool submitStageForceFullEyeVendorFallback = false;
 	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
-	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
 	mutable std::recursive_mutex submitStageVendorResumeStableEyeMaskMutex;
@@ -2911,6 +2912,8 @@ public:
 	void ClearPendingVRUpscalingTransition();
 	bool HasPendingVRUpscalingTransition() const;
 	bool HasPendingVRRenderScaleTransition() const;
+	void PreparePendingVRRenderScaleTransition(
+		const VRRenderScaleDesiredProfile& a_request);
 	void QueueVRFpsStabilizerLoadSync(uint32_t a_frame);
 	void ApplyPendingVRFpsStabilizerLoadSync();
 	bool ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const;
@@ -3078,6 +3081,7 @@ private:
 	mutable std::once_flag vrFpsStabilizerSessionConfigOnce;
 	mutable VRFpsStabilizerConfig vrFpsStabilizerSessionConfig{};
 	std::optional<VRRenderScaleProfileSnapshot> GetStableVRRenderScaleRuntimeProfile() const;
+	std::optional<VRRenderScaleProfileSnapshot> GetVRRenderScaleRuntimeOptionsProfile() const;
 	std::atomic<bool> vrRenderScaleStableRuntimeProfileAuthoritative{ false };
 	std::atomic<uint32_t> vrRenderScaleLastOutOfMemoryFailureFrame{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackStartFrame{ 0 };
@@ -3256,7 +3260,7 @@ private:
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0,
 		bool a_verifyBindings = false, bool a_finalDispatch = false);
-	void TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff);
+	void TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint64_t a_compositorCycleToken, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod, uint32_t a_generation, uint32_t a_inputWidth, uint32_t a_inputHeight, uint32_t a_outputWidth, uint32_t a_outputHeight, bool a_stabilizerDoorHandoff, bool a_directMenuRelatch);
 	void ServiceSubmitStageVendorResumePromotion(uint64_t a_compositorCycleToken);
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();

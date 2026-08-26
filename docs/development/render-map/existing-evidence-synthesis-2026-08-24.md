@@ -126,13 +126,14 @@ post-hoc classification.
 
 ## Descriptor decoding and static-manifest join
 
-The generated manifest supplies stable family joins:
+The generated manifest currently supplies these family joins (the generated
+ordinal IDs must be refreshed when the shader inventory changes):
 
 | Runtime family | Static compile unit | Static pass | Source |
 |---|---|---|---|
-| Lighting | `compile-0114` | `pass-0114` | `Lighting.hlsl` |
-| Effect | `compile-0073` | `pass-0073` | `Effect.hlsl` |
-| Utility | `compile-0119` | `pass-0119` | `Utility.hlsl` |
+| Lighting | `compile-0115` | `pass-0115` | `Lighting.hlsl` |
+| Effect | `compile-0074` | `pass-0074` | `Effect.hlsl` |
+| Utility | `compile-0120` | `pass-0120` | `Utility.hlsl` |
 | ImageSpace | 40 candidate engine-cache families | unresolved | `IS*.hlsl` family selected by runtime name |
 
 The captured keys decode as follows:

@@ -8,10 +8,10 @@
     "productionEntryCount": 100,
     "includeSourceCount": 59,
     "testEntryCount": 15,
-    "featureCount": 39,
-    "compileUnitCount": 120,
-    "passCount": 120,
-    "includeEdgeCount": 421,
+    "featureCount": 40,
+    "compileUnitCount": 121,
+    "passCount": 121,
+    "includeEdgeCount": 423,
     "virtualCollisionCount": 0,
     "unresolvedIncludeCount": 1,
     "unacceptedUnresolvedIncludeCount": 0,
@@ -43,7 +43,7 @@
           "Water"
         ],
         "declarationEvidence": [
-          "src/Features/AdaptiveBrightness.h:39"
+          "src/Features/AdaptiveBrightness.h:41"
         ],
         "actualDirectSources": [
           "Common/Color.hlsli",
@@ -427,6 +427,38 @@
         "candidateRemovableEngineTypes": [],
         "potentialIndependentPrograms": [],
         "precision": "statically-mapped"
+      },
+      "classificationStatus": "static-classified",
+      "notes": []
+    },
+    {
+      "id": "FoliageLighting",
+      "displayName": "Foliage Lighting",
+      "featureDirectory": "features/Foliage Lighting",
+      "iniPaths": [
+        "features/Foliage Lighting/Shaders/Features/FoliageLighting.ini"
+      ],
+      "sourceCandidates": [
+        "src/Features/FoliageLighting.cpp",
+        "src/Features/FoliageLighting.h"
+      ],
+      "stateCapability": {
+        "installed": true,
+        "resident": null,
+        "active": null
+      },
+      "shaderDefine": null,
+      "shaderDefineScope": {
+        "declaredShaderTypes": [],
+        "declarationEvidence": [],
+        "actualDirectSources": [],
+        "actualEntryPoints": [],
+        "potentialEngineShaderTypes": [],
+        "currentEngineCacheScope": [],
+        "semanticEngineShaderTypes": [],
+        "candidateRemovableEngineTypes": [],
+        "potentialIndependentPrograms": [],
+        "precision": "no-define"
       },
       "classificationStatus": "static-classified",
       "notes": []
@@ -2387,7 +2419,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "172F873DD2CAF1B43FF5D4237286D99A0972D7090D60D95688E0A33A62C4F9EA",
+      "sha256": "DD39A0B6A1439D658320A5070543CA889B29B975DB380BCDEAF420C87A060FDD",
       "role": "include",
       "stageHint": "include",
       "entryPoints": [],
@@ -2508,11 +2540,18 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "F081DEAE1C61E5A72D5E417F5B93D0BB5686BA8E195A8149F39971DFA18651E7",
+      "sha256": "A5832384E5ECF02689B81B2801B137529ADDA1DC6119F3DB2F940F650D769651",
       "role": "include",
       "stageHint": "include",
       "entryPoints": [],
-      "directIncludes": [],
+      "directIncludes": [
+        {
+          "token": "Common/Color.hlsli",
+          "line": 5,
+          "condition": "ifndef __DISPLAY_MAPPING_DEPENDENCY_HLSL__",
+          "resolvedVirtualPath": "Common/Color.hlsli"
+        }
+      ],
       "externalIncludes": [],
       "includeClosure": [],
       "dependedOnByEntryPoints": [
@@ -3166,7 +3205,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "4B71F80D5B18A4CFD3EBD2A7CE512CA07F9A80751666AF9061FD99E004257C02",
+      "sha256": "0F95BA05B07CFC3BE793F7818199C815AF2F197716B590B241105796FEA729E6",
       "role": "include",
       "stageHint": "include",
       "entryPoints": [],
@@ -3221,7 +3260,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "803ADA0AE2FFADCDF5D76C5AB0970B6CC62A7DA2F4DF69BD398246AD3A5ADEFE",
+      "sha256": "DDCDD55AAC9FB31A4CCC39FA51DECED96636286141CAACC7C4287015033BEE27",
       "role": "include",
       "stageHint": "include",
       "entryPoints": [],
@@ -3269,6 +3308,7 @@
         "SOFT_LIGHTING",
         "SPARKLE",
         "SPECULAR",
+        "TREE_ANIM",
         "TRUE_PBR",
         "WETNESS_EFFECTS",
         "WETTERNESS"
@@ -3476,7 +3516,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "990B7BF3B09B64F47906E8D99BEC14489A8B9F1D18B20321BC35E5DC46E44E1C",
+      "sha256": "ADC415A02318AC3BA2C15A961461111A840CDED2F6839D51214249F67E5B43A9",
       "role": "include",
       "stageHint": "include",
       "entryPoints": [],
@@ -3980,7 +4020,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "26BC1F922E5A172A319E5DD4C44170CEA1FEF1F3D93EF2B5C93D33A241C025DF",
+      "sha256": "DC89CF81D2EA2A2B3DB3CEBB973046AB67B307F182A25ACF06757F22C2ADAFB9",
       "role": "include",
       "stageHint": "include",
       "entryPoints": [],
@@ -4069,7 +4109,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           }
         ],
         "srvs": [
@@ -4077,7 +4117,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           }
         ],
         "uavs": [],
@@ -9388,7 +9428,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "D9E2E68152835A50C764DC8C48C66B39F63B56EBDE4535BCDFFFDC53D0C693D0",
+      "sha256": "4FC74821A92723DDDFD081FB08EFF9F6984B01F27268E741D54C510229CBC632",
       "role": "production-entry",
       "stageHint": "runtime-selected",
       "entryPoints": [
@@ -10544,7 +10584,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "ADDDC2CBA7F369E316F61944B026C727A013FB6D301294CE379F276021F85AAB",
+      "sha256": "505BC63D748889F65E8F2FB48F770151E8017A553D3545135A2E8408503E410E",
       "role": "production-entry",
       "stageHint": "runtime-selected",
       "entryPoints": [
@@ -12060,7 +12100,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "B18DAA3038E2D061B3BB4E17A96AB58486CCE34A6756BCA42005323319D50BA0",
+      "sha256": "88ADB1CBF614D73FF31AFFA14DD5EE659534550C0DFFB310B5E109CAFFF15FFD",
       "role": "production-entry",
       "stageHint": "runtime-selected",
       "entryPoints": [
@@ -12116,74 +12156,80 @@
           "resolvedVirtualPath": "Common/SharedData.hlsli"
         },
         {
+          "token": "Common/LightingCommon.hlsli",
+          "line": 11,
+          "condition": "if defined(PSHADER)",
+          "resolvedVirtualPath": "Common/LightingCommon.hlsli"
+        },
+        {
           "token": "GrassCollision/GrassCollision.hlsli",
-          "line": 132,
+          "line": 136,
           "condition": "ifdef VSHADER && ifdef GRASS_COLLISION",
           "resolvedVirtualPath": "GrassCollision/GrassCollision.hlsli"
         },
         {
           "token": "ScreenSpaceShadows/ScreenSpaceShadows.hlsli",
-          "line": 421,
+          "line": 425,
           "condition": "ifdef PSHADER && if defined(SCREEN_SPACE_SHADOWS)",
           "resolvedVirtualPath": "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
         },
         {
           "token": "LightLimitFix/LightLimitFix.hlsli",
-          "line": 425,
+          "line": 429,
           "condition": "ifdef PSHADER && if defined(LIGHT_LIMIT_FIX)",
           "resolvedVirtualPath": "LightLimitFix/LightLimitFix.hlsli"
         },
         {
           "token": "InverseSquareLighting/InverseSquareLighting.hlsli",
-          "line": 429,
+          "line": 433,
           "condition": "ifdef PSHADER && if defined(ISL) && defined(LIGHT_LIMIT_FIX)",
           "resolvedVirtualPath": "InverseSquareLighting/InverseSquareLighting.hlsli"
         },
         {
           "token": "DynamicCubemaps/DynamicCubemaps.hlsli",
-          "line": 435,
+          "line": 439,
           "condition": "ifdef PSHADER && if defined(DYNAMIC_CUBEMAPS)",
           "resolvedVirtualPath": "DynamicCubemaps/DynamicCubemaps.hlsli"
         },
         {
           "token": "TerrainShadows/TerrainShadows.hlsli",
-          "line": 439,
+          "line": 443,
           "condition": "ifdef PSHADER && if defined(TERRAIN_SHADOWS)",
           "resolvedVirtualPath": "TerrainShadows/TerrainShadows.hlsli"
         },
         {
           "token": "CloudShadows/CloudShadows.hlsli",
-          "line": 443,
+          "line": 447,
           "condition": "ifdef PSHADER && if defined(CLOUD_SHADOWS)",
           "resolvedVirtualPath": "CloudShadows/CloudShadows.hlsli"
         },
         {
           "token": "Skylighting/Skylighting.hlsli",
-          "line": 447,
+          "line": 451,
           "condition": "ifdef PSHADER && if defined(SKYLIGHTING)",
           "resolvedVirtualPath": "Skylighting/Skylighting.hlsli"
         },
         {
           "token": "IBL/IBL.hlsli",
-          "line": 455,
+          "line": 459,
           "condition": "ifdef PSHADER && if defined(IBL)",
           "resolvedVirtualPath": "IBL/IBL.hlsli"
         },
         {
           "token": "Common/ShadowSampling.hlsli",
-          "line": 460,
+          "line": 464,
           "condition": "ifdef PSHADER",
           "resolvedVirtualPath": "Common/ShadowSampling.hlsli"
         },
         {
           "token": "Common/PBR.hlsli",
-          "line": 632,
+          "line": 644,
           "condition": "ifdef PSHADER && ifdef GRASS_LIGHTING && if defined(TRUE_PBR)",
           "resolvedVirtualPath": "Common/PBR.hlsli"
         },
         {
           "token": "GrassLighting/GrassLighting.hlsli",
-          "line": 636,
+          "line": 648,
           "condition": "ifdef PSHADER && ifdef GRASS_LIGHTING",
           "resolvedVirtualPath": "GrassLighting/GrassLighting.hlsli"
         }
@@ -12247,31 +12293,31 @@
             "name": "PerFrame",
             "type": "cbuffer",
             "register": "b0",
-            "line": 396
+            "line": 400
           },
           {
             "name": "PerMaterial",
             "type": "cbuffer",
             "register": "b1",
-            "line": 624
+            "line": 636
           },
           {
             "name": "cb7",
             "type": "cbuffer",
             "register": "b7",
-            "line": 134
+            "line": 138
           },
           {
             "name": "cb8",
             "type": "cbuffer",
             "register": "b8",
-            "line": 139
+            "line": 143
           },
           {
             "name": "AlphaTestRefCB",
             "type": "cbuffer",
             "register": "b11",
-            "line": 414
+            "line": 418
           }
         ],
         "srvs": [
@@ -12279,31 +12325,31 @@
             "name": "TexBaseSampler",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 393
+            "line": 397
           },
           {
             "name": "TexShadowMaskSampler",
             "type": "Texture2D<float4>",
             "register": "t1",
-            "line": 395
+            "line": 399
           },
           {
             "name": "TexNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t2",
-            "line": 406
+            "line": 410
           },
           {
             "name": "TexRMAOSSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 407
+            "line": 411
           },
           {
             "name": "TexSubsurfaceSampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 408
+            "line": 412
           }
         ],
         "uavs": [],
@@ -12312,31 +12358,31 @@
             "name": "SampBaseSampler",
             "type": "SamplerState",
             "register": "s0",
-            "line": 383
+            "line": 387
           },
           {
             "name": "SampShadowMaskSampler",
             "type": "SamplerState",
             "register": "s1",
-            "line": 384
+            "line": 388
           },
           {
             "name": "SampNormalSampler",
             "type": "SamplerState",
             "register": "s2",
-            "line": 388
+            "line": 392
           },
           {
             "name": "SampRMAOSSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 389
+            "line": 393
           },
           {
             "name": "SampSubsurfaceSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 390
+            "line": 394
           }
         ]
       },
@@ -15287,10 +15333,11 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "5C9363F67AACC47A7D69022C9C4D091D6624280B0E6747117E4EBB1AAA120E34",
+      "sha256": "8F04DC1EDE5B0432D75C1FE606AF091B5A41C6C24198CD073F75701DFA164746",
       "role": "test-entry",
       "stageHint": "compute",
       "entryPoints": [
+        "TestBT709BT2020Roundtrip",
         "TestDiffuseAndLight",
         "TestGammaConversionRoundtrip",
         "TestRGBToLuminance",
@@ -15345,11 +15392,12 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "AE0452C8248E2A8F97B6E45C843CCAFF14D59F1AA52F5CA3B2A61F7B4C387D01",
+      "sha256": "809C5B6111A655352A325EB56CF01850683C132A62A8E098995542053A2DFBA3",
       "role": "test-entry",
       "stageHint": "compute",
       "entryPoints": [
         "GetTonemapFactorHejlBurgessDawson",
+        "TestGamePQRoundtrip",
         "TestICtCpLuminance",
         "TestLinearToPQRoundtrip",
         "TestPQConstants",
@@ -15621,10 +15669,11 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "44A2FCF1695C5121B9EFC0FDB8D5A7EDEA33B12BE7E3D2E47DF0E63CC902DA9E",
+      "sha256": "AAF840360B4FC6E41FD3A49C870CC308B24164C14C793E3A2C172E70BDAB5713",
       "role": "test-entry",
       "stageHint": "compute",
       "entryPoints": [
+        "TestFoliageTransmission",
         "TestShininessToRoughness",
         "TestShininessToRoughnessEdgeCases",
         "TestShininessToRoughnessProperties"
@@ -18035,7 +18084,7 @@
       ],
       "owner": "core",
       "ownerKind": "core",
-      "sha256": "4BD490AC07794CCA9C26EF298F0019038ED2C62926064BA6954359BA3F25B3B0",
+      "sha256": "A4430A4583DA3D3C54F97FA11B9D7805F6409C3140631B11230B6380DF37DBB4",
       "role": "production-entry",
       "stageHint": "runtime-selected",
       "entryPoints": [
@@ -18128,19 +18177,19 @@
         },
         {
           "token": "LightLimitFix/LightLimitFix.hlsli",
-          "line": 1738,
+          "line": 1756,
           "condition": "else && ifdef PSHADER && if defined(LIGHT_LIMIT_FIX)",
           "resolvedVirtualPath": "LightLimitFix/LightLimitFix.hlsli"
         },
         {
           "token": "InverseSquareLighting/InverseSquareLighting.hlsli",
-          "line": 1742,
+          "line": 1760,
           "condition": "else && ifdef PSHADER && if defined(ISL) && defined(LIGHT_LIMIT_FIX)",
           "resolvedVirtualPath": "InverseSquareLighting/InverseSquareLighting.hlsli"
         },
         {
           "token": "IBL/IBL.hlsli",
-          "line": 1746,
+          "line": 1764,
           "condition": "else && ifdef PSHADER && if defined(IBL)",
           "resolvedVirtualPath": "IBL/IBL.hlsli"
         }
@@ -22001,7 +22050,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -22033,7 +22082,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -22323,7 +22372,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -22355,7 +22404,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -22638,7 +22687,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -22678,7 +22727,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -22811,7 +22860,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -22851,7 +22900,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -22984,7 +23033,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -23024,7 +23073,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -23155,7 +23204,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -23187,7 +23236,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -23312,7 +23361,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -23344,7 +23393,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -23469,7 +23518,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -23501,7 +23550,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -23624,7 +23673,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -23664,7 +23713,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -23795,7 +23844,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -23827,7 +23876,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -23942,7 +23991,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -23974,7 +24023,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -24419,7 +24468,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -24467,7 +24516,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -24589,7 +24638,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -24637,7 +24686,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -24829,7 +24878,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -24877,7 +24926,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -25063,7 +25112,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -25111,7 +25160,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -25218,7 +25267,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -25266,7 +25315,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -25372,7 +25421,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -25420,7 +25469,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -25562,7 +25611,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -25610,7 +25659,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -25797,7 +25846,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -25845,7 +25894,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -25959,7 +26008,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -26007,7 +26056,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -26122,7 +26171,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -26170,7 +26219,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -26299,7 +26348,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -26331,7 +26380,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -26421,7 +26470,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -26461,7 +26510,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -26543,7 +26592,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -26575,7 +26624,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -26665,7 +26714,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -26697,7 +26746,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -26827,7 +26876,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -26859,7 +26908,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -27003,7 +27052,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -27035,7 +27084,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -27181,7 +27230,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -27213,7 +27262,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -27322,7 +27371,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -27482,7 +27531,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -27607,7 +27656,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -27767,7 +27816,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -27994,7 +28043,7 @@
         "VSHADER"
       ],
       "defineMode": "inline",
-      "compileSite": "src/Features/UnderwaterDepthOfField.cpp:184",
+      "compileSite": "src/Features/UnderwaterDepthOfField.cpp:186",
       "shaderObject": "depthOfFieldInputVS",
       "invocationSites": [],
       "routes": {
@@ -28088,7 +28137,7 @@
         "PSHADER"
       ],
       "defineMode": "inline",
-      "compileSite": "src/Features/UnderwaterDepthOfField.cpp:196",
+      "compileSite": "src/Features/UnderwaterDepthOfField.cpp:198",
       "shaderObject": "depthOfFieldInputPS",
       "invocationSites": [],
       "routes": {
@@ -28298,7 +28347,7 @@
       "entryPoint": "DevBenchHAMProbeMain",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/Upscaling.cpp:31500",
+      "compileSite": "src/Features/Upscaling.cpp:31760",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -28357,7 +28406,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "dynamic",
-      "compileSite": "src/Features/Upscaling.cpp:35113",
+      "compileSite": "src/Features/Upscaling.cpp:35373",
       "shaderObject": "encodeTexturesCSDepthOutput",
       "invocationSites": [],
       "routes": {
@@ -28393,7 +28442,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -28425,7 +28474,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -28509,7 +28558,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "dynamic",
-      "compileSite": "src/Features/Upscaling.cpp:35135",
+      "compileSite": "src/Features/Upscaling.cpp:35395",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -28545,7 +28594,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -28577,7 +28626,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -28661,7 +28710,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "dynamic",
-      "compileSite": "src/Features/Upscaling.cpp:35145",
+      "compileSite": "src/Features/Upscaling.cpp:35405",
       "shaderObject": "depthRefractionUpscalePS",
       "invocationSites": [],
       "routes": {
@@ -28698,7 +28747,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -28738,7 +28787,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -28792,7 +28841,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "dynamic",
-      "compileSite": "src/Features/Upscaling.cpp:35170",
+      "compileSite": "src/Features/Upscaling.cpp:35430",
       "shaderObject": "shader",
       "invocationSites": [],
       "routes": {
@@ -28829,7 +28878,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -28869,7 +28918,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -28918,7 +28967,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "dynamic",
-      "compileSite": "src/Features/Upscaling.cpp:35183",
+      "compileSite": "src/Features/Upscaling.cpp:35443",
       "shaderObject": "cameraMotionVectorsPS",
       "invocationSites": [],
       "routes": {
@@ -28989,7 +29038,7 @@
         "VSHADER"
       ],
       "defineMode": "inline",
-      "compileSite": "src/Features/Upscaling.cpp:35193",
+      "compileSite": "src/Features/Upscaling.cpp:35453",
       "shaderObject": "upscaleVS",
       "invocationSites": [],
       "routes": {
@@ -29022,7 +29071,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/Upscaling.cpp:35203",
+      "compileSite": "src/Features/Upscaling.cpp:35463",
       "shaderObject": "foveatedPeripheryCS",
       "invocationSites": [],
       "routes": {
@@ -29090,7 +29139,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/Upscaling.cpp:35213",
+      "compileSite": "src/Features/Upscaling.cpp:35473",
       "shaderObject": "foveatedCenterBlendCS",
       "invocationSites": [],
       "routes": {
@@ -29158,7 +29207,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/Upscaling.cpp:35223",
+      "compileSite": "src/Features/Upscaling.cpp:35483",
       "shaderObject": "peripheryTAACS",
       "invocationSites": [],
       "routes": {
@@ -29314,7 +29363,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/Upscaling.cpp:35233",
+      "compileSite": "src/Features/Upscaling.cpp:35493",
       "shaderObject": "submitStageStretchCS",
       "invocationSites": [],
       "routes": {
@@ -29381,7 +29430,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/Upscaling.cpp:35243",
+      "compileSite": "src/Features/Upscaling.cpp:35503",
       "shaderObject": "vrDesktopMirrorBlitPS",
       "invocationSites": [],
       "routes": {
@@ -29432,7 +29481,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/Upscaling.cpp:35253",
+      "compileSite": "src/Features/Upscaling.cpp:35513",
       "shaderObject": "vrMenuLayerCompositePS",
       "invocationSites": [],
       "routes": {
@@ -29491,11 +29540,11 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/Upscaling.cpp:39106",
+      "compileSite": "src/Features/Upscaling.cpp:39366",
       "shaderObject": "vrClearHMDMaskCS",
       "invocationSites": [
-        "src/Features/Upscaling.cpp:37917",
-        "src/Features/Upscaling.cpp:39192"
+        "src/Features/Upscaling.cpp:38177",
+        "src/Features/Upscaling.cpp:39452"
       ],
       "routes": {
         "flat": null,
@@ -29555,10 +29604,10 @@
         "PSHADER"
       ],
       "defineMode": "inline",
-      "compileSite": "src/Features/Upscaling.cpp:40193",
+      "compileSite": "src/Features/Upscaling.cpp:40453",
       "shaderObject": "copyDepthToSharedBufferPS",
       "invocationSites": [
-        "src/Features/Upscaling.cpp:40280"
+        "src/Features/Upscaling.cpp:40540"
       ],
       "routes": {
         "flat": true,
@@ -29852,7 +29901,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1503",
+      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1566",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -29894,7 +29943,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1517",
+      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1580",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -29950,7 +29999,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "inline-source",
-      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1677",
+      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1740",
       "shaderObject": null,
       "invocationSites": [],
       "routes": {
@@ -29971,6 +30020,37 @@
     },
     {
       "id": "compile-0065",
+      "kind": "inline-program",
+      "sourceVirtualPath": null,
+      "sourcePath": null,
+      "inlineSource": true,
+      "owner": "VR",
+      "stage": "compute",
+      "profile": "cs_5_0",
+      "entryPoint": "main",
+      "compileDefines": [],
+      "defineMode": "inline-source",
+      "compileSite": "src/Features/VR/InSceneOverlay.cpp:1772",
+      "shaderObject": null,
+      "invocationSites": [],
+      "routes": {
+        "flat": null,
+        "vr": true,
+        "stereo": true,
+        "overlay": true,
+        "vendor": false,
+        "compatibility": false
+      },
+      "classificationStatus": "resolved-inline",
+      "dependencyClosure": [],
+      "resourceInterface": {
+        "inputs": [],
+        "outputs": [],
+        "runtimeBindingsComplete": false
+      }
+    },
+    {
+      "id": "compile-0066",
       "kind": "independent-program",
       "sourceVirtualPath": "VR/StereoBlendCS.hlsl",
       "sourcePath": "package/Shaders/VR/StereoBlendCS.hlsl",
@@ -29981,7 +30061,7 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "dynamic",
-      "compileSite": "src/Features/VR.cpp:860",
+      "compileSite": "src/Features/VR.cpp:763",
       "shaderObject": "shader",
       "invocationSites": [],
       "routes": {
@@ -30056,7 +30136,7 @@
       }
     },
     {
-      "id": "compile-0066",
+      "id": "compile-0067",
       "kind": "independent-program",
       "sourceVirtualPath": "Menu/BackgroundBlurHorizontal.hlsl",
       "sourcePath": "package/Shaders/Menu/BackgroundBlurHorizontal.hlsl",
@@ -30122,7 +30202,7 @@
       }
     },
     {
-      "id": "compile-0067",
+      "id": "compile-0068",
       "kind": "independent-program",
       "sourceVirtualPath": "Menu/BackgroundBlurHorizontal.hlsl",
       "sourcePath": "package/Shaders/Menu/BackgroundBlurHorizontal.hlsl",
@@ -30189,7 +30269,7 @@
       }
     },
     {
-      "id": "compile-0068",
+      "id": "compile-0069",
       "kind": "independent-program",
       "sourceVirtualPath": "Menu/BackgroundBlurVertical.hlsl",
       "sourcePath": "package/Shaders/Menu/BackgroundBlurVertical.hlsl",
@@ -30255,7 +30335,7 @@
       }
     },
     {
-      "id": "compile-0069",
+      "id": "compile-0070",
       "kind": "runtime-tooling-dynamic-program",
       "sourceVirtualPath": null,
       "sourcePath": null,
@@ -30286,7 +30366,7 @@
       }
     },
     {
-      "id": "compile-0070",
+      "id": "compile-0071",
       "kind": "independent-program",
       "sourceVirtualPath": "Common/Glints/noisegen.cs.hlsl",
       "sourcePath": "package/Shaders/Common/Glints/noisegen.cs.hlsl",
@@ -30297,10 +30377,10 @@
       "entryPoint": "main",
       "compileDefines": [],
       "defineMode": "none",
-      "compileSite": "src/TruePBR.cpp:439",
+      "compileSite": "src/TruePBR.cpp:482",
       "shaderObject": "noiseGenProgram",
       "invocationSites": [
-        "src/TruePBR.cpp:463"
+        "src/TruePBR.cpp:506"
       ],
       "routes": {
         "flat": true,
@@ -30330,7 +30410,7 @@
       }
     },
     {
-      "id": "compile-0071",
+      "id": "compile-0072",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "BloodSplatter.hlsl",
       "sourcePath": "package/Shaders/BloodSplatter.hlsl",
@@ -30446,7 +30526,7 @@
       }
     },
     {
-      "id": "compile-0072",
+      "id": "compile-0073",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "DistantTree.hlsl",
       "sourcePath": "package/Shaders/DistantTree.hlsl",
@@ -30540,7 +30620,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -30644,7 +30724,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -30732,7 +30812,7 @@
       }
     },
     {
-      "id": "compile-0073",
+      "id": "compile-0074",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "Effect.hlsl",
       "sourcePath": "package/Shaders/Effect.hlsl",
@@ -30831,7 +30911,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -31023,7 +31103,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -31183,7 +31263,7 @@
       }
     },
     {
-      "id": "compile-0074",
+      "id": "compile-0075",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISAlphaBlend.hlsl",
       "sourcePath": "package/Shaders/ISAlphaBlend.hlsl",
@@ -31484,7 +31564,7 @@
       }
     },
     {
-      "id": "compile-0075",
+      "id": "compile-0076",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISApplyReflections.hlsl",
       "sourcePath": "package/Shaders/ISApplyReflections.hlsl",
@@ -31586,7 +31666,7 @@
       }
     },
     {
-      "id": "compile-0076",
+      "id": "compile-0077",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISApplyVolumetricLighting.hlsl",
       "sourcePath": "package/Shaders/ISApplyVolumetricLighting.hlsl",
@@ -31762,7 +31842,7 @@
       }
     },
     {
-      "id": "compile-0077",
+      "id": "compile-0078",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISBasicCopy.hlsl",
       "sourcePath": "package/Shaders/ISBasicCopy.hlsl",
@@ -31815,7 +31895,7 @@
       }
     },
     {
-      "id": "compile-0078",
+      "id": "compile-0079",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISBlur.hlsl",
       "sourcePath": "package/Shaders/ISBlur.hlsl",
@@ -31900,7 +31980,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -31948,7 +32028,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -31972,7 +32052,7 @@
       }
     },
     {
-      "id": "compile-0079",
+      "id": "compile-0080",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISCompositeLensFlareVolumetricLighting.hlsl",
       "sourcePath": "package/Shaders/ISCompositeLensFlareVolumetricLighting.hlsl",
@@ -32057,7 +32137,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -32105,7 +32185,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -32129,7 +32209,7 @@
       }
     },
     {
-      "id": "compile-0080",
+      "id": "compile-0081",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISCopy.hlsl",
       "sourcePath": "package/Shaders/ISCopy.hlsl",
@@ -32199,7 +32279,7 @@
       }
     },
     {
-      "id": "compile-0081",
+      "id": "compile-0082",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISDebugSnow.hlsl",
       "sourcePath": "package/Shaders/ISDebugSnow.hlsl",
@@ -32268,7 +32348,7 @@
       }
     },
     {
-      "id": "compile-0082",
+      "id": "compile-0083",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISDepthOfField.hlsl",
       "sourcePath": "package/Shaders/ISDepthOfField.hlsl",
@@ -32319,7 +32399,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -32391,7 +32471,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -32439,7 +32519,7 @@
       }
     },
     {
-      "id": "compile-0083",
+      "id": "compile-0084",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISDoubleVision.hlsl",
       "sourcePath": "package/Shaders/ISDoubleVision.hlsl",
@@ -32525,7 +32605,7 @@
       }
     },
     {
-      "id": "compile-0084",
+      "id": "compile-0085",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISDownsample.hlsl",
       "sourcePath": "package/Shaders/ISDownsample.hlsl",
@@ -32610,7 +32690,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -32666,7 +32746,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -32698,7 +32778,7 @@
       }
     },
     {
-      "id": "compile-0085",
+      "id": "compile-0086",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISExp.hlsl",
       "sourcePath": "package/Shaders/ISExp.hlsl",
@@ -32759,7 +32839,7 @@
       }
     },
     {
-      "id": "compile-0086",
+      "id": "compile-0087",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISFullScreenVR.hlsl",
       "sourcePath": "package/Shaders/ISFullScreenVR.hlsl",
@@ -32839,7 +32919,7 @@
       }
     },
     {
-      "id": "compile-0087",
+      "id": "compile-0088",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISHDR.hlsl",
       "sourcePath": "package/Shaders/ISHDR.hlsl",
@@ -32925,7 +33005,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -32989,7 +33069,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -33029,7 +33109,7 @@
       }
     },
     {
-      "id": "compile-0088",
+      "id": "compile-0089",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISIBLensFlare.hlsl",
       "sourcePath": "package/Shaders/ISIBLensFlare.hlsl",
@@ -33131,7 +33211,7 @@
       }
     },
     {
-      "id": "compile-0089",
+      "id": "compile-0090",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISLightingComposite.hlsl",
       "sourcePath": "package/Shaders/ISLightingComposite.hlsl",
@@ -33304,7 +33384,7 @@
       }
     },
     {
-      "id": "compile-0090",
+      "id": "compile-0091",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISLocalMap.hlsl",
       "sourcePath": "package/Shaders/ISLocalMap.hlsl",
@@ -33389,7 +33469,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -33429,7 +33509,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -33445,7 +33525,7 @@
       }
     },
     {
-      "id": "compile-0091",
+      "id": "compile-0092",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISMap.hlsl",
       "sourcePath": "package/Shaders/ISMap.hlsl",
@@ -33506,7 +33586,7 @@
       }
     },
     {
-      "id": "compile-0092",
+      "id": "compile-0093",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISNoise.hlsl",
       "sourcePath": "package/Shaders/ISNoise.hlsl",
@@ -33574,7 +33654,7 @@
       }
     },
     {
-      "id": "compile-0093",
+      "id": "compile-0094",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISRadialBlur.hlsl",
       "sourcePath": "package/Shaders/ISRadialBlur.hlsl",
@@ -33644,7 +33724,7 @@
       }
     },
     {
-      "id": "compile-0094",
+      "id": "compile-0095",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISReflectionsRayTracing.hlsl",
       "sourcePath": "package/Shaders/ISReflectionsRayTracing.hlsl",
@@ -33697,7 +33777,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -33761,7 +33841,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -33801,7 +33881,7 @@
       }
     },
     {
-      "id": "compile-0095",
+      "id": "compile-0096",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISRefraction.hlsl",
       "sourcePath": "package/Shaders/ISRefraction.hlsl",
@@ -33886,7 +33966,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -33934,7 +34014,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -33958,7 +34038,7 @@
       }
     },
     {
-      "id": "compile-0096",
+      "id": "compile-0097",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISSAOBlur.hlsl",
       "sourcePath": "package/Shaders/ISSAOBlur.hlsl",
@@ -34028,7 +34108,7 @@
       }
     },
     {
-      "id": "compile-0097",
+      "id": "compile-0098",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISSAOCameraZ.hlsl",
       "sourcePath": "package/Shaders/ISSAOCameraZ.hlsl",
@@ -34098,7 +34178,7 @@
       }
     },
     {
-      "id": "compile-0098",
+      "id": "compile-0099",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISSAOComposite.hlsl",
       "sourcePath": "package/Shaders/ISSAOComposite.hlsl",
@@ -34185,7 +34265,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -34273,7 +34353,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -34385,7 +34465,7 @@
       }
     },
     {
-      "id": "compile-0099",
+      "id": "compile-0100",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISSAOMinify.hlsl",
       "sourcePath": "package/Shaders/ISSAOMinify.hlsl",
@@ -34455,7 +34535,7 @@
       }
     },
     {
-      "id": "compile-0100",
+      "id": "compile-0101",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISSILComposite.hlsl",
       "sourcePath": "package/Shaders/ISSILComposite.hlsl",
@@ -34533,7 +34613,7 @@
       }
     },
     {
-      "id": "compile-0101",
+      "id": "compile-0102",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISSimpleColor.hlsl",
       "sourcePath": "package/Shaders/ISSimpleColor.hlsl",
@@ -34611,7 +34691,7 @@
       }
     },
     {
-      "id": "compile-0102",
+      "id": "compile-0103",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISSnowSSS.hlsl",
       "sourcePath": "package/Shaders/ISSnowSSS.hlsl",
@@ -34696,7 +34776,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -34752,7 +34832,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -34784,7 +34864,7 @@
       }
     },
     {
-      "id": "compile-0103",
+      "id": "compile-0104",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISTemporalAA.hlsl",
       "sourcePath": "package/Shaders/ISTemporalAA.hlsl",
@@ -34870,7 +34950,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -34950,7 +35030,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -35006,7 +35086,7 @@
       }
     },
     {
-      "id": "compile-0104",
+      "id": "compile-0105",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISUpsampleDynamicResolution.hlsl",
       "sourcePath": "package/Shaders/ISUpsampleDynamicResolution.hlsl",
@@ -35067,7 +35147,7 @@
       }
     },
     {
-      "id": "compile-0105",
+      "id": "compile-0106",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISVolumetricLighting.hlsl",
       "sourcePath": "package/Shaders/ISVolumetricLighting.hlsl",
@@ -35144,7 +35224,7 @@
       }
     },
     {
-      "id": "compile-0106",
+      "id": "compile-0107",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISVolumetricLightingBlurHCS.hlsl",
       "sourcePath": "package/Shaders/ISVolumetricLightingBlurHCS.hlsl",
@@ -35237,7 +35317,7 @@
       }
     },
     {
-      "id": "compile-0107",
+      "id": "compile-0108",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISVolumetricLightingBlurVCS.hlsl",
       "sourcePath": "package/Shaders/ISVolumetricLightingBlurVCS.hlsl",
@@ -35330,7 +35410,7 @@
       }
     },
     {
-      "id": "compile-0108",
+      "id": "compile-0109",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISVolumetricLightingGenerateCS.hlsl",
       "sourcePath": "package/Shaders/ISVolumetricLightingGenerateCS.hlsl",
@@ -35421,7 +35501,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -35517,7 +35597,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -35630,7 +35710,7 @@
       }
     },
     {
-      "id": "compile-0109",
+      "id": "compile-0110",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISVolumetricLightingRaymarchCS.hlsl",
       "sourcePath": "package/Shaders/ISVolumetricLightingRaymarchCS.hlsl",
@@ -35691,7 +35771,7 @@
       }
     },
     {
-      "id": "compile-0110",
+      "id": "compile-0111",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISWaterBlend.hlsl",
       "sourcePath": "package/Shaders/ISWaterBlend.hlsl",
@@ -35835,7 +35915,7 @@
       }
     },
     {
-      "id": "compile-0111",
+      "id": "compile-0112",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISWaterDisplacement.hlsl",
       "sourcePath": "package/Shaders/ISWaterDisplacement.hlsl",
@@ -35959,7 +36039,7 @@
       }
     },
     {
-      "id": "compile-0112",
+      "id": "compile-0113",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISWaterFlow.hlsl",
       "sourcePath": "package/Shaders/ISWaterFlow.hlsl",
@@ -36020,7 +36100,7 @@
       }
     },
     {
-      "id": "compile-0113",
+      "id": "compile-0114",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "ISWorldMap.hlsl",
       "sourcePath": "package/Shaders/ISWorldMap.hlsl",
@@ -36106,7 +36186,7 @@
       }
     },
     {
-      "id": "compile-0114",
+      "id": "compile-0115",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "Lighting.hlsl",
       "sourcePath": "package/Shaders/Lighting.hlsl",
@@ -36226,7 +36306,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -36570,7 +36650,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -37178,7 +37258,7 @@
       }
     },
     {
-      "id": "compile-0115",
+      "id": "compile-0116",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "Particle.hlsl",
       "sourcePath": "package/Shaders/Particle.hlsl",
@@ -37272,7 +37352,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -37392,7 +37472,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -37536,7 +37616,7 @@
       }
     },
     {
-      "id": "compile-0116",
+      "id": "compile-0117",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "RunGrass.hlsl",
       "sourcePath": "package/Shaders/RunGrass.hlsl",
@@ -37643,7 +37723,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -37683,7 +37763,7 @@
             "name": "AlphaTestRefCB",
             "type": "cbuffer",
             "register": "b11",
-            "line": 414
+            "line": 418
           },
           {
             "kind": "constantBuffers",
@@ -37691,7 +37771,7 @@
             "name": "cb7",
             "type": "cbuffer",
             "register": "b7",
-            "line": 134
+            "line": 138
           },
           {
             "kind": "constantBuffers",
@@ -37699,7 +37779,7 @@
             "name": "cb8",
             "type": "cbuffer",
             "register": "b8",
-            "line": 139
+            "line": 143
           },
           {
             "kind": "constantBuffers",
@@ -37707,7 +37787,7 @@
             "name": "PerFrame",
             "type": "cbuffer",
             "register": "b0",
-            "line": 396
+            "line": 400
           },
           {
             "kind": "constantBuffers",
@@ -37715,7 +37795,7 @@
             "name": "PerMaterial",
             "type": "cbuffer",
             "register": "b1",
-            "line": 624
+            "line": 636
           },
           {
             "kind": "samplers",
@@ -37723,7 +37803,7 @@
             "name": "SampBaseSampler",
             "type": "SamplerState",
             "register": "s0",
-            "line": 383
+            "line": 387
           },
           {
             "kind": "samplers",
@@ -37731,7 +37811,7 @@
             "name": "SampNormalSampler",
             "type": "SamplerState",
             "register": "s2",
-            "line": 388
+            "line": 392
           },
           {
             "kind": "samplers",
@@ -37739,7 +37819,7 @@
             "name": "SampRMAOSSampler",
             "type": "SamplerState",
             "register": "s3",
-            "line": 389
+            "line": 393
           },
           {
             "kind": "samplers",
@@ -37747,7 +37827,7 @@
             "name": "SampShadowMaskSampler",
             "type": "SamplerState",
             "register": "s1",
-            "line": 384
+            "line": 388
           },
           {
             "kind": "samplers",
@@ -37755,7 +37835,7 @@
             "name": "SampSubsurfaceSampler",
             "type": "SamplerState",
             "register": "s4",
-            "line": 390
+            "line": 394
           },
           {
             "kind": "srvs",
@@ -37803,7 +37883,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -37923,7 +38003,7 @@
             "name": "TexBaseSampler",
             "type": "Texture2D<float4>",
             "register": "t0",
-            "line": 393
+            "line": 397
           },
           {
             "kind": "srvs",
@@ -37931,7 +38011,7 @@
             "name": "TexNormalSampler",
             "type": "Texture2D<float4>",
             "register": "t2",
-            "line": 406
+            "line": 410
           },
           {
             "kind": "srvs",
@@ -37939,7 +38019,7 @@
             "name": "TexRMAOSSampler",
             "type": "Texture2D<float4>",
             "register": "t3",
-            "line": 407
+            "line": 411
           },
           {
             "kind": "srvs",
@@ -37947,7 +38027,7 @@
             "name": "TexShadowMaskSampler",
             "type": "Texture2D<float4>",
             "register": "t1",
-            "line": 395
+            "line": 399
           },
           {
             "kind": "srvs",
@@ -37955,7 +38035,7 @@
             "name": "TexSubsurfaceSampler",
             "type": "Texture2D<float4>",
             "register": "t4",
-            "line": 408
+            "line": 412
           },
           {
             "kind": "srvs",
@@ -37995,7 +38075,7 @@
       }
     },
     {
-      "id": "compile-0117",
+      "id": "compile-0118",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "Sky.hlsl",
       "sourcePath": "package/Shaders/Sky.hlsl",
@@ -38082,7 +38162,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -38162,7 +38242,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -38202,7 +38282,7 @@
       }
     },
     {
-      "id": "compile-0118",
+      "id": "compile-0119",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "UnderwaterFogToDepthOfField.hlsl",
       "sourcePath": "package/Shaders/UnderwaterFogToDepthOfField.hlsl",
@@ -38296,7 +38376,7 @@
       }
     },
     {
-      "id": "compile-0119",
+      "id": "compile-0120",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "Utility.hlsl",
       "sourcePath": "package/Shaders/Utility.hlsl",
@@ -38348,7 +38428,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -38508,7 +38588,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -38580,7 +38660,7 @@
       }
     },
     {
-      "id": "compile-0120",
+      "id": "compile-0121",
       "kind": "engine-shader-cache-family",
       "sourceVirtualPath": "Water.hlsl",
       "sourcePath": "package/Shaders/Water.hlsl",
@@ -38687,7 +38767,7 @@
             "name": "FeatureData",
             "type": "cbuffer",
             "register": "b6",
-            "line": 393
+            "line": 411
           },
           {
             "kind": "constantBuffers",
@@ -38895,7 +38975,7 @@
             "name": "DepthTexture",
             "type": "Texture2D<float4>",
             "register": "t17",
-            "line": 431
+            "line": 451
           },
           {
             "kind": "srvs",
@@ -39253,7 +39333,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -39285,7 +39365,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -39547,7 +39627,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -39579,7 +39659,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -39841,7 +39921,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -39881,7 +39961,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -39991,7 +40071,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -40031,7 +40111,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -40141,7 +40221,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -40181,7 +40261,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -40291,7 +40371,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -40323,7 +40403,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -40425,7 +40505,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -40457,7 +40537,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -40559,7 +40639,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -40591,7 +40671,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -40693,7 +40773,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -40733,7 +40813,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -40833,7 +40913,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -40865,7 +40945,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -40959,7 +41039,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -40991,7 +41071,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -41349,7 +41429,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -41397,7 +41477,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -41499,7 +41579,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -41547,7 +41627,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -41713,7 +41793,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -41761,7 +41841,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -41927,7 +42007,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -41975,7 +42055,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -42061,7 +42141,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -42109,7 +42189,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -42195,7 +42275,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -42243,7 +42323,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -42361,7 +42441,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -42409,7 +42489,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -42575,7 +42655,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -42623,7 +42703,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -42717,7 +42797,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -42765,7 +42845,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -42859,7 +42939,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -42907,7 +42987,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -43017,7 +43097,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -43049,7 +43129,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -43119,7 +43199,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -43159,7 +43239,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -43221,7 +43301,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -43253,7 +43333,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -43323,7 +43403,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -43355,7 +43435,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -43457,7 +43537,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -43489,7 +43569,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -43607,7 +43687,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -43639,7 +43719,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -43757,7 +43837,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -43789,7 +43869,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -43875,7 +43955,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -44035,7 +44115,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -44136,7 +44216,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -44296,7 +44376,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -44805,7 +44885,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -44837,7 +44917,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -44939,7 +45019,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -44971,7 +45051,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -45073,7 +45153,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -45113,7 +45193,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -45185,7 +45265,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -45225,7 +45305,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -45736,8 +45816,8 @@
       "pipelineKind": "independent-program",
       "compileUnit": "compile-0056",
       "invocationSites": [
-        "src/Features/Upscaling.cpp:37917",
-        "src/Features/Upscaling.cpp:39192"
+        "src/Features/Upscaling.cpp:38177",
+        "src/Features/Upscaling.cpp:39452"
       ],
       "inputs": [
         {
@@ -45785,7 +45865,7 @@
       "pipelineKind": "independent-program",
       "compileUnit": "compile-0057",
       "invocationSites": [
-        "src/Features/Upscaling.cpp:40280"
+        "src/Features/Upscaling.cpp:40540"
       ],
       "inputs": [
         {
@@ -46096,9 +46176,29 @@
     },
     {
       "id": "pass-0065",
+      "owner": "VR",
+      "pipelineKind": "inline-program",
+      "compileUnit": "compile-0065",
+      "invocationSites": [],
+      "inputs": [],
+      "outputs": [],
+      "orderingBefore": [],
+      "orderingAfter": [],
+      "routes": {
+        "flat": null,
+        "vr": true,
+        "stereo": true,
+        "overlay": true,
+        "vendor": false,
+        "compatibility": false
+      },
+      "classificationStatus": "compile-classified-invocation-pending"
+    },
+    {
+      "id": "pass-0066",
       "owner": "core",
       "pipelineKind": "independent-program",
-      "compileUnit": "compile-0065",
+      "compileUnit": "compile-0066",
       "invocationSites": [],
       "inputs": [
         {
@@ -46165,66 +46265,12 @@
       "classificationStatus": "compile-classified-invocation-pending"
     },
     {
-      "id": "pass-0066",
-      "owner": "menu-infrastructure",
-      "pipelineKind": "independent-program",
-      "compileUnit": "compile-0066",
-      "invocationSites": [
-        "src/Menu/BackgroundBlur.cpp:370"
-      ],
-      "inputs": [
-        {
-          "kind": "constantBuffers",
-          "source": "Menu/BackgroundBlurHorizontal.hlsl",
-          "name": "BlurBuffer",
-          "type": "cbuffer",
-          "register": "b0",
-          "line": 3
-        },
-        {
-          "kind": "samplers",
-          "source": "Menu/BackgroundBlurHorizontal.hlsl",
-          "name": "LinearSampler",
-          "type": "SamplerState",
-          "register": "s0",
-          "line": 9
-        },
-        {
-          "kind": "srvs",
-          "source": "Menu/BackgroundBlurHorizontal.hlsl",
-          "name": "InputTexture",
-          "type": "Texture2D",
-          "register": "t0",
-          "line": 11
-        }
-      ],
-      "outputs": [
-        {
-          "kind": "semantic",
-          "source": "Menu/BackgroundBlurHorizontal.hlsl",
-          "name": "SV_TARGET"
-        }
-      ],
-      "orderingBefore": [],
-      "orderingAfter": [],
-      "routes": {
-        "flat": true,
-        "vr": false,
-        "stereo": false,
-        "overlay": true,
-        "vendor": false,
-        "compatibility": true
-      },
-      "classificationStatus": "static-classified"
-    },
-    {
       "id": "pass-0067",
       "owner": "menu-infrastructure",
       "pipelineKind": "independent-program",
       "compileUnit": "compile-0067",
       "invocationSites": [
-        "src/Menu/BackgroundBlur.cpp:383",
-        "src/Menu/BackgroundBlur.cpp:420"
+        "src/Menu/BackgroundBlur.cpp:370"
       ],
       "inputs": [
         {
@@ -46277,6 +46323,60 @@
       "pipelineKind": "independent-program",
       "compileUnit": "compile-0068",
       "invocationSites": [
+        "src/Menu/BackgroundBlur.cpp:383",
+        "src/Menu/BackgroundBlur.cpp:420"
+      ],
+      "inputs": [
+        {
+          "kind": "constantBuffers",
+          "source": "Menu/BackgroundBlurHorizontal.hlsl",
+          "name": "BlurBuffer",
+          "type": "cbuffer",
+          "register": "b0",
+          "line": 3
+        },
+        {
+          "kind": "samplers",
+          "source": "Menu/BackgroundBlurHorizontal.hlsl",
+          "name": "LinearSampler",
+          "type": "SamplerState",
+          "register": "s0",
+          "line": 9
+        },
+        {
+          "kind": "srvs",
+          "source": "Menu/BackgroundBlurHorizontal.hlsl",
+          "name": "InputTexture",
+          "type": "Texture2D",
+          "register": "t0",
+          "line": 11
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "semantic",
+          "source": "Menu/BackgroundBlurHorizontal.hlsl",
+          "name": "SV_TARGET"
+        }
+      ],
+      "orderingBefore": [],
+      "orderingAfter": [],
+      "routes": {
+        "flat": true,
+        "vr": false,
+        "stereo": false,
+        "overlay": true,
+        "vendor": false,
+        "compatibility": true
+      },
+      "classificationStatus": "static-classified"
+    },
+    {
+      "id": "pass-0069",
+      "owner": "menu-infrastructure",
+      "pipelineKind": "independent-program",
+      "compileUnit": "compile-0069",
+      "invocationSites": [
         "src/Menu/BackgroundBlur.cpp:429"
       ],
       "inputs": [
@@ -46325,10 +46425,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0069",
+      "id": "pass-0070",
       "owner": "shader-tools",
       "pipelineKind": "runtime-tooling-dynamic-program",
-      "compileUnit": "compile-0069",
+      "compileUnit": "compile-0070",
       "invocationSites": [],
       "inputs": [],
       "outputs": [],
@@ -46345,12 +46445,12 @@
       "classificationStatus": "compile-classified-invocation-pending"
     },
     {
-      "id": "pass-0070",
+      "id": "pass-0071",
       "owner": "TruePBR",
       "pipelineKind": "independent-program",
-      "compileUnit": "compile-0070",
+      "compileUnit": "compile-0071",
       "invocationSites": [
-        "src/TruePBR.cpp:463"
+        "src/TruePBR.cpp:506"
       ],
       "inputs": [],
       "outputs": [
@@ -46376,10 +46476,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0071",
+      "id": "pass-0072",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0071",
+      "compileUnit": "compile-0072",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -46479,10 +46579,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0072",
+      "id": "pass-0073",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0072",
+      "compileUnit": "compile-0073",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -46533,7 +46633,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -46637,7 +46737,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -46734,10 +46834,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0073",
+      "id": "pass-0074",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0073",
+      "compileUnit": "compile-0074",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -46788,7 +46888,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -46980,7 +47080,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -47149,10 +47249,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0074",
+      "id": "pass-0075",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0074",
+      "compileUnit": "compile-0075",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -47436,10 +47536,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0075",
+      "id": "pass-0076",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0075",
+      "compileUnit": "compile-0076",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -47523,10 +47623,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0076",
+      "id": "pass-0077",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0076",
+      "compileUnit": "compile-0077",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -47682,10 +47782,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0077",
+      "id": "pass-0078",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0077",
+      "compileUnit": "compile-0078",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -47705,141 +47805,6 @@
           "type": "Texture2D<float4>",
           "register": "t0",
           "line": 12
-        }
-      ],
-      "outputs": [],
-      "orderingBefore": [],
-      "orderingAfter": [],
-      "routes": {
-        "flat": true,
-        "vr": false,
-        "stereo": false,
-        "overlay": false,
-        "vendor": false,
-        "compatibility": false
-      },
-      "classificationStatus": "static-classified"
-    },
-    {
-      "id": "pass-0078",
-      "owner": "core",
-      "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0078",
-      "invocationSites": [
-        "engine draw pipeline"
-      ],
-      "inputs": [
-        {
-          "kind": "constantBuffers",
-          "source": "Common/Color.hlsli",
-          "name": "AdaptiveBalancePerGeometry",
-          "type": "cbuffer",
-          "register": "b3",
-          "line": 43
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/Color.hlsli",
-          "name": "AdaptiveBalancePerGeometry",
-          "type": "cbuffer",
-          "register": "b7",
-          "line": 41
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/Color.hlsli",
-          "name": "LLPerGeometry",
-          "type": "cbuffer",
-          "register": "b8",
-          "line": 32
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/FrameBuffer.hlsli",
-          "name": "PerFrame",
-          "type": "cbuffer",
-          "register": "b12",
-          "line": 6
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/Permutation.hlsli",
-          "name": "PerShader",
-          "type": "cbuffer",
-          "register": "b4",
-          "line": 79
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/SharedData.hlsli",
-          "name": "FeatureData",
-          "type": "cbuffer",
-          "register": "b6",
-          "line": 393
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/SharedData.hlsli",
-          "name": "SharedData",
-          "type": "cbuffer",
-          "register": "b5",
-          "line": 12
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/VR.hlsli",
-          "name": "VRValues",
-          "type": "cbuffer",
-          "register": "b13",
-          "line": 17
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "ISBlur.hlsl",
-          "name": "PerGeometry",
-          "type": "cbuffer",
-          "register": "b2",
-          "line": 18
-        },
-        {
-          "kind": "samplers",
-          "source": "ISBlur.hlsl",
-          "name": "AvgLumSampler",
-          "type": "SamplerState",
-          "register": "s1",
-          "line": 14
-        },
-        {
-          "kind": "samplers",
-          "source": "ISBlur.hlsl",
-          "name": "ImageSampler",
-          "type": "SamplerState",
-          "register": "s0",
-          "line": 13
-        },
-        {
-          "kind": "srvs",
-          "source": "Common/SharedData.hlsli",
-          "name": "DepthTexture",
-          "type": "Texture2D<float4>",
-          "register": "t17",
-          "line": 431
-        },
-        {
-          "kind": "srvs",
-          "source": "ISBlur.hlsl",
-          "name": "AvgLumTex",
-          "type": "Texture2D<float4>",
-          "register": "t1",
-          "line": 17
-        },
-        {
-          "kind": "srvs",
-          "source": "ISBlur.hlsl",
-          "name": "ImageTex",
-          "type": "Texture2D<float4>",
-          "register": "t0",
-          "line": 15
         }
       ],
       "outputs": [],
@@ -47910,7 +47875,142 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/SharedData.hlsli",
+          "name": "SharedData",
+          "type": "cbuffer",
+          "register": "b5",
+          "line": 12
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/VR.hlsli",
+          "name": "VRValues",
+          "type": "cbuffer",
+          "register": "b13",
+          "line": 17
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "ISBlur.hlsl",
+          "name": "PerGeometry",
+          "type": "cbuffer",
+          "register": "b2",
+          "line": 18
+        },
+        {
+          "kind": "samplers",
+          "source": "ISBlur.hlsl",
+          "name": "AvgLumSampler",
+          "type": "SamplerState",
+          "register": "s1",
+          "line": 14
+        },
+        {
+          "kind": "samplers",
+          "source": "ISBlur.hlsl",
+          "name": "ImageSampler",
+          "type": "SamplerState",
+          "register": "s0",
+          "line": 13
+        },
+        {
+          "kind": "srvs",
+          "source": "Common/SharedData.hlsli",
+          "name": "DepthTexture",
+          "type": "Texture2D<float4>",
+          "register": "t17",
+          "line": 451
+        },
+        {
+          "kind": "srvs",
+          "source": "ISBlur.hlsl",
+          "name": "AvgLumTex",
+          "type": "Texture2D<float4>",
+          "register": "t1",
+          "line": 17
+        },
+        {
+          "kind": "srvs",
+          "source": "ISBlur.hlsl",
+          "name": "ImageTex",
+          "type": "Texture2D<float4>",
+          "register": "t0",
+          "line": 15
+        }
+      ],
+      "outputs": [],
+      "orderingBefore": [],
+      "orderingAfter": [],
+      "routes": {
+        "flat": true,
+        "vr": false,
+        "stereo": false,
+        "overlay": false,
+        "vendor": false,
+        "compatibility": false
+      },
+      "classificationStatus": "static-classified"
+    },
+    {
+      "id": "pass-0080",
+      "owner": "core",
+      "pipelineKind": "engine-shader-cache-family",
+      "compileUnit": "compile-0080",
+      "invocationSites": [
+        "engine draw pipeline"
+      ],
+      "inputs": [
+        {
+          "kind": "constantBuffers",
+          "source": "Common/Color.hlsli",
+          "name": "AdaptiveBalancePerGeometry",
+          "type": "cbuffer",
+          "register": "b3",
+          "line": 43
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/Color.hlsli",
+          "name": "AdaptiveBalancePerGeometry",
+          "type": "cbuffer",
+          "register": "b7",
+          "line": 41
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/Color.hlsli",
+          "name": "LLPerGeometry",
+          "type": "cbuffer",
+          "register": "b8",
+          "line": 32
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/FrameBuffer.hlsli",
+          "name": "PerFrame",
+          "type": "cbuffer",
+          "register": "b12",
+          "line": 6
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/Permutation.hlsli",
+          "name": "PerShader",
+          "type": "cbuffer",
+          "register": "b4",
+          "line": 79
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/SharedData.hlsli",
+          "name": "FeatureData",
+          "type": "cbuffer",
+          "register": "b6",
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -47958,7 +48058,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -47991,10 +48091,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0080",
+      "id": "pass-0081",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0080",
+      "compileUnit": "compile-0081",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48046,10 +48146,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0081",
+      "id": "pass-0082",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0081",
+      "compileUnit": "compile-0082",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48101,10 +48201,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0082",
+      "id": "pass-0083",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0082",
+      "compileUnit": "compile-0083",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48123,7 +48223,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -48195,7 +48295,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -48252,10 +48352,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0083",
+      "id": "pass-0084",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0083",
+      "compileUnit": "compile-0084",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48323,10 +48423,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0084",
+      "id": "pass-0085",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0084",
+      "compileUnit": "compile-0085",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48377,7 +48477,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -48433,7 +48533,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -48474,10 +48574,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0085",
+      "id": "pass-0086",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0085",
+      "compileUnit": "compile-0086",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48521,10 +48621,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0086",
+      "id": "pass-0087",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0086",
+      "compileUnit": "compile-0087",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48584,10 +48684,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0087",
+      "id": "pass-0088",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0087",
+      "compileUnit": "compile-0088",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48638,7 +48738,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -48702,7 +48802,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -48751,10 +48851,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0088",
+      "id": "pass-0089",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0088",
+      "compileUnit": "compile-0089",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48838,10 +48938,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0089",
+      "id": "pass-0090",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0089",
+      "compileUnit": "compile-0090",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -48997,10 +49097,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0090",
+      "id": "pass-0091",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0090",
+      "compileUnit": "compile-0091",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49051,7 +49151,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -49091,7 +49191,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -49116,10 +49216,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0091",
+      "id": "pass-0092",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0091",
+      "compileUnit": "compile-0092",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49163,10 +49263,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0092",
+      "id": "pass-0093",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0092",
+      "compileUnit": "compile-0093",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49218,10 +49318,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0093",
+      "id": "pass-0094",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0093",
+      "compileUnit": "compile-0094",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49273,10 +49373,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0094",
+      "id": "pass-0095",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0094",
+      "compileUnit": "compile-0095",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49295,7 +49395,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -49359,7 +49459,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -49408,10 +49508,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0095",
+      "id": "pass-0096",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0095",
+      "compileUnit": "compile-0096",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49462,7 +49562,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -49510,7 +49610,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -49543,10 +49643,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0096",
+      "id": "pass-0097",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0096",
+      "compileUnit": "compile-0097",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49598,10 +49698,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0097",
+      "id": "pass-0098",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0097",
+      "compileUnit": "compile-0098",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49653,10 +49753,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0098",
+      "id": "pass-0099",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0098",
+      "compileUnit": "compile-0099",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49707,7 +49807,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -49795,7 +49895,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -49916,10 +50016,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0099",
+      "id": "pass-0100",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0099",
+      "compileUnit": "compile-0100",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -49971,10 +50071,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0100",
+      "id": "pass-0101",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0100",
+      "compileUnit": "compile-0101",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -50034,10 +50134,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0101",
+      "id": "pass-0102",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0101",
+      "compileUnit": "compile-0102",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -50081,157 +50181,6 @@
           "type": "Texture2D<uint4>",
           "register": "t1",
           "line": 19
-        }
-      ],
-      "outputs": [],
-      "orderingBefore": [],
-      "orderingAfter": [],
-      "routes": {
-        "flat": true,
-        "vr": false,
-        "stereo": false,
-        "overlay": false,
-        "vendor": false,
-        "compatibility": false
-      },
-      "classificationStatus": "static-classified"
-    },
-    {
-      "id": "pass-0102",
-      "owner": "core",
-      "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0102",
-      "invocationSites": [
-        "engine draw pipeline"
-      ],
-      "inputs": [
-        {
-          "kind": "constantBuffers",
-          "source": "Common/Color.hlsli",
-          "name": "AdaptiveBalancePerGeometry",
-          "type": "cbuffer",
-          "register": "b3",
-          "line": 43
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/Color.hlsli",
-          "name": "AdaptiveBalancePerGeometry",
-          "type": "cbuffer",
-          "register": "b7",
-          "line": 41
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/Color.hlsli",
-          "name": "LLPerGeometry",
-          "type": "cbuffer",
-          "register": "b8",
-          "line": 32
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/FrameBuffer.hlsli",
-          "name": "PerFrame",
-          "type": "cbuffer",
-          "register": "b12",
-          "line": 6
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/Permutation.hlsli",
-          "name": "PerShader",
-          "type": "cbuffer",
-          "register": "b4",
-          "line": 79
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/SharedData.hlsli",
-          "name": "FeatureData",
-          "type": "cbuffer",
-          "register": "b6",
-          "line": 393
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/SharedData.hlsli",
-          "name": "SharedData",
-          "type": "cbuffer",
-          "register": "b5",
-          "line": 12
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "Common/VR.hlsli",
-          "name": "VRValues",
-          "type": "cbuffer",
-          "register": "b13",
-          "line": 17
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "ISSnowSSS.hlsl",
-          "name": "PerGeometry",
-          "type": "cbuffer",
-          "register": "b2",
-          "line": 20
-        },
-        {
-          "kind": "samplers",
-          "source": "ISSnowSSS.hlsl",
-          "name": "depthSampler",
-          "type": "SamplerState",
-          "register": "s0",
-          "line": 13
-        },
-        {
-          "kind": "samplers",
-          "source": "ISSnowSSS.hlsl",
-          "name": "snowAlphaSpecSampler",
-          "type": "SamplerState",
-          "register": "s2",
-          "line": 15
-        },
-        {
-          "kind": "samplers",
-          "source": "ISSnowSSS.hlsl",
-          "name": "snowDiffuseSampler",
-          "type": "SamplerState",
-          "register": "s1",
-          "line": 14
-        },
-        {
-          "kind": "srvs",
-          "source": "Common/SharedData.hlsli",
-          "name": "DepthTexture",
-          "type": "Texture2D<float4>",
-          "register": "t17",
-          "line": 431
-        },
-        {
-          "kind": "srvs",
-          "source": "ISSnowSSS.hlsl",
-          "name": "depthTex",
-          "type": "Texture2D<float4>",
-          "register": "t0",
-          "line": 16
-        },
-        {
-          "kind": "srvs",
-          "source": "ISSnowSSS.hlsl",
-          "name": "snowAlphaSpecTex",
-          "type": "Texture2D<float4>",
-          "register": "t2",
-          "line": 19
-        },
-        {
-          "kind": "srvs",
-          "source": "ISSnowSSS.hlsl",
-          "name": "snowDiffuseTex",
-          "type": "Texture2D<float4>",
-          "register": "t1",
-          "line": 18
         }
       ],
       "outputs": [],
@@ -50302,7 +50251,158 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/SharedData.hlsli",
+          "name": "SharedData",
+          "type": "cbuffer",
+          "register": "b5",
+          "line": 12
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/VR.hlsli",
+          "name": "VRValues",
+          "type": "cbuffer",
+          "register": "b13",
+          "line": 17
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "ISSnowSSS.hlsl",
+          "name": "PerGeometry",
+          "type": "cbuffer",
+          "register": "b2",
+          "line": 20
+        },
+        {
+          "kind": "samplers",
+          "source": "ISSnowSSS.hlsl",
+          "name": "depthSampler",
+          "type": "SamplerState",
+          "register": "s0",
+          "line": 13
+        },
+        {
+          "kind": "samplers",
+          "source": "ISSnowSSS.hlsl",
+          "name": "snowAlphaSpecSampler",
+          "type": "SamplerState",
+          "register": "s2",
+          "line": 15
+        },
+        {
+          "kind": "samplers",
+          "source": "ISSnowSSS.hlsl",
+          "name": "snowDiffuseSampler",
+          "type": "SamplerState",
+          "register": "s1",
+          "line": 14
+        },
+        {
+          "kind": "srvs",
+          "source": "Common/SharedData.hlsli",
+          "name": "DepthTexture",
+          "type": "Texture2D<float4>",
+          "register": "t17",
+          "line": 451
+        },
+        {
+          "kind": "srvs",
+          "source": "ISSnowSSS.hlsl",
+          "name": "depthTex",
+          "type": "Texture2D<float4>",
+          "register": "t0",
+          "line": 16
+        },
+        {
+          "kind": "srvs",
+          "source": "ISSnowSSS.hlsl",
+          "name": "snowAlphaSpecTex",
+          "type": "Texture2D<float4>",
+          "register": "t2",
+          "line": 19
+        },
+        {
+          "kind": "srvs",
+          "source": "ISSnowSSS.hlsl",
+          "name": "snowDiffuseTex",
+          "type": "Texture2D<float4>",
+          "register": "t1",
+          "line": 18
+        }
+      ],
+      "outputs": [],
+      "orderingBefore": [],
+      "orderingAfter": [],
+      "routes": {
+        "flat": true,
+        "vr": false,
+        "stereo": false,
+        "overlay": false,
+        "vendor": false,
+        "compatibility": false
+      },
+      "classificationStatus": "static-classified"
+    },
+    {
+      "id": "pass-0104",
+      "owner": "core",
+      "pipelineKind": "engine-shader-cache-family",
+      "compileUnit": "compile-0104",
+      "invocationSites": [
+        "engine draw pipeline"
+      ],
+      "inputs": [
+        {
+          "kind": "constantBuffers",
+          "source": "Common/Color.hlsli",
+          "name": "AdaptiveBalancePerGeometry",
+          "type": "cbuffer",
+          "register": "b3",
+          "line": 43
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/Color.hlsli",
+          "name": "AdaptiveBalancePerGeometry",
+          "type": "cbuffer",
+          "register": "b7",
+          "line": 41
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/Color.hlsli",
+          "name": "LLPerGeometry",
+          "type": "cbuffer",
+          "register": "b8",
+          "line": 32
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/FrameBuffer.hlsli",
+          "name": "PerFrame",
+          "type": "cbuffer",
+          "register": "b12",
+          "line": 6
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/Permutation.hlsli",
+          "name": "PerShader",
+          "type": "cbuffer",
+          "register": "b4",
+          "line": 79
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "Common/SharedData.hlsli",
+          "name": "FeatureData",
+          "type": "cbuffer",
+          "register": "b6",
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -50382,7 +50482,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -50447,10 +50547,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0104",
+      "id": "pass-0105",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0104",
+      "compileUnit": "compile-0105",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -50494,10 +50594,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0105",
+      "id": "pass-0106",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0105",
+      "compileUnit": "compile-0106",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -50557,86 +50657,6 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0106",
-      "owner": "core",
-      "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0106",
-      "invocationSites": [
-        "engine draw pipeline"
-      ],
-      "inputs": [
-        {
-          "kind": "constantBuffers",
-          "source": "ISVolumetricLightingBlurHCS.hlsl",
-          "name": "CBSize",
-          "type": "cbuffer",
-          "register": "b0",
-          "line": 14
-        },
-        {
-          "kind": "constantBuffers",
-          "source": "ISVolumetricLightingBlurHCS.hlsl",
-          "name": "VLData",
-          "type": "cbuffer",
-          "register": "b1",
-          "line": 20
-        },
-        {
-          "kind": "samplers",
-          "source": "ISVolumetricLightingBlurHCS.hlsl",
-          "name": "LinearSampler",
-          "type": "SamplerState",
-          "register": "s0",
-          "line": 3
-        },
-        {
-          "kind": "samplers",
-          "source": "ISVolumetricLightingBlurHCS.hlsl",
-          "name": "PointSampler",
-          "type": "SamplerState",
-          "register": "s1",
-          "line": 4
-        },
-        {
-          "kind": "srvs",
-          "source": "ISVolumetricLightingBlurHCS.hlsl",
-          "name": "DepthTexture",
-          "type": "Texture2D<float>",
-          "register": "t1",
-          "line": 2
-        },
-        {
-          "kind": "srvs",
-          "source": "ISVolumetricLightingBlurHCS.hlsl",
-          "name": "InVLTexture",
-          "type": "Texture2D<float>",
-          "register": "t0",
-          "line": 1
-        }
-      ],
-      "outputs": [
-        {
-          "kind": "uavs",
-          "source": "ISVolumetricLightingBlurHCS.hlsl",
-          "name": "OutVLTexture",
-          "type": "RWTexture2D<float>",
-          "register": "u0",
-          "line": 5
-        }
-      ],
-      "orderingBefore": [],
-      "orderingAfter": [],
-      "routes": {
-        "flat": true,
-        "vr": false,
-        "stereo": false,
-        "overlay": false,
-        "vendor": false,
-        "compatibility": false
-      },
-      "classificationStatus": "static-classified"
-    },
-    {
       "id": "pass-0107",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
@@ -50647,7 +50667,7 @@
       "inputs": [
         {
           "kind": "constantBuffers",
-          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "source": "ISVolumetricLightingBlurHCS.hlsl",
           "name": "CBSize",
           "type": "cbuffer",
           "register": "b0",
@@ -50655,7 +50675,7 @@
         },
         {
           "kind": "constantBuffers",
-          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "source": "ISVolumetricLightingBlurHCS.hlsl",
           "name": "VLData",
           "type": "cbuffer",
           "register": "b1",
@@ -50663,7 +50683,7 @@
         },
         {
           "kind": "samplers",
-          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "source": "ISVolumetricLightingBlurHCS.hlsl",
           "name": "LinearSampler",
           "type": "SamplerState",
           "register": "s0",
@@ -50671,7 +50691,7 @@
         },
         {
           "kind": "samplers",
-          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "source": "ISVolumetricLightingBlurHCS.hlsl",
           "name": "PointSampler",
           "type": "SamplerState",
           "register": "s1",
@@ -50679,7 +50699,7 @@
         },
         {
           "kind": "srvs",
-          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "source": "ISVolumetricLightingBlurHCS.hlsl",
           "name": "DepthTexture",
           "type": "Texture2D<float>",
           "register": "t1",
@@ -50687,7 +50707,7 @@
         },
         {
           "kind": "srvs",
-          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "source": "ISVolumetricLightingBlurHCS.hlsl",
           "name": "InVLTexture",
           "type": "Texture2D<float>",
           "register": "t0",
@@ -50697,7 +50717,7 @@
       "outputs": [
         {
           "kind": "uavs",
-          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "source": "ISVolumetricLightingBlurHCS.hlsl",
           "name": "OutVLTexture",
           "type": "RWTexture2D<float>",
           "register": "u0",
@@ -50721,6 +50741,86 @@
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
       "compileUnit": "compile-0108",
+      "invocationSites": [
+        "engine draw pipeline"
+      ],
+      "inputs": [
+        {
+          "kind": "constantBuffers",
+          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "name": "CBSize",
+          "type": "cbuffer",
+          "register": "b0",
+          "line": 14
+        },
+        {
+          "kind": "constantBuffers",
+          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "name": "VLData",
+          "type": "cbuffer",
+          "register": "b1",
+          "line": 20
+        },
+        {
+          "kind": "samplers",
+          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "name": "LinearSampler",
+          "type": "SamplerState",
+          "register": "s0",
+          "line": 3
+        },
+        {
+          "kind": "samplers",
+          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "name": "PointSampler",
+          "type": "SamplerState",
+          "register": "s1",
+          "line": 4
+        },
+        {
+          "kind": "srvs",
+          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "name": "DepthTexture",
+          "type": "Texture2D<float>",
+          "register": "t1",
+          "line": 2
+        },
+        {
+          "kind": "srvs",
+          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "name": "InVLTexture",
+          "type": "Texture2D<float>",
+          "register": "t0",
+          "line": 1
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "uavs",
+          "source": "ISVolumetricLightingBlurVCS.hlsl",
+          "name": "OutVLTexture",
+          "type": "RWTexture2D<float>",
+          "register": "u0",
+          "line": 5
+        }
+      ],
+      "orderingBefore": [],
+      "orderingAfter": [],
+      "routes": {
+        "flat": true,
+        "vr": false,
+        "stereo": false,
+        "overlay": false,
+        "vendor": false,
+        "compatibility": false
+      },
+      "classificationStatus": "static-classified"
+    },
+    {
+      "id": "pass-0109",
+      "owner": "core",
+      "pipelineKind": "engine-shader-cache-family",
+      "compileUnit": "compile-0109",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -50771,7 +50871,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -50867,7 +50967,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -50989,10 +51089,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0109",
+      "id": "pass-0110",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0109",
+      "compileUnit": "compile-0110",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -51037,10 +51137,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0110",
+      "id": "pass-0111",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0110",
+      "compileUnit": "compile-0111",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -51164,10 +51264,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0111",
+      "id": "pass-0112",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0111",
+      "compileUnit": "compile-0112",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -51275,10 +51375,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0112",
+      "id": "pass-0113",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0112",
+      "compileUnit": "compile-0113",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -51322,10 +51422,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0113",
+      "id": "pass-0114",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0113",
+      "compileUnit": "compile-0114",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -51393,10 +51493,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0114",
+      "id": "pass-0115",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0114",
+      "compileUnit": "compile-0115",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -51447,7 +51547,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -51791,7 +51891,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -52408,10 +52508,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0115",
+      "id": "pass-0116",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0115",
+      "compileUnit": "compile-0116",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -52462,7 +52562,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -52582,7 +52682,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -52735,10 +52835,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0116",
+      "id": "pass-0117",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0116",
+      "compileUnit": "compile-0117",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -52789,7 +52889,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -52829,7 +52929,7 @@
           "name": "AlphaTestRefCB",
           "type": "cbuffer",
           "register": "b11",
-          "line": 414
+          "line": 418
         },
         {
           "kind": "constantBuffers",
@@ -52837,7 +52937,7 @@
           "name": "cb7",
           "type": "cbuffer",
           "register": "b7",
-          "line": 134
+          "line": 138
         },
         {
           "kind": "constantBuffers",
@@ -52845,7 +52945,7 @@
           "name": "cb8",
           "type": "cbuffer",
           "register": "b8",
-          "line": 139
+          "line": 143
         },
         {
           "kind": "constantBuffers",
@@ -52853,7 +52953,7 @@
           "name": "PerFrame",
           "type": "cbuffer",
           "register": "b0",
-          "line": 396
+          "line": 400
         },
         {
           "kind": "constantBuffers",
@@ -52861,7 +52961,7 @@
           "name": "PerMaterial",
           "type": "cbuffer",
           "register": "b1",
-          "line": 624
+          "line": 636
         },
         {
           "kind": "samplers",
@@ -52869,7 +52969,7 @@
           "name": "SampBaseSampler",
           "type": "SamplerState",
           "register": "s0",
-          "line": 383
+          "line": 387
         },
         {
           "kind": "samplers",
@@ -52877,7 +52977,7 @@
           "name": "SampNormalSampler",
           "type": "SamplerState",
           "register": "s2",
-          "line": 388
+          "line": 392
         },
         {
           "kind": "samplers",
@@ -52885,7 +52985,7 @@
           "name": "SampRMAOSSampler",
           "type": "SamplerState",
           "register": "s3",
-          "line": 389
+          "line": 393
         },
         {
           "kind": "samplers",
@@ -52893,7 +52993,7 @@
           "name": "SampShadowMaskSampler",
           "type": "SamplerState",
           "register": "s1",
-          "line": 384
+          "line": 388
         },
         {
           "kind": "samplers",
@@ -52901,7 +53001,7 @@
           "name": "SampSubsurfaceSampler",
           "type": "SamplerState",
           "register": "s4",
-          "line": 390
+          "line": 394
         },
         {
           "kind": "srvs",
@@ -52949,7 +53049,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -53069,7 +53169,7 @@
           "name": "TexBaseSampler",
           "type": "Texture2D<float4>",
           "register": "t0",
-          "line": 393
+          "line": 397
         },
         {
           "kind": "srvs",
@@ -53077,7 +53177,7 @@
           "name": "TexNormalSampler",
           "type": "Texture2D<float4>",
           "register": "t2",
-          "line": 406
+          "line": 410
         },
         {
           "kind": "srvs",
@@ -53085,7 +53185,7 @@
           "name": "TexRMAOSSampler",
           "type": "Texture2D<float4>",
           "register": "t3",
-          "line": 407
+          "line": 411
         },
         {
           "kind": "srvs",
@@ -53093,7 +53193,7 @@
           "name": "TexShadowMaskSampler",
           "type": "Texture2D<float4>",
           "register": "t1",
-          "line": 395
+          "line": 399
         },
         {
           "kind": "srvs",
@@ -53101,7 +53201,7 @@
           "name": "TexSubsurfaceSampler",
           "type": "Texture2D<float4>",
           "register": "t4",
-          "line": 408
+          "line": 412
         },
         {
           "kind": "srvs",
@@ -53150,10 +53250,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0117",
+      "id": "pass-0118",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0117",
+      "compileUnit": "compile-0118",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -53204,7 +53304,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -53284,7 +53384,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -53333,10 +53433,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0118",
+      "id": "pass-0119",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0118",
+      "compileUnit": "compile-0119",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -53412,10 +53512,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0119",
+      "id": "pass-0120",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0119",
+      "compileUnit": "compile-0120",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -53434,7 +53534,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -53594,7 +53694,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -53675,10 +53775,10 @@
       "classificationStatus": "static-classified"
     },
     {
-      "id": "pass-0120",
+      "id": "pass-0121",
       "owner": "core",
       "pipelineKind": "engine-shader-cache-family",
-      "compileUnit": "compile-0120",
+      "compileUnit": "compile-0121",
       "invocationSites": [
         "engine draw pipeline"
       ],
@@ -53729,7 +53829,7 @@
           "name": "FeatureData",
           "type": "cbuffer",
           "register": "b6",
-          "line": 393
+          "line": 411
         },
         {
           "kind": "constantBuffers",
@@ -53937,7 +54037,7 @@
           "name": "DepthTexture",
           "type": "Texture2D<float4>",
           "register": "t17",
-          "line": 431
+          "line": 451
         },
         {
           "kind": "srvs",
@@ -54202,7 +54302,7 @@
           "BloodSplatter.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0071"
+          "compile-0072"
         ]
       },
       {
@@ -54218,14 +54318,14 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0072",
           "compile-0073",
-          "compile-0108",
-          "compile-0114",
+          "compile-0074",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
           "compile-0117",
-          "compile-0120"
+          "compile-0118",
+          "compile-0121"
         ]
       },
       {
@@ -54234,7 +54334,7 @@
           "ISDepthOfField.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0082"
+          "compile-0083"
         ]
       },
       {
@@ -54248,9 +54348,9 @@
         "compileUnitIds": [
           "compile-0002",
           "compile-0003",
-          "compile-0114",
-          "compile-0116",
-          "compile-0120"
+          "compile-0115",
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -54298,23 +54398,23 @@
           "compile-0032",
           "compile-0033",
           "compile-0034",
-          "compile-0072",
           "compile-0073",
-          "compile-0078",
+          "compile-0074",
           "compile-0079",
-          "compile-0084",
-          "compile-0087",
-          "compile-0090",
-          "compile-0095",
-          "compile-0098",
-          "compile-0102",
+          "compile-0080",
+          "compile-0085",
+          "compile-0088",
+          "compile-0091",
+          "compile-0096",
+          "compile-0099",
           "compile-0103",
-          "compile-0108",
-          "compile-0114",
+          "compile-0104",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
           "compile-0117",
-          "compile-0120"
+          "compile-0118",
+          "compile-0121"
         ]
       },
       {
@@ -54324,8 +54424,8 @@
           "ISTemporalAA.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0087",
-          "compile-0103"
+          "compile-0088",
+          "compile-0104"
         ]
       },
       {
@@ -54334,7 +54434,7 @@
           "ISSimpleColor.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0101"
+          "compile-0102"
         ]
       },
       {
@@ -54376,7 +54476,6 @@
           "ISWorldMap.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0074",
           "compile-0075",
           "compile-0076",
           "compile-0077",
@@ -54394,7 +54493,7 @@
           "compile-0089",
           "compile-0090",
           "compile-0091",
-          "compile-0093",
+          "compile-0092",
           "compile-0094",
           "compile-0095",
           "compile-0096",
@@ -54407,9 +54506,10 @@
           "compile-0103",
           "compile-0104",
           "compile-0105",
-          "compile-0110",
-          "compile-0112",
-          "compile-0113"
+          "compile-0106",
+          "compile-0111",
+          "compile-0113",
+          "compile-0114"
         ]
       },
       {
@@ -54465,9 +54565,9 @@
           "compile-0050",
           "compile-0051",
           "compile-0052",
-          "compile-0094",
-          "compile-0114",
-          "compile-0120"
+          "compile-0095",
+          "compile-0115",
+          "compile-0121"
         ]
       },
       {
@@ -54478,9 +54578,9 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0094",
-          "compile-0114",
-          "compile-0120"
+          "compile-0095",
+          "compile-0115",
+          "compile-0121"
         ]
       },
       {
@@ -54591,22 +54691,21 @@
           "compile-0046",
           "compile-0047",
           "compile-0048",
-          "compile-0065",
-          "compile-0072",
+          "compile-0066",
           "compile-0073",
-          "compile-0075",
+          "compile-0074",
           "compile-0076",
-          "compile-0078",
+          "compile-0077",
           "compile-0079",
           "compile-0080",
-          "compile-0082",
+          "compile-0081",
           "compile-0083",
           "compile-0084",
-          "compile-0086",
+          "compile-0085",
           "compile-0087",
           "compile-0088",
-          "compile-0090",
-          "compile-0093",
+          "compile-0089",
+          "compile-0091",
           "compile-0094",
           "compile-0095",
           "compile-0096",
@@ -54614,18 +54713,19 @@
           "compile-0098",
           "compile-0099",
           "compile-0100",
-          "compile-0102",
+          "compile-0101",
           "compile-0103",
-          "compile-0108",
-          "compile-0110",
-          "compile-0113",
+          "compile-0104",
+          "compile-0109",
+          "compile-0111",
           "compile-0114",
           "compile-0115",
           "compile-0116",
           "compile-0117",
           "compile-0118",
           "compile-0119",
-          "compile-0120"
+          "compile-0120",
+          "compile-0121"
         ]
       },
       {
@@ -54645,14 +54745,14 @@
           "compile-0032",
           "compile-0033",
           "compile-0034",
-          "compile-0072",
           "compile-0073",
-          "compile-0108",
-          "compile-0114",
+          "compile-0074",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
           "compile-0117",
-          "compile-0120"
+          "compile-0118",
+          "compile-0121"
         ]
       },
       {
@@ -54679,10 +54779,10 @@
           "compile-0032",
           "compile-0033",
           "compile-0034",
-          "compile-0072",
           "compile-0073",
-          "compile-0114",
-          "compile-0116"
+          "compile-0074",
+          "compile-0115",
+          "compile-0117"
         ]
       },
       {
@@ -54692,8 +54792,8 @@
           "RunGrass.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114",
-          "compile-0116"
+          "compile-0115",
+          "compile-0117"
         ]
       },
       {
@@ -54702,7 +54802,7 @@
           "Common/Glints/noisegen.cs.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0070"
+          "compile-0071"
         ]
       },
       {
@@ -54712,8 +54812,8 @@
           "RunGrass.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114",
-          "compile-0116"
+          "compile-0115",
+          "compile-0117"
         ]
       },
       {
@@ -54722,7 +54822,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -54734,8 +54834,8 @@
         "compileUnitIds": [
           "compile-0035",
           "compile-0036",
-          "compile-0114",
-          "compile-0119"
+          "compile-0115",
+          "compile-0120"
         ]
       },
       {
@@ -54830,31 +54930,31 @@
           "compile-0046",
           "compile-0047",
           "compile-0048",
-          "compile-0065",
-          "compile-0072",
+          "compile-0066",
           "compile-0073",
-          "compile-0076",
-          "compile-0078",
+          "compile-0074",
+          "compile-0077",
           "compile-0079",
-          "compile-0082",
-          "compile-0084",
-          "compile-0086",
+          "compile-0080",
+          "compile-0083",
+          "compile-0085",
           "compile-0087",
-          "compile-0090",
-          "compile-0094",
+          "compile-0088",
+          "compile-0091",
           "compile-0095",
-          "compile-0098",
-          "compile-0102",
+          "compile-0096",
+          "compile-0099",
           "compile-0103",
-          "compile-0108",
-          "compile-0110",
-          "compile-0114",
+          "compile-0104",
+          "compile-0109",
+          "compile-0111",
           "compile-0115",
           "compile-0116",
           "compile-0117",
           "compile-0118",
           "compile-0119",
-          "compile-0120"
+          "compile-0120",
+          "compile-0121"
         ]
       },
       {
@@ -54872,13 +54972,13 @@
         "compileUnitIds": [
           "compile-0002",
           "compile-0003",
-          "compile-0072",
           "compile-0073",
-          "compile-0094",
-          "compile-0114",
-          "compile-0116",
+          "compile-0074",
+          "compile-0095",
+          "compile-0115",
           "compile-0117",
-          "compile-0120"
+          "compile-0118",
+          "compile-0121"
         ]
       },
       {
@@ -54888,8 +54988,8 @@
           "RunGrass.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114",
-          "compile-0116"
+          "compile-0115",
+          "compile-0117"
         ]
       },
       {
@@ -54899,8 +54999,8 @@
           "RunGrass.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114",
-          "compile-0116"
+          "compile-0115",
+          "compile-0117"
         ]
       },
       {
@@ -54948,23 +55048,23 @@
           "compile-0032",
           "compile-0033",
           "compile-0034",
-          "compile-0072",
           "compile-0073",
-          "compile-0078",
+          "compile-0074",
           "compile-0079",
-          "compile-0084",
-          "compile-0087",
-          "compile-0090",
-          "compile-0095",
-          "compile-0098",
-          "compile-0102",
+          "compile-0080",
+          "compile-0085",
+          "compile-0088",
+          "compile-0091",
+          "compile-0096",
+          "compile-0099",
           "compile-0103",
-          "compile-0108",
-          "compile-0114",
+          "compile-0104",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
           "compile-0117",
-          "compile-0120"
+          "compile-0118",
+          "compile-0121"
         ]
       },
       {
@@ -55018,23 +55118,23 @@
           "compile-0032",
           "compile-0033",
           "compile-0034",
-          "compile-0072",
           "compile-0073",
-          "compile-0078",
+          "compile-0074",
           "compile-0079",
-          "compile-0084",
-          "compile-0087",
-          "compile-0090",
-          "compile-0095",
-          "compile-0098",
-          "compile-0102",
+          "compile-0080",
+          "compile-0085",
+          "compile-0088",
+          "compile-0091",
+          "compile-0096",
+          "compile-0099",
           "compile-0103",
-          "compile-0108",
-          "compile-0114",
+          "compile-0104",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
           "compile-0117",
-          "compile-0120"
+          "compile-0118",
+          "compile-0121"
         ]
       },
       {
@@ -55064,15 +55164,15 @@
           "compile-0034",
           "compile-0035",
           "compile-0036",
-          "compile-0072",
           "compile-0073",
-          "compile-0098",
-          "compile-0108",
-          "compile-0114",
+          "compile-0074",
+          "compile-0099",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
-          "compile-0119",
-          "compile-0120"
+          "compile-0117",
+          "compile-0120",
+          "compile-0121"
         ]
       },
       {
@@ -55089,10 +55189,10 @@
           "compile-0002",
           "compile-0003",
           "compile-0031",
-          "compile-0073",
-          "compile-0114",
-          "compile-0116",
-          "compile-0120"
+          "compile-0074",
+          "compile-0115",
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -55107,13 +55207,13 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0072",
           "compile-0073",
-          "compile-0108",
-          "compile-0114",
+          "compile-0074",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
-          "compile-0120"
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -55199,26 +55299,26 @@
           "compile-0045",
           "compile-0046",
           "compile-0047",
-          "compile-0072",
           "compile-0073",
-          "compile-0078",
+          "compile-0074",
           "compile-0079",
-          "compile-0082",
-          "compile-0084",
-          "compile-0087",
-          "compile-0090",
-          "compile-0094",
+          "compile-0080",
+          "compile-0083",
+          "compile-0085",
+          "compile-0088",
+          "compile-0091",
           "compile-0095",
-          "compile-0098",
-          "compile-0102",
+          "compile-0096",
+          "compile-0099",
           "compile-0103",
-          "compile-0108",
-          "compile-0114",
+          "compile-0104",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
           "compile-0117",
-          "compile-0119",
-          "compile-0120"
+          "compile-0118",
+          "compile-0120",
+          "compile-0121"
         ]
       },
       {
@@ -55231,9 +55331,9 @@
         "compileUnitIds": [
           "compile-0035",
           "compile-0036",
-          "compile-0073",
-          "compile-0114",
-          "compile-0119"
+          "compile-0074",
+          "compile-0115",
+          "compile-0120"
         ]
       },
       {
@@ -55319,26 +55419,26 @@
           "compile-0045",
           "compile-0046",
           "compile-0047",
-          "compile-0072",
           "compile-0073",
-          "compile-0078",
+          "compile-0074",
           "compile-0079",
-          "compile-0082",
-          "compile-0084",
-          "compile-0087",
-          "compile-0090",
-          "compile-0094",
+          "compile-0080",
+          "compile-0083",
+          "compile-0085",
+          "compile-0088",
+          "compile-0091",
           "compile-0095",
-          "compile-0098",
-          "compile-0102",
+          "compile-0096",
+          "compile-0099",
           "compile-0103",
-          "compile-0108",
-          "compile-0114",
+          "compile-0104",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
           "compile-0117",
-          "compile-0119",
-          "compile-0120"
+          "compile-0118",
+          "compile-0120",
+          "compile-0121"
         ]
       },
       {
@@ -55347,7 +55447,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -55439,30 +55539,30 @@
           "compile-0046",
           "compile-0047",
           "compile-0048",
-          "compile-0065",
-          "compile-0072",
+          "compile-0066",
           "compile-0073",
-          "compile-0076",
-          "compile-0078",
+          "compile-0074",
+          "compile-0077",
           "compile-0079",
-          "compile-0082",
-          "compile-0084",
-          "compile-0086",
+          "compile-0080",
+          "compile-0083",
+          "compile-0085",
           "compile-0087",
-          "compile-0090",
-          "compile-0094",
+          "compile-0088",
+          "compile-0091",
           "compile-0095",
-          "compile-0098",
-          "compile-0102",
+          "compile-0096",
+          "compile-0099",
           "compile-0103",
-          "compile-0108",
-          "compile-0110",
-          "compile-0114",
+          "compile-0104",
+          "compile-0109",
+          "compile-0111",
           "compile-0115",
           "compile-0116",
           "compile-0117",
-          "compile-0119",
-          "compile-0120"
+          "compile-0118",
+          "compile-0120",
+          "compile-0121"
         ]
       },
       {
@@ -55490,7 +55590,7 @@
           "DistantTree.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0072"
+          "compile-0073"
         ]
       },
       {
@@ -55510,9 +55610,9 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114",
-          "compile-0116",
-          "compile-0120"
+          "compile-0115",
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -55552,7 +55652,7 @@
           "Effect.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0073"
+          "compile-0074"
         ]
       },
       {
@@ -55561,7 +55661,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -55570,7 +55670,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -55588,7 +55688,7 @@
           "RunGrass.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0116"
+          "compile-0117"
         ]
       },
       {
@@ -55597,7 +55697,7 @@
           "RunGrass.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0116"
+          "compile-0117"
         ]
       },
       {
@@ -55606,7 +55706,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -55634,14 +55734,14 @@
         "compileUnitIds": [
           "compile-0002",
           "compile-0003",
-          "compile-0072",
           "compile-0073",
-          "compile-0098",
-          "compile-0108",
-          "compile-0114",
+          "compile-0074",
+          "compile-0099",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
-          "compile-0120"
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -55654,11 +55754,11 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0073",
-          "compile-0114",
+          "compile-0074",
           "compile-0115",
           "compile-0116",
-          "compile-0120"
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -55667,7 +55767,7 @@
           "ISAlphaBlend.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0074"
+          "compile-0075"
         ]
       },
       {
@@ -55676,7 +55776,7 @@
           "ISApplyReflections.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0075"
+          "compile-0076"
         ]
       },
       {
@@ -55685,7 +55785,7 @@
           "ISApplyVolumetricLighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0076"
+          "compile-0077"
         ]
       },
       {
@@ -55694,7 +55794,7 @@
           "ISBasicCopy.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0077"
+          "compile-0078"
         ]
       },
       {
@@ -55703,7 +55803,7 @@
           "ISBlur.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0078"
+          "compile-0079"
         ]
       },
       {
@@ -55712,7 +55812,7 @@
           "ISCompositeLensFlareVolumetricLighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0079"
+          "compile-0080"
         ]
       },
       {
@@ -55721,7 +55821,7 @@
           "ISCopy.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0080"
+          "compile-0081"
         ]
       },
       {
@@ -55730,7 +55830,7 @@
           "ISDebugSnow.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0081"
+          "compile-0082"
         ]
       },
       {
@@ -55739,7 +55839,7 @@
           "ISDepthOfField.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0082"
+          "compile-0083"
         ]
       },
       {
@@ -55748,7 +55848,7 @@
           "ISDoubleVision.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0083"
+          "compile-0084"
         ]
       },
       {
@@ -55757,7 +55857,7 @@
           "ISDownsample.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0084"
+          "compile-0085"
         ]
       },
       {
@@ -55766,7 +55866,7 @@
           "ISExp.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0085"
+          "compile-0086"
         ]
       },
       {
@@ -55775,7 +55875,7 @@
           "ISFullScreenVR.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0086"
+          "compile-0087"
         ]
       },
       {
@@ -55784,7 +55884,7 @@
           "ISHDR.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0087"
+          "compile-0088"
         ]
       },
       {
@@ -55793,7 +55893,7 @@
           "ISIBLensFlare.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0088"
+          "compile-0089"
         ]
       },
       {
@@ -55802,7 +55902,7 @@
           "ISLightingComposite.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0089"
+          "compile-0090"
         ]
       },
       {
@@ -55811,7 +55911,7 @@
           "ISLocalMap.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0090"
+          "compile-0091"
         ]
       },
       {
@@ -55820,7 +55920,7 @@
           "ISMap.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0091"
+          "compile-0092"
         ]
       },
       {
@@ -55829,7 +55929,7 @@
           "ISNoise.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0092"
+          "compile-0093"
         ]
       },
       {
@@ -55838,7 +55938,7 @@
           "ISRadialBlur.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0093"
+          "compile-0094"
         ]
       },
       {
@@ -55847,7 +55947,7 @@
           "ISReflectionsRayTracing.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0094"
+          "compile-0095"
         ]
       },
       {
@@ -55856,7 +55956,7 @@
           "ISRefraction.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0095"
+          "compile-0096"
         ]
       },
       {
@@ -55865,7 +55965,7 @@
           "ISSAOBlur.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0096"
+          "compile-0097"
         ]
       },
       {
@@ -55874,7 +55974,7 @@
           "ISSAOCameraZ.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0097"
+          "compile-0098"
         ]
       },
       {
@@ -55883,7 +55983,7 @@
           "ISSAOComposite.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0098"
+          "compile-0099"
         ]
       },
       {
@@ -55892,7 +55992,7 @@
           "ISSAOMinify.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0099"
+          "compile-0100"
         ]
       },
       {
@@ -55901,7 +56001,7 @@
           "ISSILComposite.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0100"
+          "compile-0101"
         ]
       },
       {
@@ -55910,7 +56010,7 @@
           "ISSimpleColor.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0101"
+          "compile-0102"
         ]
       },
       {
@@ -55919,7 +56019,7 @@
           "ISSnowSSS.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0102"
+          "compile-0103"
         ]
       },
       {
@@ -55928,7 +56028,7 @@
           "ISTemporalAA.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0103"
+          "compile-0104"
         ]
       },
       {
@@ -55937,7 +56037,7 @@
           "ISUpsampleDynamicResolution.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0104"
+          "compile-0105"
         ]
       },
       {
@@ -55946,7 +56046,7 @@
           "ISVolumetricLighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0105"
+          "compile-0106"
         ]
       },
       {
@@ -55955,7 +56055,7 @@
           "ISVolumetricLightingBlurHCS.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0106"
+          "compile-0107"
         ]
       },
       {
@@ -55964,7 +56064,7 @@
           "ISVolumetricLightingBlurVCS.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0107"
+          "compile-0108"
         ]
       },
       {
@@ -55973,7 +56073,7 @@
           "ISVolumetricLightingGenerateCS.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0108"
+          "compile-0109"
         ]
       },
       {
@@ -55982,7 +56082,7 @@
           "ISVolumetricLightingRaymarchCS.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0109"
+          "compile-0110"
         ]
       },
       {
@@ -55991,7 +56091,7 @@
           "ISWaterBlend.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0110"
+          "compile-0111"
         ]
       },
       {
@@ -56000,7 +56100,7 @@
           "ISWaterDisplacement.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0111"
+          "compile-0112"
         ]
       },
       {
@@ -56009,7 +56109,7 @@
           "ISWaterFlow.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0112"
+          "compile-0113"
         ]
       },
       {
@@ -56018,7 +56118,7 @@
           "ISWorldMap.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0113"
+          "compile-0114"
         ]
       },
       {
@@ -56027,7 +56127,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -56066,11 +56166,11 @@
           "compile-0015",
           "compile-0016",
           "compile-0017",
-          "compile-0073",
-          "compile-0114",
+          "compile-0074",
           "compile-0115",
           "compile-0116",
-          "compile-0120"
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -56083,11 +56183,11 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0073",
-          "compile-0114",
+          "compile-0074",
           "compile-0115",
           "compile-0116",
-          "compile-0120"
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -56096,8 +56196,8 @@
           "Menu/BackgroundBlurHorizontal.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0066",
-          "compile-0067"
+          "compile-0067",
+          "compile-0068"
         ]
       },
       {
@@ -56106,7 +56206,7 @@
           "Menu/BackgroundBlurVertical.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0068"
+          "compile-0069"
         ]
       },
       {
@@ -56115,7 +56215,7 @@
           "Particle.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0115"
+          "compile-0116"
         ]
       },
       {
@@ -56124,7 +56224,7 @@
           "RunGrass.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0116"
+          "compile-0117"
         ]
       },
       {
@@ -56281,9 +56381,9 @@
           "RunGrass.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0072",
-          "compile-0114",
-          "compile-0116"
+          "compile-0073",
+          "compile-0115",
+          "compile-0117"
         ]
       },
       {
@@ -56310,7 +56410,7 @@
           "Sky.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0117"
+          "compile-0118"
         ]
       },
       {
@@ -56327,10 +56427,10 @@
           "compile-0002",
           "compile-0003",
           "compile-0031",
-          "compile-0073",
-          "compile-0114",
-          "compile-0116",
-          "compile-0120"
+          "compile-0074",
+          "compile-0115",
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -56390,7 +56490,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -56414,13 +56514,13 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0072",
           "compile-0073",
-          "compile-0108",
-          "compile-0114",
+          "compile-0074",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
-          "compile-0120"
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -56429,7 +56529,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -56515,7 +56615,7 @@
         "compileUnitIds": [
           "compile-0039",
           "compile-0040",
-          "compile-0118"
+          "compile-0119"
         ]
       },
       {
@@ -56673,7 +56773,7 @@
         "compileUnitIds": [
           "compile-0035",
           "compile-0036",
-          "compile-0119"
+          "compile-0120"
         ]
       },
       {
@@ -56708,13 +56808,13 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0072",
           "compile-0073",
-          "compile-0108",
-          "compile-0114",
+          "compile-0074",
+          "compile-0109",
           "compile-0115",
           "compile-0116",
-          "compile-0120"
+          "compile-0117",
+          "compile-0121"
         ]
       },
       {
@@ -56741,7 +56841,7 @@
           "VR/StereoBlendCS.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0065"
+          "compile-0066"
         ]
       },
       {
@@ -56750,7 +56850,7 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0120"
+          "compile-0121"
         ]
       },
       {
@@ -56759,7 +56859,7 @@
           "Lighting.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114"
+          "compile-0115"
         ]
       },
       {
@@ -56768,7 +56868,7 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0120"
+          "compile-0121"
         ]
       },
       {
@@ -56778,8 +56878,8 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114",
-          "compile-0120"
+          "compile-0115",
+          "compile-0121"
         ]
       },
       {
@@ -56789,8 +56889,8 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114",
-          "compile-0120"
+          "compile-0115",
+          "compile-0121"
         ]
       },
       {
@@ -56799,7 +56899,7 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0120"
+          "compile-0121"
         ]
       },
       {
@@ -56808,7 +56908,7 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0120"
+          "compile-0121"
         ]
       },
       {
@@ -56818,8 +56918,8 @@
           "Water.hlsl"
         ],
         "compileUnitIds": [
-          "compile-0114",
-          "compile-0120"
+          "compile-0115",
+          "compile-0121"
         ]
       }
     ],
@@ -57917,7 +58017,7 @@
       {
         "sourceVirtualPath": "RunGrass.hlsl",
         "token": "WaterLighting/WaterCaustics.hlsli",
-        "line": 451,
+        "line": 455,
         "condition": "ifdef PSHADER && if defined(WATER_LIGHTING)",
         "acceptedClassification": "dormant-stale-reference",
         "acceptedReason": "No CSX feature or compile site emits WATER_LIGHTING. The current feature is WATER_EFFECTS and its deployed include is WaterEffects/WaterCaustics.hlsli. This edge does not enter a current preprocessed permutation, but must remain visible until the dormant block is removed or migrated."

@@ -11,9 +11,9 @@
 | Production entry candidates | 100 |
 | Include sources | 59 |
 | Test entry sources | 15 |
-| Features | 39 |
-| Compile units | 120 |
-| Resolved include edges | 421 |
+| Features | 40 |
+| Compile units | 121 |
+| Resolved include edges | 423 |
 | Unresolved include edges | 1 |
 | Unaccepted unresolved include edges | 0 |
 | Unresolved compile sites | 0 |
@@ -26,7 +26,7 @@
 | direct-file-program | 2 |
 | engine-shader-cache-family | 50 |
 | independent-program | 55 |
-| inline-program | 1 |
+| inline-program | 2 |
 | runtime-tooling-dynamic-program | 1 |
 | table-driven-independent-program | 11 |
 

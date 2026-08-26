@@ -77,13 +77,23 @@ namespace stl
 	}
 
 	template <class T>
-	void detour_thunk(REL::RelocationID a_relId)
+	long detour_thunk(REL::RelocationID a_relId)
 	{
 		T::func = a_relId.address();
-		DetourTransactionBegin();
-		DetourUpdateThread(GetCurrentThread());
-		DetourAttach(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
-		DetourTransactionCommit();
+		if (const long result = DetourTransactionBegin(); result != NO_ERROR) {
+			return result;
+		}
+		if (const long result = DetourUpdateThread(GetCurrentThread()); result != NO_ERROR) {
+			DetourTransactionAbort();
+			return result;
+		}
+		if (const long result =
+				DetourAttach(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
+			result != NO_ERROR) {
+			DetourTransactionAbort();
+			return result;
+		}
+		return DetourTransactionCommit();
 	}
 
 	template <class T>

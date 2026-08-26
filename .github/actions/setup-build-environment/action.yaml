@@ -19,21 +19,16 @@ outputs:
 runs:
     using: "composite"
     steps:
-        # Compare repository identity directly because this repository may
-        # itself be a fork, making head.repo.fork unsuitable for this check.
+        # PR jobs execute code from the proposed revision, so they remain
+        # restore-only regardless of repository identity or author role.
         - name: Determine cache-write trust
           id: trust
           shell: bash
           run: |
-              if [[ "${{ github.event_name }}" != "pull_request" && "${{ github.event_name }}" != "pull_request_target" ]]; then
-                  trusted=true
-              elif [[ "${{ github.event_name }}" == "pull_request_target" && "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.event.pull_request.base.repo.full_name }}" ]]; then
-                  case "${{ github.event.pull_request.author_association }}" in
-                      OWNER | MEMBER | COLLABORATOR) trusted=true ;;
-                      *) trusted=false ;;
-                  esac
-              else
+              if [[ "${{ github.event_name }}" == "pull_request" || "${{ github.event_name }}" == "pull_request_target" ]]; then
                   trusted=false
+              else
+                  trusted=true
               fi
               echo "trusted=$trusted" >> "$GITHUB_OUTPUT"
 
@@ -151,10 +146,9 @@ runs:
         # pull_request_target cache-poisoning class of bug (CodeQL rule
         # `actions/cache-poisoning/poisonable-step`):
         #
-        # - Trusted events and same-repository pull_request_target runs opened
-        #   by an owner, member, or collaborator may restore and save.
-        # - Forks, pull_request runs, and non-collaborator PRs are restore-only,
-        #   so untrusted code cannot poison a later trusted build cache.
+        # - Trusted non-PR events may restore and save.
+        # - All PR events are restore-only, so proposed code cannot poison a
+        #   later trusted build cache.
         #
         # Both steps use the same key / restore-keys so cache hits cross the
         # trust boundary in the allowed direction (trusted-saved → untrusted-restore).

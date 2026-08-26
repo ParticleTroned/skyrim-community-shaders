@@ -153,6 +153,10 @@ public:
 	virtual void EarlyPrepass() override;
 
 	void UpdateDepthBufferCulling();
+	/** Switch between bounded recovery and native-result Performance Mode. */
+	void SetDepthCullingPerformanceMode(bool a_enabled);
+	/** Return the persisted depth-culling temporal mode. */
+	[[nodiscard]] bool IsDepthCullingPerformanceMode() const;
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -204,7 +208,8 @@ public:
 
 		// Performance optimization settings
 		bool EnableDepthBufferCullingExterior = true;   ///< Master depth-culling option; enabled in exteriors
-		bool EnableDepthBufferCullingInterior = false;  ///< Also enable depth culling in interiors
+		bool EnableDepthBufferCullingInterior = true;   ///< Also enable depth culling in interiors
+		bool DepthCullingPerformanceMode = false;       ///< Accept native stale results instead of bounded recovery
 		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
 
 		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.

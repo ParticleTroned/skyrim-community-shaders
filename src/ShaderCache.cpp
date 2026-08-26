@@ -3171,10 +3171,10 @@ namespace SIE
 		if (!pendingDisable)
 			return;
 
-		const bool enableRequested = IsEnableRequested();
+		const bool enableStillRequested = IsEnableRequested();
 		const auto action = ShaderCacheDisablePolicy::ResolvePendingDisable({
 			.pendingDisable = pendingDisable,
-			.enableRequested = enableRequested,
+			.enableRequested = enableStillRequested,
 			.nativeTargetsRestored = false,
 		});
 		if (action == ShaderCacheDisablePolicy::PendingDisableAction::Cancel) {

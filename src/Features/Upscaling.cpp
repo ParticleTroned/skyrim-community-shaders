@@ -68,6 +68,82 @@
 
 #pragma comment(lib, "Psapi.lib")
 
+namespace
+{
+	uint64_t QueryVRRenderScalePresentationQpc() noexcept
+	{
+		LARGE_INTEGER value{};
+		return ::QueryPerformanceCounter(&value) && value.QuadPart > 0 ?
+		           static_cast<uint64_t>(value.QuadPart) :
+		           0;
+	}
+
+	uint64_t GetVRRenderScalePresentationQpcFrequency() noexcept
+	{
+		static const uint64_t frequency = []() noexcept {
+			LARGE_INTEGER value{};
+			return ::QueryPerformanceFrequency(&value) && value.QuadPart > 0 ?
+			           static_cast<uint64_t>(value.QuadPart) :
+			           0;
+		}();
+		return frequency;
+	}
+
+	VRPresentationStretchTelemetryPolicy::ObservationKind
+	GetVRRenderScalePresentationStretchObservationKind(
+		Upscaling::VRRenderScalePresentationPath a_path) noexcept
+	{
+		using Kind = VRPresentationStretchTelemetryPolicy::ObservationKind;
+		switch (a_path) {
+		case Upscaling::VRRenderScalePresentationPath::PresentationStretch:
+			return Kind::AllowedStretch;
+		case Upscaling::VRRenderScalePresentationPath::VendorFailureStretch:
+			return Kind::VendorFailureStretch;
+		case Upscaling::VRRenderScalePresentationPath::BoundsMismatchOriginalFallback:
+			return Kind::BoundsMismatchFallback;
+		default:
+			return Kind::Other;
+		}
+	}
+
+	template <class T>
+	void PublishVRRenderScalePresentationStretchTelemetry(
+		T& a_destination,
+		const VRPresentationStretchTelemetryPolicy::Snapshot& a_snapshot,
+		uint64_t a_qpcFrequency) noexcept
+	{
+		a_destination.presentationStretchEpisodes = a_snapshot.episodes;
+		a_destination.presentationStretchCompletedEpisodes =
+			a_snapshot.completedEpisodes;
+		a_destination.presentationStretchTimedCompletedEpisodes =
+			a_snapshot.timedCompletedEpisodes;
+		a_destination.presentationStretchCompletedFrames =
+			a_snapshot.completedFrames;
+		a_destination.presentationStretchCompletedQpcTicks =
+			a_snapshot.completedQpcTicks;
+		a_destination.presentationStretchEpisodeActive = a_snapshot.active;
+		a_destination.presentationStretchActiveFrames = a_snapshot.activeFrames;
+		a_destination.presentationStretchActiveQpcTicks =
+			a_snapshot.activeQpcTicks;
+		a_destination.presentationStretchActiveQpcTimingAvailable =
+			a_snapshot.activeQpcTimingAvailable;
+		a_destination.maximumPresentationStretchFrames =
+			a_snapshot.maximumFrames;
+		a_destination.maximumPresentationStretchQpcTicks =
+			a_snapshot.maximumQpcTicks;
+		a_destination.presentationStretchQpcFrequency = a_qpcFrequency;
+	}
+
+	double VRRenderScalePresentationQpcTicksToMilliseconds(
+		uint64_t a_qpcTicks,
+		uint64_t a_qpcFrequency) noexcept
+	{
+		return static_cast<double>(
+			(static_cast<long double>(a_qpcTicks) * 1000.0L) /
+			static_cast<long double>(a_qpcFrequency));
+	}
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
 	upscaleMethod,
@@ -160,7 +236,7 @@ void Upscaling::ResetVRRenderScaleCPUPerformanceTelemetry() noexcept
 	for (auto& counter : vrRenderScaleCPUPerformanceCounters)
 		counter.store(0, std::memory_order_relaxed);
 	vrRenderScaleCPUPerformanceCounters[static_cast<std::size_t>(
-		VRRenderScaleCPUPerformanceCounter::WindowStartFrame)]
+											VRRenderScaleCPUPerformanceCounter::WindowStartFrame)]
 		.store(
 			globals::state ? globals::state->frameCount : 0u,
 			std::memory_order_relaxed);
@@ -182,15 +258,14 @@ void Upscaling::RecordVRRenderScaleCPUPerformanceMaximum(
 {
 	if (!IsVRRenderScaleCPUPerformanceTelemetryActive())
 		return;
-	auto& maximum = vrRenderScaleCPUPerformanceCounters[
-		static_cast<std::size_t>(a_counter)];
+	auto& maximum = vrRenderScaleCPUPerformanceCounters[static_cast<std::size_t>(a_counter)];
 	uint64_t current = maximum.load(std::memory_order_relaxed);
 	while (current < a_value &&
-		!maximum.compare_exchange_weak(
-			current,
-			a_value,
-			std::memory_order_relaxed,
-			std::memory_order_relaxed)) {
+		   !maximum.compare_exchange_weak(
+			   current,
+			   a_value,
+			   std::memory_order_relaxed,
+			   std::memory_order_relaxed)) {
 	}
 }
 
@@ -1228,8 +1303,8 @@ namespace
 		       a_left.stabilizerDoorHandoffSerial ==
 		           a_right.stabilizerDoorHandoffSerial &&
 		       HasSameVRRenderScaleResourceKey(
-			       a_left.resources,
-			       a_right.resources);
+				   a_left.resources,
+				   a_right.resources);
 	}
 
 	bool HasExactVRRenderScaleStableStereoPresentation(
@@ -6565,7 +6640,7 @@ namespace
 		       srvDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D &&
 		       srvDesc.Texture2D.MostDetailedMip == 0 &&
 		       (srvDesc.Texture2D.MipLevels == a_resourceDesc.MipLevels ||
-		        srvDesc.Texture2D.MipLevels == std::numeric_limits<UINT>::max()) &&
+				   srvDesc.Texture2D.MipLevels == std::numeric_limits<UINT>::max()) &&
 		       uavDesc.Format == a_resourceDesc.Format &&
 		       uavDesc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2D &&
 		       uavDesc.Texture2D.MipSlice == 0;
@@ -19030,8 +19105,8 @@ std::optional<Upscaling::VRRenderScaleRuntimeOptionsSnapshot> Upscaling::GetVRRe
 			vrRenderScaleTransitionController.targetEpoch) {
 		target = std::addressof(vrRenderScaleTransitionController.requested);
 	} else if (vrRenderScaleTransitionController.applying.valid &&
-		vrRenderScaleTransitionController.applying.transitionEpoch ==
-			vrRenderScaleTransitionController.targetEpoch) {
+			   vrRenderScaleTransitionController.applying.transitionEpoch ==
+				   vrRenderScaleTransitionController.targetEpoch) {
 		target = std::addressof(vrRenderScaleTransitionController.applying);
 	}
 	if (!target)
@@ -21149,7 +21224,7 @@ void Upscaling::PublishCommonVendorResourceContract(
 		return;
 
 	const auto captureTexture = [](
-		const Texture2D* a_texture) {
+									const Texture2D* a_texture) {
 		CommonVendorTextureContract captured{};
 		if (!a_texture)
 			return captured;
@@ -21225,8 +21300,8 @@ bool Upscaling::IsCommonVendorResourceContractCurrent(
 	}
 
 	const auto matchesTexture = [](
-		const CommonVendorTextureContract& a_contract,
-		const Texture2D* a_texture) {
+									const CommonVendorTextureContract& a_contract,
+									const Texture2D* a_texture) {
 		return a_texture &&
 		       a_contract.wrapper == a_texture &&
 		       a_contract.resource == a_texture->resource.get() &&
@@ -23096,8 +23171,8 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 			controllerSnapshot.targetEpoch) {
 		pendingControllerProfile = std::addressof(controllerSnapshot.requested);
 	} else if (controllerSnapshot.applying.valid &&
-		controllerSnapshot.applying.transitionEpoch ==
-			controllerSnapshot.targetEpoch) {
+			   controllerSnapshot.applying.transitionEpoch ==
+				   controllerSnapshot.targetEpoch) {
 		pendingControllerProfile = std::addressof(controllerSnapshot.applying);
 	}
 	const bool preparedDirectMenuRelatch =
@@ -23915,8 +23990,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchProfile =
 				std::addressof(controllerAdmissionSnapshot.requested);
 		} else if (controllerAdmissionSnapshot.applying.valid &&
-			controllerAdmissionSnapshot.applying.transitionEpoch ==
-				relatchEpoch) {
+				   controllerAdmissionSnapshot.applying.transitionEpoch ==
+					   relatchEpoch) {
 			relatchProfile =
 				std::addressof(controllerAdmissionSnapshot.applying);
 		}
@@ -25659,10 +25734,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vrDLSSRuntimeResourceGeneration != 0 &&
 			dlssResourcesNeedTeardownForRelatch;
 		auto* relatchColorInput = globals::game::renderer ?
-			globals::game::renderer->GetRuntimeData()
-				.renderTargets[RE::RENDER_TARGETS::kMAIN]
-				.texture :
-			nullptr;
+		                              globals::game::renderer->GetRuntimeData()
+		                                  .renderTargets[RE::RENDER_TARGETS::kMAIN]
+		                                  .texture :
+		                              nullptr;
 		const bool exactFullEyeDLSSProviderReady =
 			plannedRelatchSizeKnown && relatchColorInput &&
 			streamline.HasCompleteVRDLSSViewportResources(
@@ -30166,12 +30241,12 @@ bool Upscaling::IsVRRenderScaleStereoPresentationPacketCurrentLocked(
 		       (a_currentTexture ? a_currentTexture->resource.get() : nullptr);
 	};
 	const auto matchesContract = [&matches](
-		const winrt::com_ptr<ID3D11Texture2D>& a_owned,
-		const D3D11_TEXTURE2D_DESC& a_desc,
-		const eastl::unique_ptr<Texture2D>& a_currentTexture) {
+									 const winrt::com_ptr<ID3D11Texture2D>& a_owned,
+									 const D3D11_TEXTURE2D_DESC& a_desc,
+									 const eastl::unique_ptr<Texture2D>& a_currentTexture) {
 		return matches(a_owned, a_currentTexture) &&
 		       (!a_currentTexture ||
-			   SameTexture2DDesc(a_desc, a_currentTexture->desc));
+				   SameTexture2DDesc(a_desc, a_currentTexture->desc));
 	};
 	for (uint32_t eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
 		const auto& eye = a_packet.resources->eyes[eyeIndex];
@@ -30378,15 +30453,15 @@ Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
 			VRRenderScaleCPUPerformanceCounter::PresentationPacketCaptures);
 	}
 	const auto queueWaitStart = captureTelemetryActive ?
-		std::chrono::steady_clock::now() :
-		std::chrono::steady_clock::time_point{};
+	                                std::chrono::steady_clock::now() :
+	                                std::chrono::steady_clock::time_point{};
 #endif
 	const std::scoped_lock queueLock(
 		perfModeRenderTargetRecreateQueueMutex);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto queueHoldStart = captureTelemetryActive ?
-		std::chrono::steady_clock::now() :
-		std::chrono::steady_clock::time_point{};
+	                                std::chrono::steady_clock::now() :
+	                                std::chrono::steady_clock::time_point{};
 	if (captureTelemetryActive) {
 		const auto queueWaitNanoseconds = static_cast<uint64_t>(
 			std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -30465,8 +30540,8 @@ Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
 	if (globals::d3d::device)
 		resources->device.copy_from(globals::d3d::device);
 	const auto retainCore = [](const eastl::unique_ptr<Texture2D>& a_texture,
-								 winrt::com_ptr<ID3D11Texture2D>& a_lifetime,
-								 D3D11_TEXTURE2D_DESC* a_desc = nullptr) {
+								winrt::com_ptr<ID3D11Texture2D>& a_lifetime,
+								D3D11_TEXTURE2D_DESC* a_desc = nullptr) {
 		if (!a_texture || !a_texture->resource)
 			return;
 		a_lifetime = a_texture->resource;
@@ -30498,7 +30573,7 @@ Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
 		if (!a_texture || !a_texture->resource)
 			return;
 		assert(resources->auxiliaryLifetimeCount <
-			VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity);
+			   VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity);
 		if (resources->auxiliaryLifetimeCount <
 			VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity) {
 			resources->auxiliaryLifetimes[resources->auxiliaryLifetimeCount++] =
@@ -30525,7 +30600,7 @@ Upscaling::CaptureVRRenderScaleStereoPresentationPacket(
 	retainAuxiliary(vrMapMenuUISupersampleColor);
 	if (vrMapMenuUISupersampleDepth) {
 		assert(resources->auxiliaryLifetimeCount <
-			VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity);
+			   VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity);
 		if (resources->auxiliaryLifetimeCount <
 			VRRenderScaleStereoResourceLifetime::kAuxiliaryLifetimeCapacity) {
 			resources->auxiliaryLifetimes[resources->auxiliaryLifetimeCount++] =
@@ -30707,7 +30782,7 @@ void Upscaling::RecordVRNativeRestorePresentationRejection(
 		const uint64_t previousCycle =
 			vrNativeRestorePresentationLastRejectedCycle;
 		const uint64_t maximumCycle =
-			std::numeric_limits<uint64_t>::max() >> 1u;
+			VRPresentationStretchTelemetryPolicy::kCompositorCycleTokenMaximum;
 		const bool consecutiveCycle =
 			previousCycle != 0 &&
 			((previousCycle == maximumCycle &&
@@ -30795,7 +30870,7 @@ void Upscaling::ServiceVRNativeRestorePresentationRecovery(
 		const uint64_t candidateCycle =
 			vrNativeRestorePresentationRecoveryCandidateCycle;
 		const uint64_t maximumCycle =
-			std::numeric_limits<uint64_t>::max() >> 1u;
+			VRPresentationStretchTelemetryPolicy::kCompositorCycleTokenMaximum;
 		const bool nextCycleReached =
 			candidateCycle != 0 &&
 			((candidateCycle == maximumCycle &&
@@ -31327,6 +31402,35 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			default:
 				break;
 			}
+
+			const uint64_t presentationQpc =
+				QueryVRRenderScalePresentationQpc();
+			const VRPresentationStretchTelemetryPolicy::Observation
+				stretchObservation{
+					.kind =
+						GetVRRenderScalePresentationStretchObservationKind(
+							eye.path),
+					.eyeIndex = a_observation.eyeIndex,
+					.frame = frame,
+					.compositorCycleToken =
+						a_observation.compositorCycleToken,
+					.qpc = presentationQpc,
+				};
+			VRPresentationStretchTelemetryPolicy::Observe(
+				vrRenderScalePresentationStretchLifetimeTelemetry,
+				stretchObservation);
+			if (vrRenderScaleStressSessionActive.load(
+					std::memory_order_acquire)) {
+				VRPresentationStretchTelemetryPolicy::Observe(
+					vrRenderScalePresentationStretchSessionTelemetry,
+					stretchObservation);
+			}
+			PublishVRRenderScalePresentationStretchTelemetry(
+				presentation,
+				VRPresentationStretchTelemetryPolicy::Inspect(
+					vrRenderScalePresentationStretchLifetimeTelemetry,
+					presentationQpc),
+				GetVRRenderScalePresentationQpcFrequency());
 		}
 
 		const auto& left = presentation.eyes[0];
@@ -39430,7 +39534,7 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 		ServiceVRIntermediateTextureCleanup();
 		UpdateVRIntermediateRetirementSnapshot(
 			retiredVRIntermediateTextures.size() >=
-				kVRRetiredIntermediateTextureMaxSets);
+			kVRRetiredIntermediateTextureMaxSets);
 	}
 	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -48105,12 +48209,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			std::array<FidelityFX::UpscaleRegionParameters, 2> stereoRegions{};
 			for (uint32_t stereoEye = 0; stereoEye < stereoRegions.size(); ++stereoEye) {
 				stereoResourcesReady = stereoResourcesReady &&
-					vrIntermediateColorIn[stereoEye] && vrIntermediateColorIn[stereoEye]->resource &&
-					vrIntermediateLinearDepth[stereoEye] && vrIntermediateLinearDepth[stereoEye]->resource &&
-					vrIntermediateMotionVectors[stereoEye] && vrIntermediateMotionVectors[stereoEye]->resource &&
-					vrIntermediateReactiveMask[stereoEye] && vrIntermediateReactiveMask[stereoEye]->resource &&
-					vrIntermediateTransparencyMask[stereoEye] && vrIntermediateTransparencyMask[stereoEye]->resource &&
-					vrIntermediateColorOut[stereoEye] && vrIntermediateColorOut[stereoEye]->resource;
+				                       vrIntermediateColorIn[stereoEye] && vrIntermediateColorIn[stereoEye]->resource &&
+				                       vrIntermediateLinearDepth[stereoEye] && vrIntermediateLinearDepth[stereoEye]->resource &&
+				                       vrIntermediateMotionVectors[stereoEye] && vrIntermediateMotionVectors[stereoEye]->resource &&
+				                       vrIntermediateReactiveMask[stereoEye] && vrIntermediateReactiveMask[stereoEye]->resource &&
+				                       vrIntermediateTransparencyMask[stereoEye] && vrIntermediateTransparencyMask[stereoEye]->resource &&
+				                       vrIntermediateColorOut[stereoEye] && vrIntermediateColorOut[stereoEye]->resource;
 				if (!stereoResourcesReady)
 					break;
 
@@ -49273,7 +49377,14 @@ Upscaling::VRRenderScaleTransitionSnapshot Upscaling::GetVRRenderScaleTransition
 	VRRenderScaleTransitionSnapshot snapshot{};
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+		const uint64_t presentationQpc = QueryVRRenderScalePresentationQpc();
 		snapshot = vrRenderScaleTransitionController;
+		PublishVRRenderScalePresentationStretchTelemetry(
+			snapshot.presentation,
+			VRPresentationStretchTelemetryPolicy::Inspect(
+				vrRenderScalePresentationStretchLifetimeTelemetry,
+				presentationQpc),
+			GetVRRenderScalePresentationQpcFrequency());
 	}
 
 	const auto* desired = snapshot.requested.valid ?
@@ -49381,29 +49492,48 @@ Upscaling::VRRenderScaleTransitionSnapshot Upscaling::GetVRRenderScaleTransition
 
 Upscaling::VRRenderScaleStressSessionSnapshot Upscaling::GetVRRenderScaleStressSessionSnapshot() const
 {
-	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
-	return vrRenderScaleStressSession;
+	std::scoped_lock lock(
+		vrRenderScaleTransitionControllerMutex,
+		vrRenderScaleStressSessionMutex);
+	const uint64_t presentationQpc = QueryVRRenderScalePresentationQpc();
+	auto snapshot = vrRenderScaleStressSession;
+	if (snapshot.active) {
+		PublishVRRenderScalePresentationStretchTelemetry(
+			snapshot,
+			VRPresentationStretchTelemetryPolicy::Inspect(
+				vrRenderScalePresentationStretchSessionTelemetry,
+				presentationQpc),
+			GetVRRenderScalePresentationQpcFrequency());
+	}
+	return snapshot;
 }
 
 void Upscaling::StartVRRenderScaleStressSession()
 {
 	SampleVRRenderScaleMemory(true, "stress capture start");
-	VRRenderScalePresentationSnapshot presentation{};
-	{
-		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
-		presentation = vrRenderScaleTransitionController.presentation;
-		vrRenderScaleTransitionController.presentation.maximumConsecutivePresentationStretchFrames = 0;
-		vrRenderScaleTransitionController.presentation.consecutiveBothEyesVendorFrames = 0;
-		for (auto& eye : vrRenderScaleTransitionController.presentation.eyes)
-			eye.consecutiveFrames = 0;
-		++vrRenderScaleTransitionController.revision;
-	}
 	uint64_t sessionID = nextVRRenderScaleStressSessionID.fetch_add(1, std::memory_order_acq_rel);
 	if (sessionID == 0)
 		sessionID = nextVRRenderScaleStressSessionID.fetch_add(1, std::memory_order_acq_rel);
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+	const uint64_t presentationQpcFrequency =
+		GetVRRenderScalePresentationQpcFrequency();
 	{
-		std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+		std::scoped_lock lock(
+			vrRenderScaleTransitionControllerMutex,
+			vrRenderScaleStressSessionMutex);
+		const uint64_t presentationQpc = QueryVRRenderScalePresentationQpc();
+		vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
+		VRPresentationStretchTelemetryPolicy::Reset(
+			vrRenderScalePresentationStretchSessionTelemetry);
+
+		auto& presentation =
+			vrRenderScaleTransitionController.presentation;
+		PublishVRRenderScalePresentationStretchTelemetry(
+			presentation,
+			VRPresentationStretchTelemetryPolicy::Inspect(
+				vrRenderScalePresentationStretchLifetimeTelemetry,
+				presentationQpc),
+			presentationQpcFrequency);
 		vrRenderScaleStressSession = {};
 		vrRenderScaleStressSession.active = true;
 		vrRenderScaleStressSession.sessionID = sessionID;
@@ -49414,6 +49544,32 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScaleStressSession.baselinePresentationStretchEyeObservations = presentation.presentationStretchEyeObservations;
 		vrRenderScaleStressSession.baselineVendorFailureStretchEyeObservations = presentation.vendorFailureStretchEyeObservations;
 		vrRenderScaleStressSession.baselineBoundsMismatchOriginalFallbackEyeObservations = presentation.boundsMismatchOriginalFallbackEyeObservations;
+		vrRenderScaleStressSession.baselinePresentationStretchEpisodes =
+			presentation.presentationStretchEpisodes;
+		vrRenderScaleStressSession.baselinePresentationStretchCompletedEpisodes =
+			presentation.presentationStretchCompletedEpisodes;
+		vrRenderScaleStressSession.baselinePresentationStretchTimedCompletedEpisodes =
+			presentation.presentationStretchTimedCompletedEpisodes;
+		vrRenderScaleStressSession.baselinePresentationStretchCompletedFrames =
+			presentation.presentationStretchCompletedFrames;
+		vrRenderScaleStressSession.baselinePresentationStretchCompletedQpcTicks =
+			presentation.presentationStretchCompletedQpcTicks;
+		vrRenderScaleStressSession.baselineMaximumPresentationStretchFrames =
+			presentation.maximumPresentationStretchFrames;
+		vrRenderScaleStressSession.baselineMaximumPresentationStretchQpcTicks =
+			presentation.maximumPresentationStretchQpcTicks;
+		PublishVRRenderScalePresentationStretchTelemetry(
+			vrRenderScaleStressSession,
+			VRPresentationStretchTelemetryPolicy::Inspect(
+				vrRenderScalePresentationStretchSessionTelemetry,
+				presentationQpc),
+			presentationQpcFrequency);
+
+		presentation.maximumConsecutivePresentationStretchFrames = 0;
+		presentation.consecutiveBothEyesVendorFrames = 0;
+		for (auto& eye : presentation.eyes)
+			eye.consecutiveFrames = 0;
+		++vrRenderScaleTransitionController.revision;
 		vrRenderScaleStressSessionActive.store(true, std::memory_order_release);
 	}
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
@@ -49424,19 +49580,51 @@ void Upscaling::StopVRRenderScaleStressSession()
 {
 	SampleVRRenderScaleMemory(true, "stress capture stop");
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStopped);
+	const uint64_t presentationQpcFrequency =
+		GetVRRenderScalePresentationQpcFrequency();
 	uint64_t sessionID = 0;
 	uint32_t count = 0;
 	uint32_t overwritten = 0;
 	{
-		std::scoped_lock lock(vrRenderScaleStressSessionMutex);
+		std::scoped_lock lock(
+			vrRenderScaleTransitionControllerMutex,
+			vrRenderScaleStressSessionMutex);
 		if (!vrRenderScaleStressSession.active)
 			return;
+		const uint64_t presentationQpc = QueryVRRenderScalePresentationQpc();
+		vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
+		const auto stoppedTelemetry =
+			VRPresentationStretchTelemetryPolicy::Stop(
+				vrRenderScalePresentationStretchSessionTelemetry,
+				presentationQpc);
+		PublishVRRenderScalePresentationStretchTelemetry(
+			vrRenderScaleStressSession,
+			stoppedTelemetry.snapshot,
+			presentationQpcFrequency);
+		vrRenderScaleStressSession.presentationStretchEpisodeActiveAtStop =
+			stoppedTelemetry.activeAtStop;
+		vrRenderScaleStressSession.presentationStretchActiveFramesAtStop =
+			stoppedTelemetry.activeFramesAtStop;
+		vrRenderScaleStressSession.presentationStretchActiveQpcTicksAtStop =
+			stoppedTelemetry.activeQpcTicksAtStop;
+		vrRenderScaleStressSession.presentationStretchActiveQpcTimingAvailableAtStop =
+			stoppedTelemetry.activeQpcTimingAvailableAtStop;
+		vrRenderScaleStressSession.presentationStretchIncompleteStereoCycleAtStop =
+			stoppedTelemetry.incompleteStereoCycleAtStop;
+		vrRenderScaleStressSession.presentationStretchIncompleteStereoEyeMaskAtStop =
+			stoppedTelemetry.incompleteStereoEyeMaskAtStop;
+		PublishVRRenderScalePresentationStretchTelemetry(
+			vrRenderScaleTransitionController.presentation,
+			VRPresentationStretchTelemetryPolicy::Inspect(
+				vrRenderScalePresentationStretchLifetimeTelemetry,
+				presentationQpc),
+			presentationQpcFrequency);
+		++vrRenderScaleTransitionController.revision;
 		vrRenderScaleStressSession.active = false;
 		vrRenderScaleStressSession.endFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
 		sessionID = vrRenderScaleStressSession.sessionID;
 		count = vrRenderScaleStressSession.count;
 		overwritten = vrRenderScaleStressSession.overwrittenEvents;
-		vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
 	}
 	logger::info(
 		"[VRRenderScale][Stress] Stopped capture session {} with {} retained event(s) and {} overwritten event(s).",
@@ -49448,14 +49636,18 @@ void Upscaling::StopVRRenderScaleStressSession()
 
 void Upscaling::ResetVRRenderScaleStressSession()
 {
-	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
-	vrRenderScaleStressSession = {};
+	std::scoped_lock lock(
+		vrRenderScaleTransitionControllerMutex,
+		vrRenderScaleStressSessionMutex);
 	vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
+	VRPresentationStretchTelemetryPolicy::Reset(
+		vrRenderScalePresentationStretchSessionTelemetry);
+	vrRenderScaleStressSession = {};
 }
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 12u;
+	constexpr uint32_t kSchemaVersion = 13u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -50017,6 +50209,18 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 							  { "presentationStretchEyeObservations", controller.presentation.presentationStretchEyeObservations },
 							  { "vendorFailureStretchEyeObservations", controller.presentation.vendorFailureStretchEyeObservations },
 							  { "boundsMismatchOriginalFallbackEyeObservations", controller.presentation.boundsMismatchOriginalFallbackEyeObservations },
+							  { "presentationStretchEpisodes", controller.presentation.presentationStretchEpisodes },
+							  { "presentationStretchCompletedEpisodes", controller.presentation.presentationStretchCompletedEpisodes },
+							  { "presentationStretchTimedCompletedEpisodes", controller.presentation.presentationStretchTimedCompletedEpisodes },
+							  { "presentationStretchCompletedFrames", controller.presentation.presentationStretchCompletedFrames },
+							  { "presentationStretchCompletedQpcTicks", controller.presentation.presentationStretchCompletedQpcTicks },
+							  { "presentationStretchEpisodeActive", controller.presentation.presentationStretchEpisodeActive },
+							  { "presentationStretchActiveFrames", controller.presentation.presentationStretchActiveFrames },
+							  { "presentationStretchActiveQpcTicks", controller.presentation.presentationStretchActiveQpcTicks },
+							  { "presentationStretchActiveQpcTimingAvailable", controller.presentation.presentationStretchActiveQpcTimingAvailable },
+							  { "maximumPresentationStretchFrames", controller.presentation.maximumPresentationStretchFrames },
+							  { "maximumPresentationStretchQpcTicks", controller.presentation.maximumPresentationStretchQpcTicks },
+							  { "presentationStretchQpcFrequency", controller.presentation.presentationStretchQpcFrequency },
 							  { "eyes", json::array({ presentationEyeJson(controller.presentation.eyes[0]), presentationEyeJson(controller.presentation.eyes[1]) }) } } },
 		{ "dlssLifecycle", lifecycleJson(controller.dlssLifecycle) },
 		{ "fsrLifecycle", lifecycleJson(controller.fsrLifecycle) }
@@ -50127,6 +50331,76 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 				controller.presentation.lastBothEyesVendorCycle &&
 			controller.presentation.eyes[1].compositorCycleToken ==
 				controller.presentation.lastBothEyesVendorCycle);
+	const bool presentationStretchHasCompletedEpisodes =
+		session.presentationStretchCompletedEpisodes != 0;
+	const bool presentationStretchQpcAvailable =
+		session.presentationStretchQpcFrequency != 0;
+	const bool presentationStretchCompletedTimingComplete =
+		session.presentationStretchTimedCompletedEpisodes ==
+		session.presentationStretchCompletedEpisodes;
+	const bool presentationStretchEpisodeAccountingComplete =
+		session.active ||
+		(!session.presentationStretchEpisodeActive &&
+			session.presentationStretchEpisodes ==
+				session.presentationStretchCompletedEpisodes);
+	const bool presentationStretchTimingAcceptable =
+		!presentationStretchHasCompletedEpisodes ||
+		(presentationStretchQpcAvailable &&
+			presentationStretchCompletedTimingComplete);
+	const uint64_t maximumObservedPresentationStretchFrames = std::max({ session.maximumPresentationStretchFrames,
+		session.presentationStretchActiveFrames,
+		session.presentationStretchActiveFramesAtStop });
+	json presentationStretchCompletedMilliseconds = nullptr;
+	json presentationStretchMeanFrames = nullptr;
+	json presentationStretchMeanMilliseconds = nullptr;
+	json maximumPresentationStretchMilliseconds = nullptr;
+	json presentationStretchActiveMilliseconds = nullptr;
+	json presentationStretchActiveMillisecondsAtStop = nullptr;
+	if (presentationStretchHasCompletedEpisodes) {
+		presentationStretchMeanFrames =
+			static_cast<double>(session.presentationStretchCompletedFrames) /
+			static_cast<double>(session.presentationStretchCompletedEpisodes);
+	}
+	if (presentationStretchHasCompletedEpisodes &&
+		presentationStretchQpcAvailable &&
+		presentationStretchCompletedTimingComplete) {
+		const double completedMilliseconds =
+			VRRenderScalePresentationQpcTicksToMilliseconds(
+				session.presentationStretchCompletedQpcTicks,
+				session.presentationStretchQpcFrequency);
+		presentationStretchCompletedMilliseconds = completedMilliseconds;
+		presentationStretchMeanMilliseconds =
+			completedMilliseconds /
+			static_cast<double>(session.presentationStretchCompletedEpisodes);
+		maximumPresentationStretchMilliseconds =
+			VRRenderScalePresentationQpcTicksToMilliseconds(
+				session.maximumPresentationStretchQpcTicks,
+				session.presentationStretchQpcFrequency);
+	}
+	if (session.presentationStretchEpisodeActive &&
+		session.presentationStretchActiveQpcTimingAvailable &&
+		presentationStretchQpcAvailable) {
+		presentationStretchActiveMilliseconds =
+			VRRenderScalePresentationQpcTicksToMilliseconds(
+				session.presentationStretchActiveQpcTicks,
+				session.presentationStretchQpcFrequency);
+	}
+	if (session.presentationStretchEpisodeActiveAtStop &&
+		session.presentationStretchActiveQpcTimingAvailableAtStop &&
+		presentationStretchQpcAvailable) {
+		presentationStretchActiveMillisecondsAtStop =
+			VRRenderScalePresentationQpcTicksToMilliseconds(
+				session.presentationStretchActiveQpcTicksAtStop,
+				session.presentationStretchQpcFrequency);
+	}
+	const char* presentationStretchTimingStatus =
+		!presentationStretchHasCompletedEpisodes ?
+			"no_completed_episodes" :
+		!presentationStretchQpcAvailable ?
+			"qpc_frequency_unavailable" :
+		!presentationStretchCompletedTimingComplete ?
+			"incomplete_qpc_samples" :
+			"complete";
 	record["presentationPath"] = {
 		{ "vendorEvaluatedEyeObservations", vendorEvaluatedEyeObservations },
 		{ "validatedPresentationHoldEyeObservations", validatedPresentationHoldEyeObservations },
@@ -50134,6 +50408,63 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "vendorFailureStretchEyeObservations", vendorFailureStretchEyeObservations },
 		{ "boundsMismatchOriginalFallbackEyeObservations", boundsMismatchOriginalFallbackEyeObservations },
 		{ "maximumConsecutivePresentationStretchFrames", controller.presentation.maximumConsecutivePresentationStretchFrames },
+		{ "presentationStretchEpisodes", session.presentationStretchEpisodes },
+		{ "presentationStretchCompletedEpisodes", session.presentationStretchCompletedEpisodes },
+		{ "presentationStretchCompletedFrames", session.presentationStretchCompletedFrames },
+		{ "presentationStretchCompletedQpcTicks", session.presentationStretchCompletedQpcTicks },
+		{ "presentationStretchActiveFrames", session.presentationStretchActiveFrames },
+		{ "presentationStretchActiveQpcTicks", session.presentationStretchActiveQpcTicks },
+		{ "presentationStretchIncompleteStereoCycleAtStop", session.presentationStretchIncompleteStereoCycleAtStop },
+		{ "presentationStretchIncompleteStereoEyeMaskAtStop", session.presentationStretchIncompleteStereoEyeMaskAtStop },
+		{ "maximumPresentationStretchFrames", session.maximumPresentationStretchFrames },
+		{ "maximumPresentationStretchQpcTicks", session.maximumPresentationStretchQpcTicks },
+		{ "allowedPresentationStretch", { { "episodes", session.presentationStretchEpisodes },
+											{ "completedEpisodes", session.presentationStretchCompletedEpisodes },
+											{ "timedCompletedEpisodes", session.presentationStretchTimedCompletedEpisodes },
+											{ "completedFrames", session.presentationStretchCompletedFrames },
+											{ "meanCompletedFrames", presentationStretchMeanFrames },
+											{ "maximumCompletedFrames", session.maximumPresentationStretchFrames },
+											{ "maximumObservedFrames", maximumObservedPresentationStretchFrames },
+											{ "maximumAcceptedFrames", VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames },
+											{ "episodeActive", session.presentationStretchEpisodeActive },
+											{ "activeFrames", session.presentationStretchActiveFrames },
+											{ "activeAtStop", session.presentationStretchEpisodeActiveAtStop },
+											{ "activeFramesAtStop", session.presentationStretchActiveFramesAtStop },
+											{ "incompleteStereoCycleAtStop", session.presentationStretchIncompleteStereoCycleAtStop },
+											{ "incompleteStereoEyeMaskAtStop", session.presentationStretchIncompleteStereoEyeMaskAtStop },
+											{ "completeStereoEyeMask", VRPresentationStretchTelemetryPolicy::kCompleteStereoEyeMask },
+											{ "stereoCompletionStatus", session.presentationStretchIncompleteStereoCycleAtStop ? "incomplete_at_stop" : "complete_or_absent_at_stop" },
+											{ "qpcFrequency", session.presentationStretchQpcFrequency },
+											{ "completedQpcTicks", session.presentationStretchCompletedQpcTicks },
+											{ "completedMilliseconds", presentationStretchCompletedMilliseconds },
+											{ "meanCompletedMilliseconds", presentationStretchMeanMilliseconds },
+											{ "maximumCompletedQpcTicks", session.maximumPresentationStretchQpcTicks },
+											{ "maximumCompletedMilliseconds", maximumPresentationStretchMilliseconds },
+											{ "activeQpcTicks", session.presentationStretchActiveQpcTicks },
+											{ "activeMilliseconds", presentationStretchActiveMilliseconds },
+											{ "activeQpcTimingAvailable", session.presentationStretchActiveQpcTimingAvailable },
+											{ "activeQpcTicksAtStop", session.presentationStretchActiveQpcTicksAtStop },
+											{ "activeMillisecondsAtStop", presentationStretchActiveMillisecondsAtStop },
+											{ "activeQpcTimingAvailableAtStop", session.presentationStretchActiveQpcTimingAvailableAtStop },
+											{ "completedTimingComplete", presentationStretchCompletedTimingComplete },
+											{ "timingStatus", presentationStretchTimingStatus },
+											{ "lifetimeBaseline", { { "episodes", session.baselinePresentationStretchEpisodes },
+																	  { "completedEpisodes", session.baselinePresentationStretchCompletedEpisodes },
+																	  { "timedCompletedEpisodes", session.baselinePresentationStretchTimedCompletedEpisodes },
+																	  { "completedFrames", session.baselinePresentationStretchCompletedFrames },
+																	  { "completedQpcTicks", session.baselinePresentationStretchCompletedQpcTicks },
+																	  { "maximumFrames", session.baselineMaximumPresentationStretchFrames },
+																	  { "maximumQpcTicks", session.baselineMaximumPresentationStretchQpcTicks } } },
+											{ "lifetimeCurrent", { { "episodes", controller.presentation.presentationStretchEpisodes },
+																	 { "completedEpisodes", controller.presentation.presentationStretchCompletedEpisodes },
+																	 { "timedCompletedEpisodes", controller.presentation.presentationStretchTimedCompletedEpisodes },
+																	 { "completedFrames", controller.presentation.presentationStretchCompletedFrames },
+																	 { "completedQpcTicks", controller.presentation.presentationStretchCompletedQpcTicks },
+																	 { "active", controller.presentation.presentationStretchEpisodeActive },
+																	 { "activeFrames", controller.presentation.presentationStretchActiveFrames },
+																	 { "activeQpcTicks", controller.presentation.presentationStretchActiveQpcTicks },
+																	 { "maximumFrames", controller.presentation.maximumPresentationStretchFrames },
+																	 { "maximumQpcTicks", controller.presentation.maximumPresentationStretchQpcTicks } } } } },
 		{ "stableVendorPresentation", stableVendorPresentation },
 		{ "referenceFrame", presentationReferenceFrame },
 		{ "maximumAgeFrames", kMaximumPresentationAgeFrames },
@@ -50290,8 +50621,50 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ { "vendorFailureStretchEyeObservations", vendorFailureStretchEyeObservations },
 			{ "boundsMismatchOriginalFallbackEyeObservations", boundsMismatchOriginalFallbackEyeObservations },
 			{ "validatedPresentationHoldEyeObservations", validatedPresentationHoldEyeObservations },
-			{ "allowedPresentationStretchEyeObservations", presentationStretchEyeObservations } },
+			{ "allowedPresentationStretchEyeObservations", presentationStretchEyeObservations },
+			{ "allowedPresentationStretchEpisodes", session.presentationStretchEpisodes },
+			{ "allowedPresentationStretchCompletedFrames", session.presentationStretchCompletedFrames },
+			{ "allowedPresentationStretchMaximumFrames", session.maximumPresentationStretchFrames } },
 		{ { "vendorFailureStretchEyeObservations", 0 }, { "boundsMismatchOriginalFallbackEyeObservations", 0 } });
+	addGate(
+		"presentation_stretch_episode_accounting",
+		presentationStretchEpisodeAccountingComplete,
+		{ { "episodes", session.presentationStretchEpisodes },
+			{ "completedEpisodes", session.presentationStretchCompletedEpisodes },
+			{ "active", session.presentationStretchEpisodeActive },
+			{ "activeAtStop", session.presentationStretchEpisodeActiveAtStop } },
+		"every allowed episode completed or explicitly active while capture is running");
+	addGate(
+		"presentation_stretch_complete_stereo_at_stop",
+		!session.presentationStretchIncompleteStereoCycleAtStop,
+		{ { "incompleteStereoCycleAtStop", session.presentationStretchIncompleteStereoCycleAtStop },
+			{ "observedEyeMask", session.presentationStretchIncompleteStereoEyeMaskAtStop } },
+		{ { "incompleteStereoCycleAtStop", false },
+			{ "completeStereoEyeMask", VRPresentationStretchTelemetryPolicy::kCompleteStereoEyeMask } });
+	addGate(
+		"presentation_stretch_inactive_at_stop",
+		!session.presentationStretchEpisodeActiveAtStop,
+		{ { "activeAtStop", session.presentationStretchEpisodeActiveAtStop },
+			{ "activeFramesAtStop", session.presentationStretchActiveFramesAtStop },
+			{ "activeQpcTicksAtStop", session.presentationStretchActiveQpcTicksAtStop } },
+		{ { "activeAtStop", false } });
+	addGate(
+		"presentation_stretch_frame_bound",
+		maximumObservedPresentationStretchFrames <=
+			VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames,
+		{ { "maximumCompletedFrames", session.maximumPresentationStretchFrames },
+			{ "activeFrames", session.presentationStretchActiveFrames },
+			{ "activeFramesAtStop", session.presentationStretchActiveFramesAtStop },
+			{ "maximumObservedFrames", maximumObservedPresentationStretchFrames } },
+		{ { "maximumFrames", VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames } });
+	addGate(
+		"presentation_stretch_timing",
+		presentationStretchTimingAcceptable,
+		{ { "completedEpisodes", session.presentationStretchCompletedEpisodes },
+			{ "timedCompletedEpisodes", session.presentationStretchTimedCompletedEpisodes },
+			{ "qpcFrequency", session.presentationStretchQpcFrequency },
+			{ "status", presentationStretchTimingStatus } },
+		"QPC timing for every completed allowed episode when episodes are present");
 	addGate(
 		"presentation_recovered",
 		presentationRecovered,
@@ -51856,10 +52229,10 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 	if (a_request.method == UpscaleMethod::kDLSS) {
 		auto renderer = globals::game::renderer;
 		auto* colorInput = renderer ?
-			renderer->GetRuntimeData()
-				.renderTargets[RE::RENDER_TARGETS::kMAIN]
-				.texture :
-			nullptr;
+		                       renderer->GetRuntimeData()
+		                           .renderTargets[RE::RENDER_TARGETS::kMAIN]
+		                           .texture :
+		                       nullptr;
 		if (!streamline.initialized || !streamline.featureDLSS || !colorInput) {
 			vendorResourcesReady = false;
 		} else {

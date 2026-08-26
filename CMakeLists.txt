@@ -1545,6 +1545,28 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_vendor_relatch_policy_test.cpp
     )
     add_controller_test(
+        vr_render_scale_qualification_policy_test
+        VRRenderScaleQualificationPolicy
+        tests/vr_render_scale_qualification_policy_test.cpp
+    )
+    add_controller_test(
+        vr_presentation_stretch_telemetry_policy_test
+        VRPresentationStretchTelemetryPolicy
+        tests/vr_presentation_stretch_telemetry_policy_test.cpp
+    )
+    add_test(
+        NAME VRRenderScaleDevBenchContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/vr_render_scale_devbench_contract_test.cmake"
+    )
+    set_tests_properties(
+        VRRenderScaleDevBenchContract
+        PROPERTIES LABELS "ControllerTests"
+    )
+    add_controller_test(
         reflex_policy_test
         ReflexPolicy
         tests/reflex_policy_test.cpp
@@ -1771,6 +1793,8 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             perf_mode_restart_state_test
             vr_vendor_relatch_policy_test
+            vr_render_scale_qualification_policy_test
+            vr_presentation_stretch_telemetry_policy_test
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test

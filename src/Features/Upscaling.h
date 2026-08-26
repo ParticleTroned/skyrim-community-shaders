@@ -7,6 +7,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/LazyShader.h"
 #include "VR/InSceneOverlaySubmitPolicy.h"
@@ -1034,6 +1035,21 @@ public:
 		uint64_t presentationStretchEyeObservations = 0;
 		uint64_t vendorFailureStretchEyeObservations = 0;
 		uint64_t boundsMismatchOriginalFallbackEyeObservations = 0;
+		// Allowed PresentationStretch episodes are compositor-cycle metrics, not
+		// per-eye observations. Durations use QueryPerformanceCounter ticks.
+		uint64_t presentationStretchEpisodes = 0;
+		uint64_t presentationStretchCompletedEpisodes = 0;
+		uint64_t presentationStretchTimedCompletedEpisodes = 0;
+		uint64_t presentationStretchCompletedFrames = 0;
+		uint64_t presentationStretchCompletedQpcTicks = 0;
+		bool presentationStretchEpisodeActive = false;
+		uint64_t presentationStretchActiveFrames = 0;
+		uint64_t presentationStretchActiveQpcTicks = 0;
+		bool presentationStretchActiveQpcTimingAvailable = false;
+		uint64_t maximumPresentationStretchFrames = 0;
+		uint64_t maximumPresentationStretchQpcTicks = 0;
+		// QPC ticks per second. Zero means millisecond conversion is unavailable.
+		uint64_t presentationStretchQpcFrequency = 0;
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1223,6 +1239,37 @@ public:
 		uint64_t baselinePresentationStretchEyeObservations = 0;
 		uint64_t baselineVendorFailureStretchEyeObservations = 0;
 		uint64_t baselineBoundsMismatchOriginalFallbackEyeObservations = 0;
+		uint64_t baselinePresentationStretchEpisodes = 0;
+		uint64_t baselinePresentationStretchCompletedEpisodes = 0;
+		uint64_t baselinePresentationStretchTimedCompletedEpisodes = 0;
+		uint64_t baselinePresentationStretchCompletedFrames = 0;
+		uint64_t baselinePresentationStretchCompletedQpcTicks = 0;
+		uint64_t baselineMaximumPresentationStretchFrames = 0;
+		uint64_t baselineMaximumPresentationStretchQpcTicks = 0;
+		// Session-local compositor-cycle metrics. Counters saturate at uint64 max;
+		// frame fields count cycles and duration fields are QPC ticks.
+		uint64_t presentationStretchEpisodes = 0;
+		uint64_t presentationStretchCompletedEpisodes = 0;
+		uint64_t presentationStretchTimedCompletedEpisodes = 0;
+		uint64_t presentationStretchCompletedFrames = 0;
+		uint64_t presentationStretchCompletedQpcTicks = 0;
+		bool presentationStretchEpisodeActive = false;
+		uint64_t presentationStretchActiveFrames = 0;
+		uint64_t presentationStretchActiveQpcTicks = 0;
+		bool presentationStretchActiveQpcTimingAvailable = false;
+		uint64_t maximumPresentationStretchFrames = 0;
+		uint64_t maximumPresentationStretchQpcTicks = 0;
+		uint64_t presentationStretchQpcFrequency = 0;
+		// Stop closes an in-progress episode into the completed totals while
+		// retaining this tail evidence from immediately before closure.
+		bool presentationStretchEpisodeActiveAtStop = false;
+		uint64_t presentationStretchActiveFramesAtStop = 0;
+		uint64_t presentationStretchActiveQpcTicksAtStop = 0;
+		bool presentationStretchActiveQpcTimingAvailableAtStop = false;
+		// Bit zero is left eye and bit one is right eye. An incomplete cycle is
+		// failure evidence and never contributes to the completed frame count.
+		bool presentationStretchIncompleteStereoCycleAtStop = false;
+		uint32_t presentationStretchIncompleteStereoEyeMaskAtStop = 0;
 		std::array<VRRenderScaleStressEvent, kVRRenderScaleStressEventRetentionCapacity> events{};
 	};
 
@@ -1640,10 +1687,10 @@ public:
 		float2 outputOffset;
 		float2 jitter;
 		float2 centerOffset;
-		float4 tuning0;  // x=centerScale, y=centerFeather, z=resetHistory, w=taaOuterScale
-		float4 tuning1;  // x=historyValid, y=centerHorizontalScale, z=tileDispatch, w=tileDispatchWidth
-		float4 tuning2;  // x=reactivityScale, y=instabilityScale, z=velocityScale, w=lockDecay
-		float4 tuning3;  // xy=min output color-write bounds, zw=max output color-write bounds
+		float4 tuning0;      // x=centerScale, y=centerFeather, z=resetHistory, w=taaOuterScale
+		float4 tuning1;      // x=historyValid, y=centerHorizontalScale, z=tileDispatch, w=tileDispatchWidth
+		float4 tuning2;      // x=reactivityScale, y=instabilityScale, z=velocityScale, w=lockDecay
+		float4 tuning3;      // xy=min output color-write bounds, zw=max output color-write bounds
 		float4 historyRect;  // xy=full-eye offset, zw=cropped history dimensions
 		float4x4 currentViewProjInverse;
 		float4x4 previousViewProj;
@@ -2532,6 +2579,10 @@ public:
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
 	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
+	VRPresentationStretchTelemetryPolicy::State
+		vrRenderScalePresentationStretchLifetimeTelemetry{};
+	VRPresentationStretchTelemetryPolicy::State
+		vrRenderScalePresentationStretchSessionTelemetry{};
 	// Hot-path atomic mirror; mutate with StoreVRRenderScaleTransitionStateLocked.
 	std::atomic<VRRenderScaleTransitionState> vrRenderScaleTransitionState{ VRRenderScaleTransitionState::Idle };
 	mutable std::mutex vrRenderScaleStressSessionMutex;

@@ -118,6 +118,11 @@ contradict this policy.
 -   Match validation to the changed surface: focused controller tests for policies, shader validation for HLSL, parser/unit tests for tooling, and runtime testing for UI/render/cache behavior.
 -   For shader refactors expected to be behavior-preserving, use `tools/verify-shader-refactor.ps1` first. Identical DXBC is the preferred proof; otherwise use controlled runtime A/B evidence.
 -   Runtime-affecting changes should be exercised through the available DevBench automation for each affected runtime. A new feature or settings surface should expose a DevBench action in the same PR. Changes to an exposed tool/action must update its registered description and schema in the same PR.
+-   A PR that changes VR render-scale code or behavior must include the generated
+    `csx-render-scale-pr-v1` summary described in
+    `docs/development/render-scale-pr-qualification.md`. Preserve the complete
+    evidence directory; `REVIEW_PENDING`, missing visual review, or an unmatched
+    performance baseline is not a pass.
 -   Scope pre-commit to staged files or the changed revision range. Do not use `--all-files` merely to validate a focused change; legacy third-party files preserve intentional formatting.
 -   Never interrupt shader compilation or cache generation because output is temporarily silent. Check process and cache activity and allow the documented build window.
 -   Preserve user-owned build outputs and shader caches unless the task explicitly requires their removal or regeneration.

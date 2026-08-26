@@ -26,7 +26,7 @@ The registered tool is `communityshaders.renderscale`:
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, both-eye fidelity, and compositor-accepted per-eye
     presentation paths;
--   `record` returns the complete schema-v11 record without changing capture
+-   `record` returns the complete schema-v13 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CSX-menu change.
@@ -35,6 +35,12 @@ The registered tool is `communityshaders.renderscale`:
 -   `stop` stops the capture, writes the disk artifact, and returns the complete
     record in the tool response;
 -   `reset` clears a stopped capture.
+-   `qualification_status`, `qualification_begin`, `qualification_wait`, and
+    `qualification_cancel` provide single-owner, server-timed transition
+    measurement for the PR qualification protocol;
+-   `dlss_trace_status`, `dlss_trace_start`, `dlss_trace_read`,
+    `dlss_trace_stop`, and `dlss_trace_reset` expose the bounded diagnostics
+    added by commit `b46edeaed14c41ad41225641c3a4943f1db25db6`;
 -   `probe_start` begins a bounded load-presentation probe at the final OpenVR
     submission boundary;
 -   `probe_stop` stops accepting new probe samples;
@@ -73,13 +79,15 @@ client cannot make unrecorded benchmark changes. Quality modes are `0` for
 native AA/DLAA, `1` Hoshipa, `2` Ultra Quality, `3` Quality, `4` Balanced, `5`
 Performance, and `6` Ultra Performance; enabled render scale requires `1..6`.
 
-For one candidate cycle, start capture, apply the fixed scenario profiles, and
-poll `status` until each requested epoch reaches `Active` with the stable
-profile, exact backend generation, and both eyes valid. Drive the fixed
-fast-travel leg through devbench's own console tool when that scenario requires
-it. Stop capture only after the final recovery settles, then reject the run if
-any returned acceptance gate fails. The record includes the build's git
-description so artifacts remain attributable to the exact candidate source.
+For an ordinary diagnostic cycle, start capture, apply the fixed scenario
+profiles, and inspect `status` until each requested epoch reaches `Active` with
+the stable profile, exact backend generation, and both eyes valid. PR timing
+must instead use the server-timed qualification actions described below; client
+poll cadence is not a valid latency measurement. Drive a fixed fast-travel leg
+through DevBench's own console tool when the scenario requires it. Stop capture
+only after final recovery settles, then reject the run if any acceptance gate
+fails. The record includes the build's Git description so artifacts remain
+attributable to the exact candidate source.
 
 For a memory-qualification capture, apply each of the two exact profiles at
 least three times (six alternating transitions total). A shorter diagnostic
@@ -89,75 +97,20 @@ acceptance.
 
 ## COC endurance protocol
 
-Use this protocol to verify that an already-latched render-scale contract stays
-stable through repeated cell transitions. This is not a render-scale apply
-acceptance test: if no CSX or DevBench `apply` request occurs during the run,
-the generic capture verdict may fail `minimum_requests`, `stable_latency_bound`,
-or memory-trend gates even when the endurance result is valid. For this test,
-judge the run from the terminal presentation, fallback counters, OOM/device-loss
-state, liveness, and memory samples.
+The old fixed-delay COC batches are superseded. Use the 20-transition assay in
+[Render-scale PR qualification](render-scale-pr-qualification.md). It pairs one
+server-timed `qualification_begin` with one COC and one bounded
+`qualification_wait`, then dispatches the next COC at the first coherent stable
+observation. This avoids substituting a client polling interval or arbitrary
+sleep for the transition duration.
 
-The validated COC route alternates only between real different cells:
-
-```text
-Exterior: WindhelmExterior01
-Interior: WhiterunDragonsreach
-```
-
-Before starting, load into one endpoint and confirm DevBench health and scene
-identity. Do not issue a same-cell baseline `coc`; it can wedge the load/menu
-bridge and invalidates the run. Start the CS render-scale capture with
-`communityshaders.renderscale reset` followed by
-`communityshaders.renderscale start`, using DevBench's typed `scenario` dispatch
-if the registered CS tool is not exposed as a first-class MCP call.
-
-Drive the run as small synchronous fixed-wait batches, normally five real COC
-transitions per batch with a 10 s wait after every command:
-
-```json
-{
-    "action": "run",
-    "async": false,
-    "continueOnError": false,
-    "steps": [
-        {
-            "tool": "console",
-            "args": { "action": "exec", "command": "coc WhiterunDragonsreach" }
-        },
-        { "wait": 10000 },
-        {
-            "tool": "console",
-            "args": { "action": "exec", "command": "coc WindhelmExterior01" }
-        },
-        { "wait": 10000 }
-    ]
-}
-```
-
-Extend the `steps` array to five alternating COCs per batch, then verify
-`inspect(kind=health)` and `inspect(kind=scene)` between batches. Continue from
-the actual current endpoint; do not restart the sequence by issuing another COC
-to the same location. Avoid `postLoadGame`, `playerLoaded`, or other load-event
-waits inside the COC loop. In this stress path those waits can interact badly
-with Skyrim's load/menu state and are less reliable than fixed pacing.
-
-For a 40-COC run starting in Windhelm exterior, use eight five-transition
-batches:
-
--   batches 1, 3, 5, and 7 start with `coc WhiterunDragonsreach` and end in
-    Dragonsreach;
--   batches 2, 4, 6, and 8 start with `coc WindhelmExterior01` and end in
-    Windhelm exterior.
-
-Stop the capture only after the final 10 s recovery. A valid endurance result
-should end with a live Skyrim process, the expected final scene, no OOM or device
-loss, no bounds-mismatch original fallback, no persistent
-`PresentationStretch`, and both eyes recovered to a fresh
-`VendorEvaluated` presentation matching the stable contract. Record the maximum
-consecutive stretch duration in frames, final VRAM usage/headroom, Skyrim
-private usage, and system commit/headroom. Short stretches of one or two frames
-are acceptable for this endurance check when the terminal presentation is stable
-and no fallback path persists.
+The route still alternates only between `WindhelmExterior01` and
+`WhiterunDragonsreach`; a same-cell baseline COC remains invalid. COC-only
+results are judged by the qualification transition records, presentation and
+fallback counters, failure state, liveness, and memory evidence. The generic
+stress-capture acceptance object can still fail request-count or memory-trend
+gates when no menu apply occurs, so it is retained as diagnostic evidence and
+is not used to manufacture a COC pass.
 
 ## Live Ghidra/DevBench setup
 
@@ -306,7 +259,7 @@ diagnostic heuristics. A depth-aligned black/transparent post-HAM mask is the
 expected result of a successful clear; it is evidence of what CSX wrote, not by
 itself proof that the compositor exposed the mask as an artifact. This
 correlated record is load-presentation probe schema version 5. The main
-render-scale iteration schema is version 11.
+render-scale iteration schema is version 13.
 
 The post-load black hold uses route-specific soft deadlines of 3 seconds for an
 in-game load and 6 seconds for a main-menu load. Crossing the soft deadline does
@@ -779,7 +732,16 @@ live paths under `controller.presentation`, session deltas under
 
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 11`. Schema v11 adds Debug-only liveness-cue compile/success evidence and the emergency projection multiplier/floor; acceptance thresholds and units are unchanged. Schema v10 added `session.coalescedDuplicateCount`. Same-door Stabilizer retries that match the complete pending target are counted there without creating another request event or transition metric. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and
+`schemaVersion: 13`. Schema v13 adds presentation-stretch episode duration,
+active-at-stop evidence, and incomplete-stereo-cycle evidence at capture stop.
+An active tail or partial two-eye cycle is a hard failure. Schema v12 adds exact
+build provenance. Schema v11 adds Debug-only liveness-cue compile/success
+evidence and the emergency projection multiplier/floor; its acceptance
+thresholds and units are unchanged. Schema v10 added
+`session.coalescedDuplicateCount`. Same-door Stabilizer retries that match the
+complete pending target are counted there without creating another request
+event or transition metric. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -810,7 +772,9 @@ The runtime currently requires:
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
 -   no effective lifecycle-mutation deferral remaining at capture stop, including relevant source gates, post-load reset ownership, or queued/in-progress relatch ownership; raw source owners that are irrelevant to the active render-scale lifecycle do not fail acceptance.
 
-Schema version 9 adds source-resolved vendor-work-gate status to the live snapshot, complete record, and retained stress events. These thresholds are part of schema version 9. Change the schema version if their meaning or units change.
+Schema version 9 added source-resolved vendor-work-gate status to the live
+snapshot, complete record, and retained stress events. Change the current
+schema version if an acceptance threshold's meaning or unit changes.
 
 ## Ghidra correlation
 

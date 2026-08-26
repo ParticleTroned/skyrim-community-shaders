@@ -1,0 +1,410 @@
+#pragma once
+
+#include <cstdint>
+#include <limits>
+#include <string_view>
+
+namespace VRRenderScaleQualificationPolicy
+{
+	inline constexpr std::uint32_t kMaximumQualityMode = 6;
+	inline constexpr std::string_view kElapsedMillisecondsReceiptField = "elapsedMs";
+	inline constexpr std::string_view kElapsedFramesReceiptField = "elapsedFrames";
+
+	enum class Method : std::uint8_t
+	{
+		Unknown,
+		FSR,
+		DLSS
+	};
+
+	struct TargetProfile
+	{
+		Method method = Method::Unknown;
+		std::uint32_t qualityMode = 0;
+		bool renderScaleMode = false;
+		bool matchDLSSProfile = false;
+		std::uint32_t dlssProfile = 0;
+		bool matchFSRRuntime = false;
+		bool fsr4Runtime = false;
+	};
+
+	struct Profile
+	{
+		bool valid = false;
+		Method method = Method::Unknown;
+		std::uint32_t qualityMode = 0;
+		bool renderScaleMode = false;
+		std::uint32_t dlssProfile = 0;
+		bool fsr4Runtime = false;
+	};
+
+	[[nodiscard]] constexpr bool IsTargetPropertyAllowed(
+		std::string_view a_name) noexcept
+	{
+		return a_name == "method" ||
+		       a_name == "qualityMode" ||
+		       a_name == "renderScaleMode" ||
+		       a_name == "dlssProfile" ||
+		       a_name == "fsrRuntime";
+	}
+
+	[[nodiscard]] constexpr bool IsFoveationPropertyAllowed(
+		std::string_view a_name) noexcept
+	{
+		return a_name == "foveatedVendorDispatch" ||
+		       a_name == "foveatedCenterArea" ||
+		       a_name == "peripheryTAAEnable" ||
+		       a_name == "peripheryTAACenterArea" ||
+		       a_name == "peripheryTAAOuterScale";
+	}
+
+	[[nodiscard]] constexpr bool IsValidTarget(const TargetProfile& a_target) noexcept
+	{
+		if (a_target.method == Method::Unknown ||
+			a_target.qualityMode > kMaximumQualityMode ||
+			a_target.renderScaleMode != (a_target.qualityMode != 0)) {
+			return false;
+		}
+		if (a_target.method == Method::DLSS && a_target.matchFSRRuntime)
+			return false;
+		if (a_target.method == Method::FSR && a_target.matchDLSSProfile)
+			return false;
+		return true;
+	}
+
+	[[nodiscard]] constexpr bool MatchesTarget(
+		const Profile& a_profile,
+		const TargetProfile& a_target) noexcept
+	{
+		if (!a_profile.valid || !IsValidTarget(a_target) ||
+			a_profile.method != a_target.method ||
+			a_profile.qualityMode != a_target.qualityMode ||
+			a_profile.renderScaleMode != a_target.renderScaleMode) {
+			return false;
+		}
+		if (a_target.method == Method::DLSS && a_target.matchDLSSProfile &&
+			a_profile.dlssProfile != a_target.dlssProfile) {
+			return false;
+		}
+		if (a_target.method == Method::FSR && a_target.matchFSRRuntime &&
+			a_profile.fsr4Runtime != a_target.fsr4Runtime) {
+			return false;
+		}
+		return true;
+	}
+
+	[[nodiscard]] constexpr bool ProfilesAgree(
+		const Profile& a_left,
+		const Profile& a_right) noexcept
+	{
+		return a_left.valid && a_right.valid &&
+		       a_left.method == a_right.method &&
+		       a_left.qualityMode == a_right.qualityMode &&
+		       a_left.renderScaleMode == a_right.renderScaleMode &&
+		       (a_left.method != Method::DLSS ||
+				   a_left.dlssProfile == a_right.dlssProfile) &&
+		       (a_left.method != Method::FSR ||
+				   a_left.fsr4Runtime == a_right.fsr4Runtime);
+	}
+
+	[[nodiscard]] constexpr bool CanBegin(std::uint64_t a_activeTransitionID) noexcept
+	{
+		return a_activeTransitionID == 0;
+	}
+
+	[[nodiscard]] constexpr bool OwnsTransition(
+		std::uint64_t a_activeTransitionID,
+		std::uint64_t a_requestedTransitionID) noexcept
+	{
+		return a_activeTransitionID != 0 &&
+		       a_activeTransitionID == a_requestedTransitionID;
+	}
+
+	[[nodiscard]] constexpr bool OwnsTransitionInstance(
+		std::uint64_t a_activeTransitionID,
+		std::uint64_t a_activeOwnershipToken,
+		std::uint64_t a_requestedTransitionID,
+		std::uint64_t a_requestedOwnershipToken) noexcept
+	{
+		return OwnsTransition(a_activeTransitionID, a_requestedTransitionID) &&
+		       a_activeOwnershipToken != 0 &&
+		       a_activeOwnershipToken == a_requestedOwnershipToken;
+	}
+
+	[[nodiscard]] constexpr bool FrameAdvanced(
+		std::uint32_t a_beginFrame,
+		std::uint32_t a_observedFrame) noexcept
+	{
+		return static_cast<std::int32_t>(a_observedFrame - a_beginFrame) > 0;
+	}
+
+	[[nodiscard]] constexpr std::uint32_t ElapsedFrames(
+		std::uint32_t a_beginFrame,
+		std::uint32_t a_observedFrame) noexcept
+	{
+		return FrameAdvanced(a_beginFrame, a_observedFrame) ?
+		           a_observedFrame - a_beginFrame :
+		           0;
+	}
+
+	[[nodiscard]] constexpr bool CounterRegressed(
+		std::uint64_t a_current,
+		std::uint64_t a_baseline) noexcept
+	{
+		return a_current < a_baseline;
+	}
+
+	[[nodiscard]] constexpr std::uint64_t MonotonicCounterDelta(
+		std::uint64_t a_current,
+		std::uint64_t a_baseline) noexcept
+	{
+		return CounterRegressed(a_current, a_baseline) ?
+		           0 :
+		           a_current - a_baseline;
+	}
+
+	[[nodiscard]] constexpr bool IsFoveationInvariantViolation(
+		bool a_targetSupplied,
+		bool a_settingsMatch) noexcept
+	{
+		return a_targetSupplied && !a_settingsMatch;
+	}
+
+	[[nodiscard]] constexpr bool HasRequiredPresentationHistory(
+		bool a_vendorPresentation,
+		std::uint32_t a_leftConsecutiveFrames,
+		std::uint32_t a_rightConsecutiveFrames,
+		std::uint32_t a_bothEyesConsecutiveFrames) noexcept
+	{
+		return a_leftConsecutiveFrames >= 2 &&
+		       a_rightConsecutiveFrames >= 2 &&
+		       (!a_vendorPresentation || a_bothEyesConsecutiveFrames >= 2);
+	}
+
+	[[nodiscard]] constexpr bool IsFreshTransition(
+		bool a_destinationMatches,
+		bool a_destinationDiffersFromSource,
+		std::uint32_t a_beginFrame,
+		std::uint32_t a_observedFrame,
+		bool a_profileStateChanged) noexcept
+	{
+		if (!a_destinationMatches)
+			return false;
+		return a_destinationDiffersFromSource ?
+		           FrameAdvanced(a_beginFrame, a_observedFrame) :
+		           a_profileStateChanged;
+	}
+
+	[[nodiscard]] constexpr std::uint64_t SaturatingDeadlineTick(
+		std::uint64_t a_beginTick,
+		std::uint64_t a_timeoutMilliseconds,
+		std::uint64_t a_tickFrequency) noexcept
+	{
+		if (a_tickFrequency == 0)
+			return a_beginTick;
+		const auto multiply = [](std::uint64_t a_left, std::uint64_t a_right) {
+			if (a_left != 0 &&
+				a_right > std::numeric_limits<std::uint64_t>::max() / a_left) {
+				return std::numeric_limits<std::uint64_t>::max();
+			}
+			return a_left * a_right;
+		};
+		const auto add = [](std::uint64_t a_left, std::uint64_t a_right) {
+			if (a_right > std::numeric_limits<std::uint64_t>::max() - a_left)
+				return std::numeric_limits<std::uint64_t>::max();
+			return a_left + a_right;
+		};
+		const std::uint64_t wholeSeconds = a_timeoutMilliseconds / 1000;
+		const std::uint64_t remainingMilliseconds = a_timeoutMilliseconds % 1000;
+		const std::uint64_t wholeTicks = multiply(wholeSeconds, a_tickFrequency);
+		const std::uint64_t remainingWholeTicks =
+			multiply(remainingMilliseconds, a_tickFrequency / 1000);
+		const std::uint64_t remainingFractionTicks =
+			multiply(remainingMilliseconds, a_tickFrequency % 1000) / 1000;
+		const std::uint64_t remainingTicks =
+			add(remainingWholeTicks, remainingFractionTicks);
+		return add(a_beginTick, add(wholeTicks, remainingTicks));
+	}
+
+	[[nodiscard]] constexpr bool IsWithinDeadline(
+		std::uint64_t a_observedTick,
+		std::uint64_t a_deadlineTick) noexcept
+	{
+		return a_observedTick <= a_deadlineTick;
+	}
+
+	[[nodiscard]] constexpr double ElapsedMilliseconds(
+		std::uint64_t a_beginTick,
+		std::uint64_t a_endTick,
+		std::uint64_t a_tickFrequency) noexcept
+	{
+		if (a_tickFrequency == 0 || a_endTick <= a_beginTick)
+			return 0.0;
+		return static_cast<double>(a_endTick - a_beginTick) * 1000.0 /
+		       static_cast<double>(a_tickFrequency);
+	}
+
+	struct TerminalDiagnosticDeltas
+	{
+		std::uint64_t stressFailureEvents = 0;
+		std::uint64_t stressOverwrittenEvents = 0;
+		std::uint64_t presentationStretchEyeObservations = 0;
+		std::uint64_t vendorFailureStretchEyeObservations = 0;
+		std::uint64_t boundsMismatchFallbackEyeObservations = 0;
+		std::uint64_t fidelityMismatches = 0;
+		std::uint64_t transitionFailures = 0;
+		std::uint64_t outOfMemoryFailures = 0;
+		std::uint64_t deviceLostFailures = 0;
+		std::uint64_t relevantLifecycleFailures = 0;
+		std::uint64_t memoryTrimFailures = 0;
+		std::uint64_t retirementFenceFailures = 0;
+		bool monotonicCounterRegression = false;
+		bool traceApplicable = false;
+		bool traceSessionLost = false;
+		std::uint64_t traceDroppedRecords = 0;
+		std::uint64_t traceConstantsFailures = 0;
+		std::uint64_t traceEvaluateFailures = 0;
+	};
+
+	[[nodiscard]] constexpr bool HasTerminalDiagnosticFailure(
+		const TerminalDiagnosticDeltas& a_delta) noexcept
+	{
+		return a_delta.stressFailureEvents != 0 ||
+		       a_delta.stressOverwrittenEvents != 0 ||
+		       a_delta.vendorFailureStretchEyeObservations != 0 ||
+		       a_delta.boundsMismatchFallbackEyeObservations != 0 ||
+		       a_delta.fidelityMismatches != 0 ||
+		       a_delta.transitionFailures != 0 ||
+		       a_delta.outOfMemoryFailures != 0 ||
+		       a_delta.deviceLostFailures != 0 ||
+		       a_delta.relevantLifecycleFailures != 0 ||
+		       a_delta.memoryTrimFailures != 0 ||
+		       a_delta.retirementFenceFailures != 0 ||
+		       a_delta.monotonicCounterRegression ||
+		       (a_delta.traceApplicable &&
+				   (a_delta.traceSessionLost ||
+					   a_delta.traceDroppedRecords != 0 ||
+					   a_delta.traceConstantsFailures != 0 ||
+					   a_delta.traceEvaluateFailures != 0));
+	}
+
+	enum FailureReason : std::uint64_t
+	{
+		kFailureNone = 0,
+		kFailureStressSession = 1ull << 0,
+		kFailureExactCell = 1ull << 1,
+		kFailureLoadedInWorld = 1ull << 2,
+		kFailureFreshObservation = 1ull << 3,
+		kFailurePublicSnapshot = 1ull << 4,
+		kFailureProvider = 1ull << 5,
+		kFailureProfiles = 1ull << 6,
+		kFailureDimensions = 1ull << 7,
+		kFailureAPIOperation = 1ull << 8,
+		kFailureAPIConditions = 1ull << 9,
+		kFailureController = 1ull << 10,
+		kFailureWorkGate = 1ull << 11,
+		kFailureRelatch = 1ull << 12,
+		kFailureRecovery = 1ull << 13,
+		kFailureMemoryTrim = 1ull << 14,
+		kFailureRetirement = 1ull << 15,
+		kFailurePhysicalMutation = 1ull << 16,
+		kFailureTerminal = 1ull << 17,
+		kFailureAPIActiveContract = 1ull << 18,
+		kFailurePhysicalActiveContract = 1ull << 19,
+		kFailurePresentationPhase = 1ull << 20,
+		kFailureFidelity = 1ull << 21,
+		kFailureVendorPresentation = 1ull << 22,
+		kFailureLifecycle = 1ull << 23,
+		kFailureFSRDispatch = 1ull << 24,
+		kFailureShaderCompilation = 1ull << 25,
+		kFailureAPINativeContract = 1ull << 26,
+		kFailurePhysicalNativeContract = 1ull << 27,
+		kFailureNativePresentation = 1ull << 28,
+		kFailureFoveationSettings = 1ull << 29,
+		kFailureDiagnosticDelta = 1ull << 30,
+	};
+
+	struct StabilityFacts
+	{
+		bool stressSession = false;
+		bool exactCell = false;
+		bool loadedInWorld = false;
+		bool freshObservation = false;
+		bool publicSnapshot = false;
+		bool providerReady = false;
+		bool profilesAgree = false;
+		bool dimensionsPositive = false;
+		bool apiOperationClear = false;
+		bool apiConditionsClear = false;
+		bool controllerSettled = false;
+		bool workGateClear = false;
+		bool relatchClear = false;
+		bool recoveryClear = false;
+		bool memoryTrimClear = false;
+		bool retirementClear = false;
+		bool physicalMutationClear = false;
+		bool terminalClear = false;
+		bool foveationSettingsMatch = false;
+		bool diagnosticsClear = false;
+		bool apiActiveContract = false;
+		bool physicalActiveContract = false;
+		bool presentationPhaseStable = false;
+		bool fidelityStable = false;
+		bool vendorPresentationStable = false;
+		bool lifecycleStable = false;
+		bool fsrDispatchStable = false;
+		bool shaderCompilationIdle = false;
+		bool apiNativeContract = false;
+		bool physicalNativeContract = false;
+		bool nativePresentationStable = false;
+	};
+
+	[[nodiscard]] constexpr std::uint64_t EvaluateStability(
+		const TargetProfile& a_target,
+		const StabilityFacts& a_facts) noexcept
+	{
+		std::uint64_t failures = kFailureNone;
+		const auto require = [&](bool a_satisfied, FailureReason a_reason) {
+			if (!a_satisfied)
+				failures |= static_cast<std::uint64_t>(a_reason);
+		};
+		require(a_facts.stressSession, kFailureStressSession);
+		require(a_facts.exactCell, kFailureExactCell);
+		require(a_facts.loadedInWorld, kFailureLoadedInWorld);
+		require(a_facts.freshObservation, kFailureFreshObservation);
+		require(a_facts.publicSnapshot, kFailurePublicSnapshot);
+		require(a_facts.providerReady, kFailureProvider);
+		require(a_facts.profilesAgree, kFailureProfiles);
+		require(a_facts.dimensionsPositive, kFailureDimensions);
+		require(a_facts.apiOperationClear, kFailureAPIOperation);
+		require(a_facts.apiConditionsClear, kFailureAPIConditions);
+		require(a_facts.controllerSettled, kFailureController);
+		require(a_facts.workGateClear, kFailureWorkGate);
+		require(a_facts.relatchClear, kFailureRelatch);
+		require(a_facts.recoveryClear, kFailureRecovery);
+		require(a_facts.memoryTrimClear, kFailureMemoryTrim);
+		require(a_facts.retirementClear, kFailureRetirement);
+		require(a_facts.physicalMutationClear, kFailurePhysicalMutation);
+		require(a_facts.terminalClear, kFailureTerminal);
+		require(a_facts.foveationSettingsMatch, kFailureFoveationSettings);
+		require(a_facts.diagnosticsClear, kFailureDiagnosticDelta);
+
+		if (a_target.renderScaleMode) {
+			require(a_facts.apiActiveContract, kFailureAPIActiveContract);
+			require(a_facts.physicalActiveContract, kFailurePhysicalActiveContract);
+			require(a_facts.presentationPhaseStable, kFailurePresentationPhase);
+			require(a_facts.fidelityStable, kFailureFidelity);
+			require(a_facts.vendorPresentationStable, kFailureVendorPresentation);
+			require(a_facts.lifecycleStable, kFailureLifecycle);
+			if (a_target.method == Method::FSR) {
+				require(a_facts.fsrDispatchStable, kFailureFSRDispatch);
+				require(a_facts.shaderCompilationIdle, kFailureShaderCompilation);
+			}
+		} else {
+			require(a_facts.apiNativeContract, kFailureAPINativeContract);
+			require(a_facts.physicalNativeContract, kFailurePhysicalNativeContract);
+			require(a_facts.nativePresentationStable, kFailureNativePresentation);
+		}
+		return failures;
+	}
+}

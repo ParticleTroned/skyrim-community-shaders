@@ -16,6 +16,7 @@
 -   **[Prebuilt Shader Cache](./prebuilt-shader-cache.md)** - Release build, update, validation, and AI-agent runbook
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
 -   **[GPU-Unified Presets](./unified-presets.md)** - One preset path with capability-selected DLSS or FSR
+-   **[Render-scale PR qualification](./render-scale-pr-qualification.md)** - Bounded 20-COC, 25-menu-transition, and three-sequence release gate
 -   **[Screenshot API and Sequences](./screenshot-api-and-sequences.md)** - Versioned asynchronous still/sequence contract, acknowledgements, manifests, and implementation gates
 
 ## Quick Links

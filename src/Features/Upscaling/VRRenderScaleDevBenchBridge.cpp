@@ -374,6 +374,77 @@ namespace
 		};
 	}
 
+	json CPUPerformanceJson(Upscaling& a_upscaling)
+	{
+		using Counter = Upscaling::VRRenderScaleCPUPerformanceCounter;
+		const auto counters =
+			a_upscaling.GetVRRenderScaleCPUPerformanceSnapshot();
+		const auto value = [&](Counter a_counter) {
+			return counters[static_cast<std::size_t>(a_counter)];
+		};
+		const auto microseconds = [](uint64_t a_nanoseconds) {
+			return static_cast<double>(a_nanoseconds) / 1000.0;
+		};
+		const auto averageMicroseconds = [&](Counter a_total, Counter a_count) {
+			const uint64_t count = value(a_count);
+			return count == 0 ?
+				0.0 :
+				microseconds(value(a_total)) / static_cast<double>(count);
+		};
+		const uint32_t frame =
+			globals::state ? globals::state->frameCount : 0u;
+		const uint64_t startFrame = value(Counter::WindowStartFrame);
+
+		return {
+			{ "schemaVersion", 1 },
+			{ "devBenchOnly", true },
+			{ "active", a_upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive() },
+			{ "window", {
+							{ "initialized", startFrame != 0 },
+							{ "startFrame", startFrame },
+							{ "currentFrame", frame },
+							{ "elapsedFrames", startFrame != 0 && frame >= startFrame ? frame - startFrame : 0u },
+						} },
+			{ "generationResourceValidation", {
+										  { "fullValidations", value(Counter::ResourceFullValidations) },
+										  { "contractPublishes", value(Counter::ResourceContractPublishes) },
+										  { "contractInvalidations", value(Counter::ResourceContractInvalidations) },
+										  { "stableChecks", value(Counter::ResourceContractStableChecks) },
+										  { "stableHits", value(Counter::ResourceContractStableHits) },
+										  { "stableMisses", value(Counter::ResourceContractStableMisses) },
+									  } },
+			{ "compactPresentationContract", {
+										{ "publishes", value(Counter::HotContractPublishes) },
+										{ "reuses", value(Counter::HotContractReuses) },
+									} },
+			{ "stateProportionalSafety", {
+									 { "promotion", { { "fastSkips", value(Counter::PromotionFastSkips) }, { "candidates", value(Counter::PromotionCandidates) } } },
+									 { "boundsGuard", { { "fastSkips", value(Counter::BoundsGuardFastSkips) }, { "candidates", value(Counter::BoundsGuardCandidates) } } },
+									 { "deferredRecovery", { { "fastSkips", value(Counter::DeferredRecoveryFastSkips) }, { "candidates", value(Counter::DeferredRecoveryCandidates) } } },
+									 { "nativeGuard", { { "fastSkips", value(Counter::NativeGuardFastSkips) }, { "candidates", value(Counter::NativeGuardCandidates) } } },
+									 { "engineRetirement", { { "fastSkips", value(Counter::RetirementFastSkips) }, { "services", value(Counter::RetirementServices) } } },
+									 { "memoryTrim", { { "fastSkips", value(Counter::TrimFastSkips) }, { "services", value(Counter::TrimServices) } } },
+									 { "memoryTelemetry", { { "fastSkips", value(Counter::MemoryTelemetryFastSkips) }, { "candidates", value(Counter::MemoryTelemetryCandidates) } } },
+									 { "postMutationGuard", { { "fastSkips", value(Counter::PostMutationGuardFastSkips) }, { "services", value(Counter::PostMutationGuardServices) } } },
+								 } },
+			{ "strongStereoPacket", {
+								  { "fastSkips", value(Counter::PresentationPacketFastSkips) },
+								  { "captures", value(Counter::PresentationPacketCaptures) },
+								  { "cycleReuses", value(Counter::PresentationPacketCycleReuses) },
+								  { "lifetimeReuses", value(Counter::PresentationLifetimeReuses) },
+								  { "lifetimeRebuilds", value(Counter::PresentationLifetimeRebuilds) },
+								  { "invalidations", value(Counter::PresentationPacketInvalidations) },
+								  { "commitValidations", value(Counter::PresentationCommitValidations) },
+								  { "commitAccepts", value(Counter::PresentationCommitAccepts) },
+								  { "commitRejects", value(Counter::PresentationCommitRejects) },
+								  { "queueWaitAverageMicroseconds", averageMicroseconds(Counter::PresentationQueueWaitTotalNanoseconds, Counter::PresentationPacketCaptures) },
+								  { "queueWaitMaximumMicroseconds", microseconds(value(Counter::PresentationQueueWaitMaximumNanoseconds)) },
+								  { "queueHoldAverageMicroseconds", averageMicroseconds(Counter::PresentationQueueHoldTotalNanoseconds, Counter::PresentationPacketCaptures) },
+								  { "queueHoldMaximumMicroseconds", microseconds(value(Counter::PresentationQueueHoldMaximumNanoseconds)) },
+							  } },
+		};
+	}
+
 	json BuildStatus(Upscaling& a_upscaling)
 	{
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
@@ -421,6 +492,7 @@ namespace
 		return {
 			{ "frame", frame },
 			{ "modeStatus", Upscaling::GetVRRenderScaleModeStatusName(a_upscaling.GetVRRenderScaleModeStatus()) },
+			{ "cpuPerformance", CPUPerformanceJson(a_upscaling) },
 			{ "pipelineDiagnostics", {
 										 { "configuredForNextStartup", a_upscaling.settings.pipelineDiagnostics },
 										 { "configuredStructuredForNextStartup", a_upscaling.settings.pipelineDiagnosticsStructured },
@@ -714,6 +786,75 @@ namespace
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale iteration control requires Skyrim VR" } };
 				return json{ { "action", "status" }, { "status", BuildStatus(globals::features::upscaling) } };
+			});
+		}
+
+		if (action == "cpu_performance_status") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "render-scale CPU telemetry requires Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				return json{
+					{ "action", "cpu_performance_status" },
+					{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+				};
+			});
+		}
+
+		if (action == "cpu_performance_start") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "render-scale CPU telemetry requires Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive()) {
+					return json{
+						{ "error", "a render-scale CPU telemetry capture is already active" },
+						{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+					};
+				}
+				upscaling.StartVRRenderScaleCPUPerformanceTelemetry();
+				return json{
+					{ "action", "cpu_performance_start" },
+					{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+				};
+			});
+		}
+
+		if (action == "cpu_performance_stop") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "render-scale CPU telemetry requires Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (!upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive()) {
+					return json{
+						{ "error", "no render-scale CPU telemetry capture is active" },
+						{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+					};
+				}
+				upscaling.StopVRRenderScaleCPUPerformanceTelemetry();
+				return json{
+					{ "action", "cpu_performance_stop" },
+					{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+				};
+			});
+		}
+
+		if (action == "cpu_performance_reset") {
+			return RunOnMainThread([]() {
+				if (!globals::game::isVR)
+					return json{ { "error", "render-scale CPU telemetry requires Skyrim VR" } };
+				auto& upscaling = globals::features::upscaling;
+				if (upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive()) {
+					return json{
+						{ "error", "stop the render-scale CPU telemetry capture before resetting it" },
+						{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+					};
+				}
+				upscaling.ResetVRRenderScaleCPUPerformanceTelemetry();
+				return json{
+					{ "action", "cpu_performance_reset" },
+					{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+				};
 			});
 		}
 
@@ -1027,7 +1168,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "ham_status", "ham_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
+			{ "supported", json::array({ "status", "cpu_performance_status", "cpu_performance_start", "cpu_performance_stop", "cpu_performance_reset", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "ham_status", "ham_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
 		};
 	}
 
@@ -1050,7 +1191,7 @@ namespace
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.renderscale" },
 			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. If the client has not exposed dynamic tools, dispatch it through devbench scenario with a tool step: {"tool":"communityshaders.renderscale","args":{"action":"status"}}.)" },
-			{ "actions", json::array({ "status", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "ham_status", "ham_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
+			{ "actions", json::array({ "status", "cpu_performance_status", "cpu_performance_start", "cpu_performance_stop", "cpu_performance_reset", "record", "start", "apply", "stop", "reset", "probe_start", "probe_stop", "probe_record", "probe_reset", "ham_status", "ham_reset", "trim", "texture_lifetime_start", "texture_lifetime_status", "texture_lifetime_checkpoint", "texture_lifetime_stop", "texture_lifetime_reset" }) },
 		};
 		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
@@ -1089,7 +1230,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"({"description":"Control and inspect CSX VR render-scale, fixed tiled-exact HMD-mask, and transition diagnostics. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})";
+			R"({"description":"Control and inspect CSX VR render-scale, fixed tiled-exact HMD-mask, transition, and DevBench-only CPU performance diagnostics. Every response identifies the exact producing DLL; expectedBuildId makes operations fail closed on a stale or unintended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			diagnosticDescriptor,

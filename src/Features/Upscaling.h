@@ -1287,6 +1287,114 @@ public:
 			VRRenderScalePresentationPhase::Idle;
 	};
 
+	/** @brief Compact controller state consumed by the per-eye presentation path. */
+	struct VRRenderScaleHotPresentationContract
+	{
+		uint64_t compositorCycleToken = 0;
+		uint32_t frame = 0;
+		uint64_t revision = 0;
+		VRRenderScaleTransitionState state = VRRenderScaleTransitionState::Idle;
+		uint64_t targetEpoch = 0;
+		uint32_t stateFrame = 0;
+		VRRenderScaleProfileSnapshot applied{};
+		VRRenderScaleProfileSnapshot stable{};
+		VRRenderScalePresentationSnapshot presentation{};
+		uint64_t postLoadRecoveryLoadingSerial = 0;
+	};
+	static_assert(
+		sizeof(VRRenderScaleHotPresentationContract) <
+		sizeof(VRRenderScaleTransitionSnapshot));
+
+	struct VRRenderScaleStereoEyeResourceContract
+	{
+		uint32_t contractGeneration = 0;
+		D3D11_TEXTURE2D_DESC colorInputDesc{};
+		D3D11_TEXTURE2D_DESC colorOutputDesc{};
+		winrt::com_ptr<ID3D11Texture2D> colorInput;
+		winrt::com_ptr<ID3D11Texture2D> colorOutput;
+		winrt::com_ptr<ID3D11Texture2D> depth;
+		winrt::com_ptr<ID3D11Texture2D> linearDepth;
+		winrt::com_ptr<ID3D11Texture2D> motionVectors;
+		winrt::com_ptr<ID3D11Texture2D> reactiveMask;
+		winrt::com_ptr<ID3D11Texture2D> transparencyMask;
+		winrt::com_ptr<ID3D11Texture2D> dlssSharpener;
+	};
+
+	struct VRRenderScaleStereoResourceLifetime
+	{
+		static constexpr uint32_t kAuxiliaryLifetimeCapacity = 32;
+
+		winrt::com_ptr<ID3D11Device> device;
+		uint64_t revision = 0;
+		uint32_t intermediateGeneration = 0;
+		std::array<VRRenderScaleStereoEyeResourceContract, 2> eyes{};
+		std::array<winrt::com_ptr<ID3D11Texture2D>,
+			kAuxiliaryLifetimeCapacity>
+			auxiliaryLifetimes{};
+		uint32_t auxiliaryLifetimeCount = 0;
+	};
+
+	/** @brief Immutable stereo policy and strong resource ownership for one compositor cycle. */
+	struct VRRenderScaleStereoPresentationPacket
+	{
+		VRRenderScaleHotPresentationContract contract{};
+		std::shared_ptr<const VRRenderScaleStereoResourceLifetime> resources;
+
+		[[nodiscard]] bool IsValid() const noexcept
+		{
+			return contract.compositorCycleToken != 0 && resources;
+		}
+	};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	enum class VRRenderScaleCPUPerformanceCounter : std::size_t
+	{
+		WindowStartFrame,
+		ResourceFullValidations,
+		ResourceContractPublishes,
+		ResourceContractInvalidations,
+		ResourceContractStableChecks,
+		ResourceContractStableHits,
+		ResourceContractStableMisses,
+		HotContractPublishes,
+		HotContractReuses,
+		PromotionFastSkips,
+		PromotionCandidates,
+		BoundsGuardFastSkips,
+		BoundsGuardCandidates,
+		DeferredRecoveryFastSkips,
+		DeferredRecoveryCandidates,
+		NativeGuardFastSkips,
+		NativeGuardCandidates,
+		RetirementFastSkips,
+		RetirementServices,
+		TrimFastSkips,
+		TrimServices,
+		MemoryTelemetryFastSkips,
+		MemoryTelemetryCandidates,
+		PostMutationGuardFastSkips,
+		PostMutationGuardServices,
+		PresentationPacketFastSkips,
+		PresentationPacketCaptures,
+		PresentationPacketCycleReuses,
+		PresentationLifetimeReuses,
+		PresentationLifetimeRebuilds,
+		PresentationPacketInvalidations,
+		PresentationCommitValidations,
+		PresentationCommitAccepts,
+		PresentationCommitRejects,
+		PresentationQueueWaitTotalNanoseconds,
+		PresentationQueueWaitMaximumNanoseconds,
+		PresentationQueueHoldTotalNanoseconds,
+		PresentationQueueHoldMaximumNanoseconds,
+		Count
+	};
+	using VRRenderScaleCPUPerformanceSnapshot = std::array<
+		uint64_t,
+		static_cast<std::size_t>(
+			VRRenderScaleCPUPerformanceCounter::Count)>;
+#endif
+
 	struct PerfModeState
 	{
 		struct BootSnapshot
@@ -1358,6 +1466,12 @@ public:
 	json BuildVRRenderScaleIterationRecord() const;
 	bool WriteVRRenderScaleIterationRecord() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	VRRenderScaleCPUPerformanceSnapshot
+	GetVRRenderScaleCPUPerformanceSnapshot() const noexcept;
+	[[nodiscard]] bool IsVRRenderScaleCPUPerformanceTelemetryActive() const noexcept;
+	void StartVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	void StopVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	void ResetVRRenderScaleCPUPerformanceTelemetry() noexcept;
 	void StartVRLoadPresentationProbe();
 	void StopVRLoadPresentationProbe();
 	void ResetVRLoadPresentationProbe();
@@ -1817,6 +1931,26 @@ public:
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];       // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];   // per-eye render resolution
 	eastl::unique_ptr<Texture2D> submitStageDLSSSharpenerTexture[2];  // per-eye output resolution
+	mutable std::recursive_mutex vrRenderScaleStereoPresentationPacketMutex;
+	std::atomic<uint64_t> vrRenderScaleStereoResourceRevision{ 1 };
+	mutable std::shared_ptr<const VRRenderScaleStereoResourceLifetime>
+		vrRenderScaleStereoResourceLifetime;
+	mutable VRRenderScaleStereoPresentationPacket
+		vrRenderScaleStereoPresentationPacket;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	mutable std::atomic_bool vrRenderScaleCPUPerformanceTelemetryActive{ false };
+	mutable std::array<
+		std::atomic<uint64_t>,
+		static_cast<std::size_t>(
+			VRRenderScaleCPUPerformanceCounter::Count)>
+		vrRenderScaleCPUPerformanceCounters{};
+	void RecordVRRenderScaleCPUPerformanceCounter(
+		VRRenderScaleCPUPerformanceCounter a_counter,
+		uint64_t a_delta = 1) const noexcept;
+	void RecordVRRenderScaleCPUPerformanceMaximum(
+		VRRenderScaleCPUPerformanceCounter a_counter,
+		uint64_t a_value) const noexcept;
+#endif
 	struct RetiredVRIntermediateTextures
 	{
 		uint32_t retireFrame = 0;
@@ -1870,7 +2004,10 @@ public:
 	winrt::com_ptr<IDXGIAdapter3> vrRenderScaleMemoryAdapter;
 	ID3D11Device* vrRenderScaleMemoryAdapterDevice = nullptr;
 	uint32_t vrRenderScaleMemoryLastSampleFrame = 0;
+	std::atomic_bool vrRenderScaleMemorySnapshotValid{ false };
 	winrt::com_ptr<ID3D11Query> vrRenderScaleMemoryTrimFence;
+	// Publishes the thread-affine trim payload to polling call sites.
+	std::atomic_bool vrRenderScaleMemoryTrimPending{ false };
 	uint64_t vrRenderScaleMemoryTrimOwnerEpoch = 0;
 	VRRenderScaleMemoryTrimReason vrRenderScaleMemoryTrimPendingReason = VRRenderScaleMemoryTrimReason::None;
 	uint32_t vrRenderScaleMemoryTrimRequestedFrame = 0;
@@ -1995,8 +2132,9 @@ public:
 		vr::EVREye a_eye,
 		const vr::Texture_t* a_texture,
 		const vr::VRTextureBounds_t* a_bounds) const;
-	[[nodiscard]] std::unique_lock<std::recursive_mutex>
-	AcquireVRRenderScalePresentationCommitLock() const;
+	[[nodiscard]] VRRenderScaleStereoPresentationPacket
+	CaptureVRRenderScaleStereoPresentationPacket(
+		uint64_t a_compositorCycleToken) const;
 
 	struct VRPostLoadCompositorKeepaliveSubmission
 	{
@@ -2082,11 +2220,18 @@ public:
 	void ServiceVRNativeRestorePresentationRecovery(
 		uint64_t a_compositorCycleToken);
 	void ClearVRNativeRestorePresentationWatchdog();
+	void InvalidateVRRenderScaleStereoPresentationPacket(
+		bool a_releaseResources = false);
+	[[nodiscard]] bool IsVRRenderScaleStereoPresentationPacketCurrentLocked(
+		const VRRenderScaleStereoPresentationPacket& a_packet,
+		const VRRenderScaleHotPresentationContract& a_current) const;
 	bool RecordVRNativeRestorePresentationObservationIfUnprotected(
-		const VRRenderScalePresentationObservation& a_observation);
+		const VRRenderScalePresentationObservation& a_observation,
+		const VRRenderScaleStereoPresentationPacket* a_packet = nullptr);
 	void RecordVRRenderScalePresentationObservation(
 		const VRRenderScalePresentationObservation& a_observation,
-		bool a_compositorHoldLockOwned = false);
+		bool a_compositorHoldLockOwned = false,
+		const VRRenderScaleStereoPresentationPacket* a_packet = nullptr);
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		const char** a_decisionReason = nullptr);
@@ -2186,6 +2331,29 @@ public:
 		const VRRenderScaleProfileSnapshot& a_stable) const;
 
 	// D3D11 textures
+	struct CommonVendorTextureContract
+	{
+		const Texture2D* wrapper = nullptr;
+		ID3D11Texture2D* resource = nullptr;
+		ID3D11ShaderResourceView* srv = nullptr;
+		ID3D11UnorderedAccessView* uav = nullptr;
+		D3D11_TEXTURE2D_DESC desc{};
+	};
+	struct CommonVendorResourceContract
+	{
+		bool valid = false;
+		uint64_t generation = 0;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		ID3D11Device* device = nullptr;
+		ID3D11Texture2D* mainTexture = nullptr;
+		ID3D11ShaderResourceView* mainSRV = nullptr;
+		ID3D11UnorderedAccessView* mainUAV = nullptr;
+		CommonVendorTextureContract reactiveMask;
+		CommonVendorTextureContract transparencyMask;
+		CommonVendorTextureContract motionVectors;
+		CommonVendorTextureContract runtimeFsrDepth;
+		CommonVendorTextureContract sharpener;
+	};
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
@@ -2238,6 +2406,8 @@ public:
 	bool resourceCheckStable = false;
 	UpscaleMethod resourceCheckStableMethod = UpscaleMethod::kNONE;
 	uint64_t resourceCheckStableKey = 0;
+	uint64_t commonVendorResourceGeneration = 1;
+	CommonVendorResourceContract commonVendorResourceContract;
 	std::optional<uint64_t> commonResourceFailureRequestKey;
 	std::optional<uint64_t> fsrResourceFailureRequestKey;
 	bool historyResetTrackingInitialized = false;
@@ -2274,6 +2444,8 @@ public:
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
+	// Exact owner publication avoids locking for the normally empty deferred path.
+	std::atomic<uint64_t> deferredVRRenderScalePostLoadRecoveryEpoch{ 0 };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	mutable std::mutex pendingVRRenderScaleRequestMutex;
 	std::optional<VRRenderScaleDesiredProfile> pendingVRRenderScaleRequest;
@@ -2292,6 +2464,7 @@ public:
 	std::atomic<VRRenderScaleTransitionState> vrRenderScaleTransitionState{ VRRenderScaleTransitionState::Idle };
 	mutable std::mutex vrRenderScaleStressSessionMutex;
 	VRRenderScaleStressSessionSnapshot vrRenderScaleStressSession{};
+	std::atomic_bool vrRenderScaleStressSessionActive{ false };
 	std::atomic<uint64_t> nextVRRenderScaleStressSessionID{ 1 };
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };
@@ -2391,6 +2564,7 @@ public:
 	uint32_t submitStageVendorAdmissionDLSSPreset = kDLSSPresetK;
 	uint32_t submitStageVendorAdmissionFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageVendorAdmissionEyeMask = 0;
+	VRRenderScaleHotPresentationContract submitStageHotPresentationContract{};
 	uint64_t submitStageVendorRelatchDeferredEpoch = 0;
 	struct SubmitStageVendorEyeState
 	{
@@ -3000,6 +3174,15 @@ private:
 	void ServiceVRIntermediateTextureCleanup(bool a_forceFence = false);
 	VRVendorResourceResetResult ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false, bool a_destroySharedResources = true, bool a_preserveVRIntermediateTextures = false, bool a_includePendingFSRReset = true);
 	VRVendorResourceResetResult RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
+	VRRenderScaleHotPresentationContract CaptureVRRenderScaleHotPresentationContractLocked(
+		uint64_t a_compositorCycleToken,
+		uint32_t a_frame) const;
+	VRRenderScaleHotPresentationContract GetSubmitStageHotPresentationContract(
+		uint64_t a_compositorCycleToken,
+		uint32_t a_frame);
+	void InvalidateCommonVendorResourceContract();
+	void PublishCommonVendorResourceContract(UpscaleMethod a_upscaleMethod);
+	bool IsCommonVendorResourceContractCurrent(UpscaleMethod a_upscaleMethod) const;
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
 	bool IsVRRenderScalePhysicalContractConverged(
 		UpscaleMethod a_upscaleMethod,

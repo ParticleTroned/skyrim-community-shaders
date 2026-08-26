@@ -41,6 +41,7 @@ namespace
 	std::atomic<uint64_t> g_openVRSubmitCycleState{ 0 };
 	std::mutex g_openVRSubmitCyclePublishMutex;
 	std::mutex g_vrPostLoadCompositorSubmitMutex;
+	std::mutex g_vrRenderScalePresentationWorkMutex;
 	std::mutex g_presentedMenuSurfaceMutex;
 
 	enum class VRNativeRestoreCyclePresentationPath : uint8_t
@@ -87,9 +88,8 @@ namespace
 		}
 	};
 
-	// Access is serialized by Upscaling's recursive presentation/relatch queue
-	// lease. Once one eye establishes native or black ownership, the peer eye in
-	// that exact OpenVR cycle must use the same presentation class.
+	// Submit work is serialized independently of relatch queue publication. Once
+	// one eye establishes ownership, its peer must use the same presentation class.
 	VRNativeRestoreCyclePresentationState
 		g_vrNativeRestoreCyclePresentationState{};
 
@@ -400,6 +400,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			{
 				const std::scoped_lock cyclePublishLock(
 					g_openVRSubmitCyclePublishMutex);
+				const std::scoped_lock presentationWorkLock(
+					g_vrRenderScalePresentationWorkMutex);
 				const uint64_t previousCycleState =
 					g_openVRSubmitCycleState.load(std::memory_order_acquire);
 				const uint64_t previousCompositorCycleToken =
@@ -409,9 +411,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						1u :
 						previousCompositorCycleToken + 1u;
 				auto& upscaling = globals::features::upscaling;
-				// Service promotion before atomically publishing the token and
-				// resulting policy. A concurrent Submit keeps the complete old
-				// snapshot; the next one gets the complete new snapshot.
+				// Finish prior presentation work before atomically publishing the
+				// next cycle token and its complete promoted policy.
 				upscaling.NotifyVRPostLoadCompositorCycleStarted(
 					compositorCycleToken,
 					result == vr::VRCompositorError_None);
@@ -434,6 +435,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 		{
 			auto& vr = globals::features::vr;
 			auto& upscaling = globals::features::upscaling;
+			const std::scoped_lock presentationWorkLock(
+				g_vrRenderScalePresentationWorkMutex);
 			uint64_t compositorCycleState =
 				g_openVRSubmitCycleState.load(std::memory_order_acquire);
 			uint64_t compositorCycleToken = compositorCycleState >> 1u;
@@ -458,7 +461,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				postLoadHoldActiveAtHookEntry ||
 				quarantinedAtHookEntry) {
 				// Keep startup hold/quarantine eye decisions serialized without
-				// holding a project mutex across ordinary OpenVR calls.
+				// holding the post-load arbitration mutex across ordinary calls.
 				postLoadSubmitLock.lock();
 				compositorCycleState =
 					g_openVRSubmitCycleState.load(std::memory_order_acquire);
@@ -466,12 +469,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				submitStageVendorResumeCooldownAtCycleStart =
 					(compositorCycleState & kOpenVRCycleCooldownBit) != 0;
 			}
-			// Keep the exact policy decision, all vendor/D3D work, and the
-			// selected compositor submission in one relatch transaction. This
-			// also makes an accepted first-eye cycle visible before quarantine
-			// arbitration for its peer.
-			const auto renderScalePresentationCommitLock =
-				upscaling.AcquireVRRenderScalePresentationCommitLock();
+			// Retain the complete stereo generation while vendor, overlay, and
+			// OpenVR work runs. Observation commit revalidates this exact packet.
+			const auto renderScalePresentationPacket =
+				upscaling.CaptureVRRenderScaleStereoPresentationPacket(
+					compositorCycleToken);
+			const auto* renderScalePresentationPacketPtr =
+				renderScalePresentationPacket.IsValid() ?
+					&renderScalePresentationPacket :
+					nullptr;
 			const bool acceptedNativeRestoreCycleAtHookEntry =
 				g_vrNativeRestoreCyclePresentationState
 						.compositorCycleToken ==
@@ -638,7 +644,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						probePresentationObservation &&
 						probePresentationObservation->valid) {
 						upscaling.RecordVRRenderScalePresentationObservation(
-							*probePresentationObservation);
+							*probePresentationObservation,
+							false,
+							renderScalePresentationPacketPtr);
 					}
 					return fallbackResult;
 				};
@@ -905,7 +913,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					}
 					(void)upscaling
 						.RecordVRNativeRestorePresentationObservationIfUnprotected(
-							freshObservation);
+							freshObservation,
+							renderScalePresentationPacketPtr);
 				};
 			const auto submitLatchedNativeRestoreCycle = [&](
 															 const char* a_path,
@@ -1269,7 +1278,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 								0,
 								&presentationObservation);
 							if (result == vr::VRCompositorError_None) {
-								upscaling.RecordVRRenderScalePresentationObservation(presentationObservation);
+								upscaling.RecordVRRenderScalePresentationObservation(
+									presentationObservation,
+									false,
+									renderScalePresentationPacketPtr);
 								if (inSceneOverlayComposited) {
 									vr.MarkAutoHideOverlayPresented();
 								}
@@ -1508,7 +1520,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					Upscaling::VRRenderScalePresentationPath::
 						BoundsMismatchOriginalFallback) {
 				upscaling.RecordVRRenderScalePresentationObservation(
-					presentationObservation);
+					presentationObservation,
+					false,
+					renderScalePresentationPacketPtr);
 			} else if (nativeRestoreGuardActive &&
 					   result != vr::VRCompositorError_None) {
 				upscaling.RecordVRNativeRestorePresentationRejection(

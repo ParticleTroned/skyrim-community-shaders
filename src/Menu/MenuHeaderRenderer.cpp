@@ -168,8 +168,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 			ImGui::TableNextColumn();
 			ImGui::BeginDisabled(performanceMeasurementActive);
 			if (Util::ButtonWithFlash(T("menu.save_settings", "Save Settings"), { -1, 0 })) {
-				if (globals::state->Save())
-					globals::state->SaveTheme();
+				globals::state->Save();
 			}
 			ImGui::EndDisabled();
 
@@ -189,7 +188,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 			ImGui::BeginDisabled(performanceMeasurementActive || capturing || awaitingMenuClose);
 			const std::string clearLabel = awaitingMenuClose ?
 			                                   "Close the menu to finish" :
-			                           capturing ?
+			                               capturing ?
 			                                   std::format("Capturing... {}", shaderCache->GetActiveShaderCaptureFramesRemaining()) :
 			                                   T("menu.clear_shader_cache", "Clear Shader Cache");
 			if (ImGui::Button(clearLabel.c_str(), { -1, 0 })) {
@@ -262,8 +261,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			uiIcons.saveSettings.texture,
 			T("menu.save_settings", "Save Settings"),
 			[]() {
-				if (globals::state->Save())
-					globals::state->SaveTheme();
+				globals::state->Save();
 			},
 			!performanceMeasurementActive });
 	}

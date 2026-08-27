@@ -1,0 +1,32 @@
+name: Internal source export
+
+on:
+  push:
+    branches:
+      - codex/internal-source-export
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current main-VR
+        uses: actions/checkout@v4
+        with:
+          ref: main-VR
+          fetch-depth: 1
+          submodules: false
+
+      - name: Archive tracked source
+        shell: bash
+        run: git archive --format=zip --output=source-export-main-vr.zip HEAD
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-export-main-vr
+          path: source-export-main-vr.zip
+          if-no-files-found: error
+          retention-days: 1

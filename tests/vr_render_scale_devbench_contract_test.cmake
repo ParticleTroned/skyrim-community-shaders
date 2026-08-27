@@ -71,6 +71,7 @@ foreach(_required_text IN ITEMS
     "qualification_cancel"
     "transitionId"
     "ownerId"
+	"startPerformanceTelemetry"
     "expectedSessionId"
     "expectedStartFrame"
     "expectedCellEditorId"
@@ -92,6 +93,15 @@ string(JSON _timeout_default ERROR_VARIABLE _timeout_error
 if(_timeout_error OR NOT _timeout_default EQUAL 120000)
     message(FATAL_ERROR
         "Render-scale qualification timeout default is invalid: ${_timeout_error}"
+    )
+endif()
+
+string(JSON _start_performance_default ERROR_VARIABLE _start_performance_error
+    GET "${_descriptor}" inputSchema properties startPerformanceTelemetry default
+)
+if(_start_performance_error OR _start_performance_default)
+    message(FATAL_ERROR
+        "Render-scale dispatch telemetry default is invalid: ${_start_performance_error}"
     )
 endif()
 
@@ -164,6 +174,10 @@ foreach(_required_behavior IN ITEMS
     "cpu_performance_session_mismatch"
     "cpu_performance_start_frame_mismatch"
 	"gpu_performance_start_frame_mismatch"
+	"performance_telemetry_already_active"
+	"performance_telemetry_dispatch_frame_mismatch"
+	"cpuStartFrame != frame || gpuStartFrame != frame"
+	"result[\"performanceTelemetry\"]"
     "cpu_performance_session_id_unavailable"
     "GetVRRenderScaleCPUPerformanceSessionID()"
     "{ \"sessionId\", sessionID }"

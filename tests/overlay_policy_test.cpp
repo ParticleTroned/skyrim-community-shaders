@@ -1,4 +1,5 @@
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
+#include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Menu/OverlayPolicy.h"
 
 #include <cstdint>
@@ -93,9 +94,54 @@ namespace
 		return true;
 	}
 
+	constexpr bool CoversOpenVRPayloadSelection()
+	{
+		using OpenVRSubmitLeasePolicy::PayloadKind;
+		using OpenVRSubmitLeasePolicy::SelectPayloadKind;
+
+		return SelectPayloadKind(false, false) == PayloadKind::Texture &&
+		       SelectPayloadKind(true, false) == PayloadKind::TextureWithPose &&
+		       SelectPayloadKind(false, true) == PayloadKind::TextureWithDepth &&
+		       SelectPayloadKind(true, true) ==
+				       PayloadKind::TextureWithPoseAndDepth;
+	}
+
+	constexpr bool CoversOpenVRPublicationLease()
+	{
+		using OpenVRSubmitLeasePolicy::CanPublish;
+		using OpenVRSubmitLeasePolicy::PublicationLease;
+
+		PublicationLease lease{
+			.generation = 17,
+			.deviceIdentity = 0x1234,
+			.colorTextureRetained = true,
+		};
+		if (!CanPublish(lease, 17, 0x1234) ||
+			CanPublish(lease, 18, 0x1234) ||
+			CanPublish(lease, 17, 0x5678)) {
+			return false;
+		}
+		lease.generation = 0;
+		if (CanPublish(lease, 0, 0x1234))
+			return false;
+		lease.generation = 17;
+
+		lease.depthTextureRequired = true;
+		if (CanPublish(lease, 17, 0x1234))
+			return false;
+		lease.depthTextureRetained = true;
+		if (!CanPublish(lease, 17, 0x1234))
+			return false;
+
+		lease.colorTextureRetained = false;
+		return !CanPublish(lease, 17, 0x1234);
+	}
+
 	static_assert(CoversShaderCompilationStatusAdmission());
 	static_assert(CoversShaderCompilationHMDRouting());
 	static_assert(CoversVRInSceneOverlaySubmitAdmission());
+	static_assert(CoversOpenVRPayloadSelection());
+	static_assert(CoversOpenVRPublicationLease());
 }
 
 int main() {}

@@ -36,7 +36,7 @@ SamplerState PointSampler : register(s0);
 		bool humanProfile = humanClass > 0.5;
 		bool isFemale = humanClass > 1.5;
 
-		float4 color = BurleyNormalizedSS(DTid.xy, texCoord, sssAmount, humanProfile, isFemale);
+		float4 color = BurleyNormalizedSS(DTid.xy, texCoord, sssAmount, humanProfile, isFemale, SSSRW[DTid.xy]);
 		SSSRW[DTid.xy] = max(0, color);
 	}
 
@@ -57,10 +57,12 @@ SamplerState PointSampler : register(s0);
 		float humanClass = MaskTexture[DTid.xy].y;
 		bool humanProfile = humanClass > 0.5;
 
+		float4 originalColor = SSSRW[DTid.xy];
 		float4 color = SSSSBlurCS(texCoord, float2(0.0, 1.0), sssAmount, humanProfile);
+		float3 albedo = SSSDecodeAlbedo(AlbedoTexture[DTid.xy].rgb);
+		color.rgb = SSSApplyAlbedo(color.rgb, Color::IrradianceToLinear(originalColor.rgb), albedo, ScatterMode);
 		color.rgb = Color::IrradianceToGamma(color.rgb);
-		color.rgb = SSSApplyAlbedo(color.rgb, AlbedoTexture[DTid.xy].rgb, ScatterMode);
-		SSSRW[DTid.xy] = float4(color.rgb, 1.0);
+		SSSRW[DTid.xy] = float4(color.rgb, originalColor.a);
 	}
 
 #endif

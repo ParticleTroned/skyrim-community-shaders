@@ -2,6 +2,19 @@
 
 #include "TruePBR.h"
 
+static bool IsShaderTextureSet(RE::BSTextureSet* textureSet)
+{
+	return textureSet == nullptr || netimmerse_cast<RE::BSShaderTextureSet*>(textureSet) != nullptr;
+}
+
+/** @brief Clears malformed links before invoking BSTextureSet virtual methods. */
+static void DiscardMislinkedTextureSet(RE::NiPointer<RE::BSTextureSet>& textureSet)
+{
+	if (!IsShaderTextureSet(textureSet.get())) {
+		textureSet.reset();
+	}
+}
+
 BSLightingShaderMaterialPBR::~BSLightingShaderMaterialPBR()
 {
 	All.erase(this);
@@ -106,6 +119,7 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 	hashes.projectedMaterialLogMicrofacetDensity = projectedMaterialGlintParameters.logMicrofacetDensity * 100.f;
 	hashes.projectedMaterialMicrofacetRoughness = projectedMaterialGlintParameters.microfacetRoughness * 100.f;
 	hashes.projectedMaterialDensityRandomization = projectedMaterialGlintParameters.densityRandomization * 100.f;
+	DiscardMislinkedTextureSet(textureSet);
 	if (textureSet != nullptr) {
 		hashes.rmaodHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(RmaosTexture));
 		hashes.emissiveHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(EmissiveTexture));
@@ -172,7 +186,8 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 	const auto& stateData = globals::game::graphicsState->GetRuntimeData();
 
 	if (diffuseTexture == nullptr || diffuseTexture == stateData.defaultTextureNormalMap) {
-		if (inTextureSet != nullptr && netimmerse_cast<RE::BSShaderTextureSet*>(inTextureSet) == nullptr) {
+		if (!IsShaderTextureSet(inTextureSet)) {
+			textureSet.reset();
 			inTextureSet = nullptr;
 		}
 		BSLightingShaderMaterialBase::OnLoadTextureSet(arg1, inTextureSet);
@@ -186,6 +201,7 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 		if (inTextureSet != nullptr) {
 			textureSet = RE::NiPointer(inTextureSet);
 		}
+		DiscardMislinkedTextureSet(textureSet);
 		if (textureSet != nullptr) {
 			textureSet->SetTexture(RmaosTexture, rmaosTexture);
 			textureSet->SetTexture(EmissiveTexture, emissiveTexture);

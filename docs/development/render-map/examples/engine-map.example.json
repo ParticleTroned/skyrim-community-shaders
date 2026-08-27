@@ -1,0 +1,92 @@
+{
+  "schema": {
+    "name": "csx.render-engine-map",
+    "major": 1,
+    "minor": 0,
+    "producerVersion": "design-example-1"
+  },
+  "mapId": "engine-map-skyrimvr-1.4.15-example",
+  "mapRevision": 1,
+  "engineBuild": {
+    "product": "Skyrim VR",
+    "runtime": "1.4.15",
+    "executable": {
+      "name": "SkyrimVR.exe",
+      "version": "1.4.15",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "modules": []
+  },
+  "entities": [
+    {
+      "id": "engine-shader-family-0001",
+      "kind": "shader-family",
+      "name": "BSLightingShader",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "Lighting",
+        "route": "vr"
+      },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-hook-boundary-0001",
+      "kind": "hook-boundary",
+      "name": "BSBatchRenderer::RenderPassImmediately",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x0",
+        "relocationId": null,
+        "vfuncIndex": null,
+        "renderPhase": null
+      },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    }
+  ],
+  "relations": [
+    {
+      "id": "relation-0001",
+      "type": "corresponds-to",
+      "from": "engine:engine-shader-family-0001",
+      "to": "shader:pass-0001",
+      "evidenceClass": "inferred",
+      "confidence": "low",
+      "evidenceRefs": ["evidence-0001"],
+      "attributes": {
+        "exampleOnly": true
+      },
+      "extensions": {}
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evidence-0001",
+      "class": "inferred",
+      "statement": "Illustrative record only; it does not assert a real pass-0001 host binding.",
+      "artifact": {
+        "kind": "other",
+        "name": "render-map design example",
+        "version": "1",
+        "sha256": null
+      },
+      "locator": "docs/development/render-map/examples/engine-map.example.json",
+      "confidence": "low",
+      "extensions": {}
+    }
+  ],
+  "unresolved": [
+    {
+      "id": "unresolved-0001",
+      "question": "Which exact Lighting technique and permutation does the selected opaque candidate use?",
+      "relatedRefs": ["engine:engine-shader-family-0001", "shader:pass-0001"],
+      "blocking": true,
+      "nextEvidence": "Capture BeginTechnique, SetupGeometry, and bound bytecode identity for the candidate.",
+      "extensions": {}
+    }
+  ],
+  "extensions": {
+    "exampleOnly": true
+  }
+}

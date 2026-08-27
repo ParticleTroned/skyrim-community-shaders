@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:schema:render-capture-manifest:1",
+  "title": "CSX bounded render capture manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "captureId",
+    "status",
+    "createdAtUtc",
+    "producer",
+    "capabilities",
+    "inputs",
+    "environment",
+    "scenario",
+    "bounds",
+    "clock",
+    "artifacts",
+    "completion",
+    "extensions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "$ref": "#/$defs/schemaIdentity" },
+    "captureId": { "type": "string", "pattern": "^capture-[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "status": { "enum": ["armed", "capturing", "complete", "incomplete", "failed"] },
+    "createdAtUtc": { "type": "string", "format": "date-time" },
+    "producer": {
+      "type": "object",
+      "required": ["name", "version", "gitCommit", "dirty"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "gitCommit": { "type": ["string", "null"], "pattern": "^[A-Fa-f0-9]{40}$" },
+        "dirty": { "type": "boolean" }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "inputs": { "$ref": "#/$defs/inputs" },
+    "environment": { "$ref": "#/$defs/environment" },
+    "scenario": { "$ref": "#/$defs/scenario" },
+    "bounds": { "$ref": "#/$defs/bounds" },
+    "clock": {
+      "type": "object",
+      "required": ["source", "frequencyHz", "startTick"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "const": "QueryPerformanceCounter" },
+        "frequencyHz": { "type": "integer", "minimum": 1 },
+        "startTick": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "completion": { "$ref": "#/$defs/completion" },
+    "extensions": { "$ref": "#/$defs/extensions" }
+  },
+  "$defs": {
+    "schemaIdentity": {
+      "type": "object",
+      "required": ["name", "major", "minor", "producerVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "const": "csx.render-capture-manifest" },
+        "major": { "const": 1 },
+        "minor": { "type": "integer", "minimum": 0 },
+        "producerVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "fileInput": {
+      "type": "object",
+      "required": ["availability", "path", "sha256", "schemaMajor"],
+      "additionalProperties": false,
+      "properties": {
+        "availability": { "enum": ["verified", "unverified", "unavailable"] },
+        "path": { "type": ["string", "null"], "minLength": 1 },
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "schemaMajor": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "required": ["shaderManifest", "engineMap", "csxBuildManifest"],
+      "additionalProperties": false,
+      "properties": {
+        "shaderManifest": { "$ref": "#/$defs/fileInput" },
+        "engineMap": { "$ref": "#/$defs/fileInput" },
+        "csxBuildManifest": { "$ref": "#/$defs/fileInput" }
+      }
+    },
+    "module": {
+      "type": "object",
+      "required": ["name", "version", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": ["string", "null"] },
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "skyrim",
+        "csx",
+        "runtimeRoute",
+        "modEnvironment",
+        "graphics",
+        "shaderCache"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "skyrim": { "$ref": "#/$defs/module" },
+        "csx": { "$ref": "#/$defs/module" },
+        "runtimeRoute": {
+          "enum": [
+            "steamvr-openvr",
+            "steamvr-openxr",
+            "opencomposite-openxr",
+            "virtualdesktop-vdxr",
+            "valve-null-hmd",
+            "flat",
+            "unknown"
+          ]
+        },
+        "modEnvironment": {
+          "type": "object",
+          "required": ["manager", "instance", "profile", "modlistSha256", "pluginLoadOrderSha256"],
+          "additionalProperties": false,
+          "properties": {
+            "manager": { "enum": ["MO2", "none", "other"] },
+            "instance": { "type": ["string", "null"] },
+            "profile": { "type": ["string", "null"] },
+            "modlistSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+            "pluginLoadOrderSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+          }
+        },
+        "graphics": {
+          "type": "object",
+          "required": ["gpu", "driver", "renderWidth", "renderHeight", "presetSha256", "settingsSha256"],
+          "additionalProperties": false,
+          "properties": {
+            "gpu": { "type": ["string", "null"], "minLength": 1 },
+            "driver": { "type": ["string", "null"], "minLength": 1 },
+            "renderWidth": { "type": ["integer", "null"], "minimum": 1 },
+            "renderHeight": { "type": ["integer", "null"], "minimum": 1 },
+            "presetSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+            "settingsSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+          }
+        },
+        "shaderCache": {
+          "type": "object",
+          "required": ["identity", "inventorySha256", "coldAtStart"],
+          "additionalProperties": false,
+          "properties": {
+            "identity": { "type": "string", "minLength": 1 },
+            "inventorySha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+            "coldAtStart": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": ["id", "saveFingerprint", "cell", "worldspace", "weather", "gameHour", "cameraMarker", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "saveFingerprint": { "type": ["string", "null"] },
+        "cell": { "type": ["string", "null"] },
+        "worldspace": { "type": ["string", "null"] },
+        "weather": { "type": ["string", "null"] },
+        "gameHour": { "type": ["number", "null"], "minimum": 0, "maximum": 24 },
+        "cameraMarker": { "type": ["string", "null"] },
+        "notes": { "type": "string" }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "required": ["eventKinds", "maxFrames", "maxDurationMs", "maxEvents", "maxBytes", "pointerPolicy"],
+      "additionalProperties": false,
+      "properties": {
+        "eventKinds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "maxFrames": { "type": "integer", "minimum": 1 },
+        "maxDurationMs": { "type": "integer", "minimum": 1 },
+        "maxEvents": { "type": "integer", "minimum": 1 },
+        "maxBytes": { "type": "integer", "minimum": 1 },
+        "maxShaderObservations": { "type": "integer", "minimum": 1 },
+        "maxStageShaderObservations": { "type": "integer", "minimum": 1 },
+        "maxResourceObservations": { "type": "integer", "minimum": 1 },
+        "maxTargetViewObservations": { "type": "integer", "minimum": 1 },
+        "maxTargetBindingObservations": { "type": "integer", "minimum": 1 },
+        "pointerPolicy": { "enum": ["retain", "hash", "redact"] }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["kind", "path", "mediaType", "sha256", "bytes", "complete"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["events-jsonl", "binary-events", "screenshot", "renderdoc", "report", "other"] },
+        "path": { "type": "string", "minLength": 1 },
+        "mediaType": { "type": "string", "minLength": 1 },
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "complete": { "type": "boolean" }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "required": ["reason", "firstSequence", "lastSequence", "eventCount", "droppedEventCount", "truncated", "collectorOverheadUs", "errors"],
+      "additionalProperties": false,
+      "properties": {
+        "reason": { "enum": ["not-finished", "requested", "frame-limit", "time-limit", "event-limit", "byte-limit", "shutdown", "failure"] },
+        "firstSequence": { "type": ["integer", "null"], "minimum": 0 },
+        "lastSequence": { "type": ["integer", "null"], "minimum": 0 },
+        "eventCount": { "type": "integer", "minimum": 0 },
+        "droppedEventCount": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "collectorOverheadUs": { "type": ["number", "null"], "minimum": 0 },
+        "errors": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+      "additionalProperties": true
+    }
+  }
+}

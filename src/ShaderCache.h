@@ -550,6 +550,8 @@ namespace SIE
 			uint32_t descriptor);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
+		std::wstring GetShaderDiskPath(
+			const RE::BSShader& shader, uint32_t descriptor, ShaderClass shaderClass) const;
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
 			uint32_t descriptor);

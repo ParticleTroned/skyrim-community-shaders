@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "acceptedUnresolvedIncludes": [
+    {
+      "sourceVirtualPath": "RunGrass.hlsl",
+      "token": "WaterLighting/WaterCaustics.hlsli",
+      "guard": "WATER_LIGHTING",
+      "classification": "dormant-stale-reference",
+      "reason": "No CSX feature or compile site emits WATER_LIGHTING. The current feature is WATER_EFFECTS and its deployed include is WaterEffects/WaterCaustics.hlsli. This edge does not enter a current preprocessed permutation, but must remain visible until the dormant block is removed or migrated."
+    }
+  ],
+  "manualPipelines": [
+    {
+      "id": "vr-menu-in-scene-quad",
+      "owner": "VR",
+      "kind": "independent-overlay-draw",
+      "shaders": [
+        "VR/InSceneOverlay.vs.hlsl",
+        "VR/InSceneOverlay.ps.hlsl"
+      ],
+      "compileSites": [
+        "src/Features/VR/InSceneOverlay.cpp:1503",
+        "src/Features/VR/InSceneOverlay.cpp:1517"
+      ],
+      "invocationSite": "src/Features/VR/InSceneOverlay.cpp:2001",
+      "inputs": [
+        "menu texture SRV",
+        "in-scene overlay constant buffer",
+        "overlay sampler"
+      ],
+      "outputs": [
+        "currently bound in-scene render target"
+      ],
+      "ordering": "Drawn in the scene-overlay route before OpenVR submission; distinct from submit-hook composition.",
+      "routes": {
+        "flat": false,
+        "vr": true,
+        "stereo": true,
+        "overlay": true,
+        "vendor": false,
+        "compatibility": false
+      },
+      "classificationStatus": "source-verified"
+    },
+    {
+      "id": "vr-menu-submit-hook-composite",
+      "owner": "VR",
+      "kind": "independent-overlay-compute",
+      "shaders": [],
+      "inlineShader": "kSubmitCompositeCS",
+      "compileSites": [
+        "src/Features/VR/InSceneOverlay.cpp:1677"
+      ],
+      "invocationSite": "src/Features/VR/InSceneOverlay.cpp:2375",
+      "inputs": [
+        "menu texture SRV",
+        "submit-composite constant buffer",
+        "overlay sampler"
+      ],
+      "outputs": [
+        "OpenVR submit target UAV"
+      ],
+      "ordering": "Runs inside the compositor Submit hook after target selection and before the real eye submission.",
+      "routes": {
+        "flat": false,
+        "vr": true,
+        "stereo": true,
+        "overlay": true,
+        "vendor": false,
+        "compatibility": false
+      },
+      "classificationStatus": "source-verified"
+    }
+  ]
+}

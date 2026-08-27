@@ -1,0 +1,542 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:schema:render-event:1",
+  "title": "CSX render runtime event envelope",
+  "type": "object",
+  "required": [
+    "schema",
+    "captureId",
+    "sequence",
+    "timestampQpc",
+    "processId",
+    "threadId",
+    "frame",
+    "execution",
+    "deviceContextObservationId",
+    "type",
+    "scopes",
+    "causes",
+    "manifestRefs",
+    "engineRefs",
+    "observationRefs",
+    "payload",
+    "extensions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "$ref": "#/$defs/schemaIdentity" },
+    "captureId": { "type": "string", "pattern": "^capture-[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "timestampQpc": { "type": "integer", "minimum": 0 },
+    "processId": { "type": "integer", "minimum": 0 },
+    "threadId": { "type": "integer", "minimum": 0 },
+    "frame": { "$ref": "#/$defs/frame" },
+    "execution": { "$ref": "#/$defs/execution" },
+    "deviceContextObservationId": {
+      "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
+    },
+    "type": { "$ref": "#/$defs/eventType" },
+    "scopes": { "$ref": "#/$defs/scopes" },
+    "causes": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "uniqueItems": true
+    },
+    "manifestRefs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^(compile|pass)-[0-9]{4}$" },
+      "uniqueItems": true
+    },
+    "engineRefs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^engine-[a-z][a-z0-9-]*-[0-9]{4}$" },
+      "uniqueItems": true
+    },
+    "observationRefs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/observationRef" }
+    },
+    "payload": { "type": "object", "additionalProperties": true },
+    "extensions": { "$ref": "#/$defs/extensions" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "draw" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["operation", "pipelineStateObservationId"],
+                "properties": {
+                  "operation": {
+                    "enum": ["Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced", "DrawAuto", "DrawInstancedIndirect", "DrawIndexedInstancedIndirect"]
+                  },
+                  "pipelineStateObservationId": { "$ref": "#/$defs/observationId" }
+                },
+                "additionalProperties": true
+              },
+              {
+                "type": "object",
+                "required": ["schema", "operation", "immediateContextPointer", "vertexShaderObservationId", "pixelShaderObservationId", "targetBindingObservationId", "arguments"],
+                "properties": {
+                  "schema": { "const": "draw-call-v2" },
+                  "operation": { "enum": ["draw", "draw-indexed", "draw-instanced", "draw-indexed-instanced", "draw-auto", "draw-instanced-indirect", "draw-indexed-instanced-indirect"] },
+                  "immediateContextPointer": { "type": ["string", "null"] },
+                  "vertexShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "pixelShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "targetBindingObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "arguments": { "type": "object" }
+                },
+                "additionalProperties": true
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "dispatch" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["operation", "pipelineStateObservationId"],
+                "properties": {
+                  "operation": { "enum": ["Dispatch", "DispatchIndirect"] },
+                  "pipelineStateObservationId": { "$ref": "#/$defs/observationId" }
+                },
+                "additionalProperties": true
+              },
+              {
+                "type": "object",
+                "required": ["schema", "operation", "immediateContextPointer", "computeShaderObservationId", "arguments"],
+                "properties": {
+                  "schema": { "const": "dispatch-call-v1" },
+                  "operation": { "enum": ["dispatch", "dispatch-indirect"] },
+                  "immediateContextPointer": { "type": ["string", "null"] },
+                  "computeShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "arguments": { "type": "object" }
+                },
+                "additionalProperties": true
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "device-context-observed" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["schema", "deviceContextObservationId", "contextPointer", "pointerGeneration", "kind", "creationEvidence"],
+            "properties": {
+              "schema": { "const": "device-context-observation-v1" },
+              "deviceContextObservationId": { "$ref": "#/$defs/observationId" },
+              "contextPointer": { "type": ["string", "null"] },
+              "pointerGeneration": { "type": "integer", "minimum": 1 },
+              "kind": { "const": "immediate" },
+              "creationEvidence": { "const": "initial-immediate-context" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "target-view-observed" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["schema", "targetViewObservationId", "kind", "d3dObjectPointer", "pointerGeneration", "resourceObservationId", "format", "viewDimension", "subresources", "flags"],
+            "properties": {
+              "schema": { "const": "target-view-observation-v1" },
+              "targetViewObservationId": { "$ref": "#/$defs/observationId" },
+              "kind": { "enum": ["render-target", "depth-target", "shader-resource-view", "unordered-access-view"] },
+              "d3dObjectPointer": { "type": ["string", "null"] },
+              "pointerGeneration": { "type": "integer", "minimum": 1 },
+              "resourceObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "format": { "type": "integer", "minimum": 0 },
+              "viewDimension": { "type": "integer", "minimum": 0 },
+              "subresources": { "type": "object" },
+              "flags": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "render-target-bind" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["schema", "targetBindingObservationId", "renderTargetObservationIds", "depthTargetObservationId", "identityDetailsAvailable"],
+            "properties": {
+              "schema": { "const": "render-target-binding-v1" },
+              "targetBindingObservationId": { "$ref": "#/$defs/observationId" },
+              "renderTargetObservationIds": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] }
+              },
+              "depthTargetObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "identityDetailsAvailable": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "resource-observed" } } },
+      "then": { "properties": { "payload": {
+        "type": "object",
+        "required": ["schema", "resourceObservationId", "d3dObjectPointer", "pointerGeneration", "dimension", "widthOrBytes", "height", "depthOrArraySize", "mipLevels", "format", "sampleCount", "sampleQuality", "usage", "bindFlags", "cpuAccessFlags", "miscFlags", "structureByteStride"],
+        "properties": {
+          "schema": { "const": "resource-observation-v1" },
+          "resourceObservationId": { "$ref": "#/$defs/observationId" },
+          "d3dObjectPointer": { "type": ["string", "null"] },
+          "pointerGeneration": { "type": "integer", "minimum": 1 },
+          "dimension": { "enum": ["unknown", "buffer", "texture-1d", "texture-2d", "texture-3d"] }
+        },
+        "additionalProperties": true
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "resource-view-bind" } } },
+      "then": { "properties": { "payload": {
+        "type": "object",
+        "required": ["schema", "viewObservationId", "bindingKind", "stage", "slot"],
+        "properties": {
+          "schema": { "const": "resource-view-binding-v1" },
+          "viewObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+          "bindingKind": { "enum": ["shader-resource", "unordered-access"] },
+          "stage": { "enum": ["vertex", "hull", "domain", "geometry", "pixel", "compute", "output-merger"] },
+          "slot": { "type": "integer", "minimum": 0, "maximum": 127 }
+        },
+        "additionalProperties": false
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "resource-flow" } } },
+      "then": { "properties": { "payload": {
+        "type": "object",
+        "required": ["schema", "operation", "sourceResourceObservationId", "destinationResourceObservationId", "sourceSubresource", "destinationSubresource"],
+        "properties": {
+          "schema": { "const": "resource-flow-v1" },
+          "operation": { "enum": ["copy-resource", "copy-subresource-region", "resolve-subresource", "update-subresource", "copy-structure-count", "clear-render-target", "clear-unordered-access", "clear-depth-stencil", "generate-mips"] },
+          "sourceResourceObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+          "destinationResourceObservationId": { "$ref": "#/$defs/observationId" },
+          "sourceSubresource": { "type": "integer", "minimum": 0 },
+          "destinationSubresource": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "gap" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["droppedEventCount", "reason"],
+            "properties": {
+              "droppedEventCount": { "type": "integer", "minimum": 1 },
+              "reason": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": ["visibility-candidate", "visibility-result-ready", "visibility-consumed", "cull-decision"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["visibilityTestObservationId"],
+            "properties": {
+              "visibilityTestObservationId": { "$ref": "#/$defs/observationId" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "visibility-result-ready" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["visibilityTestObservationId", "readinessDomain"],
+            "properties": {
+              "visibilityTestObservationId": { "$ref": "#/$defs/observationId" },
+              "readinessDomain": { "$ref": "#/$defs/readinessDomain" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "shader-observed" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "schema",
+              "shaderObservationId",
+              "shaderPointer",
+              "pointerGeneration",
+              "shaderType",
+              "identityDetailsAvailable"
+            ],
+            "properties": {
+              "schema": { "const": "shader-observation-v1" },
+              "shaderObservationId": { "$ref": "#/$defs/observationId" },
+              "shaderPointer": { "type": ["string", "null"] },
+              "pointerGeneration": { "type": "integer", "minimum": 1 },
+              "shaderType": { "type": "integer", "minimum": 0 },
+              "identityDetailsAvailable": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "stage-shader-observed" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "schema",
+              "stageShaderObservationId",
+              "stage",
+              "d3dObjectPointer",
+              "wrapperPointer",
+              "pointerGeneration",
+              "wrapperDescriptor",
+              "bytecodeSize",
+              "identityDetailsAvailable"
+            ],
+            "properties": {
+              "schema": { "const": "stage-shader-observation-v1" },
+              "stageShaderObservationId": { "$ref": "#/$defs/observationId" },
+              "stage": { "enum": ["vertex", "pixel", "compute"] },
+              "d3dObjectPointer": { "type": ["string", "null"] },
+              "wrapperPointer": { "type": ["string", "null"] },
+              "pointerGeneration": { "type": "integer", "minimum": 1 },
+              "wrapperDescriptor": { "type": "integer", "minimum": 0 },
+              "bytecodeSize": { "type": "integer", "minimum": 0 },
+              "bytecodeSha256": { "type": ["string", "null"], "pattern": "^[A-Fa-f0-9]{64}$" },
+              "cachePath": { "type": ["string", "null"] },
+              "identityDetailsAvailable": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "technique-resolved" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "schema",
+              "inputVertexDescriptor",
+              "inputPixelDescriptor",
+              "resolvedVertexDescriptor",
+              "resolvedPixelDescriptor",
+              "vertexShaderObservationId",
+              "pixelShaderObservationId",
+              "vertexRoute",
+              "pixelRoute",
+              "shaderFound",
+              "skipPixelShader"
+            ],
+            "properties": {
+              "schema": { "const": "technique-resolution-v1" },
+              "inputVertexDescriptor": { "type": "integer", "minimum": 0 },
+              "inputPixelDescriptor": { "type": "integer", "minimum": 0 },
+              "resolvedVertexDescriptor": { "type": "integer", "minimum": 0 },
+              "resolvedPixelDescriptor": { "type": "integer", "minimum": 0 },
+              "vertexShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "pixelShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "vertexRoute": { "enum": ["unknown", "engine", "csx-cache", "csx-fallback", "skipped", "missing"] },
+              "pixelRoute": { "enum": ["unknown", "engine", "csx-cache", "csx-fallback", "skipped", "missing"] },
+              "shaderFound": { "type": "boolean" },
+              "skipPixelShader": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "schemaIdentity": {
+      "type": "object",
+      "required": ["name", "major", "minor", "producerVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "const": "csx.render-event" },
+        "major": { "const": 1 },
+        "minor": { "type": "integer", "minimum": 0 },
+        "producerVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "observationId": {
+      "type": "string",
+      "pattern": "^obs-[a-z][a-z0-9-]*-[0-9]+-g[0-9]+$"
+    },
+    "eventType": {
+      "enum": [
+        "capture-marker",
+        "gap",
+        "frame-begin",
+        "frame-end",
+        "scene-accumulation-begin",
+        "scene-accumulation-end",
+        "eye-begin",
+        "eye-end",
+        "object-observed",
+        "geometry-observed",
+        "material-observed",
+        "render-pass-created",
+        "render-pass-enter",
+        "render-pass-exit",
+        "technique-begin",
+        "technique-end",
+        "geometry-setup-begin",
+        "geometry-setup-end",
+        "pipeline-object-created",
+        "pipeline-bind",
+        "render-target-bind",
+        "depth-source-ready",
+        "visibility-candidate",
+        "visibility-result-ready",
+        "visibility-consumed",
+        "cull-decision",
+        "draw",
+        "dispatch",
+        "finish-command-list",
+        "execute-command-list",
+        "shader-observed",
+        "stage-shader-observed",
+        "technique-resolved",
+        "device-context-observed",
+        "target-view-observed",
+        "resource-observed",
+        "resource-view-bind",
+        "resource-flow"
+      ]
+    },
+    "frame": {
+      "type": "object",
+      "required": ["cpuFrame", "sceneEpoch", "submissionEpoch", "eye", "eyeMask"],
+      "additionalProperties": false,
+      "properties": {
+        "cpuFrame": { "type": ["integer", "null"], "minimum": 0 },
+        "sceneEpoch": { "type": ["integer", "null"], "minimum": 0 },
+        "submissionEpoch": { "type": ["integer", "null"], "minimum": 0 },
+        "eye": { "enum": ["left", "right", "both", "mono", "unknown"] },
+        "eyeMask": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "readinessDomain": {
+      "enum": [
+        "cpu-observed",
+        "gpu-ordered",
+        "gpu-completed",
+        "gpu-resource-consumable",
+        "cpu-readback-complete",
+        "unknown"
+      ]
+    },
+    "execution": {
+      "type": "object",
+      "required": ["observationDomain", "commandStreamSequence", "gpuTimestampTicks", "gpuTimestampFrequencyHz"],
+      "additionalProperties": false,
+      "properties": {
+        "observationDomain": {
+          "enum": ["cpu-call", "gpu-command-stream", "gpu-completion", "cpu-readback", "unknown"]
+        },
+        "commandStreamSequence": { "type": ["integer", "null"], "minimum": 0 },
+        "gpuTimestampTicks": { "type": ["integer", "null"], "minimum": 0 },
+        "gpuTimestampFrequencyHz": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "scopes": {
+      "type": "object",
+      "required": ["renderPass", "technique", "geometry", "commandList"],
+      "additionalProperties": false,
+      "properties": {
+        "renderPass": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+        "technique": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+        "geometry": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+        "commandList": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] }
+      }
+    },
+    "observationRef": {
+      "type": "object",
+      "required": ["id", "kind", "role", "pointerEvidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/observationId" },
+        "kind": {
+          "enum": [
+            "scene-object",
+            "geometry",
+            "shader-property",
+            "material",
+            "render-pass",
+            "technique",
+            "visibility-test",
+            "device",
+            "device-context",
+            "command-list",
+            "shader",
+            "vertex-shader",
+            "pixel-shader",
+            "compute-shader",
+            "pipeline-state",
+            "resource",
+            "render-target",
+            "depth-target"
+          ]
+        },
+        "role": { "type": "string", "minLength": 1 },
+        "pointerEvidence": {
+          "type": ["string", "null"],
+          "pattern": "^(0x[A-Fa-f0-9]+|sha256:[A-Fa-f0-9]{64})$"
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+      "additionalProperties": true
+    }
+  }
+}

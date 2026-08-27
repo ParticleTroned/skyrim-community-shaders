@@ -1,5 +1,7 @@
 #include "UnderwaterDepthOfField.h"
 
+#include "RenderMap/Runtime.h"
+
 #include "Buffer.h"
 #include "CSUtility.h"
 #include "Deferred.h"
@@ -619,6 +621,9 @@ namespace
 		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 		{
 			RunPendingDepthOfFieldInputPass();
+			CSX::RenderMap::GetRuntime().RecordDraw(
+				reinterpret_cast<std::uintptr_t>(This), CSX::RenderMap::DrawOperation::kDrawIndexed,
+				IndexCount, StartIndexLocation, static_cast<std::uint32_t>(BaseVertexLocation));
 			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -629,6 +634,9 @@ namespace
 		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
 		{
 			RunPendingDepthOfFieldInputPass();
+			CSX::RenderMap::GetRuntime().RecordDraw(
+				reinterpret_cast<std::uintptr_t>(This), CSX::RenderMap::DrawOperation::kDraw,
+				VertexCount, StartVertexLocation);
 			func(This, VertexCount, StartVertexLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

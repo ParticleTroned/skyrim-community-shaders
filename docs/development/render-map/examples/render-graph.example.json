@@ -1,0 +1,227 @@
+{
+  "schema": {
+    "name": "csx.derived-render-graph",
+    "major": 1,
+    "minor": 0,
+    "producerVersion": "design-example-1"
+  },
+  "reportId": "render-graph-opaque-lighting-example",
+  "generatedAtUtc": "2026-08-23T00:01:00Z",
+  "generatedBy": {
+    "name": "csx-render-map-join",
+    "version": "0.1.0-design",
+    "gitCommit": null
+  },
+  "inputs": [
+    {
+      "kind": "shader-manifest",
+      "path": "../shader-analysis/shader-manifest.generated.json",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "schemaMajor": 2
+    },
+    {
+      "kind": "engine-map",
+      "path": "engine-map.example.json",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "schemaMajor": 1
+    },
+    {
+      "kind": "capture-manifest",
+      "path": "capture-manifest.example.json",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "schemaMajor": 1
+    },
+    {
+      "kind": "events",
+      "path": "opaque-lighting-events.example.jsonl",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "schemaMajor": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-scene-object-0001",
+      "kind": "scene-object",
+      "label": "Opaque candidate",
+      "sourceRefs": [
+        { "kind": "observation", "value": "obs-scene-object-1-g1" },
+        { "kind": "capture-event", "value": 1 }
+      ],
+      "attributes": {},
+      "extensions": {}
+    },
+    {
+      "id": "node-geometry-0001",
+      "kind": "geometry",
+      "label": "Opaque candidate geometry",
+      "sourceRefs": [
+        { "kind": "observation", "value": "obs-geometry-1-g1" },
+        { "kind": "capture-event", "value": 1 }
+      ],
+      "attributes": { "opaque": true },
+      "extensions": {}
+    },
+    {
+      "id": "node-visibility-test-0001",
+      "kind": "visibility-test",
+      "label": "Candidate OBB visibility test",
+      "sourceRefs": [
+        { "kind": "observation", "value": "obs-visibility-test-1-g1" },
+        { "kind": "capture-event", "value": 3 }
+      ],
+      "attributes": { "visible": true },
+      "extensions": {}
+    },
+    {
+      "id": "node-draw-0001",
+      "kind": "draw",
+      "label": "Left-eye DrawIndexed",
+      "sourceRefs": [
+        { "kind": "capture-event", "value": 5 },
+        { "kind": "shader-manifest", "value": "pass-0001" }
+      ],
+      "attributes": { "eye": "left" },
+      "extensions": {}
+    },
+    {
+      "id": "node-draw-0002",
+      "kind": "draw",
+      "label": "Right-eye DrawIndexed",
+      "sourceRefs": [
+        { "kind": "capture-event", "value": 6 },
+        { "kind": "shader-manifest", "value": "pass-0001" }
+      ],
+      "attributes": { "eye": "right" },
+      "extensions": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-0001",
+      "type": "owns",
+      "from": "node-scene-object-0001",
+      "to": "node-geometry-0001",
+      "evidenceClass": "runtime-observed",
+      "confidence": "confirmed",
+      "evidence": [
+        {
+          "captureId": "capture-opaque-lighting-example",
+          "eventSequences": [1],
+          "engineEvidenceRefs": [],
+          "note": "Both observations were emitted by the same object boundary."
+        }
+      ],
+      "ambiguityGroup": null,
+      "attributes": {},
+      "extensions": {}
+    },
+    {
+      "id": "edge-0002",
+      "type": "tests",
+      "from": "node-visibility-test-0001",
+      "to": "node-geometry-0001",
+      "evidenceClass": "runtime-observed",
+      "confidence": "confirmed",
+      "evidence": [
+        {
+          "captureId": "capture-opaque-lighting-example",
+          "eventSequences": [2, 3],
+          "engineEvidenceRefs": [],
+          "note": "The capture emitted the geometry and visibility-test IDs together."
+        }
+      ],
+      "ambiguityGroup": null,
+      "attributes": {},
+      "extensions": {}
+    },
+    {
+      "id": "edge-0003",
+      "type": "draws",
+      "from": "node-geometry-0001",
+      "to": "node-draw-0001",
+      "evidenceClass": "runtime-observed",
+      "confidence": "confirmed",
+      "evidence": [
+        {
+          "captureId": "capture-opaque-lighting-example",
+          "eventSequences": [5],
+          "engineEvidenceRefs": [],
+          "note": "The draw carried the active geometry scope."
+        }
+      ],
+      "ambiguityGroup": null,
+      "attributes": {},
+      "extensions": {}
+    },
+    {
+      "id": "edge-0004",
+      "type": "draws",
+      "from": "node-geometry-0001",
+      "to": "node-draw-0002",
+      "evidenceClass": "runtime-observed",
+      "confidence": "confirmed",
+      "evidence": [
+        {
+          "captureId": "capture-opaque-lighting-example",
+          "eventSequences": [6],
+          "engineEvidenceRefs": [],
+          "note": "The draw carried the active geometry scope."
+        }
+      ],
+      "ambiguityGroup": null,
+      "attributes": {},
+      "extensions": {}
+    }
+  ],
+  "ambiguities": [],
+  "gaps": [
+    {
+      "id": "gap-0001",
+      "kind": "missing-static-map",
+      "description": "The example deliberately does not establish the real Skyrim technique/permutation or CSX pass binding.",
+      "relatedNodeIds": ["node-geometry-0001", "node-draw-0001", "node-draw-0002"],
+      "blocking": true,
+      "extensions": {}
+    }
+  ],
+  "decisionWindows": [
+    {
+      "id": "decision-window-0001",
+      "candidateNode": "node-geometry-0001",
+      "suppressionStage": "before-draw",
+      "visibilityAvailable": {
+        "captureId": "capture-opaque-lighting-example",
+        "sequence": 3,
+        "timestampQpc": 1000180,
+        "cpuFrame": 100,
+        "eye": "both",
+        "readinessDomain": "cpu-observed",
+        "gpuTimestampTicks": null
+      },
+      "decisionDeadline": {
+        "captureId": "capture-opaque-lighting-example",
+        "sequence": 5,
+        "timestampQpc": 1000200,
+        "cpuFrame": 100,
+        "eye": "left",
+        "readinessDomain": "cpu-observed",
+        "gpuTimestampTicks": null
+      },
+      "result": "viable",
+      "savings": ["gpu-vertex", "gpu-pixel"],
+      "evidence": [
+        {
+          "captureId": "capture-opaque-lighting-example",
+          "eventSequences": [3, 4, 5],
+          "engineEvidenceRefs": [],
+          "note": "Illustrative ordering only; this is not a measured Skyrim result."
+        }
+      ],
+      "reason": "The example CPU-observed visibility result precedes the CPU draw-submission deadline; it makes no GPU-completion claim.",
+      "extensions": {}
+    }
+  ],
+  "extensions": {
+    "exampleOnly": true
+  }
+}

@@ -1,0 +1,471 @@
+{
+  "schema": {
+    "name": "csx.render-engine-map",
+    "major": 1,
+    "minor": 0,
+    "producerVersion": "render-evidence-analysis-2026-08-24"
+  },
+  "mapId": "engine-map-skyrim-vr-1.4.15-main-menu-seed",
+  "mapRevision": 2,
+  "engineBuild": {
+    "product": "Skyrim VR",
+    "runtime": "1.4.15",
+    "executable": {
+      "name": "SkyrimVR.exe",
+      "version": "1.4.15.0",
+      "sha256": "6961efb4f4775a307b0fc9a3d637542c1e090be207d3b09467eab216b7f87971"
+    },
+    "modules": []
+  },
+  "entities": [
+    {
+      "id": "engine-shader-family-0001",
+      "kind": "shader-family",
+      "name": "BSImagespaceShader",
+      "module": "SkyrimVR.exe",
+      "attributes": { "shaderType": "ImageSpace", "numericShaderType": 5, "route": "vr" },
+      "evidenceRefs": ["evidence-0001", "evidence-0002"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-shader-family-0002",
+      "kind": "shader-family",
+      "name": "BSLightingShader",
+      "module": "SkyrimVR.exe",
+      "attributes": { "shaderType": "Lighting", "numericShaderType": 6, "route": "vr" },
+      "evidenceRefs": ["evidence-0001", "evidence-0002", "evidence-0003"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-shader-family-0003",
+      "kind": "shader-family",
+      "name": "BSEffectShader",
+      "module": "SkyrimVR.exe",
+      "attributes": { "shaderType": "Effect", "numericShaderType": 7, "route": "vr" },
+      "evidenceRefs": ["evidence-0001", "evidence-0002", "evidence-0003"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-shader-family-0004",
+      "kind": "shader-family",
+      "name": "BSUtilityShader",
+      "module": "SkyrimVR.exe",
+      "attributes": { "shaderType": "Utility", "numericShaderType": 8, "route": "vr" },
+      "evidenceRefs": ["evidence-0001", "evidence-0002", "evidence-0003"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0001",
+      "kind": "function",
+      "name": "BSShader::BeginTechnique",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1365A70",
+        "relocationId": null,
+        "renderPhase": null,
+        "role": "descriptor-keyed vertex/pixel shader lookup and bind"
+      },
+      "evidenceRefs": ["evidence-0003", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0001",
+      "kind": "virtual-function",
+      "name": "BSLightingShader::SetupTechnique",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x1337D00", "vfuncIndex": 2, "shaderType": "Lighting" },
+      "evidenceRefs": ["evidence-0002", "evidence-0003", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0002",
+      "kind": "virtual-function",
+      "name": "BSEffectShader::SetupTechnique candidate",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1341190",
+        "vfuncIndex": 2,
+        "shaderType": "Effect",
+        "identityStatus": "family-and-role-inferred; public symbol is FUN_141341190"
+      },
+      "evidenceRefs": ["evidence-0001", "evidence-0003", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0003",
+      "kind": "virtual-function",
+      "name": "BSImagespaceShader::SetupTechnique",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x134FAB0",
+        "vfuncIndex": 2,
+        "shaderType": "ImageSpace",
+        "pdbName": "BSImagespaceShader::Func2_14130C870"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0003", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-virtual-function-0004",
+      "kind": "virtual-function",
+      "name": "BSUtilityShader::SetupTechnique",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "rva": "0x1351A50",
+        "vfuncIndex": 2,
+        "shaderType": "Utility",
+        "pdbName": "FUN_141351a50"
+      },
+      "evidenceRefs": ["evidence-0002", "evidence-0003", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0002",
+      "kind": "function",
+      "name": "ImageSpace auxiliary technique caller 0x13754C0",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x13754C0", "shaderType": "ImageSpace", "identityStatus": "unresolved" },
+      "evidenceRefs": ["evidence-0001", "evidence-0003", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-function-0003",
+      "kind": "function",
+      "name": "ImageSpace auxiliary technique caller 0x13758D0",
+      "module": "SkyrimVR.exe",
+      "attributes": { "rva": "0x13758D0", "shaderType": "ImageSpace", "identityStatus": "unresolved" },
+      "evidenceRefs": ["evidence-0001", "evidence-0003", "evidence-0004"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0001",
+      "kind": "technique",
+      "name": "ImageSpace descriptor pair 0x0/0x0",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "ImageSpace",
+        "techniqueId": "vertex=0x0,pixel=0x0",
+        "vertexDescriptor": 0,
+        "pixelDescriptor": 0,
+        "skipPixelShader": false,
+        "callerRvas": ["0x134FAC1", "0x13754E8", "0x13758F8"],
+        "observedBegins": 1680
+      },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0002",
+      "kind": "technique",
+      "name": "Lighting Envmap descriptor pair 0x01000200/0x01004201",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "Lighting",
+        "techniqueId": "vertex=0x01000200,pixel=0x01004201",
+        "vertexDescriptor": 16777728,
+        "pixelDescriptor": 16794113,
+        "decodedTechnique": "Envmap",
+        "vertexFlags": ["Specular"],
+        "pixelFlags": ["VC", "Specular", "DefShadow"],
+        "skipPixelShader": false,
+        "observedBegins": 120
+      },
+      "evidenceRefs": ["evidence-0001", "evidence-0006"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0003",
+      "kind": "technique",
+      "name": "Effect descriptor pair 0x000010C7/0x000810C7",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "Effect",
+        "techniqueId": "vertex=0x000010C7,pixel=0x000810C7",
+        "vertexFlags": ["VC", "TexCoord", "TexCoordIndex", "Texture", "IndexedTexture", "Particles"],
+        "pixelFlags": ["VC", "TexCoord", "TexCoordIndex", "Texture", "IndexedTexture", "Particles", "GrayscaleToColor"],
+        "skipPixelShader": false,
+        "observedBegins": 120
+      },
+      "evidenceRefs": ["evidence-0001", "evidence-0006"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0004",
+      "kind": "technique",
+      "name": "Effect descriptor pair 0x00000042/0x00000042",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "Effect",
+        "techniqueId": "vertex=0x00000042,pixel=0x00000042",
+        "vertexFlags": ["TexCoord", "Texture"],
+        "pixelFlags": ["TexCoord", "Texture"],
+        "skipPixelShader": false,
+        "observedBegins": 120
+      },
+      "evidenceRefs": ["evidence-0001", "evidence-0006"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0005",
+      "kind": "technique",
+      "name": "Effect descriptor pair 0x04000001/0x04000001",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "Effect",
+        "techniqueId": "vertex=0x04000001,pixel=0x04000001",
+        "vertexFlags": ["VC", "MotionVectorsNormals"],
+        "pixelFlags": ["VC", "MotionVectorsNormals"],
+        "skipPixelShader": false,
+        "observedBegins": 120
+      },
+      "evidenceRefs": ["evidence-0001", "evidence-0006"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0006",
+      "kind": "technique",
+      "name": "Utility shadow-map descriptor pair 0x0001401A/0x00014002",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "Utility",
+        "techniqueId": "vertex=0x0001401A,pixel=0x00014002",
+        "vertexDefines": ["TEXTURE", "NORMALS", "RENDER_SHADOWMAP", "RENDER_SHADOWMAP_PB", "SHADOWSPLITCOUNT=3"],
+        "pixelDefines": ["TEXTURE", "RENDER_SHADOWMAP", "RENDER_SHADOWMAP_PB", "SHADOWSPLITCOUNT=3"],
+        "skipPixelShader": false,
+        "observedBegins": 120
+      },
+      "evidenceRefs": ["evidence-0001", "evidence-0006"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0007",
+      "kind": "technique",
+      "name": "Utility depth-only descriptor pair 0x00002000/0x00002000",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "Utility",
+        "techniqueId": "vertex=0x00002000,pixel=0x00002000",
+        "vertexDefines": ["RENDER_DEPTH", "NO_PIXEL_SHADER", "SHADOWSPLITCOUNT=3"],
+        "pixelDefines": [],
+        "skipPixelShader": true,
+        "observedBegins": 240
+      },
+      "evidenceRefs": ["evidence-0001", "evidence-0006"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-technique-0008",
+      "kind": "technique",
+      "name": "Utility shadow-mask/depth descriptor pair 0x01002002/0x01062002",
+      "module": "SkyrimVR.exe",
+      "attributes": {
+        "shaderType": "Utility",
+        "techniqueId": "vertex=0x01002002,pixel=0x01062002",
+        "vertexDefines": ["TEXTURE", "RENDER_DEPTH", "RENDER_SHADOWMASKDPB", "SHADOWFILTER=0", "SHADOWSPLITCOUNT=3"],
+        "pixelDefines": ["TEXTURE", "RENDER_DEPTH", "RENDER_SHADOWMASKDPB", "SHADOWFILTER=3", "SHADOWSPLITCOUNT=3"],
+        "skipPixelShader": false,
+        "observedBegins": 120,
+        "renderPassScope": null
+      },
+      "evidenceRefs": ["evidence-0001", "evidence-0006"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-render-phase-0001",
+      "kind": "render-phase",
+      "name": "Observed render pass 81989",
+      "module": "SkyrimVR.exe",
+      "attributes": { "techniqueId": 81989, "renderFlags": 1024, "alphaTest": false, "semanticName": null },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-render-phase-0002",
+      "kind": "render-phase",
+      "name": "Observed render pass 8261",
+      "module": "SkyrimVR.exe",
+      "attributes": { "techniqueId": 8261, "renderFlags": 33, "alphaTest": false, "semanticName": null },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-render-phase-0003",
+      "kind": "render-phase",
+      "name": "Observed render pass 536879147",
+      "module": "SkyrimVR.exe",
+      "attributes": { "techniqueId": 536879147, "renderFlags": 33, "alphaTest": false, "semanticName": null },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-render-phase-0004",
+      "kind": "render-phase",
+      "name": "Observed render pass 1140850733",
+      "module": "SkyrimVR.exe",
+      "attributes": { "techniqueId": 1140850733, "renderFlags": 513, "alphaTest": false, "semanticName": null },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-render-phase-0005",
+      "kind": "render-phase",
+      "name": "Observed render pass 1224753773",
+      "module": "SkyrimVR.exe",
+      "attributes": { "techniqueId": 1224753773, "renderFlags": 513, "alphaTest": false, "semanticName": null },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-render-phase-0006",
+      "kind": "render-phase",
+      "name": "Observed render pass 1074270451",
+      "module": "SkyrimVR.exe",
+      "attributes": { "techniqueId": 1074270451, "renderFlags": 517, "alphaTest": true, "semanticName": null },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    },
+    {
+      "id": "engine-render-phase-0007",
+      "kind": "render-phase",
+      "name": "Observed render pass 1073741934",
+      "module": "SkyrimVR.exe",
+      "attributes": { "techniqueId": 1073741934, "renderFlags": 516, "alphaTest": true, "semanticName": null },
+      "evidenceRefs": ["evidence-0001"],
+      "extensions": {}
+    }
+  ],
+  "relations": [
+    { "id": "relation-0001", "type": "implements", "from": "engine:engine-virtual-function-0001", "to": "engine:engine-shader-family-0002", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0003"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0002", "type": "implements", "from": "engine:engine-virtual-function-0002", "to": "engine:engine-shader-family-0003", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0004"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0003", "type": "implements", "from": "engine:engine-virtual-function-0003", "to": "engine:engine-shader-family-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0003"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0004", "type": "implements", "from": "engine:engine-virtual-function-0004", "to": "engine:engine-shader-family-0004", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0002", "evidence-0003"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0005", "type": "invokes", "from": "engine:engine-virtual-function-0001", "to": "engine:engine-function-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004"], "attributes": { "returnAddressRva": "0x1337D7B" }, "extensions": {} },
+    { "id": "relation-0006", "type": "invokes", "from": "engine:engine-virtual-function-0002", "to": "engine:engine-function-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004"], "attributes": { "returnAddressRva": "0x13411CB" }, "extensions": {} },
+    { "id": "relation-0007", "type": "invokes", "from": "engine:engine-virtual-function-0003", "to": "engine:engine-function-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004"], "attributes": { "returnAddressRva": "0x134FAC1" }, "extensions": {} },
+    { "id": "relation-0008", "type": "invokes", "from": "engine:engine-virtual-function-0004", "to": "engine:engine-function-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004"], "attributes": { "returnAddressRva": "0x1351AD4" }, "extensions": {} },
+    { "id": "relation-0009", "type": "invokes", "from": "engine:engine-function-0002", "to": "engine:engine-function-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004"], "attributes": { "returnAddressRva": "0x13754E8" }, "extensions": {} },
+    { "id": "relation-0010", "type": "invokes", "from": "engine:engine-function-0003", "to": "engine:engine-function-0001", "evidenceClass": "static-reverse-engineered", "confidence": "confirmed", "evidenceRefs": ["evidence-0004"], "attributes": { "returnAddressRva": "0x13758F8" }, "extensions": {} },
+    { "id": "relation-0011", "type": "corresponds-to", "from": "engine:engine-shader-family-0002", "to": "shader:pass-0115", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0005"], "attributes": { "compileUnit": "compile-0115", "source": "Lighting.hlsl" }, "extensions": {} },
+    { "id": "relation-0012", "type": "corresponds-to", "from": "engine:engine-shader-family-0003", "to": "shader:pass-0074", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0005"], "attributes": { "compileUnit": "compile-0074", "source": "Effect.hlsl" }, "extensions": {} },
+    { "id": "relation-0013", "type": "corresponds-to", "from": "engine:engine-shader-family-0004", "to": "shader:pass-0120", "evidenceClass": "source-proven", "confidence": "confirmed", "evidenceRefs": ["evidence-0005"], "attributes": { "compileUnit": "compile-0120", "source": "Utility.hlsl" }, "extensions": {} },
+    { "id": "relation-0014", "type": "corresponds-to", "from": "engine:engine-technique-0002", "to": "shader:pass-0115", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0015", "type": "corresponds-to", "from": "engine:engine-technique-0003", "to": "shader:pass-0074", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0016", "type": "corresponds-to", "from": "engine:engine-technique-0004", "to": "shader:pass-0074", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0017", "type": "corresponds-to", "from": "engine:engine-technique-0005", "to": "shader:pass-0074", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0018", "type": "corresponds-to", "from": "engine:engine-technique-0006", "to": "shader:pass-0120", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0019", "type": "corresponds-to", "from": "engine:engine-technique-0007", "to": "shader:pass-0120", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0020", "type": "corresponds-to", "from": "engine:engine-technique-0008", "to": "shader:pass-0120", "evidenceClass": "correlated", "confidence": "high", "evidenceRefs": ["evidence-0001", "evidence-0005", "evidence-0006"], "attributes": {}, "extensions": {} },
+    { "id": "relation-0021", "type": "selects", "from": "engine:engine-render-phase-0001", "to": "engine:engine-technique-0006", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
+    { "id": "relation-0022", "type": "selects", "from": "engine:engine-render-phase-0002", "to": "engine:engine-technique-0007", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
+    { "id": "relation-0023", "type": "selects", "from": "engine:engine-render-phase-0003", "to": "engine:engine-technique-0007", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
+    { "id": "relation-0024", "type": "selects", "from": "engine:engine-render-phase-0004", "to": "engine:engine-technique-0005", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
+    { "id": "relation-0025", "type": "selects", "from": "engine:engine-render-phase-0005", "to": "engine:engine-technique-0002", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
+    { "id": "relation-0026", "type": "selects", "from": "engine:engine-render-phase-0006", "to": "engine:engine-technique-0003", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} },
+    { "id": "relation-0027", "type": "selects", "from": "engine:engine-render-phase-0007", "to": "engine:engine-technique-0004", "evidenceClass": "runtime-observed", "confidence": "confirmed", "evidenceRefs": ["evidence-0001"], "attributes": { "observedFrames": 120 }, "extensions": {} }
+  ],
+  "evidence": [
+    {
+      "id": "evidence-0001",
+      "class": "runtime-observed",
+      "statement": "The 120-frame null-HMD main-menu capture recorded the shader types, descriptor pairs, pass values, caller return addresses, and exact repeated event order used in this seed.",
+      "artifact": { "kind": "runtime-capture", "name": "capture-live-00008b13098138bc-1/events.jsonl", "version": "collector-v1", "sha256": "7e0521c344b56b8b47a34ea639466f1ca72dc984162e9e19764c81c869da1a5e" },
+      "locator": "L:/Codex/evidence/render-map-live-capture/20260823T232300Z-opaque-depth-culling/capture/capture-live-00008b13098138bc-1/events.jsonl",
+      "confidence": "confirmed",
+      "extensions": {}
+    },
+    {
+      "id": "evidence-0002",
+      "class": "source-proven",
+      "statement": "CommonLib defines BSShader type values, virtual SetupTechnique slot 2, the Lighting and Utility class contracts, and Skyrim VR vtable offsets used to identify the observed functions.",
+      "artifact": { "kind": "commonlib", "name": "CommonLibSSE-NG headers", "version": "worktree-pinned", "sha256": "5bf3ca2c3a25c01a60eba0ee1d135181698bf196cfa918b01e7199e545f3f3a1" },
+      "locator": "extern/CommonLibSSE-NG/include/RE/B/BSShader.h and related headers",
+      "confidence": "confirmed",
+      "extensions": { "additionalHeaderHashes": { "BSLightingShader.h": "c93910607a208526a290c16ac90a5578b81d9e856e0d91e6bc1c394277d20ff5", "BSUtilityShader.h": "831e5249d047409b07adedb8f08938315685b59626d07325d2b74ea04ace38bd", "Offsets_VTABLE.h": "d563de8987b4e245e64f2febb48b6172496ab92add77210482a7a101c9fb5ac7" } }
+    },
+    {
+      "id": "evidence-0003",
+      "class": "static-reverse-engineered",
+      "statement": "The Skyrim VR PDB and a full-memory reference dump identify BSLightingShader::SetupTechnique, BSShader::BeginTechnique, BSImagespaceShader's slot-2 function, vtable slot 2 for Utility, and containing functions for all six caller RVAs.",
+      "artifact": { "kind": "pdb", "name": "SkyrimVR.pdb", "version": "59818-2026-06-07", "sha256": "63e7a8b5cffd7b13aa7c3e7423e985b33ea4c6ab53a2869169598705bcc7fd82" },
+      "locator": "L:/Codex/artifacts/skyrimvr-symbols/sources/SkyrimVR-PDB-59818-2026-06-07/SKSE/Plugins/SkyrimVR.pdb",
+      "confidence": "high",
+      "extensions": { "referenceDump": "L:/Codex/artifacts/vanilla-skyrimvr-reference-20260822/SkyrimVR-vanilla-riverwood-book-open-20260822.dmp" }
+    },
+    {
+      "id": "evidence-0004",
+      "class": "static-reverse-engineered",
+      "statement": "Disassembly of the runtime-decrypted Skyrim image proves that each captured caller RVA follows a call to BSShader::BeginTechnique and that BeginTechnique performs descriptor-keyed shader lookup before binding vertex and pixel shader objects.",
+      "artifact": { "kind": "binary", "name": "SkyrimVR.runtime-decrypted.analysis-only.pe.bin", "version": "1.4.15.0", "sha256": "1e08d17ca4195c1d7296c076034577cc05c98c26a0d9b8f38ae5c6edbba4e8fe" },
+      "locator": "L:/Codex/artifacts/vanilla-skyrimvr-reference-20260822/derived-analysis/SkyrimVR.runtime-decrypted.analysis-only.pe.bin",
+      "confidence": "confirmed",
+      "extensions": { "analysisOnly": true }
+    },
+    {
+      "id": "evidence-0005",
+      "class": "source-proven",
+      "statement": "The deterministic shader manifest maps Effect, Lighting, and Utility engine-cache families to compile units and passes 0073, 0114, and 0119 respectively.",
+      "artifact": { "kind": "source", "name": "shader-manifest.generated.json", "version": "schema-1", "sha256": "0b87bcfbe8828991c650537b57b03ce434c00c8387f44adf75e3beb2984b6e6f" },
+      "locator": "docs/development/shader-analysis/shader-manifest.generated.json",
+      "confidence": "confirmed",
+      "extensions": {}
+    },
+    {
+      "id": "evidence-0006",
+      "class": "source-proven",
+      "statement": "ShaderCache source defines the descriptor bitfields, macro expansion, cache naming, and image-space descriptor resolution used to decode the captured keys.",
+      "artifact": { "kind": "source", "name": "src/ShaderCache.cpp and src/ShaderCache.h", "version": "render-mapping-worktree", "sha256": null },
+      "locator": "src/ShaderCache.cpp:GetShaderDefines/GetDiskPath and src/ShaderCache.h descriptor enums",
+      "confidence": "confirmed",
+      "extensions": {}
+    }
+  ],
+  "unresolved": [
+    {
+      "id": "unresolved-0001",
+      "question": "Which concrete ImageSpace shader names and compile units produced the observed 0/0 descriptor calls?",
+      "relatedRefs": ["engine:engine-shader-family-0001", "engine:engine-technique-0001"],
+      "blocking": true,
+      "nextEvidence": "Record BSImagespaceShader::name/fxpFilename and the descriptor resolved by GetImagespaceShaderDescriptor at the technique boundary.",
+      "extensions": {}
+    },
+    {
+      "id": "unresolved-0002",
+      "question": "Can the candidate function at RVA 0x1341190 be independently named BSEffectShader::SetupTechnique?",
+      "relatedRefs": ["engine:engine-virtual-function-0002", "engine:engine-shader-family-0003"],
+      "blocking": false,
+      "nextEvidence": "Identify the Effect shader vtable or a typed instance and verify that slot 2 targets RVA 0x1341190.",
+      "extensions": {}
+    },
+    {
+      "id": "unresolved-0003",
+      "question": "Which exact compiled cache files backed each observed descriptor pair?",
+      "relatedRefs": ["engine:engine-technique-0002", "engine:engine-technique-0003", "engine:engine-technique-0004", "engine:engine-technique-0005", "engine:engine-technique-0006", "engine:engine-technique-0007", "engine:engine-technique-0008"],
+      "blocking": true,
+      "nextEvidence": "Supply the shader-define snapshot, cache inventory identity, resolved disk path, and selected vertex/pixel shader object identity in the same capture.",
+      "extensions": {}
+    },
+    {
+      "id": "unresolved-0004",
+      "question": "What are the semantic names of the seven observed render-pass values?",
+      "relatedRefs": ["engine:engine-render-phase-0001", "engine:engine-render-phase-0002", "engine:engine-render-phase-0003", "engine:engine-render-phase-0004", "engine:engine-render-phase-0005", "engine:engine-render-phase-0006", "engine:engine-render-phase-0007"],
+      "blocking": false,
+      "nextEvidence": "Correlate each pass object with its producer, owning render phase, targets, and draw submission in a typed observation stream.",
+      "extensions": {}
+    },
+    {
+      "id": "unresolved-0005",
+      "question": "Which eye, command context, render/depth targets, and draw calls consumed each selected technique?",
+      "relatedRefs": ["engine:engine-function-0001"],
+      "blocking": true,
+      "nextEvidence": "Add typed observation declarations, device-context command sequence, target bindings, bound pipeline identity, and bounded Draw/Dispatch events.",
+      "extensions": {}
+    }
+  ],
+  "extensions": {
+    "scenario": "Skyrim VR main menu under verified Valve null-HMD orchestration",
+    "captureId": "capture-live-00008b13098138bc-1",
+    "semanticFrameSignatures": 1,
+    "observedFrames": 120,
+    "rawPointersAreStableIdentity": false
+  }
+}

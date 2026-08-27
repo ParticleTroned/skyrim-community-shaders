@@ -15,6 +15,7 @@
 -   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
 -   **[GPU-Unified Presets](./unified-presets.md)** - One preset path with capability-selected DLSS or FSR
 -   **[Screenshot API and Sequences](./screenshot-api-and-sequences.md)** - Versioned asynchronous still/sequence contract, acknowledgements, manifests, and implementation gates
+-   **[Shader Analysis](./shader-analysis/README.md)** - Residency/recompile plan, machine-readable ownership manifest, and versioned baselines
 
 ## Quick Links
 

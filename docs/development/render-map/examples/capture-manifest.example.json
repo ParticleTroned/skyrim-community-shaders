@@ -1,0 +1,122 @@
+{
+  "schema": {
+    "name": "csx.render-capture-manifest",
+    "major": 1,
+    "minor": 1,
+    "producerVersion": "design-example-2"
+  },
+  "captureId": "capture-opaque-lighting-example",
+  "status": "complete",
+  "createdAtUtc": "2026-08-23T00:00:00Z",
+  "producer": {
+    "name": "csx-render-evidence",
+    "version": "0.1.0-design",
+    "gitCommit": null,
+    "dirty": false
+  },
+  "capabilities": [
+    "thread-local-render-scopes",
+    "d3d11-immediate-context",
+    "depth-culling-events",
+    "pointer-redaction"
+  ],
+  "inputs": {
+    "shaderManifest": {
+      "availability": "verified",
+      "path": "../shader-analysis/shader-manifest.generated.json",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "schemaMajor": 2
+    },
+    "engineMap": {
+      "availability": "verified",
+      "path": "engine-map.example.json",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "schemaMajor": 1
+    },
+    "csxBuildManifest": {
+      "availability": "verified",
+      "path": "CSX.BuildManifest.json",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "schemaMajor": 1
+    }
+  },
+  "environment": {
+    "skyrim": {
+      "name": "SkyrimVR.exe",
+      "version": "1.4.15",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "csx": {
+      "name": "CommunityShaders.dll",
+      "version": "example",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "runtimeRoute": "valve-null-hmd",
+    "modEnvironment": {
+      "manager": "MO2",
+      "instance": "example-instance",
+      "profile": "example-owned-test-profile",
+      "modlistSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "pluginLoadOrderSha256": "6666666666666666666666666666666666666666666666666666666666666666"
+    },
+    "graphics": {
+      "gpu": "example GPU",
+      "driver": "example driver",
+      "renderWidth": 2048,
+      "renderHeight": 2048,
+      "presetSha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "settingsSha256": "8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    "shaderCache": {
+      "identity": "example-cache",
+      "inventorySha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "coldAtStart": false
+    }
+  },
+  "scenario": {
+    "id": "opaque-lighting-static-object-v1",
+    "saveFingerprint": "example-save",
+    "cell": "example-cell",
+    "worldspace": null,
+    "weather": null,
+    "gameHour": 12.0,
+    "cameraMarker": "fixed-camera-example",
+    "notes": "Schema example only; values are not runtime evidence."
+  },
+  "bounds": {
+    "eventKinds": ["frame-begin", "object-observed", "visibility-candidate", "visibility-result-ready", "visibility-consumed", "draw"],
+    "maxFrames": 3,
+    "maxDurationMs": 5000,
+    "maxEvents": 10000,
+    "maxBytes": 8388608,
+    "pointerPolicy": "redact"
+  },
+  "clock": {
+    "source": "QueryPerformanceCounter",
+    "frequencyHz": 10000000,
+    "startTick": 1000000
+  },
+  "artifacts": [
+    {
+      "kind": "events-jsonl",
+      "path": "opaque-lighting-events.example.jsonl",
+      "mediaType": "application/x-ndjson",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bytes": 1,
+      "complete": true
+    }
+  ],
+  "completion": {
+    "reason": "requested",
+    "firstSequence": 0,
+    "lastSequence": 6,
+    "eventCount": 7,
+    "droppedEventCount": 0,
+    "truncated": false,
+    "collectorOverheadUs": 10.0,
+    "errors": []
+  },
+  "extensions": {
+    "exampleOnly": true
+  }
+}

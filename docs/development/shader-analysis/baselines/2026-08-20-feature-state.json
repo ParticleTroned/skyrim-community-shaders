@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "evidenceDate": "2026-08-20",
+  "title": "CSX feature-state shader-cache and profiler baseline",
+  "binary": {
+    "sha256": "2470AA816A3A7C4D827EE6EC4F6808702C4152A684DE6D1166B2EC8922CE360A",
+    "bytes": 24437760,
+    "sourceRevisionRecorded": false
+  },
+  "runtime": {
+    "game": "Skyrim VR",
+    "route": "SteamVR Valve null HMD",
+    "requestedSamplesPerState": 120,
+    "measuredProfilerScope": "resolved CSX profiler block, not whole-frame GPU time"
+  },
+  "featureGroup": [
+    "ScreenSpaceShadows",
+    "Skylighting",
+    "VolumetricLighting",
+    "Upscaling"
+  ],
+  "compiledShaderCache": {
+    "enabled": { "files": 3615, "bytes": 179236348 },
+    "startupUnloaded": { "files": 3606, "bytes": 162088968 },
+    "byteDeltaEnabledMinusUnloaded": 17147380,
+    "byteIdenticalCommonFiles": 2131,
+    "contentChangedCommonFiles": 1475,
+    "enabledOnlyFiles": 9,
+    "changedCommonPathsByFamily": {
+      "Lighting": 710,
+      "Effect": 416,
+      "Water": 344
+    }
+  },
+  "scenes": [
+    {
+      "id": "breezehome-interior",
+      "states": [
+        { "state": "enabled", "meanMs": 3.7840, "medianMs": 3.8387, "p95Ms": 3.9837, "ratioToReference": 1.000 },
+        { "state": "resident-inactive", "meanMs": 4.0593, "medianMs": 4.0538, "p95Ms": 4.2560, "ratioToReference": 1.073 },
+        { "state": "startup-unloaded", "meanMs": 0.3385, "medianMs": 0.3386, "p95Ms": 0.3711, "ratioToReference": 0.089 }
+      ]
+    },
+    {
+      "id": "riften-exterior-fixed-anchor",
+      "states": [
+        { "state": "enabled-original", "meanMs": 4.4182, "medianMs": 4.1752, "p95Ms": 5.0962, "ratioToReference": 1.009 },
+        { "state": "enabled-repeat", "meanMs": 4.3776, "medianMs": 4.1667, "p95Ms": 5.2341, "ratioToReference": 1.000 },
+        { "state": "resident-inactive", "meanMs": 4.1577, "medianMs": 4.1120, "p95Ms": 4.5256, "ratioToReference": 0.950 },
+        { "state": "startup-unloaded", "meanMs": 0.5311, "medianMs": 0.5252, "p95Ms": 0.5514, "ratioToReference": 0.121 }
+      ],
+      "enabledRepeatFeatureWeightedMeanMs": {
+        "Upscaling": 3.6015,
+        "VolumetricLighting": 0.2039,
+        "Skylighting": 0.0578,
+        "ScreenSpaceShadows": 0.0083
+      }
+    }
+  ],
+  "archive": {
+    "archiveId": "2026-08-20-null-hmd-shader-state",
+    "fileCount": 14798,
+    "totalBytes": 781480981,
+    "fileManifestSha256": "50E2F79DBB07676BCDE7F0EDFAFB8112C2DB1A33A4C01A376E2EA492635DF187",
+    "sourceRetained": true
+  },
+  "conclusions": [
+    "Runtime disabled is not a performance proxy for startup unloading, especially when Upscaling changes route or resolution.",
+    "Feature load state changed 1475 common compiled shader paths, concentrated in Lighting, Effect, and Water, rather than only adding optional binaries.",
+    "The enabled Riften repeat differed from the original by 0.93 percent in mean CSX profiler time, supporting the repeatability of the scene contract."
+  ],
+  "caveats": [
+    "The original session recorded an exact DLL hash but not its source commit; use binary identity for this baseline and record both identities in future runs.",
+    "The null HMD proves the internal stereo presentation route but does not simulate physical-headset driver timing.",
+    "Feature-state comparisons can change render resolution and remaining-pass cost; timer deltas are not additive whole-frame savings."
+  ]
+}

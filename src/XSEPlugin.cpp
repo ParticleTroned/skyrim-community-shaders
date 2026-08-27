@@ -23,6 +23,7 @@
 #include "MenuDevBenchBridge.h"
 #include "Menu/ThemeManager.h"
 #include "ProfilerDevBenchBridge.h"
+#include "RenderMap/DevBenchBridge.h"
 #include "SceneSettingsManager.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
@@ -172,6 +173,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 			}
 			break;
 		}
@@ -188,6 +190,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				EngineFix::InstallOnPostPostLoadFixes();
@@ -290,6 +293,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 			}
 
 			break;

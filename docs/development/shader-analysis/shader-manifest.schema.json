@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:csx:schema:shader-dependency-manifest:2",
+  "title": "CSX shader dependency and invalidation manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "status",
+    "generatedBy",
+    "inventory",
+    "features",
+    "sources",
+    "families",
+    "compileUnits",
+    "passes",
+    "invalidationIndex",
+    "compatibilityVariants",
+    "manualPipelines",
+    "unresolved"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "status": { "const": "static-classified" },
+    "generatedBy": { "const": "tools/shader_dependency_manifest.py" },
+    "inventory": {
+      "type": "object",
+      "required": [
+        "sourceContributionCount",
+        "virtualSourceCount",
+        "productionEntryCount",
+        "includeSourceCount",
+        "testEntryCount",
+        "featureCount",
+        "compileUnitCount",
+        "passCount",
+        "includeEdgeCount",
+        "virtualCollisionCount",
+        "unresolvedIncludeCount",
+        "unacceptedUnresolvedIncludeCount",
+        "unresolvedCompileSiteCount",
+        "unclassifiedProductionEntryCount"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sourceContributionCount": { "$ref": "#/$defs/count" },
+        "virtualSourceCount": { "$ref": "#/$defs/count" },
+        "productionEntryCount": { "$ref": "#/$defs/count" },
+        "includeSourceCount": { "$ref": "#/$defs/count" },
+        "testEntryCount": { "$ref": "#/$defs/count" },
+        "featureCount": { "$ref": "#/$defs/count" },
+        "compileUnitCount": { "$ref": "#/$defs/count" },
+        "passCount": { "$ref": "#/$defs/count" },
+        "includeEdgeCount": { "$ref": "#/$defs/count" },
+        "virtualCollisionCount": { "$ref": "#/$defs/count" },
+        "unresolvedIncludeCount": { "$ref": "#/$defs/count" },
+        "unacceptedUnresolvedIncludeCount": { "$ref": "#/$defs/count" },
+        "unresolvedCompileSiteCount": { "$ref": "#/$defs/count" },
+        "unclassifiedProductionEntryCount": { "$ref": "#/$defs/count" }
+      }
+    },
+    "features": { "type": "array", "items": { "$ref": "#/$defs/feature" } },
+    "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
+    "families": { "type": "array", "items": { "$ref": "#/$defs/family" } },
+    "compileUnits": { "type": "array", "items": { "$ref": "#/$defs/compileUnit" } },
+    "passes": { "type": "array", "items": { "$ref": "#/$defs/pass" } },
+    "invalidationIndex": {
+      "type": "object",
+      "required": ["bySource", "byFeatureDefine", "structuralVariants"],
+      "additionalProperties": false,
+      "properties": {
+        "bySource": { "type": "array", "items": { "$ref": "#/$defs/sourceInvalidation" } },
+        "byFeatureDefine": { "type": "array", "items": { "$ref": "#/$defs/defineInvalidation" } },
+        "structuralVariants": { "type": "array", "items": { "$ref": "#/$defs/compatibilityVariant" } }
+      }
+    },
+    "compatibilityVariants": { "type": "array", "items": { "$ref": "#/$defs/compatibilityVariant" } },
+    "manualPipelines": { "type": "array", "items": { "type": "object", "required": ["id", "kind", "classificationStatus"] } },
+    "unresolved": {
+      "type": "object",
+      "required": ["virtualPathCollisions", "includes", "compileSites", "productionEntriesWithoutCompileEvidence", "runtimeEvidenceStillRequired"]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "stringArray": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "routeFlags": {
+      "type": "object",
+      "required": ["flat", "vr", "stereo", "overlay", "vendor", "compatibility"],
+      "additionalProperties": false,
+      "properties": {
+        "flat": { "type": ["boolean", "null"] },
+        "vr": { "type": ["boolean", "null"] },
+        "stereo": { "type": ["boolean", "null"] },
+        "overlay": { "type": ["boolean", "null"] },
+        "vendor": { "type": ["boolean", "null"] },
+        "compatibility": { "type": ["boolean", "null"] }
+      }
+    },
+    "feature": {
+      "type": "object",
+      "required": ["id", "displayName", "featureDirectory", "iniPaths", "sourceCandidates", "stateCapability", "shaderDefine", "shaderDefineScope", "classificationStatus", "notes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "shaderDefine": { "type": ["string", "null"] },
+        "classificationStatus": { "const": "static-classified" },
+        "shaderDefineScope": {
+          "type": "object",
+          "required": ["declaredShaderTypes", "declarationEvidence", "actualDirectSources", "actualEntryPoints", "potentialEngineShaderTypes", "currentEngineCacheScope", "semanticEngineShaderTypes", "candidateRemovableEngineTypes", "potentialIndependentPrograms", "precision"]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["id", "virtualPath", "sourcePath", "contributors", "owner", "ownerKind", "sha256", "role", "stageHint", "entryPoints", "directIncludes", "externalIncludes", "includeClosure", "dependedOnByEntryPoints", "macroReferences", "resources", "semantics", "routes", "classificationStatus"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "virtualPath": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "role": { "enum": ["production-entry", "test-entry", "include", "include-fragment"] },
+        "routes": { "$ref": "#/$defs/routeFlags" },
+        "classificationStatus": { "const": "static-classified" }
+      }
+    },
+    "family": {
+      "type": "object",
+      "required": ["id", "entryPoint", "owner", "stageHint", "includeCount", "featureOwnersInClosure", "macroReferences", "routes"]
+    },
+    "compileUnit": {
+      "type": "object",
+      "required": ["id", "kind", "sourceVirtualPath", "sourcePath", "inlineSource", "owner", "stage", "profile", "entryPoint", "compileDefines", "defineMode", "compileSite", "shaderObject", "invocationSites", "routes", "classificationStatus", "dependencyClosure", "resourceInterface"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^compile-[0-9]{4}$" },
+        "sourceVirtualPath": { "type": ["string", "null"] },
+        "sourcePath": { "type": ["string", "null"] },
+        "inlineSource": { "type": "boolean" },
+        "routes": { "$ref": "#/$defs/routeFlags" }
+      }
+    },
+    "pass": {
+      "type": "object",
+      "required": ["id", "owner", "pipelineKind", "compileUnit", "invocationSites", "inputs", "outputs", "orderingBefore", "orderingAfter", "routes", "classificationStatus"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^pass-[0-9]{4}$" },
+        "compileUnit": { "type": "string", "pattern": "^compile-[0-9]{4}$" },
+        "routes": { "$ref": "#/$defs/routeFlags" }
+      }
+    },
+    "sourceInvalidation": {
+      "type": "object",
+      "required": ["sourceVirtualPath", "affectedEntryPoints", "compileUnitIds"],
+      "additionalProperties": false,
+      "properties": {
+        "sourceVirtualPath": { "type": "string", "minLength": 1 },
+        "affectedEntryPoints": { "$ref": "#/$defs/stringArray" },
+        "compileUnitIds": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "defineInvalidation": {
+      "type": "object",
+      "required": ["feature", "define", "declaredShaderTypes", "potentialEngineShaderTypes", "currentEngineCacheScope", "semanticEngineShaderTypes", "candidateRemovableEngineTypes", "potentialIndependentPrograms", "affectedEntryPoints"]
+    },
+    "compatibilityVariant": {
+      "type": "object",
+      "required": ["id", "selection", "structuralDefine", "affectedFeature", "affectedEntryPoints", "cacheDirectories", "evidence", "classificationStatus"]
+    }
+  }
+}

@@ -2,6 +2,7 @@
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
+#include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
@@ -292,6 +293,204 @@ namespace
 		return texture;
 	}
 
+	[[nodiscard]] winrt::com_ptr<ID3D11Texture2D> RetainExactOpenVRSubmitTexture(
+		void* a_handle)
+	{
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (!a_handle)
+			return texture;
+
+		// OpenVR requires the handle itself to be the retained texture interface.
+		auto* unknown = static_cast<IUnknown*>(a_handle);
+		if (FAILED(unknown->QueryInterface(
+				__uuidof(ID3D11Texture2D),
+				texture.put_void())) ||
+			texture.get() != a_handle) {
+			texture = nullptr;
+		}
+		return texture;
+	}
+
+	// Own every pointer-backed Submit field until OpenVR returns, then validate
+	// the render-target generation before any accepted result advances CS state.
+	struct RetainedOpenVRSubmitPacket
+	{
+		OpenVRSubmitLeasePolicy::PayloadKind payloadKind =
+			OpenVRSubmitLeasePolicy::PayloadKind::Texture;
+		OpenVRSubmitLeasePolicy::PublicationLease publicationLease{};
+		vr::Texture_t texture{};
+		vr::VRTextureWithPose_t textureWithPose{};
+		vr::VRTextureWithDepth_t textureWithDepth{};
+		vr::VRTextureWithPoseAndDepth_t textureWithPoseAndDepth{};
+		vr::VRTextureBounds_t bounds{};
+		vr::EVREye eye = vr::Eye_Left;
+		vr::EVRSubmitFlags flags = vr::Submit_Default;
+		winrt::com_ptr<ID3D11Texture2D> colorLifetime;
+		winrt::com_ptr<ID3D11Texture2D> depthLifetime;
+		winrt::com_ptr<ID3D11Device> deviceLifetime;
+		vr::EVRCompositorError captureError =
+			vr::VRCompositorError_InvalidTexture;
+		bool hasTexture = false;
+		bool hasBounds = false;
+		bool directX = false;
+		bool valid = false;
+
+		[[nodiscard]] const vr::Texture_t* GetTexture() const noexcept
+		{
+			if (!hasTexture)
+				return nullptr;
+			switch (payloadKind) {
+			case OpenVRSubmitLeasePolicy::PayloadKind::TextureWithPose:
+				return static_cast<const vr::Texture_t*>(&textureWithPose);
+			case OpenVRSubmitLeasePolicy::PayloadKind::TextureWithDepth:
+				return static_cast<const vr::Texture_t*>(&textureWithDepth);
+			case OpenVRSubmitLeasePolicy::PayloadKind::TextureWithPoseAndDepth:
+				return static_cast<const vr::Texture_t*>(
+					&textureWithPoseAndDepth);
+			default:
+				return &texture;
+			}
+		}
+
+		[[nodiscard]] const vr::VRTextureBounds_t* GetBounds() const noexcept
+		{
+			return hasBounds ? &bounds : nullptr;
+		}
+
+		[[nodiscard]] ID3D11Texture2D* GetColorTexture() const noexcept
+		{
+			return colorLifetime.get();
+		}
+
+		[[nodiscard]] bool IsCurrent() const noexcept
+		{
+			if (!valid || !directX)
+				return false;
+
+			const uint64_t currentGeneration = globals::state ?
+				globals::state->GetRenderTargetResourcePublicationGeneration() :
+				0u;
+			return OpenVRSubmitLeasePolicy::CanPublish(
+				publicationLease,
+				currentGeneration,
+				reinterpret_cast<std::uintptr_t>(globals::d3d::device));
+		}
+	};
+
+	// The caller owns the render-target recreation lock while pointer-backed
+	// fields are copied and retained.
+	[[nodiscard]] RetainedOpenVRSubmitPacket CaptureRetainedOpenVRSubmitPacketLocked(
+		vr::EVREye a_eye,
+		const vr::Texture_t* a_texture,
+		const vr::VRTextureBounds_t* a_bounds,
+		vr::EVRSubmitFlags a_flags)
+	{
+		RetainedOpenVRSubmitPacket packet{};
+		packet.eye = a_eye;
+		packet.flags = a_flags;
+		const bool eyeValid =
+			a_eye == vr::Eye_Left || a_eye == vr::Eye_Right;
+		if (!eyeValid) {
+			packet.captureError = vr::VRCompositorError_IndexOutOfRange;
+		}
+		if (a_bounds) {
+			packet.bounds = *a_bounds;
+			packet.hasBounds = true;
+		}
+		if (!a_texture) {
+			packet.valid = eyeValid;
+			return packet;
+		}
+
+		packet.hasTexture = true;
+		const auto flagBits = static_cast<uint32_t>(a_flags);
+		const bool hasPose =
+			(flagBits & static_cast<uint32_t>(vr::Submit_TextureWithPose)) != 0;
+		const bool hasDepth =
+			(flagBits & static_cast<uint32_t>(vr::Submit_TextureWithDepth)) != 0;
+		packet.payloadKind =
+			OpenVRSubmitLeasePolicy::SelectPayloadKind(hasPose, hasDepth);
+		switch (packet.payloadKind) {
+		case OpenVRSubmitLeasePolicy::PayloadKind::TextureWithPose:
+			packet.textureWithPose =
+				*static_cast<const vr::VRTextureWithPose_t*>(a_texture);
+			break;
+		case OpenVRSubmitLeasePolicy::PayloadKind::TextureWithDepth:
+			packet.textureWithDepth =
+				*static_cast<const vr::VRTextureWithDepth_t*>(a_texture);
+			break;
+		case OpenVRSubmitLeasePolicy::PayloadKind::TextureWithPoseAndDepth:
+			packet.textureWithPoseAndDepth =
+				*static_cast<const vr::VRTextureWithPoseAndDepth_t*>(a_texture);
+			break;
+		default:
+			packet.texture = *a_texture;
+			break;
+		}
+
+		packet.directX = a_texture->eType == vr::TextureType_DirectX;
+		if (!packet.directX) {
+			packet.valid = eyeValid;
+			return packet;
+		}
+
+		packet.colorLifetime =
+			RetainExactOpenVRSubmitTexture(a_texture->handle);
+		if (!packet.colorLifetime)
+			return packet;
+		packet.colorLifetime->GetDevice(packet.deviceLifetime.put());
+		if (!packet.deviceLifetime ||
+			packet.deviceLifetime.get() != globals::d3d::device) {
+			if (eyeValid) {
+				packet.captureError =
+					vr::VRCompositorError_TextureIsOnWrongDevice;
+			}
+			return packet;
+		}
+
+		if (hasDepth) {
+			vr::VRTextureDepthInfo_t* depthInfo = nullptr;
+			if (packet.payloadKind ==
+				OpenVRSubmitLeasePolicy::PayloadKind::TextureWithDepth) {
+				depthInfo = &packet.textureWithDepth.depth;
+			} else {
+				depthInfo = &packet.textureWithPoseAndDepth.depth;
+			}
+			const auto depthHandle = depthInfo->handle;
+			packet.depthLifetime =
+				RetainExactOpenVRSubmitTexture(depthHandle);
+			if (!packet.depthLifetime)
+				return packet;
+			winrt::com_ptr<ID3D11Device> depthDevice;
+			packet.depthLifetime->GetDevice(depthDevice.put());
+			if (!depthDevice ||
+				depthDevice.get() != packet.deviceLifetime.get()) {
+				if (eyeValid) {
+					packet.captureError =
+						vr::VRCompositorError_TextureIsOnWrongDevice;
+				}
+				return packet;
+			}
+		}
+
+		const uint64_t publicationGeneration = globals::state ?
+			globals::state->GetCompletedRenderTargetResourcePublicationGeneration() :
+			0u;
+		packet.publicationLease = {
+			.generation = publicationGeneration,
+			.deviceIdentity = reinterpret_cast<std::uintptr_t>(
+				packet.deviceLifetime.get()),
+			.colorTextureRetained = static_cast<bool>(packet.colorLifetime),
+			.depthTextureRequired = hasDepth,
+			.depthTextureRetained =
+				!hasDepth || static_cast<bool>(packet.depthLifetime),
+		};
+		if (eyeValid && !packet.publicationLease.IsValid())
+			packet.captureError = vr::VRCompositorError_RequestFailed;
+		packet.valid = eyeValid && packet.publicationLease.IsValid();
+		return packet;
+	}
+
 	constexpr char kSubmitCompositeCS[] = R"(
 cbuffer OverlayCompositeCB : register(b0)
 {
@@ -519,6 +718,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				!acceptedNativeRestoreCycleAtHookEntry)
 				return rejectQuarantinedSubmit(pTexture, pBounds);
 			const Upscaling::VRRenderScalePresentationObservation* probePresentationObservation = nullptr;
+			RetainedOpenVRSubmitPacket lastSubmitPacket{};
 			auto submit = [&](const char* a_path,
 							  const vr::Texture_t* a_texture,
 							  const vr::VRTextureBounds_t* a_bounds,
@@ -530,48 +730,76 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							  bool a_allowPostLoadScopeRebase = false,
 							  bool a_allowScreenshotCapture = true) {
 				(void)a_probeObservation;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-				const uint64_t probeSequence = upscaling.BeginVRLoadPresentationProbeSubmit(
-					a_path,
-					eEye,
-					a_texture,
-					a_bounds,
-					a_submitFlags,
-					compositorCycleToken,
-					true,
-					a_probeObservation);
-#endif
-				vr::EVRCompositorError result;
-				winrt::com_ptr<ID3D11Texture2D> submitTextureLifetime;
-				const bool observeScreenshot =
-					a_allowScreenshotCapture &&
-					globals::features::screenshotFeature.HasPendingCapture();
-				{
+				const RetainedOpenVRSubmitPacket submitPacket = [&]() {
 					const std::shared_lock renderTargetReadLock(
 						Hooks::GetRenderTargetRecreationMutex());
-					if (observeScreenshot &&
-						a_texture &&
-						a_texture->handle &&
-						a_texture->eType == vr::TextureType_DirectX) {
-						submitTextureLifetime = ResolveSubmitTexture2D(a_texture->handle);
-					}
-					result = func(
-						_this,
+					return CaptureRetainedOpenVRSubmitPacketLocked(
 						eEye,
 						a_texture,
 						a_bounds,
 						a_submitFlags);
-					if (result == vr::VRCompositorError_None &&
-						observeScreenshot &&
-						submitTextureLifetime &&
-						globals::features::screenshotFeature.HasPendingCapture()) {
-						globals::features::screenshotFeature.ObserveAcceptedVRSubmit(
-							compositorCycleToken,
-							eEye,
-							submitTextureLifetime.get(),
-							a_bounds,
-							a_texture->eColorSpace);
-					}
+				}();
+				const auto isSubmitPacketCurrent = [&]() {
+					const std::shared_lock renderTargetReadLock(
+						Hooks::GetRenderTargetRecreationMutex());
+					return submitPacket.valid && submitPacket.IsCurrent();
+				};
+				const auto* retainedTexture =
+					submitPacket.directX && !submitPacket.GetColorTexture() ?
+						nullptr :
+						submitPacket.GetTexture();
+				const auto* retainedBounds = submitPacket.GetBounds();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				const uint64_t probeSequence = upscaling.BeginVRLoadPresentationProbeSubmit(
+					a_path,
+					submitPacket.eye,
+					retainedTexture,
+					retainedBounds,
+					submitPacket.flags,
+					compositorCycleToken,
+					submitPacket.valid,
+					a_probeObservation);
+#endif
+				vr::EVRCompositorError result = submitPacket.captureError;
+				const bool observeScreenshot =
+					a_allowScreenshotCapture &&
+					globals::features::screenshotFeature.HasPendingCapture();
+				if (submitPacket.valid) {
+					result = func(
+						_this,
+						submitPacket.eye,
+						retainedTexture,
+						retainedBounds,
+						submitPacket.flags);
+				}
+				const bool submitPacketCurrentAfterSubmit =
+					isSubmitPacketCurrent();
+				if (result == vr::VRCompositorError_None &&
+					submitPacket.directX &&
+					submitPacket.valid &&
+					!submitPacketCurrentAfterSubmit) {
+					logger::debug(
+						"[VRSubmitLease] Discarding stale OpenVR Submit observation path={} eye={} capturedGeneration={} currentGeneration={}",
+						a_path,
+						static_cast<uint32_t>(submitPacket.eye),
+						submitPacket.publicationLease.generation,
+						globals::state ?
+							globals::state->GetRenderTargetResourcePublicationGeneration() :
+							0u);
+				}
+				if (result == vr::VRCompositorError_None &&
+					submitPacketCurrentAfterSubmit &&
+					isSubmitPacketCurrent() &&
+					observeScreenshot &&
+					submitPacket.GetColorTexture() &&
+					retainedTexture &&
+					globals::features::screenshotFeature.HasPendingCapture()) {
+					globals::features::screenshotFeature.ObserveAcceptedVRSubmit(
+						compositorCycleToken,
+						submitPacket.eye,
+						submitPacket.GetColorTexture(),
+						retainedBounds,
+						retainedTexture->eColorSpace);
 				}
 				uint64_t completionScopeEpoch =
 					postLoadSubmitScopeEpoch;
@@ -586,10 +814,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					// conservatively quarantined by Complete.
 					completionScopeEpoch = 0;
 				}
+				const bool canPublishSubmitResult =
+					submitPacketCurrentAfterSubmit && isSubmitPacketCurrent();
+				const auto completionResult =
+					result == vr::VRCompositorError_None && !canPublishSubmitResult ?
+						vr::VRCompositorError_RequestFailed :
+						result;
 				const auto keepaliveDisposition =
 					upscaling.CompleteVRPostLoadCompositorSubmit(
-						eEye,
-						result,
+						submitPacket.eye,
+						completionResult,
 						a_postLoadReleaseToken,
 						a_postLoadKeepaliveToken,
 						compositorCycleToken,
@@ -601,12 +835,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 #endif
 				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 					a_path,
-					eEye,
-					a_texture,
-					a_bounds,
-					a_submitFlags,
+					submitPacket.eye,
+					retainedTexture,
+					retainedBounds,
+					submitPacket.flags,
 					result);
+				lastSubmitPacket = submitPacket;
 				return result;
+			};
+			const auto isCurrentSubmitSuccess = [&](vr::EVRCompositorError a_result) {
+				if (a_result != vr::VRCompositorError_None) {
+					return false;
+				}
+				const std::shared_lock renderTargetReadLock(
+					Hooks::GetRenderTargetRecreationMutex());
+				return lastSubmitPacket.IsCurrent();
 			};
 			auto suppressPostLoadSubmit = [&](
 											  const char* a_candidatePath,
@@ -639,7 +882,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						0,
 						0,
 						probePresentationObservation);
-					if (fallbackResult == vr::VRCompositorError_None &&
+					if (isCurrentSubmitSuccess(fallbackResult) &&
 						a_recordCandidateObservationOnFallback &&
 						probePresentationObservation &&
 						probePresentationObservation->valid) {
@@ -875,17 +1118,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						return;
 					}
 
-					winrt::com_ptr<ID3D11Texture2D> currentTexture;
-					if (pTexture &&
-						pTexture->handle &&
-						pTexture->eType ==
-							vr::TextureType_DirectX) {
-						currentTexture =
-							ResolveSubmitTexture2D(
-								pTexture->handle);
-					}
-					if (!currentTexture ||
-						currentTexture.get() !=
+					if (!isCurrentSubmitSuccess(vr::VRCompositorError_None) ||
+						!lastSubmitPacket.GetColorTexture() ||
+						lastSubmitPacket.GetColorTexture() !=
 							a_expectedTexture) {
 						return;
 					}
@@ -893,10 +1128,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					Upscaling::VRRenderScalePresentationObservation
 						freshObservation{};
 					if (!upscaling.PrepareVRNativeRestorePresentationObservation(
-							eEye,
+							lastSubmitPacket.eye,
 							compositorCycleToken,
-							pTexture,
-							pBounds,
+							lastSubmitPacket.GetTexture(),
+							lastSubmitPacket.GetBounds(),
 							freshObservation) ||
 						!freshObservation.valid ||
 						freshObservation.transitionEpoch !=
@@ -969,9 +1204,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						&presentationObservation :
 						nullptr,
 					nullptr,
-					nativeRestoreCycle.postLoadKeepaliveToken == 0,
-					nativeRestoreCycle.path == VRNativeRestoreCyclePresentationPath::Native);
-				if (result == vr::VRCompositorError_None &&
+							nativeRestoreCycle.postLoadKeepaliveToken == 0,
+							nativeRestoreCycle.path == VRNativeRestoreCyclePresentationPath::Native);
+				const bool currentSubmitSuccess =
+					isCurrentSubmitSuccess(result);
+				if (currentSubmitSuccess &&
 					a_recordStrictObservation &&
 					presentationObservation.valid) {
 					recordStrictNativeRestoreObservationIfCurrent(
@@ -979,14 +1216,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						nativeRestoreCycle.contractGeneration,
 						nativeRestoreCycle.lifetime.get());
 				} else if (
-					result != vr::VRCompositorError_None &&
+					!currentSubmitSuccess &&
 					nativeRestoreCycle.path ==
 						VRNativeRestoreCyclePresentationPath::Native &&
 					nativeRestoreCycle.guardEpoch != 0) {
 					upscaling.RecordVRNativeRestorePresentationRejection(
 						compositorCycleToken,
 						nativeRestoreCycle.guardEpoch,
-						"OpenVR rejected the retained native peer eye");
+						result == vr::VRCompositorError_None ?
+							"render-target relatch invalidated the retained native peer eye" :
+							"OpenVR rejected the retained native peer eye");
 				}
 				return result;
 			};
@@ -1034,12 +1273,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					nullptr,
 					true,
 					false);
-				if (result != vr::VRCompositorError_None) {
+				if (!isCurrentSubmitSuccess(result)) {
 					rejectNativeRestoreCycle(result);
 					upscaling.RecordVRNativeRestorePresentationRejection(
 						compositorCycleToken,
 						nativeRestoreGuardEpoch,
-						"OpenVR rejected the first native-restore black keepalive eye");
+						result == vr::VRCompositorError_None ?
+							"render-target relatch invalidated the first native-restore black keepalive eye" :
+							"OpenVR rejected the first native-restore black keepalive eye");
 					return result;
 				}
 				if (!commitAcceptedNativeRestoreCycle(
@@ -1113,12 +1354,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						nullptr,
 					nullptr,
 					true);
-				if (result != vr::VRCompositorError_None) {
+				if (!isCurrentSubmitSuccess(result)) {
 					rejectNativeRestoreCycle(result);
 					upscaling.RecordVRNativeRestorePresentationRejection(
 						compositorCycleToken,
 						nativeRestoreGuardEpoch,
-						"OpenVR rejected the first guarded native eye");
+						result == vr::VRCompositorError_None ?
+							"render-target relatch invalidated the first guarded native eye" :
+							"OpenVR rejected the first guarded native eye");
 					return result;
 				}
 				if (!commitAcceptedNativeRestoreCycle(
@@ -1277,7 +1520,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 								postLoadReleaseToken,
 								0,
 								&presentationObservation);
-							if (result == vr::VRCompositorError_None) {
+							if (isCurrentSubmitSuccess(result)) {
 								upscaling.RecordVRRenderScalePresentationObservation(
 									presentationObservation,
 									false,
@@ -1332,8 +1575,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					// above so an accepted result is unambiguously the retained
 					// keepalive (including AlreadySatisfied, whose black
 					// occupancy was proven by the post-load controller).
-					if (suppressionResult ==
-							vr::VRCompositorError_None &&
+					if (isCurrentSubmitSuccess(suppressionResult) &&
 						postLoadKeepalive.IsValid() &&
 						commitAcceptedNativeRestoreCycle(
 							VRNativeRestoreCyclePresentationPath::
@@ -1462,7 +1704,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							&overlayTexture,
 							pBounds,
 							nSubmitFlags);
-						if (result == vr::VRCompositorError_None) {
+						if (isCurrentSubmitSuccess(result)) {
 							vr.MarkAutoHideOverlayPresented();
 						}
 						return result;
@@ -1513,26 +1755,18 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				postLoadReleaseToken,
 				0,
 				presentationObservation.valid ? &presentationObservation : nullptr);
-			if (result == vr::VRCompositorError_None &&
+			const bool currentSubmitSuccess =
+				isCurrentSubmitSuccess(result);
+			if (currentSubmitSuccess &&
 				presentationObservation.path ==
 					Upscaling::VRRenderScalePresentationPath::
 						NativeOriginal) {
-				winrt::com_ptr<ID3D11Texture2D>
-					acceptedNativeTexture;
-				if (pTexture &&
-					pTexture->handle &&
-					pTexture->eType ==
-						vr::TextureType_DirectX) {
-					acceptedNativeTexture =
-						ResolveSubmitTexture2D(
-							pTexture->handle);
-				}
 				recordStrictNativeRestoreObservationIfCurrent(
 					presentationObservation.transitionEpoch,
 					presentationObservation.contractGeneration,
-					acceptedNativeTexture.get());
+					lastSubmitPacket.GetColorTexture());
 			} else if (
-				result == vr::VRCompositorError_None &&
+				currentSubmitSuccess &&
 				presentationObservation.path ==
 					Upscaling::VRRenderScalePresentationPath::
 						BoundsMismatchOriginalFallback) {
@@ -1540,12 +1774,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					presentationObservation,
 					false,
 					renderScalePresentationPacketPtr);
-			} else if (nativeRestoreGuardActive &&
-					   result != vr::VRCompositorError_None) {
+			} else if (nativeRestoreGuardActive && !currentSubmitSuccess) {
 				upscaling.RecordVRNativeRestorePresentationRejection(
 					compositorCycleToken,
 					nativeRestoreGuardEpoch,
-					"OpenVR rejected guarded native presentation");
+					result == vr::VRCompositorError_None ?
+						"render-target relatch invalidated guarded native presentation" :
+						"OpenVR rejected guarded native presentation");
 			}
 			return result;
 		}

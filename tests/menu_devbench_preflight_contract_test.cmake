@@ -1,0 +1,90 @@
+if(NOT DEFINED PROJECT_ROOT)
+    get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+endif()
+
+set(_bridge_path "${PROJECT_ROOT}/src/MenuDevBenchBridge.cpp")
+file(READ "${_bridge_path}" _bridge)
+
+string(REGEX MATCH
+    "R\"\\((\\{\"description\":\"Inspect and control the CSX VR menu[^\r\n]*\\})\\)\""
+    _descriptor_match
+    "${_bridge}"
+)
+if(NOT _descriptor_match)
+    message(FATAL_ERROR "Menu DevBench descriptor was not found")
+endif()
+set(_descriptor "${CMAKE_MATCH_1}")
+string(JSON _descriptor_type ERROR_VARIABLE _descriptor_error TYPE "${_descriptor}")
+if(_descriptor_error OR NOT _descriptor_type STREQUAL "OBJECT")
+    message(FATAL_ERROR "Invalid menu DevBench descriptor JSON: ${_descriptor_error}")
+endif()
+
+string(JSON _action_count LENGTH
+    "${_descriptor}" inputSchema properties action enum
+)
+set(_prepare_coc_found FALSE)
+math(EXPR _action_last "${_action_count} - 1")
+foreach(_index RANGE 0 ${_action_last})
+    string(JSON _action GET
+        "${_descriptor}" inputSchema properties action enum ${_index}
+    )
+    if(_action STREQUAL "prepare_coc")
+        set(_prepare_coc_found TRUE)
+    endif()
+endforeach()
+if(NOT _prepare_coc_found)
+    message(FATAL_ERROR "Menu DevBench schema is missing prepare_coc")
+endif()
+
+foreach(_required_behavior IN ITEMS
+    "if (action == \"prepare_coc\")"
+    "CaptureCocPreflightSnapshot"
+    "GetVRFpsStabilizerSessionConfig()"
+    "IsVRFpsStabilizerSyncActive()"
+    "CanApplyRuntimeSettings(before.state)"
+    "SetLogLevel(spdlog::level::debug)"
+    "settings.foveatedVendorDispatch = true"
+    "settings.periphery_taa_enable = true"
+    "kFoveatedCenterArea"
+    "kPeripheryTAACenterArea"
+    "kPeripheryTAAOuterScale"
+    "{ \"persisted\", false }"
+    "{ \"promptRequired\", true }"
+)
+    string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
+    if(_behavior_position EQUAL -1)
+        message(FATAL_ERROR
+            "Menu COC preflight behavior is missing: ${_required_behavior}"
+        )
+    endif()
+endforeach()
+
+string(FIND
+    "${_bridge}"
+    "CanApplyRuntimeSettings(before.state)"
+    _mutation_guard_position
+)
+string(FIND
+    "${_bridge}"
+    "SetLogLevel(spdlog::level::debug)"
+    _first_mutation_position
+)
+if(_mutation_guard_position GREATER _first_mutation_position)
+    message(FATAL_ERROR
+        "COC preflight mutates runtime settings before checking prerequisites"
+    )
+endif()
+
+foreach(_forbidden_behavior IN ITEMS
+    "SaveVRFpsStabilizerConfig"
+    "SaveSettings"
+)
+    string(FIND "${_bridge}" "${_forbidden_behavior}" _forbidden_position)
+    if(NOT _forbidden_position EQUAL -1)
+        message(FATAL_ERROR
+            "COC preflight bridge contains a persistence path: ${_forbidden_behavior}"
+        )
+    endif()
+endforeach()
+
+message(STATUS "Menu DevBench COC preflight contract is coherent")

@@ -9,6 +9,7 @@
 #	include "Features/VRDepthCullingTemporal.h"
 #	include "Globals.h"
 #	include "Menu.h"
+#	include "MenuDevBenchPreflightPolicy.h"
 #	include "State.h"
 
 #	include <DevBenchAPI.h>
@@ -31,6 +32,165 @@ namespace
 	constexpr auto kMainThreadTimeout = std::chrono::milliseconds(5000);
 	std::atomic_bool g_installAttempted{ false };
 	std::atomic_bool g_registered{ false };
+
+	struct CocPreflightSnapshot
+	{
+		MenuDevBenchPreflightPolicy::State state;
+		bool stabilizerFileExists = false;
+		bool stabilizerFileReadable = false;
+		bool stabilizerSwitchingEnabled = false;
+		bool stabilizerHasUpscalingProfile = false;
+		std::string stabilizerIniName;
+		std::string logLevel;
+		int logLevelValue = 0;
+	};
+
+	CocPreflightSnapshot CaptureCocPreflightSnapshot()
+	{
+		auto* state = globals::state;
+		auto& upscaling = globals::features::upscaling;
+		const auto& settings = upscaling.settings;
+		const auto& stabilizer = upscaling.GetVRFpsStabilizerSessionConfig();
+		const auto logLevel = state ? state->GetLogLevel() : spdlog::level::off;
+
+		return {
+			.state = {
+				.vr = globals::game::isVR,
+				.inGame = state &&
+			              !state->isMainMenuOpen &&
+			              !state->isLoadingMenuOpen &&
+			              RE::PlayerCharacter::GetSingleton() != nullptr,
+				.stabilizerActiveForSession = upscaling.IsVRFpsStabilizerSyncActive(),
+				.developerMode = state && state->IsDeveloperMode(),
+				.foveatedVendorDispatch = settings.foveatedVendorDispatch,
+				.foveatedCenterArea = settings.foveatedCenterArea,
+				.peripheryTAAEnabled = settings.periphery_taa_enable,
+				.peripheryTAACenterArea = settings.periphery_taa_center_area,
+				.peripheryTAAOuterScale = settings.periphery_taa_outer_scale,
+			},
+			.stabilizerFileExists = stabilizer.fileExists,
+			.stabilizerFileReadable = stabilizer.fileReadable,
+			.stabilizerSwitchingEnabled = stabilizer.upscalingSwitchingEnabled,
+			.stabilizerHasUpscalingProfile = stabilizer.HasAnyUpscalingProfile(),
+			.stabilizerIniName = stabilizer.path.filename().string(),
+			.logLevel = std::string(magic_enum::enum_name(logLevel)),
+			.logLevelValue = static_cast<int>(logLevel),
+		};
+	}
+
+	json CocPreflightSnapshotJson(const CocPreflightSnapshot& a_snapshot)
+	{
+		const auto& state = a_snapshot.state;
+		return {
+			{ "ready", MenuDevBenchPreflightPolicy::IsReady(state) },
+			{ "vr", state.vr },
+			{ "inGame", state.inGame },
+			{ "developerMode", {
+								   { "active", state.developerMode },
+								   { "logLevel", a_snapshot.logLevel },
+								   { "logLevelValue", a_snapshot.logLevelValue },
+							   } },
+			{ "foveation", {
+							   { "ready", MenuDevBenchPreflightPolicy::HasRequiredFoveation(state) },
+							   { "foveatedVendorDispatch", state.foveatedVendorDispatch },
+							   { "foveatedCenterArea", state.foveatedCenterArea },
+							   { "peripheryTAAEnable", state.peripheryTAAEnabled },
+							   { "peripheryTAACenterArea", state.peripheryTAACenterArea },
+							   { "peripheryTAAOuterScale", state.peripheryTAAOuterScale },
+						   } },
+			{ "vrFpsStabilizer", {
+									 { "activeForSession", state.stabilizerActiveForSession },
+									 { "fileExistsAtStartup", a_snapshot.stabilizerFileExists },
+									 { "fileReadableAtStartup", a_snapshot.stabilizerFileReadable },
+									 { "switchingEnabledAtStartup", a_snapshot.stabilizerSwitchingEnabled },
+									 { "hasUpscalingProfileAtStartup", a_snapshot.stabilizerHasUpscalingProfile },
+									 { "iniName", a_snapshot.stabilizerIniName },
+								 } },
+		};
+	}
+
+	std::string CocPreflightBlockCode(const CocPreflightSnapshot& a_snapshot)
+	{
+		if (!a_snapshot.state.vr)
+			return "skyrim_vr_required";
+		if (!a_snapshot.state.inGame)
+			return "in_game_state_required";
+		if (!a_snapshot.state.stabilizerActiveForSession)
+			return "vr_fps_stabilizer_required";
+		return "preflight_not_ready";
+	}
+
+	json PrepareCocPreflight()
+	{
+		const auto before = CaptureCocPreflightSnapshot();
+		if (!MenuDevBenchPreflightPolicy::CanApplyRuntimeSettings(before.state)) {
+			return {
+				{ "action", "prepare_coc" },
+				{ "applied", false },
+				{ "changed", false },
+				{ "persisted", false },
+				{ "ready", false },
+				{ "promptRequired", true },
+				{ "errorCode", CocPreflightBlockCode(before) },
+				{ "before", CocPreflightSnapshotJson(before) },
+				{ "after", CocPreflightSnapshotJson(before) },
+			};
+		}
+
+		json changes = json::array();
+		if (!before.state.developerMode) {
+			globals::state->SetLogLevel(spdlog::level::debug);
+			changes.push_back("developer_mode");
+		}
+
+		auto& settings = globals::features::upscaling.settings;
+		if (!settings.foveatedVendorDispatch) {
+			settings.foveatedVendorDispatch = true;
+			changes.push_back("foveated_vendor_dispatch");
+		}
+		if (!MenuDevBenchPreflightPolicy::NearlyEqual(
+				settings.foveatedCenterArea,
+				MenuDevBenchPreflightPolicy::kFoveatedCenterArea)) {
+			settings.foveatedCenterArea =
+				static_cast<float>(MenuDevBenchPreflightPolicy::kFoveatedCenterArea);
+			changes.push_back("foveated_center_area");
+		}
+		if (!settings.periphery_taa_enable) {
+			settings.periphery_taa_enable = true;
+			changes.push_back("periphery_taa");
+		}
+		if (!MenuDevBenchPreflightPolicy::NearlyEqual(
+				settings.periphery_taa_center_area,
+				MenuDevBenchPreflightPolicy::kPeripheryTAACenterArea)) {
+			settings.periphery_taa_center_area =
+				static_cast<float>(MenuDevBenchPreflightPolicy::kPeripheryTAACenterArea);
+			changes.push_back("periphery_taa_center_area");
+		}
+		if (!MenuDevBenchPreflightPolicy::NearlyEqual(
+				settings.periphery_taa_outer_scale,
+				MenuDevBenchPreflightPolicy::kPeripheryTAAOuterScale)) {
+			settings.periphery_taa_outer_scale =
+				static_cast<float>(MenuDevBenchPreflightPolicy::kPeripheryTAAOuterScale);
+			changes.push_back("periphery_taa_outer_scale");
+		}
+
+		const auto after = CaptureCocPreflightSnapshot();
+		const bool ready = MenuDevBenchPreflightPolicy::IsReady(after.state);
+		json result = {
+			{ "action", "prepare_coc" },
+			{ "applied", true },
+			{ "changed", !changes.empty() },
+			{ "persisted", false },
+			{ "ready", ready },
+			{ "promptRequired", !ready },
+			{ "changes", std::move(changes) },
+			{ "before", CocPreflightSnapshotJson(before) },
+			{ "after", CocPreflightSnapshotJson(after) },
+		};
+		if (!ready)
+			result["errorCode"] = CocPreflightBlockCode(after);
+		return result;
+	}
 
 	json InspectMenuTexture()
 	{
@@ -194,10 +354,10 @@ namespace
 			{ "fixedWorldPositionInitialized", vr.fixedWorldOverlayPosition.initialized },
 			{ "fixedWorldReanchorRequested", vr.fixedWorldOverlayReanchorRequested },
 			{ "fixedWorldPosition", {
-				{ "x", fixedWorldPosition.x },
-				{ "y", fixedWorldPosition.y },
-				{ "z", fixedWorldPosition.z },
-			} },
+										{ "x", fixedWorldPosition.x },
+										{ "y", fixedWorldPosition.y },
+										{ "z", fixedWorldPosition.z },
+									} },
 			{ "menuScale", vr.settings.VRMenuScale },
 			{ "depthCullingExteriorEnabled", vr.settings.EnableDepthBufferCullingExterior },
 			{ "depthCullingInteriorEnabled", vr.settings.EnableDepthBufferCullingInterior },
@@ -225,11 +385,11 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode") {
+		if (action != "status" && action != "open" && action != "close" && action != "screenshot" && action != "set_path" && action != "texture_stats" && action != "set_depth_culling_performance_mode" && action != "set_depth_culling_legacy_mode" && action != "prepare_coc") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode" }) },
+				{ "supported", json::array({ "status", "open", "close", "screenshot", "set_path", "texture_stats", "set_depth_culling_performance_mode", "set_depth_culling_legacy_mode", "prepare_coc" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -250,6 +410,8 @@ namespace
 		const bool enabled = a_args.value("enabled", false);
 
 		return RunOnMainThread([action, path, enabled]() -> json {
+			if (action == "prepare_coc")
+				return PrepareCocPreflight();
 			auto* menu = globals::menu;
 			if (!menu)
 				return { { "error", "CSX menu unavailable" } };
@@ -324,7 +486,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu and depth-culling A/B policy. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Mode state required by a depth-culling setter action."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX VR menu and depth-culling A/B policy. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","open","close","screenshot","set_path","texture_stats","set_depth_culling_performance_mode","set_depth_culling_legacy_mode","prepare_coc"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Mode state required by a depth-culling setter action."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

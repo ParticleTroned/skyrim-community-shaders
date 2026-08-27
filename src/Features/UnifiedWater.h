@@ -18,7 +18,7 @@ struct UnifiedWater : OverlayFeature
 			{ T("feature.unified_water.key_feature_1", "Unifies distant and close water appearance, streamlining all lighting visuals."),
 				T("feature.unified_water.key_feature_2", "Completely and fundamentally resolves water LOD mismatch issues."),
 				T("feature.unified_water.key_feature_3", "Provides background systems for water geometry rendering, allowing more advanced water effects."),
-				T("feature.unified_water.key_feature_4", "Improves vanilla performance by using optimized water meshes for distant water.") } };
+				T("feature.unified_water.key_feature_4", "Improves vanilla performance by using efficient water meshes for distant water.") } };
 	};
 
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
@@ -26,7 +26,6 @@ struct UnifiedWater : OverlayFeature
 	struct Settings
 	{
 		std::uint32_t SurfaceVisibilityModelVersion = 12;
-		bool UseOptimisedMeshes = true;
 		bool UseOpenShadersDepthBehaviour = false;
 		float3 WaterTintColor = { 0.0f, 0.35f, 1.0f };
 		float WaterTintStrength = 0.0f;
@@ -127,12 +126,6 @@ struct UnifiedWater : OverlayFeature
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
-	virtual bool HasPerformanceSettings() const override { return true; }
-	virtual void DrawPerformanceSettings(bool a_advanced) override;
-	virtual json CapturePerformanceSettingsState() const override;
-	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.UseOptimisedMeshes; }
-	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.UseOptimisedMeshes = a_enabled; }
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override;
@@ -151,7 +144,6 @@ struct UnifiedWater : OverlayFeature
 
 private:
 	RE::NiPointer<RE::BSTriShape> waterMesh;
-	RE::NiPointer<RE::BSTriShape> optimisedWaterMesh;
 	Flowmap* flowmap = nullptr;
 	WaterCache* waterCache = nullptr;
 

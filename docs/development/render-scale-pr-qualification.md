@@ -114,12 +114,54 @@ Each transition is a fail-fast sequence of checked top-level MCP calls:
    destination, requested/effective/stable profile agreement, complete physical
    resources, clean lifecycle, and a coherent two-eye presentation.
 
-The waiter stops on the first coherent stable observation. The runner validates
-`satisfied: true` and `outcome: stable` before dispatching the next COC. There
-are no fixed sleeps, menu queries, client polling loops, same-cell COCs, or
-overlapping transitions in the 20-transition sequence. A semantic or transport
-failure stops before the next mutation. The per-transition ceiling is 120
-seconds, further bounded by the suite deadline.
+### Qualification milestones
+
+`qualification_wait` accepts the optional `milestone` value `strict`,
+`presentation`, or `cleanup`. Omitting it is exactly equivalent to selecting
+`strict`; the revision-4 runner therefore retains its existing combined
+qualification semantics. Strict success requires presentation stability and
+drained cleanup at the same observation. Neither named milestone can turn a
+strict failure into a protocol pass.
+
+Presentation stability proves the exact destination and profile, current
+render-target resource publication, provider generation and resources, valid
+dimensions, settled mutation authority, device health, fidelity, and a
+coherent current stereo submission. It remains blocked by an active API or
+controller operation, relatch, recovery, unresolved physical mutation,
+terminal provider/lifecycle failure, or shader compilation still required by
+the active contract. A completed vendor stereo cycle remains coherent while
+one live eye advances into the immediately following compositor cycle.
+
+Cleanup drain proves that no active operation can create more cleanup debt and
+that passive work has completed. Its outstanding-debt snapshot includes the
+work gate, memory trim, intermediate and engine-target retirement, post-load
+recovery, physical mutation ownership, and shader-compilation state. A retired
+generation waiting on its safe tail or fence, a nonblocking trim, or historical
+debt unrelated to the current proven generation does not by itself withhold
+the presentation milestone.
+
+The policy classifies the previous strict checks as follows:
+
+| Classification | Checks |
+| -------------- | ------ |
+| Presentation mutation authority | API operation and blocking conditions, controller state, relatch, recovery, physical mutation, current resource publication, exact physical/provider ownership |
+| Cleanup-only debt | effective work gate, memory trim, intermediate retirement, engine-target retirement, and legacy global shader-compiler drainage |
+| Terminal error | build/session/owner failure at the request boundary, device loss, terminal controller/provider state, lifecycle failure, fidelity/fallback diagnostics, and counter regression |
+
+Every receipt retains server-owned dispatch, first `presentationStable`, first
+`cleanupDrained`, and first strict-completion QPC/frame timestamps. It returns
+the three Boolean results, separate failure masks and decoded reasons, elapsed
+milliseconds and frames, and the latest outstanding cleanup-debt snapshot.
+First-observed timestamps remain immutable if a later observation changes.
+Timeout receipts include `timedOutMilestone` and the current masks for all three
+decisions.
+
+The strict waiter stops on the first observation that satisfies both
+milestones. The runner validates `satisfied: true` and `outcome: stable` before
+dispatching the next COC. There are no fixed sleeps, menu queries, client
+polling loops, same-cell COCs, or overlapping transitions in the 20-transition
+sequence. A semantic or transport failure stops before the next mutation. The
+per-transition ceiling is 120 seconds, further bounded by the suite deadline.
 
 Native AA requires both eyes to present `NativeOriginal`, native dimensions,
 and cleared render-scale/foveated vendor flags. An active Hoshipa profile

@@ -87,6 +87,21 @@ foreach(_required_text IN ITEMS
     endif()
 endforeach()
 
+foreach(_milestone_contract IN ITEMS
+    "descriptor[\"inputSchema\"][\"properties\"][\"milestone\"]"
+    "json::array({ \"strict\", \"presentation\", \"cleanup\" })"
+    "{ \"default\", \"strict\" }"
+    "QualificationMilestone milestone = QualificationMilestone::Strict"
+    "invalid_milestone"
+)
+    string(FIND "${_bridge}" "${_milestone_contract}" _milestone_position)
+    if(_milestone_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale milestone contract is missing: ${_milestone_contract}"
+        )
+    endif()
+endforeach()
+
 string(JSON _timeout_default ERROR_VARIABLE _timeout_error
     GET "${_descriptor}" inputSchema properties timeoutMs default
 )
@@ -190,7 +205,9 @@ endif()
 
 foreach(_required_behavior IN ITEMS
     "QualificationPolicy::SaturatingDeadlineTick"
-	"QualificationPolicy::EvaluateStability"
+	"QualificationPolicy::EvaluateMilestones"
+	"QualificationPolicy::IsMilestoneSatisfied"
+	"RecordQualificationMilestones"
 	"QualificationPolicy::ExactObservationTarget"
 	"QualificationPolicy::HasCoherentPresentationFrames"
     "QualificationPolicy::HasRequiredPresentationHistory"
@@ -229,6 +246,19 @@ foreach(_required_behavior IN ITEMS
     "expectedCellEditorId"
     "kElapsedMillisecondsReceiptField"
     "kElapsedFramesReceiptField"
+	"presentationFailureMask"
+	"presentationElapsedMs"
+	"presentationElapsedFrames"
+	"cleanupFailureMask"
+	"cleanupElapsedMs"
+	"cleanupElapsedFrames"
+	"strictFailureMask"
+	"strictElapsedMs"
+	"strictElapsedFrames"
+	"outstandingCleanupDebt"
+	"timedOutMilestone"
+	"resourcePublicationCurrent"
+	"providerTerminalClear"
     "controller.retirement.nextCleanupFrame == 0"
     "BuildProvenance::ValidateExpectedBuild"
 )

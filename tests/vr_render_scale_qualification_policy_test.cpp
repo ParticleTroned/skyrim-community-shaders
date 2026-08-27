@@ -20,7 +20,7 @@ namespace
 
 	constexpr StabilityFacts CommonStableFacts()
 	{
-		return {
+		StabilityFacts facts{
 			.stressSession = true,
 			.exactCell = true,
 			.loadedInWorld = true,
@@ -42,6 +42,23 @@ namespace
 			.foveationSettingsMatch = true,
 			.diagnosticsClear = true,
 		};
+		facts.shaderCompilationIdle = true;
+		facts.resourcePublicationCurrent = true;
+		facts.providerTerminalClear = true;
+		facts.requiredShaderCompilationComplete = true;
+		return facts;
+	}
+
+	constexpr StabilityFacts ActiveDLSSStableFacts()
+	{
+		auto facts = CommonStableFacts();
+		facts.apiActiveContract = true;
+		facts.physicalActiveContract = true;
+		facts.presentationPhaseStable = true;
+		facts.fidelityStable = true;
+		facts.vendorPresentationStable = true;
+		facts.lifecycleStable = true;
+		return facts;
 	}
 
 	constexpr bool CoversExactProfileMatching()
@@ -129,13 +146,7 @@ namespace
 
 	constexpr bool CoversActiveAndNativeStability()
 	{
-		auto activeFacts = CommonStableFacts();
-		activeFacts.apiActiveContract = true;
-		activeFacts.physicalActiveContract = true;
-		activeFacts.presentationPhaseStable = true;
-		activeFacts.fidelityStable = true;
-		activeFacts.vendorPresentationStable = true;
-		activeFacts.lifecycleStable = true;
+		auto activeFacts = ActiveDLSSStableFacts();
 		if (EvaluateStability(ActiveDLSS(), activeFacts) != kFailureNone)
 			return false;
 		activeFacts.vendorPresentationStable = false;
@@ -160,6 +171,113 @@ namespace
 		nativeFacts.physicalNativeContract = true;
 		nativeFacts.nativePresentationStable = true;
 		return EvaluateStability(native, nativeFacts) == kFailureNone;
+	}
+
+	constexpr bool CoversQualificationMilestones()
+	{
+		auto facts = ActiveDLSSStableFacts();
+		facts.workGateClear = false;
+		facts.memoryTrimClear = false;
+		facts.retirementClear = false;
+		auto evaluation = EvaluateMilestones(ActiveDLSS(), facts);
+		if (!evaluation.PresentationStable() || evaluation.CleanupDrained() ||
+			evaluation.StrictSatisfied() ||
+			(evaluation.cleanupFailures &
+				static_cast<std::uint64_t>(kFailureWorkGate)) == 0 ||
+			(evaluation.cleanupFailures &
+				static_cast<std::uint64_t>(kFailureMemoryTrim)) == 0 ||
+			(evaluation.cleanupFailures &
+				static_cast<std::uint64_t>(kFailureRetirement)) == 0 ||
+			!IsMilestoneSatisfied(Milestone::Presentation, evaluation) ||
+			IsMilestoneSatisfied(Milestone::Cleanup, evaluation) ||
+			IsMilestoneSatisfied(Milestone::Strict, evaluation)) {
+			return false;
+		}
+
+		facts.workGateClear = true;
+		facts.memoryTrimClear = true;
+		facts.retirementClear = true;
+		evaluation = EvaluateMilestones(ActiveDLSS(), facts);
+		if (!evaluation.PresentationStable() || !evaluation.CleanupDrained() ||
+			!evaluation.StrictSatisfied() ||
+			EvaluateStability(ActiveDLSS(), facts) !=
+				EvaluateStrictStability(ActiveDLSS(), facts)) {
+			return false;
+		}
+
+		facts.physicalMutationClear = false;
+		if ((EvaluatePresentationStability(ActiveDLSS(), facts) &
+				static_cast<std::uint64_t>(kFailurePhysicalMutation)) == 0) {
+			return false;
+		}
+		facts.physicalMutationClear = true;
+		facts.providerTerminalClear = false;
+		if ((EvaluatePresentationStability(ActiveDLSS(), facts) &
+				static_cast<std::uint64_t>(kFailureProviderTerminal)) == 0) {
+			return false;
+		}
+		facts.providerTerminalClear = true;
+		facts.resourcePublicationCurrent = false;
+		if ((EvaluatePresentationStability(ActiveDLSS(), facts) &
+				static_cast<std::uint64_t>(kFailureResourcePublication)) == 0) {
+			return false;
+		}
+		facts.resourcePublicationCurrent = true;
+		facts.terminalClear = false;
+		return (EvaluatePresentationStability(ActiveDLSS(), facts) &
+				   static_cast<std::uint64_t>(kFailureTerminal)) != 0;
+	}
+
+	constexpr bool CoversContractSpecificShaderCompilation()
+	{
+		TargetProfile fsrTarget{
+			.method = Method::FSR,
+			.qualityMode = 3,
+			.renderScaleMode = true,
+		};
+		auto facts = CommonStableFacts();
+		facts.apiActiveContract = true;
+		facts.physicalActiveContract = true;
+		facts.presentationPhaseStable = true;
+		facts.fidelityStable = true;
+		facts.vendorPresentationStable = true;
+		facts.lifecycleStable = true;
+		facts.fsrDispatchStable = true;
+		facts.shaderCompilationIdle = false;
+		facts.requiredShaderCompilationComplete = true;
+		const auto evaluation = EvaluateMilestones(fsrTarget, facts);
+		return evaluation.PresentationStable() &&
+		       !evaluation.CleanupDrained() &&
+		       (evaluation.cleanupFailures &
+				   static_cast<std::uint64_t>(kFailureShaderCompilation)) != 0 &&
+		       !evaluation.StrictSatisfied();
+	}
+
+	constexpr bool CoversMilestoneParsingAndFirstTimestamps()
+	{
+		Milestone milestone = Milestone::Cleanup;
+		if (!TryParseMilestone("strict", milestone) ||
+			milestone != Milestone::Strict ||
+			!TryParseMilestone("presentation", milestone) ||
+			milestone != Milestone::Presentation ||
+			!TryParseMilestone("cleanup", milestone) ||
+			milestone != Milestone::Cleanup ||
+			TryParseMilestone("visual", milestone) ||
+			GetMilestoneName(Milestone::Strict) != "strict") {
+			return false;
+		}
+
+		FirstObservation presentation;
+		FirstObservation cleanup;
+		FirstObservation strict;
+		RecordFirstObservation(true, 100, 20, presentation);
+		RecordFirstObservation(true, 150, 25, presentation);
+		RecordFirstObservation(false, 175, 27, cleanup);
+		RecordFirstObservation(true, 200, 30, cleanup);
+		RecordFirstObservation(true, 200, 30, strict);
+		return presentation.tick == 100 && presentation.frame == 20 &&
+		       cleanup.tick == 200 && cleanup.frame == 30 &&
+		       strict.tick == 200 && strict.frame == 30;
 	}
 
 	constexpr bool CoversStaleSourceRejection()
@@ -291,6 +409,9 @@ namespace
 	static_assert(CoversExactProfileMatching());
 	static_assert(CoversObservedProfileTargets());
 	static_assert(CoversActiveAndNativeStability());
+	static_assert(CoversQualificationMilestones());
+	static_assert(CoversContractSpecificShaderCompilation());
+	static_assert(CoversMilestoneParsingAndFirstTimestamps());
 	static_assert(CoversStaleSourceRejection());
 	static_assert(CoversOwnership());
 	static_assert(CoversNestedPropertyPolicy());

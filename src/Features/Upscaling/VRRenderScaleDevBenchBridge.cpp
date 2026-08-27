@@ -1080,6 +1080,7 @@ namespace
 
 	namespace QualificationPolicy = VRRenderScaleQualificationPolicy;
 	using QualificationTarget = QualificationPolicy::TargetProfile;
+	using QualificationMilestone = QualificationPolicy::Milestone;
 
 	struct QualificationExpectedCell
 	{
@@ -1163,6 +1164,10 @@ namespace
 		uint64_t dispatchTick = 0;
 		uint32_t dispatchFrame = 0;
 		std::optional<std::string> cocCellEditorID;
+		QualificationMilestone milestone = QualificationMilestone::Strict;
+		QualificationPolicy::FirstObservation presentationStable{};
+		QualificationPolicy::FirstObservation cleanupDrained{};
+		QualificationPolicy::FirstObservation strictSatisfied{};
 		bool waitInProgress = false;
 		QualificationBaseline baseline{};
 		std::shared_ptr<std::atomic_bool> cancelled =
@@ -1281,6 +1286,26 @@ namespace
 		if (a_target.matchFSRRuntime)
 			output["fsrRuntime"] = a_target.fsr4Runtime ? "fsr4" : "fsr3";
 		return output;
+	}
+
+	bool TryParseQualificationMilestone(
+		const json& a_args,
+		QualificationMilestone& a_milestone,
+		json& a_error)
+	{
+		a_milestone = QualificationMilestone::Strict;
+		if (!a_args.contains("milestone"))
+			return true;
+		if (!a_args["milestone"].is_string() ||
+			!QualificationPolicy::TryParseMilestone(
+				a_args["milestone"].get<std::string>(), a_milestone)) {
+			a_error = {
+				{ "error", "milestone must be strict, presentation, or cleanup" },
+				{ "errorCode", "invalid_milestone" },
+			};
+			return false;
+		}
+		return true;
 	}
 
 	bool TryParseQualificationTarget(
@@ -2051,6 +2076,20 @@ namespace
 		};
 	}
 
+	json QualificationFirstObservationJson(
+		const QualificationPolicy::FirstObservation& a_observation)
+	{
+		return {
+			{ "observed", a_observation.Observed() },
+			{ "tick", a_observation.Observed() ?
+						  json(a_observation.tick) :
+						  json(nullptr) },
+			{ "frame", a_observation.Observed() ?
+						   json(a_observation.frame) :
+						   json(nullptr) },
+		};
+	}
+
 	json QualificationStateJson()
 	{
 		auto& store = GetQualificationStore();
@@ -2062,6 +2101,8 @@ namespace
 		if (store.active) {
 			output["transitionId"] = store.active->transitionID;
 			output["ownerId"] = store.active->ownerID;
+			output["milestone"] = QualificationPolicy::GetMilestoneName(
+				store.active->milestone);
 			output["phase"] = store.active->ready ?
 			                      (store.active->waitInProgress ? "waiting" :
 																  (store.active->dispatchTick != 0 ? "dispatched" : "armed")) :
@@ -2076,6 +2117,14 @@ namespace
 					{ "frame", store.active->dispatchTick != 0 ?
 								   json(store.active->dispatchFrame) :
 								   json(nullptr) },
+				};
+				output["milestones"] = {
+					{ "presentationStable", QualificationFirstObservationJson(
+												store.active->presentationStable) },
+					{ "cleanupDrained", QualificationFirstObservationJson(
+											store.active->cleanupDrained) },
+					{ "strictSatisfied", QualificationFirstObservationJson(
+											 store.active->strictSatisfied) },
 				};
 			}
 		}
@@ -2146,6 +2195,45 @@ namespace
 		}
 	}
 
+	void RecordQualificationMilestones(
+		QualificationTransition& a_transition,
+		bool a_presentationStable,
+		bool a_cleanupDrained,
+		bool a_strictSatisfied,
+		uint64_t a_tick,
+		uint32_t a_frame)
+	{
+		const auto record = [&](QualificationTransition& a_value) {
+			QualificationPolicy::RecordFirstObservation(
+				a_presentationStable,
+				a_tick,
+				a_frame,
+				a_value.presentationStable);
+			QualificationPolicy::RecordFirstObservation(
+				a_cleanupDrained,
+				a_tick,
+				a_frame,
+				a_value.cleanupDrained);
+			QualificationPolicy::RecordFirstObservation(
+				a_strictSatisfied,
+				a_tick,
+				a_frame,
+				a_value.strictSatisfied);
+		};
+		record(a_transition);
+
+		auto& store = GetQualificationStore();
+		std::lock_guard lock(store.mutex);
+		if (store.active &&
+			QualificationPolicy::OwnsTransitionInstance(
+				store.active->transitionID,
+				store.active->ownershipToken,
+				a_transition.transitionID,
+				a_transition.ownershipToken)) {
+			record(*store.active);
+		}
+	}
+
 	json QualificationFailureReasonsJson(uint64_t a_failures)
 	{
 		struct NamedReason
@@ -2186,6 +2274,8 @@ namespace
 			NamedReason{ QualificationPolicy::kFailureAPINativeContract, "api_native_contract_mismatch", "native" },
 			NamedReason{ QualificationPolicy::kFailurePhysicalNativeContract, "physical_native_contract_mismatch", "native" },
 			NamedReason{ QualificationPolicy::kFailureNativePresentation, "native_presentation_not_stable", "native" },
+			NamedReason{ QualificationPolicy::kFailureResourcePublication, "resource_publication_not_current", "physical" },
+			NamedReason{ QualificationPolicy::kFailureProviderTerminal, "provider_terminal_failure", "provider" },
 		};
 		json output = json::array();
 		for (const auto& reason : reasons) {
@@ -2570,6 +2660,64 @@ namespace
 		       changed(a_current.stable, a_baseline.stable);
 	}
 
+	json QualificationCleanupDebtJson(
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		const Upscaling::VRVendorWorkGateSnapshot& a_gate,
+		uint64_t a_physicalMutationEpoch,
+		uint64_t a_physicalSerializationEpoch,
+		bool a_emergencyRecoveryRequested,
+		bool a_shaderCompilationActive)
+	{
+		return {
+			{ "controller", {
+								{ "state", Upscaling::GetVRRenderScaleTransitionStateName(
+											   a_controller.state) },
+								{ "targetEpoch", a_controller.targetEpoch },
+								{ "stateFrame", a_controller.stateFrame },
+							} },
+			{ "workGate", VendorWorkGateJson(a_gate) },
+			{ "memoryTrim", {
+								{ "pending", a_controller.memoryTrim.pending },
+								{ "reason", Upscaling::GetVRRenderScaleMemoryTrimReasonName(a_controller.memoryTrim.reason) },
+								{ "ownerEpoch", a_controller.memoryTrim.ownerEpoch },
+								{ "requestedFrame", a_controller.memoryTrim.requestedFrame },
+								{ "fenceFailures", a_controller.memoryTrim.fenceFailures },
+							} },
+			{ "intermediateRetirement", {
+											{ "pendingSets", a_controller.retirement.pendingSets },
+											{ "oldestEpoch", a_controller.retirement.oldestEpoch },
+											{ "newestEpoch", a_controller.retirement.newestEpoch },
+											{ "nextCleanupFrame", a_controller.retirement.nextCleanupFrame },
+											{ "fencePending", a_controller.retirement.fencePending },
+											{ "capacityBlocked", a_controller.retirement.capacityBlocked },
+										} },
+			{ "engineTargetRetirement", {
+											{ "pending", a_controller.engineTargetRetirement.pending },
+											{ "oldestEpoch", a_controller.engineTargetRetirement.oldestEpoch },
+											{ "newestEpoch", a_controller.engineTargetRetirement.newestEpoch },
+											{ "pendingGenerations", a_controller.engineTargetRetirement.pendingGenerations },
+											{ "pendingReleaseCount", a_controller.engineTargetRetirement.pendingReleaseCount },
+											{ "fencePending", a_controller.engineTargetRetirement.fencePending },
+											{ "capacityBlocked", a_controller.engineTargetRetirement.capacityBlocked },
+										} },
+			{ "postLoadRecovery", {
+									  { "active", a_controller.postLoadRecovery.active },
+									  { "recoveryEpoch", a_controller.postLoadRecovery.recoveryEpoch },
+									  { "cleanupArmed", a_controller.postLoadRecovery.cleanupArmed },
+									  { "cleanupDrained", a_controller.postLoadRecovery.cleanupDrained },
+									  { "trimArmed", a_controller.postLoadRecovery.trimArmed },
+									  { "trimCompleted", a_controller.postLoadRecovery.trimCompleted },
+									  { "timedAttemptInProgress", a_controller.postLoadRecovery.timedAttemptInProgress },
+								  } },
+			{ "physicalMutation", {
+									  { "epoch", a_physicalMutationEpoch },
+									  { "serializationEpoch", a_physicalSerializationEpoch },
+									  { "emergencyRecoveryRequested", a_emergencyRecoveryRequested },
+								  } },
+			{ "shaderCompilationActive", a_shaderCompilationActive },
+		};
+	}
+
 	json CaptureQualificationObservation(
 		const QualificationTransition& a_transition,
 		const QualificationExpectedCell& a_expectedCell,
@@ -2628,6 +2776,7 @@ namespace
 		                                 APIProfileStateChanged(apiSnapshot, a_transition.baseline.apiSnapshot);
 
 		QualificationPolicy::StabilityFacts facts;
+		facts.providerTerminalClear = true;
 		facts.stressSession = session.active &&
 		                      session.sessionID == a_transition.baseline.stressSessionID;
 		facts.exactCell = exactCell;
@@ -2682,6 +2831,13 @@ namespace
 			facts.apiConditionsClear =
 				(apiSnapshot.observedConditions & blockingConditions) == kConditionNone &&
 				(apiSnapshot.flags & kSnapshotRestartRequired) == 0;
+			const bool providerUnavailable = targetAvailable &&
+			                                 target.renderScaleMode &&
+			                                 (apiSnapshot.flags &
+												 kSnapshotProviderCheckComplete) != 0 &&
+			                                 (apiSnapshot.observedConditions &
+												 kConditionProviderUnavailable) != 0;
+			facts.providerTerminalClear = !providerUnavailable;
 
 			constexpr uint64_t renderScaleFlags =
 				kSnapshotRenderScaleRequested |
@@ -2735,6 +2891,9 @@ namespace
 																  controller, apiSnapshot, target, a_foveation);
 			facts.physicalNativeContract = targetAvailable && NativePhysicalContractStable(
 																  controller, apiSnapshot, target);
+			facts.resourcePublicationCurrent = globals::state &&
+			                                   globals::state->HasCompleteRenderTargetResourcePublication(
+												   apiSnapshot.renderEyeWidth, apiSnapshot.renderEyeHeight);
 		}
 		facts.presentationPhaseStable =
 			controller.presentationPhase == Upscaling::VRRenderScalePresentationPhase::StereoProven ||
@@ -2747,9 +2906,24 @@ namespace
 			Upscaling::VRRenderScalePresentationPath::VendorEvaluated,
 			a_transition.dispatchFrame);
 		facts.lifecycleStable = targetAvailable && LifecycleStable(controller, target, delta);
+		if (targetAvailable && target.renderScaleMode) {
+			const auto& lifecycle = target.method == QualificationPolicy::Method::DLSS ?
+			                            controller.dlssLifecycle :
+			                            controller.fsrLifecycle;
+			facts.providerTerminalClear = facts.providerTerminalClear &&
+			                              lifecycle.phase !=
+			                                  Upscaling::VRVendorRuntimeLifecyclePhase::Failed;
+		}
 		facts.fsrDispatchStable = FSRDispatchStable(controller);
-		facts.shaderCompilationIdle =
-			!globals::shaderCache || !globals::shaderCache->IsCompiling();
+		const bool shaderCompilationActive =
+			globals::shaderCache && globals::shaderCache->IsCompiling();
+		facts.shaderCompilationIdle = !shaderCompilationActive;
+		facts.requiredShaderCompilationComplete =
+			!targetAvailable || !target.renderScaleMode ||
+			target.method != QualificationPolicy::Method::FSR ||
+			facts.shaderCompilationIdle ||
+			(facts.physicalActiveContract && facts.lifecycleStable &&
+				facts.fsrDispatchStable && facts.vendorPresentationStable);
 		facts.nativePresentationStable = PresentationEyesStable(
 			controller,
 			Upscaling::VRRenderScalePresentationPath::NativeOriginal,
@@ -2792,10 +2966,15 @@ namespace
 		};
 		facts.diagnosticsClear =
 			!QualificationPolicy::HasTerminalDiagnosticFailure(terminalDeltas);
-		const uint64_t failures = QualificationPolicy::EvaluateStability(target, facts);
-		const bool satisfied = failures == QualificationPolicy::kFailureNone;
+		const auto milestoneEvaluation =
+			QualificationPolicy::EvaluateMilestones(target, facts);
+		const bool presentationStable = milestoneEvaluation.PresentationStable();
+		const bool cleanupDrained = milestoneEvaluation.CleanupDrained();
+		const bool strictSatisfied = milestoneEvaluation.StrictSatisfied();
 		const bool terminalError = !facts.stressSession || !facts.publicSnapshot ||
-		                           !facts.terminalClear || !facts.diagnosticsClear ||
+		                           !facts.terminalClear ||
+		                           !facts.providerTerminalClear ||
+		                           !facts.diagnosticsClear ||
 		                           QualificationPolicy::IsFoveationInvariantViolation(
 									   a_foveation.has_value(),
 									   facts.foveationSettingsMatch);
@@ -2805,17 +2984,38 @@ namespace
 			expectedCell["formId"] = *a_expectedCell.formID;
 		if (a_expectedCell.editorID)
 			expectedCell["editorId"] = *a_expectedCell.editorID;
-		auto failureReasons = QualificationFailureReasonsJson(failures);
 		auto terminalDiagnosticReasons =
 			QualificationTerminalDiagnosticReasonsJson(terminalDeltas);
-		for (const auto& reason : terminalDiagnosticReasons)
-			failureReasons.push_back(reason);
+		const auto reasonsFor = [&](uint64_t a_failureMask) {
+			auto reasons = QualificationFailureReasonsJson(a_failureMask);
+			if ((a_failureMask & static_cast<uint64_t>(
+									 QualificationPolicy::kFailureDiagnosticDelta)) != 0) {
+				for (const auto& reason : terminalDiagnosticReasons)
+					reasons.push_back(reason);
+			}
+			return reasons;
+		};
+		auto presentationFailureReasons =
+			reasonsFor(milestoneEvaluation.presentationFailures);
+		auto cleanupFailureReasons =
+			reasonsFor(milestoneEvaluation.cleanupFailures);
+		auto strictFailureReasons =
+			reasonsFor(milestoneEvaluation.strictFailures);
 		json output{
 			{ "targetMode", a_expectedTarget ? "expected" : "externally_owned_observation" },
-			{ "satisfied", satisfied },
+			{ "satisfied", strictSatisfied },
 			{ "terminalError", terminalError },
-			{ "failureMask", failures },
-			{ "failureReasons", std::move(failureReasons) },
+			{ "failureMask", milestoneEvaluation.strictFailures },
+			{ "failureReasons", strictFailureReasons },
+			{ "presentationStable", presentationStable },
+			{ "presentationFailureMask", milestoneEvaluation.presentationFailures },
+			{ "presentationFailureReasons", std::move(presentationFailureReasons) },
+			{ "cleanupDrained", cleanupDrained },
+			{ "cleanupFailureMask", milestoneEvaluation.cleanupFailures },
+			{ "cleanupFailureReasons", std::move(cleanupFailureReasons) },
+			{ "strictSatisfied", strictSatisfied },
+			{ "strictFailureMask", milestoneEvaluation.strictFailures },
+			{ "strictFailureReasons", std::move(strictFailureReasons) },
 			{ "terminalDiagnosticReasons", std::move(terminalDiagnosticReasons) },
 			{ "monotonicCounterRegressions", std::move(monotonicCounterRegressions) },
 			{ "tick", tick },
@@ -2859,6 +3059,9 @@ namespace
 						   { "apiNativeContract", facts.apiNativeContract },
 						   { "physicalNativeContract", facts.physicalNativeContract },
 						   { "nativePresentationStable", facts.nativePresentationStable },
+						   { "resourcePublicationCurrent", facts.resourcePublicationCurrent },
+						   { "providerTerminalClear", facts.providerTerminalClear },
+						   { "requiredShaderCompilationComplete", facts.requiredShaderCompilationComplete },
 					   } },
 			{ "apiStatus", static_cast<uint32_t>(apiStatus) },
 			{ "upscalingSnapshot", APISnapshotJson(apiSnapshot) },
@@ -2887,6 +3090,7 @@ namespace
 							  { "fsrLifecycle", LifecycleJson(controller.fsrLifecycle) },
 						  } },
 			{ "foveation", ObservedFoveationJson(upscaling.settings, controller.stable) },
+			{ "cleanupDebt", QualificationCleanupDebtJson(controller, gate, physicalMutationEpoch, physicalSerializationEpoch, emergencyRecoveryRequested, shaderCompilationActive) },
 			{ "diagnostics", {
 								 { "baseline", QualificationDiagnosticsJson(a_transition.baseline.diagnostics) },
 								 { "current", QualificationDiagnosticsJson(diagnostics) },
@@ -2899,7 +3103,7 @@ namespace
 			output["expectedTarget"] = QualificationTargetJson(*a_expectedTarget);
 		if (a_foveation)
 			output["foveation"]["target"] = QualificationFoveationTargetJson(*a_foveation);
-		if (satisfied) {
+		if (presentationStable) {
 			output["stereoEvidenceClass"] = target.renderScaleMode ?
 			                                    "render_scale_vendor_frames" :
 			                                    "native_pipeline_frames";
@@ -3027,11 +3231,22 @@ namespace
 		json a_observation,
 		std::optional<std::string_view> a_terminalReason = std::nullopt)
 	{
-		const bool satisfied = a_outcome == "stable";
+		const bool satisfied = a_outcome == "stable" ||
+		                       a_outcome == "presentation_stable" ||
+		                       a_outcome == "cleanup_drained";
 		const bool dispatched = a_transition.dispatchTick != 0;
+		const std::string milestoneName{
+			QualificationPolicy::GetMilestoneName(a_transition.milestone)
+		};
+		const char* requestedFailureReasonsField =
+			a_transition.milestone == QualificationMilestone::Presentation ?
+				"presentationFailureReasons" :
+			a_transition.milestone == QualificationMilestone::Cleanup ?
+				"cleanupFailureReasons" :
+				"strictFailureReasons";
 		json reasons = a_observation.is_object() &&
-		                       a_observation.contains("failureReasons") ?
-		                   a_observation["failureReasons"] :
+		                       a_observation.contains(requestedFailureReasonsField) ?
+		                   a_observation[requestedFailureReasonsField] :
 		                   json::array();
 		if (!reasons.is_array())
 			reasons = json::array();
@@ -3041,14 +3256,61 @@ namespace
 				{ "category", "qualification" },
 			});
 		}
+		const auto elapsedMilliseconds = [&](const QualificationPolicy::FirstObservation& a_value) {
+			return dispatched && a_value.Observed() ?
+			           json(QualificationPolicy::ElapsedMilliseconds(
+						   a_transition.dispatchTick,
+						   a_value.tick,
+						   a_transition.baseline.tickFrequency)) :
+			           json(nullptr);
+		};
+		const auto elapsedFrames = [&](const QualificationPolicy::FirstObservation& a_value) {
+			return dispatched && a_value.Observed() ?
+			           json(QualificationPolicy::ElapsedFrames(
+						   a_transition.dispatchFrame,
+						   a_value.frame)) :
+			           json(nullptr);
+		};
+		const auto observationValue = [&](std::string_view a_name, json a_default) {
+			const std::string key{ a_name };
+			return a_observation.is_object() && a_observation.contains(key) ?
+			           a_observation[key] :
+			           std::move(a_default);
+		};
 
 		json receipt{
 			{ "action", "qualification_wait" },
 			{ "transitionId", a_transition.transitionID },
 			{ "ownerId", a_transition.ownerID },
+			{ "milestone", milestoneName },
 			{ "targetMode", a_target ? "expected" : "externally_owned_observation" },
 			{ "satisfied", satisfied },
 			{ "outcome", a_outcome },
+			{ "presentationStable", a_transition.presentationStable.Observed() },
+			{ "presentationFailureMask", observationValue(
+											 "presentationFailureMask", json(nullptr)) },
+			{ "presentationFailureReasons", observationValue(
+												"presentationFailureReasons", json::array()) },
+			{ "presentationElapsedMs", elapsedMilliseconds(
+										   a_transition.presentationStable) },
+			{ "presentationElapsedFrames", elapsedFrames(
+											   a_transition.presentationStable) },
+			{ "cleanupDrained", a_transition.cleanupDrained.Observed() },
+			{ "cleanupFailureMask", observationValue(
+										"cleanupFailureMask", json(nullptr)) },
+			{ "cleanupFailureReasons", observationValue(
+										   "cleanupFailureReasons", json::array()) },
+			{ "cleanupElapsedMs", elapsedMilliseconds(a_transition.cleanupDrained) },
+			{ "cleanupElapsedFrames", elapsedFrames(a_transition.cleanupDrained) },
+			{ "strictSatisfied", a_transition.strictSatisfied.Observed() },
+			{ "strictFailureMask", observationValue(
+									   "strictFailureMask", json(nullptr)) },
+			{ "strictFailureReasons", observationValue(
+										  "strictFailureReasons", json::array()) },
+			{ "strictElapsedMs", elapsedMilliseconds(a_transition.strictSatisfied) },
+			{ "strictElapsedFrames", elapsedFrames(a_transition.strictSatisfied) },
+			{ "outstandingCleanupDebt", observationValue(
+											"cleanupDebt", json(nullptr)) },
 			{ "baseline", a_transition.ready ?
 							  QualificationBaselineJson(a_transition.baseline) :
 							  json(nullptr) },
@@ -3064,6 +3326,15 @@ namespace
 							{ "dispatchTick", dispatched ?
 												  json(a_transition.dispatchTick) :
 												  json(nullptr) },
+							{ "presentationStableTick", a_transition.presentationStable.Observed() ?
+															json(a_transition.presentationStable.tick) :
+															json(nullptr) },
+							{ "cleanupDrainedTick", a_transition.cleanupDrained.Observed() ?
+														json(a_transition.cleanupDrained.tick) :
+														json(nullptr) },
+							{ "strictSatisfiedTick", a_transition.strictSatisfied.Observed() ?
+														 json(a_transition.strictSatisfied.tick) :
+														 json(nullptr) },
 							{ satisfied ? "stableTick" : "terminalTick", a_terminalTick },
 							{ QualificationPolicy::kElapsedMillisecondsReceiptField.data(),
 								dispatched ?
@@ -3082,11 +3353,16 @@ namespace
 			{ "frames", {
 							{ "begin", a_transition.ready ? json(a_transition.baseline.beginFrame) : json(nullptr) },
 							{ "dispatch", dispatched ? json(a_transition.dispatchFrame) : json(nullptr) },
+							{ "presentationStable", a_transition.presentationStable.Observed() ? json(a_transition.presentationStable.frame) : json(nullptr) },
+							{ "cleanupDrained", a_transition.cleanupDrained.Observed() ? json(a_transition.cleanupDrained.frame) : json(nullptr) },
+							{ "strictSatisfied", a_transition.strictSatisfied.Observed() ? json(a_transition.strictSatisfied.frame) : json(nullptr) },
 							{ satisfied ? "stable" : "terminal", a_transition.ready ? json(a_terminalFrame) : json(nullptr) },
 						} },
 			{ "failureReasons", std::move(reasons) },
 			{ "observation", std::move(a_observation) },
 		};
+		if (a_outcome == "timeout")
+			receipt["timedOutMilestone"] = milestoneName;
 		if (a_expectedCell) {
 			json expected = json::object();
 			if (a_expectedCell->formID)
@@ -3586,6 +3862,7 @@ namespace
 			uint64_t transitionID = 0;
 			uint64_t timeoutMs = kQualificationMaximumTimeoutMs;
 			std::string ownerID;
+			QualificationMilestone milestone = QualificationMilestone::Strict;
 			json error;
 			if (!TryParsePositiveInteger(
 					a_args,
@@ -3608,7 +3885,8 @@ namespace
 			QualificationExpectedCell expectedCell;
 			std::optional<QualificationTarget> target;
 			std::optional<QualificationFoveationTarget> foveation;
-			if (!TryParseExpectedCell(a_args, expectedCell, error) ||
+			if (!TryParseQualificationMilestone(a_args, milestone, error) ||
+				!TryParseExpectedCell(a_args, expectedCell, error) ||
 				!TryParseQualificationTarget(a_args, target, error) ||
 				!TryParseQualificationFoveationTarget(a_args, foveation, error)) {
 				return error;
@@ -3658,6 +3936,7 @@ namespace
 					};
 				}
 				store.active->waitInProgress = true;
+				store.active->milestone = milestone;
 				transition = *store.active;
 			}
 			const SKSE::stl::scope_exit releaseWait([&]() noexcept {
@@ -3738,9 +4017,37 @@ namespace
 				const uint32_t observedFrame = observation.value("frame", lastFrame);
 				const bool withinDeadline =
 					QualificationPolicy::IsWithinDeadline(observedTick, deadline);
-				if (observation.value("satisfied", false) && withinDeadline) {
+				const QualificationPolicy::MilestoneEvaluation milestoneEvaluation{
+					.presentationFailures = observation.value(
+						"presentationFailureMask",
+						std::numeric_limits<uint64_t>::max()),
+					.cleanupFailures = observation.value(
+						"cleanupFailureMask",
+						std::numeric_limits<uint64_t>::max()),
+					.strictFailures = observation.value(
+						"strictFailureMask",
+						std::numeric_limits<uint64_t>::max()),
+				};
+				if (withinDeadline) {
+					RecordQualificationMilestones(
+						transition,
+						milestoneEvaluation.PresentationStable(),
+						milestoneEvaluation.CleanupDrained(),
+						milestoneEvaluation.StrictSatisfied(),
+						observedTick,
+						observedFrame);
+				}
+				if (QualificationPolicy::IsMilestoneSatisfied(
+						milestone, milestoneEvaluation) &&
+					withinDeadline) {
+					const std::string_view outcome =
+						milestone == QualificationMilestone::Presentation ?
+							"presentation_stable" :
+						milestone == QualificationMilestone::Cleanup ?
+							"cleanup_drained" :
+							"stable";
 					auto receipt = BuildQualificationReceipt(
-						transition, "stable", &expectedCell,
+						transition, outcome, &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation));
 					receipt["timing"]["timeoutMs"] = timeoutMs;
@@ -4436,7 +4743,9 @@ namespace
 			"startPerformanceTelemetry binds CPU/GPU counters before it. Omit "
 			"target when an external controller owns profile selection; "
 			"qualification_wait then observes the coherent selected profile without "
-			"mutating it.";
+			"mutating it. milestone defaults to strict for backward compatibility; "
+			"presentation and cleanup expose their independent first-observed "
+			"timestamps without changing strict qualification.";
 		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
 		a_write(a_sink, serialized.c_str());
@@ -4477,6 +4786,19 @@ namespace VRRenderScaleDevBenchBridge
 			R"json({"description":"Control and inspect CSX VR render-scale, including a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Qualification deadline measured from qualification_dispatch on the server QPC clock."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
 		static const std::string runtimeDiagnosticDescriptor = [&] {
 			auto descriptor = json::parse(diagnosticDescriptor);
+			descriptor["description"] =
+				descriptor["description"].get<std::string>() +
+				" qualification_wait accepts milestone strict, presentation, or "
+				"cleanup; absent milestone preserves strict combined semantics.";
+			descriptor["inputSchema"]["properties"]["milestone"] = {
+				{ "type", "string" },
+				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },
+				{ "default", "strict" },
+				{ "description",
+					"qualification_wait only: strict requires both coherent current "
+					"presentation and drained cleanup; presentation or cleanup may "
+					"return its named milestone without weakening strict evidence." },
+			};
 			descriptor["inputSchema"]["properties"]["cocCellEditorId"] = {
 				{ "type", "string" },
 				{ "minLength", 1 },

@@ -10,6 +10,42 @@ namespace VRRenderScaleQualificationPolicy
 	inline constexpr std::string_view kElapsedMillisecondsReceiptField = "elapsedMs";
 	inline constexpr std::string_view kElapsedFramesReceiptField = "elapsedFrames";
 
+	enum class Milestone : std::uint8_t
+	{
+		Strict,
+		Presentation,
+		Cleanup
+	};
+
+	[[nodiscard]] constexpr std::string_view GetMilestoneName(
+		Milestone a_milestone) noexcept
+	{
+		switch (a_milestone) {
+		case Milestone::Strict:
+			return "strict";
+		case Milestone::Presentation:
+			return "presentation";
+		case Milestone::Cleanup:
+			return "cleanup";
+		}
+		return "unknown";
+	}
+
+	[[nodiscard]] constexpr bool TryParseMilestone(
+		std::string_view a_name,
+		Milestone& a_milestone) noexcept
+	{
+		if (a_name == "strict")
+			a_milestone = Milestone::Strict;
+		else if (a_name == "presentation")
+			a_milestone = Milestone::Presentation;
+		else if (a_name == "cleanup")
+			a_milestone = Milestone::Cleanup;
+		else
+			return false;
+		return true;
+	}
+
 	enum class Method : std::uint8_t
 	{
 		Unknown,
@@ -426,6 +462,8 @@ namespace VRRenderScaleQualificationPolicy
 		kFailureNativePresentation = 1ull << 28,
 		kFailureFoveationSettings = 1ull << 29,
 		kFailureDiagnosticDelta = 1ull << 30,
+		kFailureResourcePublication = 1ull << 31,
+		kFailureProviderTerminal = 1ull << 32,
 	};
 
 	struct StabilityFacts
@@ -461,54 +499,219 @@ namespace VRRenderScaleQualificationPolicy
 		bool apiNativeContract = false;
 		bool physicalNativeContract = false;
 		bool nativePresentationStable = false;
+		bool resourcePublicationCurrent = false;
+		bool providerTerminalClear = false;
+		bool requiredShaderCompilationComplete = false;
 	};
 
+	constexpr void RequireFact(
+		bool a_satisfied,
+		FailureReason a_reason,
+		std::uint64_t& a_failures) noexcept
+	{
+		if (!a_satisfied)
+			a_failures |= static_cast<std::uint64_t>(a_reason);
+	}
+
+	[[nodiscard]] constexpr std::uint64_t EvaluateSharedValidation(
+		const StabilityFacts& a_facts) noexcept
+	{
+		std::uint64_t failures = kFailureNone;
+		RequireFact(a_facts.stressSession, kFailureStressSession, failures);
+		RequireFact(a_facts.exactCell, kFailureExactCell, failures);
+		RequireFact(a_facts.loadedInWorld, kFailureLoadedInWorld, failures);
+		RequireFact(a_facts.freshObservation, kFailureFreshObservation, failures);
+		RequireFact(a_facts.publicSnapshot, kFailurePublicSnapshot, failures);
+		RequireFact(a_facts.providerReady, kFailureProvider, failures);
+		RequireFact(a_facts.profilesAgree, kFailureProfiles, failures);
+		RequireFact(a_facts.dimensionsPositive, kFailureDimensions, failures);
+		RequireFact(a_facts.terminalClear, kFailureTerminal, failures);
+		RequireFact(
+			a_facts.providerTerminalClear, kFailureProviderTerminal, failures);
+		RequireFact(
+			a_facts.foveationSettingsMatch,
+			kFailureFoveationSettings,
+			failures);
+		RequireFact(a_facts.diagnosticsClear, kFailureDiagnosticDelta, failures);
+		return failures;
+	}
+
+	// Presentation authority includes every owner that can still replace or
+	// invalidate the proven contract. Passive work gates, fenced retirement and
+	// nonblocking trim are cleanup debt and are intentionally evaluated below.
+	[[nodiscard]] constexpr std::uint64_t EvaluatePresentationStability(
+		const TargetProfile& a_target,
+		const StabilityFacts& a_facts) noexcept
+	{
+		std::uint64_t failures = EvaluateSharedValidation(a_facts);
+		RequireFact(a_facts.apiOperationClear, kFailureAPIOperation, failures);
+		RequireFact(a_facts.apiConditionsClear, kFailureAPIConditions, failures);
+		RequireFact(a_facts.controllerSettled, kFailureController, failures);
+		RequireFact(a_facts.relatchClear, kFailureRelatch, failures);
+		RequireFact(a_facts.recoveryClear, kFailureRecovery, failures);
+		RequireFact(
+			a_facts.physicalMutationClear, kFailurePhysicalMutation, failures);
+		RequireFact(
+			a_facts.resourcePublicationCurrent,
+			kFailureResourcePublication,
+			failures);
+
+		if (a_target.renderScaleMode) {
+			RequireFact(
+				a_facts.apiActiveContract, kFailureAPIActiveContract, failures);
+			RequireFact(
+				a_facts.physicalActiveContract,
+				kFailurePhysicalActiveContract,
+				failures);
+			RequireFact(
+				a_facts.presentationPhaseStable,
+				kFailurePresentationPhase,
+				failures);
+			RequireFact(a_facts.fidelityStable, kFailureFidelity, failures);
+			RequireFact(
+				a_facts.vendorPresentationStable,
+				kFailureVendorPresentation,
+				failures);
+			RequireFact(a_facts.lifecycleStable, kFailureLifecycle, failures);
+			if (a_target.method == Method::FSR) {
+				RequireFact(a_facts.fsrDispatchStable, kFailureFSRDispatch, failures);
+				RequireFact(
+					a_facts.requiredShaderCompilationComplete,
+					kFailureShaderCompilation,
+					failures);
+			}
+		} else {
+			RequireFact(
+				a_facts.apiNativeContract, kFailureAPINativeContract, failures);
+			RequireFact(
+				a_facts.physicalNativeContract,
+				kFailurePhysicalNativeContract,
+				failures);
+			RequireFact(
+				a_facts.nativePresentationStable,
+				kFailureNativePresentation,
+				failures);
+		}
+		return failures;
+	}
+
+	// Cleanup is complete only when no active owner can create more debt and all
+	// passive work has drained. Requiring the shared context prevents a cleanup
+	// receipt from being attributed to the wrong session, cell or profile.
+	[[nodiscard]] constexpr std::uint64_t EvaluateCleanupDrain(
+		const TargetProfile& a_target,
+		const StabilityFacts& a_facts) noexcept
+	{
+		std::uint64_t failures = EvaluateSharedValidation(a_facts);
+		RequireFact(a_facts.apiOperationClear, kFailureAPIOperation, failures);
+		RequireFact(a_facts.apiConditionsClear, kFailureAPIConditions, failures);
+		RequireFact(a_facts.controllerSettled, kFailureController, failures);
+		RequireFact(a_facts.workGateClear, kFailureWorkGate, failures);
+		RequireFact(a_facts.relatchClear, kFailureRelatch, failures);
+		RequireFact(a_facts.recoveryClear, kFailureRecovery, failures);
+		RequireFact(a_facts.memoryTrimClear, kFailureMemoryTrim, failures);
+		RequireFact(a_facts.retirementClear, kFailureRetirement, failures);
+		RequireFact(
+			a_facts.physicalMutationClear, kFailurePhysicalMutation, failures);
+		if (a_target.renderScaleMode && a_target.method == Method::FSR) {
+			// Legacy strict qualification waited for the global compiler to drain.
+			// Keep that debt in cleanup while presentation accepts an already-proven
+			// active FSR contract whose required dispatch shaders have completed.
+			RequireFact(
+				a_facts.shaderCompilationIdle,
+				kFailureShaderCompilation,
+				failures);
+		}
+		return failures;
+	}
+
+	[[nodiscard]] constexpr std::uint64_t EvaluateStrictStability(
+		const TargetProfile& a_target,
+		const StabilityFacts& a_facts) noexcept
+	{
+		return EvaluatePresentationStability(a_target, a_facts) |
+		       EvaluateCleanupDrain(a_target, a_facts);
+	}
+
+	/** Preserve the original strict evaluator name for existing callers. */
 	[[nodiscard]] constexpr std::uint64_t EvaluateStability(
 		const TargetProfile& a_target,
 		const StabilityFacts& a_facts) noexcept
 	{
-		std::uint64_t failures = kFailureNone;
-		const auto require = [&](bool a_satisfied, FailureReason a_reason) {
-			if (!a_satisfied)
-				failures |= static_cast<std::uint64_t>(a_reason);
-		};
-		require(a_facts.stressSession, kFailureStressSession);
-		require(a_facts.exactCell, kFailureExactCell);
-		require(a_facts.loadedInWorld, kFailureLoadedInWorld);
-		require(a_facts.freshObservation, kFailureFreshObservation);
-		require(a_facts.publicSnapshot, kFailurePublicSnapshot);
-		require(a_facts.providerReady, kFailureProvider);
-		require(a_facts.profilesAgree, kFailureProfiles);
-		require(a_facts.dimensionsPositive, kFailureDimensions);
-		require(a_facts.apiOperationClear, kFailureAPIOperation);
-		require(a_facts.apiConditionsClear, kFailureAPIConditions);
-		require(a_facts.controllerSettled, kFailureController);
-		require(a_facts.workGateClear, kFailureWorkGate);
-		require(a_facts.relatchClear, kFailureRelatch);
-		require(a_facts.recoveryClear, kFailureRecovery);
-		require(a_facts.memoryTrimClear, kFailureMemoryTrim);
-		require(a_facts.retirementClear, kFailureRetirement);
-		require(a_facts.physicalMutationClear, kFailurePhysicalMutation);
-		require(a_facts.terminalClear, kFailureTerminal);
-		require(a_facts.foveationSettingsMatch, kFailureFoveationSettings);
-		require(a_facts.diagnosticsClear, kFailureDiagnosticDelta);
+		return EvaluateStrictStability(a_target, a_facts);
+	}
 
-		if (a_target.renderScaleMode) {
-			require(a_facts.apiActiveContract, kFailureAPIActiveContract);
-			require(a_facts.physicalActiveContract, kFailurePhysicalActiveContract);
-			require(a_facts.presentationPhaseStable, kFailurePresentationPhase);
-			require(a_facts.fidelityStable, kFailureFidelity);
-			require(a_facts.vendorPresentationStable, kFailureVendorPresentation);
-			require(a_facts.lifecycleStable, kFailureLifecycle);
-			if (a_target.method == Method::FSR) {
-				require(a_facts.fsrDispatchStable, kFailureFSRDispatch);
-				require(a_facts.shaderCompilationIdle, kFailureShaderCompilation);
-			}
-		} else {
-			require(a_facts.apiNativeContract, kFailureAPINativeContract);
-			require(a_facts.physicalNativeContract, kFailurePhysicalNativeContract);
-			require(a_facts.nativePresentationStable, kFailureNativePresentation);
+	struct MilestoneEvaluation
+	{
+		std::uint64_t presentationFailures = kFailureNone;
+		std::uint64_t cleanupFailures = kFailureNone;
+		std::uint64_t strictFailures = kFailureNone;
+
+		[[nodiscard]] constexpr bool PresentationStable() const noexcept
+		{
+			return presentationFailures == kFailureNone;
 		}
-		return failures;
+
+		[[nodiscard]] constexpr bool CleanupDrained() const noexcept
+		{
+			return cleanupFailures == kFailureNone;
+		}
+
+		[[nodiscard]] constexpr bool StrictSatisfied() const noexcept
+		{
+			return strictFailures == kFailureNone;
+		}
+	};
+
+	[[nodiscard]] constexpr MilestoneEvaluation EvaluateMilestones(
+		const TargetProfile& a_target,
+		const StabilityFacts& a_facts) noexcept
+	{
+		const auto presentation =
+			EvaluatePresentationStability(a_target, a_facts);
+		const auto cleanup = EvaluateCleanupDrain(a_target, a_facts);
+		return {
+			.presentationFailures = presentation,
+			.cleanupFailures = cleanup,
+			.strictFailures = presentation | cleanup,
+		};
+	}
+
+	[[nodiscard]] constexpr bool IsMilestoneSatisfied(
+		Milestone a_milestone,
+		const MilestoneEvaluation& a_evaluation) noexcept
+	{
+		switch (a_milestone) {
+		case Milestone::Strict:
+			return a_evaluation.StrictSatisfied();
+		case Milestone::Presentation:
+			return a_evaluation.PresentationStable();
+		case Milestone::Cleanup:
+			return a_evaluation.CleanupDrained();
+		}
+		return false;
+	}
+
+	struct FirstObservation
+	{
+		std::uint64_t tick = 0;
+		std::uint32_t frame = 0;
+
+		[[nodiscard]] constexpr bool Observed() const noexcept
+		{
+			return tick != 0;
+		}
+	};
+
+	constexpr void RecordFirstObservation(
+		bool a_satisfied,
+		std::uint64_t a_tick,
+		std::uint32_t a_frame,
+		FirstObservation& a_observation) noexcept
+	{
+		if (a_satisfied && a_tick != 0 && !a_observation.Observed()) {
+			a_observation.tick = a_tick;
+			a_observation.frame = a_frame;
+		}
 	}
 }

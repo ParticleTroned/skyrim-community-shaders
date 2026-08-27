@@ -15,7 +15,7 @@ jobs:
       - name: Check out requested tracked source
         uses: actions/checkout@v4
         with:
-          ref: fix/vr-submit-resource-lease
+          ref: 5fd267d02a39b509ce8c6b32d1e21c9aae5c410b
           fetch-depth: 1
           submodules: false
 
@@ -26,7 +26,7 @@ jobs:
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
-          name: source-export-pr49
+          name: source-export-pr49-base
           path: source-export.zip
           if-no-files-found: error
           retention-days: 1

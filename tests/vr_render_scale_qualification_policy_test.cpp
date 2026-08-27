@@ -201,6 +201,11 @@ namespace
 		       CounterRegressed(2, 3) && !CounterRegressed(3, 3) &&
 		       MonotonicCounterDelta(5, 3) == 2 &&
 		       MonotonicCounterDelta(2, 3) == 0 &&
+		       GenerationCounterRegressed(2, 3, 7, 4, 7, 4) &&
+		       !GenerationCounterRegressed(0, 3, 8, 0, 7, 4) &&
+		       GenerationCounterDelta(5, 3, 7, 4, 7, 4) == 2 &&
+		       GenerationCounterDelta(0, 3, 8, 0, 7, 4) == 0 &&
+		       GenerationCounterDelta(1, 3, 8, 5, 7, 4) == 1 &&
 		       IsFoveationInvariantViolation(true, false) &&
 		       !IsFoveationInvariantViolation(true, true) &&
 		       !IsFoveationInvariantViolation(false, false) &&

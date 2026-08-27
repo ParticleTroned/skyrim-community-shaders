@@ -1119,6 +1119,8 @@ namespace
 		uint64_t maximumPresentationStretchFrames = 0;
 		uint64_t maximumPresentationStretchQpcTicks = 0;
 		uint64_t presentationStretchQpcFrequency = 0;
+		uint64_t fidelityTransitionEpoch = 0;
+		uint32_t fidelityContractGeneration = 0;
 		uint64_t fidelityMismatches = 0;
 		uint64_t transitionFailures = 0;
 		uint64_t outOfMemoryFailures = 0;
@@ -1696,6 +1698,32 @@ namespace
 				});
 			}
 		};
+		const auto addGenerationCounter = [&output](
+											  std::string_view a_counter,
+											  uint64_t a_current,
+											  uint64_t a_baseline,
+											  uint64_t a_currentEpoch,
+											  uint32_t a_currentGeneration,
+											  uint64_t a_baselineEpoch,
+											  uint32_t a_baselineGeneration) {
+			if (QualificationPolicy::GenerationCounterRegressed(
+					a_current,
+					a_baseline,
+					a_currentEpoch,
+					a_currentGeneration,
+					a_baselineEpoch,
+					a_baselineGeneration)) {
+				output.push_back({
+					{ "counter", a_counter },
+					{ "baseline", a_baseline },
+					{ "current", a_current },
+					{ "baselineEpoch", a_baselineEpoch },
+					{ "baselineGeneration", a_baselineGeneration },
+					{ "currentEpoch", a_currentEpoch },
+					{ "currentGeneration", a_currentGeneration },
+				});
+			}
+		};
 		add("stress.nextSequence", a_current.stressNextSequence, a_baseline.stressNextSequence);
 		add("stress.retryEvents", a_current.stressRetryEvents, a_baseline.stressRetryEvents);
 		add("stress.failureEvents", a_current.stressFailureEvents, a_baseline.stressFailureEvents);
@@ -1712,7 +1740,14 @@ namespace
 		add("presentation.stretchCompletedQpcTicks", a_current.presentationStretchCompletedQpcTicks, a_baseline.presentationStretchCompletedQpcTicks);
 		add("presentation.maximumStretchFrames", a_current.maximumPresentationStretchFrames, a_baseline.maximumPresentationStretchFrames);
 		add("presentation.maximumStretchQpcTicks", a_current.maximumPresentationStretchQpcTicks, a_baseline.maximumPresentationStretchQpcTicks);
-		add("failures.fidelityMismatches", a_current.fidelityMismatches, a_baseline.fidelityMismatches);
+		addGenerationCounter(
+			"failures.fidelityMismatches",
+			a_current.fidelityMismatches,
+			a_baseline.fidelityMismatches,
+			a_current.fidelityTransitionEpoch,
+			a_current.fidelityContractGeneration,
+			a_baseline.fidelityTransitionEpoch,
+			a_baseline.fidelityContractGeneration);
 		add("failures.transition", a_current.transitionFailures, a_baseline.transitionFailures);
 		add("failures.outOfMemory", a_current.outOfMemoryFailures, a_baseline.outOfMemoryFailures);
 		add("failures.deviceLost", a_current.deviceLostFailures, a_baseline.deviceLostFailures);
@@ -1780,6 +1815,8 @@ namespace
 			a_session.maximumPresentationStretchQpcTicks;
 		output.presentationStretchQpcFrequency =
 			a_session.presentationStretchQpcFrequency;
+		output.fidelityTransitionEpoch = a_controller.fidelity.transitionEpoch;
+		output.fidelityContractGeneration = a_controller.fidelity.contractGeneration;
 		output.fidelityMismatches = a_controller.fidelity.mismatchCount;
 		output.transitionFailures = a_controller.metrics.current.failures;
 		output.outOfMemoryFailures = a_controller.metrics.current.outOfMemoryFailures;
@@ -1838,6 +1875,12 @@ namespace
 							  { "memoryTrim", a_value.memoryTrimFailures },
 							  { "retirementFence", a_value.retirementFenceFailures },
 						  } },
+			{ "counterScopes", {
+								   { "fidelity", {
+													 { "transitionEpoch", a_value.fidelityTransitionEpoch },
+													 { "contractGeneration", a_value.fidelityContractGeneration },
+												 } },
+							   } },
 			{ "dlssTrace", {
 							   { "active", a_value.dlssTraceActive },
 							   { "sessionID", a_value.dlssTraceSessionID },
@@ -1869,7 +1912,13 @@ namespace
 		QUALIFICATION_DELTA(presentationStretchTimedCompletedEpisodes);
 		QUALIFICATION_DELTA(presentationStretchCompletedFrames);
 		QUALIFICATION_DELTA(presentationStretchCompletedQpcTicks);
-		QUALIFICATION_DELTA(fidelityMismatches);
+		output.fidelityMismatches = QualificationPolicy::GenerationCounterDelta(
+			a_current.fidelityMismatches,
+			a_baseline.fidelityMismatches,
+			a_current.fidelityTransitionEpoch,
+			a_current.fidelityContractGeneration,
+			a_baseline.fidelityTransitionEpoch,
+			a_baseline.fidelityContractGeneration);
 		QUALIFICATION_DELTA(transitionFailures);
 		QUALIFICATION_DELTA(outOfMemoryFailures);
 		QUALIFICATION_DELTA(deviceLostFailures);
@@ -1884,6 +1933,8 @@ namespace
 #	undef QUALIFICATION_DELTA
 		output.dlssTraceActive = a_current.dlssTraceActive;
 		output.dlssTraceSessionID = a_current.dlssTraceSessionID;
+		output.fidelityTransitionEpoch = a_current.fidelityTransitionEpoch;
+		output.fidelityContractGeneration = a_current.fidelityContractGeneration;
 		output.presentationStretchEpisodeActive =
 			a_current.presentationStretchEpisodeActive;
 		output.presentationStretchActiveFrames =
@@ -2643,8 +2694,7 @@ namespace
 			controller.presentationPhase == Upscaling::VRRenderScalePresentationPhase::Released;
 		facts.fidelityStable = ActiveFidelityStable(
 								   controller, a_transition.dispatchFrame) &&
-		                       CounterDelta(diagnostics.fidelityMismatches,
-								   a_transition.baseline.diagnostics.fidelityMismatches) == 0;
+		                       delta.fidelityMismatches == 0;
 		facts.vendorPresentationStable = PresentationEyesStable(
 			controller,
 			Upscaling::VRRenderScalePresentationPath::VendorEvaluated,

@@ -163,6 +163,49 @@ namespace VRRenderScaleQualificationPolicy
 		           a_current - a_baseline;
 	}
 
+	[[nodiscard]] constexpr bool SameCounterGeneration(
+		std::uint64_t a_currentEpoch,
+		std::uint32_t a_currentGeneration,
+		std::uint64_t a_baselineEpoch,
+		std::uint32_t a_baselineGeneration) noexcept
+	{
+		return a_currentEpoch == a_baselineEpoch &&
+		       a_currentGeneration == a_baselineGeneration;
+	}
+
+	[[nodiscard]] constexpr bool GenerationCounterRegressed(
+		std::uint64_t a_current,
+		std::uint64_t a_baseline,
+		std::uint64_t a_currentEpoch,
+		std::uint32_t a_currentGeneration,
+		std::uint64_t a_baselineEpoch,
+		std::uint32_t a_baselineGeneration) noexcept
+	{
+		return SameCounterGeneration(
+				   a_currentEpoch,
+				   a_currentGeneration,
+				   a_baselineEpoch,
+				   a_baselineGeneration) &&
+		       CounterRegressed(a_current, a_baseline);
+	}
+
+	[[nodiscard]] constexpr std::uint64_t GenerationCounterDelta(
+		std::uint64_t a_current,
+		std::uint64_t a_baseline,
+		std::uint64_t a_currentEpoch,
+		std::uint32_t a_currentGeneration,
+		std::uint64_t a_baselineEpoch,
+		std::uint32_t a_baselineGeneration) noexcept
+	{
+		return SameCounterGeneration(
+				   a_currentEpoch,
+				   a_currentGeneration,
+				   a_baselineEpoch,
+				   a_baselineGeneration) ?
+		           MonotonicCounterDelta(a_current, a_baseline) :
+		           a_current;
+	}
+
 	[[nodiscard]] constexpr bool IsFoveationInvariantViolation(
 		bool a_targetSupplied,
 		bool a_settingsMatch) noexcept

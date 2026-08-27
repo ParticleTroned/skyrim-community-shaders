@@ -121,8 +121,9 @@ contradict this policy.
 -   A PR that changes VR render-scale code or behavior must include the generated
     `csx-render-scale-pr-v1` summary described in
     `docs/development/render-scale-pr-qualification.md`. Preserve the complete
-    evidence directory; `REVIEW_PENDING`, missing visual review, or an unmatched
-    performance baseline is not a pass.
+    evidence directory; missing or inconclusive unattended visual review, or an
+    unmatched performance baseline, is not a pass. Human completion is not part
+    of this protocol.
 -   Scope pre-commit to staged files or the changed revision range. Do not use `--all-files` merely to validate a focused change; legacy third-party files preserve intentional formatting.
 -   Never interrupt shader compilation or cache generation because output is temporarily silent. Check process and cache activity and allow the documented build window.
 -   Preserve user-owned build outputs and shader caches unless the task explicitly requires their removal or regeneration.

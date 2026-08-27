@@ -415,17 +415,23 @@ namespace
 		};
 		const uint32_t frame =
 			globals::state ? globals::state->frameCount : 0u;
+		const bool active =
+			a_upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive();
+		const uint64_t sessionID =
+			a_upscaling.GetVRRenderScaleCPUPerformanceSessionID();
 		const uint64_t startFrame = value(Counter::WindowStartFrame);
 
 		return {
 			{ "schemaVersion", 1 },
 			{ "devBenchOnly", true },
-			{ "active", a_upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive() },
+			{ "active", active },
+			{ "sessionId", sessionID },
+			{ "state", active ? "active" : (sessionID != 0 ? "stopped" : "reset") },
 			{ "window", {
-							{ "initialized", startFrame != 0 },
+							{ "initialized", sessionID != 0 },
 							{ "startFrame", startFrame },
 							{ "currentFrame", frame },
-							{ "elapsedFrames", startFrame != 0 && frame >= startFrame ? frame - startFrame : 0u },
+							{ "elapsedFrames", sessionID != 0 && frame >= startFrame ? frame - startFrame : 0u },
 						} },
 			{ "generationResourceValidation", {
 												  { "fullValidations", value(Counter::ResourceFullValidations) },
@@ -1150,7 +1156,10 @@ namespace
 	{
 		uint64_t transitionID = 0;
 		uint64_t ownershipToken = 0;
+		std::string ownerID;
 		bool ready = false;
+		uint64_t dispatchTick = 0;
+		uint32_t dispatchFrame = 0;
 		bool waitInProgress = false;
 		QualificationBaseline baseline{};
 		std::shared_ptr<std::atomic_bool> cancelled =
@@ -1484,6 +1493,69 @@ namespace
 			return false;
 		}
 		return true;
+	}
+
+	bool TryParseOptionalIntegerExpectation(
+		const json& a_args,
+		const char* a_name,
+		uint64_t a_minimum,
+		const char* a_errorCode,
+		std::optional<uint64_t>& a_output,
+		json& a_error)
+	{
+		if (!a_args.contains(a_name))
+			return true;
+
+		uint64_t value = 0;
+		if (!TryGetNonNegativeInteger(a_args[a_name], value) || value < a_minimum) {
+			a_error = {
+				{ "error", std::format("{} must be an integer greater than or equal to {}", a_name, a_minimum) },
+				{ "errorCode", a_errorCode },
+			};
+			return false;
+		}
+		a_output = value;
+		return true;
+	}
+
+	bool TryParseQualificationOwnerID(
+		const json& a_args,
+		std::string& a_output,
+		json& a_error)
+	{
+		if (!a_args.contains("ownerId") || !a_args["ownerId"].is_string()) {
+			a_error = {
+				{ "error", "ownerId must be a string containing 1..128 bytes" },
+				{ "errorCode", "invalid_owner_id" },
+			};
+			return false;
+		}
+		a_output = a_args["ownerId"].get<std::string>();
+		if (a_output.empty() || a_output.size() > 128) {
+			a_error = {
+				{ "error", "ownerId must be a string containing 1..128 bytes" },
+				{ "errorCode", "invalid_owner_id" },
+			};
+			return false;
+		}
+		return true;
+	}
+
+	bool QualificationEvidenceOwnedBy(
+		const json& a_evidence,
+		uint64_t a_transitionID,
+		std::string_view a_ownerID)
+	{
+		if (!a_evidence.is_object())
+			return false;
+		const auto transition = a_evidence.find("transitionId");
+		const auto owner = a_evidence.find("ownerId");
+		uint64_t evidenceTransitionID = 0;
+		return transition != a_evidence.end() &&
+		       TryGetNonNegativeInteger(*transition, evidenceTransitionID) &&
+		       evidenceTransitionID == a_transitionID &&
+		       owner != a_evidence.end() && owner->is_string() &&
+		       std::string_view(owner->get_ref<const std::string&>()) == a_ownerID;
 	}
 
 	bool TryParseExpectedCell(
@@ -1903,11 +1975,23 @@ namespace
 		};
 		if (store.active) {
 			output["transitionId"] = store.active->transitionID;
+			output["ownerId"] = store.active->ownerID;
 			output["phase"] = store.active->ready ?
-			                      (store.active->waitInProgress ? "waiting" : "armed") :
+			                      (store.active->waitInProgress ? "waiting" :
+																  (store.active->dispatchTick != 0 ? "dispatched" : "armed")) :
 			                      "beginning";
-			if (store.active->ready)
+			if (store.active->ready) {
 				output["baseline"] = QualificationBaselineJson(store.active->baseline);
+				output["dispatch"] = {
+					{ "marked", store.active->dispatchTick != 0 },
+					{ "tick", store.active->dispatchTick != 0 ?
+								  json(store.active->dispatchTick) :
+								  json(nullptr) },
+					{ "frame", store.active->dispatchTick != 0 ?
+								   json(store.active->dispatchFrame) :
+								   json(nullptr) },
+				};
+			}
 		}
 		return output;
 	}
@@ -2457,7 +2541,7 @@ namespace
 		facts.freshObservation = QualificationPolicy::IsFreshTransition(
 			exactCell,
 			destinationDiffersFromSource,
-			a_transition.baseline.beginFrame,
+			a_transition.dispatchFrame,
 			frame,
 			profileStateChanged);
 		facts.publicSnapshot = apiAvailable;
@@ -2558,13 +2642,13 @@ namespace
 			controller.presentationPhase == Upscaling::VRRenderScalePresentationPhase::StereoProven ||
 			controller.presentationPhase == Upscaling::VRRenderScalePresentationPhase::Released;
 		facts.fidelityStable = ActiveFidelityStable(
-								   controller, a_transition.baseline.beginFrame) &&
+								   controller, a_transition.dispatchFrame) &&
 		                       CounterDelta(diagnostics.fidelityMismatches,
 								   a_transition.baseline.diagnostics.fidelityMismatches) == 0;
 		facts.vendorPresentationStable = PresentationEyesStable(
 			controller,
 			Upscaling::VRRenderScalePresentationPath::VendorEvaluated,
-			a_transition.baseline.beginFrame);
+			a_transition.dispatchFrame);
 		facts.lifecycleStable = LifecycleStable(controller, a_target, delta);
 		facts.fsrDispatchStable = FSRDispatchStable(controller);
 		facts.shaderCompilationIdle =
@@ -2572,7 +2656,7 @@ namespace
 		facts.nativePresentationStable = PresentationEyesStable(
 			controller,
 			Upscaling::VRRenderScalePresentationPath::NativeOriginal,
-			a_transition.baseline.beginFrame);
+			a_transition.dispatchFrame);
 
 		const bool dlssLifecycleRelevant =
 			a_target.method == QualificationPolicy::Method::DLSS;
@@ -2727,6 +2811,7 @@ namespace
 		return json::array({ "status",
 			"qualification_status",
 			"qualification_begin",
+			"qualification_dispatch",
 			"qualification_wait",
 			"qualification_cancel",
 			"cpu_performance_status",
@@ -2841,6 +2926,7 @@ namespace
 		std::optional<std::string_view> a_terminalReason = std::nullopt)
 	{
 		const bool satisfied = a_outcome == "stable";
+		const bool dispatched = a_transition.dispatchTick != 0;
 		json reasons = a_observation.is_object() &&
 		                       a_observation.contains("failureReasons") ?
 		                   a_observation["failureReasons"] :
@@ -2857,6 +2943,7 @@ namespace
 		json receipt{
 			{ "action", "qualification_wait" },
 			{ "transitionId", a_transition.transitionID },
+			{ "ownerId", a_transition.ownerID },
 			{ "satisfied", satisfied },
 			{ "outcome", a_outcome },
 			{ "baseline", a_transition.ready ?
@@ -2864,27 +2951,32 @@ namespace
 							  json(nullptr) },
 			{ "timing", {
 							{ "clock", "query_performance_counter" },
+							{ "elapsedOrigin", "qualification_dispatch" },
 							{ "tickFrequency", a_transition.baseline.tickFrequency },
 							{ "beginTick", a_transition.ready ?
 											   json(a_transition.baseline.beginTick) :
 											   json(nullptr) },
+							{ "dispatchTick", dispatched ?
+												  json(a_transition.dispatchTick) :
+												  json(nullptr) },
 							{ satisfied ? "stableTick" : "terminalTick", a_terminalTick },
 							{ QualificationPolicy::kElapsedMillisecondsReceiptField.data(),
-								a_transition.ready ?
-									QualificationPolicy::ElapsedMilliseconds(
-										a_transition.baseline.beginTick,
+								dispatched ?
+									json(QualificationPolicy::ElapsedMilliseconds(
+										a_transition.dispatchTick,
 										a_terminalTick,
-										a_transition.baseline.tickFrequency) :
-									0.0 },
+										a_transition.baseline.tickFrequency)) :
+									json(nullptr) },
 							{ QualificationPolicy::kElapsedFramesReceiptField.data(),
-								a_transition.ready ?
-									QualificationPolicy::ElapsedFrames(
-										a_transition.baseline.beginFrame,
-										a_terminalFrame) :
-									0 },
+								dispatched ?
+									json(QualificationPolicy::ElapsedFrames(
+										a_transition.dispatchFrame,
+										a_terminalFrame)) :
+									json(nullptr) },
 						} },
 			{ "frames", {
 							{ "begin", a_transition.ready ? json(a_transition.baseline.beginFrame) : json(nullptr) },
+							{ "dispatch", dispatched ? json(a_transition.dispatchFrame) : json(nullptr) },
 							{ satisfied ? "stable" : "terminal", a_transition.ready ? json(a_terminalFrame) : json(nullptr) },
 						} },
 			{ "failureReasons", std::move(reasons) },
@@ -2963,13 +3055,15 @@ namespace
 		if (action == "qualification_begin") {
 			uint64_t transitionID = 0;
 			uint64_t ownershipToken = 0;
+			std::string ownerID;
 			json error;
 			if (!TryParsePositiveInteger(
 					a_args,
 					"transitionId",
 					std::numeric_limits<uint64_t>::max(),
 					transitionID,
-					error)) {
+					error) ||
+				!TryParseQualificationOwnerID(a_args, ownerID, error)) {
 				return error;
 			}
 			if (!globals::game::isVR) {
@@ -2993,6 +3087,7 @@ namespace
 				}
 				QualificationTransition transition;
 				transition.transitionID = transitionID;
+				transition.ownerID = ownerID;
 				transition.ownershipToken =
 					AllocateQualificationOwnershipTokenLocked(store);
 				ownershipToken = transition.ownershipToken;
@@ -3004,7 +3099,7 @@ namespace
 					ClearQualificationOwnership(transitionID, ownershipToken);
 			});
 
-			auto response = RunOnMainThread([transitionID, ownershipToken]() {
+			auto response = RunOnMainThread([transitionID, ownershipToken, ownerID]() {
 				auto& upscaling = globals::features::upscaling;
 				QualificationBaseline baseline;
 				baseline.beginTick = QueryQualificationTick();
@@ -3079,6 +3174,7 @@ namespace
 				return json{
 					{ "action", "qualification_begin" },
 					{ "transitionId", transitionID },
+					{ "ownerId", ownerID },
 					{ "accepted", true },
 					{ "baseline", QualificationBaselineJson(baseline) },
 				};
@@ -3087,6 +3183,7 @@ namespace
 				json evidence{
 					{ "action", "qualification_begin" },
 					{ "transitionId", transitionID },
+					{ "ownerId", ownerID },
 					{ "satisfied", false },
 					{ "outcome", "error" },
 					{ "error", response.value("error", std::string("qualification_begin failed")) },
@@ -3101,15 +3198,119 @@ namespace
 			return response;
 		}
 
-		if (action == "qualification_cancel") {
+		if (action == "qualification_dispatch") {
 			uint64_t transitionID = 0;
+			uint64_t ownershipToken = 0;
+			std::string ownerID;
 			json error;
 			if (!TryParsePositiveInteger(
 					a_args,
 					"transitionId",
 					std::numeric_limits<uint64_t>::max(),
 					transitionID,
-					error)) {
+					error) ||
+				!TryParseQualificationOwnerID(a_args, ownerID, error)) {
+				return error;
+			}
+
+			{
+				auto& store = GetQualificationStore();
+				std::lock_guard lock(store.mutex);
+				if (!store.active || store.active->transitionID != transitionID ||
+					store.active->ownerID != ownerID) {
+					return {
+						{ "error", "qualification_dispatch does not own the active transition" },
+						{ "errorCode", "qualification_owner_mismatch" },
+						{ "requestedTransitionId", transitionID },
+						{ "requestedOwnerId", ownerID },
+						{ "activeTransitionId", store.active ? store.active->transitionID : 0 },
+						{ "activeOwnerId", store.active ? store.active->ownerID : std::string{} },
+					};
+				}
+				if (!store.active->ready) {
+					return {
+						{ "error", "qualification_begin has not completed" },
+						{ "errorCode", "qualification_not_armed" },
+					};
+				}
+				if (store.active->cancelled->load(std::memory_order_acquire)) {
+					return {
+						{ "error", "qualification transition is being cancelled" },
+						{ "errorCode", "qualification_cancelled" },
+					};
+				}
+				if (store.active->waitInProgress || store.active->dispatchTick != 0) {
+					return {
+						{ "error", "qualification dispatch was already marked" },
+						{ "errorCode", "qualification_dispatch_already_marked" },
+					};
+				}
+				ownershipToken = store.active->ownershipToken;
+			}
+
+			auto response = RunOnMainThread(
+				[transitionID, ownershipToken, ownerID]() {
+					const uint64_t tick = QueryQualificationTick();
+					const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+					if (tick == 0) {
+						return json{
+							{ "error", "QueryPerformanceCounter is unavailable" },
+							{ "errorCode", "monotonic_clock_unavailable" },
+						};
+					}
+					auto& store = GetQualificationStore();
+					std::lock_guard lock(store.mutex);
+					if (!store.active ||
+						!QualificationPolicy::OwnsTransitionInstance(
+							store.active->transitionID,
+							store.active->ownershipToken,
+							transitionID,
+							ownershipToken) ||
+						store.active->ownerID != ownerID ||
+						store.active->cancelled->load(std::memory_order_acquire)) {
+						return json{
+							{ "error", "qualification ownership changed before dispatch" },
+							{ "errorCode", "qualification_owner_mismatch" },
+						};
+					}
+					if (store.active->dispatchTick != 0) {
+						return json{
+							{ "error", "qualification dispatch was already marked" },
+							{ "errorCode", "qualification_dispatch_already_marked" },
+						};
+					}
+					store.active->dispatchTick = tick;
+					store.active->dispatchFrame = frame;
+					return json{
+						{ "action", "qualification_dispatch" },
+						{ "transitionId", transitionID },
+						{ "ownerId", ownerID },
+						{ "accepted", true },
+						{ "timing", {
+										{ "clock", "query_performance_counter" },
+										{ "elapsedOrigin", "qualification_dispatch" },
+										{ "dispatchTick", tick },
+										{ "tickFrequency", store.active->baseline.tickFrequency },
+									} },
+						{ "dispatchFrame", frame },
+					};
+				});
+			if (!response.contains("error"))
+				response["qualification"] = QualificationStateJson();
+			return response;
+		}
+
+		if (action == "qualification_cancel") {
+			uint64_t transitionID = 0;
+			std::string ownerID;
+			json error;
+			if (!TryParsePositiveInteger(
+					a_args,
+					"transitionId",
+					std::numeric_limits<uint64_t>::max(),
+					transitionID,
+					error) ||
+				!TryParseQualificationOwnerID(a_args, ownerID, error)) {
 				return error;
 			}
 
@@ -3118,21 +3319,37 @@ namespace
 				auto& store = GetQualificationStore();
 				std::lock_guard lock(store.mutex);
 				if (!store.active) {
+					if (!QualificationEvidenceOwnedBy(
+							store.lastEvidence, transitionID, ownerID)) {
+						return {
+							{ "error", "qualification_cancel does not own an active or retained transition" },
+							{ "errorCode", "qualification_owner_mismatch" },
+							{ "cancelled", false },
+							{ "requestedTransitionId", transitionID },
+							{ "requestedOwnerId", ownerID },
+							{ "activeTransitionId", 0 },
+							{ "activeOwnerId", "" },
+						};
+					}
 					return {
 						{ "action", "qualification_cancel" },
 						{ "cancelled", false },
 						{ "alreadyInactive", true },
 						{ "transitionId", transitionID },
+						{ "ownerId", ownerID },
 						{ "lastEvidence", store.lastEvidence },
 					};
 				}
-				if (transitionID != store.active->transitionID) {
+				if (transitionID != store.active->transitionID ||
+					ownerID != store.active->ownerID) {
 					return {
 						{ "error", "qualification_cancel does not own the active transition" },
 						{ "errorCode", "qualification_owner_mismatch" },
 						{ "cancelled", false },
 						{ "requestedTransitionId", transitionID },
+						{ "requestedOwnerId", ownerID },
 						{ "activeTransitionId", store.active->transitionID },
+						{ "activeOwnerId", store.active->ownerID },
 					};
 				}
 				transition = *store.active;
@@ -3142,6 +3359,7 @@ namespace
 				return {
 					{ "action", "qualification_cancel" },
 					{ "transitionId", transitionID },
+					{ "ownerId", ownerID },
 					{ "cancellationRequested", true },
 					{ "cancelled", false },
 					{ "outcome", "cancellation_requested" },
@@ -3155,11 +3373,15 @@ namespace
 						transitionID, transition.ownershipToken);
 			});
 			const uint64_t tick = QueryQualificationTick();
+			const uint32_t frame = transition.dispatchTick != 0 ?
+			                           transition.dispatchFrame :
+			                           transition.baseline.beginFrame;
 			auto evidence = BuildQualificationReceipt(
 				transition, "cancelled", nullptr, nullptr, nullptr,
-				tick, transition.baseline.beginFrame, nullptr,
+				tick, frame, nullptr,
 				"qualification_cancelled");
 			evidence["action"] = "qualification_cancel";
+			evidence["ownerId"] = ownerID;
 			evidence["cancelled"] = true;
 			FinishQualification(
 				transitionID, transition.ownershipToken, evidence);
@@ -3170,13 +3392,15 @@ namespace
 		if (action == "qualification_wait") {
 			uint64_t transitionID = 0;
 			uint64_t timeoutMs = kQualificationMaximumTimeoutMs;
+			std::string ownerID;
 			json error;
 			if (!TryParsePositiveInteger(
 					a_args,
 					"transitionId",
 					std::numeric_limits<uint64_t>::max(),
 					transitionID,
-					error)) {
+					error) ||
+				!TryParseQualificationOwnerID(a_args, ownerID, error)) {
 				return error;
 			}
 			if (a_args.contains("timeoutMs") &&
@@ -3202,12 +3426,16 @@ namespace
 				auto& store = GetQualificationStore();
 				std::lock_guard lock(store.mutex);
 				const uint64_t activeID = store.active ? store.active->transitionID : 0;
-				if (!QualificationPolicy::OwnsTransition(activeID, transitionID)) {
+				if (!store.active ||
+					!QualificationPolicy::OwnsTransition(activeID, transitionID) ||
+					store.active->ownerID != ownerID) {
 					return {
 						{ "error", "qualification_wait does not own the active transition" },
 						{ "errorCode", "qualification_owner_mismatch" },
 						{ "requestedTransitionId", transitionID },
+						{ "requestedOwnerId", ownerID },
 						{ "activeTransitionId", activeID },
+						{ "activeOwnerId", store.active ? store.active->ownerID : std::string{} },
 						{ "lastEvidence", store.lastEvidence },
 					};
 				}
@@ -3222,6 +3450,12 @@ namespace
 					return {
 						{ "error", "qualification_begin has not completed" },
 						{ "errorCode", "qualification_not_armed" },
+					};
+				}
+				if (store.active->dispatchTick == 0) {
+					return {
+						{ "error", "qualification_dispatch has not completed" },
+						{ "errorCode", "qualification_dispatch_required" },
 					};
 				}
 				if (store.active->waitInProgress) {
@@ -3239,15 +3473,15 @@ namespace
 			});
 
 			const uint64_t deadline = QualificationPolicy::SaturatingDeadlineTick(
-				transition.baseline.beginTick,
+				transition.dispatchTick,
 				timeoutMs,
 				transition.baseline.tickFrequency);
 			json lastObservation = nullptr;
 			for (;;) {
 				const uint64_t beforeTick = QueryQualificationTick();
 				const uint32_t lastFrame = lastObservation.is_object() ?
-				                               lastObservation.value("frame", transition.baseline.beginFrame) :
-				                               transition.baseline.beginFrame;
+				                               lastObservation.value("frame", transition.dispatchFrame) :
+				                               transition.dispatchFrame;
 				if (transition.cancelled->load(std::memory_order_acquire)) {
 					auto receipt = BuildQualificationReceipt(
 						transition, "cancelled", &expectedCell, &target, &foveation,
@@ -3389,12 +3623,46 @@ namespace
 		}
 
 		if (action == "dlss_trace_stop") {
+			std::optional<uint64_t> expectedSessionID;
+			json error;
+			if (!TryParseOptionalIntegerExpectation(
+					a_args,
+					"expectedSessionId",
+					1,
+					"invalid_expected_session_id",
+					expectedSessionID,
+					error)) {
+				return error;
+			}
 			auto& streamline = globals::features::upscaling.streamline;
-			if (!streamline.StopDLSSDevBenchTrace()) {
+			const auto capture = streamline.GetDLSSDevBenchTraceSnapshot(false);
+			if (!capture.active) {
 				return {
 					{ "error", "no DLSS dispatch trace is active" },
-					{ "capture", DLSSDevBenchTraceSummaryJson(streamline.GetDLSSDevBenchTraceSnapshot(false)) },
+					{ "capture", DLSSDevBenchTraceSummaryJson(capture) },
 				};
+			}
+			if (expectedSessionID && capture.sessionID != *expectedSessionID) {
+				return {
+					{ "error", "dlss_trace_stop does not own the active trace session" },
+					{ "errorCode", "dlss_trace_session_mismatch" },
+					{ "expectedSessionId", *expectedSessionID },
+					{ "activeSessionId", capture.sessionID },
+					{ "capture", DLSSDevBenchTraceSummaryJson(capture) },
+				};
+			}
+			if (!streamline.StopDLSSDevBenchTrace(expectedSessionID.value_or(0))) {
+				const auto current = streamline.GetDLSSDevBenchTraceSnapshot(false);
+				json response{
+					{ "error", "the DLSS dispatch trace changed before it could be stopped" },
+					{ "capture", DLSSDevBenchTraceSummaryJson(current) },
+				};
+				if (expectedSessionID) {
+					response["errorCode"] = "dlss_trace_session_mismatch";
+					response["expectedSessionId"] = *expectedSessionID;
+					response["activeSessionId"] = current.active ? current.sessionID : 0;
+				}
+				return response;
 			}
 			return {
 				{ "action", "dlss_trace_stop" },
@@ -3439,7 +3707,15 @@ namespace
 						{ "cpuPerformance", CPUPerformanceJson(upscaling) },
 					};
 				}
-				upscaling.StartVRRenderScaleCPUPerformanceTelemetry();
+				const uint64_t sessionID =
+					upscaling.StartVRRenderScaleCPUPerformanceTelemetry();
+				if (sessionID == 0) {
+					return json{
+						{ "error", "the CPU telemetry session ID allocator failed" },
+						{ "errorCode", "cpu_performance_session_id_unavailable" },
+						{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+					};
+				}
 				return json{
 					{ "action", "cpu_performance_start" },
 					{ "cpuPerformance", CPUPerformanceJson(upscaling) },
@@ -3448,13 +3724,57 @@ namespace
 		}
 
 		if (action == "cpu_performance_stop") {
-			return RunOnMainThread([]() {
+			std::optional<uint64_t> expectedSessionID;
+			std::optional<uint64_t> expectedStartFrame;
+			json error;
+			if (!TryParseOptionalIntegerExpectation(
+					a_args,
+					"expectedSessionId",
+					1,
+					"invalid_expected_session_id",
+					expectedSessionID,
+					error) ||
+				!TryParseOptionalIntegerExpectation(
+					a_args,
+					"expectedStartFrame",
+					0,
+					"invalid_expected_start_frame",
+					expectedStartFrame,
+					error)) {
+				return error;
+			}
+			return RunOnMainThread([expectedSessionID, expectedStartFrame]() {
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale CPU telemetry requires Skyrim VR" } };
 				auto& upscaling = globals::features::upscaling;
 				if (!upscaling.IsVRRenderScaleCPUPerformanceTelemetryActive()) {
 					return json{
 						{ "error", "no render-scale CPU telemetry capture is active" },
+						{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+					};
+				}
+				const uint64_t activeSessionID =
+					upscaling.GetVRRenderScaleCPUPerformanceSessionID();
+				if (expectedSessionID && activeSessionID != *expectedSessionID) {
+					return json{
+						{ "error", "cpu_performance_stop does not own the active capture session" },
+						{ "errorCode", "cpu_performance_session_mismatch" },
+						{ "expectedSessionId", *expectedSessionID },
+						{ "activeSessionId", activeSessionID },
+						{ "cpuPerformance", CPUPerformanceJson(upscaling) },
+					};
+				}
+				const auto snapshot =
+					upscaling.GetVRRenderScaleCPUPerformanceSnapshot();
+				const uint64_t activeStartFrame = snapshot[static_cast<std::size_t>(
+					Upscaling::VRRenderScaleCPUPerformanceCounter::WindowStartFrame)];
+				if (expectedStartFrame && activeStartFrame != *expectedStartFrame) {
+					return json{
+						{ "error", "cpu_performance_stop does not own the active capture window" },
+						{ "errorCode", "cpu_performance_start_frame_mismatch" },
+						{ "expectedStartFrame", *expectedStartFrame },
+						{ "activeStartFrame", activeStartFrame },
+						{ "activeSessionId", activeSessionID },
 						{ "cpuPerformance", CPUPerformanceJson(upscaling) },
 					};
 				}
@@ -3557,12 +3877,33 @@ namespace
 		}
 
 		if (action == "stop") {
-			return RunOnMainThread([]() {
+			std::optional<uint64_t> expectedSessionID;
+			json error;
+			if (!TryParseOptionalIntegerExpectation(
+					a_args,
+					"expectedSessionId",
+					1,
+					"invalid_expected_session_id",
+					expectedSessionID,
+					error)) {
+				return error;
+			}
+			return RunOnMainThread([expectedSessionID]() {
 				if (!globals::game::isVR)
 					return json{ { "error", "render-scale iteration control requires Skyrim VR" } };
 				auto& upscaling = globals::features::upscaling;
-				if (!upscaling.GetVRRenderScaleStressSessionSnapshot().active)
+				const auto session = upscaling.GetVRRenderScaleStressSessionSnapshot();
+				if (!session.active)
 					return json{ { "error", "no stress capture is active" }, { "status", BuildStatus(upscaling) } };
+				if (expectedSessionID && session.sessionID != *expectedSessionID) {
+					return json{
+						{ "error", "stop does not own the active stress capture" },
+						{ "errorCode", "stress_session_mismatch" },
+						{ "expectedSessionId", *expectedSessionID },
+						{ "activeSessionId", session.sessionID },
+						{ "status", BuildStatus(upscaling) },
+					};
+				}
 				upscaling.StopVRRenderScaleStressSession();
 				return json{
 					{ "action", "stop" },
@@ -3862,7 +4203,7 @@ namespace
 		json result{
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.renderscale" },
-			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. For a server-side transition barrier, reserve a caller-owned ID with qualification_begin, dispatch exactly one COC or apply, then call qualification_wait with the same ID, exact destination, target profile, and bounded timeout. qualification_cancel requires the same ID and requests a terminal cancellation receipt without releasing an active waiter early. If dynamic tools are unavailable, use equivalent communityshaders.renderscale steps in devbench scenario.)" },
+			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. For a server-side transition barrier, reserve a caller-owned ID and ownerId with qualification_begin, mark the server QPC immediately before the command with qualification_dispatch, dispatch exactly one COC or apply, then call qualification_wait with the same ownership pair, exact destination, target profile, and bounded timeout. qualification_cancel requires the same ownership pair and requests a terminal cancellation receipt without releasing an active waiter early. Pass expectedSessionId to stop, dlss_trace_stop, or cpu_performance_stop to refuse cleanup when the active capture is not the caller's; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses return cpuPerformance.sessionId; stop retains it and reset clears it to zero. If dynamic tools are unavailable, use equivalent communityshaders.renderscale steps in devbench scenario.)" },
 			{ "actions", RenderScaleActions() },
 		};
 		BuildProvenance::AttachProducer(result);
@@ -3902,7 +4243,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"json({"description":"Control and inspect CSX VR render-scale, including a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session and a caller-supplied transitionId; qualification_wait accepts an exact editor ID and/or form ID, a target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. DLSS dispatch tracing remains opt-in and non-blocking. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. begin reserves it; wait and cancel must present the same ID."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Qualification deadline measured from qualification_begin on the server QPC clock."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode","renderScaleMode"],"description":"Exact qualification profile. renderScaleMode must be true exactly for quality modes 1..6. Method-specific optional fields are exact when present."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
+			R"json({"description":"Control and inspect CSX VR render-scale, including a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, a target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; expectedStartFrame is a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Qualification deadline measured from qualification_dispatch on the server QPC clock."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode","renderScaleMode"],"description":"Exact qualification profile. renderScaleMode must be true exactly when qualityMode is 1..6. Method-specific optional fields are exact when present."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Legacy optional secondary ownership guard for cpu_performance_stop. When present, the active capture window start frame must also match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			diagnosticDescriptor,

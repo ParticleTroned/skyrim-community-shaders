@@ -6,17 +6,39 @@ set(_bridge_path
     "${PROJECT_ROOT}/src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp"
 )
 file(READ "${_bridge_path}" _bridge)
+file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling.h"
+    _upscaling_header
+)
+file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling.cpp"
+    _upscaling_source
+)
+file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/Streamline.h"
+    _streamline_header
+)
+file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/Streamline.cpp"
+    _streamline_source
+)
 
 foreach(_action IN ITEMS
     qualification_status
     qualification_begin
+    qualification_dispatch
     qualification_wait
     qualification_cancel
+    cpu_performance_status
+    cpu_performance_start
+    cpu_performance_stop
+    cpu_performance_reset
     dlss_trace_status
     dlss_trace_start
     dlss_trace_read
     dlss_trace_stop
     dlss_trace_reset
+    stop
 )
     string(FIND "${_bridge}" "if (action == \"${_action}\")" _handler_position)
     if(_handler_position EQUAL -1)
@@ -44,6 +66,9 @@ foreach(_required_text IN ITEMS
     "qualification_wait"
     "qualification_cancel"
     "transitionId"
+    "ownerId"
+    "expectedSessionId"
+    "expectedStartFrame"
     "expectedCellEditorId"
     "timeoutMs"
     "target"
@@ -66,6 +91,52 @@ if(_timeout_error OR NOT _timeout_default EQUAL 120000)
     )
 endif()
 
+string(JSON _expected_session_minimum ERROR_VARIABLE _expected_session_error
+    GET "${_descriptor}" inputSchema properties expectedSessionId minimum
+)
+if(_expected_session_error OR NOT _expected_session_minimum EQUAL 1)
+    message(FATAL_ERROR
+        "Render-scale expectedSessionId minimum is invalid: ${_expected_session_error}"
+    )
+endif()
+
+string(JSON _expected_session_description ERROR_VARIABLE _expected_session_description_error
+    GET "${_descriptor}" inputSchema properties expectedSessionId description
+)
+string(FIND
+    "${_expected_session_description}"
+    "cpu_performance_stop"
+    _expected_session_cpu_position
+)
+if(_expected_session_description_error OR _expected_session_cpu_position EQUAL -1)
+    message(FATAL_ERROR
+        "Render-scale expectedSessionId does not document CPU ownership: ${_expected_session_description_error}"
+    )
+endif()
+
+string(JSON _expected_start_frame_minimum ERROR_VARIABLE _expected_start_frame_error
+    GET "${_descriptor}" inputSchema properties expectedStartFrame minimum
+)
+if(_expected_start_frame_error OR NOT _expected_start_frame_minimum EQUAL 0)
+    message(FATAL_ERROR
+        "Render-scale expectedStartFrame minimum is invalid: ${_expected_start_frame_error}"
+    )
+endif()
+
+string(JSON _expected_start_frame_description ERROR_VARIABLE _expected_start_frame_description_error
+    GET "${_descriptor}" inputSchema properties expectedStartFrame description
+)
+string(FIND
+    "${_expected_start_frame_description}"
+    "Legacy optional secondary"
+    _expected_start_frame_legacy_position
+)
+if(_expected_start_frame_description_error OR _expected_start_frame_legacy_position EQUAL -1)
+    message(FATAL_ERROR
+        "Render-scale expectedStartFrame is not documented as a legacy secondary guard: ${_expected_start_frame_description_error}"
+    )
+endif()
+
 foreach(_required_behavior IN ITEMS
     "QualificationPolicy::SaturatingDeadlineTick"
     "QualificationPolicy::EvaluateStability"
@@ -73,6 +144,21 @@ foreach(_required_behavior IN ITEMS
     "QualificationPolicy::IsFoveationInvariantViolation"
     "QualificationPolicy::IsTransientObservationDispatchError"
     "QualificationPolicy::OwnsTransitionInstance"
+    "TryParseQualificationOwnerID"
+    "TryParseOptionalIntegerExpectation"
+    "QualificationEvidenceOwnedBy"
+    "stress_session_mismatch"
+    "dlss_trace_session_mismatch"
+    "cpu_performance_session_mismatch"
+    "cpu_performance_start_frame_mismatch"
+    "cpu_performance_session_id_unavailable"
+    "GetVRRenderScaleCPUPerformanceSessionID()"
+    "{ \"sessionId\", sessionID }"
+    "sessionID != 0 ? \"stopped\" : \"reset\""
+    "StopDLSSDevBenchTrace(expectedSessionID.value_or(0))"
+    "a_transition.dispatchTick"
+    "a_transition.dispatchFrame"
+    "elapsedOrigin"
     "QualificationMonotonicRegressionsJson"
     "BuildAdapterIdentity"
     "{ \"adapter\", BuildAdapterIdentity() }"
@@ -87,6 +173,69 @@ foreach(_required_behavior IN ITEMS
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
+    endif()
+endforeach()
+
+foreach(_required_cpu_session_behavior IN ITEMS
+    "GetVRRenderScaleCPUPerformanceSessionID() const noexcept"
+    "StartVRRenderScaleCPUPerformanceTelemetry() noexcept"
+    "nextVRRenderScaleCPUPerformanceSessionID{ 1 }"
+    "nextVRRenderScaleCPUPerformanceSessionID.compare_exchange_weak"
+    "sessionID == std::numeric_limits<uint64_t>::max()"
+    "vrRenderScaleCPUPerformanceSessionID.store("
+    "vrRenderScaleCPUPerformanceSessionID.store(\n\t\t0,"
+)
+    string(FIND
+        "${_upscaling_header}\n${_upscaling_source}"
+        "${_required_cpu_session_behavior}"
+        _cpu_session_behavior_position
+    )
+    if(_cpu_session_behavior_position EQUAL -1)
+        message(FATAL_ERROR
+            "CPU telemetry session behavior is missing: ${_required_cpu_session_behavior}"
+        )
+    endif()
+endforeach()
+
+string(REGEX MATCH
+    "void Upscaling::StopVRRenderScaleCPUPerformanceTelemetry\\(\\) noexcept[\r\n\t ]*\\{[^}]*\\}"
+    _cpu_stop_implementation
+    "${_upscaling_source}"
+)
+if(NOT _cpu_stop_implementation)
+    message(FATAL_ERROR "CPU telemetry stop implementation was not found")
+endif()
+string(FIND
+    "${_cpu_stop_implementation}"
+    "vrRenderScaleCPUPerformanceSessionID"
+    _cpu_stop_session_clear_position
+)
+if(NOT _cpu_stop_session_clear_position EQUAL -1)
+    message(FATAL_ERROR "CPU telemetry stop must retain the current session ID")
+endif()
+
+string(FIND
+    "${_upscaling_source}"
+    "nextVRRenderScaleCPUPerformanceSessionID.store("
+    _cpu_session_allocator_rewind_position
+)
+if(NOT _cpu_session_allocator_rewind_position EQUAL -1)
+    message(FATAL_ERROR "CPU telemetry reset must not rewind the session allocator")
+endif()
+
+foreach(_required_streamline_behavior IN ITEMS
+    "StopDLSSDevBenchTrace(uint64_t a_expectedSessionID = 0)"
+    "activeSessionID != a_expectedSessionID"
+)
+    string(FIND
+        "${_streamline_header}\n${_streamline_source}"
+        "${_required_streamline_behavior}"
+        _streamline_behavior_position
+    )
+    if(_streamline_behavior_position EQUAL -1)
+        message(FATAL_ERROR
+            "DLSS trace ownership behavior is missing: ${_required_streamline_behavior}"
+        )
     endif()
 endforeach()
 

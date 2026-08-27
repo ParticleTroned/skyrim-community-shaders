@@ -1546,9 +1546,15 @@ public:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	VRRenderScaleCPUPerformanceSnapshot
 	GetVRRenderScaleCPUPerformanceSnapshot() const noexcept;
+	/** @brief Reports whether the current CPU telemetry session is recording. */
 	[[nodiscard]] bool IsVRRenderScaleCPUPerformanceTelemetryActive() const noexcept;
-	void StartVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	/** @brief Returns zero after reset, otherwise the retained active or stopped session ID. */
+	[[nodiscard]] uint64_t GetVRRenderScaleCPUPerformanceSessionID() const noexcept;
+	/** @brief Starts a new monotonically identified session, or returns zero if IDs are exhausted. */
+	[[nodiscard]] uint64_t StartVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	/** @brief Stops recording while retaining the current session ID and counters. */
 	void StopVRRenderScaleCPUPerformanceTelemetry() noexcept;
+	/** @brief Clears retained telemetry and its session ID without rewinding ID allocation. */
 	void ResetVRRenderScaleCPUPerformanceTelemetry() noexcept;
 	VRRenderScaleGPUPerformanceSnapshot GetVRRenderScaleGPUPerformanceSnapshot() const noexcept;
 	[[nodiscard]] bool IsVRRenderScaleGPUPerformanceTelemetryActive() const noexcept;
@@ -2049,6 +2055,8 @@ public:
 		vrRenderScaleStereoPresentationPacket;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	mutable std::atomic_bool vrRenderScaleCPUPerformanceTelemetryActive{ false };
+	std::atomic<uint64_t> vrRenderScaleCPUPerformanceSessionID{ 0 };
+	std::atomic<uint64_t> nextVRRenderScaleCPUPerformanceSessionID{ 1 };
 	mutable std::array<
 		std::atomic<uint64_t>,
 		static_cast<std::size_t>(

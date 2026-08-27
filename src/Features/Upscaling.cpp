@@ -212,22 +212,55 @@ Upscaling::GetVRRenderScaleCPUPerformanceSnapshot() const noexcept
 bool Upscaling::IsVRRenderScaleCPUPerformanceTelemetryActive() const noexcept
 {
 	return vrRenderScaleCPUPerformanceTelemetryActive.load(
-		std::memory_order_relaxed);
+		std::memory_order_acquire);
 }
 
-void Upscaling::StartVRRenderScaleCPUPerformanceTelemetry() noexcept
+uint64_t Upscaling::GetVRRenderScaleCPUPerformanceSessionID() const noexcept
 {
+	return vrRenderScaleCPUPerformanceSessionID.load(
+		std::memory_order_acquire);
+}
+
+uint64_t Upscaling::StartVRRenderScaleCPUPerformanceTelemetry() noexcept
+{
+	uint64_t sessionID = nextVRRenderScaleCPUPerformanceSessionID.load(
+		std::memory_order_relaxed);
+	while (sessionID != 0) {
+		const uint64_t nextSessionID =
+			sessionID == std::numeric_limits<uint64_t>::max() ?
+				0 :
+				sessionID + 1;
+		if (nextVRRenderScaleCPUPerformanceSessionID.compare_exchange_weak(
+				sessionID,
+				nextSessionID,
+				std::memory_order_acq_rel,
+				std::memory_order_relaxed)) {
+			break;
+		}
+	}
+	if (sessionID == 0)
+		return 0;
+
 	ResetVRRenderScaleCPUPerformanceTelemetry();
+	vrRenderScaleCPUPerformanceCounters[static_cast<std::size_t>(
+											VRRenderScaleCPUPerformanceCounter::WindowStartFrame)]
+		.store(
+			globals::state ? globals::state->frameCount : 0u,
+			std::memory_order_relaxed);
+	vrRenderScaleCPUPerformanceSessionID.store(
+		sessionID,
+		std::memory_order_release);
 	vrRenderScaleCPUPerformanceTelemetryActive.store(
 		true,
-		std::memory_order_relaxed);
+		std::memory_order_release);
+	return sessionID;
 }
 
 void Upscaling::StopVRRenderScaleCPUPerformanceTelemetry() noexcept
 {
 	vrRenderScaleCPUPerformanceTelemetryActive.store(
 		false,
-		std::memory_order_relaxed);
+		std::memory_order_release);
 }
 
 void Upscaling::ResetVRRenderScaleCPUPerformanceTelemetry() noexcept
@@ -235,11 +268,9 @@ void Upscaling::ResetVRRenderScaleCPUPerformanceTelemetry() noexcept
 	StopVRRenderScaleCPUPerformanceTelemetry();
 	for (auto& counter : vrRenderScaleCPUPerformanceCounters)
 		counter.store(0, std::memory_order_relaxed);
-	vrRenderScaleCPUPerformanceCounters[static_cast<std::size_t>(
-											VRRenderScaleCPUPerformanceCounter::WindowStartFrame)]
-		.store(
-			globals::state ? globals::state->frameCount : 0u,
-			std::memory_order_relaxed);
+	vrRenderScaleCPUPerformanceSessionID.store(
+		0,
+		std::memory_order_release);
 }
 
 void Upscaling::RecordVRRenderScaleCPUPerformanceCounter(

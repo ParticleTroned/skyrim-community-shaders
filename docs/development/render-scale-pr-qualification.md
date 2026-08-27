@@ -1,66 +1,56 @@
 # Render-scale PR qualification
 
-Render-scale changes use the versioned `csx-render-scale-pr-v1` DevBench
-protocol. The canonical runner lives in the Skyrim VR automation repository at
-`tools/render-scale-qualification/Invoke-CSXRenderScaleQualification.ps1`.
+Render-scale changes use revision 4 of the versioned
+`csx-render-scale-pr-v1` DevBench protocol. The canonical runner lives in the
+Skyrim VR automation repository at
+`tools/render-scale-qualification/Start-CSXRenderScaleQualification.ps1`.
 Copy the generated `pr-summary.md` into every PR that changes render-scale
 behavior and retain the complete evidence directory with the candidate build.
 
-The suite is deliberately bounded. After binding an already-running runtime,
-the runner has 600 seconds for preflight, fixture establishment, all three
-assays, both recovery barriers, and final screenshot manifests. It also reports
-a narrower performance interval from the first COC dispatch through the third
-manifest. Game/MO2 launch and the later offline human or image-capable review
-are recorded separately. Preflight time is never hidden by extending the
-runner deadline.
+The suite is deliberately bounded. Its one-shot package has 600 seconds for
+preflight, all three assays, both 30-second recovery barriers, six unattended
+image-model evaluations, and evidence finalization. Capture orchestration uses
+at most 495 seconds, the image-model stage uses at most 90 seconds, and final
+evidence work retains 15 seconds. It also reports a narrower performance
+interval from the first COC dispatch through the third capture manifest. Game
+and MO2 launch remain outside the package.
 
-Invoke the distributed runner with an exact DevBench runtime, build ID, GPU
-matrix, and fixture manifest. Each run requires a new or empty evidence
-directory. Standalone local mode is:
+Configure the DevBench runtime and controlled fixture once. Then launch the
+chosen DLL and game, reach the fixed exterior start scene, and invoke the
+package. The wrapper discovers the exact running Build ID, artifact identity,
+and GPU matrix instead of accepting a caller-supplied candidate identity:
 
 ```powershell
-pwsh .\tools\render-scale-qualification\Invoke-CSXRenderScaleQualification.ps1 `
-    -EvidenceDirectory C:\Evidence\render-scale-local `
-    -RuntimePath $env:CSX_DEVBENCH_RUNTIME_PATH `
-    -ExpectedBuildId '<64-character CSX build ID>' `
-    -GpuVendor NVIDIA `
-    -FixtureManifestPath C:\Evidence\render-scale-fixture.json
+$env:CSX_DEVBENCH_RUNTIME_PATH = 'C:\Path\To\devbench\runtime.json'
+$env:CSX_RENDER_SCALE_FIXTURE_PATH = 'C:\Evidence\render-scale-fixture.json'
+pwsh .\tools\render-scale-qualification\Start-CSXRenderScaleQualification.ps1
 ```
+
+The `render-scale-qualification` automation skill exposes the conversational
+equivalent. After the game is ready, say `start render-scale qualification` or,
+when that test is already the active topic, simply `start`. The agent invokes
+the same package without building, deploying, relaunching, or requesting a
+human review. Each run creates a new timestamped evidence directory by default.
 
 PR mode also requires a previously accepted baseline evidence directory (or
 its `run.json`) and its intended Build ID. Candidate and baseline Build IDs
-must differ:
+must differ. A finalized `LOCAL_PASS` from this exact protocol and fixture may
+bootstrap the first baseline for a new revision; it remains ineligible as the
+candidate PR result:
 
 ```powershell
-pwsh .\tools\render-scale-qualification\Invoke-CSXRenderScaleQualification.ps1 `
-    -EvidenceDirectory C:\Evidence\render-scale-candidate `
-    -RuntimePath $env:CSX_DEVBENCH_RUNTIME_PATH `
-    -ExpectedBuildId '<64-character CSX build ID>' `
-    -GpuVendor NVIDIA `
-    -FixtureManifestPath C:\Evidence\render-scale-fixture.json `
+pwsh .\tools\render-scale-qualification\Start-CSXRenderScaleQualification.ps1 `
     -PrMode `
     -BaselinePath C:\Evidence\render-scale-baseline `
     -ExpectedBaselineBuildId '<64-character baseline CSX build ID>'
 ```
 
-The automated run ends as `REVIEW_PENDING` with exit code 3. Review the nine
-selected stereo samples and copy `visual-review.template.json` to
-`visual-review.json` without altering its artifact bindings. Supply a reviewer
-ID, set `reviewer.kind` to `human` or `image_model`, and use an ISO-8601
-`reviewedUtc`. For every sample, set all seven verdicts to `pass` in local mode
-or `no_regression` in PR mode, then set `overallVerdict` to `pass` and finalize
-the same evidence directory:
-
-```powershell
-pwsh .\tools\render-scale-qualification\Invoke-CSXRenderScaleQualification.ps1 `
-    -EvidenceDirectory C:\Evidence\render-scale-candidate `
-    -FinalizeReview
-```
-
 Final `PASS` or `LOCAL_PASS` returns 0, qualification `FAIL` returns 2,
-`REVIEW_PENDING` returns 3, and `INFRASTRUCTURE_ERROR` returns 4. Infrastructure
-errors cover transport, exact runtime/tool/capability/fixture/baseline binding,
-and evidence-finalization setup failures.
+and `INFRASTRUCTURE_ERROR` returns 4. There is no pending or manual-finalization
+state. Infrastructure errors cover transport, exact
+runtime/tool/capability/fixture/baseline binding, image-model availability or
+schema failure, and evidence-finalization setup failures. A valid negative or
+inconclusive visual-quality decision is a qualification `FAIL`.
 
 ## Fixed fixture
 
@@ -111,20 +101,25 @@ mid-run drift.
 Run exactly 20 real transitions, beginning with Dragonsreach and alternating
 back to Windhelm. The final transition therefore ends in the exterior.
 
-Each transition is one server-side DevBench scenario segment:
+Each transition is a fail-fast sequence of checked top-level MCP calls:
 
 1. `communityshaders.renderscale qualification_begin` captures the server QPC,
    frame, source cell, profile, stress counters, and diagnostic baselines.
-2. DevBench executes the one `coc` command.
-3. `communityshaders.renderscale qualification_wait` waits for the exact
+2. `communityshaders.renderscale qualification_dispatch` freezes the server
+   QPC and frame used as the latency origin. Its accepted receipt is required
+   before the mutation, so its bounded loopback acknowledgement is included in
+   absolute latency.
+3. DevBench executes the one `coc` command only after that receipt succeeds.
+4. `communityshaders.renderscale qualification_wait` waits for the exact
    destination, requested/effective/stable profile agreement, complete physical
    resources, clean lifecycle, and a coherent two-eye presentation.
 
-The waiter stops on the first coherent stable observation. DevBench dispatches
-the next COC immediately after that result. There are no fixed sleeps, menu
-queries, client polling loops, same-cell COCs, or overlapping transitions in
-the 20-transition sequence. The per-transition ceiling is 120 seconds, further
-bounded by the suite deadline.
+The waiter stops on the first coherent stable observation. The runner validates
+`satisfied: true` and `outcome: stable` before dispatching the next COC. There
+are no fixed sleeps, menu queries, client polling loops, same-cell COCs, or
+overlapping transitions in the 20-transition sequence. A semantic or transport
+failure stops before the next mutation. The per-transition ceiling is 120
+seconds, further bounded by the suite deadline.
 
 Native AA requires both eyes to present `NativeOriginal`, native dimensions,
 and cleared render-scale/foveated vendor flags. An active Hoshipa profile
@@ -148,6 +143,18 @@ retirement/trim work drains, and both eyes recover. The default bound for an
 allowed presentation-stretch episode is two frames. The report includes episode
 count, completed and active frames, mean/max frames, and mean/max milliseconds;
 an active episode or incomplete two-eye compositor cycle at assay end fails.
+
+CPU telemetry ownership is session-based. Successful
+`cpu_performance_start`, `cpu_performance_status`, and
+`cpu_performance_stop` responses expose `cpuPerformance.sessionId`. It is
+nonzero and monotonically increases for each successful start during the server
+lifetime. A successful stop retains the same ID and counters with
+`state: stopped`; reset is permitted only while inactive and clears the retained
+ID and counters to `sessionId: 0` and `state: reset` without rewinding the ID
+allocator. Normal and abort cleanup pass the exact retained ID as
+`expectedSessionId`; a different active session fails closed and is not stopped.
+`expectedStartFrame` remains a legacy optional secondary check and is not the
+primary ownership identity.
 
 ## Recovery barrier 1
 
@@ -224,14 +231,14 @@ The AMD matrix cannot execute DLSS and therefore uses this FSR-only sequence:
 |   24 | FSR    | Ultra Performance |
 |   25 | FSR    | Hoshipa           |
 
-Every apply is bracketed by `qualification_begin` and `qualification_wait` in
-one server-side scenario. A new apply is not sent until the prior target is
-first coherently stable. The capture must contain exactly 25 accepted requests,
-25 complete metrics records, no duplicate/coalesced/superseded request, no ring
-loss, no failure/fallback, and exact terminal profile and dimensions at every
-step. The existing ordinary and pressure-protected stability ceilings remain
-120 and 3,600 frames respectively. The foveated settings invariant applies to
-every observation.
+Every apply is bracketed by checked top-level `qualification_begin`,
+`qualification_dispatch`, and `qualification_wait` calls. A new apply is not
+sent until the prior target is first coherently stable. The capture must contain
+exactly 25 accepted requests, 25 complete metrics records, no
+duplicate/coalesced/superseded request, no ring loss, no failure/fallback, and
+exact terminal profile and dimensions at every step. The existing ordinary and
+pressure-protected stability ceilings remain 120 and 3,600 frames respectively.
+The foveated settings invariant applies to every observation.
 
 ### DLSS dispatch trace
 
@@ -255,8 +262,10 @@ validation. A session mismatch, dropped record, duplicated
 constants failure, evaluate failure, non-success result, or invalid stereo/frame
 identity fails the assay. Ring overwrite is reported as partial raw-detail
 coverage, but is not itself a render failure because the trace retains exact
-summary counters and pins the latest failure. The trace must always be stopped
-and read during abort cleanup; an active trace at handoff fails the suite.
+summary counters and pins the latest failure. Normal and abort cleanup may stop
+only the exact trace session ID returned to this runner. A lost start response
+is an infrastructure failure; cleanup does not adopt or stop whichever global
+trace happens to be active.
 
 Assay 2 reports the same descriptive statistics as assay 1, overall and by
 method and render-scale state.
@@ -286,14 +295,23 @@ capture source, mismatched eye dimensions, missing hash, overwritten file, or
 incomplete manifest fails capture integrity.
 
 Capture integrity is automatic; visual quality is not guessed from file
-existence. A human or image-capable reviewer must attest all nine selected
-side-by-side samples in `visual-review.json`, bound to their SHA-256 hashes. In
-PR mode, every candidate hash is paired with the corresponding matching
-baseline hash and receives an explicit no-regression verdict. The review
-records sharpness, unexpected blur or shimmer, left/right alignment, equal eye
-scale, geometry correspondence, and whether render scale remained latched. Any
-failed item fails assay 3. Missing review produces `REVIEW_PENDING`, never
-`PASS`.
+existence. The same invocation runs six schema-constrained Codex image-model
+evaluations: three replicate calls in parallel for each of two sequential,
+blinded presentation passes. Every call inspects the original-resolution left,
+right, and side-by-side images at ordinals 1, 8, and 16. PR mode supplies the
+matching baseline images under neutral `first` and `second` labels, then swaps
+their order for the second pass. The model-facing request contains neither
+candidate/baseline roles nor identifying source paths.
+
+The model records sharpness, unexpected blur, shimmer, stereo alignment, equal
+eye scale, and geometry correspondence. Owner-bound renderer telemetry supplies
+the seventh render-scale-latch verdict. Each response, request, prompt, output
+schema, image order, source hash, provider version, execution event stream, and
+sealed candidate position is hash-bound into the evidence. Low confidence,
+indeterminate output, disagreement after normalizing the swapped passes,
+missing evidence, or any failed item fails assay 3. Provider, authentication,
+timeout, or schema failures fail closed as `INFRASTRUCTURE_ERROR`; no human can
+complete or override the review.
 
 ## Speed comparison and suite verdict
 
@@ -306,15 +324,16 @@ tolerance changes the protocol hash. Do not compare runs with different fixture
 fingerprints or claim a performance gain from an unmatched run.
 
 The suite verdict is `PASS` only when all three assays pass, both recovery
-barriers pass, the visual review is complete, the deadline passes, required
-diagnostic artifacts are complete, and the baseline speed gates pass. Otherwise
-the verdict is `FAIL`, `REVIEW_PENDING`, or `INFRASTRUCTURE_ERROR`; these states
-must not be rewritten as a pass.
+barriers pass, all six automated visual batches and telemetry checks agree, the
+deadline passes, required diagnostic artifacts are complete, and the baseline
+speed gates pass. Otherwise the verdict is `FAIL` or
+`INFRASTRUCTURE_ERROR`; neither state may be rewritten as a pass.
 
 Without `-PrMode`, a successful finalization is `LOCAL_PASS`, uses the
 `csx-render-scale-local-v1` report schema, and writes
-`qualification-summary.md`. It is useful for this standalone test-suite work
-but is intentionally not acceptable as PR qualification evidence.
+`qualification-summary.md`. It is not candidate PR evidence, but a finalized
+run with the exact same protocol and fixture may serve as the comparison
+baseline that bootstraps a new protocol revision.
 
 Run the NVIDIA and AMD matrices on matching hardware when a PR claims universal
 behavior. A single-host result is still attributable evidence for that vendor,
@@ -333,6 +352,7 @@ pr-summary.md                  # PR mode
 qualification-summary.md       # local mode
 failures.json
 mcp-transcript.json
+preflight-retained-diagnostics.json
 transitions.json
 transitions.csv
 coc/scenario.request.json
@@ -353,13 +373,24 @@ menu/cpu-record.json
 menu/dlss-traces.json
 recovery-2.json
 visual-index.json
-visual-review.template.json
-visual-review.json              # after offline review
+visual-review.json              # generated in the same invocation
+visual/diagnostics.json
+visual/stress-record.json
+visual/cpu-record.json
 visual/rep-01/sequence.request.json
 visual/rep-01/sequence.terminal.json
 visual/rep-01/children.receipts.json
 visual/rep-02/...
 visual/rep-03/...
+visual-review/preflight.json
+visual-review/execution.json
+visual-review/pass-01/rep-01/request.json
+visual-review/pass-01/rep-01/response.json
+visual-review/pass-01/rep-01/events.jsonl
+visual-review/pass-01/rep-01/stderr.json
+visual-review/pass-01/rep-01/receipt.json
+visual-review/pass-01/rep-02/...
+visual-review/pass-02/...
 baseline/...                    # PR mode only
 ```
 

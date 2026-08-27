@@ -854,12 +854,17 @@ bool Streamline::StartDLSSDevBenchTrace()
 	return true;
 }
 
-bool Streamline::StopDLSSDevBenchTrace()
+bool Streamline::StopDLSSDevBenchTrace(uint64_t a_expectedSessionID)
 {
 	auto& state = GetDLSSDevBenchTraceState();
 	std::scoped_lock lock(state.mutex);
-	if (!state.activeSessionID.exchange(0, std::memory_order_acq_rel))
+	const uint64_t activeSessionID =
+		state.activeSessionID.load(std::memory_order_acquire);
+	if (!activeSessionID ||
+		(a_expectedSessionID && activeSessionID != a_expectedSessionID)) {
 		return false;
+	}
+	state.activeSessionID.store(0, std::memory_order_release);
 	return true;
 }
 
@@ -1949,7 +1954,7 @@ bool Streamline::IsVRDLSSViewportResourceCompatible(
 	       a_slot.dlssPreset == dlssPreset &&
 	       a_slot.resourcesAllocated[a_eyeIndex] && options.valid &&
 	       options.viewport ==
-		       static_cast<uint32_t>(a_slot.viewport[a_eyeIndex]) &&
+	           static_cast<uint32_t>(a_slot.viewport[a_eyeIndex]) &&
 	       options.outputWidth == a_outputWidth &&
 	       options.outputHeight == a_outputHeight &&
 	       options.qualityMode == qualityMode &&
@@ -2287,7 +2292,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		featurePCL,
 		upscaling.settings.reflexUseMarkersToOptimize &&
 			reflexOptionsCache.useMarkersToOptimize)
-			.enabled;
+	                                .enabled;
 	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
 		if (!emitPCLMarkers || !slPCLSetMarker || !frameToken)
 			return;
@@ -2466,7 +2471,8 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
 		const uint32_t contractGeneration =
 			upscaling.IsVRRenderScaleModeLatched() ?
-				upscaling.GetActiveVRRenderScaleContractGeneration() : 0u;
+				upscaling.GetActiveVRRenderScaleContractGeneration() :
+				0u;
 		const bool vendorLifecycleMutationDeferred =
 			upscaling.ShouldDeferVRVendorLifecycleMutation();
 		const auto existingProvider =

@@ -393,8 +393,9 @@ public:
 
 	/** Starts a cleared, fixed-capacity DLSS call trace for DevBench. */
 	bool StartDLSSDevBenchTrace();
-	/** Stops DLSS trace collection while preserving its records. */
-	bool StopDLSSDevBenchTrace();
+	/** Stops DLSS trace collection while preserving its records.
+	 * A nonzero session ID fails closed if ownership changed. */
+	bool StopDLSSDevBenchTrace(uint64_t a_expectedSessionID = 0);
 	/** Clears a stopped DLSS trace. */
 	bool ResetDLSSDevBenchTrace();
 	/** Reports whether a DLSS trace session is accepting records. */

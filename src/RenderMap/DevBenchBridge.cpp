@@ -168,8 +168,8 @@ namespace
 				{ "major", kContractMajor }, { "minor", kContractMinor },
 				{ "schemaRevision", kSchemaRevision },
 				{ "actions", json::array({ "registry", "status", "start", "stop", "capture_events" }) },
-				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "device-context-observation-v1", "target-view-observation-v1", "resource-observation-v1", "resource-view-binding-v1", "resource-flow-v1", "render-target-binding-v1", "draw-call-v2", "dispatch-call-v1" }) },
-				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "device-context-observed", "target-view-observed", "resource-observed", "resource-view-bind", "resource-flow", "render-target-bind", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "draw", "dispatch" }) },
+				{ "eventSchemas", json::array({ "render-pass-boundary-v1", "technique-boundary-v2", "geometry-boundary-v1", "shader-observation-v1", "stage-shader-observation-v1", "technique-resolution-v1", "device-context-observation-v1", "target-view-observation-v1", "resource-observation-v1", "resource-view-binding-v1", "resource-flow-v1", "resource-version-observation-v1", "visibility-candidate-v1", "visibility-result-ready-v1", "visibility-submission-v1", "cull-decision-v1", "eye-submission-v1", "render-target-binding-v1", "draw-call-v2", "dispatch-call-v1" }) },
+				{ "eventKinds", json::array({ "shader-observed", "stage-shader-observed", "technique-resolved", "device-context-observed", "target-view-observed", "resource-observed", "resource-view-bind", "resource-flow", "resource-version-observed", "render-target-bind", "render-pass-enter", "render-pass-exit", "technique-begin", "technique-end", "geometry-setup-begin", "geometry-setup-end", "visibility-candidate", "visibility-result-ready", "visibility-consumed", "cull-decision", "eye-submitted", "draw", "dispatch" }) },
 				{ "executionCoverage", {
 					{ "deviceContext", "immediate-only" },
 					{ "typedDeviceContextIdentity", true },
@@ -178,7 +178,9 @@ namespace
 					{ "shaderResourceViews", "all-immediate-stages" },
 					{ "unorderedAccessViews", "compute-and-output-merger" },
 					{ "resourceFlow", "copy-and-resolve" },
-					{ "vrEyeAttribution", false },
+					{ "vrEyeAttribution", "accepted-openvr-submit-resource-and-bounds" },
+					{ "visibilitySubmissionJoin", "explicit-next-draw-identity" },
+					{ "visibilityBindingVerification", "effective-vs-srv-slot" },
 					{ "deferredContexts", false },
 					{ "commandLists", false },
 				} },
@@ -264,15 +266,18 @@ namespace
 			return response;
 		}
 
-		if (!a_args.contains("captureId") || !a_args["captureId"].is_string() || a_args["captureId"].get_ref<const std::string&>().empty())
-			return Foundation().MakeError(a_args, "invalid_field", "captureId must be a non-empty string", "validation", false, "captureId");
-		const auto& captureId = a_args["captureId"].get_ref<const std::string&>();
-
 		if (action == "stop") {
+			std::string captureId;
+			if (a_args.contains("captureId")) {
+				if (!a_args["captureId"].is_string() || a_args["captureId"].get_ref<const std::string&>().empty())
+					return Foundation().MakeError(a_args, "invalid_field", "captureId must be a non-empty string when supplied", "validation", false, "captureId");
+				captureId = a_args["captureId"].get<std::string>();
+			}
 			std::shared_ptr<const CSX::RenderMap::CompletedCapture> capture;
 			const auto status = CSX::RenderMap::GetCaptureController().Stop(captureId, capture);
 			if (status != ControlStatus::kSuccess)
 				return ControlFailure(a_args, status);
+			captureId = capture->descriptor.captureId;
 
 			CSX::RenderMap::CaptureArtifactBundle artifacts;
 			{
@@ -297,6 +302,10 @@ namespace
 				} });
 			return response;
 		}
+
+		if (!a_args.contains("captureId") || !a_args["captureId"].is_string() || a_args["captureId"].get_ref<const std::string&>().empty())
+			return Foundation().MakeError(a_args, "invalid_field", "captureId must be a non-empty string", "validation", false, "captureId");
+		const auto& captureId = a_args["captureId"].get_ref<const std::string&>();
 
 		if ((a_args.contains("offset") && !HasUnsigned(a_args, "offset")) ||
 			(a_args.contains("limit") && !HasUnsigned(a_args, "limit"))) {

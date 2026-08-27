@@ -93,6 +93,9 @@
             "csx-pass",
             "pipeline-state",
             "resource",
+            "resource-version",
+            "submission",
+            "eye-submit",
             "visibility-test",
             "draw",
             "dispatch",
@@ -141,7 +144,10 @@
             "tests",
             "result-for",
             "precedes",
-            "same-observed-object"
+            "same-observed-object",
+            "versions",
+            "consumes",
+            "presents"
           ]
         },
         "from": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },

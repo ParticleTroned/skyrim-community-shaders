@@ -12,6 +12,7 @@
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #include "Common/Triplanar.hlsli"
+#include "Common/CurrentFrameDepthCulling.hlsli"
 
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
@@ -178,6 +179,14 @@ float2 GetTreeShiftVector(float4 position, float4 color)
 
 VS_OUTPUT main(VS_INPUT input)
 {
+	if (CurrentFrameDepthCulling::IsOccluded()) {
+		// The current stereo depth result proves that neither eye can see this draw.
+		// Return a degenerate primitive before skinning, transforms, or other vertex work.
+		VS_OUTPUT occluded = (VS_OUTPUT)0;
+		occluded.Position = float4(0.0, 0.0, 0.0, 1.0);
+		return occluded;
+	}
+
 	VS_OUTPUT vsout;
 
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);

@@ -35,6 +35,9 @@
     "deviceContextObservationId": {
       "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
     },
+    "submissionObservationId": {
+      "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }]
+    },
     "type": { "$ref": "#/$defs/eventType" },
     "scopes": { "$ref": "#/$defs/scopes" },
     "causes": {
@@ -79,7 +82,7 @@
               },
               {
                 "type": "object",
-                "required": ["schema", "operation", "immediateContextPointer", "vertexShaderObservationId", "pixelShaderObservationId", "targetBindingObservationId", "arguments"],
+                "required": ["schema", "operation", "immediateContextPointer", "vertexShaderObservationId", "pixelShaderObservationId", "targetBindingObservationId", "submissionObservationId", "arguments"],
                 "properties": {
                   "schema": { "const": "draw-call-v2" },
                   "operation": { "enum": ["draw", "draw-indexed", "draw-instanced", "draw-indexed-instanced", "draw-auto", "draw-instanced-indirect", "draw-indexed-instanced-indirect"] },
@@ -87,6 +90,7 @@
                   "vertexShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
                   "pixelShaderObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
                   "targetBindingObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+                  "submissionObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
                   "arguments": { "type": "object" }
                 },
                 "additionalProperties": true
@@ -258,31 +262,65 @@
       }
     },
     {
-      "if": {
+      "if": { "properties": { "type": { "const": "resource-version-observed" } } },
+      "then": { "properties": { "payload": {
+        "type": "object",
+        "required": ["schema", "resourceVersionObservationId", "resourceObservationId", "subresources", "writeEpoch", "producerFrame", "readinessDomain", "eye", "eyeMask"],
         "properties": {
-          "type": {
-            "enum": ["visibility-candidate", "visibility-result-ready", "visibility-consumed", "cull-decision"]
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "payload": {
+          "schema": { "const": "resource-version-observation-v1" },
+          "resourceVersionObservationId": { "$ref": "#/$defs/observationId" },
+          "resourceObservationId": { "$ref": "#/$defs/observationId" },
+          "subresources": { "type": "object", "required": ["first", "count"] },
+          "writeEpoch": { "type": "integer", "minimum": 0 },
+          "producerFrame": { "type": ["integer", "null"], "minimum": 0 },
+          "readinessDomain": { "enum": ["same-immediate-context-order", "unknown"] },
+          "eye": { "enum": ["left", "right", "both", "mono", "unknown"] },
+          "eyeMask": { "type": ["integer", "null"], "minimum": 0 }
+        },
+        "additionalProperties": false
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "visibility-candidate" } } },
+      "then": { "properties": { "payload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["schema", "objectPointer", "objectIndex", "producerFrame"],
+            "properties": {
+              "schema": { "const": "visibility-candidate-v1" },
+              "objectPointer": { "type": ["string", "null"] },
+              "objectIndex": { "type": "integer", "minimum": 0 },
+              "producerFrame": { "type": ["integer", "null"], "minimum": 0 }
+            },
+            "additionalProperties": false
+          },
+          {
             "type": "object",
             "required": ["visibilityTestObservationId"],
-            "properties": {
-              "visibilityTestObservationId": { "$ref": "#/$defs/observationId" }
-            },
+            "properties": { "visibilityTestObservationId": { "$ref": "#/$defs/observationId" } },
             "additionalProperties": true
           }
-        }
-      }
+        ]
+      } } }
     },
     {
       "if": { "properties": { "type": { "const": "visibility-result-ready" } } },
-      "then": {
-        "properties": {
-          "payload": {
+      "then": { "properties": { "payload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["schema", "resourceVersionObservationId", "viewObservationId", "objectCount", "producerFrame"],
+            "properties": {
+              "schema": { "const": "visibility-result-ready-v1" },
+              "resourceVersionObservationId": { "$ref": "#/$defs/observationId" },
+              "viewObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "objectCount": { "type": "integer", "minimum": 0 },
+              "producerFrame": { "type": ["integer", "null"], "minimum": 0 }
+            },
+            "additionalProperties": false
+          },
+          {
             "type": "object",
             "required": ["visibilityTestObservationId", "readinessDomain"],
             "properties": {
@@ -291,8 +329,84 @@
             },
             "additionalProperties": true
           }
-        }
-      }
+        ]
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "visibility-consumed" } } },
+      "then": { "properties": { "payload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["schema", "submissionObservationId", "renderPassPointer", "geometryPointer", "objectIndex", "resourceVersionObservationId", "requestedViewObservationId", "effectiveViewObservationId", "category", "slot", "bindingMatches", "forcedVisible"],
+            "properties": {
+              "schema": { "const": "visibility-submission-v1" },
+              "submissionObservationId": { "$ref": "#/$defs/observationId" },
+              "renderPassPointer": { "type": ["string", "null"] },
+              "geometryPointer": { "type": ["string", "null"] },
+              "objectIndex": { "type": "integer", "minimum": 0 },
+              "resourceVersionObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "requestedViewObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "effectiveViewObservationId": { "anyOf": [{ "$ref": "#/$defs/observationId" }, { "type": "null" }] },
+              "category": { "type": "integer", "minimum": 0 },
+              "slot": { "type": "integer", "minimum": 0, "maximum": 127 },
+              "bindingMatches": { "type": "boolean" },
+              "forcedVisible": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["visibilityTestObservationId"],
+            "properties": { "visibilityTestObservationId": { "$ref": "#/$defs/observationId" } },
+            "additionalProperties": true
+          }
+        ]
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "eye-submitted" } } },
+      "then": { "properties": { "payload": {
+        "type": "object",
+        "required": ["schema", "resourceObservationId", "eye", "eyeMask", "bounds", "submitFlags", "compositorCycle"],
+        "properties": {
+          "schema": { "const": "eye-submission-v1" },
+          "resourceObservationId": { "$ref": "#/$defs/observationId" },
+          "eye": { "enum": ["left", "right"] },
+          "eyeMask": { "type": ["integer", "null"], "minimum": 0 },
+          "bounds": { "type": "object", "required": ["uMin", "vMin", "uMax", "vMax"] },
+          "submitFlags": { "type": "integer", "minimum": 0 },
+          "compositorCycle": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "cull-decision" } } },
+      "then": { "properties": { "payload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["schema", "resourceVersionObservationId", "objectIndex", "producerVisible", "drawCounts", "producerFrame", "readinessDomain"],
+            "properties": {
+              "schema": { "const": "cull-decision-v1" },
+              "resourceVersionObservationId": { "$ref": "#/$defs/observationId" },
+              "objectIndex": { "type": "integer", "minimum": 0 },
+              "producerVisible": { "type": "boolean" },
+              "drawCounts": { "type": "object", "required": ["total", "lighting", "distantTree", "grass"] },
+              "producerFrame": { "type": ["integer", "null"], "minimum": 0 },
+              "readinessDomain": { "const": "cpu-readback-complete" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["visibilityTestObservationId"],
+            "properties": { "visibilityTestObservationId": { "$ref": "#/$defs/observationId" } },
+            "additionalProperties": true
+          }
+        ]
+      } } }
     },
     {
       "if": { "properties": { "type": { "const": "shader-observed" } } },
@@ -449,7 +563,9 @@
         "target-view-observed",
         "resource-observed",
         "resource-view-bind",
-        "resource-flow"
+        "resource-flow",
+        "resource-version-observed",
+        "eye-submitted"
       ]
     },
     "frame": {
@@ -522,8 +638,12 @@
             "compute-shader",
             "pipeline-state",
             "resource",
+            "resource-version",
+            "submission",
             "render-target",
-            "depth-target"
+            "depth-target",
+            "shader-resource-view",
+            "unordered-access-view"
           ]
         },
         "role": { "type": "string", "minLength": 1 },

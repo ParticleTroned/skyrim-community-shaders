@@ -63,8 +63,10 @@ class Graph:
         self.nodes: list[dict[str, Any]] = []
         self.edges: list[dict[str, Any]] = []
         self.gaps: list[dict[str, Any]] = []
+        self.decision_windows: list[dict[str, Any]] = []
         self._node_ids: dict[tuple[str, str], str] = {}
         self._kind_counts: dict[str, int] = {}
+        self.eye_attribution_observed = False
         self._edge_keys: set[tuple[str, str, str, str]] = set()
 
     def node(self, key: str, kind: str, label: str, sequence: int | None, attributes: dict[str, Any],
@@ -157,6 +159,14 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
     resources: dict[str, dict[str, Any]] = {}
     views: dict[str, dict[str, Any]] = {}
     target_bindings: dict[str, dict[str, Any]] = {}
+    resource_versions: dict[str, dict[str, Any]] = {}
+    submissions: dict[str, dict[str, Any]] = {}
+    submissions_by_candidate: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    draws_by_submission: dict[str, dict[str, Any]] = {}
+    candidates: list[dict[str, Any]] = []
+    results_by_frame: dict[int, dict[str, Any]] = {}
+    eye_submissions_by_frame: dict[int, list[dict[str, Any]]] = {}
+    last_event_by_frame: dict[int, dict[str, Any]] = {}
     srv_state: dict[tuple[str, int], str | None] = {}
     uav_state: dict[tuple[str, int], str | None] = {}
     active_target_binding: str | None = None
@@ -271,6 +281,9 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
         sequence = event["sequence"]
         payload = event.get("payload", {})
         event_type = event.get("type")
+        cpu_frame = event.get("frame", {}).get("cpuFrame")
+        if isinstance(cpu_frame, int):
+            last_event_by_frame[cpu_frame] = event
         if event_type == "resource-observed":
             resource_id = payload.get("resourceObservationId")
             if resource_id:
@@ -300,6 +313,132 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 resource_id = view_resource(view_id)
                 if resource_id:
                     hazard_adjustment_count += clear_conflicting_srvs({resource_id})
+        elif event_type == "resource-version-observed":
+            version_id = payload.get("resourceVersionObservationId")
+            resource_id = payload.get("resourceObservationId")
+            if version_id:
+                resource_versions[version_id] = {"sequence": sequence, "payload": payload}
+                version_node = graph.node(
+                    version_id, "resource-version", version_id, sequence, payload
+                )
+                resource = resources.get(resource_id)
+                if resource:
+                    allocation_node = graph.node(
+                        resource_id, "resource", resource_id, resource["sequence"], resource["payload"]
+                    )
+                    graph.edge(
+                        "versions", allocation_node, version_node,
+                        [resource["sequence"], sequence],
+                        "A write epoch versions this observed resource and subresource range.",
+                    )
+                else:
+                    graph.gap(
+                        f"Resource version {version_id} refers to undeclared resource {resource_id}.",
+                        [version_node], True,
+                    )
+        elif event_type == "visibility-candidate":
+            producer_frame = payload.get("producerFrame")
+            object_index = payload.get("objectIndex")
+            candidate_node = graph.node(
+                f"candidate-{producer_frame}-{object_index}-{sequence}", "visibility-test",
+                f"visibility candidate {object_index} for frame {producer_frame}",
+                sequence, payload,
+            )
+            if isinstance(producer_frame, int) and isinstance(object_index, int):
+                candidates.append({
+                    "event": event,
+                    "node": candidate_node,
+                    "producerFrame": producer_frame,
+                    "objectIndex": object_index,
+                })
+            else:
+                graph.gap(
+                    f"Visibility candidate event {sequence} lacks a numeric producer frame or object index.",
+                    [candidate_node], True,
+                )
+        elif event_type == "visibility-result-ready":
+            producer_frame = payload.get("producerFrame")
+            if isinstance(producer_frame, int):
+                results_by_frame[producer_frame] = event
+        elif event_type == "visibility-consumed":
+            submission_id = payload.get("submissionObservationId")
+            version_id = payload.get("resourceVersionObservationId")
+            if submission_id:
+                submissions[submission_id] = {"sequence": sequence, "payload": payload}
+                submission_node = graph.node(
+                    submission_id, "submission", submission_id, sequence, payload
+                )
+                version = resource_versions.get(version_id)
+                if version:
+                    producer_frame = version["payload"].get("producerFrame")
+                    object_index = payload.get("objectIndex")
+                    if isinstance(producer_frame, int) and isinstance(object_index, int):
+                        submissions_by_candidate.setdefault((producer_frame, object_index), []).append({
+                            "event": event,
+                            "node": submission_node,
+                            "version": version,
+                        })
+                    version_node = graph.node(
+                        version_id, "resource-version", version_id, version["sequence"], version["payload"]
+                    )
+                    graph.edge(
+                        "consumes", version_node, submission_node,
+                        [version["sequence"], sequence],
+                        "The explicit visibility consumer names this resource version.",
+                        {"bindingMatches": payload.get("bindingMatches"), "slot": payload.get("slot")},
+                    )
+                elif version_id:
+                    graph.gap(
+                        f"Visibility submission {submission_id} refers to undeclared version {version_id}.",
+                        [submission_node], True,
+                    )
+        elif event_type == "cull-decision" and payload.get("schema") == "cull-decision-v1":
+            version_id = payload.get("resourceVersionObservationId")
+            decision_node = graph.node(
+                f"event-{sequence}", "visibility-test",
+                f"visibility decision for object {payload.get('objectIndex')} at event {sequence}",
+                sequence, payload,
+            )
+            version = resource_versions.get(version_id)
+            if version:
+                version_node = graph.node(
+                    version_id, "resource-version", version_id, version["sequence"], version["payload"]
+                )
+                graph.edge(
+                    "result-for", version_node, decision_node,
+                    [version["sequence"], sequence],
+                    "Completed CPU readback classified a covered object from this exact resource version.",
+                )
+            elif version_id:
+                graph.gap(
+                    f"Cull decision event {sequence} refers to undeclared version {version_id}.",
+                    [decision_node], True,
+                )
+        elif event_type == "eye-submitted":
+            resource_id = payload.get("resourceObservationId")
+            eye_node = graph.node(
+                f"event-{sequence}", "eye-submit",
+                f"{payload.get('eye', 'unknown')} eye submit at event {sequence}",
+                sequence, payload,
+            )
+            if isinstance(cpu_frame, int):
+                eye_submissions_by_frame.setdefault(cpu_frame, []).append(event)
+            resource = resources.get(resource_id)
+            if resource:
+                allocation_node = graph.node(
+                    resource_id, "resource", resource_id, resource["sequence"], resource["payload"]
+                )
+                graph.edge(
+                    "presents", allocation_node, eye_node,
+                    [resource["sequence"], sequence],
+                    "Accepted OpenVR Submit identifies this texture resource, eye, and source bounds.",
+                )
+                graph.eye_attribution_observed = True
+            else:
+                graph.gap(
+                    f"Eye submission event {sequence} refers to undeclared resource {resource_id}.",
+                    [eye_node], True,
+                )
         elif event_type in {"draw", "dispatch", "resource-flow"}:
             operation = payload.get("operation", event_type)
             execution_kind = "draw" if event_type == "draw" else ("dispatch" if event_type == "dispatch" else
@@ -325,6 +464,24 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
             direct_reads: list[tuple[str, str]] = []
             direct_writes: list[tuple[str, str]] = []
             if event_type == "draw":
+                submission_id = event.get("submissionObservationId") or payload.get("submissionObservationId")
+                submission = submissions.get(submission_id)
+                if submission:
+                    submission_node = graph.node(
+                        submission_id, "submission", submission_id,
+                        submission["sequence"], submission["payload"]
+                    )
+                    graph.edge(
+                        "submits", submission_node, execution,
+                        [submission["sequence"], sequence],
+                        "The draw consumed this explicit pending submission identity.",
+                    )
+                    draws_by_submission[submission_id] = event
+                elif submission_id:
+                    graph.gap(
+                        f"Draw event {sequence} refers to undeclared submission {submission_id}.",
+                        [execution], True,
+                    )
                 for (stage, slot), view_id in sorted(srv_state.items()):
                     if stage != "compute" and view_id:
                         read_views.append((view_id, stage, slot))
@@ -442,6 +599,128 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 last_writer[resource_id] = (execution, sequence)
                 readers_since_write[resource_id] = {}
 
+    def event_point(event: dict[str, Any], readiness_domain: str) -> dict[str, Any]:
+        return {
+            "captureId": capture_id,
+            "sequence": event["sequence"],
+            "timestampQpc": event["timestampQpc"],
+            "cpuFrame": event.get("frame", {}).get("cpuFrame"),
+            "eye": event.get("frame", {}).get("eye", "unknown"),
+            "readinessDomain": readiness_domain,
+            "gpuTimestampTicks": event.get("execution", {}).get("gpuTimestampTicks"),
+        }
+
+    for candidate in sorted(candidates, key=lambda item: item["event"]["sequence"]):
+        candidate_event = candidate["event"]
+        candidate_node = candidate["node"]
+        producer_frame = candidate["producerFrame"]
+        object_index = candidate["objectIndex"]
+        ready_event = results_by_frame.get(producer_frame)
+        version_id = ready_event and ready_event.get("payload", {}).get("resourceVersionObservationId")
+        version = resource_versions.get(version_id)
+        if version:
+            version_node = graph.node(
+                version_id, "resource-version", version_id, version["sequence"], version["payload"]
+            )
+            graph.edge(
+                "tests", candidate_node, version_node,
+                [candidate_event["sequence"], ready_event["sequence"]],
+                "The current-frame visibility resource version contains this indexed candidate's result.",
+                {"objectIndex": object_index, "producerFrame": producer_frame},
+            )
+
+        matched_submission = None
+        matched_draw = None
+        for submission in submissions_by_candidate.get((producer_frame, object_index), []):
+            submission_id = submission["event"].get("payload", {}).get("submissionObservationId")
+            draw = draws_by_submission.get(submission_id)
+            if draw and (not ready_event or submission["event"]["sequence"] > ready_event["sequence"]):
+                matched_submission = submission
+                matched_draw = draw
+                break
+
+        if ready_event:
+            visibility_available = event_point(ready_event, "gpu-resource-consumable")
+        else:
+            visibility_available = event_point(candidate_event, "unknown")
+
+        if matched_draw:
+            deadline_event = matched_draw
+            decision_deadline = event_point(deadline_event, "gpu-ordered")
+        else:
+            later_eye_submissions = [
+                item for item in eye_submissions_by_frame.get(producer_frame, [])
+                if item["sequence"] > visibility_available["sequence"]
+            ]
+            deadline_event = later_eye_submissions[0] if later_eye_submissions else last_event_by_frame.get(producer_frame, candidate_event)
+            decision_deadline = event_point(deadline_event, "cpu-observed")
+
+        viable = False
+        if ready_event and matched_submission and matched_draw and version:
+            submission_event = matched_submission["event"]
+            ready_command = ready_event.get("execution", {}).get("commandStreamSequence")
+            submission_command = submission_event.get("execution", {}).get("commandStreamSequence")
+            draw_command = matched_draw.get("execution", {}).get("commandStreamSequence")
+            same_context = (
+                ready_event.get("deviceContextObservationId") is not None and
+                ready_event.get("deviceContextObservationId") == submission_event.get("deviceContextObservationId") == matched_draw.get("deviceContextObservationId")
+            )
+            ordered = (
+                isinstance(ready_command, int) and isinstance(submission_command, int) and isinstance(draw_command, int) and
+                ready_command < submission_command <= draw_command
+            )
+            viable = (
+                same_context and ordered and
+                ready_event["sequence"] < submission_event["sequence"] < matched_draw["sequence"] and
+                matched_draw.get("frame", {}).get("cpuFrame") == producer_frame and
+                submission_event.get("payload", {}).get("resourceVersionObservationId") == version_id and
+                submission_event.get("payload", {}).get("bindingMatches") is True
+            )
+
+        evidence_sequences = [candidate_event["sequence"], visibility_available["sequence"], deadline_event["sequence"]]
+        if matched_submission:
+            evidence_sequences.append(matched_submission["event"]["sequence"])
+        forced_visible = bool(matched_submission and matched_submission["event"].get("payload", {}).get("forcedVisible"))
+        if viable:
+            control_note = " The final value was deliberately forced visible for the control." if forced_visible else ""
+            result = "viable"
+            reason = (
+                "The candidate, current-frame visibility version, effective t127 binding, and explicitly associated draw "
+                "share one producer frame and increase monotonically in the same immediate-context command stream."
+                + control_note
+            )
+        else:
+            result = "not-proven"
+            reason = (
+                "No complete same-frame candidate-to-version-to-effective-binding-to-draw chain was observed before "
+                "the captured decision deadline."
+            )
+
+        graph.decision_windows.append({
+            "id": f"decision-window-{len(graph.decision_windows) + 1:04d}",
+            "candidateNode": candidate_node,
+            "suppressionStage": "vertex-shader",
+            "visibilityAvailable": visibility_available,
+            "decisionDeadline": decision_deadline,
+            "result": result,
+            "savings": ["gpu-vertex", "gpu-pixel"],
+            "evidence": [{
+                "captureId": capture_id,
+                "eventSequences": sorted(set(evidence_sequences)),
+                "engineEvidenceRefs": [],
+                "note": "Decision-window evidence uses explicit producer-frame, resource-version, binding, submission, and draw identities.",
+            }],
+            "reason": reason,
+            "extensions": {
+                "csx.objectIndex": object_index,
+                "csx.producerFrame": producer_frame,
+                "csx.resourceVersionObservationId": version_id,
+                "csx.submissionObservationId": matched_submission and matched_submission["event"].get("payload", {}).get("submissionObservationId"),
+                "csx.bindingMatches": matched_submission and matched_submission["event"].get("payload", {}).get("bindingMatches"),
+                "csx.forcedVisible": forced_visible,
+            },
+        })
+
     completion = manifest.get("completion", {})
     if manifest.get("status") != "complete" or completion.get("truncated"):
         graph.gap("The source capture is incomplete or truncated; absence of an edge is not evidence of absence.", blocking=True)
@@ -488,7 +767,7 @@ def main() -> int:
         "edges": graph.edges,
         "ambiguities": [],
         "gaps": graph.gaps,
-        "decisionWindows": [],
+        "decisionWindows": graph.decision_windows,
         "extensions": {
             "csx.executionGranularity": "individual-immediate-context-call",
             "csx.resourceVersionModel": "whole-resource-write-epoch-v1",
@@ -496,7 +775,7 @@ def main() -> int:
             "csx.effectiveStateAdjustments": graph.hazard_adjustment_count,
             "csx.graphAcyclic": True,
             "csx.deferredContextCoverage": False,
-            "csx.vrEyeAttribution": False,
+            "csx.vrEyeAttribution": graph.eye_attribution_observed,
         },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

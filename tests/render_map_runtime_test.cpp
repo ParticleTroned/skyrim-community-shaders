@@ -587,6 +587,138 @@ namespace
 		Check(declaredBeforeDraw(EventKind::kGeometrySetupBegin, draw->scopes.geometry.observationId,
 			ScopeKind::kGeometry), "draw references an undeclared geometry scope");
 	}
+
+	void TestVisibilitySubmissionJoinsActualDraw()
+	{
+		Runtime runtime;
+		auto config = Config();
+		config.maxEvents = 64;
+		config.maxBytes = Collector::EventRecordSize() * 64;
+		runtime.SetImmediateContext(0xF000);
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"visibility capture did not start");
+		runtime.SetFrameContext({ 100, 0, 0, Eye::kUnknown, 0 });
+		runtime.RecordVisibilityCandidate(0xF100, 12, 100);
+
+		const ResourceObservationInput visibilityResource{
+			.d3dObject = 0xF200,
+			.dimension = ResourceDimension::kBuffer,
+			.widthOrBytes = 16384,
+			.bindFlags = 0x8,
+			.miscFlags = 0x40,
+			.structureByteStride = 4,
+		};
+		const ResourceViewInput visibilityView{
+			.resource = visibilityResource,
+			.view = {
+				.kind = TargetViewKind::kShaderResource,
+				.d3dObject = 0xF300,
+				.dimension = 1,
+				.elementCount = 4096,
+			},
+		};
+		const auto versionId = runtime.RecordVisibilityResultReady(
+			0xF000,
+			{
+				.resource = visibilityResource,
+				.firstSubresource = 0,
+				.subresourceCount = 1,
+				.writeEpoch = 9,
+				.producerFrame = 100,
+				.readinessDomain = ResourceReadinessDomain::kSameImmediateContextOrder,
+			},
+			visibilityView,
+			24);
+		Check(versionId != 0, "visibility resource version was not declared");
+		const auto versionGeneration = runtime.ActiveCaptureGeneration();
+		const auto submissionId = runtime.DeclareVisibilitySubmission(
+			0xF000,
+			{
+				.renderPass = 0xF400,
+				.geometry = 0xF500,
+				.objectIndex = 12,
+				.category = 1,
+				.resourceVersionObservationId = versionId,
+				.requestedView = visibilityView,
+				.effectiveView = visibilityView,
+				.slot = 127,
+				.bindingMatches = true,
+			});
+		Check(submissionId != 0, "visibility submission was not declared");
+		runtime.ClearPendingVisibilitySubmission(0xF000);
+		runtime.RecordDraw(0xF000, DrawOperation::kDrawIndexed, 6, 0, 0);
+		const auto replacementSubmissionId = runtime.DeclareVisibilitySubmission(
+			0xF000,
+			{
+				.renderPass = 0xF400,
+				.geometry = 0xF500,
+				.objectIndex = 12,
+				.category = 1,
+				.resourceVersionObservationId = versionId,
+				.requestedView = visibilityView,
+				.effectiveView = visibilityView,
+				.slot = 127,
+				.bindingMatches = true,
+			});
+		Check(replacementSubmissionId != 0, "replacement visibility submission was not declared");
+		runtime.RecordDraw(0xF000, DrawOperation::kDrawIndexed, 36, 0, 0);
+		runtime.RecordDraw(0xF000, DrawOperation::kDrawIndexed, 12, 0, 0);
+
+		const ResourceObservationInput submittedTexture{
+			.d3dObject = 0xF600,
+			.dimension = ResourceDimension::kTexture2D,
+			.widthOrBytes = 2468,
+			.height = 2740,
+			.depthOrArraySize = 1,
+			.mipLevels = 1,
+		};
+		runtime.RecordEyeSubmission(
+			submittedTexture, Eye::kLeft, 1, 0.0f, 0.0f, 0.5f, 1.0f, 0, 77);
+		runtime.RecordCullDecision(
+			versionId, versionGeneration, 12, false, 2, 2, 0, 0, 100);
+
+		auto snapshot = runtime.StopCapture();
+		Check(snapshot.has_value(), "visibility capture did not stop");
+		const auto version = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kResourceVersionObserved; });
+		Check(version != snapshot->events.end() && version->payload.words[0] == versionId &&
+			version->payload.words[4] == 9,
+			"visibility resource version identity is incomplete");
+		const auto consumed = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kVisibilityConsumed; });
+		Check(consumed != snapshot->events.end() && consumed->submissionObservationId == submissionId &&
+			consumed->payload.words[4] == versionId && consumed->payload.words[5] == consumed->payload.words[6],
+			"effective visibility binding was not joined to its submission");
+		std::vector<const EventRecord*> draws;
+		for (const auto& event : snapshot->events) {
+			if (event.kind == EventKind::kDraw)
+				draws.push_back(std::addressof(event));
+		}
+		Check(draws.size() == 3 && draws[0]->submissionObservationId == 0 &&
+			draws[1]->submissionObservationId == replacementSubmissionId &&
+			draws[2]->submissionObservationId == 0,
+			"submission identity was not consumed by exactly one actual draw");
+		const auto eye = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kEyeSubmitted; });
+		Check(eye != snapshot->events.end() && eye->frame.eye == Eye::kLeft &&
+			eye->payload.words[0] != 0,
+			"accepted eye submission did not attribute its resource");
+		const auto decision = std::find_if(snapshot->events.begin(), snapshot->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kCullDecision; });
+		Check(decision != snapshot->events.end() && decision->payload.words[0] == versionId &&
+			decision->payload.words[1] == 12 && decision->payload.words[2] == 0 &&
+			decision->payload.words[3] == 2,
+			"completed visibility readback was not joined to its resource version");
+
+		Check(runtime.StartCapture(config) == StartResult::kStarted,
+			"replacement visibility capture did not start");
+		runtime.RecordCullDecision(versionId, versionGeneration, 12, false, 2, 2, 0, 0, 100);
+		auto replacement = runtime.StopCapture();
+		Check(replacement && std::none_of(
+			replacement->events.begin(), replacement->events.end(),
+			[](const EventRecord& a_event) { return a_event.kind == EventKind::kCullDecision; }),
+			"stale readback version crossed a capture generation boundary");
+	}
 }
 
 int main()
@@ -604,6 +736,7 @@ int main()
 		TestOutputMergerBoundsAreExplicit();
 		TestResourceFlowStateIsTypedAndOrdered();
 		TestExecutionJoinsDeclaredScopes();
+		TestVisibilitySubmissionJoinsActualDraw();
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

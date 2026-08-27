@@ -1,5 +1,6 @@
 #pragma once
 #include "Buffer.h"
+#include "Features/VR/DepthCullingDiagnostics.h"
 #include "Features/VR/OpenVRDetection.h"
 #include "Menu.h"
 #include "OverlayFeature.h"
@@ -154,6 +155,16 @@ public:
 
 	void UpdateDepthBufferCulling();
 	void TryApplyDepthBufferCullingCacheRefresh();
+	bool IsCurrentFrameDepthCullingEnabled() const;
+	void KeepPreviousDepthCullingResultVisible(RE::NiAVObject* a_object);
+	void RecordCurrentFrameDepthCullingCandidate(RE::NiAVObject* a_object);
+	void MarkCurrentFrameDepthCullingReady();
+	void BindCurrentFrameDepthCulling(
+		RE::BSRenderPass* a_renderPass,
+		RE::BSGeometry* a_geometry,
+		CSX::VRDepthCullingDiagnostics::DrawCategory a_category = CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting);
+	CSX::VRDepthCullingDiagnostics::Counters& GetDepthCullingDiagnostics() { return depthCullingDiagnostics; }
+	const CSX::VRDepthCullingDiagnostics::Counters& GetDepthCullingDiagnostics() const { return depthCullingDiagnostics; }
 	void DrawStereoBlend();
 	bool EnsureStereoBlendResources();
 	static bool AnyScreenSpaceEffectActive();
@@ -206,6 +217,7 @@ public:
 		// Performance optimization settings
 		bool EnableDepthBufferCullingExterior = true;   ///< Master depth-culling option; enabled in exteriors
 		bool EnableDepthBufferCullingInterior = false;  ///< Also enable depth culling in interiors
+		bool EnableCurrentFrameDepthCulling = false;  ///< Consume Skyrim's GPU OBB result in the current frame instead of on the CPU next frame
 		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
 
 		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.
@@ -525,6 +537,71 @@ public:
 	float* gMinOccludeeBoxExtent = nullptr;
 	std::atomic<bool> depthCullingCacheRefreshPending = false;
 	std::atomic<bool> depthCullingCacheRefreshCompleted = false;
+	void** gDepthCullingState = nullptr;
+	std::uint32_t* gDepthCullingFrame = nullptr;
+	std::uint32_t currentFrameDepthCullingReadyFrame = std::numeric_limits<std::uint32_t>::max();
+	std::uint64_t currentFrameDepthCullingResourceVersionObservationId = 0;
+	std::uint64_t currentFrameDepthCullingResourceVersionGeneration = 0;
+	std::uint64_t depthCullingVisibilityWriteEpoch = 0;
+	CSX::VRDepthCullingDiagnostics::Counters depthCullingDiagnostics;
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	static constexpr std::uint32_t kDepthCullingDiagnosticCapacity = 0x1000;
+	static constexpr std::size_t kDepthCullingReadbackRingSize = 8;
+	static constexpr std::size_t kDepthCullingPipelineStatsRingSize = 8;
+	struct DepthCullingReadbackSlot
+	{
+		winrt::com_ptr<ID3D11Buffer> staging;
+		std::uint32_t byteWidth = 0;
+		std::uint64_t epoch = 0;
+		std::uint64_t resourceVersionObservationId = 0;
+		std::uint64_t resourceVersionGeneration = 0;
+		std::uint32_t frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
+		std::uint32_t objectCount = 0;
+		bool pending = false;
+		bool drawsComplete = false;
+		std::array<std::uint32_t, kDepthCullingDiagnosticCapacity> draws{};
+		std::array<std::uint32_t, kDepthCullingDiagnosticCapacity> lightingDraws{};
+		std::array<std::uint32_t, kDepthCullingDiagnosticCapacity> distantTreeDraws{};
+		std::array<std::uint32_t, kDepthCullingDiagnosticCapacity> grassDraws{};
+	};
+	struct DepthCullingPipelineStatsSlot
+	{
+		winrt::com_ptr<ID3D11Query> query;
+		winrt::com_ptr<ID3D11Query> timestampDisjoint;
+		winrt::com_ptr<ID3D11Query> timestampStart;
+		winrt::com_ptr<ID3D11Query> timestampCoverageStart;
+		winrt::com_ptr<ID3D11Query> timestampEnd;
+		std::uint64_t epoch = 0;
+		std::uint32_t frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
+		std::uint64_t coveredLightingDraws = 0;
+		bool active = false;
+		bool coverageActive = false;
+		bool coverageCaptured = false;
+		bool pending = false;
+	};
+	std::array<DepthCullingReadbackSlot, kDepthCullingReadbackRingSize> depthCullingReadbackSlots{};
+	std::int32_t activeDepthCullingReadbackSlot = -1;
+	std::array<DepthCullingPipelineStatsSlot, kDepthCullingPipelineStatsRingSize> depthCullingPipelineStatsSlots{};
+	std::int32_t activeDepthCullingPipelineStatsSlot = -1;
+	winrt::com_ptr<ID3D11Buffer> depthCullingForcedVisibleBuffer;
+	winrt::com_ptr<ID3D11ShaderResourceView> depthCullingForcedVisibleSrv;
+	bool depthCullingForcedVisibleCreateAttempted = false;
+
+	void AdvanceDepthCullingDiagnosticsFrame();
+	void QueueDepthCullingVisibilityReadback(
+		ID3D11ShaderResourceView* a_visibility,
+		std::uint32_t a_frame,
+		std::uint32_t a_objectCount,
+		std::uint64_t a_resourceVersionObservationId,
+		std::uint64_t a_resourceVersionGeneration);
+	void RecordDepthCullingDiagnosticDraw(
+		std::uint32_t a_objectIndex,
+		CSX::VRDepthCullingDiagnostics::DrawCategory a_category);
+	void ArmDepthCullingPipelineStatistics(std::uint32_t a_frame);
+	void BeginDepthCullingCoverageSpan(std::uint32_t a_frame);
+	ID3D11ShaderResourceView* GetDepthCullingDiagnosticControlSrv(ID3D11ShaderResourceView* a_liveVisibility);
+#endif
 
 	// VR Controller state and logging
 	struct VRControllerEventLog

@@ -1,11 +1,28 @@
 #include "RenderMap/Runtime.h"
 
 #include <algorithm>
+#include <bit>
 
 namespace CSX::RenderMap
 {
 	namespace
 	{
+		struct PendingVisibilitySubmission
+		{
+			const Runtime* owner{ nullptr };
+			std::uint64_t generation{ 0 };
+			std::uint64_t observationId{ 0 };
+			std::uintptr_t context{ 0 };
+		};
+
+		thread_local PendingVisibilitySubmission pendingVisibilitySubmission;
+
+		std::uint64_t PackFloats(float a_low, float a_high) noexcept
+		{
+			return static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(a_low)) |
+				(static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(a_high)) << 32u);
+		}
+
 		EventPayload RenderPassPayload(const RenderPassBoundary& a_boundary) noexcept
 		{
 			return {
@@ -251,6 +268,126 @@ namespace CSX::RenderMap
 				},
 			};
 		}
+
+		EventPayload ResourceVersionPayload(
+			std::uint64_t a_versionObservationId,
+			std::uint64_t a_resourceObservationId,
+			const ResourceVersionInput& a_version) noexcept
+		{
+			const auto eye = static_cast<std::uint64_t>(a_version.eye) |
+				(static_cast<std::uint64_t>(a_version.eyeMask) << 8u);
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kResourceVersion),
+				.words = {
+					a_versionObservationId,
+					a_resourceObservationId,
+					a_version.firstSubresource,
+					a_version.subresourceCount,
+					a_version.writeEpoch,
+					a_version.producerFrame,
+					static_cast<std::uint64_t>(a_version.readinessDomain),
+					eye,
+				},
+			};
+		}
+
+		EventPayload VisibilityCandidatePayload(
+			std::uintptr_t a_object,
+			std::uint32_t a_objectIndex,
+			std::uint64_t a_producerFrame) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kVisibilityCandidate),
+				.words = { a_object, a_objectIndex, a_producerFrame },
+			};
+		}
+
+		EventPayload VisibilityResultPayload(
+			std::uint64_t a_versionObservationId,
+			std::uint64_t a_viewObservationId,
+			std::uint32_t a_objectCount,
+			std::uint64_t a_producerFrame) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kVisibilityResult),
+				.words = { a_versionObservationId, a_viewObservationId, a_objectCount, a_producerFrame },
+			};
+		}
+
+		EventPayload VisibilitySubmissionPayload(
+			std::uint64_t a_submissionObservationId,
+			const VisibilitySubmissionInput& a_submission,
+			std::uint64_t a_requestedViewObservationId,
+			std::uint64_t a_effectiveViewObservationId) noexcept
+		{
+			const auto flags = static_cast<std::uint64_t>(a_submission.category) |
+				(static_cast<std::uint64_t>(a_submission.slot) << 16u) |
+				(a_submission.bindingMatches ? (1ull << 32u) : 0u) |
+				(a_submission.forcedVisible ? (1ull << 33u) : 0u);
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kVisibilitySubmission),
+				.words = {
+					a_submissionObservationId,
+					a_submission.renderPass,
+					a_submission.geometry,
+					a_submission.objectIndex,
+					a_submission.resourceVersionObservationId,
+					a_requestedViewObservationId,
+					a_effectiveViewObservationId,
+					flags,
+				},
+			};
+		}
+
+		EventPayload EyeSubmissionPayload(
+			std::uint64_t a_resourceObservationId,
+			Eye a_eye,
+			std::uint8_t a_eyeMask,
+			float a_uMin,
+			float a_vMin,
+			float a_uMax,
+			float a_vMax,
+			std::uint32_t a_submitFlags,
+			std::uint64_t a_compositorCycle) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kEyeSubmission),
+				.words = {
+					a_resourceObservationId,
+					static_cast<std::uint64_t>(a_eye),
+					a_eyeMask,
+					PackFloats(a_uMin, a_vMin),
+					PackFloats(a_uMax, a_vMax),
+					a_submitFlags,
+					a_compositorCycle,
+				},
+			};
+		}
+
+		EventPayload CullDecisionPayload(
+			std::uint64_t a_resourceVersionObservationId,
+			std::uint32_t a_objectIndex,
+			bool a_producerVisible,
+			std::uint32_t a_totalDraws,
+			std::uint32_t a_lightingDraws,
+			std::uint32_t a_distantTreeDraws,
+			std::uint32_t a_grassDraws,
+			std::uint64_t a_producerFrame) noexcept
+		{
+			return {
+				.schema = static_cast<std::uint16_t>(PayloadSchema::kCullDecision),
+				.words = {
+					a_resourceVersionObservationId,
+					a_objectIndex,
+					a_producerVisible ? 1u : 0u,
+					a_totalDraws,
+					a_lightingDraws,
+					a_distantTreeDraws,
+					a_grassDraws,
+					a_producerFrame,
+				},
+			};
+		}
 	}
 
 	StartResult Runtime::StartCapture(const CollectorConfig& a_config)
@@ -273,6 +410,11 @@ namespace CSX::RenderMap
 	bool Runtime::IsCapturing() const noexcept
 	{
 		return collector.IsCapturing();
+	}
+
+	std::uint64_t Runtime::ActiveCaptureGeneration() const noexcept
+	{
+		return collector.ActiveGeneration();
 	}
 
 	void Runtime::SetCpuFrame(std::uint64_t a_cpuFrame) noexcept
@@ -603,6 +745,167 @@ namespace CSX::RenderMap
 			commandStreamSequence);
 	}
 
+	void Runtime::RecordVisibilityCandidate(
+		std::uintptr_t a_object,
+		std::uint32_t a_objectIndex,
+		std::uint64_t a_producerFrame) noexcept
+	{
+		if (!collector.IsCapturing() || a_object == 0)
+			return;
+		collector.Record(
+			EventKind::kVisibilityCandidate,
+			VisibilityCandidatePayload(a_object, a_objectIndex, a_producerFrame));
+	}
+
+	std::uint64_t Runtime::RecordVisibilityResultReady(
+		std::uintptr_t a_context,
+		const ResourceVersionInput& a_version,
+		const ResourceViewInput& a_view,
+		std::uint32_t a_objectCount) noexcept
+	{
+		if (!collector.IsCapturing() || a_context == 0 ||
+			a_context != immediateContext.load(std::memory_order_acquire)) {
+			return 0;
+		}
+		const auto contextObservationId = EnsureImmediateContextObservation();
+		if (contextObservationId == 0)
+			return 0;
+		const auto commandStreamSequence = NextCommandStreamSequence();
+		const auto resource = ObserveResource(
+			a_version.resource, contextObservationId, commandStreamSequence);
+		if (resource.observationId == 0)
+			return 0;
+		const auto versionObservationId = collector.AllocateObservationId(resource.sessionGeneration);
+		if (versionObservationId == 0)
+			return 0;
+		if (collector.RecordForGeneration(
+				EventKind::kResourceVersionObserved,
+				ResourceVersionPayload(versionObservationId, resource.observationId, a_version),
+				contextObservationId,
+				resource.sessionGeneration,
+				commandStreamSequence) != RecordResult::kRecorded) {
+			return 0;
+		}
+
+		auto view = a_view;
+		view.resource = a_version.resource;
+		view.view.kind = TargetViewKind::kShaderResource;
+		const auto viewObservation = ObserveResourceView(
+			view, contextObservationId, commandStreamSequence);
+		collector.RecordForGeneration(
+			EventKind::kVisibilityResultReady,
+			VisibilityResultPayload(
+				versionObservationId, viewObservation.observationId,
+				a_objectCount, a_version.producerFrame),
+			contextObservationId,
+			resource.sessionGeneration,
+			commandStreamSequence);
+		return versionObservationId;
+	}
+
+	std::uint64_t Runtime::DeclareVisibilitySubmission(
+		std::uintptr_t a_context,
+		const VisibilitySubmissionInput& a_submission) noexcept
+	{
+		if (!collector.IsCapturing() || a_context == 0 ||
+			a_context != immediateContext.load(std::memory_order_acquire)) {
+			return 0;
+		}
+		const auto generation = collector.ActiveGeneration();
+		const auto contextObservationId = EnsureImmediateContextObservation();
+		if (generation == 0 || contextObservationId == 0)
+			return 0;
+		const auto commandStreamSequence = NextCommandStreamSequence();
+		const auto requested = ObserveResourceView(
+			a_submission.requestedView, contextObservationId, commandStreamSequence);
+		const auto effective = ObserveResourceView(
+			a_submission.effectiveView, contextObservationId, commandStreamSequence);
+		const auto submissionObservationId = collector.AllocateObservationId(generation);
+		if (submissionObservationId == 0)
+			return 0;
+		if (collector.RecordForGeneration(
+				EventKind::kVisibilityConsumed,
+				VisibilitySubmissionPayload(
+					submissionObservationId, a_submission,
+					requested.observationId, effective.observationId),
+				contextObservationId,
+				generation,
+				commandStreamSequence,
+				boundTargetBindingObservationId.load(std::memory_order_acquire),
+				submissionObservationId) != RecordResult::kRecorded) {
+			return 0;
+		}
+		pendingVisibilitySubmission = {
+			.owner = this,
+			.generation = generation,
+			.observationId = submissionObservationId,
+			.context = a_context,
+		};
+		return submissionObservationId;
+	}
+
+	void Runtime::ClearPendingVisibilitySubmission(std::uintptr_t a_context) noexcept
+	{
+		if (pendingVisibilitySubmission.owner == this &&
+			(a_context == 0 || pendingVisibilitySubmission.context == a_context)) {
+			pendingVisibilitySubmission = {};
+		}
+	}
+
+	void Runtime::RecordCullDecision(
+		std::uint64_t a_resourceVersionObservationId,
+		std::uint64_t a_captureGeneration,
+		std::uint32_t a_objectIndex,
+		bool a_producerVisible,
+		std::uint32_t a_totalDraws,
+		std::uint32_t a_lightingDraws,
+		std::uint32_t a_distantTreeDraws,
+		std::uint32_t a_grassDraws,
+		std::uint64_t a_producerFrame) noexcept
+	{
+		if (!collector.IsCapturing() || a_resourceVersionObservationId == 0 ||
+			a_captureGeneration == 0 || collector.ActiveGeneration() != a_captureGeneration) {
+			return;
+		}
+		collector.Record(
+			EventKind::kCullDecision,
+			CullDecisionPayload(
+				a_resourceVersionObservationId, a_objectIndex, a_producerVisible,
+				a_totalDraws, a_lightingDraws, a_distantTreeDraws, a_grassDraws,
+				a_producerFrame));
+	}
+
+	void Runtime::RecordEyeSubmission(
+		const ResourceObservationInput& a_resource,
+		Eye a_eye,
+		std::uint8_t a_eyeMask,
+		float a_uMin,
+		float a_vMin,
+		float a_uMax,
+		float a_vMax,
+		std::uint32_t a_submitFlags,
+		std::uint64_t a_compositorCycle) noexcept
+	{
+		if (!collector.IsCapturing() || a_resource.d3dObject == 0)
+			return;
+		const auto resource = ObserveResource(a_resource, 0, 0);
+		if (resource.observationId == 0)
+			return;
+		const auto previousFrame = collector.GetThreadFrameContext();
+		auto frame = previousFrame;
+		frame.eye = a_eye;
+		frame.eyeMask = a_eyeMask;
+		collector.SetThreadFrameContext(frame);
+		collector.RecordForGeneration(
+			EventKind::kEyeSubmitted,
+			EyeSubmissionPayload(
+				resource.observationId, a_eye, a_eyeMask,
+				a_uMin, a_vMin, a_uMax, a_vMax, a_submitFlags, a_compositorCycle),
+			0,
+			resource.sessionGeneration);
+		collector.SetThreadFrameContext(previousFrame);
+	}
+
 	std::uint64_t Runtime::EnsureImmediateContextObservation() noexcept
 	{
 		const auto captureGeneration = collector.ActiveGeneration();
@@ -687,13 +990,21 @@ namespace CSX::RenderMap
 			ShaderStage::kPixel, boundPixelShader.load(std::memory_order_acquire));
 		const auto captureGeneration = vertex.sessionGeneration != 0 ? vertex.sessionGeneration :
 			(pixel.sessionGeneration != 0 ? pixel.sessionGeneration : collector.ActiveGeneration());
+		std::uint64_t submissionObservationId = 0;
+		if (pendingVisibilitySubmission.owner == this &&
+			pendingVisibilitySubmission.generation == captureGeneration &&
+			pendingVisibilitySubmission.context == a_context) {
+			submissionObservationId = pendingVisibilitySubmission.observationId;
+			pendingVisibilitySubmission = {};
+		}
 		collector.RecordForGeneration(
 			EventKind::kDraw,
 			DrawCallPayload(
 				a_context, a_operation, vertex.observationId, pixel.observationId,
 				a_argument0, a_argument1, a_argument2, a_argument3),
 			contextObservationId, captureGeneration, commandStreamSequence,
-			boundTargetBindingObservationId.load(std::memory_order_acquire));
+			boundTargetBindingObservationId.load(std::memory_order_acquire),
+			submissionObservationId);
 	}
 
 	void Runtime::RecordDispatch(

@@ -248,6 +248,17 @@ foreach ($window in $renderGraph.decisionWindows) {
     Assert-True ($graphNodeIds.Contains([string] $window.candidateNode)) "Decision window $($window.id) refers to a missing candidate node"
     Assert-True ($eventSequences.Contains([long] $window.visibilityAvailable.sequence)) "Decision window $($window.id) has a missing availability event"
     Assert-True ($eventSequences.Contains([long] $window.decisionDeadline.sequence)) "Decision window $($window.id) has a missing deadline event"
+    if ($null -ne $window.eyeCoverage) {
+        foreach ($route in $window.eyeCoverage.routes) {
+            Assert-True ($graphNodeIds.Contains([string] $route.eyeSubmitNode)) "Decision window $($window.id) has an eye route with a missing submit node"
+            foreach ($sequence in $route.eventSequences) {
+                Assert-True ($eventSequences.Contains([long] $sequence)) "Decision window $($window.id) has an eye route referring to missing event $sequence"
+            }
+        }
+        foreach ($ambiguityId in $window.eyeCoverage.ambiguityIds) {
+            Assert-True (@($renderGraph.ambiguities.id) -contains [string] $ambiguityId) "Decision window $($window.id) refers to missing ambiguity $ambiguityId"
+        }
+    }
 }
 
 Write-Output "Render-map contracts passed: $($schemaFiles.Count) schemas, 2 engine maps, $($events.Count + $mutationEventCount) events, $($renderGraph.nodes.Count) graph nodes."

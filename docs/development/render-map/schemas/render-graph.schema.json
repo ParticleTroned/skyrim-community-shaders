@@ -147,7 +147,9 @@
             "same-observed-object",
             "versions",
             "consumes",
-            "presents"
+            "presents",
+            "contributes-to",
+            "carries-forward"
           ]
         },
         "from": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
@@ -235,7 +237,71 @@
         },
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidenceRef" } },
         "reason": { "type": "string", "minLength": 1 },
+        "eyeCoverage": { "$ref": "#/$defs/eyeCoverage" },
         "extensions": { "$ref": "#/$defs/extensions" }
+      }
+    },
+    "eyeCoverage": {
+      "type": "object",
+      "required": ["result", "eyes", "physicalSubmissionCount", "stereoMechanism", "routes", "ambiguityIds", "searchTruncated", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "result": { "enum": ["observed", "ambiguous", "not-proven"] },
+        "eyes": {
+          "type": "array",
+          "items": { "enum": ["left", "right", "both", "mono", "unknown"] },
+          "uniqueItems": true
+        },
+        "physicalSubmissionCount": { "type": "integer", "minimum": 0 },
+        "stereoMechanism": { "enum": ["shared-resource-distinct-bounds", "shared-resource-same-bounds", "distinct-resources", "single-both-eye-submission", "not-proven"] },
+        "routes": { "type": "array", "items": { "$ref": "#/$defs/eyeRoute" } },
+        "ambiguityIds": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^ambiguity-[0-9]{4,}$" },
+          "uniqueItems": true
+        },
+        "searchTruncated": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "eyeRoute": {
+      "type": "object",
+      "required": ["eye", "eyeSubmitNode", "sourceResourceObservationId", "submittedResourceObservationId", "submittedBounds", "mechanism", "eventSequences", "resourceObservationIds", "transferOperations", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "eye": { "enum": ["left", "right", "both", "mono", "unknown"] },
+        "eyeSubmitNode": { "type": "string", "pattern": "^node-eye-submit-[0-9]{4,}$" },
+        "sourceResourceObservationId": { "type": "string", "minLength": 1 },
+        "submittedResourceObservationId": { "type": "string", "minLength": 1 },
+        "submittedBounds": { "$ref": "#/$defs/textureBounds" },
+        "mechanism": { "enum": ["same-allocation", "resource-flow"] },
+        "eventSequences": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "integer", "minimum": 0 },
+          "uniqueItems": true
+        },
+        "resourceObservationIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "transferOperations": {
+          "type": "array",
+          "items": { "enum": ["copy-resource", "copy-subresource-region", "resolve-subresource"] }
+        },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "textureBounds": {
+      "type": "object",
+      "required": ["uMin", "vMin", "uMax", "vMax"],
+      "additionalProperties": false,
+      "properties": {
+        "uMin": { "type": "number" },
+        "vMin": { "type": "number" },
+        "uMax": { "type": "number" },
+        "vMax": { "type": "number" }
       }
     },
     "eventPoint": {

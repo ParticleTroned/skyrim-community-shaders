@@ -35,6 +35,21 @@ The current Skyrim VR 1.4.15 hooks expose this order:
    Its readiness domain is `cpu-readback-complete`; it is analysis evidence,
    not a prerequisite for the live GPU consumer.
 
+The graph builder now joins a visibility-associated draw to accepted eye
+submissions only through its observed output content version. A direct route
+requires the exact output allocation to remain the current submitted version.
+An indirect route must traverse monotonically ordered `Copy*`/`Resolve*`
+resource-flow events. Later clear, CPU update, or full-copy writes sever an old
+route. Later draw or dispatch writes may carry prior contents forward, but that
+edge is deliberately `correlated` at medium confidence because exact pixel
+survival and blend coverage are not yet observed.
+
+When the same route reaches left and right submissions in one CPU frame, the
+decision window records both-eye coverage and distinguishes a shared stereo
+texture with different bounds from distinct eye resources. Multiple valid
+routes for one eye become explicit ambiguity groups; the builder does not pick
+one by proximity.
+
 The relocation and member offsets above are runtime evidence points, not yet
 complete semantic names for every native type. The result-buffer pointer is
 read from culler offset `0x100`; its SRV is read from the wrapper at `+0x8`.
@@ -103,10 +118,15 @@ The shortest remaining path is:
 1. capture the native candidate and exact result-buffer version;
 2. prove one explicit candidate/submission/draw association;
 3. confirm requested and effective VS slot 127 are identical;
-4. trace the draw target to one or both accepted eye submissions;
+4. validate the derived draw-content-version route to one or both accepted eye
+   submissions;
 5. validate the completed diagnostic readback decision joined to the same
    object index and version;
 6. emit the decision-window report for live and forced-visible controls.
+
+Steps 4 and 6 are implemented in the offline join contract. They remain live
+acceptance gates until a bounded in-world capture supplies both-eye routes with
+zero dropped events.
 
 Predication is not assumed: `SetPredication` requires an actual
 `ID3D11Predicate`, not the existing arbitrary visibility buffer. Indirect

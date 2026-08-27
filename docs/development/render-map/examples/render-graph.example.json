@@ -218,6 +218,16 @@
         }
       ],
       "reason": "The example CPU-observed visibility result precedes the CPU draw-submission deadline; it makes no GPU-completion claim.",
+      "eyeCoverage": {
+        "result": "not-proven",
+        "eyes": [],
+        "physicalSubmissionCount": 0,
+        "stereoMechanism": "not-proven",
+        "routes": [],
+        "ambiguityIds": [],
+        "searchTruncated": false,
+        "reason": "The design example does not contain typed output-resource and accepted OpenVR submission observations."
+      },
       "extensions": {}
     }
   ],

@@ -138,7 +138,8 @@ legitimately resolve to `both`.
 The resource-flow joiner now produces a genuine bounded immediate-context
 execution/resource graph; it is not yet a complete semantic Skyrim frame graph.
 
-The depth-culling integration and next capture target are described in
+The depth-culling integration, versioned draw-output to accepted-eye join, and
+next live capture target are described in
 [`depth-culling-observation-sequence.md`](./depth-culling-observation-sequence.md).
 
 Example DevBench requests (use a unique `commandId` for each logical command):

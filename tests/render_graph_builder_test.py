@@ -102,20 +102,54 @@ def main() -> int:
         envelope(11, "resource-flow", {"schema": "resource-flow-v1", "operation": "copy-resource", "sourceResourceObservationId": "obs-resource-2-g1", "destinationResourceObservationId": "obs-resource-1-g1", "sourceSubresource": 0, "destinationSubresource": 0}),
         envelope(12, "cull-decision", {"schema": "cull-decision-v1", "resourceVersionObservationId": "obs-resource-version-6-g1", "objectIndex": 3, "producerVisible": False, "drawCounts": {"total": 1, "lighting": 1, "distantTree": 0, "grass": 0}, "producerFrame": 1, "readinessDomain": "cpu-readback-complete"}),
         envelope(13, "eye-submitted", {"schema": "eye-submission-v1", "resourceObservationId": "obs-resource-1-g1", "eye": "left", "eyeMask": 1, "bounds": {"uMin": 0.0, "vMin": 0.0, "uMax": 0.5, "vMax": 1.0}, "submitFlags": 0, "compositorCycle": 2}),
+        envelope(14, "eye-submitted", {"schema": "eye-submission-v1", "resourceObservationId": "obs-resource-1-g1", "eye": "right", "eyeMask": 2, "bounds": {"uMin": 0.5, "vMin": 0.0, "uMax": 1.0, "vMax": 1.0}, "submitFlags": 0, "compositorCycle": 2}),
     ]
     graph = build_graph(tool, manifest, decision_events)
     assert [edge["type"] for edge in graph["edges"]].count("versions") == 1
     assert [edge["type"] for edge in graph["edges"]].count("consumes") == 1
     assert [edge["type"] for edge in graph["edges"]].count("submits") == 1
-    assert [edge["type"] for edge in graph["edges"]].count("presents") == 1
+    assert [edge["type"] for edge in graph["edges"]].count("presents") == 2
+    assert [edge["type"] for edge in graph["edges"]].count("contributes-to") == 2
     assert [edge["type"] for edge in graph["edges"]].count("result-for") == 1
     assert [edge["type"] for edge in graph["edges"]].count("tests") == 1
     assert len(graph["decisionWindows"]) == 1
     assert graph["decisionWindows"][0]["result"] == "viable"
     assert graph["decisionWindows"][0]["suppressionStage"] == "vertex-shader"
     assert graph["decisionWindows"][0]["visibilityAvailable"]["readinessDomain"] == "gpu-resource-consumable"
+    eye_coverage = graph["decisionWindows"][0]["eyeCoverage"]
+    assert eye_coverage["result"] == "observed", eye_coverage
+    assert eye_coverage["eyes"] == ["left", "right"]
+    assert eye_coverage["physicalSubmissionCount"] == 2
+    assert eye_coverage["stereoMechanism"] == "shared-resource-distinct-bounds"
+    assert eye_coverage["searchTruncated"] is False
+    assert len(eye_coverage["routes"]) == 2
+    assert all(route["mechanism"] == "resource-flow" for route in eye_coverage["routes"])
+    assert all(route["resourceObservationIds"] == ["obs-resource-2-g1", "obs-resource-1-g1"] for route in eye_coverage["routes"])
+    assert graph["ambiguities"] == []
     assert graph["extensions"]["csx.vrEyeAttribution"] is True
     assert len(graph["gaps"]) == 1 and graph["gaps"][0]["kind"] == "unsupported-route"
+
+    overwritten_events = json.loads(json.dumps(decision_events))
+    overwrite = next(event for event in overwritten_events if event["sequence"] == 11)
+    overwrite["payload"] = {
+        "schema": "resource-flow-v1", "operation": "update-subresource",
+        "sourceResourceObservationId": None, "destinationResourceObservationId": "obs-resource-2-g1",
+        "sourceSubresource": 0, "destinationSubresource": 0,
+    }
+    for event in overwritten_events:
+        if event["type"] == "eye-submitted":
+            event["payload"]["resourceObservationId"] = "obs-resource-2-g1"
+    overwritten_graph = build_graph(tool, manifest, overwritten_events)
+    assert overwritten_graph["decisionWindows"][0]["eyeCoverage"]["result"] == "not-proven"
+    assert [edge["type"] for edge in overwritten_graph["edges"]].count("contributes-to") == 0
+
+    unmatched_events = [
+        event for event in decision_events
+        if event["type"] not in {"visibility-consumed", "draw"}
+    ]
+    unmatched_graph = build_graph(tool, manifest, unmatched_events)
+    assert unmatched_graph["decisionWindows"][0]["result"] == "not-proven"
+    assert unmatched_graph["decisionWindows"][0]["eyeCoverage"]["result"] == "not-proven"
     print("Render graph builder test passed")
     return 0
 

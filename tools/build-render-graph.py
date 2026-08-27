@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import hashlib
 import json
 import re
@@ -62,6 +63,7 @@ class Graph:
         self.capture_id = capture_id
         self.nodes: list[dict[str, Any]] = []
         self.edges: list[dict[str, Any]] = []
+        self.ambiguities: list[dict[str, Any]] = []
         self.gaps: list[dict[str, Any]] = []
         self.decision_windows: list[dict[str, Any]] = []
         self._node_ids: dict[tuple[str, str], str] = {}
@@ -95,14 +97,18 @@ class Graph:
 
     def edge(self, edge_type: str, source: str, target: str, sequences: list[int], note: str,
              attributes: dict[str, Any] | None = None, evidence_class: str = "runtime-observed",
-             confidence: str = "confirmed") -> None:
+             confidence: str = "confirmed") -> str:
         attributes = attributes or {}
         edge_key = (edge_type, source, target, json.dumps(attributes, sort_keys=True))
         if edge_key in self._edge_keys:
-            return
+            return next(
+                edge["id"] for edge in self.edges
+                if (edge["type"], edge["from"], edge["to"], json.dumps(edge["attributes"], sort_keys=True)) == edge_key
+            )
         self._edge_keys.add(edge_key)
+        edge_id = f"edge-{len(self.edges) + 1:04d}"
         self.edges.append({
-            "id": f"edge-{len(self.edges) + 1:04d}",
+            "id": edge_id,
             "type": edge_type,
             "from": source,
             "to": target,
@@ -118,6 +124,24 @@ class Graph:
             "attributes": attributes,
             "extensions": {},
         })
+        return edge_id
+
+    def ambiguity(self, question: str, candidate_edge_ids: list[str], resolution_required: str) -> str | None:
+        edge_ids = sorted(set(candidate_edge_ids))
+        if len(edge_ids) < 2:
+            return None
+        ambiguity_id = f"ambiguity-{len(self.ambiguities) + 1:04d}"
+        self.ambiguities.append({
+            "id": ambiguity_id,
+            "question": question,
+            "candidateEdgeIds": edge_ids,
+            "resolutionRequired": resolution_required,
+            "extensions": {},
+        })
+        for edge in self.edges:
+            if edge["id"] in edge_ids:
+                edge["ambiguityGroup"] = ambiguity_id
+        return ambiguity_id
 
     def gap(self, description: str, related: list[str] | None = None, blocking: bool = False,
             kind: str = "uncorrelated") -> None:
@@ -163,6 +187,7 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
     submissions: dict[str, dict[str, Any]] = {}
     submissions_by_candidate: dict[tuple[int, int], list[dict[str, Any]]] = {}
     draws_by_submission: dict[str, dict[str, Any]] = {}
+    draw_output_resources_by_submission: dict[str, list[str]] = {}
     candidates: list[dict[str, Any]] = []
     results_by_frame: dict[int, dict[str, Any]] = {}
     eye_submissions_by_frame: dict[int, list[dict[str, Any]]] = {}
@@ -213,11 +238,14 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
         readers_since_write[resource_id] = {}
         return version
 
-    def write_version(resource_id: str, execution: str, sequence: int, roles: list[str]) -> str | None:
+    def write_version(
+        resource_id: str, execution: str, sequence: int, roles: list[str], preserves_prior: bool
+    ) -> str | None:
         allocation = resource_node(resource_id)
         resource = resources.get(resource_id)
         if not allocation or not resource:
             return None
+        previous_version = current_version.get(resource_id)
         next_version = version_number.get(resource_id, 0) + 1
         version_number[resource_id] = next_version
         version = graph.node(
@@ -242,6 +270,13 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
             {"roles": sorted(set(roles)), "version": next_version,
              "versionScope": "whole-resource-conservative"},
         )
+        if preserves_prior and previous_version and previous_version != version:
+            graph.edge(
+                "carries-forward", previous_version, version, [sequence],
+                "A draw or dispatch may preserve prior allocation contents outside the pixels or elements it updates; exact pixel survival is not observed.",
+                {"resourceObservationId": resource_id, "versionScope": "whole-resource-conservative"},
+                "correlated", "medium",
+            )
         current_version[resource_id] = version
         return version
 
@@ -422,17 +457,29 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 sequence, payload,
             )
             if isinstance(cpu_frame, int):
-                eye_submissions_by_frame.setdefault(cpu_frame, []).append(event)
+                eye_submissions_by_frame.setdefault(cpu_frame, []).append({
+                    "event": event,
+                    "node": eye_node,
+                    "resourceObservationId": resource_id,
+                })
             resource = resources.get(resource_id)
             if resource:
-                allocation_node = graph.node(
-                    resource_id, "resource", resource_id, resource["sequence"], resource["payload"]
-                )
-                graph.edge(
-                    "presents", allocation_node, eye_node,
-                    [resource["sequence"], sequence],
-                    "Accepted OpenVR Submit identifies this texture resource, eye, and source bounds.",
-                )
+                ensure_version(resource_id)
+                content_version_node = current_version.get(resource_id)
+                if content_version_node:
+                    graph.edge(
+                        "presents", content_version_node, eye_node,
+                        [resource["sequence"], sequence],
+                        "The accepted OpenVR submission uses the current observed content version of this texture allocation.",
+                        {"versionScope": "whole-resource-conservative"},
+                    )
+                allocation_node = resource_node(resource_id)
+                if allocation_node:
+                    graph.edge(
+                        "uses", allocation_node, eye_node,
+                        [resource["sequence"], sequence],
+                        "The accepted OpenVR submission names this exact D3D11 texture allocation.",
+                    )
                 graph.eye_attribution_observed = True
             else:
                 graph.gap(
@@ -595,9 +642,136 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                             {"hazard": "WAR", "resourceObservationId": resource_id,
                              "versionScope": "whole-resource-conservative"}, "correlated", "high",
                         )
-                write_version(resource_id, execution, sequence, roles)
+                write_version(
+                    resource_id, execution, sequence, roles,
+                    preserves_prior=event_type in {"draw", "dispatch"},
+                )
                 last_writer[resource_id] = (execution, sequence)
                 readers_since_write[resource_id] = {}
+
+            if event_type == "draw":
+                submission_id = event.get("submissionObservationId") or payload.get("submissionObservationId")
+                if submission_id:
+                    draw_output_resources_by_submission[submission_id] = sorted(
+                        write_roles, key=observation_sort_key
+                    )
+
+    def eye_routes(
+        draw: dict[str, Any], submission_id: str | None
+    ) -> tuple[list[dict[str, Any]], str, str, bool]:
+        if not submission_id:
+            return [], "not-proven", "The draw has no explicit visibility-submission identity.", False
+        draw_sequence = draw["sequence"]
+        draw_frame = draw.get("frame", {}).get("cpuFrame")
+        output_resources = draw_output_resources_by_submission.get(submission_id, [])
+        if not output_resources:
+            return [], "not-proven", "The selected draw has no observed output resource.", False
+
+        draw_node = graph.node(
+            f"event-{draw_sequence}", "draw",
+            f"{draw.get('payload', {}).get('operation', 'draw')} at event {draw_sequence}",
+            draw_sequence, {
+                "eventSequence": draw_sequence,
+                "commandStreamSequence": draw.get("execution", {}).get("commandStreamSequence"),
+                "cpuFrame": draw_frame,
+                "eye": draw.get("frame", {}).get("eye", "unknown"),
+                "operation": draw.get("payload", {}).get("operation", "draw"),
+            },
+        )
+
+        route_edge_types = {"writes", "reads", "carries-forward", "presents"}
+        adjacency: dict[str, list[dict[str, Any]]] = {}
+        for edge in graph.edges:
+            if edge["type"] in route_edge_types:
+                adjacency.setdefault(edge["from"], []).append(edge)
+
+        def graph_paths(target: str) -> tuple[list[list[dict[str, Any]]], bool]:
+            paths: list[list[dict[str, Any]]] = []
+            queue = deque([(draw_node, [], {draw_node})])
+            expansions = 0
+            while queue and len(paths) < 16 and expansions < 50_000:
+                node, path, visited = queue.popleft()
+                if node == target:
+                    paths.append(path)
+                    continue
+                for edge in adjacency.get(node, []):
+                    if edge["to"] in visited:
+                        continue
+                    queue.append((edge["to"], [*path, edge], {*visited, edge["to"]}))
+                expansions += 1
+            return paths, bool(queue)
+
+        routes: list[dict[str, Any]] = []
+        search_truncated = False
+        nodes_by_id = {node["id"]: node for node in graph.nodes}
+        for eye_submission in eye_submissions_by_frame.get(draw_frame, []):
+            event = eye_submission["event"]
+            submitted_resource = eye_submission["resourceObservationId"]
+            if event["sequence"] <= draw_sequence or not submitted_resource:
+                continue
+            paths, path_search_truncated = graph_paths(eye_submission["node"])
+            search_truncated = search_truncated or path_search_truncated
+            for path in paths:
+                if not path or path[0]["type"] != "writes":
+                    continue
+                resource_path: list[str] = []
+                transfer_operations: list[str] = []
+                for edge in path:
+                    target_node = nodes_by_id.get(edge["to"], {})
+                    allocation_id = target_node.get("attributes", {}).get("allocationObservationId")
+                    if allocation_id and (not resource_path or resource_path[-1] != allocation_id):
+                        resource_path.append(allocation_id)
+                    operation = target_node.get("attributes", {}).get("operation")
+                    if target_node.get("kind") == "copy" and operation:
+                        transfer_operations.append(operation)
+                if not resource_path or resource_path[0] not in output_resources or resource_path[-1] != submitted_resource:
+                    continue
+                event_sequences = sorted({
+                    item for edge in path for evidence in edge["evidence"]
+                    for item in evidence["eventSequences"] if item >= draw_sequence
+                })
+                routes.append({
+                    "eye": event.get("payload", {}).get("eye", "unknown"),
+                    "eyeSubmitNode": eye_submission["node"],
+                    "sourceResourceObservationId": resource_path[0],
+                    "submittedResourceObservationId": submitted_resource,
+                    "submittedBounds": event.get("payload", {}).get("bounds"),
+                    "mechanism": "same-allocation" if len(resource_path) == 1 else "resource-flow",
+                    "eventSequences": event_sequences,
+                    "resourceObservationIds": resource_path,
+                    "transferOperations": transfer_operations,
+                    "confidence": "medium" if any(edge["type"] == "carries-forward" for edge in path) else "high",
+                })
+
+        unique_routes: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for route in routes:
+            key = (
+                route["eyeSubmitNode"], route["sourceResourceObservationId"],
+                tuple(route["eventSequences"]), tuple(route["resourceObservationIds"]),
+            )
+            unique_routes[key] = route
+        routes = sorted(
+            unique_routes.values(),
+            key=lambda route: (route["eventSequences"][-1], route["sourceResourceObservationId"], route["eventSequences"]),
+        )
+
+        eyes = {route["eye"] for route in routes}
+        complete = "both" in eyes or {"left", "right"}.issubset(eyes)
+        routes_per_eye: dict[str, int] = {}
+        for route in routes:
+            routes_per_eye[route["eye"]] = routes_per_eye.get(route["eye"], 0) + 1
+        ambiguous = any(count > 1 for count in routes_per_eye.values())
+        if complete and search_truncated:
+            return routes, "ambiguous", "Both-eye reachability is observed, but the bounded route search found more alternatives than it could enumerate.", True
+        if complete and ambiguous:
+            return routes, "ambiguous", "Both-eye reachability is observed, but at least one eye has multiple valid resource routes.", False
+        if complete:
+            return routes, "observed", "The selected draw reaches accepted submissions covering both OpenVR eyes in the same CPU frame.", False
+        if routes:
+            suffix = " The bounded route search was truncated." if search_truncated else ""
+            return routes, "not-proven", "Only partial eye coverage is observed for the selected draw in the same CPU frame." + suffix, search_truncated
+        suffix = " The bounded route search was truncated." if search_truncated else ""
+        return routes, "not-proven", "No same-frame resource route connects the selected draw to an accepted OpenVR eye submission." + suffix, search_truncated
 
     def event_point(event: dict[str, Any], readiness_domain: str) -> dict[str, Any]:
         return {
@@ -649,8 +823,8 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
             decision_deadline = event_point(deadline_event, "gpu-ordered")
         else:
             later_eye_submissions = [
-                item for item in eye_submissions_by_frame.get(producer_frame, [])
-                if item["sequence"] > visibility_available["sequence"]
+                item["event"] for item in eye_submissions_by_frame.get(producer_frame, [])
+                if item["event"]["sequence"] > visibility_available["sequence"]
             ]
             deadline_event = later_eye_submissions[0] if later_eye_submissions else last_event_by_frame.get(producer_frame, candidate_event)
             decision_deadline = event_point(deadline_event, "cpu-observed")
@@ -681,6 +855,47 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
         if matched_submission:
             evidence_sequences.append(matched_submission["event"]["sequence"])
         forced_visible = bool(matched_submission and matched_submission["event"].get("payload", {}).get("forcedVisible"))
+        submission_id = matched_submission and matched_submission["event"].get("payload", {}).get("submissionObservationId")
+        routes, eye_coverage_result, eye_coverage_reason, route_search_truncated = eye_routes(matched_draw, submission_id) if matched_draw else (
+            [], "not-proven", "No explicitly associated draw was observed.", False
+        )
+        route_edge_ids: list[str] = []
+        if matched_draw:
+            draw_node = graph.node(
+                f"event-{matched_draw['sequence']}", "draw",
+                f"{matched_draw.get('payload', {}).get('operation', 'draw')} at event {matched_draw['sequence']}",
+                matched_draw["sequence"], {
+                    "eventSequence": matched_draw["sequence"],
+                    "commandStreamSequence": matched_draw.get("execution", {}).get("commandStreamSequence"),
+                    "cpuFrame": matched_draw.get("frame", {}).get("cpuFrame"),
+                    "eye": matched_draw.get("frame", {}).get("eye", "unknown"),
+                    "operation": matched_draw.get("payload", {}).get("operation", "draw"),
+                },
+            )
+            for route in routes:
+                route_edge_ids.append(graph.edge(
+                    "contributes-to", draw_node, route["eyeSubmitNode"], route["eventSequences"],
+                    "The draw output allocation reaches this accepted OpenVR submission through the observed same-frame resource route; exact pixel survival remains correlated.",
+                    {
+                        "eye": route["eye"],
+                        "mechanism": route["mechanism"],
+                        "resourceObservationIds": route["resourceObservationIds"],
+                        "transferOperations": route["transferOperations"],
+                        "routeEventSequences": route["eventSequences"],
+                    }, "correlated", route["confidence"],
+                ))
+        ambiguity_ids: list[str] = []
+        routes_by_eye: dict[str, list[str]] = {}
+        for route, edge_id in zip(routes, route_edge_ids):
+            routes_by_eye.setdefault(route["eye"], []).append(edge_id)
+        for eye, edge_ids in sorted(routes_by_eye.items()):
+            ambiguity_id = graph.ambiguity(
+                f"Which observed resource route carries the selected draw to the {eye} eye submission?",
+                edge_ids,
+                "Capture narrower target state or subresource-preservation evidence to select one route.",
+            )
+            if ambiguity_id:
+                ambiguity_ids.append(ambiguity_id)
         if viable:
             control_note = " The final value was deliberately forced visible for the control." if forced_visible else ""
             result = "viable"
@@ -711,6 +926,25 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 "note": "Decision-window evidence uses explicit producer-frame, resource-version, binding, submission, and draw identities.",
             }],
             "reason": reason,
+            "eyeCoverage": {
+                "result": eye_coverage_result,
+                "eyes": sorted({route["eye"] for route in routes}),
+                "physicalSubmissionCount": len({route["eyeSubmitNode"] for route in routes}),
+                "stereoMechanism": (
+                    "single-both-eye-submission" if {route["eye"] for route in routes} == {"both"} else
+                    "shared-resource-distinct-bounds" if {"left", "right"}.issubset({route["eye"] for route in routes}) and
+                    len({route["submittedResourceObservationId"] for route in routes}) == 1 and
+                    len({json.dumps(route["submittedBounds"], sort_keys=True) for route in routes}) > 1 else
+                    "shared-resource-same-bounds" if {"left", "right"}.issubset({route["eye"] for route in routes}) and
+                    len({route["submittedResourceObservationId"] for route in routes}) == 1 else
+                    "distinct-resources" if {"left", "right"}.issubset({route["eye"] for route in routes}) else
+                    "not-proven"
+                ),
+                "routes": routes,
+                "ambiguityIds": ambiguity_ids,
+                "searchTruncated": route_search_truncated,
+                "reason": eye_coverage_reason,
+            },
             "extensions": {
                 "csx.objectIndex": object_index,
                 "csx.producerFrame": producer_frame,
@@ -758,14 +992,14 @@ def main() -> int:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
             inputs.append({"kind": kind, "path": str(path), "sha256": sha256(path), "schemaMajor": int(data.get("schema", {}).get("major", 1))})
     output = {
-        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 2, "producerVersion": "resource-versions-1"},
+        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 3, "producerVersion": "resource-versions-1"},
         "reportId": f"render-graph-{manifest['captureId'].removeprefix('capture-')}",
         "generatedAtUtc": manifest.get("createdAtUtc", "1970-01-01T00:00:00Z"),
-        "generatedBy": {"name": "csx-render-map-join", "version": "0.3.0", "gitCommit": git_commit(repo)},
+        "generatedBy": {"name": "csx-render-map-join", "version": "0.4.0", "gitCommit": git_commit(repo)},
         "inputs": inputs,
         "nodes": graph.nodes,
         "edges": graph.edges,
-        "ambiguities": [],
+        "ambiguities": graph.ambiguities,
         "gaps": graph.gaps,
         "decisionWindows": graph.decision_windows,
         "extensions": {

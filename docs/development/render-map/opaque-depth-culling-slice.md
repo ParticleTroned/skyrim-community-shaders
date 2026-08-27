@@ -21,9 +21,10 @@ used as a proximity heuristic. Accepted OpenVR submissions identify the final
 eye texture and bounds without assuming that earlier work used two physical
 draws.
 
-The present gate is a live decision-window capture that proves the native OBB
-result buffer, the candidate-to-draw association, and the resource path from
-the selected draw to an eye-submitted texture. See
+The graph builder can now derive the native OBB result-buffer chain, the
+candidate-to-draw association, and a versioned resource path from the selected
+draw to accepted eye submissions. The present gate is a live decision-window
+capture that exercises that complete join without dropped events. See
 [`depth-culling-observation-sequence.md`](./depth-culling-observation-sequence.md).
 
 ## Candidate constraints
@@ -121,8 +122,9 @@ Remaining sequence:
 3. Add capture markers for frame and scene accumulation epochs.
 4. Emit capture-local IDs for scene object, property/material, and
    `BSRenderPass` at the narrowest known engine boundary.
-5. Join the selected draw's output resource path to the accepted OpenVR eye
-   submission; preserve `eye: both` where one stereo submission is proved.
+5. Capture and review the selected draw's derived output-version routes to the
+   accepted OpenVR eye submissions; preserve `eye: both` only where the
+   resource path proves shared stereo coverage.
 6. Join the capture without relying on pointer equality across frames unless
    object lifetime evidence supports it.
 7. Generate and review the decision-window report before adding more object

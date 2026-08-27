@@ -748,6 +748,7 @@ namespace
 														  { "trimCompleted", controller.postLoadRecovery.trimCompleted },
 														  { "trimSucceeded", controller.postLoadRecovery.trimSucceeded },
 														  { "relatchAdmitted", controller.postLoadRecovery.relatchAdmitted },
+												  { "cleanupDeferredUntilStable", controller.postLoadRecovery.cleanupDeferredUntilStable },
 													  } },
 								{ "fidelity", {
 												  { "active", controller.fidelity.active },
@@ -1079,6 +1080,7 @@ namespace
 	}
 
 	namespace QualificationPolicy = VRRenderScaleQualificationPolicy;
+	using QualificationMilestone = QualificationPolicy::Milestone;
 	using QualificationTarget = QualificationPolicy::TargetProfile;
 
 	struct QualificationExpectedCell
@@ -1152,6 +1154,20 @@ namespace
 		Upscaling::VRRenderScaleProfileSnapshot stable{};
 		QualificationFoveationTarget foveationSettings{};
 		QualificationDiagnostics diagnostics{};
+	};
+
+	struct QualificationMilestoneMark
+	{
+		bool observed = false;
+		uint64_t tick = 0;
+		uint32_t frame = 0;
+	};
+
+	struct QualificationMilestoneEvidence
+	{
+		QualificationMilestoneMark presentation{};
+		QualificationMilestoneMark cleanup{};
+		QualificationMilestoneMark strict{};
 	};
 
 	struct QualificationTransition
@@ -1281,6 +1297,29 @@ namespace
 		if (a_target.matchFSRRuntime)
 			output["fsrRuntime"] = a_target.fsr4Runtime ? "fsr4" : "fsr3";
 		return output;
+	}
+
+	bool TryParseQualificationMilestone(
+		const json& a_args,
+		QualificationMilestone& a_milestone,
+		json& a_error)
+	{
+		a_milestone = QualificationMilestone::Strict;
+		if (!a_args.contains("milestone"))
+			return true;
+		if (!a_args["milestone"].is_string()) {
+			a_error = { { "error", "qualification_wait milestone must be a string" },
+				{ "errorCode", "invalid_qualification_milestone" } };
+			return false;
+		}
+		const std::string milestone = a_args["milestone"].get<std::string>();
+		if (!QualificationPolicy::IsMilestoneName(milestone)) {
+			a_error = { { "error", "qualification_wait milestone must be 'strict', 'presentation', or 'cleanup'" },
+				{ "errorCode", "invalid_qualification_milestone" } };
+			return false;
+		}
+		a_milestone = QualificationPolicy::ParseMilestoneName(milestone);
+		return true;
 	}
 
 	bool TryParseQualificationTarget(
@@ -2712,6 +2751,39 @@ namespace
 		                      !controller.postLoadRecovery.active &&
 		                      !controller.postLoadRecovery.timedAttemptInProgress &&
 		                      !emergencyRecoveryRequested;
+		const bool cleanupOnlyPostLoadRecovery =
+			QualificationPolicy::IsPresentationSafeCleanupOnlyRecovery({
+				.active = controller.postLoadRecovery.active,
+				.cleanupDeferredUntilStable =
+					controller.postLoadRecovery.cleanupDeferredUntilStable,
+				.relatchAdmitted = controller.postLoadRecovery.relatchAdmitted,
+				.ownerValid = controller.postLoadRecovery.recoveryEpoch != 0 &&
+				              controller.postLoadRecovery.transitionEpoch != 0,
+				.stableOwnerMatches =
+					controller.postLoadRecovery.transitionEpoch ==
+					controller.stable.transitionEpoch,
+				.controllerActive =
+					controller.state ==
+					Upscaling::VRRenderScaleTransitionState::Active,
+				.stableValid = controller.stable.valid,
+				.timedAttemptInProgress =
+					controller.postLoadRecovery.timedAttemptInProgress,
+				.vendorTeardownIdle =
+					controller.postLoadRecovery.vendorTeardownPhase ==
+					VRVendorRelatchPolicy::PostLoadVendorTeardownPhase::Idle,
+				.vendorTeardownFallbackRequested =
+					controller.postLoadRecovery.vendorTeardownFallbackRequested,
+				.recoveryGatePending = gate.recoveryPending,
+				.postLoadResetPending = gate.postLoadResetPending,
+				.emergencyRecoveryRequested = emergencyRecoveryRequested,
+				.physicalMutationClear = physicalMutationEpoch == 0 &&
+				                         physicalSerializationEpoch == 0,
+			});
+		facts.presentationRecoveryClear =
+			facts.recoveryClear || cleanupOnlyPostLoadRecovery;
+		facts.postLoadCleanupDrained =
+			!controller.postLoadRecovery.active ||
+			controller.postLoadRecovery.cleanupDrained;
 		facts.memoryTrimClear = !controller.memoryTrim.pending;
 		facts.retirementClear = controller.retirement.pendingSets == 0 &&
 		                        !controller.retirement.fencePending &&
@@ -2792,30 +2864,71 @@ namespace
 		};
 		facts.diagnosticsClear =
 			!QualificationPolicy::HasTerminalDiagnosticFailure(terminalDeltas);
-		const uint64_t failures = QualificationPolicy::EvaluateStability(target, facts);
-		const bool satisfied = failures == QualificationPolicy::kFailureNone;
-		const bool terminalError = !facts.stressSession || !facts.publicSnapshot ||
-		                           !facts.terminalClear || !facts.diagnosticsClear ||
-		                           QualificationPolicy::IsFoveationInvariantViolation(
-									   a_foveation.has_value(),
-									   facts.foveationSettingsMatch);
+		const uint64_t presentationFailures =
+			QualificationPolicy::EvaluatePresentationStability(target, facts);
+		const uint64_t cleanupFailures =
+			QualificationPolicy::EvaluateCleanupDrain(facts);
+		const uint64_t strictFailures =
+			QualificationPolicy::EvaluateStrictStability(target, facts);
+		const bool presentationStable =
+			presentationFailures == QualificationPolicy::kFailureNone;
+		const bool cleanupDrained =
+			cleanupFailures == QualificationPolicy::kFailureNone;
+		const bool strictSatisfied =
+			strictFailures == QualificationPolicy::kFailureNone;
+		uint64_t terminalFailureMask = QualificationPolicy::kFailureNone;
+		if (!facts.stressSession)
+			terminalFailureMask |= QualificationPolicy::kFailureStressSession;
+		if (!facts.publicSnapshot)
+			terminalFailureMask |= QualificationPolicy::kFailurePublicSnapshot;
+		if (!facts.terminalClear)
+			terminalFailureMask |= QualificationPolicy::kFailureTerminal;
+		if (!facts.diagnosticsClear)
+			terminalFailureMask |= QualificationPolicy::kFailureDiagnosticDelta;
+		if (QualificationPolicy::IsFoveationInvariantViolation(
+				a_foveation.has_value(), facts.foveationSettingsMatch)) {
+			terminalFailureMask |= QualificationPolicy::kFailureFoveationSettings;
+		}
+		const bool terminalError =
+			terminalFailureMask != QualificationPolicy::kFailureNone;
 
 		json expectedCell = json::object();
 		if (a_expectedCell.formID)
 			expectedCell["formId"] = *a_expectedCell.formID;
 		if (a_expectedCell.editorID)
 			expectedCell["editorId"] = *a_expectedCell.editorID;
-		auto failureReasons = QualificationFailureReasonsJson(failures);
+		auto presentationFailureReasons =
+			QualificationFailureReasonsJson(presentationFailures);
+		auto cleanupFailureReasons =
+			QualificationFailureReasonsJson(cleanupFailures);
+		auto strictFailureReasons =
+			QualificationFailureReasonsJson(strictFailures);
+		auto terminalFailureReasons =
+			QualificationFailureReasonsJson(terminalFailureMask);
 		auto terminalDiagnosticReasons =
 			QualificationTerminalDiagnosticReasonsJson(terminalDeltas);
-		for (const auto& reason : terminalDiagnosticReasons)
-			failureReasons.push_back(reason);
+		for (const auto& reason : terminalDiagnosticReasons) {
+			presentationFailureReasons.push_back(reason);
+			cleanupFailureReasons.push_back(reason);
+			strictFailureReasons.push_back(reason);
+		}
 		json output{
 			{ "targetMode", a_expectedTarget ? "expected" : "externally_owned_observation" },
-			{ "satisfied", satisfied },
+			{ "satisfied", strictSatisfied },
+			{ "presentationStable", presentationStable },
+			{ "cleanupDrained", cleanupDrained },
+			{ "strictSatisfied", strictSatisfied },
 			{ "terminalError", terminalError },
-			{ "failureMask", failures },
-			{ "failureReasons", std::move(failureReasons) },
+			{ "terminalFailureMask", terminalFailureMask },
+			{ "terminalFailureReasons", std::move(terminalFailureReasons) },
+			{ "failureMask", strictFailures },
+			{ "failureReasons", strictFailureReasons },
+			{ "presentationFailureMask", presentationFailures },
+			{ "presentationFailureReasons", std::move(presentationFailureReasons) },
+			{ "cleanupFailureMask", cleanupFailures },
+			{ "cleanupFailureReasons", std::move(cleanupFailureReasons) },
+			{ "strictFailureMask", strictFailures },
+			{ "strictFailureReasons", std::move(strictFailureReasons) },
 			{ "terminalDiagnosticReasons", std::move(terminalDiagnosticReasons) },
 			{ "monotonicCounterRegressions", std::move(monotonicCounterRegressions) },
 			{ "tick", tick },
@@ -2842,6 +2955,9 @@ namespace
 						   { "workGateClear", facts.workGateClear },
 						   { "relatchClear", facts.relatchClear },
 						   { "recoveryClear", facts.recoveryClear },
+						   { "presentationRecoveryClear", facts.presentationRecoveryClear },
+						   { "cleanupOnlyPostLoadRecovery", cleanupOnlyPostLoadRecovery },
+						   { "postLoadCleanupDrained", facts.postLoadCleanupDrained },
 						   { "memoryTrimClear", facts.memoryTrimClear },
 						   { "retirementClear", facts.retirementClear },
 						   { "physicalMutationClear", facts.physicalMutationClear },
@@ -2899,7 +3015,7 @@ namespace
 			output["expectedTarget"] = QualificationTargetJson(*a_expectedTarget);
 		if (a_foveation)
 			output["foveation"]["target"] = QualificationFoveationTargetJson(*a_foveation);
-		if (satisfied) {
+		if (presentationStable) {
 			output["stereoEvidenceClass"] = target.renderScaleMode ?
 			                                    "render_scale_vendor_frames" :
 			                                    "native_pipeline_frames";
@@ -3016,6 +3132,142 @@ namespace
 		return future.get();
 	}
 
+	void RecordQualificationMilestoneEvidence(
+		const json& a_observation,
+		QualificationMilestoneEvidence& a_evidence)
+	{
+		if (!a_observation.is_object())
+			return;
+		const uint64_t tick = a_observation.value("tick", uint64_t{ 0 });
+		const uint32_t frame = a_observation.value("frame", uint32_t{ 0 });
+		const bool terminalError =
+			a_observation.value("terminalError", false);
+		const auto record = [tick, frame, terminalError](
+			bool a_satisfied, QualificationMilestoneMark& a_mark) {
+			if (a_satisfied && !terminalError && !a_mark.observed) {
+				a_mark.observed = true;
+				a_mark.tick = tick;
+				a_mark.frame = frame;
+			}
+		};
+		record(
+			a_observation.value("presentationStable", false),
+			a_evidence.presentation);
+		record(
+			a_observation.value("cleanupDrained", false),
+			a_evidence.cleanup);
+		record(
+			a_observation.value("strictSatisfied", false),
+			a_evidence.strict);
+	}
+
+	void SelectQualificationMilestoneObservation(
+		json& a_observation,
+		QualificationMilestone a_milestone,
+		const QualificationMilestoneEvidence& a_evidence)
+	{
+		if (!a_observation.is_object())
+			return;
+		const bool presentationStable =
+			a_observation.value("presentationStable", false);
+		const bool cleanupDrained =
+			a_observation.value("cleanupDrained", false);
+		const bool satisfied =
+			!a_observation.value("terminalError", false) &&
+			QualificationPolicy::IsSelectedMilestoneSatisfied(
+				a_milestone,
+				presentationStable,
+				cleanupDrained,
+				a_evidence.presentation.observed);
+
+		uint64_t failureMask =
+			a_observation.value("strictFailureMask", uint64_t{ 0 });
+		json failureReasons = a_observation.value(
+			"strictFailureReasons", json::array());
+		if (a_milestone == QualificationMilestone::Presentation) {
+			failureMask = a_observation.value(
+				"presentationFailureMask", uint64_t{ 0 });
+			failureReasons = a_observation.value(
+				"presentationFailureReasons", json::array());
+		} else if (a_milestone == QualificationMilestone::Cleanup) {
+			failureMask = a_observation.value(
+				"cleanupFailureMask", uint64_t{ 0 });
+			failureReasons = a_observation.value(
+				"cleanupFailureReasons", json::array());
+			failureMask |= a_observation.value(
+				"terminalFailureMask", uint64_t{ 0 });
+			auto terminalReasons = a_observation.value(
+				"terminalFailureReasons", json::array());
+			if (terminalReasons.is_array()) {
+				for (const auto& reason : terminalReasons)
+					failureReasons.push_back(reason);
+			}
+			if (!a_evidence.presentation.observed) {
+				failureMask |= a_observation.value(
+					"presentationFailureMask", uint64_t{ 0 });
+				auto presentationReasons = a_observation.value(
+					"presentationFailureReasons", json::array());
+				if (presentationReasons.is_array()) {
+					for (const auto& reason : presentationReasons)
+						failureReasons.push_back(reason);
+				}
+				failureReasons.push_back({
+					{ "code", "presentation_milestone_not_observed" },
+					{ "category", "qualification" },
+				});
+			}
+		}
+
+		a_observation["milestone"] =
+			QualificationPolicy::GetMilestoneName(a_milestone);
+		a_observation["satisfied"] = satisfied;
+		a_observation["selectedMilestoneSatisfied"] = satisfied;
+		a_observation["failureMask"] = failureMask;
+		a_observation["failureReasons"] = std::move(failureReasons);
+	}
+
+	json QualificationMilestoneMarkJson(
+		const QualificationMilestoneMark& a_mark,
+		const QualificationTransition& a_transition)
+	{
+		json output{ { "observed", a_mark.observed } };
+		if (!a_mark.observed) {
+			output["tick"] = nullptr;
+			output["frame"] = nullptr;
+			output[QualificationPolicy::kElapsedMillisecondsReceiptField.data()] = nullptr;
+			output[QualificationPolicy::kElapsedFramesReceiptField.data()] = nullptr;
+			return output;
+		}
+		output["tick"] = a_mark.tick;
+		output["frame"] = a_mark.frame;
+		output[QualificationPolicy::kElapsedMillisecondsReceiptField.data()] =
+			QualificationPolicy::ElapsedMilliseconds(
+				a_transition.dispatchTick,
+				a_mark.tick,
+				a_transition.baseline.tickFrequency);
+		output[QualificationPolicy::kElapsedFramesReceiptField.data()] =
+			QualificationPolicy::ElapsedFrames(
+				a_transition.dispatchFrame, a_mark.frame);
+		return output;
+	}
+
+	json QualificationMilestoneEvidenceJson(
+		const QualificationMilestoneEvidence& a_evidence,
+		const QualificationTransition& a_transition)
+	{
+		return {
+			{ "presentation",
+				QualificationMilestoneMarkJson(
+					a_evidence.presentation, a_transition) },
+			{ "cleanup",
+				QualificationMilestoneMarkJson(
+					a_evidence.cleanup, a_transition) },
+			{ "strict",
+				QualificationMilestoneMarkJson(
+					a_evidence.strict, a_transition) },
+		};
+	}
+
 	json BuildQualificationReceipt(
 		const QualificationTransition& a_transition,
 		std::string_view a_outcome,
@@ -3025,7 +3277,9 @@ namespace
 		uint64_t a_terminalTick,
 		uint32_t a_terminalFrame,
 		json a_observation,
-		std::optional<std::string_view> a_terminalReason = std::nullopt)
+		std::optional<std::string_view> a_terminalReason = std::nullopt,
+		QualificationMilestone a_milestone = QualificationMilestone::Strict,
+		const QualificationMilestoneEvidence* a_milestoneEvidence = nullptr)
 	{
 		const bool satisfied = a_outcome == "stable";
 		const bool dispatched = a_transition.dispatchTick != 0;
@@ -3047,6 +3301,7 @@ namespace
 			{ "transitionId", a_transition.transitionID },
 			{ "ownerId", a_transition.ownerID },
 			{ "targetMode", a_target ? "expected" : "externally_owned_observation" },
+			{ "milestone", QualificationPolicy::GetMilestoneName(a_milestone) },
 			{ "satisfied", satisfied },
 			{ "outcome", a_outcome },
 			{ "baseline", a_transition.ready ?
@@ -3119,6 +3374,20 @@ namespace
 				receipt["foveation"] = observation["foveation"];
 			if (observation.contains("status"))
 				receipt["status"] = observation["status"];
+			for (const char* field : { "presentationStable", "cleanupDrained",
+					 "strictSatisfied", "selectedMilestoneSatisfied",
+					 "terminalFailureMask",
+					 "terminalFailureReasons", "presentationFailureMask",
+					 "cleanupFailureMask", "strictFailureMask",
+					 "presentationFailureReasons", "cleanupFailureReasons",
+					 "strictFailureReasons" }) {
+				if (observation.contains(field))
+					receipt[field] = observation[field];
+			}
+		}
+		if (a_milestoneEvidence) {
+			receipt["milestones"] = QualificationMilestoneEvidenceJson(
+				*a_milestoneEvidence, a_transition);
 		}
 		return receipt;
 	}
@@ -3606,9 +3875,11 @@ namespace
 				return error;
 			}
 			QualificationExpectedCell expectedCell;
+			QualificationMilestone milestone = QualificationMilestone::Strict;
 			std::optional<QualificationTarget> target;
 			std::optional<QualificationFoveationTarget> foveation;
 			if (!TryParseExpectedCell(a_args, expectedCell, error) ||
+				!TryParseQualificationMilestone(a_args, milestone, error) ||
 				!TryParseQualificationTarget(a_args, target, error) ||
 				!TryParseQualificationFoveationTarget(a_args, foveation, error)) {
 				return error;
@@ -3670,6 +3941,7 @@ namespace
 				timeoutMs,
 				transition.baseline.tickFrequency);
 			json lastObservation = nullptr;
+			QualificationMilestoneEvidence milestoneEvidence;
 			for (;;) {
 				const uint64_t beforeTick = QueryQualificationTick();
 				const uint32_t lastFrame = lastObservation.is_object() ?
@@ -3680,7 +3952,7 @@ namespace
 						transition, "cancelled", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						beforeTick, lastFrame, std::move(lastObservation),
-						"qualification_cancelled");
+						"qualification_cancelled", milestone, &milestoneEvidence);
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
@@ -3690,7 +3962,7 @@ namespace
 						transition, "timeout", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						beforeTick, lastFrame, std::move(lastObservation),
-						"qualification_timeout");
+						"qualification_timeout", milestone, &milestoneEvidence);
 					receipt["timing"]["timeoutMs"] = timeoutMs;
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
@@ -3704,6 +3976,12 @@ namespace
 					},
 					QualificationDispatchTimeout(
 						beforeTick, deadline, transition.baseline.tickFrequency));
+				if (observation.is_object() && !observation.contains("error")) {
+					RecordQualificationMilestoneEvidence(
+						observation, milestoneEvidence);
+					SelectQualificationMilestoneObservation(
+						observation, milestone, milestoneEvidence);
+				}
 				if (transition.cancelled->load(std::memory_order_acquire)) {
 					const uint64_t tick = QueryQualificationTick();
 					const uint32_t frame = observation.value("frame", lastFrame);
@@ -3711,7 +3989,7 @@ namespace
 						transition, "cancelled", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						tick, frame, std::move(observation),
-						"qualification_cancelled");
+						"qualification_cancelled", milestone, &milestoneEvidence);
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
@@ -3725,7 +4003,7 @@ namespace
 						transition, "error", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						tick, lastFrame, std::move(lastObservation),
-						"qualification_observation_error");
+						"qualification_observation_error", milestone, &milestoneEvidence);
 					receipt["error"] = "qualification observation failed";
 					receipt["errorCode"] = "qualification_observation_error";
 					receipt["failure"] = std::move(observation);
@@ -3742,7 +4020,8 @@ namespace
 					auto receipt = BuildQualificationReceipt(
 						transition, "stable", &expectedCell,
 						target ? &*target : nullptr, &foveation,
-						observedTick, observedFrame, std::move(observation));
+						observedTick, observedFrame, std::move(observation),
+						std::nullopt, milestone, &milestoneEvidence);
 					receipt["timing"]["timeoutMs"] = timeoutMs;
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
@@ -3753,7 +4032,7 @@ namespace
 						transition, "error", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation),
-						"qualification_terminal_error");
+						"qualification_terminal_error", milestone, &milestoneEvidence);
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
@@ -3763,7 +4042,7 @@ namespace
 						transition, "timeout", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation),
-						"qualification_timeout");
+						"qualification_timeout", milestone, &milestoneEvidence);
 					receipt["timing"]["timeoutMs"] = timeoutMs;
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
@@ -4426,7 +4705,7 @@ namespace
 		json result{
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.renderscale" },
-			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. For a server-side transition barrier, reserve a caller-owned ID and ownerId with qualification_begin, mark the server QPC immediately before the command with qualification_dispatch, dispatch exactly one COC or apply, then call qualification_wait with the same ownership pair, exact destination, optional target profile, and bounded timeout. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and returns the first mutually coherent observed profile without mutating it. qualification_cancel requires the same ownership pair and requests a terminal cancellation receipt without releasing an active waiter early. Pass expectedSessionId to stop, dlss_trace_stop, or cpu_performance_stop to refuse cleanup when the active capture is not the caller's. Pass expectedStartFrame to gpu_performance_stop as its ownership guard; it remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses return cpuPerformance.sessionId; stop retains it and reset clears it to zero. If dynamic tools are unavailable, use equivalent communityshaders.renderscale steps in devbench scenario.)" },
+			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. For a server-side transition barrier, reserve a caller-owned ID and ownerId with qualification_begin, mark the server QPC immediately before the command with qualification_dispatch, dispatch exactly one COC or apply, then call qualification_wait with the same ownership pair, exact destination, optional target profile, optional strict/presentation/cleanup milestone, and bounded timeout. Strict remains the default and every receipt records first presentation, cleanup, and strict timestamps. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and returns the first mutually coherent observed profile without mutating it. qualification_cancel requires the same ownership pair and requests a terminal cancellation receipt without releasing an active waiter early. Pass expectedSessionId to stop, dlss_trace_stop, or cpu_performance_stop to refuse cleanup when the active capture is not the caller's. Pass expectedStartFrame to gpu_performance_stop as its ownership guard; it remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses return cpuPerformance.sessionId; stop retains it and reset clears it to zero. If dynamic tools are unavailable, use equivalent communityshaders.renderscale steps in devbench scenario.)" },
 			{ "actions", RenderScaleActions() },
 		};
 		result["usage"] =
@@ -4436,7 +4715,9 @@ namespace
 			"startPerformanceTelemetry binds CPU/GPU counters before it. Omit "
 			"target when an external controller owns profile selection; "
 			"qualification_wait then observes the coherent selected profile without "
-			"mutating it.";
+			"mutating it. The optional milestone defaults to strict; presentation "
+			"can return before nonblocking cleanup, while every receipt retains "
+			"first presentation, cleanup, and strict timing.";
 		BuildProvenance::AttachProducer(result);
 		const auto serialized = result.dump();
 		a_write(a_sink, serialized.c_str());
@@ -4474,7 +4755,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"json({"description":"Control and inspect CSX VR render-scale, including a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Qualification deadline measured from qualification_dispatch on the server QPC clock."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
+			R"json({"description":"Control and inspect CSX VR render-scale, including a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, a strict/presentation/cleanup milestone that defaults to strict, and a timeout that defaults to 120000ms and cannot exceed it. Every receipt preserves the first server-owned presentation, cleanup, and strict QPC/frame observations. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Qualification deadline measured from qualification_dispatch on the server QPC clock."},"milestone":{"type":"string","enum":["strict","presentation","cleanup"],"default":"strict","description":"qualification_wait completion milestone. strict preserves the original presentation-plus-cleanup contract; presentation returns at the first proven current stereo contract; cleanup requires that presentation was observed and deferred post-load cleanup, trim, and retirement are drained."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
 		static const std::string runtimeDiagnosticDescriptor = [&] {
 			auto descriptor = json::parse(diagnosticDescriptor);
 			descriptor["inputSchema"]["properties"]["cocCellEditorId"] = {

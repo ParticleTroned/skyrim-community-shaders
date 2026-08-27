@@ -17,6 +17,43 @@ namespace VRRenderScaleQualificationPolicy
 		DLSS
 	};
 
+	enum class Milestone : std::uint8_t
+	{
+		Strict,
+		Presentation,
+		Cleanup
+	};
+
+	[[nodiscard]] constexpr std::string_view GetMilestoneName(
+		Milestone a_milestone) noexcept
+	{
+		switch (a_milestone) {
+		case Milestone::Presentation:
+			return "presentation";
+		case Milestone::Cleanup:
+			return "cleanup";
+		default:
+			return "strict";
+		}
+	}
+
+	[[nodiscard]] constexpr bool IsMilestoneName(
+		std::string_view a_name) noexcept
+	{
+		return a_name == "strict" || a_name == "presentation" ||
+		       a_name == "cleanup";
+	}
+
+	[[nodiscard]] constexpr Milestone ParseMilestoneName(
+		std::string_view a_name) noexcept
+	{
+		if (a_name == "presentation")
+			return Milestone::Presentation;
+		if (a_name == "cleanup")
+			return Milestone::Cleanup;
+		return Milestone::Strict;
+	}
+
 	struct TargetProfile
 	{
 		Method method = Method::Unknown;
@@ -428,6 +465,43 @@ namespace VRRenderScaleQualificationPolicy
 		kFailureDiagnosticDelta = 1ull << 30,
 	};
 
+	struct CleanupOnlyRecoveryFacts
+	{
+		bool active = false;
+		bool cleanupDeferredUntilStable = false;
+		bool relatchAdmitted = false;
+		bool ownerValid = false;
+		bool stableOwnerMatches = false;
+		bool controllerActive = false;
+		bool stableValid = false;
+		bool timedAttemptInProgress = false;
+		bool vendorTeardownIdle = false;
+		bool vendorTeardownFallbackRequested = false;
+		bool recoveryGatePending = false;
+		bool postLoadResetPending = false;
+		bool emergencyRecoveryRequested = false;
+		bool physicalMutationClear = false;
+	};
+
+	[[nodiscard]] constexpr bool IsPresentationSafeCleanupOnlyRecovery(
+		const CleanupOnlyRecoveryFacts& a_facts) noexcept
+	{
+		return a_facts.active &&
+		       a_facts.cleanupDeferredUntilStable &&
+		       a_facts.relatchAdmitted &&
+		       a_facts.ownerValid &&
+		       a_facts.stableOwnerMatches &&
+		       a_facts.controllerActive &&
+		       a_facts.stableValid &&
+		       !a_facts.timedAttemptInProgress &&
+		       a_facts.vendorTeardownIdle &&
+		       !a_facts.vendorTeardownFallbackRequested &&
+		       !a_facts.recoveryGatePending &&
+		       !a_facts.postLoadResetPending &&
+		       !a_facts.emergencyRecoveryRequested &&
+		       a_facts.physicalMutationClear;
+	}
+
 	struct StabilityFacts
 	{
 		bool stressSession = false;
@@ -444,6 +518,8 @@ namespace VRRenderScaleQualificationPolicy
 		bool workGateClear = false;
 		bool relatchClear = false;
 		bool recoveryClear = false;
+		bool presentationRecoveryClear = false;
+		bool postLoadCleanupDrained = false;
 		bool memoryTrimClear = false;
 		bool retirementClear = false;
 		bool physicalMutationClear = false;
@@ -463,7 +539,7 @@ namespace VRRenderScaleQualificationPolicy
 		bool nativePresentationStable = false;
 	};
 
-	[[nodiscard]] constexpr std::uint64_t EvaluateStability(
+	[[nodiscard]] constexpr std::uint64_t EvaluatePresentationStability(
 		const TargetProfile& a_target,
 		const StabilityFacts& a_facts) noexcept
 	{
@@ -485,9 +561,7 @@ namespace VRRenderScaleQualificationPolicy
 		require(a_facts.controllerSettled, kFailureController);
 		require(a_facts.workGateClear, kFailureWorkGate);
 		require(a_facts.relatchClear, kFailureRelatch);
-		require(a_facts.recoveryClear, kFailureRecovery);
-		require(a_facts.memoryTrimClear, kFailureMemoryTrim);
-		require(a_facts.retirementClear, kFailureRetirement);
+		require(a_facts.presentationRecoveryClear, kFailureRecovery);
 		require(a_facts.physicalMutationClear, kFailurePhysicalMutation);
 		require(a_facts.terminalClear, kFailureTerminal);
 		require(a_facts.foveationSettingsMatch, kFailureFoveationSettings);
@@ -510,5 +584,67 @@ namespace VRRenderScaleQualificationPolicy
 			require(a_facts.nativePresentationStable, kFailureNativePresentation);
 		}
 		return failures;
+	}
+
+	[[nodiscard]] constexpr std::uint64_t EvaluateCleanupDrain(
+		const StabilityFacts& a_facts) noexcept
+	{
+		std::uint64_t failures = kFailureNone;
+		if (!a_facts.postLoadCleanupDrained)
+			failures |= static_cast<std::uint64_t>(kFailureRecovery);
+		if (!a_facts.memoryTrimClear)
+			failures |= static_cast<std::uint64_t>(kFailureMemoryTrim);
+		if (!a_facts.retirementClear)
+			failures |= static_cast<std::uint64_t>(kFailureRetirement);
+		return failures;
+	}
+
+	[[nodiscard]] constexpr std::uint64_t EvaluateStrictStability(
+		const TargetProfile& a_target,
+		const StabilityFacts& a_facts) noexcept
+	{
+		auto strictFacts = a_facts;
+		strictFacts.presentationRecoveryClear = a_facts.recoveryClear;
+		return EvaluatePresentationStability(a_target, strictFacts) |
+		       EvaluateCleanupDrain(a_facts);
+	}
+
+	[[nodiscard]] constexpr std::uint64_t EvaluateMilestone(
+		Milestone a_milestone,
+		const TargetProfile& a_target,
+		const StabilityFacts& a_facts) noexcept
+	{
+		switch (a_milestone) {
+		case Milestone::Presentation:
+			return EvaluatePresentationStability(a_target, a_facts);
+		case Milestone::Cleanup:
+			return EvaluateCleanupDrain(a_facts);
+		default:
+			return EvaluateStrictStability(a_target, a_facts);
+		}
+	}
+
+	[[nodiscard]] constexpr bool IsSelectedMilestoneSatisfied(
+		Milestone a_milestone,
+		bool a_presentationStable,
+		bool a_cleanupDrained,
+		bool a_presentationObserved) noexcept
+	{
+		switch (a_milestone) {
+		case Milestone::Presentation:
+			return a_presentationStable;
+		case Milestone::Cleanup:
+			return a_presentationObserved && a_cleanupDrained;
+		default:
+			return a_presentationStable && a_cleanupDrained;
+		}
+	}
+
+	// Preserve the original strict qualification contract for existing callers.
+	[[nodiscard]] constexpr std::uint64_t EvaluateStability(
+		const TargetProfile& a_target,
+		const StabilityFacts& a_facts) noexcept
+	{
+		return EvaluateStrictStability(a_target, a_facts);
 	}
 }

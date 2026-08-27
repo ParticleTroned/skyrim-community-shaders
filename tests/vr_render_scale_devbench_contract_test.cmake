@@ -76,6 +76,7 @@ foreach(_required_text IN ITEMS
     "expectedStartFrame"
     "expectedCellEditorId"
     "timeoutMs"
+    "milestone"
     "target"
     "foveation"
     "peripheryTAAEnable"
@@ -95,6 +96,24 @@ if(_timeout_error OR NOT _timeout_default EQUAL 120000)
         "Render-scale qualification timeout default is invalid: ${_timeout_error}"
     )
 endif()
+
+string(JSON _milestone_default ERROR_VARIABLE _milestone_error
+    GET "${_descriptor}" inputSchema properties milestone default
+)
+if(_milestone_error OR NOT _milestone_default STREQUAL "strict")
+    message(FATAL_ERROR
+        "Render-scale qualification milestone default is invalid: ${_milestone_error}"
+    )
+endif()
+
+foreach(_milestone IN ITEMS strict presentation cleanup)
+    string(FIND "${_descriptor}" "\"${_milestone}\"" _milestone_position)
+    if(_milestone_position EQUAL -1)
+        message(FATAL_ERROR
+            "Render-scale qualification milestone is missing: ${_milestone}"
+        )
+    endif()
+endforeach()
 
 string(JSON _target_description ERROR_VARIABLE _target_description_error
     GET "${_descriptor}" inputSchema properties target description
@@ -190,8 +209,21 @@ endif()
 
 foreach(_required_behavior IN ITEMS
     "QualificationPolicy::SaturatingDeadlineTick"
-	"QualificationPolicy::EvaluateStability"
-	"QualificationPolicy::ExactObservationTarget"
+    "QualificationPolicy::EvaluatePresentationStability"
+    "QualificationPolicy::EvaluateCleanupDrain"
+    "QualificationPolicy::EvaluateStrictStability"
+    "QualificationPolicy::IsPresentationSafeCleanupOnlyRecovery"
+    "a_milestone = QualificationMilestone::Strict"
+    "RecordQualificationMilestoneEvidence"
+    "SelectQualificationMilestoneObservation"
+    "presentation_milestone_not_observed"
+    "presentationRecoveryClear"
+    "cleanupOnlyPostLoadRecovery"
+    "postLoadCleanupDrained"
+    "terminalFailureMask"
+    "terminalFailureReasons"
+    "QualificationMilestoneEvidenceJson"
+    "QualificationPolicy::ExactObservationTarget"
 	"QualificationPolicy::HasCoherentPresentationFrames"
     "QualificationPolicy::HasRequiredPresentationHistory"
     "QualificationPolicy::IsFoveationInvariantViolation"

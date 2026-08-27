@@ -35,6 +35,8 @@ namespace
 			.workGateClear = true,
 			.relatchClear = true,
 			.recoveryClear = true,
+			.presentationRecoveryClear = true,
+			.postLoadCleanupDrained = true,
 			.memoryTrimClear = true,
 			.retirementClear = true,
 			.physicalMutationClear = true,
@@ -262,6 +264,108 @@ namespace
 				   true, 100, 111, 111, 51, 51, 110, 50);
 	}
 
+	constexpr bool CoversMilestoneSplit()
+	{
+		if (!IsMilestoneName("strict") ||
+			!IsMilestoneName("presentation") ||
+			!IsMilestoneName("cleanup") ||
+			IsMilestoneName("other") ||
+			ParseMilestoneName("strict") != Milestone::Strict ||
+			ParseMilestoneName("presentation") != Milestone::Presentation ||
+			ParseMilestoneName("cleanup") != Milestone::Cleanup ||
+			GetMilestoneName(Milestone::Strict) != "strict" ||
+			GetMilestoneName(Milestone::Presentation) != "presentation" ||
+			GetMilestoneName(Milestone::Cleanup) != "cleanup") {
+			return false;
+		}
+
+		auto facts = CommonStableFacts();
+		facts.apiActiveContract = true;
+		facts.physicalActiveContract = true;
+		facts.presentationPhaseStable = true;
+		facts.fidelityStable = true;
+		facts.vendorPresentationStable = true;
+		facts.lifecycleStable = true;
+		if (EvaluatePresentationStability(ActiveDLSS(), facts) != kFailureNone ||
+			EvaluateCleanupDrain(facts) != kFailureNone ||
+			EvaluateStrictStability(ActiveDLSS(), facts) != kFailureNone ||
+			EvaluateStability(ActiveDLSS(), facts) != kFailureNone) {
+			return false;
+		}
+
+		facts.postLoadCleanupDrained = false;
+		if ((EvaluateCleanupDrain(facts) &
+				 static_cast<std::uint64_t>(kFailureRecovery)) == 0) {
+			return false;
+		}
+		facts.postLoadCleanupDrained = true;
+		facts.memoryTrimClear = false;
+		facts.retirementClear = false;
+		const auto cleanupFailures =
+			static_cast<std::uint64_t>(kFailureMemoryTrim) |
+			static_cast<std::uint64_t>(kFailureRetirement);
+		if (EvaluatePresentationStability(ActiveDLSS(), facts) != kFailureNone ||
+			EvaluateCleanupDrain(facts) != cleanupFailures ||
+			EvaluateStrictStability(ActiveDLSS(), facts) != cleanupFailures ||
+			EvaluateMilestone(Milestone::Presentation, ActiveDLSS(), facts) !=
+				kFailureNone ||
+			EvaluateMilestone(Milestone::Cleanup, ActiveDLSS(), facts) !=
+				cleanupFailures) {
+			return false;
+		}
+
+		facts.memoryTrimClear = true;
+		facts.retirementClear = true;
+		facts.recoveryClear = false;
+		facts.presentationRecoveryClear = true;
+		if (EvaluatePresentationStability(ActiveDLSS(), facts) != kFailureNone ||
+			(EvaluateStrictStability(ActiveDLSS(), facts) &
+				static_cast<std::uint64_t>(kFailureRecovery)) == 0) {
+			return false;
+		}
+
+		CleanupOnlyRecoveryFacts cleanupOnly{
+			.active = true,
+			.cleanupDeferredUntilStable = true,
+			.relatchAdmitted = true,
+			.ownerValid = true,
+			.stableOwnerMatches = true,
+			.controllerActive = true,
+			.stableValid = true,
+			.vendorTeardownIdle = true,
+			.physicalMutationClear = true,
+		};
+		if (!IsPresentationSafeCleanupOnlyRecovery(cleanupOnly))
+			return false;
+		cleanupOnly.timedAttemptInProgress = true;
+		if (IsPresentationSafeCleanupOnlyRecovery(cleanupOnly))
+			return false;
+		cleanupOnly.timedAttemptInProgress = false;
+		cleanupOnly.physicalMutationClear = false;
+		if (IsPresentationSafeCleanupOnlyRecovery(cleanupOnly))
+			return false;
+
+		facts.recoveryClear = true;
+		facts.presentationRecoveryClear = true;
+		facts.physicalMutationClear = false;
+		if ((EvaluatePresentationStability(ActiveDLSS(), facts) &
+				 static_cast<std::uint64_t>(kFailurePhysicalMutation)) == 0 ||
+			EvaluateCleanupDrain(facts) != kFailureNone) {
+			return false;
+		}
+
+		return IsSelectedMilestoneSatisfied(
+				   Milestone::Presentation, true, false, false) &&
+		       !IsSelectedMilestoneSatisfied(
+				   Milestone::Cleanup, false, true, false) &&
+		       IsSelectedMilestoneSatisfied(
+				   Milestone::Cleanup, false, true, true) &&
+		       !IsSelectedMilestoneSatisfied(
+				   Milestone::Strict, true, false, true) &&
+		       IsSelectedMilestoneSatisfied(
+				   Milestone::Strict, true, true, true);
+	}
+
 	constexpr bool CoversTimeoutMath()
 	{
 		constexpr std::uint64_t frequency = 10'000'000;
@@ -296,6 +400,7 @@ namespace
 	static_assert(CoversNestedPropertyPolicy());
 	static_assert(CoversTerminalDiagnosticPolicy());
 	static_assert(CoversCoherentPresentationFrames());
+	static_assert(CoversMilestoneSplit());
 	static_assert(CoversTimeoutMath());
 }
 

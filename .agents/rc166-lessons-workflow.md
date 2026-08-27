@@ -1,26 +1,35 @@
 # RC166 Lessons Stacked-PR Workflow
 
-This file governs work prepared on or above `codex/vr-renderscale-RC166lessons`.
-Read it together with every applicable `AGENTS.md` and the repository's existing AI/PR documents before changing code.
+This file governs cumulative work on
+`codex/vr-renderscale-RC166lessons-integrated-v2`. Read it together with every
+applicable `AGENTS.md` and the repository's existing AI/PR documents before
+changing code.
 
 ## Scope and series order
 
-Prepare the RC166-lessons series in this order:
+The branch starts from the complete current `main-VR`, including the merged
+PR49 OpenVR Submit resource lease. Add the remaining RC166 lessons in this
+order:
 
-1. OpenVR Submit resource lease
-2. Qualification milestones (`presentationStable` versus `cleanupDrained`)
-3. Temporal depth-culling measurement
-4. Render-scale memory high-water measurement
-5. Replacement-mutation versus current-presentation audit/hardening
-6. Render-scale authority/liveness map and executable invariants
-7. Render-target publication dependency/timing audit
-8. Never-submitted generation retirement provenance
-9. Hidden-area-mask dispatch-admission audit
-10. Render-scale preparation timing and safe asynchronous staging
-11. PR43 GPU-work regression guards
-12. Reverted PR47/PR48 authority-design guardrails
+1. Qualification milestones (`presentationStable` versus `cleanupDrained`)
+2. Render-scale memory high-water measurement
+3. Replacement-mutation versus current-presentation audit/hardening
+4. Render-scale authority/liveness map and executable invariants
+5. Render-target publication dependency/timing audit
+6. Never-submitted generation retirement provenance
+7. Hidden-area-mask dispatch-admission audit
+8. Render-scale preparation timing and safe asynchronous staging
+9. PR43 GPU-work regression guards
+10. Reverted PR47/PR48 authority-design guardrails
 
-Do not start a later item until the preceding item has a reviewable PR and its adversarial review is complete. Later branches must be based on the reviewed head of the preceding item so the final series head contains the complete integration build.
+The former temporal depth-culling measurement item is explicitly excluded. The
+current temporal recovery implementation helped recover performance and must not
+be changed or instrumented by this series without new runtime evidence.
+
+Complete and adversarially review each concern before beginning the next. Keep
+separable implementation, diagnostics, tests, and documentation in separate
+commits. The branch is cumulative: its final head must contain current
+`main-VR`, PR49, and every accepted concern above in order.
 
 ## Before editing
 

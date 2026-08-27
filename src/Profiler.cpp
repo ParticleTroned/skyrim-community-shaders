@@ -281,6 +281,7 @@ void Profiler::Release()
 	results.clear();
 	knownTimers.clear();
 	knownTimerIndex.clear();
+	collectedDetailedCycles = 0;
 	activeCpuTimers.clear();
 	completedCpuTimers.clear();
 	profiledPassGpuTotalHistory = {};
@@ -371,6 +372,7 @@ void Profiler::ClearTimers()
 	results.clear();
 	knownTimers.clear();
 	knownTimerIndex.clear();
+	collectedDetailedCycles = 0;
 	activeCpuTimers.clear();
 	completedCpuTimers.clear();
 	profiledPassGpuTotalHistory = {};
@@ -412,10 +414,7 @@ void Profiler::ClearTimersForFeature(const std::string& featureName)
 		}
 	}
 
-	knownTimerIndex.clear();
-	for (size_t i = 0; i < knownTimers.size(); i++) {
-		knownTimerIndex[knownTimers[i].name] = i;
-	}
+	RebuildTimerIndex();
 }
 
 void Profiler::BeginFrame()
@@ -871,6 +870,8 @@ bool Profiler::CollectResults()
 
 	if (frame.acceptedPresent) {
 		if (frame.captureMode == CaptureMode::DetailedPasses) {
+			IncrementSaturating(collectedDetailedCycles);
+
 			for (const auto& [name, active] : activeTimers) {
 				auto& known = GetOrCreateTimer(name);
 				if (active.hasGpu) {
@@ -881,6 +882,8 @@ bool Profiler::CollectResults()
 					known.hasCpu = true;
 					known.cpu.PushSample(active.cpuMs);
 				}
+				if (active.hasGpu || active.hasCpu)
+					known.lastSampleCycle = collectedDetailedCycles;
 			}
 
 			const bool cpuFrameComplete =
@@ -930,6 +933,7 @@ bool Profiler::CollectResults()
 				profiledPassCpuTotalHistory.PushSample(
 					activeCpuTotalMs);
 			}
+			RetireStaleTimers();
 			RebuildResults(&activeTimers);
 		}
 
@@ -964,6 +968,24 @@ Profiler::KnownTimer& Profiler::GetOrCreateTimer(const std::string& name)
 		knownTimers.push_back(std::move(kt));
 	}
 	return knownTimers[it->second];
+}
+
+void Profiler::RetireStaleTimers()
+{
+	const size_t previousSize = knownTimers.size();
+	std::erase_if(knownTimers, [this](const KnownTimer& known) {
+		return collectedDetailedCycles >= known.lastSampleCycle &&
+		       collectedDetailedCycles - known.lastSampleCycle >= kTimerRetireCycles;
+	});
+	if (knownTimers.size() != previousSize)
+		RebuildTimerIndex();
+}
+
+void Profiler::RebuildTimerIndex()
+{
+	knownTimerIndex.clear();
+	for (size_t i = 0; i < knownTimers.size(); ++i)
+		knownTimerIndex[knownTimers[i].name] = i;
 }
 
 void Profiler::StoreCompletedCpuTimers(FrameQueries& frame)

@@ -18,6 +18,9 @@ public:
 	// render thread or immediately dropping the next whole-frame capture.
 	static constexpr uint32_t kFrameLatency = 8;
 	static constexpr uint32_t kHistorySize = 300;
+	// Retain intermittent passes while removing entries that remain absent across
+	// a sustained detailed-profiling capture.
+	static constexpr uint64_t kTimerRetireCycles = 60;
 	// Longer accepted-Present gaps are treated as a timing-source discontinuity
 	// (pause, loading, or alt-tab), not as an ordinary in-scene hitch sample.
 	static constexpr float kMaxPresentIntervalMs = 1000.0f;
@@ -290,9 +293,11 @@ private:
 		RollingHistory cpu;
 		bool hasGpu = false;
 		bool hasCpu = false;
+		uint64_t lastSampleCycle = 0;
 	};
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
+	uint64_t collectedDetailedCycles = 0;
 	std::vector<CpuTimer> activeCpuTimers;
 	std::vector<CompletedCpuTimer> completedCpuTimers;
 	RollingHistory profiledPassGpuTotalHistory;
@@ -327,6 +332,8 @@ private:
 	bool CollectResults();
 	void PromoteRequestedCapture();
 	KnownTimer& GetOrCreateTimer(const std::string& name);
+	void RetireStaleTimers();
+	void RebuildTimerIndex();
 	void RebuildResults(const std::unordered_map<std::string, ActiveTimerData>* activeTimers);
 	void StoreCompletedCpuTimers(FrameQueries& frame);
 	void ResetFrameState(FrameQueries& frame);

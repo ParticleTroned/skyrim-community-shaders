@@ -201,6 +201,26 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
     readers_since_write: dict[str, dict[str, int]] = {}
     hazard_adjustment_count = 0
 
+    def event_source_refs(event: dict[str, Any], observation_id: str | None = None) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = [{"kind": "capture-event", "value": event["sequence"]}]
+        if observation_id:
+            refs.append({"kind": "observation", "value": observation_id})
+        refs.extend({"kind": "shader-manifest", "value": value} for value in event.get("manifestRefs", []))
+        refs.extend({"kind": "engine-map", "value": value} for value in event.get("engineRefs", []))
+        return refs
+
+    def observed_identity_node(
+        event: dict[str, Any], observation_id: str | None, kind: str, label: str,
+        attributes: dict[str, Any] | None = None,
+    ) -> str | None:
+        if not observation_id:
+            return None
+        return graph.node(
+            observation_id, kind, label, event["sequence"],
+            attributes if attributes is not None else event.get("payload", {}),
+            event_source_refs(event, observation_id),
+        )
+
     def resource_node(resource_id: str) -> str | None:
         resource = resources.get(resource_id)
         if not resource:
@@ -319,7 +339,87 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
         cpu_frame = event.get("frame", {}).get("cpuFrame")
         if isinstance(cpu_frame, int):
             last_event_by_frame[cpu_frame] = event
-        if event_type == "resource-observed":
+        if event_type == "shader-observed":
+            shader_id = payload.get("shaderObservationId")
+            observed_identity_node(
+                event, shader_id, "engine-shader",
+                payload.get("fxpFilename") or payload.get("imageSpaceName") or shader_id or "engine shader",
+            )
+        elif event_type == "stage-shader-observed":
+            stage_shader_id = payload.get("stageShaderObservationId")
+            observed_identity_node(
+                event, stage_shader_id, "pipeline-state",
+                f"{payload.get('stage', 'unknown')} shader {stage_shader_id}",
+                {**payload, "pipelineRole": "stage-shader"},
+            )
+        elif event_type == "render-pass-enter":
+            render_pass_id = event.get("scopes", {}).get("renderPass")
+            observed_identity_node(
+                event, render_pass_id, "render-pass",
+                f"render pass {payload.get('passEnum', payload.get('technique', 'unknown'))}",
+            )
+        elif event_type == "technique-begin":
+            technique_id = event.get("scopes", {}).get("technique")
+            technique_node = observed_identity_node(
+                event, technique_id, "technique",
+                f"technique {payload.get('vertexDescriptor', 'unknown')}/{payload.get('pixelDescriptor', 'unknown')}",
+            )
+            render_pass_id = event.get("scopes", {}).get("renderPass")
+            if technique_node and render_pass_id:
+                render_pass_node = observed_identity_node(
+                    event, render_pass_id, "render-pass", f"render pass {render_pass_id}",
+                    {"identityDeclaredByScope": True},
+                )
+                graph.edge(
+                    "selects", render_pass_node, technique_node, [sequence],
+                    "The technique began inside this exact capture-local render-pass scope.",
+                )
+            shader_id = payload.get("shaderObservationId")
+            if technique_node and shader_id:
+                shader_node = observed_identity_node(
+                    event, shader_id, "engine-shader", f"engine shader {shader_id}",
+                    {"identityDeclaredByReference": True},
+                )
+                graph.edge(
+                    "selects", shader_node, technique_node, [sequence],
+                    "The engine shader observation selected this descriptor pair at the technique boundary.",
+                )
+        elif event_type == "technique-resolved":
+            technique_id = event.get("scopes", {}).get("technique")
+            technique_node = observed_identity_node(
+                event, technique_id, "technique", f"technique {technique_id}",
+                {"identityDeclaredByScope": True},
+            )
+            for stage in ("vertex", "pixel"):
+                stage_shader_id = payload.get(f"{stage}ShaderObservationId")
+                if technique_node and stage_shader_id:
+                    stage_node = observed_identity_node(
+                        event, stage_shader_id, "pipeline-state",
+                        f"{stage} shader {stage_shader_id}",
+                        {"pipelineRole": "stage-shader", "stage": stage, "identityDeclaredByReference": True},
+                    )
+                    graph.edge(
+                        "selects", technique_node, stage_node, [sequence],
+                        "Technique resolution selected this exact capture-local stage-shader observation.",
+                        {"stage": stage, "route": payload.get(f"{stage}Route")},
+                    )
+        elif event_type == "geometry-setup-begin":
+            geometry_id = event.get("scopes", {}).get("geometry")
+            geometry_node = observed_identity_node(
+                event, geometry_id, "geometry",
+                f"geometry {payload.get('geometryPointer', geometry_id)}",
+            )
+            render_pass_id = event.get("scopes", {}).get("renderPass")
+            if geometry_node and render_pass_id:
+                render_pass_node = observed_identity_node(
+                    event, render_pass_id, "render-pass", f"render pass {render_pass_id}",
+                    {"identityDeclaredByScope": True},
+                )
+                graph.edge(
+                    "uses", render_pass_node, geometry_node, [sequence],
+                    "Geometry setup occurred inside this exact capture-local render-pass scope.",
+                )
+        elif event_type == "resource-observed":
             resource_id = payload.get("resourceObservationId")
             if resource_id:
                 resources[resource_id] = {"sequence": sequence, "payload": payload}
@@ -503,8 +603,44 @@ def derive(manifest: dict[str, Any], events: list[dict[str, Any]]) -> Graph:
                 execution_attributes["destinationSubresource"] = payload.get("destinationSubresource")
             execution = graph.node(
                 f"event-{sequence}", execution_kind, f"{operation} at event {sequence}", sequence,
-                execution_attributes,
+                execution_attributes, event_source_refs(event),
             )
+
+            if event_type in {"draw", "dispatch"}:
+                scopes = event.get("scopes", {})
+                scope_kinds = (
+                    ("renderPass", "render-pass", "draws"),
+                    ("technique", "technique", "draws"),
+                    ("geometry", "geometry", "draws"),
+                )
+                for scope_name, node_kind, edge_type in scope_kinds:
+                    scope_id = scopes.get(scope_name)
+                    if scope_id:
+                        scope_node = observed_identity_node(
+                            event, scope_id, node_kind, f"{scope_name} {scope_id}",
+                            {"identityDeclaredByScope": True},
+                        )
+                        graph.edge(
+                            edge_type, scope_node, execution, [sequence],
+                            f"The execution event carried this exact active {scope_name} scope.",
+                        )
+                stage_fields = (
+                    ("vertex", payload.get("vertexShaderObservationId")),
+                    ("pixel", payload.get("pixelShaderObservationId")),
+                    ("compute", payload.get("computeShaderObservationId")),
+                )
+                for stage, stage_shader_id in stage_fields:
+                    if stage_shader_id:
+                        stage_node = observed_identity_node(
+                            event, stage_shader_id, "pipeline-state",
+                            f"{stage} shader {stage_shader_id}",
+                            {"pipelineRole": "stage-shader", "stage": stage, "identityDeclaredByReference": True},
+                        )
+                        graph.edge(
+                            "binds", stage_node, execution, [sequence],
+                            "The execution payload names this exact bound stage-shader observation.",
+                            {"stage": stage},
+                        )
 
             read_views: list[tuple[str, str, int]] = []
             write_views: list[tuple[str, str, int]] = []
@@ -992,10 +1128,10 @@ def main() -> int:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
             inputs.append({"kind": kind, "path": str(path), "sha256": sha256(path), "schemaMajor": int(data.get("schema", {}).get("major", 1))})
     output = {
-        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 3, "producerVersion": "resource-versions-1"},
+        "schema": {"name": "csx.derived-render-graph", "major": 1, "minor": 3, "producerVersion": "semantic-resource-graph-1"},
         "reportId": f"render-graph-{manifest['captureId'].removeprefix('capture-')}",
         "generatedAtUtc": manifest.get("createdAtUtc", "1970-01-01T00:00:00Z"),
-        "generatedBy": {"name": "csx-render-map-join", "version": "0.4.0", "gitCommit": git_commit(repo)},
+        "generatedBy": {"name": "csx-render-map-join", "version": "0.5.0", "gitCommit": git_commit(repo)},
         "inputs": inputs,
         "nodes": graph.nodes,
         "edges": graph.edges,
@@ -1010,6 +1146,7 @@ def main() -> int:
             "csx.graphAcyclic": True,
             "csx.deferredContextCoverage": False,
             "csx.vrEyeAttribution": graph.eye_attribution_observed,
+            "csx.semanticIdentityProjection": True,
         },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

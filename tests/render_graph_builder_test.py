@@ -72,7 +72,7 @@ def main() -> int:
         envelope(11, "resource-flow", {"schema": "resource-flow-v1", "operation": "update-subresource", "sourceResourceObservationId": None, "destinationResourceObservationId": "obs-resource-1-g1", "sourceSubresource": 0, "destinationSubresource": 0}),
     ]
     graph = build_graph(tool, manifest, hazard_events)
-    assert graph["schema"]["producerVersion"] == "resource-versions-1"
+    assert graph["schema"]["producerVersion"] == "semantic-resource-graph-1"
     assert len(graph["nodes"]) == 12, graph["nodes"]
     assert [edge["type"] for edge in graph["edges"]].count("reads") == 2
     assert [edge["type"] for edge in graph["edges"]].count("writes") == 4
@@ -150,6 +150,38 @@ def main() -> int:
     unmatched_graph = build_graph(tool, manifest, unmatched_events)
     assert unmatched_graph["decisionWindows"][0]["result"] == "not-proven"
     assert unmatched_graph["decisionWindows"][0]["eyeCoverage"]["result"] == "not-proven"
+
+    semantic_events = [
+        envelope(0, "shader-observed", {"schema": "shader-observation-v1", "shaderObservationId": "obs-shader-1-g1", "shaderPointer": "0x10", "pointerGeneration": 1, "shaderType": 6, "fxpFilename": "Lighting", "imageSpaceName": None, "definesSuffix": "ABC", "identityDetailsAvailable": True}),
+        envelope(1, "render-pass-enter", {"schema": "render-pass-boundary-v1", "renderPassPointer": "0x11", "geometryPointer": "0x12", "passEnum": 33, "technique": 33, "renderFlags": 1, "alphaTest": False}),
+        envelope(2, "technique-begin", {"schema": "technique-boundary-v2", "shaderObservationId": "obs-shader-1-g1", "shaderPointer": "0x10", "shaderType": 6, "callerRva": "0x1337D7B", "vertexDescriptor": 1, "pixelDescriptor": 2, "skipPixelShader": False}),
+        envelope(3, "stage-shader-observed", {"schema": "stage-shader-observation-v1", "stageShaderObservationId": "obs-vertex-shader-2-g1", "stage": "vertex", "d3dObjectPointer": "0x13", "wrapperPointer": "0x14", "pointerGeneration": 1, "wrapperDescriptor": 1, "bytecodeSize": 32, "bytecodeSha256": "A" * 64, "cachePath": "ShaderCache/Lighting/1.vso", "identityDetailsAvailable": True}),
+        envelope(4, "stage-shader-observed", {"schema": "stage-shader-observation-v1", "stageShaderObservationId": "obs-pixel-shader-3-g1", "stage": "pixel", "d3dObjectPointer": "0x15", "wrapperPointer": "0x16", "pointerGeneration": 1, "wrapperDescriptor": 2, "bytecodeSize": 32, "bytecodeSha256": "B" * 64, "cachePath": "ShaderCache/Lighting/2.pso", "identityDetailsAvailable": True}),
+        envelope(5, "technique-resolved", {"schema": "technique-resolution-v1", "inputVertexDescriptor": 1, "inputPixelDescriptor": 2, "resolvedVertexDescriptor": 1, "resolvedPixelDescriptor": 2, "vertexShaderObservationId": "obs-vertex-shader-2-g1", "pixelShaderObservationId": "obs-pixel-shader-3-g1", "vertexRoute": "csx-cache", "pixelRoute": "csx-cache", "shaderFound": True, "skipPixelShader": False}),
+        envelope(6, "geometry-setup-begin", {"schema": "geometry-boundary-v1", "geometryPointer": "0x12", "renderPassPointer": "0x11", "shaderPointer": "0x10", "shaderType": 6, "passEnum": 33, "renderFlags": 1}),
+        envelope(7, "draw", {"schema": "draw-call-v2", "operation": "draw-indexed", "immediateContextPointer": "0x17", "vertexShaderObservationId": "obs-vertex-shader-2-g1", "pixelShaderObservationId": "obs-pixel-shader-3-g1", "targetBindingObservationId": None, "arguments": {"indexCount": 36, "startIndexLocation": 0, "baseVertexLocation": 0}}),
+    ]
+    for event in semantic_events:
+        if event["sequence"] >= 1:
+            event["scopes"]["renderPass"] = "obs-render-pass-4-g1"
+        if event["type"] in {"technique-begin", "technique-resolved", "draw"}:
+            event["scopes"]["technique"] = "obs-technique-5-g1"
+        if event["type"] in {"geometry-setup-begin", "draw"}:
+            event["scopes"]["geometry"] = "obs-geometry-6-g1"
+    semantic_graph = build_graph(tool, manifest, semantic_events)
+    kinds = [node["kind"] for node in semantic_graph["nodes"]]
+    assert kinds.count("engine-shader") == 1
+    assert kinds.count("render-pass") == 1
+    assert kinds.count("technique") == 1
+    assert kinds.count("pipeline-state") == 2
+    assert kinds.count("geometry") == 1
+    assert kinds.count("draw") == 1
+    edge_types = [edge["type"] for edge in semantic_graph["edges"]]
+    assert edge_types.count("selects") == 4
+    assert edge_types.count("uses") == 1
+    assert edge_types.count("draws") == 3
+    assert edge_types.count("binds") == 2
+    assert semantic_graph["extensions"]["csx.graphAcyclic"] is True
     print("Render graph builder test passed")
     return 0
 

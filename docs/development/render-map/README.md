@@ -136,7 +136,12 @@ now provide resource-and-bounds eye attribution. Earlier draws acquire an eye
 label only through a proven resource-flow path; a combined stereo draw may
 legitimately resolve to `both`.
 The resource-flow joiner now produces a genuine bounded immediate-context
-execution/resource graph; it is not yet a complete semantic Skyrim frame graph.
+execution/resource graph and projects exact capture-local render-pass,
+technique, geometry, engine-shader, and selected stage-shader identities onto
+execution nodes. Projection uses explicit scope and observation IDs only;
+pointer equality is not treated as identity. It remains an incomplete semantic
+Skyrim frame graph because scene-object/material identities and externally
+verified static manifest/engine references are not yet present in live events.
 
 The depth-culling integration, versioned draw-output to accepted-eye join, and
 next live capture target are described in

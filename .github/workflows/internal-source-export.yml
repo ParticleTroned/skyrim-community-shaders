@@ -1,0 +1,38 @@
+name: Internal RC166 source export
+
+on:
+  push:
+    branches:
+      - codex/internal-source-export
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current RC166 integration base
+        uses: actions/checkout@v4
+        with:
+          ref: codex/vr-renderscale-RC166lessons-integrated-v2
+          fetch-depth: 1
+          submodules: false
+
+      - name: Record exported head
+        shell: bash
+        run: git rev-parse HEAD | tee exported-head.txt
+
+      - name: Archive tracked source
+        shell: bash
+        run: git archive --format=zip --output=source-export-rc166-integrated.zip HEAD
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-export-rc166-integrated
+          path: |
+            source-export-rc166-integrated.zip
+            exported-head.txt
+          if-no-files-found: error
+          retention-days: 1

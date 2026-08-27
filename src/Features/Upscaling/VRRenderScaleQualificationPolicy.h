@@ -107,6 +107,22 @@ namespace VRRenderScaleQualificationPolicy
 				   a_left.fsr4Runtime == a_right.fsr4Runtime);
 	}
 
+	[[nodiscard]] constexpr TargetProfile ExactObservationTarget(
+		const Profile& a_profile) noexcept
+	{
+		if (!a_profile.valid)
+			return {};
+		return {
+			.method = a_profile.method,
+			.qualityMode = a_profile.qualityMode,
+			.renderScaleMode = a_profile.renderScaleMode,
+			.matchDLSSProfile = a_profile.method == Method::DLSS,
+			.dlssProfile = a_profile.dlssProfile,
+			.matchFSRRuntime = a_profile.method == Method::FSR,
+			.fsr4Runtime = a_profile.fsr4Runtime,
+		};
+	}
+
 	[[nodiscard]] constexpr bool CanBegin(std::uint64_t a_activeTransitionID) noexcept
 	{
 		return a_activeTransitionID == 0;

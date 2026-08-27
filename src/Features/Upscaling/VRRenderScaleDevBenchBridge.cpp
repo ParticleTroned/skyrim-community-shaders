@@ -1284,14 +1284,19 @@ namespace
 
 	bool TryParseQualificationTarget(
 		const json& a_args,
-		QualificationTarget& a_target,
+		std::optional<QualificationTarget>& a_target,
 		json& a_error)
 	{
-		if (!a_args.contains("target") || !a_args["target"].is_object()) {
-			a_error = { { "error", "qualification_wait requires object parameter 'target'" },
+		if (!a_args.contains("target")) {
+			a_target.reset();
+			return true;
+		}
+		if (!a_args["target"].is_object()) {
+			a_error = { { "error", "qualification_wait target must be an object when supplied" },
 				{ "errorCode", "invalid_target" } };
 			return false;
 		}
+		a_target.emplace();
 		const auto& target = a_args["target"];
 		for (const auto& [name, value] : target.items()) {
 			(void)value;
@@ -1311,9 +1316,9 @@ namespace
 
 		const std::string method = target["method"].get<std::string>();
 		if (method == "dlss")
-			a_target.method = QualificationPolicy::Method::DLSS;
+			a_target->method = QualificationPolicy::Method::DLSS;
 		else if (method == "fsr")
-			a_target.method = QualificationPolicy::Method::FSR;
+			a_target->method = QualificationPolicy::Method::FSR;
 		else {
 			a_error = { { "error", "target.method must be 'dlss' or 'fsr'" },
 				{ "errorCode", "invalid_target_method" } };
@@ -1327,11 +1332,11 @@ namespace
 				{ "errorCode", "invalid_target_quality" } };
 			return false;
 		}
-		a_target.qualityMode = static_cast<uint32_t>(qualityMode);
-		a_target.renderScaleMode = target["renderScaleMode"].get<bool>();
+		a_target->qualityMode = static_cast<uint32_t>(qualityMode);
+		a_target->renderScaleMode = target["renderScaleMode"].get<bool>();
 
 		if (target.contains("dlssProfile")) {
-			if (a_target.method != QualificationPolicy::Method::DLSS ||
+			if (a_target->method != QualificationPolicy::Method::DLSS ||
 				!target["dlssProfile"].is_string()) {
 				a_error = { { "error", "target.dlssProfile is valid only for DLSS" },
 					{ "errorCode", "invalid_dlss_profile" } };
@@ -1345,12 +1350,12 @@ namespace
 					{ "errorCode", "invalid_dlss_profile" } };
 				return false;
 			}
-			a_target.matchDLSSProfile = true;
-			a_target.dlssProfile = static_cast<uint32_t>(std::distance(names.begin(), found));
+			a_target->matchDLSSProfile = true;
+			a_target->dlssProfile = static_cast<uint32_t>(std::distance(names.begin(), found));
 		}
 
 		if (target.contains("fsrRuntime")) {
-			if (a_target.method != QualificationPolicy::Method::FSR ||
+			if (a_target->method != QualificationPolicy::Method::FSR ||
 				!target["fsrRuntime"].is_string()) {
 				a_error = { { "error", "target.fsrRuntime is valid only for FSR" },
 					{ "errorCode", "invalid_fsr_runtime" } };
@@ -1362,11 +1367,11 @@ namespace
 					{ "errorCode", "invalid_fsr_runtime" } };
 				return false;
 			}
-			a_target.matchFSRRuntime = true;
-			a_target.fsr4Runtime = runtime == "fsr4";
+			a_target->matchFSRRuntime = true;
+			a_target->fsr4Runtime = runtime == "fsr4";
 		}
 
-		if (!QualificationPolicy::IsValidTarget(a_target)) {
+		if (!QualificationPolicy::IsValidTarget(*a_target)) {
 			a_error = { { "error", "target.renderScaleMode must be true exactly when target.qualityMode is 1..6" },
 				{ "errorCode", "invalid_target" } };
 			return false;
@@ -2538,7 +2543,7 @@ namespace
 	json CaptureQualificationObservation(
 		const QualificationTransition& a_transition,
 		const QualificationExpectedCell& a_expectedCell,
-		const QualificationTarget& a_target,
+		const std::optional<QualificationTarget>& a_expectedTarget,
 		const std::optional<QualificationFoveationTarget>& a_foveation)
 	{
 		using namespace CSX::UpscalingAPI;
@@ -2563,6 +2568,13 @@ namespace
 		                           api->GetSnapshot(api->context, &apiSnapshot) :
 		                           Status::kServiceUnavailable;
 		const bool apiAvailable = apiStatus == Status::kSuccess;
+		QualificationTarget target = a_expectedTarget.value_or(QualificationTarget{});
+		if (!a_expectedTarget && apiAvailable &&
+			(apiSnapshot.profilePresence & kProfileStable) != 0) {
+			target = QualificationPolicy::ExactObservationTarget(
+				QualificationProfile(apiSnapshot.stable, true));
+		}
+		const bool targetAvailable = QualificationPolicy::IsValidTarget(target);
 
 		const auto* player = RE::PlayerCharacter::GetSingleton();
 		const auto* cell = player ? player->GetParentCell() : nullptr;
@@ -2594,11 +2606,12 @@ namespace
 		                      gate.currentPlayerCellFormID == currentCellFormID &&
 		                      gate.lastCompletedWorldRenderFrame != 0;
 		facts.freshObservation = QualificationPolicy::IsFreshTransition(
-			exactCell,
-			destinationDiffersFromSource,
-			a_transition.dispatchFrame,
-			frame,
-			profileStateChanged);
+									 exactCell,
+									 destinationDiffersFromSource,
+									 a_transition.dispatchFrame,
+									 frame,
+									 profileStateChanged) &&
+		                         (a_expectedTarget.has_value() || profileStateChanged);
 		facts.publicSnapshot = apiAvailable;
 
 		if (apiAvailable) {
@@ -2611,10 +2624,10 @@ namespace
 			const auto stable = QualificationProfile(apiSnapshot.stable, profilesPresent);
 			facts.providerReady =
 				(apiSnapshot.flags & kSnapshotProviderCheckComplete) != 0;
-			facts.profilesAgree = profilesPresent &&
-			                      QualificationPolicy::MatchesTarget(requested, a_target) &&
-			                      QualificationPolicy::MatchesTarget(effective, a_target) &&
-			                      QualificationPolicy::MatchesTarget(stable, a_target) &&
+			facts.profilesAgree = targetAvailable && profilesPresent &&
+			                      QualificationPolicy::MatchesTarget(requested, target) &&
+			                      QualificationPolicy::MatchesTarget(effective, target) &&
+			                      QualificationPolicy::MatchesTarget(stable, target) &&
 			                      QualificationPolicy::ProfilesAgree(requested, effective) &&
 			                      QualificationPolicy::ProfilesAgree(effective, stable);
 			facts.dimensionsPositive = apiSnapshot.displayEyeWidth != 0 &&
@@ -2688,10 +2701,10 @@ namespace
 			(!a_foveation || QualificationFoveationValuesMatch(
 								 *a_foveation, a_transition.baseline.foveationSettings));
 		if (apiAvailable) {
-			facts.physicalActiveContract = ActivePhysicalContractStable(
-				controller, apiSnapshot, a_target, a_foveation);
-			facts.physicalNativeContract = NativePhysicalContractStable(
-				controller, apiSnapshot, a_target);
+			facts.physicalActiveContract = targetAvailable && ActivePhysicalContractStable(
+																  controller, apiSnapshot, target, a_foveation);
+			facts.physicalNativeContract = targetAvailable && NativePhysicalContractStable(
+																  controller, apiSnapshot, target);
 		}
 		facts.presentationPhaseStable =
 			controller.presentationPhase == Upscaling::VRRenderScalePresentationPhase::StereoProven ||
@@ -2703,7 +2716,7 @@ namespace
 			controller,
 			Upscaling::VRRenderScalePresentationPath::VendorEvaluated,
 			a_transition.dispatchFrame);
-		facts.lifecycleStable = LifecycleStable(controller, a_target, delta);
+		facts.lifecycleStable = targetAvailable && LifecycleStable(controller, target, delta);
 		facts.fsrDispatchStable = FSRDispatchStable(controller);
 		facts.shaderCompilationIdle =
 			!globals::shaderCache || !globals::shaderCache->IsCompiling();
@@ -2712,8 +2725,8 @@ namespace
 			Upscaling::VRRenderScalePresentationPath::NativeOriginal,
 			a_transition.dispatchFrame);
 
-		const bool dlssLifecycleRelevant =
-			a_target.method == QualificationPolicy::Method::DLSS;
+		const bool dlssLifecycleRelevant = targetAvailable &&
+		                                   target.method == QualificationPolicy::Method::DLSS;
 		const bool traceApplicable = dlssLifecycleRelevant &&
 		                             (a_transition.baseline.diagnostics.dlssTraceActive ||
 										 diagnostics.dlssTraceActive);
@@ -2749,7 +2762,7 @@ namespace
 		};
 		facts.diagnosticsClear =
 			!QualificationPolicy::HasTerminalDiagnosticFailure(terminalDeltas);
-		const uint64_t failures = QualificationPolicy::EvaluateStability(a_target, facts);
+		const uint64_t failures = QualificationPolicy::EvaluateStability(target, facts);
 		const bool satisfied = failures == QualificationPolicy::kFailureNone;
 		const bool terminalError = !facts.stressSession || !facts.publicSnapshot ||
 		                           !facts.terminalClear || !facts.diagnosticsClear ||
@@ -2768,6 +2781,7 @@ namespace
 		for (const auto& reason : terminalDiagnosticReasons)
 			failureReasons.push_back(reason);
 		json output{
+			{ "targetMode", a_expectedTarget ? "expected" : "externally_owned_observation" },
 			{ "satisfied", satisfied },
 			{ "terminalError", terminalError },
 			{ "failureMask", failures },
@@ -2849,10 +2863,14 @@ namespace
 								 { "delta", QualificationDiagnosticsDeltaJson(diagnostics, a_transition.baseline.diagnostics) },
 							 } },
 		};
+		if (targetAvailable)
+			output["observedTarget"] = QualificationTargetJson(target);
+		if (a_expectedTarget)
+			output["expectedTarget"] = QualificationTargetJson(*a_expectedTarget);
 		if (a_foveation)
 			output["foveation"]["target"] = QualificationFoveationTargetJson(*a_foveation);
 		if (satisfied) {
-			output["stereoEvidenceClass"] = a_target.renderScaleMode ?
+			output["stereoEvidenceClass"] = target.renderScaleMode ?
 			                                    "render_scale_vendor_frames" :
 			                                    "native_pipeline_frames";
 			output["status"] = BuildStatus(upscaling);
@@ -2998,6 +3016,7 @@ namespace
 			{ "action", "qualification_wait" },
 			{ "transitionId", a_transition.transitionID },
 			{ "ownerId", a_transition.ownerID },
+			{ "targetMode", a_target ? "expected" : "externally_owned_observation" },
 			{ "satisfied", satisfied },
 			{ "outcome", a_outcome },
 			{ "baseline", a_transition.ready ?
@@ -3050,6 +3069,8 @@ namespace
 			receipt["foveationTarget"] = QualificationFoveationTargetJson(**a_foveation);
 		if (receipt["observation"].is_object()) {
 			const auto& observation = receipt["observation"];
+			if (!a_target && observation.contains("observedTarget"))
+				receipt["observedTarget"] = observation["observedTarget"];
 			if (observation.contains("stereoEvidenceClass"))
 				receipt["stereoEvidenceClass"] = observation["stereoEvidenceClass"];
 			if (observation.contains("currentCell"))
@@ -3531,7 +3552,7 @@ namespace
 				return error;
 			}
 			QualificationExpectedCell expectedCell;
-			QualificationTarget target;
+			std::optional<QualificationTarget> target;
 			std::optional<QualificationFoveationTarget> foveation;
 			if (!TryParseExpectedCell(a_args, expectedCell, error) ||
 				!TryParseQualificationTarget(a_args, target, error) ||
@@ -3602,7 +3623,8 @@ namespace
 				                               transition.dispatchFrame;
 				if (transition.cancelled->load(std::memory_order_acquire)) {
 					auto receipt = BuildQualificationReceipt(
-						transition, "cancelled", &expectedCell, &target, &foveation,
+						transition, "cancelled", &expectedCell,
+						target ? &*target : nullptr, &foveation,
 						beforeTick, lastFrame, std::move(lastObservation),
 						"qualification_cancelled");
 					FinishQualification(
@@ -3611,7 +3633,8 @@ namespace
 				}
 				if (!QualificationPolicy::IsWithinDeadline(beforeTick, deadline)) {
 					auto receipt = BuildQualificationReceipt(
-						transition, "timeout", &expectedCell, &target, &foveation,
+						transition, "timeout", &expectedCell,
+						target ? &*target : nullptr, &foveation,
 						beforeTick, lastFrame, std::move(lastObservation),
 						"qualification_timeout");
 					receipt["timing"]["timeoutMs"] = timeoutMs;
@@ -3631,7 +3654,8 @@ namespace
 					const uint64_t tick = QueryQualificationTick();
 					const uint32_t frame = observation.value("frame", lastFrame);
 					auto receipt = BuildQualificationReceipt(
-						transition, "cancelled", &expectedCell, &target, &foveation,
+						transition, "cancelled", &expectedCell,
+						target ? &*target : nullptr, &foveation,
 						tick, frame, std::move(observation),
 						"qualification_cancelled");
 					FinishQualification(
@@ -3644,7 +3668,8 @@ namespace
 						continue;
 					const uint64_t tick = QueryQualificationTick();
 					auto receipt = BuildQualificationReceipt(
-						transition, "error", &expectedCell, &target, &foveation,
+						transition, "error", &expectedCell,
+						target ? &*target : nullptr, &foveation,
 						tick, lastFrame, std::move(lastObservation),
 						"qualification_observation_error");
 					receipt["error"] = "qualification observation failed";
@@ -3661,7 +3686,8 @@ namespace
 					QualificationPolicy::IsWithinDeadline(observedTick, deadline);
 				if (observation.value("satisfied", false) && withinDeadline) {
 					auto receipt = BuildQualificationReceipt(
-						transition, "stable", &expectedCell, &target, &foveation,
+						transition, "stable", &expectedCell,
+						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation));
 					receipt["timing"]["timeoutMs"] = timeoutMs;
 					FinishQualification(
@@ -3670,7 +3696,8 @@ namespace
 				}
 				if (observation.value("terminalError", false)) {
 					auto receipt = BuildQualificationReceipt(
-						transition, "error", &expectedCell, &target, &foveation,
+						transition, "error", &expectedCell,
+						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation),
 						"qualification_terminal_error");
 					FinishQualification(
@@ -3679,7 +3706,8 @@ namespace
 				}
 				if (!withinDeadline) {
 					auto receipt = BuildQualificationReceipt(
-						transition, "timeout", &expectedCell, &target, &foveation,
+						transition, "timeout", &expectedCell,
+						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation),
 						"qualification_timeout");
 					receipt["timing"]["timeoutMs"] = timeoutMs;
@@ -4344,7 +4372,7 @@ namespace
 		json result{
 			{ "registered", g_registered.load(std::memory_order_acquire) },
 			{ "tool", "communityshaders.renderscale" },
-			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. For a server-side transition barrier, reserve a caller-owned ID and ownerId with qualification_begin, mark the server QPC immediately before the command with qualification_dispatch, dispatch exactly one COC or apply, then call qualification_wait with the same ownership pair, exact destination, target profile, and bounded timeout. qualification_cancel requires the same ownership pair and requests a terminal cancellation receipt without releasing an active waiter early. Pass expectedSessionId to stop, dlss_trace_stop, or cpu_performance_stop to refuse cleanup when the active capture is not the caller's. Pass expectedStartFrame to gpu_performance_stop as its ownership guard; it remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses return cpuPerformance.sessionId; stop retains it and reset clears it to zero. If dynamic tools are unavailable, use equivalent communityshaders.renderscale steps in devbench scenario.)" },
+			{ "usage", R"(Invoke the top-level devbench tool with {"action":"status"} when exposed. For a server-side transition barrier, reserve a caller-owned ID and ownerId with qualification_begin, mark the server QPC immediately before the command with qualification_dispatch, dispatch exactly one COC or apply, then call qualification_wait with the same ownership pair, exact destination, optional target profile, and bounded timeout. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and returns the first mutually coherent observed profile without mutating it. qualification_cancel requires the same ownership pair and requests a terminal cancellation receipt without releasing an active waiter early. Pass expectedSessionId to stop, dlss_trace_stop, or cpu_performance_stop to refuse cleanup when the active capture is not the caller's. Pass expectedStartFrame to gpu_performance_stop as its ownership guard; it remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses return cpuPerformance.sessionId; stop retains it and reset clears it to zero. If dynamic tools are unavailable, use equivalent communityshaders.renderscale steps in devbench scenario.)" },
 			{ "actions", RenderScaleActions() },
 		};
 		BuildProvenance::AttachProducer(result);
@@ -4384,7 +4412,7 @@ namespace VRRenderScaleDevBenchBridge
 		}
 
 		static constexpr const char* diagnosticDescriptor =
-			R"json({"description":"Control and inspect CSX VR render-scale, including a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, a target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Qualification deadline measured from qualification_dispatch on the server QPC clock."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode","renderScaleMode"],"description":"Exact qualification profile. renderScaleMode must be true exactly when qualityMode is 1..6. Method-specific optional fields are exact when present."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
+			R"json({"description":"Control and inspect CSX VR render-scale, including a single-owner, QPC-timed server-side qualification barrier that returns the first coherent exact-cell/profile observation without menu queries or client polling. qualification_begin requires an active stress session plus caller-supplied transitionId and ownerId; qualification_dispatch freezes the latency origin immediately before the command and can atomically reset/start CPU plus GPU performance telemetry on that dispatch frame; qualification_wait accepts the same ownership pair, an exact editor ID and/or form ID, an optional target profile, an optional exact foveation fixture, and a timeout that defaults to 120000ms and cannot exceed it. Omit target when an external controller owns profile selection; the waiter then requires a post-dispatch profile change and validates the mutually coherent observed profile without changing it. DLSS dispatch tracing remains opt-in and non-blocking. stop, dlss_trace_stop, and cpu_performance_stop accept expectedSessionId to fail closed if capture ownership changed; gpu_performance_stop accepts expectedStartFrame as its ownership guard; expectedStartFrame remains a legacy optional secondary guard for CPU telemetry. CPU performance status, start, and stop responses expose cpuPerformance.sessionId and state; stop retains the session ID and reset clears it to zero. Every response identifies the producing DLL; expectedBuildId fails closed on a stale build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","qualification_status","qualification_begin","qualification_dispatch","qualification_wait","qualification_cancel","cpu_performance_status","cpu_performance_start","cpu_performance_stop","cpu_performance_reset","gpu_performance_status","gpu_performance_start","gpu_performance_stop","gpu_performance_reset","dlss_trace_status","dlss_trace_start","dlss_trace_read","dlss_trace_stop","dlss_trace_reset","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","ham_status","ham_reset","trim","texture_lifetime_start","texture_lifetime_status","texture_lifetime_checkpoint","texture_lifetime_stop","texture_lifetime_reset"]},"method":{"type":"string","enum":["dlss","fsr"]},"enabled":{"type":"boolean"},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"dlssPreset":{"type":"integer","minimum":0,"maximum":5},"transitionId":{"type":"integer","minimum":1,"description":"Caller-owned nonzero qualification transition ID. Begin, dispatch, wait, and cancel must present it."},"ownerId":{"type":"string","minLength":1,"maxLength":128,"description":"Caller-generated qualification owner identity. Begin, dispatch, wait, and cancel must present the same value."},"startPerformanceTelemetry":{"type":"boolean","default":false,"description":"qualification_dispatch only: require inactive CPU and GPU captures, reset/start both on the dispatch frame, and return their ownership receipts."},"expectedCell":{"type":"integer","minimum":1,"maximum":4294967295,"description":"Optional exact destination cell form ID. qualification_wait requires this or expectedCellEditorId; when both are supplied both must match."},"expectedCellEditorId":{"type":"string","minLength":1,"maxLength":128,"description":"Preferred stable exact destination cell editor ID for qualification_wait."},"timeoutMs":{"type":"integer","minimum":1,"maximum":120000,"default":120000,"description":"Qualification deadline measured from qualification_dispatch on the server QPC clock."},"target":{"type":"object","additionalProperties":false,"properties":{"method":{"type":"string","enum":["dlss","fsr"]},"qualityMode":{"type":"integer","minimum":0,"maximum":6},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode","renderScaleMode"],"description":"Optional exact expected profile for a runner-owned selection. Omit it for an externally owned selection; the waiter observes and returns the exact coherent profile without mutating upscaling state."},"foveation":{"type":"object","additionalProperties":false,"properties":{"foveatedVendorDispatch":{"type":"boolean"},"foveatedCenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAEnable":{"type":"boolean"},"peripheryTAACenterArea":{"type":"number","minimum":0,"maximum":1},"peripheryTAAOuterScale":{"type":"number","minimum":0,"maximum":1}},"required":["foveatedVendorDispatch","foveatedCenterArea","peripheryTAAEnable","peripheryTAACenterArea","peripheryTAAOuterScale"],"description":"Optional exact settings fixture. Float comparisons use the tolerance returned in each receipt; active physical flags must agree with the requested enable states."},"afterSequence":{"type":"integer","minimum":0,"description":"For dlss_trace_read, return records after this sequence."},"limit":{"type":"integer","minimum":1,"maximum":256,"description":"Maximum ring records returned by dlss_trace_read; defaults to 32 and pinned failures are returned separately."},"expectedSessionId":{"type":"integer","minimum":1,"description":"Optional ownership guard for stop, dlss_trace_stop, and cpu_performance_stop. The corresponding active session must match before it is stopped."},"expectedStartFrame":{"type":"integer","minimum":0,"description":"Optional ownership guard for gpu_performance_stop and legacy secondary guard for cpu_performance_stop. When present, the active capture window start frame must match before it is stopped."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}},"required":["action"]}})json";
 		devBench->RegisterTool(
 			"communityshaders.renderscale",
 			diagnosticDescriptor,

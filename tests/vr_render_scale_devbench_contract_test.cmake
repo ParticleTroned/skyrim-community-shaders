@@ -96,6 +96,20 @@ if(_timeout_error OR NOT _timeout_default EQUAL 120000)
     )
 endif()
 
+string(JSON _target_description ERROR_VARIABLE _target_description_error
+    GET "${_descriptor}" inputSchema properties target description
+)
+string(FIND
+    "${_target_description}"
+    "Omit it for an externally owned selection"
+    _target_observation_position
+)
+if(_target_description_error OR _target_observation_position EQUAL -1)
+    message(FATAL_ERROR
+        "Render-scale target does not document external observation mode: ${_target_description_error}"
+    )
+endif()
+
 string(JSON _start_performance_default ERROR_VARIABLE _start_performance_error
     GET "${_descriptor}" inputSchema properties startPerformanceTelemetry default
 )
@@ -160,7 +174,8 @@ endif()
 
 foreach(_required_behavior IN ITEMS
     "QualificationPolicy::SaturatingDeadlineTick"
-    "QualificationPolicy::EvaluateStability"
+	"QualificationPolicy::EvaluateStability"
+	"QualificationPolicy::ExactObservationTarget"
 	"QualificationPolicy::HasCoherentPresentationFrames"
     "QualificationPolicy::HasRequiredPresentationHistory"
     "QualificationPolicy::IsFoveationInvariantViolation"

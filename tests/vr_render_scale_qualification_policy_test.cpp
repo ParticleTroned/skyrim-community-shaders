@@ -102,6 +102,31 @@ namespace
 		       !MatchesTarget(Profile{ .valid = true, .method = Method::FSR, .qualityMode = 3, .renderScaleMode = true, .fsr4Runtime = false }, fsr);
 	}
 
+	constexpr bool CoversObservedProfileTargets()
+	{
+		const Profile dlss{
+			.valid = true,
+			.method = Method::DLSS,
+			.qualityMode = 2,
+			.renderScaleMode = true,
+			.dlssProfile = 1,
+		};
+		const auto dlssTarget = ExactObservationTarget(dlss);
+		const Profile fsr{
+			.valid = true,
+			.method = Method::FSR,
+			.qualityMode = 0,
+			.renderScaleMode = false,
+			.fsr4Runtime = true,
+		};
+		const auto fsrTarget = ExactObservationTarget(fsr);
+		return IsValidTarget(dlssTarget) && MatchesTarget(dlss, dlssTarget) &&
+		       dlssTarget.matchDLSSProfile && !dlssTarget.matchFSRRuntime &&
+		       IsValidTarget(fsrTarget) && MatchesTarget(fsr, fsrTarget) &&
+		       fsrTarget.matchFSRRuntime && !fsrTarget.matchDLSSProfile &&
+		       !IsValidTarget(ExactObservationTarget(Profile{}));
+	}
+
 	constexpr bool CoversActiveAndNativeStability()
 	{
 		auto activeFacts = CommonStableFacts();
@@ -264,6 +289,7 @@ namespace
 	}
 
 	static_assert(CoversExactProfileMatching());
+	static_assert(CoversObservedProfileTargets());
 	static_assert(CoversActiveAndNativeStability());
 	static_assert(CoversStaleSourceRejection());
 	static_assert(CoversOwnership());

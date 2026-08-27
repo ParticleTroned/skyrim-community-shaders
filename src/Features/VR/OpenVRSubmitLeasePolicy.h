@@ -35,7 +35,8 @@ namespace OpenVRSubmitLeasePolicy
 
 		[[nodiscard]] constexpr bool IsValid() const noexcept
 		{
-			return deviceIdentity != 0 &&
+			return generation != 0 &&
+			       deviceIdentity != 0 &&
 			       colorTextureRetained &&
 			       (!depthTextureRequired || depthTextureRetained);
 		}

@@ -1957,11 +1957,6 @@ void Upscaling::SetupResources()
 
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
-
-	// Setup HDR resources only when the HDR Display feature is loaded
-	if (globals::features::hdrDisplay.loaded) {
-		globals::features::hdrDisplay.SetupResources();
-	}
 }
 
 void Upscaling::ClearShaderCache()

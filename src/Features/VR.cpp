@@ -1177,7 +1177,7 @@ void VR::MarkCurrentFrameDepthCullingReady()
 				objectCount,
 				currentFrameDepthCullingResourceVersionObservationId,
 				currentFrameDepthCullingResourceVersionGeneration);
-			BeginDepthCullingPipelineStatistics(currentFrameDepthCullingReadyFrame);
+			ArmDepthCullingPipelineStatistics(currentFrameDepthCullingReadyFrame);
 		}
 #endif
 	}
@@ -1304,6 +1304,8 @@ void VR::BindCurrentFrameDepthCulling(
 		enabledDescriptor | (objectIndex << kCurrentFrameDepthCullingObjectIndexShift);
 	depthCullingDiagnostics.RecordBoundDraw(a_category);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	if (a_category == CSX::VRDepthCullingDiagnostics::DrawCategory::Lighting && state)
+		BeginDepthCullingCoverageSpan(state->frameCount);
 	RecordDepthCullingDiagnosticDraw(objectIndex, a_category);
 #endif
 }
@@ -1323,13 +1325,19 @@ void VR::AdvanceDepthCullingDiagnosticsFrame()
 	if (activeDepthCullingPipelineStatsSlot >= 0) {
 		auto& active = depthCullingPipelineStatsSlots[static_cast<std::size_t>(activeDepthCullingPipelineStatsSlot)];
 		if (active.active && active.query && active.timestampDisjoint && active.timestampEnd) {
+			if (active.coverageActive) {
+				context->End(active.query.get());
+				active.coverageCaptured = true;
+			}
 			context->End(active.timestampEnd.get());
-			context->End(active.query.get());
 			context->End(active.timestampDisjoint.get());
 			active.active = false;
 			active.pending = true;
-			if (depthCullingDiagnostics.IsCollecting() && active.epoch == depthCullingDiagnostics.CollectionEpoch())
+			if (active.coverageCaptured &&
+				depthCullingDiagnostics.IsCollecting() &&
+				active.epoch == depthCullingDiagnostics.CollectionEpoch())
 				depthCullingDiagnostics.RecordPipelineQueryEnded();
+			active.coverageActive = false;
 		}
 		activeDepthCullingPipelineStatsSlot = -1;
 	}
@@ -1420,18 +1428,21 @@ void VR::AdvanceDepthCullingDiagnosticsFrame()
 	}
 
 	for (auto& slot : depthCullingPipelineStatsSlots) {
-		if (!slot.pending || !slot.query)
+		if (!slot.pending || !slot.timestampDisjoint || !slot.timestampStart || !slot.timestampEnd)
 			continue;
 
 		D3D11_QUERY_DATA_PIPELINE_STATISTICS statistics{};
 		D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
 		std::uint64_t timestampStart = 0;
+		std::uint64_t timestampCoverageStart = 0;
 		std::uint64_t timestampEnd = 0;
-		const auto statisticsResult = context->GetData(
-			slot.query.get(),
-			&statistics,
-			sizeof(statistics),
-			D3D11_ASYNC_GETDATA_DONOTFLUSH);
+		const auto statisticsResult = slot.coverageCaptured ?
+			context->GetData(
+				slot.query.get(),
+				&statistics,
+				sizeof(statistics),
+				D3D11_ASYNC_GETDATA_DONOTFLUSH) :
+			S_OK;
 		const auto disjointResult = context->GetData(
 			slot.timestampDisjoint.get(),
 			&disjoint,
@@ -1442,26 +1453,37 @@ void VR::AdvanceDepthCullingDiagnosticsFrame()
 			&timestampStart,
 			sizeof(timestampStart),
 			D3D11_ASYNC_GETDATA_DONOTFLUSH);
+		const auto coverageStartResult = slot.coverageCaptured ?
+			context->GetData(
+				slot.timestampCoverageStart.get(),
+				&timestampCoverageStart,
+				sizeof(timestampCoverageStart),
+				D3D11_ASYNC_GETDATA_DONOTFLUSH) :
+			S_OK;
 		const auto endResult = context->GetData(
 			slot.timestampEnd.get(),
 			&timestampEnd,
 			sizeof(timestampEnd),
 			D3D11_ASYNC_GETDATA_DONOTFLUSH);
-		if (statisticsResult == S_FALSE || disjointResult == S_FALSE || startResult == S_FALSE || endResult == S_FALSE) {
+		if (statisticsResult == S_FALSE || disjointResult == S_FALSE || startResult == S_FALSE ||
+			coverageStartResult == S_FALSE || endResult == S_FALSE) {
 			if (collecting && slot.epoch == currentEpoch)
 				depthCullingDiagnostics.RecordPipelineQueryNotReady();
 			continue;
 		}
-		if (FAILED(statisticsResult) || FAILED(disjointResult) || FAILED(startResult) || FAILED(endResult)) {
+		if (FAILED(statisticsResult) || FAILED(disjointResult) || FAILED(startResult) ||
+			FAILED(coverageStartResult) || FAILED(endResult)) {
 			if (collecting && slot.epoch == currentEpoch)
 				depthCullingDiagnostics.RecordPipelineQueryError();
 			slot.pending = false;
+			slot.coverageCaptured = false;
 			slot.frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
 			continue;
 		}
 
 		if (collecting && slot.epoch == currentEpoch) {
-			depthCullingDiagnostics.RecordPipelineQueryCompleted();
+			if (slot.coverageCaptured)
+				depthCullingDiagnostics.RecordPipelineQueryCompleted();
 			if (disjoint.Disjoint || !disjoint.Frequency || timestampEnd < timestampStart) {
 				depthCullingDiagnostics.RecordPipelineTimestampDisjoint();
 			} else {
@@ -1469,22 +1491,35 @@ void VR::AdvanceDepthCullingDiagnosticsFrame()
 				const auto elapsedNanoseconds =
 					(elapsedTicks * 1'000'000'000ULL) / disjoint.Frequency;
 				depthCullingDiagnostics.RecordPipelineTiming(slot.epoch, elapsedNanoseconds);
+				if (slot.coverageCaptured && timestampCoverageStart >= timestampStart &&
+					timestampEnd >= timestampCoverageStart) {
+					const auto coverageElapsedTicks = timestampEnd - timestampCoverageStart;
+					const auto coverageElapsedNanoseconds =
+						(coverageElapsedTicks * 1'000'000'000ULL) / disjoint.Frequency;
+					depthCullingDiagnostics.RecordCoverageSpanTiming(
+						slot.epoch, coverageElapsedNanoseconds);
+				}
 			}
-			depthCullingDiagnostics.RecordPipelineStatistics(slot.epoch, {
-				.iaVertices = statistics.IAVertices,
-				.iaPrimitives = statistics.IAPrimitives,
-				.vsInvocations = statistics.VSInvocations,
-				.gsInvocations = statistics.GSInvocations,
-				.gsPrimitives = statistics.GSPrimitives,
-				.clipperInvocations = statistics.CInvocations,
-				.clipperPrimitives = statistics.CPrimitives,
-				.psInvocations = statistics.PSInvocations,
-				.hsInvocations = statistics.HSInvocations,
-				.dsInvocations = statistics.DSInvocations,
-				.csInvocations = statistics.CSInvocations,
-			});
+			if (slot.coverageCaptured)
+				depthCullingDiagnostics.RecordPipelineStatistics(
+					slot.epoch,
+					slot.coveredLightingDraws,
+					{
+						.iaVertices = statistics.IAVertices,
+						.iaPrimitives = statistics.IAPrimitives,
+						.vsInvocations = statistics.VSInvocations,
+						.gsInvocations = statistics.GSInvocations,
+						.gsPrimitives = statistics.GSPrimitives,
+						.clipperInvocations = statistics.CInvocations,
+						.clipperPrimitives = statistics.CPrimitives,
+						.psInvocations = statistics.PSInvocations,
+						.hsInvocations = statistics.HSInvocations,
+						.dsInvocations = statistics.DSInvocations,
+						.csInvocations = statistics.CSInvocations,
+					});
 		}
 		slot.pending = false;
+		slot.coverageCaptured = false;
 		slot.frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
 	}
 }
@@ -1594,7 +1629,7 @@ void VR::RecordDepthCullingDiagnosticDraw(
 	}
 }
 
-void VR::BeginDepthCullingPipelineStatistics(std::uint32_t a_frame)
+void VR::ArmDepthCullingPipelineStatistics(std::uint32_t a_frame)
 {
 	if (!depthCullingDiagnostics.IsCollecting() || !globals::d3d::device || !globals::d3d::context)
 		return;
@@ -1614,7 +1649,8 @@ void VR::BeginDepthCullingPipelineStatistics(std::uint32_t a_frame)
 	}
 
 	auto& slot = depthCullingPipelineStatsSlots[slotIndex];
-	if (!slot.query || !slot.timestampDisjoint || !slot.timestampStart || !slot.timestampEnd) {
+	if (!slot.query || !slot.timestampDisjoint || !slot.timestampStart ||
+		!slot.timestampCoverageStart || !slot.timestampEnd) {
 		auto createQuery = [&](D3D11_QUERY a_type, winrt::com_ptr<ID3D11Query>& a_query) {
 			D3D11_QUERY_DESC queryDesc{};
 			queryDesc.Query = a_type;
@@ -1623,10 +1659,12 @@ void VR::BeginDepthCullingPipelineStatistics(std::uint32_t a_frame)
 		if (!createQuery(D3D11_QUERY_PIPELINE_STATISTICS, slot.query) ||
 			!createQuery(D3D11_QUERY_TIMESTAMP_DISJOINT, slot.timestampDisjoint) ||
 			!createQuery(D3D11_QUERY_TIMESTAMP, slot.timestampStart) ||
+			!createQuery(D3D11_QUERY_TIMESTAMP, slot.timestampCoverageStart) ||
 			!createQuery(D3D11_QUERY_TIMESTAMP, slot.timestampEnd)) {
 			slot.query = nullptr;
 			slot.timestampDisjoint = nullptr;
 			slot.timestampStart = nullptr;
+			slot.timestampCoverageStart = nullptr;
 			slot.timestampEnd = nullptr;
 			depthCullingDiagnostics.RecordPipelineQueryError();
 			return;
@@ -1635,13 +1673,37 @@ void VR::BeginDepthCullingPipelineStatistics(std::uint32_t a_frame)
 
 	slot.epoch = depthCullingDiagnostics.CollectionEpoch();
 	slot.frame = a_frame;
+	slot.coveredLightingDraws = 0;
 	slot.active = true;
+	slot.coverageActive = false;
+	slot.coverageCaptured = false;
 	slot.pending = false;
 	globals::d3d::context->Begin(slot.timestampDisjoint.get());
 	globals::d3d::context->End(slot.timestampStart.get());
-	globals::d3d::context->Begin(slot.query.get());
 	activeDepthCullingPipelineStatsSlot = static_cast<std::int32_t>(slotIndex);
-	depthCullingDiagnostics.RecordPipelineQueryBegun();
+}
+
+void VR::BeginDepthCullingCoverageSpan(std::uint32_t a_frame)
+{
+	if (!depthCullingDiagnostics.IsCollecting() || !globals::d3d::context ||
+		activeDepthCullingPipelineStatsSlot < 0) {
+		return;
+	}
+
+	auto& slot =
+		depthCullingPipelineStatsSlots[static_cast<std::size_t>(activeDepthCullingPipelineStatsSlot)];
+	if (!slot.active || slot.frame != a_frame ||
+		!slot.query || !slot.timestampCoverageStart) {
+		return;
+	}
+
+	if (!slot.coverageActive) {
+		globals::d3d::context->End(slot.timestampCoverageStart.get());
+		globals::d3d::context->Begin(slot.query.get());
+		slot.coverageActive = true;
+		depthCullingDiagnostics.RecordPipelineQueryBegun();
+	}
+	++slot.coveredLightingDraws;
 }
 
 ID3D11ShaderResourceView* VR::GetDepthCullingDiagnosticControlSrv(ID3D11ShaderResourceView* a_liveVisibility)

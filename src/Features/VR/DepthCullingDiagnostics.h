@@ -113,8 +113,11 @@ namespace CSX::VRDepthCullingDiagnostics
 	X(std::uint64_t, pipelineQueryErrors, 0)                                \
 	X(std::uint64_t, pipelineTimestampDisjoint, 0)                          \
 	X(std::uint64_t, pipelineStatsSamples, 0)                               \
+	X(std::uint64_t, pipelineCoveredLightingDraws, 0)                       \
 	X(std::uint64_t, pipelineTimingSamples, 0)                              \
 	X(std::uint64_t, pipelineRegionNanoseconds, 0)                          \
+	X(std::uint64_t, coverageSpanTimingSamples, 0)                          \
+	X(std::uint64_t, coverageSpanRegionNanoseconds, 0)                      \
 	X(std::uint64_t, pipelineIAVertices, 0)                                 \
 	X(std::uint64_t, pipelineIAPrimitives, 0)                               \
 	X(std::uint64_t, pipelineVSInvocations, 0)                              \
@@ -266,11 +269,23 @@ namespace CSX::VRDepthCullingDiagnostics
 			pipelineRegionNanoseconds.fetch_add(a_nanoseconds, std::memory_order_relaxed);
 		}
 
-		void RecordPipelineStatistics(std::uint64_t a_epoch, const PipelineStatistics& a_statistics)
+		void RecordCoverageSpanTiming(std::uint64_t a_epoch, std::uint64_t a_nanoseconds)
+		{
+			if (!IsCollecting() || a_epoch != CollectionEpoch())
+				return;
+			coverageSpanTimingSamples.fetch_add(1, std::memory_order_relaxed);
+			coverageSpanRegionNanoseconds.fetch_add(a_nanoseconds, std::memory_order_relaxed);
+		}
+
+		void RecordPipelineStatistics(
+			std::uint64_t a_epoch,
+			std::uint64_t a_coveredLightingDraws,
+			const PipelineStatistics& a_statistics)
 		{
 			if (!IsCollecting() || a_epoch != CollectionEpoch())
 				return;
 			pipelineStatsSamples.fetch_add(1, std::memory_order_relaxed);
+			pipelineCoveredLightingDraws.fetch_add(a_coveredLightingDraws, std::memory_order_relaxed);
 			pipelineIAVertices.fetch_add(a_statistics.iaVertices, std::memory_order_relaxed);
 			pipelineIAPrimitives.fetch_add(a_statistics.iaPrimitives, std::memory_order_relaxed);
 			pipelineVSInvocations.fetch_add(a_statistics.vsInvocations, std::memory_order_relaxed);
@@ -386,7 +401,8 @@ namespace CSX::VRDepthCullingDiagnostics
 		CSX_STUB_RECORD(PipelineTimestampDisjoint)
 #undef CSX_STUB_RECORD
 		void RecordPipelineTiming(std::uint64_t, std::uint64_t) {}
-		void RecordPipelineStatistics(std::uint64_t, const PipelineStatistics&) {}
+		void RecordCoverageSpanTiming(std::uint64_t, std::uint64_t) {}
+		void RecordPipelineStatistics(std::uint64_t, std::uint64_t, const PipelineStatistics&) {}
 		void RecordVisibilitySample(std::uint64_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, const ClassifiedDraws&) {}
 		Snapshot Capture() const { return {}; }
 	};

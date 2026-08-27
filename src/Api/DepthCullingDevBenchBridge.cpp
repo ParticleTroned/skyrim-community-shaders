@@ -25,7 +25,7 @@ namespace
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
-		static CSX::Api::ServiceFoundation foundation({ kToolName, 1, 3, 4 });
+		static CSX::Api::ServiceFoundation foundation({ kToolName, 1, 4, 5 });
 		static std::once_flag metadataInitialized;
 		std::call_once(metadataInitialized, [&] {
 			foundation.SetServerMetadataProvider([] {
@@ -75,6 +75,14 @@ namespace
 		const auto pipelineRegionMeanMilliseconds = a_snapshot.pipelineTimingSamples ?
 			static_cast<double>(a_snapshot.pipelineRegionNanoseconds) /
 			static_cast<double>(a_snapshot.pipelineTimingSamples) / 1'000'000.0 :
+			0.0;
+		const auto coverageSpanMeanMilliseconds = a_snapshot.coverageSpanTimingSamples ?
+			static_cast<double>(a_snapshot.coverageSpanRegionNanoseconds) /
+			static_cast<double>(a_snapshot.coverageSpanTimingSamples) / 1'000'000.0 :
+			0.0;
+		const auto coveredLightingDrawsMean = a_snapshot.pipelineStatsSamples ?
+			static_cast<double>(a_snapshot.pipelineCoveredLightingDraws) /
+			static_cast<double>(a_snapshot.pipelineStatsSamples) :
 			0.0;
 
 		return {
@@ -145,6 +153,8 @@ namespace
 				} },
 			} },
 			{ "pipelineStatistics", {
+				{ "measurementDomain", "first-visibility-bound-lighting-draw-to-frame-boundary" },
+				{ "gpuRegionTimingDomain", "obb-result-ready-to-frame-boundary" },
 				{ "queriesBegun", a_snapshot.pipelineQueriesBegun },
 				{ "queriesEnded", a_snapshot.pipelineQueriesEnded },
 				{ "queriesCompleted", a_snapshot.pipelineQueriesCompleted },
@@ -152,11 +162,19 @@ namespace
 				{ "queriesNotReady", a_snapshot.pipelineQueriesNotReady },
 				{ "errors", a_snapshot.pipelineQueryErrors },
 				{ "samples", a_snapshot.pipelineStatsSamples },
+				{ "coveredLightingDraws", a_snapshot.pipelineCoveredLightingDraws },
+				{ "meanCoveredLightingDrawsPerSample", coveredLightingDrawsMean },
 				{ "gpuRegionTiming", {
 					{ "samples", a_snapshot.pipelineTimingSamples },
 					{ "disjoint", a_snapshot.pipelineTimestampDisjoint },
 					{ "totalNanoseconds", a_snapshot.pipelineRegionNanoseconds },
 					{ "meanMilliseconds", pipelineRegionMeanMilliseconds },
+				} },
+				{ "coverageSpanTiming", {
+					{ "domain", "first-visibility-bound-lighting-draw-to-frame-boundary" },
+					{ "samples", a_snapshot.coverageSpanTimingSamples },
+					{ "totalNanoseconds", a_snapshot.coverageSpanRegionNanoseconds },
+					{ "meanMilliseconds", coverageSpanMeanMilliseconds },
 				} },
 				{ "totals", {
 					{ "iaVertices", a_snapshot.pipelineIAVertices },
@@ -214,8 +232,8 @@ namespace
 			response["result"] = {
 				{ "service", kToolName },
 				{ "major", 1 },
-				{ "minor", 3 },
-				{ "schemaRevision", 4 },
+				{ "minor", 4 },
+				{ "schemaRevision", 5 },
 				{ "mainThreadAffine", false },
 				{ "actions", json::array({ "registry", "snapshot", "start", "stop", "reset", "configure" }) },
 				{ "mutations", json::array({ "start", "stop", "reset", "configure" }) },
@@ -226,7 +244,9 @@ namespace
 				{ "notes", json::array({
 					"Collection is disabled by default and absent from non-DevBench builds.",
 					"GPU results are copied to a staging ring and mapped with DO_NOT_WAIT; diagnostics never wait for the GPU.",
-					"Pipeline statistics and timestamp queries cover the post-occlusion GPU region through the following frame's early prepass and are read with D3D11_ASYNC_GETDATA_DONOTFLUSH.",
+					"The legacy gpuRegionTiming covers OBB-result readiness through the following frame's early prepass.",
+					"Pipeline statistics and coverageSpanTiming begin at the first successfully visibility-bound lighting draw and end at the following frame's early prepass.",
+					"All query results are read with D3D11_ASYNC_GETDATA_DONOTFLUSH; diagnostics never flush or wait for the GPU.",
 					"forced_visible preserves the OBB pass, binding, lookup, branch, and draw submissions but binds an all-visible result buffer to suppress only the shader early exit.",
 				}) },
 			};

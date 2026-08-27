@@ -570,10 +570,14 @@ public:
 		winrt::com_ptr<ID3D11Query> query;
 		winrt::com_ptr<ID3D11Query> timestampDisjoint;
 		winrt::com_ptr<ID3D11Query> timestampStart;
+		winrt::com_ptr<ID3D11Query> timestampCoverageStart;
 		winrt::com_ptr<ID3D11Query> timestampEnd;
 		std::uint64_t epoch = 0;
 		std::uint32_t frame = CSX::VRDepthCullingDiagnostics::kNoFrame;
+		std::uint64_t coveredLightingDraws = 0;
 		bool active = false;
+		bool coverageActive = false;
+		bool coverageCaptured = false;
 		bool pending = false;
 	};
 	std::array<DepthCullingReadbackSlot, kDepthCullingReadbackRingSize> depthCullingReadbackSlots{};
@@ -594,7 +598,8 @@ public:
 	void RecordDepthCullingDiagnosticDraw(
 		std::uint32_t a_objectIndex,
 		CSX::VRDepthCullingDiagnostics::DrawCategory a_category);
-	void BeginDepthCullingPipelineStatistics(std::uint32_t a_frame);
+	void ArmDepthCullingPipelineStatistics(std::uint32_t a_frame);
+	void BeginDepthCullingCoverageSpan(std::uint32_t a_frame);
 	ID3D11ShaderResourceView* GetDepthCullingDiagnosticControlSrv(ID3D11ShaderResourceView* a_liveVisibility);
 #endif
 

@@ -31,7 +31,8 @@ int main()
 	counters.RecordPipelineQueryEnded();
 	counters.RecordPipelineQueryCompleted();
 	counters.RecordPipelineTiming(counters.CollectionEpoch(), 2500000);
-	counters.RecordPipelineStatistics(counters.CollectionEpoch(), {
+	counters.RecordCoverageSpanTiming(counters.CollectionEpoch(), 1750000);
+	counters.RecordPipelineStatistics(counters.CollectionEpoch(), 42, {
 		.iaVertices = 1000,
 		.iaPrimitives = 500,
 		.vsInvocations = 900,
@@ -63,7 +64,9 @@ int main()
 		snapshot.occludedLightingDraws != 3 || snapshot.visibleGrassDraws != 4 ||
 		snapshot.pipelineQueriesBegun != 1 || snapshot.pipelineQueriesEnded != 1 ||
 		snapshot.pipelineQueriesCompleted != 1 || snapshot.pipelineStatsSamples != 1 ||
+		snapshot.pipelineCoveredLightingDraws != 42 ||
 		snapshot.pipelineTimingSamples != 1 || snapshot.pipelineRegionNanoseconds != 2500000 ||
+		snapshot.coverageSpanTimingSamples != 1 || snapshot.coverageSpanRegionNanoseconds != 1750000 ||
 		snapshot.pipelineIAVertices != 1000 || snapshot.pipelineIAPrimitives != 500 ||
 		snapshot.pipelineVSInvocations != 900 || snapshot.pipelineClipperInvocations != 800 ||
 		snapshot.pipelineClipperPrimitives != 400 || snapshot.pipelinePSInvocations != 700 ||
@@ -82,7 +85,9 @@ int main()
 	return !snapshot.collecting && snapshot.framesObserved == 0 && snapshot.bindAttempts == 0 &&
 		snapshot.visibilityFramesSampled == 0 &&
 		snapshot.pipelineStatsSamples == 0 &&
+		snapshot.pipelineCoveredLightingDraws == 0 &&
 		snapshot.pipelineTimingSamples == 0 && snapshot.pipelineRegionNanoseconds == 0 &&
+		snapshot.coverageSpanTimingSamples == 0 && snapshot.coverageSpanRegionNanoseconds == 0 &&
 		snapshot.controlMode == CSX::VRDepthCullingDiagnostics::ControlMode::ForcedVisible ?
 		0 :
 		4;

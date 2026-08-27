@@ -119,6 +119,22 @@ if(_start_performance_error OR _start_performance_default)
     )
 endif()
 
+string(FIND
+    "${_bridge}"
+    "descriptor[\"inputSchema\"][\"properties\"][\"cocCellEditorId\"]"
+    _coc_cell_schema_position
+)
+string(FIND
+    "${_bridge}"
+    "same main-thread operation"
+    _coc_cell_timing_position
+)
+if(_coc_cell_schema_position EQUAL -1 OR _coc_cell_timing_position EQUAL -1)
+    message(FATAL_ERROR
+        "Render-scale COC command timing schema is incomplete"
+    )
+endif()
+
 string(JSON _expected_session_minimum ERROR_VARIABLE _expected_session_error
     GET "${_descriptor}" inputSchema properties expectedSessionId minimum
 )
@@ -184,6 +200,8 @@ foreach(_required_behavior IN ITEMS
     "TryParseQualificationOwnerID"
     "TryParseOptionalIntegerExpectation"
     "QualificationEvidenceOwnedBy"
+    "TryParseQualificationCocCellEditorID"
+    "invalid_coc_cell_editor_id"
     "stress_session_mismatch"
     "dlss_trace_session_mismatch"
     "cpu_performance_session_mismatch"
@@ -201,6 +219,8 @@ foreach(_required_behavior IN ITEMS
     "a_transition.dispatchTick"
     "a_transition.dispatchFrame"
     "elapsedOrigin"
+    "coc_command"
+    "RE::Console::ExecuteCommand(command.c_str())"
     "QualificationMonotonicRegressionsJson"
     "BuildAdapterIdentity"
     "{ \"adapter\", BuildAdapterIdentity() }"

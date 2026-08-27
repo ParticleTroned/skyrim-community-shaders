@@ -112,12 +112,21 @@ Each transition is a fail-fast sequence of checked top-level MCP calls:
 3. DevBench executes the one `coc` command only after that receipt succeeds.
 4. `communityshaders.renderscale qualification_wait` waits for the exact
    destination, requested/effective/stable profile agreement, complete physical
-   resources, clean lifecycle, and a coherent two-eye presentation.
+   resources, clean lifecycle, and a coherent two-eye presentation. Its optional
+   `milestone` is `strict`, `presentation`, or `cleanup`; omitted input preserves
+   the original `strict` presentation-plus-cleanup contract.
 
-The waiter stops on the first coherent stable observation. The runner validates
-`satisfied: true` and `outcome: stable` before dispatching the next COC. There
-are no fixed sleeps, menu queries, client polling loops, same-cell COCs, or
-overlapping transitions in the 20-transition sequence. A semantic or transport
+Every waiter records the first server-owned QPC and frame observation for
+`presentationStable`, `cleanupDrained`, and their strict conjunction. A
+`presentation` waiter may return once the current stereo contract is proven while
+safe trim, retirement debt, or an exact-owner post-load recovery that has already
+entered its deferred cleanup-only phase remains. Mutation-capable recovery,
+device loss, stale ownership, and unresolved physical mutation still fail
+closed. A `cleanup` waiter cannot return before a presentation milestone has
+been observed. The default strict waiter stops only
+when both are true. The runner validates `satisfied: true` and `outcome: stable`
+before dispatching the next COC. There are no fixed sleeps, menu queries, client
+polling loops, same-cell COCs, or overlapping transitions in the 20-transition sequence. A semantic or transport
 failure stops before the next mutation. The per-transition ceiling is 120
 seconds, further bounded by the suite deadline.
 
@@ -127,11 +136,12 @@ requires both eyes to present the exact current vendor evaluation, matching
 method, generation, epoch, input extent, output extent, and stable physical
 contract. Native completes on one coherent stereo cycle; active vendor
 presentation requires two consecutive coherent stereo cycles. Intentional
-`PresentationStretch` is measured separately and must
-recover; vendor-failure stretch and bounds-mismatch fallback are failures.
+`PresentationStretch` is measured separately and must recover; vendor-failure
+stretch and bounds-mismatch fallback are failures.
 
-The assay reports wall time and stable latency in milliseconds and frames. It
-also reports count, total, minimum, median, arithmetic mean, sample standard
+The assay reports wall time, presentation-stable latency, cleanup-drain
+latency, and strict stable latency in milliseconds and frames. It also reports
+count, total, minimum, median, arithmetic mean, sample standard
 deviation, coefficient of variation, nearest-rank p95, maximum, and transitions
 per minute, both overall and split by destination. Failure rates include a
 Wilson 95-percent confidence interval. No samples are discarded as outliers.

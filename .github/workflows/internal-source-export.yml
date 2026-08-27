@@ -12,9 +12,10 @@ jobs:
   export:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out tracked source
+      - name: Check out requested tracked source
         uses: actions/checkout@v4
         with:
+          ref: fix/vr-submit-resource-lease
           fetch-depth: 1
           submodules: false
 
@@ -25,7 +26,7 @@ jobs:
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
-          name: source-export
+          name: source-export-pr49
           path: source-export.zip
           if-no-files-found: error
           retention-days: 1

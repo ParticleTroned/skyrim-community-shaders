@@ -1,4 +1,4 @@
-name: Internal source export
+name: Internal RC166 integration
 
 on:
   push:
@@ -6,27 +6,153 @@ on:
       - codex/internal-source-export
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export:
+  integrate:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out requested tracked source
+      - name: Check out current integration head
         uses: actions/checkout@v4
         with:
-          ref: codex/vr-renderscale-RC166lessons-test
-          fetch-depth: 1
+          ref: main-VR
+          fetch-depth: 0
           submodules: false
 
-      - name: Archive tracked source
+      - name: Configure integration identity
         shell: bash
-        run: git archive --format=zip --output=source-export.zip HEAD
+        run: |
+          git config user.name "ParticleTroned"
+          git config user.email "248299730+ParticleTroned@users.noreply.github.com"
+          git fetch origin fix/vr-submit-resource-lease
 
-      - name: Upload source archive
+      - name: Replay reviewed PR49 commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          git switch -C rc166-lessons-test-v2 origin/main-VR
+          git cherry-pick -x 466c25543f68318d611051493c19f716802c58ec
+          git cherry-pick -x 067f15f83dc494478f614cac88a17dd81af5de56
+
+      - name: Record corrected RC166 workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .agents
+          cat > .agents/rc166-lessons-workflow.md <<'EOF'
+          # RC166 Lessons Integration Workflow
+
+          This file governs work prepared on or above the cumulative RC166
+          render-scale test branch. Read it with the repository `AGENTS.md`,
+          `AI-INSTRUCTIONS.md`, `.claude/CLAUDE.md`, and PR template.
+
+          ## Corrected series order
+
+          Apply and validate the original assessment items in this order:
+
+          1. Item 1: OpenVR Submit resource lease.
+          2. Item 4: separate presentation stability from cleanup drain.
+          3. Item 6: render-scale memory high-water measurement.
+          4. Item 2: replacement mutation versus current presentation.
+          5. Item 3: render-scale authority and liveness invariants.
+          6. Item 7: render-target publication dependency audit.
+          7. Item 8: never-submitted generation retirement provenance.
+          8. Item 9: hidden-area-mask dispatch admission audit.
+          9. Item 10: render-scale preparation timing and safe staging.
+          10. Item 11: PR43 GPU-work regression guards.
+          11. Item 12: reverted PR47/PR48 authority guardrails.
+
+          Original item 5, temporal depth-culling measurement, is excluded from
+          this render-scale stack. The restored bounded culling path recovered
+          part of the observed performance loss and must remain unchanged unless
+          later controlled evidence specifically implicates it.
+
+          ## Commit and PR rules
+
+          - Address separable concerns as separate commits.
+          - Use `type(scope): imperative summary` subjects.
+          - Non-trivial commit bodies must describe rationale, implementation,
+            safety/fidelity, exact validation, and provenance where applicable.
+          - Use `-x` or explicit source trailers when replaying existing commits.
+          - Credit copied or materially adapted external work with repository,
+            source commit/PR, and an appropriate GitHub noreply co-author trailer.
+          - Avoid unrelated churn and preserve SE, AE, VR, visual-fidelity,
+            resource-lifetime, provider, save/load, and compositor contracts.
+          - Perform a hostile base-to-head review for scope, races, ownership,
+            locking, lifetime, stereo coherence, failure behavior, and DRY design.
+          - Do not manufacture a production change when evidence supports only
+            measurement, tests, or documentation.
+
+          ## DevBench and logging
+
+          - Put new runtime evidence behind the existing DevBench bridge.
+          - Bind observations to exact session/request/epoch/generation/device
+            ownership where relevant.
+          - Diagnostics must never create, clear, gate, or retire production work.
+          - Production builds must not pay per-frame logging, QPC, OS queries,
+            allocations, locks, or unbounded storage solely for diagnostics.
+          - Debug logging must be transition-scoped or rate-limited.
+
+          ## Cumulative test branch
+
+          Each accepted item is replayed onto the cumulative test head only after
+          its own adversarial review. Empty topic branches are not treated as
+          implementations. The cumulative branch is for integrated build and
+          headset evaluation; it does not replace item-specific review evidence.
+          EOF
+
+          git add .agents/rc166-lessons-workflow.md
+          git commit -m "docs(agents): record RC166 lesson order" \
+            -m "Rationale:
+          The cumulative test branch needs the corrected integration order and
+          durable commit, validation, diagnostics, and fidelity rules. The prior
+          draft incorrectly retained temporal depth-culling as a stack item.
+
+          Implementation:
+          Record the 1, 4, 6, 2, 3, 7, 8, 9, 10, 11, 12 order, explicitly exclude
+          item 5, and define the cumulative-branch and production-overhead rules.
+
+          Validation:
+          Documentation is checked by the integration diff and log checks in this
+          workflow. No runtime or headset validation is claimed.
+
+          Provenance:
+          No external code was copied or directly adapted."
+
+      - name: Validate cumulative diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check origin/main-VR...HEAD
+          git log --check origin/main-VR..HEAD
+          test -z "$(git status --porcelain)"
+          {
+            echo "base=$(git rev-parse origin/main-VR)"
+            echo "head=$(git rev-parse HEAD)"
+            echo
+            echo "Commits:"
+            git log --oneline --decorate origin/main-VR..HEAD
+            echo
+            echo "Changed files:"
+            git diff --name-status origin/main-VR...HEAD
+            echo
+            echo "Diff stat:"
+            git diff --stat origin/main-VR...HEAD
+          } | tee rc166-lessons-test-v2-summary.txt
+          git diff --binary origin/main-VR...HEAD > rc166-lessons-test-v2.patch
+
+      - name: Push cumulative test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/codex/vr-renderscale-RC166lessons-test-v2
+
+      - name: Upload integration evidence
         uses: actions/upload-artifact@v4
         with:
-          name: source-export-rc166-test-base
-          path: source-export.zip
+          name: rc166-lessons-test-v2-integration
+          path: |
+            rc166-lessons-test-v2-summary.txt
+            rc166-lessons-test-v2.patch
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7

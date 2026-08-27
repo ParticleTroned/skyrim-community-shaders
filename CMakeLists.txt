@@ -1598,11 +1598,6 @@ if(BUILD_CONTROLLER_TESTS)
         tests/overlay_policy_test.cpp
     )
     add_controller_test(
-        openvr_submit_lease_policy_test
-        OpenVRSubmitLeasePolicy
-        tests/openvr_submit_lease_policy_test.cpp
-    )
-    add_controller_test(
         shader_cache_disable_policy_test
         ShaderCacheDisablePolicy
         tests/shader_cache_disable_policy_test.cpp
@@ -1819,7 +1814,6 @@ if(BUILD_CONTROLLER_TESTS)
             reflex_policy_test
             fsr_host_lifecycle_policy_test
             overlay_policy_test
-            openvr_submit_lease_policy_test
             shader_cache_disable_policy_test
             shader_cache_provenance_test
             cache_invalidation_test

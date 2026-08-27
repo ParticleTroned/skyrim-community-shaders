@@ -5,20 +5,19 @@ Read it together with every applicable `AGENTS.md` and the repository's existing
 
 ## Scope and series order
 
-Prepare the RC166-lessons series in this order:
+Prepare the RC166-lessons series in the original assessment numbering and this corrected order:
 
-1. OpenVR Submit resource lease
-2. Qualification milestones (`presentationStable` versus `cleanupDrained`)
-3. Temporal depth-culling measurement
-4. Render-scale memory high-water measurement
-5. Replacement-mutation versus current-presentation audit/hardening
-6. Render-scale authority/liveness map and executable invariants
-7. Render-target publication dependency/timing audit
-8. Never-submitted generation retirement provenance
-9. Hidden-area-mask dispatch-admission audit
-10. Render-scale preparation timing and safe asynchronous staging
-11. PR43 GPU-work regression guards
-12. Reverted PR47/PR48 authority-design guardrails
+1. Point 1 — OpenVR Submit resource lease
+2. Point 4 — Qualification milestones (`presentationStable` versus `cleanupDrained`)
+3. Point 6 — Render-scale memory high-water measurement
+4. Point 2 — Replacement-mutation versus current-presentation audit/hardening
+5. Point 3 — Render-scale authority/liveness map and executable invariants
+6. Point 7 — Render-target publication dependency/timing audit
+7. Point 8 — Never-submitted generation retirement provenance
+8. Point 9 — Hidden-area-mask dispatch-admission audit
+9. Point 10 — Render-scale preparation timing and safe asynchronous staging
+10. Point 11 — PR43 GPU-work regression guards
+11. Point 12 — Reverted PR47/PR48 authority-design guardrails
 
 Do not start a later item until the preceding item has a reviewable PR and its adversarial review is complete. Later branches must be based on the reviewed head of the preceding item so the final series head contains the complete integration build.
 

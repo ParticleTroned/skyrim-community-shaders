@@ -38,8 +38,9 @@ task, and restores the caller's Java environment afterward.
 ## Managed headless server
 
 The normal automation path does not require a Ghidra window, a manually
-created project, or manual plugin activation. Start a managed headless session
-with the binary to import:
+created project, or manual plugin activation. Managed sessions use Ghidra's
+`pyghidraRun --headless` launcher so `eval_python` and debugger helpers are
+available. Start one with the exact binary to import:
 
 ```powershell
 pwsh ./tools/ghidra-mcp-control.ps1 start `
@@ -55,8 +56,14 @@ wait can therefore return `state: starting`; it does not interrupt analysis.
 Inspect progress and readiness with:
 
 ```powershell
-pwsh ./tools/ghidra-mcp-control.ps1 status
+pwsh ./tools/ghidra-mcp-control.ps1 status `
+  -ProgramPath 'D:\Artifacts\intended-build\CommunityShaders.dll'
 ```
+
+The status receipt is ready only when a harmless `eval_python` probe succeeds
+and its active program path and SHA-256 match `-ProgramPath`. Always pass the
+artifact intended for the current investigation. A listening endpoint or an
+old project program is not sufficient.
 
 Later starts reuse the saved paths and imported program without rerunning
 auto-analysis:
@@ -64,6 +71,11 @@ auto-analysis:
 ```powershell
 pwsh ./tools/ghidra-mcp-control.ps1 start
 ```
+
+Passing a different `-ProgramPath` after stopping the managed session imports
+and analyzes that artifact with overwrite semantics, then binds the saved
+session to its path and SHA-256. This prevents a project left on an RC build
+from being accepted for a PR artifact.
 
 Stop the managed session cleanly with:
 

@@ -33,7 +33,7 @@ try {
     $env:GHIDRA_JAVA_HOME = [string] $launch.javaHome
     Set-Location -LiteralPath ([string] $launch.workingDirectory)
 
-    & ([string] $launch.analyzeHeadless) @($launch.arguments) `
+    & ([string] $launch.launcher) @($launch.arguments) `
         1>> ([string] $launch.stdoutLog) `
         2>> ([string] $launch.stderrLog)
     $exitCode = $LASTEXITCODE

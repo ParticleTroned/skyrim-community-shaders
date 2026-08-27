@@ -181,6 +181,8 @@ function Test-GhidrAssistEndpoint {
             ready = $false
             serverName = $null
             protocolVersion = $null
+            pyGhidraReady = $false
+            activeProgram = $null
             error = "The loopback endpoint is not listening."
         }
     }
@@ -220,30 +222,103 @@ function Test-GhidrAssistEndpoint {
             [string] $sessionHeader
         }
 
+        $pyGhidraReady = $false
+        $activeProgram = $null
+        $capabilityError = $null
         if ($sessionId) {
             try {
+                $sessionHeaders = @{
+                    Accept = "application/json, text/event-stream"
+                    "Content-Type" = "application/json"
+                    "Mcp-Session-Id" = $sessionId
+                }
                 Invoke-WebRequest `
                     -UseBasicParsing `
-                    -Method Delete `
+                    -Method Post `
                     -Uri $endpoint `
-                    -Headers @{ "Mcp-Session-Id" = $sessionId } `
+                    -Headers $sessionHeaders `
+                    -Body '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' `
                     -TimeoutSec 3 | Out-Null
+                $probeScript = @'
+import json
+def text(value):
+    return None if value is None else str(value)
+print("CSX_PYGHIDRA_READY:" + json.dumps({
+    "name": text(currentProgram.getName()) if currentProgram else None,
+    "path": text(currentProgram.getExecutablePath()) if currentProgram else None,
+    "sha256": text(currentProgram.getExecutableSHA256()) if currentProgram else None,
+}))
+'@
+                $callBody = @{
+                    jsonrpc = "2.0"
+                    id = [DateTime]::UtcNow.Ticks
+                    method = "tools/call"
+                    params = @{
+                        name = "eval_python"
+                        arguments = @{ script = $probeScript }
+                    }
+                } | ConvertTo-Json -Depth 10 -Compress
+                $callResponse = Invoke-WebRequest `
+                    -UseBasicParsing `
+                    -Method Post `
+                    -Uri $endpoint `
+                    -Headers $sessionHeaders `
+                    -Body $callBody `
+                    -TimeoutSec 10
+                $callJson = Get-McpResponseJson -Content $callResponse.Content
+                $isErrorProperty = $callJson.result.PSObject.Properties["isError"]
+                if ($isErrorProperty -and [bool] $isErrorProperty.Value) {
+                    throw "eval_python returned an MCP tool error."
+                }
+                $text = [string](@(
+                    $callJson.result.content |
+                        Where-Object type -eq "text" |
+                        Select-Object -First 1
+                )[0].text)
+                $marker = "CSX_PYGHIDRA_READY:"
+                $markerIndex = $text.IndexOf($marker, [StringComparison]::Ordinal)
+                if ($markerIndex -lt 0) {
+                    throw "eval_python did not return its readiness marker: $text"
+                }
+                $programJson = $text.Substring($markerIndex + $marker.Length).Trim()
+                $activeProgram = $programJson | ConvertFrom-Json -Depth 10
+                if (-not $activeProgram.path -or -not $activeProgram.sha256) {
+                    throw "eval_python did not identify a loaded program path and SHA-256."
+                }
+                $pyGhidraReady = $true
             } catch {
-                # Session cleanup is best-effort after identity has been proven.
+                $capabilityError = $_.Exception.Message
+            } finally {
+                try {
+                    Invoke-WebRequest `
+                        -UseBasicParsing `
+                        -Method Delete `
+                        -Uri $endpoint `
+                        -Headers @{ "Mcp-Session-Id" = $sessionId } `
+                        -TimeoutSec 3 | Out-Null
+                } catch {
+                    # Session cleanup is best-effort after identity has been proven.
+                }
             }
+        } else {
+            $capabilityError = "The MCP endpoint did not return a session ID."
         }
 
         return [pscustomobject][ordered]@{
             ready = $serverName -eq "ghidrassistmcp"
             serverName = $serverName
             protocolVersion = [string] $json.result.protocolVersion
-            error = $null
+            pyGhidraReady = $pyGhidraReady
+            activeProgram = $activeProgram
+            error = $capabilityError
         }
     } catch {
         return [pscustomobject][ordered]@{
             ready = $false
             serverName = $null
             protocolVersion = $null
+            pyGhidraReady = $false
+            activeProgram = $null
             error = $_.Exception.Message
         }
     }
@@ -479,6 +554,40 @@ function New-StatusResult {
             "The MCP listener could not be proven to belong to the managed Ghidra process tree."
         )
     }
+    if ($Probe.ready -and -not $Probe.pyGhidraReady) {
+        $effectiveOk = $false
+        $resultErrors.Add(
+            "The managed MCP endpoint did not pass the PyGhidra eval_python probe: $($Probe.error)"
+        )
+    }
+    $expectedProgramPath = $script:expectedProgramPath
+    $expectedProgramSha256 = $script:expectedProgramSha256
+    $activeProgramPath = if ($Probe.activeProgram) {
+        [string] $Probe.activeProgram.path
+    } else { $null }
+    $activeProgramSha256 = if ($Probe.activeProgram) {
+        [string] $Probe.activeProgram.sha256
+    } else { $null }
+    $programMatchesExpectation = $null
+    if ($expectedProgramPath) {
+        $programMatchesExpectation = $Probe.pyGhidraReady -and
+            $activeProgramPath -and
+            [IO.Path]::GetFullPath($activeProgramPath).Equals(
+                [IO.Path]::GetFullPath($expectedProgramPath),
+                [StringComparison]::OrdinalIgnoreCase
+            ) -and
+            (-not $expectedProgramSha256 -or
+                ($activeProgramSha256 -and $activeProgramSha256.Equals(
+                    $expectedProgramSha256,
+                    [StringComparison]::OrdinalIgnoreCase
+                )))
+        if (-not $programMatchesExpectation) {
+            $effectiveOk = $false
+            $resultErrors.Add(
+                "The active Ghidra program does not match the expected artifact."
+            )
+        }
+    }
 
     return [pscustomobject][ordered]@{
         schemaVersion = 1
@@ -489,6 +598,7 @@ function New-StatusResult {
         endpoint = $endpoint
         endpointReady = [bool] $Probe.ready
         serverName = $Probe.serverName
+        pyGhidraReady = [bool] $Probe.pyGhidraReady
         processId = $(if ($Process) { $Process.Id } else { $null })
         listenerProcessId = $listenerPid
         listenerOwnedBySession = $ownedListener
@@ -498,9 +608,20 @@ function New-StatusResult {
                 directory = $Session.projectDirectory
                 name = $Session.projectName
                 program = $Session.programName
+                programPath = $Session.programPath
+                programSha256 = Get-OptionalProperty -Value $Session -Name "programSha256"
+                launcherMode = Get-OptionalProperty -Value $Session -Name "launcherMode"
                 mode = $Session.mode
             }
         } else { $null })
+        activeProgram = $Probe.activeProgram
+        expectedProgram = $(if ($expectedProgramPath) {
+            [pscustomobject][ordered]@{
+                path = $expectedProgramPath
+                sha256 = $expectedProgramSha256
+            }
+        } else { $null })
+        programMatchesExpectation = $programMatchesExpectation
         logs = $(if ($Session) {
             [pscustomobject][ordered]@{
                 stdout = $Session.stdoutLog
@@ -542,6 +663,7 @@ function Complete-Command($Result) {
     }
 }
 
+$programPathExplicit = $PSBoundParameters.ContainsKey("ProgramPath")
 $resolvedStateDirectory = if ($StateDirectory) {
     Get-UnresolvedFullPath $StateDirectory
 } else {
@@ -597,6 +719,19 @@ try {
             }
         }
     }
+    $script:expectedProgramPath = if ($ProgramPath) {
+        (Get-Item -LiteralPath $ProgramPath -ErrorAction Stop).FullName
+    } elseif ($session) {
+        Get-OptionalProperty -Value $session -Name "programPath"
+    } else { $null }
+    $script:expectedProgramSha256 = if (
+        $script:expectedProgramPath -and
+        (Test-Path -LiteralPath $script:expectedProgramPath -PathType Leaf)
+    ) {
+        (Get-FileHash -LiteralPath $script:expectedProgramPath -Algorithm SHA256).Hash
+    } elseif ($session) {
+        Get-OptionalProperty -Value $session -Name "programSha256"
+    } else { $null }
     $trackedProcess = Get-TrackedProcess -Session $session
     $probe = Test-GhidrAssistEndpoint
 
@@ -724,16 +859,16 @@ try {
     $resolvedGhidraRoot = Resolve-ExistingDirectory `
         -Path $GhidraInstallDir `
         -Description "Ghidra installation"
-    $analyzeHeadlessName = if ($env:OS -eq "Windows_NT") {
-        "analyzeHeadless.bat"
+    $pyGhidraRunName = if ($env:OS -eq "Windows_NT") {
+        "pyghidraRun.bat"
     } else {
-        "analyzeHeadless"
+        "pyghidraRun"
     }
-    $analyzeHeadless = Join-Path `
+    $pyGhidraRun = Join-Path `
         $resolvedGhidraRoot `
-        "support\$analyzeHeadlessName"
-    if (-not (Test-Path -LiteralPath $analyzeHeadless -PathType Leaf)) {
-        throw "Ghidra analyzeHeadless was not found: $analyzeHeadless"
+        "support\$pyGhidraRunName"
+    if (-not (Test-Path -LiteralPath $pyGhidraRun -PathType Leaf)) {
+        throw "Ghidra PyGhidra launcher was not found: $pyGhidraRun"
     }
 
     $resolvedJavaHome = Resolve-JavaHome -RequestedJavaHome $JavaHome
@@ -777,6 +912,7 @@ try {
     $projectFile = Join-Path $resolvedProjectDirectory "$ProjectName.gpr"
     $projectExists = Test-Path -LiteralPath $projectFile -PathType Leaf
     $resolvedProgramPath = $null
+    $resolvedProgramSha256 = $null
     if ($ProgramPath) {
         $resolvedProgramPath = (Get-Item -LiteralPath $ProgramPath -ErrorAction Stop).FullName
         if (-not (Test-Path -LiteralPath $resolvedProgramPath -PathType Leaf)) {
@@ -785,18 +921,40 @@ try {
         if (-not $PSBoundParameters.ContainsKey("ProgramName")) {
             $ProgramName = Split-Path -Leaf $resolvedProgramPath
         }
+        $resolvedProgramSha256 = (
+            Get-FileHash -LiteralPath $resolvedProgramPath -Algorithm SHA256
+        ).Hash
     }
     if (-not $projectExists -and -not $resolvedProgramPath) {
         throw "The project does not exist; first start requires -ProgramPath."
     }
 
-    $mode = if ($projectExists) { "process" } else { "import" }
+    $savedProgramPath = Get-OptionalProperty -Value $session -Name "programPath"
+    $savedProgramSha256 = Get-OptionalProperty -Value $session -Name "programSha256"
+    $refreshProgram = $projectExists -and $programPathExplicit -and (
+        -not $savedProgramPath -or
+        -not $savedProgramSha256 -or
+        -not $resolvedProgramPath.Equals(
+            [string] $savedProgramPath,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -or
+        -not $resolvedProgramSha256.Equals(
+            [string] $savedProgramSha256,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+    )
+    $mode = if (-not $projectExists -or $refreshProgram) { "import" } else { "process" }
     $arguments = [Collections.Generic.List[string]]::new()
+    $arguments.Add("--headless")
+    $arguments.Add("--console")
     $arguments.Add($resolvedProjectDirectory)
     $arguments.Add($ProjectName)
     if ($mode -eq "import") {
         $arguments.Add("-import")
         $arguments.Add($resolvedProgramPath)
+        if ($projectExists) {
+            $arguments.Add("-overwrite")
+        }
     } else {
         $arguments.Add("-process")
         $arguments.Add($ProgramName)
@@ -813,7 +971,8 @@ try {
 
     $launch = [ordered]@{
         schemaVersion = 1
-        analyzeHeadless = $analyzeHeadless
+        launcher = $pyGhidraRun
+        launcherMode = "pyghidra-headless"
         arguments = @($arguments)
         javaHome = $resolvedJavaHome
         workingDirectory = $repositoryRoot
@@ -859,7 +1018,9 @@ try {
         projectDirectory = $resolvedProjectDirectory
         projectName = $ProjectName
         programPath = $resolvedProgramPath
+        programSha256 = $resolvedProgramSha256
         programName = $ProgramName
+        launcherMode = "pyghidra-headless"
         mode = $mode
         completionFile = $completionFile
         stdoutLog = $stdoutLog

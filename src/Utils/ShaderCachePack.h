@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
+#include <shared_mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -67,6 +68,8 @@ namespace Util::ShaderCachePack
 		bool Open(std::string* a_error = nullptr);
 		std::optional<Entry> Find(std::string_view a_exactKey, std::string* a_error = nullptr) const;
 		bool Append(const Entry& a_entry, std::string* a_error = nullptr);
+		/** Durably commits all records appended since the previous checkpoint. */
+		bool Checkpoint(std::string* a_error = nullptr);
 		Stats GetStats() const;
 		bool ShouldCompact(double a_minimumFragmentation = 0.30, std::uint64_t a_minimumSupersededBytes = 32ull * 1024ull * 1024ull) const;
 		bool Compact(std::string* a_error = nullptr);
@@ -99,7 +102,7 @@ namespace Util::ShaderCachePack
 			std::vector<RecordLocation> records;
 		};
 
-		mutable std::mutex mutex;
+		mutable std::shared_mutex mutex;
 		std::filesystem::path pathA;
 		std::filesystem::path pathB;
 		Lane lane;
@@ -108,12 +111,13 @@ namespace Util::ShaderCachePack
 		ScannedFile fallback;
 		std::unordered_map<std::string, RecordLocation> exactIndex;
 		std::unordered_map<std::string, RecordLocation> liveByLogical;
+		std::unordered_map<std::string, RecordLocation> activeLiveByLogical;
 		Stats stats;
 
 		bool OpenLocked(std::string* a_error);
 		bool Scan(const std::filesystem::path& a_path, ScannedFile& a_output, std::string* a_error) const;
 		bool InitializeEmpty(ScannedFile& a_file, std::uint64_t a_generation, std::string* a_error) const;
-		bool AppendLocked(ScannedFile& a_file, const Entry& a_entry, std::uint64_t a_sequence, std::string* a_error) const;
+		bool AppendLocked(ScannedFile& a_file, const Entry& a_entry, std::uint64_t a_sequence, bool a_checkpoint, std::string* a_error) const;
 		std::optional<Entry> Read(const RecordLocation& a_location, std::string* a_error) const;
 		void RebuildIndexes();
 	};

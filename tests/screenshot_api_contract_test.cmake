@@ -68,6 +68,8 @@ foreach(_required_contract_text IN ITEMS
     runtime_session persistent_user settings_default file_reference
     maximumOutputsPerFrame retentionSeconds manifest_write_failed
 	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
+	maximumActiveSequences maximumReservedSequenceChildren
+	maximumSequenceStartDelayMs sequence_deadline_reached childrenComplete
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)

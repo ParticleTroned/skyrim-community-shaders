@@ -298,9 +298,13 @@ The response includes at least:
     "activeSourceCaptures": 1,
     "outstandingArtifacts": 2,
     "pendingOperations": 64,
+    "maximumActiveSequences": 8,
+    "maximumReservedSequenceChildren": 10000,
     "maximumOutputsPerFrame": 4,
     "maximumSequenceFrames": 10000,
     "maximumSequenceDurationMs": 3600000,
+    "maximumSequenceStartDelayMs": 300000,
+    "maximumSequenceStartDelayFrames": 18000,
     "maximumRetainedTerminalRequests": 256,
     "maximumRetainedEvents": 4096,
     "retentionSeconds": 3600
@@ -311,6 +315,14 @@ The response includes at least:
 These numbers are examples, not frozen limits. The implementation reports its
 actual values. The present worker's two-outstanding-artifact limit may remain
 initially; a sequence scheduler must adapt rather than enlarge it blindly.
+Sequence admission reserves each accepted sequence's requested child count,
+so concurrent sequences cannot collectively exceed the advertised child
+retention bound. Every sequence also has the advertised absolute one-hour
+lifetime, including its start delay. A partial manifest contains counts and up
+to ten recent entries in `children`, with `childrenComplete: false`; the final
+manifest contains the complete `children`
+array. Partial jobs are coalesced so slow storage cannot create an unbounded
+manifest backlog.
 
 ### Operational status
 

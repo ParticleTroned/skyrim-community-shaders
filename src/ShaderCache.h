@@ -971,10 +971,12 @@ namespace SIE
 		std::mutex hlslMapMutex;                                                                  // guard for hlslToShaderMap
 
 		std::deque<DeferredDiskWrite> deferredDiskWrites;
+		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
 		std::mutex deferredDiskWritesMutex;
 		std::condition_variable_any deferredDiskWritesCV;
 		std::jthread deferredDiskWriterJthread;
 		std::atomic_bool acceptDeferredDiskWrites{ true };
+		std::atomic_bool deferredDiskWriteLimitReported{ false };
 		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
 		bool deferredManifestFlushPending = false;  // guarded by deferredDiskWritesMutex
 

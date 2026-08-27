@@ -165,8 +165,11 @@ namespace CSX::RenderMap
 	{
 	public:
 		StartResult StartCapture(const CollectorConfig& a_config);
-		std::optional<CaptureSnapshot> StopCapture(StopReason a_reason = StopReason::kRequested);
+		std::optional<CaptureSnapshot> StopCapture(
+			StopReason a_reason = StopReason::kRequested,
+			std::chrono::milliseconds a_drainTimeout = std::chrono::milliseconds(100));
 		bool IsCapturing() const noexcept;
+		bool IsCaptureDraining() const noexcept;
 		std::uint64_t ActiveCaptureGeneration() const noexcept;
 
 		void SetCpuFrame(std::uint64_t a_cpuFrame) noexcept;
@@ -260,9 +263,13 @@ namespace CSX::RenderMap
 	private:
 		std::uint64_t EnsureImmediateContextObservation() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
-		StageShaderObservationResult ResolveBoundStage(
+		StageShaderObservationResult ObserveBoundStage(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) noexcept;
+		void PublishBoundStageObservation(
+			ShaderStage a_stage,
+			std::uintptr_t a_d3dObject,
+			const StageShaderObservationResult& a_observation) noexcept;
 		TargetViewObservationResult ObserveResourceView(
 			const ResourceViewInput& a_input,
 			std::uint64_t a_contextObservationId,
@@ -277,6 +284,9 @@ namespace CSX::RenderMap
 		std::atomic_uintptr_t boundVertexShader{ 0 };
 		std::atomic_uintptr_t boundPixelShader{ 0 };
 		std::atomic_uintptr_t boundComputeShader{ 0 };
+		std::atomic_uint64_t boundVertexShaderObservationId{ 0 };
+		std::atomic_uint64_t boundPixelShaderObservationId{ 0 };
+		std::atomic_uint64_t boundComputeShaderObservationId{ 0 };
 		std::atomic_uint64_t boundTargetBindingObservationId{ 0 };
 		std::atomic_uint64_t immediateContextPointerGeneration{ 0 };
 		std::atomic_uint64_t immediateContextObservationId{ 0 };

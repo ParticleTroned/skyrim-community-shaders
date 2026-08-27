@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -463,8 +464,11 @@ namespace CSX::RenderMap
 		Collector& operator=(const Collector&) = delete;
 
 		StartResult Start(const CollectorConfig& a_config);
-		std::optional<CaptureSnapshot> Stop(StopReason a_reason = StopReason::kRequested);
+		std::optional<CaptureSnapshot> Stop(
+			StopReason a_reason = StopReason::kRequested,
+			std::chrono::milliseconds a_drainTimeout = std::chrono::milliseconds(100));
 		bool IsCapturing() const noexcept;
+		bool IsDraining() const noexcept;
 		std::uint64_t ActiveGeneration() const noexcept;
 
 		RecordResult Record(
@@ -507,6 +511,7 @@ namespace CSX::RenderMap
 		ScopeSnapshot GetThreadScopes() const noexcept;
 
 		static constexpr std::size_t EventRecordSize() noexcept { return sizeof(EventRecord); }
+		static std::uint64_t RequiredStorageBytes(const CollectorConfig& a_config) noexcept;
 		static std::uint64_t ClockFrequencyHz() noexcept;
 
 	private:
@@ -518,5 +523,8 @@ namespace CSX::RenderMap
 			const EventPayload& a_endPayload) noexcept;
 
 		std::atomic<std::shared_ptr<Session>> activeSession;
+		mutable std::mutex stopMutex;
+		std::shared_ptr<Session> drainingSession;
+		std::atomic_bool draining{ false };
 	};
 }

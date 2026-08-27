@@ -20,21 +20,25 @@ namespace
 
 	CollectorConfig Config(std::uint64_t a_maxEvents = 64)
 	{
-		return {
+		CollectorConfig config{
 			.captureNumericId = 42,
 			.maxFrames = 3,
 			.maxEvents = a_maxEvents,
-			.maxBytes = Collector::EventRecordSize() * a_maxEvents,
+			.maxBytes = 1,
 			.maxDuration = std::chrono::minutes(1),
 			.maxScopeDepth = 8,
 		};
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		return config;
 	}
 
 	void TestBoundsValidation()
 	{
 		Collector collector;
 		auto config = Config();
-		config.maxBytes = Collector::EventRecordSize() - 1;
+		auto oneEventBudget = config;
+		oneEventBudget.maxEvents = 1;
+		config.maxBytes = Collector::RequiredStorageBytes(oneEventBudget) - 1;
 		Check(collector.Start(config) == StartResult::kInvalidBounds, "undersized byte bound was accepted");
 		config = Config();
 		config.maxFrames = 0;
@@ -119,7 +123,7 @@ namespace
 		{
 			Collector collector;
 			auto config = Config(2);
-			config.maxBytes = Collector::EventRecordSize() * 10;
+			config.maxBytes = Collector::RequiredStorageBytes(config);
 			Check(collector.Start(config) == StartResult::kStarted, "event-bound collector did not start");
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kRecorded, "first event was rejected");
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kRecorded, "second event was rejected");
@@ -137,7 +141,9 @@ namespace
 		{
 			Collector collector;
 			auto config = Config(10);
-			config.maxBytes = Collector::EventRecordSize() * 2;
+			auto twoEventBudget = config;
+			twoEventBudget.maxEvents = 2;
+			config.maxBytes = Collector::RequiredStorageBytes(twoEventBudget);
 			Check(collector.Start(config) == StartResult::kStarted, "byte-bound collector did not start");
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kRecorded, "first byte-bound event was rejected");
 			Check(collector.Record(EventKind::kCaptureMarker) == RecordResult::kRecorded, "second byte-bound event was rejected");

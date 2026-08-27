@@ -1,6 +1,7 @@
 #include "Api/ScreenshotService.h"
 
 #include "Api/RuntimeThreadAffinity.h"
+#include "Api/MainThreadDispatchPolicy.h"
 #include "Api/ServiceRegistry.h"
 #include "Features/ScreenshotFeature.h"
 #include "Globals.h"
@@ -38,12 +39,12 @@ namespace
 		if (!tasks)
 			return std::nullopt;
 		auto promise = std::make_shared<std::promise<nlohmann::json>>();
-		auto cancelled = std::make_shared<std::atomic_bool>(false);
+		auto admission = std::make_shared<CSX::Api::MainThreadDispatchAdmission>();
 		auto future = promise->get_future();
 		try {
-			tasks->AddTask([promise, cancelled, handle = std::move(handle)]() mutable {
+			tasks->AddTask([promise, admission, handle = std::move(handle)]() mutable {
 				CSX::Api::EnterRuntimeMainThreadTask();
-				if (cancelled->load(std::memory_order_acquire))
+				if (!admission->TryClaim())
 					return;
 				try {
 					promise->set_value(handle());
@@ -53,13 +54,17 @@ namespace
 					} catch (...) {
 					}
 				}
+				admission->Complete();
 			});
 		} catch (...) {
 			return std::nullopt;
 		}
 		if (future.wait_for(kMainThreadTimeout) != std::future_status::ready) {
-			cancelled->store(true, std::memory_order_release);
-			return std::nullopt;
+			if (admission->CancelIfQueued())
+				return std::nullopt;
+			// The runtime thread already claimed the mutation. Returning a timeout
+			// here would lie to the caller while the operation completes later.
+			future.wait();
 		}
 		try {
 			return future.get();

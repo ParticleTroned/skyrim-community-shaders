@@ -100,8 +100,8 @@
             "basis": { "enum": ["game_frames", "wall_clock"] },
             "intervalFrames": { "type": "integer", "minimum": 1 },
             "intervalMs": { "type": "integer", "minimum": 1 },
-            "startDelayFrames": { "type": "integer", "minimum": 0 },
-            "startDelayMs": { "type": "integer", "minimum": 0 },
+            "startDelayFrames": { "type": "integer", "minimum": 0, "maximum": 18000 },
+            "startDelayMs": { "type": "integer", "minimum": 0, "maximum": 300000 },
             "pausePolicy": { "const": "hold" }
           },
           "additionalProperties": false

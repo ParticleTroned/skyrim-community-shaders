@@ -20,14 +20,16 @@ namespace
 
 	CollectorConfig Config()
 	{
-		return {
+		CollectorConfig config{
 			.captureNumericId = 77,
 			.maxFrames = 2,
 			.maxEvents = 32,
-			.maxBytes = Collector::EventRecordSize() * 32,
+			.maxBytes = 1,
 			.maxDuration = std::chrono::minutes(1),
 			.maxScopeDepth = 8,
 		};
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		return config;
 	}
 
 	void TestInactiveRuntime()
@@ -290,8 +292,8 @@ namespace
 		Runtime runtime;
 		auto config = Config();
 		config.maxEvents = 64;
-		config.maxBytes = Collector::EventRecordSize() * 64;
 		config.maxStageShaderObservations = 8;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
 		runtime.SetImmediateContext(0x9000);
 		Check(runtime.StartCapture(config) == StartResult::kStarted, "draw capture did not start");
 		runtime.BindStage(0x9000, ShaderStage::kVertex, 0x3000);
@@ -316,7 +318,8 @@ namespace
 
 		auto snapshot = runtime.StopCapture();
 		Check(snapshot && snapshot->stageShaderObservations.size() == 3,
-			"draw and dispatch did not share or create the expected stage identities");
+			std::format("draw and dispatch retained {} stage identities, expected 3",
+				snapshot ? snapshot->stageShaderObservations.size() : 0));
 		const auto context = std::find_if(snapshot->events.begin(), snapshot->events.end(),
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kDeviceContextObserved; });
 		Check(context != snapshot->events.end(), "immediate context was not declared");
@@ -360,7 +363,7 @@ namespace
 		Runtime runtime;
 		auto config = Config();
 		config.maxEvents = 64;
-		config.maxBytes = Collector::EventRecordSize() * 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
 		runtime.SetImmediateContext(0xB000);
 		Check(runtime.StartCapture(config) == StartResult::kStarted, "output-merger capture did not start");
 
@@ -414,8 +417,8 @@ namespace
 	{
 		auto viewConfig = Config();
 		viewConfig.maxEvents = 32;
-		viewConfig.maxBytes = Collector::EventRecordSize() * 32;
 		viewConfig.maxTargetViewObservations = 1;
+		viewConfig.maxBytes = Collector::RequiredStorageBytes(viewConfig);
 		Runtime viewRuntime;
 		viewRuntime.SetImmediateContext(0xC000);
 		Check(viewRuntime.StartCapture(viewConfig) == StartResult::kStarted,
@@ -437,8 +440,8 @@ namespace
 
 		auto bindingConfig = Config();
 		bindingConfig.maxEvents = 32;
-		bindingConfig.maxBytes = Collector::EventRecordSize() * 32;
 		bindingConfig.maxTargetBindingObservations = 1;
+		bindingConfig.maxBytes = Collector::RequiredStorageBytes(bindingConfig);
 		Runtime bindingRuntime;
 		bindingRuntime.SetImmediateContext(0xD000);
 		Check(bindingRuntime.StartCapture(bindingConfig) == StartResult::kStarted,
@@ -463,7 +466,7 @@ namespace
 		Runtime runtime;
 		auto config = Config();
 		config.maxEvents = 64;
-		config.maxBytes = Collector::EventRecordSize() * 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
 		runtime.SetImmediateContext(0xE000);
 		Check(runtime.StartCapture(config) == StartResult::kStarted, "resource-flow capture did not start");
 
@@ -530,7 +533,7 @@ namespace
 		Runtime runtime;
 		auto config = Config();
 		config.maxEvents = 64;
-		config.maxBytes = Collector::EventRecordSize() * 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
 		runtime.SetImmediateContext(0xA000);
 		Check(runtime.StartCapture(config) == StartResult::kStarted, "scope-join capture did not start");
 		runtime.BindStage(0xA000, ShaderStage::kVertex, 0xA100);
@@ -593,7 +596,7 @@ namespace
 		Runtime runtime;
 		auto config = Config();
 		config.maxEvents = 64;
-		config.maxBytes = Collector::EventRecordSize() * 64;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
 		runtime.SetImmediateContext(0xF000);
 		Check(runtime.StartCapture(config) == StartResult::kStarted,
 			"visibility capture did not start");

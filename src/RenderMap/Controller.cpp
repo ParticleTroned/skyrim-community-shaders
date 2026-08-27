@@ -26,29 +26,45 @@ namespace CSX::RenderMap
 	ControlStatus CaptureController::Start(CollectorConfig a_config, CaptureDescriptor& a_output)
 	{
 		std::lock_guard lock(mutex);
-		if (active || GetRuntime().IsCapturing())
+		if (active || GetRuntime().IsCapturing() || GetRuntime().IsCaptureDraining())
 			return ControlStatus::kBusy;
 
 		const auto numericId = nextCaptureNumericId.fetch_add(1, std::memory_order_relaxed);
 		a_config.captureNumericId = numericId;
-		const auto result = GetRuntime().StartCapture(a_config);
+		// Allocate and publish all controller-owned state before activating hooks.
+		// A failed runtime start rolls this state back while the controller lock is held.
+		try {
+			active = CaptureDescriptor{
+				.captureId = MakeCaptureId(numericId),
+				.numericId = numericId,
+				.config = a_config,
+			};
+			a_output = *active;
+		} catch (...) {
+			active.reset();
+			return ControlStatus::kAllocationFailed;
+		}
+
+		StartResult result = StartResult::kAllocationFailed;
+		try {
+			result = GetRuntime().StartCapture(a_config);
+		} catch (...) {
+			active.reset();
+			return ControlStatus::kAllocationFailed;
+		}
 		switch (result) {
 		case StartResult::kAlreadyCapturing:
+			active.reset();
 			return ControlStatus::kBusy;
 		case StartResult::kInvalidBounds:
+			active.reset();
 			return ControlStatus::kInvalidBounds;
 		case StartResult::kAllocationFailed:
+			active.reset();
 			return ControlStatus::kAllocationFailed;
 		case StartResult::kStarted:
 			break;
 		}
-
-		active = CaptureDescriptor{
-			.captureId = MakeCaptureId(numericId),
-			.numericId = numericId,
-			.config = a_config,
-		};
-		a_output = *active;
 		return ControlStatus::kSuccess;
 	}
 
@@ -70,18 +86,33 @@ namespace CSX::RenderMap
 		if (!a_captureId.empty() && active->captureId != a_captureId)
 			return ControlStatus::kCaptureNotFound;
 
-		auto snapshot = GetRuntime().StopCapture();
-		if (!snapshot)
-			return ControlStatus::kNotCapturing;
+		std::shared_ptr<CompletedCapture> capture;
+		try {
+			capture = std::make_shared<CompletedCapture>();
+			capture->descriptor = *active;
+		} catch (...) {
+			return ControlStatus::kAllocationFailed;
+		}
 
-		auto capture = std::make_shared<CompletedCapture>(CompletedCapture{
-			.descriptor = *active,
-			.snapshot = std::move(*snapshot),
-		});
+		std::optional<CaptureSnapshot> snapshot;
+		try {
+			snapshot = GetRuntime().StopCapture();
+		} catch (...) {
+			return ControlStatus::kAllocationFailed;
+		}
+		if (!snapshot)
+			return GetRuntime().IsCaptureDraining() ? ControlStatus::kDraining : ControlStatus::kNotCapturing;
+
+		capture->snapshot = std::move(*snapshot);
 		active.reset();
-		completed.push_back(capture);
-		while (completed.size() > completedHistoryLimit)
-			completed.pop_front();
+		try {
+			completed.push_back(capture);
+			while (completed.size() > completedHistoryLimit)
+				completed.pop_front();
+		} catch (...) {
+			// The caller still receives the completed capture. Retained-history
+			// pressure must not split controller/runtime state after finalization.
+		}
 		a_output = std::move(capture);
 		return ControlStatus::kSuccess;
 	}

@@ -46,6 +46,7 @@ int main(int argc, char** argv)
 	assert(store.Append(MakeEntry("water|provider=1", "water|source=old|provider=1", 0x11), &error));
 	assert(store.Append(MakeEntry("water|provider=1", "water|source=new|provider=1", 0x22), &error));
 	assert(store.Append(MakeEntry("water|provider=2", "water|source=new|provider=2", 0x33), &error));
+	assert(store.Checkpoint(&error));
 
 	auto old = store.Find("water|source=old|provider=1", &error);
 	auto current = store.Find("water|source=new|provider=1", &error);
@@ -78,6 +79,24 @@ int main(int argc, char** argv)
 	assert(recovered.Find("water|source=new|provider=1", &error));
 	assert(recovered.Find("water|source=new|provider=2", &error));
 	assert(recovered.Find("water|source=old|provider=1", &error));
+
+	// Exercise the opposite A/B role: B is active after the first compaction,
+	// and the next compaction must safely initialize and promote A.
+	assert(recovered.Append(MakeEntry("water|provider=1", "water|source=newest|provider=1", 0x44), &error));
+	assert(recovered.Checkpoint(&error));
+	assert(recovered.Compact(&error));
+	assert(recovered.GetStats().activeGeneration == 3);
+	assert(recovered.Find("water|source=newest|provider=1", &error));
+
+	// A vanished backing file is an ordinary cache-lane failure, not an
+	// exception escaping through shader compilation.
+	std::filesystem::remove(a);
+	error.clear();
+	assert(!recovered.Find("water|source=newest|provider=1", &error));
+	assert(!error.empty());
+	error.clear();
+	assert(!recovered.Compact(&error));
+	assert(!error.empty());
 
 	std::filesystem::remove_all(root);
 	return 0;

@@ -1666,6 +1666,12 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ApiRuntimeThreadAffinity COMMAND api_runtime_thread_affinity_test)
     set_tests_properties(ApiRuntimeThreadAffinity PROPERTIES LABELS "ControllerTests")
 
+    add_controller_test(
+        api_main_thread_dispatch_policy_test
+        ApiMainThreadDispatchPolicy
+        tests/api_main_thread_dispatch_policy_test.cpp
+    )
+
     add_executable(
         render_map_collector_test
         EXCLUDE_FROM_ALL

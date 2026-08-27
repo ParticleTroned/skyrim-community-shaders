@@ -19,6 +19,7 @@ namespace CSX::RenderMap
 		kAllocationFailed,
 		kNotCapturing,
 		kCaptureNotFound,
+		kDraining,
 	};
 
 	struct CaptureDescriptor

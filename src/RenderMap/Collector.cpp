@@ -4,6 +4,7 @@
 #include <functional>
 #include <mutex>
 #include <new>
+#include <shared_mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -333,6 +334,23 @@ namespace CSX::RenderMap
 				a_record.depthTargetObservationId == a_input.depthTargetObservationId &&
 				a_record.renderTargetObservationIds == a_input.renderTargetObservationIds;
 		}
+
+		struct StagePointerIdentity
+		{
+			ShaderStage stage{ ShaderStage::kVertex };
+			std::uintptr_t pointer{ 0 };
+
+			bool operator==(const StagePointerIdentity&) const noexcept = default;
+		};
+
+		struct StagePointerIdentityHash
+		{
+			std::size_t operator()(const StagePointerIdentity& a_value) const noexcept
+			{
+				const auto pointerHash = std::hash<std::uintptr_t>{}(a_value.pointer);
+				return pointerHash ^ (static_cast<std::size_t>(a_value.stage) * 0x9E3779B97F4A7C15ull);
+			}
+		};
 	}
 
 	struct Collector::Session
@@ -356,8 +374,9 @@ namespace CSX::RenderMap
 		std::unordered_multimap<std::uint64_t, std::uint32_t> shaderObservationLookup;
 		std::uint32_t shaderObservationCount{ 0 };
 		std::unique_ptr<StageShaderObservationRecord[]> stageShaderObservations;
-		std::mutex stageShaderObservationMutex;
+		std::shared_mutex stageShaderObservationMutex;
 		std::unordered_multimap<std::uint64_t, std::uint32_t> stageShaderObservationLookup;
+		std::unordered_map<StagePointerIdentity, std::uint32_t, StagePointerIdentityHash> stageShaderByPointer;
 		std::uint32_t stageShaderObservationCount{ 0 };
 		std::unique_ptr<ResourceObservationRecord[]> resourceObservations;
 		std::mutex resourceObservationMutex;
@@ -471,6 +490,7 @@ namespace CSX::RenderMap
 
 	StartResult Collector::Start(const CollectorConfig& a_config)
 	{
+		std::lock_guard stopLock(stopMutex);
 		if (a_config.maxFrames == 0 || a_config.maxEvents == 0 ||
 			a_config.maxBytes < sizeof(EventRecord) || a_config.maxDuration.count() <= 0 ||
 			a_config.maxScopeDepth == 0 || a_config.maxScopeDepth > kMaximumScopeDepth ||
@@ -480,10 +500,16 @@ namespace CSX::RenderMap
 			return StartResult::kInvalidBounds;
 		}
 
-		if (activeSession.load(std::memory_order_acquire))
+		if (drainingSession || activeSession.load(std::memory_order_acquire))
 			return StartResult::kAlreadyCapturing;
 
-		const auto capacityByBytes = a_config.maxBytes / sizeof(EventRecord);
+		auto catalogueConfig = a_config;
+		catalogueConfig.maxEvents = 0;
+		const auto catalogueBytes = RequiredStorageBytes(catalogueConfig);
+		if (a_config.maxBytes <= catalogueBytes)
+			return StartResult::kInvalidBounds;
+		const auto capacityByBytes = (a_config.maxBytes - catalogueBytes) /
+			(sizeof(Session::Slot) + sizeof(EventRecord));
 		const auto capacity = std::min(a_config.maxEvents, static_cast<std::uint64_t>(capacityByBytes));
 		if (capacity == 0 || capacity > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
 			return StartResult::kInvalidBounds;
@@ -512,6 +538,7 @@ namespace CSX::RenderMap
 		try {
 			session->shaderObservationLookup.reserve(a_config.maxShaderObservations);
 			session->stageShaderObservationLookup.reserve(a_config.maxStageShaderObservations);
+			session->stageShaderByPointer.reserve(a_config.maxStageShaderObservations);
 			session->resourceObservationLookup.reserve(a_config.maxResourceObservations);
 			session->targetViewObservationLookup.reserve(a_config.maxTargetViewObservations);
 			session->targetBindingObservationLookup.reserve(a_config.maxTargetBindingObservations);
@@ -538,20 +565,61 @@ namespace CSX::RenderMap
 		return StartResult::kStarted;
 	}
 
-	std::optional<CaptureSnapshot> Collector::Stop(StopReason a_reason)
+	std::uint64_t Collector::RequiredStorageBytes(const CollectorConfig& a_config) noexcept
 	{
-		auto session = activeSession.load(std::memory_order_acquire);
-		if (!session)
-			return std::nullopt;
+		constexpr std::uint64_t kHashEntryBudget = 64;
+		auto saturatedAdd = [](std::uint64_t& a_total, std::uint64_t a_count, std::uint64_t a_size) {
+			if (a_count != 0 && a_size > (std::numeric_limits<std::uint64_t>::max)() / a_count) {
+				a_total = (std::numeric_limits<std::uint64_t>::max)();
+				return;
+			}
+			const auto bytes = a_count * a_size;
+			if (bytes > (std::numeric_limits<std::uint64_t>::max)() - a_total)
+				a_total = (std::numeric_limits<std::uint64_t>::max)();
+			else
+				a_total += bytes;
+		};
 
-		session->accepting.store(false, std::memory_order_release);
-		if (!activeSession.compare_exchange_strong(
-				session, std::shared_ptr<Session>{}, std::memory_order_acq_rel, std::memory_order_acquire)) {
-			return std::nullopt;
+		std::uint64_t total = sizeof(Session) + sizeof(CaptureSnapshot);
+		// Admission covers both the live fixed-capacity catalogue and the peak
+		// snapshot copy retained while the drained session is still alive.
+		saturatedAdd(total, a_config.maxEvents, sizeof(Session::Slot) + sizeof(EventRecord));
+		saturatedAdd(total, a_config.maxShaderObservations,
+			2 * sizeof(ShaderObservationRecord) + sizeof(bool) + kHashEntryBudget);
+		saturatedAdd(total, a_config.maxStageShaderObservations,
+			2 * sizeof(StageShaderObservationRecord) + 2 * kHashEntryBudget);
+		saturatedAdd(total, a_config.maxResourceObservations,
+			2 * sizeof(ResourceObservationRecord) + kHashEntryBudget);
+		saturatedAdd(total, a_config.maxTargetViewObservations,
+			2 * sizeof(TargetViewObservationRecord) + kHashEntryBudget);
+		saturatedAdd(total, a_config.maxTargetBindingObservations,
+			2 * sizeof(TargetBindingObservationRecord) + kHashEntryBudget);
+		return total;
+	}
+
+	std::optional<CaptureSnapshot> Collector::Stop(StopReason a_reason, std::chrono::milliseconds a_drainTimeout)
+	{
+		std::lock_guard stopLock(stopMutex);
+		auto session = drainingSession;
+		if (!session) {
+			session = activeSession.load(std::memory_order_acquire);
+			if (!session)
+				return std::nullopt;
+
+			session->accepting.store(false, std::memory_order_release);
+			if (!activeSession.compare_exchange_strong(
+					session, std::shared_ptr<Session>{}, std::memory_order_acq_rel, std::memory_order_acquire)) {
+				return std::nullopt;
+			}
+			drainingSession = session;
+			draining.store(true, std::memory_order_release);
 		}
 
-		while (session->inFlight.load(std::memory_order_acquire) != 0)
+		const auto deadline = Clock::now() + std::max(a_drainTimeout, std::chrono::milliseconds::zero());
+		while (session->inFlight.load(std::memory_order_acquire) != 0 && Clock::now() < deadline)
 			std::this_thread::yield();
+		if (session->inFlight.load(std::memory_order_acquire) != 0)
+			return std::nullopt;
 
 		CaptureSnapshot snapshot;
 		snapshot.config = session->config;
@@ -601,6 +669,8 @@ namespace CSX::RenderMap
 		for (std::uint32_t index = 0; index < session->targetBindingObservationCount; ++index)
 			snapshot.targetBindingObservations.push_back(session->targetBindingObservations[index]);
 
+		drainingSession.reset();
+		draining.store(false, std::memory_order_release);
 		return snapshot;
 	}
 
@@ -608,6 +678,11 @@ namespace CSX::RenderMap
 	{
 		const auto session = activeSession.load(std::memory_order_acquire);
 		return session && session->accepting.load(std::memory_order_acquire);
+	}
+
+	bool Collector::IsDraining() const noexcept
+	{
+		return draining.load(std::memory_order_acquire);
 	}
 
 	std::uint64_t Collector::ActiveGeneration() const noexcept
@@ -837,7 +912,7 @@ namespace CSX::RenderMap
 		const auto identityHash = HashStageShaderIdentity(a_input);
 		StageShaderObservationResult result{ .sessionGeneration = session->generation };
 		{
-			std::lock_guard lock(session->stageShaderObservationMutex);
+			std::unique_lock lock(session->stageShaderObservationMutex);
 			const auto [begin, end] = session->stageShaderObservationLookup.equal_range(identityHash);
 			for (auto found = begin; found != end; ++found) {
 				const auto& record = session->stageShaderObservations[found->second];
@@ -848,14 +923,40 @@ namespace CSX::RenderMap
 			}
 
 			if (result.observationId == 0) {
+				const StagePointerIdentity pointerIdentity{ a_input.stage, a_input.d3dObject };
+				const auto previous = session->stageShaderByPointer.find(pointerIdentity);
+				if (previous != session->stageShaderByPointer.end()) {
+					auto& record = session->stageShaderObservations[previous->second];
+					const bool previousWasPointerOnly = record.wrapperEvidence == 0 &&
+						record.wrapperDescriptor == 0 && record.bytecodeSize == 0 &&
+						record.bytecodeSha256[0] == '\0' && record.cachePath[0] == '\0';
+					const bool inputAddsIdentity = a_input.wrapper != 0 || a_input.wrapperDescriptor != 0 ||
+						a_input.bytecodeSize != 0 || !a_input.bytecodeSha256.empty() || !a_input.cachePath.empty();
+					if (previousWasPointerOnly && inputAddsIdentity) {
+						try {
+							session->stageShaderObservationLookup.emplace(identityHash, previous->second);
+							record.wrapperEvidence = a_input.wrapper;
+							record.wrapperDescriptor = a_input.wrapperDescriptor;
+							record.bytecodeSize = a_input.bytecodeSize;
+							record.bytecodeSha256Truncated = CopyBounded(a_input.bytecodeSha256, record.bytecodeSha256);
+							record.cachePathTruncated = CopyBounded(a_input.cachePath, record.cachePath);
+							result = { record.observationId, session->generation, record.pointerGeneration, false };
+						} catch (...) {
+							session->droppedStageShaderObservations.fetch_add(1, std::memory_order_relaxed);
+						}
+					}
+				}
+			}
+
+			if (result.observationId == 0) {
 				if (session->stageShaderObservationCount >= session->config.maxStageShaderObservations) {
 					session->droppedStageShaderObservations.fetch_add(1, std::memory_order_relaxed);
 				} else {
 					std::uint32_t pointerGeneration = 1;
-					for (std::uint32_t index = 0; index < session->stageShaderObservationCount; ++index) {
-						if (session->stageShaderObservations[index].pointerEvidence == a_input.d3dObject)
-							pointerGeneration = std::max(
-								pointerGeneration, session->stageShaderObservations[index].pointerGeneration + 1);
+					const StagePointerIdentity pointerIdentity{ a_input.stage, a_input.d3dObject };
+					if (const auto previous = session->stageShaderByPointer.find(pointerIdentity);
+						previous != session->stageShaderByPointer.end()) {
+						pointerGeneration = session->stageShaderObservations[previous->second].pointerGeneration + 1;
 					}
 
 					const auto index = session->stageShaderObservationCount++;
@@ -870,7 +971,13 @@ namespace CSX::RenderMap
 					record.bytecodeSha256Truncated = CopyBounded(a_input.bytecodeSha256, record.bytecodeSha256);
 					record.cachePathTruncated = CopyBounded(a_input.cachePath, record.cachePath);
 					try {
-						session->stageShaderObservationLookup.emplace(identityHash, index);
+						const auto identityEntry = session->stageShaderObservationLookup.emplace(identityHash, index);
+						try {
+							session->stageShaderByPointer.insert_or_assign(pointerIdentity, index);
+						} catch (...) {
+							session->stageShaderObservationLookup.erase(identityEntry);
+							throw;
+						}
 						result = { record.observationId, session->generation, record.pointerGeneration, true };
 					} catch (...) {
 						--session->stageShaderObservationCount;
@@ -901,18 +1008,16 @@ namespace CSX::RenderMap
 
 		StageShaderObservationResult result{ .sessionGeneration = session->generation };
 		{
-			std::lock_guard lock(session->stageShaderObservationMutex);
-			for (std::uint32_t index = 0; index < session->stageShaderObservationCount; ++index) {
-				const auto& record = session->stageShaderObservations[index];
-				if (record.stage == a_stage && record.pointerEvidence == a_d3dObject &&
-					record.observationId > result.observationId) {
-					result = {
-						.observationId = record.observationId,
-						.sessionGeneration = session->generation,
-						.pointerGeneration = record.pointerGeneration,
-						.firstSeen = false,
-					};
-				}
+			std::shared_lock lock(session->stageShaderObservationMutex);
+			const auto found = session->stageShaderByPointer.find({ a_stage, a_d3dObject });
+			if (found != session->stageShaderByPointer.end()) {
+				const auto& record = session->stageShaderObservations[found->second];
+				result = {
+					.observationId = record.observationId,
+					.sessionGeneration = session->generation,
+					.pointerGeneration = record.pointerGeneration,
+					.firstSeen = false,
+				};
 			}
 		}
 		releaseFlight();

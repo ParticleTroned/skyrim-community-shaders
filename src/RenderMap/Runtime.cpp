@@ -398,18 +398,28 @@ namespace CSX::RenderMap
 			immediateContextObservationGeneration.store(0, std::memory_order_release);
 			immediateContextCommandSequence.store(0, std::memory_order_release);
 			boundTargetBindingObservationId.store(0, std::memory_order_release);
+			boundVertexShaderObservationId.store(0, std::memory_order_release);
+			boundPixelShaderObservationId.store(0, std::memory_order_release);
+			boundComputeShaderObservationId.store(0, std::memory_order_release);
 		}
 		return result;
 	}
 
-	std::optional<CaptureSnapshot> Runtime::StopCapture(StopReason a_reason)
+	std::optional<CaptureSnapshot> Runtime::StopCapture(
+		StopReason a_reason,
+		std::chrono::milliseconds a_drainTimeout)
 	{
-		return collector.Stop(a_reason);
+		return collector.Stop(a_reason, a_drainTimeout);
 	}
 
 	bool Runtime::IsCapturing() const noexcept
 	{
 		return collector.IsCapturing();
+	}
+
+	bool Runtime::IsCaptureDraining() const noexcept
+	{
+		return collector.IsDraining();
 	}
 
 	std::uint64_t Runtime::ActiveCaptureGeneration() const noexcept
@@ -505,6 +515,8 @@ namespace CSX::RenderMap
 				EventKind::kStageShaderObserved,
 				StageShaderObservationPayload(a_resolution.pixel.shader, pixel), 0, captureGeneration);
 		}
+		PublishBoundStageObservation(a_resolution.vertex.shader.stage, a_resolution.vertex.shader.d3dObject, vertex);
+		PublishBoundStageObservation(a_resolution.pixel.shader.stage, a_resolution.pixel.shader.d3dObject, pixel);
 		collector.RecordForGeneration(
 			EventKind::kTechniqueResolved,
 			TechniqueResolutionPayload(a_resolution, vertex.observationId, pixel.observationId), 0, captureGeneration);
@@ -521,6 +533,9 @@ namespace CSX::RenderMap
 		boundVertexShader.store(0, std::memory_order_release);
 		boundPixelShader.store(0, std::memory_order_release);
 		boundComputeShader.store(0, std::memory_order_release);
+		boundVertexShaderObservationId.store(0, std::memory_order_release);
+		boundPixelShaderObservationId.store(0, std::memory_order_release);
+		boundComputeShaderObservationId.store(0, std::memory_order_release);
 		boundTargetBindingObservationId.store(0, std::memory_order_release);
 	}
 
@@ -539,12 +554,18 @@ namespace CSX::RenderMap
 		switch (a_stage) {
 		case ShaderStage::kVertex:
 			boundVertexShader.store(a_d3dObject, std::memory_order_release);
+			boundVertexShaderObservationId.store(
+				ObserveBoundStage(a_stage, a_d3dObject).observationId, std::memory_order_release);
 			break;
 		case ShaderStage::kPixel:
 			boundPixelShader.store(a_d3dObject, std::memory_order_release);
+			boundPixelShaderObservationId.store(
+				ObserveBoundStage(a_stage, a_d3dObject).observationId, std::memory_order_release);
 			break;
 		case ShaderStage::kCompute:
 			boundComputeShader.store(a_d3dObject, std::memory_order_release);
+			boundComputeShaderObservationId.store(
+				ObserveBoundStage(a_stage, a_d3dObject).observationId, std::memory_order_release);
 			break;
 		}
 	}
@@ -945,7 +966,7 @@ namespace CSX::RenderMap
 		return immediateContextCommandSequence.fetch_add(1, std::memory_order_acq_rel) + 1;
 	}
 
-	StageShaderObservationResult Runtime::ResolveBoundStage(
+	StageShaderObservationResult Runtime::ObserveBoundStage(
 		ShaderStage a_stage,
 		std::uintptr_t a_d3dObject) noexcept
 	{
@@ -968,6 +989,29 @@ namespace CSX::RenderMap
 		return observation;
 	}
 
+	void Runtime::PublishBoundStageObservation(
+		ShaderStage a_stage,
+		std::uintptr_t a_d3dObject,
+		const StageShaderObservationResult& a_observation) noexcept
+	{
+		if (a_d3dObject == 0 || a_observation.observationId == 0)
+			return;
+		switch (a_stage) {
+		case ShaderStage::kVertex:
+			if (boundVertexShader.load(std::memory_order_acquire) == a_d3dObject)
+				boundVertexShaderObservationId.store(a_observation.observationId, std::memory_order_release);
+			break;
+		case ShaderStage::kPixel:
+			if (boundPixelShader.load(std::memory_order_acquire) == a_d3dObject)
+				boundPixelShaderObservationId.store(a_observation.observationId, std::memory_order_release);
+			break;
+		case ShaderStage::kCompute:
+			if (boundComputeShader.load(std::memory_order_acquire) == a_d3dObject)
+				boundComputeShaderObservationId.store(a_observation.observationId, std::memory_order_release);
+			break;
+		}
+	}
+
 	void Runtime::RecordDraw(
 		std::uintptr_t a_context,
 		DrawOperation a_operation,
@@ -984,12 +1028,9 @@ namespace CSX::RenderMap
 		if (contextObservationId == 0)
 			return;
 		const auto commandStreamSequence = NextCommandStreamSequence();
-		const auto vertex = ResolveBoundStage(
-			ShaderStage::kVertex, boundVertexShader.load(std::memory_order_acquire));
-		const auto pixel = ResolveBoundStage(
-			ShaderStage::kPixel, boundPixelShader.load(std::memory_order_acquire));
-		const auto captureGeneration = vertex.sessionGeneration != 0 ? vertex.sessionGeneration :
-			(pixel.sessionGeneration != 0 ? pixel.sessionGeneration : collector.ActiveGeneration());
+		const auto vertexObservationId = boundVertexShaderObservationId.load(std::memory_order_acquire);
+		const auto pixelObservationId = boundPixelShaderObservationId.load(std::memory_order_acquire);
+		const auto captureGeneration = collector.ActiveGeneration();
 		std::uint64_t submissionObservationId = 0;
 		if (pendingVisibilitySubmission.owner == this &&
 			pendingVisibilitySubmission.generation == captureGeneration &&
@@ -1000,7 +1041,7 @@ namespace CSX::RenderMap
 		collector.RecordForGeneration(
 			EventKind::kDraw,
 			DrawCallPayload(
-				a_context, a_operation, vertex.observationId, pixel.observationId,
+				a_context, a_operation, vertexObservationId, pixelObservationId,
 				a_argument0, a_argument1, a_argument2, a_argument3),
 			contextObservationId, captureGeneration, commandStreamSequence,
 			boundTargetBindingObservationId.load(std::memory_order_acquire),
@@ -1023,14 +1064,12 @@ namespace CSX::RenderMap
 		if (contextObservationId == 0)
 			return;
 		const auto commandStreamSequence = NextCommandStreamSequence();
-		const auto compute = ResolveBoundStage(
-			ShaderStage::kCompute, boundComputeShader.load(std::memory_order_acquire));
-		const auto captureGeneration = compute.sessionGeneration != 0 ?
-			compute.sessionGeneration : collector.ActiveGeneration();
+		const auto computeObservationId = boundComputeShaderObservationId.load(std::memory_order_acquire);
+		const auto captureGeneration = collector.ActiveGeneration();
 		collector.RecordForGeneration(
 			EventKind::kDispatch,
 			DispatchCallPayload(
-				a_context, a_operation, compute.observationId,
+				a_context, a_operation, computeObservationId,
 				a_argument0, a_argument1, a_argument2, a_argument3),
 			contextObservationId, captureGeneration, commandStreamSequence);
 	}

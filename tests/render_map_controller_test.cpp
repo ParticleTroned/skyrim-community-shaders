@@ -24,13 +24,15 @@ namespace
 
 	CollectorConfig Config()
 	{
-		return {
+		CollectorConfig config{
 			.maxFrames = 4,
 			.maxEvents = 32,
-			.maxBytes = Collector::EventRecordSize() * 32,
+			.maxBytes = 1,
 			.maxDuration = std::chrono::seconds(1),
 			.maxScopeDepth = 8,
 		};
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		return config;
 	}
 
 	CaptureArtifactContext ArtifactContext(const std::filesystem::path& a_root)
@@ -118,7 +120,9 @@ namespace
 			"wrong capture ID stopped the active capture");
 		Check(a_controller.Stop(descriptor.captureId, completed) == ControlStatus::kSuccess,
 			"capture did not stop");
-		Check(completed && completed->snapshot.events.size() == 7, "completed capture is incomplete");
+		Check(completed && completed->snapshot.events.size() == 7,
+			std::format("completed capture event count is {}, expected 7",
+				completed ? completed->snapshot.events.size() : 0));
 		std::shared_ptr<const CompletedCapture> replay;
 		Check(a_controller.Stop(descriptor.captureId, replay) == ControlStatus::kSuccess && replay == completed,
 			"completed stop was not idempotent");
@@ -314,7 +318,7 @@ namespace
 		CaptureController controller;
 		auto config = Config();
 		config.maxEvents = 1;
-		config.maxBytes = Collector::EventRecordSize() * 4;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
 		CaptureDescriptor descriptor;
 		Check(controller.Start(config, descriptor) == ControlStatus::kSuccess, "gap capture did not start");
 		{

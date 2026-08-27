@@ -142,6 +142,8 @@ namespace
 			return Foundation().MakeError(a_args, "not_capturing", "no matching capture is active", "execution", false);
 		case ControlStatus::kCaptureNotFound:
 			return Foundation().MakeError(a_args, "capture_not_found", "the capture ID is not active or retained", "validation", false, "captureId");
+		case ControlStatus::kDraining:
+			return Foundation().MakeError(a_args, "capture_draining", "capture hooks are draining; retry stop with the same captureId", "execution", true, "captureId");
 		default:
 			return Foundation().MakeError(a_args, "internal_error", "unexpected render-map controller status", "execution", true);
 		}
@@ -217,16 +219,29 @@ namespace
 			const auto maxFrames = a_args.value("maxFrames", 4ull);
 			const auto maxDurationMs = a_args.value("maxDurationMs", 2000ull);
 			const auto maxEvents = a_args.value("maxEvents", 8192ull);
-			const auto defaultBytes = CSX::RenderMap::Collector::EventRecordSize() * maxEvents;
-			const auto maxBytes = a_args.value("maxBytes", static_cast<std::uint64_t>(defaultBytes));
 			const auto maxScopeDepth = a_args.value("maxScopeDepth", 8u);
 			const auto maxShaderObservations = a_args.value("maxShaderObservations", 1024u);
 			const auto maxStageShaderObservations = a_args.value("maxStageShaderObservations", 4096u);
 			const auto maxResourceObservations = a_args.value("maxResourceObservations", 4096u);
 			const auto maxTargetViewObservations = a_args.value("maxTargetViewObservations", 4096u);
 			const auto maxTargetBindingObservations = a_args.value("maxTargetBindingObservations", 4096u);
+			CSX::RenderMap::CollectorConfig config{
+				.maxFrames = maxFrames,
+				.maxEvents = maxEvents,
+				.maxBytes = kMaximumBytes,
+				.maxDuration = std::chrono::milliseconds(maxDurationMs),
+				.maxScopeDepth = static_cast<std::uint8_t>(maxScopeDepth),
+				.maxShaderObservations = maxShaderObservations,
+				.maxStageShaderObservations = maxStageShaderObservations,
+				.maxResourceObservations = maxResourceObservations,
+				.maxTargetViewObservations = maxTargetViewObservations,
+				.maxTargetBindingObservations = maxTargetBindingObservations,
+			};
+			const auto defaultBytes = CSX::RenderMap::Collector::RequiredStorageBytes(config);
+			const auto maxBytes = a_args.value("maxBytes", defaultBytes);
+			config.maxBytes = maxBytes;
 			if (maxFrames == 0 || maxFrames > kMaximumFrames || maxDurationMs == 0 || maxDurationMs > kMaximumDurationMs ||
-				maxEvents == 0 || maxEvents > kMaximumEvents || maxBytes < CSX::RenderMap::Collector::EventRecordSize() ||
+				maxEvents == 0 || maxEvents > kMaximumEvents || maxBytes == 0 ||
 				maxBytes > kMaximumBytes || maxScopeDepth == 0 || maxScopeDepth > CSX::RenderMap::kMaximumScopeDepth ||
 				maxShaderObservations == 0 || maxShaderObservations > kMaximumShaderObservations ||
 				maxStageShaderObservations == 0 || maxStageShaderObservations > kMaximumStageShaderObservations ||
@@ -236,34 +251,51 @@ namespace
 				return Foundation().MakeError(a_args, "invalid_bounds", "capture bounds exceed the advertised limits", "validation", false);
 			}
 
+			CSX::RenderMap::CaptureArtifactContext artifactContext;
+			try {
+				artifactContext = BuildArtifactContext();
+			} catch (const std::exception& e) {
+				return Foundation().MakeError(a_args, "allocation_failed", e.what(), "execution", true);
+			}
 			CSX::RenderMap::CaptureDescriptor descriptor;
-			const auto status = CSX::RenderMap::GetCaptureController().Start({
-				.maxFrames = maxFrames,
-				.maxEvents = maxEvents,
-				.maxBytes = maxBytes,
-				.maxDuration = std::chrono::milliseconds(maxDurationMs),
-				.maxScopeDepth = static_cast<std::uint8_t>(maxScopeDepth),
-				.maxShaderObservations = maxShaderObservations,
-				.maxStageShaderObservations = maxStageShaderObservations,
-				.maxResourceObservations = maxResourceObservations,
-				.maxTargetViewObservations = maxTargetViewObservations,
-				.maxTargetBindingObservations = maxTargetBindingObservations,
-			}, descriptor);
+			const auto status = CSX::RenderMap::GetCaptureController().Start(config, descriptor);
 			if (status != ControlStatus::kSuccess)
 				return ControlFailure(a_args, status);
-			{
+			try {
 				std::lock_guard lock(g_artifactMutex);
-				g_artifactContexts.insert_or_assign(descriptor.captureId, BuildArtifactContext());
+				g_artifactContexts.insert_or_assign(descriptor.captureId, std::move(artifactContext));
+			} catch (...) {
+				std::shared_ptr<const CSX::RenderMap::CompletedCapture> discarded;
+				const auto rollback = CSX::RenderMap::GetCaptureController().Stop(descriptor.captureId, discarded);
+				if (rollback == ControlStatus::kSuccess)
+					return Foundation().MakeError(a_args, "allocation_failed", "capture provenance could not be retained; capture was rolled back", "execution", true);
+				auto error = ControlFailure(a_args, rollback);
+				error["error"]["captureId"] = descriptor.captureId;
+				return error;
 			}
 
-			auto response = Foundation().MakeEnvelope(a_args, true);
-			response["result"] = {
-				{ "captureId", descriptor.captureId },
-				{ "numericId", descriptor.numericId },
-				{ "state", "capturing" },
-				{ "bounds", CSX::RenderMap::SerializeBounds(descriptor.config) },
-			};
-			return response;
+			try {
+				auto response = Foundation().MakeEnvelope(a_args, true);
+				response["result"] = {
+					{ "captureId", descriptor.captureId },
+					{ "numericId", descriptor.numericId },
+					{ "state", "capturing" },
+					{ "bounds", CSX::RenderMap::SerializeBounds(descriptor.config) },
+				};
+				return response;
+			} catch (...) {
+				{
+					std::lock_guard lock(g_artifactMutex);
+					g_artifactContexts.erase(descriptor.captureId);
+				}
+				std::shared_ptr<const CSX::RenderMap::CompletedCapture> discarded;
+				const auto rollback = CSX::RenderMap::GetCaptureController().Stop(descriptor.captureId, discarded);
+				if (rollback == ControlStatus::kSuccess)
+					return Foundation().MakeError(a_args, "allocation_failed", "capture response could not be materialized; capture was rolled back", "execution", true);
+				auto error = ControlFailure(a_args, rollback);
+				error["error"]["captureId"] = descriptor.captureId;
+				return error;
+			}
 		}
 
 		if (action == "stop") {

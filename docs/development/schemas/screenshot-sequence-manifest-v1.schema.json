@@ -11,6 +11,8 @@
     "state": { "enum": ["partial", "final"] },
     "capture": { "type": "object" },
     "counts": { "type": "object" },
+    "childrenComplete": { "type": "boolean" },
+    "childrenIncludedThrough": { "type": "integer", "minimum": 0 },
     "children": {
       "type": "array",
       "items": {

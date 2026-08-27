@@ -1,0 +1,8 @@
+[mcp_servers.devbench_vr]
+url = "http://127.0.0.1:8921/mcp"
+enabled = true
+
+[mcp_servers.ghidra]
+url = "http://127.0.0.1:8080/mcp"
+enabled = true
+

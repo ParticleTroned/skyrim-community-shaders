@@ -376,6 +376,59 @@ function Get-OptionalProperty {
     return $property.Value
 }
 
+function Test-SavedListenerBinding {
+    param(
+        $Session,
+        [Parameter(Mandatory = $true)][int] $ListenerProcessId
+    )
+
+    $savedProcessId = Get-OptionalProperty `
+        -Value $Session `
+        -Name "listenerProcessId"
+    $savedStartValue = Get-OptionalProperty `
+        -Value $Session `
+        -Name "listenerProcessStartUtc"
+    if ($null -eq $savedProcessId -or $null -eq $savedStartValue) {
+        return $null
+    }
+    if ([int] $savedProcessId -ne $ListenerProcessId) {
+        return $false
+    }
+
+    try {
+        $listener = Get-Process -Id $ListenerProcessId -ErrorAction Stop
+        $savedStart = [DateTimeOffset]::Parse(
+            [string] $savedStartValue,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        ).UtcDateTime
+        return [Math]::Abs((
+            $listener.StartTime.ToUniversalTime() - $savedStart
+        ).TotalSeconds) -le 1
+    } catch {
+        return $false
+    }
+}
+
+function Save-ListenerBinding {
+    param(
+        [Parameter(Mandatory = $true)] $Session,
+        [Parameter(Mandatory = $true)][int] $ListenerProcessId
+    )
+
+    $listener = Get-Process -Id $ListenerProcessId -ErrorAction Stop
+    $Session | Add-Member `
+        -NotePropertyName listenerProcessId `
+        -NotePropertyValue $ListenerProcessId `
+        -Force
+    $Session | Add-Member `
+        -NotePropertyName listenerProcessStartUtc `
+        -NotePropertyValue $listener.StartTime.ToUniversalTime().ToString("o") `
+        -Force
+    Write-AtomicJson -Path $sessionFile -Value $Session
+    return Read-Session -SessionFile $sessionFile
+}
+
 function New-StatusResult {
     param(
         [Parameter(Mandatory = $true)][string] $State,
@@ -389,10 +442,25 @@ function New-StatusResult {
 
     $listenerPid = Get-ListenerPid
     $ownedListener = $null
+    $listenerOwnershipSource = $null
     if ($listenerPid -and $Process) {
-        $ownedListener = Test-DescendantProcess `
-            -ProcessId $listenerPid `
-            -AncestorProcessId $Process.Id
+        $ownedListener = Test-SavedListenerBinding `
+            -Session $Session `
+            -ListenerProcessId $listenerPid
+        if ($null -ne $ownedListener) {
+            $listenerOwnershipSource = "session-binding"
+        } else {
+            $ownedListener = Test-DescendantProcess `
+                -ProcessId $listenerPid `
+                -AncestorProcessId $Process.Id
+            $listenerOwnershipSource = "process-ancestry"
+            if ($ownedListener -eq $true) {
+                $Session = Save-ListenerBinding `
+                    -Session $Session `
+                    -ListenerProcessId $listenerPid
+                $listenerOwnershipSource = "process-ancestry-captured"
+            }
+        }
     }
     $resultErrors = [Collections.Generic.List[string]]::new()
     foreach ($errorMessage in $Errors) {
@@ -418,6 +486,7 @@ function New-StatusResult {
         processId = $(if ($Process) { $Process.Id } else { $null })
         listenerProcessId = $listenerPid
         listenerOwnedBySession = $ownedListener
+        listenerOwnershipSource = $listenerOwnershipSource
         project = $(if ($Session) {
             [pscustomobject][ordered]@{
                 directory = $Session.projectDirectory
@@ -798,6 +867,14 @@ try {
         -Session $session `
         -TimeoutSeconds $ReadyTimeoutSeconds
     $trackedProcess = Get-TrackedProcess -Session $session
+    if ($probe.ready) {
+        $listenerPid = Get-ListenerPid
+        if ($listenerPid) {
+            $session = Save-ListenerBinding `
+                -Session $session `
+                -ListenerProcessId $listenerPid
+        }
+    }
     $state = if ($probe.ready) {
         "ready"
     } elseif ($trackedProcess) {

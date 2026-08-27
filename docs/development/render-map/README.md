@@ -146,6 +146,9 @@ verified static manifest/engine references are not yet present in live events.
 The depth-culling integration, versioned draw-output to accepted-eye join, and
 next live capture target are described in
 [`depth-culling-observation-sequence.md`](./depth-culling-observation-sequence.md).
+The first retained world-scene re-derivation with semantic identity projection
+is recorded in
+[`semantic-projection-breezehome-analysis-2026-08-27.md`](./semantic-projection-breezehome-analysis-2026-08-27.md).
 
 Example DevBench requests (use a unique `commandId` for each logical command):
 

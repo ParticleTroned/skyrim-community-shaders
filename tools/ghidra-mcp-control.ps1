@@ -397,11 +397,17 @@ function Test-SavedListenerBinding {
 
     try {
         $listener = Get-Process -Id $ListenerProcessId -ErrorAction Stop
-        $savedStart = [DateTimeOffset]::Parse(
-            [string] $savedStartValue,
-            [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::RoundtripKind
-        ).UtcDateTime
+        $savedStart = if ($savedStartValue -is [DateTime]) {
+            $savedStartValue.ToUniversalTime()
+        } elseif ($savedStartValue -is [DateTimeOffset]) {
+            $savedStartValue.UtcDateTime
+        } else {
+            [DateTimeOffset]::Parse(
+                [string] $savedStartValue,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind
+            ).UtcDateTime
+        }
         return [Math]::Abs((
             $listener.StartTime.ToUniversalTime() - $savedStart
         ).TotalSeconds) -le 1

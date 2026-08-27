@@ -4,6 +4,20 @@ This report analyses the retained render-map captures, the current static shader
 manifest, shader-cache source, the depth-culling measurements, and the earlier
 shader-residency baselines. It does not add a new runtime capture.
 
+> **Status re-baseline — 2026-08-26:** this document preserves the conclusions
+> available from the 24 August evidence set. Subsequent typed-observation,
+> immediate-context, output-merger, and resource-flow slices closed many of the
+> identity gaps listed below. The current implementation now joins typed
+> resources and RTV/DSV/SRV/UAV views to ordered immediate-context draws,
+> dispatches, copy/resolve operations, selected shaders, and output-merger
+> bindings. See
+> [`resource-flow-graph-slice.md`](./resource-flow-graph-slice.md) and
+> [`resource-flow-main-menu-capture-2026-08-26.md`](./resource-flow-main-menu-capture-2026-08-26.md).
+> The remaining graph-correctness gap is no longer basic target/draw identity;
+> it is resource write-version identity, effective D3D11 hazard state,
+> subresource precision, deferred contexts, eye attribution, and broader
+> mutation-operation coverage.
+
 The first concrete Skyrim VR engine-map seed produced from this analysis is
 [`engine-map.skyrim-vr-1.4.15.main-menu-seed.json`](./engine-map.skyrim-vr-1.4.15.main-menu-seed.json).
 
@@ -232,35 +246,43 @@ conclusion is about residency and identity, not additive per-feature cost.
 
 ### Missing hard joins
 
+The following list is the original 24 August gate. Items marked **closed** were
+subsequently implemented and live-validated; the unmarked items remain current.
+
 - concrete ImageSpace shader name and CSX-resolved descriptor;
 - global feature/define snapshot and source-closure digest;
 - selected vertex/pixel wrapper, D3D object, and bytecode hash;
-- typed observation declaration and pointer generation;
-- device context and monotonic command sequence;
-- render/depth target identity, draw/dispatch identity, eye, and submission;
+- **closed:** typed observation declaration and capture-generation identity;
+- **closed for the immediate context:** device context and monotonic command
+  sequence;
+- **closed for immediate-context application calls:** render/depth target
+  identity and draw/dispatch identity;
+- resource write epochs and producer-version identity;
+- effective state after D3D11 automatic hazard unbinding, including exact
+  subresource overlap;
+- deferred-context command-list identity, eye, and final submission;
 - a same-build gameplay capture containing both render-map and depth-culling
   events.
 
 ## Highest-value next slice
 
-The next slice should close identity before increasing capture volume:
+The original recommended identity sequence was completed through bounded
+immediate-context resource flow. The current highest-value generic slice is to
+make that graph causally honest before increasing gameplay capture volume:
 
-1. Make current render-pass, technique, geometry, and shader scopes typed,
-   generation-safe observations.
-2. At `BeginTechnique`, record shader type, `fxpFilename`, ImageSpace name,
-   input descriptors, CSX-resolved descriptors, skip-pixel state, selected
-   vertex/pixel wrapper identities, and—where available—cache path and bytecode
-   hash.
-3. Inject build-manifest, shader-manifest, define-snapshot, executable/DLL,
-   profile/load-order, cache-inventory, runtime-route, and scenario provenance
-   at capture start.
-4. Only then add the bounded immediate-context slice: command sequence,
-   render/depth target binding, pipeline observation, and Draw/Dispatch events.
-5. Prove the extended stream at the deterministic main menu, then capture one
-   fixed opaque Lighting object and finally the Breezehome curtain scenario with
-   depth-culling production/readiness/consumption events in the same build.
+1. Derive allocation-wide resource write versions so every read consumes one
+   explicit content epoch rather than a timeless allocation node.
+2. Derive conservative RAW, WAR, and WAW execution dependencies and distinguish
+   them from directly observed API calls.
+3. Reconstruct conservative same-allocation D3D11 automatic SRV/UAV/output
+   hazard unbinding, while explicitly retaining the lack of exact subresource
+   overlap proof.
+4. Observe the remaining common mutation routes: clears, updates, structure
+   count copies, and mip generation.
+5. Then project pass, technique, geometry, and selected-shader identities onto
+   the versioned execution graph and perform controlled gameplay captures.
 
-That sequence converts the current descriptor-level correlation into a
-reproducible object-to-bytecode-to-draw graph. It also supplies the evidence
-needed to move occlusion consumption to a point where it can actually prevent
-work.
+That sequence avoids producing a visually convincing but causally false frame
+graph. The original object-to-bytecode-to-draw objective remains, but its
+resource edges will identify the content version consumed and the confidence of
+each derived ordering constraint.

@@ -6,6 +6,33 @@ Date: 2026-08-20
 
 Reduce shader compilation, cache churn, restart requirements, and first-use hitches without degrading rendering quality or making runtime feature changes unsafe.
 
+## Status re-baseline — 2026-08-26
+
+This remains the architectural roadmap, but its foundation is no longer future
+work:
+
+- the schema-v2 static shader dependency graph is complete for the current
+  merged namespace: 174 sources, 100 production entry points, 120 compile
+  units/passes, and 421 resolved include edges;
+- source/include and feature-define invalidation indexes exist and are checked
+  deterministically;
+- selective cache invalidation and the managed append-only shader-pack route
+  have replaced blanket DLL-version invalidation as the intended cache model;
+- typed runtime shader, resource, view, target-binding, draw, dispatch, and
+  copy/resolve observations now produce a bounded immediate-context
+  execution/resource graph; and
+- the first resource-flow graph has been live-validated at the deterministic
+  main menu.
+
+Milestone 0 and the static portion of Milestone 1 are therefore substantially
+complete. The current optimisation gate is runtime closure, not another static
+inventory: record exact compile arguments and causes, join cache records to
+source-closure and bytecode identities, prove resource/pass ordering, and
+measure whether apparently independent work is actually independently
+schedulable. Resource write versions and effective D3D11 hazard state are the
+next graph-correctness slice. The later residency/activation milestones remain
+prospective until that evidence exists.
+
 The principal architectural change is to distinguish three feature states:
 
 - **Installed** — code and assets are present.

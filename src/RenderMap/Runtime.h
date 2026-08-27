@@ -43,6 +43,12 @@ namespace CSX::RenderMap
 		kCopyResource = 1,
 		kCopySubresourceRegion = 2,
 		kResolveSubresource = 3,
+		kUpdateSubresource = 4,
+		kCopyStructureCount = 5,
+		kClearRenderTarget = 6,
+		kClearUnorderedAccess = 7,
+		kClearDepthStencil = 8,
+		kGenerateMips = 9,
 	};
 
 	struct ResourceViewInput

@@ -837,8 +837,18 @@ namespace CSX::RenderMap
 			}
 			case PayloadSchema::kResourceFlow: {
 				const auto operation = static_cast<ResourceFlowOperation>(a_payload.words[0]);
-				const char* name = operation == ResourceFlowOperation::kCopyResource ? "copy-resource" :
-					(operation == ResourceFlowOperation::kCopySubresourceRegion ? "copy-subresource-region" : "resolve-subresource");
+				const char* name = "unknown";
+				switch (operation) {
+				case ResourceFlowOperation::kCopyResource: name = "copy-resource"; break;
+				case ResourceFlowOperation::kCopySubresourceRegion: name = "copy-subresource-region"; break;
+				case ResourceFlowOperation::kResolveSubresource: name = "resolve-subresource"; break;
+				case ResourceFlowOperation::kUpdateSubresource: name = "update-subresource"; break;
+				case ResourceFlowOperation::kCopyStructureCount: name = "copy-structure-count"; break;
+				case ResourceFlowOperation::kClearRenderTarget: name = "clear-render-target"; break;
+				case ResourceFlowOperation::kClearUnorderedAccess: name = "clear-unordered-access"; break;
+				case ResourceFlowOperation::kClearDepthStencil: name = "clear-depth-stencil"; break;
+				case ResourceFlowOperation::kGenerateMips: name = "generate-mips"; break;
+				}
 				return {
 					{ "schema", "resource-flow-v1" }, { "operation", name },
 					{ "sourceResourceObservationId", ResourceObservationId(a_payload.words[1], a_generation) },

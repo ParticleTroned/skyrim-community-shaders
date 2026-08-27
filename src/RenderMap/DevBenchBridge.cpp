@@ -85,6 +85,7 @@ namespace
 				"resolved-technique-stage-observations",
 				"typed-output-merger-target-observations",
 				"typed-resource-and-view-observations", "ordered-resource-bindings", "resource-flow-observations",
+				"resource-mutation-observations",
 				"atomic-events-jsonl", "atomic-capture-manifest", "explicit-gap-events",
 			},
 			.inputs = {

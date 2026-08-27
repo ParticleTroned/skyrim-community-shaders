@@ -35,6 +35,12 @@ semantic overlays.
 
 ## Derived graph
 
+> **Historical derivation note:** the counts and graph hash in this section are
+> for the original `resource-flow-1` allocation graph. The retained manifest and
+> event stream remain authoritative inputs. The `resource-versions-1` live gate
+> will regenerate them into write-epoch nodes and conservative hazard edges;
+> the old hash is retained rather than silently replaced.
+
 `tools/build-render-graph.py` produced a schema-valid graph containing:
 
 | Node or edge | Count |

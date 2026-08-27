@@ -1,0 +1,54 @@
+name: Internal patch apply
+
+on:
+  push:
+    branches:
+      - codex/internal-patch-apply
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out patch payload
+        uses: actions/checkout@v4
+        with:
+          ref: codex/internal-patch-apply
+          path: patch-source
+          fetch-depth: 1
+
+      - name: Check out target branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/rc166-01-submit-lease
+          path: work
+          fetch-depth: 0
+
+      - name: Apply reviewed commit series
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode patch-source/.github/internal/rc166-pr01-series.patch.gz.b64 \
+            | gzip --decompress > /tmp/rc166-pr01-series.patch
+          git -C work config user.name "ParticleTroned"
+          git -C work config user.email "248299730+ParticleTroned@users.noreply.github.com"
+          git -C work am /tmp/rc166-pr01-series.patch
+
+      - name: Run portable point-one validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -DPROJECT_ROOT="$GITHUB_WORKSPACE/work" \
+            -P work/tests/vr_render_scale_devbench_contract_test.cmake
+          g++ -std=c++23 -Iwork/src work/tests/overlay_policy_test.cpp \
+            -o /tmp/overlay_policy_test
+          /tmp/overlay_policy_test
+          git -C work diff --check \
+            origin/codex/vr-renderscale-RC166lessons...HEAD
+          test "$(git -C work rev-list --count origin/codex/vr-renderscale-RC166lessons..HEAD)" -eq 5
+
+      - name: Push target branch
+        shell: bash
+        run: git -C work push origin HEAD:codex/rc166-01-submit-lease

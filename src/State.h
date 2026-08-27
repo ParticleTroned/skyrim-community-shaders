@@ -126,6 +126,12 @@ public:
 		return renderTargetResourcePublication.load(std::memory_order_acquire);
 	}
 	uint64_t GetCompletedRenderTargetResourcePublicationGeneration() const;
+	/** Returns the current generation, including an in-progress invalidation. */
+	uint64_t GetRenderTargetResourcePublicationGeneration() const noexcept
+	{
+		return renderTargetResourcePublicationGeneration.load(
+			std::memory_order_acquire);
+	}
 	bool HasCompleteRenderTargetResourcePublication(uint32_t a_width, uint32_t a_height) const;
 
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);

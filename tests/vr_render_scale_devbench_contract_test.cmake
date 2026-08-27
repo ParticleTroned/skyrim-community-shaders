@@ -33,6 +33,10 @@ foreach(_action IN ITEMS
     cpu_performance_start
     cpu_performance_stop
     cpu_performance_reset
+	gpu_performance_status
+	gpu_performance_start
+	gpu_performance_stop
+	gpu_performance_reset
     dlss_trace_status
     dlss_trace_start
     dlss_trace_read
@@ -128,18 +132,26 @@ string(JSON _expected_start_frame_description ERROR_VARIABLE _expected_start_fra
 )
 string(FIND
     "${_expected_start_frame_description}"
-    "Legacy optional secondary"
-    _expected_start_frame_legacy_position
+	"gpu_performance_stop"
+	_expected_start_frame_gpu_position
 )
-if(_expected_start_frame_description_error OR _expected_start_frame_legacy_position EQUAL -1)
+string(FIND
+	"${_expected_start_frame_description}"
+	"legacy secondary guard for cpu_performance_stop"
+	_expected_start_frame_cpu_position
+)
+if(_expected_start_frame_description_error OR
+	_expected_start_frame_gpu_position EQUAL -1 OR
+	_expected_start_frame_cpu_position EQUAL -1)
     message(FATAL_ERROR
-        "Render-scale expectedStartFrame is not documented as a legacy secondary guard: ${_expected_start_frame_description_error}"
+		"Render-scale expectedStartFrame ownership guards are incomplete: ${_expected_start_frame_description_error}"
     )
 endif()
 
 foreach(_required_behavior IN ITEMS
     "QualificationPolicy::SaturatingDeadlineTick"
     "QualificationPolicy::EvaluateStability"
+	"QualificationPolicy::HasCoherentPresentationFrames"
     "QualificationPolicy::HasRequiredPresentationHistory"
     "QualificationPolicy::IsFoveationInvariantViolation"
     "QualificationPolicy::IsTransientObservationDispatchError"
@@ -151,6 +163,7 @@ foreach(_required_behavior IN ITEMS
     "dlss_trace_session_mismatch"
     "cpu_performance_session_mismatch"
     "cpu_performance_start_frame_mismatch"
+	"gpu_performance_start_frame_mismatch"
     "cpu_performance_session_id_unavailable"
     "GetVRRenderScaleCPUPerformanceSessionID()"
     "{ \"sessionId\", sessionID }"
@@ -175,6 +188,17 @@ foreach(_required_behavior IN ITEMS
         message(FATAL_ERROR "Render-scale qualification behavior is missing: ${_required_behavior}")
     endif()
 endforeach()
+
+string(FIND
+    "${_bridge}"
+    "a_controller.physicalPhase != Upscaling::VRRenderScalePhysicalPhase::ContractPublished"
+    _transient_physical_phase_position
+)
+if(NOT _transient_physical_phase_position EQUAL -1)
+    message(FATAL_ERROR
+        "Qualification still requires the transient physical publication phase"
+    )
+endif()
 
 foreach(_required_cpu_session_behavior IN ITEMS
     "GetVRRenderScaleCPUPerformanceSessionID() const noexcept"

@@ -219,6 +219,24 @@ namespace
 		       !IsTransientObservationDispatchError("");
 	}
 
+	constexpr bool CoversCoherentPresentationFrames()
+	{
+		return HasCoherentPresentationFrames(
+				   false, 10, 11, 11, 7, 7, 0, 0) &&
+		       !HasCoherentPresentationFrames(
+				   false, 10, 11, 12, 7, 8, 0, 0) &&
+		       HasCoherentPresentationFrames(
+				   true, 100, 111, 110, 51, 50, 110, 50) &&
+		       HasCoherentPresentationFrames(
+				   true, 100, 110, 110, 50, 50, 110, 50) &&
+		       !HasCoherentPresentationFrames(
+				   true, 110, 111, 110, 51, 50, 110, 50) &&
+		       !HasCoherentPresentationFrames(
+				   true, 100, 111, 110, 50, 50, 110, 50) &&
+		       !HasCoherentPresentationFrames(
+				   true, 100, 111, 111, 51, 51, 110, 50);
+	}
+
 	constexpr bool CoversTimeoutMath()
 	{
 		constexpr std::uint64_t frequency = 10'000'000;
@@ -251,6 +269,7 @@ namespace
 	static_assert(CoversOwnership());
 	static_assert(CoversNestedPropertyPolicy());
 	static_assert(CoversTerminalDiagnosticPolicy());
+	static_assert(CoversCoherentPresentationFrames());
 	static_assert(CoversTimeoutMath());
 }
 

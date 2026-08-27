@@ -231,6 +231,44 @@ namespace VRRenderScaleQualificationPolicy
 		       (!a_vendorPresentation || a_bothEyesConsecutiveFrames >= 2);
 	}
 
+	[[nodiscard]] constexpr bool HasCoherentPresentationFrames(
+		bool a_vendorPresentation,
+		std::uint32_t a_beginFrame,
+		std::uint32_t a_leftFrame,
+		std::uint32_t a_rightFrame,
+		std::uint64_t a_leftCycle,
+		std::uint64_t a_rightCycle,
+		std::uint32_t a_lastBothEyesFrame,
+		std::uint64_t a_lastBothEyesCycle) noexcept
+	{
+		if (!a_vendorPresentation) {
+			return a_leftFrame == a_rightFrame &&
+			       FrameAdvanced(a_beginFrame, a_leftFrame) &&
+			       a_leftCycle != 0 && a_leftCycle == a_rightCycle;
+		}
+		if (!FrameAdvanced(a_beginFrame, a_lastBothEyesFrame) ||
+			a_lastBothEyesCycle == 0 ||
+			a_lastBothEyesCycle == std::numeric_limits<std::uint64_t>::max()) {
+			return false;
+		}
+
+		const auto eyeMatchesCompletedOrNext = [=](
+												   std::uint32_t a_frame, std::uint64_t a_cycle) {
+			const bool completed = a_frame == a_lastBothEyesFrame &&
+			                       a_cycle == a_lastBothEyesCycle;
+			const bool next = ElapsedFrames(a_lastBothEyesFrame, a_frame) == 1 &&
+			                  a_cycle == a_lastBothEyesCycle + 1;
+			return completed || next;
+		};
+		const bool leftCompleted = a_leftFrame == a_lastBothEyesFrame &&
+		                           a_leftCycle == a_lastBothEyesCycle;
+		const bool rightCompleted = a_rightFrame == a_lastBothEyesFrame &&
+		                            a_rightCycle == a_lastBothEyesCycle;
+		return eyeMatchesCompletedOrNext(a_leftFrame, a_leftCycle) &&
+		       eyeMatchesCompletedOrNext(a_rightFrame, a_rightCycle) &&
+		       (leftCompleted || rightCompleted);
+	}
+
 	[[nodiscard]] constexpr bool IsFreshTransition(
 		bool a_destinationMatches,
 		bool a_destinationDiffersFromSource,

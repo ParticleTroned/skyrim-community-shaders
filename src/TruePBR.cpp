@@ -98,7 +98,7 @@ static void WarnInvalidPBRRenderTargetOnce(const std::string& inputFilePath, std
 
 namespace PNState
 {
-	void ReadPBRRecordConfigs(const std::string& rootPath, std::function<void(const std::string&, const json&)> recordReader)
+	void ReadPBRRecordConfigs(const std::string& rootPath, std::function<bool(const std::string&, const json&)> recordReader, bool enableVerboseJsonLogging)
 	{
 		if (std::filesystem::exists(rootPath)) {
 			auto configs = clib_util::distribution::get_configs(rootPath, "", ".json");
@@ -108,14 +108,20 @@ namespace PNState
 				return;
 			}
 
-			logger::info("[TruePBR] {} matching jsons found", configs.size());
+			if (enableVerboseJsonLogging) {
+				logger::info("[TruePBR] {} matching jsons found", configs.size());
+			}
 
+			bool anyFailed = false;
 			for (auto& path : configs) {
-				logger::info("[TruePBR] loading json : {}", path);
+				if (enableVerboseJsonLogging) {
+					logger::info("[TruePBR] loading json : {}", path);
+				}
 
 				std::ifstream fileStream(path);
 				if (!fileStream.is_open()) {
 					logger::error("[TruePBR] failed to read {}", path);
+					anyFailed = true;
 					continue;
 				}
 
@@ -124,11 +130,18 @@ namespace PNState
 					fileStream >> config;
 				} catch (const nlohmann::json::parse_error& e) {
 					logger::error("[TruePBR] failed to parse {} : {}", path, e.what());
+					anyFailed = true;
 					continue;
 				}
 
 				const auto editorId = std::filesystem::path(path).stem().string();
-				recordReader(editorId, config);
+				if (!recordReader(editorId, config)) {
+					anyFailed = true;
+				}
+			}
+
+			if (!enableVerboseJsonLogging && !anyFailed) {
+				logger::info("[TruePBR] All .jsons loaded successfully.");
 			}
 		}
 	}
@@ -382,6 +395,11 @@ void TruePBR::DrawSettings()
 	}
 
 	ImGui::EndDisabled();
+
+	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"))) {
+		ImGui::Checkbox(T(TKEY("enable_verbose_json_logging"), "Enable verbose json logging"), &enableVerboseJsonLogging);
+		ImGui::TreePop();
+	}
 }
 
 void TruePBR::DrawEssentialSettings()
@@ -395,17 +413,20 @@ void TruePBR::DrawEssentialSettings()
 void TruePBR::SaveSettings(json& o_json)
 {
 	o_json = settings;
+	o_json["EnableVerboseJsonLogging"] = enableVerboseJsonLogging;
 }
 
 void TruePBR::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.Enabled = settings.Enabled ? 1u : 0u;
+	enableVerboseJsonLogging = o_json.value("EnableVerboseJsonLogging", false);
 }
 
 void TruePBR::RestoreDefaultSettings()
 {
 	settings = {};
+	enableVerboseJsonLogging = false;
 }
 
 void TruePBR::SetupResources()
@@ -507,32 +528,38 @@ void TruePBR::SetupGlintsTexture()
 
 void TruePBR::SetupTextureSetData()
 {
-	logger::info("[TruePBR] loading PBR texture set configs");
+	if (enableVerboseJsonLogging) {
+		logger::info("[TruePBR] loading PBR texture set configs");
+	}
 
 	pbrTextureSets.clear();
 
 	PNState::ReadPBRRecordConfigs("Data\\PBRTextureSets", [this](const std::string& editorId, const json& config) {
 		try {
 			pbrTextureSets.insert_or_assign(editorId, config);
+			return true;
 		} catch (const std::exception& e) {
 			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
-		}
-	});
+			return false;
+		} }, enableVerboseJsonLogging);
 }
 
 void TruePBR::ReloadTextureSetData()
 {
-	logger::info("[TruePBR] reloading PBR texture set configs");
+	if (enableVerboseJsonLogging) {
+		logger::info("[TruePBR] reloading PBR texture set configs");
+	}
 
 	PNState::ReadPBRRecordConfigs("Data\\PBRTextureSets", [this](const std::string& editorId, const json& config) {
 		try {
 			if (auto it = pbrTextureSets.find(editorId); it != pbrTextureSets.cend()) {
 				it->second = config;
 			}
+			return true;
 		} catch (const std::exception& e) {
 			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
-		}
-	});
+			return false;
+		} }, enableVerboseJsonLogging);
 
 	for (const auto& [material, textureSets] : BSLightingShaderMaterialPBRLandscape::All) {
 		for (uint32_t textureSetIndex = 0; textureSetIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureSetIndex) {
@@ -562,17 +589,20 @@ bool TruePBR::IsPBRTextureSet(const RE::TESForm* textureSet)
 
 void TruePBR::SetupMaterialObjectData()
 {
-	logger::info("[TruePBR] loading PBR material object configs");
+	if (enableVerboseJsonLogging) {
+		logger::info("[TruePBR] loading PBR material object configs");
+	}
 
 	pbrMaterialObjects.clear();
 
 	PNState::ReadPBRRecordConfigs("Data\\PBRMaterialObjects", [this](const std::string& editorId, const json& config) {
 		try {
 			pbrMaterialObjects.insert_or_assign(editorId, config);
+			return true;
 		} catch (const std::exception& e) {
 			logger::error("Failed to deserialize config for {}: {}.", editorId, e.what());
-		}
-	});
+			return false;
+		} }, enableVerboseJsonLogging);
 }
 
 TruePBR::PBRMaterialObjectData* TruePBR::GetPBRMaterialObjectData(const RE::TESForm* materialObject)

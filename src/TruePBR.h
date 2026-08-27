@@ -59,6 +59,10 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
 	Settings settings;
+
+	/** @brief When true, logs each PBR JSON file path during load. Off by default. */
+	bool enableVerboseJsonLogging = false;
+
 	bool TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
 	bool BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material);
 

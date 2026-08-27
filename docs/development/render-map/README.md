@@ -149,6 +149,9 @@ next live capture target are described in
 The first retained world-scene re-derivation with semantic identity projection
 is recorded in
 [`semantic-projection-breezehome-analysis-2026-08-27.md`](./semantic-projection-breezehome-analysis-2026-08-27.md).
+The safe capture-start contract for the remaining stable build, manifest,
+environment, cache, and scenario identity gap is defined in
+[`capture-provenance-contract.md`](./capture-provenance-contract.md).
 
 Example DevBench requests (use a unique `commandId` for each logical command):
 

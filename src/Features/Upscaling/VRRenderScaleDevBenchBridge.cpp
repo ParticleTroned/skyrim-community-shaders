@@ -8,6 +8,7 @@
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
 #	include "Diagnostics/VRPipelineDiagnostics.h"
 #	include "Features/Upscaling.h"
+#	include "Features/Upscaling/VRRenderScaleMemoryTracePolicy.h"
 #	include "Features/Upscaling/VRRenderScaleQualificationPolicy.h"
 #	include "Features/VR.h"
 #	include "Globals.h"
@@ -38,6 +39,7 @@
 #	include <string>
 #	include <string_view>
 #	include <thread>
+#	include <utility>
 
 namespace
 {
@@ -48,7 +50,8 @@ namespace
 	static_assert(kDLSSDevBenchTraceDefaultReadLimit <= Streamline::kDLSSDevBenchTraceCapacity);
 	constexpr uint64_t kQualificationMaximumTimeoutMs = 120'000;
 	constexpr double kQualificationFoveationFloatTolerance = 0.0001;
-	constexpr unsigned int kDevBenchToolExtensionRevision = 6;
+	constexpr std::size_t kQualificationMemoryTraceCapacity = 48;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 7;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 
@@ -1170,6 +1173,80 @@ namespace
 		QualificationMilestoneMark strict{};
 	};
 
+	enum QualificationMemoryTraceReason : uint32_t
+	{
+		kMemoryTraceReasonNone = 0,
+		kMemoryTraceReasonBaseline = 1u << 0,
+		kMemoryTraceReasonDispatch = 1u << 1,
+		kMemoryTraceReasonControllerState = 1u << 2,
+		kMemoryTraceReasonPhysicalPhase = 1u << 3,
+		kMemoryTraceReasonPresentationPhase = 1u << 4,
+		kMemoryTraceReasonNewPeak = 1u << 5,
+		kMemoryTraceReasonAdmission = 1u << 6,
+		kMemoryTraceReasonCleanup = 1u << 7,
+		kMemoryTraceReasonPresentationMilestone = 1u << 8,
+		kMemoryTraceReasonCleanupMilestone = 1u << 9,
+		kMemoryTraceReasonStrictMilestone = 1u << 10,
+		kMemoryTraceReasonTerminal = 1u << 11,
+	};
+
+	struct QualificationMemoryTraceRecord
+	{
+		uint64_t sequence = 0;
+		uint32_t reasonMask = kMemoryTraceReasonNone;
+		VRRenderScaleMemoryTracePolicy::Sample sample{};
+		uint64_t controllerRevision = 0;
+		Upscaling::VRRenderScaleTransitionState controllerState =
+			Upscaling::VRRenderScaleTransitionState::Idle;
+		Upscaling::VRRenderScalePhysicalPhase physicalPhase =
+			Upscaling::VRRenderScalePhysicalPhase::None;
+		Upscaling::VRRenderScalePresentationPhase presentationPhase =
+			Upscaling::VRRenderScalePresentationPhase::Idle;
+		Upscaling::VRRenderScaleMemoryPressure pressure =
+			Upscaling::VRRenderScaleMemoryPressure::Unknown;
+		uint64_t requestID = 0;
+		uint64_t physicalMutationEpoch = 0;
+		uint64_t physicalSerializationEpoch = 0;
+		uint64_t memorySampleEpoch = 0;
+		uint32_t memorySampleFrame = 0;
+		uint64_t budgetBytes = 0;
+		uint64_t currentReservationBytes = 0;
+		uint64_t availableForReservationBytes = 0;
+		uint64_t headroomBytes = 0;
+		uint64_t systemCommitLimitBytes = 0;
+		uint64_t systemCommitHeadroomBytes = 0;
+		bool planValid = false;
+		bool projectedResidencyDeferred = false;
+		bool systemCommitDeferred = false;
+		bool pressureDeferred = false;
+		bool memoryTrimPending = false;
+		Upscaling::VRRenderScaleMemoryTrimReason memoryTrimReason =
+			Upscaling::VRRenderScaleMemoryTrimReason::None;
+		uint64_t memoryTrimOwnerEpoch = 0;
+		uint32_t retiredIntermediateSets = 0;
+		bool retiredIntermediateFencePending = false;
+		uint32_t retiredEngineGenerations = 0;
+		bool retiredEngineFencePending = false;
+		bool postLoadRecoveryActive = false;
+		bool postLoadCleanupDrained = false;
+		bool stableProfileValid = false;
+	};
+
+	struct QualificationMemoryTraceEvidence
+	{
+		VRRenderScaleMemoryTracePolicy::Summary summary{};
+		std::array<QualificationMemoryTraceRecord,
+			kQualificationMemoryTraceCapacity>
+			records{};
+		QualificationMemoryTraceRecord lastObserved{};
+		bool hasLastObserved = false;
+		uint64_t nextSequence = 1;
+		uint32_t nextIndex = 0;
+		uint32_t count = 0;
+		uint32_t overwrittenRecords = 0;
+		uint32_t parseFailures = 0;
+	};
+
 	struct QualificationTransition
 	{
 		uint64_t transitionID = 0;
@@ -1181,6 +1258,7 @@ namespace
 		std::optional<std::string> cocCellEditorID;
 		bool waitInProgress = false;
 		QualificationBaseline baseline{};
+		QualificationMemoryTraceEvidence memoryTrace{};
 		std::shared_ptr<std::atomic_bool> cancelled =
 			std::make_shared<std::atomic_bool>(false);
 	};
@@ -1225,6 +1303,606 @@ namespace
 			           0;
 		}();
 		return frequency;
+	}
+
+	std::pair<uint64_t, uint32_t> SelectQualificationMemoryOwner(
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller)
+	{
+		if (a_controller.relatchPlan.valid) {
+			return {
+				a_controller.relatchPlan.transitionEpoch,
+				a_controller.relatchPlan.contractGeneration,
+			};
+		}
+		for (const auto* profile : {
+				 &a_controller.applying,
+				 &a_controller.requested,
+				 &a_controller.applied,
+				 &a_controller.stable }) {
+			if (profile->valid) {
+				return {
+					profile->transitionEpoch,
+					profile->contractGeneration,
+				};
+			}
+		}
+		return {};
+	}
+
+	uint64_t SelectQualificationMemoryRequestID(
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller)
+	{
+		for (const auto* profile : {
+				 &a_controller.applying,
+				 &a_controller.requested,
+				 &a_controller.applied,
+				 &a_controller.stable }) {
+			if (profile->valid && profile->requestID != 0)
+				return profile->requestID;
+		}
+		return 0;
+	}
+
+	QualificationMemoryTraceRecord CaptureQualificationMemoryTraceRecord(
+		const Upscaling::VRRenderScaleTransitionSnapshot& a_controller,
+		uint64_t a_tick,
+		uint32_t a_frame,
+		uint64_t a_physicalMutationEpoch,
+		uint64_t a_physicalSerializationEpoch)
+	{
+		const auto [transitionEpoch, contractGeneration] =
+			SelectQualificationMemoryOwner(a_controller);
+		const auto& memory = a_controller.memory;
+		const auto& plan = a_controller.relatchPlan;
+		const bool planValid = plan.valid;
+		const bool admissionDeferred =
+			planValid &&
+			(plan.projectedResidencyDeferred ||
+				plan.systemCommitDeferred ||
+				plan.pressureDeferred);
+		const bool physicalMutationActive =
+			a_physicalMutationEpoch != 0 ||
+			a_physicalSerializationEpoch != 0;
+		const bool exactStablePhysicalOwner =
+			a_controller.stable.valid &&
+			a_controller.stable.transitionEpoch != 0 &&
+			a_controller.stable.contractGeneration != 0 &&
+			a_controller.physicalOwner.transitionEpoch ==
+				a_controller.stable.transitionEpoch &&
+			a_controller.physicalOwner.contractGeneration ==
+				a_controller.stable.contractGeneration;
+
+		QualificationMemoryTraceRecord record;
+		record.sample = {
+			.tick = a_tick,
+			.frame = a_frame,
+			.transitionEpoch = transitionEpoch,
+			.contractGeneration = contractGeneration,
+			.dxgiValid = memory.valid,
+			.dxgiUsageBytes = memory.currentUsageBytes,
+			.systemCommitValid = memory.systemCommitValid,
+			.systemCommitBytes = memory.systemCommitBytes,
+			.processPrivateValid = memory.processPrivateUsageValid,
+			.processPrivateBytes = memory.processPrivateUsageBytes,
+			.estimatedAdditionalBytes =
+				planValid ? plan.estimatedAdditionalBytes : 0,
+			.projectedAdditionalBytes =
+				planValid ? plan.projectedAdditionalBytes : 0,
+			.projectedSystemCommitAdditionalBytes =
+				planValid ? plan.projectedSystemCommitAdditionalBytes : 0,
+			.residencyAdmissionLimitBytes =
+				planValid ? plan.admissionUsageLimitBytes : 0,
+			.systemCommitAdmissionLimitBytes =
+				planValid ? plan.systemCommitAdmissionLimitBytes : 0,
+			.planValid = planValid,
+			.admissionDeferred = admissionDeferred,
+			.physicalMutationActive = physicalMutationActive,
+			.previousPresentationRetained =
+				admissionDeferred &&
+				!physicalMutationActive &&
+				exactStablePhysicalOwner,
+		};
+		record.controllerRevision = a_controller.revision;
+		record.controllerState = a_controller.state;
+		record.physicalPhase = a_controller.physicalPhase;
+		record.presentationPhase = a_controller.presentationPhase;
+		record.pressure = memory.pressure;
+		record.requestID = SelectQualificationMemoryRequestID(a_controller);
+		record.physicalMutationEpoch = a_physicalMutationEpoch;
+		record.physicalSerializationEpoch = a_physicalSerializationEpoch;
+		record.memorySampleEpoch = memory.transitionEpoch;
+		record.memorySampleFrame = memory.sampleFrame;
+		record.budgetBytes = memory.budgetBytes;
+		record.currentReservationBytes = memory.currentReservationBytes;
+		record.availableForReservationBytes =
+			memory.availableForReservationBytes;
+		record.headroomBytes = memory.headroomBytes;
+		record.systemCommitLimitBytes = memory.systemCommitLimitBytes;
+		record.systemCommitHeadroomBytes = memory.systemCommitHeadroomBytes;
+		record.planValid = planValid;
+		record.projectedResidencyDeferred =
+			planValid && plan.projectedResidencyDeferred;
+		record.systemCommitDeferred = planValid && plan.systemCommitDeferred;
+		record.pressureDeferred = planValid && plan.pressureDeferred;
+		record.memoryTrimPending = a_controller.memoryTrim.pending;
+		record.memoryTrimReason = a_controller.memoryTrim.reason;
+		record.memoryTrimOwnerEpoch = a_controller.memoryTrim.ownerEpoch;
+		record.retiredIntermediateSets = a_controller.retirement.pendingSets;
+		record.retiredIntermediateFencePending =
+			a_controller.retirement.fencePending;
+		record.retiredEngineGenerations =
+			a_controller.engineTargetRetirement.pendingGenerations;
+		record.retiredEngineFencePending =
+			a_controller.engineTargetRetirement.fencePending;
+		record.postLoadRecoveryActive = a_controller.postLoadRecovery.active;
+		record.postLoadCleanupDrained =
+			a_controller.postLoadRecovery.cleanupDrained;
+		record.stableProfileValid = a_controller.stable.valid;
+		return record;
+	}
+
+	void RetainQualificationMemoryTraceRecord(
+		QualificationMemoryTraceEvidence& a_evidence,
+		QualificationMemoryTraceRecord a_record,
+		uint32_t a_explicitReasonMask = kMemoryTraceReasonNone,
+		bool a_observeSample = true)
+	{
+		uint32_t reasonMask = a_explicitReasonMask;
+		const uint32_t peakMask = a_observeSample ?
+			a_evidence.summary.Observe(a_record.sample) :
+			VRRenderScaleMemoryTracePolicy::kPeakNone;
+		if (peakMask != VRRenderScaleMemoryTracePolicy::kPeakNone)
+			reasonMask |= kMemoryTraceReasonNewPeak;
+
+		if (a_evidence.hasLastObserved) {
+			const auto& previous = a_evidence.lastObserved;
+			if (a_record.controllerState != previous.controllerState)
+				reasonMask |= kMemoryTraceReasonControllerState;
+			if (a_record.physicalPhase != previous.physicalPhase)
+				reasonMask |= kMemoryTraceReasonPhysicalPhase;
+			if (a_record.physicalMutationEpoch !=
+					previous.physicalMutationEpoch ||
+				a_record.physicalSerializationEpoch !=
+					previous.physicalSerializationEpoch) {
+				reasonMask |= kMemoryTraceReasonPhysicalPhase;
+			}
+			if (a_record.presentationPhase != previous.presentationPhase)
+				reasonMask |= kMemoryTraceReasonPresentationPhase;
+			if (a_record.planValid != previous.planValid ||
+				a_record.projectedResidencyDeferred !=
+					previous.projectedResidencyDeferred ||
+				a_record.systemCommitDeferred != previous.systemCommitDeferred ||
+				a_record.pressureDeferred != previous.pressureDeferred) {
+				reasonMask |= kMemoryTraceReasonAdmission;
+			}
+			if (a_record.memoryTrimPending != previous.memoryTrimPending ||
+				a_record.memoryTrimReason != previous.memoryTrimReason ||
+				a_record.memoryTrimOwnerEpoch != previous.memoryTrimOwnerEpoch ||
+				a_record.retiredIntermediateSets !=
+					previous.retiredIntermediateSets ||
+				a_record.retiredIntermediateFencePending !=
+					previous.retiredIntermediateFencePending ||
+				a_record.retiredEngineGenerations !=
+					previous.retiredEngineGenerations ||
+				a_record.retiredEngineFencePending !=
+					previous.retiredEngineFencePending ||
+				a_record.postLoadRecoveryActive !=
+					previous.postLoadRecoveryActive ||
+				a_record.postLoadCleanupDrained !=
+					previous.postLoadCleanupDrained) {
+				reasonMask |= kMemoryTraceReasonCleanup;
+			}
+		}
+
+		a_evidence.lastObserved = a_record;
+		a_evidence.hasLastObserved = true;
+		if (reasonMask == kMemoryTraceReasonNone)
+			return;
+
+		a_record.reasonMask = reasonMask;
+		a_record.sequence = a_evidence.nextSequence;
+		if (a_evidence.nextSequence !=
+			std::numeric_limits<uint64_t>::max()) {
+			++a_evidence.nextSequence;
+		}
+		a_evidence.records[a_evidence.nextIndex] = a_record;
+		a_evidence.nextIndex =
+			(a_evidence.nextIndex + 1u) %
+			static_cast<uint32_t>(kQualificationMemoryTraceCapacity);
+		if (a_evidence.count < kQualificationMemoryTraceCapacity) {
+			++a_evidence.count;
+		} else if (a_evidence.overwrittenRecords !=
+				   std::numeric_limits<uint32_t>::max()) {
+			++a_evidence.overwrittenRecords;
+		}
+	}
+
+	json QualificationMemoryTraceReasonJson(uint32_t a_reasonMask)
+	{
+		json reasons = json::array();
+		const auto add = [&reasons, a_reasonMask](
+			uint32_t a_bit, std::string_view a_name) {
+			if ((a_reasonMask & a_bit) != 0)
+				reasons.push_back(a_name);
+		};
+		add(kMemoryTraceReasonBaseline, "baseline");
+		add(kMemoryTraceReasonDispatch, "dispatch");
+		add(kMemoryTraceReasonControllerState, "controller_state");
+		add(kMemoryTraceReasonPhysicalPhase, "physical_phase");
+		add(kMemoryTraceReasonPresentationPhase, "presentation_phase");
+		add(kMemoryTraceReasonNewPeak, "new_peak");
+		add(kMemoryTraceReasonAdmission, "admission");
+		add(kMemoryTraceReasonCleanup, "cleanup");
+		add(kMemoryTraceReasonPresentationMilestone, "presentation_milestone");
+		add(kMemoryTraceReasonCleanupMilestone, "cleanup_milestone");
+		add(kMemoryTraceReasonStrictMilestone, "strict_milestone");
+		add(kMemoryTraceReasonTerminal, "terminal");
+		return reasons;
+	}
+
+	json QualificationMemoryPeakJson(
+		const VRRenderScaleMemoryTracePolicy::ScalarPeak& a_peak)
+	{
+		if (!a_peak.valid)
+			return nullptr;
+		return {
+			{ "bytes", a_peak.value },
+			{ "tick", a_peak.tick },
+			{ "frame", a_peak.frame },
+			{ "transitionEpoch", a_peak.transitionEpoch },
+			{ "contractGeneration", a_peak.contractGeneration },
+		};
+	}
+
+	json QualificationMemoryTraceRecordJson(
+		const QualificationMemoryTraceRecord& a_record)
+	{
+		return {
+			{ "sequence", a_record.sequence },
+			{ "reasonMask", a_record.reasonMask },
+			{ "reasons", QualificationMemoryTraceReasonJson(a_record.reasonMask) },
+			{ "tick", a_record.sample.tick },
+			{ "frame", a_record.sample.frame },
+			{ "requestId", a_record.requestID },
+			{ "transitionEpoch", a_record.sample.transitionEpoch },
+			{ "contractGeneration", a_record.sample.contractGeneration },
+			{ "physicalMutationEpoch", a_record.physicalMutationEpoch },
+			{ "physicalSerializationEpoch", a_record.physicalSerializationEpoch },
+			{ "controllerRevision", a_record.controllerRevision },
+			{ "controllerState", Upscaling::GetVRRenderScaleTransitionStateName(a_record.controllerState) },
+			{ "controllerStateValue", static_cast<uint32_t>(a_record.controllerState) },
+			{ "physicalPhase", GetPhysicalPhaseName(a_record.physicalPhase) },
+			{ "physicalPhaseValue", static_cast<uint32_t>(a_record.physicalPhase) },
+			{ "presentationPhase", GetPresentationPhaseName(a_record.presentationPhase) },
+			{ "presentationPhaseValue", static_cast<uint32_t>(a_record.presentationPhase) },
+			{ "memory", {
+				{ "sampleFrame", a_record.memorySampleFrame },
+				{ "sampleTransitionEpoch", a_record.memorySampleEpoch },
+				{ "dxgiValid", a_record.sample.dxgiValid },
+				{ "currentUsageBytes", a_record.sample.dxgiUsageBytes },
+				{ "budgetBytes", a_record.budgetBytes },
+				{ "currentReservationBytes", a_record.currentReservationBytes },
+				{ "availableForReservationBytes", a_record.availableForReservationBytes },
+				{ "headroomBytes", a_record.headroomBytes },
+				{ "systemCommitValid", a_record.sample.systemCommitValid },
+				{ "systemCommitBytes", a_record.sample.systemCommitBytes },
+				{ "systemCommitLimitBytes", a_record.systemCommitLimitBytes },
+				{ "systemCommitHeadroomBytes", a_record.systemCommitHeadroomBytes },
+				{ "processPrivateValid", a_record.sample.processPrivateValid },
+				{ "processPrivateUsageBytes", a_record.sample.processPrivateBytes },
+				{ "pressure", Upscaling::GetVRRenderScaleMemoryPressureName(a_record.pressure) },
+				{ "pressureValue", static_cast<uint32_t>(a_record.pressure) },
+			} },
+			{ "plan", {
+				{ "valid", a_record.planValid },
+				{ "estimatedAdditionalBytes", a_record.sample.estimatedAdditionalBytes },
+				{ "projectedAdditionalBytes", a_record.sample.projectedAdditionalBytes },
+				{ "projectedSystemCommitAdditionalBytes", a_record.sample.projectedSystemCommitAdditionalBytes },
+				{ "residencyAdmissionLimitBytes", a_record.sample.residencyAdmissionLimitBytes },
+				{ "systemCommitAdmissionLimitBytes", a_record.sample.systemCommitAdmissionLimitBytes },
+				{ "projectedResidencyDeferred", a_record.projectedResidencyDeferred },
+				{ "systemCommitDeferred", a_record.systemCommitDeferred },
+				{ "pressureDeferred", a_record.pressureDeferred },
+				{ "previousPresentationRetained", a_record.sample.previousPresentationRetained },
+			} },
+			{ "cleanup", {
+				{ "memoryTrimPending", a_record.memoryTrimPending },
+				{ "memoryTrimReason", Upscaling::GetVRRenderScaleMemoryTrimReasonName(a_record.memoryTrimReason) },
+				{ "memoryTrimReasonValue", static_cast<uint32_t>(a_record.memoryTrimReason) },
+				{ "memoryTrimOwnerEpoch", a_record.memoryTrimOwnerEpoch },
+				{ "retiredIntermediateSets", a_record.retiredIntermediateSets },
+				{ "retiredIntermediateFencePending", a_record.retiredIntermediateFencePending },
+				{ "retiredEngineGenerations", a_record.retiredEngineGenerations },
+				{ "retiredEngineFencePending", a_record.retiredEngineFencePending },
+				{ "postLoadRecoveryActive", a_record.postLoadRecoveryActive },
+				{ "postLoadCleanupDrained", a_record.postLoadCleanupDrained },
+			} },
+			{ "physicalMutationActive", a_record.sample.physicalMutationActive },
+			{ "stableProfileValid", a_record.stableProfileValid },
+		};
+	}
+
+	bool TryParseQualificationMemoryTraceRecord(
+		const json& a_observation,
+		QualificationMemoryTraceRecord& a_record)
+	{
+		if (!a_observation.is_object() ||
+			!a_observation.contains("memoryTraceRecord") ||
+			!a_observation["memoryTraceRecord"].is_object()) {
+			return false;
+		}
+		const auto& source = a_observation["memoryTraceRecord"];
+		if (!source.contains("memory") || !source["memory"].is_object() ||
+			!source.contains("plan") || !source["plan"].is_object() ||
+			!source.contains("cleanup") || !source["cleanup"].is_object()) {
+			return false;
+		}
+		const auto& memory = source["memory"];
+		const auto& plan = source["plan"];
+		const auto& cleanup = source["cleanup"];
+
+		a_record.controllerRevision =
+			source.value("controllerRevision", uint64_t{ 0 });
+		a_record.controllerState =
+			static_cast<Upscaling::VRRenderScaleTransitionState>(
+				source.value("controllerStateValue", uint32_t{ 0 }));
+		a_record.physicalPhase =
+			static_cast<Upscaling::VRRenderScalePhysicalPhase>(
+				source.value("physicalPhaseValue", uint32_t{ 0 }));
+		a_record.presentationPhase =
+			static_cast<Upscaling::VRRenderScalePresentationPhase>(
+				source.value("presentationPhaseValue", uint32_t{ 0 }));
+		a_record.requestID = source.value("requestId", uint64_t{ 0 });
+		a_record.physicalMutationEpoch =
+			source.value("physicalMutationEpoch", uint64_t{ 0 });
+		a_record.physicalSerializationEpoch =
+			source.value("physicalSerializationEpoch", uint64_t{ 0 });
+		a_record.memorySampleEpoch =
+			memory.value("sampleTransitionEpoch", uint64_t{ 0 });
+		a_record.memorySampleFrame =
+			memory.value("sampleFrame", uint32_t{ 0 });
+		a_record.budgetBytes = memory.value("budgetBytes", uint64_t{ 0 });
+		a_record.currentReservationBytes =
+			memory.value("currentReservationBytes", uint64_t{ 0 });
+		a_record.availableForReservationBytes =
+			memory.value("availableForReservationBytes", uint64_t{ 0 });
+		a_record.headroomBytes =
+			memory.value("headroomBytes", uint64_t{ 0 });
+		a_record.systemCommitLimitBytes =
+			memory.value("systemCommitLimitBytes", uint64_t{ 0 });
+		a_record.systemCommitHeadroomBytes =
+			memory.value("systemCommitHeadroomBytes", uint64_t{ 0 });
+		a_record.pressure = static_cast<Upscaling::VRRenderScaleMemoryPressure>(
+			memory.value("pressureValue", uint32_t{ 0 }));
+		a_record.planValid = plan.value("valid", false);
+		a_record.projectedResidencyDeferred =
+			a_record.planValid &&
+			plan.value("projectedResidencyDeferred", false);
+		a_record.systemCommitDeferred =
+			a_record.planValid && plan.value("systemCommitDeferred", false);
+		a_record.pressureDeferred =
+			a_record.planValid && plan.value("pressureDeferred", false);
+		a_record.memoryTrimPending =
+			cleanup.value("memoryTrimPending", false);
+		a_record.memoryTrimReason =
+			static_cast<Upscaling::VRRenderScaleMemoryTrimReason>(
+				cleanup.value("memoryTrimReasonValue", uint32_t{ 0 }));
+		a_record.memoryTrimOwnerEpoch =
+			cleanup.value("memoryTrimOwnerEpoch", uint64_t{ 0 });
+		a_record.retiredIntermediateSets =
+			cleanup.value("retiredIntermediateSets", uint32_t{ 0 });
+		a_record.retiredIntermediateFencePending =
+			cleanup.value("retiredIntermediateFencePending", false);
+		a_record.retiredEngineGenerations =
+			cleanup.value("retiredEngineGenerations", uint32_t{ 0 });
+		a_record.retiredEngineFencePending =
+			cleanup.value("retiredEngineFencePending", false);
+		a_record.postLoadRecoveryActive =
+			cleanup.value("postLoadRecoveryActive", false);
+		a_record.postLoadCleanupDrained =
+			cleanup.value("postLoadCleanupDrained", false);
+		a_record.stableProfileValid =
+			source.value("stableProfileValid", false);
+
+		a_record.sample = {
+			.tick = source.value("tick", uint64_t{ 0 }),
+			.frame = source.value("frame", uint32_t{ 0 }),
+			.transitionEpoch =
+				source.value("transitionEpoch", uint64_t{ 0 }),
+			.contractGeneration =
+				source.value("contractGeneration", uint32_t{ 0 }),
+			.dxgiValid = memory.value("dxgiValid", false),
+			.dxgiUsageBytes =
+				memory.value("currentUsageBytes", uint64_t{ 0 }),
+			.systemCommitValid =
+				memory.value("systemCommitValid", false),
+			.systemCommitBytes =
+				memory.value("systemCommitBytes", uint64_t{ 0 }),
+			.processPrivateValid =
+				memory.value("processPrivateValid", false),
+			.processPrivateBytes =
+				memory.value("processPrivateUsageBytes", uint64_t{ 0 }),
+			.estimatedAdditionalBytes =
+				plan.value("estimatedAdditionalBytes", uint64_t{ 0 }),
+			.projectedAdditionalBytes =
+				plan.value("projectedAdditionalBytes", uint64_t{ 0 }),
+			.projectedSystemCommitAdditionalBytes = plan.value(
+				"projectedSystemCommitAdditionalBytes", uint64_t{ 0 }),
+			.residencyAdmissionLimitBytes =
+				plan.value("residencyAdmissionLimitBytes", uint64_t{ 0 }),
+			.systemCommitAdmissionLimitBytes = plan.value(
+				"systemCommitAdmissionLimitBytes", uint64_t{ 0 }),
+			.planValid = a_record.planValid,
+			.admissionDeferred =
+				a_record.projectedResidencyDeferred ||
+				a_record.systemCommitDeferred ||
+				a_record.pressureDeferred,
+			.physicalMutationActive =
+				source.value("physicalMutationActive", false),
+			.previousPresentationRetained =
+				plan.value("previousPresentationRetained", false),
+		};
+		if (!a_record.planValid) {
+			a_record.sample.estimatedAdditionalBytes = 0;
+			a_record.sample.projectedAdditionalBytes = 0;
+			a_record.sample.projectedSystemCommitAdditionalBytes = 0;
+			a_record.sample.residencyAdmissionLimitBytes = 0;
+			a_record.sample.systemCommitAdmissionLimitBytes = 0;
+			a_record.sample.previousPresentationRetained = false;
+		}
+		return true;
+	}
+
+	void RecordQualificationMemoryTraceObservation(
+		const json& a_observation,
+		QualificationMemoryTraceEvidence& a_evidence,
+		uint32_t a_explicitReasonMask = kMemoryTraceReasonNone)
+	{
+		QualificationMemoryTraceRecord record;
+		if (!TryParseQualificationMemoryTraceRecord(a_observation, record)) {
+			if (a_evidence.parseFailures !=
+				std::numeric_limits<uint32_t>::max()) {
+				++a_evidence.parseFailures;
+			}
+			return;
+		}
+		RetainQualificationMemoryTraceRecord(
+			a_evidence, std::move(record), a_explicitReasonMask);
+	}
+
+	void MarkQualificationMemoryTrace(
+		QualificationMemoryTraceEvidence& a_evidence,
+		uint32_t a_reasonMask)
+	{
+		if (!a_evidence.hasLastObserved)
+			return;
+		RetainQualificationMemoryTraceRecord(
+			a_evidence,
+			a_evidence.lastObserved,
+			a_reasonMask,
+			false);
+	}
+
+	std::optional<uint64_t> QualificationPeakDelta(
+		bool a_baselineValid,
+		uint64_t a_baseline,
+		const VRRenderScaleMemoryTracePolicy::ScalarPeak& a_peak)
+	{
+		if (!a_baselineValid || !a_peak.valid)
+			return std::nullopt;
+		return VRRenderScaleMemoryTracePolicy::SaturatingDelta(
+			a_peak.value, a_baseline);
+	}
+
+	json QualificationOptionalBytes(
+		const std::optional<uint64_t>& a_value)
+	{
+		return a_value ? json(*a_value) : json(nullptr);
+	}
+
+	json QualificationOptionalRatio(
+		const std::optional<uint64_t>& a_numerator,
+		bool a_denominatorValid,
+		uint64_t a_denominator)
+	{
+		return !a_numerator || !a_denominatorValid || a_denominator == 0 ?
+			json(nullptr) :
+			json(VRRenderScaleMemoryTracePolicy::SafeRatio(
+				*a_numerator, a_denominator));
+	}
+
+	json QualificationMemoryTraceEvidenceJson(
+		const QualificationMemoryTraceEvidence& a_evidence)
+	{
+		const auto& summary = a_evidence.summary;
+		const auto peakDXGIDelta = QualificationPeakDelta(
+			summary.baselineCaptured && summary.baseline.dxgiValid,
+			summary.baseline.dxgiUsageBytes,
+			summary.peakDXGIUsage);
+		const auto peakSystemCommitDelta = QualificationPeakDelta(
+			summary.baselineCaptured && summary.baseline.systemCommitValid,
+			summary.baseline.systemCommitBytes,
+			summary.peakSystemCommit);
+		const auto peakProcessPrivateDelta = QualificationPeakDelta(
+			summary.baselineCaptured && summary.baseline.processPrivateValid,
+			summary.baseline.processPrivateBytes,
+			summary.peakProcessPrivate);
+
+		json events = json::array();
+		const uint32_t start = a_evidence.count < kQualificationMemoryTraceCapacity ?
+			0u : a_evidence.nextIndex;
+		for (uint32_t offset = 0; offset < a_evidence.count; ++offset) {
+			const uint32_t index =
+				(start + offset) %
+				static_cast<uint32_t>(kQualificationMemoryTraceCapacity);
+			events.push_back(
+				QualificationMemoryTraceRecordJson(a_evidence.records[index]));
+		}
+
+		return {
+			{ "capacity", kQualificationMemoryTraceCapacity },
+			{ "retainedRecords", a_evidence.count },
+			{ "overwrittenRecords", a_evidence.overwrittenRecords },
+			{ "parseFailures", a_evidence.parseFailures },
+			{ "samplesObserved", summary.samplesObserved },
+			{ "invalidSamples", {
+				{ "dxgi", summary.invalidDXGISamples },
+				{ "systemCommit", summary.invalidSystemCommitSamples },
+				{ "processPrivate", summary.invalidProcessPrivateSamples },
+			} },
+			{ "baseline", summary.baselineCaptured ? json{
+				{ "tick", summary.baseline.tick },
+				{ "frame", summary.baseline.frame },
+				{ "dxgiUsageBytes", summary.baseline.dxgiValid ?
+					json(summary.baseline.dxgiUsageBytes) : json(nullptr) },
+				{ "systemCommitBytes", summary.baseline.systemCommitValid ?
+					json(summary.baseline.systemCommitBytes) : json(nullptr) },
+				{ "processPrivateUsageBytes", summary.baseline.processPrivateValid ?
+					json(summary.baseline.processPrivateBytes) : json(nullptr) },
+			} : json(nullptr) },
+			{ "peaks", {
+				{ "dxgiUsage", QualificationMemoryPeakJson(summary.peakDXGIUsage) },
+				{ "systemCommit", QualificationMemoryPeakJson(summary.peakSystemCommit) },
+				{ "processPrivate", QualificationMemoryPeakJson(summary.peakProcessPrivate) },
+				{ "estimatedAdditional", QualificationMemoryPeakJson(summary.peakEstimatedAdditional) },
+				{ "projectedAdditional", QualificationMemoryPeakJson(summary.peakProjectedAdditional) },
+				{ "projectedSystemCommitAdditional", QualificationMemoryPeakJson(summary.peakProjectedSystemCommitAdditional) },
+			} },
+			{ "peakDeltas", {
+				{ "dxgiUsageBytes", QualificationOptionalBytes(peakDXGIDelta) },
+				{ "systemCommitBytes", QualificationOptionalBytes(peakSystemCommitDelta) },
+				{ "processPrivateUsageBytes", QualificationOptionalBytes(peakProcessPrivateDelta) },
+			} },
+			{ "estimateRatios", {
+				{ "dxgiObservedToEstimated", QualificationOptionalRatio(
+					peakDXGIDelta,
+					summary.peakEstimatedAdditional.valid,
+					summary.peakEstimatedAdditional.value) },
+				{ "dxgiObservedToProjected", QualificationOptionalRatio(
+					peakDXGIDelta,
+					summary.peakProjectedAdditional.valid,
+					summary.peakProjectedAdditional.value) },
+				{ "systemCommitObservedToProjected", QualificationOptionalRatio(
+					peakSystemCommitDelta,
+					summary.peakProjectedSystemCommitAdditional.valid,
+					summary.peakProjectedSystemCommitAdditional.value) },
+			} },
+			{ "admission", {
+				{ "deferredObserved", summary.admissionDeferredObserved },
+				{ "preMutationDeferredObserved", summary.preMutationAdmissionDeferredObserved },
+				{ "presentationRetainedWhileDeferredObserved", summary.presentationRetainedWhileDeferredObserved },
+				{ "maximumDeferredResidencyAdmissionRatio",
+					summary.deferredResidencyAdmissionRatioObserved ?
+						json(summary.maximumDeferredResidencyAdmissionRatio) :
+						json(nullptr) },
+				{ "maximumDeferredSystemCommitAdmissionRatio",
+					summary.deferredSystemCommitAdmissionRatioObserved ?
+						json(summary.maximumDeferredSystemCommitAdmissionRatio) :
+						json(nullptr) },
+			} },
+			{ "physicalMutationObserved", summary.physicalMutationObserved },
+			{ "events", std::move(events) },
+		};
 	}
 
 	std::string NormalizeEditorID(std::string_view a_editorID)
@@ -2107,6 +2785,9 @@ namespace
 			                      "beginning";
 			if (store.active->ready) {
 				output["baseline"] = QualificationBaselineJson(store.active->baseline);
+				output["memoryTrace"] =
+					QualificationMemoryTraceEvidenceJson(
+						store.active->memoryTrace);
 				output["dispatch"] = {
 					{ "marked", store.active->dispatchTick != 0 },
 					{ "tick", store.active->dispatchTick != 0 ?
@@ -2651,6 +3332,12 @@ namespace
 		const std::string currentCellEditorID = cell ? Util::GetFormEditorID(cell) : "";
 		const uint32_t frame = globals::state ? globals::state->frameCount : 0;
 		const uint64_t tick = QueryQualificationTick();
+		const auto memoryTraceRecord = CaptureQualificationMemoryTraceRecord(
+			controller,
+			tick,
+			frame,
+			physicalMutationEpoch,
+			physicalSerializationEpoch);
 
 		const bool formIDMatches =
 			!a_expectedCell.formID || currentCellFormID == *a_expectedCell.formID;
@@ -2933,6 +3620,8 @@ namespace
 			{ "monotonicCounterRegressions", std::move(monotonicCounterRegressions) },
 			{ "tick", tick },
 			{ "frame", frame },
+			{ "memoryTraceRecord",
+				QualificationMemoryTraceRecordJson(memoryTraceRecord) },
 			{ "expectedCell", std::move(expectedCell) },
 			{ "currentCell", {
 								 { "formId", currentCellFormID },
@@ -3279,7 +3968,8 @@ namespace
 		json a_observation,
 		std::optional<std::string_view> a_terminalReason = std::nullopt,
 		QualificationMilestone a_milestone = QualificationMilestone::Strict,
-		const QualificationMilestoneEvidence* a_milestoneEvidence = nullptr)
+		const QualificationMilestoneEvidence* a_milestoneEvidence = nullptr,
+		const QualificationMemoryTraceEvidence* a_memoryTraceEvidence = nullptr)
 	{
 		const bool satisfied = a_outcome == "stable";
 		const bool dispatched = a_transition.dispatchTick != 0;
@@ -3389,6 +4079,10 @@ namespace
 			receipt["milestones"] = QualificationMilestoneEvidenceJson(
 				*a_milestoneEvidence, a_transition);
 		}
+		receipt["memoryTrace"] = QualificationMemoryTraceEvidenceJson(
+			a_memoryTraceEvidence ?
+				*a_memoryTraceEvidence :
+				a_transition.memoryTrace);
 		return receipt;
 	}
 
@@ -3519,6 +4213,18 @@ namespace
 				}
 
 				const auto controller = upscaling.GetVRRenderScaleTransitionSnapshot();
+				QualificationMemoryTraceEvidence memoryTrace;
+				RetainQualificationMemoryTraceRecord(
+					memoryTrace,
+					CaptureQualificationMemoryTraceRecord(
+						controller,
+						baseline.beginTick,
+						baseline.beginFrame,
+						upscaling.vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+							std::memory_order_acquire),
+						upscaling.vrRenderScalePostMutationSerializationEpoch.load(
+							std::memory_order_acquire)),
+					kMemoryTraceReasonBaseline);
 				baseline.sourceCellFormID = cell->GetFormID();
 				baseline.sourceCellEditorID = Util::GetFormEditorID(cell);
 				baseline.stressSessionID = session.sessionID;
@@ -3547,6 +4253,7 @@ namespace
 						};
 					}
 					qualificationStore.active->baseline = baseline;
+					qualificationStore.active->memoryTrace = memoryTrace;
 					qualificationStore.active->ready = true;
 				}
 				return json{
@@ -3555,6 +4262,7 @@ namespace
 					{ "ownerId", ownerID },
 					{ "accepted", true },
 					{ "baseline", QualificationBaselineJson(baseline) },
+					{ "memoryTrace", QualificationMemoryTraceEvidenceJson(memoryTrace) },
 				};
 			});
 			if (response.contains("error")) {
@@ -3731,6 +4439,20 @@ namespace
 						tick = QueryQualificationTick();
 						RE::Console::ExecuteCommand(command.c_str());
 					}
+					auto& upscaling = globals::features::upscaling;
+					const auto controller =
+						upscaling.GetVRRenderScaleTransitionSnapshot();
+					RetainQualificationMemoryTraceRecord(
+						store.active->memoryTrace,
+						CaptureQualificationMemoryTraceRecord(
+							controller,
+							tick,
+							frame,
+							upscaling.vrRenderScaleUnresolvedPhysicalMutationEpoch.load(
+								std::memory_order_acquire),
+							upscaling.vrRenderScalePostMutationSerializationEpoch.load(
+								std::memory_order_acquire)),
+						kMemoryTraceReasonDispatch);
 					store.active->dispatchTick = tick;
 					store.active->dispatchFrame = frame;
 					store.active->cocCellEditorID = cocCellEditorID;
@@ -3755,6 +4477,9 @@ namespace
 					}
 					if (startPerformanceTelemetry)
 						result["performanceTelemetry"] = std::move(performanceTelemetry);
+					result["memoryTrace"] =
+						QualificationMemoryTraceEvidenceJson(
+							store.active->memoryTrace);
 					return result;
 				});
 			if (!response.contains("error"))
@@ -3838,10 +4563,16 @@ namespace
 			const uint32_t frame = transition.dispatchTick != 0 ?
 			                           transition.dispatchFrame :
 			                           transition.baseline.beginFrame;
+			auto memoryTraceEvidence = transition.memoryTrace;
+			MarkQualificationMemoryTrace(
+				memoryTraceEvidence, kMemoryTraceReasonTerminal);
 			auto evidence = BuildQualificationReceipt(
 				transition, "cancelled", nullptr, nullptr, nullptr,
 				tick, frame, nullptr,
-				"qualification_cancelled");
+				"qualification_cancelled",
+				QualificationMilestone::Strict,
+				nullptr,
+				&memoryTraceEvidence);
 			evidence["action"] = "qualification_cancel";
 			evidence["ownerId"] = ownerID;
 			evidence["cancelled"] = true;
@@ -3942,27 +4673,33 @@ namespace
 				transition.baseline.tickFrequency);
 			json lastObservation = nullptr;
 			QualificationMilestoneEvidence milestoneEvidence;
+			QualificationMemoryTraceEvidence memoryTraceEvidence =
+				transition.memoryTrace;
 			for (;;) {
 				const uint64_t beforeTick = QueryQualificationTick();
 				const uint32_t lastFrame = lastObservation.is_object() ?
 				                               lastObservation.value("frame", transition.dispatchFrame) :
 				                               transition.dispatchFrame;
 				if (transition.cancelled->load(std::memory_order_acquire)) {
+					MarkQualificationMemoryTrace(
+						memoryTraceEvidence, kMemoryTraceReasonTerminal);
 					auto receipt = BuildQualificationReceipt(
 						transition, "cancelled", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						beforeTick, lastFrame, std::move(lastObservation),
-						"qualification_cancelled", milestone, &milestoneEvidence);
+						"qualification_cancelled", milestone, &milestoneEvidence, &memoryTraceEvidence);
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
 				}
 				if (!QualificationPolicy::IsWithinDeadline(beforeTick, deadline)) {
+					MarkQualificationMemoryTrace(
+						memoryTraceEvidence, kMemoryTraceReasonTerminal);
 					auto receipt = BuildQualificationReceipt(
 						transition, "timeout", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						beforeTick, lastFrame, std::move(lastObservation),
-						"qualification_timeout", milestone, &milestoneEvidence);
+						"qualification_timeout", milestone, &milestoneEvidence, &memoryTraceEvidence);
 					receipt["timing"]["timeoutMs"] = timeoutMs;
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
@@ -3977,19 +4714,41 @@ namespace
 					QualificationDispatchTimeout(
 						beforeTick, deadline, transition.baseline.tickFrequency));
 				if (observation.is_object() && !observation.contains("error")) {
+					const bool presentationObserved =
+						milestoneEvidence.presentation.observed;
+					const bool cleanupObserved =
+						milestoneEvidence.cleanup.observed;
+					const bool strictObserved =
+						milestoneEvidence.strict.observed;
 					RecordQualificationMilestoneEvidence(
 						observation, milestoneEvidence);
+					uint32_t memoryReasonMask = kMemoryTraceReasonNone;
+					if (!presentationObserved &&
+						milestoneEvidence.presentation.observed) {
+						memoryReasonMask |=
+							kMemoryTraceReasonPresentationMilestone;
+					}
+					if (!cleanupObserved && milestoneEvidence.cleanup.observed)
+						memoryReasonMask |= kMemoryTraceReasonCleanupMilestone;
+					if (!strictObserved && milestoneEvidence.strict.observed)
+						memoryReasonMask |= kMemoryTraceReasonStrictMilestone;
+					if (observation.value("terminalError", false))
+						memoryReasonMask |= kMemoryTraceReasonTerminal;
+					RecordQualificationMemoryTraceObservation(
+						observation, memoryTraceEvidence, memoryReasonMask);
 					SelectQualificationMilestoneObservation(
 						observation, milestone, milestoneEvidence);
 				}
 				if (transition.cancelled->load(std::memory_order_acquire)) {
+					MarkQualificationMemoryTrace(
+						memoryTraceEvidence, kMemoryTraceReasonTerminal);
 					const uint64_t tick = QueryQualificationTick();
 					const uint32_t frame = observation.value("frame", lastFrame);
 					auto receipt = BuildQualificationReceipt(
 						transition, "cancelled", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						tick, frame, std::move(observation),
-						"qualification_cancelled", milestone, &milestoneEvidence);
+						"qualification_cancelled", milestone, &milestoneEvidence, &memoryTraceEvidence);
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
@@ -3998,12 +4757,14 @@ namespace
 					const auto errorCode = observation.value("errorCode", std::string{});
 					if (QualificationPolicy::IsTransientObservationDispatchError(errorCode))
 						continue;
+					MarkQualificationMemoryTrace(
+						memoryTraceEvidence, kMemoryTraceReasonTerminal);
 					const uint64_t tick = QueryQualificationTick();
 					auto receipt = BuildQualificationReceipt(
 						transition, "error", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						tick, lastFrame, std::move(lastObservation),
-						"qualification_observation_error", milestone, &milestoneEvidence);
+						"qualification_observation_error", milestone, &milestoneEvidence, &memoryTraceEvidence);
 					receipt["error"] = "qualification observation failed";
 					receipt["errorCode"] = "qualification_observation_error";
 					receipt["failure"] = std::move(observation);
@@ -4021,28 +4782,32 @@ namespace
 						transition, "stable", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation),
-						std::nullopt, milestone, &milestoneEvidence);
+						std::nullopt, milestone, &milestoneEvidence, &memoryTraceEvidence);
 					receipt["timing"]["timeoutMs"] = timeoutMs;
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
 				}
 				if (observation.value("terminalError", false)) {
+					MarkQualificationMemoryTrace(
+						memoryTraceEvidence, kMemoryTraceReasonTerminal);
 					auto receipt = BuildQualificationReceipt(
 						transition, "error", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation),
-						"qualification_terminal_error", milestone, &milestoneEvidence);
+						"qualification_terminal_error", milestone, &milestoneEvidence, &memoryTraceEvidence);
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);
 					return receipt;
 				}
 				if (!withinDeadline) {
+					MarkQualificationMemoryTrace(
+						memoryTraceEvidence, kMemoryTraceReasonTerminal);
 					auto receipt = BuildQualificationReceipt(
 						transition, "timeout", &expectedCell,
 						target ? &*target : nullptr, &foveation,
 						observedTick, observedFrame, std::move(observation),
-						"qualification_timeout", milestone, &milestoneEvidence);
+						"qualification_timeout", milestone, &milestoneEvidence, &memoryTraceEvidence);
 					receipt["timing"]["timeoutMs"] = timeoutMs;
 					FinishQualification(
 						transitionID, transition.ownershipToken, receipt);

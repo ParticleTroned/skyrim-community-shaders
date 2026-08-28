@@ -1974,7 +1974,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					material.F0 = saturate(Color::SkyrimGammaToLinear(envColorBase.rgb) * Math::PI * SharedData::vanillaFresnelSettings.CubemapToF0Multiplier);
 #			else
 					material.F0 = 1.0;
-					material.Roughness = 1.0 / 8.0;
+					material.Roughness = 1.0 / max(SharedData::cubemapCreatorSettings.MaxMipLevel, 1.0);
 #			endif
 				}
 

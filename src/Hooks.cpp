@@ -12,6 +12,7 @@
 #include "Util.h"
 
 #include "Features/AdaptiveBrightness.h"
+#include "Features/DynamicCubemaps.h"
 #include "Features/HDRDisplay.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenshotFeature.h"
@@ -957,8 +958,9 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::CubeMapRenderTargetProperties* a_properties)
 		{
-			a_properties->height = 256;
-			a_properties->width = 256;
+			const auto resolution = globals::features::dynamicCubemaps.GetCubemapResolutionForResourceCreation();
+			a_properties->height = resolution;
+			a_properties->width = resolution;
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -968,8 +970,9 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::DepthStencilTargetProperties* a_properties)
 		{
-			a_properties->height = 256;
-			a_properties->width = 256;
+			const auto resolution = globals::features::dynamicCubemaps.GetCubemapResolutionForResourceCreation();
+			a_properties->height = resolution;
+			a_properties->width = resolution;
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

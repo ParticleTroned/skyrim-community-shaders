@@ -146,6 +146,35 @@ deviation, coefficient of variation, nearest-rank p95, maximum, and transitions
 per minute, both overall and split by destination. Failure rates include a
 Wilson 95-percent confidence interval. No samples are discarded as outliers.
 
+Every qualification receipt also contains a bounded `memoryTrace` tied to the
+same transition and owner. The trace reuses controller-owned DXGI, Windows
+commit, process-private, relatch-plan, trim, and retirement snapshots; it does
+not issue per-poll operating-system or DXGI queries. The first sample is the
+qualification baseline, dispatch is marked explicitly, and later records are
+retained only for controller/physical/presentation phase changes, admission or
+cleanup changes, new high-water observations, milestones, or terminal outcomes.
+The 48-record ring reports overwrites instead of growing without bound.
+
+`memoryTrace.peaks` records the frame, QPC tick, transition epoch, and contract
+generation of the maximum observed DXGI usage, system commit, process-private
+usage, and each relatch-plan projection. `peakDeltas` are saturated against the
+baseline so counter or ownership regressions cannot wrap into a false peak. A
+metric with an invalid baseline or no valid peak is returned as `null`, not as a
+misleading zero delta. Relatch-plan projections and deferred-admission ratios
+are considered only while the plan and corresponding memory sample are valid.
+`estimateRatios` compare observed deltas with the largest matching estimate;
+zero estimates are returned as `null`, not infinity. Admission evidence reports
+the maximum observed residency and system-commit ratios at deferred samples,
+whether the refusal happened before physical mutation, and whether the exact
+previous physical owner remained available. These values are measurement
+evidence only: this change does not alter the 4x/8x projections, reserves,
+trim, retirement, or allocation admission decisions.
+
+`qualification_status` exposes the trace committed during begin and dispatch.
+The waiter keeps later samples locally to avoid copying the bounded ring through
+the shared store on every poll; the terminal qualification receipt is the
+authoritative complete trace for the transition.
+
 Assay 1 passes only when all 20 transitions reach the exact destination and
 profile, no transition overlaps or times out, settings do not drift, no device,
 OOM, backend, terminal, lifecycle, fidelity, or fallback failure occurs, the

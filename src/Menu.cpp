@@ -946,7 +946,7 @@ void Menu::DrawDisableAtBootSettings()
 
 		// Display sorted features
 		for (auto* feature : featureList) {
-			if (feature->IsHiddenFromUserView()) {
+			if (feature->IsHiddenFromUserView() || feature->IsForcedEnabledAtBoot()) {
 				continue;
 			}
 

@@ -92,14 +92,26 @@ namespace
 		return result;
 	}
 
-	bool IsForcedDisabledFeature(const std::string& a_featureName)
+	Feature* FindRegisteredFeature(const std::string& a_featureName)
 	{
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (feature->GetShortName() == a_featureName)
-				return feature->IsForcedDisabledAtBoot();
+				return feature;
 		}
 
-		return false;
+		return nullptr;
+	}
+
+	bool IsForcedDisabledFeature(const std::string& a_featureName)
+	{
+		const auto* feature = FindRegisteredFeature(a_featureName);
+		return feature && feature->IsForcedDisabledAtBoot();
+	}
+
+	bool IsForcedEnabledFeature(const std::string& a_featureName)
+	{
+		const auto* feature = FindRegisteredFeature(a_featureName);
+		return feature && feature->IsForcedEnabledAtBoot();
 	}
 }
 
@@ -469,6 +481,9 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				if (feature->IsForcedDisabledAtBoot()) {
 					disabledFeatures[featureName] = true;
 					logger::info("Feature '{}' is forced disabled at boot", featureName);
+				} else if (feature->IsForcedEnabledAtBoot()) {
+					disabledFeatures[featureName] = false;
+					logger::info("Feature '{}' is forced enabled at boot", featureName);
 				} else if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
 					disabledFeatures[featureName] = true;
 					logger::info("Feature '{}' is disabled by default", featureName);
@@ -1304,6 +1319,8 @@ bool State::SetFeatureDisabled(const std::string& featureName, bool isDisabled)
 {
 	if (IsForcedDisabledFeature(featureName))
 		isDisabled = true;
+	else if (IsForcedEnabledFeature(featureName))
+		isDisabled = false;
 
 	bool wasPreviouslyDisabled = disabledFeatures.count(featureName) > 0 ? disabledFeatures[featureName] : false;  // Properly check if it exists
 	disabledFeatures[featureName] = isDisabled;

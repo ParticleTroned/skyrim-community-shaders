@@ -758,24 +758,31 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	ImGui::PushID(featureName.c_str());
 	const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
 	ImGui::BeginDisabled(navigationLocked);
+	const bool requiredAtBoot = feat->IsForcedEnabledAtBoot();
 	bool bootEnabled = !isDisabled;
 	if (hasFailedMessage) {
 		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
 	}
+	ImGui::BeginDisabled(requiredAtBoot);
 	if (Util::FeatureToggle("##BootToggleList", &bootEnabled)) {
 		bool newState = feat->ToggleAtBootSetting();
 		logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
 	}
+	ImGui::EndDisabled();
 	if (hasFailedMessage) {
 		ImGui::PopStyleColor();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Toggle feature loading at boot.\n"
-			"Current state: %s\n"
-			"Restart required for changes to take effect.\n"
-			"Disabling removes performance impact.",
-			bootEnabled ? "Enabled" : "Disabled");
+		if (requiredAtBoot) {
+			ImGui::TextUnformatted("This feature is a required component of this build and is always loaded at boot.");
+		} else {
+			ImGui::Text(
+				"Toggle feature loading at boot.\n"
+				"Current state: %s\n"
+				"Restart required for changes to take effect.\n"
+				"Disabling removes performance impact.",
+				bootEnabled ? "Enabled" : "Disabled");
+		}
 	}
 	ImGui::SameLine();
 
